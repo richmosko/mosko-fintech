@@ -1,13 +1,16 @@
 # WORKFLOW.md
 
 **Project:** mosko-fintech
-**Current version:** v1.0
-**Last updated:** 2026-05-08
-**Current phase:** Phase 0 — Discovery & Operating Model (complete). Next: Phase 0.5 — Agent Roster Definition.
+**Current version:** v1.1
+**Last updated:** 2026-05-09
+**Current phase:** Phase 0.5 — Agent Roster Definition (complete). Next: Phase 1 — Product Definition (PRD).
 
 ---
 
 ## Changelog
+
+### v1.1 — 2026-05-09
+Phase 0.5 complete. Six agent definition files committed to `/agents/`: Chief of Staff, Product Manager, Architect, Security Reviewer, UX Designer, Visual Designer. Each follows the template locked in ADR-001. Chief of Staff smoke-tested (orchestration-shaped response confirmed). DECISIONS.md carries ADR-001 (Phase 0.5 process resolutions). Header pointer advanced to Phase 1. Phase 0.5 status, detailed steps, and lessons learned filled in.
 
 ### v1.0 — 2026-05-08
 First repo commit. Per WORKFLOW.md's own versioning rule ("First repo commit: v1.0"), bumped from v0.5 to v1.0 on landing in git. Content unchanged from v0.5 except for this changelog entry, the header version/date, and the footer (which had stalled at "End of WORKFLOW.md v0.1" through four revisions). `.gitignore` and `CLAUDE.md` committed alongside this version bump — the previous commit (`5e65712`) listed them in its message but did not actually include them. Phase 0.5 detailed steps now planned in `/Users/mosko/.claude/plans/i-m-starting-claude-delegated-scott.md`; phase entry is imminent.
@@ -207,7 +210,7 @@ Location and format TBD in Phase 2.
 | # | Phase | Status | Primary output |
 |---|---|---|---|
 | 0 | Discovery & Operating Model | ✅ Complete | Operating model + this document |
-| 0.5 | Agent Roster Definition | ⏳ Not started | Agent definition files for Phase 1–4 roles |
+| 0.5 | Agent Roster Definition | ✅ Complete | Agent definition files for Phase 1–4 roles |
 | 1 | Product Definition (PRD) | ⏳ Not started | `PRD.md` |
 | 2 | UX & Design | ⏳ Not started | User flows + design system |
 | 3 | Technical Architecture | ⏳ Not started | `ARCHITECTURE.md` (revised from existing schema) |
@@ -330,11 +333,30 @@ Build-time roles (Backend Engineer, Frontend Engineer, QA, DevOps) are deliberat
 - Founder/CTO has reviewed every prompt and signed off
 - `DECISIONS.md` exists (created here if not earlier) and contains entries for any contentious prompt-design choices
 
-**Status:** ⏳ Not started
+**Status:** ✅ Complete (2026-05-09)
 
-**Detailed steps:** *To be fleshed out before phase entry. First step will be drafting the Chief of Staff definition (so the role doing the agent-definition work gets formalized first), then the other five in dependency order: PM and Architect together (since they overlap in Phase 1), Security Reviewer next (informs the others' escalation patterns), then UX Designer and Visual Designer.*
+**Detailed steps (as executed):**
 
-**Lessons learned:** *To be added after phase exit.*
+1. **Pre-work (prior session).** `/agents/` directory created. `DECISIONS.md` bootstrapped with ADR-001, resolving the three open process choices: single bundled PR for all six files, agent-file template locked as proposed, smoke tests run live and not archived.
+
+2. **Chief of Staff drafted and reviewed.** Drafted first so the role doing the definition work is formalized before drafting the others. One minor flag surfaced during review (engagement model wording "Co-piloted" vs. WORKFLOW.md's list of three explicitly co-piloted roles); Founder/CTO confirmed it as acceptable shorthand. Smoke test run: invoked on "What phase are we in and what's next?" — produced an orchestration-shaped response (named state, sequenced remaining steps, flagged a stale WORKFLOW.md status, ended with a routing question rather than an action). Passed.
+
+3. **Product Manager + Architect drafted as a pair.** Pairing surfaced the handoff contract early: PM flags requirements with architectural cost → Architect consults → infeasible requirements route back to PM → Founder/CTO decides if stuck. Non-obvious design choices: PM's "flag, don't embed" rule for security decisions (prevents architectural decisions from leaking into PRD user stories); Architect owns `/supabase/migrations/` in tool scope (migration files are the primary Phase 3 build artifact, not just prose in ARCHITECTURE.md); Architect's "boring by default" behavioral guideline. No ADR entries needed — all aligned with existing WORKFLOW.md framing.
+
+4. **Security Reviewer drafted.** Non-obvious design choice: three-level severity system (veto / flag / note) rather than binary veto/pass. Rationale: a bare veto on every concern inflates noise; the three levels let the agent calibrate without softening findings. Veto still requires Founder/CTO sign-off before work proceeds. No ADR entry — Founder/CTO did not flag this as contentious.
+
+5. **UX Designer + Visual Designer drafted as a pair.** Pairing surfaced the handoff contract: UX hands off with screen list, component inventory, interaction states, and error states; Visual operates from that inventory and flags gaps back rather than designing around them. Mid-draft, Founder/CTO directed adding a mandatory palette-and-typography checkpoint to Visual Designer — engagement model updated from "Fully delegated" to "Delegated with review" to reflect this. All four affected locations in the file updated consistently.
+
+6. **WORKFLOW.md updated, PR opened.** This step.
+
+**Lessons learned:**
+
+- **Draft the meta-role first.** Formalizing the Chief of Staff before drafting the other agents was the right call — the smoke test served as a live self-consistency check that the prompt matched the role's actual behavior during the session.
+- **Pair roles that share a phase.** Drafting PM + Architect together, and UX + Visual together, surfaced handoff contract gaps that sequential drafting would have missed. The asymmetry between them (PM escalates to Architect for feasibility; Architect escalates back to PM for scope ambiguity) was cleaner to see when both files were open.
+- **Template held.** The template locked in ADR-001 needed no changes across six files. The upfront lock cost one decision; the savings were six consistent files without retrofit churn.
+- **Behavioral guardrails are the hard part.** The structural sections (tool scope, Linear policy, escalation triggers) were straightforward. The behavioral guidelines — "boring by default," "flag, don't embed," "flows first wireframes second" — are where the real prompt design work happened. These are the constraints that prevent the most common agent failure modes and deserve the most review attention.
+- **Engagement model granularity matters.** "Fully delegated" and "co-piloted" are too coarse. The Visual Designer revision mid-phase (adding a mandatory checkpoint) shows that "delegated with review" covers a range. Future agent definitions may benefit from naming the specific checkpoints explicitly rather than relying on the engagement model label alone.
+- **ADR bar is higher than expected.** None of the individual prompt design choices during this phase cleared the bar for a DECISIONS.md entry — they were either aligned with WORKFLOW.md framing or resolved without meaningful alternatives. ADR-001 (the process decisions) was the only entry. Future phases: an ADR belongs when the Founder/CTO would otherwise be unable to reconstruct *why* a choice was made, not just *what* was chosen.
 
 ---
 
