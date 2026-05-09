@@ -1,13 +1,16 @@
 # WORKFLOW.md
 
 **Project:** mosko-fintech
-**Current version:** v1.2
+**Current version:** v1.3
 **Last updated:** 2026-05-09
 **Current phase:** Phase 0.5 — Agent Roster Definition (complete). Next: Phase 1 — Product Definition (PRD), prepped and ready to enter (restart Claude Code first to load subagents).
 
 ---
 
 ## Changelog
+
+### v1.3 — 2026-05-09
+SessionStart hook for automatic re-orientation. Added `.claude/settings.json` with a SessionStart hook that injects the *Subsequent sessions* re-orient prompt from `docs/handoff-prompts.md` as additional context at session start — so Claude performs the four-step orient (phase, role, next deliverable, changelog deltas, plus git status if a feature branch is active) before responding to the user's first message of each session, no manual prompt-pasting required. The hook re-reads `docs/handoff-prompts.md` at fire time; editing the prompt source changes auto-orient behavior without touching `settings.json`. Includes adaptive flagging: when WORKFLOW.md's header indicates a phase transition is pending, Claude appends a one-liner pointing at the phase-transition workflow prompt — detection happens in Claude's response, not in shell, so it's robust to header-format drift. `settings.json` is project-shared (committed); personal overrides belong in `.claude/settings.local.json` (gitignored). Operational gotcha discovered during validation and worth flagging for future-self: worktrees are materialized from the local `main` checkout's current commit, so failing to `git pull` main locally before opening a new Claude Code session means the new worktree won't include recently-merged `.claude/settings.json` or `.claude/agents/` files, and the hook can't fire — pull main locally before relying on settings or agents from a recent merge. Bookkeeping note: this entry is being added post-hoc — the SessionStart hook landed in PR #3 alongside the residual phase/1-prep branch but missed its WORKFLOW.md changelog companion at the time; v1.3 closes that gap.
 
 ### v1.2 — 2026-05-09
 Phase 1 prep + agent wiring fix. Phase 0.5 produced six well-drafted agent definitions at `/agents/*.md`, but the location and format were wrong for Claude Code's project-scoped subagent system: files needed to live at `.claude/agents/*.md` with YAML frontmatter to be invokable as `subagent_type` values. Documentation existed; wiring did not. Phase 1 prep applied the smallest fix: prepended minimal frontmatter (`name`, `description`) to each of the six files and `git mv`'d them into `.claude/agents/`. Mechanical tool scoping (`tools:` allowlists matching the prose Tool scope sections) deliberately deferred to Phase 5, per the original Phase 5 plan. Path references updated repo-wide (WORKFLOW.md and chief-of-staff.md); two historical references in the v1.1 changelog and Phase 0.5 "as executed" steps preserved as `/agents/` for accuracy. Phase 0.5 lessons-learned amended retroactively with the documentation-vs-wiring lesson. Phase 1 "Detailed steps" subsection fleshed out, including an explicit subagent invocation pattern for the phase (Product Manager as workhorse; Architect surgical; Security Reviewer at section-lock; Chief of Staff at phase boundaries). **After committing this version, Claude Code must be restarted before Phase 1 work begins** — the subagent registry loads at session start, so newly added agents are not callable mid-session.
