@@ -1,13 +1,16 @@
 # WORKFLOW.md
 
 **Project:** mosko-fintech
-**Current version:** v1.1
+**Current version:** v1.2
 **Last updated:** 2026-05-09
-**Current phase:** Phase 0.5 — Agent Roster Definition (complete). Next: Phase 1 — Product Definition (PRD).
+**Current phase:** Phase 0.5 — Agent Roster Definition (complete). Next: Phase 1 — Product Definition (PRD), prepped and ready to enter (restart Claude Code first to load subagents).
 
 ---
 
 ## Changelog
+
+### v1.2 — 2026-05-09
+Phase 1 prep + agent wiring fix. Phase 0.5 produced six well-drafted agent definitions at `/agents/*.md`, but the location and format were wrong for Claude Code's project-scoped subagent system: files needed to live at `.claude/agents/*.md` with YAML frontmatter to be invokable as `subagent_type` values. Documentation existed; wiring did not. Phase 1 prep applied the smallest fix: prepended minimal frontmatter (`name`, `description`) to each of the six files and `git mv`'d them into `.claude/agents/`. Mechanical tool scoping (`tools:` allowlists matching the prose Tool scope sections) deliberately deferred to Phase 5, per the original Phase 5 plan. Path references updated repo-wide (WORKFLOW.md and chief-of-staff.md); two historical references in the v1.1 changelog and Phase 0.5 "as executed" steps preserved as `/agents/` for accuracy. Phase 0.5 lessons-learned amended retroactively with the documentation-vs-wiring lesson. Phase 1 "Detailed steps" subsection fleshed out, including an explicit subagent invocation pattern for the phase (Product Manager as workhorse; Architect surgical; Security Reviewer at section-lock; Chief of Staff at phase boundaries). **After committing this version, Claude Code must be restarted before Phase 1 work begins** — the subagent registry loads at session start, so newly added agents are not callable mid-session.
 
 ### v1.1 — 2026-05-09
 Phase 0.5 complete. Six agent definition files committed to `/agents/`: Chief of Staff, Product Manager, Architect, Security Reviewer, UX Designer, Visual Designer. Each follows the template locked in ADR-001. Chief of Staff smoke-tested (orchestration-shaped response confirmed). DECISIONS.md carries ADR-001 (Phase 0.5 process resolutions). Header pointer advanced to Phase 1. Phase 0.5 status, detailed steps, and lessons learned filled in.
@@ -357,6 +360,7 @@ Build-time roles (Backend Engineer, Frontend Engineer, QA, DevOps) are deliberat
 - **Behavioral guardrails are the hard part.** The structural sections (tool scope, Linear policy, escalation triggers) were straightforward. The behavioral guidelines — "boring by default," "flag, don't embed," "flows first wireframes second" — are where the real prompt design work happened. These are the constraints that prevent the most common agent failure modes and deserve the most review attention.
 - **Engagement model granularity matters.** "Fully delegated" and "co-piloted" are too coarse. The Visual Designer revision mid-phase (adding a mandatory checkpoint) shows that "delegated with review" covers a range. Future agent definitions may benefit from naming the specific checkpoints explicitly rather than relying on the engagement model label alone.
 - **ADR bar is higher than expected.** None of the individual prompt design choices during this phase cleared the bar for a DECISIONS.md entry — they were either aligned with WORKFLOW.md framing or resolved without meaningful alternatives. ADR-001 (the process decisions) was the only entry. Future phases: an ADR belongs when the Founder/CTO would otherwise be unable to reconstruct *why* a choice was made, not just *what* was chosen.
+- **Documentation ≠ wiring (added retroactively in v1.2).** Phase 0.5 produced six well-drafted agent definitions but at `/agents/*.md`, without YAML frontmatter — a path and format that Claude Code's project-scoped subagent system does not load. The files were documentation, not invokable subagents. The gap was invisible from inside Phase 0.5 because the smoke test validated *role behavior* (does the prompt produce orchestration-shaped responses?) via in-session roleplay, not *invocation mechanics* (can `subagent_type: chief-of-staff` actually be called?). Phase 1 prep surfaced it; the minimal fix was applied in v1.2 (frontmatter prepended, files moved to `.claude/agents/`, mechanical tool scoping deferred to Phase 5). Lesson for any future agent-definition phase: every smoke test must include an actual `Task`/`Agent` invocation by `subagent_type`, not just "Claude reads the file and roleplays." Prose-correctness and call-mechanics-correctness are independent checks.
 
 ---
 
@@ -401,7 +405,42 @@ These come from the "Preliminary product findings" section of this document. The
 
 **Status:** ⏳ Not started
 
-**Detailed steps:** *To be fleshed out before phase entry. First step will be a ratification pass over Phase 0's preliminary findings — confirming, revising, or rejecting each before structuring the rest of the PRD around them.*
+**Detailed steps:**
+
+1. **Session prerequisites (Founder/CTO + CoS).** Before kicking off Phase 1 work, **restart Claude Code** so the six subagents from `.claude/agents/*.md` are loaded into the session's registry. Verify by attempting an explicit subagent invocation (e.g., `Task` with `subagent_type: product-manager` and a trivial smoke prompt). If the subagents do not appear, **do not proceed** — stop and debug the wiring before drafting any PRD content. Mandatory pre-reading for the session: `WORKFLOW.md`, `DECISIONS.md`, and the four agent files active in this phase (`.claude/agents/chief-of-staff.md`, `.claude/agents/product-manager.md`, `.claude/agents/architect.md`, `.claude/agents/security-reviewer.md`).
+
+2. **Ratification pass over Phase 0's preliminary findings (PM-led, CoS-orchestrated).** Invoke the Product Manager subagent for a focused working session whose only goal is to ratify, refine, or reject each preliminary finding currently captured in WORKFLOW.md's "Preliminary product findings" subsection. For each finding, the PM produces one of three verdicts: **(a) confirmed** — finding becomes a V1 PRD requirement as-is; **(b) revised** — new framing recorded as a DECISIONS.md ADR; **(c) rejected** — rationale recorded as an ADR. Founder/CTO signs off on each verdict explicitly. PM does NOT begin PRD section drafting until ratification is complete — ratification first, drafting second.
+
+3. **PRD section drafting in agreed order (PM-led, with consultations).** Once findings are ratified, the PM agent drafts `PRD.md` section-by-section, invoking other subagents only when their role is triggered:
+   - Vision and target user (PM only)
+   - User stories per V1 surface, in priority order: net worth → asset allocation → spending categorization (PM; consult Architect via `subagent_type: architect` when a story implies non-trivial architectural cost)
+   - Success metrics (PM; Founder/CTO signs off on what's measurable)
+   - **Security and compliance posture** (PM drafts, then **mandatory Security Reviewer pass** via `subagent_type: security-reviewer` before locking — covers auth, multi-tenant data isolation, Plaid integration boundaries, secrets handling, financial calculation integrity)
+   - V2 deferred candidates (PM only)
+   - Permanent non-goals (PM; Founder/CTO sign-off)
+   - Constraints — cost, scale, single-user vs. invite-only (PM)
+
+4. **Cross-cutting reviews on the full PRD draft.** Once a draft PRD exists end-to-end:
+   - **Architect feasibility pass** — invoke `subagent_type: architect` to review the full PRD and flag any requirement with significant architectural cost. Architect presents 2–3 options for each flag; Founder/CTO decides; decisions recorded in DECISIONS.md.
+   - **Security Reviewer pass** — invoke `subagent_type: security-reviewer` to review the full PRD with veto authority on auth, money flows, secrets, Plaid integration, multi-tenant isolation. Any veto requires PRD revision before proceeding to lock.
+
+5. **Founder/CTO sign-off on PRD v1.0.** Read the full PRD in one sitting. Confirm scope, non-goals, success metrics, security posture. Sign off explicitly in chat — silence is not approval.
+
+6. **Phase exit (CoS-led).** After PRD lock at v1.0:
+   - Replace WORKFLOW.md's "Preliminary product findings" subsection with a brief pointer to `PRD.md`.
+   - Add Phase 1 "Lessons learned" subsection.
+   - Update Phase 1 status to "✅ Complete" with completion date.
+   - Bump WORKFLOW.md (likely v1.3) and write the changelog entry.
+   - Commit and merge via PR. Move header pointer to Phase 2.
+
+**Subagent invocation pattern for the whole phase** (the answer to "how do I spin up and manage sub-agents during Phase 1?"):
+
+- **Product Manager** is the workhorse — most session time runs through this agent. Invoke explicitly (`subagent_type: product-manager`) at the start of any drafting block.
+- **Architect** is surgical — short, focused invocations when a feasibility question surfaces. Do not run extended Architect sessions in Phase 1; that's Phase 3's job.
+- **Security Reviewer** is invoked at section-lock time on auth/data/Plaid sections. Veto authority means: do not lock those sections without an explicit Security Reviewer pass.
+- **Chief of Staff** is invoked at phase boundaries — ratification kickoff, PRD lock, phase exit — and whenever ambiguity surfaces about which agent owns a question.
+- **Each subagent invocation is its own context.** Re-brief explicitly. Do not assume the Architect has read what the PM just wrote; paste the relevant excerpt into the invocation prompt.
+- **Founder/CTO is the decider.** Co-piloted agents (PM, Architect, Security Reviewer) propose; Founder/CTO disposes. Don't let any subagent close out a non-trivial decision unilaterally.
 
 **Lessons learned:** *To be added after phase exit.*
 
