@@ -104,49 +104,49 @@ mosko-fintech operates as a one-human-many-agents team. The human (the owner) ho
 
 ## Agent roster
 
-Nine roles total. Each role has a corresponding `/agents/<role>.md` file containing its system prompt, scoped tools, and behavioral guidelines. Agent definitions are split across two phases by when they're first needed: roles active in Phases 1–4 are defined in **Phase 0.5**; build-time roles activated in Phase 5+ are defined in **Phase 5** alongside the rest of workshop setup. The "Definition timing" note on each role below indicates which phase produces its definition file.
+Nine roles total. Each role has a corresponding `.claude/agents/<role>.md` file containing its system prompt, scoped tools, and behavioral guidelines. Agent definitions are split across two phases by when they're first needed: roles active in Phases 1–4 are defined in **Phase 0.5**; build-time roles activated in Phase 5+ are defined in **Phase 5** alongside the rest of workshop setup. The "Definition timing" note on each role below indicates which phase produces its definition file.
 
 ### Meta role
 
-**Chief of Staff** (`/agents/chief-of-staff.md`)
+**Chief of Staff** (`.claude/agents/chief-of-staff.md`)
 The orchestrator. Maintains WORKFLOW.md, ensures phase transitions are clean, escalates when execution agents drift outside their roles, and is the agent the Founder/CTO talks to when unsure which agent to engage. Does not execute on the build itself. Primary artifact: WORKFLOW.md.
 *Definition timing:* Phase 0.5 (formalization of the role that has been operating informally since Phase 0).
 
 ### Execution roster
 
-**Product Manager** (`/agents/product-manager.md`)
+**Product Manager** (`.claude/agents/product-manager.md`)
 Owns PRD.md. Translates owner intent into structured user stories and feature definitions. Pushes back on scope creep. Maintains the V1 vs. V2 boundary. Co-piloted by Founder/CTO; Founder/CTO has final say on scope.
 *Definition timing:* Phase 0.5 (lead on Phase 1).
 
-**Architect** (`/agents/architect.md`)
+**Architect** (`.claude/agents/architect.md`)
 Owns ARCHITECTURE.md. Proposes system designs, data models, service boundaries, and tech choices. Always presents options with tradeoffs. Flags one-way doors and migration debt. Defaults to boring patterns; requires justification for novel ones. Co-piloted by Founder/CTO; Founder/CTO signs off on all architectural decisions.
 *Definition timing:* Phase 0.5 (consulted in Phase 1; lead on Phase 3).
 
-**UX Designer** (`/agents/ux-designer.md`)
+**UX Designer** (`.claude/agents/ux-designer.md`)
 Owns user flows and interaction patterns. Translates PRD user stories into navigable flows. Hands off to Visual Designer. Reviewed by Founder/CTO; substantive UX decisions confirmed before execution.
 *Definition timing:* Phase 0.5 (lead on Phase 2).
 
-**Visual Designer** (`/agents/visual-designer.md`)
+**Visual Designer** (`.claude/agents/visual-designer.md`)
 Owns the design system — typography, color tokens, component inventory, visual polish. Outputs code-ready tokens. Operates from UX flows. Fully delegated.
 *Definition timing:* Phase 0.5 (lead on Phase 2).
 
-**Security Reviewer** (`/agents/security-reviewer.md`)
+**Security Reviewer** (`.claude/agents/security-reviewer.md`)
 Non-optional for fintech. Reviews every PR touching auth, data handling, external APIs, secrets, or financial calculations. Has veto power. Co-piloted by Founder/CTO; Founder/CTO signs off on all security-flagged changes.
 *Definition timing:* Phase 0.5 (consulted in Phase 1; lead reviewer on Phase 3 auth/data/secrets work).
 
-**Backend Engineer** (`/agents/backend-engineer.md`)
+**Backend Engineer** (`.claude/agents/backend-engineer.md`)
 Implements API, data layer, Plaid integration, background workers. Operates against Architect's contracts. Reviewed by Founder/CTO; SQL and Python output specifically reviewed by Founder/CTO given owner fluency.
 *Definition timing:* Phase 5 (build-time role; deferred until tech stack and patterns are real).
 
-**Frontend Engineer** (`/agents/frontend-engineer.md`)
+**Frontend Engineer** (`.claude/agents/frontend-engineer.md`)
 Implements UI against the design system and API contracts. Fully delegated; Founder/CTO reviews PRs but does not co-pilot.
 *Definition timing:* Phase 5 (build-time role; deferred until frontend framework and design system are real).
 
-**QA** (`/agents/qa.md`)
+**QA** (`.claude/agents/qa.md`)
 Generates and maintains test suites. Writes acceptance tests against PRD user stories. Founder/CTO defines acceptance criteria; QA agent operationalizes them.
 *Definition timing:* Phase 5 (build-time role; deferred until test framework and acceptance patterns are real).
 
-**DevOps** (`/agents/devops.md`)
+**DevOps** (`.claude/agents/devops.md`)
 Owns CI/CD scaffolding, deployment pipeline, monitoring setup. Split: agent handles GitHub Actions and pipeline scaffolding; Founder/CTO handles VPS/Coolify directly given existing familiarity.
 *Definition timing:* Phase 5 (build-time role; deferred until CI/CD scope is real).
 
@@ -184,7 +184,7 @@ Operational, how-to, and reference documents live in `/docs/`. The repo-root mar
 - `/web/CLAUDE.md` — frontend conventions, design system usage, component patterns
 - `/workers/CLAUDE.md` — background job patterns, sync logic, idempotency rules
 
-### Agent definitions (`/agents/`)
+### Agent definitions (`.claude/agents/`)
 
 One file per role. See agent roster above.
 
@@ -216,7 +216,7 @@ Location and format TBD in Phase 2.
 | 3 | Technical Architecture | ⏳ Not started | `ARCHITECTURE.md` (revised from existing schema) |
 | 4 | Project Scoping | ⏳ Not started | Linear backlog (initiatives, projects, issues) |
 | 4.5 | Agentic Flow Ramp | ⏳ Not started | Practice feature + workflow fluency |
-| 5 | Workshop Setup | ⏳ Not started | `CLAUDE.md` files, build-time `/agents/*.md`, `/skills/*.md`, CI/CD |
+| 5 | Workshop Setup | ⏳ Not started | `CLAUDE.md` files, build-time `.claude/agents/*.md`, `/skills/*.md`, CI/CD |
 | 6 | Build Loop | ⏳ Not started | V1 product |
 | 7 | Deploy & Iterate | ⏳ Not started | Live system + V2 backlog |
 
@@ -300,7 +300,7 @@ Discovery happens here too, but in a specific sense: a structured conversation t
 
 ## Phase 0.5 — Agent Roster Definition
 
-**Purpose:** Stand up the team. Phase 0 defined *what* the agent roster is at a high level; Phase 0.5 produces the actual agent definition files (`/agents/*.md`) for the roles that will be active in Phases 1–4. Each definition contains the agent's system prompt, scoped tools, behavioral guidelines, escalation patterns, and Linear permission policy. After this phase, when Phase 1 says "Product Manager leads," there is a real PM agent file to invoke.
+**Purpose:** Stand up the team. Phase 0 defined *what* the agent roster is at a high level; Phase 0.5 produces the actual agent definition files (`.claude/agents/*.md`) for the roles that will be active in Phases 1–4. Each definition contains the agent's system prompt, scoped tools, behavioral guidelines, escalation patterns, and Linear permission policy. After this phase, when Phase 1 says "Product Manager leads," there is a real PM agent file to invoke.
 
 Build-time roles (Backend Engineer, Frontend Engineer, QA, DevOps) are deliberately deferred to Phase 5, where their context (stack, framework, design system, CI patterns) is real. Defining them here would mean writing prompts in a vacuum and rewriting them later.
 
@@ -312,12 +312,12 @@ Build-time roles (Backend Engineer, Frontend Engineer, QA, DevOps) are deliberat
 
 **Outputs:**
 
-- `/agents/chief-of-staff.md` — formalizes the role that has been operating informally since Phase 0 began
-- `/agents/product-manager.md` — Phase 1 lead
-- `/agents/architect.md` — Phase 1 consultant, Phase 3 lead
-- `/agents/security-reviewer.md` — Phase 1 consultant, Phase 3 reviewer
-- `/agents/ux-designer.md` — Phase 2 lead
-- `/agents/visual-designer.md` — Phase 2 lead
+- `.claude/agents/chief-of-staff.md` — formalizes the role that has been operating informally since Phase 0 began
+- `.claude/agents/product-manager.md` — Phase 1 lead
+- `.claude/agents/architect.md` — Phase 1 consultant, Phase 3 lead
+- `.claude/agents/security-reviewer.md` — Phase 1 consultant, Phase 3 reviewer
+- `.claude/agents/ux-designer.md` — Phase 2 lead
+- `.claude/agents/visual-designer.md` — Phase 2 lead
 - `DECISIONS.md` entries for any non-obvious choices in agent prompt design (e.g., scope of veto power, escalation triggers, when an agent must present options vs. just decide)
 
 **Agents involved:**
@@ -327,7 +327,7 @@ Build-time roles (Backend Engineer, Frontend Engineer, QA, DevOps) are deliberat
 
 **Exit criteria:**
 
-- Six agent definition files exist in `/agents/`, each containing: role description, system prompt, scoped tools, behavioral guidelines, escalation triggers, Linear permission policy
+- Six agent definition files exist in `.claude/agents/`, each containing: role description, system prompt, scoped tools, behavioral guidelines, escalation triggers, Linear permission policy
 - Chief of Staff agent can be invoked and produces orchestration-style responses, not execution-style responses
 - Each Phase 1–4 agent can be invoked and stays within its role boundaries (validated by a brief test prompt for each)
 - Founder/CTO has reviewed every prompt and signed off
@@ -373,7 +373,7 @@ These come from the "Preliminary product findings" section of this document. The
 - **Likely permanent non-goals** to confirm: public sign-up; money movement; advisor role; multi-currency in V1
 - **Likely user model** to confirm: solo owner initially with invite-only friends-and-family path; multi-tenant from day one in data model; UI single-user-only until a second user actually onboards
 - **Likely operating cost shape** to confirm: ~$0/month single-user on Plaid Trial; ~$10–40/month range for small family network
-- **Agent definitions for Phase 1 roles** (from Phase 0.5): `/agents/product-manager.md`, `/agents/architect.md`, `/agents/security-reviewer.md`, `/agents/chief-of-staff.md` all exist and are signed off
+- **Agent definitions for Phase 1 roles** (from Phase 0.5): `.claude/agents/product-manager.md`, `.claude/agents/architect.md`, `.claude/agents/security-reviewer.md`, `.claude/agents/chief-of-staff.md` all exist and are signed off
 - Owner's domain knowledge of personal finance workflows
 - Any insights from owner's existing manual scripts (worth reviewing as PRD input — they encode requirements)
 
@@ -580,7 +580,7 @@ These come from the "Preliminary product findings" section of this document. The
 **Inputs:**
 
 - Locked PRD, ARCHITECTURE, backlog
-- Existing agent definitions from Phase 0.5 (`/agents/chief-of-staff.md`, `/agents/product-manager.md`, `/agents/architect.md`, `/agents/security-reviewer.md`, `/agents/ux-designer.md`, `/agents/visual-designer.md`)
+- Existing agent definitions from Phase 0.5 (`.claude/agents/chief-of-staff.md`, `.claude/agents/product-manager.md`, `.claude/agents/architect.md`, `.claude/agents/security-reviewer.md`, `.claude/agents/ux-designer.md`, `.claude/agents/visual-designer.md`)
 - Lessons from Phase 4.5
 - Owner's existing GitHub setup
 
@@ -588,7 +588,7 @@ These come from the "Preliminary product findings" section of this document. The
 
 - Root `CLAUDE.md` with project conventions
 - Per-directory `CLAUDE.md` files for `/supabase`, `/api`, `/web`, `/workers` (or analogous structure)
-- **Build-time agent definitions** added: `/agents/backend-engineer.md`, `/agents/frontend-engineer.md`, `/agents/qa.md`, `/agents/devops.md` — each with system prompt, tool scopes, behavioral guidelines, and **Linear permission scope** (which issues it may read, comment on, update status on, or create)
+- **Build-time agent definitions** added: `.claude/agents/backend-engineer.md`, `.claude/agents/frontend-engineer.md`, `.claude/agents/qa.md`, `.claude/agents/devops.md` — each with system prompt, tool scopes, behavioral guidelines, and **Linear permission scope** (which issues it may read, comment on, update status on, or create)
 - **Refinements to Phase 0.5 agent definitions** if Phases 1–4 surfaced gaps (e.g., escalation triggers that need adjustment, behavioral guidelines that need clarification) — version-bumped, with changes logged in `DECISIONS.md`
 - Initial set of `/skills/*.md` files for known repeated workflows
 - **Linear MCP server connected** to Claude Code (`claude mcp add --transport http linear https://mcp.linear.app/mcp`), with OAuth completed and access verified
@@ -742,7 +742,7 @@ These come from the "Preliminary product findings" section of this document. The
 
 These are tracked here in v0.1 and resolved in subsequent versions. When resolved, move from this section into the relevant body section and reference in the changelog.
 
-- ~~`[OPEN]` Agent prompt files (`/agents/*.md`) — slated for Phase 5 drafting. Confirm timing or pull earlier if needed.~~ **Resolved in v0.4:** split across Phase 0.5 (Phase 1–4 roles) and Phase 5 (build-time roles). See agent roster section.
+- ~~`[OPEN]` Agent prompt files (`.claude/agents/*.md`) — slated for Phase 5 drafting. Confirm timing or pull earlier if needed.~~ **Resolved in v0.4:** split across Phase 0.5 (Phase 1–4 roles) and Phase 5 (build-time roles). See agent roster section.
 - `[OPEN]` Frontend framework choice — deferred to Phase 3 Architect proposal.
 - `[OPEN]` Background worker technology — deferred to Phase 3 Architect proposal.
 - ~~`[OPEN]` Backlog tooling: `TASKS.md` vs. GitHub Issues — deferred to Phase 4 entry.~~ **Resolved in v0.3:** Linear chosen, accessed via the official Linear MCP server. Operational details in `docs/linear-setup.md` (drafted in Phase 5). Cleanup of stale `TASKS.md` references completed in v0.5.
