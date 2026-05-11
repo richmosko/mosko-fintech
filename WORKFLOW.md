@@ -3,7 +3,7 @@
 **Project:** mosko-fintech
 **Current version:** v1.3
 **Last updated:** 2026-05-09
-**Current phase:** Phase 0.5 — Agent Roster Definition (complete). Next: Phase 1 — Product Definition (PRD), prepped and ready to enter (restart Claude Code first to load subagents).
+**Current phase:** Phase 1 — Product Definition (PRD), in progress. Step 2 (ratification pass on preliminary product findings) underway.
 
 ---
 
