@@ -6,6 +6,62 @@ Architectural Decision Records for mosko-fintech. Each entry captures a non-obvi
 
 ---
 
+## ADR-003 — Subagent engagement patterns: adoption of Agent Teams for multi-agent coordination
+
+**Date:** 2026-05-11
+**Status:** Accepted
+**Phase:** 1 (decision made between Step 2 close and Step 3 entry; applies Step 3 onward)
+
+**Context.** Phase 1 Step 2 ratification exercised mosko-fintech's subagent setup at depth: the Product Manager subagent was invoked three times (full ratification report, focused income-categorization V1 check, post-override scope-implication assessment). Two friction points became clear during that work:
+
+1. **No SendMessage available in this harness.** The Agent tool's documented "continue an existing agent" mechanism isn't loaded by default in Claude Desktop. Each PM consultation therefore had to be a fresh spawn with full re-briefing — a real cost when the PM has accumulated 5,000-word ratification context to re-acquire each turn.
+2. **Orchestrator-mediated relay has its limits.** Founder/CTO expressed wanting to "meet with the PM" directly, surfacing a gap between the agent-roster vision ("work with my PM") and the subagent mechanic ("one-shot delegations through me as orchestrator"). The CoS-as-relay pattern works but adds friction for any multi-turn agent conversation.
+
+**Claude Code Agent Teams** (experimental, gated behind `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`) was evaluated as an alternative. Documentation: `https://code.claude.com/docs/en/agent-teams`. A smoke test in Claude Desktop confirmed:
+
+- **Compatibility:** spawn succeeds; teammates load their agent-file system prompts correctly; SendMessage works for lead↔teammate communication; team config persists at `~/.claude/teams/{name}/`.
+- **Backend:** in-process only (split-pane requires tmux/iTerm2, which Claude Desktop doesn't provide). Lead and teammates are co-located in one Claude Desktop window; user navigates between them via session cycling.
+- Three friction points surfaced during the smoke test; mitigations captured below.
+
+**Decisions.**
+
+1. **Engagement-pattern catalog.** mosko-fintech operates with three subagent engagement patterns, used for different work shapes:
+   - **Task mode** — one-shot `Agent` invocation. Used for: a focused deliverable from a single role with no follow-up turns expected. Example uses: Phase 0.5 smoke tests; one-shot research lookups via claude-code-guide; mechanical drafting work.
+   - **Meeting mode** — multi-turn back-and-forth with a single persistent subagent. In this harness (no SendMessage at the orchestrator level), this is approximated by re-spawning fresh subagents with re-briefing, accepting the friction. Used for: when one agent needs an extended conversation but other agents aren't involved.
+   - **Team mode** — Agent Teams with multiple persistent teammates, peer-to-peer messaging, optional direct user-to-teammate cycling. Used for: multi-agent coordination on a single phase or step, especially when peer consultation between agents (PM ↔ Architect ↔ Security Reviewer) is needed.
+
+2. **Phase-specific engagement model.**
+   - **Phase 0:** not applicable (no agents).
+   - **Phase 0.5:** task mode (smoke tests of individual agent files).
+   - **Phase 1 Step 1–2** (completed under prior model): task mode + approximated meeting mode (orchestrator-mediated, fresh respawn each turn).
+   - **Phase 1 Step 3 onward (PRD drafting through phase exit):** **team mode** with PM as workhorse, Architect and Security Reviewer spawn-on-need within the same team.
+   - **Phase 2 (UX & Design):** team mode with UX Designer and Visual Designer as primary teammates.
+   - **Phase 3 (Architecture):** team mode with Architect as workhorse, Security Reviewer mandatory.
+   - **Phase 4 (Scoping):** task mode likely sufficient (PM decomposes; not multi-agent-coordination-heavy).
+   - **Phase 5+ (Workshop / Build):** revisit at Phase 5 when build-time agents are defined.
+
+3. **Team-mode operational conventions (smoke-test friction mitigations).**
+   - **Agent-file preamble.** Every agent file used as a teammate gets a one-line opening clause at the top of its System prompt section: *"You may be running as a team member. If so, your communication primitive is SendMessage — load it via ToolSearch as your first action before responding to messages from the team lead. Plain-text output is invisible to other team members."* Applied to: product-manager, architect, security-reviewer, ux-designer, visual-designer. Not applied to chief-of-staff (CoS-as-main-session is always the lead, never a teammate).
+   - **TaskList not relied upon.** Agent Teams docs reference TaskCreate / TaskUpdate / TaskList as the coordination layer; those tools don't surface in the Claude Desktop harness. Coordination falls back to SendMessage between teammates plus orchestrator-coordinated invocations. The `~/.claude/tasks/{team-name}/` directory may be used for ad-hoc shared files but not as a documented coordination primitive.
+   - **Long-context model specified at spawn.** Teammates default to `claude-opus-4-7` (non-1M-context variant). For roles that need to read large composite contexts (PM reading full WORKFLOW + DECISIONS + accumulated PRD; Architect reading full ARCHITECTURE + migrations; Security Reviewer reading full PRD + ARCHITECTURE + source), explicitly specify the 1M-context variant when spawning.
+   - **One team per active phase / step.** Team naming convention: `phase-<N>-<step-or-purpose>` (e.g., `phase-1-step-3-drafting`). Created at phase/step entry, torn down at phase/step exit via `TeamDelete` (or direct removal of `~/.claude/teams/{name}/` and `~/.claude/tasks/{name}/` if the calling session lacks team context, as observed during smoke-test cleanup). No cross-phase teams.
+   - **Lead is always the orchestrator session (CoS-as-main-session).** The session that calls `TeamCreate` becomes the lead; lead is immutable per the docs. The Chief of Staff role lives in the main session per CLAUDE.md ("default to CoS behavior") and is never spawned as a teammate within its own team.
+   - **Experimental flag prerequisite.** `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` must be set in `.claude/settings.local.json` (or shell env) at session start. The personal-override settings file is gitignored; not committed.
+
+4. **Fallback to orchestrator-mediated pattern.** Team mode is experimental. If a session experiences team-mode breakage (TeamCreate fails, SendMessage errors, teammates fail to load), the orchestrator-mediated subagent pattern from Step 2 is the fallback — task mode for focused work, approximated meeting mode (fresh respawn with re-briefing) for multi-turn agent work. Fallback isn't a regression; it's the documented backup. Any breakage gets noted in the relevant phase's lessons-learned for future ADR revision.
+
+**Consequences.**
+
+- **Agent files get a preamble edit** applied to PM, Architect, Security Reviewer, UX Designer, Visual Designer. CoS file unchanged.
+- **WORKFLOW.md's "Subagent invocation pattern" subsection** in Phase 1 needs a small revision noting that Step 3 onward uses team mode (versus the task-mode pattern used in Steps 1–2). Captured in the same transition commit as the agent-file preambles.
+- **Smoke-test artifacts already cleaned up** prior to this ADR: `~/.claude/teams/smoketest-agent-teams/` and `~/.claude/tasks/smoketest-agent-teams/` removed.
+- **Per-phase team naming** lets us trace team lifecycle to project phases — e.g., the team for Step 3 drafting will be `phase-1-step-3-drafting`, spawned at Step 3 entry, torn down at Step 3 exit.
+- **Experimental-flag dependency** means Founder/CTO must have a Claude Code session running with `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` enabled to engage in team mode. The `.claude/settings.local.json` file in this worktree was created for this purpose; a parallel file at the main repo's `.claude/` would enable team mode for main-repo sessions too if F/CTO wants that.
+- **A future `docs/agent-engagement.md`** could expand on team-spawn commands, model-selection patterns, troubleshooting. Drafted lazily as patterns emerge during Phase 1 Step 3 rather than upfront.
+- **ADR-003 supersedes nothing**; complements ADR-001 (Phase 0.5 process resolutions) and ADR-002 (Phase 1 Step 2 ratification).
+
+---
+
 ## ADR-002 — Phase 1 Step 2 ratification of preliminary product findings
 
 **Date:** 2026-05-11 (ratification spanned 2026-05-09 through 2026-05-11)
