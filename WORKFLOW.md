@@ -1,13 +1,16 @@
 # WORKFLOW.md
 
 **Project:** mosko-fintech
-**Current version:** v1.3
-**Last updated:** 2026-05-09
-**Current phase:** Phase 1 — Product Definition (PRD), in progress. Step 2 (ratification pass on preliminary product findings) underway.
+**Current version:** v1.4
+**Last updated:** 2026-05-11
+**Current phase:** Phase 1 — Product Definition (PRD), in progress. Step 2 (ratification) complete (see ADR-002); Step 3 (PRD section drafting) entry pending. Team-mode engagement adopted per ADR-003 for Step 3 onward.
 
 ---
 
 ## Changelog
+
+### v1.4 — 2026-05-11
+Phase 1 Step 2 closed; engagement pattern shifted for Step 3 onward. Step 2 ratification of preliminary product findings completed across 2026-05-09 through 2026-05-11; F/CTO-signed-off verdicts for all six findings plus twelve sub-decisions captured in ADR-002. Notable Step 2 expansions vs. PM's tighter scope recommendations: transaction-tracking expanded to cover Plaid Investments alongside Transactions across depository / credit / investment / loan-balance / crypto accounts (ADR-002 §1.3); manual non-Plaid accounts and manual transaction entry added as V1-initiative scope with V1.0/V1.1 sequencing deferred to Phase 4 (§1.5); cost basis and unrealized G/L pulled into V1 with average-cost-fallback realized G/L marked "estimated" (§1.7); securities general principle treating all Plaid-surfaced investment activity uniformly at the transaction level with type as a categorization attribute (§1.8); multi-tenant data model from day one (§1.4). Terminology refinement: "permanent non-goals" relabeled "out-of-scope for this PRD lifecycle" (§3.0). Subagent engagement pattern shifted for Step 3 onward: **ADR-003 adopts Claude Code Agent Teams** (experimental, gated behind `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`) as the multi-agent coordination primitive. Smoke-tested in Claude Desktop (in-process backend; SendMessage works; TaskList not surfaced; teammates default to non-1M-context model — mitigations captured in ADR-003 §3). Five teammate-eligible agent files (PM, Architect, Security Reviewer, UX Designer, Visual Designer) received a "team-mode preamble" instructing them to load SendMessage via ToolSearch as first action when spawned as a teammate. Chief of Staff agent file unchanged — CoS-as-main-session is always the lead, never a teammate. The "Subagent invocation pattern" subsection in Phase 1 detailed steps revised to reference team mode for Step 3.
 
 ### v1.3 — 2026-05-09
 SessionStart hook for automatic re-orientation. Added `.claude/settings.json` with a SessionStart hook that injects the *Subsequent sessions* re-orient prompt from `docs/handoff-prompts.md` as additional context at session start — so Claude performs the four-step orient (phase, role, next deliverable, changelog deltas, plus git status if a feature branch is active) before responding to the user's first message of each session, no manual prompt-pasting required. The hook re-reads `docs/handoff-prompts.md` at fire time; editing the prompt source changes auto-orient behavior without touching `settings.json`. Includes adaptive flagging: when WORKFLOW.md's header indicates a phase transition is pending, Claude appends a one-liner pointing at the phase-transition workflow prompt — detection happens in Claude's response, not in shell, so it's robust to header-format drift. `settings.json` is project-shared (committed); personal overrides belong in `.claude/settings.local.json` (gitignored). Operational gotcha discovered during validation and worth flagging for future-self: worktrees are materialized from the local `main` checkout's current commit, so failing to `git pull` main locally before opening a new Claude Code session means the new worktree won't include recently-merged `.claude/settings.json` or `.claude/agents/` files, and the hook can't fire — pull main locally before relying on settings or agents from a recent merge. Bookkeeping note: this entry is being added post-hoc — the SessionStart hook landed in PR #3 alongside the residual phase/1-prep branch but missed its WORKFLOW.md changelog companion at the time; v1.3 closes that gap.
@@ -436,13 +439,14 @@ These come from the "Preliminary product findings" section of this document. The
    - Bump WORKFLOW.md (likely v1.3) and write the changelog entry.
    - Commit and merge via PR. Move header pointer to Phase 2.
 
-**Subagent invocation pattern for the whole phase** (the answer to "how do I spin up and manage sub-agents during Phase 1?"):
+**Subagent invocation pattern for the whole phase** (per ADR-003):
 
-- **Product Manager** is the workhorse — most session time runs through this agent. Invoke explicitly (`subagent_type: product-manager`) at the start of any drafting block.
-- **Architect** is surgical — short, focused invocations when a feasibility question surfaces. Do not run extended Architect sessions in Phase 1; that's Phase 3's job.
-- **Security Reviewer** is invoked at section-lock time on auth/data/Plaid sections. Veto authority means: do not lock those sections without an explicit Security Reviewer pass.
-- **Chief of Staff** is invoked at phase boundaries — ratification kickoff, PRD lock, phase exit — and whenever ambiguity surfaces about which agent owns a question.
-- **Each subagent invocation is its own context.** Re-brief explicitly. Do not assume the Architect has read what the PM just wrote; paste the relevant excerpt into the invocation prompt.
+- **Step 1–2 used the task-mode subagent pattern**: orchestrator-mediated, one-shot invocations via `Agent(subagent_type=...)` with full re-briefing each turn. That work is complete (ADR-002 records the Step 2 ratification verdicts).
+- **Step 3 onward uses team mode** (per ADR-003): `TeamCreate phase-1-step-3-drafting` at Step 3 entry; teammates spawned via the `Agent` tool with `team_name` and persistent context; peer-to-peer communication via `SendMessage`. Requires `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` in `.claude/settings.local.json`. Fallback to task mode is documented in ADR-003 §4 if team mode breaks mid-session.
+- **Product Manager** is the workhorse — primary teammate, persistent context across all of Step 3.
+- **Architect** is surgical — spawn-on-need within the same team for feasibility questions. Long-context model variant recommended when reading large composite contexts (full WORKFLOW + DECISIONS + accumulated PRD draft).
+- **Security Reviewer** is mandatory at section-lock time on auth / data / Plaid / multi-tenant sections. Veto authority means: do not lock those sections without an explicit Security Reviewer pass.
+- **Chief of Staff** is always the team lead — CoS-as-main-session calls TeamCreate, manages team lifecycle, tears down at phase/step exit. Never spawned as a teammate within its own team.
 - **Founder/CTO is the decider.** Co-piloted agents (PM, Architect, Security Reviewer) propose; Founder/CTO disposes. Don't let any subagent close out a non-trivial decision unilaterally.
 
 **Lessons learned:** *To be added after phase exit.*
