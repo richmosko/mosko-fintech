@@ -38,11 +38,20 @@ Paste this into Claude Code the first time you run `claude` in the mosko-fintech
 
 For sessions after the first, paste this:
 
-> Re-orienting on mosko-fintech. Please re-read `CLAUDE.md` and `WORKFLOW.md`, then summarize: (1) what phase the project is in, (2) what role you're playing in this session, (3) what the immediate next deliverable is, and (4) anything that's changed in the workflow document's changelog since you'd expect to last have seen it.
->
-> If there's an active feature branch, also check git status and tell me where things stand on it.
+> Re-orienting on mosko-fintech. Before answering anything else:
+> 
+> 1. From `main` at the project root: read `CLAUDE.md` first to learn the project's reading order, then read the source-of-truth documents in that order — `WORKFLOW.md`, `DECISIONS.md`, and `PRD.md` / `ARCHITECTURE.md` if they exist. These are the authoritative state.
+> 
+> 2. Scan for in-progress work not yet on `main`. Run `git worktree list`, `git log --all --not main --oneline`, and `git status` on the current branch. For each branch with commits ahead of `main`:
+> 
+>    - List the branch name and its unmerged commits.
+>    - Identify which source-of-truth files those commits touch (`WORKFLOW.md`, `DECISIONS.md`, `PRD.md`, `ARCHITECTURE.md`, `docs/*`, `.claude/*`).
+> 
+>    Keep your orient summary (step 3) anchored to `main`. Do not silently treat unmerged-branch content as the current state. After your summary, present the list of unmerged branches back to the user as discrepancies and ask whether any should be merged to `main` before continuing with what they asked. Don't merge unilaterally.
+> 
+> 3. Summarize, grounded in `main`: (1) what phase **and step** the project is in (cite WORKFLOW.md's header and the most recent ADR on `main`), (2) what role you're playing in this session, (3) what the immediate next deliverable is, and (4) what's changed on `main` since you'd expect to last have seen the project — WORKFLOW.md changelog entries, new ADRs in DECISIONS.md, new PRD/ARCHITECTURE content. Any in-progress feature branches go in the step-2 discrepancy list, not folded into this summary as if they were merged.
 
-**Why this version:** Claude Code starts fresh each session, but the artifacts have grown. The four-step summary makes Claude Code re-derive its orientation from the current state of the repo, rather than assuming nothing has changed. The git status line catches "I left a branch half-done" situations after a multi-week gap.
+**Why this version:** Claude Code starts fresh each session, but the artifacts have grown (DECISIONS.md now carries multiple ADRs; PRD.md exists from Phase 1 onward). The expanded reading order forces Claude to re-derive orientation from `main` in the order CLAUDE.md prescribes, not from a stale snapshot. The unmerged-branch scan catches "I left a branch half-done" situations after a multi-week gap — including the failure mode where in-progress work lives on a feature branch while WORKFLOW.md's header on `main` is stale. Listing the discrepancies and asking before merging keeps the line between shipped and provisional work clean and puts the decision back with the Founder/CTO. The earlier short-form prompt (`re-read CLAUDE.md and WORKFLOW.md`) had a real miss in May 2026: it failed to surface an unmerged branch containing PRD.md + ADR-004 because git status was clean on `main` and the prompt didn't widen the scan beyond the current branch. This version closes that gap.
 
 ---
 
