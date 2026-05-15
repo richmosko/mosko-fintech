@@ -6,6 +6,38 @@ Architectural Decision Records for mosko-fintech. Each entry captures a non-obvi
 
 ---
 
+## ADR-005 — Amendment to ADR-002 §1.2: planning-targets V1 static reference-value rendering
+
+**Date:** 2026-05-14
+**Status:** Accepted
+**Phase:** 1 (Step 3; amends ADR-002 §1.2 V1 non-goals based on §2.3 drafting evidence and PDF-inspection of the canonical Finance_Report)
+
+**Context.** ADR-002 §1.2 ratified specific V1 non-goals for spending categorization, including *"budget targets per category, category-level trend charts, custom user-defined categories, recurring-transaction detection, and category alerts/notifications."* During §2.3.2 (cross-account multi-period cash-flow rollup) drafting, two pieces of evidence required revisiting the budget-targets non-goal:
+
+1. **Parity-matrix lines 178 + 199:** the existing Finance_Report renders the Founder/CTO's authored income and expense target values as static caption text under the Income and Expenses section headers, alongside the actual cash-flow totals — used as reference values for visual comparison, not as tracked-budget-with-variance.
+2. **F/CTO direct PDF inspection of `Finance_Report_2026_04.pdf` page 6:** confirmed the targets appear as inline caption text ("Pre-tax income from all sources… Target is [value]:" and "Discretionary spending… Budget is [value]:"); no variance computation, no alert mechanic, no per-category target breakdown — only two aggregate values (income target as annual, expense target as monthly).
+
+A strict reading of §1.2's "budget targets per category" non-goal would exclude any V1 rendering of target values. A practical reading — surfaced by the §2.3-drafting evidence — distinguishes between *static reference-value rendering* (parity with existing Finance_Report) and *budget-tracking mechanics* (variance computation, threshold alerts, per-category rolling budgets). The original §1.2 non-goal targeted the latter; the former is parity-preserve.
+
+**Decision.** F/CTO lock 2026-05-14 (Option (a)(i) per CoS-surfaced options framing during §2.3.2 drafting):
+
+**Amendment to ADR-002 §1.2:** the V1 non-goal on "budget targets per category" applies to budget *tracking* mechanics — actual-vs-target variance computation, threshold alerts, category-level rolling budgets, per-category target authoring beyond aggregate values. These remain V1 non-goals.
+
+**V1 includes:** static reference-value rendering of two user-authored aggregate targets (one income target, one expense target) as inline caption text alongside the §2.3.2 cross-account cash-flow rendering — parity-preserve with the existing Finance_Report. **No variance computation, no alert mechanic, no per-category target breakdown.**
+
+**Edit mode (Option (i) per F/CTO lock):** V1 includes a settings UI for user-editing of the two target values — the first concrete V1 surface needing a user-editable settings store. (Alternative considered: seeded-at-bootstrap with edit-via-migration-only — rejected on F/CTO call.)
+
+**Consequences.**
+
+- **PRD §2.3.2** describes the planning-targets caption-text rendering as V1; trace anchors to this ADR for the V1/V2 boundary on tracking mechanics.
+- **New V1 settings-UI surface** — introduced solely by this amendment. Architect routing flag #4 in §2.3's Open routing flags block covers the plumbing (generalized settings/preferences table vs planning-targets-specific storage); Sec re-engagement triggered when that plumbing surfaces (per Sec Task #23 forward-looking comment #3 — write-path validation, audit trail, tenant-scoping of the settings store).
+- **New Architect flag on planning-targets storage shape** (flag #5 in §2.3's block): likely one income-target total + one expense-target total, period-typed (annual / monthly); Architect Phase 3 confirms.
+- **Other §1.2 V1 non-goals unchanged:** category-level trend charts (now partially superseded by §2.3.4 Historical Expenditures expenses-only chart — this is a separate amendment surface, see WORKFLOW v1.9 entry for §2.3.4's "capability not in original parity-matrix V1 enumeration" framing; ADR-005 does not amend the trend-charts non-goal); custom user-defined categories (V2 per ADR-004 Decision C taxonomy CRUD V1/V2 split — already amended); recurring-transaction detection (covered as recurring-vendor inference V1 per §2.3.1 inference-layer lock 2026-05-14 — this is also a §1.2 amendment in shape, captured in §2.3.1's trace + routing-flag #2 not in this ADR); category alerts/notifications (remain V1 non-goal).
+
+**Scope note on §1.2 amendments not in this ADR.** The §2.3.1 recurring-vendor inference V1 inclusion and the §2.3.4 expenses-only time-series chart V1 inclusion are both technically §1.2 amendments in shape (the original §1.2 listed "recurring-transaction detection" and "category-level trend charts" as V1 non-goals). They are not consolidated into this ADR because: (a) §2.3.1's inference layer is a sub-decision within the V1-required transaction-to-bucket assignment UI (the alternative is unworkable per F/CTO's archetype), not a stand-alone V1 surface expansion; and (b) §2.3.4 was caught via PDF inspection as a parity-grounded existing-system surface F/CTO already uses, not a V1 expansion. Their V1/V2 boundaries are documented in the §2.3 PRD section's per-story traces and the §2.3 routing-flags block; this ADR documents only the planning-targets amendment because it introduces a genuinely new V1 user-facing capability (the settings UI) not present in the original ADR-002 §1.2 framing.
+
+---
+
 ## ADR-004 — Phase 1 Step 3 script-audit amendments to ADR-002
 
 **Date:** 2026-05-13
