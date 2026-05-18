@@ -6,6 +6,101 @@ Architectural Decision Records for mosko-fintech. Each entry captures a non-obvi
 
 ---
 
+## ADR-006 — Amendment to ADR-004 Decision D: V1 input-layer characterization (bracket schedules + tax_character enum)
+
+**Date:** 2026-05-17
+**Status:** Accepted
+**Phase:** 1 (Step 3; amends ADR-004 Decision D input-layer wording based on F/CTO 2026-05-17 correction surfaced during §2.5 body drafting, plus operationalization of the Sub-Cat tax-character attribute that the §2.5 surface needs)
+
+**Context.** ADR-004 Decision D (2026-05-13) ratified V1 inclusion of estimated quarterly tax payment computation in "primitive form" with the following input-layer characterization: *"Federal marginal rate input"* and *"separate marginal rate input"* for Federal and California FTB. That wording was derived from the 2026-05-13 script audit's reading of the Asset Summary `Est Taxes` sheet (parity-matrix line 80: *"Marginal tax rate input, quarterly estimated payment computation…"*). During §2.5 body drafting, two pieces of evidence required revisiting the input-layer characterization:
+
+1. **F/CTO 2026-05-17 correction on the bracket-aware shape:** F/CTO direct workflow knowledge surfaced that the existing Est Taxes sheet does not use a single marginal-rate input × income; it uses **marginal tax bracket tables + standard deduction**, with realized income for the year plugged into the bracket schedule and tax computed progressively against the deduction. F/CTO quote: *"existing flow with the google sheets has marginal tax brackets and rates listed on the est_taxes sheet. The income for the year get's plugged into that set of tables and estimates the real tax amount based on using the standard deduction. This is more accurate than just plugging in a marginal rate to use…"* The 2026-05-13 audit-derived ADR-004 wording was incomplete — the audit characterization was simplified relative to the actual sheet, and the ADR's "marginal rate input" framing was a re-narration of that incomplete audit reading rather than a deliberate F/CTO scope decision.
+
+2. **§2.5.1 ζ-2 lock on Sub-Cat tax-character attribute:** §2.5.1 body drafting surfaced the need for the per-Sub-Cat tax-character attribute as a V1 input layer alongside the bracket schedules — to route qualified dividends to the Federal LT CG schedule, exclude tax-exempt interest from Federal computation, and provide forward-compat for V2+ tax-character refinements. F/CTO locked ζ-2 at 2026-05-17: a `tax_relevant` boolean + `tax_character` enum with 5 V1 values (`ordinary` / `qualified_dividend` / `tax_exempt_interest` / `long_term_capital_gain_eligible` / `short_term_only`) on each Sub-Cat in the §2.3.1 + §2.2.1 taxonomies.
+
+The audit-derived "marginal rate input" wording would, under a strict reading, justify a less-accurate V1 (single rate × income) than the F/CTO existing system actually uses. A practical reading — anchored in F/CTO direct workflow knowledge — confirms the existing system's bracket-aware computation as the V1 baseline. This ADR documents the amendment.
+
+**Decision.** F/CTO lock 2026-05-17 (per CoS-relayed §2.5 v2 structure proposal + §2.5.1 / §2.5.2 body drafting):
+
+**Amendment to ADR-004 Decision D (two-axis amendment):**
+
+### Axis 1 — V1 input layer: bracket schedules + standard deduction (§2.5.2-scope)
+
+The Decision D input-layer wording "Federal marginal rate input" / "separate marginal rate input" is amended to:
+
+> **V1 input layer (per-jurisdiction bracket tables + standard deduction, user-entered):**
+> - Federal **ordinary-income bracket schedule** (multi-row rate + threshold table)
+> - Federal **separate LT capital-gains bracket schedule** (typical: 3 rows 0% / 15% / 20%)
+> - Federal **standard deduction** scalar
+> - California FTB **ordinary-income bracket schedule** (single schedule; CA treats LT capital gains as ordinary income, no separate CA LT CG schedule in V1)
+> - California **standard deduction** scalar
+> - Single-filing-status V1 (F/CTO's filing status fixed at seed time)
+> - **User-entered, manual update at tax-year rollover** — no live tax-data API in V1
+
+**V1 quarterly estimated payment computation is bracket-aware progressive** against these schedules with standard deduction applied to ordinary-routed income before the bracket walk. Live tax-data API ingestion of bracket tables is V2+.
+
+### Axis 2 — V1 input layer: Sub-Cat tax-character attribute (§2.5.1-scope)
+
+Additive to Decision D's input-layer characterization:
+
+> **Each Sub-Cat in the §2.3.1 cash-flow taxonomy and the §2.2.1 asset taxonomy that holds securities subject to capital-gain realization carries:**
+> - `tax_relevant` boolean — gates whether the Sub-Cat contributes to §2.5.1 tax-relevant income decomposition
+> - `tax_character` enum with 5 V1 values: `ordinary` / `qualified_dividend` / `tax_exempt_interest` / `long_term_capital_gain_eligible` / `short_term_only`
+
+**Federal routing rules per the enum (applied by §2.5.3 computation engine):**
+
+| §2.5.1 column | `tax_character` enum | Federal schedule routed to |
+|---|---|---|
+| Ordinary Income | `qualified_dividend` | LT CG |
+| Ordinary Income | `tax_exempt_interest` | (excluded from Federal computation) |
+| Ordinary Income | `ordinary` / `short_term_only` / `long_term_capital_gain_eligible` / default | Ordinary |
+| ST CG | any | Ordinary |
+| LT CG | any | LT CG |
+
+California FTB routing collapses to a single ordinary schedule per (κ) — all non-excluded contributions route to the CA ordinary schedule.
+
+**Both attributes seeded at V1 bootstrap** from the F/CTO existing system (parallel to ADR-004 Decision C taxonomy seeding) and editable via migration only in V1; user-editable Sub-Cat tax-attribute CRUD UI is V2+ as an extension to §2.3.1 + §2.2.1 broader taxonomy CRUD V2+.
+
+### Decision D "Primitive means" boundary — unchanged
+
+Both axes operationalize Decision D's "Primitive means" framing rather than expanding it. The following remain V2+ per the original Decision D verdict (unchanged by this amendment):
+
+- Multi-state tax handling (any non-California state)
+- Non-US tax handling (RRSP, ISA, foreign tax credits, etc.)
+- Lot-level tax features (FIFO/LIFO/specific-ID lot-matching; wash-sale auto-detection; Section 1256 auto-detection; tax-loss harvesting recommendations) — per ADR-002 §1.7 + ADR-004 D
+- Monte Carlo longevity modeling — per ADR-002 Finding (b)
+
+### F/CTO V1-simplification scope choices (locked alongside ADR-006)
+
+The §2.5 body drafting surfaced two additional V1-simplification scope choices that operationalize Decision D's "Primitive means" framing **without expanding Decision D's V1 scope** (and therefore don't require ADR-006 amendment surface — documented here for decision-history completeness):
+
+- **μ-2 (Realized side at §2.5.3): bracket-derived expected-annual ÷ 4 only; no safe-harbor floor computation in V1.** Tax Balance Prior Year row appears as informational reference only. Safe-harbor computation (Federal 100%/110%-of-prior-year + CA FTB rules) is V2+. F/CTO 2026-05-17 deliberate scope choice for V1 simplicity.
+- **ο-a (Unrealized side at §2.5.4): simplified marginal × aggregate G/L per F/CTO Task #2 close verification (2026-05-14).** Federal_LT_CG_top_bracket_rate × `aggregate_unrealized_G/L_taxable` + CA_top_marginal_rate × `aggregate_unrealized_G/L_taxable`. No ST/LT split; no tax_character enum routing on Unrealized; no §2.5.3 engine reuse for Unrealized. **Federal_top_marginal_rate sourced from Federal LT CG top-bracket row per F/CTO 2026-05-17 override** (less-conservative parity choice over PM's conservative-default ordinary top-bracket; aligns with existing-system Est Taxes sheet treatment per F/CTO direct-workflow-knowledge clarification of the Task #2 "marginal-rate" factor). Bracket-aware-as-if-realized refinements (ο-b full / ο-c hybrid-LT-only) are V2+.
+
+**Sec sensitivity note.** Sec at-lock 2026-05-17: *"Sec-class implications: data class #1 (tax-bracket-revealing data — §2.5.2 bracket schedules + standard deduction) sensitivity incrementally higher post-amendment vs. the original Decision D scalar-rate framing; storage / access-control posture unchanged."*
+
+**Consequences.**
+
+- **PRD §2.5 body content traces to ADR-006** for the input-layer scope characterization. The bracket schedules + standard deduction at §2.5.2 + the Sub-Cat tax-character enum at §2.5.1 are direct downstream of ADR-006's two-axis amendment. §2.5.3 computation consumes both axes; §2.5.4 Realized consumes via §2.5.3; §2.5.4 Unrealized under ο-a consumes only the top-marginal-rate values from §2.5.2 (a specific top-bracket row read per jurisdiction, not the full schedule or the tax_character routing).
+
+- **ADR-006 supersedes nothing; amends ADR-004 Decision D specifically.** Parallel to how ADR-005 amended ADR-002 §1.2 — narrow, surgical, with the parent ADR's other clauses unchanged. Future readers should read ADR-004 Decision D first, then ADR-006 to layer the input-layer amendment.
+
+- **ADR-006 reinforces the audit-derived-ADR-text feedback pattern** (memory entry 2026-05-17): when audit notes are re-narrated into ADR text, the resulting ADR wording can over-simplify relative to the actual artifact. The 2026-05-13 script audit reading of the Est Taxes sheet as "marginal rate input" was an over-simplification; F/CTO direct workflow knowledge surfaced the actual bracket-aware computation during §2.5 body drafting. Future ADRs that re-narrate audit findings should be verified against direct artifact inspection at body-drafting time, not assumed to be deliberate scope decisions.
+
+- **PRD §2.5.2 + §2.5.1 settings-store and taxonomy schema additions surface as Architect routing flags** (§2.5 routing-flags block items (a) Sub-Cat tax_character schema, (e) bracket-table-update cadence, (f) §2.5.2 settings store dedup, (g) bracket-schedule routing logic location). Architect Phase 3 picks the implementation shape for both axes; the V1 PRD commitment is the user-facing shape per ADR-006, the storage / query / caching shapes are downstream.
+
+- **§2.5.2 settings store extends §2.3.2 planning-targets settings store per ADR-005.** The richer field shape (multiple bracket rows × multiple schedules × per-jurisdiction × standard deduction scalar, vs. §2.3.2's two scalars) is a new Architect Phase 3 dedup-vs-separate decision. Sec re-engagement on the settings-UI plumbing was already triggered at §2.3.2 lock per Sec Task #23 forward-looking comment #3; §2.5.2 extends the surface additively, not as a new trigger.
+
+- **Sec sensitive-data class #1 (tax-bracket-revealing data) sensitivity upgraded incrementally** post-amendment. The original Decision D scalar-rate framing exposed a single-scalar-per-jurisdiction rate; the amended framing exposes per-jurisdiction multi-row bracket schedules + standard deduction scalar. Sec storage / access-control posture commitment from §2.3.2 settings-UI tenant-scoping carries; no new storage / access-control surface. ADR-006 records this as a Sec-recorded note rather than a new Sec routing flag.
+
+- **No supersession of ADR-004 as a whole.** ADR-006 amends Decision D's input-layer characterization specifically; ADR-004's other Decisions (A target visualization, B multi-scope ownership, C multi-level taxonomy) stand unchanged. ADR-002 amendments via ADR-004 stand unchanged.
+
+- **F/CTO V1-simplification scope choices μ-2 + ο-a documented here for decision-history; not separately ADR-ratified.** μ-2 (safe-harbor V2+ on Realized side) and ο-a (simplified marginal × G/L on Unrealized side) are operationalizations within Decision D's "Primitive means" framing — they don't expand V1 scope beyond what Decision D already authorized, and they pre-existed in F/CTO's existing-system Est Taxes sheet per F/CTO direct-workflow-knowledge. Documenting them in ADR-006 preserves the decision history without elevating them to amendment-shape (they're refinements of Decision D's existing primitive-form scope, not amendments).
+
+- **Future ADRs touching tax-domain inputs route to ADR-006** as the input-layer characterization anchor. Future V2+ amendments (e.g., live tax-data API; multi-state expansion; lot-level features) reference ADR-006 + ADR-004 Decision D as the V1 baseline they're expanding from.
+
+---
+
 ## ADR-005 — Amendment to ADR-002 §1.2: planning-targets V1 static reference-value rendering
 
 **Date:** 2026-05-14
