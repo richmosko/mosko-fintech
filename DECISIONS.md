@@ -6,6 +6,50 @@ Architectural Decision Records for mosko-fintech. Each entry captures a non-obvi
 
 ---
 
+## ADR-007 — Amendment to ADR-002 Finding (b): tax-loss-harvesting recommendations reclassified from V2+ candidate to permanent non-goal
+
+**Date:** 2026-05-17
+**Status:** Accepted
+**Phase:** 1 (Step 3; amends ADR-002 Finding (b) per F/CTO 2026-05-17 ratification during §5 V2 deferred candidates structure proposal)
+
+**Context.** ADR-002 Finding (b) enumerates four explicit V2 candidates: Tax planning (estimated payments), Monte Carlo longevity modeling, Lot-level tax features, and Stock screening (with "possibly a separate tool" hedge). The consolidated V2+ deferred list in ADR-002 §2.0 expanded those four into a broader ~18-item enumeration during the Phase 1 Step 2 ratification; that consolidated list specifically named "Lot-level tax features (per 1.7: lot-level UI, FIFO/LIFO/specific-ID matching, wash-sale detection, **tax-loss harvesting**)" — folding tax-loss harvesting under the lot-level-tax-features V2+ banner.
+
+During Phase 1 Step 3 §5 (V2 deferred candidates) structure-proposal review, the §5/§6 axis surfaced TLH recommendations as advisor-shaped rather than observational. The §5/§6 axis is sharp: §5 enumerates capabilities on the eventual product trajectory (locked-as-V2+ in V1 to preserve scope, but anticipated as legitimate later work); §6 enumerates capabilities that are not in this PRD's universe at all (ADR-002 §3.0 permanent non-goals — public sign-up, money movement, advisor / fiduciary role, real-time price quotes, mobile-native app). PM lean at the §5 structure proposal flagged TLH as a §5/§6 reroute candidate with PM-lean toward §6: "TLH as conceived in Finding (b) — recommend a tax-action against a position — is advisory-shaped output, not observational; sits closer to ADR-002 §3.0 advisor-role non-goal than to V2 trajectory."
+
+F/CTO ratified the PM lean 2026-05-17. This ADR documents the amendment.
+
+**Decision.** F/CTO lock 2026-05-17 (per PM-lean Q3a accepted at §5 structure-proposal ratify gate):
+
+**Amendment to ADR-002 Finding (b) (and the §2.0 consolidated V2+ deferred list's "Lot-level tax features" clause):** Remove "Tax-loss harvesting recommendations" from the V2+ trajectory enumeration. TLH is reclassified as **out-of-scope for this PRD lifecycle (§6 home)** under the advisor-role permanent-non-goal axis (ADR-002 §3.0).
+
+**Rationale.** TLH as conceived in Finding (b) — "recommend a tax-action against a position" — is advisory-shaped output. The recommendation is action-prescriptive ("you should sell holding X to harvest a $Y loss against your realized gains"); it implies tax-timing-and-realization advice with a held-position recommendation as its operative output. This crosses the ADR-002 §3.0 advisor / fiduciary role boundary that the V1 PRD treats as a permanent product-identity non-goal — not a deferral, an identity statement.
+
+Distinguishing TLH from the observational tax surfaces that V1 / V2+ legitimately span: §2.5 Estimated Taxes (V1), §3.2 Metric 2 (mixed `tax_treatment` + jurisdictions capability metric), and §3.3 §2.5 parity test all surface tax obligations and computations as **information** ("here's what you owe, here's how much was realized, here's the bracket-aware projection"). TLH would generate **prescriptive recommendations** ("you should sell X to harvest a $Y loss"). The information-vs-prescription axis is what §6's advisor-role boundary protects.
+
+**Distinction from observational tax-tool extensions that REMAIN on the V2+ trajectory list.** Two ADR-002 §1.7 / Finding (b) clauses are retained as V2+ candidates in §5.5 and do not move with this amendment:
+
+- **Lot-level tax features (FIFO / LIFO / specific-ID lot-matching).** These compute cost basis with more precision and provide lot-level reporting surfaces; they do not generate buy / sell recommendations. Remain V2+ in §5.5 per ADR-002 §1.7 + ADR-004 Decision D V2+ enumeration.
+- **Wash-sale auto-detection.** Flags wash-sale rule application on existing realized transactions as an informational annotation on past activity; does not recommend future trades. Remains V2+ in §5.5 per ADR-002 §1.7 V2+ enumeration. V1 already ships user-marked wash-sale flag as an information surface; auto-detection is a refinement of that information surface, not a prescription.
+
+The TLH amendment is narrow: only the "recommend tax-actions against unrealized losses" framing is reclassified to §6. Information-surface extensions of the tax domain (more-precise cost basis, more-accurate identification of wash-sale rule application, multi-state expansion, fiscal-year flexibility, etc.) remain V2+ trajectory items.
+
+**§5/§6 placement consequence.** TLH lands in §6 alongside the existing ADR-002 §3.0 permanent non-goals (public sign-up, money movement, advisor / fiduciary role, real-time price quotes, mobile-native app). §6 body drafting in a future thread will enumerate TLH as one of the listed items under the advisor-role axis. §5.5 (estimated-tax deferrals) does not list TLH; this is the body-level consequence of the ADR-007 reclassification and is reflected in the §5 bulk-closeout body landed alongside this ADR.
+
+**Sec note.** ADR-007 carries no new sensitive-data class and no new credential-handling surface. The amendment narrows V2+ scope rather than expanding it; no Sec posture change. (Parallel to ADR-005 / ADR-006 Sec one-line notes for amendment ADRs that don't expand the data or credential surface.)
+
+**Consequences.**
+
+- **PRD §5.5 (V2 deferred candidates — estimated-tax deferrals) does not list TLH.** The §5 body landed alongside this ADR omits TLH from §5.5. Future readers seeking TLH's V1 PRD home should reference §6 (out-of-scope for this PRD lifecycle) and the §6 enumerated permanent-non-goal list under the advisor-role axis.
+- **PRD §6 will enumerate TLH at §6 body drafting time.** §6 is currently a stub on PRD.md; §6 drafting in a future thread lands TLH alongside the existing ADR-002 §3.0 permanent non-goals.
+- **ADR-002 Finding (b)'s remaining V2+ enumeration stands.** Monte Carlo longevity modeling remains V2+ (landed in §5.5 as observational projection surface per F/CTO Q3b ratify). Stock screening remains V2+ with the "possibly a separate tool" hedge preserved verbatim (landed in §5.5 with hedge per F/CTO Q3b ratify). Tax planning (estimated payments) was already promoted to V1 by ADR-004 Decision D and operationalized by ADR-006; no change. Lot-level tax features remain V2+ minus TLH per this amendment.
+- **ADR-007 supersedes nothing; amends ADR-002 Finding (b) specifically.** Parallel to how ADR-005 amended ADR-002 §1.2 (planning targets V1 static reference-value rendering carve-out) and ADR-006 amended ADR-004 Decision D (bracket-aware input layer). Narrow, surgical, with the parent ADR's other clauses unchanged. Future readers should read ADR-002 Finding (b) first, then ADR-007 to layer the TLH reclassification.
+- **ADR-007 reinforces the §5/§6 axis-as-product-identity-boundary pattern.** When a V2+ candidate from an earlier ratification turns out on inspection to cross the §3.0 advisor / fiduciary / money-movement / public-distribution / real-time-quote / mobile-native axis, the resolution is to move it to §6 rather than carry it forward as a deferred V2+ trajectory item that the PRD would have to re-litigate at V2-scoping time. The §5/§6 distinction is the V1 PRD's mechanism for keeping product-identity decisions sharp; ADR-007 is the first amendment that exercises that mechanism.
+- **No supersession of ADR-002 as a whole.** ADR-007 amends Finding (b) specifically; ADR-002's other findings (a / c / d / e / f) and §1.0 – §8.0 sub-decisions stand unchanged. Cross-reference: ADR-005 + ADR-006 also amended ADR-002 surgically without supersession; ADR-007 follows the same pattern.
+- **No new Architect routing flag.** ADR-007 narrows scope; the V1 PRD has no TLH-touching surface to route to Architect Phase 3.
+- **Future ADR housekeeping.** If a V2-scoping-phase review revisits ADR-007 (e.g., F/CTO at V2-scoping time wants to consider a tax-loss-harvesting *information* surface that flags wash-sale-eligible loss opportunities as an observational annotation rather than a prescriptive recommendation), that revisit would be a new ADR — not a supersession of ADR-007. The information-vs-prescription axis is the boundary; an information-surface TLH could in principle re-enter V2+ trajectory without violating the §6 advisor-role boundary.
+
+---
+
 ## ADR-006 — Amendment to ADR-004 Decision D: V1 input-layer characterization (bracket schedules + tax_character enum)
 
 **Date:** 2026-05-17
