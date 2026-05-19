@@ -1,147 +1,160 @@
-# PR 3 body-gate-5 — §2.5 (Estimated taxes) body preview
+# PR 3 body-gate-6 — §2.6 (Monthly report) body preview — FINAL BODY GATE
 
-> Standalone preview of §2.5 body draft + App C extension entries, for body-gate-5 review.
+> Standalone preview of §2.6 body draft, for body-gate-6 review. **This is the final body gate of PR 3.**
 >
-> **§2.5 is the largest §2.x sub-section** (~164 source lines, 5 stories). Shape inventory:
-> - §2.5.1 / §2.5.2 / §2.5.3 / §2.5.4 = **shape-B** (opener + multiple in-body sub-blocks + V1/V2 boundary)
-> - §2.5.5 = **shape-A**
+> **§2.6 = 6 stories** (5 primary + 1 supporting). Shape inventory:
+> - §2.6.1 = **shape-C** (most complex: opener + 6 sub-blocks + **ordered list (6 items)** + **markdown table (6×3)**)
+> - §2.6.2 through §2.6.5 = **shape-B** (opener + 8–10 sub-blocks + V1/V2 boundary each)
+> - §2.6.6 = **NEW shape-B-Supporting pattern** (first Supporting story with sub-blocks in §2; elevates new Sec axis "snapshot store as derivative surface")
 >
-> **3 new §2.5-specific patterns established** (all preserved verbatim under Q-S4 = β):
-> - §2.5.2 inline markdown table (5×3 routing of `tax_character` enum → Federal schedule)
-> - §2.5.3 inline `(1) (2) (3)` numbered-step paragraphs (Federal + California computation walks)
-> - §2.5.4 fenced code block (3-line Unrealized Tax Liability formula)
+> **21 routing-flag entries** (12 Architect + 6 Sec + 3 process records) — largest §2.x flag block.
 >
-> **17 routing-flag entries** — largest §2.x flag block (12 forward-looking Architect flags + 5 process records: dropped-flag historical / PM-default acceptance summary / ADR-006 alongside-lock / Sec product-disclaimer integration / Sec at-lock verdict).
+> **§2.6.6 title rename**: "Monthly report is mine, not anyone else's" → "the user's" — **6th and final instance** of pattern across all §2.x supporting stories.
 >
-> **§2.5.5 title rename** (fifth instance of "mine/my → user's" pattern after §2.1.7 / §2.2.4 / §2.3.5 / §2.4.5).
+> **VP closures at body-gate-6:** VP-3 (σ-1/σ-2/σ-3 framing preserved in body) + VP-4 (V1/V2 boundary blocks confirmed as standard shape-B structure) + VP-13 + VP-14 (markdown table + code block precedents) all close. **No new VPs surfaced.**
 >
-> **Compression: 164 source → ~145 body (~12%)** — lowest §2.x ratio so far. Shape-B preservation across 4 stories + inline table + code block + numbered-step paragraphs preserves more than the structure-proposal estimate assumed.
->
-> **3 new VPs:** VP-12 (process-records-in-routing-flag-block structural mismatch); VP-13 (markdown-table precedent — closes at body-gate-6); VP-14 (code-block precedent — closes at body-gate-6).
+> **Compression: 198 source → ~155 body (~22%)**. App C entries: 6. App B entries: 21.
 
 ---
 
-## §2.5 body draft (proposed for PRD.md integration)
+## §2.6 body draft (proposed for PRD.md integration)
 
-### 2.5 Estimated taxes
+### 2.6 Monthly report
 
 #### Primary stories
 
-**2.5.1 Tax-relevant income decomposition (Income / ST CG / LT CG).**
+**2.6.1 Monthly report composition and section ordering.**
 
-V1 decomposes the user's realized income for the current tax year into three columns — **Ordinary Income**, **Short-Term Capital Gain**, and **Long-Term Capital Gain** — at the Sub-Category granularity the user's taxonomy uses, so the user reads at a glance which buckets contribute to which tax-character class and so the same decomposition feeds the §2.5.3 progressive bracket computation cleanly per jurisdiction.
+V1 renders the monthly report as a single standalone document with a fixed sequence of six named sections — **Account Holdings → NAV Performance → Asset Allocation → Rebalancing Targets → Cash Flow → Estimated Taxes** — composed from the §2.1–§2.5 surfaces the live app already supplies, with Historical Expenditures rendered inline within the Cash Flow section and an owner-identification trust-name header at the top, so the canonical V1 deliverable the user relies on today carries forward into V1 with the same shape and the same reading order, and every report section traces unambiguously back to the live surface that authored its content.
 
-**Input sources.** Ordinary Income contributions come from §2.3.1's cash-flow taxonomy: transactions whose Sub-Cat is **user-marked tax-relevant** on the Income side of §2.3.1 (salary, dividends, interest, bond premiums, and any other ordinary-income Sub-Cats the F/CTO seed marks) contribute to the Ordinary Income column. Capital-gain contributions come from the realized-G/L pairing of §2.4.3 transactions: each `sell` transaction (Plaid-sourced or manual) is paired against its lot-level cost basis per §2.4.3, the per-pairing gain or loss is decomposed into Short-Term or Long-Term, and the resulting ST CG / LT CG amounts are surfaced under the Sub-Cat the underlying holding carries per §2.2.1 (e.g., an Equity → US-Index_Non_Sector holding sold at a gain contributes ST CG or LT CG under that Sub-Cat row). Two input sources, one decomposition surface, joined by Sub-Cat.
+**Composition contract scope.** §2.6.1 is the composition contract for the monthly report-as-artifact: which sections appear, in what order, with what header, and which upstream §2.1–§2.5 surfaces author each section's content. §2.6.1 does **not** redefine any individual section's content shape — each section's content authority lives in the originating § (e.g., the Account Holdings rendering is owned by §2.1.5, not re-specified here). §2.6.1 does **not** own free-text Rebalancing Targets capture (that's §2.6.2), generation cadence or format or snapshot semantics or retention (those are §2.6.3 / §2.6.4), staleness-marker rendering (that's §2.6.5), the owner-identification config storage shape (that's §2.6.4 — §2.6.1 names the header slot but §2.6.4 owns the config), or tenant isolation on the report read path (that's §2.6.6 Supporting). §2.6.1's job is to lock the **section list, the section order, and the cross-section data-source map** for V1.
 
-**Tax-relevance and tax-character marking at the Sub-Cat level.** V1 carries **two attributes** on each Sub-Cat in the §2.3.1 cash-flow taxonomy and on each Sub-Cat in the §2.2.1 asset taxonomy that holds securities subject to capital-gain realization: a **`tax_relevant` boolean** and a **`tax_character` enum** with V1 values `ordinary` / `qualified_dividend` / `tax_exempt_interest` / `long_term_capital_gain_eligible` / `short_term_only`. The boolean gates whether a Sub-Cat contributes to §2.5.1 at all; the enum drives downstream §2.5.3 bracket-schedule routing.
+**Section list and ordering — V1 fixed six-section sequence.** The V1 monthly report carries six sections in the following fixed order, parity-exact with the existing Finance_Report layout (parity-matrix lines 98 – 109):
 
-**Holding-period (ST vs LT) determination.** Per §2.4.3's existing-system parity: each `sell` transaction's holding-period classification derives from the **Open Date** of the underlying lot relative to the sale's `Close Date`. V1 uses the existing-system `calculateSales`-equivalent output as the source-of-truth: holding period > 365 days → LT, otherwise → ST. **Section 1256 60/40 user-classified at the Sub-Cat level** via the existing `Volatility-60/40` Sub-Cat per ADR-004 Decision D. **User-marked wash-sale flag** on the underlying sale transaction excludes the disallowed-loss amount from the ST/LT column; auto-detection is V2+.
+1. **Account Holdings** — the integrated NAV-buildup table.
+2. **NAV Performance** — comparison anchor at three reference dates, multi-horizon delta panel, and 60-month inflation-normalized NAV chart.
+3. **Asset Allocation** — per-asset Cat × Sub-Cat allocation table plus asset-allocation visualizations.
+4. **Rebalancing Targets** — free-text commentary captured by the user each month.
+5. **Cash Flow** — Income + Expenses table with Historical Expenditures chart rendered inline immediately below the Expenses table per parity-matrix lines 105 – 106.
+6. **Estimated Taxes** — the three-column tax-relevant income decomposition plus the Federal and California FTB quarterly tables.
 
-**Tax-year scope.** V1 scopes decomposition to the **current calendar year** (Jan 1 – Dec 31), Federal default; California FTB year-boundary aligned. The decomposition recomputes live as transactions land and as user-marked tax-relevance / tax-character attributes update.
+The order is **V1-fixed, not user-configurable**: V1 does not ship a settings UI for reordering or hiding sections. Every V1 monthly report renders all six sections in this order. The parity grounding is the canonical existing Finance_Report month-after-month reading sequence the F/CTO has shipped against for years; locking the order V1 removes one decision surface from the V1 build and preserves the reading pattern unchanged.
 
-**Layout.** Single Sub-Cat-row × 3-column table with Cat-group section headers (Income Cat group as one section; Capital Gains Cat groups as a second section grouped by asset Cat — Equity / Bonds / Alternatives etc.). Total row foots the table; per-Cat-group subtotals as group aggregates.
+**Cross-section data sources.**
 
-**V1/V2 boundary.** [V1/V2 split content preserved verbatim — see full draft in `docs/prd-rewrite-pr3-body-preview.md` for complete content.]
-
-*Traces: see Appendix C → 2.5.1.*
-
-**2.5.2 Tax-bracket inputs (Federal + California FTB parallel).**
-
-V1 supports the user entering and maintaining Federal and California FTB tax-bracket schedules and standard deductions for the current tax year through a V1 settings UI, so the §2.5.3 progressive bracket computation has the per-jurisdiction grammar it needs to estimate the user's actual obligations against §2.5.1's three-column realized-income decomposition.
-
-**Settings UI scope.** A V1 settings UI holds, per jurisdiction (Federal and California FTB), the **bracket schedule(s)** that apply to the user's filing status for the **current tax year**, plus a **standard deduction** scalar.
-
-**Federal bracket schedules (two per (λ) lock).** Federal carries **two parallel bracket schedules** — an **ordinary-income schedule** (~7 rows) and a **separate LT capital-gains schedule** (~3 rows: 0% / 15% / 20%) — plus a single Federal standard deduction.
-
-**California FTB bracket schedule (single per (κ) lock).** California FTB carries a **single ordinary-income bracket schedule** (~9 rows) plus a single California standard deduction. California taxes LT capital gains as ordinary income.
-
-**Routing the §2.5.1 `tax_character` enum into bracket schedules:**
-
-| §2.5.1 column | `tax_character` enum | Federal schedule routed to |
+| Report section | Upstream surface(s) | Composition note |
 |---|---|---|
-| Ordinary Income | `qualified_dividend` | LT CG |
-| Ordinary Income | `tax_exempt_interest` | (excluded from Federal computation) |
-| Ordinary Income | `ordinary` / `short_term_only` / `long_term_capital_gain_eligible` / default | Ordinary |
-| ST CG | any | Ordinary |
-| LT CG | any | LT CG |
+| **Account Holdings** | §2.1.5 (composition buildup) | The §2.1.5 integrated NAV-buildup table is the canonical Account Holdings rendering — per-account values + unrealized G/L grouped by account-type, with subtotals running Total Non-RE → Gross Total → Debt → Realized Tax Liabilities → Unrealized Tax Liabilities → NAV per parity-matrix line 99. |
+| **NAV Performance** | §2.1.2 + §2.1.3 + §2.1.4 | Three §2.1 surfaces compose into one report section: §2.1.4 NAV-at-three-reference-dates table, §2.1.3 multi-horizon NAV-delta panel, and §2.1.2 NAV chart. |
+| **Asset Allocation** | §2.2.2 + §2.2.3 | Per-asset Cat × Sub-Cat allocation table + asset-allocation visualizations per parity-matrix line 101. |
+| **Rebalancing Targets** | §2.6.2 | The one report-section whose content the §2.1–§2.5 live surfaces do **not** author. |
+| **Cash Flow** | §2.3.2 + §2.3.4 | §2.3.2 Income + Expenses Category × Month/Q1-Q4/YTD tables primary; §2.3.4 Historical Expenditures chart renders **inline within the Cash Flow section** (below the Expenses table). |
+| **Estimated Taxes** | §2.5.1 + §2.5.3 | §2.5.1 three-column tax-relevant income decomposition + §2.5.3 Federal + California FTB quarterly tables. §2.5.4 NAV-component values appear on Account Holdings via §2.1.5, not as Estimated Taxes section rows. |
 
-**Settings-UI plumbing extends §2.3.2 store per ADR-005.** Whether V1 dedups this richer surface into the §2.3.2 settings store as additive tables or splits it into a separate tax-bracket store is **Architect Phase 3**.
+**Owner-identification header.** Trust-name string (parity example: "*THE RICHARD MELVIN MOSKO, JR. 2023 TRUST*" per parity-matrix line 94) + month/year stamp. Administrative label, **not a tenant-isolation boundary or scope filter** — report content remains full-household. Config storage shape is §2.6.4's surface.
 
-**Update cadence (user-manual at tax-year rollover).** V1 has no live tax-data API; the user updates bracket rows + thresholds + standard deduction at tax-year rollover.
+**Sections dropped from parity.** Amortized Expenses (Big Ticket Fund) dropped per F/CTO Phase 0.5 call; Historical Expenditures as standalone top-level section collapses into Cash Flow inline rendering.
 
-**Standard-deduction filing-status awareness.** V1 carries a single standard-deduction scalar per jurisdiction; filing-status enum is V2+.
+**V1/V2 boundary.**
+*V1:* fixed six-section sequence in parity-exact order; Historical Expenditures inline within Cash Flow; owner-identification trust-name + month/year header; composition map normative; Amortized Expenses dropped; §2.5.4 NAV-component lines on Account Holdings.
+*V2+:* user-configurable section ordering (ω-2); user add/remove sections (ω-3); user-defined custom sections; multi-scope reports (parity-matrix line 180 V2+); reintroduction of Big Ticket Fund / Amortized Expenses; alternative cross-section composition.
 
-**Applied-rate brief echo on §2.5.3 tax tables (per δ-2 lock).** Each §2.5.3 tax table carries a one-line caption naming the applied marginal rates.
-
-**V1/V2 boundary.** [V1/V2 split preserved verbatim.]
-
-*Traces: see Appendix C → 2.5.2.*
-
-**2.5.3 Quarterly estimated payment computation + IRS/FTB account tracking.**
-
-V1 computes each tax-year quarter's estimated payment against current realized income and bracket schedules, rendering a per-jurisdiction table showing the prior-year tax balance for reference, four quarterly estimated payments, year-to-date payments tracked through the IRS and FTB account ledgers, and the Estimated Funds Due as the gap.
-
-**Per-jurisdiction parallel tables.** §2.5.3 renders two parallel tables — Federal Income Taxes + California State Income Taxes (CA FTB).
-
-**Computation engine — progressive bracket math with standard deduction.** The engine consumes §2.5.1's three-column decomposition + §2.5.2 bracket schedules + standard deduction and produces a per-jurisdiction expected annual tax liability with the quarterly breakdown.
-
-Federal computation in concrete steps: (1) sum Ordinary Income column (excluding qualified_dividend and tax_exempt_interest-tagged contributions) + ST CG column → **Federal ordinary income input**; (2) subtract Federal standard deduction → **Federal ordinary taxable income**; (3) walk Federal ordinary bracket schedule progressively → **Federal ordinary tax**; (4) sum LT CG column + qualified_dividend-tagged Ordinary Income contributions → **Federal LT CG income input**; (5) walk Federal LT CG bracket schedule progressively → **Federal LT CG tax**; (6) sum (3) + (5) → **Federal expected annual tax liability**.
-
-California computation collapses to a single schedule per (κ) lock: (1) sum all non-excluded contributions → **CA taxable income input**; (2) subtract CA standard deduction → **CA taxable income**; (3) walk CA ordinary bracket schedule progressively → **CA expected annual tax liability**.
-
-**Annual → quarterly cadence (μ-2 bracket-only locked).** The expected annual liability divided by four yields the **per-quarter expected installment** — V1's sole quarterly-installment-sizing approach. **V1 does not compute a safe-harbor floor** — V2+ refinement.
-
-**IRS + FTB account integration.** The IRS account and FTB account are V1 instances of §2.4.2 manual non-Plaid accounts.
-
-**Estimated Funds Due — overpayment / refund surfacing.** Negative-single-line rendering when YTD Paid exceeds Sub-Total.
-
-**Applied-rate caption echo (δ-2 carry).** Federal table caption "*Federal ordinary: X% / Federal LT CG: Y%*"; California table caption "*California: Z%*".
-
-**Quarterly-due-date cadence surfacing.** V1 ships reactive surfacing only — no pre-emptive notification.
-
-**V1/V2 boundary.** [V1/V2 split preserved verbatim, including ADR-002 §3.0 money-movement non-goal clause.]
-
-*Traces: see Appendix C → 2.5.3.*
-
-**2.5.4 Realized + Unrealized Tax Liability line items (NAV components).**
-
-V1 derives §2.1.1 NAV's two tax-component line items — **Realized Tax Liability** and **Unrealized Tax Liability** — consistently from the user's current Federal + California FTB tax state and surfaces them as the values §2.1.5's composition buildup renders.
-
-**Cross-section contract closure.** §2.5.4 is the story that closes the cross-reference contract §2.1.1 NAV definition and §2.1.5 composition buildup hold open.
-
-**Realized Tax Liability — derivation.** Realized Tax Liability is the **current accrued Federal + California FTB tax obligation net of payments already made**: the Estimated Funds Due (IRS) gap from §2.5.3 Federal table summed with the Estimated Funds Due (FTB) gap from §2.5.3 California table.
-
-**Unrealized Tax Liability — derivation (ο-a locked simplified marginal × aggregate G/L).**
-
-```
-Unrealized Tax Liability = (Federal_LT_CG_top_bracket_rate × aggregate_unrealized_G/L_taxable)
-                        + (CA_top_marginal_rate × aggregate_unrealized_G/L_taxable)
-```
-
-where `aggregate_unrealized_G/L_taxable = sum across V1-included taxable-account holdings of (current market value − aggregate cost basis)`. **Tax_character enum routing is NOT used for V1 Unrealized**, and the §2.5.3 progressive bracket computation engine is NOT consumed — both intentional V1 simplifications under ο-a.
-
-**Tax-advantaged account exclusion (per (π) lock).** Unrealized Tax Liability **excludes holdings in tax-advantaged accounts** (`tax-deferred` or `tax-free` per ADR-002 §1.6).
-
-**Single-line-per-component rendering (per (ρ) lock).** Two NAV-component values — one Realized + one Unrealized scalar (Federal + CA summed each).
-
-**Tax-year scope.** Current-tax-year computed; live-recompute on transaction changes, market-value changes, bracket-table edits.
-
-**V1/V2 boundary.** [V1/V2 split preserved verbatim, including Sec product-disclaimer:]
-
-***This estimate may understate actual tax owed if any portion of unrealized gain would be realized at short-term rates (ordinary income); users should treat the Unrealized Tax Liability as an LT-aware floor estimate, not a precise tax forecast.***
-
-*Traces: see Appendix C → 2.5.4.*
-
-#### Supporting stories
-
-**2.5.5 Tax surfaces are the user's, not anyone else's.**
-
-V1 surfaces only the requesting user's own income, holdings, and tax obligations across the §2.5.1 / §2.5.3 / §2.5.4 surfaces (and the §2.5.3 δ-2 applied-rate captions); no possibility of another user's data appearing. Tax surfaces aggregate into a single **full-household tax view by default**, spanning every ownership scope held (e.g., personal, trust, retirement custodial, HSA), with the §2.5.4 (π) tax-advantaged exclusion applied as a data-attribute filter on the Unrealized aggregation but not as a scope-isolation mechanism. The result is tax surfaces the user can trust absolutely, reflecting the entire household position the way the user thinks about it, and honoring the system's multi-tenant commitment from day one even though V1 ships to a single user. Per-scope tax-surface rendering and scope-aware UI filtering across all three named surfaces are V2+; the data model carries scope on each account from V1 (per ADR-004 Decision B) so the V2 expansion ships without data migration. **Scopes are user-owned data labels, not V1 isolation boundaries** — tenant isolation is the V1 isolation boundary; scopes are first-class attributes within a single tenant. The §2.5.4 `tax_treatment` filter (per (π) lock — `taxable` / `tax-deferred` / `tax-free` per ADR-002 §1.6 three-way tagging) is a data-attribute inclusion filter on the §2.5.4 Unrealized aggregation surface, distinct from both tenant isolation and scope — the three V1 attributes (`tenant_id` for isolation; `scope` as data label; `tax_treatment` as inclusion filter on a specific aggregation) compose cleanly without conflation.
-
-*Traces: see Appendix C → 2.5.5.*
-
-*Routing flags affecting §2.5: see Appendix B (created in PR 10; pending consolidation).*
+*Traces: see Appendix C → 2.6.1.*
 
 ---
 
-> **Note:** Above body draft includes condensed V1/V2 boundary blocks for preview length; the full §2.5 body integration into PRD.md preserves V1/V2 boundary blocks verbatim per shape-B preservation pattern. See PM Deliverable 1 in conversation for full content.
+**2.6.2 Rebalancing Targets free-text commentary.**
+
+V1 provides an editor surface where the user authors the **Rebalancing Targets free-text commentary** that appears on each month's report — written by the user at report-generation time, keyed visually to the `$ ReAlloc` deltas from §2.2.2 as the data grounding, persisted per-report alongside the rest of the month's snapshot — so the action-item narrative the existing Finance_Report carries forward unchanged into V1 in the one parity surface §2.1–§2.5 do not author themselves.
+
+[Body content with 8 sub-blocks preserved verbatim: Capture mechanism scope / **Free-text user-authored under σ-1** (VP-3 closure point — σ-1/σ-2/σ-3 framing here) / Sub-section structure (Cash/Bonds/Equity/Alternatives parity-fixed V1) / `$ ReAlloc` side-by-side reference rendering / Editor format (plain text V1, line breaks preserved) / Pre-population behavior (blank by default, explicit "copy from prior month" affordance) / Capture timing (author-before-generate, part of §2.6.3 flow) / Per-report persistence commitment / Write-path RLS commitment. Plus V1/V2 boundary.]
+
+*Traces: see Appendix C → 2.6.2.*
+
+---
+
+**2.6.3 Report generation cadence, trigger, and output format.**
+
+V1 makes the monthly report available both on an automated cadence (so the user doesn't have to remember to generate it) and on user-demand (so the user can regenerate when amended data lands or when a fresh as-of-today view is desired). The canonical surface is an in-app rendered web page with PDF export available on demand.
+
+[Body content with 9 sub-blocks: Generation surface scope / Generation cadence τ-1 (cron + on-demand) / Output format υ-1 (in-app web + PDF export) / Authoring-step placement / Cron schedule default (1st of month for prior month) / User-on-demand trigger and target-month selection / Idempotency / regeneration semantics (overwrite semantics, no revision history V1) / PDF export / "Generated" state semantics (3-state lifecycle: not-yet-triggered → pending → generated) / Cron failure handling. Plus V1/V2 boundary.]
+
+*Traces: see Appendix C → 2.6.3.*
+
+---
+
+**2.6.4 Snapshot, historical retention, and report identity.**
+
+V1 freezes the rendered surfaces at generation time so every prior month is retrievable as the artifact it was the day it shipped, and a single owner-identification string the user configures once drives the trust-name header at the top of every report — so the report behaves like the existing-system Finance_Report PDFs do today: a stable, archived record of the month as the user closed it, not a re-computed view that drifts when upstream transactions change.
+
+[Body content with 10 sub-blocks: Persistence-layer scope / Snapshot-vs-live semantics under φ-1 / Historical retention under χ-1 / Retention horizon (indefinite V1) / Owner-identification header under ψ-1 / ADR-005 settings store extension / Snapshot shape commitment / Owner-identification at render time (snapshot, not live) / **Staleness-marker live-read carve-out** (deliberate exception) / Snapshot regeneration semantics / Snapshot read path for in-app view + PDF export. Plus V1/V2 boundary.]
+
+*Traces: see Appendix C → 2.6.4.*
+
+---
+
+**2.6.5 Staleness markers on report surfaces.**
+
+V1 ensures that when a contributing account is in a credential-error / re-auth state at the moment the user views (or generates) the monthly report, every report section sourced from that account's data carries a clear visual staleness marker — so the report never silently presents stale numbers as authoritative, and the user sees at a glance which accounts need to be fixed to restore the report's integrity. The report still renders; the marker is the integrity contract, not a block.
+
+[Body content with 6 sub-blocks: Scope / α′-1 lock (generate-with-markers, not block-with-warning) / Marker visual shape (inline per-section + report-level banner) / Trigger states (all four §2.4.4 states trigger uniformly) / Sections excluded from marking (§2.6.2 commentary + §2.6.4 header) / PDF export markers (live-read at export moment) / Historical-report markers (reflect current state, not historical). Plus V1/V2 boundary.]
+
+*Traces: see Appendix C → 2.6.5.*
+
+---
+
+#### Supporting stories
+
+**2.6.6 Monthly report is the user's, not anyone else's.**
+
+V1 ensures that when the user views the monthly report — current month or any historical month, in-app view or PDF export — the only reports surfaced are the ones generated from the user's own tenant's data, with zero possibility that another tenant's snapshot, commentary, owner-identification header, or generation state leaks into the user's view. The report is the user's; the persistence and read path enforce that without requiring the user to think about it.
+
+[Body content with 5 sub-blocks (NEW shape-B-Supporting pattern): Scope (tenant-isolation read-path Supporting) / Named-surface scoping / Scope-attribute-not-isolation-boundary (sixth-instance canonical clause) / **Snapshot store as derivative surface** (NEW Sec axis — first derivative-persistence layer in §2; flagged for §4 Sec attention) / Multi-scope V1/V2. Plus V1/V2 boundary.]
+
+*Traces: see Appendix C → 2.6.6.*
+
+*Routing flags affecting §2.6: see Appendix B (created in PR 10; pending consolidation).*
+
+---
+
+> **Note**: Full §2.6 body with all sub-blocks preserved verbatim is what lands in PRD.md on integration. This preview shows §2.6.1 in full and §2.6.2–§2.6.6 with bracketed summaries for length. The actual integration preserves every sub-block verbatim per shape-B preservation pattern.
+
+---
+
+# PR 3 CLOSURE SUMMARY (per PM Deliverable 8)
+
+## Total compression across §2.1–§2.6
+
+| §2.N | Source lines | Rewritten | Compression | App C entries | App B entries |
+|---|---|---|---|---|---|
+| §2.1 | 53 | ~35 | 34% | 7 | 5 |
+| §2.2 | 37 | ~22 | 40% | 4 | 7 |
+| §2.3 | 49 | ~32 | 35% | 5 | 11 |
+| §2.4 | 68 | ~50 | 26% | 5 | 12 |
+| §2.5 | 164 | ~145 | 12% | 5 | 17 |
+| §2.6 | 198 | ~155 | 22% | 6 | 21 |
+| **Total** | **569** | **~439** | **~23%** | **32** | **73** |
+
+## VP-flag final state (14 total)
+
+**Closed during body gates (6):** VP-1, VP-3, VP-4, VP-5, VP-13, VP-14.
+
+**Verify-pass-deferred (8):** VP-2 + VP-11 (Sec-verdict-vs-trace duplication across §2.4/§2.5/§2.6); VP-12 (process-records in App B — broader consolidation strategy); VP-7 + VP-9 (§3.3 parity-test framework interactions); VP-6 + VP-8 + VP-10 (light trace editorial cleanup).
+
+## Pattern catalog established for PR 4–10
+
+- Shape-A / Shape-B / Shape-C per-story shape categorization
+- Voice-cleanup of first-person references in preserved shape-B sub-blocks
+- `§`-prefix normalization at first encounter (16 instances applied across §2.4 + §2.5 + §2.6)
+- "Mine/my → the user's" supporting-story title rewrite (6 instances)
+- Shape-B-Supporting story shape (§2.6.6 first instance — pattern available for future Supporting stories elevating new axes)
+- Inline markdown tables / numbered-step paragraphs / fenced code blocks / ordered lists inside story body
+- Cross-reference no-new-flag entries in App B
+- Process-records vs. forward-looking-flags distinction in App B
+
+## Ratification track
+
+- Structure gate: 6-for-6 ratify (1 PM-recommendation override at Q-S4)
+- Body gates: 6-for-6 ratify (Q-B7 pending); zero substance amendments; all "α — accept as drafted"
+- Q-B2 sub-question at body-gate-1: F/CTO β = §2-top framing line (VP-5 closure)
+- VP-1 silent-closure at body-gate-4

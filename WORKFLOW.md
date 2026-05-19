@@ -1,13 +1,109 @@
 # WORKFLOW.md
 
 **Project:** mosko-fintech
-**Current version:** v1.20
+**Current version:** v1.21
 **Last updated:** 2026-05-18
 **Current phase:** Phase 1 — Product Definition (PRD), in progress. Step 3 (PRD section drafting) **substantively complete** (all 12 PRD sections LOCKED across §2 series + §3/§4/§5/§6/§7/§8); **Step 3.5 (PRD editorial rewrite) in progress** — PR 1 kickoff (archive + README + Step 3.5 declaration) landed at v1.19; **PR 2 / §1 rewrite landed at v1.20 with §1 β override EXERCISED** (4 substance amendments: NEW §1.1 Problem Statement + renumber §1.1–§1.4 → §1.2–§1.5 + archetype rename "self-directed multi-account owner" → "Independent Investor" + cross-ref retarget cascade); PR 3–10 remain pending per source order. Original Step 3.5 framing — F/CTO surfaced late-phase rubber-stamp risk under cumulative PRD density (see `memory/feedback_late_phase_density_overload.md`); rewrite plan locked at 7-Q ratify pass (see v1.19 changelog) — presentation-only restructure preserving all locks, source archived at `docs/archive/PRD-v1.18-source.md`, ~10 PR sequence (PR 1 kickoff + PR 2–9 sections §1 → §8 in source order + PR 10 overview/appendices); 7 PM-flagged rubber-stamp candidates deferred to dedicated post-rewrite verify pass before Step 4 entry. Step 4 (Architectural overview consult; Architect lead; Phase 3 entry gate) gated by Step 3.5 closure + post-rewrite verify pass. After Step 4 ratifies, Phase 2 (UX/Visual) becomes available; Phase 1 closes. Team-mode (`phase-1` team) per ADR-003 active. (Step 2 ratification complete at ADR-002; Step 3 prior state preserved in v1.18 changelog.)
 
 ---
 
 ## Changelog
+
+### v1.21 — 2026-05-18
+
+**PR #[TBD] — Phase 1 Step 3.5 PR 3 / §2 (V1 user stories) rewrite.** Largest single PR in the rewrite sequence. First sub-section-gates PR under Q3 = γ. First exercise of Appendix C (Story Trace Index extraction); created in PR 3 with 32 per-story trace entries across §2.1–§2.6. Completes §2.x archetype rename (32 instances via opener-prelude-removal per Q-S4 = β + Option-2 capability-statement-extraction).
+
+**Section rewritten**
+
+- **§2** (V1 user stories) — 6 sub-sections preserved (§2.1 / §2.2 / §2.3 / §2.4 / §2.5 / §2.6) per Q2 = β source-order parity.
+- Source: `docs/archive/PRD-v1.18-source.md` §2 (569 lines across §2.1–§2.6).
+- Rewritten: `PRD.md` §2 (~439 lines body; ~23% overall compression).
+
+**Pattern divergence declaration**
+
+- **Sub-section-gates** per Q3 = γ. 1 structure gate (6 sub-Qs Q-S1–Q-S6) + 6 body gates (1 per §2.N) = 7 ratify gates + 1 structure-followup Q-B2 = 8 ratify touchpoints.
+- **Zero bulk-closeout, zero per-bullet gates.** Body-gates 1–6 each ratified at α (PR 3 6-for-6 acceptance).
+
+**Structure-gate decisions (Q-S1 through Q-S6 + Q-B2)**
+
+| Q | Locked answer |
+|---|---|
+| Q-S1 | **α** — one body gate per §2.N (6 body gates) |
+| Q-S2 | **α** — Appendix C in PRD.md |
+| Q-S3 | **γ** — hybrid format (bold-prefix story ID + blockquote trace content) |
+| Q-S4 | **β presentation-only** — opener-prelude removed; capability-statement-extraction (Option-2) preserved capability content |
+| Q-S5 | **α** — structure accepted |
+| Q-S6 | **(ii)** — routing-flag blocks extract to App B at PR 3 with bridge marker |
+| Q-B2 | **β** — one-line §2-top framing line re-anchoring archetype (closes VP-5) |
+
+**PR 3 totals across §2.1–§2.6**
+
+| §2.N | Source lines | Rewritten | Compression | App C entries | App B entries |
+|---|---|---|---|---|---|
+| §2.1 | 53 | ~35 | 34% | 7 | 5 |
+| §2.2 | 37 | ~22 | 40% | 4 | 7 |
+| §2.3 | 49 | ~32 | 35% | 5 | 11 |
+| §2.4 | 68 | ~50 | 26% | 5 | 12 |
+| §2.5 | 164 | ~145 | 12% | 5 | 17 |
+| §2.6 | 198 | ~155 | 22% | 6 | 21 |
+| **Total** | **569** | **~439** | **~23%** | **32** | **73** |
+
+**Archetype rename completion (per Q-2 = α bounded reading from PR 2)**
+
+- 32 source instances of "self-directed multi-account owner" renamed across §2.1–§2.6 via opener-prelude-removal pattern (Q-S4 = β).
+- **Zero "Independent Investor" occurrences in §2 body** — Q-B2 = β resolution at body-gate-1 added one-line §2-top framing line carrying archetype reference.
+- Per VP-1 closure at body-gate-4: 16 silent `§`-prefix normalizations applied (5 at §2.4 + 5 at §2.5 + 6 at §2.6).
+
+**§2 lock status: STRICTLY PRESENTATION-ONLY**
+
+- No §2 β override per WORKFLOW.md v1.18 lock; substance candidates routed to Q7 = γ post-rewrite verify pass.
+- **Zero substance amendments. Zero new commitments. Zero dropped commitments.**
+
+**Patterns established during PR 3 (for PR 4–10 inheritance)**
+
+- **Shape-A / Shape-B / Shape-C per-story shape categorization** — apply per-story shape pattern based on inspected source structure, not broad-stroke sub-section categorization.
+- **Voice-cleanup of first-person references in preserved shape-B sub-blocks** — "I/me/my" → "the user / the user's" + product-voice; attested as presentation-only.
+- **`§`-prefix normalization at first encounter** — VP-1 closure at body-gate-4.
+- **"Mine/my → the user's" supporting-story title rewrite** — 6 consecutive instances across §2.1.7 / §2.2.4 / §2.3.5 / §2.4.5 / §2.5.5 / §2.6.6.
+- **Shape-B-Supporting story shape** — §2.6.6 first instance (Supporting story with sub-blocks when elevating new Sec axes).
+- **Inline structures preserved in story bodies** — markdown tables (§2.5.2 + §2.6.1); inline `(1)(2)(3)` numbered-step paragraphs (§2.5.3); fenced code blocks (§2.5.4); ordered lists (§2.6.1).
+- **Cross-reference no-new-flag entries in App B** — §2.3-(j) CPI-U precedent; preserves Phase 3 traceability without duplication.
+- **Process-records vs. forward-looking-flags in App B** — App B contains both entry types (12 process records across §2.5 + §2.6); PR 10 consolidation strategy will distinguish.
+
+**Substance-flag candidates (VP-set, 14 total)**
+
+- **Closed during body gates (6):** VP-1 (§-prefix normalization, body-gate-4); VP-3 (σ-1/σ-2/σ-3 framing preserved as shape-B sub-block, body-gate-6); VP-4 (V1/V2 boundary block confirmed standard shape-B structure, body-gate-6); VP-5 (zero-archetype-name-in-§2-body resolved via Q-B2 = β framing line, body-gate-1); VP-13 (markdown-table precedent confirmed at body-gate-6); VP-14 (code-block precedent confirmed at body-gate-6).
+- **Verify-pass-deferred (8):** VP-2 + VP-11 (Sec-verdict-vs-story-trace duplication across §2.4 / §2.5 / §2.6); VP-12 (process-records in App B — broader consolidation strategy for PR 10); VP-7 + VP-9 (§3.3 parity-test framework interactions: §2.2.2 Liabilities Cat extension + §2.3.4 PDF-inspection-discovered surface); VP-6 + VP-8 + VP-10 (light trace editorial cleanup).
+
+**Cross-reference retargeting (per Q4 = α)**
+
+- **Zero `PRD.md:NNN` retargets in PR 3.** §2 source was drafted with section-anchor cross-references (§2.1.5, §2.4.4, etc.) rather than line refs. Clean Q4 = α sweep.
+
+**Acceptance-flags relocation (per Q1 = β)**
+
+- All 6 `#### Acceptance flags` blocks removed from §2.1–§2.6 rewritten bodies.
+- §2.1–§2.6 lock metadata preserved across WORKFLOW.md v1.10–v1.15 entries + v1.18 §8-lock-time recap + this v1.21 entry.
+
+**F/CTO ratification: 8-for-8 acceptance across structure + body gates** (zero substance amendments, all "α — accept as drafted"):
+1. Structure gate Q-S1–Q-S6 (6 sub-questions): 5 PM-recommendation-accepted + 1 PM-override (Q-S4 from α to β with presentation-only followup confirmation)
+2. Q-B2 sub-question at body-gate-1: F/CTO β = one-line §2-top framing line (VP-5 closure)
+3. Body-gates Q-B1 / Q-B3 / Q-B4 / Q-B5 / Q-B6 / Q-B7: 6-for-6 α — accept as drafted
+
+**Engagement notes**
+
+- **PM workhorse** across 7 stages (structure proposal + 6 body-gate deliverables + PR 3 closure summary).
+- **Sec untouched** (no Sec surface ratification in PR 3 — §2 already locked; presentation-only rewrite). Sec re-engages at §4 primary author per the Phase 1 Step 4 closure path.
+- **Architect untouched** (no architecture surface in PR 3; PR 3 routing flags carried forward to App B for Phase 3 consumption).
+- **CoS bookkeeping** + 8 ratify gates with F/CTO via AskUserQuestion + integration pass per body-gate (6 commits on `phase/1-step-3-5-section-2` branch — including 1 fix-up commit at body-gate-3 for integration error).
+- **PM agentId-based SendMessage continuation** succeeded across all 7 stages on the same agentId.
+
+**CoS integration error during body-gate-3 (transparency note)**
+
+- Body-gate-3 (§2.3) integration produced a broken state — CoS's first Edit replaced only through the §2.3.2 heading, leaving orphaned source content; a follow-up Edit failed to find its target. Committed broken state as `9b8f293`; fix-up commit `91793a7` completed the §2.3 body swap. Pattern saved as a lesson: large multi-section Edits with content boundaries need verified before commit; sed-delete-then-Edit-insert pattern (used subsequently at body-gates 4 + 5 + 6) is more reliable than single-Edit replacement on long source blocks. Content unchanged from F/CTO-ratified deliverable; the fix was purely structural.
+
+**Next thread:** **PR 4 — §3 (Success metrics) rewrite.** Low-risk shape-A section (80 source lines, 5 sub-sections); bulk-closeout cadence per Q3 = γ (mirrors PR 2). 2 ratify gates (structure + body). PR 4 cross-reference handling: `PRD.md:689` → `PRD.md §3.4` (1 retarget). PR 5 (§4) is the second sub-section-gates PR.
+
+---
 
 ### v1.20 — 2026-05-18
 
