@@ -1,13 +1,82 @@
 # WORKFLOW.md
 
 **Project:** mosko-fintech
-**Current version:** v1.18
+**Current version:** v1.19
 **Last updated:** 2026-05-18
-**Current phase:** Phase 1 — Product Definition (PRD), in progress. Step 2 (ratification) complete (ADR-002); Step 3 (PRD section drafting) **substantively complete** — script-audit pivot complete (ADR-004), `docs/v1-parity-matrix.md` authoritative for V1 capability scope, **PRD §2.1 + §2.2 + §2.3 + §2.4 + §2.5 + §2.6 + §3 + §4 + §5 + §6 + §7 + §8 ALL LOCKED** (§2 series on 2026-05-14 / 2026-05-15 / 2026-05-17; §3 + §5 + §6 on 2026-05-17; §7 on 2026-05-18; **§4 on 2026-05-18 — fifth and largest non-§2 section locked; first Sec primary-authored PRD section in Phase 1 Step 3; closes all of Phase 1 Step 3 inventory + posture sections (only Phase 1 Step 4 Architectural overview consult remains); 21-for-21 Sec-lean ratifications across four stages (gate 1 = 6-for-6, gate A = 5-for-5, gate B = 6-for-6, stage 2 + stage 3 + stage 4 body bundles all accepted as-drafted, zero F/CTO overrides); ADR-008 net-new accepted (V1 security posture canonical reference — six Sec axes, 14-class sensitive-data matrix SD-00 through SD-13, 15-entry RLS test catalog RT-01 through RT-15 with RT-07 reserved-vacant, V1 retention/availability/incident-handling baseline, two pattern divergences from PM-led default ratified at ADR-008 Decision 5); three pattern divergences from quadruple-confirmed PM-led bulk-closeout pattern ratified — (i) hybrid format markdown tables for §4.4 + §4.5 + bulleted-with-framing for §4.1–§4.3 + §4.6; (ii) two-stage hybrid drafting (per-table ratify gates for §4.4 + §4.5 column shape + severity rubric, bulk-closeout for posture sub-sections); (iii) ADR-008 net-new confirmed; Sec hard-line preserved — V1 cannot ship with RT-05 webhook signature verification failing or unimplemented (Plaid Item table RLS RT-02 + webhook sig verification RT-05 = only V1-ship-blocker critical-severity tests); closes ADR-002 §7.0 missing-content gaps #4 (security and compliance posture) + #6 (availability/uptime) + partial #5 (data retention — jointly with §2.6.4 χ-1 indefinite-snapshot lock); closes §3 routing flags (b) + (d) + (e); closes §7 routing flag (a) at §4.6 V2-ship-gate inventory item (iv); one surgical upstream edit at §4 lock — §7.1 routing flag (a) appended with §4.6 reciprocation line; six canonical Sec axes (i tenant_id-isolation-boundary + ii multi-scope-as-attribute-not-boundary + iii tax_treatment-as-filter-not-boundary + iv write-path-RLS-symmetry + v staleness-live-read-cross-tenant-signal-leak + vi snapshot-as-derivative-persistence) established as ADR-grade immutable canonical set; four-stage two-stage-hybrid drafting pattern executed and captured at ADR-008 Decision 5 as available for future Sec-primary-author sections (Phase 3 ARCHITECTURE.md, Phase 6 PR review)**; **§8 on 2026-05-18 — sixth and smallest non-§2 section locked; last PM-led Phase 1 Step 3 drafting task; closes PRD substantive content surface for Phase 1 Step 3; 2-for-2 PM-lean ratifications at gate-1 (Q1 3-sub-section structure + Q2 bulleted-with-framing format) + 1-for-1 section-level body acceptance (zero F/CTO overrides); fifth confirmed instance of bulk-closeout-from-structure-proposal pattern (§3 → §5 → §6 → §7 → §8); fourth instance of "no-new-ADR lock" pattern (joins §3, §6, §7); PM-lean track 23-for-23 across §3 + §5 + §6 + §7 + §8 (PM-led sections) with the Sec-lean 21-for-21 track from §4 giving a combined teammate-lean record of 44-for-44 across all locked Phase 1 Step 3 PRD sections; smallest routing-flags block to date (5 boundary-note items only, zero Architect/Sec/V1-block flags); closes §3.4 → §8 + §1.3 → §8 forward-pointers + ADR-002 §7.0 gap #4 milestone-framing dimension (the criteria dimension closed at §3.4 at §3 lock); §8 → Phase 4 (Scoping) / Linear-backlog handoff anchor established at routing flag (d) — specific sub-version sequencing, per-version capability boundaries, criterion-to-sub-version mapping, one-session-granularity Linear acceptance criteria all Phase 4 territory**; all Sec passes on §2 sections pass-with-comments; §1 substantively drafted, §1.2 attribute #5 strengthened at v1.6; §1.4 line-58 surgical edit at §6 lock aligns advisor/fiduciary deferral with permanent-non-goal-under-§6 framing per ADR-007; ADR-002 §1.2 V1 non-goals amended per ADR-005 for planning-targets settings UI; ADR-004 Decision D input-layer amended per ADR-006 for bracket schedules + Sub-Cat tax_character enum; ADR-002 Finding (b) amended per ADR-007 — TLH recommendations reclassified from V2+ candidate to permanent non-goal (§6.3 advisor/fiduciary axis); ADR-005 settings store carries three additive fields; §3.4 is home for "V1 done" definition per F/CTO Q2 lock). **PRD §2 series + §3 + §4 + §5 + §6 + §7 + §8 complete; Sec posture canonical-reference layer established at ADR-008; PRD substantive content surface for Phase 1 Step 3 closed.** Next thread — **Phase 1 Step 4** (Architectural overview consult; Architect lead; Phase 3 entry gate) opens. Step 4 consumes the accumulated 11 §4 routing flags + 4 §3 routing flags + 6 §2.x Architect routing flags + §7.2 scale dimensions + §7.1 cost-shape at-risk flag + the §8 → Phase 4 milestone-sequencing handoff as Phase 3 entry payload. After Phase 1 Step 4 ratifies, **Phase 2** (UX/Visual design) becomes available; Phase 1 closes. Team-mode (`phase-1` team) per ADR-003 active.
+**Current phase:** Phase 1 — Product Definition (PRD), in progress. Step 3 (PRD section drafting) **substantively complete** (all 12 PRD sections LOCKED across §2 series + §3/§4/§5/§6/§7/§8); **Step 3.5 (PRD editorial rewrite) declared and kicked off** — F/CTO surfaced late-phase rubber-stamp risk under cumulative PRD density (see `memory/feedback_late_phase_density_overload.md`); rewrite plan locked at 7-Q ratify pass (see v1.19 changelog) — presentation-only restructure preserving all locks, source archived at `docs/archive/PRD-v1.18-source.md`, ~10 PR sequence (PR 1 kickoff + PR 2–9 sections §1 → §8 in source order + PR 10 overview/appendices); 7 PM-flagged rubber-stamp candidates deferred to dedicated post-rewrite verify pass before Step 4 entry. Step 4 (Architectural overview consult; Architect lead; Phase 3 entry gate) gated by Step 3.5 closure + post-rewrite verify pass. After Step 4 ratifies, Phase 2 (UX/Visual) becomes available; Phase 1 closes. Team-mode (`phase-1` team) per ADR-003 active. (Step 2 ratification complete at ADR-002; Step 3 prior state preserved in v1.18 changelog.)
 
 ---
 
 ## Changelog
+
+### v1.19 — 2026-05-18
+
+**PR #[TBD] — Phase 1 Step 3.5 declared and kicked off.** Editorial rewrite of `PRD.md` for scannability without altering locked substance. (Changelog entry deliberately modeled in the target scannable shape the rewrite is producing — bullets, tables, sub-headers; compare to v1.18 wall-of-prose to see the pattern shift.)
+
+**Why Step 3.5 exists**
+
+- F/CTO surfaced **late-phase rubber-stamp risk** post-§8 lock: by end of Phase 1 Step 3, F/CTO was accepting recommendations without engaging nuance because `PRD.md` (~37k tokens, 1,090 lines) had become too dense to read substantively.
+- Step 3's "44-for-44 teammate-lean track" (per v1.18 changelog) reflects acceptance, not necessarily considered ratification. Highest-risk surfaces: §6 / §7 / §8 framing; parts of §4 posture.
+- Memory captured: `~/.claude/projects/-Users-mosko-Projects-mosko-fintech/memory/feedback_late_phase_density_overload.md` — pace ratify gates smaller on dense late-phase work; treat N-for-N teammate-lean tracks as metric-to-watch not virtue-signal; editorial restructure passes are legitimate Phase sub-steps.
+
+**Step 3.5 plan — presentation-only restructure with locked substance preserved**
+
+- Source `PRD.md` archived at `docs/archive/PRD-v1.18-source.md` (frozen this PR).
+- `docs/archive/README.md` documents historical line-ref resolution and the Q4 = α retargeting carve-out.
+- Working artifact: `docs/prd-rewrite-proposal-v1.md` carries full PM target-shape proposal + R1–R8 risks/mitigations + §9 substance-flag detail. Will be archived or removed at Step 3.5 closure.
+
+**Plan ratified 7-for-7 at per-question engagement (no bulk-closeout — explicit pattern divergence from Step 3):**
+
+| Q | Topic | Locked answer |
+|---|---|---|
+| Q1 | Appendix scope | **β** — Appendix B (routing flags consolidated) + Appendix C (Story Trace Index for §2.x); per-section Acceptance flags content relocates entirely to WORKFLOW.md changelog |
+| Q2 | Section order | **β** — Source order (§1 → §2 → §3 → §4 → §5 → §6 → §7 → §8 → overview/appendices) |
+| Q3 | Gate pattern | **γ** — Hybrid: bulk-closeout for §1/§3/§5/§6/§7/§8; sub-section gates for §4 + §2 |
+| Q4 | Cross-refs | **α** — Retarget `PRD.md:NNN` → `PRD.md §N.M.K` at rewrite time (each rewrite PR sweeps WORKFLOW.md + DECISIONS.md) |
+| Q5 | (Process record shape) | Auto-skipped under Q1 = β |
+| Q6 | Archive PR | **α** — Standalone kickoff PR (this PR) |
+| Q7 | Substance flags | **γ** — Defer all 7 PM-flagged rubber-stamp candidates to dedicated post-rewrite verify pass before Step 4 entry |
+
+**PM-recommendation track: 5-for-7.** Two deliberate F/CTO overrides:
+
+- **Q2** — Source order over PM's smallest-first. F/CTO weighted predictability over PM's pattern-discovery sequencing.
+- **Q4** — Retarget at rewrite over PM's accept-as-historical. F/CTO read the DECISIONS.md immutability convention as applying to ADR substance, not pointer form; per-PR retargeting is treated as presentation-pointer-only.
+
+**7 substance flags deferred to post-rewrite verify pass** (full reasoning: `docs/prd-rewrite-proposal-v1.md` §9). Verify pass walks each flag sub-section-by-sub-section before Phase 1 Step 4 opens; any substance issue lands as ADR amendment:
+
+1. **§4.2** credential-error states (c)/(d) — observational distinguishability at V1 user-facing surface
+2. **§4.3** RT-13 staleness severity (high, not critical) — does it account for §2.6.5 account-name exposure dimension?
+3. **§4.6** incident-handling V2-trajectory ramp vs. audit-log V1 commitment (potential clause-level tension)
+4. **§6.3** TLH information-vs-prescription axis — elevate from TLH-clause-tail to explicit axis-level commitment?
+5. **§7.2** single-tenant scale dimensions — V1 RLS verification scope (single-user-only vs. V2-cohort scale)
+6. **§8.1** V1.0/V1.1 "illustrative-not-normative" — is this implicitly relaxing ADR-004's actual commitment?
+7. **§8.2** drop-replace transition vs. §4.6 cutover commitment (could conflict)
+
+**PR sequence — 11 PRs:**
+
+- **PR 1 (this PR)** — kickoff: archive source + README + WORKFLOW.md v1.19 header + this changelog
+- **PR 2–9** — §1 → §2 → §3 → §4 → §5 → §6 → §7 → §8 rewrites (source order per Q2)
+- **PR 10** — document overview + reading guide + section index + Appendix B (routing flags consolidated)
+- After PR 10 ships: **post-rewrite verify pass** (7 substance flags above)
+- After verify pass: **Phase 1 Step 3.5 closes; Phase 1 Step 4** (Architectural overview consult; Architect lead; Phase 3 entry gate) **opens**
+
+**Pattern divergence vs. Step 3** (deliberate; enforced by Q3 = γ):
+
+- Per-PR ratify cadence is structure gate + per-sub-section body gates for §4 + §2 (high-risk).
+- Bulk-closeout permissible only on low-risk small sections (§1/§3/§5/§6/§7/§8).
+- Each rewrite PR includes a structural-fidelity attestation (per R1 mitigation in `docs/prd-rewrite-proposal-v1.md`).
+- Each rewrite PR explicitly declares its gate pattern in the PR body ("this PR uses [bulk-closeout | sub-section gates]; rationale: …") — pattern-divergence-check is a first-class PR convention to prevent silent relapse to bulk-closeout.
+
+**Engagement notes — Step 3.5 kickoff session:**
+
+- **CoS-led** ratify gate sequencing (one-question-at-a-time per memory `feedback_one_question_at_a_time.md`).
+- **PM workhorse** on the target-shape proposal (single bulk deliverable per task brief, returned as scannable structured markdown for F/CTO walkthrough); PM continues as primary author for PR 2–9 section rewrites.
+- **Sec / Architect untouched** at kickoff (presentation-only rewrite; no posture or scope decisions); they re-engage at the post-rewrite verify pass (if flags raise substance) and at Phase 1 Step 4 (Architect overview consult against the polished + verified PRD).
+- **No new ADRs at Step 3.5 kickoff.** Step 3.5 may produce an ADR if the post-rewrite verify pass surfaces a substance change; presentation-only restructure does not produce ADRs by construction.
+
+**Next thread:** **PR 2 — §1 (Vision and target user) rewrite.** PM-led; first body rewrite under the new Step 3.5 cadence. Establishes the rewrite *pattern* — how to compress paragraph-bullets; how to handle routing-flag pointers to Appendix B which doesn't exist yet at PR 2 (in-body marker should bridge with "Routing flags affecting §1: see Appendix B (created in PR 10; pending consolidation)"); how to express the lock-status-block-relocated-to-WORKFLOW.md convention.
+
+---
 
 ### v1.18 — 2026-05-18
 
