@@ -1,17 +1,119 @@
 # WORKFLOW.md
 
 **Project:** mosko-fintech
-**Current version:** v1.19
+**Current version:** v1.20
 **Last updated:** 2026-05-18
-**Current phase:** Phase 1 — Product Definition (PRD), in progress. Step 3 (PRD section drafting) **substantively complete** (all 12 PRD sections LOCKED across §2 series + §3/§4/§5/§6/§7/§8); **Step 3.5 (PRD editorial rewrite) declared and kicked off** — F/CTO surfaced late-phase rubber-stamp risk under cumulative PRD density (see `memory/feedback_late_phase_density_overload.md`); rewrite plan locked at 7-Q ratify pass (see v1.19 changelog) — presentation-only restructure preserving all locks, source archived at `docs/archive/PRD-v1.18-source.md`, ~10 PR sequence (PR 1 kickoff + PR 2–9 sections §1 → §8 in source order + PR 10 overview/appendices); 7 PM-flagged rubber-stamp candidates deferred to dedicated post-rewrite verify pass before Step 4 entry. Step 4 (Architectural overview consult; Architect lead; Phase 3 entry gate) gated by Step 3.5 closure + post-rewrite verify pass. After Step 4 ratifies, Phase 2 (UX/Visual) becomes available; Phase 1 closes. Team-mode (`phase-1` team) per ADR-003 active. (Step 2 ratification complete at ADR-002; Step 3 prior state preserved in v1.18 changelog.)
+**Current phase:** Phase 1 — Product Definition (PRD), in progress. Step 3 (PRD section drafting) **substantively complete** (all 12 PRD sections LOCKED across §2 series + §3/§4/§5/§6/§7/§8); **Step 3.5 (PRD editorial rewrite) in progress** — PR 1 kickoff (archive + README + Step 3.5 declaration) landed at v1.19; **PR 2 / §1 rewrite landed at v1.20 with §1 β override EXERCISED** (4 substance amendments: NEW §1.1 Problem Statement + renumber §1.1–§1.4 → §1.2–§1.5 + archetype rename "self-directed multi-account owner" → "Independent Investor" + cross-ref retarget cascade); PR 3–10 remain pending per source order. Original Step 3.5 framing — F/CTO surfaced late-phase rubber-stamp risk under cumulative PRD density (see `memory/feedback_late_phase_density_overload.md`); rewrite plan locked at 7-Q ratify pass (see v1.19 changelog) — presentation-only restructure preserving all locks, source archived at `docs/archive/PRD-v1.18-source.md`, ~10 PR sequence (PR 1 kickoff + PR 2–9 sections §1 → §8 in source order + PR 10 overview/appendices); 7 PM-flagged rubber-stamp candidates deferred to dedicated post-rewrite verify pass before Step 4 entry. Step 4 (Architectural overview consult; Architect lead; Phase 3 entry gate) gated by Step 3.5 closure + post-rewrite verify pass. After Step 4 ratifies, Phase 2 (UX/Visual) becomes available; Phase 1 closes. Team-mode (`phase-1` team) per ADR-003 active. (Step 2 ratification complete at ADR-002; Step 3 prior state preserved in v1.18 changelog.)
 
 ---
 
 ## Changelog
 
+### v1.20 — 2026-05-18
+
+**PR #[TBD] — Phase 1 Step 3.5 PR 2 / §1 (Vision and target user) rewrite. §1 β override EXERCISED.** First body-rewrite PR under Step 3.5 cadence; establishes patterns PR 3–9 inherit; landed 4 substance amendments per WORKFLOW.md v1.19 R6 carve-out (§1 still-mutable scope).
+
+**Section rewritten**
+
+- **§1** (Vision and target user) — **now 5 sub-sections** (was 4): §1.1 Problem statement / §1.2 Vision / §1.3 Target-user archetype / §1.4 Why an archetype, not the F/CTO by name / §1.5 Deferred user-shape questions.
+- Source: `docs/archive/PRD-v1.18-source.md` §1 (lines 17–58, ~47 lines, 4 sub-sections).
+- Rewritten: `PRD.md` §1 (~75 lines including NEW §1.1 + presentation reshape; line delta reflects content addition + bullet expansion).
+
+**Pattern divergence declaration**
+
+- **Bulk-closeout** per Q3 = γ (low-risk small section; in §1 / §3 / §5 / §6 / §7 / §8 bulk-closeout-permissible scope). Two F/CTO ratify gates: structure (Q1=α, round 1) + body re-round (Q-3=α, round 2 absorbing 4 substance amendments).
+- Zero sub-section gates, zero per-bullet gates.
+
+**§1 β override status: EXERCISED**
+
+Four substance amendments landed (full enumeration in PR 2 body Part 8):
+
+- **Amendment A** — NEW §1.1 Problem Statement sub-section. F/CTO direction with PM redraft. PM shifted three of F/CTO's source-paraphrase wordings: (i) "tax compliance" → "estimated-tax obligations" to avoid §6.3 advisor/fiduciary axis brush, (ii) "calculating cash flows" → "manual mechanics of compiling their financial picture" to cover stock concepts at §2.1 (NAV) + §2.2 (allocation), (iii) "suite of tools and dashboards" → singular "streamlined personal financial observatory" to avoid scope overstatement vs. V1's single Finance Report deliverable. F/CTO ratified γ at Q-1: PM shifts kept; closing foreshadowing paragraph removed; "Independent Investor" bolded in opening framing paragraph.
+- **Amendment B** — Renumbering §1.1 → §1.2 / §1.2 → §1.3 / §1.3 → §1.4 / §1.4 → §1.5 (cascade from Amendment A).
+- **Amendment C** — Archetype rename "self-directed multi-account owner" → "Independent Investor" (deliberately NOT "Independent accredited investor" — F/CTO ratified non-legal framing to avoid SEC Reg D Rule 501 legal-threshold inheritance). Sweep scope per Q-2 = α (bounded): PR 2 = §1 only (2 instances); §2.x rename (32 story-opener instances) defers to PR 3 as part of opener-compression pattern.
+- **Amendment D** — Cross-reference retargets per renumbering (cascade from Amendment B): 3 line-anchored refs in WORKFLOW.md updated to section-anchor form.
+
+**No ADR amendment.** DECISIONS.md has zero occurrences of the renamed archetype term (ADRs use "the V1 instance" / "the F/CTO" / "the user"); Amendment C is therefore a PRD-internal substance amendment that does NOT require an ADR-009 entry. Section-β-override path is currently §1-only per WORKFLOW.md v1.19 R6 carve-out; PR 3–10 remain strictly presentation-only.
+
+**Cross-reference retargeting (per Q4 = α)**
+
+| File | Pattern | Old | New |
+|---|---|---|---|
+| WORKFLOW.md | §8.3 forward-pointer closure | `` `PRD.md:47` `` | `` `PRD.md §1.4` `` |
+| WORKFLOW.md | §8 forward-pointer closures list | `` `PRD.md:47` `` | `` `PRD.md §1.4` `` |
+| WORKFLOW.md | §1.4 line-58 surgical edit reference | `` `PRD.md:58` `` | `` `PRD.md §1.5` `` |
+
+3 retargets in WORKFLOW.md; 0 in DECISIONS.md (DECISIONS.md `§1.X` refs are to ADR-002 internal numbering, not PRD §1.x).
+
+**Archetype-name rename-sweep scope (per Q-2 = α bounded reading)**
+
+| Surface | Occurrences | Scope |
+|---|---|---|
+| `PRD.md` §1 | 2 | **IN — PR 2 (this PR)** |
+| `PRD.md` §2.x story openers | 32 | IN at PR 3 (integrated into opener-compression) |
+| `DECISIONS.md` | 0 | N/A — zero occurrences |
+| `WORKFLOW.md` (line 383, v1.9-era changelog) | 1 | OUT — historical changelog; immutability convention |
+| `docs/v1-parity-matrix.md` | 1 | OUT — historical artifact |
+| `docs/prd-rewrite-proposal-v1.md` + `docs/prd-rewrite-pr2-proposal.md` + `docs/prd-rewrite-pr2-body-preview.md` | 6 total | OUT — historical artifacts |
+| `docs/archive/PRD-v1.18-source.md` | 34 | OUT — frozen archive by construction |
+
+Forward convention from v1.20 onward: new artifact text uses "Independent Investor."
+
+**In-body marker conventions established (for PR 3–9)**
+
+- **Appendix B marker** (when Appendix B does not yet exist): `*Routing flags affecting §N: see Appendix B (created in PR 10; pending consolidation).*` §1 has zero routing flags so convention is declared but first exercised at PR 3.
+- **Appendix C marker** (first exercised PR 3): `*Traces: see Appendix C → N.M.K.*`
+- **ADR citation convention:** drop ADR re-narration in PRD body; keep ID-level pointer inline as `(ADR-NNN [Decision X])` or `(ADR-NNN §M.N)`.
+
+**Acceptance-flags relocation (per Q1 = β)**
+
+- §1 body has **no `#### Acceptance flags` block** in rewritten form.
+- §1 lock metadata preserved across: WORKFLOW.md v1.6 (§1.2-source attribute #5 strengthening), v1.15 (§1.4-source line-58 surgical edit), v1.20 (this entry — §1 rewrite + 4 substance amendments).
+- Pattern: no Acceptance-flags block in any rewritten PRD body. PR 3–9 inherit.
+
+**Structural-fidelity attestation summary**
+
+- §1.1 (NET-NEW substance) — attested consistent with locked §1.2–§1.5 commitments; no ADR-002 §3.0 product-identity non-goal contradiction; no ADR-007 information-vs-prescription axis crossing.
+- §1.2 (was §1.1) — preserved verbatim from PR 2 round 1; no rename touchpoint.
+- §1.3 (was §1.2) — preserved + 1 rename instance in framing sentence; all 7 attribute bullets verbatim; "Independent Investor" replaces "*self-directed multi-account owner*" (bold replaces italic to reflect proper-noun shape).
+- §1.4 (was §1.3) — preserved + 1 rename instance in numbered-point #2.
+- §1.5 (was §1.4) — preserved verbatim; zero rename touchpoints.
+- Zero dropped commitments across all 5 sub-sections.
+
+**F/CTO ratification: 4-for-4 acceptance across 2 rounds**, with Q1 PM-recommendation accepted at round 1 + 3 explicit revision-or-accept calls at round 2:
+
+1. Round 1 Q1 structure = α (sub-section preservation + bullet plan + in-body marker conventions + Q1=α-locked §1.4/§1.5 title rewrites; PM-recommendation accepted).
+2. Round 2 Q-1 = γ (per-clause revisions on §1.1: PM shifts #1/#2/#3 kept; closing paragraph removed; "Independent Investor" bolded in opening — F/CTO editorial direction).
+3. Round 2 Q-2 = α (rename-sweep bounded reading: PR 2 = §1 only; §2.x defers to PR 3 — PM-recommendation accepted).
+4. Round 2 Q-3 = α (full body re-round acceptance — PM-recommendation accepted).
+
+**Engagement notes — PR 2 across two rounds**
+
+- PM workhorse: round 1 target-shape proposal + structure gate + initial body draft; round 2 substance-amendment redraft + repo-wide rename-sweep occurrence scan + cross-ref-cascade + updated attestations + v1.20 changelog draft.
+- Sec untouched (no Sec surface in §1).
+- Architect untouched (no architecture surface in §1).
+- CoS bookkeeping + ratify-gate sequencing across 2 rounds + integration pass (PRD.md §1 swap + WORKFLOW.md 3-line retarget + WORKFLOW.md header + this v1.20 entry).
+- **PM agentId-based SendMessage continuation succeeded** for round-1-to-round-2 transition; pattern fully reliable for mid-task PM re-engagement.
+
+**Pattern implications for PR 3–10**
+
+- **Substance amendments are demonstrated as exercisable mid-rewrite via section-β-override path.** Currently scoped to §1 only per WORKFLOW.md v1.19 R6 carve-out; PR 3–10 remain strictly presentation-only per Step 3.5 constraint.
+- **Rename-sweep precedent established:** repo-wide grep + per-surface scope decisions (PRD body = in; ADRs = N/A here, would be case-by-case if non-zero; historical changelog / artifacts = out; forward convention from new version onward). Applies forward if any future term-evolution amendment lands.
+- **Bulk-closeout pattern absorbed substance amendments cleanly** under §1's low-risk surface AND across a round-1 → round-2 re-iteration. PR 3 + 4 (§2 + §4 sub-section gates) test whether sub-section-gates cadence carries similar flexibility.
+- **CoS-inline editorial revision pattern** — F/CTO's `§1.1 close-paragraph removal + bolding` revision applied directly by CoS without round-3 PM re-run (presentation-only edit on PM round-2 draft). Available for future PRs where F/CTO surfaces small editorial revisions that don't warrant a PM round-trip.
+
+**Working artifacts (transient; remove or archive at Step 3.5 closure):**
+
+- `docs/prd-rewrite-pr2-proposal.md` — PM round-1 target-shape proposal (round-2 deliverable preserved in PM task notification; round-2 wasn't saved as a separate artifact since the body preview and v1.20 changelog capture the relevant content).
+- `docs/prd-rewrite-pr2-body-preview.md` — Standalone §1 body preview used for F/CTO body-gate review (incorporates Q-1=γ revisions).
+
+**Next thread:** **PR 3 — §2 (V1 user stories) rewrite.** First sub-section-gates PR under Q3 = γ — §2 is high-risk (largest section, 6 sub-sections, ~580 lines). Cadence: structure gate + 6 sub-section body gates (one per §2.1 / §2.2 / §2.3 / §2.4 / §2.5 / §2.6). First exercise of Appendix C Story Trace Index extraction pattern. First exercise of Appendix B in-body marker convention (§2.x sub-sections all have routing flags). PR 3 also completes the §2.x archetype-rename (32 story-opener instances) integrated into the opener-compression pattern.
+
+---
+
 ### v1.19 — 2026-05-18
 
-**PR #[TBD] — Phase 1 Step 3.5 declared and kicked off.** Editorial rewrite of `PRD.md` for scannability without altering locked substance. (Changelog entry deliberately modeled in the target scannable shape the rewrite is producing — bullets, tables, sub-headers; compare to v1.18 wall-of-prose to see the pattern shift.)
+**PR #26 — Phase 1 Step 3.5 declared and kicked off.** Editorial rewrite of `PRD.md` for scannability without altering locked substance. (Changelog entry deliberately modeled in the target scannable shape the rewrite is producing — bullets, tables, sub-headers; compare to v1.18 wall-of-prose to see the pattern shift.)
 
 **Why Step 3.5 exists**
 
@@ -90,7 +192,7 @@
 
 **§8.2** (1 framing paragraph + 3 bullets) — Drop-replace migration pattern as user-continuity guarantee during V1 data-plane transition. V1.x backend as data source for residual Google Sheets views during transition per ADR-004 verbatim (data-plane shifts underneath; presentation-plane migration is incremental as V1-native surfaces supersede residuals); §4.6 shadow-workflow tear-down cross-reference (drop-replace makes §4.6 tear-down user-survivable; §4.6 tear-down is what makes drop-replace terminate cleanly at §3.4(c) retirement); §4.6 availability + §2.4.4 non-silent-staleness cross-reference (stale-data surfacing applies symmetrically across residual Google Sheets views + V1-native surfaces during transition).
 
-**§8.3** (1 framing paragraph + 3 bullets) — V1-done cross-reference to §3.4 + §1.3 forward-pointer closure + §8 → Phase 4 handoff boundary. Reciprocates §3.4's three migration-completion criteria + N=2-months commitment without re-litigating (§3.4 owns criteria definition; §8 owns milestone-framing scaffolding). Closes §1.3 V1-correctness forward-pointer (`PRD.md:47`) by anchoring V1-done at §3.4. Establishes §8 → Phase 4 (Scoping) / Linear-backlog handoff: Phase 4 owns criterion-to-sub-version mapping + per-sub-version capability boundaries + dependency ordering across §2 / §4 / §7 surfaces + one-session-granularity Linear acceptance criteria. **§8 does not pre-commit milestone-sequencing decisions** — the milestone-framing scaffolding is intentionally separated from the milestone-sequencing decisions to keep Phase 1 (PRD) and Phase 4 (Scoping) territorially clean.
+**§8.3** (1 framing paragraph + 3 bullets) — V1-done cross-reference to §3.4 + §1.3 forward-pointer closure + §8 → Phase 4 handoff boundary. Reciprocates §3.4's three migration-completion criteria + N=2-months commitment without re-litigating (§3.4 owns criteria definition; §8 owns milestone-framing scaffolding). Closes §1.3 V1-correctness forward-pointer (`PRD.md §1.4`) by anchoring V1-done at §3.4. Establishes §8 → Phase 4 (Scoping) / Linear-backlog handoff: Phase 4 owns criterion-to-sub-version mapping + per-sub-version capability boundaries + dependency ordering across §2 / §4 / §7 surfaces + one-session-granularity Linear acceptance criteria. **§8 does not pre-commit milestone-sequencing decisions** — the milestone-framing scaffolding is intentionally separated from the milestone-sequencing decisions to keep Phase 1 (PRD) and Phase 4 (Scoping) territorially clean.
 
 **Routing-flags block: 5 boundary notes (a)–(e); zero Architect flags; zero Sec flags; zero V1-block flags either side.** Smallest routing-flags block of any locked PRD section to date by content type (pure boundary-note). Boundary notes: (a) §3.4 → §8 forward-pointer closure at §8.3; (b) §1.3 → §8 forward-pointer closure at §8.3; (c) ADR-002 §7.0 gap #4 milestone-framing dimension closure at §8.3 (the criteria dimension closed at §3.4 at §3 lock); (d) §8 → Phase 4 / Linear backlog handoff anchor; (e) §8 ↔ §4.6 cross-reference shape (one-way at §8 lock; §4.6 already commits to the posture, §8.2 names the transition mechanic that consumes it). Closure-documentation pattern for ADR-002 §7.0 gap #4 follows §4.6's closure-doc convention from §4 lock; Appendix A absorption deferred per §4 routing flag (o) housekeeping convention.
 
@@ -105,7 +207,7 @@
 
 **PM-lean track now 23-for-23 across §3 + §5 + §6 + §7 + §8** (PM-led sections). Combined with Sec-lean 21-for-21 from §4: **44-for-44 teammate-lean record** across all locked Phase 1 Step 3 PRD sections (5 PM-led + 1 Sec-led), zero F/CTO overrides on PM- or Sec-led recommendations across the entire Phase 1 Step 3 lock work. **Fifth confirmed instance of bulk-closeout-from-structure-proposal pattern** (§3 → §5 → §6 → §7 → §8); pattern is stably the default for PM-led PRD inventory + framing sections of any scope.
 
-**Forward-pointer closures at §8 lock:** §3.4 → §8 (`PRD.md:689`); §1.3 → §8 (`PRD.md:47`); ADR-002 §7.0 gap #4 milestone-framing dimension. Three forward-pointer closures + §8 → Phase 4 handoff anchor established at routing flag (d).
+**Forward-pointer closures at §8 lock:** §3.4 → §8 (`PRD.md:689`); §1.3 → §8 (`PRD.md §1.4`); ADR-002 §7.0 gap #4 milestone-framing dimension. Three forward-pointer closures + §8 → Phase 4 handoff anchor established at routing flag (d).
 
 **Engagement notes:** PM workhorse across 2 tasks (structure proposal — Q1/Q2 + cross-section reference scan + ADR forecast + cross-section surgical-edit forecast + pattern-divergence check; bulk-closeout body draft — opening framing + 3 sub-section bodies + 5 boundary-note routing flags + acceptance flags in one bundle). Sec untouched (no credential-handling surface, no V1 Sec posture; §4.6 cross-references at §8.2 are reciprocations of locked content). Architect untouched (no V1 architecture surface; §8 → Phase 4 handoff makes milestone-sequencing decisions Linear-backlog territory). CoS bookkeeping + 3 ratify gates with F/CTO via AskUserQuestion (Q1 standalone → Q2 standalone → body-bundle section-level acceptance). **PM agentId-based SendMessage continuation succeeded for the sixth confirmed time** (after v1.13 §3, v1.14 §5, v1.15 §6, v1.16 §7 structure + body, this session's §7 + §8); pattern is fully reliable for recently-completed PM agents across multiple session-spanning instances.
 
@@ -214,7 +316,7 @@
 
 **§6.5** (1 item) — mobile-native application; ADR-002 §3.0 verbatim. Explicit non-§6 carve-out for mobile-responsive web as expected V1 behavior; specific responsive commitments queued for Phase 2 (UX/Design).
 
-**§1.4 line-58 surgical edit** — `PRD.md:58` rewritten to align with §6 + ADR-007 framing: the advisor/fiduciary role carved out as the one §1.4 deferral that is a permanent §6 non-goal; geographic/multi-currency, life-stage/goal-tracking, and accountant read-only-export remain V2+ trajectory or future-PRD-revision per existing §1.4 prose. Terminology alignment to already-locked decisions, parallel to the surgical-amendment pattern of ADR-005/006/007; no new ADR (no novel scope decision; just alignment of pre-ADR-007 §1.4 framing).
+**§1.4 line-58 surgical edit** — `PRD.md §1.5` rewritten to align with §6 + ADR-007 framing: the advisor/fiduciary role carved out as the one §1.4 deferral that is a permanent §6 non-goal; geographic/multi-currency, life-stage/goal-tracking, and accountant read-only-export remain V2+ trajectory or future-PRD-revision per existing §1.4 prose. Terminology alignment to already-locked decisions, parallel to the surgical-amendment pattern of ADR-005/006/007; no new ADR (no novel scope decision; just alignment of pre-ADR-007 §1.4 framing).
 
 **Routing-flags block: 3 boundary notes only** — (a) §6 ↔ §1.4 framing alignment (resolved at §6 lock per Q5-a surgical edit); (b) §6 ↔ §5 distinction (V2+ trajectory vs permanent non-goal; re-routes via surgical ADR amendment under §5/§6 axis-as-product-identity-boundary pattern; mirrors §5 flag (d) TLH boundary note from §5-side); (c) §6 ↔ §3.5 distinction (capability-shaped vs measurement-shaped; disjoint by construction). **Zero Sec V1-block flags, zero Architect V1-block flags, zero new V2-ship-gate forward-Sec-consult flags** (V2-ship-gate flags live at §5.6 + §5.4 per §5 lock). Smallest routing-flags block of any locked PRD section to date (vs §5's 6-item, §3's 6-item, §2.6's 12-Architect + 6-Sec).
 
