@@ -1,13 +1,83 @@
 # WORKFLOW.md
 
 **Project:** mosko-fintech
-**Current version:** v1.26
+**Current version:** v1.27
 **Last updated:** 2026-05-19
-**Current phase:** Phase 1 — Product Definition (PRD), in progress. Step 3 (PRD section drafting) **substantively complete** (all 12 PRD sections LOCKED across §2 series + §3/§4/§5/§6/§7/§8); **Step 3.5 (PRD editorial rewrite) in progress** — PR 1 kickoff (archive + README + Step 3.5 declaration) landed at v1.19; **PR 2 / §1 rewrite landed at v1.20 with §1 β override EXERCISED**; **PR 3 / §2 rewrite landed at v1.21 (first sub-section-gates PR; Appendix C extracted with 32 story traces)**; **PR 4 / §3 rewrite landed at v1.22 (second bulk-closeout PR; default-to-source-shape correction landed mid-PR — see `memory/feedback_rewrite_convention_drops_blockquotes.md`)**; **PR 5 / §4 rewrite landed at v1.23 (second sub-section-gates PR; first Sec-as-primary-author PR since PR 1 kickoff; Q-S5=γ F/CTO override on §4.2 voice conversion)**; **PR 6 / §5 rewrite landed at v1.24 (third bulk-closeout PR; first PR to exercise β shape-discipline aggressively under Q-S2=β F/CTO override; +57% line-count expansion vs source; 20 lead bullets extracted into 77 new sub-bullets)**; **PR 7 / §6 rewrite landed at v1.26 (fourth bulk-closeout PR; smallest section under rewrite at 39 source body lines; 4-for-4 PM α structure-gate acceptance; -10.3% line-count compression; first team-mode dispatch under v1.25 operating-model convention)**; PR 8–10 remain pending per source order. Original Step 3.5 framing — F/CTO surfaced late-phase rubber-stamp risk under cumulative PRD density (see `memory/feedback_late_phase_density_overload.md`); rewrite plan locked at 7-Q ratify pass (see v1.19 changelog) — presentation-only restructure preserving all locks, source archived at `docs/archive/PRD-v1.18-source.md`, ~10 PR sequence (PR 1 kickoff + PR 2–9 sections §1 → §8 in source order + PR 10 overview/appendices); 7 PM-flagged rubber-stamp candidates deferred to dedicated post-rewrite verify pass before Step 4 entry. Step 4 (Architectural overview consult; Architect lead; Phase 3 entry gate) gated by Step 3.5 closure + post-rewrite verify pass. After Step 4 ratifies, Phase 2 (UX/Visual) becomes available; Phase 1 closes. Team-mode (`phase-1` team) per ADR-003 active. (Step 2 ratification complete at ADR-002; Step 3 prior state preserved in v1.18 changelog.)
+**Current phase:** Phase 1 — Product Definition (PRD), in progress. Step 3 (PRD section drafting) **substantively complete** (all 12 PRD sections LOCKED across §2 series + §3/§4/§5/§6/§7/§8); **Step 3.5 (PRD editorial rewrite) in progress** — PR 1 kickoff (archive + README + Step 3.5 declaration) landed at v1.19; **PR 2 / §1 rewrite landed at v1.20 with §1 β override EXERCISED**; **PR 3 / §2 rewrite landed at v1.21 (first sub-section-gates PR; Appendix C extracted with 32 story traces)**; **PR 4 / §3 rewrite landed at v1.22 (second bulk-closeout PR; default-to-source-shape correction landed mid-PR — see `memory/feedback_rewrite_convention_drops_blockquotes.md`)**; **PR 5 / §4 rewrite landed at v1.23 (second sub-section-gates PR; first Sec-as-primary-author PR since PR 1 kickoff; Q-S5=γ F/CTO override on §4.2 voice conversion)**; **PR 6 / §5 rewrite landed at v1.24 (third bulk-closeout PR; first PR to exercise β shape-discipline aggressively under Q-S2=β F/CTO override; +57% line-count expansion vs source; 20 lead bullets extracted into 77 new sub-bullets)**; **PR 7 / §6 rewrite landed at v1.26 (fourth bulk-closeout PR; smallest section under rewrite at 39 source body lines; 4-for-4 PM α structure-gate acceptance; -10.3% line-count compression; first team-mode dispatch under v1.25 operating-model convention)**; **PR 8 / §7 rewrite landed at v1.27 (fifth bulk-closeout PR; 5-for-6 PM acceptance with 1 F/CTO override at Q-S6 = β narrowly scoped to §7.3 b2; -19% line-count compression; first PR to exercise Acceptance-flag recap block convention at WORKFLOW.md per PR 4 / v1.22 precedent)**; PR 9–10 remain pending per source order. Original Step 3.5 framing — F/CTO surfaced late-phase rubber-stamp risk under cumulative PRD density (see `memory/feedback_late_phase_density_overload.md`); rewrite plan locked at 7-Q ratify pass (see v1.19 changelog) — presentation-only restructure preserving all locks, source archived at `docs/archive/PRD-v1.18-source.md`, ~10 PR sequence (PR 1 kickoff + PR 2–9 sections §1 → §8 in source order + PR 10 overview/appendices); 7 PM-flagged rubber-stamp candidates deferred to dedicated post-rewrite verify pass before Step 4 entry. Step 4 (Architectural overview consult; Architect lead; Phase 3 entry gate) gated by Step 3.5 closure + post-rewrite verify pass. After Step 4 ratifies, Phase 2 (UX/Visual) becomes available; Phase 1 closes. Team-mode (`phase-1` team) per ADR-003 active. (Step 2 ratification complete at ADR-002; Step 3 prior state preserved in v1.18 changelog.)
 
 ---
 
 ## Changelog
+
+### v1.27 — 2026-05-19
+
+**PR #[TBD] — Phase 1 Step 3.5 PR 8 / §7 (Constraints) rewrite.** Fifth bulk-closeout PR under Step 3.5 cadence (mirrors PR 7 / §6 + PR 6 / §5 + PR 4 / §3 + PR 2 / §1). PM continues as primary author from PR 6 + PR 7. **Second PR to invoke a F/CTO β override at structure gate** — Q-S6 = β narrowly scoped to §7.3 b2 (parallel to PR 6 / v1.24 invoking β at Q-S2 across the broader shape-discipline sweep; PR 8's β scope is single-bullet-narrow). **First PR to exercise the Acceptance-flag recap block convention** at the dedicated WORKFLOW.md location per PR 4 / v1.22 explicit precedent.
+
+**Section rewritten**
+
+- **§7** (Constraints) — 3 sub-sections preserved (§7.1 Cost / §7.2 Scale / §7.3 Usage model) per Q2 = β source-order parity.
+- Source: `docs/archive/PRD-v1.18-source.md` §7 (lines 994–1037; 43 inclusive body lines including 0 blockquote lines).
+- Rewritten: `PRD.md` §7 (35 body lines; net line-count compression of -8 lines / -19% under α-for-α/α/α/α/β structure-gate ratify).
+
+**Structure-gate decisions (Q-S1 through Q-S6)**
+
+| Q | Locked answer | PM recommendation |
+|---|---|---|
+| Q-S1 | **α** — bulk-closeout cadence | α |
+| Q-S2 | **N/A** — no blockquotes in §7 source (convention trivially satisfied) | N/A confirmation |
+| Q-S3 | **α** — §7 prelude tightened by single-phrase drop (cross-§-pattern meta phrase); sub-§ preludes verbatim | α |
+| Q-S4 | **α** — 5 routing flags (a)–(e) → App B; mix of closing-trace + forward-operative entries | α |
+| Q-S5 | **α** — 4 process-record acceptance flags → WORKFLOW.md `Acceptance-flag recap (PR 8 / §7)` block; bullet 1 dropped as prelude-duplicate | α |
+| Q-S6 | **β** — §7.3 b2 extracted (4 V2+ deferred surfaces lifted into sub-bullets); other 9 bullets preserved verbatim | α (F/CTO override) |
+
+**5-for-6 PM acceptance; 1 F/CTO override at Q-S6 = β.**
+
+**β extraction sweep — 1 extraction (single-bullet scope)**
+
+- Systematic sweep of all 10 source body bullets across §7.1–§7.3 for three β triggers per PR 6 precedent. 3 multi-clause candidates surfaced at structure proposal (§7.2 b1 Historical-data depth; §7.2 b3 Plaid sync throughput; §7.3 b2 Invite-only forward-compat).
+- **1 bullet extracted per F/CTO Q-S6 = β override:** §7.3 b2 (Invite-only forward-compat). 4 V2+ deferred surfaces (friends-and-family onboarding, invite-flow UI, multi-user auth gates, per-user data-access boundary checks) lifted from inline list into 4 indented sub-bullets. Lead bullet's primary commitment (V1 forward-compat + closed-and-invite-controlled framing + cross-refs to §5.7 / §6.1) preserved verbatim. Bold-inline `Invite-only forward-compat — V2 adds the second user without data migration.` preserved on lead bullet.
+- **9 bullets preserved verbatim.** §7.2 b1 + §7.2 b3 surfaced as β candidates but preserved verbatim per F/CTO scoping (single-bullet-narrow override).
+
+**Line-count outcome under α/α/α/α/α/β**
+
+- PM α target at structure proposal: -32% compression (-12 lines).
+- CoS β-reset estimate post-Q-S6 ratify: -25% to -28% compression.
+- **Realized: -8 lines net / -19%** — below both projections. Compression source: routing-flags-block collapse + acceptance-flags-block lift to WORKFLOW.md + §7 prelude tightening. Offset: β extraction expansion on §7.3 b2 (+4 net lines: 1 source bullet → 1 lead + 4 sub-bullets). **Not a problem; net compression remains substantial; reset reported honestly per PR 6 / v1.24 precedent.**
+
+**App B running total post-PR 8 = 14 entries**
+
+- PR 8 adds 5: Sec V2-implementation closure-trace (flag (a); resolved at §4.6 V2-ship-gate inventory (iv) + closure at §4 (k)(iv)/(m)) + Architect Phase 3 forward-pointer (flag (b)) + §7.2 ↔ §6.4 cross-reference (flag (c)) + §5 flag (e) closure (flag (d); resolved-at-§7.3-lock process-record) + §7 ↔ §4 routing closure (flag (e); hybrid).
+- Running total: 9 (post-PR 7) + 5 (PR 8) = 14.
+
+**Q7 verify-pass queue total post-PR 8 = 17**
+
+- PR-8-VP-§7-1 surfaced: §7's §4 forward-pointers cite §4's locked-content scope but do not explicitly cross-reference §4.6 V2-ship-gate Sec-consult inventory item (k)(iv); evaluate at Q7 = γ whether explicit `§4.6(k)(iv)` anchor citation is warranted. Marginal; not joint-mergeable with prior candidates.
+- Running queue: 16 (post-PR 7 merged) + 1 (PR 8) = 17.
+
+**Acceptance-flag recap (PR 8 / §7)**
+
+- **§7 is locked as of 2026-05-18.** No Security Reviewer at-lock pass required — §7 has no credential-handling surface, no auth-flow surface, no multi-tenant-isolation primitive ratification, no Plaid integration surface ratification, no money-flow surface, and no financial-calculation-integrity claim; §7.1's spend-cap forward-consult is a V2-implementation flag (landed at §4.6 V2-ship-gate inventory item (iv)); §7.2's multi-tenant isolation-at-scale routing is a forward-pointer to §4 (landed at §4.1–§4.6).
+- **Per-sub-section locks:**
+  - **§7.1** — 1 target-ceiling commitment + 1 cost-shape at-risk flag + 1 per-line-item-out-of-scope boundary; ADR-002 §6.0 verbatim, no itemized vendor pricing.
+  - **§7.2** — 3 Architect Phase-3 scale dimensions + 1 RLS query-shape forward-pointer + 1 §4-routed isolation-at-scale posture pointer.
+  - **§7.3** — 1 single-user-V1-multi-tenant-day-one commitment + 1 invite-only-forward-compat commitment (lead bullet preserved verbatim; 4 V2+ deferred surfaces extracted under Q-S6 = β override); ADR-002 §1.4 + §5.7 verbatim.
+- **Five routing flags (a)–(e) added** (1 Sec V2-implementation closure-trace, 1 Architect Phase 3 forward-pointer, 3 boundary notes — all relocated to App B per Q-S4 = α).
+- **No new ADR for §7 lock.** §7 introduces no new scope decisions; all content is grounded in already-locked ADRs (ADR-002 §6.0 for §7.1; ADR-002 §1.4 + §5.7 for §7.3) or forward-points to Architect Phase 3 (§7.2). **No cross-section surgical edits** — §7's content is purely additive to upstream sections; no §1.4-line-58-style alignment required at §7 lock.
+- **Closure-trace summary:** The Sec routing flag (a) closed at §4.6 lock (PR 5 / v1.23); the Architect routing flag (b) resolves at Phase 3 (ARCHITECTURE.md cost reconciliation + scale-dimension implementation), does not block §7 lock at the PRD level. Boundary notes (c), (d), (e) are documentation markers; (d) closes §5 routing flag (e) at this lock (PR 8 / §7.3); (e) is largely closed at §4 lock with residual forward-operative boundary-note semantics for post-hoc cross-§ navigation.
+
+**Team-mode operational continuation**
+
+- `pm-pr8-structure@phase-1` teammate handled both structure proposal and body draft turns under one continuous teammate (vs PR 7's structure-as-subagent + body-as-teammate split). Sync-mismatch pattern surfaced after Q-S ratify relay (teammate went idle without producing body deliverables on first turn); re-poke with "Not a re-fire" framing per `memory/feedback_pm_sync_mismatch_pattern.md` unblocked cleanly.
+
+**Substance preservation**
+
+- 0 substance amendments. Presentation-only rewrite. All locks preserved (ADR-002 §1.4 + §6.0 + Finding (a) + Finding (f) + §5.7 + §6.1 + §6.4 + §4.6 + §2.1.3 + §2.1 + §3).
+- 1 cross-ref retarget (`PRD.md:820` → `§5 routing flag (e)` inside App B entry for flag (d); body itself has zero retargets — cleanest-sweep parallel to PR 3 + PR 6 + PR 7).
+- 3 DECISIONS.md numeric refs preserved verbatim (`:275`, `:534`, `:541`).
+
+**No new ADR.** PR 8 is presentation-only; all content grounded in already-locked ADRs. Follows PR 2 / 3 / 4 / 5 / 6 / 7 precedent.
+
+---
 
 ### v1.26 — 2026-05-19
 
