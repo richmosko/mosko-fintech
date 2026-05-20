@@ -1070,7 +1070,7 @@ The following measurement frames are **not** V1 success metrics. They are enumer
 
 ## 6. Out-of-scope for this PRD lifecycle
 
-§6 enumerates capabilities that are **not in this PRD's universe at all** — permanent non-goals under the product-identity axes of ADR-002 §3.0 (extended by ADR-007). The §5/§6 distinction is sharp: §5 enumerates capabilities on the eventual product trajectory (locked-as-V2+ in V1 to preserve scope, but anticipated as legitimate later work); §6 enumerates capabilities that V1's product identity actively excludes. "Later" vs "not in this PRD's universe" is the operative distinction (per §5 framing at §5 opening) and "permanent non-goal under a product-identity axis" is the operative test (per ADR-007). Items here do not migrate to §5 by V2-scoping pressure; relaxing a §6 entry requires an explicit PRD-scope revision under a new ADR amendment, paralleling how ADR-007 moved TLH *into* §6 from V2+ trajectory. The section title preserves ADR-002 Finding (c)'s "out-of-scope for this PRD lifecycle" relabel verbatim; the framing inside this section is the locked permanent-non-goal-under-product-identity-axis pattern established at §5 lock + ADR-007. §6 is to *capabilities* what §3.5 is to *measurement frames* — both make the V1 perimeter visible by its complement and prevent re-litigation of settled scope decisions.
+§6 enumerates capabilities that are **not in this PRD's universe at all** — permanent non-goals per ADR-002 §3.0 + ADR-007. The §5/§6 distinction is sharp: §5 enumerates capabilities on the eventual product trajectory (locked-as-V2+ in V1 to preserve scope, but anticipated as legitimate later work); §6 enumerates capabilities that V1's product identity actively excludes. "Later" vs "not in this PRD's universe" is the operative distinction (per §5 framing at §5 opening) and "permanent non-goal under a product-identity axis" is the operative test (per ADR-007). Items here do not migrate to §5 by V2-scoping pressure; relaxing a §6 entry requires an explicit PRD-scope revision under a new ADR amendment, paralleling how ADR-007 moved TLH *into* §6 from V2+ trajectory. The section title preserves ADR-002 Finding (c)'s "out-of-scope for this PRD lifecycle" relabel verbatim; the framing inside this section is the locked permanent-non-goal-under-product-identity-axis pattern established at §5 lock + ADR-007. §6 is to *capabilities* what §3.5 is to *measurement frames* — both make the V1 perimeter visible by its complement and prevent re-litigation of settled scope decisions.
 
 ### 6.1 Public-distribution axis
 
@@ -1103,11 +1103,7 @@ The mobile-native axis is a permanent product-identity boundary: mosko-fintech i
 
 - **Mobile-native application.** Separate iOS app, Android app, React-Native-style hybrid app, or any platform-specific installable native client are permanent non-goals. ADR-002 §3.0 verbatim. The boundary is "the delivery medium is web," not "mobile use is unsupported." Mobile-responsive web design is the V1 / V2 mobile commitment; native distribution is out of this PRD's universe.
 
-#### Open routing flags affecting §6
-
-- **(a) Boundary note — §6 ↔ §1.4 framing alignment (resolved at §6 lock per Q5-a).** PRD §1.4 line-58 received a surgical edit aligning it with the permanent-non-goal-under-product-identity-axis framing: the advisor/fiduciary role specifically is a permanent product-identity non-goal cross-referenced to §6, distinct from the other §1.4 deferrals which remain scope boundaries / V2+ trajectory items.
-- **(b) Boundary note — §6 ↔ §5 distinction.** §5 enumerates V2+ trajectory items; §6 enumerates permanent non-goals under product-identity axes. Re-routes between §5 and §6 happen via surgical ADR amendment under the §5/§6 axis-as-product-identity-boundary pattern (ADR-007 precedent). Inverse re-routes (§6 → §5) are possible in principle per ADR-007 future-housekeeping clause. Mirrors §5's routing flag (d) TLH boundary note from the §5-side.
-- **(c) Boundary note — §6 ↔ §3.5 distinction.** §6 enumerates capability-shaped non-goals; §3.5 enumerates measurement-shaped non-metrics. Disjoint by construction per §3.5's locked closing paragraph.
+*Routing flags from §6 lock (3 boundary notes — §1.4 framing alignment; §5 distinction; §3.5 distinction) carried to Appendix B (created in PR 10; pending consolidation).*
 
 ## 7. Constraints
 
