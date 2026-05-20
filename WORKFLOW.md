@@ -1,13 +1,119 @@
 # WORKFLOW.md
 
 **Project:** mosko-fintech
-**Current version:** v1.22
+**Current version:** v1.23
 **Last updated:** 2026-05-19
-**Current phase:** Phase 1 — Product Definition (PRD), in progress. Step 3 (PRD section drafting) **substantively complete** (all 12 PRD sections LOCKED across §2 series + §3/§4/§5/§6/§7/§8); **Step 3.5 (PRD editorial rewrite) in progress** — PR 1 kickoff (archive + README + Step 3.5 declaration) landed at v1.19; **PR 2 / §1 rewrite landed at v1.20 with §1 β override EXERCISED**; **PR 3 / §2 rewrite landed at v1.21 (first sub-section-gates PR; Appendix C extracted with 32 story traces)**; **PR 4 / §3 rewrite landed at v1.22 (second bulk-closeout PR; default-to-source-shape correction landed mid-PR — see `memory/feedback_rewrite_convention_drops_blockquotes.md`)**; PR 5–10 remain pending per source order. Original Step 3.5 framing — F/CTO surfaced late-phase rubber-stamp risk under cumulative PRD density (see `memory/feedback_late_phase_density_overload.md`); rewrite plan locked at 7-Q ratify pass (see v1.19 changelog) — presentation-only restructure preserving all locks, source archived at `docs/archive/PRD-v1.18-source.md`, ~10 PR sequence (PR 1 kickoff + PR 2–9 sections §1 → §8 in source order + PR 10 overview/appendices); 7 PM-flagged rubber-stamp candidates deferred to dedicated post-rewrite verify pass before Step 4 entry. Step 4 (Architectural overview consult; Architect lead; Phase 3 entry gate) gated by Step 3.5 closure + post-rewrite verify pass. After Step 4 ratifies, Phase 2 (UX/Visual) becomes available; Phase 1 closes. Team-mode (`phase-1` team) per ADR-003 active. (Step 2 ratification complete at ADR-002; Step 3 prior state preserved in v1.18 changelog.)
+**Current phase:** Phase 1 — Product Definition (PRD), in progress. Step 3 (PRD section drafting) **substantively complete** (all 12 PRD sections LOCKED across §2 series + §3/§4/§5/§6/§7/§8); **Step 3.5 (PRD editorial rewrite) in progress** — PR 1 kickoff (archive + README + Step 3.5 declaration) landed at v1.19; **PR 2 / §1 rewrite landed at v1.20 with §1 β override EXERCISED**; **PR 3 / §2 rewrite landed at v1.21 (first sub-section-gates PR; Appendix C extracted with 32 story traces)**; **PR 4 / §3 rewrite landed at v1.22 (second bulk-closeout PR; default-to-source-shape correction landed mid-PR — see `memory/feedback_rewrite_convention_drops_blockquotes.md`)**; **PR 5 / §4 rewrite landed at v1.23 (second sub-section-gates PR; first Sec-as-primary-author PR since PR 1 kickoff; Q-S5=γ F/CTO override on §4.2 voice conversion)**; PR 6–10 remain pending per source order. Original Step 3.5 framing — F/CTO surfaced late-phase rubber-stamp risk under cumulative PRD density (see `memory/feedback_late_phase_density_overload.md`); rewrite plan locked at 7-Q ratify pass (see v1.19 changelog) — presentation-only restructure preserving all locks, source archived at `docs/archive/PRD-v1.18-source.md`, ~10 PR sequence (PR 1 kickoff + PR 2–9 sections §1 → §8 in source order + PR 10 overview/appendices); 7 PM-flagged rubber-stamp candidates deferred to dedicated post-rewrite verify pass before Step 4 entry. Step 4 (Architectural overview consult; Architect lead; Phase 3 entry gate) gated by Step 3.5 closure + post-rewrite verify pass. After Step 4 ratifies, Phase 2 (UX/Visual) becomes available; Phase 1 closes. Team-mode (`phase-1` team) per ADR-003 active. (Step 2 ratification complete at ADR-002; Step 3 prior state preserved in v1.18 changelog.)
 
 ---
 
 ## Changelog
+
+### v1.23 — 2026-05-19
+
+**PR #[TBD] — Phase 1 Step 3.5 PR 5 / §4 (Security and compliance posture) rewrite.** Second sub-section-gates PR (mirrors PR 3 / §2 cadence). **First Sec-as-primary-author PR since PR 1 kickoff.** ADR-008-locked canonical-reference content (6 Sec axes; 14×8 SD classification matrix; 15×7 RLS test catalog; V1 retention/availability/incident-handling baseline; 2 pattern divergences) preserved verbatim by construction.
+
+**Section rewritten**
+
+- **§4** (Security and compliance posture) — 6 sub-sections preserved (§4.1 / §4.2 / §4.3 / §4.4 / §4.5 / §4.6) per Q2 = β source-order parity.
+- Source: `docs/archive/PRD-v1.18-source.md` §4 (lines 720–845; 126 source lines including 0 blockquote lines).
+- Rewritten: `PRD.md` §4 (lines 803–901; ~99 lines; ~21% net line-count compression).
+
+**Pattern divergence declaration**
+
+- **Sub-section-gates** per Q3 = γ. 1 structure gate (6 sub-Qs Q-S1–Q-S6) + 6 body gates (1 per §4.N) = 7 ratify touchpoints.
+- **Zero bulk-closeout, zero per-bullet gates.**
+
+**Structure-gate decisions (Q-S1 through Q-S6)**
+
+| Q | Locked answer |
+|---|---|
+| Q-S1 | **α** — 1 structure + 6 body gates (mirror PR 3 §2 cadence) |
+| Q-S2 | **α** — aggressive Shape-P compression (framing-prelude + bullet-tail rationale-trace) |
+| Q-S3 | **α** — §4.4 matrix preserved verbatim; framing compress only |
+| Q-S4 | **β** — §4.5 RT-07 orphan-ref `acceptance flag (ii) below` → `ADR-008 Decision 3 — reserved-vacant row consolidation rationale` |
+| Q-S5 | **γ** — §4.2 line-ref retarget + redundant parenthetical drop + first-person voice conversion (F/CTO override of Sec β recommendation; rationale: §2.4.1 already rewritten to product-voice at PR 3, so verbatim-re-citation rationale no longer holds; γ maintains citation consistency rather than preserving stale citation form) |
+| Q-S6 | **α** — §4.6 V2-ship-gate inventory preserved as nested bullets |
+
+**PR 5 totals across §4.1–§4.6**
+
+| §4.N | Source lines | Rewritten | Compression |
+|---|---|---|---|
+| §4.1 | ~9 | ~9 | minor |
+| §4.2 | ~12 | ~11 | ~10% |
+| §4.3 | ~11 | ~10 | minor |
+| §4.4 | ~20 | ~20 | minor (table verbatim) |
+| §4.5 | ~21 | ~21 | minor (table verbatim + Q-S4 RT-07 cell update) |
+| §4.6 | ~46 | ~18 | **~60%** (largest single compression) |
+| §4 prelude | ~3 | ~3 | preserved verbatim |
+| **Total** | **126** | **~99** | **~21% net** |
+
+**ADR-008 canonical-reference preservation (per Decisions 1 + 2 + 3 + 4 + 5)**
+
+- **Decision 1** (6 canonical Sec axes i–vi): all preserved verbatim across §4.1 + §4.3.
+- **Decision 2** (14×8 SD classification matrix): all 112 cells preserved verbatim character-for-character (cell-level verification performed at body-gate-4). Closed-enum values preserved verbatim (sensitivity-tier 3 / storage-protection 4 / retention-posture 4 incl. N=90). SD-13 `—` cross-cutting placeholder preserved across 3 cells.
+- **Decision 3** (15×7 RLS test catalog): 104 of 105 cells preserved verbatim; 1 cell (RT-07 Surface) updated per documented Q-S4=β closure (orphan-ref → canonical-reference anchor). Closed-enum values preserved verbatim. V1-block threshold (`critical` severity only; RT-02 + RT-05) preserved.
+- **Decision 4** (V1 retention/availability/incident-handling baseline): all preserved verbatim including "best-effort uptime, no SLO" / "incident-log file at the F/CTO level" / "No user-facing delete-my-data control as a V1 surface" / V2-trajectory ramp items (a)–(d).
+- **Decision 5** (pattern divergences from PM-led default): preserved at WORKFLOW.md changelog + ADR-008 itself (no §4.6 body action required).
+
+**Q-S5 = γ F/CTO override at §4.2 (single F/CTO override; treated as presentation-only)**
+
+F/CTO chose γ over Sec's β recommendation at structure-gate Q-S5:
+
+- Retarget `PRD.md:269` → `PRD.md §2.4.1` (§4.2 bullet 1).
+- Drop redundant parenthetical re-narrating §2.4.1 content.
+- **Convert first-person voice fragment** `the institution credentials I enter` → `the institution credentials the user enters`.
+
+Rationale: §2.4.1 has already been rewritten to product-voice at PR 3 on `main`; the verbatim-re-citation rationale for Sec's β recommendation no longer holds. F/CTO override maintains citation consistency with the rewritten §2.4.1 rather than preserving a stale citation form. Treated as presentation-only (voice-cleanup to match upstream rewrite), not a substance amendment.
+
+**Cross-reference retargeting (per Q4 = α)**
+
+| File | Old | New |
+|---|---|---|
+| PRD.md (§4.2 bullet 1) | `` `PRD.md:269` `` | `` `PRD.md §2.4.1` `` |
+| WORKFLOW.md (line 478, v1.X §7.3 changelog) | `` `PRD.md:820` `` | `` `PRD.md §5.7` `` |
+
+2 retargets total: 1 in-body (§4.2) + 1 WORKFLOW.md. Zero DECISIONS.md retargets. Zero §1.N renumber retargets in §4 body. Zero §-prefix normalizations in §4 body (already clean).
+
+**Acceptance-flags relocation (per Q1 = β)**
+
+- §4 body has **no `#### Acceptance flags` block** in rewritten form.
+- §4 body has **no `#### Open routing flags affecting §4` block** — replaced by italic Appendix B marker at §4 foot.
+- §4 lock metadata preserved across: WORKFLOW.md v1.17 changelog (§4 lock) + ADR-008 + this v1.23 entry.
+- 16 App B entries (11 forward-looking + 5 process-record) carried forward in PR 5 body deliverable for PR 10 consolidation.
+
+**VP candidates surfaced (Q7 = γ deferred)**
+
+3 new VP candidates from PR 5, bringing Q7 verify-pass queue to **13 total** (7 from v1.19 + 3 from PR 4 + 3 from PR 5):
+
+1. **PR-5-VP-§4-1** (§4.2) — credential-error states (c)/(d) observational distinguishability at V1 user-facing surface (depends on Plaid webhook event taxonomy).
+2. **PR-5-VP-§4-2** (§4.3 + §4.5 RT-13) — RT-13 staleness severity (high) vs. §2.6.5 account-name exposure dimension; potential revision to critical (would amend ADR-008 Decision 3 + raise V1-ship-blocker count to 3).
+3. **PR-5-VP-§4-3** (§4.6) — V1 indefinite audit-log retention vs. V2 incident-handling-ramp clause-level tension.
+
+**F/CTO ratification: 12-for-12 acceptance across structure + body gates** (5 Sec-recommended + 1 F/CTO override at Q-S5=γ + 6 body-gates accepted as drafted):
+
+- Structure gate: Q-S1 = α / Q-S2 = α / Q-S3 = α / Q-S4 = β / Q-S5 = γ (override) / Q-S6 = α.
+- Body gates: Q-B1 = α / Q-B2 = α / Q-B3 = α / Q-B4 = α / Q-B5 = α / Q-B6 = α.
+
+**Patterns established / extended during PR 5**
+
+- **Sec-as-primary-author cadence pattern established** for sub-section-gates. ADR-008 Decision 5 pattern-divergence-from-PM-led default exercised at PR 5 ship.
+- **Default-to-source-shape = §2/§3 rewritten shape on `main`** convention (per `memory/feedback_rewrite_convention_drops_blockquotes.md`) — N/A for §4 since source had 0 blockquote lines, but convention applied at briefing.
+- **Working artifacts to `temp/` from creation** (per `memory/feedback_working_artifacts_temp_not_docs.md`) — zero `docs/prd-rewrite*` files added by PR 5.
+- **Body-gate standalone rendered file convention established** (per `memory/feedback_body_gate_rendered_extract.md`) — CoS proactively extracts each rewritten §4.N body to `temp/prd-rewrite-pr5-section4-N-rendered.md` and opens in One Markdown for F/CTO body-gate review. Established at body-gate-3 (F/CTO surfaced same need that appeared at PR 4 / §3); applied proactively at body-gates 4 / 5 / 6; retroactively extracted §4.1 + §4.2 at integration.
+- **F/CTO γ-override at structure gate is presentation-only when matched by upstream rewrite** — Q-S5 γ override on first-person voice conversion was treated as presentation-only because §2.4.1 (the source-of-citation) had already been converted to product-voice at PR 3; γ on §4.2 maintains citation consistency, not substance amendment.
+
+**Engagement notes**
+
+- **Sec workhorse** across 7 stages (structure proposal + 6 body-gate deliverables). First Sec primary-author PR since PR 1 kickoff.
+- **PM untouched** (PM not consulted for §4 body content per ADR-008 Decision 5 Sec-primary-author pattern; PM resumes at PR 6 / §5).
+- **Architect untouched** (no architecture surface in PR 5; PR 5 routing flags carried forward to App B for Phase 3 consumption).
+- **CoS bookkeeping** + 12 ratify gates with F/CTO via AskUserQuestion (6 structure-gate Qs + 6 body-gate Qs, all one-question-at-a-time) + integration pass (PRD.md §4 swap + WORKFLOW.md `PRD.md:820` retarget + this v1.23 entry).
+- **Sec agentId-based SendMessage continuation succeeded** across all 7 stages on the same agentId.
+
+**Next thread:** **PR 6 — §5 (V2 deferred candidates) rewrite.** Bulk-closeout cadence per Q3 = γ (mirrors PR 2 / §1 + PR 4 / §3); §5 has 7 sub-sections (§5.1–§5.7) but is a low-density V2-trajectory inventory (not a high-density per-sub-§ lock content like §2 or §4). PM resumes as primary author. PR 6 inherits PR 5's ratification patterns (sub-section-gates is not the default for low-density sections).
+
+---
 
 ### v1.22 — 2026-05-19
 
@@ -475,7 +581,7 @@ Forward convention from v1.20 onward: new artifact text uses "Independent Invest
 
 **§7.2** (5 bullets) — historical-data depth (Dec-2015-forward NAV import per §2.1.3) + snapshot-store growth under daily-snapshot data shape (cross-reference §6.4) + Plaid sync throughput across two products on single tenant (per `DECISIONS.md:534`) + RLS query-shape forward-pointer (per `DECISIONS.md:541`) + multi-tenant isolation-at-scale posture forward-pointer to §4. V1 single-user by construction; "scale" is single-tenant scale dimensions, not multi-user-cohort scale. PRD commits to the posture (scale dimensions are first-class from day one even at single-user V1); implementation shapes are Architect Phase 3.
 
-**§7.3** (2 bullets) — single-user V1 + multi-tenant infrastructure from day one per ADR-002 §1.4 verbatim + invite-only forward-compat per §5.7 (V2 adds second user without data migration of V1 user data). Reciprocates §5.7 cross-reference; closes §5 routing flag (e) (`PRD.md:820`).
+**§7.3** (2 bullets) — single-user V1 + multi-tenant infrastructure from day one per ADR-002 §1.4 verbatim + invite-only forward-compat per §5.7 (V2 adds second user without data migration of V1 user data). Reciprocates §5.7 cross-reference; closes §5 routing flag (e) (`PRD.md §5.7`).
 
 **Routing-flags block: 5 items (a)-(e)** — one Sec V2-implementation forward-consult ((a) §7.1 spend-cap / API-quota alerting posture as cost-protection control: fires only if/when a runtime cost-protection mechanism is proposed); one Architect Phase-3 forward-pointer ((b) §7.2 scale dimensions + RLS query-shape resolve at ARCHITECTURE.md); three boundary notes ((c) §7.2 ↔ §6.4 daily-snapshot cross-reference, (d) §5 routing flag (e) closed at §7.3 lock, (e) §7 ↔ §4 routing for 3 forward-pointers). **Zero V1-block flags on either side.** Smallest routing-flags block to date alongside §6 (5 vs §6's 5; §3 and §5 both had 6).
 
