@@ -1,13 +1,31 @@
 # WORKFLOW.md
 
 **Project:** mosko-fintech
-**Current version:** v1.24
+**Current version:** v1.25
 **Last updated:** 2026-05-19
 **Current phase:** Phase 1 — Product Definition (PRD), in progress. Step 3 (PRD section drafting) **substantively complete** (all 12 PRD sections LOCKED across §2 series + §3/§4/§5/§6/§7/§8); **Step 3.5 (PRD editorial rewrite) in progress** — PR 1 kickoff (archive + README + Step 3.5 declaration) landed at v1.19; **PR 2 / §1 rewrite landed at v1.20 with §1 β override EXERCISED**; **PR 3 / §2 rewrite landed at v1.21 (first sub-section-gates PR; Appendix C extracted with 32 story traces)**; **PR 4 / §3 rewrite landed at v1.22 (second bulk-closeout PR; default-to-source-shape correction landed mid-PR — see `memory/feedback_rewrite_convention_drops_blockquotes.md`)**; **PR 5 / §4 rewrite landed at v1.23 (second sub-section-gates PR; first Sec-as-primary-author PR since PR 1 kickoff; Q-S5=γ F/CTO override on §4.2 voice conversion)**; **PR 6 / §5 rewrite landed at v1.24 (third bulk-closeout PR; first PR to exercise β shape-discipline aggressively under Q-S2=β F/CTO override; +57% line-count expansion vs source; 20 lead bullets extracted into 77 new sub-bullets)**; PR 7–10 remain pending per source order. Original Step 3.5 framing — F/CTO surfaced late-phase rubber-stamp risk under cumulative PRD density (see `memory/feedback_late_phase_density_overload.md`); rewrite plan locked at 7-Q ratify pass (see v1.19 changelog) — presentation-only restructure preserving all locks, source archived at `docs/archive/PRD-v1.18-source.md`, ~10 PR sequence (PR 1 kickoff + PR 2–9 sections §1 → §8 in source order + PR 10 overview/appendices); 7 PM-flagged rubber-stamp candidates deferred to dedicated post-rewrite verify pass before Step 4 entry. Step 4 (Architectural overview consult; Architect lead; Phase 3 entry gate) gated by Step 3.5 closure + post-rewrite verify pass. After Step 4 ratifies, Phase 2 (UX/Visual) becomes available; Phase 1 closes. Team-mode (`phase-1` team) per ADR-003 active. (Step 2 ratification complete at ADR-002; Step 3 prior state preserved in v1.18 changelog.)
 
 ---
 
 ## Changelog
+
+### v1.25 — 2026-05-19
+
+**PR #[TBD] — Team-mode operational convention for agent dispatches.** Operating-model addendum locking forward execution-agent dispatches to Claude Code team-mode with `team_name` matching the active phase identifier (`phase-1` for Phase 1). Prior PRs (Step 3.5 PRs 1–6) ran with plain `Agent` subagent calls — work rendered in the orchestrator's pane, no split-pane visibility for the Founder/CTO. Convention shift surfaced mid-PR-7 when the PR 7 / §6 structure-proposal PM was dispatched as an inline subagent and Founder/CTO noted the missing pane against an earlier same-session split-pane test that had verified team-mode rendering works.
+
+**Mechanic.** `team_name: phase-1` on `Agent` tool calls spawns the teammate into the `phase-1` team (created locally at `~/.claude/teams/phase-1/`), where it gets its own split-pane and runs asynchronously while the orchestrator stays free to handle other work. Teammates send idle notifications when their turn ends; F/CTO can watch progress live and intervene without waiting for the orchestrator to relay.
+
+**Scope.** Convention applies to all execution-agent dispatches in the active phase — Product Manager, Architect, Security Reviewer, UX Designer, Visual Designer, and any future Phase 5+ roles when they activate. New phases create their own team under `phase-<N>` naming when phase entry locks; team creation is a one-time setup step per phase. ADR-003 already establishes phase teams conceptually; this is operational reinforcement, not a new ADR.
+
+**Changes.**
+
+- `WORKFLOW.md` — added "Team-mode for agent dispatches" paragraph at end of Operating model section (after Task tracking via Linear, before Agent roster); version bump v1.24 → v1.25.
+- No PRD / DECISIONS.md / per-directory CLAUDE.md changes — purely operating-model surface.
+- No header revision — line 6's existing "Team-mode (`phase-1` team) per ADR-003 active" wording is now genuinely operational.
+
+**Forward implications.** PR 7 / §6 PM body draft (next dispatch in Step 3.5) is the first team-mode dispatch under this convention. All subsequent Phase 1 execution-agent dispatches use team-mode. When Phase 2 (UX/Visual) opens after Step 4 ratifies, a `phase-2` team gets created at phase entry; the same convention applies.
+
+---
 
 ### v1.24 — 2026-05-19
 
@@ -996,6 +1014,8 @@ mosko-fintech operates as a one-human-many-agents team. The human (the owner) ho
 **Cadence:** Async, single-developer. Work happens in bursts, with multi-week gaps possible. The project must be reconstructable from `WORKFLOW.md` + `DECISIONS.md` + the open branch at any time. Nothing important lives only in the owner's head.
 
 **Task tracking via Linear:** Project work is tracked in **Linear**, organized as initiatives → projects → issues. Agents are granted scoped access to Linear via the official Linear MCP server, so an agent picking up an assigned issue can read its full context (description, priority, labels, linked PRs), update its status as work progresses (Todo → In Progress → In Review → Done), and post comments capturing decisions or blockers. This closes the loop between planning and execution: issues created during Phase 4 scoping become the actual unit of work agents pick up in Phase 6, with status changes flowing back automatically rather than requiring manual sync. Agent permissions in Linear are scoped — agents may read, comment, and update status on issues assigned to their role; reassignment, priority changes, and issue creation outside their scope require Founder/CTO action. Specific permission policy per agent role is defined in Phase 5.
+
+**Team-mode for agent dispatches.** Execution-agent dispatches in the active phase use Claude Code team-mode with `team_name` set to the current phase identifier (e.g., `phase-1` for Phase 1). Plain `Agent` calls without `team_name` spawn inline subagents whose work renders in the orchestrator's pane; team-mode spawns appear in their own split-pane, so the Founder/CTO can watch teammate progress live and intervene if work drifts. The convention is forward-looking — Step 3.5 PRs 1–6 ran without it (inline subagents); PR 7 onward uses team-mode. New phases create their own team under the same `phase-<N>` naming.
 
 ---
 
