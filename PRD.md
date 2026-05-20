@@ -901,7 +901,7 @@ The following measurement frames are **not** V1 success metrics. They are enumer
 
 ## 5. V2 deferred candidates
 
-§5 is the consolidation home for the V2+ deferred capabilities surfaced across the V1 PRD lifecycle — every V1/V2 boundary clause in §2.1 → §2.6, the explicit V2+ enumeration in ADR-002 Finding (b), the V1/V2 consequences of ADR-004 Decisions A–D, and the deferral surfaces created by ADR-005 (planning-targets settings UI), ADR-006 (bracket-aware tax inputs), and ADR-007 (TLH reclassification, drafted alongside this §5 lock). The §5/§6 axis is sharp: §5 enumerates capabilities that **are** on the eventual product trajectory — locked-as-V2+ in V1 to preserve the single-user drop-replace-migration scope but anticipated as legitimate later work; §6 enumerates capabilities that are **not** in this PRD's universe at all (advisor / fiduciary role, public sign-up, money movement, real-time quotes, mobile-native app — per ADR-002 §3.0). "Later" vs "not in this PRD's universe" is the operative distinction. §5 is to *capabilities* what §3.5 is to *measurement frames* — both make the V1 perimeter visible by its complement and prevent re-litigation of settled scope decisions. §5 introduces no new V2+ items; every entry traces to an existing §2.x V1/V2 clause or an ADR-locked deferral.
+§5 is the consolidation home for the V2+ deferred capabilities surfaced across the V1 PRD lifecycle — every V1/V2 boundary clause in §2.1 → §2.6 and the deferral surfaces created by the relevant ADRs (ADR-002 Finding (b); ADR-004 Decisions A–D; ADR-005; ADR-006; ADR-007). The §5/§6 axis is sharp: §5 enumerates capabilities that **are** on the eventual product trajectory — locked-as-V2+ in V1 to preserve the single-user drop-replace-migration scope but anticipated as legitimate later work; §6 enumerates capabilities that are **not** in this PRD's universe at all (advisor / fiduciary role, public sign-up, money movement, real-time quotes, mobile-native app — per ADR-002 §3.0). "Later" vs "not in this PRD's universe" is the operative distinction. §5 is to *capabilities* what §3.5 is to *measurement frames* — both make the V1 perimeter visible by its complement and prevent re-litigation of settled scope decisions. §5 introduces no new V2+ items; every entry traces to an existing §2.x V1/V2 clause or an ADR-locked deferral.
 
 ### 5.1 Net-worth deferrals
 
@@ -922,7 +922,12 @@ The following measurement frames are **not** V1 success metrics. They are enumer
 ### 5.3 Cash-flow deferrals
 
 - **User-editable cash-flow-taxonomy CRUD UI** — §2.3.1 V1/V2 (ADR-004 Decision C). Parallel to §5.2's asset-taxonomy CRUD V2+; V1 seeds the cash-flow taxonomy (Income / Expenses / OtherCF / AcctSetup × user Sub-Cats) and ships the transaction-to-bucket assignment UI, but taxonomy editing happens via migration in V1.
-- **Budget tracking mechanics** — §2.3.2 V1/V2 (ADR-002 §1.2 + ADR-005). V1 ships static reference-value rendering of two user-authored aggregate targets (one income, one expense) inline in §2.3.2 captions with no variance computation. V2+ delivers actual-vs-target variance computation, threshold alerts, category-level rolling budgets, per-category target authoring beyond aggregates, and the broader budget-tracking-with-goal-setting surface (per ADR-002 §1.1). Category alerts / notifications are a feature-class within this V2+ surface.
+- **Budget tracking mechanics** — §2.3.2 V1/V2 (ADR-002 §1.2 + ADR-005). V1 ships static reference-value rendering of two user-authored aggregate targets (one income, one expense) inline in §2.3.2 captions with no variance computation. V2+ delivers (per ADR-002 §1.1 broader budget-tracking-with-goal-setting surface):
+  - Actual-vs-target variance computation.
+  - Threshold alerts and category notifications (feature-class within this V2+ surface).
+  - Category-level rolling budgets.
+  - Per-category target authoring beyond aggregates.
+  - The broader budget-tracking-with-goal-setting surface itself.
 - **Rule-based auto-categorization beyond recurring-vendor inference** — §2.3.2 V1/V2. V1 ships Plaid-category suggested default + recurring-vendor inference (same-merchant → suggest last-assigned Sub-Cat per §2.3.1 ζ lock). User-authored category-assignment rules with regex / pattern matching beyond simple recurring-vendor inference are V2+.
 - **Per-account taxonomy overrides** — §2.3.3 V1/V2. Account-specific Sub-Cats that don't exist in the global taxonomy are V2+.
 - **Per-scope cash-flow rendering + scope-aware filtering UI** — §2.3.5 V1/V2 (ADR-004 Decision B). Per-scope rollups, per-scope drill-downs, and scope-aware filtering across §2.3.2 / §2.3.3 / §2.3.4 surfaces are V2+; data model carries scope from V1.
@@ -934,32 +939,66 @@ The following measurement frames are **not** V1 success metrics. They are enumer
 
 - **Auto-classification of new symbols from Plaid metadata** — §2.4.1 V1/V2. V1 surfaces Plaid security_type + description + ticker as recommendation hints in the notification-queue assignment UI but never auto-applies; full auto-classification without user confirmation is V2+ and requires metadata-accuracy evidence before the V1 commitment relaxes.
 - **Onboarding workflow extensions** — §2.4.1 / §2.4.2 V1/V2. V1 ships single-account-at-a-time onboarding for both Plaid and manual paths. Bulk-connect-multiple-institutions (§2.4.1), bulk import for manual non-Plaid accounts (§2.4.2), and manual un-share of an already-shared Plaid account (§2.4.1) are V2+.
-- **Pre-emptive notification surfaces** — §2.4.1 + §2.4.4 V1/V2. V1 ships in-app notification queue only for pending new-symbol assignments and persistent in-app banner only for re-auth state. Push / email / SMS notification of pending new-symbol assignments (§2.4.1) is V2+. **Pre-emptive Plaid re-auth reminders** (§2.4.4) are V2+ with **Sec consult required before V2 ship** — pre-emptive re-auth prompts expand the phishing-template surface (counterfeit re-auth prompt risk); per §2.4.4 lock the V1 reactive-only cadence trades a bounded stale-data window against a narrower phishing surface.
-- **Manual transaction entry extensions** — §2.4.3 V1/V2. V1 ships single-transaction-at-a-time entry + generic AcctSetup mode. CSV bulk-import of historical transactions, event-type-specific AcctSetup wizards (versus V1 generic AcctSetup), and auto-reconcile on balance-match (B3 axis per F/CTO 2026-05-15 (i) lock) are V2+. Free-text rules-engine for auto-categorization beyond §2.3.1 recurring-vendor inference is V2+ (cross-ref §5.3).
+- **Pre-emptive notification surfaces** — §2.4.1 + §2.4.4 V1/V2. V1 ships in-app notification queue only for pending new-symbol assignments and persistent in-app banner only for re-auth state. Two distinct V2+ commitments with different Sec posture:
+  - **Push / email / SMS notification of pending new-symbol assignments** (§2.4.1) is V2+. No Sec gate beyond standard V2 delivery-channel review.
+  - **Pre-emptive Plaid re-auth reminders** (§2.4.4) are V2+ with **Sec consult required before V2 ship** — pre-emptive re-auth prompts expand the phishing-template surface (counterfeit re-auth prompt risk); per §2.4.4 lock the V1 reactive-only cadence trades a bounded stale-data window against a narrower phishing surface.
+- **Manual transaction entry extensions** — §2.4.3 V1/V2. V1 ships single-transaction-at-a-time entry + generic AcctSetup mode. V2+:
+  - CSV bulk-import of historical transactions.
+  - Event-type-specific AcctSetup wizards (versus V1 generic AcctSetup).
+  - Auto-reconcile on balance-match (B3 axis per F/CTO 2026-05-15 (i) lock).
+  - Free-text rules-engine for auto-categorization beyond §2.3.1 recurring-vendor inference (cross-ref §5.3).
 - **External valuation integrations (Zillow, KBB, etc.)** — ADR-002 §1.5 V2+ (pre-§2.4 lock). V1 manual asset valuation is user-updated. External-source live valuation ingestion for held-away assets is V2+.
-- **Plaid product expansions** — ADR-002 §1.3 + §1.9. **Plaid Liabilities** (APR, statement balance, principal / interest split, escrow, payoff projections — credit cards + loans) and **Plaid Income** (wage / income aggregation surface as primary V1 income source — V1 derives income from Plaid Transactions + Investments instead) are V2+.
-- **Plaid coverage and instrument-level mechanics** — ADR-002 §1.8 + §1.9 V2+. V1 treats all Plaid-surfaced security types uniformly at transaction-and-position level with security type as categorization attribute. Underlying mechanics — derivative Greeks / intrinsic-value / complex lifecycle events; bond YTM / duration / accrued interest / coupon scheduling; tax-character decomposition for REITs / MLPs (K-1 partnership-character splits); structured-product specifics — are V2+. Off-exchange crypto wallets, on-chain transactions, and mining / staking-as-income mechanics (§1.9) are V2+. DRIP-pair detection + "income realized in cash vs reinvested" display split (§1.9) is V2+. Per-security user-configurable allocation classification (§1.9) is V2+.
+- **Plaid product expansions** — ADR-002 §1.3 + §1.9. Two distinct V2+ product surfaces:
+  - **Plaid Liabilities** (APR, statement balance, principal / interest split, escrow, payoff projections — credit cards + loans).
+  - **Plaid Income** (wage / income aggregation surface as primary V1 income source — V1 derives income from Plaid Transactions + Investments instead).
+- **Plaid coverage and instrument-level mechanics** — ADR-002 §1.8 + §1.9 V2+. V1 treats all Plaid-surfaced security types uniformly at transaction-and-position level with security type as categorization attribute. V2+ instrument-level mechanics:
+  - **Underlying instrument-mechanics axes** — derivative Greeks / intrinsic-value / complex lifecycle events; bond YTM / duration / accrued interest / coupon scheduling; tax-character decomposition for REITs / MLPs (K-1 partnership-character splits); structured-product specifics.
+  - **Off-exchange crypto wallets, on-chain transactions, and mining / staking-as-income mechanics** (§1.9).
+  - **DRIP-pair detection + "income realized in cash vs reinvested" display split** (§1.9).
+  - **Per-security user-configurable allocation classification** (§1.9).
 - **Tax-treatment refinements** — ADR-002 §1.6 V2+. HSA "tax-free conditional" classification refinement (sub-flag or fourth bucket reflecting medical-withdrawal constraint) is V2+; V1 three-way tagging (taxable / tax-deferred / tax-free) does not differentiate HSA's conditional shape.
 
 ### 5.5 Estimated-tax deferrals
 
-- **Auto-categorization and user-editable CRUD on tax attributes** — §2.5.1 V1/V2. V1 seeds Sub-Cat `tax_relevant` boolean + `tax_character` enum at bootstrap from F/CTO existing system (per ADR-006 Axis 2); editing is migration-only in V1. Auto-categorization of tax-relevant Sub-Cats from Plaid metadata or heuristic, and user-editable Sub-Cat tax-attribute CRUD UI (additive to the broader §2.3.1 + §2.2.1 taxonomy CRUD V2+ surfaces), are V2+.
-- **Multi-year tax surfaces** — §2.5.1 + §2.5.2 V1/V2. V1 scopes the §2.5.1 three-column decomposition to current calendar year and holds a single current-tax-year bracket-schedule set in §2.5.2. Multi-year historical Ordinary Income / ST CG / LT CG tracking + time-series chart (mirrors §5.3 income-time-series V2+), multi-tax-year bracket version history, bracket inheritance from prior tax-year, and custom fiscal-year overrides are V2+.
+- **Auto-categorization and user-editable CRUD on tax attributes** — §2.5.1 V1/V2. V1 seeds Sub-Cat `tax_relevant` boolean + `tax_character` enum at bootstrap from F/CTO existing system (per ADR-006 Axis 2); editing is migration-only in V1. Two distinct V2+ surfaces:
+  - **Auto-categorization of tax-relevant Sub-Cats** from Plaid metadata or heuristic.
+  - **User-editable Sub-Cat tax-attribute CRUD UI** (additive to the broader §2.3.1 + §2.2.1 taxonomy CRUD V2+ surfaces).
+- **Multi-year tax surfaces** — §2.5.1 + §2.5.2 V1/V2. V1 scopes the §2.5.1 three-column decomposition to current calendar year and holds a single current-tax-year bracket-schedule set in §2.5.2. V2+:
+  - Multi-year historical Ordinary Income / ST CG / LT CG tracking + time-series chart (mirrors §5.3 income-time-series V2+).
+  - Multi-tax-year bracket version history.
+  - Bracket inheritance from prior tax-year.
+  - Custom fiscal-year overrides.
 - **Full Federal AGI-line decomposition (ζ-3)** — §2.5.1 V1/V2. V1 ships the three-column Ordinary / ST CG / LT CG decomposition with `tax_character` routing per ADR-006 Axis 2; per-Sub-Cat mapping to Schedule B / Schedule D / Schedule E / etc. for full Federal AGI-line decomposition is V2+.
 - **Wash-sale and Section 1256 auto-detection** — §2.5.1 V1/V2 (ADR-002 §1.7 + ADR-004 Decision D). V1 ships user-marked wash-sale flag and user-classification of Section 1256 60/40 via the `Volatility-60/40` Sub-Cat. Auto-detection of wash-sale rule application and Section 1256 60/40 classification is V2+.
-- **Lot-level tax features** — ADR-002 §1.7 + ADR-004 Decision D V2+ (unchanged by ADR-006). FIFO / LIFO / specific-ID lot-matching for tax purposes, per-lot UI (lot tables, holding-period indicators), and lot-level cost-basis reporting on tax surfaces are V2+. V1 ships aggregate cost basis per position with average-cost-fallback realized G/L. **Tax-loss harvesting recommendations are NOT included in this V2+ surface** — reclassified to §6 per ADR-007.
+- **Lot-level tax features** — ADR-002 §1.7 + ADR-004 Decision D V2+ (unchanged by ADR-006). V1 ships aggregate cost basis per position with average-cost-fallback realized G/L. V2+:
+  - **FIFO / LIFO / specific-ID lot-matching** for tax purposes.
+  - **Per-lot UI** (lot tables, holding-period indicators).
+  - **Lot-level cost-basis reporting** on tax surfaces.
+  - **Tax-loss harvesting recommendations are NOT included in this V2+ surface** — reclassified to §6 per ADR-007.
 - **In-state-vs-out-of-state municipal-bond differentiation for CA FTB `tax_exempt_interest` routing** — §2.5.1 / §2.5.2 V1/V2. V1 treats all `tax_exempt_interest` uniformly for CA computation (excluded); California in-state-issuer vs. out-of-state-issuer differentiation is V2+.
-- **Live tax-data API ingestion of bracket tables** — §2.5.2 V1/V2 (ADR-006 Axis 1). V1 user-manually updates Federal + California bracket schedules + standard deductions at tax-year rollover. Live API ingestion (IRS / California FTB public rate-table sources), with diff / version-history awareness and bracket-table import from external CSV / IRS publication sources, is V2+.
+- **Live tax-data API ingestion of bracket tables** — §2.5.2 V1/V2 (ADR-006 Axis 1). V1 user-manually updates Federal + California bracket schedules + standard deductions at tax-year rollover. V2+:
+  - **Live API ingestion** (IRS / California FTB public rate-table sources).
+  - **Diff / version-history awareness** on ingested bracket tables.
+  - **Bracket-table import from external CSV / IRS publication sources.**
 - **Multi-jurisdiction tax expansion** — ADR-002 §1.7 + ADR-004 Decision D V2+ (unchanged by ADR-006). Multi-state tax handling (any non-California state) and non-US tax handling (RRSP, ISA, foreign tax credits, etc.) are V2+. V1 supports Federal + California FTB only.
 - **Filing-status enum** — §2.5.2 V1/V2 (ι lock). V1 carries a single standard-deduction scalar per jurisdiction applicable to F/CTO's current filing status (fixed at seed time). Filing-status enum (single / MFJ / HoH) with user-selectable filing-status at settings UI + multi-scalar standard deduction is V2+.
 - **Bracket-aware tax credits and above-the-line deductions** — §2.5.2 V1/V2. V1 ships single standard deduction per jurisdiction; FTC, child tax credit, and other tax-credit handling beyond standard deduction are V2+.
 - **Separate California LT CG schedule** — §2.5.2 V1/V2 (κ lock). V1 collapses CA LT CG to ordinary (no separate CA LT CG schedule); if existing-system divergence surfaces at V1 implementation, separate CA LT CG schedule is V2+.
-- **Quarterly-installment-sizing refinements** — §2.5.3 V1/V2 (μ-2 lock). V1 ships bracket-derived expected-annual ÷ 4 only with no safe-harbor floor; Tax Balance Prior Year row appears as informational reference only. V2+ delivers safe-harbor floor computation (Federal 100%/110%-of-prior-year + CA FTB safe-harbor rules), alternative quarterly-installment-sizing (μ-1 max-of bracket-derived-and-safe-harbor; μ-3 two-column rendering), and annualized-income installment method (IRS Form 2210 method 2).
+- **Quarterly-installment-sizing refinements** — §2.5.3 V1/V2 (μ-2 lock). V1 ships bracket-derived expected-annual ÷ 4 only with no safe-harbor floor; Tax Balance Prior Year row appears as informational reference only. V2+:
+  - **Safe-harbor floor computation** (Federal 100%/110%-of-prior-year + CA FTB safe-harbor rules).
+  - **Alternative quarterly-installment-sizing** — μ-1 max-of bracket-derived-and-safe-harbor; μ-3 two-column rendering.
+  - **Annualized-income installment method** (IRS Form 2210 method 2).
 - **Withholding tracking** — §2.5.3 V1/V2. V1 simplification treats all incoming-tax-payments as "estimated payments" in the IRS / FTB ledgers; withholding (W-2 / 1099) tracked distinct from estimated payments is V2+.
-- **Pre-emptive quarterly-payment-due-date reminders** — §2.5.3 V1/V2 (ξ-2 / ξ-3 V2+). V1 ships reactive in-table due-date surfacing with current-quarter visual emphasis. Pre-emptive in-app notifications + email reminders + calendar integration for quarterly due dates are V2+.
+- **Pre-emptive quarterly-payment-due-date reminders** — §2.5.3 V1/V2 (ξ-2 / ξ-3 V2+). V1 ships reactive in-table due-date surfacing with current-quarter visual emphasis. V2+:
+  - **Pre-emptive in-app notifications** of quarterly due dates.
+  - **Email reminders** of quarterly due dates.
+  - **Calendar integration** for quarterly due dates.
 - **Refund / overpayment surfacing extensions** — §2.5.3 V1/V2 (ν-2 V2+). V1 surfaces overpayment as negative single-line Estimated Funds Due (ν-1 lock). Separate "Refund Expected" line + distinct overpayment-status indicator is V2+.
 - **Penalty computation and prior-tax-year computation surfaces** — §2.5.3 V1/V2. V1 ships no penalty computation; users responsible for understanding underpayment-penalty risk outside the system. Penalty computation against safe-harbor and prior-tax-year computation surfaces are V2+.
-- **Bracket-aware Unrealized Tax Liability refinements** — §2.5.4 V1/V2 (ο-a lock). V1 Unrealized = simplified marginal × aggregate G/L per ο-a (Federal LT CG top-bracket rate × aggregate_unrealized_G/L_taxable + CA ordinary top-bracket rate × aggregate_unrealized_G/L_taxable; tax-advantaged accounts excluded per (π); `tax_character` enum routing NOT used on Unrealized; §2.5.3 engine NOT consumed by Unrealized). V2+ delivers ο-b (full bracket-aware as-if-realized — treat all aggregate unrealized G/L as if realized today, run through §2.5.3 progressive bracket computation engine with ST/LT split via §2.4.3 Open Date and `tax_character` enum routing) and ο-c (hybrid LT-only bracket-aware — ST CG portion treated as marginal × G/L; LT CG portion runs through Federal LT CG bracket schedule). Federal-ordinary-top-bracket-rate as a more-conservative alternative for the Federal_marginal_rate factor (would treat unrealized G/L as marginal additional ordinary income rather than as LT capital gain) is V2+.
+- **Bracket-aware Unrealized Tax Liability refinements** — §2.5.4 V1/V2 (ο-a lock). V1 Unrealized = simplified marginal × aggregate G/L per ο-a (Federal LT CG top-bracket rate × aggregate_unrealized_G/L_taxable + CA ordinary top-bracket rate × aggregate_unrealized_G/L_taxable; tax-advantaged accounts excluded per (π); `tax_character` enum routing NOT used on Unrealized; §2.5.3 engine NOT consumed by Unrealized). V2+:
+  - **ο-b — Full bracket-aware as-if-realized.** Treat all aggregate unrealized G/L as if realized today, run through §2.5.3 progressive bracket computation engine with ST/LT split via §2.4.3 Open Date and `tax_character` enum routing.
+  - **ο-c — Hybrid LT-only bracket-aware.** ST CG portion treated as marginal × G/L; LT CG portion runs through Federal LT CG bracket schedule.
+  - **Federal-ordinary-top-bracket-rate as more-conservative alternative for the Federal_marginal_rate factor** — would treat unrealized G/L as marginal additional ordinary income rather than as LT capital gain.
 - **Per-jurisdiction split rendering of Realized + Unrealized as separate lines** — §2.5.4 V1/V2 (ρ-2 V2+). V1 surfaces single combined-jurisdiction Realized scalar and single combined-jurisdiction Unrealized scalar on §2.1.5 composition. Per-jurisdiction Federal + CA split rendering on §2.5.4 + §2.1.5 is V2+.
 - **Tax-deferred withdrawal-tax-liability as a fourth NAV-subtraction line** — §2.5.4 V1/V2. V1 (π) exclusion filters tax-deferred and tax-free accounts out of the `aggregate_unrealized_G/L_taxable` aggregation; tax-deferred account Unrealized "ordinary-income-on-withdrawal" treatment as a separate "deferred tax obligation" line, and withdrawal-tax-liability for tax-deferred accounts as a fourth NAV-subtraction line item, are V2+.
 - **REIT / MLP K-1 partnership-character splits on unrealized G/L** — §2.5.4 V1/V2 (ADR-002 §1.8 V2+). Cross-ref §5.4 instrument-level mechanics deferral.
@@ -969,42 +1008,65 @@ The following measurement frames are **not** V1 success metrics. They are enumer
 
 ### 5.6 Monthly-report deferrals
 
-- **User-configurable section ordering and composition** — §2.6.1 V1/V2 (ω-2 / ω-3). V1 ships fixed six-section sequence (Account Holdings → NAV Performance → Asset Allocation → Rebalancing Targets → Cash Flow → Estimated Taxes). User-configurable section ordering, add / remove / hide sections via settings UI, user-selectable section visibility per-report, and user-defined custom sections beyond the six are V2+. Reintroduction of Big Ticket Fund / Amortized Expenses (if F/CTO revisits the Phase 0.5 drop) is V2+. Alternative inline-vs-standalone placement of Historical Expenditures is V2+. Alternative cross-section composition that decouples report sections from §2.1 – §2.5 live-surface boundaries (e.g., year-over-year comparison view) is V2+.
+- **User-configurable section ordering and composition** — §2.6.1 V1/V2 (ω-2 / ω-3). V1 ships fixed six-section sequence (Account Holdings → NAV Performance → Asset Allocation → Rebalancing Targets → Cash Flow → Estimated Taxes). V2+:
+  - **User-configurable section ordering** — add / remove / hide sections via settings UI + user-selectable section visibility per-report + user-defined custom sections beyond the six.
+  - **Reintroduction of Big Ticket Fund / Amortized Expenses** if F/CTO revisits the Phase 0.5 drop.
+  - **Alternative inline-vs-standalone placement of Historical Expenditures.**
+  - **Alternative cross-section composition** that decouples report sections from §2.1 – §2.5 live-surface boundaries (e.g., year-over-year comparison view).
 - **Multi-scope reports** — §2.6.1 + §2.6.6 V1/V2 (parity-matrix line 180; ADR-004 Decision B). V1 default report scope is full-household with a single per-tenant owner-identification header; per-scope report variants (one report per scope, each with its own owner-identification header per ψ-2 multi-named-owner config) are V2+.
 - **Auto-generated and hybrid Rebalancing Targets commentary** — §2.6.2 V1/V2 (σ-2 / σ-3). V1 ships σ-1 free-text user-authored commentary under four V1-fixed sub-sections (Cash / Bonds / Equity / Alternatives). Auto-generated commentary from §2.2.2 `$ ReAlloc` positive-delta rows (σ-2) and hybrid-with-edit (σ-3) are V2+; both require ADR-004 Decision A amendment. Per-asset-class sub-section template prompts as authoring scaffolding are V2+.
-- **Rebalancing Targets editor extensions** — §2.6.2 V1/V2. User-configurable sub-sections (rename / add / remove / reorder) paralleling §2.2.1 taxonomy-CRUD V2+ are V2+. Markdown / rich-text formatting affordances (bold / italic / lists / headings / inline links) on the editor are V2+. Auto-pre-population of new-month commentary editor from prior-month content as default behavior (plus a settings toggle to choose blank-vs-auto-copy as per-tenant default) is V2+. Late-edit / amend-after-generation flows on historical-month commentary with explicit revision tracking are V2+.
-- **Generation-cadence and trigger extensions** — §2.6.3 V1/V2. User-configurable cron schedule (date + time-of-day), per-jurisdiction tax-aware quarter-end adjustments to cron cadence, alternative cron cadences (weekly / quarterly / annual companion artifacts), automated cron-retry + partial-run recovery, in-app cron-failure notification to the user, and alerting / monitoring infrastructure beyond system-level logging are V2+.
+- **Rebalancing Targets editor extensions** — §2.6.2 V1/V2. V2+:
+  - **User-configurable sub-sections** (rename / add / remove / reorder) paralleling §2.2.1 taxonomy-CRUD V2+.
+  - **Markdown / rich-text formatting affordances** on the editor (bold / italic / lists / headings / inline links).
+  - **Auto-pre-population of new-month commentary editor from prior-month content** as default behavior, plus a settings toggle to choose blank-vs-auto-copy as per-tenant default.
+  - **Late-edit / amend-after-generation flows** on historical-month commentary with explicit revision tracking.
+- **Generation-cadence and trigger extensions** — §2.6.3 V1/V2. V2+:
+  - **User-configurable cron schedule** (date + time-of-day).
+  - **Per-jurisdiction tax-aware quarter-end adjustments to cron cadence.**
+  - **Alternative cron cadences** (weekly / quarterly / annual companion artifacts).
+  - **Automated cron-retry + partial-run recovery.**
+  - **In-app cron-failure notification to the user.**
+  - **Alerting / monitoring infrastructure beyond system-level logging.**
 - **Revision history for regenerated months** — §2.6.3 + §2.6.4 V1/V2. V1 ships overwrite-semantics regeneration (one snapshot per `(tenant, target-month)`, last-writer-wins, no prior revision retained). Revision-history-aware snapshot storage and "regenerate with revision-history" user-triggered flow are V2+. Resolves the §2.6.2-vs-§2.6.3 persistence-tension noted at §2.6.3 lock.
 - **Alternative delivery channels — email / SMS** — §2.6.3 V1/V2. **Forward-Sec-consult flag (carry-forward to V2 scoping):** email / SMS delivery of generated reports introduces a new delivery channel V1 does not exercise — report content rendered into transit message body is a new sensitive-data exfiltration surface (especially over SMS, which is plaintext); Sec re-engagement required before V2 ship.
 - **Alternative delivery channels — shared-link to external viewers** — §2.6.3 V1/V2. **Forward-Sec-consult flag (carry-forward to V2 scoping):** shared-link delivery intersects multi-tenant + access-control scope and may overlap §6 advisor-role boundary; Sec re-engagement + possible ADR re-litigation against §6 advisor-role boundary required before V2 ship.
-- **Alternative output formats** — §2.6.3 V1/V2. V1 ships in-app rendered web page + on-demand PDF export (υ-1). Google Doc parity-exact (the rejected υ-3 path, documented as V2+ optional companion if F/CTO revisits Google Workspace integration), markdown export, HTML email body, structured-data export (JSON / CSV), and scheduled PDF auto-export to user storage (Drive / Dropbox / S3 / etc.) are V2+.
+- **Alternative output formats** — §2.6.3 V1/V2. V1 ships in-app rendered web page + on-demand PDF export (υ-1). V2+:
+  - **Google Doc parity-exact** (the rejected υ-3 path, documented as V2+ optional companion if F/CTO revisits Google Workspace integration).
+  - **Markdown export.**
+  - **HTML email body.**
+  - **Structured-data export** (JSON / CSV).
+  - **Scheduled PDF auto-export to user storage** (Drive / Dropbox / S3 / etc.).
 - **Drill-down from report sections to source surfaces** — §2.6.3 V1/V2. Drill-down from a section in the in-app view to its source PRD story / current-state surface (e.g., click NAV Performance → land on §2.1.2) is V2+.
 - **Live-rendered date-filtered views of historical months** — §2.6.4 V1/V2 (φ-2 / φ-3). V1 ships φ-1 frozen-at-generation snapshot (parity-exact with existing-system Finance_Report PDF behavior); live-rendered date-filtered views of historical months and the φ-2 / φ-3 toggle complexity that supports them are V2+.
-- **Snapshot-store retention and management extensions** — §2.6.4 V1/V2. V1 χ-1 retains every generated report indefinitely with no retention-window cleanup, archival-tier migration, or user-initiated deletion. User-initiated deletion of historical reports, automated retention windows (e.g., retain 5 years then archive to cold storage), and archival-tier migration are V2+. PDF caching and source-data-level snapshots (re-renderable from underlying transactions, versus V1 rendered-value-level snapshots) are V2+.
+- **Snapshot-store retention and management extensions** — §2.6.4 V1/V2. V1 χ-1 retains every generated report indefinitely with no retention-window cleanup, archival-tier migration, or user-initiated deletion. V2+:
+  - **User-initiated deletion of historical reports.**
+  - **Automated retention windows** (e.g., retain 5 years then archive to cold storage).
+  - **Archival-tier migration.**
+  - **PDF caching.**
+  - **Source-data-level snapshots** (re-renderable from underlying transactions, versus V1 rendered-value-level snapshots).
 - **Owner-identification header extensions** — §2.6.4 V1/V2 (ψ-2 / ψ-3). V1 ships ψ-1 single per-tenant owner-identification string driving every report's header. Multi-named-owner config (ψ-2), per-report header override at generation time (ψ-3), and multi-line / rich-text owner-identification headers are V2+. ψ-2 specifically anticipates V2+ multi-scope reports.
-- **Staleness-marker extensions** — §2.6.5 V1/V2. V1 ships α′-1 generate-with-markers with inline per-section indicator + report-level summary banner, uniform across all four §2.4.4 credential-error states, with live-read at render time. Per-credential-error-class differentiated marker visuals, "block with warning" mode as user-selectable preference, user-initiated dismiss / acknowledge of staleness markers per report, staleness-history layer (showing when an account went stale relative to the report's as-of date), and marker-state snapshotting (recording staleness state at generation time alongside the snapshot for a historical-audit V2+ feature) are V2+.
+- **Staleness-marker extensions** — §2.6.5 V1/V2. V1 ships α′-1 generate-with-markers with inline per-section indicator + report-level summary banner, uniform across all four §2.4.4 credential-error states, with live-read at render time. V2+:
+  - **Per-credential-error-class differentiated marker visuals.**
+  - **"Block with warning" mode** as user-selectable preference.
+  - **User-initiated dismiss / acknowledge of staleness markers per report.**
+  - **Staleness-history layer** showing when an account went stale relative to the report's as-of date.
+  - **Marker-state snapshotting** — recording staleness state at generation time alongside the snapshot for a historical-audit V2+ feature.
 
 ### 5.7 Cross-cutting V2+
 
-- **Multi-user invite-only V2 expansion** — ADR-002 §1.4 V1-to-V2 transition. V1 ships to a single user (the F/CTO) on a multi-tenant data model with `tenant_id` on every user-data table, RLS policies enforced, and multi-tenant-capable auth infrastructure from day one. V2 adds the second user via invite-only onboarding; the V1 forward-compatibility commitment is that no data migration of V1 user data is required when the second user lands. Friends-and-family onboarding, invite-flow UI, multi-user auth gates, and per-user data-access boundary checks are V2+. Cross-reference: §7.3 (usage model: single-user V1, invite-only forward-compat) references this entry.
-- **Multi-currency** — ADR-002 §3.0 reclassification from non-goal to V2+ deferral. The "in V1" qualifier in the original finding made multi-currency a deferral, not an identity statement; mixing it into the out-of-scope list was rejected as weakening the discipline of both buckets. Multi-currency holdings, multi-currency transactions, FX conversion surfaces, and per-tenant base-currency selection are V2+. V1 is USD-denominated.
+- **Multi-user invite-only V2 expansion** — ADR-002 §1.4 V1-to-V2 transition. V1 ships to a single user (the F/CTO) on a multi-tenant data model with `tenant_id` on every user-data table, RLS policies enforced, and multi-tenant-capable auth infrastructure from day one. V2 adds the second user via invite-only onboarding; the V1 forward-compatibility commitment is that no data migration of V1 user data is required when the second user lands. V2+:
+  - **Friends-and-family onboarding.**
+  - **Invite-flow UI.**
+  - **Multi-user auth gates.**
+  - **Per-user data-access boundary checks.**
+  - Cross-reference: §7.3 (usage model: single-user V1, invite-only forward-compat) references this entry.
+- **Multi-currency** — ADR-002 §3.0 reclassification from non-goal to V2+ deferral. The "in V1" qualifier in the original finding made multi-currency a deferral, not an identity statement; mixing it into the out-of-scope list was rejected as weakening the discipline of both buckets. V1 is USD-denominated. V2+:
+  - **Multi-currency holdings.**
+  - **Multi-currency transactions.**
+  - **FX conversion surfaces.**
+  - **Per-tenant base-currency selection.**
 
-#### Open routing flags affecting §5
-
-- **(a) Sec — Pre-emptive Plaid re-auth reminders pre-V2 ship.** Per §5.4 + §2.4.4 lock carry-forward. When V2 ships pre-emptive re-auth reminders, Sec consult required for phishing-template surface (counterfeit re-auth prompt risk). V1 reactive-only cadence trades a bounded stale-data window against a narrower phishing surface; relaxing the cadence requires explicit Sec sign-off.
-- **(b) Sec — Email / SMS delivery of monthly reports pre-V2 ship.** Per §5.6. Introduces a new delivery channel V1 does not exercise; report content rendered into transit message body is a new sensitive-data exfiltration surface — especially over SMS which is plaintext, but also over email where transit-layer encryption is best-effort and at-rest encryption at recipient mail servers is uncontrolled. Sec re-engagement required before V2 ship.
-- **(c) Sec — Shared-link delivery of reports pre-V2 ship.** Per §5.6. Distinct from (b) — shared-link surfaces intersect multi-tenant + access-control scope and potentially the §6 advisor-role boundary at V2. Sec re-engagement + possible ADR re-litigation against §6 advisor-role boundary required before V2 ship.
-- **(d) Boundary note — TLH home is §6 pending §6 body drafting.** ADR-007 (drafted alongside this §5 lock) ratifies the reclassification of tax-loss-harvesting recommendations from V2+ trajectory (ADR-002 Finding (b)) to permanent non-goal (§6 home, under the advisor-role axis of ADR-002 §3.0). §5.5 does not list TLH; §6 body draft (later thread) will enumerate TLH alongside the existing ADR-002 §3.0 permanent non-goals. No V1 block.
-- **(e) Boundary note — §5 → §7.3 cross-reference.** §5.7's multi-user invite-only V2 expansion entry intersects §7.3's (single-user V1, invite-only forward-compat) usage-model stub. §7.3 will reference §5.7 at §7 drafting time; no §5 body revision expected from §7 lock.
-- **(f) Architect — V2+ items requiring schema or migration scope decisions (general flag).** §5 enumerates capabilities, not implementation strategies. At V2-scoping time (post-V1 ship), Architect will need to assess which §5 items require additional schema fields versus which can extend the existing ADR-005 settings store, the §2.x data model with additive columns, or the V1 multi-level taxonomy tables forward-compat-shaped per ADR-004 Decision C. No V1 block.
-
-#### Acceptance flags
-
-- Each V2+ item is a deferral statement traceable to an existing §2.x V1/V2 clause or ADR; §5 introduces no new V2+ items beyond what V1 PRD work already surfaced.
-- §5 is **locked** as of 2026-05-17 (no Security Reviewer at-lock pass required — §5 has no credential-handling surface, no auth-flow surface, no multi-tenant-isolation primitive, no Plaid integration surface, no money-flow surface, and no financial-calculation-integrity claim; the §5 entries that touch Sec territory ((a) / (b) / (c) routing flags) are forward-Sec-consult flags for V2-ship gates, not V1 Sec at-lock surfaces). Sec is §4 primary author next; Sec consult on §5 collapses into the Phase 1 Step 4 architectural-overview consult flagged at §2.6 lock.
-- Per-sub-section locks: **§5.1** (4 net-worth deferrals); **§5.2** (6 allocation deferrals); **§5.3** (8 cash-flow deferrals); **§5.4** (8 cross-cutting deferrals); **§5.5** (23 estimated-tax deferrals — **TLH excluded per ADR-007**; "possibly a separate tool" hedge preserved verbatim on stock screening); **§5.6** (13 monthly-report deferrals — forward-Sec-consult flags preserved on email/SMS + shared-link delivery); **§5.7** (2 cross-cutting V2+ — multi-user invite-only V2 expansion + multi-currency reclassification). Six routing flags (a)–(f) added.
-- **ADR-007 lands alongside §5 lock** (parallel to ADR-005 with §2.3.2 lock and ADR-006 with §2.5.4 lock). ADR-007 amends ADR-002 Finding (b) by removing TLH recommendations from the V2+ trajectory and reclassifying as permanent non-goal under the §6 advisor-role axis.
-- The Architect routing flag (f) resolves at V2-scoping-phase time (post-V1 ship), not Phase 3; it does not block §5 lock at the PRD level. The Sec forward-consult flags (a) / (b) / (c) are V2-ship-gate markers, not V1 surfaces; they do not block §5 lock.
+*Routing flags affecting §5: see Appendix B (created in PR 10; pending consolidation).*
 
 ## 6. Out-of-scope for this PRD lifecycle
 
