@@ -1,13 +1,102 @@
 # WORKFLOW.md
 
 **Project:** mosko-fintech
-**Current version:** v1.28
+**Current version:** v1.29
 **Last updated:** 2026-05-19
-**Current phase:** Phase 1 — Product Definition (PRD), in progress. Step 3 (PRD section drafting) **substantively complete** (all 12 PRD sections LOCKED across §2 series + §3/§4/§5/§6/§7/§8); **Step 3.5 (PRD editorial rewrite) in progress** — PR 1 kickoff (archive + README + Step 3.5 declaration) landed at v1.19; **PR 2 / §1 rewrite landed at v1.20 with §1 β override EXERCISED**; **PR 3 / §2 rewrite landed at v1.21 (first sub-section-gates PR; Appendix C extracted with 32 story traces)**; **PR 4 / §3 rewrite landed at v1.22 (second bulk-closeout PR; default-to-source-shape correction landed mid-PR — see `memory/feedback_rewrite_convention_drops_blockquotes.md`)**; **PR 5 / §4 rewrite landed at v1.23 (second sub-section-gates PR; first Sec-as-primary-author PR since PR 1 kickoff; Q-S5=γ F/CTO override on §4.2 voice conversion)**; **PR 6 / §5 rewrite landed at v1.24 (third bulk-closeout PR; first PR to exercise β shape-discipline aggressively under Q-S2=β F/CTO override; +57% line-count expansion vs source; 20 lead bullets extracted into 77 new sub-bullets)**; **PR 7 / §6 rewrite landed at v1.26 (fourth bulk-closeout PR; smallest section under rewrite at 39 source body lines; 4-for-4 PM α structure-gate acceptance; -10.3% line-count compression; first team-mode dispatch under v1.25 operating-model convention)**; **PR 8 / §7 rewrite landed at v1.27 (fifth bulk-closeout PR; 5-for-6 PM acceptance with 1 F/CTO override at Q-S6 = β narrowly scoped to §7.3 b2; -19% line-count compression; first PR to exercise Acceptance-flag recap block convention at WORKFLOW.md per PR 4 / v1.22 precedent)**; **PR 9 / §8 rewrite landed at v1.28 (sixth bulk-closeout PR; LAST PM-led drafting task in Phase 1 Step 3; 5-for-7 PM acceptance with 2 F/CTO overrides — Q-S6 = β on §8.3 b3 single-bullet-narrow + Q-S7 = α-extended symbolic conversion of all 10 PRD.md:NNN refs in §8 body; first PR to surface a section-drift cross-ref correction (§1.3 → §1.4 V1-correctness content relocation from PR 2 / §1 rewrite, caught + fixed at Q-S7 audit); -39% body-line compression)**; PR 10 remains pending (overview / appendices / Appendix B consolidation). Original Step 3.5 framing — F/CTO surfaced late-phase rubber-stamp risk under cumulative PRD density (see `memory/feedback_late_phase_density_overload.md`); rewrite plan locked at 7-Q ratify pass (see v1.19 changelog) — presentation-only restructure preserving all locks, source archived at `docs/archive/PRD-v1.18-source.md`, ~10 PR sequence (PR 1 kickoff + PR 2–9 sections §1 → §8 in source order + PR 10 overview/appendices); 7 PM-flagged rubber-stamp candidates deferred to dedicated post-rewrite verify pass before Step 4 entry. Step 4 (Architectural overview consult; Architect lead; Phase 3 entry gate) gated by Step 3.5 closure + post-rewrite verify pass. After Step 4 ratifies, Phase 2 (UX/Visual) becomes available; Phase 1 closes. Team-mode (`phase-1` team) per ADR-003 active. (Step 2 ratification complete at ADR-002; Step 3 prior state preserved in v1.18 changelog.)
+**Current phase:** Phase 1 — Product Definition (PRD), in progress. Step 3 (PRD section drafting) **substantively complete** (all 12 PRD sections LOCKED across §2 series + §3/§4/§5/§6/§7/§8); **Step 3.5 (PRD editorial rewrite) substantively complete** — PR 1 kickoff (archive + README + Step 3.5 declaration) landed at v1.19; **PR 2 / §1 rewrite landed at v1.20 with §1 β override EXERCISED**; **PR 3 / §2 rewrite landed at v1.21 (first sub-section-gates PR; Appendix C extracted with 32 story traces)**; **PR 4 / §3 rewrite landed at v1.22 (second bulk-closeout PR; default-to-source-shape correction landed mid-PR — see `memory/feedback_rewrite_convention_drops_blockquotes.md`)**; **PR 5 / §4 rewrite landed at v1.23 (second sub-section-gates PR; first Sec-as-primary-author PR since PR 1 kickoff; Q-S5=γ F/CTO override on §4.2 voice conversion)**; **PR 6 / §5 rewrite landed at v1.24 (third bulk-closeout PR; first PR to exercise β shape-discipline aggressively under Q-S2=β F/CTO override; +57% line-count expansion vs source; 20 lead bullets extracted into 77 new sub-bullets)**; **PR 7 / §6 rewrite landed at v1.26 (fourth bulk-closeout PR; smallest section under rewrite at 39 source body lines; 4-for-4 PM α structure-gate acceptance; -10.3% line-count compression; first team-mode dispatch under v1.25 operating-model convention)**; **PR 8 / §7 rewrite landed at v1.27 (fifth bulk-closeout PR; 5-for-6 PM acceptance with 1 F/CTO override at Q-S6 = β narrowly scoped to §7.3 b2; -19% line-count compression; first PR to exercise Acceptance-flag recap block convention at WORKFLOW.md per PR 4 / v1.22 precedent)**; **PR 9 / §8 rewrite landed at v1.28 (sixth bulk-closeout PR; LAST PM-led drafting task in Phase 1 Step 3; 5-for-7 PM acceptance with 2 F/CTO overrides — Q-S6 = β on §8.3 b3 single-bullet-narrow + Q-S7 = α-extended symbolic conversion of all 10 PRD.md:NNN refs in §8 body; first PR to surface a section-drift cross-ref correction (§1.3 → §1.4 V1-correctness content relocation from PR 2 / §1 rewrite, caught + fixed at Q-S7 audit); -39% body-line compression)**; **PR 10 / Step 3.5 closure landed at v1.29 (closure PR; structurally distinct from PR 2–9 §-rewrites; 7-for-8 PM acceptance with 1 F/CTO override at Q-S3 = β to include PRD overview/preamble; critical audit finding — full Appendix B consolidation surface = 114 entries, NOT the 19-entry post-PR-6 running total the brief framed; 114-entry App B body lifted + classified with 5-tag convention [Architect Phase 3 / Sec V2-implementation / Architect-Sec joint / Boundary note / Closure-trace process-record]; 87 active forward-pointers + 27 resolved process-records; Appendix A defer-note added; 12 in-body italic markers updated)**. Original Step 3.5 framing — F/CTO surfaced late-phase rubber-stamp risk under cumulative PRD density (see `memory/feedback_late_phase_density_overload.md`); rewrite plan locked at 7-Q ratify pass (see v1.19 changelog) — presentation-only restructure preserving all locks, source archived at `docs/archive/PRD-v1.18-source.md`, ~10 PR sequence (PR 1 kickoff + PR 2–9 sections §1 → §8 in source order + PR 10 overview/appendices); 7 PM-flagged rubber-stamp candidates deferred to dedicated post-rewrite verify pass before Step 4 entry. Step 4 (Architectural overview consult; Architect lead; Phase 3 entry gate) gated by Step 3.5 closure + post-rewrite verify pass. After Step 4 ratifies, Phase 2 (UX/Visual) becomes available; Phase 1 closes. Team-mode (`phase-1` team) per ADR-003 active. (Step 2 ratification complete at ADR-002; Step 3 prior state preserved in v1.18 changelog.)
 
 ---
 
 ## Changelog
+
+### v1.29 — 2026-05-19
+
+**PR #[TBD] — Phase 1 Step 3.5 PR 10 / Step 3.5 closure (overview refresh + Appendix B consolidation + housekeeping).** Closure PR for Step 3.5 editorial rewrite sequence. **Structurally distinct from PR 2–9 §-rewrite PRs**: PR 10 adds new top-level content (overview/preamble, Appendix B body, Appendix A defer-note) and applies 12 in-body italic-marker surgical edits across §2.1 / §2.2 / §2.3 / §2.4 / §2.5 / §2.6 / §3 / §4 / §5 / §6 / §7 / §8. After PR 10 lands, **post-rewrite verify pass** (Q7 = γ queue 17 entries) gates **Step 4 entry** (Architectural overview consult; Architect lead). Phase 1 starts closing after Step 4 ratifies.
+
+**Critical audit finding (PR 10 structure proposal).** Appendix B consolidation surface was **~114 entries, NOT the 19-entry post-PR-9 running total** the PR 10 brief initially framed. The "19 entries" framing was a counter convention the changelog established at PR 7 / v1.26, anchored on "6 entries post-PR-6" without back-summing PR 3 (73 entries from §2.1–§2.6 routing-flag blocks) / PR 4 (6 entries) / PR 5 (16 entries). All 12 in-body italic markers across §2.1–§8 explicitly stated "see Appendix B (created in PR 10; pending consolidation)"; consolidating only 19 entries would have left 95 markers dangling against a partial App B body — re-creating the forward-pointer-without-closure problem Step 3.5 closed. **F/CTO Q-S1 = α (full consolidation)** addressed the audit finding directly.
+
+**Structure-gate decisions (Q-S1 through Q-S8)**
+
+| Q | Locked answer | PM recommendation |
+|---|---|---|
+| Q-S1 | **α** — full ~114-entry consolidation | α |
+| Q-S2 | **α** — by source-§ shape | α |
+| Q-S3 | **β** (F/CTO override) — include tight PRD overview/preamble (~12 lines) before §1 | α (out of scope) |
+| Q-S4 | **α** — symbolic-ref convention extended to App B entries per PR 9 Q-S7 precedent | α |
+| Q-S5 | **β** — defer Appendix A consolidation with explicit italic note under heading | β |
+| Q-S6 | **α** — consistent type-tag prefix (`[Architect Phase 3]` / `[Sec V2-implementation]` / `[Architect / Sec joint]` / `[Boundary note]` / `[Closure-trace process-record]`) | α |
+| Q-S7 | **α** — inline `[RESOLVED-AT-§X]` tag on closure-trace entries alongside type-tag | α |
+| Q-S8 | **α** — update 12 in-body italic markers to drop "(created in PR 10; pending consolidation)" qualifier | α |
+
+**7-for-8 PM acceptance; 1 F/CTO override at Q-S3 = β.**
+
+**5-tag classification convention.** PM introduced a fifth tag value `[Architect / Sec joint]` during body draft (12 entries: §2.3 (d)(f), §2.4 (b)(g)(h)(j)(k), §2.6 (m)(n)(p)(q)(r), §4 (a)(b)(c)(i)(j)) on top of the four enumerated in Q-S6 = α. F/CTO ratified the 5-tag scheme at Q-B1 = α; without it, joint flags would collapse to either Architect-only (losing Sec dimension) or Sec-only (mis-classifying as V2-gate).
+
+**App B consolidation totals (114 entries)**
+
+| Source-§ | Entries | Source PR |
+|---|---|---|
+| §2.1 | 5 | PR 3 / v1.21 |
+| §2.2 | 7 | PR 3 / v1.21 |
+| §2.3 | 11 | PR 3 / v1.21 |
+| §2.4 | 12 | PR 3 / v1.21 |
+| §2.5 | 17 | PR 3 / v1.21 |
+| §2.6 | 21 | PR 3 / v1.21 |
+| §3 | 6 | PR 4 / v1.22 |
+| §4 | 16 | PR 5 / v1.23 |
+| §5 | 6 | PR 6 / v1.24 |
+| §6 | 3 | PR 7 / v1.26 |
+| §7 | 5 | PR 8 / v1.27 |
+| §8 | 5 | PR 9 / v1.28 |
+| **Total** | **114** | — |
+
+**Classification breakdown (114 entries)**
+
+- **`[Architect Phase 3]`** — 65 entries. Largest category; dominates §2.x + §4.
+- **`[Architect / Sec joint]`** — 12 entries. Joint Phase 3 + mandatory Sec PR-time review.
+- **`[Sec V2-implementation]`** — 4 entries. Consolidated V2-ship-gate inventory.
+- **`[Boundary note]`** — 6 entries. Forward-operative cross-§ documentation markers.
+- **`[Closure-trace process-record]`** — 27 entries. Resolved at downstream §-locks; preserved for traceability.
+
+**Resolved-vs-active counts**
+
+- **Active forward-pointers:** 87 (65 + 12 + 4 + 6) — primary payload for Architect Step 4 + Phase 3 consumption.
+- **Resolved process-records:** 27 — historical record; filterable via `[RESOLVED-AT-§X]` tag.
+
+**Symbolic-ref conversion sweep (Q-S4 = α)**
+
+- Zero `PRD.md:NNN` numerics remain in Appendix B. ~14 in-body section refs converted to symbolic form during lift (primarily §2.2 / §2.3 line-NN refs to "§X routing flag (Y)" form).
+- DECISIONS.md numerics preserved verbatim per PR 9 Q-S7 scope ruling.
+
+**Line-count outcome**
+
+- PM α projection: ~291–401 lines net PRD growth under Q-S1 = α + Q-S5 = β + Q-S8 = α.
+- Q-S3 = β override added ~12 lines for overview.
+- **Realized:** PRD.md grew from 1340 → 1610 lines (+270 lines / +20%). Within projected range.
+
+**Pattern divergence — PR 10 is structurally distinct from PR 2–9.** PR 2–9 were §-rewrite PRs (replace §N body, preserve substance). PR 10 is a closure / consolidation PR (add new top-level content, lift entries verbatim, apply housekeeping surgical edits). **Verbatim-lift attestation surface** replaces the §-body-rewrite attestation: every App B entry's substance is preserved from its source location with symbolic-ref conversion + classification-line addition.
+
+**Acceptance-flag recap (PR 10 / Step 3.5 closure)**
+
+- **Step 3.5 substantively complete as of 2026-05-19** (per PR 10 merge). Step 3.5 produced: archived PRD-v1.18 source; 8 §-rewrite PRs (§1 → §8); closure PR 10 with App B consolidation (114 entries), PRD overview/preamble (NEW per Q-S3 = β), Appendix A defer-note, and 12 in-body marker updates. **PM-lean track final: 30-for-38 across Step 3.5.** Eight F/CTO overrides — six β at structure gates (PR 3 Q-S4, PR 4 Q-S2, PR 5 Q-S5 γ, PR 6 Q-S2, PR 8 Q-S6, PR 9 Q-S6, PR 10 Q-S3) + two α-extended (PR 9 Q-S7) + one β at PR 10 Q-S3.
+- **No new ADR for PR 10.** Verbatim consolidation only. **Step 3.5 produced zero new ADRs by construction** (presentation-only restructure); the only ADR-related event was the §1 substance amendments at PR 2 / v1.20 under §1's still-mutable carve-out (Amendment C was a PRD-internal rename with zero DECISIONS.md occurrences).
+- **Substance verify-pass (Q7 = γ) queue total: 17 entries** carried forward. PR 10 surfaces zero new VP candidates (verbatim consolidation; no substance discrepancies during lift). **Verify-pass resolution is explicitly outside PR 10 scope.** Post-PR-10 sequence: (i) verify pass opens; (ii) each VP entry walked; (iii) any substance issue lands as ADR amendment; (iv) Step 4 (Architectural overview consult) opens after verify pass closes; (v) Phase 1 closes after Step 4 ratifies; Phase 2 (UX/Visual) becomes available.
+- **Post-PR-10 in-body markers point exclusively to consolidated Appendix B.** 12 markers updated per Q-S8 = α; zero references to "pending consolidation" remain in PRD body. **The Step 3.5 forward-pointer-without-closure pattern closes at PR 10 merge.**
+- **Step 4 entry payload:** 87 active forward-pointers (65 Architect + 12 Architect/Sec joint + 4 Sec V2-implementation + 6 boundary notes) + §4.4 14-class sensitive-data matrix + §4.5 15-row RLS test catalog + §8 → Phase 4 handoff anchor (Appendix B → §8 routing flag (d)). Step 4 produces ARCHITECTURE.md as Phase 3 entry payload.
+
+**Team-mode operational note (fourth dispatch under v1.25 convention)**
+
+- `pm-pr10-structure@phase-1` teammate handled both structure proposal and body draft turns. Third consecutive idle-before-deliverable timing event surfaced (idle notification arrived without sign-off; `ls` showed only structure proposal); resolved via diagnostic ping per `memory/feedback_team_mode_idle_before_deliverable.md`. **Memory pattern validated three times** across PR 8 / PR 9 / PR 10. The largest body draft of Step 3.5 (~280-line App B body + overview + recap + 12 marker triples + v1.29 changelog) completed cleanly with the diagnostic-ping resolution.
+
+**Substance preservation**
+
+- 0 substance amendments. Verbatim-lift consolidation only. Every App B entry byte-equivalent to its source after symbolic conversion + classification-line addition.
+- ~14 symbolic-ref retargets applied across App B entries.
+- 12 in-body italic-marker surgical edits applied; zero §-body content changed.
+
+**No new ADR.** PR 10 is presentation/consolidation only; follows PR 2–9 precedent. **Step 3.5 closes with zero new ADRs across the entire 10-PR sequence.**
+
+---
 
 ### v1.28 — 2026-05-19
 

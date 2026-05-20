@@ -14,6 +14,18 @@ downstream: ARCHITECTURE.md (Phase 3), Linear initiatives/projects (Phase 4)
 
 > **Reading order:** this PRD is the single source of truth for what mosko-fintech V1 is. Architectural and infrastructure decisions live in `ARCHITECTURE.md` (Phase 3); backlog decomposition lives in Linear (Phase 4+). Anything locked here flows downstream; anything locked downstream must trace back to a requirement here.
 
+## Overview
+
+This PRD defines mosko-fintech V1 — the V1 scope, the V1 user stories, the success metrics that determine V1 done, the security and compliance posture, the V2 / V2+ deferral surface, the permanent non-goals, the V1 operating envelope, and the milestone-framing scaffolding by which V1 ships. Source of truth for V1 product scope; downstream consumed by Architect (Phase 3 design), Phase 4 scoping (Linear backlog decomposition), and Phase 6 PR review.
+
+**Section guide.** §1 vision and target user (problem statement, archetype, deferrals); §2 V1 user stories (§2.1 net worth, §2.2 asset allocation, §2.3 spending and income categorization, §2.4 cross-cutting onboarding / manual entry / re-auth, §2.5 estimated taxes, §2.6 monthly report); §3 success metrics (capability-delivery, parity, migration-completion); §4 security and compliance posture (canonical Sec reference layer per ADR-008); §5 V2 deferred candidates; §6 out-of-scope for this PRD lifecycle (permanent non-goals); §7 constraints (cost / scale / usage model); §8 V1 milestone framing (sub-version convention, drop-replace migration pattern, §3.4 cross-reference). Appendices: A (ADR-002 verdict traceability; consolidation deferred); B (open routing flags for Architect and Security Reviewer, consolidated in this PR); C (story-trace index for §2.x).
+
+**V1 / V2 / V2+ shorthand.** *V1* = scope committed for first ship; tested per §3.3 parity criteria. *V2* = second milestone after V1.final; default trajectory for surfaces tagged at section locks. *V2+* = post-V2 trajectory or unsequenced future work. **V1 ships across sub-versions** per §8 (V1.0 → V1.x → V1.final); specific per-sub-version capability boundaries are Phase 4 (Scoping) / Linear-backlog territory, not pinned in this PRD.
+
+**ADR convention.** ADRs live in `DECISIONS.md` and are referenced by ID — `ADR-002` (V1 scope foundation), `ADR-003` (synthetic-team / phase teams), `ADR-004` (V1 product expansion — Decisions A/B/C/D), `ADR-005` (planning-targets settings UI), `ADR-006` (bracket-aware tax inputs), `ADR-007` (TLH reclassification), `ADR-008` (V1 security canonical-reference layer). PRD body cites by ID; substantive content lives in DECISIONS.md.
+
+**Cross-ref convention.** Symbolic section refs throughout (`§2.4.1`, `§4.6`, `Appendix B → §N`, etc.); no `PRD.md:NNN` numeric refs in PRD body or App B per PR 9 / PR 10 Q-S4 / Q-S7 convention. `DECISIONS.md:NNN` numeric refs preserved verbatim per same convention (DECISIONS.md is stable append-only). Routing flags relocated from §-body blocks to Appendix B at PR 10; in-body italic markers point readers to App B per source-§ grouping.
+
 ## 1. Vision and target user
 
 ### 1.1 Problem statement
@@ -125,7 +137,7 @@ V1 surfaces only the requesting user's own accounts and data in the net worth vi
 
 *Traces: see Appendix C → 2.1.7.*
 
-*Routing flags affecting §2.1: see Appendix B (created in PR 10; pending consolidation).*
+*Routing flags affecting §2.1: see Appendix B → §2.1.*
 
 ### 2.2 Asset allocation
 
@@ -157,7 +169,7 @@ V1 surfaces only the requesting user's own holdings in the allocation views (the
 
 *Traces: see Appendix C → 2.2.4.*
 
-*Routing flags affecting §2.2: see Appendix B (created in PR 10; pending consolidation).*
+*Routing flags affecting §2.2: see Appendix B → §2.2.*
 
 ### 2.3 Spending and income categorization
 
@@ -195,7 +207,7 @@ V1 surfaces only the requesting user's own transactions in the cash-flow views (
 
 *Traces: see Appendix C → 2.3.5.*
 
-*Routing flags affecting §2.3: see Appendix B (created in PR 10; pending consolidation).*
+*Routing flags affecting §2.3: see Appendix B → §2.3.*
 
 ### 2.4 Cross-cutting stories (account onboarding, manual entry, re-auth)
 
@@ -251,7 +263,7 @@ V1 ensures the user's actions across §2.4.1 (Plaid account onboarding and new-s
 
 *Traces: see Appendix C → 2.4.5.*
 
-*Routing flags affecting §2.4: see Appendix B (created in PR 10; pending consolidation).*
+*Routing flags affecting §2.4: see Appendix B → §2.4.*
 
 ### 2.5 Estimated taxes
 
@@ -382,7 +394,7 @@ V1 surfaces only the requesting user's own income, holdings, and tax obligations
 
 *Traces: see Appendix C → 2.5.5.*
 
-*Routing flags affecting §2.5: see Appendix B (created in PR 10; pending consolidation).*
+*Routing flags affecting §2.5: see Appendix B → §2.5.*
 
 ### 2.6 Monthly report
 
@@ -556,7 +568,7 @@ V1 ensures that when the user views the monthly report — current month or any 
 
 *Traces: see Appendix C → 2.6.6.*
 
-*Routing flags affecting §2.6: see Appendix B (created in PR 10; pending consolidation).*
+*Routing flags affecting §2.6: see Appendix B → §2.6.*
 
 ## 3. Success metrics
 
@@ -798,7 +810,7 @@ The following measurement frames are **not** V1 success metrics. They are enumer
 
 **Distinction from §6.** §6 enumerates product surfaces that V1 does not build (permanent non-goals + this-PRD-lifecycle deferrals). §3.5 enumerates measurement frames that V1 does not apply. The two lists are disjoint by construction: §6 is capability-shaped, §3.5 is measurement-shaped. A SaaS-pattern feature like "referral program" is a §6 non-goal; the K-factor that would measure such a feature is a §3.5 non-metric.
 
-*Routing flags affecting §3: see Appendix B (created in PR 10; pending consolidation).*
+*Routing flags affecting §3: see Appendix B → §3.*
 
 ## 4. Security and compliance posture
 
@@ -897,7 +909,7 @@ The following measurement frames are **not** V1 success metrics. They are enumer
 
   **Closes §7 routing flag (a) at §4 lock** (the flag lives forward at item (iv) above); §5.4 + §5.6 V2-ship-gate flags remain V2-active but are inventoried here for V2-scoping reference per routing flag (k).
 
-*Routing flags affecting §4: see Appendix B (created in PR 10; pending consolidation).*
+*Routing flags affecting §4: see Appendix B → §4.*
 
 ## 5. V2 deferred candidates
 
@@ -1066,7 +1078,7 @@ The following measurement frames are **not** V1 success metrics. They are enumer
   - **FX conversion surfaces.**
   - **Per-tenant base-currency selection.**
 
-*Routing flags affecting §5: see Appendix B (created in PR 10; pending consolidation).*
+*Routing flags affecting §5: see Appendix B → §5.*
 
 ## 6. Out-of-scope for this PRD lifecycle
 
@@ -1103,7 +1115,7 @@ The mobile-native axis is a permanent product-identity boundary: mosko-fintech i
 
 - **Mobile-native application.** Separate iOS app, Android app, React-Native-style hybrid app, or any platform-specific installable native client are permanent non-goals. ADR-002 §3.0 verbatim. The boundary is "the delivery medium is web," not "mobile use is unsupported." Mobile-responsive web design is the V1 / V2 mobile commitment; native distribution is out of this PRD's universe.
 
-*Routing flags from §6 lock (3 boundary notes — §1.4 framing alignment; §5 distinction; §3.5 distinction) carried to Appendix B (created in PR 10; pending consolidation).*
+*Routing flags from §6 lock (3 boundary notes — §1.4 framing alignment; §5 distinction; §3.5 distinction): see Appendix B → §6.*
 
 ## 7. Constraints
 
@@ -1138,7 +1150,7 @@ V1 ships to a single user (the F/CTO) on a multi-tenant data model with forward-
     - Multi-user auth gates.
     - Per-user data-access boundary checks.
 
-*Routing flags from §7 lock (5 entries — Sec V2-implementation closure-trace, Architect Phase 3 forward-pointer, §6.4 cross-ref, §5 flag (e) closure, §4 routing closure) carried to Appendix B (created in PR 10; pending consolidation).*
+*Routing flags from §7 lock (5 entries — Sec V2-implementation closure-trace, Architect Phase 3 forward-pointer, §6.4 cross-ref, §5 flag (e) closure, §4 routing closure): see Appendix B → §7.*
 
 *Acceptance flags from §7 lock (4 process-records: lock-date + Sec-not-required rationale, per-sub-§ lock recap, no-new-ADR rationale, routing-flag closure-trace summary) carried to WORKFLOW.md v1.27 changelog `Acceptance-flag recap (PR 8 / §7)` block. Constraint-vs-implementation framing (source bullet 1) carried by §7 prelude.*
 
@@ -1175,13 +1187,281 @@ The drop-replace migration pattern is the *user-continuity guarantee* during V1'
   - (iii) **Dependency ordering** — across §2 / §4 / §7 surfaces.
   - (iv) **Per-sub-version acceptance criteria** — at one-session-granularity per Linear issue convention.
 
-*Routing flags from §8 lock (5 boundary notes — §3.4 → §8 closure / §1.4 → §8 closure / ADR-002 §7.0 gap #4 milestone-framing-dimension closure / §8 → Phase 4 handoff anchor / §8 ↔ §4.6 cross-reference shape) carried to Appendix B (created in PR 10; pending consolidation).*
+*Routing flags from §8 lock (5 boundary notes — §3.4 → §8 closure / §1.4 → §8 closure / ADR-002 §7.0 gap #4 milestone-framing-dimension closure / §8 → Phase 4 handoff anchor / §8 ↔ §4.6 cross-reference shape): see Appendix B → §8.*
 
 *Acceptance flags from §8 lock (6 process-records: §8 lock-date + per-sub-§ recap, no-new-ADR rationale, no-cross-section-edits + §1.3 → §1.4 section-drift correction note, forward-pointer closures summary, PM-lean track tally + bulk-closeout cadence, last-PM-led-drafting-task closure note) carried to WORKFLOW.md v1.28 changelog `Acceptance-flag recap (PR 9 / §8)` block. Constraint-vs-implementation framing (source bullet 1) carried by routing flag (d) §8 → Phase 4 handoff anchor.*
 
 ## Appendix A — Traceability to ADR-002 verdicts
 
+*Appendix A reserved for ADR-002 §7.0 verdict-by-verdict traceability; consolidation deferred per §4 routing flag (o) housekeeping convention. ADR-002 §7.0 missing-content gaps #4 (V1 done definition + security and compliance posture + milestone framing) + #5 (data retention, partial) + #6 (offline / availability tolerance) are documented as closed at §3.4 / §4 / §4.6 / §8.3 lock-times via routing-flag closure-trace process-records in Appendix B; ADR-002 body revision deferred to a future housekeeping PR. Future Phase 4 / Linear-backlog work consuming the §8 → Phase 4 handoff anchor (Appendix B → §8 routing flag (d)) can treat Appendix A as the planned canonical home for ADR-002 verdict traceability when it lands.*
+
 ## Appendix B — Open routing flags (Architect / Security Reviewer)
+
+Appendix B consolidates the routing flags raised at §2 → §8 section locks: Architect Phase 3 forward-pointers, Security Reviewer V2-implementation gates, Architect / Sec joint flags, boundary notes between sections, and closure-trace process-records that resolved at downstream locks. Entries are grouped by source-§ to mirror the in-body italic-marker pointer convention (a reader landing on the §3 marker finds the §3 entries below in source-§ order). Each entry carries a one-line **classification line** with one of the following type-tags: `[Architect Phase 3]` (forward to ARCHITECTURE.md), `[Sec V2-implementation]` (forward to V2-ship-gate Sec-consult inventory at §4.6), `[Architect / Sec joint]` (joint at Phase 3 with mandatory Sec PR-time review), `[Boundary note]` (forward-operative cross-§ documentation marker), `[Closure-trace process-record]` (resolved at a downstream §-lock; preserved for traceability). Closure-trace entries additionally carry `[RESOLVED-AT-§X]` indicating where the closure landed. Symbolic refs per PR 10 Q-S4 = α; DECISIONS.md numerics preserved verbatim. Substance verify-pass: 17 candidates queued for Q7 = γ post-rewrite verify pass before Phase 1 Step 4 entry; resolution is outside PR 10 scope.
+
+### §2.1 (Net worth) routing flags
+
+- **(a) Architect — manual-vs-Plaid sourcing for net-worth contribution.** When an account is manual (no Plaid coverage) or in re-auth, what value contributes to current net worth and to the time series — last-known-good, user-entered most recent, zero, omitted? ADR-002 §1.5 establishes manual contributes; the exact contribution rule is an architectural decision. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(b) Architect — period aggregation for the time series.** The multi-granularity expectation (monthly default + weekly/daily override) means the storage model needs to support either pre-aggregated multiple-resolution storage or on-the-fly aggregation from a finer underlying resolution. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(c) Architect — historical NAV depth in V1 (how, not whether).** V1 imports the existing Google Sheet's monthly NAV history (Dec-2015 forward) so the 5-Year horizon in §2.1.3 is meaningful at launch — F/CTO has locked the *whether*. Open architectural questions: import mechanism, validation strategy, schema location, and whether per-asset-category NAV breakdown imports alongside total NAV. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(d) Architect — CPI-U source.** Live API (e.g., FRED, BLS public API) vs. manual user entry, with cadence, historical depth back to the Dec-2015 NAV anchor, and freshness expectations. Required for both the §2.1.3 panel Inflation Adjusted column and the §2.1.2 chart-overlay inflation-adjusted view. Parity-matrix open product decision #10. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(e) Security Reviewer — §2.1.7 isolation + scope-attribute pass.** (a) Tenant isolation language consistent with ADR-002 §1.4 (tenant_id + RLS commitment); (b) multi-scope ownership per ADR-004 Decision B is a user-owned data attribute, not a V1 isolation boundary — scopes are not tenants. **Pass-with-comments recorded 2026-05-14 (Task #8).**
+  **Classification:** `[Closure-trace process-record]` `[RESOLVED-AT-§2.1]` (Sec at-lock pass landed; surface remains for §4 traceability)
+
+### §2.2 (Asset allocation) routing flags
+
+- **(a) Architect — multi-level user-scoped taxonomy data model.** Per §2.2.1: V1 carries the Cat × Sub-Cat taxonomy in data tables (one taxonomy per tenant; per-user expansion V2+ if needed). Open architectural questions: tables and relationships for Cat + Sub-Cat; seed-on-first-use mechanism (F/CTO-seeded taxonomy loads at tenant bootstrap, not hardcoded); forward-compatibility for V2 user-editable CRUD UI (additive schema only, no breaking renames or restructure); per-symbol assignment storage (AssetDB-style registry); per-account assignment storage (for manual non-securities holdings). Architectural overlap with the **target allocation storage shape** flag below — both likely share the underlying multi-level user-scoped table set; Architect dedupes at Phase 3. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(b) Architect — Sub-Cat-aware holdings aggregation query path.** Per §2.2.2 + §2.2.3: computing `% Alloc` and `$ Alloc` at Sub-Cat granularity (with Cat-level subtotals as group aggregates) across the user's holdings; parallel to the §2.1 net-worth roll-up Architect flag (§2.1 routing flag (a)). Covers both the Non-RE allocation table (§2.2.2) and the US Equity sub-allocation drill-down (§2.2.3). Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(c) Architect — target allocation storage shape.** Per §2.2.2: where user-defined target %s per Sub-Cat (and per-Cat aggregates derived from Sub-Cat sums) live. Open dimensions: per-tenant table vs. per-scope; how Sub-Cat targets relate to Cat-group targets (sum-derived vs. independently storable); how user-editable target updates persist; per-scope-target capability for V2 forward-compat. Architectural overlap with the multi-level user-scoped taxonomy data model flag above. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(d) Architect — Real Estate / non-liquid Cat semantics.** Per §2.2.2: the rebalance view (Non-RE allocation table) excludes Real Estate as a non-liquid asset that doesn't get rebalanced (F/CTO rationale: house-fractions can't be sold on demand). Query-layer needs to express which Cats are excluded from the rebalance view via either a hardcoded predicate (`Cat != 'RealEstate'`) or a taxonomy-attribute flag (`rebalanceable: bool` per Cat). The latter is forward-compatible if future user-defined Cats include other non-liquid types. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(e) Architect — Liabilities-as-Cat semantics.** Per §2.2.2: the Liabilities Cat group is an intentional V1 extension functioning as a leverage-management surface (target % expresses desired leverage; positive `$ ReAlloc` reads as "under-leveraged"). Asymmetric data flow: Liabilities `$ Alloc` values appear in §2.1.5 composition's Debt subtotal (liability-side sign) AND in §2.2.2 allocation table (leverage-target sign). Query-layer needs consistent handling across §2.1.5 composition and §2.2.2 allocation views. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(f) Architect — drill-down view capability.** Per §2.2.3: §2.2.3 is structurally a drill-down into one specific Sub-Cat row of §2.2.2 (the `US - Sector Diversified` row). Does V1's allocation-view layer support drill-down as a general capability (any Sub-Cat could have its own sub-rows via user-extension), or is the US Equity drill-down a hardcoded special case for V1? Forward-compat consideration for V2+. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(g) Security Reviewer — §2.2.4 isolation + scope-attribute pass.** Pass-with-comments recorded 2026-05-14 (Task #14). (a) Tenant isolation language consistent with ADR-002 §1.4 (tenant_id + RLS commitment) — confirmed. (b) Multi-scope ownership per ADR-004 Decision B is a user-owned data attribute, not a V1 isolation boundary — confirmed. Comments captured for Architect Phase 3 + PRD §4 carry-over (see Task #14 verdict).
+  **Classification:** `[Closure-trace process-record]` `[RESOLVED-AT-§2.2]`
+
+### §2.3 (Spending and income categorization) routing flags
+
+- **(a) Architect — cash-flow taxonomy data model.** Per §2.3.1: V1 carries the cash-flow Cat × Sub-Cat taxonomy in data tables; seed-on-bootstrap from F/CTO's existing Master.CashFlowCategories; per-transaction Sub-Cat assignment storage; forward-compatibility for V2 user-editable CRUD UI (additive schema only). **Architectural overlap with §2.2.1's multi-level user-scoped taxonomy data model flag** — Architect dedupes at Phase 3 if the cash-flow and asset taxonomies share the underlying table set. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(b) Architect — transaction-classification heuristic mechanism.** Per §2.3.1: Plaid category consumed as suggested default; recurring-vendor inference for same-merchant repeat-classification. F/CTO locked V1 inclusion 2026-05-14 (per §2.3.1 accept-as-drafted). Architect Phase 3 question: implementation shape for the inference layer (deterministic merchant-string lookup vs trained classifier vs simple per-vendor most-recent-Sub-Cat lookup). Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(c) Architect — cross-account per-period cash-flow aggregation query path.** Per §2.3.2: query path computes Sub-Cat rows × {Month, Q1-Q4, YTD} columns × Cat-group section split (Income / Expenses) across all of the user's accounts; OtherCF + AcctSetup classified transactions exist in data but are excluded from this surface's query output. Parallel to §2.2.2's Sub-Cat-aware holdings aggregation flag (§2.2 routing flag (b)). Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(d) Architect — V1 settings UI plumbing for user-authored planning-target values.** Per §2.3.2 + F/CTO planning-targets lock 2026-05-14 (Option (a)(i)): first concrete V1 surface needing a user-editable settings store. Architect Phase 3 question: generalized settings/preferences table for forward-compat against future V2 settings expansion, vs. planning-targets-specific storage narrower in scope. **Sec re-engagement triggered** when this surfaces (per Sec Task #23 forward-looking comment #3 — write-path validation, audit trail, tenant-scoping confirmation). Routing: ADR-002 §8.0 Architect flag with mandatory Sec re-engagement, non-F/CTO-led.
+  **Classification:** `[Architect / Sec joint]`
+- **(e) Architect — planning-targets storage shape.** Per §2.3.2: likely simple in V1 (one income-target total value + one expense-target total value, no Sub-Cat-level breakdown; values period-typed — annual for income, monthly for expenses — per Finance_Report caption framing). Architect Phase 3 confirms. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(f) Architect — as-of-date as system-wide query-time parameter.** Per §2.3.3: exposed in §2.3.3's UI as the per-account drill-down's date toggle, but plausibly a query-path-level abstraction (single as-of-date parameter threading through all dated query paths, including §2.6 monthly report generation with a custom as-of-date). PM recommendation embedded in §2.3.3 trace: query-path-level abstraction in V1 given §2.6's monthly-report custom-date use case is on the V1 roadmap. **Sec Task #23 Phase 3 RLS test obligation attached** (forward-looking comment #1 — confirm tenant_id enforcement is independent of the date filter; no parameter-manipulation bypass). Routing: ADR-002 §8.0 Architect flag with mandatory Phase 3 RLS test, non-F/CTO-led.
+  **Classification:** `[Architect / Sec joint]`
+- **(g) Architect — per-account scoping query path.** Per §2.3.3: query path computes Sub-Cat rows × {Month, Q1-Q4, YTD} columns × 3 Cat-group sections (Income / OtherCF / Expenses) for one selected account; shares Sub-Cat aggregation backbone with §2.3.2's cross-account query path. Architect dedupes at Phase 3 (likely shared infrastructure with a single-account-filter parameter). Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(h) Architect — drill-down view capability.** Per §2.3.3: parallel shape question to §2.2.3's drill-down flag (§2.2 routing flag (f)). Does V1's cash-flow view layer support per-account drill-down as a general capability, or is per-account drill-down structurally hardcoded? Forward-compat for V2+. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(i) Architect — V1 expense-transaction data retention horizon.** Per §2.3.4: V1 retains expense transactions back ≥ 5 years to populate the rolling-5-year chart; income transaction retention is narrower (current-year-sufficient per F/CTO 2026-05-14 (α) lock). Architect Phase 3 question: differential retention by Cat (expenses ≥ 5yr, income current-year-only) vs uniform retention across Cats with operational/storage implications. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(j) Architect — CPI-U series sourcing (cross-ref, no new flag).** Covered by §2.1's existing Architect flag; §2.3.4 adds a fourth V1 surface consuming the same CPI-U series (§2.1.2 + §2.1.3 + §2.1.4 + §2.3.4). One CPI-U-source decision serves all four.
+  **Classification:** `[Boundary note]` (cross-ref to §2.1 routing flag (d); no new Architect surface)
+- **(k) Security Reviewer — §2.3.5 isolation + scope-attribute pass + as-of-date toggle axis.** Pass-with-comments recorded 2026-05-14 (Task #23). (a) Tenant isolation across §2.3.2 / §2.3.3 / §2.3.4 query paths consistent with ADR-002 §1.4 — confirmed; §2.3.3 as-of-date toggle as user-supplied query-time parameter on multi-tenant data path is a new axis vs §2.1.7 + §2.2.4 — product-level pass; Phase 3 RLS test obligation attached (see Architect as-of-date flag above). (b) Multi-scope ownership per ADR-004 Decision B is a user-owned data attribute, not a V1 isolation boundary — confirmed; §2.3.5's scope-attribute clause endorsed as canonical for §4 verbatim. Three new sensitive data classes added to running §4 matrix (per-transaction merchant/vendor identifier data; user-authored planning targets; derived cash-flow categorization patterns). Three forward-looking comments captured for downstream phases (see Task #23 verdict). Sec re-engagement mandatory at §2.4 + §4; primary author at §4.
+  **Classification:** `[Closure-trace process-record]` `[RESOLVED-AT-§2.3]`
+
+### §2.4 (Cross-cutting: onboarding, manual entry, re-auth) routing flags
+
+- **(a) Architect — Plaid metadata recommendation engine for new-symbol assignment.** Per §2.4.1 + F/CTO 2026-05-15 (iv) lock: consumes Plaid security_type + description + ticker; surfaces ranked Sub-Cat candidates in the notification-queue assignment UI; forward-compat for V2 auto-classification when metadata-accuracy evidence supports it. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(b) Architect / Sec joint — Plaid account-share-decision authoritative storage.** Per §2.4.1 + F/CTO Sec-(b)-2 lock 2026-05-15: tenant-scoped table tracking which institution accounts the user has opted in to share; newly-available-account detection on resync compares Plaid's current account list against this stored set. **Sec re-engagement** triggered when implementation surfaces (write-path validation + audit trail + correct tenant-scoping). Routing: ADR-002 §8.0 Architect flag with mandatory Sec joint review, non-F/CTO-led.
+  **Classification:** `[Architect / Sec joint]`
+- **(c) Architect — Initial-value entry as synthetic AcctSetup-flagged transaction.** Per §2.4.2: keeps the data model uniform with §2.3.1's transaction-to-bucket-assignment shape; account balance is computed from transaction-history-from-zero parallel to Plaid-sourced accounts. Forward-compatible with §2.3.1 + §2.4.3. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(d) Architect — Hash composition + reconcile balance-consistency check.** Per §2.4.3 (Axis D from F/CTO 2026-05-15 (i) lock): Plaid `transaction_id` primary key + content hash secondary for splits/edge cases; splits as parent-child (original Plaid split-and-skip-flagged, user-created children independent); balance-consistency check tolerance threshold TBD by Architect Phase 3. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(e) Architect — Transaction edit-vs-delete-vs-skip data model.** Per §2.4.3 (Axis C1 from F/CTO 2026-05-15 (i) lock): skip-flag retention semantics, server-side retention of deleted records, un-skip recovery via deleted/skipped view. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(f) Architect — AcctSetup event subtype data model with cost-basis cascade.** Per §2.4.3 (F/CTO 2026-05-15 (iii) iii-A-1 lock): split / transfer-in-kind / other field shape; split-quantity-propagation logic; transfer-in-kind cost-basis carry-over with mandatory cross-section review against §2.3.1 + §2.1.5 (cost-basis cascade). Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(g) Sec-led / Architect joint — Access token storage shape (protection class).** Per §2.4.4 + Sec Task #27 / Task #33: application-layer encryption, KMS-backed, audit log on rotation, tenant-scoped non-negotiable. **Sec-led for the protection class; Architect-led for the implementation shape.** Routing: ADR-002 §8.0 Sec-led flag with mandatory Architect implementation review, non-F/CTO-led.
+  **Classification:** `[Architect / Sec joint]`
+- **(h) Architect / Sec joint — Credential-error state model with Plaid-error-code → user-state mapping.** Per §2.4.4 + Sec Task #27 / Task #33: four data-model states named in body (`ITEM_LOGIN_REQUIRED` / `INSTITUTION_DOWN` / institution-side grant revoked / user-side grant revoked at institution) must remain distinguishable for Phase 2 UX-finer-grained work and beyond. Routing: ADR-002 §8.0 Sec/Architect joint flag, non-F/CTO-led.
+  **Classification:** `[Architect / Sec joint]`
+- **(i) Architect — Per-surface staleness signal threading.** Per §2.4.4: propagation from per-account credential-error state through aggregation surfaces in §2.1 / §2.2 / §2.3 / §2.6. Headline V1 product commitment in §2.4.4 body — every aggregation visually marks stale-account contributions; aggregations are never silently presented as fresh when constituent accounts are pending re-auth. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(j) Architect / Sec joint — Manual-entry write-path integrity mechanism.** Per §2.4.5 + Sec Task #27 / Task #33 forward-looking: validation, audit trail, immutability or versioning of historical entries that affect downstream computations (cost basis, realized G/L, NAV time-series). Routing: ADR-002 §8.0 Architect flag with mandatory Sec joint review, non-F/CTO-led.
+  **Classification:** `[Architect / Sec joint]`
+- **(k) Sec-led / Architect joint — Plaid webhook signature verification.** **New from Sec Task #33 verdict** (not surfaced in Task #27 early consult or any §2.4 body drafts): mandatory before any production credential-state mutation lands via webhook. Webhook signature verification is the integrity gate for Plaid-triggered state changes; without it, a forged webhook could trigger spurious credential-error states or sync-state mutations. Routing: ADR-002 §8.0 Sec/Architect joint flag with mandatory Sec sign-off before V1 ship, non-F/CTO-led.
+  **Classification:** `[Architect / Sec joint]` (Sec hard-line; V1-ship-gate; surfaces at §4 routing flag (c) as RT-05)
+- **(l) Security Reviewer — §2.4 dual-axis at-lock verdict + two-touch consult pattern recorded.** Pass-with-comments recorded 2026-05-15 (Task #33; preceded by Task #27 early consult per F/CTO-accepted two-touch Sec engagement for §2.4 — first non-verdict Sec consult in Phase 1). (a) Tenant isolation extended for write-path framing — §2.4.5 elevates RLS-on-writes from inferred architectural detail to explicit PRD-locked product commitment, names §2.4.1 / §2.4.2 / §2.4.3 / §2.4.4 mutation paths; confirmed. (b) Multi-scope-attribute clause verbatim-equivalent to §2.3.5 canonical formulation; fourth consecutive continuity instance across PRD §2 (§2.1.7 / §2.2.4 / §2.3.5 / §2.4.5); confirmed. **Six veto-eligible body clauses verified landed:** §2.4.1 OAuth flow integrity ("credentials stay at the institution; mosko-fintech holds only a Plaid-mediated access token"); §2.4.1 Plaid-only metadata enrichment ("V1 does not call out to third-party security-master APIs"); §2.4.4 token lifecycle server-side; §2.4.4 access-token credential-class protection; **§2.4.4 non-silent staleness across every consuming surface (headline V1 commitment) — names §2.1.2 / §2.1.5 / §2.2.2 / §2.3.2 / §2.3.4 / §2.6 explicitly**; §2.4.5 write-path RLS symmetry (closes Sec Task #23 forward-looking comment #3 for entire §2.4 write surface). **Six non-veto Task #27 consult clauses verified.** **Three new sensitive data classes for running §4 matrix:** Plaid access tokens (credential class, distinct from data class); Plaid Item-state metadata (low sensitivity individually, behavior-correlate when aggregated — sync patterns reveal financial-activity timing); Plaid account-share-decision data (tenant-scoped per §2.4.1). **New Phase 3 RLS test surfaces:** write-path RLS tests on §2.4.1 / §2.4.2 / §2.4.3 / §2.4.4 mutation paths; per-tenant Plaid Item table RLS (access tokens + Item-state metadata); per-tenant account-share-decision table RLS; tenant-scoped read on §2.4.3 sync-history audit log. **New Sec/Architect joint forward-looking flag elevated to routing-flag #11 in this block (Plaid webhook signature verification).** Sec re-engagement: **primary author at §4 (mandatory next engagement)**; §2.5 standard at-lock pass; §2.6 standard at-lock pass; §3 conditional on sensitive metrics. §2.4 cleared for lock; no re-review needed barring substantive body revision.
+  **Classification:** `[Closure-trace process-record]` `[RESOLVED-AT-§2.4]`
+
+### §2.5 (Estimated taxes) routing flags
+
+- **(a) Architect — Sub-Cat `tax_relevant` boolean + `tax_character` enum schema on the §2.3.1 + §2.2.1 taxonomies.** Additive boolean + V1-enumerated 5-value enum per Sub-Cat (V1 enum values: `ordinary` / `qualified_dividend` / `tax_exempt_interest` / `long_term_capital_gain_eligible` / `short_term_only`); seed-on-bootstrap mechanism parallel to ADR-004 Decision C taxonomy seeding; forward-compat for V2 CRUD UI extension to §2.3.1 + §2.2.1 taxonomy CRUD V2+; forward-compat for V2+ enum expansion. §2.5.1 origin per ζ-2 lock. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(b) Architect — Cross-source join for §2.5.1 three-column projection.** Cash-flow Ordinary Income (§2.3.1) + realized capital gains (§2.4.3 / `calculateSales`-equivalent output) joined into the §2.5.1 decomposition view; query path handles two structurally different transaction-source types under a unified three-column projection; `tax_character` enum travels with each contribution into §2.5.3's bracket-routing layer; §2.5.1 column placement is structural (event-type-driven) while §2.5.3 routing is `tax_character`-driven. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(c) Architect — Tax-year boundary at query path.** Current-calendar-year filtering on transactions feeding §2.5.1, on YTD-Paid feed from §2.4.3 IRS / FTB ledgers, and on Tax Balance Prior Year row at §2.5.3 (informational-only per μ-2 but sourcing-shape still matters — V1 either persists prior-year liability as a settings-stored value or re-computes from prior-year transaction state); forward-compat for V2+ multi-tax-year persistence + custom fiscal-year overrides + V2+ safe-harbor computation consumption of the Tax Balance Prior Year row. Spans §2.5.1 + §2.5.3 + §2.5.4 query paths. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(d) Architect — Holding-period source-of-truth.** V1 leverages existing-system `L-Term ?` computed-at-sale-time pattern per parity-matrix line 63 + η-1 lock; Architect Phase 3 picks whether this is a computed view from Open Date + Close Date or a materialized column at sale time. §2.5.1 consumption (per ζ-2 lock); §2.5.4 Unrealized under ο-a does NOT consume holding-period. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(e) Architect — Bracket-table-update cadence.** V1 = user-manual at tax-year rollover; V2+ = live tax-data API ingestion (e.g., IRS / California FTB public-published rate tables ingested + diffed). §2.5.2 origin. PM scope-flag: API sourcing decision is Architect's, not PM's. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(f) Architect — §2.5.2 settings store: dedup-vs-separate from §2.3.2 planning-targets store.** Richer field shape than §2.3.2's two scalars — multiple bracket rows per jurisdiction × Federal-ordinary-schedule + Federal-LT-CG-schedule + CA-ordinary-schedule + per-jurisdiction-standard-deduction-scalar. Architect Phase 3 picks the storage shape. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(g) Architect — Bracket-schedule routing logic location.** Where the §2.5.1 `tax_character` enum → §2.5.2 schedule mapping lives. PM lean (g-1) hardcoded in §2.5.3 computation engine (static routing table) for V1 simplicity given the fixed 5-value enum; promote to (g-2) data-driven config on the bracket-schedule store when V2 adds enum values. §2.5.2 + §2.5.3 surface; NOT consumed by §2.5.4 Unrealized under ο-a (cleaner scope). Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(h) Architect — Filing-status handling.** V1 single-scalar standard deduction per (ι) lock; V2+ filing-status enum (single / MFJ / HoH) + multi-scalar standard deduction with user-selectable filing-status at the §2.5.2 settings UI. Forward-compat schema only V1. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(i) Architect — §2.5.3 computation engine storage / caching shape.** Progressive-bracket computation runs against §2.5.1 three-column decomposition × §2.5.2 schedules + standard deduction; tenant-scoped per §2.5.5. Three viable shapes: (i-1) precomputed-snapshot updated on each contribution/setting change; (i-2) pure-function-on-demand at view time; (i-3) hybrid. μ-2 lock simplifies this surface — no parallel safe-harbor computation path means a single bracket-walk per jurisdiction is the entire compute. PM lean (i-2) on-demand reaffirmed under μ-2 given F/CTO instance's bounded single-user transaction volume per ADR-002 §1.4. §2.5.3 consumes; §2.5.4 Realized consumes via §2.5.3; §2.5.4 Unrealized does NOT consume under ο-a. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(j) Architect — IRS / FTB account semantics relative to §2.4.2.** §2.5.3 treats IRS + FTB as standard §2.4.2 manual accounts with tax-domain interpretation overlay. Two viable shapes: (j-1) standard-account-with-overlay (no new account-type-or-attribute; designation attribute identifies which §2.4.2 accounts are IRS/FTB); (j-2) special "tax-payment" account-type in §2.4.2's account-type taxonomy. PM lean (j-1) for V1 simplicity; promote to (j-2) when V2+ multi-state expansion surfaces. Cross-flag with §2.5.4 tax-advantaged exclusion mechanism — the (j-1) designation attribute distinguishes IRS/FTB from `taxable`/`tax-deferred`/`tax-free` so the exclusion filter doesn't accidentally include them. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(k) Architect — Aggregate unrealized G/L computation surface.** §2.5.4 Unrealized requires sum-of-(current market value − aggregate cost basis) across all V1-included taxable holdings; tenant-scoped query at the holdings + cost-basis read layer. Forward-compat for V2+ per-lot accuracy if ADR-002 §1.7 lot-level features land; forward-compat for V2+ ο-b/ο-c bracket-aware refinement. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(l) Architect — Tax-advantaged account exclusion mechanism.** Per (π) lock: filter the aggregate-unrealized-G/L aggregation query by `tax_treatment IN ('taxable')` (excluding `tax-deferred` and `tax-free` per ADR-002 §1.6 three-way tagging). Architect Phase 3 picks query-layer filtering shape; forward-compat to V2+ if account-attribute taxonomy expands. Sub-concern: IRS + FTB accounts have no investment holdings (cross-flag with IRS/FTB-semantics flag above — the (j-1) designation attribute keeps them out of the filter independent of tax_treatment). Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(m) Dropped from V1 routing flags: §2.5.3 computation-engine reuse for §2.5.4 Unrealized.** Was conditional on (ο-b) full-bracket-aware or (ο-c) hybrid-LT-only-bracket-aware Unrealized shape, neither of which was selected — F/CTO locked (ο-a) simplified marginal × G/L. V2+-only: opens if F/CTO ever revisits Unrealized shape to (ο-b)/(ο-c) in V2+. Noted here for decision-history completeness; not active in V1.
+  **Classification:** `[Closure-trace process-record]` `[RESOLVED-AT-§2.5]` (decision-history only)
+- **(n) F/CTO PM-default acceptance 2026-05-17.** Nine items were originally surfaced as parity-verify-against-Finance_Report-PDF-and-Est-Taxes-sheet candidates during body drafting. F/CTO direct-workflow-knowledge throughout body drafting informed each PM-default; formal PDF-verification was skipped as redundant per F/CTO 2026-05-17. Items resolved as PM-default for V1: (ε) §2.5.1 §10 layout — ε-1 default (single Sub-Cat-row × 3-column table with Cat-group section headers); (ι) §2.5.2 standard-deduction — single-scalar V1; (κ) §2.5.2 CA LT CG treatment — collapse-to-ordinary V1; (λ) §2.5.2 Federal LT CG schedule rows — separate schedule V1; (ν) §2.5.3 overpayment surfacing — ν-1 negative-single-line V1; (ξ) §2.5.3 due-date rendering — ξ-1 reactive-in-table V1; (π) §2.5.4 tax-advantaged exclusion — taxable-only filter V1; Federal LT CG top-bracket rate sourcing for §2.5.4 Unrealized — F/CTO 2026-05-17 override locked; California quarterly cadence — Federal-aligned-except-Q3 V1 default. Verification deferred to V1 implementation if divergence surfaces against existing-system behavior; no body revision required at PRD-level lock.
+  **Classification:** `[Closure-trace process-record]` `[RESOLVED-AT-§2.5]`
+- **(o) ADR-006 drafted alongside §2.5 lock** (see DECISIONS.md). Two-axis amendment to ADR-004 Decision D input-layer characterization: **Axis 1** bracket schedules + standard deduction (§2.5.2-scope — amends Decision D's "Federal marginal rate input" / "separate marginal rate input" wording to bracket-aware framing); **Axis 2** Sub-Cat `tax_character` enum at V1 with 5 enumerated values + Federal routing rules per ζ-2 (§2.5.1-scope). Both axes operationalize Decision D's "Primitive means" rather than expanding it — multi-state, non-US, lot-level features stay V2+ unchanged. Sec one-line sensitivity-note woven into ADR-006: "data class #1 sensitivity incrementally higher post-amendment; storage / access-control posture unchanged."
+  **Classification:** `[Closure-trace process-record]` `[RESOLVED-AT-§2.5]` (ADR-006 lock-time record)
+- **(p) Sec product-disclaimer integrated at §2.5.4 V1 boundary clause.** Per Sec at-lock recommendation, V1 Unrealized Tax Liability under ο-a is computed at Federal LT CG top-bracket rate (less-conservative than top-marginal-ordinary). One-sentence user-facing disclaimer integrated into §2.5.4 V1 clause: *"This estimate may understate actual tax owed if any portion of unrealized gain would be realized at short-term rates (ordinary income); users should treat the Unrealized Tax Liability as an LT-aware floor estimate, not a precise tax forecast."* Sec endorsed framing as "Standard product disclaimer territory."
+  **Classification:** `[Closure-trace process-record]` `[RESOLVED-AT-§2.5]`
+- **(q) Security Reviewer — §2.5 first tri-axis at-lock verdict recorded.** Pass-with-comments recorded 2026-05-17. **Fifth Sec dual-axis pass + first tri-axis pass** across PRD §2 (§2.1.7 / §2.2.4 / §2.3.5 / §2.4.5 / §2.5.5); no veto, no required revisions. **(a) Tenant isolation** across §2.5.1 / §2.5.3 / §2.5.4 read query paths consistent with ADR-002 §1.4 + Sec Task #8 / Task #14 / Task #23 / Task #33 precedent set — confirmed. **(b) Multi-scope-ownership-as-data-attribute-not-isolation-boundary** continuity per ADR-004 Decision B verbatim-equivalent to §2.3.5 / §2.4.5 canonical formulation — confirmed (fifth consecutive instance across PRD §2). **(c) NEW — `tax_treatment`-attribute-as-inclusion-filter-not-isolation-boundary** clarification (third orthogonal query-layer attribute at V1: `tenant_id` for isolation + `scope` as data label + `tax_treatment` as inclusion filter on §2.5.4 Unrealized aggregation per (π) lock); endorsed as canonical for §4 verbatim promotion. **Six sensitive-data classes for §4 matrix** (Sec primary author at §4 per Task #33): (1) tax-bracket-revealing data (§2.5.2 — upgraded sensitivity per F/CTO 2026-05-17 bracket-aware correction); (2) tax-character categorization patterns (§2.5.1 Sub-Cat enum); (3) marginal-rate scalars (Federal LT CG top-bracket + CA ordinary top-bracket — §2.5.4 inputs); (4) Realized + Unrealized Tax Liability scalar values (§2.5.4 NAV-components); (5) aggregate unrealized G/L by tax_treatment (§2.5.4 input); (6) §2.5.3 quarterly est-payment ledger + IRS/FTB account ledger state (class-1 derivative + behavioral correlate). **Five forward-looking comments** for §4 drafting + Phase 3 RLS surfaces: (i) Phase 3 RLS test — `tax_treatment`-filtered aggregation independence (third axis-of-parameterization on tenant-scoped query paths now: tenant_id × scope × tax_treatment × date); (ii) Phase 3 RLS test — settings store bracket-table reads (test data should include realistic bracket-schedule field shapes post bracket-aware correction); (iii) §4 sensitive-data class #1 narrative — acknowledge bracket-aware upgrade increases revealing precision; storage / access-control posture unchanged; (iv) ADR-006 input-layer wording amendment — no Sec implications; (v) Plaid webhook signature verification (Task #33 routing flag #11) unchanged by §2.5 — no new external-API surface (F/CTO-authored bracket tables, not API-pulled). Sec re-engagement: primary author at §4 (mandatory next engagement); §2.6 standard at-lock pass; §3 conditional on sensitive metrics. §2.5 cleared for lock; no re-review needed barring substantive body revision.
+  **Classification:** `[Closure-trace process-record]` `[RESOLVED-AT-§2.5]`
+
+### §2.6 (Monthly report) routing flags
+
+- **(a) Architect — PDF generation mechanism.** Server-side vs client-side; library selection; tenant-isolation on the generation path; storage shape if any caching is introduced (V1 lock: no PDF caching). Source §2.6.3. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(b) Architect — Cron mechanism.** Scheduling shape (in-process scheduler vs external cron vs queue-driven); per-tenant cron config; idempotency on retries; user-triggered generation sync vs async path. Source §2.6.3. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(c) Architect — Snapshot storage shape.** Per-tenant report-archive table; rendered-value JSON-blob vs normalized columns vs hybrid; indexing by `(tenant_id, target_month)`; commentary co-location vs sibling table. Source §2.6.4. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(d) Architect — Snapshot-vs-live render-path composition.** In-app view reads snapshot directly; §2.6.5 staleness markers join live §2.4.4 state at render path; composition layer needs to fuse frozen snapshot rows with live staleness signals per render. Source §2.6.4 / §2.6.5. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(e) Architect — Owner-identification settings-store dedup vs split.** Joins ADR-005 store with §2.3.2 planning targets + §2.5.2 bracket schedules vs splits into a report-config sub-store; parallel to §2.5.2's settings-store-dedup routing flag. Source §2.6.4 ψ-1. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(f) Architect — Snapshot regeneration write path.** Single-row-per-`(tenant, target-month)` enforcement; transactional overwrite semantics; staleness-marker live-read coupling at render path (regeneration must not silently rewrite the staleness layer). Source §2.6.4 / §2.6.3. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(g) Architect — Rebalancing Targets persistence shape.** Per-report free-text storage; markdown / rich-text shape forward-compat for V2+; tenant-scoped read+write. Source §2.6.2. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(h) Architect — `$ ReAlloc` side-by-side reference rendering shape.** Modal / inline panel / linked view / dual-pane split for surfacing the prior month's targets alongside the current commentary authoring surface. Source §2.6.2. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(i) Architect — Cross-section staleness signal threading on report surface.** Dedupes with §2.4.4's per-surface signal-threading routing flag; likely shared infrastructure (one signal-threading layer serves both §2.1–§2.5 and §2.6 consuming surfaces). Source §2.6.5 / §2.4.4. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(j) Architect — Section-rendering composition layer.** Six sections as independently-rendered components vs single composition view; forward-compat for V2+ ω-2 / ω-3 section additions and per-scope rendering. Source §2.6.1. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(k) Architect — In-app pending-monthly-report queue affordance.** UI shape parallel to §2.4.1 iv-1 notification queue (where the user sees "report ready" / "generation in progress" / "generation failed" states). Source §2.6.3. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(l) Architect — Marker visual shape.** Inline indicator + tooltip on each affected section; report-level banner additive; PDF rendering of markers (color reproduction, accessibility). Source §2.6.5; Architect / Design Phase 2/3. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(m) Sec — Snapshot store tenant-scoping.** Read-path RLS on snapshot table per ADR-002 §1.4; snapshot persists §2.5-grade sensitive-data class derivatives; §2.6.6 owns canonical framing. Routing: Sec-led; landed in Phase 3 RLS test catalog.
+  **Classification:** `[Architect / Sec joint]` (lands at §4 routing flag (a); RT-08)
+- **(n) Sec — Owner-identification config — settings-store write-path validation.** Input sanitization, length bounds, no executable content in rendered header; additive to Sec Task #23 forward-looking comment #3 surface. Source §2.6.4 ψ-1. Routing: Sec-led.
+  **Classification:** `[Architect / Sec joint]` (lands at §4 routing flag (a); RT-12)
+- **(o) Sec — Snapshot row as persisted derivative surface of §2.5-grade sensitive-data classes.** §4 matrix annotation: derivative-surface, not new class; inherits classification of underlying source classes. Source §2.6.4 / §2.6.6. Routing: Sec-led.
+  **Classification:** `[Closure-trace process-record]` `[RESOLVED-AT-§4.4]` (lands at §4.4 SD-12 + SD-13)
+- **(p) Sec — Commentary write-path RLS.** §2.6.2 free-text authoring write-path; tenant-scoped per §2.4.5 precedent; input sanitization on free-text content. Source §2.6.2. Routing: Sec-led.
+  **Classification:** `[Architect / Sec joint]` (lands at §4 routing flag (a); RT-11)
+- **(q) Sec — Staleness-marker live-read at render time.** §2.6.5 reads §2.4.4 credential-error state live at render time; tenant-scoped read on §2.4.4 state surface; cross-tenant signal leak surface to verify. Source §2.6.5. Routing: Sec-led.
+  **Classification:** `[Architect / Sec joint]` (lands at §4 routing flag (a); RT-13)
+- **(r) Sec — Cron job tenant-scoping.** Per-tenant cron job; no cross-tenant data path in the generation worker; cron worker identity / authorization shape. Source §2.6.3. Routing: Sec-led.
+  **Classification:** `[Architect / Sec joint]` (lands at §4 routing flag (a); RT-09)
+- **(s) Sec product-disclaimer integration — PM-default ratified by Sec.** §2.6.5 marker IS the disclaimer in the monthly-report context (per-section + report-banner naming stale accounts); no additional static financial-product disclaimer rides on every report in V1. Sec reasoning: static disclaimer would (a) train banner-blindness over time and (b) dilute the §2.6.5 per-section staleness marker's signal value. Revisit if §2.6.3 in-app render ever sprouts a "share this report" affordance — that would be the trigger to add static disclaimer text.
+  **Classification:** `[Closure-trace process-record]` `[RESOLVED-AT-§2.6]`
+- **(t) No new ADR for §2.6 lock.** All §2.6 product decisions (ω / σ / τ / υ / φ / χ / ψ / α′) fold cleanly into PRD body + routing-flags per §2.4 precedent. ADR-005 settings store extension is **additive** (third additive field after §2.3.2 planning targets + §2.5.2 bracket schedules) with no scope amendment to ADR-005 itself; no ADR-007 surface emerges from any §2.6 lock.
+  **Classification:** `[Closure-trace process-record]` `[RESOLVED-AT-§2.6]`
+- **(u) Security Reviewer — §2.6 at-lock verdict recorded.** Pass-with-comments recorded 2026-05-17. **Sixth at-lock Sec pass** across PRD §2 (§2.1.7 / §2.2.4 / §2.3.5 / §2.4.5 / §2.5.5 / §2.6.6); no veto, no required revisions. Five prior Sec axes hold (tenant-isolation read-path framing; multi-scope-ownership-as-data-attribute-not-isolation-boundary canonical clause; `tax_treatment`-attribute-as-inclusion-filter where §2.6 inherits §2.5-grade classes; write-path-RLS shape extended to §2.6.2 commentary per §2.4.5 precedent; staleness-live-read cross-tenant-signal-leak as new verification surface at §2.6.5). **NEW Sec axis elevated at §2.6 — snapshot store as persisted derivative surface** of underlying sensitive-data classes (first derivative-persistence layer in §2; Sec recommends §4 carries a dedicated "Derivative persistence surfaces" sub-section rather than annotating per-class). **Sensitive-data classes update for §4 matrix:** §2.6 adds two new classes — Rebalancing Targets free-text commentary (medium-to-high sensitivity; captures F/CTO strategy reasoning alongside actionable financial decisions; tenant-scoped; XSS surface on rendered commentary) + owner-identification trust-name string (low individual sensitivity but identity-correlate when aggregated; rendered on every PDF; XSS surface on rendered header) — plus one cross-cutting **derivative-surface annotation** across multiple existing classes (snapshot store denormalizes Realized + Unrealized Tax Liability + marginal-rate scalars + tax-character categorization + aggregate unrealized G/L by tax_treatment + NAV + allocation deltas + cash flow into single rows; retention sprawl + blast-radius widening + render-time staleness join compound the per-class isolation requirements). Running total entering §3 / §4: thirteen entries (twelve effective classes plus the cross-cutting derivative-surface annotation). **Seven forward-looking comments** for §4 drafting + Phase 3 RLS surfaces: (i) cross-tenant snapshot store leak verification (query by target-month / report_id / joined view — three sub-tests); (ii) cross-tenant staleness-state-read leak verification (poison-test that §2.6.5's render-time join from snapshot's account_id to §2.4.4 credential-error state never reads cross-tenant credential state — most subtle test in the §2.6 suite); (iii) cross-tenant cron worker context isolation (cron worker must establish `tenant_id` context before any source-data read or snapshot-store write; instrument SQL log to assert tenant_id WHERE on every query; concurrent multi-tenant cron jobs assert disjoint writes); (iv) owner-identification settings-store write-path input sanitization (XSS / SQL injection / oversize PDF-OOM / Unicode control / RTL / homoglyph battery); (v) commentary write-path input sanitization on free-text editor (same battery as (iv); plus copy-from-prior-month must re-validate not bypass); (vi) PDF-generation worker-process tenant-isolation verification (shared Puppeteer / wkhtmltopdf worker pool must not leak fonts / DOM / auth headers / metadata across tenant renders); (vii) snapshot regeneration race condition (concurrent regenerations on same `(tenant_id, target-month)` produce exactly one row with last-writer-wins or transactional rejection; cross-tenant concurrency assert no cross-tenant data mixing). Sec re-engagement: **§3 architectural overview consult** (Phase 1 Step 4); **§4 primary author** (Sec-led, mandatory next engagement — largest single Sec task in Phase 1, where the seven Phase 3 RLS test candidates + thirteen-class sensitive-data matrix + six canonical Sec axes land); **Phase 3 RLS reviews** per-PR for any migration touching RLS / snapshot store / cron worker context binding / PDF render path / settings store / commentary write path.
+  **Classification:** `[Closure-trace process-record]` `[RESOLVED-AT-§2.6]`
+
+### §3 (Success metrics) routing flags
+
+- **(a) Architect — §2.6 monthly-report render latency / performance threshold.** §3 commits to the *shape* (V1 must render the §2.6 monthly report within an acceptable latency budget) but not the *number*. Architect Phase 3 sets the specific P95 / P99 page-render and PDF-export latency targets grounded in actual stack constraints (Supabase + Coolify + Puppeteer-or-equivalent PDF worker per §2.6.4 / §2.6.5 routing). F/CTO ratifies the budget.
+  **Classification:** `[Architect Phase 3]`
+- **(b) Architect / Sec joint — §3.3 parity-test fixture storage and test-environment handling.** The canonical parity fixtures contain real F/CTO financial values. Fixture storage location, redaction posture for test-environment runs, fixture-refresh cadence as the comparison month rolls forward, and access-control on the fixture artifacts are joint Architect + Sec decisions. §4 (Sec primary author) covers the posture; Architect Phase 3 picks the test-environment plumbing.
+  **Classification:** `[Closure-trace process-record]` `[RESOLVED-AT-§4]` (closed at §4 routing flag (j) + RT-15)
+- **(c) Architect — §3.2 binary-test data-model verification.** Each §3.2 metric (especially #1 multi-institution coverage, #2 mixed `tax_treatment` + jurisdictions, #4 two-level taxonomies on holdings AND cash-flow) is a binary test against the V1 data model. Architect Phase 3 confirms the V1 schema supports the test (every account carries `tax_treatment`, `ownership_scope`, `(cat, sub_cat)` tuples; every transaction carries `(cat, sub_cat)` + `tax_character`) and that the test runs efficiently as the data grows.
+  **Classification:** `[Architect Phase 3]`
+- **(d) Sec — §3.4(c) shadow-workflow tear-down posture for existing-system retirement.** When the F/CTO retires the existing manual-spreadsheet system per §3.4(c), the data-export / archive / decommissioning of the existing Google Sheets has Sec posture implications: where does the historical NAV import from §2.1's Architect routing flag *terminate*; does the F/CTO retain a read-only archive of the existing spreadsheets and if so where + with what access controls; is there a tear-down playbook that ensures the existing system stops being a working data source rather than just being unused; is there a snapshot of the existing system's state at V1-final cutover for audit. §3.4 commits to the migration-completion test; §4 covers the posture of how data leaves the existing system safely.
+  **Classification:** `[Closure-trace process-record]` `[RESOLVED-AT-§4.6]` (closed at §4.6 shadow-workflow tear-down bullet)
+- **(e) Sec — §3.3 parity-fixture sensitive-data handling.** Distinct from (b)'s test-environment plumbing: this flag covers the fact that `Finance_Report_2026_04.pdf` and the Asset Summary workbook are themselves *sensitive-data artifacts* — they contain the F/CTO's real financial values across every account category. §3 commits to parity-testing against these fixtures; §4 commits to the posture for handling them (where they live, how they're versioned, who or what process can read them, redaction-or-not for CI environments).
+  **Classification:** `[Closure-trace process-record]` `[RESOLVED-AT-§4]` (closed at §4 routing flag (j) + RT-15)
+- **(f) Boundary note — §3 does NOT enumerate the thirteen sensitive-data classes.** Per §2.6 lock's running total (twelve effective classes plus the cross-cutting derivative-surface annotation), the sensitive-data classes inventory has grown across §2.1 → §2.6 lock entries. §3 deliberately does not re-enumerate or re-classify these — that is §4's territory per the §2.6 Sec re-engagement note. This routing-flag entry exists to make the §3 → §4 boundary explicit and to prevent §3-vs-§4 territorial drift.
+  **Classification:** `[Closure-trace process-record]` `[RESOLVED-AT-§4.4]` (self-closes — §4.4 carries the 14-class inventory)
+
+### §4 (Security and compliance posture) routing flags
+
+- **(a) Architect — RLS implementation across the §4.5 Phase 3 RLS test catalog.** §4.5 enumerates 14 V1-mandatory RLS tests (RT-01 through RT-15, RT-07 vacant); Architect Phase 3 lands the migrations, the policies, and the test fixtures. **Mandatory Sec joint review at PR time per §4.1 write-path RLS symmetry posture.** Routing: ADR-002 §8.0 Architect flag with mandatory Sec PR-time joint review.
+  **Classification:** `[Architect / Sec joint]`
+- **(b) Architect — Plaid access-token storage shape (SD-03 credential-class implementation).** Application-layer encryption, KMS-backed, audit log on rotation, tenant-scoped non-negotiable per §2.4.4 + §4.2. Server-side deletion on Item-deletion per SD-03 retention posture `bounded-Item-active-only`. **Sec-led for the protection class, Architect-led for the implementation shape.** Routing: ADR-002 §8.0 Sec-led flag, mandatory Architect implementation review.
+  **Classification:** `[Architect / Sec joint]`
+- **(c) Architect / Sec joint — Plaid webhook signature verification (verified at RT-05).** Carry-forward from §2.4 Task #33 routing flag #11; now surfaces as a critical-severity §4.5 test row (RT-05). Mandatory before any production credential-state mutation lands via webhook. **Hard Sec hard-line: no V1 ship without RT-05 implemented and passing.** Routing: ADR-002 §8.0 Sec/Architect joint, mandatory Sec sign-off before V1 ship.
+  **Classification:** `[Architect / Sec joint]` (Sec hard-line; V1-ship-gate)
+- **(d) Architect — Encryption-at-rest evaluation per `tenant-scoped-with-app-encryption` class assignments.** §4.4 column 5 sets the per-class storage protection class with a closed enum; SD-07 Realized + Unrealized Tax Liability scalar values is the sole V1 class carrying `tenant-scoped-with-app-encryption`. Architect Phase 3 picks the encryption mechanism (per-tenant key derivation, KMS-backed, etc.) for SD-07; Sec posture locks the requirement at the class. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(e) Architect — Item-state metadata 90-day rolling prune mechanism (SD-02).** Sec posture commits to the bounded window per Q3a Option α + N = 90 days; Architect Phase 3 picks the prune mechanism (scheduled job vs trigger-on-write vs background sweep). Verification of pruning correctness is NOT a §4.5 test row (pruning-mechanism correctness is implementation-shape, not RLS-shape); Sec joint PR review at implementation time. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(f) Architect — Audit-log architecture (V1 baseline + V2 cold-storage rollover forward-compat).** Per Q3a Option α — V1 commits to indefinite audit-log retention with V2 cold-storage rollover forward-compat; Architect Phase 3 picks the audit-log storage shape, the V2 cold-storage rollover mechanism (and whether V1 ships any scaffolding for it), and the per-class audit-event taxonomy. Audit-log surfaces are the implementation home for the rotation-audit commitment on SD-03 (per routing flag (b)) and any other per-class audit-event requirements that surface at Phase 3. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(g) Architect — Cron worker tenant-context binding mechanism (verified at RT-09).** Carry-forward from §2.6 lock routing flag (vi). §4.5 RT-09 verifies; §4.1 + §4.6 reaffirm the posture. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(h) Architect — PDF-generation worker tenant-isolation mechanism (verified at RT-10).** Carry-forward from §2.6 lock routing flag (vi) variant. Shared Puppeteer / wkhtmltopdf worker pool must not leak fonts / DOM / auth headers / metadata across tenant renders. Routing: ADR-002 §8.0 Architect flag, non-F/CTO-led.
+  **Classification:** `[Architect Phase 3]`
+- **(i) Architect / Sec joint — Snapshot regeneration race condition (verified at RT-14).** Carry-forward from §2.6 lock routing flag (vii). RT-14 verifies; transactional / last-writer-wins semantics (Architect picks) + cross-tenant disjoint-write assertion + staleness-marker live-read coupling preservation. Routing: ADR-002 §8.0 Architect/Sec joint, non-F/CTO-led.
+  **Classification:** `[Architect / Sec joint]`
+- **(j) Architect / Sec joint — Parity-fixture storage and test-environment plumbing (verified at RT-15).** Carry-forward from §3 (b) Architect/Sec joint. §4.6 commits to the Sec posture; Architect Phase 3 picks the test-environment plumbing; RT-15 verifies the posture holds. **Closes §3 (b) at §4 lock.**
+  **Classification:** `[Architect / Sec joint]` (closes §3 routing flag (b))
+- **(k) Sec — V2-ship-gate Sec-consult inventory (consolidated).** Four forward-Sec-consult flags carried forward: (i) pre-emptive Plaid re-auth reminders V2-ship-gate (phishing-surface evaluation; §5.4 origin); (ii) email/SMS report delivery V2-ship-gate (delivery-surface evaluation; §5.6 origin); (iii) shared-link delivery to external viewers V2-ship-gate (derivative-persistence surface per SD-13 axis; possible §6 advisor-axis re-litigation; §5.6 origin); (iv) spend-cap / API-quota alerting V2-implementation Sec-consult (sync-availability intersection with §2.4 re-auth flow; §7.1 (a) origin). **Closes §7 (a) V2-implementation surface at §4 lock (the flag lives forward at §4.6 V2-ship-gate inventory).** Routing: ADR-002 §8.0 Sec-led flags, all V2-gate.
+  **Classification:** `[Sec V2-implementation]` (consolidated inventory; closes §7 routing flag (a))
+- **(l) Boundary note — §4.4 ↔ §4.5 bidirectional cross-reference (validated at stage 2).** §4.4 column 8 forward-points to §4.5 Test IDs; §4.5 Related Class IDs column points back at §4.4 Class IDs. Bidirectional cross-reference validated at stage-2 cross-reference pass; one-way pointer findings resolved (SD-02 → RT-02 single-pointer is correct because pruning-mechanism verification is routing flag (e), not a test row; SD-13 cross-cutting annotation pointers populated to RT-08/09/10/13/14). No upstream/downstream section edit required.
+  **Classification:** `[Closure-trace process-record]` `[RESOLVED-AT-§4]`
+- **(m) Boundary note — §4 ↔ §7 forward-pointer reciprocation closed at §4 lock.** §7.1 (a) spend-cap mechanism Sec-consult landed at §4 routing flag (k)(iv); §7.2 isolation-at-scale lands at §4.1; availability/uptime per Q3b lands at §4.6. **Surgical edit at §4 lock:** one line appended to §7.1 routing flag (a) reciprocating §4.6 V2-ship-gate inventory landing (parallel to §7.3's reciprocation of §5.7 closing §5 routing flag (e)). **Closes §7 routing flag (e) at §4 lock.**
+  **Classification:** `[Closure-trace process-record]` `[RESOLVED-AT-§4]` (closes §7 routing flag (e))
+- **(n) Boundary note — §4.6 ↔ §2.6.4 χ-1 retention cross-reference.** §2.6.4 χ-1 locks indefinite retention on monthly-report snapshots; SD-12 row in §4.4 traces to χ-1; §4.6 data-retention sub-section cross-references χ-1 in the retention bullet covering snapshot-side commitments. No §2.6.4 body revision.
+  **Classification:** `[Closure-trace process-record]` `[RESOLVED-AT-§4.6]`
+- **(o) Boundary note — §4 closes ADR-002 §7.0 gaps #4 (security and compliance posture) + #6 (offline / availability tolerance) at V1 baseline; partial close of #5 (data retention).** Gap #5 split: snapshot-side retention is §2.6.4 χ-1 (closed); non-snapshot retention is §4.4 retention-posture column (closed at §4 lock per Q3a Option α). All three gaps documented as closed in the ADR-002 §7.0 traceability at §4 lock-time (no ADR-002 body revision; Appendix A absorption deferred to future housekeeping PR — closure documentation lives here at routing flag (o) and at §4.6 retention/availability/incident-handling bullets).
+  **Classification:** `[Closure-trace process-record]` `[RESOLVED-AT-§4]` (closes ADR-002 §7.0 gaps #4 + #6 + partial-#5)
+- **(p) Boundary note — §3 (b) + §3 (d) + §3 (e) Sec routing flags from §3 lock all close at §4 lock.** §3 (b) test-environment plumbing closes at routing flag (j) above; §3 (d) shadow-workflow tear-down posture for existing-system retirement closes at §4.6; §3 (e) parity-fixture sensitive-data handling closes at routing flag (j) + RT-15. **Closes §3 (b), (d), (e) at §4 lock.** §3 (f) boundary-marker (§3 does NOT enumerate the 14-class inventory) self-closes by §4.4 carrying the 14-class inventory.
+  **Classification:** `[Closure-trace process-record]` `[RESOLVED-AT-§4]` (closes §3 routing flags (b)/(d)/(e)/(f))
+
+### §5 (V2 deferred candidates) routing flags
+
+- **(a) Sec — Pre-emptive Plaid re-auth reminders pre-V2 ship.** Per §5.4 + §2.4.4 lock carry-forward. When V2 ships pre-emptive re-auth reminders, Sec consult required for phishing-template surface (counterfeit re-auth prompt risk). V1 reactive-only cadence trades a bounded stale-data window against a narrower phishing surface; relaxing the cadence requires explicit Sec sign-off.
+  **Classification:** `[Sec V2-implementation]` (lands at §4.6 V2-ship-gate inventory item (i))
+- **(b) Sec — Email / SMS delivery of monthly reports pre-V2 ship.** Per §5.6. Introduces a new delivery channel V1 does not exercise; report content rendered into transit message body is a new sensitive-data exfiltration surface — especially over SMS which is plaintext, but also over email where transit-layer encryption is best-effort and at-rest encryption at recipient mail servers is uncontrolled. Sec re-engagement required before V2 ship.
+  **Classification:** `[Sec V2-implementation]` (lands at §4.6 V2-ship-gate inventory item (ii))
+- **(c) Sec — Shared-link delivery of reports pre-V2 ship.** Per §5.6. Distinct from (b) — shared-link surfaces intersect multi-tenant + access-control scope and potentially the §6 advisor-role boundary at V2. Sec re-engagement + possible ADR re-litigation against §6 advisor-role boundary required before V2 ship.
+  **Classification:** `[Sec V2-implementation]` (lands at §4.6 V2-ship-gate inventory item (iii))
+- **(d) Boundary note — TLH home is §6 pending §6 body drafting.** ADR-007 (drafted alongside this §5 lock) ratifies the reclassification of tax-loss-harvesting recommendations from V2+ trajectory (ADR-002 Finding (b)) to permanent non-goal (§6 home, under the advisor-role axis of ADR-002 §3.0). §5.5 does not list TLH; §6 body draft (later thread) will enumerate TLH alongside the existing ADR-002 §3.0 permanent non-goals. No V1 block.
+  **Classification:** `[Closure-trace process-record]` `[RESOLVED-AT-§6.3]` (§6.3 enumerates TLH under advisor/fiduciary axis)
+- **(e) Boundary note — §5 → §7.3 cross-reference.** §5.7's multi-user invite-only V2 expansion entry intersects §7.3's (single-user V1, invite-only forward-compat) usage-model stub. §7.3 will reference §5.7 at §7 drafting time; no §5 body revision expected from §7 lock.
+  **Classification:** `[Closure-trace process-record]` `[RESOLVED-AT-§7.3]` (§7.3 reciprocates §5.7)
+- **(f) Architect — V2+ items requiring schema or migration scope decisions (general flag).** §5 enumerates capabilities, not implementation strategies. At V2-scoping time (post-V1 ship), Architect will need to assess which §5 items require additional schema fields versus which can extend the existing ADR-005 settings store, the §2.x data model with additive columns, or the V1 multi-level taxonomy tables forward-compat-shaped per ADR-004 Decision C. No V1 block.
+  **Classification:** `[Architect Phase 3]` (V2-scoping-phase, not Phase 3-immediate)
+
+### §6 (Out-of-scope for this PRD lifecycle) routing flags
+
+- **(a) Boundary note — §6 ↔ §1.4 framing alignment (resolved at §6 lock per Q5-a).** PRD §1.4 line-58 received a surgical edit aligning it with the permanent-non-goal-under-product-identity-axis framing: the advisor/fiduciary role specifically is a permanent product-identity non-goal cross-referenced to §6, distinct from the other §1.4 deferrals which remain scope boundaries / V2+ trajectory items.
+  **Classification:** `[Closure-trace process-record]` `[RESOLVED-AT-§6]`
+- **(b) Boundary note — §6 ↔ §5 distinction.** §5 enumerates V2+ trajectory items; §6 enumerates permanent non-goals under product-identity axes. Re-routes between §5 and §6 happen via surgical ADR amendment under the §5/§6 axis-as-product-identity-boundary pattern (ADR-007 precedent). Inverse re-routes (§6 → §5) are possible in principle per ADR-007 future-housekeeping clause. Mirrors §5's routing flag (d) TLH boundary note from the §5-side.
+  **Classification:** `[Boundary note]` (forward-operative)
+- **(c) Boundary note — §6 ↔ §3.5 distinction.** §6 enumerates capability-shaped non-goals; §3.5 enumerates measurement-shaped non-metrics. Disjoint by construction per §3.5's locked closing paragraph.
+  **Classification:** `[Boundary note]` (forward-operative)
+
+### §7 (Constraints) routing flags
+
+- **(a) Sec — Spend-cap / API-quota alerting posture as cost-protection control (V2-implementation forward-consult).** If the §7.1 ≤ $50/month target is operationalized as a runtime cost-protection control (auto-disable Plaid sync at threshold, alert at threshold, quota-tripped sync degradation, etc.), the implementation shape of that control has a Sec dimension: a quota-tripped auto-disable on the Plaid sync path creates an availability-shaped failure mode that intersects the §2.4 / §5.4 re-auth flow (where the V1 stale-data window vs phishing-surface tradeoff is already locked). Sec consult required before any spend-cap mechanism that affects sync availability ships. The PRD-locked §7.1 commitment is the *target*, not the protection mechanism; this flag fires only if/when a runtime cost-protection control is proposed. No V1 block. §4.6 V2-ship-gate Sec-consult inventory item (iv) lands this flag at §4 lock; closure documented at §4 routing flag (k)(iv) + (m).
+  **Classification:** `[Closure-trace process-record]` `[RESOLVED-AT-§4]` (V2-implementation surface closed at §4 routing flag (k)(iv); flag lives forward at §4.6 V2-ship-gate inventory)
+- **(b) Architect — V1 scale dimensions (Phase 3 forward-pointer).** The three §7.2 scale dimensions (historical-data depth, snapshot-store growth, Plaid sync throughput) plus the RLS query-shape forward-pointer all resolve at Architect Phase 3. PRD §7.2 commits to the posture (scale dimensions are first-class from day one); the implementation shapes are downstream. No V1 PRD block.
+  **Classification:** `[Architect Phase 3]`
+- **(c) Boundary note — §7.2 ↔ §6.4 daily-snapshot cross-reference.** §6.4 establishes daily-snapshot data shape as permanent product-identity boundary; §7.2's snapshot-store-growth bullet is the natural cost-side consequence of that boundary at V1 scale. Normal cross-reference; no §6.4 edit needed.
+  **Classification:** `[Boundary note]` (forward-operative)
+- **(d) Boundary note — §5 routing flag (e) closed at §7.3 lock.** §5 routing flag (e) pre-committed the §5 → §7.3 cross-reference at §5 lock ("§7.3 will reference §5.7 at §7 drafting time; no §5 body revision expected from §7 lock"). §7.3's reciprocation of the §5.7 cross-reference closes that flag; no §5 body revision required.
+  **Classification:** `[Closure-trace process-record]` `[RESOLVED-AT-§7.3]` (closes §5 routing flag (e))
+- **(e) Boundary note — §7 ↔ §4 routing.** Three §7 surfaces forward-point to §4 (Sec primary author next): the §7.1 (a) spend-cap mechanism (Sec consult at V2-implementation time), the §7.2 isolation-at-scale posture (Sec primary at §4), and any availability/uptime commitments (Sec primary at §4 per Q3 boundary lock). §7 enumerates the constraints; §4 owns the postures.
+  **Classification:** `[Closure-trace process-record]` `[RESOLVED-AT-§4]` (§4 lands all three forward-points)
+
+### §8 (V1 milestone framing) routing flags
+
+- **(a) Boundary note — §3.4 → §8 forward-pointer closure at §8.3.** §3.4's closing line ("§8 (V1 milestone framing) will reference §3.4 as the criterion source and will add the milestone-sequencing scaffolding…") closes at §8.3 by reciprocation. No §3.4 body revision required; §8.3's reciprocation is the closure.
+  **Classification:** `[Closure-trace process-record]` `[RESOLVED-AT-§8.3]`
+- **(b) Boundary note — §1.4 → §8 forward-pointer closure at §8.3.** §1.4's V1 existing-system-replacement test bullet ("Per the §8 V1-done definition, V1 is correct when it replicates the workflows…") closes at §8.3 by reciprocation. No §1.4 body revision required; §8.3's reciprocation is the closure. *Note: source-§8 reference was to §1.3; the V1-correctness content moved to §1.4 during PR 2 / §1 rewrite. Section-drift correction applied per PR 9 Q-S7 α-extended override.*
+  **Classification:** `[Closure-trace process-record]` `[RESOLVED-AT-§8.3]`
+- **(c) Boundary note — ADR-002 §7.0 gap #4 milestone-framing dimension closure at §8.3.** ADR-002 §7.0 missing-content gap #4 ("V1 done definition") was closed at §3.4 at the *criteria* level (per §3 lock acceptance flags); §8.3 closes the same gap at the *milestone-framing* level (which sub-version closes which criterion, per the §8 → Phase 4 handoff at routing flag (d) below). Parallel to §4.6 routing flag (o)'s closure-documentation pattern. Documentation closure at §8 lock-time; no ADR-002 body revision (Appendix A absorption deferred per the §4 lock housekeeping convention at §4 routing flag (o)).
+  **Classification:** `[Closure-trace process-record]` `[RESOLVED-AT-§8.3]` (closes ADR-002 §7.0 gap #4 milestone-framing dimension)
+- **(d) Boundary note — §8 → Phase 4 / Linear backlog handoff.** Specific sub-version sequencing (which V1.x closes which §3.4 criterion, per-version capability boundaries, dependency ordering, one-session-granularity acceptance criteria per Linear convention) is Phase 4 (Scoping) / Linear-backlog territory per ADR-004 verbatim. §8 frames the scaffolding; Phase 4 owns the contents. **This boundary is the §8 → Phase 4 handoff anchor** — future Phase 4 work cites §8 as the milestone-framing source and §3.4 as the V1-done criteria source.
+  **Classification:** `[Boundary note]` (forward-operative; Phase 4 handoff anchor)
+- **(e) Boundary note — §8 ↔ §4.6 cross-reference shape.** §8.2 cross-references §4.6's shadow-workflow tear-down posture and availability / non-silent-staleness commitment; §4.6 commits to the Sec posture (existing system stops being a working data source, no dual-write, F/CTO retains read-only archive, snapshot at V1-final cutover for audit; best-effort uptime with §2.4.4 non-silent-staleness as user-facing availability commitment), §8.2 commits to the *user-continuity mechanic* during transition that makes §4.6 posture user-survivable. Reciprocation is one-way at §8 lock (§8 → §4.6); no §4.6 body revision required because §4.6 already commits to the posture, §8.2 just names the transition mechanic that consumes it.
+  **Classification:** `[Boundary note]` (forward-operative; one-way reciprocation at §8 lock)
 
 ## Appendix C — Story Trace Index
 
