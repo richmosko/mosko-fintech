@@ -37,6 +37,19 @@ Project work is tracked in **Linear**, organized as initiatives → projects →
 
 To find out what phase the project is in, what's locked, and what's next: read the header and changelog of `WORKFLOW.md`.
 
+## In-flight: HTML doc conversion (scaffolded; content migration pending)
+
+PR A landed the scaffolding for `docs/PRD/`, `docs/ARCH/`, `docs/SECURITY/`, `docs/_assets/` per [ADR-009](DECISIONS.md#adr-009) (Decisions 3+4+5). These directories contain placeholder `index.html` files showing the locked conventions; **content migration is PR B** (still pending). `PRD.md` remains the live source of truth until PR B lands.
+
+- `docs/PRD/index.html` — mosko §1–§8 schema; §4/§5/§8 marked for relocation per Decision 4.
+- `docs/SECURITY/index.html` — receives migrated PRD §4 in PR B (V1 Sec canonical reference per ADR-008).
+- `docs/ARCH/index.html` — content drafted in Phase 3 by Architect.
+- `docs/_assets/style.css` — shared styling.
+- `docs/_assets/mermaid.min.js` — vendored Mermaid runtime (no CDN; per Decision 5 sub-decision 3).
+- `docs/_assets/mermaid-init.js` — vendored-load initializer.
+
+After PR B + PR C land, the reading-order block above will narrow to a compact-ledger auto-load model per [ADR-009 Decision 6](DECISIONS.md#adr-009) (MILESTONES.md anchor; everything else consult-on-demand).
+
 ## When in doubt
 
-If unsure which agent role applies to a request, default to **Chief of Staff** behavior: orchestrate, ask which role the human wants to invoke, or escalate. Don't execute as a generic assistant — that's the role-collapse failure mode.
+If unsure which agent role applies to a request, **default to team-lead behavior** (per [ADR-009 Decision 1](DECISIONS.md#adr-009) — CoS role absorbed into the main session as team-lead): orchestrate, ask which role the human wants to invoke, or escalate. Don't execute as a generic assistant — that's the role-collapse failure mode.

@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>mosko-fintech — Security and Compliance Posture</title>
+  <link rel="stylesheet" href="../_assets/style.css">
+  <script defer src="../_assets/mermaid.min.js"></script>
+  <script defer src="../_assets/mermaid-init.js"></script>
+</head>
+<body>
+
+<header class="doc-header">
+  <h1>mosko-fintech — Security and Compliance Posture</h1>
+  <p class="doc-subtitle">V1 canonical Sec reference layer per <a href="../../DECISIONS.md#adr-008">ADR-008</a>.</p>
+  <div class="doc-meta">
+    <span><strong>Owner:</strong> <code>seceng</code> agent</span>
+    <span><strong>Status:</strong> Scaffolding (content migrates from PRD §4 in PR B)</span>
+    <span><strong>Traces to:</strong> <a href="../PRD/">PRD</a> / <a href="../ARCH/">ARCH</a> / <a href="../../DECISIONS.md#adr-008">ADR-008</a></span>
+    <span><strong>Last updated:</strong> <span class="tbd">—</span></span>
+  </div>
+</header>
+
+<nav class="toc">
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#sec-4-1">§4.1 Isolation axes (6 canonical)</a></li>
+    <li><a href="#sec-4-2">§4.2 RLS architecture</a></li>
+    <li><a href="#sec-4-3">§4.3 Staleness / derivative-persistence</a></li>
+    <li><a href="#sec-4-4">§4.4 Sensitive-data classification matrix (14 entries)</a></li>
+    <li><a href="#sec-4-5">§4.5 RLS test catalog (15 entries; RT-02 + RT-05 critical-severity V1-block)</a></li>
+    <li><a href="#sec-4-6">§4.6 Retention / availability / incident-handling posture</a></li>
+    <li><a href="#boundaries">Trust boundaries (cross-ref from ARCH)</a></li>
+  </ol>
+</nav>
+
+<!-- SCAFFOLDING NOTE (delete in PR B):
+     PR A scaffolding skeleton receiving migrated PRD §4 content in PR B per
+     ADR-009 Decision 4. Conventions in this skeleton mirror PRD/index.html. -->
+
+<section id="sec-4-1" data-section="isolation-axes">
+  <h2>§4.1 Isolation axes — six canonical</h2>
+  <p class="section-hint">V1 isolation primitives per <a href="../../DECISIONS.md#adr-008">ADR-008</a> Decision 1.</p>
+  <div class="migration-stub">Content migrated from <code>PRD.md</code> §4.1 verbatim in PR B. Six axes: (i) <code>tenant_id</code> isolation boundary; (ii) multi-scope ownership attribute; (iii) <code>tax_treatment</code> inclusion-filter attribute; (iv) write-path RLS symmetry; (v) staleness-live-read cross-tenant signal leak; (vi) snapshot derivative-persistence.</div>
+</section>
+
+<section id="sec-4-2" data-section="rls-architecture">
+  <h2>§4.2 RLS architecture</h2>
+  <p class="section-hint">How tenant scoping is enforced at the database policy layer.</p>
+  <div class="migration-stub">Content migrated from <code>PRD.md</code> §4.2 verbatim in PR B.</div>
+</section>
+
+<section id="sec-4-3" data-section="staleness-derivative">
+  <h2>§4.3 Staleness / derivative-persistence surfaces</h2>
+  <p class="section-hint">Snapshot-side derivative-persistence handling; staleness-live-read posture.</p>
+  <div class="migration-stub">Content migrated from <code>PRD.md</code> §4.3 verbatim in PR B (incl. β′ resolution from v1.30 verify-pass VP-2/12).</div>
+</section>
+
+<section id="sec-4-4" data-section="sd-matrix">
+  <h2>§4.4 Sensitive-data classification matrix</h2>
+  <p class="section-hint">14 entries (SD-00 through SD-13) in §2-traceability order. 8 columns. Locked at <a href="../../DECISIONS.md#adr-008">ADR-008</a> Decision 2.</p>
+
+  <div class="migration-stub">
+    Content migrated from <code>PRD.md</code> §4.4 in PR B. Convention example below (CSS tier classes; semantic IDs <code>id="sd-NN"</code>):
+  </div>
+
+  <table class="data-matrix sensitive-data">
+    <thead>
+      <tr>
+        <th>Class ID</th>
+        <th>Class name</th>
+        <th>Source-§</th>
+        <th>Sensitivity tier</th>
+        <th>Storage protection class</th>
+        <th>Retention posture</th>
+        <th>V1-acceptable disclosure surfaces</th>
+        <th>Phase 3 forward-pointer ID</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr id="sd-12" class="tier-high storage-tenant-scoped-derivative">
+        <td>SD-12</td>
+        <td><em>(example row)</em> Snapshot account name</td>
+        <td>§2.6</td>
+        <td>high</td>
+        <td>tenant-scoped-derivative</td>
+        <td><span class="tbd">—</span></td>
+        <td><span class="tbd">—</span></td>
+        <td><a class="forward-pointer" href="#app-b-sd-12">[App B-SD-12]</a></td>
+      </tr>
+      <tr class="tbd"><td colspan="8" class="tbd">14 rows total — migrated in PR B</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="sec-4-5" data-section="rt-catalog">
+  <h2>§4.5 RLS test catalog</h2>
+  <p class="section-hint">15 entries (RT-01 through RT-15; RT-07 reserved-vacant; 14 active). 7 columns. Locked at <a href="../../DECISIONS.md#adr-008">ADR-008</a> Decision 3. <strong>V1-block threshold:</strong> <code>critical</code> severity only — expected V1 critical-severity count = 2 (RT-02 + RT-05).</p>
+
+  <div class="migration-stub">Content migrated from <code>PRD.md</code> §4.5 in PR B.</div>
+
+  <table class="data-catalog rls-tests">
+    <thead>
+      <tr>
+        <th>Test ID</th>
+        <th>Surface</th>
+        <th>Test description</th>
+        <th>Test category</th>
+        <th>Source-§</th>
+        <th>Severity if violated</th>
+        <th>Related Class IDs</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr id="rt-02" class="severity-critical">
+        <td>RT-02</td>
+        <td><em>(example row)</em> Plaid Item table RLS</td>
+        <td><span class="tbd">—</span></td>
+        <td>read-path-RLS</td>
+        <td>§2.4</td>
+        <td><strong>critical</strong></td>
+        <td>SD-03</td>
+      </tr>
+      <tr id="rt-13" class="severity-high">
+        <td>RT-13</td>
+        <td><em>(example row)</em> Cross-tenant staleness-state leak</td>
+        <td><span class="tbd">—</span></td>
+        <td>read-path-RLS</td>
+        <td>§2.6</td>
+        <td>high</td>
+        <td>SD-12 / SD-00 / SD-01</td>
+      </tr>
+      <tr class="tbd"><td colspan="7" class="tbd">15 rows total — migrated in PR B (incl. β′ RT-13 update from v1.30 verify-pass)</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="sec-4-6" data-section="retention-availability">
+  <h2>§4.6 Retention / availability / incident-handling posture</h2>
+  <p class="section-hint">V1 baselines per <a href="../../DECISIONS.md#adr-008">ADR-008</a> Decision 4. Closes <a href="../../DECISIONS.md#adr-002">ADR-002</a> §7.0 gaps #4 + #6 + partial-#5.</p>
+  <div class="migration-stub">Content migrated from <code>PRD.md</code> §4.6 verbatim in PR B.</div>
+</section>
+
+<section id="boundaries" data-section="boundaries">
+  <h2>Trust boundaries (cross-ref anchor for ARCH)</h2>
+  <p class="section-hint">Linked from <a href="../ARCH/#topology">ARCH §5 Deployment Topology</a>. Per Phase 3, Architect surfaces trust-boundary diagrams that cross-reference this section.</p>
+  <pre class="mermaid">
+flowchart LR
+  user((F/CTO solo user)) -.->|TLS / Supabase Auth| edge[Edge / Vercel]
+  edge -.->|RLS-enforced queries| api[API service]
+  api -.->|tenant_id scoping<br/>per ADR-008 axis i| db[(Supabase / Postgres)]
+  api -.->|Plaid access-token<br/>SD-03| plaid[(Plaid API)]
+  classDef boundary stroke-dasharray: 5 5;
+  class user,edge,api,db,plaid boundary;
+  </pre>
+  <p class="section-hint"><em>Diagram is illustrative; concrete trust-boundary inventory lands at Phase 3 in <a href="../ARCH/">ARCH</a>.</em></p>
+</section>
+
+<footer class="doc-footer">
+  Owned by <code>seceng</code> agent. V1 canonical Sec reference layer per <a href="../../DECISIONS.md#adr-008">ADR-008</a>. Update via <code>/start-doc-update sec-…</code> branches per <a href="../../DECISIONS.md#adr-009">ADR-009</a> Decision 9.
+</footer>
+
+</body>
+</html>
