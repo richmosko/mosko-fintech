@@ -4,14 +4,19 @@ A personal fintech app run as a mini-business. The Founder/CTO is the human owne
 
 ## Read first, every session
 
-These documents are the project's source of truth. Read them in order before taking on any task:
+The project state-of-the-art lives in **`MILESTONES.md`** (compact state ledger; auto-loaded by the SessionStart hook per [ADR-009](DECISIONS.md#adr-009) Decision 6). The hook reads the head section (above `## Roadmap`) and injects it as session context — you don't need to manually open it.
 
-1. **`WORKFLOW.md`** — project map and execution log. Contains the eight-phase structure, agent roster, artifact list, current phase, and operating model. The header tells you which phase the project is currently in.
-2. **`DECISIONS.md`** — architectural and product decisions with rationale (when it exists; created in Phase 0.5 or Phase 1).
-3. **`PRD.md`** — product requirements (when it exists; created in Phase 1).
-4. **`ARCHITECTURE.md`** — system design (when it exists; created in Phase 3).
-5. **`CHANGELOG.md`** — per-version execution history for WORKFLOW.md (PR-level narrative; what landed in v1.NN). Consult on demand when answering "when did X land?" questions; not auto-loaded. Extracted from WORKFLOW.md on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6.
-6. **`docs/discovery-summary.md`** — the discovery conversation that produced WORKFLOW.md, captured as pivot points and principles. Background reading; not active context.
+Deeper context is **consult-on-demand** — read these only when the task requires them:
+
+1. **`MILESTONES.md`** — compact state ledger; auto-loaded; current phase + step + active feature + recent activity. **Read first** (auto-load handles this).
+2. **`WORKFLOW.md`** — project map: 10-phase structure (Phases 0 / 0.5 / 1–7) grouped under R/P/I+V outer categories per [ADR-009](DECISIONS.md#adr-009) Decision 2; agent roster; artifact list; operating model. Consult for "how do we operate" questions.
+3. **`DECISIONS.md`** — architectural and product decisions with rationale. Hybrid format (consolidation pattern + terse pattern per [ADR-009](DECISIONS.md#adr-009) Decision 8). Consult for "why did we choose X" questions.
+4. **`CHANGELOG.md`** — per-version PR-level execution history (extracted from WORKFLOW.md on 2026-05-23 per ADR-009 Decision 6). Consult for "when did X land?" / "what happened in v1.NN?" questions.
+5. **`PRD.md`** — product requirements. Will be converted to `docs/PRD/index.html` in PR B per [ADR-009](DECISIONS.md#adr-009) Decisions 3+4; until then `PRD.md` remains the live source of truth. Consult for "what V1 should do" questions.
+6. **`docs/PRD/`** / **`docs/ARCH/`** / **`docs/SECURITY/`** — HTML artifacts (scaffolded post-PR-A; PRD content migrates in PR B; ARCH + SECURITY content drafted in Phase 3). Consult for product / architecture / security detail.
+7. **`BACKLOG.md`** — V2 deferred candidates + Linear overflow queue (created via PR B per [ADR-009](DECISIONS.md#adr-009) Decision 4). Consult for "what's deferred to V2?" questions.
+8. **`docs/MILESTONE-FRAMING.md`** — V1 sub-version convention + drop-replace migration (created via PR B per [ADR-009](DECISIONS.md#adr-009) Decision 4). Consult for milestone-shape / V1.x sub-version questions.
+9. **`docs/discovery-summary.md`** — the discovery conversation that produced WORKFLOW.md, captured as pivot points and principles. Background; not active context.
 
 Per-directory `CLAUDE.md` files (e.g., `/api/CLAUDE.md`, `/supabase/CLAUDE.md`) provide scoped context when working inside those directories. They get created in Phase 5.
 
@@ -36,7 +41,7 @@ Project work is tracked in **Linear**, organized as initiatives → projects →
 
 ## Current state
 
-To find out what phase the project is in, what's locked, and what's next: read the header and changelog of `WORKFLOW.md`.
+To find out what phase the project is in, what's locked, and what's next: read `MILESTONES.md` head (auto-loaded by the SessionStart hook; the section above `## Roadmap`). Historical per-version PR narrative lives in `CHANGELOG.md` (consult on demand).
 
 ## In-flight: HTML doc conversion (scaffolded; content migration pending)
 
@@ -49,7 +54,7 @@ PR A landed the scaffolding for `docs/PRD/`, `docs/ARCH/`, `docs/SECURITY/`, `do
 - `docs/_assets/mermaid.min.js` — vendored Mermaid runtime (no CDN; per Decision 5 sub-decision 3).
 - `docs/_assets/mermaid-init.js` — vendored-load initializer.
 
-After PR B + PR C land, the reading-order block above will narrow to a compact-ledger auto-load model per [ADR-009 Decision 6](DECISIONS.md#adr-009) (MILESTONES.md anchor; everything else consult-on-demand).
+After PR B lands, `PRD.md` will be archived; the `docs/PRD/index.html` skeleton will fill with the migrated content; and the reading-order block above will reflect the final state.
 
 ## When in doubt
 
