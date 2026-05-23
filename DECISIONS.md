@@ -2,7 +2,331 @@
 
 Architectural Decision Records for mosko-fintech. Each entry captures a non-obvious choice: what was decided, what was considered, why.
 
-**Format.** One ADR per H2 heading, numbered sequentially. Newest at top. Entries are immutable once accepted — supersede via a new entry rather than rewriting an old one. Status values: `Proposed`, `Accepted`, `Superseded by ADR-NNN`, `Deprecated`.
+## Format
+
+mosko-fintech uses **two ADR patterns** per the policy locked at ADR-009 Decision 8. The pattern fits the decision shape; both patterns are first-class.
+
+### Consolidation pattern
+
+Used for: synthesis work, canonical-reference layers, multi-Decision territory establishment. Examples: ADR-002, ADR-008, ADR-009.
+
+**Structure:**
+
+- **Date** / **Status** / **Phase** preamble
+- **Context** — multi-paragraph framing of what surfaces the ADR and what's at stake
+- **Decisions** — numbered subjects (`### Decision 1 — <title>`, `### Decision 2 — <title>`, etc.), each with structured content (decision itself + rationale + alternatives considered + cross-references)
+- **Consequences** — downstream phase implications, pending tasks, supersession notes, ADR housekeeping
+
+### Terse pattern
+
+Used for: one-off decisions, simple supersessions, isolated choices that don't warrant consolidation ceremony.
+
+**Structure:**
+
+```
+### YYYY-MM-DD — <short decision title>
+**Decision:** <one sentence>
+**Why:** <one or two sentences>
+**Alternatives considered:** <bullets>
+**Approved by:** <name>
+**Supersedes:** <ref to prior decision, if any>
+```
+
+### Common conventions (apply to both patterns)
+
+- **One ADR per H2 heading**, numbered sequentially.
+- **Newest at top** (this file is read by scrolling down through history).
+- **Immutable once accepted.** Supersede via a new entry rather than rewriting an old one. Status values: `Proposed`, `Accepted`, `Superseded by ADR-NNN`, `Deprecated`.
+- **Cross-references** to other ADRs use `ADR-NNN` (e.g., "supersedes ADR-005"). Cross-references to PRD / WORKFLOW / SECURITY use anchor refs (e.g., `docs/PRD/index.html#sec-4-5`, `docs/SECURITY/index.html#rt-13`).
+
+---
+
+## ADR-009 — Selective adoption of richmosko/project_template patterns
+
+**Date:** 2026-05-23
+**Status:** Accepted
+**Phase:** 1 (Step 4 prep; lands the selective-adoption convention before Phase 3 entry; structural choices for the entire R/P/I+V outer frame going forward)
+
+**Context.** mosko-fintech was bootstrapped through Phases 0 and 0.5 with project-internal conventions: an 8-numbered-phase workflow model, multi-Decision ADR consolidation pattern, monolithic markdown source-of-truth files (`PRD.md`, `WORKFLOW.md`, `DECISIONS.md`), `chief-of-staff` as a spawnable orchestrator subagent, an explicit Visual Designer role separate from UX, and a `/ship-branch` skill encoding mosko-specific PR conventions. By the close of Phase 1 Step 3.5 (v1.30; PR 11), the project had accumulated 14 weeks of locked work across 30+ PRs: a full PRD spanning §1–§8 with three Appendices (114-entry forward-pointer index + 32-entry story trace index), eight accepted ADRs (ADR-002 through ADR-008), and a 298 KB WORKFLOW.md that exceeded Read's 256 KB byte limit (segment-reads only).
+
+F/CTO surfaced `richmosko/project_template` (a reusable Claude Code starter template authored by the same person, distinct from but referenced during mosko-fintech's bootstrap) as a candidate framework for adoption. The template ships an R/P/I/V four-phase model, a nine-specialist roster, an HTML doc-generation pipeline (`/generate-prd` / `/generate-archdoc` / `/generate-secdoc`), a feature-flow scheme (PRD → BACKLOG → Linear → MILESTONES), a `/start-doc-update` + `/finish-doc-update` doc-update flow, and a SessionStart hook that auto-loads only a compact MILESTONES.md head section.
+
+The brainstorm question: does mosko-fintech adopt the template's conventions wholesale, partially, or not at all? Wholesale adoption would invalidate the 14 weeks of locked Phase 1 work (PRD section schema, ADR pattern, agent roster, branch conventions all differ). No adoption would forgo the template's genuine improvements (compact-ledger auto-load model, feature-flow scheme, doc-update skill flow, HTML doc shape with Mermaid). The middle path — **selective adoption with explicit deviations preserved as load-bearing** — emerged early and became the framing throughout. F/CTO formalized the philosophy as `feedback_seed_not_constraint`: "project templates are seed material, not constraints; default to selective adoption + project-specific additions; capture meaningful deviations as feedback to the template repo."
+
+The brainstorm executed across three sessions (2026-05-21 / 2026-05-22 / 2026-05-23) and produced 17 locked structural decisions/sub-decisions. Mid-brainstorm, F/CTO surfaced a layered-persistence question — "are all these decisions getting logged somewhere?" — that produced a working brainstorm log at `temp/template-adoption-brainstorm.md` (gitignored; per `feedback_working_artifacts_temp_not_docs`) and a new memory `feedback_brainstorm_logging` codifying the convention. Six template-feedback entries also accumulated in `temp/project_template_feedback.md` for eventual upstream contribution to `richmosko/project_template`.
+
+This ADR consolidates the 17 brainstorm entries into 9 named Decisions that become canonical references for Phase 3+ work. The bullet-level conventions (CSS class taxonomy, branch-prefix mapping, filename pattern, etc.) elaborated below remain mutable through future revisions if the canonical references hold steady. New convention categories require ADR-009 amendment. This ADR supersedes nothing; it lands the selective-adoption convention as a parallel consolidation alongside ADR-002 / ADR-003 / ADR-004 / ADR-008.
+
+**Decisions.**
+
+### Decision 1 — Agent roster lock
+
+The mosko-fintech agent roster is **main session (acting as team-lead) + 9 specialist subagents**:
+
+| Role | Source | Notes |
+|---|---|---|
+| **team-lead** | Main session itself (not spawnable) | Absorbs orchestration responsibilities formerly held by spawnable `chief-of-staff` |
+| `product-manager` | Both mosko + template | Name aligned |
+| `architect` | Both | Name aligned |
+| `seceng` | Renamed from mosko's `security-reviewer` | Template-aligned name |
+| `ux-designer` | Both | Name aligned; scope is flows + IA only |
+| `visual-designer` | **mosko-specific addition** | Owns design tokens, typography, color, spacing; runs palette/typography F/CTO checkpoint; flags missing components back to UX |
+| `frontend-lead` | Template (new to mosko) | Phase 5+ |
+| `backend-lead` | Template (new to mosko) | Phase 5+ |
+| `qa-engineer` | Template (new to mosko) | Phase 5+ |
+| `devops-engineer` | Template (new to mosko) | Phase 5+ |
+
+**Dropped from prior roster:**
+
+- **Spawnable `chief-of-staff` subagent.** With `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`, the main session is addressable like any teammate, so the parallel-orchestration argument for a separate CoS subagent doesn't hold. Removes a confusing duplication where the main session was already operating as CoS and could also spawn one.
+
+**Skipped from template's roster:**
+
+- **`implementation-lead`** (template's CLI / library / ML / data-pipeline generalist). Not applicable to mosko-fintech's full-stack web app shape.
+
+**Visual Designer kept as mosko-specific because** the role encodes load-bearing discipline: a mandatory palette-and-typography checkpoint with the F/CTO before design-system lock, and a "flags missing components back to UX rather than designing around them" boundary that breaks the moment one head holds both roles. The template's single `ux-designer` doesn't encode this discipline. The deviation is logged to the template-feedback log (`temp/project_template_feedback.md` entry: "Visual Designer as a project-specific extension for trust-driven domains") for potential upstream contribution once Phase 2 actually exercises the role.
+
+### Decision 2 — Phase model under R/P/I+V outer frame
+
+Mosko-fintech keeps its 10 numbered phases (0, 0.5, 1, 2, 3, 4, 4.5, 5, 6, 7) and **groups them under template's R/P/I+V outer categories** as a non-destructive labeling addition:
+
+| Outer category (template) | Mosko phases | Notes |
+|---|---|---|
+| _(Meta-bootstrap)_ | 0, 0.5 | No template equivalent; pre-Research |
+| **Research** | 1, 2 | PRD + UX/Visual |
+| **Plan** | 3, 4, 5 | Technical Architecture + Project Scoping + Workshop Setup |
+| **Implement+Validate** | 4.5, 6, 7 | Agentic Flow Ramp + Build Loop + Deploy & Iterate |
+
+**Linear hierarchy correction:** template's actual hierarchy is **Project → Milestone → Feature** (three scales of the same I↔V loop mechanic). **Sprint is an orthogonal pacing wrapper, not a hierarchy level** — sprint boundaries are bookkeeping events, not I↔V gates.
+
+**Mosko's V1.0 / V1.1 / V1.final / V2 sub-version structure** (PRD §8 / ADR-004) maps to template milestones (Linear Projects). Materialization deferred to Phase 4 (Project Scoping) per ADR-004's "specific sub-version sequencing remains Phase 4 work" and per Decision 7's M1 issue "(c) Populate product milestones."
+
+**Rationale.** Non-destructive: all existing Phase 1 work, ADRs, memory references stay intact. Mosko's finer-grained phases preserve setup-side discipline (PRD vs UX vs ARCH are different activities with different agents); template's R/P/I+V is a clean outer frame for cross-project comparison. Phase 4.5 sits under I+V as "the first I+V loop is a learning loop with throwaway feature as deliverable"; Phase 7 sits under I+V as "ongoing I+V at project scale — V1 done, plan V2."
+
+### Decision 3 — Document format scheme
+
+**HTML format** for product / architecture / security artifacts (diagram-dense, structured-data):
+
+- `docs/PRD/index.html` — converted from `PRD.md` (single-file initial; Layout 1 per-§ split deferred)
+- `docs/ARCH/index.html` — new (Phase 3 surface; scaffolded in PR A from template's ARCH.html seed)
+- `docs/SECURITY/index.html` — new (receives migrated PRD §4 content per Decision 4)
+
+**Markdown format** for state-ledger and process artifacts (text-shaped, append-only, edit-heavy):
+
+- `MILESTONES.md` — new compact state ledger (auto-loaded per Decision 6)
+- `WORKFLOW.md` — conventions (existing; consult-on-demand)
+- `DECISIONS.md` — ADRs (existing; consult-on-demand)
+- `CHANGELOG.md` — new per-version execution history (consult-on-demand; populated by task #10 extraction)
+- `BACKLOG.md` — new (receives migrated PRD §5 content per Decision 4; also serves as Linear overflow queue)
+- `docs/MILESTONE-FRAMING.md` — new (receives migrated PRD §8 content per Decision 4)
+- `CLAUDE.md` — existing conventions
+
+**Subdirectory shape for HTML docs.** Each top-level HTML doc lives in `docs/<DOC>/` with `index.html` as entry point. Multi-file split (Layout 1 — per-§ files like `01-overview.html`, `02-user-stories.html`, etc.) is the **eventual** target if `index.html` becomes unwieldy; **single-file initial conversion** for now. The subdirectory shape future-proofs growth without preemptive multi-file complexity.
+
+**Rationale.** HTML wins for the artifacts that carry diagrams and structured data (PRD with matrices + 114-entry App B; ARCH with system diagrams; SECURITY with threat models). Markdown wins for artifacts that are text-shaped and edit-heavy (state ledgers, ADRs, changelog). HTML conversion scope is PRD-only for the immediate work; ARCH/SECURITY land via PR A scaffolding + Phase 3 drafting; future state-ledger conversions decided independently per `feedback_orthogonal_decisions`.
+
+### Decision 4 — PRD section schema with relocations
+
+**Mosko's §1–§8 PRD section schema is preserved verbatim.** No new sections are added during the conversion (no dedicated Acceptance Criteria section, no Risks / Open Questions section — both deferred for future consideration if/when they earn their place).
+
+**Three §-relocations** during the conversion (PRD §-stubs become thin pointers to the relocated content):
+
+| Mosko § | Content | Destination |
+|---|---|---|
+| **§4 Security and compliance posture** | 14-entry SD matrix + 15-entry RT catalog + 6 posture sub-§ | `docs/SECURITY/index.html` |
+| **§5 V2 deferred candidates** | ~18 V2 candidates from ADR-002 §2.0 + later additions | `BACKLOG.md` |
+| **§8 V1 milestone framing** | V1 sub-version convention + drop-replace migration + Phase 4 handoff | `docs/MILESTONE-FRAMING.md` |
+
+**Sections that stay in PRD verbatim:** §1 Overview, §2 V1 user stories (§2.1–§2.6 archetypes), §3 Success metrics, §6 Out-of-scope, §7 Constraints (§7.1–§7.3), Appendix A (deferred), Appendix B (114 forward-pointers), Appendix C (32 story traces).
+
+**Rationale.** The §1–§8 schema reflects 30+ PRs of deliberate editorial work (Step 3 + Step 3.5); restructuring would re-displace exactly the work the conversion is preserving. The three relocations target sections that will grow over time (Security artifacts as V2 expands; milestone framing touched at every release cycle; V2 candidates accumulate) — separating them into dedicated artifacts is forward-planning at low cost. §5 → BACKLOG.md is template-faithful: forward-looking scope waiting for promotion to Linear is exactly what BACKLOG.md is for in template's feature-flow scheme (Decision 7).
+
+### Decision 5 — HTML doc conventions
+
+Conventions for HTML docs (PRD, ARCH, SECURITY):
+
+**Asset structure** (`docs/_assets/`):
+
+- `style.css` — shared CSS across all HTML docs
+- `mermaid.min.js` — **vendored Mermaid runtime, NOT CDN-loaded.** Matches mosko-fintech's fintech security posture (no third-party fetch at view time). Offline-works.
+
+**Filename convention:**
+
+- Number prefix: two-digit zero-padded (`01-`, `02-`, … `08-`)
+- Slug: kebab-case, semantic, slugified from §-title
+- Appendices: explicit `appendix-a.html`, `appendix-b.html`, `appendix-c.html`
+- Index: `index.html` reserved for landing page / TOC (entry point)
+- Cross-doc pattern extends: `docs/ARCH/index.html`, `docs/SECURITY/index.html`
+
+**Cross-reference shape:**
+
+- **§-heading anchor IDs:** explicit short IDs from §-numbering (`id="sec-4-5"`, `id="sec-2-4-5"`).
+- **Data-entry anchor IDs:** explicit short IDs from existing nomenclature (`id="sd-12"`, `id="rt-13"`, `id="adr-008"`, `id="app-b-rt-13"`).
+- **Incidental content anchor IDs:** slugify-derived from heading text.
+- **Path style:** relative + anchor. Within-file: `#anchor`. Cross-file within `docs/PRD/`: `02-user-stories.html#sec-2-4-5`. Cross-doc HTML→HTML: `../ARCH/index.html#sec-3-2`. Cross-doc HTML→MD: `../../DECISIONS.md#adr-008` (GitHub-renderable).
+- **No `<base href>`.** Anchor IDs are file-agnostic — same `sec-4-5` works whether in `index.html` or `04-security.html` after a multi-file split.
+- **Forward-pointer pattern:** §-cell side inline `<a class="forward-pointer" href="#app-b-rt-13">[App B-RT-13]</a>`; App B entry side `<li id="app-b-rt-13" class="active architect-phase-3">…</li>`. Bidirectional navigability.
+- **Voting markers / lock markers:** semantic spans — `<span class="vote alpha">Q-S4 α</span>`, `<span class="lock-marker">§4.5 locked 2026-05-18</span>`. CSS color-coding optional polish.
+
+**Structured-data representation:**
+
+- **HTML `<table>`** for fixed-column data: §4.4 sensitive-data matrix (14 rows × 8 cols), §4.5 RLS test catalog (15 rows × 7 cols).
+- **Semantic `<ul>` with `<li id="...">`** for variable-content indexed entries: Appendix B (114 entries), Appendix C (32 entries).
+- **CSS class taxonomy** (locked vocabulary):
+  - **Status:** `.active`, `.resolved`
+  - **Classification (5-tag from PR 10):** `.architect-phase-3`, `.sec-v2-implementation`, `.architect-sec-joint`, `.boundary-note`, `.closure-trace`
+  - **Tier (§4.4):** `.tier-credential`, `.tier-high`, `.tier-medium`
+  - **Severity (§4.5):** `.severity-critical`, `.severity-high`, `.severity-medium`
+
+**Build approach:** no build step initially (option i — accept duplication of headers/footers across files). Promote to templating (build pipeline) only if multi-file adoption expands beyond a single split.
+
+### Decision 6 — Compact-ledger auto-load architecture
+
+**Adopt template's compact-ledger auto-load pattern.** Session-start auto-load reduces to a compact state ledger only; all heavy artifacts become consult-on-demand.
+
+**New auto-load set** (3 files; ~150 lines total):
+
+| File | Mechanism | Purpose |
+|---|---|---|
+| `CLAUDE.md` (root) | Claude Code built-in | Project conventions, reading order |
+| `~/.claude/.../memory/MEMORY.md` | Claude Code built-in | Memory index |
+| `MILESTONES.md` (new) | SessionStart hook (read top section above `## Roadmap` cutoff per template's awk pattern) | Compact state ledger: current phase, active feature, milestone summary |
+
+**Removed from auto-load** (all become consult-on-demand):
+
+- `WORKFLOW.md` — was forced-read by re-orient protocol
+- `DECISIONS.md` — same
+- `PRD.md` / `docs/PRD/index.html` — same
+- `ARCHITECTURE.*` — same (when it exists)
+- `docs/handoff-prompts.md` — heavily simplified or retired; per-session orient protocol drops; Phase-transition prompts (explicitly invoked) preserved
+
+**Rationale.** Three of six auto-read files exceeded Read's limits at brainstorm time (`WORKFLOW.md` 305 KB byte-limit; `DECISIONS.md` 37K-token-limit; `PRD.md` exceeded both). The previous "always know everything important" auto-load was already silently degraded — segment-reads only. Template's pattern (load slim "where are we" snapshot; consult depth only when work requires it) is the correct shape at the current artifact scale.
+
+**SessionStart hook modification:** modify `.claude/settings.json` to read MILESTONES.md head via template's awk-then-stop pattern (`awk '/^## Roadmap/{exit} {print}' MILESTONES.md`); drop the heavy re-orient protocol that forced reads of WORKFLOW + DECISIONS + PRD + ARCH.
+
+### Decision 7 — Template feature-flow scheme + initial milestones
+
+**Adopt template's feature-flow scheme now** (not deferred to Phase 5 entry):
+
+```
+[PRD §2 User Stories]       ← intent (32 stories per Appendix C; never deleted)
+        ↓ (Plan phase: stories sized + milestone-tagged)
+[BACKLOG.md]                ← overflow queue, ordered by milestone, FIFO promotion
+        ↓ (sprint boundaries, /sync-backlog promotes batch)
+[Linear (≤200 hot)]         ← active set under work
+        ↓ (features finish)
+[Linear: Done]              ← /merge-pr marks status; /cleanup-linear archives
+        ↓ (mirrored locally)
+[MILESTONES.md → Completed] ← snapshot of done features
+```
+
+**Initial milestones** (defined in MILESTONES.md):
+
+| Milestone | Status | Gate | Initial issues |
+|---|---|---|---|
+| **M0 — Research** | Active (virtually done) | PRD locked at end of mosko Phase 1 (after Step 4 ratifies) | Step 3 + Step 3.5 PRs retro-tagged as M0 issues |
+| **M1 — Plan** | Pending | ARCH + SECURITY docs locked at end of mosko Phase 3 | (a) Draft ARCHITECTURE; (b) Draft SECURITY (largely landed via ADR-008); (c) Populate product milestones in MILESTONES.md — notes point to `docs/MILESTONE-FRAMING.md`; (d) further granularity TBD |
+
+**Product milestones (V1.0 / V1.1 / V1.final / V2-X) get defined LATER** as the output of M1's issue (c) — the "populate product milestones" work that converts MILESTONE-FRAMING.md's conceptual framing into actual Linear Projects.
+
+**Skill suite phasing:**
+
+- **Adopt now:** `/setup-linear-team` (adapted — must seed M0/M1 meta-process milestones first, NOT PRD §2 stories), `/sync-backlog`, `/cleanup-linear`, `/open-doc`, BACKLOG.md, MILESTONES.md.
+- **Adopt at Phase 3 entry:** `/generate-archdoc` (adapted for mosko's existing 87 App B forward-pointers + ADR-008 axes), `/generate-secdoc` (adapted).
+- **Adopt at Phase 6 entry:** `/start-feature`, `/finish-feature`, `/merge-pr`.
+- **Skip:** `/generate-prd` (PRD already drafted; import mode N/A given conversion path).
+
+**Rationale.** M0 is virtually done — defining it now makes Phase 1 closure cleaner and provides a retro-anchor for Step 3 / 3.5 work. M1 is the natural framing for Phase 3 (ARCH/SEC); the "populate product milestones" issue under M1 makes the deferred Phase 4 (Project Scoping) work explicit and tracked. Adopting feature-flow scheme now (not Phase 5) means Linear + BACKLOG.md infrastructure becomes load-bearing for M1 sub-issue tracking, not just future implementation work.
+
+### Decision 8 — ADR format hybrid policy
+
+**Two ADR patterns are supported in DECISIONS.md going forward:**
+
+- **Consolidation pattern** (mosko's existing — ADR-002 / ADR-008 style): Context → Decisions (numbered multi-Decision structure) → Consequences. Use for: synthesis work, canonical-reference layers, multi-Decision territory establishment.
+- **Terse pattern** (template's): `Decision / Why / Alternatives considered / Approved by / Supersedes`. Use for: one-off decisions, simple supersessions, isolated choices.
+
+**Examples:**
+
+- **This ADR (ADR-009):** consolidation pattern. Nine distinct Decisions across roster / phase model / format / schema / conventions / architecture / process — the natural fit for synthesis.
+- **ADR-002 / ADR-008:** consolidation pattern (canonical-reference layers).
+- **Hypothetical future "use Tailwind for styling":** terse pattern (one-off styling choice).
+
+**Policy location.** `DECISIONS.md` preamble. The hybrid policy is documented in a Format section explaining both patterns and when each applies. The preamble lands as part of this ADR's commit.
+
+**Rationale.** Honors mosko's existing convention (consolidation has proven valuable for canonical-reference work at ADR-002 / 008); allows lean ADRs when work doesn't warrant ceremony. Per `feedback_seed_not_constraint`: template provides the terse pattern as a baseline; mosko preserves the consolidation pattern where it adds value.
+
+### Decision 9 — Doc-update skill flow
+
+**Replace mosko's `/ship-branch`** with template's two-step `/start-doc-update` + `/finish-doc-update` (adapted for mosko).
+
+**`/start-doc-update` adaptation** — phase-prefix map (sub-option 3 hybrid; outer-category names):
+
+| Doc edited | Branch prefix |
+|---|---|
+| `docs/PRD/*` | `phase/research-<slug>` |
+| `docs/ARCH/*`, `docs/SECURITY/*` | `phase/plan-<slug>` |
+| Future implementation code | `phase/iv-<slug>` |
+| `MILESTONES.md`, `DECISIONS.md`, `BACKLOG.md`, `CHANGELOG.md`, `docs/MILESTONE-FRAMING.md`, `WORKFLOW.md`, `CLAUDE.md`, `.claude/agents/*`, `.claude/skills/*` | `meta/<slug>` |
+
+State-ledger files **lumped under `meta/`** (not split into separate `state/` per template's pattern) — single prefix simpler; doc edited is in the slug.
+
+**`/finish-doc-update` adaptation:**
+
+1. **SSH→HTTPS fallback** ported from retired `/ship-branch` per `feedback_ssh_push_fallback`: per-use-authorization HTTPS temp-switch when SSH push fails; restore origin to SSH after.
+2. **Commit format** `docs(<outer>): <subject>` matching the prefix — e.g., `docs(research): add §3.4 metric`, `docs(plan): refine RLS catalog`, `docs(meta): update CLAUDE.md reading order`.
+3. **PR body shape** — ported mosko's elaborate shape (Summary / Motivation / Files changed / Test plan / Follow-ups) **replacing template's lean shape.** F/CTO consistently found the richer shape useful for PR review; going lean would be a regression.
+
+**`/ship-branch` retirement:**
+
+- Delete `.claude/skills/ship-branch/`.
+- `feedback_ssh_push_fallback.md` memory updated to reference `/finish-doc-update` as the primary path.
+- Old branches using legacy `phase/<N>-<descriptor>` or `workflow/<descriptor>` convention stay legacy (no rename); new branches use the adapted convention.
+
+**Rationale.** Template's two-step flow covers branch creation (which mosko did manually) — phase-prefix auto-detection is genuine value-add. Adopting both halves of template's flow lets mosko stop maintaining two competing push+PR paths. Mosko-specific load-bearing pieces (SSH fallback, elaborate PR body) port cleanly into the adapted `/finish-doc-update`.
+
+**Consequences.**
+
+- **ADR-009 supersedes nothing; extends existing convention by selective adoption.** ADR-002 / ADR-003 / ADR-004 / ADR-005 / ADR-006 / ADR-007 / ADR-008 all stand. ADR-009 is parallel to ADR-002 / ADR-003 in shape (consolidation pattern across multiple subjects); parallel to ADR-008 in role (canonical-reference layer for the cross-template-adoption decisions).
+
+- **Phase 3 entry consumption** (Step 4 ratifies → Phase 3 opens). Architect drafts `docs/ARCH/index.html` using template's 9-section ARCH.html seed (adapted with mosko-specific additions: multi-tenant architecture surface per ADR-008 axes i/ii/iii; RLS implementation consuming §4.5 RT catalog; sensitive-data storage architecture consuming §4.4 SD matrix; snapshot regeneration architecture per ADR-008 axis vi; Plaid integration architecture). Architect consumes the 87 active App B forward-pointers + §4.4 + §4.5 + §8 → Phase 4 handoff anchor. Cross-refs use Decision 5's conventions.
+
+- **Phase 4 (Project Scoping) materializes product milestones.** V1.0 / V1.1 / V1.final / V2-X get defined from PRD §8 / `docs/MILESTONE-FRAMING.md` / ADR-004 and become Linear Projects per Decision 7's feature-flow scheme. M1's issue (c) is the trigger.
+
+- **Phase 5+ build work** uses adapted `/start-feature` + `/finish-feature` + `/merge-pr` (Phase 6 entry per Decision 7's skill phasing). `/start-doc-update` + `/finish-doc-update` already active for all doc work per Decision 9.
+
+- **Phase 7 incident handling** per ADR-008 Decision 4 (F/CTO-level incident-log primitive at V1; ramp to formal incident-response shape at V2-trajectory) — unchanged by this ADR.
+
+- **Pending execution tasks** (post-ADR-009 work; tracked at task IDs):
+  - **#7** Compact MILESTONES.md ledger (load-bearing for Decision 6; blocks #11 + #15).
+  - **#10** Extract changelog from WORKFLOW.md to CHANGELOG.md (orthogonal per `feedback_orthogonal_decisions`; independent timing).
+  - **#11** Implement compact-ledger auto-load model (Decision 6 mechanics; blocked by #7).
+  - **#12** Migrate PRD §4 → `docs/SECURITY/index.html` (Decision 4; part of PR B).
+  - **#13** Migrate PRD §5 → `BACKLOG.md` (Decision 4; part of PR B).
+  - **#14** Migrate PRD §8 → `docs/MILESTONE-FRAMING.md` (Decision 4; part of PR B).
+  - **#15** Populate MILESTONES.md with M0 + M1 + retro-tag issues (Decision 7; blocked by #7; part of PR C).
+  - **#16** Adopt template feature-flow scheme (Decision 7).
+  - **#17** Adapt doc-update skills + retire `/ship-branch` (Decision 9; lands on its own `meta/` branch).
+
+- **PR sequence for PRD conversion** (locked per Decision 4's migration staging — Shape B): **PR A** (scaffolding — `docs/PRD/`, `docs/SECURITY/`, `docs/ARCH/`, `docs/_assets/`, skeleton files, conventions locked visibly) → **PR B** (content migration — PRD §1/§2/§3/§6/§7/appendices to HTML; §4/§5/§8 migrations; cross-ref retargeting; archive `PRD.md`) → **PR C** (architectural shift mechanics — populate MILESTONES.md; modify SessionStart hook; simplify/retire `handoff-prompts.md`; update CLAUDE.md). Driver: main session (team-lead) — pure mechanical work, no scope decisions left.
+
+- **Memory updates landed during this brainstorm** (durable behavioral feedback for future sessions):
+  - **Updated:** `feedback_subagent_relay_format.md` ([CoS]: → [team-lead]:; roster label refresh); `feedback_ssh_push_fallback.md` (`/ship-branch` → `/finish-doc-update`); `user_role.md` (CoS removed; reading order refreshed); `feedback_main_anchored_orient.md` (auto-read file list refreshed); `feedback_working_artifacts_temp_not_docs.md` (brainstorm-log + template-feedback-log added as examples).
+  - **Added:** `feedback_seed_not_constraint.md` (templates are seed not constraint); `feedback_orthogonal_decisions.md` (don't fold orthogonal decisions back into parent framing); `feedback_brainstorm_logging.md` (substantive brainstorms log to temp/ before ADR synthesis).
+  - **MEMORY.md index** updated with three new entries.
+
+- **Template-feedback log entries** surfaced for upstream contribution to `richmosko/project_template` (in `temp/project_template_feedback.md`):
+  - Visual Designer as a project-specific extension for trust-driven domains.
+  - HTML preview methodology should be a per-project decision.
+  - Mermaid loading strategy (CDN vs. vendored) should be a template option.
+  - Subdirectory structure for HTML docs (`docs/PRD/`, `docs/ARCH/`, `docs/SECURITY/`).
+  - Seed default M0 (Research) + M1 (Plan) milestones in template's MILESTONES.md.
+  - Distinguish CHANGELOG.md (execution log) from DECISIONS.md (architectural log).
+
+- **ADR-009 canonical-reference immutability boundary.** The nine Decisions are immutable as canonical references for downstream work. Bullet-level conventions inside Decisions (CSS class taxonomy, filename patterns, branch-prefix mappings, etc.) remain mutable through future PRD / ARCH / SECURITY / WORKFLOW revisions if the canonical references hold steady. **New canonical references** (new branch-prefix categories, new file-format categories, new roster roles, new phase categories, new ADR pattern variants) **require ADR-009 amendment.**
+
+- **WORKFLOW.md changelog entry** lands at integration-pass time documenting ADR-009 acceptance + execution-task creation + memory updates + brainstorm log archival path. The changelog entry itself moves to `CHANGELOG.md` upon task #10 execution per Decision 3.
+
+- **Future ADR housekeeping.** When Phase 3 architectural decisions land (V1 stack choices; per-tenant key derivation for `tenant-scoped-with-app-encryption` classes; webhook signature verification mechanism; etc.), those land at ARCHITECTURE.md per ADR-002 §6.0 + ADR-008's Phase-3-territory framing, NOT as ADR-009 amendments. When V2-scoping work surfaces additional template-adoption patterns (additional skills; additional roster roles), new ADRs amend ADR-009. The selective-adoption convention itself (template-as-seed-not-constraint per `feedback_seed_not_constraint`) is intentionally narrow and amendable; the substantive content evolves at the consuming-artifact level.
 
 ---
 
