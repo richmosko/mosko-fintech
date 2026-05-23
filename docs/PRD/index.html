@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>mosko-fintech — Product Requirements</title>
+  <link rel="stylesheet" href="../_assets/style.css">
+  <script defer src="../_assets/mermaid.min.js"></script>
+  <script defer src="../_assets/mermaid-init.js"></script>
+</head>
+<body>
+
+<header class="doc-header">
+  <h1>mosko-fintech — Product Requirements</h1>
+  <p class="doc-subtitle">Personal fintech mini-business; multi-tenant from day one.</p>
+  <div class="doc-meta">
+    <span><strong>Owner:</strong> <code>product-manager</code> agent</span>
+    <span><strong>Status:</strong> Locked (Phase 1 Step 3.5 complete; awaiting Step 4 ratification)</span>
+    <span><strong>Schema lock:</strong> ADR-009 Decision 4 (§1–§8 preserved; §4/§5/§8 relocated)</span>
+    <span><strong>Last updated:</strong> <span class="tbd">— (populated in PR B)</span></span>
+  </div>
+</header>
+
+<nav class="toc">
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#sec-1">Overview</a></li>
+    <li><a href="#sec-2">V1 user stories</a>
+      <ol>
+        <li><a href="#sec-2-1">§2.1 Instrument archetype</a></li>
+        <li><a href="#sec-2-2">§2.2 Account archetype</a></li>
+        <li><a href="#sec-2-3">§2.3 Holding archetype</a></li>
+        <li><a href="#sec-2-4">§2.4 Transaction archetype</a></li>
+        <li><a href="#sec-2-5">§2.5 Tax archetype</a></li>
+        <li><a href="#sec-2-6">§2.6 Snapshot archetype</a></li>
+      </ol>
+    </li>
+    <li><a href="#sec-3">Success metrics</a></li>
+    <li><a href="#sec-4">Security and compliance posture <span class="tbd">→ <a href="../SECURITY/">docs/SECURITY/</a></span></a></li>
+    <li><a href="#sec-5">V2 deferred candidates <span class="tbd">→ <a href="../../BACKLOG.md">BACKLOG.md</a></span></a></li>
+    <li><a href="#sec-6">Out-of-scope for this PRD lifecycle</a></li>
+    <li><a href="#sec-7">Constraints</a>
+      <ol>
+        <li><a href="#sec-7-1">§7.1 Cost</a></li>
+        <li><a href="#sec-7-2">§7.2 Time / staffing</a></li>
+        <li><a href="#sec-7-3">§7.3 Invite-only</a></li>
+      </ol>
+    </li>
+    <li><a href="#sec-8">V1 milestone framing <span class="tbd">→ <a href="../../docs/MILESTONE-FRAMING.md">docs/MILESTONE-FRAMING.md</a></span></a></li>
+    <li><a href="#appendix-a">Appendix A — Deferred</a></li>
+    <li><a href="#appendix-b-link">Appendix B — Forward-pointer index (114 entries)</a></li>
+    <li><a href="#appendix-c-link">Appendix C — Story trace index (32 entries)</a></li>
+  </ol>
+</nav>
+
+<!-- SCAFFOLDING NOTE (delete in PR B):
+     This is the PR A scaffolding skeleton per ADR-009 Decision 4 + Decision 5.
+     Content migration happens in PR B. Sections show convention examples
+     (vote markers, lock markers, forward-pointers, stub patterns) so PR B's
+     content lands into a structurally-consistent shell. -->
+
+<section id="sec-1" data-section="overview">
+  <h2>1. Overview</h2>
+  <p class="section-hint">Frames mosko-fintech: solo Founder/CTO; personal fintech mini-business; multi-tenant from day one (per <a href="../../DECISIONS.md#adr-002">ADR-002</a> §1.4); single-user-V1 test path with multi-tenant primitives exercised end-to-end.</p>
+  <div class="migration-stub">Content migrated from <code>PRD.md</code> §1 verbatim in PR B. Conventions for this section: vote markers like <span class="vote alpha">Q-S4 α</span> appear where ratify-gate outcomes are documented; <span class="lock-marker">§1 locked 2026-05-13</span> marks the lock event.</div>
+</section>
+
+<section id="sec-2" data-section="user-stories">
+  <h2>2. V1 user stories</h2>
+  <p class="section-hint">Six archetypes (§2.1–§2.6) covering Instrument / Account / Holding / Transaction / Tax / Snapshot. 32 stories total per <a href="#appendix-c-link">Appendix C</a>. Each story is a candidate Linear Issue per <a href="../../DECISIONS.md#adr-009">ADR-009</a> Decision 7 (feature-flow scheme); promotion happens at Phase 4 entry.</p>
+  <div class="migration-stub">Content migrated from <code>PRD.md</code> §2.1–§2.6 verbatim in PR B.</div>
+
+  <h3 id="sec-2-1">2.1 Instrument archetype</h3>
+  <div class="stub">PR B placeholder.</div>
+
+  <h3 id="sec-2-2">2.2 Account archetype</h3>
+  <div class="stub">PR B placeholder.</div>
+
+  <h3 id="sec-2-3">2.3 Holding archetype</h3>
+  <div class="stub">PR B placeholder.</div>
+
+  <h3 id="sec-2-4">2.4 Transaction archetype</h3>
+  <div class="stub">PR B placeholder. Forward-pointer convention example: <a class="forward-pointer" href="#app-b-sd-04">[App B-SD-04]</a> for cross-references into <a href="#appendix-b-link">Appendix B</a>.</div>
+
+  <h3 id="sec-2-5">2.5 Tax archetype</h3>
+  <div class="stub">PR B placeholder.</div>
+
+  <h3 id="sec-2-6">2.6 Snapshot archetype</h3>
+  <div class="stub">PR B placeholder.</div>
+</section>
+
+<section id="sec-3" data-section="metrics">
+  <h2>3. Success metrics</h2>
+  <p class="section-hint">Mix of measurable + immeasurable; counter-metrics where relevant. mosko-fintech is a personal mini-business — success metrics emphasize parity-with-existing-system (over external KPIs).</p>
+  <div class="migration-stub">Content migrated from <code>PRD.md</code> §3 verbatim in PR B.</div>
+</section>
+
+<section id="sec-4" data-section="security-stub">
+  <h2>4. Security and compliance posture</h2>
+  <div class="migration-stub">
+    <strong>This section relocated in PR B</strong> per <a href="../../DECISIONS.md#adr-009">ADR-009</a> Decision 4. Full content lives at <a href="../SECURITY/">docs/SECURITY/index.html</a> — the canonical V1 Sec reference layer per <a href="../../DECISIONS.md#adr-008">ADR-008</a>. Contains the 14-entry sensitive-data classification matrix (§4.4), the 15-entry RLS test catalog (§4.5; RT-02 + RT-05 are V1-block critical-severity tests), and 6 posture sub-sections.
+  </div>
+</section>
+
+<section id="sec-5" data-section="v2-deferred-stub">
+  <h2>5. V2 deferred candidates</h2>
+  <div class="migration-stub">
+    <strong>This section relocated in PR B</strong> per <a href="../../DECISIONS.md#adr-009">ADR-009</a> Decision 4. Full content lives at <a href="../../BACKLOG.md">BACKLOG.md</a> — ~18 V2 candidates from <a href="../../DECISIONS.md#adr-002">ADR-002</a> §2.0 + later additions, plus Linear overflow-queue overflow mechanism per <a href="../../DECISIONS.md#adr-009">ADR-009</a> Decision 7.
+  </div>
+</section>
+
+<section id="sec-6" data-section="out-of-scope">
+  <h2>6. Out-of-scope for this PRD lifecycle</h2>
+  <p class="section-hint">V1 scope boundaries. Distinct from §5 V2 deferred (which captures forward-looking scope candidates) — §6 is "we are deliberately not addressing this in any V1 sub-version."</p>
+  <div class="migration-stub">Content migrated from <code>PRD.md</code> §6 verbatim in PR B.</div>
+</section>
+
+<section id="sec-7" data-section="constraints">
+  <h2>7. Constraints</h2>
+  <p class="section-hint">Hard constraints on V1: cost (§7.1), time / staffing (§7.2), invite-only forward-compat (§7.3).</p>
+  <div class="migration-stub">Content migrated from <code>PRD.md</code> §7.1–§7.3 verbatim in PR B.</div>
+
+  <h3 id="sec-7-1">7.1 Cost</h3>
+  <div class="stub">PR B placeholder.</div>
+
+  <h3 id="sec-7-2">7.2 Time / staffing</h3>
+  <div class="stub">PR B placeholder.</div>
+
+  <h3 id="sec-7-3">7.3 Invite-only forward-compatibility</h3>
+  <div class="stub">PR B placeholder.</div>
+</section>
+
+<section id="sec-8" data-section="milestone-framing-stub">
+  <h2>8. V1 milestone framing</h2>
+  <div class="migration-stub">
+    <strong>This section relocated in PR B</strong> per <a href="../../DECISIONS.md#adr-009">ADR-009</a> Decision 4. Full content lives at <a href="../../docs/MILESTONE-FRAMING.md">docs/MILESTONE-FRAMING.md</a> — V1 sub-version convention (§8.1) + drop-replace migration pattern (§8.2) + Phase 4 handoff anchor (§8.3) per <a href="../../DECISIONS.md#adr-004">ADR-004</a>.
+  </div>
+  <p class="section-hint">Note: distinct from <code>MILESTONES.md</code> (compact state ledger, auto-loaded per <a href="../../DECISIONS.md#adr-009">ADR-009</a> Decision 6). MILESTONE-FRAMING is the conceptual spec; MILESTONES.md is the live state.</p>
+</section>
+
+<section id="appendix-a" data-section="appendix-a">
+  <h2>Appendix A — Deferred</h2>
+  <p class="section-hint">Future-housekeeping items that don't block V1.</p>
+  <div class="migration-stub">Content migrated from <code>PRD.md</code> Appendix A verbatim in PR B.</div>
+</section>
+
+<section id="appendix-b-link" data-section="appendix-b-link">
+  <h2>Appendix B — Forward-pointer index</h2>
+  <p class="section-hint">114 entries (87 active + 27 resolved); 5-tag classification per PR 10. Forward-pointer convention demonstrated below.</p>
+  <p>Convention demo (replaced by actual content in PR B):</p>
+  <ul class="appendix-b">
+    <li id="app-b-rt-13" class="active architect-phase-3">
+      <span class="tag architect-phase-3">[Architect Phase 3]</span>
+      <strong>RT-13</strong> — Cross-tenant staleness-state-read leak — see <a href="#sec-4">§4.5 RT-13</a> / <a href="#sec-4">§4.4 SD-12</a>. <em>(Example structure; real content in PR B.)</em>
+    </li>
+    <li id="app-b-rt-04" class="resolved closure-trace">
+      <span class="tag closure-trace">[Closure-trace process-record]</span>
+      <strong>RT-04</strong> — Resolved at PR 7 / §6 rewrite (v1.26). <em>(Example structure.)</em>
+    </li>
+  </ul>
+  <div class="migration-stub">Full 114-entry consolidation migrated from <code>PRD.md</code> Appendix B in PR B.</div>
+</section>
+
+<section id="appendix-c-link" data-section="appendix-c-link">
+  <h2>Appendix C — Story trace index</h2>
+  <p class="section-hint">32 per-story traces across §2.1–§2.6.</p>
+  <div class="migration-stub">Content migrated from <code>PRD.md</code> Appendix C verbatim in PR B.</div>
+</section>
+
+<footer class="doc-footer">
+  Owned by <code>product-manager</code> agent. Schema locked at <a href="../../DECISIONS.md#adr-009">ADR-009</a> Decision 4. Edit via <code>/start-doc-update prd-…</code> branches per <a href="../../DECISIONS.md#adr-009">ADR-009</a> Decision 9.
+</footer>
+
+</body>
+</html>
