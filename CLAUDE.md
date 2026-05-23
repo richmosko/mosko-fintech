@@ -10,7 +10,8 @@ These documents are the project's source of truth. Read them in order before tak
 2. **`DECISIONS.md`** — architectural and product decisions with rationale (when it exists; created in Phase 0.5 or Phase 1).
 3. **`PRD.md`** — product requirements (when it exists; created in Phase 1).
 4. **`ARCHITECTURE.md`** — system design (when it exists; created in Phase 3).
-5. **`docs/discovery-summary.md`** — the discovery conversation that produced WORKFLOW.md, captured as pivot points and principles. Background reading; not active context.
+5. **`CHANGELOG.md`** — per-version execution history for WORKFLOW.md (PR-level narrative; what landed in v1.NN). Consult on demand when answering "when did X land?" questions; not auto-loaded. Extracted from WORKFLOW.md on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6.
+6. **`docs/discovery-summary.md`** — the discovery conversation that produced WORKFLOW.md, captured as pivot points and principles. Background reading; not active context.
 
 Per-directory `CLAUDE.md` files (e.g., `/api/CLAUDE.md`, `/supabase/CLAUDE.md`) provide scoped context when working inside those directories. They get created in Phase 5.
 
