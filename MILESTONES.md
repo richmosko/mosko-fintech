@@ -6,7 +6,7 @@ Compact state ledger for mosko-fintech. **Top section (above `## Roadmap`) is au
 - Milestones tracked at two scales per [ADR-009](DECISIONS.md#adr-009) Decision 7: **meta-process** (M0 / M1 / M2 / M3 = R / P / I+V / Deploy) and **product** (V1.0 / V1.1 / V1.final / V2-X).
 - Sprint = Linear cycle (orthogonal pacing wrapper, not a hierarchy level).
 - Feature = Linear Issue = one PR = one I↔V loop.
-- Last updated: 2026-05-24 (ADR-010 comments-sidecar pass-2 in flight; pass-1 landed at PR #47).
+- Last updated: 2026-05-24 (post-PR #48; ADR-010 comments-sidecar fully landed; between PRs).
 
 ## Project / Initiative
 
@@ -34,14 +34,14 @@ Compact state ledger for mosko-fintech. **Top section (above `## Roadmap`) is au
 
 | Field | Value |
 |---|---|
-| Feature | ADR-010 comments-sidecar feature port (pass 2) |
+| Feature | _None active right now — between PRs_ |
 | Linear issue | _N/A — Linear activates at Phase 4 entry_ |
-| Branch | `meta/comments-sidecar-pass-2` |
-| Status | In flight (PR 2 of 2) |
+| Branch | _N/A_ |
+| Status | _N/A_ |
 
 ## Recent activity (last 7 days)
 
-- **2026-05-24** — `meta/comments-sidecar-pass-2` opened: ADR-010 PR 2 — comments-sidecar pass 2 (Python server `scripts/serve-docs.{py,sh}` + JS widget `docs/_assets/comments.{js,css}` + `/serve-docs` skill + asset wiring in all three HTML docs + WORKFLOW.md Inline-authoring subsection). Closes the ADR-010 two-PR landing.
+- **2026-05-24** — PR #48 merged: ADR-010 PR 2 — comments-sidecar pass 2 (Python server `scripts/serve-docs.{py,sh}` + JS widget `docs/_assets/comments.{js,css}` + `/serve-docs` skill + asset wiring in all three HTML docs + WORKFLOW.md Inline-authoring subsection). Closes the ADR-010 two-PR landing — `/refine-doc` + `/serve-docs` both available; Step 4 PRD review can begin with widget support.
 - **2026-05-24** — PR #47 merged: ADR-010 PR 1 — comments-sidecar pass 1 (`/refine-doc` skill + `comments.md` convention + gitignore + WORKFLOW.md Doc review loop section + ADR-010).
 - **2026-05-23** — PR #46 merged: MILESTONES.md post-PR-B refresh.
 - **2026-05-23** — PR #45 merged: PR B content migration — PRD §1/§2/§3/§6/§7/appendices → `docs/PRD/index.html`; §4 → `docs/SECURITY/index.html`; §5 → `BACKLOG.md`; §8 → `docs/MILESTONE-FRAMING.md`; `PRD.md` archived (tasks #12 + #13 + #14). ADR-009 mechanics wave complete.
@@ -94,6 +94,7 @@ Issues retroactively tagged under M0 (Research milestone). Full PR history at [`
 
 | Feature | PR | Merged | Notes |
 |---|---|---|---|
+| ADR-010 PR 2 — comments-sidecar pass 2 (server + widget + `/serve-docs`) | #48 | 2026-05-24 | Closes the ADR-010 two-PR landing. Python stdlib HTTP server + JS widget + `/serve-docs` skill + asset wiring in all three HTML docs (PRD / ARCH / SECURITY) + WORKFLOW.md Inline-authoring subsection. Both `/refine-doc` and `/serve-docs` now available; Step 4 PRD review can begin with widget support. |
 | ADR-010 PR 1 — comments-sidecar pass 1 (convention + `/refine-doc`) | #47 | 2026-05-24 | Adopted comments-sidecar feature from `richmosko/project_template` per ADR-009 Decision 8 selective-adoption framework. Pass 1 of 2: convention + skill + gitignore + WORKFLOW.md Doc-review-loop section + ADR-010. |
 | PR B — PRD content migration to HTML artifact set | #45 | 2026-05-23 | Tasks #12 + #13 + #14 (ADR-009 Decision 4 second stage; closes the architectural shift). Migrated §1/§2/§3/§6/§7/appendices to `docs/PRD/index.html`; §4 → `docs/SECURITY/`; §5 → `BACKLOG.md`; §8 → `docs/MILESTONE-FRAMING.md`; `PRD.md` archived. |
 | PR C — SessionStart hook → MILESTONES.md head | #44 | 2026-05-23 | Task #11 (ADR-009 Decision 6 mechanics; compact-ledger auto-load) |
@@ -120,7 +121,7 @@ Issues retroactively tagged under M0 (Research milestone). Full PR history at [`
 
 | Feature | PR | Milestone | Branch | Status |
 |---|---|---|---|---|
-| **ADR-010 comments-sidecar pass 2** (this PR) | _this PR_ | M0 (process-record) | `meta/comments-sidecar-pass-2` | In flight |
+| _none active — between PRs; Step 4 (Architect PRD ratification) is the immediate next deliverable_ | | | | |
 | _Substantive M1 features open after Step 4 ratifies / Phase 3 entry_ | | | | |
 
 ### Backlog (M1+)
