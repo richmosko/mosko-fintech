@@ -246,10 +246,47 @@ Each `## §<section-id>` anchor matches a `<section id="...">` in the correspond
 - **ARCH / SECURITY review** during Phase 3 (Plan outer category) — same loop, different doc.
 - **Periodic refreshes** mid-project — when a milestone closes, take a pass at whether the PRD assumptions still hold; same loop.
 
+### Inline-authoring mode (`/serve-docs` or `scripts/serve-docs.sh`)
+
+Hand-editing `comments.md` works in any editor, anywhere. For a friendlier review experience, the repo ships a local Python server + JS widget that lets you author comments inline while reading the doc in a browser.
+
+**Two ways to start it:**
+
+```
+/serve-docs PRD              # preferred — server runs in background under
+                             # the Claude session; cleaned up on /exit;
+                             # opens the browser to PRD
+                             # (omit the doc arg to just start the server)
+```
+
+```bash
+./scripts/serve-docs.sh      # direct invocation — runs in your terminal
+                             # with live request logs; useful for debugging
+                             # the server itself
+```
+
+Both run the same server (Python stdlib only) at `http://localhost:8765` and serve `docs/`. The `/serve-docs` skill probes for an already-running instance before launching, so it's safe to invoke repeatedly. Browse to `http://localhost:8765/PRD/` (or `ARCH/`, `SECURITY/`) — the widget activates:
+
+- **A small status badge** in the bottom-right shows `connected (N comments)` or `offline`.
+- **Hover any section heading** to reveal a `+ Comment` button.
+- **Click `+ Comment`** to open an inline panel under the heading: any existing comments for the section are listed (read-only), and a textarea + Save button let you add a new one.
+- **Cmd/Ctrl+Enter** saves; **Esc** cancels.
+- **Save POSTs to the server**, which appends a `## §<section-id>` block to `docs/<DOC>/comments.md` on disk. The widget refreshes inline.
+
+Sections that already have comments show a `💬 N` count badge next to the heading. Click the badge to open the panel showing existing comments.
+
+**Format compatibility:** the widget and `/refine-doc` use the **same** `comments.md` format. You can mix authoring methods freely — write some comments via the widget, others by hand-editing the file. Both feed `/refine-doc` identically.
+
+**Graceful degradation:** if you open the HTML doc directly from disk (`file://`), or via a non-localhost host, the widget recognizes it can't reach a local server and shows the status badge as offline with a hint. The doc remains fully readable; only comment authoring is disabled. Hand-editing `comments.md` still works.
+
+**Lifecycle:** when launched via `/serve-docs`, the server is bound to the Claude session and dies on `/exit`. When launched directly from a terminal, Cmd+C (Ctrl+C) to stop. Override the port with `DOCS_PORT=8080 ./scripts/serve-docs.sh` if 8765 collides.
+
+**Security shape:** the server binds to `127.0.0.1` only (no LAN exposure), accepts only its two API endpoints (`GET /api/comments`, `POST /api/comments`), and writes only to `docs/<DOC>/comments.md` after validating `doc` against a whitelist (`PRD`, `ARCH`, `SECURITY`) and `section` against the `[a-z][a-z0-9-]*` pattern. No auth needed.
+
 ### Pass status
 
 - **Pass 1** (shipped at ADR-010 PR 1) — convention + `/refine-doc` skill. Hand-edit `comments.md`, run the skill.
-- **Pass 2** (pending ADR-010 PR 2) — inline browser widget + local Python server + `/serve-docs` skill. Same on-disk format; nicer authoring UX. The widget POSTs new comments to `docs/<DOC>/comments.md` while you read the doc in a browser.
+- **Pass 2** (shipped at ADR-010 PR 2) — inline browser widget + local Python server + `/serve-docs` skill. Same on-disk format; nicer authoring UX. Widget POSTs new comments to `docs/<DOC>/comments.md` while you read the doc in a browser; both authoring paths feed `/refine-doc` identically.
 - **Pass 3** (not planned) — would handle inline edit/delete of existing comments via the widget, comment threading, or multi-user attribution. Defer until single-user usage surfaces a real need.
 
 ---
