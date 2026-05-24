@@ -8,6 +8,10 @@ This directory holds frozen point-in-time snapshots of project artifacts taken a
 
 Frozen copy of `PRD.md` as of WORKFLOW.md v1.18 (2026-05-18, after PRD §8 lock landed in PR #25), taken at kickoff of Phase 1 Step 3.5 (PRD editorial rewrite).
 
+### `PRD-pre-html-migration.md`
+
+Frozen copy of `PRD.md` as of v1.30 / PR #38 (2026-05-20, Phase 1 Step 3.5 closure), archived at PR B per [ADR-009](../../DECISIONS.md#adr-009) Decision 4 when `PRD.md` was retired and content migrated to `docs/PRD/index.html` (§1 / §2 / §3 / §6 / §7 / appendices), `docs/SECURITY/index.html` (§4), `BACKLOG.md` (§5), and `docs/MILESTONE-FRAMING.md` (§8). This snapshot is the canonical Markdown source for any historical reference into the pre-HTML PRD body; new authoring lives in the HTML artifacts.
+
 ## Why this snapshot exists
 
 The Phase 1 Step 3.5 editorial rewrite (Phase 1 Step 3.5 / PR #25 → PR #N) restructures `PRD.md` for scannability without altering locked substance. The rewrite shifts line numbers throughout `PRD.md`.
