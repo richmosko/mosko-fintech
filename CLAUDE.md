@@ -12,11 +12,13 @@ Deeper context is **consult-on-demand** — read these only when the task requir
 2. **`WORKFLOW.md`** — project map: 10-phase structure (Phases 0 / 0.5 / 1–7) grouped under R/P/I+V outer categories per [ADR-009](DECISIONS.md#adr-009) Decision 2; agent roster; artifact list; operating model. Consult for "how do we operate" questions.
 3. **`DECISIONS.md`** — architectural and product decisions with rationale. Hybrid format (consolidation pattern + terse pattern per [ADR-009](DECISIONS.md#adr-009) Decision 8). Consult for "why did we choose X" questions.
 4. **`CHANGELOG.md`** — per-version PR-level execution history (extracted from WORKFLOW.md on 2026-05-23 per ADR-009 Decision 6). Consult for "when did X land?" / "what happened in v1.NN?" questions.
-5. **`PRD.md`** — product requirements. Will be converted to `docs/PRD/index.html` in PR B per [ADR-009](DECISIONS.md#adr-009) Decisions 3+4; until then `PRD.md` remains the live source of truth. Consult for "what V1 should do" questions.
-6. **`docs/PRD/`** / **`docs/ARCH/`** / **`docs/SECURITY/`** — HTML artifacts (scaffolded post-PR-A; PRD content migrates in PR B; ARCH + SECURITY content drafted in Phase 3). Consult for product / architecture / security detail.
-7. **`BACKLOG.md`** — V2 deferred candidates + Linear overflow queue (created via PR B per [ADR-009](DECISIONS.md#adr-009) Decision 4). Consult for "what's deferred to V2?" questions.
-8. **`docs/MILESTONE-FRAMING.md`** — V1 sub-version convention + drop-replace migration (created via PR B per [ADR-009](DECISIONS.md#adr-009) Decision 4). Consult for milestone-shape / V1.x sub-version questions.
-9. **`docs/discovery-summary.md`** — the discovery conversation that produced WORKFLOW.md, captured as pivot points and principles. Background; not active context.
+5. **`docs/PRD/index.html`** — product requirements (HTML; canonical post-PR-B). §1 vision / §2 V1 user stories (32 stories) / §3 success metrics / §6 out-of-scope / §7 constraints / appendices A/B/C. §4 / §5 / §8 stubs point to their relocated homes (rows 6 / 7 / 8). Consult for "what V1 should do" questions.
+6. **`docs/SECURITY/index.html`** — V1 canonical Sec reference layer per [ADR-008](DECISIONS.md#adr-008) (received PRD §4 content in PR B). 14-entry SD matrix + 15-entry RT catalog + 6 posture sub-§ (incl. V2-ship-gate Sec-consult inventory). Consult for security/compliance questions.
+7. **`BACKLOG.md`** — V2 deferred candidates + Linear overflow queue (received PRD §5 content in PR B per [ADR-009](DECISIONS.md#adr-009) Decision 4 + Decision 7 feature-flow scheme). Consult for "what's deferred to V2?" questions.
+8. **`docs/MILESTONE-FRAMING.md`** — V1 sub-version convention + drop-replace migration pattern + Phase 4 handoff anchor (received PRD §8 content in PR B per [ADR-009](DECISIONS.md#adr-009) Decision 4). Conceptual spec distinct from `MILESTONES.md` live state ledger. Consult for milestone-shape / V1.x sub-version questions.
+9. **`docs/ARCH/index.html`** — architecture HTML artifact (scaffolded in PR A; content drafted in Phase 3 by Architect). Consult for architecture detail post-Phase-3.
+10. **`docs/archive/PRD-pre-html-migration.md`** — frozen Markdown snapshot of `PRD.md` at v1.30 (Phase 1 Step 3.5 closure), archived in PR B when content migrated to the HTML artifacts above. Read-only historical reference for any pre-PR-B cross-section refs.
+11. **`docs/discovery-summary.md`** — the discovery conversation that produced WORKFLOW.md, captured as pivot points and principles. Background; not active context.
 
 Per-directory `CLAUDE.md` files (e.g., `/api/CLAUDE.md`, `/supabase/CLAUDE.md`) provide scoped context when working inside those directories. They get created in Phase 5.
 
@@ -43,18 +45,19 @@ Project work is tracked in **Linear**, organized as initiatives → projects →
 
 To find out what phase the project is in, what's locked, and what's next: read `MILESTONES.md` head (auto-loaded by the SessionStart hook; the section above `## Roadmap`). Historical per-version PR narrative lives in `CHANGELOG.md` (consult on demand).
 
-## In-flight: HTML doc conversion (scaffolded; content migration pending)
+## HTML doc artifact set (post-PR-B)
 
-PR A landed the scaffolding for `docs/PRD/`, `docs/ARCH/`, `docs/SECURITY/`, `docs/_assets/` per [ADR-009](DECISIONS.md#adr-009) (Decisions 3+4+5). These directories contain placeholder `index.html` files showing the locked conventions; **content migration is PR B** (still pending). `PRD.md` remains the live source of truth until PR B lands.
+PR A landed the scaffolding; **PR B landed the content migration** per [ADR-009](DECISIONS.md#adr-009) Decisions 3 + 4 + 5. `PRD.md` is archived; HTML artifacts are canonical.
 
-- `docs/PRD/index.html` — mosko §1–§8 schema; §4/§5/§8 marked for relocation per Decision 4.
-- `docs/SECURITY/index.html` — receives migrated PRD §4 in PR B (V1 Sec canonical reference per ADR-008).
+- `docs/PRD/index.html` — mosko §1 / §2 / §3 / §6 / §7 / appendices A/B/C (1090 lines). §4 / §5 / §8 stubs point to relocated homes per Decision 4.
+- `docs/SECURITY/index.html` — V1 Sec canonical reference per [ADR-008](DECISIONS.md#adr-008); received PRD §4 in PR B.
 - `docs/ARCH/index.html` — content drafted in Phase 3 by Architect.
-- `docs/_assets/style.css` — shared styling.
+- `BACKLOG.md` — V2 deferred candidates + Linear overflow queue; received PRD §5 in PR B.
+- `docs/MILESTONE-FRAMING.md` — V1 sub-version convention + drop-replace migration; received PRD §8 in PR B.
+- `docs/_assets/style.css` — shared styling (incl. CSS class taxonomy per Decision 5).
 - `docs/_assets/mermaid.min.js` — vendored Mermaid runtime (no CDN; per Decision 5 sub-decision 3).
 - `docs/_assets/mermaid-init.js` — vendored-load initializer.
-
-After PR B lands, `PRD.md` will be archived; the `docs/PRD/index.html` skeleton will fill with the migrated content; and the reading-order block above will reflect the final state.
+- `docs/archive/PRD-pre-html-migration.md` — frozen Markdown snapshot at v1.30 (PR B archive target).
 
 ## When in doubt
 

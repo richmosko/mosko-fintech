@@ -14,55 +14,84 @@
   <h1>mosko-fintech — Security and Compliance Posture</h1>
   <p class="doc-subtitle">V1 canonical Sec reference layer per <a href="../../DECISIONS.md#adr-008">ADR-008</a>.</p>
   <div class="doc-meta">
-    <span><strong>Owner:</strong> <code>seceng</code> agent</span>
-    <span><strong>Status:</strong> Scaffolding (content migrates from PRD §4 in PR B)</span>
+    <span><strong>Owner:</strong> <code>security-reviewer</code> agent</span>
+    <span><strong>Status:</strong> Locked (Phase 1 Step 3.5 + v1.30 verify-pass complete; β′ resolution applied to RT-13)</span>
     <span><strong>Traces to:</strong> <a href="../PRD/">PRD</a> / <a href="../ARCH/">ARCH</a> / <a href="../../DECISIONS.md#adr-008">ADR-008</a></span>
-    <span><strong>Last updated:</strong> <span class="tbd">—</span></span>
+    <span><strong>Last updated:</strong> <span class="lock-marker">2026-05-23 (PR B migration; §4 frozen at v1.30 PRD lock 2026-05-18)</span></span>
   </div>
 </header>
 
 <nav class="toc">
   <h2>Contents</h2>
   <ol>
-    <li><a href="#sec-4-1">§4.1 Isolation axes (6 canonical)</a></li>
-    <li><a href="#sec-4-2">§4.2 RLS architecture</a></li>
-    <li><a href="#sec-4-3">§4.3 Staleness / derivative-persistence</a></li>
-    <li><a href="#sec-4-4">§4.4 Sensitive-data classification matrix (14 entries)</a></li>
-    <li><a href="#sec-4-5">§4.5 RLS test catalog (15 entries; RT-02 + RT-05 critical-severity V1-block)</a></li>
-    <li><a href="#sec-4-6">§4.6 Retention / availability / incident-handling posture</a></li>
-    <li><a href="#boundaries">Trust boundaries (cross-ref from ARCH)</a></li>
+    <li><a href="#sec-4-1">§4.1 Tenant isolation posture (axes i–iv)</a></li>
+    <li><a href="#sec-4-2">§4.2 Credential and external-API posture</a></li>
+    <li><a href="#sec-4-3">§4.3 Derivative-persistence and staleness posture (axes v–vi)</a></li>
+    <li><a href="#sec-4-4">§4.4 Sensitive-data classification matrix (14 entries: SD-00 – SD-13)</a></li>
+    <li><a href="#sec-4-5">§4.5 RLS test catalog (15 entries: RT-01 – RT-15; RT-07 reserved-vacant; RT-02 + RT-05 critical-severity V1-block)</a></li>
+    <li><a href="#sec-4-6">§4.6 Cross-cutting posture commitments (retention / availability / incident-handling / V2-ship-gate inventory)</a></li>
+    <li><a href="#boundaries">Trust boundaries (cross-ref anchor from ARCH)</a></li>
   </ol>
 </nav>
 
-<!-- SCAFFOLDING NOTE (delete in PR B):
-     PR A scaffolding skeleton receiving migrated PRD §4 content in PR B per
-     ADR-009 Decision 4. Conventions in this skeleton mirror PRD/index.html. -->
-
-<section id="sec-4-1" data-section="isolation-axes">
-  <h2>§4.1 Isolation axes — six canonical</h2>
-  <p class="section-hint">V1 isolation primitives per <a href="../../DECISIONS.md#adr-008">ADR-008</a> Decision 1.</p>
-  <div class="migration-stub">Content migrated from <code>PRD.md</code> §4.1 verbatim in PR B. Six axes: (i) <code>tenant_id</code> isolation boundary; (ii) multi-scope ownership attribute; (iii) <code>tax_treatment</code> inclusion-filter attribute; (iv) write-path RLS symmetry; (v) staleness-live-read cross-tenant signal leak; (vi) snapshot derivative-persistence.</div>
+<section id="sec-4-intro" data-section="intro">
+  <h2>4. Security and compliance posture</h2>
+  <p>§4 lands V1's security and compliance posture — the canonical reference layer for tenant isolation, credential handling, derivative-persistence + staleness, the sensitive-data classification matrix, the Phase 3 RLS test catalog, and the cross-cutting posture commitments (data retention, availability/uptime, incident handling). §4 is Security Reviewer primary-authored (first Sec primary-authorship in Phase 1 Step 3; prior Sec engagements were six at-lock pass-with-comments verdicts on PM-authored §2 sections). The canonical-reference layer is captured at <strong><a href="../../DECISIONS.md#adr-008">ADR-008</a></strong> with bullet-level posture commitments at §4.1–§4.6; ADR-008 establishes the immutability boundary for the six canonical Sec axes, the 14-entry sensitive-data classification matrix, the 15-entry RLS test catalog, the V1 retention/availability/incident-handling baseline, and the two pattern divergences from PM-led drafting (hybrid format + two-stage drafting). §4 closes <strong>ADR-002 §7.0 missing-content gaps #4 + #6 + partial-#5</strong>; consumed by Phase 3 architecture work, Phase 5 migration design, Phase 6 PR review (Security Reviewer mandatory on every PR touching auth / data handling / external APIs / secrets / financial calculations), and Phase 7 incident handling.</p>
 </section>
 
-<section id="sec-4-2" data-section="rls-architecture">
-  <h2>§4.2 RLS architecture</h2>
-  <p class="section-hint">How tenant scoping is enforced at the database policy layer.</p>
-  <div class="migration-stub">Content migrated from <code>PRD.md</code> §4.2 verbatim in PR B.</div>
+<section id="sec-4-1" data-section="isolation-axes">
+  <h2>§4.1 Tenant isolation posture</h2>
+  <p class="section-hint">V1 isolation primitives — axes (i)–(iv) per <a href="../../DECISIONS.md#adr-008">ADR-008</a> Decision 1.</p>
+
+  <p>§4.1 anchors mosko-fintech V1's isolation primitive: <strong><code>tenant_id</code> is the V1 isolation boundary; every other axis-of-parameterization on user-data query paths (scope, tax_treatment, date, account_id, target_month) is a data attribute or inclusion filter operating <em>within</em> the tenant boundary, not a parallel isolation boundary alongside it.</strong> This sub-section consolidates the four canonical Sec axes (i)–(iv) elevated through the six §2.x at-lock passes into V1-locked posture commitments per ADR-008 Decision 1. The §4.4 matrix's <code>tenant-scoped</code>, <code>tenant-scoped-with-app-encryption</code>, and <code>tenant-scoped-derivative</code> storage-protection-class values all assume the §4.1 isolation primitive as foundation (see §4.4); the §4.5 RLS test catalog's 14 active tests verify the posture commitments below either directly or as adjacent extensions (see §4.5).</p>
+
+  <ul>
+    <li><strong><code>tenant_id</code> is the V1 isolation boundary (axis i — canonical clause).</strong> Every user-data table carries a <code>tenant_id</code> column; every read against a user-data table is enforced via Row-Level Security at the database policy layer to return only rows whose <code>tenant_id</code> matches the requesting tenant context. RLS enforcement is non-optional and is exercised (not bypassed) on the V1 single-user-tenant test path per ADR-002 §1.4 — single-user V1 is the deployment posture, not the isolation posture; the isolation posture is multi-tenant from day one. The 14 V1-mandatory tests in §4.5 verify this primitive across read paths, write paths, worker-context paths, and the test-environment posture; concrete RLS policy implementation is Architect Phase 3 per routing flag (a).</li>
+    <li><strong>Multi-scope ownership is a tenant-scoped data attribute, NOT an isolation boundary (axis ii — canonical clause).</strong> The ownership-scope label set during account onboarding (e.g., personal, trust, retirement custodial, HSA) per ADR-004 Decision B is a <code>scope</code> column on user-data rows. Scope filtering happens at the application query layer <em>above</em> the RLS boundary — a tenant's query for "personal-scope NAV" runs as <code>WHERE tenant_id = $1 AND scope = 'personal'</code> where the <code>tenant_id</code> clause is RLS-enforced and the <code>scope</code> clause is application-layer-applied. V1 user-facing surfaces render full-household-only (per §2.1.7 / §5.1 per-scope deferral); the data model carries scope from V1 bootstrap so V2 per-scope rendering ships without a data migration. <strong>Scopes are user-owned data labels; tenant isolation is the isolation boundary.</strong></li>
+    <li><strong><code>tax_treatment</code> is an inclusion-filter attribute, NOT an isolation boundary (axis iii — canonical clause).</strong> The three-way <code>tax_treatment</code> enum per ADR-002 §1.6 (<code>taxable</code> / <code>tax-deferred</code> / <code>tax-free</code>) on each account is a data attribute that filters which holdings contribute to specific aggregations (e.g., §2.5.4 Unrealized Tax Liability aggregates only <code>tax_treatment IN ('taxable')</code> per (π) lock). Like <code>scope</code>, <code>tax_treatment</code> filtering happens at the application query layer above the RLS boundary; <strong>tenant_id remains the isolation boundary across all <code>tax_treatment</code> filter combinations.</strong> The tri-axis query parameterization (<code>tenant_id × scope × tax_treatment × date</code>) verified at <a href="#rt-06">RT-06</a> is the canonical V1 query-shape envelope; future V2+ attributes that surface as additional inclusion filters operate within the same envelope and do NOT relax the isolation boundary.</li>
+    <li><strong>Write-path RLS symmetry: write paths inherit the tenant-scoping the read paths enforce (axis iv — canonical clause).</strong> No write path in V1 bypasses the tenant-scoping the read path enforces. The four §2.4.x mutation paths (account onboarding, manual account creation, manual transaction entry / edit / split / skip / reconcile, re-auth completion) per §2.4.5 are tenant-scoped at the database policy layer; same applies to the §2.6.2 commentary write path (<a href="#rt-11">RT-11</a>) and the §2.6.4 owner-identification settings-store write path (<a href="#rt-12">RT-12</a>). <strong>Manual-entry write paths carry elevated integrity risk relative to Plaid-ingested data</strong> — a user can author a <code>buy</code> five years ago at any price, with direct impact on cost basis and downstream realized-G/L computation per §2.4.5 elevated-integrity posture. V1 acknowledges the asymmetry as a write-path-integrity concern distinct from but downstream-of the write-path-RLS commitment; the specific integrity mechanism is Architect Phase 3 territory routed through the §2.4 manual-entry write-path Architect/Sec joint flag.</li>
+    <li><strong>Single-user V1 + multi-tenant infrastructure from day one (§7.3 cross-reference; closes §7.2 isolation-at-scale forward-pointer).</strong> Per ADR-002 §1.4 + §7.3 verbatim. The V1 usage model is explicitly single-user; the V1 isolation posture is multi-tenant. <strong>Isolation-at-scale posture per §7.2 forward-pointer (e) lands here:</strong> at V1 scale (single tenant) the §4.1 isolation primitive is exercised on every query under RLS; the scale-dimension question of how the isolation primitive holds at V2 multi-user scale (RLS query performance, cross-tenant query-plan stability, concurrent-tenant cron job isolation per <a href="#rt-09">RT-09</a>) is Architect Phase 3 territory per §7.2 routing flag (b). §4.1 commits to the <em>posture</em> — RLS scale is first-class from day one even at single-user-V1 test paths; the implementation shapes are downstream. <strong>Closes §7 routing flag (e)'s isolation-at-scale forward-pointer at §4 lock.</strong></li>
+  </ul>
+</section>
+
+<section id="sec-4-2" data-section="credential-posture">
+  <h2>§4.2 Credential and external-API posture</h2>
+  <p class="section-hint">V1 credential-class data class (SD-03 Plaid access tokens) + external-API surface (Plaid OAuth + webhooks). The two critical-severity tests (RT-02, RT-05) mark this boundary.</p>
+
+  <p>§4.2 lands V1's posture for credential-class data and the external-API surface that introduces it. mosko-fintech V1 has exactly one credential-class data class — <strong><a href="#sd-03">SD-03 Plaid access tokens</a></strong> — and exactly one external-API surface that handles credentials — the <strong>Plaid OAuth flow + webhook channel</strong> per §2.4.1 + §2.4.4. The asymmetry between credential-class data and the broader sensitive-data surface is intentional: credentials get categorically stricter handling than even high-tier financial-data classes because compromise yields direct unauthenticated access to a downstream system (the user's institution data via Plaid), not just exposure of stored financial state. The §4.5 catalog's two critical-severity tests (<a href="#rt-02">RT-02</a>, <a href="#rt-05">RT-05</a>) are V1-ship-blockers per ADR-008 Decision 3; the critical-severity tier exists at V1 specifically to mark the credential-class boundary.</p>
+
+  <ul>
+    <li><strong>Plaid OAuth flow integrity — credentials stay at the institution; mosko-fintech holds only a Plaid-mediated access token.</strong> Per §2.4.1 verbatim. The Plaid Link flow exchanges a short-TTL Link token → public token at the client → server-side <code>/item/public_token/exchange</code> for a long-lived access token; <strong>the institution credentials the user enters at the institution never touch mosko-fintech servers</strong>, and the access token never touches the client. Redirect URI is allowlist-bound. §4.2 reaffirms as V1 posture.</li>
+    <li><strong>SD-03 Plaid access tokens carry credential-class storage protection (<a href="#rt-02">RT-02</a>).</strong> Per §4.4 SD-03 row: application-layer encryption, KMS-backed, audit log on rotation, tenant-scoped non-negotiable, never client-facing. Retention is <code>bounded-Item-active-only</code> — server-side deletion on Item-deletion, not merely flagged-inactive. RT-02 verifies tenant isolation on the Plaid Item table where SD-03 + SD-02 co-locate; RT-02 is critical-severity per ADR-008 Decision 3 — Plaid Item table cross-tenant compromise is the V1-ship-block scenario. Concrete storage shape (per-tenant key derivation, KMS-backed mechanism, audit-on-rotation surface) is Architect Phase 3 per routing flag (b).</li>
+    <li><strong>Webhook signature verification gates production credential-state mutation (<a href="#rt-05">RT-05</a>; hard Sec hard-line for V1 ship).</strong> Per routing flag (c). Every incoming Plaid webhook payload's signature is validated against the configured Plaid webhook signing secret before the payload routes to any credential-state mutation path; invalid-signature payloads are dropped with audit-log entry. RT-05 verifies under the adversarial-input battery (signature stripping, signature substitution from another Plaid app's secret, replay of valid-but-stale signatures, payload-body tampering with signature retained). <strong>Sec hard-line: V1 cannot ship with RT-05 failing or unimplemented.</strong> Routing flag (c) carries the Sec-sign-off-before-V1-ship requirement.</li>
+    <li><strong>Four credential-error states handled non-silently (per §2.4.4 verbatim).</strong> The data model distinguishes at minimum (a) <code>ITEM_LOGIN_REQUIRED</code> (institution credentials invalid — user re-auths via Plaid Link); (b) <code>INSTITUTION_DOWN</code> (Plaid reaches the institution but it's offline — no user action required); (c) institution-side grant revoked (the institution withdrew Plaid's grant; user acts at the institution side); (d) user-side grant revoked at the institution (user revoked Plaid on the institution's portal; user re-authorizes there before re-auth here can complete). Finer UX presentation of (b) / (c) / (d) is Phase 2 territory; the data-model distinction holds in V1. <strong>Re-auth UX is in-session only</strong> — mosko-fintech sends no re-auth-link emails or SMS; institution credentials are entered only inside the authenticated app session, through Plaid Link itself. Pre-emptive Plaid re-auth reminders are V2+ per <a href="../../BACKLOG.md">BACKLOG.md</a> §5.4 with Sec-consult required before V2 ship (phishing-template surface) per §4.6 V2-ship-gate inventory item (i).</li>
+    <li><strong>SD-01 Plaid account-share-decision data as credential-adjacent surface (<a href="#rt-03">RT-03</a>).</strong> The user's Plaid Link account-share selections are tenant-scoped per §2.4.1 + RT-03. Account-share-decision data is medium-tier sensitivity (per §4.4 <a href="#sd-01">SD-01</a> row) — lower than the access token itself but adjacent to the credential surface because it records which institution accounts the user has authorized for Plaid-mediated read access. Newly-available-account detection on resync compares Plaid's current account list against this stored set; the "newly available — opt in?" prompt is the user-facing surface per §2.4.1.</li>
+    <li><strong>No third-party security-master API calls at V1 — new-symbol metadata enrichment uses Plaid-only data.</strong> Per §2.4.1 verbatim. V1 does not call out to third-party security-master APIs that would expose user holdings to those providers; new-symbol enrichment uses provider-side data already delivered by Plaid for that holding. Any V2+ third-party security-master API integration requires separate Sec consult before ship (parallel posture to §4.6 V2-ship-gate inventory items (ii) / (iii)).</li>
+    <li><strong>Spend-cap / API-quota alerting V2-implementation Sec-consult forward-pointer.</strong> Per §7.1 (a) origin + §4.6 V2-ship-gate inventory item (iv). If V1's ≤ $50/month cost target is operationalized as a runtime cost-protection control (auto-disable Plaid sync at threshold, alert at threshold, quota-tripped sync degradation), the implementation shape intersects the §2.4.4 re-auth flow's availability/phishing-surface tradeoff. <strong>Closes §7 routing flag (a) at §4 lock</strong> — flag lives forward at §4.6 V2-ship-gate inventory item (iv); §7.1 (a) reciprocation lands at §4 lock-time surgical edit per routing flag (m).</li>
+  </ul>
 </section>
 
 <section id="sec-4-3" data-section="staleness-derivative">
-  <h2>§4.3 Staleness / derivative-persistence surfaces</h2>
-  <p class="section-hint">Snapshot-side derivative-persistence handling; staleness-live-read posture.</p>
-  <div class="migration-stub">Content migrated from <code>PRD.md</code> §4.3 verbatim in PR B (incl. β′ resolution from v1.30 verify-pass VP-2/12).</div>
+  <h2>§4.3 Derivative-persistence and staleness posture</h2>
+  <p class="section-hint">Two axes elevated at §2.6 lock — (v) staleness-live-read cross-tenant signal leak; (vi) snapshot store as derivative-persistence surface. β′ resolution from v1.30 verify-pass VP-2/12 applied at the RT-13 banner-name-string clause.</p>
+
+  <p>§4.3 lands V1's posture for two axes that §2.6 lock elevated as new Sec territory beyond the §2.1 → §2.5 isolation primitive: <strong>(v) staleness-live-read cross-tenant signal leak</strong> as a new verification surface, and <strong>(vi) snapshot store as derivative-persistence surface</strong>. The §4.4 matrix's <code>tenant-scoped-derivative</code> storage protection class exists specifically for axis vi (see §4.4 <a href="#sd-12">SD-12</a>). §4.3 also lands the non-silent-staleness V1 commitment that anchors the §2.4.4 user-facing availability story per §4.6 availability posture.</p>
+
+  <ul>
+    <li><strong>Staleness-live-read cross-tenant signal leak (axis v — new Sec verification surface; <a href="#rt-13">RT-13</a>).</strong> At §2.6.5 render time, every aggregation that consumed data from an account currently pending re-auth visually marks the stale-account contribution; the rendering layer joins from the §2.6.4 frozen snapshot's <code>account_id</code> to live §2.4.4 credential-error state per render. <strong>The cross-tenant signal-leak risk is that this live join must resolve under the requesting tenant's identity, not under any cross-tenant scope.</strong> Under a two-tenant fixture with overlapping <code>account_id</code> values (collision case), the staleness join must resolve to tenant A's credential state when rendering tenant A's snapshot, never to tenant B's. RT-13 verifies under both the in-app render path and the PDF re-render path; classified <code>race-condition</code> because the live-join-at-render-time pattern is concurrency-shape (multiple tenants may render simultaneously, the join must not race across tenant boundaries). <strong>The §2.6.5 banner additionally surfaces stale-contributing account-name strings inline; per §4.4's signal-correlation framing for identity-correlate name attributes (<a href="#sd-01">SD-01</a> / <a href="#sd-11">SD-11</a> canonical posture), account-name strings are protected as signal-correlation attributes, not as credential-class or financial-data-exposure classes. The banner's account-name string MUST resolve from the requesting tenant's SD-12 snapshot, not from any live join surface against §2.4.4 — Architect Phase 3 is constrained accordingly; the constraint is verified at RT-13.</strong> <span class="lock-marker">β′ resolution from v1.30 verify-pass VP-2/12 applied</span> — High-severity per ADR-008 Decision 3; not critical because the failure-mode under the snapshot-sourced-name constraint is cross-tenant signal correlation (which-accounts-at-tenant-A-are-stale-leaks-behavior-to-tenant-B, including the account-name strings rendered as part of that signal), not cross-tenant credential or financial-data exposure.</li>
+    <li><strong>Snapshot store as derivative-persistence surface (axis vi — <a href="#sd-12">SD-12</a>).</strong> The §2.6.4 frozen-at-generation monthly-report snapshot denormalizes <a href="#sd-00">SD-00</a> baseline ledger + <a href="#sd-04">SD-04</a> bracket schedules + <a href="#sd-05">SD-05</a> tax_character categorization + <a href="#sd-06">SD-06</a> marginal-rate scalars + <a href="#sd-07">SD-07</a> Realized + Unrealized Tax Liability scalars + <a href="#sd-08">SD-08</a> aggregate G/L by tax_treatment + <a href="#sd-09">SD-09</a> est-payment ledger + <a href="#sd-10">SD-10</a> Rebalancing Targets commentary + <a href="#sd-11">SD-11</a> owner-identification trust-name + staleness-state into single rows per <code>(tenant_id, target_month)</code>. <strong>The derivative inherits the storage protection class of the most-protected source class</strong> — per §4.4 SD-12 row, SD-12's storage protection class is <code>tenant-scoped-derivative</code> (a distinct enum value per ADR-008 Decision 2, specifically to flag derivative-of-multiple-classes posture). Retention is <code>indefinite-with-V2-cold-storage-rollover</code> per §2.6.4 χ-1; concrete cold-storage rollover mechanism is Architect Phase 3 per routing flag (f). <a href="#rt-08">RT-08</a> verifies cross-tenant snapshot store read isolation under three sub-tests (query by <code>target_month</code> / by <code>report_id</code> / via joined view).</li>
+    <li><strong>Cross-cutting derivative-persistence axis (<a href="#sd-13">SD-13</a> cross-cutting annotation; applies forward to any future derivative-persistence surface).</strong> Per §4.4 SD-13 row + the cross-cutting cell-value convention. Any derivative-persistence surface that lands at V2+ (e.g., shared-link delivery from <a href="../../BACKLOG.md">BACKLOG.md</a> §5.6; pre-emptive notification surfaces from <a href="../../BACKLOG.md">BACKLOG.md</a> §5.4) inherits the same posture: storage-protection-class follows most-protected source class; retention-posture is independently Sec-flaggable; render-time-staleness-join must resolve under requesting-tenant identity. <strong>The axis is independently Sec-flaggable for retention-sprawl + blast-radius-widening + render-time-staleness-join compound risk</strong> — any V2+ derivative-persistence surface triggers Sec-consult at design time, parallel to §4.6 V2-ship-gate inventory item (iii).</li>
+    <li><strong>Non-silent staleness as V1 commitment (the §2.4.4 user-facing availability story).</strong> Per §2.4.4 verbatim. Every aggregation that consumed data from an account currently pending re-auth visually marks the stale-account contribution — the §2.1.2 NAV trajectory, the §2.1.5 composition table, the §2.2.2 allocation table, the §2.3.2 cash-flow rollup, the §2.3.4 Historical Expenditures chart, and the §2.6 monthly report. <strong>Aggregations are never silently presented as fresh when constituent accounts are pending re-auth.</strong> This is the headline V1 product commitment of §2.4.4 and the V1 user-facing availability story per §4.6 availability posture — V1 doesn't commit to an uptime SLO; it commits to telling the user when data is stale, which is a stronger commitment than an SLO for the F/CTO's analytical use case. §2.6.5 staleness markers are derived from this commitment (per-section + report-banner naming stale accounts at render time per §2.6.5 lock).</li>
+    <li><strong>Snapshot regeneration race condition preserves staleness-marker live-read coupling (<a href="#rt-14">RT-14</a>).</strong> Per routing flag (i). Concurrent regenerations on same <code>(tenant_id, target-month)</code> produce exactly one snapshot row with last-writer-wins or transactional rejection (Architect Phase 3 picks the semantics); cross-tenant concurrency (tenant A regenerating month M while tenant B regenerating month M simultaneously) asserts no cross-tenant data mixing; <strong>regeneration does not silently rewrite the staleness layer</strong> — the staleness-marker live-read coupling at render path is preserved across regeneration. Classified <code>race-condition</code> and Related Class IDs <code>SD-12, SD-13</code> because the race spans both the concrete snapshot store and the derivative-persistence axis.</li>
+    <li><strong>PDF + cron worker tenant isolation as derivative-persistence-adjacent (<a href="#rt-09">RT-09</a> + <a href="#rt-10">RT-10</a>).</strong> Background workers that generate or render snapshots establish tenant context before any source-data read or snapshot-store write (RT-09 cron worker tenant-context isolation); shared PDF worker pool does not leak fonts / DOM / auth headers / metadata across tenant renders (RT-10 PDF-generation worker tenant isolation). Both are <code>worker-context-isolation</code> test category per §4.5; both high-severity per ADR-008 Decision 3. Cron worker tenant-context-binding mechanism is Architect Phase 3 per routing flag (g); PDF worker isolation mechanism is Architect Phase 3 per routing flag (h).</li>
+  </ul>
 </section>
 
 <section id="sec-4-4" data-section="sd-matrix">
   <h2>§4.4 Sensitive-data classification matrix</h2>
-  <p class="section-hint">14 entries (SD-00 through SD-13) in §2-traceability order. 8 columns. Locked at <a href="../../DECISIONS.md#adr-008">ADR-008</a> Decision 2.</p>
+  <p class="section-hint">14 entries (SD-00 – SD-13) in §2-traceability order. 8 columns. Locked at <a href="../../DECISIONS.md#adr-008">ADR-008</a> Decision 2 — the matrix is V1-canonical; class additions require ADR-008 amendment.</p>
 
-  <div class="migration-stub">
-    Content migrated from <code>PRD.md</code> §4.4 in PR B. Convention example below (CSS tier classes; semantic IDs <code>id="sd-NN"</code>):
-  </div>
+  <p>§4.4 lands the V1 sensitive-data classification matrix as the canonical Sec reference for what data classes V1 handles, how each is protected and retained, and how each cross-references to the §4.5 Phase 3 RLS test catalog. Per <strong>ADR-008 Decision 2</strong>, the matrix is V1-canonical: the 8-column shape, the 14 entries (SD-00 through SD-13), and the three closed-enum columns (sensitivity tier / storage protection class / retention posture) bind future class additions and require ADR-008 amendment for any expansion. Cross-cutting annotation rows use the <code>—</code> cell convention (<a href="#sd-13">SD-13</a> is the V1 instance). The Phase 3 forward-pointer ID column points right to §4.5 Test IDs; §4.5's Related Class IDs column points left back at §4.4 Class IDs.</p>
 
   <table class="data-matrix sensitive-data">
     <thead>
@@ -78,26 +107,155 @@
       </tr>
     </thead>
     <tbody>
-      <tr id="sd-12" class="tier-high storage-tenant-scoped-derivative">
+      <tr id="sd-00" class="tier-high">
+        <td>SD-00</td>
+        <td>Baseline transaction / holdings / cost-basis ledger</td>
+        <td>§2.1 + §2.2 + §2.3 + §2.4.3</td>
+        <td>high</td>
+        <td>tenant-scoped</td>
+        <td>indefinite</td>
+        <td>Server-side reads under tenant_id RLS; user-facing within own tenant on §2.1 / §2.2 / §2.3 / §2.6 aggregation surfaces; never cross-tenant; manual-entry write path per §2.4.5 elevated-integrity posture</td>
+        <td><a class="forward-pointer" href="#rt-01">[RT-01]</a> <a class="forward-pointer" href="#rt-04">[RT-04]</a></td>
+      </tr>
+      <tr id="sd-01" class="tier-medium">
+        <td>SD-01</td>
+        <td>Plaid account-share-decision data</td>
+        <td>§2.4.1</td>
+        <td>medium</td>
+        <td>tenant-scoped</td>
+        <td>indefinite</td>
+        <td>Server-side reads under tenant_id RLS; user-facing within own tenant on §2.4.1 "newly available — opt in?" surface and §2.4 connection-state view; never cross-tenant</td>
+        <td><a class="forward-pointer" href="#rt-03">[RT-03]</a></td>
+      </tr>
+      <tr id="sd-02" class="tier-medium">
+        <td>SD-02</td>
+        <td>Plaid Item-state metadata (sync-pattern behavioral correlate)</td>
+        <td>§2.4.4</td>
+        <td>medium</td>
+        <td>tenant-scoped</td>
+        <td>bounded-N-day-rolling (N = 90 days)</td>
+        <td>Server-side reads under tenant_id RLS for sync-health / debugging; aggregated counts may surface on §2.4 connection-state view; never cross-tenant; 90-day prune per routing flag (e)</td>
+        <td><a class="forward-pointer" href="#rt-02">[RT-02]</a></td>
+      </tr>
+      <tr id="sd-03" class="tier-credential">
+        <td>SD-03</td>
+        <td>Plaid access tokens</td>
+        <td>§2.4.4</td>
+        <td>credential</td>
+        <td>credential-class</td>
+        <td>bounded-Item-active-only</td>
+        <td>Server-side only; never client-facing; surfaces in audit log on rotation per §2.4.4 Architect/Sec joint flag; deleted on user-disconnect of Item</td>
+        <td><a class="forward-pointer" href="#rt-02">[RT-02]</a> <a class="forward-pointer" href="#rt-05">[RT-05]</a></td>
+      </tr>
+      <tr id="sd-04" class="tier-high">
+        <td>SD-04</td>
+        <td>Tax-bracket schedules + standard deduction (Federal + CA)</td>
+        <td>§2.5.2</td>
+        <td>high</td>
+        <td>tenant-scoped</td>
+        <td>indefinite</td>
+        <td>Server-side reads under tenant_id RLS; user-facing within own tenant on §2.5.2 settings-store UI and §2.5.3 / §2.5.4 computation paths; never cross-tenant; revealing precision increased per ADR-006 bracket-aware correction</td>
+        <td><a class="forward-pointer" href="#rt-06">[RT-06]</a></td>
+      </tr>
+      <tr id="sd-05" class="tier-high">
+        <td>SD-05</td>
+        <td>Sub-Cat tax_character categorization patterns</td>
+        <td>§2.5.1</td>
+        <td>high</td>
+        <td>tenant-scoped</td>
+        <td>indefinite</td>
+        <td>Server-side reads under tenant_id RLS; user-facing within own tenant on §2.5.1 three-column decomposition view and §2.5.3 bracket-routing layer; never cross-tenant</td>
+        <td><a class="forward-pointer" href="#rt-06">[RT-06]</a></td>
+      </tr>
+      <tr id="sd-06" class="tier-high">
+        <td>SD-06</td>
+        <td>Marginal-rate scalars (Federal LT CG top-bracket + CA ordinary top-bracket)</td>
+        <td>§2.5.4</td>
+        <td>high</td>
+        <td>tenant-scoped</td>
+        <td>indefinite</td>
+        <td>Server-side reads under tenant_id RLS; user-facing within own tenant on §2.5.4 Unrealized Tax Liability computation; never cross-tenant; F/CTO 2026-05-17 override locked Federal LT CG top-bracket as the source</td>
+        <td><a class="forward-pointer" href="#rt-06">[RT-06]</a></td>
+      </tr>
+      <tr id="sd-07" class="tier-high">
+        <td>SD-07</td>
+        <td>Realized + Unrealized Tax Liability scalar values</td>
+        <td>§2.5.4</td>
+        <td>high</td>
+        <td>tenant-scoped-with-app-encryption</td>
+        <td>indefinite</td>
+        <td>Server-side reads under tenant_id RLS; user-facing within own tenant as §2.5.4 NAV-components and as §2.6 monthly-report Estimated Taxes section; never cross-tenant; product-disclaimer attached at §2.5.4 V1 boundary</td>
+        <td><a class="forward-pointer" href="#rt-06">[RT-06]</a> <a class="forward-pointer" href="#rt-08">[RT-08]</a></td>
+      </tr>
+      <tr id="sd-08" class="tier-high">
+        <td>SD-08</td>
+        <td>Aggregate unrealized G/L by tax_treatment</td>
+        <td>§2.5.4</td>
+        <td>high</td>
+        <td>tenant-scoped</td>
+        <td>indefinite</td>
+        <td>Server-side reads under tenant_id RLS with tax_treatment-attribute inclusion filter (taxable-only per π lock); user-facing within own tenant on §2.5.4 Unrealized aggregation; never cross-tenant</td>
+        <td><a class="forward-pointer" href="#rt-06">[RT-06]</a></td>
+      </tr>
+      <tr id="sd-09" class="tier-high">
+        <td>SD-09</td>
+        <td>Quarterly est-payment ledger + IRS/FTB account ledger state</td>
+        <td>§2.5.3</td>
+        <td>high</td>
+        <td>tenant-scoped</td>
+        <td>indefinite</td>
+        <td>Server-side reads under tenant_id RLS; user-facing within own tenant on §2.5.3 Tax Balance Prior Year + due-date rendering; never cross-tenant; treated as standard §2.4.2 manual accounts with tax-domain overlay per (j-1)</td>
+        <td><a class="forward-pointer" href="#rt-01">[RT-01]</a> <a class="forward-pointer" href="#rt-04">[RT-04]</a></td>
+      </tr>
+      <tr id="sd-10" class="tier-high">
+        <td>SD-10</td>
+        <td>Rebalancing Targets free-text commentary</td>
+        <td>§2.6.2</td>
+        <td>high</td>
+        <td>tenant-scoped</td>
+        <td>indefinite</td>
+        <td>Server-side reads under tenant_id RLS; user-facing within own tenant on §2.6.2 authoring surface and §2.6.4 frozen-snapshot render path; rendered into §2.6 monthly-report PDF; never cross-tenant; input-sanitization required at write path</td>
+        <td><a class="forward-pointer" href="#rt-11">[RT-11]</a></td>
+      </tr>
+      <tr id="sd-11" class="tier-medium">
+        <td>SD-11</td>
+        <td>Owner-identification trust-name string</td>
+        <td>§2.6.4</td>
+        <td>medium</td>
+        <td>tenant-scoped</td>
+        <td>indefinite</td>
+        <td>Server-side reads under tenant_id RLS; user-facing within own tenant on §2.6.4 ψ-1 settings UI; rendered into every §2.6 monthly-report PDF header; never cross-tenant; input-sanitization required at write path</td>
+        <td><a class="forward-pointer" href="#rt-12">[RT-12]</a></td>
+      </tr>
+      <tr id="sd-12" class="tier-high">
         <td>SD-12</td>
-        <td><em>(example row)</em> Snapshot account name</td>
-        <td>§2.6</td>
+        <td>Monthly-report snapshot store (frozen-at-generation derivative)</td>
+        <td>§2.6.4</td>
         <td>high</td>
         <td>tenant-scoped-derivative</td>
-        <td><span class="tbd">—</span></td>
-        <td><span class="tbd">—</span></td>
-        <td><a class="forward-pointer" href="#app-b-sd-12">[App B-SD-12]</a></td>
+        <td>indefinite-with-V2-cold-storage-rollover</td>
+        <td>Server-side reads under tenant_id RLS; user-facing within own tenant on §2.6 in-app reads + PDF export; denormalizes SD-00 + SD-04 + SD-05 + SD-06 + SD-07 + SD-08 + SD-09 + SD-10 + SD-11 + staleness-state into single rows; inherits storage-protection of most-protected source class; retention per §2.6.4 χ-1 indefinite lock with V2-cold-storage rollover forward-compat</td>
+        <td><a class="forward-pointer" href="#rt-08">[RT-08]</a> <a class="forward-pointer" href="#rt-09">[RT-09]</a> <a class="forward-pointer" href="#rt-10">[RT-10]</a> <a class="forward-pointer" href="#rt-13">[RT-13]</a> <a class="forward-pointer" href="#rt-14">[RT-14]</a></td>
       </tr>
-      <tr class="tbd"><td colspan="8" class="tbd">14 rows total — migrated in PR B</td></tr>
+      <tr id="sd-13">
+        <td>SD-13</td>
+        <td>Derivative-persistence axis (cross-cutting annotation)</td>
+        <td>§2.6 (axis vi elevated at §2.6 lock)</td>
+        <td>—</td>
+        <td>—</td>
+        <td>—</td>
+        <td>Axis-as-posture: any derivative-persistence surface (SD-12 at V1; V2+ surfaces from <a href="../../BACKLOG.md">BACKLOG.md</a> §5.6 shared-link / §5.4 pre-emptive-notification trajectories) inherits the storage-protection-class of its most-protected source class AND is independently Sec-flaggable for retention-sprawl + blast-radius-widening + render-time-staleness-join compound risk; §4.3 posture sub-section anchors here</td>
+        <td><a class="forward-pointer" href="#rt-08">[RT-08]</a> <a class="forward-pointer" href="#rt-09">[RT-09]</a> <a class="forward-pointer" href="#rt-10">[RT-10]</a> <a class="forward-pointer" href="#rt-13">[RT-13]</a> <a class="forward-pointer" href="#rt-14">[RT-14]</a></td>
+      </tr>
     </tbody>
   </table>
 </section>
 
 <section id="sec-4-5" data-section="rt-catalog">
-  <h2>§4.5 RLS test catalog</h2>
-  <p class="section-hint">15 entries (RT-01 through RT-15; RT-07 reserved-vacant; 14 active). 7 columns. Locked at <a href="../../DECISIONS.md#adr-008">ADR-008</a> Decision 3. <strong>V1-block threshold:</strong> <code>critical</code> severity only — expected V1 critical-severity count = 2 (RT-02 + RT-05).</p>
+  <h2>§4.5 Phase 3 RLS test catalog</h2>
+  <p class="section-hint">15 entries (RT-01 – RT-15; RT-07 reserved-vacant; 14 active). 7 columns. Locked at <a href="../../DECISIONS.md#adr-008">ADR-008</a> Decision 3. <strong>V1-block threshold:</strong> <code>critical</code> severity only — expected V1 critical-severity count = 2 (<a href="#rt-02">RT-02</a> + <a href="#rt-05">RT-05</a>).</p>
 
-  <div class="migration-stub">Content migrated from <code>PRD.md</code> §4.5 in PR B.</div>
+  <p>§4.5 lands the V1-mandatory Phase 3 RLS test catalog as the canonical Sec forward-payload for Architect Phase 3 + Phase 6 PR-review consumption. Per <strong>ADR-008 Decision 3</strong>, the catalog is V1-canonical: the 7-column shape, the 14 active tests + 1 reserved slot (RT-01 through RT-15; RT-07 reserved-vacant), and the two closed-enum columns (test category / severity) bind future test additions and require ADR-008 amendment for any expansion. <strong>V1-block threshold: <code>critical</code> severity only</strong> — two V1-ship-blocker tests (<a href="#rt-02">RT-02</a> Plaid Item table RLS, <a href="#rt-05">RT-05</a> webhook signature verification). Bidirectional cross-reference with §4.4 via the Related Class IDs column; one-way pointer findings explained at routing flag (l).</p>
 
   <table class="data-catalog rls-tests">
     <thead>
@@ -112,33 +270,162 @@
       </tr>
     </thead>
     <tbody>
+      <tr id="rt-01" class="severity-high">
+        <td>RT-01</td>
+        <td>§2.4.1 + §2.4.2 + §2.4.3 + §2.4.4 mutation paths (consolidated write-path RLS)</td>
+        <td>Under two-tenant SQL fixture, writes under tenant A's identity through the §2.4.1 account-onboarding, §2.4.2 manual account creation, §2.4.3 manual transaction entry / edit / split / skip / reconcile, and §2.4.4 re-auth completion paths create rows visible only to tenant A; cross-tenant write attempts (impersonated tenant B identity) are rejected at the policy layer; ownership-label/scope/tax-treatment/account-type attribute writes inherit the same tenant-scoping.</td>
+        <td>write-path-RLS</td>
+        <td>§2.4.5</td>
+        <td>high</td>
+        <td><a class="forward-pointer" href="#sd-00">SD-00</a>, <a class="forward-pointer" href="#sd-09">SD-09</a></td>
+      </tr>
       <tr id="rt-02" class="severity-critical">
         <td>RT-02</td>
-        <td><em>(example row)</em> Plaid Item table RLS</td>
-        <td><span class="tbd">—</span></td>
+        <td>Per-tenant Plaid Item table (access tokens + Item-state metadata co-located)</td>
+        <td>Under two-tenant SQL fixture, tenant A's Plaid Item rows (containing SD-03 access tokens and SD-02 Item-state metadata) are visible only to tenant A; cross-tenant SELECT returns zero rows; access tokens never surface in any query result to a client context; Item-state metadata older than the 90-day prune window does not appear in any read path.</td>
         <td>read-path-RLS</td>
-        <td>§2.4</td>
+        <td>§2.4.4</td>
         <td><strong>critical</strong></td>
-        <td>SD-03</td>
+        <td><a class="forward-pointer" href="#sd-02">SD-02</a>, <a class="forward-pointer" href="#sd-03">SD-03</a></td>
+      </tr>
+      <tr id="rt-03" class="severity-high">
+        <td>RT-03</td>
+        <td>Per-tenant account-share-decision table</td>
+        <td>Under two-tenant SQL fixture, tenant A's account-share-decision rows (which institution accounts opted in) are visible only to tenant A; cross-tenant SELECT returns zero rows; newly-available-account detection on resync reads only tenant A's stored set.</td>
+        <td>read-path-RLS</td>
+        <td>§2.4.1</td>
+        <td>high</td>
+        <td><a class="forward-pointer" href="#sd-01">SD-01</a></td>
+      </tr>
+      <tr id="rt-04" class="severity-high">
+        <td>RT-04</td>
+        <td>Tenant-scoped read on §2.4.3 sync-history audit log</td>
+        <td>Under two-tenant SQL fixture, tenant A's sync-history audit-log rows (per-account dedup-history "what was deduped this sync") are visible only to tenant A; the on-demand audit-log view query is tenant-scoped at every entry point including any aggregated count surfaces.</td>
+        <td>read-path-RLS</td>
+        <td>§2.4.3</td>
+        <td>high</td>
+        <td><a class="forward-pointer" href="#sd-00">SD-00</a>, <a class="forward-pointer" href="#sd-09">SD-09</a></td>
+      </tr>
+      <tr id="rt-05" class="severity-critical">
+        <td>RT-05</td>
+        <td>Plaid webhook signature verification (gates production credential-state mutations)</td>
+        <td>Webhook handler rejects any incoming Plaid webhook payload whose signature does not validate against the configured Plaid webhook signing secret; valid-signature payloads route to credential-state mutation paths, invalid-signature payloads are dropped with audit-log entry; adversarial-input battery includes signature stripping, signature substitution from another Plaid app's secret, replay of valid-but-stale signatures, and payload-body tampering with signature retained.</td>
+        <td>input-sanitization</td>
+        <td>§2.4.4</td>
+        <td><strong>critical</strong></td>
+        <td><a class="forward-pointer" href="#sd-03">SD-03</a></td>
+      </tr>
+      <tr id="rt-06" class="severity-high">
+        <td>RT-06</td>
+        <td>tax_treatment-filtered aggregation independence + settings-store bracket-table reads (consolidated §2.5 read-path)</td>
+        <td>Under two-tenant SQL fixture with realistic bracket-schedule field shapes per ADR-006: (a) tenant A's §2.5.2 bracket schedules / standard deduction / marginal-rate scalars are visible only to tenant A across all settings-store read paths; (b) §2.5.4 Unrealized Tax Liability aggregation under <code>tax_treatment IN ('taxable')</code> filter returns only tenant A's taxable holdings and excludes tenant B's taxable holdings AND tenant A's tax-deferred/tax-free holdings; (c) tri-axis query parameterization (tenant_id × scope × tax_treatment × date) maintains tenant_id as the isolation boundary regardless of scope or tax_treatment filter combinations.</td>
+        <td>read-path-RLS</td>
+        <td>§2.5.2 + §2.5.4</td>
+        <td>high</td>
+        <td><a class="forward-pointer" href="#sd-04">SD-04</a>, <a class="forward-pointer" href="#sd-05">SD-05</a>, <a class="forward-pointer" href="#sd-06">SD-06</a>, <a class="forward-pointer" href="#sd-07">SD-07</a>, <a class="forward-pointer" href="#sd-08">SD-08</a></td>
+      </tr>
+      <tr id="rt-07">
+        <td>RT-07</td>
+        <td colspan="6"><em>Reserved (vacant — see <a href="../../DECISIONS.md#adr-008">ADR-008</a> Decision 3 reserved-vacant row consolidation rationale)</em></td>
+      </tr>
+      <tr id="rt-08" class="severity-high">
+        <td>RT-08</td>
+        <td>Cross-tenant snapshot store leak verification (three sub-tests)</td>
+        <td>Under two-tenant SQL fixture: (a) query snapshot store by <code>target_month</code> returns only tenant A's snapshots; (b) query by <code>report_id</code> returns only tenant A's report; (c) joined view fusing snapshot rows with live §2.4.4 staleness state returns only tenant A's account staleness — never reads cross-tenant credential state; all three sub-tests pass under the rendered-value-level snapshot shape per φ-1.</td>
+        <td>read-path-RLS</td>
+        <td>§2.6.4 + §2.6.6</td>
+        <td>high</td>
+        <td><a class="forward-pointer" href="#sd-07">SD-07</a>, <a class="forward-pointer" href="#sd-12">SD-12</a></td>
+      </tr>
+      <tr id="rt-09" class="severity-high">
+        <td>RT-09</td>
+        <td>Cross-tenant cron worker context isolation</td>
+        <td>Cron worker establishes <code>tenant_id</code> context before any source-data read or snapshot-store write; instrumented SQL log assertion confirms tenant_id WHERE clause on every query the worker issues; concurrent multi-tenant cron jobs (tenant A + tenant B cron firing simultaneously per 1st-of-month τ-1 cadence) assert disjoint writes — no row written by tenant A's worker is visible to tenant B's render path and vice versa; worker identity / authorization shape verified per §2.6 lock routing flag (vi).</td>
+        <td>worker-context-isolation</td>
+        <td>§2.6.3</td>
+        <td>high</td>
+        <td><a class="forward-pointer" href="#sd-12">SD-12</a></td>
+      </tr>
+      <tr id="rt-10" class="severity-high">
+        <td>RT-10</td>
+        <td>PDF-generation worker tenant-isolation verification</td>
+        <td>Shared Puppeteer / wkhtmltopdf worker pool does not leak fonts, DOM state, auth headers, cookies, or PDF metadata across tenant renders; under sequential tenant A → tenant B render harness with worker re-use, tenant B's rendered PDF contains zero data, metadata, or rendering artifacts from tenant A; concurrent tenant A + tenant B render harness produces two disjoint PDFs.</td>
+        <td>worker-context-isolation</td>
+        <td>§2.6.3 + §2.6.4</td>
+        <td>high</td>
+        <td><a class="forward-pointer" href="#sd-12">SD-12</a></td>
+      </tr>
+      <tr id="rt-11" class="severity-medium">
+        <td>RT-11</td>
+        <td>§2.6.2 commentary write-path RLS + input sanitization (consolidated)</td>
+        <td>Under two-tenant SQL fixture, tenant A's Rebalancing Targets commentary writes create rows visible only to tenant A; cross-tenant write attempts are rejected at the policy layer; adversarial-input battery against the free-text editor includes XSS payloads (script tags, event handlers, javascript: URIs, SVG payloads), SQL injection patterns, oversize content (PDF-OOM trigger), Unicode control / RTL override / homoglyph characters; copy-from-prior-month affordance re-validates input on copy, does not bypass sanitization on the assumption that the prior-month source was already sanitized.</td>
+        <td>input-sanitization</td>
+        <td>§2.6.2</td>
+        <td>medium</td>
+        <td><a class="forward-pointer" href="#sd-10">SD-10</a></td>
+      </tr>
+      <tr id="rt-12" class="severity-medium">
+        <td>RT-12</td>
+        <td>§2.6.4 ψ-1 owner-identification settings-store write-path input sanitization</td>
+        <td>Adversarial-input battery against the owner-identification trust-name string write endpoint includes the full XSS / SQL injection / oversize / Unicode control / RTL override / homoglyph battery (parallel to RT-11); rendered PDF header from sanitized input contains no executable content; oversize input rejected at write rather than triggering OOM at PDF generation.</td>
+        <td>input-sanitization</td>
+        <td>§2.6.4</td>
+        <td>medium</td>
+        <td><a class="forward-pointer" href="#sd-11">SD-11</a></td>
       </tr>
       <tr id="rt-13" class="severity-high">
         <td>RT-13</td>
-        <td><em>(example row)</em> Cross-tenant staleness-state leak</td>
-        <td><span class="tbd">—</span></td>
-        <td>read-path-RLS</td>
-        <td>§2.6</td>
+        <td>Cross-tenant staleness-state-read leak verification (live-join-at-render-time most-subtle case)</td>
+        <td>At §2.6.5 render time, the join from snapshot store's <code>account_id</code> to live §2.4.4 credential-error state never reads cross-tenant credential state under any query shape; two-tenant fixture with overlapping account_id values (collision case) asserts the staleness join resolves to tenant A's credential state when rendering tenant A's snapshot, never to tenant B's; <strong>the §2.6.5 banner's account-name strings render from the requesting tenant's snapshot only, never from a cross-tenant live-join surface;</strong> the join holds under in-app render path AND PDF re-render path. <span class="lock-marker">β′ resolution from v1.30 verify-pass VP-2/12 applied</span></td>
+        <td>race-condition</td>
+        <td>§2.6.5 + §2.6.6</td>
         <td>high</td>
-        <td>SD-12 / SD-00 / SD-01</td>
+        <td><a class="forward-pointer" href="#sd-12">SD-12</a></td>
       </tr>
-      <tr class="tbd"><td colspan="7" class="tbd">15 rows total — migrated in PR B (incl. β′ RT-13 update from v1.30 verify-pass)</td></tr>
+      <tr id="rt-14" class="severity-high">
+        <td>RT-14</td>
+        <td>Snapshot regeneration race condition</td>
+        <td>Concurrent regenerations on same <code>(tenant_id, target-month)</code> produce exactly one snapshot row with last-writer-wins or transactional rejection (Architect Phase 3 picks the semantics; test verifies whichever lands); cross-tenant concurrency (tenant A regenerating month M while tenant B regenerating month M simultaneously) asserts no cross-tenant data mixing — tenant A's snapshot contains only tenant A's source data and vice versa; the staleness-marker live-read coupling at render path is preserved across regeneration (regeneration does not silently rewrite the staleness layer per §2.6.4 routing flag (f)).</td>
+        <td>race-condition</td>
+        <td>§2.6.3 + §2.6.4</td>
+        <td>high</td>
+        <td><a class="forward-pointer" href="#sd-12">SD-12</a>, <a class="forward-pointer" href="#sd-13">SD-13</a></td>
+      </tr>
+      <tr id="rt-15" class="severity-medium">
+        <td>RT-15</td>
+        <td>§3.3 parity-fixture test-environment RLS posture</td>
+        <td>CI test environment running parity tests against <code>Finance_Report_2026_04.pdf</code> + Asset Summary workbook fixtures enforces tenant-scoping on fixture loads equivalent to production RLS: a parity test for tenant A reads only tenant A's fixture row-set; cross-tenant fixture access in CI is rejected; fixture artifacts themselves are stored under access-controlled paths per §3 (e) Sec posture (specific access-control mechanism is §4.6 + Architect Phase 3 joint per §3 (b)).</td>
+        <td>test-environment-posture</td>
+        <td>§3.3 + §3 (e)</td>
+        <td>medium</td>
+        <td><a class="forward-pointer" href="#sd-00">SD-00</a></td>
+      </tr>
     </tbody>
   </table>
 </section>
 
-<section id="sec-4-6" data-section="retention-availability">
-  <h2>§4.6 Retention / availability / incident-handling posture</h2>
-  <p class="section-hint">V1 baselines per <a href="../../DECISIONS.md#adr-008">ADR-008</a> Decision 4. Closes <a href="../../DECISIONS.md#adr-002">ADR-002</a> §7.0 gaps #4 + #6 + partial-#5.</p>
-  <div class="migration-stub">Content migrated from <code>PRD.md</code> §4.6 verbatim in PR B.</div>
+<section id="sec-4-6" data-section="cross-cutting-posture">
+  <h2>§4.6 Cross-cutting posture commitments</h2>
+  <p class="section-hint">Consolidation home for V1-locked posture commitments that don't belong to a single axis sub-section: data retention, availability/uptime, incident handling, parity-fixture handling, shadow-workflow tear-down, V2-ship-gate Sec-consult inventory. Closes <a href="../../DECISIONS.md#adr-002">ADR-002</a> §7.0 gaps #4 + #6 + partial-#5.</p>
+
+  <p>§4.6 is the consolidation home for the V1-locked posture commitments that don't belong to a single axis-grouped sub-section: data retention, availability/uptime, incident handling, parity-fixture handling, shadow-workflow tear-down, and the V2-ship-gate Sec-consult inventory. Each commitment closes one or more cross-section forward-pointers (closures enumerated at routing flags (m)–(p); see PRD Appendix B). §4.6 closes ADR-002 §7.0 missing-content gaps #4 (security and compliance posture as a whole — across all of §4) + #6 (offline / availability tolerance — at the availability bullet below) at V1 baseline and partially closes #5 (data retention — snapshot-side at §2.6.4 χ-1, non-snapshot at the retention bullet below) per routing flag (o).</p>
+
+  <ul>
+    <li><strong>Data retention (closes <a href="../../DECISIONS.md#adr-002">ADR-002</a> §7.0 gap #5 jointly with §2.6.4 χ-1).</strong> V1 retention posture is class-by-class per the §4.4 retention-posture column: <strong>indefinite</strong> retention on SD-00 baseline transactions/holdings/cost-basis ledger and on SD-04 through SD-11 high-tier and medium-tier non-credential classes (aligns with §2.6.4 χ-1 + the F/CTO's analytical use case; bounded retention would lose the §2.1.3 5-Year horizon depth); <strong><code>bounded-Item-active-only</code></strong> on <a href="#sd-03">SD-03</a> Plaid access tokens (server-side deletion on Item-deletion, not merely flagged-inactive; credentials are categorically deleted on the unbinding event, not retained "in case"); <strong><code>bounded-N-day-rolling</code> with N = 90 days</strong> on <a href="#sd-02">SD-02</a> Plaid Item-state metadata (three monthly-report cycles of retrospective debuggability + headroom for delayed investigation, clearly under the 6+ month behavioral-correlate aggregation risk threshold; concrete prune mechanism is Architect Phase 3 per routing flag (e)); <strong><code>indefinite-with-V2-cold-storage-rollover</code></strong> on <a href="#sd-12">SD-12</a> monthly-report snapshot store (per §2.6.4 χ-1 lock) and on audit logs (V1 commits to indefinite at-V1 with V2 cold-storage rollover forward-compat; audit-log architecture itself is Architect Phase 3 per routing flag (f)). <strong>No user-facing delete-my-data control as a V1 surface</strong> — deferred to V2+ trajectory if the surface becomes warranted at the multi-user expansion per §7.3. <strong>Cross-reference §2.6.4 χ-1</strong> — the snapshot-side retention commitment lives at §2.6.4 χ-1; §4.4 SD-12 row traces; §4.6 retention bullet consolidates the non-snapshot retention posture alongside it. <strong>Closes ADR-002 §7.0 gap #5</strong> jointly with §2.6.4 χ-1 per routing flag (o).</li>
+    <li><strong>Availability/uptime (closes <a href="../../DECISIONS.md#adr-002">ADR-002</a> §7.0 gap #6).</strong> V1 commits to <strong>best-effort uptime, no SLO.</strong> §7.3's single-user V1 deployment posture means "uptime" is what the F/CTO is willing to tolerate; committing to a numeric uptime target before Architect Phase 3 sizes the Coolify / VPS infrastructure would pre-judge Phase 3, and a numeric target in PRD scope conflicts with §7.1's per-line-item-out-of-PRD-scope boundary. <strong>The V1 user-facing availability story is the §2.4.4 non-silent-staleness commitment</strong> (per §4.3 above) — when data is stale because Plaid sync is degraded or because credential state requires re-auth, the user is told at every consuming surface; aggregations are never silently presented as fresh. This is a stronger commitment for the F/CTO's analytical use case than a numeric SLO: a numeric SLO commits to availability frequency but says nothing about data freshness when the system is technically up; the non-silent-staleness commitment guarantees that data freshness is visible regardless of system-uptime state. Architect Phase 3 sizes infrastructure-side uptime targets grounded in actual stack constraints without a PRD-locked numeric per §7.2 + §3 (a) routing. <strong>Closes ADR-002 §7.0 gap #6</strong> per routing flag (o).</li>
+    <li><strong>Incident handling (closes <a href="../../DECISIONS.md#adr-002">ADR-002</a> §7.0 gap #4 jointly with the rest of §4).</strong> V1 commits to an <strong>incident-log file at the F/CTO level</strong> as the V1 incident-handling primitive: when a security-relevant event surfaces (a failed RLS test in CI; a suspicious webhook signature failure pattern; a sync-error pattern that suggests credential compromise; a degraded-performance event that crosses the §7.2 scale dimensions), the F/CTO logs the event with timestamp, surface, observed behavior, and remediation taken. <strong>No on-call rotation, no severity rubric beyond the §4.5 three-tier (critical / high / medium), no postmortem template at single-user V1</strong> — single-user-F/CTO incident response is what V1 ships; the conventional incident-response shape would be ceremony without value at this scale. <strong>V2-trajectory ramp to formal incident-response shape if/when the second user lands per §7.3 invite-only forward-compat:</strong> the V2-onboarding step adds (a) explicit incident-severity rubric (likely lifting the §4.5 three-tier as the rubric foundation), (b) postmortem template, (c) response-time targets, and (d) cross-user-incident-notification posture. V1 ships the incident-log primitive so the V2 ramp has a baseline data lineage; the V2 ramp design itself is V2-onboarding territory, not §4 V1 scope.</li>
+    <li><strong>Parity-fixture handling (closes §3 (e) at §4 lock per routing flag (j)).</strong> <code>Finance_Report_2026_04.pdf</code> and the Asset Summary workbook are sensitive-data artifacts — they contain real F/CTO financial values across every account category — and are the canonical fixtures the §3.3 parity tests run against. V1 Sec posture: <strong>fixture artifacts are stored under access-controlled paths</strong> (specific access-control mechanism is Architect Phase 3 per routing flag (j) Architect/Sec joint); <strong>the CI test environment enforces tenant-scoping on fixture loads equivalent to production RLS</strong> (verified at <a href="#rt-15">RT-15</a>); <strong>fixture-refresh cadence as the comparison month rolls forward is F/CTO-paced</strong> (the next parity-evidence month replaces the prior month's fixture under the same access-controlled storage; no historical fixture accumulation in CI). The §3 (e) Sec routing flag closes at this commitment + RT-15 verification + routing flag (j); the §3 (b) Architect/Sec joint test-environment plumbing flag closes at routing flag (j) per §3 (b) routing.</li>
+    <li><strong>Shadow-workflow tear-down (closes §3 (d) at §4 lock).</strong> When the F/CTO retires the existing manual-spreadsheet system per §3.4(c) migration-completion criterion, the existing Google Sheet stops being a working data source — V1 commits to no dual-write to the existing Google Sheet after V1 lands. <strong>The historical NAV import from the existing system per §2.1 Architect routing flag terminates at V1 schema population</strong> — the import is a one-time event, not an ongoing sync. <strong>The F/CTO retains a read-only archive of the existing spreadsheets at a Sec-acknowledged access-controlled location</strong> (concrete location and access-control mechanism is F/CTO operational choice, not §4 V1 lock; what §4 commits to is the <em>posture</em> — the existing system exists post-V1 as a read-only audit reference, not as a working data source). <strong>A snapshot of the existing system's state at V1-final cutover is preserved as an audit artifact</strong> for the §3.4 migration-completion test verification path. <strong>Closes §3 (d) at §4 lock</strong> per routing flag (p). See also <a href="../../docs/MILESTONE-FRAMING.md#82-drop-replace-migration-pattern">MILESTONE-FRAMING.md §8.2 drop-replace migration pattern</a> for the user-continuity flip side of this commitment.</li>
+    <li><strong>V2-ship-gate Sec-consult inventory (consolidates routing flag (k)'s four items).</strong> The following V2+ surfaces require Sec-consult before V2 ship per accumulated <a href="../../BACKLOG.md">BACKLOG.md</a> §5 + PRD §7 routing flags; the inventory consolidates them at one §4 anchor so V2-scoping work has a single reference point rather than scanning <a href="../../BACKLOG.md">BACKLOG.md</a> §5 / PRD §7 separately:
+      <ul>
+        <li><strong>(i) Pre-emptive Plaid re-auth reminders (<a href="../../BACKLOG.md">BACKLOG.md</a> §5.4 origin).</strong> V1 ships reactive-only re-auth per §2.4.4; pre-emptive reminders introduce a phishing-template surface (an email or push notification that says "re-auth your bank here" is a phishing-template even when legitimate). Sec-consult at V2-design: notification channel, sender-identity verification, deep-link posture, user-side "is this real?" verification path.</li>
+        <li><strong>(ii) Email/SMS report delivery (<a href="../../BACKLOG.md">BACKLOG.md</a> §5.6 origin).</strong> V1 ships in-app + PDF-export only per §2.6.3 + υ-1; email/SMS introduces a delivery-surface Sec-consult: payload sensitivity (the monthly report contains SD-07 + SD-10 + SD-11 + SD-12-derived content), delivery-channel encryption posture, recipient-verification posture, opt-in / opt-out controls.</li>
+        <li><strong>(iii) Shared-link delivery to external viewers (<a href="../../BACKLOG.md">BACKLOG.md</a> §5.6 origin).</strong> V1 has no shared-link surface; V2+ trajectory would produce a derivative-persistence surface per <a href="#sd-13">SD-13</a> cross-cutting axis (the shared link is a delivered derivative of SD-12 snapshot content). <strong>Possible §6 advisor-axis re-litigation flagged at <a href="../../BACKLOG.md">BACKLOG.md</a> §5 lock</strong> — if the recipient set extends to fiduciary-implication external viewers, the surface re-tests against §6.3 advisor/fiduciary axis per ADR-007 (information-vs-prescription axis). Sec-consult at V2-design must address: SD-13 derivative-persistence posture for the shared-link artifact, recipient access-control mechanism, revocation posture, expiration posture, and the §6.3 axis test for the recipient set.</li>
+        <li><strong>(iv) Spend-cap / API-quota alerting as cost-protection control (§7.1 (a) origin; V2-implementation).</strong> If V1's ≤ $50/month cost target is operationalized as a runtime cost-protection control, the implementation shape intersects the §2.4.4 re-auth flow's availability/phishing-surface tradeoff (a quota-tripped auto-disable on Plaid sync creates an availability-shaped failure mode). Sec-consult at V2-implementation must address: spend-cap mechanism shape (alert-only vs auto-disable vs degraded-sync), interaction with non-silent-staleness commitment (a quota-disabled account is a stale-data surface; how is that distinguished from a credential-error stale-data surface), and any user-facing surface the mechanism produces.</li>
+      </ul>
+      <p><strong>Closes §7 routing flag (a) at §4 lock</strong> (the flag lives forward at item (iv) above); <a href="../../BACKLOG.md">BACKLOG.md</a> §5.4 + §5.6 V2-ship-gate flags remain V2-active but are inventoried here for V2-scoping reference per routing flag (k).</p>
+    </li>
+  </ul>
 </section>
 
 <section id="boundaries" data-section="boundaries">
@@ -157,7 +444,7 @@ flowchart LR
 </section>
 
 <footer class="doc-footer">
-  Owned by <code>seceng</code> agent. V1 canonical Sec reference layer per <a href="../../DECISIONS.md#adr-008">ADR-008</a>. Update via <code>/start-doc-update sec-…</code> branches per <a href="../../DECISIONS.md#adr-009">ADR-009</a> Decision 9.
+  Owned by <code>security-reviewer</code> agent. V1 canonical Sec reference layer per <a href="../../DECISIONS.md#adr-008">ADR-008</a>. Migrated from PRD §4 in PR B per <a href="../../DECISIONS.md#adr-009">ADR-009</a> Decision 4. Update via <code>/start-doc-update sec-…</code> branches per <a href="../../DECISIONS.md#adr-009">ADR-009</a> Decision 9.
 </footer>
 
 </body>
