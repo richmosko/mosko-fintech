@@ -41,6 +41,42 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-010 — Adopt comments-sidecar feature from project_template
+
+**Date:** 2026-05-24
+**Status:** Accepted
+**Phase:** 1 (Step 4 prep; adopted via [ADR-009](#adr-009) selective-adoption framework)
+
+**Context.** `richmosko/project_template` shipped a per-section HTML doc review feature across four PRs (#8 / #9 / #10 / #11 on the upstream repo, 2026-05-23): an on-disk `docs/<DOC>/comments.md` sidecar with `## §<section-id>` anchors mapping to `<section id="...">` in the HTML doc, a `/refine-doc` skill that walks the sidecar and applies each comment to the matching section (removing addressed comments as it goes), a local Python stdlib HTTP server (`scripts/serve-docs.py`) with a JSON comments API, an in-browser JS widget that lets reviewers add comments inline while reading the doc, and a `/serve-docs` skill that backgrounds the server under the Claude session. The feature is designed for single-user solo review (no author attribution, no threading) and gitignores the sidecar so PR history stays clean. Implementation summary lives at `~/Projects/project_template/temp/comments-implementation.md`.
+
+mosko-fintech is at Phase 1 Step 4 (Architect ratification of PRD content; Phase 3 entry gate) with PRD content migrated to `docs/PRD/index.html` (PR #45) and `docs/SECURITY/index.html` carrying the V1 security canonical reference. Step 4 review is the immediate near-term use case for per-section commenting; Phase 3 ARCH drafting and ongoing SECURITY refinement are downstream use cases.
+
+**Decision.** Adopt the comments-sidecar feature wholesale via two PRs:
+
+1. **Pass 1** (this PR) — convention + `/refine-doc` skill (hand-edit authoring path). Establishes the `comments.md` format, the gitignore entry, the `/refine-doc` skill, and the WORKFLOW.md `Doc review loop` section. Validates the convention via hand-editing before investing in the UX layer.
+2. **Pass 2** (next PR) — Python local server (`scripts/serve-docs.py` + `serve-docs.sh`) + JS widget (`docs/_assets/comments.{js,css}`) + `/serve-docs` skill + HTML asset wiring in `docs/PRD/index.html` and `docs/SECURITY/index.html`. Adds the in-browser inline-authoring UX; both passes write to the same on-disk format.
+
+**Why.** Selective-adoption candidate per [ADR-009](#adr-009) Decision 8 (template-as-seed-not-constraint policy): solved problem upstream, modest footprint (~8 new files + 6 edits across 2 PRs), aligns cleanly with mosko's existing `docs/<DOC>/index.html` artifact set and `/start-doc-update` + `/finish-doc-update` skills (PR #42). Strategic timing favors landing before Step 4 review so Architect comments flow through the widget rather than scattering across chat context. Single-user assumption from the upstream design holds for mosko's solo-Founder shape.
+
+**Alternatives considered.**
+
+- **Bundle into one PR.** Rejected — the pass-1 / pass-2 split mirrors upstream's incremental landing pattern and provides a validation checkpoint between the markdown-convention layer and the JS/Python UX layer. Two atomic PRs each independently revertible.
+- **Hand-edit-only port (skip Pass 2).** Rejected — per upstream implementation notes, the inline widget is the feature's main UX value-add ("the amazing UX layer") and pays off immediately for solo review. Hand-edit-only would land a working but lower-UX version and likely require the same Pass 2 work later anyway.
+- **Defer to Phase 3 (after `docs/ARCH/index.html` is drafted so all three docs get the feature day-one).** Rejected — PRD review at Step 4 is the more pressing use case; ARCH will get the feature automatically once Phase 3 drafts its content. Deferring would forfeit the Step 4 review benefit without a corresponding gain.
+- **Merge `comments.css` into the existing `docs/_assets/style.css`.** Rejected — keeping `comments.css` separate matches the upstream `doc.css` + `comments.css` split, produces a cleaner diff (no churn to `style.css` which was lock-edited in PR #38), and makes the feature's CSS surface inspectable in isolation. Two extra `<link>` lines per HTML doc is a trivial cost.
+
+**Adaptations from upstream.**
+
+- **Section-ID examples** in `refine-doc/SKILL.md` use mosko's `sec-N` + `appendix-X` scheme rather than template's semantic IDs (`goals`, `non-goals`). Functional behavior unchanged — section IDs are read from the DOM at runtime and the server-side regex `^[a-z][a-z0-9-]*$` accepts both schemes.
+- **`/merge-pr` references dropped** in the suggested PR flow. mosko has no `/merge-pr` skill; merges go through the GitHub UI or `gh pr merge --squash <pr#>`.
+- **WORKFLOW.md `Doc review loop` section** rewritten to reference mosko-specific section IDs, phases (Step 4 / Phase 3), and the absence of `/merge-pr`. Pass status note added to make the two-PR landing visible to future readers.
+
+**Approved by:** F/CTO (2026-05-24, via PR plan ratification before PR 1 execution).
+
+**Cross-references:** [ADR-009](#adr-009) Decision 8 (selective-adoption framework). Upstream implementation notes: `~/Projects/project_template/temp/comments-implementation.md` (not in this repo). Template-feedback log location: `temp/project_template_feedback.md` (for any deviations worth contributing back upstream — note that mosko's `<section id>` scheme is one such candidate, since the template's semantic-IDs convention is less mechanically robust than mosko's numeric scheme for handling section renames).
+
+---
+
 ## ADR-009 — Selective adoption of richmosko/project_template patterns
 
 **Date:** 2026-05-23

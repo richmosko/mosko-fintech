@@ -6,7 +6,7 @@ Compact state ledger for mosko-fintech. **Top section (above `## Roadmap`) is au
 - Milestones tracked at two scales per [ADR-009](DECISIONS.md#adr-009) Decision 7: **meta-process** (M0 / M1 / M2 / M3 = R / P / I+V / Deploy) and **product** (V1.0 / V1.1 / V1.final / V2-X).
 - Sprint = Linear cycle (orthogonal pacing wrapper, not a hierarchy level).
 - Feature = Linear Issue = one PR = one I↔V loop.
-- Last updated: 2026-05-23 (post-PR #45; ADR-009 mechanics wave complete).
+- Last updated: 2026-05-24 (ADR-010 comments-sidecar pass-1 in flight).
 
 ## Project / Initiative
 
@@ -34,13 +34,15 @@ Compact state ledger for mosko-fintech. **Top section (above `## Roadmap`) is au
 
 | Field | Value |
 |---|---|
-| Feature | _None active right now — between PRs_ |
+| Feature | ADR-010 comments-sidecar feature port (pass 1) |
 | Linear issue | _N/A — Linear activates at Phase 4 entry_ |
-| Branch | _N/A_ |
-| Status | _N/A_ |
+| Branch | `meta/comments-sidecar-pass-1` |
+| Status | In flight (PR 1 of 2) |
 
 ## Recent activity (last 7 days)
 
+- **2026-05-24** — `meta/comments-sidecar-pass-1` opened: ADR-010 PR 1 — comments-sidecar feature port pass 1 (refine-doc skill + `comments.md` convention + gitignore + WORKFLOW.md Doc review loop section + ADR-010). Pass 2 (server + widget + serve-docs skill) follows.
+- **2026-05-23** — PR #46 merged: MILESTONES.md post-PR-B refresh.
 - **2026-05-23** — PR #45 merged: PR B content migration — PRD §1/§2/§3/§6/§7/appendices → `docs/PRD/index.html`; §4 → `docs/SECURITY/index.html`; §5 → `BACKLOG.md`; §8 → `docs/MILESTONE-FRAMING.md`; `PRD.md` archived (tasks #12 + #13 + #14). ADR-009 mechanics wave complete.
 - **2026-05-23** — PR #44 merged: PR C / SessionStart hook → MILESTONES.md head (task #11).
 - **2026-05-23** — PR #43 merged: MILESTONES.md initial ledger creation (tasks #7 + #15).
@@ -116,7 +118,8 @@ Issues retroactively tagged under M0 (Research milestone). Full PR history at [`
 
 | Feature | PR | Milestone | Branch | Status |
 |---|---|---|---|---|
-| **MILESTONES.md post-PR-B refresh (this PR)** | _this PR_ | M0 (process-record) | `meta/milestones-refresh-pr-b-landing` | In flight |
+| **ADR-010 comments-sidecar pass 1** (this PR) | _this PR_ | M0 (process-record) | `meta/comments-sidecar-pass-1` | In flight |
+| ADR-010 comments-sidecar pass 2 (server + widget) | _pending_ | M0 (process-record) | _to be created post-PR-1_ | Queued |
 | _Substantive M1 features open after Step 4 ratifies / Phase 3 entry_ | | | | |
 
 ### Backlog (M1+)
@@ -135,6 +138,7 @@ The Decision Log lives in [`DECISIONS.md`](DECISIONS.md) (consult-on-demand per 
 
 **Most recent ADRs:**
 
+- **[ADR-010](DECISIONS.md#adr-010)** (2026-05-24; terse) — Adopt comments-sidecar feature from project_template. Two-PR landing: pass 1 (convention + `/refine-doc` skill); pass 2 (server + widget + `/serve-docs` skill).
 - **[ADR-009](DECISIONS.md#adr-009)** (2026-05-23; consolidation) — Selective adoption of richmosko/project_template patterns. 9 Decisions consolidating the template-adoption brainstorm.
 - **[ADR-008](DECISIONS.md#adr-008)** (2026-05-18; consolidation) — Phase 1 Step 3 §4 lock: V1 security posture canonical reference. 5 Decisions including 14-entry SD matrix + 15-entry RT catalog.
 - **[ADR-007](DECISIONS.md#adr-007)** (2026-05-17; terse amendment) — Amendment to ADR-002 Finding (b): tax-loss-harvesting reclassified V2+ → permanent non-goal.

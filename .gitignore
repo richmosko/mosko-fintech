@@ -6,6 +6,10 @@
 # Local working files (planning drafts, scratch)
 temp/
 
+# Doc review sidecars (per-section comments; resolution is the doc change via PR)
+# Per ADR-010 — comments-sidecar feature port from project_template
+docs/*/comments.md
+
 # Claude Code: worktrees are pointers, not artifacts; personal settings overrides
 .claude/worktrees/
 .claude/settings.local.json
