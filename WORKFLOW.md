@@ -191,6 +191,69 @@ Location and format TBD in Phase 2.
 
 ---
 
+## Doc review loop (`comments.md` sidecar)
+
+Each HTML doc (`PRD`, `ARCH`, `SECURITY`) supports an optional sidecar `docs/<DOC>/comments.md` for in-process review notes. It's a feedback loop with Claude: write per-section comments in the file, then run `/refine-doc` to have the relevant lead address them. Adopted from `richmosko/project_template` per [ADR-010](DECISIONS.md#adr-010) (selective-adoption framework set up by [ADR-009](DECISIONS.md#adr-009) Decision 8).
+
+### Format
+
+```markdown
+# PRD Comments
+
+Working notes for review of `docs/PRD/index.html`. Comments are removed when
+`/refine-doc` addresses them.
+
+---
+
+## §sec-1
+
+The vision paragraph reads as too solo-focused — pull forward the
+"replaces existing spreadsheet workflow" framing from Appendix A.
+
+## §sec-6
+
+Should "mobile-native app" stay as a permanent non-goal, or be re-classified
+as V2+ trajectory? See ADR-002 §3.0 — feels worth re-examining.
+```
+
+Each `## §<section-id>` anchor matches a `<section id="...">` in the corresponding HTML doc. Section IDs already exist on every section in mosko's PRD (`sec-overview`, `sec-1` … `sec-8`, `appendix-a` … `appendix-c`) and `docs/SECURITY/index.html` — no markup changes needed.
+
+### Workflow
+
+```
+1. Open docs/<DOC>/index.html in browser (file:// or via a doc-serve mechanism).
+2. Read; jot per-section feedback into docs/<DOC>/comments.md.
+3. /start-doc-update <doc>-address-review-comments    # branch
+4. /refine-doc <DOC>                                  # lead addresses comments
+5. Review the diff to docs/<DOC>/index.html.
+6. /finish-doc-update                                 # opens PR
+7. Merge via GitHub UI or `gh pr merge --squash <pr#>`
+```
+
+`/refine-doc` walks the sidecar in file order, addresses each comment in the matching HTML section, and **removes the addressed comments** from `comments.md` as it goes. Comments that need Founder/CTO clarification stay in place with a `> [refine-doc deferred YYYY-MM-DD]: <reason>` annotation — answer the question, re-run the skill.
+
+### Gitignored, by design
+
+`docs/*/comments.md` is gitignored. Comments are working notes, not permanent record:
+
+- The **resolution** is the doc change itself (committed via PR).
+- If a comment leads to a decision worth preserving long-term, log it in [`DECISIONS.md`](DECISIONS.md) before running `/refine-doc` — once addressed, the sidecar entry is gone.
+- Keeps PR history clean (no review-noise commits).
+
+### When to use
+
+- **PRD review** during Phase 1 Step 4 (Architect's PRD ratification consult) — primary near-term use case. Walk through `docs/PRD/index.html` in the browser, jot feedback by section, refine.
+- **ARCH / SECURITY review** during Phase 3 (Plan outer category) — same loop, different doc.
+- **Periodic refreshes** mid-project — when a milestone closes, take a pass at whether the PRD assumptions still hold; same loop.
+
+### Pass status
+
+- **Pass 1** (shipped at ADR-010 PR 1) — convention + `/refine-doc` skill. Hand-edit `comments.md`, run the skill.
+- **Pass 2** (pending ADR-010 PR 2) — inline browser widget + local Python server + `/serve-docs` skill. Same on-disk format; nicer authoring UX. The widget POSTs new comments to `docs/<DOC>/comments.md` while you read the doc in a browser.
+- **Pass 3** (not planned) — would handle inline edit/delete of existing comments via the widget, comment threading, or multi-user attribution. Defer until single-user usage surfaces a real need.
+
+---
+
 ## Phase overview
 
 | # | Phase | Status | Primary output |
