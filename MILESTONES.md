@@ -6,7 +6,7 @@ Compact state ledger for mosko-fintech. **Top section (above `## Roadmap`) is au
 - Milestones tracked at two scales per [ADR-009](DECISIONS.md#adr-009) Decision 7: **meta-process** (M0 / M1 / M2 / M3 = R / P / I+V / Deploy) and **product** (V1.0 / V1.1 / V1.final / V2-X).
 - Sprint = Linear cycle (orthogonal pacing wrapper, not a hierarchy level).
 - Feature = Linear Issue = one PR = one I↔V loop.
-- Last updated: 2026-05-23.
+- Last updated: 2026-05-23 (post-PR #45; ADR-009 mechanics wave complete).
 
 ## Project / Initiative
 
@@ -24,7 +24,7 @@ Compact state ledger for mosko-fintech. **Top section (above `## Roadmap`) is au
 | Field | Value |
 |---|---|
 | **Phase** | Phase 1 — Product Definition (PRD) |
-| **Step** | Step 4 (Architectural overview consult; Architect lead; Phase 3 entry gate) — **ready to open** after Step 3.5 closure at v1.30 / PR #38 |
+| **Step** | Step 4 (Architectural overview consult; Architect lead; Phase 3 entry gate) — **ready to open** now that ADR-009 mechanics wave (PRs #39 – #45) is complete |
 | **Outer category** | Research (per ADR-009 Decision 2 — mosko Phases 1 + 2 sit under template's Research outer frame) |
 | **Started** | 2026-05-09 (Phase 1 entry) |
 | **Driver agent** | Product Manager (hands off to Architect at Step 4) |
@@ -41,21 +41,20 @@ Compact state ledger for mosko-fintech. **Top section (above `## Roadmap`) is au
 
 ## Recent activity (last 7 days)
 
+- **2026-05-23** — PR #45 merged: PR B content migration — PRD §1/§2/§3/§6/§7/appendices → `docs/PRD/index.html`; §4 → `docs/SECURITY/index.html`; §5 → `BACKLOG.md`; §8 → `docs/MILESTONE-FRAMING.md`; `PRD.md` archived (tasks #12 + #13 + #14). ADR-009 mechanics wave complete.
+- **2026-05-23** — PR #44 merged: PR C / SessionStart hook → MILESTONES.md head (task #11).
+- **2026-05-23** — PR #43 merged: MILESTONES.md initial ledger creation (tasks #7 + #15).
 - **2026-05-23** — PR #42 merged: adapt doc-update skills + retire /ship-branch (task #17).
 - **2026-05-23** — PR #41 merged: extract WORKFLOW.md changelog to CHANGELOG.md (task #10).
 - **2026-05-23** — PR #40 merged: PR A HTML doc scaffolding (task #18).
 - **2026-05-23** — PR #39 merged: ADR-009 selective project_template adoption (task #9; 9-Decision consolidation ADR).
 - **2026-05-20** — PR #38 merged: Phase 1 Step 3.5 post-rewrite verify pass closure (v1.30).
-- **2026-05-19** — PR #37 merged: Step 3.5 closure / PR 10 / Appendix B consolidation (v1.29).
-- **2026-05-19** — PR #36 merged: Step 3.5 PR 9 / §8 rewrite (v1.28).
 
 Full PR history in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Pending (immediate)
 
-- **PR B** — PRD content migration: convert `PRD.md` §1/§2/§3/§6/§7/appendices to `docs/PRD/index.html`; migrate §4 → `docs/SECURITY/index.html`; §5 → `BACKLOG.md`; §8 → `docs/MILESTONE-FRAMING.md`; archive `PRD.md`. Tasks #12 + #13 + #14.
-- **PR C** — Architectural shift mechanics: modify SessionStart hook to read this file's head (per ADR-009 Decision 6); simplify/retire `docs/handoff-prompts.md` per-session orient protocol; update CLAUDE.md reading-order block. Task #11.
-- **Step 4** — Architectural overview consult (Architect lead; Phase 3 entry gate). Independent of PR B / PR C; can start after Phase 1 Step 3.5 closure (already complete).
+- **Step 4** — Architectural overview consult (Architect lead; Phase 3 entry gate). All blockers cleared: Phase 1 Step 3.5 closed at v1.30 / PR #38, ADR-009 mechanics wave complete at PR #45. Ready to open.
 
 ---
 
@@ -68,7 +67,7 @@ Full PR history in [`CHANGELOG.md`](CHANGELOG.md).
 | # | Milestone | Status | Gate | Linear Project | Notes |
 |---|---|---|---|---|---|
 | **M0** | Research (PRD lock) | Active (virtually done) | PRD locked at end of mosko Phase 1 (after Step 4 ratifies) | _TBD on /setup-linear-team_ | Retro-tagged issues: Step 3 + Step 3.5 PRs (see [Completed Features](#completed-m0-retro-tagged) below). Plus the ADR-009 brainstorm-adoption arc (PRs #39–#42). |
-| **M1** | Plan (ARCH + SECURITY docs) | Pending | ARCH + SECURITY docs locked at end of mosko Phase 3 | _TBD_ | Initial issues: (a) Draft ARCHITECTURE.md; (b) Draft SECURITY (largely landed via ADR-008; need consolidation into `docs/SECURITY/index.html` via PR B); (c) Populate product milestones in MILESTONES.md → see [`docs/MILESTONE-FRAMING.md`](docs/MILESTONE-FRAMING.md); (d) further granularity TBD. Also catches Phase 4 (Project Scoping) work as part of issue (c). |
+| **M1** | Plan (ARCH + SECURITY docs) | Pending | ARCH + SECURITY docs locked at end of mosko Phase 3 | _TBD_ | Initial issues: (a) Draft ARCHITECTURE.md; (b) Extend `docs/SECURITY/index.html` with Phase 3 architectural decisions (V1 Sec posture already landed via ADR-008 + PR #45 content migration); (c) Populate product milestones in MILESTONES.md → see [`docs/MILESTONE-FRAMING.md`](docs/MILESTONE-FRAMING.md); (d) further granularity TBD. Also catches Phase 4 (Project Scoping) work as part of issue (c). |
 | **M2** | Build (V1.0 → V1.final) | Pending | V1 ship | _TBD; defined as M1 issue (c) output_ | Product milestones (V1.0 / V1.1 / V1.final) get defined as M1's "Populate product milestones" output. M2 then decomposes into sprints. |
 | **M3** | Deploy & Iterate | Pending | V1 in production | _TBD_ | mosko Phase 7 territory; ongoing project-scale I+V loops post-V1 ship. V2 candidates from [`BACKLOG.md`](BACKLOG.md) feed here. |
 
@@ -76,7 +75,7 @@ Full PR history in [`CHANGELOG.md`](CHANGELOG.md).
 
 | Milestone | Status | Gate | Notes |
 |---|---|---|---|
-| V1.0 / V1.1 / V1.final / V2-X | _NOT YET DEFINED_ | _Defined by M1 issue (c) output_ | See [`docs/MILESTONE-FRAMING.md`](docs/MILESTONE-FRAMING.md) (lands via PR B) for the V1 sub-version convention + drop-replace migration pattern + Phase 4 handoff anchor per ADR-004. |
+| V1.0 / V1.1 / V1.final / V2-X | _NOT YET DEFINED_ | _Defined by M1 issue (c) output_ | See [`docs/MILESTONE-FRAMING.md`](docs/MILESTONE-FRAMING.md) for the V1 sub-version convention + drop-replace migration pattern + Phase 4 handoff anchor per ADR-004. |
 
 ## Sprints (Linear cycles)
 
@@ -92,6 +91,9 @@ Issues retroactively tagged under M0 (Research milestone). Full PR history at [`
 
 | Feature | PR | Merged | Notes |
 |---|---|---|---|
+| PR B — PRD content migration to HTML artifact set | #45 | 2026-05-23 | Tasks #12 + #13 + #14 (ADR-009 Decision 4 second stage; closes the architectural shift). Migrated §1/§2/§3/§6/§7/appendices to `docs/PRD/index.html`; §4 → `docs/SECURITY/`; §5 → `BACKLOG.md`; §8 → `docs/MILESTONE-FRAMING.md`; `PRD.md` archived. |
+| PR C — SessionStart hook → MILESTONES.md head | #44 | 2026-05-23 | Task #11 (ADR-009 Decision 6 mechanics; compact-ledger auto-load) |
+| MILESTONES.md initial ledger | #43 | 2026-05-23 | Tasks #7 + #15 (this file's creation) |
 | Adapt doc-update skills + retire /ship-branch | #42 | 2026-05-23 | Task #17 (ADR-009 Decision 9 implementation) |
 | Extract WORKFLOW.md changelog to CHANGELOG.md | #41 | 2026-05-23 | Task #10 (orthogonal cleanup) |
 | PR A — HTML doc scaffolding for PRD/ARCH/SECURITY | #40 | 2026-05-23 | Task #18 (ADR-009 Decision 4 first stage) |
@@ -114,12 +116,12 @@ Issues retroactively tagged under M0 (Research milestone). Full PR history at [`
 
 | Feature | PR | Milestone | Branch | Status |
 |---|---|---|---|---|
-| **MILESTONES.md initial ledger (this PR)** | _this PR_ | M0 (process-record); enables M1 | `meta/milestones-initial-ledger` | In flight |
-| _M1 features open after Step 4 ratifies / Phase 3 entry_ | | | | |
+| **MILESTONES.md post-PR-B refresh (this PR)** | _this PR_ | M0 (process-record) | `meta/milestones-refresh-pr-b-landing` | In flight |
+| _Substantive M1 features open after Step 4 ratifies / Phase 3 entry_ | | | | |
 
 ### Backlog (M1+)
 
-Pulled from Linear once activated. Until then, M1's initial issues are listed in the [Meta-process milestones](#meta-process-milestones) table above. V2 candidates live in [`BACKLOG.md`](BACKLOG.md) (lands via PR B / task #13).
+Pulled from Linear once activated. Until then, M1's initial issues are listed in the [Meta-process milestones](#meta-process-milestones) table above. V2 candidates live in [`BACKLOG.md`](BACKLOG.md).
 
 ## Releases
 
