@@ -6,7 +6,7 @@ Compact state ledger for mosko-fintech. **Top section (above `## Roadmap`) is au
 - Milestones tracked at two scales per [ADR-009](DECISIONS.md#adr-009) Decision 7: **meta-process** (M0 / M1 / M2 / M3 = R / P / I+V / Deploy) and **product** (V1.0 / V1.1 / V1.final / V2-X).
 - Sprint = Linear cycle (orthogonal pacing wrapper, not a hierarchy level).
 - Feature = Linear Issue = one PR = one I↔V loop.
-- Last updated: 2026-05-24 (post-PR #48; ADR-010 comments-sidecar fully landed; between PRs).
+- Last updated: 2026-05-26 (post Step-4 in-session drilling; 11 of 16 substantive locks closed; Step 4 in progress, NOT "ready to open" — full state at [`temp/step-4-locks-log.md`](temp/step-4-locks-log.md)).
 
 ## Project / Initiative
 
@@ -24,23 +24,33 @@ Compact state ledger for mosko-fintech. **Top section (above `## Roadmap`) is au
 | Field | Value |
 |---|---|
 | **Phase** | Phase 1 — Product Definition (PRD) |
-| **Step** | Step 4 (Architectural overview consult; Architect lead; Phase 3 entry gate) — **ready to open** now that ADR-009 mechanics wave (PRs #39 – #45) is complete |
+| **Step** | Step 4 (Architectural overview consult; Architect lead; Phase 3 entry gate) — **IN PROGRESS** (active drilling session 2026-05-25 → 2026-05-26; paused mid-Step-4) |
+| **Locks closed** | **11 of 16 substantive flags closed** — Flag #1 / P2 / E1a / Flag #2 / E2 / P1 / Flag #3 / Wave 1 step 2 (#10 + #12) / Flag #4 / Flag #5 / Flag #6. Full alphanumeric track (P1/P2/E1a/E2) closed. Waves 1 + 2 closed; Wave 3 step 1 closed. |
+| **Locks remaining** | **5 substantive** (Flags #7 / #8 / #9 / #11 / #13) + candidate **P3** (FMP/stock-screening incumbent-exceeds-V1 — PM consult) |
+| **Next pick** | **Flag #7** (Wave 3 step 2: snapshot-vs-live render-path composition; Architect/Sec joint per PRD §2.6.5 non-silent staleness; cross-tenant signal-leak race RT-13) |
+| **Authoritative state file** | [`temp/step-4-locks-log.md`](temp/step-4-locks-log.md) — full lock rationale + Sec verdicts + 8 meta-patterns + Sec mod inventory + pending Step 4 work. **Consult this file as first stop to resume.** Gitignored per `feedback_working_artifacts_temp_not_docs`; local-only working artifact. |
+| **Team task tracker** | `~/.claude/teams/phase-1-step-4/` team active; `~/.claude/tasks/phase-1-step-4/` task list has 32 tasks. **9 Phase 3 carry-over tasks** booked (#11/#13/#15/#16/#17/#20/#26/#29/#32) — each with full Sec-mod descriptions for Phase 3 implementation. Team mode active per ADR-003; spawn teammates via `Agent(team_name="phase-1-step-4", subagent_type=..., name=...)`. |
+| **Candidate ADRs for Step 4 close** | 3 project-convention ADRs identified (locks-log meta-patterns §6 / §7 / §8): (a) **privileged-context-write discipline** for non-JWT writes; (b) **immutable + INSERT-new-version discipline** for audit-class surfaces; (c) **cross-tenant FK-bypass attack family** — matched-tenant validation required on every FK-shaped reference (incl. INTEGER[] arrays). Plus per-lock ADRs (~11 candidates from the 11 locks). |
+| **§SECURITY HTML edits accumulated** | SD-matrix expansion 14→20 (SD-14 plaid_item_state_history; SD-15 acct_number; SD-16 reconciliation_event HIGH; SD-17 holdings_checkpoint; SD-18 reconciliation_event_trans; SD-12 monthly_report HIGH; plus SD-00 immutability addendum). RT catalog +3 entries (RT-16 cost-basis cascade; RT-17 reconciliation surfaces append-only; RT-18 immutability invariant suite; RT-19 read-time composition tenant-scoping). §4.2 three-surface external-API inventory + webhook-bypass-risk annotation. §4.6 PCI-DSS scope posture sub-section + four-surface reconciliation audit family annotation + trans-table-as-audit-log composition annotation. |
+| **PRD HTML edits accumulated** | §7.3 V1-dormant `account_users` bullet (Flag P2). `tenant_id` → `users_id` sweep per Flag P1 (~8–15 edits across §1.4 + §7.3 + §SECURITY §4.1 axes (i)–(iv) + §4.4 SD matrix + ADR-008 Decision 1). |
 | **Outer category** | Research (per ADR-009 Decision 2 — mosko Phases 1 + 2 sit under template's Research outer frame) |
-| **Started** | 2026-05-09 (Phase 1 entry) |
-| **Driver agent** | Product Manager (hands off to Architect at Step 4) |
-| **Gate criteria** | PRD locked + Step 4 ratification → Phase 1 closes; Phase 2 (UX/Visual) becomes available |
+| **Started** | 2026-05-09 (Phase 1 entry); 2026-05-25 (Step 4 in-session drilling start) |
+| **Driver agent** | Architect (lead Step 4; PM consulted at P-flags; Sec at every architectural lock — Sec found 13+ V1-ship-blockers across reviews including 3 instances of the cross-tenant FK-bypass attack family) |
+| **Gate criteria** | 5 substantive flags drilled + Step 4 close (ADR batch + §SECURITY HTML edits + PRD HTML edits + MILESTONES + WORKFLOW lessons-learned + phase-transition prompt per `docs/handoff-prompts.md`) → Phase 1 closes; Phase 3 (Technical Architecture) becomes available (skipping Phase 2 fast-track TBD at phase transition) |
+| **New memory entries this session** | 4 — `feedback_team_mode_default` (spawn via team_name), `feedback_incumbent_exceeds_v1_review` (P-flag pattern when incumbent exceeds V1), `feedback_horizontal_rule_after_fcto_input` (formatting), `reference_pfin_back_etl` (sibling Python ETL on Coolify with BLS + FMP APIs already in production) |
 
 ## Active Feature
 
 | Field | Value |
 |---|---|
-| Feature | _None active right now — between PRs_ |
+| Feature | _Step 4 architectural drilling — Wave 3 step 1 just closed (Flag #6); Wave 3 step 2 (Flag #7) is next pick_ |
 | Linear issue | _N/A — Linear activates at Phase 4 entry_ |
-| Branch | _N/A_ |
-| Status | _N/A_ |
+| Branch | _N/A — drilling work in `temp/`; doc commits via `meta/` branches per ADR-009 Decision 9_ |
+| Status | _Session paused 2026-05-26 mid-Step-4. Resume via consulting [`temp/step-4-locks-log.md`](temp/step-4-locks-log.md) + team task tracker. Next session: TeamCreate not needed (team `phase-1-step-4` durable); spawn Architect via `Agent(team_name="phase-1-step-4", ...)` and brief on Flag #7._ |
 
 ## Recent activity (last 7 days)
 
+- **2026-05-25 → 2026-05-26 (active drilling session; no PRs yet — work in `temp/`)** — Phase 1 Step 4 drilling: **11 substantive locks closed** (Flag #1 / P2 / E1a / Flag #2 / E2 / P1 / Flag #3 / Wave 1 step 2 #10+#12 / Flag #4 / Flag #5 / Flag #6). Full alphanumeric track closed; Waves 1+2 closed; Wave 3 step 1 closed. 9 Phase 3 carry-overs booked in team task tracker `phase-1-step-4`. 8 locks-log meta-patterns identified (3 candidate ADRs for Step 4 close). Sec found 13+ V1-ship-blockers across reviews. 4 new memory entries. Full state at [`temp/step-4-locks-log.md`](temp/step-4-locks-log.md). Step 4 close work blocked on remaining 5 flag drills (#7 / #8 / #9 / #11 / #13) + candidate P3.
 - **2026-05-24** — PR #48 merged: ADR-010 PR 2 — comments-sidecar pass 2 (Python server `scripts/serve-docs.{py,sh}` + JS widget `docs/_assets/comments.{js,css}` + `/serve-docs` skill + asset wiring in all three HTML docs + WORKFLOW.md Inline-authoring subsection). Closes the ADR-010 two-PR landing — `/refine-doc` + `/serve-docs` both available; Step 4 PRD review can begin with widget support.
 - **2026-05-24** — PR #47 merged: ADR-010 PR 1 — comments-sidecar pass 1 (`/refine-doc` skill + `comments.md` convention + gitignore + WORKFLOW.md Doc review loop section + ADR-010).
 - **2026-05-23** — PR #46 merged: MILESTONES.md post-PR-B refresh.
@@ -57,7 +67,11 @@ Full PR history in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Pending (immediate)
 
-- **Step 4** — Architectural overview consult (Architect lead; Phase 3 entry gate). All blockers cleared: Phase 1 Step 3.5 closed at v1.30 / PR #38, ADR-009 mechanics wave complete at PR #45. Ready to open.
+- **Step 4 drilling continues** — **Flag #7** (Wave 3 step 2: snapshot-vs-live render-path composition; Architect/Sec joint per PRD §2.6.5) is the immediate next pick. Composes with Flag #6 = B Option's read-time composition + Plaid Item state-history from Flag #2.
+- **Locks log** at [`temp/step-4-locks-log.md`](temp/step-4-locks-log.md) is the authoritative state file (11 lock entries + 8 meta-patterns + pending Step 4 work + full Sec-mod inventory).
+- **9 Phase 3 carry-over tasks** in team tracker `phase-1-step-4`: #11 (E1a Sec mods + E1b NULL bug) / #13 (Flag #2 Plaid Sec mods) / #15 (E2 Sec mods) / #16 (Flag P1 schema rename + PRD/Sec adoption) / #17 (Flag #3 taxonomy migration Option A) / #20 (Wave 1 step 2 Sec mods) / #26 (Flag #4 Sec mods + per-transaction reconciliation model) / #29 (Flag #5 immutable account_trans + 10 Sec mods + RT-18) / #32 (Flag #6 monthly_report + 9 Sec mods + RT-19).
+- **Step 4 close work (Task #8 in tracker, BLOCKED on remaining flag drills)** — ADR batch (~14 entries: 3 project-convention ADRs from locks-log meta-patterns §6/§7/§8 + per-lock ADRs) + §SECURITY HTML edits (SD matrix 14→20 expansion; RT catalog +4 entries; §4.2 + §4.6 annotations; PCI sub-section; SD-00 immutability addendum) + PRD HTML edits (§7.3 V1-dormant `account_users` bullet; `users_id` sweep per P1) + MILESTONES Phase 1 → complete + WORKFLOW lessons-learned subsection + phase-transition prompt per `docs/handoff-prompts.md`.
+- **Candidate P3 follow-up** — FMP API + stock-screening tables (already shipped in `pfin_back_etl`) are incumbent-exceeds-V1 per `feedback_incumbent_exceeds_v1_review` guardrail; PM consult needed at F/CTO's choice of timing (not blocking Step 4 close but should land before Phase 3 ARCH drafting).
 
 ---
 
