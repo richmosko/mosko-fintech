@@ -101,6 +101,7 @@ V2+ deferred candidates plus the Linear overflow queue. **Created in PR B per [A
   - **Live API ingestion** (IRS / California FTB public rate-table sources).
   - **Diff / version-history awareness** on ingested bracket tables.
   - **Bracket-table import from external CSV / IRS publication sources.**
+  - **Sec re-consult MANDATORY at adoption** (per [ADR-011](DECISIONS.md#adr-011) Decision 18 / Lock 14 mod #8 advisory forward-compat fence). V2+ live-tax-API ingestion is a future privileged-context-write surface (§6 meta-pattern per ADR-011 Decision 1); inherits Lock 11 mod #2 cron tenant-binding + Lock 13 `TenantBoundConnection` discipline automatically when the surface lands. Activates the cross-tenant FK-bypass family chain (per ADR-011 Decision 3) on `pfin.tax_bracket_schedule.users_id` column (V1-safe by-construction since V1 settings writes are user-session-bounded) — at V2+ adoption, the Lock 12 mod #2 pattern (immutability DB-trigger fencing tenant-anchor `users_id` UPDATE post-creation) becomes V1-SHIP-BLOCK for that V2+ surface.
 - **Multi-jurisdiction tax expansion.** ADR-002 §1.7 + ADR-004 Decision D V2+ (unchanged by ADR-006). Multi-state tax handling (any non-California state) and non-US tax handling (RRSP, ISA, foreign tax credits, etc.) are V2+. V1 supports Federal + California FTB only.
 - **Filing-status enum.** §2.5.2 V1/V2 (ι lock). V1 carries a single standard-deduction scalar per jurisdiction applicable to F/CTO's current filing status (fixed at seed time). Filing-status enum (single / MFJ / HoH) with user-selectable filing-status at settings UI + multi-scalar standard deduction is V2+.
 - **Bracket-aware tax credits and above-the-line deductions.** §2.5.2 V1/V2. V1 ships single standard deduction per jurisdiction; FTC, child tax credit, and other tax-credit handling beyond standard deduction are V2+.
@@ -125,7 +126,7 @@ V2+ deferred candidates plus the Linear overflow queue. **Created in PR B per [A
 - **REIT / MLP K-1 partnership-character splits on unrealized G/L.** §2.5.4 V1/V2 (ADR-002 §1.8 V2+). Cross-ref §5.4 instrument-level mechanics deferral.
 - **Multi-state Unrealized Tax Liability sourcing.** §2.5.4 V1/V2. Parallel to multi-jurisdiction tax expansion V2+.
 - **Monte Carlo longevity modeling.** ADR-002 Finding (b). Projection / scenario surface for retirement / longevity planning; observational tool within §1.2 archetype attribute #4 framing.
-- **Stock screening — possibly a separate tool rather than mosko-fintech scope.** ADR-002 Finding (b). The "possibly a separate tool" hedge from Finding (b) is preserved verbatim: this V2+ line is not a commitment to ship within mosko-fintech, only that it's not V1.
+- **Stock screening — possibly a separate tool rather than mosko-fintech scope.** ADR-002 Finding (b). The "possibly a separate tool" hedge from Finding (b) is preserved verbatim: this V2+ line is not a commitment to ship within mosko-fintech, only that it's not V1. **Candidate P3 disposition at Phase 1 Step 4 close (per [ADR-011](DECISIONS.md#adr-011) Decision 20 / Lock 16):** V1-default — `pfin_back_etl` FMP API ingestion continues (incumbent); stock-screening tables accumulate in `pfin_dash` schema; V1 UI does NOT expose stock-screening surface. V2+ trajectory: if the surface lands in mosko-fintech scope, existing ingestion provides backfilled data; if it ships as a separate tool, the FMP ingestion can be repurposed or wound down. The candidate-P3 incumbent-exceeds-V1 review (per `feedback_incumbent_exceeds_v1_review` memory) ratified V1-default at Lock 16 with F/CTO disposition; no V1 PRD-scope expansion.
 
 ---
 
@@ -190,6 +191,11 @@ V2+ deferred candidates plus the Linear overflow queue. **Created in PR B per [A
   - **Multi-currency transactions.**
   - **FX conversion surfaces.**
   - **Per-tenant base-currency selection.**
+- **FMP API cost-saving levers** (per [ADR-011](DECISIONS.md#adr-011) Decision 20 / Lock 16 / Flag #11 cost-feasibility Outcome 1). V1 retains FMP starter plan per F/CTO ratification. Two V2+ cost-saving levers captured for future evaluation if V1 cost-shape pressures emerge:
+  - **(b) FMP free tier downgrade** — $0/mo subscription IF the free tier's rate limits hold for V2+ needs. May degrade ingestion frequency or coverage; Phase 3 + V1.1+ verifies feasibility against query shape.
+  - **(c) Yahoo / Google Finance scrape replacement** — $0/mo subscription cost replacement of FMP entirely. **Risk-flagged:** TOS ambiguity for commercial use; rate-limiting unpredictable; format-change breakage; data-quality concerns vs. structured FMP API. Sec re-consult MANDATORY before adoption (terms-of-service + data-quality posture); Architect re-consult for ingestion-code rewrite.
+- **Stock-screening UI surface** (per [ADR-011](DECISIONS.md#adr-011) Decision 20 / Lock 16 candidate P3 V2+ trajectory). V1 ingests FMP data into `pfin_dash` stock-screening tables (incumbent) but exposes NO V1 UI surface. V2+ candidate: surface stock-screening capability (per-equity profile / EOD-price chart / statement viewer / screener UI). Cross-ref §5.5 above "Stock screening" line for the V2+ disposition narrative. PM consult required at V2-scoping time to scope the surface within the mosko-fintech-vs-separate-tool framing per ADR-002 Finding (b) hedge.
+- **Hetzner cax21 → cax31 / cax41 VPS tier escalation path** (per [ADR-011](DECISIONS.md#adr-011) Decision 20 / Lock 16 + `reference_hetzner_cax21` memory). V1 ships on incumbent Hetzner cax21 (8 ARM vCores + 16 GB RAM + 160 GB disk at €9.50/mo). Phase 3 stress-test verifies headroom under full Lock 13 worker stack (Puppeteer + ETL + Supabase + Plaid concurrent load). V2+ escalation path: cax31 (~€18/mo; 2× headroom) → cax41 (~€36/mo; 4× headroom). Architect Phase 3 + first-quarter actual cost-tracking monitors squeeze-point; cost-feasibility re-review at V2 ship if cax21 no longer fits.
 
 ---
 
@@ -228,4 +234,4 @@ Per ADR-009 Decision 7's feature-flow scheme, BACKLOG.md doubles as the overflow
 
 ---
 
-*Last updated: 2026-05-23 (PR B migration; §5 content frozen at v1.30 PRD lock 2026-05-18). Edit via `/start-doc-update <slug>` per ADR-009 Decision 9 (`meta/` branch prefix — BACKLOG.md is a state-ledger file).*
+*Last updated: 2026-05-26 (Phase 1 Step 4 close — added FMP cost-saving levers + stock-screening UI surface + Hetzner cax21 escalation path per [ADR-011](DECISIONS.md#adr-011) Decision 20 / Lock 16; annotated live-tax-API ingestion entry with Sec re-consult fence per ADR-011 Decision 18; annotated stock screening line with candidate-P3 V1-default disposition per ADR-011 Decision 20). Edit via `/start-doc-update <slug>` per ADR-009 Decision 9 (`meta/` branch prefix — BACKLOG.md is a state-ledger file).*

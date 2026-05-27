@@ -8,7 +8,43 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 **Format.** Newest at top. Each entry: `### vN.NN — YYYY-MM-DD` header followed by narrative paragraphs.
 
-**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 37 version entries total (v0.1 → v1.31).
+**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 38 version entries total (v0.1 → v1.32).
+
+---
+
+### v1.32 — 2026-05-26
+
+**Phase 1 Step 4 architectural drilling cycle + close-work — Phase 1 → ✅ COMPLETE.**
+
+Active drilling cycle 2026-05-25 → 2026-05-26 ratified 16 substantive architectural locks + 4 cross-cutting project-convention meta-patterns + candidate P3 disposition + Lock 9 amendment under the Architect-lead + Sec-joint-review + F/CTO-ratification pattern (ADR-003 team-mode in team `phase-1-step-4`).
+
+**16 locks closed across 5 waves:**
+
+- **Wave 1 (alphanumeric + foundational):** Lock 1 / Flag #1 Multi-tenant + RLS Option A baseline; Lock 2 / Flag P2 `account_users` V1-dormant; Lock 3 / Flag E1a `account_trans` RLS Option B; Lock 4 / Flag #2 Plaid integration Option C hybrid; Lock 5 / Flag E2 `acct_number` masked-only; Lock 6 / Flag P1 `users_id` schema rename; Lock 7 / Flag #3 taxonomy migration Option A; Lock 8 / Wave 1 step 2 / Flag #10 + #12 NAV materialization + CPI ingestion.
+- **Wave 2 (money correctness):** Lock 9 / Flag #4 dedup + reconciliation (Addendum 2 + 6 Sec mods including first instance of §8 cross-tenant FK-bypass family); Lock 10 / Flag #5 `account_trans` immutable + reverse-and-replace (§7 immutable INSERT-new-version discipline ratified).
+- **Wave 3 (snapshot store):** Lock 11 / Flag #6 `monthly_report` Option B with 9 Sec mods (INTEGER[] matched-tenant trigger as §8 third instance); Lock 12 / Flag #7 snapshot-vs-live render Option A child table with 8 Sec mods (§8 fourth instance + Sec's 5th chain-attack catch via parent immutability extension).
+- **Wave 4 (workers + settings + as-of-date):** Lock 13 / Flag #8 background-worker architecture Option C hybrid (`pfin_back_etl` + V1 app + Node PDF worker) with 10 Sec mods (§10 defense-in-depth meta-pattern emerged); Lock 14 / Flag #9 settings store Option B per-domain tables with 9 Sec mods including `updated_at` trigger addendum; Lock 15 / Flag #13 as-of-date Option A with 9 Sec mods + Lock 9 amendment re-introducing `account_trans.created_at` (§10 schema-level orthogonality awareness).
+- **Wave 5 (cost-feasibility synthesis):** Lock 16 / Flag #11 Outcome 1 ≤$50/month target holds (after F/CTO clarification reframed FMP/Plaid as fixed-cost + Hetzner cax21 baseline) + FMP path (a) keep starter + candidate P3 V1-default disposition (stock-screening ingestion continues; no V1 UI).
+
+**4 project-convention meta-patterns ratified as ADR-011 Decisions 1-4:** §6 privileged-context-write discipline (Locks 4/7/11/13); §7 immutable + INSERT-new-version for audit-class surfaces (Locks 9/10/11); §8 cross-tenant FK-bypass family + matched-tenant validation (4 V1 instances Locks 9/10/11/12); §10 defense-in-depth fencing across surface boundaries + schema-level orthogonality awareness (Locks 13/14/15).
+
+**Sec found 23+ V1-ship-blockers across reviews; 8 chain-attack catches Architect's drills missed.** All surfaced via joint-review pattern. F/CTO ratification interventions materially load-bearing on three locks (Flag #11 cost reframe v1→v1.1; Lock 14 mod #9 amend; Lock 15 mod #2/5/7/7b amend).
+
+**Step 4 close-work landed across 5 stacked PRs:**
+
+- **PR #51** — ADR-011 consolidation (186 lines added to DECISIONS.md covering 4 meta-pattern Decisions + 16 per-lock Decisions) + MILESTONES drilling-cycle narratives.
+- **PR #52** — §SECURITY tables: SD matrix 14→23 expansion (+9 entries; +4 row revisions); RT catalog 15→25 expansion (+10 entries including RT-21 HIGH-severity NEW V1 test; RT-09/RT-10/RT-13 amendments).
+- **PR #53** — §SECURITY §4.x prose annotations: §4.2 webhook-bypass + scheduled-poll + V2+ tax-API ingestion; §4.3 Coolify-container-boundary + infrastructure-layer fence framing; §4.6 PCI-DSS scope posture + audit-class family inventory (5-nested-bullet structure).
+- **PR #54** — PRD §7.3 V1-dormant `account_users` bullet per Lock 2 / Flag P2 / `feedback_incumbent_exceeds_v1_review` guardrail.
+- **PR #55** — BACKLOG V2+ entries (FMP cost-saving levers + stock-screening UI + Hetzner escalation path + live-tax-API privileged-context-write annotation) + WORKFLOW.md Step 4 lessons-learned subsection + MILESTONES Phase 1 → ✅ COMPLETE state + this CHANGELOG entry.
+
+**Pacing per `feedback_late_phase_density_overload`:** original PR plan was 4 PRs; PR 2 split into PR 2a (tables) + PR 2b (annotations) per F/CTO direction; PR 3 scope reduced (Lock 6 `users_id` sweep deferred to Phase 3 Task #16); each PR independently reviewable; stacked-PR dependency graph (#51 → #52 → #53 → #54 → #55).
+
+**13 Phase 3 carry-over tasks booked in team tracker `phase-1-step-4`** (#11/#13/#15/#16/#17/#20/#26/#29/#32/#33/#34/#35/#36 — full per-lock Sec-mod descriptions at `temp/step-4-locks-log.md` gitignored authoritative state file).
+
+**Five new memory entries this drilling cycle:** `feedback_team_mode_default`, `feedback_incumbent_exceeds_v1_review`, `feedback_horizontal_rule_after_fcto_input`, `reference_pfin_back_etl`, `reference_hetzner_cax21`.
+
+**Meta-process M0 (Research / PRD lock) → ✅ COMPLETE 2026-05-26.** M1 (Plan / ARCH + SECURITY docs) becomes Active at Phase 3 entry per the phase-transition prompt invocation at `docs/handoff-prompts.md`. Architect Phase 3 consumes ADR-011 + locks log + 13 carry-over tasks. Plaid production-tier monthly minimum sales call is the only out-of-band Phase 3 entry-gate task (per ADR-011 Decision 20 / Lock 16).
 
 ---
 
