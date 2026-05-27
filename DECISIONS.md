@@ -41,6 +41,192 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-011 — Phase 1 Step 4 architectural drilling: 16 lock decisions + 4 project-convention meta-patterns
+
+**Date:** 2026-05-26
+**Status:** Accepted
+**Phase:** 1 (Step 4 lock; consolidates 16 architectural decisions + 4 cross-cutting project-convention meta-patterns ratified during the active drilling cycle 2026-05-25 → 2026-05-26; lands the canonical-reference layer for Phase 3 implementation work; Phase 3 entry gate)
+
+**Context.** Phase 1 Step 4 (Architectural overview consult; Architect lead; Phase 3 entry gate per [ADR-009](#adr-009) Decision 2) executed an active drilling cycle against the 16 substantive architectural flags + 3 candidate-P flags surfaced at Pass 1 framing (`temp/step-4-arch-overview-pass-1.md`). Per Architect's wave sequencing, the 16 flags drilled across 5 waves: Wave 1 (Flag #1 RLS baseline + alphanumeric track P1/P2/E1a/E2 + Flag #3 taxonomy + Wave 1 step 2 Flag #10/#12 NAV+CPI); Wave 2 (Flag #4 reconciliation + Flag #5 manual-entry); Wave 3 (Flag #6 snapshot store + Flag #7 snapshot-vs-live render); Wave 4 (Flag #8 workers + Flag #9 settings + Flag #13 as-of-date); Wave 5 (Flag #11 cost feasibility — synthesis drill last). Each lock followed the project pattern: Architect drills A/B/C options + lean; Sec joint review on architecturally Sec-load-bearing surfaces; F/CTO ratifies with mods. The cycle produced 16 locks closed + candidate P3 (FMP/stock-screening incumbent-exceeds-V1) resolved as V1-default + Lock 9 amended at Lock 15 (re-introduces `account_trans.created_at` as IMMUTABLE post-INSERT).
+
+Drilling output: 16 lock entries totaling ~1200 lines of locked architectural commitment with full Sec-mod inventory at the authoritative state file `temp/step-4-locks-log.md` (gitignored per `feedback_working_artifacts_temp_not_docs`). Sec found 23+ V1-ship-blockers across reviews including 4 instances of the cross-tenant FK-bypass attack family + 8 distinct chain-attack catches that Architect's drills missed but Sec's joint-review surfaced. 13 Phase 3 carry-over tasks booked in team task tracker `phase-1-step-4` (Tasks #11/#13/#15/#16/#17/#20/#26/#29/#32/#33/#34/#35/#36) with full per-lock Sec-mod implementation descriptions. 8 locks-log meta-patterns identified across the drilling cycle — 4 emerged as project-convention candidates ratified at Step 4 close per Decisions 1-4 below.
+
+This ADR establishes the canonical-reference layer for the 16 locks at the consolidation scale appropriate for Phase 3 consumption — bullet-level per-lock content elaborates at the locks log; ADR-011 captures the decision shape, rationale, and cross-flag implications at the granularity Phase 3 ARCH drafting (Phase 3) + Phase 5 migration design + Phase 6 PR review will consume. Bullet-level commitments at PRD/SECURITY HTML artifacts remain mutable through future revisions if the canonical references hold steady; new architectural commitments require ADR-011 amendment or supersession.
+
+**Decisions.**
+
+### Decision 1 — Privileged-context-write discipline for non-JWT writes (project-convention meta-pattern §6)
+
+For all non-JWT writes (webhook handlers + cron workers + scheduled-poll workers + future privileged contexts), V1 commits to a four-clause discipline ratified across Locks 4 + 7 + 11 + 13:
+
+- **(a)** Ingress under no JWT (writer is not a user session).
+- **(b)** Writes execute under `service_role` (bypasses RLS by design at the DB layer).
+- **(c)** Tenant correctness derives from code, not RLS (RLS can't help when there's no JWT; explicit `users_id` binding at the entry boundary).
+- **(d)** Explicit audit log captures the tenant-resolution chain (forensic-detectability when the code's tenant-decision goes wrong).
+
+**Origin:** Lock 4 mod #6 (Plaid webhook handler). **Confirmed reusability:** Lock 7 NAV worker; Lock 11 monthly_report cron mod #2; Lock 13 `pfin_back_etl` worker architecture (concretized as `TenantBoundConnection` class + same-transaction audit-log per Lock 13 mods #3 + #4). **Forward applicability:** Lock 9 dedup writes (Plaid sync path); any V2+ privileged-context-write surface emerging.
+
+**Why ADR-able:** four consecutive locks surfaced the same discipline; expected to recur at every future privileged-context surface. Names the pattern so future surfaces can be evaluated against it without rediscovering. New V1 or V2 privileged-context surface MUST adopt the four-clause discipline at design time.
+
+**Cross-references:** Locks 4 / 7 / 11 / 13. `temp/step-4-locks-log.md` §6 meta-pattern. Sec confirmed reusability at every joint flag review.
+
+### Decision 2 — Immutable + INSERT-new-version discipline for audit-class surfaces (project-convention meta-pattern §7)
+
+For all audit-class surfaces (financial-correctness data + compliance-attestation-bearing tables), V1 commits to immutable rows at the policy/trigger layer + INSERT-new-version regeneration where corrections are required. Pattern ratified across Locks 9 + 10 + 11:
+
+- Rows are append-only at the RLS policy + DB-trigger layer (UPDATE/DELETE blocked across both `authenticated` AND `service_role` roles).
+- "Updates" become NEW rows with explicit relationship to predecessor (FK or status ENUM).
+- Audit trail is the table itself; no separate audit table needed.
+- Composes with §6 privileged-context-write discipline — service_role contexts still can't UPDATE due to DB-trigger layer.
+
+**Surfaces ratified:**
+- **Lock 9 (reconciliation_event + reconciliation_event_trans):** append-only RLS; tamper-proof audit trail.
+- **Lock 10 (account_trans):** immutable rows; edits via reverse-and-replace INSERT (`is_reverse BOOLEAN` + `replaces_trans_id` FK).
+- **Lock 11 (monthly_report):** immutable per row; regeneration via INSERT-new-version with `generation_status` ENUM (draft → final → superseded); partial UNIQUE on `(users_id, target_month) WHERE generation_status = 'final'`.
+
+**Why ADR-able:** §SECURITY §4.6 audit-log retention commitment held by-construction (no UPDATE means no audit gap); money-correctness failure modes (silent drift, silent cascade-skip) eliminated by immutability; cross-tenant chain attacks (Decision 3 below) close cleanly via matched-account WITH CHECK + immutability of the chain.
+
+**Cross-references:** Locks 9 / 10 / 11. `temp/step-4-locks-log.md` §7 meta-pattern. Lock 12 Decision 16 below strengthens to fence tenant anchor (`users_id`) + audit-load-bearing columns (`target_month`, `account_id`), not merely value columns.
+
+### Decision 3 — Cross-tenant FK-bypass attack family + matched-tenant validation (project-convention meta-pattern §8)
+
+Any FK-shaped reference column (single FK, self-FK, INTEGER[] array element) that crosses an isolation boundary requires **explicit matched-tenant validation** — DB-level WITH CHECK constraint (single columns) or BEFORE INSERT/UPDATE trigger (array elements PostgreSQL can't express declaratively). PostgreSQL FK constraints are silent on RLS: the constraint validates the referenced row exists; it does NOT validate the referenced row is within the referring user's isolation scope. Without explicit matched-tenant validation, FK-shaped columns create chain-attack surfaces that defeat RLS protection at the schema layer.
+
+**Four V1 instances locked:**
+- **Lock 9 mod #1:** `pfin.reconciliation_event_trans (event_id, account_trans_id)` — WITH CHECK matching `reconciliation_event.account_id` to `account_trans.account_id`.
+- **Lock 10 mod #2:** `pfin.account_trans.replaces_trans_id` self-FK — WITH CHECK matching target's `account_id` to row's `account_id`.
+- **Lock 11 mod #9:** `pfin.monthly_report.included_reconciliation_event_ids INTEGER[]` — BEFORE INSERT/UPDATE trigger validating every array element's `reconciliation_event.users_id` equals row's `users_id`.
+- **Lock 12 Architect-spec + mod #2:** `pfin.monthly_report_account_snapshot.account_id` — matched-tenant validation trigger + parent immutability extension fencing `monthly_report.users_id` UPDATE post-creation.
+
+**Why ADR-able:** four consecutive flags surfaced the pattern; default-discipline lowers the cognitive load on Sec reviews (forces explicit consideration at design time rather than catching ad-hoc per surface). Composes with §6 + §7 + §10 to form a defensive layer on top of RLS. Any new V1 or V2 surface introducing a FK-shaped reference column (including INTEGER[] arrays) MUST include matched-tenant validation in its DDL.
+
+**Cross-references:** Locks 9 / 10 / 11 / 12. `temp/step-4-locks-log.md` §8 meta-pattern. Decision 16 below (Lock 12) strengthens the family with tenant-anchor-immutability extension. Decision 19 below (Lock 15 / Flag #13) confirms NOT a new instance at V1 (settings-table writes are user-session-bounded; FK-bypass becomes live only at V2+ live-tax-API ingestion under service_role).
+
+### Decision 4 — Defense-in-depth fencing across surface boundaries + schema-level orthogonality awareness (project-convention meta-pattern §10)
+
+V1 commits to defense-in-depth fencing for security-load-bearing surfaces — fence at MULTIPLE layers simultaneously rather than at any single layer. Three classes of surface accumulated across Locks 13 + 14 + 15:
+
+- **Privileged-context surfaces (Lock 13):** fence at code (`TenantBoundConnection` class + CI grep fence) + CI (no raw `psycopg2.connect()` outside the class) + JWT shape (authenticated-tier-only; dedicated signing key; nonce replay protection) + **infrastructure-credential-presence** (no `SUPABASE_*` env vars in PDF worker container; no Postgres client installed in Dockerfile — preserves Lock 12 mod #1 read-path-only fence by-construction against future-optimization regressions).
+- **User-facing direct DB write surfaces (Lock 14):** fence at app-layer (Zod `.strict()` schema validation + mass-assignment prevention; `users_id` from `auth.uid()` not `req.body`) + numeric-input adversarial battery (NaN/Inf/currency-string regex/overflow/scientific-notation/locale-formatted reject) + RLS WITH CHECK at DB layer + DB-trigger backstops (monotonicity; `updated_at` UPDATE-refresh).
+- **Schema-level orthogonality awareness (Lock 15 catch on Lock 9):** drop-column corrections MUST be evaluated against ALL downstream PRD commitments, not just the immediate-driver concern. Lock 9 correction #3 dropped `account_trans.created_at` for event-date immutability — orthogonal to row-insertion-time semantics needed by Lock 15 / Flag #13 §2.3.3 retroactive-edit-historical-view commitment.
+
+**Why ADR-able:** the same chain-attack pattern (catching multiple-layer failures) keeps surfacing. Sec found 8 chain-attack catches across the drilling cycle that Architect's drills missed — defense-in-depth is the discipline that makes catches possible at design time rather than at attack time. Composes with §6 (privileged-context-write) + §7 (immutable INSERT-new-version) + §8 (cross-tenant FK-bypass).
+
+**Cross-references:** Locks 13 / 14 / 15. `temp/step-4-locks-log.md` §10 candidate meta-pattern (further-strengthened at Lock 15 schema-level orthogonality). Sec re-pings at every Phase 3 / Phase 6 multi-layer-surface review verify the discipline holds.
+
+### Decision 5 — Lock 1 / Flag #1: Multi-tenant + RLS Option A (Supabase Auth + native RLS)
+
+**Locked option:** Option A — Supabase Auth + native RLS as V1 baseline + selective Option C overlay deferred to Phase 3 detail design on RT-02 (Plaid Items table) + RT-05 (webhook handler) critical-severity surfaces. **Rationale:** Option A satisfies every PRD/SECURITY lock at zero incumbent-switching cost; Option B portability benefits not load-bearing for single-tenant V1 invite-only-V2 trajectory; selective C-on-A captures financial-correctness blast-radius wins on critical-severity RT surfaces without universal-wrapper maintenance tax.
+
+**Cross-references:** locks-log Lock 1; PRD §1.4 + §7.3; SECURITY §4.1 axis (i); ADR-008 Decision 1 axis (i) baseline; sets foundational RLS stance under which all downstream locks land.
+
+### Decision 6 — Lock 2 / Flag P2: account_users V1-dormant; preserve as-built schema
+
+**Locked option:** Option A — document `account_users` table + `fn_grant_creator_access` trigger + `rd_access`/`wr_access` flags as V1-dormant. PRD §7.3 adds additive bullet acknowledging the dormant per-account ACL primitive. V1 UI does not expose sharing or invitation flows. V2 invite-only expansion enables the UI surface against this scaffolding without a data migration. F/CTO-added guardrail: `feedback_incumbent_exceeds_v1_review` memory established (when incumbent code/schema exceeds V1 PRD commitment, promote to a P-flag with options + ADR; do NOT auto-accept via selective adoption).
+
+**Cross-references:** locks-log Lock 2; PRD §7.3; ADR-008 Decision 1 Axis (i); composes with Lock 3 E1a-B RLS-shape decision. Memory `feedback_incumbent_exceeds_v1_review`.
+
+### Decision 7 — Lock 3 / Flag E1a: account_trans RLS shape (Option B — account_users.rd_access-JOIN)
+
+**Locked option:** Option B — `account_users.rd_access`-JOIN at SELECT; `wr_access` at INSERT/UPDATE/DELETE WITH CHECK. F/CTO override of Architect's Option A lean (created_by-direct) — exercises multi-user RLS infrastructure at V1 so V2 sharing-UI lands against an RLS pattern already in production. Sec blessed with 3 V1-SHIP-BLOCK mods + 1 advisory: (1) tighten `account_users` UPDATE policy via column-level `REVOKE UPDATE; GRANT UPDATE (nickname, notes)` mirroring `user_profile` pattern (without it, tenant A can re-tenant their `account_users` row to tenant B — full cross-tenant R/W leak); (2) elevate `fn_grant_creator_access()` to `SECURITY DEFINER` + verify it fires under V1 RLS; (3) write-path WITH CHECK uses `wr_access`, not `rd_access`; (4) advisory SECURITY annotation noting V1 exercises V2 sharing-shape ACL.
+
+**Cross-references:** locks-log Lock 3; Task #11 Phase 3 carry-over (E1a Sec mods + E1b NULL bug). Sec's load-bearing catch: `account_users` UPDATE-policy cross-tenant-pivot bug — latent under Option A; active under Option B — would have shipped silently.
+
+### Decision 8 — Lock 4 / Flag #2: Plaid integration (Option C — pragmatic hybrid)
+
+**Locked option:** Option C — Supabase Vault/pgsodium column-level encryption on `plaid_items.access_token_encrypted` BYTEA + denormalized token storage + Express/Next webhook signature verification via Plaid SDK HMAC + dedup hybrid (partial-unique-index `(account_id, plaid_transaction_id)` + existing `(account_id, import_hash)`) + append-only `plaid_item_state_history` table (V1 audit-retention commitment per §4.6 requires it). **Sec's 6 mods** (3 V1-SHIP-BLOCK + 3 advisory): (1) pgsodium decrypt-view permission scoped to service_role only + Vault key-management Phase 3 lock; (2) webhook handler explicit `users_id`-binding from `plaid_items.users_id` lookup at the Plaid Item ID; (3) webhook idempotency via `plaid_webhook_id` UNIQUE; (4) ItemUpdate event-state classification mapped to 4-class credential-error enum per §2.4.4; (5) §SECURITY §4.2 webhook-bypass-risk annotation; (6) **privileged-context-write discipline established** (§6 meta-pattern origin). E1a-B dependency: Plaid Items table inherits `account_users.rd_access`-JOIN shape.
+
+**Cross-references:** locks-log Lock 4; Task #13 Phase 3 carry-over (Plaid Sec mods). Sec's load-bearing catch: pgsodium-default-decrypt-view permission gap — would have defeated RT-02 (Plaid Item table RLS critical-severity test) entirely.
+
+### Decision 9 — Lock 5 / Flag E2: acct_number storage class
+
+**Locked option:** Option B — Preserve as-built `acct_number` column on `pfin.account` with masked-rendering convention (4-char suffix display only; full value never user-facing). SD-15 entry NEW (medium tier; tenant-scoped; indefinite). Sec mods (3 advisory): (1) Phase 3 ARCH masked-rendering helper implementation; (2) Phase 6 PR-review fence on full-value disclosure surfaces; (3) §SECURITY §4.6 PCI-DSS scope posture sub-section (V1 not PCI-DSS-scope since `acct_number` is masked-only; V2+ unmasking surface triggers PCI consult).
+
+**Cross-references:** locks-log Lock 5; Task #15 Phase 3 carry-over (E2 Sec mods). New SD-15 entry per §SECURITY §4.4 expansion.
+
+### Decision 10 — Lock 6 / Flag P1: users_id schema rename
+
+**Locked option:** Sweep `tenant_id` → `users_id` across all V1 user-data tables. PRD §1.4 + §7.3 + SECURITY §4.1 axes (i)–(iv) + §4.4 SD matrix + ADR-008 Decision 1 axis (i) ratify the new name. F/CTO-driven rename for V1 single-user-V1 + multi-tenant-from-day-one shape clarity (the column anchors to `auth.users(id)` — `users_id` is the literal semantic; `tenant_id` was a generic shape that implied a tenant table that V1 doesn't have). Phase 3 implementation does the actual DDL rename; PRD/SECURITY/ADR text updates align in Step 4 close PR.
+
+**Cross-references:** locks-log Lock 6; Task #16 Phase 3 carry-over (P1 schema rename + PRD/Sec adoption). Affects all V1 RLS predicates per axis (i).
+
+### Decision 11 — Lock 7 / Flag #3: taxonomy migration (Option A — V1 user_taxonomy with seed-only V1)
+
+**Locked option:** Option A — single `pfin.user_taxonomy` table (per-user user-editable taxonomy); V1 seed-only (no UI for taxonomy CRUD); V2+ taxonomy-CRUD-UI as expansion. Two-level Cat × Sub-Cat for asset (§2.2.1) + cash-flow (§2.3.1) + `tax_relevant` boolean + `tax_character` enum per ADR-006 Axis 2. V1 bootstrap seeds from F/CTO's existing-system taxonomy. Sec posture: user-scoped RLS standard; no novel surface. Architect Phase 3 picks the precise DDL shape (single table vs split asset/cashflow tables — Phase 3 decision per App B §2.2 (a) + §2.3 (a)).
+
+**Cross-references:** locks-log Lock 7; Task #17 Phase 3 carry-over (taxonomy migration Option A). Per ADR-006 + ADR-004 Decision C.
+
+### Decision 12 — Lock 8 / Wave 1 step 2 / Flag #10 + #12: NAV + CPI ingestion
+
+**Locked option:** Combined drill — NAV materialized per-month rows in `pfin.nav` (worker computes month-end; Lock 11 monthly_report reads as O(1) lookup) + CPI-U historical import via `pfin_back_etl` (incumbent BLS API integration; back to Dec-2015 NAV anchor per PRD §2.1.3). NAV worker established §6 privileged-context-write discipline reusability (confirmed Lock 4's Plaid webhook pattern extends cleanly to cron workers). Sec mods (2 advisory): (1) NAV materialization tenant-binding follows Lock 4 mod #6 pattern; (2) CPI ingestion is read-only public-data; no new SECURITY surface.
+
+**Cross-references:** locks-log Lock 8; Task #20 Phase 3 carry-over (Wave 1 step 2 Sec mods). `reference_pfin_back_etl` memory.
+
+### Decision 13 — Lock 9 / Flag #4: dedup + reconciliation (Addendum 2 + Lock 9-A amendment per Lock 15)
+
+**Locked option:** Per-transaction explicit reconciliation via `pfin.reconciliation_event_trans` join table (replaces date-range derivation); statement-blessed values on `reconciliation_event` (`statement_balance` + `statement_quantity`); multi-dimension reconciliation support (single trans linked to multiple events); NAV via `eod_price` lookup at read time (no stored NAV column); naming sweep drops `_cents` suffix; trigger logic fix on `holdings_checkpoint`; drop denormalized flags (`is_plug` BOOLEAN — Sub-Cat is discriminator; `mode VARCHAR(4)` — not load-bearing). **F/CTO correction #3 dropped `account_trans.created_at`** (per-transaction model handles retroactive inserts by construction) — **AMENDED at Lock 9-A per Lock 15 (Decision 19 below)**: correction #3 was scope-narrow (addressed event-date immutability); did NOT anticipate §2.3.3 retroactive-edit-historical-view use case. **Lock 15 mod #1 V1-SHIP-BLOCK re-introduces `account_trans.created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()` IMMUTABLE post-INSERT** (inherits Lock 10 mod #8 trigger pattern). **Sec's 6 mods + 1 advisory + 1 hardening + 1 forward-fence** including V1-SHIP-BLOCK on append-only RLS + matched-account WITH CHECK (Decision 3 above first instance); cost-basis cascade concurrency control via `SELECT ... FOR UPDATE` row-lock; SD-matrix expansion 14→19 (SD-16 reconciliation_event HIGH + SD-17 holdings_checkpoint medium + SD-18 reconciliation_event_trans low); RT-16 + RT-17 HIGH; §4.6 four-surface audit-family annotation. **ADR-008 amendment required** at Step 4 close documenting Lock 9 correction #3 partial-reversal rationale + SD-00 row light addendum for re-introduced `created_at`.
+
+**Cross-references:** locks-log Lock 9 + Lock 15; Task #26 Phase 3 carry-over (Flag #4 Sec mods + per-transaction reconciliation model). Sec's load-bearing catch: cross-tenant link attack via `reconciliation_event_trans` (FK enforcement silent on RLS).
+
+### Decision 14 — Lock 10 / Flag #5: account_trans immutable + reverse-and-replace
+
+**Locked option:** `account_trans` rows immutable post-INSERT; edits via reverse-and-replace pattern (`is_reverse BOOLEAN` + `replaces_trans_id` FK self-reference; matched-account WITH CHECK per Decision 3). RLS-default-deny on UPDATE + DB-trigger blocking UPDATE across both `authenticated` AND `service_role` (Lock 10 mod #8 pattern — referenced by Lock 14 mod #9 trigger reuse + Lock 15 mod #1 trigger extension). Sec's 10 mods including SD-00 immutability addendum + RT-18 immutability invariant suite + cross-flag chain-attack catch on `replaces_trans_id` self-FK (Decision 3 second instance). §7 immutable + INSERT-new-version discipline ratified at this lock (Decision 2 above).
+
+**Cross-references:** locks-log Lock 10; Task #29 Phase 3 carry-over (immutable account_trans + 10 Sec mods + RT-18). Sec's load-bearing catch: `replaces_trans_id` self-FK cross-account replacement attack.
+
+### Decision 15 — Lock 11 / Flag #6: monthly_report snapshot store (Option B — minimal + read-time composition)
+
+**Locked option:** Option B — minimal report-identity table (`monthly_report` with `included_reconciliation_event_ids INTEGER[]` + `generation_status` ENUM draft/final/superseded) + composition at read time (joins `holdings_checkpoint` + `eod_price` + `account_trans` + `tax_character` + `pfin.nav` at render); immutable + INSERT-new-version regeneration with partial UNIQUE `(users_id, target_month) WHERE generation_status = 'final'`. **Sec's 9 mods** (3 V1-SHIP-BLOCK + 6 advisory) including: V1-SHIP-BLOCK SECURITY INVOKER on read-time composition (no DEFINER bypass); V1-SHIP-BLOCK cron tenant-binding discipline (§6 meta-pattern instance per Decision 1); V1-SHIP-BLOCK immutable INSERT-new-version regeneration (Decision 2 instance — hard-overwrite UPDATE would lose `included_reconciliation_event_ids` + `owner_header_at_generation` history); SD-12 row revision (HIGH; reference IDs + user-input; financial values composed at read time); RT-19 read-time composition tenant-scoping; **mod #9 V1-SHIP-BLOCK `INTEGER[]` matched-tenant trigger** (Decision 3 third instance — INTEGER[] columns can't carry FK constraints on array elements; cross-tenant `reconciliation_event_id` population is real audit-trail-integrity leak).
+
+**Cross-references:** locks-log Lock 11; Task #32 Phase 3 carry-over (monthly_report + 9 Sec mods + RT-19). Sec's load-bearing catch + project-convention consolidation: §7 immutable + INSERT-new-version discipline explicitly named at this lock; INTEGER[] matched-tenant trigger pattern as Decision 3 third instance.
+
+### Decision 16 — Lock 12 / Flag #7: snapshot-vs-live render-path composition (Option A — sibling child table)
+
+**Locked option:** Option A — sibling per-account snapshot child table `pfin.monthly_report_account_snapshot (monthly_report_id, account_id, acct_name_at_generation)` + matched-tenant validation trigger on `account_id` (Decision 3 fourth instance); RLS via parent FK chain; single SECURITY INVOKER composition helper called from all three entry paths (in-app render + PDF export + historical-month view); live-staleness join reads `plaid_items.state` direct (NOT `plaid_item_state_history`); β′ resolution from v1.30 verify-pass binds banner stale-account-name strings to requesting tenant's snapshot only. **Sec's 8 mods** (3 V1-SHIP-BLOCK + 5 advisory) including: V1-SHIP-BLOCK SECURITY INVOKER read-path-only fence on composition helper; V1-SHIP-BLOCK **immutability trigger extended to fence parent `users_id` + `target_month` UPDATE on monthly_report** (chain-attack via parent re-tenant orphaning child snapshot rows from original tenant — Sec's 5th chain-attack catch); V1-SHIP-BLOCK service_role bypass DB-trigger on child table; ON DELETE RESTRICT (not CASCADE); SD-12 child sub-class addendum; RT-13 amendment (SECURITY INVOKER read-path-only fence verification); new RT-20 HIGH (fourth-instance FK-bypass + service_role bypass + parent immutability extension).
+
+**Cross-references:** locks-log Lock 12; Task #33 Phase 3 carry-over (child table + 8 Sec mods + RT-20 + RT-13 amendment). Sec's load-bearing catch: immutability trigger MUST fence the tenant anchor itself (`users_id`) + audit-load-bearing columns (`target_month`, `account_id`), not merely value columns — strengthens Decision 2 (§7) and Decision 3 (§8) jointly.
+
+### Decision 17 — Lock 13 / Flag #8: background-worker architecture (Option C — hybrid)
+
+**Locked option:** Option C — hybrid worker location: `pfin_back_etl` (Python on Coolify; incumbent extended) hosts monthly-report cron + Plaid scheduled-poll + NAV + BLS + FMP; V1 app retains Plaid webhook handler + in-app render path; NEW Node PDF worker container (Puppeteer browser-context-per-render hitting V1 app render URL with short-lived signed JWT under user-session identity). Lock 12 mod #1 read-path-only fence preserved by-construction (HTTP-via-V1-app) + by-infrastructure (Sec mod #2 — no Supabase credentials in PDF worker container). **Sec's 10 mods** (4 V1-SHIP-BLOCK + 6 advisory) including: V1-SHIP-BLOCK PDF worker JWT shape (authenticated-tier-only; dedicated signing key; 60s freshness; nonce replay); V1-SHIP-BLOCK PDF worker no-direct-DB-access infrastructure fence (no `SUPABASE_*` env vars; no Postgres client installed; **§10 meta-pattern instance per Decision 4 — infrastructure-credential-presence layer**); V1-SHIP-BLOCK `TenantBoundConnection`-only CI fence (compile-time complement to runtime SQL-log assertion); V1-SHIP-BLOCK same-transaction audit-log discipline (`emit_audit_log()` on same `conn` in same SERIALIZABLE tx); Puppeteer browser-context-per-render hardening (system-fonts-only fence + Chromium flags `--disable-features=BackgroundFetch,ServiceWorker,BackgroundSync` + cache-disable + per-render PDF metadata clear); **mod #8 cross-language audit-log schema-as-contract** via new `pfin.plaid_sync_audit` table with `source` ENUM discriminator; RT-21 HIGH (PDF worker JWT verification) + RT-22 medium (PDF worker container credential audit); RT-09 + RT-10 amendments. §6 privileged-context-write discipline concretized as `TenantBoundConnection` class.
+
+**Cross-references:** locks-log Lock 13; Task #34 Phase 3 carry-over (`pfin_back_etl` extension + V1 app `/internal/pdf-render` endpoint + Node PDF worker + 10 Sec mods). Sec's load-bearing catch: infrastructure-credential-absence as defense-in-depth layer (future-regression-fence) — §10 meta-pattern (Decision 4) first formal instance. `reference_pfin_back_etl` + `reference_hetzner_cax21` memories.
+
+### Decision 18 — Lock 14 / Flag #9: settings store (Option B — per-domain tables fully split)
+
+**Locked option:** Option B — four per-domain tables (`pfin.planning_target` + `pfin.tax_bracket_schedule` + `pfin.tax_bracket_row` + `pfin.owner_identification`); greenfield (no incumbent settings tables in `pfin_dash`); UPSERT-in-place + `updated_at`; no edit-history rows (settings NOT audit-class); `tax_year SMALLINT` from V1 day-one for forward-compat-additive multi-year history (V1 reads `EXTRACT(YEAR FROM CURRENT_DATE)` for §2.5.3 in-app + `EXTRACT(YEAR FROM target_month)` for Lock 11 cron — year-boundary-correctness pattern). **Sec's 9 mods** (2 V1-SHIP-BLOCK + 7 advisory) including: V1-SHIP-BLOCK strict typed-input validation + mass-assignment prevention (§10 meta-pattern instance per Decision 4 — user-facing layer); V1-SHIP-BLOCK numeric-input sanitization battery (NaN/Inf/currency-string regex/overflow/scientific-notation/locale-formatted reject); bracket-row monotonicity DB-trigger; schedule+rows replace-all SERIALIZABLE; SD-04 + SD-11 revisions + new SD-23 planning_target medium; RT-23 + RT-24 medium; `updated_at` UPDATE-refresh trigger via `pfin.fn_refresh_updated_at()` (Sec addendum mod #9 post-initial-ratify); forward-compat fence (no JSONB blobs in settings store under any future surface). **NOT a new instance of §8 cross-tenant FK-bypass family at V1** — settings writes are user-session-bounded; chain becomes live only at V2+ live-tax-API ingestion under service_role (Sec re-consult mandatory at that adoption with Lock 12 mod #2-pattern fence becoming V1-SHIP-BLOCK).
+
+**Cross-references:** locks-log Lock 14; Task #35 Phase 3 carry-over (4 per-domain tables + Zod `.strict()` endpoints + monotonicity + `updated_at` triggers + 9 Sec mods + RT-23 + RT-24 + SD-23). Sec's load-bearing catch: app-layer mass-assignment + numeric adversarial battery at the FIRST user-facing direct DB write path outside §2.4 — §10 meta-pattern (Decision 4) user-facing-surface instance.
+
+### Decision 19 — Lock 15 / Flag #13: as-of-date semantics (Option A — app-layer parameter threading) + Lock 9 amendment
+
+**Locked option:** Option A — app-layer parameter threading; V1 app validates request → bound parameter `$as_of_date`; SQL query uses dual-column filter `transaction_date <= $1 AND created_at <= $1`; SECURITY INVOKER composition helper signature extends with `p_data_as_of DATE`; Lock 13 worker entry gains `data_as_of` as second parameter (cron derives last-day-of-prior-month; on-demand derives CURRENT_DATE or end-of-target_month). **Sec's 9 mods** (2 V1-SHIP-BLOCK + 7 advisory) including: V1-SHIP-BLOCK **Lock 9 amendment — re-introduce `account_trans.created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()` IMMUTABLE post-INSERT** (reverses Lock 9 F/CTO correction #3 partially; correction #3 was scope-narrow on event-date immutability; did NOT address row-insertion-time semantics required for §2.3.3 retroactive-edit-historical-view); V1-SHIP-BLOCK app-layer DATE input validation battery (Zod `.date()` + tightened range `2015-12-01 ≤ as_of_date ≤ CURRENT_DATE` per NAV anchor floor + no future dates); server-derived-only fence for §2.6 paths (NO client-asserted `data_as_of` for cron + on-demand monthly_report; §2.3.3 drill-down is the ONLY surface where client toggle is legitimate); Lock 11 mod #2 audit-log shape extension with `data_as_of DATE` field; PDF worker JWT integrity (NO `data_as_of` claim; V1 app reads frozen value from audit-log row); new RT-25 medium (parameter-bypass adversarial input; closes Sec Task #23 forward-looking comment #1). **§10 schema-level orthogonality awareness** (Decision 4 third class) ratified at this lock — drop-column corrections must evaluate against all downstream PRD commitments.
+
+**Cross-references:** locks-log Lock 15 + Lock 9 amendment annotation; Task #36 Phase 3 carry-over (Lock 9 schema amendment + V1 app Zod date-input + SECURITY INVOKER signature + Lock 13 worker `data_as_of` + Lock 11 audit-log extension + PDF worker JWT integrity + 9 Sec mods + RT-25). **ADR-008 amendment** documented per Decision 13 above (Lock 9 correction #3 partial-reversal). Sec's load-bearing catch (8th chain-attack catch this Step): schema-level orthogonality cascade.
+
+### Decision 20 — Lock 16 / Flag #11: cost feasibility (Outcome 1 — confirm ≤$50/month) + candidate P3 disposition (V1-default)
+
+**Locked outcome:** Outcome 1 — V1 fits ≤$50/month under all 15 prior locks; no PRD revision; ADR-002 §6.0 + PRD §7.1 stand. **Cost projection (Architect drill v1.1 after F/CTO clarifications):** fixed-cost section (Plaid per-account-locked + FMP starter + BLS free) $5-$45/mo; already-paid baseline (Hetzner cax21 €9.50/mo per `reference_hetzner_cax21`) $10/mo; feature-dependent (VPS upgrade if needed) $0-$10/mo; **V1 total $15-$65/mo; mid-range ~$35/mo** comfortably under target. Architecture confidence HIGH. **FMP path (a) — keep starter plan** at V1; (b) free-tier + (c) Yahoo/Google scrape captured as V2+ cost-saving levers in BACKLOG. **Candidate P3 disposition (FMP/stock-screening incumbent-exceeds-V1):** V1-default — `pfin_back_etl` ingestion continues unchanged; stock-screening tables accumulate in `pfin_dash`; NO V1 UI surface; V2+ trajectory item in BACKLOG. **PM consult + Sec review SKIPPED** (no scope-cut to vet under Outcome 1; no architectural re-touch; no V1-SHIP-BLOCK security surface introduced). **Phase 3 entry-gate tasks:** Plaid production-tier monthly minimum confirmation (sales/onboarding call BEFORE V1 ships); Hetzner cax21 stress-test under full Lock 13 stack; first-quarter actual cost-tracking; V2+ spend-cap / API-quota alerting (PRD §7.1 + App B §7 (a)).
+
+**Cross-references:** locks-log Lock 16; no new Phase 3 task booked (cost-observability operationalized via Phase 3 entry-gate tasks above as Architect Phase 3 implementation work). `reference_hetzner_cax21` + `reference_pfin_back_etl` memories. BACKLOG.md entries: V2+ FMP cost-saving levers (b) + (c); V2+ stock-screening UI surface.
+
+**Consequences.**
+
+- **PRD §1.4 + §7.3 + SECURITY §4.1 axes (i)–(iv) + §4.4 SD matrix + ADR-008 Decision 1 absorb the `tenant_id` → `users_id` rename per Decision 10.** Step 4 close PR sweeps the convention; Phase 3 DDL implementation does the actual column rename.
+- **Phase 3 ARCH drafting consumes ADR-011 + the 13 Phase 3 carry-over Tasks** as the V1-mandatory implementation surface. Each task carries its full Sec-mod inventory; Sec re-pings at Phase 3 lock to verify all V1-SHIP-BLOCK mods landed. Phase 3 sequencing: Task #26 (Lock 9 reconciliation; touches schema territory) precedes Task #36 (Lock 15 Lock-9-amendment); Task #32 (Lock 11 monthly_report cron read of owner-id) follows Task #35 (Lock 14 settings table creation).
+- **Phase 5 migration design + Phase 6 PR review consume ADR-011 + §SECURITY HTML updates** for V1-mandatory enforcement: every migration touching a SD-NN class implements the storage-protection-class commitment; every PR review against a security-load-bearing surface verifies the §10 defense-in-depth fencing discipline holds (Decision 4); Security Reviewer agent mandatory on every PR touching auth/data/Plaid/secrets per the agent definition.
+- **Phase 7 incident handling inherits ADR-008 Decision 4 baseline** (F/CTO-level incident-log primitive at V1; V2 onboarding triggers ramp). No Lock 15 supersession.
+- **ADR-008 amendment** for Lock 9 correction #3 partial-reversal: SD-00 row light addendum documents the re-introduced `account_trans.created_at` column per Lock 15 mod #1. Amendment lands at Step 4 close §SECURITY HTML edits PR (PR 2 of 4 in the close-work sequence).
+- **§SECURITY HTML edits queued for Step 4 close (PR 2):** SD matrix 14→23 expansion (SD-14 plaid_item_state_history; SD-15 acct_number; SD-16 reconciliation_event HIGH; SD-17 holdings_checkpoint; SD-18 reconciliation_event_trans; SD-12 monthly_report HIGH + child sub-class addendum per Decision 16; SD-23 planning_target per Decision 18; +2 Lock 13 SD entries per Decision 17; SD-04 + SD-11 revisions per Decision 18; SD-00 immutability addendum + Lock 15 created_at addendum per Decisions 14 + 19); RT catalog +10 entries (RT-16 + RT-17 per Decision 13; RT-18 per Decision 14; RT-19 per Decision 15; RT-20 per Decision 16; RT-21 HIGH + RT-22 per Decision 17; RT-23 + RT-24 per Decision 18; RT-25 per Decision 19); RT-13 + RT-09 + RT-10 amendments; §4.2 + §4.3 + §4.6 annotations.
+- **PRD HTML edits queued for Step 4 close (PR 3):** §7.3 V1-dormant `account_users` bullet per Decision 6; `users_id` sweep per Decision 10.
+- **BACKLOG.md + WORKFLOW.md + MILESTONES.md queued for Step 4 close (PR 4):** BACKLOG entries for V2+ FMP cost-saving levers (b) + (c) + V2+ stock-screening UI surface per Decision 20; V2+ live-tax-API ingestion privileged-context-write surface trajectory per Decision 18; WORKFLOW.md lessons-learned subsection capturing the 8 Sec-load-bearing catches + meta-pattern discovery cycle; MILESTONES.md Phase 1 → complete state + phase-transition prompt invocation per `docs/handoff-prompts.md`.
+- **ADR-011 supersedes nothing.** Composes alongside ADR-002 / ADR-003 / ADR-004 / ADR-008 / ADR-009 as the canonical-reference layer for Phase 3 architectural consumption. Per-lock bullet-level rationale lives at `temp/step-4-locks-log.md` (gitignored authoritative state file); ADR-011 captures the decision-grade content at the granularity Phase 3 + Phase 5 + Phase 6 + Phase 7 will consume.
+- **Future ADR housekeeping.** When Phase 3 architectural decisions warrant ADR-011 extensions (e.g., per-tenant-key-derivation mechanism for `tenant-scoped-with-app-encryption` classes lands; ARM-tier Postgres tuning under Hetzner cax21 stress-test surfaces a posture refinement), those decisions land at `docs/ARCH/index.html` per ADR-002 §6.0 + §8.0 + Phase 3 territory, not as ADR-011 amendments. When Phase 6 PR-review lessons surface meta-pattern refinements (e.g., a fifth chain-attack family Architect missed but Sec caught), those land as ADR-011 amendments adding to Decisions 1-4 or as new ADR. **ADR-011 canonical-reference layer is intentionally narrow + amendable**; the locks-log meta-patterns plus the 16 per-lock Decisions are the V1-canonical architectural commitments.
+
+**Approved by:** F/CTO (2026-05-26, across the active drilling cycle 2026-05-25 → 2026-05-26 via 16 lock ratifications + 3 mod-set amendments at Locks 14 / 15 / cost-feasibility reframe + candidate P3 disposition).
+
+---
+
 ## ADR-010 — Adopt comments-sidecar feature from project_template
 
 **Date:** 2026-05-24
