@@ -91,9 +91,11 @@
 
 <section id="sec-4-4" data-section="sd-matrix">
   <h2>§4.4 Sensitive-data classification matrix</h2>
-  <p class="section-hint">14 entries (SD-00 – SD-13) in §2-traceability order. 8 columns. Locked at <a href="../../DECISIONS.md#adr-008">ADR-008</a> Decision 2 — the matrix is V1-canonical; class additions require ADR-008 amendment.</p>
+  <p class="section-hint">23 entries (SD-00 – SD-23) in §2-traceability order; 21 active populated + 2 reserved-vacant (SD-21 + SD-22 reserved-vacant per the §4.5 <a href="#rt-07">RT-07</a> precedent — Sec mod #5 at Lock 14 picked SD-23 for `planning_target` with intermediate slots held). 8 columns. Locked at <a href="../../DECISIONS.md#adr-008">ADR-008</a> Decision 2 + <a href="../../DECISIONS.md#adr-011">ADR-011</a> Phase 1 Step 4 lock-set expansion (Decisions 8 / 9 / 13 / 17 / 18 added SD-14 through SD-23). Class additions require ADR-008 amendment.</p>
 
-  <p>§4.4 lands the V1 sensitive-data classification matrix as the canonical Sec reference for what data classes V1 handles, how each is protected and retained, and how each cross-references to the §4.5 Phase 3 RLS test catalog. Per <strong>ADR-008 Decision 2</strong>, the matrix is V1-canonical: the 8-column shape, the 14 entries (SD-00 through SD-13), and the three closed-enum columns (sensitivity tier / storage protection class / retention posture) bind future class additions and require ADR-008 amendment for any expansion. Cross-cutting annotation rows use the <code>—</code> cell convention (<a href="#sd-13">SD-13</a> is the V1 instance). The Phase 3 forward-pointer ID column points right to §4.5 Test IDs; §4.5's Related Class IDs column points left back at §4.4 Class IDs.</p>
+  <p>§4.4 lands the V1 sensitive-data classification matrix as the canonical Sec reference for what data classes V1 handles, how each is protected and retained, and how each cross-references to the §4.5 Phase 3 RLS test catalog. Per <strong>ADR-008 Decision 2</strong>, the matrix is V1-canonical: the 8-column shape, the (currently 21 active) entries SD-00 through SD-23 (with SD-21 + SD-22 reserved-vacant), and the three closed-enum columns (sensitivity tier / storage protection class / retention posture) bind future class additions and require ADR-008 amendment for any expansion. Cross-cutting annotation rows use the <code>—</code> cell convention (<a href="#sd-13">SD-13</a> is the V1 instance). The Phase 3 forward-pointer ID column points right to §4.5 Test IDs; §4.5's Related Class IDs column points left back at §4.4 Class IDs.</p>
+
+  <p><strong>Phase 1 Step 4 lock-set expansion (ADR-011):</strong> +9 entries lock-added across the active drilling cycle 2026-05-25 → 2026-05-26: SD-14 plaid_item_state_history (<a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 8 / Lock 4); SD-15 acct_number (Decision 9 / Lock 5); SD-16 reconciliation_event + SD-17 holdings_checkpoint + SD-18 reconciliation_event_trans (Decision 13 / Lock 9); SD-19 plaid_sync_audit + SD-20 PDF-worker-signing-key (Decision 17 / Lock 13); SD-23 planning_target (Decision 18 / Lock 14). Concurrent revisions to SD-00 (immutability addendum + Lock 15 created_at re-introduction per ADR-008 amendment), SD-04 (name <code>pfin.tax_bracket_schedule</code> + <code>pfin.tax_bracket_row</code> as storage surfaces per Decision 18), SD-11 (name <code>pfin.owner_identification.owner_name</code> per Decision 18), and SD-12 (child sub-class addendum naming <code>pfin.monthly_report_account_snapshot</code> per Decision 16).</p>
 
   <table class="data-matrix sensitive-data">
     <thead>
@@ -116,8 +118,8 @@
         <td>high</td>
         <td>tenant-scoped</td>
         <td>indefinite</td>
-        <td>Server-side reads under tenant_id RLS; user-facing within own tenant on §2.1 / §2.2 / §2.3 / §2.6 aggregation surfaces; never cross-tenant; manual-entry write path per §2.4.5 elevated-integrity posture</td>
-        <td><a class="forward-pointer" href="#rt-01">[RT-01]</a> <a class="forward-pointer" href="#rt-04">[RT-04]</a></td>
+        <td>Server-side reads under tenant_id RLS; user-facing within own tenant on §2.1 / §2.2 / §2.3 / §2.6 aggregation surfaces; never cross-tenant; manual-entry write path per §2.4.5 elevated-integrity posture. <strong>Immutability + reverse-and-replace addendum (<a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 14 / Lock 10):</strong> <code>account_trans</code> rows are immutable post-INSERT (UPDATE/DELETE blocked across both <code>authenticated</code> AND <code>service_role</code> via BEFORE trigger); edits via reverse-and-replace pattern (<code>is_reverse BOOLEAN</code> + <code>replaces_trans_id</code> self-FK with matched-account WITH CHECK). <strong>Row-insertion-time addendum (ADR-011 Decision 19 / Lock 15 amendment to Lock 9 correction #3):</strong> <code>account_trans.created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()</code> re-introduced as IMMUTABLE post-INSERT (also fenced via BEFORE trigger across both roles) to support §2.3.3 retroactive-edit-historical-view per Flag #13 dual-column filter <code>WHERE transaction_date &lt;= $1 AND created_at &lt;= $1</code>. <strong>ADR-008 amendment</strong> ratifies the Lock 9 correction #3 partial-reversal.</td>
+        <td><a class="forward-pointer" href="#rt-01">[RT-01]</a> <a class="forward-pointer" href="#rt-04">[RT-04]</a> <a class="forward-pointer" href="#rt-18">[RT-18]</a> <a class="forward-pointer" href="#rt-25">[RT-25]</a></td>
       </tr>
       <tr id="sd-01" class="tier-medium">
         <td>SD-01</td>
@@ -151,13 +153,13 @@
       </tr>
       <tr id="sd-04" class="tier-high">
         <td>SD-04</td>
-        <td>Tax-bracket schedules + standard deduction (Federal + CA)</td>
+        <td>Tax-bracket schedules + standard deduction (Federal + CA) — storage surfaces <code>pfin.tax_bracket_schedule</code> + <code>pfin.tax_bracket_row</code> per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 18 / Lock 14</td>
         <td>§2.5.2</td>
         <td>high</td>
         <td>tenant-scoped</td>
         <td>indefinite</td>
-        <td>Server-side reads under tenant_id RLS; user-facing within own tenant on §2.5.2 settings-store UI and §2.5.3 / §2.5.4 computation paths; never cross-tenant; revealing precision increased per ADR-006 bracket-aware correction</td>
-        <td><a class="forward-pointer" href="#rt-06">[RT-06]</a></td>
+        <td>Server-side reads under tenant_id RLS; user-facing within own tenant on §2.5.2 settings-store UI and §2.5.3 / §2.5.4 computation paths; never cross-tenant; revealing precision increased per ADR-006 bracket-aware correction. <strong>Per-domain split (ADR-011 Decision 18):</strong> parent <code>pfin.tax_bracket_schedule</code> carries <code>(users_id, jurisdiction, schedule_kind, standard_deduction, tax_year)</code> with UNIQUE constraint on <code>(users_id, jurisdiction, schedule_kind, tax_year)</code>; child <code>pfin.tax_bracket_row</code> carries <code>(schedule_id, ordinal, lower_bound, marginal_rate)</code> + BEFORE INSERT/UPDATE trigger enforcing strictly-increasing <code>lower_bound</code> per <code>schedule_id</code>. <code>tax_year SMALLINT</code> column from V1 day-one as forward-compat-additive (V2+ multi-year history ships without DDL change). UPSERT-in-place + <code>updated_at</code> via <code>pfin.fn_refresh_updated_at()</code> BEFORE UPDATE trigger; NOT audit-class.</td>
+        <td><a class="forward-pointer" href="#rt-06">[RT-06]</a> <a class="forward-pointer" href="#rt-24">[RT-24]</a></td>
       </tr>
       <tr id="sd-05" class="tier-high">
         <td>SD-05</td>
@@ -221,23 +223,123 @@
       </tr>
       <tr id="sd-11" class="tier-medium">
         <td>SD-11</td>
-        <td>Owner-identification trust-name string</td>
+        <td>Owner-identification trust-name string — storage surface <code>pfin.owner_identification.owner_name</code> per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 18 / Lock 14</td>
         <td>§2.6.4</td>
         <td>medium</td>
         <td>tenant-scoped</td>
         <td>indefinite</td>
-        <td>Server-side reads under tenant_id RLS; user-facing within own tenant on §2.6.4 ψ-1 settings UI; rendered into every §2.6 monthly-report PDF header; never cross-tenant; input-sanitization required at write path</td>
+        <td>Server-side reads under tenant_id RLS; user-facing within own tenant on §2.6.4 ψ-1 settings UI; rendered into every §2.6 monthly-report PDF header; never cross-tenant; input-sanitization required at write path. <strong>Per-domain table (ADR-011 Decision 18):</strong> singleton row per <code>users_id</code> PK (FK to <code>auth.users(id)</code>); <code>owner_name TEXT NOT NULL</code> with TEXT length cap + adversarial-input battery at app layer (HTML injection / unicode-bidi / zero-width control chars / length limits). UPSERT-in-place + <code>updated_at</code> via <code>pfin.fn_refresh_updated_at()</code> BEFORE UPDATE trigger; NOT audit-class. <strong>Snapshot composition (ADR-011 Decision 15 / Lock 11):</strong> Lock 11 cron reads <code>owner_name</code> at generation and freezes into <code>monthly_report.owner_header_at_generation</code>; historical-month re-render reads from snapshot only (no live-join surface; no Lock 12-parallel RT-13 banner-name signal-correlation risk).</td>
         <td><a class="forward-pointer" href="#rt-12">[RT-12]</a></td>
       </tr>
       <tr id="sd-12" class="tier-high">
         <td>SD-12</td>
-        <td>Monthly-report snapshot store (frozen-at-generation derivative)</td>
+        <td>Monthly-report snapshot store (frozen-at-generation derivative) — storage surfaces <code>pfin.monthly_report</code> + child <code>pfin.monthly_report_account_snapshot</code> per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 15 + Decision 16 / Locks 11 + 12</td>
         <td>§2.6.4</td>
         <td>high</td>
         <td>tenant-scoped-derivative</td>
         <td>indefinite-with-V2-cold-storage-rollover</td>
-        <td>Server-side reads under tenant_id RLS; user-facing within own tenant on §2.6 in-app reads + PDF export; denormalizes SD-00 + SD-04 + SD-05 + SD-06 + SD-07 + SD-08 + SD-09 + SD-10 + SD-11 + staleness-state into single rows; inherits storage-protection of most-protected source class; retention per §2.6.4 χ-1 indefinite lock with V2-cold-storage rollover forward-compat</td>
-        <td><a class="forward-pointer" href="#rt-08">[RT-08]</a> <a class="forward-pointer" href="#rt-09">[RT-09]</a> <a class="forward-pointer" href="#rt-10">[RT-10]</a> <a class="forward-pointer" href="#rt-13">[RT-13]</a> <a class="forward-pointer" href="#rt-14">[RT-14]</a></td>
+        <td>Server-side reads under tenant_id RLS through SECURITY INVOKER composition helper (read-path-only fence; never service_role); user-facing within own tenant on §2.6 in-app reads + PDF export + historical-month view; <strong>reference IDs + user-input persisted; financial values composed at read time</strong> per ADR-011 Decision 15 Option B revision (parent <code>monthly_report</code> stores identity + commentary + <code>included_reconciliation_event_ids INTEGER[]</code> + <code>generation_status</code> ENUM (draft/final/superseded) + <code>owner_header_at_generation</code>; partial UNIQUE on <code>(users_id, target_month) WHERE generation_status = 'final'</code>; immutable + INSERT-new-version regeneration); composes downstream values from SD-00 + SD-04 + SD-05 + SD-06 + SD-07 + SD-08 + SD-09 + SD-10 + SD-11 + staleness-state at render time. <strong>Child sub-class addendum (ADR-011 Decision 16 / Lock 12):</strong> <code>pfin.monthly_report_account_snapshot</code> persists per-account display strings at generation (<code>acct_name_at_generation</code>); matched-tenant validation trigger on <code>account_id</code> (4th instance of cross-tenant FK-bypass family per ADR-011 Decision 3); parent <code>users_id</code> + <code>target_month</code> UPDATE fenced via immutability trigger (5th chain-attack catch); same <code>tenant-scoped-derivative</code> storage protection inherited; account-name strings are signal-correlation attributes (SD-01 / SD-11 class). <strong>Snapshot regeneration audit addendum (ADR-011 Decision 19 / Lock 15 mod #7):</strong> Lock 11 mod #2 audit-log row gains <code>data_as_of DATE</code> field (forensic-detectability of "which data-as-of slice was frozen into this snapshot"); audit-log row carries the forensic record, NOT a column on <code>monthly_report</code> itself. Retention per §2.6.4 χ-1 indefinite lock with V2-cold-storage rollover forward-compat.</td>
+        <td><a class="forward-pointer" href="#rt-08">[RT-08]</a> <a class="forward-pointer" href="#rt-09">[RT-09]</a> <a class="forward-pointer" href="#rt-10">[RT-10]</a> <a class="forward-pointer" href="#rt-13">[RT-13]</a> <a class="forward-pointer" href="#rt-14">[RT-14]</a> <a class="forward-pointer" href="#rt-19">[RT-19]</a> <a class="forward-pointer" href="#rt-20">[RT-20]</a></td>
+      </tr>
+      <tr id="sd-14" class="tier-medium">
+        <td>SD-14</td>
+        <td>Plaid Item state-history append-only audit (storage surface <code>pfin.plaid_item_state_history</code>) per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 8 / Lock 4</td>
+        <td>§2.4.4</td>
+        <td>medium</td>
+        <td>tenant-scoped</td>
+        <td>bounded-N-day-rolling (N = 90 days)</td>
+        <td>Server-side reads under tenant_id RLS via Plaid Items FK chain; append-only on insert (no UPDATE/DELETE policies); receives credential-error state transitions from webhook + scheduled-poll write surfaces under §6 privileged-context-write discipline (<a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 1); 90-day prune per <a href="../../DECISIONS.md#adr-008">ADR-008</a> Decision 2 retention enum value</td>
+        <td><a class="forward-pointer" href="#rt-02">[RT-02]</a></td>
+      </tr>
+      <tr id="sd-15" class="tier-medium">
+        <td>SD-15</td>
+        <td>Account number (storage surface <code>pfin.account.acct_number</code>) per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 9 / Lock 5</td>
+        <td>§2.4.2</td>
+        <td>medium</td>
+        <td>tenant-scoped</td>
+        <td>indefinite</td>
+        <td>Server-side reads under tenant_id RLS; user-facing within own tenant ONLY as masked-rendering (4-char suffix display via <code>pfin.fn_mask_acct_number()</code> Phase 3 helper); full value NEVER user-facing; never cross-tenant; Phase 6 PR-review fence on full-value disclosure surfaces. <strong>PCI-DSS scope posture (<a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 9):</strong> V1 NOT PCI-DSS-scope since <code>acct_number</code> is masked-only on every user-facing surface; V2+ full-value unmasking surface triggers explicit PCI consult</td>
+        <td>—</td>
+      </tr>
+      <tr id="sd-16" class="tier-high">
+        <td>SD-16</td>
+        <td>Reconciliation event + statement-blessed financials (storage surface <code>pfin.reconciliation_event</code>) per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 13 / Lock 9</td>
+        <td>§2.4.3</td>
+        <td>high</td>
+        <td>tenant-scoped</td>
+        <td>indefinite</td>
+        <td>Server-side reads under tenant_id RLS via E1a-B <code>account_users.rd_access</code>-JOIN; append-only (no UPDATE/DELETE policies — tamper-proof audit trail); carries statement-blessed values (<code>statement_balance</code> + <code>statement_quantity</code>) anchoring multi-dimension reconciliation; financial-correctness parity with <a href="#sd-00">SD-00</a> baseline ledger; immutable + INSERT-new-version per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 2 audit-class discipline. <strong>Cross-flag composition:</strong> drives <a href="#sd-17">SD-17</a> <code>holdings_checkpoint</code> via trigger fan-out; linked to <a href="#sd-00">SD-00</a> via <a href="#sd-18">SD-18</a> matched-account join</td>
+        <td><a class="forward-pointer" href="#rt-16">[RT-16]</a> <a class="forward-pointer" href="#rt-17">[RT-17]</a></td>
+      </tr>
+      <tr id="sd-17" class="tier-medium">
+        <td>SD-17</td>
+        <td>Holdings checkpoint snapshot (storage surface <code>pfin.holdings_checkpoint</code>) per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 13 / Lock 9</td>
+        <td>§2.4.3</td>
+        <td>medium</td>
+        <td>tenant-scoped</td>
+        <td>indefinite</td>
+        <td>Server-side reads under tenant_id RLS via account-FK chain; append-only on reconciliation-event trigger; trigger logic reads NEW.* values from <a href="#sd-16">SD-16</a>, NOT from <code>current_holdings</code> per F/CTO correction #5 at Lock 9; carries per-asset balance + quantity snapshots at each reconciliation moment; never cross-tenant. Cost-basis cascade concurrency via <code>SELECT ... FOR UPDATE</code> row-lock in cascade trigger (<a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 13 Sec mod #2)</td>
+        <td><a class="forward-pointer" href="#rt-16">[RT-16]</a> <a class="forward-pointer" href="#rt-17">[RT-17]</a></td>
+      </tr>
+      <tr id="sd-18" class="tier-medium">
+        <td>SD-18</td>
+        <td>Reconciliation event ↔ account_trans join (storage surface <code>pfin.reconciliation_event_trans</code>) per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 13 / Lock 9</td>
+        <td>§2.4.3</td>
+        <td>medium</td>
+        <td>tenant-scoped</td>
+        <td>indefinite</td>
+        <td>Server-side reads under tenant_id RLS via parent <a href="#sd-16">SD-16</a> FK chain; append-only (no UPDATE/DELETE policies); link table mapping individual <code>account_trans.id</code> rows to <code>reconciliation_event.id</code> rows (supports multi-dimension reconciliation: one trans linked to multiple events, e.g. balance_check + quantity_check_per_asset for a stock-buy). <strong>Cross-tenant FK-bypass mitigation (<a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 3 first instance):</strong> matched-account WITH CHECK constraint enforcing <code>reconciliation_event.account_id = account_trans.account_id</code> (closes the silent-cross-tenant-link attack that pure FK enforcement misses — Sec's load-bearing catch at Lock 9)</td>
+        <td><a class="forward-pointer" href="#rt-17">[RT-17]</a></td>
+      </tr>
+      <tr id="sd-19" class="tier-medium">
+        <td>SD-19</td>
+        <td>Plaid sync cross-language audit-log (storage surface <code>pfin.plaid_sync_audit</code>) per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 17 / Lock 13 mod #8</td>
+        <td>§2.4.4</td>
+        <td>medium</td>
+        <td>tenant-scoped</td>
+        <td>indefinite</td>
+        <td>Server-side reads under tenant_id RLS; service_role-only writes from BOTH the webhook handler (V1 app TypeScript) AND the scheduled-poll worker (`pfin_back_etl` Python); cross-language schema-as-contract via <code>source</code> ENUM discriminator (<code>webhook</code> / <code>scheduled_poll</code> / future entries) + shared columns + nullable per-source columns. <strong>Drift-impossibility-by-construction:</strong> two write paths against same table at DB layer; column shape IS the contract; cross-language discipline cohesion (<a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 17 Q4) resolved at data layer rather than code-layer convention. Same-transaction audit-log discipline (Lock 13 mod #4 — atomic with main write under SERIALIZABLE)</td>
+        <td><a class="forward-pointer" href="#rt-02">[RT-02]</a> <a class="forward-pointer" href="#rt-09">[RT-09]</a></td>
+      </tr>
+      <tr id="sd-20" class="tier-credential">
+        <td>SD-20</td>
+        <td>PDF-worker-signing-key (Coolify env var <code>PDF_WORKER_SIGNING_KEY</code>) per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 17 / Lock 13</td>
+        <td>§2.6.3</td>
+        <td>credential</td>
+        <td>credential-class</td>
+        <td>bounded-Item-active-only</td>
+        <td>Service-to-service-only; never client-facing; never persisted in DB; lives ONLY in Coolify environment variables for V1 app + Node PDF worker container. Distinct from Supabase JWT secret (Lock 13 mod #1 dedicated signing key fence). V1 app signs short-lived (60s freshness) JWT containing <code>users_id</code> claim ONLY (no <code>service_role</code> escalation; no <code>data_as_of</code> claim per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 19 / Lock 15 mod #7b); PDF worker verifies signature + freshness + nonce. Rotation Phase 3+; rotation mechanism TBD per Phase 3 ARCH</td>
+        <td><a class="forward-pointer" href="#rt-21">[RT-21]</a> <a class="forward-pointer" href="#rt-22">[RT-22]</a></td>
+      </tr>
+      <tr id="sd-21">
+        <td>SD-21</td>
+        <td><em>Reserved-vacant</em> — held at Phase 1 Step 4 close per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 18 (Sec mod #5 picked SD-23 for <code>planning_target</code> with intermediate slots held; parallel to <a href="#rt-07">RT-07</a> reserved-vacant precedent)</td>
+        <td>—</td>
+        <td>—</td>
+        <td>—</td>
+        <td>—</td>
+        <td>Reserved-vacant slot. Future V2+ class assignment via ADR-008 / ADR-011 amendment.</td>
+        <td>—</td>
+      </tr>
+      <tr id="sd-22">
+        <td>SD-22</td>
+        <td><em>Reserved-vacant</em> — held at Phase 1 Step 4 close per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 18 (parallel to <a href="#rt-07">RT-07</a> reserved-vacant precedent)</td>
+        <td>—</td>
+        <td>—</td>
+        <td>—</td>
+        <td>—</td>
+        <td>Reserved-vacant slot. Future V2+ class assignment via ADR-008 / ADR-011 amendment.</td>
+        <td>—</td>
+      </tr>
+      <tr id="sd-23" class="tier-medium">
+        <td>SD-23</td>
+        <td>Planning-target scalars (income + expense; storage surface <code>pfin.planning_target</code>) per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 18 / Lock 14</td>
+        <td>§2.3.2</td>
+        <td>medium</td>
+        <td>tenant-scoped</td>
+        <td>indefinite-with-V2-cold-storage-rollover</td>
+        <td>Server-side reads under tenant_id RLS; user-facing within own tenant on §2.3.2 settings UI and §2.3.4 cash-flow rollup; never cross-tenant; input-sanitization required at write path (Zod <code>.strict()</code> + numeric NaN/Inf/range/currency-string adversarial battery per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 18 Sec mods #1 + #2). <strong>Per-domain table (Decision 18 / Option B):</strong> 2 rows per tenant (income / expense); <code>UNIQUE (users_id, target_kind)</code>; UPSERT-in-place + <code>updated_at</code> via <code>pfin.fn_refresh_updated_at()</code> trigger; NOT audit-class</td>
+        <td><a class="forward-pointer" href="#rt-23">[RT-23]</a></td>
       </tr>
       <tr id="sd-13">
         <td>SD-13</td>
@@ -255,9 +357,11 @@
 
 <section id="sec-4-5" data-section="rt-catalog">
   <h2>§4.5 Phase 3 RLS test catalog</h2>
-  <p class="section-hint">15 entries (RT-01 – RT-15; RT-07 reserved-vacant; 14 active). 7 columns. Locked at <a href="../../DECISIONS.md#adr-008">ADR-008</a> Decision 3. <strong>V1-block threshold:</strong> <code>critical</code> severity only — expected V1 critical-severity count = 2 (<a href="#rt-02">RT-02</a> + <a href="#rt-05">RT-05</a>).</p>
+  <p class="section-hint">25 entries (RT-01 – RT-25; RT-07 reserved-vacant; 24 active). 7 columns. Locked at <a href="../../DECISIONS.md#adr-008">ADR-008</a> Decision 3 + <a href="../../DECISIONS.md#adr-011">ADR-011</a> Phase 1 Step 4 lock-set expansion (+10 entries RT-16 through RT-25). <strong>V1-block threshold:</strong> <code>critical</code> severity only — expected V1 critical-severity count = 2 (<a href="#rt-02">RT-02</a> + <a href="#rt-05">RT-05</a>). +1 NEW <strong>HIGH</strong> severity test at Step 4 lock: <a href="#rt-21">RT-21</a> PDF worker JWT verification per ADR-011 Decision 17 / Lock 13 mod #1.</p>
 
-  <p>§4.5 lands the V1-mandatory Phase 3 RLS test catalog as the canonical Sec forward-payload for Architect Phase 3 + Phase 6 PR-review consumption. Per <strong>ADR-008 Decision 3</strong>, the catalog is V1-canonical: the 7-column shape, the 14 active tests + 1 reserved slot (RT-01 through RT-15; RT-07 reserved-vacant), and the two closed-enum columns (test category / severity) bind future test additions and require ADR-008 amendment for any expansion. <strong>V1-block threshold: <code>critical</code> severity only</strong> — two V1-ship-blocker tests (<a href="#rt-02">RT-02</a> Plaid Item table RLS, <a href="#rt-05">RT-05</a> webhook signature verification). Bidirectional cross-reference with §4.4 via the Related Class IDs column; one-way pointer findings explained at routing flag (l).</p>
+  <p>§4.5 lands the V1-mandatory Phase 3 RLS test catalog as the canonical Sec forward-payload for Architect Phase 3 + Phase 6 PR-review consumption. Per <strong>ADR-008 Decision 3</strong>, the catalog is V1-canonical: the 7-column shape, the 24 active tests + 1 reserved slot (RT-01 through RT-25; RT-07 reserved-vacant), and the two closed-enum columns (test category / severity) bind future test additions and require ADR-008 amendment for any expansion. <strong>V1-block threshold: <code>critical</code> severity only</strong> — two V1-ship-blocker tests (<a href="#rt-02">RT-02</a> Plaid Item table RLS, <a href="#rt-05">RT-05</a> webhook signature verification). Bidirectional cross-reference with §4.4 via the Related Class IDs column; one-way pointer findings explained at routing flag (l).</p>
+
+  <p><strong>Phase 1 Step 4 lock-set expansion (ADR-011):</strong> +10 entries lock-added across the active drilling cycle 2026-05-25 → 2026-05-26: RT-16 cost-basis cascade trigger-chain + RT-17 reconciliation surfaces append-only (<a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 13 / Lock 9); RT-18 immutability invariant suite (Decision 14 / Lock 10); RT-19 read-time composition tenant-scoping (Decision 15 / Lock 11); RT-20 fourth-instance FK-bypass + service_role bypass + parent immutability extension (Decision 16 / Lock 12); RT-21 PDF worker JWT verification HIGH + RT-22 PDF worker container credential audit medium (Decision 17 / Lock 13); RT-23 planning_target write-path + RT-24 tax_bracket write-path (Decision 18 / Lock 14); RT-25 as-of-date adversarial input (Decision 19 / Lock 15 — closes Sec Task #23 forward-looking comment #1). Concurrent amendments to <a href="#rt-09">RT-09</a> (two-sub-case enumeration per Lock 13 mod #6), <a href="#rt-10">RT-10</a> (four-sub-assertion enumeration per Lock 13 mod #7), <a href="#rt-13">RT-13</a> (SECURITY INVOKER read-path-only fence verification per Lock 12 mod #1).</p>
 
   <table class="data-catalog rls-tests">
     <thead>
@@ -342,20 +446,27 @@
       <tr id="rt-09" class="severity-high">
         <td>RT-09</td>
         <td>Cross-tenant cron worker context isolation</td>
-        <td>Cron worker establishes <code>tenant_id</code> context before any source-data read or snapshot-store write; instrumented SQL log assertion confirms tenant_id WHERE clause on every query the worker issues; concurrent multi-tenant cron jobs (tenant A + tenant B cron firing simultaneously per 1st-of-month τ-1 cadence) assert disjoint writes — no row written by tenant A's worker is visible to tenant B's render path and vice versa; worker identity / authorization shape verified per §2.6 lock routing flag (vi).</td>
+        <td>Cron worker establishes <code>users_id</code> context before any source-data read or snapshot-store write; instrumented SQL log assertion confirms users_id WHERE clause on every query the worker issues; concurrent multi-tenant cron jobs (tenant A + tenant B cron firing simultaneously per 1st-of-month τ-1 cadence) assert disjoint writes — no row written by tenant A's worker is visible to tenant B's render path and vice versa; worker identity / authorization shape verified per §2.6 lock routing flag (vi). <strong>Two-sub-case enumeration per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 17 / Lock 13 mod #6:</strong> (a) monthly-report cron sub-case (`pfin_back_etl` Python; `TenantBoundConnection` discipline; SERIALIZABLE transactions; matches §6 privileged-context-write discipline per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 1); (b) Plaid scheduled-poll sub-case (`pfin_back_etl` Python; iterates per-tenant Plaid Items; same `TenantBoundConnection` discipline). Both sub-cases share the same Python codepath + SQL-log discipline + atomic same-transaction audit-log into <a href="#sd-19">SD-19</a> <code>pfin.plaid_sync_audit</code>.</td>
         <td>worker-context-isolation</td>
         <td>§2.6.3</td>
         <td>high</td>
-        <td><a class="forward-pointer" href="#sd-12">SD-12</a></td>
+        <td><a class="forward-pointer" href="#sd-12">SD-12</a>, <a class="forward-pointer" href="#sd-19">SD-19</a></td>
       </tr>
       <tr id="rt-10" class="severity-high">
         <td>RT-10</td>
         <td>PDF-generation worker tenant-isolation verification</td>
-        <td>Shared Puppeteer / wkhtmltopdf worker pool does not leak fonts, DOM state, auth headers, cookies, or PDF metadata across tenant renders; under sequential tenant A → tenant B render harness with worker re-use, tenant B's rendered PDF contains zero data, metadata, or rendering artifacts from tenant A; concurrent tenant A + tenant B render harness produces two disjoint PDFs.</td>
+        <td>Shared Puppeteer worker pool does not leak data across tenant renders; under sequential tenant A → tenant B render harness with worker re-use, tenant B's rendered PDF contains zero data, metadata, or rendering artifacts from tenant A; concurrent tenant A + tenant B render harness produces two disjoint PDFs. <strong>Four-sub-assertion enumeration per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 17 / Lock 13 mod #7</strong> (Puppeteer browser-context-per-render isolation primitive per mod #5):
+          <ul>
+            <li><strong>Font cache:</strong> system-fonts-only fence (no <code>@font-face</code>); Chromium's font cache does not surface tenant A glyph data in tenant B render.</li>
+            <li><strong>ServiceWorker / BackgroundFetch / BackgroundSync:</strong> Chromium flags <code>--disable-features=BackgroundFetch,ServiceWorker,BackgroundSync</code>; no SW registration persists across context boundary.</li>
+            <li><strong>HTTP cache:</strong> cache-disable per render context; tenant A response bodies do not surface to tenant B requests.</li>
+            <li><strong>PDF metadata:</strong> per-render PDF metadata clear (Author / Subject / Keywords fields blank or render-specific); no tenant A identity surfaces in tenant B PDF metadata.</li>
+          </ul>
+          Composes with Lock 13 mod #2 infrastructure-credential-absence fence (PDF worker container has no <code>SUPABASE_*</code> credentials; no Postgres client installed) so Lock 12 mod #1 read-path-only fence holds by-construction AND by-infrastructure.</td>
         <td>worker-context-isolation</td>
         <td>§2.6.3 + §2.6.4</td>
         <td>high</td>
-        <td><a class="forward-pointer" href="#sd-12">SD-12</a></td>
+        <td><a class="forward-pointer" href="#sd-12">SD-12</a>, <a class="forward-pointer" href="#sd-20">SD-20</a></td>
       </tr>
       <tr id="rt-11" class="severity-medium">
         <td>RT-11</td>
@@ -378,7 +489,7 @@
       <tr id="rt-13" class="severity-high">
         <td>RT-13</td>
         <td>Cross-tenant staleness-state-read leak verification (live-join-at-render-time most-subtle case)</td>
-        <td>At §2.6.5 render time, the join from snapshot store's <code>account_id</code> to live §2.4.4 credential-error state never reads cross-tenant credential state under any query shape; two-tenant fixture with overlapping account_id values (collision case) asserts the staleness join resolves to tenant A's credential state when rendering tenant A's snapshot, never to tenant B's; <strong>the §2.6.5 banner's account-name strings render from the requesting tenant's snapshot only, never from a cross-tenant live-join surface;</strong> the join holds under in-app render path AND PDF re-render path. <span class="lock-marker">β′ resolution from v1.30 verify-pass VP-2/12 applied</span></td>
+        <td>At §2.6.5 render time, the join from snapshot store's <code>account_id</code> to live §2.4.4 credential-error state never reads cross-tenant credential state under any query shape; two-tenant fixture with overlapping account_id values (collision case) asserts the staleness join resolves to tenant A's credential state when rendering tenant A's snapshot, never to tenant B's; <strong>the §2.6.5 banner's account-name strings render from the requesting tenant's snapshot (<a href="#sd-12">SD-12</a> child <code>pfin.monthly_report_account_snapshot.acct_name_at_generation</code> per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 16) only, never from a cross-tenant live-join surface;</strong> the join holds under in-app render path AND PDF re-render path. <span class="lock-marker">β′ resolution from v1.30 verify-pass VP-2/12 applied</span>. <strong>SECURITY INVOKER read-path-only fence verification (light amendment per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 16 / Lock 12 mod #1):</strong> the composition helper invoked at render time is <code>SECURITY INVOKER</code> (NOT DEFINER); helper is fenced to user-session-only contexts; PDF worker re-render path satisfies the fence by hitting V1 app render URL with authenticated-tier JWT (Lock 13 mod #1) so the helper executes under user session, NOT under service_role. Verified Phase 6 PR-review per ADR-011 Decision 4 / §10 meta-pattern.</td>
         <td>race-condition</td>
         <td>§2.6.5 + §2.6.6</td>
         <td>high</td>
@@ -399,6 +510,96 @@
         <td>CI test environment running parity tests against <code>Finance_Report_2026_04.pdf</code> + Asset Summary workbook fixtures enforces tenant-scoping on fixture loads equivalent to production RLS: a parity test for tenant A reads only tenant A's fixture row-set; cross-tenant fixture access in CI is rejected; fixture artifacts themselves are stored under access-controlled paths per §3 (e) Sec posture (specific access-control mechanism is §4.6 + Architect Phase 3 joint per §3 (b)).</td>
         <td>test-environment-posture</td>
         <td>§3.3 + §3 (e)</td>
+        <td>medium</td>
+        <td><a class="forward-pointer" href="#sd-00">SD-00</a></td>
+      </tr>
+      <tr id="rt-16" class="severity-high">
+        <td>RT-16</td>
+        <td>Cost-basis cascade trigger-chain RLS + write-skew (per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 13 / Lock 9 mod #2)</td>
+        <td>Under two-tenant SQL fixture, cost-basis cascade trigger chain on <code>account_trans</code> INSERT writes only to <a href="#sd-00">SD-00</a> + <a href="#sd-17">SD-17</a> rows in the originating tenant's scope; cross-account UPDATE within same tenant succeeds (per multi-account use case); cross-tenant UPDATE rejected at RLS layer. <strong>Write-skew under concurrent INSERTs:</strong> two concurrent transactions issuing <code>account_trans</code> INSERTs on same account see write-skew if not row-locked; cascade trigger applies <code>SELECT ... FOR UPDATE</code> row-lock on prior <code>holdings_checkpoint</code> row during composition walk per Lock 9 mod #2. Pre-flight <code>wr_access</code> check on all affected accounts BEFORE issuing UPDATEs per Lock 9 mod #8 hardening; explicit <code>SECURITY INVOKER</code> declaration on cascade trigger function (no DEFINER bypass).</td>
+        <td>race-condition</td>
+        <td>§2.4.3</td>
+        <td>high</td>
+        <td><a class="forward-pointer" href="#sd-00">SD-00</a>, <a class="forward-pointer" href="#sd-16">SD-16</a>, <a class="forward-pointer" href="#sd-17">SD-17</a></td>
+      </tr>
+      <tr id="rt-17" class="severity-high">
+        <td>RT-17</td>
+        <td>Reconciliation surfaces append-only + matched-account invariant (per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 13 / Lock 9 mod #1)</td>
+        <td>Append-only RLS verification across <a href="#sd-16">SD-16</a> <code>pfin.reconciliation_event</code> + <a href="#sd-17">SD-17</a> <code>pfin.holdings_checkpoint</code> + <a href="#sd-18">SD-18</a> <code>pfin.reconciliation_event_trans</code>: no UPDATE/DELETE policies; UPDATE/DELETE attempts under both <code>authenticated</code> AND <code>service_role</code> rejected at policy layer (tamper-proof audit trail). <strong>Matched-account invariant on <a href="#sd-18">SD-18</a> link table (cross-tenant FK-bypass family first instance per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 3):</strong> tenant A INSERT attempting to link their <code>reconciliation_event.id</code> to tenant B's <code>account_trans.id</code> via the join table is rejected by WITH CHECK constraint matching <code>reconciliation_event.account_id = account_trans.account_id</code>; FK alone does NOT enforce this (FK is RLS-silent); test verifies WITH CHECK closes the silent-cross-tenant-link attack Sec catch.</td>
+        <td>write-path-RLS</td>
+        <td>§2.4.3</td>
+        <td>high</td>
+        <td><a class="forward-pointer" href="#sd-16">SD-16</a>, <a class="forward-pointer" href="#sd-17">SD-17</a>, <a class="forward-pointer" href="#sd-18">SD-18</a></td>
+      </tr>
+      <tr id="rt-18" class="severity-high">
+        <td>RT-18</td>
+        <td>Account_trans immutability invariant suite (per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 14 / Lock 10)</td>
+        <td>Immutability verification on <a href="#sd-00">SD-00</a> <code>pfin.account_trans</code> per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 2 (§7 audit-class discipline) + Decision 14 (Lock 10): UPDATE attempts under <code>authenticated</code> rejected at RLS-default-deny + BEFORE UPDATE DB-trigger; UPDATE attempts under <code>service_role</code> ALSO rejected at DB-trigger layer (RLS bypasses but trigger doesn't); DELETE attempts under both roles rejected; <code>is_reverse BOOLEAN</code> + <code>replaces_trans_id</code> self-FK reverse-and-replace pattern validates: reverse row insertion succeeds; replacement row insertion succeeds; matched-account WITH CHECK constraint on <code>replaces_trans_id</code> (cross-tenant FK-bypass family second instance per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 3) rejects cross-account replacement attempts. <strong>Row-insertion-time invariant (per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 19 / Lock 15 amendment to Lock 9):</strong> <code>account_trans.created_at</code> column re-introduction + immutability trigger verified — column is set on INSERT (via DEFAULT NOW()) but UPDATE attempts on <code>created_at</code> rejected under both roles via BEFORE UPDATE trigger.</td>
+        <td>write-path-RLS</td>
+        <td>§2.4.3 + §2.4.5</td>
+        <td>high</td>
+        <td><a class="forward-pointer" href="#sd-00">SD-00</a></td>
+      </tr>
+      <tr id="rt-19" class="severity-high">
+        <td>RT-19</td>
+        <td>Read-time composition tenant-scoping verification (per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 15 / Lock 11 mod #5)</td>
+        <td>Under two-tenant fixture, the <code>monthly_report</code> SECURITY INVOKER composition helper at every JOIN boundary returns only requesting-tenant rows: monthly_report → holdings_checkpoint join scoped under requesting tenant; → eod_price (public-prices; no tenant scope); → account_trans scoped via included_reconciliation_event_ids filter (per Lock 11 mod #9 INTEGER[] matched-tenant trigger); → tax_character scoped under requesting tenant; → pfin.nav scoped under requesting tenant. Phase 6 PR-review confirms SECURITY INVOKER declaration; cron event-set capture filters by tenant's accounts (per Lock 11 mod #2 cron tenant-binding); Flag #7 staleness join verifies via <a href="#rt-13">RT-13</a>.</td>
+        <td>read-path-RLS</td>
+        <td>§2.6.1 + §2.6.4</td>
+        <td>high</td>
+        <td><a class="forward-pointer" href="#sd-12">SD-12</a></td>
+      </tr>
+      <tr id="rt-20" class="severity-high">
+        <td>RT-20</td>
+        <td>Fourth-instance FK-bypass + service_role bypass + parent immutability extension (per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 16 / Lock 12)</td>
+        <td>Verification of <code>pfin.monthly_report_account_snapshot</code> child table cross-tenant safety: <strong>(a) Matched-tenant trigger on <code>account_id</code></strong> (4th instance of cross-tenant FK-bypass family per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 3) — tenant A INSERT linking their <code>monthly_report</code> row to tenant B's <code>account.id</code> rejected by BEFORE INSERT/UPDATE trigger validating <code>account.users_id = parent monthly_report.users_id</code>; <strong>(b) Service_role bypass trigger</strong> (per Lock 12 mod #3) — UPDATE/DELETE under service_role rejected via BEFORE trigger raising EXCEPTION unconditionally (closes the gap where RLS-default-deny only fences <code>authenticated</code> role); <strong>(c) Parent immutability extension</strong> (per Lock 12 mod #2 — Sec's 5th chain-attack catch beyond Architect's drill) — UPDATE on <code>monthly_report.users_id</code> + <code>monthly_report.target_month</code> rejected via BEFORE UPDATE trigger (closes the re-tenant-parent chain attack that orphans child snapshot rows from original tenant post-`final`).</td>
+        <td>write-path-RLS</td>
+        <td>§2.6.4 + §2.6.5</td>
+        <td>high</td>
+        <td><a class="forward-pointer" href="#sd-12">SD-12</a></td>
+      </tr>
+      <tr id="rt-21" class="severity-high">
+        <td>RT-21</td>
+        <td>PDF worker JWT verification (per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 17 / Lock 13 mod #1)</td>
+        <td>V1 app <code>/internal/pdf-render</code> endpoint verifies inbound JWT from PDF worker: <strong>(a) Authenticated-tier JWT only</strong> — service_role JWT rejected at signature verification (signature key is dedicated PDF-worker-signing-key per <a href="#sd-20">SD-20</a>, NOT Supabase JWT secret); <strong>(b) Dedicated signing key</strong> — Supabase-JWT-signed tokens rejected; only PDF-worker-signing-key signatures accepted on this endpoint; <strong>(c) 60-second freshness window</strong> — JWTs with <code>iat</code> &gt; 60s in the past rejected; <strong>(d) Nonce replay protection</strong> — JWT carries single-use nonce claim; replay of previously-seen nonce rejected via in-memory or Redis-backed nonce store (Phase 3 mechanism); <strong>(e) NO service_role escalation</strong> — V1 app render under JWT's <code>users_id</code> claim only; no path within the endpoint allows the worker's session to escalate to service_role; <strong>(f) Dedicated endpoint</strong> — verification logic lives at <code>/internal/pdf-render</code> only; not exposed via other V1 app routes. Phase 6 PR-review enforces.</td>
+        <td>input-sanitization</td>
+        <td>§2.6.3</td>
+        <td>high</td>
+        <td><a class="forward-pointer" href="#sd-20">SD-20</a></td>
+      </tr>
+      <tr id="rt-22" class="severity-medium">
+        <td>RT-22</td>
+        <td>PDF worker container credential audit (per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 17 / Lock 13 mod #2 / §10 meta-pattern infrastructure-credential-presence layer)</td>
+        <td>Coolify env-var inventory + Dockerfile audit at Phase 3 ops confirms ABSENCE of <code>SUPABASE_*</code> credentials in PDF worker container; no Postgres client (psycopg2, asyncpg, pg, node-postgres, etc.) installed in PDF worker Dockerfile; only <code>PDF_WORKER_SIGNING_KEY</code> (per <a href="#sd-20">SD-20</a>) present as worker credential. <strong>Defense-in-depth fence at infrastructure-credential-presence layer per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 4 (§10 meta-pattern):</strong> future "performance optimization" routing PDF worker via direct DB access cannot silently violate Lock 12 mod #1 read-path-only fence because the credentials aren't there to make the call. Phase 6 PR-review enforces on every PDF worker Dockerfile change.</td>
+        <td>test-environment-posture</td>
+        <td>§2.6.3</td>
+        <td>medium</td>
+        <td><a class="forward-pointer" href="#sd-20">SD-20</a></td>
+      </tr>
+      <tr id="rt-23" class="severity-medium">
+        <td>RT-23</td>
+        <td>Planning-target settings-store write-path RLS + input sanitization (per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 18 / Lock 14)</td>
+        <td>Under two-tenant SQL fixture, tenant A's <code>pfin.planning_target</code> writes create rows visible only to tenant A; cross-tenant write attempts (impersonated tenant B identity) rejected at policy layer. <strong>App-layer mass-assignment fence (per Lock 14 mod #1):</strong> Zod <code>.strict()</code> schema validation at the planning-target endpoint; unknown-field injection rejected; <code>users_id</code> NEVER read from <code>req.body</code> (always derived from <code>auth.uid()</code> session resolve). <strong>Numeric-input adversarial battery (per Lock 14 mod #2):</strong> NaN/Inf rejection (<code>Number.isFinite()</code> + Zod <code>.finite()</code>); currency-string strict regex parse (<code>/^\$?[0-9]{1,12}(,[0-9]{3})*(\.[0-9]{1,2})?$/</code>); overflow guard at jurisdiction-realistic upper bound; scientific notation reject; locale-formatted reject (V1 accepts US-format currency or raw numbers only). RLS WITH CHECK at DB layer composes with app-layer fence (defense-in-depth per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 4 / §10 meta-pattern user-facing-surface instance).</td>
+        <td>input-sanitization</td>
+        <td>§2.3.2</td>
+        <td>medium</td>
+        <td><a class="forward-pointer" href="#sd-23">SD-23</a></td>
+      </tr>
+      <tr id="rt-24" class="severity-medium">
+        <td>RT-24</td>
+        <td>Tax-bracket settings-store write-path RLS + monotonicity trigger (per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 18 / Lock 14)</td>
+        <td>Under two-tenant SQL fixture, tenant A's <code>pfin.tax_bracket_schedule</code> + <code>pfin.tax_bracket_row</code> writes create rows visible only to tenant A; cross-tenant write attempts rejected at policy layer. <strong>App-layer fences (per Lock 14 mods #1 + #2):</strong> Zod <code>.strict()</code> + mass-assignment prevention + numeric adversarial battery (parallel to RT-23). <strong>Bracket-row monotonicity DB-trigger verification (per Lock 14 mod #3 advisory):</strong> BEFORE INSERT/UPDATE trigger on <code>pfin.tax_bracket_row</code> rejects writes that violate strictly-increasing <code>lower_bound</code> per <code>schedule_id</code> ordinal ordering (defense-in-depth backstop; app-layer validation is first line). <strong>Replace-all SERIALIZABLE transaction semantics (per Lock 14 mod #4 advisory):</strong> schedule+rows update wrapped in SERIALIZABLE transaction with DELETE + INSERT replace-all (prevents schedule-without-rows broken state + mid-tx monotonicity violations).</td>
+        <td>input-sanitization</td>
+        <td>§2.5.2</td>
+        <td>medium</td>
+        <td><a class="forward-pointer" href="#sd-04">SD-04</a></td>
+      </tr>
+      <tr id="rt-25" class="severity-medium">
+        <td>RT-25</td>
+        <td>As-of-date parameter-bypass verification (per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 19 / Lock 15 mod #3 — closes Sec Task #23 forward-looking comment #1)</td>
+        <td>Under two-tenant SQL fixture, tenant A submits crafted <code>as_of_date</code> values to §2.3.3 per-account drill-down endpoint AND to Lock 13 cron §2.6.3 monthly-report on-demand path; queries return only tenant A's data filtered by date predicate (or empty/error) under all inputs — MUST NOT return tenant B's data under any input. Test inputs include: <strong>(a) Extreme dates:</strong> <code>2099-12-31</code>, <code>1900-01-01</code>, <code>0001-01-01</code>; <strong>(b) Type-confusion:</strong> string <code>"DROP TABLE"</code>, boolean <code>true</code>, numeric <code>0</code>; <strong>(c) SQL-injection patterns:</strong> <code>'; DROP TABLE</code>, <code>'2025-01-01' OR '1'='1</code>, comment-injection; <strong>(d) Boundary:</strong> NULL, empty string, malformed dates; <strong>(e) Range-bound:</strong> dates outside <code>[2015-12-01, CURRENT_DATE]</code> per Lock 15 mod #2 tightened range. <strong>Timing-attack sub-test:</strong> response time delta between adversarial <code>as_of_date='2099-12-31'</code> and benign <code>as_of_date='2024-06-15'</code> measured for cross-tenant cardinality leakage signal; expected null at single-user V1 scale; Phase 3 verifies. RLS predicate (<code>users_id = auth.uid()</code>) is structurally independent of date predicate (<code>transaction_date &lt;= $1 AND created_at &lt;= $1</code>) by Option A's design; bound-parameter type-check blocks SQL injection at pg-client.</td>
+        <td>input-sanitization</td>
+        <td>§2.3.3 + §2.6.3</td>
         <td>medium</td>
         <td><a class="forward-pointer" href="#sd-00">SD-00</a></td>
       </tr>
