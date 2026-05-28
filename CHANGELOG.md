@@ -8,7 +8,30 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 **Format.** Newest at top. Each entry: `### vN.NN — YYYY-MM-DD` header followed by narrative paragraphs.
 
-**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 38 version entries total (v0.1 → v1.32).
+**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 39 version entries total (v0.1 → v1.33).
+
+---
+
+### v1.33 — 2026-05-27
+
+**Phase 1 → Phase 2 + Phase 3 parallel transition.** Phase 1 (Product Definition / PRD) closed 2026-05-26; Phase 2 (UX & Design) + Phase 3 (Technical Architecture) entered in parallel 2026-05-27 per [ADR-012](DECISIONS.md#adr-012).
+
+**PR `meta/phase-2-3-entry` — phase-transition consolidated update.** Single PR landing all phase-transition artifacts via `/start-doc-update` + `/finish-doc-update` doc-update flow per [ADR-009](DECISIONS.md#adr-009) Decision 9:
+
+- **WORKFLOW.md edits:** line 6 current-phase pointer rewrite (Phase 1 → Phase 2 + Phase 3 parallel); Phase 1 Status flip 🟡 Closing → ✅ Complete (cleanup the 5 close-work PRs missed); Phase 2 detailed-steps subsection (UX steps 1–5 flows + wireframes; Visual steps 6–11 design system + tokens — 11 numbered steps composed in team-mode); Phase 3 detailed-steps subsection (Architect steps 1–8); open-q resolution (background worker technology resolved at [ADR-011](DECISIONS.md#adr-011) Decision 17 / Lock 13 hybrid); footer v1.0 → v1.33; changelog stub pointer 37 → 39 entries.
+- **DECISIONS.md edits:** [ADR-012](DECISIONS.md#adr-012) inserted between header and ADR-011 (terse pattern; documents the parallel-execution decision, alternatives considered, coordination expectations including pointer convention + framework-coupling fallback).
+- **MILESTONES.md edits:** Current Phase block rewritten (Phase 2 + Phase 3 active surfaces; out-of-band entry-gate tasks; coupling touchpoint; team task trackers TBD until phase entry; outer category spans R+P); Active Feature block rewritten; Recent activity entry added; Last updated line bumped to 2026-05-27.
+- **CHANGELOG.md edits:** this v1.33 entry; header version count 38 → 39.
+
+**Phase-transition team `phase-2-3-entry` execution.** Team-lead spawned 3 teammates via `Agent(team_name="phase-2-3-entry", subagent_type=..., name=...)` per [ADR-003](DECISIONS.md#adr-003): `architect` (Phase 3 steps 1–8 draft); `ux` (Phase 2 steps 1–5 — flows + wireframes); `visual` (Phase 2 steps 6–11 — design system + tokens). All three teammates produced drafts in their owned-section scope; UX + Visual coordinated numbering via cross-teammate SendMessage DM before sending drafts back to team-lead. Drafts delivered within minutes of spawning (parallel execution).
+
+**9 substantive flags walked one-by-one with F/CTO; all ratified at-recommend** with two minor reconciliations applied at edit-time: (1) **Flag 8 reconciliation** — UX's two-path framework-slip fallback (pause OR emit framework-agnostic intermediate format like Style Dictionary / W3C design-tokens JSON) overrides Visual's pause-only at Phase 2 Step 10; (2) **Flag 9 reconciliation** — [ADR-012](DECISIONS.md#adr-012) pointer convention (header pointer stays at "Phase 2 + Phase 3 parallel" until both close) overrides Visual's "advance pointer to Phase 4 on Phase 2 exit" at Phase 2 Step 11; "CoS-as-team-lead" terminology drift dropped per [ADR-009](DECISIONS.md#adr-009) Decision 1.
+
+**Substantive Phase 2 + Phase 3 process locks emerged from the flag walk:** Phase 3 ARCH §-by-§ sequencing is dependency-order not scaffold-order (Task #26 before #36; #32 after #35 per [ADR-011](DECISIONS.md#adr-011) Consequences); Sec joint-review codified MANDATORY at every architectural surface (Data model / Plaid / Auth / Workers / Security model — protects against future Architect-only drift; Step 4 surfaced 8 chain-attack catches Architect's drills missed at joint reviews); Phase 2 §2.4 cross-cutting drilled FIRST not PRD-numeric (foundation-first; matches Phase 1 sequential-discovery lesson); F/CTO flow walk-through gate non-skippable + 2-sitting default per `feedback_late_phase_density_overload`; navigation-model + info-hierarchy decisions become DECISIONS.md ADRs; mandatory palette + typography F/CTO checkpoint with dark-mode disposition codified at Phase 2 Step 7.
+
+**Phase 2 + Phase 3 closing semantics.** Both phases close together at Phase 4 (Project Scoping) entry gate per [ADR-012](DECISIONS.md#adr-012). WORKFLOW.md header pointer stays at "Phase 2 + Phase 3 (parallel)" until both close. Individual phase sections advance their own Status independently (each can mark ✅ Complete in its section before the other). Phase 4 pointer activates only when BOTH phases close.
+
+**Out-of-band entry-gate tasks** (carry into Phase 2 + Phase 3 work surfaces): (1) Plaid production-tier monthly minimum sales/onboarding call (F/CTO driven; per [ADR-011](DECISIONS.md#adr-011) Decision 20; only load-bearing cost-target unknown; non-blocking for ARCH drafting but blocks any Phase 3 lock dependent on Plaid production-tier shape); (2) candidate P3 PM consult on FMP/stock-screening incumbent-exceeds-V1 surface (per `feedback_incumbent_exceeds_v1_review`; needed BEFORE Phase 3 ARCH drafting touches `pfin_back_etl` ingestion architecture).
 
 ---
 

@@ -41,6 +41,45 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-012 — Parallel Phase 2 (UX & Design) + Phase 3 (Technical Architecture) execution
+
+**Date:** 2026-05-27
+**Status:** Accepted
+**Phase:** Phase 1 → Phase 2 + Phase 3 transition (R-outer-frame sequencing under [ADR-009](#adr-009) Decision 2)
+
+**Context.** Phase 1 (Product Definition) closed 2026-05-26 with all 16 substantive architectural locks ratified + candidate P3 disposed + Lock 9 amended (per [ADR-011](#adr-011)). The R/P/I+V outer frame per ADR-009 Decision 2 places mosko's Phases 1 + 2 under the template's "Research" outer category; Phase 3 (Technical Architecture) opens the "Plan" outer category. At phase-transition invocation, three sequencing options for Phase 2 vs Phase 3 were available: (1) Sequential R-strict — fully close Phase 2 before opening Phase 3; (2) Defer-Phase-2 — open Phase 3 immediately, Phase 2 lands post-ARCH or alongside Phase 4; (3) Parallel execution — open both phases concurrently with explicit coordination at coupling touchpoints.
+
+PRD §2 already locks 32 V1 user stories at decision-grade clarity, so Phase 3 has a complete requirements surface independent of Phase 2 flows. ADR-011 + the 13 Phase 3 carry-over tasks give Architect a fully-loaded immediate work surface. Phase 2 deliverables (flows + wireframes + design system + tokens) have no upstream blockers either — PRD §2 is their input. The only hard coupling point between the two phases is frontend framework choice (Phase 3 Architect deliverable) ↔ design tokens format (Phase 2 Visual Designer deliverable); both can begin work independently and converge at the framework-choice gate.
+
+**Decision.** Open Phase 2 and Phase 3 concurrently per option 3 (parallel execution). Architect leads Phase 3 ARCH drafting from PRD §2 + ADR-011 + locks log + 13 carry-overs; UX Designer + Visual Designer lead Phase 2 flows → wireframes → design system → tokens from PRD §2. Both phases work in separate team contexts (`phase-3-arch-drafting` + `phase-2-ux-design`, created at their respective work openings); coordination touchpoints are explicit at the framework-choice ↔ design-tokens-format coupling. Both phases close together at the Phase 4 (Project Scoping) entry gate — Phase 4 consumes both ARCH HTML and the design-system spec. If one phase finishes before the other, the further-along phase marks ✅ Complete in its own section but the WORKFLOW.md header pointer remains at "Phase 2 + Phase 3 (parallel)" until both close.
+
+**Why.** PRD §2 + ADR-011 already provide both phases with fully-specified inputs; serializing them adds calendar without unlocking new information. The chain-attack-catch density observed in Phase 1 Step 4 (Sec found 8 catches Architect missed at joint reviews — see [ADR-011](#adr-011)) suggests Phase 3 will benefit from F/CTO bandwidth focused on architectural decisions; parallelizing Phase 2 reduces idle-Phase-2-roster cost without diluting that bandwidth (Phase 2 lead agents — UX + Visual Designer — don't compete with Architect or Sec for F/CTO review cycles). The decision-by-Phase-4 gate provides a natural convergence point.
+
+**Alternatives considered.**
+
+- **Sequential R-strict (option 1).** Rejected — tightest R-outer-frame discipline but trades calendar for no information gain; Phase 3 inputs are already complete at PRD §2 + ADR-011. The R-outer-frame discipline per ADR-009 Decision 2 is a grouping convention, not a hard sequencing constraint — phases within the same outer category can overlap when their input surfaces are independent.
+- **Defer-Phase-2 (option 2).** Rejected — defers a planning artifact without surfacing a forcing function. Phase 2 deliverables eventually need to land before Phase 5 (Workshop Setup) regardless; deferring creates a downstream cliff rather than spreading the work. Visual Designer's "mandatory palette + typography F/CTO checkpoint" gate also benefits from early scheduling.
+
+**Coordination expectations.**
+
+- **Coupling touchpoint:** Architect's frontend framework choice (Phase 3) ↔ Visual Designer's design tokens format (Phase 2). Visual locks the abstract tokens taxonomy (framework-agnostic) without Architect input; tokens-as-code finalization waits on the framework-choice gate, with a framework-agnostic intermediate-format fallback (Style Dictionary / W3C design-tokens JSON) available at F/CTO's call if Phase 3 slips substantially.
+- **Team-mode coordination:** Phase 2 + Phase 3 create separate teams (`phase-2-ux-design` + `phase-3-arch-drafting`) per [ADR-003](#adr-003); team-lead (main session) bridges them. Cross-team coordination at the coupling touchpoint routes through team-lead, not direct peer-to-peer (per the Step 4 synthetic-team routing-discipline lesson — see ADR-011 Decisions 1-4 Consequences + WORKFLOW.md Phase 1 Step 4 lessons-learned).
+- **Decision-by-Phase-4 gate:** both phases close before Phase 4 (Project Scoping) opens. If one phase lags, Phase 4 waits. No partial-Phase-4 entry under one-phase-only closure.
+- **Pointer convention:** WORKFLOW.md header current-phase pointer stays at "Phase 2 + Phase 3 (parallel)" until both phases close. Individual phase sections advance their own Status independently.
+- **Sec re-consult discipline:** Phase 3 architectural surfaces inherit the Step 4 Sec joint-review pattern (chain-attack-catch density warrants mandatory Sec re-consult at every surface lock per [ADR-011](#adr-011) Decision 4 §10 defense-in-depth fencing). Phase 2 does not require Sec re-consult (no security-load-bearing surface in flows / wireframes / tokens).
+
+**Cross-references.**
+
+- WORKFLOW.md §"Phase 2 — UX & Design" + §"Phase 3 — Technical Architecture" — both phase sections receive Detailed-steps subsections at this phase-transition PR (drafted by UX + Visual Designer teammates + Architect teammate in team `phase-2-3-entry` on 2026-05-27).
+- [ADR-009](#adr-009) Decision 1 (team-lead as main session) + Decision 2 (R/P/I+V outer frame).
+- [ADR-011](#adr-011) — Phase 3 input surface (16 locks + 4 meta-patterns + 13 carry-overs).
+- [ADR-003](#adr-003) — team-mode coordination conventions inherited by Phase 2 + Phase 3 team setup.
+- `docs/handoff-prompts.md` § Phase-transition prompt — invoked to produce this ADR + WORKFLOW.md updates + MILESTONES update.
+
+**Approved by:** F/CTO (2026-05-27, via phase-transition sequencing chooser at session start; locked option 3 "Run Phase 2 and Phase 3 in parallel" against options "Defer Phase 2; invoke Phase 3 now" and "Fast-track Phase 2 first (sequential)". 9 substantive flags from teammate drafts ratified at-recommend across the walk-through.).
+
+---
+
 ## ADR-011 — Phase 1 Step 4 architectural drilling: 16 lock decisions + 4 project-convention meta-patterns
 
 **Date:** 2026-05-26
