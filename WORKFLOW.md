@@ -576,7 +576,7 @@ The active drilling cycle ratified 16 architectural locks + 4 cross-cutting proj
 - Design system spec exists and is unambiguous
 - Design tokens are in a format consumable by the chosen frontend framework
 
-**Status:** 🟡 In progress (2026-05-27) — entered in parallel with Phase 3 per [ADR-012](DECISIONS.md#adr-012). UX Designer + Visual Designer co-lead; consumes [PRD §2](docs/PRD/index.html#sec-2) 32 V1 user stories.
+**Status:** 🟡 In progress (2026-05-27) — entered in parallel with Phase 3 per [ADR-012](DECISIONS.md#adr-012). UX Designer + Visual Designer co-lead; consumes [PRD §2](docs/PRD/index.html#sec-2) 32 V1 user stories. **Steps 1–3 complete (2026-05-28):** all 6 user-story clusters drilled into flow documents + PM-traceability-PASSed; full 2-sitting F/CTO walk-through signed off; 6 parked decisions (P1–P6) + the D1 staleness principle decided and consolidated in [ADR-013](DECISIONS.md#adr-013). **Step 4 (wireframes) active next.** Flow documents are gitignored working artifacts at `temp/phase-2-flows-*.md` (committed home TBD per ADR-013 follow-up); Phase-3 ARCH handoffs (A1–A4, H1–H2, RT-13-tracks-D1, §2.6 injection invariants) consolidated in ADR-013 Consequences.
 
 **Detailed steps:**
 

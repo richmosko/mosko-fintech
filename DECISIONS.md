@@ -41,6 +41,56 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-013 — Phase 2 Step 3: UX/design decisions (staleness-marking principle + 6 walk-through decisions)
+
+**Date:** 2026-05-28
+**Status:** Accepted
+**Phase:** 2 (Step 3 walk-through lock; consolidates the UX/design decisions from the 6-cluster flow drill + 2-sitting F/CTO walk-through; drives Step 4 wireframing + supplies Phase 3 ARCH consumption inputs)
+
+**Context.** Phase 2 (UX & Design) ran in parallel with Phase 3 per [ADR-012](#adr-012). Phase 2 Step 2 drilled all six PRD §2 user-story clusters into flow documents in dependency order (§2.4 cross-cutting → §2.1 net worth → §2.2 asset allocation → §2.3 spending/income → §2.5 estimated taxes → §2.6 monthly report/convergence), each closed via UX draft → PM traceability consult → (Security Reviewer where security-load-bearing) → F/CTO ratification. The drill produced one ratified global principle (D1) mid-stream and surfaced six parked cross-cutting decisions (P1–P6). Step 3 was a full 2-sitting F/CTO walk-through (sitting 1: §2.4/§2.1/§2.2/§2.3; sitting 2: §2.5/§2.6) followed by a one-at-a-time decision pass. The flow documents + per-cluster consult records are working artifacts at `temp/phase-2-flows-*.md` + `temp/phase-2-decisions-log.md` (gitignored per `feedback_working_artifacts_temp_not_docs`); this ADR is the committed, decision-grade consolidation — and the durable bridge for the Phase-3 ARCH handoffs the gitignored logs would otherwise not carry forward.
+
+**Decisions.**
+
+### Decision 1 — D1: staleness-marking surface scope is illustrative, not exhaustive (GLOBAL)
+The §2.4.4 non-silent-staleness commitment's enumerated surface list is **illustrative**. Governing rule: **every derived aggregation that consumes stale-account data carries the staleness marker; aggregations are never silently presented as fresh** — including surfaces the §2.4.4 list omits (headline NAV, delta panel, reference dates, `nav-asof-timestamp`, §2.2.3 sub-allocation, §2.3 rollup/drill, §2.5 tax tables, §2.6 report sections). Applies globally; downstream clusters do not re-litigate. Ratified 2026-05-27 (expands a locked commitment's realized surface set → F/CTO ratification). Security Reviewer concurred: strictly-more-conservative, no new attack-surface category.
+
+### Decision 2 — P1: app-level navigation = persistent left sidebar
+Always-visible left nav for the ~6 surfaces + Settings. Chosen for the density-first desktop power-user archetype; scales as destinations grow; needs a collapse affordance for narrow viewports. (Over top-tabs / hub-and-spoke drill-down.)
+
+### Decision 3 — P2: Net Worth information hierarchy = number-first, dense single-canvas
+Headline NAV + deltas lead → 60-mo trend → composition table, all co-visible on one scrolling canvas; no within-surface sub-tabs (surface-switching is the sidebar's job). (Over trend-first / breakdown-first.)
+
+### Decision 4 — P6: Cash Flow information hierarchy = category×period table (PRD-faithful)
+The Income/Expenses × {Month/Q1–Q4/YTD} rollup anchors the surface; per-account drill-down + Historical Expenditures chart secondary. (Over transaction-stream / calendar.)
+
+### Decision 5 — P3: new-symbol classification surfacing = hybrid
+The allocation table's `Unsorted` row shows unclassified symbols in-context AND deep-links to a dedicated classification queue for bulk work. (Over queue-only / inline-only.) Consistent with onboarding's New-Symbol-Classification-Queue.
+
+### Decision 6 — P4: re-auth/staleness banner = top chrome bar, conditional, clean-when-healthy
+Banner sits in the top chrome (above content, right of the sidebar). **"Persistent" = conditional-persistent:** appears ONLY when a re-auth-required or staleness condition exists; while live it shows on EVERY surface, does not auto-dismiss, and cannot be casually dismissed until the underlying issue resolves. **When healthy → no banner (clean chrome); absence-of-banner = all good.** No always-on health chip (the §2.4 connection-status-chip is not used as an always-present healthy-state indicator; per-account sync status remains available on the Accounts Hub on demand).
+
+### Decision 7 — P5: planning-value editing affordance = settings-UI only (all four)
+A dedicated Settings area is the **sole** edit + storage home for all four user-authored planning values: §2.2 allocation `%Target`, §2.3.2 income/expense targets, §2.5.2 tax brackets, §2.6 owner-id header. **No inline editing anywhere** (F/CTO chose pure settings-UI over the best-of-both settings-UI+§2.2-inline option). Supersedes UX's §2.2 inline-cell lean — `alloc-target-edit` routes to Settings. Storage = ADR-005 / Lock-14 settings-store family.
+
+**Consequences.**
+
+- **Step 4 wireframing consumes these directly:** sidebar shell + conditional top-chrome banner + a Settings area housing all 4 planning-value editors (no inline target editing) + single-canvas Net Worth + table-anchored Cash Flow + Unsorted-row→queue deep-link.
+- **Phase-3 ARCH handoffs (consolidated here so they survive the gitignored logs):**
+  - **A1–A3 (inactive-Plaid lifecycle, from §2.4 PM-1/Sec):** inactive suspends the scheduled-poll for the Item (A1); webhook signature verification (RT-05) + SD-14 state-history recording CONTINUE for inactive Items, only the user-facing surface is suppressed (A2); inactive does NOT delete the SD-03 token (retain per `bounded-Item-active-only`), revoke-on-inactive is NOT V1, V2 un-share = Plaid `/item/remove` + token deletion (A3). Compose with [ADR-011](#adr-011) Decision 8 + Decision 1 (§6 privileged-context-write).
+  - **A4 (wash-sale, from §2.5 PM-2):** the §2.4.3 sell-transaction gains a user-marked wash-sale flag + user-entered disallowed-loss field; the Lock-10 immutability mechanism (mutable-annotation vs reverse-and-replace) is Architect/Sec's call under [ADR-011](#adr-011) Appendix-B flag (j); validation: disallowed-loss ≤ realized loss on the transaction + tenant-scoped.
+  - **H1 (planning-value write-path):** all four P5 surfaces inherit the Lock-14 settings-store fence (Zod `.strict()` mass-assignment + numeric adversarial battery + tenant-scoping); the §2.2 `%Target` write is a per-Sub-Cat **keyed array** → the Sub-Cat key must be validated against the seeded taxonomy (no forged/cross-tenant key); §2.5.2 brackets are multi-row keyed.
+  - **H2 (as-of-date):** §2.3.3 (client-toggle) + §2.6 (server-derived) reuse one Lock-15 mechanism; tenant-isolation independent of the date filter; RT-25.
+  - **`nav-asof-timestamp` (Lock-8-derived):** Architect confirms `pfin.nav` exposes a usable last-current-NAV-computation timestamp + sets the stale-materialization warning threshold.
+  - **RT-13 tracks D1:** widening the staleness surface set widens RT-13's verification scope — every newly-realized staleness surface inherits the requesting-tenant-scoped credential-state-resolution requirement (Phase-3 + Phase-6 PR-review fence).
+  - **§2.6 injection invariants:** INV-1 — plain-text-only commentary/owner-id is security-load-bearing (the V2+ markdown path is a security-surface expansion requiring a Sec re-touch, NOT a harmless refinement); INV-2 — output-encoding must span HTML view + PDF export and couples to Appendix-B flag (a) (PDF render-path open). RT-11 (commentary) + RT-12 (owner-id) land at the mandatory §4 Sec authoring.
+  - **Seed-content recommendation:** the cash-flow taxonomy seed should include a catch-all "Uncategorized" Sub-Cat (→ [ADR-004](#adr-004) / Architect Phase-3 bootstrap) so every transaction always sits in a visible bucket (keeps the §2.3 "no review queue" decision robust).
+- **Follow-up — Phase 2 flow-artifact committed home:** the six flow documents remain in gitignored `temp/`; their committed home (e.g., a `docs/UX/` artifact) is an open decision, naturally resolved when wireframes + design system land. Tracked, not blocking.
+- **No supersession.** Composes with [ADR-011](#adr-011) (Phase-3 input surface) + [ADR-012](#adr-012) (parallel execution). Per-cluster bullet-level detail lives in the gitignored `temp/phase-2-*` working files.
+
+**Approved by:** F/CTO (2026-05-28, via the Step 3 walk-through: 2-sitting flow review signed off + P1–P6 decided one-at-a-time; D1 ratified 2026-05-27 during the drill).
+
+---
+
 ## ADR-012 — Parallel Phase 2 (UX & Design) + Phase 3 (Technical Architecture) execution
 
 **Date:** 2026-05-27
