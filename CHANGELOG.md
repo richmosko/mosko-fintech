@@ -8,7 +8,26 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 **Format.** Newest at top. Each entry: `### vN.NN — YYYY-MM-DD` header followed by narrative paragraphs.
 
-**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 39 version entries total (v0.1 → v1.33).
+**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 40 version entries total (v0.1 → v1.34).
+
+---
+
+### v1.34 — 2026-05-28
+
+**Phase 2 (UX & Design) Steps 1–3 complete — 6 flow clusters locked + Step 3 walk-through decisions ([ADR-013](DECISIONS.md#adr-013)).**
+
+Phase 2 ran in parallel with Phase 3 per [ADR-012](DECISIONS.md#adr-012). UX Designer led the flow drill in team `phase-2-ux-design`; PM consulted at every cluster close; Security Reviewer consulted where security-load-bearing.
+
+**All 6 PRD §2 clusters drilled into flow documents + locked (dependency order):** §2.4 cross-cutting (onboarding/manual-entry/re-auth) → §2.1 net worth → §2.2 asset allocation → §2.3 spending/income → §2.5 estimated taxes → §2.6 monthly report (convergence). Each closed via UX draft → PM traceability PASS → (Sec where applicable) → lock. Flow docs are gitignored working artifacts at `temp/phase-2-flows-*.md`.
+
+**F/CTO decisions during the drill + Step 3 walk-through:**
+- **PM-1 (§2.4):** "mark inactive" applies to Plaid accounts in V1 as a display/sync-pause flag; genuine un-share stays V2+ (Sec consult + re-verify PASS; 4 V1-SHIP-BLOCK flow items folded in).
+- **D1 (global, ratified mid-drill):** §2.4.4 staleness-marking surface list is illustrative, not exhaustive — every derived aggregation consuming stale-account data carries the marker (Sec concurred: strictly-more-conservative).
+- **Step 3 walk-through (2 sittings) + P1–P6 decision pass:** P1 persistent left sidebar · P2 number-first single-canvas Net Worth · P3 hybrid classification surfacing · P4 conditional top-chrome banner (clean-when-healthy) · P5 settings-UI-only planning-value editing (all four; no inline) · P6 category×period-table Cash Flow.
+
+**[ADR-013](DECISIONS.md#adr-013)** consolidates D1 + P1–P6 (7 decisions) + the Phase-3 ARCH handoffs (A1–A4 inactive-Plaid lifecycle + wash-sale; H1 planning-value write-path under Lock-14 fence + §2.2 keyed-array validation; H2 as-of-date; nav-asof-timestamp; RT-13-tracks-D1; §2.6 injection invariants INV-1/INV-2; cash-flow seed catch-all recommendation). The ADR is the committed durable bridge for these handoffs since the `temp/` logs are gitignored.
+
+**PR `meta/phase-2-step-3-adr`:** ADR-013 + WORKFLOW.md Phase 2 status (Steps 1–3 complete, Step 4 active) + MILESTONES Phase 2 progress + this CHANGELOG entry. **Step 4 (wireframing) is next** — UX produces wireframes from the locked flows + P1–P6; Visual Designer joins at the UX→Visual handoff for the design system + tokens. Follow-up: Phase 2 flow-artifact committed home (currently gitignored `temp/`) TBD per ADR-013.
 
 ---
 
