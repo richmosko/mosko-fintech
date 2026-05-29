@@ -207,6 +207,11 @@ blockquote {
   margin: 0 0 1.5rem;
   text-align: center;
   overflow-x: auto;
+  /* Break out of the narrow text column so dense diagrams render larger
+     (fit-to-width against a wider box, not scaled down to ~832px). Capped and
+     centered so the page itself never scrolls sideways. */
+  width: min(94vw, 1320px);
+  margin-inline: calc(50% - min(94vw, 1320px) / 2);
 }
 
 footer.doc-footer {

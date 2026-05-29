@@ -17,9 +17,9 @@
   <p class="doc-subtitle">Phase 3 surface; drafted at Step 4 ratification.</p>
   <div class="doc-meta">
     <span><strong>Owner:</strong> <code>architect</code> agent</span>
-    <span><strong>Status:</strong> Scaffolding (content drafted in Phase 3)</span>
-    <span><strong>Traces to:</strong> <a href="../PRD/">PRD</a> / <a href="../SECURITY/">SECURITY</a> / <a href="../../DECISIONS.md#adr-008">ADR-008</a></span>
-    <span><strong>Last updated:</strong> <span class="tbd">—</span></span>
+    <span><strong>Status:</strong> Phase 3 drafting — System Overview (in review)</span>
+    <span><strong>Traces to:</strong> <a href="../PRD/">PRD</a> / <a href="../SECURITY/">SECURITY</a> / <a href="../../DECISIONS.md#adr-008">ADR-008</a> / <a href="../../DECISIONS.md#adr-011">ADR-011</a></span>
+    <span><strong>Last updated:</strong> 2026-05-29</span>
   </div>
 </header>
 
@@ -47,13 +47,55 @@
 <section id="sec-1" data-section="context">
   <h2>1. System Context</h2>
   <p class="section-hint">The system and the actors around it. C4 context level.</p>
-  <div class="stub">Replace the placeholder diagram. Add a one-paragraph narrative above it. Phase 3 work.</div>
+  <p>mosko-fintech is a <strong>single-tenant-in-use, multi-tenant-by-construction</strong> personal-finance
+     application. A solo user (the Founder/CTO) connects financial institutions via Plaid; the system ingests
+     instruments, balances, and transactions, then derives six surfaces — net worth, asset allocation,
+     spending/income, estimated taxes, and the monthly report. The architecture is a deliberately
+     <strong>boring monolith</strong>: one web application over one Postgres database (self-hosted Supabase),
+     plus a small set of background workers for asynchronous and scheduled work. Multi-tenant isolation is
+     enforced at the database layer via <strong>Supabase Auth + native RLS</strong>
+     (<a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 5, Option A); the per-account
+     <code>account_users</code> ACL is exercised at the RLS layer in V1 even though no sharing UI ships until V2
+     (Decision 7). Every isolation boundary is <strong>defended in depth</strong> — RLS + matched-tenant
+     validation on FK-shaped columns + immutable audit-class tables + privileged-context-write discipline for
+     all non-JWT writers (ADR-011 Decisions 1–4).</p>
+
+  <p>The system runs on the Founder/CTO's existing <strong>Hetzner cax21 VPS</strong>
+     (8&nbsp;ARM vCores / 16&nbsp;GB / 160&nbsp;GB, ~€9.50/mo) under <strong>Coolify</strong>, alongside the
+     already-in-production <code>pfin_back_etl</code> Python ETL. Phase 3 <strong>extends</strong> that footprint
+     rather than greenfielding it: per ADR-011 Decision 17, V1 spreads work across <strong>three Coolify
+     containers</strong> — <code>pfin_back_etl</code> (Python; gains the monthly-report cron, the Plaid
+     scheduled-poll, and the NAV worker on top of incumbent BLS&nbsp;+&nbsp;FMP ingestion); the
+     <strong>V1 web app</strong> (TypeScript; owns the Plaid webhook handler and all user-facing read/render
+     paths via a <code>SECURITY&nbsp;INVOKER</code> read-composition helper); and a <strong>new Node PDF-render
+     worker</strong> (Puppeteer, rendering <em>through</em> the V1 app's authenticated render URL — never
+     touching the database directly). External dependencies are Plaid (aggregation + webhooks) and the two
+     reference-data feeds already wired into <code>pfin_back_etl</code> (BLS CPI-U; FMP prices).</p>
+
+  <blockquote>
+    <strong>One un-locked choice flagged.</strong> The <strong>frontend framework</strong> the V1 web app is
+    built on is <em>not yet decided</em> — it is the Phase&nbsp;2 ↔ Phase&nbsp;3 coupling point and is resolved
+    in the Tech-Stack / API-surface drafting (§4 / later sections), <em>not here</em>. This overview describes
+    the V1 app as a TypeScript/Node web application (the ADR-011 Decision&nbsp;17 topology shape, which names
+    Next.js as the incumbent-implied candidate) but does <strong>not</strong> lock the framework.
+  </blockquote>
+
+  <blockquote>
+    <strong>Scope fence honored.</strong> <code>pfin_back_etl</code>'s <strong>FMP / stock-screening
+    ingestion-architecture detail is intentionally left unresolved</strong> here. The candidate-P3 disposition
+    (<a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision&nbsp;20, PM-ratified 2026-05-29: ingest, no V1 UI)
+    holds; the ingestion-architecture detail lands in the Worker / Data-model sections. This overview names FMP
+    only at the container / topology level.
+  </blockquote>
+
   <pre class="mermaid">
 flowchart LR
-  user(F/CTO solo user) --> system[mosko-fintech app]
-  system --> plaid(Plaid API — instrument + balance + tx ingestion)
-  system --> db[(Supabase / Postgres — multi-tenant from day one)]
-  system --> coolify[(Coolify VPS — self-hosted)]
+  user(["F/CTO — solo user · multi-tenant by construction"]) -->|"HTTPS · Supabase Auth JWT"| app["mosko-fintech V1 web app"]
+  app -->|"user-session JWT · RLS-enforced"| db[("Supabase / Postgres")]
+  app -->|"Link · token exchange · webhooks"| plaid(["Plaid API"])
+  etl[["pfin_back_etl + workers"]] -->|"service_role · TenantBoundConnection · audit log"| db
+  etl -->|"aggregation + reference data"| ext(["Plaid · BLS · FMP"])
+  pdf[["PDF render worker"]] -->|"authenticated-tier JWT · no DB creds"| app
   </pre>
 </section>
 
@@ -62,21 +104,111 @@ flowchart LR
   <p class="section-hint">3–7 components. Each has a single responsibility, an owner, and clear interfaces.</p>
   <table>
     <thead><tr><th>Component</th><th>Responsibility</th><th>Owner agent</th><th>Exposes</th><th>Consumes</th></tr></thead>
-    <tbody><tr><td class="tbd">— (Phase 3 work)</td><td class="tbd">—</td><td class="tbd">—</td><td class="tbd">—</td><td class="tbd">—</td></tr></tbody>
+    <tbody>
+      <tr>
+        <td><strong>V1 web app</strong><br/>(TypeScript; framework TBD)</td>
+        <td>All user-facing read/render of the 6 surfaces; settings write endpoints; as-of-date query paths; Plaid webhook handler; <code>SECURITY INVOKER</code> read-composition helper; <code>/internal/pdf-render</code> endpoint</td>
+        <td><code>frontend-engineer</code> + <code>backend-engineer</code></td>
+        <td>HTTPS UI; REST/RPC API; <code>/api/plaid/webhook</code>; <code>/internal/pdf-render</code></td>
+        <td>Supabase (user-session JWT, RLS); Plaid Link / token-exchange; design tokens (Phase 2)</td>
+      </tr>
+      <tr>
+        <td><strong><code>pfin_back_etl</code></strong><br/>(Python ETL — incumbent, extended)</td>
+        <td>Scheduled / privileged-context writes: Plaid scheduled-poll, NAV computation, monthly-report cron, BLS CPI-U ingestion, FMP ingestion <a href="#sec-2-fmp-note">†</a></td>
+        <td><code>backend-engineer</code></td>
+        <td>Cron jobs; <code>service_role</code> writes via <code>TenantBoundConnection</code></td>
+        <td>Supabase (<code>service_role</code>); Plaid API; BLS API; FMP API</td>
+      </tr>
+      <tr>
+        <td><strong>PDF render worker</strong><br/>(Node / Puppeteer — new)</td>
+        <td>Headless render of the monthly report to PDF</td>
+        <td><code>backend-engineer</code> / <code>devops</code></td>
+        <td>PDF artifact</td>
+        <td>V1 app <code>/internal/pdf-render</code> (authenticated-tier JWT; <strong>no DB creds</strong>)</td>
+      </tr>
+      <tr>
+        <td><strong>Supabase / Postgres</strong></td>
+        <td>System of record; multi-tenant isolation (RLS); pgsodium / Vault encryption (access tokens, acct-number); immutability + matched-tenant triggers; audit-class tables</td>
+        <td><code>architect</code> (schema) / <code>backend-engineer</code></td>
+        <td>SQL; Auth / JWT issuance; RLS-enforced rows</td>
+        <td>— (authoritative store)</td>
+      </tr>
+      <tr>
+        <td><strong>Plaid</strong> (external)</td>
+        <td>Instrument / balance / transaction aggregation; Item-lifecycle webhooks</td>
+        <td><code>backend-engineer</code></td>
+        <td>Link, Items, Transactions, webhooks</td>
+        <td>access-token (SD-03, Vault-encrypted)</td>
+      </tr>
+      <tr>
+        <td><strong>BLS + FMP</strong> (external)</td>
+        <td>Reference data — CPI-U (BLS, free/open); security prices (FMP, subscription)</td>
+        <td><code>backend-engineer</code></td>
+        <td>public / subscription data APIs</td>
+        <td>API keys (Coolify env vars)</td>
+      </tr>
+    </tbody>
   </table>
+  <p id="sec-2-fmp-note" class="section-hint">† FMP ingestion is shown at the topology level only; the ingestion-architecture detail is deferred to the Worker / Data-model sections per the candidate-P3 disposition (see §1).</p>
   <pre class="mermaid">
 flowchart TB
-  ui[UI — frontend-lead] --> api[API — backend-lead]
-  api --> svc[Service layer — backend-lead]
-  svc --> db[(Supabase DB<br/>RLS-enforced per ADR-008 axis i)]
-  svc --> plaid_worker[[Plaid sync worker<br/>tenant-context-bound]]
+  subgraph vps["Hetzner cax21 VPS — Coolify"]
+    subgraph appc["V1 web app container — TypeScript (framework TBD)"]
+      ui["UI · 6 surfaces"] --> apil["API / RPC · settings writes · as-of-date paths"]
+      wh["Plaid webhook handler"]
+      pe["/internal/pdf-render endpoint"]
+      comp[["SECURITY INVOKER read-composition helper"]]
+    end
+    subgraph etlc["pfin_back_etl container — Python"]
+      cron[["monthly-report cron"]]
+      poll[["Plaid scheduled-poll"]]
+      nav[["NAV worker"]]
+      ref[["BLS CPI-U + FMP ingestion"]]
+    end
+    subgraph pdfc["PDF worker container — Node / Puppeteer"]
+      pup[["Puppeteer render"]]
+    end
+    db[("Supabase / Postgres · RLS · pgsodium · immutability + matched-tenant triggers")]
+  end
+  apil -->|"user-session"| db
+  comp -->|"user-session"| db
+  wh -->|"service_role + audit"| db
+  cron -->|"service_role · TenantBoundConnection"| db
+  poll -->|"service_role · TenantBoundConnection"| db
+  nav -->|"service_role"| db
+  ref -->|"service_role"| db
+  pup -->|"authenticated-tier JWT"| pe
+  pe --> comp
+  poll --> plaid(["Plaid API"])
+  wh --> plaid
+  ref --> rext(["BLS · FMP APIs"])
   </pre>
 </section>
 
 <section id="sec-3" data-section="dataflow">
   <h2>3. Data Flow</h2>
   <p class="section-hint">One sequence diagram per primary user story. Only diagram flows with non-trivial design choices.</p>
-  <div class="stub">Add a <code>&lt;pre class="mermaid"&gt;sequenceDiagram…&lt;/pre&gt;</code> block per major flow. Phase 3 work.</div>
+  <p>At the system level there are two write contexts and one read/render path. <strong>User-session writes</strong>
+     (settings, manual entry, as-of-date queries) carry a Supabase Auth JWT and are gated by RLS
+     <code>WITH CHECK</code> at the database. <strong>Privileged-context writes</strong> (Plaid sync, NAV
+     computation, the monthly-report cron, and reference-data ingestion) run under <code>service_role</code> with
+     no JWT, so tenant correctness is bound in code via <code>TenantBoundConnection</code> and recorded in an
+     explicit audit log (ADR-011 Decision 1, the privileged-context-write discipline). Both contexts land in
+     immutable audit-class tables for money-correctness surfaces. All <strong>reads</strong> flow through a single
+     <code>SECURITY INVOKER</code> read-composition helper (user-session only — never invoked from a worker),
+     which is also the render source the PDF worker reaches through the V1 app rather than the database.</p>
+  <p class="section-hint">This is the system-level overview only. A per-story <code>sequenceDiagram</code> is drafted
+     with each surface's own later section (Data model, Plaid integration, Workers, etc.) — those carry the
+     non-trivial flow-specific design choices.</p>
+  <pre class="mermaid">
+flowchart TB
+  us["User session — JWT → RLS WITH CHECK"] -->|"settings · manual entry · as-of queries"| db[("Postgres · RLS")]
+  pc["Privileged context (no JWT) — service_role + TenantBoundConnection + audit log"] -->|"Plaid sync · NAV · monthly-report cron · reference data"| db
+  db --> immut{{"Immutable audit-class tables · account_trans · reconciliation_event · monthly_report"}}
+  db --> read[["SECURITY INVOKER read-composition helper"]]
+  read -->|"user-session only"| render["6 read surfaces + monthly report"]
+  render --> pdfp["PDF worker render path"]
+  </pre>
 </section>
 
 <section id="sec-4" data-section="stack">
