@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mosko-fintech — §2.5 Estimated Taxes (styled)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="tokens.css?v=11">
+<link rel="stylesheet" href="screen.css?v=11">
+<link rel="stylesheet" href="review.css?v=11">
+</head>
+<body>
+<div class="controlbar">
+  <span class="lbl">Locked</span>
+  <span class="lockchip">Palette B refined</span>
+  <span class="lockchip">Inter + JetBrains · Hybrid</span>
+  <span class="lockchip">Attn = Canary #FFEF00</span>
+  <span class="lbl" style="margin-left:10px">Theme</span>
+  <button data-set="theme" data-val="light" class="on">Light</button>
+  <button data-set="theme" data-val="dark">Dark</button>
+  <span class="ver">Design System <strong>v11.0</strong> · theme <strong id="now-th">light</strong></span>
+</div>
+<div class="wrap">
+  <nav class="toc">
+    <a href="index.html">Design System + §2.1</a>
+    <a href="2.2-asset-allocation.html">§2.2 Allocation</a>
+    <a href="2.3-cash-flow.html">§2.3 Cash Flow</a>
+    <a class="cur" href="2.5-estimated-taxes.html">§2.5 Taxes</a>
+    <a href="2.6-monthly-report.html">§2.6 Report</a>
+  </nav>
+  <div class="intro">
+    <h2>§2.5 Estimated Taxes — styled</h2>
+    <div class="fence"><strong>Money-movement fence:</strong> the app <em>records</em> payments made externally + computes obligations — there is NO Pay / Schedule / Transfer affordance. "Record a payment" is a plain link to a manual §2.4.3 transaction, never styled as a payment CTA. No safe-harbor; brackets edited in Settings (P5); server-derived (no as-of toggle).</div>
+  </div>
+
+  <div class="sec-h">§2.5 Estimated Taxes surface</div>
+  <div class="app">
+    <nav class="sidebar">
+      <div class="brandslot">the · trust</div>
+      <div class="nav-item">Accounts</div>
+      <div class="nav-item">Net Worth</div>
+      <div class="nav-item">Asset Allocation</div>
+      <div class="nav-item">Cash Flow</div>
+      <div class="nav-item active">Estimated Taxes</div>
+      <div class="nav-item">Monthly Report</div>
+      <div class="nav-item divider">Settings</div>
+      <div class="collapse">&lsaquo; collapse</div>
+    </nav>
+    <div class="main">
+      <div class="topbar"><span class="search-ph">Search — reserved (V1 placeholder)</span><span class="inbox">Inbox</span></div>
+      <div class="banner-absent"></div>
+      <div class="content">
+        <h2 class="surface-title">Estimated Taxes</h2>
+
+        <div class="region">
+          <span class="region-label">tax-income-decomposition · 2.5.1</span>
+          <table class="tbl">
+            <thead><tr><th>Sub-Category</th><th class="num">Ordinary Income</th><th class="num">ST CG</th><th class="num">LT CG</th></tr></thead>
+            <tbody>
+              <tr class="group-row"><td colspan="4">Income</td></tr>
+              <tr><td>Salary</td><td class="num">$180,000</td><td class="num">&mdash;</td><td class="num">&mdash;</td></tr>
+              <tr class="group-row"><td colspan="4">Capital Gains (by asset Cat)</td></tr>
+              <tr><td>Equity &rarr; US-Index_Non_Sector</td><td class="num">&mdash;</td><td class="num">$4,200</td><td class="num">$31,500</td></tr>
+              <tr class="foot"><td>Total</td><td class="num">$180,000</td><td class="num">$4,200</td><td class="num">$31,500</td></tr>
+            </tbody>
+          </table>
+          <p class="muted" style="font-size:var(--fs-small)">Seeded tax-attributes (no CRUD UI); live-recompute; cost-basis-unavailable flagged; stale inputs marked (D1).</p>
+        </div>
+
+        <div class="grid-2">
+          <div class="region">
+            <span class="region-label">tax-quarterly-federal · 2.5.3</span>
+            <div class="applied-rate">Federal ordinary <span class="rate">24%</span> · Federal LT CG <span class="rate">15%</span></div>
+            <table class="tbl">
+              <thead><tr><th>Line</th><th class="num">Amount</th></tr></thead>
+              <tbody>
+                <tr><td>Tax Balance Prior Year <span class="muted">(info only)</span></td><td class="num">$2,140</td></tr>
+                <tr><td>Q1 (Apr 15) … Q4 (Jan 15)</td><td class="num">$11,800 ea</td></tr>
+                <tr class="subtotal"><td>Sub-Total (obligation)</td><td class="num">$47,200</td></tr>
+                <tr><td>YTD Paid (IRS ledger)</td><td class="num">$23,600</td></tr>
+                <tr class="foot"><td>Estimated Funds Due (IRS)</td><td class="num">$23,600</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="region">
+            <span class="region-label">tax-quarterly-ca · 2.5.3</span>
+            <div class="applied-rate">California <span class="rate">9.3%</span> · CA Q3 due-date differs from Federal</div>
+            <table class="tbl">
+              <thead><tr><th>Line</th><th class="num">Amount</th></tr></thead>
+              <tbody>
+                <tr><td>Tax Balance Prior Year <span class="muted">(info only)</span></td><td class="num">$640</td></tr>
+                <tr><td>Q1–Q4 estimated payments</td><td class="num">$4,300 ea</td></tr>
+                <tr class="subtotal"><td>Sub-Total</td><td class="num">$17,200</td></tr>
+                <tr><td>YTD Paid (FTB ledger)</td><td class="num">$8,600</td></tr>
+                <tr class="foot"><td>Estimated Funds Due (FTB)</td><td class="num">$8,600</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel-card" style="margin-bottom:var(--space-4)">
+          <strong style="font-size:var(--fs-h3)">Payments</strong>
+          <p class="muted" style="font-size:var(--fs-small);margin:var(--space-1) 0 var(--space-2)">There is no "Pay" button. Record a payment you made externally as a manual transaction against the IRS/FTB account; YTD Paid reads from that ledger. Overpayment renders as a negative "Estimated Funds Due" on the same line.</p>
+          <a class="link" href="#">Record a payment (manual entry) &rarr;</a>
+        </div>
+
+        <div class="region">
+          <span class="region-label">tax-nav-components · 2.5.4 — the §2.1 bridge</span>
+          <div style="display:flex;gap:var(--space-3);flex-wrap:wrap">
+            <div class="kv"><span class="kv-label">Realized Tax Liability (Fed+CA)</span><span class="kv-value">$48,200</span></div>
+            <div class="kv"><span class="kv-label">Unrealized Tax Liability (Fed+CA, taxable-only)</span><span class="kv-value">$93,560</span></div>
+          </div>
+          <p class="disclaimer">This estimate may understate actual tax owed if any portion of unrealized gain would be realized at short-term rates; treat it as an LT-aware floor estimate. These two scalars feed §2.1.5 Account Holdings.</p>
+          <p class="muted" style="font-size:var(--fs-small)"><a class="link" href="#">Edit brackets in Settings &rarr;</a> (Federal ordinary + Federal LT CG + CA ordinary schedules + standard deductions; manual update at tax-year rollover; no API fetch).</p>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+<script src="review.js?v=11"></script>
+</body>
+</html>

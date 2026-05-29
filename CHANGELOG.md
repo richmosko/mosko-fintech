@@ -8,7 +8,28 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 **Format.** Newest at top. Each entry: `### vN.NN — YYYY-MM-DD` header followed by narrative paragraphs.
 
-**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 40 version entries total (v0.1 → v1.34).
+**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 41 version entries total (v0.1 → v1.35).
+
+---
+
+### v1.35 — 2026-05-29
+
+**Phase 2 Steps 4–9 complete — design system + `docs/DESIGN/` committed home ([ADR-014](DECISIONS.md#adr-014)).**
+
+Team `phase-2-ux-design` carried Phase 2 from wireframes through the design system (HTML route; Figma MCP held as the escalation path; no Claude Design bridge reachable from Claude Code).
+
+- **Step 4 — wireframes:** low-fi HTML wireframes for all 6 clusters + shell, F/CTO-approved.
+- **Step 5 — UX→Visual handoff:** contract with ~45 screens + a consolidated component library; UX added INV-3 (breadcrumb / action-menu / chart-granularity chip-group).
+- **Step 6 — gap-scan:** clean except the 2 INV-3 inventory gaps (routed to + resolved by UX).
+- **Step 7 — mandatory palette/typography/dark checkpoint (F/CTO):** Palette **B (Restrained Semantic), refined** · **Inter + JetBrains Mono, Hybrid** · **dark plan-for** · attention **Canary-Yellow `#FFEF00`** (picked over neon-orange `#FFAD00` + true-yellow `#eaea00` via a live 3-way A/B/C, contrast-managed for WCAG-AA).
+- **Step 8 — design-system spec applied across all 6 clusters;** the §2.3 non-goal fence held in the visual layer (semantic green/red scoped to actual performance only; `$ReAlloc`/`%Target` neutral; no progress/gauge/over-under/target-line).
+- **Step 9 — two-tier token taxonomy:** named **primitive** tokens (`--color-*`) → **semantic aliases** (`--c-*`), no bare hex on the semantic layer (closes the recurring "can't find the token for that value" friction). Canvas resolved to a **barely-cool near-white** with pure-white cards, restoring the per-story bordered "window" regions (a prior literal-pure-white over-correction had flattened them).
+
+**Process notes.** A multi-round stale-render was root-caused to Chrome caching the `file://` stylesheet (fixed via CSS inlining / `?v=` versioned links + a visible version stamp). Confirmed Claude Design (claude.ai/design) is browser-only with no MCP/API — not usable for agent-driven design from Claude Code.
+
+**[ADR-014](DECISIONS.md#adr-014)** consolidates the visual foundation + barely-cool canvas + two-tier tokens + the `docs/DESIGN/` home decision (resolving the ADR-013 flow-artifact-home follow-up).
+
+**PR `meta/phase-2-design-landing`:** establishes **`docs/DESIGN/`** (4th top-level doc alongside PRD/ARCH/SECURITY) populated with the design system (`tokens.css`/`screen.css`/`design-system-spec.md`/styled-screen HTML) + `flows/` + `wireframes/` (migrated from gitignored `temp/`) + ADR-014 + WORKFLOW Phase 2 status + MILESTONES + this entry. **Only Step 10 (tokens-as-code) remains — gated on the Phase-3 frontend-framework choice (ADR-012 coupling); Phase 2 sits at the framework-coupling pause.** Follow-up: normalize residual `temp/phase-2-*` cross-refs inside the migrated flow/wireframe markdown.
 
 ---
 

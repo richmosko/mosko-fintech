@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wireframes (LOW-FI): §2.6 Monthly Report (convergence)</title>
+<link rel="stylesheet" href="wireframe.css">
+</head>
+<body>
+
+<h1>§2.6 Monthly Report — CONVERGENCE <span class="decision-tag">LOW-FI</span></h1>
+<p class="toc"><strong>Wireframes:</strong> <a href="index.html">Shell + §2.4</a> · <a href="2.1-net-worth.html">§2.1 Net Worth</a> · <a href="2.2-asset-allocation.html">§2.2 Allocation</a> · <a href="2.3-cash-flow.html">§2.3 Cash Flow</a> · <a href="2.5-estimated-taxes.html">§2.5 Taxes</a> · <a href="2.6-monthly-report.html">§2.6 Report</a></p>
+<p class="note">Low-fi conventions: see <a href="index.html">Shell page</a>.</p>
+
+<div class="legend"><strong>Decisions realized here:</strong>
+  <ul>
+    <li>6 fixed-order sections composed from §2.1–§2.5; generate (cron + on-demand); 3-state lifecycle (not-yet-triggered / pending / generated).</li>
+    <li><strong>3rd distinct freshness signal:</strong> <code>report-generation-stamp</code> (frozen snapshot recency) — kept separate from the LIVE <code>stale-data-marker</code> (read live even on historical/PDF).</li>
+    <li><strong>Generate-with-markers (α′-1):</strong> stale never blocks; per-section markers + banner naming accounts.</li>
+    <li><strong>INV-1:</strong> Rebalancing-Targets commentary is <strong>plain-text-only</strong> (security-load-bearing). Owner-id header edited in Settings. Both non-goal fences (money-movement, variance) carry into the rendered report + PDF.</li>
+  </ul>
+</div>
+
+<h2>A. report-listing + generate (F-2.6.A) — in shell frame</h2>
+<div class="shell">
+  <div class="sidebar">
+    <div class="brandslot">[owner / app label]</div>
+    <div class="nav-item">Accounts</div>
+    <div class="nav-item">Net Worth</div>
+    <div class="nav-item">Asset Allocation</div>
+    <div class="nav-item">Cash Flow</div>
+    <div class="nav-item">Estimated Taxes</div>
+    <div class="nav-item active">Monthly Report</div>
+    <div class="nav-item divider">Settings</div>
+  </div>
+  <div class="main">
+    <div class="topbar"><span class="search-ph">search — placeholder (V1 reserved; behavior TBD)</span><span class="inbox">inbox (1) — pending report</span></div>
+    <div class="banner-absent">reauth-staleness-banner — absent (healthy)</div>
+    <div class="content">
+      <div class="region"><span class="region-label">report-listing</span>
+        <div class="bar-actions" style="text-align:left"><strong>Monthly Reports</strong>
+          <span style="float:right">Target month <span class="field sel">April 2026</span><span class="btn primary">Generate monthly report</span></span></div>
+        <table class="wf">
+          <tr><th>Month</th><th>State</th><th>Generated</th><th></th></tr>
+          <tr><td>April 2026</td><td><span class="chip">pending — author commentary</span></td><td>—</td><td><span class="btn">Resume →</span></td></tr>
+          <tr><td>March 2026</td><td><span class="chip">generated</span></td><td>2026-04-01</td><td><span class="btn">View →</span></td></tr>
+        </table>
+        <span class="state-note">pending-report-queue surfaces via inbox · cron 1st-of-month for prior month (data-as-of = last day prior month); on-demand can target the in-progress month (as-of-today) · server-derived data_as_of (never client-asserted)</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<h2>B. rebalancing-targets-editor (F-2.6.B) — author-before-generate</h2>
+<div class="screen">
+  <div class="screen-title">Rebalancing Targets — author before finalize</div>
+  <div class="two-col">
+    <div class="region"><span class="region-label">editor (4 fixed sub-sections; plain-text only — INV-1)</span>
+      <p><strong>Cash</strong><br><span class="field" style="display:block;min-height:34px">[ plain text — line breaks preserved; NO markdown/rich-text ]</span></p>
+      <p><strong>Bonds · Equity · Alternatives</strong> … (same)</p>
+      <span class="state-note">blank-by-default · [copy from prior month] (per-sub-section/global) · empty sub-sections render empty · tenant-scoped write</span>
+    </div>
+    <div class="region"><span class="region-label">$ReAlloc reference (read-only, from §2.2.2)</span>
+      <table class="wf"><tr><th>Sub-Cat</th><th class="num">$ ReAlloc</th></tr><tr><td>US-Index_Non_Sector</td><td class="num">+$x</td></tr></table>
+      <span class="comp-label">reference only — does not write back to §2.2.2</span>
+    </div>
+  </div>
+  <p class="note"><strong>INV-1 (security-load-bearing):</strong> plain-text only. The V2+ markdown/rich-text path is a security-surface expansion (rendered into HTML + PDF), NOT a harmless refinement.</p>
+  <div class="bar-actions"><span class="btn">Skip</span><span class="btn primary">Finalize report →</span></div>
+</div>
+
+<h2>C. report-view (F-2.6.C) — the 6-section frozen snapshot + live markers</h2>
+<div class="screen">
+  <div class="crumb">‹ Monthly Reports &nbsp;|&nbsp; <strong>April 2026</strong> &nbsp; <span class="btn">Export PDF</span></div>
+  <div class="comp-label">report-generation-stamp: "Generated 2026-05-01 · data as-of 2026-04-30" (snapshot recency — distinct from live staleness)</div>
+  <div class="banner" style="margin:8px 0">[!] 1 account in re-auth — sections sourced from it are marked stale: <span class="chip">Chase — re-auth</span> <span class="comp-label">report-staleness-banner (live, α′-1) — report still renders</span></div>
+  <div style="border:1px solid #999;padding:8px;margin:8px 0"><strong>[ owner-identification header ]</strong> — "THE … TRUST" (snapshot, not live; excluded from staleness)</div>
+  <div class="region"><span class="region-label">1. Account Holdings ← §2.1.5 (incl. §2.5.4 Realized/Unrealized rows)</span> [composition build-up render]</div>
+  <div class="region"><span class="region-label">2. NAV Performance ← §2.1.2+§2.1.3+§2.1.4</span> [reference dates + delta panel + 60-mo chart]</div>
+  <div class="region"><span class="region-label">3. Asset Allocation ← §2.2.2+§2.2.3</span> [allocation table + US-equity drill]</div>
+  <div class="region"><span class="region-label">4. Rebalancing Targets ← §2.6.2 (user-authored)</span> [commentary; excluded from staleness marking]</div>
+  <div class="region"><span class="region-label">5. Cash Flow ← §2.3.2 + §2.3.4 inline</span> [Income/Expenses tables + Historical Expenditures; static targets, NO variance/target-line]</div>
+  <div class="region"><span class="region-label">6. Estimated Taxes ← §2.5.1 + §2.5.3</span> [decomposition + Fed/CA quarterly; obligations only, NO pay affordance]</div>
+  <span class="state-note">historical view shows frozen snapshot + TODAY's live staleness markers · PDF export = live-markers-at-click capture (no PDF caching) · regeneration = overwrite (no revision history V1, commentary pre-populated)</span>
+</div>
+
+<p class="note">END §2.6 — the convergence cluster. Owner-id header edited in Settings (P5 · Report Identity). Both permanent non-goal fences (money-movement, variance/budget) carry into the rendered report + PDF.</p>
+</body>
+</html>

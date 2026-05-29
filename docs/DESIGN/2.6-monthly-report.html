@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mosko-fintech — §2.6 Monthly Report (styled)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="tokens.css?v=11">
+<link rel="stylesheet" href="screen.css?v=11">
+<link rel="stylesheet" href="review.css?v=11">
+</head>
+<body>
+<div class="controlbar">
+  <span class="lbl">Locked</span>
+  <span class="lockchip">Palette B refined</span>
+  <span class="lockchip">Inter + JetBrains · Hybrid</span>
+  <span class="lockchip">Attn = Canary #FFEF00</span>
+  <span class="lbl" style="margin-left:10px">Theme</span>
+  <button data-set="theme" data-val="light" class="on">Light</button>
+  <button data-set="theme" data-val="dark">Dark</button>
+  <span class="ver">Design System <strong>v11.0</strong> · theme <strong id="now-th">light</strong></span>
+</div>
+<div class="wrap">
+  <nav class="toc">
+    <a href="index.html">Design System + §2.1</a>
+    <a href="2.2-asset-allocation.html">§2.2 Allocation</a>
+    <a href="2.3-cash-flow.html">§2.3 Cash Flow</a>
+    <a href="2.5-estimated-taxes.html">§2.5 Taxes</a>
+    <a class="cur" href="2.6-monthly-report.html">§2.6 Report</a>
+  </nav>
+  <div class="intro">
+    <h2>§2.6 Monthly Report — styled (convergence cluster)</h2>
+    <div class="fence"><strong>Carries every fence into the rendered report + PDF:</strong> rebalancing commentary is <strong>plain-text only</strong> (INV-1 — no formatting toolbar); the Cash Flow section keeps static targets (no variance/target-line); Estimated Taxes shows obligations only (no Pay). <code>report-generation-stamp</code> (frozen snapshot recency) is kept distinct from the live D1 stale-marker and the canary <code>report-staleness-banner</code>.</div>
+  </div>
+
+  <div class="sec-h">A · report-listing + generate</div>
+  <div class="app">
+    <nav class="sidebar">
+      <div class="brandslot">the · trust</div>
+      <div class="nav-item">Accounts</div>
+      <div class="nav-item">Net Worth</div>
+      <div class="nav-item">Asset Allocation</div>
+      <div class="nav-item">Cash Flow</div>
+      <div class="nav-item">Estimated Taxes</div>
+      <div class="nav-item active">Monthly Report</div>
+      <div class="nav-item divider">Settings</div>
+      <div class="collapse">&lsaquo; collapse</div>
+    </nav>
+    <div class="main">
+      <div class="topbar"><span class="search-ph">Search — reserved (V1 placeholder)</span><span class="inbox">Inbox <span class="badge">1</span></span></div>
+      <div class="banner-absent"></div>
+      <div class="content">
+        <h2 class="surface-title">Monthly Reports</h2>
+        <div class="region">
+          <span class="region-label">report-listing</span>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-2)">
+            <strong>Reports</strong>
+            <span style="display:flex;gap:var(--space-2);align-items:center">Target month <span class="select">April 2026</span><button class="btn primary">Generate monthly report</button></span>
+          </div>
+          <table class="tbl">
+            <thead><tr><th>Month</th><th>State</th><th>Generated</th><th></th></tr></thead>
+            <tbody>
+              <tr><td>April 2026</td><td><span class="chip attn">pending — author commentary</span></td><td class="num">&mdash;</td><td><button class="btn">Resume &rarr;</button></td></tr>
+              <tr><td>March 2026</td><td><span class="chip">generated</span></td><td class="num">2026-04-01</td><td><button class="btn">View &rarr;</button></td></tr>
+            </tbody>
+          </table>
+          <p class="muted" style="font-size:var(--fs-small)">Cron 1st-of-month for the prior month; on-demand can target the in-progress month. Server-derived <code>data_as_of</code> (never client-asserted).</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="sec-h">B · rebalancing-targets-editor (author-before-generate · INV-1 plain-text)</div>
+  <div class="panel-card">
+    <div class="grid-2">
+      <div>
+        <span class="region-label">editor — 4 fixed sub-sections, PLAIN TEXT ONLY (no toolbar)</span>
+        <p style="font-size:var(--fs-small);margin:0 0 4px"><strong>Cash</strong></p>
+        <div class="plain-text-area"><span class="ph">[ plain text — line breaks preserved; NO markdown / rich-text / links ]</span></div>
+        <p style="font-size:var(--fs-small);margin:var(--space-3) 0 4px"><strong>Bonds · Equity · Alternatives</strong> … (same)</p>
+        <div class="plain-text-area" style="min-height:40px"></div>
+        <p class="muted" style="font-size:var(--fs-small);margin-top:var(--space-2)"><a class="link" href="#">Copy from prior month</a> · blank by default · tenant-scoped write.</p>
+      </div>
+      <div>
+        <span class="region-label">$ReAlloc reference (read-only, from §2.2.2)</span>
+        <table class="tbl">
+          <thead><tr><th>Sub-Cat</th><th class="num">$ ReAlloc</th></tr></thead>
+          <tbody>
+            <tr><td>US-Index_Non_Sector</td><td class="num val-target">&minus;$49,542</td></tr>
+            <tr><td>Margin</td><td class="num val-target">+$135,240</td></tr>
+          </tbody>
+        </table>
+        <p class="muted" style="font-size:var(--fs-small)">Reference only — does not write back to §2.2.2. Neutral (no comparative color).</p>
+      </div>
+    </div>
+    <div class="bar-actions"><button class="btn">Skip</button><button class="btn primary">Finalize report &rarr;</button></div>
+  </div>
+
+  <div class="sec-h">C · report-view — 6-section frozen snapshot + live markers</div>
+  <div class="panel-card">
+    <nav class="breadcrumb"><a href="#">Monthly Reports</a><span class="sep">/</span><span class="crumb-current">April 2026</span>
+      <span style="margin-left:auto"><button class="btn">Export PDF</button></span>
+    </nav>
+    <div class="freshness-stamp" style="margin:var(--space-2) 0">report-generation-stamp: Generated 2026-05-01 · data as-of 2026-04-30 <span class="muted">(snapshot recency — distinct from live staleness)</span></div>
+    <div class="banner" style="border-radius:var(--radius-md);margin:var(--space-2) 0">
+      <span class="b-icon">&#9888;</span><span class="b-title">1 account in re-auth</span>
+      <span class="muted" style="color:inherit">— sections sourced from it are marked stale</span>
+      <span class="conn-chip reauth">Chase</span>
+      <span class="b-actions muted" style="color:inherit;font-size:var(--fs-small)">report-staleness-banner (live, α′-1) — report still renders</span>
+    </div>
+    <div style="border:1px solid var(--c-border);border-radius:var(--radius-md);padding:var(--space-3);margin:var(--space-2) 0">
+      <strong>[ owner-identification header ]</strong> — "THE … TRUST" <span class="muted" style="font-size:var(--fs-small)">(snapshot, not live; excluded from staleness; plain-text — INV-1)</span>
+    </div>
+    <div class="region"><span class="region-label">1 · Account Holdings ← §2.1.5 (incl. §2.5.4 Realized/Unrealized rows)</span><span class="muted" style="font-size:var(--fs-small)">composition build-up render</span></div>
+    <div class="region"><span class="region-label">2 · NAV Performance ← §2.1.2 + §2.1.3 + §2.1.4</span><span class="muted" style="font-size:var(--fs-small)">reference dates + delta panel + 60-mo chart</span></div>
+    <div class="region"><span class="region-label">3 · Asset Allocation ← §2.2.2 + §2.2.3</span><span class="muted" style="font-size:var(--fs-small)">allocation table + US-equity drill ($ReAlloc neutral)</span></div>
+    <div class="region"><span class="region-label">4 · Rebalancing Targets ← §2.6.2 (user-authored)</span><span class="muted" style="font-size:var(--fs-small)">plain-text commentary; excluded from staleness marking</span></div>
+    <div class="region"><span class="region-label">5 · Cash Flow ← §2.3.2 + §2.3.4</span><span class="muted" style="font-size:var(--fs-small)">Income/Expenses tables + Historical Expenditures; static targets, NO variance/target-line</span></div>
+    <div class="region"><span class="region-label">6 · Estimated Taxes ← §2.5.1 + §2.5.3</span><span class="muted" style="font-size:var(--fs-small)">decomposition + Fed/CA quarterly; obligations only, NO pay affordance</span></div>
+    <p class="muted" style="font-size:var(--fs-small)">Historical view = frozen snapshot + TODAY's live staleness markers. PDF export = live-markers-at-click capture. Regeneration overwrites (commentary pre-populated).</p>
+  </div>
+
+</div>
+<script src="review.js?v=11"></script>
+</body>
+</html>

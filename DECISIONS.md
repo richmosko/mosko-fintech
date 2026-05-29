@@ -41,6 +41,45 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-014 — Phase 2 design system: foundation, two-tier tokens, and the `docs/DESIGN/` home
+
+**Date:** 2026-05-29
+**Status:** Accepted
+**Phase:** 2 (Steps 6–9 — UX→Visual handoff, palette/typography/dark checkpoint, design-system spec, token taxonomy; consumes [ADR-013](#adr-013) flows + decisions; Step 10 tokens-as-code remains gated on the Phase-3 frontend-framework choice per [ADR-012](#adr-012))
+
+**Context.** With the §2 flows locked + the P1–P6 walk-through decisions in [ADR-013](#adr-013), Phase 2 proceeded through wireframes (Step 4, low-fi HTML), the UX→Visual handoff (Step 5; ~45 screens + a consolidated component inventory incl. INV-3: breadcrumb / action-menu / chart-granularity chip-group), the mandatory palette/typography/dark-mode checkpoint (Step 7), the full design-system spec applied across all 6 clusters (Step 8), and the token taxonomy (Step 9). **Output format = HTML route** (F/CTO call): the Visual Designer applies real palette/type/spacing to the wireframe HTML, reviewed in-browser; CSS custom properties serve as the framework-agnostic token layer (the ADR-012 intermediate). **Figma MCP is connected as the escalation path** if HTML proved insufficient (it didn't). **No Claude Design (claude.ai/design) bridge exists from Claude Code** — it's a browser-only interactive tool with no MCP/API (confirmed via the Anthropic announcement + this session's tooling), so it was not usable for agent-driven design here. Working artifacts (the live palette switcher, walkthrough decks, the decisions log) live in gitignored `temp/`; this ADR is the committed decision record.
+
+**Decisions.**
+
+### Decision 1 — Visual foundation (locked at the Step 7 checkpoint)
+- **Palette = Restrained Semantic (B), refined.** Semantic green/red (`--c-pos`/`--c-neg`) scoped to **actual performance only** (NAV Δ, unrealized G/L); the §2.3 non-goal fence holds in the visual layer — **zero value-color on `$ReAlloc`/`%Target`/target captions**, no progress bars / gauges / over-under / variance / target-lines anywhere. Pop comes from a vivid blue accent + a restrained indigo secondary applied to **chrome only** (active nav, hero focal surface, chart line/fill, chips, badges).
+- **Typeface = Inter + JetBrains Mono** (chosen over Geist+Geist Mono / Satoshi+IBM Plex for readability); **Hybrid (Type 3)** — Inter for hero NAV + UI, JetBrains Mono for tabular numerics. Self-host at Step 10.
+- **Attention hue = Canary-Yellow `#FFEF00`** (chosen over neon-orange `#FFAD00` + true-yellow `#eaea00` via a 3-way live A/B/C). Intensity/contrast-managed (text/border darker for WCAG-AA on white + fill); reserved for staleness/re-auth only; distinct from the negative-performance red + the accent.
+- **Dark mode = plan-for** — dark tokens authored now (proven via a Light/Dark toggle), ship light-first, dark fast-follow; ~one token block + a contrast pass, no V1 gate.
+
+### Decision 2 — Canvas: barely-cool, with card elevation (resolving the "lost windows")
+The canvas is a **barely-cool near-white** (`--color-neutral-25`, ≈`#fafcfe`) — reads essentially white, cool (not cream/warm). Card surfaces stay **pure white**, so the per-story bordered "window" regions pop again via gentle fill-contrast + a light shadow + their cool border. (A prior over-correction to a literal pure-white canvas had set canvas == surface, flattening the cards; the barely-cool canvas restores the distinction while honoring F/CTO's "cooler white, not cream" intent — the warmth F/CTO had objected to was the attention token + a cached stylesheet, not the canvas.)
+
+### Decision 3 — Two-tier token architecture (the Step-9 taxonomy)
+Tokens are structured in two tiers so **no raw hex sits on a semantic token** (every value is discoverable + traceable to a named primitive — closing the recurring "I can't find the token for that value" problem):
+- **Tier 1 — primitives (`--color-*`):** named raw values, the only place hexes live (a cool-neutral ramp + blue/indigo/canary/green-red ramps + alpha tokens).
+- **Tier 2 — semantic aliases (`--c-*`):** every role aliases a primitive via `var(--color-*)` (e.g. `--c-canvas: var(--color-neutral-25)`, `--c-surface: var(--color-white)`, `--c-attn-solid: var(--color-canary-500)`). The dark theme re-aliases the same semantic names to dark-side primitives — no new hexes in the dark block.
+
+### Decision 4 — Committed home = `docs/DESIGN/` (resolves the [ADR-013](#adr-013) flow-artifact-home follow-up)
+A new top-level **`docs/DESIGN/`** artifact (4th alongside `docs/PRD/` / `docs/ARCH/` / `docs/SECURITY/`) is the permanent home for Phase 2 (UX & Design) outputs: the **design system** (`tokens.css` / `screen.css` / `design-system-spec.md` / styled-screen HTML), the **UX flows** (`flows/`), and the **wireframes** (`wireframes/`). NOT folded into PRD (requirements = Phase-1 input) or ARCH (technical architecture = Phase 3) — ARCH **cross-references** `docs/DESIGN/` for the frontend/tokens coupling. Matches the project's HTML-doc + serve-docs/comments convention.
+
+**Consequences.**
+
+- **`docs/DESIGN/` is established + populated** in this PR (the design system + flows + wireframes migrated out of gitignored `temp/`). Working/review-only artifacts (the palette switcher, walkthrough decks, the Phase-2 decisions log) stay in `temp/`.
+- **Step 10 (tokens-as-code) remains gated on the Phase-3 frontend-framework choice** (per [ADR-012](#adr-012)). The framework-agnostic token taxonomy (Decision 3) is complete; the framework-specific token export lands at Step 10 once Phase 3 picks the framework. Phase 2 cannot fully close until then — it sits at the ADR-012 framework-coupling pause.
+- **Phase 3 ARCH consumes the frontend-framework coupling point + cross-references `docs/DESIGN/`** for the UI/token surface.
+- **Follow-up (path-normalization):** the migrated `flows/*.md` + `wireframes/*.md` retain some `temp/phase-2-*` internal cross-references (informational prose) that should be normalized to `docs/DESIGN/`-relative paths in a cleanup pass; the design-system HTML/CSS itself uses clean relative links.
+- **Composes with** [ADR-013](#adr-013) (Step-3 flow decisions) + [ADR-012](#adr-012) (parallel execution + framework coupling). Per-decision detail + the full option history live in the gitignored `temp/phase-2-decisions-log.md`.
+
+**Approved by:** F/CTO (2026-05-29 — Step 7 foundation locked via the palette/type/dark/attn checkpoint; design system reviewed + approved at Step 8; two-tier tokens + barely-cool canvas + `docs/DESIGN/` home ratified across the closing review).
+
+---
+
 ## ADR-013 — Phase 2 Step 3: UX/design decisions (staleness-marking principle + 6 walk-through decisions)
 
 **Date:** 2026-05-28
