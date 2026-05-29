@@ -8,7 +8,60 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 **Format.** Newest at top. Each entry: `### vN.NN — YYYY-MM-DD` header followed by narrative paragraphs.
 
-**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 41 version entries total (v0.1 → v1.35).
+**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 42 version entries total (v0.1 → v1.36).
+
+---
+
+### v1.36 — 2026-05-29
+
+**[ADR-015](DECISIONS.md#adr-015) lands — SvelteKit + no Tailwind; Phase 2 Step 10 closes by composition; post-PR-63 state refresh.**
+
+**ADR-015 framing.** Architect-originated 3-option frontend framework brief (Next.js App Router / Remix (React Router v7 framework mode) / SvelteKit) with constraint-by-constraint satisfaction tables against the Lock-13 hybrid 3-container topology + Lock-13 mod #1 PDF-render contract + Supabase JS RLS-forwarding + [ADR-014](DECISIONS.md#adr-014) two-tier token consumption. Architect's ranked lean: **Remix > Next > SvelteKit**, weighted on solo-maintainer multi-week-gap mental load + Phase-6 AI-coding-agent fluency + React-ecosystem availability. **F/CTO ratified SvelteKit** in-conversation against the Architect lean on engineering-merit grounds (verbatim: *"Better structural engineering decision"*); subsequently ratified **no Tailwind**.
+
+**Process gap caught by Sec.** The §SECURITY §4.2 V1-web-app posture sub-§ + RT-26 framework-agnostic `SUPABASE_SERVICE_ROLE_KEY` fence (PR #62) reached verify-pass and Sec ran the grep — `SvelteKit` / `Svelte` returned zero matches across `DECISIONS.md` / `docs/` / `MILESTONES.md` / `WORKFLOW.md` despite the in-conversation ratification. Decision was real but had no committed artifact; RT-26's "concrete server-source file-glob enumeration locked in ARCH §4 at framework ratify" obligation needed the framework artifact to anchor against. ADR-015 closes the gap.
+
+**Sec joint-review at v2 — two amendments applied before F/CTO ratify.**
+
+- **Finding 1 (load-bearing) — audit-scope glob completeness:** Architect's v1 canonical-server-source surfaces enumeration missed `+layout.server.ts` (SvelteKit layout-level data loading + auth gates) + `src/lib/server/**/*.ts` (SvelteKit's server-only-module convention, Vite-enforced at import time). Both are real SvelteKit conventions where service-role drift could land and slip past the RT-26 CI grep. Added to the enumeration in three locations (Locked option, Cross-references, Consequences).
+- **Finding 2 (framing) — Decision 17 "supersedes" → "extends":** v1 used "supersedes" for ADR-015's relationship to [ADR-011](DECISIONS.md#adr-011) Decision 17 (Lock 13 / V1 app container). Verified Decision 17's committed text is framework-neutral (verbatim: *"V1 app retains Plaid webhook handler + in-app render path"*) — nothing to supersede. Reworded to "extends" in three locations.
+
+**Locked option.**
+
+- **Frontend framework:** **SvelteKit (Svelte 5)** for the V1 web app container in [ADR-011](DECISIONS.md#adr-011) Decision 17's hybrid 3-container topology. Canonical server-source surfaces (the RT-26 audit scope): `+server.ts` (route handlers) / `+page.server.ts` (SSR data loading) / `+layout.server.ts` (layout-level data + auth gates) / `src/hooks.server.ts` (Supabase session forwarding + auth refresh) / `src/lib/server/**/*.ts` (server-only-module convention). Build via Vite; deploy as a small Node server in its Coolify container on the existing Hetzner cax21.
+- **Styling:** **No Tailwind.** [ADR-014](DECISIONS.md#adr-014)'s two-tier CSS-custom-properties token taxonomy (`--color-*` primitives → `--c-*` semantic aliases) consumed natively via Svelte component-scoped `<style>` blocks; `tokens.css` imported globally in `src/app.css`. Component styles use `var(--c-*)` directly; no utility-class transformation layer.
+
+**Rationale (F/CTO engineering-merit weighting).**
+
+- **Lock 13 mod #1 PDF-render contract** (Puppeteer → V1 app `/internal/pdf-render` → SECURITY INVOKER read-composition helper): SvelteKit's `+server.ts` / `+page.server.ts` surfaces are **SSR by default** — no `dynamic = "force-dynamic"` opt-out knob to remember (Next.js's structural disadvantage on this contract) and no caching-defaults flip exposure.
+- **[ADR-014](DECISIONS.md#adr-014) token consumption is 1:1.** Svelte's idiomatic styling pattern *is* component-scoped CSS + CSS custom properties — exactly the shape [ADR-014](DECISIONS.md#adr-014) locked. No Style Dictionary export, no Tailwind `@theme` round-trip, no design-token JSON intermediate.
+- **Smallest container footprint** of the three options (~60–120 MB idle vs. ~80–150 MB Remix and ~200–400 MB Next.js); meaningful on a shared cax21 (16 GB) running `pfin_back_etl` + V1 app + PDF worker + Supabase concurrently.
+- **Lowest framework ceremony** for Supabase RLS forwarding: centralized in `hooks.server.ts`; one place to get the user-session-JWT-forwarding pattern right, one place to audit.
+- **No Tailwind** falls out naturally — adding utility classes on top of [ADR-014](DECISIONS.md#adr-014)'s already-finished CSS variables would reintroduce double-bookkeeping.
+
+**Costs accepted explicitly.** Architect's lean prioritized (i) solo-maintainer multi-week-gap mental load (Remix's two-primitive loader/action model is the smallest mental surface); (ii) Phase-6 AI-coding-agent fluency (React-based options materially better-represented in current LLM training corpora than Svelte 5; runes API new); (iii) React-ecosystem availability (shadcn/ui, Radix). F/CTO accepted these costs, with the caveat that **Phase-6 build-loop velocity will pay a real ramp-up cost on UI work** that Phase 6 entry lessons-learned should track.
+
+**Consequences.**
+
+- **Phase 2 Step 10 (tokens-as-code) CLOSES by composition.** `docs/DESIGN/tokens.css` IS the consumption format; imported globally in `src/app.css`; component `<style>` blocks use `var(--c-*)` natively. Visual Designer notification follows once ADR-015 + ARCH §4 land.
+- **ARCH §4 Tech Stack write-up is next** — populates Frontend framework + Styling rows; carries the Alternatives Considered material into the "alternatives" cells; enumerates the concrete SvelteKit server-source file-glob allowlist that RT-26 / [SECURITY §4.2](docs/SECURITY/index.html#sec-4-2) audits against.
+- **[ADR-011](DECISIONS.md#adr-011) Decision 17's "V1 app" container is now anchored as SvelteKit.** ADR-015 extends Decision 17 — hybrid topology + privileged-context-write disciplines + Lock 13's full mod inventory all stand unchanged.
+- **No other ADRs superseded or amended.** [ADR-005](DECISIONS.md#adr-005) / [ADR-013](DECISIONS.md#adr-013) / [ADR-014](DECISIONS.md#adr-014) compose unchanged.
+- **ADR-015 is in-principle reversible** if Phase-6 agent-fluency cost lands materially higher than expected (UI-layer rewrite; DB / RLS / worker code is portable) — but reversal is a one-way-door-shaped cost, not the planning baseline.
+
+**Same-day Phase 3 progress** (PRs #60 + #62 — first material content beyond ARCH scaffolding).
+
+- **PR #60 `phase/plan-arch-system-overview`** — Phase 3 ARCH HTML §1 / system-overview content landed in `docs/ARCH/index.html`.
+- **PR #62 `phase/plan-sec-rt26`** — Sec-led; lands **RT-26** in the §SECURITY risk-treatment catalog + §4.2 V1-web-app posture sub-§ committing to a framework-agnostic CI grep fence forbidding `SUPABASE_SERVICE_ROLE_KEY` import in the V1 web-app server bundle; concrete file-glob allowlist deferred to ARCH §4 at framework ratify (precondition: ADR-015). Also catalogues §10 defense-in-depth meta-pattern instances at [ADR-011](DECISIONS.md#adr-011) Decision 4. Verify-pass on this PR caught the missing-ADR process gap that triggered ADR-015.
+
+**PR #63 `meta/adr-015-framework-lock`** — landed ADR-015 (52 lines) in `DECISIONS.md`. Architect-originated; Sec joint-reviewed at v2 (two amendments applied); F/CTO ratified.
+
+**This PR `meta/post-adr-015-state-refresh`** — state-ledger refresh after ADR-015 lands:
+
+- **WORKFLOW.md edits:** line 6 current-phase pointer (framework-coupling RESOLVED via ADR-015; Phase 2 Steps 1–10 complete; in-flight Phase 3 PRs noted); §Phase 2 status block (🟡 Steps 1–10 complete; Step 10 CLOSES by composition); Open Questions resolved entries for `Frontend framework choice` + `Design tokens format`; footer v1.33 → v1.36.
+- **MILESTONES.md edits:** Last-updated refresh; Active Phase 2 work surface (Step 10 CLOSES); Coupling touchpoint (RESOLVED); Active Feature Status; three new Recent-activity entries (PR #63 ADR-015 lead + catch-ups for PR #60 ARCH system overview + PR #62 RT-26 / §4.2 fence).
+- **CHANGELOG.md edits:** this v1.36 entry; header version count 41 → 42.
+
+**Follow-up:** Phase 2 Step 10 hand-off to Visual Designer (notify framework + tokens-as-code closed); ARCH §4 Tech Stack write-up (Frontend framework + Styling rows + concrete SvelteKit server-source file-glob allowlist for RT-26 / §4.2).
 
 ---
 
