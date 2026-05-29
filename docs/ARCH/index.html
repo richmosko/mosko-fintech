@@ -66,18 +66,22 @@
      rather than greenfielding it: per ADR-011 Decision 17, V1 spreads work across <strong>three Coolify
      containers</strong> — <code>pfin_back_etl</code> (Python; gains the monthly-report cron, the Plaid
      scheduled-poll, and the NAV worker on top of incumbent BLS&nbsp;+&nbsp;FMP ingestion); the
-     <strong>V1 web app</strong> (TypeScript; owns the Plaid webhook handler and all user-facing read/render
-     paths via a <code>SECURITY&nbsp;INVOKER</code> read-composition helper); and a <strong>new Node PDF-render
+     <strong>V1 web app</strong> (SvelteKit + TypeScript; owns the Plaid webhook handler and all user-facing
+     read/render paths via a <code>SECURITY&nbsp;INVOKER</code> read-composition helper); and a <strong>new Node PDF-render
      worker</strong> (Puppeteer, rendering <em>through</em> the V1 app's authenticated render URL — never
      touching the database directly). External dependencies are Plaid (aggregation + webhooks) and the two
      reference-data feeds already wired into <code>pfin_back_etl</code> (BLS CPI-U; FMP prices).</p>
 
   <blockquote>
-    <strong>One un-locked choice flagged.</strong> The <strong>frontend framework</strong> the V1 web app is
-    built on is <em>not yet decided</em> — it is the Phase&nbsp;2 ↔ Phase&nbsp;3 coupling point and is resolved
-    in the Tech-Stack / API-surface drafting (§4 / later sections), <em>not here</em>. This overview describes
-    the V1 app as a TypeScript/Node web application (the ADR-011 Decision&nbsp;17 topology shape, which names
-    Next.js as the incumbent-implied candidate) but does <strong>not</strong> lock the framework.
+    <strong>Framework locked.</strong> The V1 web app is built on <strong>SvelteKit (Svelte 5)</strong>
+    per <a href="../../DECISIONS.md#adr-015">ADR-015</a> — closing the Phase&nbsp;2 ↔ Phase&nbsp;3 coupling
+    point per <a href="../../DECISIONS.md#adr-012">ADR-012</a> and anchoring the V1-web-app container in
+    the <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision&nbsp;17 hybrid 3-container topology. See
+    <a href="#sec-4">§4</a> for the row decomposition (V1 web-app / ingestion+cron / PDF render worker) and
+    <a href="#sec-4-1">§4.1</a> for the server-source allowlist anchoring the
+    <a href="../SECURITY/#rt-26">RT-26</a> CI grep fence. No Tailwind; styling consumes
+    <a href="../../DECISIONS.md#adr-014">ADR-014</a>'s two-tier tokens natively via Svelte component-scoped
+    <code>&lt;style&gt;</code>.
   </blockquote>
 
   <blockquote>
@@ -106,7 +110,7 @@ flowchart LR
     <thead><tr><th>Component</th><th>Responsibility</th><th>Owner agent</th><th>Exposes</th><th>Consumes</th></tr></thead>
     <tbody>
       <tr>
-        <td><strong>V1 web app</strong><br/>(TypeScript; framework TBD)</td>
+        <td><strong>V1 web app</strong><br/>(SvelteKit + TypeScript)</td>
         <td>All user-facing read/render of the 6 surfaces; settings write endpoints; as-of-date query paths; Plaid webhook handler; <code>SECURITY INVOKER</code> read-composition helper; <code>/internal/pdf-render</code> endpoint</td>
         <td><code>frontend-engineer</code> + <code>backend-engineer</code></td>
         <td>HTTPS UI; REST/RPC API; <code>/api/plaid/webhook</code>; <code>/internal/pdf-render</code></td>
@@ -153,7 +157,7 @@ flowchart LR
   <pre class="mermaid">
 flowchart TB
   subgraph vps["Hetzner cax21 VPS — Coolify"]
-    subgraph appc["V1 web app container — TypeScript (framework TBD)"]
+    subgraph appc["V1 web app container — SvelteKit + TypeScript"]
       ui["UI · 6 surfaces"] --> apil["API / RPC · settings writes · as-of-date paths"]
       wh["Plaid webhook handler"]
       pe["/internal/pdf-render endpoint"]
@@ -213,18 +217,71 @@ flowchart TB
 
 <section id="sec-4" data-section="stack">
   <h2>4. Tech Stack &amp; Rationale</h2>
-  <p class="section-hint">Justify every row. "We know it" is a valid reason — write it down. Mosko's existing assets per <a href="../../DECISIONS.md#adr-002">ADR-002</a> §6.0 (Coolify VPS + Supabase) anchor several choices.</p>
+  <p class="section-hint">Justify every row. "We know it" is a valid reason — write it down. Mosko's existing assets per <a href="../../DECISIONS.md#adr-002">ADR-002</a> §6.0 (Coolify VPS + Supabase) anchor several choices. <strong>Row layout mirrors the <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 17 / Lock 13 hybrid 3-container topology</strong> (three container rows; Styling separated) rather than the conventional Frontend/Backend split — see <a href="../../DECISIONS.md#adr-015">ADR-015</a> for the locked framework + styling choice and <a href="#sec-4-1">§4.1</a> below for the V1 server-source allowlist anchoring <a href="../SECURITY/#rt-26">RT-26</a>.</p>
   <table>
     <thead><tr><th>Layer</th><th>Choice</th><th>Why</th><th>Alternatives considered</th></tr></thead>
     <tbody>
-      <tr><td>Frontend framework</td><td class="tbd">— (Phase 3 decision)</td><td class="tbd">—</td><td class="tbd">—</td></tr>
-      <tr><td>Backend language / framework</td><td class="tbd">—</td><td class="tbd">—</td><td class="tbd">—</td></tr>
+      <tr>
+        <td><strong>V1 web-app container</strong></td>
+        <td><strong>SvelteKit (Svelte 5)</strong> — UI + SSR + Plaid webhook handler + <code>/internal/pdf-render</code> endpoint. Anchored as the V1 web-app container per <a href="../../DECISIONS.md#adr-015">ADR-015</a> + <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 17. Build via Vite; deploy as a small Node server in its Coolify container on Hetzner cax21.</td>
+        <td><strong>SSR-by-default surfaces</strong> (<code>+server.ts</code> / <code>+page.server.ts</code> / <code>+layout.server.ts</code>) satisfy the Lock 13 mod #1 PDF-render contract with no caching/<code>dynamic</code> knob to misconfigure. <strong>Component-scoped <code>&lt;style&gt;</code> + CSS custom properties</strong> consume <a href="../../DECISIONS.md#adr-014">ADR-014</a>'s <code>--color-*</code> → <code>--c-*</code> token taxonomy 1:1 — no transformation layer; closes the <a href="../../DECISIONS.md#adr-012">ADR-012</a> Phase 2 ↔ Phase 3 coupling. <strong><code>src/lib/server/**</code> server-only-module convention</strong> (Vite-enforced at import time) is the structural fence for shared server-side helpers including database-client factories — the natural home for the <code>SUPABASE_SERVICE_ROLE_KEY</code> allowlist anchor (see <a href="#sec-4-1">§4.1</a>). F/CTO ratified on engineering-merit grounds.</td>
+        <td><strong>Next.js (App Router)</strong> — heaviest agent-fluency + starter-template advantage; con: <code>dynamic = "force-dynamic"</code> opt-out knob on PDF-render contract is a footgun; middleware-vs-route split adds Supabase-JWT ceremony. Rejected: structural-engineering disadvantage on PDF-render contract weighed against agent-fluency advantage. <strong>Remix (React Router v7 framework mode)</strong> — Architect's pre-ratify lean; two-primitive loader/action SSR-by-default; preserves React ecosystem; con: mid-rebrand doc fragmentation (Nov 2024 React Router v7 merge); smaller starter pool. Rejected by F/CTO on structural-engineering merit weighing above mental-load / agent-fluency. Long-list rejected at framing (Nuxt / Astro / Express+HTMX / Vite-SPA+Express SSR) — see <a href="../../DECISIONS.md#adr-015">ADR-015</a> Alternatives Considered.</td>
+      </tr>
+      <tr>
+        <td><strong>Ingestion + cron worker container</strong></td>
+        <td><code>pfin_back_etl</code> (<strong>Python</strong> on Coolify; incumbent extended). Hosts monthly-report cron + Plaid scheduled-poll + NAV worker on top of incumbent BLS + FMP ingestion per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 17 / Lock 13. Privileged-context-write surface — all DB writes route through the <code>TenantBoundConnection</code> class (Lock 13 mod #3).</td>
+        <td>Already-in-production incumbent on the same Hetzner cax21 host (BLS CPI-U + FMP ingestion operational); V1 extends rather than greenfields. Python suits cron + ingestion workload (long-running scheduled jobs + reference-data ETL + NAV worker's compute-bound aggregation). Out-of-process from V1 web app so the web app stays small + restart-cheap. Code-layer <a href="../../DECISIONS.md#adr-011">§10</a> fence (<code>TenantBoundConnection</code> + CI grep) per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 4 Privileged-context surfaces bullet; V1 web-app's parallel code-layer fence is <a href="../SECURITY/#rt-26">RT-26</a> (see <a href="#sec-4-1">§4.1</a>).</td>
+        <td><strong>Move ingestion + cron into V1 web app</strong> — rejected at Lock 13. Mixes authenticated-tier + privileged-context-write surfaces in one container; complicates <a href="../SECURITY/#rt-26">RT-26</a> allowlist; gives up existing operational footprint. <strong>Greenfield Node worker</strong> — rejected: no incumbent reuse; doubles runtime count; no unlock vs Python. Full enumeration at <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 17.</td>
+      </tr>
+      <tr>
+        <td><strong>PDF render worker container</strong></td>
+        <td><strong>Node + Puppeteer</strong> (new at V1). Browser-context-per-render hitting V1 web app's <code>/internal/pdf-render</code> URL under a short-lived signed JWT per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 17 / Lock 13 mod #1. <strong>No DB credentials</strong>: no <code>SUPABASE_*</code> env vars; no Postgres client in Dockerfile; only <code>PDF_WORKER_SIGNING_KEY</code> per <a href="../SECURITY/#sd-20">SD-20</a>. <a href="../SECURITY/#rt-22">RT-22</a> verifies absence at PR-review on every Dockerfile change.</td>
+        <td>Preserves Lock 12 mod #1 read-path-only fence by-construction + by-infrastructure. PDF-via-HTTP-through-V1-app under user-session JWT means the worker never touches the database directly; infrastructure-credential-absence layer guarantees a "performance optimization" cannot silently violate the fence under refactor. First catalogued instance of the infrastructure-credential-presence layer in the <a href="../../DECISIONS.md#adr-011">§10</a> defense-in-depth meta-pattern. Puppeteer for browser-fidelity guarantee on the monthly-report HTML render surface (Lock 13 mod #7 hardening battery).</td>
+        <td><strong>PDF in V1 web app process directly</strong> — rejected at Lock 13. Memory-heavy Puppeteer inside user-facing route-handler container; restart + crash-recovery don't compose; collapses infrastructure-credential-absence fence. <strong>Non-Puppeteer HTML-to-PDF</strong> (wkhtmltopdf, WeasyPrint) — rejected: SvelteKit-rendered CSS + browser-runtime layout don't reproduce on non-Chromium engines. <strong>Server-side PDF libraries</strong> (pdfkit, jsPDF) — rejected: §2.6 monthly report is HTML-first; PDF-DSL doubles work + forks visual.</td>
+      </tr>
+      <tr>
+        <td><strong>Styling</strong></td>
+        <td><strong>No CSS utility framework (no Tailwind).</strong> <a href="../../DECISIONS.md#adr-014">ADR-014</a>'s two-tier CSS-custom-properties token taxonomy (<code>--color-*</code> primitives → <code>--c-*</code> semantic aliases) consumed natively via Svelte component-scoped <code>&lt;style&gt;</code> blocks. <code>tokens.css</code> imported globally in <code>src/app.css</code>; component styles use <code>var(--c-*)</code> directly.</td>
+        <td><strong>1:1 fit with <a href="../../DECISIONS.md#adr-014">ADR-014</a></strong> — Svelte's idiomatic styling pattern IS component-scoped CSS + CSS custom properties. <strong>No transformation layer</strong> (no Style Dictionary, no Tailwind <code>@theme</code> round-trip, no design-token JSON intermediate) — framework gets out of the way. Avoids double-bookkeeping (utility classes + CSS vars). Closes Phase 2 Step 10 (tokens-as-code): <code>tokens.css</code> IS the consumption format.</td>
+        <td><strong>Tailwind CSS</strong> — rejected. Re-encodes <a href="../../DECISIONS.md#adr-014">ADR-014</a>'s tokens as utility classes; requires <code>@theme</code> round-trip from <code>--c-*</code> (transformation + drift) or hand-mirroring (double-bookkeeping). No upside for a ~45-screen interactive app. <strong>CSS-in-JS</strong> (Emotion / styled-components) — rejected at framing: wrong-runtime for SvelteKit; scoped-CSS is the framework-native alternative.</td>
+      </tr>
       <tr><td>Data store</td><td>Supabase / Postgres</td><td>Existing asset; multi-tenant RLS native; per <a href="../../DECISIONS.md#adr-002">ADR-002</a> §6.0</td><td class="tbd">—</td></tr>
       <tr><td>Auth</td><td class="tbd">— (Phase 3 decision; Supabase Auth candidate)</td><td class="tbd">—</td><td class="tbd">—</td></tr>
       <tr><td>Hosting / runtime</td><td>Coolify VPS</td><td>Existing asset; self-hosted control; per ADR-002 §6.0</td><td class="tbd">—</td></tr>
       <tr><td>Observability</td><td class="tbd">— (Phase 3 decision)</td><td class="tbd">—</td><td class="tbd">—</td></tr>
     </tbody>
   </table>
+
+  <h3 id="sec-4-1">4.1 V1 server-source surface — RT-26 allowlist anchor</h3>
+  <p>The V1 web-app container's server-side source surface is enumerated below as the <strong>allowlist of permitted surfaces</strong> for the <a href="../SECURITY/#rt-26">RT-26</a> grep fence. The fence searches the V1 web-app source tree (<code>src/**</code> plus the repo-root config files — see below) for any reference to <code>SUPABASE_SERVICE_ROLE_KEY</code>; references in files matching an allowlist glob are permitted, all others trip the grep at PR-time (fail-closed). The structural consequence: universal loaders (<code>+page.ts</code> / <code>+layout.ts</code>) and any other non-allowlisted surface are by-construction-banned from referencing service_role — closing the client-bundle-leak failure mode by the same fence that closes the RLS-bypass failure mode.</p>
+  <p>RT-26 is a <strong>V1-SHIP-BLOCK + HIGH severity</strong> posture obligation per <a href="../SECURITY/#sec-4-2">SECURITY §4.2</a>; V1 cannot ship with the fence absent or unenforced over this surface (parallel to <a href="../SECURITY/#rt-05">RT-05</a>'s hard-line shape; critical-severity reserved for credential-class admission boundaries per the §4.5 rubric). The fence is <strong>allowlist-shaped (not wrapping-shaped)</strong> — it enumerates permitted surfaces by file path rather than wrapping the env-var reference in a sanctioned helper. Wrapping-shaped fences silently fail-open when a new server route lands under time pressure and reaches for the raw env var; allowlist-shaped fences fail-closed because any new reference outside the allowlist trips the grep at PR-time. Adding new allowlist entries requires Sec-consult + ADR amendment at the surface-introducing lock.</p>
+
+  <table>
+    <thead><tr><th>Glob</th><th>What it is</th><th>Why it's audit-relevant</th></tr></thead>
+    <tbody>
+      <tr><td><code>src/routes/**/+server.ts</code></td><td>Route handlers (REST/JSON endpoints) — e.g., <code>/api/plaid/webhook</code>, <code>/internal/pdf-render</code></td><td>Privileged-context-write surfaces live here (Plaid webhook handler is the canonical first allowlist entry per <a href="../SECURITY/#sec-4-2">SECURITY §4.2</a>); high-risk for service_role drift under a "make the failing query work" refactor.</td></tr>
+      <tr><td><code>src/routes/**/+page.server.ts</code></td><td>Per-route SSR data loading</td><td>Reads under the user session's <code>authenticated</code>-tier JWT; service_role would silently break tenant isolation.</td></tr>
+      <tr><td><code>src/routes/**/+layout.server.ts</code></td><td>Layout-level SSR data + auth gates</td><td>Same RLS-enforcement profile as <code>+page.server.ts</code>; covers auth-gate composition (the natural "I'll just bypass for now" failure surface).</td></tr>
+      <tr><td><code>src/hooks.server.ts</code></td><td>Centralized Supabase session forwarding + auth refresh</td><td>Single chokepoint for the user-session JWT lifecycle; any <code>SUPABASE_SERVICE_ROLE_KEY</code> reference here would compromise every request.</td></tr>
+      <tr><td><code>src/lib/server/**/*.ts</code></td><td>SvelteKit server-only-module convention (Vite-enforced at import time)</td><td>Natural home for shared server-side helpers including database-client factories — <strong>the surface where service_role drift is most likely under a "DRY up the codebase" refactor</strong> if uncovered by the fence (called out at <a href="../../DECISIONS.md#adr-015">ADR-015</a> Decision 1).</td></tr>
+    </tbody>
+  </table>
+
+  <p><strong>Repo-root build-config exclusion.</strong> Repo-root build-config files (<code>vite.config.{ts,js}</code>, <code>svelte.config.js</code>) are <strong>NOT</strong> on the allowlist; any reference to <code>SUPABASE_SERVICE_ROLE_KEY</code> in these surfaces trips the fence (build-time injection into the client bundle is the failure mode the exclusion catches). These files are inside the V1 web-app source tree but outside <code>src/**</code>; the fence covers them under its <code>src/**</code> + repo-root scan even though they don't match an allowlist glob.</p>
+
+  <p><strong>Worker-entry codepaths covered under separate fence layers</strong> (named here for completeness; not in the V1 web-app RT-26 grep scope):</p>
+  <ul>
+    <li><strong><code>pfin_back_etl</code></strong> (Python container) — uses the <code>TenantBoundConnection</code> class code-layer fence per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 17 / Lock 13; CI grep enforces the class as the only allowed Postgres-client entry point (no raw <code>psycopg2.connect()</code> outside the class). Code-layer §10 fence per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 4 Privileged-context surfaces bullet (parallel to RT-26's V1-web-app code-layer fence; not in Decision 4's catalogued-instance numbered list — that list catalogues <a href="../SECURITY/#rt-22">RT-22</a> first, <a href="../SECURITY/#rt-26">RT-26</a> second).</li>
+    <li><strong>Node PDF worker container</strong> — covered by the <a href="../SECURITY/#rt-22">RT-22</a> infrastructure-credential-presence fence: no <code>SUPABASE_*</code> env vars; no Postgres client in Dockerfile; only <code>PDF_WORKER_SIGNING_KEY</code> per <a href="../SECURITY/#sd-20">SD-20</a>. RT-22 verifies absence at PR-review on every Dockerfile change. PDF worker reaches the data layer <strong>only</strong> via the V1 web-app's <code>/internal/pdf-render</code> endpoint under a short-lived signed JWT (Lock 13 mod #1 contract — preserves Lock 12 mod #1 read-path-only fence by-construction).</li>
+  </ul>
+
+  <p><strong>Three-layer §10 defense composition</strong> (per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 4 + <a href="../SECURITY/#sec-4-2">SECURITY §4.2</a>):</p>
+  <ol>
+    <li><strong>Code-layer</strong> — this RT-26 allowlist CI grep fence on the V1 web-app server-source surface enumerated above.</li>
+    <li><strong>JWT-shape-layer</strong> — RLS predicate <code>users_id = auth.uid()</code> bound under <code>authenticated</code> tier (existing).</li>
+    <li><strong>Infrastructure-credential-presence-layer</strong> — Phase 3 ops bounds <code>SUPABASE_SERVICE_ROLE_KEY</code> runtime presence to allowlisted surfaces.</li>
+  </ol>
+  <p>All three layers required; failure of any one is recoverable iff the other two hold. RT-26 enforcement details — fence implementation, allowlist registry location, PR-time grep trigger — land at Phase 5 (CI pipeline build).</p>
 </section>
 
 <section id="sec-5" data-section="topology">
