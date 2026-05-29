@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mosko-fintech — §2.3 Cash Flow (styled)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="tokens.css?v=11">
+<link rel="stylesheet" href="screen.css?v=11">
+<link rel="stylesheet" href="review.css?v=11">
+</head>
+<body>
+<div class="controlbar">
+  <span class="lbl">Locked</span>
+  <span class="lockchip">Palette B refined</span>
+  <span class="lockchip">Inter + JetBrains · Hybrid</span>
+  <span class="lockchip">Attn = Canary #FFEF00</span>
+  <span class="lbl" style="margin-left:10px">Theme</span>
+  <button data-set="theme" data-val="light" class="on">Light</button>
+  <button data-set="theme" data-val="dark">Dark</button>
+  <span class="ver">Design System <strong>v11.0</strong> · theme <strong id="now-th">light</strong></span>
+</div>
+<div class="wrap">
+  <nav class="toc">
+    <a href="index.html">Design System + §2.1</a>
+    <a href="2.2-asset-allocation.html">§2.2 Allocation</a>
+    <a class="cur" href="2.3-cash-flow.html">§2.3 Cash Flow</a>
+    <a href="2.5-estimated-taxes.html">§2.5 Taxes</a>
+    <a href="2.6-monthly-report.html">§2.6 Report</a>
+  </nav>
+  <div class="intro">
+    <h2>§2.3 Cash Flow — styled (P6 table-anchored)</h2>
+    <div class="fence"><strong>§2.3 non-goal fence (the source cluster):</strong> the income/expense <code>target-caption</code> is a <em>static reference number</em> only — NO progress bar, over/under zone, variance delta, color-coding vs actual, or chart target-line. The category×period table IS the monthly-review surface. As-of toggle (§2.3.3) is the one client-controlled date.</div>
+  </div>
+
+  <div class="sec-h">§2.3 Cash Flow surface</div>
+  <div class="app">
+    <nav class="sidebar">
+      <div class="brandslot">the · trust</div>
+      <div class="nav-item">Accounts</div>
+      <div class="nav-item">Net Worth</div>
+      <div class="nav-item">Asset Allocation</div>
+      <div class="nav-item active">Cash Flow</div>
+      <div class="nav-item">Estimated Taxes</div>
+      <div class="nav-item">Monthly Report</div>
+      <div class="nav-item divider">Settings</div>
+      <div class="collapse">&lsaquo; collapse</div>
+    </nav>
+    <div class="main">
+      <div class="topbar"><span class="search-ph">Search — reserved (V1 placeholder)</span><span class="inbox">Inbox</span></div>
+      <div class="banner-absent"></div>
+      <div class="content">
+        <h2 class="surface-title">Cash Flow</h2>
+
+        <div class="region">
+          <span class="region-label">cashflow-rollup · 2.3.2 — cross-account, primary</span>
+
+          <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:var(--space-1)">
+            <strong>Income</strong>
+            <span class="target-caption">Target reference (annual): <span class="ref-value">$240,000</span> <span class="muted">— static; no variance/progress</span></span>
+          </div>
+          <table class="tbl">
+            <thead><tr><th>Sub-Cat</th><th class="num emphasis-col">Month</th><th class="num">Q1</th><th class="num">Q2</th><th class="num">Q3</th><th class="num">Q4</th><th class="num">YTD</th></tr></thead>
+            <tbody>
+              <tr><td>Salary</td><td class="num emphasis-col">$20,000</td><td class="num">$60,000</td><td class="num">$60,000</td><td class="num">$60,000</td><td class="num">&mdash;</td><td class="num">$180,000</td></tr>
+              <tr class="foot"><td>Total</td><td class="num emphasis-col">$20,000</td><td class="num">$60,000</td><td class="num">$60,000</td><td class="num">$60,000</td><td class="num">&mdash;</td><td class="num">$180,000</td></tr>
+            </tbody>
+          </table>
+
+          <div style="display:flex;align-items:baseline;justify-content:space-between;margin:var(--space-4) 0 var(--space-1)">
+            <strong>Expenses</strong>
+            <span class="target-caption">Target reference (monthly): <span class="ref-value">$9,500</span> <span class="muted">— static</span></span>
+          </div>
+          <table class="tbl">
+            <thead><tr><th>Sub-Cat</th><th class="num emphasis-col">Month</th><th class="num">Q1</th><th class="num">Q2</th><th class="num">Q3</th><th class="num">Q4</th><th class="num">YTD</th></tr></thead>
+            <tbody>
+              <tr class="stale-row"><td>Groceries</td><td class="num emphasis-col">$1,240 <span class="stale-tag" title="Chase needs re-authentication.">STALE</span></td><td class="num">$3,520</td><td class="num">$3,610</td><td class="num">$3,480</td><td class="num">&mdash;</td><td class="num">$10,610</td></tr>
+              <tr><td>Utilities</td><td class="num emphasis-col">$380</td><td class="num">$1,150</td><td class="num">$1,090</td><td class="num">$1,210</td><td class="num">&mdash;</td><td class="num">$3,450</td></tr>
+              <tr class="foot"><td>Total</td><td class="num emphasis-col">$9,180</td><td class="num">$27,400</td><td class="num">$26,900</td><td class="num">$27,800</td><td class="num">&mdash;</td><td class="num">$82,100</td></tr>
+            </tbody>
+          </table>
+          <p class="muted" style="font-size:var(--fs-small)"><strong>Non-goal fence:</strong> targets are reference numbers in the captions only — no progress bar / over-under zone / variance delta / color-coding vs actual. <a class="link" href="#">Edit targets in Settings &rarr;</a> (P5)</p>
+        </div>
+
+        <div class="region">
+          <span class="region-label">cashflow-account-drilldown · 2.3.3 — per-account + as-of toggle</span>
+          <div style="display:flex;gap:var(--space-4);align-items:center;flex-wrap:wrap">
+            <label style="font-size:var(--fs-small);color:var(--c-text-secondary)">Account <span class="select" style="margin-left:6px">Fidelity Brokerage</span></label>
+            <label style="font-size:var(--fs-small);color:var(--c-text-secondary)">As-of date <span class="field-input" style="margin-left:6px;min-width:120px">today</span></label>
+            <span class="muted" style="font-size:var(--fs-small)">the one client-toggle as-of surface — default today; pick a historical date for year-end reconciliation (2015-12-01 … today; no future)</span>
+          </div>
+          <p class="muted" style="font-size:var(--fs-small)">Sections: <strong>Income · OtherCF · Expenses</strong> (same Month / Q1–Q4 / YTD columns). OtherCF renders here (not in the rollup). No targets here.</p>
+        </div>
+
+        <div class="region">
+          <span class="region-label">historical-expenditures-chart · 2.3.4</span>
+          <div class="chart">
+            <div class="legend-line"><span class="swatch-line nominal"></span>monthly expense &nbsp;<span class="swatch-line infl"></span>12-mo rolling avg</div>
+            <div class="spark">
+              <div class="bar" style="height:48%"></div><div class="bar" style="height:62%"></div><div class="bar" style="height:40%"></div>
+              <div class="bar" style="height:71%"></div><div class="bar" style="height:55%"></div><div class="bar" style="height:46%"></div>
+              <div class="bar" style="height:64%"></div><div class="bar" style="height:82%"></div><div class="bar" style="height:51%"></div>
+              <div class="bar" style="height:44%"></div><div class="bar" style="height:60%"></div><div class="bar" style="height:49%"></div>
+            </div>
+          </div>
+          <p class="muted" style="font-size:var(--fs-small)"><strong>NO target reference line on the chart</strong> (non-goal fence). Inflation-normalized to today's $ (same CPI-U basis as §2.1.2); expenses-only.</p>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+<script src="review.js?v=11"></script>
+</body>
+</html>

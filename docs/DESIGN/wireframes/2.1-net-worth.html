@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wireframes (LOW-FI): §2.1 Net Worth</title>
+<link rel="stylesheet" href="wireframe.css">
+</head>
+<body>
+
+<h1>§2.1 Net Worth <span class="decision-tag">LOW-FI</span> <span class="decision-tag">P2</span></h1>
+<p class="toc"><strong>Wireframes:</strong> <a href="index.html">Shell + §2.4</a> · <a href="2.1-net-worth.html">§2.1 Net Worth</a> · <a href="2.2-asset-allocation.html">§2.2 Allocation</a> · <a href="2.3-cash-flow.html">§2.3 Cash Flow</a> · <a href="2.5-estimated-taxes.html">§2.5 Taxes</a> · <a href="2.6-monthly-report.html">§2.6 Report</a></p>
+<p class="note">Low-fi conventions + legend: see <a href="index.html">Shell page</a>. Grayscale/structure only; Visual owns color/type/spacing later.</p>
+
+<div class="legend">
+  <strong>Decisions realized here:</strong>
+  <ul>
+    <li><span class="decision-tag">P2</span> <strong>dense single-canvas, number-first</strong> — one scroll: headline+deltas → 60-mo trend → composition foot. <em>No within-surface sub-tabs.</em></li>
+    <li><strong>3 distinct freshness signals</strong> (kept separate): <code>nav-asof-timestamp</code> (NAV materialization recency) · per-aggregation <code>stale-data-marker</code> (account staleness) · the <strong>incomplete-NAV "not yet computed"</strong> state (tax components from §2.5 unset).</li>
+    <li><strong>Value-semantics:</strong> NAV is owned ONLY here; per-account values are gross; tax adjustment happens only at the composition foot.</li>
+    <li>Inflation overlay <strong>co-drawn</strong> (not a toggle); horizons/window/reference-dates fixed; NO scope filter.</li>
+  </ul>
+</div>
+
+<h2>Net Worth surface — dense single-canvas (in shell frame)</h2>
+<div class="shell">
+  <div class="sidebar">
+    <div class="brandslot">[owner / app label]</div>
+    <div class="nav-item">Accounts</div>
+    <div class="nav-item active">Net Worth</div>
+    <div class="nav-item">Asset Allocation</div>
+    <div class="nav-item">Cash Flow</div>
+    <div class="nav-item">Estimated Taxes</div>
+    <div class="nav-item">Monthly Report</div>
+    <div class="nav-item divider">Settings</div>
+  </div>
+  <div class="main">
+    <div class="topbar"><span class="search-ph">search — placeholder (V1 reserved; behavior TBD)</span><span class="inbox">inbox (0)</span></div>
+    <div class="banner-absent">reauth-staleness-banner — absent (healthy)</div>
+    <div class="content">
+
+      <div class="region"><span class="region-label">nav-headline (2.1.1)</span>
+        <div style="font-size:22px;font-weight:700">NAV &nbsp; $X,xxx,xxx</div>
+        <div class="comp-label">nav-asof-timestamp: "NAV as of 2026-05-27 06:10" — materialization recency (distinct from staleness)</div>
+        <div class="note">= Gross Asset Value − Debt − Realized Tax Liab − Unrealized Tax Liab (four-component; traceable in composition below)</div>
+        <span class="state-note">default / stale(if any input account stale) / incomplete("NAV incomplete — tax components not yet computed" when §2.5 brackets unset)</span>
+      </div>
+
+      <div class="two-col">
+        <div class="region"><span class="region-label">nav-delta-panel (2.1.3)</span>
+          <table class="wf">
+            <tr><th>Horizon</th><th class="num">$ Δ</th><th class="num">% Δ</th><th class="num">Infl-Adj</th></tr>
+            <tr><td>Month</td><td class="num">+$x</td><td class="num">+x%</td><td class="num">—</td></tr>
+            <tr><td>YTD</td><td class="num">+$x</td><td class="num">+x%</td><td class="num">—</td></tr>
+            <tr><td>1-Year</td><td class="num">+$x</td><td class="num">+x%</td><td class="num">+x%</td></tr>
+            <tr><td>3-Year</td><td class="num">+$x</td><td class="num">+x%</td><td class="num">+x%</td></tr>
+            <tr><td>5-Year</td><td class="num">+$x</td><td class="num">+x%</td><td class="num">+x%</td></tr>
+          </table>
+          <span class="state-note">fixed 5 horizons · IA column only 1/3/5-Yr · cell empty="insufficient history" for 3/5-Yr pre-import</span>
+        </div>
+        <div class="region"><span class="region-label">nav-reference-dates (2.1.4)</span>
+          <table class="wf">
+            <tr><th>Reference</th><th class="num">NAV (nominal)</th><th class="num">NAV — Prior Yr $</th></tr>
+            <tr><td>This Month</td><td class="num">$x</td><td class="num">$x</td></tr>
+            <tr><td>Prior Month</td><td class="num">$x</td><td class="num">$x</td></tr>
+            <tr><td>Prior Year-End</td><td class="num">$x</td><td class="num">$x</td></tr>
+          </table>
+          <span class="state-note">fixed 3 dates · two columns side-by-side (prior-Yr-$ NOT behind a toggle)</span>
+        </div>
+      </div>
+
+      <div class="region"><span class="region-label">nav-trend-chart (2.1.2)</span>
+        <div class="comp">
+          [ line chart placeholder — 60-month rolling window ]<br>
+          nominal NAV: &nbsp;▁▂▂▃▄▄▅▆▆▇<br>
+          inflation-adj (CPI-U): ▁▁▂▂▂▃▃▄▄▅ &nbsp; <span class="comp-label">drawn SIMULTANEOUSLY (not a toggle); visually distinct line</span><br>
+          x: 60 months &nbsp;·&nbsp; granularity: <span class="chip">• monthly</span><span class="chip muted">weekly</span><span class="chip muted">daily</span>
+        </div>
+        <span class="state-note">granularity toggle: monthly(default)/weekly/daily · drill into inflection → finer view · CPI-U-unavailable → inflation line omitted w/ note, nominal still renders · stale segment marked</span>
+      </div>
+
+      <div class="region"><span class="region-label">nav-composition-table (2.1.5) — the build-up; NAV owned here</span>
+        <table class="wf">
+          <tr><th>Account / group</th><th class="num">Current value (gross)</th><th class="num">Unrealized G/L</th></tr>
+          <tr><td><strong>▸ Investment</strong> (expand → accounts)</td><td class="num">$x</td><td class="num">+$x</td></tr>
+          <tr class="stale-row"><td>&nbsp;&nbsp;Chase (depository)</td><td class="num">$x <span class="stale-tag">STALE</span></td><td class="num">—</td></tr>
+          <tr><td><strong>▸ Real Estate</strong> (own group)</td><td class="num">$x</td><td class="num">—</td></tr>
+          <tr class="subtotal"><td>Total Non-RE</td><td class="num">$x</td><td class="num"></td></tr>
+          <tr class="subtotal"><td>Gross Total</td><td class="num">$x</td><td class="num"></td></tr>
+          <tr class="subtotal"><td>Debt</td><td class="num">−$x</td><td class="num"></td></tr>
+          <tr class="subtotal"><td>Realized Tax Liab <span class="comp-label">(from §2.5)</span></td><td class="num">−$x</td><td class="num"></td></tr>
+          <tr class="subtotal"><td>Unrealized Tax Liab <span class="comp-label">(from §2.5)</span></td><td class="num">−$x</td><td class="num"></td></tr>
+          <tr class="foot"><td>Net Assets Value (NAV)</td><td class="num">$X,xxx,xxx</td><td class="num"></td></tr>
+        </table>
+        <span class="state-note">category expand/collapse (one level) · account-row → Account Detail (§2.4) · stale rows + subtotals/NAV marked when an input is stale</span>
+        <p class="note"><strong>Incomplete-NAV variant:</strong> when §2.5 brackets are unset, the two Tax-Liab rows render "not yet computed" and the NAV foot is marked <em>incomplete</em> — never silently $0 (the §2.5↔§2.1 bridge; remedy = set brackets in Settings).</p>
+      </div>
+
+    </div>
+  </div>
+</div>
+<p class="note">END §2.1. Reuses shell + wireframe.css. No color/type/spacing decisions made.</p>
+
+</body>
+</html>

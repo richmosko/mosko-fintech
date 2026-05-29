@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wireframes (LOW-FI): §2.3 Cash Flow</title>
+<link rel="stylesheet" href="wireframe.css">
+</head>
+<body>
+
+<h1>§2.3 Spending &amp; Income (Cash Flow) <span class="decision-tag">LOW-FI</span> <span class="decision-tag">P6</span></h1>
+<p class="toc"><strong>Wireframes:</strong> <a href="index.html">Shell + §2.4</a> · <a href="2.1-net-worth.html">§2.1 Net Worth</a> · <a href="2.2-asset-allocation.html">§2.2 Allocation</a> · <a href="2.3-cash-flow.html">§2.3 Cash Flow</a> · <a href="2.5-estimated-taxes.html">§2.5 Taxes</a> · <a href="2.6-monthly-report.html">§2.6 Report</a></p>
+<p class="note">Low-fi conventions: see <a href="index.html">Shell page</a>.</p>
+
+<div class="legend"><strong>Decisions realized here:</strong>
+  <ul>
+    <li><span class="decision-tag">P6</span> category×period <strong>table anchored</strong> as primary; drill-down + Historical Expenditures secondary.</li>
+    <li><strong>NON-GOAL fence (visible):</strong> target captions are <strong>static reference numbers</strong> — NO progress bar / over-under / variance / target-line (the §7A Visual constraint applies to the HTML too).</li>
+    <li>§2.3.3 per-account drill-down is the <strong>one client-toggle as-of-date surface</strong>; targets edited in Settings (P5); OtherCF in drill-down only (not rollup); AcctSetup in neither.</li>
+  </ul>
+</div>
+
+<h2>Cash Flow surface — rollup anchored (in shell frame)</h2>
+<div class="shell">
+  <div class="sidebar">
+    <div class="brandslot">[owner / app label]</div>
+    <div class="nav-item">Accounts</div>
+    <div class="nav-item">Net Worth</div>
+    <div class="nav-item">Asset Allocation</div>
+    <div class="nav-item active">Cash Flow</div>
+    <div class="nav-item">Estimated Taxes</div>
+    <div class="nav-item">Monthly Report</div>
+    <div class="nav-item divider">Settings</div>
+  </div>
+  <div class="main">
+    <div class="topbar"><span class="search-ph">search — placeholder (V1 reserved; behavior TBD)</span><span class="inbox">inbox (0)</span></div>
+    <div class="banner-absent">reauth-staleness-banner — absent (healthy)</div>
+    <div class="content">
+
+      <div class="region"><span class="region-label">cashflow-rollup (2.3.2) — cross-account, primary</span>
+        <p><strong>Income</strong> &nbsp; <span class="comp-label">caption: target reference (annual): $X — STATIC, no variance/progress</span></p>
+        <table class="wf">
+          <tr><th>Sub-Cat</th><th class="num emphasis-col">Month</th><th class="num">Q1</th><th class="num">Q2</th><th class="num">Q3</th><th class="num">Q4</th><th class="num">YTD</th></tr>
+          <tr><td>Salary</td><td class="num emphasis-col">$x</td><td class="num">$x</td><td class="num">$x</td><td class="num">$x</td><td class="num">$x</td><td class="num">$x</td></tr>
+          <tr class="foot"><td>Total</td><td class="num emphasis-col">$x</td><td class="num">$x</td><td class="num">$x</td><td class="num">$x</td><td class="num">$x</td><td class="num">$x</td></tr>
+        </table>
+        <p><strong>Expenses</strong> &nbsp; <span class="comp-label">caption: target reference (monthly): $X — STATIC</span></p>
+        <table class="wf">
+          <tr><th>Sub-Cat</th><th class="num emphasis-col">Month</th><th class="num">Q1</th><th class="num">Q2</th><th class="num">Q3</th><th class="num">Q4</th><th class="num">YTD</th></tr>
+          <tr class="stale-row"><td>Groceries</td><td class="num emphasis-col">$x <span class="stale-tag">STALE</span></td><td class="num">$x</td><td class="num">$x</td><td class="num">$x</td><td class="num">$x</td><td class="num">$x</td></tr>
+          <tr class="foot"><td>Total</td><td class="num emphasis-col">$x</td><td class="num">$x</td><td class="num">$x</td><td class="num">$x</td><td class="num">$x</td><td class="num">$x</td></tr>
+        </table>
+        <p class="note"><strong>NON-GOAL fence:</strong> targets are reference numbers in the captions only. NO progress bar, NO over/under zone, NO variance delta, NO color-coding vs actual. <span class="btn">Edit targets in Settings →</span> (P5)</p>
+        <span class="state-note">Month column emphasized · Sub-Cats flat (2-section layout = Cat structure) · OtherCF NOT in rollup · AcctSetup in neither · stale rows + Totals marked</span>
+      </div>
+
+      <div class="region"><span class="region-label">cashflow-account-drilldown (2.3.3) — per-account + as-of toggle</span>
+        <p>Account: <span class="field sel">Fidelity Brokerage</span> &nbsp;·&nbsp; As-of date: <span class="field">today</span> <span class="comp-label">the ONE client-toggle as-of surface — default today; pick a historical date for year-end reconciliation</span></p>
+        <p>Sections: <strong>Income · OtherCF · Expenses</strong> (3 sections; same Month/Q1–Q4/YTD columns). <em>OtherCF renders here (not in rollup). No targets here.</em></p>
+        <span class="state-note">as-of: today(default)/historical-reconstruction("as of &lt;date&gt;" label; bounds 2015-12-01…today; no future) · empty/error per invalid date</span>
+      </div>
+
+      <div class="region"><span class="region-label">historical-expenditures-chart (2.3.4)</span>
+        <div class="comp">
+          [ bar chart placeholder — 5-year monthly expense bars ]<br>
+          bars: ▃▅▂▆▄▃▅▇▄▃ &nbsp;·&nbsp; 12-mo rolling avg line: ▄▄▄▅▅▅▄▄ (drawn simultaneously)<br>
+          inflation-normalized to today's $ (same CPI-U basis as §2.1.2) · expenses-only (no income-over-time)
+        </div>
+        <p class="note"><strong>NO target reference line on the chart</strong> (V2+ anyway; called out so it isn't added as polish — non-goal fence).</p>
+        <span class="state-note">insufficient history → truncate; rolling line starts at ≥12 mo · CPI-U-unavailable → nominal + note · recent stale bars marked</span>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<p class="note">END §2.3. Transaction classification (F-2.3.A) reuses §2.4 Transaction-Entry + a per-row Reclassify affordance (Plaid-suggested default + recurring-vendor inference; seeded buckets). Per F/CTO: no review queue — the rollup IS the review surface.</p>
+</body>
+</html>

@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mosko-fintech — Phase 2 Wireframes (LOW-FI): Shell + §2.4</title>
+<link rel="stylesheet" href="wireframe.css">
+</head>
+<body>
+
+<h1>mosko-fintech — Phase 2 Step 4 Wireframes <span class="decision-tag">LOW-FI</span></h1>
+<p><strong>Scope:</strong> shared app SHELL + all 6 clusters (this page = shell + §2.4).</p>
+<p class="toc"><strong>Wireframes:</strong> <a href="index.html">Shell + §2.4</a> · <a href="2.1-net-worth.html">§2.1 Net Worth</a> · <a href="2.2-asset-allocation.html">§2.2 Allocation</a> · <a href="2.3-cash-flow.html">§2.3 Cash Flow</a> · <a href="2.5-estimated-taxes.html">§2.5 Taxes</a> · <a href="2.6-monthly-report.html">§2.6 Report</a></p>
+
+<div class="legend">
+  <strong>This is a LOW-FI / wireframe-grade mockup — layout &amp; structure only.</strong>
+  <ul>
+    <li>Grayscale only · system font · boxes + labels + visible region borders. <em>No color palette, no type scale, no spacing/shadow polish, no real icons</em> — the Visual Designer owns all of that at Steps 6–11. Nothing here locks a visual decision.</li>
+    <li><code>dashed box</code> = layout <strong>region</strong>; <code>solid box</code> = a named <strong>component</strong> (vocabulary from the locked flow docs). Region/component names appear as small monospace labels.</li>
+    <li><span class="state-note">default / hover / pressed / loading / disabled / empty / stale / error</span> appear as notes near components (no live interactivity).</li>
+    <li><strong>STALE</strong> = the D1 marker (a value derived from an account in re-auth/credential-error). Shown grayscale as a hatch + <span class="stale-tag">STALE</span> tag — Visual will style it later; here it's just "structurally distinct from the global banner."</li>
+    <li>Decisions realized: <span class="decision-tag">P1</span> sidebar · <span class="decision-tag">P4</span> conditional banner · <span class="decision-tag">P5</span> settings (no inline editing) · <span class="decision-tag">D1</span> per-aggregation stale marker · <span class="decision-tag">P3</span> hybrid classification. (P2/P6 land in §2.1/§2.3 later.)</li>
+    <li><code>global-search</code> kept as a <strong>labeled placeholder slot</strong> in the top-bar (F/CTO call) — reserved chrome space; behavior/scope TBD, no §2.x flow defines its search semantics yet. Not a built feature.</li>
+  </ul>
+</div>
+
+<div class="toc">
+  <strong>Sections:</strong>
+  <a href="#shell-healthy">Shell · healthy</a> ·
+  <a href="#shell-attention">Shell · attention (P4 banner)</a> ·
+  <a href="#rail">Sidebar · collapsed rail</a> ·
+  <a href="#settings">Settings (P5)</a> ·
+  <a href="#hub">Accounts Hub</a> ·
+  <a href="#detail">Account Detail</a> ·
+  <a href="#setup">Account Setup</a> ·
+  <a href="#queue">Classification Queue (P3)</a> ·
+  <a href="#classify">Symbol Classification</a> ·
+  <a href="#manual">Add Manual Account</a> ·
+  <a href="#txn">Transaction Entry</a> ·
+  <a href="#reconcile">Reconcile</a> ·
+  <a href="#inactive">Mark Plaid Inactive</a> ·
+  <a href="#misc">Smaller surfaces</a>
+</div>
+
+<!-- ============================= SHELL · HEALTHY ============================= -->
+<h2 id="shell-healthy">1. App Shell — healthy state <span class="decision-tag">P1</span> <span class="decision-tag">P4 absent</span></h2>
+<p class="note">P4 banner is CONDITIONAL — absent (zero footprint) when all connections are healthy → clean chrome. The dashed strip below the top-bar shows where it WOULD appear.</p>
+<div class="shell">
+  <div class="sidebar">
+    <div class="brandslot">[owner / app label]</div>
+    <div class="nav-item active">Accounts</div>
+    <div class="nav-item">Net Worth</div>
+    <div class="nav-item">Asset Allocation</div>
+    <div class="nav-item">Cash Flow</div>
+    <div class="nav-item">Estimated Taxes</div>
+    <div class="nav-item">Monthly Report</div>
+    <div class="nav-item divider">Settings</div>
+    <div class="collapse">‹ collapse</div>
+  </div>
+  <div class="main">
+    <div class="topbar"><span class="search-ph">search — placeholder (V1 reserved; behavior TBD)</span><span class="inbox">inbox (0)</span></div>
+    <div class="banner-absent">reauth-staleness-banner — ABSENT (no account needs re-auth). Zero layout footprint when healthy.</div>
+    <div class="content">
+      <div class="region"><span class="region-label">content region</span>
+        <p style="color:#888">[active surface renders here — e.g., Accounts Hub, §6]</p>
+      </div>
+    </div>
+  </div>
+</div>
+<span class="state-note">app-sidebar: default / hover / pressed(active) / collapsed · nav-item attention-dot modifier when a surface has an unresolved condition</span>
+<span class="state-note">notifications-inbox: empty(no badge) / has-items(badge) / open(panel) — distinct from the P4 banner (task queue vs integrity condition)</span>
+
+<!-- ============================= SHELL · ATTENTION ============================= -->
+<h2 id="shell-attention">2. App Shell — attention state (P4 banner present + D1 markers) <span class="decision-tag">P4</span> <span class="decision-tag">D1</span></h2>
+<p class="note">≥1 account in re-auth/credential-error → the banner appears above content, persists across every surface until resolved, is non-dismissible. Content aggregations sourced from the affected accounts also carry per-aggregation STALE markers (D1) — global signal (banner) + local signal (marker) render together.</p>
+<div class="shell">
+  <div class="sidebar">
+    <div class="brandslot">[owner / app label]</div>
+    <div class="nav-item active">Accounts <span class="dot">•</span></div>
+    <div class="nav-item">Net Worth</div>
+    <div class="nav-item">Asset Allocation</div>
+    <div class="nav-item">Cash Flow</div>
+    <div class="nav-item">Estimated Taxes</div>
+    <div class="nav-item">Monthly Report <span class="dot">•</span></div>
+    <div class="nav-item divider">Settings</div>
+    <div class="collapse">‹ collapse</div>
+  </div>
+  <div class="main">
+    <div class="topbar"><span class="search-ph">search — placeholder (V1 reserved; behavior TBD)</span><span class="inbox">inbox (2)</span></div>
+    <div class="banner">
+      <span class="b-actions"><span class="btn">Review accounts →</span></span>
+      <span class="b-title">[!] 2 accounts need re-authentication</span>
+      &nbsp; <span class="chip">Fidelity — re-auth</span> <span class="chip">Chase — re-auth</span>
+      <span class="comp-label">component: reauth-staleness-banner (P4)</span>
+    </div>
+    <div class="content">
+      <div class="region"><span class="region-label">content region</span>
+        <p>Example aggregation row sourced partly from Fidelity:</p>
+        <div class="comp">Equity → US-Index_Non_Sector &nbsp; $alloc 21.4% <span class="stale-tag">STALE</span>
+          <span class="comp-label">component: stale-data-marker (D1) — per-aggregation, hatch + tag</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<span class="state-note">reauth-staleness-banner: absent(healthy, default) / present-single / present-multiple / institution-down(informational, NO Review CTA)</span>
+<span class="state-note">stale-data-marker: present / absent · hover→tooltip names the stale account + re-auth link</span>
+
+<!-- ============================= RAIL ============================= -->
+<h2 id="rail">3. Sidebar — collapsed icon rail (narrow viewport) <span class="decision-tag">P1</span></h2>
+<p class="note">Narrow viewports collapse the sidebar to an icon/abbrev rail (labels on hover). Dense financial tables get horizontal scroll, NOT mobile "stacked cards" — density is preserved.</p>
+<div class="shell" style="min-height:200px">
+  <div class="sidebar rail">
+    <div class="brandslot">[≡]</div>
+    <div class="nav-item active">Acct</div>
+    <div class="nav-item">NAV</div>
+    <div class="nav-item">Alloc</div>
+    <div class="nav-item">Cash</div>
+    <div class="nav-item">Tax</div>
+    <div class="nav-item">Rpt</div>
+    <div class="nav-item divider">Set</div>
+    <div class="collapse">›</div>
+  </div>
+  <div class="main"><div class="topbar"><span class="search-ph">search — placeholder (V1 reserved; behavior TBD)</span><span class="inbox">inbox</span></div>
+    <div class="content"><p style="color:#888">[content — full width gained]</p></div>
+  </div>
+</div>
+
+<!-- ============================= SETTINGS ============================= -->
+<h2 id="settings">4. Settings area (P5 — all four planning-value editors; NO inline editing anywhere else) <span class="decision-tag">P5</span></h2>
+<p class="note">All planning-value editing lives here. The §2.2 alloc %Target, §2.3.2 cash-flow targets, §2.5.2 tax brackets, and §2.6 owner-id header are the four V1 editors. Tax Brackets doubles as the remedy surface for the bootstrap-incomplete-NAV state.</p>
+<div class="settings">
+  <div class="subnav">
+    <div class="nav-item active">Allocation Targets</div>
+    <div class="nav-item">Cash-Flow Targets</div>
+    <div class="nav-item">Tax Brackets</div>
+    <div class="nav-item">Report Identity</div>
+  </div>
+  <div class="editor">
+    <h4>settings-allocation-targets (§2.2 %Target)</h4>
+    <table class="wf">
+      <tr><th>Sub-Category</th><th class="num">% Target</th></tr>
+      <tr><td>Equity → US-Index_Non_Sector</td><td class="num"><span class="field">22.0</span></td></tr>
+      <tr><td>Bonds → T-bill</td><td class="num"><span class="field">8.0</span></td></tr>
+      <tr><td>Alternatives → REIT</td><td class="num"><span class="field">5.0</span></td></tr>
+      <tr class="foot"><td>Sum of targets (informational)</td><td class="num">97.0%</td></tr>
+    </table>
+    <p class="note">target-sum-readout is INFORMATIONAL only — not a warning/alert, does not block save (non-goal discipline).</p>
+    <div class="bar-actions"><span class="btn">Cancel</span><span class="btn primary">Save</span></div>
+    <span class="state-note">editor: default / editing(dirty) / saving / disabled(no valid change) / error(per-field: neg %, &gt;100%, NaN) / empty(bootstrap) / saved</span>
+    <p class="note">Other three editors (stubbed): <strong>Cash-Flow Targets</strong> = income(annual)+expense(monthly) scalars, NO variance preview · <strong>Tax Brackets</strong> = Fed-ordinary + Fed-LT-CG + CA-ordinary rate/threshold rows + std-deduction scalars · <strong>Report Identity</strong> = single plain-text owner string (INV-1: plain-text only, no markdown — security-load-bearing).</p>
+  </div>
+</div>
+
+<hr class="sec">
+
+<!-- ============================= ACCOUNTS HUB ============================= -->
+<h2 id="hub">5. §2.4 — Accounts Hub (full shell frame) <span class="decision-tag">PM-2: gross-total ≠ NAV</span></h2>
+<div class="shell">
+  <div class="sidebar">
+    <div class="brandslot">[owner / app label]</div>
+    <div class="nav-item active">Accounts</div>
+    <div class="nav-item">Net Worth</div>
+    <div class="nav-item">Asset Allocation</div>
+    <div class="nav-item">Cash Flow</div>
+    <div class="nav-item">Estimated Taxes</div>
+    <div class="nav-item">Monthly Report</div>
+    <div class="nav-item divider">Settings</div>
+  </div>
+  <div class="main">
+    <div class="topbar"><span class="search-ph">search — placeholder (V1 reserved; behavior TBD)</span><span class="inbox">inbox (5) — symbols to classify</span></div>
+    <div class="banner-absent">reauth-staleness-banner — absent (healthy)</div>
+    <div class="content">
+      <div class="region"><span class="region-label">content region: Accounts Hub</span>
+        <div class="bar-actions" style="text-align:left">
+          <strong>Accounts</strong>
+          <span style="float:right"><span class="btn">+ Connect institution</span><span class="btn">+ Add manual</span></span>
+        </div>
+        <table class="wf">
+          <tr><th>Account</th><th>Scope · Tax</th><th class="num">Current value (gross)</th><th>Connection</th></tr>
+          <tr><td colspan="4" style="background:#ededed"><strong>DEPOSITORY</strong></td></tr>
+          <tr class="stale-row"><td>Chase Checking</td><td>personal · taxable</td><td class="num">$12,4xx</td><td><span class="chip">re-auth required</span><span class="stale-tag">STALE</span></td></tr>
+          <tr><td>Ally Savings</td><td>personal · taxable</td><td class="num">$8,0xx</td><td><span class="chip">fresh</span></td></tr>
+          <tr><td colspan="4" style="background:#ededed"><strong>INVESTMENT</strong></td></tr>
+          <tr><td>Fidelity Brokerage</td><td>trust · taxable</td><td class="num">$3xx,xxx</td><td><span class="chip">fresh</span></td></tr>
+          <tr><td colspan="4" style="background:#ededed"><strong>RETIREMENT / CRYPTO / MANUAL-OTHER / REAL ESTATE / LIABILITIES …</strong></td></tr>
+          <tr class="foot"><td colspan="2">Gross total (pre-tax-adjustment) → See Net Worth for NAV</td><td class="num">$X,xxx,xxx</td><td></td></tr>
+        </table>
+        <div class="comp">▸ Inactive (3) <span class="comp-label">component: inactive-group (collapsed) — "sync paused" accounts</span></div>
+        <span class="state-note">account-row: default / hover / pressed(→Detail) / stale / loading(initial sync) / empty / inactive</span>
+        <span class="state-note">connection-status-chip: fresh / re-auth required / institution down / grant revoked / manual / inactive—sync paused</span>
+      </div>
+      <p class="note">PM-2 / value-semantics pin realized: the footer is a labeled <strong>Gross total (pre-tax-adjustment)</strong> with a pointer to Net Worth — it is NEVER a NAV or hero number. Per-account values are gross, never tax-adjusted.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ============================= ACCOUNT DETAIL ============================= -->
+<h2 id="detail">6. §2.4 — Account Detail (content region; panels)</h2>
+<p class="screen-meta">renders in the shell content region · ‹ Accounts breadcrumb</p>
+<div class="screen">
+  <div class="crumb">‹ Accounts &nbsp;|&nbsp; <strong>Fidelity Brokerage</strong> &nbsp; <span class="chip">fresh</span> <span style="float:right" class="btn">⋯ actions</span></div>
+  <div class="region"><span class="region-label">account-attributes-panel</span>
+    Type: Investment &nbsp; Scope: trust &nbsp; Tax-treatment: taxable
+    <div class="bar-actions" style="text-align:left"><span class="btn">Edit</span><span class="btn">Mark inactive</span> <span class="comp-label">Plaid → F-2.4.F confirm modal (§13); manual → simple confirm</span></div>
+  </div>
+  <div class="region"><span class="region-label">connection-status-panel (Plaid only)</span>
+    Last successful sync: 2026-05-27 06:00 &nbsp;·&nbsp; State: connected
+    <span class="comp-label">re-auth variant: "re-auth required [Re-authenticate]"; inactive variant: "Still connected to Plaid — sync paused" (NOT "disconnected")</span>
+  </div>
+  <div class="region"><span class="region-label">transaction-list</span>
+    <div class="bar-actions" style="text-align:left"><span class="btn">+ Add transaction</span><span class="btn">Reconcile ▾</span><span class="btn">Deleted / skipped</span></div>
+    <table class="wf">
+      <tr><th>Date</th><th>Vendor / desc</th><th class="num">Amount</th><th>Sub-Cat</th><th>Reconcile</th></tr>
+      <tr><td>2026-05-20</td><td>Trader Joe's</td><td class="num">-$xx</td><td>Expenses → Groceries</td><td><span class="btn">reconcile-through ▸</span></td></tr>
+    </table>
+    <span class="state-note">row: default / hover / pressed(edit) / stale(Plaid row from stale sync) / skipped / split-parent / reconciled</span>
+  </div>
+  <div class="region"><span class="region-label">sync-history-panel (Plaid only)</span>
+    2026-05-27 — 4 new · 2 deduped &nbsp; <span class="btn">audit log</span>
+  </div>
+</div>
+
+<!-- ============================= ACCOUNT SETUP ============================= -->
+<h2 id="setup">7. §2.4 — Account-Setup-Attributes (after Plaid share selection)</h2>
+<p class="screen-meta">Plaid Link itself is EXTERNAL (Plaid-hosted) — bracketed by Connect-Launch (loading) → [Plaid Link] → this screen → Initial-Sync-Progress.</p>
+<div class="screen">
+  <div class="screen-title">Set up 3 shared accounts from Fidelity</div>
+  <table class="wf">
+    <tr><th>Account</th><th>Scope</th><th>Tax-treatment</th><th>Account-type</th></tr>
+    <tr><td>Brokerage …1234</td><td><span class="field sel">trust</span></td><td><span class="field sel">taxable</span></td><td><span class="field sel">investment *</span></td></tr>
+    <tr><td>Roth IRA …5678</td><td><span class="field sel">personal</span></td><td><span class="field sel">tax-free</span></td><td><span class="field sel">retirement *</span></td></tr>
+  </table>
+  <p class="note">* account-type pre-filled from Plaid as a recommendation — editable/overridable.</p>
+  <div class="bar-actions"><span class="btn primary">Continue → sync</span></div>
+  <span class="state-note">selects: default(Plaid-recommended) / error(required empty → Continue disabled) · continue: disabled-until-valid / loading(→sync)</span>
+</div>
+
+<!-- ============================= QUEUE (P3) ============================= -->
+<h2 id="queue">8. §2.4 — New-Symbol-Classification-Queue (P3 hybrid) <span class="decision-tag">P3</span></h2>
+<p class="note">P3 = hybrid: this queue is the canonical task home (reached via the inbox + after initial sync). The §2.2 Asset-Allocation "Unsorted" row will ALSO deep-link here (that deep-link lands in the §2.2 wireframe). Unclassified symbols still aggregate as Unsorted in the meantime — never blocked.</p>
+<div class="screen">
+  <div class="screen-title">Unclassified symbols (5)</div>
+  <table class="wf">
+    <tr><th>Symbol</th><th>Plaid hint (recommendation, never auto-applied)</th><th>Assign</th></tr>
+    <tr><td>VTI</td><td>ETF · Vanguard Total Stock Market</td><td><span class="btn">Classify →</span></td></tr>
+    <tr><td>XYZ</td><td>equity · (sparse metadata)</td><td><span class="btn">Classify →</span></td></tr>
+  </table>
+  <span class="state-note">rows: default / hover / pressed · queue: empty("No symbols need classification" — common steady state) · badge feeds inbox count</span>
+</div>
+
+<!-- ============================= CLASSIFY (modal) ============================= -->
+<h2 id="classify">9. §2.4 — Symbol-Classification (panel)</h2>
+<div class="modal-wrap">
+  <div class="modal">
+    <h4>Symbol-Classification — VTI</h4>
+    <p>Plaid hint: ETF · Vanguard Total Stock Market <span class="comp-label">recommendation — NEVER auto-applied</span></p>
+    <label class="fld">Category <span class="field sel">Equity</span></label>
+    <label class="fld">Sub-Category <span class="field sel">US-Index_Non_Sector</span></label>
+    <p class="note">Applies to VTI across ALL accounts holding it. Seeded buckets only — no "+ new bucket" (taxonomy CRUD is V2+).</p>
+    <div class="bar-actions"><span class="btn">Cancel</span><span class="btn primary disabled">Assign</span></div>
+    <span class="state-note">Cat/Sub-Cat: default / error(none chosen) · Assign: disabled-until-both-chosen / loading(saving) → row leaves queue, aggregations recompute</span>
+  </div>
+</div>
+
+<!-- ============================= ADD MANUAL ============================= -->
+<h2 id="manual">10. §2.4 — Add-Manual-Account (non-credential surface)</h2>
+<div class="screen">
+  <div class="screen-title">Add manual account</div>
+  <p class="note">Never touches Plaid Link · no OAuth token · no credential prompt — manual creation is a non-credential surface by construction.</p>
+  <p>
+    <label class="fld">Name <span class="field">&nbsp;</span></label>
+    <label class="fld">Account-type <span class="field sel">Real Estate</span></label><br>
+    <label class="fld">Scope <span class="field sel">personal</span></label>
+    <label class="fld">Tax-treatment <span class="field sel">taxable</span></label><br>
+    <label class="fld">Initial value <span class="field">&nbsp;</span></label>
+    <label class="fld">as of <span class="field">2026-05-01</span></label><br>
+    <label class="fld">Sub-Category <span class="field sel">Real Estate → Primary Residence</span></label>
+  </p>
+  <div class="bar-actions"><span class="btn">Cancel</span><span class="btn primary">Create</span></div>
+  <span class="state-note">fields: default / hover / error(non-numeric value, future as-of-date, missing Sub-Cat) · Create: disabled-until-valid / loading · post-create → Hub with "manual" chip (no staleness)</span>
+</div>
+
+<!-- ============================= TXN ENTRY ============================= -->
+<h2 id="txn">11. §2.4 — Transaction-Entry (+ wash-sale for sells; + split) </h2>
+<div class="screen">
+  <div class="screen-title">Transaction-Entry (add / edit)</div>
+  <p>Type: <span class="chip">• Cash</span> <span class="chip muted">AcctSetup</span></p>
+  <p>
+    <label class="fld">Amount <span class="field">&nbsp;</span></label>
+    <label class="fld">Date <span class="field">2026-05-27</span></label><br>
+    <label class="fld">Vendor <span class="field">&nbsp;</span></label>
+    <label class="fld">Description <span class="field" style="min-width:160px">&nbsp;</span></label><br>
+    <label class="fld">Sub-Cat <span class="field sel">Expenses → Groceries</span> <span class="comp-label">recurring-vendor suggestion</span></label>
+  </p>
+  <div class="region"><span class="region-label">if this is a SELL (realizes a position)</span>
+    <label class="fld"><span class="field" style="min-width:20px">☐</span> Wash sale</label>
+    <label class="fld">Disallowed loss <span class="field">&nbsp;</span></label>
+    <span class="comp-label">back-annotated to reconcile §2.5.1 (via §2.5 PM-2). Validation: disallowed loss ≤ realized loss on this transaction.</span>
+  </div>
+  <p class="note">Editing a Plaid transaction preserves its ID link — your edit wins on the next sync. [Split…] opens child-row entry (original → split-and-skip, retained/excluded; children independent).</p>
+  <div class="bar-actions"><span class="btn">Cancel</span><span class="btn">Split…</span><span class="btn primary">Save</span></div>
+  <span class="state-note">fields: default / hover / error(cash: amount/date/Sub-Cat; AcctSetup: subtype+fields; wash-sale: disallowed&gt;realized) · Save: disabled-until-valid / loading · AcctSetup mode reveals event-subtype ▾ (split / transfer-in-kind / other)</span>
+</div>
+
+<!-- ============================= RECONCILE ============================= -->
+<h2 id="reconcile">12. §2.4 — Reconcile-Mode (bulk B2) + Balance-Mismatch-Diff</h2>
+<div class="screen">
+  <div class="screen-title">Reconcile — anchor date <span class="field">2026-04-30</span></div>
+  <table class="wf">
+    <tr><th>Account</th><th class="num">Computed</th><th class="num">Plaid-reported</th><th>Status</th></tr>
+    <tr><td>Chase Checking</td><td class="num">$12,4xx</td><td class="num">$12,4xx</td><td><span class="chip">match</span></td></tr>
+    <tr><td>Fidelity Brokerage</td><td class="num">$3xx,xxx</td><td class="num">$3xx,xyz</td><td><span class="chip">mismatch</span> <span class="btn">diff</span></td></tr>
+  </table>
+  <div class="bar-actions"><span class="btn primary">Reconcile matched →</span></div>
+  <div class="comp">Balance-Mismatch-Diff (panel): Fidelity — computed $X vs Plaid $Y, Δ $Z → investigate (edit a txn, add a missing one, or accept &amp; re-run)</div>
+  <span class="state-note">anchor-date: default / error(invalid) · row: match / mismatch / loading(checking) / stale(reconciling against a stale source is flagged) · B1 per-txn = "reconcile-through ▸" on a Detail row · no auto-reconcile (B3 is V2+)</span>
+</div>
+
+<!-- ============================= INACTIVE (modal) ============================= -->
+<h2 id="inactive">13. §2.4 — Mark-Plaid-Account-Inactive-Confirm (F-2.4.F) <span class="decision-tag">distinct from manual</span></h2>
+<div class="modal-wrap">
+  <div class="modal">
+    <h4>Mark "Fidelity Brokerage" inactive?</h4>
+    <p>Hides this account and pauses sync. <strong>Does NOT disconnect from Plaid</strong> — the connection and access token are retained server-side. Full disconnect is not available in V1.</p>
+    <div class="bar-actions"><span class="btn">Cancel</span><span class="btn primary">Mark inactive</span></div>
+    <span class="state-note">modal blocks the surface beneath · on confirm: → Inactive group, sync paused, any P4 banner it raised clears, contributes no stale-marker, history retained · Reactivate: resumes sync (re-auth only if an error accumulated while inactive)</span>
+  </div>
+</div>
+
+<!-- ============================= MISC ============================= -->
+<h2 id="misc">14. §2.4 — Smaller surfaces (component + state notes)</h2>
+<div class="two-col">
+  <div class="screen">
+    <div class="screen-title">Newly-Available-Account-Prompt (modal)</div>
+    <p>"Fidelity surfaced a new account: 529 Plan …9012. Add it?"</p>
+    <div class="bar-actions"><span class="btn">Not now</span><span class="btn primary">Opt in → set up</span></div>
+    <span class="state-note">opt-in → Account-Setup for that one account · dismiss → excluded (re-offerable); never auto-flows into aggregations</span>
+  </div>
+  <div class="screen">
+    <div class="screen-title">Initial-Sync-Progress</div>
+    <p style="color:#888">[loading] Pulling balances &amp; holdings…</p>
+    <span class="state-note">loading → Hub(Fresh) · error/partial → Hub with "sync error"/"re-auth" chip (never silently complete); retry from Detail</span>
+  </div>
+</div>
+<div class="two-col">
+  <div class="screen">
+    <div class="screen-title">Deleted/Skipped-Transactions</div>
+    <table class="wf"><tr><th>Date</th><th>Desc</th><th>Un-skip</th></tr>
+      <tr><td style="text-decoration:line-through;color:#999">2026-05-10</td><td style="color:#999">Duplicate charge</td><td><span class="btn">un-skip</span></td></tr></table>
+    <span class="state-note">default / hover / pressed(un-skip) / empty("Nothing deleted") · un-skip returns record; resync won't duplicate</span>
+  </div>
+  <div class="screen">
+    <div class="screen-title">Sync/Dedup-Audit-Log (read-only)</div>
+    <table class="wf"><tr><th>Matched by</th><th>Count</th></tr>
+      <tr><td>plaid_transaction_id</td><td>2</td></tr><tr><td>content hash</td><td>0</td></tr></table>
+    <span class="state-note">on-demand surface — silent in the stream, never silent on demand · default / empty</span>
+  </div>
+</div>
+<div class="screen">
+  <div class="screen-title">Re-authenticate (F-2.4.E) — EXTERNAL handoff</div>
+  <p>Entry: P4 banner [Review →] or connection-status-panel [Re-authenticate] → <strong>Plaid Link update mode (Plaid-hosted, EXTERNAL)</strong> — credentials entered only there, in-session. On success: state → fresh, banner clears, stale markers clear next sync. INSTITUTION_DOWN = informational, no re-auth action.</p>
+</div>
+
+<hr class="sec">
+<p class="note">END — Shell + §2.4 checkpoint. Low-fi by intent: no color/type/spacing/icon decisions made (Visual owns those at Steps 6–11). On confirmation of this HTML pattern, the remaining clusters (§2.1 → §2.2 → §2.3 → §2.5 → §2.6) render in the same low-fi HTML, reusing this shell + CSS.</p>
+
+</body>
+</html>

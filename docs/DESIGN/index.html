@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mosko-fintech — Phase 2 Step 8: Design System (spec + shell + §2.1)</title>
+<!-- LOCKED typeface: Inter + JetBrains Mono (self-hosted at Step 10). -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<!-- Versioned links = single canonical source + cache-proof (bump ?v= on every CSS change). -->
+<link rel="stylesheet" href="tokens.css?v=11">
+<link rel="stylesheet" href="screen.css?v=11">
+<link rel="stylesheet" href="review.css?v=11">
+<style>
+  /* gallery scaffolding (index-only review chrome; shared chrome is in review.css) */
+  .gal { display: grid; grid-template-columns: 180px 1fr; gap: 10px 18px; align-items: start; padding: 12px 0; border-bottom: 1px solid var(--c-border); }
+  .gal > .name { font-size: 12px; font-weight: 600; color: var(--c-text-secondary); }
+  .gal > .name small { display: block; font-weight: 400; color: var(--c-text-muted); margin-top: 2px; }
+  .gal .row { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
+  .gal .stk { display: inline-flex; flex-direction: column; gap: 3px; align-items: flex-start; }
+  .gal .stk small { color: var(--c-text-muted); font-size: 10px; }
+  .swrow { display: flex; flex-wrap: wrap; gap: 8px; }
+  .sw { width: 92px; border: 1px solid rgba(0,0,0,.1); border-radius: 6px; overflow: hidden; font-size: 10px; }
+  .sw .cap { height: 40px; }
+  .sw .lab { padding: 3px 5px; background: var(--c-surface); color: var(--c-text-secondary); border-top: 1px solid var(--c-border); }
+  .typ-spec { display: flex; flex-direction: column; gap: 4px; }
+  .spacerow { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--c-text-muted); }
+  .spacerow .bar { height: 14px; background: var(--c-accent); border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<div class="controlbar">
+  <span class="lbl">Locked</span>
+  <span class="lockchip">Palette B refined</span>
+  <span class="lockchip">Inter + JetBrains Mono · Hybrid</span>
+  <span class="lockchip">Attn = Canary #FFEF00</span>
+  <span class="lbl" style="margin-left:10px">Theme (plan-for)</span>
+  <button data-set="theme" data-val="light" class="on">Light</button>
+  <button data-set="theme" data-val="dark">Dark</button>
+  <span class="ver">Design System <strong id="ver">v11.0</strong> · theme <strong id="now-th">light</strong></span>
+</div>
+
+<div class="wrap">
+
+  <nav class="toc">
+    <a class="cur" href="index.html">Design System + §2.1</a>
+    <a href="2.2-asset-allocation.html">§2.2 Allocation</a>
+    <a href="2.3-cash-flow.html">§2.3 Cash Flow</a>
+    <a href="2.5-estimated-taxes.html">§2.5 Taxes</a>
+    <a href="2.6-monthly-report.html">§2.6 Report</a>
+  </nav>
+
+  <div class="intro">
+    <h2>Phase 2 · Design System <span style="font-weight:400;color:var(--c-text-muted)">(foundations · component gallery · shell · §2.1 — all clusters via the TOC above)</span></h2>
+    <p>Locked: <strong>Palette B refined</strong> · barely-cool <code>#fafcfe</code> canvas with pure-white cards (they pop via gentle fill-contrast + <code>shadow-1</code> elevation) · vivid blue <code>#2563eb</code> + indigo <code>#7c5cff</code> accents, chrome-only · <strong>Inter + JetBrains Mono</strong> (Hybrid) · <strong>Attention = Canary <code>#FFEF00</code></strong> · dark = plan-for. Tokens are <strong>two-tier</strong>: named <code>--color-*</code> primitives → <code>--c-*</code> semantic aliases (no bare hex on any semantic token). This page = the visual spec: <strong>Foundations</strong> → <strong>Component gallery</strong> (every component × states, incl. INV-3) → <strong>Shell</strong> → <strong>§2.1 Net Worth</strong> fully styled. Written spec: <code>design-system-spec.md</code>.</p>
+    <div class="fence"><strong>§2.3 non-goal fence (highest-risk Visual item) — held:</strong> planning targets render as <em>static reference numbers</em> only. No progress bar / gauge / fill-line / over-under color / %-of-target badge / arrow / chart target-line anywhere. Semantic <code>--c-pos/--c-neg</code> are scoped to ACTUAL performance only and forbidden on <code>$ReAlloc</code>/<code>%Target</code>/target captions. See the <em>target-caption</em> + <em>allocation</em> rows in the gallery.</p></div>
+    <p style="font-size:12px;color:var(--c-text-muted)">Cache strategy: CSS is loaded via versioned links (<code>?v=11</code>) from the canonical <code>tokens.css</code> + <code>screen.css</code> + <code>review.css</code> — single source, refreshed whenever the version bumps (shown top-right). If a font looks like a system fallback, reconnect to the internet and reload.</p>
+  </div>
+
+  <!-- ============================= FOUNDATIONS ============================= -->
+  <div class="sec-h">Foundations · Color</div>
+  <div class="swrow">
+    <div class="sw"><div class="cap" style="background:var(--c-canvas)"></div><div class="lab">canvas #fafcfe</div></div>
+    <div class="sw"><div class="cap" style="background:var(--c-surface-alt)"></div><div class="lab">surface-alt</div></div>
+    <div class="sw"><div class="cap" style="background:var(--c-surface-alt2)"></div><div class="lab">surface-alt2</div></div>
+    <div class="sw"><div class="cap" style="background:var(--c-border-strong)"></div><div class="lab">border-strong</div></div>
+    <div class="sw"><div class="cap" style="background:var(--c-text-primary)"></div><div class="lab">text-primary</div></div>
+    <div class="sw"><div class="cap" style="background:var(--c-text-secondary)"></div><div class="lab">text-secondary</div></div>
+    <div class="sw"><div class="cap" style="background:var(--c-accent)"></div><div class="lab">accent #2563eb</div></div>
+    <div class="sw"><div class="cap" style="background:var(--c-accent-2)"></div><div class="lab">accent-2 indigo</div></div>
+    <div class="sw"><div class="cap" style="background:var(--c-attn-solid)"></div><div class="lab">attn canary</div></div>
+    <div class="sw"><div class="cap" style="background:var(--c-attn-bg)"></div><div class="lab">attn-bg</div></div>
+    <div class="sw"><div class="cap" style="background:var(--c-pos)"></div><div class="lab">pos (perf only)</div></div>
+    <div class="sw"><div class="cap" style="background:var(--c-neg)"></div><div class="lab">neg (perf only)</div></div>
+  </div>
+
+  <div class="sec-h">Foundations · Type (Inter UI/hero · JetBrains Mono numerics)</div>
+  <div class="typ-spec">
+    <div style="font-family:var(--font-ui);font-size:32px;font-weight:700;letter-spacing:-.02em">Net Worth $4,182,640 <span style="font-size:13px;font-weight:400;color:var(--c-text-muted)">— hero (Inter 700, 32px)</span></div>
+    <div style="font-size:22px;font-weight:600">H1 22/600 · <span style="font-size:16px">H2 16/600</span> · <span style="font-size:13px">Body 13/400 Inter</span> · <span style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--c-text-secondary)">Label 11 caps</span></div>
+    <div style="font-family:var(--font-num);font-size:13px">JetBrains Mono numerics → 1,234,567.89 &nbsp; -$120,300 &nbsp; +27.5% &nbsp; 0123456789 (tabular, aligned)</div>
+  </div>
+
+  <div class="sec-h">Foundations · Spacing · Radius · Elevation</div>
+  <div class="spacerow"><span class="bar" style="width:var(--space-1)"></span>space-1 4 <span class="bar" style="width:var(--space-2)"></span>2·8 <span class="bar" style="width:var(--space-3)"></span>3·12 <span class="bar" style="width:var(--space-4)"></span>4·16 <span class="bar" style="width:var(--space-5)"></span>5·24 <span class="bar" style="width:var(--space-6)"></span>6·32</div>
+  <div class="gal"><div class="name">Radius / Elevation</div><div class="row">
+    <span style="padding:8px 12px;border:1px solid var(--c-border);border-radius:var(--radius-sm)">sm 3</span>
+    <span style="padding:8px 12px;border:1px solid var(--c-border);border-radius:var(--radius-md)">md 5</span>
+    <span style="padding:8px 12px;border:1px solid var(--c-border);border-radius:var(--radius-lg)">lg 8</span>
+    <span style="padding:8px 12px;border-radius:var(--radius-md);box-shadow:var(--shadow-1)">shadow-1</span>
+    <span style="padding:8px 12px;border-radius:var(--radius-md);box-shadow:var(--shadow-2)">shadow-2</span>
+    <span style="padding:8px 12px;border-radius:var(--radius-md);box-shadow:var(--shadow-3)">shadow-3 (modal)</span>
+  </div></div>
+
+  <!-- ============================= COMPONENT GALLERY ============================= -->
+  <div class="sec-h">Component gallery · primitives (states)</div>
+
+  <div class="gal"><div class="name">btn<small>default·hover·pressed·loading·disabled</small></div>
+    <div class="row">
+      <button class="btn primary">Primary</button>
+      <button class="btn primary is-hover">Hover</button>
+      <button class="btn primary is-pressed">Pressed</button>
+      <button class="btn primary is-loading">Loading</button>
+      <button class="btn primary is-disabled">Disabled</button>
+      <button class="btn">Secondary</button>
+      <button class="btn link-style">Link-style</button>
+    </div>
+  </div>
+  <div class="gal"><div class="name">field-input<small>default·hover·focus·disabled·error</small></div>
+    <div class="row">
+      <span class="field-input">22.0</span>
+      <span class="field-input is-hover">hover</span>
+      <span class="field-input is-focus">focus</span>
+      <span class="field-input is-disabled">disabled</span>
+      <span class="stk"><span class="field-input is-error num-input">-5.0</span><span class="field-error-msg">Must be 0–100.</span></span>
+    </div>
+  </div>
+  <div class="gal"><div class="name">select<small>seeded lists · no "+ new"</small></div>
+    <div class="row">
+      <span class="select">Equity</span>
+      <span class="select is-hover">Sub-Cat</span>
+      <span class="select is-open">Open</span>
+      <span class="select is-disabled">Disabled</span>
+      <span class="select is-error">Required</span>
+    </div>
+  </div>
+  <div class="gal"><div class="name">chip<small>filter · selected · muted · attn</small></div>
+    <div class="row"><span class="chip">filter</span><span class="chip sel">selected</span><span class="chip muted">muted</span><span class="chip attn">attn</span></div>
+  </div>
+  <div class="gal"><div class="name">connection-status-chip<small>all 6 variants</small></div>
+    <div class="row">
+      <span class="conn-chip fresh">fresh</span>
+      <span class="conn-chip reauth">re-auth required</span>
+      <span class="conn-chip down">institution down</span>
+      <span class="conn-chip revoked">grant revoked</span>
+      <span class="conn-chip manual">manual</span>
+      <span class="conn-chip inactive">inactive — sync paused</span>
+    </div>
+  </div>
+  <div class="gal"><div class="name">tooltip</div>
+    <div class="row"><span class="tooltip is-hover">stale value<span class="tip">From Fidelity — needs re-authentication.</span></span></div>
+  </div>
+
+  <div class="sec-h">Component gallery · INV-3 (new from UX) + composites</div>
+  <div class="gal"><div class="name">breadcrumb<small>INV-3</small></div>
+    <div class="row"><nav class="breadcrumb"><a href="#">Accounts</a><span class="sep">/</span><span class="crumb-current">Fidelity Brokerage</span></nav></div>
+  </div>
+  <div class="gal"><div class="name">action / overflow menu<small>INV-3 · trigger + open</small></div>
+    <div class="row" style="align-items:flex-start">
+      <span class="action-menu"><button class="trigger">&#8943;</button></span>
+      <div class="menu">
+        <div class="menu-item">Edit attributes</div>
+        <div class="menu-item">Reconcile&hellip;</div>
+        <div class="menu-sep"></div>
+        <div class="menu-item">Mark inactive</div>
+      </div>
+    </div>
+  </div>
+  <div class="gal"><div class="name">chart-granularity chip-group<small>INV-3 · segmented</small></div>
+    <div class="row"><span class="chip-group"><span class="seg sel">monthly</span><span class="seg">weekly</span><span class="seg">daily</span></span></div>
+  </div>
+  <div class="gal"><div class="name">notification-queue-item</div>
+    <div class="row" style="width:100%"><div class="queue-item" style="width:360px;border:1px solid var(--c-border);border-radius:6px"><span>VTI — classify symbol</span><button class="btn">Classify &rarr;</button></div></div>
+  </div>
+  <div class="gal"><div class="name">target-caption<small>§2.3 FENCE — static, no comparison</small></div>
+    <div class="row"><span class="target-caption">Target reference (annual): <span class="ref-value">$240,000</span> <span class="muted">— static reference number; no progress/variance treatment</span></span></div>
+  </div>
+  <div class="gal"><div class="name">stale-data-marker (D1)<small>distinct from canary banner</small></div>
+    <div class="row"><span class="num">$1,902,300 <span class="stale-tag">STALE</span></span><span class="muted">inline tag + faint row tint — never a bar, never hides the value</span></div>
+  </div>
+
+  <!-- ============================= SHELL ============================= -->
+  <div class="sec-h">Shell · sidebar states · P4 banner · Settings (P5)</div>
+  <div class="panel-card" style="padding:0;overflow:hidden">
+    <div style="display:flex">
+      <nav class="sidebar" style="border-radius:0">
+        <div class="brandslot">the · trust</div>
+        <div class="nav-item active">Net Worth</div>
+        <div class="nav-item">Asset Allocation</div>
+        <div class="nav-item">Accounts <span class="attn-dot"></span></div>
+        <div class="nav-item is-hover">Cash Flow</div>
+        <div class="nav-item divider">Settings</div>
+        <div class="collapse">&lsaquo; collapse</div>
+      </nav>
+      <div class="main">
+        <div class="banner">
+          <span class="b-icon">&#9888;</span><span class="b-title">2 accounts need re-authentication</span>
+          <span class="conn-chip reauth">Fidelity</span><span class="conn-chip reauth">Chase</span>
+          <span class="b-actions"><button class="btn attn">Review accounts &rarr;</button></span>
+        </div>
+        <div class="content" style="min-height:auto">
+          <p class="muted" style="margin-top:0;font-size:11px">P4 banner shown above (conditional, non-dismissible). Settings · Allocation Targets (P5 — no inline editing on data surfaces):</p>
+          <div class="settings-layout">
+            <nav class="settings-subnav">
+              <div class="nav-item active">Allocation Targets</div>
+              <div class="nav-item">Cash-Flow Targets</div>
+              <div class="nav-item">Tax Brackets</div>
+              <div class="nav-item">Report Identity</div>
+            </nav>
+            <div style="flex:1">
+              <table class="tbl">
+                <thead><tr><th>Sub-Category</th><th class="num">% Target</th></tr></thead>
+                <tbody>
+                  <tr><td>Equity &rarr; US-Index_Non_Sector</td><td class="num"><span class="field-input num-input" style="min-width:80px">22.0</span></td></tr>
+                  <tr><td>Bonds &rarr; T-bill</td><td class="num"><span class="field-input num-input" style="min-width:80px">8.0</span></td></tr>
+                  <tr class="foot"><td>Sum of targets (informational)</td><td class="num">97.0%</td></tr>
+                </tbody>
+              </table>
+              <div class="target-sum-readout">Targets sum to 97% — informational only (not an alert; does not block save).</div>
+              <div class="bar-actions"><button class="btn">Cancel</button><button class="btn primary">Save</button></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================= §2.1 NET WORTH CLUSTER ============================= -->
+  <div class="sec-h">§2.1 Net Worth — fully styled (healthy)</div>
+  <div class="app">
+    <nav class="sidebar">
+      <div class="brandslot">the · trust</div>
+      <div class="nav-item">Accounts</div>
+      <div class="nav-item active">Net Worth</div>
+      <div class="nav-item">Asset Allocation</div>
+      <div class="nav-item">Cash Flow</div>
+      <div class="nav-item">Estimated Taxes</div>
+      <div class="nav-item">Monthly Report</div>
+      <div class="nav-item divider">Settings</div>
+      <div class="collapse">&lsaquo; collapse</div>
+    </nav>
+    <div class="main">
+      <div class="topbar"><span class="search-ph">Search — reserved (V1 placeholder)</span><span class="inbox">Inbox</span></div>
+      <div class="banner-absent"></div>
+      <div class="content">
+        <h2 class="surface-title">Net Worth</h2>
+        <div class="region hero">
+          <span class="region-label">nav-headline · 2.1.1</span>
+          <div class="nav-hero-label">Net Assets Value</div>
+          <div class="nav-hero-value">$4,182,640</div>
+          <div class="freshness-stamp">NAV as of 2026-05-27 06:10 &middot; computed daily</div>
+          <div class="formula-note">= Gross Asset Value &minus; Debt &minus; Realized Tax Liab &minus; Unrealized Tax Liab</div>
+        </div>
+        <div class="grid-2">
+          <div class="region">
+            <span class="region-label">nav-delta-panel · 2.1.3</span>
+            <table class="tbl">
+              <thead><tr><th>Horizon</th><th class="num">$ &Delta;</th><th class="num">% &Delta;</th><th class="num">Infl-Adj</th></tr></thead>
+              <tbody>
+                <tr><td>Month</td><td class="num val-pos">+$18,420</td><td class="num val-pos">+0.44%</td><td class="num">&mdash;</td></tr>
+                <tr><td>YTD</td><td class="num val-pos">+$214,900</td><td class="num val-pos">+5.42%</td><td class="num">&mdash;</td></tr>
+                <tr><td>1-Year</td><td class="num val-pos">+$391,200</td><td class="num val-pos">+10.3%</td><td class="num val-pos">+6.9%</td></tr>
+                <tr><td>3-Year</td><td class="num val-pos">+$902,500</td><td class="num val-pos">+27.5%</td><td class="num val-pos">+15.1%</td></tr>
+                <tr><td>5-Year</td><td class="num val-neg">&minus;$120,300</td><td class="num val-neg">&minus;2.8%</td><td class="num val-neg">&minus;11.4%</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="region">
+            <span class="region-label">nav-reference-dates · 2.1.4</span>
+            <table class="tbl">
+              <thead><tr><th>Reference</th><th class="num">NAV (nominal)</th><th class="num">NAV — Prior Yr $</th></tr></thead>
+              <tbody>
+                <tr><td>This Month</td><td class="num">$4,182,640</td><td class="num">$3,914,100</td></tr>
+                <tr><td>Prior Month</td><td class="num">$4,164,220</td><td class="num">$3,898,900</td></tr>
+                <tr><td>Prior Year-End</td><td class="num">$3,967,740</td><td class="num">$3,714,000</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="region">
+          <span class="region-label">nav-trend-chart · 2.1.2 — 60-month rolling window</span>
+          <div class="chart">
+            <div class="legend-line"><span class="swatch-line nominal"></span>nominal &nbsp;<span class="swatch-line infl"></span>inflation-adj (CPI-U)</div>
+            <div class="spark">
+              <div class="bar" style="height:30%"></div><div class="bar" style="height:38%"></div><div class="bar" style="height:44%"></div>
+              <div class="bar" style="height:42%"></div><div class="bar" style="height:55%"></div><div class="bar" style="height:60%"></div>
+              <div class="bar" style="height:58%"></div><div class="bar" style="height:71%"></div><div class="bar" style="height:78%"></div>
+              <div class="bar" style="height:74%"></div><div class="bar" style="height:86%"></div><div class="bar" style="height:92%"></div>
+            </div>
+          </div>
+          <div class="gran-toggle"><span class="chip-group"><span class="seg sel">monthly</span><span class="seg">weekly</span><span class="seg">daily</span></span></div>
+        </div>
+        <div class="region">
+          <span class="region-label">nav-composition-table · 2.1.5 — NAV build-up (owned here)</span>
+          <table class="tbl">
+            <thead><tr><th>Account / group</th><th class="num">Current value (gross)</th><th class="num">Unrealized G/L</th></tr></thead>
+            <tbody>
+              <tr><td><span class="disclosure">&#9662;</span><strong>Investment</strong></td><td class="num">$3,041,900</td><td class="num val-pos">+$612,400</td></tr>
+              <tr><td class="indent">Fidelity Brokerage</td><td class="num">$1,902,300</td><td class="num val-pos">+$402,100</td></tr>
+              <tr><td class="indent">Schwab Roth IRA</td><td class="num">$1,139,600</td><td class="num val-pos">+$210,300</td></tr>
+              <tr><td><span class="disclosure">&#9656;</span><strong>Real Estate</strong></td><td class="num">$1,250,000</td><td class="num">&mdash;</td></tr>
+              <tr class="subtotal"><td>Gross Total</td><td class="num">$4,506,400</td><td class="num"></td></tr>
+              <tr class="subtotal"><td>Debt</td><td class="num">&minus;$182,000</td><td class="num"></td></tr>
+              <tr class="subtotal"><td>Realized Tax Liab <span class="muted">(from §2.5)</span></td><td class="num">&minus;$48,200</td><td class="num"></td></tr>
+              <tr class="subtotal"><td>Unrealized Tax Liab <span class="muted">(from §2.5)</span></td><td class="num">&minus;$93,560</td><td class="num"></td></tr>
+              <tr class="foot"><td>Net Assets Value (NAV)</td><td class="num">$4,182,640</td><td class="num"></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="sec-h">§2.1 Net Worth — attention state (P4 banner · D1 stale markers · incomplete-NAV)</div>
+  <div class="app">
+    <nav class="sidebar">
+      <div class="brandslot">the · trust</div>
+      <div class="nav-item">Accounts <span class="attn-dot"></span></div>
+      <div class="nav-item active">Net Worth</div>
+      <div class="nav-item">Asset Allocation</div>
+      <div class="nav-item">Cash Flow</div>
+      <div class="nav-item">Estimated Taxes</div>
+      <div class="nav-item">Monthly Report <span class="attn-dot"></span></div>
+      <div class="nav-item divider">Settings</div>
+    </nav>
+    <div class="main">
+      <div class="topbar"><span class="search-ph">Search — reserved (V1 placeholder)</span><span class="inbox">Inbox <span class="badge">2</span></span></div>
+      <div class="banner">
+        <span class="b-icon">&#9888;</span><span class="b-title">2 accounts need re-authentication</span>
+        <span class="conn-chip reauth">Fidelity</span><span class="conn-chip reauth">Chase</span>
+        <span class="b-actions"><button class="btn attn">Review accounts &rarr;</button></span>
+      </div>
+      <div class="content">
+        <h2 class="surface-title">Net Worth</h2>
+        <div class="region hero">
+          <span class="region-label">nav-headline · 2.1.1 — incomplete + stale variant</span>
+          <div class="nav-hero-label">Net Assets Value</div>
+          <div class="nav-hero-value">$4,182,640 <span class="stale-tag" title="Includes values from Fidelity, which needs re-authentication.">STALE</span></div>
+          <div class="freshness-stamp">NAV as of 2026-05-27 06:10 &middot; computed daily</div>
+          <div class="incomplete-note">NAV incomplete — tax components not yet computed (set brackets in Settings &rarr;)</div>
+        </div>
+        <div class="region">
+          <span class="region-label">nav-composition-table · 2.1.5 — stale rows + incomplete tax components</span>
+          <table class="tbl">
+            <thead><tr><th>Account / group</th><th class="num">Current value (gross)</th><th class="num">Unrealized G/L</th></tr></thead>
+            <tbody>
+              <tr><td><span class="disclosure">&#9662;</span><strong>Investment</strong></td><td class="num">$3,041,900 <span class="stale-tag">STALE</span></td><td class="num val-pos">+$612,400</td></tr>
+              <tr class="stale-row"><td class="indent">Fidelity Brokerage</td><td class="num">$1,902,300 <span class="stale-tag" title="Needs re-authentication — value as of last good sync 2026-05-21.">STALE</span></td><td class="num val-pos">+$402,100</td></tr>
+              <tr><td class="indent">Schwab Roth IRA</td><td class="num">$1,139,600</td><td class="num val-pos">+$210,300</td></tr>
+              <tr class="subtotal"><td>Gross Total</td><td class="num">$4,506,400 <span class="stale-tag">STALE</span></td><td class="num"></td></tr>
+              <tr class="subtotal"><td>Realized Tax Liab</td><td class="num" style="color:var(--c-attn-text)">not yet computed</td><td class="num"></td></tr>
+              <tr class="subtotal"><td>Unrealized Tax Liab</td><td class="num" style="color:var(--c-attn-text)">not yet computed</td><td class="num"></td></tr>
+              <tr class="foot"><td>Net Assets Value (NAV) <span class="chip attn">incomplete</span></td><td class="num">$4,182,640 <span class="stale-tag">STALE</span></td><td class="num"></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p style="font:12px/1.5 -apple-system,system-ui,sans-serif;color:var(--c-text-muted);margin:24px 0 40px">
+    Step 8 checkpoint — Foundations + component gallery + shell + §2.1. On F/CTO confirm, the remaining clusters
+    (§2.2 / §2.3 / §2.5 / §2.6) get styled in the same system. Tokens-as-code (Step 10) waits on the Phase-3 framework choice.
+  </p>
+</div>
+
+<script src="review.js?v=11"></script>
+</body>
+</html>

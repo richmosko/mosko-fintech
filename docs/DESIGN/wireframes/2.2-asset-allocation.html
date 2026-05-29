@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wireframes (LOW-FI): §2.2 Asset Allocation</title>
+<link rel="stylesheet" href="wireframe.css">
+</head>
+<body>
+
+<h1>§2.2 Asset Allocation <span class="decision-tag">LOW-FI</span> <span class="decision-tag">P3</span> <span class="decision-tag">P5</span></h1>
+<p class="toc"><strong>Wireframes:</strong> <a href="index.html">Shell + §2.4</a> · <a href="2.1-net-worth.html">§2.1 Net Worth</a> · <a href="2.2-asset-allocation.html">§2.2 Allocation</a> · <a href="2.3-cash-flow.html">§2.3 Cash Flow</a> · <a href="2.5-estimated-taxes.html">§2.5 Taxes</a> · <a href="2.6-monthly-report.html">§2.6 Report</a></p>
+<p class="note">Low-fi conventions: see <a href="index.html">Shell page</a>.</p>
+
+<div class="legend"><strong>Decisions realized here:</strong>
+  <ul>
+    <li><span class="decision-tag">P3</span> hybrid — the <code>Unsorted</code> row shows in-context AND <strong>deep-links into the classification queue</strong> (the link flagged at §2.4 lands here).</li>
+    <li><span class="decision-tag">P5</span> <code>%Target</code> is <strong>read-only with a link to Settings</strong> — NO inline editing.</li>
+    <li>Visualization-only (no rebalance suggestions); RE excluded; Liabilities = leverage group; <code>$ReAlloc</code> positive = underweight / under-leveraged; US-equity drill off the "US - Sector Diversified" row.</li>
+  </ul>
+</div>
+
+<h2>Asset Allocation surface (in shell frame)</h2>
+<div class="shell">
+  <div class="sidebar">
+    <div class="brandslot">[owner / app label]</div>
+    <div class="nav-item">Accounts</div>
+    <div class="nav-item">Net Worth</div>
+    <div class="nav-item active">Asset Allocation</div>
+    <div class="nav-item">Cash Flow</div>
+    <div class="nav-item">Estimated Taxes</div>
+    <div class="nav-item">Monthly Report</div>
+    <div class="nav-item divider">Settings</div>
+  </div>
+  <div class="main">
+    <div class="topbar"><span class="search-ph">search — placeholder (V1 reserved; behavior TBD)</span><span class="inbox">inbox (5) — symbols to classify</span></div>
+    <div class="banner-absent">reauth-staleness-banner — absent (healthy)</div>
+    <div class="content">
+
+      <div class="region"><span class="region-label">alloc-nonre-table (2.2.2)</span>
+        <div class="bar-actions" style="text-align:left">
+          <strong>Non-RE Allocation</strong>
+          <span style="float:right" class="chip muted">% Target read-only → <span class="btn">Edit targets in Settings →</span></span>
+        </div>
+        <table class="wf">
+          <tr><th>Sub-Category</th><th class="num">% Target</th><th class="num">% Alloc</th><th class="num">$ Target</th><th class="num">$ Alloc</th><th class="num">$ ReAlloc</th></tr>
+          <tr><td colspan="6" style="background:#ededed"><strong>EQUITY</strong></td></tr>
+          <tr><td>US - Sector Diversified &nbsp;<span class="btn">drill ▸</span></td><td class="num">30.0</td><td class="num">28.4</td><td class="num">$x</td><td class="num">$x</td><td class="num">+$x</td></tr>
+          <tr><td>US-Index_Non_Sector</td><td class="num">22.0</td><td class="num">23.1</td><td class="num">$x</td><td class="num">$x</td><td class="num">−$x</td></tr>
+          <tr><td colspan="6" style="background:#ededed"><strong>BONDS / ALTERNATIVES / CASH</strong> …</td></tr>
+          <tr><td colspan="6" style="background:#ededed"><strong>LIABILITIES</strong> (leverage group)</td></tr>
+          <tr><td>Margin</td><td class="num">10.0</td><td class="num">7.0</td><td class="num">$x</td><td class="num">$x</td><td class="num">+$x</td></tr>
+          <tr class="stale-row"><td>Uncategorized → <strong>Unsorted</strong> (3)</td><td class="num">—</td><td class="num">2.1</td><td class="num">—</td><td class="num">$x</td><td class="num">—</td></tr>
+          <tr><td colspan="6"><span class="btn">Classify 3 symbols → queue</span> <span class="comp-label">P3 hybrid: Unsorted row deep-links into New-Symbol-Classification-Queue (§2.4 §8)</span></td></tr>
+        </table>
+        <span class="state-note">rows: default/hover · stale(holding from stale account) · Unsorted(no meaningful target: "—") · $ReAlloc positive=underweight (Liabilities=under-leveraged)</span>
+        <p class="note">RE excluded from this rebalance view (non-liquid; its value is on §2.1 composition). Visualization only — NO "buy/sell" suggestions. <code>%Target</code> NOT inline-editable (P5 → Settings).</p>
+      </div>
+
+      <div class="region"><span class="region-label">alloc-us-equity-table (2.2.3) — drill-down off "US - Sector Diversified"</span>
+        <table class="wf">
+          <tr><th>US Equity Sub-Cat</th><th class="num">% Target</th><th class="num">% Alloc</th><th class="num">$ Target</th><th class="num">$ Alloc</th><th class="num">$ ReAlloc</th></tr>
+          <tr><td>US-01 Basic Materials … US-10 Utilities (10 sectors)</td><td class="num">…</td><td class="num">…</td><td class="num">…</td><td class="num">…</td><td class="num">…</td></tr>
+          <tr><td>Index Non-Sector</td><td class="num">x</td><td class="num">x</td><td class="num">$x</td><td class="num">$x</td><td class="num">±$x</td></tr>
+          <tr><td>Growth Non-Sector</td><td class="num">x</td><td class="num">x</td><td class="num">$x</td><td class="num">$x</td><td class="num">±$x</td></tr>
+          <tr class="foot"><td>Total US Equity (= parent row)</td><td class="num">100</td><td class="num">100</td><td class="num">$x</td><td class="num">$x</td><td class="num"></td></tr>
+        </table>
+        <span class="state-note">12 rows · foots to Total US Equity (= the §2.2.2 parent row — reconciliation invariant) · empty state if Total US Equity=0 · US only (no Ex-US drill, V2+)</span>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<h2>Holding-to-bucket assignment (F-2.2.A) — reuses §2.4 Symbol-Classification</h2>
+<p class="note">Per-symbol assignment uses the same <code>Symbol-Classification</code> panel as §2.4 (seeded buckets only; Plaid hint as recommendation; applies across all accounts). A <code>Reassign Symbol Bucket</code> variant re-opens it for an already-classified symbol. Manual-holding buckets are set in <code>Add-Manual-Account</code> / Account Detail (§2.4). No new screens here.</p>
+
+<p class="note">END §2.2.</p>
+</body>
+</html>

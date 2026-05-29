@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mosko-fintech — §2.2 Asset Allocation (styled)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="tokens.css?v=11">
+<link rel="stylesheet" href="screen.css?v=11">
+<link rel="stylesheet" href="review.css?v=11">
+</head>
+<body>
+<div class="controlbar">
+  <span class="lbl">Locked</span>
+  <span class="lockchip">Palette B refined</span>
+  <span class="lockchip">Inter + JetBrains · Hybrid</span>
+  <span class="lockchip">Attn = Canary #FFEF00</span>
+  <span class="lbl" style="margin-left:10px">Theme</span>
+  <button data-set="theme" data-val="light" class="on">Light</button>
+  <button data-set="theme" data-val="dark">Dark</button>
+  <span class="ver">Design System <strong>v11.0</strong> · theme <strong id="now-th">light</strong></span>
+</div>
+<div class="wrap">
+  <nav class="toc">
+    <a href="index.html">Design System + §2.1</a>
+    <a class="cur" href="2.2-asset-allocation.html">§2.2 Allocation</a>
+    <a href="2.3-cash-flow.html">§2.3 Cash Flow</a>
+    <a href="2.5-estimated-taxes.html">§2.5 Taxes</a>
+    <a href="2.6-monthly-report.html">§2.6 Report</a>
+  </nav>
+  <div class="intro">
+    <h2>§2.2 Asset Allocation — styled</h2>
+    <div class="fence"><strong>§2.3 non-goal fence bites HARD here:</strong> the <code>%Target</code> and <code>$ReAlloc</code> columns are <em>static reference numbers</em> rendered neutral (<code>.val-target</code>) — NO over/under red-green, NO progress bar, NO gauge, NO fill, NO "% of target" badge. Signed <code>$ReAlloc</code> (+ = underweight / under-leveraged) is plain text. Visualization only — no buy/sell suggestions. <code>%Target</code> is read-only (P5 → Settings).</div>
+  </div>
+
+  <div class="sec-h">§2.2 Asset Allocation surface</div>
+  <div class="app">
+    <nav class="sidebar">
+      <div class="brandslot">the · trust</div>
+      <div class="nav-item">Accounts</div>
+      <div class="nav-item">Net Worth</div>
+      <div class="nav-item active">Asset Allocation</div>
+      <div class="nav-item">Cash Flow</div>
+      <div class="nav-item">Estimated Taxes</div>
+      <div class="nav-item">Monthly Report</div>
+      <div class="nav-item divider">Settings</div>
+      <div class="collapse">&lsaquo; collapse</div>
+    </nav>
+    <div class="main">
+      <div class="topbar"><span class="search-ph">Search — reserved (V1 placeholder)</span><span class="inbox">Inbox <span class="badge">3</span></span></div>
+      <div class="banner-absent"></div>
+      <div class="content">
+        <h2 class="surface-title">Asset Allocation</h2>
+
+        <div class="region">
+          <span class="region-label">alloc-nonre-table · 2.2.2</span>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-2)">
+            <strong>Non-RE Allocation</strong>
+            <span><span class="chip muted">% Target read-only</span> <a class="link" href="#">Edit targets in Settings &rarr;</a></span>
+          </div>
+          <table class="tbl">
+            <thead><tr>
+              <th>Sub-Category</th><th class="num">% Target</th><th class="num">% Alloc</th>
+              <th class="num">$ Target</th><th class="num">$ Alloc</th><th class="num">$ ReAlloc</th>
+            </tr></thead>
+            <tbody>
+              <tr class="group-row"><td colspan="6">Equity</td></tr>
+              <tr>
+                <td>US - Sector Diversified <span class="chip" style="cursor:pointer">drill &#9656;</span></td>
+                <td class="num val-target">30.0</td><td class="num">28.4</td>
+                <td class="num val-target">$1,351,920</td><td class="num">$1,279,800</td><td class="num val-target">+$72,120</td>
+              </tr>
+              <tr>
+                <td>US-Index_Non_Sector</td>
+                <td class="num val-target">22.0</td><td class="num">23.1</td>
+                <td class="num val-target">$991,408</td><td class="num">$1,040,950</td><td class="num val-target">&minus;$49,542</td>
+              </tr>
+              <tr class="group-row"><td colspan="6">Bonds · Alternatives · Cash</td></tr>
+              <tr><td>Bonds &rarr; T-bill</td><td class="num val-target">8.0</td><td class="num">7.4</td><td class="num val-target">$360,512</td><td class="num">$333,400</td><td class="num val-target">+$27,112</td></tr>
+              <tr class="group-row"><td colspan="6">Liabilities (leverage group)</td></tr>
+              <tr><td>Margin</td><td class="num val-target">10.0</td><td class="num">7.0</td><td class="num val-target">$450,640</td><td class="num">$315,400</td><td class="num val-target">+$135,240</td></tr>
+              <tr>
+                <td><span class="conn-chip inactive" style="gap:6px"></span>Uncategorized &rarr; <strong>Unsorted</strong> (3)</td>
+                <td class="num val-target">&mdash;</td><td class="num">2.1</td>
+                <td class="num val-target">&mdash;</td><td class="num">$94,640</td><td class="num val-target">&mdash;</td>
+              </tr>
+              <tr><td colspan="6"><a class="link" href="#">Classify 3 symbols &rarr; queue</a> <span class="muted" style="font-size:var(--fs-small)">(P3 hybrid: Unsorted row deep-links into the classification queue)</span></td></tr>
+            </tbody>
+          </table>
+          <p class="muted" style="font-size:var(--fs-small)">RE excluded from this rebalance view. Visualization only — NO buy/sell suggestions. <code style="background:var(--c-surface-alt);padding:0 4px;border-radius:3px">$ReAlloc</code> positive = underweight / under-leveraged, shown as a plain signed number (no comparative color).</p>
+        </div>
+
+        <div class="region">
+          <span class="region-label">alloc-us-equity-table · 2.2.3 — drill-down off "US - Sector Diversified"</span>
+          <table class="tbl">
+            <thead><tr>
+              <th>US Equity Sub-Cat</th><th class="num">% Target</th><th class="num">% Alloc</th>
+              <th class="num">$ Target</th><th class="num">$ Alloc</th><th class="num">$ ReAlloc</th>
+            </tr></thead>
+            <tbody>
+              <tr><td>US-01 Basic Materials &hellip; US-10 Utilities (10 sectors)</td><td class="num val-target">&hellip;</td><td class="num">&hellip;</td><td class="num val-target">&hellip;</td><td class="num">&hellip;</td><td class="num val-target">&hellip;</td></tr>
+              <tr><td>Index Non-Sector</td><td class="num val-target">40.0</td><td class="num">41.2</td><td class="num val-target">$511,920</td><td class="num">$527,280</td><td class="num val-target">&minus;$15,360</td></tr>
+              <tr><td>Growth Non-Sector</td><td class="num val-target">15.0</td><td class="num">13.6</td><td class="num val-target">$191,970</td><td class="num">$174,050</td><td class="num val-target">+$17,920</td></tr>
+              <tr class="foot"><td>Total US Equity (= parent row)</td><td class="num">100</td><td class="num">100</td><td class="num">$1,279,800</td><td class="num">$1,279,800</td><td class="num"></td></tr>
+            </tbody>
+          </table>
+          <p class="muted" style="font-size:var(--fs-small)">Foots to Total US Equity (= the §2.2.2 parent row — reconciliation invariant). US only (no Ex-US drill, V2+).</p>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+<script src="review.js?v=11"></script>
+</body>
+</html>

@@ -1,0 +1,35 @@
+/* ============================================================================
+   REVIEW CHROME — shared across the styled review pages (NOT part of the design
+   system). Provides the sticky control bar (theme toggle + version stamp +
+   locked-spec chips), the page TOC, section headers, and intro panel.
+   Loaded after tokens.css/screen.css so it can use design tokens for content
+   chrome; the control bar stays intentionally dark in both themes.
+   ============================================================================ */
+body { padding-bottom: 80px; }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 0 20px; }
+
+.controlbar {
+  position: sticky; top: 0; z-index: 50; background: #11161d; color: #e7ecf2;
+  border-bottom: 1px solid #2a323d; padding: 10px 20px; margin-bottom: 14px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 14px;
+  font: 13px/1.4 -apple-system, system-ui, sans-serif;
+}
+.controlbar .lbl { color: #9aa4b0; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+.controlbar button { background: #1d242e; color: #cdd5df; border: 1px solid #3a4350; border-radius: 5px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+.controlbar button.on { background: #2f6fd0; color: #fff; border-color: #2f6fd0; font-weight: 600; }
+.controlbar .lockchip { background: #223; color: #cfe0ff; border: 1px solid #3a4a6a; border-radius: 999px; padding: 3px 10px; font-size: 11px; font-weight: 600; }
+.controlbar .ver { margin-left: auto; font-size: 12px; color: #9aa4b0; }
+.controlbar .ver strong { color: #7fe0a0; }
+
+.toc { display: flex; flex-wrap: wrap; gap: 6px; font: 12px/1 -apple-system, system-ui, sans-serif; margin: 0 0 14px; }
+.toc a { padding: 5px 10px; border: 1px solid var(--c-border); border-radius: 999px; color: var(--c-text-secondary); text-decoration: none; background: var(--c-surface); }
+.toc a:hover { background: var(--c-surface-alt); color: var(--c-text-primary); }
+.toc a.cur { background: var(--c-accent-soft); color: var(--c-accent); border-color: var(--c-accent); font-weight: 600; }
+
+.sec-h { font: 700 12px/1 -apple-system, system-ui, sans-serif; color: var(--c-text-secondary); text-transform: uppercase; letter-spacing: .08em; margin: 24px 0 10px; padding-bottom: 6px; border-bottom: 2px solid var(--c-border); }
+
+.intro { background: var(--c-surface); border: 1px solid var(--c-border); border-radius: 8px; padding: 14px 18px; margin: 14px 0; font-size: 13px; color: var(--c-text-secondary); }
+.intro h2 { margin: 0 0 6px; font-size: 15px; color: var(--c-text-primary); }
+.intro p, .intro li { font-size: 13px; color: var(--c-text-secondary); }
+.intro .fence { background: var(--c-attn-bg); border-left: 3px solid var(--c-attn-border); padding: 6px 10px; margin: 8px 0; border-radius: 0 4px 4px 0; color: var(--c-attn-text); }
+.intro code { background: var(--c-surface-alt); padding: 0 4px; border-radius: 3px; font-size: 12px; }
