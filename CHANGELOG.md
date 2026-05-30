@@ -8,7 +8,44 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 **Format.** Newest at top. Each entry: `### vN.NN — YYYY-MM-DD` header followed by narrative paragraphs.
 
-**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 43 version entries total (v0.1 → v1.37).
+**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 44 version entries total (v0.1 → v1.38).
+
+---
+
+### v1.38 — 2026-05-29
+
+**ARCH §4 Auth row lands — Supabase Auth + native RLS Option A baseline locked per [ADR-011](DECISIONS.md#adr-011) Decision 5; JWT-shape-layer composition correctly attributed (RLS predicate at DB; Auth supplies the JWT input).**
+
+Phase 3 ARCH HTML drafting; team `phase-3-arch-tech-stack` (Architect lead + Sec mandatory joint-review per MILESTONES line 35; load-bearing at auth surface — critical-security category). Narrower scope than [v1.37](#v137--2026-05-29) (single table row vs full §4 restructure + §4.1 sub-section).
+
+**Process arc.** Architect drafted v1 inline (no `temp/` working doc — scope fits ~50 lines). Sec returned 7 findings (Task #5 joint-review) categorized:
+
+- **(a) Load-bearing × 2** — F1 JWT-shape-layer attribution drift (Architect's v1 conflated "Auth = JWT-shape-layer" with the actual layer attribution; the JWT-shape-layer IS the RLS predicate `users_id = auth.uid()` enforced at the DB layer per Decision 4 + SECURITY §4.2; Auth supplies the JWT *input to* that layer, not the layer itself) + F2 §4.2 sub-section disposition (Sec confirmed Architect's lean (a) NO sub-section — no analogous outstanding forward-pointer obligation; anchor-collision contingency on (b) flagged: `sec-4-2` would collide with SECURITY §4.2 reader-naming).
+- **(b) Advisory × 5** — F3 MFA + session-rotation policy reference not locked anywhere in V1 artifacts (Sec confirmed grep zero hits) — F3 (i) lock V1 posture inline ("no MFA / Supabase platform-default refresh-token rotation"; Sec preference over option (ii) drop entirely) / F4 Phase 3 qualifier restoration on Option C overlay forward-pointer + destination anchor specificity ("future ARCH section or SECURITY §4 sub-section; Sec-consult mandatory at lock-time") / F5 explicit `authenticated` vs `service_role` tier-discipline clarification sentence / F6 §10 ledger cross-check CLEAN (no Nth-catalogued-instance claim; layer-of-defense reference only — confirmation finding) / F7 Alternatives Considered Sec-grade (External IdP / Self-hosted IdP / DIY JWT all rejected with security-posture-sound rationale — confirmation finding).
+- **(c) Sub-edit candidates × 0** — SECURITY + DECISIONS canonical wording stands; Auth row aligns to canonical, not the reverse.
+
+**F/CTO ratified Sec's full package.** Architect produced v2 inline applying all 5 ratified findings + dropping the structural-question section per F2(a). Architect placement calls: F5 tier-clarification placed immediately after F1 §10-composition framing (both deal with tier separation); F3 V1-posture-lock placed after the SECURITY §4 posture-obligations sentence (flows as "posture obligations canonical home → V1 posture is X"). Architect flagged the F1 verbatim's `#sec-4-2` link as intentional dual-purpose anchoring (Sec's verbatim points to §4.2 as the §10 three-layer defense's documented home in SECURITY, separate from the top-level §4 link for posture-obligation canonical home); team-lead confirmed.
+
+**Team-lead applied v2** to `docs/ARCH/index.html` line 249 — replacing the `class="tbd"` Auth row (`— (Phase 3 decision; Supabase Auth candidate)`) with the full Choice / Why / Alternatives content.
+
+**Substantive Auth row content.**
+
+- **Choice:** Supabase Auth (Supabase-native identity provider, JWT-issuing, in-stack on the same self-hosted Supabase as the Data store row per [ADR-002](DECISIONS.md#adr-002) §6.0); locked at [ADR-011](DECISIONS.md#adr-011) Decision 5 / Lock 1 as V1 multi-tenant isolation baseline (Option A: Supabase Auth + native RLS) with selective Option C overlay to be resolved at next Phase 3 architectural surface lock covering RT-02 (Plaid Items table) + RT-05 (webhook handler) critical-severity surfaces.
+- **Why:** (1) 1:1 native-RLS composition — Supabase Auth's session JWT carries `auth.uid()`; native RLS predicates `users_id = auth.uid()` consume directly under `authenticated` tier; no token-translation layer. (2) SvelteKit-side chokepoint — `src/hooks.server.ts` (allowlisted per §4.1) is the centralized Supabase-session-forwarding + auth-refresh point per [ADR-015](DECISIONS.md#adr-015). (3) §10 composition — Auth row supplies the JWT shape that the JWT-shape-layer of the §10 three-layer defense consumes (Sec F1 verbatim attribution); the JWT-shape-layer itself is the RLS predicate at the DB layer per Decision 4 + SECURITY §4.2; three-layer composition = code-layer (RT-26 V1-web-app allowlist) + JWT-shape-layer (this row supplies the JWT) + infrastructure-credential-presence-layer (RT-22 PDF worker Dockerfile audit). (4) Tier discipline — Supabase Auth issues `authenticated`-tier JWTs only; `service_role` is server-only, never issued via user-facing Auth flow; service_role discipline is the RT-26 / §4.1 allowlist-fence domain. (5) Posture obligations live at SECURITY §4 (V1 Sec canonical reference layer per [ADR-008](DECISIONS.md#adr-008)). (6) V1 posture locked inline: no MFA required (single-user / invite-only-V2 scale); session-rotation = Supabase Auth platform-default refresh-token rotation. (7) Zero incumbent-switching cost.
+- **Alternatives Considered:** External IdP integration (Auth0 / Clerk / Cognito) rejected at Decision 5 framing — IdP integration surface adds work without unlock; Option B portability not load-bearing for single-tenant-in-use V1 + invite-only-V2. Self-hosted identity (Keycloak / Authelia) rejected at framing — doubles operationally-managed stack on Hetzner cax21 with no V1 unlock; solo-maintainer operational-load discipline. Build-from-scratch JWT issuance rejected at framing — reinvents auth wheel; multiplies attack surface against RT-02 / RT-05 critical surfaces.
+
+**Lesson logged: §10-surface attribution drift is a recurring failure mode** — caught at Sec review on two consecutive PRs in the same Phase 3 architectural-surface arc. PR #65 / v1.37 caught Finding V1 (TenantBoundConnection-as-"first catalogued §10 instance" instance-numbering drift). PR `phase/plan-arch-4-auth-row` / v1.38 caught Finding F1 (Auth-row-as-"JWT-shape-layer" layer-attribution drift). Same shape: a true architectural mechanism gets miscredited as the canonical anchor itself, when its actual role is to supply input to / parallel the catalogued anchor. The existing `feedback_decision_4_instance_ledger_cross_check` memory (created post-PR-65) covers instance numbering specifically; **the memory should be broadened post-PR to cover layer attribution + instance numbering as a single §10-surface attribution-drift class.** This was already flagged in the F/CTO ratify briefing; deferred to a post-PR meta-state-refresh task to consolidate the drift class definition before it ages.
+
+**PR `phase/plan-arch-4-auth-row` edit inventory:**
+
+- `docs/ARCH/index.html` — Auth row (line 249) `class="tbd"` placeholder replaced with full Choice / Why / Alternatives content per v2.
+- `MILESTONES.md` — Last-updated refresh; new Recent-activity entry covering Auth row lands + Sec 7-findings disposition + Architect v2 + Finding F1 lesson logged.
+- `WORKFLOW.md` — line 6 in-flight Phase 3 PRs list extended (adds `phase/plan-arch-4-auth-row`); footer v1.37 → v1.38; current-version + last-updated bumped.
+- `CHANGELOG.md` — this v1.38 entry; header version count 43 → 44.
+
+**Follow-up.**
+- **`feedback_decision_4_instance_ledger_cross_check` memory broadening** — promote scope from "§10 instance numbering" to "§10-surface attribution-drift class" covering both instance numbering and layer attribution. Cite v1.37 Finding V1 + v1.38 Finding F1 as the two precedent catches.
+- **ARCH §4 Observability row** + **§4 Hosting row** (already populated; no work) + **ARCH §3 Data Flow + §6 CI/CD + §7 Integrations + §8 Trade-offs + §9 Open Questions** remain TBD — candidate Phase 3 ARCH next surfaces.
 
 ---
 
