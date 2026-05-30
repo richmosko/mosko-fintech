@@ -8,7 +8,63 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 **Format.** Newest at top. Each entry: `### vN.NN — YYYY-MM-DD` header followed by narrative paragraphs.
 
-**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 45 version entries total (v0.1 → v1.39).
+**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 46 version entries total (v0.1 → v1.40).
+
+---
+
+### v1.40 — 2026-05-30
+
+**ARCH §4 Observability row lands — Coolify→Discord (incumbent) primary + Generic Webhook → on-VPS Shape C named fallback; new "conditional-lock + named-fallback" project convention; F1 V1-SHIP-BLOCK Phase 5 PII-vector verification as conditional flip-gate; F2 pull-based-detection posture explicit; F3+F9 RT-21 audit-log capture mirrors RT-05; F10 SECURITY §4.6 V2-ship-gate inventory item (v) added.**
+
+Phase 3 ARCH HTML drafting; team `phase-3-arch-tech-stack` (Architect lead + Sec mandatory joint-review). Observability row had no pre-existing lock (unlike Auth row's ADR-011 Decision 5 / Lock 1) — genuine Phase 3 architectural choice with full scope-shape proposal cycle.
+
+**Scope-shape disposition arc (two-stage F/CTO ratification — first-of-kind for this PR's mechanism-comparison shape):**
+
+- **Stage 1 — initial scope-shape ratification:** Architect proposed 3 substantive options (a Coolify-native minimum / b self-hosted Grafana+Loki+Prometheus stack on cax21 / c Sentry+Pino cloud-hosted hybrid) + (d framing-rejection — hybrid local+cloud). Architect-leaned (c) on the volume-tradeoff calculus: (a) under-provisioned at V1 scale (Plaid webhook + PDF render + cron failures benefit from real-time alerting); (b) over-provisioned (same solo-maintainer ops-load argument that rejected Keycloak/Authelia on the Auth row applies — "debug-your-debugger at 3am"); (c) hits the balance with Sentry hosted = no infra burden + Pino as single SDK per container. **F/CTO picked (a) AMENDED with Coolify→Discord notification routing** (incumbent F/CTO infra that was off-canvas at Architect's scope-shape time — closed the under-alerting con + sidestepped the first-cloud-dependency-in-V1 line).
+- **Stage 2 — mechanism-comparison cycle:** After Sec joint-review, F/CTO added directive to explore all 6 Coolify notification mechanisms (Email / Slack / Discord / Telegram / Pushover / Generic Webhooks) for best solution. Architect produced mechanism-comparison cycle at `temp/arch-4-observability-mechanism-comparison.md` (~113 lines; 6-mechanism × 5-criteria comparison: F1 PII vector / first-cloud-dependency line / ops-load / coverage delivered / F1 verification feasibility). **Architect lean: Discord (incumbent) primary + Generic Webhook → on-VPS Shape C named fallback** (SvelteKit `+server.ts` endpoint + flat-file write; ~20 LOC) if F1 Phase 5 verification on Discord payload cannot close the PII vector. **F/CTO sub-ratified Architect's lean.**
+
+**Sec joint-review returned 10 findings** (Task #11) categorized:
+
+- **(a) Load-bearing × 3** — F1 Discord PII vector ESCALATED Phase 5 detail design → V1-SHIP-BLOCK gate (Discord stores message history server-side indefinitely; realistic exposures: transaction-description fragments / [SD-15](docs/SECURITY/index.html#sd-15) acct_number / [SD-03](docs/SECURITY/index.html#sd-03) Plaid access token fragments as [RT-02](docs/SECURITY/index.html#rt-02) compromise vector / SD-01+SD-11 patterns surfacing in stack traces, unhandled exceptions, or stderr-tails the notification payload includes — V1 Sec posture cannot accept under §4.2 SD-03 protection commitments). F2 §4.6 incident-handling tension resolution (Sec found Observability row Coverage NOT delivered (ii) conflicts with §4.6 commitment to incident-logging on "suspicious webhook signature failure pattern"; resolved via explicit pull-based posture in Why cell — **V1 Sec-event detection = active pull-based query against `pfin.plaid_sync_audit`**; F/CTO weekly cadence at single-user V1; NO automated alerting at V1; V2 onboarding triggers Sec-consult per [ADR-008](DECISIONS.md#adr-008) Decision 4. **BONUS within F2**: Sec REJECTED Architect's crash-on-RT-05-trip alternative as DOS vulnerability — adversary sends repeated invalid webhooks → container crash-restart loop → V1 unavailable for legitimate Plaid traffic. RT-05 fence MUST reject WITHOUT crashing). F3 RT-21 audit-log V1-SHIP-BLOCK capture commitment ([RT-05](docs/SECURITY/index.html#rt-05) catalog committed to "invalid-signature payloads dropped with audit-log entry" but [RT-21](docs/SECURITY/index.html#rt-21) had no parallel commitment; paired with F9 same-PR SECURITY catalog (g) addition).
+- **(b) Advisory × 5** — F4 notification-target access posture Phase 5 + Sec-consult mandatory (generalized from "Discord channel-access" to cover both primary + Shape C fallback paths) / F5 Coverage gap (ii) framing per F2 / F6 NO sub-section confirm (same precedent as Auth row + §4.2 — no forward-pointer obligation justifies elevation) / F7 Alternatives all Sec-grade / **F8 §10 attribution cross-check CLEAN — commendation** (Architect-side pre-emptive self-audit holding for **3rd consecutive surface review** post-PR-65/66/67; convergence-outcome pattern from broadened `feedback_decision_4_instance_ledger_cross_check` v1.39 codification is durable across surface category variation — Tech Stack rows vs flow diagrams vs operational-observability row).
+- **(c) Sub-edit candidates × 2** — F9 SECURITY [RT-21](docs/SECURITY/index.html#rt-21) catalog row gets new (g) verification battery item: *"Rejected JWT payloads dropped with audit-log entry — mirrors RT-05's pattern. Storage surface: `pfin.plaid_sync_audit` row with appropriate source/event-type discriminator (Phase 5 picks schema fit). Detection surface for §4.6 incident-handling 'PDF-JWT trip pattern' triggering event"* (V1-SHIP-BLOCK paired with F3; must land same-PR). F10 SECURITY §4.6 V2-ship-gate inventory item (v) addition: *"Multi-user alerting on RT-05 / RT-21 trips (and any future critical/HIGH security-control-rejection surfaces) per ADR-008 Decision 4 incident-handling ramp; V1 ships pull-based audit-log surface as detection mechanism; V2 onboarding triggers Sec-consult on alerting shape"* (recommended same-PR).
+
+**F/CTO ratified Sec's full package** + Architect's mechanism-comparison lean. Architect v2 (`temp/arch-4-observability-draft-v2.md`, ~94 lines) applied all Sec wording verbatim + integrated the new conditional-lock + named-fallback narrative at top of Why cell. Architect placement calls: conditional-lock narrative top of Why (establishes structural shape before details) + F2 posture immediately after Coverage NOT delivered (ii) (resolves gap adjacent to gap-statement) + F1/F3/F4 bundled under Phase 5 detail design subsection (i)/(ii)/(iii) with (iv) cron-status verification + (v) optional structured-stdout convention carried forward + DOS-vulnerability rejection folded into Coverage NOT delivered (ii) as bolded preemptive answer.
+
+**Team-lead applied v2 to `docs/ARCH/index.html` §4 Observability row** (line 369) + **F9 SECURITY RT-21 catalog (g) addition** + **F10 SECURITY §4.6 V2-ship-gate inventory item (v) addition** + **pre-PR memory creation**: `reference_coolify_discord_notifications` durably anchors F/CTO's incumbent Coolify→Discord configuration (was off-canvas at Architect's scope-shape time + changed the answer materially; analogous to `reference_hetzner_cax21` + `reference_pfin_back_etl` incumbent-infra memories). MEMORY.md index updated.
+
+**New project convention introduced: "conditional-lock + named-fallback" architectural pattern.** Distinct from prior precedents:
+
+- **ADR-015 / Auth row precedent:** unconditional lock (one path; commit fully to one mechanism).
+- **§3.2 PDF-JWT-binding precedent:** pure mechanism deferral (no path locked; Phase 5 picks; design-space-constrained-but-undecided).
+- **PR #68 / v1.40 NEW:** primary mechanism locked + pre-specified fallback shape named simultaneously; Phase 5 verification is the conditional flip-gate determining which path is live at V1 production. Works here because Shape C fallback is well-defined (~20 LOC SvelteKit `+server.ts` endpoint + flat-file write; one-way-door cost bounded by fallback specificity).
+
+**Post-PR memory candidate flagged:** `feedback_conditional_lock_with_named_fallback` to durably anchor this pattern for future Phase 3 / Phase 5 surfaces. Pattern signature: when a primary mechanism choice has a substantive Sec-posture-or-correctness gate (Phase 5 verification) that may fail with bounded probability, lock primary + name specific fallback shape simultaneously rather than defer choice entirely or commit unconditionally with no fallback. Team-lead to land memory post-PR.
+
+**Substantive deferrals logged (Phase 5 V1-SHIP-BLOCK tasks):**
+
+- **F1 — Coolify Discord payload PII audit (conditional flip-gate).** (a) Verify default payload shape (stderr-tail / unhandled-exception traces / container-log excerpts?); (b) Test against synthetic exception with PII-shaped argument values; (c) Configure scrub OR enforce app-level discipline BEFORE V1 ships with Coolify→Discord active. **If verification cannot close vector, V1 row mechanism flips to Shape C fallback.** Sec-consult mandatory.
+- **F3 — RT-21 PDF-JWT-rejection audit-log commitment.** Storage surface `pfin.plaid_sync_audit` or SD-19-derivative (Phase 5 picks schema fit).
+- **F4 — notification-target access posture** (Sec-consult mandatory). Discord-primary: channel privacy / webhook URL secrets discipline / message-history retention acknowledged. Shape C fallback: receiver endpoint authentication / flat-file path + permissions / log-rotation policy.
+- **Coolify-cron-status visibility verification** — does Coolify natively notify on cron-container exit-status, or custom Phase 5 work needed?
+- **Optional structured-JSON-to-stdout log-format conventions** for V2 Pino-adoption forward-compat.
+
+**Discipline convergence pattern continues holding** (post-PR-65/66/67 + this PR). Architect-side pre-emptive §10 attribution cross-check at draft + Sec-side independent verification + Sec-side new-dimension catches at new surface categories. Convergence-outcome codified in `feedback_decision_4_instance_ledger_cross_check` v1.39 + validated through 4 consecutive surface reviews now (no §10 drift caught at draft or verify-pass for §3 Data Flow + Observability row).
+
+**PR `phase/plan-arch-4-observability-row` edit inventory:**
+
+- `docs/ARCH/index.html` (+~75 net) — §4 Observability row replaced (single row; substantial content). Conditional-lock + named-fallback narrative integrated; F1/F2/F3/F4 Sec framings applied verbatim; Coverage NOT delivered (ii) framing with crash-on-failure DOS-rejection inline; audit-log non-overlap explicit; first-cloud-dependency-line preservation explicit for both primary + fallback legs.
+- `docs/SECURITY/index.html` (+~5 net) — RT-21 catalog row gets (g) verification battery item (F9 V1-SHIP-BLOCK); §4.6 V2-ship-gate inventory adds item (v) multi-user alerting trigger (F10 recommended).
+- `~/.claude/projects/-Users-mosko-Projects-mosko-fintech/memory/reference_coolify_discord_notifications.md` (NEW) — incumbent-infra anchor memory; MEMORY.md index updated.
+- `MILESTONES.md` — Last-updated refresh; new Recent-activity entry covering full two-stage F/CTO ratification arc + Sec 10-findings disposition + Architect v2 placement calls + conditional-lock pattern + Phase 5 V1-SHIP-BLOCK deferrals + lesson convergence.
+- `WORKFLOW.md` — line 6 in-flight Phase 3 PRs list extended (adds `phase/plan-arch-4-observability-row`); footer v1.39 → v1.40.
+- `CHANGELOG.md` — this v1.40 entry; header version count 45 → 46.
+
+**Follow-up:**
+
+- **Post-PR memory:** `feedback_conditional_lock_with_named_fallback` durable anchor for the new project convention (team-lead lands post-merge).
+- **Phase 5 V1-SHIP-BLOCK tasks** enumerated above — all must close before V1 production deployment.
+- **Remaining ARCH §s** — §5 Deployment Topology refresh post-v1.37 cleanup + §6 CI/CD + §7 Integrations + §8 Trade-offs + §9 Open Questions; §4 Tech Stack rows all complete (V1 web-app / Ingestion+cron / PDF render worker / Styling / Data store / Auth / Hosting / **Observability** — locked at this PR).
 
 ---
 
