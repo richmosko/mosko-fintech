@@ -80,12 +80,49 @@ Full PR history in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Pending (immediate)
 
-- **Phase 1 closed 2026-05-26.** Step 4 close-work landed across 4 stacked PRs (#51 ADR-011 + #52 §SECURITY tables + #53 §SECURITY annotations + #54 PRD §7.3) + this final meta-docs PR (BACKLOG + WORKFLOW lessons-learned + MILESTONES Phase 1 → complete state + phase-transition prompt readiness).
-- **Phase 3 invocation:** when ready, use the phase-transition prompt at [`docs/handoff-prompts.md`](docs/handoff-prompts.md). Architect Phase 3 consumes ADR-011 + locks log + 13 Phase 3 carry-over tasks. Phase 2 fast-track decision TBD at phase-transition invocation.
-- **Locks log** at [`temp/step-4-locks-log.md`](temp/step-4-locks-log.md) remains the authoritative historical state file (gitignored; ~1200 lines; full per-lock Sec-mod inventory for Phase 3 consumption).
-- **13 Phase 3 carry-over tasks** in team tracker `phase-1-step-4`: #11 / #13 / #15 / #16 / #17 / #20 / #26 / #29 / #32 / #33 / #34 / #35 / #36 — full descriptions in the locks log per-lock entries; consumed at Phase 3 ARCH drafting + Phase 6 PR review.
-- **One Phase 3 entry-gate task (out-of-band):** Plaid production-tier monthly minimum confirmation (sales/onboarding call BEFORE V1 ships; only load-bearing cost-target unknown per ADR-011 Decision 20).
-- **Candidate P3 follow-up** — FMP API + stock-screening tables (already shipped in `pfin_back_etl`) are incumbent-exceeds-V1 per `feedback_incumbent_exceeds_v1_review` guardrail; PM consult needed at F/CTO's choice of timing (not blocking Step 4 close but should land before Phase 3 ARCH drafting).
+**Session paused 2026-05-31 post-PR #69 merge.** Five-PR Phase 3 ARCH streak (#65–#69) closed clean; §4 Tech Stack table fully populated (8/8 rows); §3 Data Flow + §3.1 + §3.2 + §4.1 + §4 Auth + §4 Observability + §5 Deployment Topology all locked. Two F/CTO decisions pending before next-surface work; team `phase-3-arch-tech-stack` left alive but idle.
+
+**Pending F/CTO decisions for next session:**
+
+1. **`feedback_section_hint_canonical_territory_statement` memory codification timing** (PR #69 v1.41 follow-up; Sec offered both paths):
+   - **(a) Codify now** — single application + structural elegance + Sec-validated. Same pattern as `feedback_conditional_lock_with_named_fallback` v1.40 immediate post-merge codification.
+   - **(b) Wait for second application** — more durability evidence; codify after §6 CI/CD or §8 Trade-offs uses the territory-statement framing. Sec lean was for either path; F/CTO timing call.
+
+2. **Next architectural surface** (Architect's analysis at PR #69 closeout):
+   - **§7 Integration Points** — strongest natural pull (§5 forward-points here explicitly for endpoint posture; narrative coherence; closes §5-opened obligation).
+   - **§6 CI/CD** — strong (template scaffolding; Coolify→Discord + conditional-lock + RT-26 CI fence + RT-22 Dockerfile audit all compose; first chance to invoke conditional-lock pattern outside notification routing).
+   - **§8 Trade-offs / §9 Open Questions** — meta-sections; less time-sensitive; Phase 3 close artifacts.
+   - **Pause + tear down team** — both teammates idle; cheap to spin down for stock-taking.
+
+**Phase 5 V1-SHIP-BLOCK + non-V1-SHIP-BLOCK detail-design inventory** (accumulating across PRs #67/#68/#69; team-lead should consider curating a forward-pointer artifact when surface count gets larger — currently 8+ items spread across §3.2 + §4 Observability + §5):
+- **PR #67 / §3.2:** PDF-JWT-to-RLS binding mechanism (`SET LOCAL request.jwt.claims` vs parametric `WHERE users_id = $1` vs other; constrained by RT-21(e) no-service_role-escalation per Lock 13 mod #1) — substantive deferral.
+- **PR #67 / §3.2:** V1-web-app TypeScript-side privileged-context helper class name (parallel to pfin_back_etl Python `TenantBoundConnection`).
+- **PR #68 / §4 Observability V1-SHIP-BLOCK:** F1 Coolify Discord payload PII audit (conditional flip-gate to Shape C fallback if verification fails).
+- **PR #68 / §4 Observability V1-SHIP-BLOCK:** F3 RT-21 PDF-JWT-rejection audit-log commitment.
+- **PR #68 / §4 Observability:** F4 notification-target access posture (Discord channel privacy + webhook URL secrets + retention; Shape C receiver auth + flat-file permissions + log-rotation).
+- **PR #68 / §4 Observability:** Coolify-cron-status visibility verification.
+- **PR #68 / §4 Observability:** Optional structured-JSON-to-stdout log-format conventions.
+- **PR #69 / §5:** Staging environment ramp (V2-onboarding-triggers).
+- **PR #69 / §5:** Network topology detail (port allocations / reverse-proxy / TLS termination per Coolify defaults vs custom).
+- **PR #69 / §5:** F2 inter-container network isolation evaluation (RT-22 credential-absence sole barrier vs explicit network isolation defense-in-depth).
+- **PR #69 / §5:** Operational/admin auth mechanism (Coolify defaults vs custom hardening + SSH key/passphrase posture + Coolify privileged-mode posture).
+
+**Long-standing Phase 3 entry-gate task** (out-of-band; Phase 1 closeout origin):
+- **Plaid production-tier monthly minimum confirmation** — sales/onboarding call BEFORE V1 ships; only load-bearing cost-target unknown per ADR-011 Decision 20.
+
+**Candidate P3 follow-up** (Phase 1 closeout origin):
+- FMP API + stock-screening tables (already shipped in `pfin_back_etl`) are incumbent-exceeds-V1 per `feedback_incumbent_exceeds_v1_review` guardrail; PM consult at F/CTO's choice of timing.
+
+**Team `phase-3-arch-tech-stack` status:** alive (both `arch` + `sec` teammates idle); 15 tasks all completed (5 PRs × 3 tasks each). Per `/merge-pr` skill convention, team teardown happens "once the lead has decided the next move" — pending F/CTO decision 2 above. Can resume in fresh session by re-poking teammates via SendMessage; their pane context (substantial accumulated discipline + pattern observations across 5 PRs) survives the team-lead conversation pause.
+
+**5-PR Phase 3 streak summary** (for fresh-session context):
+- **PR #65 / v1.37 (2026-05-29):** ARCH §4 + §4.1 Tech Stack table restructure (8-row Option C 3-container shape) + RT-26 file-glob allowlist anchor + F11 SECURITY forward-cross-refs to §4.1. Sec Finding V1: §10 instance-numbering drift caught at verify-pass. Memory `feedback_decision_4_instance_ledger_cross_check` created with instance-numbering scope.
+- **PR #66 / v1.38 (2026-05-29):** ARCH §4 Auth row (Supabase Auth + native RLS Option A baseline per ADR-011 Decision 5 / Lock 1). Sec Finding F1: §10 layer-attribution drift caught at joint-review. Memory broadened to cover both dimensions (instance numbering + layer attribution).
+- **PR #67 / v1.39 (2026-05-30):** ARCH §3 Data Flow expansion (prose refresh + §3.1 Plaid webhook + §3.2 PDF render cross-container sequenceDiagrams) + F11 SECURITY forward-cross-refs to §3.1/§3.2 at RT-02/RT-05/RT-21/RT-22/RT-26. Phase 5 PDF-JWT mechanism deferral introduced. Sec F8 commendation: Architect-side pre-emptive §10 self-audit at draft. Memory broadened to codify convergence-outcome pattern.
+- **PR #68 / v1.40 (2026-05-30):** ARCH §4 Observability row (Coolify→Discord incumbent + Shape C named fallback per `reference_coolify_discord_notifications` memory). **NEW PROJECT CONVENTION: conditional-lock + named-fallback pattern** introduced; memory `feedback_conditional_lock_with_named_fallback` codified immediately post-merge per Sec endorsement. F1 V1-SHIP-BLOCK PII-vector gate + F2 §4.6 pull-based detection + F3+F9 RT-21 audit-log + F10 §4.6 inventory (v).
+- **PR #69 / v1.41 (2026-05-31):** ARCH §5 Deployment Topology (substantive first-time content; replaces template scaffolding). F1 operational/admin trust boundaries + F2 inter-container network isolation Phase 5. **First cross-PR composition test of v1.40 conditional-lock pattern PASSES.** §10 attribution discipline 5th consecutive surface CLEAN. Sec F5: section-hint canonical-territory statement candidate new convention (memory codification timing = Decision 1 above).
+
+**Sync-mismatch echo investigation logged:** `feedback_self_triggered_task_assignment_echo` memory (created 2026-05-31). 14 sync-mismatch echoes / 20 task_assignment events (~70% rate) caused by self-triggered task_assignment notifications arriving async after agent's own TaskUpdate self-claim. Mitigation: pre-brief block in team-mode agent spawn prompts.
 
 ---
 
