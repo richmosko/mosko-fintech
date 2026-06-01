@@ -913,11 +913,78 @@ flowchart TB
 
 <section id="sec-9" data-section="open-questions">
   <h2>9. Open Questions</h2>
-  <p class="section-hint">Each has an owner and a target resolution date.</p>
+
+  <p class="section-hint"><strong>§9 OWNS</strong> the Phase 3 close open-questions ledger — each question with named owner + target resolution date (phase-relative; concrete calendar dates not feasible at Phase 3 pre-V1-ship).</p>
+
+  <p class="section-hint"><strong>Decision-content canonical homes are elsewhere:</strong></p>
+  <ul class="section-hint">
+    <li><a href="#sec-1">ARCH §1</a>–<a href="#sec-8">§8</a> own the Phase 3 architectural commitments themselves; §9 lists questions whose resolution closes Phase 3, NOT commitments.</li>
+    <li><a href="#sec-8-6">§8.6</a> owns the Phase 5 detail-design implementation-inventory workstream commitment; §9 REFERENCES it as a Phase 4 entry workstream rather than re-enumerating the 22+ items.</li>
+    <li><a href="../../MILESTONES.md">MILESTONES.md</a> owns the live state ledger including Phase 3 exit gate criteria + Phase 4 entry triggers.</li>
+    <li><a href="../../DECISIONS.md#adr-009">DECISIONS.md ADR-009</a> / <a href="../../DECISIONS.md#adr-012">ADR-012</a> own the phase model + Phase 2 + Phase 3 joint-close pattern.</li>
+  </ul>
+
+  <p class="section-hint"><strong>§9 REFERENCES those canonical homes; it does not re-state phase model semantics or duplicate Phase 5 workstream inventories.</strong> Phase 4 transition triggers (Linear initiative creation; team teardown) are team-lead / F/CTO orchestration territory and are named at §9 close as boundary, not owned.</p>
+
   <table>
-    <thead><tr><th>Question</th><th>Owner agent</th><th>Resolve by</th></tr></thead>
-    <tbody><tr><td class="tbd">— (Phase 3 work)</td><td class="tbd">—</td><td class="tbd">—</td></tr></tbody>
+    <thead><tr><th>Question</th><th>Owner</th><th>Resolve by</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Plaid production-tier monthly minimum confirmation — sales/onboarding call against the <a href="../../DECISIONS.md#adr-011">ADR-011 Decision 20 / Lock 16</a> cost projection envelope.</td>
+        <td>F/CTO</td>
+        <td>Before V1 ships</td>
+      </tr>
+      <tr>
+        <td>Candidate P3 (FMP/stock-screening incumbent-exceeds-V1) PM consult — per <code>feedback_incumbent_exceeds_v1_review</code> guardrail; <code>pfin_back_etl</code> incumbent ingestion continues unchanged in either disposition.</td>
+        <td>PM consult + F/CTO ratify</td>
+        <td>F/CTO choice timing</td>
+      </tr>
+      <tr>
+        <td>ARCH HTML header refresh (post-§9 close) — table-of-contents + footer-status + any cross-§ anchor updates downstream of the 9-§ surface lock.</td>
+        <td>Architect</td>
+        <td>Phase 3 close PR</td>
+      </tr>
+      <tr>
+        <td>Cross-section consistency audit — verify <a href="#sec-3">§3</a>→<a href="#sec-8">§8</a> territory-OWNS framing holds against the <a href="#sec-8">§8</a> section-hint canonical-territory statement (4-application convention track record per <code>feedback_section_hint_canonical_territory_statement</code>).</td>
+        <td>Architect</td>
+        <td>Phase 3 close PR</td>
+      </tr>
+      <tr>
+        <td>§10 catalogued-instance ledger CHANGELOG-style audit — 3 drift catches discharged across Phase 3 ARCH streak (PR #65 instance-numbering drift class; PR #66 layer-attribution drift class; PR #74 §8.5 four-layer paraphrase drift class); canonical ledger at <a href="../../DECISIONS.md#adr-011">ADR-011 Decision 4</a>.</td>
+        <td>Architect</td>
+        <td>Phase 3 close PR</td>
+      </tr>
+      <tr>
+        <td><a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision-N lock attribution verification at every §-surface — confirm each ARCH §1–§8 cite of an ADR-011 Decision matches the canonical Decision number verbatim (16 substantive locks per Decisions 5–20).</td>
+        <td>Architect</td>
+        <td>Phase 3 close PR</td>
+      </tr>
+      <tr>
+        <td>Sec sign-off on auth/RLS/secrets — V1-mandatory <a href="../SECURITY/">SECURITY §4</a> posture verification at Phase 3 exit; composes with the ARCH §3 / §4 / §7 surfaces.</td>
+        <td>Sec</td>
+        <td>Phase 3 exit gate</td>
+      </tr>
+      <tr>
+        <td>F/CTO sign-off on ARCH v1.0 — gates Phase 4 entry per <a href="../../DECISIONS.md#adr-012">ADR-012</a> joint-close pattern.</td>
+        <td>F/CTO</td>
+        <td>Phase 3 exit gate</td>
+      </tr>
+    </tbody>
   </table>
+
+  <h3 id="sec-9-1">9.1 Closing boundary — Phase 4 transition + Phase 5 workstream + live state ledger</h3>
+
+  <p><strong>Phase 4 transition triggers</strong> (team-lead / F/CTO orchestration territory; named here as boundary, not owned by §9):</p>
+  <ul>
+    <li>Linear initiative creation per <a href="../../DECISIONS.md#adr-009">ADR-009 Decision 7</a> (feature-flow scheme + initial milestones).</li>
+    <li>Phase 2 + Phase 3 joint-close gate per <a href="../../DECISIONS.md#adr-012">ADR-012</a> (parallel execution joint-close pattern).</li>
+    <li>Team teardown of <code>phase-2-ux-design</code> + <code>phase-3-arch-tradeoffs</code> post-close.</li>
+  </ul>
+
+  <p><strong>Phase 5 detail-design implementation-inventory workstream:</strong> <a href="#sec-8-6">§8.6</a> owns the commitment; candidate consolidation artifact <code>docs/PHASE-5-INVENTORY.md</code> at Phase 4 entry. 22+ items distributed across <a href="#sec-3-2">§3.2</a> + <a href="#sec-4">§4 Observability</a> + <a href="#sec-5">§5</a> + <a href="#sec-7-1">§7.1</a> + <a href="#sec-6">§6</a> + <a href="#sec-6-1">§6.1</a> + <a href="#sec-8-3">§8.3</a>; per-territory tables grouping Plaid implementation items + observability items + concurrency items + settings-store items + tenant-isolation tests + other Phase 5 detail-design surfaces. §9 REFERENCES the workstream without enumerating items.</p>
+
+  <p><strong>Live state ledger</strong> for Phase 3 exit gate + Phase 4 entry triggers: <a href="../../MILESTONES.md">MILESTONES.md</a>. §9 lists open questions at a stable §-anchor for Phase-3-close-PR-cycle forcing-function value; MILESTONES.md tracks live state across the same items and survives §9 lock.</p>
+
 </section>
 
 <footer class="doc-footer">
