@@ -238,9 +238,9 @@ flowchart TB
 sequenceDiagram
   autonumber
   participant Plaid as "Plaid API"
-  participant WH as "SvelteKit /api/plaid/webhook (+server.ts)<br>(allowlisted §4.1 surface)"
-  participant SR as "service_role Supabase client<br>(from src/lib/server/ factory)"
-  participant DB as "Postgres (RLS bypassed under service_role;<br>matched-tenant triggers + immutability hold)"
+  participant WH as "SvelteKit /api/plaid/webhook (+server.ts) - allowlisted §4.1 surface"
+  participant SR as "service_role Supabase client (from src/lib/server/ factory)"
+  participant DB as "Postgres (RLS bypassed under service_role; matched-tenant triggers + immutability hold)"
   Plaid->>WH: POST webhook payload + signature header
   WH->>WH: Verify Plaid signature (RT-05 critical-severity gate)<br>reject on mismatch
   WH->>SR: Obtain service_role client<br>(SUPABASE_SERVICE_ROLE_KEY use; RT-26 allowlist audits)
@@ -286,9 +286,9 @@ sequenceDiagram
   <pre class="mermaid">
 sequenceDiagram
   autonumber
-  participant PW as "PDF worker container<br>(no SUPABASE_* env vars;<br>no Postgres client — RT-22)"
-  participant V1 as "SvelteKit /internal/pdf-render (+server.ts)<br>(allowlisted §4.1 surface)"
-  participant DB as "Postgres (authenticated tier;<br>RLS predicate users_id = auth.uid())"
+  participant PW as "PDF worker container (no SUPABASE_* env vars; no Postgres client — RT-22)"
+  participant V1 as "SvelteKit /internal/pdf-render (+server.ts) - allowlisted §4.1 surface"
+  participant DB as "Postgres (authenticated tier; RLS predicate users_id = auth.uid())"
   participant Pup as "Puppeteer browser-context-per-render"
   PW->>PW: Mint short-lived JWT<br>(PDF_WORKER_SIGNING_KEY; 60s freshness; nonce; auth.uid() claim — SD-20)
   PW->>V1: GET /internal/pdf-render + signed JWT (RT-21 verifies)
