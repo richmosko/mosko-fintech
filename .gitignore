@@ -10,6 +10,10 @@ temp/
 # Per ADR-010 — comments-sidecar feature port from project_template
 docs/*/comments.md
 
+# Local isolation tests (Mermaid render tests, etc. — diagnostic harnesses not for PR)
+docs/test.html
+docs/test-*.html
+
 # Claude Code: worktrees are pointers, not artifacts; personal settings overrides
 .claude/worktrees/
 .claude/settings.local.json
