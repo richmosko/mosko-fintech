@@ -237,16 +237,16 @@ flowchart TB
   <pre class="mermaid">
 sequenceDiagram
   autonumber
-  participant Plaid as Plaid API
-  participant WH as SvelteKit /api/plaid/webhook (+server.ts)<br/>(allowlisted §4.1 surface)
-  participant SR as service_role Supabase client<br/>(from src/lib/server/ factory)
-  participant DB as Postgres (RLS bypassed under service_role;<br/>matched-tenant triggers + immutability hold)
+  participant Plaid as "Plaid API"
+  participant WH as "SvelteKit /api/plaid/webhook (+server.ts)<br>(allowlisted §4.1 surface)"
+  participant SR as "service_role Supabase client<br>(from src/lib/server/ factory)"
+  participant DB as "Postgres (RLS bypassed under service_role;<br>matched-tenant triggers + immutability hold)"
   Plaid->>WH: POST webhook payload + signature header
-  WH->>WH: Verify Plaid signature (RT-05 critical-severity gate)<br/>reject on mismatch
-  WH->>SR: Obtain service_role client<br/>(SUPABASE_SERVICE_ROLE_KEY use; RT-26 allowlist audits)
+  WH->>WH: Verify Plaid signature (RT-05 critical-severity gate)<br>reject on mismatch
+  WH->>SR: Obtain service_role client<br>(SUPABASE_SERVICE_ROLE_KEY use; RT-26 allowlist audits)
   WH->>DB: BEGIN SERIALIZABLE
-  WH->>DB: INSERT plaid_webhook_id (UNIQUE; idempotency gate;<br/>ON CONFLICT → ROLLBACK + 200 OK — Lock 4 mod #3)
-  WH->>DB: Lookup users_id from plaid_items.plaid_item_id<br/>(Lock 4 mod #2 — tenant-resolution mechanism)
+  WH->>DB: INSERT plaid_webhook_id (UNIQUE; idempotency gate;<br>ON CONFLICT → ROLLBACK + 200 OK — Lock 4 mod #3)
+  WH->>DB: Lookup users_id from plaid_items.plaid_item_id<br>(Lock 4 mod #2 — tenant-resolution mechanism)
   WH->>DB: INSERT plaid_item_state_history (SD-14 immutable)
   WH->>DB: Dedup + INSERT account_trans (SD-00 immutable; Lock 9 discipline)
   WH->>DB: INSERT pfin.plaid_sync_audit (Decision 17 mod #8 cross-language schema)
@@ -286,19 +286,19 @@ sequenceDiagram
   <pre class="mermaid">
 sequenceDiagram
   autonumber
-  participant PW as PDF worker container<br/>(no SUPABASE_* env vars;<br/>no Postgres client — RT-22)
-  participant V1 as SvelteKit /internal/pdf-render (+server.ts)<br/>(allowlisted §4.1 surface)
-  participant DB as Postgres (authenticated tier;<br/>RLS predicate users_id = auth.uid())
-  participant Pup as Puppeteer browser-context-per-render
-  PW->>PW: Mint short-lived JWT<br/>(PDF_WORKER_SIGNING_KEY; 60s freshness; nonce; auth.uid() claim — SD-20)
+  participant PW as "PDF worker container<br>(no SUPABASE_* env vars;<br>no Postgres client — RT-22)"
+  participant V1 as "SvelteKit /internal/pdf-render (+server.ts)<br>(allowlisted §4.1 surface)"
+  participant DB as "Postgres (authenticated tier;<br>RLS predicate users_id = auth.uid())"
+  participant Pup as "Puppeteer browser-context-per-render"
+  PW->>PW: Mint short-lived JWT<br>(PDF_WORKER_SIGNING_KEY; 60s freshness; nonce; auth.uid() claim — SD-20)
   PW->>V1: GET /internal/pdf-render + signed JWT (RT-21 verifies)
-  V1->>V1: Verify JWT signature + freshness (iat <= 60s) + nonce single-use<br/>+ extract auth.uid() under authenticated tier<br/>(RT-21 battery a/b/c/d/e/f)
+  V1->>V1: Verify JWT signature + freshness (iat ≤ 60s) + nonce single-use<br>+ extract auth.uid() under authenticated tier<br>(RT-21 battery a/b/c/d/e/f)
   V1->>DB: SECURITY INVOKER read-composition helper(user_id)
   Note over DB: JWT-shape-layer in motion: RLS predicate users_id = auth.uid() enforces tenant scope on the bound identity (V1 binds the verified PDF-worker JWT's auth.uid() claim to the helper invocation; binding mechanism Phase 5)
   DB-->>V1: Rendered data (tenant-scoped)
   V1-->>PW: Rendered HTML
   Note over V1, PW: HTML returned is tenant-scoped by RLS-predicate construction at the DB; no cross-tenant leakage path on the return even under upstream-bug-class failure
-  PW->>Pup: Load HTML in browser-context-per-render<br/>(system-fonts-only; cache-disable;<br/>per-render PDF metadata clear — Lock 13 mod #7)
+  PW->>Pup: Load HTML in browser-context-per-render<br>(system-fonts-only; cache-disable;<br>per-render PDF metadata clear — Lock 13 mod #7)
   Pup-->>PW: PDF artifact
   </pre>
 
