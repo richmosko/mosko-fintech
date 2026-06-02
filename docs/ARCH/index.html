@@ -245,11 +245,11 @@ sequenceDiagram
   WH->>WH: "Verify Plaid signature (RT-05 critical-severity gate) reject on mismatch"
   WH->>SR: "Obtain service_role client (SUPABASE_SERVICE_ROLE_KEY use: RT-26 allowlist audits)"
   WH->>DB: BEGIN SERIALIZABLE
-  WH->>DB: "INSERT plaid_webhook_id (UNIQUE&#59; idempotency gate&#59; ON CONFLICT → ROLLBACK + 200 OK — Lock 4 mod &#35;3)"
-  WH->>DB: "Lookup users_id from plaid_items.plaid_item_id (Lock 4 mod &#35;2 — tenant-resolution mechanism)"
+  WH->>DB: "INSERT plaid_webhook_id (UNIQUE#59; idempotency gate#59; ON CONFLICT → ROLLBACK + 200 OK — Lock 4 mod #35;3)"
+  WH->>DB: "Lookup users_id from plaid_items.plaid_item_id (Lock 4 mod #35;2 — tenant-resolution mechanism)"
   WH->>DB: "INSERT plaid_item_state_history (SD-14 immutable)"
-  WH->>DB: "Dedup + INSERT account_trans (SD-00 immutable&#59; Lock 9 discipline)"
-  WH->>DB: "INSERT pfin.plaid_sync_audit (Decision 17 mod &#35;8 cross-language schema)"
+  WH->>DB: "Dedup + INSERT account_trans (SD-00 immutable#59; Lock 9 discipline)"
+  WH->>DB: "INSERT pfin.plaid_sync_audit (Decision 17 mod #35;8 cross-language schema)"
   WH->>DB: COMMIT
   WH-->>Plaid: "200 OK"
   </pre>
@@ -290,15 +290,15 @@ sequenceDiagram
   participant V1 as "Web-app endpoint"
   participant DB as "Postgres"
   participant Pup as "Puppeteer"
-  PW->>PW: "Mint short-lived JWT (PDF_WORKER_SIGNING_KEY&#59; 60s freshness&#59; nonce&#59; auth.uid() claim — SD-20)"
+  PW->>PW: "Mint short-lived JWT (PDF_WORKER_SIGNING_KEY#59; 60s freshness#59; nonce#59; auth.uid() claim — SD-20)"
   PW->>V1: "GET /internal/pdf-render + signed JWT (RT-21 verifies)"
   V1->>V1: "Verify JWT signature + freshness (iat ≤ 60s) + nonce single-use + extract auth.uid() under authenticated tier (RT-21 battery a/b/c/d/e/f)"
   V1->>DB: "SECURITY INVOKER read-composition helper(user_id)"
-  Note over DB: "JWT-shape-layer in motion: RLS predicate users_id = auth.uid() enforces tenant scope on the bound identity (V1 binds the verified PDF-worker JWT auth.uid() claim to the helper invocation&#59; binding mechanism Phase 5)"
+  Note over DB: "JWT-shape-layer in motion: RLS predicate users_id = auth.uid() enforces tenant scope on the bound identity (V1 binds the verified PDF-worker JWT auth.uid() claim to the helper invocation#59; binding mechanism Phase 5)"
   DB-->>V1: "Rendered data (tenant-scoped)"
   V1-->>PW: Rendered HTML
-  Note over V1, PW: "HTML returned is tenant-scoped by RLS-predicate construction at the DB&#59; no cross-tenant leakage path on the return even under upstream-bug-class failure"
-  PW->>Pup: "Load HTML in browser-context-per-render (system-fonts-only&#59; cache-disable&#59; per-render PDF metadata clear — Lock 13 mod &#35;7)"
+  Note over V1, PW: "HTML returned is tenant-scoped by RLS-predicate construction at the DB#59; no cross-tenant leakage path on the return even under upstream-bug-class failure"
+  PW->>Pup: "Load HTML in browser-context-per-render (system-fonts-only#59; cache-disable#59; per-render PDF metadata clear — Lock 13 mod #35;7)"
   Pup-->>PW: PDF artifact
   </pre>
 
