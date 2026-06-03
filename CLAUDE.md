@@ -14,7 +14,7 @@ Deeper context is **consult-on-demand** — read these only when the task requir
 4. **`CHANGELOG.md`** — per-version PR-level execution history (extracted from WORKFLOW.md on 2026-05-23 per ADR-009 Decision 6). Consult for "when did X land?" / "what happened in v1.NN?" questions.
 5. **`docs/PRD/index.html`** — product requirements (HTML; canonical post-PR-B). §1 vision / §2 V1 user stories (32 stories) / §3 success metrics / §6 out-of-scope / §7 constraints / appendices A/B/C. §4 / §5 / §8 stubs point to their relocated homes (rows 6 / 7 / 8). Consult for "what V1 should do" questions.
 6. **`docs/SECURITY/index.html`** — V1 canonical Sec reference layer per [ADR-008](DECISIONS.md#adr-008) (received PRD §4 content in PR B). 14-entry SD matrix + 15-entry RT catalog + 6 posture sub-§ (incl. V2-ship-gate Sec-consult inventory). Consult for security/compliance questions.
-7. **`BACKLOG.md`** — V2 deferred candidates + Linear overflow queue (received PRD §5 content in PR B per [ADR-009](DECISIONS.md#adr-009) Decision 4 + Decision 7 feature-flow scheme). Consult for "what's deferred to V2?" questions.
+7. **`BACKLOG.md`** — two-purpose backlog: §5 V2+ deferred candidates (received PRD §5 content in PR B per [ADR-009](DECISIONS.md#adr-009) Decision 4) + §7 V1 staging queue (going-forward per [ADR-017](DECISIONS.md#adr-017) — repo-versioned V1 work-spec for milestones not currently in Linear; promotion at milestone-rotation). Consult for "what's deferred to V2?" or "what's queued for upcoming V1.X?" questions.
 8. **`docs/MILESTONE-FRAMING.md`** — V1 sub-version convention + drop-replace migration pattern + Phase 4 handoff anchor (received PRD §8 content in PR B per [ADR-009](DECISIONS.md#adr-009) Decision 4). Conceptual spec distinct from `MILESTONES.md` live state ledger. Consult for milestone-shape / V1.x sub-version questions.
 9. **`docs/ARCH/index.html`** — architecture HTML artifact (scaffolded in PR A; content drafted in Phase 3 by Architect). Consult for architecture detail post-Phase-3.
 10. **`docs/archive/PRD-pre-html-migration.md`** — frozen Markdown snapshot of `PRD.md` at v1.30 (Phase 1 Step 3.5 closure), archived in PR B when content migrated to the HTML artifacts above. Read-only historical reference for any pre-PR-B cross-section refs.
@@ -31,7 +31,9 @@ Per-directory `CLAUDE.md` files (e.g., `/api/CLAUDE.md`, `/supabase/CLAUDE.md`) 
 
 ## Backlog and task tracking
 
-Project work is tracked in **Linear**, organized as initiatives → projects → issues. Linear MCP integration is set up in Phase 5; until then, planning happens in this repo's markdown documents. **There is no `TASKS.md` artifact** — Linear is the single source of truth for what's being worked on.
+Project work is tracked in **Linear**, organized as initiatives → projects → issues. Linear MCP activated in Phase 4 Step 2. **There is no `TASKS.md` artifact** — Linear is the single source of truth for what's actively being worked on.
+
+**Linear scope per [ADR-017](DECISIONS.md#adr-017) Decision 2:** Linear holds the **current milestone + next milestone only** (plus Platform / Cross-cutting V1.x always). All other planned milestones live in `BACKLOG.md` §7 with full Source / AC / Dependencies specs. Promotion to Linear happens at milestone-rotation (when current completes; next becomes current; what-was-after-next promotes from BACKLOG.md → Linear). Going-forward from Wave 6 (V1.5); existing V1.0–V1.4 Linear issues stay in place.
 
 ## Repo conventions
 
@@ -52,7 +54,7 @@ PR A landed the scaffolding; **PR B landed the content migration** per [ADR-009]
 - `docs/PRD/index.html` — mosko §1 / §2 / §3 / §6 / §7 / appendices A/B/C (1090 lines). §4 / §5 / §8 stubs point to relocated homes per Decision 4.
 - `docs/SECURITY/index.html` — V1 Sec canonical reference per [ADR-008](DECISIONS.md#adr-008); received PRD §4 in PR B.
 - `docs/ARCH/index.html` — content drafted in Phase 3 by Architect.
-- `BACKLOG.md` — V2 deferred candidates + Linear overflow queue; received PRD §5 in PR B.
+- `BACKLOG.md` — §5 V2+ deferred candidates (PRD §5 in PR B) + §7 V1 staging queue (going-forward per [ADR-017](DECISIONS.md#adr-017)).
 - `docs/MILESTONE-FRAMING.md` — V1 sub-version convention + drop-replace migration; received PRD §8 in PR B.
 - `docs/_assets/style.css` — shared styling (incl. CSS class taxonomy per Decision 5).
 - `docs/_assets/mermaid.min.js` — vendored Mermaid runtime (no CDN; per Decision 5 sub-decision 3).

@@ -1,12 +1,16 @@
 # BACKLOG — mosko-fintech
 
-V2+ deferred candidates plus the Linear overflow queue. **Created in PR B per [ADR-009](DECISIONS.md#adr-009) Decision 4** as the relocation home for PRD §5 content; serves a second role as the Linear overflow queue per ADR-009 Decision 7's feature-flow scheme (`[PRD §2 User Stories] → [BACKLOG.md] → [Linear ≤200 hot] → [Linear: Done] → [MILESTONES.md Completed]`).
+Two-purpose backlog per [ADR-009](DECISIONS.md#adr-009) Decision 4 + Decision 7 and [ADR-017](DECISIONS.md#adr-017):
+
+1. **§5 — V2+ deferred candidates** (PRD §5 relocation home; created in PR B per ADR-009 Decision 4). Capabilities on the eventual product trajectory but locked-as-V2+ in V1 to preserve drop-replace-migration scope.
+2. **§7 — V1 staging queue** (going-forward from Wave 6 per [ADR-017](DECISIONS.md#adr-017) Decision 2). Per the narrowed feature-flow scheme: `[PRD §2 User Stories] → [BACKLOG.md §7] → [Linear: current + next milestone only] → [Linear: Done] → [MILESTONES.md Completed]`. Existing V1.0–V1.4 issues already in Linear (SELF-181 → SELF-269) stay there; milestone rotation handles them at Phase 5 implementation start. Wave 6 (V1.5) onward decompositions land in §7 with full Source / Acceptance criterion / Dependencies specs, then promote to Linear at milestone-rotation time.
 
 **Conventions:**
 - §5.x sub-section grouping mirrors PRD §2.x source order (§5.1 net-worth deferrals from §2.1 / §5.2 allocation from §2.2 / etc.).
-- Every entry traces to an existing §2.x V1/V2 clause or an ADR-locked deferral (per §5 framing — §5 introduces no new V2+ items).
-- **§5 / §6 distinction (sharp):** §5 = capabilities **on** the eventual product trajectory (locked V2+ in V1 to preserve drop-replace-migration scope); §6 = permanent product-identity non-goals (see [`docs/PRD/index.html` §6](docs/PRD/index.html#sec-6); not in this file).
-- Last updated: 2026-05-23 (PR B migration; content frozen at PRD lock 2026-05-18 / v1.30).
+- Every §5 entry traces to an existing §2.x V1/V2 clause or an ADR-locked deferral (per §5 framing — §5 introduces no new V2+ items).
+- §7 entries carry the same fields a Linear issue would (Source / Acceptance criterion / Dependencies); promotion to Linear is verbatim with the entry marked "Promoted to Linear at SELF-N" as durable historical reference.
+- **§5 / §6 / §7 distinctions:** §5 = V2+ capabilities on the eventual trajectory; §6 = permanent product-identity non-goals (see [`docs/PRD/index.html` §6](docs/PRD/index.html#sec-6); not in this file); §7 = V1 staging queue (going-forward, repo-versioned V1 work-spec for milestones not currently active in Linear).
+- Last updated: 2026-06-03 ([ADR-017](DECISIONS.md#adr-017) §7 staging-queue framing added; §5 content frozen at PRD lock 2026-05-18 / v1.30).
 
 ---
 
