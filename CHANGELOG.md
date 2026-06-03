@@ -8,7 +8,53 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 **Format.** Newest at top. Each entry: `### vN.NN — YYYY-MM-DD` header followed by narrative paragraphs.
 
-**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 49 version entries total (v0.1 → v1.43).
+**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 50 version entries total (v0.1 → v1.44).
+
+---
+
+### v1.44 — 2026-06-02
+
+**Joint Phase 2 (UX & Design) + Phase 3 (Technical Architecture) → ✅ COMPLETE; Phase 4 (Project Scoping) entered.** Per [ADR-012](DECISIONS.md#adr-012) joint-close pattern: Phase 3 exit-gate closed 2026-06-02 (row #7 Sec sign-off APPROVED + row #8 F/CTO sign-off APPROVED on ARCH v1.0); Phase 2 ready-to-close since 2026-05-29 (Steps 1–10 complete per ADR-013 / ADR-014 / ADR-015 trio). Both phases close together at Phase 4 entry gate; WORKFLOW.md header pointer advances to Phase 4. Meta-process **M1 (Plan / ARCH + SECURITY docs locked) → ✅ COMPLETE**; M2 (Implement + Verify) becomes Active at Phase 5 entry.
+
+**PR `meta/phase-2-3-close` — joint-close consolidated update.** Single bundled close PR per [ADR-009](DECISIONS.md#adr-009) Decision 9 + `feedback_late_phase_density_overload` (scoped tight per the precedent set at Phase 1's stacked-PR decomposition — joint-close substance is lower density than Phase 1's 16-lock close-arc, so single PR is the right shape). Team-mode close-cycle in team `meta-phase-2-3-close` per [ADR-003](DECISIONS.md#adr-003): UX Designer + Visual Designer drafted Phase 2 lessons-learned (Visual's draft formally closed the "Visual Designer notification" criterion from MILESTONES line 27); Architect drafted Phase 3 lessons-learned; PM drafted Phase 4 detailed-steps subsection (just-in-time per `docs/handoff-prompts.md` phase-transition prompt step 2). Team-lead synthesized + drafted WORKFLOW.md current-phase header rewrite + CHANGELOG entry + MILESTONES.md Current Phase block flip.
+
+**Post-v1.43 PR-arc recap (PR #74 / #76 / PR-A / PR-B / PR-C / PR #80 / PR #81 / PR #82).** Eight PRs landed between v1.43 (PR #72) and this close without per-PR CHANGELOG entries — bundled here per the Phase-1-close-arc precedent at v1.32 (stacked close PRs land as a single CHANGELOG entry with bullet-density recap):
+
+- **PR #74** — ARCH §8 Trade-offs & Alternatives lands; §8.1–§8.6 sub-sections; verbatim-vs-paraphrase discipline self-catch at §8.5 four-layer paraphrase drift; Path B v2-fix shape (drop enumeration + let link carry) preferred when §-surface section-hint frames REFERENCES-not-ABSORBS; Sec-validated; §10 attribution 8th consecutive CLEAN surface. `feedback_team_lead_sec_ratify_lock_cross_check` 2nd-application strong-validation codified.
+
+- **PR #76** — ARCH §9 Open Questions + §9.1 lands; section-hint convention 5th application at Phase-3-close meta-section territory (5-6 adjacent owners); track-record extensions only, no new memory codifications. §10 attribution 9th consecutive CLEAN surface.
+
+- **PR-A** — cross-doc cleanup pass (per-row disposition); row #4 Path B applied in some surfaces, KEEP-at-canonical-anchor disposition introduced as third disposition for surfaces where §-surface IS canonical anchor AND numbered list IS substantive content-positioning territory; §10 attribution 10th consecutive CLEAN surface; Path B 4-application track record.
+
+- **PR-B** — annotation pass; verbatim-quote completeness drift caught at boundary (dropped prepositional phrase from PR #66 v2-mod quote); team-lead Sec-Lock cross-check discipline 5th application; §10 attribution 11th consecutive CLEAN surface; Path B 5-application.
+
+- **PR-C** — sweep pass; §10 attribution 12th consecutive CLEAN surface; Path B 6-application; section-hint 5-application durable across §-surfaces with adjacency lists ≥6.
+
+- **PR #80** — row #7 Sec sign-off APPROVED via comprehensive audit covering 3 sub-surfaces (auth / RLS / secrets) + 6 cross-cutting (14 SD entries / 15 RT entries / 6 posture sub-§ / [ADR-008](DECISIONS.md#adr-008) composition / §10 CHANGELOG annotation / Sec-territory Locks 1/4/12/13/14/15); 1 advisory (b)1 SECURITY HTML TOC/header drift (deferred as housekeeping per F/CTO ratify); §10 attribution 13th consecutive CLEAN surface; team-lead Sec-Lock cross-check 7-application track record (+ row #7 audit (b)1 SECURITY TOC/header citation verification at lines 32/33/100/366).
+
+- **PR #81** — `phase/plan-arch-mermaid-fix` Mermaid render saga close. F/CTO surfaced ARCH §3.1 + §3.2 sequenceDiagrams as not-rendering during row #8 ARCH v1.0 review via `/serve-docs` comment widget. **6-round whack-a-mole arc**: round-1 `<br/>` → `<br>` wrong direction; round-2 alias `<br>` flatten; round-3 aggressive alias simplification; round-4 `&#NN;` HTML-entity dead-end defeated by browser pre-decode; round-5 `#NN;` Mermaid-entity syntax (no `&` prefix) works; round-6 message-text shortening + `.gitignore docs/test-*.html`. F/CTO meta-feedback ("why do we keep making the same mistakes?") drove pivot to isolated `docs/test-mermaid.html` test-harness pattern at round-4; harness pinpointed exact constraint set in 2 iterations vs 3 prior rounds of guessing. **Full Mermaid sequenceDiagram constraint set discovered + codified** at new memory `feedback_mermaid_sequencediagram_constraints`: cascading failure across blocks; NO line breaks in messages; `"..."` wrap on special-char messages; `;` → `#59;` + `#` → `#35;` Mermaid entities (NO `&` prefix — defeats escape via browser pre-decode); short messages render better. Recovery discipline: isolated `docs/test-NAME.html` harness pattern (gitignored) instead of iterate-against-canonical-doc. **Browser-render-verification-at-drafting-time discipline** codified: PR #67 introduced defect latent for months; surfaced only at row #8 v1.0 review; future Mermaid PRs include browser-verify in test plan.
+
+- **PR #82** — post-PR-81 cleanup: row #7 + row #8 ratifications committed to MILESTONES head + DECISIONS ADR-011 Decision 4 §10 CHANGELOG annotation + new memory entry codified.
+
+**Phase 2 close substance.** Steps 1–10 complete per [ADR-013](DECISIONS.md#adr-013) (D1 + P1–P6) + [ADR-014](DECISIONS.md#adr-014) (Palette B refined + Inter+JetBrains Hybrid + Canary attn + dark plan-for + primitive→semantic token tiers) + [ADR-015](DECISIONS.md#adr-015) (SvelteKit + no Tailwind; tokens.css consumed natively via Svelte component-scoped CSS). Committed home established at [`docs/DESIGN/`](docs/DESIGN/) (design system + flows + wireframes migrated from `temp/`). Two-tier token taxonomy (`--color-*` primitives → `--c-*` semantic aliases) made the framework-coupling resolution at ADR-015 close-by-composition rather than requiring a transformation layer.
+
+**Phase 3 close substance.** ARCH v1.0 HTML drafted across 16-PR arc (#60 system overview → #62 RT-26 fence → #63 ADR-015 framework lock → #65 §4 Tech Stack → #66 §4 Auth → #67 §3 Data Flow + sequenceDiagrams → #68 §4 Observability → #69 §5 Deployment → #71 §7 Integration Points → #72 §6 CI/CD → #74 §8 → #76 §9 → PR-A/B/C cross-doc cleanup → PR #80 row #7 Sec audit → PR #81 Mermaid render fix → PR #82 row #8 ratify cleanup). [ADR-015](DECISIONS.md#adr-015) (SvelteKit + no Tailwind) + [ADR-016](DECISIONS.md#adr-016) (RT-26 three-entry service_role allowlist enumeration) ratified during Phase 3. **Five durable project conventions emerged**: section-hint canonical-territory statement (5-application); post-ratify cross-check at v1 (Sec-2 commendation as project-pattern); conditional-lock + named-fallback (PR #68 / v1.40); Path B (drop enumeration; let link carry) with KEEP-at-canonical-anchor third disposition (PR-A row #4); §10 attribution discipline 14 consecutive CLEAN surfaces on full three-axis basis (instance-numbering / layer-attribution / V1-SHIP-BLOCK-axis orthogonality). **Team-lead Sec-Lock cross-check discipline 7-application track record** (+ row #7 audit) — 6 SUCCESS-cases : 1 boundary-failure-case (PR #72 Sec-vs-Sec dispute, the boundary-failure that mechanized the catch).
+
+**Out-of-band Phase 4 entry-gate disposition.** Per ADR-011 Decision 20: (1) **Plaid production-tier monthly minimum sales call** — non-blocking for Phase 4 entry; carries as a Phase 4/5 F/CTO-driven task. (2) **Candidate P3 PM consult (FMP/stock-screening incumbent-exceeds-V1)** — original gate position was "BEFORE Phase 3 ARCH drafting touches `pfin_back_etl` ingestion"; Phase 3 closed without P3 disposition surfacing as load-bearing on ARCH content. **F/CTO-ratified at v1.44 joint-close: Option A path** — P3 consult folded into Phase 4 entry step 1 as explicit PM ratify-pass on the [ADR-011](DECISIONS.md#adr-011) Decision 20 V1-default ("ingest + no UI") disposition; closes the gate cleanly with BACKLOG.md confirmed-V2+ entry as the durable artifact.
+
+**WORKFLOW.md edits.** Current-phase header (line 6) rewrite — Phase 2 + Phase 3 (parallel) → Phase 4 (Project Scoping). Phase 2 Status flip 🟡 In progress → ✅ Complete (2026-06-02). Phase 3 Status flip 🟡 In progress → ✅ Complete (2026-06-02). Phase 4 Status flip ⏳ Not started → 🟡 In progress (2026-06-02). Phase 2 Lessons-learned subsection drafted (UX + Visual contributions). Phase 3 Lessons-learned subsection drafted (Architect contribution, mirroring Phase 1 Step 4 shape per `feedback_late_phase_density_overload` — dense bolded-header bullets covering durable conventions / failures / changes for Phase 4+). Phase 4 Detailed-steps subsection fleshed out (PM-led; 9 steps covering entry gates + Linear setup + PRD→projects mapping + milestone sequencing + issue decomposition + ARCH §10 SD+RT mapping + Sec joint-review triggers + exit verification). Footer version bump v1.41 → v1.44.
+
+**MILESTONES.md edits.** Current Phase block rewrite — Phase 2 + Phase 3 → Phase 4. Active Feature block rewrite. Recent activity entry for the joint close. Last updated 2026-06-02.
+
+**CHANGELOG.md edits.** This v1.44 entry; preamble version count 49 → 50.
+
+**No new ADRs in this PR.** Joint-close pattern already codified at [ADR-012](DECISIONS.md#adr-012); no new architectural decisions surfaced during close-work.
+
+**Memory entries this session.** None pending — all candidate codifications from the Phase 3 close-arc landed pre-close (PR #72 batch + PR #74 batch + PR #81 Mermaid memory).
+
+**Team `meta-phase-2-3-close` teardown.** `TeamDelete meta-phase-2-3-close` after PR merge. Any Phase 4 work spawns a new team per [ADR-003](DECISIONS.md#adr-003).
+
+**Phase 4 entry posture.** PM owns Phase 4. Initial work activates Linear MCP + creates the "V1 launch" initiative. First downstream milestone — first Linear-tracked work surface for mosko-fintech (no individual Linear-feature granularity before Phase 4 per ADR-009 Decision 7).
 
 ---
 
