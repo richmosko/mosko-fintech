@@ -41,6 +41,58 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-017 — Compact-ledger conventions: MILESTONES Recent activity 5-entry + Linear current+next-milestone scope
+
+**Date:** 2026-06-03
+**Status:** Accepted
+**Approved by:** F/CTO (2026-06-03; in-band call after Phase 4 Step 5 Wave 5 close per the [v1.45 CHANGELOG entry](CHANGELOG.md#v145--2026-06-03)).
+
+### Context
+
+Two compact-ledger conventions drifted across Phase 4 Step 5 (Waves 1–5):
+
+1. **`MILESTONES.md` Recent activity** drifted into multi-paragraph density (1500+ words per Wave-closure entry across Waves 1–4) despite the [ADR-009 Decision 6](#adr-009) auto-load contract framing `MILESTONES.md` head as the *compact* ledger anchor with detail living in `CHANGELOG.md`. By Wave 4 close the auto-loaded section had ballooned to ~6000 words of in-context-ledger content per session.
+2. **Linear scope** drifted from the [ADR-009 Decision 7](#adr-009) feature-flow scheme `[PRD → BACKLOG.md → Linear ≤200 hot → Linear: Done → MILESTONES.md Completed]` into direct PRD → Linear population at Phase 4 Step 5, bypassing the `BACKLOG.md` intermediate staging layer. 89 V1 issues across V1.0–V1.4 + Platform V1.x landed in Linear directly across Waves 1–5; `BACKLOG.md` never functioned as the V1 work-spec staging home the scheme intended.
+
+Neither drift caused functional failure (the ≤200 hot cap wasn't hit; sessions still loaded MILESTONES head), but both compounded session-context bloat and weakened the repo-versioned V1 work-spec discipline the project conventions were designed to preserve.
+
+### Decisions
+
+**Decision 1 — MILESTONES.md Recent activity: 5-entry compact convention.**
+
+`MILESTONES.md` Recent activity section narrows to:
+
+- **Last 5 entries** (not "last 7 days"). 5 is enough to give recent-context grounding without becoming a parallel changelog.
+- **1 sentence per entry**. Names the deliverable + key F/CTO ratify + headline metric (e.g., "11 Linear issues SELF-X→SELF-Y; PR #N").
+- **`CHANGELOG.md` pointer for detail.** Each entry ends with `Detail: [CHANGELOG vN.NN](CHANGELOG.md#vNNN--YYYY-MM-DD)`.
+
+Restores the [ADR-009 Decision 6](#adr-009) compact-ledger auto-load contract: MILESTONES head is the lightweight pointer; CHANGELOG is the authoritative per-version detail home. When a Wave/Step/Phase closes, its dense narrative lands in the next CHANGELOG.md `vX.YY` entry; the MILESTONES Recent activity head gets a 1-sentence pointer added (and the oldest entry rotates out if already at 5).
+
+The drifted Waves 1–4 entries get rewritten as 1-sentence pointers at v1.45 close; the dense detail absorbed into [CHANGELOG v1.45](CHANGELOG.md#v145--2026-06-03). Going forward, Wave closures land 1 CHANGELOG entry + 1 1-sentence MILESTONES pointer.
+
+**Decision 2 — Linear scope: current milestone + next milestone only; everything else in BACKLOG.md.**
+
+The [ADR-009 Decision 7](#adr-009) feature-flow scheme stands, but the Linear-hot threshold narrows from `≤200 hot` to **current milestone + next milestone**:
+
+- **Linear holds:** the milestone currently being implemented (Phase 5+ active work) + the next milestone in sequence (planning queue) + Platform / Cross-cutting V1.x (foundational substrate, always active).
+- **`BACKLOG.md` holds:** all other planned milestones, with full issue specs at the same Source / Acceptance criterion / Dependencies granularity that Linear would have. `BACKLOG.md` functions as the durable repo-versioned V1 work-spec.
+- **Promotion mechanism:** when implementation of the current milestone completes, the next milestone rotates into "current" and the milestone after it gets promoted from `BACKLOG.md` to Linear ("next"). Promotion = creating Linear issues from the `BACKLOG.md` specs verbatim, then marking the `BACKLOG.md` entries as "Promoted to Linear at SELF-N" (durable historical reference).
+
+**Going-forward only.** Existing V1.0–V1.4 issues already in Linear (89 issues; SELF-181 → SELF-269) stay in Linear; no retroactive export. Milestone rotation handles them as implementation begins at Phase 5 (current = V1.0; next = V1.1; V1.2–V1.4 + future milestones flow through BACKLOG.md once they're far enough out). Wave 6 (V1.5) onward lands new issue decompositions in `BACKLOG.md` rather than Linear.
+
+**Rationale for narrowing the cap.** The original `≤200 hot` framing in ADR-009 Decision 7 was a practical-limit framing (Linear free-tier-adjacent). The current+next-milestone framing is a *discipline* framing: BACKLOG.md functions as the durable V1 work-spec independent of any Linear pricing/cap consideration, and active workspace clutter stays low. The narrower scope honors the spirit of Decision 7's feature-flow scheme (`PRD → BACKLOG → Linear → Done`) more strictly than the `≤200 hot` framing did in practice.
+
+### Consequences
+
+- **`MILESTONES.md`** head shrinks by ~6000 words at v1.45 close; SessionStart hook auto-load context bloat correspondingly drops.
+- **`CHANGELOG.md`** absorbs the Phase 4 Step 5 detail at v1.45; future Wave closures append a CHANGELOG entry + MILESTONES 1-sentence pointer.
+- **`BACKLOG.md`** header updated to reflect the new scheme; existing V2 deferred content (§5.1–§5.7) preserved; new "V1 staging queue" framing added for going-forward Wave content.
+- **`CLAUDE.md`** updated to reflect both conventions in the read-first guidance.
+- **Wave 6 (V1.5)** dispatches into `BACKLOG.md` not Linear. Implementation Phase 5 entry triggers V1.0 promotion-to-Linear-active (already there) + V1.1 promotion-to-Linear-next.
+- **Cross-reference.** This ADR refines [ADR-009 Decision 6](#adr-009) (compact-ledger auto-load) + [ADR-009 Decision 7](#adr-009) (feature-flow scheme). It does NOT supersede those decisions — both still hold; this ADR narrows their thresholds.
+
+---
+
 ## ADR-016 — V1 RT-26 service_role allowlist surface enumeration
 
 **Date:** 2026-05-31
