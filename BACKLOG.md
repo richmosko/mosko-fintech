@@ -238,4 +238,106 @@ Per ADR-009 Decision 7's feature-flow scheme, BACKLOG.md doubles as the overflow
 
 ---
 
-*Last updated: 2026-05-26 (Phase 1 Step 4 close — added FMP cost-saving levers + stock-screening UI surface + Hetzner cax21 escalation path per [ADR-011](DECISIONS.md#adr-011) Decision 20 / Lock 16; annotated live-tax-API ingestion entry with Sec re-consult fence per ADR-011 Decision 18; annotated stock screening line with candidate-P3 V1-default disposition per ADR-011 Decision 20). Edit via `/start-doc-update <slug>` per ADR-009 Decision 9 (`meta/` branch prefix — BACKLOG.md is a state-ledger file).*
+## §7 framing — V1 staging queue
+
+§7 holds going-forward V1 issue decompositions for milestones NOT currently in Linear per [ADR-017](DECISIONS.md#adr-017) Decision 2 (Linear holds current + next milestone only; everything else stages here with full Linear-grade specs). Promotion to Linear happens at Phase 5 milestone-rotation — when current completes, next becomes current, and the milestone after next promotes from §7 → Linear verbatim with the §7 entry marked **Promoted to Linear at SELF-N** as durable historical reference.
+
+**Wave 6 (V1.5 + V1.final) — staged 2026-06-03.** Decomposed at Phase 4 Step 5 Wave 6 close per F/CTO ratify of 6 gates (Gate A unified helper per Wave 5 precedent → PM Issues 1+6+9 absorbed into Arch substrate; Gate B Option C — 4 named TEXT commentary columns on `monthly_report`; Gate C V1.x Platform scope for PDF worker; Gate D single calendar-gated V1.final issue; Gate E separate Sec PR post-Wave-6 for SECURITY §4.4 derivative-surface annotation; Gate F Option α native Coolify cron container). 18 issues total. Detail: [CHANGELOG v1.46 — TBD](CHANGELOG.md).
+
+### §7.1 — Architect substrate (Platform / Cross-cutting V1.x; 8 items)
+
+**A1. `pfin.monthly_report` header table + 4-named-TEXT commentary columns (Lock 11; Gate B Option C).** [V1-SHIP-BLOCK]
+- **Source.** [ADR-011 Decision 15 / Lock 11](DECISIONS.md#adr-011) verbatim; [PRD §2.6.1](docs/PRD/index.html#story-2-6-1) header + §2.6.2 commentary persistence per Wave 6 Gate B Option C F/CTO ratify (4 named TEXT cols `commentary_cash` + `commentary_bonds` + `commentary_equity` + `commentary_alternatives` on header table — Lock 14 family stays at 5; no JSONB per forward-compat fence; PRD §2.6.2 fixed 4-sub-section verbatim count).
+- **AC.** Schema with `users_id` UUID + `target_month` DATE + `generation_status` Lock-11-vocab enum (`draft`/`final`/`superseded`; PRD `not-yet-triggered`/`pending`/`generated` mapped at presentation) + `data_as_of` DATE + `generated_at` TIMESTAMPTZ + 4 commentary TEXT columns + `created_at` + `updated_at`; UNIQUE(users_id, target_month, generation_status) for `final`; Lock 11 9-mod inventory (INSERT-new-version regeneration per Lock 11 mod #2 Decision 15; supersession via SECURITY DEFINER `fn_supersede_monthly_report`; matched-tenant trigger on users_id FK per Decision 3 family — 6th instance; Lock 15 server-derived-only fence on data_as_of). RLS WITH CHECK `users_id = auth.uid()`. Sec joint-review on supersession mechanism + INSERT-new-version trigger.
+- **Dependencies.** Upstream: SELF-232 fn_refresh_updated_at + SELF-233 settings write-path hardening. Downstream: A2, A3, A7, PM #2 in-app UI, PM #4 commentary editor.
+
+**A2. `pfin.monthly_report_account_snapshot` sibling child table (Lock 12).** [V1-SHIP-BLOCK]
+- **Source.** [ADR-011 Decision 16 / Lock 12](DECISIONS.md#adr-011) verbatim; PRD §2.6.4 snapshot historical retention.
+- **AC.** Child table FK to A1 monthly_report; per-account snapshot rows (NAV components + balances + tax_treatment + scope at snapshot time); Lock 12 8-mod inventory including 3 V1-SHIP-BLOCK: (i) matched-tenant trigger on FK to parent (Decision 3 family — 7th instance); (ii) parent users_id + target_month immutability fence; (iii) service_role bypass DB-trigger on child. RT-21 HIGH + SD-12 child sub-class addendum. Read-only post-write per Lock 10 pattern adjacent. RLS via JOIN to A1.
+- **Dependencies.** Upstream: A1, Wave 1 B4 account_trans, SELF-214 nav_daily, SELF-201 manual accounts. Downstream: A3, A7 cron worker.
+
+**A3. SECURITY INVOKER read-composition helper (3 entry paths; absorbs PM Issue 1 per Gate A unified).** [V1-SHIP-BLOCK]
+- **Source.** [ADR-011 Decision 15 / Lock 11](DECISIONS.md#adr-011) verbatim Lock 11 SECURITY INVOKER read-composition pattern; F/CTO Gate A Option B unified per Wave 5 precedent.
+- **AC.** `pfin.fn_render_monthly_report(p_users_id UUID, p_target_month DATE, p_data_as_of DATE) RETURNS JSONB`. Composes 6-section report tree per PRD §2.6.1 verbatim section ordering: Account Holdings (consumes SELF-225 §2.1.5) + NAV Performance (SELF-218/219/220) + Asset Allocation (SELF-237/240 §2.2.2/§2.2.3) + Rebalancing Targets (reads A1 commentary cols) + Cash Flow (SELF-250/255 §2.3.2/§2.3.4) + Estimated Taxes (SELF-260/261 §2.5.1 + SELF-262 `fn_compute_tax_liability(p_data_as_of)` §2.5.3+§2.5.4). §2.5.4 NAV-components render on Account Holdings via §2.1.5 buildup NOT as Estimated Taxes rows per PRD §2.6.1 verbatim. SECURITY INVOKER preserves RLS at JWT-user-session layer (`auth.uid()` predicate composes across all upstream surfaces). 3 entry paths: in-app render (SSR), PDF render (via A5 endpoint), historical-month view. Sec joint-review on cross-tenant leak surface analysis (mirrors Wave 1 B5 + SELF-262 patterns).
+- **Dependencies.** Upstream: A1 + A2 + SELF-262 (Wave 5 unified tax helper) + SELF-214 (nav_daily) + SELF-231 (user_taxonomy) + all Wave 1-5 NAV/allocation/cashflow substrate. Downstream: PM #2 in-app UI, PM #8 PDF export, A7 cron worker invocation.
+
+**A4. Node PDF worker container scaffold (V1.x Platform scope per Gate C).** [V1-SHIP-BLOCK]
+- **Source.** [ADR-011 Decision 17 / Lock 13](DECISIONS.md#adr-011) verbatim hybrid worker location; F/CTO Gate C V1.x Platform scope. RT-22 by construction (Lock 13 mod #2 verbatim "no SUPABASE_* env vars; no Postgres client installed in Dockerfile" — credential-absence by construction).
+- **AC.** Node container scaffold with Puppeteer for headless Chrome PDF rendering; Dockerfile excludes Postgres client + `SUPABASE_*` env vars; reads JWT-bearer-token + composes HTML from JSON payload at `/internal/pdf-render` (A5); deploys on cax21 alongside `pfin_back_etl` per `reference_hetzner_cax21`. Coolify→Discord notification per `reference_coolify_discord_notifications` incumbent. NO database access by design (Lock 13 mod #2). Note: TenantBoundConnection fence (Wave 1 E2) applies to `pfin_back_etl` Python; PDF worker has NO DB connection so no TBC fence needed (per Architect Wave 6 v2 brief-drift catch #1).
+- **Dependencies.** Upstream: cax21 incumbent + Wave 1 E2 (CI fence on pfin_back_etl, distinct). Downstream: A5 endpoint, A6 RT-22 audit fence, PM #8 PDF export.
+
+**A5. V1 app `/internal/pdf-render` endpoint + RT-21 JWT verification battery.** [V1-SHIP-BLOCK]
+- **Source.** [ADR-011 Decision 17 / Lock 13](DECISIONS.md#adr-011) verbatim 10-mod inventory.
+- **AC.** SvelteKit `/api/internal/pdf-render` route accepts JWT-bearer signed by V1 app + JSON payload (composed report); validates JWT signature + tenant binding via `SET LOCAL request.jwt.claims` (Arch-locked binding mechanism per RT-21(e) no-service_role-escalation); invokes A4 PDF worker; returns PDF bytes. RT-21 (a)–(g) full verification battery: (a) JWT signature; (b) nonce replay protection; (c) tenant claim presence; (d) expiry; (e) no service_role escalation; (f) audience check; (g) issuer check. Sec joint-review mandatory on JWT verification battery (RT-21 HIGH).
+- **Dependencies.** Upstream: A4. Downstream: PM #8 PDF export.
+
+**A6. RT-22 Dockerfile audit CI fence script (closes catalogued §10 instance #1; deferred from Wave 1).** [V1-SHIP-BLOCK]
+- **Source.** [ADR-011 Decision 17 / Decision 4](DECISIONS.md#adr-011) verbatim; RT-22 catalogued §10 instance #1 per Decision 4 catalogued numbered list.
+- **AC.** CI script greps A4 PDF worker Dockerfile for forbidden patterns: `SUPABASE_*` env vars (other than `SUPABASE_URL`); Postgres client packages (`postgresql-client`, `libpq-dev`, etc.); explicit Postgres binary `RUN` statements. CI fails build if violation found. Closes RT-22 catalogued §10 instance #1 (Wave 1 E1 closed RT-26 #2 instance; both catalogued instances now have V1 CI automation). Sec joint-review on grep pattern coverage.
+- **Dependencies.** Upstream: A4. Downstream: V1 deployability gate.
+
+**A7. monthly_report cron worker on `pfin_back_etl` (Native Coolify cron container per Gate F α; absorbs PM Issue 6 per Gate A).** [V1-SHIP-BLOCK]
+- **Source.** [ADR-011 Decision 15 + Decision 17 / Lock 11 + Lock 13](DECISIONS.md#adr-011) verbatim hybrid worker location; F/CTO Gate F Option α native Coolify cron container ratify 2026-06-03.
+- **AC.** Native Coolify cron container on cax21 schedules monthly invocation (1st-of-month per PRD §2.6.3 verbatim). Cron container invokes Python worker in `pfin_back_etl` which loops over tenants (via service_role-bounded query for tenant list) + invokes A3 helper per-tenant via SECURITY INVOKER tenant-binding (NOT service_role for report data composition; only for tenant enumeration). Lock 11 mod #4 cron tenant-binding pattern; Lock 13 mod #4 audit log. Coolify→Discord on completion or error. `p_data_as_of` server-derived from cron context (1st-of-month - 1 day = end-of-prior-month) per Lock 15 server-derived-only fence. Sec joint-review on cron tenant-binding + service_role isolation.
+- **Dependencies.** Upstream: A3, A4 (worker location parallel), `pfin_back_etl` incumbent infra. Downstream: PM #2 in-app rendering shows cron-generated reports; PM #7 on-demand UI.
+
+**A8. `pfin.owner_identification` settings table (closes Lock 14 5/5 + Settings ramp 4/4).**
+- **Source.** [ADR-011 Decision 18 / Lock 14](DECISIONS.md#adr-011) verbatim "four per-domain tables" — last originally-committed member; [ADR-013 P5](DECISIONS.md#adr-013) Settings 4th-of-four occupant.
+- **AC.** Schema: `users_id` UUID + `owner_id_header_text` TEXT + `created_at` + `updated_at`; UNIQUE(users_id) per Lock 14 per-domain-table pattern. Lock 14 family closes at 5 named tables (planning_target + cashflow_target + tax_bracket_schedule + tax_bracket_row + owner_identification). RLS WITH CHECK `users_id = auth.uid()`. Reuses SELF-232 fn_refresh_updated_at + SELF-233 settings write-path hardening shared layer. Sec advisory (not joint-review — single-column user-scoped table with no chain).
+- **Dependencies.** Upstream: SELF-232 + SELF-233. Downstream: PM #10 Settings 4th occupant editor; A3 helper reads for §2.6.1 report header.
+
+### §7.2 — PM V1.5 domain + V1.final close (10 items)
+
+**P2. §2.6.1.b Monthly report in-app rendering UI.** [V1-SHIP-BLOCK]
+- **Source.** [PRD §2.6.1](docs/PRD/index.html#story-2-6-1) verbatim composition + section ordering.
+- **AC.** SvelteKit page at `/reports/monthly/{target_month}` invokes A3 helper via `+page.server.ts` SSR. Renders 6-section report: Account Holdings + NAV Performance + Asset Allocation + Rebalancing Targets (reads A1 commentary cols) + Cash Flow + Estimated Taxes (per PRD §2.6.1 verbatim ordering). NO inline edit per ADR-013 P5; "Edit commentary" button routes to P4. Live-recompute on upstream surface changes when viewing latest report; historical reports immutable post-final per Lock 11 mod #2.
+- **Dependencies.** Upstream: A3 helper. Downstream: V1-SHIP-BLOCK V1.5 close.
+
+**P3. §2.6.2.b Commentary editor UI (4 named text areas per Gate B Option C).** [V1-SHIP-BLOCK]
+- **Source.** [PRD §2.6.2](docs/PRD/index.html#story-2-6-2) verbatim 4-sub-section Rebalancing Targets free-text; ADR-013 INV-1 plain-text-only commentary is security-load-bearing (NO markdown sanitization at V1).
+- **AC.** 4 plain text areas (Cash / Bonds / Equity / Alternatives) at `/reports/monthly/{target_month}/commentary`; reads A1 commentary cols; saves via REPLACE-all SERIALIZABLE write semantics (parallel to Lock 14 settings write pattern). Lock 14 V1-SHIP-BLOCK Sec mods applied: Zod `.strict()` + numeric-input adversarial battery (TEXT-input variant: control-char/length/encoding); mass-assignment prevention (users_id from auth.uid()). NO markdown rendering; plain-text-only per INV-1.
+- **Dependencies.** Upstream: A1 (commentary cols). Downstream: P4 trigger integration.
+
+**P4. §2.6.2.c Author-before-generate trigger integration.** [V1-SHIP-BLOCK]
+- **Source.** [PRD §2.6.2](docs/PRD/index.html#story-2-6-2) verbatim author-before-generate flow.
+- **AC.** Cron worker (A7) checks for commentary presence per-tenant before generating monthly report; if all 4 commentary cols NULL/empty for target_month, skips report generation + sends Coolify→Discord notification "Awaiting commentary for {month}"; if commentary present, proceeds with generation. On-demand UI (P5) blocks "Generate" button if commentary empty + routes user to P3 commentary editor.
+- **Dependencies.** Upstream: P3 commentary editor + A7 cron + P5 on-demand UI.
+
+**P5. §2.6.3.b On-demand UI + pending queue.** [V1-SHIP-BLOCK]
+- **Source.** [PRD §2.6.3](docs/PRD/index.html#story-2-6-3) verbatim manual-trigger flow.
+- **AC.** Page at `/reports/monthly/generate` lets user trigger on-demand generation outside cron cadence; pending queue shows reports queued/in-flight/done; on-demand invokes A3 helper via `/api/reports/generate` endpoint (NOT cron worker direct invocation per RLS + tenant-binding isolation). Blocks if commentary missing per P4. Reuses Lock 11 INSERT-new-version semantic.
+- **Dependencies.** Upstream: A1 + A3 + P4. Downstream: PDF export P6.
+
+**P6. §2.6.3.c PDF export via PDF worker container.** [V1-SHIP-BLOCK]
+- **Source.** [PRD §2.6.3](docs/PRD/index.html#story-2-6-3) verbatim PDF output format; [ADR-011 Decision 17 / Lock 13](DECISIONS.md#adr-011).
+- **AC.** "Download PDF" button on P2 in-app render page invokes A5 endpoint with composed JSON payload + JWT-bearer; receives PDF bytes; serves as download. Filename pattern: `mosko-monthly-{target_month}-{generated_at}.pdf`. Layout matches in-app render (P2) via shared HTML template.
+- **Dependencies.** Upstream: A4 + A5 + P2 in-app UI. Downstream: V1-SHIP-BLOCK V1.5 close.
+
+**P7. §2.6.4.b Owner-identification Settings editor (4th-of-four occupant ramp closes).** [V1-SHIP-BLOCK]
+- **Source.** [PRD §2.6.1](docs/PRD/index.html#story-2-6-1) header owner-id; [ADR-013 P5](DECISIONS.md#adr-013) Settings 4th-of-four occupant.
+- **AC.** SvelteKit Settings route at `/settings/owner-id`; single TEXT input for `owner_id_header_text` (e.g., "The Mosko Household"); replace-all SERIALIZABLE write to A8 table via Lock 14 V1-SHIP-BLOCK Sec mods (Zod `.strict()` + adversarial battery + mass-assignment prevention via SELF-233 hardening shared layer). Closes Settings area ramp at 4/4 (SELF-242 V1.2 + SELF-252 V1.3 + SELF-265 V1.4 + this V1.5).
+- **Dependencies.** Upstream: A8 table + SELF-233 + SELF-242 shell. Downstream: A3 helper reads for report header.
+
+**P8. §2.6.5 Staleness markers on §2.6 surfaces (SELF-208/229/243/258 framework extension).** [V1-SHIP-BLOCK]
+- **Source.** [PRD §2.6.5](docs/PRD/index.html#story-2-6-5) verbatim + [PRD §2.4.4](docs/PRD/index.html#story-2-4-4) verbatim staleness-ramp list naming §2.6 monthly report.
+- **AC.** Generate-with-markers per α′-1 PRD §2.4.4 verbatim: when stale-Plaid-item constituents present at generation time, report renders with `<StaleConstituentBadge>` adjacent to affected section headers + per-row stale icon. Cron worker (A7) generates report regardless of staleness (NOT block); badges communicate degraded confidence. Extends SELF-208 (V1.0 framework) + SELF-229 (V1.1 NW) + SELF-243 (V1.2 §2.2) + SELF-258 (V1.3 §2.3) per ADR-013 D1.
+- **Dependencies.** Upstream: SELF-208 + A3 helper. Downstream: V1-SHIP-BLOCK V1.5 close.
+
+**P9. §2.5.x Staleness ramp to §2.5 surfaces (Wave 5 Gate D absorbed).** [V1-SHIP-BLOCK]
+- **Source.** F/CTO Wave 5 Gate D ratify (defer §2.5 staleness ramp to V1.5 monthly-report close); ADR-013 D1 illustrative-not-exhaustive.
+- **AC.** Extends SELF-208/229/243/258 framework to §2.5.1 / §2.5.3 / §2.5.4 surfaces (3-col tax decomposition table at SELF-264; quarterly tax tables at SELF-266; NAV composition Tax Liab rows at SELF-268). Per-row stale-constituent icon + section-header badge consuming `pfin.fn_aggregation_has_stale_constituent()` primitive.
+- **Dependencies.** Upstream: SELF-208 framework + SELF-264 + SELF-266 + SELF-268. Downstream: V1-SHIP-BLOCK V1.5 close (paired with P8).
+
+**P10. §2.6.6 RLS verification battery (V1.5 close-gate; tri-axis tenant × scope × tax_treatment + snapshot derivative-surface).** [V1-SHIP-BLOCK]
+- **Source.** [PRD §2.6.6](docs/PRD/index.html#story-2-6-6) verbatim "Monthly report is the user's, not anyone else's"; mirrors SELF-209/228/244/257/269 pattern.
+- **AC.** RLS test battery covers A1+A2+A3+A5+A7+A8+P3 backend surfaces: cross-tenant injection rejected; SECURITY INVOKER A3 helper cross-tenant leak analysis; Lock 12 snapshot derivative-surface Sec annotation (NOT new SD class; snapshots of §2.5-grade values); A7 cron tenant-binding isolation; A5 PDF endpoint JWT-bearer tenant-binding; owner-id A8 cross-tenant; commentary P3 cross-tenant. Tri-axis orthogonality (tenant × scope × tax_treatment) verified per PRD §2.6.6 verbatim. V1.5 close-gate — no V1.5 issue closes until battery passes. Sec review pass + verdict recorded per SELF-269 precedent.
+- **Dependencies.** Upstream: All Wave 6 issues. **V1.5 close-gate.**
+
+**P11. V1.final §3.4 close-gate verification protocol (calendar-gated N=2 consecutive months).**
+- **Source.** [PRD §3.4](docs/PRD/index.html#sec-3) verbatim (a)/(b)/(c) all-pass; [docs/MILESTONE-FRAMING.md §8.3](docs/MILESTONE-FRAMING.md) routing flag (d) handoff anchor.
+- **AC.** Verification-protocol issue spanning N=2 consecutive months (structurally different from implementation issues per F/CTO Gate D ratify single-issue framing). Three sub-criteria: (a) PRD trace exit criterion = all 32 stories have ≥1 issue closed in Linear (post-rotation); (b) ARCH §10 SD+RT mapping verified post-implementation; (c) N=2 consecutive months of monthly report generation + commentary authoring + RLS clean. Closes V1 ship-gate per §8.3 routing flag (d) + drop-replace termination per §8.2. Decompose into (a)/(b)/(c)-month-1/(c)-month-2/V1.final-close-PR sub-issues at Linear promotion time IF F/CTO prefers finer granularity (per Gate D framing).
+- **Dependencies.** Upstream: ALL V1 issues (V1.0+V1.1+V1.2+V1.3+V1.4+V1.5) + 2 calendar months of operation. **V1.final close-gate; final V1 issue.**
+
+---
+
+*Last updated: 2026-06-03 (Phase 4 Step 5 Wave 6 close — §7 V1 staging queue framing added per [ADR-017](DECISIONS.md#adr-017) Decision 2 + Wave 6 18 issues staged: 8 Architect substrate (A1-A8) + 10 PM domain (P2-P11; PM Issues 1+3+6+9 collapsed per F/CTO Gate A unified + Gate B Option C 4-col absorption); Settings area ramp closes at 4/4; Lock 14 family closes at 5/5; cumulative PRD §2 trace = 32/32 stories = Phase 4 exit criterion 1 fully discharged). Edit via `/start-doc-update <slug>` per ADR-009 Decision 9.*
