@@ -41,6 +41,36 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-018 — Phase 4 close-gate + Phase 5 entry approval (terse pattern)
+
+**Date:** 2026-06-04
+**Status:** Accepted
+**Approved by:** F/CTO (2026-06-04; in-band "ratify both" after Step 9 synthesis surfaced Phase 4.5 disposition + V1.0 first-implementation-issue identification gates).
+
+### Decisions
+
+1. **Phase 4 (Project Scoping) ✅ Complete 2026-06-04.** All 6 WORKFLOW.md exit criteria PASS + mosko-specific §10 SD+RT coverage extension DISCHARGED per Architect Task #30 verdict at `temp/phase-4-sd-rt-coverage.md` (21/21 active SD + 25/25 active RT covered; 0 hard gaps; 2 implicit gaps SD-15 + RT-15 routed to Phase 5 Step 4 by-construction closure). 107 V1 issues total decomposed (89 Linear SELF-181 → SELF-269 V1.0–V1.4 + 18 BACKLOG.md §7 V1.5 + V1.final). Cumulative PRD §2 trace 32/32 stories. Both V1 catalogued §10 instances (RT-22 + RT-26) ship V1 per [ADR-011 Decision 4](#adr-011) catalogued-instance ledger; **Decision 4 catalogued-instance ledger fully discharged at V1 per the 2-instance original commitment**. Settings area ramp 4/4 closed; Lock 14 family 5/5 closed.
+
+2. **Phase 4.5 (Agentic Flow Ramp) SKIPPED.** F/CTO ratified Architect recommendation: skip Phase 4.5 because Phase 4 execution materially exercised the agentic loop (89 Linear issues + 18 BACKLOG.md §7 entries + 4 one-way-door ratify gates + 3 cross-draft conflicts resolved + 5 brief-drift catches + 2-teammate independent verification at boundaries — all under full team-mode discipline across 6 Waves). Phase 4.5's original purpose (fluency-building via throwaway practice feature) is moot given Phase 4 establishes the same fluency on real V1 work. Remaining fluency gaps surface in Phase 5+ production work, not synthetic practice. **WORKFLOW.md Phase 4.5 section preserved** as historical scaffold; not deleted (could re-activate if Phase 5+ surfaces unforeseen fluency gaps).
+
+3. **SELF-186 ratified as V1.0 first-implementation-issue + Phase 5 close-gate exercise.** Per Architect Phase 5 detailed-steps Step 9 mosko extension. SELF-186 = B1 Apply migration `001_users_id_rename.sql`. Rationale (Architect-recommended; F/CTO ratified): (a) smallest end-to-end issue post-Wave-1-scaffolding (Wave 1 A1-A5 SELF-181–185 are themselves Phase 5 Step 1 verification work, not appropriate as close-gate validation targets); (b) exercises full migration pattern (Architect drafting → Backend execution → Sec joint-review on RLS predicate updates → DevOps CI fixture spin-up → F/CTO ratify); (c) foundational unblock cascade — SELF-186 ships `users_id` rename that ALL downstream V1.0 RLS work consumes (SELF-187/188/189/190 + Onboarding SELF-196-209 + Net Worth SELF-210/211); (d) exercises Architect → Backend → Sec → DevOps → F/CTO loop; subsequent V1.0 issues exercise the alternate Backend → Frontend → QA → Sec → DevOps → F/CTO loop. Alternatives rejected per Architect protocol: SELF-196 (too broad — multi-table + pgsodium), SELF-211 (too deep in stack), SELF-201 (too many simultaneous patterns).
+
+4. **Phase 5 (Workshop Setup) entered 2026-06-04.** CoS lead with DevOps + Architect + Sec + PM consult. 9-step detailed-steps subsection drafted by Architect at Phase 4 Step 9 close and landed in WORKFLOW.md Phase 5 section. Bootstrap order DevOps → Backend → Frontend → QA per WORKFLOW.md verbatim intentional bootstrapping moment. Phase 5 exit-gate streak target: 35+ consecutive CLEAN §10 surfaces through Phase 5 close.
+
+### Cross-references
+
+- [ADR-003](#adr-003) — Phase 4-scoping team teardown + Phase 5-workshop-setup team creation.
+- [ADR-009](#adr-009) Decision 2 — Phase 4 sits under P outer category; Phase 5 sits under I+V outer category. Meta-process M1 ✅ COMPLETE; M2 (Implement + Verify) becomes Active at Phase 5 entry.
+- [ADR-011](#adr-011) Decision 4 — catalogued-instance ledger fully discharged at V1 per 2-instance original commitment.
+- [ADR-013 P5](#adr-013) — Settings area ramp 4/4 closed at V1.5.
+- [ADR-017](#adr-017) Decision 2 — BACKLOG.md §7 → Linear milestone-rotation rehearsal lands at Phase 5 Step 7.
+- WORKFLOW.md Phase 4 Lessons learned subsection (12 durable patterns codified at v1.45 close).
+- `temp/phase-4-sd-rt-coverage.md` (gitignored Architect coverage verdict; cited as Criterion 6 evidence).
+- `temp/phase-4-step-9-pm.md` (gitignored PM exit-criteria walk + lessons-learned source).
+- `temp/phase-5-detailed-steps.md` (gitignored Architect Phase 5 9-step draft source).
+
+---
+
 ## ADR-017 — Compact-ledger conventions: MILESTONES Recent activity 5-entry + Linear current+next-milestone scope
 
 **Date:** 2026-06-03
