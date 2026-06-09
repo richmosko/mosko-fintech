@@ -1,0 +1,30 @@
+# .gitleaks.toml — gitleaks repo config
+#
+# Phase 5 Step 4 W1: extends gitleaks default ruleset (inherited via title) with
+# a single path-based allowlist for CI fence golden-test fixtures.
+#
+# Fixtures at tests/fixtures/ci/ deliberately contain violation-shaped patterns
+# (fake env-var values; fake credentials in Dockerfiles; fake DB connections in
+# Python) so the corresponding fences catch them deterministically. Those fixture
+# values are NOT real secrets — they are not in any production code path, never
+# get bundled into any container image (per .dockerignore at repo root + per
+# Sec rubric (b)3 #2 fixture-path discipline), and exist only to exercise the
+# fences' inversion-mode CI checks.
+#
+# Without this allowlist, gitleaks would trip on the fixtures and fail the
+# secrets-scan CI job — false-positive masking the real secret-detection
+# signal. With this allowlist, gitleaks scans the rest of the repo unchanged.
+
+title = "mosko-fintech gitleaks config"
+
+# Inherit the gitleaks default ruleset (~150 rules — generic-api-key, supabase,
+# stripe, github-pat, aws, gcp, etc.). DO NOT override [[rules]] here unless
+# extending; allowlists alone are sufficient for V1.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "CI fence golden-test fixtures — intentionally violation-shaped; never runtime-loadable; per Sec rubric (b)3 #2."
+paths = [
+    '''tests/fixtures/ci/.*''',
+]

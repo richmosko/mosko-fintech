@@ -1,0 +1,44 @@
+# .dockerignore — mosko-fintech repo root
+#
+# Excludes paths from Docker build contexts that use the repo root as the build
+# context. The V1 web-app and PDF worker containers are the V1 build targets
+# (per ARCH §5 + ARCH §2 Components); both inherit this exclusion list.
+#
+# Per-container Dockerfiles may also carry container-scoped .dockerignore files
+# under their respective directories (e.g., workers/pdf-render/.dockerignore).
+
+# CI fence golden-test fixtures (Phase 5 Step 4 W1) — MUST stay out of production
+# build contexts per Sec rubric (b)3 #2. Fixtures are deliberately violation-shaped
+# (raw psycopg2.connect outside TenantBoundConnection class; out-of-allowlist
+# SUPABASE_SERVICE_ROLE_KEY reference; Dockerfile with Postgres client install).
+# If accidentally bundled into a production image, the TBC fixture would be a real
+# security hazard (runtime-loadable raw connection).
+tests/
+
+# Working artifacts + meta-process scratch (per feedback_working_artifacts_temp_not_docs).
+temp/
+
+# VCS + IDE artifacts.
+.git/
+.github/
+.husky/
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Node — handled per-container but defensively excluded at root.
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python — handled per-container but defensively excluded at root.
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Documentation + planning artifacts — not needed in any production container.
+docs/
+*.md
+!CLAUDE.md  # keep per-directory CLAUDE.md instructions visible at debug time
