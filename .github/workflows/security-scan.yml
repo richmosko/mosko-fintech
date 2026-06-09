@@ -178,8 +178,14 @@ jobs:
       - name: gitleaks
         uses: gitleaks/gitleaks-action@v2
         env:
-          # mosko-fintech repo is private; gitleaks-action v2 requires GITLEAKS_LICENSE
-          # for private repos. Secret-store assignment captured at Phase 5 Step 8
-          # secrets-manifest lock; W1 adds the env read here so the scanner runs
-          # correctly + flags the secret-store requirement to Step 8.
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+          # GITHUB_TOKEN is auto-provided by GitHub Actions to every workflow run;
+          # gitleaks-action v2 requires it for PR scanning (per the action's README
+          # breaking-change announcement). No secrets-manifest entry required —
+          # GITHUB_TOKEN is GitHub-native, NOT a CI-only project secret.
+          #
+          # GITLEAKS_LICENSE intentionally NOT set — richmosko is an individual GitHub
+          # user (not an organization); gitleaks-action requires a license key only
+          # for org-owned private repos. If/when mosko-fintech ever migrates to an
+          # org owner, surface the license-key requirement to the secrets-manifest
+          # work at Phase 5 Step 8.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
