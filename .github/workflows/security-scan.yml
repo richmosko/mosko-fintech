@@ -1,0 +1,185 @@
+# .github/workflows/security-scan.yml
+#
+# Phase 5 Step 4 W1 — CI fences + dep/secrets scanners for mosko-fintech V1.
+#
+# Lock anchors:
+#   - ARCH §6 Security scan stage (i)+(ii)+(iii)+(iv)+(v) + ARCH §6.1 catalog mapping
+#   - SECURITY §4.5 RT-22 + RT-26 entries
+#   - ADR-011 Decision 4 (RT-22 first + RT-26 second catalogued §10 instances)
+#   - ADR-011 Decision 17 / Lock 13 mod #2 (RT-22) + mod #3 (TBC; NOT a catalogued §10 instance)
+#   - ADR-015 D1 (5 SvelteKit globs frame RT-26 audit-scope structure)
+#   - ADR-016 D1 (3 V1 RT-26 allowlist surfaces) + D2 (durably-ratified addition convention)
+#
+# §10 attribution discipline (per Sec rubric (c)1 verbatim):
+#   - RT-22 is the FIRST catalogued §10 instance per ADR-011 Decision 4.
+#   - RT-26 is the SECOND catalogued §10 instance per ADR-011 Decision 4.
+#   - TBC is the Privileged-context-surfaces bullet at Decision 4 (code-layer
+#     parallel to RT-26; NOT in Decision 4's catalogued numbered list).
+#     V1-SHIP-BLOCK axis per Lock 13 mod #3 is orthogonal to the §10 catalogued-
+#     instance axis. This file is the ENFORCEMENT VENUE for these mechanisms;
+#     it is NOT a §10 attribution surface.
+#
+# Cross-repo posture (per F/CTO α + paired-PR ratify 2026-06-08):
+#   - TBC fence production-mode enforcement lives in pfin_back_etl repo's CI.
+#   - This workflow runs TBC fence in INVERSION mode only (proves the fence
+#     catches the violation shape against the source-of-truth golden fixture).
+#   - Both repos' workflows must land + merge before V1 ship.
+
+name: Security scan
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]  # also runs on main to catch direct-push regressions if branch protection ever lapses
+
+# No `paths:` filter — all fences + scanners run on every PR/push per agent-def
+# "fail-closed CI fence discipline" defining-behavior. A refactor that moves a
+# Dockerfile or adds a sibling shouldn't accidentally skip the fence.
+
+jobs:
+  fence-rt22:
+    name: RT-22 — PDF worker Dockerfile audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: RT-22 production-mode (PDF worker Dockerfile)
+        run: bash scripts/ci/fence-rt22-pdf-worker-dockerfile.sh workers/pdf-render/Dockerfile
+
+      - name: RT-22 inversion-mode (golden fixture; expects violation)
+        run: |
+          set +e
+          bash scripts/ci/fence-rt22-pdf-worker-dockerfile.sh tests/fixtures/ci/rt22-violation.Dockerfile
+          rc=$?
+          set -e
+          if [ $rc -eq 0 ]; then
+            echo "FATAL: RT-22 fence reported clean against violation fixture — fence is broken; failing closed."
+            exit 1
+          fi
+          echo "OK: RT-22 fence caught fixture violation (exit $rc)."
+
+  fence-rt26:
+    name: RT-26 — SUPABASE_SERVICE_ROLE_KEY allowlist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: RT-26 production-mode (src/ tree)
+        # Audit scope = src/ tree.
+        # When/if repo-root SvelteKit config files (vite.config.*, svelte.config.js)
+        # land at first SvelteKit commit, add additional invocations here scoping
+        # each file. Files don't exist at W1; per ARCH §4.1 they're outside the
+        # allowlist registry and would trip the fence — that's by-design when
+        # they land.
+        run: |
+          if [ -d src ]; then
+            bash scripts/ci/fence-rt26-service-role-allowlist.sh src/ scripts/ci/rt26-allowlist.txt
+          else
+            echo "INFO: src/ does not yet exist (pre-SvelteKit-init); RT-26 production-mode scope is empty at W1."
+            echo "INFO: This step becomes load-bearing at first SvelteKit commit; fence will scan src/ then."
+          fi
+
+      - name: RT-26 inversion-mode (golden fixture; expects violation)
+        run: |
+          set +e
+          bash scripts/ci/fence-rt26-service-role-allowlist.sh tests/fixtures/ci/rt26-violation/ scripts/ci/rt26-allowlist.txt
+          rc=$?
+          set -e
+          if [ $rc -eq 0 ]; then
+            echo "FATAL: RT-26 fence reported clean against violation fixture — fence is broken; failing closed."
+            exit 1
+          fi
+          echo "OK: RT-26 fence caught fixture violation (exit $rc)."
+
+  fence-tbc-inversion:
+    name: TBC — TenantBoundConnection grep (inversion mode only; production lives in pfin_back_etl CI)
+    runs-on: ubuntu-latest
+    # Per α paired-PR shape: production-mode TBC enforcement lives in pfin_back_etl
+    # repo's CI (paired PR scope at ~/Projects/pfin_back_etl/). This job proves the
+    # fence catches the violation shape against the source-of-truth golden fixture;
+    # production-mode catch lives across the repo boundary. Both must land + merge
+    # before V1 ship.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: TBC inversion-mode (golden fixture; expects violation)
+        run: |
+          set +e
+          bash scripts/ci/fence-tbc-pfin-back-etl.sh tests/fixtures/ci/
+          rc=$?
+          set -e
+          if [ $rc -eq 0 ]; then
+            echo "FATAL: TBC fence reported clean against violation fixture — fence is broken; failing closed."
+            exit 1
+          fi
+          echo "OK: TBC fence caught fixture violation (exit $rc)."
+
+  scanner-npm-audit:
+    name: Dep scan — npm audit (high+critical)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: npm audit (fails on high or critical)
+        run: |
+          # Find package.json files under V1 scope (V1 web-app + PDF worker; both Node).
+          # Skip W1 if no package.json lands yet — pre-SvelteKit-init posture.
+          PKG_FILES=$(find . -name 'package.json' -not -path './node_modules/*' -not -path './tests/*' || true)
+          if [ -z "$PKG_FILES" ]; then
+            echo "INFO: no package.json under mosko-fintech V1 scope — npm audit no-op as expected at W1."
+            echo "INFO: This scanner becomes load-bearing at first npm-init commit."
+            exit 0
+          fi
+          for p in $PKG_FILES; do
+            d=$(dirname "$p")
+            echo "Auditing $d"
+            (cd "$d" && npm audit --audit-level=high)
+          done
+
+  scanner-pip-audit:
+    name: Dep scan — pip-audit (high+critical)
+    runs-on: ubuntu-latest
+    # V1 web-app + PDF worker are Node-only at V1; this job no-ops in mosko-fintech
+    # repo as expected. Python-dep scanning for pfin_back_etl lives in its own repo CI
+    # (paired-PR scope). When/if mosko-fintech ever adds a Python surface,
+    # pip-audit picks up automatically via the find pattern.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: pip-audit (defensive find excludes fixtures + node_modules)
+        run: |
+          pip install pip-audit
+          REQS=$(find . -name 'requirements*.txt' -not -path './node_modules/*' -not -path './tests/*' || true)
+          if [ -z "$REQS" ]; then
+            echo "INFO: no requirements*.txt under mosko-fintech V1 scope — pip-audit no-op as expected."
+            echo "INFO: Python-dep scanning for pfin_back_etl lives in its own repo CI."
+            exit 0
+          fi
+          for r in $REQS; do
+            echo "Auditing $r"
+            pip-audit -r "$r"
+          done
+
+  scanner-gitleaks:
+    name: Secrets scan — gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # gitleaks needs full history for diff mode
+
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          # mosko-fintech repo is private; gitleaks-action v2 requires GITLEAKS_LICENSE
+          # for private repos. Secret-store assignment captured at Phase 5 Step 8
+          # secrets-manifest lock; W1 adds the env read here so the scanner runs
+          # correctly + flags the secret-store requirement to Step 8.
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
