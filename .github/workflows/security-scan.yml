@@ -19,11 +19,11 @@
 #     instance axis. This file is the ENFORCEMENT VENUE for these mechanisms;
 #     it is NOT a §10 attribution surface.
 #
-# Cross-repo posture (per F/CTO α + paired-PR ratify 2026-06-08):
-#   - TBC fence production-mode enforcement lives in pfin_back_etl repo's CI.
-#   - This workflow runs TBC fence in INVERSION mode only (proves the fence
-#     catches the violation shape against the source-of-truth golden fixture).
-#   - Both repos' workflows must land + merge before V1 ship.
+# Single-repo posture (per ADR-019, Phase 5 Step 4 W0):
+#   - pfin_back_etl source is absorbed into this monorepo at workers/etl/; the
+#     cross-repo paired-PR pattern retires.
+#   - The TBC fence runs production-mode (workers/etl/src/) + inversion-mode
+#     (golden fixture) in one job, mirroring fence-rt22's dual-mode shape.
 
 name: Security scan
 
@@ -92,16 +92,20 @@ jobs:
           fi
           echo "OK: RT-26 fence caught fixture violation (exit $rc)."
 
-  fence-tbc-inversion:
-    name: TBC — TenantBoundConnection grep (inversion mode only; production lives in pfin_back_etl CI)
+  fence-tbc:
+    name: TBC — TenantBoundConnection grep (production + inversion)
     runs-on: ubuntu-latest
-    # Per α paired-PR shape: production-mode TBC enforcement lives in pfin_back_etl
-    # repo's CI (paired PR scope at ~/Projects/pfin_back_etl/). This job proves the
-    # fence catches the violation shape against the source-of-truth golden fixture;
-    # production-mode catch lives across the repo boundary. Both must land + merge
-    # before V1 ship.
+    # Post-W0 (ADR-019): pfin_back_etl source is absorbed into this monorepo at
+    # workers/etl/. The cross-repo paired-PR pattern retires; production-mode +
+    # inversion-mode both run here, mirroring the fence-rt22 dual-mode shape.
+    # Production-mode scopes to workers/etl/src/ — the faithful 1:1 migration of
+    # the pre-W0 pfin_back_etl CI posture, which scanned src/ and excluded tests/
+    # (where the violation fixture lives; it is exercised under inversion-mode).
     steps:
       - uses: actions/checkout@v4
+
+      - name: TBC production-mode (workers/etl/src/ source tree)
+        run: bash scripts/ci/fence-tbc-pfin-back-etl.sh workers/etl/src/
 
       - name: TBC inversion-mode (golden fixture; expects violation)
         run: |
@@ -143,10 +147,12 @@ jobs:
   scanner-pip-audit:
     name: Dep scan — pip-audit (high+critical)
     runs-on: ubuntu-latest
-    # V1 web-app + PDF worker are Node-only at V1; this job no-ops in mosko-fintech
-    # repo as expected. Python-dep scanning for pfin_back_etl lives in its own repo CI
-    # (paired-PR scope). When/if mosko-fintech ever adds a Python surface,
-    # pip-audit picks up automatically via the find pattern.
+    # V1 web-app + PDF worker are Node-only at V1; this requirements*.txt-based job
+    # no-ops in the monorepo as expected. Post-W0 (ADR-019) the ETL source lives at
+    # workers/etl/ but pins deps via pyproject.toml + uv.lock (NOT requirements*.txt),
+    # so it is NOT covered by this find pattern — adding uv/pyproject-aware Python
+    # dep-audit for workers/etl/ is tracked with the ETL CI re-homing follow-up.
+    # When/if a requirements*.txt surface lands, pip-audit picks it up automatically.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -159,7 +165,7 @@ jobs:
           REQS=$(find . -name 'requirements*.txt' -not -path './node_modules/*' -not -path './tests/*' || true)
           if [ -z "$REQS" ]; then
             echo "INFO: no requirements*.txt under mosko-fintech V1 scope — pip-audit no-op as expected."
-            echo "INFO: Python-dep scanning for pfin_back_etl lives in its own repo CI."
+            echo "INFO: workers/etl/ pins deps via pyproject.toml + uv.lock (not requirements*.txt); uv/pyproject-aware ETL dep-audit is a tracked follow-up."
             exit 0
           fi
           for r in $REQS; do
