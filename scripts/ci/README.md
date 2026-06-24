@@ -23,7 +23,7 @@ Per ADR-011 Decision 4:
 - **RT-26** is the **second catalogued §10 instance** (code-layer on V1-web-app
   server-side source; SECURITY §4.2 axis vi; HIGH + V1-SHIP-BLOCK).
 - **TBC** is the **Privileged-context-surfaces bullet at Decision 4** (code-layer
-  parallel to RT-26 on `pfin_back_etl`; Lock 13 mod #3 V1-SHIP-BLOCK). **NOT in
+  parallel to RT-26 on `workers/etl/` Python source; Lock 13 mod #3 V1-SHIP-BLOCK). **NOT in
   Decision 4's catalogued numbered list** — the numbered list stays 2-instance per
   the discipline-preservation guard. V1-SHIP-BLOCK axis (Lock 13 mod #3) is
   orthogonal to the §10 catalogued-instance axis.

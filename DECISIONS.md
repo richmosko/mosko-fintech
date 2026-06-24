@@ -41,6 +41,85 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-019 — Polyrepo → monorepo topology consolidation; `pfin_back_etl` absorbed at `workers/etl/`
+
+**Date:** 2026-06-16
+**Status:** Accepted
+**Phase:** Phase 5 Step 4 W0 (monorepo topology migration; predecessor W1 — PR #104 mosko-fintech + paired PR #14 pfin_back_etl — both merged)
+**Pattern:** Short pattern (single decision; topology consolidation that amends — does not invalidate — [ADR-011](#adr-011) Decision 17 / Lock 13)
+
+**Context.**
+
+[ADR-011](#adr-011) Decision 17 / Lock 13 locked the V1 hybrid background-worker topology at 2026-05-26 with `pfin_back_etl` as an **incumbent sibling repo** — its own GitHub repo at `github.com/richmosko/pfin_back_etl` + its own Coolify application + (as of Phase 5 Step 4 W1) its own paired CI workflow carrying the production-mode `TenantBoundConnection` (TBC) grep fence. Phase 5 Step 4 W1 (PR #104 + paired PR #14) operationalized the cross-repo TBC fence: production-mode ran against the actual Python tree in `pfin_back_etl`'s CI; inversion-mode (golden-fixture, expects-violation) ran against the vendored fixture in mosko-fintech's CI; the two were kept in sync by the **paired-PR convention** + a vendored-copy header banner — both F/CTO-discipline-at-paired-PR-time, with no automated drift detection at V1.
+
+W1 ran that pattern end-to-end and proved its durable cost: every Python-source change requires a paired PR; vendored-copy drift is caught only by F/CTO attention at paired-PR-time; Phase 5 Step 4 W2 + W3 + Phase 6 build-loop would compound the friction across all future Python-source touches. W0 retires the friction by-construction by folding the `pfin_back_etl` source into the mosko-fintech monorepo at `workers/etl/` (sibling to the existing `workers/pdf-render/`). The fold is a **fresh import** (working tree at `origin/main` `f047e88`; NOT a git-subtree merge — history-preservation cost exceeds benefit at V1 scale per F/CTO ratify on shape β.2); the `pfin_back_etl` GitHub repo stays archived as historical reference.
+
+This is a **one-way door** on the ADR-home axis: every downstream surface (ARCH §5/§6/§6.1, devops.md, `scripts/ci/README.md`, future PRs) links to wherever this decision lives as canonical; moving it later requires a migration-pass across every linked surface. F/CTO ratified the five sub-decisions below against the Architect leans.
+
+### Decision — consolidate to monorepo at `workers/etl/`; record via new short-pattern ADR; CI consolidates to one dual-mode TBC job
+
+The migration is a **source-organization** change, not a **runtime-topology** change. The five ratified sub-decisions:
+
+1. **ADR shape → Option C (hybrid).** This decision lands as new short-pattern **ADR-019** (clean, independently-linkable canonical home for the topology-shift meta-decision); [ADR-011](#adr-011) Decision 17 gains a one-sentence reciprocal annotation pointing here. The **new-ADR-extends-a-prior-Decision-17-sub-territory** relationship follows the [ADR-015](#adr-015) precedent — ADR-015 extends Decision 17 without invalidating it via a **one-directional** cross-reference housed inside ADR-015 (Decision 17 itself was never annotated under ADR-015). The reciprocal **Decision 17 → ADR-019 back-annotation is a new navigation aid introduced at W0**, not part of the ADR-015 precedent: W0 adds the back-pointer so a reader landing on the closed Decision 17 finds the topology-consolidation reference in place. Option A (new ADR only) was rejected as leaving Decision 17 silently stale; Option B (in-line amendment to the closed Decision 17, no new ADR) was rejected per the [ADR-016](#adr-016) precedent against re-opening a closed canonical anchor.
+
+2. **CI restructure → Option A (extend the existing job to dual-mode).** mosko-fintech's `security-scan.yml` `fence-tbc-inversion` job is renamed `fence-tbc` and gains a production-mode step running the TBC grep fence against `workers/etl/`, alongside the existing inversion-mode step — production + inversion in **one job**, matching the established `fence-rt22` pattern (production-mode + inversion-mode in a single job). Both modes run on every PR; fail-closed discipline preserved. Option B (a new sibling production-mode job) was rejected as introducing a "one job per mode" variant that diverges from the established RT-22 convention without a forcing function. The `pfin_back_etl`-side `security-scan-tbc.yml` workflow retires (the paired-PR pattern retires with it).
+
+3. **§10 attribution-annotation surface → Option A (ADR-019 § only).** The topology-shift annotation lives in this ADR's "§10 attribution discipline preservation" subsection below; **[ADR-011](#adr-011) Decision 4 is NOT amended.** W0 is structurally not an attribution-drift catch (the case Decision 4's maintenance-annotation CHANGELOG was designed to absorb) — it is a topology shift that preserves Decision 4's content by-construction. Option B (append a bullet to Decision 4's CHANGELOG annotation) was rejected as conflating topology-shift annotations with drift-catch entries; Option C (both surfaces) was rejected on the same sync-cost grounds as sub-decision 1's Option B. This mirrors the [ADR-016](#adr-016) shape: §10 catalogued-instance ledger stays UNCHANGED by-construction; the new ADR annotates discipline preservation in-§.
+
+4. **Coolify config-change → Option A (in-place reconfigure; delete-recreate named fallback).** Operational (W0b); not part of this ADR's artifact scope. The existing `pfin_back_etl` Coolify application is reconfigured in-place to point at `github.com/richmosko/mosko-fintech` with **Base Directory** `workers/etl/`, preserving deploy history + env-vars (5+ secrets stay in place). DevOps drafts the numbered recipe; delete-recreate is the named fallback if the source-repo-change UI surfaces undocumented behavior.
+
+5. **`pfin_back_etl` repo decommissioning → Option A (minimal archive).** Operational (W0b); not part of this ADR's artifact scope. README banner pointing at the monorepo + GitHub archive-flag (read-only mode) + no visibility-tier change.
+
+### §10 attribution discipline preservation
+
+ADR-019 introduces **zero** new catalogued §10 instances. [ADR-011](#adr-011) Decision 4 is referenced here by canonical link only — its catalogued numbered list, Privileged-context-surfaces bullet, and three-layer composition definitions are not restated (Path B — drop-enumeration-let-link-carry, per the frame that this ADR REFERENCES rather than ABSORBS Decision 4's canonical content). Cross-check across the three drift axes:
+
+- **(i) Instance-numbering.** Decision 4's catalogued §10-instances list stays at its V1 commitment — RT-22 first, RT-26 second; the ledger remains fully discharged at V1 per the 2-instance original commitment recorded at [ADR-018](#adr-018) / Phase 4 close. W0 adds no catalogued instance.
+- **(ii) Layer-attribution.** RT-22 stays the infrastructure-credential-presence layer (its CI target is the PDF-worker Dockerfile — unchanged by W0). RT-26 stays the code-layer fence on the V1-web-app server-side source surface (`src/**` + repo root — unchanged by W0). TBC stays at the Privileged-context-surfaces bullet as the code-layer `TenantBoundConnection` class + CI grep fence — **explicitly not a catalogued §10 instance**; W0 only retargets its CI invocation from a cross-repo Python tree to the monorepo path `workers/etl/`, which is a path change, not a layer or attribution change.
+- **(iii) Verbatim-vs-paraphrase.** This ADR does not enumerate Decision 4's catalogued numbered list verbatim; it links to Decision 4 as the canonical anchor (Path B).
+
+Streak: the §10 attribution-discipline CLEAN streak (26+ consecutive surfaces at W1 close) extends to 27+ at W0 close by-construction. Sec joint-review verifies the three-axis cross-check at W0a-3 lock.
+
+### Considered alternatives
+
+- **(a) Continue the cross-repo paired-PR pattern** — rejected: W1 proved the friction (every Python-source change needs a paired PR; vendored-copy drift detection is manual); Phase 5 Step 4 W2 + W3 + Phase 6 build-loop would compound the cost across all future Python-source touches.
+- **(b) Git-subtree merge (preserve `pfin_back_etl` history in the monorepo)** — rejected per F/CTO ratify on shape β.2: history-preservation cost exceeds benefit at V1 scale; fresh import is simpler and the old repo stays archived as the historical reference.
+- **(c) Amend [ADR-011](#adr-011) Decision 17 in-line without a new ADR** — rejected per the [ADR-016](#adr-016) precedent: re-opening a closed canonical anchor risks discipline drift; a new short-pattern ADR is the established convention for amendments that extend without invalidating the prior Decision (the exact shape [ADR-015](#adr-015) set).
+
+### Cross-references
+
+- [ADR-011](#adr-011) Decision 17 / Lock 13 — the hybrid 3-container topology this ADR consolidates the source-organization of. **UNCHANGED structurally**; carries a one-sentence annotation pointing here. The 3-container runtime topology + full Lock 13 mod inventory (#1–#10) all stand.
+- [ADR-011](#adr-011) Decision 4 — §10 defense-in-depth ledger. **UNCHANGED by-construction**; this ADR's "§10 attribution discipline preservation" subsection carries the cross-check; Decision 4 is referenced by link only.
+- [ADR-015](#adr-015) — SvelteKit framework lock; the precedent for a **new ADR extending a prior Decision 17 sub-territory** while the topology + Lock 13 mod inventory stand unchanged. ADR-015's cross-reference to Decision 17 is **one-directional** (housed inside ADR-015; Decision 17 was not annotated). ADR-019 follows that extends-relationship; the reciprocal **Decision 17 → ADR-019 back-annotation is a new navigation aid W0 introduces**, not part of the ADR-015 precedent (sub-decision 1 Option C).
+- [ADR-016](#adr-016) — RT-26 allowlist enumeration; the precedent for "rejected an α Decision-4 amendment in favor of a new short ADR that annotates discipline preservation in-§ while Decision 4's catalogued ledger stays UNCHANGED." ADR-019 follows this shape (sub-decisions 1 + 3).
+- [ADR-017](#adr-017) — compact-ledger conventions; W0 close lands one CHANGELOG `vX.YY` entry + one 1-sentence MILESTONES Recent-activity pointer per Decision 1.
+- WORKFLOW.md Phase 5 Step 4 — W0 insertion + sub-wave restructure (W0 → W1 already-merged → W2 → W3).
+- `reference_pfin_back_etl` memory — updated to note the source now lives in-repo at `mosko-fintech/workers/etl/` (no longer a sibling repo); historical-reference framing for the archived `pfin_back_etl` GitHub repo preserved.
+
+### Consequences
+
+**Unchanged by ADR-019:**
+
+- 3-container runtime topology on Hetzner cax21 (V1 web-app + PDF worker + Python ETL container + monthly_report cron container). Monorepo is a source-organization change; the runtime stays three separate containers / three Dockerfiles / three processes.
+- All Lock 13 mods (#1–#10) — PDF-render contract, PDF-worker zero-DB-isolation, TBC, same-transaction audit-log, Puppeteer/audit hardening posture.
+- §10 catalogued-instance ledger ([ADR-011](#adr-011) Decision 4) — RT-22 first, RT-26 second; TBC at the Privileged-context-surfaces bullet; numbered list unchanged.
+- Container **display name** `pfin_back_etl` (the Coolify container / runtime identity) — only its **source location** changes.
+- ARCH §5 trust-boundary inventory composition (the rows stand; the Python-source-path framing retargets to `workers/etl/`).
+
+**Changed by ADR-019:**
+
+- Source location: `github.com/richmosko/pfin_back_etl/` → `mosko-fintech/workers/etl/`.
+- CI pattern: cross-repo paired-PR (mosko-fintech W1 + `pfin_back_etl` paired PR) retires; single-PR shape going forward. TBC fence runs production-mode + inversion-mode in one `fence-tbc` job in mosko-fintech `security-scan.yml`; `pfin_back_etl`-side `security-scan-tbc.yml` retires.
+- `scripts/ci/README.md` retires the `Cross-repo TBC posture` subsection (replaced with a shorter `Single-repo TBC posture (post-W0)` subsection); the §10 catalogued-instance ledger cross-reference subsection + the RT-22 / RT-26 subsections stay unchanged. The vendored-copy + source-of-truth-header conventions retire (no second repo to vendor into).
+- Coolify application reconfigures (in-place; delete-recreate fallback) to point at the monorepo with Base Directory `workers/etl/` (W0b operational).
+- `pfin_back_etl` GitHub repo archives with a README banner pointing at the monorepo (W0b operational).
+
+**Sequencing:** W0 lands before W2 (SD-15 `fn_mask_acct_number` migration — topology-agnostic) + W3 (QA two-tenant + parity fixtures + RLS battery — RT-15 parity-fixture framing retargets from "`pfin_back_etl` test-environment posture" to "`workers/etl/` test-environment posture" at W3 ratify; no fixture-shape change). Landing W0 first means W2 + W3 reference post-migration `workers/etl/` paths directly.
+
+**Approved by:** F/CTO (2026-06-16 — ratified all five sub-decisions against the Architect leans, per the W0 monorepo-migration plan ratify gate; Sec joint-review on the Decision 4 cross-check + ADR-019 at W0a-3 lock).
+
+---
+
 ## ADR-018 — Phase 4 close-gate + Phase 5 entry approval (terse pattern)
 
 **Date:** 2026-06-04
@@ -529,6 +608,8 @@ Decision 4's canonical structure above (Three classes of surface + sub-bullets +
 **Locked option:** Option C — hybrid worker location: `pfin_back_etl` (Python on Coolify; incumbent extended) hosts monthly-report cron + Plaid scheduled-poll + NAV + BLS + FMP; V1 app retains Plaid webhook handler + in-app render path; NEW Node PDF worker container (Puppeteer browser-context-per-render hitting V1 app render URL with short-lived signed JWT under user-session identity). Lock 12 mod #1 read-path-only fence preserved by-construction (HTTP-via-V1-app) + by-infrastructure (Sec mod #2 — no Supabase credentials in PDF worker container). **Sec's 10 mods** (4 V1-SHIP-BLOCK + 6 advisory) including: V1-SHIP-BLOCK PDF worker JWT shape (authenticated-tier-only; dedicated signing key; 60s freshness; nonce replay); V1-SHIP-BLOCK PDF worker no-direct-DB-access infrastructure fence (no `SUPABASE_*` env vars; no Postgres client installed; **§10 meta-pattern instance per Decision 4 — infrastructure-credential-presence layer**); V1-SHIP-BLOCK `TenantBoundConnection`-only CI fence (compile-time complement to runtime SQL-log assertion); V1-SHIP-BLOCK same-transaction audit-log discipline (`emit_audit_log()` on same `conn` in same SERIALIZABLE tx); Puppeteer browser-context-per-render hardening (system-fonts-only fence + Chromium flags `--disable-features=BackgroundFetch,ServiceWorker,BackgroundSync` + cache-disable + per-render PDF metadata clear); **mod #8 cross-language audit-log schema-as-contract** via new `pfin.plaid_sync_audit` table with `source` ENUM discriminator; RT-21 HIGH (PDF worker JWT verification) + RT-22 medium (PDF worker container credential audit); RT-09 + RT-10 amendments. §6 privileged-context-write discipline concretized as `TenantBoundConnection` class.
 
 **Cross-references:** locks-log Lock 13; Task #34 Phase 3 carry-over (`pfin_back_etl` extension + V1 app `/internal/pdf-render` endpoint + Node PDF worker + 10 Sec mods). Sec's load-bearing catch: infrastructure-credential-absence as defense-in-depth layer (future-regression-fence) — §10 meta-pattern (Decision 4) first formal instance. `reference_pfin_back_etl` + `reference_hetzner_cax21` memories.
+
+**[Annotation 2026-06-16 — see [ADR-019](#adr-019) for polyrepo → monorepo topology consolidation; Decision 17's 3-container runtime topology + Lock 13 mod inventory all stand unchanged.]**
 
 ### Decision 18 — Lock 14 / Flag #9: settings store (Option B — per-domain tables fully split)
 
