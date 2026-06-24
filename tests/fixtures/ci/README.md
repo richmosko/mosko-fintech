@@ -34,19 +34,24 @@ container**:
 - The fixtures are scoped to `tests/fixtures/ci/`; the wider `tests/` tree is
   also conventionally excluded from production builds.
 
-### `pfin_back_etl` repo (paired-PR responsibility)
+### Stronger isolation post-W0 (Coolify Base Directory)
 
-Per the α paired-PR shape (per F/CTO ratify 2026-06-08), `pfin_back_etl` repo
-vendors `tbc-violation.py` (literal copy). That repo's paired PR is responsible
-for excluding `tests/fixtures/` from:
+Per ADR-019 (Phase 5 Step 4 W0), `pfin_back_etl` was absorbed into this monorepo at
+`workers/etl/`; the cross-repo **vendored-copy convention retires** — there is no
+second repo to vendor `tbc-violation.py` into, and this directory is now the single
+source of truth.
 
-- `.dockerignore` (production build context).
-- `pyproject.toml` / `setup.py` `packages` declaration (Python module
-  discovery).
-- `__pycache__` cleanup (no compiled bytecode in production).
+This is a **posture strengthening**, not a relaxation. Each production container's
+build context is scoped by Coolify **Base Directory** (e.g. `workers/etl/` for the
+ETL container, `workers/pdf-render/` for the PDF worker). The repo-root
+`tests/fixtures/` tree sits *outside* every per-container Base Directory
+by-construction, so no fixture is reachable in any production build context —
+without relying on per-repo `.dockerignore` + `packages`-exclusion discipline the
+way the retired paired-PR convention did. The isolation guarantee is now
+**structural rather than convention-maintained**.
 
-See `scripts/ci/README.md` § Cross-repo TBC posture for the full paired-PR file
-map + isolation requirements.
+See `scripts/ci/README.md` § Single-repo TBC posture (post-W0) for the
+consolidated CI restructure.
 
 ## Why fixtures violate verbatim, not via mocks
 

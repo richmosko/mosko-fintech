@@ -6,8 +6,8 @@ three classes of security-load-bearing regressions:
 - **RT-22** — PDF worker Dockerfile zero-DB-isolation audit.
 - **RT-26** — `SUPABASE_SERVICE_ROLE_KEY` allowlist grep fence on the V1 web-app
   server-side source surface.
-- **TBC** — `TenantBoundConnection` grep fence on `pfin_back_etl` Python source
-  tree (cross-repo; see [Cross-repo TBC posture](#cross-repo-tbc-posture) below).
+- **TBC** — `TenantBoundConnection` grep fence on the `workers/etl/` Python source
+  tree (single-repo post-W0; see [Single-repo TBC posture (post-W0)](#single-repo-tbc-posture-post-w0) below).
 
 The fences are invoked from `.github/workflows/security-scan.yml`. Each fence ships
 with a paired golden-test fixture under `tests/fixtures/ci/` and a CI inversion-mode
@@ -23,7 +23,7 @@ Per ADR-011 Decision 4:
 - **RT-26** is the **second catalogued §10 instance** (code-layer on V1-web-app
   server-side source; SECURITY §4.2 axis vi; HIGH + V1-SHIP-BLOCK).
 - **TBC** is the **Privileged-context-surfaces bullet at Decision 4** (code-layer
-  parallel to RT-26 on `pfin_back_etl`; Lock 13 mod #3 V1-SHIP-BLOCK). **NOT in
+  parallel to RT-26 on `workers/etl/` Python source; Lock 13 mod #3 V1-SHIP-BLOCK). **NOT in
   Decision 4's catalogued numbered list** — the numbered list stays 2-instance per
   the discipline-preservation guard. V1-SHIP-BLOCK axis (Lock 13 mod #3) is
   orthogonal to the §10 catalogued-instance axis.
@@ -38,7 +38,7 @@ by anything in this directory.
 scripts/ci/
 ├── fence-rt22-pdf-worker-dockerfile.sh   # RT-22 audit script
 ├── fence-rt26-service-role-allowlist.sh  # RT-26 grep fence (γ-hybrid)
-├── fence-tbc-pfin-back-etl.sh            # TBC grep fence (cross-repo consumable)
+├── fence-tbc-pfin-back-etl.sh            # TBC grep fence (single-repo; scans workers/etl/src/)
 ├── rt26-allowlist.txt                    # RT-26 allowlist registry (3 ADR-016 D1 file paths)
 └── README.md                             # (this file)
 ```
@@ -109,111 +109,38 @@ Catches raw `psycopg2.connect()` / `psycopg.connect()` (psycopg3) /
 `TenantBoundConnection` class. Class-allowlisting is via class-declaration
 discovery, NOT hardcoded path (per Sec rubric (a)3 #4).
 
-### Cross-repo TBC posture
+### Single-repo TBC posture (post-W0)
 
-Per F/CTO α + paired-PR ratify (2026-06-08), TBC enforcement lives across two
-repos:
+Per ADR-019 (Phase 5 Step 4 W0), `pfin_back_etl` source was absorbed into this
+monorepo at `workers/etl/`. The cross-repo paired-PR pattern **retires**:
 
-- **`mosko-fintech` repo (this repo)** holds the source-of-truth fence script +
-  golden fixture + cross-repo docs (this section). CI runs the fence in
-  **inversion mode only** against the local golden fixture.
-- **`pfin_back_etl` repo** (sibling at `~/Projects/pfin_back_etl/`) holds a
-  vendored literal copy of the fence script + golden fixture + a workflow YAML
-  that runs the fence in **production mode** against the actual Python source
-  tree + inversion mode redundantly.
+- Production-mode + inversion-mode both run in **one job** (`fence-tbc`) in
+  `.github/workflows/security-scan.yml`, mirroring the `fence-rt22` dual-mode
+  shape. Production-mode scans `workers/etl/src/` (the Python package);
+  inversion-mode scans `tests/fixtures/ci/` (the golden violation fixture).
+- Production-mode scope `workers/etl/src/` is the **faithful 1:1 migration** of
+  the pre-W0 `pfin_back_etl` CI posture, which scanned `src/` and excluded
+  `tests/` — where the violation fixture lives and would otherwise self-trip
+  production-mode. The fixture is exercised under inversion-mode instead. Catch
+  criterion is unchanged: raw `psycopg2`/`psycopg`/`asyncpg` `.connect()` outside
+  the `TenantBoundConnection` class.
+- The **vendored-copy convention retires** — there is no second repo to vendor the
+  fence script or fixture into. `scripts/ci/fence-tbc-pfin-back-etl.sh` and
+  `tests/fixtures/ci/tbc-violation.py` are the single source of truth; the
+  "VENDORED COPY" source-of-truth banner no longer applies.
+- Fixture isolation is now **stronger by-construction**: each production container's
+  build context is scoped by Coolify **Base Directory** (`workers/etl/` for the ETL
+  container), so the repo-root `tests/fixtures/` tree is outside every production
+  build context automatically — a stronger guarantee than the paired-PR
+  `.dockerignore` + `packages`-exclusion convention it replaces.
 
-Both repos' workflows MUST land + merge before V1 ship.
-
-#### Paired `pfin_back_etl` PR file map
-
-When drafting the paired PR in `pfin_back_etl`, land these files (literal copies
-of the mosko-fintech-side artifacts unless noted):
-
-```
-pfin_back_etl/
-├── .github/
-│   └── workflows/
-│       └── security-scan-tbc.yml         # NEW — see skeleton below
-├── scripts/
-│   └── ci/
-│       └── fence-tbc-pfin-back-etl.sh    # VENDORED COPY (identical content + single-source-of-truth header)
-├── tests/
-│   └── fixtures/
-│       └── ci/
-│           └── tbc-violation.py          # VENDORED COPY (identical content + single-source-of-truth header)
-├── .dockerignore                          # UPDATED — adds `tests/fixtures/` exclusion
-└── pyproject.toml OR setup.py             # UPDATED — `tests/fixtures/` outside `packages` declaration
-```
-
-#### Paired `pfin_back_etl` workflow YAML skeleton
-
-```yaml
-# pfin_back_etl/.github/workflows/security-scan-tbc.yml
-name: Security scan — TBC fence
-on:
-  pull_request:
-    branches: [main]
-  push:
-    branches: [main]
-jobs:
-  fence-tbc:
-    name: TBC — TenantBoundConnection grep
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: TBC production-mode (pfin_back_etl source tree)
-        # Vendored copy of fence script + golden fixture from mosko-fintech repo.
-        # Single source of truth: <mosko-fintech>/scripts/ci/fence-tbc-pfin-back-etl.sh
-        run: bash scripts/ci/fence-tbc-pfin-back-etl.sh .
-      - name: TBC inversion-mode (vendored golden fixture; expects violation)
-        run: |
-          set +e
-          bash scripts/ci/fence-tbc-pfin-back-etl.sh tests/fixtures/ci/
-          rc=$?
-          set -e
-          if [ $rc -eq 0 ]; then
-            echo "FATAL: TBC fence reported clean against violation fixture — fence is broken; failing closed."
-            exit 1
-          fi
-          echo "OK: TBC fence caught fixture violation (exit $rc)."
-```
-
-#### Vendored-copy header convention
-
-When vendoring the fence script + fixture into `pfin_back_etl`, prepend a header
-comment marking the single source of truth:
+Local invocation (production-mode against the ETL package):
 
 ```bash
-# VENDORED COPY — single source of truth at:
-#   <mosko-fintech>/scripts/ci/fence-tbc-pfin-back-etl.sh
-# Update this copy IN LOCKSTEP with the source-of-truth file. Drift detection is
-# F/CTO-discipline at paired-PR time at V1; automated drift detection deferred to
-# V2-or-later.
+bash scripts/ci/fence-tbc-pfin-back-etl.sh workers/etl/src/
 ```
 
-#### Fixture path isolation requirements (paired-PR responsibility)
-
-Per Sec rubric (b)3 #2: the TBC fixture's path MUST NOT be on `pfin_back_etl`'s
-production code-loading path. The paired PR is responsible for:
-
-1. `.dockerignore` excludes `tests/fixtures/` from `pfin_back_etl`'s production
-   build context.
-2. `pyproject.toml` / `setup.py` `packages` declaration excludes
-   `tests/fixtures/` from Python module discovery.
-3. `__pycache__` cleanup pattern in place so test runs don't accidentally ship
-   compiled bytecode to production.
-
-Without these exclusions, the raw `psycopg2.connect()` in `tbc-violation.py` would
-be runtime-loadable — fixture-as-attack-surface is exactly what Sec rubric (b)3
-#2 catches.
-
-Local invocation (in `pfin_back_etl` repo against actual Python tree):
-
-```bash
-bash scripts/ci/fence-tbc-pfin-back-etl.sh .
-```
-
-Local invocation (in either repo against the golden fixture):
+Local invocation (inversion-mode against the golden fixture):
 
 ```bash
 bash scripts/ci/fence-tbc-pfin-back-etl.sh tests/fixtures/ci/
