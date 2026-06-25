@@ -57,6 +57,14 @@ QA sign-off gates V1-SHIP-BLOCK merge.
 > cases under `supabase/tests/rls/NN_*.sql` are one dir down, so they use
 > `\ir ../_fixtures/rls_verbs.psql`. Directory-mode mounts the whole tree, so both resolve.
 
+> **Grant-then-RLS shape (isolate the layer under test):** Postgres checks the **table ACL
+> before RLS**. So a cross-tenant test must hold the table-level grant OPEN to `authenticated`
+> (`grant select, insert … to authenticated`) and let **RLS be the only gate** — otherwise a
+> missing grant denies the probe at the ACL layer and you're testing GRANTs, not RLS. This
+> mirrors prod (authenticated holds table privileges; RLS does row filtering). The inversion
+> canary encodes this; Phase-6 per-table cases follow the same model. (Root-caused on PR #106:
+> the canary's probe hit `permission denied` before RLS because the grant was missing.)
+
 ## Access-control / fixture posture
 
 Synthetic-only — no production data, no PII, no real account numbers. Governed by the central
