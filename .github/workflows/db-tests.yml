@@ -18,12 +18,14 @@
 #
 # Two CLI behaviors this job is built around (verified against supabase/cli source,
 # 2026-06-25 — NOT assumed):
-#   1. `supabase test db` runs `pg_prove --ext .pg --ext .sql -r <paths>`. The `-r`
-#      RECURSES — so handing it the supabase/tests directory would collect
-#      supabase/tests/_fixtures/rls_verbs.sql (a `\ir`-included verb file with NO
-#      plan()) and fail it as a planless test. We pass an EXPLICIT, sorted file
-#      list that excludes _fixtures/. The CLI mounts each test file's PARENT dir
-#      (supabase/tests), so the `\ir _fixtures/rls_verbs.sql` includes still resolve.
+#   1. `supabase test db` runs `pg_prove --ext .pg --ext .sql -r <dir>` and binds the
+#      WHOLE supabase/tests dir into the container, so `\ir _fixtures/...` includes
+#      resolve. `-r` recurses but only collects .sql/.pg as tests — the shared verbs
+#      live at supabase/tests/_fixtures/rls_verbs.psql (NON-test extension), so they
+#      are mounted for \ir yet never run as a planless standalone test.
+#      (Explicit-file mode does NOT work: the Go CLI binds each passed path at its own
+#      abspath `fp:fp:ro`, so passing only the test files leaves _fixtures/ unmounted
+#      and `\ir` fails "no such file" — that was the PR #106 first-run bug.)
 #   2. There is NO `supabase db start` command — the local stack starts via
 #      `supabase start` (db-only via `-x`). `supabase start` applies
 #      supabase/migrations/** on bring-up (so 002_fn_mask_acct_number lands before
@@ -81,20 +83,26 @@ jobs:
           || { echo "FATAL: auth.uid() not resolvable in db-only stack — RLS predicates would break. Failing closed."; exit 1; }
           echo "OK: auth.uid() present in db-only stack."
 
-      - name: Run pgTAP battery (explicit file list excludes _fixtures/)  ⟦WIRE-VALIDATE #1⟧
-        # Auto-discovers test files but EXCLUDES _fixtures/ (the `\ir`-included verbs,
-        # not standalone tests) so the `-r` recursion doesn't collect them as planless
-        # tests. New tests (e.g. supabase/tests/rls/NN_*.sql) are picked up
-        # automatically; only _fixtures/ is excluded.
+      - name: Run pgTAP battery (directory-mode; verbs excluded by non-test extension)  ⟦WIRE-VALIDATE #1⟧
+        # `supabase test db` (no args) defaults to the supabase/tests directory and binds the WHOLE
+        # dir into the pg_prove container (a directory arg is mounted as-is), so the
+        # `\ir _fixtures/rls_verbs.psql` includes resolve. `pg_prove --ext .pg --ext .sql -r` recurses
+        # but only collects .sql/.pg files as tests — the shared verbs use a NON-test extension
+        # (.psql), so they are mounted (for \ir) yet NOT run as a planless standalone test. Future
+        # tests under supabase/tests/rls/** are auto-discovered the same way.
+        #
+        # Fail-closed guard: a .sql/.pg file under any _fixtures/ dir WOULD be collected as a planless
+        # test by `-r` — catch it with a clear message rather than an opaque "No plan found" failure.
+        # This makes the "fixtures use a non-test extension" rule a permanent mechanical fence.
         run: |
-          mapfile -t TEST_FILES < <(find supabase/tests -type f \( -name '*.sql' -o -name '*.pg' \) -not -path '*/_fixtures/*' | sort)
-          if [ ${#TEST_FILES[@]} -eq 0 ]; then
-            echo "FATAL: no pgTAP test files discovered under supabase/tests (excluding _fixtures/). Failing closed."
+          BAD=$(find supabase/tests -path '*/_fixtures/*' -type f \( -name '*.sql' -o -name '*.pg' \) 2>/dev/null || true)
+          if [ -n "$BAD" ]; then
+            echo "FATAL: test-extension file(s) under _fixtures/ would be collected as planless tests by 'pg_prove -r':"
+            echo "$BAD"
+            echo "Shared fixtures/verbs must use a NON-test extension (e.g. .psql) so they are mounted for \\ir but not run."
             exit 1
           fi
-          echo "Running ${#TEST_FILES[@]} pgTAP file(s):"
-          printf '  %s\n' "${TEST_FILES[@]}"
-          supabase test db "${TEST_FILES[@]}"
+          supabase test db
 
       - name: Stop local stack
         if: always()

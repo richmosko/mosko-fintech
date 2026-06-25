@@ -15,24 +15,26 @@ so this dir is QA's with no collision.)
 | `00_rls_inversion_self_test.sql` | harness self-proof (inversion-mode) | runnable now (no migration dep) |
 | `sd15_fn_mask_acct_number.sql` | SD-15 per-§10 behavioral + no-disclosure | **RED until `002_fn_mask_acct_number.sql` lands**, then GREEN |
 | `rls/NN_<table>_rls.sql` | per-Wave cross-tenant cases | added per migration (none yet — main has no RLS base tables) |
-| `_fixtures/rls_verbs.sql` | shared assertion verbs (NOT a test) | `\ir`-included by test files |
+| `_fixtures/rls_verbs.psql` | shared assertion verbs (NOT a test — `.psql` non-test extension) | `\ir`-included by test files |
 
 ## Helper-placement (Option C, via `\ir`)
 
-Reusable assertion verbs live once in `_fixtures/rls_verbs.sql` (DRY). Each test file
-`\ir _fixtures/rls_verbs.sql` at the top of its `begin…rollback` txn — the verbs are created
+Reusable assertion verbs live once in `_fixtures/rls_verbs.psql` (DRY). Each test file
+`\ir _fixtures/rls_verbs.psql` at the top of its `begin…rollback` txn — the verbs are created
 transactionally per test and rolled back with it. This keeps a single verb source without
 depending on cross-file pgTAP state persistence or a particular seed-load mechanism. The
 two-tenant **data** is seeded per-test inside the txn (no bleed); the verbs expose the fixed
 synthetic tenant identities (`_rls.tenant_a()` / `_rls.tenant_b()`).
 
-**Discovery (RESOLVED at author-time, DevOps 2026-06-25):** `supabase test db` runs `pg_prove
-… -r`, which **recurses** — so a bare `supabase/tests` target WOULD collect
-`_fixtures/rls_verbs.sql` as a planless test and fail the run. The `db-tests.yml` job therefore
-passes an **explicit `_fixtures/`-excluding file list** (not the bare dir); the CLI still mounts
-the parent `supabase/tests` dir so each test's `\ir _fixtures/rls_verbs.sql` resolves. The
-`_fixtures/` subdir layout stays as-is — the exclusion lives in the job, not in the directory
-name. (Verified: the job's list returns exactly the 2 real test files and skips the verbs.)
+**Discovery (RESOLVED on PR #106 first run, DevOps 2026-06-25):** the `db-tests.yml` job runs
+`supabase test db` in **directory-mode** (no file args) — it mounts the whole `supabase/tests`
+tree, and `pg_prove -r` recurses but collects only `*.sql`/`*.pg` files as tests. The verbs file
+carries a **non-test extension `.psql`**, so it is mounted (so each test's `\ir _fixtures/
+rls_verbs.psql` resolves) but never run as a planless test. (The earlier "explicit file list"
+plan was wrong: explicit-files mode binds each file alone with no parent dir, which breaks `\ir`
+— directory-mode + `.psql` is the correct fix and keeps the per-test `\ir` model unchanged.)
+DevOps's job also has a fail-closed guard: any `.sql`/`.pg` ever landing under `_fixtures/`
+errors the run.
 
 ## The inversion self-test (why a green battery is trustworthy)
 
@@ -49,6 +51,11 @@ policy, new SECURITY INVOKER helper — ships a `rls/NN_<table>_rls.sql` case **
 asserting: cross-tenant read fails closed, cross-tenant write fails closed, owner reads own rows
 (fail-closed both directions), and any SECURITY INVOKER helper asserts-fails-closed cross-tenant.
 QA sign-off gates V1-SHIP-BLOCK merge.
+
+> **`\ir` relative-path note for nested cases:** `\ir` is relative to the **including file's**
+> location. Top-level tests (e.g. `00_rls_inversion_self_test.sql`) use `\ir _fixtures/rls_verbs.psql`;
+> cases under `supabase/tests/rls/NN_*.sql` are one dir down, so they use
+> `\ir ../_fixtures/rls_verbs.psql`. Directory-mode mounts the whole tree, so both resolve.
 
 ## Access-control / fixture posture
 
@@ -78,15 +85,15 @@ init, not by the GoTrue container):
 
 ```
 supabase start -x gotrue,realtime,storage-api,imgproxy,studio,edge-runtime,logflare,vector,supavisor,postgres-meta,mailpit
-supabase test db <explicit _fixtures-excluding file list>   # NOT the bare dir (pg_prove -r recurses)
+supabase test db          # directory-mode (no args): mounts supabase/tests/, runs *.sql/*.pg
 ```
 
 CI: own workflow `db-tests.yml` (DevOps-owned), path-triggered on `supabase/migrations/**` +
 `supabase/tests/**` + `supabase/config.toml` — deliberately path-triggered (heavy DB spin-up),
 unlike the always-run fast fences in `security-scan.yml`. The job runs the db-only `supabase
 start -x …`, applies migrations on bring-up, runs a `select auth.uid();` smoke guard, then
-`supabase test db` with the explicit file list. DB major-version is pinned via `config.toml
-[db] major_version` (pending F/CTO confirm vs cax21 prod PG — version-skew guard).
+`supabase test db` in directory-mode. DB major-version is pinned via `config.toml [db]
+major_version` (pending F/CTO confirm vs cax21 prod PG — version-skew guard).
 
 ⟦WIRE-VALIDATE⟧ not yet executed — authored against the firmed contracts; first live run happens
 once `002` lands + the DevOps CI job is wired. Per the W3-A grounding discipline, not claimed

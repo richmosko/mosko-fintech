@@ -14,7 +14,9 @@
 begin;
 
 -- load the shared verbs textually into this txn (Option C via \ir)
-\ir _fixtures/rls_verbs.sql
+-- (.psql non-test extension: pg_prove -r mounts it in directory-mode but does
+--  not run it as a planless test)
+\ir _fixtures/rls_verbs.psql
 
 select plan(2);
 

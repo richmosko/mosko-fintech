@@ -7,11 +7,14 @@
 -- This keeps a single DRY verb source (Option C) without depending on cross-file
 -- pgTAP state persistence or a specific seed-load mechanism.
 --
--- Lives under `_fixtures/` and is excluded from the run by the db-tests.yml job's
--- EXPLICIT file list (NOT by directory name): `supabase test db` runs `pg_prove -r`
--- which recurses, so the bare `supabase/tests` dir would otherwise collect this
--- planless file as a test and fail. Resolved at author-time (DevOps 2026-06-25);
--- the parent dir is still mounted so `\ir _fixtures/rls_verbs.sql` resolves.
+-- Excluded from the test run by its NON-TEST EXTENSION (`.psql`, not `.sql`/`.pg`):
+-- `supabase test db` (directory-mode, no args) mounts the whole `supabase/tests`
+-- tree and `pg_prove -r` recurses, but only `*.sql`/`*.pg` are collected as tests,
+-- so this planless verbs file is mounted (so `\ir` resolves) but never run.
+-- Root-caused on PR #106 first run (DevOps 2026-06-25): explicit-files mode binds
+-- each file alone with no parent dir, breaking `\ir`; directory-mode + the `.psql`
+-- extension is the fix and keeps the per-test `\ir` model unchanged.
+-- DevOps job has a fail-closed guard: any `.sql`/`.pg` under `_fixtures/` errors.
 --
 -- Contract (firmed per team-lead relay 2026-06-25):
 --   RLS predicate convention: users_id = auth.uid()  (post 001_users_id_rename)

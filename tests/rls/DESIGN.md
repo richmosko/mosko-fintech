@@ -1,7 +1,7 @@
 # Per-Wave RLS verification battery — framework-body design (W3-B)
 
 **Status:** Phase 5 Step 4 W3-B. This is the **design rationale** doc. The scaffold has landed
-and the battery now lives at **`supabase/tests/`** (`_fixtures/rls_verbs.sql` + `00_rls_inversion_
+and the battery now lives at **`supabase/tests/`** (`_fixtures/rls_verbs.psql` + `00_rls_inversion_
 self_test.sql` + `sd15_fn_mask_acct_number.sql` + `README.md`). Framework shape **locked: pgTAP
 via `supabase test`** (per W3-A routing). Helper-placement **Option C confirmed**, realized via
 `\ir` textual include. SD-15 test **verified against authored `002_fn_mask_acct_number.sql`**.
