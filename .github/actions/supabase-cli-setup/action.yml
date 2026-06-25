@@ -1,0 +1,22 @@
+# .github/actions/supabase-cli-setup/action.yml
+#
+# Composite action — single source of truth for the pinned Supabase CLI version.
+# Referenced identically by db-tests.yml (pgTAP RLS battery) and, going forward,
+# the ETL CI job (task #4). Bump the version in ONE place here and every consumer
+# inherits it — no per-workflow drift.
+#
+# Pin rationale: a fixed CLI version keeps `supabase start` / `supabase test db`
+# reproducible across jobs and over time (vs `version: latest`, which is
+# non-reproducible and needs a token to dodge API rate limits).
+
+name: 'Supabase CLI setup (pinned)'
+description: 'Install a pinned Supabase CLI version — shared source of truth for db-tests + ETL CI.'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install pinned Supabase CLI
+      uses: supabase/setup-cli@v2
+      with:
+        # Pinned stable (latest stable at authoring: 2.107.0). Bump here only.
+        version: 2.107.0

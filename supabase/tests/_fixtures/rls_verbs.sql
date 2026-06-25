@@ -7,9 +7,11 @@
 -- This keeps a single DRY verb source (Option C) without depending on cross-file
 -- pgTAP state persistence or a specific seed-load mechanism.
 --
--- Lives under `_fixtures/` so the `supabase test` discovery glob does not run it
--- as a test. ⟦WIRE-VALIDATE⟧ confirm the runner does not recurse `_`-prefixed
--- dirs as tests when the battery first runs.
+-- Lives under `_fixtures/` and is excluded from the run by the db-tests.yml job's
+-- EXPLICIT file list (NOT by directory name): `supabase test db` runs `pg_prove -r`
+-- which recurses, so the bare `supabase/tests` dir would otherwise collect this
+-- planless file as a test and fail. Resolved at author-time (DevOps 2026-06-25);
+-- the parent dir is still mounted so `\ir _fixtures/rls_verbs.sql` resolves.
 --
 -- Contract (firmed per team-lead relay 2026-06-25):
 --   RLS predicate convention: users_id = auth.uid()  (post 001_users_id_rename)

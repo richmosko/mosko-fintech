@@ -1,0 +1,101 @@
+# .github/workflows/db-tests.yml
+#
+# Phase 5 Step 4 W3 — pgTAP RLS verification battery (QA-authored tests under
+# supabase/tests/; this is the DevOps-owned CI venue that operationalizes them).
+#
+# Design anchors:
+#   - Own workflow (NOT a job in security-scan.yml): the fences there are cheap
+#     grep, run-always, no `paths:` filter (fail-closed). This battery is a heavy
+#     Postgres-stack spin-up (minutes) → path-triggered. Opposite rationale,
+#     opposite choice — intentional.
+#   - db-only spin-up per the battery's SQL-seeded-auth design (QA + DevOps lane,
+#     2026-06-25): tenant identities are SQL-seeded into auth.users and auth.uid()
+#     reads request.jwt.claims (a DB function present from migrations). No GoTrue
+#     signup → the gotrue/auth CONTAINER is excluded via `-x`.
+#   - DB major version is pinned in supabase/config.toml [db] major_version (=17,
+#     F/CTO match-prod, provisional pending cax21 confirm) — `supabase start`
+#     inherits it; no separate pin here.
+#
+# Two CLI behaviors this job is built around (verified against supabase/cli source,
+# 2026-06-25 — NOT assumed):
+#   1. `supabase test db` runs `pg_prove --ext .pg --ext .sql -r <paths>`. The `-r`
+#      RECURSES — so handing it the supabase/tests directory would collect
+#      supabase/tests/_fixtures/rls_verbs.sql (a `\ir`-included verb file with NO
+#      plan()) and fail it as a planless test. We pass an EXPLICIT, sorted file
+#      list that excludes _fixtures/. The CLI mounts each test file's PARENT dir
+#      (supabase/tests), so the `\ir _fixtures/rls_verbs.sql` includes still resolve.
+#   2. There is NO `supabase db start` command — the local stack starts via
+#      `supabase start` (db-only via `-x`). `supabase start` applies
+#      supabase/migrations/** on bring-up (so 002_fn_mask_acct_number lands before
+#      the SD-15 test runs).
+
+name: DB tests (pgTAP RLS battery)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'supabase/migrations/**'
+      - 'supabase/tests/**'
+      - 'supabase/config.toml'
+      - '.github/workflows/db-tests.yml'
+      - '.github/actions/supabase-cli-setup/**'
+  push:
+    branches: [main]  # also on main to catch direct-push regressions if branch protection ever lapses
+    paths:
+      - 'supabase/migrations/**'
+      - 'supabase/tests/**'
+      - 'supabase/config.toml'
+      - '.github/workflows/db-tests.yml'
+      - '.github/actions/supabase-cli-setup/**'
+
+jobs:
+  rls-battery:
+    name: pgTAP RLS battery (supabase test db)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Supabase CLI (pinned, shared source of truth)
+        uses: ./.github/actions/supabase-cli-setup
+
+      - name: Start local stack (db-only; -x drops non-db services incl gotrue/auth)
+        # `supabase start` applies supabase/migrations/** on bring-up (incl 002).
+        # `-x` excludes the non-db service containers — db-only per the SQL-seeded-
+        # auth battery design. Invalid `-x` names only warn (never fail), so this
+        # list is safe across CLI versions.
+        run: |
+          supabase start -x gotrue,realtime,storage-api,imgproxy,studio,edge-runtime,logflare,vector,supavisor,postgres-meta,mailpit
+
+      - name: Smoke — auth.uid() resolves under db-only  ⟦WIRE-VALIDATE #3⟧
+        # Permanent guard: proves the `auth` SCHEMA + `auth.uid()` function exist in
+        # the db-only stack (the gotrue CONTAINER is excluded, but the schema is
+        # created at DB init, independent of GoTrue). auth.uid() returns NULL with no
+        # JWT claim set — success. If the function is ABSENT, ON_ERROR_STOP makes psql
+        # exit non-zero and we fail fast with a clear message, instead of surfacing as
+        # an opaque RLS-predicate error buried in the pgTAP output. Connection is the
+        # supabase local default (config.toml [db] port = 54322).
+        run: |
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
+            -v ON_ERROR_STOP=1 -Atc "select auth.uid() is not distinct from auth.uid();" \
+          || { echo "FATAL: auth.uid() not resolvable in db-only stack — RLS predicates would break. Failing closed."; exit 1; }
+          echo "OK: auth.uid() present in db-only stack."
+
+      - name: Run pgTAP battery (explicit file list excludes _fixtures/)  ⟦WIRE-VALIDATE #1⟧
+        # Auto-discovers test files but EXCLUDES _fixtures/ (the `\ir`-included verbs,
+        # not standalone tests) so the `-r` recursion doesn't collect them as planless
+        # tests. New tests (e.g. supabase/tests/rls/NN_*.sql) are picked up
+        # automatically; only _fixtures/ is excluded.
+        run: |
+          mapfile -t TEST_FILES < <(find supabase/tests -type f \( -name '*.sql' -o -name '*.pg' \) -not -path '*/_fixtures/*' | sort)
+          if [ ${#TEST_FILES[@]} -eq 0 ]; then
+            echo "FATAL: no pgTAP test files discovered under supabase/tests (excluding _fixtures/). Failing closed."
+            exit 1
+          fi
+          echo "Running ${#TEST_FILES[@]} pgTAP file(s):"
+          printf '  %s\n' "${TEST_FILES[@]}"
+          supabase test db "${TEST_FILES[@]}"
+
+      - name: Stop local stack
+        if: always()
+        run: supabase stop --no-backup || true

@@ -26,9 +26,13 @@ depending on cross-file pgTAP state persistence or a particular seed-load mechan
 two-tenant **data** is seeded per-test inside the txn (no bleed); the verbs expose the fixed
 synthetic tenant identities (`_rls.tenant_a()` / `_rls.tenant_b()`).
 
-`_fixtures/` is underscore-prefixed so the test-discovery glob should skip it. ⟦WIRE-VALIDATE⟧
-confirm `supabase test` does not run `_fixtures/rls_verbs.sql` as a standalone test on the
-first live run; if it recurses, exclude the dir in the job config (DevOps lane).
+**Discovery (RESOLVED at author-time, DevOps 2026-06-25):** `supabase test db` runs `pg_prove
+… -r`, which **recurses** — so a bare `supabase/tests` target WOULD collect
+`_fixtures/rls_verbs.sql` as a planless test and fail the run. The `db-tests.yml` job therefore
+passes an **explicit `_fixtures/`-excluding file list** (not the bare dir); the CLI still mounts
+the parent `supabase/tests` dir so each test's `\ir _fixtures/rls_verbs.sql` resolves. The
+`_fixtures/` subdir layout stays as-is — the exclusion lives in the job, not in the directory
+name. (Verified: the job's list returns exactly the 2 real test files and skips the verbs.)
 
 ## The inversion self-test (why a green battery is trustworthy)
 
@@ -57,8 +61,8 @@ The verbs schema (`_rls`) and the test seed load into the **test** DB only, neve
 The battery simulates tenant auth **in-SQL**: `_rls.set_tenant()` sets `role=authenticated` +
 `request.jwt.claims.sub`, and `auth.uid()` (a DB function from migrations) reads it. Tenant
 identities are seeded into `auth.users` **via SQL** (fixed UUIDs), not GoTrue signup — so the
-CI spin-up is **`db`-only** (`supabase db start`; GoTrue/auth container not needed). Per DevOps
-CI-lane decision 2026-06-25.
+CI spin-up is **`db`-only** (`supabase start -x …` drops the GoTrue/auth container — see ## Run;
+`supabase db start` does not exist). Per DevOps CI-lane decision 2026-06-25.
 
 > When the first real RLS base table (with an `auth.users` FK) lands in Phase 6, a
 > `_rls.seed_tenants()` helper will insert the two fixed-UUID `auth.users` rows with the minimal
@@ -67,15 +71,22 @@ CI-lane decision 2026-06-25.
 
 ## Run
 
+`supabase db start` does **not** exist (the `db` subcommands are diff/dump/lint/pull/push/reset/
+schema-* only). `supabase test db` requires a running stack via `supabase start`. db-only
+incantation (drop GoTrue + the rest; `auth.uid()` stays — the `auth` schema is created at DB
+init, not by the GoTrue container):
+
 ```
-supabase db start            # local test DB (Docker), db-only
-supabase test db             # runs supabase/tests/*.sql via pgTAP
+supabase start -x gotrue,realtime,storage-api,imgproxy,studio,edge-runtime,logflare,vector,supavisor,postgres-meta,mailpit
+supabase test db <explicit _fixtures-excluding file list>   # NOT the bare dir (pg_prove -r recurses)
 ```
 
 CI: own workflow `db-tests.yml` (DevOps-owned), path-triggered on `supabase/migrations/**` +
 `supabase/tests/**` + `supabase/config.toml` — deliberately path-triggered (heavy DB spin-up),
-unlike the always-run fast fences in `security-scan.yml`. DB major-version is pinned via
-`config.toml [db] major_version` (pending F/CTO confirm vs cax21 prod PG — version-skew guard).
+unlike the always-run fast fences in `security-scan.yml`. The job runs the db-only `supabase
+start -x …`, applies migrations on bring-up, runs a `select auth.uid();` smoke guard, then
+`supabase test db` with the explicit file list. DB major-version is pinned via `config.toml
+[db] major_version` (pending F/CTO confirm vs cax21 prod PG — version-skew guard).
 
 ⟦WIRE-VALIDATE⟧ not yet executed — authored against the firmed contracts; first live run happens
 once `002` lands + the DevOps CI job is wired. Per the W3-A grounding discipline, not claimed
