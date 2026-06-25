@@ -22,6 +22,16 @@ select plan(2);
 
 -- throwaway, deliberately UNPROTECTED canary (RLS never enabled -> leaks)
 create table _rls_canary (users_id uuid not null, val text not null);
+
+-- Open the TABLE-LEVEL grant to `authenticated` so RLS is the ONLY possible gate.
+-- Without this, the probe (which runs as `authenticated`) is denied at the table ACL
+-- layer BEFORE RLS is consulted — that would test GRANTs, not RLS. With the grant
+-- open and RLS deliberately NOT enabled, the only thing that could restrict rows is
+-- RLS; its absence == the leak the probe must detect. (This also mirrors the real
+-- prod shape: `authenticated` holds table privileges; RLS does the row filtering —
+-- so Phase-6 per-table cases follow the same grant-then-RLS model.)
+grant select, insert on _rls_canary to authenticated;
+
 insert into _rls_canary (users_id, val) values
   (_rls.tenant_a(), 'A-owned-secret'),
   (_rls.tenant_b(), 'B-owned');
