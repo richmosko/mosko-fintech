@@ -28,6 +28,7 @@ markers = [
     "unit: fast tests with no external dependencies (no DB, no API)",
     "integration: tests that require database and/or API connections",
     "deployment: tests that replicate actual deployment function calls",
+    "replay: deterministic tests using synthetic record-replay fixtures (no live API, no creds; RT-15 parity)",
 ]
 addopts = [
     "--strict-markers",

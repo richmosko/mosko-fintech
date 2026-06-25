@@ -164,3 +164,33 @@ def sample_df_new():
             ],
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# RT-15 parity — record-replay fixtures (synthetic, offline, credential-free)
+# ---------------------------------------------------------------------------
+# Replays frozen *synthetic* BLS + FMP HTTP responses so deterministic tests
+# run with no live API and no API keys. Governance + MUST-NOT discipline:
+# tests/fixtures/parity/README.md (central). Payloads: tests/fixtures/replay/.
+# Pair with `@pytest.mark.replay`.
+import replay as _replay  # sibling module; tests/ dir is on sys.path under pytest
+
+
+@pytest.fixture
+def bls_replay(monkeypatch):
+    """Patch the BLS `requests.post` seam to replay a synthetic CPI payload.
+
+    No network, no BLS_API_KEY. Returns the synthetic payload for assertions.
+    """
+    _replay.install_bls_replay(monkeypatch)
+    return _replay.load_replay("bls_cpi")
+
+
+@pytest.fixture
+def fmp_replay():
+    """Factory for synthetic FMP `fmp_func` stubs for `PFinFMP.fetch_fmp_df`.
+
+    No network, no FMP_API_KEY. Call e.g. `fmp_replay("fmp_income_statement")`
+    to get a replay `fmp_func` suitable for `fetch_fmp_df(fmp_func, ...)`.
+    """
+    return _replay.make_fmp_func

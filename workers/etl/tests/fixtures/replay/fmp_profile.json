@@ -1,0 +1,19 @@
+[
+  {
+    "symbol": "ZZTEST",
+    "companyName": "Synthetic Test Co.",
+    "currency": "USD",
+    "exchange": "NASDAQ",
+    "exchangeShortName": "NASDAQ",
+    "industry": "Synthetic Fixtures",
+    "sector": "Testing",
+    "country": "US",
+    "mktCap": 1500000000,
+    "price": 100.0,
+    "beta": 1.0,
+    "volAvg": 1000000,
+    "lastDiv": 0.0,
+    "ipoDate": "2000-01-01",
+    "description": "Synthetic RT-15 parity fixture. NOT production data."
+  }
+]
