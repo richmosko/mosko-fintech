@@ -18,6 +18,11 @@ docs/test-*.html
 .claude/worktrees/
 .claude/settings.local.json
 
+# Python bytecode caches (workers/etl/ + any Python)
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
 # OS noise
 .DS_Store
 Thumbs.db

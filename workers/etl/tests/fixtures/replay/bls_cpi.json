@@ -1,0 +1,36 @@
+{
+  "_synthetic_fixture": "RT-15 parity replay — synthetic BLS CPI; NOT production data",
+  "status": "REQUEST_SUCCEEDED",
+  "responseTime": 0,
+  "message": [],
+  "Results": {
+    "series": [
+      {
+        "seriesID": "CUUR0000SA0",
+        "data": [
+          {
+            "year": "2024",
+            "period": "M12",
+            "periodName": "December",
+            "value": "300.000",
+            "footnotes": [{}]
+          },
+          {
+            "year": "2024",
+            "period": "M11",
+            "periodName": "November",
+            "value": "299.000",
+            "footnotes": [{}]
+          },
+          {
+            "year": "2024",
+            "period": "M10",
+            "periodName": "October",
+            "value": "298.000",
+            "footnotes": [{}]
+          }
+        ]
+      }
+    ]
+  }
+}

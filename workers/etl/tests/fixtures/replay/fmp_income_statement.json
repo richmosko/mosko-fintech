@@ -1,0 +1,40 @@
+[
+  {
+    "date": "2024-09-30",
+    "symbol": "ZZTEST",
+    "reportedCurrency": "USD",
+    "cik": "0000000000",
+    "fillingDate": "2024-11-01",
+    "acceptedDate": "2024-11-01 06:00:00",
+    "calendarYear": "2024",
+    "period": "Q4",
+    "revenue": 100000000,
+    "costOfRevenue": 60000000,
+    "grossProfit": 40000000,
+    "operatingIncome": 25000000,
+    "netIncome": 15000000,
+    "eps": 1.0,
+    "epsdiluted": 1.0,
+    "weightedAverageShsOut": 15000000,
+    "weightedAverageShsOutDil": 15000000
+  },
+  {
+    "date": "2024-06-30",
+    "symbol": "ZZTEST",
+    "reportedCurrency": "USD",
+    "cik": "0000000000",
+    "fillingDate": "2024-08-01",
+    "acceptedDate": "2024-08-01 06:00:00",
+    "calendarYear": "2024",
+    "period": "Q3",
+    "revenue": 90000000,
+    "costOfRevenue": 55000000,
+    "grossProfit": 35000000,
+    "operatingIncome": 22000000,
+    "netIncome": 13000000,
+    "eps": 0.87,
+    "epsdiluted": 0.87,
+    "weightedAverageShsOut": 15000000,
+    "weightedAverageShsOutDil": 15000000
+  }
+]
