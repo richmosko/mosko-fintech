@@ -8,7 +8,22 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 **Format.** Newest at top. Each entry: `### vN.NN — YYYY-MM-DD` header followed by narrative paragraphs.
 
-**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 55 version entries total (v0.1 → v1.49).
+**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 56 version entries total (v0.1 → v1.50).
+
+---
+
+### v1.50 — 2026-06-26
+
+**Phase 5 Step 6 — skills library.** Adds four user-invocable skills under `.claude/skills/`, each owned by the role whose discipline it codifies — turning conventions that previously lived only in memory/ADR prose into invocable, self-checking procedures. PR #110 (`meta/phase-5-step-6-skills`). Landed in two commits: `brief-drift-catch` first (WIP 1/4, `20ab582`), then the 3 role-owned skills (`e26a42b`).
+
+- **`brief-drift-catch`** (CoS/team-lead meta-skill) — verbatim-source cross-check (5 drift classes: paraphrase / citation-attribution / quote-completeness / header-vs-body / count) + the 2-teammate independent-verification pattern for high-stakes brief-vs-canonical boundaries. Operationalizes the `feedback_team_lead_sec_ratify_lock_cross_check` + `feedback_decision_4_instance_ledger_cross_check` + `feedback_post_ratify_v1_cross_check` + `feedback_async_mismatch_boundary_hooks` memories.
+- **`milestone-rotation`** (DevOps) — the [ADR-017](DECISIONS.md#adr-017) Decision 2 rotation procedure: verify current-milestone completion against **live** Linear (not memory), rotate next→current, promote the milestone-after-next from BACKLOG.md §7 → Linear verbatim (Source/AC/Dependencies carried; §7 entries marked "Promoted to Linear at SELF-N"), update the MILESTONES.md 5-entry ledger (Decision 1) + land the CHANGELOG `vX.YY` entry. Phase 5 Step 7 rehearses its read/verify path.
+- **`apply-migration`** (Architect) — the migration-authoring procedure from `supabase/CLAUDE.md`: file shape (POSTURE RATIONALE + CONTRACT blocks + `set search_path = ''` + idempotent schema), mandatory §10 3-axis cross-check before drafting, Decision 3 matched-tenant validation for every FK-shaped column (incl. `INTEGER[]`), SECURITY-DEFINER→Sec-joint-review routing, the grant-then-RLS gotcha, and same-PR QA pgTAP pairing. SELF-186 (Step 9) runs through it.
+- **`spawn-sec-joint-review`** (PM) — the joint-review-mandatory trigger inventory ([ADR-011](DECISIONS.md#adr-011) D1 privileged-context-write / D2 immutable+INSERT-new-version audit-class / D3 cross-tenant FK-bypass family / D4 §10 catalogued-instance ledger + new SECURITY DEFINER fn + any §10 ledger change + auth/money/secrets/Plaid/financial-calc/multi-tenant) with Sec VETO authority, a self-checking dispatch template (embeds the §10 3-axis verify-hook + the self-triggered-task_assignment-echo drop block), and GREEN/RED/AMBER verdict interpretation.
+
+**Process.** The 3 role-owned skills were authored by fresh role-agent spawns (DevOps/Architect/PM; the prior session's spawns had stalled without writing files). Team-lead then ran `brief-drift-catch`'s own discipline over each draft, **independently verifying every load-bearing count against live source** (not the relayed cross-check logs): D3 = **7** at Phase 4 close (correctly distinguished from the "Four V1 instances" at ADR-011 D3 drafting time), D4 ledger = **2** (RT-22 first / RT-26 second), DEFINER allowlist **3→2**, 89 Linear (SELF-181→SELF-269) + 18 BACKLOG §7. One minor path nit fixed in `milestone-rotation` (a CHANGELOG link written into MILESTONES.md corrected to root-relative). All 6 Security-scan CI checks GREEN. F/CTO signed off on content before merge per the Phase 5 gate criterion ("F/CTO sign-off on every agent definition + skills").
+
+**Follow-up:** MILESTONES head + this CHANGELOG entry land in the companion doc-state PR (`meta/phase-5-step-6-doc-state`). Not in Step 6 scope: `start-feature`/`finish-feature` (Phase 6 entry per [ADR-009](DECISIONS.md#adr-009) Decision 7).
 
 ---
 
