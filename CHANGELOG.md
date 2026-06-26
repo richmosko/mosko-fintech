@@ -8,7 +8,22 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 **Format.** Newest at top. Each entry: `### vN.NN — YYYY-MM-DD` header followed by narrative paragraphs.
 
-**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 54 version entries total (v0.1 → v1.48).
+**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 55 version entries total (v0.1 → v1.49).
+
+---
+
+### v1.49 — 2026-06-26
+
+**Phase 5 Step 5 — per-directory `CLAUDE.md` files.** Adds four scoped `CLAUDE.md` files giving Claude Code surface-local context (root `CLAUDE.md` + ARCH/SECURITY/DECISIONS stay source-of-truth; these are quick-references). F/CTO ratified "all 4 now, forward-looking for `api`/`web`". PR #108 (`meta/phase-5-step-5-claude-md`).
+
+- **`supabase/CLAUDE.md`** (Architect) — migration file shape (numbering / POSTURE+CONTRACT blocks / `set search_path = ''` / idempotent `create schema`); RLS-default-trust + Lock 11 SECURITY INVOKER read-composition + the corrected **2-entry** DEFINER allowlist (ADR-011 D9); §10 SD+RT enforcement (preserve the 2-instance ledger / matched-tenant DDL incl. `INTEGER[]` per Decision 3 / paired pgTAP battery test + 3-axis pre-emptive cross-check); grant-then-RLS gotcha (PR #106); provisional PG-17.
+- **`workers/CLAUDE.md`** (Backend) — ETL Python (`uv`/`pyproject`/`ruff`/`pytest`); TenantBoundConnection fence (Lock 13 mod #3; greps `workers/etl/`); same-transaction audit-log; Coolify native cron → Discord; **PDF-worker zero-DB-by-design** (Lock 13 mod #2) + the RT-22-is-infra-credential-presence-NOT-TBC distinction.
+- **`api/CLAUDE.md`** (Backend; **forward-looking** — `api/` scaffolds Phase 6) — server-source surface allowlist anchored at **ARCH §4.1**; `SUPABASE_SERVICE_ROLE_KEY` confinement to the 3 ADR-016 RT-26 allowlist endpoints; Zod `.strict()` (Lock 14 mods #1 typed-input + #2 mass-assignment); SECURITY INVOKER read-composition + never-write-DEFINER; `hooks.server.ts` session chokepoint (ADR-015 D1).
+- **`web/CLAUDE.md`** (Frontend; **forward-looking**) — non-`server` surface ownership; `var(--c-*)` tokens-only; ADR-013 P5 no-inline-edit; INV-1 plain-text commentary fence; the 3-signal staleness-marker framework (`stale-data-marker` D1 / `reauth-staleness-banner` P4 / `freshness-stamp`); no-secrets-in-browser.
+
+**Process.** Role-owners drafted in parallel (Architect / Backend ×2 / Frontend); team-lead normalized for house-style + citation accuracy; Security Reviewer joint-review **GREEN on all 4** (no vetoes). **§10 attribution three-axis CLEAN** across all four (Path B link-carry — references the ledger, does not restate it; streak extended). **Two productive Sec-Lock cross-check catches:** (i) Frontend caught an ARCH-§4.1-vs-SECURITY-§4.1 anchor drift in the team-lead brief (server-source allowlist is anchored at ARCH §4.1; SECURITY §4.1 is tenant-isolation posture) — propagation fixed in `api/`; (ii) Sec caught a Lock-14 mod-number mislabel in `api/` (corrected to #1 typed-input validation + #2 mass-assignment prevention) and re-confirmed the fix at the boundary. Stale SD/RT entry-counts dropped (no-number framing).
+
+**Follow-up:** `api/` + `web/` get a light refine when SvelteKit scaffolds in Phase 6 (pin concrete `src/routes/...` paths; reconcile the illustrative Plaid route paths + `src/lib/server/plaid/` default per ADR-016's "or equivalent per Phase 5 routing convention").
 
 ---
 
