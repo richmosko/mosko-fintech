@@ -195,3 +195,35 @@ jobs:
           # org owner, surface the license-key requirement to the secrets-manifest
           # work at Phase 5 Step 8.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  secrets-nonoverlap:
+    name: Secrets manifest — CI/production non-overlap
+    runs-on: ubuntu-latest
+    # Phase 5 Step 8 (DevOps-led; Sec-consult mandatory at manifest lock).
+    # Enforces the secrets-manifest.yml invariant: ci_only and production_only are
+    # DISJOINT name-sets — a leaked CI secret must never grant production access.
+    # Dual-mode (production + inversion), mirroring the fence-rt22/rt26/tbc shape.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install PyYAML
+        run: pip install pyyaml
+
+      - name: Non-overlap check — production-mode (real manifest; expects clean)
+        run: python3 scripts/ci/check-secrets-nonoverlap.py secrets-manifest.yml
+
+      - name: Non-overlap check — inversion-mode (golden fixture; expects violation)
+        run: |
+          set +e
+          python3 scripts/ci/check-secrets-nonoverlap.py tests/fixtures/ci/secrets-manifest-overlap.yml
+          rc=$?
+          set -e
+          if [ $rc -eq 0 ]; then
+            echo "FATAL: non-overlap fence reported clean against the overlap fixture — fence is broken; failing closed."
+            exit 1
+          fi
+          echo "OK: non-overlap fence caught fixture violation (exit $rc)."

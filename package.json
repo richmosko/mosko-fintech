@@ -1,0 +1,12 @@
+{
+  "name": "mosko-fintech",
+  "version": "0.0.0",
+  "private": true,
+  "description": "mosko-fintech monorepo root — Husky hook host ONLY (Phase 5 Step 8). This is NOT the SvelteKit V1 web-app manifest; that scaffolds under /api in Phase 6 with its own package.json. Kept intentionally minimal: husky devDependency + prepare script so pre-commit linters (ruff + hadolint) install on `npm install`.",
+  "scripts": {
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7"
+  }
+}
