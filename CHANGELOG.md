@@ -8,7 +8,21 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 **Format.** Newest at top. Each entry: `### vN.NN — YYYY-MM-DD` header followed by narrative paragraphs.
 
-**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 57 version entries total (v0.1 → v1.51).
+**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 58 version entries total (v0.1 → v1.52).
+
+---
+
+### v1.52 — 2026-06-28
+
+**Phase 5 Step 8 — pre-commit hooks + secrets management.** DevOps-led; **Sec joint-review GREEN** (AMBER→GREEN); F/CTO ratified. PR #114 (`meta/phase-5-step-8-hooks-secrets`) + doc-state companion (this entry).
+
+**Pre-commit hooks** (F/CTO decision: land runnable linters now, defer JS to Phase 6). Root `package.json` (minimal Husky host — NOT the SvelteKit app, which scaffolds under `api/` in Phase 6) + `.husky/pre-commit` running **`ruff`** (staged `workers/etl/**/*.py`) + **`hadolint`** (the 2 Dockerfiles), graceful on missing binaries. `svelte-check` + eslint are commented stubs marking the exact Phase-6 activation point. `[tool.ruff]` config added to `workers/etl/pyproject.toml`. `package-lock.json` committed (the npm-audit CI job requires a lockfile; `npm install --package-lock-only` reports 0 vulnerabilities); `node_modules/` gitignored.
+
+**Secrets management** (per ARCH §5; per-surface confinement is the security property). Three `.env.example` files: root (V1 web-app — `SUPABASE_ANON_KEY` + `SUPABASE_SERVICE_ROLE_KEY` [RT-26 §4.1 allowlist] + `PDF_WORKER_SIGNING_KEY` [SD-20] + Plaid + Discord), `workers/etl/` (`PFIN_DB_*` + FMP + BLS + Plaid), `workers/pdf-render/` (**ONLY** `PDF_WORKER_SIGNING_KEY` per Lock 13 mod #2 zero-DB). `sample.env` superseded. **`secrets-manifest.yml`** — the CI/production non-overlap commitment: `ci_only` (3, distinct-named sandbox/test analogues) vs `production_only` (10, Coolify-injected), disjoint by construction (blast-radius containment). Fail-closed CI fence `scripts/ci/check-secrets-nonoverlap.py` + dual-mode `secrets-nonoverlap` job in `security-scan.yml` (real manifest passes; overlap fixture must fail; missing/malformed/duplicate → fail closed).
+
+**Sec joint-review (AMBER→GREEN).** CLEAN on the load-bearing surfaces: PDF-worker zero-DB confinement (Lock 13 mod #2 — "perfect, the one true veto surface"), the non-overlap fence fails closed on all four criteria, distinct-naming discipline sound, §10 catalogued-instance ledger untouched (Path B — references RT-22/RT-26/SD-20 without restating counts or layer-attribution). One cheap **blocking condition resolved**: the ETL `.env.example` asserted TenantBoundConnection as present-tense fact, but TBC is not yet in the code (incumbent uses SQLAlchemy `create_engine` at `core.py:231`) — reworded to forward-discipline framing (Sec's exact text) so the doc doesn't assert an unenforced control as enforced. BLS key accepted-with-annotation (citation fixed to ARCH's "free/open").
+
+**Tracked follow-ups (F/CTO-ratified, non-blocking on the lock).** (1) **`fence-tbc` integrity gap** (the more serious finding): the existing TBC CI fence is non-enforcing on the real ETL tree — its grep doesn't match `sqlalchemy.create_engine(...)` and it fails *open* on TBC-class-absence in production-mode (stale post-ADR-019 assumption). Folded into the ETL-CI-coverage follow-up; fix when TBC actually lands (Wave 6). (2) **BLS** — reconcile ARCH §5 "free/open" vs ETL code requiring `BLS_API_KEY` (Architect).
 
 ---
 
