@@ -18,6 +18,10 @@ docs/test-*.html
 .claude/worktrees/
 .claude/settings.local.json
 
+# Node — root package.json is the Husky hook host (Phase 5 Step 8); the lockfile
+# is committed (npm-audit needs it) but installed deps are not.
+node_modules/
+
 # Python bytecode caches (workers/etl/ + any Python)
 __pycache__/
 *.py[cod]
