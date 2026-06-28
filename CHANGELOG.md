@@ -8,7 +8,23 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 **Format.** Newest at top. Each entry: `### vN.NN — YYYY-MM-DD` header followed by narrative paragraphs.
 
-**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 56 version entries total (v0.1 → v1.50).
+**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 57 version entries total (v0.1 → v1.51).
+
+---
+
+### v1.51 — 2026-06-28
+
+**Phase 5 Step 7 — Linear MCP setup verification + milestone-rotation rehearsal.** Lands `docs/linear-setup.md` (operational how-to per the WORKFLOW.md `/docs` pattern). DevOps-led; PM + F/CTO ratify. PR #112 (`meta/phase-5-step-7-linear-setup`) + doc-state companion (this entry).
+
+**F/CTO-ratified scoping.** Two decisions taken before execution: (a) the milestone-rotation rehearsal runs as a **read/verify dry-run** on the as-built model (nothing has completed, so no live rotation); (b) the per-agent permission test covers **existing-label roles only** (`role:qa`/`role:devops` labels don't exist; `role:pm` tags zero issues — those three deferred to Phase 6).
+
+**Workspace verification.** Team `SELF` (Mosko-Personal) / initiative "V1 launch" → 7 feature-cluster projects / 89 mosko issues SELF-181→SELF-269. **Milestone model verified live as native Linear project-milestones** — V1.0 (spans 3 milestones across Platform + Onboarding + Net worth) · V1.1 Net worth · V1.2 Asset allocation · V1.3 Cash flow · V1.4 Estimated taxes · V1.5 Monthly report (shell exists, 0 issues — the BACKLOG §7 promotion target) · V1.x Cross-cutting · V1.final §3.4 close. This **corrected an earlier scouting error**: an `includeMilestones` 400 had wrongly reported "no native milestones," which was relayed as a finding before being verified — the verbatim-verify discipline (`brief-drift-catch`) caught it on direct inspection. The ADR-017 D2 per-sub-version reasoning and the as-built workspace agree; no doc reconciliation needed.
+
+**Rotation rehearsal dry-run.** The `/milestone-rotation` Step 0 gate was validated against a **partially-complete** milestone — `V1.0 — Platform foundation` is 1/16 Done (SELF-195, an early dedup/fold-in closed 2026-06-03), explaining its 6.25% progress; not all issues Done → the gate **correctly refuses to rotate**. §7 promotion set confirmed = 18 entries (cross-checked vs BACKLOG.md). No mutations.
+
+**Permission write-path proof.** Verified end-to-end on SELF-269: posted a test comment + flipped `Backlog → Todo`, both succeeded, then reverted `Todo → Backlog` + deleted the comment (left clean; only `updatedAt` moved). Read scope confirmed live for all 6 labeled roles; the write mechanism is identical across roles, so one cycle validates the path.
+
+**Process note.** The DevOps execution agent died mid-run when the safety-classifier + Linear-MCP-token outage hit; team-lead finished the read/verify directly and reverified all cells on re-auth. **Open gaps** (in `docs/linear-setup.md` §4): create `role:qa`/`role:devops` labels at Phase 6 (F/CTO action); attach 3 NO-PROJECT mosko issues to their cluster (cosmetic).
 
 ---
 
