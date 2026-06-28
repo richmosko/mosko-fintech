@@ -1,0 +1,59 @@
+# .husky/pre-commit — mosko-fintech pre-commit linters (Phase 5 Step 8; DevOps-owned).
+#
+# F/CTO-ratified scope (Phase 5 Step 8): runnable linters ONLY.
+#   - ruff check    on staged Python under workers/etl/
+#   - hadolint      on staged Dockerfiles (workers/etl/Dockerfile, workers/pdf-render/Dockerfile)
+# svelte-check + eslint are DEFERRED to Phase 6 (SvelteKit not scaffolded yet) —
+# see the clearly-marked activation point at the bottom of this file.
+#
+# Husky v9 convention: no shebang, no `_/husky.sh` sourcing line (both deprecated
+# in v9.1, removed in v10). Husky runs this script with `sh`.
+#
+# Graceful-degradation contract: if a linter binary is absent locally, WARN and
+# skip — do NOT hard-block the commit. CI (security-scan.yml / hadolint, and the
+# ETL ruff CI follow-up) is the fail-closed backstop; the hook is a fast local
+# pre-filter, not the enforcement boundary.
+
+set -e
+
+# --- ruff (Python; workers/etl/ surface) -------------------------------------
+# Pathspec 'workers/etl' + grep '\.py$' is robust (git pathspec '**' globbing is
+# not portable across git versions); --diff-filter=ACM skips deletions.
+STAGED_PY=$(git diff --cached --name-only --diff-filter=ACM -- 'workers/etl' | grep -E '\.py$' || true)
+if [ -n "$STAGED_PY" ]; then
+  if command -v ruff >/dev/null 2>&1; then
+    echo "pre-commit: ruff check (staged workers/etl/ Python)"
+    echo "$STAGED_PY" | xargs ruff check
+  else
+    echo "pre-commit: WARN — ruff not installed; skipping Python lint."
+    echo "pre-commit:        install via 'uv tool install ruff' or 'pipx install ruff' (pinned in workers/etl/pyproject.toml dev group)."
+  fi
+fi
+
+# --- hadolint (Dockerfiles) --------------------------------------------------
+STAGED_DOCKER=$(git diff --cached --name-only --diff-filter=ACM -- 'workers/etl/Dockerfile' 'workers/pdf-render/Dockerfile' || true)
+if [ -n "$STAGED_DOCKER" ]; then
+  if command -v hadolint >/dev/null 2>&1; then
+    echo "pre-commit: hadolint (staged Dockerfiles)"
+    echo "$STAGED_DOCKER" | xargs hadolint
+  else
+    echo "pre-commit: WARN — hadolint not installed; skipping Dockerfile lint."
+    echo "pre-commit:        install via 'brew install hadolint' (macOS) or see github.com/hadolint/hadolint."
+  fi
+fi
+
+# === Phase 6 activation point — DO NOT uncomment until SvelteKit scaffolds =====
+# Phase 6: add `npm run check` (svelte-check) + eslint once SvelteKit scaffolds.
+# When /api lands its SvelteKit package.json, add staged-aware invocations here:
+#
+#   STAGED_FE=$(git diff --cached --name-only --diff-filter=ACM -- 'api' | grep -E '\.(ts|svelte|js)$' || true)
+#   if [ -n "$STAGED_FE" ]; then
+#     npm run check              # svelte-check (type + a11y + template diagnostics)
+#     echo "$STAGED_FE" | xargs npx eslint
+#   fi
+#
+# Deferred per F/CTO ratify (Phase 5 Step 8): no JS tooling exists pre-scaffold,
+# so uncommenting now would hard-fail every commit. Leave commented until the
+# SvelteKit scaffold PR lands the toolchain.
+
+exit 0

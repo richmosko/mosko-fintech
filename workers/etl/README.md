@@ -18,8 +18,9 @@ manager. It's fast and pretty idiot proof... which is perfect for my skill level
 ### Environmental Variables
 A `.env` file will need to get added to the project root directory `pfin_back_etl`.
 This file contains environmental variables that the scripts use to define API Keys
-and database connection variables. An example of this file sits in the root
-directory as `sample.env` with non-valid entries.
+and database connection variables. An example of this file sits in this
+directory as `.env.example` with non-valid entries (Phase 5 Step 8: `.env.example`
+supersedes the prior `sample.env`, matching the repo-wide `.env.example` convention).
 
 ```
 BLS_SERIES_ID=CUUR0000SA0
