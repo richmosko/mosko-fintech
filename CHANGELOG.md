@@ -8,7 +8,19 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 **Format.** Newest at top. Each entry: `### vN.NN — YYYY-MM-DD` header followed by narrative paragraphs.
 
-**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 60 version entries total (v0.1 → v1.54).
+**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 61 version entries total (v0.1 → v1.55).
+
+---
+
+### v1.55 — 2026-06-29
+
+**Phase 6 — ARCH §5 Deployment Topology greenfield reframe.** Companion to v1.54 ([ADR-021](DECISIONS.md#adr-021)): re-anchors the Phase-3-locked ARCH §5 on the greenfield posture before base-table work begins. Branch `phase/plan-arch-s5-greenfield-reframe` (Architect). 9 edits in §5; `docs/ARCH/index.html` only.
+
+**Host reframe.** cax21/`pfindash.com` → **reference-precedent sizing baseline**, not the deploy target; V1 host is a **new greenfield VPS** provisioned from scratch at deploy time. Forward-pointer to `docs/deployment-runbook.md` added. **Postgres 17** stated as the chosen forward DB target (greenfield rationale; the 15.8 incumbent reading moot). The Lock 13 3-container + monthly_report-cron **topology is unchanged** — host-independent; only the host changes. Operational/admin boundaries reworded host-neutrally (VPS host SSH; Coolify control plane on the VPS; Discord *emitter* re-created on the greenfield VPS, *target* webhook reused).
+
+**Two ARCH↔code reconcile flags closed** (both Sec-dispositioned LOW at v1.54 S3): (i) ETL DB secret reframed from single connection-string → discrete `PFIN_DB_*` params (the one sensitive credential is `PFIN_DB_PASSWORD` at `production_only`; `TenantBoundConnection` commitment preserved in substance); (ii) BLS reframed from "free/open" → requires `BLS_API_KEY` (low-sensitivity rate-limit key over public CPI data) — `BLS_API_KEY` surfaced in the §5 ETL secrets list. Mermaid host-subgraph + BLS node labels updated.
+
+**Sec confirm-pass GREEN.** §10 catalogued-instance ledger **untouched by-construction** (RT-22/RT-26 + layer-attribution lines not in the diff — Architect by-construction claim + Sec Sec-Lock cross-check + team-lead diff cross-check, three-way confirmed; 23+ CLEAN streak preserved). Secrets surface **not expanded** (every named secret already in `secrets-manifest.yml` `production_only`; the four discrete `PFIN_DB_*` non-password fields are non-secret connection config). Mermaid **browser-render-verified** at draft-time via isolated `docs/test-arch-s5.html` harness (a `<br/>` two-line label collision caught + fixed to single-line; harness deleted post-verify).
 
 ---
 
