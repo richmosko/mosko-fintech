@@ -8,7 +8,24 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 **Format.** Newest at top. Each entry: `### vN.NN — YYYY-MM-DD` header followed by narrative paragraphs.
 
-**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 62 version entries total (v0.1 → v1.56).
+**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 63 version entries total (v0.1 → v1.57).
+
+---
+
+### v1.57 — 2026-06-29
+
+**Phase 6 — SELF-187: first V1 base-table migration (`003_account_and_account_users`).** PR #121 · milestone *V1.0 — Platform foundation*. The first real build-loop feature, validated end-to-end (Architect scope → QA + Sec joint-review → DevOps CI → branch-protected PR → F/CTO ratify) on production schema.
+
+**What landed** — `pfin.account` + `pfin.account_users` + `fn_grant_creator_access` as one bundled migration (DP-1; renumbered 002→003 since `002` = `fn_mask_acct_number`):
+- **`pfin.account`** — minimal V1 column set (DP-6, PRD §2.4 + SD matrix): `users_id` (`DEFAULT auth.uid()`; direct RLS `users_id = auth.uid()` + the linchpin INSERT `WITH CHECK`), `name`, `account_type` (`TEXT+CHECK` = PRD §2.1.5 verbatim, 7 members), `scope` (free-TEXT per ADR-004 Decision B), `tax_treatment` (3-way), `acct_number` (nullable, SD-15 masked-render), `is_active`, timestamps. Plaid / taxonomy FKs deferred to their owning migrations.
+- **`pfin.account_users`** — V1-dormant per-account ACL (Decision 6 / Lock 2 / Lock 3): SELECT-only `authenticated` grant, `ENABLE RLS users_id = auth.uid()`, **no** authenticated I/U/D (DEFINER trigger sole writer), `account_id` FK `ON DELETE CASCADE`. UPDATE/DELETE + the Lock-3-mod-1 column-UPDATE restriction hard-gated to B5 (recorded in the schema comment).
+- **`fn_grant_creator_access`** — SECURITY DEFINER (Decision 7 mod #2), `set search_path = ''`, `REVOKE EXECUTE FROM PUBLIC`, fixed insert from `NEW.users_id`.
+
+**DEFINER allowlist reconciled 2→3.** `fn_grant_creator_access` was already locked DEFINER at Decision 7 mod #2 but uncaptured by the "exactly 2" enumeration; SELF-187 reconciles it. New Decision 9 SELF-187 amendment + `supabase/CLAUDE.md` + 3 agent cards → 3-entry; `001` header + Decision 10 get forward-pointers (not mutations); Decision 9's prior "3→2" history preserved (distinct transition — PR #106 dropped `fn_mask_acct_number`). Committed allowlist = 3 (authored DEFINER fns = 2; audit-log helper still unauthored). The **§10 catalogued ledger is unchanged at 2** (RT-22 + RT-26) — explicitly de-conflated as a separate ledger from the DEFINER allowlist.
+
+**Reviews.** Architect scoping (6 DPs F/CTO-ratified: bundle / renumber / allowlist-2→3 / Decision-3-disposition / RLS-shape / minimal-columns) + pre-authoring Sec concurrence (GREEN, both veto surfaces) + 2nd Sec review on the DDL (GREEN; both rulings concurred — `ON DELETE CASCADE` as ACL-not-audit, direct-on-`account` RLS as anchor-not-JOIN). QA two-tenant pgTAP battery `plan(10)` (`supabase/tests/rls/003_account_and_account_users_rls.sql`): creator-grant fires under RLS, owner-reads-own, cross-tenant fails closed, the forged-`users_id` linchpin, no authenticated write on `account_users`; the account_trans-JOIN assertion correctly deferred (not faked). The wire-validate run caught **and fixed** a test-harness bug (`_rls` schema USAGE under the `authenticated` role) plus a latent false-green (schema-denied / ACL-denied / WITH-CHECK-violation all SQLSTATE 42501 → switched to message-precise `throws_like`). 8/8 CI green.
+
+**Follow-ups** (non-blocking): `account_trans` (`004`) carries the deferred JOIN assertion + the `rd_access`-JOIN read path; B5 hard-gate (Lock-3 mod #1 column restriction MUST land in the same PR that first grants any authenticated write on `account_users`); Decision-3 family-count grain reconciliation (canonical = 7; `CHANGELOG:209` 5-vs-6 miscount) — separate doc-hygiene pass.
 
 ---
 
