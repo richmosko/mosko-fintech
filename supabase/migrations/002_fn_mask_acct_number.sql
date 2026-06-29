@@ -3,8 +3,9 @@
 -- Phase 5 Step 4 W2. Closes the SD-15 implicit gap (temp/phase-4-sd-rt-coverage.md)
 -- per ADR-011 Decision 9 / Lock 5 (SECURITY §4.4 SD-15).
 --
--- Numbering: 002 reserves 001 for the foundational users_id_rename migration
--- (SELF-186 Phase 5 close-gate, authored later); fn_mask is order-independent.
+-- Numbering: 002 follows the foundational 001_pfin_foundation migration
+-- (SELF-186 Phase 5 close-gate: pfin schema + fn_refresh_updated_at DEFINER
+-- helper); fn_mask is order-independent (self-sufficient idempotent schema create).
 --
 -- POSTURE RATIONALE — SECURITY INVOKER (default per ADR-011 Lock 11); NOT SECURITY DEFINER.
 --   fn_mask_acct_number is a PURE string transform (TEXT in -> masked TEXT out). It reads

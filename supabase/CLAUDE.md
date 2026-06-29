@@ -5,7 +5,7 @@
 **Owner role:** Architect (authors migrations + `config.toml`); Backend consumes (read-only). QA owns `tests/`; DevOps owns the CI job. Per WORKFLOW.md Agent Roster.
 
 ## What lives here
-- `migrations/` — Architect-authored SQL migrations. **Migrations live in code, not the dashboard** (root CLAUDE.md). Current: `002_fn_mask_acct_number.sql` (SD-15 masking primitive). `001` is **reserved** for the foundational `users_id_rename` migration (SELF-186 Phase 5 close-gate, authored later).
+- `migrations/` — Architect-authored SQL migrations. **Migrations live in code, not the dashboard** (root CLAUDE.md). Current: `001_pfin_foundation.sql` (foundational — `pfin` schema + `fn_refresh_updated_at` SECURITY DEFINER `updated_at` trigger helper; SELF-186 Phase 5 close-gate) + `002_fn_mask_acct_number.sql` (SD-15 masking primitive).
 - `config.toml` — Supabase CLI config. Note the **PROVISIONAL `[db] major_version = 17`** (see gotchas).
 - `tests/` — **QA-owned** pgTAP RLS battery (`supabase test db`, directory-mode). Architect does not author here, but every migration extending RLS surface is paired with a QA battery test. See [`tests/README.md`](tests/README.md) + [`tests/rls/DESIGN.md`](../tests/rls/DESIGN.md).
 
