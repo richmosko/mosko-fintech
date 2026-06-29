@@ -8,7 +8,17 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 **Format.** Newest at top. Each entry: `### vN.NN — YYYY-MM-DD` header followed by narrative paragraphs.
 
-**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 63 version entries total (v0.1 → v1.57).
+**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 64 version entries total (v0.1 → v1.58).
+
+---
+
+### v1.58 — 2026-06-30
+
+**Phase 6 — ADR-022: `account_type` modeling rationale (CHECK vs lookup table).** Branch `meta/account-type-taxonomy-rationale`. Records the previously-unwritten rationale (surfaced by an F/CTO question) for SELF-187's `pfin.account.account_type` being a fixed `TEXT+CHECK` 7-member enumeration rather than a `pfin.account_type` lookup table.
+
+**Principle (ADR-022, Architect):** fixed **code-coupled** taxonomies → `TEXT+CHECK`; **user-extensible** taxonomies → lookup tables (V1-seed / V2-CRUD). `account_type` is the former — per ADR-002 §1.9 each type drives ingest path + NAV grouping (PRD §2.1.5) + asset-allocation bucket + income treatment, so adding a type is a **code event, not a data event** (a lookup table buys nothing in V1: no row is addable without handling code). Contrast — the user-extensible pattern IS used where it fits: `scope` free-text (ADR-004 Decision B) + `user_taxonomy` Cat/Sub-Cat (ADR-004 Decision C). `TEXT+CHECK` over PG `enum` avoids the `ALTER TYPE` one-way-door. Terse pattern; no Sec gate (documents an existing CHECK — no DEFINER/RLS/§10/secrets surface).
+
+**V2 follow-up (BACKLOG §5.7, PM):** a promote-`account_type`-to-`pfin.account_type`-lookup-table re-assessment candidate, triggered by the first need for **per-type metadata** (display label / icon / default `tax_treatment` / Plaid-product mapping / sort order); contained migration when it lands (create + seed 7 + swap CHECK→FK + backfill). A tracked re-assessment trigger, not a committed V2 ship.
 
 ---
 

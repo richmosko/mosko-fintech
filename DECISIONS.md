@@ -41,6 +41,35 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-022 — `account_type` as `TEXT + CHECK`, not a lookup table: code-coupled taxonomies use CHECK, user-extensible taxonomies use tables (terse pattern)
+
+**Date:** 2026-06-30
+**Status:** Accepted
+**Phase:** Phase 6 Build Loop (documents a SELF-187 / `003` modeling choice already authored; no code change).
+**Approved by:** F/CTO (2026-06-30 — asked why `pfin.account.account_type` is a `TEXT + CHECK` enumeration rather than a `pfin.account_type` lookup table; this records the answer, which was not written down).
+
+**Decision.** Fixed, **code-coupled** taxonomies are modeled as `TEXT + CHECK` enumerations; **user-extensible** taxonomies get lookup tables (seeded at V1 bootstrap; CRUD UI gated to V2). `pfin.account.account_type` (SELF-187 / migration `003`) is the former — `TEXT NOT NULL CHECK (account_type IN (…))` over the 7 PRD §2.1.5 net-worth-grouping members, **not** a `pfin.account_type` lookup table.
+
+**Why.** `account_type` is a **closed, code-coupled** set, not user-extensible reference data. Per [ADR-002 §1.9](#adr-002) each type carries bespoke V1 handling — credit-card → Plaid Transactions; loan → Plaid accounts endpoint; brokerage cash-sweep → "cash" allocation bucket; options/derivatives → "derivatives" bucket; crypto → Plaid-exchange ingest path; DRIP dividend/`buy` split — and the type drives ingest path + NAV grouping ([PRD §2.1.5](docs/PRD/index.html#story-2-1-5)) + asset-allocation bucket + income treatment. Adding a type is therefore a **code event, not a data event**: a lookup table buys nothing, because you cannot add a row without also adding the handling code that makes the type mean anything. Membership is fixed to PRD §2.1.5 verbatim — `depository`, `investment`, `retirement`, `crypto`, `manual_other`, `real_estate`, `liability` (display labels "manual/other" + "Real Estate" normalized to snake_case in `003`). `TEXT + CHECK` over a PG `enum` avoids the `ALTER TYPE` one-way-door — expansion is a one-line `CHECK` alter.
+
+**The principle is applied deliberately, not by oversight — the user-extensible pattern IS used where it fits.** `scope` is free-text ([ADR-004 Decision B](#adr-004) — "scopes are user-defined ownership labels"); the asset Cat/Sub-Cat taxonomy is a user-scoped lookup-table set (`user_taxonomy`, [ADR-004 Decision C](#adr-004)) seeded at V1 bootstrap with the V1-seed / V2-CRUD-UI split. Those are genuinely user-extensible reference data with no per-row handling code; `account_type` is not. The contrast is the whole point: pick CHECK vs table by whether the taxonomy is code-coupled or user-extensible.
+
+**Alternatives considered:**
+- **`pfin.account_type` lookup table (FK from `account`)** — rejected for V1. It earns its keep only once a type needs **per-type metadata** (display label, icon, default `tax_treatment`, Plaid-product mapping, sort order); today all of that lives in code per §1.9, so a V1 table would be an empty abstraction (7 rows, no columns beyond the name, no row addable without code). The incumbent Google-Sheet `Account Types` reference sheet ([ADR-002](#adr-002) Master-sheet inventory) is **deliberately codified as a CHECK** in V1 rather than transcribed into a table.
+- **PG `enum` type** — rejected. `ALTER TYPE … ADD VALUE` is a one-way-door (values can't be removed/reordered; transactional restrictions in some PG versions); `TEXT + CHECK` expansion is a trivially-reversible one-line alter.
+
+**Expansion path.** Add a type today = a `CHECK` alter + the handling code the type needs anyway. Promote to a `pfin.account_type` lookup table later = a contained migration (create table + seed the 7 rows + swap `CHECK` → FK + backfill). The promotion trigger is the **first need for per-type metadata**; a V2 follow-up assessment ("promote `account_type` to a lookup table") is queued in `BACKLOG.md` §5 (PM-owned) as the deferred trigger.
+
+**Cross-references:**
+- SELF-187 / `supabase/migrations/003_account_and_account_users.sql` — the `account_type TEXT + CHECK` this ADR documents.
+- [ADR-002](#adr-002) §1.9 (per-account-type handling boundaries) + [PRD §2.1.5](docs/PRD/index.html#story-2-1-5) (the 7-member NAV grouping = the CHECK membership).
+- [ADR-004](#adr-004) Decision B (`scope` free-text) + Decision C (`user_taxonomy` lookup tables; V1-seed / V2-CRUD) — the user-extensible contrast.
+- `BACKLOG.md` §5 V2 follow-up (promote-`account_type`-to-lookup-table assessment) — PM-owned; the deferred promotion trigger.
+
+**No Sec gate:** documents an existing `CHECK` constraint; introduces no DEFINER / RLS / §10 / secrets surface.
+
+---
+
 ## ADR-021 — V1 greenfield deployment posture: build on a new VPS; `pfindash.com`/cax21 is reference-only; Postgres 17 by choice
 
 **Date:** 2026-06-29
