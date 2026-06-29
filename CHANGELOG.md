@@ -8,7 +8,21 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 **Format.** Newest at top. Each entry: `### vN.NN — YYYY-MM-DD` header followed by narrative paragraphs.
 
-**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 58 version entries total (v0.1 → v1.52).
+**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 59 version entries total (v0.1 → v1.53).
+
+---
+
+### v1.53 — 2026-06-29
+
+**Phase 5 (Workshop Setup) ✅ COMPLETE + Phase 6 (Build Loop) entered.** Step 9 exit-criteria walk + SELF-186 V1.0 first-implementation close-gate smoke-test. F/CTO signed off on Phase 5 exit → Phase 6 entry. Phase-gate recorded at [ADR-020](DECISIONS.md#adr-020). PRs #116 (SELF-186) + this close PR.
+
+**Exit-criteria walk — 7/7 PASS + mosko extensions.** (C1) task assignable end-to-end — SELF-186; (C2) CI on clean checkout — 8/8 green; (C3) branch protection on main — **configured at close** (see below); (C4) 10 agent defs with Linear scope; (C5) Phase 0.5 defs re-signed-off; (C6) invoke-by-name; (C7) agent+Linear-issue end-to-end — SELF-186. Extensions: §10 discipline preserved (every Phase 5 surface CLEAN; grain-count reconciliation carried), SD-15 + RT-15 closed (Step 4), milestone-rotation rehearsal (Step 7), 8 lessons-learned codified in WORKFLOW.md.
+
+**SELF-186 — `001_pfin_foundation.sql` (the smoke-test) PASSED.** Architect scoping surfaced that the issue's literal "rename `tenant_id` → `users_id`" was unsatisfiable — the incumbent `pfin` schema has no `tenant_id` (20 tables, none); Lock 6 / ADR-011 Decision 10 was a naming decision already swept to `users_id` in the Step-4-close prose. F/CTO ratified **Option A**: `001` **instantiates** the `users_id = auth.uid()` convention rather than renaming — `create schema pfin` + `pfin.fn_refresh_updated_at()` SECURITY DEFINER trigger helper (1 of the 2 locked Decision-9 allowlist entries; `set search_path = ''` privesc fence; body touches no tables). **Sec joint-review GREEN** (search_path fence exact; DEFINER matches locked D9; §10 ledger untouched, 3-axis CLEAN; no RLS predicate weakened). **[ADR-011 Decision 10 amendment](DECISIONS.md#adr-011)** (greenfield reconciliation; annotate-not-rewrite) reconciled the 4 AC-drift clauses. The migration ran the full **Architect → Sec joint-review → DevOps CI (`db-tests` applied it on a live Supabase, green) → branch-protection gate → F/CTO ratify** loop, and the Linear C7 loop (read → In Progress → comment → Done). File renamed `001_users_id_rename` → `001_pfin_foundation`.
+
+**Branch protection on main — configured (closes C3).** The exit walk found "branch protection on main" (a stated `CLAUDE.md` convention) had **never actually been enforced**. Configured via `gh api`: require PR + the 7 always-run `security-scan` checks (strict) + 0 required approvals (solo-dev) + `enforce_admins = true` (no direct push to main, including F/CTO). Path-filtered `db-tests` intentionally not a required context (would deadlock doc-only PRs). Validated live on SELF-186 (first `feature/*` PR through the gate).
+
+**Carried into Phase 6** (per ADR-020): the `fence-tbc` integrity gap (fails open on the real ETL tree — fix at Wave 6); §10 streak grain reconciliation; `config.toml major_version = 17` confirm-vs-prod before base-table work; BLS ARCH↔code reconcile; `role:qa`/`role:devops` Linear labels; W0b Coolify repoint. **Phase 6 begins the V1.0 Build Loop** (SELF-187+ base-table migrations on the `001` substrate).
 
 ---
 

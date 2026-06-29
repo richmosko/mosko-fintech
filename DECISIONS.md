@@ -41,6 +41,42 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-020 — Phase 5 close-gate + Phase 6 entry approval (terse pattern)
+
+**Date:** 2026-06-29
+**Status:** Accepted
+**Approved by:** F/CTO (2026-06-29; explicit sign-off on Phase 5 exit → Phase 6 entry after the Step 9 exit-criteria walk + SELF-186 smoke-test PASSED).
+
+### Decisions
+
+1. **Phase 5 (Workshop Setup) ✅ Complete 2026-06-29.** All 7 WORKFLOW.md exit criteria PASS: (C1) new task assignable end-to-end without ad-hoc setup — SELF-186 demonstrated; (C2) CI passes on clean checkout — 8/8 checks green; (C3) branch protection prevents direct push to main — configured (Decision 2); (C4) agent definitions exist for all 10 roles with explicit Linear permission scope; (C5) Phase 0.5 defs refined + re-signed-off (Steps 2–3, PRs #101–#103); (C6) owner can invoke any agent by name; (C7) agent + Linear issue ID → read/work/status/comment verified end-to-end on SELF-186. Mosko extensions: §10 attribution discipline preserved (every Phase 5 surface CLEAN; no new catalogued claim — ledger stays 2 = RT-22 + RT-26; grain-count reconciliation carried); SD-15 + RT-15 implicit gaps closed (Step 4 W2/W3); BACKLOG §7 → Linear milestone-rotation rehearsal completed (Step 7); SELF-186 V1.0 first-implementation smoke-test PASSED. 9 steps landed across PRs #97–#116; `phase-5-workshop-setup` team torn down 2026-06-25 per [ADR-003](#adr-003).
+
+2. **Branch protection on main configured (closes exit-criterion C3).** Discovered **absent** during the Step 9 exit walk — "branch protection on main" was a stated convention (`CLAUDE.md`) that had never been enforced. Configured via `gh api`: require a PR before merge + the 7 always-run `security-scan` status checks (strict / branches-up-to-date) + **0 required approvals** (solo-dev — a required human review is impractical when the author can't approve their own PR) + **`enforce_admins = true`** (no direct push to main, including F/CTO; self-merge after green CI). The path-filtered `db-tests` (pgTAP) job is intentionally **not** a required context — requiring it globally would deadlock doc-only PRs that don't trigger it; it still runs + is reviewed on migration PRs. Validated live: SELF-186 (first `feature/*` PR) merged through the gate.
+
+3. **SELF-186 greenfield reconciliation — Option A ratified ([ADR-011 Decision 10 amendment](#adr-011)).** The literal "rename `tenant_id` → `users_id` across V1 user-data tables" was unsatisfiable: the incumbent `pfin` schema has no `tenant_id` (20 tables, none), and the rename was a naming decision already swept to `users_id` in the Step-4-close prose; the "Phase 3 DDL rename" never happened (greenfield). `001_pfin_foundation.sql` therefore **instantiates** the `users_id = auth.uid()` convention rather than renaming built DDL: `create schema pfin` + `pfin.fn_refresh_updated_at()` SECURITY DEFINER helper (1 of the 2 locked Decision-9 allowlist entries; `set search_path = ''`). Sec joint-review GREEN. Options B (rename against incumbent snapshot) + C (schema-only, vacuous Sec leg) rejected.
+
+4. **Phase 6 (Build Loop) entered 2026-06-29.** Meta-process M2 (Implement + Verify) continues per [ADR-009](#adr-009) Decision 2. Phase 6 consumes the locked PRD + ARCH + SECURITY + DESIGN + the Linear V1.0–V1.4 inventory + BACKLOG §7, executing V1 issues through the now-validated build loop (Architect/Backend/Frontend → QA/Sec joint-review → DevOps CI → branch-protected PR → F/CTO ratify; milestone-rotation per [ADR-017](#adr-017) Decision 2). First foundational migration `001_pfin_foundation` is live; SELF-187+ base-table migrations build on it.
+
+### Carried follow-ups (into Phase 6)
+
+- **`fence-tbc` integrity gap** (Sec Step 8 finding) — non-enforcing on the real ETL tree; fix when TBC lands at Wave 6 (folded into ETL CI coverage).
+- **§10 attribution-streak grain reconciliation** (MILESTONES "25+/31+" grain vs fresh Sec count — pick one canonical grain).
+- **`config.toml major_version = 17` PROVISIONAL** — confirm vs cax21 prod before Phase 6 base-table work.
+- **BLS ARCH↔code reconcile** (Architect) — ARCH §5 "free/open" vs ETL code requiring `BLS_API_KEY`.
+- **`role:qa` + `role:devops` Linear labels absent** — create at each role's first Phase 6 issue (F/CTO action); 3 mosko issues in NO-PROJECT bucket (cosmetic).
+- **W0b operational** — F/CTO-executed Coolify repoint + `pfin_back_etl` archive.
+
+### Cross-references
+
+- [ADR-018](#adr-018) — Phase 4 close + Phase 5 entry approval (the prior phase-gate this mirrors).
+- [ADR-003](#adr-003) — team teardown convention (`phase-5-workshop-setup` torn down 2026-06-25).
+- [ADR-009](#adr-009) Decision 2 — Phase 6 outer category; M2 (Implement + Verify) continues.
+- [ADR-011](#adr-011) Decision 10 amendment — SELF-186 greenfield reconciliation; Decision 9 — the 2-entry DEFINER allowlist `001` instantiates from.
+- [ADR-017](#adr-017) Decision 2 — milestone-rotation (rehearsed at Step 7; operational at first real rotation).
+- WORKFLOW.md Phase 5 Lessons learned subsection (8 durable patterns codified at this close).
+
+---
+
 ## ADR-019 — Polyrepo → monorepo topology consolidation; `pfin_back_etl` absorbed at `workers/etl/`
 
 **Date:** 2026-06-16
