@@ -41,6 +41,84 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-021 — V1 greenfield deployment posture: build on a new VPS; `pfindash.com`/cax21 is reference-only; Postgres 17 by choice
+
+**Date:** 2026-06-29
+**Status:** Accepted
+**Phase:** Phase 6 entry (Build Loop) — recorded at the start of base-table migration work (SELF-187+).
+**Pattern:** Short pattern (single posture decision + named options; resolves an ADR-020 carried follow-up and amends the deployment framing that [ADR-011](#adr-011) Decision 10 + Decision 17 reference).
+
+**Context.**
+
+V1 has been carrying an implicit assumption — inherited from the project's origin on F/CTO's incumbent infrastructure — that the live `pfindash.com` deployment (self-hosted Supabase on Coolify on the Hetzner **cax21** box in Germany, the same box that runs the `pfin_back_etl` Python ETL) is the V1 deploy target. Phase 5 close ([ADR-020](#adr-020)) surfaced the friction concretely: the `config.toml major_version = 17` carried follow-up was filed as "confirm vs cax21 prod before Phase 6 base-table work," and a read-only `SHOW server_version` against the live cax21 box on 2026-06-29 returned **15.8** — a mismatch against `supabase/config.toml` line 42 (`major_version = 17`). Under the Supabase-CLI "local `config.toml` must match the linked remote" rule, that mismatch would be a defect *if* cax21 were a remote we depend on.
+
+F/CTO resolved the framing by **decision rather than measurement**: V1 is **greenfield**, built from scratch on a **new virtual server** at deploy time. The incumbent `pfindash.com`/cax21 deployment is a **reference, not a deployment dependency** — F/CTO is comfortable tearing down everything on `pfindash.com` and standing up a fresh instance when V1 is ready to ship. Under this posture the cax21 `15.8` measurement is **moot**: there is no remote we depend on yet, so the CLI match-rule does not bind us, and **Postgres 17 is the chosen forward target by choice** (`config.toml` line 42 is therefore correct *by intent*, not by prod-match). The from-scratch stand-up will be documented in **the deployment runbook** (`docs/deployment-runbook.md`, exact path per DevOps — skeleton drafted in parallel at this entry).
+
+The load-bearing meta-principle this ADR exists to capture: **do not rely on a working existing deployment.** Every V1 artifact, migration, and CI fence is authored to stand up a fresh environment from repo state alone.
+
+### Decision — Option A: greenfield from scratch on a new VPS; incumbent is reference-only; PG 17 by choice
+
+V1 deploys to a **new, clean virtual server** provisioned at ship time, from repo state alone, per the deployment runbook. `pfindash.com`/cax21 is retained as **reference material only** (architecture precedent, the `pfin_back_etl` source now in-repo at `workers/etl/` per [ADR-019](#adr-019), and historical config) and carries **no runtime or data dependency** for V1. Postgres **17** is the forward database target by choice; `supabase/config.toml major_version = 17` stands as correct-by-intent.
+
+### Options considered
+
+- **(A) Greenfield from scratch on a new VPS [CHOSEN].** Provision a clean VPS at deploy time; stand up Supabase + the V1 container topology from repo state per the runbook; pick PG 17 as the forward target.
+  - *Why it fits:* Matches reality — V1 was designed (PRD/ARCH/SECURITY/migrations) as a from-scratch build, not a retrofit onto a running system. Removes the CLI match-rule constraint and the `15.8`-vs-`17` friction entirely. Lets us choose the PG major version on technical merit (17 > 15.8) rather than inheriting prod's version. Forces the deployment to be fully documented and reproducible (runbook), which is the correct V1 discipline anyway. No risk of corrupting or destabilizing F/CTO's live incumbent during V1 iteration.
+  - *Cost:* A fresh stand-up is net-new operational work at ship time (provision VPS, install Coolify/Supabase, seed, configure secrets, point DNS). Requires a real deployment runbook to exist before ship (now a tracked Phase 6/7 dependency). Incumbent's accumulated config (working Coolify→Discord notification routing, env-vars, deploy history) does not carry forward automatically — it must be re-created or re-derived from repo + runbook.
+  - *What it makes harder later:* Little. If F/CTO ever wants to *consolidate* onto the cax21 box later, that's a forward migration, not a reversal.
+
+- **(B) Deploy onto / adopt the incumbent cax21 box in-place.** Treat cax21's running Supabase as the V1 remote; link the CLI to it; deploy V1 alongside `pfin_back_etl` on the existing box.
+  - *Why it might be right:* Zero new-infra cost (cax21 is paid-for, €9.50/mo, with substantial headroom per the `reference_hetzner_cax21` memory); reuses the working Coolify→Discord routing and existing env-var setup; fastest path to a running V1.
+  - *Cost:* Binds V1 to the incumbent's state — including PG **15.8**, which would force `config.toml` back to `major_version = 15` and forgo PG 17. Any V1 iteration risks the live incumbent (and `pfin_back_etl`'s production ingestion sharing the box). Couples V1's fate to a deployment whose history predates the project's discipline — the antithesis of "do not rely on a working existing deployment."
+  - *What it makes harder later:* One-way-ish — once V1 data lives on the incumbent, *separating* it (to a clean box, or to fix the box) becomes a data migration under load.
+
+- **(C) In-place PG 15 → 17 major-version upgrade of the incumbent.** Keep cax21 as the target but `pg_upgrade` it (or dump/restore) from 15.8 to 17 first, then deploy V1 against the upgraded box.
+  - *Why it might be right:* Preserves the paid-for box while getting PG 17; reconciles `config.toml = 17` against a real remote.
+  - *Cost:* A major-version upgrade of a box that's running `pfin_back_etl` in production is a high-risk operation (downtime, rollback planning, extension-compatibility audit) for **zero V1 benefit** — V1 doesn't need the incumbent's data. Highest-effort, highest-risk option; inherits all of Option B's coupling problems *plus* an upgrade hazard.
+  - *What it makes harder later:* Same coupling one-way-door as (B), reached via a riskier path.
+
+### One-way doors — F/CTO ratify status
+
+- **The greenfield posture itself is ratified by F/CTO today (2026-06-29).** It is a *low-reversal-cost* direction: choosing not-to-depend-on the incumbent is cheap to hold and cheap to revisit (consolidating onto cax21 later would be a forward decision, not an undo).
+- **Genuine one-way door #1 — PG 17 migration-authorship lock-in.** Once base-table migrations (SELF-187+) are authored against PG 17 and begin using any 17-specific or 17-default behavior, *downgrading* the forward target to 15.x would require a compatibility audit and possibly rework of authored DDL. This is the reversible-with-cost edge. **F/CTO has ratified PG 17 as the forward target by choice** — recording it here so the lock-in is explicit, not implicit.
+- **Genuine one-way door #2 — destructive teardown of `pfindash.com`.** Actually tearing down the live incumbent (vs. merely not depending on it) is *destructive and irreversible* for that environment's data. F/CTO has signalled comfort with teardown, but the **execution** of teardown is an operational step to perform only at deploy time, deliberately, after confirming nothing reference-worthy is lost. Flagging it so it is never done as an incidental side-effect of V1 stand-up. (Operational; tracked alongside the W0b Coolify repoint + `pfin_back_etl` archive carried follow-up.)
+
+### §10 attribution discipline preservation
+
+ADR-021 introduces **zero** new catalogued §10 instances and amends **no** layer attribution. 3-axis cross-check (Path B — reference-not-absorb; [ADR-011](#adr-011) Decision 4 is linked, not restated):
+
+- **(i) Instance-numbering.** The catalogued §10 ledger stays at its V1 commitment — RT-22 first, RT-26 second; count **unchanged at 2**.
+- **(ii) Layer-attribution.** RT-22 stays the **infrastructure-credential-presence** layer — its fence is the *absence* of `SUPABASE_*` env-vars and a Postgres client in the **PDF-worker container Dockerfile**, a property of the container image regardless of which VPS hosts it. Moving the deploy target from cax21 to a new VPS is a host change, not a layer or attribution change; RT-22's CI target (the Dockerfile) is untouched. RT-26 stays the code-layer `SUPABASE_SERVICE_ROLE_KEY` allowlist fence on the V1-web-app server-side source — host-independent.
+- **(iii) Verbatim-vs-paraphrase.** This ADR does not enumerate Decision 4's catalogued numbered list; it links to Decision 4 as the canonical anchor.
+
+Sec joint-review is **not** independently required for this ADR (no auth/RLS/secrets/Plaid/financial-calc surface; §10 ledger unchanged by-construction). The §10 cross-check is recorded pre-emptively per the mandatory draft-time discipline.
+
+### Consequences
+
+- **Resolves the [ADR-020](#adr-020) `config.toml major_version = 17` PROVISIONAL carried follow-up** — by *decision* (greenfield + PG 17 by choice), not by measurement. The cax21 `SHOW server_version = 15.8` reading is recorded for the record and then declared moot; no `config.toml` change. (Team-lead owns the MILESTONES Pending-block update closing this follow-up; this ADR does not edit MILESTONES.)
+- **Amends the deployment *framing*** referenced by [ADR-011](#adr-011) Decision 10 (greenfield-reconciliation amendment — already migration-layer-correct under greenfield) and Decision 17 / Lock 13 (the 3-container topology, whose `reference_hetzner_cax21` framing now reads as reference-only). The Lock 13 **runtime topology** (web app + PDF worker + `workers/etl/` Python ETL + monthly_report cron) is **unchanged** — it stands up on the new VPS exactly as specified; only the *host* is no longer the incumbent box.
+- **ARCH §5 Deployment Topology becomes reference-only in its incumbent framing** (see recommendation below).
+- **Creates a Phase 6/7 dependency:** a real deployment runbook (`docs/deployment-runbook.md`, per DevOps) must exist and be validated before V1 ship. The incumbent's working Coolify→Discord routing + env-var setup must be re-derived from repo + runbook, not assumed-inherited.
+- **Reinforces the meta-principle "do not rely on a working existing deployment"** across all V1 CI fences and migrations — they must stand up a fresh environment from repo state alone.
+
+### ARCH §5 recommendation (flag only — NOT edited in this branch)
+
+**Recommend a follow-up ARCH §5 refresh.** The Phase-3 ARCH §5 Deployment Topology content frames deployment around the incumbent cax21 box (Hetzner ARM, Coolify, the box that also runs `pfin_back_etl`). Under ADR-021 that framing is now **reference-only**: the *topology* (3-container + cron) is correct, but the *host* is a new greenfield VPS, not cax21. Suggested scope for the refresh (own PR, Architect-led, after this ADR lands): (1) reframe the cax21 references as "reference precedent" rather than "deploy target"; (2) add a forward pointer to `docs/deployment-runbook.md`; (3) state PG 17 as the chosen DB target with the greenfield rationale; (4) re-check ARCH §5's trust-boundary inventory reads host-neutrally (it should — boundaries are container/credential properties, not host properties). This is **not touched in this branch** per the team-lead's instruction; flagged here and in the report-back for F/CTO to schedule.
+
+### Cross-references
+
+- [ADR-020](#adr-020) — Phase 5 close; resolves its `config.toml major_version = 17` PROVISIONAL carried follow-up by decision.
+- [ADR-011](#adr-011) Decision 10 — greenfield-reconciliation amendment (migration-layer `users_id` instantiation). This ADR records the *deployment-posture* counterpart of the same greenfield reality; Decision 10 stands unchanged.
+- [ADR-011](#adr-011) Decision 17 / Lock 13 — 3-container runtime topology; **runtime topology unchanged**, host reframed to a new VPS. The `reference_hetzner_cax21` framing reads as reference-only under this ADR.
+- [ADR-019](#adr-019) — `pfin_back_etl` absorbed into the monorepo at `workers/etl/`; the archived `pfin_back_etl` repo and cax21 box are jointly the "reference, not dependency" precedent this ADR generalizes to the whole deployment.
+- [ADR-011](#adr-011) Decision 4 — §10 catalogued-instance ledger; **unchanged by-construction** (referenced, not amended).
+- `reference_hetzner_cax21` + `reference_pfin_back_etl` + `feedback_greenfield_no_existing_deployment_dependency` memories — the durable record of the reference-only reframe.
+- `docs/deployment-runbook.md` (per DevOps) — the from-scratch stand-up procedure this posture depends on.
+
+**Approved by:** F/CTO (2026-06-29 — greenfield posture + PG 17 forward-target-by-choice ratified at Phase 6 entry; the two genuine one-way doors above recorded explicitly).
+
+---
+
 ## ADR-020 — Phase 5 close-gate + Phase 6 entry approval (terse pattern)
 
 **Date:** 2026-06-29

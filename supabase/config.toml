@@ -37,9 +37,9 @@ port = 54322
 shadow_port = 54320
 # Maximum amount of time to wait for health check when starting the local database.
 health_timeout = "2m"
-# The database major version to use. This has to be the same as your remote database's. Run `SHOW
-# server_version;` on the remote database to check.
-major_version = 17  # F/CTO match-prod call (2026-06-25): cax21 prod Supabase PG major = 17 (best-guess; CONFIRM against prod via Studio → Settings → Infrastructure or `SHOW server_version;` before Phase 6 RLS base-table work, where version-skew bites harder — current Step 4 battery content (pure-fn masking + inversion canary) is 15/17-identical, so low-stakes today).
+# The database major version to use. The Supabase-CLI "must match the linked remote" rule binds
+# only when there IS a linked remote we depend on — under greenfield (ADR-021) there is not yet.
+major_version = 17  # PG 17 is the chosen forward target BY DECISION (ADR-021, 2026-06-29 — V1 greenfield). The cax21/pfindash.com incumbent is REFERENCE-ONLY, not a deploy dependency: V1 stands up from scratch on a new VPS at deploy time. For the record, a read-only `SHOW server_version` on the incumbent (2026-06-29) measured 15.8 — but that is MOOT under greenfield (no remote we depend on; the match-rule does not bind). Resolves the ADR-020 PROVISIONAL config.toml follow-up by decision, not by prod-match.
 
 [db.pooler]
 enabled = false

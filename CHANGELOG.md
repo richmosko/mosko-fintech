@@ -8,7 +8,23 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 **Format.** Newest at top. Each entry: `### vN.NN — YYYY-MM-DD` header followed by narrative paragraphs.
 
-**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 59 version entries total (v0.1 → v1.53).
+**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 60 version entries total (v0.1 → v1.54).
+
+---
+
+### v1.54 — 2026-06-29
+
+**Phase 6 — V1 greenfield deployment posture ([ADR-021](DECISIONS.md#adr-021)).** First Phase 6 doc-update PR (branch `meta/greenfield-deployment-posture`). While clearing the carried `config.toml major_version = 17` confirm-vs-prod gate, F/CTO ratified that V1 is **greenfield**: built from scratch on a **new VPS** at deploy time. The live `pfindash.com` deployment (self-hosted Supabase on Coolify on the Hetzner **cax21** box, alongside `pfin_back_etl`) is **reference-only, NOT a deploy dependency**, and may be torn down at ship time.
+
+**PG-17 gate closed by-decision, not measurement.** A read-only `SHOW server_version` against the live cax21 box on 2026-06-29 returned **15.8** (vs `config.toml major_version = 17`). Under greenfield the Supabase-CLI "local must match remote" rule does not bind (no remote depended on), so **PG 17 stands as the forward target by choice**; the 15.8 reading is recorded and declared moot. Resolves the ADR-020 carried follow-up.
+
+**ADR-021 (Architect).** Records the posture + 3 options considered (A greenfield [chosen] / B adopt-incumbent-in-place / C in-place PG 15→17 upgrade) + 2 genuine one-way doors (PG-17 migration-authorship lock-in; destructive `pfindash.com` teardown) + §10 3-axis CLEAN (catalogued ledger unchanged at 2 — RT-22 + RT-26; Path B reference-not-restate). Recommends a separate Architect-led **ARCH §5 Deployment Topology refresh** (cax21 framing → reference-only) — flagged, not done in this branch.
+
+**`docs/deployment-runbook.md` skeleton (DevOps).** New Markdown runbook stub — 10 sections (VPS provision / DNS / Coolify / Supabase-from-scratch PG17 / secrets / migrations / workers / observability / cutover+teardown / verification) + open-flags roll-up; every section carries a `> **STUB —**` marker, real-artifact-anchored (`secrets-manifest.yml`, the three `.env.example`, migrations `001`/`002`, Lock 13 3-container topology). §5 secrets-provisioning is **Sec-joint-review-gated**; surfaces two pre-existing reconcile flags for deliberate resolution (ETL discrete `PFIN_DB_*` vs ARCH §5 connection-string; BLS key-required vs ARCH §5 "free/open").
+
+**`config.toml` + `supabase/CLAUDE.md` reword (Architect).** `major_version = 17` kept; provisional/confirm-vs-prod framing replaced with greenfield-by-decision (cites ADR-021) on `config.toml` line 42 and the two `supabase/CLAUDE.md` mentions.
+
+**Meta-principle codified:** *do not rely on a working existing deployment* — all V1 CI fences + migrations stand up a fresh environment from repo state alone. Memory: `feedback_greenfield_no_existing_deployment_dependency` + `reference_hetzner_cax21` reframe.
 
 ---
 
