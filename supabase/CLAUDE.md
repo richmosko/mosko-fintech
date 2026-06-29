@@ -6,7 +6,7 @@
 
 ## What lives here
 - `migrations/` — Architect-authored SQL migrations. **Migrations live in code, not the dashboard** (root CLAUDE.md). Current: `001_pfin_foundation.sql` (foundational — `pfin` schema + `fn_refresh_updated_at` SECURITY DEFINER `updated_at` trigger helper; SELF-186 Phase 5 close-gate) + `002_fn_mask_acct_number.sql` (SD-15 masking primitive).
-- `config.toml` — Supabase CLI config. Note the **PROVISIONAL `[db] major_version = 17`** (see gotchas).
+- `config.toml` — Supabase CLI config. **`[db] major_version = 17`** is the chosen forward target **by decision** ([ADR-021](../DECISIONS.md#adr-021) — V1 greenfield; cax21/pfindash.com incumbent is reference-only, not a deploy dependency). See gotchas.
 - `tests/` — **QA-owned** pgTAP RLS battery (`supabase test db`, directory-mode). Architect does not author here, but every migration extending RLS surface is paired with a QA battery test. See [`tests/README.md`](tests/README.md) + [`tests/rls/DESIGN.md`](../tests/rls/DESIGN.md).
 
 ## Conventions
@@ -26,6 +26,6 @@
 
 ## Fail-closed / gotchas
 - **`grant`-then-RLS shape** (durable root-cause, PR #106). Postgres checks the **table ACL before RLS**. A table needs `grant select, insert, … to authenticated` *even with RLS enabled* — RLS filters rows; the GRANT lets the role reach the table at all. A missing grant denies at the ACL layer before RLS is consulted (you'd be testing GRANTs, not RLS). Every base-table migration pairs its RLS policy with the matching table-level GRANT.
-- **`major_version = 17` is PROVISIONAL** — F/CTO best-guess for cax21 prod PG. **Confirm against prod** (Studio → Settings → Infrastructure, or `SHOW server_version;`) **before Phase 6 base-table work**, where version-skew bites harder. Today's content (pure-fn masking + inversion canary) is 15/17-identical, so low-stakes now.
+- **`major_version = 17` is PG 17 BY DECISION** ([ADR-021](../DECISIONS.md#adr-021), 2026-06-29). V1 is **greenfield**: it stands up from scratch on a new VPS at deploy time, so the cax21/pfindash.com incumbent is **reference-only, not a deploy dependency** — the Supabase-CLI "must match remote" rule does not bind (no remote we depend on yet). The prior "confirm against prod" gate is **resolved by decision** (a read-only `SHOW server_version` measured the incumbent at 15.8 on 2026-06-29, but that is moot under greenfield). PG 17 is chosen on technical merit as the forward target.
 - **Migrations live in code, not the Supabase dashboard.** Architect authors; Backend applies (`supabase migration up`) after CI fixture-seed verification; QA consumes in fixture setup.
 - **Architect authors / Backend consumes read-only.** Do not edit `migrations/` as Backend; do not edit `tests/` as Architect (QA-owned).
