@@ -17,7 +17,7 @@
 -- DevOps job has a fail-closed guard: any `.sql`/`.pg` under `_fixtures/` errors.
 --
 -- Contract (firmed per team-lead relay 2026-06-25):
---   RLS predicate convention: users_id = auth.uid()  (post 001_users_id_rename)
+--   RLS predicate convention: users_id = auth.uid()  (post 001_pfin_foundation)
 --   tenant context: role=authenticated + request.jwt.claims.sub
 -- =====================================================================
 
