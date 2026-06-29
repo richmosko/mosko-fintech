@@ -8,6 +8,20 @@
 
 ## 1. Workspace topology
 
+### Concept → Linear mapping
+
+The repo's planning vocabulary maps onto Linear objects as follows. **Two layers sit between Initiative and Issue** — the *Project* (feature cluster) and the *milestone* (native project-milestone); collapsing them is the common mental-model slip.
+
+| Project concept | Linear object | This workspace |
+|---|---|---|
+| Repo project (the whole V1 effort) | **Initiative** | *V1 launch* |
+| Feature cluster (a PRD §2 area, or the cross-cutting substrate) | **Project** | 7 — *Platform / Cross-cutting* + the 6 §2 clusters (see below) |
+| Milestone (a V1 sub-version) | native **project-milestone** | *V1.0 … V1.final* (§3) |
+| Feature (one PR = one I↔V loop, per ADR-009 Decision 7) | **Issue** | *SELF-NNN* |
+| Sprint | **Cycle** | Linear cycle (orthogonal pacing wrapper) |
+
+> **Notes.** (a) A product sub-version may span **multiple** native milestones across clusters — e.g. **V1.0 = 3 milestones** (Platform foundation + Onboarding minimal + Net worth current-NAV), all of which must close to ship V1.0 (see §3). (b) The coarse `V1.0` / `V1.x` / `V1.final` **labels** (§ Label taxonomy) are a *cross-project sequencing aid*, **distinct** from the native milestones — the labels tag a cross-cutting issue with the cluster release it ships alongside; the native milestones are the per-cluster sub-version objects. (c) Worked example: **SELF-187** is an *Issue*, in the *Project* "Platform / Cross-cutting", under the *milestone* "V1.0 — Platform foundation".
+
 | Object | Value |
 |---|---|
 | **Team** | Mosko-Personal (key `SELF`) — single team, single user (richmosko@gmail.com) |

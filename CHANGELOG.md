@@ -8,7 +8,13 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 **Format.** Newest at top. Each entry: `### vN.NN — YYYY-MM-DD` header followed by narrative paragraphs.
 
-**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 61 version entries total (v0.1 → v1.55).
+**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 62 version entries total (v0.1 → v1.56).
+
+---
+
+### v1.56 — 2026-06-29
+
+**docs(meta): Linear Concept→object mapping table.** Added an explicit *Concept → Linear mapping* subsection to `docs/linear-setup.md` §1: repo project → **Initiative**; feature cluster (PRD §2 area / substrate) → **Project**; V1 sub-version → native **project-milestone**; feature/one-PR → **Issue**; sprint → **Cycle**. Notes capture the two-layer Project-vs-milestone distinction (the common mental-model slip), the V1.0-spans-3-native-milestones case, and the coarse-labels-vs-native-milestones distinction, with SELF-187 as the worked example. Clarification only — no topology change. F/CTO-requested at Phase 6 entry while orienting on SELF-187.
 
 ---
 
