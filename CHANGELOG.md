@@ -8,7 +8,23 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 **Format.** Newest at top. Each entry: `### vN.NN — YYYY-MM-DD` header followed by narrative paragraphs.
 
-**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 64 version entries total (v0.1 → v1.58).
+**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 65 version entries total (v0.1 → v1.59).
+
+---
+
+### v1.59 — 2026-06-30
+
+**Phase 6 — SELF-189: `account_trans` immutable audit ledger (`004`).** PR #123 · milestone *V1.0 — Platform foundation*. Second base-table migration — the Decision-2 audit-class transactions table.
+
+**What landed** — `pfin.account_trans`, append-only and fenced against **UPDATE + DELETE + TRUNCATE across all roles** (incl. `service_role`):
+- Minimal V1.0 cash-core (DP-2): `trans_id` PK · `account_id` FK→`pfin.account` (`ON DELETE RESTRICT`; **sole tenant anchor via the `account_users.rd_access`-JOIN — no own `users_id`**) · `transaction_date` · `amount NUMERIC(20,4)` · `vendor` · `description` · `is_reverse` · `replaces_trans_id` self-FK · `plaid_transaction_id` · `import_hash` · `created_at` IMMUTABLE (Lock 15 mod #1). **No `updated_at`/`reconciled_flag`/`skip_flag`** — append-only realization (reconciled state lives in the reconciliation link; edits via reverse-and-replace). Dedup partial-unique indexes (Decision 8). RLS **fence-only/default-deny** (the rd_access/wr_access-JOIN → SELF-190).
+- **Three triggers, all SECURITY INVOKER (allowlist stays 3):** `fn_account_trans_block_mutation` (BEFORE UPDATE/DELETE, raise-loud — blocks `authenticated` AND `service_role`; service_role bypasses RLS but not triggers, Decision 2 / Lock 10 mod #8); `fn_account_trans_block_truncate` (BEFORE TRUNCATE statement-level + `REVOKE TRUNCATE` — closes a Sec-flagged bulk-erase bypass that row-level triggers miss); `fn_account_trans_matched_account` (BEFORE INSERT, **NULL-safe `NOT EXISTS`** matched-account validation on `replaces_trans_id` — Decision-3 2nd instance, implements Lock 10 mod #2, family count +0/stays 7).
+
+**Sequencing corrected.** `004` account_trans precedes `005` reconciliation (`reconciliation_event_trans` junctions account_trans); the inverted Wave-1 order + Linear dependency flipped (SELF-188 renumbers `003`→`005`).
+
+**Reviews.** 7 DPs F/CTO-ratified; pre-authoring Sec GREEN (3 surfaces) + 2nd Sec review GREEN on the DDL — `ON DELETE RESTRICT` accept-and-defer concurred (weakening it would be a Decision-2 violation), and the **TRUNCATE bypass caught + closed**. QA RT-18 cross-tier battery `plan(9)`: UPDATE/DELETE/TRUNCATE blocked under `service_role` (the trigger, not RLS), authenticated fenced at the table ACL, matched-account cross-account-rejected/same-account-accepted; QA's layering insight (ACL-denial under authenticated vs trigger under service_role) sharpened the cross-tier proof. **8/8 CI green first run.** §10 catalogued ledger unchanged at 2 (immutability triggers are Decision-2 mechanisms, not §10 instances). (Note: pushed via the HTTPS fallback — SSH port 22 was timing out.)
+
+**Follow-ups.** **SELF-190 (B5):** the rd_access/wr_access-JOIN RLS policies + the Lock-3-mod-1 column-restriction hard-gate + SELF-187's deferred cross-tenant assertion (ii). **User-deletion / GDPR-erasure** cross-cutting decision (RESTRICT defer; resolution **must preserve immutability**; hard prerequisite before any user-deletion UI) — durable BACKLOG entry to follow. Decision-3 count grain reconciliation (canonical = 7) — doc-hygiene pass.
 
 ---
 
