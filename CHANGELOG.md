@@ -8,7 +8,31 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 **Format.** Newest at top. Each entry: `### vN.NN — YYYY-MM-DD` header followed by narrative paragraphs.
 
-**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 65 version entries total (v0.1 → v1.59).
+**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 66 version entries total (v0.1 → v1.60).
+
+---
+
+### v1.60 — 2026-07-01
+
+**Phase 6 — SELF-188: `reconciliation_event` family (`005`, substrate).** PR #124 · milestone *V1.0 — Platform foundation*. Third base-table migration — the Lock 9 / ADR-011 Decision 13 reconciliation substrate.
+
+**What landed** — three append-only audit-class tables + append-only RLS + cross-tier immutability triple-fence + the Decision-3 matched-account fence on the join:
+- `pfin.reconciliation_event` (SD-16 HIGH) — statement-blessed; no own `users_id` (`account_users.rd_access`-JOIN tenancy); **explicit `dimension` CHECK('balance','quantity')** + dimension→column population CHECK (DP-2); `statement_balance NUMERIC(20,4)` / `statement_quantity NUMERIC(28,8)` (DP-3); no `is_plug`/`mode`/`_cents` (dropped per Lock 9).
+- `pfin.holdings_checkpoint` (SD-17) — per-asset position snapshot; sole `account_id` anchor (**no `source_event_id`** → Decision-3 family stays 7); **SUBSTRATE only** (SELECT + immutability fence land now; **no authenticated INSERT path** — the fan-out writer defers).
+- `pfin.reconciliation_event_trans` (SD-18) — append-only join; RLS via **parent `reconciliation_event` FK-chain** (Lock 12 pattern; deliberately decoupled from `account_trans` policy state, which is default-deny until SELF-190).
+- **Three functions, all SECURITY INVOKER (allowlist stays 3):** two shared family fences (`fn_reconciliation_family_block_mutation` BEFORE UPDATE/DELETE + `fn_reconciliation_family_block_truncate` BEFORE TRUNCATE, `tg_table_name`-parameterized for per-table-distinct raise messages) + `fn_reconciliation_event_trans_matched_account` (BEFORE INSERT, **NULL-safe `NOT EXISTS`** — the **already-catalogued** Decision-3 instance / Lock 9 mod #1, family count +0).
+
+**Scope — full-family ratified, DP-1 = substrate-only.** F/CTO ratified full-family scope; the Architect drilled the dependency split → **DP-1 substrate-only**: tables + RLS + fences land now; the **holdings_checkpoint fan-out trigger (+ DP-4 DEFINER-vs-INVOKER posture), cost-basis cascade, and NAV(`eod_price`) composition DEFER to the V1.3 usage wave** — strictly on **missing-dependency** grounds (no `eod_price` table; `account_trans` investment columns deferred by `004`; no securities-master), NOT a posture conflict. (A team-lead brief-drift-catch corrected an overstated "append-only-vs-cascade contradiction" framing before it reached the migration header — the cascade's `SELECT … FOR UPDATE` is a concurrency row-lock + INSERT, append-only-compatible.)
+
+**Staleness reconciled.** Phase-4-era issue spec: migration renumbered `003`→`005` (`003`=account, `004`=account_trans); `account_trans.created_at` (Lock 9-A / Decision 19) already landed in `004`; SD-16/17/18 + RT-16/17 already catalogued (not re-expanded); Decision-3 "first instance" ordinal is stale (catalogued member, +0).
+
+**Reviews.** DPs F/CTO-ratified (DP-1 substrate / DP-2 explicit dimension CHECK / DP-3 NUMERIC(28,8); `source_event_id` deferred). **Sec joint-review 🟢 GREEN** — 0 V1-SHIP-BLOCK; all six adversarial-verify items confirmed; **commendation on trigger-over-WITH-CHECK** (the D3 fence fires under `service_role`, which an RLS WITH CHECK would not — the exact privileged path QA exercises). Two header-precision fixes applied pre-merge (NOTE-1 verbatim-anchor parenthetical restore; QA's ACL-layer-vs-NOT-EXISTS correction). QA battery `tests/rls/005_reconciliation_event_family_rls.sql` `plan(31)` (RT-17 full; RT-16 cascade slice defers with the writer).
+
+**CI caught two test-layer bugs** (Docker down locally → CI was the first execution against applied DDL): (1) the `005` battery's mixed-case `\gset` aliases fold to lowercase → unset `:refs` → syntax abort (planned 31, ran 0); (2) a **cross-migration regression** — `005`'s inbound `reconciliation_event_trans → account_trans` FK made `TRUNCATE account_trans` trip Postgres's FK-truncate guard **before** the statement-level immutability trigger, breaking `004`'s test #9; fixed via `TRUNCATE … CASCADE` in `004`'s + `005`'s TRUNCATE tests (audit-wipe stays fenced — the FK guard is an *additional* layer). QA proactively caught the same pattern on `005`'s own `reconciliation_event`. **8/8 CI green** on re-run.
+
+**Ledgers unchanged:** Decision-3 family = 7 · §10 catalogued = 2 (RT-22 + RT-26) · SECURITY DEFINER allowlist = 3.
+
+**Follow-ups → V1.3:** holdings_checkpoint fan-out (+ DP-4 posture), cost-basis cascade (RT-16 full), NAV via `eod_price`; SELF-190 battery revisits the authenticated `reconciliation_event_trans` link path once `account_trans` SELECT opens.
 
 ---
 
