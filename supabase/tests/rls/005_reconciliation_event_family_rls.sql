@@ -125,42 +125,42 @@ insert into auth.users (id) values (:'ta'), (:'tb');
 
 insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
   values (:'ta', 'acct-A', 'investment', 'household', 'taxable')
-  returning account_id as acctA \gset
+  returning account_id as accta \gset
 insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
   values (:'tb', 'acct-B', 'investment', 'household', 'taxable')
-  returning account_id as acctB \gset
+  returning account_id as acctb \gset
 
 -- account_trans: two in acct-A, one in acct-B (matched-account fence is per-ACCOUNT).
 insert into pfin.account_trans (account_id, transaction_date, amount, vendor, description)
-  values (:acctA, '2026-01-15', 100, 'vA1', 'acct-A trans 1')
-  returning trans_id as transA1 \gset
+  values (:accta, '2026-01-15', 100, 'vA1', 'acct-A trans 1')
+  returning trans_id as transa1 \gset
 insert into pfin.account_trans (account_id, transaction_date, amount, vendor, description)
-  values (:acctA, '2026-01-16', 200, 'vA2', 'acct-A trans 2')
-  returning trans_id as transA2 \gset
+  values (:accta, '2026-01-16', 200, 'vA2', 'acct-A trans 2')
+  returning trans_id as transa2 \gset
 insert into pfin.account_trans (account_id, transaction_date, amount, vendor, description)
-  values (:acctB, '2026-01-17', 300, 'vB1', 'acct-B trans 1')
-  returning trans_id as transB1 \gset
+  values (:acctb, '2026-01-17', 300, 'vB1', 'acct-B trans 1')
+  returning trans_id as transb1 \gset
 
 -- reconciliation_event: two in acct-A (balance + quantity), one in acct-B (balance).
 insert into pfin.reconciliation_event (account_id, reconciliation_date, dimension, statement_balance)
-  values (:acctA, '2026-01-31', 'balance', 1000)
-  returning event_id as eventA_bal \gset
+  values (:accta, '2026-01-31', 'balance', 1000)
+  returning event_id as eventa_bal \gset
 insert into pfin.reconciliation_event (account_id, reconciliation_date, dimension, symbol, statement_quantity)
-  values (:acctA, '2026-01-31', 'quantity', 'AAPL', 10)
-  returning event_id as eventA_qty \gset
+  values (:accta, '2026-01-31', 'quantity', 'AAPL', 10)
+  returning event_id as eventa_qty \gset
 insert into pfin.reconciliation_event (account_id, reconciliation_date, dimension, statement_balance)
-  values (:acctB, '2026-01-31', 'balance', 2000)
-  returning event_id as eventB_bal \gset
+  values (:acctb, '2026-01-31', 'balance', 2000)
+  returning event_id as eventb_bal \gset
 
 -- holdings_checkpoint: one in acct-A (substrate read target).
 insert into pfin.holdings_checkpoint (account_id, symbol, as_of_date, quantity, balance)
-  values (:acctA, 'AAPL', '2026-01-31', 10, 1500)
-  returning checkpoint_id as hcpA \gset
+  values (:accta, 'AAPL', '2026-01-31', 10, 1500)
+  returning checkpoint_id as hcpa \gset
 
--- reconciliation_event_trans: seed L1 = (eventA_bal, transA1) — both acct-A, so the
+-- reconciliation_event_trans: seed L1 = (eventa_bal, transa1) — both acct-A, so the
 -- matched-account fence passes even under this privileged INSERT (read target for RLS).
 insert into pfin.reconciliation_event_trans (event_id, account_trans_id)
-  values (:eventA_bal, :transA1)
+  values (:eventa_bal, :transa1)
   returning id as l1 \gset
 
 -- Hold the table ACL OPEN to service_role (test setup, rolled back) so the immutability
@@ -179,13 +179,13 @@ grant select, update, delete on pfin.reconciliation_event_trans to service_role;
 -- (1) POSITIVE control: SAME-account link (event + trans both acct-A) SUCCEEDS.
 select lives_ok(
   format($$ insert into pfin.reconciliation_event_trans (event_id, account_trans_id)
-              values (%s, %s) $$, :eventA_qty, :transA2),
+              values (%s, %s) $$, :eventa_qty, :transa2),
   '[D3+] same-account link (event & trans both in acct-A) SUCCEEDS — matched-account fence accepts in-account link (guards an over-broad reject; non-vacuous positive)'
 );
 -- (2) NEGATIVE: cross-account link (event acct-A, trans acct-B) REJECTED.
 select throws_like(
   format($$ insert into pfin.reconciliation_event_trans (event_id, account_trans_id)
-              values (%s, %s) $$, :eventA_bal, :transB1),
+              values (%s, %s) $$, :eventa_bal, :transb1),
   'cross-account reconciliation link rejected%',
   '[D3-] cross-account link (event acct-A, trans acct-B) REJECTED by the matched-account fence (distinct message; Decision 3 / Lock 9 mod #1)'
 );
@@ -214,7 +214,7 @@ select set_config('role', 'postgres', true);
 -- Cross-tenant (tenant B, rd_access on acct-B only) sees ZERO of A's rows -> fails closed.
 select _rls.set_tenant(:'tb'::uuid);
 select is(
-  (select count(*) from pfin.reconciliation_event where account_id = :acctA)::bigint, 0::bigint,
+  (select count(*) from pfin.reconciliation_event where account_id = :accta)::bigint, 0::bigint,
   '[RLS] cross-tenant read fails closed: B sees 0 of A''s reconciliation_event rows'
 );
 select is(
@@ -222,7 +222,7 @@ select is(
   '[RLS] cross-tenant read fails closed: B sees 0 reconciliation_event_trans rows (all links are A''s; parent FK-chain excludes B)'
 );
 select is(
-  (select count(*) from pfin.holdings_checkpoint where account_id = :acctA)::bigint, 0::bigint,
+  (select count(*) from pfin.holdings_checkpoint where account_id = :accta)::bigint, 0::bigint,
   '[substrate] cross-tenant read fails closed: B sees 0 of A''s holdings_checkpoint rows'
 );
 select set_config('role', 'postgres', true);
@@ -235,12 +235,12 @@ select set_config('role', 'postgres', true);
 -- ---- authenticated tier: fully fenced at the TABLE ACL (no write grant) ----
 select _rls.set_tenant(:'ta'::uuid);
 select throws_like(
-  format($$ update pfin.reconciliation_event set reconciliation_date = '2026-02-01' where event_id = %s $$, :eventA_bal),
+  format($$ update pfin.reconciliation_event set reconciliation_date = '2026-02-01' where event_id = %s $$, :eventa_bal),
   'permission denied for table reconciliation_event',
   '[IMMUT auth] reconciliation_event UPDATE fails closed at the table ACL (no write grant; trigger never reached)'
 );
 select throws_like(
-  format($$ delete from pfin.reconciliation_event where event_id = %s $$, :eventA_bal),
+  format($$ delete from pfin.reconciliation_event where event_id = %s $$, :eventa_bal),
   'permission denied for table reconciliation_event',
   '[IMMUT auth] reconciliation_event DELETE fails closed at the table ACL'
 );
@@ -255,12 +255,12 @@ select throws_like(
   '[IMMUT auth] reconciliation_event_trans DELETE fails closed at the table ACL'
 );
 select throws_like(
-  format($$ update pfin.holdings_checkpoint set as_of_date = '2026-02-01' where checkpoint_id = %s $$, :hcpA),
+  format($$ update pfin.holdings_checkpoint set as_of_date = '2026-02-01' where checkpoint_id = %s $$, :hcpa),
   'permission denied for table holdings_checkpoint',
   '[IMMUT auth] holdings_checkpoint UPDATE fails closed at the table ACL (SELECT-only grant)'
 );
 select throws_like(
-  format($$ delete from pfin.holdings_checkpoint where checkpoint_id = %s $$, :hcpA),
+  format($$ delete from pfin.holdings_checkpoint where checkpoint_id = %s $$, :hcpa),
   'permission denied for table holdings_checkpoint',
   '[IMMUT auth] holdings_checkpoint DELETE fails closed at the table ACL (SELECT-only grant)'
 );
@@ -269,12 +269,12 @@ select set_config('role', 'postgres', true);
 -- ---- service_role tier: RLS-bypassed + granted -> the TRIGGER is the sole gate (LOAD-BEARING) ----
 select set_config('role', 'service_role', true);
 select throws_like(
-  format($$ update pfin.reconciliation_event set reconciliation_date = '2026-02-01' where event_id = %s $$, :eventA_bal),
+  format($$ update pfin.reconciliation_event set reconciliation_date = '2026-02-01' where event_id = %s $$, :eventa_bal),
   'pfin.reconciliation_event is immutable%UPDATE blocked%',
   '[IMMUT svc] CROSS-TIER: service_role reconciliation_event UPDATE blocked by the immutability TRIGGER (RLS-bypass does NOT bypass the trigger)'
 );
 select throws_like(
-  format($$ delete from pfin.reconciliation_event where event_id = %s $$, :eventA_bal),
+  format($$ delete from pfin.reconciliation_event where event_id = %s $$, :eventa_bal),
   'pfin.reconciliation_event is immutable%DELETE blocked%',
   '[IMMUT svc] CROSS-TIER: service_role reconciliation_event DELETE blocked by the immutability TRIGGER'
 );
@@ -289,22 +289,28 @@ select throws_like(
   '[IMMUT svc] CROSS-TIER: service_role reconciliation_event_trans DELETE blocked by the immutability TRIGGER'
 );
 select throws_like(
-  format($$ update pfin.holdings_checkpoint set as_of_date = '2026-02-01' where checkpoint_id = %s $$, :hcpA),
+  format($$ update pfin.holdings_checkpoint set as_of_date = '2026-02-01' where checkpoint_id = %s $$, :hcpa),
   'pfin.holdings_checkpoint is immutable%UPDATE blocked%',
   '[IMMUT svc] CROSS-TIER: service_role holdings_checkpoint UPDATE blocked by the immutability TRIGGER'
 );
 select throws_like(
-  format($$ delete from pfin.holdings_checkpoint where checkpoint_id = %s $$, :hcpA),
+  format($$ delete from pfin.holdings_checkpoint where checkpoint_id = %s $$, :hcpa),
   'pfin.holdings_checkpoint is immutable%DELETE blocked%',
   '[IMMUT svc] CROSS-TIER: service_role holdings_checkpoint DELETE blocked by the immutability TRIGGER'
 );
 select set_config('role', 'postgres', true);
 
 -- ---- TRUNCATE tier: statement-level trigger, exercised as OWNER (postgres) — sole gate ----
+-- reconciliation_event is REFERENCED by reconciliation_event_trans.event_id, so a plain
+-- TRUNCATE hits Postgres's FK-guard ('cannot truncate a table referenced in a foreign key
+-- constraint') BEFORE the statement-trigger fires. CASCADE bypasses that guard and includes
+-- the referencing table in the truncation set; the TARGET (reconciliation_event) is first in
+-- the set, so ITS BEFORE TRUNCATE trigger fires first and raises -> message-precise match.
+-- (_trans + holdings_checkpoint have no inbound FK, so they need no CASCADE.)
 select throws_like(
-  $$ truncate pfin.reconciliation_event $$,
+  $$ truncate pfin.reconciliation_event cascade $$,
   'pfin.reconciliation_event is immutable%TRUNCATE blocked%',
-  '[IMMUT trunc] reconciliation_event TRUNCATE blocked by the statement-level trigger (audit-wipe path fenced; distinct from the row-level fence)'
+  '[IMMUT trunc] reconciliation_event TRUNCATE (CASCADE past the inbound-FK guard) blocked by the statement-level trigger (audit-wipe path fenced; distinct from the row-level fence)'
 );
 select throws_like(
   $$ truncate pfin.reconciliation_event_trans $$,
@@ -325,13 +331,13 @@ select _rls.set_tenant(:'ta'::uuid);
 -- A holds wr_access on acct-A -> INSERT into its own account SUCCEEDS.
 select lives_ok(
   format($$ insert into pfin.reconciliation_event (account_id, reconciliation_date, dimension, statement_balance)
-              values (%s, '2026-03-01', 'balance', 300) $$, :acctA),
+              values (%s, '2026-03-01', 'balance', 300) $$, :accta),
   '[RLS-WRITE] A INSERT reconciliation_event into own acct-A SUCCEEDS (wr_access-JOIN WITH CHECK satisfied)'
 );
 -- A has NO wr_access on acct-B -> INSERT rejected by the INSERT WITH CHECK.
 select throws_like(
   format($$ insert into pfin.reconciliation_event (account_id, reconciliation_date, dimension, statement_balance)
-              values (%s, '2026-03-01', 'balance', 300) $$, :acctB),
+              values (%s, '2026-03-01', 'balance', 300) $$, :acctb),
   'new row violates row-level security policy%for table "reconciliation_event"',
   '[RLS-WRITE] A INSERT reconciliation_event into acct-B REJECTED by the wr_access-JOIN WITH CHECK (cross-account write fails closed)'
 );
@@ -340,7 +346,7 @@ select throws_like(
 -- (24) FINDING note in the header — asserts the ACTUAL layer (ACL), not the header's prose.
 select throws_like(
   format($$ insert into pfin.reconciliation_event_trans (event_id, account_trans_id)
-              values (%s, %s) $$, :eventA_qty, :transA1),
+              values (%s, %s) $$, :eventa_qty, :transa1),
   'permission denied for table account_trans',
   '[RLS-WRITE] authenticated link INSERT FAILS CLOSED at V1.0 (INVOKER matched-account reads account_trans -> table ACL denial; SELF-190-gated). Revisit in SELF-190 battery.'
 );
@@ -352,7 +358,7 @@ select set_config('role', 'postgres', true);
 select _rls.set_tenant(:'ta'::uuid);
 select throws_like(
   format($$ insert into pfin.holdings_checkpoint (account_id, symbol, as_of_date, quantity)
-              values (%s, 'AAPL', '2026-03-01', 5) $$, :acctA),
+              values (%s, 'AAPL', '2026-03-01', 5) $$, :accta),
   'permission denied for table holdings_checkpoint',
   '[substrate] authenticated INSERT into holdings_checkpoint fails closed at the table ACL (no INSERT grant/policy; writer + DP-4 posture defer to V1.3)'
 );
@@ -363,24 +369,24 @@ select set_config('role', 'postgres', true);
 -- =====================================================================
 select throws_like(
   format($$ insert into pfin.reconciliation_event (account_id, reconciliation_date, dimension, symbol, statement_balance)
-              values (%s, '2026-04-01', 'balance', 'AAPL', 100) $$, :acctA),
+              values (%s, '2026-04-01', 'balance', 'AAPL', 100) $$, :accta),
   'new row for relation "reconciliation_event" violates check constraint "reconciliation_event_dimension_shape"%',
   '[DIM] balance event with a non-null symbol REJECTED by the dimension-shape CHECK (balance carries no symbol)'
 );
 select throws_like(
   format($$ insert into pfin.reconciliation_event (account_id, reconciliation_date, dimension, statement_quantity)
-              values (%s, '2026-04-01', 'quantity', 5) $$, :acctA),
+              values (%s, '2026-04-01', 'quantity', 5) $$, :accta),
   'new row for relation "reconciliation_event" violates check constraint "reconciliation_event_dimension_shape"%',
   '[DIM] quantity event missing symbol REJECTED by the dimension-shape CHECK (quantity requires symbol)'
 );
 select lives_ok(
   format($$ insert into pfin.reconciliation_event (account_id, reconciliation_date, dimension, statement_balance)
-              values (%s, '2026-04-01', 'balance', 100) $$, :acctA),
+              values (%s, '2026-04-01', 'balance', 100) $$, :accta),
   '[DIM+] valid balance event (statement_balance set; symbol/quantity null) inserts'
 );
 select lives_ok(
   format($$ insert into pfin.reconciliation_event (account_id, reconciliation_date, dimension, symbol, statement_quantity)
-              values (%s, '2026-04-01', 'quantity', 'AAPL', 5) $$, :acctA),
+              values (%s, '2026-04-01', 'quantity', 'AAPL', 5) $$, :accta),
   '[DIM+] valid quantity event (symbol + statement_quantity set; balance null) inserts'
 );
 

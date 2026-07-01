@@ -191,10 +191,17 @@ select set_config('role', 'postgres', true);  -- restore before (h) + finish()
 --   correct role here.) Message matched against the authored 004 text — DISTINCT from
 --   the row-level 'UPDATE blocked'/'DELETE blocked' fence.
 -- =====================================================================
+-- CASCADE is REQUIRED as of 005: reconciliation_event_trans.account_trans_id now adds an
+-- inbound FK on account_trans, so a plain TRUNCATE trips Postgres's FK-guard ('cannot
+-- truncate a table referenced in a foreign key constraint') BEFORE the statement-trigger
+-- fires. CASCADE bypasses the guard and includes the referencing table; account_trans (the
+-- TARGET) is first in the truncation set, so its BEFORE TRUNCATE trigger fires first and
+-- raises -> the message stays precise. (Same FK-guard-then-trigger cross-tier layering the
+-- 005 battery documents; 005 introduced the FK, so this PR fixes the regression here.)
 select throws_like(
-  $$ truncate pfin.account_trans $$,
+  $$ truncate pfin.account_trans cascade $$,
   'pfin.account_trans is immutable%TRUNCATE blocked%',
-  '(h) TRUNCATE blocked by the statement-level immutability TRIGGER (bulk audit-wipe path fenced; distinct from the row-level UPDATE/DELETE fence)'
+  '(h) TRUNCATE (CASCADE past the 005 inbound-FK guard) blocked by the statement-level immutability TRIGGER (bulk audit-wipe path fenced; distinct from the row-level UPDATE/DELETE fence)'
 );
 
 select * from finish();
