@@ -1,0 +1,200 @@
+/* ============================================================================
+   mosko-fintech — DESIGN SYSTEM TOKENS  (Phase 2 · Step 9 token taxonomy)
+   ----------------------------------------------------------------------------
+   TWO-TIER SYSTEM (no bare hex on any semantic --c-* token):
+     • TIER 1 — PRIMITIVES (--color-*): named raw values. The ONLY place hexes
+       live, once each. A cool-neutral ramp + accent/indigo/canary/green/red +
+       alpha tokens, covering BOTH light and dark.
+     • TIER 2 — SEMANTIC ALIASES (--c-*): every role aliases a named primitive
+       via var(). Light set on :root; dark set re-aliases under [data-theme=dark].
+   This is the discoverable/explicit token system — every semantic value traces
+   to a named primitive (kills "I can't find the token for that value").
+
+   LOCKED FOUNDATION: Palette B refined · barely-cool #fafcfe canvas (cards pop
+   via gentle fill-contrast + elevation) · pure-white surfaces · Inter + JetBrains
+   Mono Hybrid · Attention = Canary #FFEF00 (stale/re-auth only) · dark = plan-for.
+   Tokens-as-code in a framework format (Step 10) waits on the Phase-3 framework.
+
+   FENCES: --c-pos/--c-neg scoped to ACTUAL performance only (forbidden on
+   $ReAlloc/%Target/target captions; §2.3 / ADR-002 §1.2). Attention is its own
+   reserved hue. No progress/gauge/target-line tokens exist.
+   ============================================================================ */
+
+:root {
+  /* ====================== TIER 1 · PRIMITIVES (named raw values) ====================== */
+
+  /* neutral (cool) ramp — light → dark (higher = darker) */
+  --color-white:       #ffffff;
+  --color-neutral-25:  #fafcfe;   /* barely-cool canvas */
+  --color-neutral-40:  #e8edf5;   /* dark-theme primary text */
+  --color-neutral-50:  #eef3fa;   /* light surface-alt */
+  --color-neutral-100: #e1e9f5;   /* light surface-alt2 */
+  --color-neutral-150: #d3ddee;   /* light border */
+  --color-neutral-250: #b2c0d8;   /* light border-strong */
+  --color-neutral-300: #aab3c0;   /* light disabled-text */
+  --color-neutral-350: #a2aec2;   /* dark secondary text */
+  --color-neutral-400: #8190a7;   /* light muted text */
+  --color-neutral-480: #6f7d96;   /* dark muted text */
+  --color-neutral-560: #5a6678;   /* dark disabled-text */
+  --color-neutral-600: #4d5d77;   /* light secondary text */
+  --color-neutral-700: #3a4763;   /* dark border-strong */
+  --color-neutral-800: #283246;   /* dark border / disabled-border */
+  --color-neutral-820: #243049;   /* dark surface-alt2 */
+  --color-neutral-860: #1c2433;   /* dark surface-alt */
+  --color-neutral-880: #1a212d;   /* dark disabled-bg */
+  --color-neutral-900: #121b2b;   /* light primary text (ink) */
+  --color-neutral-915: #151b26;   /* dark surface */
+  --color-neutral-955: #0d1119;   /* dark canvas */
+
+  /* blue (interactive accent) */
+  --color-blue-25:  #f0f5ff;   /* light accent-tint */
+  --color-blue-50:  #e2ecfe;   /* light accent-soft */
+  --color-blue-300: #5b8def;   /* dark accent */
+  --color-blue-350: #79a3f5;   /* dark accent hover */
+  --color-blue-450: #4878d8;   /* dark accent active */
+  --color-blue-500: #2563eb;   /* light accent */
+  --color-blue-600: #1d4ed8;   /* light accent hover */
+  --color-blue-700: #1742a8;   /* light accent active */
+  --color-blue-soft-d: #16243f;  /* dark accent-soft */
+  --color-blue-tint-d: #121d33;  /* dark accent-tint */
+
+  /* indigo (secondary accent — chrome + 2nd data line only) */
+  --color-indigo-50:  #efeaff;
+  --color-indigo-300: #9d83ff;   /* dark */
+  --color-indigo-500: #7c5cff;   /* light */
+  --color-indigo-soft-d: #211b3d;
+
+  /* canary (attention = stale/re-auth ONLY) */
+  --color-canary-200: #fdfaad;   /* light fill */
+  --color-canary-300: #ffef33;   /* dark identity */
+  --color-canary-500: #ffef00;   /* light identity */
+  --color-canary-700: #8f8400;   /* light border */
+  --color-canary-900: #5c5600;   /* light text */
+  --color-canary-text-d:   #f0ec6a;  /* dark text */
+  --color-canary-bg-d:     #2a2806;  /* dark fill */
+  --color-canary-border-d: #80790f;  /* dark border */
+
+  /* green / red (semantic VALUE — actual performance only) */
+  --color-green-300: #4cc187;   /* dark */
+  --color-green-500: #1c854f;   /* light */
+  --color-red-300:   #e08484;   /* dark */
+  --color-red-500:   #c23b3b;   /* light */
+
+  /* alpha primitives */
+  --color-overlay-light: rgba(13, 17, 25, .45);
+  --color-overlay-dark:  rgba(0, 0, 0, .6);
+  --color-vizfill-light: rgba(37, 99, 235, .14);
+  --color-vizfill-dark:  rgba(91, 141, 239, .18);
+
+  /* ====================== TIER 2 · SEMANTIC ALIASES (light) ====================== */
+  --c-canvas:        var(--color-neutral-25);   /* barely-cool #fafcfe — cards pop on it */
+  --c-surface:       var(--color-white);        /* pure white card fill */
+  --c-surface-alt:   var(--color-neutral-50);
+  --c-surface-alt2:  var(--color-neutral-100);
+  --c-border:        var(--color-neutral-150);
+  --c-border-strong: var(--color-neutral-250);
+  --c-text-primary:  var(--color-neutral-900);
+  --c-text-secondary:var(--color-neutral-600);
+  --c-text-muted:    var(--color-neutral-400);
+
+  --c-accent:        var(--color-blue-500);
+  --c-accent-hover:  var(--color-blue-600);
+  --c-accent-active: var(--color-blue-700);
+  --c-accent-contrast:var(--color-white);
+  --c-accent-soft:   var(--color-blue-50);
+  --c-accent-tint:   var(--color-blue-25);
+  --c-link:          var(--c-accent);
+  --c-focus:         var(--color-blue-500);
+
+  --c-accent-2:      var(--color-indigo-500);
+  --c-accent-2-soft: var(--color-indigo-50);
+
+  --c-attn-solid:  var(--color-canary-500);
+  --c-attn-text:   var(--color-canary-900);
+  --c-attn-bg:     var(--color-canary-200);
+  --c-attn-border: var(--color-canary-700);
+
+  --c-pos: var(--color-green-500);
+  --c-neg: var(--color-red-500);
+
+  --c-disabled-bg:    var(--color-neutral-50);
+  --c-disabled-text:  var(--color-neutral-300);
+  --c-disabled-border:var(--color-neutral-150);
+  --c-overlay:        var(--color-overlay-light);
+
+  --c-viz-nominal: var(--c-accent);
+  --c-viz-infl:    var(--c-accent-2);
+  --c-viz-fill:    var(--color-vizfill-light);
+
+  /* ====================== TYPE / SPACING / RADIUS / ELEVATION ====================== */
+  --space-0: 2px;  --space-1: 4px;  --space-2: 8px;   --space-3: 12px;
+  --space-4: 16px; --space-5: 24px; --space-6: 32px;  --space-7: 48px;
+  --radius-sm: 3px; --radius-md: 5px; --radius-lg: 8px; --radius-pill: 999px;
+
+  --font-ui:  'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-num: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --headline-font: var(--font-ui);
+  --num-variant: normal;
+
+  --fs-hero: 32px; --fs-h1: 22px; --fs-h2: 16px; --fs-h3: 13px;
+  --fs-body: 13px; --fs-num: 13px; --fs-small: 11px; --fs-micro: 10px;
+  --lh-tight: 1.18; --lh-body: 1.45;
+  --weight-reg: 400; --weight-med: 500; --weight-semi: 600; --weight-bold: 700;
+
+  --shadow-1: 0 1px 2px rgba(18, 27, 43, .06), 0 1px 3px rgba(18, 27, 43, .05);
+  --shadow-2: 0 6px 18px rgba(18, 27, 43, .12);
+  --shadow-3: 0 12px 32px rgba(18, 27, 43, .18);
+  --hero-glow: 0 0 0 1px var(--c-accent-soft) inset;
+  --focus-ring: 0 0 0 2px var(--c-canvas), 0 0 0 4px var(--c-focus);
+}
+
+/* ============================ DARK THEME — re-aliased semantics ============================
+   Only the TIER-2 aliases swap (to dark-side primitives); no new hexes here. */
+:root[data-theme="dark"] {
+  --c-canvas:        var(--color-neutral-955);
+  --c-surface:       var(--color-neutral-915);
+  --c-surface-alt:   var(--color-neutral-860);
+  --c-surface-alt2:  var(--color-neutral-820);
+  --c-border:        var(--color-neutral-800);
+  --c-border-strong: var(--color-neutral-700);
+  --c-text-primary:  var(--color-neutral-40);
+  --c-text-secondary:var(--color-neutral-350);
+  --c-text-muted:    var(--color-neutral-480);
+
+  --c-accent:        var(--color-blue-300);
+  --c-accent-hover:  var(--color-blue-350);
+  --c-accent-active: var(--color-blue-450);
+  --c-accent-contrast:var(--color-neutral-955);
+  --c-accent-soft:   var(--color-blue-soft-d);
+  --c-accent-tint:   var(--color-blue-tint-d);
+  --c-focus:         var(--color-blue-300);
+
+  --c-accent-2:      var(--color-indigo-300);
+  --c-accent-2-soft: var(--color-indigo-soft-d);
+
+  --c-attn-solid:  var(--color-canary-300);
+  --c-attn-text:   var(--color-canary-text-d);
+  --c-attn-bg:     var(--color-canary-bg-d);
+  --c-attn-border: var(--color-canary-border-d);
+
+  --c-pos: var(--color-green-300);
+  --c-neg: var(--color-red-300);
+
+  --c-disabled-bg:    var(--color-neutral-880);
+  --c-disabled-text:  var(--color-neutral-560);
+  --c-disabled-border:var(--color-neutral-800);
+  --c-overlay:        var(--color-overlay-dark);
+
+  --c-viz-nominal: var(--color-blue-300);
+  --c-viz-infl:    var(--color-indigo-300);
+  --c-viz-fill:    var(--color-vizfill-dark);
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, .45);
+  --shadow-2: 0 8px 22px rgba(0, 0, 0, .55);
+  --shadow-3: 0 16px 40px rgba(0, 0, 0, .7);
+  --hero-glow: 0 0 0 1px rgba(91, 141, 239, .30) inset;
+}
+
+/* ======================== TYPEFACE (LOCKED) =======================
+   Inter (UI + hero NAV) + JetBrains Mono (tabular numerics).
+   Loaded via the review HTML <link>; self-hosted at Step 10. */

@@ -1,0 +1,12 @@
+# Keep the build context lean + reproducible (build regenerates these).
+node_modules
+.svelte-kit
+build
+.output
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+CLAUDE.md
+README.md
