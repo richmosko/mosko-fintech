@@ -1,8 +1,11 @@
 # tests/fixtures/ci/tbc-violation.py
 #
 # DELIBERATELY OUTSIDE TenantBoundConnection — TBC golden-test fixture per ARCH §6
-# Phase 5 detail item (d). Raw psycopg2.connect() outside the class binding
-# users_id. The TBC fence MUST report violation against this file.
+# Phase 5 detail item (d). Covers all four violation shapes outside the class
+# binding users_id: (1) raw psycopg2.connect(); (2) from-import connect();
+# (3) bare sqla.create_engine() — the ETL's REAL SQLAlchemy connection path;
+# (4) unqualified create_engine() from-import. The TBC fence MUST report
+# violation against this file at every CI invocation.
 #
 # CI inversion check (per Sec rubric (b)3 + ARCH §6.1 TBC row):
 #   The TBC fence script MUST flag this fixture at every CI invocation. If the
@@ -37,3 +40,21 @@ conn = psycopg2.connect(
 # A second violation shape: from-import.
 from psycopg2 import connect  # noqa: E402, F811
 conn2 = connect(host="localhost", database="pfin")
+
+# A third violation shape: bare SQLAlchemy engine construction outside the
+# TenantBoundConnection class. This is the ETL's REAL DB connection path —
+# core.py routes it through TenantBoundConnection.system(); a bare
+# sqla.create_engine() here bypasses the sole sanctioned engine factory.
+# Lock 13 mod #3 V1-SHIP-BLOCK: the TBC fence MUST flag this. This is the
+# pattern the pre-fix fence missed (it greped only psycopg2.connect()), which
+# is why it failed OPEN against the actual SQLAlchemy-based ETL code.
+import sqlalchemy as sqla  # noqa: E402
+engine = sqla.create_engine(  # noqa: F841
+    "postgresql+psycopg2://service_role:fake-fixture-password@localhost/pfin"
+)
+
+# A fourth violation shape: unqualified create_engine from-import.
+from sqlalchemy import create_engine  # noqa: E402, F811
+engine2 = create_engine(  # noqa: F841
+    "postgresql+psycopg2://service_role:fake-fixture-password@localhost/pfin"
+)

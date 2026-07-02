@@ -15,13 +15,23 @@
 # V1-SHIP-BLOCK axis (Lock 13 mod #3) is orthogonal to the §10 catalogued-instance axis.
 #
 # Catch criterion:
+#   - Bare SQLAlchemy engine construction: `sqla.create_engine(` /
+#     `sqlalchemy.create_engine(` / unqualified `create_engine(` — the ETL's
+#     REAL DB connection path (core.py routes it through
+#     TenantBoundConnection.system(); a bare create_engine() bypasses the sole
+#     sanctioned engine factory). This is the pattern the pre-fix fence missed,
+#     causing it to fail OPEN against the actual code (Backend DP5).
 #   - Raw psycopg2.connect() / psycopg.connect() (psycopg3) / asyncpg.connect()
-#     invocations outside the file declaring the TenantBoundConnection class.
+#     invocations outside the file declaring the TenantBoundConnection class —
+#     kept as defense-in-depth (a future raw-driver regression must still trip).
 #   - Includes from-import shape (`from psycopg2 import connect`).
+#   All patterns are scoped `--include='*.py'` and evaluated outside the file
+#   declaring the TenantBoundConnection class.
 #
 # Allowlist mechanism: class-declaration discovery (NOT hardcoded path).
 #   1. Find file declaring `class TenantBoundConnection` → ALLOWED_FILE.
-#   2. If none found → fail-closed (class absence = TBC discipline absent).
+#   2. If none found → fail-closed (exit 2), UNLESS --allow-missing-class is
+#      passed (inversion/fixture mode, which has no class by design).
 #   3. Grep target tree for pattern set; exclude ALLOWED_FILE; any other hit = violation.
 #
 # Cross-repo posture (per F/CTO α + paired-PR ratify 2026-06-08):
@@ -32,20 +42,47 @@
 #     + inversion mode redundantly.
 #
 # Usage:
-#   bash fence-tbc-pfin-back-etl.sh <target-python-tree-path>
+#   bash fence-tbc-pfin-back-etl.sh [--allow-missing-class] <target-python-tree-path>
+#
+#   --allow-missing-class : tolerate absence of the TenantBoundConnection class
+#                           (inversion/fixture mode ONLY — the fixture tree has
+#                           no class by design; production mode MUST NOT pass it,
+#                           so class absence fails closed there).
 #
 # Exit codes:
-#   0   — target tree clean (TBC class exists; no raw connect() outside class).
-#   1   — one or more raw connect() outside TBC class (fail-closed).
-#   2   — argument / environment error OR TBC class not found in target.
+#   0   — target tree clean (TBC class exists; no engine/connect construction outside class).
+#   1   — one or more engine/connect constructions outside TBC class (fail-closed).
+#   2   — argument / environment error OR TBC class not found in target
+#         (unless --allow-missing-class was passed).
 #
 
 set -euo pipefail
 
-TARGET="${1:-}"
+ALLOW_MISSING_CLASS=0
+TARGET=""
+for arg in "$@"; do
+  case "$arg" in
+    --allow-missing-class)
+      ALLOW_MISSING_CLASS=1
+      ;;
+    -*)
+      echo "FATAL: unknown flag: $arg" >&2
+      echo "Usage: bash $(basename "$0") [--allow-missing-class] <target-python-tree-path>" >&2
+      exit 2
+      ;;
+    *)
+      if [ -n "$TARGET" ]; then
+        echo "FATAL: multiple target args (got '$TARGET' and '$arg')." >&2
+        exit 2
+      fi
+      TARGET="$arg"
+      ;;
+  esac
+done
+
 if [ -z "$TARGET" ]; then
   echo "FATAL: missing target tree arg." >&2
-  echo "Usage: bash $(basename "$0") <target-python-tree-path>" >&2
+  echo "Usage: bash $(basename "$0") [--allow-missing-class] <target-python-tree-path>" >&2
   exit 2
 fi
 if [ ! -e "$TARGET" ]; then
@@ -58,19 +95,42 @@ fi
 ALLOWED_FILES=$(grep -rln 'class TenantBoundConnection' "$TARGET" 2>/dev/null || true)
 
 if [ -z "$ALLOWED_FILES" ]; then
-  # Class absence = TBC discipline absent in this target. Fail-closed.
-  # Exception: the fixture-only inversion mode in mosko-fintech repo intentionally
-  # has no TBC class — the violation fixture is the whole point of the run.
-  # In that mode, the fixture trips the next check (raw connect outside any class)
-  # so the fence still reports violation correctly. We log + continue to the
-  # grep stage; if there ARE hits in target, fence fires; if target is empty,
-  # we treat that as a configuration error.
+  # Class absence = TBC discipline mechanism absent in this target.
+  #
+  # DEFAULT (production mode): FAIL CLOSED (exit 2). If the TenantBoundConnection
+  # class does not exist, the sole sanctioned Postgres-client entry point is gone
+  # — the discipline is not merely violated, it is ABSENT. A clean grep in that
+  # state is meaningless, so we must not let it exit 0. (Prior behavior fell
+  # through to the grep and exited 0 when no raw hit happened to be present —
+  # that was the fail-OPEN hole this branch now closes.)
+  #
+  # --allow-missing-class (inversion/fixture mode ONLY): the fixture tree has no
+  # class by design; the whole point of that run is to prove the fence flags the
+  # violation fixture. There we tolerate class absence and let the grep stage
+  # trip on the fixture's deliberate violations.
+  if [ "$ALLOW_MISSING_CLASS" -eq 0 ]; then
+    echo "FATAL: TenantBoundConnection class not found in $TARGET." >&2
+    echo "Lock 13 mod #3: TenantBoundConnection is the ONLY sanctioned Postgres-client" >&2
+    echo "entry point in pfin_back_etl. Its absence means the discipline mechanism does" >&2
+    echo "not exist in this tree. Failing closed (a clean grep against a class-less tree" >&2
+    echo "proves nothing)." >&2
+    echo "(If this is the fixture/inversion invocation, pass --allow-missing-class.)" >&2
+    exit 2
+  fi
   echo "INFO: TenantBoundConnection class not found in $TARGET." >&2
-  echo "INFO: Proceeding under no-class-file assumption — every raw connect() in scope is a violation." >&2
+  echo "INFO: --allow-missing-class set (inversion/fixture mode) — proceeding under" >&2
+  echo "INFO: no-class-file assumption; every engine/connect construction in scope is a violation." >&2
   ALLOWED_FILES=""
 fi
 
-# Pattern set: raw .connect() calls + from-import-connect shape.
+# Pattern set:
+#   1. Bare SQLAlchemy engine construction — the ETL's REAL DB connection path
+#      (Backend DP5). Matches `sqla.create_engine(`, `sqlalchemy.create_engine(`,
+#      and unqualified `create_engine(`. This is the primary catch: the pre-fix
+#      fence lacked it and failed OPEN against the actual code.
+#   2. Raw .connect() calls (defense-in-depth against a future raw-driver regression).
+#   3. from-import-connect shape.
+PATTERN_CREATE_ENGINE='(sqla\.|sqlalchemy\.)?create_engine\('
 PATTERN_CONNECT='(psycopg2|psycopg|asyncpg)\.connect\('
 PATTERN_FROM_IMPORT='from[[:space:]]+(psycopg2|psycopg|asyncpg)[[:space:]]+import[[:space:]]+connect'
 
@@ -89,6 +149,7 @@ fi
 # Scan for the patterns. -E for ERE; -n for line numbers; -H for filename;
 # -r for recursive; --include='*.py' to scope to Python.
 RAW_HITS=$(grep -rEnH --include='*.py' "${EXCLUDE_ARGS[@]+"${EXCLUDE_ARGS[@]}"}" \
+  -e "$PATTERN_CREATE_ENGINE" \
   -e "$PATTERN_CONNECT" \
   -e "$PATTERN_FROM_IMPORT" \
   "$TARGET" 2>/dev/null || true)
@@ -127,7 +188,7 @@ if [ -n "$RAW_HITS" ]; then
       done <<< "$ALLOWED_FILES"
     fi
     if [ "$is_allowed" -eq 0 ]; then
-      echo "VIOLATION: raw DB connect outside TenantBoundConnection class:" >&2
+      echo "VIOLATION: DB engine/connect construction outside TenantBoundConnection class:" >&2
       echo "  $hit" >&2
       VIOLATIONS=$((VIOLATIONS+1))
     fi
@@ -138,8 +199,9 @@ if [ "$VIOLATIONS" -gt 0 ]; then
   echo "" >&2
   echo "TBC fence: $VIOLATIONS violation(s) in $TARGET. Failing closed." >&2
   echo "Lock 13 mod #3: TenantBoundConnection is the only allowed Postgres-client entry" >&2
-  echo "point in pfin_back_etl. Raw psycopg2/psycopg/asyncpg .connect() outside the" >&2
-  echo "TenantBoundConnection class is V1-SHIP-BLOCK." >&2
+  echo "point in pfin_back_etl. A bare sqla.create_engine()/create_engine() OR raw" >&2
+  echo "psycopg2/psycopg/asyncpg .connect() outside the TenantBoundConnection class is" >&2
+  echo "V1-SHIP-BLOCK." >&2
   if [ -n "$ALLOWED_FILES" ]; then
     echo "" >&2
     echo "Allowed file(s) declaring TenantBoundConnection class:" >&2
@@ -148,5 +210,5 @@ if [ "$VIOLATIONS" -gt 0 ]; then
   exit 1
 fi
 
-echo "TBC fence: $TARGET clean (no raw connect() outside TenantBoundConnection class)."
+echo "TBC fence: $TARGET clean (no engine/connect construction outside TenantBoundConnection class)."
 exit 0
