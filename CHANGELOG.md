@@ -8,7 +8,26 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 **Format.** Newest at top. Each entry: `### vN.NN — YYYY-MM-DD` header followed by narrative paragraphs.
 
-**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 68 version entries total (v0.1 → v1.62).
+**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 69 version entries total (v0.1 → v1.63).
+
+---
+
+### v1.63 — 2026-07-02
+
+**Phase 6 — SELF-185: SvelteKit (Svelte 5) web-app scaffold under `api/`.** PR #131 · milestone *V1.0 — Platform foundation*. The **first frontend code** — opens the app-layer surface after the migration/RLS base-table track completed.
+
+**What landed** — the V1 web-app scaffold per ADR-015 (SvelteKit + Svelte 5 + Vite + TypeScript + **no Tailwind**, `adapter-node`), rooted at **`api/`**:
+- **Frontend:** `npx sv create` (minimal/ts/no-add-ons) + `@sveltejs/adapter-node@5`. The adapter + runes config live in `api/vite.config.ts` — **this SvelteKit version has no `svelte.config.js`** (current convention; documented in `api/CLAUDE.md` gotchas). `docs/DESIGN/tokens.css` copied to `api/src/lib/styles/` + `@import`'d globally in `api/src/app.css` → `var(--c-*)` tokens global; hello-world `+page.svelte` is token-consumption-only (ADR-013 P5 clean). `api/Dockerfile` — multi-stage adapter-node, `node:22-bookworm-slim`, non-root, hadolint-clean.
+- **`web/`→`api/` fold (F/CTO-ratified):** a single SvelteKit `src/` tree can't span two top-level dirs, so `web/CLAUDE.md`'s Frontend conventions folded into `api/CLAUDE.md` (now dual-role — Backend server-surface content preserved verbatim + a Frontend browser-surface section; the server/browser split is by **file-glob** per ARCH §4.1, not by directory). `web/` deleted.
+- **DevOps:** `.github/workflows/web-tests.yml` — path-filtered to `api/**`, non-required (like `db-tests`): `npm ci` + `npm run check` (svelte-check) + `npm run build` + **`docker build api/`**.
+
+**Layout decision.** The app roots at `api/` per the root `package.json` note ("scaffolds under /api"). F/CTO ratified folding the redundant `web/` dir in (vs keeping it as a non-activating pointer doc).
+
+**Frontend-CI decision.** F/CTO ratified folding a minimal frontend CI job into this PR rather than deferring — so the scaffold ships CI-verified (the AC's "Docker build builds the container" clause was unverifiable locally with the daemon down; the CI `docker build api/` closes it) and every future frontend PR is verified.
+
+**Reviews.** No Sec gate (`role:frontend` scaffold — no auth/secrets/RLS). Local verification all green (svelte-check 0/0, tsc, build, `node build`, dev). **CI 8/8 green** including the first live `docker build api/` (36s). SELF-180 (exact duplicate) canceled.
+
+**Follow-ups.** RT-26 service_role fence scan path may need to point at `api/src/**` (moot for this scaffold — no service_role — relevant at SELF-181+ when server surfaces land). **Unblocks SELF-181** (Supabase Auth session-forwarding chokepoint — the first server surface + Sec-gated).
 
 ---
 
