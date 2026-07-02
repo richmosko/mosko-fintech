@@ -109,12 +109,18 @@ jobs:
 
       - name: TBC inversion-mode (golden fixture; expects violation)
         run: |
+          # --allow-missing-class: the fixture tree has no TenantBoundConnection
+          # class by design. Without the flag, class-absence would fail closed
+          # (exit 2) and MASK whether the pattern set actually matched the
+          # fixture's deliberate violations — defeating the inversion test's
+          # purpose. With the flag, the fence proceeds to the grep stage and must
+          # exit 1 on the fixture's create_engine()/connect() violations.
           set +e
-          bash scripts/ci/fence-tbc-pfin-back-etl.sh tests/fixtures/ci/
+          bash scripts/ci/fence-tbc-pfin-back-etl.sh --allow-missing-class tests/fixtures/ci/
           rc=$?
           set -e
-          if [ $rc -eq 0 ]; then
-            echo "FATAL: TBC fence reported clean against violation fixture — fence is broken; failing closed."
+          if [ $rc -ne 1 ]; then
+            echo "FATAL: TBC inversion expected exit 1 (violations caught) but got exit $rc — fence is broken; failing closed."
             exit 1
           fi
           echo "OK: TBC fence caught fixture violation (exit $rc)."

@@ -18,6 +18,7 @@ import sqlalchemy.ext.automap as sqla_automap
 import polars as pl
 import fmpstab
 from pfin_back_etl import utils
+from pfin_back_etl.connection import TenantBoundConnection
 
 logger = logging.getLogger("pfin_etl")
 
@@ -226,10 +227,14 @@ class SBaseConn:
         DATABASE_URL += f"{DB_HOST}:{DB_PORT}/{DB_NAME}"
         DATABASE_URL += "?sslmode=require"
 
-        # 1. Construct the SQLAlchemy connection string and setup the engine
-        logger.info("Setting up sqlalchemy engine...")
-        engine = sqla.create_engine(DATABASE_URL, poolclass=sqla.pool.NullPool)
-        # engine = sqla.create_engine(DATABASE_URL, poolclass=sqla.pool.NullPool, echo=True)
+        # 1. Construct the SQLAlchemy connection string and setup the engine.
+        #    Lock 13 mod #3: the engine MUST be created through
+        #    TenantBoundConnection — the single sanctioned engine factory. The
+        #    ETL writes global market-reference tables (no users_id column), so
+        #    this is the SYSTEM-mode (service-context) construction path. A bare
+        #    sqla.create_engine() here would be a TBC CI-fence violation.
+        logger.info("Setting up sqlalchemy engine (via TenantBoundConnection)...")
+        engine = TenantBoundConnection.system(DATABASE_URL).engine
 
         # 2. Create the Automap Base, linking to your engine's metadata
         logger.info("Initializing sqlalchemy MetaData object...")
