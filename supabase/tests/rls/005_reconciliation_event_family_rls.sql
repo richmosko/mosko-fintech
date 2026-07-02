@@ -341,14 +341,21 @@ select throws_like(
   'new row violates row-level security policy%for table "reconciliation_event"',
   '[RLS-WRITE] A INSERT reconciliation_event into acct-B REJECTED by the wr_access-JOIN WITH CHECK (cross-account write fails closed)'
 );
--- Authenticated link INSERT is FAIL-CLOSED at V1.0: the INVOKER matched-account trigger's
--- account_trans read hits the table ACL (no authenticated grant until SELF-190). See the
--- (24) FINDING note in the header — asserts the ACTUAL layer (ACL), not the header's prose.
-select throws_like(
+-- Authenticated link INSERT — (24) FINDING forward-note DISCHARGED at SELF-190/006.
+-- At 005-time this ACL-failed-closed ('permission denied for table account_trans'):
+-- account_trans had no authenticated grant, so the INVOKER matched-account trigger's
+-- account_trans read hit the table ACL. 006 grants authenticated SELECT on account_trans,
+-- and directory-mode runs this test against the full schema, so A (rd/wr on acct-A) now
+-- resolves the read: (eventa_qty, transa1) is a SAME-account (both acct-A) link -> the
+-- matched-account trigger matches -> parent wr_access WITH CHECK passes -> the link now
+-- SUCCEEDS. Converted throws_like -> lives_ok in the SAME PR that changed the behavior
+-- (006), mirroring the 005->004 TRUNCATE-CASCADE cross-migration fix pattern. The
+-- authoritative matched-account semantics (same-account accept / cross-account reject) are
+-- covered comprehensively by 006's §5 (5a/5b); this keeps 005 internally green under 006.
+select lives_ok(
   format($$ insert into pfin.reconciliation_event_trans (event_id, account_trans_id)
               values (%s, %s) $$, :eventa_qty, :transa1),
-  'permission denied for table account_trans',
-  '[RLS-WRITE] authenticated link INSERT FAILS CLOSED at V1.0 (INVOKER matched-account reads account_trans -> table ACL denial; SELF-190-gated). Revisit in SELF-190 battery.'
+  '[RLS-WRITE] authenticated SAME-account link (eventa_qty + transa1, both acct-A) SUCCEEDS under 006 — the (24) FINDING ACL-gated fail-closed is discharged; matched-account semantics now permit the same-account link under authenticated (rd_access on account_trans reachable via SELF-190/006).'
 );
 select set_config('role', 'postgres', true);
 
