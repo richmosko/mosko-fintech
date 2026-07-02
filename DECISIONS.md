@@ -649,6 +649,17 @@ Any FK-shaped reference column (single FK, self-FK, INTEGER[] array element) tha
 
 **Cross-references:** Locks 9 / 10 / 11 / 12. `temp/step-4-locks-log.md` §8 meta-pattern. Decision 16 below (Lock 12) strengthens the family with tenant-anchor-immutability extension. Decision 19 below (Lock 15 / Flag #13) confirms NOT a new instance at V1 (settings-table writes are user-session-bounded; FK-bypass becomes live only at V2+ live-tax-API ingestion under service_role).
 
+**Instance-count grain annotation (2026-07-02 / Phase 6 Build Loop, SELF-190 doc-followup).**
+
+Decision 3's canonical enumeration above ("Four V1 instances locked" — Lock 9 mod #1 · Lock 10 mod #2 · Lock 11 mod #9 · Lock 12, each ordinally numbered *first* / *second* / *third* / *fourth* at Decisions 13 / 14 / 15 / 16; Locks 14 + 15 explicitly declined to add per Decisions 18 + 19) is UNCHANGED by this annotation. Recorded here is a count-grain discrepancy surfaced at Sec joint-review of migration `006` (SELF-190):
+
+- **Canonical count = 4.** The FK-bypass family instances locked at ADR-011 authoring are exactly the four enumerated above; each is ordinally numbered in its originating Decision. No fifth-or-later instance is enumerated anywhere in `DECISIONS.md`.
+- **The "7" is an un-reconciled operational count, NOT canonical.** A family count of "7" appears in the Phase-6 migration headers (`004` "Sec-pinned at 7"; `005` "stays 7 … would push 7→8"; `006`), in the Architect + Security-Reviewer agent definitions, in `supabase/CLAUDE.md`, and in the `spawn-sec-joint-review` skill — but no artifact *enumerates* three instances beyond the canonical four.
+- **Provenance is partly a family-conflation.** The additions cited operationally (Wave-5 SELF-259 / SELF-261) do not resolve to Decision-3 instances: SELF-259 is a **Lock 14 per-domain _settings_ table** migration whose own scope note reads "Family stays at 5" — a distinct family (`planning_target` + `tax_bracket_schedule` + `tax_bracket_row` + `owner_identification`), not the FK-bypass family — and SELF-261 (`transaction_annotation`) is an unbuilt Wave-5 backlog item nowhere numbered as a Decision-3 instance. The "7" is thus contaminated by conflation of the Lock-14 settings-family-of-5 with this cross-tenant FK-bypass family.
+- **Reconciliation is deferred (Option B), tracked.** Full `4 → N` reconciliation — should genuine post-authoring FK-bypass instances exist (candidates to *evaluate*, not asserted: any Wave-2–5 FK-shaped cross-tenant column, e.g. SELF-261 `transaction_annotation` → `account_trans`; `user_taxonomy` FK references at SELF-234 / SELF-248) — requires an Architect enumeration pass (ADR authorship) numbering each addition with locking provenance, then Sec joint-review and F/CTO ratify. This annotation is the truthful interim record, not the reconciliation itself; it asserts no specific N beyond the locked 4.
+
+**Maintenance note.** Decision 3's canonical "Four V1 instances locked" enumeration stays UNCHANGED until an Architect enumeration pass lands the numbered additions under Sec joint-review; downstream "7" references should be read as operational-not-canonical until then.
+
 ### Decision 4 — Defense-in-depth fencing across surface boundaries + schema-level orthogonality awareness (project-convention meta-pattern §10)
 
 V1 commits to defense-in-depth fencing for security-load-bearing surfaces — fence at MULTIPLE layers simultaneously rather than at any single layer. Three classes of surface accumulated across Locks 13 + 14 + 15:
