@@ -1,0 +1,34 @@
+/* ============================================================================
+   mosko-fintech — GLOBAL STYLESHEET
+   ----------------------------------------------------------------------------
+   Imports the locked design-system tokens (docs/DESIGN/tokens.css, copied to
+   src/lib/styles/tokens.css as a build asset) so every `var(--c-*)` /
+   `var(--space-*)` / `var(--fs-*)` token is globally available to all
+   `.svelte` surfaces. Consumption-only — never hardcode a hex/px/font inline
+   (ADR-013 P5 no-inline-edit invariant). New tokens route to Visual Designer.
+   ============================================================================ */
+
+@import './lib/styles/tokens.css';
+
+html {
+	background: var(--c-canvas);
+	color: var(--c-text-primary);
+	font-family: var(--font-ui);
+	font-size: var(--fs-body);
+	line-height: var(--lh-body);
+}
+
+body {
+	margin: 0;
+	min-height: 100vh;
+}
+
+a {
+	color: var(--c-link);
+}
+
+a:focus-visible,
+button:focus-visible {
+	outline: none;
+	box-shadow: var(--focus-ring);
+}

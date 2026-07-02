@@ -1,0 +1,61 @@
+# .github/workflows/web-tests.yml
+#
+# Phase 6 (SELF-185) — SvelteKit web-app CI: svelte-check + Vite build + docker build.
+# Verifies Frontend's scaffold under api/ and every future frontend PR touching api/**.
+#
+# Design anchors (mirrors db-tests.yml, opposite of security-scan.yml):
+#   - Own workflow (NOT a job in security-scan.yml): the fences there are cheap grep,
+#     run-always, no `paths:` filter (fail-closed). This job is a heavier Node install +
+#     Vite build + docker build → path-triggered on api/** only. Same rationale as the
+#     pgTAP battery: expensive stack work is scoped to the PRs that change its inputs.
+#   - NOT a branch-protection required check. Path-filtered jobs can't be required
+#     (they'd deadlock PRs that don't touch api/, exactly like db-tests). It gates in
+#     practice by running on api/ PRs + team-lead observing green before merge.
+#   - Node 22 pinned to match api/Dockerfile's build+runtime base (node:22-bookworm-slim),
+#     so CI's toolchain == the deploy runtime. npm cache is keyed on api/package-lock.json.
+#   - The `docker build api/` step is the one AC item that can't be verified locally in
+#     the same env — it closes "Dockerfile builds the container" on real CI.
+
+name: Web tests (svelte-check + build + docker)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'api/**'
+      - '.github/workflows/web-tests.yml'
+  push:
+    branches: [main]  # also on main to catch direct-push regressions if branch protection ever lapses
+    paths:
+      - 'api/**'
+      - '.github/workflows/web-tests.yml'
+
+jobs:
+  web-app:
+    name: Web app — svelte-check + build + docker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node (22, matches api/Dockerfile runtime)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: api/package-lock.json
+
+      - name: Install deps (npm ci from lockfile)
+        working-directory: api
+        run: npm ci
+
+      - name: Type-check (svelte-kit sync + svelte-check)
+        working-directory: api
+        run: npm run check
+
+      - name: Build (Vite production build via adapter-node → build/)
+        working-directory: api
+        run: npm run build
+
+      - name: Docker build (multi-stage adapter-node image — AC "Dockerfile builds")
+        # No push — build-only verification that the container assembles cleanly.
+        run: docker build api/
