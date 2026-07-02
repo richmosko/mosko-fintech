@@ -8,7 +8,25 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 **Format.** Newest at top. Each entry: `### vN.NN — YYYY-MM-DD` header followed by narrative paragraphs.
 
-**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 67 version entries total (v0.1 → v1.61).
+**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 68 version entries total (v0.1 → v1.62).
+
+---
+
+### v1.62 — 2026-07-02
+
+**Phase 6 — SELF-193: `TenantBoundConnection` + `fence-tbc` closure (Lock 13 mod #3).** PR #129 · milestone *V1.0 — Platform foundation*. V1-SHIP-BLOCK. The first Backend + DevOps (non-migration) build-loop feature of Phase 6.
+
+**What landed** — two disjoint surfaces:
+- **Backend (`workers/etl/`):** new `connection.py` — `TenantBoundConnection`, the single sanctioned SQLAlchemy engine factory. `.system()` (V1.0 usage — service-context engine for the ETL's global market-reference writes) + `.for_tenant(users_id)` (scaffolded; registers a **dormant** `before_cursor_execute` per-tenant assertion that fails closed via `TenantBindingError`; no live caller until V1.1+) + `.engine` (NullPool preserved). `core.py:231` routed through `TenantBoundConnection.system()` — zero blast radius. `emit_audit_log` = documented `NotImplementedError` stub. 13 unit tests.
+- **DevOps (CI fence — closes the tracked `fence-tbc` integrity gap):** `fence-tbc-pfin-back-etl.sh` now catches `(sqla\.|sqlalchemy\.)?create_engine\(` — the ETL's real connection shape, which the old fence (grepping only `psycopg2.connect(`) **failed open** against; class-absence now **fails closed (exit 2) by default** (was fail-open), with `--allow-missing-class` an explicit opt-out for the inversion tree only. Production-mode step stays flag-free. Inversion fixture + `security-scan.yml` step updated. 5 local proofs.
+
+**Ratified scope — honest scaffold.** The ETL writes only global market-reference tables (no `users_id` column), so there is no per-user write path to tenant-bind in V1.0. TBC's V1.0 value is therefore **architectural** — the single sanctioned factory (the fence anchors on it; every future per-user write is forced through it) + `system()` mode + a dormant assertion. F/CTO ratified shipping it as an honest scaffold rather than implying per-query enforcement that can't run yet; per-query enforcement + mod #4 audit-wiring activate at V1.1+.
+
+**Reviews.** Backend drilled the approach (surfacing the no-`users_id` reframing) → F/CTO ratified. **Sec joint-review 🟢 GREEN** — 0 V1-SHIP-BLOCK; all 5 adversarial items confirmed (fence fail-closed; production-mode has no `--allow-missing-class`; dormant assertion genuinely raises; `system()` sentinel un-forgeable; §10 stays 2). 3 low NOTEs, all tracked. **CI 8/8 green**; the TBC fence is a **required** status check (gates merge — confirmed against branch protection).
+
+**Ledgers:** §10 catalogued = **2** (RT-22 + RT-26; TBC is the code-layer Privileged-context-surfaces mechanism, orthogonal to the catalogued numbered axis — NOT a new instance). No migration; no DEFINER; no RLS change. Decision-3 family unaffected (no FK-shaped column).
+
+**Follow-ups.** **mod #4 same-transaction audit-log** wiring is blocked on the Architect authoring `pfin.plaid_sync_audit` (mod #8 cross-language audit table) + the `SECURITY DEFINER` audit-log insert helper (the still-unauthored Decision-9 allowlist entry) → V1.1+. **ETL pytest CI job** (so the 13 `test_connection.py` unit tests execute in CI) → the tracked "ETL CI re-homing" follow-up (the fence is the CI-enforced V1-SHIP-BLOCK mechanism). Dormant per-tenant predicate tightening → firms at the V1.1 first-per-tenant-write joint-review gate.
 
 ---
 
