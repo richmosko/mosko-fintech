@@ -33,9 +33,9 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 **CI: two snags handled.** (1) The first run hung on a stalled runner for ~5.5 h (no `timeout-minutes` set → 6 h default) — cancelled + re-triggered on a fresh runner (1m47s normal). (2) A **cross-migration transition**: `006`'s new `account_trans` grant flipped `005` test #26's fail-layer — the authenticated same-account link that ACL-failed-closed at `005`-time now succeeds (matched-account semantics take over), exactly the "revisit in SELF-190 battery" forward-note QA left; discharged in-place (`throws_like`→`lives_ok`, `plan(31)` unchanged). **8/8 CI green** on re-run.
 
-**Ledgers unchanged:** Decision-3 family = 7 · §10 catalogued = 2 (RT-22 + RT-26) · SECURITY DEFINER allowlist = 3 (zero functions authored).
+**Ledgers:** Decision-3 family **+0** (SELF-190 adds no FK-shaped column) · §10 catalogued = 2 (RT-22 + RT-26) · SECURITY DEFINER allowlist = 3 (zero functions authored). **Note — the absolute Decision-3 count is under reconciliation:** the canonical ADR-011 Decision 3 body enumerates **4** instances (each ordinally numbered); the "7" that had propagated through the Phase-6 migration headers is an *operational-not-canonical* count (see the follow-up below).
 
-**Follow-ups.** Companion doc-update (Sec-owned): mod #4 SECURITY annotation + the pre-existing Decision-3 body `4→7` count-grain reconciliation (Sec re-flagged; the body still enumerates "Four V1 instances" vs the operational 7). V2 sharing-UI PR lands mod #1 with the first authenticated `account_users` write (`003` hard-gate).
+**Follow-ups.** Companion doc-update (Sec-owned, separate PR): mod #4 SECURITY §4.1 annotation + a **Decision-3 count-grain annotation**. Sec's `006` joint-review **vetoed** a naive "reconcile the body to 7" — the "7" is not confirmable from the repo (no fifth-or-later instance is enumerated anywhere) and its provenance partly **conflates the Lock-14 settings-family-of-5** (SELF-259 "Family stays at 5"). F/CTO ratified **Option A**: the canonical Decision 3 body stays at **4** with a truthful count-grain annotation; full `4→N` reconciliation is **deferred to an Architect enumeration pass + Sec joint-review** (Option B, tracked). V2 sharing-UI PR lands mod #1 with the first authenticated `account_users` write (`003` hard-gate).
 
 ---
 
