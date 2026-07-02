@@ -8,7 +8,34 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 **Format.** Newest at top. Each entry: `### vN.NN — YYYY-MM-DD` header followed by narrative paragraphs.
 
-**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 66 version entries total (v0.1 → v1.60).
+**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 67 version entries total (v0.1 → v1.61).
+
+---
+
+### v1.61 — 2026-07-02
+
+**Phase 6 — SELF-190: `account_trans` RLS shape (`006`, Lock 3 Option B).** PR #126 · milestone *V1.0 — Platform foundation*. Discharges the RLS deferral `004` left open — `account_trans` becomes reachable by `authenticated` for the first time.
+
+**What landed** — pure declarative RLS on `pfin.account_trans` (zero functions, zero schema/column DDL):
+- **SELECT** policy: `account_users.rd_access`-JOIN (a user reads a transaction only for an account they hold rd_access on).
+- **INSERT** policy: `wr_access`-JOIN WITH CHECK (**mod #3** — the write path keys on `wr_access`, NOT `rd_access`).
+- **No UPDATE/DELETE** policy (default-deny; also trigger-blocked for all roles by `004`'s immutability fence — belt-and-suspenders). `grant select, insert` only.
+
+**Lock 3 (ADR-011 Decision 7 Option B) mod dispositions (F/CTO-ratified):**
+- **mod #1** (account_users column-level UPDATE restriction) — **DEFERRED as a documented forward-fence.** `006` introduces no authenticated write to `account_users`, so the `003` hard-gate ("column-restriction lands in the SAME PR that first grants any authenticated write") isn't triggered; the restriction lands atomically at the future V2 sharing-UI write-grant PR. **Conscious F/CTO-ratified deviation from the issue AC-as-written**, documented in the `006` header; Sec **blessed** the deferral (the re-tenant pivot is inert in V1 — `account_users` is double-fenced SELECT-only at both RLS and ACL).
+- **mod #2** (elevate `fn_grant_creator_access` to SECURITY DEFINER) — already landed at `003`/SELF-187; **verify-only** here (the creator-grant row it seeds, rd=t/wr=t, is exactly what the new policies JOIN against).
+- **mod #3** — implemented (wr_access WITH CHECK).
+- **mod #4** (advisory SECURITY annotation "V1 exercises V2 sharing-shape ACL") — → **companion doc-update** (Sec-owned `docs/SECURITY/`; text authored at review).
+
+**Cross-feature discharges (two carried forward-notes closed):** SELF-187's deferred cross-tenant read assertion (rd_access-JOIN cross-tenant read fails closed — deferred-not-faked until a SELECT policy existed); and `005`'s authenticated reconciliation-link path — now that `account_trans` has an authenticated SELECT, the `005` `fn_reconciliation_event_trans_matched_account` INVOKER fence is reachable under `authenticated` and enforces matched-account semantics (same-account accept / cross-account reject), no longer ACL-gated.
+
+**Reviews.** Architect drilled 3 forks (mod #1 defer / UPDATE-DELETE default-deny / mod #4 routing) — F/CTO ratified. **Sec joint-review 🟢 GREEN** — 0 V1-SHIP-BLOCK; all 5 adversarial-verify items confirmed; mod #1 deferral blessed. QA battery `tests/rls/006_...` `plan(12)`.
+
+**CI: two snags handled.** (1) The first run hung on a stalled runner for ~5.5 h (no `timeout-minutes` set → 6 h default) — cancelled + re-triggered on a fresh runner (1m47s normal). (2) A **cross-migration transition**: `006`'s new `account_trans` grant flipped `005` test #26's fail-layer — the authenticated same-account link that ACL-failed-closed at `005`-time now succeeds (matched-account semantics take over), exactly the "revisit in SELF-190 battery" forward-note QA left; discharged in-place (`throws_like`→`lives_ok`, `plan(31)` unchanged). **8/8 CI green** on re-run.
+
+**Ledgers unchanged:** Decision-3 family = 7 · §10 catalogued = 2 (RT-22 + RT-26) · SECURITY DEFINER allowlist = 3 (zero functions authored).
+
+**Follow-ups.** Companion doc-update (Sec-owned): mod #4 SECURITY annotation + the pre-existing Decision-3 body `4→7` count-grain reconciliation (Sec re-flagged; the body still enumerates "Four V1 instances" vs the operational 7). V2 sharing-UI PR lands mod #1 with the first authenticated `account_users` write (`003` hard-gate).
 
 ---
 
