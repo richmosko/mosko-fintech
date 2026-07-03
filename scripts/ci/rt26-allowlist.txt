@@ -2,7 +2,14 @@
 #
 # Each non-comment, non-blank line is a permitted file path (relative to repo root).
 # References to SUPABASE_SERVICE_ROLE_KEY in any other file within audit scope
-# (src/** + repo-root config files) trip the fence at PR-time (fail-closed).
+# (api/src/** + repo-root config files) trip the fence at PR-time (fail-closed).
+#
+# PATH SHAPE (per SELF-181 RT-26 fence-path fix, 2026-07-02):
+#   The SvelteKit app is scaffolded under api/ (SELF-185), so audit scope is
+#   api/src/ and entries carry the api/ prefix. The fence does EXACT-STRING path
+#   matching against grep's emitted path (api/src/routes/...); the api/ prefix is
+#   load-bearing — without it these legitimate Plaid surfaces would TRIP the fence
+#   when they land. Pre-SELF-185 these were src/routes/... (repo-root scaffold).
 #
 # Lock anchors:
 #   - ADR-016 Decision 1 (3 V1 surfaces; canonical enumeration).
@@ -31,6 +38,6 @@
 #   one-way-door — route to Architect at Phase 5 implementation; NOT a W1 inline
 #   addition.
 
-src/routes/api/plaid/webhook/+server.ts
-src/routes/api/plaid/onboard/+server.ts
-src/routes/api/plaid/revoke/+server.ts
+api/src/routes/api/plaid/webhook/+server.ts
+api/src/routes/api/plaid/onboard/+server.ts
+api/src/routes/api/plaid/revoke/+server.ts
