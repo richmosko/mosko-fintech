@@ -65,19 +65,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: RT-26 production-mode (src/ tree)
-        # Audit scope = src/ tree.
-        # When/if repo-root SvelteKit config files (vite.config.*, svelte.config.js)
-        # land at first SvelteKit commit, add additional invocations here scoping
-        # each file. Files don't exist at W1; per ARCH §4.1 they're outside the
-        # allowlist registry and would trip the fence — that's by-design when
-        # they land.
+      - name: RT-26 production-mode (api/src/ tree)
+        # Audit scope = api/src/ tree.
+        # The SvelteKit app is scaffolded under api/ (SELF-185), so the server
+        # source lives at api/src/ — NOT repo-root src/. SELF-181 (first server
+        # surface, hooks.server.ts) is the moment this step becomes load-bearing;
+        # the allowlist entries carry the api/ prefix to match (see rt26-allowlist.txt).
+        # When/if SvelteKit config files (vite.config.*, svelte.config.js) that
+        # reference the key land under api/, add additional invocations here scoping
+        # each file; per ARCH §4.1 anything outside the allowlist registry trips the
+        # fence — that's by-design when they land.
         run: |
-          if [ -d src ]; then
-            bash scripts/ci/fence-rt26-service-role-allowlist.sh src/ scripts/ci/rt26-allowlist.txt
+          if [ -d api/src ]; then
+            bash scripts/ci/fence-rt26-service-role-allowlist.sh api/src/ scripts/ci/rt26-allowlist.txt
           else
-            echo "INFO: src/ does not yet exist (pre-SvelteKit-init); RT-26 production-mode scope is empty at W1."
-            echo "INFO: This step becomes load-bearing at first SvelteKit commit; fence will scan src/ then."
+            echo "INFO: api/src/ does not yet exist (pre-SvelteKit-init); RT-26 production-mode scope is empty."
+            echo "INFO: This step becomes load-bearing at first SvelteKit commit; fence will scan api/src/ then."
           fi
 
       - name: RT-26 inversion-mode (golden fixture; expects violation)
