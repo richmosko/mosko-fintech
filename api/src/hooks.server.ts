@@ -17,12 +17,35 @@
 //    refresh as needed and `setAll` writes the rotated cookies back.
 
 import { createServerClient } from '@supabase/ssr';
-import { PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY } from '$env/static/public';
+// `$env/dynamic/public` (NOT static): values are read at container RUNTIME, so
+// the build succeeds with no env present and Coolify injects the anon config at
+// deploy time (build-once/inject-at-runtime). Still the anon key — never the
+// service-role key (RT-26).
+import { env } from '$env/dynamic/public';
 import type { Handle } from '@sveltejs/kit';
 
+// One-time fail-loud guard, memoized: validated at FIRST request (runtime, where
+// env is populated) — not at module load (build time, where it is empty). Once
+// cached, subsequent requests return the config without re-reading env or
+// re-checking, so the guard stays off the per-request hot path.
+let cached: { url: string; anonKey: string } | null = null;
+function supabaseEnv(): { url: string; anonKey: string } {
+	if (cached) return cached;
+	const url = env.PUBLIC_SUPABASE_URL;
+	const anonKey = env.PUBLIC_SUPABASE_ANON_KEY;
+	if (!url || !anonKey) {
+		throw new Error(
+			'Missing PUBLIC_SUPABASE_URL / PUBLIC_SUPABASE_ANON_KEY — set them in the container runtime env (see .env.example).'
+		);
+	}
+	cached = { url, anonKey };
+	return cached;
+}
+
 export const handle: Handle = async ({ event, resolve }) => {
+	const { url, anonKey } = supabaseEnv();
 	// Per-request Supabase client, cookie-bound to this request/response cycle.
-	event.locals.supabase = createServerClient(PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY, {
+	event.locals.supabase = createServerClient(url, anonKey, {
 		cookies: {
 			getAll: () => event.cookies.getAll(),
 			setAll: (cookiesToSet) => {
