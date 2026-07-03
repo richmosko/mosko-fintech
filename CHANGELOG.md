@@ -8,7 +8,44 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 **Format.** Newest at top. Each entry: `### vN.NN — YYYY-MM-DD` header followed by narrative paragraphs.
 
-**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 68 version entries total (v0.1 → v1.62).
+**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 70 version entries total (v0.1 → v1.64).
+
+---
+
+### v1.64 — 2026-07-03
+
+**Phase 6 — SELF-181: `hooks.server.ts` Supabase Auth chokepoint + RT-26 fence-path fix.** PR #133 · milestone *V1.0 — Platform foundation*. The **first server surface** (`surface:auth`, Sec-gated) — Backend-led (the `role:frontend` label was stale; `hooks.server.ts` is a server-source surface).
+
+**What landed:**
+- **`api/src/hooks.server.ts`** — the centralized Supabase Auth session-forwarding + refresh chokepoint (ADR-015 D1 + ADR-011 D5 / Lock 1, Option A). Single `handle()`: `createServerClient(anon key, {getAll/setAll})` → `event.locals.supabase`; `event.locals.safeGetSession` reads the cookie then **validates via `getUser()`** (returns nulls on error — the spoofable bare `getSession()` is never trusted for authorization); `resolve()` with a 2-entry `filterSerializedResponseHeaders` allowlist (no auth-header leak). Uses **`$env/dynamic/public`** (runtime — Coolify injects `PUBLIC_SUPABASE_*` at container start) with a memoized fail-loud guard.
+- **`/api/whoami`** — bare `{ uid: user?.id ?? null }` (never session/access_token/refresh_token — no JWT in any body or log).
+- `app.d.ts` `App.Locals { supabase, safeGetSession }`; `.env.example` PUBLIC_ only (service-role deliberately absent). `@supabase/ssr@0.12` + `supabase-js@2`.
+- **RT-26 fence-path fix (folded in; §10-ledger-neutral):** the fence had been scanning repo-root `src/` (nonexistent → vacuously passing); the app is at `api/src/`. Now scans `api/src/` (+ the 3 Plaid allowlist entries `api/`-prefixed for exact-string match). SELF-181 = the load-bearing moment — RT-26 now genuinely enforces service_role confinement on the server surfaces.
+
+**Reviews.** Backend drilled 5 DPs (the getSession-vs-getUser crux being the load-bearing one) → F/CTO ratified. **Sec joint-review 🟢 GREEN** (validated `getUser`; no token leak; no service_role; single chokepoint; `/api/whoami` permanent OK) + confirmed the fence fix §10-neutral (ledger stays 2). **CI 8/8** — incl. the load-bearing RT-26 scan of `api/src/` + `web-tests` (svelte-check + build + docker).
+
+**CI-caught bug.** `$env/static/public` requires the vars at BUILD time (absent in CI; the gitignored local `.env` masked it) → switched to `$env/dynamic/public` (runtime read; also avoids build-arg plumbing through CI + Dockerfile + Coolify). Fixed + re-verified green.
+
+**Follow-ups (ratified DEFERRED).** The AC's **logged-in→real-uid** smoke assertion needs a Supabase-Auth/gotrue test env (`db-tests` excludes gotrue) — route to QA/DevOps. Client-side session (`+layout.server.ts` loader + browser client) deferred until Frontend needs it (DP1-A).
+
+---
+
+### v1.63 — 2026-07-02
+
+**Phase 6 — SELF-185: SvelteKit (Svelte 5) web-app scaffold under `api/`.** PR #131 · milestone *V1.0 — Platform foundation*. The **first frontend code** — opens the app-layer surface after the migration/RLS base-table track completed.
+
+**What landed** — the V1 web-app scaffold per ADR-015 (SvelteKit + Svelte 5 + Vite + TypeScript + **no Tailwind**, `adapter-node`), rooted at **`api/`**:
+- **Frontend:** `npx sv create` (minimal/ts/no-add-ons) + `@sveltejs/adapter-node@5`. The adapter + runes config live in `api/vite.config.ts` — **this SvelteKit version has no `svelte.config.js`** (current convention; documented in `api/CLAUDE.md` gotchas). `docs/DESIGN/tokens.css` copied to `api/src/lib/styles/` + `@import`'d globally in `api/src/app.css` → `var(--c-*)` tokens global; hello-world `+page.svelte` is token-consumption-only (ADR-013 P5 clean). `api/Dockerfile` — multi-stage adapter-node, `node:22-bookworm-slim`, non-root, hadolint-clean.
+- **`web/`→`api/` fold (F/CTO-ratified):** a single SvelteKit `src/` tree can't span two top-level dirs, so `web/CLAUDE.md`'s Frontend conventions folded into `api/CLAUDE.md` (now dual-role — Backend server-surface content preserved verbatim + a Frontend browser-surface section; the server/browser split is by **file-glob** per ARCH §4.1, not by directory). `web/` deleted.
+- **DevOps:** `.github/workflows/web-tests.yml` — path-filtered to `api/**`, non-required (like `db-tests`): `npm ci` + `npm run check` (svelte-check) + `npm run build` + **`docker build api/`**.
+
+**Layout decision.** The app roots at `api/` per the root `package.json` note ("scaffolds under /api"). F/CTO ratified folding the redundant `web/` dir in (vs keeping it as a non-activating pointer doc).
+
+**Frontend-CI decision.** F/CTO ratified folding a minimal frontend CI job into this PR rather than deferring — so the scaffold ships CI-verified (the AC's "Docker build builds the container" clause was unverifiable locally with the daemon down; the CI `docker build api/` closes it) and every future frontend PR is verified.
+
+**Reviews.** No Sec gate (`role:frontend` scaffold — no auth/secrets/RLS). Local verification all green (svelte-check 0/0, tsc, build, `node build`, dev). **CI 8/8 green** including the first live `docker build api/` (36s). SELF-180 (exact duplicate) canceled.
+
+**Follow-ups.** RT-26 service_role fence scan path may need to point at `api/src/**` (moot for this scaffold — no service_role — relevant at SELF-181+ when server surfaces land). **Unblocks SELF-181** (Supabase Auth session-forwarding chokepoint — the first server surface + Sec-gated).
 
 ---
 
