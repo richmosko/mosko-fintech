@@ -8,7 +8,28 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 **Format.** Newest at top. Each entry: `### vN.NN — YYYY-MM-DD` header followed by narrative paragraphs.
 
-**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 70 version entries total (v0.1 → v1.64).
+**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 71 version entries total (v0.1 → v1.65).
+
+---
+
+### v1.65 — 2026-07-03
+
+**Phase 6 — SELF-196: Plaid platform schema (`007`, Vault-native) + foundational pfin service_role transport (`008`).** PR #134 · milestone *V1.0 — Onboarding minimal path (§2.4)*. Lead-off of the Onboarding/Plaid cluster; V1-SHIP-BLOCK, sec-joint-review.
+
+**What landed:**
+- **`007_plaid_platform_schema.sql`** — `pfin.plaid_items` (`access_token_secret_id uuid` — a Vault secret handle; the ciphertext lives in `vault.secrets`, never on the row → RT-02 "token never surfaces in a client query" is **structural**), `plaid_item_state_history` (append-only, 4-class credential-error enum), `plaid_sync_audit` (`plaid_webhook_id` UNIQUE idempotency; RLS deny-by-default), `pfin.decrypted_plaid_access_token` (service_role-only view joining `vault.decrypted_secrets` to `plaid_items`, tenant-gated by shape), + an `AFTER DELETE` retention backstop trigger (SECURITY INVOKER, allowlist +0) deleting the backing Vault secret on any Item delete — **no orphaned credential by construction** (cleanup-or-fail-closed on every path, incl. the `auth.users` cascade).
+- **`008_pfin_service_role_grants.sql`** — `grant usage on schema pfin to service_role` + least-privilege per-table write grants. **The Decision-1 privileged-write transport was non-functional pfin-wide until this** (service_role had no USAGE on `pfin`; `007`'s decrypt-view grant was inert; latent since `003`).
+- **`config.toml`** — `pfin` added to `[api] schemas`.
+
+**Two ADR events:**
+- **ADR-011 Decision 8 / Lock 4 — Vault-native amendment.** The locked pgsodium column-BYTEA mechanism proved non-viable on the pinned greenfield PG-17 stack (Backend clean-apply smoke: pgsodium available-but-not-installed; the UUID-keyed AEAD overload the decrypt-view needs is execute-denied for both `service_role` and `postgres`; pgsodium deprecated by Supabase). F/CTO ratified Option 2 (Vault-native secret-per-token) over pgcrypto-master-key (Opt 1) + DEFINER-wrapper (Opt 3) on greenfield-sunk-cost-nil + structural-isolation grounds.
+- **ADR-023 — pfin data-access role-of-record (Option A).** Expose `pfin` to the Data API + least-privilege `service_role` grants (two-layer fence: anon zero-grant + RLS `users_id=auth.uid()`). Completes Decision-5 RLS-default-trust + ADR-015 supabase-js-RLS-forwarding. **Standing obligation (Sec C6):** every pfin table is internet-facing the moment it is granted → the [SECURITY §4.5](docs/SECURITY/index.html#sec-4-5) two-tenant RLS battery is now **exposure-gating**.
+
+**Reviews.** Sec joint-review **unconditional GREEN** (15 C2/C3/C4 checks re-measured live; exposure posture blessed under conditions C1–C6; the fail-open-DEFINER alternative rejected as a security *regression* — it would leave an un-revocable Plaid grant). QA pgTAP **`plan(37)`, 37/37** (both-ways proven: teeth-check REDs the retention assertions without the trigger). Backend fresh `db reset` 001→008 green (the service_role round-trip blocked pre-`008` now works). **CI 8/8.** Ledgers unchanged: SECURITY DEFINER allowlist **3** · §10 catalogued-instance ledger **2** · Decision-3 FK-bypass family flat.
+
+**SECURITY §4.2** reconciled pgsodium→Vault (SD-03 row, scheduled-poll bullet, view rename, RT-26 allowlist bullet). **ACs #2/#3 amended** (capability-driven; product behavior identical) + FK-target correction (`pfin.users`→`auth.users(id)`).
+
+**Follow-ups.** SELF-197 carries the `/item/remove` Plaid-side-revoke hard-gate + decrypt-view consumer-filter discipline + the encrypt-on-insert admission path (SELF-195's remaining scope folds here, annotated). GDPR-erasure routine specified (enumerate Items → `/item/remove` each → delete user; no DEFINER). `plaid_sync_audit` grant/policy changes are Sec-joint-review-mandatory; FORCE-RLS defense-in-depth pass tracked (scoped).
 
 ---
 
