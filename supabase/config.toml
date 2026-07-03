@@ -10,7 +10,12 @@ enabled = true
 port = 54321
 # Schemas to expose in your API. Tables, views and stored procedures in this schema will get API
 # endpoints. `public` and `graphql_public` schemas are included by default.
-schemas = ["public", "graphql_public"]
+# `pfin` added 2026-07-03 per ADR-023 (role-of-record Option A): the app reaches pfin via
+# supabase-js/PostgREST + native RLS (Decision 5 RLS-default-trust). Two-layer fence: (outer)
+# anon holds ZERO grants on every pfin relation; (inner) RLS on every table (users_id=auth.uid()
+# / account_users-JOIN). Sec C6: every pfin table is internet-facing the moment it is granted —
+# the §4.5 two-tenant RLS battery is EXPOSURE-gating (no pfin relation ships without proven RLS).
+schemas = ["public", "graphql_public", "pfin"]
 # Extra schemas to add to the search_path of every request.
 extra_search_path = ["public", "extensions"]
 # The maximum number of rows returns from a view, table, or stored procedure. Limits payload size
