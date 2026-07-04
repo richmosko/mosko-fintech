@@ -41,6 +41,43 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-024 — `tax_character` promoted to a global value-registry table (Option C hybrid); routing stays hardcoded (g-1), routing-metadata columns deferred to V2 (g-2)
+
+**Date:** 2026-07-04
+**Status:** Accepted
+**Phase:** Phase 6 Build Loop (SELF-231 follow-up; migration `011`).
+**Approved by:** F/CTO ratified **Option C** 2026-07-04 (F/CTO-raised the question: `009` modeled `tax_character` as `text + CHECK`, which makes value-additions an `ALTER` and gives no join/lookup; F/CTO's instinct was the incumbent's lookup-table shape). Options paper: `temp/self-231-tax-character-shape-options.md`.
+**Pattern:** Short pattern (single schema-shape decision + named options). Companion/light-refinement to [ADR-022](#adr-022) — does NOT overturn it.
+
+**Decision.** `pfin.user_taxonomy.tax_character` (5 ADR-006 Axis-2 values) is promoted from the `009` inline `text CHECK (…)` to an FK into a **new GLOBAL value-registry table `pfin.tax_character`** (migration `011`). The registry uses the **value string as the natural-key PK** (`code text primary key` + `label` + `notes` + `display_order` + timestamps); `user_taxonomy.tax_character` stays `text`, nullable, now `REFERENCES pfin.tax_character(code) ON DELETE RESTRICT`. **V1 builds the value registry ONLY — NO routing-metadata columns.** The §2.5.1 `tax_character` → §2.5.2 schedule routing stays **hardcoded ([PRD flag g-1](docs/PRD/index.html#app-b-2-5-g))** in the (unbuilt) §2.5.3 engine; the data-driven **routing-metadata columns are the deferred V2 [(g-2)](docs/PRD/index.html#app-b-2-5-g) additive `ALTER TABLE ADD COLUMN`.** `domain` stays `text + CHECK` (stable binary; unchanged).
+
+**Why Option C (hybrid).** F/CTO's challenge to `009`'s CHECK is legitimate on two axes ADR-022 itself names: (1) `tax_character` **carries per-value metadata** (the enum→schedule routing) — ADR-022's own stated trigger for promoting a taxonomy to a lookup table is "the first need for per-value metadata"; and (2) a data-driven routing table is **already the planned V2 promotion** per PRD flag (g): (g-1) hardcoded V1 → (g-2) data-driven V2. Because `009` has **zero consumers** (V1 app unbuilt, seed unrun, engine unbuilt), the conversion is a **clean `ALTER` with no backfill NOW**; the same conversion after V1 ships would rewire a built engine + live seed + built form. Option C captures the cheap-now half (FK integrity + joinable value list + a committed non-personal home for label/notes + F/CTO's table instinct) while **deferring the one genuine one-way door** — the routing-metadata **column shape** — to V2, when the engine is built and multi-state routing scope (which will likely reshape single-column routing into per-jurisdiction routing) is known. The Federal routing per value is already locked (PRD §2.5.2), so the V2 columns are not blind — but multi-state is the residual reshape Option C sidesteps.
+
+**Relationship to ADR-022 — refines, does not overturn.** ADR-022's rule (code-coupled → CHECK; user-extensible → table) stands. `tax_character` values ARE code-coupled and closed (not user-extensible) — so ADR-022 correctly predicted CHECK. This ADR promotes it to a table not on the *extensibility* axis but on ADR-022's *own* secondary trigger — **per-value metadata** (label/notes now; routing metadata at V2). `account_type`'s ruling is **untouched**: its per-type behavior still lives entirely in code with no metadata surfaced as data, so no `account_type` lookup table is earned (its BACKLOG.md §5 V2 promote-trigger stands). The distinction is exactly ADR-022's "the contrast is the whole point": `account_type` = code-coupled, no data-metadata → CHECK; `tax_character` = code-coupled **but** metadata-carrying → registry table with routing deferred.
+
+**Alternatives considered:**
+- **A — keep `text + CHECK`, defer the whole table to V2 (g-2).** Zero work now, fully reversible, PRD/ADR-022-literal. Rejected as the primary only because it forgoes the cheap moment: the eventual text→FK conversion is paid later *with consumers attached* (built engine + live seed + built form). Entirely defensible; was the close second.
+- **B — build the table NOW WITH routing-metadata columns (pull g-2 fully forward).** Matches the incumbent `tax_cat` (which carried `tax_as_ordinary` / `tax_as_cap_gain` / `tax_as_sec_1246` booleans). Rejected: commits V1 to a routing-**column shape** that is a **MEDIUM one-way door** — V2 multi-state + new enum values will likely reshape it — and deviates from the documented (g-1) V1 lean. Option C gets ~80% of B's value at ~40% of the one-way-door risk.
+- **D — native PG `enum`.** Rejected for the same reason [ADR-022](#adr-022) rejected it for `account_type`: `ALTER TYPE … ADD VALUE` is a one-way door (no removal/reorder; transactional restrictions) and gives no metadata/join.
+
+**Tenancy / RLS posture (Sec-reviewed).** `pfin.tax_character` is **GLOBAL shared-read** reference data: `RLS ENABLE` + a `using (true)` SELECT policy for `authenticated` + `grant select` — every tenant reads the same 5 rows (mirrors the incumbent `pfin.tax_cat` `USING (true)`). This is the **FIRST global `using (true)` shared-read table in the greenfield `pfin` schema** (`001`–`010` are all `users_id`-scoped) — a small posture **precedent**. No write policy / no write grant (bootstrap-seeded canonical data; adding a value is a code event, not a user data event). anon zero-grant (schema-usage denial, [ADR-023](#adr-023) C2). service_role ungranted.
+
+**Decision-3 clearance.** The new FK `user_taxonomy (per-user) → tax_character (GLOBAL)` is **CLEARED — no matched-tenant obligation**: `tax_character` carries no `users_id`/tenant anchor, so there is no cross-tenant row to leak and nothing to validate. [Decision 3](#adr-011) family **unchanged at 7**. This is distinct from the pending **SELF-201 `account.sub_cat_id → user_taxonomy(id)`** FK, which IS matched-tenant-**MANDATORY** (both sides per-user; family 7→8) — evaluated at that migration, not here.
+
+**Sec gate:** **joint-review-mandatory (advisory; low veto-likelihood)** — two triggers: (1) first global `using (true)` shared-read posture in `pfin`; (2) the Decision-3 clearance sign-off (new FK-shaped column). Paired QA pgTAP battery (shared-read + FK-integrity variant) gates merge per [ADR-023](#adr-023) C6. **§10 ledger unchanged (2 — RT-22 + RT-26); DEFINER allowlist unchanged (3).**
+
+**Expansion path (the deferred V2 g-2 work).** V2 adds the routing-metadata columns as an additive `ALTER TABLE pfin.tax_character ADD COLUMN …` (e.g. a per-jurisdiction routing shape informed by multi-state scope) + rewires the §2.5.3 engine to JOIN instead of hardcode. Because V1 consumed no routing columns, this is additive — no reshape of consumed columns.
+
+**Cross-references:**
+- SELF-231 / `supabase/migrations/011_tax_character_registry.sql` — the migration this ADR documents; `009_user_taxonomy.sql` (the CHECK being promoted); `010_user_taxonomy_notes.sql` (orthogonal; `011` lands after it).
+- [ADR-022](#adr-022) — the code-coupled-vs-user-extensible rule this ADR refines (per-value-metadata trigger); `account_type` ruling untouched.
+- [ADR-006](#adr-006) Axis 2 (`tax_character` enum, 5 values + Federal routing) + [ADR-004](#adr-004) Decision C (`user_taxonomy`) — the taxonomy substrate.
+- [PRD flag (g)](docs/PRD/index.html#app-b-2-5-g) (g-1 hardcoded V1 / g-2 data-driven V2 routing) + PRD §2.5.2 locked Federal routing.
+- [ADR-011](#adr-011) Decision 3 (cross-tenant FK-bypass family — clearance) + [ADR-023](#adr-023) C6 (exposure-gating QA pairing).
+- Incumbent `pfin.tax_cat` (`../pfin_dash/sql/schema/schema.sql`) — the global shared-read + routing-boolean precedent Option C mirrors (minus the deferred routing columns).
+
+---
+
 ## ADR-023 — pfin data-access role-of-record: expose `pfin` to the Data API + least-privilege `service_role` grants (Option A)
 
 **Phase:** 6 (Build Loop — SELF-196 Plaid platform; foundational data-access transport). **Approved by:** F/CTO ratified **Option A** 2026-07-03; Sec recommended A with 4 blocking + 2 structural conditions (C1–C6 below).
