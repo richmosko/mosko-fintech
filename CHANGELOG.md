@@ -8,7 +8,23 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 **Format.** Newest at top. Each entry: `### vN.NN — YYYY-MM-DD` header followed by narrative paragraphs.
 
-**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 72 version entries total (v0.1 → v1.66).
+**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 73 version entries total (v0.1 → v1.67).
+
+---
+
+### v1.67 — 2026-07-04
+
+**Phase 6 — SELF-231 taxonomy fast-follows: `notes` column (`010`) + `tax_character` value-registry table (`011`, Option C) + ADR-024.** PRs #138 + #139 · milestone *V1.0 — manual-entry cluster foundation*. Two F/CTO-driven refinements to the `009` `user_taxonomy` substrate, surfaced by comparing against the incumbent `../pfin_dash` schema.
+
+**`010_user_taxonomy_notes.sql`** (PR #138) — restores the incumbent `asset_cat`/`tax_cat`/`trans_cat` **`notes`** definitional content (e.g. `T-Bill = "Treasury Bill (<1yr)"`) that `009` dropped by oversight (its DDL was built from the ADR-006 Axis-2 column list, which never named `notes`). Additive, idempotent `add column if not exists notes text` (nullable, no default) + `comment on column`. No function (DEFINER allowlist unchanged at **3**); no new grant/policy (inherits `009`'s SELECT grant + `user_taxonomy_select`). QA pgTAP `plan(10)→plan(15)` (notes exists/text/nullable + owner-reads-own-incl-notes + cross-tenant notes-content fails-closed). Sec: not required (category-definition free text; no D1–D4/auth/money/secrets/PII surface). §10 stays **2**; Decision-3 flat.
+
+**`011_tax_character_registry.sql`** (PR #139) — promotes `tax_character` from a `text`+CHECK column to a **global `pfin.tax_character` value-registry table** per **ADR-024 (Option C hybrid)**, F/CTO-ratified 2026-07-04. F/CTO challenged the `009` `text`+CHECK shape (hard to extend, no join/metadata — the incumbent modeled it as a `tax_cat` reference table); the Architect's A/B/C/D options paper recommended C. **Table:** `code text primary key` (natural key), `label`, `notes`, `display_order`, timestamps; **5 canonical values seeded in-migration** (committed, non-personal reference data); **no routing-metadata columns** (deferred to V2 g-2 — routing stays hardcoded g-1 per PRD flag `app-b-2-5-g`). **RLS `using(true)` shared-read** + `grant select` to `authenticated`; no write grant/policy; anon zero-grant — the **first global shared-read table in greenfield pfin** (mirrors incumbent `tax_cat`). Reuses `fn_refresh_updated_at` (DEFINER stays **3**). Converts `user_taxonomy.tax_character`: drops the `009` CHECK → FK `→ tax_character(code)` (nullable preserved; clean ALTER, no backfill — zero data). The gitignored `user_taxonomy` seed needs **zero rework** (its code strings become valid FK refs — the natural-key payoff).
+
+**ADR-024** — promotes `tax_character` under **ADR-022**'s own "first need for per-value metadata" trigger (labels/notes surfaced as data now; routing-metadata at V2); does NOT overturn ADR-022's `account_type` CHECK ruling. Native PG enum (Option D) rejected (`ALTER TYPE` one-way-door). Decision-3 **cleared** for the per-user→global FK (global side has no tenant anchor → no matched-tenant obligation; distinct from the pending SELF-201 `account.sub_cat_id → user_taxonomy` FK, which stays matched-tenant-mandatory 7→8).
+
+**Reviews.** **Sec joint-review GREEN + C1 sign-off** (both triggers cleared: global `using(true)` posture CORRECT — public tax-law labels, zero PII/secrets, writes default-denied at both layers; Decision-3 clearance CONFIRMED). **QA `011_tax_character_rls.sql` `plan(12)`** (shared-read both tenants see all 5 · write fails-closed both layers · FK integrity bogus→`23503`/valid+NULL→`lives_ok` · `user_taxonomy` isolation unaffected · anon zero-grant fence). **CI 8/8** — the pgTAP run caught a real cross-migration interaction (`009` `(4c)` asserted the old CHECK error `23514`; `011`'s CHECK→FK swap made it `23503`), fixed by dropping the stale `(4c)` (`009` `plan(15)→plan(14)`; coverage moved to `011`'s `c1`). Ledgers flat: DEFINER **3** · §10 **2** · Decision-3 family unchanged (`+0`; SELF-201's FK is the next addition).
+
+**Follow-up.** The gitignored `supabase/seed.sql` (65 rows: 36 asset tax-neutral + 29 cash-flow) is built + `.gitignore`'d; awaits F/CTO's local-dev UUID + a `db reset` 001→011 smoke. Migrations `001`–`011` live.
 
 ---
 
