@@ -8,7 +8,29 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 **Format.** Newest at top. Each entry: `### vN.NN — YYYY-MM-DD` header followed by narrative paragraphs.
 
-**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 71 version entries total (v0.1 → v1.65).
+**Extracted from `WORKFLOW.md`** on 2026-05-23 per [ADR-009](DECISIONS.md#adr-009) Decision 6 implementation (task #10). 72 version entries total (v0.1 → v1.66).
+
+---
+
+### v1.66 — 2026-07-03
+
+**Phase 6 — SELF-231: `pfin.user_taxonomy` substrate (`009`) + RLS.** PR #136 · milestone *V1.0 — manual-entry cluster foundation*. V1-SHIP-BLOCK; the `sub_cat_id` FK target that migration `004` explicitly deferred — **unblocks the SELF-201/202 manual-entry cluster** on the schema side.
+
+**What landed:**
+- **`009_user_taxonomy.sql`** — `pfin.user_taxonomy`, the single per-user two-level Cat × Sub-Cat table per **ADR-011 Decision 11 / Lock 7 (Option A)**, spanning the asset (§2.2.1) + cash-flow (§2.3.1) domains: `id` identity PK, `users_id uuid` (`auth.uid()` tenant anchor, FK `auth.users(id)` ON DELETE CASCADE), `domain` CHECK(`asset`|`cashflow`), `cat`/`sub_cat`, `tax_relevant bool`, `tax_character` enum (5 vals: `ordinary`/`qualified_dividend`/`tax_exempt_interest`/`long_term_capital_gain_eligible`/`short_term_only` — the ADR-006 Axis 2 tax dimension), `display_order`, `is_active`, timestamps; `UNIQUE(users_id,domain,cat,sub_cat)`; `updated_at` via the existing `fn_refresh_updated_at` (DEFINER allowlist entry #1 — no new function authored).
+- **`supabase/tests/rls/009_user_taxonomy_rls.sql`** — pgTAP `plan(10)`.
+
+**V1 write-dormant (SELECT-only).** `authenticated` gets **SELECT only**; write policies + grants are DEFERRED to the V2 taxonomy-CRUD-UI (Decision 11 locks V1 as seed-only / no-CRUD-UI — the sole V1 consumer, SELF-201's manual-account form, only *reads* the taxonomy for Sub-Cat dropdowns; SELF-236 re-tag + SELF-200 auto-Unsorted are not taxonomy-row writers). Writes default-denied at **both** layers (ACL: no write grant; RLS: no write policy). Mirrors the `003` `account_users` V1-dormancy precedent.
+
+**AC-vs-convention corrections** (the SELF-231 AC predated the greenfield type convention settled at `003`; reconciled in-migration, F/CTO-flagged): `id SERIAL`→`bigint generated always as identity` (the `003` PK convention; SERIAL used nowhere in `001`–`008`); `users_id INTEGER`→`uuid ... default auth.uid()` (auth.users.id is `uuid`, not integer — the AC was type-wrong). Convention-conformance, not scope change; Option A single-table shape unchanged.
+
+**C6 exposure-gating — first exercise.** First new pfin table since **ADR-023** put `pfin` in `[api] schemas` → internet-facing the moment it is granted, so the [SECURITY §4.5](docs/SECURITY/index.html#sec-4-5) two-tenant RLS battery gated the merge. Two-layer fence: anon zero-grant (schema-usage denial) + RLS `users_id=auth.uid()`. Holds no external reference → no cascade-orphan backstop needed (contrast `plaid_items`).
+
+**Reviews.** **QA pgTAP 10/10** — RLS SELECT isolation (owner reads own / tenant B reads 0), write-side **grant-layer denial** (authenticated I/U/D → `42501`, proving even the owner can't write under V1 SELECT-only), C2 anon zero-grant, shape (UNIQUE dup→`23505`; `domain`+`tax_character` CHECK→`23514`). **Backend** fresh `db reset` 001→009 clean. **Sec advisory GREEN** — live ACL spot-check (12 checks), C6-safe, no conditions. **CI green.** Ledgers flat: SECURITY DEFINER allowlist **3** · §10 catalogued-instance ledger **2** · Decision-3 FK-bypass family flat.
+
+**Decision-3 forward-pointer.** This table's only reference column, `users_id → auth.users(id)`, IS the tenant anchor — not a cross-tenant reference — so it carries no matched-tenant obligation (family +0). The future `sub_cat_id → user_taxonomy(id)` FK (deferred at `004`, lands with the SELF-201 manual-entry write path) WILL be a **new Decision-3 matched-tenant instance** (family 7→8, joint-review-mandatory) at that migration, NOT here.
+
+**Follow-ups.** **Asset-side seed** (AC #3/#4) is **decoupled** — F/CTO supplies the Cat × Sub-Cat inventory + per-row `tax_relevant`/`tax_character`; lands as a small fast-follow (recommended: gitignored-local `seed.sql` given it's personal financial taxonomy; committed template only, at `temp/self-231-seed-template.sql`). Seed runs without a JWT so rows must carry F/CTO's explicit UUID (dev ≠ prod). V2 CRUD-UI adds the write policies + grants. **SELF-201** unblocked on the schema side.
 
 ---
 
