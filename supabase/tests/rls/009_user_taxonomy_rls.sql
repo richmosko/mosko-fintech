@@ -9,7 +9,10 @@
 --                                       NO write policy, NO write grant)
 --   - policy user_taxonomy_select      (FOR SELECT TO authenticated; users_id = auth.uid())
 --   - grant select on pfin.user_taxonomy to authenticated   (ACL-before-RLS; SELECT only)
---   - CHECK domain in ('asset','cashflow'); CHECK tax_character in (5 ADR-006 Axis-2 values)
+--   - CHECK domain in ('asset','cashflow'); tax_character membership: was inline CHECK (009),
+--     CONVERTED to FK -> pfin.tax_character(code) at 011. Membership enforcement now lives in
+--     the 011 battery (011_tax_character_rls.sql c1: bad code -> 23503), NOT here — the (4c)
+--     CHECK assertion was REMOVED because 011 drops that CHECK. See BLOCK 4 note below.
 --   - UNIQUE (users_id, domain, cat, sub_cat)
 --   - column notes text NULL (010) — nullable, no default, NO new grant/policy: inherits the
 --                                    009 SELECT grant + user_taxonomy_select policy verbatim.
@@ -38,7 +41,11 @@
 --   (3a)/(3b)    -> RED if anon gained SELECT on user_taxonomy OR USAGE on schema pfin
 --                  (ADR-023 C2 internet-facing outer fence).
 --   (4a)         -> RED if UNIQUE(users_id,domain,cat,sub_cat) were dropped (dup taxonomy row).
---   (4b)/(4c)    -> RED if the domain / tax_character CHECK were dropped (bad value commits).
+--   (4b)         -> RED if the domain CHECK were dropped (bad value commits). [(4c) tax_character
+--                  membership was REMOVED at 011: the inline CHECK became an FK -> tax_character
+--                  (code), so a bad code now raises 23503 (not 23514). Coverage moved to the 011
+--                  battery c1; keeping (4c) here would assert a CHECK 011 deleted. Teeth preserved
+--                  — bad code still fails closed, just at the FK layer now.]
 --   (5a)/(5b)/(5c)-> RED if the 010 `notes` column were dropped/renamed, retyped off text, or
 --                  made NOT NULL (guards the additive-nullable-column contract).
 --   (5d)         -> RED if the new column were NOT readable under user_taxonomy_select (owner A
@@ -72,7 +79,7 @@ begin;
 -- shared verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(15);
+select plan(14);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
@@ -169,13 +176,12 @@ select throws_ok(
   '23514', null,
   '(4b) domain CHECK: a domain outside (asset,cashflow) raises check_violation (23514) — fails closed on a bad value'
 );
--- (4c) tax_character CHECK: a value outside the 5-value ADR-006 Axis-2 enum raises 23514.
-select throws_ok(
-  format($$ insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat, tax_character)
-              values (%L, 'asset', 'Brokerage', 'Muni', 'not_a_tax_character') $$, :'ta'),
-  '23514', null,
-  '(4c) tax_character CHECK: a non-enum tax_character raises check_violation (23514) — fails closed on a bad value'
-);
+-- (4c) REMOVED at 011: the inline tax_character CHECK was converted to an FK ->
+--   pfin.tax_character(code), so a bad code now raises 23503 (foreign_key_violation), not 23514.
+--   Directory-mode pgTAP runs this file against the post-011 schema, so the old 23514 premise is
+--   stale. Membership-enforcement coverage moved to 011_tax_character_rls.sql (c1: bad code ->
+--   23503; c2: valid code lives; c3: NULL lives). Teeth preserved — bad code still fails closed,
+--   just at the FK layer now. (4a) UNIQUE + (4b) domain CHECK are unchanged by 011 and stay.
 
 -- =====================================================================
 -- BLOCK 5 — MIGRATION 010: additive nullable `notes text` column.
