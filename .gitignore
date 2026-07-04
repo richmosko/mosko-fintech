@@ -6,6 +6,10 @@
 # Local working files (planning drafts, scratch)
 temp/
 
+# Personal financial taxonomy seed (SELF-231) — F/CTO's own Cat×Sub-Cat + tax
+# attributes + local-dev user UUID; local-only, auto-loaded at `supabase db reset`.
+supabase/seed.sql
+
 # Doc review sidecars (per-section comments; resolution is the doc change via PR)
 # Per ADR-010 — comments-sidecar feature port from project_template
 docs/*/comments.md

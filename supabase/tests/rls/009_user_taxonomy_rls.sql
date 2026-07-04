@@ -3,6 +3,7 @@
 --   C6 EXPOSURE-GATING per ADR-023; V1-SHIP-BLOCK)
 -- =====================================================================
 -- BINDS TO MIGRATION: supabase/migrations/009_user_taxonomy.sql
+--                    + supabase/migrations/010_user_taxonomy_notes.sql (additive `notes text`)
 --   - pfin.user_taxonomy               (RLS: direct-owner users_id = auth.uid();
 --                                       V1-WRITE-DORMANT — SELECT policy + SELECT grant ONLY;
 --                                       NO write policy, NO write grant)
@@ -10,6 +11,8 @@
 --   - grant select on pfin.user_taxonomy to authenticated   (ACL-before-RLS; SELECT only)
 --   - CHECK domain in ('asset','cashflow'); CHECK tax_character in (5 ADR-006 Axis-2 values)
 --   - UNIQUE (users_id, domain, cat, sub_cat)
+--   - column notes text NULL (010) — nullable, no default, NO new grant/policy: inherits the
+--                                    009 SELECT grant + user_taxonomy_select policy verbatim.
 -- Reuses the SELF-187/189/190/196 idiom: \ir verbs, ALL-LOWERCASE \gset literals
 --   (005 case-fold lesson), SQLSTATE-precise throws_ok + message-precise throws_like
 --   (004 all-42501 false-green lesson), role restored to postgres between blocks.
@@ -36,6 +39,13 @@
 --                  (ADR-023 C2 internet-facing outer fence).
 --   (4a)         -> RED if UNIQUE(users_id,domain,cat,sub_cat) were dropped (dup taxonomy row).
 --   (4b)/(4c)    -> RED if the domain / tax_character CHECK were dropped (bad value commits).
+--   (5a)/(5b)/(5c)-> RED if the 010 `notes` column were dropped/renamed, retyped off text, or
+--                  made NOT NULL (guards the additive-nullable-column contract).
+--   (5d)         -> RED if the new column were NOT readable under user_taxonomy_select (owner A
+--                  could no longer read its own notes — the column-add broke owner-reads-own).
+--   (5e)         -> RED if the SELECT policy were dropped/widened so B could see A's notes
+--                  CONTENT — the notes-specific golden cross-tenant violation. Non-vacuous:
+--                  with RLS off, B's `where notes = <A's value>` returns A's row (count 1 ≠ 0).
 --
 -- §10 / DECISION 3: ledger UNCHANGED at 2 (RT-22 + RT-26); Decision-3 family UNCHANGED
 --   (009's sole reference column users_id -> auth.users IS the tenant anchor — no second
@@ -62,7 +72,7 @@ begin;
 -- shared verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(10);
+select plan(15);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
@@ -166,6 +176,58 @@ select throws_ok(
   '23514', null,
   '(4c) tax_character CHECK: a non-enum tax_character raises check_violation (23514) — fails closed on a bad value'
 );
+
+-- =====================================================================
+-- BLOCK 5 — MIGRATION 010: additive nullable `notes text` column.
+--   010 adds `notes text NULL` (no default) and NO new grant/policy — the column
+--   inherits 009's SELECT grant + user_taxonomy_select (users_id = auth.uid()). This
+--   block is a lightweight EXTENSION of the existing two-tenant battery (reusing the
+--   BLOCK-1 fixture: A owns 2 rows, B owns 1), NOT a new battery. It asserts (i) the
+--   additive-nullable-column shape and (ii) that the column-add introduced no leak —
+--   owner-reads-own still holds WITH the column present, and A's notes CONTENT does
+--   not cross to B.
+-- =====================================================================
+-- (5a) column exists (catalog; role-independent).
+select has_column(
+  'pfin', 'user_taxonomy', 'notes',
+  '(5a) 010: pfin.user_taxonomy.notes column exists'
+);
+-- (5b) type is text.
+select col_type_is(
+  'pfin', 'user_taxonomy', 'notes', 'text',
+  '(5b) 010: notes is type text'
+);
+-- (5c) nullable (optional per-row note; no default).
+select col_is_null(
+  'pfin', 'user_taxonomy', 'notes',
+  '(5c) 010: notes is nullable (optional; no default) — additive-nullable contract'
+);
+
+-- Seed a distinct notes value on A's asset row. Privileged (role=postgres) — the only
+-- write path (V1-write-dormant). Gives the read assertions TEETH: a real, tenant-A-owned
+-- value that (5d) must surface to A and (5e) must NOT surface to B.
+update pfin.user_taxonomy set notes = 'tenant-A private note' where id = :a_row;
+
+-- (5d) owner-reads-own-INCLUDING-notes: A reads its own row and sees the notes value
+--      (proves the new column is readable under the existing SELECT policy — no column
+--       restriction crept in; owner-reads-own still holds with the column present).
+select _rls.set_tenant(:'ta'::uuid);
+select is(
+  (select notes from pfin.user_taxonomy where id = :a_row),
+  'tenant-A private note',
+  '(5d) 010: owner A reads its own notes under user_taxonomy_select (new column readable; owner-reads-own holds with the column present)'
+);
+select set_config('role', 'postgres', true);
+
+-- (5e) cross-tenant notes CONTENT fails closed: B sees ZERO rows carrying A's notes value.
+--      The column-add introduced NO leak — the direct-owner RLS filter still holds with the
+--      new column present. Non-vacuous: with RLS off/widened, this returns 1 (A's row).
+select _rls.set_tenant(:'tb'::uuid);
+select is(
+  (select count(*) from pfin.user_taxonomy where notes = 'tenant-A private note')::bigint, 0::bigint,
+  '(5e) 010: cross-tenant fails closed — B sees 0 rows carrying A''s notes (no leak from the column add; RLS direct-owner isolation holds with the new column)'
+);
+select set_config('role', 'postgres', true);
 
 select * from finish();
 rollback;
