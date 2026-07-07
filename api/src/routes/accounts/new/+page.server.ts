@@ -13,30 +13,17 @@
 
 import { fail, redirect } from '@sveltejs/kit';
 import { manualAccountCreateSchema, fieldErrors } from '$lib/server/schemas/account';
+import { loadAssetSubCats } from '$lib/server/queries/taxonomy';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	const { user } = await locals.safeGetSession();
 	if (!user) throw redirect(303, '/login');
 
-	// pfin is a non-public exposed schema → address it explicitly (.schema('pfin')).
-	// RLS (user_taxonomy_select) scopes the read to the caller's own rows; domain
-	// filter = 'asset' per the §2.2.1 asset taxonomy. is_active hides retired rows.
-	const { data: subCats, error } = await locals.supabase
-		.schema('pfin')
-		.from('user_taxonomy')
-		.select('id, cat, sub_cat, display_order')
-		.eq('domain', 'asset')
-		.eq('is_active', true)
-		.order('display_order', { ascending: true, nullsFirst: false })
-		.order('cat', { ascending: true })
-		.order('sub_cat', { ascending: true });
-
-	if (error) {
-		console.error('[accounts/new] Sub-Cat load failed:', error.message);
-		return { subCats: [] };
-	}
-	return { subCats: subCats ?? [] };
+	// Asset-domain Sub-Cat options for the create picker — RLS-scoped, shared with the
+	// accounts/[account_id] reassignment picker (SELF-236) via loadAssetSubCats.
+	const subCats = await loadAssetSubCats(locals.supabase);
+	return { subCats };
 };
 
 export const actions: Actions = {

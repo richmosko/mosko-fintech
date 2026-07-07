@@ -15,7 +15,9 @@
 	import type { SubmitFunction } from '@sveltejs/kit';
 	import type { PageData, ActionData } from './$types';
 	import { accountTypeLabel, taxTreatmentLabel } from '$lib/account-display';
+	import { reassignSubCatSchema, fieldErrors } from '$lib/schemas/account';
 	import Button from '$lib/components/Button.svelte';
+	import SelectField from '$lib/components/SelectField.svelte';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
@@ -23,6 +25,66 @@
 	const transactions = $derived(data.transactions);
 
 	let toggling = $state(false);
+
+	// ── Sub-Cat reassignment (SELF-236 §2.2.1.c) ──────────────────────────────
+	let editing = $state(false);
+	let saving = $state(false);
+	// Editor selection; '' = Unsorted (posts empty → server coerces null). Seeded to the
+	// current assignment by openEditor() each time the editor opens (starts collapsed).
+	let selected = $state('');
+	// Scoped to the reassign action (NOT the shared `form` prop) so a toggleActive
+	// failure can't bleed its errors into this editor and vice-versa.
+	let reassignErrors = $state<Record<string, string[]>>({});
+
+	const currentSubCatLabel = $derived(
+		account.cat ? `${account.cat} › ${account.sub_cat}` : account.sub_cat
+	);
+
+	// Sub-Cat options grouped by `cat` (accessible <optgroup>) — same shape as the
+	// create form's picker (AC #2: reuse the SelectField component). Server order kept.
+	const subCatGroups = $derived.by(() => {
+		const byCat = new Map<string, { value: string; label: string }[]>();
+		for (const s of data.subCats) {
+			if (!byCat.has(s.cat)) byCat.set(s.cat, []);
+			byCat.get(s.cat)!.push({ value: String(s.id), label: s.sub_cat });
+		}
+		return [...byCat.entries()].map(([cat, options]) => ({ label: cat, options }));
+	});
+
+	function openEditor() {
+		selected = String(account.sub_cat_id ?? ''); // re-sync to current on each open
+		reassignErrors = {};
+		editing = true;
+	}
+	function cancelEditor() {
+		editing = false;
+		reassignErrors = {};
+	}
+
+	// use:enhance — client-validate, POST the reassign, refresh the label via invalidation.
+	const reassignHandler: SubmitFunction = ({ cancel }) => {
+		const parsed = reassignSubCatSchema.safeParse({ sub_cat_id: selected });
+		if (!parsed.success) {
+			reassignErrors = fieldErrors(parsed.error);
+			cancel();
+			return;
+		}
+		reassignErrors = {};
+		saving = true;
+		return async ({ result, update }) => {
+			saving = false;
+			if (result.type === 'success') {
+				await update(); // invalidates → load re-runs → cat/sub_cat label refreshes
+				editing = false;
+			} else if (result.type === 'failure') {
+				reassignErrors =
+					(result.data?.errors as Record<string, string[]> | undefined) ??
+					{ _form: ['Could not update the sub-category. Please try again.'] };
+			} else {
+				await update();
+			}
+		};
+	};
 
 	const toggleHandler: SubmitFunction = () => {
 		toggling = true;
@@ -79,11 +141,60 @@
 				<dt>Tax treatment</dt>
 				<dd>{taxTreatmentLabel(account.tax_treatment)}</dd>
 			</div>
-			<div class="attr">
-				<dt>Sub-category</dt>
-				<dd>{account.cat ? `${account.cat} › ${account.sub_cat}` : account.sub_cat}</dd>
-			</div>
 		</dl>
+	</section>
+
+	<!--
+		SELF-197+ FORK-B: gate this whole section on `plaid_item_id IS NULL` (manual-only)
+		once a Plaid-vs-manual discriminator exists. For now the picker shows on ALL accounts
+		— the AC #4 manual-only gate is deferred per F/CTO (no discriminator yet).
+	-->
+	<section class="region" aria-label="Sub-category">
+		<div class="subcat-head">
+			<div class="subcat-current">
+				<h2 class="section-title">Sub-category</h2>
+				<p class="current">{currentSubCatLabel}</p>
+			</div>
+			{#if !editing}
+				<Button
+					variant="secondary"
+					type="button"
+					onclick={openEditor}
+					aria-expanded={editing}
+					aria-controls="subcat-editor"
+				>
+					Edit
+				</Button>
+			{/if}
+		</div>
+
+		{#if editing}
+			<form
+				id="subcat-editor"
+				method="POST"
+				action="?/reassignSubCat"
+				use:enhance={reassignHandler}
+				class="subcat-form"
+				novalidate
+			>
+				<SelectField
+					label="Sub-category"
+					name="sub_cat_id"
+					bind:value={selected}
+					errors={reassignErrors.sub_cat_id}
+					hint="Choose a sub-category, or Unsorted to leave it uncategorised."
+					placeholder={{ value: '', label: 'Unsorted' }}
+					groups={subCatGroups}
+				/>
+				{#if reassignErrors._form}
+					<p class="form-error" role="alert">{reassignErrors._form.join(' ')}</p>
+				{/if}
+				<div class="actions">
+					<Button variant="link" type="button" onclick={cancelEditor}>Cancel</Button>
+					<Button variant="primary" type="submit" loading={saving}>Save</Button>
+				</div>
+			</form>
+		{/if}
 	</section>
 
 	<section class="region" aria-label="Account status">
@@ -264,6 +375,33 @@
 		background: color-mix(in srgb, var(--c-neg) 8%, var(--c-surface));
 		color: var(--c-neg);
 		font-size: var(--fs-small);
+	}
+	.subcat-head {
+		display: flex;
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: var(--space-3);
+	}
+	.subcat-current .section-title {
+		margin-bottom: var(--space-1);
+	}
+	.current {
+		margin: 0;
+		color: var(--c-text-primary);
+		overflow-wrap: anywhere;
+	}
+	.subcat-form {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-3);
+		margin-top: var(--space-4);
+		max-width: 22rem;
+	}
+	.actions {
+		display: flex;
+		justify-content: flex-end;
+		align-items: center;
+		gap: var(--space-3);
 	}
 	.table-scroll {
 		overflow-x: auto;

@@ -25,6 +25,19 @@ const currencyAmount = () =>
 		return r.value;
 	});
 
+/**
+ * Nullable Sub-Cat id field, shared by the create + reassign paths so both validate
+ * identically. Empty-string (dropdown "Unsorted") / missing → null; else a positive
+ * integer. Matched-tenant is DB-enforced (012 fn_account_matched_sub_cat) regardless.
+ */
+const subCatIdField = () =>
+	z
+		.preprocess(
+			(v) => (v === '' || v === undefined || v === null ? null : v),
+			z.coerce.number().int().positive().nullable()
+		)
+		.default(null);
+
 /** Real-calendar-date guard for the ISO bootstrap date (rejects 2026-02-31 etc.). */
 const isoDate = () =>
 	z
@@ -51,14 +64,17 @@ export const manualAccountCreateSchema = z
 		tax_treatment: z.enum(TAX_TREATMENTS),
 		initial_value: currencyAmount(),
 		as_of_date: isoDate(),
-		sub_cat_id: z.preprocess(
-			(v) => (v === '' || v === undefined || v === null ? null : v),
-			z.coerce.number().int().positive().nullable()
-		).default(null)
+		sub_cat_id: subCatIdField()
 	})
 	.strict();
 
 export type ManualAccountCreate = z.infer<typeof manualAccountCreateSchema>;
+
+/** Sub-Cat reassignment (SELF-236 §2.2.1.c). Single nullable field; nullable clears
+ *  the tag ("Unsorted"). Matched-tenant fenced by the 012 trigger on UPDATE. */
+export const reassignSubCatSchema = z.object({ sub_cat_id: subCatIdField() }).strict();
+
+export type ReassignSubCat = z.infer<typeof reassignSubCatSchema>;
 
 /** Inactive-toggle (AC #3). Single boolean; coerces form string/checkbox values. */
 export const toggleActiveSchema = z
