@@ -12,6 +12,20 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 ---
 
+### v1.69 — 2026-07-07
+
+**Phase 6 — SELF-236: §2.2.1.c per-manual-account Sub-Cat reassignment UI.** PR #145 · milestone *V1.2 — Asset allocation full (§2.2)* (built early as the natural extension of the just-completed SELF-201). **App-layer only — no migration, no new pgTAP.** The security-hard part (the matched-tenant UPDATE fence) was pre-built + pre-tested in SELF-201's `012`: this is the first live exercise of the `012` `fn_account_matched_sub_cat` **UPDATE arm** ("a reassignment cannot pivot to another tenant's Sub-Cat"), and the `012` two-tenant battery's assertion 2b already proves the cross-tenant reassignment fence.
+
+**What landed:** `accounts/[account_id]/+page.svelte` gains a "Sub-category" section (current `cat › sub_cat` + Edit affordance → the reused create-form `SelectField`, current pre-selected, "Unsorted"→null); `accounts/[account_id]/+page.server.ts` gains `subCats` on the load + a `reassignSubCat` form action (Zod `.strict()` `{ sub_cat_id }` → RLS-scoped `UPDATE pfin.account SET sub_cat_id`; `account_update` RLS ownership → non-owner 404; the `012` trigger raises on a cross-tenant sub_cat → mapped to a `sub_cat_id` field error; returns `{ success: true }`, label refreshes via `enhance` invalidation). New shared `src/lib/server/queries/taxonomy.ts` (`loadAssetSubCats` + `subCatLabel`) — both pickers can't drift; `accounts/new` refactored to consume it (byte-identical). Client `reassignSubCatSchema` mirror.
+
+**AC reconciliations (F/CTO-ratified):** #4 `is_manual` manual-only gate **DEFERRED** — no discriminator column exists (`007` deferred FORK-B); picker shows on all accounts; the Plaid-vs-manual gate lands with FORK-B at SELF-197+ (marker in code). #5/#6 allocation-table propagation **satisfied-by-construction** (writes `sub_cat_id`; verified when §2.2.2/SELF-239 reads it).
+
+**Reviews.** Sec app-layer Lock-14 light-review **GREEN, no conditions** (`.strict()` mass-assignment doubly-safe; cross-tenant fail-closed via the `012` UPDATE arm + `account_update` RLS; no service_role; shared `taxonomy.ts` anti-drift). Sec confirmed the `012` battery's 2b suffices — no additional test required. `npm run check` 0/0 (320 files) + build clean; CI 8/8. Ledgers unchanged: DEFINER **3** · §10 **2** · Decision-3 canonical **5** (relies on the existing #5 fence, adds no instance).
+
+**NOTE — the next substantive work is NOT a normal feature PR:** the Plaid/data-aggregation strategy is under F/CTO-driven reconsideration (the **aggregator-strategy pivot** — see MILESTONES Last-updated + Pending). No general aggregator reliably returns Fidelity *transactions*; the direction is a provider-agnostic multi-aggregator ingest abstraction (SnapTrade + SimpleFIN/Plaid + CSV/OFX import + manual). SELF-197 (Plaid Link) is paused pending a provider-strategy ADR. Research: `temp/aggregator-strategy-memo.md`.
+
+---
+
 ### v1.68 — 2026-07-06
 
 **Phase 6 — SELF-201: §2.4.2 manual non-Plaid account onboarding (full-stack; 3 PRs).** PRs #141 + #142 + #143 · milestone *V1.0 — Onboarding minimal path (full §2.4)*. V1-SHIP-BLOCK. First full-stack feature of Phase 6, landing PRD §2.4.2 (add a non-Plaid asset in one guided pass — name / account-type / scope / tax-treatment / initial value + as-of-date / Sub-Cat; no Plaid Link, no credential prompt; inactive toggle that retains transaction history). Three sequential PRs: migration foundation → atomic create RPC + money-integrity backstop → app layer.
