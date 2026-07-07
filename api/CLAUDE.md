@@ -32,6 +32,7 @@ The V1 web-app container — **SvelteKit (Svelte 5)** per [ADR-015](../DECISIONS
 - **Plaid SDK** (web-app side) lives in `src/lib/server/plaid/` ([ARCH §7.1](../docs/ARCH/index.html#sec-7-1) two-tier posture); sandbox tier in V1.0, production post-`SELF-212` (F/CTO-gated).
 - **`/internal/pdf-render`** is the signed-JWT render endpoint the PDF worker hits (Lock 13 mod #1) — it's the only path the zero-DB PDF worker reaches data through.
 - Any new cross-tenant FK reference is a [Decision 3](../DECISIONS.md#adr-011) family instance — Sec-consult + ARCH §10 ledger update, even when the parent FK is RLS-protected.
+- **Account soft-delete CONTRACT (SELF-201 AC#3):** an account is retired via `pfin.account.is_active = FALSE` — there is **no `inactive` column** (the SELF-201 AC's `inactive`/`WHERE inactive=FALSE` naming predates the 003 greenfield convention; reconciled at `012`). Every current-state / NAV / aggregation surface (SELF-225 et al.) MUST filter **`WHERE is_active = TRUE`** by default. Inactive accounts RETAIN their `account_trans` history (schema-guaranteed: `ON DELETE RESTRICT` + soft-delete, no cascade/skip-flag) — never hard-delete or skip-flag them.
 - Migrations are **Architect-owned** (`/supabase/migrations/`); `api/` consumes them (apply locally + in CI test-fixture), never authors them. Schema changes → flag Architect.
 
 ---
