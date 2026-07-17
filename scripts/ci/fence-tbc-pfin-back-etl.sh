@@ -134,21 +134,20 @@ PATTERN_CREATE_ENGINE='(sqla\.|sqlalchemy\.)?create_engine\('
 PATTERN_CONNECT='(psycopg2|psycopg|asyncpg)\.connect\('
 PATTERN_FROM_IMPORT='from[[:space:]]+(psycopg2|psycopg|asyncpg)[[:space:]]+import[[:space:]]+connect'
 
-# Find raw hits. We want one combined grep run that excludes any ALLOWED_FILES.
-# Build a comma-separated --exclude list from ALLOWED_FILES (basenames only;
-# grep --exclude operates on basenames).
-EXCLUDE_ARGS=()
-if [ -n "$ALLOWED_FILES" ]; then
-  while IFS= read -r f; do
-    [ -z "$f" ] && continue
-    base=$(basename "$f")
-    EXCLUDE_ARGS+=(--exclude="$base")
-  done <<< "$ALLOWED_FILES"
-fi
-
-# Scan for the patterns. -E for ERE; -n for line numbers; -H for filename;
-# -r for recursive; --include='*.py' to scope to Python.
-RAW_HITS=$(grep -rEnH --include='*.py' "${EXCLUDE_ARGS[@]+"${EXCLUDE_ARGS[@]}"}" \
+# Scan ALL in-scope .py files (including the class file) — do NOT pre-exclude by
+# basename. The sole exclusion mechanism is the FULL-PATH re-verify loop below.
+#
+# WHY NOT grep --exclude=<basename> (the false-negative Sec caught 2026-07-17;
+# fixed here for Python/Node parity in lockstep with fence-tbc-node.sh): grep
+# --exclude matches on BASENAME, so excluding the class file `core.py` would ALSO
+# exclude a violator create_engine()/connect() in a DIFFERENT directory sharing the
+# basename (e.g. class at db/core.py + violator at etl/core.py). The violator would
+# never enter RAW_HITS, so the full-path re-verify loop could never recover it —
+# silently skipped. Letting the full-path loop do ALL the exclusion is correct: the
+# class file's own construction is skipped by full-path match, and a same-basename
+# violator elsewhere has a distinct full path → caught.
+# (See tests/fixtures/ci/tbc-basename-collision/.)
+RAW_HITS=$(grep -rEnH --include='*.py' \
   -e "$PATTERN_CREATE_ENGINE" \
   -e "$PATTERN_CONNECT" \
   -e "$PATTERN_FROM_IMPORT" \
@@ -161,8 +160,10 @@ RAW_HITS=$(grep -rEnH --include='*.py' "${EXCLUDE_ARGS[@]+"${EXCLUDE_ARGS[@]}"}"
 #       trip the fence. Caveats: does NOT skip docstrings or inline trailing
 #       comments — those are rare false-positive shapes; human reviewer
 #       adjudicates if surfaced.
-#   (2) Re-verify against ALLOWED_FILES by full path (the --exclude basename
-#       match could over-exclude same-basename files in unrelated paths).
+#   (2) Exclude a hit ONLY if its FULL PATH matches an allowed (class-declaring)
+#       file. This is the SOLE exclusion mechanism (grep --exclude is deliberately
+#       NOT used — it matches basenames and would over-exclude a same-basename
+#       violator in an unrelated path; see the scan-comment above).
 VIOLATIONS=0
 if [ -n "$RAW_HITS" ]; then
   while IFS= read -r hit; do

@@ -8,6 +8,14 @@ three classes of security-load-bearing regressions:
   server-side source surface.
 - **TBC** — `TenantBoundConnection` grep fence on the `workers/etl/` Python source
   tree (single-repo post-W0; see [Single-repo TBC posture (post-W0)](#single-repo-tbc-posture-post-w0) below).
+- **TBC-node** — `TenantBoundClient` grep fence on the `workers/provider-sync/` Node/TS
+  source tree (ADR-019 amendment; the first DB-touching Node worker). The Node analogue
+  of TBC — a separate fence because the Python patterns don't match TypeScript. Two legs:
+  **(1)** raw-client construction (`postgres()`/`new Pool()`/`new Client()`) or any
+  `@supabase/supabase-js` import/`createClient()` outside the `TenantBoundClient` class;
+  **(2)** a Sec-condition `SUPABASE_SERVICE_ROLE_KEY` *absence* tripwire (assert-absent,
+  zero-hit) — together they enforce direct-Postgres-only and keep provider-sync off the
+  RT-26 allowlist (asserts absence; does NOT amend ADR-016 D2).
 
 The fences are invoked from `.github/workflows/security-scan.yml`. Each fence ships
 with a paired golden-test fixture under `tests/fixtures/ci/` and a CI inversion-mode
