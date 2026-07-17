@@ -14,7 +14,9 @@
 --       DELETE using (users_id = auth.uid())                      -- owner-only delete
 --   - GRANT authenticated SELECT/INSERT/UPDATE/DELETE (active V1 write path — SELF-201
 --       manual-asset onboarding; contrast 009 user_taxonomy SELECT-only dormancy).
---       anon ZERO-grant (schema-usage fence, 001/003). service_role UNGRANTED in 016.
+--       anon ZERO-grant (schema-usage fence, 001/003). service_role UNGRANTED BY 016 itself —
+--       but GRANTED select,insert at 020 (the global-asset write path); this battery runs against
+--       the full applied stack, so (g3) asserts the post-020 realized grant, not 016-in-isolation.
 --   - Committed GLOBAL currency-asset identity seed: 7 rows users_id NULL (USD + majors),
 --       asset_type 'currency', pricing_source 'fx_feed' (011-style global reference data).
 --   - Partial-uniques: asset_global_symbol_uniq = unique(symbol) where users_id IS NULL;
@@ -78,8 +80,10 @@
 --                  proven by (c1), so exercised on the privileged seed path): duplicate global 'USD' -> 23505.
 --   (g1)         -> non-vacuous ACL positive: authenticated HOLDS INSERT (active V1 write path — the
 --                  grant is not vacuously absent; RED if 016 shipped SELECT-only like 009).
---   (g2)/(g3)    -> RED if anon or service_role were ever granted reach to pfin.asset (anon zero-grant
---                  by construction; service_role's global-enrichment write path is DEFERRED + C6-gated).
+--   (g2)         -> RED if anon were ever granted reach to pfin.asset (anon zero-grant by construction).
+--   (g3)         -> service_role SELECT is GRANTED AT 020 (the global-asset write path DEFERRED at 016
+--                  is realized there, Sec-GREEN Option A); RED if the 020 grant were dropped. Cross-
+--                  migration posture ref — this battery runs against the full applied stack (post-020).
 --
 -- §10 / DECISION 3: §10 ledger UNCHANGED at 2 (RT-22 + RT-26; 016 introduces ZERO catalogued §10
 --   instances — hybrid RLS + GRANT + reference seed are authenticated-tier DB-layer work, NOT the
@@ -306,7 +310,7 @@ select throws_ok(
 
 -- =====================================================================
 -- LEG (g) GRANT posture (ACL facts, run as postgres — role-agnostic).
---   authenticated CRUD active; anon + service_role zero-reach (016 GRANT rationale).
+--   authenticated CRUD active; anon zero-reach; service_role SELECT+INSERT granted at 020 (g3).
 -- =====================================================================
 -- (g1) non-vacuous ACL positive: authenticated HOLDS INSERT (active V1 write path, not SELECT-only).
 select ok(
@@ -318,10 +322,11 @@ select ok(
   not has_table_privilege('anon', 'pfin.asset', 'SELECT'),
   '(g2) anon zero-grant: anon holds NO SELECT on pfin.asset (internet-facing anon fenced at the schema-usage layer + no table grant — by construction)'
 );
--- (g3) service_role ungranted in 016 (the global-enrichment write path is DEFERRED + C6-gated).
+-- (g3) service_role SELECT GRANTED AT 020 (the 016-deferred global-asset write path realized;
+--      cross-migration posture ref — flip-in-place, was a forward-negative "deferred" guard).
 select ok(
-  not has_table_privilege('service_role', 'pfin.asset', 'SELECT'),
-  '(g3) service_role ungranted in 016: service_role holds NO SELECT on pfin.asset (the global registry-enrichment write path is a later worker-build surface — deferred, C6-gated + Sec joint-review then)'
+  has_table_privilege('service_role', 'pfin.asset', 'SELECT'),
+  '(g3) service_role SELECT granted at 020: service_role NOW HOLDS SELECT on pfin.asset — the global-asset auto-registration write path DEFERRED at 016 is REALIZED at 020 (grant select, insert to service_role, Sec-GREEN Option A). This battery runs against the full applied stack, so (g3) reflects the post-020 ACL; RED if the 020 grant were dropped'
 );
 
 select * from finish();

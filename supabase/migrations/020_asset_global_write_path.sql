@@ -1,0 +1,219 @@
+-- ============================================================================
+-- Migration: pfin.asset — global-asset service_role WRITE-PATH (016-deferred) +
+--            cusip global-unique index (fixed-income cusip-first resolution).
+-- Phase 6 Build Loop (ADR-027 provider-sync ingest worker — Component (1)/(3) build;
+--   design memo temp/provider-sync-worker-design.md §3 + §4.3). Realizes the 016
+--   GRANTS-RATIONALE deferral ("the runtime service_role GLOBAL-securities write path
+--   … is a LATER worker-build surface, SELF-197+, C6-GATED + Sec joint-review then").
+--   JOINT-REVIEW-MANDATORY — a NEW service_role write path on an all-tenants-readable
+--   table (the Option-A-vs-C fence sub-decision is Sec's call; see POSTURE RATIONALE).
+--
+-- WHAT THIS DOES (the ONLY new DB surface the provider-sync worker needs — every other
+--   write path it uses already exists: fn_ingest_transactions @017, the provider
+--   snapshot grants @018, eod_price service_role SELECT+INSERT+UPDATE @019):
+--   (A) GRANT select, insert on pfin.asset to service_role — so the worker can
+--       AUTO-REGISTER an unknown symbol/cusip as a GLOBAL asset row (users_id IS NULL)
+--       during symbol→security_id resolution. LEAN: SELECT + INSERT only — enrichment
+--       (UPDATE an existing global row's cusip/name/figi) is DEFERRED to V2 (F/CTO
+--       2026-07-17: "lean INSERT+SELECT; enrichment UPDATE = V2"). No DELETE (least
+--       privilege; the worker never deletes a global asset).
+--   (B) A cusip global-unique index — asset_global_cusip_uniq(cusip) WHERE users_id IS
+--       NULL AND cusip IS NOT NULL — so fixed-income assets (bonds/CDs/treasuries) dedup
+--       on CUSIP, not on their descriptive/CUSIP-ish "symbol". Empirical bond finding
+--       (temp/aggregator-strategy-memo.md): bonds report symbols like "CILH4422711" /
+--       "US Treasury Bill - 3.52% …" — NOT clean tickers. The worker's resolution key is
+--       COALESCE(cusip-match, symbol-match); this index makes the cusip leg dedup-safe.
+--       Additive index (not an FK) → Decision-3 flat.
+--
+-- Numbering: 020 follows 019 (eod_price + valuation core). F/CTO RE-SEQUENCED the batch
+--   2026-07-17 (worker-next): the global-asset write path takes 020; the allocation
+--   junction (user_asset_category) shifts to 021, the annotation overlay
+--   (account_trans_annotation) shifts to 022. See the DECISION 3 RE-SEQUENCE NOTE below —
+--   this is a MIGRATION-NUMBER shift only; the canonical Decision-3 INSTANCE LABELS
+--   (#8/#9/#10) are UNCHANGED. Depends on 016 (pfin.asset — the GRANT target + the
+--   asset.cusip column + the users_id-NULL global-row convention + the 016 hybrid RLS,
+--   all UNCHANGED here). service_role holds schema pfin USAGE from 008. References no
+--   other table. Downstream: the provider-sync worker (task #12) consumes this grant +
+--   index; 019's holdings_checkpoint.security_id / 017's account_trans.security_id novel
+--   fences validate every worker-written security_id against these global rows.
+--
+-- ----------------------------------------------------------------------------
+-- §10 3-AXIS CROSS-CHECK (Path B — reference ADR-011 Decision 4; do NOT restate the
+--   catalogued numbered list. Read Decision 4 verbatim before drafting — DONE: the
+--   canonical structure is Three surface classes + the Catalogued §10 instances list
+--   RT-22 first / RT-26 second + the Privileged-context-surfaces bullet). This migration
+--   introduces ZERO catalogued §10 instances; the ledger STAYS at 2 (RT-22 + RT-26).
+--   (i)   Instance-numbering: RT-22 first, RT-26 second — unchanged (not touched).
+--   (ii)  Layer-attribution: the `service_role SELECT+INSERT` grant on pfin.asset is a
+--         DB-LAYER ACL — NOT the RT-26 code-layer SUPABASE_SERVICE_ROLE_KEY allowlist
+--         grep fence (which governs WHERE the service key is USED in web-app/worker
+--         SOURCE), and NOT the RT-22 PDF-worker container infra-credential-presence
+--         fence. Identical reasoning to 008 lines 49–57 / 015 lines 44–52 / 017 lines
+--         43–54 / 018 lines 46–54 / 019 lines 69–75. The service_role CODE consumer (the
+--         provider-sync worker that auto-registers global assets — task #12) lives in
+--         worker SOURCE and is governed by RT-26 THERE, not by this migration. A DB-ACL
+--         grant is not a catalogued §10 instance under any of the three layers.
+--   (iii) Verbatim-vs-paraphrase: Decision 4 is linked, not restated. 020 is not the
+--         canonical §10 anchor.
+--   DE-CONFLATION GUARD: the Option-C role-guarded fence (IF Sec elects it — see POSTURE
+--   RATIONALE) would be a Decision-3-ADJACENT privileged-write mechanism, NOT a §10
+--   catalogued instance (same separation as SELF-187's DEFINER-allowlist 2→3 being
+--   distinct from §10). Whichever fence disposition Sec picks, §10 stays 2.
+--
+-- ----------------------------------------------------------------------------
+-- DECISION 3 (cross-tenant FK-bypass family) EVALUATION — family count +0 (stays 8
+--   realized). This migration adds NO FK-shaped reference column:
+--     - The GRANT is an ACL, not a column.
+--     - asset_global_cusip_uniq is a partial-UNIQUE INDEX on asset.cusip — a TEXT
+--       identifier, NOT an FK (asset.cusip references nothing; it is identity data,
+--       same class as asset.symbol/isin/figi, all NOT-D3 per 016 lines 67–69). An index
+--       creates no tenant-crossing reference.
+--     - pfin.asset.users_id remains the SOLE tenant anchor (evaluated at 016; NULL =
+--       global) — unchanged. No second anchor to mismatch → not a matched-tenant instance.
+--   The FKs INTO pfin.asset stay the shipped novel global-OR-matched-tenant fences
+--   (#7 account_trans.security_id @017, #11 holdings_checkpoint.security_id @019) —
+--   authored at their migrations, UNCHANGED here. The worker's auto-registered GLOBAL
+--   rows (users_id NULL) satisfy those fences by the "global" arm — the intended design
+--   (a market security is legitimately shared reference; global rows carry NO per-user
+--   data).
+--
+--   RE-SEQUENCE NOTE (drift-avoidance; NO committed-header renumber, NO DECISIONS.md
+--   touch in this PR): the committed 015/017/018/019 headers + ADR-027 amendment (g)
+--   forward-enumerate the FUTURE instances as "#8/#9 user_asset_category @020" and
+--   "#10 account_trans_annotation @021". F/CTO's 2026-07-17 worker-next re-sequence puts
+--   the global-asset write path at 020 (this file, which adds NO instance) and shifts
+--   user_asset_category → 021 and account_trans_annotation → 022. The canonical INSTANCE
+--   LABELS are UNCHANGED — #8/#9 remain user_asset_category, #10 remains
+--   account_trans_annotation; ONLY the migration-number hint moves (020/021 → 021/022).
+--   No instance is renumbered, dropped, or reordered → no Decision-3 drift. The stale
+--   migration-number hints in the committed headers + ADR-027 (g) are reconciled in the
+--   separate enumeration-pass fold-in (task #13), NOT by rewriting on-main headers here.
+--   Sec numbering sign-off at joint-review confirms this bookkeeping.
+--
+-- ----------------------------------------------------------------------------
+-- POSTURE RATIONALE — NO function authored; DEFINER allowlist STAYS 3 (ADR-011
+--   Decision 9: fn_refresh_updated_at + fn_grant_creator_access + the still-unauthored
+--   audit-log helper; authored-so-far = 2). This migration is a GRANT + a partial-unique
+--   INDEX only — no SECURITY DEFINER, no SECURITY INVOKER function, no trigger. `set
+--   search_path = ''` is N/A (a function-body guard; no function here).
+--
+--   THE FENCE SUB-DECISION — FLAGGED FOR SEC JOINT-REVIEW (Architect lean = Option A;
+--   Option C offered; Option B rejected):
+--     • Option A (AUTHORED HERE, lean) — plain least-privilege `grant select, insert`.
+--       The worker inserts users_id=NULL rows `ON CONFLICT (symbol) WHERE users_id IS
+--       NULL DO NOTHING`. Guard = the ON CONFLICT dedup + adapter normalization in the
+--       RT-26-allowlisted worker. WHY: this is the IDENTICAL idiom to every other
+--       service_role writer (015 linked_source, 018 holdings_checkpoint /
+--       account_balance_checkpoint, 019 eod_price) — service_role is the trusted
+--       privileged writer (Decision 1 privileged-context-write) that binds tenant in
+--       code; NONE of those writers carries a role-guard fence. Boring, consistent.
+--     • Option C (NOT authored; Sec may elect) — Option A + a BEFORE INSERT guard trigger
+--       constraining a service_role-lane INSERT to the GLOBAL lane (users_id IS NULL).
+--       WHY Sec might want it — the HONEST new risk UNIQUE to pfin.asset: a global row is
+--       readable by ALL tenants (016 asset_select: users_id IS NULL → visible to
+--       everyone), whereas every other service_role write lands tenant-scoped data. So a
+--       worker bug is a cross-tenant-VISIBLE artifact — though it carries NO per-user
+--       data (only identity: symbol/cusip/name/type). C makes "service_role stays in the
+--       global lane" a DB invariant, not just app discipline. COST: a novel role-branching
+--       fence pattern (current_user = 'service_role') Sec has required on no other writer
+--       — arguably over-engineering given the no-per-user-data property + the consistent
+--       Decision-1 trust posture. IF Sec elects C, it is an INVOKER trigger (touches only
+--       a role check + raise) → allowlist STILL 3, §10 STILL 2.
+--     • Option B (REJECTED) — a SECURITY DEFINER fn_register_global_asset RPC. service_role
+--       already bypasses RLS, so DEFINER buys nothing and would add a 4th DEFINER allowlist
+--       entry (Sec-veto surface) for zero gain — the exact anti-pattern ADR-026 rejected.
+--   Architect ships Option A; Sec disposes at joint-review. If Sec vetoes A → add the
+--   Option C trigger in the same PR (no new migration number).
+--
+-- ----------------------------------------------------------------------------
+-- GRANTS / RLS RATIONALE.
+--   pfin.asset already has RLS ENABLED + the 016 hybrid policies (asset_select
+--   global-OR-owned; asset_insert/update/delete owner-only WITH CHECK users_id =
+--   auth.uid()). Those policies are UNCHANGED and continue to fence `authenticated`:
+--   a user still CANNOT create a global row (users_id NULL fails `NULL = auth.uid()`).
+--   This migration adds service_role reachability ONLY:
+--     - service_role SELECT + INSERT (no UPDATE — enrichment is V2; no DELETE — least
+--       privilege). service_role is BYPASSRLS, so the 016 owner-only WITH CHECK does not
+--       constrain it — the worker writes users_id=NULL global rows directly (Decision 1
+--       privileged-context-write; the worker binds tenant/lane in code, Option A).
+--     - authenticated grants (016: SELECT/INSERT/UPDATE/DELETE, RLS-gated to owned rows)
+--       are UNTOUCHED.
+--     - anon: nothing (schema pfin USAGE denies anon before any table ACL — ADR-023 C2).
+--   Idempotent (grant is a no-op if already held; index is `if not exists`).
+--
+-- EXPOSURE / C6 RLS-COVERAGE NOTE (ADR-023 C6 standing obligation — pfin is in [api]
+--   schemas; this grant makes pfin.asset service_role-WRITABLE under the Data-API
+--   transport, so C6 binds): this migration does NOT ship without the paired QA two-tenant
+--   pgTAP battery (SECURITY §4.5, exposure-gating per C6 / merge-block). The battery must
+--   assert the WRITE-PATH posture on top of 016's read isolation:
+--     (a) service_role CAN insert a GLOBAL row (users_id NULL) → the row is then read by
+--         BOTH tenant A and tenant B (global shared-read) PASS;
+--     (b) authenticated STILL CANNOT insert a global row (016 asset_insert WITH CHECK
+--         holds — users_id NULL fails NULL = auth.uid()) PASS;
+--     (c) a per-user asset (users_id = A) stays isolated — tenant B reads 0 of A's
+--         per-user rows (016 asset_select) PASS;
+--     (d) the cusip dedup holds — two global rows with the same cusip collapse to one
+--         (asset_global_cusip_uniq) PASS;
+--     (e) IF Sec elects Option C: service_role CANNOT insert a per-user (users_id NOT
+--         NULL) row (the global-lane fence raises) PASS.
+--   QA authors the battery (Architect does not edit tests/); Sec sign-off gates
+--   V1-SHIP-BLOCK merge.
+--
+-- ----------------------------------------------------------------------------
+-- ONE-WAY DOORS (flagged for F/CTO; pre-ratified 2026-07-17):
+--   (1) The cusip global dedup grain (asset_global_cusip_uniq). Once fixed-income global
+--       rows land with cusips, re-shaping the cusip dedup is a data migration. Realized
+--       now while empty (greenfield). Additive/reversible-while-empty; the durable
+--       commitment is "global fixed-income assets dedup by cusip."
+--   (2) The service_role global-asset write path itself is a POSTURE commitment (the
+--       worker will imprint global rows). Reversing (revoking) after rows land is clean
+--       (revoke a grant), but the registered global rows persist — the data one-way-door
+--       is the accumulated global registry, not the grant.
+--
+-- ----------------------------------------------------------------------------
+-- CONTRACT
+--   pfin.asset — CHANGES (no column/table/policy change):
+--     - GRANT select, insert to service_role (the global-asset auto-registration write
+--       path; UPDATE/DELETE deliberately withheld — enrichment V2, least privilege).
+--     - asset_global_cusip_uniq: unique(cusip) WHERE users_id IS NULL AND cusip IS NOT
+--       NULL — fixed-income cusip dedup for the worker's COALESCE(cusip, symbol) key.
+--   Worker contract (task #12, NOT authored here — for reference): resolve
+--     COALESCE(cusip-match, symbol-match) against global assets; miss → INSERT
+--     (users_id=NULL, asset_type=<normalized>, pricing_source=<normalized>, symbol, cusip,
+--     name) ON CONFLICT (symbol) WHERE users_id IS NULL DO NOTHING → re-select asset_id.
+--     The resolved security_id passes the 017/019 novel fences via the "global" arm.
+--   Security-load-bearing edges: 016's owner-only WITH CHECK still fences authenticated
+--     out of the global lane; service_role's global-lane discipline is app-layer (Option
+--     A) OR a DB fence (Option C, Sec's call); the all-tenants-readable property of global
+--     rows is the Sec-review crux; no per-user data ever lands on a global row.
+-- ============================================================================
+
+create schema if not exists pfin;
+-- service_role schema pfin USAGE persists from 008; authenticated USAGE from 001/003.
+
+-- ----------------------------------------------------------------------------
+-- (B) Fixed-income cusip global-unique index (empirical bond finding; §4.3 of the design
+--   memo). Partial-unique on cusip for GLOBAL rows only (per-user physical assets carry no
+--   cusip). Postgres requires an index (not a table constraint) for partial uniqueness —
+--   mirrors 016's asset_global_symbol_uniq exactly, on cusip instead of symbol.
+-- ----------------------------------------------------------------------------
+create unique index if not exists asset_global_cusip_uniq
+  on pfin.asset (cusip) where users_id is null and cusip is not null;
+
+comment on index pfin.asset_global_cusip_uniq is
+  'Global fixed-income dedup (ADR-027 provider-sync; 020). unique(cusip) WHERE users_id '
+  'IS NULL AND cusip IS NOT NULL — bonds/CDs/treasuries report descriptive/CUSIP-ish '
+  '"symbols" (e.g. "CILH4422711", "US Treasury Bill - 3.52% …"), NOT clean tickers, so '
+  'the provider-sync worker keys resolution on COALESCE(cusip-match, symbol-match) and '
+  'this index makes the cusip leg dedup-safe. Mirrors 016 asset_global_symbol_uniq on '
+  'cusip. NOT an FK (cusip is TEXT identity) → Decision-3 flat.';
+
+-- ----------------------------------------------------------------------------
+-- (A) service_role global-asset write path (the 016-deferred grant). LEAN: SELECT +
+--   INSERT only (enrichment UPDATE = V2; no DELETE = least privilege). This is the ONLY
+--   new privileged surface — Sec joint-review-MANDATORY (Option A plain grant, per the
+--   POSTURE RATIONALE fence sub-decision). C6-GATED: does not merge without the QA
+--   two-tenant battery + Sec sign-off. Mirrors the 018/019 least-privilege service_role
+--   grant idiom.
+-- ----------------------------------------------------------------------------
+grant select, insert on pfin.asset to service_role;
