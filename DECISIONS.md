@@ -221,6 +221,25 @@ F/CTO ratified a single durable valuation model ("won't rearchitect this") that 
 
 **Ledger deltas:** **Decision-3 7 → 8** (the #11 fence). **§10 stays 2** (the worker provider_implied write uses the already-allowlisted service_role provider-sync consumer + the existing `019` grant — no new RT-26 file, DB-ACL only). **DEFINER stays 3** (the new fence is INVOKER; no new DEFINER; the read fns INVOKER). **eod_price GRAIN unchanged** (OWD-A `unique(asset_id, price_date, source)` holds — `provider_implied` slots in by source; source vocab additive per ADR-022). `019` grows the `holdings_checkpoint.security_id` ALTER + fence + the two fn rewrites + the source-vocab CHECK; no migration file beyond `019`. **Credit-union thread RESOLVED** — mixed-mode (balance snapshot + rolled-forward txns) is now core. **FMP stays OUT of V1** (future higher-priority source; provider_implied is the floor). Worker provider-implied write = a downstream Backend/Worker deliverable.
 
+### Amendment (2026-07-16 / gate (i) — provider SELECTION RESOLVED). F/CTO-ratified. Resolves the "Downstream gates §(i)" left explicitly OPEN at this ADR's authoring.
+
+**Decision: Plaid PRIMARY + SimpleFIN FALLBACK + import/manual (SELF-201); SnapTrade DROPPED; Teller INVALIDATED.** Routing stays per-institution behind the `015 linked_source` interface (Component (1) Option A).
+
+- **Plaid = primary** (banks + cards + **brokerages incl. Fidelity**). The round-3 production probe (2026-07-15/16, F/CTO's real accounts) cleared all four feature cells: bank/card transactions + balances (Cap One 191, Schwab checking 262/2yr, Wells) and — the round-2 Fidelity blocker now **RESOLVED** — Fidelity end-to-end: investment transactions **551** (IRA 215 / CASH 123 / HSA 28 / PORTFOLIO 185, ≈ SnapTrade's 550), holdings on all Fidelity + Schwab accounts (incl. individual bonds), + the Fidelity Visa. Best data quality (`personal_finance_category` + merchant enrichment + `investment_transaction_id`/`cancel_transaction_id` → the immutable-ledger correction model + `security_id`).
+- **SimpleFIN = fallback** (banks/cards Plaid drops). Flat **$1.50/mo**; caught **Synchrony** where Plaid was transiently down. Thinner data (`mcc`-only categorization).
+- **SnapTrade DROPPED.** Its round-2 rationale (Fidelity coverage Plaid couldn't do) is gone — Plaid now matches it (551 ≈ 550). Brokerage-only + **holdings endpoints return HTTP 410 on the F/CTO's key tier** ("no longer available for your account") → strictly redundant with Plaid; a second brokerage integration is unjustified. `snaptrade-*` probes retired.
+- **Teller INVALIDATED** — service shutting down.
+
+**Pricing — Plaid bills per ITEM, not per connected account** (corrected 2026-07-16 vs the billing docs, `https://plaid.com/docs/account/billing/`). Transactions + Investments are subscription fees per Item (per institution login) as long as a valid `access_token` exists; Investments = Holdings $0.18 + Investment-Transactions $0.35; no proration/base/minimum. F/CTO's 10 real accounts = **5 Items** → Fidelity (card + 4 investment) $0.83 + Schwab (checking + brokerage) $0.83 + Cap One / Wells / Synchrony $0.30 each = **$2.56/mo (~$31/yr)** on PAYG, or **$0** under the 10-Item Trial cap (Trial Items are lifetime-cumulative — `/item/remove` does NOT refund the slot). **Cost scales with institutions, not account count** — the original "8 vs 16 accounts" axis barely moves the bill.
+
+**Empirical findings folded into the worker/adapter build:**
+- **Plaid sign convention is inverted** (positive = money OUT) → flip to R-7 `positive=inflow` at ingest.
+- **`CUR:USD` cash sweeps** returned as holdings = the uniform cash-as-currency-asset model (already handled).
+- **Fixed-income "symbols" are CUSIP-ish / descriptive strings** (`CILH4422711`, `US Treasury Bill - 3.52%…`), NOT clean tickers → symbol→`asset` resolution needs a CUSIP/`security_id`-keyed path for bonds, not ticker-only. A registry-design input.
+- **Credit-card history is issuer-capped** (Cap One ~3mo, Fidelity Visa ~1mo), NOT a config limit — Schwab checking returned the full 2yr under the same `days_requested: 730`, and `days_requested` is locked at Item creation with no documented widen-in-place path → **card backfill comes from the F/CTO's spreadsheet**, not the API.
+
+**Consequence:** gate (i) CLOSED. The worker build (SELF-197 successor) targets a **Plaid adapter + SimpleFIN adapter** behind `linked_source`. **SELF-212 (Plaid production sales call) now truly MOOT.** Gate (ii) (PM §2.4/§2.5 per-provider-connect re-scope) unchanged. This is a provider-selection call — **no schema, ledgers untouched.** Full empirical record: `temp/aggregator-strategy-memo.md`.
+
 ---
 
 ## ADR-026 — SELF-201 manual-account create path: `fn_create_manual_account` SECURITY INVOKER write-composition RPC (migration `013`) + audit-log same-transaction discipline deferred (A2, conscious deviation)
