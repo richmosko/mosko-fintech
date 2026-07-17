@@ -119,7 +119,14 @@ jobs:
           # purpose. With the flag, the fence proceeds to the grep stage and must
           # exit 1 on the fixture's create_engine()/connect() violations.
           set +e
-          bash scripts/ci/fence-tbc-pfin-back-etl.sh --allow-missing-class tests/fixtures/ci/
+          # Target the golden fixture FILE specifically (not the tests/fixtures/ci/
+          # dir). The dir now also contains tbc-basename-collision/db/core.py, which
+          # DECLARES class TenantBoundConnection — sweeping the whole dir would let
+          # inversion discover that class and muddy the "no class by design"
+          # semantics. File-targeting keeps inversion precise and mirrors the Node
+          # fence's inversion step. (The collision dir is exercised by its own
+          # production-mode regression step below.)
+          bash scripts/ci/fence-tbc-pfin-back-etl.sh --allow-missing-class tests/fixtures/ci/tbc-violation.py
           rc=$?
           set -e
           if [ $rc -ne 1 ]; then
@@ -127,6 +134,84 @@ jobs:
             exit 1
           fi
           echo "OK: TBC fence caught fixture violation (exit $rc)."
+
+      - name: TBC same-basename-collision regression (class present; expects violator caught)
+        # Python-parity regression test for the grep --exclude=<basename> false-negative
+        # (Sec, 2026-07-17): class at db/core.py + violator at etl/core.py (SAME basename).
+        # Run in PRODUCTION mode (class present → NO --allow-missing-class); the fence MUST
+        # exit 1 by catching the violator via full-path exclusion. Exit 0 = regression.
+        run: |
+          set +e
+          bash scripts/ci/fence-tbc-pfin-back-etl.sh tests/fixtures/ci/tbc-basename-collision/
+          rc=$?
+          set -e
+          if [ $rc -ne 1 ]; then
+            echo "FATAL: same-basename collision expected exit 1 (violator caught) but got exit $rc — basename false-negative regressed; failing closed."
+            exit 1
+          fi
+          echo "OK: TBC fence caught the same-basename violator (exit $rc)."
+
+  fence-tbc-node:
+    name: TBC-node — TenantBoundClient grep (production + inversion)
+    runs-on: ubuntu-latest
+    # ADR-019 amendment (F/CTO-ratified 2026-07-17): the Node/TS provider-sync
+    # worker (workers/provider-sync/) is the FIRST DB-touching Node worker. It needs
+    # a Node TenantBoundConnection-equivalent (TenantBoundClient) enforced fail-closed
+    # BEFORE any DB-touching worker code merges. This job is the Node analogue of
+    # fence-tbc; the Python patterns don't match TS, so it is a SEPARATE fence.
+    # Production-mode scopes to workers/provider-sync/src/; inversion-mode runs the
+    # golden fixture (tests/fixtures/ci/tbc-node-violation.ts), mirroring fence-tbc's
+    # dual-mode shape. See scripts/ci/fence-tbc-node.sh SANCTIONED-TRANSPORT CONTRACT.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: TBC-node production-mode (workers/provider-sync/src/ source tree)
+        # Scaffold posture: the worker source tree does not exist until Backend lands
+        # the implementation (task #12 / SELF-197+). Until then this step no-ops (the
+        # container Dockerfile + fence + fixture ship ahead of the app code). It
+        # becomes load-bearing at the first workers/provider-sync/src/ commit, where
+        # the fence fails closed if TenantBoundClient is absent (no --allow-missing-class).
+        run: |
+          if [ -d workers/provider-sync/src ]; then
+            bash scripts/ci/fence-tbc-node.sh workers/provider-sync/src/
+          else
+            echo "INFO: workers/provider-sync/src/ does not yet exist (pre-implementation scaffold)."
+            echo "INFO: TBC-node production-mode scope is empty; becomes load-bearing at first worker-source commit."
+          fi
+
+      - name: TBC-node inversion-mode (golden fixture; expects violation)
+        run: |
+          # --allow-missing-class: the fixture tree has no TenantBoundClient class by
+          # design. Without the flag, class-absence would fail closed (exit 2) and
+          # MASK whether the pattern set actually matched the fixture's deliberate
+          # violations. With the flag, the fence proceeds to grep and must exit 1 on
+          # the fixture's LEG 1 (postgres()/new Pool()/new Client()/@supabase import/
+          # createClient()) + LEG 2 (SUPABASE_SERVICE_ROLE_KEY absence tripwire) violations.
+          set +e
+          bash scripts/ci/fence-tbc-node.sh --allow-missing-class tests/fixtures/ci/tbc-node-violation.ts
+          rc=$?
+          set -e
+          if [ $rc -ne 1 ]; then
+            echo "FATAL: TBC-node inversion expected exit 1 (violations caught) but got exit $rc — fence is broken; failing closed."
+            exit 1
+          fi
+          echo "OK: TBC-node fence caught fixture violation (exit $rc)."
+
+      - name: TBC-node same-basename-collision regression (class present; expects violator caught)
+        # Regression test for the grep --exclude=<basename> false-negative (Sec, 2026-07-17):
+        # class at db/client.ts + violator at adapters/client.ts (SAME basename). Run in
+        # PRODUCTION mode (class present → NO --allow-missing-class); the fence MUST exit 1
+        # by catching the violator via full-path exclusion. Exit 0 = the false-negative regressed.
+        run: |
+          set +e
+          bash scripts/ci/fence-tbc-node.sh tests/fixtures/ci/tbc-node-basename-collision/
+          rc=$?
+          set -e
+          if [ $rc -ne 1 ]; then
+            echo "FATAL: same-basename collision expected exit 1 (violator caught) but got exit $rc — basename false-negative regressed; failing closed."
+            exit 1
+          fi
+          echo "OK: TBC-node fence caught the same-basename violator (exit $rc)."
 
   scanner-npm-audit:
     name: Dep scan — npm audit (high+critical)

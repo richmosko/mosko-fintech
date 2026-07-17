@@ -19,6 +19,9 @@ adjacent**, not a §10 attribution surface. See `scripts/ci/README.md` for the
 | `rt22-violation.Dockerfile` | RT-22 PDF worker Dockerfile audit | Violates BOTH catch criteria (i) `SUPABASE_*` env vars + (ii) Postgres client install in a single fixture. |
 | `rt26-violation/+page.svelte` | RT-26 `SUPABASE_SERVICE_ROLE_KEY` allowlist | Client-side Svelte page in routes-tree-shape path referencing the env var; path is NOT on the ADR-016 D1 allowlist registry. |
 | `tbc-violation.py` | TBC `TenantBoundConnection` grep | Raw `psycopg2.connect()` invocations outside the `TenantBoundConnection` class. |
+| `tbc-node-violation.ts` | TBC-node `TenantBoundClient` grep | LEG 1: raw `postgres()` / `new Pool()` / `new Client()` + banned `@supabase/supabase-js` `createClient()`/import outside the `TenantBoundClient` class. LEG 2: a literal `SUPABASE_SERVICE_ROLE_KEY` reference (Sec-condition absence tripwire). Node/TS provider-sync analogue. |
+| `tbc-basename-collision/` (`db/core.py` + `etl/core.py`) | TBC `TenantBoundConnection` grep | **Production-mode** regression for the `grep --exclude=<basename>` false-negative (Sec, 2026-07-17): class file + a same-basename violator in a different dir. Fence MUST exit 1 (violator caught via full-path exclusion). |
+| `tbc-node-basename-collision/` (`db/client.ts` + `adapters/client.ts`) | TBC-node `TenantBoundClient` grep | **Production-mode** regression (Node twin): class file + same-basename violator elsewhere. Fence MUST exit 1. |
 
 ## Fixture path discipline (Sec rubric (b)3 #2 + agent-def)
 
