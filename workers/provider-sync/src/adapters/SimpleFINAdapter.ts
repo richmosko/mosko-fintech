@@ -349,6 +349,11 @@ export class SimpleFINAdapter implements ProviderAdapter {
 	readonly #dbFor: AdmissionDbFactory | undefined;
 	readonly #logger: AdmissionLogger | undefined;
 	readonly #fetch: FetchLike;
+	/** errlist[] from the most recent /accounts GET (gappy-institution per-account failures).
+	 *  Surfaced (not swallowed) so the scheduler can land it in linked_source_sync_audit.detail
+	 *  (design §8 Sec risk #3). These are NON-credential provider error entries from a 200 body;
+	 *  credential-bearing failures throw a scrubbedSimplefinError instead and never reach here. */
+	#lastErrlist: unknown[] = [];
 
 	/**
 	 * @param dbFor  tenant-bound service_role DB factory — REQUIRED for connect()/revoke();
@@ -394,7 +399,16 @@ export class SimpleFINAdapter implements ProviderAdapter {
 		} catch {
 			throw scrubbedSimplefinError('accounts (malformed body)', resp.status);
 		}
-		return parseAccountsSet(body);
+		const set = parseAccountsSet(body);
+		this.#lastErrlist = set.errlist; // capture gappy-institution signal for the sync audit
+		return set;
+	}
+
+	/** errlist[] (gappy-institution per-account failures) from the most recent fetch* call —
+	 *  for linked_source_sync_audit.detail (design §8 Sec risk #3; surfaced, never swallowed).
+	 *  Empty until a fetch* has run. */
+	getLastErrlist(): unknown[] {
+		return [...this.#lastErrlist];
 	}
 
 	/** The ~89-day trailing window (SimpleFIN caps at ~90) + pending=1, epoch seconds. syncDate

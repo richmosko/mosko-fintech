@@ -65,8 +65,15 @@ export function pricingSourceForAssetType(assetType: string): string {
  * a blank/blank sweep (unvalued).
  */
 export async function resolveSecurityId(tx: Tx, a: ResolvableAsset): Promise<number | null> {
-	const cusip = blank(a.cusip) ? null : a.cusip!.trim();
-	const symbol = blank(a.symbol) ? null : a.symbol!.trim();
+	// Flag-2 V1-now case-normalize (slice 3b): canonicalize symbol + cusip to
+	// .trim().toUpperCase() so cross-provider case variants (Plaid `voo` vs SimpleFIN
+	// `VOO`) resolve + register to ONE global pfin.asset row. This local drives BOTH the
+	// resolve SELECTs (below) AND the auto-register INSERT stored value — so the DB store
+	// and every future lookup share the uppercased form, aligning the DB with assetKey()
+	// (which already uppercases; memo-vs-DB parity). The V1.x upper() expression-index is
+	// a separate later migration (Architect-owned), not this change.
+	const cusip = blank(a.cusip) ? null : a.cusip!.trim().toUpperCase();
+	const symbol = blank(a.symbol) ? null : a.symbol!.trim().toUpperCase();
 	if (cusip === null && symbol === null) return null; // §6.4 unvalued
 
 	// (1) cusip-first resolve.

@@ -32,6 +32,7 @@
 import postgres from 'postgres';
 import type { Sql } from 'postgres';
 import type { AdmissionDb, AdmissionDbFactory } from '../../src/adapters/SimpleFINAdapter.js';
+import type { Tx } from '../../src/db/TenantBoundClient.js';
 
 /** Integration tests run only when explicitly enabled (stack present). */
 export const RUN_DB_INTEGRATION = process.env.RUN_DB_INTEGRATION === '1';
@@ -90,4 +91,76 @@ export function makeLiveDbFor(
 			}) as Promise<T>) as AdmissionDb['withServiceRole'];
 		return { withServiceRole, end: () => sql.end() };
 	};
+}
+
+/**
+ * A live TenantBoundClient-shaped double for the G2 land-path integration test — the ONLY
+ * harness that exercises BOTH access modes on one connection (syncProviderData needs
+ * withTenant AND withServiceRole). It connects as the superuser test role (postgres) and
+ * SET-LOCAL-ROLEs into the SAME two execution contexts production's TenantBoundClient
+ * establishes:
+ *   • withTenant  → `set local role authenticated` + the two request.jwt claim GUCs, so
+ *     fn_ingest_transactions runs under RLS as the bound tenant (the account_trans_insert
+ *     wr_access-JOIN actually FENCES — it is not silently bypassed).
+ *   • withServiceRole → `set local role service_role` (BYPASSRLS) for the append-only
+ *     snapshot writes + the global-asset register + the guard-#3 eod_price upsert.
+ * The login identity differs (postgres vs the ratified `authenticator`) ONLY because the
+ * local authenticator password is not a fixed test constant; a superuser can SET ROLE into
+ * either target, and every property G2 asserts is a fact of what runs UNDER each role
+ * (RLS-enforced ingest under authenticated; idempotency under service_role), NOT of the
+ * login handshake. `begin`'s per-transaction LOCAL-role reset is IDENTICAL to production.
+ *
+ * The returned object is structurally a TenantBoundClient but not nominally one (its private
+ * #fields brand it) — the G2 test casts it `as unknown as TenantBoundClient` at the
+ * syncProviderData call site, exactly as poll.ts casts its structural PollClient.
+ */
+export interface LiveTenantClient {
+	withTenant<T>(fn: (tx: Tx) => Promise<T>): Promise<T>;
+	withServiceRole<T>(fn: (tx: Tx) => Promise<T>): Promise<T>;
+	end(): Promise<void>;
+}
+
+export function makeLiveTenantClient(usersId: string, conn: LiveConn = liveConn()): LiveTenantClient {
+	const sql = postgres({ ...conn, max: 1, prepare: false, onnotice: () => {} });
+	return {
+		withTenant: (<T>(fn: (tx: Tx) => Promise<T>): Promise<T> =>
+			sql.begin(async (tx) => {
+				await tx.unsafe('set local role authenticated');
+				const claims = JSON.stringify({ sub: usersId, role: 'authenticated' });
+				await tx`select set_config('request.jwt.claims', ${claims}, true)`;
+				await tx`select set_config('request.jwt.claim.sub', ${usersId}, true)`;
+				return fn(tx as unknown as Tx);
+			}) as Promise<T>) as LiveTenantClient['withTenant'],
+		withServiceRole: (<T>(fn: (tx: Tx) => Promise<T>): Promise<T> =>
+			sql.begin(async (tx) => {
+				await tx.unsafe('set local role service_role');
+				return fn(tx as unknown as Tx);
+			}) as Promise<T>) as LiveTenantClient['withServiceRole'],
+		end: () => sql.end()
+	};
+}
+
+/**
+ * Bulldoze all G2 test rows for a tenant + the ZZTG2 test asset. Append-only tables
+ * (account_trans / holdings_checkpoint / account_balance_checkpoint) carry immutability
+ * triggers that block DELETE for ALL roles incl. service_role — so the deletes run under
+ * `session_replication_role = 'replica'` (superuser-only), which suppresses user + FK/cascade
+ * triggers for THIS transaction only. Everything is deleted explicitly in dependency order,
+ * so cascade is not relied on. Idempotent: safe to run as both pre-clean (a prior aborted run
+ * may have left committed rows) and teardown. Keyed on stable identifiers (users_id + the
+ * global ZZTG2 symbol), so it never touches another tenant's data.
+ */
+export async function cleanupG2(db: Sql, usersId: string, assetSymbols: readonly string[]): Promise<void> {
+	await db.begin(async (tx) => {
+		await tx.unsafe("set local session_replication_role = 'replica'");
+		await tx`delete from pfin.account_trans where account_id in (select account_id from pfin.account where users_id = ${usersId})`;
+		await tx`delete from pfin.holdings_checkpoint where account_id in (select account_id from pfin.account where users_id = ${usersId})`;
+		await tx`delete from pfin.account_balance_checkpoint where account_id in (select account_id from pfin.account where users_id = ${usersId})`;
+		await tx`delete from pfin.eod_price where asset_id in (select asset_id from pfin.asset where users_id is null and symbol in ${tx(assetSymbols as string[])})`;
+		await tx`delete from pfin.asset where users_id is null and symbol in ${tx(assetSymbols as string[])}`;
+		await tx`delete from pfin.account_users where users_id = ${usersId}`;
+		await tx`delete from pfin.account where users_id = ${usersId}`;
+		await tx`delete from pfin.linked_source where users_id = ${usersId}`;
+		await tx`delete from auth.users where id = ${usersId}`;
+	});
 }
