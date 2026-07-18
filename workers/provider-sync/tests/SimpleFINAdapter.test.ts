@@ -231,6 +231,19 @@ describe('SimpleFINAdapter fetch* (injected fetch, delegate to normalizers)', ()
 		expect(symbols).toContain(null); // the blank-symbol sweep → unvalued
 	});
 
+	it('getLastErrlist() surfaces the most-recent /accounts errlist (gappy institution, for the sync audit)', async () => {
+		const adapter = new SimpleFINAdapter(undefined, undefined, async () => jsonResponse(fx.accountsSetWithErrlist));
+		expect(adapter.getLastErrlist()).toEqual([]); // empty before any fetch
+		await adapter.fetchTransactions(source, { start: '2026-04-01', end: '2026-07-18' });
+		expect(adapter.getLastErrlist()).toEqual([{ account: 'sfin_acct_gappy', error: 'act.missingdata' }]);
+	});
+
+	it('getLastErrlist() is empty for a clean /accounts set', async () => {
+		const adapter = new SimpleFINAdapter(undefined, undefined, async () => jsonResponse(fx.accountsSetClean));
+		await adapter.fetchBalances(source);
+		expect(adapter.getLastErrlist()).toEqual([]);
+	});
+
 	it('fetchTransactions flattens cash txns + requests the trailing window', async () => {
 		let qs = '';
 		const adapter = new SimpleFINAdapter(undefined, undefined, async (url) => {

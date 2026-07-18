@@ -9,7 +9,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "admit": "npm run build && node dist/cli/admit.js"
+    "test:integration": "RUN_DB_INTEGRATION=1 vitest run tests/integration",
+    "admit": "npm run build && node dist/cli/admit.js",
+    "poll": "npm run build && node dist/cli/poll.js"
   },
   "dependencies": {
     "plaid": "^27.0.0",

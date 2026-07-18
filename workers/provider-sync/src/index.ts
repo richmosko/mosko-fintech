@@ -1,10 +1,11 @@
-// index.ts — provider-sync public surface (PR #1: Foundation + Plaid path).
+// index.ts — provider-sync public surface.
 //
-// PR #1 SCOPE: the transport (TenantBoundClient), the Plaid adapter + normalizers, the
-// symbol→security_id resolution, and the DTO→landing mapper/orchestrator. The full sync
-// SCHEDULER (cron entrypoint, per-source cursor advance, linked_source_sync_audit writes,
-// SimpleFINAdapter, connect/revoke Vault admission) is DEFERRED to PR #2 — the Dockerfile
-// CMD stays the DevOps placeholder until then.
+// Landed across slices: the transport (TenantBoundClient), the Plaid + SimpleFIN adapters +
+// normalizers, credential admission (connect/revoke), account mapping, the symbol→security_id
+// resolution, the DTO→landing mapper/orchestrator (syncProviderData), and — slice 3b — the
+// SYNC SCHEDULER (the Coolify-cron `poll` entrypoint that enumerates active linked_source rows
+// and drives syncProviderData per source across both adapters, with per-source failure
+// isolation + scheduled_poll audit). DevOps owns the Dockerfile CMD / cron container.
 
 export { TenantBoundClient } from './db/TenantBoundClient.js';
 export type { Tx } from './db/TenantBoundClient.js';
@@ -34,3 +35,29 @@ export {
 export type { ProviderData, SyncResult } from './ingest/mapper.js';
 
 export { resolveSecurityId, resolveSecurityIds, assetKey, pricingSourceForAssetType } from './ingest/resolution.js';
+
+// Slice 3b — the SYNC SCHEDULER (Coolify-cron entrypoint `node dist/cli/poll.js`).
+export {
+	runPoll,
+	runPollLoop,
+	enumerateSources,
+	resolveCredential,
+	buildAdapter,
+	createPollHandlers,
+	trailingRange,
+	todayIso,
+	POLL_PROVIDERS
+} from './cli/poll.js';
+export type {
+	PollProvider,
+	SourceRow,
+	AuditDetail,
+	SourceSyncOutcome,
+	PollSummary,
+	PollHandlers,
+	PollClient,
+	FetchAdapter,
+	PollWiring,
+	SyncFn,
+	RunPollDeps
+} from './cli/poll.js';

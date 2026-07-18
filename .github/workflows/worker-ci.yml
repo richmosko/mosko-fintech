@@ -1,0 +1,116 @@
+# .github/workflows/worker-ci.yml
+#
+# provider-sync worker CI — slice 3b (DevOps, folds task #13 live-DB lane).
+#
+# Design anchors (mirrors the established run-always-vs-path-triggered split):
+#   - security-scan.yml = cheap grep fences, run-always, NO paths filter (fail-closed).
+#   - db-tests.yml      = heavy Postgres spin-up, path-triggered (opposite rationale).
+#   This file follows db-tests.yml: the worker suite (esp. the live-DB integration
+#   lane) is a heavier Node + Postgres job, so it is PATH-TRIGGERED on the worker
+#   tree + the migrations/config it consumes — a doc-only PR shouldn't spin a DB.
+#
+# Two jobs:
+#   - `unit`        : hermetic vitest + typecheck + build. Closes the gap that TODAY
+#                     only the fences (fence-tbc-node) touch worker code — a logic
+#                     regression in the adapters / mapper / resolution would otherwise
+#                     sail through. The integration specs self-SKIP LOUDLY here
+#                     (RUN_DB_INTEGRATION unset) — no false green.
+#   - `integration` : provisions the local Supabase stack (migrations 001–021, incl.
+#                     007 vault + 016/020 partial-unique indexes the SC-4 test needs),
+#                     sets RUN_DB_INTEGRATION=1, runs the live-DB lane (G2/G3/SC-4).
+#                     db-only via `-x` (the harness connects as postgres + SET LOCAL
+#                     ROLE service_role; no GoTrue/JWT path — same rationale as
+#                     db-tests.yml). Credentials-free: local DSN is not a secret, so
+#                     this lane does NOT touch the secrets-manifest non-overlap fence.
+#
+# TRANSPORT NOTE: this worker stays OFF the RT-26 allowlist (direct-Postgres
+# PFIN_DB_*, no @supabase/supabase-js, no SUPABASE_SERVICE_ROLE_KEY). fence-tbc-node
+# (security-scan.yml) mechanically enforces that; this file adds NO service-role key.
+
+name: Worker CI (provider-sync)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'workers/provider-sync/**'
+      - 'supabase/migrations/**'
+      - 'supabase/config.toml'
+      - '.github/workflows/worker-ci.yml'
+      - '.github/actions/supabase-cli-setup/**'
+  push:
+    branches: [main]  # also on main to catch direct-push regressions if branch protection ever lapses
+    paths:
+      - 'workers/provider-sync/**'
+      - 'supabase/migrations/**'
+      - 'supabase/config.toml'
+      - '.github/workflows/worker-ci.yml'
+      - '.github/actions/supabase-cli-setup/**'
+
+defaults:
+  run:
+    working-directory: workers/provider-sync
+
+jobs:
+  unit:
+    name: Unit + typecheck + build (hermetic)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'  # matches workers/provider-sync/Dockerfile FROM node:22-bookworm-slim
+
+      - name: Install deps (clean, lockfile-pinned)
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Unit tests (integration specs self-skip loudly — no RUN_DB_INTEGRATION)
+        run: npm run test
+
+  integration:
+    name: Live-DB integration lane (G2/G3/SC-4)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Supabase CLI (pinned, shared source of truth)
+        uses: ./.github/actions/supabase-cli-setup
+
+      - name: Start local stack (db-only; -x drops non-db services incl gotrue/auth)
+        # `supabase start` applies supabase/migrations/** (001–021) on bring-up —
+        # incl. 007 (vault: SimpleFINAdapterAdmission G3 needs vault.create_secret) and
+        # 016/020 (symbol/cusip partial-unique indexes: resolution SC-4 dedup). `-x`
+        # excludes the non-db service containers (the harness never uses GoTrue/JWT —
+        # it connects as postgres + SET LOCAL ROLE service_role). Invalid `-x` names
+        # only warn, so this list is safe across CLI versions.
+        working-directory: .
+        run: |
+          supabase start -x gotrue,realtime,storage-api,imgproxy,studio,edge-runtime,logflare,vector,supavisor,postgres-meta,mailpit
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install deps (clean, lockfile-pinned)
+        run: npm ci
+
+      - name: Run live-DB integration lane
+        # `npm run test:integration` = `RUN_DB_INTEGRATION=1 vitest run tests/integration`
+        # (workers/provider-sync/package.json) — the single source of truth for the lane,
+        # so CI and local-dev run the IDENTICAL command. RUN_DB_INTEGRATION=1 flips
+        # tests/integration/_liveDb.ts from loud-skip to live; PFIN_DB_* stays at the
+        # _liveDb.ts local defaults (127.0.0.1:54322, postgres/postgres) — the supabase
+        # local stack DSN, NOT a secret.
+        run: npm run test:integration
+
+      - name: Stop local stack
+        if: always()
+        working-directory: .
+        run: supabase stop --no-backup || true

@@ -74,11 +74,29 @@ export type Tx = Sql;
 export class TenantBoundClient {
 	/** The SOLE raw Postgres client in provider-sync/src (fence anchor). */
 	readonly #sql: Sql;
-	readonly #usersId: string;
+	/** The bound tenant, or null for an ENUMERATION-ONLY client (service_role, no RLS
+	 *  context to bind → withTenant() is disabled fail-closed). */
+	readonly #usersId: string | null;
 
-	private constructor(sql: Sql, usersId: string) {
+	private constructor(sql: Sql, usersId: string | null) {
 		this.#sql = sql;
 		this.#usersId = usersId;
+	}
+
+	/** The SOLE raw Postgres client construction site (fence-tbc-node LEG 1 anchor).
+	 *  Both factories funnel through here so the raw `postgres()` call appears exactly
+	 *  once in the whole worker source tree. */
+	static #connect(config: WorkerConfig): Sql {
+		return postgres({
+			host: config.db.host,
+			port: config.db.port,
+			database: config.db.database,
+			username: config.db.user,
+			password: config.db.password,
+			max: 1, // single short-lived worker connection (NullPool-equivalent posture)
+			prepare: true,
+			onnotice: () => {} // suppress NOTICE noise; failures still throw
+		});
 	}
 
 	/**
@@ -89,21 +107,33 @@ export class TenantBoundClient {
 		if (!usersId || !/^[0-9a-f-]{36}$/i.test(usersId)) {
 			throw new Error('TenantBoundClient.forTenant requires a real users_id (uuid).');
 		}
-		const sql = postgres({
-			host: config.db.host,
-			port: config.db.port,
-			database: config.db.database,
-			username: config.db.user,
-			password: config.db.password,
-			max: 1, // single short-lived worker connection (NullPool-equivalent posture)
-			prepare: true,
-			onnotice: () => {} // suppress NOTICE noise; failures still throw
-		});
-		return new TenantBoundClient(sql, usersId);
+		return new TenantBoundClient(TenantBoundClient.#connect(config), usersId);
 	}
 
-	/** The bound tenant (read-only; the binding is immutable per instance). */
-	get usersId(): string {
+	/**
+	 * Construct an ENUMERATION-ONLY client: a privileged service_role connection NOT bound
+	 * to any tenant. Its ONLY sanctioned use is a cross-tenant service_role SELECT (the sync
+	 * scheduler enumerating poll-eligible pfin.linked_source rows across all tenants —
+	 * Decision 1 privileged-context read). `withTenant()` is DISABLED (throws fail-closed) —
+	 * there is no tenant to bind an RLS context to, so no authenticated-tier statement may
+	 * run on this client. The scheduler reads the source list here, then constructs a
+	 * per-source `forTenant(row.users_id)` client for the actual per-tenant landing (the
+	 * per-source isolation anchor). withServiceRole is BYPASSRLS, so the absent binding does
+	 * not weaken tenant isolation on this read — the read is deliberately cross-tenant.
+	 * (Posture surface — Sec joint-review GREEN at the slice-3b gate.)
+	 *
+	 * READ-ONLY CONVENTION (Sec hardening): use this client's withServiceRole for the
+	 * enumeration SELECT ONLY. Do NOT run a service_role WRITE on a null-tenant client — a
+	 * write here has no tenant to attribute rows to. (The DB-side matched-tenant + #7/#11
+	 * fences are role-agnostic and would still fire, but keep the read-only intent explicit
+	 * at the call site.) Per-tenant writes go through a forTenant(users_id) client.
+	 */
+	static forEnumeration(config: WorkerConfig): TenantBoundClient {
+		return new TenantBoundClient(TenantBoundClient.#connect(config), null);
+	}
+
+	/** The bound tenant, or null for an enumeration-only client (read-only; immutable). */
+	get usersId(): string | null {
 		return this.#usersId;
 	}
 
@@ -111,16 +141,24 @@ export class TenantBoundClient {
 	 * INVOKER / caller-RLS path. Runs `fn` inside a transaction bound to the tenant's
 	 * RLS context (role authenticated + jwt sub = usersId). Use for fn_ingest_transactions
 	 * and any authenticated-tier RLS-enforced read/write (e.g. account_id resolution).
+	 * Fail-closed on an enumeration-only client (no tenant bound).
 	 */
 	async withTenant<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
+		if (this.#usersId === null) {
+			throw new Error(
+				'withTenant() is disabled on an enumeration-only TenantBoundClient (no tenant bound). ' +
+					'Construct a per-source forTenant(config, users_id) client for tenant-scoped work.'
+			);
+		}
+		const usersId = this.#usersId;
 		return this.#sql.begin(async (tx) => {
 			await tx.unsafe('set local role authenticated');
 			// Bind auth.uid() → the tenant. Both GUCs set to cover the auth.uid()
 			// implementation variants (jsonb `request.jwt.claims` and the flat
 			// `request.jwt.claim.sub`). set_config(..., true) = LOCAL (tx-scoped).
-			const claims = JSON.stringify({ sub: this.#usersId, role: 'authenticated' });
+			const claims = JSON.stringify({ sub: usersId, role: 'authenticated' });
 			await tx`select set_config('request.jwt.claims', ${claims}, true)`;
-			await tx`select set_config('request.jwt.claim.sub', ${this.#usersId}, true)`;
+			await tx`select set_config('request.jwt.claim.sub', ${usersId}, true)`;
 			return fn(tx as unknown as Tx);
 		}) as Promise<T>;
 	}
@@ -130,6 +168,8 @@ export class TenantBoundClient {
 	 * (BYPASSRLS, Decision 1 privileged-context-write). Use for the provider snapshot /
 	 * valuation / global-asset writes that authenticated may not perform. The DB-side
 	 * #7/#11 security_id fences + NaN/qty CHECKs still fire (role-agnostic).
+	 * NOTE: on an enumeration-only client (forEnumeration → null tenant), use this for the
+	 * cross-tenant READ ONLY — a service_role WRITE there has no tenant to attribute rows to.
 	 */
 	async withServiceRole<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
 		return this.#sql.begin(async (tx) => {

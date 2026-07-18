@@ -1,0 +1,2 @@
+# Build output (tsc outDir) — never committed; rebuilt in CI + the Docker build stage.
+dist/
