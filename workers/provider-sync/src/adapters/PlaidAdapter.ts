@@ -19,6 +19,7 @@
 //      (OWD-2a DEFERRED to V1.3). getLastSyncDiagnostics() surfaces the counts.
 
 import { z } from 'zod';
+import type { Tx } from '../db/TenantBoundClient.js';
 import type {
 	BalanceDTO,
 	CorrectionCounts,
@@ -26,6 +27,7 @@ import type {
 	HoldingDTO,
 	ProviderAccountRef,
 	ProviderAdapter,
+	RevokeRef,
 	SourceRef,
 	TransactionDTO
 } from './ProviderAdapter.js';
@@ -248,6 +250,16 @@ export function normalizeAccountRef(rawAccount: unknown): ProviderAccountRef {
 // type level; the real client is injected at construction.
 export interface PlaidClientLike {
 	accountsGet(req: { access_token: string }): Promise<{ data: { accounts: unknown[] } }>;
+	// Credential-admission surface (connect/revoke). Structural subset of the Plaid SDK.
+	itemPublicTokenExchange(req: {
+		public_token: string;
+	}): Promise<{ data: { access_token: string; item_id: string } }>;
+	itemRemove(req: { access_token: string }): Promise<{ data: unknown }>;
+	// Dev-CLI-only sandbox mint (never a production admission path — SC3-C2).
+	sandboxPublicTokenCreate(req: {
+		institution_id: string;
+		initial_products: string[];
+	}): Promise<{ data: { public_token: string } }>;
 	transactionsSync(req: {
 		access_token: string;
 		cursor?: string;
@@ -268,13 +280,104 @@ export interface PlaidClientLike {
 	}>;
 }
 
+// ── Credential-admission plumbing (connect/revoke) ───────────────────────────────
+
+/**
+ * The minimal DB surface connect()/revoke() need: a service_role transaction runner +
+ * a close(). TenantBoundClient satisfies this structurally (its withServiceRole runs
+ * `SET LOCAL ROLE service_role` — Decision 1 privileged-context-write). Kept structural
+ * so the admission logic unit-tests against a mocked DB with NO live Postgres.
+ */
+export interface AdmissionDb {
+	withServiceRole<T>(fn: (tx: Tx) => Promise<T>): Promise<T>;
+	end(): Promise<void>;
+}
+
+/**
+ * Factory: resolve a tenant-bound service_role client for `usersId`. Production wiring is
+ * `(usersId) => TenantBoundClient.forTenant(config, usersId)` — the factory (not this file)
+ * constructs the raw Postgres client, so the TBC-node fence stays satisfied.
+ */
+export type AdmissionDbFactory = (usersId: string) => AdmissionDb;
+
+/** Optional token-free diagnostic logger (SC3-C4: the access_token is NEVER passed here). */
+export type AdmissionLogger = (message: string) => void;
+
+/** Canonical uuid (stricter than TenantBoundClient's loose guard — fail-closed on shape). */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function assertUuid(value: string, label: string): void {
+	if (!UUID_RE.test(value)) {
+		// Fail-closed BEFORE any admission write (SC3-C3). Message carries the LABEL only,
+		// never a credential.
+		throw new Error(`provider-sync admission: ${label} must be a well-formed uuid (fail-closed).`);
+	}
+}
+
+/** connect() input shape — `.strict()` (SC mass-assignment prevention, Lock 14 mod #1). */
+const connectSetupSchema = z
+	.object({
+		provider: z.literal('plaid'),
+		publicToken: z.string().min(1),
+		ownerUserId: z.string().min(1),
+		institutionId: z.string().optional(),
+		institutionName: z.string().optional()
+	})
+	.strict();
+
+/** The exchange response fields we consume (external-input boundary hardening). */
+const exchangeSchema = z.object({
+	access_token: z.string().min(1),
+	item_id: z.string().min(1)
+});
+
+/** Extract a Plaid error_code from an SDK/axios error without touching credential-bearing
+ *  fields (err.config.data carries access_token + PLAID_SECRET — never read/surface it). */
+export function plaidErrorCode(err: unknown): string | null {
+	const e = err as { response?: { data?: { error_code?: unknown } }; error_code?: unknown } | null | undefined;
+	const code = e?.response?.data?.error_code ?? e?.error_code;
+	return typeof code === 'string' ? code : null;
+}
+
+/** Build a SCRUBBED error for a failed Plaid call. SC3-C4: the raw SDK/axios error carries
+ *  the access_token + client secret in err.config.data — we discard the whole object and
+ *  keep only the (non-sensitive) error_code + operation label. */
+export function scrubbedPlaidError(err: unknown, op: string): Error {
+	const code = plaidErrorCode(err);
+	return new Error(`Plaid ${op} failed${code ? ` (${code})` : ''}`);
+}
+
 export class PlaidAdapter implements ProviderAdapter {
 	readonly provider = 'plaid' as const;
 	readonly #client: PlaidClientLike;
+	readonly #dbFor: AdmissionDbFactory | undefined;
+	readonly #logger: AdmissionLogger | undefined;
 	#lastCorrections: CorrectionCounts = { modified: 0, removed: 0, cancelled: 0 };
 
-	constructor(client: PlaidClientLike) {
+	/**
+	 * @param client Plaid SDK (structural subset).
+	 * @param dbFor  tenant-bound service_role DB factory — REQUIRED for connect()/revoke();
+	 *               fetch* paths do not use it (existing PR #1 callers pass only `client`).
+	 * @param logger optional token-free diagnostic logger (SC3-C4).
+	 */
+	constructor(client: PlaidClientLike, dbFor?: AdmissionDbFactory, logger?: AdmissionLogger) {
 		this.#client = client;
+		this.#dbFor = dbFor;
+		this.#logger = logger;
+	}
+
+	#requireDbFor(): AdmissionDbFactory {
+		if (!this.#dbFor) {
+			throw new Error(
+				'PlaidAdapter credential admission (connect/revoke) requires a dbFor factory; ' +
+					'construct with new PlaidAdapter(client, dbFor).'
+			);
+		}
+		return this.#dbFor;
+	}
+
+	#log(message: string): void {
+		this.#logger?.(message);
 	}
 
 	/** Correction counts from the most recent fetchTransactions — for sync_audit.detail
@@ -346,24 +449,162 @@ export class PlaidAdapter implements ProviderAdapter {
 		return out;
 	}
 
-	// ── connect() / revoke() — Vault credential admission surface. ──────────────────
-	// DEFERRED beyond PR #1: both touch linked_source (015) service_role writes +
-	// vault.create_secret / provider-side revoke (a distinct Sec-sensitive credential-
-	// admission surface). PR #1 is the INGEST core (fetch normalize + landing). These
-	// are stubbed explicit-throw so the interface is satisfied without a half-built
-	// credential path. Flagged for the follow-up (connect/revoke + Vault + linked_source).
-	async connect(): Promise<{ sourceId: bigint; accounts: ProviderAccountRef[] }> {
-		throw new Error(
-			'PlaidAdapter.connect (Vault credential admission → linked_source) is a follow-up ' +
-				'surface, not built in PR #1 (ingest core). Route the credential-admission design to Sec.'
-		);
+	// ── connect() — Vault credential admission (design §1.1 / §3 / §4 / §6). ─────────
+	// Worker-owns-exchange (ratified one-way-door): the worker does the Plaid exchange +
+	// vault.create_secret + INSERT linked_source under service_role. api/src (future) is a
+	// thin relay handing only the short-lived public_token. Account-mapping (writing
+	// pfin.account) is a SEPARATE slice — this returns account refs only.
+	async connect(setup: unknown): Promise<{ sourceId: bigint; accounts: ProviderAccountRef[] }> {
+		const dbFor = this.#requireDbFor();
+		const s = connectSetupSchema.parse(setup); // `.strict()` — mass-assignment prevention.
+		assertUuid(s.ownerUserId, 'ownerUserId'); // SC3-C3: fail-closed BEFORE any admission.
+
+		// (1) Provider exchange — the ONLY place the raw access_token is in process memory.
+		let accessToken: string;
+		let itemId: string;
+		try {
+			const { data } = await this.#client.itemPublicTokenExchange({ public_token: s.publicToken });
+			const ex = exchangeSchema.parse(data);
+			accessToken = ex.access_token;
+			itemId = ex.item_id;
+		} catch (err) {
+			throw scrubbedPlaidError(err, 'item/public_token/exchange'); // SC3-C4.
+		}
+
+		// Account refs (no pfin.account write — separate slice / defers the D3 #6 fence).
+		let accounts: ProviderAccountRef[];
+		try {
+			const { data } = await this.#client.accountsGet({ access_token: accessToken });
+			accounts = data.accounts.map((a) => normalizeAccountRef(a));
+		} catch (err) {
+			throw scrubbedPlaidError(err, 'accounts/get'); // SC3-C4.
+		}
+
+		// (2) Admission — ONE service_role transaction (Decision 1 privileged-context-write).
+		//   create_secret + INSERT are ATOMIC: a crash between them would orphan a never-
+		//   referenced vault.secrets row (the retention trigger only fires on linked_source
+		//   DELETE). The access_token is bound as a query PARAMETER (postgres.js sends $N,
+		//   never interpolated into the query text) → a DB error cannot echo it (SC3-C4).
+		const meta = JSON.stringify({ item_id: itemId });
+		const label = `plaid:item:${itemId}`;
+		const desc = `provider-sync linked_source credential (plaid item ${itemId})`;
+		const db = dbFor(s.ownerUserId); // TenantBoundClient.forTenant re-validates the uuid.
+		try {
+			const sourceId = await db.withServiceRole(async (tx) => {
+				// Re-admission dedup on (provider, external_connection_id) — the shipped
+				// linked_source_provider_conn_uidx (015). For Plaid, external id = item_id.
+				const existing = await tx<{ source_id: string; credential_secret_id: string | null; users_id: string }[]>`
+					select source_id, credential_secret_id, users_id
+					  from pfin.linked_source
+					 where provider = 'plaid' and external_connection_id = ${itemId}`;
+				const found = existing[0];
+				if (found) {
+					// SC3-C8: the matched row MUST belong to the admitting tenant. Under
+					// service_role the dedup match is RLS-bypassed, so an item_id colliding with
+					// ANOTHER tenant's source would otherwise let a re-admission rotate/UPDATE
+					// that tenant's credential. Make the "item_id is globally unique so it's
+					// safe" invariant EXPLICIT + fail-closed (parity with the revoke #1 guard).
+					if (found.users_id !== s.ownerUserId) {
+						throw new Error(
+							'provider-sync admission: re-admission tenant mismatch — the existing ' +
+								'source for this provider/connection belongs to a different tenant (fail-closed).'
+						);
+					}
+					// Credential rotation on the SAME item (Plaid update-mode re-auth keeps
+					// item_id). REUSE the same secret handle via vault.update_secret — swapping
+					// to a new secret would orphan the old vault row (trigger fires on DELETE,
+					// not UPDATE). UPDATE the existing row in place (linked_source is mutable).
+					if (found.credential_secret_id) {
+						await tx`select vault.update_secret(${found.credential_secret_id}::uuid, ${accessToken}, ${label}, ${desc})`;
+					} else {
+						// Was credential-less (manual/import) → mint + attach a secret in place.
+						const created = await tx<{ secret_id: string }[]>`
+							select vault.create_secret(${accessToken}, ${label}, ${desc}) as secret_id`;
+						const secretId = created[0]?.secret_id;
+						if (!secretId) throw new Error('provider-sync admission: vault.create_secret returned no id.');
+						await tx`update pfin.linked_source set credential_secret_id = ${secretId} where source_id = ${found.source_id}`;
+					}
+					await tx`
+						update pfin.linked_source
+						   set connection_status = 'healthy',
+						       provider_metadata = ${meta}::jsonb,
+						       institution_id    = ${s.institutionId ?? null},
+						       institution_name  = ${s.institutionName ?? null},
+						       updated_at = now()
+						 where source_id = ${found.source_id}`;
+					return BigInt(found.source_id);
+				}
+
+				// New connection: atomic create_secret + INSERT (users_id bound in code —
+				// auth.uid() is NULL under service_role, so the default won't stamp; §4).
+				const created = await tx<{ secret_id: string }[]>`
+					select vault.create_secret(${accessToken}, ${label}, ${desc}) as secret_id`;
+				const secretId = created[0]?.secret_id;
+				if (!secretId) throw new Error('provider-sync admission: vault.create_secret returned no id.');
+				const inserted = await tx<{ source_id: string }[]>`
+					insert into pfin.linked_source
+						(provider, credential_secret_id, external_connection_id, provider_metadata,
+						 connection_status, users_id, institution_id, institution_name)
+					values
+						('plaid', ${secretId}, ${itemId}, ${meta}::jsonb,
+						 'healthy', ${s.ownerUserId}, ${s.institutionId ?? null}, ${s.institutionName ?? null})
+					returning source_id`;
+				const newId = inserted[0]?.source_id;
+				if (!newId) throw new Error('provider-sync admission: INSERT linked_source returned no source_id.');
+				return BigInt(newId);
+			});
+			// SC3-C4: token-free diagnostic; the return carries NO access_token.
+			this.#log(`admitted plaid source source_id=${sourceId} (accounts=${accounts.length})`);
+			return { sourceId, accounts };
+		} finally {
+			await db.end();
+		}
 	}
 
-	async revoke(): Promise<void> {
-		throw new Error(
-			'PlaidAdapter.revoke (provider-side revoke + linked_source/Vault delete; retention ' +
-				'hard-gate) is a follow-up surface, not built in PR #1.'
-		);
+	// ── revoke() — provider revoke-then-delete (design §1.2 / §5; retention hard-gate). ──
+	// Order is non-negotiable: read credential → Plaid /item/remove → THEN DELETE (fires
+	// the vault-secret cleanup trigger). ABORT on revoke failure (SC3-C5) — never orphan a
+	// live provider grant. ITEM_NOT_FOUND → proceed (idempotent / crash-safe). Tenant-scoped
+	// (defense-in-depth): every statement filters users_id = ownerUserId.
+	async revoke(ref: RevokeRef): Promise<void> {
+		const dbFor = this.#requireDbFor();
+		assertUuid(ref.ownerUserId, 'ownerUserId'); // fail-closed.
+		const db = dbFor(ref.ownerUserId);
+		try {
+			// (1) Read credential via the service_role-only decrypt view (tenant-scoped).
+			const sourceId = String(ref.sourceId); // postgres.js: bind bigint as text + ::bigint cast.
+			const credential = await db.withServiceRole(async (tx) => {
+				const rows = await tx<{ decrypted_credential: string }[]>`
+					select decrypted_credential
+					  from pfin.decrypted_source_credential
+					 where source_id = ${sourceId}::bigint and users_id = ${ref.ownerUserId}`;
+				return rows[0]?.decrypted_credential ?? null;
+			});
+
+			// (2) Provider revoke BEFORE delete. ABORT on failure (SC3-C5) → no DELETE runs
+			//     → both the vault secret AND the row stay intact (retry-safe). A credential-
+			//     less / already-gone source (no view row) skips straight to the idempotent
+			//     tenant-scoped DELETE (0 rows if not owned → safe no-op).
+			if (credential !== null) {
+				try {
+					await this.#client.itemRemove({ access_token: credential });
+				} catch (err) {
+					if (plaidErrorCode(err) !== 'ITEM_NOT_FOUND') {
+						throw scrubbedPlaidError(err, 'item/remove'); // SC3-C4 + SC3-C5 abort.
+					}
+					// ITEM_NOT_FOUND → already revoked at provider → proceed (idempotent).
+				}
+			}
+
+			// (3) Delete the row → fires fn_linked_source_cleanup_vault_secret (service_role
+			//     holds DELETE on vault.secrets → secret cleaned).
+			await db.withServiceRole(async (tx) => {
+				await tx`delete from pfin.linked_source where source_id = ${sourceId}::bigint and users_id = ${ref.ownerUserId}`;
+			});
+			this.#log(`revoked plaid source source_id=${ref.sourceId}`);
+		} finally {
+			await db.end();
+		}
 	}
 }
 
