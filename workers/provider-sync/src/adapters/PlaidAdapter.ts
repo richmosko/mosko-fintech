@@ -108,6 +108,61 @@ export function isCurrencyHolding(security: Pick<PlaidSecurity, 'ticker_symbol' 
 	return t.toUpperCase().startsWith('CUR:') || (security.type ?? '').toLowerCase() === 'cash';
 }
 
+/**
+ * Retirement-subtype allowlist (ADR-027 amendment §4.1 / Q3). A Plaid `investment`-type
+ * account whose subtype is one of these maps to account_type='retirement' (which then nudges
+ * tax_treatment → 'tax_deferred'); every other investment subtype maps to 'investment'.
+ * Grounded in the design memo's Q3 table (the enumerated 401k/403b/457b/ira/roth/roth 401k/
+ * sep ira/simple ira/pension/retirement) + the direct US-plan Plaid equivalents. Lower-cased
+ * match. The ONE provider-specific list — kept here on the Plaid adapter, not the generic mapper.
+ */
+const PLAID_RETIREMENT_SUBTYPES: ReadonlySet<string> = new Set([
+	'401a',
+	'401k',
+	'403b',
+	'457b',
+	'ira',
+	'roth',
+	'roth ira',
+	'roth 401k',
+	'sep ira',
+	'sep',
+	'simple ira',
+	'simple',
+	'pension',
+	'retirement',
+	'keogh',
+	'sarsep',
+	'tsp'
+]);
+
+/**
+ * Map a Plaid account `type`/`subtype` → the 003 account_type CHECK enum
+ * (depository/investment/retirement/crypto/manual_other/real_estate/liability). ADR-027
+ * amendment §4.1 (Q3), ratified:
+ *   - depository            → 'depository'
+ *   - credit | loan         → 'liability'
+ *   - investment            → 'retirement' IFF subtype ∈ PLAID_RETIREMENT_SUBTYPES, else 'investment'
+ *   - any unrecognized type → 'manual_other' (fallback; a data-quality flag, corrected at SELF-212)
+ * No auto-assignment to crypto/real_estate — Plaid has no clean signal; reachable only via
+ * the SELF-212 override.
+ */
+export function mapPlaidAccountType(type: string, subtype: string | null): string {
+	const t = (type ?? '').toLowerCase().trim();
+	const s = (subtype ?? '').toLowerCase().trim();
+	switch (t) {
+		case 'depository':
+			return 'depository';
+		case 'credit':
+		case 'loan':
+			return 'liability';
+		case 'investment':
+			return PLAID_RETIREMENT_SUBTYPES.has(s) ? 'retirement' : 'investment';
+		default:
+			return 'manual_other';
+	}
+}
+
 /** Map a Plaid security.type → the pfin.asset.asset_type vocab (016 R-9). Unknown market
  *  securities default to 'equity' (the least-wrong market bucket; logged upstream). */
 export function normalizeAssetType(plaidType: string | null | undefined): string {
@@ -349,6 +404,13 @@ export function scrubbedPlaidError(err: unknown, op: string): Error {
 
 export class PlaidAdapter implements ProviderAdapter {
 	readonly provider = 'plaid' as const;
+
+	/** Plaid `type`/`subtype` → 003 account_type CHECK enum (ADR-027 amendment §4.1). The
+	 *  account-mapping slice (accountMapper.landAccounts) passes this as its AccountTypeMapper. */
+	static mapAccountType(type: string, subtype: string | null): string {
+		return mapPlaidAccountType(type, subtype);
+	}
+
 	readonly #client: PlaidClientLike;
 	readonly #dbFor: AdmissionDbFactory | undefined;
 	readonly #logger: AdmissionLogger | undefined;

@@ -1,0 +1,100 @@
+-- ============================================================================
+-- Migration: pfin.account — partial UNIQUE INDEX (linked_source_id, provider_account_id)
+-- Phase 6 Build Loop (provider-sync account-mapping slice; ADR-027 amendment —
+-- account-mapping). Adds the dedup constraint + ON CONFLICT arbiter that the
+-- account-mapping write path (workers/provider-sync/src/ingest/accountMapper.ts —
+-- landAccounts) needs so a re-run of connect+map on the same source cannot create
+-- a duplicate pfin.account row per provider account.
+--
+-- Numbering: 021 follows 020 (asset_global_write_path). Depends only on 003
+-- (pfin.account exists) + 015 STEP 7 (the account link columns linked_source_id +
+-- provider_account_id were ALTER-added there). INDEX-ONLY; no function, no RLS,
+-- no new column, no FK, no trigger. RENUMBER NOTE: the planned allocation-junction
+-- migration (previously the next slot) shifts to 022 — migrations are append-only
+-- sequential; landed 001-020 are unchanged. (Recorded in ADR-027 amendment +
+-- the 015-substrate sequence tracking, temp/015-ingest-substrate-design.md §16.)
+--
+-- ----------------------------------------------------------------------------
+-- POSTURE RATIONALE — index-only; no INVOKER/DEFINER question applies.
+--   This migration authors NO function, so the SECURITY INVOKER vs DEFINER decision
+--   (ADR-011 Lock 11 / Decision 9) does not arise. The SECURITY DEFINER allowlist
+--   is UNCHANGED at 3 (fn_refresh_updated_at + fn_grant_creator_access + the still-
+--   unauthored audit-log helper). A UNIQUE INDEX is a role-agnostic structural
+--   invariant — it fences duplicate rows under authenticated (the account-mapping
+--   INVOKER write path, ADR-027 amendment Q1) AND under service_role, identically.
+--
+-- ----------------------------------------------------------------------------
+-- WHY — structural idempotency for account-mapping re-run (ratified Q5-(b)).
+--   The account-mapping slice writes one pfin.account row per provider account
+--   surfaced by connect() (ProviderAccountRef → account, setting linked_source_id +
+--   provider_account_id). A second connect+map on the same source MUST NOT duplicate
+--   those rows. F/CTO ratified the STRUCTURAL dedup (a partial unique index +
+--   ON CONFLICT DO NOTHING in landAccounts) over the app-level SELECT-guard
+--   alternative — consistent with 015's linked_source_provider_conn_uidx, which
+--   dedups connections the same structural way, and TOCTOU-free (the app SELECT-then-
+--   insert guard is not). The invariant is documented in the schema, not just in code.
+--
+--   RECONCILIATION-MODEL COMMITMENT (the mild one-way door flagged at ratify).
+--     This index pins "one canonical pfin.account row per (linked_source, provider
+--     account) — a re-map is a no-op, never a second row." The SELF-212 remove/re-add-
+--     connection UX must honor this (a re-added provider account reactivates via
+--     is_active, it does NOT create a second row). Reversing later (modelling
+--     connect/disconnect history as multiple rows) would need DROP INDEX + a
+--     dedup/merge migration. Ratified as the intended model.
+--
+-- ----------------------------------------------------------------------------
+-- PARTIAL PREDICATE — WHERE linked_source_id IS NOT NULL (manual accounts exempt).
+--   Manual/unlinked accounts (SELF-201; linked_source_id NULL, provider_account_id
+--   NULL) are OUTSIDE this index by construction — a user may hold many manual
+--   accounts and they carry no provider identity to dedup on. The uniqueness applies
+--   ONLY to provider-linked rows, keyed by the source + the provider-native id.
+--   (Among linked rows, provider_account_id is always set by the mapper; a NULL there
+--   would be treated as distinct by the index, which is the correct no-op — nothing
+--   to dedup.)
+--
+-- ----------------------------------------------------------------------------
+-- §10 3-AXIS CROSS-CHECK (Path B — reference ADR-011 Decision 4; do NOT restate
+--   the catalogued numbered list; Decision 4 read verbatim before drafting).
+--   ZERO catalogued §10 instances; ledger stays at 2 (RT-22 + RT-26). (i) instance-
+--   numbering — RT-22 first / RT-26 second, unchanged. (ii) layer-attribution — a
+--   table index; no infra-credential-presence (RT-22) or SUPABASE_SERVICE_ROLE_KEY
+--   code-layer allowlist (RT-26) surface touched; the account-mapping write path is
+--   authenticated-tier INVOKER (no service_role → RT-26 untouched). (iii) Decision 4
+--   linked, not restated.
+--
+-- DECISION 3 (cross-tenant FK-bypass family) EVALUATION — family +0 (stays 8).
+--   This migration adds NO FK-shaped column. The two indexed columns:
+--     - provider_account_id : TEXT provider-native id — NOT a pfin FK → NOT a
+--       Decision-3 instance (015 STEP 7 already established this attribution).
+--     - linked_source_id    : the FK → pfin.linked_source(source_id) already carries
+--       Decision-3 CANONICAL INSTANCE #6 (fn_account_matched_linked_source, 015
+--       STEP 8, BEFORE INSERT OR UPDATE matched-tenant fence). Indexing it adds NO
+--       new instance — the account-mapping write EXERCISES #6, it does not create one.
+--   The canonical enumeration (ADR-011 Decision 3) is UNCHANGED at 8.
+--
+-- ----------------------------------------------------------------------------
+-- QA TEST-PAIRING (same-PR; QA-authored — Architect does not edit tests/).
+--   The two-tenant pgTAP battery extends to the provider-linked account write path:
+--     - a duplicate (linked_source_id, provider_account_id) INSERT fails (this index);
+--     - cross-tenant account↔source linking fails closed (the #6 fence, exercised);
+--     - owner maps + reads own linked accounts (positive path).
+--   Sec joint-review-mandatory (Q5 dedup + the D3 #6-fence exercise). Not a vacuous
+--   green — the fixture must populate two tenants.
+--
+-- CONTRACT
+--   pfin.account gains partial UNIQUE INDEX account_linked_source_provider_uidx
+--     ON (linked_source_id, provider_account_id) WHERE linked_source_id IS NOT NULL.
+--     Serves both as the dedup invariant and the ON CONFLICT arbiter for landAccounts
+--     (ON CONFLICT (linked_source_id, provider_account_id) WHERE linked_source_id
+--     IS NOT NULL DO NOTHING). Idempotent (CREATE UNIQUE INDEX IF NOT EXISTS).
+--     Greenfield: no existing linked rows to violate it.
+-- ============================================================================
+
+create schema if not exists pfin;
+
+create unique index if not exists account_linked_source_provider_uidx
+  on pfin.account (linked_source_id, provider_account_id)
+  where linked_source_id is not null;
+
+comment on index pfin.account_linked_source_provider_uidx is
+  'Partial UNIQUE dedup index for the provider-sync account-mapping slice (ADR-027 amendment / account-mapping Q5-(b)). Enforces one canonical pfin.account row per (linked_source_id, provider_account_id) for provider-linked accounts; the ON CONFLICT arbiter for landAccounts so a re-run of connect+map is a no-op, not a duplicate. Partial WHERE linked_source_id IS NOT NULL: manual/unlinked accounts (SELF-201) are exempt (no provider identity to dedup). Role-agnostic (fences under authenticated INVOKER + service_role). NOT a Decision-3 instance: provider_account_id is TEXT (not a FK); linked_source_id already carries canonical instance #6 (fn_account_matched_linked_source, 015) — this index exercises #6, adds none. Pins the reconciliation model (re-map reactivates via is_active, never a second row) — SELF-212 remove/re-add UX honors it. DEFINER allowlist unchanged (no function); §10 ledger unchanged at 2.';
