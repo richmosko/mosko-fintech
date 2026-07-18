@@ -8,7 +8,8 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "admit": "npm run build && node dist/cli/admit.js"
   },
   "dependencies": {
     "plaid": "^27.0.0",

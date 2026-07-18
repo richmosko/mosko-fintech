@@ -91,6 +91,43 @@ export interface ProviderAccountRef {
 	currency: string;
 }
 
+// ── Credential-admission slice types (connect() / revoke()) ────────────────────
+// Grounded in temp/provider-sync-credential-admission-design.md (§1 flow, §4 tenant-
+// binding, §5 revoke). SC-3 GREEN-with-conditions.
+
+/**
+ * connect() input. `ownerUserId` is the SEC-LOAD-BEARING field (design §4): admission
+ * runs under service_role (RLS-bypassed), so there is NO DB-layer control that this
+ * tenant is correct — correctness rests entirely on the caller binding the right tenant
+ * (Decision 1 clause (d) resolved-tenant-in-code). The adapter hard-validates it is a
+ * well-formed uuid BEFORE any admission write (SC3-C3). The provider adapter re-validates
+ * the whole shape with a Zod `.strict()` schema (mass-assignment prevention, Lock 14).
+ */
+export interface ProviderConnectSetup {
+	provider: 'plaid';
+	/** Short-lived (~30 min) provider public token; the ONLY provider credential crossing
+	 *  the app→worker boundary. NEVER the long-lived access_token (design §2b). */
+	publicToken: string;
+	/** Resolved tenant (server-validated session on the app path; explicit operator id on
+	 *  the dev-CLI path). Bound in code on the INSERT — the default auth.uid() is NULL under
+	 *  service_role, so admission MUST supply this explicitly (design §4). */
+	ownerUserId: string;
+	institutionId?: string;
+	institutionName?: string;
+}
+
+/**
+ * revoke() input. TENANT-SCOPED (defense-in-depth refinement over the design's bare
+ * source_id): the owning tenant is carried so both the decrypt-view read and the DELETE
+ * filter on `users_id = ownerUserId`. Under service_role (RLS-bypassed) this is the only
+ * fail-closed guard that a wrong/foreign source_id cannot be revoked — a mismatch reads +
+ * deletes 0 rows rather than touching another tenant's source.
+ */
+export interface RevokeRef {
+	sourceId: bigint;
+	ownerUserId: string;
+}
+
 /** Correction counts LOGGED to linked_source_sync_audit.detail but NOT applied in V1
  *  (OWD-2a DEFERRED to V1.3 reconciliation — design §2.3 / §6). */
 export interface CorrectionCounts {
@@ -111,14 +148,17 @@ export interface ProviderAdapter {
 	readonly provider: 'plaid' | 'simplefin';
 	/**
 	 * Credential admission → persists an SD-03 Vault handle on a linked_source row
-	 * (service_role). Returns the source_id + the provider's account list.
+	 * (service_role). Returns the source_id + the provider's account list. `setup` is a
+	 * ProviderConnectSetup (parsed + `.strict()`-validated inside the adapter). Account-
+	 * mapping (writing pfin.account) is a SEPARATE slice — connect() returns refs only.
 	 */
 	connect(setup: unknown): Promise<{ sourceId: bigint; accounts: ProviderAccountRef[] }>;
 	fetchBalances(source: SourceRef): Promise<BalanceDTO[]>;
 	fetchHoldings(source: SourceRef): Promise<HoldingDTO[]>;
 	fetchTransactions(source: SourceRef, range: DateRange): Promise<TransactionDTO[]>;
-	/** Provider-side revoke-then-delete (retention hard-gate). */
-	revoke(source: SourceRef): Promise<void>;
+	/** Provider-side revoke-then-delete (retention hard-gate; abort-on-failure, tenant-
+	 *  scoped). See RevokeRef. */
+	revoke(ref: RevokeRef): Promise<void>;
 }
 
 /**
