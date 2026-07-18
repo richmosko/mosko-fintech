@@ -1,0 +1,23 @@
+{
+  "name": "provider-sync",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Provider-sync ingest worker (Plaid PRIMARY + SimpleFIN FALLBACK per ADR-027). The 4th Coolify unit; the FIRST DB-touching Node worker (ADR-019 amendment). Direct-Postgres transport via TenantBoundClient (Lock 13 mod #3).",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "plaid": "^27.0.0",
+    "postgres": "^3.4.5",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^6.0.3",
+    "vitest": "^3.0.0"
+  }
+}
