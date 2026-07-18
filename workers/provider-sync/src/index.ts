@@ -23,6 +23,7 @@ export type {
 } from './adapters/ProviderAdapter.js';
 
 export { PlaidAdapter } from './adapters/PlaidAdapter.js';
+export { SimpleFINAdapter } from './adapters/SimpleFINAdapter.js';
 
 export {
 	syncProviderData,
