@@ -224,14 +224,36 @@ describe('C6-5 log-scrub — api/src relay tier (independent sweep)', () => {
 	});
 });
 
-// ── RECONCILIATION HOLD (team-lead brief): burned/invalid public_token browser status ─────────
-// The AC's literal 400 vs the current 500-reconnect mapping is under Sec ruling. QA does NOT
-// hard-assert the exact status until it resolves — asserting it now would bake in a
-// possibly-wrong contract. Pending marker so the gap is visible, not silently uncovered.
-describe.skip('PENDING (Sec reconciliation): burned public_token → browser status (400 vs 500)', () => {
-	it('asserts the ratified burned-token browser status once Sec rules', () => {
-		// Wire a worker 400 (invalid/burned request) and assert the ratified browser status here.
-		// Left skipped intentionally — see team-lead brief "IN RECONCILIATION".
-		expect(true).toBe(true);
+// ── RECONCILIATION RESOLVED (2026-07-19 Sec ruling): invalid public_token → browser 400 ────────
+// Ruling: the worker emits `400 public_token_invalid` for an invalid/burned public_token, and
+// the relay's mapUpstreamStatus maps worker-400 → browser-400 (a client-correctable status so
+// the browser re-runs Link for a fresh token — C6-4: the relay itself never retries). The
+// browser body stays a GENERIC scrubbed envelope: no public_token, no shared secret, and not
+// even the worker's internal `public_token_invalid` code is forwarded.
+describe('invalid public_token → browser 400 (Sec reconciliation RESOLVED)', () => {
+	const PUBLIC_TOKEN = 'public-sandbox-BURNED-DO-NOT-LOG';
+
+	it('worker 400 public_token_invalid → browser 400, generic scrubbed body', async () => {
+		await wireWorker(() => ({ status: 400, json: { error: 'public_token_invalid' } }));
+
+		const lines: string[] = [];
+		const push = (...args: unknown[]) => lines.push(args.map(String).join(' '));
+		vi.spyOn(console, 'error').mockImplementation(push);
+		vi.spyOn(console, 'log').mockImplementation(push);
+
+		const res = await POST(exchangeEvent({ public_token: PUBLIC_TOKEN }, { id: SESSION_A }));
+		const bodyText = await res.text();
+
+		// Client-correctable 400 (NOT the 5xx-reconnect class).
+		expect(res.status).toBe(400);
+		// Generic envelope — no upstream detail leaked to the browser.
+		expect(bodyText).toBe(JSON.stringify({ error: 'exchange_failed' }));
+
+		// Scrub sweep: neither the token, the shared secret, nor the worker's internal
+		// error code appears in logs or the browser body.
+		const haystack = lines.join('\n') + '\n' + bodyText;
+		for (const s of [PUBLIC_TOKEN, SHARED_SECRET, 'public_token_invalid']) {
+			expect(haystack).not.toContain(s);
+		}
 	});
 });
