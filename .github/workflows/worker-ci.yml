@@ -74,6 +74,13 @@ jobs:
       - name: Unit tests (integration specs self-skip loudly — no RUN_DB_INTEGRATION)
         run: npm run test
 
+  # NOTE: the RT-27 admission private-bind config-lint (fence-admission-bind) lives
+  # in .github/workflows/security-scan.yml (RUN-ALWAYS, no paths filter), NOT here.
+  # Relocated per Sec F-2 (code-half review, RT-27 fence owner): a §10-catalogued
+  # instance must be run-always like RT-22/RT-26 — a path-trigger leaves a trigger-
+  # drift meta-risk (a future `paths:` refactor silently disabling the fence) that is
+  # not acceptable for this surface. See security-scan.yml `fence-admission-bind`.
+
   integration:
     name: Live-DB integration lane (G2/G3/SC-4)
     runs-on: ubuntu-latest

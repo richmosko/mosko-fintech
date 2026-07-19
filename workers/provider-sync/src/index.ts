@@ -23,7 +23,7 @@ export type {
 	CorrectionCounts
 } from './adapters/ProviderAdapter.js';
 
-export { PlaidAdapter } from './adapters/PlaidAdapter.js';
+export { PlaidAdapter, PublicTokenInvalidError, isPublicTokenInvalidity } from './adapters/PlaidAdapter.js';
 export { SimpleFINAdapter } from './adapters/SimpleFINAdapter.js';
 
 export {
@@ -35,6 +35,16 @@ export {
 export type { ProviderData, SyncResult } from './ingest/mapper.js';
 
 export { resolveSecurityId, resolveSecurityIds, assetKey, pricingSourceForAssetType } from './ingest/resolution.js';
+
+// SELF-212 Option C — inbound admission HTTP endpoint (leg-1 link_token mint + leg-2
+// exchange/admit). Entrypoint: `node dist/cli/serve-admission.js` (DevOps owns Dockerfile CMD).
+export { createAdmissionServer } from './http/admissionServer.js';
+export type { AdmissionServerDeps, ExchangeInput, AdmissionAccountRef } from './http/admissionServer.js';
+export { mintLinkToken } from './http/linkToken.js';
+export { verifySharedSecret, ADMISSION_SECRET_HEADER } from './http/sharedSecret.js';
+export { assertPrivateOnly, detectPublicRouteSignal, PUBLIC_ROUTE_ENV_MATCHERS } from './http/admissionGuard.js';
+export { loadAdmissionConfig } from './http/admissionConfig.js';
+export type { AdmissionConfig } from './http/admissionConfig.js';
 
 // Slice 3b — the SYNC SCHEDULER (Coolify-cron entrypoint `node dist/cli/poll.js`).
 export {

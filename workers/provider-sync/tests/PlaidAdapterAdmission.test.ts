@@ -4,7 +4,7 @@
 // SC3-C4 no-access_token-leak, SC3-C5 revoke-abort + ITEM_NOT_FOUND-proceeds.
 
 import { describe, it, expect, vi } from 'vitest';
-import { PlaidAdapter, type PlaidClientLike, type AdmissionDb } from '../src/adapters/PlaidAdapter.js';
+import { PlaidAdapter, PublicTokenInvalidError, type PlaidClientLike, type AdmissionDb } from '../src/adapters/PlaidAdapter.js';
 import * as fx from './fixtures/plaid-payloads.js';
 
 const VALID_UUID = '11111111-1111-4111-8111-111111111111';
@@ -214,9 +214,11 @@ describe('connect() — SC3-C4 the access_token never leaks', () => {
 	});
 
 	it('scrubs a failed exchange error (no access_token / no client secret in the message)', async () => {
+		// Use a NON-invalidity code so this exercises the generic scrubbedPlaidError path (an
+		// INVALID_PUBLIC_TOKEN is reclassified to the Item-2 marker, covered separately below).
 		const client = baseClient({
 			itemPublicTokenExchange: vi.fn(async () => {
-				throw leakyPlaidError('INVALID_PUBLIC_TOKEN');
+				throw leakyPlaidError('INTERNAL_SERVER_ERROR');
 			})
 		});
 		const adapter = new PlaidAdapter(client, vi.fn(() => makeDb(makeTx([]).tx).db));
@@ -226,9 +228,61 @@ describe('connect() — SC3-C4 the access_token never leaks', () => {
 			.connect({ provider: 'plaid', publicToken: 'public-sandbox-bad', ownerUserId: VALID_UUID })
 			.catch((e) => (caught = e));
 		const msg = (caught as Error).message;
-		expect(msg).toContain('INVALID_PUBLIC_TOKEN'); // the non-sensitive code survives.
+		expect(msg).toContain('INTERNAL_SERVER_ERROR'); // the non-sensitive code survives.
 		expect(msg).not.toContain(TOKEN);
 		expect(msg).not.toContain(PLAID_SECRET);
+	});
+});
+
+describe('Item-2 — public_token invalidity classified ONLY at the exchange leg', () => {
+	it('a recognized invalidity code (INVALID_PUBLIC_TOKEN) at exchange → PublicTokenInvalidError (client-correctable)', async () => {
+		const client = baseClient({
+			itemPublicTokenExchange: vi.fn(async () => {
+				throw leakyPlaidError('INVALID_PUBLIC_TOKEN');
+			})
+		});
+		const adapter = new PlaidAdapter(client, vi.fn(() => makeDb(makeTx([]).tx).db));
+
+		let caught: unknown;
+		await adapter
+			.connect({ provider: 'plaid', publicToken: 'public-burned', ownerUserId: VALID_UUID })
+			.catch((e) => (caught = e));
+		expect(caught).toBeInstanceOf(PublicTokenInvalidError);
+		// SCRUBBED (guardrail #3): no token / no client secret in the marker's message.
+		expect((caught as Error).message).not.toContain(TOKEN);
+		expect((caught as Error).message).not.toContain(PLAID_SECRET);
+	});
+
+	it('a NON-invalidity exchange error_code (INTERNAL_SERVER_ERROR) stays a generic (5xx) error', async () => {
+		const client = baseClient({
+			itemPublicTokenExchange: vi.fn(async () => {
+				throw leakyPlaidError('INTERNAL_SERVER_ERROR');
+			})
+		});
+		const adapter = new PlaidAdapter(client, vi.fn(() => makeDb(makeTx([]).tx).db));
+
+		let caught: unknown;
+		await adapter.connect({ provider: 'plaid', publicToken: 'p', ownerUserId: VALID_UUID }).catch((e) => (caught = e));
+		expect(caught).toBeInstanceOf(Error);
+		expect(caught).not.toBeInstanceOf(PublicTokenInvalidError); // → 5xx, not client-correctable.
+	});
+
+	it('a POST-exchange DB/vault failure is NEVER a PublicTokenInvalidError (server failure stays 5xx)', async () => {
+		// Exchange SUCCEEDS; the dedup SELECT throws → a server-side failure, not token invalidity.
+		const tx = ((strings: TemplateStringsArray) => {
+			if (/source_id, credential_secret_id/.test(strings.join('?'))) return Promise.reject(new Error('db exploded'));
+			return Promise.resolve([]);
+		}) as unknown;
+		const db: AdmissionDb = {
+			withServiceRole: (<T>(fn: (t: unknown) => Promise<T>) => fn(tx)) as AdmissionDb['withServiceRole'],
+			end: vi.fn(async () => {})
+		};
+		const adapter = new PlaidAdapter(baseClient(), vi.fn(() => db));
+
+		let caught: unknown;
+		await adapter.connect({ provider: 'plaid', publicToken: 'p', ownerUserId: VALID_UUID }).catch((e) => (caught = e));
+		expect(caught).toBeInstanceOf(Error);
+		expect(caught).not.toBeInstanceOf(PublicTokenInvalidError);
 	});
 });
 

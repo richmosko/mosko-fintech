@@ -1,0 +1,26 @@
+# fence-admission-private-bind: target
+# GOLDEN FIXTURE — POSITIVE (vector 2: reverse-proxy Domain / Host() label → fence TRIPS).
+#
+# CA-5 exposure vector (2 of 2): a Traefik `Host()` routing label (and the Coolify
+# SERVICE_FQDN_* magic) requests a PUBLIC FQDN for the admission service, routing
+# the endpoint through the reverse proxy to the internet. The fence MUST exit 1.
+# Inversion-mode in the fence-admission-bind CI job asserts this trips; a clean
+# result here = the fence is broken (fails the job closed).
+
+services:
+  provider-sync:
+    container_name: provider-sync
+    build: .
+    restart: unless-stopped
+    expose:
+      - "8081"
+    environment:
+      - NODE_ENV=production
+      - ADMISSION_PRIVATE_ONLY=true
+      - ADMISSION_PORT=8081
+      # VIOLATION: Coolify SERVICE_FQDN magic requests a public domain for the port.
+      - SERVICE_FQDN_PROVIDERSYNC_8081=/
+    labels:
+      # VIOLATION: Traefik reverse-proxy route publishes the admission port publicly.
+      - "traefik.enable=true"
+      - "traefik.http.routers.provider-sync.rule=Host(`provider-sync.example.com`)"

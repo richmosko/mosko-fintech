@@ -1,0 +1,266 @@
+// admissionServer.ts — SELF-212 Option C inbound admission endpoint (the app→worker relay).
+//
+// A THIN authenticated HTTP wrapper over (leg-1) mintLinkToken + (leg-2) PlaidAdapter.connect()
+// — it does NOT re-implement the admission; it authenticates the internal caller, validates the
+// inbound body, and delegates. Every security property is enforced by a dedicated, unit-tested
+// helper: CA-1 private-only boot (admissionGuard) / CA-6 constant-time secret (sharedSecret) /
+// (u) atomic exchange + C6-4 recovery (PlaidAdapter.connect).
+//
+// SERVER CHOICE: Node's built-in `node:http`. Rationale (flagged for Sec/team-lead): the worker
+// stack today is pure Node/TS with only `plaid` / `postgres` / `zod` as deps and NO web
+// framework. This is a two-route internal RPC surface, not a web app — Express/Fastify would add
+// a dependency + transitive supply-chain surface for routing we can hand-write in a few lines.
+// The lightest thing that fits the existing stack + Dockerfile (no new dep, no build change) is
+// the stdlib http server. If the surface later grows, revisit.
+//
+// TENANT BINDING (C6-3): `ownerUserId` is accepted ONLY from the request body of the
+// shared-secret-authed internal call (api/src derives it from the validated session). The worker
+// exposes NO browser-reachable field, and is unreachable by the browser by construction (CA-1
+// private bind). The in-code binding is the SOLE primary tenant-correctness control per ADR-027
+// (t); fn_account_matched_linked_source (Decision-3 #6) is the downstream backstop, not a
+// substitute.
+//
+// REDACTION (C6-5): request/response bodies are NEVER logged; error responses to api/src carry a
+// stable machine code only — no token fragments, no secret, no stack, no tenant-PII. The
+// server-side log lines carry only route + a coarse outcome (+ scrubbed adapter message).
+
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { z } from 'zod';
+import type { ProviderAccountRef } from '../adapters/ProviderAdapter.js';
+import { PublicTokenInvalidError } from '../adapters/PlaidAdapter.js';
+import { ADMISSION_SECRET_HEADER, verifySharedSecret } from './sharedSecret.js';
+
+/** Max inbound body. A link_token request / public_token handoff is tiny; anything larger is
+ *  abuse → reject (fail-closed) rather than buffer. */
+const MAX_BODY_BYTES = 64 * 1024;
+
+// ── Inbound body schemas — Zod `.strict()` at the boundary (mass-assignment prevention,
+//    Lock 14 mod #1). `ownerUserId` is a uuid; connect() re-validates independently. ──────────
+const linkTokenBodySchema = z.object({ ownerUserId: z.string().uuid() }).strict();
+
+const exchangeBodySchema = z
+	.object({
+		public_token: z.string().min(1),
+		ownerUserId: z.string().uuid(),
+		institutionId: z.string().min(1).optional(),
+		institutionName: z.string().min(1).optional()
+	})
+	.strict();
+
+export interface ExchangeInput {
+	publicToken: string;
+	ownerUserId: string;
+	institutionId?: string;
+	institutionName?: string;
+}
+
+/** The account routing key api/src forwards to the browser. `account_id` is the stable
+ *  provider account id (ProviderAccountRef.providerAccountId). */
+export interface AdmissionAccountRef {
+	account_id: string;
+	name: string;
+	type: string;
+	subtype: string | null;
+	currency: string;
+}
+
+/**
+ * The admission server's collaborators, injected so the server unit-tests with NO Plaid client
+ * and NO Postgres. The entrypoint (cli/serve-admission.ts) wires these to the real Plaid client
+ * + PlaidAdapter.connect().
+ */
+export interface AdmissionServerDeps {
+	/** The shared secret both legs authenticate against (constant-time). */
+	readonly sharedSecret: string;
+	/** Leg-1: mint a link_token for the session-derived tenant. */
+	mintLinkToken(ownerUserId: string): Promise<{ link_token: string; expiration: string }>;
+	/** Leg-2: drive the atomic exchange+vault+INSERT admission (PlaidAdapter.connect). */
+	admit(input: ExchangeInput): Promise<{ sourceId: bigint; accounts: ProviderAccountRef[] }>;
+	/** Token-free diagnostic logger (never receives a body/secret/token). */
+	logger?: (message: string) => void;
+}
+
+const OK = 200;
+const BAD_REQUEST = 400;
+const UNAUTHORIZED = 401;
+const NOT_FOUND = 404;
+const METHOD_NOT_ALLOWED = 405;
+const PAYLOAD_TOO_LARGE = 413;
+const BAD_GATEWAY = 502;
+
+function sendJson(res: ServerResponse, status: number, body: unknown): void {
+	const payload = JSON.stringify(body);
+	res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
+	res.end(payload);
+}
+
+/** Generic error envelope — a stable machine `error` code ONLY (C6-5: no internal detail). */
+function sendError(res: ServerResponse, status: number, code: string): void {
+	sendJson(res, status, { error: code });
+}
+
+/** Read + size-cap the request body, then JSON.parse. Rejects (throws a tagged reason) on
+ *  oversize or malformed JSON so the handler can map to a generic 4xx. */
+async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+	return new Promise((resolve, reject) => {
+		let size = 0;
+		const chunks: Buffer[] = [];
+		req.on('data', (chunk: Buffer) => {
+			size += chunk.length;
+			if (size > MAX_BODY_BYTES) {
+				reject(new Error('BODY_TOO_LARGE'));
+				req.destroy();
+				return;
+			}
+			chunks.push(chunk);
+		});
+		req.on('end', () => {
+			if (chunks.length === 0) {
+				resolve(undefined);
+				return;
+			}
+			try {
+				resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+			} catch {
+				reject(new Error('BODY_NOT_JSON'));
+			}
+		});
+		req.on('error', () => reject(new Error('BODY_READ_ERROR')));
+	});
+}
+
+function toAdmissionAccounts(accounts: ProviderAccountRef[]): AdmissionAccountRef[] {
+	return accounts.map((a) => ({
+		account_id: a.providerAccountId,
+		name: a.name,
+		type: a.type,
+		subtype: a.subtype,
+		currency: a.currency
+	}));
+}
+
+/**
+ * Build (but do not start) the admission HTTP server. Call `.listen(port, host)` on the result.
+ * Routes:
+ *   GET  /healthz                → { status: 'ok' }           (UNAUTHENTICATED liveness; no secrets)
+ *   POST /admission/link-token   → { link_token, expiration } (leg-1, shared-secret authed)
+ *   POST /admission/exchange     → { sourceId, accounts }     (leg-2, shared-secret authed)
+ * Every non-health route requires the constant-time shared-secret header; absent/mismatch → 401.
+ */
+/** N-1 (Sec SELF-212): explicit inbound timeouts — do NOT rely on Node defaults for a
+ *  credential-admission server (Slowloris / hung-request hardening). Values are conservative
+ *  for a two-route internal RPC over the private Docker network (fast local calls, tiny bodies):
+ *    - headers must arrive within 5s (a stalled header stream is dropped),
+ *    - the ENTIRE request (headers+body) must arrive within 15s.
+ *  These bound REQUEST RECEIPT from the caller, not downstream Plaid handler time. Constraint:
+ *  requestTimeout > headersTimeout (Node). */
+const HEADERS_TIMEOUT_MS = 5_000;
+const REQUEST_TIMEOUT_MS = 15_000;
+
+export function createAdmissionServer(deps: AdmissionServerDeps): Server {
+	const log = (m: string): void => deps.logger?.(m);
+
+	const server = createServer((req, res) => {
+		void handle(req, res).catch(() => {
+			// Last-resort catch — never leak an internal error to the caller (C6-5).
+			if (!res.headersSent) sendError(res, 502, 'internal_error');
+			else res.end();
+		});
+	});
+	server.headersTimeout = HEADERS_TIMEOUT_MS;
+	server.requestTimeout = REQUEST_TIMEOUT_MS;
+	return server;
+
+	async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+		const method = req.method ?? 'GET';
+		// Strip query string — no route consumes it, and we never want tenant ids in a query
+		// (C6-5). Anything after '?' is discarded.
+		const path = (req.url ?? '/').split('?')[0];
+
+		// (0) Liveness — unauthenticated, reveals nothing (Coolify healthcheck).
+		if (path === '/healthz') {
+			if (method !== 'GET') return sendError(res, METHOD_NOT_ALLOWED, 'method_not_allowed');
+			return sendJson(res, OK, { status: 'ok' });
+		}
+
+		// (1) Auth gate (BOTH legs, C6-6): constant-time shared-secret compare, fail-closed.
+		const presented = req.headers[ADMISSION_SECRET_HEADER];
+		const headerValue = Array.isArray(presented) ? presented[0] : presented;
+		if (!verifySharedSecret(headerValue, deps.sharedSecret)) {
+			log(`admission: 401 unauthorized (${method} ${path})`);
+			return sendError(res, UNAUTHORIZED, 'unauthorized');
+		}
+
+		// (2) Route.
+		if (path === '/admission/link-token') {
+			if (method !== 'POST') return sendError(res, METHOD_NOT_ALLOWED, 'method_not_allowed');
+			return handleLinkToken(req, res);
+		}
+		if (path === '/admission/exchange') {
+			if (method !== 'POST') return sendError(res, METHOD_NOT_ALLOWED, 'method_not_allowed');
+			return handleExchange(req, res);
+		}
+		return sendError(res, NOT_FOUND, 'not_found');
+	}
+
+	async function handleLinkToken(req: IncomingMessage, res: ServerResponse): Promise<void> {
+		let body: unknown;
+		try {
+			body = await readJsonBody(req);
+		} catch (err) {
+			const reason = err instanceof Error ? err.message : '';
+			return sendError(res, reason === 'BODY_TOO_LARGE' ? PAYLOAD_TOO_LARGE : BAD_REQUEST, 'invalid_request');
+		}
+		const parsed = linkTokenBodySchema.safeParse(body);
+		if (!parsed.success) return sendError(res, BAD_REQUEST, 'invalid_request');
+
+		try {
+			const result = await deps.mintLinkToken(parsed.data.ownerUserId);
+			log('admission: 200 link-token minted');
+			return sendJson(res, OK, { link_token: result.link_token, expiration: result.expiration });
+		} catch (err) {
+			// scrubbedPlaidError already stripped secrets; keep it server-side only (C6-5).
+			log(`admission: 502 link-token mint failed (${err instanceof Error ? err.message : 'error'})`);
+			return sendError(res, BAD_GATEWAY, 'link_token_failed');
+		}
+	}
+
+	async function handleExchange(req: IncomingMessage, res: ServerResponse): Promise<void> {
+		let body: unknown;
+		try {
+			body = await readJsonBody(req);
+		} catch (err) {
+			const reason = err instanceof Error ? err.message : '';
+			return sendError(res, reason === 'BODY_TOO_LARGE' ? PAYLOAD_TOO_LARGE : BAD_REQUEST, 'invalid_request');
+		}
+		const parsed = exchangeBodySchema.safeParse(body);
+		if (!parsed.success) return sendError(res, BAD_REQUEST, 'invalid_request');
+
+		const input: ExchangeInput = {
+			publicToken: parsed.data.public_token,
+			ownerUserId: parsed.data.ownerUserId,
+			...(parsed.data.institutionId ? { institutionId: parsed.data.institutionId } : {}),
+			...(parsed.data.institutionName ? { institutionName: parsed.data.institutionName } : {})
+		};
+
+		try {
+			const { sourceId, accounts } = await deps.admit(input);
+			log(`admission: 200 admitted source_id=${sourceId} (accounts=${accounts.length})`);
+			// bigint → string (JSON has no bigint). Never echo the public_token (C6-5).
+			return sendJson(res, OK, { sourceId: String(sourceId), accounts: toAdmissionAccounts(accounts) });
+		} catch (err) {
+			// Item-2: ONLY a recognized public_token-invalidity at the exchange leg is client-
+			// correctable → worker-400 `public_token_invalid` (one uniform code; api/src maps it to
+			// browser-400 "re-run Link"). EVERY other failure — DB / vault / network / unknown /
+			// post-exchange — stays 5xx (guardrail #2, fail-safe): a server failure must never be
+			// dressed up as client-correctable. Envelope stays scrubbed (guardrail #3).
+			if (err instanceof PublicTokenInvalidError) {
+				log('admission: 400 public_token_invalid (client-correctable)');
+				return sendError(res, BAD_REQUEST, 'public_token_invalid');
+			}
+			// connect() already scrubbed Plaid errors + ran the C6-4 /item/remove recovery.
+			log(`admission: 502 admit failed (${err instanceof Error ? err.message : 'error'})`);
+			return sendError(res, BAD_GATEWAY, 'admission_failed');
+		}
+	}
+}
