@@ -23,6 +23,14 @@ body {
 	min-height: 100vh;
 }
 
+/* SvelteKit body wrapper. Was an inline `style="display:contents"` in app.html; moved
+   to a class so the app-global strict CSP (style-src-attr 'none', ADR-028 CSP-1) needs
+   no inline-style-attribute allowance. `display: contents` keeps the wrapper layout-
+   transparent (it does not introduce a box). */
+.app-body {
+	display: contents;
+}
+
 a {
 	color: var(--c-link);
 }
