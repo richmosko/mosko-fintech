@@ -55,15 +55,15 @@ style-src       'self' 'nonce-<per-response>'
 style-src-elem  'self' 'nonce-<per-response>'
 style-src-attr  'unsafe-inline'                      # vendor-forced; documented residual (CSP-4)
 frame-src       https://cdn.plaid.com
-connect-src     'self' https://production.plaid.com  # sandbox host in non-prod builds only (CSP-3)
+connect-src     'self' <plaid-host>                  # <plaid-host> tracks PLAID_ENV tier: sandbox.plaid.com (non-prod) / production.plaid.com (prod) (CSP-3)
 ```
 
-`script-src` pins the **exact Link initializer path** (not the whole origin) + a per-response nonce; `connect-src` is the **explicit `production.plaid.com` host**, not a wildcard.
+`script-src` pins the **exact Link initializer path** (not the whole origin) + a per-response nonce; `connect-src` is a **single explicit Plaid host tracking the `PLAID_ENV` tier** (`sandbox.plaid.com` / `production.plaid.com`), not a wildcard.
 
 **Acceptance conditions (Sec-bound).**
 - **CSP-1 — per-route scoping MANDATORY.** Scoped to the Plaid Link onboarding route ONLY; an app-global relaxation on dashboard / financial surfaces is a **Sec veto**.
 - **CSP-2 — `script-src` nonce, NOT `'unsafe-inline'`.** Realized via SvelteKit `csp: { mode: 'nonce' }` (per-response nonce).
-- **CSP-3 — `connect-src` explicit `production.plaid.com`, build-env-gated.** The sandbox host appears ONLY in non-prod builds; production builds carry only `production.plaid.com`.
+- **CSP-3 — `connect-src` Plaid host gated on `PLAID_ENV` (Plaid API tier), NOT build mode.** *[Amended 2026-07-19 / #12, F/CTO-ratified — gating basis corrected from build-mode to `PLAID_ENV` tier.]* The single `connect-src` Plaid host tracks the live Plaid tier, resolved server-side in the CSP hook from `PLAID_ENV` (a non-secret env var; fail-safe → `sandbox.plaid.com`): `https://sandbox.plaid.com` when `PLAID_ENV !== 'production'`, `https://production.plaid.com` when `=== 'production'`. **Rationale — build-mode ≠ Plaid-tier under the V1.0 posture:** V1.0 runs the Plaid *sandbox* tier on a *production* build (`PLAID_ENV=sandbox` default; production tier post-SELF-212, F/CTO-gated per `api/CLAUDE.md` / `workers/CLAUDE.md`). Gating on build mode would emit only `production.plaid.com` on a V1.0 prod build → CSP-block sandbox Link's connection → broken onboarding; gating on `PLAID_ENV` keeps the host correct across the sandbox→production tier flip.
 - **CSP-4 — `style-src-attr 'unsafe-inline'` documented as a vendor-forced residual.** Plaid Link requires inline style attributes; scoped to `style-src-attr` only (`style-src`/`style-src-elem` stay nonce-gated).
 
 **Alternatives considered.** (a) Vendor/self-host the Link initializer — REJECTED (unsupported + ToS-restricted; breaks Link's OAuth handshake + out-of-band security updates). (b) No CSP, just load the script — REJECTED (abandons defense-in-depth; the CSP allowlist keeps every non-Plaid origin denied). (c) Server-side proxy of Link — REJECTED (Link is a browser drop-in managing the institution OAuth redirect in-browser; not a supported integration mode).

@@ -74,6 +74,10 @@ export function loadPlaidScript(): Promise<PlaidGlobal> {
 		el.addEventListener('load', onLoad, { once: true });
 		el.addEventListener('error', onError, { once: true });
 		if (!existing) {
+			// CSP note (ADR-028): this is an EXTERNAL `src` script — CSP matches it against
+			// the `script-src` URL allowlist (the exact cdn.plaid.com Link path admitted on
+			// the connect route), NOT against a nonce. Nonces gate INLINE scripts only, so
+			// no `el.nonce` is needed here; the per-route script-src entry is what admits it.
 			el.src = PLAID_LINK_SRC;
 			el.async = true;
 			document.head.appendChild(el);

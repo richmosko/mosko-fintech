@@ -22,6 +22,12 @@ import { createServerClient } from '@supabase/ssr';
 // deploy time (build-once/inject-at-runtime). Still the anon key — never the
 // service-role key (RT-26).
 import { env } from '$env/dynamic/public';
+// Server-only private env (never ships to the browser) — reads PLAID_ENV for the
+// per-route Plaid CSP host selection (ADR-028 / CSP-3). Aliased to avoid colliding
+// with the public `env` above.
+import { env as privateEnv } from '$env/dynamic/private';
+import { sequence } from '@sveltejs/kit/hooks';
+import { applyPlaidConnectCsp } from '$lib/plaid/csp';
 import type { Handle } from '@sveltejs/kit';
 
 // One-time fail-loud guard, memoized: validated at FIRST request (runtime, where
@@ -42,7 +48,7 @@ function supabaseEnv(): { url: string; anonKey: string } {
 	return cached;
 }
 
-export const handle: Handle = async ({ event, resolve }) => {
+const authHandle: Handle = async ({ event, resolve }) => {
 	const { url, anonKey } = supabaseEnv();
 	// Per-request Supabase client, cookie-bound to this request/response cycle.
 	event.locals.supabase = createServerClient(url, anonKey, {
@@ -86,3 +92,33 @@ export const handle: Handle = async ({ event, resolve }) => {
 		}
 	});
 };
+
+// cspHandle — per-route Plaid CSP widening (ADR-028 / CSP-1 / CSP-3). Sequenced AFTER
+// authHandle so it observes the fully-resolved response + the strict CSP header that
+// SvelteKit's app-global `kit.csp` already emitted (with its per-response nonce, CSP-2).
+//
+// For the Plaid connect route ONLY, `applyPlaidConnectCsp` widens that header to the
+// ADR-028 blessed set (reusing the same nonce); for EVERY other route it returns the
+// base header UNCHANGED, so this hook is a structural no-op elsewhere — that identity
+// is the CSP-1 (RT-28) veto guarantee. The connect-src host is matched to the live
+// Plaid API tier via the server-side private PLAID_ENV (CSP-3, F/CTO ruling option 2).
+// Exported for hooks.server.test.ts (fail-safe PLAID_ENV default + route-scoping proof).
+export const cspHandle: Handle = async ({ event, resolve }) => {
+	const response = await resolve(event);
+	const base = response.headers.get('content-security-policy');
+	if (base) {
+		// Fail-safe: ANY value other than the exact string 'production' → 'sandbox'. A
+		// missing/typo'd/unknown PLAID_ENV admits the SANDBOX host, never production.
+		// Mirrors the worker's `z.enum(['sandbox','production']).default('sandbox')`.
+		const plaidEnv = privateEnv.PLAID_ENV === 'production' ? 'production' : 'sandbox';
+		response.headers.set(
+			'content-security-policy',
+			applyPlaidConnectCsp(event.route?.id, base, { plaidEnv })
+		);
+	}
+	return response;
+};
+
+// The exported chokepoint stays a single `handle` (ADR-015 D1) — now a sequence: auth
+// session forwarding first, then the route-scoped CSP widening.
+export const handle = sequence(authHandle, cspHandle);

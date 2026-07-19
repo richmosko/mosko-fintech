@@ -30,7 +30,12 @@ export default defineConfig({
 	resolve: {
 		alias: {
 			$lib: fileURLToPath(new URL('./src/lib', import.meta.url)),
+			// Both $env/dynamic/{private,public} resolve to the same process.env-backed stub
+			// under test (hooks.server.ts imports both). Real build uses the SvelteKit plugin.
 			'$env/dynamic/private': fileURLToPath(
+				new URL('./tests/stubs/env-dynamic-private.ts', import.meta.url)
+			),
+			'$env/dynamic/public': fileURLToPath(
 				new URL('./tests/stubs/env-dynamic-private.ts', import.meta.url)
 			)
 		}
