@@ -1,0 +1,21 @@
+# fence-admission-private-bind: target
+# GOLDEN FIXTURE — POSITIVE (vector 3: host-network mode → fence TRIPS).
+#
+# F-3 (Sec code-half review) exposure vector (3 of 3): `network_mode: host` drops
+# the container onto the HOST network namespace, so the admission port binds
+# directly on the host's interfaces — bypassing the project Docker network AND the
+# expose:/ports: distinction entirely. A committed host-level exposure vector.
+# The fence MUST exit 1. Inversion-mode in the fence-admission-bind job asserts
+# this trips; a clean result = the fence is broken (fails the job closed).
+
+services:
+  provider-sync:
+    container_name: provider-sync
+    build: .
+    restart: unless-stopped
+    # VIOLATION: host-network mode exposes the admission port on the host directly.
+    network_mode: host
+    environment:
+      - NODE_ENV=production
+      - ADMISSION_PRIVATE_ONLY=true
+      - ADMISSION_PORT=8081

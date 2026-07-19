@@ -52,6 +52,13 @@ jobs:
         working-directory: api
         run: npm run check
 
+      - name: Unit tests (vitest — OQ-3 harness; SELF-198 + relay-leg + QA api specs)
+        # OQ-3: api/ Vitest runner. Runs Frontend's SELF-198 specs, the Option-C
+        # relay-leg tests, and QA's api-tier tests (previously unrunnable — no runner).
+        # Node-env, hermetic (no DB / no live creds → no secrets-manifest touch).
+        working-directory: api
+        run: npm run test
+
       - name: Build (Vite production build via adapter-node → build/)
         working-directory: api
         run: npm run build

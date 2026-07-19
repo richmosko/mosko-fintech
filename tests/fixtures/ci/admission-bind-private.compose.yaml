@@ -1,0 +1,20 @@
+# fence-admission-private-bind: target
+# GOLDEN FIXTURE — NEGATIVE CONTROL (correct internal-only config → fence PASSES).
+#
+# Proves fence-admission-private-bind does NOT false-positive the correct shape:
+# `expose:`-only admission port, NO published `ports:` mapping, NO proxy Domain /
+# Traefik Host() label / Coolify SERVICE_FQDN magic. Mirrors the real
+# workers/provider-sync/docker-compose.yaml. Exercised in production-mode (expects
+# exit 0) by the fence-admission-bind CI job.
+
+services:
+  provider-sync:
+    container_name: provider-sync
+    build: .
+    restart: unless-stopped
+    expose:
+      - "8081"
+    environment:
+      - NODE_ENV=production
+      - ADMISSION_PRIVATE_ONLY=true
+      - ADMISSION_PORT=8081

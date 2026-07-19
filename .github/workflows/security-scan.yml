@@ -321,3 +321,62 @@ jobs:
             exit 1
           fi
           echo "OK: non-overlap fence caught fixture violation (exit $rc)."
+
+  fence-admission-bind:
+    name: RT-27 — admission endpoint private-bind config-lint
+    runs-on: ubuntu-latest
+    # SELF-212 Option-C C6-1 limb (b): committed-config lint over the provider-sync
+    # Coolify Compose manifest — the admission endpoint must stay INTERNAL-ONLY
+    # (expose:-only; no host-publish; no public Domain / Traefik Host() label; no
+    # network_mode: host). RT-27's §10-catalogued network-exposure layer — the THIRD
+    # catalogued §10 instance (RT-22 first / RT-26 second / RT-27 third) per Sec CA-3.
+    #
+    # HOMED HERE (run-always, no paths filter) per Sec F-2 (code-half review, RT-27
+    # fence owner): a §10-catalogued instance must be run-always like RT-22/RT-26 —
+    # a path-trigger leaves a trigger-drift meta-risk (a future `paths:` refactor
+    # silently disabling the fence). Dual-mode (production + inversion) with a golden
+    # fixture per exposure vector, mirroring fence-rt22/rt26/tbc/secrets-nonoverlap.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Production-mode — real compose (expects internal-only; exit 0)
+        run: bash scripts/ci/fence-admission-private-bind.sh workers/provider-sync/docker-compose.yaml
+
+      - name: Inversion — negative control fixture (correct config; expects exit 0)
+        run: bash scripts/ci/fence-admission-private-bind.sh tests/fixtures/ci/admission-bind-private.compose.yaml
+
+      - name: "Inversion — golden 1: published ports (expects violation, exit 1)"
+        run: |
+          set +e
+          bash scripts/ci/fence-admission-private-bind.sh tests/fixtures/ci/admission-bind-public-ports.compose.yaml
+          rc=$?
+          set -e
+          if [ $rc -ne 1 ]; then
+            echo "FATAL: admission-bind fence expected exit 1 on the published-ports golden but got $rc — fence is broken; failing closed."
+            exit 1
+          fi
+          echo "OK: fence caught the published-ports exposure vector (exit $rc)."
+
+      - name: "Inversion — golden 2: proxy Domain / Host() label (expects violation, exit 1)"
+        run: |
+          set +e
+          bash scripts/ci/fence-admission-private-bind.sh tests/fixtures/ci/admission-bind-public-domain.compose.yaml
+          rc=$?
+          set -e
+          if [ $rc -ne 1 ]; then
+            echo "FATAL: admission-bind fence expected exit 1 on the proxy-Domain golden but got $rc — fence is broken; failing closed."
+            exit 1
+          fi
+          echo "OK: fence caught the proxy-Domain exposure vector (exit $rc)."
+
+      - name: "Inversion — golden 3: host-network mode (expects violation, exit 1)"
+        run: |
+          set +e
+          bash scripts/ci/fence-admission-private-bind.sh tests/fixtures/ci/admission-bind-host-network.compose.yaml
+          rc=$?
+          set -e
+          if [ $rc -ne 1 ]; then
+            echo "FATAL: admission-bind fence expected exit 1 on the host-network golden but got $rc — fence is broken; failing closed."
+            exit 1
+          fi
+          echo "OK: fence caught the host-network exposure vector (exit $rc)."

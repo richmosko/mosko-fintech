@@ -305,6 +305,17 @@ export function normalizeAccountRef(rawAccount: unknown): ProviderAccountRef {
 // type level; the real client is injected at construction.
 export interface PlaidClientLike {
 	accountsGet(req: { access_token: string }): Promise<{ data: { accounts: unknown[] } }>;
+	// Leg-1 link_token mint (SELF-212 Option C). Worker-tier only: /link/token/create needs
+	// the Plaid client secret, which per ADR-027 (s) lives ONLY in the worker (never api/src).
+	linkTokenCreate(req: {
+		user: { client_user_id: string };
+		client_name: string;
+		products: string[];
+		country_codes: string[];
+		language: string;
+		webhook?: string;
+		redirect_uri?: string;
+	}): Promise<{ data: { link_token: string; expiration: string } }>;
 	// Credential-admission surface (connect/revoke). Structural subset of the Plaid SDK.
 	itemPublicTokenExchange(req: {
 		public_token: string;
@@ -400,6 +411,39 @@ export function plaidErrorCode(err: unknown): string | null {
 export function scrubbedPlaidError(err: unknown, op: string): Error {
 	const code = plaidErrorCode(err);
 	return new Error(`Plaid ${op} failed${code ? ` (${code})` : ''}`);
+}
+
+/**
+ * Item-2 (Sec SELF-212): the recognized Plaid token-invalidity error_code set for the
+ * /item/public_token/exchange call. Plaid collapses invalid / expired / already-exchanged into
+ * the SINGLE `INVALID_PUBLIC_TOKEN` code (error_type INVALID_INPUT) — which is exactly what we
+ * want: ONE uniform client-correctable state, NOT a per-state taxonomy (no token-state oracle,
+ * guardrail #1). Keyed STRICTLY to the exchange leg + this allowlist; every other Plaid code
+ * (INVALID_API_KEYS, RATE_LIMIT_EXCEEDED, INTERNAL_SERVER_ERROR, INVALID_FIELD, …) and every
+ * non-Plaid failure (DB / vault / network / unknown) stays a generic 5xx (guardrail #2, fail-safe).
+ */
+const PUBLIC_TOKEN_INVALIDITY_CODES: ReadonlySet<string> = new Set(['INVALID_PUBLIC_TOKEN']);
+
+/**
+ * Marker error for a client-correctable invalid/burned/expired public_token AT THE EXCHANGE
+ * LEG. The HTTP admission endpoint maps this — and ONLY this — to a worker-400
+ * `public_token_invalid` ("re-run Link"); everything else is 5xx. SCRUBBED (guardrail #3): the
+ * message carries no token/secret; `plaidErrorCode` holds the non-sensitive Plaid code for
+ * server-side logging ONLY and is never emitted in the response envelope.
+ */
+export class PublicTokenInvalidError extends Error {
+	readonly plaidErrorCode: string;
+	constructor(code: string) {
+		super('Plaid public_token invalid at exchange (client-correctable; re-run Link)');
+		this.name = 'PublicTokenInvalidError';
+		this.plaidErrorCode = code;
+	}
+}
+
+/** True iff `err` is a recognized public_token-invalidity error from the EXCHANGE call. */
+export function isPublicTokenInvalidity(err: unknown): boolean {
+	const code = plaidErrorCode(err);
+	return code !== null && PUBLIC_TOKEN_INVALIDITY_CODES.has(code);
 }
 
 export class PlaidAdapter implements ProviderAdapter {
@@ -530,9 +574,61 @@ export class PlaidAdapter implements ProviderAdapter {
 			accessToken = ex.access_token;
 			itemId = ex.item_id;
 		} catch (err) {
+			// Item-2: a recognized public_token-invalidity code at THIS (exchange) leg → a
+			// client-correctable marker (→ worker-400). A malformed exchange RESPONSE (Zod parse
+			// throw) or any other Plaid/transport failure has no invalidity code → generic 5xx
+			// (guardrail #2, fail-safe). Both stay SCRUBBED (guardrail #3 / SC3-C4).
+			if (isPublicTokenInvalidity(err)) {
+				throw new PublicTokenInvalidError(plaidErrorCode(err) as string);
+			}
 			throw scrubbedPlaidError(err, 'item/public_token/exchange'); // SC3-C4.
 		}
 
+		// (2) Post-exchange work runs under a C6-4 recovery guard (Sec SELF-212): any failure
+		//   AFTER a successful exchange attempts Plaid /item/remove so a live, un-revocable Item
+		//   is never stranded (connect() discards the access_token when it throws, and the token
+		//   lives ONLY in this scope → the recovery MUST be here, not in the HTTP wrapper). The
+		//   caller contract is "never retry a burned public_token"; a legitimate same-Item retry
+		//   lands on the (u) re-admission UPDATE via unique(provider, external_connection_id).
+		try {
+			return await this.#admitAfterExchange(s, dbFor, accessToken, itemId);
+		} catch (err) {
+			await this.#revokeExchangedItemBestEffort(accessToken, itemId);
+			throw err;
+		}
+	}
+
+	/**
+	 * C6-4 recovery: best-effort Plaid /item/remove for an Item whose exchange SUCCEEDED but
+	 * whose admission then failed. Swallows its own failure (never throws over the original
+	 * admission error) and emits a TOKEN-FREE manual-revoke audit signal so a live Item is not
+	 * silently stranded. C6-7 forward-hook: replace the log with a same-transaction audit row
+	 * when audit infra lands (ADR-026 A2 deferral). NEVER logs the access_token (C6-5).
+	 */
+	async #revokeExchangedItemBestEffort(accessToken: string, itemId: string): Promise<void> {
+		try {
+			await this.#client.itemRemove({ access_token: accessToken });
+			this.#log(`admission failed post-exchange; revoked orphaned plaid item item_id=${itemId} (C6-4).`);
+		} catch (revokeErr) {
+			const code = plaidErrorCode(revokeErr);
+			this.#log(
+				`MANUAL REVOKE REQUIRED (C6-4): plaid item_id=${itemId} is live post-exchange and ` +
+					`/item/remove failed${code ? ` (${code})` : ''}; revoke it at the Plaid dashboard.`
+			);
+		}
+	}
+
+	/**
+	 * The post-exchange admission body: account-refs fetch + the (u) ONE atomic service_role
+	 * transaction (create_secret + INSERT/UPDATE linked_source). Extracted verbatim from
+	 * connect() so connect() can wrap it in the C6-4 recovery guard; behavior is unchanged.
+	 */
+	async #admitAfterExchange(
+		s: z.infer<typeof connectSetupSchema>,
+		dbFor: AdmissionDbFactory,
+		accessToken: string,
+		itemId: string
+	): Promise<{ sourceId: bigint; accounts: ProviderAccountRef[] }> {
 		// Account refs (no pfin.account write — separate slice / defers the D3 #6 fence).
 		let accounts: ProviderAccountRef[];
 		try {

@@ -1,0 +1,21 @@
+# fence-admission-private-bind: target
+# GOLDEN FIXTURE — POSITIVE (vector 1: published host-port mapping → fence TRIPS).
+#
+# CA-5 exposure vector (1 of 2): a `ports:` host-publish mapping on the admission
+# port makes it reachable from the host/public internet. The fence MUST exit 1.
+# Inversion-mode in the fence-admission-bind CI job asserts this trips; a clean
+# result here = the fence is broken (fails the job closed). "A fence without a
+# failing golden test is theater."
+
+services:
+  provider-sync:
+    container_name: provider-sync
+    build: .
+    restart: unless-stopped
+    # VIOLATION: published host-port mapping (should be `expose:` only).
+    ports:
+      - "8081:8081"
+    environment:
+      - NODE_ENV=production
+      - ADMISSION_PRIVATE_ONLY=true
+      - ADMISSION_PORT=8081

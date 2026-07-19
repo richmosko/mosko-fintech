@@ -58,16 +58,18 @@ describe('fetchLinkToken (leg 1)', () => {
 
 describe('exchangePublicToken (leg 2)', () => {
 	it('sends ONLY { public_token, metadata } — no tenant id, no access_token (AC #5)', async () => {
-		const spy = vi.fn(async () =>
+		// Type the mock with the real `fetch` signature so `mock.calls[0]` is typed as
+		// `[input, init?]` — lets us destructure the 2nd arg without an unsafe cast.
+		const spy: FetchLike = vi.fn<FetchLike>(async () =>
 			new Response(JSON.stringify({ success: true, accounts: [{ account_id: 'a1' }] }), {
 				status: 200,
 				headers: { 'content-type': 'application/json' }
 			})
 		);
-		await exchangePublicToken('public-sandbox-xyz', { institution: { name: 'Test Bank' } }, spy as unknown as FetchLike);
+		await exchangePublicToken('public-sandbox-xyz', { institution: { name: 'Test Bank' } }, spy);
 
-		const [, init] = spy.mock.calls[0];
-		const sentBody = JSON.parse(String((init as RequestInit).body));
+		const init = (spy as ReturnType<typeof vi.fn<FetchLike>>).mock.calls[0]?.[1];
+		const sentBody = JSON.parse(String(init?.body ?? ''));
 		expect(Object.keys(sentBody).sort()).toEqual(['metadata', 'public_token']);
 		expect(sentBody.public_token).toBe('public-sandbox-xyz');
 		// Hard guards: none of these may ever appear in the outgoing body.

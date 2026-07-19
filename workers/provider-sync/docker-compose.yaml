@@ -1,0 +1,84 @@
+# fence-admission-private-bind: target
+# workers/provider-sync/docker-compose.yaml
+#
+# Coolify **Compose build-pack** manifest for the provider-sync worker (SELF-212
+# Option C, b-i per F/CTO ratify + Sec CA-3). Adopting a committed compose — vs.
+# the Dockerfile+Base-Directory build pack — is what makes the SELF-212 admission
+# endpoint's network-exposure surface COMMITTED and therefore LINTABLE by
+# scripts/ci/fence-admission-private-bind.sh (limb (b) of C6-1). Precedent:
+# workers/etl/docker-compose.yaml.
+#
+# ┌─ ADMISSION ENDPOINT — INTERNAL-ONLY BY CONSTRUCTION (C6-1 / RT-27) ─────────┐
+# │ The SELF-212 app→worker admission HTTP endpoint (leg-1 link_token mint +     │
+# │ leg-2 public_token exchange+admit) is reachable ONLY over the shared Coolify │
+# │ PROJECT Docker network, via the service name `http://provider-sync:8081`.    │
+# │                                                                              │
+# │ ENFORCED HERE by the ABSENCE of two things (fence-admission-private-bind      │
+# │ fails closed if either appears):                                             │
+# │   1. NO published host-port mapping (`ports:`) — only `expose:` (internal).  │
+# │      `expose:` grants sibling-container reach on the project network; it does │
+# │      NOT publish to the host/public internet. That is the whole point.       │
+# │   2. NO reverse-proxy Domain / Traefik `Host()` label / Coolify `SERVICE_FQDN`│
+# │      magic requesting a public FQDN for this service.                        │
+# │                                                                              │
+# │ The UI-added-Domain vector (which a committed lint CANNOT see) is covered by  │
+# │ the worker's startup public-route env tripwire (limb (a), Backend-owned) +    │
+# │ the deploy-time external-reachability negative smoke (CA-2, runbook §10).     │
+# │ Multi-layer per Sec CA-3 — do not collapse to a single layer.                │
+# │                                                                              │
+# │ CA-4 PREREQUISITE: this service AND the api/ web-app MUST live in the SAME    │
+# │ Coolify PROJECT, or `http://provider-sync:8081` does not resolve (internal    │
+# │ DNS is per-project). Cross-project placement breaks internal reach AND tempts │
+# │ a public-Domain "fix" — the exact regression §10 fences. See runbook §7.      │
+# └─────────────────────────────────────────────────────────────────────────────┘
+#
+# TRANSPORT posture is UNCHANGED from the Dockerfile: direct-Postgres via
+# TenantBoundClient (PFIN_DB_*, login role authenticator), OFF the RT-26 allowlist
+# (no SUPABASE_SERVICE_ROLE_KEY, no @supabase/supabase-js — fence-tbc-node enforces).
+#
+# SECRETS: Coolify-injected at RUNTIME (deploy-time, greenfield VPS per ADR-021).
+# NONE are literals here. `${VAR}` references document the contract; Coolify
+# substitutes the real values from the service/project env at deploy. See
+# workers/provider-sync/.env.example + secrets-manifest.yml (production_only).
+
+services:
+  provider-sync:
+    container_name: provider-sync
+    build: .
+    restart: unless-stopped
+    # INTERNAL-ONLY admission port. `expose:` = reachable to sibling containers on
+    # the project network; NOT host-published. NEVER convert this to a `ports:`
+    # mapping (fence-admission-private-bind fails closed on `ports:`).
+    expose:
+      - "8081"
+    environment:
+      - NODE_ENV=production
+      # --- SELF-212 admission endpoint (Option C) ---
+      # ADMISSION_PRIVATE_ONLY: affirmative fail-closed opt-in consumed by the
+      # worker's limb-(a) startup assertion. Unset/not-"true" → worker refuses to
+      # serve the admission listener (Backend-owned). Non-secret literal.
+      - ADMISSION_PRIVATE_ONLY=true
+      - ADMISSION_PORT=8081
+      # ADMISSION_HOST: in-container bind host. 0.0.0.0 is REQUIRED for sibling
+      # reach over the internal Docker network (CAVEAT-2) — the bind address is NOT
+      # the exposure control; the absence of ports:/Domain above is. Consumed by
+      # admissionConfig.ts (default 0.0.0.0); set explicitly here for contract clarity.
+      - ADMISSION_HOST=0.0.0.0
+      # WORKER_ADMISSION_SHARED_SECRET (C6-2): 256-bit shared secret, SAME value on
+      # api/ web-app + this worker; Coolify project-scoped shared var (one rotation
+      # edit point). production_only (secrets-manifest.yml); NEVER a literal here.
+      - WORKER_ADMISSION_SHARED_SECRET=${WORKER_ADMISSION_SHARED_SECRET}
+      # --- pfin direct-Postgres transport (authenticator; writes AS service_role) ---
+      - PFIN_DB_HOST=${PFIN_DB_HOST}
+      - PFIN_DB_PORT=${PFIN_DB_PORT}
+      - PFIN_DB_NAME=${PFIN_DB_NAME}
+      - PFIN_DB_USER=${PFIN_DB_USER}
+      - PFIN_DB_PASSWORD=${PFIN_DB_PASSWORD}
+      # --- Plaid (PRIMARY; required at boot per loadConfig()) ---
+      - PLAID_ENV=${PLAID_ENV}
+      - PLAID_CLIENT_ID=${PLAID_CLIENT_ID}
+      - PLAID_SECRET=${PLAID_SECRET}
+      # --- SimpleFIN (FALLBACK; admit entrypoint) ---
+      - SIMPLEFIN_TOKEN=${SIMPLEFIN_TOKEN}
+      # --- Notification routing ---
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
