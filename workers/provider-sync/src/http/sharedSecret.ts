@@ -4,7 +4,7 @@
 // shared secret; leg-1 is NOT "less protected" for being stateless (link_token mint is a
 // Plaid cost-abuse vector — C6-6). The secret is `WORKER_ADMISSION_SHARED_SECRET`, a NEW
 // high-entropy production-only secret provisioned by DevOps on both api/src and the worker
-// (NOT `SUPABASE_SERVICE_ROLE_KEY` → RT-26 allowlist unchanged).
+// (NOT the Supabase service-role key / its env var — RT-26 allowlist unchanged).
 //
 // Verification is CONSTANT-TIME and FAIL-CLOSED on absent/mismatch (C6-2 / CA-6): no timing
 // oracle, no verbose reject. We compare fixed-length SHA-256 digests of both sides so the
