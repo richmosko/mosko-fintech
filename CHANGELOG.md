@@ -12,6 +12,18 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 ---
 
+### v1.84 — 2026-07-19
+
+**Phase 6 — SELF-212 follow-up #12: ADR-028 per-route Plaid Link CSP (PR #177, merge `fde7bda`).** The Content-Security-Policy for the Plaid Link connect surface — deferred from the SELF-212 wave (the config, not the ADR). A strict global CSP base for every route + a per-route widen for `/accounts/connect` ONLY (**CSP-1** — app-global relaxation on dashboard/financial surfaces is a Sec veto). Sec CSP-1 joint-review PASS, no veto; §10 untouched; RT-28 stays MEDIUM non-§10.
+
+**The one fork — CSP-3 gating basis (F/CTO-ratified).** ADR-028 CSP-3 originally read "sandbox host in non-prod *builds*," but V1.0 runs Plaid *sandbox* tier on a *production* build (`PLAID_ENV=sandbox` default; production post-SELF-212, F/CTO-gated) — literal build-mode gating would emit only `production.plaid.com` on a V1.0 prod build → CSP-block sandbox Link → broken onboarding. F/CTO ruled **Plaid-env-gating**: the `connect-src` host tracks `PLAID_ENV` (server-read, non-secret, fail-safe → sandbox), env-matched to a single host (`sandbox.plaid.com` XOR `production.plaid.com`, verified against Plaid's official CSP docs). **ADR-028 CSP-3 amended** (`2deab3a`); `PLAID_ENV` exact-name-matched to the worker's var so one value drives both the worker's Plaid tier and the web-app CSP host.
+
+**What landed.** `vite.config.ts` `kit.csp {mode:'nonce'}` strict zero-Plaid base (CSP-2); `src/lib/plaid/csp.ts` pure `applyPlaidConnectCsp` (widens only the exact connect route, base UNCHANGED elsewhere — the structural CSP-1 guarantee); `hooks.server.ts` `sequence(authHandle, cspHandle)` (single chokepoint per ADR-015 D1, auth-first, post-resolve widen). Both Sec test follow-ups closed: the CSP-1 per-route-scoping assertion is now REAL (replaced the `expect(true)` stub — goes red if any non-Plaid route widens, even under `PLAID_ENV=production`); the burned-token-status test un-skipped (worker-400 `public_token_invalid` → browser-400, scrubbed). 60/60 api tests, check 0 errors, CI 10/10.
+
+**Process note — a shared-worktree clobber, self-caught + recovered.** Sec ran a mutating `git checkout -- .` to read branch files, which overwrote BackendApi's *uncommitted* `cspHandle` + burned-token flip; Sec self-reported immediately and reverted to read-only. BackendApi re-applied + committed (`8df3fad`), the tree verified whole + green. Lesson banked: reviewers read branch files with the Read tool, never `git checkout`; and reviewed work gets committed promptly rather than held uncommitted in a shared tree. Detail: [PR #177](https://github.com/richmosko/mosko-fintech/pull/177).
+
+---
+
 ### v1.83 — 2026-07-19
 
 **Phase 6 — SELF-212 frontend-connect wave: production Plaid onboarding via worker-owns-exchange (PR #175, merge `d8cbbac`).** The browser→worker Plaid production-onboarding path. Browser → credential-less `api/src` relay → private-Docker-network worker admission endpoint; the raw `access_token` never enters the app tier. Closes **SELF-197** (relay legs) + **SELF-198** (Link UI); **SELF-212** (the F/CTO Plaid production-tier gate) closed **Outcome A** — the round-3 production probe already surfaced the cost (~$2.56/mo per 5 Items, well under the ≤$50/mo Lock-16 envelope), so the sales call was moot. **§10 catalogued-instance count 2→3** (RT-27 third); DEFINER 3 · Decision-3 8 · migrations `001`–`021` unchanged (the wave is code + docs, no migration).
