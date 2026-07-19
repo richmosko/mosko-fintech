@@ -17,6 +17,8 @@ import {
 	PLAID_CONNECT_SRC_SANDBOX
 } from './csp';
 
+// The Plaid API env is now a pure parameter (F/CTO ruling: env-matched connect-src host).
+
 // A representative strict base header as SvelteKit's kit.csp emits it in SSR (nonce mode).
 const NONCE = 'r4Nd0mNoNcE';
 const BASE_CSP =
@@ -29,35 +31,37 @@ const PLAID_TOKENS = ['plaid.com', 'cdn.plaid.com', 'production.plaid.com', 'san
 
 describe('CSP-1 — per-route scoping (Sec veto condition)', () => {
 	it('returns the base CSP UNCHANGED for a non-Plaid route (identity)', () => {
-		const out = applyPlaidConnectCsp('/dashboard', BASE_CSP, { includeSandbox: true });
+		const out = applyPlaidConnectCsp('/dashboard', BASE_CSP, { plaidEnv: 'sandbox' });
 		expect(out).toBe(BASE_CSP);
 	});
 
-	it('a non-Plaid route emits NO Plaid entry of any kind', () => {
-		for (const routeId of ['/', '/dashboard', '/accounts', '/accounts/new', '/accounts/[account_id]', null]) {
-			const out = applyPlaidConnectCsp(routeId, BASE_CSP, { includeSandbox: true });
-			for (const t of PLAID_TOKENS) expect(out).not.toContain(t);
+	it('a non-Plaid route emits NO Plaid entry of any kind (in either env)', () => {
+		for (const plaidEnv of ['sandbox', 'production'] as const) {
+			for (const routeId of ['/', '/dashboard', '/accounts', '/accounts/new', '/accounts/[account_id]', null]) {
+				const out = applyPlaidConnectCsp(routeId, BASE_CSP, { plaidEnv });
+				for (const t of PLAID_TOKENS) expect(out).not.toContain(t);
+			}
 		}
 	});
 
 	it('only the exact connect route id triggers widening', () => {
-		expect(applyPlaidConnectCsp('/accounts/connect/attributes', BASE_CSP, { includeSandbox: false })).toBe(BASE_CSP);
-		expect(applyPlaidConnectCsp(PLAID_CONNECT_ROUTE_ID, BASE_CSP, { includeSandbox: false })).not.toBe(BASE_CSP);
+		expect(applyPlaidConnectCsp('/accounts/connect/attributes', BASE_CSP, { plaidEnv: 'production' })).toBe(BASE_CSP);
+		expect(applyPlaidConnectCsp(PLAID_CONNECT_ROUTE_ID, BASE_CSP, { plaidEnv: 'production' })).not.toBe(BASE_CSP);
 	});
 });
 
 describe('CSP-2 — nonce, never unsafe-inline on script-src', () => {
 	it('preserves the base nonce and adds NO unsafe-inline to script-src on the connect route', () => {
-		const out = applyPlaidConnectCsp(PLAID_CONNECT_ROUTE_ID, BASE_CSP, { includeSandbox: false });
+		const out = applyPlaidConnectCsp(PLAID_CONNECT_ROUTE_ID, BASE_CSP, { plaidEnv: 'production' });
 		const scriptSrc = parseCsp(out).get('script-src')!;
 		expect(scriptSrc).toContain(`'nonce-${NONCE}'`);
 		expect(scriptSrc).not.toContain("'unsafe-inline'");
 	});
 });
 
-describe('CSP-3 — explicit hosts, no wildcard, build-env-gated sandbox', () => {
-	it('script-src + frame-src admit ONLY the exact cdn.plaid.com path/origin (no wildcard)', () => {
-		const map = parseCsp(widenCspForPlaid(BASE_CSP, { includeSandbox: false }));
+describe('CSP-3 — explicit hosts, no wildcard, env-matched connect-src', () => {
+	it('script-src + frame-src admit ONLY the exact cdn.plaid.com path/origin (no wildcard, env-independent)', () => {
+		const map = parseCsp(widenCspForPlaid(BASE_CSP, { plaidEnv: 'production' }));
 		expect(map.get('script-src')).toContain(PLAID_SCRIPT_SRC);
 		expect(map.get('frame-src')).toEqual([PLAID_FRAME_SRC]);
 		const all = [...map.values()].flat();
@@ -65,20 +69,23 @@ describe('CSP-3 — explicit hosts, no wildcard, build-env-gated sandbox', () =>
 		expect(all.some((s) => s.includes('*'))).toBe(false);
 	});
 
-	it('connect-src is explicit production.plaid.com; sandbox ONLY when includeSandbox', () => {
-		const prod = parseCsp(widenCspForPlaid(BASE_CSP, { includeSandbox: false })).get('connect-src')!;
+	it('production env → connect-src carries production.plaid.com ONLY (never sandbox)', () => {
+		const prod = parseCsp(widenCspForPlaid(BASE_CSP, { plaidEnv: 'production' })).get('connect-src')!;
 		expect(prod).toEqual(["'self'", PLAID_CONNECT_SRC_PROD]);
 		expect(prod).not.toContain(PLAID_CONNECT_SRC_SANDBOX);
+	});
 
-		const nonProd = parseCsp(widenCspForPlaid(BASE_CSP, { includeSandbox: true })).get('connect-src')!;
-		expect(nonProd).toContain(PLAID_CONNECT_SRC_PROD);
-		expect(nonProd).toContain(PLAID_CONNECT_SRC_SANDBOX);
+	it('sandbox env → connect-src carries sandbox.plaid.com ONLY (never production)', () => {
+		// Plaid-official: in Sandbox, Link XHRs target sandbox.plaid.com (env-matched, not both).
+		const sb = parseCsp(widenCspForPlaid(BASE_CSP, { plaidEnv: 'sandbox' })).get('connect-src')!;
+		expect(sb).toEqual(["'self'", PLAID_CONNECT_SRC_SANDBOX]);
+		expect(sb).not.toContain(PLAID_CONNECT_SRC_PROD);
 	});
 });
 
 describe('CSP-4 — style-src-attr unsafe-inline is the ONLY residual', () => {
 	it('sets style-src-attr to unsafe-inline while style-src / style-src-elem stay nonce-gated', () => {
-		const map = parseCsp(widenCspForPlaid(BASE_CSP, { includeSandbox: false }));
+		const map = parseCsp(widenCspForPlaid(BASE_CSP, { plaidEnv: 'production' }));
 		expect(map.get('style-src-attr')).toEqual(["'unsafe-inline'"]);
 		expect(map.get('style-src')).not.toContain("'unsafe-inline'");
 		expect(map.get('style-src-elem')).not.toContain("'unsafe-inline'");
@@ -89,7 +96,7 @@ describe('CSP-4 — style-src-attr unsafe-inline is the ONLY residual', () => {
 
 describe('base directives preserved on the connect route', () => {
 	it('keeps default-src / object-src / base-uri / form-action / frame-ancestors from the base', () => {
-		const map = parseCsp(widenCspForPlaid(BASE_CSP, { includeSandbox: false }));
+		const map = parseCsp(widenCspForPlaid(BASE_CSP, { plaidEnv: 'production' }));
 		expect(map.get('default-src')).toEqual(["'self'"]);
 		expect(map.get('object-src')).toEqual(["'none'"]);
 		expect(map.get('base-uri')).toEqual(["'self'"]);

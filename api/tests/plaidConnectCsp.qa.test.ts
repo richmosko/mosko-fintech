@@ -38,7 +38,7 @@ export const BLESSED_CSP = {
 	'style-src-elem': ["'self'", "'nonce-<per-response>'"],
 	'style-src-attr': ["'unsafe-inline'"], // vendor-forced residual (CSP-4), documented in SECURITY §4.2
 	'frame-src': ['https://cdn.plaid.com'],
-	'connect-src': ["'self'", 'https://production.plaid.com'] // sandbox.plaid.com in non-prod builds ONLY
+	'connect-src': ["'self'", 'https://production.plaid.com'] // env-matched: sandbox.plaid.com when PLAID_ENV=sandbox
 	// default-src stays app base 'self'; img-src NOT required.
 } as const;
 
@@ -57,16 +57,19 @@ const BASE_CSP =
 	`font-src 'self'; connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'self'; ` +
 	`form-action 'self'; frame-ancestors 'none'`;
 
-// The connect route's emitted CSP (prod build → includeSandbox:false) as a parsed map.
-const connectProd = parseCsp(applyPlaidConnectCsp(PLAID_CONNECT_ROUTE_ID, BASE_CSP, { includeSandbox: false }));
+// The connect route's emitted CSP for each Plaid env (F/CTO ruling: env-matched host).
+const connectProd = parseCsp(applyPlaidConnectCsp(PLAID_CONNECT_ROUTE_ID, BASE_CSP, { plaidEnv: 'production' }));
+const connectSandbox = parseCsp(applyPlaidConnectCsp(PLAID_CONNECT_ROUTE_ID, BASE_CSP, { plaidEnv: 'sandbox' }));
 
 describe('RT-28 — Plaid Link connect-route CSP allowlist (LIVE — #12 landed)', () => {
-	it('CSP-1: relaxations are PER-ROUTE — a non-Plaid route carries NONE of them', () => {
-		for (const routeId of ['/', '/dashboard', '/accounts', '/accounts/new', null]) {
-			const out = applyPlaidConnectCsp(routeId, BASE_CSP, { includeSandbox: true });
-			expect(out).toBe(BASE_CSP); // identity: untouched
-			for (const t of ['plaid.com', 'cdn.plaid.com', 'production.plaid.com', 'sandbox.plaid.com']) {
-				expect(out).not.toContain(t);
+	it('CSP-1: relaxations are PER-ROUTE — a non-Plaid route carries NONE of them (either env)', () => {
+		for (const plaidEnv of ['sandbox', 'production'] as const) {
+			for (const routeId of ['/', '/dashboard', '/accounts', '/accounts/new', null]) {
+				const out = applyPlaidConnectCsp(routeId, BASE_CSP, { plaidEnv });
+				expect(out).toBe(BASE_CSP); // identity: untouched
+				for (const t of ['plaid.com', 'cdn.plaid.com', 'production.plaid.com', 'sandbox.plaid.com']) {
+					expect(out).not.toContain(t);
+				}
 			}
 		}
 	});
@@ -77,16 +80,17 @@ describe('RT-28 — Plaid Link connect-route CSP allowlist (LIVE — #12 landed)
 		expect(scriptSrc).not.toContain(CSP_FORBIDDEN.scriptUnsafeInline);
 	});
 
-	it('CSP-3: connect-src is explicit production.plaid.com — never *.plaid.com, never sandbox in prod', () => {
+	it('CSP-3: production env → connect-src is explicit production.plaid.com; never *.plaid.com, never sandbox', () => {
 		const connectSrc = connectProd.get('connect-src')!;
-		expect(connectSrc).toContain(PLAID_CONNECT_SRC_PROD);
+		expect(connectSrc).toEqual(["'self'", PLAID_CONNECT_SRC_PROD]);
 		expect(connectSrc).not.toContain(CSP_FORBIDDEN.plaidWildcard);
 		expect(connectSrc).not.toContain(CSP_FORBIDDEN.sandboxHostInProd);
 	});
 
-	it('CSP-3: sandbox host appears in NON-prod builds only', () => {
-		const nonProd = parseCsp(applyPlaidConnectCsp(PLAID_CONNECT_ROUTE_ID, BASE_CSP, { includeSandbox: true }));
-		expect(nonProd.get('connect-src')).toContain(PLAID_CONNECT_SRC_SANDBOX);
+	it('CSP-3: sandbox env → connect-src is explicit sandbox.plaid.com ONLY (env-matched, not both)', () => {
+		// Plaid-official CSP guidance: in Sandbox, point connect-src at sandbox.plaid.com.
+		expect(connectSandbox.get('connect-src')).toEqual(["'self'", PLAID_CONNECT_SRC_SANDBOX]);
+		expect(connectSandbox.get('connect-src')).not.toContain(PLAID_CONNECT_SRC_PROD);
 	});
 
 	it('CSP-3: script-src + frame-src admit ONLY cdn.plaid.com (no wildcard)', () => {

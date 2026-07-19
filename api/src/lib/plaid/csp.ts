@@ -15,22 +15,34 @@
 //     reusing the nonce SvelteKit already generated. Header (not meta) ⇒ no intersection
 //     trap; the per-route widening is authoritative. This is what satisfies CSP-1.
 //
-// ADR-028 blessed set (Sec-ratified, verbatim) — the connect route's target policy:
+// ADR-028 blessed set (Sec-ratified) — the connect route's target policy. CSP-3 host is
+// gated on the Plaid API ENV (F/CTO ruling 2026-07-19, option 2: env-matched, NOT build
+// mode — ADR-028 amendment routing to Architect):
 //   script-src   'self' 'nonce-<per-response>' https://cdn.plaid.com/link/v2/stable/link-initialize.js
 //   style-src    'self' 'nonce-<per-response>'
 //   style-src-elem 'self' 'nonce-<per-response>'
 //   style-src-attr 'unsafe-inline'                 # CSP-4 vendor-forced residual
-//   frame-src    https://cdn.plaid.com
-//   connect-src  'self' https://production.plaid.com   # + sandbox host in NON-prod only (CSP-3)
+//   frame-src    https://cdn.plaid.com             # Link ASSET host — env-independent
+//   connect-src  'self' https://<env>.plaid.com    # sandbox.plaid.com | production.plaid.com per PLAID_ENV (CSP-3)
+
+/** Which Plaid API environment the deploy talks to. Mirrors the worker's `PLAID_ENV`. */
+export type PlaidEnv = 'sandbox' | 'production';
 
 /** The SvelteKit route id of the Plaid Link onboarding surface (the ONLY route relaxed). */
 export const PLAID_CONNECT_ROUTE_ID = '/accounts/connect';
 
 // The exact allowlisted Plaid origins/paths (no wildcard — `*.plaid.com` was REJECTED).
+// cdn.plaid.com is the Link ASSET host (script + frame) — the SAME regardless of API env.
 export const PLAID_SCRIPT_SRC = 'https://cdn.plaid.com/link/v2/stable/link-initialize.js';
 export const PLAID_FRAME_SRC = 'https://cdn.plaid.com';
+// connect-src API host is env-matched (CSP-3): exactly ONE host, the one for the live tier.
 export const PLAID_CONNECT_SRC_PROD = 'https://production.plaid.com';
 export const PLAID_CONNECT_SRC_SANDBOX = 'https://sandbox.plaid.com';
+/** The single connect-src API host for a given Plaid env. */
+export const PLAID_CONNECT_SRC_BY_ENV: Record<PlaidEnv, string> = {
+	sandbox: PLAID_CONNECT_SRC_SANDBOX,
+	production: PLAID_CONNECT_SRC_PROD
+};
 
 /** True only for the Plaid Link onboarding route — the sole surface ADR-028 relaxes. */
 export function isPlaidConnectRoute(routeId: string | null | undefined): boolean {
@@ -61,11 +73,11 @@ export function serializeCsp(map: Map<string, string[]>): string {
  * connect route ONLY. Preserves the base's per-response nonce (reused, never dropped) and
  * every non-Plaid base directive (default-src etc.). Additive/override per directive:
  *   • script-src  ← base + the exact Link initializer path
- *   • frame-src   ← https://cdn.plaid.com (blessed exact)
- *   • connect-src ← 'self' + production.plaid.com (+ sandbox host when includeSandbox)
+ *   • frame-src   ← https://cdn.plaid.com (blessed exact; env-independent asset host)
+ *   • connect-src ← 'self' + the env-matched API host (sandbox|production per plaidEnv)
  *   • style-src-attr ← 'unsafe-inline' (CSP-4 residual; style-src/-elem stay nonce-gated)
  */
-export function widenCspForPlaid(baseCsp: string, opts: { includeSandbox: boolean }): string {
+export function widenCspForPlaid(baseCsp: string, opts: { plaidEnv: PlaidEnv }): string {
 	const map = parseCsp(baseCsp);
 
 	const scriptSrc = [...(map.get('script-src') ?? ["'self'"])];
@@ -74,9 +86,8 @@ export function widenCspForPlaid(baseCsp: string, opts: { includeSandbox: boolea
 
 	map.set('frame-src', [PLAID_FRAME_SRC]);
 
-	const connectSrc = ["'self'", PLAID_CONNECT_SRC_PROD];
-	if (opts.includeSandbox) connectSrc.push(PLAID_CONNECT_SRC_SANDBOX);
-	map.set('connect-src', connectSrc);
+	// CSP-3 (F/CTO option 2): exactly ONE API host, matched to the live Plaid tier.
+	map.set('connect-src', ["'self'", PLAID_CONNECT_SRC_BY_ENV[opts.plaidEnv]]);
 
 	// CSP-4: inline style ATTRIBUTES only (Plaid Link injects them). style-src /
 	// style-src-elem stay nonce-gated — the residual does not leak to them.
@@ -92,12 +103,13 @@ export function widenCspForPlaid(baseCsp: string, opts: { includeSandbox: boolea
  *
  * @param routeId `event.route?.id` from the SvelteKit hook.
  * @param baseCsp the `content-security-policy` header SvelteKit's kit.csp emitted.
- * @param opts.includeSandbox add sandbox.plaid.com to connect-src (NON-prod builds only).
+ * @param opts.plaidEnv the live Plaid API env (server-read `PLAID_ENV`) — selects the
+ *        single env-matched connect-src host (CSP-3).
  */
 export function applyPlaidConnectCsp(
 	routeId: string | null | undefined,
 	baseCsp: string,
-	opts: { includeSandbox: boolean }
+	opts: { plaidEnv: PlaidEnv }
 ): string {
 	if (!isPlaidConnectRoute(routeId)) return baseCsp;
 	return widenCspForPlaid(baseCsp, opts);
