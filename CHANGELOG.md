@@ -12,6 +12,20 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 ---
 
+### v1.87 — 2026-07-20
+
+**Phase 6 — SELF-281 (connect-wave follow-up OQ-2): provider-agnostic connect seam + in-app SimpleFIN connect (PR #183, merge `57b4cb4`).** SimpleFIN was previously admittable only via a sandbox dev CLI; OQ-2 adds an in-app SimpleFIN connect flow through the SHIPPED RT-27 app→worker fence (a new *route*, not a new fence) and generalizes the connect page to a provider picker. Plaid path unchanged; reuses `SimpleFINAdapter.connect()` + the shipped account-mapping wholesale. **1-leg asymmetry:** SimpleFIN = paste a Bridge setup-token → claim → Vault admit (no link-token analogue, no `/item/remove` recovery — read-only Access URL).
+
+**F/CTO ratifications (all two-way doors).** RF-1 = Option A (provider picker + sibling `SimpleFINConnect`; defer a provider registry to a 3rd provider) · RF-2 = accept the paste-a-Bridge-token V1.x cut (defer a token-broker) · RF-3 = ship the revoke-at-Bridge warning now (closes the SECURITY §4.2 C7 warning-UX limb; the structural local-delete-only revoke residual persists).
+
+**What landed.** Worker `POST /admission/simplefin/claim` (shared-secret gate + private-bind; `SetupTokenInvalidError` client-correctable discrimination — base64-fail/4xx → 400, 5xx/DB/Vault/transport → 5xx fail-safe) + api credential-less relay `POST /api/simplefin/connect` (`ownerUserId` session-derived, `.strict()` body no tenant key, off RT-26) + `SimpleFINConnect.svelte` (setup-token form + the RF-3 revoke-at-Bridge warning in neutral tokens + credential hygiene) + the accessible provider picker (RF-1 Option A). Docs: **[ADR-027](DECISIONS.md#adr-027) (jj)** + RT-27 **KEEP-at-canonical-anchor + extend** annotation (Plaid clauses preserved verbatim) + §4.2 C7 update.
+
+**Security — Sec paired joint-review GREEN (no conditions).** All six C6-1…C6-6 conditions verified in code (C6-3 tenant proven at 4 layers; C6-5 scrub swept both tiers); fail-safe discrimination; the `new URL()` Access-URL leak vector scrub carries. **Ledger UNCHANGED: §10 stays 3** (route on the existing RT-27 instance, no surface becomes "four-layer") **· DEFINER 3 · Decision-3 8 · RT-26 allowlist unchanged**; no migration. §10 3-axis clean. QA: two-tenant relay+worker + the **SC3-C8** same-Access-URL-digest collision (tenant A's credential asserted untouched) + systematic scrub battery. worker 227 / api 103 / svelte-check 0 errors.
+
+**CI note.** gitleaks flagged the synthetic `SETUP_TOKEN` base64 fixtures (high-entropy `generic-api-key`); resolved by computing them via `btoa('https://setup-should-never-appear')` (readable plaintext sentinel — no fence allowlist) + squashing the branch so the literal never enters `main` history. **Tracked follow-up (non-blocking):** lift the shared api→worker transport to a `src/lib/server/providers/` module (~50-line relay duplication). Detail: [PR #183](https://github.com/richmosko/mosko-fintech/pull/183).
+
+---
+
 ### v1.86 — 2026-07-20
 
 **Phase 6 — SELF-280 (connect-wave follow-up #16): `safeGetSession` unvalidated-session hardening (PR #181, merge `2a5b18c`).** Hardens the [ADR-015](DECISIONS.md#adr-015) D1 single auth chokepoint (`api/src/hooks.server.ts`). `safeGetSession` validated the JWT via `getUser()` but returned the raw `getSession()` session, whose `.user` came from the **unverified (spoofable) cookie**. It now normalizes the returned `session.user` to the `getUser()`-server-validated user — `return { session: { ...session, user }, user }` — so any read of `session.user` is validated-by-construction. Latent (all 9 call sites read only `{ user }`) but a footgun on the app's sole auth chokepoint.
