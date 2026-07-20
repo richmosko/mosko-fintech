@@ -12,6 +12,18 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 ---
 
+### v1.85 — 2026-07-20
+
+**Phase 6 — SELF-279 (connect-wave follow-up #14): recurring CA-2 reachability probe + Discord alert (PR #179, merge `51a02a9`).** Closes the "recurring reachability probe … tracked post-merge hardening" that SECURITY RT-27 + [ADR-027](DECISIONS.md#adr-027) (hh) forward-named. Folds a recurring, `@daily`-poll EXTERNAL reachability probe into the provider-sync worker's `poll` entrypoint as an isolated, non-fatal pre-loop step: each run GETs DevOps-pinned candidate public FQDNs; a `200 {status:'ok'}` admission-app fingerprint reached from OUTSIDE the private Docker network raises a Discord alert (via the already-plumbed `DISCORD_WEBHOOK_URL`) + a durable log line. It runtime-complements RT-27's existing DEPLOY-time CA-2 smoke — the drift-detector for a public Coolify Domain assigned days AFTER deploy (the stale-env residual, coollabsio/coolify #8912/#6124).
+
+**F/CTO ratifications.** Detection model = **Option B** (active external probe). RF-1 fold into the `@daily` poll · RF-2 `ADMISSION_PROBE_PUBLIC_URLS` env contract (non-secret; presence=enabled, unset⇒log-only) · RF-3 arbitrary-custom-subdomain non-enumerability accepted as a stated residual. **F1** fingerprint = subset match `body.status === 'ok'` (survives additive `/healthz` fields → no silent false-negative; un-forgeable by a proxy/CDN 200 page).
+
+**Security — Sec joint-review AMBER→GREEN (4 conditions).** **C1** Discord payload scrub — **allow-list-by-construction** (the response body never reaches the alert builder's input type; payload = probed URL + fixed fingerprint literal + timestamp only) · **C2** dual-surface SECURITY doc update (§4.2 posture bullet + §4.5 RT-27 row moved to SHIPPED in lockstep) + the §10 3-axis cross-check + [ADR-027](DECISIONS.md#adr-027) amendment **(hh.1)** · **C3** exit-code isolation (probe/webhook failure is log-and-continue; adds no non-zero-exit path; cannot mask a fleet-fatal) · **F1** disposed. First worker→Discord egress; holds no credential. **Ledger UNCHANGED: §10 catalogued stays 3 · SECURITY DEFINER 3 · Decision-3 8 · RT-26 allowlist unchanged.** Two-way door.
+
+**What landed.** `workers/provider-sync/src/http/reachabilityProbe.ts` (pure classify + injectable-fetch seam) + `src/notify/discord.ts` (fail-safe egress) + `poll.ts` pre-loop wiring + 3 non-secret env keys (`ADMISSION_PROBE_PUBLIC_URLS` / `_CONFIRM_ROUTE=false` / `_TIMEOUT_MS`, in `.env.example` + `docker-compose.yaml`; `_TIMEOUT_MS` documented-omitted from compose to avoid an empty-string→coerce-0 boot crash). 27 new network-free tests (C1 scrub #6, C3 exit-code #5/#7); full worker suite 204 pass / 0 fail; **11/11 CI green** (incl. the RT-27 private-bind config-lint fence, empirically confirming no exposure widened). **Naming note:** created Linear **SELF-279** (Platform / Cross-cutting) for what teammates had labelled "SELF-14" — that label was a PR-body follow-up number (#14 from PR #175), not a Linear ID; `SELF-14`→`SELF-279` swept across the 11 files pre-merge. Detail: [PR #179](https://github.com/richmosko/mosko-fintech/pull/179).
+
+---
+
 ### v1.84 — 2026-07-19
 
 **Phase 6 — SELF-212 follow-up #12: ADR-028 per-route Plaid Link CSP (PR #177, merge `fde7bda`).** The Content-Security-Policy for the Plaid Link connect surface — deferred from the SELF-212 wave (the config, not the ADR). A strict global CSP base for every route + a per-route widen for `/accounts/connect` ONLY (**CSP-1** — app-global relaxation on dashboard/financial surfaces is a Sec veto). Sec CSP-1 joint-review PASS, no veto; §10 untouched; RT-28 stays MEDIUM non-§10.
