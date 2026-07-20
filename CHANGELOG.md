@@ -12,6 +12,14 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 ---
 
+### v1.86 — 2026-07-20
+
+**Phase 6 — SELF-280 (connect-wave follow-up #16): `safeGetSession` unvalidated-session hardening (PR #181, merge `2a5b18c`).** Hardens the [ADR-015](DECISIONS.md#adr-015) D1 single auth chokepoint (`api/src/hooks.server.ts`). `safeGetSession` validated the JWT via `getUser()` but returned the raw `getSession()` session, whose `.user` came from the **unverified (spoofable) cookie**. It now normalizes the returned `session.user` to the `getUser()`-server-validated user — `return { session: { ...session, user }, user }` — so any read of `session.user` is validated-by-construction. Latent (all 9 call sites read only `{ user }`) but a footgun on the app's sole auth chokepoint.
+
+**Also fail-closed-strengthening.** `if (error)` → `if (error || !user)` — a type-narrow that ALSO closes a prior `{ session, user: null }` gap on the no-error/null-user path; `authHandle` exported for the test (non-behavioral, mirrors the `cspHandle` precedent). **Sec joint-review GREEN** (auth surface, no conditions — fail-closed preserved and strengthened). **Ledger UNCHANGED: RT-26 allowlist untouched** (anon+RLS path only; `SUPABASE_SERVICE_ROLE_KEY` never referenced) · **§10 stays 3 · DEFINER 3 · Decision-3 8** · no DB change / no SECURITY DEFINER. 3 new `hooks.server.test.ts` cases (spoofed-≠-validated ⇒ validated user in both `user` + `session.user`; + no-session / getUser-error ⇒ {null,null}); 63 api tests pass, `svelte-check` 0 errors, 10/10 CI. Detail: [PR #181](https://github.com/richmosko/mosko-fintech/pull/181).
+
+---
+
 ### v1.85 — 2026-07-20
 
 **Phase 6 — SELF-279 (connect-wave follow-up #14): recurring CA-2 reachability probe + Discord alert (PR #179, merge `51a02a9`).** Closes the "recurring reachability probe … tracked post-merge hardening" that SECURITY RT-27 + [ADR-027](DECISIONS.md#adr-027) (hh) forward-named. Folds a recurring, `@daily`-poll EXTERNAL reachability probe into the provider-sync worker's `poll` entrypoint as an isolated, non-fatal pre-loop step: each run GETs DevOps-pinned candidate public FQDNs; a `200 {status:'ok'}` admission-app fingerprint reached from OUTSIDE the private Docker network raises a Discord alert (via the already-plumbed `DISCORD_WEBHOOK_URL`) + a durable log line. It runtime-complements RT-27's existing DEPLOY-time CA-2 smoke — the drift-detector for a public Coolify Domain assigned days AFTER deploy (the stale-env residual, coollabsio/coolify #8912/#6124).
