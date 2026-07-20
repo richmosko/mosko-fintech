@@ -342,6 +342,25 @@ export function scrubbedSimplefinError(op: string, status?: number): Error {
 	return new Error(`SimpleFIN ${op} failed${status !== undefined ? ` (HTTP ${status})` : ''}`);
 }
 
+/**
+ * Marker error for a client-correctable INVALID/BURNED SETUP TOKEN at the claim leg — the
+ * SimpleFIN analogue of Plaid's PublicTokenInvalidError. The HTTP admission endpoint maps this
+ * — and ONLY this — to a worker-400 `setup_token_invalid` ("obtain a fresh setup token from the
+ * SimpleFIN Bridge and re-paste"); EVERY other failure (network/transport, a 5xx Bridge error,
+ * DB/Vault, unknown) stays 5xx (guardrail #2 fail-safe: a server failure must never be dressed
+ * as client-correctable). SCRUBBED (guardrail #3): the message carries NO setup token / claim URL
+ * / Access URL — it wraps only a non-sensitive op label (via scrubbedSimplefinError) or a fixed
+ * decode-failure string. Recognized client-correctable cases: (a) the setup token does not
+ * base64-decode to a claim URL; (b) the claim POST returns a 4xx (403 already-claimed / a
+ * malformed-token 4xx). A 5xx claim response or a transport error is NOT this class.
+ */
+export class SetupTokenInvalidError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = 'SetupTokenInvalidError';
+	}
+}
+
 // ── The adapter ──────────────────────────────────────────────────────────────────
 
 export class SimpleFINAdapter implements ProviderAdapter {
@@ -459,7 +478,8 @@ export class SimpleFINAdapter implements ProviderAdapter {
 			// eslint-disable-next-line no-new
 			new URL(claimUrl); // sanity: it must decode to a URL.
 		} catch {
-			throw new Error('SimpleFIN admission: setup token did not decode to a claim URL (fail-closed).');
+			// Client-correctable: the pasted setup token is malformed → typed 400 `setup_token_invalid`.
+			throw new SetupTokenInvalidError('SimpleFIN admission: setup token did not decode to a claim URL (fail-closed).');
 		}
 		let accessUrl: string;
 		try {
@@ -468,11 +488,21 @@ export class SimpleFINAdapter implements ProviderAdapter {
 			// userinfo; this is uniform defense-in-depth.)
 			const { url: claimReqUrl, headers: claimHeaders } = splitAuth(claimUrl);
 			const resp = await this.#fetch(claimReqUrl, { method: 'POST', headers: claimHeaders });
-			if (!resp.ok) throw scrubbedSimplefinError('claim', resp.status); // 403 = already claimed.
+			if (!resp.ok) {
+				// A 4xx claim response (403 already-claimed / a malformed-token 4xx) means the setup
+				// token is burned/invalid → client-correctable typed 400. A 5xx (a Bridge server error)
+				// is NOT client-correctable → stays a generic scrubbed error mapped to 5xx (guardrail
+				// #2). The scrubbed message is identical either way (no credential; op + HTTP status).
+				const scrubbed = scrubbedSimplefinError('claim', resp.status);
+				if (resp.status >= 400 && resp.status < 500) throw new SetupTokenInvalidError(scrubbed.message);
+				throw scrubbed;
+			}
 			accessUrl = (await resp.text()).trim();
 		} catch (err) {
 			// C3: discard the raw error (it may echo the request URL/headers) — keep only a scrubbed
-			// op label. Re-throw our own already-scrubbed SimpleFIN errors unchanged.
+			// op label. Re-throw our own already-scrubbed SimpleFIN errors unchanged (SetupTokenInvalidError
+			// carries a `SimpleFIN claim failed …` scrubbed message → matched by the startsWith below,
+			// so its type survives the catch for the endpoint's 400 discrimination).
 			throw err instanceof Error && err.message.startsWith('SimpleFIN') ? err : scrubbedSimplefinError('claim');
 		}
 		if (!accessUrl || !/^https?:\/\//i.test(accessUrl)) {

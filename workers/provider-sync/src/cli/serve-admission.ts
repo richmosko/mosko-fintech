@@ -14,10 +14,11 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../config/env.js';
 import { TenantBoundClient } from '../db/TenantBoundClient.js';
 import { PlaidAdapter, type PlaidClientLike } from '../adapters/PlaidAdapter.js';
+import { SimpleFINAdapter } from '../adapters/SimpleFINAdapter.js';
 import { buildPlaidClient } from './admit.js';
 import { mintLinkToken } from '../http/linkToken.js';
 import { loadAdmissionConfig } from '../http/admissionConfig.js';
-import { createAdmissionServer, type ExchangeInput } from '../http/admissionServer.js';
+import { createAdmissionServer, type ExchangeInput, type SimplefinClaimInput } from '../http/admissionServer.js';
 
 export async function main(): Promise<void> {
 	const config = loadConfig();
@@ -31,6 +32,10 @@ export async function main(): Promise<void> {
 	const dbFor = (usersId: string): TenantBoundClient => TenantBoundClient.forTenant(config, usersId);
 	// Token-free logger (C6-5): the adapter/server only ever hand it non-credential diagnostics.
 	const adapter = new PlaidAdapter(plaid, dbFor, (m) => console.log(`[admission] ${m}`));
+	// leg-S: SimpleFINAdapter shares the SAME dbFor factory (TBC-node fence stays satisfied — the
+	// factory, not this file, builds the raw client). No provider SDK: SimpleFIN is claim-over-HTTP,
+	// so the adapter's default global fetch is used (no client construction here).
+	const sfAdapter = new SimpleFINAdapter(dbFor, (m) => console.log(`[admission] ${m}`));
 
 	const server = createAdmissionServer({
 		sharedSecret: admission.sharedSecret,
@@ -41,6 +46,13 @@ export async function main(): Promise<void> {
 				publicToken: input.publicToken,
 				ownerUserId: input.ownerUserId,
 				institutionId: input.institutionId,
+				institutionName: input.institutionName
+			}),
+		admitSimplefin: (input: SimplefinClaimInput) =>
+			sfAdapter.connect({
+				provider: 'simplefin',
+				setupToken: input.setupToken,
+				ownerUserId: input.ownerUserId,
 				institutionName: input.institutionName
 			}),
 		logger: (m) => console.log(`[admission] ${m}`)
