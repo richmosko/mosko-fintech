@@ -48,7 +48,8 @@ function supabaseEnv(): { url: string; anonKey: string } {
 	return cached;
 }
 
-const authHandle: Handle = async ({ event, resolve }) => {
+// Exported for hooks.server.test.ts (safeGetSession identity-normalization proof).
+export const authHandle: Handle = async ({ event, resolve }) => {
 	const { url, anonKey } = supabaseEnv();
 	// Per-request Supabase client, cookie-bound to this request/response cycle.
 	event.locals.supabase = createServerClient(url, anonKey, {
@@ -77,12 +78,18 @@ const authHandle: Handle = async ({ event, resolve }) => {
 			data: { user },
 			error
 		} = await event.locals.supabase.auth.getUser();
-		if (error) {
-			// JWT failed server-side validation — treat as unauthenticated.
+		if (error || !user) {
+			// JWT failed server-side validation (or no validated user) — treat as
+			// unauthenticated. The `!user` arm also narrows `user` to non-null below, so
+			// the normalized `session.user` is a genuine validated User, never null.
 			return { session: null, user: null };
 		}
 
-		return { session, user };
+		// Normalize the session's identity to the getUser()-VALIDATED user. The raw
+		// `session` from getSession() carries `session.user` derived from the UNVERIFIED
+		// cookie (spoofable); overriding it with the validated `user` means any caller
+		// reading `session.user` gets the server-verified identity, never the cookie's.
+		return { session: { ...session, user }, user };
 	};
 
 	return resolve(event, {

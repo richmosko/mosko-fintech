@@ -10,13 +10,18 @@
 // Supabase client needed. `$env/dynamic/private` resolves to the process.env-backed
 // stub via the vitest alias (vitest.config.ts).
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { cspHandle } from './hooks.server';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { authHandle, cspHandle } from './hooks.server';
+import { createServerClient } from '@supabase/ssr';
 import {
 	PLAID_CONNECT_ROUTE_ID,
 	PLAID_CONNECT_SRC_PROD,
 	PLAID_CONNECT_SRC_SANDBOX
 } from '$lib/plaid/csp';
+
+// authHandle constructs its per-request Supabase client via createServerClient — mock it
+// so safeGetSession runs against a fake auth surface with controllable getSession/getUser.
+vi.mock('@supabase/ssr', () => ({ createServerClient: vi.fn() }));
 
 const BASE_CSP = "default-src 'self'; script-src 'self' 'nonce-abc'; connect-src 'self'";
 
@@ -80,5 +85,85 @@ describe('cspHandle — PLAID_ENV fail-safe host selection (CSP-3)', () => {
 		const csp = (await runCsp(PLAID_CONNECT_ROUTE_ID)).headers.get('content-security-policy') ?? '';
 		expect(csp).toContain(PLAID_CONNECT_SRC_SANDBOX);
 		expect(csp).not.toContain(PLAID_CONNECT_SRC_PROD);
+	});
+});
+
+// ── safeGetSession — SELF-280 #16 unvalidated-session hardening ──────────────────────
+//
+// safeGetSession validates the JWT via getUser() and returns nulls on failure. THIS
+// covers the hardening: on the success path the returned `session.user` must be the
+// getUser()-VALIDATED user, NOT the (spoofable) getSession() cookie user — plus the
+// preserved null-on-no-session and null-on-getUser-error behavior.
+
+const VALIDATED_UID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const SPOOFED_UID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+
+type AuthDoubles = {
+	getSession: () => Promise<{ data: { session: unknown } }>;
+	getUser: () => Promise<{ data: { user: unknown }; error: unknown }>;
+};
+
+// Wire a fake Supabase client into authHandle, run it to install safeGetSession on
+// event.locals, and hand the installed helper back. Mirrors the exchange.server.test.ts
+// locals-double style; authHandle mutates event.locals before it calls resolve.
+async function installSafeGetSession(auth: AuthDoubles) {
+	(createServerClient as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ auth });
+	const event = {
+		route: { id: '/x' },
+		cookies: { getAll: () => [], set: () => {} },
+		locals: {} as Record<string, unknown>
+	} as unknown as Parameters<typeof authHandle>[0]['event'];
+	const resolve = (async () => new Response('ok')) as unknown as Parameters<
+		typeof authHandle
+	>[0]['resolve'];
+	await authHandle({ event, resolve } as Parameters<typeof authHandle>[0]);
+	return event.locals.safeGetSession as App.Locals['safeGetSession'];
+}
+
+describe('safeGetSession — validated-identity normalization (SELF-280)', () => {
+	beforeEach(() => {
+		process.env.PUBLIC_SUPABASE_URL = 'http://supabase.test';
+		process.env.PUBLIC_SUPABASE_ANON_KEY = 'anon-test-key';
+	});
+
+	it('spoofed cookie user ≠ getUser() user → returns the VALIDATED user in BOTH user AND session.user', async () => {
+		const safeGetSession = await installSafeGetSession({
+			// getSession() cookie carries a DIFFERENT (spoofed) user than the Auth server validates.
+			getSession: async () => ({
+				data: { session: { access_token: 'tok', user: { id: SPOOFED_UID } } }
+			}),
+			getUser: async () => ({ data: { user: { id: VALIDATED_UID } }, error: null })
+		});
+
+		const { session, user } = await safeGetSession();
+
+		// The authorization-bearing identity is the getUser()-validated one.
+		expect(user).toEqual({ id: VALIDATED_UID });
+		// The hardening: session.user is normalized to the validated user, never the cookie's.
+		expect(session?.user).toEqual({ id: VALIDATED_UID });
+		expect(session?.user.id).not.toBe(SPOOFED_UID);
+		// Non-identity session fields are preserved.
+		expect((session as unknown as { access_token: string }).access_token).toBe('tok');
+	});
+
+	it('no session → { session: null, user: null }', async () => {
+		const safeGetSession = await installSafeGetSession({
+			getSession: async () => ({ data: { session: null } }),
+			// Must not be consulted, but returning a user proves nulls come from the no-session guard.
+			getUser: async () => ({ data: { user: { id: VALIDATED_UID } }, error: null })
+		});
+
+		expect(await safeGetSession()).toEqual({ session: null, user: null });
+	});
+
+	it('getUser() error → { session: null, user: null } (JWT failed validation)', async () => {
+		const safeGetSession = await installSafeGetSession({
+			getSession: async () => ({
+				data: { session: { access_token: 'tok', user: { id: SPOOFED_UID } } }
+			}),
+			getUser: async () => ({ data: { user: null }, error: { message: 'invalid JWT' } })
+		});
+
+		expect(await safeGetSession()).toEqual({ session: null, user: null });
 	});
 });
