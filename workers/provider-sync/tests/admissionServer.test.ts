@@ -8,6 +8,7 @@ import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { createAdmissionServer, type AdmissionServerDeps } from '../src/http/admissionServer.js';
 import { PublicTokenInvalidError } from '../src/adapters/PlaidAdapter.js';
+import { SetupTokenInvalidError } from '../src/adapters/SimpleFINAdapter.js';
 import { ADMISSION_SECRET_HEADER } from '../src/http/sharedSecret.js';
 import type { ProviderAccountRef } from '../src/adapters/ProviderAdapter.js';
 
@@ -35,6 +36,7 @@ async function start(deps: Partial<AdmissionServerDeps> = {}): Promise<string> {
 		sharedSecret: SECRET,
 		mintLinkToken: vi.fn(async () => ({ link_token: 'link-sandbox-1', expiration: '2026-07-19T12:00:00Z' })),
 		admit: vi.fn(async () => ({ sourceId: 42n, accounts: [ACCT] })),
+		admitSimplefin: vi.fn(async () => ({ sourceId: 77n, accounts: [ACCT] })),
 		logger: vi.fn(),
 		...deps
 	};
@@ -186,6 +188,98 @@ describe('leg-2 — public_token exchange/admit', () => {
 		const text = await res.text();
 		expect(text).toBe(JSON.stringify({ error: 'admission_failed' }));
 		expect(text).not.toContain(TOKEN);
+	});
+});
+
+describe('leg-S — SimpleFIN setup-token claim/admit', () => {
+	const SETUP_TOKEN = btoa('https://setup-should-never-appear'); // base64-ish; never echoed
+
+	it('happy path returns { sourceId (string), accounts } and forwards the input', async () => {
+		const admitSimplefin = vi.fn(async () => ({ sourceId: 77n, accounts: [ACCT] }));
+		const url = await start({ admitSimplefin });
+		const res = await post(
+			`${url}/admission/simplefin/claim`,
+			{ setup_token: SETUP_TOKEN, ownerUserId: UUID, institutionName: 'Test Bank' },
+			authed
+		);
+		expect(res.status).toBe(200);
+		const body = await res.json();
+		expect(body.sourceId).toBe('77'); // bigint serialized as string
+		expect(body.accounts).toEqual([
+			{ account_id: 'acct_1', name: 'Checking', type: 'depository', subtype: 'checking', currency: 'USD' }
+		]);
+		expect(admitSimplefin).toHaveBeenCalledWith({
+			setupToken: SETUP_TOKEN,
+			ownerUserId: UUID,
+			institutionName: 'Test Bank'
+		});
+	});
+
+	it('C6-6: 401 when the secret header is absent — admitSimplefin never invoked', async () => {
+		const admitSimplefin = vi.fn();
+		const url = await start({ admitSimplefin });
+		const res = await post(`${url}/admission/simplefin/claim`, { setup_token: SETUP_TOKEN, ownerUserId: UUID });
+		expect(res.status).toBe(401);
+		expect(admitSimplefin).not.toHaveBeenCalled();
+	});
+
+	it('400 on missing setup_token; admitSimplefin not called', async () => {
+		const admitSimplefin = vi.fn();
+		const url = await start({ admitSimplefin });
+		const res = await post(`${url}/admission/simplefin/claim`, { ownerUserId: UUID }, authed);
+		expect(res.status).toBe(400);
+		expect(admitSimplefin).not.toHaveBeenCalled();
+	});
+
+	it('400 on a bad uuid ownerUserId (Zod .strict boundary)', async () => {
+		const admitSimplefin = vi.fn();
+		const url = await start({ admitSimplefin });
+		const res = await post(`${url}/admission/simplefin/claim`, { setup_token: SETUP_TOKEN, ownerUserId: 'not-a-uuid' }, authed);
+		expect(res.status).toBe(400);
+		expect(admitSimplefin).not.toHaveBeenCalled();
+	});
+
+	it('C6-3: an extra tenant-adjacent field is rejected (.strict)', async () => {
+		const admitSimplefin = vi.fn();
+		const url = await start({ admitSimplefin });
+		const res = await post(
+			`${url}/admission/simplefin/claim`,
+			{ setup_token: SETUP_TOKEN, ownerUserId: UUID, tenant_override: 'other' },
+			authed
+		);
+		expect(res.status).toBe(400);
+		expect(admitSimplefin).not.toHaveBeenCalled();
+	});
+
+	it('a SetupTokenInvalidError → worker-400 setup_token_invalid (client-correctable)', async () => {
+		const admitSimplefin = vi.fn(async () => {
+			throw new SetupTokenInvalidError('SimpleFIN claim failed (HTTP 403)');
+		});
+		const url = await start({ admitSimplefin });
+		const res = await post(`${url}/admission/simplefin/claim`, { setup_token: 'burned', ownerUserId: UUID }, authed);
+		expect(res.status).toBe(400);
+		const text = await res.text();
+		expect(text).toBe(JSON.stringify({ error: 'setup_token_invalid' })); // one uniform code, no detail
+	});
+
+	it('C6-5: any other failure returns a generic 502 with NO token fragment', async () => {
+		const admitSimplefin = vi.fn(async () => {
+			// Even if the adapter somehow surfaced a token-bearing message, the envelope is generic.
+			throw new Error(`admission blew up with ${TOKEN}`);
+		});
+		const url = await start({ admitSimplefin });
+		const res = await post(`${url}/admission/simplefin/claim`, { setup_token: SETUP_TOKEN, ownerUserId: UUID }, authed);
+		expect(res.status).toBe(502);
+		const text = await res.text();
+		expect(text).toBe(JSON.stringify({ error: 'admission_failed' }));
+		expect(text).not.toContain(TOKEN);
+		expect(text).not.toContain(SETUP_TOKEN);
+	});
+
+	it('405 on a wrong method for the claim route', async () => {
+		const url = await start();
+		const res = await fetch(`${url}/admission/simplefin/claim`, { headers: authed });
+		expect(res.status).toBe(405);
 	});
 });
 

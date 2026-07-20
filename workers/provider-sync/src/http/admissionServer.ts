@@ -28,6 +28,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { z } from 'zod';
 import type { ProviderAccountRef } from '../adapters/ProviderAdapter.js';
 import { PublicTokenInvalidError } from '../adapters/PlaidAdapter.js';
+import { SetupTokenInvalidError } from '../adapters/SimpleFINAdapter.js';
 import { ADMISSION_SECRET_HEADER, verifySharedSecret } from './sharedSecret.js';
 
 /** Max inbound body. A link_token request / public_token handoff is tiny; anything larger is
@@ -54,6 +55,25 @@ export interface ExchangeInput {
 	institutionName?: string;
 }
 
+// ── SimpleFIN claim leg (leg-S) — ONE leg, no link-token analogue, no /item/remove recovery.
+//    A new ROUTE on the RT-27 admission surface (NOT a new §10 instance): same private-bind, same
+//    shared-secret gate, same session-derived tenant. `ownerUserId` is a uuid; connect()
+//    re-validates independently. `.strict()` — mass-assignment fence (Lock 14 mod #1). The token
+//    field is `setup_token` (snake) to mirror the shipped Plaid `public_token` convention. ──────
+const simplefinClaimBodySchema = z
+	.object({
+		setup_token: z.string().min(1),
+		ownerUserId: z.string().uuid(),
+		institutionName: z.string().min(1).optional()
+	})
+	.strict();
+
+export interface SimplefinClaimInput {
+	setupToken: string;
+	ownerUserId: string;
+	institutionName?: string;
+}
+
 /** The account routing key api/src forwards to the browser. `account_id` is the stable
  *  provider account id (ProviderAccountRef.providerAccountId). */
 export interface AdmissionAccountRef {
@@ -76,6 +96,8 @@ export interface AdmissionServerDeps {
 	mintLinkToken(ownerUserId: string): Promise<{ link_token: string; expiration: string }>;
 	/** Leg-2: drive the atomic exchange+vault+INSERT admission (PlaidAdapter.connect). */
 	admit(input: ExchangeInput): Promise<{ sourceId: bigint; accounts: ProviderAccountRef[] }>;
+	/** Leg-S: drive the SimpleFIN claim+vault+INSERT admission (SimpleFINAdapter.connect). */
+	admitSimplefin(input: SimplefinClaimInput): Promise<{ sourceId: bigint; accounts: ProviderAccountRef[] }>;
 	/** Token-free diagnostic logger (never receives a body/secret/token). */
 	logger?: (message: string) => void;
 }
@@ -143,8 +165,9 @@ function toAdmissionAccounts(accounts: ProviderAccountRef[]): AdmissionAccountRe
  * Build (but do not start) the admission HTTP server. Call `.listen(port, host)` on the result.
  * Routes:
  *   GET  /healthz                → { status: 'ok' }           (UNAUTHENTICATED liveness; no secrets)
- *   POST /admission/link-token   → { link_token, expiration } (leg-1, shared-secret authed)
- *   POST /admission/exchange     → { sourceId, accounts }     (leg-2, shared-secret authed)
+ *   POST /admission/link-token       → { link_token, expiration } (leg-1, shared-secret authed)
+ *   POST /admission/exchange         → { sourceId, accounts }     (leg-2, shared-secret authed)
+ *   POST /admission/simplefin/claim  → { sourceId, accounts }     (leg-S, shared-secret authed)
  * Every non-health route requires the constant-time shared-secret header; absent/mismatch → 401.
  */
 /** N-1 (Sec SELF-212): explicit inbound timeouts — do NOT rely on Node defaults for a
@@ -199,6 +222,10 @@ export function createAdmissionServer(deps: AdmissionServerDeps): Server {
 		if (path === '/admission/exchange') {
 			if (method !== 'POST') return sendError(res, METHOD_NOT_ALLOWED, 'method_not_allowed');
 			return handleExchange(req, res);
+		}
+		if (path === '/admission/simplefin/claim') {
+			if (method !== 'POST') return sendError(res, METHOD_NOT_ALLOWED, 'method_not_allowed');
+			return handleSimplefinClaim(req, res);
 		}
 		return sendError(res, NOT_FOUND, 'not_found');
 	}
@@ -260,6 +287,47 @@ export function createAdmissionServer(deps: AdmissionServerDeps): Server {
 			}
 			// connect() already scrubbed Plaid errors + ran the C6-4 /item/remove recovery.
 			log(`admission: 502 admit failed (${err instanceof Error ? err.message : 'error'})`);
+			return sendError(res, BAD_GATEWAY, 'admission_failed');
+		}
+	}
+
+	// leg-S — SimpleFIN setup-token claim + admit. Mirrors handleExchange exactly, minus the
+	// leg-1 mint (SimpleFIN has none) and minus /item/remove recovery (a read-only Access URL
+	// needs none). The ONE divergence: the client-correctable typed error is
+	// SetupTokenInvalidError → worker-400 `setup_token_invalid`.
+	async function handleSimplefinClaim(req: IncomingMessage, res: ServerResponse): Promise<void> {
+		let body: unknown;
+		try {
+			body = await readJsonBody(req);
+		} catch (err) {
+			const reason = err instanceof Error ? err.message : '';
+			return sendError(res, reason === 'BODY_TOO_LARGE' ? PAYLOAD_TOO_LARGE : BAD_REQUEST, 'invalid_request');
+		}
+		const parsed = simplefinClaimBodySchema.safeParse(body);
+		if (!parsed.success) return sendError(res, BAD_REQUEST, 'invalid_request');
+
+		const input: SimplefinClaimInput = {
+			setupToken: parsed.data.setup_token,
+			ownerUserId: parsed.data.ownerUserId,
+			...(parsed.data.institutionName ? { institutionName: parsed.data.institutionName } : {})
+		};
+
+		try {
+			const { sourceId, accounts } = await deps.admitSimplefin(input);
+			log(`admission: 200 simplefin admitted source_id=${sourceId} (accounts=${accounts.length})`);
+			// bigint → string (JSON has no bigint). Never echo the setup token / Access URL (C6-5).
+			return sendJson(res, OK, { sourceId: String(sourceId), accounts: toAdmissionAccounts(accounts) });
+		} catch (err) {
+			// ONLY a recognized setup-token-invalidity is client-correctable → worker-400
+			// `setup_token_invalid` (one uniform code; api/src maps it to browser-400 "obtain a fresh
+			// setup token"). EVERY other failure — DB / vault / network / a 5xx Bridge error / unknown
+			// — stays 5xx (guardrail #2, fail-safe). Envelope stays scrubbed (guardrail #3).
+			if (err instanceof SetupTokenInvalidError) {
+				log('admission: 400 setup_token_invalid (client-correctable)');
+				return sendError(res, BAD_REQUEST, 'setup_token_invalid');
+			}
+			// connect() already scrubbed every SimpleFIN/DB error (whole error object discarded).
+			log(`admission: 502 simplefin admit failed (${err instanceof Error ? err.message : 'error'})`);
 			return sendError(res, BAD_GATEWAY, 'admission_failed');
 		}
 	}

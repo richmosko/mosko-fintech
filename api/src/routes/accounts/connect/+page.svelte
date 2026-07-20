@@ -1,16 +1,21 @@
 <!--
-	accounts/connect/+page.svelte — institution-connect onboarding entry (SELF-198 §2.4.1).
-	Hosts the Plaid Link connect widget (automated-aggregator path) and links to the
-	manual (§2.4.2) path as the alternative. Pure browser surface — the Plaid flow is
-	client-initiated (fetch to the SELF-197 relay legs), so there is NO +page.server.ts
-	here; auth-gating rides the shared hooks.server.ts session chokepoint + the route
-	group's existing loaders.
+	accounts/connect/+page.svelte — institution-connect onboarding entry (§2.4.1).
+	Hosts a provider picker (RF-1 Option A, OQ-2) that routes to the automated-aggregator
+	connect widget for the chosen provider — Plaid (SDK modal) or SimpleFIN (paste a Bridge
+	setup token) — plus a link to the manual (§2.4.2) path. Pure browser surface: both connect
+	flows are client-initiated (fetch to the relay legs), so there is NO +page.server.ts here;
+	auth-gating rides the shared hooks.server.ts session chokepoint + the route group's loaders.
 
-	DRAFT (SELF-198): builds against the assumed SELF-197 relay contract; do not ship
-	until leg-1/leg-2 land and the C6 gate clears.
+	The picker is the ONLY provider knowledge this shell accretes (Option A). Adding a 3rd
+	provider = add a radio + a component; if that ever gets painful, promote to a registry
+	(Option B) — a data-migration-free refactor, deferred until a 3rd provider forcing function.
 -->
 <script lang="ts">
 	import PlaidLinkConnect from '$lib/components/PlaidLinkConnect.svelte';
+	import SimpleFINConnect from '$lib/components/SimpleFINConnect.svelte';
+
+	type Provider = 'plaid' | 'simplefin';
+	let provider = $state<Provider>('plaid');
 </script>
 
 <svelte:head>
@@ -37,7 +42,32 @@
 			Recommended for institutions we can sync automatically. After you connect, you'll set
 			each account's scope, tax treatment, and type.
 		</p>
-		<PlaidLinkConnect />
+
+		<!--
+			Provider picker (RF-1 Option A). Native radios in a fieldset give a keyboard-native
+			radiogroup (arrow-key navigation, roving focus) for free; the <legend> names the group.
+		-->
+		<fieldset class="provider-picker">
+			<legend>How would you like to connect?</legend>
+			<div class="provider-options">
+				<label class="provider-option" class:selected={provider === 'plaid'}>
+					<input type="radio" name="provider" value="plaid" bind:group={provider} />
+					<span class="provider-name">Connect automatically</span>
+					<span class="provider-desc">Sign in at your institution through Plaid.</span>
+				</label>
+				<label class="provider-option" class:selected={provider === 'simplefin'}>
+					<input type="radio" name="provider" value="simplefin" bind:group={provider} />
+					<span class="provider-name">Connect with SimpleFIN</span>
+					<span class="provider-desc">Paste a one-time setup token from the SimpleFIN Bridge.</span>
+				</label>
+			</div>
+		</fieldset>
+
+		{#if provider === 'plaid'}
+			<PlaidLinkConnect />
+		{:else}
+			<SimpleFINConnect />
+		{/if}
 	</section>
 
 	<section class="region card" aria-labelledby="manual-heading">
@@ -117,5 +147,57 @@
 		color: var(--c-link);
 		font-size: var(--fs-small);
 		font-weight: var(--weight-med);
+	}
+	.provider-picker {
+		border: none;
+		margin: 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-2);
+	}
+	.provider-picker legend {
+		padding: 0;
+		font-size: var(--fs-small);
+		font-weight: var(--weight-semi);
+		color: var(--c-text-secondary);
+	}
+	.provider-options {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-2);
+	}
+	.provider-option {
+		display: grid;
+		grid-template-columns: auto 1fr;
+		column-gap: var(--space-2);
+		row-gap: var(--space-0);
+		align-items: baseline;
+		padding: var(--space-3);
+		border: 1px solid var(--c-border);
+		border-radius: var(--radius-md);
+		background: var(--c-surface);
+		cursor: pointer;
+	}
+	.provider-option:hover {
+		border-color: var(--c-border-strong);
+	}
+	.provider-option.selected {
+		border-color: var(--c-accent);
+		box-shadow: 0 0 0 1px var(--c-accent);
+	}
+	.provider-option input {
+		grid-row: 1 / span 2;
+		align-self: center;
+		accent-color: var(--c-accent);
+	}
+	.provider-name {
+		font-size: var(--fs-body);
+		font-weight: var(--weight-semi);
+		color: var(--c-text-primary);
+	}
+	.provider-desc {
+		font-size: var(--fs-small);
+		color: var(--c-text-secondary);
 	}
 </style>

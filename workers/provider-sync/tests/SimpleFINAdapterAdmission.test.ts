@@ -5,7 +5,7 @@
 // the Access-URL-never-leaks property, and local-delete-only revoke (no provider call).
 
 import { describe, it, expect, vi } from 'vitest';
-import { SimpleFINAdapter, accessUrlDigest, type AdmissionDb, type FetchLike } from '../src/adapters/SimpleFINAdapter.js';
+import { SimpleFINAdapter, SetupTokenInvalidError, accessUrlDigest, type AdmissionDb, type FetchLike } from '../src/adapters/SimpleFINAdapter.js';
 import * as fx from './fixtures/simplefin-payloads.js';
 
 const VALID_UUID = '11111111-1111-4111-8111-111111111111';
@@ -168,6 +168,41 @@ describe('connect() — fail-closed input hardening', () => {
 		const msg = (caught as Error).message;
 		expect(msg).toMatch(/SimpleFIN claim failed \(HTTP 403\)/);
 		expect(msg).not.toContain(ACCESS_URL);
+	});
+});
+
+describe('connect() — SetupTokenInvalidError discrimination (client-correctable 400 vs generic 5xx)', () => {
+	it('a 403 (already-claimed) claim → SetupTokenInvalidError (client-correctable); message scrubbed', async () => {
+		const adapter = new SimpleFINAdapter(vi.fn(() => makeDb(makeTx([]).tx).db), undefined, async (_url, init) => {
+			if (init?.method === 'POST') return { ok: false, status: 403, text: async () => ACCESS_URL, json: async () => ({}) };
+			return { ok: true, status: 200, text: async () => '{}', json: async () => ({}) };
+		});
+		const caught = await adapter
+			.connect({ provider: 'simplefin', setupToken: fx.SETUP_TOKEN, ownerUserId: VALID_UUID })
+			.catch((e) => e);
+		expect(caught).toBeInstanceOf(SetupTokenInvalidError);
+		expect((caught as Error).message).not.toContain(ACCESS_URL);
+	});
+
+	it('a malformed (non-decodable) setup token → SetupTokenInvalidError (client-correctable)', async () => {
+		const adapter = new SimpleFINAdapter(vi.fn() as never, undefined, admissionFetch());
+		const caught = await adapter
+			.connect({ provider: 'simplefin', setupToken: 'not-base64-url!!', ownerUserId: VALID_UUID })
+			.catch((e) => e);
+		expect(caught).toBeInstanceOf(SetupTokenInvalidError);
+	});
+
+	it('a 500 (Bridge server error) claim → NOT SetupTokenInvalidError (stays generic → 5xx, fail-safe)', async () => {
+		const adapter = new SimpleFINAdapter(vi.fn(() => makeDb(makeTx([]).tx).db), undefined, async (_url, init) => {
+			if (init?.method === 'POST') return { ok: false, status: 500, text: async () => ACCESS_URL, json: async () => ({}) };
+			return { ok: true, status: 200, text: async () => '{}', json: async () => ({}) };
+		});
+		const caught = await adapter
+			.connect({ provider: 'simplefin', setupToken: fx.SETUP_TOKEN, ownerUserId: VALID_UUID })
+			.catch((e) => e);
+		expect(caught).toBeInstanceOf(Error);
+		expect(caught).not.toBeInstanceOf(SetupTokenInvalidError);
+		expect((caught as Error).message).not.toContain(ACCESS_URL);
 	});
 });
 
