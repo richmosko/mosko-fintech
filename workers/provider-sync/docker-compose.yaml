@@ -82,3 +82,24 @@ services:
       - SIMPLEFIN_TOKEN=${SIMPLEFIN_TOKEN}
       # --- Notification routing ---
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
+      # --- SELF-279 CA-2 recurring reachability probe (NON-secret config) ---
+      # ADMISSION_PROBE_PUBLIC_URLS: comma-separated PUBLIC https FQDNs the @daily poll's
+      # folded-in reachability probe GETs (presence ⇒ enabled; unset/empty ⇒ logged no-op,
+      # fail-SAFE — never fails the poll). NON-secret (public URLs by definition) → NOT in
+      # secrets-manifest.yml; the CI/prod non-overlap fence is UNAFFECTED. Coolify-injected,
+      # DevOps-pinned per Note N4 (pin the `<service>-<hash>.<wildcard>` Coolify pattern + the
+      # project apex). Entries must be bare https FQDNs — no query-string / no embedded creds
+      # (the URL is echoed into the Discord alert; Note N1). Unset in Coolify ⇒ ${...} expands
+      # empty ⇒ probe no-ops (fail-safe preserved).
+      - ADMISSION_PROBE_PUBLIC_URLS=${ADMISSION_PROBE_PUBLIC_URLS}
+      # ADMISSION_PROBE_CONFIRM_ROUTE: optional 401-confirmation route probe; OFF by default
+      # (Sec ruling — /healthz-fingerprint-only ships in v1). Non-secret literal.
+      - ADMISSION_PROBE_CONFIRM_ROUTE=false
+      # ADMISSION_PROBE_TIMEOUT_MS (per-URL probe timeout ms, code default 5000): DELIBERATELY
+      # NOT declared here. env.ts parses it as z.coerce.number().int().positive().default(5000),
+      # and .default() fires ONLY on `undefined`. A `${ADMISSION_PROBE_TIMEOUT_MS}` reference to an
+      # UNSET Coolify var would expand to "" ⇒ coerces to 0 ⇒ fails .positive() ⇒ worker BOOT CRASH.
+      # Omitting the line keeps the key genuinely undefined so the 5000 code default stands. To
+      # override, add it in Coolify with an explicit POSITIVE INTEGER value (never blank). Contract
+      # documented in .env.example. (Contrast ADMISSION_PROBE_PUBLIC_URLS: z.string().optional()
+      # accepts "" safely, so a ${...} ref is fine there — only the coerced-number key has this trap.)

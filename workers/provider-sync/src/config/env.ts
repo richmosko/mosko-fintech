@@ -31,6 +31,15 @@ export interface WorkerConfig {
 	readonly simplefinToken: string | undefined;
 	/** Coolify→Discord failure/health routing — OPTIONAL (scheduler PR #2). */
 	readonly discordWebhookUrl: string | undefined;
+	/** SELF-279 CA-2 recurring reachability probe config (all NON-secret). */
+	readonly probe: {
+		/** DevOps-pinned public FQDNs to probe. EMPTY ⇒ probe no-ops (fail-safe, presence=enabled). */
+		readonly publicUrls: string[];
+		/** Also probe the admission 401-envelope route (default false; /healthz-only in v1 — Sec A). */
+		readonly confirmRoute: boolean;
+		/** Per-URL probe timeout in ms (default 5000). */
+		readonly timeoutMs: number;
+	};
 }
 
 // `.strict()` is not meaningful for process.env (a wide record); instead we pick +
@@ -48,8 +57,23 @@ const envSchema = z.object({
 	PLAID_SECRET: nonEmpty,
 	PLAID_ENV: z.enum(['sandbox', 'production']).default('sandbox'),
 	SIMPLEFIN_TOKEN: z.string().optional(),
-	DISCORD_WEBHOOK_URL: z.string().optional()
+	DISCORD_WEBHOOK_URL: z.string().optional(),
+	// SELF-279 CA-2 probe — all NON-secret (public FQDNs + tuning knobs). Presence of
+	// ADMISSION_PROBE_PUBLIC_URLS is the enable switch (no separate enable flag; RF-2).
+	ADMISSION_PROBE_PUBLIC_URLS: z.string().optional(),
+	// enum (not z.coerce.boolean, which treats any non-empty string incl. "false" as true).
+	ADMISSION_PROBE_CONFIRM_ROUTE: z.enum(['true', 'false']).default('false'),
+	ADMISSION_PROBE_TIMEOUT_MS: z.coerce.number().int().positive().default(5000)
 });
+
+/** Parse a comma-separated URL list → trimmed, non-empty entries (RF-2 shape). Unset/empty ⇒ []. */
+function parseProbeUrls(raw: string | undefined): string[] {
+	if (raw === undefined) return [];
+	return raw
+		.split(',')
+		.map((s) => s.trim())
+		.filter((s) => s.length > 0);
+}
 
 /**
  * Load + validate worker config from an env-like record (defaults to process.env).
@@ -72,6 +96,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
 		},
 		plaid: { clientId: e.PLAID_CLIENT_ID, secret: e.PLAID_SECRET, env: e.PLAID_ENV },
 		simplefinToken: e.SIMPLEFIN_TOKEN,
-		discordWebhookUrl: e.DISCORD_WEBHOOK_URL
+		discordWebhookUrl: e.DISCORD_WEBHOOK_URL,
+		probe: {
+			publicUrls: parseProbeUrls(e.ADMISSION_PROBE_PUBLIC_URLS),
+			confirmRoute: e.ADMISSION_PROBE_CONFIRM_ROUTE === 'true',
+			timeoutMs: e.ADMISSION_PROBE_TIMEOUT_MS
+		}
 	};
 }

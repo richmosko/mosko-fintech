@@ -35,6 +35,7 @@ import { PlaidAdapter, type PlaidClientLike } from '../adapters/PlaidAdapter.js'
 import { SimpleFINAdapter } from '../adapters/SimpleFINAdapter.js';
 import { buildPlaidClient } from './admit.js';
 import { syncProviderData, type ProviderData, type SyncResult } from '../ingest/mapper.js';
+import { runAdmissionReachabilityProbe } from '../http/reachabilityProbe.js';
 import type {
 	BalanceDTO,
 	CorrectionCounts,
@@ -350,6 +351,9 @@ export interface RunPollDeps {
 	wiring?: Partial<PollWiring>;
 	/** Override enumeration (tests). */
 	enumerate?: (config: WorkerConfig) => Promise<SourceRow[]>;
+	/** Override the CA-2 reachability probe pre-loop step (SELF-279). Tests stub to a no-op, or to a
+	 *  thrower to assert the exit-code contract is unaffected. Defaults to runAdmissionReachabilityProbe. */
+	probe?: (config: WorkerConfig, log: (message: string) => void) => Promise<void>;
 }
 
 /** Build the production wiring from config (all seams overridable via deps.wiring). */
@@ -375,6 +379,17 @@ function defaultWiring(config: WorkerConfig, syncDate: string, over: Partial<Pol
 export async function runPoll(config: WorkerConfig, deps: RunPollDeps = {}): Promise<PollSummary> {
 	const log = deps.log ?? ((m: string) => console.log(`[poll] ${m}`));
 	const syncDate = deps.syncDate ?? todayIso(deps.now ?? new Date());
+
+	// (0) CA-2 recurring reachability probe — isolated + non-fatal (SELF-279). A positive detection
+	//     alerts via Discord + logs a durable finding; it NEVER throws out of runPoll and NEVER
+	//     changes the exit code. Runs BEFORE enumeration so it touches no DB/enumeration exit path
+	//     and cannot mask a real fleet-fatal. The step is fail-safe internally; this outer try/catch
+	//     is belt-and-suspenders (per design §6). A bounded per-URL timeout caps its wall-time.
+	try {
+		await (deps.probe ?? runAdmissionReachabilityProbe)(config, log);
+	} catch (probeErr) {
+		log(`CA-2 probe step errored (non-fatal): ${errMessage(probeErr)}`);
+	}
 
 	// (1) ENUMERATE — the enumeration-only client (service_role, no tenant bound). Its own
 	// short-lived connection, ended before the per-source loop opens per-tenant clients.

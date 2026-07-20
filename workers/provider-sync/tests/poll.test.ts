@@ -8,6 +8,7 @@ import {
 	createPollHandlers,
 	enumerateSources,
 	resolveCredential,
+	runPoll,
 	runPollLoop,
 	trailingRange,
 	todayIso,
@@ -29,7 +30,8 @@ const CONFIG: WorkerConfig = {
 	db: { host: 'h', port: 5432, database: 'd', user: 'u', password: 'p' },
 	plaid: { clientId: 'cid', secret: 'sek', env: 'sandbox' },
 	simplefinToken: undefined,
-	discordWebhookUrl: undefined
+	discordWebhookUrl: undefined,
+	probe: { publicUrls: [], confirmRoute: false, timeoutMs: 5000 }
 };
 
 const UID_A = '11111111-1111-1111-1111-111111111111';
@@ -296,5 +298,65 @@ describe('enumerateSources / resolveCredential — query shaping (service_role)'
 
 		const miss = fakeTx([[]]);
 		expect(await resolveCredential(fakeClient(miss), row({ sourceId: '4' }))).toBeNull();
+	});
+});
+
+// ── #7 [MERGE-GATE C3] CA-2 probe seam NEVER flips the poll exit-code contract ───────
+// runPoll THROWS only on a fleet-fatal (enumeration / DB unreachable) ⇒ main() exit 1. The
+// SELF-279 probe pre-loop step must add NO new non-zero-exit path: a probe that throws (or one
+// that detects-positive) must leave runPoll RESOLVING with a normal summary (⇒ exit 0). We
+// inject the `probe` seam (RunPollDeps.probe) + an `enumerate` stub so the whole run is
+// network-/DB-free, and assert runPoll never rejects.
+describe('runPoll — CA-2 probe seam never flips the exit-code contract (design §9 #7 / C3)', () => {
+	const okAdapter: FetchAdapter = {
+		async fetchBalances() {
+			return [];
+		},
+		async fetchHoldings() {
+			return [];
+		},
+		async fetchTransactions() {
+			return [];
+		},
+		getLastErrlist: () => []
+	};
+
+	it('a probe seam that THROWS is caught + logged non-fatally; runPoll completes a normal (exit-0) run', async () => {
+		const log = vi.fn();
+		const summary = await runPoll(CONFIG, {
+			probe: async () => {
+				throw new Error('probe blew up');
+			},
+			enumerate: async () => [], // no DB; the fleet-fatal enumeration path is untouched
+			log,
+			syncDate: '2026-07-18'
+		});
+		// runPoll RESOLVED (did not reject) ⇒ main() would exit 0.
+		expect(summary).toMatchObject({ total: 0, succeeded: 0, failed: 0, failures: [] });
+		expect(log).toHaveBeenCalledWith(expect.stringContaining('CA-2 probe step errored (non-fatal)'));
+	});
+
+	it('a probe seam that DETECTS-POSITIVE (resolves) still exits 0 — a finding alerts/logs, never pages', async () => {
+		const log = vi.fn();
+		let probeRan = false;
+		const summary = await runPoll(CONFIG, {
+			probe: async (_config, l) => {
+				probeRan = true;
+				// mirror the real positive-detection log line; crucially it RESOLVES (no throw).
+				l('CA-2 probe: POSITIVE DETECTION — admission endpoint PUBLICLY REACHABLE: https://x/healthz');
+			},
+			enumerate: async () => [row({ sourceId: '1', provider: 'simplefin' })],
+			wiring: {
+				clientFor: () => fakeClient(fakeTx([[]])),
+				buildAdapter: () => okAdapter,
+				resolveCredential: async () => 'ACCESS-URL-SECRET',
+				sync: vi.fn().mockResolvedValue(emptyResult)
+			},
+			log,
+			syncDate: '2026-07-18'
+		});
+		expect(probeRan).toBe(true);
+		// enumeration + the per-source loop still ran to completion ⇒ exit 0 with the source synced.
+		expect(summary).toMatchObject({ total: 1, succeeded: 1, failed: 0 });
 	});
 });
