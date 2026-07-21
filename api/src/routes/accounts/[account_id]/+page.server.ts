@@ -35,9 +35,10 @@ function isCrossTenantSubCat(message: string): boolean {
 	return /sub_cat|Decision 3|matched-tenant/i.test(message);
 }
 
-export const load: PageServerLoad = async ({ locals, params }) => {
+export const load: PageServerLoad = async ({ locals, params, url }) => {
 	const { user } = await locals.safeGetSession();
-	if (!user) throw redirect(303, '/login');
+	// Preserve where the user was headed so /login can bounce them back (SELF-285).
+	if (!user) throw redirect(303, `/login?redirectTo=${encodeURIComponent(url.pathname)}`);
 
 	const accountId = parseAccountId(params.account_id);
 	if (accountId === null) throw error(404, 'Account not found');

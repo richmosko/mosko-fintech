@@ -16,9 +16,10 @@ import { manualAccountCreateSchema, fieldErrors } from '$lib/server/schemas/acco
 import { loadAssetSubCats } from '$lib/server/queries/taxonomy';
 import type { PageServerLoad, Actions } from './$types';
 
-export const load: PageServerLoad = async ({ locals }) => {
+export const load: PageServerLoad = async ({ locals, url }) => {
 	const { user } = await locals.safeGetSession();
-	if (!user) throw redirect(303, '/login');
+	// Preserve where the user was headed so /login can bounce them back (SELF-285).
+	if (!user) throw redirect(303, `/login?redirectTo=${encodeURIComponent(url.pathname)}`);
 
 	// Asset-domain Sub-Cat options for the create picker — RLS-scoped, shared with the
 	// accounts/[account_id] reassignment picker (SELF-236) via loadAssetSubCats.

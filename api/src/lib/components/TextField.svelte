@@ -7,6 +7,8 @@
 	render as plain text — no rich-text affordance.
 -->
 <script lang="ts">
+	import type { HTMLInputAttributes } from 'svelte/elements';
+
 	let {
 		label,
 		name,
@@ -23,14 +25,14 @@
 		label: string;
 		name: string;
 		value?: string;
-		type?: 'text' | 'date';
+		type?: 'text' | 'date' | 'email' | 'password';
 		required?: boolean;
 		errors?: string[];
 		hint?: string;
 		numeric?: boolean;
 		inputmode?: 'text' | 'decimal' | 'numeric';
 		placeholder?: string;
-		autocomplete?: 'on' | 'off';
+		autocomplete?: HTMLInputAttributes['autocomplete'];
 	} = $props();
 
 	const fieldId = $derived(`f-${name}`);
