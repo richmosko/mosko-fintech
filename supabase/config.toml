@@ -228,6 +228,9 @@ enable_signup = true
 # addresses. If disabled, only the new email is required to confirm.
 double_confirm_changes = true
 # If enabled, users need to confirm their email address before signing in.
+# Auth-1 / SELF-290: PROD = true (real signups must verify their email); LOCAL
+# stays false for dev convenience (Inbucket has no real deliverability). The prod
+# flip is a GoTrue-env/deploy concern — see docs/email-smtp-runbook.md.
 enable_confirmations = false
 # If enabled, users will need to reauthenticate or have logged in recently to change their password.
 secure_password_change = false
@@ -238,26 +241,37 @@ otp_length = 6
 # Number of seconds before the email OTP expires (defaults to 1 hour).
 otp_expiry = 3600
 
-# Use a production-ready SMTP server
+# ── Production SMTP (Auth-1 / SELF-290) ──────────────────────────────────────
+# PROVIDER-AGNOSTIC: GoTrue speaks SMTP, so the provider is a deploy-time env
+# choice — Resend (V1 default) or SES — per docs/email-smtp-runbook.md.
+# THIS BLOCK STAYS COMMENTED: local dev routes ALL mail to Inbucket
+# (http://127.0.0.1:54324); uncommenting points LOCAL at real SMTP (not wanted).
+# PROD wiring lives on the self-hosted Supabase / GoTrue env at deploy, NOT here.
+# The `pass` secret is Coolify-injected + tracked in secrets-manifest.yml (a
+# Sec-reviewed surface) — never committed.
+#   Resend (default):  host=smtp.resend.com  port=465  user=resend  pass=<Resend API key>
+#   SES (alternative): host=email-smtp.<region>.amazonaws.com  port=587  user/pass=<IAM SMTP creds>
 # [auth.email.smtp]
 # enabled = true
-# host = "smtp.sendgrid.net"
-# port = 587
-# user = "apikey"
-# pass = "env(SENDGRID_API_KEY)"
-# admin_email = "admin@email.com"
-# sender_name = "Admin"
+# host = "smtp.resend.com"
+# port = 465
+# user = "resend"
+# pass = "env(SMTP_PASS)"
+# admin_email = "env(SMTP_ADMIN_EMAIL)"
+# sender_name = "mosko-fintech"
 
-# Uncomment to customize email template
-# [auth.email.template.invite]
-# subject = "You have been invited"
-# content_path = "./supabase/templates/invite.html"
+# ── Custom auth-email templates (Auth-1) — plain-text-safe; active locally + prod.
+[auth.email.template.confirmation]
+subject = "Confirm your mosko-fintech email"
+content_path = "./supabase/templates/confirmation.html"
 
-# Uncomment to customize notification email template
-# [auth.email.notification.password_changed]
-# enabled = true
-# subject = "Your password has been changed"
-# content_path = "./templates/password_changed_notification.html"
+[auth.email.template.recovery]
+subject = "Reset your mosko-fintech password"
+content_path = "./supabase/templates/recovery.html"
+
+[auth.email.template.magic_link]
+subject = "Your mosko-fintech sign-in code"
+content_path = "./supabase/templates/magic_link.html"
 
 [auth.sms]
 # Allow/disallow new user signups via SMS to your project.

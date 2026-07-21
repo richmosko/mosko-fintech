@@ -1,0 +1,7 @@
+<!-- GoTrue magic-link / email-OTP template (Auth-1 / SELF-290; consumed by Auth-4
+     email-2FA, which uses the CODE not the link — {{ .Token }} is emphasized). -->
+<h2>Your sign-in code</h2>
+<p>Use this one-time code to finish signing in to mosko-fintech:</p>
+<p style="font-size:1.5em"><strong>{{ .Token }}</strong></p>
+<p>This code expires shortly. If you didn’t try to sign in, you can ignore this email.</p>
+<p>(Prefer a link? <a href="{{ .ConfirmationURL }}">Sign in here</a>.)</p>
