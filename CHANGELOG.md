@@ -12,6 +12,18 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 ---
 
+### v1.88 — 2026-07-21
+
+**Phase 6 — SELF-282: migration `022` `pfin.user_asset_category` LANDED (PR #185, merge `7668a1c`).** The per-user asset-allocation junction (PRD §2.2; R-19) — first of the two remaining 015–021 substrate slices. Every user categorizes ANY asset (global market securities OR their own manual assets) via a junction row; category is per-(user, asset), not per-account. MUTABLE, RLS direct-owner (`users_id=auth.uid()`, full authenticated CRUD), anon zero-grant, no service_role writer in V1.
+
+**Two Decision-3 fences (BEFORE INSERT OR UPDATE, INVOKER, `search_path=''`):** #8 matched-tenant `sub_cat_id` (the `012` shape); #9 the **novel global-OR-matched-tenant** `asset_id` fence — 2nd + final site of the `017` OWD-B predicate, tenant resolved directly via `new.users_id` (this table carries its own `users_id`, no JOIN).
+
+**Sec joint-review GREEN (both gates)** — SQL review (both fences byte-identical to the ratified 012/017 patterns, fail-closed, NULL-safe) + the **C1 two-tenant-battery sign-off**. QA C6 pgTAP battery `plan(22)`: both fences proven *separately* (message-precise), the #9 **global-asset SUCCESS** case (non-vacuous), a **service_role trigger-isolation** block (RLS-bypassed → B's rows visible → fences still raise, proving the explicit predicate — not RLS — is the gate), UPDATE coverage, RLS isolation, unique, anon-42501, ON DELETE RESTRICT. Clean apply `001→022`; suite 300 tests PASS, 0 regressions. (One test-only `%s`→`%L` UUID-quoting fix mid-review; migration itself untouched.)
+
+**Ledger:** no migration DEFINER (INVOKER); **§10 stays 3 · DEFINER 3 · RT-26 unchanged**; **Decision-3 +2** (realizes canonical #8 + #9; operational tally 8→10). The non-contiguous canonical-label reconciliation (#6–#10 into the DECISIONS.md Decision-3 body list) is **task #13**, queued after `023`. Detail: [PR #185](https://github.com/richmosko/mosko-fintech/pull/185).
+
+---
+
 ### v1.87 — 2026-07-20
 
 **Phase 6 — SELF-281 (connect-wave follow-up OQ-2): provider-agnostic connect seam + in-app SimpleFIN connect (PR #183, merge `57b4cb4`).** SimpleFIN was previously admittable only via a sandbox dev CLI; OQ-2 adds an in-app SimpleFIN connect flow through the SHIPPED RT-27 app→worker fence (a new *route*, not a new fence) and generalizes the connect page to a provider picker. Plaid path unchanged; reuses `SimpleFINAdapter.connect()` + the shipped account-mapping wholesale. **1-leg asymmetry:** SimpleFIN = paste a Bridge setup-token → claim → Vault admit (no link-token analogue, no `/item/remove` recovery — read-only Access URL).
