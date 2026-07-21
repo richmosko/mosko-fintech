@@ -12,6 +12,18 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 ---
 
+### v1.89 — 2026-07-21
+
+**Phase 6 — SELF-283: migration `023` `pfin.account_trans_annotation` LANDED (PR #187, merge `6926c29`) — the 015–021 substrate is COMPLETE.** The user's MUTABLE editable overlay over the immutable `account_trans` ledger (PRD §2.3 transaction-level expense categorization + a note; R-17) — last of the two remaining substrate slices. `trans_id` PK 1:1 → account_trans (sole anchor, NOT D3) · `sub_cat_id` → user_taxonomy (D3 #10) · `note`. Parent-chain RLS (the `006` shape — the annotation has no own `users_id`); authenticated CRUD; anon zero-grant; no service_role annotation writer in V1.
+
+**The C-note fence — Sec ruled (a) chain-resolved.** The `sub_cat_id` matched-tenant fence resolves the owning tenant via `trans_id → account_trans → account.users_id` then matches `user_taxonomy.users_id` (mirrors 017's chain-JOIN). Sec's grounds: Decision 3's mandatory-DDL rule; future-proofs the still-open §6A eager-seed choice (a service_role annotation writer would bypass RLS-only fencing); family consistency.
+
+**Sec joint-review GREEN (all four)** — DDL + the (a) ruling + a header count-narrative correction + the C1 battery sign-off. QA C6 two-tenant/cross-account pgTAP battery `plan(18)`: parent-chain RLS isolation + the #10 fence + its service_role trigger-isolation teeth (non-vacuous). Clean apply `001→023`; suite 318 tests PASS, 0 regressions.
+
+**Ledger + the D3 count-narrative correction.** No migration DEFINER (INVOKER); **§10 stays 3 · DEFINER 3 · RT-26 unchanged · Decision-3 +1** (canonical #10). A recurring drift was caught + fixed across the 022 header, the 023 header, AND the 023 battery: the family is **11 labeled instances, NOT 10** (#11 `holdings_checkpoint.security_id` realized *early* at 019, distinct-provenance, outside the (g) 5→10 batch) — after 023, **DDL-realized = 9 of 11** (#1,#2,#5,#6,#7,#8,#9,#10,#11); #3/#4 (`monthly_report`) pending V1.3+. **task #13** (fold the DECISIONS.md Decision-3 body list to #1–#11 with realized/unrealized status) is now cleanly runnable. Detail: [PR #187](https://github.com/richmosko/mosko-fintech/pull/187).
+
+---
+
 ### v1.88 — 2026-07-21
 
 **Phase 6 — SELF-282: migration `022` `pfin.user_asset_category` LANDED (PR #185, merge `7668a1c`).** The per-user asset-allocation junction (PRD §2.2; R-19) — first of the two remaining 015–021 substrate slices. Every user categorizes ANY asset (global market securities OR their own manual assets) via a junction row; category is per-(user, asset), not per-account. MUTABLE, RLS direct-owner (`users_id=auth.uid()`, full authenticated CRUD), anon zero-grant, no service_role writer in V1.
