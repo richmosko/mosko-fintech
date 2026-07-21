@@ -47,6 +47,20 @@ Running your own SMTP (Postfix / mailcow / …) is **not recommended** for this 
 
 **Nothing to configure.** The Supabase CLI stack routes all mail to **Inbucket** (`http://127.0.0.1:54324`) — read confirmation/reset/OTP emails there. `enable_confirmations` stays `false` locally (dev convenience); the custom templates in `supabase/templates/` are active locally too.
 
+## No domain yet, or local-only (no public email)
+
+**Key distinction:** the app's URL/hostname and the email **sending** domain are independent — you can run the app at `localhost`, an IP, or a `.local` name and still send from a verified sending domain. "No domain" only blocks email when you actually need to deliver to real inboxes.
+
+**No domain yet (deploying publicly later):**
+- *Interim (test-to-self):* use Resend's shared sender **`onboarding@resend.dev`** — works immediately with no domain verification, but **only delivers to the email you registered with Resend.** Enough to build + test the whole signup / reset / OTP flow against your own inbox. Set `SMTP_ADMIN_EMAIL=onboarding@resend.dev`.
+- *Real fix (before real users):* register any cheap domain (~$10/yr — needn't be fancy), verify it on Resend (ideally a `mail.` subdomain to isolate sending reputation), then set `SMTP_ADMIN_EMAIL=noreply@<your-domain>`. The app does **not** need to run at that domain — it's only the `From:` identity.
+
+**Local server that will never have a domain:**
+- *Pure local / solo (just you on `localhost`):* configure nothing — **Inbucket** catches every email at `http://127.0.0.1:54324`. Zero domain, zero provider, zero cost (see [Local development](#local-development) above).
+- *Closed instance, a few real users, no domain* — two postures:
+  1. **Relay through a personal mailbox's SMTP.** GoTrue only needs SMTP creds, e.g. Gmail with an **app password**: `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=587`, `SMTP_USER=<your-gmail>`, `SMTP_PASS=<app-password>` (needs 2FA on that Google account to mint one). Fine for low volume to known recipients; caveats: Gmail's ~500/day limit + mail sends from your personal address.
+  2. **Turn email off entirely.** Set `enable_confirmations = false`, have the **admin provision accounts**, use **TOTP** for MFA (needs no email), and rely on an **admin/DB break-glass** for recovery instead of email reset. A fully email-free posture for a closed, admin-managed instance — no domain, no SMTP provider.
+
 ## Posture notes
 
 - **`enable_confirmations`**: `true` in prod (real signups verify their email), `false` local. Set on the GoTrue env at deploy.
