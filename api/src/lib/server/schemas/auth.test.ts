@@ -133,7 +133,18 @@ function makeActionEvent(
 		headers: { 'content-type': 'application/x-www-form-urlencoded' },
 		body: new URLSearchParams(form).toString()
 	});
-	const locals = { supabase: { auth: supabaseAuth } };
+	// supabase stub: the auth surface under test + a benign pfin schema chain so the
+	// wired-in ensureUserSettings (SELF-286) upsert resolves quietly (it's fail-soft
+	// regardless; ensureUserSettings has its own dedicated unit coverage).
+	const supabase = {
+		auth: supabaseAuth,
+		schema: () => ({
+			from: () => ({
+				upsert: async () => ({ error: null })
+			})
+		})
+	};
+	const locals = { supabase };
 	const url = new URL(origin);
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	return { request, locals, url } as any;
@@ -167,7 +178,7 @@ describe('login action', () => {
 	});
 
 	it('success → 303 redirect to the guarded target', async () => {
-		const signInWithPassword = vi.fn(async () => ({ error: null }));
+		const signInWithPassword = vi.fn(async () => ({ data: { user: { id: 'u1' } }, error: null }));
 		const { redirect } = await runAction(
 			loginActions.default as never,
 			makeActionEvent({ email: 'a@b.com', password: 'x', redirectTo: '/accounts/new' }, { signInWithPassword })
@@ -176,7 +187,7 @@ describe('login action', () => {
 	});
 
 	it('open-redirect guard: an off-origin redirectTo collapses to /', async () => {
-		const signInWithPassword = vi.fn(async () => ({ error: null }));
+		const signInWithPassword = vi.fn(async () => ({ data: { user: { id: 'u1' } }, error: null }));
 		const { redirect } = await runAction(
 			loginActions.default as never,
 			makeActionEvent({ email: 'a@b.com', password: 'x', redirectTo: '//evil.com' }, { signInWithPassword })
@@ -185,7 +196,7 @@ describe('login action', () => {
 	});
 
 	it('redirectTo in the body does NOT trip the .strict() fence', async () => {
-		const signInWithPassword = vi.fn(async () => ({ error: null }));
+		const signInWithPassword = vi.fn(async () => ({ data: { user: { id: 'u1' } }, error: null }));
 		const { redirect } = await runAction(
 			loginActions.default as never,
 			makeActionEvent({ email: 'a@b.com', password: 'x', redirectTo: '/' }, { signInWithPassword })
@@ -208,7 +219,10 @@ describe('signup action', () => {
 	});
 
 	it('confirmations OFF (session returned) → 303 redirect to /', async () => {
-		const signUp = vi.fn(async () => ({ data: { session: { access_token: 't' } }, error: null }));
+		const signUp = vi.fn(async () => ({
+			data: { session: { access_token: 't' }, user: { id: 'u1' } },
+			error: null
+		}));
 		const { redirect } = await runAction(
 			signupActions.default as never,
 			makeActionEvent({ email: 'a@b.com', password: 'password1', confirm: 'password1' }, { signUp })
