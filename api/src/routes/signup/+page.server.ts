@@ -20,6 +20,7 @@
 
 import { fail, redirect } from '@sveltejs/kit';
 import { signupSchema, fieldErrors } from '$lib/server/schemas/auth';
+import { ensureUserSettings } from '$lib/server/queries/userSettings';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -52,8 +53,14 @@ export const actions: Actions = {
 			});
 		}
 
-		// Confirmations OFF → a session was minted → straight in.
-		if (data.session) throw redirect(303, '/');
+		// Confirmations OFF → a session was minted → straight in. Lazily provision the
+		// user_settings row first (SELF-286 substrate). FAIL-SOFT (never throws/blocks).
+		// Confirmations ON → no session yet (no JWT to write under) → provisioning happens
+		// lazily on the first confirmed login instead (login action / self-heal).
+		if (data.session) {
+			if (data.user) await ensureUserSettings(locals.supabase, data.user.id);
+			throw redirect(303, '/');
+		}
 
 		// Confirmations ON → no session → tell the UI to prompt for the email link.
 		return { emailSent: true, email };

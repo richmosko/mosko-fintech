@@ -16,6 +16,7 @@
 
 import { fail, redirect } from '@sveltejs/kit';
 import { loginSchema, fieldErrors, safeRedirectPath } from '$lib/server/schemas/auth';
+import { ensureUserSettings } from '$lib/server/queries/userSettings';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -44,11 +45,16 @@ export const actions: Actions = {
 		}
 		const { email, password } = parsed.data;
 
-		const { error } = await locals.supabase.auth.signInWithPassword({ email, password });
+		const { data, error } = await locals.supabase.auth.signInWithPassword({ email, password });
 		if (error) {
 			// GENERIC — never reveal whether the email exists (enumeration fence).
 			return fail(400, { errors: { _form: ['Invalid email or password.'] }, email });
 		}
+
+		// Lazily provision the caller's user_settings row (SELF-286 substrate). FAIL-SOFT:
+		// ensureUserSettings never throws, so a provisioning hiccup cannot block login —
+		// the row self-heals next request and a missing row reads as 'none' anyway.
+		if (data.user) await ensureUserSettings(locals.supabase, data.user.id);
 
 		// Same-site-guarded redirect (open-redirect fence). Bad targets → '/'.
 		throw redirect(303, safeRedirectPath(typeof redirectTo === 'string' ? redirectTo : null));
