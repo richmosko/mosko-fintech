@@ -12,6 +12,22 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 ---
 
+### v1.92 — 2026-07-21
+
+**Phase 6 — Auth & Accounts foundation: Auth-1 + Auth-2 + Auth-3 SHIPPED (PRs #193/#194/#195/#196).** The authenticated app is now browser-reachable and carries the MFA substrate. Stood up the **Auth & Accounts** Linear project (SELF-285–291) under the ratified model: **GoTrue authenticates, Postgres RLS authorizes; MFA is a per-user opt-in choice; tenant isolation is the universal invariant.**
+
+**Auth-1 (SELF-290, PR #193/#194) — SMTP scaffolding.** Provider-agnostic GoTrue SMTP (the app never sends mail → provider is a deploy-time env choice), **Resend default** + SES documented alternative + self-host discouraged; three plain-text-safe auth-email templates; the operator runbook `docs/email-smtp-runbook.md` (incl. the "no domain / local-only" section). The SMTP secret is a Supabase-stack concern (secrets-manifest + prod GoTrue env at deploy), deliberately NOT in the web-app `.env.example`. Stays In Progress pending the operator's Resend/DNS + prod wiring.
+
+**Auth-2 (SELF-285, PR #195) — signup + login + session + email confirmation.** The multi-user base flow that makes every protected page (§2.1 net-worth, `accounts/*`) reachable: `/login` + `/signup` (email confirmation) + `/auth/callback` + POST-only sign-out + the authed layout header. Zod `.strict()`, account-enumeration fences, and a `URL`-origin-resolve open-redirect guard (Sec finding #1 — fixed + re-verified); no service_role. Sec 🟢 GREEN. Deploy-gate: `enable_confirmations=true` in prod (tracked on SELF-290).
+
+**Auth-3 (SELF-286, PR #196) — MFA substrate.** Migration `024` `pfin.user_settings` + `mfa_policy` (`none/totp/passkey`, default `none`) + owner-only RLS + fail-soft lazy provisioning + the `[auth.mfa.totp]` capability-enable (GoTrue v2.189.0 empirically verified). No new DEFINER (allowlist **3**), §10 **3** (adds none), Decision-3 **+0** (`users_id` = tenant anchor + PK). Sec 🟢 GREEN. Fulfills SELF-285 AC#5's deferred profile row; home for SELF-232 settings.
+
+**Auth-model decisions (F/CTO-ratified 2026-07-21).** **Option-B split:** real DB-enforced TOTP (the per-user-conditional RLS `aal2` backstop + enrollment/step-up) is the Sec-gated fast-follow **Auth-3b (SELF-291)**, not the substrate. **Email-2FA DROPPED (SELF-287 canceled)** — email OTP is `aal1`, never a native `aal2` factor → not DB-enforceable; and on the directly-reachable data API (C6), app-layer-only 2FA protects nothing against a phished password. Supported factors: **password / TOTP (V1.0 via Auth-3b) / passkey (V1.x)**; email retained for signup verification + password recovery only.
+
+**Process:** Auth-2/3 built via role-separated teams (architect → backend ‖ qa → security-reviewer), design-first for the migration-bearing Auth-3. Migrations `001`–`024` live; ledgers **DEFINER 3 · §10 3 · Decision-3 11 labels / 9 DDL-realized**. Detail: PRs #193/#194/#195/#196.
+
+---
+
 ### v1.91 — 2026-07-21
 
 **Phase 6 — SELF-211 (§2.1.1.b): headline Net Worth read-surface LANDED (PR #191, merge `69f531a`) — the first V1 feature read-surface on the complete `001`–`023` valuation substrate.** The root route (`/`) renders the caller's net worth as a single trustworthy number (PRD §2.1.1 verbatim), sourced from the existing `SECURITY INVOKER` helper `pfin.fn_compute_nav` (migration `019` / SELF-277) via the per-request anon+RLS client (RT-26-clean, no service_role; INVOKER scopes to `auth.uid()`). F/CTO-ratified **Option A** — the GAV/Debt/tax composition breakdown stays V1.1 (§2.1.5 / SELF-225). No new DB work: the substrate already IS the aggregation.
