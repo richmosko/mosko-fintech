@@ -12,6 +12,16 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 ---
 
+### v1.90 — 2026-07-21
+
+**Phase 6 — SELF-284 (task #13): ADR-011 Decision-3 enumeration fold-in — canonical #1–#11 (PR #189, merge `f78aa37`).** Doc-only, but a Sec-load-bearing ledger change (Sec numbering sign-off gates merge). The ADR-011 Decision 3 body numbered list was stale at #1–#5; #6–#11 lived only in ADR-027 (g)/(p) + migration headers with a drift-prone operational tally. Folds the full canonical family into the body list: each instance FK → target · migration · fence pattern (P1 local-anchor / P2 novel global-OR / CR chain-resolved) · provenance.
+
+**The canonical family = 11 non-contiguous labeled instances, 9/11 DDL-realized after 023:** #1@005 · #2@004 · #5@012 · #6@015 · #7@017 · #8+#9@022 · #10@023 · #11@019 (realized early, distinct-provenance, outside the (g) 5→10 batch); #3+#4 (`monthly_report`) canonically-locked but DDL-deferred V1.3+. Corrects the ADR-027 (g) planning-era migration numbers (#8/#9 020→022, #10 021→023) + the #1@005 / #2@004 Lock-vs-migration inversion. **Retires the operational tally** ("5→10 fully realized / total 10", which recurrently omitted #11 — the drift caught 3× during 022/023) in favor of the canonical enumeration as authoritative.
+
+**Sec numbering sign-off GREEN** — §10 catalogued list byte-untouched (stays 3); DEFINER 3; no migration, no code. **Follow-up (non-blocking, Sec NOTE):** a later pass to point the frozen operational counts in agent-def files + `supabase/CLAUDE.md` at this canonical enumeration. Detail: [PR #189](https://github.com/richmosko/mosko-fintech/pull/189).
+
+---
+
 ### v1.89 — 2026-07-21
 
 **Phase 6 — SELF-283: migration `023` `pfin.account_trans_annotation` LANDED (PR #187, merge `6926c29`) — the 015–021 substrate is COMPLETE.** The user's MUTABLE editable overlay over the immutable `account_trans` ledger (PRD §2.3 transaction-level expense categorization + a note; R-17) — last of the two remaining substrate slices. `trans_id` PK 1:1 → account_trans (sole anchor, NOT D3) · `sub_cat_id` → user_taxonomy (D3 #10) · `note`. Parent-chain RLS (the `006` shape — the annotation has no own `users_id`); authenticated CRUD; anon zero-grant; no service_role annotation writer in V1.
