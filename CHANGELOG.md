@@ -12,6 +12,22 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 ---
 
+### v1.95 — 2026-07-22
+
+**Phase 6 — Auth-3b Slice 2a: the recovery-code store SHIPPED (SELF-291, PR #202, merge `1dbabfb`).** The DB foundation for self-service TOTP recovery. Migration `026` lands the store + the column-scoped `service_role` downgrade grant; the actual `/mfa/recover` endpoint + issuance/redemption + UI are Slice 2b (where the 4th RT-26 surface + ADR-016 amendment land).
+
+**`pfin.mfa_recovery_code`.** Per-user store of app-side **bcrypt/argon2-hashed** one-time backup codes (`code_id` PK, `users_id` FK→auth.users ON DELETE CASCADE, `code_hash`, `batch_id`, `used_at` NULL=unspent, `created_at`; partial index `(users_id) WHERE used_at IS NULL`). **service_role-only:** RLS enabled + **ZERO authenticated policy** + **ZERO authenticated/anon grant** → default-deny at *both* the ACL and RLS layers, so hashes never reach the direct PostgREST API (the `linked_source_sync_audit` pattern). `service_role` SELECT/INSERT/UPDATE (redeem reads+consumes, issue inserts; no DELETE — regenerate supersedes via `used_at`, lifecycle via the auth.users cascade).
+
+**The recovery downgrade grant.** `grant select (users_id), update (mfa_policy) on pfin.user_settings to service_role` — column-scoped least-privilege: `service_role` reads *only* the tenant anchor (already visible via `auth.users`) and writes *only* `mfa_policy`. This lets the Slice-2b endpoint perform the guard-exempt `mfa_policy→none` downgrade at recovery (the MB-1 trigger exempts `service_role`). The `select(users_id)` is mechanically required for the `UPDATE … WHERE users_id=$1` (Sec-approved as still minimal — same empirically-forced-but-minimal shape as the MB-1 tier-scoping).
+
+**ADR-030 — the Slice-2 recovery posture.** `service_role` is **forced by construction** — three independent forcings, each sufficient: (1) the MB-1 guard blocks the aal1 `mfa_policy` downgrade; (2) **CV-R1 = BLOCKED** (empirically driven: an aal1 session cannot `mfa.unenroll()` a verified factor — GoTrue returns `422 insufficient_aal`; only `service_role` admin `deleteFactor` works, and removal is *required* or GoTrue keeps `nextLevel=aal2` and the Slice-1 guard still blocks); (3) the hash table must stay off the direct API. So conditional-lock #4 resolves to `service_role` — not because "CV-R1 failed" but because no design escapes it (the DEFINER-RPC alternative still needs `service_role` for the GoTrue leg *and* adds a DEFINER entry — strictly worse; rejected, along with a Sec-vetoable `auth.mfa_factors`-mutation option). Recovery mints **no aal2** (remove dead factor + downgrade → aal1-sufficient → re-enroll). The 4th RT-26 surface + ADR-016 amendment are explicitly deferred to Slice 2b.
+
+**Verification.** Sec joint-review 🟢 **GREEN** (least-privilege grant surface; hashes fenced both layers; §10 framing cross-checked against ADR-016 D1 + Decision 4 verbatim — a `service_role` DB-ACL grant is not an RT-26 code-layer move, same as `008`) + the default-deny pgTAP battery **signed off** (`026` plan(13), new `_rls.stmt_denied_as` verb; full suite **376 tests / 24 files PASS**; non-vacuous — authenticated/anon denied both layers, service_role operability, the `used_at IS NULL` consumption arbiter, the column-scoped grant pinned). All CI green. No functions authored. Ledgers flat: **DEFINER 3 · §10 3 · Decision-3 unchanged.** Migrations `001`–`026` live.
+
+**Remaining on SELF-291** (In Progress): **Slice 2b** — the `/mfa/recover` endpoint (verify→consume→admin `deleteFactor`→downgrade→notify→re-enroll) + display-once issuance + recovery UI + the **ADR-016 amendment (4th RT-26 surface)** + the `rt26-allowlist.txt` update; Sec gates the atomic check-and-consume (single-statement + rows-affected), hash algo/cost + constant-time compare, rate-limit, and notify-on-MFA-change. Plus **C2** (SECURITY §4.5 RT-class posture entry, Sec co-authored, before TOTP GA) + **C3** (migration-checklist note). Detail: PR #202.
+
+---
+
 ### v1.94 — 2026-07-22
 
 **Phase 6 — Auth-3b Slice 1 COMPLETE: the app flow (TOTP enrollment + step-up + fail-closed guard) SHIPPED (SELF-291, PR #200, merge `f7b96c8`).** The app layer on top of the merged `025` DB backstop (v1.93). With enforcement (the DB demands aal2 on the direct API) now paired with a usable enrollment/step-up UI, **opt-in TOTP works end-to-end.**
