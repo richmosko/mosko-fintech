@@ -12,6 +12,22 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 ---
 
+### v1.94 — 2026-07-22
+
+**Phase 6 — Auth-3b Slice 1 COMPLETE: the app flow (TOTP enrollment + step-up + fail-closed guard) SHIPPED (SELF-291, PR #200, merge `f7b96c8`).** The app layer on top of the merged `025` DB backstop (v1.93). With enforcement (the DB demands aal2 on the direct API) now paired with a usable enrollment/step-up UI, **opt-in TOTP works end-to-end.**
+
+**Server.** `/settings/security` — the MFA hub: `enrollStart` (`mfa.enroll` → QR + secret) / `enrollVerify` (`challenge`+`verify`; on success sets `mfa_policy='totp'` via a **separate N1-safe UPDATE of only that column, and only after a verified factor exists** — factor-before-policy, so the DB backstop's `totp` never outruns a real factor) / `disable` (aal2-gated; the `025` MB-1 guard rejects an aal1 downgrade at the DB — 42501 → `fail(403)`, factor untouched). `/mfa/step-up` — `getAuthenticatorAssuranceLevel()` → `challenge`+`verify` → aal2 → same-site-guarded redirect. **`requireStepUp` (fail-CLOSED, N3)** — a new helper distinct from the fail-soft `getMfaPolicy` reporter; keys off **GoTrue AAL** as the reconciled source of truth for "a verified factor exists" (**N2**: catches a factor even with a stale `mfa_policy='none'`; N2b lockout prevented by the write-ordering), and any error/indeterminate AAL ⇒ step-up. Sequenced in the `hooks.server.ts` chokepoint as `authHandle → mfaHandle → cspHandle`; **GET-page-nav scope** (POSTs rely on the `025` DB backstop, which clauses writes too, + each action's own `safeGetSession` guard; the exempt-prefix set `/login /signup /auth /mfa` is abuse-resistant — `startsWith(p + '/')` so `/mfa-evil` doesn't match). Anon+RLS only, no service_role.
+
+**UI.** `settings/security` + `mfa/step-up` `.svelte` on Backend's contract; a client Zod mirror (message-identical to the server, Lock 14); the QR rendered via `{@html}` of the trusted, script-free GoTrue-generated SVG — safe under the app-global **nonce-only CSP** (`script-src ['self']` + `mode:'nonce'`, no `unsafe-inline`; avoids a data-URI `<img>` + `img-src data:` widening); `TextField` gains optional native-validation attr passthrough (backward-compatible); plain progressive-enhancement forms (matches `/login` + `/signup`).
+
+**Verification.** Sec joint-review 🟢 **unconditional GREEN** (C-APP1 CSP posture confirmed; the fail-closed guard, N1/N2 reconciliation + write-ordering, the GET-only scope opening no protected-data path, no service_role, and the open-redirect + mass-assignment fences all verified in source). `svelte-check` 0 · `vitest` **181** · `vite build` clean · Backend live smoke **13/13** vs GoTrue v2.189 (enroll→aal2; **totp@aal1 → guard-redirect AND DB-backstop 0 rows AND MB-1 42501**; none-user unaffected) · all CI green. No new migration/DB-fn/service_role (consumes `025`). Ledgers flat: **DEFINER 3 · §10 3 · Decision-3 unchanged.**
+
+**Slice-1 close-out.** MB-1 (the backstop self-defeat) is closed at the DB layer (`025`); this app layer is defense-in-depth over it. Two non-blocking Sec NOTEs: the disable partial-failure window fails in the *safer* access-restored direction (never toward an aal1 lockout); the client Zod mirror is UX-only.
+
+**Remaining on SELF-291** (In Progress): **C2** (SECURITY §4.5 RT-class posture entry — Sec co-authored, before TOTP GA), **C3** (migration-checklist note), and **Slice 2** — recovery codes (`026` store + redemption + the CV-R1 flip-gate on the backup-code path; joint-review-mandatory) under the ratified recovery invariants. Slice 2 gates TOTP GA (a lost phone = lockout without it). Detail: PR #200.
+
+---
+
 ### v1.93 — 2026-07-22
 
 **Phase 6 — Auth-3b Slice-1 (DB enforcement layer): the aal2 step-up backstop + MB-1 guard SHIPPED (SELF-291, PR #198, merge `fa8900c`).** Migration `025` makes opt-in TOTP a real, DB-enforced guarantee — the increment Sec's **C2 hard gate** required. `pfin` is directly reachable via PostgREST + the public anon key (C6); base RLS checks `users_id = auth.uid()` but **not** `aal`, so an `aal1` session (password entered, TOTP not completed) could read/write a totp-user's financial rows through the direct data API with app-layer step-up enforcing nothing. `025` closes that at the only layer that can — the DB.
