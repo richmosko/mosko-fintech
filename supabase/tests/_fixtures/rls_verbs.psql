@@ -162,3 +162,29 @@ begin
   return n;
 end;
 $$;
+
+-- DEFAULT-DENY PROBE: run p_sql under role p_role and report whether it was refused
+-- with insufficient_privilege (SQLSTATE 42501 — the ACL denial class: table-level,
+-- column-level, or schema-USAGE). Returns TRUE if denied, FALSE if it executed. Any
+-- OTHER error propagates (so a typo/undefined-object fails the test loudly rather than
+-- masquerading as a denial). Restores role=postgres before returning. Called at
+-- role=postgres and asserted with ok() at postgres — so it never runs pgTAP under the
+-- probed role (service_role/anon may lack EXECUTE on the pgTAP funcs). For a POSITIVE
+-- capability check use ok(not _rls.stmt_denied_as(...)). NOTE: on the not-denied path
+-- p_sql actually executes (mutations persist in the caller's txn) — pass a read for a
+-- pure capability probe, or expect the write to land.
+create or replace function _rls.stmt_denied_as(p_role text, p_sql text)
+  returns boolean
+  language plpgsql as $$
+declare denied boolean := false;
+begin
+  perform set_config('role', p_role, true);
+  begin
+    execute p_sql;
+  exception when insufficient_privilege then
+    denied := true;
+  end;
+  perform set_config('role', 'postgres', true);
+  return denied;
+end;
+$$;
