@@ -7,12 +7,23 @@
 	CONTRACT (Backend, authoritative — see +page.server.ts):
 	  data.status : MfaStatus — render off `hasVerifiedTotp` (the REAL, AAL-derived state;
 	                mfaPolicy is display-only and deliberately NOT gated on here).
+	  data.recovery : { unused: number } — live unused backup-code count (0 when MFA off).
 	  action ?/enrollStart  → { action:'enrollStart', enroll:{ factorId, qrCode, secret, uri } }
 	                          | { action:'enrollStart', errors:{ _form } }
-	  action ?/enrollVerify → 303 /settings/security on success (PRG; page reloads MFA-on)
+	  action ?/enrollVerify → { action:'enrollVerify', enrolled:true, recoveryCodes:string[],
+	                            recoveryCodesError:boolean }  (SUCCESS — no longer redirects,
+	                            so it can carry the display-once plaintext codes)
 	                          | { action:'enrollVerify', factorId, errors:{ code | _form } }
 	  action ?/disable      → 303 /settings/security on success
 	                          | { action:'disable', errors:{ _form } }
+	  action ?/regenerateRecoveryCodes → { action:'regenerateRecoveryCodes', recoveryCodes }
+	                          | { action:'regenerateRecoveryCodes', errors:{ _form } }  (403
+	                            when the session isn't aal2 → prompt step-up)
+
+	Slice 2b — DISPLAY-ONCE recovery codes: `recoveryCodes` arrives ONLY on an action return
+	(enrollVerify / regenerate success). We render it through RecoveryCodesPanel, which shows
+	it exactly once and never persists it. On reload the action data is gone and the codes
+	cannot reappear. INV-1 plain text; no value-color / attention hue on the codes.
 
 	Plain <form method="POST"> per action — progressive-enhancement + CSP-safe, mirroring
 	/login + /signup (no use:enhance, no inline handlers). The server-side .strict() schema
@@ -28,13 +39,16 @@
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5).
 -->
 <script lang="ts">
+	import { page } from '$app/state';
 	import TextField from '$lib/components/TextField.svelte';
 	import Button from '$lib/components/Button.svelte';
+	import RecoveryCodesPanel from '$lib/components/RecoveryCodesPanel.svelte';
 	import type { PageData, ActionData } from './$types';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
 	const status = $derived(data.status);
+	const recovery = $derived(data.recovery);
 	// Backend's fail() branches are all string-keyed `{ field: string[] }` maps at runtime.
 	const errors = $derived((form?.errors ?? {}) as Record<string, string[]>);
 
@@ -46,6 +60,34 @@
 		enroll?.factorId ?? (form && 'factorId' in form ? form.factorId : undefined)
 	);
 	const showVerify = $derived(Boolean(verifyFactorId));
+
+	// ── Slice 2b: display-once recovery codes + count ──────────────────────────
+	// Codes are present ONLY as action-return data (enrollVerify / regenerate success). We
+	// read them straight from `form` — never into a persistent store (display-once).
+	const recoveryCodes = $derived(
+		form && 'recoveryCodes' in form && Array.isArray(form.recoveryCodes) && form.recoveryCodes.length > 0
+			? form.recoveryCodes
+			: undefined
+	);
+	// enrollment succeeded but the code batch couldn't be issued → prompt regenerate.
+	const recoveryCodesError = $derived(
+		form?.action === 'enrollVerify' && 'recoveryCodesError' in form
+			? Boolean(form.recoveryCodesError)
+			: false
+	);
+	// A fresh regenerate batch supersedes the old — warn the user their old codes died.
+	const regenerated = $derived(
+		form?.action === 'regenerateRecoveryCodes' && recoveryCodes !== undefined
+	);
+	// Regenerate refused (server-side aal2 gate, 403) → nudge to step up first.
+	const regenerateNeedsStepUp = $derived(
+		form?.action === 'regenerateRecoveryCodes' && Boolean(errors._form)
+	);
+	// Low unused-code balance → a gentle regenerate nudge (only meaningful when MFA is on).
+	const lowRecovery = $derived(status.hasVerifiedTotp && recovery.unused <= 2);
+
+	// The /mfa/recover flow lands here as ?recovered=1 — MFA is now off; prompt re-enroll.
+	const justRecovered = $derived(page.url.searchParams.get('recovered') === '1');
 </script>
 
 <svelte:head>
@@ -58,6 +100,27 @@
 		<p class="lead">Protect your account with two-factor authentication.</p>
 	</header>
 
+	{#if justRecovered}
+		<!-- Landed from /mfa/recover: the dead factor is gone + MFA is off. Neutral notice
+		     (NOT the attention hue — reserved for staleness/re-auth), prompting re-enrollment. -->
+		<p class="notice" role="status">
+			You're signed in with a backup code. Two-factor authentication has been turned off — set
+			up a fresh authenticator below to protect your account again.
+		</p>
+	{/if}
+
+	{#if recoveryCodes}
+		<!-- DISPLAY-ONCE: rendered straight from the action return, shown exactly once. -->
+		<section class="card" aria-label="Backup codes">
+			{#if regenerated}
+				<p class="notice" role="status">
+					These new codes replace your previous backup codes — the old ones no longer work.
+				</p>
+			{/if}
+			<RecoveryCodesPanel codes={recoveryCodes} />
+		</section>
+	{/if}
+
 	<section class="card" aria-labelledby="mfa-title">
 		{#if status.hasVerifiedTotp}
 			<!-- ── MFA ON: verified factor exists (AAL truth) → offer disable ─────────── -->
@@ -65,6 +128,32 @@
 			<p class="body">
 				You'll be asked for a code from your authenticator app when you sign in.
 			</p>
+
+			<!-- Recovery-code balance + regenerate (aal2-gated server-side). -->
+			<div class="recovery">
+				<p class="body">
+					<span class="count">{recovery.unused} of 10</span> backup codes remaining.
+				</p>
+				{#if recoveryCodesError}
+					<p class="notice" role="status">
+						Two-factor authentication is on, but your backup codes couldn't be issued.
+						Regenerate a fresh set below.
+					</p>
+				{:else if lowRecovery}
+					<p class="notice" role="status">
+						You're running low on backup codes. Regenerate a fresh set so you always have a way
+						back in.
+					</p>
+				{/if}
+				{#if regenerateNeedsStepUp}
+					<p class="banner" role="alert">
+						{errors._form.join(' ')} <a href="/mfa/step-up">Verify it's you</a> and try again.
+					</p>
+				{/if}
+				<form method="POST" action="?/regenerateRecoveryCodes" class="row">
+					<Button type="submit">Regenerate backup codes</Button>
+				</form>
+			</div>
 
 			{#if form?.action === 'disable' && errors._form}
 				<p class="banner" role="alert">{errors._form.join(' ')}</p>
@@ -185,6 +274,29 @@
 	}
 	.row {
 		display: flex;
+	}
+	.recovery {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-3);
+		padding-top: var(--space-4);
+		border-top: 1px solid var(--c-border);
+	}
+	.count {
+		font-family: var(--font-num);
+		font-weight: var(--weight-semi);
+		color: var(--c-text-primary);
+	}
+	/* Neutral notice — NOT the attention hue (reserved for staleness/re-auth per the
+	   design-system fence). Informational nudges, not alerts. */
+	.notice {
+		margin: 0;
+		padding: var(--space-2) var(--space-3);
+		background: var(--c-surface-alt);
+		border: 1px solid var(--c-border);
+		border-radius: var(--radius-md);
+		font: var(--weight-reg) var(--fs-small) / var(--lh-body) var(--font-ui);
+		color: var(--c-text-secondary);
 	}
 	/* QR wrapper: constrain the inline SVG to a sane render box on a light chip so it
 	   scans on any theme (GoTrue SVGs are black-on-transparent). */

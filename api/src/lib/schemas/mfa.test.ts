@@ -4,9 +4,10 @@
 // /^\d{6}$/ shape, same trim, same message string.
 
 import { describe, it, expect } from 'vitest';
-import { totpCodeSchema, fieldErrors } from './mfa';
+import { totpCodeSchema, recoveryCodeSchema, fieldErrors } from './mfa';
 
 const MSG = 'Enter the 6-digit code from your authenticator app.';
+const RECOVERY_MSG = 'Enter a valid recovery code.';
 
 describe('totpCodeSchema (client mirror)', () => {
 	it('accepts exactly 6 digits', () => {
@@ -42,6 +43,47 @@ describe('totpCodeSchema (client mirror)', () => {
 
 	it('rejects a missing code field', () => {
 		const r = totpCodeSchema.safeParse({});
+		expect(r.success).toBe(false);
+	});
+});
+
+describe('recoveryCodeSchema (client mirror)', () => {
+	it('accepts a normalized 16-char base32 code', () => {
+		const r = recoveryCodeSchema.safeParse({ code: 'abcdefgh2345mnop' });
+		expect(r.success).toBe(true);
+		if (r.success) expect(r.data.code).toBe('abcdefgh2345mnop');
+	});
+
+	it('normalizes the grouped display form (dashes + spaces stripped, lowercased)', () => {
+		const r = recoveryCodeSchema.safeParse({ code: '  ABCD-EFGH-2345-MNOP ' });
+		expect(r.success).toBe(true);
+		if (r.success) expect(r.data.code).toBe('abcdefgh2345mnop');
+	});
+
+	it('tolerates loose spacing between groups', () => {
+		const r = recoveryCodeSchema.safeParse({ code: 'abcd efgh 2345 mnop' });
+		expect(r.success).toBe(true);
+		if (r.success) expect(r.data.code).toBe('abcdefgh2345mnop');
+	});
+
+	it.each([
+		['too short after normalization', 'abcd-efgh-2345'],
+		['too long after normalization', 'abcdefgh2345mnopq'],
+		['base32-invalid chars (0/1/8/9)', 'abcd0189ijklmnop'],
+		['empty', '']
+	])('rejects a %s code', (_label, code) => {
+		const r = recoveryCodeSchema.safeParse({ code });
+		expect(r.success).toBe(false);
+		if (!r.success) expect(r.error.issues[0].message).toBe(RECOVERY_MSG);
+	});
+
+	it('is .strict() — rejects extra keys (mass-assignment fence mirror)', () => {
+		const r = recoveryCodeSchema.safeParse({ code: 'abcdefgh2345mnop', users_id: 'u1' });
+		expect(r.success).toBe(false);
+	});
+
+	it('rejects a missing code field', () => {
+		const r = recoveryCodeSchema.safeParse({});
 		expect(r.success).toBe(false);
 	});
 });

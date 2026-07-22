@@ -17,14 +17,22 @@
 // Disable (aal2-gated): setMfaPolicy('none') FIRST (lockout-safe ordering — never leave
 // mfa_policy='totp' without a factor, N2b), THEN unenroll the verified factor(s).
 //
-// Anon+RLS client only, NEVER service_role (RT-26 / Lock 11). Zod `.strict()` on the
-// code input. Recovery-code issuance/redemption is Slice 2 — NOT built here.
+// Slice 2b additions: recovery-code issuance is hooked into enrollVerify success
+// (display-once), a regenerate action (aal2-gated), the unused-code count in the load,
+// and notify-on-change at each MFA transition.
+//
+// The enroll/disable/step-up flows use the ANON+RLS client (the user's own JWT). The
+// recovery-code issuance/regenerate helpers run service_role via the audited admin factory
+// (supabase-admin.ts) — this route imports the helpers and holds NO service_role key
+// itself (RT-26; the factory is the sole key-home). Zod `.strict()` on the code input.
 
 import { fail, redirect } from '@sveltejs/kit';
 import { fieldErrors } from '$lib/server/schemas/auth';
 import { totpCodeSchema } from '$lib/server/schemas/mfa';
 import { ensureUserSettings, setMfaPolicy } from '$lib/server/queries/userSettings';
 import { getMfaStatus, getTotpFactors } from '$lib/server/auth/mfa';
+import { issueRecoveryCodes, recoveryCodeStatus } from '$lib/server/auth/mfa-recovery';
+import { notifyMfaChange } from '$lib/server/auth/mfa-notify';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -32,7 +40,11 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	if (!user) throw redirect(303, `/login?redirectTo=${encodeURIComponent(url.pathname)}`);
 
 	const status = await getMfaStatus(locals.supabase);
-	return { status };
+	// Unused recovery-code count (service_role read — the table is not owner-readable).
+	const recovery = status.hasVerifiedTotp
+		? await recoveryCodeStatus(user.id)
+		: { unused: 0 };
+	return { status, recovery };
 };
 
 export const actions: Actions = {
@@ -142,8 +154,21 @@ export const actions: Actions = {
 			});
 		}
 
-		// PRG: reload the hub, now showing MFA enabled.
-		throw redirect(303, '/settings/security');
+		// Fail-soft notify (never blocks the security op).
+		await notifyMfaChange({ email: user.email, event: 'enrolled' });
+
+		// Issue the display-once recovery-code batch. Returned to the page (NOT redirected —
+		// a redirect cannot carry the plaintext, and the codes are shown exactly once). On
+		// an issuance hiccup the enrollment still stands (protection is live); the user is
+		// prompted to regenerate from settings.
+		let recoveryCodes: string[] = [];
+		let recoveryCodesError = false;
+		try {
+			recoveryCodes = await issueRecoveryCodes(user.id);
+		} catch {
+			recoveryCodesError = true;
+		}
+		return { action: 'enrollVerify' as const, enrolled: true, recoveryCodes, recoveryCodesError };
 	},
 
 	// ── aal2-gated disable: policy → 'none' THEN remove the factor(s) ───────────
@@ -175,6 +200,42 @@ export const actions: Actions = {
 			await locals.supabase.auth.mfa.unenroll({ factorId: id });
 		}
 
+		// Fail-soft notify (never blocks the security op).
+		await notifyMfaChange({ email: user.email, event: 'disabled' });
+
 		throw redirect(303, '/settings/security');
+	},
+
+	// ── aal2-gated: regenerate the recovery-code batch (supersedes the old) ─────
+	regenerateRecoveryCodes: async ({ locals }) => {
+		const { user } = await locals.safeGetSession();
+		if (!user) return fail(401, { errors: { _form: ['You must be signed in.'] } });
+
+		// aal2-gate in code: this is a sensitive self-service op. The GET guard already
+		// steps a totp user up before they reach this page, but the POST is not guarded —
+		// so re-assert current aal2 here (defense-in-depth; the DB has no backstop on the
+		// service_role issuance path).
+		const { data: aal } = await locals.supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+		if (aal?.currentLevel !== 'aal2') {
+			return fail(403, {
+				action: 'regenerateRecoveryCodes',
+				errors: {
+					_form: ['Regenerating recovery codes requires a freshly verified session. Please step up and try again.']
+				}
+			});
+		}
+
+		let recoveryCodes: string[] = [];
+		try {
+			recoveryCodes = await issueRecoveryCodes(user.id);
+		} catch {
+			return fail(500, {
+				action: 'regenerateRecoveryCodes',
+				errors: { _form: ['Could not regenerate recovery codes. Please try again.'] }
+			});
+		}
+		// Fail-soft notify.
+		await notifyMfaChange({ email: user.email, event: 'regenerated' });
+		return { action: 'regenerateRecoveryCodes' as const, recoveryCodes };
 	}
 };
