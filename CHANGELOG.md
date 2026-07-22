@@ -12,6 +12,20 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 ---
 
+### v1.97 — 2026-07-22
+
+**Phase 6 — TOTP GA reached.** The documented GA gate for Auth-3b (SELF-291) was **C2 + C3**, both now closed; the last discoverability gap is closed here. Opt-in TOTP MFA is **generally available**: a signed-in user can find MFA setup in the app chrome, enroll a TOTP factor, be stepped up at login, have the DB enforce aal2 on the direct data API, and self-recover a lost authenticator with a rate-limited scrypt-hashed backup code — the full arc is shipped, Sec-reviewed, documented, and reachable.
+
+**C2 + C3 (PR #207, merge `b85fd51` — the GA-gating docs).** SECURITY §4.5 gained a 2-entry RT cluster (Sec-authored): **RT-29** (HIGH) — the aal2 DB step-up backstop (`025`) + MB-1 downgrade guard + Decision-7 domain tighten + the DB-fails-open/app-fails-closed asymmetry (ADR-029); **RT-30** (HIGH) — the recovery posture: `026`/`027` service_role-only default-deny stores + scrypt algo-of-record (ADR-030 Amdt 1) + 5/hr rate-limit + atomic gate/consume + downgrade-first + the 4th RT-26 factory (ADR-016 D3). Catalog 28→30 (29 active); RT-30 annotates *"GA-gate … now satisfied."* Both explicitly **NOT §10-catalogued** (RT-29 an RLS assurance-gate; RT-30 an intra-RT-26 allowlist expansion) → **§10 stays 3**. C3 landed the apply-migration checklist note. No SD-matrix touch.
+
+**Security nav link (this PR — discoverability, the last GA gap).** `/settings/security` (the MFA hub — enroll / step-up / recovery / regenerate) was fully built and Sec-gated but linked from **nowhere** in the app UI — reachable only by typing the URL, which a *generally available* feature can't be. Added a **Security** link to the authed header (`+layout.svelte`, between the email and sign-out): a plain `<a href="/settings/security">` (correct for navigation, not a state-changing Button), tokens-only (`--c-accent` / `--c-accent-hover`; ADR-013 P5), no server surface touched. Frontend-owned change; touches no joint-review-mandatory surface (a link to an existing route — no auth logic, secrets, or money flow), so no Sec gate required.
+
+**Verification.** `svelte-check` **0** · `vitest` **213** · `vite build` clean. Ledgers flat: **DEFINER 3 · §10 3 · Decision-3 unchanged.** Migrations `001`–`027` live.
+
+**NEXT: the V1 feature clusters** — now unblocked by the complete auth front door: §2.1.2+ full net-worth / §2.2 asset-allocation / §2.3 cash-flow / §2.5 taxes / §2.6 monthly-report read-surfaces. Non-blocking follow-ups carried: live-Mailpit notify e2e (DevOps: `config.toml` smtp_port + restart); Sec N-A (deleteFactor-permanent-fail UX) / N-B (scrypt-v2 version-field validation).
+
+---
+
 ### v1.96 — 2026-07-22
 
 **Phase 6 — Auth-3b Slice 2b COMPLETE: `027` rate-limit store (PR #204) + the self-service recovery app (PR #205, merge `5cb44be`). Auth-3b is now COMPLETE end-to-end.** A user can enroll TOTP → be stepped up at login → have the DB enforce aal2 on the direct API → self-recover a lost authenticator with a rate-limited, scrypt-hashed backup code.

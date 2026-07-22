@@ -4,9 +4,10 @@
 	(LayoutData { userEmail: string | null }); authors NO server logic.
 
 	Renders an authed header ONLY when a user is signed in (data.userEmail present):
-	brand link → /, the signed-in email, and the POST sign-out affordance. Sign-out is
-	a plain <form method="POST" action="/auth/signout"> — state-changing, so never a
-	GET link; matches Backend's POST-only /auth/signout handler.
+	brand link → /, the signed-in email, a Security link → /settings/security (the MFA
+	hub — makes TOTP enrollment/recovery discoverable at GA, not URL-only), and the POST
+	sign-out affordance. Sign-out is a plain <form method="POST" action="/auth/signout">
+	— state-changing, so never a GET link; matches Backend's POST-only /auth/signout handler.
 
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5).
 -->
@@ -28,6 +29,7 @@
 		<a class="brand" href="/">mosko-fintech</a>
 		<div class="account">
 			<span class="email">{data.userEmail}</span>
+			<a class="nav-link" href="/settings/security">Security</a>
 			<form method="POST" action="/auth/signout">
 				<Button type="submit">Sign out</Button>
 			</form>
@@ -60,6 +62,15 @@
 	.email {
 		font: var(--weight-reg) var(--fs-small) / 1 var(--font-ui);
 		color: var(--c-text-secondary);
+	}
+	.nav-link {
+		font: var(--weight-med) var(--fs-small) / 1 var(--font-ui);
+		color: var(--c-accent);
+		text-decoration: none;
+	}
+	.nav-link:hover {
+		color: var(--c-accent-hover);
+		text-decoration: underline;
 	}
 	/* The sign-out form is layout-transparent — it exists only to carry the POST. */
 	.account form {
