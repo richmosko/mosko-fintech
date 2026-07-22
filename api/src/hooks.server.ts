@@ -16,6 +16,7 @@
 //  - Refresh-token rotation is Supabase Auth default: getUser()/getSession()
 //    refresh as needed and `setAll` writes the rotated cookies back.
 
+import { redirect } from '@sveltejs/kit';
 import { createServerClient } from '@supabase/ssr';
 // `$env/dynamic/public` (NOT static): values are read at container RUNTIME, so
 // the build succeeds with no env present and Coolify injects the anon config at
@@ -28,6 +29,7 @@ import { env } from '$env/dynamic/public';
 import { env as privateEnv } from '$env/dynamic/private';
 import { sequence } from '@sveltejs/kit/hooks';
 import { applyPlaidConnectCsp } from '$lib/plaid/csp';
+import { requireStepUp } from '$lib/server/auth/mfa';
 import type { Handle } from '@sveltejs/kit';
 
 // One-time fail-loud guard, memoized: validated at FIRST request (runtime, where
@@ -100,6 +102,48 @@ export const authHandle: Handle = async ({ event, resolve }) => {
 	});
 };
 
+// mfaHandle — the fail-CLOSED app-layer step-up guard (SELF-291 / Auth-3b Slice 1, N3).
+// Sequenced AFTER authHandle so identity is getUser()-validated and locals.supabase is
+// wired. Defense-in-depth OVER the 025 DB aal2 backstop (the real enforcer on the direct
+// PostgREST data API) — it stops an aal1 session that HAS a verified factor from
+// server-rendering a protected page.
+//
+// SCOPE — GET page-navigations to NON-exempt routes only:
+//   · GET-only: action / API POSTs are covered by the DB backstop (reads+writes clause)
+//     AND each action's own safeGetSession guard; redirecting a fetch/POST would be
+//     incoherent (a fetch would silently follow a 303 to an HTML page).
+//   · Exempt prefixes: the auth flow + the step-up flow itself must stay reachable at
+//     aal1, else the guard would loop. '/mfa' covers /mfa/step-up (and the Slice-2
+//     /mfa/recover, which must be aal1-reachable). '/auth' covers callback + signout so
+//     a stuck user can always sign out.
+//
+// N2/N3 reconciliation: requireStepUp keys off GoTrue AAL (the reconciled source of
+// truth for "a verified factor exists"), NOT the stored mfa_policy — so a
+// self-enrolled-via-API factor with a stale mfa_policy='none' still steps up (N2a), and
+// any indeterminate/error AAL state fails CLOSED to step-up (N3). See $lib/server/auth/mfa.
+//
+// Exported for hooks.server.test.ts.
+const STEP_UP_EXEMPT_PREFIXES = ['/login', '/signup', '/auth', '/mfa'];
+function isStepUpExempt(pathname: string): boolean {
+	return STEP_UP_EXEMPT_PREFIXES.some((p) => pathname === p || pathname.startsWith(p + '/'));
+}
+
+export const mfaHandle: Handle = async ({ event, resolve }) => {
+	if (event.request.method !== 'GET' || isStepUpExempt(event.url.pathname)) {
+		return resolve(event);
+	}
+	const { user } = await event.locals.safeGetSession();
+	// Unauthenticated → let the page's own load() redirect to /login. The guard only
+	// governs step-up for an already-authenticated identity.
+	if (!user) return resolve(event);
+
+	if ((await requireStepUp(event.locals.supabase)) === 'step-up-required') {
+		const target = event.url.pathname + event.url.search;
+		throw redirect(303, `/mfa/step-up?redirectTo=${encodeURIComponent(target)}`);
+	}
+	return resolve(event);
+};
+
 // cspHandle — per-route Plaid CSP widening (ADR-028 / CSP-1 / CSP-3). Sequenced AFTER
 // authHandle so it observes the fully-resolved response + the strict CSP header that
 // SvelteKit's app-global `kit.csp` already emitted (with its per-response nonce, CSP-2).
@@ -127,5 +171,7 @@ export const cspHandle: Handle = async ({ event, resolve }) => {
 };
 
 // The exported chokepoint stays a single `handle` (ADR-015 D1) — now a sequence: auth
-// session forwarding first, then the route-scoped CSP widening.
-export const handle = sequence(authHandle, cspHandle);
+// session forwarding first, then the fail-closed step-up guard (which may redirect
+// before a protected page renders), then the route-scoped CSP widening on whatever
+// response resolves.
+export const handle = sequence(authHandle, mfaHandle, cspHandle);
