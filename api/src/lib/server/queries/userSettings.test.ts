@@ -9,9 +9,19 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { ensureUserSettings, getMfaPolicy } from './userSettings';
+import { ensureUserSettings, getMfaPolicy, setMfaPolicy } from './userSettings';
 
 const USER_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+
+/** update-path stub: .schema().from().update().eq() → { error }. */
+function makeUpdateSupabase(error: { message: string } | null = null) {
+	const eq = vi.fn(async () => ({ error }));
+	const update = vi.fn(() => ({ eq }));
+	const from = vi.fn(() => ({ update }));
+	const schema = vi.fn(() => ({ from }));
+	const client = { schema } as unknown as SupabaseClient;
+	return { client, eq, update, from, schema };
+}
 
 /** upsert-path stub: .schema().from().upsert() → { error }. */
 function makeUpsertSupabase(error: { message: string } | null = null) {
@@ -100,6 +110,37 @@ describe('getMfaPolicy', () => {
 			}
 		} as unknown as SupabaseClient;
 		await expect(getMfaPolicy(client)).resolves.toBe('none');
+		errSpy.mockRestore();
+	});
+});
+
+describe('setMfaPolicy (N1 separate-write)', () => {
+	it("UPDATEs only mfa_policy, RLS-scoped to the caller's own row", async () => {
+		const { client, schema, from, update, eq } = makeUpdateSupabase();
+		await expect(setMfaPolicy(client, USER_ID, 'totp')).resolves.toBe(true);
+		expect(schema).toHaveBeenCalledWith('pfin');
+		expect(from).toHaveBeenCalledWith('user_settings');
+		expect(update).toHaveBeenCalledWith({ mfa_policy: 'totp' });
+		expect(eq).toHaveBeenCalledWith('users_id', USER_ID);
+	});
+
+	it('returns false (logs) on a returned error — e.g. the MB-1 aal1 downgrade 42501', async () => {
+		const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const { client } = makeUpdateSupabase({ message: 'insufficient_privilege' });
+		await expect(setMfaPolicy(client, USER_ID, 'none')).resolves.toBe(false);
+		expect(errSpy).toHaveBeenCalled();
+		errSpy.mockRestore();
+	});
+
+	it('returns false when the chain throws', async () => {
+		const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const client = {
+			schema: () => {
+				throw new Error('transport down');
+			}
+		} as unknown as SupabaseClient;
+		await expect(setMfaPolicy(client, USER_ID, 'none')).resolves.toBe(false);
+		expect(errSpy).toHaveBeenCalled();
 		errSpy.mockRestore();
 	});
 });

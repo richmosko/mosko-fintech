@@ -20,7 +20,10 @@
 		numeric = false,
 		inputmode,
 		placeholder = '',
-		autocomplete
+		autocomplete,
+		maxlength,
+		minlength,
+		pattern
 	}: {
 		label: string;
 		name: string;
@@ -33,6 +36,12 @@
 		inputmode?: 'text' | 'decimal' | 'numeric';
 		placeholder?: string;
 		autocomplete?: HTMLInputAttributes['autocomplete'];
+		// Optional native-validation passthroughs (undefined ⇒ attribute omitted). These
+		// are the browser's fast-feedback layer that mirrors the server-side .strict()
+		// shape (e.g. the 6-digit TOTP code: maxlength=6 + pattern="\d{6}").
+		maxlength?: number;
+		minlength?: number;
+		pattern?: string;
 	} = $props();
 
 	const fieldId = $derived(`f-${name}`);
@@ -59,6 +68,9 @@
 		{placeholder}
 		{inputmode}
 		{autocomplete}
+		{maxlength}
+		{minlength}
+		{pattern}
 		bind:value
 		class="field-input"
 		class:num-input={numeric}

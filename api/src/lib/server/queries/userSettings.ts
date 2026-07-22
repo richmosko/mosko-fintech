@@ -72,3 +72,45 @@ export async function getMfaPolicy(supabase: SupabaseClient): Promise<MfaPolicy>
 		return 'none';
 	}
 }
+
+/**
+ * N1 SEPARATE-WRITE (Auth-3b / SELF-291): explicitly UPDATE **only** the mfa_policy
+ * column, RLS-scoped to the caller's own row (users_id = auth.uid()). This is the
+ * enrollment/removal policy transition — deliberately NOT an upsert: ensureUserSettings
+ * owns row creation (insert-or-nothing, no-clobber), and this owns the policy value.
+ * Merging the two writes would risk clobbering other columns / resetting the policy —
+ * so callers MUST `ensureUserSettings()` first (row exists), then call this.
+ *
+ * Write-ordering invariant (N2b lockout prevention): mfa_policy is set to 'totp' ONLY
+ * AFTER a factor is verified, and set to 'none' BEFORE a verified factor is removed —
+ * so `mfa_policy = 'totp'` never outlives a real factor. Callers enforce the ordering.
+ *
+ * NOT fail-soft: returns `false` (and logs) on any error so the caller can react (tell
+ * the user to retry). In particular the MB-1 DB guard (025) REJECTS a 'totp'->'none'
+ * downgrade at aal1 with SQLSTATE 42501 — that surfaces here as `false` (disable
+ * requires an aal2 session).
+ */
+export async function setMfaPolicy(
+	supabase: SupabaseClient,
+	userId: string,
+	policy: MfaPolicy
+): Promise<boolean> {
+	try {
+		const { error } = await supabase
+			.schema('pfin')
+			.from('user_settings')
+			.update({ mfa_policy: policy })
+			.eq('users_id', userId);
+		if (error) {
+			console.error('[userSettings] setMfaPolicy update failed:', error.message);
+			return false;
+		}
+		return true;
+	} catch (e) {
+		console.error(
+			'[userSettings] setMfaPolicy threw:',
+			e instanceof Error ? e.message : String(e)
+		);
+		return false;
+	}
+}

@@ -11,7 +11,7 @@
 // stub via the vitest alias (vitest.config.ts).
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { authHandle, cspHandle } from './hooks.server';
+import { authHandle, cspHandle, mfaHandle } from './hooks.server';
 import { createServerClient } from '@supabase/ssr';
 import {
 	PLAID_CONNECT_ROUTE_ID,
@@ -165,5 +165,126 @@ describe('safeGetSession — validated-identity normalization (SELF-280)', () =>
 		});
 
 		expect(await safeGetSession()).toEqual({ session: null, user: null });
+	});
+});
+
+// ── mfaHandle — the fail-CLOSED step-up guard (SELF-291 / Auth-3b Slice 1, N3) ──────
+//
+// mfaHandle reads event.request.method + event.url + event.locals.{safeGetSession,supabase}
+// and delegates the decision to requireStepUp (getAuthenticatorAssuranceLevel). No
+// Supabase client is CONSTRUCTED here, so no @supabase/ssr mock is needed — we drive it
+// with fully-stubbed locals.
+describe('mfaHandle — step-up guard', () => {
+	const RESOLVED = new Response('page');
+
+	function makeEvent(opts: {
+		method?: string;
+		pathname: string;
+		search?: string;
+		user?: { id: string } | null;
+		aal?: { currentLevel: string | null; nextLevel: string | null } | null;
+		aalError?: boolean;
+	}) {
+		const resolve = vi.fn(async () => RESOLVED);
+		const getAuthenticatorAssuranceLevel = vi.fn(async () =>
+			opts.aalError ? { data: null, error: { message: 'boom' } } : { data: opts.aal, error: null }
+		);
+		const event = {
+			request: { method: opts.method ?? 'GET' },
+			url: { pathname: opts.pathname, search: opts.search ?? '' },
+			locals: {
+				safeGetSession: async () => ({ session: null, user: opts.user ?? null }),
+				supabase: { auth: { mfa: { getAuthenticatorAssuranceLevel } } }
+			}
+		} as unknown as Parameters<typeof mfaHandle>[0]['event'];
+		return { event, resolve, getAuthenticatorAssuranceLevel };
+	}
+
+	/** Invoke mfaHandle; return {redirected, location} — a thrown 303 redirect is captured. */
+	async function run(event: Parameters<typeof mfaHandle>[0]['event'], resolve: () => Promise<Response>) {
+		try {
+			const res = await mfaHandle({ event, resolve } as Parameters<typeof mfaHandle>[0]);
+			return { redirected: false, res, location: null as string | null };
+		} catch (e) {
+			const r = e as { status?: number; location?: string };
+			return { redirected: r.status === 303, res: null, location: r.location ?? null };
+		}
+	}
+
+	it('passes NON-GET requests through untouched (POST actions/APIs use the DB backstop)', async () => {
+		const { event, resolve, getAuthenticatorAssuranceLevel } = makeEvent({
+			method: 'POST',
+			pathname: '/settings/security',
+			user: { id: 'u1' },
+			aal: { currentLevel: 'aal1', nextLevel: 'aal2' } // would block if consulted
+		});
+		const out = await run(event, resolve);
+		expect(out.redirected).toBe(false);
+		expect(resolve).toHaveBeenCalledOnce();
+		expect(getAuthenticatorAssuranceLevel).not.toHaveBeenCalled();
+	});
+
+	it.each(['/login', '/signup', '/auth/callback', '/mfa/step-up', '/mfa/recover'])(
+		'exempts %s (must stay reachable at aal1 — no loop)',
+		async (pathname) => {
+			const { event, resolve, getAuthenticatorAssuranceLevel } = makeEvent({
+				pathname,
+				user: { id: 'u1' },
+				aal: { currentLevel: 'aal1', nextLevel: 'aal2' }
+			});
+			const out = await run(event, resolve);
+			expect(out.redirected).toBe(false);
+			expect(resolve).toHaveBeenCalledOnce();
+			expect(getAuthenticatorAssuranceLevel).not.toHaveBeenCalled();
+		}
+	);
+
+	it('passes an UNAUTHENTICATED request through (page load handles /login)', async () => {
+		const { event, resolve, getAuthenticatorAssuranceLevel } = makeEvent({
+			pathname: '/',
+			user: null
+		});
+		const out = await run(event, resolve);
+		expect(out.redirected).toBe(false);
+		expect(resolve).toHaveBeenCalledOnce();
+		expect(getAuthenticatorAssuranceLevel).not.toHaveBeenCalled();
+	});
+
+	it('ALLOWS a no-factor user through to a protected page (aal1/aal1)', async () => {
+		const { event, resolve } = makeEvent({
+			pathname: '/',
+			user: { id: 'u1' },
+			aal: { currentLevel: 'aal1', nextLevel: 'aal1' }
+		});
+		const out = await run(event, resolve);
+		expect(out.redirected).toBe(false);
+		expect(resolve).toHaveBeenCalledOnce();
+	});
+
+	it('REDIRECTS a verified-factor aal1 user to /mfa/step-up with the encoded target', async () => {
+		const { event, resolve } = makeEvent({
+			pathname: '/accounts/abc',
+			search: '?x=1',
+			user: { id: 'u1' },
+			aal: { currentLevel: 'aal1', nextLevel: 'aal2' }
+		});
+		const out = await run(event, resolve);
+		expect(out.redirected).toBe(true);
+		expect(out.location).toBe(
+			`/mfa/step-up?redirectTo=${encodeURIComponent('/accounts/abc?x=1')}`
+		);
+		expect(resolve).not.toHaveBeenCalled();
+	});
+
+	it('FAILS CLOSED on an indeterminate AAL read (redirects to step-up)', async () => {
+		const { event, resolve } = makeEvent({
+			pathname: '/',
+			user: { id: 'u1' },
+			aalError: true
+		});
+		const out = await run(event, resolve);
+		expect(out.redirected).toBe(true);
+		expect(out.location).toBe(`/mfa/step-up?redirectTo=${encodeURIComponent('/')}`);
+		expect(resolve).not.toHaveBeenCalled();
 	});
 });
