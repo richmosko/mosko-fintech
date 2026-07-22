@@ -7,7 +7,11 @@
 -- BINDS TO MIGRATION: supabase/migrations/024_user_settings.sql
 --   - pfin.user_settings (users_id uuid PRIMARY KEY DEFAULT auth.uid() -> auth.users
 --       ON DELETE CASCADE; mfa_policy text NOT NULL DEFAULT 'none'
---       CHECK (mfa_policy in ('none','totp','passkey')); created_at / updated_at).
+--       CHECK (mfa_policy in ('none','totp')); created_at / updated_at).
+--       NOTE: 024 declared the CHECK as ('none','totp','passkey'); 025 PART 3
+--       TIGHTENED it to ('none','totp') ('passkey' deferred to Auth-6/SELF-289).
+--       This battery runs on the 001->025 stack, so the effective domain is
+--       ('none','totp') — the (1c) case asserts 'passkey' is now rejected (23514).
 --     ONE row per user (PK = users_id, the tenant anchor itself). LIVE write path:
 --     authenticated holds SELECT+INSERT+UPDATE (owner-gated users_id = auth.uid()
 --     on read AND write). NO DELETE grant + NO DELETE policy. anon zero-grant.
@@ -52,8 +56,10 @@
 -- FAILS-CLOSED (each assertion guards a REAL violation):
 --   (1a) -> owner INSERT own row (users_id DEFAULT auth.uid() = A) COMMITS (the live write path).
 --   (1b) -> default mfa_policy = 'none' when omitted; RED if the DEFAULT were dropped/changed.
---   (1c)/(1d) -> owner UPDATE own row to 'passkey' / 'totp' COMMITS; RED if the UPDATE policy
---          over-restricted the owner OR if a valid domain value were rejected (non-vacuous CHECK).
+--   (1c) -> owner UPDATE own row to 'passkey' REJECTED (23514) — 'passkey' is out-of-domain
+--          post-025 PART 3; RED if the domain were widened back before Auth-6.
+--   (1d) -> owner UPDATE own row to 'totp' COMMITS; RED if the UPDATE policy over-restricted
+--          the owner OR if a valid domain value were rejected (non-vacuous CHECK).
 --   (1e) -> owner UPDATE to 'email' REJECTED (23514); RED if the CHECK domain were widened.
 --   (2a) -> owner reads exactly its 1 own row; RED if the SELECT policy were over-restrictive.
 --   (2b) -> intruder B sees 0 of A's rows; RED if the SELECT USING owner-scoping leaked.
@@ -131,23 +137,35 @@ select is(
   '(1b) DEFAULT mfa_policy = ''none'' when omitted (a user who has chosen no factor reads as ''none'')'
 );
 
--- (1c) owner UPDATE own row to a valid domain value -> COMMITS (proves ''passkey'' is in-domain).
-select lives_ok(
-  $$ update pfin.user_settings set mfa_policy = 'passkey' where users_id = auth.uid() $$,
-  '(1c) owner UPDATE own row -> ''passkey'' COMMITS (owner UPDATE path + ''passkey'' is a valid CHECK value; non-vacuous domain)'
-);
-
--- (1d) owner UPDATE own row to another valid value -> COMMITS (A ends at 'totp', the (4a) baseline).
-select lives_ok(
-  $$ update pfin.user_settings set mfa_policy = 'totp' where users_id = auth.uid() $$,
-  '(1d) owner UPDATE own row -> ''totp'' COMMITS (''totp'' is a valid CHECK value; A now sits at ''totp'' — the (4a) tamper baseline)'
-);
-
 -- (1e) CHECK domain on UPDATE: an out-of-domain value ('email', DROPPED from the ratified model).
+--   ORDERING NOTE (025 interaction): this runs FIRST, while the row is still 'none'. Once
+--   migration 025's MB-1 guard is on the stack, a totp/passkey -> 'email' UPDATE is a
+--   downgrade OUT of the aal2-capable set and the guard raises 42501 (at aal1) BEFORE the
+--   CHECK can raise 23514. Asserting the CHECK domain from old='none' (guard falls through,
+--   old not in the gated set) keeps this a clean 23514 domain proof and is independent of 025.
 select throws_ok(
   $$ update pfin.user_settings set mfa_policy = 'email' where users_id = auth.uid() $$,
   '23514', null,
   '(1e) CHECK domain (UPDATE): mfa_policy = ''email'' is REJECTED (check_violation 23514) — ''email'' was dropped from the ratified auth model; the domain is exactly (none,totp,passkey)'
+);
+
+-- (1c) CHECK domain: 'passkey' is NO LONGER a valid stored value -> REJECTED (23514).
+--   025 PART 3 tightened the CHECK from 024's ('none','totp','passkey') to ('none','totp')
+--   ('passkey' deferred to Auth-6/SELF-289). Since this test runs on the 001->025 stack,
+--   'passkey' is out-of-domain. Row is still 'none' here so 025's MB-1 guard falls through
+--   (old='none' not in the gated set) and the CHECK is the sole gate -> 23514.
+select throws_ok(
+  $$ update pfin.user_settings set mfa_policy = 'passkey' where users_id = auth.uid() $$,
+  '23514', null,
+  '(1c) CHECK domain (UPDATE): mfa_policy = ''passkey'' is REJECTED (check_violation 23514) — 025 PART 3 tightened the V1 stored domain to (none,totp); ''passkey'' is deferred to Auth-6'
+);
+
+-- (1d) owner UPDATE own row to a valid domain value -> COMMITS (A ends at 'totp', the (4a)
+--   baseline). 'none' -> 'totp' is enrollment (old not in the gated set) so 025's MB-1
+--   guard falls through and 'totp' is in-domain -> COMMITS at aal1.
+select lives_ok(
+  $$ update pfin.user_settings set mfa_policy = 'totp' where users_id = auth.uid() $$,
+  '(1d) owner UPDATE own row -> ''totp'' COMMITS (''totp'' is a valid CHECK value + owner UPDATE path; A now sits at ''totp'' — the (4a) tamper baseline)'
 );
 select set_config('role', 'postgres', true);
 
@@ -208,14 +226,14 @@ select set_config('role', 'postgres', true);
 -- B UPDATE targeting A's row: USING (users_id = auth.uid() = B) filters A's row out -> 0 rows
 -- affected silently (no matching row). No fence needed — A's row is invisible to B's UPDATE.
 select _rls.set_tenant(:'tb'::uuid);
-update pfin.user_settings set mfa_policy = 'passkey' where users_id = :'ta';  -- 0 rows (RLS hides A's row)
+update pfin.user_settings set mfa_policy = 'none' where users_id = :'ta';  -- 0 rows (RLS hides A's row); 'none' is in-domain so a leak would MUTATE (not 23514), keeping (4a) a clean RLS discriminator
 select set_config('role', 'postgres', true);
 
 -- (4a) cross-tenant UPDATE blocked: A's row is UNCHANGED (still 'totp'); B's UPDATE touched 0 rows.
 select is(
   (select mfa_policy from pfin.user_settings where users_id = :'ta'),
   'totp',
-  '(4a) cross-tenant UPDATE blocked: after B''s UPDATE targeting A''s row, A is UNCHANGED (still ''totp'') — the UPDATE USING policy scoped B to its own rows (0 rows affected), not ''passkey'''
+  '(4a) cross-tenant UPDATE blocked: after B''s UPDATE targeting A''s row, A is UNCHANGED (still ''totp'') — the UPDATE USING policy scoped B to its own rows (0 rows affected), not ''none'''
 );
 
 -- (4b) OUTER no-DELETE (owner): even the owner cannot delete its own row — there is NO delete
