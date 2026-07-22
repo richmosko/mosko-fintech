@@ -41,3 +41,10 @@
 api/src/routes/api/plaid/webhook/+server.ts
 api/src/routes/api/plaid/onboard/+server.ts
 api/src/routes/api/plaid/revoke/+server.ts
+
+# 4th V1 surface (per ADR-016 Decision 3, SELF-291 / Auth-3b Slice 2b, 2026-07-22):
+# the single service_role admin-client factory — the sole SUPABASE_SERVICE_ROLE_KEY
+# reference in api/src (the factory the "Phase 5 factory-file question" note anticipated).
+# MFA recovery uses service_role by construction (ADR-030). Added with Sec-consult +
+# the ADR-016 amendment in the same PR. Callers import supabaseAdmin() and hold no key.
+api/src/lib/server/supabase-admin.ts

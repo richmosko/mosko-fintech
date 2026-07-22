@@ -27,3 +27,25 @@ export const totpCodeSchema = z
 	.strict();
 
 export type TotpCodeInput = z.infer<typeof totpCodeSchema>;
+
+/**
+ * A one-time MFA **recovery** code (SELF-291 / Auth-3b Slice 2b). Issued as 16 RFC-4648
+ * base32 chars (lowercased; from 10 random bytes = 80 bits), DISPLAYED grouped
+ * (`abcd-efgh-ijkl-mnop`) for legibility. The input is NORMALIZED first — trimmed,
+ * lowercased, and stripped of spaces/dashes — so a user may paste the grouped form or
+ * type it loosely; the normalized 16-char value is what the server scrypt-compares
+ * (constant-time) against the stored hash (`mfa-hash.ts` hashes the same normalized form).
+ * `.strict()`
+ * is the mass-assignment fence; the normalized value is exposed as `code`.
+ */
+export const recoveryCodeSchema = z
+	.object({
+		code: z
+			.string()
+			.trim()
+			.transform((s) => s.toLowerCase().replace(/[\s-]/g, ''))
+			.pipe(z.string().regex(/^[a-z2-7]{16}$/, 'Enter a valid recovery code.'))
+	})
+	.strict();
+
+export type RecoveryCodeInput = z.infer<typeof recoveryCodeSchema>;
