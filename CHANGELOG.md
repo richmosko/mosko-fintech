@@ -12,6 +12,27 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 ---
 
+### v1.96 — 2026-07-22
+
+**Phase 6 — Auth-3b Slice 2b COMPLETE: `027` rate-limit store (PR #204) + the self-service recovery app (PR #205, merge `5cb44be`). Auth-3b is now COMPLETE end-to-end.** A user can enroll TOTP → be stepped up at login → have the DB enforce aal2 on the direct API → self-recover a lost authenticator with a rate-limited, scrypt-hashed backup code.
+
+**`027 mfa_recovery_attempt`** (PR #204) — per-user append-only attempt log backing the 5-failures/hr/user lockout; service_role-only (RLS + zero authenticated policy/grant → default-deny both layers), APPEND-ONLY (SELECT+INSERT, no UPDATE/DELETE — a compromised service_role can't erase attempts to reset the gate). pgTAP plan(8); Sec GREEN.
+
+**The recovery app** (PR #205) — the **4th RT-26 `service_role` surface**, the first *actual* `SUPABASE_SERVICE_ROLE_KEY` usage in `api/src`:
+- **`supabase-admin.ts`** — the sole key home (factory pattern; callers hold no key). **ADR-016 Decision 3** amendment + `rt26-allowlist.txt` +1 (allowlist 3→4, intra-instance; **§10 stays 3**; Sec-consult per the webhook-allowlist annotation convention, satisfied in-PR).
+- **`redeemRecoveryCode`** — atomic rate-gate (attempt INSERT-before-count + reject-early-but-log-while-locked + fail-closed on log/count error), constant-time compare over ALL ≤10 candidates (no early-return), atomic check-and-consume (`UPDATE … WHERE code_id=? AND users_id=? AND used_at IS NULL`, reject on 0 rows — double-spend TOCTOU), **downgrade-first** (`mfa_policy→none` via the `026` guard-exempt grant, THEN admin `deleteFactor` 3×-retry — fails toward access-restored, never an aal1 hard-lockout), `users_id` **from the validated session only** (service_role BYPASSRLS → explicit `.eq('users_id',…)` on every query). Enumeration-safe (generic invalid/locked). `issueRecoveryCodes` (10 × 80-bit CSPRNG, display-once, supersede batch) + `recoveryCodeStatus`.
+- **`mfa-hash.ts`** — Node built-in **async `crypto.scrypt`** per **ADR-030 Amendment 1** (`N=16384/r=8/p=1/keylen=32`, 16-byte salt/code; versioned self-describing `scrypt$v$N$r$p$salt$hash`; verify re-derives with the STORED salt+params; `timingSafeEqual` over fixed-length digests, malformed→false-not-throw). **`bcryptjs` dropped → zero runtime hashing dependency** (F/CTO chose supply-chain minimization; Sec blessed scrypt as memory-hard/NIST/RFC-7914, cryptographically equivalent-or-better for 80-bit one-time codes).
+- **`mfa-notify.ts`** — nodemailer + shared SMTP, deploy-gated no-op-with-log, **fail-soft** (never blocks the security op); INV-1 plain-text.
+- **UI** — `/mfa/recover` (aal1-reachable redeem) + `/settings/security` display-once `RecoveryCodesPanel` (copy-all / download-.txt / confirm + `beforeunload` guard; INV-1, no value/attn hue; CSP-safe compiled handlers) + aal2-gated regenerate + unused-code count.
+
+**Verification.** Sec hard-gate 🟢 **GREEN** — all 9 conditions on the 4th-RT-26 veto surface (factory sole-key-home, tenant-binding-from-session, scrypt-to-spec, atomic rate-gate + consume, downgrade-first, notify-fail-soft, display-once, enumeration-safe + aal2-regenerate); 3 non-blocking robustness NOTES (N-A deleteFactor-permanent-fail UX, N-B scrypt-v2 version-field, N-C non-sensitive count-timing). `svelte-check` 0 · `vitest` **213** · `vite build` clean · **RT-26 fence exit 0** · live smoke **10/10** (real scrypt + GoTrue). Deps: **+`nodemailer` only** (bcryptjs removed); npm-audit clean. Ledgers flat: **DEFINER 3 · §10 3 · Decision-3 unchanged.** Migrations `001`–`027` live.
+
+**Auth-3b arc (this session):** `025` backstop + MB-1 guard + domain tighten (v1.93) · Slice-1 app flow (v1.94) · `026` recovery store (v1.95) · `027` + recovery app (v1.96). F/CTO interventions shaped it throughout — the recovery-invariant correction, deleting the speculative `passkey` value, the 4th-privilege-surface understanding, and the scrypt pivot (−1 dependency).
+
+**Remaining before TOTP GA:** **C2** (SECURITY §4.5 RT-class posture entry, Sec-authored) + **C3** (migration-checklist note). Non-blocking: live-Mailpit notify e2e (DevOps); Sec notes N-A/N-B. Detail: PR #204 + PR #205.
+
+---
+
 ### v1.95 — 2026-07-22
 
 **Phase 6 — Auth-3b Slice 2a: the recovery-code store SHIPPED (SELF-291, PR #202, merge `1dbabfb`).** The DB foundation for self-service TOTP recovery. Migration `026` lands the store + the column-scoped `service_role` downgrade grant; the actual `/mfa/recover` endpoint + issuance/redemption + UI are Slice 2b (where the 4th RT-26 surface + ADR-016 amendment land).
