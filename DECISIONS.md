@@ -41,6 +41,151 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-031 — Event-sourced double-entry general ledger as a derived layer over the immutable `account_trans` ledger
+
+**Date:** 2026-07-23
+**Status:** Proposed (F/CTO ratify pending)
+**Phase:** Phase 6+ (post-V1 substrate — GL/accounting layer over the `015`–`023` ingest substrate).
+**Approved by:** *pending F/CTO ratify.* Design papers: `temp/double-entry-design-v2.md` (current model, supersedes `temp/double-entry-approach-c-migration.md`). Security conditional-GREEN (no veto) 2026-07-23 — conditions binding on M1-evt + M2 (Decision 7).
+**Pattern:** Consolidation (multi-Decision territory: an accounting-model layer spanning event semantics, account model, classification, valuation, and the GL engine). Amends [ADR-025](#adr-025) (see Amendment 1) and extends [ADR-011](#adr-011) Decision 3.
+
+### Context
+
+The `015`–`023` ingest substrate (ADR-027) gave us an immutable transaction ledger (`pfin.account_trans`, `004`/`017`), a universal asset registry (`pfin.asset`, `016`), a per-user taxonomy (`pfin.user_taxonomy`, `009`), a mutable annotation overlay (`account_trans_annotation`, `023`), and a market-value net-worth engine (`fn_compute_nav`, `019`). The F/CTO asked how much double-entry bookkeeping is latent in that schema and what it would take to make it double-entry-native.
+
+The finding: the schema is **single-entry storage with a latent two-*leg* event model** — a securities BUY already carries both `amount=−cash` and `quantity=+shares` on one row (`017`), and the `(account_id, security_id)` grain is already a subsidiary ledger that `fn_holdings_as_of` (`019`) rolls forward — but there is no account-class dimension, no normal-balance flag, no journal/contra structure, and no virtual-account concept. Three design rounds converged on a model that delivers a genuine double-entry general ledger **as a derived layer**, without rewriting the immutable ledger and without a stored `journal_entry`/`journal_line` structure. This ADR records that model (Decisions 1–5), the rejection of the classic journal-lines alternative (Decision 6), the Security posture (Decision 7), the Decision-3 / ledger impact (Decision 8), and the migration plan (Decision 9).
+
+The single most consequential reframe (Decision 1) is that **`account_trans` immutability is an audit control over raw FACTS, not a freeze on our interpretation** — which reopens and amends [ADR-025](#adr-025)'s "the ledger is immutable, so `transaction_type` permanence is good" justification (see Amendment 1).
+
+### Decision 1 — Facts vs. interpretation: the ledger is event-sourced; immutability protects facts, not classification
+
+**Decision:** Treat `pfin.account_trans` as an **event-sourced store of raw facts** the source asserts (`amount`, `quantity`, `transaction_date`, `security_id`, `account_id` — `004`/`017`). Its immutability (the `004` UPDATE/DELETE/TRUNCATE triple-fence) is a **tamper-evidence audit control over those facts**. **Interpretation** — flow-class/category, open-vs-close designation, lot-matching, transfer grouping — is a **separate, MUTABLE layer** (the `023` overlay + the new structures below). Current state (position, cost basis, value, NAV) is a **roll-forward of dated events** (`fn_holdings_as_of`, `019`). **Economic adjustments** (return-of-capital, mark-to-market, depreciation) are **new dated transactions, not edits**; only genuine source *errors* use reverse-and-replace (`is_reverse` + `replaces_trans_id` + the `#2` matched-account fence, `004`).
+
+**Why:** Conflating "tamper-proof audit trail" with "our interpretation is final" was the error in the earlier framing. Permanence is correct for facts (a buy is a buy) but a *cost* for anything inferred — on **import there is no buy-to-open vs buy-to-close distinction** (open/close needs position inference, which can be wrong), so a frozen inferred designation would be a defect. The freeze spectrum: **provider raw facts** (immutable audit) → **app-generated structural** e.g. `acct_setup` (defensibly immutable — creation is app-controlled) → **inferred interpretation** (open/close, category, lot-match — MUST be mutable).
+
+**Amends [ADR-025](#adr-025).** ADR-025 justified `transaction_type`-as-an-immutable-column with "the ledger is immutable → permanence is good." This ADR corrects the *scope* of that permanence: `transaction_type` stays frozen-per-row **but its vocabulary is restricted to fact-level event kinds**; inferred designations move to the mutable overlay. See **Amendment 1** for the six preserved commitments; Security consult applies because it concerns the semantics of the audit control.
+
+### Decision 2 — Account model: three buckets, calculated subsidiary accounts, manual accounts (A/R + A/P), hierarchical escape hatch
+
+**Decision:** The GL operates over **three clearly-separated buckets**:
+1. **Real accounts** — assets + liabilities, institution-linked OR manual (`fn_create_manual_account`, `013`). Carry real balances, count in NAV. Assets debit-normal; liabilities credit-normal. Asset-vs-Liability is the one accounting class already in the schema (`account_type='liability'`, `003:96–99`).
+2. **Imputed flow-contras** — Income / Expense / Equity: the other side of a flow, **derived in the GL view** from the row's class (Decision 3). Never stored.
+3. **Suspense** — a single virtual should-be-zero account; nonzero = unclassified activity = the to-do list.
+
+**Subsidiary accounts are calculated, uniform across all account types:** `(account_id, security_id)` is the sub-ledger (`security_id IS NULL` = cash sub-account; each distinct `security_id` = a holding), already rolled forward by `fn_holdings_as_of` (`019`). Terminology: `pfin.asset` (`016`) is the instrument **registry** (definitions), not positions; positions are derived. Real-estate / personal-holdings manual accounts carry a `security_id`-referenced per-user asset (`asset_type='real_estate'`/`'private'`, `pricing_source='manual_valuation'`, `016`) with `quantity=1`, valued by a manual `eod_price` — one `fn_compute_nav` code path for cash, stocks, and a house.
+
+**Manual accounts resolve the old "virtual/composite account" question.** **A/R (Accounts Receivable)** = a real *manual asset* account for money that is yours but not in your possession (escrow, deposits, cash-in-transit) — debit-normal, counts in NAV, kept **separate from Suspense** (A/R is a real claim; Suspense is an unclassified-error bucket). **A/P** = the mirror manual liability. The only genuinely virtual/derived accounts are the imputed flow-contras + Suspense.
+
+**Hierarchical accounts — additive, deferred escape hatch (`M-hier`).** A nullable self-referential `parent_account_id` on `pfin.account` turns the flat list into a chart of accounts: **class/normal-balance inherit down** (a child of "Accounts Receivable" *is* A/R), **balances roll up** (parent shows aggregate; children collapse beneath). `parent_account_id = NULL` = today's flat behavior, unchanged — so it lands **only if the account count ever warrants it**, with no rearchitecture. It sits on the mutable account structure (fits Decision 1). Gate: Decision-3 same-tenant self-FK fence + Sec joint-review.
+
+**Why:** the buckets keep real balances, derived contras, and the error-signal strictly separated; manual accounts are the cheap, already-built home for every synthetic balance we thought needed virtual structure; hierarchy de-risks the one ergonomic bet (Decision 6) without committing to it now.
+
+### Decision 3 — Category-as-class: the top-level cashflow Category IS the accounting class; no `flow_class` / no `normal_balance` column
+
+**Decision:** Constrain the **cashflow-domain** `user_taxonomy.cat` (`009:155`, today free text with no CHECK) to the fixed enum `{Income, Expense, Transfer, Distribution, Equity}` via a **domain-conditional CHECK**; `sub_cat` stays free text. The Category **is** the class marker — **no separate `flow_class` column**. Normal-balance **derives** from the class (Income/Equity credit-normal; Expense/Distribution debit-normal) — **no `normal_balance` column**. Class always top-level (`Transfer::Internal`, never `OtherCF::Transfer`). Asset-allocation cats (`domain='asset'`) stay free. Of the 5: four → imputed contras; **Transfer → a real↔real link** (both legs real; no contra). The transaction's category lives on the mutable overlay `account_trans_annotation.sub_cat_id → user_taxonomy` (`023`), 1:1.
+
+**Why:** the accounting class of a discretionary cash flow *is* its top-level category — a separate normalized column (the earlier proposal) was redundant with the category the user already assigns. Enforcing it at the taxonomy grain (not the account grain) is correct: an account holds flows of many classes; the *category* is what carries a fixed class.
+
+**Sketch:**
+```sql
+alter table pfin.user_taxonomy add constraint user_taxonomy_cashflow_class_chk
+  check (domain <> 'cashflow' or cat in ('Income','Expense','Transfer','Distribution','Equity'));
+```
+
+**Event-class vs. flow-class partition (the reconciliation).** Two vocabularies exist: the **event-kind FACT** (`transaction_type`, immutable ledger) and the **flow-class INTERPRETATION** (cat, mutable overlay). They are partitioned by **axis** so **every row has exactly one authoritative class source**: structural events (`acct_setup`→Opening-Balance-Equity; `basis_adjust`→contra by `reason`; `security_buy/sell`→balance-sheet-internal or realized-gain-to-equity; `dividend_cash`→Income) take their class from the event kind and **never consult the cat**; discretionary `cash_flow` rows take their class from the cat. Open/close (BTO/STC/BTC/STO) is **inferred → mutable overlay** (the raw fact is only "bought/sold N shares"). This partition is the Amendment-1 / M1-evt surface (Decision 7 binding conditions).
+
+### Decision 4 — Dual book/market valuation; `basis_adjust` events; Unrealized-Gains equity line (F/CTO quick-locks)
+
+**Decision:** Keep **two** balance sheets: (a) **book-value accounting** (historical cost, realized-only) — the double-entry that sums to zero; (b) **market-value net worth** (`fn_compute_nav`, `019`, unrealized-inclusive). The gap is a single **Unrealized-Gains equity line**: **`net worth = book equity + unrealized gains`** *(F/CTO quick-lock: book-value-primary confirmed sound — a historical-cost realized-only book is what balances; unrealized MTM is properly an equity overlay)*. This is **NOT multi-book** — cost basis, accumulated depreciation, and market value are just attributes every position carries (one entity, two valuation lenses).
+
+**`basis_adjust` event type.** Depreciation / return-of-capital / wash-sale / corporate-action are **new dated `basis_adjust` transactions** whose magnitude rides the **`cost_basis` column, NOT `amount`** (a book adjustment moves no cash): `security_id`=asset, `quantity=0`, `amount=0` (except return-of-capital, which also carries `amount`=cash), **`cost_basis`=signed delta**, `transaction_type='basis_adjust'`, **`reason` ∈ {depreciation, return_of_capital, wash_sale, corporate_action}**. The GL imputes the contra by `reason` (depreciation → Dr Depreciation-Expense / Cr book-value reduction → Retained Earnings; RoC → cash leg + basis reduction, no income contra). **One `cost_basis` roll-forward** = original cost + Σ(basis_adjust deltas); **accumulated depreciation = derived** (filter `reason='depreciation'`, no separate column); **recapture survives** (`recapture = min(gain, accumulated_depreciation)`); at sale `gain/loss = proceeds − effective_cost_basis → Equity/Retained Earnings`.
+
+**F/CTO quick-lock (confirm):** this **widens `cost_basis`'s role** from "per-lot/aggregate *acquisition* basis" (`017:175,253`) to "signed basis-*delta* per basis-affecting event." Semantic widening of an existing column, not a new column; `fn_compute_nav` values on market `eod_price` (not `cost_basis`), so the NAV path is unaffected — the book-value GL is the new consumer.
+
+**Why:** depreciation touches book value, not market price; a personal net-worth app wants both the market NAV it already computes and a balancing book ledger, reconciled by one equity line rather than a second set of books.
+
+### Decision 5 — The GL engine: imputed contras + `journal_group_id` grouping + virtual scratch/Suspense; `Σ=0` at group-close
+
+**Decision:** The general ledger is a **derived `SECURITY INVOKER` read helper** (`fn_gl_entries`, Lock 11 like `fn_compute_nav`) that images each real row into a balanced debit/credit pair: the stored leg is the real (sub-)account; the other leg is imputed from the class (Decision 3) or resolved via grouping. **N-legged entries come from GROUPING real rows, not a stored journal-line table:** a `journal_group_id` on the mutable `023` overlay ties N real `account_trans` rows with `Σ=0`, backed by a `pfin.journal_group` parent (`group_type ∈ {transfer, transfer_in_kind, compound}`, `status ∈ {open, closed}`). A **virtual scratch/Escrow account, unified with Suspense**, is the universal counter-leg for "the matching leg hasn't arrived yet." **Balance (`Σ=0`) is enforced at group-CLOSE, not insert** — open groups park residual in per-tenant scratch/Suspense; closed groups must balance.
+
+**Mixed cash/security balance (the reconciliation):** the group invariant is checked in **the GL view's value space**, not raw `amount`, with `group_type` selecting the conservation law — `transfer` → cash `Σ(amount)=0`; `transfer_in_kind` → per-`security_id` `Σ(quantity)=0`; `compound` → GL-projected value at the transaction-time `price` (`017`), snapshotted deterministically at close (never re-valued).
+
+**Storage-enforced balancing is folded in, not needed as a per-row control:** the GL emits balanced pairs by construction → the trial balance zeroes by construction → the only imbalance is unclassified → Suspense. A hard balance control exists only at group-close (above), which is the feed-compatible home for it.
+
+**Header-comes-AFTER-the-lines (the structural insight):** feed-sourced legs arrive independently/asynchronously and are grouped **post-hoc** on the overlay. Classic journal-lines (header-first: author a balanced entry as a unit) **fights feed-sourced reality** — grouping is not merely lighter but structurally correct here. (This is the basis for Decision 6.)
+
+**Sketch:**
+```sql
+create table pfin.journal_group (
+  group_id bigint generated always as identity primary key,
+  users_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  group_type text not null check (group_type in ('transfer','transfer_in_kind','compound')),
+  status text not null default 'open' check (status in ('open','closed')),
+  description text, created_at timestamptz not null default now(), updated_at timestamptz not null default now());
+alter table pfin.account_trans_annotation add column journal_group_id bigint references pfin.journal_group(group_id);
+-- matched-tenant leg fence (Decision-3 #12) + Σ=0-at-close trigger — see Decision 7/8.
+```
+
+### Decision 6 — Classic Approach B (stored `journal_entry`/`journal_line`) REJECTED; the C→B "ladder" retired
+
+**Decision:** Do **not** build a classic header-first journal-entry / journal-line structure. Adopt grouping + manual accounts + imputation + `basis_adjust` (Decisions 2–5) as the **permanent** model. The earlier "C→B graduation ladder" framing is **retired**: there is no ladder to climb — grouping + manual accounts is a *better* model for this domain, not a cheaper approximation of B.
+
+**Stress-test result (could not break "B never needed" within personal-app scope):** every candidate breaker — depreciation, accrued interest/accruals, N-legged compound entries (house purchase), reserves/provisions, opening balances, inter-category reclass, and the hardest all-synthetic-legs case — is absorbed by the model: `basis_adjust` events, A/R/A/P manual accounts, the Escrow/clearing grouping, manual-account-as-stored-virtual-balance, `acct_setup`→OBE, and mutable overlay edits, respectively. **Classic B's only unique capability is header-first atomic authoring of a balanced entry with hand-entered synthetic legs** — which is exactly the thing that fights async feed-sourced legs.
+
+**Honest residual + escape hatch:** the model bets manual-accounts-as-virtual-balances scale ergonomically (they do at personal scale — a handful of A/R/A/P/escrow/reserve accounts; imputed contras + derived roll-forwards scale for free). The bet is de-risked by the additive **hierarchical-accounts escape hatch** (Decision 2 / `M-hier`), which organizes an arbitrarily larger set under a few parents with no rearchitecture. The thesis would only *truly* fail on a pivot the personal-app scope explicitly excludes: a **small-business bookkeeping suite** (thousands of short-lived deferred-revenue schedules, multi-entity consolidation with elimination entries) — and even then hierarchy pushes the ceiling well past any personal need.
+
+**Alternatives considered:**
+- **Approach A (views-only, no class dimension):** too thin — a balancing GL needs *some* class + normal-balance dimension; A provides no home for it. Superseded by Decision 3 (class at the taxonomy grain).
+- **Approach B (stored header-first `journal_entry`/`journal_line`):** rejected as above — wrong shape for feed-sourced data; its differentiators are covered by grouping (atomic multi-leg), manual accounts + hierarchy (organization/synthetic balances), and imputation (contras). Multi-book / eliminations (a B-adjacent capability) assessed **never needed** for a single-economic-entity-per-tenant app (distinct from Decision 4's book-vs-market dual valuation, which is NOT multi-book).
+
+### Decision 7 — Security posture: conditional-GREEN (no veto, 2026-07-23); binding conditions; joint-review-mandatory at M1-evt + M2
+
+**Decision:** Security assessed the two Sec-gated reconciliations 2026-07-23 — **both conditional-GREEN, no veto.** The event-sourcing reframe (Decision 1) is **audit-sound**: the `004` triple-fence never protected interpretation, so moving classification to the mutable overlay costs nothing from tamper-evidence, and `transaction_type` stays frozen-on-ledger. **§10 stays 3 · SECURITY DEFINER allowlist stays 3** (every new function/fence is INVOKER). The following conditions are **binding**, each **joint-review-mandatory** at author time with a non-vacuous two-tenant pgTAP battery.
+
+**Binding on M1-evt (event/flow-class partition + Amendment 1):**
+1. **Mandatory append-only reclassification history** over the GL-routing-relevant overlay columns (cat, open/close, lot-match) — an **INSERT-only side table with its own immutability fence** (mirror `004`), **NOT** an in-place `jsonb` column (jsonb is itself UPDATE-able → not tamper-evident). Classification drives money-routing, so this is a requirement, not polish. `transaction_type` needs none (frozen already).
+2. **NULL-cat fail-safe** — a `cash_flow` row with NULL/Unsorted cat routes to **Suspense**, never a silent default class.
+3. **Fact-level-only `transaction_type` vocabulary is a durable invariant** — no inferred value (open/close) may ever become a `transaction_type` value.
+4. **Lot-matching buy-reference FK = a NEW Decision-3 instance** — a sell referencing its matched buy `trans_id` is a self-referential tenant-scoped FK (like `replaces_trans_id` `#2`) → matched-account/matched-tenant fence required; evaluate + count at that migration.
+5. **The append-only history table is itself a new write surface** → ships with its own immutability fence + two-tenant test (residual).
+
+**Binding on M2 (grouping fence + mixed-unit balance) — one standing VETO trigger:**
+1. **Matched-tenant leg fence** — `BEFORE INSERT OR UPDATE` on `account_trans_annotation` WHEN `journal_group_id IS NOT NULL`, resolving the leg's tenant via the `023` chain (`trans_id → account_trans.account_id → account.users_id`) and requiring `= journal_group.users_id`; NULL-safe fail-closed, INVOKER, `set search_path=''`. A clone of the shipped `#10` sub_cat fence. **= Decision-3 instance `#12`** (Sec numbering sign-off at M2).
+2. **Virtual scratch/Suspense MUST be strictly per-tenant — a shared/global scratch is a hard VETO.** It carries parked balances; a global singleton cross-contaminates NAV *and* leaks another tenant's unreconciled activity. Instantiate as a per-tenant `pfin.account` row (`fn_create_manual_account`, `013`, already `users_id`-scoped).
+3. **`users_id` code-binding under any privileged path** — `default auth.uid()` is fine for V1 user-authored grouping under `authenticated`; if any feed/worker path ever creates groups under `service_role`, bind `users_id` in code from the validated session (ADR-027 clause-(t)), never column-default/client-body.
+4. **UPDATE policy `WITH CHECK (users_id = auth.uid())`** on `journal_group` — no cross-tenant close/reopen, no `users_id` reassignment.
+5. **C6 exposure-gating (ADR-023)** — two-tenant RLS battery proves cross-tenant read+write fail closed *before* grant; `service_role` gets nothing in V1.
+6. **NAV/GL must include the per-tenant Suspense residual in net worth** — parked money in an open group must not silently drop out of NAV.
+7. **`compound` group_type snapshots GL-projected value deterministically at close** (transaction-time `price`, `017`), never re-valued (a re-valued check lets a closed group silently un-balance later).
+
+Group open/close (Recon #3) is Sec-sound, not a security risk (open-group residual sits in the tenant's own per-tenant Suspense; folded into M2 conditions 6–7). Book-value-primary (Recon #4) is Sec-neutral (F/CTO quick-lock, Decision 4).
+
+### Decision 8 — Decision-3 / ledger impact: two new instances forward-flagged; §10 and DEFINER ledgers flat
+
+**Decision:** The model adds **two new Decision-3 (cross-tenant FK-bypass) instances**, both matched-tenant-fenced with Sec numbering sign-off at their migration: **`journal_group_id` (labeled `#12`)** (Decision 7 M2 cond 1) and **the lot-matching buy-reference FK** (Decision 7 M1-evt cond 4; label assigned at its migration). Both extend [ADR-011](#adr-011) Decision 3 (currently 11 labeled instances / 9 DDL-realized). The `M-hier` `parent_account_id` self-FK (Decision 2), if built, is a third same-tenant fence (evaluated at `M-hier`). **All other ledgers flat: §10 catalogued-instance ledger stays 3 (RT-22 + RT-26 + RT-27); SECURITY DEFINER allowlist stays 3** — every new function and fence is `SECURITY INVOKER`.
+
+### Decision 9 — Migration plan (reference, not commitment) + the ordering-vs-backfill one-way-door
+
+**Decision:** The model realizes as additive migrations, each independently shippable and reversible-while-empty (reference sequence, not a lock):
+
+`M1` (Category-as-class CHECK; no `flow_class`) → `M1-evt` (event-class vocabulary refactor + Amendment 1; **Sec conditional-GREEN conditions binding**) → `M2.5` (split-child table `account_trans_split`, 1:many, Σ=parent — the everyday receipt split, ranked above depreciation) → `M2` (`journal_group` + `journal_group_id` + matched-tenant fence + scratch/Suspense; **joint-review-mandatory**) → `M3-basis` (`basis_adjust` event + `reason`) → `M4-GL` (`fn_gl_entries` INVOKER GL/trial-balance helper: book-value double-entry + market/Unrealized-Gains + imputed contras + Suspense + group + split reads) → `C+` (formalize the SD-12 monthly-report snapshot to freeze Income Statement / Balance Sheet / Statement of Equity, incl. book/market split — spec-locked, build-pending) → `M-hier` (deferred hierarchical accounts, build only if account count warrants).
+
+**ONE-WAY DOOR:** the **category→class map**, the **event-class vocabulary + ADR-025 semantics**, the **grouping/pairing rule**, and the **basis-delta convention** all **imprint on the incumbent transaction import** — settle them (F/CTO ratify + Sec where flagged) **before the export imports**. The column/CHECK/table adds, the `M4-GL` view, and the `C+` snapshot formalization are additive/read-only and can land anytime.
+
+**What is untouched:** `account_trans` FACT columns + the `004` immutability triple-fence (only `transaction_type`'s *vocabulary* is refactored + `reason` added); `fn_compute_nav`/`fn_holdings_as_of` (`019`, reused not rewritten); signed `amount`/`quantity` (R-7); the SECURITY DEFINER allowlist (stays 3).
+
+### Consequences
+
+- **Amends [ADR-025](#adr-025)** — see **Amendment 1** (immutability of `004` is an audit control over raw facts, not a freeze on classification; `transaction_type` fact-level-only). ADR-025's three components (`sub_cat_id` FK, AcctSetup discriminator, `is_active` reuse) are otherwise unchanged.
+- **Extends [ADR-011](#adr-011) Decision 3** — two new forward-flagged instances (`journal_group_id` `#12` + lot-match buy-reference FK); numbering sign-off at each migration. §10 (Decision 4) unchanged at 3; DEFINER allowlist (Decision 9) unchanged at 3.
+- **Retires the v1 "C→B graduation ladder"** (Decision 6) — grouping + manual accounts is the permanent model; classic B is not a planned future state.
+- **Pending F/CTO quick-locks:** book-value-primary (`net worth = book equity + unrealized gains`) + the `cost_basis` role-widening (Decision 4).
+- **Joint-review-mandatory** at `M1-evt` and `M2` (Decision 7); paired non-vacuous QA two-tenant pgTAP at every fence + the GL view.
+- **Handoffs:** Architect authors the migrations; QA authors the `supabase/tests/` two-tenant pgTAP batteries (incl. the append-only reclassification-history immutability test); Backend applies via `supabase migration up` after CI fixture-seed verification, then builds the GL/statement UI; DevOps wires any new CI fixture rows.
+- **Cross-references:** `temp/double-entry-design-v2.md` (design of record); [ADR-027](#adr-027) (the `015`–`023` substrate this layers over); [ADR-011](#adr-011) D1/D2/D3/D4/D9 + Lock 11; [ADR-023](#adr-023) C6; [ADR-025](#adr-025) (amended); [ADR-022](#adr-022)/[ADR-024](#adr-024) (CHECK-vs-registry for `transaction_type`/`reason`); `004`/`009`/`012`/`013`/`016`/`017`/`019`/`023` migrations.
+
+---
+
 ## ADR-030 — Auth-3b Slice 2: MFA recovery codes — `service_role`-forced recovery + the `026` store (SELF-291)
 
 **Date:** 2026-07-22 · **Status:** Accepted (F/CTO-ratified 2026-07-22 — Opt A + leans #2–#6 + #7 SELF-288 stays open; the `026` migration returns for **Sec joint-review** — the `service_role`-grant surface — before merge; the ADR-016 amendment + RT-26 allowlist edit land with Slice 2b) · **Phase:** 6
@@ -523,7 +668,7 @@ The scheduler is the Coolify-cron entrypoint that drives the shipped `syncProvid
 ## ADR-025 — SELF-201 manual-account schema foundation: `account.sub_cat_id` matched-tenant FK (Decision-3 canonical instance #5) + AcctSetup discriminator on `account_trans` (Option B, one-way-door)
 
 **Date:** 2026-07-05
-**Status:** Accepted
+**Status:** Accepted (amended 2026-07-23 by [ADR-031](#adr-031) — see Amendment 1 below)
 **Phase:** Phase 6 Build Loop (SELF-201 / §2.4.2 manual non-Plaid account onboarding; migration `012`).
 **Approved by:** F/CTO ratified 2026-07-05 — **Option B** for the AcctSetup discriminator (one-way-door ratify gate); `sub_cat_id` **NULLABLE** + matched-tenant trigger + `is_active` reuse ratified as recommended-defaults; and the **Decision-3 canonical-#5 enumeration** (the deferred enumeration pass — see Decision 3 below). Design paper: `temp/self-201-012-design.md`.
 **Pattern:** Short pattern (schema-foundation for one issue; three components + a Decision-3 enumeration-pass amendment). Companion to [ADR-022](#adr-022)/[ADR-024](#adr-024) (CHECK-vs-table) and an enumeration extension of [ADR-011](#adr-011) Decision 3.
@@ -550,6 +695,24 @@ The scheduler is the Coolify-cron entrypoint that drives the shipped `syncProvid
 - SELF-200 (auto-Unsorted) + SELF-236 (§2.2.1.c Sub-Cat reassignment — the UPDATE path the trigger covers).
 
 **Handoffs:** QA authors the `supabase/tests/` two-tenant pgTAP battery (Architect does not edit `tests/`); DevOps owns the CI fixture-seed row (`account.sub_cat_id` + a per-tenant `user_taxonomy` row); Backend applies `012` via `supabase migration up` after CI fixture-seed verification, then builds the SELF-201 full-stack form.
+
+### ADR-025 — Amendment 1 (2026-07-23): `transaction_type` immutability is scoped to FACTS, not classification (per [ADR-031](#adr-031) Decision 1)
+
+**Context.** ADR-031 Decision 1 reframes `account_trans` immutability as an **audit control over raw FACTS, not a freeze on our interpretation**. This corrects the *scope* of ADR-025 Component (2)'s justification — "`account_trans` is immutable (`004`) so the discriminator is permanent per-row … hence a one-way door." That reasoning stands for a **fact-level** `transaction_type`, but permanence is a *cost* for anything inferred (open/close, category, lot-match), which must be mutable. This amendment records the corrected scope. Security consult applies (semantics of the audit control); Sec conditional-GREEN 2026-07-23 (ADR-031 Decision 7).
+
+**The core reframe.** Immutability of `pfin.account_trans` (`004`) is a **tamper-evidence control over the raw facts the source asserts** (amount, quantity, date, security, account). **Classification and interpretation** — the flow-class/category, open-vs-close designation, and lot-matching — do **NOT** live on the immutable ledger; they live on the mutable overlay (`account_trans_annotation`, `023`, + the ADR-031 structures) and are freely correctable. `transaction_type` remains on the immutable ledger **only because, and only insofar as, it names a FACT** (the event kind the source asserts).
+
+**Six preserved commitments (binding on the M1-evt vocabulary refactor):**
+- **(a) `transaction_type` stays frozen-per-row on the immutable ledger** — the `004` UPDATE/DELETE/TRUNCATE triple-fence is untouched; a fact-level value is permanent by design (Component (2) permanence rationale is retained *for facts*).
+- **(b) TEXT + CHECK, not enum / not registry** — ADR-022's code-coupled→CHECK rule and ADR-024's promote-to-registry escape hatch continue to govern; the vocabulary widens via one-line `CHECK` alters (additive, ADR-022).
+- **(c) Fact-level-only vocabulary (the new invariant)** — the `transaction_type` vocabulary admits only event kinds the source asserts (`cash_flow`, `security_buy`, `security_sell`, `security_transfer`, `basis_adjust`, `dividend_cash`, `acct_setup`, …). **No inferred value (open/close designation) may ever become a `transaction_type` value** — inferred designations live on the mutable overlay. Standing rule.
+- **(d) One-way-door — settle the vocabulary before the incumbent import** — the fact-level vocabulary imprints on backfilled transactions; ratify it (F/CTO + Sec) before the export imports (ADR-031 Decision 9).
+- **(e) Reverse-and-replace + the `#2` matched-account fence remain the SOLE fact-correction path** — a genuine source-fact error is corrected by an invalidate-and-replace pair (`is_reverse` + `replaces_trans_id`, `004`), never an in-place edit; interpretation errors are corrected on the mutable overlay, not here.
+- **(f) SECURITY DEFINER allowlist stays 3 · §10 catalogued-instance ledger stays 3** — the vocabulary refactor and the overlay designation column are INVOKER/authenticated-tier; no privileged surface, no §10 instance (separate-ledger de-conflation, per the SELF-187 DEFINER-allowlist precedent).
+
+**Unchanged.** ADR-025 Components (1) `sub_cat_id` matched-tenant FK (Decision-3 `#5`), (2) the AcctSetup discriminator = Option B `transaction_type`, and (3) `is_active` reuse stand as accepted. This amendment scopes the *permanence justification* of Component (2); it does not alter the discriminator choice or the migration (`012`).
+
+**Cross-references:** [ADR-031](#adr-031) (Decisions 1, 3, 7 — the double-entry model, the event/flow-class partition, the Sec conditions); [ADR-011](#adr-011) Decision 2 (immutable audit-class) + Decision 3 (`#2` matched-account fence, the lot-match `#13`-pending instance) + Decision 4 (§10 ledger) + Decision 9 (DEFINER allowlist); [ADR-022](#adr-022)/[ADR-024](#adr-024).
 
 ---
 
