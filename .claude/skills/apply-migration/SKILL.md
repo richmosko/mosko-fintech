@@ -32,7 +32,7 @@ Before writing a single line of SQL, read [ADR-011 Decision 4](../../../DECISION
 2. **Layer-attribution** — do not re-attribute which layer a catalogued instance operates at (RT-22 = infrastructure-credential-presence layer; RT-26 = code-layer CI grep fence).
 3. **Verbatim-vs-paraphrase** — the catalogued numbered list is not restated in migration files; link to Decision 4 (Path B: drop-enumeration-let-link-carry). Only restate verbatim if the migration file IS the canonical anchor (it never is — Decision 4 is).
 
-The V1 §10 ledger commitment is **2 instances only** (RT-22 + RT-26). Do not silently add a catalogued instance. Any ledger change (count or layer-attribution) is **Sec joint-review-mandatory** before the migration is finalized.
+The V1 §10 ledger commitment is **3 instances** (RT-22 + RT-26 + RT-27; RT-27 = the app→worker credential-admission network-exposure/config layer, catalogued at SELF-212 / v1.83). Do not silently add a catalogued instance. Any ledger change (count or layer-attribution) is **Sec joint-review-mandatory** before the migration is finalized.
 
 ## Step 1 — Migration file shape
 
