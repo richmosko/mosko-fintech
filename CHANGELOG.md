@@ -12,6 +12,24 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 ---
 
+### v1.103 — 2026-07-24
+
+**Phase 6 — M1-evt Slice A2 (reclassification-history audit table) LANDED — the fourth Double-Entry GL migration + the project's FIRST SECURITY DEFINER allowlist growth (SELF-293, PR #219, merge `aec9e9a`).** The tamper-evident classification-history backbone. F/CTO **reopened** reclass-history to V1 (reversing ADR-031 Amendment 1 §9's V2-deferral) to decouple the audit story from the C+ monthly-report freeze bet — the heavier-but-better long-term call.
+
+**Migration `031`** — `pfin.account_trans_annotation_history`: an ADR-011 **Decision 2 audit-class** table. Append-only, `004`/`005`-mirror immutable — UPDATE/DELETE/TRUNCATE blocked **all roles incl. service_role** via **trigger-based** INVOKER fences (not policy: RLS-bypass by service_role doesn't defeat a trigger). Full-snapshot-new-version rows (`version_seq` monotonic per `trans_id`, no predecessor FK). Captures the GL-routing-relevant `023` overlay state (`sub_cat_id` snapshot [plain bigint, **no FK** → audit-truthful after taxonomy deletion] + `metadata` snapshot; not `note`) on INSERT + routing-relevant UPDATE (a note-only edit writes nothing — the DISTINCT-FROM gate). Owner-only read (parent-chain α); birth-row backfill (idempotent).
+
+**The DEFINER growth (3→4).** The sole write path is a new `SECURITY DEFINER` helper `fn_reclass_history_insert` (`set search_path=''`, `revoke execute from public`), fired by an AFTER-trigger on `023` — `authenticated` has NO direct INSERT grant, so history is **un-forgeable** (an INVOKER path would be either permission-denied or a forgeable PostgREST POST). This is the **first authored DEFINER-allowlist growth in the project's history**: committed allowlist **3 → 4** (`fn_refresh_updated_at` @001 + `fn_grant_creator_access` @003 + `fn_reclass_history_insert` @031 + the reserved general same-transaction audit-log slot, SELF-201 Task #7, still unauthored); authored = 3. F/CTO-ratified (disposition A over stay-3-by-absorbing-the-general-audit-log). A team-lead cross-check caught the Architect's initial "stays 3" over-round (the reserved slot is earmarked for the *general* audit-log, distinct from reclass-history) → corrected to the honest +1 before F/CTO ratified.
+
+**Ledgers: SECURITY DEFINER allowlist 3 → 4 · §10 3 (unchanged — DEFINER ledger is separate, de-conflation per SELF-187) · Decision-3 +0** (`trans_id` sole anchor NOT-D3; `sub_cat_id` no-FK snapshot; `version_seq` no predecessor FK; family stays 12 labeled / 10 realized).
+
+**Gate — Sec-joint-review-mandatory (TWO veto surfaces: D2 audit-class + the new DEFINER fn), CLEARED.** Sec migration review GREEN — DEFINER posture *sound, necessary, exactly one, honestly counted, reserved slot preserved*; D2 immutability holds under all roles; §10/Decision-3 confirmed; Amendment 2 accurate. Fixed a fragile line-number citation → name-anchored + a bonus mis-attribution (the reclass-history requirement is ADR-031 Decision 7, not ADR-025 §146). Sec battery sign-off GREEN — QA `plan(18)` 18/18, all edges non-vacuous. CI green (001→031 clean).
+
+**ADR-031 Amendment 2** records the reopening; **ADR-011 Decision 9** amended for the 3→4 growth. **Bookkeeping folded in:** swept the stale DEFINER-count phrasing (the `apply-migration` skill said "2 entries only"; `supabase/CLAUDE.md` + the `spawn-sec-joint-review` skill + the architect / security-reviewer / backend-engineer agent defs said "3") → the canonical **4** (3 authored + 1 reserved).
+
+**NEXT:** Slice B (lot-match buy-reference FK `#14`) — F/CTO elected to build it now (design-first in flight); the last M1-evt piece. Migrations `001`–`031` live. Open: ADR-011 D3 body fold-in (#12 + #13) ahead of Slice B pinning #14.
+
+---
+
 ### v1.102 — 2026-07-24
 
 **Phase 6 — M1-evt Slice A1 (event-class vocab widen + Trade constraints) LANDED — the third Double-Entry GL migration (SELF-293, PR #217, merge `c06d78c`).** The import-critical core of M1-evt (the ship-order step after M1; M2.5 was taken out of order first). M1-evt is **3 slices** per F/CTO ratify: **A1 (this)** = the settle-before-import core · **A2** = the reclass-history audit table (F/CTO reopened it to V1) · **B** = the lot-match FK `#14` (deferred).
