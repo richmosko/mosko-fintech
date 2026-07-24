@@ -53,6 +53,22 @@
 --   (5e)         -> RED if the SELECT policy were dropped/widened so B could see A's notes
 --                  CONTENT — the notes-specific golden cross-tenant violation. Non-vacuous:
 --                  with RLS off, B's `where notes = <A's value>` returns A's row (count 1 ≠ 0).
+--   (6a-6e)      -> MIGRATION 028 (SELF-292 / M1 — user_taxonomy_cashflow_class_chk):
+--                  RED if the CHECK were absent/over-broad so a valid cashflow class were
+--                  wrongly rejected. Each of the 5 ratified classes (Revenue/Expense/
+--                  Transfer/Equity/Trade) inserts cleanly on a cashflow-domain row.
+--   (6f)/(6g)    -> fail-closed: RED if the CHECK were DROPPED (or its enum widened) so a
+--                  non-enum cashflow cat committed. 'Income' (the stale pre-Amendment-1
+--                  name) and an arbitrary 'Groceries' each raise check_violation (23514).
+--                  These are privileged (role=postgres) inserts, so the raise is the CHECK
+--                  (23514), NOT a grant-layer permission-denied (42501) — the CHECK is the
+--                  surface under test, isolated from the V1-write-dormant grant fence.
+--   (6h)         -> asset-domain UNCONSTRAINED: RED if the CHECK were made unconditional
+--                  (dropped the `domain <> 'cashflow'` disjunct) so asset free-text cat were
+--                  rejected. An asset-domain row with an arbitrary cat ('US Equity') inserts.
+--   (6i)         -> isolation preserved: RED if the CHECK's row additions leaked across the
+--                  tenant boundary. The CHECK adds NO tenant surface — B still sees 0 of A's
+--                  newly-inserted M1 cashflow rows. Non-vacuous (A owns 5; B must see 0).
 --
 -- §10 / DECISION 3: ledger UNCHANGED at 2 (RT-22 + RT-26); Decision-3 family UNCHANGED
 --   (009's sole reference column users_id -> auth.users IS the tenant anchor — no second
@@ -79,7 +95,7 @@ begin;
 -- shared verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(14);
+select plan(23);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
@@ -94,8 +110,17 @@ insert into auth.users (id) values (:'ta'), (:'tb');
 insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat, tax_relevant, tax_character)
   values (:'ta', 'asset', 'Brokerage', 'US Equity', true, 'qualified_dividend')
   returning id as a_row \gset
+-- NOTE (SELF-292 / M1): this cashflow row's cat was 'Income' pre-028. Migration
+--   028 (user_taxonomy_cashflow_class_chk) constrains cashflow-domain cat to the
+--   ratified 5-class enum (Revenue/Expense/Transfer/Equity/Trade), and 'Income' is
+--   the STALE pre-Amendment-1 name (Income -> Revenue). Left as 'Income' this
+--   privileged seed would raise 23514 and abort the whole txn BEFORE any assertion
+--   runs (a false-RED unrelated to isolation). Settled to the ratified 'Revenue'
+--   (settle-before-import imprint, ADR-031 Amendment 1 §1). Row COUNT unchanged
+--   (A still owns exactly 2 rows -> (1a) still asserts 2); sub_cat 'Salary' is free
+--   text and unaffected.
 insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat, tax_relevant)
-  values (:'ta', 'cashflow', 'Income', 'Salary', true);
+  values (:'ta', 'cashflow', 'Revenue', 'Salary', true);
 insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
   values (:'tb', 'asset', 'Brokerage', 'US Equity');
 
@@ -232,6 +257,85 @@ select _rls.set_tenant(:'tb'::uuid);
 select is(
   (select count(*) from pfin.user_taxonomy where notes = 'tenant-A private note')::bigint, 0::bigint,
   '(5e) 010: cross-tenant fails closed — B sees 0 rows carrying A''s notes (no leak from the column add; RLS direct-owner isolation holds with the new column)'
+);
+select set_config('role', 'postgres', true);
+
+-- =====================================================================
+-- BLOCK 6 — MIGRATION 028: domain-conditional cashflow-class CHECK
+--   (user_taxonomy_cashflow_class_chk; SELF-292 / M1; ADR-031 Decision 1 as amended
+--    by ADR-031 Amendment 1). CHECK:
+--      domain <> 'cashflow' OR cat IN ('Revenue','Expense','Transfer','Equity','Trade')
+--   Lightweight EXTENSION of the 009 two-tenant battery (not a new battery). All
+--   inserts here are PRIVILEGED (role=postgres) — the only write path (V1-write-
+--   dormant) — so they reach the CHECK directly; a raise is the CHECK (23514), not a
+--   grant-layer 42501. This deliberately isolates the CHECK surface from the write-
+--   dormant grant fence (BLOCK 2). users_id set explicitly (auth.uid() NULL under
+--   postgres). sub_cat 'm1-probe' keeps every probe row UNIQUE(users_id,domain,cat,
+--   sub_cat)-clean vs the BLOCK-1 fixture (which uses sub_cat 'Salary'/'US Equity').
+--   Ordered LAST so the BLOCK-1 count assertions ((1a)=2) are untouched by these rows.
+-- =====================================================================
+
+-- (6a-6e) ACCEPT: each of the 5 ratified cashflow classes inserts cleanly.
+select lives_ok(
+  format($$ insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
+              values (%L, 'cashflow', 'Revenue', 'm1-probe') $$, :'ta'),
+  '(6a) 028: cashflow class Revenue accepted by user_taxonomy_cashflow_class_chk'
+);
+select lives_ok(
+  format($$ insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
+              values (%L, 'cashflow', 'Expense', 'm1-probe') $$, :'ta'),
+  '(6b) 028: cashflow class Expense accepted by user_taxonomy_cashflow_class_chk'
+);
+select lives_ok(
+  format($$ insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
+              values (%L, 'cashflow', 'Transfer', 'm1-probe') $$, :'ta'),
+  '(6c) 028: cashflow class Transfer accepted by user_taxonomy_cashflow_class_chk'
+);
+select lives_ok(
+  format($$ insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
+              values (%L, 'cashflow', 'Equity', 'm1-probe') $$, :'ta'),
+  '(6d) 028: cashflow class Equity accepted by user_taxonomy_cashflow_class_chk'
+);
+select lives_ok(
+  format($$ insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
+              values (%L, 'cashflow', 'Trade', 'm1-probe') $$, :'ta'),
+  '(6e) 028: cashflow class Trade accepted by user_taxonomy_cashflow_class_chk'
+);
+
+-- (6f)/(6g) REJECT (fail-closed): a cashflow-domain non-enum cat raises 23514.
+--   'Income' = the stale pre-Amendment-1 name (Income -> Revenue); 'Groceries' = an
+--   arbitrary free-text cat. Both must fail closed at the CHECK (NOT permission-denied).
+select throws_ok(
+  format($$ insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
+              values (%L, 'cashflow', 'Income', 'm1-probe') $$, :'ta'),
+  '23514', null,
+  '(6f) 028: cashflow cat ''Income'' (stale name) fails closed at the class CHECK (23514) — not an enum member'
+);
+select throws_ok(
+  format($$ insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
+              values (%L, 'cashflow', 'Groceries', 'm1-probe') $$, :'ta'),
+  '23514', null,
+  '(6g) 028: cashflow cat ''Groceries'' (arbitrary) fails closed at the class CHECK (23514) — not an enum member'
+);
+
+-- (6h) ASSET-DOMAIN UNCONSTRAINED: the CHECK short-circuits on domain <> 'cashflow',
+--   so an asset-domain row with an arbitrary (non-enum) cat inserts cleanly.
+--   Distinct sub_cat keeps it UNIQUE vs A's BLOCK-1 asset/Brokerage/US Equity row.
+select lives_ok(
+  format($$ insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
+              values (%L, 'asset', 'US Equity', 'm1-asset-probe') $$, :'ta'),
+  '(6h) 028: asset-domain arbitrary cat ''US Equity'' inserts (CHECK short-circuits on domain <> ''cashflow'' — asset cat stays free text)'
+);
+
+-- (6i) ISOLATION PRESERVED: the CHECK adds no tenant surface. After A's 5 M1 cashflow
+--   rows land, intruder B still sees ZERO of them. Non-vacuous: A owns 5 m1-probe
+--   cashflow rows; with RLS off/widened B's count would be 5, not 0.
+select _rls.set_tenant(:'tb'::uuid);
+select is(
+  (select count(*) from pfin.user_taxonomy
+     where users_id = :'ta' and domain = 'cashflow' and sub_cat = 'm1-probe')::bigint,
+  0::bigint,
+  '(6i) 028: isolation preserved — B sees 0 of A''s new M1 cashflow rows (class CHECK adds no tenant surface; RLS direct-owner isolation holds)'
 );
 select set_config('role', 'postgres', true);
 

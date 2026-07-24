@@ -220,12 +220,19 @@ insert into pfin.account_trans (account_id, transaction_date, amount, vendor, de
 insert into pfin.account_trans (account_id, transaction_date, amount, vendor, description)
   values (:acctb, '2026-01-16', 16, 'vB1', 'beta txn 1') returning trans_id as tb1 \gset
 
+-- M1/028: cashflow cats remapped to the ratified 5-class enum. Housing/Food were
+--   top-level cats pre-Amendment-1; both are now sub_cats of Expense, so
+--   Housing->Expense::Rent and Food->Expense::Groceries. sub_cat text unchanged;
+--   a_sub/a_sub2 stay UNIQUE(users_id,domain,cat,sub_cat) (distinct sub_cat); b_sub
+--   is tenant B (distinct users_id from a_sub). Assertions key off id/users_id, not
+--   the cat text, so the fence-test intent is unchanged. (NB: no inline comment on a
+--   `\gset` line — \gset consumes the rest of the line as variable-name args.)
 insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'ta', 'cashflow', 'Housing', 'Rent') returning id as a_sub \gset
+  values (:'ta', 'cashflow', 'Expense', 'Rent') returning id as a_sub \gset
 insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'ta', 'cashflow', 'Food', 'Groceries') returning id as a_sub2 \gset
+  values (:'ta', 'cashflow', 'Expense', 'Groceries') returning id as a_sub2 \gset
 insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'tb', 'cashflow', 'Housing', 'Rent') returning id as b_sub \gset
+  values (:'tb', 'cashflow', 'Expense', 'Rent') returning id as b_sub \gset
 
 -- =====================================================================
 -- BLOCK 1 (authenticated A) — matched-tenant PASSes: annotate own txn (matched Sub-Cat),
