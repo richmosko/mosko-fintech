@@ -12,6 +12,22 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 ---
 
+### v1.101 — 2026-07-24
+
+**Phase 6 — M2.5 (account_trans_split receipt-split overlay) LANDED — the second Double-Entry GL migration (SELF-294, PR #215, merge `1c5cead`).** Migration `029` adds `pfin.account_trans_split`, a 1:many split-child table under the immutable `account_trans` parent, so one transaction can carry multiple category lines with **Σ(children) = parent.amount** enforced by the database. The GL track's first Sec-joint-review-mandatory migration (M1 was an attribute CHECK; M2.5 adds a base table + a Decision-3 fence).
+
+**Built to four F/CTO-ratified design decisions** (walked one-by-one this session): (1) **anchor α** — parent-chain tenancy, no own `users_id` (mirrors `023`); tenancy via `account_trans_id → account_trans → account_users`. (2) **Σ=parent = `fn_account_trans_split_balance`**, a `CONSTRAINT TRIGGER … DEFERRABLE INITIALLY DEFERRED` (fires at commit; if ≥1 child, assert Σ(signed)=parent.amount; unsplit passes) + a `security_invoker` reconciliation view `account_trans_split_balance` shaped to feed a mini T-account (Dr/Cr) rendering. (3) **write-dormant** (`009` pattern) — RLS + fences + Σ-trigger land now; write grants deferred to the split-UI PR. (4) **`sub_cat_id` nullable** (uncategorized → Unsorted); **precedence soft** — an M4-GL read rule, not a DB constraint.
+
+**Decision-3 = +1 → `#13`** (Sec-pinned at joint-review against live ADR-011 [11 labeled / 9 DDL-realized] + ADR-031 Decision 8 [`#12` reserved-by-name for `journal_group`, unrealized]; the `sub_cat_id` matched-tenant chain-resolved fence is a verbatim mirror of `023` #10). This is the family's first *forward-reservation gap* — `#13` DDL-realizes while `#12` stays reserved-unrealized (legitimate per ADR-031 D8; the eventual D3-body fold-in records `#12` + `#13` together with provenance). Family → **12 labeled / 10 DDL-realized**. **§10 = 3 · SECURITY DEFINER allowlist = 3** unchanged (Σ-trigger fn + sub_cat fence fn + recon view all INVOKER).
+
+**Gate — Sec-joint-review-mandatory, CLEARED.** Sec migration review **GREEN** (D3 `#13` pinned; DEFINER/§10 confirmed; isolation fails closed on table + view; deferred Σ re-parent/delete/0-child logic sound). Sec battery sign-off **GREEN** (three non-vacuous conditions with real two-tenant referents + paired controls). QA `plan(17)` **17/17** two-tenant pgTAP; sweep clean (new table, no collisions). CI green (pgTAP RLS battery + Live-DB lane + unit/build). Team-lead verbatim cross-check of Sec's D3 citations: clean.
+
+**Also (bookkeeping).** Reconciled stale ledger counts in the convention layer: `supabase/CLAUDE.md` Convention 3(b) (Decision-3 "7 at Phase 4 close" → current 12 labeled / 10 realized) + the `spawn-sec-joint-review` skill (§10 "2" → 3 RT-22+RT-26+RT-27; DEFINER "2-entry" → 3; the D3 growth-note currency). Same drift class as the v1.100 §10 fix.
+
+**NEXT:** the GL sequence continues — **M1-evt** (event-class vocab refactor + ADR-025 amendment, the heavy Sec-gated step) or **M2** (`journal_group` + scratch/Suspense, where `#12` DDL-realizes). Open (non-blocking): the D3-body `#13`/`#12` fold-in (at M2); the split-entry frontend + T-account rendering off the recon view. Migrations `001`–`029` live.
+
+---
+
 ### v1.100 — 2026-07-24
 
 **Phase 6 — M1 (Category-as-class CHECK) LANDED — the first migration of the Double-Entry GL track (SELF-292, PR #213, merge `1a117f9`).** The double-entry GL moves from design to build. Migration `028_user_taxonomy_cashflow_class.sql` adds a domain-conditional CHECK constraining the **cashflow-domain** `pfin.user_taxonomy.cat` to the ratified 5-class accounting enum **`('Revenue','Expense','Transfer','Equity','Trade')`** — turning the top-level Category *into* the enforced accounting class (no `flow_class` column, no `normal_balance` column; both derive from the class). Uses the Amendment-1 enum, not the stale design-v2 `{Income,…,Distribution}` sketch.
