@@ -12,6 +12,22 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 ---
 
+### v1.100 — 2026-07-24
+
+**Phase 6 — M1 (Category-as-class CHECK) LANDED — the first migration of the Double-Entry GL track (SELF-292, PR #213, merge `1a117f9`).** The double-entry GL moves from design to build. Migration `028_user_taxonomy_cashflow_class.sql` adds a domain-conditional CHECK constraining the **cashflow-domain** `pfin.user_taxonomy.cat` to the ratified 5-class accounting enum **`('Revenue','Expense','Transfer','Equity','Trade')`** — turning the top-level Category *into* the enforced accounting class (no `flow_class` column, no `normal_balance` column; both derive from the class). Uses the Amendment-1 enum, not the stale design-v2 `{Income,…,Distribution}` sketch.
+
+**Pure DDL, no backfill.** `user_taxonomy` is V1-write-dormant and empty at migration time (the cashflow seed is gitignored/local, loaded post-migration per `011`), so the CHECK adds clean with zero data migration. No FK, no function, no RLS/GRANT change. Idempotent (drop-if-exists + add, `011` pattern).
+
+**Build loop (role-separated).** Architect authored `028` + verified clean-apply (rolled-back txns, since the local DB carries stale personal-seed rows the CHECK correctly rejects). QA paired the pgTAP battery: `009_user_taxonomy_rls.sql` extended `plan(14)→plan(23)` (+9 — accept each of the 5 classes; reject non-enum cashflow cat fail-closed `23514`; asset-domain unconstrained; two-tenant isolation preserved), plus a sweep that caught + settled two stale committed fixtures under the new CHECK (`009`'s `Income`→`Revenue`; `023`'s `Housing`/`Food`→`Expense` sub-cats). All CI green on the clean DB (pgTAP RLS battery + Live-DB lane + unit/build + every §10 fence).
+
+**Gate.** **Not Sec-joint-review-mandatory** — a pure attribute CHECK with no fence surface (no auth/money/secrets/external-API/multi-tenant-isolation change). QA sign-off was the gate; F/CTO ratified the merge. Ledgers flat: **§10 3 · SECURITY DEFINER allowlist 3 · Decision-3 unchanged.**
+
+**Also (bookkeeping).** Reconciled the stale §10 "2-instance commitment (RT-22 + RT-26)" count in `supabase/CLAUDE.md` + the `apply-migration` skill to the canonical **3 (RT-22 + RT-26 + RT-27)** — RT-27 was catalogued at SELF-212 (v1.83, 2026-07-19) but those two convention docs predated it. Surfaced during `028`'s §10 cross-check.
+
+**Track state.** Double-Entry GL Linear project stood up (SELF-292→297, full blocked-by chain: M1 → M1-evt → M2.5 → M2 → M3-basis → M4-GL). SELF-292 Done. **NEXT:** the sequence continues — M1-evt (event-class vocab refactor, Sec joint-review-mandatory + ADR-025 amendment) per ship-order, or M2.5 (split-child, lighter). **Open (non-blocking):** the F/CTO local `seed.sql` rewrite to the ratified class names (blocks local `db reset` until settled; includes the OtherCF/AcctSetup dissolution mapping).
+
+---
+
 ### v1.99 — 2026-07-23
 
 **Phase 6 — settle-before-import conventions RATIFIED + ADR-031 Amendment 1 LANDED (PR #211, merge `68bd07c`).** Closes the design arc for the double-entry GL: the four conventions ADR-031 Decision 9 flagged as a "settle-before-the-incumbent-import one-way-door" (category→class map, event vocabulary, grouping rule, basis semantics) are now F/CTO-ratified and formalized as an in-place amendment to ADR-031.
