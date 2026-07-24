@@ -12,6 +12,24 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 ---
 
+### v1.104 — 2026-07-24
+
+**Phase 6 — M1-evt Slice B (lot_match junction + Decision-3 #14 fence) LANDED — the fifth Double-Entry GL migration; CLOSES M1-evt (SELF-293 Done, all 3 slices) (PR #221, merge `ee40ac0`).** The lot-match substrate: which buy lots a sell closes (drives per-lot holding-period / realized-gain character at tax time).
+
+**Migration `032`** — `pfin.lot_match`: an append-only immutable many-to-many junction (`sell_trans_id` + `buy_trans_id` → account_trans; `quantity_matched` [`>0`, finite]; `match_seq` per-sell append-only re-match batch; UNIQUE(sell,buy,match_seq)). Model **(b)** — many-to-many, because a sale can span multiple lots with mixed short/long-term character (a 1:1 FK would produce wrong tax character on any split sale). **Write-dormant** (029 pattern): the fenced, audit-ready shell lands now; the matching write/inference logic (FIFO / specific-lot) + INSERT grant land with its consumer at M4-GL.
+
+**Decision-3 #14 fence** `fn_lot_match_matched_tenant_security` — BEFORE INSERT (INSERT-only, append-only), INVOKER, NULL-safe fail-closed: `sell-tenant = buy-tenant` (isolation — else another tenant's basis leaks into your tax compute) + `sell.security_id = buy.security_id` (correctness; NULL security fails closed). **Sec-pinned #14, count = ONE** (both FKs under one fence *relationship* — per the #1/#2 precedent, instances counted per fence relationship, not per FK column).
+
+**(4-B) self-versioning** — the append-only `match_seq` batches ARE the lot-match reclass-history (ADR-011 D2); `031`'s DEFINER helper untouched → **no new DEFINER**. This supersedes the A2 "add-lot-match-column-to-031" expectation (a many-to-many *set* isn't a per-txn snapshot column; and matching writes are direct RLS-scoped INSERTs at M4-GL, not a side-effect capture).
+
+**Ledgers: Decision-3 +1 → #14** (family 13 labeled / 11 realized) **· §10 3 · SECURITY DEFINER allowlist 4** (all three new fns — #14 fence + 2 immutability fences — INVOKER; no new DEFINER).
+
+**Gate — Sec-joint-review-mandatory, CLEARED.** Sec migration review GREEN (#14 pinned + count=1; matched-tenant + matched-security fence fail-closed on both legs; D2 append-only under all roles; write-dormant closed). Sec battery sign-off GREEN — QA `plan(21)` 21/21 via the privileged-INSERT path. Fixed a #1-shape mischaracterization in the header (comment-only, SecB FLAG 1).
+
+**M1-evt (SELF-293) COMPLETE** across all 3 slices: A1 (`030`, vocab + Trade constraints) · A2 (`031`, reclass-history + DEFINER 3→4) · B (`032`, lot_match #14). **NEXT in the GL sequence: M2** (`journal_group` + scratch/Suspense, where #12 DDL-realizes — Sec's standing per-tenant-scratch veto surface) or **M3-basis** / **M4-GL**. Migrations `001`–`032` live. Open: ADR-011 D3 body fold-in (#12 + #13 + #14) — the canonical enumeration now lags three instances.
+
+---
+
 ### v1.103 — 2026-07-24
 
 **Phase 6 — M1-evt Slice A2 (reclassification-history audit table) LANDED — the fourth Double-Entry GL migration + the project's FIRST SECURITY DEFINER allowlist growth (SELF-293, PR #219, merge `aec9e9a`).** The tamper-evident classification-history backbone. F/CTO **reopened** reclass-history to V1 (reversing ADR-031 Amendment 1 §9's V2-deferral) to decouple the audit story from the C+ monthly-report freeze bet — the heavier-but-better long-term call.
