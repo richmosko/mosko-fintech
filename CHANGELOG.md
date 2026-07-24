@@ -12,6 +12,28 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 ---
 
+### v1.105 — 2026-07-24
+
+**Phase 6 — M2 (journal_group→journal grouping parent + Decision-3 #12 leg fence) LANDED — the sixth Double-Entry GL migration (SELF-295; PR #223 migration, merge `6fbc67d`; PR #224 paired battery, merge `3e0d5b6`).** N-legged double-entry entries are expressed by GROUPING real `account_trans` legs (`Σ=0` via a shared journal), NOT a stored journal-line table — `pfin.journal` is that grouping parent (header-comes-after-the-lines; feed legs grouped post-hoc on the `023` overlay). Write-live; the `Σ=0`-at-close balance check is deferred to M4-GL.
+
+**Migration `033`** — `pfin.journal`: `journal_id` bigint identity PK; `users_id` sole tenant anchor (default `auth.uid()`, ON DELETE CASCADE); `group_type ∈ {transfer, transfer_in_kind, compound}`; `status ∈ {open, closed}` default `open`; `description`; timestamps + `fn_refresh_updated_at` reuse. Plus a nullable `journal_id` FK (→ `pfin.journal`, ON DELETE NO ACTION / fail-loud) on the `023` `account_trans_annotation` overlay — the leg→group attachment.
+
+**Decision-3 #12 fence** `fn_account_trans_annotation_matched_journal` — BEFORE INSERT OR UPDATE on `account_trans_annotation` WHEN `journal_id IS NOT NULL`; SECURITY INVOKER, `set search_path=''`; NULL-safe fail-closed (`NOT EXISTS → raise`); `revoke execute from public`. **Hybrid-resolved** (the one shape-difference from the #10 sub_cat clone): the leg tenant is chain-resolved (`trans_id → account_trans.account_id → account.users_id`; the `023` overlay has no own `users_id`), the journal tenant read directly. Covers UPDATE, not just INSERT (attach/detach via the overlay CRUD path — the load-bearing UPDATE path).
+
+**RLS + aal2** — 4 policies (SELECT/INSERT/UPDATE/DELETE), each `users_id = auth.uid()` AND the `025` aal2 backstop clause (verbatim, inline COALESCE); grant-then-RLS; UPDATE gates USING + WITH CHECK (no cross-tenant close/reopen, no `users_id` reassignment); `service_role` ungranted; anon zero-grant.
+
+**A2 scope (F/CTO-ratified 2026-07-24).** Write-live shell; the `Σ=0`-at-close balance check is DEFERRED to M4-GL — it runs the book-value imputation engine `fn_gl_entries` (the realized-gain plug + imputed contras are DERIVED, not stored), so **market value plays no role** in any balance check (an F/CTO challenge corrected design-v2's misleading "GL-projected value" phrasing; `group_type` selects cash-conservation / per-security-quantity / book-value-imputation, all over stored facts). B-ii (defer snapshot columns), C-i (plain `status`; user closes; same-tenant reopen), D (scratch/Suspense = runtime per-tenant `pfin.account` via `013`, no DDL — a global singleton = the standing Sec VETO, not tripped), and the `journal_group`→`journal` table harmonization (extends ADR-031 Amendment 1 item 8; PK/FK `journal_id`) were each ratified one-at-a-time.
+
+**Ledgers: §10 3 (RT-22+RT-26+RT-27, unchanged) · SECURITY DEFINER allowlist 4 (zero new — the #12 fence is INVOKER, `fn_refresh_updated_at` reused) · Decision-3 +1 → #12** (the `journal_id` leg fence; family **14 labeled / 12 DDL-realized**; #12 realizes LAST, non-contiguous behind #13@`029` / #14@`032`; only #3/#4 monthly_report remain V1.3+). All `pg_catalog`-verified at Backend clean-apply.
+
+**Gate — Sec-joint-review-mandatory, CONDITIONAL-GREEN (no veto).** Sec pinned #12, verified the fence airtight both directions (incl. under `service_role` with RLS bypassed), confirmed the per-tenant-scratch VETO not tripped + aal2 on all 4 policies + §10=3 / DEFINER=4. The one binding condition (non-vacuous two-tenant battery) was discharged; the misleading fence-message edge (an aal1 + `mfa_policy='totp'` caller reading their OWN journal hits the aal2-gated RLS → the "cross-tenant" message; fail-closed + safe) was ruled defer-with-follow-up → **SELF-298**. QA `plan(28)` 28/28, the #12 UPDATE-attach assertion **inversion-proven** (mutating the fence to `BEFORE INSERT` only flips ONLY that assertion RED). Backend clean-apply `001`→`033` under PG17 + directory-mode 498 tests PASS.
+
+**Battery-omission caught + remediated.** The paired battery `033_journal_rls.sql` was authored untracked in the working tree and omitted from #223 (a team-lead push-verification miss) — #223 merged the migration alone, so CI's pgTAP lane on #223 was vacuous for `033`. Caught immediately post-merge (the fast-forward showed 1 file changed); landed as fast-follow **#224**, restoring same-PR test-pairing (CI 28/28 against the merged migration). Memory `feedback_verify_paired_artifacts_before_push` codified.
+
+**M2 (SELF-295) COMPLETE. NEXT in the GL sequence: M3-basis** (`basis_adjust` event + `reason` subtype) **/ M4-GL** (`fn_gl_entries` — the book-value/market GL/trial-balance INVOKER read helper, where the deferred `Σ=0`-at-close + the write-path to journal groupings land). Non-blocking follow-ups: SELF-298 (fence-message soften across #10 + #12 + battery `throws_like`→`throws_ok 'P0001'`); N1 (ADR-011 D3 body fold-in of #12/#13/#14); N2 (ADR-031 D7/D8 "DEFINER stays 3"→4); N4 (user-deletion runbook note — `journal.users_id` CASCADE vs `023.journal_id` NO ACTION).
+
+---
+
 ### v1.104 — 2026-07-24
 
 **Phase 6 — M1-evt Slice B (lot_match junction + Decision-3 #14 fence) LANDED — the fifth Double-Entry GL migration; CLOSES M1-evt (SELF-293 Done, all 3 slices) (PR #221, merge `ee40ac0`).** The lot-match substrate: which buy lots a sell closes (drives per-lot holding-period / realized-gain character at tax time).
