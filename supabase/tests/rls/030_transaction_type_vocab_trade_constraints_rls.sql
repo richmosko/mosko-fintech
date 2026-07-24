@@ -54,6 +54,8 @@
 --        legit trade direction were over-blocked (all four sub-cats recognized).
 --   (3e) BTO on qty<0 RAISES sign-alignment — RED if a buy could sit on a sell quantity.
 --   (3f) STC on qty>0 RAISES sign-alignment — RED if a sell could sit on a buy quantity.
+--   (3g) BTO on qty=0 RAISES sign-alignment (Sec pre-push boundary lock) — RED if the fence
+--        used `>= 0` instead of strict `> 0` (a zero-quantity buy must not pass).
 --   (4a) UPDATE path load-bearing: re-categorizing BTO->STC on a frozen qty>0 row RAISES on
 --        UPDATE — RED if the fence covered only INSERT (an overlay edit could break the invariant).
 --   (5a) NULL sub_cat annotation on a securities row PASSES (WHEN-skip) — RED if the trade
@@ -93,7 +95,7 @@ begin;
 -- shared verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(20);
+select plan(21);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
@@ -138,6 +140,10 @@ insert into pfin.account_trans (account_id, transaction_date, amount, vendor, de
   values (:accta, '2026-03-07', -100, 'vBTON', 'bto qty-',     :g_asset,  -4) returning trans_id as ct_bto_n \gset
 insert into pfin.account_trans (account_id, transaction_date, amount, vendor, description, security_id, quantity)
   values (:accta, '2026-03-08',  100, 'vSTCP', 'stc qty+',     :g_asset,   4) returning trans_id as ct_stc_p \gset
+-- qty=0 boundary row (securities): the 017 CHECK (quantity=0 OR security_id NOT NULL) permits
+-- a zero-qty securities row since security_id is set — the (3g) strict->0 boundary lock.
+insert into pfin.account_trans (account_id, transaction_date, amount, vendor, description, security_id, quantity)
+  values (:accta, '2026-03-16', -100, 'vBTOZ', 'bto qty0',     :g_asset,   0) returning trans_id as ct_bto_z \gset
 insert into pfin.account_trans (account_id, transaction_date, amount, vendor, description, security_id, quantity)
   values (:accta, '2026-03-09', -100, 'vUPD', 'update path',   :g_asset,   8) returning trans_id as ct_upd \gset
 insert into pfin.account_trans (account_id, transaction_date, amount, vendor, description, security_id, quantity)
@@ -260,6 +266,13 @@ select throws_like(
   format($$ insert into pfin.account_trans_annotation (trans_id, sub_cat_id) values (%s, %s) $$, :ct_stc_p, :a_stc),
   '%sign-alignment%',
   '(3f) sign fails closed: STC on qty>0 RAISES sign-alignment (a sell cannot sit on a buy quantity)'
+);
+-- (3g) qty=0 BOUNDARY (Sec pre-push add): BTO on qty=0 must RAISE — locks the STRICT
+--      quantity > 0 semantics against a future >= 0 regression (a zero-qty buy is not a buy).
+select throws_like(
+  format($$ insert into pfin.account_trans_annotation (trans_id, sub_cat_id) values (%s, %s) $$, :ct_bto_z, :a_bto),
+  '%sign-alignment%',
+  '(3g) sign boundary: BTO on qty=0 RAISES sign-alignment (locks strict quantity>0 — a >=0 regression would let a zero-qty buy through)'
 );
 
 -- --- (AC4) UPDATE path load-bearing ---
