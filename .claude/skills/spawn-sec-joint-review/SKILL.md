@@ -30,7 +30,7 @@ Read [ADR-011](../../../DECISIONS.md#adr-011) verbatim (per `brief-drift-catch` 
 
 Per `supabase/CLAUDE.md` convention 2 + Security Reviewer agent definition:
 
-- **New SECURITY DEFINER function** — routes to Sec joint-review before finalize. V1 DEFINER allowlist is a narrow 3-entry list (incl. `fn_refresh_updated_at` + the audit-log insert helper; see [ADR-011](../../../DECISIONS.md#adr-011) D9 for the canonical entries). Any addition to this allowlist is a merge gate.
+- **New SECURITY DEFINER function** — routes to Sec joint-review before finalize. V1 DEFINER allowlist is a narrow 4-entry list (`fn_refresh_updated_at` @`001` + `fn_grant_creator_access` @`003` + `fn_reclass_history_insert` @`031` + the reserved general audit-log insert helper, unauthored; grew 3→4 at SELF-293/`031` — see [ADR-011](../../../DECISIONS.md#adr-011) D9 for the canonical entries). Any addition to this allowlist is a merge gate.
 - **§10 ledger change (count or layer-attribution)** — even if not directly an ADR-011 D4 amendment. Path B discipline (drop-enumeration-let-link-carry) does NOT waive the joint-review gate.
 - **Auth / money flows / secrets** — any route touching `service_role`, Vault/pgsodium, JWT shape, or `SUPABASE_SERVICE_ROLE_KEY` allowlist.
 - **Plaid integration surfaces** — webhook handler, `/item/public_token/exchange`, `/item/remove` (the three V1 allowlist entries per [ADR-016](../../../DECISIONS.md#adr-016)).
