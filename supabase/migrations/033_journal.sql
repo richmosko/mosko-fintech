@@ -34,8 +34,9 @@
 --     that derivation, so it belongs with fn_gl_entries, NOT forked here). This
 --     migration ships the grouping STRUCTURE + tenancy fences; the balance INVARIANT is
 --     documented as the M4-GL obligation (see M4-GL CONTRACT below). status is a plain
---     column (C-i): user closes; a closed group may reopen same-tenant (the #12 fence
---     re-fires on UPDATE — no extra DDL). Scratch/Suspense is a RUNTIME per-tenant
+--     column (C-i): user closes; a closed group may reopen same-tenant — reopen is a status
+--     UPDATE on pfin.journal gated by journal_update WITH CHECK (NOT the #12 fence, which
+--     fires only on account_trans_annotation leg writes; no extra DDL). Scratch/Suspense is a RUNTIME per-tenant
 --     pfin.account row (fn_create_manual_account, 013) — NO DDL here (D; global = VETO).
 --
 -- Numbering: 033 follows 032 (M1-evt Slice B lot_match). Depends on 004 (pfin.account_
@@ -201,7 +202,8 @@
 --       the M4-GL conservation law.
 --     - status (text NOT NULL default 'open', CHECK in open/closed): open = residual →
 --       per-tenant Suspense (no balance requirement); closed = Σ=0 must hold (M4-GL). C-i:
---       user closes; same-tenant reopen allowed (the #12 fence re-fires on UPDATE).
+--       user closes; same-tenant reopen allowed (a journal UPDATE gated by journal_update
+--       WITH CHECK — NOT the #12 fence, which fires only on annotation leg writes).
 --     - description (text NULL): user label. (metadata jsonb is the account_trans.reason
 --       home per Amendment 1 item 8 — NOT on journal; description stays.)
 --     - created_at / updated_at (timestamptz NOT NULL default now()): updated_at auto-
@@ -274,8 +276,9 @@ comment on column pfin.journal.status is
   'open | closed (default open). open = legs still arriving, residual parks in the '
   'per-tenant scratch/Suspense pfin.account row, no balance requirement; closed = the '
   'Σ=0 book-value check must hold (DEFERRED to M4-GL under A2). C-i: user closes; a closed '
-  'group may reopen same-tenant (the #12 fence re-fires on the overlay UPDATE — no extra '
-  'DDL). Cross-tenant close/reopen blocked by the UPDATE WITH CHECK.';
+  'group may reopen same-tenant (a journal UPDATE gated by journal_update WITH CHECK — NOT '
+  'the #12 fence, which fires only on annotation leg writes). Cross-tenant close/reopen '
+  'blocked by the UPDATE WITH CHECK.';
 comment on column pfin.journal.description is
   'Optional user label for the group. metadata jsonb is the account_trans.reason home '
   '(Amendment 1 item 8), NOT on journal — description stays.';
@@ -355,8 +358,8 @@ comment on policy journal_update on pfin.journal is
   'Direct-owner UPDATE, USING + WITH CHECK both (users_id = auth.uid()) AND the aal2 '
   'backstop (Decision 7 M2 cond 4). The close/reopen path (status open↔closed) + '
   'description edits. Both clauses block cross-tenant close/reopen AND users_id '
-  'reassignment (a row cannot be re-tenanted). C-i: same-tenant reopen re-fires the #12 '
-  'leg fence via the overlay.';
+  'reassignment (a row cannot be re-tenanted). C-i: reopen (status closed→open) is gated by '
+  'this policy''s WITH CHECK, NOT the #12 fence (which fires only on annotation leg writes).';
 
 drop policy if exists journal_delete on pfin.journal;
 create policy journal_delete on pfin.journal
