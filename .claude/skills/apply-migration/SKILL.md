@@ -70,9 +70,11 @@ Every function also carries:
 
 **Default posture: SECURITY INVOKER** ([Lock 11](../../../DECISIONS.md#adr-011)). The canonical V1 read-composition path (`fn_compute_nav` / `fn_compute_tax_liability` / `fn_render_monthly_report`) is entirely INVOKER — functions run as the calling user, inheriting their RLS context.
 
-**SECURITY DEFINER allowlist — 2 entries only** ([ADR-011 Decision 9](../../../DECISIONS.md#adr-011)):
-1. `fn_refresh_updated_at` — trigger helper for `updated_at` refresh
-2. The audit-log insert helper
+**SECURITY DEFINER allowlist — 4 entries** ([ADR-011 Decision 9](../../../DECISIONS.md#adr-011); grew 2→3 at SELF-187/`003`, 3→4 at SELF-293/`031`):
+1. `fn_refresh_updated_at` — trigger helper for `updated_at` refresh (@`001`)
+2. `fn_grant_creator_access` — Lock 3 / Decision 7 mod #2 creator-grant trigger (@`003`)
+3. `fn_reclass_history_insert` — the reclass-history capture helper (@`031`)
+4. The reserved general same-transaction audit-log insert helper (still unauthored — SELF-201 Task #7)
 
 `fn_mask_acct_number` is NOT a DEFINER entry — it is a pure `IMMUTABLE`/`STRICT` string transform that reads no tables and needs no elevated privilege (DEFINER allowlist corrected 3→2 at Phase 5 Step 4 W2 per Decision 9 amendment).
 
