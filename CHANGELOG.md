@@ -12,6 +12,22 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 ---
 
+### v1.102 — 2026-07-24
+
+**Phase 6 — M1-evt Slice A1 (event-class vocab widen + Trade constraints) LANDED — the third Double-Entry GL migration (SELF-293, PR #217, merge `c06d78c`).** The import-critical core of M1-evt (the ship-order step after M1; M2.5 was taken out of order first). M1-evt is **3 slices** per F/CTO ratify: **A1 (this)** = the settle-before-import core · **A2** = the reclass-history audit table (F/CTO reopened it to V1) · **B** = the lot-match FK `#14` (deferred).
+
+**Migration `030`:** (1) widens `account_trans_transaction_type_check` `{standard,acct_setup}` → `{standard,acct_setup,basis_adjust,corp_action}` — **additive** (same constraint name; `004` row-immutability untouched — this is DDL, not row DML). `basis_adjust`/`corp_action` are stored *facts* now; their GL handling lands at M3-basis / M4-GL (a widened-but-unhandled type is inert). V-α chosen because the incumbent import has `basis_adjust`-type events (F/CTO-confirmed) — tag against the final vocab now (settle-before-import). (2) adds `metadata jsonb NULL` to `account_trans_annotation` (023) — the `reason`/`action` home. (3) `fn_account_trans_annotation_trade_constraints` — ONE `BEFORE INSERT OR UPDATE` INVOKER trigger realizing **Sec Condition A**: consistency (`security_id present ⟺ cat='Trade'`) + sign-alignment (BTO/BTC⟹qty>0, STC/STO⟹qty<0), cross-table-resolving frozen facts via `trans_id→account_trans`; NULL-safe fail-closed; **UPDATE path load-bearing** (re-validates on every overlay edit — closes the "invariant rots" hole).
+
+**ADR-025 edits (same PR):** Amendment 1 realization note (records the 3-slice + the reclass-history reopening) + line 759 (stale 7-value example → lean vocab) + line 766 (lot-match `#13`→`#14`, reconciled since `029`/M2.5 realized #13 first).
+
+**Ledgers flat: §10 3 · SECURITY DEFINER allowlist 3 · Decision-3 +0** (the Trade fence is INVOKER + D3-neutral; the shipped #10 untouched). Family stays 12 labeled / 10 DDL-realized.
+
+**Gate — Sec-joint-review-mandatory, CLEARED.** Sec migration review GREEN (Condition A faithfully realized incl. UPDATE-rot; fail-closed hinge verified against the live NOT-NULL anchors `quantity`@017 / `cat`@009). Sec battery sign-off GREEN — QA `plan(21)` 21/21, incl. the qty=0 strict-`>0` boundary added on Sec's flag (3g). **012 regression:** full 012 battery 12/12 against the widened schema. CI green. Team-lead verbatim cross-check of Sec citations + independent NOT-NULL-anchor verification: clean.
+
+**NEXT:** Slice A2 (reclass-history audit-class table, ADR-011 D2 — design-first in flight), then Slice B (lot-match #14, deferred). Migrations `001`–`030` live. Open: ADR-011 D3 body fold-in (#12 + #13) ahead of Slice B pinning #14.
+
+---
+
 ### v1.101 — 2026-07-24
 
 **Phase 6 — M2.5 (account_trans_split receipt-split overlay) LANDED — the second Double-Entry GL migration (SELF-294, PR #215, merge `1c5cead`).** Migration `029` adds `pfin.account_trans_split`, a 1:many split-child table under the immutable `account_trans` parent, so one transaction can carry multiple category lines with **Σ(children) = parent.amount** enforced by the database. The GL track's first Sec-joint-review-mandatory migration (M1 was an attribute CHECK; M2.5 adds a base table + a Decision-3 fence).
