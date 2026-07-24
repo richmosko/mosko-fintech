@@ -88,11 +88,17 @@
 --   — INSERT-only because the table is append-only immutable, like the #2
 --   replaces_trans_id fence on the immutable ledger).
 --   COUNT: numbered **provisional #14**, covering BOTH FK columns via ONE matched-
---   tenant relationship (sell-tenant = buy-tenant) — analogous to the #1
---   reconciliation_event_trans two-FK-to-account_trans junction counted as one
---   instance. **Sec pins 1-vs-2 at joint-review; NOT overclaimed here.** Family delta
---   +1; folds into the ADR-011 Decision-3 BODY enumeration alongside #13 (029) at the
---   task-#8 fold-in. (#12 journal_group @ M2 stays reserved-unrealized.)
+--   tenant relationship (sell-tenant = buy-tenant). Precedent for the counting
+--   principle: #1 (reconciliation_event_trans — a two-FK junction, `(event_id →
+--   reconciliation_event, account_trans_id → account_trans)`, fenced by one
+--   matched-account trigger) and #2 (`replaces_trans_id` self-FK) establish that a
+--   matched-tenant instance is counted per fence RELATIONSHIP, not per FK column. So
+--   lot_match's two account_trans FKs under one sell-tenant=buy-tenant fence = ONE
+--   instance (#14). (lot_match is in fact the purer both-FKs-to-the-same-target case;
+--   #1's two FKs point at two different tables.) **Sec pins 1-vs-2 at joint-review;
+--   NOT overclaimed here.** Family delta +1; folds into the ADR-011 Decision-3 BODY
+--   enumeration alongside #13 (029) at the task-#8 fold-in. (#12 journal_group @ M2
+--   stays reserved-unrealized.)
 --
 -- ----------------------------------------------------------------------------
 -- EXPOSURE / C6 RLS-COVERAGE NOTE (ADR-023 C6 — pfin is [api]-exposed):
