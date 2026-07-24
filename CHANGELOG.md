@@ -12,6 +12,18 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 ---
 
+### v1.99 — 2026-07-23
+
+**Phase 6 — settle-before-import conventions RATIFIED + ADR-031 Amendment 1 LANDED (PR #211, merge `68bd07c`).** Closes the design arc for the double-entry GL: the four conventions ADR-031 Decision 9 flagged as a "settle-before-the-incumbent-import one-way-door" (category→class map, event vocabulary, grouping rule, basis semantics) are now F/CTO-ratified and formalized as an in-place amendment to ADR-031.
+
+**The ratified conventions.** 5-class cashflow enum **`Revenue · Expense · Transfer · Equity · Trade`** (Income→Revenue; Expenses→Expense; Distribution demoted to `Equity::Distribution` symmetrical with `Equity::Contribution`; **Trade** added as a top-level Cat with `BTO/STC/STO/BTC` open/close sub-cats — the designation lives *in* the Cat, superseding the earlier NULL-cat + separate-`open_close`-column partition). **`Transfer ⟺ tax-neutral`** (`Cash` / `Asset`-in-kind moves only; a purchase/sale is a `Trade`, never a Transfer). **Lean event vocabulary `{standard, acct_setup, basis_adjust, corp_action}`** — buy/sell derived from `sign(quantity)`, no explicit security-movement types. **`corp_action`** = splits (qty restatement, no GL) / swaps / ticker-renames — **always a dated transaction, never a registry rename** (a rename would retroactively falsify as-of-date holdings). **Shorts** stored as a negative-quantity holding, presented as a derived `Securities Sold Short` liability. **Naming:** `journal_id` (was `group_id`), `metadata` jsonb (was a `reason` text column). Reclassification-history **deferred to V2**.
+
+**Security re-confirmed GREEN-with-conditions (no veto).** Sec found the Cat-driven `Trade` refinement actually *tightens* the partition (one mutable class source per row on both sides). Two binding conditions attach to the M1-evt/M2 joint-review gates: **(A)** the two Trade constraints (consistency `security_id ⟺ Cat=Trade`; sign-alignment `BTO/BTC⟹qty>0`, `STC/STO⟹qty<0`) are **cross-table**, so realized as **`BEFORE INSERT OR UPDATE` overlay triggers** (not single-table CHECKs) — the UPDATE-path re-validation is load-bearing; INVOKER, DEFINER allowlist stays 3, Decision-3-neutral. **(B)** the reclassification-history deferral is valid **only if the monthly-report snapshot ships in V1 as a genuine immutable freeze** (audit-class, not a re-derivable view) — **if the `C+` snapshot migration slips to V2, reclass-history must reopen.**
+
+**Verification.** Brief-drift-catch CLEAN (ratified record + ADR-031 + Sec conditions verified verbatim). Ledgers flat: **§10 3 · SECURITY DEFINER allowlist 3.** No migrations built — decision record only; M1→M4-GL (+ M-hier deferred) each carry their joint-review gates + the two Sec conditions when authored. Design records: `temp/settle-before-import-conventions.md` + `temp/double-entry-transaction-column-map.md` + `temp/double-entry-design-v2.md`. **NEXT:** start the double-entry migrations (M1 Category-as-class = smallest un-gated first step) or the V1 feature clusters (§2.1.2+ net-worth). The **monthly-report snapshot is now load-bearing** for the audit story (Sec Condition B).
+
+---
+
 ### v1.98 — 2026-07-23
 
 **Phase 6 — ADR-031 (event-sourced double-entry general ledger) + ADR-025 Amendment 1 LANDED (F/CTO-ratified 2026-07-23, PR #209, merge `bb76894`).** Formalizes the design decision for a genuine double-entry GL as a **derived layer** over the immutable `account_trans` ledger — no rewrite of the ledger, and **no stored `journal_entry`/`journal_line` structure** (classic Approach B rejected; the earlier "C→B graduation ladder" retired after a stress-test that couldn't break "B never needed" within personal-app scope).
