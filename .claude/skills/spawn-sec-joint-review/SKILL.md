@@ -24,13 +24,13 @@ Read [ADR-011](../../../DECISIONS.md#adr-011) verbatim (per `brief-drift-catch` 
 | **D1** | Privileged-context-write discipline | Any non-JWT write path (webhook handler / cron worker / scheduled-poll worker / future privileged context). Four-clause discipline: ingress under no JWT; writes under `service_role`; tenant correctness from code not RLS; explicit audit log. |
 | **D2** | Immutable + INSERT-new-version audit-class | Any audit-class surface (financial-correctness data + compliance-attestation-bearing tables). Append-only at RLS + trigger layer; corrections via INSERT-new-version with predecessor FK. Surfaces: `reconciliation_event`, `account_trans`, `monthly_report`. |
 | **D3** | Cross-tenant FK-bypass family | Any FK-shaped reference column (single FK, self-FK, INTEGER[] array element) crossing an isolation boundary. Requires explicit matched-tenant validation — WITH CHECK (single columns) or BEFORE INSERT/UPDATE trigger (array elements). **7 instances at Phase 4 close** — count must be verified against live [ADR-011](../../../DECISIONS.md#adr-011) D3 text before any dispatch, not from memory. |
-| **D4** | §10 catalogued-instance ledger | Any change to the defense-in-depth fencing ledger. **Two catalogued instances:** RT-22 (PDF worker container credential audit — infrastructure-credential-presence layer) + RT-26 (SUPABASE_SERVICE_ROLE_KEY allowlist CI grep fence — V1-web-app server-side source). Any change to count or layer-attribution is Sec joint-review-mandatory. |
+| **D4** | §10 catalogued-instance ledger | Any change to the defense-in-depth fencing ledger. **Three catalogued instances:** RT-22 (PDF worker container credential audit — infrastructure-credential-presence layer) + RT-26 (SUPABASE_SERVICE_ROLE_KEY allowlist CI grep fence — V1-web-app server-side source) + RT-27 (app→worker credential-admission network-exposure/config layer — catalogued at SELF-212 / v1.83). Any change to count or layer-attribution is Sec joint-review-mandatory. |
 
 ## Additional mandatory-trigger surfaces
 
 Per `supabase/CLAUDE.md` convention 2 + Security Reviewer agent definition:
 
-- **New SECURITY DEFINER function** — routes to Sec joint-review before finalize. V1 DEFINER allowlist is a 2-entry narrow list (`fn_refresh_updated_at` + audit-log insert helper). Any addition to this allowlist is a merge gate.
+- **New SECURITY DEFINER function** — routes to Sec joint-review before finalize. V1 DEFINER allowlist is a narrow 3-entry list (incl. `fn_refresh_updated_at` + the audit-log insert helper; see [ADR-011](../../../DECISIONS.md#adr-011) D9 for the canonical entries). Any addition to this allowlist is a merge gate.
 - **§10 ledger change (count or layer-attribution)** — even if not directly an ADR-011 D4 amendment. Path B discipline (drop-enumeration-let-link-carry) does NOT waive the joint-review gate.
 - **Auth / money flows / secrets** — any route touching `service_role`, Vault/pgsodium, JWT shape, or `SUPABASE_SERVICE_ROLE_KEY` allowlist.
 - **Plaid integration surfaces** — webhook handler, `/item/public_token/exchange`, `/item/remove` (the three V1 allowlist entries per [ADR-016](../../../DECISIONS.md#adr-016)).
@@ -90,7 +90,7 @@ This is a **merge gate** — not optional peer review, not a post-merge annotati
 ## Failure modes
 
 - **Skipping because "it looks low-risk"** — the trigger list is mechanical for a reason. D3 FK-bypass surfaces consistently look benign at the schema level and still require the gate; Sec's catch rate across Phase 1 Step 4 (4 instances at ADR drafting time; grew to 7 by Phase 4 close) demonstrates that surface-level risk estimates are not reliable.
-- **Verifying D3 instance count against a recalled number** — the canonical count was 4 at Phase 1 Step 4 ADR authoring; it is 7 at Phase 4 close; it may grow further. Read [ADR-011](../../../DECISIONS.md#adr-011) D3 live before every dispatch.
+- **Verifying D3 instance count against a recalled number** — the canonical count was 4 at Phase 1 Step 4 ADR authoring; 7 at Phase 4 close; 12 labeled / 10 DDL-realized after M2.5 (v1.101); it may grow further. Read [ADR-011](../../../DECISIONS.md#adr-011) D3 live before every dispatch.
 - **Omitting the verify-hook from the dispatch brief** — without an embedded verify-hook, Sec's own finding may carry paraphrase drift; the verify-hook makes the review self-checking at source.
 - **Treating AMBER as proceed** — AMBER is a blocked state, not a caution. Only GREEN proceeds.
 - **Dispatching without naming the specific anchor** — vague briefs produce vague verdicts; name the Decision number, Lock number, and file path.
