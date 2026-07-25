@@ -174,10 +174,12 @@ insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat) values (:'tb','c
 -- PHASE 1 (role=postgres) — vocab CHECK (AC1) + the isolated trade fail-closed (AC7b).
 -- =====================================================================
 -- (1a) basis_adjust INSERT into the immutable ledger PASSES the widened CHECK.
+-- NB: shaped for 034's account_trans_basis_adjust_shape CHECK (quantity=0 + security_id set +
+-- cost_basis delta) so it co-exists with M3-basis; the vocab-value-accepted intent is unchanged.
 select lives_ok(
-  format($$ insert into pfin.account_trans (account_id, transaction_date, amount, vendor, description, transaction_type)
-              values (%s, '2026-03-20', 0, 'vBA', 'basis adj', 'basis_adjust') $$, :accta),
-  '(1a) vocab widen: transaction_type=basis_adjust INSERT PASSES account_trans_transaction_type_check'
+  format($$ insert into pfin.account_trans (account_id, transaction_date, amount, vendor, description, transaction_type, security_id, quantity, cost_basis)
+              values (%s, '2026-03-20', 0, 'vBA', 'basis adj', 'basis_adjust', %s, 0, 25) $$, :accta, :g_asset),
+  '(1a) vocab widen: transaction_type=basis_adjust INSERT PASSES account_trans_transaction_type_check (well-shaped for 034: quantity=0, security_id set, cost_basis delta)'
 );
 -- (1b) corp_action INSERT PASSES.
 select lives_ok(
@@ -308,12 +310,15 @@ select throws_like(
 );
 
 -- --- (AC8a) metadata jsonb round-trip (write under A) ---
+-- NB: uses the NON-RESERVED key `note` (metadata.reason is a basis_adjust-only key under 034
+-- R3 — a reason on this STANDARD txn would trip 'misplaced reason'); the jsonb round-trip intent
+-- (write a key, read it back under RLS) is unchanged.
 insert into pfin.account_trans_annotation (trans_id, sub_cat_id, metadata)
-  values (:ct_meta, :a_exp, '{"reason":"wash_sale"}'::jsonb);
+  values (:ct_meta, :a_exp, '{"note":"wash_sale"}'::jsonb);
 select is(
-  (select metadata->>'reason' from pfin.account_trans_annotation where trans_id = :ct_meta),
+  (select metadata->>'note' from pfin.account_trans_annotation where trans_id = :ct_meta),
   'wash_sale',
-  '(8a) metadata jsonb round-trips: A writes {"reason":"wash_sale"} on its own annotation and reads it back under RLS'
+  '(8a) metadata jsonb round-trips: A writes {"note":"wash_sale"} (non-reserved key) on its own annotation and reads it back under RLS'
 );
 
 select set_config('role', 'postgres', true);
