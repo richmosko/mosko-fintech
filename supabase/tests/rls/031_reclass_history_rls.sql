@@ -152,8 +152,11 @@ select is(
   '2|2|update',
   '(3b) capture change: a sub_cat_id UPDATE writes a new version (count 2, version_seq 2, op=update)'
 );
--- (3c) metadata UPDATE -> v3 (op=update).
-update pfin.account_trans_annotation set metadata = '{"reason":"return_of_capital"}'::jsonb where trans_id = :ct_cap;
+-- (3c) metadata UPDATE -> v3 (op=update). Uses the NON-RESERVED key `note` (metadata.reason is
+--   basis_adjust-only under 034 R3, and ct_cap is a STANDARD txn — a reason here would trip
+--   'misplaced reason'); the metadata-change-capture intent (a DISTINCT metadata edit → new
+--   version) is unchanged.
+update pfin.account_trans_annotation set metadata = '{"note":"reclassified"}'::jsonb where trans_id = :ct_cap;
 select is(
   (select count(*)::text || '|' || max(version_seq)::text || '|'
           || (select op from pfin.account_trans_annotation_history where trans_id = :ct_cap order by version_seq desc limit 1)
