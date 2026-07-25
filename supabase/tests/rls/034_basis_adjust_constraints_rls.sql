@@ -278,10 +278,10 @@ select throws_like(
 );
 -- (B12) NULL-safe fail-closed: an unresolvable trans_id RAISES 'cannot resolve fact' (before the FK check).
 --   Only the 034 trigger fires here (metadata set; sub_cat/journal NULL) — no #10-style masking.
-select throws_like(
+select throws_ok(
   $$ insert into pfin.account_trans_annotation (trans_id, metadata) values (9999999, '{"reason":"depreciation"}'::jsonb) $$,
-  '%cannot resolve fact%',
-  '(B12) NULL-safe fail-closed: an annotation whose trans_id cannot resolve a fact RAISES ''cannot resolve fact'' (fires BEFORE the FK check; the frozen fact is the integrity anchor)'
+  'P0001', null,
+  '(B12) NULL-safe fail-closed: an annotation whose trans_id cannot resolve a fact RAISES the fence (fires BEFORE the FK check; the frozen fact is the integrity anchor). SQLSTATE-match (P0001, distinct from RLS 42501) so the SELF-298 message softening cannot RED this.'
 );
 -- (B13) UPDATE non-vacuous control: valid depreciation (amount=0), UPDATE reason -> wash_sale (also amount=0-valid) PASSES.
 insert into pfin.account_trans_annotation (trans_id, metadata) values (:t_updok0, '{"reason":"depreciation"}'::jsonb);
