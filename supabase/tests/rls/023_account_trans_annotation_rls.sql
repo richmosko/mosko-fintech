@@ -22,8 +22,9 @@
 --   - pfin.fn_account_trans_annotation_matched_sub_cat()  (Decision-3 CANONICAL #10; the
 --       012 Pattern 1 matched-tenant fence, but CHAIN-RESOLVED — mirrors 017's chain-JOIN
 --       tenant resolution; SECURITY INVOKER; set search_path=''; BEFORE INSERT OR UPDATE
---       WHEN (new.sub_cat_id IS NOT NULL); NULL-safe fail-closed NOT EXISTS -> raise
---       'cross-tenant Sub-Cat rejected%'). The referenced user_taxonomy row must share the
+--       WHEN (new.sub_cat_id IS NOT NULL); NULL-safe fail-closed NOT EXISTS -> raise the #10
+--       fence, P0001 (SELF-298 softened the message + switched the F1/F2/F3 assertions to
+--       SQLSTATE-match)). The referenced user_taxonomy row must share the
 --       annotation's OWNING tenant, resolved via trans_id -> account_trans.account_id ->
 --       account.users_id (this table has NO local new.users_id — contrast 012/022).
 --   - trigger account_trans_annotation_set_updated_at (reuses the 001 DEFINER allowlist #1).
@@ -78,7 +79,7 @@
 --
 -- ┌─ WHY EACH REJECTION MATCHES A DISTINCT SIGNAL (no fence/policy/constraint passes for    │
 -- │  another — the 004 all-42501 discipline) ─────────────────────────────────────────────┐
--- │  • cross-tenant sub_cat (fence #10)          -> raise 'cross-tenant Sub-Cat rejected%'   │
+-- │  • cross-tenant sub_cat (fence #10)          -> raise #10 fence, P0001 (SELF-298)        │
 -- │  • cross-account write, no wr_access (RLS)   -> 'new row violates row-level security     │
 -- │                                                  policy%for table "account_trans_        │
 -- │                                                  annotation"'                            │
@@ -404,18 +405,18 @@ select _rls.set_tenant(:'ta'::uuid);
 -- (F1) #10 cross-tenant INSERT: A annotates its OWN txn (ta5) with B's Sub-Cat -> the fence
 --      resolves ta5 -> acct-alpha -> A, requires b_sub.users_id (B) == A -> NOT EXISTS ->
 --      RAISE. The chain-attack Decision-3 #10 fences (a real violation, not a silent pass).
-select throws_like(
+select throws_ok(
   format($$ insert into pfin.account_trans_annotation (trans_id, sub_cat_id) values (%s, %s) $$, :ta5, :b_sub),
-  'cross-tenant Sub-Cat rejected%',
-  '(F1) #10 cross-tenant INSERT under authenticated: A annotates its OWN txn with B''s Sub-Cat -> fn_account_trans_annotation_matched_sub_cat RAISES (chain-resolved: ta5 -> acct-alpha -> A != b_sub.users_id=B; NOT EXISTS -> raise; belt-and-suspenders with 009 user_taxonomy RLS)'
+  'P0001', null,
+  '(F1) #10 cross-tenant INSERT under authenticated: A annotates its OWN txn with B''s Sub-Cat -> fn_account_trans_annotation_matched_sub_cat RAISES (chain-resolved: ta5 -> acct-alpha -> A != b_sub.users_id=B; NOT EXISTS -> raise; belt-and-suspenders with 009 user_taxonomy RLS). SQLSTATE-match (P0001, distinct from RLS 42501) so the SELF-298 #10 message softening cannot RED this.'
 );
 
 -- (F2) #10 cross-tenant UPDATE: A re-points ta1's annotation (currently a_sub) to B's
 --      Sub-Cat -> the BEFORE UPDATE fence RAISES. Confirms #10 covers UPDATE/reassignment.
-select throws_like(
+select throws_ok(
   format($$ update pfin.account_trans_annotation set sub_cat_id = %s where trans_id = %s $$, :b_sub, :ta1),
-  'cross-tenant Sub-Cat rejected%',
-  '(F2) #10 cross-tenant UPDATE under authenticated: A re-categorizes its OWN annotation to B''s Sub-Cat -> the fence RAISES (BEFORE INSERT OR UPDATE covers the mutable re-categorization path — a re-categorization cannot pivot to another tenant''s Sub-Cat)'
+  'P0001', null,
+  '(F2) #10 cross-tenant UPDATE under authenticated: A re-categorizes its OWN annotation to B''s Sub-Cat -> the fence RAISES (BEFORE INSERT OR UPDATE covers the mutable re-categorization path — a re-categorization cannot pivot to another tenant''s Sub-Cat). SQLSTATE-match (P0001, distinct from RLS 42501) so the SELF-298 #10 message softening cannot RED this.'
 );
 select set_config('role', 'postgres', true);
 
@@ -438,10 +439,10 @@ select set_config('role', 'service_role', true);
 --      (B != A, resolved via the ta4 -> acct-alpha chain) STILL RAISES. Proves the chain-
 --      resolved TRIGGER predicate — NOT RLS — is the sole gate (the C-NOTE (a) property:
 --      authoritative under a hypothetical service_role annotation writer, §6A Option A).
-select throws_like(
+select throws_ok(
   format($$ insert into pfin.account_trans_annotation (trans_id, sub_cat_id) values (%s, %s) $$, :ta4, :b_sub),
-  'cross-tenant Sub-Cat rejected%',
-  '(F3) LOAD-BEARING fence RAISE under service_role: RLS BYPASSED (B''s Sub-Cat IS visible), yet annotating A''s txn with B''s Sub-Cat STILL RAISES — the explicit chain-resolved ut.users_id=acc.users_id predicate (NOT RLS) is the sole gate (authoritative regardless of writer)'
+  'P0001', null,
+  '(F3) LOAD-BEARING fence RAISE under service_role: RLS BYPASSED (B''s Sub-Cat IS visible), yet annotating A''s txn with B''s Sub-Cat STILL RAISES — the explicit chain-resolved ut.users_id=acc.users_id predicate (NOT RLS) is the sole gate (authoritative regardless of writer). SQLSTATE-match (P0001, distinct from RLS 42501) so the SELF-298 #10 message softening cannot RED this.'
 );
 
 -- (F4) NON-VACUOUS service_role control: service_role annotates A's txn (ta5) with A's OWN

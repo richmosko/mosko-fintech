@@ -444,7 +444,7 @@ begin
       and j.users_id = acc.users_id
   ) then
     raise exception
-      'cross-tenant journal attach rejected: journal_id % is not owned by the tenant of trans_id % (ADR-011 Decision 3 canonical instance #12 / matched-tenant leg fence, hybrid-resolved; M2 / SELF-295)',
+      'journal attach rejected: journal_id % is not a journal owned by and visible to the tenant of trans_id % — not found, not visible under current AAL, or cross-tenant (ADR-011 Decision 3 canonical instance #12 / matched-tenant leg fence, hybrid-resolved; M2 / SELF-295)',
       new.journal_id, new.trans_id;
   end if;
   return new;

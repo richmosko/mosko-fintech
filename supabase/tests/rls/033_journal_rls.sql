@@ -37,9 +37,10 @@
 --   the aal dimension rides _rls.set_tenant_aal / _rls.count_as (already in the shared verbs).
 --
 -- Reuses the 022/023/025/032 idiom: \ir shared verbs; ALL-LOWERCASE \gset literals (005
---   case-fold lesson); MESSAGE-precise throws_like (004 all-42501 false-green lesson —
---   the fence RAISE carries 'cross-tenant journal attach rejected%', distinct from the RLS
---   '%violates row-level security policy%'); role restored to postgres between blocks (PR
+--   case-fold lesson); SQLSTATE-precise throws_ok(P0001) on the #12 fence (004 all-42501
+--   false-green lesson — the fence RAISE is P0001, distinct from the RLS 42501 / '%violates
+--   row-level security policy%'; SELF-298 switched these from message-match throws_like to
+--   P0001 so the fence-message softening cannot RED CI); role restored to postgres between blocks (PR
 --   #121 _rls-USAGE root-cause); fixtures built at role=postgres (bypasses RLS + ACL, so the
 --   backstop + fence are exercised ONLY on the authenticated / service_role paths under test).
 --
@@ -79,7 +80,7 @@
 --   (3b) #12 FOREIGN-leg × own-journal under authenticated -> RAISE (belt-and-suspenders: B's leg RLS-invisible to A; BEFORE trigger fires ahead of the RLS WITH CHECK).
 --   (3c) #12 LOAD-BEARING own-leg × foreign-journal under service_role (RLS BYPASSED) -> STILL RAISE (explicit predicate is the sole gate).
 --   (3d) #12 LOAD-BEARING foreign-leg × own-journal under service_role -> STILL RAISE (mirror direction).
---   (3e) #12 NULL-safe fail-closed: attach to a NON-EXISTENT journal_id -> RAISE 'cross-tenant journal attach rejected' (BEFORE the FK 23503; no NULL <> leak).
+--   (3e) #12 NULL-safe fail-closed: attach to a NON-EXISTENT journal_id -> RAISE the #12 fence (P0001, BEFORE the FK 23503; no NULL <> leak).
 --   (3f) #12 NON-VACUOUS control: a matched (same-tenant) attach under service_role COMMITS -> the fence is mismatch-driven.
 --   (3g) #12 matched attach under authenticated A (own leg × own journal) -> COMMITS (the real feature works; positive on the authenticated path).
 --   (3h) #12 UPDATE-ATTACH load-bearing (service_role, RLS bypassed): re-pointing an EXISTING own-annotation to a FOREIGN journal STILL RAISES -> proves the fence covers BEFORE UPDATE (not just INSERT); RED if `or update` were dropped from the trigger (silent UPDATE-attach leak) or if the fence leaned on RLS. (Sec condition-1 add.)
@@ -273,16 +274,16 @@ select is(
 -- =====================================================================
 -- (3a) authenticated A: own leg × FOREIGN journal (jB) -> RAISE (jB RLS-invisible to A).
 select _rls.set_tenant(:'ta'::uuid);
-select throws_like(
+select throws_ok(
   format($$ insert into pfin.account_trans_annotation (trans_id, journal_id) values (%s, %s) $$, :leg_a1, :j_b),
-  '%cross-tenant journal attach rejected%',
-  '(3a) #12 own-leg × FOREIGN-journal under authenticated A: A attaches its OWN leg to B''s journal -> fn_account_trans_annotation_matched_journal RAISES (belt-and-suspenders: jB is journal_select-invisible to A -> NOT EXISTS -> raise)'
+  'P0001', null,
+  '(3a) #12 own-leg × FOREIGN-journal under authenticated A: A attaches its OWN leg to B''s journal -> fn_account_trans_annotation_matched_journal RAISES (belt-and-suspenders: jB is journal_select-invisible to A -> NOT EXISTS -> raise). SQLSTATE-match (P0001, distinct from RLS 42501) so the SELF-298 #12 message softening cannot RED this.'
 );
 -- (3b) authenticated A: FOREIGN leg (B's) × own journal (jA) -> RAISE (B's leg RLS-invisible).
-select throws_like(
+select throws_ok(
   format($$ insert into pfin.account_trans_annotation (trans_id, journal_id) values (%s, %s) $$, :leg_b1, :j_a),
-  '%cross-tenant journal attach rejected%',
-  '(3b) #12 FOREIGN-leg × own-journal under authenticated A: A pulls B''s leg into its OWN journal -> the BEFORE trigger fence RAISES (belt-and-suspenders: B''s account_trans is 006 rd_access-invisible to A; the trigger fires ahead of the RLS WITH CHECK)'
+  'P0001', null,
+  '(3b) #12 FOREIGN-leg × own-journal under authenticated A: A pulls B''s leg into its OWN journal -> the BEFORE trigger fence RAISES (belt-and-suspenders: B''s account_trans is 006 rd_access-invisible to A; the trigger fires ahead of the RLS WITH CHECK). SQLSTATE-match (P0001, distinct from RLS 42501) so the SELF-298 #12 message softening cannot RED this.'
 );
 select set_config('role', 'postgres', true);
 
@@ -299,22 +300,22 @@ grant select, insert, update on pfin.account_trans_annotation to service_role;  
 select set_config('role', 'service_role', true);
 
 -- (3c) LOAD-BEARING own-leg × foreign-journal: A's leg × B's journal STILL RAISES.
-select throws_like(
+select throws_ok(
   format($$ insert into pfin.account_trans_annotation (trans_id, journal_id) values (%s, %s) $$, :leg_a1, :j_b),
-  '%cross-tenant journal attach rejected%',
-  '(3c) #12 LOAD-BEARING under service_role: RLS BYPASSED (jB IS visible), yet A''s leg × B''s journal STILL RAISES -- the explicit j.users_id = acc.users_id predicate (leg tenant chain-resolved = A != jB.users_id = B) is the SOLE gate'
+  'P0001', null,
+  '(3c) #12 LOAD-BEARING under service_role: RLS BYPASSED (jB IS visible), yet A''s leg × B''s journal STILL RAISES -- the explicit j.users_id = acc.users_id predicate (leg tenant chain-resolved = A != jB.users_id = B) is the SOLE gate. SQLSTATE-match (P0001, distinct from RLS 42501) so the SELF-298 #12 message softening cannot RED this.'
 );
 -- (3d) LOAD-BEARING mirror: B's leg × A's journal STILL RAISES.
-select throws_like(
+select throws_ok(
   format($$ insert into pfin.account_trans_annotation (trans_id, journal_id) values (%s, %s) $$, :leg_b1, :j_a),
-  '%cross-tenant journal attach rejected%',
-  '(3d) #12 LOAD-BEARING mirror under service_role: B''s leg × A''s journal STILL RAISES -- the explicit predicate (leg tenant chain-resolved = B != jA.users_id = A) is the sole gate (mirror direction)'
+  'P0001', null,
+  '(3d) #12 LOAD-BEARING mirror under service_role: B''s leg × A''s journal STILL RAISES -- the explicit predicate (leg tenant chain-resolved = B != jA.users_id = A) is the sole gate (mirror direction). SQLSTATE-match (P0001, distinct from RLS 42501) so the SELF-298 #12 message softening cannot RED this.'
 );
 -- (3e) NULL-safe fail-closed: attach to a NON-EXISTENT journal_id -> RAISE before the FK check.
-select throws_like(
+select throws_ok(
   format($$ insert into pfin.account_trans_annotation (trans_id, journal_id) values (%s, %s) $$, :leg_a1, 9999999),
-  '%cross-tenant journal attach rejected%',
-  '(3e) #12 NULL-safe fail-closed: attaching to a NON-EXISTENT journal_id RAISES the fence (NOT EXISTS -> raise, ahead of the FK 23503) -- a missing journal fails closed, no NULL <> leak'
+  'P0001', null,
+  '(3e) #12 NULL-safe fail-closed: attaching to a NON-EXISTENT journal_id RAISES the fence (NOT EXISTS -> raise, ahead of the FK 23503) -- a missing journal fails closed, no NULL <> leak. SQLSTATE-match (P0001, distinct from RLS 42501) so the SELF-298 #12 message softening cannot RED this.'
 );
 -- (3f) NON-VACUOUS control: matched (same-tenant) attach under service_role COMMITS.
 select lives_ok(
@@ -339,10 +340,10 @@ select set_config('role', 'postgres', true);
 --   service_role RLS is bypassed (jB IS visible), so the explicit predicate is the sole gate on
 --   the UPDATE path too. Grants persist in the txn from the 3c-3f block.
 select set_config('role', 'service_role', true);
-select throws_like(
+select throws_ok(
   format($$ update pfin.account_trans_annotation set journal_id = %s where trans_id = %s $$, :j_b, :leg_a1),
-  '%cross-tenant journal attach rejected%',
-  '(3h) #12 UPDATE-ATTACH LOAD-BEARING under service_role: re-pointing an EXISTING own-annotation (leg_a1 -> jA) to B''s FOREIGN journal STILL RAISES -- proves the fence covers BEFORE UPDATE (not just INSERT) and the explicit predicate is the sole gate on the UPDATE-attach path; RED if `or update` were dropped from the trigger (silent UPDATE-attach leak) or if the fence leaned on RLS'
+  'P0001', null,
+  '(3h) #12 UPDATE-ATTACH LOAD-BEARING under service_role: re-pointing an EXISTING own-annotation (leg_a1 -> jA) to B''s FOREIGN journal STILL RAISES -- proves the fence covers BEFORE UPDATE (not just INSERT) and the explicit predicate is the sole gate on the UPDATE-attach path; RED if `or update` were dropped from the trigger (silent UPDATE-attach leak) or if the fence leaned on RLS. SQLSTATE-match (P0001, distinct from RLS 42501) so the SELF-298 #12 message softening cannot RED this.'
 );
 select set_config('role', 'postgres', true);
 

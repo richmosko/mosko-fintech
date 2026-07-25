@@ -461,7 +461,7 @@ begin
       and ut.users_id = acc.users_id
   ) then
     raise exception
-      'cross-tenant Sub-Cat rejected: sub_cat_id % is not a taxonomy row owned by the tenant of trans_id % (ADR-011 Decision 3 canonical instance #10 / matched-tenant fence, chain-resolved)',
+      'Sub-Cat reference rejected: sub_cat_id % is not a taxonomy row owned by and visible to the tenant of trans_id % — not found, not visible under current AAL, or cross-tenant (ADR-011 Decision 3 canonical instance #10 / matched-tenant fence, chain-resolved)',
       new.sub_cat_id, new.trans_id;
   end if;
   return new;

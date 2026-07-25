@@ -199,10 +199,10 @@ select throws_ok(
 --      #10 fence so the trade fence is the sole BEFORE trigger, then an unresolvable
 --      trans_id trips the trade fence's NULL-safe guard (fires BEFORE the FK check).
 alter table pfin.account_trans_annotation disable trigger account_trans_annotation_matched_sub_cat;
-select throws_like(
+select throws_ok(
   format($$ insert into pfin.account_trans_annotation (trans_id, sub_cat_id) values (%s, %s) $$, 9999999, :a_bto),
-  '%cannot resolve fact%',
-  '(7b) trade fence fail-closed (isolated from #10): an unresolvable trans_id RAISES the trade fence NULL-safe guard (before the FK check)'
+  'P0001', null,
+  '(7b) trade fence fail-closed (isolated from #10): an unresolvable trans_id RAISES the trade fence NULL-safe guard (before the FK check). SQLSTATE-match (P0001, distinct from RLS 42501) so the SELF-298 message softening cannot RED this.'
 );
 alter table pfin.account_trans_annotation enable trigger account_trans_annotation_matched_sub_cat;
 
@@ -303,10 +303,10 @@ select lives_ok(
 
 -- --- (AC7a) #10 matched-tenant fence UNCHANGED by 030 ---
 -- A tags its txn with B's Sub-Cat -> #10 RAISES (fires before the trade fence).
-select throws_like(
+select throws_ok(
   format($$ insert into pfin.account_trans_annotation (trans_id, sub_cat_id) values (%s, %s) $$, :ct_x7a, :b_bto),
-  '%cross-tenant Sub-Cat rejected%',
-  '(7a) #10 unchanged: A tagging its txn with B''s Sub-Cat still RAISES the #10 matched-tenant fence (030 did not disturb #10 or the trigger ordering)'
+  'P0001', null,
+  '(7a) #10 unchanged: A tagging its txn with B''s Sub-Cat still RAISES the #10 matched-tenant fence (030 did not disturb #10 or the trigger ordering). SQLSTATE-match (P0001, distinct from RLS 42501) so the SELF-298 #10 message softening cannot RED this.'
 );
 
 -- --- (AC8a) metadata jsonb round-trip (write under A) ---

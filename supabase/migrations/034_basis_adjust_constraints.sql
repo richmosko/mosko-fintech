@@ -253,7 +253,7 @@ begin
 
   if v_has_txn is null then
     raise exception
-      'basis_adjust reason: cannot resolve fact (trans_id %) — fail-closed (M3-basis / SELF-296)',
+      'basis_adjust reason: cannot resolve fact (trans_id %) — not found or not visible under current AAL; fail-closed (M3-basis / SELF-296)',
       new.trans_id;
   end if;
 

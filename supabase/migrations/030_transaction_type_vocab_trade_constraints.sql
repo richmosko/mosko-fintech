@@ -227,7 +227,7 @@ begin
   -- (never a silent skip that would let an unvalidated Trade row through).
   if v_has_txn is null or v_has_tax is null then
     raise exception
-      'Trade constraint: cannot resolve fact (trans_id %) or class (sub_cat_id %) — fail-closed (M1-evt / SELF-293)',
+      'Trade constraint: cannot resolve fact (trans_id %) or class (sub_cat_id %) — not found or not visible under current AAL; fail-closed (M1-evt / SELF-293)',
       new.trans_id, new.sub_cat_id;
   end if;
 
