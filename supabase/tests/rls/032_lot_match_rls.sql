@@ -44,8 +44,11 @@
 --   (2c) same-tenant same-security partial-lot (a 2nd buy lot) SUCCEEDS — non-vacuous control.
 --   (3a)/(3b)/(3c) UPDATE / DELETE / TRUNCATE RAISE (append-only immutability).
 --   (3d) a service_role UPDATE (RLS-bypass, grant held open) is STILL blocked by the trigger.
---   (4a) authenticated holds SELECT; (4b) authenticated holds NO INSERT grant.
---   (4c) a direct authenticated INSERT fails at the GRANT layer (write-dormant).
+--   (4a) authenticated holds SELECT. [(4b) "no INSERT grant" + (4c) "direct authenticated INSERT
+--        fails at the GRANT layer" were MIGRATED to 036's battery at SELF-300 (Sec AMBER B2) —
+--        036 GRANTs INSERT, so under the 001->036 reset they reverse; the write-ENABLED posture
+--        (authenticated HOLDS INSERT; INSERT gated at RLS not the grant) lives in
+--        036_lot_match_write_enablement_rls.sql AC1b + AC4. plan 21 -> 19.]
 --   (5a)/(5b)/(5c) quantity_matched <=0 / NaN / Infinity RAISE 23514 (the finite/positive CHECK).
 --   (6a) a non-existent sell_trans_id RAISES 'cannot resolve%' (NULL-safe fail-closed, before FK).
 --   (7a) a duplicate (sell,buy,match_seq) RAISES 23505 (UNIQUE).
@@ -68,7 +71,7 @@
 -- ⟦WIRE-VALIDATE⟧ authored against 032's firmed contract; authoritative run is the 001->032
 --   reset stack. Locally the DB is at 027, so a net-zero rolled-back harness \i's 032 transiently
 --   (032 depends only on 001/003/004/006/016/017 — already applied); CI (pg_prove directory-mode)
---   is the green gate. plan(21).
+--   is the green gate. plan(19) (was 21 — (4b)+(4c) migrated to 036 per Sec AMBER B2; SELF-300).
 -- =====================================================================
 
 begin;
@@ -76,7 +79,7 @@ begin;
 -- shared verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(21);
+select plan(19);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
@@ -226,15 +229,13 @@ select throws_like(
 );
 
 -- =====================================================================
--- AC4 — WRITE-DORMANT (2a/2b catalog privilege facts under postgres).
+-- AC4 — read-grant fact under postgres. [(4b) "no INSERT grant" MIGRATED to 036 per Sec AMBER B2
+--   — 036 GRANTs INSERT, so the write-dormant assertion reverses under the 001->036 reset. The
+--   ACL flip (authenticated HOLDS INSERT) is asserted in 036's battery AC1b.]
 -- =====================================================================
 select ok(
   has_table_privilege('authenticated', 'pfin.lot_match', 'SELECT'),
-  '(4a) write-dormant: authenticated holds SELECT on lot_match (owner-only read via the parent-chain policy)'
-);
-select ok(
-  not has_table_privilege('authenticated', 'pfin.lot_match', 'INSERT'),
-  '(4b) write-dormant: authenticated holds NO INSERT grant on lot_match (writes land at M4-GL)'
+  '(4a) authenticated holds SELECT on lot_match (owner-only read via the parent-chain policy)'
 );
 
 -- =====================================================================
@@ -252,15 +253,13 @@ select throws_like(
 select set_config('role', 'postgres', true);
 
 -- =====================================================================
--- AC4c + AC8 — the REAL authenticated path.
+-- AC8 — the REAL authenticated read path. [(4c) "direct authenticated INSERT fails at the GRANT
+--   layer" MIGRATED to 036 per Sec AMBER B2 — under the 001->036 reset the grant exists, so the
+--   INSERT no longer fails at the ACL layer (it is gated at RLS / lands when authorized). The
+--   write-ENABLED posture is proven in 036's battery AC4 (authenticated INSERT succeeds when
+--   wr_access held; gated at RLS otherwise).]
 -- =====================================================================
 select _rls.set_tenant(:'ta'::uuid);
--- (4c) a direct authenticated INSERT fails closed at the GRANT layer (write-dormant).
-select throws_like(
-  format($$ insert into pfin.lot_match (sell_trans_id, buy_trans_id, quantity_matched, match_seq) values (%s,%s,5,99) $$, :sell_a, :buy_a),
-  '%permission denied for table lot_match%',
-  '(4c) write-dormant: a direct authenticated INSERT into lot_match fails at the GRANT layer (SELECT-only; no write policy)'
-);
 -- (8b) owner-reads-own: A reads its 3 own valid lot_matches for sell_a (seq1 + seq2 + buy_a2).
 select is(
   (select count(*) from pfin.lot_match where sell_trans_id = :sell_a)::bigint, 3::bigint,
