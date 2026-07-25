@@ -32,7 +32,7 @@
 --
 -- ┌─ WHY THE FIXTURE IS NON-VACUOUS (the isolation + Suspense teeth) ────────────────────────────┐
 -- │ ISOLATION: tenant A owns a RICH GL-producing ledger (3 accounts, 2 currencies, a BUY + a       │
--- │ depreciation basis_adjust + a SELL, an OPEN + a CLOSED journal group, a split). So when B      │
+-- │ depreciation basis_adjust + a SELL, two OPEN journal groups, a split). So when B               │
 -- │ calls fn_gl_entries and sees ZERO of A's rows (1a), that 0 is a REAL cross-tenant denial — A   │
 -- │ demonstrably HAS rows (1b > 0). B also owns its OWN minimal ledger so its call is non-empty     │
 -- │ (1c) — B's INVOKER read works; it just cannot cross the tenant boundary. A DEFINER regression   │
@@ -148,12 +148,16 @@ insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
 insert into pfin.account (users_id, name, account_type, scope, tax_treatment, currency)
   values (:'ta', 'a-cash-eur', 'depository', 'household', 'taxable', 'EUR') returning account_id as a_eur \gset
 
--- Tenant A journals: one OPEN + one CLOSED group (035 images grouped legs regardless of status —
--- the Σ=0-at-close enforcement is deferred to 036).
+-- Tenant A journals: two OPEN transfer groups (035 images grouped legs regardless of status).
+-- NOTE (037 collision fix): the second journal was 'closed' pre-037. 037's freeze_closed trigger
+-- (BEFORE INSERT on account_trans_annotation) now REJECTS attaching a leg to a CLOSED journal, so
+-- the t_xf_in attach below would RAISE under the 001→037 reset. Flipped to 'open' — 035 asserts
+-- nothing status-specific ((4b) only counts the 2 grouped-transfer journal_clearing legs), so
+-- plan(13) is unchanged. Close-time enforcement + the freeze guard are exercised in 037's battery.
 insert into pfin.journal (users_id, group_type, status, description)
-  values (:'ta', 'transfer', 'open',   'A open journal')   returning journal_id as j_open \gset
+  values (:'ta', 'transfer', 'open', 'A open journal')   returning journal_id as j_open  \gset
 insert into pfin.journal (users_id, group_type, status, description)
-  values (:'ta', 'transfer', 'closed', 'A closed journal') returning journal_id as j_closed \gset
+  values (:'ta', 'transfer', 'open', 'A open journal 2') returning journal_id as j_open2 \gset
 
 -- ---------------------------------------------------------------------
 -- Tenant A facts (transaction_type defaults 'standard' where omitted).
@@ -167,7 +171,7 @@ insert into pfin.account_trans (account_id, transaction_date, amount, vendor, de
 -- Transfer OUT (-300), grouped in the OPEN journal → P1 Cash -300 / P3 Journal Clearing +300.
 insert into pfin.account_trans (account_id, transaction_date, amount, vendor, description)
   values (:a_cash, '2026-05-03', -300, 'vXFO', 'transfer out') returning trans_id as t_xf_out \gset
--- Transfer IN (+300), grouped in the CLOSED journal → P1 Cash +300 / P3 Journal Clearing -300.
+-- Transfer IN (+300), grouped in the 2nd open journal → P1 Cash +300 / P3 Journal Clearing -300.
 insert into pfin.account_trans (account_id, transaction_date, amount, vendor, description)
   values (:a_inv, '2026-05-03', 300, 'vXFI', 'transfer in') returning trans_id as t_xf_in \gset
 -- acct_setup opening cash (+5000) → P1 Cash +5000 / P5 Opening-Balance-Equity -5000.
@@ -201,7 +205,7 @@ insert into pfin.account_trans (account_id, transaction_date, amount, vendor, de
 insert into pfin.account_trans_annotation (trans_id, sub_cat_id)             values (:t_rev,   :tx_a_rev);
 insert into pfin.account_trans_annotation (trans_id, sub_cat_id)             values (:t_exp,   :tx_a_exp);
 insert into pfin.account_trans_annotation (trans_id, sub_cat_id, journal_id) values (:t_xf_out, :tx_a_xfer, :j_open);
-insert into pfin.account_trans_annotation (trans_id, sub_cat_id, journal_id) values (:t_xf_in,  :tx_a_xfer, :j_closed);
+insert into pfin.account_trans_annotation (trans_id, sub_cat_id, journal_id) values (:t_xf_in,  :tx_a_xfer, :j_open2);
 insert into pfin.account_trans_annotation (trans_id, metadata)               values (:t_dep,   '{"reason":"depreciation"}'::jsonb);
 insert into pfin.account_trans_annotation (trans_id, sub_cat_id)             values (:t_eur,   :tx_a_exp);
 
