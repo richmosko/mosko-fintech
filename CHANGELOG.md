@@ -12,6 +12,24 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 ---
 
+### v1.110 — 2026-07-25
+
+**Phase 6 — SELF-298 cross-tenant fence-message softening LANDED — the Double-Entry GL project's non-blocking cleanup fast-follow (PR #237, merge `1007ec9`).** A carried backlog item from the SELF-295 (M2) and SELF-296 (M3-basis) Sec joint-reviews, cleared now that the GL project core is complete.
+
+**The defect it fixes.** Four SECURITY INVOKER matched-tenant fences — #10 (`023` sub_cat), #12 (`033` journal), the `030` Trade-constraint read, and the `034` basis_adjust reason read — sit behind the `025` aal2 step-up backstop. An own-tenant `aal1` + `mfa_policy='totp'` caller reading their OWN row hits the aal2-gated RLS, the fence's `NOT EXISTS` read returns empty, and it RAISEd a "cross-tenant … rejected" message. Fail-closed and safe, but the attribution is wrong — the cause is "not visible under the current AAL", not cross-tenant.
+
+**Migration message rewordings** (message-text only — no fence-logic change, no new migration): #10 and #12 now read "… — not found, not visible under current AAL, or cross-tenant (ADR-011 Decision 3 canonical instance #NN …)"; the `030`/`034` "cannot resolve fact … fail-closed" reads append "— not found or not visible under current AAL". All four keep their ADR-011 Decision 3 instance-# citations. Fences #5 (`012`) / #8 (`022`) / `029` share the string but are **not** aal2-gated, so they were deliberately left untouched.
+
+**Test batteries — decouple from message text.** The paired assertions on the reworded messages were switched from `throws_like('%msg%')` to `throws_ok(…, 'P0001', null, …)` — P0001 specifically (not bare, not 42501) so the assertion still distinguishes a fence RAISE from an RLS denial, preserving the "004 all-42501 false-green" teeth. 12 assertions flipped: `033` 3a/3b/3c/3d/3e/3h, `030` 7a/7b, `034` B12, and `023` F1/F2/F3. Business-rule RAISEs (consistency / sign-alignment / domain / reason↔amount) kept message-precise `throws_like`.
+
+**Brief-drift catch.** The Linear AC enumerated only the `033`/`030`/`034` batteries, but rewording #10 also breaks the `023` battery (F1/F2/F3 assert the #10 message) — those would have hard-RED'd CI. Caught during scoping and flipped.
+
+**Gate — Sec + QA joint-review (D3 cross-tenant FK-bypass family surface), AMBER → GREEN.** Both reviewers independently caught the same lone defect: `033_journal_rls.sql:315` (3e) had its args swapped to the `throws_ok` 4-arg shape but the function name left as `throws_like` — a malformed call that would abort the file's transaction. Fixed. Sec confirmed all four fences remain fail-closed (message-only edit, no `(subquery) <> …` NULL-leak), no new information disclosure, and the ledgers flat; QA confirmed no assertion count lost, the AC-missed `023` set caught, and the business-rule `throws_like` correctly preserved. **§10 = 3 · SECURITY DEFINER allowlist = 4 · Decision-3 = 14 labeled / 12 DDL-realized — all unchanged, zero ledger movement.**
+
+**Verification.** Local `supabase test db` (fresh build of `001`–`037`): Files=34, Tests=575, PASS. CI green — pgTAP RLS battery + RT-22/RT-26/RT-27 + TenantBoundConnection greps + secrets/dep scans. SELF-298 Done. **The Double-Entry GL project is fully closed — no GL feature work remains; NEXT is the V1 feature clusters (§2.1.2+ net-worth / §2.2 allocation / §2.3 cash-flow / §2.5 taxes / §2.6 monthly-report) or a milestone-rotation check.**
+
+---
+
 ### v1.109 — 2026-07-25
 
 **Phase 6 — `037` GL-completion LANDED — the tenth-and-LAST Double-Entry GL migration; CLOSES the GL project core (SELF-301; PR #234, merge `72b88f9`).** The write-side completion over the now-writable `lot_match` (`036`). Authored across a design-then-fix arc: an initial 4-component author pass, then a Sec-gated F1 fix, then an F/CTO-ratified compound-close hardening (both QA and the Architect independently found the ratified compound Σ=0 check vacuous).
