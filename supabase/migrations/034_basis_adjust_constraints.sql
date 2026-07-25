@@ -122,16 +122,35 @@
 --   004 immutability is UNWEAKENED — Sec confirms at joint-review.
 --
 -- ----------------------------------------------------------------------------
--- ADDITIVE GUARD R3 (flagged for Sec/F-CTO — reason is a basis_adjust-ONLY concept):
---   trigger (2) also rejects a `metadata.reason` present on a NON-basis_adjust row
---   (a stray depreciation/RoC/wash_sale label on a standard/corp_action txn is
---   nonsensical and would confuse M4-GL). This is the one-directional analog of 030's
---   Trade biconditional (reason present ⟹ transaction_type='basis_adjust'; NOT the
---   reverse — a basis_adjust may carry NO reason yet, a pending/Suspense state). It is
---   slightly BEYOND the literal B-i brief (which named only the domain + amount checks);
---   included as the natural completeness guard. It keys on the `reason` jsonb key
---   specifically, so it does NOT touch corp_action `metadata.action` rows. Sec/F-CTO may
---   drop R3 for a minimal scope — it is isolated to one IF branch.
+-- GUARD R3 — RATIFIED KEEP (F/CTO 2026-07-25; Sec financial-correctness posture):
+--   `metadata.reason` is a RESERVED, basis_adjust-ONLY semantic key. Trigger (2) rejects
+--   a `metadata.reason` present on a NON-basis_adjust row (a stray depreciation/RoC/
+--   wash_sale label on a standard/corp_action txn is nonsensical and would POISON M4-GL's
+--   reason-keyed depreciation aggregation). One-directional analog of 030's Trade
+--   biconditional (reason present ⟹ transaction_type='basis_adjust'; NOT the reverse — a
+--   basis_adjust may carry NO reason yet, a pending state). Keys on the `reason` jsonb key
+--   specifically, so it does NOT touch corp_action `metadata.action`. Reversibility
+--   asymmetry motivated KEEP: reserve-now/relax-later is a free trigger-only change;
+--   drop-now/reserve-later would need cleanup of imprinted stray reasons (settle-before-
+--   import). Ratified over DROP (free-form metadata) + a narrower domain-only variant.
+--
+-- RESERVED METADATA KEYS REGISTRY (Sec cond 1 — `metadata` is SEMANTICALLY-KEYED, NOT a
+--   free-form bag; future authors must NOT reach for these keys as generic payloads the
+--   way early 030/031 fixtures did):
+--     • `reason` → basis_adjust-ONLY. ENFORCED (this migration): domain {depreciation,
+--                  return_of_capital, wash_sale} (R1) + reason↔amount (R2) + basis_adjust-
+--                  only (R3).
+--     • `action` → corp_action-ONLY (Amendment 1 §5; split / ticker_change). RESERVED but
+--                  UNENFORCED today — see the FORWARD-FLAG below.
+--   (See the re-comment on account_trans_annotation.metadata at the END of this file —
+--   carries 030's original content forward + this registry, the append-only-clean way.)
+--
+-- FORWARD-FLAG (Sec cond 2 — `action` guard symmetry): `metadata.action` is semantically
+--   reserved (corp_action-only) but has NO write-time guard today — a stray
+--   `metadata.action` on a non-corp_action row is currently UNGUARDED. Apply the R3-analog
+--   (action present ⟹ transaction_type='corp_action') at the corp_action migration, for
+--   symmetry with `reason`/R3, so the two reserved keys converge on the same fence
+--   discipline.
 --
 -- ----------------------------------------------------------------------------
 -- ONE-WAY DOORS: the basis_adjust row-shape convention (quantity=0 / security present /
@@ -301,3 +320,23 @@ create trigger account_trans_annotation_basis_adjust_reason
   for each row
   when (new.metadata is not null)
   execute function pfin.fn_account_trans_annotation_basis_adjust_reason();
+
+-- ----------------------------------------------------------------------------
+-- Reserved-keys doc (Sec cond 1) — re-comment metadata carrying 030's content forward +
+-- the reserved-keys registry (append-only-clean: comment on column OVERWRITES 030's, so
+-- 030's content is preserved here verbatim-in-substance + extended, not lost).
+-- ----------------------------------------------------------------------------
+comment on column pfin.account_trans_annotation.metadata is
+  'Routing-detail jsonb on the mutable overlay (M1-evt Slice A1 / 030; ADR-031 Amendment 1 '
+  '§5/§6/§8). SEMANTICALLY-KEYED — NOT a free-form bag. RESERVED KEYS: `reason` = '
+  'basis_adjust-ONLY (domain {depreciation, return_of_capital, wash_sale}, §6; ENFORCED by '
+  'R1/R2/R3 in 034 — a reason on a non-basis_adjust row is REJECTED, it would poison '
+  'M4-GL''s reason-keyed depreciation aggregation); `action` = corp_action-ONLY (e.g. '
+  'split / ticker_change, §5; RESERVED but guard DEFERRED to the corp_action migration — '
+  'see 034 header forward-flag). SUPERSEDES the Decision-4 `reason text` column sketch '
+  '(§8: reason is now metadata.reason). Freely editable in V1 for NON-reserved detail '
+  '(Amendment 1 §9; the append-only reclassification-history freeze is Slice A2 / 031). '
+  'Nullable; NULL = no routing detail. Plain jsonb value column: not an FK (Decision 3 '
+  'N/A), no §10 surface; inherits the 023 RLS + full-CRUD grant (no new grant/policy). '
+  'FUTURE AUTHORS: do NOT use `reason`/`action` as generic payload keys (early 030/031 '
+  'fixtures did incidentally — corrected).';
