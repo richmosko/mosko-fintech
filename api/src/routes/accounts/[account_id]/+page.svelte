@@ -18,11 +18,22 @@
 	import { reassignSubCatSchema, fieldErrors } from '$lib/schemas/account';
 	import Button from '$lib/components/Button.svelte';
 	import SelectField from '$lib/components/SelectField.svelte';
+	import TransactionEntryForm from '$lib/components/TransactionEntryForm.svelte';
+	import TransactionRow from '$lib/components/TransactionRow.svelte';
+	import { subCatGroupsOf } from '$lib/transaction-util';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
 	const account = $derived(data.account);
 	const transactions = $derived(data.transactions);
+
+	// Cashflow-domain Sub-Cat picker groups for the transaction entry/edit/split/categorize
+	// surfaces (NOT data.subCats — that's the asset-domain picker for account reassignment).
+	const cashflowGroups = $derived(subCatGroupsOf(data.cashflowSubCats));
+
+	// The ledger table column count — shared with each row so its full-width editor rows
+	// (<td colspan>) span correctly: Date | Category | Vendor | Description | Amount | Actions.
+	const TABLE_COLUMNS = 6;
 
 	let toggling = $state(false);
 
@@ -93,18 +104,6 @@
 			toggling = false;
 		};
 	};
-
-	// Neutral money formatting (NOT pos/neg coloured — ledger amount, not performance).
-	function money(raw: string | number): string {
-		const n = typeof raw === 'number' ? raw : Number(raw);
-		if (!Number.isFinite(n)) return String(raw);
-		return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-	}
-
-	function humanize(v: string | null): string {
-		if (!v) return '—';
-		return v.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
-	}
 </script>
 
 <svelte:head>
@@ -220,6 +219,11 @@
 		</form>
 	</section>
 
+	<section class="region" aria-label="Add a transaction">
+		<h2 class="section-title">Add a transaction</h2>
+		<TransactionEntryForm subCatGroups={cashflowGroups} />
+	</section>
+
 	<section class="region" aria-label="Transactions">
 		<h2 class="section-title">Transactions</h2>
 		{#if transactions.length === 0}
@@ -230,24 +234,16 @@
 					<thead>
 						<tr>
 							<th scope="col">Date</th>
-							<th scope="col">Type</th>
+							<th scope="col">Category</th>
 							<th scope="col">Vendor</th>
 							<th scope="col">Description</th>
 							<th scope="col" class="num">Amount</th>
+							<th scope="col">Actions</th>
 						</tr>
 					</thead>
 					<tbody>
 						{#each transactions as t (t.trans_id)}
-							<tr>
-								<td class="num-cell">{t.transaction_date}</td>
-								<td>
-									{humanize(t.transaction_type)}
-									{#if t.is_reverse}<span class="rev-tag">Reversal</span>{/if}
-								</td>
-								<td>{t.vendor ?? '—'}</td>
-								<td>{t.description ?? '—'}</td>
-								<td class="num num-cell">{money(t.amount)}</td>
-							</tr>
+							<TransactionRow transaction={t} subCatGroups={cashflowGroups} columns={TABLE_COLUMNS} />
 						{/each}
 					</tbody>
 				</table>
@@ -411,8 +407,10 @@
 		width: 100%;
 		font-size: var(--fs-num);
 	}
+	/* Header cells live in this component; body cells (<td>) are rendered by TransactionRow,
+	   so the td-level rules are :global-scoped to this page-owned .tbl to reach them. */
 	.tbl th,
-	.tbl td {
+	.tbl :global(td) {
 		padding: var(--space-2) var(--space-3);
 		border-bottom: 1px solid var(--c-border);
 		text-align: left;
@@ -427,26 +425,15 @@
 		background: var(--c-surface-alt);
 		border-bottom: 1px solid var(--c-border-strong);
 	}
-	.tbl td.num,
+	.tbl :global(td.num),
 	.tbl th.num {
 		text-align: right;
 	}
-	.num-cell {
+	.tbl :global(.num-cell) {
 		font-family: var(--font-num);
 	}
-	.tbl tbody tr:hover td {
+	.tbl :global(tbody tr:hover td) {
 		background: var(--c-surface-alt);
-	}
-	.rev-tag {
-		display: inline-block;
-		margin-left: var(--space-1);
-		border: 1px solid var(--c-border-strong);
-		border-radius: var(--radius-sm);
-		padding: 0 var(--space-1);
-		font-size: var(--fs-micro);
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
-		color: var(--c-text-muted);
 	}
 	.empty {
 		margin: 0;

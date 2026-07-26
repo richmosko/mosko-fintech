@@ -36,6 +36,29 @@ export async function loadAssetSubCats(supabase: SupabaseClient): Promise<SubCat
 }
 
 /**
+ * Cashflow-domain (§2.4 / ADR-031 D3 class enum) Sub-Cat options for the caller, RLS-scoped.
+ * The category picker for the manual cash-entry / edit / split surfaces (SELF-202). Same shape
+ * + ordering as loadAssetSubCats; domain='cashflow' is the only difference. Returns [] on error.
+ */
+export async function loadCashflowSubCats(supabase: SupabaseClient): Promise<SubCatOption[]> {
+	const { data, error } = await supabase
+		.schema('pfin')
+		.from('user_taxonomy')
+		.select('id, cat, sub_cat, display_order')
+		.eq('domain', 'cashflow')
+		.eq('is_active', true)
+		.order('display_order', { ascending: true, nullsFirst: false })
+		.order('cat', { ascending: true })
+		.order('sub_cat', { ascending: true });
+
+	if (error) {
+		console.error('[taxonomy] loadCashflowSubCats failed:', error.message);
+		return [];
+	}
+	return (data ?? []) as SubCatOption[];
+}
+
+/**
  * Flatten an embedded `user_taxonomy ( cat, sub_cat )` join result to a label.
  * supabase-js may type the FK embed as a to-many array though this many-to-one FK
  * returns a single object at runtime — normalize both. NULL (untagged sub_cat_id) →
