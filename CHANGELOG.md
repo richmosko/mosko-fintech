@@ -12,6 +12,24 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 ---
 
+### v1.111 — 2026-07-26
+
+**Phase 6 — SELF-202 manual cash-transaction entry LANDED — the FIRST Onboarding §2.4 issue toward closing V1.0 (PR #240, merge `ff61a23`).** Full-stack §2.4.3.a (form UI + backend write path + edit + split), delivered through the complete role-separated build loop.
+
+**The append-only re-derivation (ADR-032).** The 2026-06-03 AC assumed mutable `skip_flag`/`split_flag` + in-place edit — all rejected by the `004` immutability lock. F/CTO ratified re-deriving to the append-only model and, critically, **eliminating "skip" entirely**: a "skip" is a report-view filter, not stored data. A transfer is a real event → categorize it `Transfer` (the `028` taxonomy; the GL already Σ=0-offsets it via `group_type='transfer'`); "don't show category X in report Y" is a query/UI `WHERE` filter. ADR-032 generalizes the principle (**derive-don't-store**: split-double-count and transfer-hiding are both derived reader rules, not stored flags). The `skip ≠ reverse` distinction is the ground: a reversed txn *didn't happen* (leaves NAV/balance); there is no "happened-but-hidden" stored state.
+
+**Migration `038` + ADR-032** (Sec-GREEN). PART A un-dorms `pfin.account_trans_split` writes — 3 `wr_access`-JOIN policies (INSERT/UPDATE/DELETE) mirroring `023`'s `ata_*`, each aal2-claused, + grant; no new table/column/fn (the Σ=parent deferred trigger, the `#13` matched-tenant fence, and the T-account view already exist in `029` — un-dorming *activates* them). PART B adds `fn_create_manual_trans` — a SECURITY INVOKER write-composition RPC (atomic `account_trans` INSERT + conditional `023` category annotation, under the caller's RLS). **Fact edit** = `004` reverse-and-replace (INSERT reversal + corrected row; the immutable ledger is never mutated); **split** = the un-dormed `029` path under the locked child-lifecycle rule (per parent, commit-surviving states are {0 children → count parent} XOR {N children Σ=parent → count children}; partial/unbalanced rejected at COMMIT).
+
+**Folded-in security fix (SELF-304).** `038` also ALTERs `account_trans_split_select` to add the aal2 backstop conjunct — `029` shipped its SELECT un-claused because it post-dated the `025` retrofit, leaving a live C3 gap (aal1-readable split amounts for a totp-declared user). Aal2 clause byte-verified verbatim against `025`. Filed + closed as SELF-304.
+
+**Backend / Frontend.** Backend: 5 SvelteKit actions (`createTrans` / `editTransFact` / `recategorize` / `splitTrans` / `unsplitTrans`) + Zod `.strict()` (server = security boundary) + reverse-and-replace + split create/replace/unsplit helpers; capability-verify clean-apply smoke PASS under the real `authenticated` role. Frontend: entry form (Money in/out toggle **derives the sign** — the user never types −), split editor (live running-sum, submit blocked until balanced + ≥2 lines), transaction row (edit/categorize/split/unsplit), account-detail page; tokens-only, no skip UI.
+
+**Gate.** Sec joint-review **GREEN ×2** — migration DDL (aal2 clause fidelity, C3 fix, wr_access chains, RPC composition, ledgers flat-verified-live) + app-layer money-flow (reverse-and-replace netting, split-REPLACE money-safety, `.strict()` mass-assignment, tenant-binding — no service_role/cross-tenant). QA `plan(21)` two-tenant + inversion-proven, plus the required `029` BLOCK-4 removal (paired — directory-mode CI). CI fully green (pgTAP battery + Live-DB + web build + fences); `npm run check` 0; vitest 226 (+13). **Ledgers flat:** §10 = 3 · DEFINER allowlist 4/3 (RPC is INVOKER) · Decision-3 unchanged (no new FK; `#13` activated, `#10` exercised). 16 files, +2748/−75. SELF-202 + SELF-304 Done.
+
+**Context around the landing.** A milestone-rotation check (2026-07-26) confirmed **no rotation is due** — the Double-Entry GL is a Linear *project*, not a V1.x milestone, and V1.0 is not closed. A V1.0 reconciliation flipped three stale-opens to Done (SELF-210 NAV backend superseded by `fn_compute_nav`; SELF-191 Plaid SDK scaffold; SELF-182 CI pipeline — all shipped but never updated in Linear), leaving the genuine V1.0 gap concentrated in **Onboarding §2.4** (SELF-199/200/203/204/205/206/207/208 + the SELF-209 close-gate + SELF-184). The GL follow-ups SELF-302/303 were re-homed to the V1.4 tax cluster; 5 SELF-202 fast-follows filed (SELF-305–309: 2 Architect hardenings, the exact-id embed, 2 designer polish). **NEXT: continue Onboarding §2.4 (SELF-203/204/200/209 + co-root 199) to close V1.0.**
+
+---
+
 ### v1.110 — 2026-07-25
 
 **Phase 6 — SELF-298 cross-tenant fence-message softening LANDED — the Double-Entry GL project's non-blocking cleanup fast-follow (PR #237, merge `1007ec9`).** A carried backlog item from the SELF-295 (M2) and SELF-296 (M3-basis) Sec joint-reviews, cleared now that the GL project core is complete.
