@@ -18,8 +18,38 @@
 
 import { error, fail, redirect } from '@sveltejs/kit';
 import { reassignSubCatSchema, toggleActiveSchema, fieldErrors } from '$lib/server/schemas/account';
-import { loadAssetSubCats, subCatLabel } from '$lib/server/queries/taxonomy';
+import {
+	manualTransCreateSchema,
+	manualTransEditSchema,
+	recategorizeSchema,
+	splitSetSchema,
+	unsplitSchema
+} from '$lib/server/schemas/transaction';
+import {
+	reverseAndReplaceTrans,
+	writeSplitSet,
+	unsplitTrans,
+	upsertAnnotation,
+	type WriteResult
+} from '$lib/server/queries/transactions';
+import { loadAssetSubCats, loadCashflowSubCats, subCatLabel } from '$lib/server/queries/taxonomy';
 import type { PageServerLoad, Actions } from './$types';
+
+// Category label + note (023) and split children (029) embedded per transaction so the
+// detail UI can render the current state (category, is-split, breakdown). Both embeds are
+// RLS-scoped; the nested user_taxonomy carries the human label.
+const TRANSACTION_COLUMNS = `
+	trans_id, transaction_date, amount, vendor, description, transaction_type, is_reverse, replaces_trans_id, created_at,
+	account_trans_annotation ( sub_cat_id, note, user_taxonomy ( cat, sub_cat ) ),
+	account_trans_split ( id, amount, sub_cat_id, note, display_order, user_taxonomy ( cat, sub_cat ) )
+`;
+
+/** Map a transactions.ts WriteResult to a SvelteKit action response. */
+function toActionResult(r: WriteResult) {
+	if (r.ok) return { success: true, transId: r.transId };
+	const key = r.field ?? '_form';
+	return fail(r.status, { errors: { [key]: [r.message] } });
+}
 
 // Embed the Sub-Cat label via the account.sub_cat_id → user_taxonomy FK (012).
 const ACCOUNT_COLUMNS =
@@ -58,19 +88,57 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	const { user_taxonomy, ...rest } = row;
 	const account = { ...rest, ...subCatLabel(user_taxonomy) };
 
-	const { data: transactions } = await locals.supabase
+	const { data: transRows } = await locals.supabase
 		.schema('pfin')
 		.from('account_trans')
-		.select('trans_id, transaction_date, amount, vendor, description, transaction_type, is_reverse, created_at')
+		.select(TRANSACTION_COLUMNS)
 		.eq('account_id', accountId)
 		.order('transaction_date', { ascending: false })
 		.order('trans_id', { ascending: false });
 
-	// Asset-domain Sub-Cat options for the reassignment picker (SELF-236) — same
-	// RLS-scoped shape as the accounts/new create picker.
-	const subCats = await loadAssetSubCats(locals.supabase);
+	// Shape each row: fold the 1:1 annotation into a { category, note } pair and the 1:many
+	// split children into a labelled, ordered array + a derived split_count (035/037 reader
+	// rule: split_count>0 → the children are the truth; else the parent). No stored flags.
+	// Fields are picked explicitly (not `...rest`) so the ledger columns stay concretely typed
+	// for the consuming component. supabase-js can't infer the embed shape → rows typed loose.
+	const transactions = ((transRows ?? []) as Array<Record<string, unknown>>).map((r) => {
+		const annRaw = r.account_trans_annotation as
+			| { note?: string | null; user_taxonomy?: unknown }
+			| Array<{ note?: string | null; user_taxonomy?: unknown }>
+			| null;
+		const ann = Array.isArray(annRaw) ? (annRaw[0] ?? null) : annRaw;
+		const splits = ((r.account_trans_split as Array<Record<string, unknown>>) ?? [])
+			.map((s) => ({
+				id: s.id as number,
+				amount: s.amount as number,
+				note: (s.note as string | null) ?? null,
+				display_order: (s.display_order as number | null) ?? null,
+				...subCatLabel(s.user_taxonomy)
+			}))
+			.sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0));
+		return {
+			trans_id: r.trans_id as number,
+			transaction_date: r.transaction_date as string,
+			amount: r.amount as number,
+			vendor: (r.vendor as string | null) ?? null,
+			description: (r.description as string | null) ?? null,
+			transaction_type: r.transaction_type as string,
+			is_reverse: r.is_reverse as boolean,
+			replaces_trans_id: (r.replaces_trans_id as number | null) ?? null,
+			created_at: r.created_at as string,
+			category: ann ? subCatLabel(ann.user_taxonomy) : null,
+			note: (ann?.note as string | null) ?? null,
+			splits,
+			split_count: splits.length
+		};
+	});
 
-	return { account, transactions: transactions ?? [], subCats };
+	// Asset-domain Sub-Cat options for the account reassignment picker (SELF-236); cashflow-
+	// domain options for the transaction category pickers (entry/edit/split) — both RLS-scoped.
+	const subCats = await loadAssetSubCats(locals.supabase);
+	const cashflowSubCats = await loadCashflowSubCats(locals.supabase);
+
+	return { account, transactions, subCats, cashflowSubCats };
 };
 
 export const actions: Actions = {
@@ -134,5 +202,105 @@ export const actions: Actions = {
 		if (!updated) return fail(404, { errors: { _form: ['Account not found.'] } });
 
 		return { success: true };
+	},
+
+	// ── SELF-202 manual cash-transaction surfaces (038 / ADR-032) ──────────────────────
+	// (1) Manual cash entry → the atomic fn_create_manual_trans INVOKER RPC (account_trans
+	// row + optional 023 annotation, one txn under the caller's RLS). transaction_type is
+	// RPC-set ('standard'); the category is p_sub_cat_id (028 class), NOT transaction_type.
+	createTrans: async ({ request, locals, params }) => {
+		const { user } = await locals.safeGetSession();
+		if (!user) return fail(401, { errors: { _form: ['You must be signed in.'] } });
+		const accountId = parseAccountId(params.account_id);
+		if (accountId === null) return fail(400, { errors: { _form: ['Invalid account.'] } });
+
+		const raw = Object.fromEntries(await request.formData());
+		const parsed = manualTransCreateSchema.safeParse(raw);
+		if (!parsed.success) return fail(400, { errors: fieldErrors(parsed.error), values: raw });
+		const v = parsed.data;
+
+		const { data: newId, error: rpcErr } = await locals.supabase
+			.schema('pfin')
+			.rpc('fn_create_manual_trans', {
+				p_account_id: accountId,
+				p_transaction_date: v.transaction_date,
+				p_amount: v.amount,
+				p_vendor: v.vendor,
+				p_description: v.description,
+				p_sub_cat_id: v.sub_cat_id,
+				p_note: v.note
+			});
+		if (rpcErr) {
+			console.error('[accounts/[account_id]] createTrans RPC failed:', rpcErr.message);
+			return fail(422, {
+				errors: isCrossTenantSubCat(rpcErr.message)
+					? { sub_cat_id: ['That category is not available.'] }
+					: { _form: ['Could not save the transaction. Please try again.'] },
+				values: raw
+			});
+		}
+		return { success: true, transId: newId as number };
+	},
+
+	// (2a) Fact edit = reverse-and-replace (immutable 004 ledger; NO UPDATE).
+	editTransFact: async ({ request, locals, params }) => {
+		const { user } = await locals.safeGetSession();
+		if (!user) return fail(401, { errors: { _form: ['You must be signed in.'] } });
+		const accountId = parseAccountId(params.account_id);
+		if (accountId === null) return fail(400, { errors: { _form: ['Invalid account.'] } });
+
+		const raw = Object.fromEntries(await request.formData());
+		const parsed = manualTransEditSchema.safeParse(raw);
+		if (!parsed.success) return fail(400, { errors: fieldErrors(parsed.error), values: raw });
+
+		return toActionResult(await reverseAndReplaceTrans(locals.supabase, accountId, parsed.data));
+	},
+
+	// (2b) Category/note edit = a 023 annotation upsert (mutable overlay; NOT a ledger touch).
+	recategorize: async ({ request, locals, params }) => {
+		const { user } = await locals.safeGetSession();
+		if (!user) return fail(401, { errors: { _form: ['You must be signed in.'] } });
+		if (parseAccountId(params.account_id) === null)
+			return fail(400, { errors: { _form: ['Invalid account.'] } });
+
+		const parsed = recategorizeSchema.safeParse(Object.fromEntries(await request.formData()));
+		if (!parsed.success) return fail(400, { errors: fieldErrors(parsed.error) });
+		const v = parsed.data;
+
+		return toActionResult(await upsertAnnotation(locals.supabase, v.trans_id, v.sub_cat_id, v.note));
+	},
+
+	// (3) Split CREATE / REPLACE — a balanced child set over the 029 write path. `lines` is a
+	// JSON array string (variable-length set); Σ(children)=parent.amount (029 deferred trigger).
+	splitTrans: async ({ request, locals, params }) => {
+		const { user } = await locals.safeGetSession();
+		if (!user) return fail(401, { errors: { _form: ['You must be signed in.'] } });
+		const accountId = parseAccountId(params.account_id);
+		if (accountId === null) return fail(400, { errors: { _form: ['Invalid account.'] } });
+
+		const raw = Object.fromEntries(await request.formData());
+		let lines: unknown;
+		try {
+			lines = JSON.parse(String(raw.lines ?? ''));
+		} catch {
+			return fail(400, { errors: { lines: ['Malformed split lines.'] } as Record<string, string[]> });
+		}
+		const parsed = splitSetSchema.safeParse({ trans_id: raw.trans_id, lines });
+		if (!parsed.success) return fail(400, { errors: fieldErrors(parsed.error) });
+
+		return toActionResult(await writeSplitSet(locals.supabase, accountId, parsed.data));
+	},
+
+	// (3b) UNSPLIT — delete the entire child set → revert to parent-only counting.
+	unsplitTrans: async ({ request, locals, params }) => {
+		const { user } = await locals.safeGetSession();
+		if (!user) return fail(401, { errors: { _form: ['You must be signed in.'] } });
+		if (parseAccountId(params.account_id) === null)
+			return fail(400, { errors: { _form: ['Invalid account.'] } });
+
+		const parsed = unsplitSchema.safeParse(Object.fromEntries(await request.formData()));
+		if (!parsed.success) return fail(400, { errors: fieldErrors(parsed.error) });
+
+		return toActionResult(await unsplitTrans(locals.supabase, parsed.data.trans_id));
 	}
 };

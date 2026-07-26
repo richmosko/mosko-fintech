@@ -78,10 +78,12 @@
 --        RED if the SELECT policy were over-restrictive.
 --   (3b) cross-tenant read fails closed: B reads 0 of A's split rows — RED if the parent-chain
 --        SELECT policy leaked (B sees A's splits).
---   (4a)/(4b)/(4c) WRITE-DORMANT: authenticated INSERT/UPDATE/DELETE fail closed at the GRANT
---        layer ('permission denied for table account_trans_split') — RED if a write grant were
---        opened (dormancy broken). Distinct from a WITH-CHECK RLS message (there is no write
---        policy to reach) — matching the grant-layer message guards SELECT-only against widening.
+--   (4a)/(4b)/(4c) ⟦REMOVED at 038 — see the amendment note below⟧. These asserted the WRITE-
+--        DORMANT ACL denial ('permission denied for table account_trans_split'). 038 (SELF-202)
+--        un-doms the table (adds the write policies + GRANT insert,update,delete), so those
+--        assertions are now FALSE against the applied stack. The un-dormed write-path coverage
+--        (owner INSERT, cross-tenant/re-parent fail-closed, Σ-at-commit on the authenticated
+--        write, #13-through-write) lives in 038_manual_trans_and_split_write_rls.sql.
 --   (5a) NaN amount RAISES 23514 (account_trans_split_amount_finite) — RED if the finite CHECK
 --        were dropped (a NaN line would poison Σ).
 --   (5b) ±Infinity amount fails closed at numeric(20,4) coercion — RED if the type were widened
@@ -116,7 +118,17 @@
 -- ⟦WIRE-VALIDATE⟧ authored against 029's firmed contract; the authoritative run is the 001->029
 --   reset stack (Backend owns the clean-apply). Locally the DB is NOT 029-clean, so a net-zero
 --   rolled-back harness \i's the 029 migration transiently before this file; CI (pg_prove
---   directory-mode, db-tests.yml) is the green gate. plan(17).
+--   directory-mode, db-tests.yml) is the green gate. plan(17) → plan(14) as of the 038 amendment.
+--
+-- ⟦038 AMENDMENT (SELF-202)⟧ 038 UN-DOMS this write-dormant table (adds account_trans_split
+--   insert/update/delete policies + GRANT + ALTERs _select to add the aal2 backstop). CI runs
+--   pg_prove in DIRECTORY mode against the FULLY-APPLIED 001→038 stack, so BLOCK 4's write-
+--   dormant ACL assertions became FALSE and are REMOVED here (plan 17→14). BLOCKs 1/2/3/5/6
+--   (Σ trigger, #13 fence, parent-chain read isolation, finite CHECK, recon view) STAND — 038
+--   only widens the write ACL/policy set + adds the SELECT aal2 conjunct (BLOCK 3 reads: A/B
+--   carry no user_settings row → mfa 'none' → the new backstop passes at aal1, so 3a/3b hold).
+--   The un-dormed write-path battery lives in 038_manual_trans_and_split_write_rls.sql. SHIP
+--   BOTH TOGETHER.
 -- =====================================================================
 
 begin;
@@ -124,7 +136,7 @@ begin;
 -- shared verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(17);
+select plan(14);  -- was 17; BLOCK 4 write-dormant assertions removed at the 038 un-dorm amendment
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
@@ -292,32 +304,15 @@ select is(
 select set_config('role', 'postgres', true);
 
 -- =====================================================================
--- BLOCK 4 — WRITE-DORMANT: authenticated I/U/D fail closed at the GRANT layer
---   ('permission denied for table account_trans_split' — SELECT-only grant, no write
---   policy). U/D target a REAL existing child id (ta_p1's p1_c1) so the denial is the ACL,
---   not a missing row. Run under authenticated A (its own account's split) to prove even the
---   owner cannot write in V1.
+-- BLOCK 4 — ⟦REMOVED at the 038 un-dorm amendment (SELF-202)⟧
+--   This block asserted WRITE-DORMANCY: authenticated INSERT/UPDATE/DELETE fail closed at the
+--   GRANT layer ('permission denied for table account_trans_split'). 038 adds the write policies
+--   + GRANT insert,update,delete to authenticated, so those assertions are now FALSE against the
+--   applied stack. The un-dormed write-path coverage (owner INSERT PASS, cross-tenant write +
+--   cross-account re-parent fail-closed, Σ-at-commit on the authenticated write, #13-through-
+--   write) lives in 038_manual_trans_and_split_write_rls.sql. Plan reduced 17→14 (see header).
+--   The p1_c1 \gset (BLOCK 1) is now unused but harmless — left in place to keep BLOCK 1 intact.
 -- =====================================================================
-select _rls.set_tenant(:'ta'::uuid);
--- (4a) authenticated INSERT fails closed at the ACL.
-select throws_like(
-  format($$ insert into pfin.account_trans_split (account_trans_id, amount) values (%s, 1) $$, :ta_p1),
-  'permission denied for table account_trans_split',
-  '(4a) write-dormant: authenticated INSERT fails closed at the GRANT layer (SELECT-only grant, no write policy — distinct from a WITH-CHECK RLS rejection)'
-);
--- (4b) authenticated UPDATE fails closed at the ACL (targets A's own child row).
-select throws_like(
-  format($$ update pfin.account_trans_split set amount = 999 where id = %s $$, :p1_c1),
-  'permission denied for table account_trans_split',
-  '(4b) write-dormant: authenticated UPDATE fails closed at the GRANT layer (no UPDATE grant — guards SELECT-only against widening)'
-);
--- (4c) authenticated DELETE fails closed at the ACL.
-select throws_like(
-  format($$ delete from pfin.account_trans_split where id = %s $$, :p1_c1),
-  'permission denied for table account_trans_split',
-  '(4c) write-dormant: authenticated DELETE fails closed at the GRANT layer (no DELETE grant)'
-);
-select set_config('role', 'postgres', true);
 
 -- =====================================================================
 -- BLOCK 5 — finite CHECK (account_trans_split_amount_finite; the 014 discipline).

@@ -41,6 +41,28 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-032 — No presentation-exclusion in the data layer: a "skip" is a report-view filter, not a stored flag (SELF-202)
+
+**Date:** 2026-07-25 · **Status:** Accepted (F/CTO-ratified 2026-07-25 — skip primitive eliminated; the re-derived SELF-202 = manual-entry RPC + un-dorm `029` split write path + `004` reverse-and-replace edit; `038` returns for **Sec joint-review** — the un-dorm write path + the folded-in `029` SELECT aal2 fix) · **Phase:** 6
+
+**Pattern:** Terse. **Context.** SELF-202 (§2.4.3.a Cash transaction entry) was AC-authored 2026-06-03, before the `004` immutability lock, and assumed mutable `skip_flag`/`split_flag` + in-place edit/delete. Re-deriving to the append-only model surfaced a fork the prior design brief (Rev 1) framed as "where does skip/exclude state live" — with a recommended mutable `is_excluded` flag on the `023` annotation overlay. F/CTO rejected the flag entirely: **"skip" is presentation logic leaking into the data model.**
+
+**Decision.**
+
+1. **No `is_excluded` column; no data-layer cashflow-exclusion predicate.** The prior brief's Options A (in-ledger reversal) / B (overlay flag) / C (reconciliation link) are all eliminated. A user's "don't count this in my budget" is expressed by **categorization + reporting-view filtering**, never by stored exclusion state.
+
+2. **A transfer is a real event → categorize it `Transfer`** (the `028` cashflow-class taxonomy). The double-entry GL already offsets it to zero: `pfin.journal.group_type='transfer'` selects the cash `Σ(amount)=0` conservation law (`033`; ADR-031 Decision 5). It cancels in bookkeeping with no flag.
+
+3. **"Don't show category X in report Y" is a reporting-view `WHERE category <> …` filter** at the query/UI layer — not stored data. The data layer records *what happened*; the report layer decides *what to show*.
+
+**Generalization (the principle, not just the case).** The codebase is already **derive-don't-store** for presentation: `fn_gl_entries` (`035`) / `037` never read a stored "is-this-split" flag — they compute `split_count` per parent and branch (`split_count > 0` → count the children; else count the parent). Both **"don't double-count a split"** and **"don't show transfers in spending"** are therefore the same shape: **derived reader rules, not stored flags.** New reader concerns default to a derived predicate; a stored flag must justify itself against this ADR.
+
+**Considered / rejected.** A mutable `is_excluded boolean` on the `023` overlay (Rev-1 Option B — un-skip = a plain UPDATE, `031` reclass-history audits it for free). **Why not:** (a) it leaks report concerns into the ledger/overlay data model; (b) it becomes a **load-bearing predicate every cashflow reader must honor** — a de-facto one-way door (once readers ship keying on it, changing the semantic is a migration + recompute); (c) it **duplicates** what categorization + the GL `Σ=0` conservation law already express. A reversal row (Option A) was rejected on a stronger ground still: **skip ≠ reverse** — a reversed txn *did not occur* (leaves NAV/balance), a skipped txn *did occur* (must stay in NAV/balance, drop only from budget), so encoding skip as a reversal corrupts net worth.
+
+**Consequences.** The re-derived SELF-202 (`038`) authors **no exclusion surface**: (a) manual entry = `fn_create_manual_trans` INVOKER RPC (account_trans INSERT + `023` category annotation); (b) fact edit = `004` reverse-and-replace (app-layer; on a provider-sourced row the `source_provider`/`provider_txn_id` (+ `import_hash`) stay on the original row only, the reverse + replacement rows carry NULL — avoids the `017` `account_trans_provider_dedup_idx` `(source_provider, provider_txn_id)` partial-unique collision); (c) split = un-dorm the `029` write path under the locked child-lifecycle rule (`038` Part A). **Ledgers flat:** §10 catalogued **stays 3** (RT-22 + RT-26 + RT-27 — `038` is authenticated-tier RLS + an INVOKER RPC, no service_role); **DEFINER allowlist unchanged** (4 labeled / 3 authored — the RPC is INVOKER); **Decision-3 unchanged** (no new FK-shaped column — the split `#13` + annotation `#10` matched-tenant fences are activated/exercised, not added; verify the live count against [ADR-011](#adr-011) Decision 3 at joint-review). **Sibling reframing (routed to PM, not designed):** SELF-205 "reconciled-flag" = a derived read (`EXISTS` a `005` `reconciliation_event_trans` link), no stored flag; SELF-204 "dedup" = already structural (`004` `(account_id, import_hash)` partial-unique + `017` `account_trans_provider_dedup_idx` `(source_provider, provider_txn_id)` + `fn_ingest_transactions` `ON CONFLICT`).
+
+**Cross-references.** [ADR-011](#adr-011) Decision 2 (immutable audit-class ledger — edits are new rows) / Decision 3 (`#10` + `#13` matched-tenant fences) / Decision 4 (§10 ledger — stays 3) / Decision 9 (DEFINER allowlist) / Lock 11 (INVOKER write-composition) · [ADR-031](#adr-031) Decision 5 (the GL `Σ=0` conservation law that offsets transfers) · [ADR-029](#adr-029) (the aal2 backstop `038` extends to `account_trans_split`) · `004` / `023` / `028` / `029` / `033` / `035` / `037` · migration `038` · design brief `temp/self-202-append-only-rederive.md`.
+
 ## ADR-031 — Event-sourced double-entry general ledger as a derived layer over the immutable `account_trans` ledger
 
 **Date:** 2026-07-23
