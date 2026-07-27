@@ -10,7 +10,7 @@
 // skip/exclusion anywhere (ADR-032).
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { ManualTransEdit, SplitSet } from '$lib/server/schemas/transaction';
+import type { ManualTransEdit, SplitSet, StockSplitCreate } from '$lib/server/schemas/transaction';
 
 export type WriteResult =
 	| { ok: true; transId?: number }
@@ -23,6 +23,27 @@ function isCrossTenantSubCat(message: string): boolean {
 /** DB raise-message → the 029 Σ=parent balance violation. */
 function isImbalance(message: string): boolean {
 	return /imbalance|sum to|Σ|parent\.amount/i.test(message);
+}
+
+// ── fn_create_stock_split (039) raise-message classifiers → friendly, field-scoped errors.
+// The RPC RAISEs are the authoritative guard (Zod pre-validates ratio positivity, so a
+// bad-ratio raise is normally unreachable; the position/provider/visibility raises are
+// DB-only and reachable). Order the checks most-specific-first at the call site.
+/** account not owned / not visible under RLS → 404 (no existence leak). */
+function isAccountNotVisible(message: string): boolean {
+	return /not found or not visible|fail closed/i.test(message);
+}
+/** the source-of-truth guard: a provider-linked account rejects manual splits. */
+function isProviderLinked(message: string): boolean {
+	return /provider-linked|linked_source_id|reconciliation/i.test(message);
+}
+/** no live position for the chosen security as-of the ex-date → nothing to split. */
+function isNoPosition(message: string): boolean {
+	return /no live position|nothing to split/i.test(message);
+}
+/** ratio invalid (non-positive-rational) or a no-op (1:1 / zero delta). */
+function isBadRatio(message: string): boolean {
+	return /positive rational|zero delta|no-op/i.test(message);
 }
 
 /** Compare two 4-dp money values (numeric(20,4)); DB may return numeric as string. */
@@ -239,4 +260,127 @@ export async function unsplitTrans(
 		return { ok: false, status: 422, message: 'Could not remove the split. Please try again.' };
 	}
 	return { ok: true, transId };
+}
+
+/**
+ * Stock split — record a POSITION-LEVEL book-neutral corp_action via the atomic
+ * fn_create_stock_split INVOKER RPC (SELF-203; migration 039 / ADR-033). Everything runs as
+ * the caller through the per-request anon client, so the RPC's guards ARE the boundary:
+ *   - cross-tenant → the account read / fn_holdings_as_of see nothing → fail closed;
+ *   - a provider-linked account is rejected (source-of-truth guard — its splits arrive via the
+ *     SELF-204 reconciliation path, never manual fan-in, to avoid double-restatement);
+ *   - a 1:1 (no-op) ratio and an empty position are rejected.
+ * The RPC INSERTs ONE book-neutral row (amount=0, cost_basis NULL, quantity=delta) + its 023
+ * annotation in ONE txn and returns the new corp_action trans_id. We map each RAISE to a
+ * friendly, field-scoped WriteResult. NO amount/sign handling here — a split moves quantity,
+ * not money.
+ */
+export async function createStockSplit(
+	supabase: SupabaseClient,
+	accountId: number,
+	v: StockSplitCreate
+): Promise<WriteResult> {
+	const { data: newId, error: rpcErr } = await supabase
+		.schema('pfin')
+		.rpc('fn_create_stock_split', {
+			p_account_id: accountId,
+			p_security_id: v.security_id,
+			p_ratio_num: v.ratio_num,
+			p_ratio_den: v.ratio_den,
+			p_ex_date: v.ex_date
+		});
+
+	if (rpcErr) {
+		const msg = rpcErr.message;
+		console.error('[transactions] createStockSplit RPC failed:', msg);
+		if (isAccountNotVisible(msg)) return { ok: false, status: 404, message: 'Account not found.' };
+		if (isProviderLinked(msg))
+			return {
+				ok: false,
+				status: 422,
+				message:
+					'This account is linked to a provider — its splits are applied automatically during reconciliation, not entered manually.'
+			};
+		if (isNoPosition(msg))
+			return {
+				ok: false,
+				status: 422,
+				field: 'security_id',
+				message: 'No holdings of that security as of the ex-date — nothing to split.'
+			};
+		if (isBadRatio(msg))
+			return {
+				ok: false,
+				status: 400,
+				field: 'ratio_num',
+				message: 'Enter a positive split ratio that actually changes the share count (a 1:1 ratio is a no-op).'
+			};
+		return { ok: false, status: 422, message: 'Could not record the stock split. Please try again.' };
+	}
+
+	return { ok: true, transId: newId as number };
+}
+
+/** One held-security option for the stock-split picker. `security_id` is pfin.asset.asset_id
+ *  — the value the form posts back as `security_id` (matches Frontend's SecurityOption +
+ *  fn_create_stock_split's p_security_id). `quantity` is the current held share count (display). */
+export type HeldSecurity = {
+	security_id: number;
+	symbol: string | null;
+	name: string | null;
+	quantity: number;
+};
+
+/**
+ * Load the securities CURRENTLY held in an account as-of `asOf` — the option set for the
+ * stock-split security picker (SELF-203). Two RLS-scoped reads, both fail-soft (logged, [] on
+ * error — the picker degrades, never throws):
+ *   (1) fn_holdings_as_of (019 INVOKER roll-forward) → (account_id, asset_id, quantity) for
+ *       every account; live positions only (qty <> 0). We keep this account's rows.
+ *   (2) a pfin.asset label read (RLS: global OR owned) for the held asset_ids → symbol/name.
+ * Cash is naturally absent (cash carries no security_id). Sorted by symbol, then name.
+ */
+export async function loadHeldSecurities(
+	supabase: SupabaseClient,
+	accountId: number,
+	asOf: string
+): Promise<HeldSecurity[]> {
+	const { data: holdings, error: hErr } = await supabase
+		.schema('pfin')
+		.rpc('fn_holdings_as_of', { p_as_of: asOf });
+	if (hErr) {
+		console.error('[transactions] loadHeldSecurities holdings read failed:', hErr.message);
+		return [];
+	}
+
+	const positions = ((holdings ?? []) as Array<{ account_id: number; asset_id: number; quantity: number | string }>)
+		.filter((h) => h.account_id === accountId && Number(h.quantity) !== 0);
+	if (positions.length === 0) return [];
+
+	const assetIds = positions.map((p) => p.asset_id);
+	const { data: assets, error: aErr } = await supabase
+		.schema('pfin')
+		.from('asset')
+		.select('asset_id, symbol, name')
+		.in('asset_id', assetIds);
+	if (aErr) {
+		console.error('[transactions] loadHeldSecurities asset read failed:', aErr.message);
+		return [];
+	}
+
+	const labelById = new Map(
+		((assets ?? []) as Array<{ asset_id: number; symbol: string | null; name: string | null }>).map((a) => [
+			a.asset_id,
+			a
+		])
+	);
+
+	return positions
+		.map((p) => ({
+			security_id: p.asset_id,
+			symbol: labelById.get(p.asset_id)?.symbol ?? null,
+			name: labelById.get(p.asset_id)?.name ?? null,
+			quantity: Number(p.quantity)
+		}))
+		.sort((a, b) => (a.symbol ?? a.name ?? '').localeCompare(b.symbol ?? b.name ?? ''));
 }

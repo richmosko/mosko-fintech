@@ -58,6 +58,18 @@ const subCatIdField = () =>
  *  004 matched-account fence are the security boundary; this is shape validation only. */
 const transIdField = () => z.coerce.number().int().positive();
 
+/** A positive-int security/asset id (the held-position picker value for a stock split).
+ *  Shape only — RLS + the 017 #7 security fence + the fn_create_stock_split guards are the
+ *  security boundary. */
+const securityIdField = () => z.coerce.number().int().positive();
+
+/** A strictly-positive ratio component (num or den). Runs the shared numeric battery (the
+ *  NaN/Inf/scientific/currency-string type-confusion fence — Lock 14 mod #1), then requires
+ *  > 0: a split ratio is a POSITIVE rational (forward num/den>1, reverse num/den<1; both
+ *  book-neutral). The DB re-validates (positive-rational + no-op) — this is fast UX feedback. */
+const positiveRatioComponent = () =>
+	currencyAmount().refine((n) => n > 0, 'Enter a value greater than zero.');
+
 const optionalText = (max: number) =>
 	z
 		.preprocess((v) => (v === '' || v === undefined ? null : v), z.string().trim().max(max).nullable())
@@ -130,3 +142,18 @@ export type SplitSet = z.infer<typeof splitSetSchema>;
 // UNSPLIT: delete the entire child set → revert to parent-only counting.
 export const unsplitSchema = z.object({ trans_id: transIdField() }).strict();
 export type Unsplit = z.infer<typeof unsplitSchema>;
+
+// ── (4) Stock split — POSITION-LEVEL book-neutral corp_action (SELF-203; migration 039 /
+// fn_create_stock_split; ADR-033). account_id is the route param, NOT a form field. There is
+// NO `amount` here — a split is book-neutral; the RPC resolves the held position as-of ex_date
+// (fn_holdings_as_of) and derives the quantity delta itself. transaction_type is RPC-set
+// ('corp_action'), never a form input. The ratio is a positive rational (num:den).
+export const stockSplitCreateSchema = z
+	.object({
+		security_id: securityIdField(),
+		ratio_num: positiveRatioComponent(),
+		ratio_den: positiveRatioComponent(),
+		ex_date: isoDate()
+	})
+	.strict();
+export type StockSplitCreate = z.infer<typeof stockSplitCreateSchema>;

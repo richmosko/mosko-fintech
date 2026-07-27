@@ -12,6 +12,20 @@ export type Direction = 'in' | 'out';
 /** A grouped <optgroup> shape for SelectField (cat → its sub-cats). */
 export type SubCatGroup = { label: string; options: { value: string; label: string }[] };
 
+/**
+ * A held security as shaped by the account-detail load() for the stock-split picker
+ * (SELF-203). `security_id` = pfin.asset.asset_id (the value posted to the split RPC).
+ * Backend derives the list via fn_holdings_as_of → join pfin.asset for symbol/name;
+ * the display label is composed browser-side (securityLabel) so label shape stays here.
+ */
+export type SecurityOption = { security_id: number; symbol: string | null; name: string | null };
+
+/** "SYMBOL — Name" when both present; else whichever exists; else a stable id fallback. */
+export function securityLabel(s: SecurityOption): string {
+	if (s.symbol && s.name) return `${s.symbol} — ${s.name}`;
+	return s.symbol ?? s.name ?? `Security #${s.security_id}`;
+}
+
 /** A split child as shaped by load() — note: labels only, NO sub_cat_id (recovered by label). */
 export type SplitChild = {
 	id: number;
