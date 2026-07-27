@@ -12,6 +12,18 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 ---
 
+### v1.114 — 2026-07-27
+
+**Phase 6 — SELF-203 manual stock-split entry LANDED — full-stack (PR #244, merge `686f412`).** §2.4.3.b, re-scoped to stock-split-only per [ADR-033](DECISIONS.md#adr-033). Migration `039_stock_split_entry.sql`: `account_trans_corp_action_shape` CHECK (corp_action ⟹ book-neutral; NULL-safe `coalesce(amount,0)=0 AND coalesce(cost_basis,0)=0`; quantity unconstrained) + `fn_create_stock_split` SECURITY INVOKER RPC (POSITION-LEVEL — resolves position via `fn_holdings_as_of` (019), `delta = qty × (ratio−1)`, inserts one book-neutral corp_action row + 023 annotation; source-of-truth guard rejects provider-linked accounts; `FOUND`-idiom account fence). Paired two-tenant pgTAP `039_stock_split_entry_rls.sql` **plan(21)** — Sec joint-review **GREEN**, CI directory-mode green. Backend: `stockSplitCreateSchema` (+7 vitest) + `createStockSplit` action/helper + `loadHeldSecurities`. Frontend: `StockSplitEntryForm.svelte` (source-of-truth-gated) + client mirror. **Ratified decisions:** position-level not per-lot (OWD-1 → C; per-lot deferred — [BACKLOG §7.3 G2](BACKLOG.md)); single-account per entry (OWD-2). SELF-203 → Done. Empty-state/error copy are placeholders (UX follow-up).
+
+### v1.113 — 2026-07-26
+
+**Phase 6 — SELF-203 re-scope follow-through (PR #243, merge `fa035cc`).** Doc-only, per [ADR-033](DECISIONS.md#adr-033) Handoffs: PRD §2.4.3 drops "other" from the V1 enumeration (V2-reserved → BACKLOG §5.4); BACKLOG §7.3 (new) stages the deferred transfer-in-kind work (G1, later-V1.x GL-substrate stream); SELF-203 re-scoped in Linear to stock-split-only + the book-neutrality build AC. Also `supabase/CLAUDE.md` Decision-3 count doc-synced (stale 12/10 → live **14 labeled / 12 DDL-realized**).
+
+### v1.112 — 2026-07-26
+
+**Phase 6 — ADR-033 SELF-203 model-ratify gate LANDED (PR #242, merge `8834501`).** Decision-only ADR reconciling SELF-203's June AC against the landed `030`–`038` GL model: **no new `transaction_type` value** — split → `corp_action`, "other" → V2-reserved, transfer-in-kind → deferred (journal `group_type='transfer_in_kind'`, not a fact-kind). **Two collisions caught on paper:** (a) other → `acct_setup` would mis-book every event to Opening-Balance-Equity via the unconditional P5 branch; (b) a new `transfer_in_kind` `transaction_type` would have no contra branch → position leg with no offset → Σ=0 trial-balance break. §10 (stays 3) / Decision-3 / DEFINER (stays 4) all unchanged. Sec joint-review **GREEN** + F/CTO ratified. **Also (infra).** Diagnosed a Linear↔GitHub auto-close bug — a merged PR referencing an issue ID (branch/title/body/commits) auto-transitions it to Done; #242/#243 wrongly closed SELF-203 (reopened). F/CTO changed the integration setting to stop merged→Done auto-migration; **confirmed working** on the #244 merge (SELF-203 stayed In Progress, closed via `/merge-pr` step 4).
+
 ### v1.111 — 2026-07-26
 
 **Phase 6 — SELF-202 manual cash-transaction entry LANDED — the FIRST Onboarding §2.4 issue toward closing V1.0 (PR #240, merge `ff61a23`).** Full-stack §2.4.3.a (form UI + backend write path + edit + split), delivered through the complete role-separated build loop.
