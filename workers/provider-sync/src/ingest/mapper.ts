@@ -11,6 +11,7 @@
 import type { BalanceDTO, HoldingDTO, TransactionDTO } from '../adapters/ProviderAdapter.js';
 import { TenantBoundClient, type Tx } from '../db/TenantBoundClient.js';
 import { assetKey, resolveSecurityIds, type ResolvableAsset } from './resolution.js';
+import { computeImportHash } from '../shared/importHash.js';
 
 /** The jsonb row shape fn_ingest_transactions(p_rows jsonb) shreds via jsonb_to_recordset
  *  (017 column list — EXACT names/order do not matter to jsonb_to_recordset, names do). */
@@ -28,7 +29,11 @@ export interface IngestRow {
 	source_provider: string;
 	provider_txn_id: string;
 	provider_category: string | null;
-	import_hash: string | null; // provider path dedups on (source_provider, provider_txn_id)
+	// Provider↔provider dedup keys on (source_provider, provider_txn_id). import_hash is ALSO
+	// populated (SELF-204 / ADR-034 D4) with the SAME shared canonical hash the manual-entry action
+	// computes → enables the manual_provider_dup_candidate detection self-join. Safe: the 040 hash
+	// index is non-unique, so a provider row and its manual echo coexist.
+	import_hash: string | null;
 }
 
 /** Reason a TransactionDTO was dropped from the ingest batch (surfaced for sync_audit). */
@@ -73,7 +78,16 @@ export function buildIngestRows(
 			source_provider: provider,
 			provider_txn_id: t.providerTxnId,
 			provider_category: t.providerCategory,
-			import_hash: null
+			// SELF-204 (ADR-034 D4): the SAME shared canonical hash the manual-entry action computes,
+			// over account + date + amount + normalized descriptor — the detection self-join matches
+			// on it. account_id here is the resolved pfin account_id (the hash is account-scoped).
+			import_hash: computeImportHash({
+				accountId,
+				date: t.date,
+				amount: t.amount,
+				vendor: t.vendor,
+				description: t.description
+			})
 		});
 	}
 	return { rows, dropped };

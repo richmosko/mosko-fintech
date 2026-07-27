@@ -20,6 +20,8 @@
 	import SelectField from '$lib/components/SelectField.svelte';
 	import TransactionEntryForm from '$lib/components/TransactionEntryForm.svelte';
 	import StockSplitEntryForm from '$lib/components/StockSplitEntryForm.svelte';
+	import DuplicateCandidateList from '$lib/components/DuplicateCandidateList.svelte';
+	import SyncHistoryTable from '$lib/components/SyncHistoryTable.svelte';
 	import TransactionRow from '$lib/components/TransactionRow.svelte';
 	import { subCatGroupsOf } from '$lib/transaction-util';
 
@@ -34,6 +36,14 @@
 	// reconciliation (SELF-204); the fn_create_stock_split RPC is the DB-level backstop.
 	const heldSecurities = $derived(data.heldSecurities ?? []);
 	const isSourceOfTruth = $derived(account.linked_source_id == null);
+
+	// SELF-204 read-only surfaces (Backend exposes both view row-sets from load()):
+	//  - dupCandidates: manual↔provider candidate-duplicate pairs for THIS account
+	//    (pfin.manual_provider_dup_candidate). DETECTION-ONLY — no action affordance.
+	//  - syncHistory: per-account provider sync history (pfin.linked_source_sync_history),
+	//    rendered only for provider-linked accounts (a manual account has no sync history).
+	const dupCandidates = $derived(data.dupCandidates ?? []);
+	const syncHistory = $derived(data.syncHistory ?? []);
 
 	// Cashflow-domain Sub-Cat picker groups for the transaction entry/edit/split/categorize
 	// surfaces (NOT data.subCats — that's the asset-domain picker for account reassignment).
@@ -248,6 +258,16 @@
 		</section>
 	{/if}
 
+	<!--
+		Candidate-duplicate DETECTION surface (SELF-204). Read-only — surfaces manual entries that
+		look like a synced provider transaction so the user can reconcile them through existing
+		mechanisms. NO action affordance here (resolution is SELF-205). Empty-state when none.
+	-->
+	<section class="region" aria-label="Possible duplicates">
+		<h2 class="section-title">Possible duplicates</h2>
+		<DuplicateCandidateList candidates={dupCandidates} />
+	</section>
+
 	<section class="region" aria-label="Transactions">
 		<h2 class="section-title">Transactions</h2>
 		{#if transactions.length === 0}
@@ -274,6 +294,18 @@
 			</div>
 		{/if}
 	</section>
+
+	<!--
+		Per-account sync history (SELF-204). Rendered ONLY for provider-linked accounts (a manual
+		account has no sync history); the component's empty-state covers a linked account with no
+		history rows yet. Read-only — no edit/delete affordance (AC requirement, RBAC-tested).
+	-->
+	{#if !isSourceOfTruth}
+		<section class="region" aria-label="Sync history">
+			<h2 class="section-title">Sync history</h2>
+			<SyncHistoryTable rows={syncHistory} />
+		</section>
+	{/if}
 </main>
 
 <style>

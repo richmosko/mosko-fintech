@@ -9,6 +9,7 @@ import {
 	providerImpliedPrice
 } from '../src/ingest/mapper.js';
 import type { HoldingDTO, TransactionDTO } from '../src/adapters/ProviderAdapter.js';
+import { computeImportHash } from '../src/shared/importHash.js';
 
 describe('providerImpliedPrice (Sec guard #1 — div-by-zero + non-finite)', () => {
 	it('computes marketValue ÷ quantity', () => {
@@ -56,9 +57,14 @@ describe('buildIngestRows', () => {
 			security_id: null,
 			source_provider: 'plaid',
 			provider_txn_id: 't1',
-			transaction_type: null, // RPC COALESCEs to 'standard'
-			import_hash: null
+			transaction_type: null // RPC COALESCEs to 'standard'
 		});
+		// SELF-204 (ADR-034 D4): the mapper stamps the SHARED canonical content hash (account +
+		// date + amount + normalized descriptor), enabling manual↔provider dedup detection. Assert
+		// it equals the shared fn over the resolved pfin account_id — proves no per-tier drift.
+		expect(rows[0]?.import_hash).toBe(
+			computeImportHash({ accountId: 1001, date: '2026-07-10', amount: -50, vendor: 'V', description: 'D' })
+		);
 	});
 
 	it('resolves security_id via the key map for an investment txn', () => {

@@ -380,3 +380,49 @@ jobs:
             exit 1
           fi
           echo "OK: fence caught the host-network exposure vector (exit $rc)."
+
+  dedup-hash-identical:
+    name: dedup-hash — import_hash canonical↔copy drift fence
+    runs-on: ubuntu-latest
+    # SELF-204 / ADR-034 Decision 4 (F/CTO-ratified 2026-07-27): the canonical manual↔
+    # provider import_hash is ONE shared source (workers/provider-sync/src/shared/
+    # importHash.ts) with a machine-generated, banner-marked copy (api/src/lib/server/
+    # dedup/importHash.ts). A divergent canonicalization breaks manual↔provider dedup
+    # detection INVISIBLY and imprints on stored hashes (one-way door) — so the two must
+    # be provably identical at every merge.
+    #
+    # Mechanism = REGENERATE-and-assert-clean (Sec ratify condition 2, 2026-07-27), NOT a
+    # static two-file byte-compare (which passes if both were hand-edited in lockstep). The
+    # script runs the canonical generator from the source and asserts the committed copy IS
+    # that fresh output — red on stale/hand-edited/deleted copy. See the script header for
+    # the `--stdout | diff` vs `git diff --exit-code` mechanism note flagged to Sec.
+    #
+    # HOMED HERE (run-always, no `paths:` filter) DELIBERATELY: this is a CROSS-TREE fence
+    # (workers/provider-sync/ ↔ api/). Path-filtering it to either tree would green-by-
+    # absence when a PR edits only the OTHER tree — the exact F-2 / RT-27 trigger-drift hole.
+    # A drift fence that isn't run-always is theater. Must ALSO be a REQUIRED status check on
+    # `main` (F/CTO branch-protection action, registrable after this job's first report).
+    # Dual-mode (production + inversion golden) mirrors fence-rt22/rt26/tbc/secrets-nonoverlap.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'  # generator is a Node .mjs; matches both tiers' runtime
+
+      - name: Production-mode — real canonical source vs committed copy (expects clean, exit 0)
+        run: bash scripts/ci/check-dedup-hash-identical.sh
+
+      - name: Inversion — golden diverged copy (expects drift, exit 1)
+        run: |
+          set +e
+          bash scripts/ci/check-dedup-hash-identical.sh \
+            --source tests/fixtures/ci/dedup-hash-drift-source.ts \
+            --copy   tests/fixtures/ci/dedup-hash-drift-copy.ts
+          rc=$?
+          set -e
+          if [ $rc -ne 1 ]; then
+            echo "FATAL: dedup-hash fence expected exit 1 on the diverged-copy golden but got $rc — fence is broken; failing closed."
+            exit 1
+          fi
+          echo "OK: fence caught the diverged-copy drift (exit $rc)."
