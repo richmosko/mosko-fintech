@@ -11,6 +11,7 @@ import {
 	recategorizeSchema,
 	splitSetSchema,
 	unsplitSchema,
+	stockSplitCreateSchema,
 	fieldErrors
 } from './transaction';
 
@@ -138,5 +139,71 @@ describe('unsplitSchema', () => {
 	it('needs only a positive trans id', () => {
 		expect(unsplitSchema.safeParse({ trans_id: '5' }).success).toBe(true);
 		expect(unsplitSchema.safeParse({ trans_id: '5', extra: 1 }).success).toBe(false);
+	});
+});
+
+describe('stockSplitCreateSchema (SELF-203; book-neutral corp_action)', () => {
+	it('accepts a valid forward split (2:1)', () => {
+		const r = stockSplitCreateSchema.safeParse({
+			security_id: '42',
+			ratio_num: '2',
+			ratio_den: '1',
+			ex_date: '2026-07-20'
+		});
+		expect(r.success).toBe(true);
+		if (r.success) {
+			expect(r.data.security_id).toBe(42);
+			expect(r.data.ratio_num).toBe(2);
+			expect(r.data.ratio_den).toBe(1);
+		}
+	});
+
+	it('accepts a reverse split (1:10) and a fractional ratio component', () => {
+		expect(
+			stockSplitCreateSchema.safeParse({ security_id: '7', ratio_num: '1', ratio_den: '10', ex_date: '2026-01-02' })
+				.success
+		).toBe(true);
+		expect(
+			stockSplitCreateSchema.safeParse({ security_id: '7', ratio_num: '1.5', ratio_den: '1', ex_date: '2026-01-02' })
+				.success
+		).toBe(true);
+	});
+
+	it('rejects a non-positive ratio component (a ratio is a positive rational)', () => {
+		for (const bad of [
+			{ ratio_num: '0', ratio_den: '1' },
+			{ ratio_num: '2', ratio_den: '0' },
+			{ ratio_num: '-2', ratio_den: '1' },
+			{ ratio_num: '2', ratio_den: '-1' }
+		]) {
+			const r = stockSplitCreateSchema.safeParse({ security_id: '1', ex_date: '2026-07-20', ...bad });
+			expect(r.success, `${JSON.stringify(bad)} must be rejected`).toBe(false);
+		}
+	});
+
+	it('rejects NaN / Infinity / scientific / currency-string ratio components (numeric battery)', () => {
+		for (const ratio_num of ['NaN', 'Infinity', '1e2', '$2', '1,000', 'abc']) {
+			const r = stockSplitCreateSchema.safeParse({ security_id: '1', ratio_num, ratio_den: '1', ex_date: '2026-07-20' });
+			expect(r.success, `ratio_num=${ratio_num} must be rejected`).toBe(false);
+		}
+	});
+
+	it('rejects a non-positive / non-integer security id', () => {
+		expect(stockSplitCreateSchema.safeParse({ security_id: '0', ratio_num: '2', ratio_den: '1', ex_date: '2026-07-20' }).success).toBe(false);
+		expect(stockSplitCreateSchema.safeParse({ security_id: '-3', ratio_num: '2', ratio_den: '1', ex_date: '2026-07-20' }).success).toBe(false);
+		expect(stockSplitCreateSchema.safeParse({ security_id: '1.5', ratio_num: '2', ratio_den: '1', ex_date: '2026-07-20' }).success).toBe(false);
+	});
+
+	it('rejects an impossible ex-date', () => {
+		const r = stockSplitCreateSchema.safeParse({ security_id: '1', ratio_num: '2', ratio_den: '1', ex_date: '2026-02-31' });
+		expect(r.success).toBe(false);
+		if (!r.success) expect(fieldErrors(r.error)).toHaveProperty('ex_date');
+	});
+
+	it('.strict() rejects unknown keys — incl. account_id (route param, NOT a form field) + amount/transaction_type', () => {
+		for (const extra of [{ account_id: '9' }, { amount: '100' }, { transaction_type: 'corp_action' }, { is_excluded: true }]) {
+			const r = stockSplitCreateSchema.safeParse({ security_id: '1', ratio_num: '2', ratio_den: '1', ex_date: '2026-07-20', ...extra });
+			expect(r.success, `extra key ${JSON.stringify(extra)} must be rejected`).toBe(false);
+		}
 	});
 });

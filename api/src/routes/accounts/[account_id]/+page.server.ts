@@ -23,13 +23,16 @@ import {
 	manualTransEditSchema,
 	recategorizeSchema,
 	splitSetSchema,
-	unsplitSchema
+	unsplitSchema,
+	stockSplitCreateSchema
 } from '$lib/server/schemas/transaction';
 import {
 	reverseAndReplaceTrans,
 	writeSplitSet,
 	unsplitTrans,
 	upsertAnnotation,
+	createStockSplit,
+	loadHeldSecurities,
 	type WriteResult
 } from '$lib/server/queries/transactions';
 import { loadAssetSubCats, loadCashflowSubCats, subCatLabel } from '$lib/server/queries/taxonomy';
@@ -52,12 +55,21 @@ function toActionResult(r: WriteResult) {
 }
 
 // Embed the Sub-Cat label via the account.sub_cat_id → user_taxonomy FK (012).
+// linked_source_id (015) surfaces the source-of-truth status so the UI can restrict manual
+// stock-split entry to non-provider-linked accounts (SELF-203 app-layer UX complement; the
+// fn_create_stock_split DB guard is the integrity boundary — the UI restriction is defense-
+// in-depth for a clean affordance, never the security boundary). acct_number stays unselected.
 const ACCOUNT_COLUMNS =
-	'account_id, name, account_type, scope, tax_treatment, sub_cat_id, is_active, created_at, user_taxonomy ( cat, sub_cat )';
+	'account_id, name, account_type, scope, tax_treatment, sub_cat_id, is_active, linked_source_id, created_at, user_taxonomy ( cat, sub_cat )';
 
 function parseAccountId(param: string): number | null {
 	const n = Number(param);
 	return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+/** Today's date as an ISO YYYY-MM-DD string — the as-of date for the held-security picker. */
+function todayIso(): string {
+	return new Date().toISOString().slice(0, 10);
 }
 
 /** 012 fn_account_matched_sub_cat raise-message signature → map to the sub_cat field. */
@@ -138,7 +150,14 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	const subCats = await loadAssetSubCats(locals.supabase);
 	const cashflowSubCats = await loadCashflowSubCats(locals.supabase);
 
-	return { account, transactions, subCats, cashflowSubCats };
+	// SELF-203 stock-split entry — the account's current live positions (quantity ≠ 0) for the
+	// security picker: fn_holdings_as_of(today) filtered to this account + pfin.asset labels.
+	// RLS-scoped, fail-soft ([] on error → cash-only accounts have nothing to split). The
+	// OWD-2 source-of-truth UI gate reads account.linked_source_id directly (the same column
+	// the fn_create_stock_split DB guard keys on — UI + DB gate on one source, no derived drift).
+	const heldSecurities = await loadHeldSecurities(locals.supabase, accountId, todayIso());
+
+	return { account, transactions, subCats, cashflowSubCats, heldSecurities };
 };
 
 export const actions: Actions = {
@@ -302,5 +321,24 @@ export const actions: Actions = {
 		if (!parsed.success) return fail(400, { errors: fieldErrors(parsed.error) });
 
 		return toActionResult(await unsplitTrans(locals.supabase, parsed.data.trans_id));
+	},
+
+	// ── SELF-203 stock-split entry (039 / fn_create_stock_split; ADR-033) ──────────────────
+	// (4) Record a POSITION-LEVEL book-neutral corp_action via the atomic INVOKER RPC. Posted
+	// fields: security_id, ratio_num, ratio_den, ex_date (account_id is the route param; there
+	// is NO amount — a split is book-neutral, quantity-only). The RPC's guards are the boundary
+	// (cross-tenant fails closed; provider-linked / empty-position / no-op rejected) — the helper
+	// maps each RAISE to a friendly, field-scoped error.
+	createStockSplit: async ({ request, locals, params }) => {
+		const { user } = await locals.safeGetSession();
+		if (!user) return fail(401, { errors: { _form: ['You must be signed in.'] } });
+		const accountId = parseAccountId(params.account_id);
+		if (accountId === null) return fail(400, { errors: { _form: ['Invalid account.'] } });
+
+		const raw = Object.fromEntries(await request.formData());
+		const parsed = stockSplitCreateSchema.safeParse(raw);
+		if (!parsed.success) return fail(400, { errors: fieldErrors(parsed.error), values: raw });
+
+		return toActionResult(await createStockSplit(locals.supabase, accountId, parsed.data));
 	}
 };

@@ -19,6 +19,7 @@
 	import Button from '$lib/components/Button.svelte';
 	import SelectField from '$lib/components/SelectField.svelte';
 	import TransactionEntryForm from '$lib/components/TransactionEntryForm.svelte';
+	import StockSplitEntryForm from '$lib/components/StockSplitEntryForm.svelte';
 	import TransactionRow from '$lib/components/TransactionRow.svelte';
 	import { subCatGroupsOf } from '$lib/transaction-util';
 
@@ -26,6 +27,13 @@
 
 	const account = $derived(data.account);
 	const transactions = $derived(data.transactions);
+
+	// SELF-203 stock split — held-security picker options (Backend derives via fn_holdings_as_of).
+	// The affordance is source-of-truth gated (OWD-2 / ADR-033): rendered ONLY when the account is
+	// NOT provider-linked (linked_source_id IS NULL). A provider-linked account's splits arrive via
+	// reconciliation (SELF-204); the fn_create_stock_split RPC is the DB-level backstop.
+	const heldSecurities = $derived(data.heldSecurities ?? []);
+	const isSourceOfTruth = $derived(account.linked_source_id == null);
 
 	// Cashflow-domain Sub-Cat picker groups for the transaction entry/edit/split/categorize
 	// surfaces (NOT data.subCats — that's the asset-domain picker for account reassignment).
@@ -223,6 +231,22 @@
 		<h2 class="section-title">Add a transaction</h2>
 		<TransactionEntryForm subCatGroups={cashflowGroups} />
 	</section>
+
+	<!--
+		Stock-split entry (SELF-203). Source-of-truth gate (OWD-2 / ADR-033): only rendered for
+		non-provider-linked accounts. A provider-linked account's splits come via reconciliation
+		(SELF-204) — showing manual entry there would be a conflicting write path.
+	-->
+	{#if isSourceOfTruth}
+		<section class="region" aria-label="Record a stock split">
+			<h2 class="section-title">Record a stock split</h2>
+			{#if heldSecurities.length === 0}
+				<p class="empty">No securities held in this account to split.</p>
+			{:else}
+				<StockSplitEntryForm securities={heldSecurities} />
+			{/if}
+		</section>
+	{/if}
 
 	<section class="region" aria-label="Transactions">
 		<h2 class="section-title">Transactions</h2>

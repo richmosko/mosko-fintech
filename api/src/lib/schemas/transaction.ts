@@ -125,3 +125,30 @@ export type SplitSet = z.infer<typeof splitSetSchema>;
 // ── (3b) Unsplit — delete the entire child set → revert to parent-only counting. ─────────
 export const unsplitSchema = z.object({ trans_id: transIdField() }).strict();
 export type Unsplit = z.infer<typeof unsplitSchema>;
+
+// ── (4) Stock split — POSITION-LEVEL book-neutral corp_action (SELF-203 / ADR-033). CLIENT
+// mirror of src/lib/server/schemas/transaction.ts stockSplitCreateSchema (Backend's source of
+// truth); same field shape, same .strict() posture, same numeric battery. account_id is the
+// route param, NOT a form field; there is NO `amount` (book-neutral — the RPC derives the
+// quantity delta from the held position). ────────────────────────────────────────────────
+
+/** A positive-int security/asset id (the held-position picker value). Shape only — RLS + the
+ *  017 #7 security fence + the fn_create_stock_split guards are the security boundary. */
+const securityIdField = () => z.coerce.number().int().positive();
+
+/** A strictly-positive ratio component (num or den). Runs the shared numeric battery (the
+ *  NaN/Inf/scientific/currency-string type-confusion fence), then requires > 0: a split ratio
+ *  is a POSITIVE rational (forward num/den>1, reverse num/den<1). The server + DB re-validate
+ *  (positive-rational + no-op) — this is fast UX feedback only. */
+const positiveRatioComponent = () =>
+	currencyAmount().refine((n) => n > 0, 'Enter a value greater than zero.');
+
+export const stockSplitCreateSchema = z
+	.object({
+		security_id: securityIdField(),
+		ratio_num: positiveRatioComponent(),
+		ratio_den: positiveRatioComponent(),
+		ex_date: isoDate()
+	})
+	.strict();
+export type StockSplitCreate = z.infer<typeof stockSplitCreateSchema>;
