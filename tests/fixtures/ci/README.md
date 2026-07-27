@@ -22,6 +22,7 @@ adjacent**, not a §10 attribution surface. See `scripts/ci/README.md` for the
 | `tbc-node-violation.ts` | TBC-node `TenantBoundClient` grep | LEG 1: raw `postgres()` / `new Pool()` / `new Client()` + banned `@supabase/supabase-js` `createClient()`/import outside the `TenantBoundClient` class. LEG 2: a literal `SUPABASE_SERVICE_ROLE_KEY` reference (Sec-condition absence tripwire). Node/TS provider-sync analogue. |
 | `tbc-basename-collision/` (`db/core.py` + `etl/core.py`) | TBC `TenantBoundConnection` grep | **Production-mode** regression for the `grep --exclude=<basename>` false-negative (Sec, 2026-07-17): class file + a same-basename violator in a different dir. Fence MUST exit 1 (violator caught via full-path exclusion). |
 | `tbc-node-basename-collision/` (`db/client.ts` + `adapters/client.ts`) | TBC-node `TenantBoundClient` grep | **Production-mode** regression (Node twin): class file + same-basename violator elsewhere. Fence MUST exit 1. |
+| `dedup-hash-drift-source.ts` + `dedup-hash-drift-copy.ts` | `dedup-hash-identical` import_hash drift fence (SELF-204 / ADR-034 D4) | **Inversion pair.** A golden stand-in source + a deliberately-diverged copy (`toLowerCase`→`toUpperCase`, the invisible-canonicalization-break class D4 fears). The fence regenerates from the source and diffs against the copy; they MUST differ so the fence exits 1 (a fence without a failing golden is theater, Sec 2026-07-27). Stand-ins, NOT the real `importHash.ts` module. |
 
 ## Fixture path discipline (Sec rubric (b)3 #2 + agent-def)
 

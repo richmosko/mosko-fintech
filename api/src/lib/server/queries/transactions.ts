@@ -11,6 +11,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ManualTransEdit, SplitSet, StockSplitCreate } from '$lib/server/schemas/transaction';
+import { computeImportHash } from '$lib/server/dedup/importHash';
 
 export type WriteResult =
 	| { ok: true; transId?: number }
@@ -88,9 +89,13 @@ export async function upsertAnnotation(
  * via a single bulk INSERT (one PostgREST statement = one txn). The reversal mirrors the
  * original (negated amount/quantity) and points at it (is_reverse=true, replaces_trans_id); the
  * corrected row is a fresh fact (is_reverse=false, replaces_trans_id NULL). Per the dedup rule,
- * BOTH new rows carry NULL source_provider/provider_txn_id/import_hash even when the original was
- * provider-sourced — the provider identity stays on the original only (avoids the 017
- * account_trans_provider_dedup_idx collision). The corrected row's category/note is a follow-up
+ * both new rows carry NULL source_provider/provider_txn_id — the provider identity stays on the
+ * original only (avoids the 017 account_trans_provider_dedup_idx collision). import_hash differs
+ * by row (SELF-204 / ADR-034 D4 + Consequences b): the reversal row is always NULL; the corrected
+ * replacement gets a FRESH content hash when the original was manual (source_provider NULL) so an
+ * edited manual entry stays detectable against a provider echo, and NULL when the original was
+ * provider-sourced (its import_hash stays on the original only). The corrected row's category/note
+ * is a follow-up
  * 023 annotation upsert (benign if it fails — the row is then Unsorted-pending, a valid state;
  * the money-critical {reversal, replacement} pair already committed atomically).
  */
@@ -103,7 +108,7 @@ export async function reverseAndReplaceTrans(
 	const { data: orig } = await supabase
 		.schema('pfin')
 		.from('account_trans')
-		.select('trans_id, account_id, transaction_date, amount, vendor, description, transaction_type, security_id, quantity, is_reverse')
+		.select('trans_id, account_id, transaction_date, amount, vendor, description, transaction_type, security_id, quantity, is_reverse, source_provider')
 		.eq('account_id', accountId)
 		.eq('trans_id', v.orig_trans_id)
 		.maybeSingle();
@@ -138,6 +143,23 @@ export async function reverseAndReplaceTrans(
 		is_reverse: true,
 		replaces_trans_id: orig.trans_id
 	};
+	// SELF-204 (ADR-034 D4 + Consequences b): the corrected row is a fresh MANUAL fact — give it a
+	// fresh content hash (via the SAME shared module the provider mapper uses) so an edited manual
+	// entry stays detectable against a provider echo. BUT when the ORIGINAL was provider-sourced,
+	// its provider identity (incl. import_hash) stays on the original ONLY — the replacement carries
+	// NULL (per ADR-034 Consequences b; avoids re-imprinting a provider row's identity onto a manual
+	// correction). The reversal row (below) always carries NULL. The 040-relaxed hash index is
+	// non-unique, so a duplicate manual hash no longer aborts.
+	const correctedImportHash =
+		orig.source_provider == null
+			? computeImportHash({
+					accountId,
+					date: v.transaction_date,
+					amount: v.amount,
+					vendor: v.vendor,
+					description: v.description
+				})
+			: null;
 	const corrected = {
 		account_id: accountId,
 		transaction_date: v.transaction_date,
@@ -145,7 +167,8 @@ export async function reverseAndReplaceTrans(
 		vendor: v.vendor,
 		description: v.description,
 		transaction_type: orig.transaction_type, // preserve the fact-kind (cash = 'standard')
-		is_reverse: false
+		is_reverse: false,
+		import_hash: correctedImportHash
 		// security_id NULL + quantity 0 default (017 cash CHECK); provider cols NULL (manual origin)
 	};
 

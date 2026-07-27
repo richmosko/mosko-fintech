@@ -36,6 +36,8 @@ import {
 	type WriteResult
 } from '$lib/server/queries/transactions';
 import { loadAssetSubCats, loadCashflowSubCats, subCatLabel } from '$lib/server/queries/taxonomy';
+import { loadDupCandidates, loadSyncHistory } from '$lib/server/queries/reconciliation';
+import { computeImportHash } from '$lib/server/dedup/importHash';
 import type { PageServerLoad, Actions } from './$types';
 
 // Category label + note (023) and split children (029) embedded per transaction so the
@@ -157,7 +159,17 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	// the fn_create_stock_split DB guard keys on — UI + DB gate on one source, no derived drift).
 	const heldSecurities = await loadHeldSecurities(locals.supabase, accountId, todayIso());
 
-	return { account, transactions, subCats, cashflowSubCats, heldSecurities };
+	// SELF-204 manual↔provider dedup DETECTION (migration 040 / ADR-034 D2) — candidate pairs
+	// for this account (a manual row that looks like a synced provider row). Detection-only:
+	// the user reconciles explicitly (SELF-205 interprets). RLS-scoped, fail-soft ([] on error).
+	const dupCandidates = await loadDupCandidates(locals.supabase, accountId);
+
+	// SELF-204 sync history (ADR-034 D3) — THIS account's linked-connection sync activity, filtered
+	// by the account's linked_source_id (per-account per F/CTO ratify; owner-scoped scalar projection,
+	// raw `detail` blob unreachable). A manual/non-linked account → []. Fail-soft ([] on error).
+	const syncHistory = await loadSyncHistory(locals.supabase, account.linked_source_id ?? null);
+
+	return { account, transactions, subCats, cashflowSubCats, heldSecurities, dupCandidates, syncHistory };
 };
 
 export const actions: Actions = {
@@ -238,6 +250,17 @@ export const actions: Actions = {
 		if (!parsed.success) return fail(400, { errors: fieldErrors(parsed.error), values: raw });
 		const v = parsed.data;
 
+		// SELF-204 (ADR-034 D4): compute the canonical content hash in shared TS (the SAME module
+		// the provider-sync mapper uses) and pass it as p_import_hash — the RPC STORES it (computes
+		// nothing), feeding manual↔provider dedup detection. NULL was the pre-040 behavior.
+		const importHash = computeImportHash({
+			accountId,
+			date: v.transaction_date,
+			amount: v.amount,
+			vendor: v.vendor,
+			description: v.description
+		});
+
 		const { data: newId, error: rpcErr } = await locals.supabase
 			.schema('pfin')
 			.rpc('fn_create_manual_trans', {
@@ -247,7 +270,8 @@ export const actions: Actions = {
 				p_vendor: v.vendor,
 				p_description: v.description,
 				p_sub_cat_id: v.sub_cat_id,
-				p_note: v.note
+				p_note: v.note,
+				p_import_hash: importHash
 			});
 		if (rpcErr) {
 			console.error('[accounts/[account_id]] createTrans RPC failed:', rpcErr.message);

@@ -26,6 +26,58 @@ export function securityLabel(s: SecurityOption): string {
 	return s.symbol ?? s.name ?? `Security #${s.security_id}`;
 }
 
+/**
+ * A manual↔provider candidate-duplicate pair (SELF-204), as shaped by the account-detail
+ * load() from pfin.manual_provider_dup_candidate. DETECTION-ONLY: read-only, no action —
+ * the user reconciles through existing mechanisms; resolution/reconciled-state is SELF-205.
+ */
+export type DupCandidate = {
+	account_id: number;
+	manual_trans_id: number;
+	manual_date: string;
+	manual_amount: number;
+	manual_vendor: string | null;
+	manual_description: string | null;
+	provider_trans_id: number;
+	provider: string;
+	provider_txn_id: string;
+	provider_date: string;
+	provider_amount: number;
+	import_hash: string;
+};
+
+/**
+ * One per-account sync-history row (SELF-204), from pfin.linked_source_sync_history. The two
+ * count keys are JSONB-extracted scalars → null when the key is absent. Read-only (no edit/
+ * delete affordance — AC requirement, RBAC-tested).
+ */
+export type SyncHistoryRow = {
+	provider: string;
+	source: string;
+	created_at: string;
+	transactions_inserted: number | null;
+	transactions_skipped: number | null;
+};
+
+/** Sync-trigger source → friendly label; unknown sources pass through raw. (Copy = UX's call.) */
+export function syncSourceLabel(source: string): string {
+	if (source === 'webhook') return 'Webhook';
+	if (source === 'scheduled_poll') return 'Scheduled';
+	return source;
+}
+
+/**
+ * Deterministic timestamp format — locale AND time-zone pinned (like money()'s pinned locale)
+ * so the SSR and client renders match (unpinned toLocale* would drift server-TZ vs browser-TZ
+ * → hydration mismatch). Rendered in UTC for determinism; the TZ-display choice is a UX/Visual
+ * decision flagged, not settled here.
+ */
+export function formatTimestamp(iso: string): string {
+	const d = new Date(iso);
+	if (Number.isNaN(d.getTime())) return iso;
+	return d.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC' });
+}
+
 /** A split child as shaped by load() — note: labels only, NO sub_cat_id (recovered by label). */
 export type SplitChild = {
 	id: number;
