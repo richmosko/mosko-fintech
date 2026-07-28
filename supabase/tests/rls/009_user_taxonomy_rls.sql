@@ -35,9 +35,13 @@
 --   (1a)         -> non-vacuous POSITIVE: owner A reads its own rows (guards an over-
 --                  restrictive / absent SELECT policy).
 --   (1b)         -> RED if the SELECT policy were dropped/widened (B would see A's taxonomy).
---   (2a)/(2b)/(2c)-> RED if a write GRANT were opened to authenticated (V1-write-dormancy
---                  broken): the message would change from grant-layer 'permission denied'
---                  (or the write would commit). Guards the SELECT-only grant against widening.
+--   NOTE: INSERT-dormancy is NO LONGER asserted here — 041 (SELF-311) un-defers Lock 7 for
+--     INSERT (adds user_taxonomy_insert policy + INSERT grant). The former (2a) INSERT-grant-
+--     denied assertion was REMOVED at SELF-311 (it now tests a false premise); the live INSERT
+--     surface is covered by supabase/tests/rls/041_taxonomy_default_and_provisioning_rls.sql.
+--   (2b)/(2c)    -> RED if an UPDATE/DELETE GRANT were opened to authenticated (mutate-dormancy
+--                  broken — 041 lifts INSERT ONLY): the message would change from grant-layer
+--                  'permission denied' (or the write would commit). Guards UPDATE/DELETE dormancy.
 --   (3a)/(3b)    -> RED if anon gained SELECT on user_taxonomy OR USAGE on schema pfin
 --                  (ADR-023 C2 internet-facing outer fence).
 --   (4a)         -> RED if UNIQUE(users_id,domain,cat,sub_cat) were dropped (dup taxonomy row).
@@ -95,7 +99,7 @@ begin;
 -- shared verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(23);
+select plan(22);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
@@ -144,18 +148,14 @@ select is(
 select set_config('role', 'postgres', true);
 
 -- =====================================================================
--- BLOCK 2 — V1-WRITE-DORMANT: authenticated I/U/D fail closed at the GRANT layer.
---   SELECT-only grant + no write policy => 'permission denied for table user_taxonomy' (42501),
---   the grant-layer mechanism (NOT the WITH-CHECK RLS-policy message). Run under authenticated
---   A (its OWN rows) to prove even the owner cannot write in V1 — a pure grant-layer denial.
+-- BLOCK 2 — MUTATE-DORMANT: authenticated UPDATE/DELETE fail closed at the GRANT layer.
+--   SELECT+INSERT grant (INSERT added at 041), NO update/delete grant => 'permission denied for
+--   table user_taxonomy' (42501), the grant-layer mechanism (NOT the WITH-CHECK RLS-policy
+--   message). Run under authenticated A (its OWN rows) to prove the owner cannot MUTATE existing
+--   rows in V1 — a pure grant-layer denial. (INSERT-dormancy was lifted at 041; the live INSERT
+--   surface — owner PASS, cross-tenant/aal2 fail-closed — is the 041 battery, not this file.)
 -- =====================================================================
 select _rls.set_tenant(:'ta'::uuid);
--- (2a) authenticated INSERT fails closed at the ACL (no INSERT grant; no write policy).
-select throws_like(
-  $$ insert into pfin.user_taxonomy (domain, cat, sub_cat) values ('asset', 'Brokerage', 'Intl Equity') $$,
-  'permission denied for table user_taxonomy',
-  '(2a) V1-write-dormant: authenticated INSERT fails closed at the GRANT layer (permission denied — SELECT-only grant, no write policy; distinct from a WITH-CHECK RLS rejection)'
-);
 -- (2b) authenticated UPDATE fails closed at the ACL (targets A's own row; ACL denies pre-RLS).
 select throws_like(
   format($$ update pfin.user_taxonomy set cat = 'Changed' where id = %s $$, :a_row),

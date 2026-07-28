@@ -17,6 +17,7 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { loginSchema, fieldErrors, safeRedirectPath } from '$lib/server/schemas/auth';
 import { ensureUserSettings } from '$lib/server/queries/userSettings';
+import { provisionDefaultTaxonomy } from '$lib/server/queries/taxonomy';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -54,7 +55,13 @@ export const actions: Actions = {
 		// Lazily provision the caller's user_settings row (SELF-286 substrate). FAIL-SOFT:
 		// ensureUserSettings never throws, so a provisioning hiccup cannot block login —
 		// the row self-heals next request and a missing row reads as 'none' anyway.
-		if (data.user) await ensureUserSettings(locals.supabase, data.user.id);
+		// SELF-311: likewise provision the default user_taxonomy here (fail-soft, guarded) so the
+		// first page after login has a populated picker — completes BEFORE the redirect, avoiding
+		// the layout+page concurrent-load race the bootstrap call alone would leave on first access.
+		if (data.user) {
+			await ensureUserSettings(locals.supabase, data.user.id);
+			await provisionDefaultTaxonomy(locals.supabase, data.user.id);
+		}
 
 		// Same-site-guarded redirect (open-redirect fence). Bad targets → '/'.
 		throw redirect(303, safeRedirectPath(typeof redirectTo === 'string' ? redirectTo : null));

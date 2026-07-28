@@ -13,10 +13,19 @@
 // Left as a follow-up rather than folded in silently.
 
 import { countPendingSymbols } from '$lib/server/queries/pendingSymbols';
+import { provisionDefaultTaxonomy } from '$lib/server/queries/taxonomy';
 import type { LayoutServerLoad } from './$types';
 
 export const load: LayoutServerLoad = async ({ locals }) => {
 	const { user } = await locals.safeGetSession();
+
+	// SELF-311 (§ default-taxonomy-on-signup / migration 041 / ADR-036 B1): first-access lazy
+	// provisioning of the caller's default user_taxonomy. Guarded (skips when already present) +
+	// fail-soft (never blocks the load) — see provisionDefaultTaxonomy. Awaited BEFORE the page's
+	// own taxonomy-consuming loads would ideally see it; note SvelteKit runs layout+page loads
+	// concurrently, so the classify picker can be empty on the FIRST navigation and self-heal next
+	// (also wired at the login/signup entry points so post-auth first access is never empty).
+	if (user) await provisionDefaultTaxonomy(locals.supabase, user.id);
 
 	// SELF-200 (§2.4.1.e): pending-symbol count for the header badge. Computed at read time
 	// (derived view — no stored count). Two cheap RLS-scoped selects, bounded by the caller's own
