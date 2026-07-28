@@ -15,25 +15,32 @@
 		name,
 		value = $bindable(''),
 		required = false,
+		disabled = false,
 		errors = [],
 		hint = '',
 		placeholder,
 		options = [],
-		groups = []
+		groups = [],
+		id
 	}: {
 		label: string;
 		name: string;
 		value?: string;
 		required?: boolean;
+		disabled?: boolean;
 		errors?: string[];
 		hint?: string;
 		/** A leading option (e.g. "Select…" for required, or "Unsorted" for optional). */
 		placeholder?: Opt;
 		options?: Opt[];
 		groups?: Group[];
+		/** Explicit control id — REQUIRED when the same `name` renders more than once on a page
+		 *  (e.g. a per-row classify select) so ids/label-associations stay unique. Defaults to
+		 *  `f-${name}` for the common single-instance case. */
+		id?: string;
 	} = $props();
 
-	const fieldId = $derived(`f-${name}`);
+	const fieldId = $derived(id ?? `f-${name}`);
 	const errId = $derived(`${fieldId}-err`);
 	const hintId = $derived(`${fieldId}-hint`);
 
@@ -56,6 +63,7 @@
 			{name}
 			bind:value
 			class="select-input"
+			{disabled}
 			aria-required={required}
 			aria-invalid={hasError}
 			aria-describedby={describedby}
@@ -116,6 +124,12 @@
 	}
 	.select-input:hover {
 		border-color: var(--c-text-muted);
+	}
+	.select-input:disabled {
+		background: var(--c-disabled-bg);
+		color: var(--c-disabled-text);
+		border-color: var(--c-disabled-border);
+		cursor: not-allowed;
 	}
 	.select-input:focus {
 		border-color: var(--c-accent);

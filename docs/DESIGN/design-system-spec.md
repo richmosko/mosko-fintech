@@ -55,6 +55,8 @@ Examples: `--c-canvas: var(--color-neutral-25)` (barely-cool `#fafcfe`); `--c-su
 | **freshness-stamp** (`nav-asof` / `report-generation`) | default — quiet, distinct from stale-marker | text-muted |
 | **sidebar / nav-item** | default · hover · active(current) · attention-dot · collapsed rail | accent-soft, accent, attn-solid(dot) |
 | **hero (nav-headline)** | default · stale · incomplete-NAV | accent-tint surface, accent kicker, text-primary value |
+| **count-badge** *(SELF-200)* | default(count>0, solid-accent pill) · zero-footprint(count≤0, renders nothing) · parent-hover(bg→accent-hover) | accent (bg), accent-contrast (text), accent-hover (via parent), radius-pill, fs-small, font-num, weight-semi. **Not `--c-attn-*`** — a count-notification, not staleness (§5 fence 8). `min/height 1.25rem` is a deliberate component-intrinsic constant (like `radius-pill` 999), not a `--space-*` value. |
+| **metadata-hint / info-callout** *(SELF-200)* | present(caption + `<dl>` key/value list) — read-only, non-preselected hint (never auto-applied) | surface-alt (bg), border, radius-md, space-3 (pad); caption text-muted/fs-small; dt text-muted/weight-semi; dd text-secondary; all fs-small |
 
 ## 5. Load-bearing fences — how the system enforces them
 1. **§2.3 non-goal (HIGHEST RISK):** `--c-pos/--c-neg` are scoped to ACTUAL performance only (NAV $Δ/%Δ, unrealized G/L). `.val-target` keeps target/`$ReAlloc`/`%Target` cells neutral. **No** progress/gauge/fill-line/over-under/%-of-target/arrow/target-line component or token exists. `target-caption` has no comparative state by construction.
