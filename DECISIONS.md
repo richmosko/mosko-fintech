@@ -41,6 +41,125 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-036 — Default taxonomy provisioning on signup/first-access — mechanism + canonical home (SELF-311)
+
+**Date:** 2026-07-28 · **Status:** Accepted — F/CTO ratified 2026-07-28 · **Phase:** 6
+
+**Decision (ratified 2026-07-28): B1 + A1 + first-access-lazy.** Lazy authenticated upsert — a scoped INSERT grant + `user_taxonomy_insert` policy (`with check users_id = auth.uid()`, INSERT-only, no UPDATE/DELETE) lets the app materialize the default set under the user's own JWT via `insert … select … from pfin.taxonomy_default on conflict (users_id, domain, cat, sub_cat) do nothing`. **A1** — a migration-embedded global reference table `pfin.taxonomy_default` is the canonical home (63 rows verbatim from current seed content incl. `notes`); the dev `seed.sql` is refactored to seed the local user *from* that table (one source, no drift). **Timing** — provisioned first-access-lazy in the authenticated server bootstrap, both domains in one idempotent pass. B2/B3 were not chosen ⇒ **DEFINER allowlist stays 4, service_role untouched.** Because B1 (not B2/B3) was chosen, this is a Sec **review-surface** (sign-off on the new INSERT policy + the paired QA two-tenant battery), **not** a pre-insert veto gate. The options / recommendation / tradeoffs / one-way-door flags below are retained verbatim as the decision record.
+
+**Pattern:** Consolidation (two coupled decisions + options). **Context.** F/CTO ruled **V1 signup is OPEN** (public signup + email-confirmation), which makes default-taxonomy provisioning a **V1-SHIP-BLOCK**: every user needs a populated `pfin.user_taxonomy` (009) before the pending-symbol classify picker (asset domain, §2.2.1) and the §2.4.3 manual-entry Sub-Cat dropdowns (cashflow domain, §2.3.1) have anything to show. Today the default set exists in exactly one place — the **gitignored, dev-only `supabase/seed.sql`** (63 hardcoded rows: 36 asset + 27 cashflow, incl. the `010` `notes` column) — and it lands only for one hardcoded local-dev UUID at `db reset`. There is **no runtime provisioning path and no canonical (non-gitignored) source** for real signed-up users. Two coupled decisions must be settled: **(A)** where the canonical default set lives, and **(B)** what write path materializes it into a new user's `user_taxonomy`.
+
+Two hard constraints shape the space:
+- **009 is V1-WRITE-DORMANT.** `authenticated` holds **SELECT only**; there is no INSERT grant and no write policy (F/CTO-disposed 2026-07-03; write policies + grants deferred to the V2 taxonomy-CRUD-UI PR). service_role is **not** granted. So *some* new write path is unavoidable — provisioning cannot happen under the current grants.
+- **The ratified provisioning posture (024 `user_settings`, D3) is "LAZY app-upsert; NO on-signup DEFINER trigger."** The app writes the row under the user's own JWT via `insert … on conflict do nothing` — chosen specifically to keep the SECURITY DEFINER allowlist from growing. **But 024's lazy pattern works because a missing `user_settings` row reads as a safe DEFAULT (`mfa_policy='none'`).** Taxonomy has no such fallback: a missing set is 63 absent rows, not a default value — the content must be *materialized*, so we cannot lean on "missing = default" the way 024 does. That is the essential difference this ADR navigates.
+
+---
+
+### Decision B — the provisioning write path (the mechanism)
+
+**B1 — Lazy authenticated upsert from a canonical source (RECOMMENDED).** Relax 009's write-dormancy just enough to add a **scoped INSERT grant + INSERT policy** on `user_taxonomy` (`with check (users_id = auth.uid())`) — *not* UPDATE/DELETE. On first authenticated access the app runs, under the user's own JWT, `insert into pfin.user_taxonomy (users_id, domain, …) select auth.uid(), domain, … from <canonical source> on conflict (users_id, domain, cat, sub_cat) do nothing`.
+- *Pro:* directly mirrors the **already-ratified 024 lazy-upsert** pattern (user's own JWT, `on conflict do nothing`); **no DEFINER growth** (allowlist stays 4); **no service_role broadening**; tenant-safe by the standard `with check users_id = auth.uid()` shape; the existing `unique (users_id, domain, cat, sub_cat)` makes it idempotent for free.
+- *Con / cost:* it **un-defers a slice of Lock 7's write-dormancy early** — authenticated gains INSERT on `user_taxonomy` before the V2 CRUD-UI PR. Because the grant is INSERT-only + `with check users_id = auth.uid()`, the worst a caller can do via the API is add **their own** extra taxonomy rows (no cross-tenant reach, no UPDATE/DELETE, no V1 UI to do it) — a self-tenant-scoped concern, not an isolation one. It does mean provisioning is "insert the default set" by *app convention*, not DB-enforced to only-the-defaults (contrast B2).
+
+**B2 — Called SECURITY DEFINER provisioning function.** Keep authenticated fully write-dormant; author `pfin.fn_provision_default_taxonomy()` `SECURITY DEFINER, set search_path=''`, which the app invokes (RPC) on first access. The function body inserts the default set (from the canonical source) for `auth.uid()`, `on conflict do nothing`.
+- *Pro:* **preserves 009 write-dormancy exactly** (authenticated stays SELECT-only); provisioning is a **single controlled entry point that can only write the default set** — DB-enforced, not app-convention; no arbitrary-row surface.
+- *Con / cost:* a **new SECURITY DEFINER entry → allowlist 4→5**. This is precisely the growth the 024 decision worked to avoid. Note the distinction: 024 rejected an *on-signup DEFINER trigger* (auth.users coupling); a *called* DEFINER function is not that trigger — but it **still grows the narrow allowlist**, which is the deeper posture 024 was protecting. **Sec joint-review MANDATORY** (new DEFINER function). Soft one-way-door on the DEFINER-allowlist ledger (see flags).
+
+**B3 — service_role eager seed at signup.** Add a **service_role INSERT grant** to `user_taxonomy` and have a backend post-signup/post-confirmation hook seed the default set under service_role, eagerly (before first access).
+- *Pro:* eager — the set exists before the user ever loads a classify surface (no first-access latency, no lazy-guard in every entry surface); server-controlled.
+- *Con / cost:* **broadens service_role onto a user-data table** — exactly the blast-radius the project fences hardest (RT-26 allowlist / §10-adjacent territory). service_role **bypasses RLS**, so the seed writer must itself guarantee `users_id` correctness (no `with check` backstop). Couples provisioning to a reliable server-side signup/confirmation hook (in an open-signup + email-confirm flow, "when exactly" is a real question — on confirm? on first login?). The 009 header **explicitly anticipates this as a future step gated on Sec review** ("a new service_role write path → add the grant then + Sec joint-review"). **Sec joint-review MANDATORY**; strongest one-way-door of the three.
+
+---
+
+### Decision A — canonical home for the default set (coupled to B)
+
+**A1 — Migration-embedded reference table `pfin.taxonomy_default` (RECOMMENDED).** A new migration creates a **global, non-tenant reference table** and populates it with the 63 rows (verbatim from today's seed content). Provisioning (any of B1/B2/B3) becomes `INSERT … SELECT … FROM pfin.taxonomy_default`. The dev `seed.sql` is refactored to seed the local user from the *same* table (`insert … select … from pfin.taxonomy_default` with the dev UUID), so **seed and runtime share one source** — the gitignored file stops being the canonical home and becomes just a dev-user materialization.
+- *Pro:* single canonical, versioned, queryable source of truth; edits to the default set are one migration; both dev-seed and runtime read the same rows (no drift); a natural home for future default-set changes; trivially SELECT-grantable to authenticated for B1.
+- *Con:* one extra table; must decide its exposure posture (global-readable reference data — RLS with `using (true)` SELECT for authenticated, or keep it in a non-[api] schema if only a DEFINER/service_role path reads it). Not tenant data, so no Decision-3 obligation (no FK-shaped column, no users_id).
+
+**A2 — Inline the 63 rows in the provisioning function/migration body.** The default set lives as `VALUES (…)` inside `fn_provision_default_taxonomy` (B2) or inside a data-migration DO block — no standalone table.
+- *Pro:* no extra table; content + mechanism in one artifact.
+- *Con:* couples the content to the function; editing the default set means editing/replacing the function (DEFINER re-review each time under B2); not queryable; dev-seed and runtime can drift unless the seed also calls the function. Fits B2 but fights B1 (B1's app-side insert would have to hardcode the rows in app code — worse).
+
+**A3 — Committed shared SQL fragment (`supabase/taxonomy_default.sql`) included by both seed and a migration.** De-gitignore a fragment holding the rows; `\i` it from seed and from a migration.
+- *Pro:* one text source; minimal schema surface.
+- *Con:* the `db reset` seed loader **does not process psql meta-commands** (`\i`, `\set` — the seed header documents this SQLSTATE 42601 gotcha), so an `\i`-include won't run in the seed path; no runtime-queryable form; weakest fit for any runtime provision path. Effectively a non-starter for the runtime side.
+
+---
+
+### Coupling matrix (which A pairs with which B)
+
+| Mechanism | Natural home | DEFINER | service_role | Notes |
+|---|---|---|---|---|
+| **B1** lazy authenticated upsert | **A1** (authenticated `SELECT`s `taxonomy_default`, inserts own rows) | stays 4 | none | recommended pair |
+| **B2** called DEFINER fn | A1 or A2 (fn reads table or inlines) | **4→5** | none | Sec-mandatory |
+| **B3** service_role eager | A1 (service_role reads table, inserts) | stays 4 | **+grant** | Sec-mandatory |
+
+A3 pairs cleanly with nothing on the runtime side (seed-loader can't `\i`).
+
+---
+
+### Recommendation — B1 + A1
+
+**Lazy authenticated upsert from a migration-embedded `pfin.taxonomy_default` reference table.** Rationale:
+1. **Boring, and it matches a ratified precedent.** B1 is the 024 lazy-upsert pattern applied verbatim (user's own JWT, `on conflict do nothing`) — no novel surface. The one place taxonomy differs from 024 (content must be materialized, not read-as-default) is exactly what A1's reference table supplies.
+2. **It protects the two postures the project guards hardest.** DEFINER allowlist stays 4 (vs B2's 4→5); service_role is untouched (vs B3's new user-table write path / §10-adjacent broadening). Both B2 and B3 buy *tighter write-constraint* at the cost of growing a deliberately-narrow privilege ledger — a bad trade when the B1 residual risk is self-tenant-scoped and UI-less.
+3. **The only real cost is a scoped, early un-defer of Lock 7** — INSERT-only, `with check users_id = auth.uid()`. That is a strictly smaller step than the deferred V2 CRUD write path (no UPDATE/DELETE), and provisioning genuinely *is* a write the user's own session performs. If F/CTO wants the default-set-only guarantee DB-enforced rather than app-convention, **that is the single reason to prefer B2** — I'd rather name that tradeoff than bury it.
+4. **A1 kills the gitignored-canonical-home problem outright** — one versioned source feeding both dev-seed and runtime, no drift.
+
+**If F/CTO weights "authenticated must never write `user_taxonomy` in V1" above "keep the DEFINER allowlist at 4,"** the answer flips to **B2 + A1** (controlled DEFINER, template table) — and then Sec joint-review is mandatory pre-insert. B3 I'd reserve for if/when an eager server-side onboarding step exists for other reasons; standing it up *just* for taxonomy over-broadens service_role.
+
+---
+
+### Idempotency + timing (applies to the recommended B1; B2/B3 analogous)
+
+- **Idempotent by construction.** `on conflict (users_id, domain, cat, sub_cat) do nothing` against the existing `009` unique constraint — re-running never double-seeds and never clobbers an existing row (so even the future V2 editor's user-edited rows survive a re-provision; V1 has no editor, so the point is moot but the shape is safe forward).
+- **Timing = first-access-lazy (recommended over eager).** A single idempotent provision call in the **authenticated server bootstrap** (e.g. `+layout.server.ts` / a `hooks.server.ts` step) that seeds **both domains in one pass**, so it fires regardless of whether the user hits the classify picker (asset) or manual-entry (cashflow) first. Lazy avoids needing a reliable post-signup/confirmation server hook in the open-signup + email-confirm flow (eager-at-signup's hard part). Demonstrable anchor per the brief = the **asset** classify surface; cashflow rides the same call.
+- **One-call, both domains.** Provision is domain-agnostic (`select … from taxonomy_default` with no domain filter), so a single guarded call covers §2.2.1 + §2.3.1 together — no per-surface partial seeding.
+
+---
+
+### Governance — Decision-3 / §10 / DEFINER-allowlist / Sec-review
+
+**Under the recommended B1 + A1:**
+- **Decision-3 (cross-tenant FK-bypass family) — UNCHANGED (+0).** `taxonomy_default` is global reference data with **no `users_id` and no FK-shaped column** (no cross-tenant reference, no INTEGER[]/array FK, no self-FK). The provisioning INSERT sets `user_taxonomy.users_id = auth.uid()` — same tenant-anchor shape already evaluated at 009, no new cross-tenant reference. (Unrelated and unchanged: the still-deferred `account_trans.sub_cat_id → user_taxonomy` FK remains its own future Decision-3 evaluation.)
+- **§10 catalogued-instance ledger — stays 3** (RT-22 + RT-26 + RT-27). B1+A1 touches no infrastructure-credential surface (RT-22), no `SUPABASE_SERVICE_ROLE_KEY`/code-layer allowlist surface (RT-26), and no app→worker network-admission surface (RT-27). *(B3 would put pressure here — a new service_role write path is RT-26-adjacent; B2 does not touch §10 but grows the DEFINER ledger.)*
+- **SECURITY DEFINER allowlist — stays 4** under B1 (no function authored; the provision path is authenticated SQL). **B2 → 4→5** (new entry, Sec-mandatory). **B3 → stays 4** (no function) but adds a service_role grant.
+- **Sec-review assessment (Architect read):**
+  - **B1 (recommended): not a joint-review-*mandatory* trigger** — no DEFINER, no service_role, no §10 movement, no Decision-3 change, no new cross-tenant FK. It *is* a **C6 exposure-gated RLS change** (a new INSERT policy + grant on an [api]-exposed table) and it **relaxes the ratified Lock 7 write-dormancy**, so I recommend **Sec sign-off on the new INSERT policy + the paired QA two-tenant battery** as good practice (same review lane 009/024 shipped under), and an explicit F/CTO note that write-dormancy is being partially un-deferred. Not a veto-surface; a review-surface.
+  - **B2 / B3: Sec joint-review MANDATORY before insert** — B2 for the new SECURITY DEFINER function (allowlist growth); B3 for the new service_role write path on user data (RT-26-adjacent). Both are veto-surfaces.
+
+---
+
+### Handoffs (on ratify of the recommended path)
+
+1. **Architect** — author the migration(s): `pfin.taxonomy_default` reference table + its 63-row population (verbatim from current seed content, incl. `notes`); the scoped INSERT grant + `user_taxonomy_insert` policy (`with check users_id = auth.uid()`); refactor `seed.sql` to seed the dev user *from* `taxonomy_default`. §10 3-axis cross-check + Decision-3 statement in the migration header (both "unchanged", stated explicitly per the mandatory FK-shaped-column check).
+2. **Backend** — the first-access lazy-provision call in the authenticated server bootstrap (`+layout.server.ts` / `hooks.server.ts`), idempotent, both domains, `on conflict do nothing`.
+3. **QA** — extend the two-tenant pgTAP battery for the new `user_taxonomy` INSERT surface: owner provisions own rows PASS; tenant B cannot insert A's `users_id` (WITH CHECK fail-closed); re-provision is idempotent (no duplicate rows); `taxonomy_default` is readable but carries no tenant rows.
+4. **Sec** — sign-off on the new INSERT policy + battery (B1); **joint-review gate** if F/CTO selects B2 or B3.
+5. **PM** — confirm the default set (63 rows) is the intended V1 canonical content, and that promoting it out of gitignored-dev-only into a committed reference table is acceptable (it encodes the F/CTO taxonomy verbatim — no $-figures, just category names/notes, so no redaction concern).
+
+---
+
+### One-way-door flags
+
+- **Opening authenticated INSERT on `user_taxonomy` (B1) is a SOFT one-way door.** Once users have provisioned (and, via API, potentially self-added) rows, cleanly *re-closing* the write path later means deciding what to do with any user-created rows. In V1 (no CRUD UI) it's practically reversible; flagged because it partially un-defers a deliberately-ratified dormancy.
+- **The canonical-home shape (A1's `taxonomy_default`) is a SOFT one-way door on storage shape.** Once the provision path reads from that table, relocating the canonical home later is a migration + a re-point of the provision path. Low cost, but not free.
+- **B2's DEFINER-allowlist growth (4→5) is a one-way-door-ish governance step** — the allowlist is deliberately narrow; every entry is permanent privileged surface subject to ongoing Sec scrutiny.
+- **B3's service_role write path is the HARDEST one-way door** — broadening service_role onto a user-data table is exactly the RT-26/§10-adjacent boundary the project fences hardest; reversing it after a seed writer depends on it is a real un-wind. This is the "decide slowly" option.
+
+*Reversible, for contrast:* the **content** of the default set (which rows) is cheap to change under A1 (a data migration) regardless of mechanism — that is not a one-way door.
+
+---
+
+### Open questions for F/CTO (one decision each)
+
+1. **Mechanism:** B1 (lazy authenticated upsert — recommended) / B2 (controlled DEFINER, allowlist 4→5) / B3 (service_role eager). The axis is *"un-defer a scoped authenticated INSERT"* vs *"grow the DEFINER allowlist"* vs *"broaden service_role."*
+2. **Canonical home:** A1 (reference table — recommended, pairs with all three) / A2 (inline in function — only sane under B2).
+3. **Timing (if B1/B2):** first-access-lazy (recommended) vs eager. Eager needs a reliable post-confirmation server hook; lazy does not.
+
+**Cross-references.** `009` (`user_taxonomy` target table + V1-WRITE-DORMANT posture + the "future per-user server-side seed → service_role grant + Sec joint-review" forward-pointer) · `010` (added the `notes` column the default set carries) · `024` (`user_settings` — the ratified LAZY app-upsert / NO on-signup DEFINER precedent, and the "missing row reads as default" property taxonomy lacks) · `seed.sql` (current gitignored canonical source — 63 rows: 36 asset + 27 cashflow) · [ADR-011](#adr-011) Decision 4 (§10 ledger — stays 3) · Decision 3 (FK-bypass family — unchanged) · Decision 9 (SECURITY DEFINER allowlist) · Decision 11 / Lock 7 (`user_taxonomy` single-table, seed-only/no-CRUD-UI) · [ADR-004](#adr-004) Decision C (canonical taxonomy) · [ADR-006](#adr-006) Axis 2 (`tax_relevant` / `tax_character`) · [ADR-023](#adr-023) C6 (exposure-gated RLS coverage) · PRD §2.2.1 (asset taxonomy) / §2.3.1 (cashflow grammar) · BACKLOG §7.5 O1 (SELF-311 spec) · **SELF-311** · SELF-231 (009 authorship) · SELF-286 (024 authorship).
+
 ## ADR-035 — SELF-205's per-transaction reconciled-flag mechanism SUPERSEDED (reconciled-by-construction GL); successor = a V1.6 statement control tie-out (read-only) (SELF-205 re-scoped)
 
 **Date:** 2026-07-27 · **Status:** Accepted — F/CTO ratified 2026-07-27 · **Phase:** 6
