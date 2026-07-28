@@ -4,17 +4,21 @@
 	(LayoutData { userEmail: string | null }); authors NO server logic.
 
 	Renders an authed header ONLY when a user is signed in (data.userEmail present):
-	brand link → /, the signed-in email, a Security link → /settings/security (the MFA
-	hub — makes TOTP enrollment/recovery discoverable at GA, not URL-only), and the POST
-	sign-out affordance. Sign-out is a plain <form method="POST" action="/auth/signout">
-	— state-changing, so never a GET link; matches Backend's POST-only /auth/signout handler.
+	brand link → /, a Classify link carrying the SELF-200 pending-symbol count badge
+	(zero footprint when the count is 0), the signed-in email, a Security link →
+	/settings/security (the MFA hub — makes TOTP enrollment/recovery discoverable at GA, not
+	URL-only), and the POST sign-out affordance. Sign-out is a plain
+	<form method="POST" action="/auth/signout"> — state-changing, so never a GET link; matches
+	Backend's POST-only /auth/signout handler.
 
-	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5).
+	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5). The count badge uses the
+	ACCENT ramp — NOT `--c-attn-*` (canary is reserved for staleness/re-auth; §5 fence).
 -->
 <script lang="ts">
 	import '../app.css';
 	import favicon from '$lib/assets/favicon.svg';
 	import Button from '$lib/components/Button.svelte';
+	import CountBadge from '$lib/components/CountBadge.svelte';
 	import type { LayoutData } from './$types';
 
 	let { data, children }: { data: LayoutData; children: import('svelte').Snippet } = $props();
@@ -28,6 +32,16 @@
 	<header class="app-header">
 		<a class="brand" href="/">mosko-fintech</a>
 		<div class="account">
+			{#if data.pendingClassificationCount > 0}
+				<a
+					class="nav-link classify-link"
+					href="/portfolio/classify"
+					aria-label="Classify securities — {data.pendingClassificationCount} pending"
+				>
+					Classify
+					<CountBadge count={data.pendingClassificationCount} />
+				</a>
+			{/if}
 			<span class="email">{data.userEmail}</span>
 			<a class="nav-link" href="/settings/security">Security</a>
 			<form method="POST" action="/auth/signout">
@@ -71,6 +85,25 @@
 	.nav-link:hover {
 		color: var(--c-accent-hover);
 		text-decoration: underline;
+	}
+	/* Keyboard focus visibility — explicit ring on the nav links (the small radius gives the
+	   box-shadow ring rounded corners on these inline links). */
+	.nav-link:focus-visible {
+		outline: none;
+		box-shadow: var(--focus-ring);
+		border-radius: var(--radius-sm);
+	}
+	/* The Classify link keeps its badge on the baseline and never underlines the pill. */
+	.classify-link {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-1);
+	}
+	.classify-link:hover {
+		text-decoration: none;
+	}
+	.classify-link:hover :global(.count-badge) {
+		background: var(--c-accent-hover);
 	}
 	/* The sign-out form is layout-transparent — it exists only to carry the POST. */
 	.account form {
