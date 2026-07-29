@@ -45,6 +45,8 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 **Date:** 2026-07-28 · **Status:** Accepted — F/CTO ratified the full gate 2026-07-28 (OWD #3 scope = SELF-206 in V1.0 / Plaid primary; OWD-B = B1; OWD-A = A3 hybrid); Sec joint-review of the model recommended, joint-review-MANDATORY at the named build surfaces (Decision 5) · **Phase:** 6 Build Loop (gates the remaining V1.0 §2.4 Onboarding issues SELF-199 / 206 / 207; shows the seam to SELF-208 / 209)
 
+> **Amendment (2026-07-29, post-SELF-199):** the SELF-207 sync-cursor migration referenced as **`042`** throughout this ADR is **renumbered to `043`** — SELF-199's `fn_land_linked_accounts` RPC took migration `042` when it was built first (PR #257, merge `bdb6b2f`). Everywhere below that says "`042`" (the cursor column / OWD-A A3 migration) should read "`043`"; migration `042` at head is the unrelated SELF-199 RPC. No decision, option, or ledger claim changes — pure migration-number sequencing.
+
 **Scope note:** authors **no app code** and **one small additive migration only** — the `042` typed sync-cursor column on `pfin.linked_source` (OWD-A A3). All other work falls to Backend/Frontend/QA from the reconciled ACs.
 
 **Pattern:** Model-ratify gate with one-way-door aspects (mirrors ADR-034: re-derive a batch of pre-pivot Plaid-framed ACs onto the landed generic substrate; name what is already built, what is stale wording, what is genuinely net-new). Longer than a terse ADR because it carries the two one-way-door surfaces + the scope-resolution that ADR-027 left open.
