@@ -18,14 +18,17 @@
 //   (1) cross-tenant: A (no verified factor → guard ALLOWs) posts tenant B's linked_source_id →
 //       the real #6 fence raises → the action maps it to fail-closed 403. End-to-end, no mock.
 //   (2) owner control: A posts A's OWN linked_source_id → lands atomically → 303 → /accounts.
-//   (3) LAYER-DIVERGENCE edge (the residual of the fence-order finding — surfaced to Sec/Backend):
-//       the app guard keys off GoTrue AAL (a *verified factor*), while the 025 DB clause keys off
-//       the pfin.user_settings.mfa_policy COLUMN. A user whose pfin mfa_policy='totp' but who has
-//       NO verified GoTrue factor (a reachable divergent state — e.g. a factor was removed but the
-//       MB-1 guard kept mfa_policy from being lowered) is NOT step-up-intercepted (guard sees no
-//       factor → ALLOW), yet is still blocked at the DB #6 fence (its aal2-gated linked_source is
-//       RLS-invisible at aal1) → the misleading 403. Fail-closed (no hole) — but the app guard does
-//       NOT resolve the finding for this divergent-state user. Worth a Sec/Backend note.
+//   (3) DEFENSE-IN-DEPTH for an OUT-OF-BAND-ONLY state (the guard keys off GoTrue AAL / a *verified
+//       factor*; the 025 DB clause keys off the pfin.user_settings.mfa_policy COLUMN). A user whose
+//       pfin mfa_policy='totp' but who has NO verified GoTrue factor is NOT step-up-intercepted
+//       (guard → ALLOW) yet is still blocked at the DB #6 fence → 403, no leak. IMPORTANT (Backend-
+//       verified): the app's OWN MFA flows CANNOT create this state — both the disable path
+//       (settings/security disable: setMfaPolicy('none') FIRST, remove factor only on success) and
+//       the recovery path (mfa-recovery: downgrade mfa_policy FIRST, then remove) maintain the
+//       invariant "mfa_policy='totp' ⇒ a verified factor exists". So it is reachable ONLY via
+//       out-of-band admin factor deletion (dashboard / GoTrue API) — and even then it is fail-closed
+//       and the recovery-code flow unlocks it. This case is the regression fence for that DB backstop,
+//       NOT an app-path gap. (Case 4 is the app-reachable step-up path — the finding's actual fix.)
 //   (4) step-up (the finding's FIX, proven directly): a user WITH a real verified TOTP factor at
 //       aal1 posts → requireStepUp fires (nextLevel='aal2', currentLevel='aal1') → 303 →
 //       /mfa/step-up BEFORE the RPC. This is the intended resolution: a legit step-up user is sent
@@ -216,12 +219,13 @@ describe.skipIf(!RUN)('APP-PATH persist action — two-tenant isolation + step-u
 		expect(data?.[0]?.is_active).toBe(true);
 	});
 
-	it('(3) LAYER-DIVERGENCE edge (Sec/Backend note): pfin mfa_policy=totp but NO GoTrue factor → guard ALLOWs, DB #6 still blocks → 403 (the guard does not resolve this residual)', async () => {
+	it('(3) defense-in-depth (out-of-band-only): pfin mfa_policy=totp with NO GoTrue factor → guard ALLOWs but DB #6 still fails closed → 403, no leak', async () => {
 		// D has pfin mfa_policy='totp' (025 DB clause gates) but no verified GoTrue factor (guard
 		// keys off GoTrue AAL → nextLevel='aal1' → ALLOW). So D reaches the RPC and is blocked at the
-		// DB #6 fence (D’s aal2-gated linked_source is RLS-invisible at aal1) with the misleading
-		// cross-tenant message. Fail-closed (no hole) — but the app guard does NOT intercept this
-		// divergent-state user, so the fence-order finding’s residual persists for it.
+		// DB #6 fence (D’s aal2-gated linked_source is RLS-invisible at aal1). The app's own MFA flows
+		// cannot create this (disable + recovery both downgrade mfa_policy FIRST — Backend-verified),
+		// so it is out-of-band-only + recovery-covered; this asserts the DB backstop still fails closed
+		// for it (a regression fence), NOT an app-reachable gap.
 		const res = await run(makeEvent({ linked_source_id: String(dSrc), accounts: [acct(RID)] }, cD, { id: dId }));
 		if (res.kind !== 'return') throw new Error('expected a fail() return, not a redirect');
 		expect(res.value.status).toBe(403);

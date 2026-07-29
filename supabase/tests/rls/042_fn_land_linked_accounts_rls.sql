@@ -113,15 +113,15 @@
 --           fn_account_matched_linked_source raises 'cross-tenant linked_source rejected%' before the
 --           account WITH CHECK is reached (the account-level clause is defense-in-depth behind it; the
 --           025 battery W1 proves it directly on a bare insert). RED if a sub-aal2 totp caller could
---           land via the RPC. ⚠ Sec/Backend (PARTIALLY RESOLVED): Backend's pre-RPC requireStepUp
---           guard on the persist action now intercepts a legit aal1 owner WITH A VERIFIED GoTrue
---           FACTOR → 303 /mfa/step-up (proven end-to-end in api/tests/attributesPersistTwoTenant.dbit
---           case 4), so that user no longer sees the misleading 403. BUT the guard keys off GoTrue AAL
---           while THIS clause keys off the pfin.user_settings.mfa_policy COLUMN — a user with
---           mfa_policy='totp' but NO verified GoTrue factor (divergent state) is NOT intercepted (guard
---           ALLOWs) and still hits this #6 fence with the misleading 403 (dbit case 3). The DB fence is
---           the fail-closed backstop either way. (20) is the non-vacuous aal2 control (source visible +
---           WITH CHECK passes).
+--           land via the RPC. ⚠ Sec/Backend (RESOLVED at the app layer): Backend's pre-RPC requireStepUp
+--           guard on the persist action intercepts a legit aal1 owner WITH A VERIFIED GoTrue FACTOR →
+--           303 /mfa/step-up (proven end-to-end in api/tests/attributesPersistTwoTenant.dbit case 4).
+--           The guard keys off GoTrue AAL while THIS clause keys off the pfin.user_settings.mfa_policy
+--           COLUMN — a user with mfa_policy='totp' but NO verified factor would hit this #6 fence with
+--           the misleading 403, BUT the app's own MFA flows cannot create that state (disable +
+--           recovery both downgrade mfa_policy FIRST — Backend-verified), so it is out-of-band-only +
+--           recovery-covered, and this DB fence is its fail-closed backstop (dbit case 3, defense-in-
+--           depth). (20) is the non-vacuous aal2 control (source visible + WITH CHECK passes).
 --   (20) -> non-vacuous aal control: the SAME totp caller at aal2 lands successfully -> proves (19)
 --           is aal-driven, not a blanket block of that tenant.
 --   (21) -> anon holds NO EXECUTE on the RPC (revoked from PUBLIC, granted to authenticated only) —
@@ -407,13 +407,14 @@ select set_config('role', 'postgres', true);
 --      caller's OWN source is RLS-INVISIBLE; the BEFORE INSERT fn_account_matched_linked_source
 --      (INVOKER) reads NOT EXISTS -> raises 'cross-tenant linked_source rejected%' before the account
 --      WITH CHECK. A sub-aal2 totp caller cannot land — RED if it could (aal2-bypass on the linked
---      write path). ⚠ NOTE (Sec/Backend — PARTIALLY RESOLVED at the app layer): Backend's pre-RPC
---      requireStepUp guard sends a legit aal1 owner WITH a verified GoTrue factor to /mfa/step-up
---      before the RPC (app-path proof: attributesPersistTwoTenant.dbit case 4). BUT the guard keys off
---      GoTrue AAL and this clause keys off the pfin mfa_policy COLUMN — a mfa_policy='totp' user with
---      NO verified factor is NOT intercepted and still hits this #6 fence with the misleading 403
---      (dbit case 3). The migration header's "fails the INSERT WITH CHECK closed" is imprecise for the
---      provider-linked case (it fails at #6 first). This DB fence stays the fail-closed backstop.
+--      write path). ⚠ NOTE (Sec/Backend — RESOLVED at the app layer): Backend's pre-RPC requireStepUp
+--      guard sends a legit aal1 owner WITH a verified GoTrue factor to /mfa/step-up before the RPC
+--      (app-path proof: attributesPersistTwoTenant.dbit case 4). The guard keys off GoTrue AAL and this
+--      clause keys off the pfin mfa_policy COLUMN; a mfa_policy='totp' user with NO verified factor
+--      would hit this #6 fence, but the app's MFA flows cannot create that state (disable + recovery
+--      downgrade mfa_policy FIRST — Backend-verified) → out-of-band-only + recovery-covered, with this
+--      DB fence as its fail-closed backstop (dbit case 3). The migration header's "fails the INSERT
+--      WITH CHECK closed" is imprecise for the provider-linked case (it fails at #6 first).
 select _rls.set_tenant_aal(:'tc'::uuid, 'aal1');
 select throws_like(
   format($$ select pfin.fn_land_linked_accounts(%s, $j$[{"provider_account_id":"ext-c-1","name":"C aal1","account_type":"investment","scope":"household","tax_treatment":"taxable"}]$j$::jsonb) $$, :c_src1),
