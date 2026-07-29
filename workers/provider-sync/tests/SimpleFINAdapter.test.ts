@@ -6,6 +6,8 @@ import { describe, it, expect } from 'vitest';
 import {
 	SimpleFINAdapter,
 	accessUrlDigest,
+	classifySimplefinUnhealthy,
+	scrubbedSimplefinError,
 	epochToIsoDate,
 	normalizeAccessUrlForDigest,
 	normalizeAccountRef,
@@ -263,5 +265,28 @@ describe('SimpleFINAdapter fetch* (injected fetch, delegate to normalizers)', ()
 			json: async () => ({})
 		}));
 		await expect(adapter.fetchBalances(source)).rejects.toThrow(/SimpleFIN accounts failed \(HTTP 403\)/);
+	});
+});
+
+describe('classifySimplefinUnhealthy — SELF-207 auth-vs-transient (definitive-auth-rejection heuristic)', () => {
+	it('a 403 auth-rejection → login_required + raw provider_error_code', () => {
+		expect(classifySimplefinUnhealthy(scrubbedSimplefinError('accounts', 403))).toEqual({
+			statusClass: 'login_required',
+			providerErrorCode: 'http_403'
+		});
+	});
+	it('a 401 → login_required', () => {
+		expect(classifySimplefinUnhealthy(scrubbedSimplefinError('accounts', 401))).toEqual({
+			statusClass: 'login_required',
+			providerErrorCode: 'http_401'
+		});
+	});
+	it('transient 5xx / 429 → null (no flip, avoid flapping)', () => {
+		expect(classifySimplefinUnhealthy(scrubbedSimplefinError('accounts', 500))).toBeNull();
+		expect(classifySimplefinUnhealthy(scrubbedSimplefinError('accounts', 429))).toBeNull();
+	});
+	it('a no-status error (network / non-HTTP) → null (transient)', () => {
+		expect(classifySimplefinUnhealthy(scrubbedSimplefinError('accounts'))).toBeNull();
+		expect(classifySimplefinUnhealthy(new Error('boom'))).toBeNull();
 	});
 });

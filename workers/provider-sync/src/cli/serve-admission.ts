@@ -18,7 +18,14 @@ import { SimpleFINAdapter } from '../adapters/SimpleFINAdapter.js';
 import { buildPlaidClient } from './admit.js';
 import { mintLinkToken } from '../http/linkToken.js';
 import { loadAdmissionConfig } from '../http/admissionConfig.js';
-import { createAdmissionServer, type ExchangeInput, type SimplefinClaimInput } from '../http/admissionServer.js';
+import {
+	createAdmissionServer,
+	type ExchangeInput,
+	type ReauthCompleteInput,
+	type ReauthStartInput,
+	type SimplefinClaimInput
+} from '../http/admissionServer.js';
+import type { ProviderAdapter } from '../adapters/ProviderAdapter.js';
 
 export async function main(): Promise<void> {
 	const config = loadConfig();
@@ -36,6 +43,10 @@ export async function main(): Promise<void> {
 	// factory, not this file, builds the raw client). No provider SDK: SimpleFIN is claim-over-HTTP,
 	// so the adapter's default global fetch is used (no client construction here).
 	const sfAdapter = new SimpleFINAdapter(dbFor, (m) => console.log(`[admission] ${m}`));
+
+	// Provider dispatch for the reauth legs (SELF-207) — the server is provider-agnostic; the
+	// body's `provider` picks the adapter here. Both adapters share the same dbFor factory.
+	const adapters: Record<'plaid' | 'simplefin', ProviderAdapter> = { plaid: adapter, simplefin: sfAdapter };
 
 	const server = createAdmissionServer({
 		sharedSecret: admission.sharedSecret,
@@ -55,6 +66,16 @@ export async function main(): Promise<void> {
 				ownerUserId: input.ownerUserId,
 				institutionName: input.institutionName
 			}),
+		reauthStart: (input: ReauthStartInput) =>
+			adapters[input.provider].reauthStart({
+				linkedSourceId: input.linkedSourceId,
+				ownerUserId: input.ownerUserId
+			}),
+		reauthComplete: (input: ReauthCompleteInput) =>
+			adapters[input.provider].reauthComplete(
+				{ linkedSourceId: input.linkedSourceId, ownerUserId: input.ownerUserId },
+				input.input
+			),
 		logger: (m) => console.log(`[admission] ${m}`)
 	});
 

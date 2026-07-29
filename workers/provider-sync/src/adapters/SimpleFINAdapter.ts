@@ -57,12 +57,17 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { Tx } from '../db/TenantBoundClient.js';
 import type { AdmissionDb, AdmissionDbFactory, AdmissionLogger } from './PlaidAdapter.js';
+import { appendHealthyStateHistoryTx } from './reauthShared.js';
 import type {
 	BalanceDTO,
 	DateRange,
 	HoldingDTO,
 	ProviderAccountRef,
 	ProviderAdapter,
+	ReauthContext,
+	ReauthHandoff,
+	ReauthInput,
+	ReauthResult,
 	RevokeRef,
 	SourceRef,
 	TransactionDTO
@@ -339,7 +344,31 @@ function assertUuid(value: string, label: string): void {
  * scrubbedPlaidError discipline (SC3-C4) extended to SimpleFIN.
  */
 export function scrubbedSimplefinError(op: string, status?: number): Error {
-	return new Error(`SimpleFIN ${op} failed${status !== undefined ? ` (HTTP ${status})` : ''}`);
+	const e = new Error(`SimpleFIN ${op} failed${status !== undefined ? ` (HTTP ${status})` : ''}`);
+	// Attach the (non-sensitive) HTTP status so the poll loop can classify auth-vs-transient
+	// without parsing the message. A status code is NOT a credential (SC3-C4 unaffected).
+	if (status !== undefined) (e as { httpStatus?: number }).httpStatus = status;
+	return e;
+}
+
+/**
+ * Classify a SimpleFIN SYNC failure → a connection-health transition (SELF-207 unhealthy-detection).
+ * HEURISTIC (flagged for ratify): flip to `login_required` ONLY on a DEFINITIVE auth-rejection —
+ * an HTTP 401/403 from the Bridge means the Access URL is invalid/revoked (exactly what reauth
+ * fixes). EVERYTHING ELSE (5xx / 429 / network / malformed / no status) is treated as TRANSIENT →
+ * returns null → NO flip (avoids false-positive "please reconnect" nags on a temporary blip; the
+ * source is simply retried next poll). This is the "definitive auth-rejection" option (no counter
+ * state, no flapping — a 401/403 is definitive until the user reauths). provider_error_code carries
+ * the raw HTTP status for forensics.
+ */
+export function classifySimplefinUnhealthy(
+	err: unknown
+): { statusClass: 'login_required'; providerErrorCode: string } | null {
+	const status = (err as { httpStatus?: unknown } | null | undefined)?.httpStatus;
+	if (typeof status === 'number' && (status === 401 || status === 403)) {
+		return { statusClass: 'login_required', providerErrorCode: `http_${status}` };
+	}
+	return null;
 }
 
 /**
@@ -463,18 +492,20 @@ export class SimpleFINAdapter implements ProviderAdapter {
 		return out;
 	}
 
-	// ── connect() — SimpleFIN claim + Vault credential admission (§1.1; inherits ADR-027 (s)/(u)).
-	async connect(setup: unknown): Promise<{ sourceId: bigint; accounts: ProviderAccountRef[] }> {
-		const dbFor = this.#requireDbFor();
-		const s = connectSetupSchema.parse(setup); // `.strict()` — mass-assignment prevention.
-		assertUuid(s.ownerUserId, 'ownerUserId'); // fail-closed BEFORE any claim/admission.
-
-		// (1) The SimpleFIN "exchange": base64-decode the setup token → claim URL → POST → Access URL.
-		//     This is the ONLY place the raw Access URL is in process memory. One-time claim (403 if
-		//     already claimed — the short-lived-single-use analogue of Plaid's public_token).
+	/**
+	 * The SimpleFIN "exchange": base64-decode the setup token → claim URL → POST → Access URL,
+	 * then fetch account refs + compute the external_connection_id digest. This is the ONLY place
+	 * the raw Access URL is in process memory. One-time claim (403 if already claimed). Shared by
+	 * connect() (initial admission) and reauthComplete() (SELF-207 rotation) — pure extraction, no
+	 * behavior change. Throws SetupTokenInvalidError (client-correctable) on a malformed/burned
+	 * token; a scrubbed error (5xx) on a Bridge server error; NEVER leaks the credential (C2/C3).
+	 */
+	async #claimSetupToken(
+		setupToken: string
+	): Promise<{ accessUrl: string; accounts: ProviderAccountRef[]; externalConnectionId: string }> {
 		let claimUrl: string;
 		try {
-			claimUrl = Buffer.from(s.setupToken, 'base64').toString('utf8').trim();
+			claimUrl = Buffer.from(setupToken, 'base64').toString('utf8').trim();
 			// eslint-disable-next-line no-new
 			new URL(claimUrl); // sanity: it must decode to a URL.
 		} catch {
@@ -515,6 +546,17 @@ export class SimpleFINAdapter implements ProviderAdapter {
 
 		// external_connection_id = SHA-256 digest of the FULL normalized Access URL (SC-3 C4).
 		const externalConnectionId = accessUrlDigest(accessUrl);
+		return { accessUrl, accounts, externalConnectionId };
+	}
+
+	// ── connect() — SimpleFIN claim + Vault credential admission (§1.1; inherits ADR-027 (s)/(u)).
+	async connect(setup: unknown): Promise<{ sourceId: bigint; accounts: ProviderAccountRef[] }> {
+		const dbFor = this.#requireDbFor();
+		const s = connectSetupSchema.parse(setup); // `.strict()` — mass-assignment prevention.
+		assertUuid(s.ownerUserId, 'ownerUserId'); // fail-closed BEFORE any claim/admission.
+
+		// (1) Claim the setup token → Access URL + account refs + digest (shared with reauth).
+		const { accessUrl, accounts, externalConnectionId } = await this.#claimSetupToken(s.setupToken);
 		// C1: provider_metadata is CLIENT-READABLE (015) → keep it strictly credential-free. The
 		// Access URL / any auth-bearing fragment NEVER lands here (the digest already lives in the
 		// dedicated external_connection_id column; nothing credential-derived belongs in metadata).
@@ -618,6 +660,88 @@ export class SimpleFINAdapter implements ProviderAdapter {
 				await tx`delete from pfin.linked_source where source_id = ${sourceId}::bigint and users_id = ${ref.ownerUserId}`;
 			});
 			this.#log(`revoked simplefin source source_id=${ref.sourceId} (local-delete only; grant stays live at the Bridge)`);
+		} finally {
+			await db.end();
+		}
+	}
+
+	// ── reauth() — SELF-207 §2.4.4.b (spec temp/self-207-reauth-vault-spec.md). ───────
+	// SimpleFIN has no server-side pre-mint — the client re-collects a fresh setup token from
+	// the Bridge (Phase 1 is a pure client signal), then Phase 2 claims it + ROTATES the
+	// credential on the EXISTING source (preserving 021 mappings) + writes the shared healthy
+	// transition.
+
+	/** Phase 1: no server token — signal the client to re-collect a fresh setup token. */
+	async reauthStart(_ctx: ReauthContext): Promise<ReauthHandoff> {
+		return { kind: 'recollect_credential' };
+	}
+
+	/**
+	 * Phase 2: claim the FRESH setup token + rotate the Access URL IN PLACE on the EXISTING source,
+	 * then flip healthy + append the healthy state_history row — ONE atomic tenant-bound txn.
+	 *
+	 * IDENTITY = `ctx.linkedSourceId` (SELF-207 ③, F/CTO-ratified): reauth already knows the source,
+	 * so we UPDATE by source_id — NOT dedup by the fresh claim's digest (a fresh setup token yields
+	 * a NEW Access URL → NEW digest; dedup-by-digest would INSERT a new row → orphan the 021
+	 * mappings, defeating the point of ②). ROTATION = in-place `vault.update_secret` on the SAME
+	 * credential_secret_id handle (② ratified; NOT create→swap→delete) — no orphan, no zero-
+	 * credential window. source_id unchanged → 021 preserved. `external_connection_id` is updated to
+	 * the new digest so it tracks the current credential (future dedup stays correct). `rotated:true`.
+	 */
+	async reauthComplete(ctx: ReauthContext, input: ReauthInput): Promise<ReauthResult> {
+		const dbFor = this.#requireDbFor();
+		assertUuid(ctx.ownerUserId, 'ownerUserId'); // fail-closed BEFORE any claim/rotation.
+		if (input.kind !== 'setup_token') {
+			throw new Error('SimpleFINAdapter.reauthComplete: expected setup_token input.');
+		}
+
+		// (1) Claim the fresh setup token → new Access URL + digest (shared claim logic).
+		const { accessUrl, externalConnectionId } = await this.#claimSetupToken(input.setupToken);
+
+		// (2) In-place rotation on the EXISTING source (by source_id), one service_role txn.
+		const label = `simplefin:conn:${externalConnectionId.slice(0, 16)}`;
+		const desc = 'provider-sync linked_source credential (simplefin access url)';
+		const sid = String(ctx.linkedSourceId);
+		const db = dbFor(ctx.ownerUserId);
+		try {
+			await db.withServiceRole(async (tx) => {
+				// Tenant-bound read of the current credential handle. A cross-tenant / nonexistent /
+				// wrong-provider source → no row → fail-closed (never rotate another tenant's source).
+				const existing = await tx<{ credential_secret_id: string | null }[]>`
+					select credential_secret_id
+					  from pfin.linked_source
+					 where source_id = ${sid}::bigint and users_id = ${ctx.ownerUserId} and provider = 'simplefin'`;
+				const found = existing[0];
+				if (!found) {
+					throw new Error('SimpleFIN reauth: source not found for tenant (fail-closed).');
+				}
+				// Reuse the same secret handle (in-place update) — a new secret would orphan the old
+				// vault row (cleanup trigger fires on DELETE, not UPDATE). Credential-less → mint + attach.
+				if (found.credential_secret_id) {
+					await tx`select vault.update_secret(${found.credential_secret_id}::uuid, ${accessUrl}, ${label}, ${desc})`;
+				} else {
+					const created = await tx<{ secret_id: string }[]>`
+						select vault.create_secret(${accessUrl}, ${label}, ${desc}) as secret_id`;
+					const secretId = created[0]?.secret_id;
+					if (!secretId) throw new Error('SimpleFIN reauth: vault.create_secret returned no id.');
+					await tx`update pfin.linked_source set credential_secret_id = ${secretId} where source_id = ${sid}::bigint and users_id = ${ctx.ownerUserId}`;
+				}
+				// Track the new credential's digest + flip healthy (tenant-bound; 0 rows → raise).
+				const updated = await tx<{ source_id: string }[]>`
+					update pfin.linked_source
+					   set external_connection_id = ${externalConnectionId},
+					       connection_status = 'healthy',
+					       updated_at = now()
+					 where source_id = ${sid}::bigint and users_id = ${ctx.ownerUserId}
+					returning source_id`;
+				if (updated.length !== 1) {
+					throw new Error('SimpleFIN reauth: source not found for tenant on rotate (fail-closed).');
+				}
+				// Healthy audit transition — same txn (atomic with the rotation).
+				await appendHealthyStateHistoryTx(tx, ctx.linkedSourceId);
+			});
+			this.#log(`simplefin reauth completed (rotated) source_id=${ctx.linkedSourceId}`);
+			return { connectionStatus: 'healthy', rotated: true };
 		} finally {
 			await db.end();
 		}

@@ -28,8 +28,17 @@
 /** Which Plaid API environment the deploy talks to. Mirrors the worker's `PLAID_ENV`. */
 export type PlaidEnv = 'sandbox' | 'production';
 
-/** The SvelteKit route id of the Plaid Link onboarding surface (the ONLY route relaxed). */
+/** The SvelteKit route id of the Plaid Link onboarding (connect) surface. */
 export const PLAID_CONNECT_ROUTE_ID = '/accounts/connect';
+/** The SvelteKit route id of the connection-state surface where Plaid Link opens in UPDATE
+ *  mode for SELF-207 re-auth. Plaid Link loads cdn.plaid.com + opens its iframe here too, so
+ *  the ADR-028 CSP widening must cover it — else update-mode Link is silently CSP-blocked. */
+export const PLAID_REAUTH_ROUTE_ID = '/accounts/connections';
+
+/** The EXACT routes where Plaid Link opens (connect + update-mode reauth) — the only surfaces
+ *  ADR-028 relaxes. EXACT match (not prefix): `/accounts/connect/attributes` is deliberately
+ *  EXCLUDED (post-connect attribute capture; no Link SDK → stays strict/BASE_CSP). */
+export const PLAID_LINK_ROUTE_IDS: readonly string[] = [PLAID_CONNECT_ROUTE_ID, PLAID_REAUTH_ROUTE_ID];
 
 // The exact allowlisted Plaid origins/paths (no wildcard — `*.plaid.com` was REJECTED).
 // cdn.plaid.com is the Link ASSET host (script + frame) — the SAME regardless of API env.
@@ -44,9 +53,11 @@ export const PLAID_CONNECT_SRC_BY_ENV: Record<PlaidEnv, string> = {
 	production: PLAID_CONNECT_SRC_PROD
 };
 
-/** True only for the Plaid Link onboarding route — the sole surface ADR-028 relaxes. */
+/** True only for the EXACT routes where Plaid Link opens (connect + update-mode reauth) — the
+ *  sole surfaces ADR-028 relaxes. Exact-match against the allowlist so `/accounts/connect/attributes`
+ *  (and any other child) stays strict. (Name kept for call-site stability; now covers reauth too.) */
 export function isPlaidConnectRoute(routeId: string | null | undefined): boolean {
-	return routeId === PLAID_CONNECT_ROUTE_ID;
+	return routeId != null && PLAID_LINK_ROUTE_IDS.includes(routeId);
 }
 
 /** Parse a CSP header string into an ordered directive→sources map. */

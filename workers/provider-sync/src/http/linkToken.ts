@@ -54,3 +54,34 @@ export async function mintLinkToken(
 		throw scrubbedPlaidError(err, 'link/token/create');
 	}
 }
+
+/**
+ * Mint an UPDATE-MODE Plaid link_token for an EXISTING Item (SELF-207 re-auth). Passes the
+ * Item's existing `access_token` and OMITS `products` (Plaid's update-mode rule — products are
+ * fixed on the existing Item). Update mode does NOT change the access_token (no re-exchange;
+ * plaid.com/docs/link/update-mode) — so re-auth needs no credential rotation. `accessToken` is
+ * resolved server-side from Vault by the caller (reauthShared.resolveAccessToken); it is NEVER
+ * logged and stays in worker memory only. Update-mode link_tokens expire after 30 min. Throws a
+ * SCRUBBED error on Plaid failure (C6-5) — the message carries no token/secret fragment.
+ */
+export async function mintUpdateModeLinkToken(
+	client: PlaidClientLike,
+	ownerUserId: string,
+	accessToken: string,
+	opts: LinkTokenOptions = {}
+): Promise<{ link_token: string; expiration: string }> {
+	try {
+		const { data } = await client.linkTokenCreate({
+			user: { client_user_id: ownerUserId },
+			client_name: opts.clientName ?? DEFAULTS.clientName,
+			// products OMITTED — update mode operates on the existing Item's product set.
+			country_codes: [...(opts.countryCodes ?? DEFAULTS.countryCodes)],
+			language: opts.language ?? DEFAULTS.language,
+			access_token: accessToken,
+			...(opts.redirectUri ? { redirect_uri: opts.redirectUri } : {})
+		});
+		return { link_token: data.link_token, expiration: data.expiration };
+	} catch (err) {
+		throw scrubbedPlaidError(err, 'link/token/create (update mode)');
+	}
+}

@@ -26,7 +26,12 @@
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { z } from 'zod';
-import type { ProviderAccountRef } from '../adapters/ProviderAdapter.js';
+import type {
+	ProviderAccountRef,
+	ReauthHandoff,
+	ReauthInput,
+	ReauthResult
+} from '../adapters/ProviderAdapter.js';
 import { PublicTokenInvalidError } from '../adapters/PlaidAdapter.js';
 import { SetupTokenInvalidError } from '../adapters/SimpleFINAdapter.js';
 import { ADMISSION_SECRET_HEADER, verifySharedSecret } from './sharedSecret.js';
@@ -74,6 +79,46 @@ export interface SimplefinClaimInput {
 	institutionName?: string;
 }
 
+// ── Re-auth legs (SELF-207 §2.4.4.b) — provider-agnostic routes on the SAME RT-27 admission
+//    surface (same private-bind, same shared-secret gate, same session-derived tenant). The
+//    server delegates to a provider dispatch wired in serve-admission.ts. `.strict()` bodies
+//    (mass-assignment fence). `linked_source_id` is a digit-string (bigint); `ownerUserId` is a
+//    uuid the adapter re-validates. NEVER carries a credential in the START body; COMPLETE
+//    carries only the SimpleFIN fresh setup_token (Plaid update mode has no token). ────────────
+const reauthStartBodySchema = z
+	.object({
+		provider: z.enum(['plaid', 'simplefin']),
+		linked_source_id: z.string().regex(/^\d+$/),
+		ownerUserId: z.string().uuid()
+	})
+	.strict();
+
+const reauthCompleteBodySchema = z
+	.object({
+		provider: z.enum(['plaid', 'simplefin']),
+		linked_source_id: z.string().regex(/^\d+$/),
+		ownerUserId: z.string().uuid(),
+		// Plaid: { kind:'link_update_success' } (no token). SimpleFIN: the fresh Bridge token.
+		input: z.discriminatedUnion('kind', [
+			z.object({ kind: z.literal('link_update_success') }).strict(),
+			z.object({ kind: z.literal('setup_token'), setup_token: z.string().min(1) }).strict()
+		])
+	})
+	.strict();
+
+export interface ReauthStartInput {
+	provider: 'plaid' | 'simplefin';
+	linkedSourceId: bigint;
+	ownerUserId: string;
+}
+
+export interface ReauthCompleteInput {
+	provider: 'plaid' | 'simplefin';
+	linkedSourceId: bigint;
+	ownerUserId: string;
+	input: ReauthInput;
+}
+
 /** The account routing key api/src forwards to the browser. `account_id` is the stable
  *  provider account id (ProviderAccountRef.providerAccountId). */
 export interface AdmissionAccountRef {
@@ -98,6 +143,10 @@ export interface AdmissionServerDeps {
 	admit(input: ExchangeInput): Promise<{ sourceId: bigint; accounts: ProviderAccountRef[] }>;
 	/** Leg-S: drive the SimpleFIN claim+vault+INSERT admission (SimpleFINAdapter.connect). */
 	admitSimplefin(input: SimplefinClaimInput): Promise<{ sourceId: bigint; accounts: ProviderAccountRef[] }>;
+	/** Re-auth Phase 1: dispatch to the provider's reauthStart (SELF-207). */
+	reauthStart(input: ReauthStartInput): Promise<ReauthHandoff>;
+	/** Re-auth Phase 2: dispatch to the provider's reauthComplete (SELF-207). */
+	reauthComplete(input: ReauthCompleteInput): Promise<ReauthResult>;
 	/** Token-free diagnostic logger (never receives a body/secret/token). */
 	logger?: (message: string) => void;
 }
@@ -227,6 +276,14 @@ export function createAdmissionServer(deps: AdmissionServerDeps): Server {
 			if (method !== 'POST') return sendError(res, METHOD_NOT_ALLOWED, 'method_not_allowed');
 			return handleSimplefinClaim(req, res);
 		}
+		if (path === '/admission/reauth/start') {
+			if (method !== 'POST') return sendError(res, METHOD_NOT_ALLOWED, 'method_not_allowed');
+			return handleReauthStart(req, res);
+		}
+		if (path === '/admission/reauth/complete') {
+			if (method !== 'POST') return sendError(res, METHOD_NOT_ALLOWED, 'method_not_allowed');
+			return handleReauthComplete(req, res);
+		}
 		return sendError(res, NOT_FOUND, 'not_found');
 	}
 
@@ -329,6 +386,74 @@ export function createAdmissionServer(deps: AdmissionServerDeps): Server {
 			// connect() already scrubbed every SimpleFIN/DB error (whole error object discarded).
 			log(`admission: 502 simplefin admit failed (${err instanceof Error ? err.message : 'error'})`);
 			return sendError(res, BAD_GATEWAY, 'admission_failed');
+		}
+	}
+
+	// reauth Phase 1 — provider-agnostic. Delegates to deps.reauthStart (dispatched by provider
+	// in serve-admission.ts). Returns the ReauthHandoff verbatim (Plaid link_token / recollect
+	// signal — no credential). ownerUserId is session-derived (C6-3), re-validated by the adapter.
+	async function handleReauthStart(req: IncomingMessage, res: ServerResponse): Promise<void> {
+		let body: unknown;
+		try {
+			body = await readJsonBody(req);
+		} catch (err) {
+			const reason = err instanceof Error ? err.message : '';
+			return sendError(res, reason === 'BODY_TOO_LARGE' ? PAYLOAD_TOO_LARGE : BAD_REQUEST, 'invalid_request');
+		}
+		const parsed = reauthStartBodySchema.safeParse(body);
+		if (!parsed.success) return sendError(res, BAD_REQUEST, 'invalid_request');
+
+		try {
+			const handoff = await deps.reauthStart({
+				provider: parsed.data.provider,
+				linkedSourceId: BigInt(parsed.data.linked_source_id),
+				ownerUserId: parsed.data.ownerUserId
+			});
+			log(`admission: 200 reauth-start (${parsed.data.provider})`);
+			return sendJson(res, OK, handoff);
+		} catch (err) {
+			log(`admission: 502 reauth-start failed (${err instanceof Error ? err.message : 'error'})`);
+			return sendError(res, BAD_GATEWAY, 'reauth_failed');
+		}
+	}
+
+	// reauth Phase 2 — provider-agnostic. Plaid: no token (link update-mode success). SimpleFIN:
+	// the fresh setup token (the ②-gated rotation currently throws → 5xx until wired). A recognized
+	// SimpleFIN setup-token-invalidity is client-correctable → 400; every other failure stays 5xx.
+	async function handleReauthComplete(req: IncomingMessage, res: ServerResponse): Promise<void> {
+		let body: unknown;
+		try {
+			body = await readJsonBody(req);
+		} catch (err) {
+			const reason = err instanceof Error ? err.message : '';
+			return sendError(res, reason === 'BODY_TOO_LARGE' ? PAYLOAD_TOO_LARGE : BAD_REQUEST, 'invalid_request');
+		}
+		const parsed = reauthCompleteBodySchema.safeParse(body);
+		if (!parsed.success) return sendError(res, BAD_REQUEST, 'invalid_request');
+
+		// Map the wire input (snake `setup_token`) → the adapter ReauthInput (camel `setupToken`).
+		const wire = parsed.data.input;
+		const reauthInput: ReauthInput =
+			wire.kind === 'setup_token'
+				? { kind: 'setup_token', setupToken: wire.setup_token }
+				: { kind: 'link_update_success' };
+
+		try {
+			const result = await deps.reauthComplete({
+				provider: parsed.data.provider,
+				linkedSourceId: BigInt(parsed.data.linked_source_id),
+				ownerUserId: parsed.data.ownerUserId,
+				input: reauthInput
+			});
+			log(`admission: 200 reauth-complete (${parsed.data.provider}, rotated=${result.rotated})`);
+			return sendJson(res, OK, result);
+		} catch (err) {
+			if (err instanceof SetupTokenInvalidError) {
+				log('admission: 400 setup_token_invalid (reauth; client-correctable)');
+				return sendError(res, BAD_REQUEST, 'setup_token_invalid');
+			}
+			log(`admission: 502 reauth-complete failed (${err instanceof Error ? err.message : 'error'})`);
+			return sendError(res, BAD_GATEWAY, 'reauth_failed');
 		}
 	}
 }

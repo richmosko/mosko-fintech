@@ -37,6 +37,8 @@ async function start(deps: Partial<AdmissionServerDeps> = {}): Promise<string> {
 		mintLinkToken: vi.fn(async () => ({ link_token: 'link-sandbox-1', expiration: '2026-07-19T12:00:00Z' })),
 		admit: vi.fn(async () => ({ sourceId: 42n, accounts: [ACCT] })),
 		admitSimplefin: vi.fn(async () => ({ sourceId: 77n, accounts: [ACCT] })),
+		reauthStart: vi.fn(async () => ({ kind: 'link_update', linkToken: 'link-upd-1' })),
+		reauthComplete: vi.fn(async () => ({ connectionStatus: 'healthy', rotated: false })),
 		logger: vi.fn(),
 		...deps
 	};
@@ -294,5 +296,89 @@ describe('routing', () => {
 		const url = await start();
 		const res = await fetch(`${url}/admission/exchange`, { headers: authed });
 		expect(res.status).toBe(405);
+	});
+});
+
+describe('reauth legs (SELF-207)', () => {
+	it('POST /admission/reauth/start dispatches + returns the ReauthHandoff', async () => {
+		const reauthStart = vi.fn(async () => ({ kind: 'link_update' as const, linkToken: 'lt-1' }));
+		const url = await start({ reauthStart });
+		const res = await post(`${url}/admission/reauth/start`, { provider: 'plaid', linked_source_id: '42', ownerUserId: UUID }, authed);
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ kind: 'link_update', linkToken: 'lt-1' });
+		expect(reauthStart).toHaveBeenCalledWith({ provider: 'plaid', linkedSourceId: 42n, ownerUserId: UUID });
+	});
+
+	it('POST /admission/reauth/start requires the shared secret', async () => {
+		const url = await start();
+		const res = await post(`${url}/admission/reauth/start`, { provider: 'plaid', linked_source_id: '42', ownerUserId: UUID });
+		expect(res.status).toBe(401);
+	});
+
+	it('POST /admission/reauth/start rejects a bad body (.strict / bad linked_source_id)', async () => {
+		const url = await start();
+		const r1 = await post(`${url}/admission/reauth/start`, { provider: 'plaid', linked_source_id: 'abc', ownerUserId: UUID }, authed);
+		expect(r1.status).toBe(400);
+		const r2 = await post(`${url}/admission/reauth/start`, { provider: 'plaid', linked_source_id: '42', ownerUserId: UUID, extra: 1 }, authed);
+		expect(r2.status).toBe(400);
+	});
+
+	it('POST /admission/reauth/complete (Plaid) maps link_update_success + returns the result', async () => {
+		const reauthComplete = vi.fn(async () => ({ connectionStatus: 'healthy' as const, rotated: false }));
+		const url = await start({ reauthComplete });
+		const res = await post(
+			`${url}/admission/reauth/complete`,
+			{ provider: 'plaid', linked_source_id: '42', ownerUserId: UUID, input: { kind: 'link_update_success' } },
+			authed
+		);
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ connectionStatus: 'healthy', rotated: false });
+		expect(reauthComplete).toHaveBeenCalledWith({
+			provider: 'plaid',
+			linkedSourceId: 42n,
+			ownerUserId: UUID,
+			input: { kind: 'link_update_success' }
+		});
+	});
+
+	it('POST /admission/reauth/complete (SimpleFIN) maps setup_token → setupToken (camel)', async () => {
+		const reauthComplete = vi.fn(async () => ({ connectionStatus: 'healthy' as const, rotated: true }));
+		const url = await start({ reauthComplete });
+		const res = await post(
+			`${url}/admission/reauth/complete`,
+			{ provider: 'simplefin', linked_source_id: '77', ownerUserId: UUID, input: { kind: 'setup_token', setup_token: 'tok-abc' } },
+			authed
+		);
+		expect(res.status).toBe(200);
+		expect(reauthComplete).toHaveBeenCalledWith({
+			provider: 'simplefin',
+			linkedSourceId: 77n,
+			ownerUserId: UUID,
+			input: { kind: 'setup_token', setupToken: 'tok-abc' }
+		});
+	});
+
+	it('POST /admission/reauth/complete rejects an unknown input kind (.strict discriminated union)', async () => {
+		const url = await start();
+		const res = await post(
+			`${url}/admission/reauth/complete`,
+			{ provider: 'plaid', linked_source_id: '42', ownerUserId: UUID, input: { kind: 'nope' } },
+			authed
+		);
+		expect(res.status).toBe(400);
+	});
+
+	it('reauth-complete failure → 502 reauth_failed (e.g. the SimpleFIN ②-held throw)', async () => {
+		const reauthComplete = vi.fn(async () => {
+			throw new Error('held');
+		});
+		const url = await start({ reauthComplete });
+		const res = await post(
+			`${url}/admission/reauth/complete`,
+			{ provider: 'simplefin', linked_source_id: '77', ownerUserId: UUID, input: { kind: 'setup_token', setup_token: 't' } },
+			authed
+		);
+		expect(res.status).toBe(502);
+		expect(await res.json()).toEqual({ error: 'reauth_failed' });
 	});
 });
