@@ -41,6 +41,185 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-037 — Provider-agnostic connection-lifecycle / sync-trigger / re-auth / credential-error model; SELF-199 / 206 / 207 ACs re-derived off the landed `linked_source` substrate (Plaid PRIMARY, SimpleFIN SECONDARY)
+
+**Date:** 2026-07-28 · **Status:** Accepted — F/CTO ratified the full gate 2026-07-28 (OWD #3 scope = SELF-206 in V1.0 / Plaid primary; OWD-B = B1; OWD-A = A3 hybrid); Sec joint-review of the model recommended, joint-review-MANDATORY at the named build surfaces (Decision 5) · **Phase:** 6 Build Loop (gates the remaining V1.0 §2.4 Onboarding issues SELF-199 / 206 / 207; shows the seam to SELF-208 / 209)
+
+**Scope note:** authors **no app code** and **one small additive migration only** — the `042` typed sync-cursor column on `pfin.linked_source` (OWD-A A3). All other work falls to Backend/Frontend/QA from the reconciled ACs.
+
+**Pattern:** Model-ratify gate with one-way-door aspects (mirrors ADR-034: re-derive a batch of pre-pivot Plaid-framed ACs onto the landed generic substrate; name what is already built, what is stale wording, what is genuinely net-new). Longer than a terse ADR because it carries the two one-way-door surfaces + the scope-resolution that ADR-027 left open.
+
+---
+
+### Section-hint / canonical-territory statement (read first)
+
+- **This ADR OWNS:** the statement of the provider-agnostic connection-lifecycle model + the re-derivation of SELF-199 / 206 / 207's ACs onto it + the `042` cursor-column authorization. It **REFERENCES, does not restate**, the substrate DDL (owned by migrations `007`→`015`→`040`), the §10 catalogued ledger (owned by ADR-011 Decision 4), the credential-storage generalization (owned by ADR-027 Component 2), and the dedup/sync-audit read surface (owned by ADR-034 / `040`).
+- **Neighbors that own related content:** [ADR-027](#adr-027) (the pivot + OWD-1 adapter-interface / OWD-2 ingest-shape doors this ADR continues + **provider-selection gate i, which this ADR RESOLVES**) · [ADR-034](#adr-034) (the sibling AC-reconciliation gate + the `linked_source_sync_history` view) · [ADR-016](#adr-016) (RT-26 webhook-allowlist enumeration — the Plaid webhook is its canonical-first entry) · [ADR-011](#adr-011) Decision 1 (privileged-context-write, the webhook's tenant-binding discipline) / Decision 3 (FK-bypass family) / Decision 4 (§10) / Decision 9 (DEFINER allowlist) / Lock 11 (INVOKER read-composition).
+
+---
+
+### Context
+
+The three remaining V1.0 §2.4 Onboarding issues — **SELF-199** (§2.4.1.d per-account attribute capture), **SELF-206** (§2.4.4.a webhook handler), **SELF-207** (§2.4.4.b connection-state view + re-auth flow + banner) — carry Phase-4 ACs authored **June 2026, before** the 2026-07-07 aggregator pivot ([ADR-027](#adr-027)) and before the `015` `linked_source` fold that realized it. Their ACs are written in **Plaid-transport-specific vocabulary throughout** (`plaid_item_id`, `plaid_item_state_history`, `plaid_sync_audit`, `plaid_webhook_id`, `PLAID_WEBHOOK_SECRET`, Plaid's 4-class credential-error enum, `fn_aggregation_has_stale_constituent` keyed to `plaid_item_id`s).
+
+Two things changed under them:
+
+1. **The provider-agnostic substrate LANDED and is canonical.** Migration `015` **dropped** the four Plaid-specific `007` objects (`plaid_items`, `plaid_item_state_history`, `plaid_sync_audit`, `decrypted_plaid_access_token`) and recreated **generic** ones discriminated by `provider text check (in 'plaid','snaptrade','simplefin','teller','manual','import')`. The Plaid tables the ACs target **no longer exist at head** — so parts of SELF-206 are literally **schema-impossible as written** (the pm_draft_ac_vs_schema failure mode).
+2. **Provider selection is now RESOLVED (F/CTO ruling 2026-07-28), closing [ADR-027](#adr-027) downstream gate i.** **Plaid is the PRIMARY data source; SimpleFIN is SECONDARY** — used for the one account Plaid does not currently support (the Fidelity-transaction coverage gap ADR-027 documented). **The interface is provider-agnostic precisely so data sources can change with availability** — not because any one provider is the core. SimpleFIN's in-app connect flow (poll-based, no webhook) shipped SELF-281; the provider-sync poll loop shipped SELF-279; the Plaid connect legs shipped but the webhook + re-auth are greenfield. **The `plaid-tier-confirmation-dependent` framing on SELF-206 and the "maybe SimpleFIN-only" reading of ADR-027 are SUPERSEDED by this ruling:** SELF-206 (Plaid webhook) is firmly in V1.0, and Plaid webhook-push is the primary V1 sync-trigger with SimpleFIN poll-pull as the secondary path.
+
+Per the F/CTO directive the model is **provider-agnostic, spanning BOTH Plaid AND SimpleFIN**: Plaid's webhook is *one provider's transport* feeding a shared abstraction; SimpleFIN's poll feeds the *same* abstraction. This ADR states that abstraction, re-derives the three ACs onto it, records the ratified one-way-door choices, and lists the build sequence.
+
+---
+
+### Decision 1 — The provider-agnostic connection-lifecycle model (the shared abstraction and where the seam sits)
+
+**The shared, provider-blind layer is ALREADY BUILT (data-layer, `015` + `040`).** It is the normalized connection-state + credential-error + sync-audit + ledger-landing substrate:
+
+| Concern | Shared object (landed) | Normalization contract |
+|---|---|---|
+| Connection identity + credential handle + health | `pfin.linked_source` | `provider` discriminator · `external_connection_id` (generalizes `plaid_item_id`) · `credential_secret_id` (Vault handle, nullable) · **`connection_status`** 5-value normalized enum (`healthy`/`login_required`/`institution_down`/`revoked`/`disconnected`) |
+| Credential-error history (append-only) | `pfin.linked_source_state_history` | **`status_class`** (same 5-value normalized set) + `provider_error_code` (raw provider-native, forensic, CHECK-unconstrained) |
+| Sync audit + idempotency (append-only) | `pfin.linked_source_sync_audit` | `provider` + **`source` {`webhook`,`scheduled_poll`}** + **`provider_event_id UNIQUE`** (generalizes `plaid_webhook_id`; NULL for poll rows so they coexist) |
+| Per-connection sync read (authenticated) | `pfin.linked_source_sync_history` (`040`, owner-semantics view) | projects `linked_source_id`, `provider`, `source`, `created_at`, `transactions_inserted`, `transactions_skipped` |
+| Transaction landing + dedup | `fn_ingest_transactions` (`017`, INVOKER) | `ON CONFLICT (source_provider, provider_txn_id) DO NOTHING` |
+| Matched-tenant fence | `fn_account_matched_linked_source` (`015`, D3 instance #6) | `account.linked_source_id` cross-tenant fence |
+
+**The provider-specific (adapter) layer is the SEAM — greenfield above the connect leg.** Three things differ per provider, and only these three:
+
+1. **Transport / sync-trigger — how a state-change-or-sync event ARRIVES.**
+   - **Plaid (PRIMARY) = webhook-PUSH.** An HTTP callback (SELF-206) with a signed payload → **signature-verify (RT-05, critical)** → normalize.
+   - **SimpleFIN (SECONDARY) = poll-PULL.** No webhook exists; the provider-sync worker polls on a schedule (`source='scheduled_poll'`; the loop shipped SELF-279).
+   - **Both converge on the SAME shared writes:** `INSERT linked_source_state_history` (normalized `status_class` + raw code) + `INSERT linked_source_sync_audit` + `fn_ingest_transactions`. The transport is the only difference; the normalized events are identical.
+
+2. **Re-auth ACTION — how a broken connection is repaired.**
+   - **Plaid = Link update-mode** (in-place credential refresh: re-exchange a new `public_token`, update the SAME `linked_source` row's `credential_secret_id` via Vault).
+   - **SimpleFIN = re-claim** (no update-mode exists; the user pastes a fresh setup token → the shipped `connect` leg mints a new Access URL; no programmatic revoke — C7 residual).
+   - **Shared contract:** `connection_status IN ('login_required','revoked','disconnected')` ⇒ "needs re-auth." The banner + connection-state view read that flag **provider-blind**; the repair ACTION dispatches to the adapter's `reauth()`.
+
+3. **Error-code mapping — raw → normalized.** Each adapter maps its native codes to the 5-value `status_class`. Plaid's "4-class credential-error enum" the ACs cite = the **4 non-healthy `status_class` values**; SimpleFIN's failure modes map to the same set. This is the reconciliation for "4-class enum" — it is already the normalized contract, not a Plaid-only artifact.
+
+**The normalization boundary (the one-sentence seam):** everything **above** `connection_status`/`status_class`/`linked_source_sync_audit` is provider-blind (connection-state view, re-auth banner, staleness primitive, RLS); everything **below** is a per-adapter transport/repair detail (webhook signature-verify, poll loop, Link update-mode, re-claim). The data-layer substrate that expresses this boundary is built; the code-layer adapters + provider-blind UI are the net-new work. The agnostic interface is what lets Plaid-primary / SimpleFIN-secondary swap by availability without touching anything above the boundary.
+
+---
+
+### Decision 2 — AC re-derivation onto the landed model (per issue)
+
+#### SELF-199 — §2.4.1.d per-account attribute capture (LEAST coupled; near-buildable now)
+
+| AC element (June, Plaid-specific) | Landed state | Reconciled form |
+|---|---|---|
+| "Plaid Link onSuccess / Plaid-returned account list" | Both Plaid + SimpleFIN connect legs converge on a shared `AccountRef[]` → `/accounts/connect/attributes` route (**shipped seam**) | "the adapter's returned `AccountRef[]`" — provider-blind |
+| `pfin.account` row with **`plaid_item_id` linkage** | `plaid_item_id` gone; `account.linked_source_id` FK exists (`015`), matched-tenant fenced (D3 #6) | **re-key to `account.linked_source_id`** |
+| "Plaid provides account-type metadata as a recommendation the user confirms/overrides" | SimpleFIN refs carry `type:'unknown'`; Plaid refs carry subtype | generalize: **adapter-supplied account metadata seeds the form; absent → user sets** |
+| 4 attrs (name/scope/tax-treatment/account-type) + RLS INSERT + tenant binding | provider-blind already | **as-written** |
+
+**Verdict:** satisfied-with-stale-wording; the only substantive change is `plaid_item_id`→`linked_source_id` + "Plaid Link"→"adapter connect." **Build note:** the convergent `AccountRef[]`→attributes route is shipped, so SELF-199 may be partially scaffolded — Backend verifies the attributes form/route state at build. **Natural first build.**
+
+#### SELF-206 — §2.4.4.a Plaid webhook handler (firmly in V1.0; SCHEMA-IMPOSSIBLE as written → reconciled)
+
+| AC step (June, Plaid-specific) | Landed state | Reconciled form |
+|---|---|---|
+| (1) signature-verify vs `PLAID_WEBHOOK_SECRET` (RT-05) | greenfield; RT-05 critical still stands | **UNCHANGED** — Plaid's primary transport, provider-specific; SimpleFIN has no analogue |
+| (2) `INSERT plaid_webhook_id ON CONFLICT` idempotency | `plaid_webhook_id` **dropped** | **`linked_source_sync_audit.provider_event_id UNIQUE`** (the generalized idempotency gate) |
+| (3) tenant-resolution via `users_id` from `plaid_item_id` | `plaid_items` **dropped** | `users_id` lookup from `linked_source WHERE provider='plaid' AND external_connection_id=<Item ID>` — **[ADR-011](#adr-011) Decision 1 privileged-context-write**, code-bind `users_id` (no JWT) |
+| (4) `INSERT plaid_item_state_history` + 4-class enum | table **dropped** | **`INSERT linked_source_state_history`** (`status_class` normalized + `provider_error_code` raw); the "4-class enum" = the 4 non-healthy `status_class` values |
+| (5) `INSERT account_trans` if TransactionsUpdated | direct INSERT superseded | **`fn_ingest_transactions`** (shared mapper, dedup) |
+| (6) `INSERT plaid_sync_audit` | table **dropped** | **`INSERT linked_source_sync_audit`** (`provider='plaid'`, `source='webhook'`) |
+
+**Verdict:** AC steps 2/3/4/6 are **schema-impossible as written** (target dropped tables) → reconciled onto the generic substrate. Steps 1/5 stand. As the PRIMARY-provider sync-trigger, this is core V1.0 surface (the `plaid-tier-confirmation-dependent` deferral framing is superseded by the F/CTO ruling in Context).
+
+#### SELF-207 — §2.4.4.b connection-state view + re-auth + banner
+
+| AC element (June, Plaid-specific) | Landed state | Reconciled form |
+|---|---|---|
+| #1 `GET connection-state` → `last_successful_sync_at` + `current_credential_error_class` from `plaid_items`+`plaid_item_state_history` | tables dropped; `connection_status`/`status_class` are the homes; **`last_successful_sync_at` has NO persisted scalar** | read `linked_source.connection_status` + latest `linked_source_state_history.status_class`; **`last_successful_sync_at` DERIVED from the sync-audit log** (OWD-A A3 — no scalar) |
+| #2 button visible when `ITEM_LOGIN_REQUIRED`/`USER_GRANT_REVOKED` | normalized to 5-value enum | `connection_status IN ('login_required','revoked','disconnected')` |
+| #3 layout-level persistent banner | greenfield (P4 hue reserved; no component) | **provider-blind** — reads `connection_status`; build the component |
+| #4 re-auth = Plaid Link update-mode + re-exchange + update `access_token_encrypted` | **provider-COUPLED** | dispatch to adapter **`reauth()`**: Plaid=update-mode re-exchange (update `credential_secret_id`); SimpleFIN=re-claim (new connect leg) |
+| #5 no email/SMS re-auth | provider-blind | **UNCHANGED** |
+
+**Verdict:** view + banner are provider-blind and buildable on the landed state model; AC #4 re-derives "Plaid update-mode"→adapter `reauth()`; AC #1's `last_successful_sync_at` is derived from the sync-audit log (OWD-A A3).
+
+#### SELF-208 — §2.4.4.c staleness framework (SEAM ONLY — not re-scoped here)
+
+`fn_aggregation_has_stale_constituent(p_users_id, p_scope_filter)` returning stale **`plaid_item_id`s** → **re-key the return to `linked_source_id`s**; the primitive reads `linked_source.connection_status <> 'healthy'`. Already provider-agnostic in spirit; it **consumes** SELF-207's connection-state model. No re-scope beyond the key type.
+
+#### SELF-209 — §2.4.5 RLS lock + V1-SHIP-BLOCK battery (SEAM ONLY — the close-gate)
+
+Verifies the whole §2.4 write surface (RT-01 already enumerates "§2.4.4 re-auth completion paths" + "scope/tax-treatment/account-type attribute writes" = SELF-199). Its V1-SHIP-BLOCK RLS battery must extend to cover: the landed `linked_source`/`state_history`/`sync_audit` RLS (already tested at `015`/`040`), the SELF-199 attribute-write path, the webhook privileged-context-write tenant-resolution (cross-tenant injection rejected), and the `042` cursor-column write path. **SELF-209 closes V1.0 last**, after 199 + 206 + 207 + 208 land. Provider-blind.
+
+---
+
+### Decision 3 — The two open boundaries: ratified outcomes (options + tradeoffs recorded)
+
+#### ONE-WAY DOOR A (data-layer) — where "last successful sync" + the sync cursor live → **RATIFIED: A3 (hybrid)**
+
+`SELF-207` AC #1 wants `last_successful_sync_at`; there was no persisted scalar, and the incremental-sync cursor lived untyped inside `linked_source.provider_metadata jsonb`.
+
+- **A1 — derive-don't-store (no columns).** Derive `last_successful_sync_at` = `MAX(created_at)` from `linked_source_sync_audit`; cursor stays in jsonb. *Cost:* untyped/un-inspectable cursor; silent-corruption risk.
+- **A2 — typed scalars (`last_successful_sync_at` + `sync_cursor`).** O(1) reads + typed cursor. *Cost:* a scalar the poll worker/webhook must maintain on every sync + a migration.
+- **A3 — hybrid (CHOSEN, F/CTO ratified 2026-07-28).** **Derive `last_successful_sync_at` from the sync-audit log (no scalar — ADR-032 derive-don't-store), and give the incremental-sync CURSOR its own typed column** (`042` additive migration on `pfin.linked_source`; cursor moves out of `provider_metadata jsonb` into the typed column). *Why chosen:* the cursor is operationally load-bearing for correct incremental sync and silent jsonb-cursor corruption is a real failure mode → it earns a typed home; "last sync" is a pure read with no such fragility → derive it. Column is `users_id`-anchored (sole anchor) → **Decision-3-neutral**. **One-way-door note:** the stored cursor's provider-specific semantics (Plaid `/transactions/sync` cursor vs a SimpleFIN poll watermark) imprint on the column; a later re-shape of the cursor's meaning would be a migration — hence flagged, but the additive column itself is low-risk.
+
+#### ONE-WAY DOOR B (code-layer, continues ADR-027 OWD-1) — the adapter interface contract → **RATIFIED: B1**
+
+- **B1 — thin shared sync-lifecycle contract now (CHOSEN, ratified directly by the F/CTO "interface should be agnostic" directive).** Define ONE `ProviderSyncAdapter` interface at the normalization boundary: `triggerSync()` (Plaid webhook-handler / SimpleFIN poll-step both normalize to the same event), `reauth()` (update-mode / re-claim), `mapErrorCode(raw) → status_class`. Lift the duplicated admission transport to `src/lib/server/providers/` (the sanctioned §3b TODO). Keep the UI provider-picker (Option A) as-is. Everything above the boundary (view/banner/staleness) stays provider-blind. *Cost:* the interface binds both adapters + the sync caller → later changes are a multi-file refactor (soft one-way door, **no data migration**).
+- **B2 — defer / keep parallel silos.** *Rejected:* the connection-state view/banner/staleness would each branch on provider → drift-prone; contradicts the agnostic-interface directive.
+- **B3 — full data-driven registry now.** *Rejected:* over-abstraction for 2 providers; the code already deferred this until a 3rd-provider forcing function.
+
+#### ONE-WAY DOOR #3 (scope) — is the Plaid webhook (SELF-206) in V1.0? → **RATIFIED: YES (Plaid PRIMARY)**
+
+F/CTO ruling 2026-07-28: **SELF-206 is in V1.0.** Plaid is the primary data source and its webhook-push is the primary V1 sync-trigger; SimpleFIN poll-pull is the secondary path for the one Plaid-unsupported account. This **RESOLVES [ADR-027](#adr-027) provider-selection gate i (→ Plaid primary)**, which that ADR left explicitly open.
+
+---
+
+### Decision 4 — Governance-ledger impact (decision-only + one additive column)
+
+- **§10 catalogued-instance ledger — stays 3** (RT-22 first / RT-26 second / RT-27 third). **Path B 3-axis cross-check** (Decision 4 read verbatim before drafting): (i) numbering unchanged; (ii) layer-attribution unchanged — no surface becomes "four-layer"; (iii) reference Decision 4, no restate. **Load-bearing notes:** (a) the **`042` cursor column adds NO §10 instance** — it is a plain `text` column on a tenant table, not a credential/admission/service_role-allowlist surface; (b) when SELF-206 is *built*, the Plaid webhook route populates the **already-catalogued RT-26 canonical-first allowlist entry** ([ADR-016](#adr-016) D1) and composes RT-05 — it adds **NO new §10 instance and NO new RT-26 allowlist entry** (allowlist stays 4).
+- **Decision-3 cross-tenant FK-bypass family — unchanged (14 labeled / 12 DDL-realized).** The **`042` cursor column adds NO FK-shaped column** (it is `text`, not a reference; `linked_source.users_id` is the sole anchor → nothing to matched-tenant-validate). The webhook tenant-resolution **exercises** the existing D3 #6 `fn_account_matched_linked_source` fence; it adds none.
+- **SECURITY DEFINER allowlist — stays 4.** **The `042` migration authors NO function.** Connection-state read = Lock 11 INVOKER view / owner-scoped RLS; re-auth = adapter code + Vault write under service_role (the RT-27 admission pattern, `WORKER_ADMISSION_SHARED_SECRET`, **not** the service_role key) → no DEFINER; the cursor write is a plain UPDATE on `linked_source` by the existing service_role sync path.
+
+---
+
+### Decision 5 — Sec joint-review triggers (so team-lead routes correctly)
+
+- **THIS ADR (decision-only + one additive column):** the decision authors nothing that touches a veto surface; Sec **review of the model is recommended** (it re-frames the canonical external-API ingest surface + resolves provider selection to Plaid-primary).
+- **At BUILD, joint-review-MANDATORY fires at:**
+  - **The `042` cursor migration** — the service_role cursor-write path on `linked_source` + a QA two-tenant battery (owner reads/writes own cursor; cross-tenant fails closed).
+  - **SELF-206** — external-API webhook + **RT-05 signature-verify (critical)** + **[ADR-011](#adr-011) Decision 1 privileged-context-write** (service_role, code-bound tenant) + writes to the credential-error/sync-audit surface. (Already labeled `sec-joint-review`.)
+  - **SELF-207 re-auth path** — credential re-exchange / Vault write (SD-03-class) + the SimpleFIN re-claim (C7 revoke-residual posture).
+  - **SELF-209** — the RLS V1-SHIP-BLOCK close-gate. (Already labeled `sec-joint-review` + `role:migration`.)
+- SELF-199 (attribute-write RLS) + SELF-208 (staleness primitive) = standard RLS + QA two-tenant battery, no mandatory Sec veto surface.
+
+---
+
+### Decision 6 — Build sequence
+
+0. **(DONE — this ADR) scope + boundary ratify:** SELF-206 in V1.0 / Plaid primary; OWD-A A3; OWD-B B1.
+1. **`042` cursor migration** — Architect authors the additive `sync_cursor text` column on `pfin.linked_source` (cursor relocates out of `provider_metadata jsonb`); Sec joint-review of the service_role cursor-write path; QA two-tenant battery.
+2. **SELF-199** — least-coupled; re-key `plaid_item_id`→`linked_source_id`; build onto the shipped `AccountRef[]`→attributes seam.
+3. **SELF-207** — provider-blind connection-state view + banner + the adapter `reauth()` seam (Plaid update-mode + SimpleFIN re-claim); `last_successful_sync_at` derived from the sync-audit log.
+4. **SELF-206** — the Plaid webhook adapter (primary sync-trigger) normalizing into `state_history`/`sync_audit`/`fn_ingest_transactions`.
+5. **SELF-208** — re-key the staleness primitive to `linked_source_id`; consumes SELF-207's model.
+6. **SELF-209** — closes V1.0; extend the RLS V1-SHIP-BLOCK battery across the whole §2.4 write surface (199 attribute writes + webhook tenant-resolution + `042` cursor write).
+
+*(SELF-199 and SELF-207 have no hard dependency on SELF-206 and may build in parallel once `042` lands; 206 must precede the Plaid-side of 207's `reauth()` verification. 208 depends on 207's model; 209 is last.)*
+
+---
+
+### Handoffs
+
+- **PM** — re-write SELF-199 / 206 / 207 ACs to the reconciled generic forms (Decision 2 tables); update PRD §2.4.1/§2.4.4 Plaid-specific text to the provider-agnostic (Plaid-primary/SimpleFIN-secondary) model.
+- **Architect** — authors the `042` cursor migration.
+- **Backend** — the `ProviderSyncAdapter` seam (B1) + the Plaid webhook handler + the re-auth dispatch + the connection-state endpoint + the cursor-write wiring in the sync path.
+- **Sec** — joint-review at the `042` migration / SELF-206 / SELF-207 re-auth / SELF-209.
+- **QA** — two-tenant battery for the `042` cursor write, the SELF-199 attribute writes, the connection-state read, and the webhook tenant-resolution; SELF-209 close-gate.
+
+### Cross-references
+
+[ADR-027](#adr-027) (the pivot 2026-07-07; OWD-1 adapter interface / OWD-2 ingest shape this continues; Component 2 credential storage; **gate i RESOLVED → Plaid primary here**) · [ADR-034](#adr-034) (sibling AC-reconciliation gate; `linked_source_sync_history` view) · [ADR-032](#adr-032) (derive-don't-store — basis for OWD-A A3's derived `last_successful_sync_at`) · [ADR-016](#adr-016) (RT-26 webhook-allowlist; the Plaid webhook is its canonical-first entry) · [ADR-011](#adr-011) Decision 1 (privileged-context-write) / Decision 3 (FK-bypass family — unchanged) / Decision 4 (§10 — stays 3) / Decision 9 (DEFINER allowlist — stays 4) / Lock 11 (INVOKER read-composition) · SECURITY RT-01 / RT-02 / RT-05 / §4.2 (C7 SimpleFIN revoke-residual) · migrations `007`→`015` (fold) / `017` (`fn_ingest_transactions`) / `018` / `040` (sync-history view) / `021` (account-map dedup) / **`042`** (this ADR's cursor column) · SELF-199 / 206 / 207 / 208 / 209 · SELF-279 (shipped poll loop) / SELF-281 (shipped SimpleFIN connect).
+
+---
+
 ## ADR-036 — Default taxonomy provisioning on signup/first-access — mechanism + canonical home (SELF-311)
 
 **Date:** 2026-07-28 · **Status:** Accepted — F/CTO ratified 2026-07-28 · **Phase:** 6
