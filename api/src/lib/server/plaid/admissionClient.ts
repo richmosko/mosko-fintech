@@ -81,7 +81,12 @@ const workerExchangeResponseSchema = z.object({
 
 export type LinkTokenData = z.infer<typeof workerLinkTokenResponseSchema>;
 export type AdmissionAccount = z.infer<typeof workerAccountSchema>;
-export type ExchangeData = { accounts: AdmissionAccount[] };
+// `sourceId` = the caller's own pfin.linked_source.source_id (bigint serialized as a
+// decimal STRING — JSON-unsafe as a number). SURFACED to the browser (SELF-199, ADR-037):
+// the account-attributes flow ((ii) client-carries-refs) passes it to fn_land_linked_accounts
+// as the FK to bind each landed account. Owner-safe (the caller already owns that source);
+// a tampered value fails closed at the 015 matched-tenant fence (Decision-3 #6) + 021 dedup.
+export type ExchangeData = { sourceId: string; accounts: AdmissionAccount[] };
 
 /** Discriminated outcome; on failure carries ONLY a browser-facing HTTP status (no leak). */
 export type LegOutcome<T> = { ok: true; data: T } | { ok: false; status: number };
@@ -213,8 +218,9 @@ export async function exchangePublicToken(
 	if (call.status === 200) {
 		const parsed = workerExchangeResponseSchema.safeParse(call.json);
 		if (!parsed.success) return { ok: false, status: 502 };
-		// Drop sourceId (internal pfin id) — browser routes on account_id.
-		return { ok: true, data: { accounts: parsed.data.accounts } };
+		// Forward sourceId (the caller's own linked_source id) alongside the account refs —
+		// the browser needs it for the SELF-199 attributes flow (see ExchangeData above).
+		return { ok: true, data: { sourceId: parsed.data.sourceId, accounts: parsed.data.accounts } };
 	}
 	return { ok: false, status: mapUpstreamStatus(call.status) };
 }

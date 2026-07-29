@@ -11,11 +11,24 @@
 	(Option B) — a data-migration-free refactor, deferred until a 3rd provider forcing function.
 -->
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import PlaidLinkConnect from '$lib/components/PlaidLinkConnect.svelte';
 	import SimpleFINConnect from '$lib/components/SimpleFINConnect.svelte';
+	import { stashConnectResult } from '$lib/accounts/connect-handoff.svelte';
+	import type { ConnectResult } from '$lib/accounts/account-ref';
 
 	type Provider = 'plaid' | 'simplefin';
 	let provider = $state<Provider>('plaid');
+
+	// Client-carries-refs seam (SELF-199 seam (b)): on a successful connect, stash the
+	// provider-blind result (AccountRef[] + linked_source_id) into the in-memory handoff and
+	// navigate to the attributes-capture route. No server round trip carries this — the
+	// attributes route consumes the carry on entry and fail-closes if it is empty.
+	const ATTRIBUTES_ROUTE = '/accounts/connect/attributes';
+	async function onConnected(result: ConnectResult) {
+		stashConnectResult(result);
+		await goto(ATTRIBUTES_ROUTE);
+	}
 </script>
 
 <svelte:head>
@@ -64,9 +77,9 @@
 		</fieldset>
 
 		{#if provider === 'plaid'}
-			<PlaidLinkConnect />
+			<PlaidLinkConnect {onConnected} />
 		{:else}
-			<SimpleFINConnect />
+			<SimpleFINConnect {onConnected} />
 		{/if}
 	</section>
 

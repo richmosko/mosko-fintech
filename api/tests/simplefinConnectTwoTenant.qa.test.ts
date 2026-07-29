@@ -169,7 +169,10 @@ describe('OQ-2 leg-S relay two-tenant cross-binding (QA — real transport → r
 		// upstream schema STRIPS the surprise `__internal` key so nothing unexpected reaches the browser.
 		expect(await res.json()).toEqual({
 			success: true,
-			accounts: [{ account_id: 'sfin_acct_chk', name: 'Everyday Checking', type: 'unknown', subtype: null, currency: 'USD' }]
+			accounts: [{ account_id: 'sfin_acct_chk', name: 'Everyday Checking', type: 'unknown', subtype: null, currency: 'USD' }],
+			// SELF-199 / ADR-037: relay forwards the caller's OWN linked_source_id alongside accounts (the
+			// recording worker at L69 emits sourceId:'77'); the __internal surprise key is still stripped.
+			linked_source_id: '77'
 		});
 	});
 

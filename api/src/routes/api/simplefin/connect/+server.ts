@@ -6,8 +6,13 @@
 //   2. Validates the body with Zod `.strict()` — the mass-assignment fence: any extra key
 //      (least of all a client-supplied ownerUserId / tenant id) is REJECTED (400).
 //   3. Relays { setup_token, ownerUserId=session, institutionName? } to the worker's internal
-//      /admission/simplefin/claim and maps 2xx → { success, accounts } (sourceId dropped — it's
-//      an internal pfin id the browser never needs).
+//      /admission/simplefin/claim and maps 2xx → { success, accounts, linked_source_id }.
+//      `linked_source_id` is the caller's own linked_source.source_id (worker `sourceId`,
+//      bigint-as-string) — surfaced for the SELF-199 attributes flow (ADR-037 (ii)
+//      client-carries-refs): the browser passes it to fn_land_linked_accounts to bind each
+//      landed account. Owner-safe (caller owns the source); a tampered value fails closed at
+//      the 015 matched-tenant fence (Decision-3 #6). [Sec: surface:plaid/simplefin — reverses
+//      the prior "drop internal id" posture; ratified owner-safe, confirm at the SELF-199 PR.]
 //
 // This route holds NO SimpleFIN credential and NO service_role key → stays OFF the RT-26
 // allowlist. C6-4 analogue: a burned setup token is never retried — failure is surfaced so the
@@ -56,5 +61,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		return json({ error: 'connect_failed' }, { status: outcome.status });
 	}
 
-	return json({ success: true, accounts: outcome.data.accounts });
+	return json({
+		success: true,
+		accounts: outcome.data.accounts,
+		linked_source_id: outcome.data.sourceId
+	});
 };

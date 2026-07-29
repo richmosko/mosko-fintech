@@ -61,10 +61,13 @@ describe('exchangePublicToken (leg 2)', () => {
 		// Type the mock with the real `fetch` signature so `mock.calls[0]` is typed as
 		// `[input, init?]` — lets us destructure the 2nd arg without an unsafe cast.
 		const spy: FetchLike = vi.fn<FetchLike>(async () =>
-			new Response(JSON.stringify({ success: true, accounts: [{ account_id: 'a1' }] }), {
-				status: 200,
-				headers: { 'content-type': 'application/json' }
-			})
+			new Response(
+				JSON.stringify({ success: true, linked_source_id: '1', accounts: [{ account_id: 'a1' }] }),
+				{
+					status: 200,
+					headers: { 'content-type': 'application/json' }
+				}
+			)
 		);
 		await exchangePublicToken('public-sandbox-xyz', { institution: { name: 'Test Bank' } }, spy);
 
@@ -78,12 +81,24 @@ describe('exchangePublicToken (leg 2)', () => {
 		expect(sentBody).not.toHaveProperty('users_id');
 	});
 
-	it('returns { success, accounts } on 200', async () => {
-		const fetchFn = jsonFetch({ success: true, accounts: [{ account_id: 'a1', name: 'Checking' }] });
+	it('returns { success, linked_source_id, accounts } on 200', async () => {
+		const fetchFn = jsonFetch({
+			success: true,
+			linked_source_id: '42',
+			accounts: [{ account_id: 'a1', name: 'Checking' }]
+		});
 		const out = await exchangePublicToken('public-sandbox-xyz', undefined, fetchFn);
 		expect(out.success).toBe(true);
+		expect(out.linked_source_id).toBe('42');
 		expect(out.accounts).toHaveLength(1);
 		expect(out.accounts[0].account_id).toBe('a1');
+	});
+
+	it('rejects a success body missing linked_source_id (required numeric string)', async () => {
+		const fetchFn = jsonFetch({ success: true, accounts: [{ account_id: 'a1' }] });
+		await expect(
+			exchangePublicToken('public-sandbox-xyz', undefined, fetchFn)
+		).rejects.toMatchObject({ leg: 'exchange', kind: 'malformed' });
 	});
 
 	it('throws a typed http error on relay failure (drives retry)', async () => {

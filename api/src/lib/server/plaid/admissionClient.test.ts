@@ -143,7 +143,7 @@ describe('mintLinkToken transport', () => {
 });
 
 describe('exchangePublicToken transport', () => {
-	it('sends session ownerUserId + public_token, drops sourceId from the result', async () => {
+	it('sends session ownerUserId + public_token, forwards sourceId in the result', async () => {
 		const fetchMock = vi.fn(async () =>
 			jsonResponse(200, {
 				sourceId: '42',
@@ -153,12 +153,15 @@ describe('exchangePublicToken transport', () => {
 		vi.stubGlobal('fetch', fetchMock);
 
 		const out = await exchangePublicToken(SESSION_UID, { public_token: 'public-sandbox-abc' });
+		// sourceId (the caller's own linked_source id) is now FORWARDED for the SELF-199
+		// attributes flow (ADR-037 (ii) client-carries-refs) — no longer dropped.
 		expect(out).toEqual({
 			ok: true,
-			data: { accounts: [{ account_id: 'acct_1', name: 'Checking', type: 'depository' }] }
+			data: {
+				sourceId: '42',
+				accounts: [{ account_id: 'acct_1', name: 'Checking', type: 'depository' }]
+			}
 		});
-		// sourceId must not survive into the browser-facing data.
-		if (out.ok) expect(JSON.stringify(out.data)).not.toContain('42');
 
 		const [, init] = fetchMock.mock.calls[0] as unknown as [string, { body: string }];
 		expect(JSON.parse(init.body).ownerUserId).toBe(SESSION_UID);

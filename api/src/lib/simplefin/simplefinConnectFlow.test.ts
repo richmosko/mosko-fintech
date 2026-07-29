@@ -17,10 +17,13 @@ function jsonFetch(body: unknown, status = 200): FetchLike {
 describe('submitSetupToken (leg-S)', () => {
 	it('sends ONLY { setup_token } — no tenant id, no institutionName when blank (mass-assignment fence)', async () => {
 		const spy: FetchLike = vi.fn<FetchLike>(async () =>
-			new Response(JSON.stringify({ success: true, accounts: [{ account_id: 'a1' }] }), {
-				status: 200,
-				headers: { 'content-type': 'application/json' }
-			})
+			new Response(
+				JSON.stringify({ success: true, linked_source_id: '1', accounts: [{ account_id: 'a1' }] }),
+				{
+					status: 200,
+					headers: { 'content-type': 'application/json' }
+				}
+			)
 		);
 		await submitSetupToken('setup-token-abc', undefined, spy);
 
@@ -36,7 +39,7 @@ describe('submitSetupToken (leg-S)', () => {
 
 	it('includes institutionName only when provided', async () => {
 		const spy: FetchLike = vi.fn<FetchLike>(async () =>
-			new Response(JSON.stringify({ success: true, accounts: [] }), {
+			new Response(JSON.stringify({ success: true, linked_source_id: '1', accounts: [] }), {
 				status: 200,
 				headers: { 'content-type': 'application/json' }
 			})
@@ -48,13 +51,15 @@ describe('submitSetupToken (leg-S)', () => {
 		expect(sentBody.institutionName).toBe('Capital One');
 	});
 
-	it('returns { success, accounts } on 200', async () => {
+	it('returns { success, linked_source_id, accounts } on 200', async () => {
 		const fetchFn = jsonFetch({
 			success: true,
+			linked_source_id: '42',
 			accounts: [{ account_id: 'a1', name: 'Checking', type: 'unknown' }]
 		});
 		const out = await submitSetupToken('setup-token-abc', undefined, fetchFn);
 		expect(out.success).toBe(true);
+		expect(out.linked_source_id).toBe('42');
 		expect(out.accounts).toHaveLength(1);
 		expect(out.accounts[0].account_id).toBe('a1');
 	});

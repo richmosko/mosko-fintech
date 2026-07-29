@@ -128,7 +128,10 @@ describe('SELF-212 relay two-tenant cross-binding (QA — real transport → rec
 		const w = await wireWorker();
 		const res = await POST(exchangeEvent({ public_token: 'public-sandbox-abc' }, { id: SESSION_A }));
 		expect(res.status).toBe(200);
-		expect(await res.json()).toEqual({ success: true, accounts: [{ account_id: 'acct_1', name: 'Checking' }] });
+		// Relay forwards the caller's OWN linked_source.source_id (bigint-as-string) alongside accounts
+		// for the (ii) client-carries-refs attributes flow (SELF-199 / ADR-037; owner-safe). The
+		// recording worker (L67) emits sourceId:'42' → relay surfaces it as linked_source_id.
+		expect(await res.json()).toEqual({ success: true, accounts: [{ account_id: 'acct_1', name: 'Checking' }], linked_source_id: '42' });
 
 		expect(w.calls).toHaveLength(1);
 		expect(w.calls[0].path).toBe('/admission/exchange');

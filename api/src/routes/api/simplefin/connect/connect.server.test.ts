@@ -78,9 +78,11 @@ it('legitimate claim → worker receives the SESSION ownerUserId, not any client
 	const res = await POST(makeEvent({ setup_token: SETUP_TOKEN, institutionName: 'Test Bank' }, { id: SESSION_UID }));
 
 	expect(res.status).toBe(200);
+	// linked_source_id = the worker's sourceId, surfaced for the SELF-199 attributes flow.
 	expect(await res.json()).toEqual({
 		success: true,
-		accounts: [{ account_id: 'acct_1', name: 'Checking' }]
+		accounts: [{ account_id: 'acct_1', name: 'Checking' }],
+		linked_source_id: '77'
 	});
 
 	// The value that reached the worker is the session uid — provably; the setup_token rode the body.

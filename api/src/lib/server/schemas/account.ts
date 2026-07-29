@@ -70,6 +70,53 @@ export const manualAccountCreateSchema = z
 
 export type ManualAccountCreate = z.infer<typeof manualAccountCreateSchema>;
 
+/**
+ * SELF-199 (§2.4.1.d) — per-account attribute capture for PROVIDER-LINKED accounts
+ * (ADR-037; distinct from the manual path above). Seam (b) = (ii) client-carries-refs:
+ * the browser carries the adapter's AccountRef[] + linked_source_id from the connect step
+ * and submits, per SELECTED account, the four user attributes + the provider account id
+ * (the AccountRef join key). Maps 1:1 to the `fn_land_linked_accounts` (042) `p_accounts`
+ * element shape — the action renames `account_id` → `provider_account_id` at the RPC
+ * boundary. Unselected accounts are simply absent from the array (never persisted, per AC).
+ * Both envelope + element are `.strict()` (Lock 14 mass-assignment fence). `scope` is
+ * free-text (ADR-004 Dec B); enums from the shared account-constants (anti-drift, same as
+ * the manual form). `currency` is NOT threaded — it defaults to 'USD' (015) per the 042
+ * contract (an optional per-account currency key can be added additively later).
+ */
+const linkedSourceIdField = () =>
+	// pfin.linked_source.source_id is a bigint, serialized by the connect relay as a decimal
+	// STRING (JSON-safe). Validate the digit-string here; the action coerces to a number for
+	// the bigint RPC param (source_id is a small sequence value — Number() is exact).
+	z.string().trim().regex(/^\d+$/, 'Invalid connection reference.');
+
+export const linkedAccountAttrSchema = z
+	.object({
+		// The adapter AccountRef join key → persisted as pfin.account.provider_account_id.
+		account_id: z.string().trim().min(1, 'Missing account reference.'),
+		name: z.string().trim().min(1, 'Name is required.').max(200, 'Name is too long.'),
+		scope: z.string().trim().min(1, 'Scope is required.').max(200, 'Scope is too long.'),
+		tax_treatment: z.enum(TAX_TREATMENTS),
+		account_type: z.enum(ACCOUNT_TYPES)
+	})
+	.strict();
+
+export type LinkedAccountAttr = z.infer<typeof linkedAccountAttrSchema>;
+
+export const landLinkedAccountsSchema = z
+	.object({
+		linked_source_id: linkedSourceIdField(),
+		// .min(1): the client only includes SELECTED accounts; an empty submit is a
+		// client-prevented no-op the action rejects. .max(100): generous per-institution
+		// cap (defensive; institutions expose well under this) — bounds the atomic txn.
+		accounts: z
+			.array(linkedAccountAttrSchema)
+			.min(1, 'Select at least one account to add.')
+			.max(100, 'Too many accounts in one submission.')
+	})
+	.strict();
+
+export type LandLinkedAccounts = z.infer<typeof landLinkedAccountsSchema>;
+
 /** Sub-Cat reassignment (SELF-236 §2.2.1.c). Single nullable field; nullable clears
  *  the tag ("Unsorted"). Matched-tenant fenced by the 012 trigger on UPDATE. */
 export const reassignSubCatSchema = z.object({ sub_cat_id: subCatIdField() }).strict();

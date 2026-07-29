@@ -45,22 +45,22 @@ export const connectRequestSchema = z
 export type ConnectRequest = z.infer<typeof connectRequestSchema>;
 
 // ── Response ─────────────────────────────────────────────────────────────────────────
-// Identical shape to the Plaid exchange response (OQ-2 §3c — no new mapping leg). Parsed
-// leniently (unknown keys stripped, not rejected — response shapes may grow server-side
-// without breaking the client). SimpleFIN refs carry `type: 'unknown'` (no provider type
-// signal); the shared attributes flow lets the user classify each account, so `unknown`
-// simply means the type field starts unselected rather than pre-filled — a UX nicety.
-export const accountRefSchema = z.object({
-	account_id: z.string().min(1),
-	name: z.string().optional(),
-	type: z.string().optional(),
-	subtype: z.string().nullish(),
-	currency: z.string().optional()
-});
-export type AccountRef = z.infer<typeof accountRefSchema>;
+// Account-ref shape is the CANONICAL provider-blind `AccountRef` (SELF-199) — the SAME type
+// the Plaid path converges on, re-exported here so existing `$lib/simplefin/contract`
+// importers are unaffected. SimpleFIN responses omit the Plaid-only `mask` and carry
+// `type: 'unknown'` (no provider type signal), so the attributes flow simply starts each
+// account's type UNSELECTED (recommendAccountType → undefined) rather than pre-filled — a UX
+// nicety, not a gap. Parsed leniently (unknown keys stripped, not rejected).
+export { accountRefSchema, type AccountRef } from '$lib/accounts/account-ref';
+import { accountRefSchema } from '$lib/accounts/account-ref';
 
+// `linked_source_id` (SELF-199 seam): the connect relay returns it alongside `accounts` so the
+// attributes step can carry it to the persist action. It is `pfin.linked_source.source_id` —
+// a **bigint serialized as a decimal string** (e.g. "42"), NOT a UUID. Backend confirmed the
+// relay always returns it, so it is required here (numeric-string shape mirrors the envelope).
 export const connectResponseSchema = z.object({
 	success: z.literal(true),
+	linked_source_id: z.string().regex(/^\d+$/),
 	accounts: z.array(accountRefSchema)
 });
 export type ConnectResponse = z.infer<typeof connectResponseSchema>;
