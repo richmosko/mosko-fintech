@@ -49,20 +49,22 @@ export const exchangeRequestSchema = z
 export type ExchangeRequest = z.infer<typeof exchangeRequestSchema>;
 
 // ── Leg 2 response ───────────────────────────────────────────────────────────────────
-// ASSUMED account-ref shape (re-scoped SELF-197: relay returns success + account-refs,
-// NOT a plaid_items persist confirmation). Fields beyond `account_id` are best-effort;
-// confirm the canonical ref shape with Backend. Parsed leniently (unknown keys stripped).
-export const accountRefSchema = z.object({
-	account_id: z.string().min(1),
-	name: z.string().optional(),
-	mask: z.string().nullish(),
-	type: z.string().optional(),
-	subtype: z.string().nullish()
-});
-export type AccountRef = z.infer<typeof accountRefSchema>;
+// Account-ref shape is now the CANONICAL provider-blind `AccountRef` (SELF-199) — both the
+// Plaid + SimpleFIN paths converge on it so the shared attributes route builds against ONE
+// type. Re-exported here so existing `$lib/plaid/contract` importers are unaffected. Plaid
+// responses simply omit the SimpleFIN-only `currency` field. Parsed leniently (unknown keys
+// stripped, not rejected — a provider response may grow server-side without breaking us).
+export { accountRefSchema, type AccountRef } from '$lib/accounts/account-ref';
+import { accountRefSchema } from '$lib/accounts/account-ref';
 
+// `linked_source_id` (SELF-199 seam): the leg-2 relay returns it alongside `accounts` so the
+// attributes step can carry it to the persist action. It is `pfin.linked_source.source_id` —
+// a **bigint serialized as a decimal string** (e.g. "42"), NOT a UUID (the UUID is the RLS
+// `users_id` anchor; source_id is a plain bigint PK). Backend confirmed the relay always
+// returns it, so it is required here (numeric-string shape mirrors Backend's envelope regex).
 export const exchangeResponseSchema = z.object({
 	success: z.literal(true),
+	linked_source_id: z.string().regex(/^\d+$/),
 	accounts: z.array(accountRefSchema)
 });
 export type ExchangeResponse = z.infer<typeof exchangeResponseSchema>;

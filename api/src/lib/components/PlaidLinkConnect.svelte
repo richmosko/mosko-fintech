@@ -34,7 +34,7 @@
 		type PlaidLinkError,
 		type PlaidCreateConfig
 	} from '$lib/plaid/loadPlaidLink';
-	import type { AccountRef } from '$lib/plaid/contract';
+	import type { ConnectResult } from '$lib/accounts/account-ref';
 
 	type Status = 'idle' | 'initializing' | 'linking' | 'exchanging' | 'error';
 
@@ -43,7 +43,9 @@
 		// "per-account attributes after share selection"). NOTE: that route is a later
 		// SELF-# — path is a prop so the host wires the real target when it lands.
 		mappingPath = '/accounts/connect/attributes',
-		/** Optional override: called with the account-refs instead of navigating. */
+		/** Optional override: called with the connect result instead of navigating. The host
+		 *  (the connect page) uses this to carry the refs + linked_source_id to the attributes
+		 *  route per the client-carries-refs seam (SELF-199 seam (b)). */
 		onConnected,
 		// Injectable seams (defaults are the real relay/SDK fns) — kept for unit-testing
 		// the widget against a mocked relay without touching the network or the CDN.
@@ -52,7 +54,7 @@
 		createHandlerFn = defaultCreateHandler
 	}: {
 		mappingPath?: string;
-		onConnected?: (accounts: AccountRef[]) => void;
+		onConnected?: (result: ConnectResult) => void;
 		fetchLinkTokenFn?: typeof defaultFetchLinkToken;
 		exchangeFn?: typeof defaultExchange;
 		createHandlerFn?: typeof defaultCreateHandler;
@@ -93,11 +95,15 @@
 		pendingPublicToken = publicToken;
 		status = 'exchanging';
 		try {
-			const { accounts } = await exchangeFn(publicToken, metadata);
+			const { accounts, linked_source_id } = await exchangeFn(publicToken, metadata);
 			pendingPublicToken = null;
 			cleanup();
 			status = 'idle';
-			if (onConnected) onConnected(accounts);
+			// Carry the provider-blind result to the host (connect page). linked_source_id is
+			// the pfin.linked_source row the relay created (ADR-037 substrate); null-coalesced
+			// until Backend confirms the relay always returns it — the attributes route
+			// fail-closes when it is absent.
+			if (onConnected) onConnected({ accounts, linkedSourceId: linked_source_id ?? null });
 			else await goto(mappingPath);
 		} catch (e) {
 			const leg = e instanceof PlaidRelayError ? e.leg : 'exchange';

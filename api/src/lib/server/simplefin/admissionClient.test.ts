@@ -91,16 +91,19 @@ describe('mapUpstreamStatus', () => {
 
 // ── Transport: header, body, mapping, redaction ────────────────────────────────────────────
 describe('admitSimplefin transport', () => {
-	it('POSTs the shared-secret header + session ownerUserId to the claim path, drops sourceId', async () => {
+	it('POSTs the shared-secret header + session ownerUserId to the claim path, forwards sourceId', async () => {
 		const fetchMock = vi.fn(async () =>
 			jsonResponse(200, { sourceId: '77', accounts: [{ account_id: 'acct_1', name: 'Checking', type: 'unknown' }] })
 		);
 		vi.stubGlobal('fetch', fetchMock);
 
 		const out = await admitSimplefin(SESSION_UID, { setup_token: SETUP_TOKEN, institutionName: 'Capital One' });
-		expect(out).toEqual({ ok: true, data: { accounts: [{ account_id: 'acct_1', name: 'Checking', type: 'unknown' }] } });
-		// sourceId (internal pfin id) must NOT survive into the browser-facing data.
-		if (out.ok) expect(JSON.stringify(out.data)).not.toContain('77');
+		// sourceId (the caller's own linked_source id) is now FORWARDED for the SELF-199
+		// attributes flow (ADR-037 (ii) client-carries-refs) — no longer dropped.
+		expect(out).toEqual({
+			ok: true,
+			data: { sourceId: '77', accounts: [{ account_id: 'acct_1', name: 'Checking', type: 'unknown' }] }
+		});
 
 		const [url, init] = fetchMock.mock.calls[0] as unknown as [
 			string,

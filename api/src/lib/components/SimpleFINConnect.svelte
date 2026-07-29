@@ -42,6 +42,7 @@
 		type FetchLike
 	} from '$lib/simplefin/simplefinConnectFlow';
 	import type { AccountRef } from '$lib/simplefin/contract';
+	import type { ConnectResult } from '$lib/accounts/account-ref';
 
 	type Status = 'idle' | 'submitting' | 'error';
 
@@ -50,19 +51,21 @@
 		// route the Plaid path uses (OQ-2 §3c: account-mapping reuses the shipped attributes
 		// slice; no new leg). Path is a prop so the host wires the real target.
 		mappingPath = '/accounts/connect/attributes',
-		/** Optional override: called with the account-refs instead of navigating. */
+		/** Optional override: called with the connect result instead of navigating. The host
+		 *  (the connect page) uses this to carry the refs + linked_source_id to the attributes
+		 *  route per the client-carries-refs seam (SELF-199 seam (b)). */
 		onConnected,
 		// Injectable seam (default is the real relay fn) — lets a unit test drive the widget
 		// against a mocked relay without touching the network.
 		submitFn = defaultSubmit
 	}: {
 		mappingPath?: string;
-		onConnected?: (accounts: AccountRef[]) => void;
+		onConnected?: (result: ConnectResult) => void;
 		submitFn?: (
 			setupToken: string,
 			institutionName: string | undefined,
 			fetchFn?: FetchLike
-		) => Promise<{ success: true; accounts: AccountRef[] }>;
+		) => Promise<{ success: true; linked_source_id?: string | null; accounts: AccountRef[] }>;
 	} = $props();
 
 	// Bound to the textarea (two-way). Cleared the instant we submit (credential hygiene).
@@ -110,10 +113,13 @@
 		status = 'submitting';
 
 		try {
-			const { accounts } = await submitFn(token, label);
+			const { accounts, linked_source_id } = await submitFn(token, label);
 			status = 'idle';
 			institutionName = '';
-			if (onConnected) onConnected(accounts);
+			// Carry the provider-blind result to the host (connect page). linked_source_id is
+			// null-coalesced until Backend confirms the relay always returns it — the
+			// attributes route fail-closes when it is absent.
+			if (onConnected) onConnected({ accounts, linkedSourceId: linked_source_id ?? null });
 			else await goto(mappingPath);
 		} catch (e) {
 			const failure = e instanceof SimplefinRelayError ? e.failure : 'unavailable';

@@ -76,7 +76,12 @@ const workerClaimResponseSchema = z.object({
 });
 
 export type AdmissionAccount = z.infer<typeof workerAccountSchema>;
-export type ClaimData = { accounts: AdmissionAccount[] };
+// `sourceId` = the caller's own pfin.linked_source.source_id (bigint serialized as a
+// decimal STRING). SURFACED to the browser (SELF-199, ADR-037): the account-attributes
+// flow ((ii) client-carries-refs) passes it to fn_land_linked_accounts as the FK to bind
+// each landed account. Owner-safe (caller owns the source); a tampered value fails closed
+// at the 015 matched-tenant fence (Decision-3 #6) + 021 dedup. Mirrors the Plaid leg.
+export type ClaimData = { sourceId: string; accounts: AdmissionAccount[] };
 
 /** Discriminated outcome; on failure carries ONLY a browser-facing HTTP status (no leak). */
 export type LegOutcome<T> = { ok: true; data: T } | { ok: false; status: number };
@@ -159,8 +164,9 @@ export async function admitSimplefin(
 	if (call.status === 200) {
 		const parsed = workerClaimResponseSchema.safeParse(call.json);
 		if (!parsed.success) return { ok: false, status: 502 }; // malformed upstream
-		// Drop sourceId (internal pfin id) — browser routes on account_id.
-		return { ok: true, data: { accounts: parsed.data.accounts } };
+		// Forward sourceId (the caller's own linked_source id) alongside the account refs —
+		// the browser needs it for the SELF-199 attributes flow (see ClaimData above).
+		return { ok: true, data: { sourceId: parsed.data.sourceId, accounts: parsed.data.accounts } };
 	}
 	return { ok: false, status: mapUpstreamStatus(call.status) };
 }

@@ -82,9 +82,11 @@ it('legitimate exchange → worker receives the SESSION ownerUserId, not any cli
 	const res = await POST(makeEvent({ public_token: 'public-sandbox-abc' }, { id: SESSION_UID }));
 
 	expect(res.status).toBe(200);
+	// linked_source_id = the worker's sourceId, surfaced for the SELF-199 attributes flow.
 	expect(await res.json()).toEqual({
 		success: true,
-		accounts: [{ account_id: 'acct_1', name: 'Checking' }]
+		accounts: [{ account_id: 'acct_1', name: 'Checking' }],
+		linked_source_id: '42'
 	});
 
 	// The value that reached the worker is the session uid — provably.
