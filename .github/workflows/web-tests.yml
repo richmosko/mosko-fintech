@@ -66,3 +66,32 @@ jobs:
       - name: Docker build (multi-stage adapter-node image — AC "Dockerfile builds")
         # No push — build-only verification that the container assembles cleanly.
         run: docker build api/
+
+  dependency-audit:
+    name: api — dependency vuln audit (npm audit)
+    runs-on: ubuntu-latest
+    # SELF-206 (Sec condition on the jose@^6.2.5 dep for RT-05 ES256/JWK verify):
+    # api/ had no dependency-vuln audit; Sec requires one. Boring choice — npm's
+    # native `npm audit` against the committed lockfile, no third-party scanner.
+    #
+    # THRESHOLD RATIONALE (fail-closed on real risk, not on pre-existing noise):
+    #   --audit-level=moderate ⇒ the job FAILS on any moderate/high/critical
+    #   advisory (e.g. a future compromised `jose`), and PASSES on the 3
+    #   pre-existing LOW-severity advisories (cookie <0.7.0, transitively via
+    #   @sveltejs/kit → @sveltejs/adapter-node), whose only remediation today is a
+    #   BREAKING SvelteKit downgrade (`npm audit fix --force`) — deliberately not
+    #   taken. jose itself added 0 new advisories. If those low-sev items ever gain
+    #   a non-breaking fix, apply it and tighten the threshold to `low`.
+    #   Runs off the lockfile (no npm ci) — npm audit builds the tree from
+    #   package-lock.json and queries the registry advisory DB.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node (22, matches api/Dockerfile runtime)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: npm audit (fail-closed at moderate+; pre-existing low-sev triaged)
+        working-directory: api
+        run: npm audit --audit-level=moderate

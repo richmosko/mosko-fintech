@@ -215,4 +215,8 @@ export interface SourceRef {
 	accessToken: string;
 	/** The date this sync runs (Plaid balance as-of; holdings as-of when provider omits it). */
 	syncDate: string;
+	/** OWD-A A3 (045): the stored incremental-sync cursor to RESUME from (Plaid /transactions/sync
+	 *  cursor). NULL/undefined = never-synced → full drain. Advanced (persisted) by the caller ONLY
+	 *  on a successful land — see getLastCursor + ingest/cursor.ts. */
+	cursor?: string | null;
 }

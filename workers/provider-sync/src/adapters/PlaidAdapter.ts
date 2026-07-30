@@ -469,6 +469,9 @@ export class PlaidAdapter implements ProviderAdapter {
 	readonly #dbFor: AdmissionDbFactory | undefined;
 	readonly #logger: AdmissionLogger | undefined;
 	#lastCorrections: CorrectionCounts = { modified: 0, removed: 0, cancelled: 0 };
+	// OWD-A A3 (045): the /transactions/sync cursor the most recent fetchTransactions drained TO.
+	// The caller persists this to pfin.linked_source.sync_cursor ONLY on a successful land.
+	#lastCursor: string | null = null;
 
 	/**
 	 * @param client Plaid SDK (structural subset).
@@ -502,6 +505,12 @@ export class PlaidAdapter implements ProviderAdapter {
 		return { ...this.#lastCorrections };
 	}
 
+	/** OWD-A A3 (045): the /transactions/sync cursor drained TO by the most recent fetchTransactions
+	 *  (the watermark to persist on a successful land). null when none was produced. */
+	getLastCursor(): string | null {
+		return this.#lastCursor;
+	}
+
 	async fetchBalances(source: SourceRef): Promise<BalanceDTO[]> {
 		const { data } = await this.#client.accountsGet({ access_token: source.accessToken });
 		return data.accounts.map((a) => normalizeBalance(a, source.syncDate));
@@ -524,8 +533,11 @@ export class PlaidAdapter implements ProviderAdapter {
 		let removed = 0;
 		let cancelled = 0;
 
-		// (a) Bank/card: /transactions/sync (cursor drain; cursor persistence is PR #2).
-		let cursor: string | undefined = undefined;
+		// (a) Bank/card: /transactions/sync (cursor drain). OWD-A A3 (045): RESUME from the stored
+		// cursor (source.cursor) — incremental; NULL/undefined = full drain from the beginning. The
+		// final next_cursor is exposed via getLastCursor() so the caller advances the persisted
+		// pfin.linked_source.sync_cursor ONLY after a successful land (advance-on-success-only).
+		let cursor: string | undefined = source.cursor ?? undefined;
 		for (let page = 0; page < 50; page++) {
 			const { data } = await this.#client.transactionsSync({
 				access_token: source.accessToken,
@@ -538,6 +550,8 @@ export class PlaidAdapter implements ProviderAdapter {
 			cursor = data.next_cursor;
 			if (!data.has_more) break;
 		}
+		// The cursor to persist on success (the drained-to watermark). null if none was produced.
+		this.#lastCursor = cursor ?? null;
 
 		// (b) Investment transactions (offset-paginated, NOT the sync/cursor model).
 		let offset = 0;
