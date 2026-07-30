@@ -121,7 +121,7 @@ Per the F/CTO directive the model is **provider-agnostic, spanning BOTH Plaid AN
 
 | AC step (June, Plaid-specific) | Landed state | Reconciled form |
 |---|---|---|
-| (1) signature-verify vs `PLAID_WEBHOOK_SECRET` (RT-05) | greenfield; RT-05 critical still stands | **UNCHANGED** — Plaid's primary transport, provider-specific; SimpleFIN has no analogue |
+| (1) signature-verify (RT-05) | greenfield; RT-05 critical still stands | **AMENDED at SELF-206 (capability-verify)** — Plaid webhook verification is asymmetric-JWT (ES256; `Plaid-Verification` header; PUBLIC JWK via `/webhook_verification_key/get`), NOT a static HMAC secret. The June AC's `PLAID_WEBHOOK_SECRET` primitive does not exist in Plaid's model. Satisfied by: worker fetches the PUBLIC JWK by kid (sole holder of `PLAID_CLIENT_ID/SECRET`; api/src is credential-less); api/src verifies the ES256 JWT + `request_body_sha256` raw-body-hash locally (jose), ES256-pinned + iat-bounded. `PLAID_WEBHOOK_SECRET` retired (removed from the env manifest). Still Plaid-specific; SimpleFIN has no webhook analogue. |
 | (2) `INSERT plaid_webhook_id ON CONFLICT` idempotency | `plaid_webhook_id` **dropped** | **`linked_source_sync_audit.provider_event_id UNIQUE`** (the generalized idempotency gate) |
 | (3) tenant-resolution via `users_id` from `plaid_item_id` | `plaid_items` **dropped** | `users_id` lookup from `linked_source WHERE provider='plaid' AND external_connection_id=<Item ID>` — **[ADR-011](#adr-011) Decision 1 privileged-context-write**, code-bind `users_id` (no JWT) |
 | (4) `INSERT plaid_item_state_history` + 4-class enum | table **dropped** | **`INSERT linked_source_state_history`** (`status_class` normalized + `provider_error_code` raw); the "4-class enum" = the 4 non-healthy `status_class` values |
@@ -129,6 +129,8 @@ Per the F/CTO directive the model is **provider-agnostic, spanning BOTH Plaid AN
 | (6) `INSERT plaid_sync_audit` | table **dropped** | **`INSERT linked_source_sync_audit`** (`provider='plaid'`, `source='webhook'`) |
 
 **Verdict:** AC steps 2/3/4/6 are **schema-impossible as written** (target dropped tables) → reconciled onto the generic substrate. Steps 1/5 stand. As the PRIMARY-provider sync-trigger, this is core V1.0 surface (the `plaid-tier-confirmation-dependent` deferral framing is superseded by the F/CTO ruling in Context).
+
+> **AC1 amendment (2026-07-29, at the Plaid-webhook build).** SELF-206's capability-verify amended AC1's verification *mechanism* per the installed `plaid@27` SDK — Plaid webhook authenticity is asymmetric ES256-JWT (PUBLIC JWK from `/webhook_verification_key/get`), NOT a static HMAC `PLAID_WEBHOOK_SECRET` (which does not exist in Plaid's model and is retired from the env manifest). See the AC1 reconciliation-table cell above for the full form. **No §10 / RT-26 / Decision-3 ledger change** (the credentialed JWK fetch is a route on the existing RT-27 admission surface; api/src stays credential-less; RT-05 remains critical, satisfied by the ES256/JWK method).
 
 #### SELF-207 — §2.4.4.b connection-state view + re-auth + banner
 
