@@ -35,6 +35,8 @@ import type {
 import { PublicTokenInvalidError } from '../adapters/PlaidAdapter.js';
 import { SetupTokenInvalidError } from '../adapters/SimpleFINAdapter.js';
 import { ADMISSION_SECRET_HEADER, verifySharedSecret } from './sharedSecret.js';
+import type { PublicJwk } from './webhookVerificationKey.js';
+import type { SyncSourceInput, SyncSourceResult } from './triggerSync.js';
 
 /** Max inbound body. A link_token request / public_token handoff is tiny; anything larger is
  *  abuse → reject (fail-closed) rather than buffer. */
@@ -106,6 +108,26 @@ const reauthCompleteBodySchema = z
 	})
 	.strict();
 
+// ── SELF-206 Plaid-webhook support legs (Option 1) — NEW ROUTES on this SAME admission server
+//    (same private-bind listener + same C6-6 constant-time shared-secret gate). Keeping them on
+//    the existing server is load-bearing: a separate listener/port would be a NEW §10 instance.
+//    On the existing server they are ROUTES on the RT-27 surface (Sec-verified; mirrors the
+//    /admission/simplefin/claim + reauth-leg precedent). Both bodies `.strict()` (mass-assignment
+//    fence, Lock 14 mod #1).
+//  • webhook-verification-key: fetch the PUBLIC JWK by kid (credentialed Plaid call — the creds
+//    that api/src does NOT hold). `kid` is the JWT header key id (opaque string).
+//  • sync: AC5 on-demand incremental Plaid sync for a VERIFIED webhook. `ownerUserId` is the
+//    tenant api/src resolved FROM the Plaid Item id (never browser-sourced); `linked_source_id` is
+//    a digit-string (bigint). resolveCredential double-binds source+tenant downstream (fail-closed).
+const webhookVerificationKeyBodySchema = z.object({ kid: z.string().min(1) }).strict();
+
+const syncSourceBodySchema = z
+	.object({
+		ownerUserId: z.string().uuid(),
+		linked_source_id: z.string().regex(/^\d+$/)
+	})
+	.strict();
+
 export interface ReauthStartInput {
 	provider: 'plaid' | 'simplefin';
 	linkedSourceId: bigint;
@@ -147,6 +169,10 @@ export interface AdmissionServerDeps {
 	reauthStart(input: ReauthStartInput): Promise<ReauthHandoff>;
 	/** Re-auth Phase 2: dispatch to the provider's reauthComplete (SELF-207). */
 	reauthComplete(input: ReauthCompleteInput): Promise<ReauthResult>;
+	/** SELF-206: fetch the PUBLIC JWK by kid (credentialed Plaid call — worker-side only). */
+	fetchWebhookVerificationKey(kid: string): Promise<PublicJwk>;
+	/** SELF-206 AC5: on-demand incremental Plaid sync for a verified webhook (resolved tenant). */
+	syncSource(input: SyncSourceInput): Promise<SyncSourceResult>;
 	/** Token-free diagnostic logger (never receives a body/secret/token). */
 	logger?: (message: string) => void;
 }
@@ -283,6 +309,14 @@ export function createAdmissionServer(deps: AdmissionServerDeps): Server {
 		if (path === '/admission/reauth/complete') {
 			if (method !== 'POST') return sendError(res, METHOD_NOT_ALLOWED, 'method_not_allowed');
 			return handleReauthComplete(req, res);
+		}
+		if (path === '/admission/webhook-verification-key') {
+			if (method !== 'POST') return sendError(res, METHOD_NOT_ALLOWED, 'method_not_allowed');
+			return handleWebhookVerificationKey(req, res);
+		}
+		if (path === '/admission/sync') {
+			if (method !== 'POST') return sendError(res, METHOD_NOT_ALLOWED, 'method_not_allowed');
+			return handleSyncSource(req, res);
 		}
 		return sendError(res, NOT_FOUND, 'not_found');
 	}
@@ -454,6 +488,59 @@ export function createAdmissionServer(deps: AdmissionServerDeps): Server {
 			}
 			log(`admission: 502 reauth-complete failed (${err instanceof Error ? err.message : 'error'})`);
 			return sendError(res, BAD_GATEWAY, 'reauth_failed');
+		}
+	}
+
+	// SELF-206 — fetch the PUBLIC JWK for a kid (credentialed Plaid call). Returns { key } (public
+	// EC point + routing metadata; no secret). On any Plaid/transport failure → generic 502 so
+	// api/src fails the webhook CLOSED (never 200s an unverifiable webhook). C6-5: route+status only.
+	async function handleWebhookVerificationKey(req: IncomingMessage, res: ServerResponse): Promise<void> {
+		let body: unknown;
+		try {
+			body = await readJsonBody(req);
+		} catch (err) {
+			const reason = err instanceof Error ? err.message : '';
+			return sendError(res, reason === 'BODY_TOO_LARGE' ? PAYLOAD_TOO_LARGE : BAD_REQUEST, 'invalid_request');
+		}
+		const parsed = webhookVerificationKeyBodySchema.safeParse(body);
+		if (!parsed.success) return sendError(res, BAD_REQUEST, 'invalid_request');
+
+		try {
+			const key = await deps.fetchWebhookVerificationKey(parsed.data.kid);
+			log('admission: 200 webhook-verification-key');
+			return sendJson(res, OK, { key });
+		} catch (err) {
+			log(`admission: 502 webhook-verification-key failed (${err instanceof Error ? err.message : 'error'})`);
+			return sendError(res, BAD_GATEWAY, 'verification_key_failed');
+		}
+	}
+
+	// SELF-206 AC5 — on-demand incremental Plaid sync for a VERIFIED webhook. ownerUserId is the
+	// tenant api/src resolved from the Item id (C6-3: never browser-sourced — the webhook has no
+	// session). resolveCredential double-binds source+tenant downstream (fail-closed). Returns
+	// non-sensitive landed counts. On failure → 502 (api/src logs + relies on the next poll as the
+	// self-healing backstop; it does NOT un-ack the already-committed webhook). C6-5: no token/body.
+	async function handleSyncSource(req: IncomingMessage, res: ServerResponse): Promise<void> {
+		let body: unknown;
+		try {
+			body = await readJsonBody(req);
+		} catch (err) {
+			const reason = err instanceof Error ? err.message : '';
+			return sendError(res, reason === 'BODY_TOO_LARGE' ? PAYLOAD_TOO_LARGE : BAD_REQUEST, 'invalid_request');
+		}
+		const parsed = syncSourceBodySchema.safeParse(body);
+		if (!parsed.success) return sendError(res, BAD_REQUEST, 'invalid_request');
+
+		try {
+			const result = await deps.syncSource({
+				ownerUserId: parsed.data.ownerUserId,
+				linkedSourceId: BigInt(parsed.data.linked_source_id)
+			});
+			log(`admission: 200 sync source_id=${result.sourceId} (inserted=${result.inserted})`);
+			return sendJson(res, OK, { ok: true, ...result });
+		} catch (err) {
+			log(`admission: 502 sync failed (${err instanceof Error ? err.message : 'error'})`);
+			return sendError(res, BAD_GATEWAY, 'sync_failed');
 		}
 	}
 }

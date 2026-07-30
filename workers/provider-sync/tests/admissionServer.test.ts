@@ -39,6 +39,16 @@ async function start(deps: Partial<AdmissionServerDeps> = {}): Promise<string> {
 		admitSimplefin: vi.fn(async () => ({ sourceId: 77n, accounts: [ACCT] })),
 		reauthStart: vi.fn(async () => ({ kind: 'link_update', linkToken: 'link-upd-1' })),
 		reauthComplete: vi.fn(async () => ({ connectionStatus: 'healthy', rotated: false })),
+		fetchWebhookVerificationKey: vi.fn(async () => ({
+			kty: 'EC',
+			crv: 'P-256',
+			x: 'x-coord',
+			y: 'y-coord',
+			kid: 'kid-1',
+			alg: 'ES256',
+			use: 'sig'
+		})),
+		syncSource: vi.fn(async () => ({ sourceId: '42', inserted: 3, skipped: 1, unresolvedAccounts: 0 })),
 		logger: vi.fn(),
 		...deps
 	};
@@ -380,5 +390,96 @@ describe('reauth legs (SELF-207)', () => {
 		);
 		expect(res.status).toBe(502);
 		expect(await res.json()).toEqual({ error: 'reauth_failed' });
+	});
+});
+
+// ── SELF-206 — webhook-verification-key + sync trigger (new routes, same server/gate) ──────
+describe('SELF-206 webhook-verification-key — credentialed JWK fetch (Option 1)', () => {
+	it('401 without the shared secret (route on the SAME RT-27 gate)', async () => {
+		const fetchWebhookVerificationKey = vi.fn();
+		const url = await start({ fetchWebhookVerificationKey });
+		const res = await post(`${url}/admission/webhook-verification-key`, { kid: 'kid-1' });
+		expect(res.status).toBe(401);
+		expect(fetchWebhookVerificationKey).not.toHaveBeenCalled();
+	});
+
+	it('happy path returns { key } (public JWK); kid forwarded', async () => {
+		const fetchWebhookVerificationKey = vi.fn(async () => ({
+			kty: 'EC',
+			crv: 'P-256',
+			x: 'X',
+			y: 'Y',
+			kid: 'kid-9',
+			alg: 'ES256',
+			use: 'sig'
+		}));
+		const url = await start({ fetchWebhookVerificationKey });
+		const res = await post(`${url}/admission/webhook-verification-key`, { kid: 'kid-9' }, authed);
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({
+			key: { kty: 'EC', crv: 'P-256', x: 'X', y: 'Y', kid: 'kid-9', alg: 'ES256', use: 'sig' }
+		});
+		expect(fetchWebhookVerificationKey).toHaveBeenCalledWith('kid-9');
+	});
+
+	it('400 on an empty kid / extra field (Zod .strict boundary)', async () => {
+		const fetchWebhookVerificationKey = vi.fn();
+		const url = await start({ fetchWebhookVerificationKey });
+		expect((await post(`${url}/admission/webhook-verification-key`, { kid: '' }, authed)).status).toBe(400);
+		expect(
+			(await post(`${url}/admission/webhook-verification-key`, { kid: 'k', extra: 1 }, authed)).status
+		).toBe(400);
+		expect(fetchWebhookVerificationKey).not.toHaveBeenCalled();
+	});
+
+	it('502 generic envelope when the fetch throws (no internal detail leaks)', async () => {
+		const fetchWebhookVerificationKey = vi.fn(async () => {
+			throw new Error('Plaid /webhook_verification_key/get failed (RATE_LIMIT)');
+		});
+		const url = await start({ fetchWebhookVerificationKey });
+		const res = await post(`${url}/admission/webhook-verification-key`, { kid: 'kid-1' }, authed);
+		expect(res.status).toBe(502);
+		expect(await res.json()).toEqual({ error: 'verification_key_failed' });
+	});
+});
+
+describe('SELF-206 sync — on-demand incremental sync trigger (AC5)', () => {
+	it('401 without the shared secret', async () => {
+		const syncSource = vi.fn();
+		const url = await start({ syncSource });
+		const res = await post(`${url}/admission/sync`, { ownerUserId: UUID, linked_source_id: '42' });
+		expect(res.status).toBe(401);
+		expect(syncSource).not.toHaveBeenCalled();
+	});
+
+	it('happy path returns { ok, ...counts }; input forwarded (bigint parsed)', async () => {
+		const syncSource = vi.fn(async () => ({ sourceId: '42', inserted: 5, skipped: 2, unresolvedAccounts: 1 }));
+		const url = await start({ syncSource });
+		const res = await post(`${url}/admission/sync`, { ownerUserId: UUID, linked_source_id: '42' }, authed);
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ ok: true, sourceId: '42', inserted: 5, skipped: 2, unresolvedAccounts: 1 });
+		expect(syncSource).toHaveBeenCalledWith({ ownerUserId: UUID, linkedSourceId: 42n });
+	});
+
+	it('400 on a non-digit linked_source_id / extra field (Zod .strict boundary)', async () => {
+		const syncSource = vi.fn();
+		const url = await start({ syncSource });
+		expect(
+			(await post(`${url}/admission/sync`, { ownerUserId: UUID, linked_source_id: 'abc' }, authed)).status
+		).toBe(400);
+		expect(
+			(await post(`${url}/admission/sync`, { ownerUserId: UUID, linked_source_id: '42', extra: 1 }, authed)).status
+		).toBe(400);
+		expect(syncSource).not.toHaveBeenCalled();
+	});
+
+	it('502 generic envelope when the sync throws (no credential/detail leaks)', async () => {
+		const syncSource = vi.fn(async () => {
+			throw new Error('no credential resolved for source_id=42');
+		});
+		const url = await start({ syncSource });
+		const res = await post(`${url}/admission/sync`, { ownerUserId: UUID, linked_source_id: '42' }, authed);
+		expect(res.status).toBe(502);
+		expect(await res.json()).toEqual({ error: 'sync_failed' });
 	});
 });

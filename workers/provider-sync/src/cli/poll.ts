@@ -35,6 +35,7 @@ import { PlaidAdapter, type PlaidClientLike } from '../adapters/PlaidAdapter.js'
 import { SimpleFINAdapter, classifySimplefinUnhealthy } from '../adapters/SimpleFINAdapter.js';
 import { buildPlaidClient } from './admit.js';
 import { syncProviderData, type ProviderData, type SyncResult } from '../ingest/mapper.js';
+import { readSyncCursor, writeSyncCursor } from '../ingest/cursor.js';
 import { runAdmissionReachabilityProbe } from '../http/reachabilityProbe.js';
 import type {
 	BalanceDTO,
@@ -120,6 +121,8 @@ export interface FetchAdapter {
 	getLastErrlist?(): unknown[];
 	/** Plaid correction counts. */
 	getLastSyncDiagnostics?(): CorrectionCounts;
+	/** OWD-A A3 (045): the /transactions/sync cursor drained TO (persist on successful land). */
+	getLastCursor?(): string | null;
 }
 
 /** syncProviderData signature (needs a concrete TenantBoundClient). Injectable for tests. */
@@ -137,6 +140,11 @@ export interface PollWiring {
 	resolveCredential: (client: PollClient, row: SourceRow) => Promise<string | null>;
 	sync: SyncFn;
 	syncDate: string;
+	/** OWD-A A3 (045): read the stored incremental cursor before the drain. Optional seam — absent
+	 *  (tests) → no cursor read (full drain); production defaults to the pfin.linked_source read. */
+	readCursor?: (client: PollClient, row: SourceRow) => Promise<string | null>;
+	/** OWD-A A3 (045): advance the stored cursor AFTER a successful land. Optional seam. */
+	writeCursor?: (client: PollClient, row: SourceRow, cursor: string) => Promise<void>;
 }
 
 // ── Pure helpers ───────────────────────────────────────────────────────────────
@@ -236,10 +244,15 @@ export function createPollHandlers(wiring: PollWiring, log: (message: string) =>
 					throw new Error(`no credential resolved for source_id=${row.sourceId} (${row.provider})`);
 				}
 				const adapter = wiring.buildAdapter(row.provider);
+				// OWD-A A3 (045): resume the Plaid /transactions/sync drain from the stored cursor.
+				// Plaid-only (SimpleFIN uses a date window). Optional seam → absent = full drain.
+				const priorCursor =
+					row.provider === 'plaid' && wiring.readCursor ? await wiring.readCursor(client, row) : null;
 				const sourceRef: SourceRef = {
 					sourceId: BigInt(row.sourceId),
 					accessToken: credential, // consumed by the adapter's HTTP fetch; never logged.
-					syncDate: wiring.syncDate
+					syncDate: wiring.syncDate,
+					cursor: priorCursor
 				};
 				const range = trailingRange(wiring.syncDate);
 				const balances = await adapter.fetchBalances(sourceRef);
@@ -253,6 +266,14 @@ export function createPollHandlers(wiring: PollWiring, log: (message: string) =>
 					holdings,
 					transactions
 				});
+				// A3 advance-on-success-ONLY: the land above succeeded (a throw would skip this) →
+				// persist the drained-to cursor so the next sync is incremental. Only when it changed.
+				if (row.provider === 'plaid' && wiring.writeCursor) {
+					const nextCursor = adapter.getLastCursor?.() ?? null;
+					if (nextCursor !== null && nextCursor !== priorCursor) {
+						await wiring.writeCursor(client, row, nextCursor);
+					}
+				}
 				return {
 					result,
 					errlist: adapter.getLastErrlist?.() ?? [],
@@ -411,7 +432,11 @@ function defaultWiring(config: WorkerConfig, syncDate: string, over: Partial<Pol
 		buildAdapter: over.buildAdapter ?? ((provider) => buildAdapter(provider, config)),
 		resolveCredential: over.resolveCredential ?? resolveCredential,
 		sync: over.sync ?? syncProviderData,
-		syncDate: over.syncDate ?? syncDate
+		syncDate: over.syncDate ?? syncDate,
+		// OWD-A A3 (045): production cursor persistence (Plaid /transactions/sync incremental).
+		readCursor: over.readCursor ?? ((client, row) => readSyncCursor(client, row.sourceId, row.usersId)),
+		writeCursor:
+			over.writeCursor ?? ((client, row, cursor) => writeSyncCursor(client, row.sourceId, row.usersId, cursor))
 	};
 }
 

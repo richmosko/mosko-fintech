@@ -18,6 +18,9 @@ import { SimpleFINAdapter } from '../adapters/SimpleFINAdapter.js';
 import { buildPlaidClient } from './admit.js';
 import { mintLinkToken } from '../http/linkToken.js';
 import { loadAdmissionConfig } from '../http/admissionConfig.js';
+import { fetchWebhookVerificationKey, type WebhookKeyClient } from '../http/webhookVerificationKey.js';
+import { syncLinkedSource, productionSyncSourceDeps } from '../http/triggerSync.js';
+import { todayIso } from './poll.js';
 import {
 	createAdmissionServer,
 	type ExchangeInput,
@@ -76,6 +79,13 @@ export async function main(): Promise<void> {
 				{ linkedSourceId: input.linkedSourceId, ownerUserId: input.ownerUserId },
 				input.input
 			),
+		// SELF-206 (Option 1): the credentialed JWK fetch (api/src holds no Plaid creds). The
+		// same Plaid client every other worker leg uses; returns only the PUBLIC key.
+		fetchWebhookVerificationKey: (kid: string) =>
+			fetchWebhookVerificationKey(plaid as unknown as WebhookKeyClient, kid),
+		// SELF-206 AC5: on-demand incremental sync. syncDate is computed PER CALL (todayIso) — this
+		// is a long-running server, not a one-shot cron, so the date must not be frozen at boot.
+		syncSource: (input) => syncLinkedSource(input, productionSyncSourceDeps(config, todayIso(new Date()))),
 		logger: (m) => console.log(`[admission] ${m}`)
 	});
 

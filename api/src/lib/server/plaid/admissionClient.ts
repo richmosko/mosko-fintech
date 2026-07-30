@@ -25,10 +25,14 @@
 
 import { env } from '$env/dynamic/private';
 import { z } from 'zod';
+import type { JWK } from 'jose';
 
 const ADMISSION_HEADER = 'x-worker-admission-secret';
 const LINK_TOKEN_PATH = '/admission/link-token';
 const EXCHANGE_PATH = '/admission/exchange';
+// SELF-206 Option-1 legs (new routes on the SAME worker admission server).
+const WEBHOOK_VERIFICATION_KEY_PATH = '/admission/webhook-verification-key';
+const SYNC_PATH = '/admission/sync';
 // Coolify internal service name + DevOps-aligned admission port (ADMISSION_PORT=8081).
 // Overridable via WORKER_ADMISSION_URL for local/CI targeting.
 const DEFAULT_BASE_URL = 'http://provider-sync:8081';
@@ -223,4 +227,57 @@ export async function exchangePublicToken(
 		return { ok: true, data: { sourceId: parsed.data.sourceId, accounts: parsed.data.accounts } };
 	}
 	return { ok: false, status: mapUpstreamStatus(call.status) };
+}
+
+// ── SELF-206 leg — webhook verification-key fetch (Option 1) ─────────────────────────────
+// The worker's PUBLIC-JWK response (EC/P-256). Plain z.object() strips unknown keys (upstream
+// response, not user input). We forward the whole public JWK to jose importJWK.
+const workerJwkResponseSchema = z.object({
+	key: z.object({
+		kty: z.string().min(1),
+		crv: z.string().min(1),
+		x: z.string().min(1),
+		y: z.string().min(1),
+		kid: z.string().min(1),
+		alg: z.string().min(1),
+		use: z.string().min(1)
+	})
+});
+
+/**
+ * Fetch the PUBLIC JWK for a `kid` via the worker (which alone holds the Plaid creds needed for
+ * `/webhook_verification_key/get`). THROWS on any transport/upstream failure — the webhook verifier
+ * treats a throw as fail-closed (no 200 for an unverifiable webhook → Plaid retries). Returns a
+ * jose-compatible JWK. NEVER logs the key (it is public, but we keep the surface minimal / C6-5).
+ */
+export async function fetchWebhookVerificationKey(kid: string): Promise<JWK> {
+	const call = await callWorker(WEBHOOK_VERIFICATION_KEY_PATH, { kid });
+	if (!call.transportOk || call.status !== 200) {
+		throw new Error('webhook_verification_key_fetch_failed'); // scrubbed; caller fails closed.
+	}
+	const parsed = workerJwkResponseSchema.safeParse(call.json);
+	if (!parsed.success) throw new Error('webhook_verification_key_malformed');
+	return parsed.data.key as JWK;
+}
+
+// ── SELF-206 AC5 leg — incremental-sync trigger (Option A landing path) ───────────────────
+/**
+ * Dispatch an incremental Plaid sync to the worker for a verified webhook's resolved tenant+source
+ * (the worker ALONE holds PLAID_SECRET → fetches from Plaid → lands via fn_ingest_transactions).
+ *
+ * ORDERING IS LOAD-BEARING (C-X2 closure — do NOT reorder to a post-commit best-effort kick): this
+ * is called SYNC-FIRST, BEFORE the handler claims the idempotency gate (fn_plaid_webhook_commit).
+ * On a non-2xx the handler returns 5xx (C-X1) so Plaid retries; the gate is committed ONLY AFTER
+ * this confirms 2xx. So a crash anywhere before commit leaves NO gate row → Plaid's at-least-once
+ * webhook retry re-drives, and the sync is idempotent (the 045 /transactions/sync cursor advances
+ * only on real new data + fn_ingest ON CONFLICT dedups). The C-X2 safety rests on THIS ordering +
+ * retry + sync-idempotency — NOT on any scheduled-poll self-heal. Returns a coarse ok flag (never
+ * throws). C6-5: no bodies/tokens logged.
+ */
+export async function triggerSourceSync(
+	ownerUserId: string,
+	linkedSourceId: string
+): Promise<{ ok: boolean }> {
+	const call = await callWorker(SYNC_PATH, { ownerUserId, linked_source_id: linkedSourceId });
+	return { ok: call.transportOk && call.status === 200 };
 }
