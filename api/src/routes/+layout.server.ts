@@ -14,6 +14,7 @@
 
 import { countPendingSymbols } from '$lib/server/queries/pendingSymbols';
 import { provisionDefaultTaxonomy } from '$lib/server/queries/taxonomy';
+import { loadConnectionHealth } from '$lib/server/queries/connectionState';
 import type { LayoutServerLoad } from './$types';
 
 export const load: LayoutServerLoad = async ({ locals }) => {
@@ -36,5 +37,14 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 	// distinguishes error-vs-empty itself and surfaces a retriable error (SELF-200 Gap 1).
 	const pendingClassificationCount = user ? await countPendingSymbols(locals.supabase) : 0;
 
-	return { userEmail: user?.email ?? null, pendingClassificationCount };
+	// SELF-207 (§2.4.4.b): connection-health summary for the always-on P4 re-auth banner —
+	// { reauthCount, institutionDownCount } over the caller's own connections (043 view).
+	// Cheap (a handful of owner-scoped rows, like the pending count) + FAIL-SOFT-TO-{0,0}: a
+	// layout load that threw would break every page. Only for signed-in users. The banner is a
+	// summary; the /accounts/connections page surfaces any read error itself.
+	const connectionHealth = user
+		? await loadConnectionHealth(locals.supabase)
+		: { reauthCount: 0, institutionDownCount: 0 };
+
+	return { userEmail: user?.email ?? null, pendingClassificationCount, connectionHealth };
 };

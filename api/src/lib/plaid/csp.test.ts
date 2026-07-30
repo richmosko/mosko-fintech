@@ -44,9 +44,14 @@ describe('CSP-1 — per-route scoping (Sec veto condition)', () => {
 		}
 	});
 
-	it('only the exact connect route id triggers widening', () => {
-		expect(applyPlaidConnectCsp('/accounts/connect/attributes', BASE_CSP, { plaidEnv: 'production' })).toBe(BASE_CSP);
+	it('only the exact Link route ids trigger widening (connect + reauth); children stay strict', () => {
+		// Widened: the two exact routes where Plaid Link opens.
 		expect(applyPlaidConnectCsp(PLAID_CONNECT_ROUTE_ID, BASE_CSP, { plaidEnv: 'production' })).not.toBe(BASE_CSP);
+		expect(applyPlaidConnectCsp('/accounts/connections', BASE_CSP, { plaidEnv: 'production' })).not.toBe(BASE_CSP);
+		// NOT widened: the attributes child (no Link SDK) + a look-alike prefix must stay BASE_CSP
+		// (exact-match, not startsWith — `/accounts/connect/attributes` must never widen).
+		expect(applyPlaidConnectCsp('/accounts/connect/attributes', BASE_CSP, { plaidEnv: 'production' })).toBe(BASE_CSP);
+		expect(applyPlaidConnectCsp('/accounts/connections/foo', BASE_CSP, { plaidEnv: 'production' })).toBe(BASE_CSP);
 	});
 });
 

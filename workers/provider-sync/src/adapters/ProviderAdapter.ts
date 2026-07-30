@@ -142,6 +142,39 @@ export interface DateRange {
 	end: string;
 }
 
+// ── Re-auth slice types (SELF-207 §2.4.4.b / ADR-037; spec temp/self-207-reauth-vault-spec.md) ──
+// Re-auth is a FLOW, not a single call (Plaid needs a browser Link update-mode round-trip;
+// SimpleFIN re-collects a fresh credential), so the adapter exposes a two-phase seam. Both
+// providers converge on the SHARED healthy normalization: connection_status='healthy' on
+// linked_source + a healthy linked_source_state_history row (the 043 view reads it as
+// status_class). Plaid does NOT rotate (update-mode leaves the access_token unchanged —
+// capability-verified against the SDK/docs); SimpleFIN rotates the Access URL on the EXISTING
+// source (preserving 021 mappings).
+
+/** Tenant + connection identity for a re-auth. `ownerUserId` is session-derived (Decision 1)
+ *  — NEVER browser-sourced (the app relay binds it from the validated session). */
+export interface ReauthContext {
+	linkedSourceId: bigint;
+	ownerUserId: string;
+}
+
+/** Phase-1 handoff to the client. Plaid: run Link in update mode with `linkToken`.
+ *  SimpleFIN: the client re-shows the connect field to collect a fresh setup token. */
+export type ReauthHandoff =
+	| { kind: 'link_update'; linkToken: string }
+	| { kind: 'recollect_credential' };
+
+/** Phase-2 input. Plaid: NO public_token (update mode). SimpleFIN: the fresh Bridge token. */
+export type ReauthInput =
+	| { kind: 'link_update_success' }
+	| { kind: 'setup_token'; setupToken: string };
+
+/** Phase-2 result. `rotated` = did the stored credential change (Plaid: false; SimpleFIN: true). */
+export interface ReauthResult {
+	connectionStatus: 'healthy';
+	rotated: boolean;
+}
+
 // ── The interface each adapter satisfies (design §1.1) ─────────────────────────
 
 export interface ProviderAdapter {
@@ -159,6 +192,17 @@ export interface ProviderAdapter {
 	/** Provider-side revoke-then-delete (retention hard-gate; abort-on-failure, tenant-
 	 *  scoped). See RevokeRef. */
 	revoke(ref: RevokeRef): Promise<void>;
+	/**
+	 * Phase 1 — begin re-auth. Plaid: mint an update-mode link_token (existing access_token).
+	 * SimpleFIN: signal the client to re-collect a fresh setup token. See ReauthHandoff.
+	 */
+	reauthStart(ctx: ReauthContext): Promise<ReauthHandoff>;
+	/**
+	 * Phase 2 — complete re-auth. Plaid: finalize update-mode success (NO token rotation),
+	 * flip health. SimpleFIN: claim the fresh token + rotate the credential on the EXISTING
+	 * source. Both write the shared healthy transition. See ReauthResult.
+	 */
+	reauthComplete(ctx: ReauthContext, input: ReauthInput): Promise<ReauthResult>;
 }
 
 /**

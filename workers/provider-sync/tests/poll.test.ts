@@ -21,7 +21,7 @@ import {
 	type SourceSyncOutcome
 } from '../src/cli/poll.js';
 import { PlaidAdapter } from '../src/adapters/PlaidAdapter.js';
-import { SimpleFINAdapter } from '../src/adapters/SimpleFINAdapter.js';
+import { SimpleFINAdapter, scrubbedSimplefinError } from '../src/adapters/SimpleFINAdapter.js';
 import type { Tx } from '../src/db/TenantBoundClient.js';
 import type { WorkerConfig } from '../src/config/env.js';
 import type { SyncResult } from '../src/ingest/mapper.js';
@@ -144,6 +144,7 @@ describe('runPollLoop — per-source failure isolation (design §8 Sec risk #1)'
 			async writeAudit(r, detail) {
 				audited.push({ row: r, detail });
 			},
+			markUnhealthy: vi.fn(),
 			log: vi.fn()
 		};
 
@@ -153,6 +154,13 @@ describe('runPollLoop — per-source failure isolation (design §8 Sec risk #1)'
 		expect(processed).toEqual(['1', '2', '3']);
 		expect(summary).toMatchObject({ total: 3, succeeded: 2, failed: 1 });
 		expect(summary.failures).toEqual([{ sourceId: '2', provider: 'plaid', error: 'SimpleFIN accounts failed (HTTP 403)' }]);
+
+		// markUnhealthy invoked ONLY for the FAILED source (#2), NOT the succeeded ones.
+		expect(handlers.markUnhealthy).toHaveBeenCalledTimes(1);
+		expect(handlers.markUnhealthy).toHaveBeenCalledWith(
+			expect.objectContaining({ sourceId: '2' }),
+			expect.any(Error)
+		);
 
 		// EVERY source got exactly one audit row, scoped to its own tenant.
 		expect(audited).toHaveLength(3);
@@ -183,6 +191,7 @@ describe('runPollLoop — per-source failure isolation (design §8 Sec risk #1)'
 			async writeAudit(r) {
 				if (r.sourceId === '1') throw new Error('audit insert failed');
 			},
+			markUnhealthy: vi.fn(),
 			log
 		};
 		const summary = await runPollLoop(sources, handlers, '2026-07-18');
@@ -272,6 +281,8 @@ describe('createPollHandlers.writeAudit — tenant-scoped scheduled_poll row', (
 		expect(vals[2]).toBe('ec-7');
 		expect(vals[3]).toBeNull(); // provider_event_id NULL for poll
 		expect(vals[4]).toEqual({ __json: detail }); // detail via tx.json
+		expect(vals[5]).toBe('7'); // linked_source_id (044): the STABLE source FK for the 040 re-join
+		expect(ft.queries[0]).toContain('linked_source_id'); // column present in the INSERT
 		expect(client.ended).toBe(true);
 	});
 });
@@ -358,5 +369,64 @@ describe('runPoll — CA-2 probe seam never flips the exit-code contract (design
 		expect(probeRan).toBe(true);
 		// enumeration + the per-source loop still ran to completion ⇒ exit 0 with the source synced.
 		expect(summary).toMatchObject({ total: 1, succeeded: 1, failed: 0 });
+	});
+});
+
+describe('createPollHandlers.markUnhealthy — SELF-207 SimpleFIN unhealthy-detection', () => {
+	function wiringWith(ft: ReturnType<typeof fakeTx>): { wiring: PollWiring; client: ReturnType<typeof fakeClient> } {
+		const client = fakeClient(ft);
+		const wiring: PollWiring = {
+			clientFor: () => client,
+			buildAdapter: () => ({}) as FetchAdapter,
+			resolveCredential: async () => 'x',
+			sync: vi.fn(),
+			syncDate: '2026-07-18'
+		};
+		return { wiring, client };
+	}
+
+	it('auth-failure (403) → flips connection_status=login_required + appends state_history (raw code)', async () => {
+		const ft = fakeTx([[{ source_id: '7' }], []]); // UPDATE flips 1 row → INSERT state_history
+		const { wiring, client } = wiringWith(ft);
+		const handlers = createPollHandlers(wiring, vi.fn());
+
+		await handlers.markUnhealthy(
+			row({ sourceId: '7', usersId: UID_B, provider: 'simplefin' }),
+			scrubbedSimplefinError('accounts', 403)
+		);
+
+		expect(ft.queries[0]).toContain('update pfin.linked_source');
+		expect(ft.queries[0]).toContain('connection_status is distinct from'); // idempotency guard
+		expect(ft.values[0]).toContain('login_required'); // target class
+		expect(ft.values[0]).toContain(UID_B); // tenant-bound
+		expect(ft.queries[1]).toContain('insert into pfin.linked_source_state_history');
+		expect(ft.values[1]).toContain('login_required'); // normalized status_class
+		expect(ft.values[1]).toContain('http_403'); // raw provider_error_code
+		expect(client.ended).toBe(true);
+	});
+
+	it('transient (500) → NO flip (classify null → no DB touch)', async () => {
+		const ft = fakeTx([]);
+		const { wiring } = wiringWith(ft);
+		const handlers = createPollHandlers(wiring, vi.fn());
+		await handlers.markUnhealthy(row({ sourceId: '7', provider: 'simplefin' }), scrubbedSimplefinError('accounts', 500));
+		expect(ft.queries).toHaveLength(0);
+	});
+
+	it('idempotent: already login_required (UPDATE 0 rows) → NO duplicate state_history', async () => {
+		const ft = fakeTx([[]]); // UPDATE flips 0 rows (already login_required)
+		const { wiring } = wiringWith(ft);
+		const handlers = createPollHandlers(wiring, vi.fn());
+		await handlers.markUnhealthy(row({ sourceId: '7', provider: 'simplefin' }), scrubbedSimplefinError('accounts', 403));
+		expect(ft.queries).toHaveLength(1); // UPDATE only, no state_history INSERT
+		expect(ft.queries[0]).toContain('update pfin.linked_source');
+	});
+
+	it('non-SimpleFIN provider (plaid) → no-op (webhook-driven detection, SELF-206)', async () => {
+		const ft = fakeTx([]);
+		const { wiring } = wiringWith(ft);
+		const handlers = createPollHandlers(wiring, vi.fn());
+		await handlers.markUnhealthy(row({ sourceId: '7', provider: 'plaid' }), scrubbedSimplefinError('accounts', 403));
+		expect(ft.queries).toHaveLength(0);
 	});
 });

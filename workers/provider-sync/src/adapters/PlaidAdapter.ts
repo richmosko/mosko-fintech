@@ -27,10 +27,16 @@ import type {
 	HoldingDTO,
 	ProviderAccountRef,
 	ProviderAdapter,
+	ReauthContext,
+	ReauthHandoff,
+	ReauthInput,
+	ReauthResult,
 	RevokeRef,
 	SourceRef,
 	TransactionDTO
 } from './ProviderAdapter.js';
+import { mintUpdateModeLinkToken } from '../http/linkToken.js';
+import { resolveAccessToken, writeHealthyTransition } from './reauthShared.js';
 
 // ── Defensive Zod shapes for the Plaid response fields we read (harden the normalize
 //    boundary — external-API input discipline). Non-`.strict()`: Plaid payloads carry
@@ -310,11 +316,15 @@ export interface PlaidClientLike {
 	linkTokenCreate(req: {
 		user: { client_user_id: string };
 		client_name: string;
-		products: string[];
+		// Optional so update mode can OMIT it (Plaid rule: products omitted in update mode).
+		products?: string[];
 		country_codes: string[];
 		language: string;
 		webhook?: string;
 		redirect_uri?: string;
+		// Update-mode (SELF-207 reauth): references the existing Item; the access_token is
+		// UNCHANGED by update mode (no re-exchange) — plaid.com/docs/link/update-mode.
+		access_token?: string;
 	}): Promise<{ data: { link_token: string; expiration: string } }>;
 	// Credential-admission surface (connect/revoke). Structural subset of the Plaid SDK.
 	itemPublicTokenExchange(req: {
@@ -760,6 +770,48 @@ export class PlaidAdapter implements ProviderAdapter {
 				await tx`delete from pfin.linked_source where source_id = ${sourceId}::bigint and users_id = ${ref.ownerUserId}`;
 			});
 			this.#log(`revoked plaid source source_id=${ref.sourceId}`);
+		} finally {
+			await db.end();
+		}
+	}
+
+	// ── reauth() — SELF-207 §2.4.4.b (spec temp/self-207-reauth-vault-spec.md). ───────
+	// Plaid re-auth is Link update-mode: mint an update-mode link_token (existing Item),
+	// the user repairs the login, then finalize. Update mode does NOT change the access_token
+	// (capability-verified) → NO credential rotation, NO Vault change; reauthComplete only
+	// writes the shared healthy transition.
+
+	/** Phase 1: resolve the Item's existing access_token (service_role decrypt view, tenant-
+	 *  scoped) and mint an update-mode link_token against it. The access_token stays in worker
+	 *  memory + is never logged/returned. */
+	async reauthStart(ctx: ReauthContext): Promise<ReauthHandoff> {
+		const dbFor = this.#requireDbFor();
+		assertUuid(ctx.ownerUserId, 'ownerUserId'); // fail-closed BEFORE any credential read.
+		const db = dbFor(ctx.ownerUserId);
+		try {
+			const accessToken = await resolveAccessToken(db, ctx.linkedSourceId, ctx.ownerUserId);
+			const { link_token } = await mintUpdateModeLinkToken(this.#client, ctx.ownerUserId, accessToken);
+			this.#log(`plaid reauth link_token minted (update mode) source_id=${ctx.linkedSourceId}`);
+			return { kind: 'link_update', linkToken: link_token };
+		} finally {
+			await db.end();
+		}
+	}
+
+	/** Phase 2: finalize update-mode success. NO public_token, NO re-exchange, NO rotation —
+	 *  the access_token is unchanged. Just repair health (flip connection_status + append the
+	 *  healthy state_history row). */
+	async reauthComplete(ctx: ReauthContext, input: ReauthInput): Promise<ReauthResult> {
+		const dbFor = this.#requireDbFor();
+		assertUuid(ctx.ownerUserId, 'ownerUserId');
+		if (input.kind !== 'link_update_success') {
+			throw new Error('PlaidAdapter.reauthComplete: expected link_update_success input.');
+		}
+		const db = dbFor(ctx.ownerUserId);
+		try {
+			await writeHealthyTransition(db, ctx.linkedSourceId, ctx.ownerUserId);
+			this.#log(`plaid reauth completed (no rotation) source_id=${ctx.linkedSourceId}`);
+			return { connectionStatus: 'healthy', rotated: false };
 		} finally {
 			await db.end();
 		}

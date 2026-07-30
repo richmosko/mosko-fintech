@@ -32,7 +32,7 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig, type WorkerConfig } from '../config/env.js';
 import { TenantBoundClient, type Tx } from '../db/TenantBoundClient.js';
 import { PlaidAdapter, type PlaidClientLike } from '../adapters/PlaidAdapter.js';
-import { SimpleFINAdapter } from '../adapters/SimpleFINAdapter.js';
+import { SimpleFINAdapter, classifySimplefinUnhealthy } from '../adapters/SimpleFINAdapter.js';
 import { buildPlaidClient } from './admit.js';
 import { syncProviderData, type ProviderData, type SyncResult } from '../ingest/mapper.js';
 import { runAdmissionReachabilityProbe } from '../http/reachabilityProbe.js';
@@ -97,6 +97,10 @@ export interface PollHandlers {
 	processSource(row: SourceRow): Promise<SourceSyncOutcome>;
 	/** Append the scheduled_poll audit row for this source, scoped to row.usersId. */
 	writeAudit(row: SourceRow, detail: AuditDetail): Promise<void>;
+	/** On a per-source sync failure: if it's a definitive auth-rejection, transition the
+	 *  connection to unhealthy (SELF-207 — drives the P4 re-auth banner). Non-fatal + idempotent;
+	 *  transient failures do NOT flip. No-op for providers without poll-side detection (Plaid). */
+	markUnhealthy(row: SourceRow, err: unknown): Promise<void>;
 	log(message: string): void;
 }
 
@@ -269,11 +273,46 @@ export function createPollHandlers(wiring: PollWiring, log: (message: string) =>
 				await client.withServiceRole(async (tx) => {
 					await tx`
 						insert into pfin.linked_source_sync_audit
-							(provider, source, users_id, external_connection_id, provider_event_id, detail)
+							(provider, source, users_id, external_connection_id, provider_event_id, detail, linked_source_id)
 						values (
 							${row.provider}, 'scheduled_poll', ${row.usersId}, ${row.externalConnectionId},
-							${null}, ${tx.json(detail as unknown as Parameters<typeof tx.json>[0])}
+							${null}, ${tx.json(detail as unknown as Parameters<typeof tx.json>[0])}, ${row.sourceId}::bigint
 						)`;
+					// linked_source_id (044): the STABLE FK the 040 sync-history view re-joins on, so
+					// SELF-207 reauth's external_connection_id digest-mutation no longer orphans history
+					// / resets last_successful_sync_at. The writer already knows the source (row.sourceId).
+				});
+			} finally {
+				await client.end();
+			}
+		},
+
+		async markUnhealthy(row, err) {
+			// SELF-207 SimpleFIN unhealthy-detection. Plaid's unhealthy transitions are webhook-
+			// driven (SELF-206) — poll-side detection is SimpleFIN-only for now.
+			if (row.provider !== 'simplefin') return;
+			const classification = classifySimplefinUnhealthy(err);
+			if (!classification) return; // transient / unknown → no flip (avoid flapping).
+
+			// Tenant-scoped service_role transition (Decision 1 in-code binding). IDEMPOTENT: the
+			// UPDATE flips only when connection_status is not ALREADY the target class, so a second
+			// consecutive auth-failure poll is a no-op (0 rows) and appends NO duplicate state_history
+			// row. The state_history row is written ONLY on a real transition (with the raw code).
+			const client = wiring.clientFor(row.usersId);
+			try {
+				await client.withServiceRole(async (tx) => {
+					const flipped = await tx<{ source_id: string }[]>`
+						update pfin.linked_source
+						   set connection_status = ${classification.statusClass}, updated_at = now()
+						 where source_id = ${Number(row.sourceId)} and users_id = ${row.usersId}
+						   and connection_status is distinct from ${classification.statusClass}
+						returning source_id`;
+					if (flipped.length === 1) {
+						await tx`
+							insert into pfin.linked_source_state_history (source_id, status_class, provider_error_code)
+							values (${Number(row.sourceId)}, ${classification.statusClass}, ${classification.providerErrorCode})`;
+						log(`marked source_id=${row.sourceId} ${classification.statusClass} (${classification.providerErrorCode})`);
+					}
 				});
 			} finally {
 				await client.end();
@@ -325,6 +364,15 @@ export async function runPollLoop(
 			failed += 1;
 			failures.push({ sourceId: row.sourceId, provider: row.provider, error: message });
 			handlers.log(`FAILED source_id=${row.sourceId} provider=${row.provider}: ${message}`);
+
+			// SELF-207: on a DEFINITIVE auth-rejection, flip the connection to unhealthy so the P4
+			// re-auth banner surfaces + reauth can repair it. Non-fatal (a mark failure must never
+			// abort the fleet) + idempotent + transient-safe (handler no-ops on a transient error).
+			try {
+				await handlers.markUnhealthy(row, err);
+			} catch (markErr) {
+				handlers.log(`unhealthy-mark FAILED source_id=${row.sourceId}: ${errMessage(markErr)}`);
+			}
 		}
 
 		// Audit is scoped to THIS row's tenant inside the handler → no cross-source leak.

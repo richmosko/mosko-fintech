@@ -19,9 +19,15 @@
 	import favicon from '$lib/assets/favicon.svg';
 	import Button from '$lib/components/Button.svelte';
 	import CountBadge from '$lib/components/CountBadge.svelte';
+	import ReauthStalenessBanner from '$lib/components/ReauthStalenessBanner.svelte';
 	import type { LayoutData } from './$types';
 
 	let { data, children }: { data: LayoutData; children: import('svelte').Snippet } = $props();
+
+	// SELF-207 P4 re-auth banner health summary — from +layout.server.ts (Backend-computed via the
+	// shared needsReauth/isInstitutionDown predicates, active-connections-only, fail-soft to {0,0}).
+	// {0,0} → the banner renders nothing (zero-footprint fence 3).
+	const connectionHealth = $derived(data.connectionHealth);
 </script>
 
 <svelte:head>
@@ -49,6 +55,14 @@
 			</form>
 		</div>
 	</header>
+
+	<!-- P4 re-auth banner (SELF-207): full-width, persistent, non-dismissible; zero footprint
+	     when healthy. Sits directly below the app header so it is the first thing seen on any page
+	     when a connection needs attention. -->
+	<ReauthStalenessBanner
+		reauthCount={connectionHealth.reauthCount}
+		institutionDownCount={connectionHealth.institutionDownCount}
+	/>
 {/if}
 
 {@render children()}

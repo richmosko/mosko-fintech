@@ -53,7 +53,9 @@
 --   (view revised 2026-07-27 → INNER-joins linked_source, projects linked_source_id; Sec GREEN
 --   conditional on join coverage): J1 (auth-A: linked_source_id resolves to a_source — positive) +
 --   J2 (auth-B: 0 of A's a_source — join is no new leak path, load-bearing) + J3 (auth-A: an
---   A-owned NULL-external_connection_id row is EXCLUDED — conservative INNER drop).
+--   A-owned NULL-linked_source_id row is EXCLUDED — conservative INNER drop). NOTE (044): the
+--   audit→linked_source join is now on the STABLE linked_source_id, not the (provider,
+--   external_connection_id) digest — fixtures set linked_source_id; J3's exclusion is a NULL id.
 --
 -- Prereqs exercised on the 001→040 reset stack (Backend owns the clean-apply): 001 (pfin,
 --   fn_refresh_updated_at, auth.uid()), 003 (account + fn_grant_creator_access DEFINER creator-
@@ -172,36 +174,37 @@ insert into pfin.account_trans
   (account_id, transaction_date, amount, vendor, description, transaction_type, source_provider, provider_txn_id, import_hash, is_reverse)
   values (:acctb, '2026-04-13', 55.00, 'CAND-B-provider', 'B provider leg', 'standard', 'plaid', 'ptxn-b', 'hashcand-b', false);
 
--- Per-connection linked_source rows (the view now INNER-joins the audit to linked_source on
---   (provider, external_connection_id) WHERE ls.users_id=auth.uid(), projecting source_id as
---   linked_source_id). A's + B's connections match their audit rows by (provider, ext-conn-id) →
---   the join resolves their OWN source_id (J1/J2). Seeded privileged; users_id explicit (RLS bypass
---   under postgres; the linked_source write path is service_role-only anyway).
+-- Per-connection linked_source rows. NOTE (044): the view now INNER-joins the audit to linked_source
+--   on the STABLE linked_source_id (was the (provider, external_connection_id) digest), WHERE
+--   ls.users_id=auth.uid(), projecting source_id as linked_source_id. A's + B's audit rows carry
+--   linked_source_id → the join resolves their OWN source_id (J1/J2). Seeded privileged; users_id
+--   explicit (RLS bypass under postgres; the linked_source write path is service_role-only anyway).
 insert into pfin.linked_source (users_id, provider, external_connection_id, institution_name)
   values (:'ta', 'plaid', 'qa-conn-a', 'QA A Institution') returning source_id as a_source \gset
 insert into pfin.linked_source (users_id, provider, external_connection_id, institution_name)
   values (:'tb', 'plaid', 'qa-conn-b', 'QA B Institution') returning source_id as b_source \gset
 
 -- Sync-history audit rows (service_role-only table; append-only). users_id = the resolved tenant;
---   external_connection_id matches the tenant's linked_source above → the INNER join resolves.
---   detail carries ONLY the named count keys the view projects; event_type is set to prove S5
---   excludes it even when present.
+--   linked_source_id = the tenant's own source (044 stable key — the post-044 worker writeAudit sets
+--   it) → the INNER id-join resolves. detail carries ONLY the named count keys the view projects;
+--   event_type is set to prove S5 excludes it even when present.
 insert into pfin.linked_source_sync_audit
-  (provider, source, users_id, external_connection_id, event_type, detail)
+  (provider, source, users_id, external_connection_id, event_type, detail, linked_source_id)
   values ('plaid', 'scheduled_poll', :'ta', 'qa-conn-a', 'SYNC_COMPLETE',
-          '{"result": {"transactionsInserted": 7, "transactionsSkipped": 3}}'::jsonb);
+          '{"result": {"transactionsInserted": 7, "transactionsSkipped": 3}}'::jsonb, :a_source);
 insert into pfin.linked_source_sync_audit
-  (provider, source, users_id, external_connection_id, event_type, detail)
+  (provider, source, users_id, external_connection_id, event_type, detail, linked_source_id)
   values ('plaid', 'webhook', :'tb', 'qa-conn-b', 'SYNC_COMPLETE',
-          '{"result": {"transactionsInserted": 11, "transactionsSkipped": 2}}'::jsonb);
+          '{"result": {"transactionsInserted": 11, "transactionsSkipped": 2}}'::jsonb, :b_source);
 
 -- An UNATTRIBUTABLE A-owned audit row: users_id=A (passes the WHERE lsa.users_id=auth.uid()) but
---   external_connection_id NULL → NO linked_source join match → the conservative INNER join EXCLUDES
---   it (J3). Marker count 999 (distinct from 7/11) so its absence is provable & non-vacuous vs J1.
+--   linked_source_id NULL (044: a pre-companion / removed-source / unattributable row) → NO id-join
+--   match → the conservative INNER join EXCLUDES it (J3). Marker count 999 (distinct from 7/11) so
+--   its absence is provable & non-vacuous vs J1.
 insert into pfin.linked_source_sync_audit
-  (provider, source, users_id, external_connection_id, event_type, detail)
+  (provider, source, users_id, external_connection_id, event_type, detail, linked_source_id)
   values ('plaid', 'scheduled_poll', :'ta', null, 'SYNC_COMPLETE',
-          '{"result": {"transactionsInserted": 999, "transactionsSkipped": 0}}'::jsonb);
+          '{"result": {"transactionsInserted": 999, "transactionsSkipped": 0}}'::jsonb, null);
 
 -- =====================================================================
 -- PART A — manual_provider_dup_candidate (security_invoker=true DETECTION view).
@@ -337,18 +340,18 @@ select is(
   (select count(*) from pfin.linked_source_sync_history
      where linked_source_id = :a_source and provider = 'plaid' and transactions_inserted = 7)::bigint,
   1::bigint,
-  '(J1) join positive: A''s sync-history row resolves linked_source_id = a_source (its OWN connection, joined on provider + external_connection_id WHERE ls.users_id=auth.uid()) — the per-connection discriminator is correctly wired'
+  '(J1) join positive: A''s sync-history row resolves linked_source_id = a_source (its OWN connection, joined on the STABLE linked_source_id (044) WHERE ls.users_id=auth.uid()) — the per-connection discriminator is correctly wired'
 );
 
--- (J3) [INNER-join exclusion] the A-owned audit row with a NULL external_connection_id (marker
---      transactions_inserted=999) is ABSENT from A's view — its users_id passes the WHERE, but no
---      linked_source join match → the conservative INNER join drops it (an unattributable row is
---      NEVER surfaced with a NULL linked_source_id). Non-vacuous vs J1: same tenant, only the
---      connection match differs.
+-- (J3) [INNER-join exclusion] the A-owned audit row with a NULL linked_source_id (044: marker
+--      transactions_inserted=999) is ABSENT from A's view — its users_id passes the WHERE, but a
+--      NULL linked_source_id has no id-join match → the conservative INNER join drops it (an
+--      unattributable / pre-companion / removed-source row is NEVER surfaced). Non-vacuous vs J1:
+--      same tenant, only the connection match differs.
 select is(
   (select count(*) from pfin.linked_source_sync_history where transactions_inserted = 999)::bigint,
   0::bigint,
-  '(J3) INNER-join exclusion: an A-owned audit row with NULL external_connection_id (marker 999) is ABSENT from A''s view — passes WHERE lsa.users_id=auth.uid() but has NO linked_source match, so the INNER join excludes it (unattributable rows dropped, not surfaced with NULL linked_source_id)'
+  '(J3) INNER-join exclusion: an A-owned audit row with NULL linked_source_id (044; marker 999) is ABSENT from A''s view — passes WHERE lsa.users_id=auth.uid() but has NO id-join match, so the INNER join excludes it (unattributable rows dropped, not surfaced)'
 );
 
 select set_config('role', 'postgres', true);
