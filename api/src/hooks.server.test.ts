@@ -239,6 +239,91 @@ describe('mfaHandle — step-up guard', () => {
 		}
 	);
 
+	// ── SELF-288 (Auth-5) password-reset exemption boundary — Sec Mod #1 coverage lock ──
+	// F/CTO Option A: /forgot-password stays EXEMPT (public request form, reached
+	// unauthenticated); /reset-password is DELIBERATELY NOT exempt so mfaHandle routes an
+	// aal1 MFA user through /mfa/step-up (→ aal2) BEFORE the set-password form — the reset
+	// then requires email control + 2nd factor (no MFA bypass). These lock BOTH halves of
+	// the boundary + the over-match protection, guarding a refactor that either drops the
+	// /reset-password step-up (an aal2 bypass) or over-widens /forgot-password's exemption.
+
+	// (a) /forgot-password: EXEMPT — an aal1 MFA user reaches the request form, NO step-up.
+	it('(a) exempts /forgot-password for an aal1 MFA user — request form reachable, NO bounce', async () => {
+		const { event, resolve, getAuthenticatorAssuranceLevel } = makeEvent({
+			pathname: '/forgot-password',
+			user: { id: 'u1' },
+			aal: { currentLevel: 'aal1', nextLevel: 'aal2' } // verified factor, aal1 → would bounce if NOT exempt
+		});
+		const out = await run(event, resolve);
+		expect(out.redirected).toBe(false);
+		expect(resolve).toHaveBeenCalledOnce();
+		// Exempt short-circuits BEFORE the AAL read — proves the prefix matched, not luck.
+		expect(getAuthenticatorAssuranceLevel).not.toHaveBeenCalled();
+	});
+
+	// (b) /reset-password: NOT exempt — an aal1 MFA user is BOUNCED to /mfa/step-up (Option A).
+	// This is the aal2-non-bypass lock: the set-password page is unreachable at aal1 for an
+	// MFA user; they must verify the 2nd factor first.
+	it.each(['/reset-password', '/reset-password/foo'])(
+		'(b) does NOT exempt %s → an aal1 MFA user bounces to /mfa/step-up (Option A step-up)',
+		async (pathname) => {
+			const { event, resolve, getAuthenticatorAssuranceLevel } = makeEvent({
+				pathname,
+				user: { id: 'u1' },
+				aal: { currentLevel: 'aal1', nextLevel: 'aal2' }
+			});
+			const out = await run(event, resolve);
+			expect(out.redirected).toBe(true);
+			expect(out.location).toBe(`/mfa/step-up?redirectTo=${encodeURIComponent(pathname)}`);
+			expect(getAuthenticatorAssuranceLevel).toHaveBeenCalledOnce(); // AAL read RAN — treated as protected
+			expect(resolve).not.toHaveBeenCalled();
+		}
+	);
+
+	// (b') /reset-password NON-MFA user: aal1/aal1 → requireStepUp 'allow' → renders directly
+	// (no regression — non-MFA reset is unchanged by Option A).
+	it("(b') /reset-password for a NON-MFA aal1 user renders directly (no step-up)", async () => {
+		const { event, resolve } = makeEvent({
+			pathname: '/reset-password',
+			user: { id: 'u1' },
+			aal: { currentLevel: 'aal1', nextLevel: 'aal1' } // no verified factor
+		});
+		const out = await run(event, resolve);
+		expect(out.redirected).toBe(false);
+		expect(resolve).toHaveBeenCalledOnce();
+	});
+
+	// (c) over-match guard: a route that merely SHARES /forgot-password as a substring is NOT
+	// exempt — proves the `pathname===p || startsWith(p+'/')` boundary holds (no exemption
+	// leaks to a shadowed protected route).
+	it.each(['/forgot-password-evil', '/forgot-passwordx'])(
+		'(c) over-match guard: %s is NOT exempt → an aal1 MFA user bounces to /mfa/step-up',
+		async (pathname) => {
+			const { event, resolve, getAuthenticatorAssuranceLevel } = makeEvent({
+				pathname,
+				user: { id: 'u1' },
+				aal: { currentLevel: 'aal1', nextLevel: 'aal2' }
+			});
+			const out = await run(event, resolve);
+			expect(out.redirected).toBe(true);
+			expect(out.location).toBe(`/mfa/step-up?redirectTo=${encodeURIComponent(pathname)}`);
+			expect(getAuthenticatorAssuranceLevel).toHaveBeenCalledOnce();
+			expect(resolve).not.toHaveBeenCalled();
+		}
+	);
+
+	it('boundary: an exact-prefix SUBPATH (/forgot-password/foo) stays exempt', async () => {
+		const { event, resolve, getAuthenticatorAssuranceLevel } = makeEvent({
+			pathname: '/forgot-password/foo',
+			user: { id: 'u1' },
+			aal: { currentLevel: 'aal1', nextLevel: 'aal2' }
+		});
+		const out = await run(event, resolve);
+		expect(out.redirected).toBe(false);
+		expect(resolve).toHaveBeenCalledOnce();
+		expect(getAuthenticatorAssuranceLevel).not.toHaveBeenCalled();
+	});
+
 	it('passes an UNAUTHENTICATED request through (page load handles /login)', async () => {
 		const { event, resolve, getAuthenticatorAssuranceLevel } = makeEvent({
 			pathname: '/',

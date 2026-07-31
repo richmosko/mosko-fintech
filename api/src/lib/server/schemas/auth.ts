@@ -62,6 +62,47 @@ export const signupSchema = z
 export type SignupInput = z.infer<typeof signupSchema>;
 
 /**
+ * Forgot-password request (SELF-288 / Auth-5, AC #1). ONLY an email — `.strict()` rejects
+ * any extra key (mass-assignment fence, Lock 14 mod #2). Email is normalized (trim +
+ * lowercase) so the rate-limit key and the GoTrue call see one canonical identity.
+ *
+ * ANTI-ENUMERATION (AC #4): validity of the EMAIL SHAPE is the only thing this schema
+ * decides. The action NEVER branches its response on whether the address is registered —
+ * see forgot-password/+page.server.ts. A malformed email fails here with the SAME generic
+ * "enter a valid email" the login/signup paths use; it reveals nothing about existence.
+ */
+export const forgotPasswordSchema = z
+	.object({
+		email: emailField()
+	})
+	.strict();
+
+export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
+
+/**
+ * Reset (set-new) password (SELF-288 / Auth-5, AC #1). Reuses the signup password floor:
+ * min 8 (mirrors config.toml `minimum_password_length`) / max 72 (bcrypt truncates past 72
+ * bytes). `confirm` must match; the mismatch attaches to `confirm` so the UI flags the
+ * right field. NO email field — the identity comes from the recovery SESSION, never the
+ * body. `.strict()` is the mass-assignment fence.
+ */
+export const resetPasswordSchema = z
+	.object({
+		password: z
+			.string()
+			.min(8, 'Password must be at least 8 characters.')
+			.max(72, 'Password must be at most 72 characters.'),
+		confirm: z.string().min(1, 'Please confirm your password.')
+	})
+	.strict()
+	.refine((v) => v.password === v.confirm, {
+		message: 'Passwords do not match.',
+		path: ['confirm']
+	});
+
+export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
+
+/**
  * Open-redirect guard. A post-login / post-confirm redirect target is honored ONLY
  * when it is a SAME-SITE absolute path: a single leading `/`, and NOT a
  * protocol-relative URL (`//host`) or a backslash-smuggled one (`/\host`, which some

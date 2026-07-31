@@ -115,7 +115,21 @@ export const authHandle: Handle = async ({ event, resolve }) => {
 //   · Exempt prefixes: the auth flow + the step-up flow itself must stay reachable at
 //     aal1, else the guard would loop. '/mfa' covers /mfa/step-up (and the Slice-2
 //     /mfa/recover, which must be aal1-reachable). '/auth' covers callback + signout so
-//     a stuck user can always sign out.
+//     a stuck user can always sign out. '/forgot-password' is the SELF-288 (Auth-5) reset
+//     REQUEST form: reached UNauthenticated (no recovery session yet), so it needs no
+//     step-up; exempt so an already-authenticated aal1 user isn't pointlessly bounced from
+//     a public form.
+//
+//     '/reset-password' is DELIBERATELY NOT exempt (F/CTO Option A, SELF-288 QA re-scope):
+//     the recovery link lands the user on an aal1 recovery SESSION. For a NON-MFA user
+//     requireStepUp → 'allow' and the page renders directly. For an MFA user requireStepUp
+//     → 'step-up-required', so THIS guard routes them aal1 → /mfa/step-up?redirectTo=
+//     /reset-password → they verify their authenticator → aal2 → return here → the form
+//     renders → GoTrue's MFA-sensitive-op gate now PERMITS updateUser at aal2. So password
+//     reset for an MFA user requires BOTH email control AND the 2nd factor — no bypass. The
+//     earlier exemption (which let an aal1 MFA user reach the form) produced GoTrue's silent
+//     aal1-refusal dead-end; removing it is the fix. (A lost-authenticator user is routed to
+//     /mfa/step-up, which carries the /mfa/recover recovery-code escape.)
 //
 // N2/N3 reconciliation: requireStepUp keys off GoTrue AAL (the reconciled source of
 // truth for "a verified factor exists"), NOT the stored mfa_policy — so a
@@ -123,7 +137,7 @@ export const authHandle: Handle = async ({ event, resolve }) => {
 // any indeterminate/error AAL state fails CLOSED to step-up (N3). See $lib/server/auth/mfa.
 //
 // Exported for hooks.server.test.ts.
-const STEP_UP_EXEMPT_PREFIXES = ['/login', '/signup', '/auth', '/mfa'];
+const STEP_UP_EXEMPT_PREFIXES = ['/login', '/signup', '/auth', '/mfa', '/forgot-password'];
 function isStepUpExempt(pathname: string): boolean {
 	return STEP_UP_EXEMPT_PREFIXES.some((p) => pathname === p || pathname.startsWith(p + '/'));
 }

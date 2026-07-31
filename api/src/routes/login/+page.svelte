@@ -35,6 +35,10 @@
 	// The /auth/callback handler bounces an invalid/expired confirmation link back to
 	// /login?error=confirmation. Read it off the live URL (SvelteKit 2 / Svelte 5 idiom).
 	const confirmationError = $derived(page.url.searchParams.get('error') === 'confirmation');
+
+	// A completed password reset (SELF-288) 303s here with ?reset=success — nudge the user to
+	// sign in with the new password. Positive/neutral status, not an error.
+	const resetSuccess = $derived(page.url.searchParams.get('reset') === 'success');
 </script>
 
 <svelte:head>
@@ -44,6 +48,12 @@
 <main class="auth">
 	<section class="card" aria-labelledby="auth-title">
 		<h1 id="auth-title" class="title">Sign in</h1>
+
+		{#if resetSuccess}
+			<p class="notice" role="status">
+				Password updated — sign in with your new password.
+			</p>
+		{/if}
 
 		{#if confirmationError}
 			<p class="notice" role="status">
@@ -76,6 +86,10 @@
 				required
 				errors={errors.password ?? []}
 			/>
+
+			<p class="forgot">
+				<a href="/forgot-password">Forgot password?</a>
+			</p>
 
 			<Button variant="primary" type="submit">Sign in</Button>
 		</form>
@@ -143,5 +157,11 @@
 		margin: 0;
 		font: var(--weight-reg) var(--fs-small) / var(--lh-body) var(--font-ui);
 		color: var(--c-text-secondary);
+	}
+	/* Right-aligned inline link directly under the password field; small type, secondary weight. */
+	.forgot {
+		margin: calc(var(--space-2) * -1) 0 0;
+		text-align: right;
+		font: var(--weight-reg) var(--fs-small) / var(--lh-body) var(--font-ui);
 	}
 </style>

@@ -61,6 +61,13 @@
 				/>
 				<Button variant="primary" type="submit">Verify</Button>
 			</form>
+
+			<!-- Escape hatch for a lost-authenticator user (SELF-288 Option A constraint 5). Secondary,
+			     muted — must not compete with the primary Verify action. /mfa/recover is the SELF-291
+			     recovery-code redeem page (reachable at aal1; manages its own flow, no params). -->
+			<p class="recover-link">
+				Lost your authenticator? <a href="/mfa/recover">Use a recovery code</a>
+			</p>
 		{:else}
 			<!-- mode === 'unavailable': indeterminate AAL. Actionable dead-end, no auto-nav. -->
 			<h1 id="auth-title" class="title">Verification unavailable</h1>
@@ -114,6 +121,12 @@
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-4);
+	}
+	/* Secondary/muted escape hatch — small type, muted color; sits below the primary form. */
+	.recover-link {
+		margin: 0;
+		font: var(--weight-reg) var(--fs-small) / var(--lh-body) var(--font-ui);
+		color: var(--c-text-muted);
 	}
 	.actions {
 		display: flex;
