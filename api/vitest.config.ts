@@ -19,9 +19,17 @@
 // Flagged to team-lead — do not add jsdom/testing-library without approval.
 
 import { defineConfig } from 'vitest/config';
+import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { fileURLToPath } from 'node:url';
 
 export default defineConfig({
+	// SVELTE COMPONENT COMPILATION (QA, SELF-208): the ALREADY-INSTALLED @sveltejs/vite-plugin-svelte
+	// (a devDep pulled by the SvelteKit plugin — NOT a new dependency) so vitest can compile `.svelte`
+	// imports for SERVER-SIDE render tests (`svelte/server` render → HTML string, node env, NO DOM).
+	// This does NOT add jsdom / @testing-library — those remain the gated dep-add flagged below for a
+	// full client-render/interaction test. The plugin only transforms `.svelte`; pure-TS node tests
+	// (server logic / relay legs / utils) are unaffected. Runes mode auto-activates per-component.
+	plugins: [svelte()],
 	// Minimal alias resolution so pure-TS SERVER tests (the Option-C relay legs — this
 	// config's stated target) can import via the app's `$lib` convention and stub the
 	// SvelteKit `$env/dynamic/private` virtual module (unavailable without svelte-kit
