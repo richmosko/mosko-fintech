@@ -25,6 +25,7 @@
 	import ConnectionStatusChip from '$lib/components/ConnectionStatusChip.svelte';
 	import ReauthControl from '$lib/components/ReauthControl.svelte';
 	import { needsReauth } from '$lib/schemas/connection-status-constants';
+	import { providerLabel } from '$lib/accounts/connection-display';
 
 	/** The connection-state row shape — tied to Backend's loader return (anti-drift). `source_id`
 	 *  === the account's `linked_source_id` FK (same bigint, different column by role). */
@@ -55,10 +56,10 @@
 		<span class="crumb-current" aria-current="page">Connections</span>
 	</nav>
 
-	<h1>Connected accounts</h1>
+	<h1>Connections</h1>
 	<p class="lede">
-		The institutions you've linked and their current sync status. Re-authenticate any that need
-		attention to keep their data up to date.
+		The institutions you've linked and their current sync status — one entry per connection, not
+		per account. Re-authenticate any that need attention to keep their data up to date.
 	</p>
 
 	{#if loadError}
@@ -81,7 +82,9 @@
 					<div class="conn-main">
 						<div class="conn-id">
 							<span class="conn-name">{c.institution_name || 'Connected institution'}</span>
-							<span class="conn-sync">Last synced: {formatSyncTime(c.last_successful_sync_at)}</span>
+							<span class="conn-sync">
+								{providerLabel(c.provider)} · Last synced: {formatSyncTime(c.last_successful_sync_at)}
+							</span>
 						</div>
 						<ConnectionStatusChip
 							connection_status={c.connection_status}

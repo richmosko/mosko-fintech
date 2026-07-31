@@ -20,9 +20,17 @@
 	import Button from '$lib/components/Button.svelte';
 	import CountBadge from '$lib/components/CountBadge.svelte';
 	import ReauthStalenessBanner from '$lib/components/ReauthStalenessBanner.svelte';
+	import { page } from '$app/state';
 	import type { LayoutData } from './$types';
 
 	let { data, children }: { data: LayoutData; children: import('svelte').Snippet } = $props();
+
+	// Primary-nav active state. Net Worth is the root; Accounts owns the whole /accounts/* subtree.
+	// Only the surfaces that exist today are linked — the full locked app-sidebar (Allocation /
+	// Cash Flow / Est. Taxes / Monthly Report / Settings) lands as those V1.x surfaces are built.
+	const path = $derived(page.url.pathname);
+	const isNetWorth = $derived(path === '/');
+	const isAccounts = $derived(path === '/accounts' || path.startsWith('/accounts/'));
 
 	// SELF-207 P4 re-auth banner health summary — from +layout.server.ts (Backend-computed via the
 	// shared needsReauth/isInstitutionDown predicates, active-connections-only, fail-soft to {0,0}).
@@ -36,7 +44,15 @@
 
 {#if data.userEmail}
 	<header class="app-header">
-		<a class="brand" href="/">mosko-fintech</a>
+		<div class="header-left">
+			<a class="brand" href="/">mosko-fintech</a>
+			<nav class="primary-nav" aria-label="Primary">
+				<a class="nav-link" href="/" aria-current={isNetWorth ? 'page' : undefined}>Net Worth</a>
+				<a class="nav-link" href="/accounts" aria-current={isAccounts ? 'page' : undefined}>
+					Accounts
+				</a>
+			</nav>
+		</div>
 		<div class="account">
 			{#if data.pendingClassificationCount > 0}
 				<a
@@ -77,8 +93,27 @@
 		background: var(--c-surface);
 		border-bottom: 1px solid var(--c-border);
 	}
+	.header-left {
+		display: flex;
+		align-items: center;
+		gap: var(--space-4);
+	}
 	.brand {
 		font: var(--weight-semi) var(--fs-body) / 1 var(--font-ui);
+		color: var(--c-text-primary);
+		text-decoration: none;
+	}
+	.primary-nav {
+		display: flex;
+		align-items: center;
+		gap: var(--space-3);
+	}
+	/* The current surface reads as active — heavier weight + primary ink, no underline. */
+	.primary-nav .nav-link[aria-current='page'] {
+		color: var(--c-text-primary);
+		font-weight: var(--weight-semi);
+	}
+	.primary-nav .nav-link[aria-current='page']:hover {
 		color: var(--c-text-primary);
 		text-decoration: none;
 	}

@@ -149,14 +149,17 @@
 			<div class="attr">
 				<dt>Type</dt>
 				<dd>{accountTypeLabel(account.account_type)}</dd>
+				<p class="attr-hint">How this account is grouped — depository (cash), investment, retirement, crypto, real estate, or liability.</p>
 			</div>
 			<div class="attr">
 				<dt>Scope</dt>
 				<dd>{account.scope}</dd>
+				<p class="attr-hint">Your own ownership label (e.g. personal, joint, trust) — used to group accounts across views.</p>
 			</div>
 			<div class="attr">
 				<dt>Tax treatment</dt>
 				<dd>{taxTreatmentLabel(account.tax_treatment)}</dd>
+				<p class="attr-hint">How the account is taxed: taxable, tax-deferred, or tax-free. Feeds the estimated-tax view.</p>
 			</div>
 		</dl>
 	</section>
@@ -184,6 +187,12 @@
 				</Button>
 			{/if}
 		</div>
+
+		<p class="help subcat-help">
+			The whole account's asset class for the Allocation view — best for single-asset accounts (a
+			savings account is all Cash; a house is Real Estate). Accounts holding many securities are
+			classified per-holding in the Classify queue instead, so this can stay Unsorted for a brokerage.
+		</p>
 
 		{#if editing}
 			<form
@@ -412,6 +421,15 @@
 		margin: 0;
 		color: var(--c-text-primary);
 		overflow-wrap: anywhere;
+	}
+	.attr-hint {
+		margin: var(--space-1) 0 0;
+		font-size: var(--fs-small);
+		line-height: var(--lh-body);
+		color: var(--c-text-muted);
+	}
+	.subcat-help {
+		margin-top: var(--space-2);
 	}
 	.help {
 		margin: 0 0 var(--space-3);
