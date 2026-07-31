@@ -64,6 +64,20 @@ export const CONNECTION_CHIP_PRESENTATION: Record<ConnectionChipState, ChipPrese
 	}
 };
 
+/** How each provider is labelled on connection surfaces — the connection's identity is its
+ *  provider (Plaid / SimpleFIN), a system value, NOT a user-editable nickname (F/CTO). */
+const PROVIDER_LABEL: Record<string, string> = {
+	plaid: 'Plaid',
+	simplefin: 'SimpleFIN',
+	manual: 'Manual',
+	import: 'Import'
+};
+
+/** Human label for a provider value; unknown providers fall back to the raw value. */
+export function providerLabel(provider: string): string {
+	return PROVIDER_LABEL[provider] ?? provider;
+}
+
 /** Safe lookup that falls back to a neutral presentation if an unknown state ever appears. */
 export function chipPresentation(state: ConnectionChipState): ChipPresentation {
 	return (
