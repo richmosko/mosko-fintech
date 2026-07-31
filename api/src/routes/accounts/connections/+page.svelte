@@ -55,10 +55,10 @@
 		<span class="crumb-current" aria-current="page">Connections</span>
 	</nav>
 
-	<h1>Connected accounts</h1>
+	<h1>Connections</h1>
 	<p class="lede">
-		The institutions you've linked and their current sync status. Re-authenticate any that need
-		attention to keep their data up to date.
+		The institutions you've linked and their current sync status — one entry per connection, not
+		per account. Re-authenticate any that need attention to keep their data up to date.
 	</p>
 
 	{#if loadError}
