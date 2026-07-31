@@ -11,6 +11,8 @@
 
 import { redirect } from '@sveltejs/kit';
 import { loadNetWorthView } from '$lib/server/queries/netWorth';
+import { loadStaleness } from '$lib/server/queries/staleness';
+import { EMPTY_STALENESS } from '$lib/staleness/stale-constituent';
 import type { PageServerLoad } from './$types';
 
 /** Today's date as an ISO YYYY-MM-DD string — the as-of/LOCF valuation date. */
@@ -25,5 +27,18 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const asOf = todayIso();
 	const { netWorth, hasAccounts } = await loadNetWorthView(locals.supabase, asOf);
 
-	return { netWorth, hasAccounts, asOf };
+	// D1 non-silent staleness marker (SELF-208 §2.4.4.c). FAIL-SOFT is load-bearing: a
+	// staleness-read failure must NEVER break or block the NAV number — degrade to an empty
+	// staleness (badge simply doesn't render), mirroring the NAV's degrade-never-wrong-number
+	// posture. loadStaleness() already fails soft internally; this try/catch is the belt-and-
+	// suspenders boundary so an unexpected throw can never take down the NAV surface.
+	let staleness = EMPTY_STALENESS;
+	try {
+		staleness = await loadStaleness(locals.supabase);
+	} catch (err) {
+		console.error('[+page.server] staleness load threw; degrading to empty staleness:', err);
+		staleness = EMPTY_STALENESS;
+	}
+
+	return { netWorth, hasAccounts, asOf, staleness };
 };

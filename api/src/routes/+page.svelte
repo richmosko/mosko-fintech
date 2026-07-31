@@ -13,13 +13,20 @@
 	ACTUAL performance (deltas) ONLY — the NAV headline is a position, not a delta, so a
 	negative net worth is NOT rendered red. It shows a minus sign in --c-text-primary.
 
-	Staleness badge (AC#4) is DEFERRED: it needs the per-item staleness primitive (its own
-	issue), which does not exist yet. When that lands, the D1 stale-data-marker attaches here.
+	Staleness marker (AC#4) attaches here (SELF-208): the D1 stale-data-marker off the `046`
+	fn_aggregation_has_stale_constituent primitive, threaded through the loader as `data.staleness`
+	({ is_stale, stale_items }). It MARKS beside the number, never suppresses it (D1).
 -->
 <script lang="ts">
 	import type { PageData } from './$types';
+	import StaleConstituentBadge from '$lib/components/StaleConstituentBadge.svelte';
+	import { EMPTY_STALENESS } from '$lib/staleness/stale-constituent';
 
 	let { data }: { data: PageData } = $props();
+
+	// Loader field Backend wires (`+page.server.ts` → `046` read). Default to the healthy
+	// zero-value so the surface renders cleanly before/if the field is absent (no silent throw).
+	const staleness = $derived(data.staleness ?? EMPTY_STALENESS);
 
 	// Whole-dollar USD — the headline reads cleaner without cents. Negative values render
 	// a leading minus (in primary ink, per the value-color fence above).
@@ -68,6 +75,12 @@
 			<h1 id="nav-label" class="nav-label">Net Worth</h1>
 			<p class="nav-value">{usd.format(data.netWorth)}</p>
 			<p class="nav-asof">as of {asOfLabel}</p>
+			<!-- D1 stale-data-marker (AC#4): marks stale contribution beside the number, never
+			     hides it. Zero-footprint when all constituents are healthy. -->
+			<StaleConstituentBadge
+				isStale={staleness.is_stale}
+				staleItems={staleness.stale_items}
+			/>
 		</section>
 	{/if}
 </main>
