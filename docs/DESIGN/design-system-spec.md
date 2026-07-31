@@ -48,7 +48,7 @@ Examples: `--c-canvas: var(--color-neutral-25)` (barely-cool `#fafcfe`); `--c-su
 | **tooltip** | hover→tip | text-primary(bg), surface(fg), shadow-2 |
 | **planning-target-editor** (Settings, P5) | default · editing(dirty) · saving · disabled(no valid change) · error(per-field) · empty(bootstrap) · saved | field-input states, accent(Save), target-sum-readout |
 | **target-caption** *(§2.3 FENCE)* | static reference value ONLY | text-secondary, font-num ref-value — **no comparative state exists** |
-| **stale-data-marker (D1)** | present(tag + faint row tint) · absent · hover→tooltip | attn-solid(edge), attn-bg/text |
+| **stale-data-marker (D1)** | present — tag + **disclosure** (when the marker carries an interactive affordance, e.g. Re-authenticate) OR tag + faint row tint (informational, on aggregation rows) · absent(zero-footprint) · hover→tooltip (informational-only instances) | attn-solid(edge), attn-bg/text, radius-sm/md, shadow-2(panel), focus-ring |
 | **reauth-staleness-banner (P4)** | absent(healthy, zero footprint) · present-N · institution-down(no CTA) | attn-bg/border/solid(stripe), attn-text — non-dismissible |
 | **notification-queue-item** | default · hover · pressed | surface-alt, border |
 | **chart-placeholder** | default · loading(skeleton) · empty(insufficient history) · cpi-unavailable(nominal-only) · stale-segment | viz-nominal/infl/fill, text-muted |
