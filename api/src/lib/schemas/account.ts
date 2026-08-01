@@ -69,6 +69,44 @@ export const toggleActiveSchema = z
 
 export type ToggleActive = z.infer<typeof toggleActiveSchema>;
 
+/** Coerce a form boolean the same way the server does (checkbox/string/'1'). */
+const formBoolean = () =>
+	z.preprocess((v) => v === true || v === 'true' || v === 'on' || v === '1', z.boolean());
+
+/**
+ * Connections-redesign use/ignore toggle — CLIENT mirror of the server `toggleAccountSchema`
+ * (`accounts/connections/[source_id]` `?/toggleAccount`). A single account's `is_active` keyed
+ * by `account_id`. Same `.strict()` posture + same coercions as the server (the security
+ * boundary); this is the browser-side UX mirror. Never looser than the server.
+ */
+export const toggleAccountSchema = z
+	.object({
+		account_id: z.coerce.number().int('Invalid account.').positive('Invalid account.'),
+		is_active: formBoolean()
+	})
+	.strict();
+
+export type ToggleAccount = z.infer<typeof toggleAccountSchema>;
+
+/**
+ * Account-detail attribute edit — CLIENT mirror of the server `updateAttributesSchema`
+ * (`accounts/[account_id]` `?/updateAttributes`). The four user-editable attributes:
+ * name / account_type / scope / tax_treatment. Field rules copied VERBATIM from the manual-create
+ * mirror (name/scope free-text 1..200; enums from the shared account-constants, anti-drift with the
+ * DB CHECK). Deliberately excludes the aggregator/connection binding (deferred) and is_active (the
+ * toggle path) — `.strict()` rejects any stray posted field, matching the server mass-assignment fence.
+ */
+export const updateAttributesSchema = z
+	.object({
+		name: z.string().trim().min(1, 'Name is required.').max(200, 'Name is too long.'),
+		account_type: z.enum(ACCOUNT_TYPES, { message: 'Choose an account type.' }),
+		scope: z.string().trim().min(1, 'Scope is required.').max(200, 'Scope is too long.'),
+		tax_treatment: z.enum(TAX_TREATMENTS, { message: 'Choose a tax treatment.' })
+	})
+	.strict();
+
+export type UpdateAttributes = z.infer<typeof updateAttributesSchema>;
+
 /**
  * Flatten a ZodError into `{ field: [messages] }` keyed by the top-level field.
  * Mirrors the server helper so client + server errors render through one code path.

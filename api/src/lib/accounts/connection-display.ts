@@ -78,6 +78,19 @@ export function providerLabel(provider: string): string {
 	return PROVIDER_LABEL[provider] ?? provider;
 }
 
+/** The aggregator provider's public home page — the external "learn more" affordance on the
+ *  connections surfaces (connections-redesign). Only the real aggregators have one; `manual` /
+ *  `import` (and any unknown provider) return null so the caller omits the external link. */
+const PROVIDER_HOME_URL: Record<string, string> = {
+	plaid: 'https://plaid.com/',
+	simplefin: 'https://bridge.simplefin.org/'
+};
+
+/** Public home-page URL for an aggregator provider, or null when there is none to link to. */
+export function providerHomeUrl(provider: string): string | null {
+	return PROVIDER_HOME_URL[provider] ?? null;
+}
+
 /** Safe lookup that falls back to a neutral presentation if an unknown state ever appears. */
 export function chipPresentation(state: ConnectionChipState): ChipPresentation {
 	return (

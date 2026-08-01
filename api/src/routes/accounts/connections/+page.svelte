@@ -1,24 +1,23 @@
 <!--
-	accounts/connections/+page.svelte — SELF-207 §2.4.4.b per-account connection-state view.
+	accounts/connections/+page.svelte — connections-redesign aggregator-connection list
+	(SELF-207 §2.4.4.b, redesigned). Frontend-owned browser surface.
 
-	Provider-blind. Lists each connected source with its connection health (ConnectionStatusChip),
-	last successful sync, and — for re-auth-actionable states (login_required / revoked /
-	disconnected, per REAUTH_STATUSES) — a "Re-authenticate" affordance. This is the page the P4
-	layout banner's CTA routes to.
+	The page is organised by DATA AGGREGATOR CONNECTION, not by account. Each card leads with the
+	provider (Plaid / SimpleFIN) — the connection's identity is its provider (a system value, not a
+	user nickname). The provider name is the click target to the per-connection use/ignore edit page
+	(`/accounts/connections/{source_id}`); a small external "↗" links out to the provider's public
+	home page (new tab). institution_name is a secondary detail line, not the primary label. Under
+	each connection: an indented list of its accounts (each → Account Detail), with an "Ignored"
+	marker for inactive (ignored) accounts.
 
 	DATA (server-known at render → boring-Svelte loader, not client fetch): consumes
-	`data.connections: AccountConnectionState[]` from Backend's `+page.server.ts` load, which reads
-	the Architect-authored `043` linked_source_connection_state INVOKER view (RLS-scoped). Scaffolded
-	against the AC fields; wired 1:1 when Backend publishes the loader. `last_successful_sync_at` is
-	DERIVED server-side from the sync-audit log (ADR-037 OWD-A A3 — no persisted scalar).
+	`data.connections: ConnectionWithAccounts[]` from Backend's `+page.server.ts` load — each row is
+	a ConnectionState PLUS `accounts` (active AND inactive; management view, not NAV).
+	`last_successful_sync_at` is DERIVED server-side (ADR-037). Keeps the `ConnectionStatusChip` +
+	last-synced + `SyncNowControl`, and the per-connection `ReauthControl` for re-auth-actionable states.
 
-	RE-AUTH (LIVE, both providers): the per-connection re-auth affordance is the `ReauthControl`
-	component — connect-flow-shaped (NOT a form action), scoped to one source, branching on provider
-	(Plaid update-mode Link / SimpleFIN fresh-setup-token re-collect). On success it invalidates the
-	loaders so this row + the layout banner refresh to healthy.
-
-	Tokens ONLY (var(--c-*)). a11y: semantic list, chip carries an sr-only status prefix, errors
-	role="alert", the re-auth control is keyboard-native. No email/SMS path (AC #5 — in-session only).
+	Tokens ONLY (var(--c-*)). a11y: semantic lists, chip carries an sr-only status prefix, the
+	external link names itself + "opens in a new tab", errors role="alert", controls keyboard-native.
 -->
 <script lang="ts">
 	import type { PageData } from './$types';
@@ -26,11 +25,7 @@
 	import ReauthControl from '$lib/components/ReauthControl.svelte';
 	import SyncNowControl from '$lib/components/SyncNowControl.svelte';
 	import { needsReauth } from '$lib/schemas/connection-status-constants';
-	import { providerLabel } from '$lib/accounts/connection-display';
-
-	/** The connection-state row shape — tied to Backend's loader return (anti-drift). `source_id`
-	 *  === the account's `linked_source_id` FK (same bigint, different column by role). */
-	type AccountConnectionState = PageData['connections'][number];
+	import { providerLabel, providerHomeUrl } from '$lib/accounts/connection-display';
 
 	let { data }: { data: PageData } = $props();
 
@@ -47,20 +42,21 @@
 </script>
 
 <svelte:head>
-	<title>Connections — mosko-fintech</title>
+	<title>Data aggregator connections — mosko-fintech</title>
 </svelte:head>
 
 <main class="page">
 	<nav class="breadcrumb" aria-label="Breadcrumb">
 		<a href="/accounts">Accounts</a>
 		<span class="sep" aria-hidden="true">/</span>
-		<span class="crumb-current" aria-current="page">Connections</span>
+		<span class="crumb-current" aria-current="page">Data aggregator connections</span>
 	</nav>
 
-	<h1>Connections</h1>
+	<h1>Data aggregator connections</h1>
 	<p class="lede">
-		The institutions you've linked and their current sync status — one entry per connection, not
-		per account. Re-authenticate any that need attention to keep their data up to date.
+		The data aggregators you've linked — one entry per connection, not per account. Open a
+		connection to choose which of its accounts to use or ignore, or re-authenticate any that need
+		attention to keep their data up to date.
 	</p>
 
 	{#if loadError}
@@ -69,23 +65,44 @@
 		</p>
 	{:else if connections.length === 0}
 		<section class="region card empty" aria-labelledby="empty-heading">
-			<h2 id="empty-heading">No connected institutions yet</h2>
+			<h2 id="empty-heading">No connected aggregators yet</h2>
 			<p class="card-note">
-				Link a bank, card, or brokerage to sync it automatically — or add an account you'll update
-				by hand.
+				Link a bank, card, or brokerage through an aggregator to sync it automatically — or add an
+				account you'll update by hand.
 			</p>
 			<a class="cta" href="/accounts/connect">Connect an institution</a>
 		</section>
 	{:else}
 		<ul class="conn-list">
 			{#each connections as c (c.source_id)}
+				{@const homeUrl = providerHomeUrl(c.provider)}
 				<li class="conn-row region card">
 					<div class="conn-main">
 						<div class="conn-id">
-							<span class="conn-name">{c.institution_name || 'Connected institution'}</span>
-							<span class="conn-sync">
-								{providerLabel(c.provider)} · Last synced: {formatSyncTime(c.last_successful_sync_at)}
-							</span>
+							<div class="conn-name-row">
+								<a
+									class="conn-name"
+									href="/accounts/connections/{c.source_id}"
+									aria-label="Manage {providerLabel(c.provider)} connection accounts"
+								>
+									{providerLabel(c.provider)}
+								</a>
+								{#if homeUrl}
+									<a
+										class="provider-home"
+										href={homeUrl}
+										target="_blank"
+										rel="noopener noreferrer"
+										aria-label="Open the {providerLabel(c.provider)} home page (opens in a new tab)"
+									>
+										<span aria-hidden="true">↗</span>
+									</a>
+								{/if}
+							</div>
+							{#if c.institution_name}
+								<span class="conn-inst">{c.institution_name}</span>
+							{/if}
+							<span class="conn-sync">Last synced: {formatSyncTime(c.last_successful_sync_at)}</span>
 						</div>
 						<ConnectionStatusChip
 							connection_status={c.connection_status}
@@ -93,6 +110,21 @@
 							is_active={c.is_active}
 						/>
 					</div>
+
+					{#if c.accounts.length > 0}
+						<ul class="acct-sublist" aria-label="Accounts under this connection">
+							{#each c.accounts as a (a.account_id)}
+								<li class="acct-subrow">
+									<a class="acct-sublink" href="/accounts/{a.account_id}">{a.name}</a>
+									{#if !a.is_active}
+										<span class="ignored-marker">Ignored</span>
+									{/if}
+								</li>
+							{/each}
+						</ul>
+					{:else}
+						<p class="acct-empty">No accounts under this connection yet.</p>
+					{/if}
 
 					{#if c.is_active}
 						<div class="conn-action">
@@ -200,7 +232,7 @@
 	}
 	.conn-main {
 		display: flex;
-		align-items: center;
+		align-items: flex-start;
 		justify-content: space-between;
 		gap: var(--space-3);
 	}
@@ -210,14 +242,89 @@
 		gap: var(--space-0);
 		min-width: 0;
 	}
+	.conn-name-row {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+	}
 	.conn-name {
 		font-size: var(--fs-body);
 		font-weight: var(--weight-semi);
-		color: var(--c-text-primary);
+		color: var(--c-link);
+		text-decoration: none;
+	}
+	.conn-name:hover {
+		text-decoration: underline;
+	}
+	.conn-name:focus-visible {
+		outline: none;
+		box-shadow: var(--focus-ring);
+		border-radius: var(--radius-sm);
+	}
+	.provider-home {
+		display: inline-flex;
+		align-items: center;
+		color: var(--c-text-muted);
+		text-decoration: none;
+		font-size: var(--fs-small);
+		line-height: 1;
+	}
+	.provider-home:hover {
+		color: var(--c-link);
+	}
+	.provider-home:focus-visible {
+		outline: none;
+		box-shadow: var(--focus-ring);
+		border-radius: var(--radius-sm);
+	}
+	.conn-inst {
+		font-size: var(--fs-small);
+		color: var(--c-text-secondary);
 	}
 	.conn-sync {
 		font-size: var(--fs-small);
 		color: var(--c-text-muted);
+	}
+	.acct-sublist {
+		list-style: none;
+		margin: 0;
+		padding: 0 0 0 var(--space-4);
+		border-left: 1px solid var(--c-border);
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-1);
+	}
+	.acct-subrow {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+	}
+	.acct-sublink {
+		font-size: var(--fs-small);
+		color: var(--c-link);
+		text-decoration: none;
+	}
+	.acct-sublink:hover {
+		text-decoration: underline;
+	}
+	.acct-sublink:focus-visible {
+		outline: none;
+		box-shadow: var(--focus-ring);
+		border-radius: var(--radius-sm);
+	}
+	.ignored-marker {
+		font-size: var(--fs-small);
+		font-weight: var(--weight-med);
+		color: var(--c-text-muted);
+		border: 1px dashed var(--c-border-strong);
+		border-radius: var(--radius-pill);
+		padding: 0 var(--space-2);
+	}
+	.acct-empty {
+		margin: 0 0 0 var(--space-4);
+		font-size: var(--fs-small);
+		color: var(--c-text-muted);
+		font-style: italic;
 	}
 	.conn-action {
 		display: flex;
