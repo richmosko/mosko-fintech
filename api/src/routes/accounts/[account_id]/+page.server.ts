@@ -1,15 +1,16 @@
 // accounts/[account_id]/+page.server.ts — account-detail server surface.
-// SELF-201 §2.4.2 (AC #3/#4) + SELF-236 §2.2.1.c (Sub-Cat reassignment).
+// SELF-201 §2.4.2 (AC #3/#4).
 // Backend-owned server source (ARCH §4.1 allowlist).
 //
-//  - load(): account row (+ embedded Sub-Cat label) + transaction history +
-//    asset-domain Sub-Cat picker options — all RLS-scoped. Non-owner → 404.
+//  - load(): account row + transaction history — all RLS-scoped. Non-owner → 404.
 //  - actions.toggleActive: single-row RLS-scoped UPDATE of is_active (SELF-201 AC#3).
-//  - actions.reassignSubCat: single-row RLS-scoped UPDATE of sub_cat_id (SELF-236).
-//    Fenced by account_update RLS (ownership) + the 012 fn_account_matched_sub_cat
-//    trigger (BEFORE INSERT OR UPDATE — a reassignment cannot pivot to another
-//    tenant's Sub-Cat). Nullable clears the tag → "Unsorted". No migration needed
-//    (the trigger + account_update RLS already exist).
+//
+// The account-level asset Sub-Cat surface (reassignSubCat action + the asset-domain
+// picker + the account.sub_cat_id label embed) is REMOVED — allocation classifies
+// per-asset (user_asset_category) / per-transaction (annotations), never per-account.
+// The DB column pfin.account.sub_cat_id + its 012 fn_account_matched_sub_cat trigger
+// stay dormant (a full column drop is a separate future Architect ADR). The
+// per-TRANSACTION cashflow category (account_trans_annotation.sub_cat_id) is unaffected.
 //
 // AC #3 polarity: is_active (WHERE is_active = TRUE), NOT a new `inactive` column
 // (reconciled at 012). CONTRACT for NAV/current-state consumers: filter is_active.
@@ -17,7 +18,7 @@
 // acct_number intentionally NOT selected — masked-only render posture (SD-15).
 
 import { error, fail, redirect } from '@sveltejs/kit';
-import { reassignSubCatSchema, toggleActiveSchema, fieldErrors } from '$lib/server/schemas/account';
+import { toggleActiveSchema, fieldErrors } from '$lib/server/schemas/account';
 import {
 	manualTransCreateSchema,
 	manualTransEditSchema,
@@ -35,7 +36,7 @@ import {
 	loadHeldSecurities,
 	type WriteResult
 } from '$lib/server/queries/transactions';
-import { loadAssetSubCats, loadCashflowSubCats, subCatLabel } from '$lib/server/queries/taxonomy';
+import { loadCashflowSubCats, subCatLabel } from '$lib/server/queries/taxonomy';
 import { loadDupCandidates, loadSyncHistory } from '$lib/server/queries/reconciliation';
 import { computeImportHash } from '$lib/server/dedup/importHash';
 import type { PageServerLoad, Actions } from './$types';
@@ -56,13 +57,14 @@ function toActionResult(r: WriteResult) {
 	return fail(r.status, { errors: { [key]: [r.message] } });
 }
 
-// Embed the Sub-Cat label via the account.sub_cat_id → user_taxonomy FK (012).
 // linked_source_id (015) surfaces the source-of-truth status so the UI can restrict manual
 // stock-split entry to non-provider-linked accounts (SELF-203 app-layer UX complement; the
 // fn_create_stock_split DB guard is the integrity boundary — the UI restriction is defense-
 // in-depth for a clean affordance, never the security boundary). acct_number stays unselected.
+// account.sub_cat_id + its user_taxonomy label embed are intentionally NOT selected — the
+// account-level asset Sub-Cat surface is removed (allocation classifies per-asset/per-txn).
 const ACCOUNT_COLUMNS =
-	'account_id, name, account_type, scope, tax_treatment, sub_cat_id, is_active, linked_source_id, created_at, user_taxonomy ( cat, sub_cat )';
+	'account_id, name, account_type, scope, tax_treatment, is_active, linked_source_id, created_at';
 
 function parseAccountId(param: string): number | null {
 	const n = Number(param);
@@ -87,8 +89,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	const accountId = parseAccountId(params.account_id);
 	if (accountId === null) throw error(404, 'Account not found');
 
-	// Embedded read is itself RLS-scoped (user_taxonomy_select = auth.uid()); the
-	// matched-tenant write fence guarantees the joined row is the caller's own.
+	// RLS-scoped single-row read (account_select = users_id = auth.uid()); a
+	// non-owner id yields no row → 404 below (no existence leak).
 	const { data: row } = await locals.supabase
 		.schema('pfin')
 		.from('account')
@@ -99,8 +101,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	// RLS-filtered: not-owner (or nonexistent) → no row → 404 (no existence leak).
 	if (!row) throw error(404, 'Account not found');
 
-	const { user_taxonomy, ...rest } = row;
-	const account = { ...rest, ...subCatLabel(user_taxonomy) };
+	const account = row;
 
 	const { data: transRows } = await locals.supabase
 		.schema('pfin')
@@ -147,9 +148,9 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		};
 	});
 
-	// Asset-domain Sub-Cat options for the account reassignment picker (SELF-236); cashflow-
-	// domain options for the transaction category pickers (entry/edit/split) — both RLS-scoped.
-	const subCats = await loadAssetSubCats(locals.supabase);
+	// Cashflow-domain Sub-Cat options for the per-transaction category pickers
+	// (entry/edit/split) — RLS-scoped. (No asset-domain account picker: the
+	// account-level Sub-Cat surface is removed.)
 	const cashflowSubCats = await loadCashflowSubCats(locals.supabase);
 
 	// SELF-203 stock-split entry — the account's current live positions (quantity ≠ 0) for the
@@ -169,7 +170,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	// raw `detail` blob unreachable). A manual/non-linked account → []. Fail-soft ([] on error).
 	const syncHistory = await loadSyncHistory(locals.supabase, account.linked_source_id ?? null);
 
-	return { account, transactions, subCats, cashflowSubCats, heldSecurities, dupCandidates, syncHistory };
+	return { account, transactions, cashflowSubCats, heldSecurities, dupCandidates, syncHistory };
 };
 
 export const actions: Actions = {
@@ -194,45 +195,6 @@ export const actions: Actions = {
 			return fail(422, { errors: { _form: ['Could not update the account.'] } });
 		}
 		return { success: true, is_active: parsed.data.is_active };
-	},
-
-	reassignSubCat: async ({ request, locals, params }) => {
-		const { user } = await locals.safeGetSession();
-		if (!user) return fail(401, { errors: { _form: ['You must be signed in.'] } });
-
-		const accountId = parseAccountId(params.account_id);
-		if (accountId === null) return fail(400, { errors: { _form: ['Invalid account.'] } });
-
-		const parsed = reassignSubCatSchema.safeParse(Object.fromEntries(await request.formData()));
-		if (!parsed.success) return fail(400, { errors: fieldErrors(parsed.error) });
-
-		// Single-row RLS-scoped UPDATE. Ownership fenced by account_update RLS
-		// (USING/WITH CHECK users_id = auth.uid()); a cross-tenant sub_cat_id is fenced
-		// by the 012 fn_account_matched_sub_cat trigger (covers UPDATE, fail-closed).
-		// Minimal .select('account_id') only detects the RLS-filtered non-owner (0 rows
-		// → null → 404); the fresh label is NOT returned — enhance's default update()
-		// re-invalidates load(), which refreshes account.cat/sub_cat from the one place
-		// the label lives (identical to toggleActive). Return { success: true } only.
-		const { data: updated, error: updErr } = await locals.supabase
-			.schema('pfin')
-			.from('account')
-			.update({ sub_cat_id: parsed.data.sub_cat_id })
-			.eq('account_id', accountId)
-			.select('account_id')
-			.maybeSingle();
-
-		if (updErr) {
-			console.error('[accounts/[account_id]] reassignSubCat failed:', updErr.message);
-			return fail(422, {
-				errors: isCrossTenantSubCat(updErr.message)
-					? { sub_cat_id: ['That Sub-Cat is not available.'] }
-					: { _form: ['Could not update the Sub-Cat.'] }
-			});
-		}
-		// RLS-filtered non-owner → 0 rows updated → null.
-		if (!updated) return fail(404, { errors: { _form: ['Account not found.'] } });
-
-		return { success: true };
 	},
 
 	// ── SELF-202 manual cash-transaction surfaces (038 / ADR-032) ──────────────────────

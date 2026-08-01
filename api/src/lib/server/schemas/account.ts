@@ -25,19 +25,6 @@ const currencyAmount = () =>
 		return r.value;
 	});
 
-/**
- * Nullable Sub-Cat id field, shared by the create + reassign paths so both validate
- * identically. Empty-string (dropdown "Unsorted") / missing → null; else a positive
- * integer. Matched-tenant is DB-enforced (012 fn_account_matched_sub_cat) regardless.
- */
-const subCatIdField = () =>
-	z
-		.preprocess(
-			(v) => (v === '' || v === undefined || v === null ? null : v),
-			z.coerce.number().int().positive().nullable()
-		)
-		.default(null);
-
 /** Real-calendar-date guard for the ISO bootstrap date (rejects 2026-02-31 etc.). */
 const isoDate = () =>
 	z
@@ -50,11 +37,10 @@ const isoDate = () =>
 		}, 'Enter a real calendar date.');
 
 /**
- * Manual-account create (AC #1/#2). Six user attributes + nullable Sub-Cat.
- * `sub_cat_id` NULL = untagged / Unsorted-pending (012); empty-string from the
- * dropdown coerces to null. Matched-tenant is DB-enforced (fn_account_matched_sub_cat)
- * even if a tampered client posts a foreign id — this schema is UX + shape, the DB
- * trigger is the security boundary.
+ * Manual-account create (AC #1/#2). Six user attributes. The account-level asset
+ * Sub-Cat field is removed — accounts aren't classified per-account (allocation
+ * classifies per-asset / per-transaction); the create action passes p_sub_cat_id
+ * NULL to the dormant 013 param. `.strict()` rejects any stray posted `sub_cat_id`.
  */
 export const manualAccountCreateSchema = z
 	.object({
@@ -63,8 +49,7 @@ export const manualAccountCreateSchema = z
 		scope: z.string().trim().min(1, 'Scope is required.').max(200, 'Scope is too long.'),
 		tax_treatment: z.enum(TAX_TREATMENTS),
 		initial_value: currencyAmount(),
-		as_of_date: isoDate(),
-		sub_cat_id: subCatIdField()
+		as_of_date: isoDate()
 	})
 	.strict();
 
@@ -116,12 +101,6 @@ export const landLinkedAccountsSchema = z
 	.strict();
 
 export type LandLinkedAccounts = z.infer<typeof landLinkedAccountsSchema>;
-
-/** Sub-Cat reassignment (SELF-236 §2.2.1.c). Single nullable field; nullable clears
- *  the tag ("Unsorted"). Matched-tenant fenced by the 012 trigger on UPDATE. */
-export const reassignSubCatSchema = z.object({ sub_cat_id: subCatIdField() }).strict();
-
-export type ReassignSubCat = z.infer<typeof reassignSubCatSchema>;
 
 /** Inactive-toggle (AC #3). Single boolean; coerces form string/checkbox values. */
 export const toggleActiveSchema = z
