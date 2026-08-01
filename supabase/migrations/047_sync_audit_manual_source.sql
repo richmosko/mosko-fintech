@@ -36,7 +36,7 @@
 --       network-exposure surface touched); ledger stays 3 (RT-22 + RT-26 + RT-27).
 --   (ii) layer-attribution unchanged — no surface becomes an additional layer.
 --   (iii) Decision 4 referenced, not restated.
---   Adjacent ledgers FLAT: RT-26 SUPABASE_SERVICE_ROLE_KEY allowlist stays 3; SECURITY DEFINER
+--   Adjacent ledgers FLAT: RT-26 SUPABASE_SERVICE_ROLE_KEY allowlist stays 4 (sync-now adds 0 — the live registry is 4: plaid webhook + onboard + revoke + supabase-admin.ts per ADR-016 D3/SELF-291); SECURITY DEFINER
 --   allowlist stays 4 (no function authored); Decision-3 cross-tenant FK-bypass family unchanged
 --   (15 labeled / 13 DDL-realized) — `external_connection_id` stays TEXT (NOT a pfin FK), the
 --   widened column `source` is a plain enum-string, no FK-shaped column added. Sec pre-blessed
