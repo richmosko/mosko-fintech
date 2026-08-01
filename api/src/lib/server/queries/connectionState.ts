@@ -31,6 +31,22 @@ export type ConnectionState = {
 /** Layout banner summary — the two counts the P4 banner needs (present-N vs info vs zero). */
 export type ConnectionHealth = { reauthCount: number; institutionDownCount: number };
 
+/** One account nested under its connection (connections-redesign). Both active and inactive
+ *  are surfaced — the connections surfaces are MANAGEMENT views, not current-state/NAV, so the
+ *  `WHERE is_active = TRUE` contract (api/CLAUDE.md) does NOT apply here. */
+export type ConnectionAccount = {
+	account_id: number;
+	name: string;
+	account_type: string;
+	is_active: boolean;
+};
+
+// Account columns for the connection-nested account rows. acct_number intentionally NOT
+// selected — masked-only render posture (SD-15). linked_source_id is the grouping key.
+const CONNECTION_ACCOUNT_COLUMNS = 'account_id, name, account_type, is_active, linked_source_id';
+
+type ConnectionAccountRow = ConnectionAccount & { linked_source_id: number | string | null };
+
 // View column names (043). `linked_source_id` is renamed to `source_id` in the mapped row.
 const VIEW_COLUMNS =
 	'linked_source_id, provider, institution_name, is_active, connection_status, status_class, last_successful_sync_at';
@@ -103,6 +119,109 @@ export function summarizeHealth(connections: ConnectionState[]): ConnectionHealt
 export async function loadConnectionHealth(supabase: SupabaseClient): Promise<ConnectionHealth> {
 	const { connections, error } = await loadConnectionStates(supabase);
 	return error ? { reauthCount: 0, institutionDownCount: 0 } : summarizeHealth(connections);
+}
+
+/**
+ * Read ONE of the caller's connections by source_id (== linked_source_id), owner-scoped via the
+ * 043 view (security_invoker → the caller's RLS; a cross-tenant / nonexistent source is invisible).
+ * Returns null when the source is not the caller's (or on a read error) — the page then 404s (no
+ * existence leak). Used by the connections-redesign `[source_id]` edit page + the account-detail
+ * Aggregation section. `sourceId` is the numeric-string convention (SELF-199).
+ */
+export async function loadConnectionState(
+	supabase: SupabaseClient,
+	sourceId: string
+): Promise<ConnectionState | null> {
+	const { data, error } = await supabase
+		.schema('pfin')
+		.from('linked_source_connection_state')
+		.select(VIEW_COLUMNS)
+		.eq('linked_source_id', sourceId)
+		.maybeSingle();
+
+	if (error) {
+		console.error('[connectionState] loadConnectionState failed:', error.message);
+		return null;
+	}
+	if (!data) return null;
+
+	const r = data as ViewRow;
+	return {
+		source_id: String(r.linked_source_id),
+		provider: r.provider,
+		institution_name: r.institution_name,
+		is_active: r.is_active,
+		connection_status: r.connection_status,
+		status_class: r.status_class,
+		last_successful_sync_at: r.last_successful_sync_at
+	};
+}
+
+/**
+ * All of the caller's LINKED accounts grouped by their connection (linked_source_id), owner-scoped
+ * via the anon client (account_select RLS). Manual / non-linked accounts (linked_source_id IS NULL)
+ * are excluded — they are not connections. Returns a Map keyed by source_id (numeric string, to
+ * match ConnectionState.source_id) → the account rows (active AND inactive: management view, not
+ * NAV). Fail-soft: `error:true` on a read failure with an empty map (the connections page renders a
+ * retriable error). Feeds the connections-list loader's per-connection nesting.
+ */
+export async function loadAccountsBySource(
+	supabase: SupabaseClient
+): Promise<{ accountsBySource: Map<string, ConnectionAccount[]>; error: boolean }> {
+	const { data, error } = await supabase
+		.schema('pfin')
+		.from('account')
+		.select(CONNECTION_ACCOUNT_COLUMNS)
+		.not('linked_source_id', 'is', null)
+		.order('name', { ascending: true });
+
+	if (error) {
+		console.error('[connectionState] loadAccountsBySource failed:', error.message);
+		return { accountsBySource: new Map(), error: true };
+	}
+
+	const accountsBySource = new Map<string, ConnectionAccount[]>();
+	for (const a of (data ?? []) as ConnectionAccountRow[]) {
+		if (a.linked_source_id == null) continue; // defensive; the .not() filter already excludes
+		const key = String(a.linked_source_id);
+		const bucket = accountsBySource.get(key) ?? [];
+		bucket.push({
+			account_id: a.account_id,
+			name: a.name,
+			account_type: a.account_type,
+			is_active: a.is_active
+		});
+		accountsBySource.set(key, bucket);
+	}
+	return { accountsBySource, error: false };
+}
+
+/**
+ * The caller's accounts under ONE connection (linked_source_id = sourceId), owner-scoped via the
+ * anon client (account_select RLS). Active AND inactive (management view). Fail-soft: [] on a read
+ * error. Used by the connections-redesign `[source_id]` use/ignore edit page.
+ */
+export async function loadAccountsForSource(
+	supabase: SupabaseClient,
+	sourceId: string
+): Promise<ConnectionAccount[]> {
+	const { data, error } = await supabase
+		.schema('pfin')
+		.from('account')
+		.select(CONNECTION_ACCOUNT_COLUMNS)
+		.eq('linked_source_id', sourceId)
+		.order('name', { ascending: true });
+
+	if (error) {
+		console.error('[connectionState] loadAccountsForSource failed:', error.message);
+		return [];
+	}
+	return ((data ?? []) as ConnectionAccountRow[]).map((a) => ({
+		account_id: a.account_id,
+		name: a.name,
+		account_type: a.account_type,
+		is_active: a.is_active
+	}));
 }
 
 /**

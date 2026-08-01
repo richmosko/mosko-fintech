@@ -18,7 +18,8 @@
 // acct_number intentionally NOT selected — masked-only render posture (SD-15).
 
 import { error, fail, redirect } from '@sveltejs/kit';
-import { toggleActiveSchema, fieldErrors } from '$lib/server/schemas/account';
+import { toggleActiveSchema, updateAttributesSchema, fieldErrors } from '$lib/server/schemas/account';
+import { loadConnectionState } from '$lib/server/queries/connectionState';
 import {
 	manualTransCreateSchema,
 	manualTransEditSchema,
@@ -170,7 +171,32 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	// raw `detail` blob unreachable). A manual/non-linked account → []. Fail-soft ([] on error).
 	const syncHistory = await loadSyncHistory(locals.supabase, account.linked_source_id ?? null);
 
-	return { account, transactions, cashflowSubCats, heldSecurities, dupCandidates, syncHistory };
+	// Connections-redesign Aggregation section: THIS account's connection state (provider +
+	// health + last-sync), resolved via its linked_source_id from the 043 view (RLS-scoped).
+	// A manual / non-linked account → null (the section renders "manual, no connection").
+	// Fail-soft: loadConnectionState returns null on a read error too. Project the 3 fields the
+	// Aggregation section needs (the full ConnectionState is not surfaced here).
+	const connState =
+		account.linked_source_id == null
+			? null
+			: await loadConnectionState(locals.supabase, String(account.linked_source_id));
+	const connection = connState
+		? {
+				provider: connState.provider,
+				connection_status: connState.connection_status,
+				last_successful_sync_at: connState.last_successful_sync_at
+			}
+		: null;
+
+	return {
+		account,
+		transactions,
+		cashflowSubCats,
+		heldSecurities,
+		dupCandidates,
+		syncHistory,
+		connection
+	};
 };
 
 export const actions: Actions = {
@@ -195,6 +221,39 @@ export const actions: Actions = {
 			return fail(422, { errors: { _form: ['Could not update the account.'] } });
 		}
 		return { success: true, is_active: parsed.data.is_active };
+	},
+
+	// Edit the account's user attributes: name / account_type / scope / tax_treatment. RLS-scoped
+	// single-row UPDATE (account_update = users_id = auth.uid()). Deliberately does NOT touch the
+	// aggregator / connection binding (deferred) nor is_active (that's toggleActive). `.strict()` +
+	// the shared enums are the mass-assignment + type-confusion fences (Lock 14 mods #1/#2).
+	updateAttributes: async ({ request, locals, params }) => {
+		const { user } = await locals.safeGetSession();
+		if (!user) return fail(401, { errors: { _form: ['You must be signed in.'] } });
+
+		const accountId = parseAccountId(params.account_id);
+		if (accountId === null) return fail(400, { errors: { _form: ['Invalid account.'] } });
+
+		const raw = Object.fromEntries(await request.formData());
+		const parsed = updateAttributesSchema.safeParse(raw);
+		if (!parsed.success) return fail(400, { errors: fieldErrors(parsed.error), values: raw });
+
+		const { error: updErr } = await locals.supabase
+			.schema('pfin')
+			.from('account')
+			.update({
+				name: parsed.data.name,
+				account_type: parsed.data.account_type,
+				scope: parsed.data.scope,
+				tax_treatment: parsed.data.tax_treatment
+			})
+			.eq('account_id', accountId);
+
+		if (updErr) {
+			console.error('[accounts/[account_id]] updateAttributes failed:', updErr.message);
+			return fail(422, { errors: { _form: ['Could not update the account.'] }, values: raw });
+		}
+		return { success: true };
 	},
 
 	// ── SELF-202 manual cash-transaction surfaces (038 / ADR-032) ──────────────────────

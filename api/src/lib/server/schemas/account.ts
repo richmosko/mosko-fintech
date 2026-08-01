@@ -115,6 +115,46 @@ export const toggleActiveSchema = z
 
 export type ToggleActive = z.infer<typeof toggleActiveSchema>;
 
+/** Coerce a form boolean the same way toggleActiveSchema does (checkbox/string/'1'). */
+const formBoolean = () =>
+	z.preprocess((v) => v === true || v === 'true' || v === 'on' || v === '1', z.boolean());
+
+/**
+ * Connections-redesign use/ignore toggle (`accounts/connections/[source_id]`). A single
+ * account's `is_active` keyed by account_id — the per-connection "use / ignore" control.
+ * Ownership is fenced by the account_update RLS policy (users_id = auth.uid()); the action
+ * does a single-row UPDATE keyed on account_id, mirroring the `[account_id]` toggleActive
+ * path. `.strict()` is the mass-assignment fence (Lock 14 mod #2) — a stray posted column
+ * (e.g. users_id, linked_source_id) is rejected, never silently forwarded to the UPDATE.
+ */
+export const toggleAccountSchema = z
+	.object({
+		account_id: z.coerce.number().int('Invalid account.').positive('Invalid account.'),
+		is_active: formBoolean()
+	})
+	.strict();
+
+export type ToggleAccount = z.infer<typeof toggleAccountSchema>;
+
+/**
+ * Account-detail attribute edit (`accounts/[account_id]` updateAttributes action). The four
+ * user-editable account attributes — name / account_type / scope / tax_treatment. Mirrors the
+ * manual-create field rules VERBATIM (name/scope free-text 1..200; enums from the shared
+ * account-constants, anti-drift with the DB CHECK). Deliberately does NOT include the aggregator
+ * / connection binding (deferred) nor is_active (that's the toggle path) — `.strict()` rejects
+ * any of those if posted (Lock 14 mass-assignment fence).
+ */
+export const updateAttributesSchema = z
+	.object({
+		name: z.string().trim().min(1, 'Name is required.').max(200, 'Name is too long.'),
+		account_type: z.enum(ACCOUNT_TYPES),
+		scope: z.string().trim().min(1, 'Scope is required.').max(200, 'Scope is too long.'),
+		tax_treatment: z.enum(TAX_TREATMENTS)
+	})
+	.strict();
+
+export type UpdateAttributes = z.infer<typeof updateAttributesSchema>;
+
 /**
  * Flatten a ZodError into `{ field: [messages] }` keyed by the top-level field.
  * Built from `error.issues` directly (stable across Zod v3/v4; avoids the
