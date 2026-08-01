@@ -36,9 +36,13 @@ const isoDate = () =>
 
 /**
  * Manual-account create (AC #1/#2) — mirrors manualAccountCreateSchema server-side.
- * `sub_cat_id` empty-string (the "Unsorted" option) coerces to null. Enum messages are
- * friendlier than the server's raw enum error — a UX nicety, NOT a loosening (same
- * value-set, same .strict()). Matched-tenant is a DB-enforced boundary, not checked here.
+ * Enum messages are friendlier than the server's raw enum error — a UX nicety, NOT a
+ * loosening (same value-set, same .strict()). Matched-tenant is a DB-enforced boundary,
+ * not checked here.
+ *
+ * Note: the account-level asset Sub-category (`sub_cat_id`) was removed from the product
+ * (dead field — nothing read it for allocation/NAV; allocation classifies per-asset via
+ * user_asset_category, not per-account). The DB column stays dormant; Backend passes null.
  */
 export const manualAccountCreateSchema = z
 	.object({
@@ -47,37 +51,11 @@ export const manualAccountCreateSchema = z
 		scope: z.string().trim().min(1, 'Scope is required.').max(200, 'Scope is too long.'),
 		tax_treatment: z.enum(TAX_TREATMENTS, { message: 'Choose a tax treatment.' }),
 		initial_value: currencyAmount(),
-		as_of_date: isoDate(),
-		sub_cat_id: z
-			.preprocess(
-				(v) => (v === '' || v === undefined || v === null ? null : v),
-				z.coerce.number().int().positive().nullable()
-			)
-			.default(null)
+		as_of_date: isoDate()
 	})
 	.strict();
 
 export type ManualAccountCreate = z.infer<typeof manualAccountCreateSchema>;
-
-/**
- * Sub-Cat reassignment (SELF-236) — mirrors the create form's `sub_cat_id` handling:
- * empty-string (the "Unsorted" option) coerces to null; otherwise a positive int id.
- * `.strict()` so no extra keys ride along. Matched-tenant remains a DB-enforced boundary
- * (fn_account_matched_sub_cat) — this is UX + shape only. Mirror the server
- * reassignSubCatSchema when Backend lands it (Backend owns the source of truth).
- */
-export const reassignSubCatSchema = z
-	.object({
-		sub_cat_id: z
-			.preprocess(
-				(v) => (v === '' || v === undefined || v === null ? null : v),
-				z.coerce.number().int().positive().nullable()
-			)
-			.default(null)
-	})
-	.strict();
-
-export type ReassignSubCat = z.infer<typeof reassignSubCatSchema>;
 
 /** Inactive-toggle (AC #3) — mirrors toggleActiveSchema server-side. */
 export const toggleActiveSchema = z

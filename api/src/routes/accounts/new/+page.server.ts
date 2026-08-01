@@ -1,19 +1,20 @@
 // accounts/new/+page.server.ts — manual (non-Plaid) account onboarding server surface.
 // SELF-201 §2.4.2 AC #1/#2. Backend-owned server source (ARCH §4.1 allowlist).
 //
-//  - load(): fetches the caller's asset-domain Sub-Cat taxonomy for the dropdown,
-//    RLS-scoped via the per-request anon client (users_id = auth.uid()).
-//  - actions.default: validates the six attributes + Sub-Cat with the .strict()
-//    schema + numeric battery, then calls the ATOMIC write-composition RPC
+//  - load(): auth guard only (bounce to /login when signed-out). The account-level
+//    asset Sub-Cat picker is removed — accounts are not classified per-account.
+//  - actions.default: validates the six attributes with the .strict() schema +
+//    numeric battery, then calls the ATOMIC write-composition RPC
 //    fn_create_manual_account (013, SECURITY INVOKER) which creates the account +
 //    the AcctSetup account_trans row in ONE transaction (Option A, F/CTO-ratified).
 //    NO hand-rolled two-insert sequence (non-atomic; account has no DELETE grant).
+//    p_sub_cat_id is passed NULL (the account-level asset Sub-Cat surface is removed;
+//    the 013 param stays dormant — a full column drop is a separate future ADR).
 //
 // No Plaid Link, no OAuth token, no credential prompt (PRD §2.4.2 verbatim).
 
 import { fail, redirect } from '@sveltejs/kit';
 import { manualAccountCreateSchema, fieldErrors } from '$lib/server/schemas/account';
-import { loadAssetSubCats } from '$lib/server/queries/taxonomy';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -21,10 +22,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	// Preserve where the user was headed so /login can bounce them back (SELF-285).
 	if (!user) throw redirect(303, `/login?redirectTo=${encodeURIComponent(url.pathname)}`);
 
-	// Asset-domain Sub-Cat options for the create picker — RLS-scoped, shared with the
-	// accounts/[account_id] reassignment picker (SELF-236) via loadAssetSubCats.
-	const subCats = await loadAssetSubCats(locals.supabase);
-	return { subCats };
+	return {};
 };
 
 export const actions: Actions = {
@@ -46,6 +44,9 @@ export const actions: Actions = {
 		// p_tax_treatment text, p_initial_value numeric, p_as_of_date date,
 		// p_sub_cat_id bigint default null) RETURNS bigint. EXECUTE granted to
 		// authenticated (anon denied). users_id is NOT a param — defaults to auth.uid().
+		// p_sub_cat_id is passed NULL: the account-level asset Sub-Cat surface is removed
+		// (accounts aren't classified per-account). The 013 param stays dormant; a full
+		// column/param drop is a separate future Architect ADR.
 		const { data: accountId, error } = await locals.supabase
 			.schema('pfin')
 			.rpc('fn_create_manual_account', {
@@ -55,19 +56,14 @@ export const actions: Actions = {
 				p_tax_treatment: v.tax_treatment,
 				p_initial_value: v.initial_value,
 				p_as_of_date: v.as_of_date,
-				p_sub_cat_id: v.sub_cat_id
+				p_sub_cat_id: null
 			});
 		// ──────────────────────────────────────────────────────────────────────
 
 		if (error) {
 			console.error('[accounts/new] create RPC failed:', error.message);
-			// The matched-tenant fence (fn_account_matched_sub_cat) raises on a
-			// cross-tenant sub_cat_id — surface that against the field; else generic.
-			const isSubCat = /sub_cat|Decision 3|matched-tenant/i.test(error.message);
 			return fail(422, {
-				errors: isSubCat
-					? { sub_cat_id: ['That Sub-Cat is not available.'] }
-					: { _form: ['Could not create the account. Please try again.'] },
+				errors: { _form: ['Could not create the account. Please try again.'] },
 				values: raw
 			});
 		}
