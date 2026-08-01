@@ -39,8 +39,9 @@ const isoDate = () =>
 /**
  * Manual-account create (AC #1/#2). Six user attributes. The account-level asset
  * Sub-Cat field is removed — accounts aren't classified per-account (allocation
- * classifies per-asset / per-transaction); the create action passes p_sub_cat_id
- * NULL to the dormant 013 param. `.strict()` rejects any stray posted `sub_cat_id`.
+ * classifies per-asset / per-transaction). The column + its param were physically
+ * dropped at migration 048 (Decision-3 #5 DROPPED); the create action calls the
+ * 6-arg fn_create_manual_account. `.strict()` rejects any stray posted `sub_cat_id`.
  */
 export const manualAccountCreateSchema = z
 	.object({
