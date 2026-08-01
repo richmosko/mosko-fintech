@@ -37,6 +37,7 @@ Run in parallel:
   - On `meta/workflow-fix-mermaid`: `docs(meta): fix Mermaid arrow in WORKFLOW`
   - On `meta/adr-010-tailwind-choice`: `docs(meta): land ADR-010 — Tailwind for styling`
 - HEREDOC body for non-trivial changes; one-liner subject is fine for simple edits.
+- **No raw `self-NNN` in the commit subject or body** (the integration scans commit messages — see the Issue-ID hygiene callout in step 3). Reference the documented feature by PR number + merge SHA, not its issue ID. The committed *file content* (CHANGELOG/MILESTONES/DECISIONS) keeps the IDs — that's exempt.
 
 Add the standard Claude trailer per global git instructions:
 
@@ -69,7 +70,13 @@ This SSH→HTTPS fallback is the mosko-specific extension to template's `/finish
 
 Use `gh pr create` with mosko's **elaborate PR body shape** per ADR-009 Decision 9.
 
-**Title:** matches the most recent commit subject (or ask user if multiple commits with mixed scopes).
+> **⚠️ Issue-ID hygiene (load-bearing — the Linear↔GitHub auto-close gate).** A doc/meta PR is *about* issues but does NOT complete them. The integration fires its issue automation on any `self-NNN` token in the **branch name, PR title, PR body, or commit messages** (NOT file diffs). So a doc PR that names a live `self-NNN` in its metadata will spuriously transition that issue on open/merge (this is why the F/CTO disabled the merged→Done auto-close; re-enabling is gated on doc PRs staying clean). **Rules for this skill's title / body / commits:**
+> - **Never write a raw `SELF-NNN` / `self-NNN` token** in the doc-PR title, body, or commit message. Reference the feature it documents by **PR number + merge SHA** instead (e.g. "the accounts-hub bundle, PR #269, merge `255af7d`") — never by its issue ID.
+> - The branch name already excludes IDs (`meta/<slug>` / `phase/<outer>-<slug>` per `/start-doc-update`) — keep it that way.
+> - **File CONTENT is exempt** — `CHANGELOG.md` / `MILESTONES.md` / `DECISIONS.md` may (and should) keep `SELF-NNN` in the committed text as the historical record; the integration scans PR/commit *metadata*, not diffs. The rule is about the PR title/body/commit-message ONLY.
+> - Neutralize any *incidental* mention of an unrelated live issue that would otherwise land in the body — do not name it. (See `feedback_branch_name_issue_id_autocloses_linear`.)
+
+**Title:** matches the most recent commit subject (or ask user if multiple commits with mixed scopes). **Must contain no `self-NNN` token** (per the hygiene rule above) — so the commit subject it mirrors must also be ID-free.
 
 **Body skeleton:**
 
