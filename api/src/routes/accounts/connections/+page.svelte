@@ -24,6 +24,7 @@
 	import type { PageData } from './$types';
 	import ConnectionStatusChip from '$lib/components/ConnectionStatusChip.svelte';
 	import ReauthControl from '$lib/components/ReauthControl.svelte';
+	import SyncNowControl from '$lib/components/SyncNowControl.svelte';
 	import { needsReauth } from '$lib/schemas/connection-status-constants';
 	import { providerLabel } from '$lib/accounts/connection-display';
 
@@ -93,13 +94,20 @@
 						/>
 					</div>
 
-					{#if c.is_active && needsReauth(c.connection_status)}
+					{#if c.is_active}
 						<div class="conn-action">
-							<ReauthControl
+							<SyncNowControl
 								source_id={c.source_id}
-								provider={c.provider}
 								institution_name={c.institution_name}
+								lastSyncedAt={c.last_successful_sync_at}
 							/>
+							{#if needsReauth(c.connection_status)}
+								<ReauthControl
+									source_id={c.source_id}
+									provider={c.provider}
+									institution_name={c.institution_name}
+								/>
+							{/if}
 						</div>
 					{/if}
 				</li>

@@ -63,6 +63,7 @@ export type SyncHistoryRow = {
 export function syncSourceLabel(source: string): string {
 	if (source === 'webhook') return 'Webhook';
 	if (source === 'scheduled_poll') return 'Scheduled';
+	if (source === 'manual') return 'Manual'; // SELF-317 user-initiated "Sync now" provenance
 	return source;
 }
 

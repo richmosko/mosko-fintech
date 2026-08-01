@@ -22,6 +22,7 @@
 	import StockSplitEntryForm from '$lib/components/StockSplitEntryForm.svelte';
 	import DuplicateCandidateList from '$lib/components/DuplicateCandidateList.svelte';
 	import SyncHistoryTable from '$lib/components/SyncHistoryTable.svelte';
+	import SyncNowControl from '$lib/components/SyncNowControl.svelte';
 	import TransactionRow from '$lib/components/TransactionRow.svelte';
 	import { subCatGroupsOf } from '$lib/transaction-util';
 
@@ -311,7 +312,16 @@
 	-->
 	{#if !isSourceOfTruth}
 		<section class="region" aria-label="Sync history">
-			<h2 class="section-title">Sync history</h2>
+			<div class="sync-head">
+				<h2 class="section-title">Sync history</h2>
+				<!--
+					Per-account "Sync now" (SELF-317) — the account's own linked source. On accept the
+					control polls via loader invalidation, so this panel re-fetches and the new
+					`source='manual'` row appears once the sync lands. No `lastSyncedAt` scalar on this
+					surface, so the poll runs its full window rather than short-circuiting on advance.
+				-->
+				<SyncNowControl source_id={String(account.linked_source_id)} />
+			</div>
 			<SyncHistoryTable rows={syncHistory} />
 		</section>
 	{/if}
@@ -446,7 +456,8 @@
 		color: var(--c-neg);
 		font-size: var(--fs-small);
 	}
-	.subcat-head {
+	.subcat-head,
+	.sync-head {
 		display: flex;
 		align-items: flex-start;
 		justify-content: space-between;
