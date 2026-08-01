@@ -5,7 +5,7 @@
 	synchronous paste-and-submit (1 leg): the user obtains a one-time setup token from the
 	SimpleFIN Bridge out-of-band, pastes it here, and we relay it once to the claim leg.
 
-	FLOW (temp/oq2-connect-seam-design.md §2/§3): paste setup token (+ optional label) →
+	FLOW (temp/oq2-connect-seam-design.md §2/§3): paste setup token →
 	POST /api/simplefin/connect → on 200 route to the SAME shared account-attributes flow
 	the Plaid path uses (mappingPath), handing off the same AccountRef[]. SimpleFIN refs
 	carry type='unknown', so the attributes flow simply starts each account's type
@@ -34,7 +34,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import Button from '$lib/components/Button.svelte';
-	import TextField from '$lib/components/TextField.svelte';
 	import {
 		submitSetupToken as defaultSubmit,
 		SimplefinRelayError,
@@ -70,7 +69,6 @@
 
 	// Bound to the textarea (two-way). Cleared the instant we submit (credential hygiene).
 	let setupToken = $state('');
-	let institutionName = $state('');
 
 	let status = $state<Status>('idle');
 	let errorMessage = $state('');
@@ -105,7 +103,6 @@
 			fieldError = 'Paste the one-time setup token from your SimpleFIN Bridge.';
 			return;
 		}
-		const label = institutionName.trim() || undefined;
 
 		// Credential hygiene: capture to a local const, then CLEAR the field from component
 		// state immediately — the token lives no longer than this single submit needs it.
@@ -113,9 +110,11 @@
 		status = 'submitting';
 
 		try {
-			const { accounts, linked_source_id } = await submitFn(token, label);
+			// No user-supplied institution label — a single SimpleFIN connection can span
+			// accounts at MANY institutions, so a one-label-per-connection field was misleading
+			// and was removed. institution_name is left provider-derived / null.
+			const { accounts, linked_source_id } = await submitFn(token, undefined);
 			status = 'idle';
-			institutionName = '';
 			// Carry the provider-blind result to the host (connect page). linked_source_id is
 			// null-coalesced until Backend confirms the relay always returns it — the
 			// attributes route fail-closes when it is absent.
@@ -179,14 +178,6 @@
 				<span id="sf-setup-token-err" class="field-error-msg" role="alert">{fieldError}</span>
 			{/if}
 		</div>
-
-		<TextField
-			label="Institution name (optional)"
-			name="sf-institution"
-			bind:value={institutionName}
-			hint="A label to help you recognize this connection (e.g. “Capital One”)."
-			autocomplete="off"
-		/>
 
 		{#if status === 'error'}
 			<p class="connect-error" role="alert">{errorMessage}</p>
