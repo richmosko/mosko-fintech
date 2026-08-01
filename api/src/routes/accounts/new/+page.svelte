@@ -13,7 +13,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import type { SubmitFunction } from '@sveltejs/kit';
-	import type { PageData, ActionData } from './$types';
+	import type { ActionData } from './$types';
 	import { ACCOUNT_TYPES, TAX_TREATMENTS } from '$lib/schemas/account-constants';
 	import { ACCOUNT_TYPE_LABELS, TAX_TREATMENT_LABELS } from '$lib/account-display';
 	import { manualAccountCreateSchema, fieldErrors } from '$lib/schemas/account';
@@ -21,7 +21,7 @@
 	import SelectField from '$lib/components/SelectField.svelte';
 	import Button from '$lib/components/Button.svelte';
 
-	let { data, form }: { data: PageData; form: ActionData } = $props();
+	let { form }: { form: ActionData } = $props();
 
 	// Sticky field values. Seeded from the server echo (`form.values`) so a no-JS POST
 	// still repopulates; with JS the bound state is the live source across a failed submit.
@@ -34,7 +34,6 @@
 	let tax_treatment = $state(v0.tax_treatment ?? '');
 	let initial_value = $state(v0.initial_value ?? '');
 	let as_of_date = $state(v0.as_of_date ?? '');
-	let sub_cat_id = $state(v0.sub_cat_id ?? '');
 
 	let clientErrors = $state<Record<string, string[]>>({});
 	let submitting = $state(false);
@@ -49,17 +48,6 @@
 	const typeOptions = ACCOUNT_TYPES.map((t) => ({ value: t, label: ACCOUNT_TYPE_LABELS[t] }));
 	const taxOptions = TAX_TREATMENTS.map((t) => ({ value: t, label: TAX_TREATMENT_LABELS[t] }));
 
-	// Sub-Cat options grouped by `cat` (accessible <optgroup>), display_order preserved
-	// by the server's ORDER BY. "Unsorted" posts empty → server coerces null.
-	const subCatGroups = $derived.by(() => {
-		const byCat = new Map<string, { value: string; label: string }[]>();
-		for (const s of data.subCats) {
-			if (!byCat.has(s.cat)) byCat.set(s.cat, []);
-			byCat.get(s.cat)!.push({ value: String(s.id), label: s.sub_cat });
-		}
-		return [...byCat.entries()].map(([cat, options]) => ({ label: cat, options }));
-	});
-
 	// use:enhance handler — client-validate, then let the POST proceed (server is boundary).
 	const enhanceHandler: SubmitFunction = ({ cancel }) => {
 		const parsed = manualAccountCreateSchema.safeParse({
@@ -68,8 +56,7 @@
 			scope,
 			tax_treatment,
 			initial_value,
-			as_of_date,
-			sub_cat_id
+			as_of_date
 		});
 		if (!parsed.success) {
 			clientErrors = fieldErrors(parsed.error);
@@ -175,16 +162,6 @@
 			required
 			errors={errors.as_of_date}
 			hint="The date the opening balance is accurate as of."
-		/>
-
-		<SelectField
-			label="Sub-category"
-			name="sub_cat_id"
-			bind:value={sub_cat_id}
-			errors={errors.sub_cat_id}
-			hint="Optional — leave as Unsorted to categorise later."
-			placeholder={{ value: '', label: 'Unsorted' }}
-			groups={subCatGroups}
 		/>
 
 		<div class="actions">
