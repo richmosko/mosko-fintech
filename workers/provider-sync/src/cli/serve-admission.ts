@@ -20,6 +20,7 @@ import { mintLinkToken } from '../http/linkToken.js';
 import { loadAdmissionConfig } from '../http/admissionConfig.js';
 import { fetchWebhookVerificationKey, type WebhookKeyClient } from '../http/webhookVerificationKey.js';
 import { syncLinkedSource, productionSyncSourceDeps } from '../http/triggerSync.js';
+import { manualSync, productionManualSyncDeps, createSyncDebounce } from '../http/manualSync.js';
 import { todayIso } from './poll.js';
 import {
 	createAdmissionServer,
@@ -35,6 +36,11 @@ export async function main(): Promise<void> {
 	const admission = loadAdmissionConfig(); // CA-1 guard + shared secret (fail-closed).
 
 	const plaid = buildPlaidClient(config) as unknown as PlaidClientLike;
+
+	// SELF-317 R1: ONE debounce/in-flight store for the process lifetime (the always-on admission
+	// process). Shared across every manual-sync call so the 60s/source window + in-flight flag
+	// persist between requests (in-memory; resets on restart — acceptable per design §5).
+	const syncDebounce = createSyncDebounce();
 
 	// The dbFor FACTORY (not this file, not the adapter) constructs the raw Postgres client via
 	// TenantBoundClient.forTenant → the fence-tbc-node LEG-1 anchor stays the sole construction
@@ -86,6 +92,10 @@ export async function main(): Promise<void> {
 		// SELF-206 AC5: on-demand incremental sync. syncDate is computed PER CALL (todayIso) — this
 		// is a long-running server, not a one-shot cron, so the date must not be frozen at boot.
 		syncSource: (input) => syncLinkedSource(input, productionSyncSourceDeps(config, todayIso(new Date()))),
+		// SELF-317: manual "Sync now". syncDate is computed PER CALL (long-running server — never
+		// frozen at boot); the debounce store is the SHARED process-lifetime instance (R1).
+		manualSync: (input) =>
+			manualSync(productionManualSyncDeps(config, todayIso(new Date()), syncDebounce), input),
 		logger: (m) => console.log(`[admission] ${m}`)
 	});
 

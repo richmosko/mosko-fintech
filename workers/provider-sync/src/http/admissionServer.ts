@@ -37,6 +37,7 @@ import { SetupTokenInvalidError } from '../adapters/SimpleFINAdapter.js';
 import { ADMISSION_SECRET_HEADER, verifySharedSecret } from './sharedSecret.js';
 import type { PublicJwk } from './webhookVerificationKey.js';
 import type { SyncSourceInput, SyncSourceResult } from './triggerSync.js';
+import type { ManualSyncInput, ManualSyncResult } from './manualSync.js';
 
 /** Max inbound body. A link_token request / public_token handoff is tiny; anything larger is
  *  abuse → reject (fail-closed) rather than buffer. */
@@ -128,6 +129,20 @@ const syncSourceBodySchema = z
 	})
 	.strict();
 
+// ── SELF-317 manual "Sync now" leg — a NEW dedicated route on this SAME admission server (NOT an
+//    overload of /admission/sync, which carries the 045 webhook's C-X2 gate-at-completion contract).
+//    Same private-bind listener + same C6-6 constant-time shared-secret gate → a route on the RT-27
+//    surface (no new §10 instance). `ownerUserId` is the session-derived tenant api/src forwards
+//    (C6-3; never browser-sourced); `source_id` (OPTIONAL — absent ⇒ sync-all) is a digit-string
+//    bigint the worker intersects with the RLS-scoped enumerated set (Sec C2). `.strict()` —
+//    mass-assignment fence (Lock 14 mod #1).
+const manualSyncBodySchema = z
+	.object({
+		ownerUserId: z.string().uuid(),
+		source_id: z.string().regex(/^\d+$/).optional()
+	})
+	.strict();
+
 export interface ReauthStartInput {
 	provider: 'plaid' | 'simplefin';
 	linkedSourceId: bigint;
@@ -173,11 +188,15 @@ export interface AdmissionServerDeps {
 	fetchWebhookVerificationKey(kid: string): Promise<PublicJwk>;
 	/** SELF-206 AC5: on-demand incremental Plaid sync for a verified webhook (resolved tenant). */
 	syncSource(input: SyncSourceInput): Promise<SyncSourceResult>;
+	/** SELF-317: user-initiated "Sync now" — validates + debounces synchronously, returns per-source
+	 *  dispositions, and runs the actual sync(s) fire-and-forget (A2). Resolves fast (before the 202). */
+	manualSync(input: ManualSyncInput): Promise<ManualSyncResult>;
 	/** Token-free diagnostic logger (never receives a body/secret/token). */
 	logger?: (message: string) => void;
 }
 
 const OK = 200;
+const ACCEPTED = 202;
 const BAD_REQUEST = 400;
 const UNAUTHORIZED = 401;
 const NOT_FOUND = 404;
@@ -317,6 +336,10 @@ export function createAdmissionServer(deps: AdmissionServerDeps): Server {
 		if (path === '/admission/sync') {
 			if (method !== 'POST') return sendError(res, METHOD_NOT_ALLOWED, 'method_not_allowed');
 			return handleSyncSource(req, res);
+		}
+		if (path === '/admission/manual-sync') {
+			if (method !== 'POST') return sendError(res, METHOD_NOT_ALLOWED, 'method_not_allowed');
+			return handleManualSync(req, res);
 		}
 		return sendError(res, NOT_FOUND, 'not_found');
 	}
@@ -541,6 +564,38 @@ export function createAdmissionServer(deps: AdmissionServerDeps): Server {
 		} catch (err) {
 			log(`admission: 502 sync failed (${err instanceof Error ? err.message : 'error'})`);
 			return sendError(res, BAD_GATEWAY, 'sync_failed');
+		}
+	}
+
+	// SELF-317 — user-initiated "Sync now". ownerUserId is the session-derived tenant api/src forwards
+	// (C6-3; never browser-sourced). deps.manualSync validates + debounces SYNCHRONOUSLY and runs the
+	// actual sync(s) fire-and-forget (A2) → this handler resolves FAST and returns 202 + per-source
+	// dispositions (triggered|debounced). resolveCredential double-binds source+tenant downstream, and
+	// the enumeration is RLS-scoped (Sec C1/C2) — a foreign source_id is a no-op, never a cross-tenant
+	// fetch. C4: route + status + a coarse source count only — never body/credential/token.
+	async function handleManualSync(req: IncomingMessage, res: ServerResponse): Promise<void> {
+		let body: unknown;
+		try {
+			body = await readJsonBody(req);
+		} catch (err) {
+			const reason = err instanceof Error ? err.message : '';
+			return sendError(res, reason === 'BODY_TOO_LARGE' ? PAYLOAD_TOO_LARGE : BAD_REQUEST, 'invalid_request');
+		}
+		const parsed = manualSyncBodySchema.safeParse(body);
+		if (!parsed.success) return sendError(res, BAD_REQUEST, 'invalid_request');
+
+		try {
+			const result = await deps.manualSync({
+				ownerUserId: parsed.data.ownerUserId,
+				...(parsed.data.source_id ? { sourceId: parsed.data.source_id } : {})
+			});
+			log(`admission: 202 manual-sync accepted (sources=${result.sources.length})`);
+			return sendJson(res, ACCEPTED, { accepted: true, sources: result.sources });
+		} catch (err) {
+			// Phase-1 (enumeration/debounce) failure only — the background sync(s) never reject here
+			// (A2 fire-and-forget is guarded worker-side). Envelope stays scrubbed (C6-5/C4).
+			log(`admission: 502 manual-sync failed (${err instanceof Error ? err.message : 'error'})`);
+			return sendError(res, BAD_GATEWAY, 'manual_sync_failed');
 		}
 	}
 }

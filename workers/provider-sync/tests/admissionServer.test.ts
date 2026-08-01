@@ -49,6 +49,7 @@ async function start(deps: Partial<AdmissionServerDeps> = {}): Promise<string> {
 			use: 'sig'
 		})),
 		syncSource: vi.fn(async () => ({ sourceId: '42', inserted: 3, skipped: 1, unresolvedAccounts: 0 })),
+		manualSync: vi.fn(async () => ({ sources: [{ source_id: '42', disposition: 'triggered' as const }] })),
 		logger: vi.fn(),
 		...deps
 	};
@@ -481,5 +482,66 @@ describe('SELF-206 sync — on-demand incremental sync trigger (AC5)', () => {
 		const res = await post(`${url}/admission/sync`, { ownerUserId: UUID, linked_source_id: '42' }, authed);
 		expect(res.status).toBe(502);
 		expect(await res.json()).toEqual({ error: 'sync_failed' });
+	});
+});
+
+describe('SELF-317 manual-sync — user-initiated "Sync now" (A2 return-fast 202)', () => {
+	it('401 without the shared secret — manualSync never invoked', async () => {
+		const manualSync = vi.fn();
+		const url = await start({ manualSync });
+		const res = await post(`${url}/admission/manual-sync`, { ownerUserId: UUID });
+		expect(res.status).toBe(401);
+		expect(manualSync).not.toHaveBeenCalled();
+	});
+
+	it('sync-all (source_id absent) → 202 { accepted, sources }; ownerUserId forwarded, no sourceId', async () => {
+		const manualSync = vi.fn(async () => ({
+			sources: [
+				{ source_id: '42', disposition: 'triggered' as const },
+				{ source_id: '77', disposition: 'debounced' as const }
+			]
+		}));
+		const url = await start({ manualSync });
+		const res = await post(`${url}/admission/manual-sync`, { ownerUserId: UUID }, authed);
+		expect(res.status).toBe(202);
+		expect(await res.json()).toEqual({
+			accepted: true,
+			sources: [
+				{ source_id: '42', disposition: 'triggered' },
+				{ source_id: '77', disposition: 'debounced' }
+			]
+		});
+		expect(manualSync).toHaveBeenCalledWith({ ownerUserId: UUID });
+	});
+
+	it('per-source (source_id present) → 202; sourceId forwarded verbatim', async () => {
+		const manualSync = vi.fn(async () => ({ sources: [{ source_id: '42', disposition: 'triggered' as const }] }));
+		const url = await start({ manualSync });
+		const res = await post(`${url}/admission/manual-sync`, { ownerUserId: UUID, source_id: '42' }, authed);
+		expect(res.status).toBe(202);
+		expect(manualSync).toHaveBeenCalledWith({ ownerUserId: UUID, sourceId: '42' });
+	});
+
+	it('400 on a bad uuid / non-digit source_id / extra field (Zod .strict boundary)', async () => {
+		const manualSync = vi.fn();
+		const url = await start({ manualSync });
+		expect((await post(`${url}/admission/manual-sync`, { ownerUserId: 'nope' }, authed)).status).toBe(400);
+		expect(
+			(await post(`${url}/admission/manual-sync`, { ownerUserId: UUID, source_id: 'abc' }, authed)).status
+		).toBe(400);
+		expect(
+			(await post(`${url}/admission/manual-sync`, { ownerUserId: UUID, extra: 1 }, authed)).status
+		).toBe(400);
+		expect(manualSync).not.toHaveBeenCalled();
+	});
+
+	it('502 generic envelope when phase-1 throws (no detail leaks)', async () => {
+		const manualSync = vi.fn(async () => {
+			throw new Error('enumeration failed for tenant');
+		});
+		const url = await start({ manualSync });
+		const res = await post(`${url}/admission/manual-sync`, { ownerUserId: UUID }, authed);
+		expect(res.status).toBe(502);
+		expect(await res.json()).toEqual({ error: 'manual_sync_failed' });
 	});
 });
