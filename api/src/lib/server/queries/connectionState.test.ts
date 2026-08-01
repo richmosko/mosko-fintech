@@ -6,6 +6,9 @@ import {
 	loadConnectionStates,
 	summarizeHealth,
 	loadConnectionHealth,
+	loadConnectionState,
+	loadAccountsBySource,
+	loadAccountsForSource,
 	type ConnectionState
 } from './connectionState';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -116,6 +119,128 @@ describe('loadConnectionHealth', () => {
 		const { supabase } = makeSupabase({ data: null, error: { message: 'boom' } });
 		const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
 		expect(await loadConnectionHealth(supabase)).toEqual({ reauthCount: 0, institutionDownCount: 0 });
+		spy.mockRestore();
+	});
+});
+
+/** Mock a `.schema().from().select().eq().maybeSingle()` chain (targeted single-row read). */
+function makeSingleSupabase(result: { data?: unknown; error?: unknown }) {
+	const maybeSingle = vi.fn(async () => result);
+	const eq = vi.fn(() => ({ maybeSingle }));
+	const select = vi.fn(() => ({ eq }));
+	const from = vi.fn(() => ({ select }));
+	const schema = vi.fn(() => ({ from }));
+	return { supabase: { schema } as unknown as SupabaseClient, eq, from };
+}
+
+describe('loadConnectionState', () => {
+	it('reads ONE connection by source_id and maps linked_source_id → source_id', async () => {
+		const { supabase, eq } = makeSingleSupabase({ data: VIEW_ROW, error: null });
+		const state = await loadConnectionState(supabase, '42');
+		expect(eq).toHaveBeenCalledWith('linked_source_id', '42');
+		expect(state).toEqual({
+			source_id: '42',
+			provider: 'plaid',
+			institution_name: 'Chase',
+			is_active: true,
+			connection_status: 'login_required',
+			status_class: 'login_required',
+			last_successful_sync_at: '2026-07-20T10:00:00Z'
+		});
+	});
+
+	it('non-owner / nonexistent source → null (no row, RLS-filtered → 404 upstream)', async () => {
+		const { supabase } = makeSingleSupabase({ data: null, error: null });
+		expect(await loadConnectionState(supabase, '999')).toBeNull();
+	});
+
+	it('fail-soft: read error → null', async () => {
+		const { supabase } = makeSingleSupabase({ data: null, error: { message: 'boom' } });
+		const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+		expect(await loadConnectionState(supabase, '42')).toBeNull();
+		spy.mockRestore();
+	});
+});
+
+const ACCT = (over: Record<string, unknown> = {}) => ({
+	account_id: 1,
+	name: 'Checking',
+	account_type: 'depository',
+	is_active: true,
+	linked_source_id: 42,
+	...over
+});
+
+describe('loadAccountsBySource', () => {
+	/** Mock a `.schema().from().select().not().order()` chain. */
+	function makeMulti(result: { data?: unknown; error?: unknown }) {
+		const order = vi.fn(async () => result);
+		const not = vi.fn(() => ({ order }));
+		const select = vi.fn(() => ({ not }));
+		const from = vi.fn(() => ({ select }));
+		const schema = vi.fn(() => ({ from }));
+		return { supabase: { schema } as unknown as SupabaseClient, not };
+	}
+
+	it('groups linked accounts by source_id (numeric-string key); excludes NULL defensively', async () => {
+		const { supabase, not } = makeMulti({
+			data: [
+				ACCT({ account_id: 1, linked_source_id: 42 }),
+				ACCT({ account_id: 2, is_active: false, linked_source_id: 42 }),
+				ACCT({ account_id: 3, linked_source_id: 7 }),
+				ACCT({ account_id: 4, linked_source_id: null }) // defensive guard
+			],
+			error: null
+		});
+		const { accountsBySource, error } = await loadAccountsBySource(supabase);
+		expect(not).toHaveBeenCalledWith('linked_source_id', 'is', null);
+		expect(error).toBe(false);
+		expect(accountsBySource.get('42')).toEqual([
+			{ account_id: 1, name: 'Checking', account_type: 'depository', is_active: true },
+			{ account_id: 2, name: 'Checking', account_type: 'depository', is_active: false }
+		]);
+		expect(accountsBySource.get('7')).toHaveLength(1);
+		expect(accountsBySource.has('null')).toBe(false);
+	});
+
+	it('fail-soft: read error → { empty map, error:true }', async () => {
+		const { supabase } = makeMulti({ data: null, error: { message: 'boom' } });
+		const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const { accountsBySource, error } = await loadAccountsBySource(supabase);
+		expect(accountsBySource.size).toBe(0);
+		expect(error).toBe(true);
+		spy.mockRestore();
+	});
+});
+
+describe('loadAccountsForSource', () => {
+	/** Mock a `.schema().from().select().eq().order()` chain. */
+	function makeForSource(result: { data?: unknown; error?: unknown }) {
+		const order = vi.fn(async () => result);
+		const eq = vi.fn(() => ({ order }));
+		const select = vi.fn(() => ({ eq }));
+		const from = vi.fn(() => ({ select }));
+		const schema = vi.fn(() => ({ from }));
+		return { supabase: { schema } as unknown as SupabaseClient, eq };
+	}
+
+	it('returns this connection\'s accounts (active AND inactive)', async () => {
+		const { supabase, eq } = makeForSource({
+			data: [ACCT({ account_id: 1 }), ACCT({ account_id: 2, is_active: false })],
+			error: null
+		});
+		const accounts = await loadAccountsForSource(supabase, '42');
+		expect(eq).toHaveBeenCalledWith('linked_source_id', '42');
+		expect(accounts).toEqual([
+			{ account_id: 1, name: 'Checking', account_type: 'depository', is_active: true },
+			{ account_id: 2, name: 'Checking', account_type: 'depository', is_active: false }
+		]);
+	});
+
+	it('fail-soft: read error → []', async () => {
+		const { supabase } = makeForSource({ data: null, error: { message: 'boom' } });
+		const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+		expect(await loadAccountsForSource(supabase, '42')).toEqual([]);
 		spy.mockRestore();
 	});
 });

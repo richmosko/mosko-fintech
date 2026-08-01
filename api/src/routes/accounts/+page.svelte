@@ -160,7 +160,7 @@
 	<!-- Footer links (NO gross total / NAV per PM-2 — the number lives on the dashboard). -->
 	<footer class="hub-footer">
 		<a class="foot-link" href="/">See your net worth →</a>
-		<a class="foot-link" href="/accounts/connections">Manage connections →</a>
+		<a class="foot-link" href="/accounts/connections">Manage aggregator connections →</a>
 	</footer>
 </main>
 
