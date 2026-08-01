@@ -63,6 +63,7 @@
 	type Row = {
 		ref: AccountRef;
 		recommended: boolean; // was account_type pre-seeded from adapter metadata?
+		include: boolean; // import this account? (unchecked → ignored, never landed)
 		name: string;
 		scope: string;
 		tax_treatment: string;
@@ -76,6 +77,9 @@
 			return {
 				ref,
 				recommended: rec !== undefined,
+				// Default = import. Plaid already filtered at Link; SimpleFIN grants ALL of a token's
+				// accounts (no share-selection step), so this checkbox IS the SimpleFIN import filter.
+				include: true,
 				name: ref.name ?? '',
 				scope: '',
 				tax_treatment: '',
@@ -86,6 +90,7 @@
 	);
 
 	const hasAccounts = $derived(rows.length > 0);
+	const includedCount = $derived(rows.filter((r) => r.include).length);
 	// linked_source_id is required to persist (it ties the accounts to their pfin.linked_source
 	// row). If the carry is present but the id is missing, we can render/validate but not save.
 	const canPersist = $derived(hasAccounts && linkedSourceId !== null);
@@ -105,17 +110,21 @@
 	const typeOptions = ACCOUNT_TYPES.map((t) => ({ value: t, label: ACCOUNT_TYPE_LABELS[t] }));
 	const taxOptions = TAX_TREATMENTS.map((t) => ({ value: t, label: TAX_TREATMENT_LABELS[t] }));
 
-	/** Build the validated submit envelope from row state (also the JSON `payload` shape). */
+	/** Build the validated submit envelope from row state (also the JSON `payload` shape).
+	 *  ONLY included accounts are landed — an ignored account is simply absent from the payload
+	 *  (the fn_land_linked_accounts RPC lands one row per element, so absence = not imported). */
 	function buildEnvelope() {
 		return {
 			linked_source_id: linkedSourceId ?? '',
-			accounts: rows.map((r) => ({
-				account_id: r.ref.account_id,
-				name: r.name,
-				scope: r.scope,
-				tax_treatment: r.tax_treatment,
-				account_type: r.account_type
-			}))
+			accounts: rows
+				.filter((r) => r.include)
+				.map((r) => ({
+					account_id: r.ref.account_id,
+					name: r.name,
+					scope: r.scope,
+					tax_treatment: r.tax_treatment,
+					account_type: r.account_type
+				}))
 		};
 	}
 
@@ -123,10 +132,16 @@
 	// via $derived so the hidden input reflects current row state at submit time.
 	const payloadJson = $derived(JSON.stringify(buildEnvelope()));
 
-	/** Per-row + envelope client validation. Returns true when everything is valid. */
+	/** Per-row + envelope client validation. Returns true when everything is valid.
+	 *  Only INCLUDED rows are validated — an ignored account carries no attributes to check
+	 *  (its fields are hidden) and must not block submit. */
 	function validate(): boolean {
 		let ok = true;
 		for (const r of rows) {
+			if (!r.include) {
+				r.errors = {};
+				continue;
+			}
 			const parsed = connectAccountAttributesSchema.safeParse({
 				account_id: r.ref.account_id,
 				name: r.name,
@@ -136,6 +151,11 @@
 			});
 			r.errors = parsed.success ? {} : fieldErrors(parsed.error);
 			if (!parsed.success) ok = false;
+		}
+		// At least one account must be selected to import (else the payload has 0 accounts).
+		if (includedCount === 0) {
+			formError = 'Select at least one account to import.';
+			return false;
 		}
 		// Envelope-level checks (linked_source_id present, ≥1 account).
 		const env = connectAttributesSubmitSchema.safeParse(buildEnvelope());
@@ -203,9 +223,10 @@
 		</section>
 	{:else}
 		<p class="lede">
-			You connected {rows.length}
-			{rows.length === 1 ? 'account' : 'accounts'}. Give each one a name and tell us how to
-			track it. We suggested a type where we could — change it if it's not right.
+			This connection has {rows.length}
+			{rows.length === 1 ? 'account' : 'accounts'}. Choose which to import — then give each a
+			name and tell us how to track it. We suggested a type where we could; change it if it's
+			not right. (Importing {includedCount} of {rows.length}.)
 		</p>
 
 		{#if !canPersist}
@@ -222,7 +243,11 @@
 			<input type="hidden" name="payload" value={payloadJson} />
 
 			{#each rows as row, i (row.ref.account_id)}
-				<fieldset class="region card account" aria-labelledby={`acct-${i}-title`}>
+				<fieldset
+					class="region card account"
+					class:ignored={!row.include}
+					aria-labelledby={`acct-${i}-title`}
+				>
 					<legend class="account-legend">
 						<span class="account-index">Account {i + 1} of {rows.length}</span>
 						<span id={`acct-${i}-title`} class="account-title">
@@ -233,6 +258,14 @@
 						{/if}
 					</legend>
 
+					<!-- Import/ignore selection. Unchecked → this account is excluded from the payload
+					     (never landed) and its attribute fields are hidden (nothing to fill in). -->
+					<label class="import-toggle">
+						<input type="checkbox" bind:checked={row.include} />
+						<span>{row.include ? 'Import this account' : "Ignore — don't import"}</span>
+					</label>
+
+					{#if row.include}
 					<TextField
 						label="Account name"
 						name={`name-${i}`}
@@ -277,6 +310,9 @@
 						placeholder={{ value: '', label: 'Select…' }}
 						options={taxOptions}
 					/>
+					{:else}
+						<p class="ignored-note">This account won't be imported. Check the box above to include it.</p>
+					{/if}
 				</fieldset>
 			{/each}
 
@@ -290,9 +326,11 @@
 					variant="primary"
 					type="submit"
 					loading={submitState === 'submitting'}
-					disabled={!canPersist}
+					disabled={!canPersist || includedCount === 0}
 				>
-					Save accounts
+					{includedCount === rows.length
+						? `Import ${includedCount === 1 ? 'account' : `all ${includedCount} accounts`}`
+						: `Import ${includedCount} of ${rows.length}`}
 				</Button>
 			</div>
 		</form>
@@ -404,6 +442,31 @@
 		font-size: var(--fs-small);
 		color: var(--c-text-secondary);
 		font-family: var(--font-num);
+	}
+	/* Import/ignore toggle — neutral ramp (canary --c-attn-* stays reserved for staleness/re-auth). */
+	.import-toggle {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+		font-size: var(--fs-small);
+		font-weight: var(--weight-med);
+		color: var(--c-text-primary);
+		cursor: pointer;
+	}
+	.import-toggle input {
+		accent-color: var(--c-accent);
+		width: 1rem;
+		height: 1rem;
+	}
+	/* An ignored account: dim the card so it reads as excluded, but keep it legible + toggleable. */
+	.account.ignored {
+		opacity: 0.6;
+		background: var(--c-surface-alt);
+	}
+	.ignored-note {
+		margin: 0;
+		font-size: var(--fs-small);
+		color: var(--c-text-muted);
 	}
 	.notice {
 		margin: 0;
