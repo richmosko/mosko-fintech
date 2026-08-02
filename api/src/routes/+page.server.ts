@@ -11,6 +11,7 @@
 
 import { redirect } from '@sveltejs/kit';
 import { loadNetWorthView } from '$lib/server/queries/netWorth';
+import { loadNavComposition } from '$lib/server/queries/navComposition';
 import { loadStaleness } from '$lib/server/queries/staleness';
 import { EMPTY_STALENESS } from '$lib/staleness/stale-constituent';
 import type { PageServerLoad } from './$types';
@@ -40,5 +41,19 @@ export const load: PageServerLoad = async ({ locals }) => {
 		staleness = EMPTY_STALENESS;
 	}
 
-	return { netWorth, hasAccounts, asOf, staleness };
+	// §2.1.5 NAV-composition table (V1.1 / SELF-226). Same FAIL-SOFT posture as staleness above:
+	// a composition-read failure must NEVER take down the §2.1.1 headline netWorth — degrade to
+	// `null` (the table just doesn't render; the headline still shows). loadNavComposition() fails
+	// soft internally; this try/catch is the belt-and-suspenders boundary so an unexpected throw
+	// can't take down the NAV surface. asOf is passed explicitly so the composition foots to the
+	// headline's fn_compute_nav(asOf, true) by construction (051 FOOT-TO-NAV EXACT).
+	let composition = null;
+	try {
+		composition = await loadNavComposition(locals.supabase, asOf);
+	} catch (err) {
+		console.error('[+page.server] composition load threw; degrading to null:', err);
+		composition = null;
+	}
+
+	return { netWorth, hasAccounts, asOf, staleness, composition };
 };

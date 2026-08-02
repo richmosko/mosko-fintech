@@ -20,6 +20,7 @@
 <script lang="ts">
 	import type { PageData } from './$types';
 	import StaleConstituentBadge from '$lib/components/StaleConstituentBadge.svelte';
+	import NavCompositionTable from '$lib/components/NavCompositionTable.svelte';
 	import { EMPTY_STALENESS } from '$lib/staleness/stale-constituent';
 
 	let { data }: { data: PageData } = $props();
@@ -27,6 +28,11 @@
 	// Loader field Backend wires (`+page.server.ts` → `046` read). Default to the healthy
 	// zero-value so the surface renders cleanly before/if the field is absent (no silent throw).
 	const staleness = $derived(data.staleness ?? EMPTY_STALENESS);
+
+	// §2.1.5 composition build-up (SELF-226). Backend threads the `051` fn_nav_composition tree
+	// through the loader as `data.composition`, FAIL-SOFT to `null` (composition-read failure must
+	// never take down the headline). `null` → the table simply doesn't render; the headline stays.
+	const composition = $derived(data.composition ?? null);
 
 	// Whole-dollar USD — the headline reads cleaner without cents. Negative values render
 	// a leading minus (in primary ink, per the value-color fence above).
@@ -82,14 +88,41 @@
 				staleItems={staleness.stale_items}
 			/>
 		</section>
+
+		<!-- §2.1.5 composition foot (SELF-226) — the build-up below the headline on the single
+		     canvas (P2 number-first). Fail-soft: renders only when the composition load succeeded;
+		     absent → the headline still stands on its own. -->
+		{#if composition}
+			<section class="composition" aria-labelledby="composition-label">
+				<h2 id="composition-label" class="section-label">Composition</h2>
+				<NavCompositionTable {composition} />
+			</section>
+		{/if}
 	{/if}
 </main>
 
 <style>
 	.dashboard {
-		max-width: 40rem;
+		max-width: 48rem;
 		margin: 0 auto;
 		padding: var(--space-7) var(--space-5);
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-6);
+	}
+
+	/* ── §2.1.5 composition foot ──────────────────────────────────────────────── */
+	.composition {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-3);
+	}
+	.section-label {
+		margin: 0;
+		font: var(--weight-semi) var(--fs-h3) / var(--lh-tight) var(--font-ui);
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+		color: var(--c-text-secondary);
 	}
 
 	/* ── headline ─────────────────────────────────────────────────────────── */
