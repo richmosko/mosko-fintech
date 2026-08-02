@@ -100,6 +100,31 @@ def test_update_table_all(backend):
     backend.update_table_all(sym_list=SYMBOL_LIST)
 
 
+# ---------------------------------------------------------------------------
+# SELF-214 W-1 daily-NAV checkpoint worker (impersonation). Live legs require
+# migration 054 (pfin.nav_daily) applied AND the connecting role able to
+# `SET ROLE authenticated` (see the Sec/DevOps flag). Forward-only.
+# ---------------------------------------------------------------------------
+@pytest.mark.integration
+def test_nav_daily_enumerates_active_users(nav_worker):
+    # Enumeration is a service_role read on pfin.account — no 054 dependency.
+    user_ids = nav_worker.active_account_user_ids()
+    assert isinstance(user_ids, list)
+
+
+@pytest.mark.integration
+def test_nav_daily_run(nav_worker):
+    # Full W-1 run: impersonate each active-account tenant, compute
+    # fn_compute_nav(current_date, true) under RLS, append to pfin.nav_daily.
+    # Idempotent: run twice; second run must be a clean no-op (ON CONFLICT DO
+    # NOTHING), not an error. Requires migration 054 applied.
+    summary_1 = nav_worker.run()
+    summary_2 = nav_worker.run()
+    assert summary_1["failed"] == 0
+    assert summary_2["failed"] == 0
+    assert summary_1["total"] == summary_2["total"]
+
+
 @pytest.mark.deployment
 def test_update_table_all_search():
     logger.info("Perform Full Symbol Search. Update All records...")

@@ -40,3 +40,6 @@ Thumbs.db
 *.swo
 .vscode/
 .idea/
+
+# Python editable-install artifacts
+*.egg-info/

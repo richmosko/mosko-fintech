@@ -15,6 +15,8 @@ Description:
     returns a working engine.
 """
 
+import json
+
 import pytest
 import sqlalchemy as sqla
 
@@ -24,7 +26,25 @@ from pfin_back_etl.connection import (
     TenantBindingError,
     _is_tenant_exempt,
     _statement_carries_users_id,
+    _check_tenant_statement,
+    _IMPERSONATION_KEY,
+    _JWT_CLAIMS_GUC,
 )
+
+# Two synthetic tenant uuids for the impersonation / cross-tenant assertion tests.
+_UID_A = "11111111-1111-1111-1111-111111111111"
+_UID_B = "22222222-2222-2222-2222-222222222222"
+
+
+def _claims_stmt():
+    """The impersonation-establishing statement shape emitted by impersonate()."""
+    return f"select set_config('{_JWT_CLAIMS_GUC}', :claims, true)"
+
+
+def _claims_params(uid):
+    # Mirrors impersonate(): includes the aal2 claim required by the 025 backstop
+    # (054 WORKER NOTE) so a totp/passkey user's underlying reads are not zeroed.
+    return {"claims": json.dumps({"sub": uid, "role": "authenticated", "aal": "aal2"})}
 
 # In-memory SQLite — no creds, no Postgres. Engine creation + execution work
 # identically for exercising the factory + the assertion event listener.
@@ -154,3 +174,142 @@ def test_non_exempt_statement_requires_users_id():
         )
         is False
     )
+
+
+# --------------------------------------------------------------------------- #
+# SELF-214 W-1 — firmed impersonation-aware per-tenant assertion.
+#   _check_tenant_statement is the pure decision core (mutates an `info` dict =
+#   conn.info; raises TenantBindingError on an unbound-tenant statement).
+# --------------------------------------------------------------------------- #
+class TestImpersonationAssertion:
+    """Fail-closed coverage for the firmed for_tenant() assertion (W-1)."""
+
+    @pytest.mark.unit
+    def test_bare_read_without_binding_fails_closed(self):
+        """A read carrying no users_id and no impersonation is rejected — the
+        fence that stops a for_tenant(A) connection acting tenant-less."""
+        info = {}
+        with pytest.raises(TenantBindingError):
+            _check_tenant_statement(
+                info, "select pfin.fn_compute_nav(current_date, true)", {}, _UID_A
+            )
+
+    @pytest.mark.unit
+    def test_claims_op_establishes_impersonation(self):
+        """set_config('request.jwt.claims', …sub=A…) carrying the bound uid marks
+        impersonation active for A on the connection."""
+        info = {}
+        _check_tenant_statement(info, _claims_stmt(), _claims_params(_UID_A), _UID_A)
+        assert info[_IMPERSONATION_KEY] == _UID_A
+
+    @pytest.mark.unit
+    def test_impersonated_read_is_allowed(self):
+        """Once impersonation for A is active, a bare INVOKER read (no literal uid)
+        is allowed — RLS/auth.uid() enforces isolation."""
+        info = {}
+        _check_tenant_statement(info, _claims_stmt(), _claims_params(_UID_A), _UID_A)
+        # Must NOT raise:
+        _check_tenant_statement(
+            info, "select pfin.fn_compute_nav(current_date, true)", {}, _UID_A
+        )
+
+    @pytest.mark.unit
+    def test_literal_write_allowed_without_impersonation(self):
+        """The nav_daily INSERT carries users_id literally → allowed as a direct
+        write even after impersonation is torn down (it runs as service_role)."""
+        info = {}
+        stmt = (
+            "insert into pfin.nav_daily (users_id, nav_date, nav_value) "
+            "values (:uid, current_date, :nav) "
+            "on conflict (users_id, nav_date) do nothing"
+        )
+        _check_tenant_statement(info, stmt, {"uid": _UID_A, "nav": 100}, _UID_A)
+
+    @pytest.mark.unit
+    def test_cross_tenant_impersonation_rejected(self):
+        """A connection bound to A whose impersonation somehow reads as B still
+        rejects a bare read — impersonation for the WRONG tenant is not a pass."""
+        info = {_IMPERSONATION_KEY: _UID_B}
+        with pytest.raises(TenantBindingError):
+            _check_tenant_statement(
+                info, "select pfin.fn_compute_nav(current_date, true)", {}, _UID_A
+            )
+
+    @pytest.mark.unit
+    def test_cross_tenant_literal_rejected(self):
+        """A statement naming a DIFFERENT tenant (B) on an A-bound connection, with
+        no impersonation, fails closed."""
+        info = {}
+        with pytest.raises(TenantBindingError):
+            _check_tenant_statement(
+                info,
+                "insert into pfin.nav_daily (users_id, nav_date, nav_value) "
+                "values (:uid, current_date, :nav)",
+                {"uid": _UID_B, "nav": 100},
+                _UID_A,
+            )
+
+    @pytest.mark.unit
+    def test_claims_clear_tears_down_impersonation(self):
+        """Clearing the JWT claims (NULL — no uid) removes the impersonation, so a
+        subsequent bare read fails closed again."""
+        info = {_IMPERSONATION_KEY: _UID_A}
+        _check_tenant_statement(
+            info,
+            f"select set_config('{_JWT_CLAIMS_GUC}', NULL, true)",
+            {},
+            _UID_A,
+        )
+        assert _IMPERSONATION_KEY not in info
+        with pytest.raises(TenantBindingError):
+            _check_tenant_statement(
+                info, "select pfin.fn_compute_nav(current_date, true)", {}, _UID_A
+            )
+
+    @pytest.mark.unit
+    def test_reset_role_tears_down_impersonation(self):
+        """RESET ROLE tears down impersonation (defensive teardown)."""
+        info = {_IMPERSONATION_KEY: _UID_A}
+        _check_tenant_statement(info, "reset role", {}, _UID_A)
+        assert _IMPERSONATION_KEY not in info
+
+    @pytest.mark.unit
+    def test_full_worker_transaction_sequence(self):
+        """End-to-end: the exact statement sequence the NAV worker issues in one
+        for_tenant(A) transaction must all pass through the assertion with a single
+        shared info dict, and the impersonation must be torn down before the write.
+        """
+        info = {}
+        # 1. set role authenticated (exempt)
+        _check_tenant_statement(info, "set local role authenticated", {}, _UID_A)
+        # 2. establish impersonation (claims carry A)
+        _check_tenant_statement(info, _claims_stmt(), _claims_params(_UID_A), _UID_A)
+        assert info[_IMPERSONATION_KEY] == _UID_A
+        # 3. impersonated INVOKER read (no literal uid) — allowed via RLS binding
+        _check_tenant_statement(
+            info, "select pfin.fn_compute_nav(current_date, true)", {}, _UID_A
+        )
+        # 4. teardown claims + reset role
+        _check_tenant_statement(
+            info, f"select set_config('{_JWT_CLAIMS_GUC}', NULL, true)", {}, _UID_A
+        )
+        _check_tenant_statement(info, "reset role", {}, _UID_A)
+        assert _IMPERSONATION_KEY not in info
+        # 5. privileged literal write (service_role) — allowed via literal binding
+        _check_tenant_statement(
+            info,
+            "insert into pfin.nav_daily (users_id, nav_date, nav_value) "
+            "values (:uid, current_date, :nav) "
+            "on conflict (users_id, nav_date) do nothing",
+            {"uid": _UID_A, "nav": 12345.67},
+            _UID_A,
+        )
+
+    @pytest.mark.unit
+    def test_impersonate_rejects_system_mode(self):
+        """impersonate() requires a for_tenant()-bound TBC — a system-mode TBC has
+        no tenant, so entering the context raises before touching the connection."""
+        tbc = TenantBoundConnection.system(_SQLITE_URL)
+        with pytest.raises(TenantBindingError):
+            with tbc.impersonate(conn=None):
+                pass

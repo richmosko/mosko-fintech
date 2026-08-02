@@ -36,21 +36,36 @@ Description:
         - `.system()`     — V1.0 usage. Service-context / global-reference
                             writes with no tenant. The per-query users_id
                             assertion is NOT registered in this mode.
-        - `.for_tenant()` — Scaffolded for the first per-user write path
-                            (V1.1+). Registers a dormant `before_cursor_execute`
-                            assertion that binds `users_id` and checks each
-                            statement carries it. No live caller yet.
+        - `.for_tenant()` — The per-user write path. Registers a
+                            `before_cursor_execute` assertion that binds
+                            `users_id` and requires every DML/function statement
+                            to EITHER literally carry that `users_id` OR run
+                            under an active impersonation binding for it.
+                            FIRST LIVE CALLER: the SELF-214 daily-NAV worker
+                            (nav_daily.py) — W-1 impersonation model (see
+                            `impersonate()`).
 
         Full per-tenant enforcement + mod #4 same-transaction audit-log wiring
         are V1.1+ (see `emit_audit_log` — DEPENDENCY-BLOCKED stub).
 """
 
+import json
 import logging
+from contextlib import contextmanager
 
 import sqlalchemy as sqla
 from sqlalchemy import event
 
 logger = logging.getLogger("pfin_etl")
+
+# Connection-scoped (conn.info) key recording that impersonation is ACTIVE for a
+# given users_id — set by the JWT-claims binding op, cleared on teardown. See
+# TenantBoundConnection.impersonate() + _register_tenant_assertion (SELF-214 W-1).
+_IMPERSONATION_KEY = "tbc_impersonated_users_id"
+
+# GUC carrying the Supabase JWT claims; auth.uid() reads its 'sub'. Setting it
+# (with sub = the bound users_id) is what establishes an impersonation binding.
+_JWT_CLAIMS_GUC = "request.jwt.claims"
 
 
 class TenantBindingError(RuntimeError):
@@ -109,9 +124,9 @@ class TenantBoundConnection:
 
     @classmethod
     def for_tenant(cls, database_url, users_id):
-        """Scaffolded for the first per-user write path (V1.1+). Binds
-        `users_id` and registers the dormant per-query assertion. No live
-        caller in V1.0."""
+        """The per-user write path. Binds `users_id` and registers the per-query
+        assertion (impersonation-aware — see _register_tenant_assertion). First
+        live caller: the SELF-214 daily-NAV worker via impersonate()."""
         if users_id is None or users_id is cls._SYSTEM:
             raise ValueError(
                 "for_tenant() requires a real users_id; use system() for "
@@ -132,32 +147,93 @@ class TenantBoundConnection:
         return self._users_id is self._SYSTEM
 
     # ------------------------------------------------------------------ #
-    # Per-tenant assertion (dormant in V1.0 — registered only in
-    # for_tenant() mode, which has no live caller yet).
+    # Per-tenant impersonation (SELF-214 W-1). First live for_tenant() use.
+    # ------------------------------------------------------------------ #
+    @contextmanager
+    def impersonate(self, conn):
+        """Impersonate the bound tenant on `conn` for the duration of the block so
+        SECURITY INVOKER reads (e.g. pfin.fn_compute_nav) resolve `auth.uid()` to
+        the bound users_id under RLS.
+
+        SELF-214 W-1 (first live per-user worker write path; Sec-joint-reviewed):
+        the worker connects as service_role (BYPASSRLS) with no user session, so an
+        INVOKER read would see `auth.uid()` NULL and return 0. Within a
+        for_tenant()-bound transaction this sets, transaction-locally:
+            SET LOCAL ROLE authenticated;
+            select set_config('request.jwt.claims', '{"sub": <users_id>, ...}', true);
+        making `auth.uid()` = the bound users_id for the block. On exit it tears the
+        binding down (claims cleared, RESET ROLE) so a following PRIVILEGED write
+        (e.g. the service_role-only INSERT into pfin.nav_daily) runs back as the
+        connection's original service_role — authenticated has no write grant there.
+
+        Contract:
+          - MUST be a for_tenant()-bound TBC (raises in system mode).
+          - MUST run inside an open transaction — SET LOCAL / set_config(..., true)
+            are transaction-scoped; they auto-clear at COMMIT/ROLLBACK even if the
+            explicit teardown is skipped.
+          - Isolation for reads in the block is enforced by RLS via the JWT claim;
+            the firmed per-tenant assertion verifies the impersonation binding
+            matches the bound users_id before permitting non-users_id-carrying reads.
+        """
+        if self.is_system:
+            raise TenantBindingError(
+                "impersonate() requires a for_tenant()-bound connection; a "
+                "system-mode TBC has no tenant to impersonate."
+            )
+        # aal2 IS REQUIRED (migration 054 WORKER NOTE + 025 aal2 step-up backstop;
+        # Sec-joint-review surface): the 025 backstop AND-s an aal2 conjunct into the
+        # RLS of sensitive tenant tables (nav_daily + the account/holdings/txns that
+        # fn_compute_nav reads). A user who DECLARED mfa_policy totp/passkey is gated
+        # to an aal2 session; without an 'aal':'aal2' claim their underlying reads
+        # filter to ZERO and the frozen NAV would be a wrong 0. The trusted worker's
+        # synthetic session presents aal2 (ratified W-1 expectation). Users with
+        # mfa_policy 'none'/missing are unaffected by the conjunct either way.
+        claims = json.dumps(
+            {"sub": str(self._users_id), "role": "authenticated", "aal": "aal2"}
+        )
+        conn.execute(sqla.text("set local role authenticated"))
+        conn.execute(
+            sqla.text(f"select set_config('{_JWT_CLAIMS_GUC}', :claims, true)"),
+            {"claims": claims},
+        )
+        try:
+            yield conn
+        finally:
+            conn.execute(
+                sqla.text(f"select set_config('{_JWT_CLAIMS_GUC}', NULL, true)")
+            )
+            conn.execute(sqla.text("reset role"))
+
+    # ------------------------------------------------------------------ #
+    # Per-tenant assertion. Registered only in for_tenant() mode.
     # ------------------------------------------------------------------ #
     def _register_tenant_assertion(self):
-        """Register a `before_cursor_execute` hook that asserts the bound
-        users_id is carried by each executed statement.
+        """Register a `before_cursor_execute` hook that asserts every DML/function
+        statement on this per-tenant-bound connection is scoped to the bound
+        users_id — by ONE of two sanctioned bindings:
 
-        PROVISIONAL: the exact predicate contract (which tables/columns count
-        as per-tenant; how the users_id must appear) firms up with the first
-        per-user write path in V1.1+. This dormant default is conservative —
-        it skips transaction-control / session-setup / reflection-introspection
-        statements and otherwise requires the bound users_id to appear in the
-        statement parameters or literal SQL."""
+          (a) LITERAL: the statement carries the bound users_id in its parameters
+              or SQL text (the direct-write contract — e.g. the nav_daily INSERT
+              whose VALUES carry the users_id).
+          (b) IMPERSONATION: `set_config('request.jwt.claims', …sub=users_id…)` +
+              `SET ROLE authenticated` are active on this connection (established by
+              impersonate()), so RLS (`auth.uid()`) enforces isolation for a read
+              that does not itself name the users_id (e.g. fn_compute_nav).
+
+        Transaction-control / session-setup / introspection statements are exempt;
+        the JWT-claims binding op is recognized and toggles impersonation state on
+        conn.info; RESET ROLE / DISCARD tear it down. A statement that satisfies
+        neither binding fails closed (TenantBindingError) — this is the fence that
+        keeps a for_tenant(A) connection from silently acting on tenant B."""
         users_id = self._users_id
 
         @event.listens_for(self._engine, "before_cursor_execute")
         def _assert_tenant_bound(
             conn, cursor, statement, parameters, context, executemany
         ):  # noqa: ANN001
-            if _is_tenant_exempt(statement):
-                return
-            if not _statement_carries_users_id(statement, parameters, users_id):
-                raise TenantBindingError(
-                    "per-tenant statement does not carry bound users_id="
-                    f"{users_id!r}: {statement.strip()[:200]}"
-                )
+            # Pure decision core (module-level, unit-testable): conn.info carries
+            # the per-connection impersonation state across statements.
+            _check_tenant_statement(conn.info, statement, parameters, users_id)
 
     # ------------------------------------------------------------------ #
     # mod #4 — same-transaction audit-log (DEPENDENCY-BLOCKED stub).
@@ -212,6 +288,72 @@ def _is_tenant_exempt(statement):
     that carry no tenant predicate."""
     head = statement.lstrip().lower()
     return head.startswith(_TENANT_EXEMPT_PREFIXES)
+
+
+def _claims_carry_users_id(statement, parameters, target):
+    """True if the bound users_id (`target`, already stringified) appears anywhere
+    in a JWT-claims binding op. The sub is embedded in a JSON claims blob
+    ({"sub": "<uid>", …}) passed as a bound parameter or inline literal, so this is
+    a CONTAINMENT check — deliberately distinct from _statement_carries_users_id's
+    equality-on-params contract used for direct writes."""
+    if target in statement:
+        return True
+    for value in _iter_param_values(parameters):
+        if target in str(value):
+            return True
+    return False
+
+
+def _check_tenant_statement(info, statement, parameters, users_id):
+    """Pure decision core of the per-tenant assertion (SELF-214 W-1).
+
+    `info` is the per-connection state dict (conn.info) tracking whether
+    impersonation is active for a users_id. This function MUTATES `info` on binding
+    ops and RAISES TenantBindingError on a statement that is scoped to neither the
+    bound users_id (literal) nor an active impersonation binding for it. Returns
+    None on allow. Factored out of the before_cursor_execute closure so the
+    fail-closed logic is unit-testable without a live database.
+
+    Two sanctioned per-tenant bindings for a DML/function statement:
+      (a) LITERAL — the bound users_id appears in the statement params or SQL text
+          (the direct-write contract, e.g. the nav_daily INSERT VALUES users_id).
+      (b) IMPERSONATION — SET ROLE authenticated + request.jwt.claims.sub =
+          users_id are active on this connection (established by impersonate()), so
+          RLS/auth.uid() enforces isolation for a read that does not name users_id.
+    """
+    target = str(users_id)
+    lowered = statement.lower()
+
+    # (1) Impersonation binding op: sets the JWT-claims GUC (via SET LOCAL
+    # "request.jwt.claims" = … or select set_config('request.jwt.claims', …)).
+    # Carrying the bound users_id ESTABLISHES impersonation; otherwise it CLEARS it
+    # (teardown). The binding op itself is always allowed. NOTE: the users_id here
+    # is embedded in a JSON claims blob ({"sub": "<uid>", …}), so this is a
+    # CONTAINMENT check — distinct from the equality-based literal-write contract.
+    if _JWT_CLAIMS_GUC in lowered:
+        if _claims_carry_users_id(statement, parameters, target):
+            info[_IMPERSONATION_KEY] = target
+        else:
+            info.pop(_IMPERSONATION_KEY, None)
+        return
+
+    # (2) Transaction-control / session-setup / introspection — exempt. RESET ROLE
+    # / DISCARD also tear down any active impersonation (defensive).
+    if _is_tenant_exempt(statement):
+        if lowered.lstrip().startswith(("reset", "discard")):
+            info.pop(_IMPERSONATION_KEY, None)
+        return
+
+    # (3) DML / function statement — require binding (a) OR (b), else fail closed.
+    if _statement_carries_users_id(statement, parameters, users_id):
+        return
+    if info.get(_IMPERSONATION_KEY) == target:
+        return
+    raise TenantBindingError(
+        "per-tenant statement carries neither the bound users_id="
+        f"{users_id!r} nor an active impersonation binding for it: "
+        f"{statement.strip()[:200]}"
+    )
 
 
 def _statement_carries_users_id(statement, parameters, users_id):

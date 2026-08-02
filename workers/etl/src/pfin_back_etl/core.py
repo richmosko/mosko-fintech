@@ -284,15 +284,10 @@ class SBaseConn:
             metadata:      The database table metadata to define the fields
             base:          The base instance containing the reflected tables
         """
-        # SBASE:: Try to establish a connection to the postgresql database
-        DB_NAME = self._params["DB_NAME"]
-        DB_HOST = self._params["DB_HOST"]
-        DB_PORT = self._params["DB_PORT"]
-        DB_USER = self._params["DB_USER"]
-        DB_PASSWORD = self._params["DB_PASSWORD"]
-        DATABASE_URL = f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@"
-        DATABASE_URL += f"{DB_HOST}:{DB_PORT}/{DB_NAME}"
-        DATABASE_URL += "?sslmode=require"
+        # SBASE:: Try to establish a connection to the postgresql database.
+        # Single source of the connection string (utils.build_database_url) so the
+        # ETL system engine and the SELF-214 per-tenant NAV worker are identical.
+        DATABASE_URL = utils.build_database_url(self._params)
 
         # 1. Construct the SQLAlchemy connection string and setup the engine.
         #    Lock 13 mod #3: the engine MUST be created through

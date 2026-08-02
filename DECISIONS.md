@@ -41,6 +41,39 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-040 — `pfin.nav_daily` net-worth-trend substrate: precomputed append-only checkpoint (Option B) + W-1 impersonation worker model (SELF-214)
+
+**Date:** 2026-08-02 · **Status:** Accepted — F/CTO ratified 2026-08-02 (Option B; A derived-view + C matview/DEFINER rejected · worker model W-1; W-2 new-DEFINER + W-3 python-recompute rejected) · **Phase:** 6 Build Loop (V1.1 "Net worth full"; SELF-214; migration `054`)
+
+**Pattern:** Terse-plus — a base-table substrate decision with a one-way-door storage-shape choice + a precedent-setting worker sub-decision. **Sec joint-review-mandatory** (tenant-scoped financial data + new RLS + immutability triggers + worker tenant-binding).
+
+**Decision:** Persist the §2.1.2 net-worth trajectory as **`pfin.nav_daily`** — a precomputed **append-only** table, one row per `(users_id, nav_date)` = the NAV **frozen at that day's close** by the cron worker calling the locked INVOKER `fn_compute_nav(current_date, true)` (`050` active-only). `users_id uuid` (sole tenant anchor, direct-owner RLS `= auth.uid()`); `nav_value` finiteness-fenced (NaN + ±Infinity); `UNIQUE(users_id, nav_date)`; Lock 10 mod #8 append-only cross-tier triggers (UPDATE/DELETE/TRUNCATE blocked for authenticated **and** service_role). Migration `054`. **Forward-only** — the trajectory accumulates from first run; no historical backfill in V1.1.
+
+**Why precomputed (not derived-on-read):** `050`'s **temporal constraint** — `fn_compute_nav`'s active-only scope is sound **only at `p_as_of = current_date`** (`is_active` is current-state; filtering it into a past as-of retroactively rewrites history). `050` explicitly forward-named this table: history must come from **frozen checkpoints**, not on-the-fly `fn_compute_nav(<past>, true)`. A precomputed row captures the true as-of-that-day active set, immutably.
+
+**Alternatives considered (AC1):**
+- **A — derived view / recompute-on-read.** Rejected: temporally unsound (can't reconstruct a past day's active set from current `is_active` — the `050` constraint), and recomputing a full NAV per trajectory point per page-load is expensive.
+- **B — precomputed append-only table (CHOSEN).** Frozen-at-compute-time (temporally correct by construction), cheap reads (indexed `(users_id, nav_date)`), audit-class immutability. Cost: a daily write path (the cron worker) + a new SD/RT SECURITY entry.
+- **C — materialized view + SECURITY DEFINER refresh.** Rejected: a DEFINER refresh over a financial calc (against Lock 11 INVOKER read-composition) + refresh-coupling/staleness; the append-only table gives frozen history a matview can't (a matview recomputes, losing the as-of-that-day active set).
+
+**Sub-decision — worker model W-1 (precedent-setting; the first live per-user ETL write path):** the cron worker binds each tenant via `TenantBoundConnection.for_tenant()` and computes NAV by **session-impersonation** (`set local role authenticated` + a synthetic `request.jwt.claims.sub = <users_id>`), reusing the **locked INVOKER `fn_compute_nav`** under RLS, then INSERTs the checkpoint as service_role.
+- **W-2 — new `SECURITY DEFINER fn_compute_nav_for_user(uuid, date)`.** Rejected: **DEFINER allowlist 4→5** (Sec veto surface) + **duplicates** `050`'s valuation → INVOKER/DEFINER drift on a financial calc (exactly what Lock 11 steers away from).
+- **W-3 — recompute NAV in Python.** Rejected: a third valuation implementation (worst drift); abandons the DB as single valuation source of truth.
+- **Consequence:** W-1 keeps the **DEFINER allowlist at 4** (authors no new function) and reuses the Sec-reviewed valuation. It **firms the dormant `TenantBoundConnection` per-tenant assertion contract** (nav_daily is its first live caller) and establishes session-impersonation as the durable per-user worker pattern. **Load-bearing worker edge (for the worker's Sec joint-review):** the impersonation session must claim **`aal2`** or a totp/passkey user's underlying reads (025-aal2-gated) filter to zero → a frozen NAV of 0.
+
+**Consequences.**
+- Migration `054` — SECURITY INVOKER immutability triggers (DEFINER allowlist **unchanged at 4**); `users_id` = sole own tenant anchor → **Decision-3 family unchanged** (not a cross-tenant FK-bypass instance, `024`/`009` shape); §10 catalogued ledger **unchanged at 3** (RT-22/RT-26/RT-27; 3-axis clean — the service_role INSERT grant is a DB-ACL, not RT-26). **aal2 step-up backstop INHERITED** on the SELECT policy (C3 / `025` — nav_daily is sensitive tenant-owned, not an exclusion).
+- **SECURITY doc (Sec-canonical; Sec ratifies slot numbers + lands):** SD matrix **+1** (proposed **SD-24** — nav_daily; medium severity, tenant-scoped, indefinite retention per §4.6) + RT catalog **+1** (proposed **RT-28**, §4.5 — nav_daily cross-tenant read-leak under the two-tenant fixture, AC8).
+- **Backend (parallel, not this migration):** the W-1 daily-NAV worker in `workers/etl/` — Architect + Sec joint-review its tenant-binding (impersonation + aal2-claim + audit-log) after.
+- **QA** two-tenant battery ships same-PR: cross-tenant SELECT fails closed (owner-only + aal2); authenticated INSERT/UPDATE/DELETE denied (default-deny); UPDATE/DELETE/TRUNCATE blocked across both tiers (append-only); finiteness CHECK rejects NaN + ±Infinity.
+- **Forward-flag:** historical backfill (a seeded pre-launch trajectory) is deferred — if ever wanted, the temporally-sound path is `fn_compute_nav(d, false)` (all-accounts as-of), a distinct future decision.
+
+**Approved by:** Founder/CTO (2026-08-02).
+
+**Cross-references.** [ADR-039](#adr-039) (`fn_compute_nav` active-only 2-arg — the worker's read source + the temporal constraint that forces precomputation) · `050` / `019` (`fn_compute_nav` / `fn_holdings_as_of`) · `004` (the Lock 10 mod #8 append-only cross-tier trigger pattern reproduced) · `024` (`user_settings` — the direct `users_id = auth.uid()` RLS precedent) · `025` (the aal2 step-up backstop clause inherited) · [ADR-011](#adr-011) **Lock 9** (reconciliation/checkpoint precedent) / **Lock 11** (INVOKER read-composition — the worker reuses INVOKER `fn_compute_nav`) / **Lock 12** (`monthly_report` snapshot family — the sibling precomputed-checkpoint shape) / Decision 2 + Decision 14 / Lock 10 (immutable audit-class) / Decision 3 (FK-bypass family — unchanged) / Decision 4 (§10 — stays 3) / Decision 9 (DEFINER allowlist — stays 4) · [ADR-019](#adr-019) (`TenantBoundConnection` at `workers/etl/`) · [ADR-029](#adr-029) (aal2 backstop obligation) · PRD §2.1.2 (net-worth trend) · SECURITY §4.4 (proposed SD-24) / §4.5 (proposed RT-28).
+
+---
+
 ## ADR-039 — `fn_compute_nav` current-state (`is_active`) scope: parameterize via `p_active_only` (Option C); the book/as-of engine stays all-accounts (SELF-322)
 
 **Date:** 2026-08-02 · **Status:** Accepted — F/CTO ratified 2026-08-02 (Option C; A blanket + D temporal rejected) · **Phase:** 6 Build Loop (V1.1 "Net worth full"; SELF-322, blocks SELF-225; migration `050`)
