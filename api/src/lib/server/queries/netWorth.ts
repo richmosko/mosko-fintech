@@ -1,13 +1,25 @@
 // netWorth.ts — server-side read for the §2.1.1 headline Net Worth surface (SELF-211).
 // Backend-owned server surface (ARCH §4.1 allowlist).
 //
-// The V1.0 §2.1.1 read is a SINGLE trustworthy number: pfin.fn_compute_nav(as_of), the
-// Architect-authored SECURITY INVOKER uniform-valuation helper landed at migration 019
-// (SELF-277). INVOKER means the caller's RLS context propagates — we call it through the
-// per-request anon client (users_id = auth.uid()), NEVER service_role (RT-26 / Lock 11).
-// fn_compute_nav takes NO users_id/scope param (tenancy is auth.uid()); the Wave-1 issue's
-// fn_nav(users_id, scope[]) contract predates the substrate and is superseded (SELF-210
-// reconciled to a verification note — the substrate absorbed the aggregation).
+// The §2.1.1 read is a SINGLE trustworthy number: pfin.fn_compute_nav, the Architect-authored
+// SECURITY INVOKER uniform-valuation helper landed at migration 019 (SELF-277). INVOKER means
+// the caller's RLS context propagates — we call it through the per-request anon client
+// (users_id = auth.uid()), NEVER service_role (RT-26 / Lock 11). fn_compute_nav takes NO
+// users_id/scope param (tenancy is auth.uid()); the Wave-1 issue's fn_nav(users_id, scope[])
+// contract predates the substrate and is superseded (SELF-210 reconciled to a verification
+// note — the substrate absorbed the aggregation).
+//
+// CURRENT-STATE SCOPE (SELF-322 / ADR-039, migration 050): the headline calls the 2-arg
+// fn_compute_nav(p_as_of, p_active_only => true) so the NAV EXCLUDES soft-deleted (inactive)
+// accounts (PRD §2.4.2; the 012 is_active current-state convention) and reconciles EXACTLY
+// with the §2.1.5 composition (049, active-only). The 019/1-arg wrapper (all-accounts) is
+// reserved for the book/GL memo (037) + historical trend — NOT the current-state headline.
+// TEMPORAL FENCE (load-bearing, ADR-039 N3): p_active_only => true is sound ONLY at
+// p_as_of = current_date (is_active is a current-state boolean, not temporal — filtering it
+// into a past as_of would rewrite history). The sole caller (+page.server.ts) passes
+// todayIso() = current_date, so the fence holds by construction. A future §2.1.2 trajectory /
+// historical NAV must NOT reuse this active-only path with a past date — derive history from
+// frozen precomputed checkpoints instead.
 //
 // The composition breakdown (GAV / Debt / tax lines) is §2.1.5 = V1.1 (SELF-225); V1.0
 // renders the single number only, per PRD §2.1.1 verbatim + F/CTO Option A.
@@ -39,12 +51,16 @@ export async function loadNetWorthView(
 	asOf: string
 ): Promise<NetWorthView> {
 	// ── NAV compute (INVOKER; RLS-scoped to auth.uid()) ───────────────────────────
-	// fn_compute_nav(p_as_of date) RETURNS numeric. supabase-js returns a scalar RPC as
-	// the raw value; a Postgres numeric may arrive as number OR string → coerce. A NaN
-	// coercion (should never happen — the DB NaN-fences price) degrades to null, not a
-	// poisoned render.
+	// fn_compute_nav(p_as_of date, p_active_only boolean) RETURNS numeric. p_active_only:true
+	// = current-state headline scope (active accounts only; SELF-322 / ADR-039). asOf is
+	// current_date at this call site (the ADR-039 N3 temporal fence — see header). supabase-js
+	// returns a scalar RPC as the raw value; a Postgres numeric may arrive as number OR string
+	// → coerce. A NaN coercion (should never happen — the DB NaN-fences price) degrades to
+	// null, not a poisoned render.
 	let netWorth: number | null = null;
-	const { data, error } = await supabase.schema('pfin').rpc('fn_compute_nav', { p_as_of: asOf });
+	const { data, error } = await supabase
+		.schema('pfin')
+		.rpc('fn_compute_nav', { p_as_of: asOf, p_active_only: true });
 	if (error) {
 		console.error('[netWorth] fn_compute_nav failed:', error.message);
 	} else {

@@ -1,6 +1,6 @@
 // netWorth.test.ts — unit coverage for the §2.1.1 headline read (SELF-211).
 // Pure-TS server test (node env per vitest.config). Mocks the supabase-js chain:
-//   .schema('pfin').rpc('fn_compute_nav', { p_as_of })     → { data, error }
+//   .schema('pfin').rpc('fn_compute_nav', { p_as_of, p_active_only }) → { data, error }
 //   .schema('pfin').from('account').select(...).eq(...)    → { count, error }
 //
 // Proves: numeric coercion (number + Postgres-numeric-as-string), the $0-with-accounts
@@ -36,9 +36,11 @@ describe('loadNetWorthView', () => {
 		const view = await loadNetWorthView(client, AS_OF);
 
 		expect(view).toEqual({ netWorth: 123456.78, hasAccounts: true });
-		// Called the INVOKER helper in the pfin schema with the as-of date.
+		// Called the INVOKER helper in the pfin schema with the as-of date + the current-state
+		// active-only scope (SELF-322 / ADR-039 — the 2-arg fn_compute_nav; p_active_only:true
+		// excludes soft-deleted accounts so the headline reconciles with §2.1.5 composition).
 		expect(schema).toHaveBeenCalledWith('pfin');
-		expect(rpc).toHaveBeenCalledWith('fn_compute_nav', { p_as_of: AS_OF });
+		expect(rpc).toHaveBeenCalledWith('fn_compute_nav', { p_as_of: AS_OF, p_active_only: true });
 	});
 
 	it('coerces a Postgres numeric returned as a string', async () => {
