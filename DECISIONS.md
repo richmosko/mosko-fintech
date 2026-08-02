@@ -41,6 +41,57 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-038 — Per-account unrealized-G/L primitive (`fn_account_unrealized_gl`, SELF-224): account-total market-value scope (Design C) + the scope-matching principle + cost_basis redefinition
+
+**Date:** 2026-08-02 · **Status:** Accepted — F/CTO ratified 2026-08-02 (cost-basis path 2026-08-01; market-value scope + 4-col contract 2026-08-02) · **Phase:** 6 Build Loop (V1.1 "Net worth full"; first V1.1 build feature; migration `049`)
+
+**Pattern:** Terse-plus — one migration-shaping decision with genuine alternatives (A/B/C) and a reusable principle worth naming. Sec joint-review-MANDATORY at the build surface (financial calculation over multi-tenant-isolated data); RLS verification → SELF-228 two-tenant battery.
+
+**Context.** SELF-224 introduces `pfin.fn_account_unrealized_gl(p_as_of date)` — a per-account read primitive returning `(account_id, current_market_value, cost_basis, unrealized_gl)`, structurally shared with §2.2 asset-allocation (V1.2). Two orthogonal decisions surfaced: (1) the **cost-basis read path** — where per-position basis comes from; (2) the **market-value scope** — whether `current_market_value` for an investment account is securities-only or account-total (securities + cash sweep). The PM-draft AC signature was also schema-impossible in three ways (corrected below).
+
+### Decision 1 — Cost-basis path = GL-derived carried book (reuse `fn_gl_entries` `trade_position`)
+
+`cost_basis`'s securities component = `Σ(fn_gl_entries trade_position × fx→USD)` per account — the current carried book (acquisition + basis_adjust − FIFO/specific-lot matched-sell removal, balanced-by-construction via `037`).
+
+**Alternatives considered:** (B) **lot-level residual** direct from `lot_match` + `account_trans` — rejected: re-implements `037`'s sell-removal/basis-adjust logic → a second basis truth (drift), and depends on `lot_match` being populated (mostly un-matched in V1.1). (C) **avg-cost** from `account_trans` only — rejected: a different method than the FIFO/specific-lot the GL/tax layer uses → a competing basis truth. **GL-derived wins** because it is the single basis truth (== GL == `fn_compute_tax_liability` == monthly reports), re-implements nothing, and inherits `037`'s graceful-degradation Suspense floor for unmatched sells.
+
+**Lot-split forward path (the F/CTO ratify contingency):** GL-derived does **not** foreclose per-lot granularity. The buy side is already per-lot (`trade_position` keyed on `source_trans_id`); the removal side aggregates per-sell but the per-lot detail is preserved in the immutable `lot_match` table. A future `fn_position_lots_as_of`-style helper reconstructs per-lot residual basis and sums to the *same* per-account total in both the matched and unmatched-sell regimes — an **additive migration, not a rip-and-replace** (lot-level UI is V2 regardless). This *reinforces* GL-derived over B (which would fork a second basis truth and commit the direct path prematurely).
+
+### Decision 2 — Market-value scope = Design C (account-total, symmetric) + the scope-matching principle
+
+`current_market_value` (all account types, uniform) = **securities MV + cash** (roll-forward) = the account's `fn_compute_nav` contribution → **foots to per-account NAV**. For investment-class accounts, `cost_basis` = securities carried book **+ the same cash term** (cancels); `unrealized_gl = current_market_value − cost_basis =` the pure securities G/L.
+
+**Foot-to-NAV invariant (precise — QA finding):** `Σ current_market_value = fn_compute_nav` **over active accounts only**. `049` filters `where acc.is_active` (PRD §2.4.2 — inactive accounts excluded from the current-state view); `fn_compute_nav` (`019`) has **no** `is_active` filter and sums all accounts. The two equal exactly unless a tenant holds a value-bearing *inactive* account, where `fn_compute_nav` is larger by that account's value. `049`'s `is_active` filter is correct as-is; the pre-existing `fn_compute_nav`/`019` scope gap is tracked as a separate follow-up, **SELF-322** (*fn_compute_nav is_active scope gap — headline NAV counts inactive accounts*; blocks SELF-225 per its AC).
+
+**Scope-matching principle (the reusable takeaway):** `unrealized_gl = mv − cost_basis` is both correct *and* consumer-verifiable **only when `mv` and `cost_basis` are at the same scope.** This is the governing constraint, not a defect of any design.
+
+**Alternatives considered — worked example (investment acct: $100 stock, cost $60, + $40 cash sweep; correct `unrealized_gl` = $40):**
+
+| Design | current_market_value | cost_basis | unrealized_gl | verdict |
+|---|---|---|---|---|
+| **A** securities-only mv + securities-only basis | $100 (positions) | $60 | $40 ✓ | AC-faithful but `current_market_value` **understates** account value by the $40 cash — **rejected** (SELF-225 needs it to foot to NAV) |
+| **B** uniform mv + securities-only basis | $140 | $60 | $80 ✗ | scope-mismatch → cash leaks as phantom gain — **rejected (wrong)** |
+| **C** uniform mv + symmetric basis | $140 (foots to NAV) | $100 | $40 ✓ | **CHOSEN** |
+
+A and C both yield correct `unrealized_gl`; they differ only in column *semantics*. **C chosen** because the consumer (SELF-225 net-worth breakdown) requires `current_market_value` to reconcile to per-account NAV — a positions-only view (A) understates a brokerage account by its cash sweep.
+
+**`cost_basis` redefinition (load-bearing consequence of C):** under C, `cost_basis` is the **account-total book** (securities carried book + cash at face), **not** the AC#2-literal securities-only cost basis. `unrealized_gl` remains the pure securities G/L (cash is book=market → contributes zero gain and cancels). Securities-only cost basis is derivable as `(cost_basis − cash)` or via a future per-lot helper. **The redefinition is safe because no V1.1 consumer reads `cost_basis`** — SELF-225 (`fn_nav_composition`) and SELF-226 consume only `current_market_value` + `unrealized_gl` (confirmed via consumer-spec review); `cost_basis`'s scope is therefore internal.
+
+**Cash-term identity (implementation invariant):** the cancelling cash term MUST be the *same expression* in `mv` and `cost_basis`. It uses the **checkpoint-anchored roll-forward** cash (`fn_compute_nav` cash_leg), **NOT** `fn_gl_entries` `asset_liability` (a pure-ledger `Σ(amount)` that diverges from the roll-forward whenever an `account_balance_checkpoint` exists). So `cost_basis` consumes only `trade_position` from the GL engine; the cash comes from the shared roll-forward CTE. Brokerage cash is modeled as a **balance** (`account_balance_checkpoint`), not a currency-holding — securities (`fn_holdings_as_of`) and cash are disjoint, so `mv` counts each dollar once (confirmed against `019` / `fn_compute_nav`).
+
+### Decision 3 — Signature corrections (PM-draft AC was schema-impossible)
+
+`account_id` is `bigint` (not `UUID`, per `003`); **drop `p_users_id`** (INVOKER + RLS scope by `auth.uid()` — a `p_users_id` param is a confused-deputy foot-gun; mirrors `fn_compute_nav` / `fn_holdings_as_of` / `fn_gl_entries`, all `p_as_of`-only); **drop `p_scope`** (the drafted `pfin.scope[]` type does not exist — `scope` is a free-text account label per ADR-004 Decision B; scope-filtering deferred); **USD-fx normalization** on all value legs (NAV consistency). The **4-column contract** stands — `account_type` was considered as a returned branch discriminator and **declined** (the NULL-vs-zero on `cost_basis` already encodes investment vs non-investment; a consumer needing the type joins `pfin.account`).
+
+**Consequences.**
+- `049_fn_account_unrealized_gl.sql` — SECURITY INVOKER (Lock 11; DEFINER allowlist unchanged at 4), no new base table / no FK-shaped column (Decision-3 family unchanged), §10 catalogued ledger unchanged at 3 (RT-22 / RT-26 / RT-27; 3-axis clean). Non-investment `cost_basis`/`unrealized_gl` = NULL (AC#3 NULL-not-zero preserved via the investment branch).
+- **Sec joint-review-mandatory** before merge (financial calc + multi-tenant isolation); QA two-tenant pgTAP battery ships same-PR (SELF-228): cross-tenant fail-closed, both branches, NULL-vs-zero, foot-to-NAV, as-of historical, liability R-7 sign, AC#6 perf smoke (≤300ms p95 / 20 accts — the conditional-lock flip-gate; fallback = extract the shared `trade_position` projection to drop `fn_gl_entries`'s internal `fn_compute_nav` memo double-call, preserving single-source-of-truth).
+- Supersedes the securities-only (Design A) draft `049` previously carried.
+
+**Approved by:** Founder/CTO (2026-08-01 cost-basis path; 2026-08-02 market-value scope + signature).
+
+---
+
 ## ADR-037 — Provider-agnostic connection-lifecycle / sync-trigger / re-auth / credential-error model; SELF-199 / 206 / 207 ACs re-derived off the landed `linked_source` substrate (Plaid PRIMARY, SimpleFIN SECONDARY)
 
 **Date:** 2026-07-28 · **Status:** Accepted — F/CTO ratified the full gate 2026-07-28 (OWD #3 scope = SELF-206 in V1.0 / Plaid primary; OWD-B = B1; OWD-A = A3 hybrid); Sec joint-review of the model recommended, joint-review-MANDATORY at the named build surfaces (Decision 5) · **Phase:** 6 Build Loop (gates the remaining V1.0 §2.4 Onboarding issues SELF-199 / 206 / 207; shows the seam to SELF-208 / 209)
