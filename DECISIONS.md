@@ -41,6 +41,37 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-039 — `fn_compute_nav` current-state (`is_active`) scope: parameterize via `p_active_only` (Option C); the book/as-of engine stays all-accounts (SELF-322)
+
+**Date:** 2026-08-02 · **Status:** Accepted — F/CTO ratified 2026-08-02 (Option C; A blanket + D temporal rejected) · **Phase:** 6 Build Loop (V1.1 "Net worth full"; SELF-322, blocks SELF-225; migration `050`)
+
+**Pattern:** Terse-plus — one localized fix with a genuine scope-semantics decision. Sec joint-review-mandatory (financial calc + multi-tenant).
+
+**Decision:** Parameterize `pfin.fn_compute_nav` as **`fn_compute_nav(p_as_of date, p_active_only boolean)`** (2-arg impl) — when `p_active_only` is true, both legs (securities via `fn_holdings_as_of` joined to `pfin.account`; cash via `pfin.account`) filter `is_active`; when false, the result is byte-identical to `019`. The **1-arg `fn_compute_nav(p_as_of)`** stays as a thin wrapper delegating to `fn_compute_nav(p_as_of, false)` (all-accounts). The §2.1.1 headline (`netWorth.ts`) calls the 2-arg with `true`; `037`'s GL Unrealized memo and any historical/as-of use keep the 1-arg (all-accounts). Migration `050` (CREATE OR REPLACE in place — no DROP, `037` dependency intact).
+
+**Why:** `fn_compute_nav` (`019`) filtered no `is_active`, so it counted **inactive accounts**. PRD §2.4.2 marks accounts inactive "when closed or sold … excluded from current-state surfaces by default," and soft-delete retains their value (no DELETE path; `042` reactivates). The §2.1.1 headline calls `fn_compute_nav` directly → it over-counted value-bearing inactive accounts and **disagreed with §2.1.5 composition** (`049`, active-only) — a live bug against the `012` convention ("net-worth aggregation filters `WHERE is_active = TRUE`"). But the scope is **genuinely split**: current-state net-worth surfaces exclude inactive accounts, while the **book/GL trial-balance** (`037`'s memo = `fn_compute_nav − book_nav`, both all-accounts) and **historical as-of** legitimately include all accounts. A single opt-in boolean serves both without forcing one scope on the other.
+
+**Alternatives considered:**
+- **A — blanket `WHERE is_active` in `fn_compute_nav`.** Rejected: breaks `037`'s Unrealized memo (market-active − book-all mismatch) → forces a companion GL fix, and retroactively rewrites historical as-of NAV (`is_active` is current-state, the function is as-of — a "temporal" corruption).
+- **B — headline sums `049` composition; `fn_compute_nav` untouched.** Viable single-source-of-truth reconciliation, but abandons `fn_compute_nav` for the headline, makes the headline a heavier query, and doesn't fix the named function for other/future direct consumers. Not chosen (C fixes the function with less Backend churn).
+- **D — temporal `deactivated_at` (filter "active as-of `p_as_of`").** Most correct for historical trend, but a schema change + backfill — overkill for V1; a future append-only precomputed `nav_daily` (frozen at compute-time) sidesteps the need. Deferred.
+
+**Implementation notes (load-bearing):** the 2-arg carries **no parameter default** — a `default false` alongside the 1-arg wrapper makes 1-arg calls ambiguous (`function … is not unique`); the "default false" semantic is delivered by the wrapper. The 2-arg is created **before** the wrapper (SQL-body forward-reference validation under `check_function_bodies`). **Temporal constraint:** `p_active_only => true` is sound **only at `p_as_of = current_date`**; §2.1.2 trajectory / a future `nav_daily` must derive history from append-only precomputed checkpoints, not on-the-fly `fn_compute_nav(<past>, true)`.
+
+**Consequences.**
+- Migration `050` — SECURITY INVOKER (both functions; DEFINER allowlist unchanged at 4), no new base table / no FK column (Decision-3 unchanged), §10 catalogued ledger unchanged at 3 (RT-22/RT-26/RT-27; 3-axis clean).
+- **Backend (not this migration):** one-line `netWorth.ts` change — pass `p_active_only: true`.
+- **QA** two-tenant battery ships same-PR: headline excludes a value-bearing inactive account; §2.1.1 == §2.1.5 for that tenant (SELF-322 Consistency AC); all-active tenant unchanged; `037` memo path (1-arg) unchanged; INVOKER cross-tenant → 0 (fails closed).
+- Tightens **[ADR-038](#adr-038)**'s foot-to-NAV invariant to exact (footnote updated).
+- **Forward-flag:** `fn_compute_tax_liability` / `fn_render_monthly_report` (Lock 11-named, not yet authored) must apply the `012` current-state `is_active` convention when built.
+- **Doc nit (non-blocking):** `046`'s comment "netWorth.ts filters is_active" refers to the account-existence *count* query, not the NAV *scalar* — the scalar was the unfiltered `fn_compute_nav` this ADR fixes. Worth a one-line comment correction when `046` is next touched.
+
+**Approved by:** Founder/CTO (2026-08-02).
+
+**Cross-references.** [ADR-038](#adr-038) (foot-to-NAV invariant — now exact) · `019` (`fn_compute_nav` / `fn_holdings_as_of` — the replaced function + reproduced idioms) · `037` (`fn_gl_entries` Unrealized memo — all-accounts, untouched) · `049` (`fn_account_unrealized_gl` — §2.1.5 composition, active-only) · `012` (the `is_active` current-state convention) · `003` (`account.is_active` soft-delete) · [ADR-011](#adr-011) Decision 4 (§10 — stays 3) / Decision 3 (FK-bypass family — unchanged) / Lock 11 (INVOKER read-composition) · PRD §2.4.2 (inactive = excluded from current-state).
+
+---
+
 ## ADR-038 — Per-account unrealized-G/L primitive (`fn_account_unrealized_gl`, SELF-224): account-total market-value scope (Design C) + the scope-matching principle + cost_basis redefinition
 
 **Date:** 2026-08-02 · **Status:** Accepted — F/CTO ratified 2026-08-02 (cost-basis path 2026-08-01; market-value scope + 4-col contract 2026-08-02) · **Phase:** 6 Build Loop (V1.1 "Net worth full"; first V1.1 build feature; migration `049`)
@@ -61,7 +92,7 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 `current_market_value` (all account types, uniform) = **securities MV + cash** (roll-forward) = the account's `fn_compute_nav` contribution → **foots to per-account NAV**. For investment-class accounts, `cost_basis` = securities carried book **+ the same cash term** (cancels); `unrealized_gl = current_market_value − cost_basis =` the pure securities G/L.
 
-**Foot-to-NAV invariant (precise — QA finding):** `Σ current_market_value = fn_compute_nav` **over active accounts only**. `049` filters `where acc.is_active` (PRD §2.4.2 — inactive accounts excluded from the current-state view); `fn_compute_nav` (`019`) has **no** `is_active` filter and sums all accounts. The two equal exactly unless a tenant holds a value-bearing *inactive* account, where `fn_compute_nav` is larger by that account's value. `049`'s `is_active` filter is correct as-is; the pre-existing `fn_compute_nav`/`019` scope gap is tracked as a separate follow-up, **SELF-322** (*fn_compute_nav is_active scope gap — headline NAV counts inactive accounts*; blocks SELF-225 per its AC).
+**Foot-to-NAV invariant (precise — QA finding):** `Σ current_market_value = fn_compute_nav` **over active accounts only**. `049` filters `where acc.is_active` (PRD §2.4.2 — inactive accounts excluded from the current-state view); `fn_compute_nav` (`019`) has **no** `is_active` filter and sums all accounts. The two equal exactly unless a tenant holds a value-bearing *inactive* account, where `fn_compute_nav` is larger by that account's value. `049`'s `is_active` filter is correct as-is; the pre-existing `fn_compute_nav`/`019` scope gap is tracked as a separate follow-up, **SELF-322** (*fn_compute_nav is_active scope gap — headline NAV counts inactive accounts*; blocks SELF-225 per its AC). **RESOLVED — see [ADR-039](#adr-039) / migration `050`:** `fn_compute_nav` gains an opt-in `p_active_only` param; the §2.1.1 headline calls `fn_compute_nav(as_of, true)`, making this invariant **EXACT** — `Σ 049.current_market_value (active) = fn_compute_nav(as_of, p_active_only => true)`. The 1-arg wrapper stays all-accounts, so `037`'s book memo is untouched.
 
 **Scope-matching principle (the reusable takeaway):** `unrealized_gl = mv − cost_basis` is both correct *and* consumer-verifiable **only when `mv` and `cost_basis` are at the same scope.** This is the governing constraint, not a defect of any design.
 
