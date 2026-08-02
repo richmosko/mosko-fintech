@@ -1,0 +1,84 @@
+# .github/workflows/etl-ci.yml
+#
+# workers/etl (pfin_back_etl) unit-test CI lane — closes the ETL-CI-rehoming gap
+# (SELF-230; F/CTO-ratified Path B, 2026-08-02). Prior to this, NO workflow ran
+# pytest over workers/etl/tests/: security-scan.yml's TBC fence greps
+# workers/etl/src/ but runs no tests, and worker-ci.yml is scoped to
+# workers/provider-sync/** only. That left the ETL unit suite CI-invisible — a
+# green PR gave VACUOUS assurance for the ETL half of any change under workers/etl/.
+#
+# Design anchors (mirrors the established run-always-vs-path-triggered split):
+#   - security-scan.yml = cheap grep fences, run-always, NO paths filter (fail-closed).
+#   - db-tests.yml / worker-ci.yml = heavier stack spin-ups, PATH-triggered.
+#   This file follows worker-ci.yml: the ETL suite is a Python + uv job, so it is
+#   PATH-TRIGGERED on the workers/etl tree — a doc-only PR shouldn't run it. It is a
+#   separate file (not a job in worker-ci.yml) so an ETL change doesn't cross-trigger
+#   the provider-sync jobs and vice versa — one worker, one workflow, house style.
+#
+# UNIT-ONLY, SECRETS-FREE by design:
+#   - Runs `pytest -m unit` (the README-documented, no-credentials-needed selector):
+#     55 unit tests RUN; the 17 non-unit tests (@integration/@deployment/@replay) are
+#     DESELECTED under --strict-markers. The @integration lane needs a live BLS key +
+#     a real DB and is keyed/manual — it MUST NOT hard-fail CI for lack of a BLS key.
+#     This unit lane is the gate; integration stays local/manual.
+#   - No .env is checked out (.env is gitignored; only .env.example is tracked). The
+#     unit tests mock os.environ, so they are hermetic — verified green with creds unset.
+#   - Touches NO secret → does NOT interact with the secrets-manifest non-overlap fence.
+#
+# PACKAGE-IMPORT NOTE: pyproject.toml declares no [build-system], so `uv sync` alone
+# does NOT install the pfin_back_etl package into site-packages (src-layout → import
+# fails at collection). We mirror the Dockerfile's `uv pip install -e .` to make the
+# package importable, then run pytest with --no-sync so the run doesn't drop the
+# editable install.
+
+name: ETL CI (workers/etl unit)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'workers/etl/**'
+      - '.github/workflows/etl-ci.yml'
+  push:
+    branches: [main]  # also on main to catch direct-push regressions if branch protection ever lapses
+    paths:
+      - 'workers/etl/**'
+      - '.github/workflows/etl-ci.yml'
+
+defaults:
+  run:
+    working-directory: workers/etl
+
+jobs:
+  unit:
+    name: Unit tests + lint (pytest -m unit; hermetic, no secrets)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv (provisions Python per workers/etl/.python-version = 3.14)
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: 'workers/etl/uv.lock'
+
+      - name: Sync deps (frozen lockfile; dev=ruff + test=pytest groups)
+        run: uv sync --frozen --group dev --group test
+
+      - name: Install project editable (src-layout; no [build-system] → mirrors Dockerfile)
+        run: uv pip install -e .
+
+      - name: Lint — ruff check (src/; the SELF-230 core.py surface)
+        # Scoped to src/ deliberately. tests/ carries ONE pre-existing E402
+        # (conftest.py:176 — a deliberate late `import replay` after sys.path setup)
+        # that predates SELF-230. Full-tree ruff-in-CI is deferred to the ETL-ruff
+        # follow-up (fix = a `# noqa: E402` in the QA-owned conftest, out of this PR's
+        # scope). Scoping to src/ lints the changed importer without red-on-incumbent-debt.
+        run: uv run --no-sync ruff check src
+
+      - name: Unit tests (pytest -m unit → 55 run; non-unit markers deselected)
+        # --strict-markers (pyproject addopts): unknown markers error. `-m unit` selects
+        # ONLY unit-marked tests → the 17 non-unit tests (incl. BLS-keyed @integration)
+        # are DESELECTED, never hard-failing CI for a missing key. Hermetic: unit tests
+        # mock os.environ, so no .env / no credentials are required.
+        run: uv run --no-sync pytest -m unit

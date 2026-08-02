@@ -40,6 +40,22 @@ def test_update_table_cpi(backend):
 
 
 @pytest.mark.integration
+def test_update_table_cpi_u_index(backend):
+    # Requires migration 053 (pfin.cpi_u_index) applied in the test fixture.
+    # Idempotent upsert: run twice, second run must not raise (revision path).
+    backend.update_table_cpi_u_index()
+    backend.update_table_cpi_u_index()
+
+
+@pytest.mark.integration
+def test_backfill_cpi_u_index(backend):
+    # AC4 one-shot historical backfill Dec-2015 -> now; idempotent (upsert).
+    # Requires migration 053 applied. Guarded to a short window to keep the
+    # integration run cheap while still exercising the multi-year loop.
+    backend.backfill_cpi_u_index(start_year=2015)
+
+
+@pytest.mark.integration
 def test_update_table_asset(backend):
     backend.update_table_asset(sym_list=SYMBOL_LIST)
 
