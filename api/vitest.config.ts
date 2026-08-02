@@ -1,60 +1,77 @@
 // api/vitest.config.ts
 //
 // OQ-3 — api/ test harness (SELF-212 build support). Stands up Vitest as the api/
-// test runner so Frontend's SELF-198 tests, the forthcoming Option-C relay-leg
-// tests, and QA's api-tier tests have a runnable target (they were authored
-// against the Vitest API but api/ had no runner).
+// test runner so Frontend's SELF-198 tests, the Option-C relay-leg tests, and QA's
+// api-tier tests have a runnable target.
 //
-// DELIBERATELY STANDALONE (does NOT import vite.config.ts / the SvelteKit plugin):
-// keeping the runner decoupled from the SvelteKit Vite plugin means pure-TS server
-// tests (src/lib/server/**, hooks, relay legs) run without requiring `svelte-kit
-// sync` / a browser env. Default environment = node.
+// TWO TEST MODALITIES → TWO VITEST PROJECTS (SELF-226, QA; team-lead + F/CTO-approved
+// Option A jsdom dep-add). The two modalities need DIFFERENT resolve conditions and can
+// NOT share one environment:
+//   • 'node'  — pure-TS server tests (src/lib/server/**, hooks, relay legs, utils) AND
+//               `svelte/server` SSR-render tests (component → HTML string, no DOM). Svelte
+//               resolves to its SERVER build here. This is the original, unchanged posture.
+//   • 'jsdom' — DOM component-interaction tests (*.dom.test.ts): @testing-library/svelte
+//               `mount` needs Svelte's BROWSER build → the svelteTesting() plugin puts
+//               `browser` ahead of `node` in resolve.conditions + wires DOM auto-cleanup.
+// Keeping them as separate projects means the browser resolve-condition is SCOPED to the
+// jsdom project ONLY — the SSR/node tests keep server resolution and are byte-for-byte
+// unaffected. (A single global `browser` condition would break `svelte/server` render.)
 //
-// DOM/COMPONENT TESTS (follow-up — needs team-lead sign-off before dep-add):
-// Svelte-component tests (e.g. some SELF-198 UI specs) will need a DOM environment
-// (`jsdom` or `happy-dom`) + `@testing-library/svelte` as ADDITIONAL devDeps, which
-// are BEYOND the sanctioned "test runner only" footprint. Those are optional Vitest
-// peers (not pulled by vitest itself). Until they land, a component spec can opt in
-// per-file with a `// @vitest-environment jsdom` docblock once the dep is added.
-// Flagged to team-lead — do not add jsdom/testing-library without approval.
+// DELIBERATELY STANDALONE (does NOT import vite.config.ts / the SvelteKit plugin): pure-TS
+// server tests run without `svelte-kit sync` / a browser env.
 
 import { defineConfig } from 'vitest/config';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
+import { svelteTesting } from '@testing-library/svelte/vite';
 import { fileURLToPath } from 'node:url';
 
+// Shared TEST-ONLY alias resolution (both projects): the app's `$lib` convention + a
+// process.env-backed stub for the SvelteKit `$env/dynamic/{private,public}` virtual modules
+// (unavailable without svelte-kit sync). The real build resolves these via the SvelteKit
+// Vite plugin. `import type ... from './$types'` needs NO alias (erased).
+const alias = {
+	$lib: fileURLToPath(new URL('./src/lib', import.meta.url)),
+	'$env/dynamic/private': fileURLToPath(
+		new URL('./tests/stubs/env-dynamic-private.ts', import.meta.url)
+	),
+	'$env/dynamic/public': fileURLToPath(
+		new URL('./tests/stubs/env-dynamic-private.ts', import.meta.url)
+	)
+};
+
+// Discovery excludes shared by both projects.
+const baseExclude = ['node_modules/**', 'build/**', '.svelte-kit/**'];
+
 export default defineConfig({
-	// SVELTE COMPONENT COMPILATION (QA, SELF-208): the ALREADY-INSTALLED @sveltejs/vite-plugin-svelte
-	// (a devDep pulled by the SvelteKit plugin — NOT a new dependency) so vitest can compile `.svelte`
-	// imports for SERVER-SIDE render tests (`svelte/server` render → HTML string, node env, NO DOM).
-	// This does NOT add jsdom / @testing-library — those remain the gated dep-add flagged below for a
-	// full client-render/interaction test. The plugin only transforms `.svelte`; pure-TS node tests
-	// (server logic / relay legs / utils) are unaffected. Runes mode auto-activates per-component.
-	plugins: [svelte()],
-	// Minimal alias resolution so pure-TS SERVER tests (the Option-C relay legs — this
-	// config's stated target) can import via the app's `$lib` convention and stub the
-	// SvelteKit `$env/dynamic/private` virtual module (unavailable without svelte-kit
-	// sync). These aliases are TEST-ONLY; the real build resolves them via the
-	// SvelteKit Vite plugin. `import type ... from './$types'` needs NO alias (erased).
-	resolve: {
-		alias: {
-			$lib: fileURLToPath(new URL('./src/lib', import.meta.url)),
-			// Both $env/dynamic/{private,public} resolve to the same process.env-backed stub
-			// under test (hooks.server.ts imports both). Real build uses the SvelteKit plugin.
-			'$env/dynamic/private': fileURLToPath(
-				new URL('./tests/stubs/env-dynamic-private.ts', import.meta.url)
-			),
-			'$env/dynamic/public': fileURLToPath(
-				new URL('./tests/stubs/env-dynamic-private.ts', import.meta.url)
-			)
-		}
-	},
 	test: {
-		// Node env: server-logic / relay-leg / util tests. Component tests override
-		// per-file via `// @vitest-environment jsdom` once the DOM dep is approved.
-		environment: 'node',
-		// Colocated (src/**/*.test.ts) + a dedicated tests/ tree.
-		include: ['src/**/*.{test,spec}.ts', 'tests/**/*.{test,spec}.ts'],
-		// Exclude build artifacts + SvelteKit's generated dir from test discovery.
-		exclude: ['node_modules/**', 'build/**', '.svelte-kit/**']
+		projects: [
+			{
+				// ── node: pure-TS server + `svelte/server` SSR-render tests ──────────────
+				// @sveltejs/vite-plugin-svelte (already-installed; pulled by the SvelteKit
+				// plugin) so `.svelte` imports compile for SSR render. Server resolution.
+				plugins: [svelte()],
+				resolve: { alias },
+				test: {
+					name: 'node',
+					environment: 'node',
+					include: ['src/**/*.{test,spec}.ts', 'tests/**/*.{test,spec}.ts'],
+					// The DOM project owns *.dom.test.ts — keep them out of the node project.
+					exclude: [...baseExclude, 'src/**/*.dom.test.ts']
+				}
+			},
+			{
+				// ── jsdom: DOM component-interaction tests (*.dom.test.ts) ────────────────
+				// svelteTesting() adds `browser` before `node` in resolve.conditions (Svelte's
+				// browser build for mount) + a DOM auto-cleanup setup file. SCOPED here only.
+				plugins: [svelte(), svelteTesting()],
+				resolve: { alias },
+				test: {
+					name: 'dom',
+					environment: 'jsdom',
+					include: ['src/**/*.dom.test.ts'],
+					exclude: baseExclude
+				}
+			}
+		]
 	}
 });
