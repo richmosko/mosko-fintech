@@ -15,12 +15,28 @@ import logging
 from datetime import date, datetime, timezone, timedelta
 import sqlalchemy as sqla
 import sqlalchemy.ext.automap as sqla_automap
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 import polars as pl
 import fmpstab
 from pfin_back_etl import utils
 from pfin_back_etl.connection import TenantBoundConnection
 
 logger = logging.getLogger("pfin_etl")
+
+# ---------------------------------------------------------------------------
+# CPI-U (BLS series CUUR0000SA0) ingest constants — SELF-230 (V1.1 Platform).
+# Target table pfin.cpi_u_index (migration 053; Architect-owned, consumed here).
+# ---------------------------------------------------------------------------
+# BLS series id for CPI-U: All Urban Consumers, US city average, all items, NSA.
+CPI_U_SERIES_ID = "CUUR0000SA0"
+# Provenance string stored in pfin.cpi_u_index.source (matches the 053 DEFAULT).
+CPI_U_SOURCE = "BLS_CUUR0000SA0"
+# AC4 historical-backfill anchor: rows must exist for every month Dec-2015 -> now.
+CPI_U_BASE_YEAR = 2015
+# Nightly rolling window (years, inclusive of the current year). BLS revises only
+# recent prints, so a short trailing window catches revisions cheaply; the deep
+# history is laid down once by backfill_cpi_u_index() (the AC4 one-shot).
+CPI_U_NIGHTLY_WINDOW_YEARS = 2
 
 
 class PFinFMP(fmpstab.FMPStab):
@@ -160,6 +176,57 @@ class SBaseConn:
             if ldict_update:
                 self._staging_update(session, tab_sbase, key_list, ldict_update)
                 session.commit()
+
+    def upsert_table_df(self, tab_sbase, index_elements, df_upsert):
+        """
+        UPSERT rows from polars dataframe df_upsert into tab_sbase using a native
+        Postgres INSERT ... ON CONFLICT (index_elements) DO UPDATE. This is the
+        single-statement upsert path for global-reference tables whose natural key
+        IS the conflict target (e.g. pfin.cpi_u_index keyed on cpi_period) — new
+        rows INSERT, existing rows UPDATE in place. Idempotent: re-running with the
+        same data is a no-op-equivalent (same values re-written).
+
+        Distinct from insert_table_df + update_table_df (the two-step
+        isolate-new / staging-update path used by surrogate-key tables like
+        pfin.cpi where the conflict key is not the row identity). Prefer this when
+        the table's PRIMARY KEY / unique key is exactly the upsert key.
+
+        args:
+            tab_sbase:       sqlalchemy ORM table object (the target)
+            index_elements:  list of column names forming the conflict target
+                             (must be a PK / unique constraint on tab_sbase)
+            df_upsert:       polars dataframe of rows to upsert
+
+        Columns present in df_upsert are written on INSERT; columns absent from
+        df_upsert fall back to their DB DEFAULT on INSERT. On CONFLICT, every
+        non-key column of the target is refreshed from the proposed row (EXCLUDED),
+        so a column with a DEFAULT now() (e.g. ingested_at) is re-stamped on each
+        revision-update even when it is not carried in df_upsert.
+        """
+        if not isinstance(index_elements, list):
+            index_elements = [index_elements]
+
+        ldict_upsert = df_upsert.to_dicts()
+        if not ldict_upsert:
+            return
+
+        tab = tab_sbase.__table__
+        with sqla.orm.Session(self.engine) as session:
+            logger.info(
+                f"Upserting {len(ldict_upsert)} entries into "
+                f"{tab.schema}.{tab.name} on conflict {index_elements}..."
+            )
+            stmt = pg_insert(tab).values(ldict_upsert)
+            update_cols = {
+                col.name: stmt.excluded[col.name]
+                for col in tab.columns
+                if col.name not in index_elements
+            }
+            stmt = stmt.on_conflict_do_update(
+                index_elements=index_elements, set_=update_cols
+            )
+            session.execute(stmt)
+            session.commit()
 
     def print_schema_info(self):
         """
@@ -423,6 +490,7 @@ class PFinBackend(SBaseConn):
         be run as a scheduled job nightly.
         """
         self.update_table_cpi()
+        self.update_table_cpi_u_index()
         self.update_table_asset(sym_list=sym_list)
         self.update_table_equity_profile(sym_list=sym_list)
         self.update_table_reporting_period(sym_list=sym_list)
@@ -482,6 +550,134 @@ class PFinBackend(SBaseConn):
 
         self.insert_table_df(tab_sbase, df_insert)
         self.update_table_df(tab_sbase, "id", df_update)
+        return
+
+    @staticmethod
+    def _map_cpi_u_index_df(df_api):
+        """
+        Map a raw BLS CPI-U dataframe (as returned by utils.fetch_cpi_df) to the
+        pfin.cpi_u_index grain: one row per calendar month.
+
+        Transform contract:
+            - month grain: BLS periods are M01..M12 for real months and M13 for the
+              ANNUAL AVERAGE. M13 (and any period > 12) is DROPPED — it is not a
+              calendar month and would produce an invalid first-of-month DATE.
+            - cpi_period: first-of-month DATE = date(year, month, 1).
+            - cpi_value:  the BLS series_value; non-finite / null values are dropped
+              (the 053 CHECK cpi_u_index_value_finite rejects NaN; NOT NULL rejects
+              null — we fail-closed at the worker before the DB does).
+            - source:     CPI_U_SOURCE provenance string (053 DEFAULT parity; carried
+              explicitly so a future series can coexist).
+            - ingested_at: NOT set here — the DB DEFAULT now() stamps it on INSERT and
+              the upsert re-stamps it from EXCLUDED on revision-UPDATE.
+
+        args:    df_api (polars DataFrame from utils.fetch_cpi_df)
+        returns: df_rows (polars DataFrame: cpi_period[Date], cpi_value[Float64],
+                 source[str]) — ready for upsert_table_df on cpi_period.
+        """
+        df_rows = (
+            df_api.filter(
+                pl.col("month").is_not_null()
+                & (pl.col("month") >= 1)
+                & (pl.col("month") <= 12)
+                & pl.col("series_value").is_not_null()
+                & pl.col("series_value").is_finite()
+            )
+            .with_columns(
+                pl.date(pl.col("year"), pl.col("month"), 1).alias("cpi_period"),
+                pl.col("series_value").cast(pl.Float64).alias("cpi_value"),
+                pl.lit(CPI_U_SOURCE).alias("source"),
+            )
+            .select(["cpi_period", "cpi_value", "source"])
+            .unique(subset=["cpi_period"], keep="first")
+            .sort("cpi_period")
+        )
+        return df_rows
+
+    def update_table_cpi_u_index(self, start_year=None, end_year=None):
+        """
+        Fetch CPI-U (BLS series CUUR0000SA0) and UPSERT into pfin.cpi_u_index on
+        cpi_period (first-of-month DATE). New months INSERT; BLS-revised prints
+        UPDATE in place (the table is MUTABLE per migration 053 — eod_price/019
+        global-reference posture, not append-only).
+
+        Global public reference data (no tenant): the engine is the SYSTEM-mode
+        TenantBoundConnection (TenantBoundConnection.system() in _sbase_setup) —
+        NOT .for_tenant(); there is no users_id on this table.
+
+        args:
+            start_year:  first BLS year to fetch (default: a CPI_U_NIGHTLY_WINDOW_YEARS
+                         trailing window ending at the current year — the nightly
+                         revision-catch path). Deep history is laid down by
+                         backfill_cpi_u_index() (the AC4 one-shot).
+            end_year:    last BLS year to fetch (default: current year).
+
+        Gov#3 (ratified minimal): run-logging only — no per-tenant audit row and no
+        new audit table. Emits structured start / fetched / upserted / done logs on
+        the pfin_etl logger (the minimal ETL run-log posture).
+        """
+        logger.info("==== " * 16)
+        logger.info("==== Updating pfin.cpi_u_index Table (CPI-U / BLS CUUR0000SA0)")
+        api_key = self._params["BLS_API_KEY"]
+
+        current_year = date.today().year
+        if end_year is None:
+            end_year = current_year
+        if start_year is None:
+            start_year = current_year - CPI_U_NIGHTLY_WINDOW_YEARS + 1
+        logger.info(
+            f"CPI-U fetch window: {start_year} -> {end_year} "
+            f"(series {CPI_U_SERIES_ID})"
+        )
+
+        df_api = utils.fetch_cpi_df(
+            api_key, start_year, end_year, [CPI_U_SERIES_ID]
+        )
+        df_rows = self._map_cpi_u_index_df(df_api)
+        logger.info(f"CPI-U rows mapped to first-of-month grain: {len(df_rows)}")
+
+        if df_rows.is_empty():
+            logger.warning(
+                "CPI-U fetch returned no upsertable rows for window "
+                f"{start_year}->{end_year}; skipping upsert."
+            )
+            return
+
+        tab_sbase = self.base.by_module.pfin.cpi_u_index
+        self.upsert_table_df(tab_sbase, ["cpi_period"], df_rows)
+        logger.info(
+            f"pfin.cpi_u_index upsert complete: {len(df_rows)} months "
+            f"({df_rows['cpi_period'].min()} .. {df_rows['cpi_period'].max()})"
+        )
+        return
+
+    def backfill_cpi_u_index(self, start_year=CPI_U_BASE_YEAR):
+        """
+        One-shot idempotent historical backfill of pfin.cpi_u_index so a row exists
+        for every month from Dec-CPI_U_BASE_YEAR (2015) through the current month
+        (SELF-230 AC4). Idempotent because the underlying write is an UPSERT on
+        cpi_period — re-running rewrites the same values, never duplicates.
+
+        Implemented as a year-by-year loop (start_year -> current year): each year is
+        fetched + upserted independently, so a transient BLS failure in one year does
+        not lose the years already written, and a re-run resumes cleanly. Not wired
+        into the nightly update_table_all() path — it is invoked once (initial load)
+        or on demand; the nightly update_table_cpi_u_index() keeps recent months
+        fresh thereafter. (Coolify cron scheduling is deferred per the SELF-230
+        ratified Phase-7 deferral.)
+        """
+        current_year = date.today().year
+        logger.info("==== " * 16)
+        logger.info(
+            f"==== Backfilling pfin.cpi_u_index: {start_year} -> {current_year} "
+            "(AC4 one-shot; idempotent upsert)"
+        )
+        for year in range(start_year, current_year + 1):
+            logger.info(f"CPI-U backfill year {year}...")
+            self.update_table_cpi_u_index(start_year=year, end_year=year)
+        logger.info(
+            f"pfin.cpi_u_index backfill complete ({start_year} -> {current_year})."
+        )
         return
 
     def update_table_asset(self, sym_list=None):
