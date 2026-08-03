@@ -147,6 +147,32 @@ select set_eq(
   '(a1) DEFINER allowlist = EXACTLY {fn_refresh_updated_at, fn_grant_creator_access, fn_reclass_history_insert}; no unexpected 4th DEFINER (the SELF-201 Task #7 audit-log helper stays reserved-unauthored)'
 );
 
+-- ⚠⚠ DO NOT "CORRECT" 3 TO 4. READ THIS BEFORE EDITING (a1)/(a2)/(E-iii). ⚠⚠
+--   Added 2026-08-03 at Sec's + Architect's joint request during the ADR-042 close-gate
+--   review, because this is a live trap and the failure looks like tidying up.
+--
+--   These assertions measure **AUTHORED** SECURITY DEFINER functions. That number is **3**:
+--     fn_refresh_updated_at (`001`) · fn_grant_creator_access (`003`) ·
+--     fn_reclass_history_insert (`031`).
+--   The **ALLOWLIST** is **4**. The fourth entry is the **reserved-but-UNAUTHORED** general
+--   same-transaction audit-log insert helper (ADR-011 Decision 9 + its SELF-293 amendment;
+--   standing tracker at BACKLOG.md §7.6 S7). It has no function object, so it cannot appear
+--   in a pg_proc count.
+--
+--   BOTH NUMBERS ARE CORRECT. They have DIFFERENT REFERENTS and they live in DIFFERENT
+--   ARTIFACTS — ADR-042's Consequences block says "allowlist unchanged at 4"; this test
+--   says 3. A reviewer who knows "the allowlist is 4", meets a test asserting 3, and
+--   reconciles the two by editing the test **silently widens this tripwire to admit one new
+--   SECURITY DEFINER function** — the exact thing it exists to catch. The edit reads as
+--   housekeeping and leaves no trace of what it cost.
+--
+--   RULE: 3 must NOT be raised to 4 until the audit-log helper is ACTUALLY AUTHORED, under
+--   Sec review, at which point (a1)'s set_eq list gains its name in the same commit.
+--   COROLLARY: if this test goes RED on new work, that is a REAL DEFECT — something
+--   acquired SECURITY DEFINER that should not have. Fix the migration, never the test.
+--   ADR-042 confirmed intent is all-INVOKER for every `056`/`057`/`058`/`059` fence, so a
+--   red there has no legitimate reading.
+--
 -- (a2) count is exactly 3 (the reserved 4th allowlist slot is unauthored).
 select is(
   (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
