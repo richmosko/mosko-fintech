@@ -22,16 +22,27 @@ and database connection variables. An example of this file sits in this
 directory as `.env.example` with non-valid entries (Phase 5 Step 8: `.env.example`
 supersedes the prior `sample.env`, matching the repo-wide `.env.example` convention).
 
+**`.env.example` is the single source of truth for this contract — copy it, don't
+copy a listing from here.** This README previously duplicated the variable block,
+and the duplicate drifted: it carried `PFIN_DB_USER=<example::postgres.your_project_ref>`
+(the Supabase-pooler username form for the schema **owner**) and
+`PFIN_DB_HOST=<example::pfindash.com>` (the *incumbent* cax21 host, not the V1
+greenfield target). Pasting either would have produced a worker running as the
+`pfin` owner — which inverts every fence migration `054` depends on, since an owner
+can `ALTER TABLE … DISABLE TRIGGER` and bypasses RLS by ownership. That placeholder
+is what SELF-214's Sec joint-review (B1) was raised about; the duplicate here is
+removed rather than re-synced so it cannot drift again.
+
+```sh
+cp .env.example .env      # then fill in the secrets
 ```
-BLS_SERIES_ID=CUUR0000SA0
-BLS_API_KEY=<Bureau_of_Labor_Statistics_API_KEY>
-FMP_API_KEY=<Financial_Modeling_Prep_API_KEY>
-PFIN_DB_USER=<example::postgres.your_project_ref>
-PFIN_DB_HOST=<example::pfindash.com>
-PFIN_DB_PORT=<example::5432>
-PFIN_DB_NAME=<example::postgres>
-PFIN_DB_PASSWORD=<password_for_SupaBase_database>
-```
+
+The DB login role is **`pfin_etl`** (dedicated, NOINHERIT; writes execute AS
+`service_role` via `SET LOCAL ROLE` per ADR-023). See the `DB LOGIN ROLE` block in
+`.env.example` for the full model, the two-step deploy-time credential handoff
+(`\password` then `ALTER ROLE … LOGIN` — order is load-bearing, and the single
+atomic `ALTER ROLE … WITH LOGIN PASSWORD` is prohibited), and the `42501` gotcha
+that bites any new write path. Migration `055`'s header is canonical for the handoff.
 
 ### A Valid Financial Modeling Prep API Key
 This is what I'm using as a stock financials data source. Other sources could work

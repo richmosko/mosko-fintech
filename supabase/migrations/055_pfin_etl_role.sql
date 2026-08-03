@@ -1,0 +1,429 @@
+-- ============================================================================
+-- Migration: pfin_etl — a dedicated NOINHERIT login role for the workers/etl
+--   container. This is the ETL's own database identity: once provisioned it LOGS
+--   IN as `pfin_etl` and holds NO privilege until it explicitly `SET ROLE`s to
+--   `service_role` (privileged writes) or `authenticated` (the W-1 impersonation
+--   read path). **CREATED HERE AS `NOLOGIN` WITH NO PASSWORD** — the role ships
+--   inert and is switched on by a single atomic deploy statement; see the
+--   DEPLOY-TIME CREDENTIAL HANDOFF block. Migration-time `rolcanlogin` is FALSE.
+--   Linear SELF-214. F/CTO-ratified 2026-08-02 (Sec joint-review B8, option (B) —
+--   dedicated role; option (A) share provider-sync's `authenticator` REJECTED).
+--   ADR-041 (this PR). apply-migration procedure applied.
+--   JOINT-REVIEW-MANDATORY (Sec veto surface): a cluster-level identity + a
+--   privileged-role membership grant.
+--
+-- ----------------------------------------------------------------------------
+-- Numbering: 055 follows 054 (nav_daily). Depends on: NOTHING in pfin — this
+--   migration creates no object in the pfin schema and touches no table. It
+--   depends only on the Supabase-provisioned platform roles `service_role` +
+--   `authenticated` existing, which they do from cluster bootstrap. No downstream
+--   migration depends on 055. It is order-independent and could equally have
+--   landed earlier; it is numbered 055 simply because it was authored after 054.
+--
+-- WHY A SEPARATE MIGRATION (not an amendment to 054): 054 is a nav_daily table
+--   concern; this is a CLUSTER-LEVEL IDENTITY concern with a different lifecycle
+--   and a different blast radius. `pfin_etl` outlives nav_daily, is consumed by
+--   every future workers/etl write path (BLS + FMP + CPI-U ingest already in
+--   production shape, plus the W-1 NAV cron), and would need to survive any future
+--   drop-replace of nav_daily. Folding a role into a table migration would couple
+--   two things that must be separately reasoned about and separately reverted.
+--   (Distinct from 054's in-place amendment, which was correct precisely BECAUSE
+--   054 had never been applied anywhere; that reasoning does not generalize.)
+--
+-- ----------------------------------------------------------------------------
+-- WHY OPTION (B) — a dedicated role — OVER (A), sharing `authenticator`.
+--   (A) would have the ETL authenticate with the SAME credential PostgREST uses.
+--   Three consequences made it the wrong trade:
+--     1. BLAST RADIUS. Compromising a batch ETL container would yield the
+--        credential fronting the ENTIRE public Data API (ADR-023 exposed `pfin`
+--        to PostgREST). A long-running batch container is a materially different
+--        exposure profile from the API gateway; sharing one identity collapses
+--        them into a single failure.
+--     2. NO INDEPENDENT REVOCATION. There would be no way to revoke or rotate the
+--        ETL's access without simultaneously downing PostgREST AND the
+--        provider-sync worker. An identity you cannot revoke in isolation is not
+--        really a separate principal.
+--     3. IT CONTRADICTS THE COMMITTED CONTRACT. `secrets-manifest.yml` already
+--        states, verbatim, that PFIN_DB_PASSWORD carries "DIFFERENT credential
+--        VALUES per container: ETL uses its own login credential; provider-sync's
+--        value = the `authenticator` credential". Option (A) would have required
+--        editing that commitment to match a shortcut. (B) realizes it as written.
+--   ADR-023 C1 ROTATION-COUPLING DELTA: C1 (the standing Sec-load-bearing note
+--   that provider-sync's PFIN_DB_PASSWORD == the `authenticator` password ==
+--   PostgREST's credential, so rotating either forces a COORDINATED redeploy of
+--   both) now binds TWO consumers — PostgREST + provider-sync — instead of three.
+--   The ETL is OUT of that coupling: `pfin_etl`'s password rotates independently,
+--   on its own schedule, with a restart of only the ETL container. C1 itself is
+--   NOT weakened or rescinded for the consumers it still covers.
+--
+-- ----------------------------------------------------------------------------
+-- POSTURE RATIONALE — NO FUNCTION IS AUTHORED HERE, so the SECURITY DEFINER
+--   allowlist question does not arise at all: allowlist STAYS 4 (ADR-011
+--   Decision 9, read verbatim 2026-08-02 — fn_refresh_updated_at +
+--   fn_grant_creator_access + fn_reclass_history_insert + the reserved,
+--   still-unauthored general audit-log insert helper; authored so far = 3). There
+--   is no INVOKER-vs-DEFINER decision to make: this migration contains one guarded
+--   CREATE ROLE, two role-membership GRANTs, and one COMMENT.
+--
+--   NOINHERIT IS LOAD-BEARING — it is the whole point of the shape, not a stylistic
+--   choice. With `rolinherit = f`, `pfin_etl` holds the PRIVILEGES of neither
+--   `service_role` nor `authenticated` merely by being a member; it must issue an
+--   explicit `SET ROLE` to acquire them, and drops them again at `RESET ROLE` /
+--   transaction end. Two properties follow:
+--     · FAIL-CLOSED, LOUDLY. A code path that forgets `set local role service_role`
+--       before an INSERT gets a hard `42501` insufficient_privilege at the ACL —
+--       it does NOT silently succeed while running over-privileged. The failure is
+--       a crash at the exact wrong statement, not a silent widening. (This is
+--       exactly what Sec's B1(c) identified in the W-1 worker: under NOINHERIT the
+--       append MUST issue `set local role service_role` or fail — a functional
+--       requirement, discovered on paper rather than in production.)
+--     · PRIVILEGE IS SCOPED TO THE STATEMENT THAT NEEDS IT. The elevated window is
+--       bounded by the SET ROLE, not by the lifetime of the connection.
+--
+--   *** `rolinherit = false` ALONE IS NOT SUFFICIENT ON PG 16+ — DO NOT "SIMPLIFY"
+--   THE TEST TO THAT FLAG. *** Since PG 16, inheritance is PER-MEMBERSHIP: a grant
+--   issued as `GRANT service_role TO pfin_etl WITH INHERIT TRUE` confers privileges
+--   IMPLICITLY, defeating this migration's entire posture — WHILE `rolinherit` STILL
+--   READS FALSE. Measured on this stack (PG 17.6, rolled-back txn):
+--       default grant        : rolinherit=false  USAGE=false  MEMBER=true   ← correct
+--       WITH INHERIT TRUE    : rolinherit=false  USAGE=true   MEMBER=true   ← DEFEATED
+--   So BOTH checks are required and they govern different things:
+--     · `rolinherit = false`                  governs FUTURE memberships (the default
+--                                             applied when a new grant omits INHERIT);
+--     · pg_has_role(...,'MEMBER') = true AND
+--       pg_has_role(...,'USAGE')  = false     governs the EXISTING memberships — this
+--                                             is the pair that actually proves no
+--                                             privilege is held without a SET ROLE.
+--   The grants below deliberately omit any INHERIT clause so the role default applies.
+--   QA's battery asserts both (found by QA; verified independently here). Anyone
+--   trimming the MEMBER/USAGE pair as redundant re-opens exactly this hole.
+--
+--   *** AND THE MIRROR-IMAGE HAZARD: `MEMBER` DOES NOT TRACK THE `SET` OPTION. ***
+--   PG 16+ splits every membership into THREE independent options — ADMIN / INHERIT
+--   / SET — and `pg_has_role(..., 'MEMBER')` reflects membership, NOT the right to
+--   `SET ROLE`. Measured on this stack, the counterexample is in this very migration:
+--       member    role_granted    admin  inherit  set
+--       pfin_etl  authenticated     f       f      t     ← worker CAN set role  ✅
+--       pfin_etl  service_role      f       f      t     ← worker CAN set role  ✅
+--       postgres  pfin_etl          t       f      f     ← MEMBER=true, SET DENIED
+--   `pg_has_role('postgres','pfin_etl','MEMBER')` returns TRUE while
+--   `SET ROLE pfin_etl` as postgres fails 42501. So MEMBER=true proves membership,
+--   NOT that a SET ROLE will succeed.
+--   CONSEQUENCE — the load-bearing check is `pg_auth_members.set_option`. If anyone
+--   ever re-issues `GRANT service_role TO pfin_etl WITH SET FALSE`, the W-1 worker
+--   breaks at `set local role service_role` with 42501 on EVERY run — and a battery
+--   asserting only MEMBER would stay GREEN. The grants below deliberately omit any
+--   SET clause so the `SET TRUE` default applies. The three checks are complementary
+--   and none substitutes for another:
+--       rolinherit = false                → governs FUTURE memberships
+--       MEMBER=true AND USAGE=false       → proves no implicit privilege TODAY
+--       pg_auth_members.set_option = true → proves SET ROLE will actually WORK
+--   (Symmetry worth noting: INHERIT can be silently turned ON behind a false
+--   `rolinherit`, and SET can be silently turned OFF behind a true `MEMBER`. Both
+--   flags read reassuringly while the per-membership option decides the outcome.)
+--
+--   OPERATIONAL SURPRISE, NOT A PRIVILEGE BOUNDARY — `postgres` cannot `SET ROLE
+--   pfin_etl` by default (PG 16+ CREATEROLE confers ADMIN but not SET, as the table
+--   above shows). An operator debugging as `postgres` must first run
+--   `grant pfin_etl to postgres with set true`. **This is a convenience gap, NOT an
+--   isolation control:** `postgres` holds ADMIN on the role it created and can issue
+--   that grant itself, in one statement — verified live. Do NOT write this up as
+--   isolation. An attacker holding `postgres` already owns the schema, can
+--   `ALTER TABLE ... DISABLE TRIGGER`, and can read every table; the missing SET
+--   costs them one statement. Calling it a fence would be exactly the false-fence
+--   pattern this migration's own history was corrected to remove — and on a role
+--   whose entire justification is a security property, that is where it would do the
+--   most damage.
+--   This mirrors the `authenticator` posture the worker code is ALREADY written
+--   against (ADR-023 / workers/provider-sync), which is why option (B) requires
+--   NO Backend code change: the two role memberships granted below are the same
+--   two option (A) would have relied on.
+--
+--   NOT THE OWNER, NOT SUPERUSER — this is what makes 054's fences real. `pfin_etl`
+--   is created with no special attributes (and, at creation, not even LOGIN): not
+--   SUPERUSER, not CREATEDB, not CREATEROLE, not REPLICATION, not BYPASSRLS, and
+--   it owns NOTHING (it is not the
+--   `pfin` schema owner and owns no table in it). Therefore it can neither
+--   `ALTER TABLE … DISABLE TRIGGER` (denied — must be owner) nor set
+--   `session_replication_role` (denied — must be superuser), which are the ONLY
+--   two ways to suppress a trigger. Consequence, stated plainly because it is the
+--   security argument for this whole migration: 054's append-only immutability
+--   fences AND the B7 write-tenant binding fence are UN-BYPASSABLE BY THE WRITER
+--   under this identity. Under an owner-class login (e.g. `postgres`) both
+--   mechanisms succeed and every one of those guarantees inverts — reproduced live
+--   at the SELF-214 joint-review. See SECURITY §4.4 SD-24 + §4.5 RT-31 (c-i)/(c-ii).
+--
+--   NO DIRECT TABLE PRIVILEGES ARE GRANTED HERE — DELIBERATELY. `pfin_etl` gets no
+--   `GRANT … ON pfin.<table>` and no schema `USAGE`. Its entire reach is via
+--   `SET ROLE service_role`, so migration `008`'s least-privilege per-table
+--   `service_role` grant architecture remains the SINGLE place table privileges are
+--   decided. Granting `pfin_etl` anything directly would fork that decision surface
+--   into two, and the second one would drift.
+--
+-- ----------------------------------------------------------------------------
+-- *** DEPLOY-TIME CREDENTIAL HANDOFF — DO NOT MISS THIS ***
+--   THIS MIGRATION DELIBERATELY CREATES `pfin_etl` **NOLOGIN, WITH NO PASSWORD**.
+--   A credential in the repository is a hard no (root CLAUDE.md: "Secrets never go
+--   in the repo"), and a migration file is committed, diffed, and mirrored to
+--   GitHub. The role therefore ships INERT and is switched on at deploy time.
+--
+--   REQUIRED at deploy time (DevOps + Backend; Phase 7 / first ETL deploy), run
+--   ONCE against the target database by an operator, NOT from a committed file.
+--   TWO statements, and THE ORDER IS LOAD-BEARING:
+--
+--       \password pfin_etl          -- psql meta-command. Prompts; computes the
+--                                   -- verifier CLIENT-SIDE per password_encryption.
+--                                   -- Role is still NOLOGIN here → inert, harmless.
+--       ALTER ROLE pfin_etl LOGIN;  -- carries NO secret; safe in history and logs.
+--
+--   Then set the ETL container's env: PFIN_DB_USER=pfin_etl (non-secret username)
+--   + PFIN_DB_PASSWORD=<the same secret> (production_only, per secrets-manifest.yml).
+--   Rotation = `\password pfin_etl` + restart the ETL container ONLY — no coordinated
+--   PostgREST/provider-sync redeploy (the ADR-023 C1 coupling this role escapes).
+--   Revocation = `ALTER ROLE pfin_etl NOLOGIN` — stops the ETL and NOTHING else.
+--   OPERATOR PRIVILEGE: `\password` is `ALTER USER` underneath, so the operator must
+--   be superuser, or hold CREATEROLE / ADMIN OPTION on the role.
+--   *** THE SECRET MUST BE HIGH-ENTROPY AND MACHINE-GENERATED, NOT HUMAN-CHOSEN ***
+--   (Sec condition on B10). This is what makes the logged SCRAM verifier's residual
+--   offline attack economically irrelevant — the 4096-iteration bound below is only
+--   meaningful against a secret that is not guessable. A human-chosen password makes
+--   the logged verifier a real exposure rather than a theoretical one. Generate it
+--   (e.g. `openssl rand -hex 32`) and store it as the Coolify PFIN_DB_PASSWORD secret.
+--
+--   WHY NOT THE SINGLE ATOMIC `ALTER ROLE pfin_etl WITH LOGIN PASSWORD '<plaintext>'`
+--   (Sec joint-review B10, 2026-08-02 — this migration previously MANDATED that
+--   statement; it is now PROHIBITED). MEASURED on the local stack, not theorized:
+--       log_statement       = ddl              → ALTER ROLE ... PASSWORD is DDL, so
+--                                                it is captured VERBATIM in the log
+--       password_encryption = scram-sha-256    → \password yields a real SCRAM verifier
+--   Postgres does NOT redact passwords from `log_statement`. The mandated step would
+--   therefore have written the ETL's credential into the server log IN CLEARTEXT.
+--   An earlier mitigation — "use an interactive session, never `psql -c`" — was also
+--   insufficient: it dodges SHELL history but walks straight into psql's OWN
+--   `~/.psql_history`, which records typed statements in plaintext by default.
+--   `\password` closes both, because the secret is typed at a prompt and never
+--   becomes statement text.
+--
+--   *** BE PRECISE ABOUT WHAT THIS BUYS — DO NOT WRITE "NOTHING IS LOGGED" ***
+--   `\password` is a client convenience, not magic. It prompts, hashes client-side,
+--   and then SENDS `ALTER USER ... PASSWORD 'SCRAM-SHA-256$4096:...'`. That is DDL,
+--   so under `log_statement = ddl` IT IS STILL LOGGED. What changes is WHAT is
+--   logged: a SCRAM verifier instead of the plaintext. Precisely:
+--     · PLAINTEXT NEVER LEAVES THE CLIENT — it reaches neither the wire, the server
+--       log, nor `.psql_history`.
+--     · THE VERIFIER IS STILL LOGGED, and it is NOT a usable credential: it stores
+--       StoredKey + ServerKey, while a client proof requires ClientKey, which is not
+--       derivable from StoredKey (StoredKey = H(ClientKey)). Possession of the logged
+--       verifier does NOT let an attacker authenticate as pfin_etl.
+--     · THE RESIDUAL IS AN OFFLINE ATTACK against that verifier, bounded by the
+--       secret's entropy and the iteration count (4096, measured). Acceptable against
+--       a high-entropy generated secret, and categorically better than cleartext —
+--       which is replayable immediately, with no work at all.
+--   Claiming "the secret isn't logged" would overclaim the mechanism. That is the
+--   same failure shape as a test asserting a privilege it never exercised (the B9
+--   defect) — just pointed at a log instead of a battery.
+--
+--   WHY THE TWO-STEP STILL PRESERVES THIS MIGRATION'S CORE PROPERTY. Splitting the
+--   statement does NOT reopen the window NOLOGIN exists to close, because of the
+--   ORDER: `\password` sets ONLY the password, so the credential lands while the role
+--   is still NOLOGIN, and `LOGIN` then flips onto an ALREADY-CREDENTIALED role. The
+--   state this migration exists to prevent — LOGIN with no password, reachable under
+--   a `trust` line — NEVER EXISTS AT ANY INSTANT. The intermediate state (password
+--   set, NOLOGIN) is inert. So the atomicity argument the single-statement form
+--   relied on is no longer needed: the two-step is safe BECAUSE of the ordering, not
+--   despite the split.
+--
+--   WHY NOLOGIN-AT-CREATION RATHER THAN LOGIN-WITH-NO-PASSWORD (Sec NOTE on 055,
+--   adopted 2026-08-02). An earlier draft created the role LOGIN with no password and
+--   argued the pre-provision state was fail-closed because "a LOGIN role with no
+--   password cannot authenticate under scram-sha-256." That claim is TRUE IN
+--   PRODUCTION but does NOT generalize, and the gap was measured, not theorized: the
+--   LOCAL stack's pg_hba.conf grants `trust` on 127.0.0.1/32, ::1/128 and local — and
+--   `trust` NEVER CONSULTS A PASSWORD AT ALL. Under a `trust` line a passwordless
+--   LOGIN role is reachable with NO CREDENTIAL. So the old shape's fail-closed
+--   property was outsourced to pg_hba.conf, a file outside this repo that differs
+--   between production, local dev, and CI.
+--   NOLOGIN removes that dependency entirely: `rolcanlogin = false` is checked from
+--   the ROLE ATTRIBUTE ITSELF, before any authentication method is consulted, so the
+--   role is unreachable under `trust`, `scram-sha-256`, `md5`, or anything else. The
+--   fence is true BY CONSTRUCTION rather than configuration-dependent, which is how
+--   every other fence in this project is built.
+--
+--   SYMPTOMS — note there are TWO, and only one of them is safe:
+--     · SKIP STEP 2 (`ALTER ROLE ... LOGIN`) → the role stays NOLOGIN and the ETL
+--       fails at connect with `role "pfin_etl" is not permitted to log in`. Loud,
+--       immediate, and SAFE: an outage, never an exposure.
+--     · RUN STEP 2 WITHOUT STEP 1 → THIS IS THE ONE DANGEROUS ORDERING. It succeeds,
+--       and leaves exactly the LOGIN-with-no-password state this migration is shaped
+--       to avoid — reachable with no credential under any `trust` line. The guarded
+--       else-branch below raises a WARNING on precisely this state when the migration
+--       is re-applied, so it is detected rather than silent. Do the steps IN ORDER.
+--
+-- ----------------------------------------------------------------------------
+-- §10 3-AXIS CROSS-CHECK (Path B — reference ADR-011 Decision 4; do NOT restate the
+--   catalogued numbered list. Decision 4 read VERBATIM before drafting.) ZERO
+--   catalogued §10 instances added; the ledger STAYS at 3 (RT-22 + RT-26 + RT-27).
+--   (i)   Instance-numbering: RT-22 first, RT-26 second, RT-27 third — untouched.
+--   (ii)  Layer-attribution: `pfin_etl` is a DB-LAYER cluster ROLE/identity. It is
+--         NOT the RT-26 code-layer SUPABASE_SERVICE_ROLE_KEY allowlist grep fence
+--         (pfin_etl is a direct-Postgres login credential; the ETL holds no
+--         SUPABASE_SERVICE_ROLE_KEY and stays OFF the RT-26 allowlist, same posture
+--         as workers/provider-sync), NOT the RT-22 PDF-worker container credential
+--         audit, NOT the RT-27 app→worker admission network/config surface. No
+--         catalogued instance's layer attribution moves, and the Decision-4
+--         per-surface layer-composition language is UNCHANGED — nothing becomes
+--         "four-layer."
+--   (iii) Verbatim-vs-paraphrase: Decision 4 linked, not restated. 055 is not the
+--         canonical anchor.
+--   NOTE (de-conflation guard): introducing a new LOGIN identity is a credential-
+--   posture change, NOT a §10 catalogued-instance addition. The §10 ledger
+--   enumerates specific defense-in-depth FENCE instances, not every role in the
+--   cluster. SECURITY-doc SD/RT catalog entries (SD-24 + RT-31, landed at SELF-214)
+--   are §4.4/§4.5 growth and ALSO not a §10 ledger change.
+--
+-- ----------------------------------------------------------------------------
+-- DECISION 3 (cross-tenant FK-bypass family) — UNCHANGED (+0). Read verbatim
+--   2026-08-02: FIFTEEN LABELED instances (#1–#15), TWELVE DDL-realized; #5 DROPPED
+--   at 048; #3 + #4 DDL-deferred to V1.3+. This migration creates NO table, NO
+--   column, and therefore NO FK-shaped reference column of any kind — single FK,
+--   self-FK, or INTEGER[] array. There is nothing here for matched-tenant
+--   validation to apply to. Family stays 15 labeled / 12 DDL-realized.
+--
+-- ----------------------------------------------------------------------------
+-- LEDGER DELTAS (each confirmed by reading the canonical ADR-011 body verbatim on
+--   2026-08-02, not cited from memory — ALL FLAT):
+--     · §10 catalogued instances = 3 (unchanged; RT-22 first / RT-26 second /
+--       RT-27 third, per Decision 4).
+--     · SECURITY DEFINER allowlist = 4 (unchanged, per Decision 9 — this migration
+--       authors NO function at all).
+--     · Decision-3 family = 15 labeled / 12 DDL-realized (unchanged — no FK-shaped
+--       column exists here).
+--     · RT-26 SUPABASE_SERVICE_ROLE_KEY allowlist = unchanged (pfin_etl is a
+--       direct-Postgres credential; the ETL is not on that code-layer allowlist).
+--     · SECURITY doc: no new SD/RT entry proposed. The write-path posture this role
+--       realizes is ALREADY described in the SD-24 + RT-31 entries Sec landed at
+--       SELF-214; those entries currently frame the ETL login role as an OPEN
+--       deployment decision, which this migration CLOSES. Routed to Sec (doc owner)
+--       for the wording update — Architect does not edit docs/SECURITY/index.html.
+--
+-- ----------------------------------------------------------------------------
+-- CONTRACT
+--   pfin_etl — cluster-level login role; the workers/etl container's database
+--     identity. Attributes AS CREATED BY THIS MIGRATION: **NOLOGIN**, NOINHERIT,
+--     NO PASSWORD — the role ships INERT. Explicitly NOT: SUPERUSER, CREATEDB,
+--     CREATEROLE, REPLICATION, BYPASSRLS. Owns no object. Holds NO direct table or
+--     schema privilege in pfin. It becomes usable ONLY at deploy time, via a single
+--     `ALTER ROLE pfin_etl WITH LOGIN PASSWORD '<secret>'` that flips LOGIN and sets
+--     the password atomically (see the handoff block above). So `rolcanlogin` is
+--     FALSE at migration time and TRUE only in a provisioned environment — tests
+--     that assert migration-time state must expect FALSE.
+--   Memberships (the role's ONLY source of reach, and only after an explicit
+--     SET ROLE, because NOINHERIT):
+--     · service_role   — privileged writes (e.g. the 054 INSERT grant on
+--                        pfin.nav_daily). Reached via `SET LOCAL ROLE service_role`
+--                        per the ADR-023 write role-of-record.
+--     · authenticated  — the W-1 session-impersonation read path (`SET LOCAL ROLE
+--                        authenticated` + a synthetic request.jwt.claims), which
+--                        reuses the locked SECURITY INVOKER fn_compute_nav under
+--                        RLS per Lock 11.
+--   Security-load-bearing edges: NOLOGIN-at-creation makes the role unreachable by
+--     its own attribute, checked BEFORE any pg_hba authentication method — so it is
+--     inert even under a `trust` line, with no dependency on a config file outside
+--     this repo; NOINHERIT means a forgotten SET ROLE fails 42501 rather than
+--     silently running elevated; the role is neither owner nor superuser, so it
+--     cannot suppress 054's append-only triggers or the B7 write-tenant binding
+--     fence by ANY mechanism; it holds no BYPASSRLS attribute of its own (RLS
+--     engages normally while it is SET ROLE authenticated); and it is independently
+--     revocable (`ALTER ROLE pfin_etl NOLOGIN` disables the ETL and NOTHING else —
+--     not PostgREST, not provider-sync).
+--   Idempotency: CREATE ROLE has no IF NOT EXISTS, so creation is guarded on
+--     pg_roles in a DO block. GRANT of an already-held role membership is a no-op,
+--     and COMMENT is a straight overwrite — so the whole migration is re-runnable.
+--     NOTE: the guard does NOT reset attributes on a pre-existing pfin_etl, and
+--     that is DELIBERATE — after deploy the role is legitimately LOGIN, and
+--     "correcting" it on re-application would take the live ETL down. Because the
+--     migration therefore cannot vouch for a pre-existing role's shape, the
+--     else-branch REPORTS the found attributes and raises a WARNING on the two
+--     states that would defeat the posture: INHERIT, and LOGIN-with-no-password.
+--     (Password state is read from pg_authid — pg_roles.rolpassword is a literal
+--     '********' and is useless for this check; the read degrades gracefully if
+--     pg_authid is not visible to the applying role.)
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- Create the role, guarded (CREATE ROLE has no IF NOT EXISTS).
+-- NOLOGIN + NO PASSWORD by design — see the DEPLOY-TIME CREDENTIAL HANDOFF block.
+-- The role ships INERT: unreachable by its own attribute, independent of pg_hba.
+--
+-- WHY THIS GUARD DOES NOT RE-APPLY ATTRIBUTES — this is deliberate and it matters.
+-- After a successful deploy, `pfin_etl` is LEGITIMATELY `LOGIN` (an operator ran
+-- `ALTER ROLE pfin_etl WITH LOGIN PASSWORD …`). A guard that "corrected" attributes
+-- on re-application would flip a live production role back to NOLOGIN and take the
+-- ETL down on the next migration run. Non-resetting is therefore the CORRECT
+-- behaviour, not laziness — but it does mean this migration cannot vouch for a
+-- pre-existing role's shape, so the else-branch REPORTS what it actually found
+-- (loudly, with the two states distinguished) rather than staying silent.
+-- ----------------------------------------------------------------------------
+do $$
+declare
+  v_canlogin  boolean;
+  v_inherit   boolean;
+  v_haspass   text;
+begin
+  if not exists (select 1 from pg_catalog.pg_roles where rolname = 'pfin_etl') then
+    -- NOINHERIT is load-bearing: no privilege is held until an explicit SET ROLE,
+    -- so a forgotten `set local role service_role` fails 42501 (loud) instead of
+    -- silently running over-privileged.
+    -- NOLOGIN is load-bearing: rolcanlogin is checked BEFORE any pg_hba auth method,
+    -- so the role is unreachable even under a `trust` line (local/CI), not merely
+    -- unauthenticatable under scram.
+    create role pfin_etl with nologin noinherit;
+    raise notice 'pfin_etl created NOLOGIN + NOINHERIT + no password (inert by construction). DEPLOY STEPS REQUIRED, IN ORDER: (1) \password pfin_etl  [prompts; verifier computed client-side; role still NOLOGIN so this is inert]  then (2) ALTER ROLE pfin_etl LOGIN;  [carries no secret]. Do NOT use ALTER ROLE ... WITH LOGIN PASSWORD ''<plaintext>'' — log_statement=ddl captures it verbatim in the server log (Sec B10).';
+  else
+    select r.rolcanlogin, r.rolinherit into v_canlogin, v_inherit
+      from pg_catalog.pg_roles r where r.rolname = 'pfin_etl';
+
+    -- pg_authid holds the real password state (pg_roles.rolpassword is a literal
+    -- '********' and is USELESS for this check). It may be unreadable depending on
+    -- the applying role, so degrade gracefully rather than failing the migration.
+    begin
+      select case when a.rolpassword is null then 'NO' else 'yes' end into v_haspass
+        from pg_catalog.pg_authid a where a.rolname = 'pfin_etl';
+    exception when insufficient_privilege then
+      v_haspass := 'unreadable (pg_authid not visible to the applying role)';
+    end;
+
+    raise notice 'pfin_etl already exists — creation SKIPPED; attributes NOT re-applied (deliberate: a deployed role is legitimately LOGIN, and resetting it would take the ETL down). Found: rolcanlogin=% / rolinherit=% / password set=%.',
+      v_canlogin, v_inherit, v_haspass;
+
+    if v_inherit then
+      raise warning 'pfin_etl exists but is INHERIT — this DEFEATS the 055 posture (privileges would be held without an explicit SET ROLE, so a forgotten SET ROLE runs elevated instead of failing 42501). Investigate before deploying; fix with: ALTER ROLE pfin_etl NOINHERIT;';
+    end if;
+
+    if v_canlogin and v_haspass = 'NO' then
+      raise warning 'pfin_etl exists as LOGIN with NO PASSWORD — reachable with NO CREDENTIAL under any pg_hba `trust` line (local/CI). This is the exact state 055 is shaped to avoid. Either complete the deploy step (ALTER ROLE pfin_etl WITH LOGIN PASSWORD ...) or disable it (ALTER ROLE pfin_etl NOLOGIN).';
+    end if;
+  end if;
+end
+$$;
+
+-- ----------------------------------------------------------------------------
+-- Memberships — the role's ONLY source of reach, and only after an explicit
+-- SET ROLE (NOINHERIT). These are the same two memberships the shared-`authenticator`
+-- alternative would have relied on, which is why Backend's worker code is unchanged.
+-- Re-granting an already-held membership is a no-op, so this is idempotent.
+-- ----------------------------------------------------------------------------
+
+-- Privileged writes: `SET LOCAL ROLE service_role` (ADR-023 write role-of-record).
+-- Table privileges themselves stay decided in 008 / per-table grants — NOT here.
+grant service_role to pfin_etl;
+
+-- W-1 session-impersonation read path: `SET LOCAL ROLE authenticated` + a synthetic
+-- request.jwt.claims, reusing the locked INVOKER fn_compute_nav under RLS (Lock 11).
+grant authenticated to pfin_etl;
+
+-- ----------------------------------------------------------------------------
+-- Self-documenting comment (the role analogue of `comment on function`).
+-- ----------------------------------------------------------------------------
+comment on role pfin_etl is
+  'Dedicated login identity for the workers/etl container (ADR-041; SELF-214 Sec joint-review B8 option (B), F/CTO-ratified 2026-08-02; migration 055). Created NOLOGIN + NOINHERIT with NO PASSWORD (inert by construction); NOT superuser, NOT owner, NOT BYPASSRLS, owns nothing, holds NO direct table or schema privilege in pfin. Its entire reach is via explicit SET ROLE to its two memberships: service_role (privileged writes, per the ADR-023 write role-of-record — table privileges stay decided in 008, not granted here) and authenticated (the W-1 session-impersonation read path reusing INVOKER fn_compute_nav under RLS, Lock 11). NOINHERIT is load-bearing: a forgotten SET ROLE fails 42501 loudly instead of silently running elevated. Because it is neither table owner nor superuser it can neither ALTER TABLE ... DISABLE TRIGGER nor set session_replication_role — which is what makes 054 nav_daily''s append-only fences and its B7 write-tenant binding fence un-bypassable by the writer. Chosen over sharing provider-sync''s authenticator so the ETL is INDEPENDENTLY REVOCABLE (ALTER ROLE pfin_etl NOLOGIN stops the ETL and nothing else) and so a compromised batch container does not yield the credential fronting the entire PostgREST Data API; this also pulls ADR-023''s C1 rotation coupling back to two consumers (PostgREST + provider-sync), leaving pfin_etl''s password independently rotatable. CREATED NOLOGIN WITH NO PASSWORD — a repo-committed credential is prohibited; an operator switches the role on at deploy time with TWO statements IN A LOAD-BEARING ORDER: (1) `\password pfin_etl` (prompts, computes the SCRAM verifier CLIENT-SIDE, sets ONLY the password while the role is still NOLOGIN and therefore inert), then (2) `ALTER ROLE pfin_etl LOGIN` (carries no secret). The single statement `ALTER ROLE ... WITH LOGIN PASSWORD ''<plaintext>''` is PROHIBITED per Sec B10: log_statement=ddl (measured) captures it verbatim, writing the credential to the server log in cleartext, and typing it also lands it in ~/.psql_history. Be precise about what \password buys: plaintext never leaves the client, but the resulting ALTER USER carrying a SCRAM-SHA-256$4096 verifier IS still logged — that verifier is not a usable credential (a client proof needs ClientKey, which StoredKey does not yield), leaving only an offline attack bounded by secret entropy and iteration count. Do NOT claim "the secret isn''t logged". Ordering matters: running (2) without (1) leaves LOGIN-with-no-password, the exact state this role is shaped to avoid. NOLOGIN rather than LOGIN-without-a-password because rolcanlogin is checked BEFORE any pg_hba auth method: a passwordless LOGIN role is reachable with NO credential under a `trust` line (measured on the local stack, which trusts 127.0.0.1/32 + ::1/128 + local), so the earlier shape outsourced its fail-closed property to a config file outside this repo. Consequence for tests: rolcanlogin is FALSE at migration time and TRUE only in a provisioned environment. Revoke with ALTER ROLE pfin_etl NOLOGIN — stops the ETL and nothing else. See SECURITY §4.4 SD-24 + §4.5 RT-31.';
