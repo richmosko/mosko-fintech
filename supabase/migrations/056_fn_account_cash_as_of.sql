@@ -289,3 +289,160 @@ as $$
   )
   select (select v from security_leg) + (select v from cash_leg);
 $$;
+
+-- ============================================================================
+-- (3) RE-POINT -- 049's cash_bal consumes the extracted function.
+--
+-- Same single change as (2). sec_mv, sec_basis, the fx terms, `where
+--   acc.is_active`, the Design-C projection and the signature are VERBATIM.
+--
+-- PRODUCED BY SUBSTITUTION, NOT TRANSCRIPTION. Body extracted from 049
+--   programmatically; three regex substitutions, each asserted to match exactly
+--   once; post-asserted on EXECUTABLE text only: zero account_balance_checkpoint
+--   refs, exactly one fn_account_cash_as_of call, left-join present, sec_mv and
+--   sec_basis still present. A 160-line hand-reproduction where the change is
+--   two lines is the shape where a long swap goes wrong silently.
+--
+-- THE THIRD SUBSTITUTION WAS FOUND BY THE ASSERTION, NOT BY READING: the first
+--   pass replaced the executable roll-forward and the check still failed, on a
+--   COMMENT above cash_bal describing the mechanism that had just moved. A
+--   comment describing a mechanism that relocated is the class this ADR has
+--   corrected repeatedly -- here caught inside the migration doing the moving.
+--
+-- WHY BOTH CALL SITES MOVE TOGETHER: 049 + 050 are the two halves of the
+--   ADR-038 foot-to-NAV invariant. Re-pointing one leaves THREE definitions of
+--   the roll-forward where there were two, and the third has no cross-check --
+--   foot-to-NAV compares 049 to 050 and is blind to a third existing.
+-- ============================================================================
+
+create or replace function pfin.fn_account_unrealized_gl(p_as_of date default current_date)
+returns table (
+  account_id            bigint,
+  current_market_value  numeric,
+  cost_basis            numeric,
+  unrealized_gl         numeric
+)
+language sql
+security invoker
+set search_path = ''
+as $$
+  with
+  -- SECURITIES MARKET value per account (USD): fn_holdings_as_of qty × best-available
+  -- price × fx. Reproduces fn_compute_nav's security-leg valuation VERBATIM (V-1..V-4):
+  -- price = D-FIRST (latest price_date ≤ as_of; same-date tie → source rank
+  -- manual_valuation(1) > market_feed/spot_feed/fx_feed(2) > provider_implied(3) — the
+  -- actual CASE ranks below); fx via the asset's currency-asset
+  -- fx_feed (USD ≡ 1.0). Unpriced asset → NULL term → SUM drops it → 0, never NaN.
+  sec_mv as (
+    select
+      h.account_id,
+      coalesce(sum(
+        h.quantity
+        * (select ep.price
+           from pfin.eod_price ep
+           where ep.asset_id = h.asset_id and ep.price_date <= p_as_of
+           order by ep.price_date desc,
+                    case ep.source
+                      when 'manual_valuation' then 1
+                      when 'market_feed'      then 2
+                      when 'spot_feed'        then 2
+                      when 'fx_feed'          then 2
+                      when 'provider_implied' then 3
+                      else 4
+                    end
+           limit 1)
+        * case when a.currency = 'USD' then 1.0
+               else coalesce((
+                 select fx.price from pfin.eod_price fx
+                 join pfin.asset ca on ca.asset_id = fx.asset_id
+                 where ca.users_id is null and ca.asset_type = 'currency'
+                   and ca.symbol = a.currency and fx.source = 'fx_feed'
+                   and fx.price_date <= p_as_of
+                 order by fx.price_date desc limit 1), 1.0) end
+      ), 0) as mv_usd
+    from pfin.fn_holdings_as_of(p_as_of) h
+    join pfin.asset a on a.asset_id = h.asset_id
+    group by h.account_id
+  ),
+
+  -- SECURITIES CARRIED BOOK per account (USD): the GL-derived cost-basis path —
+  -- Σ(fn_gl_entries `trade_position` amount_book) per account, fx-normalized to USD (the
+  -- GL amount_book is in the account's NATIVE currency). This is the current carried book
+  -- (acquisition + basis_adjust − matched-sell removal, FIFO/specific-lot via lot_match),
+  -- balanced-by-construction. SINGLE BASIS TRUTH (== GL == tax == reports). Design C adds
+  -- the shared cash_bal term to this at the projection (so cost_basis = account-total book).
+  sec_basis as (
+    select
+      g.account_id,
+      coalesce(sum(
+        g.amount_book
+        * case when g.currency = 'USD' then 1.0
+               else coalesce((
+                 select fx.price from pfin.eod_price fx
+                 join pfin.asset ca on ca.asset_id = fx.asset_id
+                 where ca.users_id is null and ca.asset_type = 'currency'
+                   and ca.symbol = g.currency and fx.source = 'fx_feed'
+                   and fx.price_date <= p_as_of
+                 order by fx.price_date desc limit 1), 1.0) end
+      ), 0) as basis_usd
+    from pfin.fn_gl_entries(p_as_of) g
+    where g.entry_class = 'trade_position'
+    group by g.account_id
+  ),
+
+  -- CASH BALANCE per account (USD): pfin.fn_account_cash_as_of(p_as_of) x fx.
+  -- The roll-forward itself now lives in ONE place (056); this CTE only
+  -- fx-normalizes it. LEFT JOIN + coalesce so a totality breach degrades to 0
+  -- (the pre-extraction behaviour) rather than to a missing account. Liabilities R-7 signed naturally negative (no branch).
+  -- DESIGN C: this SAME figure feeds BOTH current_market_value (all types) AND the
+  -- investment cost_basis cash term — the shared expression is what makes them cancel and
+  -- what makes current_market_value foot to NAV (NOT fn_gl_entries asset_liability, which is
+  -- a pure-ledger Σ that diverges when a checkpoint exists — see CASH-TERM IDENTITY above).
+  cash_bal as (
+    select
+      acc.account_id,
+      coalesce(c.balance_native, 0)
+      * case when acc.currency = 'USD' then 1.0
+             else coalesce((
+               select fx.price from pfin.eod_price fx
+               join pfin.asset ca on ca.asset_id = fx.asset_id
+               where ca.users_id is null and ca.asset_type = 'currency'
+                 and ca.symbol = acc.currency and fx.source = 'fx_feed'
+                 and fx.price_date <= p_as_of
+               order by fx.price_date desc limit 1), 1.0) end
+      as bal_usd
+    from pfin.account acc
+    left join pfin.fn_account_cash_as_of(p_as_of) c
+      on c.account_id = acc.account_id
+  )
+
+  -- One row per NON-INACTIVE account visible to the caller (pfin.account is INVOKER-scoped
+  -- → cross-tenant caller sees no rows → empty set, fails closed). DESIGN C (account-total,
+  -- symmetric): current_market_value = securities MV + cash for ALL types (foots to NAV over
+  -- active accounts — 049 filters is_active, 019 does not; see FOOT-TO-NAV PRECISION header);
+  -- for investments cost_basis = securities book + the SAME cash term (cancels) and
+  -- unrealized_gl = securities MV − securities book (= mv − cost_basis by construction);
+  -- non-investments get NULL cost_basis/unrealized_gl (NULL ≠ 0 — concept-does-not-apply).
+  select
+    acc.account_id,
+    -- UNIFORM (all types): securities MV + cash → the account's fn_compute_nav contribution.
+    coalesce(smv.mv_usd, 0) + coalesce(cb.bal_usd, 0) as current_market_value,
+    case
+      when acc.account_type in ('investment', 'retirement', 'crypto')
+        -- securities carried book + the SAME cash term as current_market_value (cancels).
+        then coalesce(sb.basis_usd, 0) + coalesce(cb.bal_usd, 0)
+      else null
+    end as cost_basis,
+    case
+      when acc.account_type in ('investment', 'retirement', 'crypto')
+        -- = current_market_value − cost_basis (the identical cash term cancels exactly).
+        then coalesce(smv.mv_usd, 0) - coalesce(sb.basis_usd, 0)
+      else null
+    end as unrealized_gl
+  from pfin.account acc
+  left join sec_mv    smv on smv.account_id = acc.account_id
+  left join sec_basis sb  on sb.account_id  = acc.account_id
+  left join cash_bal  cb  on cb.account_id  = acc.account_id
+  where acc.is_active
+  order by acc.account_id;
+$$;
