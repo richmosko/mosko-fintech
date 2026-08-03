@@ -84,8 +84,16 @@ create table if not exists pfin.account_event (
   reason_code    text
                    check (reason_code in
                      ('closed', 'sold', 'transferred_out', 'duplicate', 'other')),
+  -- ENUMERATED, NOT OPEN-ENDED (Sec, 057 review). `system:[a-z_]+` would let a
+  -- NEW SYSTEM WRITER APPEAR SILENTLY — and the whole matched_on/decided removal
+  -- rests on there being exactly one non-session writer. An open pattern admits a
+  -- second without firing anything. Enumerated, a new system identity FAILS THIS
+  -- CHECK and forces the review that would re-examine the column set.
   actor          text not null
-                   check (actor ~ '^(user:[0-9a-f-]{36}|system:[a-z_]+)$'),
+                   check (
+                     actor ~ '^user:[0-9a-f-]{36}$'
+                     or actor in ('system:remediation')
+                   ),
   effective_date date not null,
   created_at     timestamptz not null default now(),
 
