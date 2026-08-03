@@ -254,8 +254,37 @@ select is(
 );
 
 -- =====================================================================
+-- ⛔⛔ (E4)/(E4b)/(E4c) ARE A FENCE GUARD FOR `058` — DO NOT PRUNE AS REDUNDANT ⛔⛔
+--   Sec ruling 2026-08-03. These look like property assertions about `056` that duplicate
+--   its own comment. **They are the only guard on one of the three `056` contracts that
+--   `058`'s close gate depends on**, and unlike the other two it is NOT runtime-detectable:
+--   you cannot tell from a scalar whether it was converted, so `058` cannot raise on it.
+--
+--   THE MECHANISM, which is why this outranks the other two contracts:
+--     If `056` ever applied fx and the rate were **0** — which `eod_price` CURRENTLY ADMITS —
+--     then
+--     **converted cash reads 0 while native cash is non-zero**, `v_cash <> 0` is false, and
+--     **THE GATE ADMITS A CLOSURE ON A FUNDED ACCOUNT.** A negative rate is worse: it
+--     inverts rather than zeroes. Measured live at (E4b)/(E4c): the measure is unmoved,
+--     fn_compute_nav sign-flips.
+--
+--   ⟦CITED BY NAME, NOT BY LINE (Architect's correction, verified live): `eod_price`'s ONLY
+--     price constraint is **`eod_price_price_finite`** — measured: `CHECK (price <> 'NaN')`.
+--     **Finiteness only. No positivity.** So 0 and negative rates are both admitted.
+--     My earlier anchor `019:220` pointed at the column DECLARATION whose trailing comment
+--     mentions the fence, not the fence itself (that is at `:223`). A constraint NAME
+--     survives every edit to that file; a line number inside a block written explicitly to
+--     outlive this conversation is the one citation form guaranteed to rot. Same rule I
+--     applied to ADR citations this morning, applied to my own block.⟧
+--
+--   So "a fence must not depend on price data" is the CONCLUSION and the above is the
+--   MECHANISM under it. Deleting these three assertions removes `058`'s only protection on
+--   that contract, and **the deletion is invisible at the deletion site** — nothing in
+--   `058` would go red. Same class as the DEFINER tripwire's `3 authored != 4 allowlisted`
+--   note: the role has to be written where someone would remove it.
+-- =====================================================================
 -- E4 — NO FX MULTIPLIER, AND THIS IS A SECURITY PROPERTY NOT A FORMATTING ONE
---   `056`'s own contract: eod_price carries only a NaN fence (`019:220-223`, no positivity
+--   `056`'s own contract: eod_price carries only a NaN fence (`eod_price_price_finite` — CHECK (price <> 'NaN') — no positivity
 --   constraint), so a zero-or-negative fx_feed rate would ZERO or SIGN-FLIP the leg. A
 --   fence whose correctness depends on price data is not a fence. The fixture seeds a LIVE
 --   1.5 EUR rate specifically so that an implementation which applied FX would read 150.
@@ -271,7 +300,7 @@ select set_config('role', 'postgres', true);
 -- =====================================================================
 -- E4b/E4c — WHY (E4) IS A SECURITY PROPERTY, DEMONSTRATED RATHER THAN ARGUED
 --   ADR-042 D3: "a fence whose correctness depends on price data is not a fence."
---   `056`'s contract says eod_price carries only a NaN fence (`019:220-223`, no positivity
+--   `056`'s contract says eod_price carries only a NaN fence (`eod_price_price_finite` — CHECK (price <> 'NaN') — no positivity
 --   constraint), so a zero-or-negative fx_feed rate would ZERO or SIGN-FLIP the leg. That
 --   was an argument. These two assertions make it a measurement.
 --   ⟦MEASURED 2026-08-03 with the EUR rate flipped to -1.5000 in a rolled-back savepoint:
@@ -291,7 +320,7 @@ select _rls.set_tenant(:'ta'::uuid);
 select is(
   (select balance_native from pfin.fn_account_cash_as_of('2026-03-31'::date) where account_id = :aeur),
   100.0000::numeric,
-  '(E4b) POISONED-RATE IMMUNITY: with the EUR fx_feed rate NEGATIVE, the measure still reads 100 native. The close gate consumes this function, so a zero-or-negative rate — which eod_price has no constraint against (019:220-223 is a NaN fence only) — cannot move what the gate measures. This is (E4) shown to be load-bearing rather than cosmetic'
+  '(E4b) POISONED-RATE IMMUNITY: with the EUR fx_feed rate NEGATIVE, the measure still reads 100 native. The close gate consumes this function, so a zero-or-negative rate — which eod_price has no constraint against (`eod_price_price_finite` is a NaN fence only) — cannot move what the gate measures. This is (E4) shown to be load-bearing rather than cosmetic'
 );
 select set_config('role', 'postgres', true);
 savepoint sp_badfx;
