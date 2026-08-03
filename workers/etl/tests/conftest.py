@@ -38,6 +38,19 @@ def backend():
         pytest.skip(f"Could not connect to database: {e}")
 
 
+@pytest.fixture(scope="session")
+def nav_worker():
+    """SELF-214 daily-NAV worker (W-1). Skips integration tests if creds/DB are
+    unavailable. Live tests additionally require migration 054 (pfin.nav_daily)
+    applied in the fixture DB — see the test docstrings."""
+    try:
+        import pfin_back_etl as pfbe
+
+        return pfbe.NavDailyWorker()
+    except Exception as e:
+        pytest.skip(f"Could not construct NavDailyWorker: {e}")
+
+
 # ---------------------------------------------------------------------------
 # Sample data fixtures for unit tests
 # ---------------------------------------------------------------------------

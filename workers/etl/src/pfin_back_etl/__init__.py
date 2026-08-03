@@ -7,6 +7,7 @@ from .core import PFinFMP
 from .core import SBaseConn
 from .core import PFinBackend
 from .connection import TenantBoundConnection, TenantBindingError
+from .nav_daily import NavDailyWorker
 
 __all__ = [
     "PFinFMP",
@@ -14,4 +15,5 @@ __all__ = [
     "PFinBackend",
     "TenantBoundConnection",
     "TenantBindingError",
+    "NavDailyWorker",
 ]

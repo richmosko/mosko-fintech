@@ -78,8 +78,9 @@ Scope: inject production secrets into Coolify, honoring the CI/production non-ov
 Real artifacts this section binds to (all verified present):
 
 - [`secrets-manifest.yml`](../secrets-manifest.yml) — the CI/production **non-overlap commitment**. Two disjoint sets:
-  - `ci_only` (reserved distinct names; no production reach): `PLAID_SANDBOX_CLIENT_ID`, `PLAID_SANDBOX_SECRET`, `PDF_WORKER_SIGNING_KEY_TEST`.
-  - `production_only` (Coolify-injected on the box; never in CI): `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `PDF_WORKER_SIGNING_KEY`, `PLAID_CLIENT_ID`, `PLAID_SECRET`, `WORKER_ADMISSION_SHARED_SECRET`, `DISCORD_WEBHOOK_URL`, `PFIN_DB_PASSWORD`, `FMP_API_KEY`, `BLS_API_KEY`.
+  - `ci_only` (4 names — reserved distinct names; no production reach): `PLAID_SANDBOX_CLIENT_ID`, `PLAID_SANDBOX_SECRET`, `PDF_WORKER_SIGNING_KEY_TEST`, `SIMPLEFIN_TOKEN_TEST`.
+  - `production_only` (11 names — Coolify-injected on the box; never in CI): `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `PDF_WORKER_SIGNING_KEY`, `PLAID_CLIENT_ID`, `PLAID_SECRET`, `SIMPLEFIN_TOKEN`, `WORKER_ADMISSION_SHARED_SECRET`, `DISCORD_WEBHOOK_URL`, `PFIN_DB_PASSWORD`, `FMP_API_KEY`, `BLS_API_KEY`.
+  - **Counts are load-bearing — check them, don't skim them.** The two lists above are a **hand-maintained mirror** of [`secrets-manifest.yml`](../secrets-manifest.yml); nothing enforces that they stay in sync, so they drift silently. The failure mode is asymmetric and unpleasant: a secret missing *here* isn't a fence breach (the non-overlap fence still passes — it reads the manifest, not this file), it's a **container that deploys without a secret it needs**. So: the `secrets-nonoverlap` job prints `N ci_only + M production_only` on every PR + push. If those numbers disagree with the `(4 names)` / `(11 names)` above, this enumeration has drifted — **the manifest is source of truth; fix this list.** Comparing two integers CI already emits is the cheap check; diffing two prose lists by eye is the one that fails. *(This is not hypothetical: both halves of the `SIMPLEFIN_TOKEN` / `SIMPLEFIN_TOKEN_TEST` pair were missing here and went unnoticed until SELF-214 — with the fence green throughout.)*
   - **`WORKER_ADMISSION_SHARED_SECRET` (SELF-212 Option-C, C6-2) provisioning:** generate 256-bit (`openssl rand -hex 32`); inject as a Coolify **project-scoped SHARED variable** referenced by BOTH the api/ web-app service and the provider-sync worker service — one edit point, so rotation updates a single value. **Rotation:** update the shared var → **coordinated restart of BOTH** services (the constant-time compare mismatches mid-rotation, failing admission closed until both restart — a brief onboarding-only outage; acceptable). NOT the service_role key → RT-26 allowlist unchanged. This secret's SAME-value-on-both-tiers shape mirrors `PDF_WORKER_SIGNING_KEY` (web-app + PDF worker per SD-20).
   - **Fail-closed fence:** `scripts/ci/check-secrets-nonoverlap.py` runs as the `secrets-nonoverlap` job in `.github/workflows/security-scan.yml` on every PR + push to `main`; fails closed if the sets intersect, a set is missing/malformed, or a name is duplicated. The **distinct-naming rule** (any CI/test analogue takes a `*_SANDBOX` / `*_TEST` name) is the mechanism that keeps the sets disjoint.
 - Per-surface `.env.example` files (each enumerates ONLY its container's permitted secrets — the enumeration *is* the confinement property):
@@ -99,6 +100,71 @@ Scope: apply the repo's `supabase/migrations/` against the fresh Postgres 17 ins
 - Phase 6 base-table migrations (SELF-187+) land incrementally — append them here as they're authored.
 - **Ownership note:** migrations are **Architect-authored**; DevOps operates on CI's *consumption* of them (test-fixture spin-up per RT-15) and, here, on the production *apply* step. This runbook does not author migration content.
 
+### 6.1 `pfin_etl` role provisioning — REQUIRED one-time deploy step · 🔒 SECURITY-SENSITIVE
+
+**Applying the migrations is not sufficient to start the ETL.** Migration [`055_pfin_etl_role.sql`](../supabase/migrations/055_pfin_etl_role.sql) creates the ETL's dedicated login identity `pfin_etl` **NOLOGIN, with NO password** — deliberately inert, because a credential must never sit in a committed file. An operator switches it on at deploy time. *(SELF-214 Sec finding B8 → option (B), F/CTO-ratified 2026-08-02; ADR-041.)*
+
+> **Precedence.** This procedure is described in three places — here, [`055`](../supabase/migrations/055_pfin_etl_role.sql)'s DEPLOY-TIME CREDENTIAL HANDOFF block, and [`workers/etl/.env.example`](../workers/etl/.env.example). **If they disagree, `055` wins** and the others are the copies to fix. Three artifacts describing one procedure is three chances to leave a retracted claim behind in a secondary copy.
+
+**Ordering dependency — do not reorder:**
+
+> **migrations applied (§6)** → **`pfin_etl` password set, *then* LOGIN flipped (this step — in that order)** → **`PFIN_DB_*` env injected (§5)** → **ETL container started (§7)**
+
+Start the container before this step and it boots and cannot authenticate. That is fail-closed, not an exposure — but it is a guaranteed failed deploy.
+
+**The step.** Run **once** against the target database, in an interactive `psql` session, as an operator (never from a committed file). **Two statements, and the order is load-bearing:**
+
+```
+\password pfin_etl           -- prompts; verifier computed CLIENT-SIDE; role still NOLOGIN → inert
+ALTER ROLE pfin_etl LOGIN;   -- carries no secret; safe in shell history and server logs
+```
+
+`\password` sets **only** the password — it does *not* set `LOGIN`. That is why this is two steps and why the order matters: the credential lands while the role is still `NOLOGIN`, and `LOGIN` then flips onto an already-credentialed role, so **LOGIN-with-no-password never exists at any instant** — the state `055` is built to prevent. Same property the earlier single-statement form aimed at, reached differently.
+
+**The single-statement form `ALTER ROLE pfin_etl WITH LOGIN PASSWORD '…'` is PROHIBITED.** Wherever statement logging is on, it writes the credential to the server log in cleartext. **The prohibition does not depend on any per-stack measurement** — do not measure a target, find logging off, and conclude it lapses. `\password` also keeps the secret out of psql's own `~/.psql_history`, which records typed statements in plaintext by default.
+
+> **What was measured, and where:** `log_statement = ddl` was measured on the **local** stack — so the exposure is established, not theoretical. The V1 production stack does not exist yet and has **not** been measured. Treat statement logging as **enabled** on any target until verified otherwise there; assuming it off is the failure-open direction. (`log_statement` is not the only relevant knob — `log_min_duration_statement` can cause a statement to be logged in full. `show log_statement; show log_min_duration_statement;` is the pair that settles it for a given target.)
+
+**Generate the password with `openssl rand -hex 32`** (256-bit), mirroring the `WORKER_ADMISSION_SHARED_SECRET` convention in §5. This is not incidental: the residual risk below is an *offline attack bounded by the secret's entropy*, so a high-entropy generated value is what makes that residual acceptable. A human-chosen password would not be.
+
+> **⚠ Be precise about what this buys — do not write "nothing is logged."**
+> - **Plaintext never leaves the client.** `\password` prompts and computes the verifier client-side per `password_encryption` (`scram-sha-256` here), so the cleartext reaches neither the wire, the server log, nor `.psql_history`.
+> - **The verifier IS still logged.** `\password` sends `ALTER USER … PASSWORD 'SCRAM-SHA-256$4096:…'`, which is DDL and is captured under `log_statement = ddl`. But a verifier **is not a usable credential**: it stores `StoredKey` + `ServerKey`, a client proof requires `ClientKey`, and `StoredKey = H(ClientKey)` does not invert — possession of the logged verifier does not let an attacker authenticate as `pfin_etl`.
+> - **The residual is an offline attack**, bounded by the secret's entropy and the **4096** iteration count. Acceptable against a high-entropy generated secret, and categorically better than cleartext, which is replayable immediately with zero work.
+>
+> Claiming the stronger property would be the same failure shape as a test asserting a privilege it never exercised — just pointed at a log instead of a battery.
+
+**Operator privilege:** `\password` is `ALTER USER` underneath, so the operator must be superuser or hold `CREATEROLE` / `ADMIN OPTION` on the role.
+
+The password value is the **`pfin_etl` credential** — a *different value* from provider-sync's `PFIN_DB_PASSWORD` (which is the `authenticator` credential). Same secret **name**, different secret **value**, per container; see [`secrets-manifest.yml`](../secrets-manifest.yml). Then set the ETL container's env (§5): `PFIN_DB_USER=pfin_etl` (non-secret username) + `PFIN_DB_PASSWORD=<same value>` (`production_only`).
+
+**Verify before starting the container** (read-only; expect `t` / `f`):
+
+```sql
+select rolcanlogin, rolinherit, rolsuper, rolbypassrls
+  from pg_catalog.pg_roles where rolname = 'pfin_etl';
+-- expect: rolcanlogin = t, rolinherit = f, rolsuper = f, rolbypassrls = f
+```
+
+`rolcanlogin = f` means this step has not run. `rolinherit = t` means the role is misconfigured and the NOINHERIT posture is defeated — stop and fix (`055` raises a `WARNING` for both cases on re-apply, but its idempotency guard deliberately does **not** rewrite attributes on a pre-existing role — auto-repair would flip a *legitimately* `LOGIN` production role back to `NOLOGIN` and take the ETL down on the next migration run. It reports; it does not repair. So this check is the operator's own confirmation).
+
+> **Do not extend this query with `pg_roles.rolpassword`.** That column is the literal constant `'********'` for every role, so `rolpassword is not null` is **always true** and proves nothing — it is a metric that reads like a check. If you need to confirm a password is actually set, read `pg_authid.rolpassword` (superuser-only; it may be unreadable depending on the applying role). **Under the two-step above this check is worth running, not redundant:** `rolcanlogin = t` only proves *step 2* ran, and step 2 without step 1 is precisely the dangerous ordering below.
+
+**Rotation** — `\password pfin_etl` (same prompt-and-hash path; `LOGIN` is already set, so no second statement) **+ restart the ETL container ONLY**. No coordinated PostgREST / provider-sync redeploy: escaping the [ADR-023](../DECISIONS.md#adr-023) C1 rotation coupling is the entire point of the dedicated role. C1 still binds PostgREST + provider-sync to each other; the ETL is out of it.
+
+**Revocation / kill-switch** — `ALTER ROLE pfin_etl NOLOGIN` stops the ETL **and nothing else**. This is the independent-revocability property (B) was chosen for: a compromised batch container is cut off without downing the public Data API.
+
+**Two failure modes — only one of them is safe:**
+
+| what went wrong | result |
+|---|---|
+| **Step 2 skipped** (`\password` ran, `LOGIN` never set) | Role stays `NOLOGIN` → ETL fails at connect with `role "pfin_etl" is not permitted to log in`. Loud, immediate, **safe** — an outage, never an exposure. |
+| **Step 2 run without step 1** (`LOGIN` set, password never set) | ⚠ **The one dangerous ordering.** Succeeds silently and leaves exactly the LOGIN-with-no-password state `055` is shaped to prevent. |
+
+`055`'s `WARNING` branch for a pre-existing LOGIN-with-no-password role was written to catch partial *manual* provisioning, but it catches this mis-ordered deploy too — on the next migration re-apply. Do not remove that guard thinking it only covers the older case.
+
+> **⚠ Open flag (#10) — secret-in-statement handling, Sec-review before this section locks.** The `ALTER ROLE … PASSWORD '<literal>'` above carries the plaintext credential in a SQL statement. Two exposure paths to close deliberately rather than by habit: **(a) shell history** — run it inside an interactive `psql` session, never as a `psql -c '<statement>'` shell argument; **(b) server logs** — a database configured with `log_statement = 'ddl'` or `'all'` would capture the statement text. I have **not** verified what the self-hosted Supabase stack sets, or whether it redacts; do not assume it does. Mitigations to weigh with Sec: confirm/disable statement logging for the duration of this one statement, or pass a **pre-computed SCRAM-SHA-256 verifier** instead of a plaintext literal (Postgres accepts a verifier string in the same syntax, so no plaintext ever reaches the server). Resolve before §5/§6.1 lock.
+
 > **STUB —** Fill in: the apply mechanism against self-hosted Supabase (`supabase db push` / `supabase migration up` vs. a CI/Coolify-driven apply), the idempotency/ordering guarantees, and how to verify each migration landed (e.g., RLS policies present, `fn_mask_acct_number` callable). Keep the migration list current as Phase 6 adds tables.
 
 ---
@@ -107,7 +173,7 @@ Scope: apply the repo's `supabase/migrations/` against the fresh Postgres 17 ins
 
 Scope: deploy the background-worker containers. Per ARCH Lock 13, the V1 runtime is a **hybrid 3-container topology** on Coolify: (1) V1 web-app, (2) `pfin_back_etl` ETL, (3) Node PDF worker — plus the Phase-6/V1.5 cron + scheduled-poll additions.
 
-- **`pfin_back_etl` (ETL)** — `workers/etl/`, Coolify **Base Directory** `workers/etl/`; Dockerfile [`workers/etl/Dockerfile`](../workers/etl/Dockerfile) (DevOps-owned). Python ETL (BLS CPI + FMP financials → Supabase). **Forward discipline:** all `pfin` DB access binds `users_id` via TenantBoundConnection (Lock 13 mod #3) — TBC + `fence-tbc` coverage land Wave 6; incumbent currently uses SQLAlchemy `create_engine`.
+- **`pfin_back_etl` (ETL)** — `workers/etl/`, Coolify **Base Directory** `workers/etl/`; Dockerfile [`workers/etl/Dockerfile`](../workers/etl/Dockerfile) (DevOps-owned). Python ETL (BLS CPI + FMP financials → Supabase). **Direct-Postgres** transport (`PFIN_DB_*`, login role **`pfin_etl`** — its OWN dedicated identity, *not* provider-sync's `authenticator`; writes AS `service_role` via `SET ROLE`) via **TenantBoundConnection** (Lock 13 mod #3). **`PFIN_DB_USER=pfin_etl`** (non-secret username) + `PFIN_DB_PASSWORD` (the `pfin_etl` credential, `production_only`). **This container cannot start successfully until §6's role-provisioning step has run** — see the ordering dependency there. **Forward discipline:** all `pfin` DB access binds `users_id` via TenantBoundConnection — TBC + `fence-tbc` coverage land Wave 6; incumbent currently uses SQLAlchemy `create_engine`.
 - **Node PDF worker** — `workers/pdf-render/`, Dockerfile [`workers/pdf-render/Dockerfile`](../workers/pdf-render/Dockerfile) (currently a placeholder; Backend adds Puppeteer app code at Wave 6). **Zero DB reach by design** (Lock 13 mod #2) — NO database libraries, credentials, or network reach; reaches data only via the web-app's `/internal/pdf-render` endpoint under a short-lived signed JWT. RT-22 fence enforces the Dockerfile credential/Postgres-client absence.
 - **`provider-sync` (Plaid/SimpleFIN ingest)** — `workers/provider-sync/`, Coolify **Base Directory** `workers/provider-sync/`; Dockerfile [`workers/provider-sync/Dockerfile`](../workers/provider-sync/Dockerfile) (DevOps-owned). The 4th Coolify unit (ADR-019 amendment) — the FIRST DB-touching **Node** worker. **Direct-Postgres** transport (`PFIN_DB_*`, login role `authenticator`, writes AS `service_role` via `SET LOCAL ROLE` per ADR-023) via **TenantBoundClient** (Lock 13 mod #3; `fence-tbc-node` enforces at PR-time). **OFF the RT-26 allowlist by design** — no `SUPABASE_SERVICE_ROLE_KEY`, no `@supabase/supabase-js`. Env contract: [`workers/provider-sync/.env.example`](../workers/provider-sync/.env.example).
 - **`provider-sync` SELF-212 admission endpoint (Option C, internal-only) — deploy config:**
@@ -192,5 +258,6 @@ Net effect: **deleting a user who has grouped legs FAILS** (the `journal` cascad
 | 7 | BLS key: code requires `BLS_API_KEY` vs. ARCH §5 "free/open" — reconcile | Architect / Sec | §5 |
 | 8 | Cutover timing + teardown go/no-go (**one-way door**) | F/CTO | §9 |
 | 9 | ✅ Cross-ref greenfield-deployment ADR-021 (resolved) | DevOps | Overview |
+| 10 | ✅ `ALTER ROLE … PASSWORD` plaintext handling — **resolved**: measured `log_statement = ddl` (exposure real, not theoretical); single-statement form prohibited, replaced by the `\password` + `ALTER ROLE … LOGIN` two-step (§6.1). Sec-ruled | DevOps + Sec | §6.1 |
 
 > **STUB —** This runbook is a skeleton. Each `> **STUB —**` marker above is a fill-in point as Phase 6 reveals the operational detail. Do not treat any section as complete until its STUB marker is removed and (for §5 + fence-touching content) Sec joint-review has signed off.

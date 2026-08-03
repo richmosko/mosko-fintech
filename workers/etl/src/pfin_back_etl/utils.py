@@ -101,6 +101,21 @@ def load_env_variables(env_prefix):
     return params
 
 
+def build_database_url(params):
+    """Build the psycopg2 SQLAlchemy URL from a loaded params dict (as returned by
+    load_env_variables). Single source of the connection string so every engine —
+    the ETL system engine (_sbase_setup) and the SELF-214 per-tenant NAV worker —
+    constructs it identically. TLS required (sslmode=require).
+
+    args:    params (dict with DB_USER / DB_PASSWORD / DB_HOST / DB_PORT / DB_NAME)
+    returns: database_url (str) for TenantBoundConnection.system()/.for_tenant().
+    """
+    url = f"postgresql+psycopg2://{params['DB_USER']}:{params['DB_PASSWORD']}@"
+    url += f"{params['DB_HOST']}:{params['DB_PORT']}/{params['DB_NAME']}"
+    url += "?sslmode=require"
+    return url
+
+
 def sqla_modulename_for_table(tablename, declarativetable, reflecttable):
     """
     This function needs to be defined with the above input arguments
