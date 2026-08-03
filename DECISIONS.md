@@ -41,6 +41,259 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-042 — Account closure is a bookkeeping event: the dated `closed_at` model, the standing zero-value invariant, and the retirement of `pfin.account.is_active`
+
+**Date:** 2026-08-03 · **Status:** Accepted — F/CTO ratified 2026-08-03 (three-concept model; `is_active` dropped entirely — generated-column and keep-both-with-CHECK alternatives rejected; pre-existing-row disposition = fail-loud) · **Phase:** 6 Build Loop · **Migrations:** `056` / `057` / `058` (slices A / C / B)
+
+**Pattern:** Consolidation — a semantic model with a one-way-door column retirement, a standing invariant realized as fences across four tables, two amendments to ratified ADRs, and a new audit surface. **Sec joint-review-MANDATORY** (financial calculation, multi-tenant isolation, new fences on a privileged-context write path, Decision-3 family extension).
+
+---
+
+### Context
+
+`pfin.account.is_active` (`003:104`) was a soft-delete flag with **no guard on its transition** — verified: `new.is_active` / `old.is_active` appear in **zero** migrations. Under the double-entry ledger (`033` / `035` / `037`), flipping it on an account that still holds value is a bookkeeping error: the value must be counter-booked, and a flag flip does not do that. `050` / [ADR-039](#adr-039) addressed the symptom — the §2.1.1 headline stopped counting inactive accounts — and thereby made the GL and the reported number disagree **silently**, with the statement-vs-GL detector (the §7.4 *period statement-vs-GL reconciliation control tie-out*) unbuilt at V1.6.
+
+Architect + Security joint scoping established that the column carried **three distinct meanings**, two of them shipped: PRD §2.4.2 closed/sold; the connections **use/ignore** control (`api/src/routes/accounts/connections/[source_id]/+page.server.ts`); and PRD §2.4.1's un-share note. The gate had no unambiguous subject.
+
+---
+
+### Decision 1 — The three-concept model (F/CTO-ratified; this ADR records rather than proposes it)
+
+1. **Aggregator linkage** — *is this account connected, and to which provider?* Already exists: `account.linked_source_id` → `linked_source(source_id)` (`015`, Decision-3 instance **#6**), with `linked_source.provider`; NULL = manual. **No new work; a link/unlink control is explicitly deferred.**
+2. **Open / closed** — **as-of dated**, on `pfin.account`. The subject of this ADR.
+3. **Aggregator-side selection** — a *different level*: unwanted provider accounts are **never landed** (`042`'s existing "unselected are simply never present in `p_accounts`"), and are re-offered on each connect. **No registry, no marker, no persistent selection state.**
+
+**Consequence:** `toggleAccount` writing `account.is_active` was a **mis-implementation** — concept 3 landed one level too high because its correct home did not exist. It becomes a **close-account control gated on zero value**. A guided close-with-funds walkthrough is future work; **the refusal message must name it** so the gate is not a dead end.
+
+### Decision 2 — `closed_at timestamptz` replaces `is_active`, which is DROPPED. **ONE-WAY DOOR.**
+
+`is_active` is retired, not retained-as-derived. Two reasons beyond redundancy:
+
+- **A boolean cannot answer an as-of question**, so any future query reaching for it in an as-of context is **silently wrong** — the exact defect this model removes. Retaining it leaves an authoritative-looking foot-gun.
+- **It resolves the naming collision.** Four `is_active` columns remain (`linked_source` `015:206`, `plaid_items` `007:191`, `user_taxonomy` `009:163`, `asset` `016:215`) and after the drop **every one is connection- or registry-level**. The only column carrying *accounting* semantics is the one that goes.
+
+**Rejected: a generated column** (`is_active generated always as (closed_at is null) stored`) as an end state *or* as a migration stage. As an end state it re-creates two representations of one fact. **As a stage it protects the wrong consumers:** it preserves *current-state* readers (`nav_daily.py:214`, `netWorth.ts` count, `connectionState.ts`) — which are the low-risk ones — while the as-of re-point of `049`/`050`/`051` must happen regardless, because a column derived from *current* `closed_at` cannot express *closed as of a past date*. It adds a migration step without reducing the risk that matters. **Rejected: keep-both-with-a-CHECK** — two columns encoding one fact.
+
+**Ordering requirement, non-negotiable:** pre-existing `is_active = false` rows are the **only evidence** of the mis-implementation's footprint. Enumerate and remediate **before** the drop, or which accounts were wrongly deactivated becomes permanently unrecoverable on a financial surface.
+
+**Fail-loud enumerates EVERY `is_active = false` row with its value — not only the non-zero ones (Sec; a gap in an earlier draft of this path).** The earlier form fired only on *violators* (inactive **and** non-zero), while the migration maps **every** surviving inactive row to `closed_at`. So an account **merely ignored and sitting at zero today** — dormant, emptied-but-intended-for-reuse, provider-linked and untracked — passed silently and was auto-mapped to **closed**. The forcing function fired on exactly the population that excluded it.
+
+**The consequence is behavioural, not bookkeeping:** once closed, the transfer-in fence **refuses all future writes to that account, including legitimate provider sync**, and those refusals surface only as a Decision 6 quarantine counter. A user who was merely ignoring an account would find it could no longer receive transactions. **That is a procedural control where a structural one is available** — the trade this ADR rejects everywhere else.
+
+Widening the predicate from *non-zero* to *all* also makes the validated-vs-unvalidated distinction airtight rather than nearly so: *"validated"* stops meaning **we checked it wasn't a violator** and starts meaning **an operator decided what it is.** The second is what makes the auto-map defensible at all.
+
+**Measured cost (team-lead, 2026-08-03): `pfin.account` currently holds 4 rows, all active — zero inactive.** So the widened enumeration is **empty today** and costs nothing; the population only grows between now and `058`, which argues for the widened form rather than against it — free now, more expensive later, on a surface where a wrong disposition is invisible.
+
+> **And an empty enumeration means the fail-loud guard ships UNEXERCISED, which is its own defect.** A guard that never fires has never been shown to fire. **Requirement: `058`'s QA battery must seed a deliberate violator and assert the migration aborts**, then seed a zero-valued inactive row and assert it is enumerated for disposition. This is checkpoint 7 at the DDL layer — *a check that returns clean has not been verified until something known-present makes it fire* — and it is the same class as ADR-040's B9 lesson that a test exercising an approximation of the production statement is worse than no test, because it reports green over an unproven path.
+
+**The forward path (Sec).** Remediation happens first — per-account, while `is_active` still exists to identify the population:
+
+- **genuinely closed** → book the disposal so the account reaches zero. It stays `is_active = false` and stops being a violator.
+- **merely "ignored"** → set `is_active = true`. Concept 3 says it should never have been landed; concept 2 says it is not closed.
+
+**Then `058` applies, and the surviving `is_active = false` rows map to `closed_at` automatically — which is NOT the prohibited auto-map, and the distinction is the whole point.** The prohibition is on mapping **unvalidated** rows. After the fail-loud check passes, every remaining inactive account is **proven zero-valued** — *passing the check is the validation*, and it is the same condition the gate would apply. All three gate legs hold: zero holdings and zero cash (by the check), and no post-`closed_at` activity (trivially, at `closed_at = now()`).
+
+**`closed_at = now()`, and it is harmless rather than merely tolerable — but for a narrower reason than "zero contributes zero" (Sec's precision, and the loose form licenses an unsafe move).** The real closure date is unknown; `is_active` never carried one, which is the defect being fixed. `now()` distorts no NAV **because a genuinely-closed account holds zero across the entire window from its real closure to now** — that is what closure means, no post-closure activity — so the true boundary and `now()` **agree over the whole disputed range**. The invariant doing the work is *"no activity after real closure"*, **not** *"a zero-valued account contributes zero."* The looser claim is false in general — an account zero **today** may have held value last week, and there the boundary genuinely moves past NAVs — so stating it loosely would license the same mapping where it silently restates history. Recorded as a **migration artifact, not an observed closure date**.
+
+**Bounding the exemption so it cannot be read as "auto-mapping is fine if you check first" (Sec).** *"We validated first"* is a claim someone can make with a weaker check. **Requirement: the migration's check must BE the gate's check — the same three legs, evaluated at the same instant the mapped `closed_at` names.** Any weaker proxy — a balance-only test, or a check evaluated at a different date than the one written — is the prohibited map wearing a validation. This is the quantity-not-value and leg-independence findings applying to **the migration itself**, not only to the runtime gate.
+
+**Rejected: reopen-everything-then-re-close-through-the-control.** Coherent, and it validates each closure exactly once — but it **destroys the very evidence the ordering requirement exists to preserve**: setting all violators `is_active = true` erases which accounts were inactive, so "re-close the genuinely-closed ones" has no list to work from unless a human captured one outside the database first. It trades a durable, in-database population for an uncaptured manual step.
+
+**And the prohibition extends past the migration, which is where it would actually be broken:** **no `UPDATE … SET closed_at` derived from the old flag after the fact, ever.** Post-migration those rows are unvalidated by definition and the gate is the only thing that validates them; such a statement would look like tidying up and would be a bypass of exactly the population the gate exists to catch.
+
+### Decision 3 — The standing invariant, and its two enforcement points
+
+> **A closed account's position as of `closed_at` is zero, and no activity is dated after `closed_at`.**
+
+- **At closure** (`closed_at` NULL → NOT NULL): both legs must already hold. Three checks — zero holdings *as of `closed_at`* (`fn_holdings_as_of`, quantity-based), zero cash *as of `closed_at`*, and no post-`closed_at` activity already on the books.
+- **At every write** into a closed account: **reject.** Corrections go through **reopen → edit → re-close**, which re-proves the invariant rather than assuming it survived.
+
+**Why reject-all rather than "permit if the closure-date position stays zero":** the permissive form cannot be an immediate row trigger — a legitimate *netting pair* fails on the first row before its partner arrives — so it requires a DEFERRABLE constraint trigger. That fires at COMMIT, and releasing a savepoint does **not** fire deferred triggers, so per-row quarantine becomes reachable only by relocating the deferred-check machinery into the ingest worker (`SET CONSTRAINTS ALL IMMEDIATE` per row) or by committing per account — a mandatory cross-artifact invariant between DDL and worker, invisible from inside either half. **And it buys nothing:** the netting correction still works under reject-all, via reopen → insert both → re-close. Both forms admit it; reject-all merely makes the transition visible.
+
+**Reopen is ungated and deliberately asymmetric.** A reopened account starts at zero and is funded by new dated entries; closure entries are historical facts and are not un-booked. Gating the exit would be incoherent — a closed account is already at zero by the gate that admitted it.
+
+**Measure — reuse, no new derivation.** Holdings via `fn_holdings_as_of` (**quantity-based**: an unpriced asset yields a NULL price term that `SUM` drops, so a *market-value* test fails open — price coverage is not a security control). Cash via `fn_account_cash_as_of`, extracted from `050`'s cash leg and consumed by `049` / `050` / the fence, so **fence and NAV share one definition and can only fail together**. **Exact zero, no tolerance** — the native roll-forward is `numeric(20,4)` addition with no division and no multiplier.
+
+**Fence scope** — exactly the position-determining tables. Every exemption names its dependency, because an unnamed one is an unexamined one:
+
+| Table | Fenced | Dependency of the exemption |
+|---|---|---|
+| `account_trans` · `account_balance_checkpoint` · `holdings_checkpoint` | **yes** | — |
+| `account_trans_split` | no | **`029`'s Σ=parent deferred constraint** — splits carry real signed amounts and are position-neutral only because they must decompose an existing amount |
+| `account_trans_annotation` | no | **`004` immutability** of `account_trans.account_id` + `amount` — an annotation can only re-classify a value it cannot change |
+| `pfin.account` | **column-scoped** | see Decision 4 |
+
+### Decision 4 — On a closed account, `currency` is immutable
+
+`account.currency` (`015:537`) *"feeds the `fn_compute_nav` cash-leg FX multiplier"* (its own comment). So `UPDATE … SET currency` on a closed account retroactively re-values every date **including `closed_at`**, falsifying the invariant that admitted the closure. Reachable: `authenticated` holds table-level UPDATE (`003:124` — a **table-level grant with no column list**), `pfin` is Data-API-exposed, and `updateAttributes`'s Zod schema is app-layer — **not a control**. One conjunct on the existing `BEFORE UPDATE` fence. Columns checked, not assumed: `account_type` selects `049`'s investment branch but never enters `fn_compute_nav`; `backfill_cutover_date` is provenance-only; `users_id` is fenced by `account_update`'s WITH CHECK.
+
+**The open-account half is NOT in scope** — `currency` is mutable on every account and changing it silently restates history. Tracked at `BACKLOG.md` §7.7; see Consequences.
+
+### Decision 5 — `pfin.account_event`: the audit surface
+
+Audit-class per [ADR-011](#adr-011) Decision 2 (`pfin.account` itself stays mutable — `updateAttributes` is a correct mutable path). Precedents: `015 linked_source_state_history`, `031 reclass_history`. Fires on `closed_at IS DISTINCT FROM old.closed_at` in **both** directions (close, reopen, and closed→ignored-style clears); the **gate** fires into-closed only.
+
+**Named for the general class, not `closure_history`** — `event_type` CHECK admits only the closure values today and widens by a one-line ALTER (the `030` `transaction_type` CHECK-widen precedent under the ADR-022 code-coupled→CHECK rule). A restatement is not a closure; a second near-identical audit table later would duplicate RLS + grants + immutability triggers **and add a Decision-3 instance** (`account_id → account` a second time, as #18).
+
+**Two conditions on the general name — both cheap now, expensive later, and both recorded in `comment on constraint` where the next person editing the CHECK will be standing:**
+
+1. **Widening `event_type` is Sec-joint-review-mandatory, not a routine ALTER.** This is the risk the general name introduces: a bounded-today table whose bound moves in one line. Every downstream posture was calibrated **for closure events specifically** — SD-25's tier, the `detail` keys-only allowlist, the read posture (SELECT policy + grant + the `025` aal2 conjunct), and `indefinite` §4.6 retention. A widening silently re-scopes all four, and **SD-25 rates what the CHECK admits, not what the table is named**, so re-rating is part of each widening's ratify. Convention precedent: [ADR-016](#adr-016)'s webhook-allowlist annotation (*additions require Sec-consult + ADR amendment*).
+2. **The `event_type` and `detail` CHECKs widen TOGETHER, in the same migration.** The allowlist enumerates keys chosen for closure events; a new event type's natural provenance has no admitted key.
+
+   > **Mechanism, corrected from Sec's statement of it — the conclusion holds but the failure path differs, and the fix follows the path.** Sec described the `detail` CHECK *rejecting* the row (fail-closed on the write, fail-open on the audit trail). It would not: the allowlist admits `detail is null`, so a writer unable to express its provenance under the current keys **omits `detail` and the row lands clean, with no provenance, looking like it worked.** The failure is *omission-passes*, not rejection.
+   >
+   > So the pairing requirement is necessary but not sufficient by itself. **`detail is null` is permissible today only because closure events carry their provenance in typed columns (`account_id`, `linked_source_id`).** Therefore: **any event type whose provenance is not expressible in typed columns must make `detail` mandatory for that type at its widening** — the paired ALTER extends the required-key rule, not merely the allowlist.
+
+Columns: `users_id` (own anchor) · `account_id` → **#16** · `linked_source_id` nullable → **#17** (both P1 matched-tenant, copying `#15`'s lenient-on-null shape at `044`) · `provider_event_id` text (neutral, `015:458` precedent) · `actor` text, discriminated `user:<uid>` / `system:<source>`, **never a bare uid that means "system" when null** · `detail jsonb` · `effective_date` **separate from `created_at`** (ADR-011 D4 third bullet).
+
+**`reason_code` is a closed vocabulary. No free text anywhere on this surface** (F/CTO-ratified 2026-08-03; the `023`-shape mutable-overlay alternative was correctly reasoned and lost to the dominating option). **No `other` + "please specify"** — an escape-hatch free-text field reintroduces the unredactable-PII problem while *looking* like a closed vocabulary. If the vocabulary carries `other`, it is `other` and nothing else.
+
+**Consequences of the ratify:** SD-25 rates **`low`**; the second SD entry and its RLS + grant + `025` aal2 conjunct disappear; the overlay's D3-neutrality analysis is moot.
+
+**Starting vocabulary — PROPOSED, grounded not invented. PM to confirm, F/CTO to ratify:**
+
+| value | grounding |
+|---|---|
+| `closed` · `sold` | PRD §2.4.2 verbatim — *"mark an account inactive when it's **closed or sold**"* |
+| `transferred_out` | the guided close-with-funds walkthrough named at Decision 1 (zero the account by transferring, then close) |
+| `duplicate` | the F/CTO's originating case. **Not legacy-only:** concept 3 prevents a *provider* duplicate at landing, but not a **manual account duplicating a later-connected provider account**, which stays reachable |
+| `other` | see below — PM's call whether to include |
+
+**On `other`, and on why the extensibility here is deceptive.** Adding a value later is cheap (an additive CHECK change under the ADR-022 rule) — but **re-categorizing rows already written is impossible**, because the table is append-only. So the *type* is extensible while the *rows* are not: an under-specified vocabulary is a **one-way door on every row written under it**, and it reads as reversible because the type-level change is. That asymmetry is the argument **for** including `other`: a row honestly recorded as unclassified cannot be fixed later, but neither can a row *wrongly* forced into a specific value — and on an audit record, wrong classification is worse than absent classification.
+
+**There is no `detail jsonb` column. Provenance is carried in typed, constrained columns.** This reverses an earlier design in this ADR's own drafting, and the reversal is load-bearing — three separately-negotiated constraints dissolve with it.
+
+**How it failed.** The `detail jsonb` was adopted from `015:453`'s shipped *"tenant-resolution chain"* column. Sec then found that the total-form allowlist I specified **constrains type, not content**: `jsonb_typeof(detail->'k') in ('string','number','null')` admits an arbitrarily long string, so with `reason_code` closed, `detail` became the only remaining path for unbounded content into a permanent, user-readable, append-only record — the same escape hatch the `other` + "please specify" prohibition closes at `reason_code`, still open one column over.
+
+**Following that through invalidates the column, not just its constraints:**
+
+1. **Every key in the proposed allowlist duplicated a typed column** — `account_id`, `linked_source_id`, `provider_event_id` all exist on this table. That is not merely redundant, it is a **bypass**: the typed `account_id` carries matched-tenant validation (**#16**), a `detail.account_id` key carries none, so a row could hold a fenced `5` and an unfenced `999`, and any reader consuming the jsonb gets an unvalidated cross-tenant value. It defeats the fences the same ADR installs.
+2. **Removing the duplicates leaves only `matched_on` and `decided`** — which Sec's fix already gives **closed vocabularies**. Two closed-vocabulary scalars do not need a jsonb container; they need two `text` columns with CHECKs.
+3. **Which dissolves the rest by construction:** no key allowlist, no `jsonb_typeof` guard, no per-key type rule, no *omission-passes* hole (a column can be `NOT NULL` where its event type requires it), no three-constraints-must-widen-together rule — and critically, **no jsonb exposure problem at all.** `040:36-39`'s constraint (*a scalar key cannot be exposed via column-level GRANT without granting the whole column*) is a fact **about jsonb**. Columns have column-level grants.
+
+**The root cause is this review's own named pattern, and this instance is mine.** `015`'s `detail jsonb` exists because sync-audit carries **variable provider payloads**. `account_event` carries a **fixed, small, closed set of facts**. I adopted the column without its condition — the condition for jsonb is *variable shape*, and we do not have variable shape. Sixth instance of precedent-without-its-surrounding-conditions.
+
+**Resulting columns:** `matched_on text` and `decided text`, each with its own **closed-vocabulary CHECK** (same treatment as `reason_code`). Requiredness is **per event type**, so it is a CHECK (`event_type <> 'X' or decided is not null`), **not** a column-level `NOT NULL` — a global one would fail for the types that do not need it.
+
+**Bounding claim, stated accurately rather than favourably (Sec's correction):** *"no free-form string anywhere"* would be **false** and would mislead the next reviewer into thinking the table is fully bounded — and the next person needing somewhere to put a string would find one already there. Being a typed column does not bound content. The honest form:
+
+> **Every column is a closed vocabulary or a fenced identifier, except `provider_event_id`, which is an arbitrary provider-supplied string bounded by *provenance* — never user-authored — not by constraint.**
+
+Same correction to `acct_number`: the prohibition is **structural for the vocabulary columns** and **provenance-based for `provider_event_id`**, which is structurally capable of carrying anything. It therefore **stays an explicit rule**, not a solved problem. *(But see the writer analysis below — `provider_event_id` may not survive at all.)*
+
+**Widening consequence (Sec):** with no free-form home, a future event type whose provenance is not expressible in the existing typed columns **needs new columns**, not merely a widened CHECK. So: **widening `event_type` may require new typed columns, and each is its own Sec-review surface** — an FK-shaped one extends the Decision-3 family (a new instance, not a free ALTER); a text one must have its content bound or its provenance stated. Without this, *"widening is one line"* carries over from the CHECK-only world and someone adds an unbounded column under a rule written for enum values.
+
+### Decision 5a — Writer analysis: `account_event` has **no system-path writer**, and two columns evaporate with that
+
+Sec's closing argument was that removing `detail` *strengthens* ADR-011 D1 clause (d), because `resolved_via` becomes the typed, matched-tenant-fenced `linked_source_id` (**#17**) rather than an unvalidated blob key. That is sound **given ingest-path writers** — and the ratified model removed all of them, in three separate decisions none of which was taken with this table in view:
+
+| candidate writer | status under the ratified model |
+|---|---|
+| user closes / reopens | **live** — session write under RLS |
+| `042` re-land | **gone** — Decision 1 / Consequences: `042` must **not** clear `closed_at` (a concept-3 action must not perform a concept-2 transition) |
+| provider sync reactivating a closed account | **gone** — Decision 3's transfer-in fence *refuses* the write; the refusal is recorded in `linked_source_sync_audit`, not here |
+| one-time remediation of pre-existing rows | **live** — runs as the migration role, not a session |
+
+**The writer set is closed by GRANT, not by enumeration — which is the argument that actually holds** (Sec; verified independently here rather than accepted). An enumeration of callers is only as good as the enumeration. This is a property of the schema:
+
+> **`service_role` cannot write `closed_at` at all.** `008:95` — `grant select on pfin.account to service_role` — is the **only** grant on `pfin.account` to that role across all 55 migrations (swept, not recalled). `008`'s own CONTRACT records the write grant as *"DEFERRED to SELF-197's confirmation"*, never discharged, and this ADR adds nothing. `service_role` bypasses RLS but **not table ACLs**, so here the ACL is the only fence on it and it holds absolutely.
+
+No privileged path to `closed_at` exists, and none can appear without a new `GRANT` — a migration, therefore a review. Checkable by anyone in one grep, rather than resting on either agent's attention.
+
+**Consequences:**
+- **`provider_event_id` has no writer** — no provider event drives a closure event. **Drop it**, and with it the one free-form string, making the bounding claim above unconditionally true.
+- **`linked_source_id` has no provenance to record** — the misroute-prevention argument for it was about a *system* path resolving tenant via a connection, and no such path writes here. **Drop it → instance #17 is never created → the Decision-3 family stays at 16 labeled / 13 DDL-realized, not 17/14.**
+- **Clause (d) does not apply to this table at all** — every standing writer is a session write under RLS, which Sec already ruled *"not a Decision 1 surface."* The clause-(d) discussion was entirely about writers the model removed.
+- **`actor` survives, and its justification is now a named one rather than a general principle:** the **remediation path** writes as the migration role, so `users_id` (tenant) and the acting identity genuinely diverge for those rows. Without that path `actor` would be redundant with `users_id` and should have gone too.
+
+**#16 still earns its keep, and specifically because of the remediation path.** A migration-role script is **RLS-exempt** and could write a mismatched `(account_id, users_id)` pair; the matched-tenant fence catches exactly that. So #16 is load-bearing for the one writer that is not a session, while #17 had nothing left to validate.
+
+**Dropping is affirmatively better, not merely neutral** — recorded because *"it costs nothing to keep"* is the obvious counter. **An unused fenced column is an attractive nuisance:** it exists, it looks authoritative, and someone eventually populates it *because it is there* — at which point the fence validates tenant-match but **not meaning**, and the project has an unreviewed provenance channel wearing a fence that only ever checked one property. Removal is the stronger control. Re-introduction stays clean: a future system-written `event_type` needs provenance, which needs columns, which is a Sec-review surface where an FK-shaped one enters the family as a **new** instance.
+
+**This is the same failure as the `detail jsonb` column, one level up — and it is a distinct third variant of the pattern**, worth naming separately because its tell is different:
+
+> **A requirement outliving its own precondition.** #17 was correct when written. Three decisions later — none taken with this table in view — the condition it rested on was gone, and the requirement kept standing because nobody re-derived it.
+
+The first two variants are about *incoming* things and both have something to read: copying an artifact without its surroundings (go read the surroundings), invoking a rule outside its trigger (go read the trigger clause). **This one has nothing to read.** The requirement looks exactly as valid as the day it was written; the change is somewhere else entirely.
+
+**Which yields the symmetric rule** (Sec), extending the dependency-naming discipline from exemptions to requirements: **every exemption states what makes it safe; every fence states what makes it necessary.** Had #17 carried *"depends on a system-path writer existing"*, the lapse would have been visible three decisions earlier.
+
+**Jointly owned rather than assigned** — Sec's requirement, this ADR's model changes, and neither party re-checking the other's ground. Recorded that way deliberately: the mechanism is precisely that it fell between two people who were each individually correct.
+
+### Decision 6 — Ingest refusal is a specified behaviour
+
+Unspecified, "refuse" defaults to one of: silent per-row drop (ledger data lost at the boundary); whole-sync abort (**one closed account wedges an entire connection** — cursor never advances, every other account starves); or cursor-advances-past-refused (permanent silent gap). **Required: per-row quarantine, durably recorded and user-surfaced; the cursor must not advance past a refused row without a durable record.** Durable record → `linked_source_sync_audit.detail` (already the sync-event class, `service_role`-only). User surfacing → a **new named scalar COUNT key** on the `040` view — **not** `transactions_skipped` (a dedup-skip is benign; a closed-account refusal needs user action), and **NULL ≠ 0** (NULL for every historical row: *"we weren't counting"* must not render as *"nothing was refused"*). `040:283` makes the view text Sec-joint-review-mandatory.
+
+---
+
+### Amendment to ADR-039 — Option D is ratified; the temporal constraint is struck
+
+ADR-039 rejected *"**D** — temporal `deactivated_at` (filter 'active as-of `p_as_of`')… most correct for historical trend, but a schema change + backfill — overkill for V1. **Deferred.**"* **The ratified model IS Option D**, so that rejection is reversed. `p_active_only` changes meaning from *current-state `is_active`* to *not-closed-as-of `p_as_of`*, and its documented temporal constraint (*"sound only at `p_as_of = current_date`"*) is **struck, not reworded** — the parameter becomes temporally sound in both settings, which it never was. Landed via a comment-only migration in the `052` shape, not by editing merged `050` (per the §7.6 entry *inverting the `007`/`015` REVOKE comments*, which carries the merged-migration scoping guard).
+
+### Amendment to ADR-040 — the temporal rationale is struck; the decision stands
+
+ADR-040 argued *"`is_active` is current-state, so filtering it into a past as-of retroactively rewrites history"* → therefore precompute. **The premise is that the column carries no date.** Dated closure falsifies it: filtering *not-closed-as-of-`p_as_of`* into a past date is temporally **correct**. **Strike the argument rather than re-scope it.** `nav_daily` **stands** on the four grounds that never depended on it: unrecomputable pre-app spreadsheet-backfill history; provider restatement (a checkpoint records what was *believed* then); historical `eod_price` coverage; cost. Those are unfixable by ledger hygiene, which is why they are the durable grounds. The Forward-flag upgrades: `fn_compute_nav(d, false)` backfill is now sound by construction.
+
+### Preserved, not superseded — ADR-013 A1–A3
+
+> **This ADR preserves [ADR-013](#adr-013) A1–A3 (connection-level); it supersedes PM-1's account-level display half by way of the 3-concept model, not by way of the gate.**
+
+A1–A3 govern the **Item / connection**, not the account: their own label is *"inactive-**Plaid** lifecycle"*; the subject noun is *"the Item"* / *"inactive Items"* throughout; A3's *"retain per `bounded-Item-active-only`"* **is the column comment** on `plaid_items.is_active` (`007:191`), generalized at `015:206` to `linked_source.is_active`; Plaid's scheduled poll is per-Item and has no per-account expression; and they sit under ADR-013's *"Phase-3 ARCH handoffs"*. PM-1 (the §2.4 bullet in the `v1.11` CHANGELOG entry, cited by name — a line citation into a growing file is the same drift hazard) says *"applies to Plaid accounts"*, stating loosely a **compound** — display (account-ish) + sync-pause (necessarily Item-level) — which A1–A3 disambiguated. **No contradiction; no supersession of A1–A3.**
+
+---
+
+### Consequences
+
+- **DEFINER allowlist unchanged at 4** — every fence INVOKER + `set search_path = ''`, firing for `service_role` too (bypasses RLS, not triggers; `004:165`).
+- **Decision-3 family 15 labeled / 12 DDL-realized → 16 / 13** — `account_event.account_id` is **#16** and is the only addition. **`#17` (`.linked_source_id`) is NOT created**: its misroute-prevention justification depended on a system-path writer, and the ratified model removed every one (see Decision 5a). Sec-adjudicated 2026-08-03. Sec joint-review-mandatory on #16. *(Note: `046:167` and ADR-037 D4 carry a stale "15/13"; canonical is 15/12 since `048` dropped #5.)*
+- **Stale-count note, restored (it was dropped during the ledger cleanup, which would have lost a finding about *merged* code while tidying stale counts).** `046:167` and [ADR-037](#adr-037) D4's superseding bracket both assert *"Decision-3 unchanged 15/13"*. Canonical was **15/12** once `048` dropped #5, and is **16/13** as of this ADR — so both go from one step stale to two. Correct `046`'s comment **when it is next touched**, per the §7.6 merged-migration scoping guard (do not sweep-rewrite merged migrations' history); ADR-037's bracket is a point-in-time record and arguably stands as written. **This survives nowhere else in committed text** — not in §7.7 — so it lives here.
+- **§10 catalogued ledger unchanged at 3** (RT-22 / RT-26 / RT-27). The fences are Decision-4 *second-class* surfaces (user-facing direct DB write) — **class membership is not a catalogued instance**. 3-axis clean.
+- **Naming:** `fn_account_trans_block_closed_account`, not a generic "closed" freeze — `037:633` already ships `fn_account_trans_annotation_freeze_closed` for a **closed journal**, i.e. two rules on adjacent surfaces taking *opposite* positions on annotations. Standing convention: **put the subject in the name of any "closed" fence.** Header note: a user on the reopen path may still meet `037`'s journal freeze; never blocks a closure correction (annotations are position-neutral).
+- **`042`** must **not** clear `closed_at` on re-land. Landing is concept 3; reopening is concept 2; **a concept-3 action must not silently perform a concept-2 transition.** Also closes the unaudited-silent-reopen finding.
+- **Fixture reconciliation fails loud** — a `DO $$ … RAISE $$` block naming offending `account_id`s, run **read-only in place** (no `db reset`; it destroys the F/CTO's local test data). Auto-mapping is rejected: it guesses intent on financial records, and the two candidate intents now have materially different consequences.
+- **Backend:** the re-point of `netWorth.ts` / `connectionState.ts` / both toggles; the skip-and-record loop. **QA:** two-tenant battery per slice. **Under ADR-040's assembled-sequence discipline** — execute the real statement sequence against a live DB in a rolled-back transaction before merge.
+- **Forward-flagged to `BACKLOG.md` §7.7:** the open-account `currency` restatement. Marking the affected trajectory range is **"D1-shaped, requiring F/CTO ratification as an extension"** — ADR-013 D1 opens the *surface* set, not the *cause* set, and its own provenance required ratification for the smaller move. **Urgency is a closing window, not a severity adjective:** the information needed to mark retroactively is destroyed by not recording it now, and the window closes **per user action**, so the event-recording half must land **before public signup**.
+
+### Build sequence (Architect-owned) — restructured at Sec joint review; **`closed_at` and its gate are inseparable**
+
+**Sec's B-1 is decisive and the original slicing was wrong.** `003:124` is a **table-level** UPDATE grant with no column list, so `closed_at` is writable by `authenticated` **the instant it exists** — no new grant, nothing to review. Under the original A/C/B ordering, `main` would carry a closure column with **no fence at all** while `is_active` was already gone: strictly worse than today, and a live violation of the fail-closed condition. *"Independently reviewable" is not "independently mergeable."*
+
+**Sec required one merge or the fence inside A. This goes further and takes the stronger form: the fence is in the same FILE as the column.** A single merge still leaves a transient window *during apply* — `supabase migration up` applies each file in its own transaction, so a failure between them strands a real database in the ungated state. Same-file closes that by construction, on every database, at every moment, and costs nothing.
+
+**`056`** — extract `fn_account_cash_as_of`; refactor `049` + `050` to consume it. **Pure behaviour-preserving refactor**, isolating the highest-risk edit (two Sec-reviewed financial functions) into a slice whose correctness is checkable on its own via the ADR-038 foot-to-NAV invariant.
+**`057`** — `pfin.account_event` + the #16/#17 matched-tenant fences + the `reason_code` / `matched_on` / `decided` vocabularies. *(Before the gate: the gate's trigger writes closure rows into it.)*
+**`058`** — the atomic semantic change, **one file**: `closed_at` **+ the close gate (three checks) + the `currency` conjunct + the transfer-in fences** on `account_trans` and both checkpoint tables, then the fail-loud enumeration, then **drop `is_active`**, then the as-of re-point of `049`/`050`/`051` and `042`'s clause change. **The column never exists ungated. The enumeration precedes the drop.**
+
+### Process patterns (recorded because ADR-042 is what the next reviewer copies)
+
+- **Precedent-without-its-surrounding-conditions.** Five instances this review; the condition was written down every time and never inside the artifact being lifted. One is **endemic** (`042`'s reactivation, pre-existing); four were agent-authored **with the pattern named and in view**. Variant: *invoking a ratified rule outside its stated trigger* (D1's cause-vs-surface).
+- **Absence is not a value.** Omitting a row where an explicit zero belongs makes *"we didn't measure"* indistinguishable from *"we measured zero"* — a **detectability** failure, the class ADR-011 D1(d) governs, which is why it lands on audit surfaces specifically. Instances: the `nav_daily` enumeration; ADR-040 D1(d)'s four-way absence; the new refusal count key.
+- **Cite by title, never by number.** Both working documents were gitignored and carried colliding ordinal sequences; §7.7's labels inherit the shared-mutable-namespace hazard ADR-040 documented after §7.6 grew 4 → 8 and all four citations silently became wrong.
+
+- **A document can be perfectly cited and still contradict itself.** This draft's body reasoned instance #17 out of existence while its **Consequences block still asserted it and counted it** — 43 lines apart, and the stale half was the *summary*, which is where anyone checks a ledger. Every citation in the document resolved correctly; both numbers were internally well-formed. **A citation sweep and a consistency sweep are different checks**, and the first cannot find this. Caught by team-lead's cross-check, not by checkpoint 5. **Checkpoint 6, and it is mechanical:** extract every quantitative claim a summary block makes and confirm it against the body — here, `grep -n "1[0-9] *labeled\|1[0-9] */ *1[0-9]"` over the whole file, resolving each hit against its context rather than reading the one that was flagged.
+
+- **Audit the justification, not just the claim.** The widened fail-loud enumeration was found by chasing a **loose reason for a conclusion everyone already agreed with**. *"`closed_at = now()` is harmless because a zero-valued account contributes zero"* reaches the right answer — but the stated reason does not cover the case that matters, since at a date *before* real closure the account is not zero at all. Following the loose form to where it stops holding is what exposed the merely-ignored-and-at-zero population. **Nobody had a reason to look: the answer was right.** Distinct from every other finding here, which came from auditing a *claim*; this one came from auditing a *justification behind an agreed claim*, and it is the only kind that survives consensus.
+
+- **A mechanical check is only as good as its mechanism, and a broken one fails OPEN.** Verifying this ADR's ledger fix, team-lead ran `grep -c '17 ?/ ?14'`, got **0**, and briefly read it as confirmation — but `grep` without `-E` is basic regex, where `?` is a **literal character**, so the command searched for a string containing a question mark and could never match. **A sweep with a broken pattern returns clean and reads as verified**, silently in the direction of the answer you were hoping for. It was caught only because the result contradicted a second grep in the same block and the contradiction was resolved rather than taken.
+
+  **And checkpoint 7 as first stated verifies the wrong property** (Sec, then reproduced here). An adversarial probe confirms the pattern **can fire**; it says nothing about whether it fires on **everything it should**. A non-zero result proves *liveness*, not *coverage* — and **an under-matching pattern is exactly as silent as a broken one while looking better, because it returned hits.** Sec's checkpoint-6 sweep returned 22 hits and still missed a stale ledger claim in prose form; re-running the equivalent test here found the identical miss — `"Decision-3 family **15 → 17 labeled / 12 → 14 realized**"` — which no alternative in either of our patterns could reach, because the numbers are separated by transition markers. **The same construction escaped two independently-written patterns**, which makes the arrow-form a systematically hard variant rather than anyone's slip. Two additions: **probe with the hardest known variant, not any instance**; and **for a completeness sweep prefer a pattern that over-matches and filter by hand** — an over-matching pattern is *auditable*, an under-matching one is *silent and its silence reads as absence*. That inverts the usual instinct toward precise patterns, correctly, when the question is *"did I get them all"* rather than *"where is this one."*
+
+  **The structural escape, which is stronger than any pattern:** make the **disposition blanket rather than enumerated**, and the sweep's completeness stops being load-bearing. Sec's supersession table *enumerated* the sections carrying stale claims — written from recollection, so its coverage of the missed line was luck. A blanket header (*"every ledger figure below is superseded; the current one is X"*) covers by construction, including the instances the sweep never found. **Where a blanket disposition is available, prefer it over an enumerated one precisely because you cannot trust your own sweep's coverage.**
+
+  **Checkpoint 7: any check returning "clean" on its first run gets one adversarial probe** — grep for something you know is present and confirm the pattern actually fires — before the clean result is believed. This ranks above the others in leverage: checkpoints 5 and 6 are themselves greps, so a mechanism that fails open **disarms them both while reporting success.** *(This document has now demonstrated three defects in its own subject matter: a citation error, an internal contradiction that citation-checking structurally cannot catch, and a verification tool that failed open — the last being the one that would have let the other two through.)*
+
+- **The checkpoint count keeps rising because each new check has its own failure mode, and the regress does not terminate.** Checkpoint 5 misses consistency; 6 misses broken patterns; 7 misses incomplete ones. Stated plainly rather than implying the latest one closes it. **The practical stopping point is not a complete set of checks** — it is that every check is **cheap, mechanical, and leaves an artifact a third party can re-run**, which is what makes the *next* gap findable by someone else rather than by luck. Where the regress does terminate locally is the structural escape above: **a blanket disposition removes the dependency on the check being complete**, which is the only move here that ends a branch of the regress rather than extending it.
+
+- **A two-agent pair is structurally blind to a premise both agents hold.** Every catch logged in this review came from *the other* agent — each time, one party held a belief the other did not. But both agents carried *"free-text/rights is the last open F/CTO item"* for several exchanges after it was ratified, **restating it to each other in closing lines, where each restatement read as corroboration.** A shared premise does not merely evade the pair's cross-check; **the pair manufactures confidence in it.** It took a reader outside the pair — team-lead — who saw it immediately from a different vantage.
+
+  This is the **stated limit of the two-agent shape**, and it must be recorded rather than left to inference, because the rest of this section implies the pair is sufficient: *every instance we logged is one the pair could catch, which is survivorship bias about our own method.* **No general checkpoint follows** — you cannot grep for a belief you do not know you hold, and inventing a sixth would be worse than admitting the gap. The remedy is structural: **a reader outside the pair reviews the status claims.** The narrow, high-frequency case does have a cheap rule: **re-derive an open-items list from the artifact rather than carrying it forward** — one read, and it is the same *relayed-not-re-derived* shape as the `003:127` line number.
+
+**Approved by:** Founder/CTO (2026-08-03).
+
+**Cross-references.** [ADR-039](#adr-039) (Option D ratified) · [ADR-040](#adr-040) (temporal rationale struck; decision stands) · [ADR-013](#adr-013) A1–A3 (preserved) · [ADR-038](#adr-038) · [ADR-031](#adr-031) · [ADR-035](#adr-035) (R1) · [ADR-011](#adr-011) D1 / D2 / D3 / D4 / D9 / Lock 10 / Lock 11 / Lock 14 · `003` `004` `015` `019` `029` `037` `040` `042` `049` `050` `051` `054` · PRD §2.4.1 / §2.4.2 / §2.4.3 · `BACKLOG.md` §7.4 (*statement-vs-GL tie-out*) / §7.6 (*merged-migration comment scoping guard*) / §7.7.
+
+---
+
 ## ADR-041 — ETL database login identity: a dedicated `pfin_etl` NOINHERIT role, not a shared `authenticator` (SELF-214)
 
 **Date:** 2026-08-02 · **Status:** Accepted — F/CTO ratified 2026-08-02 (option **(B)** dedicated role; option **(A)** share provider-sync's `authenticator` rejected) · **Phase:** 6 Build Loop (V1.1 "Net worth full"; SELF-214; migration `055`)
