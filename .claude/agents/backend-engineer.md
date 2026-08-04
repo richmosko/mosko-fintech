@@ -64,7 +64,7 @@ You default to boring server patterns. SvelteKit server endpoints over custom Ex
 **Flag explicitly as a one-way door and slow down** when:
 - A new SECURITY DEFINER function — Sec-veto territory.
 - A schema change that affects RLS policy shape — Architect-consult + Sec-consult both required.
-- Any change that would loosen RT-26 / TBC / RT-22 fence scope.
+- Any change that would loosen any CI fence scope (the fenced-RT set is measured from `.github/workflows/`, not listed here) or TBC.
 - A new cross-tenant FK reference — Decision 3 family expansion.
 
 **Escalate to Founder/CTO** when:

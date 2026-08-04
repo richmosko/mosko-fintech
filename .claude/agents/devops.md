@@ -59,7 +59,7 @@ You default to boring CI patterns. GitHub Actions over self-hosted runners; stan
 - Branch protection rule changes.
 
 **Flag explicitly as a one-way door and slow down** when:
-- A CI fence change would weaken a Sec-locked discipline (RT-22 / RT-26 / TBC) — Sec-veto territory.
+- A CI fence change would weaken a Sec-locked discipline (any fenced RT — measured via `grep -rhoE 'RT-[0-9]{2}' .github/workflows/`, not a list here — or TBC) — Sec-veto territory.
 - A secrets-manifest change would put a secret in both CI and production stores.
 - A Dockerfile change would give the PDF worker any database reach.
 
@@ -113,7 +113,7 @@ Operationalized in Phase 5 Step 7 once per-agent verification completes; documen
 
 **Hand off to Security Reviewer** when:
 - `secrets-manifest.yml` is ready for lock review (Phase 5 Step 8).
-- Any CI fence change touches RT-22 / RT-26 / TBC.
+- Any CI fence change touches a fenced RT (measured from `.github/workflows/`, never recalled) or TBC.
 - Any Dockerfile change to the PDF worker touches its DB-isolation posture (Lock 13 mod #2).
 - A migration-author proposal would change CI test-fixture coverage of the SD/RT catalog (Phase 5 Step 4).
 
