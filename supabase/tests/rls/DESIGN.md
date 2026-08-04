@@ -161,18 +161,33 @@ Sec-relevant because it touches where synthetic seed data lives — flagging for
 > none of it is recoverable from the rules themselves — so it is recorded here as data, not
 > as credit.
 >
-> | rule | caught whom |
-> |---|---|
-> | route by shape, not by confidence | **its author, twice** — an arithmetic decomposition and a negative existential, both stated confidently, both wrong |
-> | a caveat is a claim | **its author** — an unmeasured "the table is empty" that would have argued against running the test that found the defect |
-> | confidence has a timestamp | **its author** — a battery-binding claim true when made and silently false six commits later |
-> | build to the risk, not the shape of diligence | **its author** — twice: the withdrawn `prosrc` gate, then a structural check relocated rather than dropped |
-> | regenerate from the catalog and diff | **its author** — three function bodies written from recall that would have applied clean |
-> | the rename trap | its author (prevented, by counting sites before replacing) |
-> | absence reads as recency · a battery cannot prove it is reached | found by others; **treat as least calibrated** and re-examine first |
+> | rule | applications | self-catches |
+> |---|---|---|
+> | route by shape, not by confidence | 3 | **2** |
+> | build to the risk, not the shape of diligence | 2 | **2** |
+> | a caveat is a claim | 1 | **1** |
+> | confidence has a timestamp | 1 | **1** |
+> | regenerate from the catalog and diff | 1 | **1** |
+> | the rename trap | 1 | **1** (prevented) |
+> | absence reads as recency | 1 | 0 |
+> | a battery cannot prove it is reached | 1 | 0 |
 >
-> The bottom row is the one to distrust. Not because those rules are wrong — because
-> nothing has yet tested them against the person who wrote them.
+> **THE COUNT IS LOAD-BEARING — without it the test conflates two opposite failures** (Sec):
+>
+> - **MISCALIBRATED** — many applications, no self-catch. **The shape is the problem; reshape it.**
+> - **UNTESTED** — few applications, so no self-catch has had the chance. **Nothing is wrong; it needs use.**
+>
+> Same cell, opposite remedies — and **reshaping an untested rule is how a good rule gets
+> damaged by its own audit.**
+>
+> **Applying it: both zero-catch entries sit at ONE application. Neither is miscalibrated;
+> both are young.** The first recording of this table flagged them "re-examine first,"
+> which was the wrong disposition for the right observation. **Leave them alone and use
+> them.** Revisit if either reaches ~5 applications still at zero.
+>
+> Nothing here is flagged for reshaping. The table's value is that it can be re-run: a rule
+> drifting toward many-applications-zero-self-catches is shaped around its author's blind
+> spots, and that is only visible if the counts are kept.
 
 
 
