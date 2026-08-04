@@ -278,6 +278,23 @@ argued against — a synthetic table with 20,000 rows, `ANALYZE`d, `enable_seqsc
 inside a rolled-back transaction. **Two index shapes with real statistics, rather than a plan
 against a degenerate plan.**
 
+### Route by shape, not by confidence (sub-rule of 3; same defect as the caveat rule)
+
+> **The shape is "a derivation that has not been run." Confidence is not an input to the
+> decision.**
+
+Confidence is *produced by* the same reasoning under evaluation, so it cannot also referee
+it. Three derivations of identical shape in one review — an arithmetic decomposition, a
+negative existential about the schema, and an index-ordering claim. **Two wrong, one right,
+and nothing available at the time separated them.** The only variable was whether each got
+run before it got recorded.
+
+**A discipline gated on doubt is gated on the one signal the failure mode disables.** The
+wrong ones did not feel wrong; that is what made them propagate.
+
+Pairs with *a caveat is a claim* — same defect at different scopes. One says **your hedge is
+a claim**; this one says **your confidence is not evidence**.
+
 ### Absence reads as recency (a variant of "absence must not become a value")
 
 Two separate mechanisms can make *unknown* present itself as *newest*, and removing one
