@@ -512,6 +512,42 @@ comment on function pfin.fn_account_unrealized_gl(date) is
 comment on function pfin.fn_compute_nav(date, boolean) is
   'SECURITY INVOKER uniform roll-forward net-worth read (ADR-027 §5 / Lock 11; SELF-322 / ADR-039). 019''s valuation VERBATIM + AS-OF OPEN/CLOSED scoping GATED on p_active_only (was is_active; the boolean was RETIRED at 059 per ADR-042 and the predicate is now closed_at is null or closed_at > p_as_of). p_active_only=FALSE → byte-identical to 019 (ALL accounts — the book/as-of engine: 037 GL memo + historical trend). p_active_only=TRUE → CURRENT-STATE (active accounts only; the §2.1.1 headline via netWorth.ts) — SOUND ONLY at p_as_of=current_date (is_active is current-state, not temporal; filtering it into a past as_of rewrites history — see 050 TEMPORAL CONSTRAINT; §2.1.2 trajectory/nav_daily must use frozen precomputed checkpoints). ⚠ THE PRECEDING SOUND-ONLY-AT-CURRENT_DATE CLAUSE IS KNOWN STALE AND DELIBERATELY LEFT INTACT BY 059: ADR-042 STRIKES it, because closed_at IS temporal and an as-of predicate does not rewrite history. It is NOT corrected here because it is a FILED DECISION (the ADR-039 amendment, booked in BACKLOG §7.7 as its own comment-only migration) and 059 does not get to absorb work booked elsewhere. 059 corrects only what 059 falsifies. Do not read the clause as current. securities leg filters via LEFT JOIN pfin.account on holdings.account_id; cash leg via pfin.account — both gate on the as-of open/closed predicate ONLY when p_active_only, and the securities leg carries the FAIL-CLOSED conjunct acc2.account_id is not null (a LEFT JOIN miss must EXCLUDE, not include; the naive closed_at is null alone fails OPEN). Makes the ADR-038 foot-to-NAV invariant EXACT: Σ 049.current_market_value(active) = fn_compute_nav(as_of, true). INVOKER (cross-tenant → 0, fails closed); unpriced asset → NULL → dropped → 0, never NaN. set search_path=''''; NOT a DEFINER allowlist entry (stays 4); §10 ledger 3; Decision-3 unchanged. EXECUTE revoked from PUBLIC, granted to authenticated. §2.1.6 MV-vs-COST-BASIS AUDIT-TRACE (SELF-227, comment-only — no body/signature/logic change): investment-account contributions to NAV use CURRENT MARKET VALUE (eod_price × qty × fx), NOT cost basis; cost basis is confined to 049.cost_basis / unrealized_gl (+ future §2.2.x cost-basis-display surfaces). PRD §2.1.6 / SELF-227.';
 
+
+-- ----------------------------------------------------------------------------
+-- (2d) THE ONE COMMENT THAT MUST *NOT* BE RE-POINTED — qualified instead.
+--
+--   fn_aggregation_has_stale_constituent (046) reads linked_source.is_active,
+--   the CONNECTION-level lifecycle column, which ADR-042 PRESERVES. Its scoping
+--   is CORRECT and is NOT changed here. It appears in the sweep only because its
+--   catalog comment said a BARE `is_active` with no qualifier.
+--
+--   >> IT IS NAMED HERE RATHER THAN SILENTLY SKIPPED. A sweep that quietly
+--      passes over one of five is indistinguishable from a sweep that missed
+--      one. (team-lead) <<
+--
+--   WHY A QUALIFIER-ONLY EDIT BELONGS IN 059 UNDER THE FALSIFIER RULE — the
+--   argument, because 059 does not falsify this comment and the rule would
+--   otherwise exclude it. 059 removes ONE OF THE TWO REFERENTS of a bare
+--   `is_active`. Before 059 the term was ambiguous between two live columns;
+--   after 059 it is ambiguous-BY-ABSENCE — a reader meets a bare `is_active`,
+--   knows the account column was just dropped, and reasonably concludes this
+--   comment is stale. So 059 does not make the sentence FALSE; it makes the
+--   sentence MISREAD. That is a consequence of this migration and belongs to it.
+--   ⚠ Sec: if you read the falsifier rule as excluding this, say so and it moves
+--     out — the edit is comment-only and independent of everything else here.
+--
+--   The token collision cost roughly five misclassifications in one day,
+--   including one of mine that nearly reported ADR-042's own 059 scope as
+--   incomplete. Qualifying the source is cheaper than every future sweep having
+--   to be careful: put the disambiguation where the confusion happens.
+--
+--   A catalog object, so it needs its own re-emit — it cannot ride a function
+--   redefinition. Regenerated from obj_description(), ONE substitution,
+--   diff-proved. NO behaviour change and NO scoping change.
+-- ----------------------------------------------------------------------------
+comment on function pfin.fn_aggregation_has_stale_constituent() is
+  'SECURITY INVOKER staleness-detection primitive (SELF-208 §2.4.4.c; ADR-013 D1 non-silent staleness framework; RT-13). Returns ONE aggregate row (is_stale boolean, stale_items jsonb) for the calling user: is_stale = TRUE iff the caller owns >=1 ACTIVE linked_source whose connection_status <> ''healthy''; stale_items = jsonb array of {linked_source_id, institution_name, provider, connection_status, status_class} for those sources (''[]'' when none). Composes over the 043 pfin.linked_source_connection_state INVOKER view (Lock 11 read-composition) — owner isolation + the 025 aal2 gate are INHERITED via linked_source RLS (auth.uid() scope; RT-13 requesting-tenant-scoped credential-state resolution satisfied structurally). Scopes to linked_source.is_active=TRUE — THE CONNECTION-LEVEL LIFECYCLE COLUMN, NOT pfin.account.is_active, WHICH WAS RETIRED AT 059 (ADR-042). This column SURVIVES and this scoping is CORRECT AND UNCHANGED; the qualifier is here because a bare ''is_active'' in a pfin comment became ambiguous-by-absence once the account column was dropped — to match the NAV constituent contract (netWorth.ts connection filter) — an inactive/suspended source feeds nothing into the number so flagging it would be a false positive (NOT a D1 violation: D1 governs the honesty of the number the user sees). D1-FORWARD: the §2.4.4 surface list is illustrative-not-exhaustive; this framework applies to every aggregation consuming Plaid-sourced data — V1.0 wires NAV (§2.1.1), ramp at V1.1+ (§2.1.2/§2.1.5/§2.2.2/§2.3.2/§2.3.4/§2.6). Per-status affordance (Frontend): key on connection_status — Re-authenticate for IN (login_required,revoked,disconnected), informational for institution_down (marked-but-not-reauth); provider dispatches reauth() per adapter; status_class is context not driver. Authors no function with DEFINER (allowlist stays 4), no FK column (Decision-3 unchanged 15/13), no service_role (RT-26 stays 4), no catalogued §10 instance (stays 3).';
+
 -- ----------------------------------------------------------------------------
 -- (4) Drop the biconditional. Prefix: the columns may now diverge and NOTHING
 --   READS EITHER for correctness — step (2) already re-pointed.
