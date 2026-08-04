@@ -644,7 +644,22 @@ select set_eq(
       where pg_get_functiondef(q.oid) like '%pfin.account_balance_checkpoint%' $$,
   $$ values ('fn_account_balance_checkpoint_block_mutation'::text),
             ('fn_account_balance_checkpoint_block_truncate'),
-            ('fn_account_cash_as_of') $$,
+            ('fn_account_cash_as_of'),
+            -- EXTENDED 2026-08-04 for `058`'s close gate, AFTER READING IT — which is what
+            -- this assertion instructs, and the only response it permits besides finding a
+            -- defect. Reviewed against the exact distinction the signal exists to draw:
+            --   · its CASH leg DELEGATES — `from pfin.fn_account_cash_as_of(...)`. It does not
+            --     compute a balance. No sum(), no order by, no '-infinity', no roll-forward.
+            --   · its ONE direct reference to the table is an EXISTENCE PROBE in leg 3:
+            --     `where b.account_id = ... and b.as_of_date > new.closed_at::date`, asking
+            --     "is there post-closure activity", never "what is the balance".
+            -- So it is a LEGITIMATE CONSUMER, and it joins the set for the SAME reason the two
+            -- `018` guards already in it do: it MENTIONS the table without computing cash.
+            -- That is the honest-limit note's whole point — this is a TEXT-MENTION set.
+            -- ⚠ NOT relaxed and NOT deleted: the set GREW BY ONE NAMED ROUTINE, so a second
+            --   new consumer still fires this red. Extending is what keeps the signal live;
+            --   deleting is what the header forbids.
+            ('fn_account_closure_gate') $$,
   '(E10a) REVIEW SIGNAL — schema-wide TEXT-MENTION set (NOT a computes-cash set; see the honest-limit note): the pfin routines whose TEXT MENTIONS pfin.account_balance_checkpoint are EXACTLY the table''s two `018` mutation/truncate GUARDS (members because the anchor matches the table NAME wherever it appears — their own function names AND raise-message text — without computing cash at all; bodies use tg_op and never read it. Permanent, expected, NOT drift) plus fn_account_cash_as_of (the one cash home). A red means a NEW routine touches the table: LOOK, then extend the set under review. Do NOT delete this assertion to resolve a red. Catches PROLIFERATION into unknown consumers, which (E10b)/(E10c) structurally cannot. ⚑ EXPECTED RED until the re-point lands — measured live pre-re-point the set also contains fn_account_unrealized_gl and fn_compute_nav(date,boolean)'
 );
 select is(
