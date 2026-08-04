@@ -3,7 +3,9 @@
 // Backend-owned server source (ARCH §4.1 allowlist).
 //
 //  - load(): account row + transaction history — all RLS-scoped. Non-owner → 404.
-//  - actions.toggleActive: single-row RLS-scoped UPDATE of is_active (SELF-201 AC#3).
+//  - actions.toggleActive: the account CLOSE control (ADR-042 Decision 1). Single-row
+//    RLS-scoped UPDATE of closed_at — NOT is_active, which 059 drops. Gated by the 058
+//    BEFORE UPDATE close gate; refusals name which leg fired.
 //
 // The account-level asset Sub-Cat surface (reassignSubCat action + the asset-domain
 // picker + the account.sub_cat_id label embed) is REMOVED — allocation classifies
@@ -12,8 +14,10 @@
 // stay dormant (a full column drop is a separate future Architect ADR). The
 // per-TRANSACTION cashflow category (account_trans_annotation.sub_cat_id) is unaffected.
 //
-// AC #3 polarity: is_active (WHERE is_active = TRUE), NOT a new `inactive` column
-// (reconciled at 012). CONTRACT for NAV/current-state consumers: filter is_active.
+// SUPERSEDED BY ADR-042: the AC #3 is_active polarity note described a boolean that is
+// retired at 059. Closure is now as-of dated (closed_at); a boolean cannot answer an
+// as-of question, which is the defect the three-concept model removes. The NAV/
+// current-state read contract re-points with the §7.9 application-layer landing.
 // AC #4: inactive accounts retain account_trans history (schema-guaranteed).
 // acct_number intentionally NOT selected — masked-only render posture (SD-15).
 
@@ -199,7 +203,31 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	};
 };
 
+/**
+ * Turn a close-gate refusal into user-facing copy that NAMES the leg that fired.
+ *
+ * The gate's raises are operator-precise (they interpolate account ids, dates and native
+ * amounts) and are not shown verbatim — but which of the four legs refused IS the useful
+ * part, per ADR-042 Decision 1. A generic "could not update" would tell the user nothing
+ * and is the failure this mapping exists to avoid.
+ */
+function gateRefusalMessage(raw: string): string {
+	if (raw.includes('leg 1 of 3: holdings'))
+		return 'This account still holds positions. Sell or transfer them out, then close it.';
+	if (raw.includes('leg 2 of 3: cash'))
+		return 'This account still holds a cash balance. Move the funds out, then close it.';
+	if (raw.includes('leg 3 of 3: post-closure activity'))
+		return 'This account has activity dated after the closing date. Close it as of a later date.';
+	if (raw.includes('future closed_at'))
+		return 'An account cannot be closed as of a future date.';
+	return 'This account cannot be closed yet — it still holds value.';
+}
+
 export const actions: Actions = {
+	// The account CLOSE control (ADR-042 Decision 1). Named `toggleActive` and posting
+	// `is_active` for now: PR 2 fixes the WRITE only, and the reads still resolve through
+	// is_active until 059 drops it. The rename rides with the §7.9 application-layer landing,
+	// so this file is not touched twice for a half-migrated surface.
 	toggleActive: async ({ request, locals, params }) => {
 		const { user } = await locals.safeGetSession();
 		if (!user) return fail(401, { errors: { _form: ['You must be signed in.'] } });
@@ -210,14 +238,29 @@ export const actions: Actions = {
 		const parsed = toggleActiveSchema.safeParse(Object.fromEntries(await request.formData()));
 		if (!parsed.success) return fail(400, { errors: fieldErrors(parsed.error) });
 
+		// ADR-042 Decision 1: this is the CLOSE control, and closure is a dated bookkeeping
+		// event — so it writes closed_at, never is_active. The 058 sync trigger is
+		// ONE-DIRECTIONAL (closed_at -> is_active); writing is_active directly would leave
+		// closed_at untouched and be REJECTED by account_closure_biconditional. is_active is
+		// dropped entirely at 059.
+		//   is_active=false (posted) -> CLOSE  -> closed_at = now()
+		//   is_active=true  (posted) -> REOPEN -> closed_at = null (deliberately ungated)
+		const closing = !parsed.data.is_active;
 		const { error: updErr } = await locals.supabase
 			.schema('pfin')
 			.from('account')
-			.update({ is_active: parsed.data.is_active })
+			.update({ closed_at: closing ? new Date().toISOString() : null })
 			.eq('account_id', accountId);
 
 		if (updErr) {
-			console.error('[accounts/[account_id]] toggleActive failed:', updErr.message);
+			console.error('[accounts/[account_id]] close-control update failed:', updErr.message);
+			// The close gate refuses with a named leg (holdings / cash / post-closure activity /
+			// future-dated). ADR-042 Decision 1 requires the refusal to NAME why, so the user
+			// knows the account holds value rather than that "something went wrong" — a guided
+			// close-with-funds walkthrough is future work and the message stands in for it.
+			if (updErr.message?.includes('account closure blocked')) {
+				return fail(422, { errors: { _form: [gateRefusalMessage(updErr.message)] } });
+			}
 			return fail(422, { errors: { _form: ['Could not update the account.'] } });
 		}
 		return { success: true, is_active: parsed.data.is_active };

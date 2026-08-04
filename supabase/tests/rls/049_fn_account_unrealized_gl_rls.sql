@@ -154,8 +154,8 @@ insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_o
   values (:a4, -2000.0000, 'USD', '2026-06-01', 'seed');
 
 -- a5 (depository, INACTIVE + value-bearing 9999): must be EXCLUDED from the fn (T1 is_active filter).
-insert into pfin.account (users_id, name, account_type, scope, tax_treatment, is_active)
-  values (:'ta', 'a-inactive-5', 'depository', 'household', 'taxable', false) returning account_id as a5 \gset
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment, is_active, closed_at)
+  values (:'ta', 'a-inactive-5', 'depository', 'household', 'taxable', false, '2026-06-30'::timestamptz) returning account_id as a5 \gset
 insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_of_date, source)
   values (:a5, 9999.0000, 'USD', '2026-06-01', 'seed');
 

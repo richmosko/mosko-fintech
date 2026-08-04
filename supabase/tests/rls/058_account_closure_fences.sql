@@ -296,11 +296,19 @@ select throws_like(
 --   ⚑ This assertion exists because I ENUMERATED the raises rather than assuming the three
 --     legs I had been told about were all of them. A fence with no test is the defect this
 --     battery was created for; I nearly shipped one.
+--   ⚑ ORDERING: (B1) already closed `:z`, and the gate fires ONLY on the into-closed
+--     transition (`old.closed_at is null and new.closed_at is not null`). Without reopening
+--     first this UPDATE is closed->closed, the branch is skipped, and the assertion reports
+--     "no exception thrown" — a GREEN GATE read as a missing one. Reopened inside a savepoint
+--     so (B9b)'s `reopened` count is not inflated; reopening is deliberately ungated.
+savepoint sp_future_bound;
+update pfin.account set closed_at = null where account_id = :z;
 select throws_like(
   format($$ update pfin.account set closed_at = (now() + interval '1 year') where account_id = %s $$, :z),
   :'m_gate_future',
   '(B4b) PLAUSIBILITY BOUND: a closed_at dated one year in the FUTURE is REFUSED. One-sided by design — a past closed_at before created_at is legitimate for a historical account, so only the future bound is fenced. Found by enumerating the gate''s raises against the DDL, not by working from the three legs I was told about'
 );
+rollback to savepoint sp_future_bound;
 
 -- (B5) LEG INDEPENDENCE. B2/B3/B4 are three assertions only if their messages are three
 --   messages. Under one merged 'closure gate failed' each would pass on ANY leg's fire and
@@ -368,6 +376,9 @@ language sql security invoker stable set search_path = '' as $totality$
 $totality$
 $fmt$, :z) \gexec
 select _rls.set_tenant(:'ta'::uuid);
+-- Same into-closed ordering as (B4b): reopen so the gate is actually entered. Inside
+-- sp_totality, so both this and the sabotage are rolled back together.
+update pfin.account set closed_at = null where account_id = :z;
 select throws_like(
   format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = %s $$, :z),
   '%returned no row from fn_account_cash_as_of%totality contract is broken%',

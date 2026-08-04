@@ -130,8 +130,8 @@ insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_o
   values (:a3, -2000.0000, 'USD', '2026-06-01', 'seed');
 
 -- a4: INACTIVE investment WITH securities (10 NVSECA) — tests BOTH legs' is_active gating.
-insert into pfin.account (users_id, name, account_type, scope, tax_treatment, is_active)
-  values (:'ta', 'a-inv-inactive-4', 'investment', 'household', 'taxable', false) returning account_id as a4 \gset
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment, is_active, closed_at)
+  values (:'ta', 'a-inv-inactive-4', 'investment', 'household', 'taxable', false, '2026-06-30'::timestamptz) returning account_id as a4 \gset
 insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_of_date, source)
   values (:a4, 1000.0000, 'USD', '2026-06-01', 'seed');
 insert into pfin.account_trans (account_id, transaction_date, amount, quantity, security_id, cost_basis, transaction_type, vendor)

@@ -161,8 +161,8 @@ insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
 insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_of_date, source)
   values (:a5, -2000.0000, 'USD', '2026-06-01', 'seed');
 
-insert into pfin.account (users_id, name, account_type, scope, tax_treatment, is_active)
-  values (:'ta', 'a-dep-inactive-7', 'depository', 'household', 'taxable', false) returning account_id as a7 \gset
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment, is_active, closed_at)
+  values (:'ta', 'a-dep-inactive-7', 'depository', 'household', 'taxable', false, '2026-06-30'::timestamptz) returning account_id as a7 \gset
 insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_of_date, source)
   values (:a7, 9999.0000, 'USD', '2026-06-01', 'seed');
 
