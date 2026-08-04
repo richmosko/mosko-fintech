@@ -146,6 +146,11 @@ insert into pfin.account_trans (account_id, transaction_date, amount, quantity, 
   values (:a4, '2026-06-20', 1000.0000, -10, :seca, 1000.0000, 'standard', 'sell-a4');
 insert into pfin.account_trans (account_id, transaction_date, amount, quantity, vendor)
   values (:a4, '2026-06-30', -1000.0000, 0, 'sweep-a4');
+-- The seed block runs at postgres with no tenant, so auth.uid() is NULL and 057's
+-- writer refuses rather than letting absence become a value. Declare the writer, as
+-- its own raise instructs. 'system:remediation' is the ONLY system actor 057 admits
+-- (enumerated, not an open pattern, so a new system identity fails the CHECK).
+select set_config('pfin.actor', 'system:remediation', true);
 select set_config('pfin.reason_code', 'no_longer_used', true);
 update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = :a4;
 
