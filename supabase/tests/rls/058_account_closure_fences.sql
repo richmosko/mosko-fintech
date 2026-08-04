@@ -92,6 +92,19 @@
 --   `059` (which drops `is_active`), so this file discriminates in BOTH directions rather
 --   than merely being present alongside the right migration.
 --
+-- ┌─ ⚠ MEASURED vs WRITTEN — READ BEFORE QUOTING A COUNT FROM THIS FILE ─────────────┐
+-- │ This file's assertions are **WRITTEN, NOT MEASURED**: its migration is not applied │
+-- │ to any database I can reach (local stack at `056`; verified `account_event`,       │
+-- │ `closed_at` and `account_closure_gate` all ABSENT). **No assertion here has ever   │
+-- │ run.** They are authored against the DDL text at a cited ref, which is a weaker    │
+-- │ claim than green and must not be aggregated with one.                              │
+-- │ Reporting rule adopted 2026-08-03 after Architect flagged that a single total      │
+-- │ ("95 assertions") sitting beside a green ("22/22") invites reading all of them as  │
+-- │ measured — wrong about 57. **Quote two numbers, never one sum.**                   │
+-- │ Same defect as the (B5) it superseded: comparing what I had WRITTEN rather than    │
+-- │ what the database SAID. Applied there to an assertion, here to a status report.    │
+-- └───────────────────────────────────────────────────────────────────────────────────┘
+--
 -- ┌─ ⟦EXPECTED STACK⟧ — READ BEFORE INTERPRETING ANY RESULT FROM THIS FILE ──────────┐
 -- │ **A RESULT FROM THIS BATTERY IS UNINTERPRETABLE WITHOUT THE MIGRATION SET IT RAN │
 -- │ AGAINST.** A red cannot be distinguished from "this DB predates the change"; a    │
@@ -166,11 +179,20 @@ begin;
 \set m_fence_hold      '%write blocked%is closed (holdings_checkpoint)%'
 \set m_currency_frozen '%currency is immutable on a closed account%'
 
--- plan = 40: BLOCK B 16 · C 10 · S 7 · P 5 · G 2. Recorded so a silent plan-edit — the
+-- plan = 47: BLOCK B 17 · C 10 · S 7 · P 5 · W 6 · G 2. Recorded so a silent plan-edit — the
 -- cheapest way to make a battery green — shows up in review as an arithmetic change.
-select plan(40);
+select plan(47);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
+
+-- ⟦CARRIER REBOUND at `e88b76c` — EVERY closure in this file now needs TWO `set local`s in
+--   the same transaction, not one. The `account_event` AFTER writer RAISES if
+--   `pfin.reason_code` is unset, and it is MANDATORY, never defaulted. Without this every
+--   one of the 12 closure statements below fails — and it would fail with the WRITER's
+--   message, not the gate's, so (B1)/(B6a)/(B9) would go red for a cause that has nothing
+--   to do with what they assert. Set once here at the txn level; individual assertions
+--   override it only where the point is its ABSENCE (see (W2)).⟧
+select set_config('pfin.reason_code', 'no_longer_used', true);
 
 -- ---------------------------------------------------------------------
 -- FIXTURE (PRIVILEGED postgres — RLS-bypassed; the sole seed path).
@@ -307,9 +329,21 @@ select is(
 --     · the test role CAN `create or replace` a function in pfin inside a txn — measured
 --     · the replacement ROLLS BACK — measured, and independently confirmed by (E12) in the
 --       `056` battery, whose sentinel did not leak: the live fn is still the real one.⟧
+-- ⚠ STATUS: THIS ASSERTION HAS NEVER RUN AND CANNOT AT THE CURRENT STACK. It sabotages
+--   `056` and asserts THE GATE refuses; the gate does not exist at migration `056`. Stated
+--   here so its status is legible without deriving it from the expected-stack block.
 -- ⚠ PENDING REBIND — Sec ruled option A 2026-08-03: the NULL fail-open folds into THIS
 --   raise (`if not found or v_cash is null`) rather than becoming a seventh distinct one,
 --   because both causes mean the same thing to an operator: **`056` is wrong, fix `056`.**
+--   ⟦FINAL RAISE TEXT — Architect `2cd4457`, for a mechanical rebind (NOT yet applied here;
+--     holding until Sec rules on the `057` writer so I rebind once):
+--       'account closure blocked: account % got no usable cash balance from
+--        fn_account_cash_as_of (row %, value %) — … (leg 2 of 3: cash)'
+--     with `row MISSING`/`row present` and `value NULL`. **Raise count stays 6**, so the
+--     (B5) raise-site assertion is unchanged — Sec ruled this is one expression inside one
+--     raise, not a seventh code path. And the two causes render DISTINGUISHABLY, so both
+--     (B4c) halves can assert the SAME raise and still tell each other apart — which is
+--     what makes "one raise, two seeded conditions" testable rather than merely stated.⟧
 --   >> CONSEQUENCE FOR THIS ASSERTION: ONE RAISE, **TWO SEEDED CONDITIONS**. It must be
 --      shown to fire on a MISSING ROW (below) *and* on a NULL `balance_native`. Only the
 --      first is written, because Architect has not yet committed option A and I will not
@@ -372,6 +406,22 @@ select lives_ok(
   '(B9) REOPEN IS UNGATED: NOT NULL -> NULL succeeds. Asymmetric by design — closure entries are historical facts and are not un-booked; a reopened account starts at zero and is funded by new dated entries'
 );
 select set_config('role', 'postgres', true);
+-- (B9b) ⭐ REOPEN IS AUDITED TOO — Sec-required, and the half I was missing.
+--   (B1b) asserts CLOSING writes an account_event row. The vocabulary has TWO values and
+--   only one production path was even claimed, so `reopened` had no test at all.
+--   ⚑ WHY THIS PAIR IS THE ONLY THING IN THE SET THAT TESTS THE WRITER: every other
+--     account_event assertion — all 17 in `057` — inserts its OWN rows and checks the
+--     table's PROPERTIES. Those go green forever against a table nothing writes. **These
+--     two drive the PRODUCTION PATH and assert a row appears.** They are the standing form
+--     of the "what writes this?" sweep, and as of `2cd4457` they are the only assertions in
+--     the set that FAIL — because nothing writes account_event yet. That failure IS the
+--     finding, kept running rather than resolved as a one-time check.
+select is(
+  (select count(*)::int from pfin.account_event
+    where account_id = :z and event_type = 'reopened'),
+  1,
+  '(B9b) REOPEN IS AUDITED: clearing closed_at wrote a `reopened` account_event row. Without it the audit trail is one-directional and every reopen — the correction path the whole reject-all fence design depends on being visible — leaves no trace. Field-level shape binds AFTER THE WRITER LANDS — not merely after Sec''s actor ruling, because the reason_code carrier is unresolved and may change what the trigger writes; actor, reason_code and effective_date bind in ONE pass. ⚑ WHEN IT BINDS, THE LOAD-BEARING ASSERTION IS: actor derives auth.uid() FIRST, GUC second, RAISE third — a GUC-first order is a FORGEABLE SYSTEM IDENTITY in an append-only record, because `set local` is available to any session. And assert only that what is written matches its context; do NOT assert `system:` is reachable, since under the ratified model the operator dispositions as a user session and it may never be written'
+);
 update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = :z;  -- re-close for BLOCK C
 select _rls.set_tenant(:'ta'::uuid);
 
@@ -599,6 +649,85 @@ select throws_like(
 --   would succeed over a table full of violators.
 select col_not_null('pfin', 'account', 'is_active',
   '(P5) NULL TRIPWIRE: pfin.account.is_active is still NOT NULL (inherited from `003:104`, not restated by `058`). A CHECK passes on NULL, so a nullable is_active makes the biconditional silently pass EVERYTHING and `059`''s VALIDATE succeed over a table of violators. RED here means the fence was disarmed by a change somewhere else entirely — the only way this defect can arrive');
+
+-- =====================================================================
+-- BLOCK W — THE account_event WRITER (`e88b76c`, ADR-042 Amendment 1)
+--   The writer exists, so (B1b)/(B9b) stop being standing reds. These three assert the
+--   writer's OWN fences, which live in `fn_account_event_write` — NOT in the gate, so the
+--   (B5) raise-site count of 6 on `fn_account_closure_gate` is unchanged.
+--   ⚑ THREE DISTINGUISHABLE OUTCOMES now exist where there were two, which is why (B1) and
+--     (B1b) had to be separate assertions: gate refuses · gate admits and WRITER refuses ·
+--     both succeed. A single "did the closure work" assertion cannot tell the middle case
+--     from the first, and the middle case is new as of this commit.
+-- =====================================================================
+-- (W1) no acting identity -> RAISE. Absence must not silently become 'system:remediation'.
+select set_config('role', 'postgres', true);
+select set_config('request.jwt.claims', '', true);
+savepoint sp_w1;
+select throws_like(
+  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz, is_active = false where account_id = %s $$, :open1),
+  '%no acting identity%auth.uid() is null and no pfin.actor is set%',
+  '(W1) NO ACTING IDENTITY: a writer with null auth.uid() and no pfin.actor RAISES rather than defaulting. Absence must not BECOME a value on an append-only record — "we did not record who" and "the system did it" must stay distinguishable'
+);
+rollback to savepoint sp_w1;
+
+-- (W2) no reason -> RAISE, and the message must name the remedy.
+savepoint sp_w2;
+select set_config('pfin.reason_code', '', true);
+select _rls.set_tenant(:'ta'::uuid);
+select throws_like(
+  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz, is_active = false where account_id = %s $$, :open1),
+  '%no pfin.reason_code set%set local pfin.reason_code%',
+  '(W2) NO REASON: a session closure without pfin.reason_code RAISES, and the message NAMES THE REMEDY. Asserted on the remedy text deliberately — a mandatory field whose error does not say how to supply it produces a correct refusal that reads as a broken feature'
+);
+rollback to savepoint sp_w2;
+
+-- (W3) ⭐ FORGERY — auth.uid() must WIN over the GUC. Architect asked me to own this one
+--   rather than take their measurement, because they wrote the ordering and then tested it,
+--   which tests their understanding of their own code. Same reason byte-identity was mine.
+--   THE HAZARD: `set local` is available to ANY session, so a GUC-first derivation lets a
+--   user forge a system identity into a permanent, append-only audit record.
+select set_config('role', 'postgres', true);
+select set_config('pfin.reason_code', 'no_longer_used', true);
+select _rls.set_tenant(:'ta'::uuid);
+select set_config('pfin.actor', 'system:remediation', true);   -- the forgery attempt
+select lives_ok(
+  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz, is_active = false where account_id = %s $$, :open1),
+  '(W3a) a session that ALSO sets pfin.actor closes successfully — the forgery does not error, which is what makes (W3b) the assertion that matters'
+);
+select set_config('role', 'postgres', true);
+select is(
+  (select actor from pfin.account_event where account_id = :open1 and event_type = 'closed'),
+  'user:' || :'ta',
+  '(W3b) FORGERY REFUSED: the recorded actor is `user:<uid>`, NOT the forged `system:remediation`. auth.uid() is consulted FIRST and a user session never reaches the GUC. A GUC-first ordering would let any session write a system identity into an append-only record — and it would look correct, because the row lands and the value is in the vocabulary'
+);
+
+-- (W4) UNKNOWN DATE STAYS UNKNOWN — the reopen branch records NULL, not today.
+--   `243079c`: `effective_date` is now NULLABLE and the reopen branch reads an OPTIONAL
+--   `pfin.effective_date` GUC. Sec's finding is the reason, and it is the sharpest form of
+--   a rule this battery has applied all day: the writer PROHIBITED a guessed `reason_code`
+--   and then GUESSED `effective_date` six lines later. `current_date` on a reopen makes a
+--   real same-day reopen **byte-identical** to an unknown-date one — **indistinguishable,
+--   not merely lossy**, on an append-only table with no redaction path.
+select set_config('role', 'postgres', true);
+select set_config('pfin.effective_date', '', true);
+select set_config('pfin.reason_code', 'no_longer_used', true);
+select _rls.set_tenant(:'ta'::uuid);
+select is(
+  (select effective_date from pfin.account_event
+    where account_id = :z and event_type = 'reopened' order by created_at desc limit 1),
+  null::date,
+  '(W4) UNKNOWN STAYS UNKNOWN: a reopen with no pfin.effective_date GUC records NULL, not current_date. A defaulted date makes "we know it happened today" and "we do not know when" byte-identical on a permanent record — absence becoming a value, which is the same defect the writer already refuses for reason_code'
+);
+
+-- (W5) …but a CLOSED row may NOT be dateless. Asymmetry is the point, and it is a CHECK.
+select set_config('role', 'postgres', true);
+select throws_like(
+  format($$ insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor, effective_date)
+              values (%L, %s, 'closed', 'no_longer_used', 'system:remediation', null) $$, :'ta', :open1),
+  '%account_event_effective_date_required%',
+  '(W5) A CLOSED ROW MUST CARRY A DATE: the constraint admits NULL effective_date for `reopened` and refuses it for `closed`. Asserted as the COMPANION to (W4) — without it, "nullable" would read as "optional everywhere" and the closure date, which the whole as-of model depends on, could go unrecorded'
+);
 
 -- =====================================================================
 -- BLOCK G — INVERSION (non-vacuity, proved IN FILE)

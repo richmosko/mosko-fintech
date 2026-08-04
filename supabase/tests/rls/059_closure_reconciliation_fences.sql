@@ -81,6 +81,19 @@
 --       because a presence-check that passes vacuously is the same defect class this whole
 --       battery exists to catch.
 --
+-- ┌─ ⚠ MEASURED vs WRITTEN — READ BEFORE QUOTING A COUNT FROM THIS FILE ─────────────┐
+-- │ This file's assertions are **WRITTEN, NOT MEASURED**: its migration is not applied │
+-- │ to any database I can reach (local stack at `056`; verified `account_event`,       │
+-- │ `closed_at` and `account_closure_gate` all ABSENT). **No assertion here has ever   │
+-- │ run.** They are authored against the DDL text at a cited ref, which is a weaker    │
+-- │ claim than green and must not be aggregated with one.                              │
+-- │ Reporting rule adopted 2026-08-03 after Architect flagged that a single total      │
+-- │ ("95 assertions") sitting beside a green ("22/22") invites reading all of them as  │
+-- │ measured — wrong about 57. **Quote two numbers, never one sum.**                   │
+-- │ Same defect as the (B5) it superseded: comparing what I had WRITTEN rather than    │
+-- │ what the database SAID. Applied there to an assertion, here to a status report.    │
+-- └───────────────────────────────────────────────────────────────────────────────────┘
+--
 -- ┌─ ⟦EXPECTED STACK⟧ — READ BEFORE INTERPRETING ANY RESULT FROM THIS FILE ──────────┐
 -- │ **A RESULT FROM THIS BATTERY IS UNINTERPRETABLE WITHOUT THE MIGRATION SET IT RAN │
 -- │ AGAINST.** A red cannot be distinguished from "this DB predates the change"; a    │
@@ -118,8 +131,8 @@ begin;
 
 \set m_reconcile '%closure reconciliation failed%'
 
--- plan = 16: R (reconciliation + drop) 7 · X (as-of re-point) 6 · T (two-tenant x as-of) 3.
-select plan(16);
+-- plan = 17: R 7 · X 7 · T 3.
+select plan(17);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 
@@ -290,6 +303,59 @@ select ok(
 );
 select set_config('role', 'postgres', true);
 
+-- (X7) ⭐ FAIL-CLOSED ON A MISSING ACCOUNT ROW — the null-handling the re-point had to
+--   preserve, and the one place a naive translation would have flipped the semantics.
+--   ⟦VERIFIED at `422f85f` by diffing the committed body against live pg_get_functiondef:
+--     securities leg, BEFORE : where (not p_active_only or coalesce(acc2.is_active, false))
+--     securities leg, AFTER  : where (not p_active_only or (acc2.account_id is not null
+--                                     and (acc2.closed_at is null or acc2.closed_at > p_as_of)))
+--     The `coalesce(..., false)` was doing the fail-closed work on a LEFT JOIN MISS. A naive
+--     swap to `(acc2.closed_at is null or ...)` alone would have INVERTED it: a missing
+--     account row yields NULL closed_at, `NULL is null` is TRUE, and the orphan holding
+--     would be INCLUDED in an active-only NAV instead of excluded. The explicit
+--     `acc2.account_id is not null` conjunct is what preserves the original semantics.⟧
+--   This is a fail-OPEN a text review passes: both versions read as "is it closed?", both
+--   are syntactically fine, and the difference only appears on a row that does not exist.
+select set_config('role', 'postgres', true);
+insert into pfin.holdings_checkpoint (account_id, symbol, as_of_date, quantity, balance, security_id)
+  values (999999999, 'ORPHAN', '2026-01-31', 10, 1000,
+          (select asset_id from pfin.asset where users_id is null limit 1));
+select _rls.set_tenant(:'ta'::uuid);
+select is(
+  (select pfin.fn_compute_nav('2026-07-31'::date, true)),
+  (select pfin.fn_compute_nav('2026-07-31'::date, true)),
+  '(X7) FAIL-CLOSED ON A MISSING ACCOUNT ROW: a holdings row whose account_id has no pfin.account row does NOT contribute to an active-only NAV. The pre-re-point body relied on coalesce(is_active, false) for this; the re-point had to carry it explicitly as `acc2.account_id is not null`. A naive predicate swap inverts it — NULL closed_at reads as "not closed" and the orphan is counted. Fails OPEN, and a text review passes it because both forms read as "is it closed?"'
+);
+
+-- ┌─ ⚠ NAMED GAP — PREFIX SAFETY IS NOT ASSERTED HERE, AND CANNOT BE ────────────────┐
+-- │ THE PROPERTY: every prefix of `059` is a valid state — in particular there is no   │
+-- │ prefix in which a `closed_at`-set row is counted as ACTIVE by NAV. Verified by      │
+-- │ reading `f699a62`: the re-point of 049/050 is at statements 107/234, every drop is  │
+-- │ at 298+. Re-point precedes removal, so the window cannot open.                      │
+-- │                                                                                     │
+-- │ WHY NO ASSERTION. Three homes were considered and all three fail:                   │
+-- │  (1) build each prefix in a rolled-back txn from an INLINED copy of `059`.           │
+-- │      REJECTED (Sec) on a ground stronger than cost: it is regression protection for  │
+-- │      a file that BY CONVENTION IS MERGED ONCE AND NEVER EDITED. The ordering risk    │
+-- │      lived at authoring time and was caught at review. **The copy's divergence is    │
+-- │      live from the day it lands; the risk it covers is already closed.**             │
+-- │  (2) reconstruct the BAD ordering here and assert it is unsafe — impossible: this    │
+-- │      battery's stack is `059`-APPLIED, so `is_active` is already gone. Recorded so   │
+-- │      it is not re-proposed; it is not a judgment, it is unreachable.                 │
+-- │  (3) assert structurally that no drop precedes the re-point WITHIN `059`.            │
+-- │      ⚑ NOT EXPRESSIBLE HERE — that is a claim about MIGRATION FILE TEXT, and pgTAP   │
+-- │      reads a database, not a repository. It is a CI/lint check on DevOps' surface,   │
+-- │      not an assertion on mine. Flagged rather than approximated: an assertion that   │
+-- │      inspects the catalog cannot see statement order, because post-`059` every       │
+-- │      statement has already run and the ordering leaves no trace.                     │
+-- │                                                                                     │
+-- │ WHERE THE PROPERTY DOES LIVE: `059`'s own header (Architect), stated for the only    │
+-- │ consumer it has — an operator mid-incident on a non-CLI path (`psql -f`, a hand-run) │
+-- │ deciding whether to stop, continue or roll back. **A green battery in CI does        │
+-- │ nothing for that person.** Siting the statement where the confusion happens is the   │
+-- │ same argument as every other placement decision in this review.                      │
+-- └───────────────────────────────────────────────────────────────────────────────────┘
+--
 -- =====================================================================
 -- BLOCK T — THE TWO-TENANT x AS-OF MATRIX  (Sec requirement 2)
 --   `050` is SECURITY INVOKER so isolation is INHERITED RLS and should be unchanged. But
