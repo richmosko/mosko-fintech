@@ -259,6 +259,39 @@ an inline copy in the close gate — the single worst case it could catch. And p
 natural failure mode to calibrate against, which is why it took four tries and the
 behavioural form took one.
 
+### A caveat is a claim (sub-rule of 3, and the most expensive form)
+
+**A caution about instrument conditions is itself an assertion about state, and needs the
+same treatment as the claim it qualifies.** It is easy to exempt because it is the careful
+half of the message.
+
+Instance: a request to measure an index-ordering defect carried the caveat *"the table is
+empty, so the planner will seqscan regardless and the comparison may show nothing."* **The
+table was not empty — it was absent.** The caveat was structurally right and premised wrong,
+**and the wrong premise pointed at "don't bother."**
+
+> **A well-formed caution built on an unmeasured premise licenses skipping the test.**
+> That is worse than no caution at all, because a caution carries authority.
+
+The measurement was only possible because the instrument was built to conditions the premise
+argued against — a synthetic table with 20,000 rows, `ANALYZE`d, `enable_seqscan = off`,
+inside a rolled-back transaction. **Two index shapes with real statistics, rather than a plan
+against a degenerate plan.**
+
+### Absence reads as recency (a variant of "absence must not become a value")
+
+Two separate mechanisms can make *unknown* present itself as *newest*, and removing one
+leaves the other:
+
+- a **defaulted date** (`current_date` on an event of unknown date) makes unknown look like
+  **today's** event;
+- **`NULLS FIRST`** — Postgres's default under `DESC` — makes the resulting NULL sort as the
+  **latest** event in `order by <date> desc limit 1`, the query everyone writes.
+
+Removing the fabricated date so absence stops masquerading as information leaves it
+masquerading as *the most recent* information. **Fixing the value without fixing the
+ordering fixes nothing at the point of use.**
+
 ### The rename trap (a sub-rule of 3, and the same precondition shape)
 
 **Two identical adjacent literals can belong to different vocabularies.** When
