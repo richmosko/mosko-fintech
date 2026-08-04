@@ -470,6 +470,18 @@ AS $function$
 $function$
 ;
 
+
+-- The CATALOG comment is a separate object from the body comment above and
+-- survives CREATE OR REPLACE (comments attach by signature), so re-pointing the
+-- body does NOT correct it (Sec flag at d773006). Left alone, \df+ and
+-- obj_description() would keep reporting "049 already filters is_active" after
+-- step (6) — false, on the surface most tooling actually shows, and for many
+-- readers MORE reachable than the in-body comment. Same reasoning as the body
+-- fix: this is the documentation that justifies a safety-relevant omission.
+-- Regenerated from obj_description() and diff-proved: ONE substitution.
+comment on function pfin.fn_nav_composition(date) is
+  'SECURITY INVOKER §2.1.5 NAV-composition aggregation (V1.1 "Net worth full"; PRD §2.1.5 / SELF-225; Lock 11 read-composition). Returns the composition tree as JSONB: {groups:[{category, accounts:[{account_id, account_name, current_market_value, unrealized_gl}], subtotal}], buildups:{total_non_re, gross_total, debt, realized_tax_liab, unrealized_tax_liab}, nav}. COMPOSES ON 049 fn_account_unrealized_gl (single leaf substrate — per active account current_market_value + unrealized_gl, naturally signed) joined to pfin.account for name + account_type; 049 already filters by the AS-OF predicate (closed_at is null or closed_at > p_as_of) — the boolean flag it used to filter on was RETIRED at 059 per ADR-042, and this function still adds NO predicate of its own and MUST NOT (adding one double-filters). groups[] in canonical category order (depository/investment/retirement/crypto/manual_other → real_estate → liability; §2.1.5/AC#2), empty categories omitted; accounts[] by account_id; leaf unrealized_gl NULL for non-investment (049, AC#3). DEBT SIGN (D-1): liability leaves + subtotal carry 049''s natural negative sign; buildups.debt = −(liability subtotal) = positive magnitude so AC#4 nav = gross_total − debt reads literally. TAX PLACEHOLDERS = Option A V1.1 (AC#5): realized/unrealized_tax_liab = 0::numeric, V1.4 ramp. FOOT-TO-NAV EXACT (ADR-038/039): nav = total_non_re + real_estate + Σ liability_signed = Σ 049(active) = fn_compute_nav(p_as_of, true) BY CONSTRUCTION (single-substrate natural summation; no separate fn_compute_nav call). p_scope DROPPED (pfin.scope type does not exist; scope is a free-text ADR-004 label — per-scope reporting is V2+, PRD §2.1.7); p_users_id DROPPED (INVOKER + RLS scope by auth.uid()). AS-OF via 049 threading (Lock 15; V1.1 consumers pass CURRENT_DATE). INVOKER → cross-tenant caller sees no rows → empty groups / nav 0 (fails closed). set search_path=''''; NOT a DEFINER allowlist entry (stays 4); §10 ledger stays 3; Decision-3 unchanged (no new FK column). Sec joint-review-mandatory (financial calc + multi-tenant); RLS verification → SELF-225 two-tenant battery. §2.1.6 MV-vs-COST-BASIS AUDIT-TRACE (SELF-227, comment-only — no body/signature/logic change): investment-account contributions to NAV use CURRENT MARKET VALUE (eod_price × qty × fx), NOT cost basis; cost basis is confined to 049.cost_basis / unrealized_gl (+ future §2.2.x cost-basis-display surfaces). PRD §2.1.6 / SELF-227.';
+
 -- ----------------------------------------------------------------------------
 -- (4) Drop the biconditional. Prefix: the columns may now diverge and NOTHING
 --   READS EITHER for correctness — step (2) already re-pointed.
