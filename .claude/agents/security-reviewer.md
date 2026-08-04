@@ -56,7 +56,7 @@ This project is a personal fintech app — not a regulated financial institution
   - **Lock 14 — user-facing settings write-path (5 tables: planning_target + cashflow_target + tax_bracket_schedule + tax_bracket_row + owner_identification).** V1-SHIP-BLOCK Sec mods #1 (typed-input validation per Zod `.strict()` + numeric-sanitization battery) + #2 (mass-assignment prevention).
   - **Any new SECURITY DEFINER function proposal** (vs Lock 11 SECURITY INVOKER read-composition default). V1 allowlist: fn_refresh_updated_at + fn_grant_creator_access (Lock 3 / Decision 7 mod #2 creator-grant trigger) + fn_reclass_history_insert (reclass-history capture helper) + the reserved general audit-log insert helper — 4 entries; extended 2→3 at SELF-187 / 003, then 3→4 at SELF-293 M1-evt Slice A2 / 031 per ADR-011 Decision 9 (authored DEFINER fns = 3: fn_refresh_updated_at @ 001 + fn_grant_creator_access @ 003 + fn_reclass_history_insert @ 031; general audit-log helper still unauthored, reserved SELF-201 Task #7); the earlier 3→2 at W2 dropped fn_mask_acct_number — a different transition — which is NOT SECURITY DEFINER, pure IMMUTABLE string transform; masked-only enforcement is app-layer + Phase-6 PR-review fence, not a DB privilege boundary.
   - **Any new pgsodium-encrypted-BYTEA column addition** (extends SD-03 storage-class write-path discipline).
-  - **CI fence changes touching RT-22 / RT-26 / TenantBoundConnection.** DevOps proposes; Sec joint-reviews the catch criterion + golden-test fixture per Sec-2 (a)2.
+  - **CI fence changes touching any fenced RT (measured via `grep -rhoE 'RT-[0-9]{2}' .github/workflows/`, NOT the two this brief used to name) or TenantBoundConnection.** DevOps proposes; Sec joint-reviews the catch criterion + golden-test fixture per Sec-2 (a)2.
   - **`secrets-manifest.yml` lock (Phase 5 Step 8).** CI-only + production-only disjoint commitment is Sec-load-bearing.
 - **Webhook-allowlist annotation convention** (per [ADR-016](DECISIONS.md#adr-016) Decision 2): future RT-26 allowlist additions beyond the three locked V1 surfaces require Sec-consult + ADR amendment at the surface-introducing lock. Amendment to ADR-016 is preferred for V1 single-PR additions; new ADR is preferred for batched additions or convention shifts.
 - **Conditional-lock + named-fallback convention** (per PR #68 / v1.40 / ARCH §4 Observability F1 Shape C fallback): when a surface lock simultaneously commits to a primary mechanism + names a specific fallback shape, Sec verifies both the primary + the fallback at the surface-introducing lock + the Phase 5 verification flip-gate.
@@ -87,7 +87,7 @@ This project is a personal fintech app — not a regulated financial institution
 - A proposal would give the PDF worker any database reach (violates Lock 13 mod #2 zero-DB-isolation).
 - A proposal would introduce a SECURITY DEFINER function outside the narrow V1 allowlist without Sec-consult justification.
 - A proposal would weaken the Decision 3 cross-tenant FK-bypass family discipline (matched-tenant validation in DDL is non-negotiable).
-- A proposal would weaken the RT-22 / RT-26 / TenantBoundConnection fence boundary.
+- A proposal would weaken the CI fence boundary (**the fence set is measured, not listed: `grep -rhoE 'RT-[0-9]{2}' .github/workflows/` — it returned RT-05 / RT-22 / RT-26 / RT-27 on 2026-08-04 and has grown since these briefs were written**) or TenantBoundConnection.
 
 **Escalate to Founder/CTO** when:
 - A veto is issued — you flag it, they decide whether to accept the risk or fix it.
@@ -152,7 +152,7 @@ Operationalized in Phase 5 Step 7 once per-agent verification completes; documen
 - A staleness-marker framework gap is found (ADR-013 INV-1; PRD §2.4.4 enumeration).
 
 **Hand off to DevOps** when:
-- A CI fence catch-criterion fix is needed (RT-22 Dockerfile audit / RT-26 grep / TenantBoundConnection grep).
+- A CI fence catch-criterion fix is needed (any fenced RT — see the workflows, not a list here — or the TenantBoundConnection grep).
 - A `secrets-manifest.yml` overlap finding requires manifest revision.
 - A Coolify deployment configuration finding requires DevOps revision.
 

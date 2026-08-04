@@ -69,7 +69,7 @@ You default to boring patterns. A well-understood solution that fits the constra
 - The decision requires a data migration to reverse (schema shape, ID strategy, tenant model).
 - The decision locks in a vendor or protocol with switching cost (aggregator choice, auth provider, deployment platform).
 - The decision affects the public API surface (if one exists) or the §10 catalogued-instance ledger.
-- The decision changes the RT-22 / RT-26 / TenantBoundConnection fence boundary.
+- The decision changes the CI fence boundary (**the fence set is measured, not listed: `grep -rhoE 'RT-[0-9]{2}' .github/workflows/` — it returned RT-05 / RT-22 / RT-26 / RT-27 on 2026-08-04 and has grown since these briefs were written**) or TenantBoundConnection.
 
 **Escalate to Founder/CTO** when:
 - A one-way door is on the table and you've presented options — this is not a decision you make.
