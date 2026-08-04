@@ -224,14 +224,20 @@ select is(
   '(2) caller-bound ownership: exactly 2 A-owned accounts under a_src1 (users_id DEFAULT auth.uid()=A — NOT a parameter, so the caller cannot land an account for another tenant)'
 );
 
--- (3) attrs-as-passed + is_active: the ext-a-1 row carries every passed attribute AND is_active=true.
+-- (3) attrs-as-passed + OPEN: the ext-a-1 row carries every passed attribute and lands OPEN.
+--   ⚑ RE-POINTED AT 059 (`is_active` dropped): `and is_active` -> `and closed_at is null`.
+--     A BARE `closed_at is null` IS CORRECT HERE, and the exception is worth naming because
+--     049/050 carry the opposite rule. Theirs is an AS-OF rule — never use current-state to
+--     answer a question about a past date. This assertion asks what state a FRESHLY LANDED row
+--     is created in; there is no as-of to thread and no history to misread. Current-state is
+--     the question, so current-state is the right predicate.
 select is(
   (select count(*) from pfin.account
      where linked_source_id = :a_src1 and provider_account_id = 'ext-a-1'
        and name = 'A Brokerage' and account_type = 'investment'
-       and scope = 'household' and tax_treatment = 'taxable' and is_active)::bigint,
+       and scope = 'household' and tax_treatment = 'taxable' and closed_at is null)::bigint,
   1::bigint,
-  '(3) attrs-as-passed: the ext-a-1 landed row carries the passed name/account_type/scope/tax_treatment AND is_active=true (RED if the RPC mis-mapped a per-account attribute)'
+  '(3) attrs-as-passed: the ext-a-1 landed row carries the passed name/account_type/scope/tax_treatment AND LANDS OPEN (closed_at IS NULL — was `is_active` before 059 retired the boolean). RED if the RPC mis-mapped a per-account attribute, or if landing ever produced an already-closed row'
 );
 
 -- capture the canonical ext-a-1 account_id (authenticated A; RLS-visible) for (5)-(9).

@@ -83,7 +83,9 @@ begin;
 -- shared cross-tenant verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(32);
+-- plan = 34: +A3/A4, the pre-closure propagation identity against 049. Recorded so a silent
+-- plan-edit is visible in review as an arithmetic change.
+select plan(34);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
@@ -339,20 +341,46 @@ select is(
       where g->>'category' = 'liability'),
   '(D4) debt sign D-1 identity: buildups.debt == −(liability subtotal) — the positive magnitude is exactly the negated natural-signed subtotal');
 
--- ---- A: is_active INHERITANCE (via 049) -----------------------------
--- (A1) the value-bearing INACTIVE a7 appears in NO group leaf (non-vacuous: a7 exists + carries 9999).
+-- ---- A: OPEN/CLOSED INHERITANCE (via 049) ---------------------------
+-- (A1) the closed-as-of a7 appears in NO group leaf (non-vacuous: a7 exists + carried 9999).
 select ok(
   not exists (
     select 1 from jsonb_array_elements(pfin.fn_nav_composition('2026-06-30'::date) -> 'groups') g,
                   jsonb_array_elements(g -> 'accounts') a
     where (a->>'account_id')::bigint = :a7),
-  '(A1) is_active inheritance: a7 EXISTS + carries 9999 cash, yet NEVER appears in any group — 051 inherits 049''s is_active filter (it never touches an account 049 excluded). RED if inactive leaked in');
--- (A2) a7 is absent from the BUILDUPS too: depository subtotal (5000) excludes a7''s 9999 (would be 14999).
+  '(A1) open/closed inheritance: a7 EXISTS and really carried 9999 cash, yet appears in NO group at this as-of — 051 inherits 049''s open-as-of filter and never touches an account 049 excluded. RED if a closed-as-of account leaked in. (Phrased as `is_active` inheritance before 059 retired the boolean; the mechanism is the same, the predicate is now dated)');
+-- (A2) a7 is absent from the BUILDUPS too: depository subtotal (5000) excludes a7's 9999.
 select is(
   (select (g->>'subtotal')::numeric from jsonb_array_elements(pfin.fn_nav_composition('2026-06-30'::date) -> 'groups') g
      where g->>'category' = 'depository'),
   5000.0000::numeric,
-  '(A2) is_active inheritance into buildups: depository subtotal = 5000 (a2 only), NOT 14999 (a2 + inactive a7) — the inactive account affects neither groups nor the foot');
+  '(A2) inheritance into the BUILDUPS: depository subtotal = 5000 (a2 only), NOT 14999 (a2 + a7) — a closed-as-of account affects neither the groups nor the foot');
+
+-- (A3)/(A4) ⭐ PROPAGATION, ASSERTED AS AN IDENTITY — 051's share of the 059 re-point detector.
+--   ⚑ DELIBERATELY NOT A PREDICATE TEST. 058's header is explicit that only TWO functions are
+--     re-pointed (049 + 050), not three: 051 adds NO open/closed predicate of its own and MUST
+--     NOT. So re-testing the predicate here would duplicate 049's assertion and then DRIFT from
+--     it — two copies of one rule that can disagree after an edit to either.
+--   Stated as a SET IDENTITY against 049 instead: whatever 049 returns at an as-of, 051's leaves
+--   are exactly that. It cannot drift, because it is defined in terms of the thing it must
+--   track rather than in terms of the rule they would each have to re-implement.
+--   ⚑ AND IT IS EVALUATED AT A PRE-CLOSURE DATE FOR THE REASON 049/050 GAINED THEIR DETECTORS:
+--     at 2026-06-30 the as-of and current-state predicates AGREE, so a post-closure-only check
+--     cannot see a wrong 059 re-point. Measured — 8 leaves / 8 cards at 2026-06-10 against
+--     7 / 7 at 2026-06-30.
+select is(
+  (select array_agg((a->>'account_id')::bigint order by (a->>'account_id')::bigint)
+     from jsonb_array_elements(pfin.fn_nav_composition('2026-06-10'::date) -> 'groups') g,
+          jsonb_array_elements(g -> 'accounts') a),
+  (select array_agg(account_id order by account_id)
+     from pfin.fn_account_unrealized_gl('2026-06-10')),
+  '(A3) PROPAGATION IDENTITY AT A PRE-CLOSURE AS-OF: 051''s leaf account-id set is EXACTLY 049''s row set at 2026-06-10 — 8 leaves, 8 cards, including a7, which was open then. Asserted as an identity against 049 rather than by re-testing the open/closed predicate, because 051 adds no predicate of its own and a second copy of the rule would drift from it. ⚠ THIS ONE CANNOT DETECT A WRONG 059 RE-POINT AND IS NOT MEANT TO — measured: under the naive predicate it stays GREEN, because 049 and 051 then propagate the SAME wrong set and the identity still holds. That is the correct behaviour for a propagation check; (A4) is the detector here');
+select ok(
+  exists (
+    select 1 from jsonb_array_elements(pfin.fn_nav_composition('2026-06-10'::date) -> 'groups') g,
+                  jsonb_array_elements(g -> 'accounts') a
+    where (a->>'account_id')::bigint = :a7),
+  '(A4) …AND THE IDENTITY IS NON-VACUOUS: a7 IS a leaf at 2026-06-10, the same account (A1) proves absent at 2026-06-30. Without this, (A3) could hold because both sides excluded a7 — two agreeing wrong answers. The pair is what shows the composition tree is a function of the AS-OF and not of the account''s state today');
 
 -- ---- T: TAX PLACEHOLDERS (Option A V1.1 / AC#5) --------------------
 -- (T1) realized_tax_liab == 0::numeric.

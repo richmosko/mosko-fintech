@@ -101,7 +101,9 @@ begin;
 -- shared cross-tenant verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(28);
+-- plan = 30: T1 8 (+1g/1h, the pre-closure row-set detector) · T2 4 · T3 3 · T4 3 · T5 3 ·
+-- T6 2 · T7 3 · T8 2 · T9 2. Recorded so a silent plan-edit shows as an arithmetic change.
+select plan(30);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
@@ -247,11 +249,11 @@ insert into pfin.account_trans (account_id, transaction_date, amount, quantity, 
 -- =====================================================================
 select _rls.set_tenant(:'ta'::uuid);
 
--- (1a) A sees EXACTLY its 4 ACTIVE accounts (a5 inactive excluded). RED=5 if is_active unfiltered.
+-- (1a) A sees EXACTLY its 4 accounts OPEN AS OF this date (a5 closed 06-30, excluded).
 select is(
   (select count(*)::int from pfin.fn_account_unrealized_gl('2026-06-30')),
   4,
-  '(1a) owner-only-active: A sees EXACTLY 4 rows (a1..a4 active); the value-bearing INACTIVE a5 is EXCLUDED. RED=5 if the is_active filter were dropped');
+  '(1a) open-as-of scoping: A sees EXACTLY 4 rows (a1..a4, open as of 2026-06-30); a5, closed AS OF that date, is EXCLUDED. RED=5 if the open/closed filter were dropped entirely');
 
 -- (1b) A's returned account-id set = EXACTLY {a1,a2,a3,a4} (identity, not just count).
 select is(
@@ -259,10 +261,25 @@ select is(
   (select array_agg(x order by x) from (values (:a1::bigint),(:a2),(:a3),(:a4)) v(x)),
   '(1b) owner identity set: A''s rows are EXACTLY {a1,a2,a3,a4} — every active account, only active accounts');
 
--- (1c) a5 (inactive, value-bearing 9999) is NOT among A's rows — non-vacuous is_active exclusion.
+-- (1c) NO CARD, NOT A ZERO CARD — the distinction 049 exists to make.
 select ok(
   not exists (select 1 from pfin.fn_account_unrealized_gl('2026-06-30') where account_id = :a5),
-  '(1c) is_active exclusion is non-vacuous: a5 EXISTS + carries 9999 cash, yet NEVER appears in the fn output (a suspended account feeds no per-account G/L card). RED if is_active were unfiltered');
+  '(1c) A CLOSED-AS-OF ACCOUNT PRODUCES NO CARD, NOT A ZERO CARD: a5 is absent from the row set entirely. This is the substantive difference from 050 — there the filter cannot change a scalar total (a closed account is worth zero), so the exclusion is invisible in the answer; HERE it changes the ROW COUNT, so 049''s filter is genuinely not a no-op even though it can never move a sum. A zero-valued card for a closed account would render as a live account holding nothing');
+
+-- (1g)/(1h) ⭐ THE PRE-CLOSURE HALF — 049's share of the 059 re-point detector.
+--   (1a)/(1c) assert at 2026-06-30, a POST-closure as-of, where the as-of predicate and the
+--   naive current-state predicate agree. MEASURED: under the naive re-point this file passes
+--   28/28. The row set only diverges BEFORE the closing date, which is where these two look.
+--   a5 held 9999 from 2026-06-01 and was counter-booked to zero on its closing date, so at
+--   2026-06-10 it was open AND value-bearing — the state a current-state filter erases.
+select is(
+  (select count(*)::int from pfin.fn_account_unrealized_gl('2026-06-10')),
+  5,
+  '(1g) ⭐ PRE-CLOSURE ROW SET: at 2026-06-10 A sees FIVE cards — a5 was OPEN as of that date and belongs in the composition for it. Under a current-state re-point (`closed_at is null`) a5 is excluded at EVERY date and this reads 4. Together with (1a)''s 4 at 2026-06-30, the pair pins that the row set is a function of the AS-OF, not of the account''s state today');
+select is(
+  (select current_market_value from pfin.fn_account_unrealized_gl('2026-06-10') where account_id = :a5),
+  9999.0000::numeric,
+  '(1h) ⭐ …AND THE PRE-CLOSURE CARD CARRIES ITS REAL VALUE: a5''s card at 2026-06-10 reads 9999, not 0 and not NULL. A history that showed the account present but empty would be as wrong as omitting it — the account genuinely held that on that date, and the whole point of a dated closure over a boolean is that a past as-of is not rewritten by a later closure. RED (row absent) under a current-state re-point');
 
 -- (1f) cross-tenant: A sees ZERO of B's accounts.
 select is(
