@@ -17,13 +17,21 @@
 -- │ something outside the doc checks it.                                                 │
 -- └────────────────────────────────────────────────────────────────────────────────────┘
 --
--- LAYER DISCIPLINE — why the #16 fence is genuinely load-bearing at BOTH tiers:
+-- LAYER DISCIPLINE — why the #16 fence is load-bearing, and AT WHICH TIER:
 --   account_event's RLS keys on `users_id = auth.uid()`. A row carrying users_id=A and
 --   account_id = B's account therefore PASSES the WITH CHECK (its users_id is A's own) and
---   only the matched-tenant fence catches the mismatch. So the fence is the SOLE gate at
---   authenticated, and again at the migration role (RLS-exempt entirely). Both are asserted.
---   A test that only proved "B cannot write A's row" would be testing RLS and reporting it
---   as the fence.
+--   only the matched-tenant fence catches the mismatch. A test that only proved "B cannot
+--   write A's row" would be testing RLS and reporting it as the fence.
+--   ⚑⚑ CORRECTED 2026-08-04 — THIS PARAGRAPH USED TO SAY "SO THE FENCE IS THE SOLE GATE AT
+--     AUTHENTICATED", AND THAT IS NOW FALSE. `057`'s Amendment-3 F2 fence
+--     (`account_event_block_direct_insert`) sorts alphabetically BEFORE
+--     `account_event_matched_account` and refuses every non-owner INSERT, so **#16 no longer
+--     evaluates at the authenticated tier at all.** Its behavioural proof is (D2b)/(D2c) at
+--     the OWNER tier — which is the RLS-exempt migration-role remediation writer #16 was
+--     justified for in the first place, so the fence still has exactly one live justification
+--     and one live proof. Coverage NARROWED, not lost.
+--     Corrected rather than deleted because the stale form is the most misleading sentence
+--     this file could carry: a standing argument for a fence at a tier where it is inert.
 --
 -- ┌─ LAYER MAP — WHICH MECHANISM EACH ASSERTION ACTUALLY TARGETS ──────────────────────┐
 -- │ Required by Sec 2026-08-03. This file KEEPS the `_rls` suffix because — unlike `058` │
@@ -32,16 +40,33 @@
 -- │ so an author can write an RLS assertion, watch it pass, and believe the fence is     │
 -- │ covered. It is not. FIVE mechanisms live here:                                       │
 -- │                                                                                      │
--- │   RLS policies on pfin.account_event   D1a · D1b · D1c                               │
--- │   BEFORE INSERT trigger (#16 fence)    D2a · D2b · D2c                               │
+-- │   RLS policies on pfin.account_event   D1a · D1b                                     │
+-- │   BEFORE INSERT #16 (matched-tenant)   D2b · D2c        ← OWNER TIER ONLY, see below │
+-- │   BEFORE INSERT F2 (wrong-origin)      D1c · D1e · D1f · D2a                         │
 -- │   CHECK constraints (vocabularies)     D4a · D4b · D4c                               │
 -- │   Table ACL (no write grant)           D5a · D5b                                     │
 -- │   Immutability trigger (cross-tier)    D5c                                           │
--- │   pg_catalog / information_schema      D2d · D3a · D3b · D6a · D6b                   │
+-- │   pg_catalog / information_schema      D1d · D1d2 · D1g · D2d · D3a · D3b · D4d ·    │
+-- │                                        D6a · D6b                                     │
 -- │                                                                                      │
--- │ THE ONE TO GET RIGHT: D2a runs as `authenticated` and its row PASSES RLS — users_id  │
--- │ is A's own. Only the TRIGGER rejects it. An assertion phrased as an RLS denial there │
--- │ would go green while proving nothing about the fence. See the LAYER DISCIPLINE note. │
+-- │ ⚑ THE TWO BEFORE INSERT TRIGGERS ARE ORDERED BY NAME, AND THE ORDER IS THE MAP.      │
+-- │   `account_event_block_direct_insert` sorts before `account_event_matched_account`,  │
+-- │   so at `authenticated` the F2 fence fires and #16 NEVER EVALUATES. Every            │
+-- │   authenticated row above therefore targets F2, whatever it forges. #16 is reachable │
+-- │   only where F2 exempts — the table OWNER — which is why its whole behavioural proof  │
+-- │   is (D2b)/(D2c). Rename either trigger and this entire column silently re-points.   │
+-- │                                                                                      │
+-- │ THE ONE TO GET RIGHT: an assertion here phrased as an RLS denial would go green      │
+-- │ while proving nothing about either trigger — RLS WITH CHECK is evaluated AFTER both  │
+-- │ BEFORE ROW triggers and is unreachable at this tier. See the LAYER DISCIPLINE note.  │
+-- │                                                                                      │
+-- │ ⚑ AND A SECOND AXIS, added after Sec's F1 veto 2026-08-04. This map organises by      │
+-- │   MECHANISM, which is what it is for — but every authenticated-tier row in it probes  │
+-- │   the CROSS-TENANT axis, and the map's own completeness made that invisible. The      │
+-- │   matched-tenant ACTOR forge (D1e) needed no cross-tenant step and had no assertion   │
+-- │   at any tier while this file read 15/15 green. **BEFORE ADDING A CASE, ask which     │
+-- │   AXIS it probes as well as which mechanism it targets** — a map with one axis        │
+-- │   reports coverage of the tier.                                                       │
 -- └────────────────────────────────────────────────────────────────────────────────────┘
 --
 -- CORRESPONDENCE (Sec's joint-review check): does at least one assertion reference an object
@@ -97,10 +122,25 @@ begin;
 \ir ../_fixtures/rls_verbs.psql
 
 \set m_fence16 '%Decision 3 #16 matched-tenant fence%'
+-- ⟦WIRE-BOUND 2026-08-04 against `fn_account_event_block_direct_insert` (ADR-042 Amendment 3
+--   F2). Distinct from m_fence16 on purpose: both are BEFORE INSERT triggers on this table and
+--   Architect made the messages distinguishable precisely so a battery can say WHICH fired.
+--   ⚑ REBOUND TWICE IN ONE SESSION, and the second time is the lesson. First bound while the
+--     trigger was named `account_event_origin_fence`, which sorts AFTER
+--     `account_event_matched_account`, so a mismatched pair met #16 first. Architect then
+--     RENAMED it to `account_event_block_direct_insert` — which sorts BEFORE `m` — precisely
+--     to invert that order, and pre-announced the resulting (D1c)/(D2a) red in `057`'s own
+--     header. **TRIGGER NAMES ARE FIRING ORDER, NOT LABELS.** A rename with no behavioural
+--     intent silently re-points every assertion that matched on a message, and it re-points
+--     them to something that still raises — so they fail with a plausible message rather than
+--     an obviously broken one. Measured here: two assertions flipped fence mid-session with no
+--     edit to either battery or fence logic.⟧
+\set m_direct  '%rejects direct INSERT%written ONLY by the account_event_write trigger%'
 
--- plan = 20: D1 5 (3 + D1d/D1d2, the declarative policy pair) · D2 4 · D3 2 · D4 3 · D5 3 · D6 2 · D7 1. Recorded so a silent plan-edit is
--- visible in review as an arithmetic change.
-select plan(20);
+-- plan = 24: D1 8 (3 + D1d/D1d2 declarative policy pair + D1e/D1f/D1g, the Amendment-3 forge
+-- trio) · D2 4 · D3 2 · D4 4 (+D4d vocabulary pin) · D5 3 · D6 2 · D7 1. Recorded so a silent
+-- plan-edit is visible in review as an arithmetic change.
+select plan(24);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 
@@ -175,11 +215,32 @@ select _rls.set_tenant(:'tb'::uuid);
 --     class, on a surface nobody has filed it against.
 --     ADR-042's symmetric rule says every fence states what makes it NECESSARY; this one must
 --     also state what makes it SUFFICIENT, because it borrows that from somewhere else.
+--
+-- ⚑⚑ REBOUND A SECOND TIME, 2026-08-04 — ARCHITECT'S PRE-ANNOUNCED DESIGNED RED, ACCEPTED.
+--   `057` renamed the F2 fence `account_event_origin_fence` -> `account_event_block_direct_
+--   insert`, which sorts BEFORE `account_event_matched_account`, so a direct POST now meets
+--   the WRONG-ORIGIN fence before the CROSS-TENANT one. Architect states the intent in the DDL
+--   ("#16 should not be what a direct POST hits first — it would report a tenant defect for
+--   what is really a wrong-origin write") and pre-announced this exact red, ruling that **the
+--   expectations get renamed, not the trigger.** Accepted: ordering the DDL around a test's
+--   convenience is backwards, and the new diagnosis is the more accurate one.
+--   ⚠ SEC'S "LEAVE D1c AS IT IS" RULING WAS MADE AGAINST THE PRIOR ORDERING AND IS SUPERSEDED
+--     BY A LATER DDL CHANGE — flagged rather than quietly worked around. An approval names a
+--     REF, not a readiness; this rebind is a ruled delta on top of it, not a reopening of it.
+--   ⚑ AND THE REAL CONSEQUENCE, WHICH IS A COVERAGE CHANGE AND NOT A RENAME: **#16 IS NOW
+--     BEHAVIOURALLY UNREACHABLE AT `authenticated` ALTOGETHER.** The direct-insert fence
+--     refuses every non-owner INSERT before #16 evaluates, so NO authenticated probe can reach
+--     #16 — not this one, not (D2a), not any future one. #16's remaining behavioural proof is
+--     (D2b)/(D2c) at the OWNER tier, which is exactly the RLS-exempt migration-role writer #16
+--     was justified for. So coverage is not lost, but it is NARROWED, and the file's LAYER
+--     DISCIPLINE note above — "the fence is the SOLE gate at authenticated" — is now FALSE as
+--     written and is corrected there. Left uncorrected it would be the most misleading
+--     sentence in the file: an argument for a fence that no longer participates at that tier.
 select throws_like(
   format($$ insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor, effective_date)
               values (%L, %s, 'closed', 'no_longer_used', 'user:%s', '2026-06-30') $$, :'ta', :aacct, :'ta'),
-  :'m_fence16',
-  '(D1c) cross-tenant INSERT FAILS CLOSED AT #16 (rebound + renamed): B forging users_id=A is rejected by the Decision-3 #16 matched-tenant fence, which fires BEFORE the RLS WITH CHECK. Renamed because it previously claimed an RLS-policy denial, which is unreachable on this path — see the corollary above'
+  :'m_direct',
+  '(D1c) cross-tenant direct POST FAILS CLOSED AT THE WRONG-ORIGIN FENCE (rebound twice — see the block above): B forging users_id=A is refused by account_event_block_direct_insert, which sorts first and therefore diagnoses the write as wrong-ORIGIN rather than wrong-TENANT. That is deliberate and is the more accurate diagnosis. #16 still holds the cross-tenant property but no longer participates at authenticated — see (D2b)/(D2c) for its surviving behavioural proof'
 );
 select set_config('role', 'postgres', true);
 
@@ -204,6 +265,93 @@ select is(
   '(D1d2) DECLARATIVE: the same policy still carries the 025 aal2 step-up conjunct. Behaviourally unreachable for the same reason — an aal1 session under a totp policy cannot see its own account, so #16 raises before the conjunct is evaluated'
 );
 
+-- (D1e)/(D1f) ⚑⚑ THE MATCHED-TENANT ACTOR FORGE — Sec veto F1, 2026-08-04.
+--   ⚑ WHY THIS FILE WAS 15/15 GREEN WHILE THE SURFACE WAS WIDE OPEN, stated as the finding
+--     rather than as an apology, because the SHAPE is what generalises:
+--     every authenticated-tier assertion in this file probes the CROSS-TENANT axis — (D1c)
+--     forges users_id, (D2a) forges account_id. Both are caught, by #16, and their green
+--     reads as "the authenticated tier is covered". IT IS NOT. The forge that needs NO
+--     cross-tenant step — A writing A's OWN account with a SYSTEM actor — had no assertion
+--     at any tier. **A battery organised around one axis reports coverage of the tier.**
+--     Same family as `a battery cannot prove it is reached`: the missing case is invisible
+--     from inside the set of cases that exist.
+--
+--   THE HOLE, verified leg by leg against the DDL as merged:
+--     · pfin is Data-API-exposed and `authenticated` holds INSERT on account_event (057).
+--     · `account_event_insert`'s WITH CHECK mentions `actor` ZERO times — it binds users_id
+--       and the aal2 conjunct, nothing else.
+--     · #16 PASSES: the pair is matched; it is the tenant's own account.
+--     · `account_event_actor_check` PASSES: 'system:remediation' is IN the vocabulary — the
+--       CHECK bounds the SHAPE of the string, never its RELATIONSHIP to the session.
+--     -> the row LANDS, permanently, on an append-only table with no redaction path, and it
+--        attributes a user's action to the system. (D4c) is not this assertion: it rejects a
+--        BARE uid, i.e. a malformed actor. This one is WELL-FORMED and FALSE.
+--
+--   ⚑⚑ FIRST DRAFT WENT GREEN FOR THE WRONG REASON, AND THE PAIR IS WHAT CAUGHT IT — recorded
+--     because it is a live instance of DESIGN.md rule 4 rather than a restatement of it.
+--     (D1e) was first written MECHANISM-AGNOSTIC (`throws_ok(sql, null, null, …)`) on the
+--     reasoning that naming a SQLSTATE would encode whichever fix landed. Measured: it PASSED
+--     on the first run — not because actor binds to the session, but because Architect's F2
+--     ORIGIN FENCE had already landed and refuses EVERY direct authenticated INSERT whatever
+--     the actor says. **An "any exception" assertion cannot distinguish the fence it is about
+--     from a fence that refuses everything.** Its companion went red simultaneously, and the
+--     disagreement between two independently-derived results is the only thing that exposed it.
+--     So these are now bound to the ORIGIN FENCE MESSAGE: this file's own layer discipline
+--     already requires an assertion to identify WHICH mechanism fired, and Architect made the
+--     two BEFORE-INSERT messages distinguishable for exactly that.
+--
+--   ⚠ WHERE EACH OF SEC'S TWO FIXES IS ACTUALLY PROVEN, because they are not proven in the
+--     same place and assuming otherwise is how one of them goes unwatched:
+--       F2 (origin fence, a BEFORE trigger)      -> BEHAVIOURALLY, by (D1e)/(D1f).
+--       F1 (the `actor = 'user:' || auth.uid()`  -> DECLARATIVELY, by (D1g). A policy's
+--           WITH CHECK conjunct)                    WITH CHECK is evaluated AFTER BEFORE ROW
+--                                                   triggers, so with F2 in place NO authenticated
+--                                                   INSERT ever reaches it. It is unreachable by
+--                                                   construction — the same structural situation
+--                                                   as (D1c)/(D1d), one fence over.
+--   ⚑ AND THAT IS THE THIRD INSTANCE IN THIS FILE OF ONE FENCE BORROWING ITS SUFFICIENCY FROM
+--     ANOTHER (#16 from RLS; F1 from F2). If F2 were ever removed as "belt and braces", F1
+--     becomes the sole fence on the forge — and F1 is behaviourally unprovable here, so (D1g)
+--     would be the only thing watching it. Neither may be deleted on the strength of the other.
+--   NON-VACUITY: the table is demonstrably writable by its permitted writer — see (D2c), which
+--     inserts a matched pair as the OWNER and succeeds. Cross-referenced rather than duplicated,
+--     per the discoverability corollary; (D1e)/(D1f) are refusals and prove nothing on their own
+--     about whether the audit surface still works.
+select _rls.set_tenant(:'ta'::uuid);
+select throws_like(
+  format($$ insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor, effective_date)
+              values (%L, %s, 'closed', 'no_longer_used', 'system:remediation', '2026-06-30') $$, :'ta', :aacct),
+  :'m_direct',
+  '(D1e) SEC F1/F2 — MATCHED-TENANT ACTOR FORGE IS REFUSED: an authenticated session inserting into its OWN account with actor = ''system:remediation'' is REJECTED BY THE ORIGIN FENCE. Every other layer admits this row — #16 passes (the pair really is matched), the tenant conjunct passes (it really is their uid), and account_event_actor_check passes (the value IS in the vocabulary; that CHECK bounds the string''s SHAPE, never its RELATIONSHIP to the session). Before F1+F2 the row LANDED, permanently, on an append-only table with no redaction path'
+);
+-- (D1f) THE REFUSAL IS ORIGIN-BASED, NOT ACTOR-VALUE-BASED — a strictly stronger property than
+--   the veto asked for, and the assertion that replaced my broken companion. An actor-VALUE
+--   fence would refuse 'system:remediation' and admit any other well-formed-but-false actor;
+--   an ORIGIN fence refuses the whole caller-supplied route, so there is no actor string that
+--   buys a direct write. Proven by driving the SAME insert with a LEGITIMATE own-uid actor and
+--   asserting it hits the SAME fence.
+select throws_like(
+  format($$ insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor, effective_date)
+              values (%L, %s, 'closed', 'sold', 'user:%s', '2026-06-30') $$, :'ta', :aacct, :'ta'),
+  :'m_direct',
+  '(D1f) ORIGIN-BASED, NOT ACTOR-VALUE-BASED: the same direct INSERT with a LEGITIMATE actor = ''user:<own uid>'' hits the SAME origin fence. So the refusal in (D1e) is not "that particular string is disallowed" — no caller-supplied actor buys a direct write at all, and a state transition is recorded BY THE TRANSITION. RED here with (D1e) green would mean the fence had been narrowed to an actor-value blocklist, which admits every well-formed-but-false actor that is not on it'
+);
+select set_config('role', 'postgres', true);
+-- (D1g) F1's ACTOR CONJUNCT, proven DECLARATIVELY — the only instrument available, because F2
+--   intercepts every authenticated INSERT before any WITH CHECK is evaluated. Sec ruled this
+--   the honest form for (D1d); it is the same situation and the same answer.
+--   ⚑ ASSERTED ON THE BINDING, NOT ON THE STRING: what must hold is that actor is tied to
+--     auth.uid(). RED if the conjunct is dropped or loosened — which is the change that would
+--     matter the moment F2 is ever relaxed or a second writer trigger is added to pfin.account.
+select is(
+  (select count(*)::int from pg_policies
+    where schemaname = 'pfin' and tablename = 'account_event'
+      and policyname = 'account_event_insert' and cmd = 'INSERT'
+      and with_check like '%actor%auth.uid()%'),
+  1,
+  '(D1g) SEC F1 DECLARATIVE: account_event_insert''s WITH CHECK binds `actor` to auth.uid(). This is the conjunct Sec''s veto asked for, and it can ONLY be proven from the catalog — F2''s BEFORE INSERT trigger refuses every authenticated INSERT before Postgres evaluates any WITH CHECK, so no behavioural probe can reach it. RED means the identity binding was dropped: harmless while F2 stands, and the entire fence the moment it does not'
+);
+
 -- =====================================================================
 -- D2 — DECISION-3 INSTANCE #16 (account_event.account_id matched-tenant fence)
 --   The fence's justification, stated per ADR-042's own symmetric rule ("every exemption
@@ -214,14 +362,24 @@ select is(
 --   "a requirement outliving its own precondition".
 -- =====================================================================
 
--- (D2a) AUTHENTICATED tier: users_id=A (passes RLS — it IS A's own tenant) + account_id =
---   B's account. RLS admits this row; ONLY the fence rejects it.
+-- (D2a) ⚑ REBOUND 2026-08-04 WITH (D1c) — Architect's pre-announced designed red.
+--   It asserted "#16 TEETH at authenticated". **THAT CLAIM IS NO LONGER TRUE OF ANY PROBE**:
+--   account_event_block_direct_insert sorts first and refuses every non-owner INSERT, so #16
+--   never evaluates at this tier. Rebinding the pattern without renaming the assertion would
+--   have been the worse outcome — a green labelled "#16 TEETH at authenticated" while #16 was
+--   not consulted, which is precisely the failure this file's LAYER MAP was written to prevent
+--   (an assertion reporting one mechanism while a different one does the work).
+--   ⚑ WHAT IT PROVES NOW, and it is worth keeping rather than deleting: the SAME cross-tenant
+--     pair that (D1c) drives from B's session is here driven from A's OWN session — the two
+--     differ in WHOSE session forges, which used to select which #16 branch fired. Both now
+--     land on the origin fence, and asserting that they BOTH do is what shows the fence is
+--     origin-based rather than tenant-sensitive: it does not care who is asking.
 select _rls.set_tenant(:'ta'::uuid);
 select throws_like(
   format($$ insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor, effective_date)
               values (%L, %s, 'closed', 'no_longer_used', 'user:%s', '2026-06-30') $$, :'ta', :bacct, :'ta'),
-  :'m_fence16',
-  '(D2a) #16 TEETH at authenticated: users_id=A + account_id=B''s account RAISES the fence. This row PASSES RLS (its users_id is A''s own), so the fence is the SOLE gate here — a test asserting only "B cannot write A''s row" would be testing RLS and reporting it as the fence'
+  :'m_direct',
+  '(D2a) WRONG-ORIGIN REFUSAL IS TENANT-BLIND (renamed from "#16 TEETH at authenticated", which is no longer true of any probe): A''s own session POSTing a row for B''s account is refused by account_event_block_direct_insert — the same fence, and the same message, as (D1c) driving the mirror-image forge from B''s session. The refusal does not depend on who is asking or on which tenant the pair belongs to. #16''s teeth are now proven ONLY at the owner tier — (D2b)/(D2c)'
 );
 select set_config('role', 'postgres', true);
 
@@ -309,6 +467,46 @@ select throws_ok(
   '23514',
   null,
   '(D4c) `actor` is DISCRIMINATED: a BARE uid is rejected — it must be `user:<uid>` or `system:<source>`. A bare uid, or a NULL meaning "system", makes "we did not record the actor" indistinguishable from "the actor was the system" on a permanent audit record'
+);
+
+-- (D4d) ⚑ THE VOCABULARY PIN — ADR-042 B3 sub-decision 2, Sec F9 2026-08-04.
+--   `reason_code` has THREE representations: this CHECK, `CLOSURE_REASONS` in
+--   `api/src/lib/schemas/account-constants.ts`, and the picker built from it. Architect ruled
+--   it is deliberately NOT re-validated inside `fn_close_account` — that would be a FOURTH.
+--   With no fourth copy, the CHECK is the single enforcement point and this is the only thing
+--   holding the other two to it.
+--
+--   ⚑ THE DIRECTION IS THE WHOLE POINT (Sec): **a value the picker offers and the CHECK
+--     rejects fails loudly — a user hits an error. A value the CHECK ADMITS and the picker
+--     OMITS is INVISIBLE.** Nothing breaks; the option simply never appears, and the
+--     vocabulary quietly narrows to whatever the UI happens to list. That asymmetry is why
+--     the pin belongs on the ADMITTED SET rather than on the picker: widening the CHECK is
+--     the move that has no natural failure mode, so it needs the one that is not natural.
+--
+--   ⚑ DERIVED, NOT RE-TYPED. The measured side is extracted from `pg_get_constraintdef` — so
+--     it is whatever the database ADMITS, not whatever this file's author believed. Anchored
+--     on the SUBJECT (the single-column CHECK whose conkey IS `reason_code`) rather than on
+--     the auto-generated constraint NAME, per DESIGN.md's anchoring rule: an explicit
+--     `constraint <name> check (...)` re-declaration would rename it and a name-anchored
+--     probe would then measure NOTHING and report an empty set as agreement.
+--   ⚑ THE EXPECTED SIDE IS A LITERAL, AND IT HAS TO BE. pgTAP cannot read TypeScript, so this
+--     is the DB-side half of a two-file invariant. Its job is to make a DDL vocabulary change
+--     go RED so nobody can land one without also touching the constant — the remedy is NAMED
+--     in the message, because a red whose fix is "go find the other copy" gets fixed here.
+select is(
+  (select array(
+     select m[1]
+       from pg_constraint con
+       join pg_attribute att
+         on att.attrelid = con.conrelid and att.attnum = con.conkey[1]
+       cross join lateral regexp_matches(pg_get_constraintdef(con.oid), '''([a-z_]+)''::text', 'g') m
+      where con.conrelid = 'pfin.account_event'::regclass
+        and con.contype = 'c'
+        and array_length(con.conkey, 1) = 1
+        and att.attname = 'reason_code'
+      order by 1)),
+  array['duplicate', 'institution_closed', 'no_longer_used', 'other', 'sold', 'transferred_out'],
+  '(D4d) VOCABULARY PIN: the reason_code CHECK admits EXACTLY the six values mirrored by CLOSURE_REASONS in api/src/lib/schemas/account-constants.ts. Derived from pg_constraint, not hand-copied from the DDL. RED means the CHECK changed — THE REMEDY IS TO UPDATE `CLOSURE_REASONS` (and the picker labels beside it) IN THE SAME PR, then this literal. Do NOT fix this by editing the literal alone: a value the CHECK admits and the picker omits breaks nothing and is therefore invisible, which is exactly the drift this pin exists to make loud'
 );
 
 -- =====================================================================

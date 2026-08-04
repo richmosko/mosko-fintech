@@ -71,13 +71,15 @@
 -- │   BEFORE INSERT triggers (transfer-in fences, 3 tables)                              │
 -- │     C1 · C2 · C3 · C4 · C5a · C5b · C5c · G1                                         │
 -- │   Transitional is_active sync trigger                                                │
--- │     S1 · S2a · S2b · S3 · S4a · S4b · S4c                                            │
+-- │     S1 · S2a · S2b · S3 · S4c   (S4a is the CHECK, S4b targets no mechanism — above)  │
 -- │   Audit-row side effect (pfin.account_event insert)                                  │
 -- │     B1b                                                                              │
 -- │   pg_catalog / information_schema — structural, no runtime mechanism                 │
--- │     B5 · C6b · C7 · P1 · P2 · P3 · P5                                                │
+-- │     B5 · C6b · C7 · P1 · P2 · P3 · P5 · G3                                           │
 -- │   CHECK constraint `account_closure_biconditional` — covers INSERT *and* UPDATE      │
--- │     P4                                                                               │
+-- │     P4 · S4a  (S4a MOVED HERE 2026-08-04: it was listed under the sync trigger, but   │
+-- │     the flip is refused by the CHECK, not by the trigger. S4b is a post-condition of  │
+-- │     that refusal and targets NO mechanism — see its own note.)                        │
 -- │   Table ACL — none in this file. Where a probe RUNS as `authenticated` (C1, S4a) it   │
 -- │     asserts a TRIGGER raise or a successful write, never `permission denied`.         │
 -- │                                                                                      │
@@ -179,9 +181,10 @@ begin;
 \set m_fence_hold      '%write blocked%is closed (holdings_checkpoint)%'
 \set m_currency_frozen '%currency is immutable on a closed account%'
 
--- plan = 47: BLOCK B 17 · C 10 · S 7 · P 5 · W 6 · G 2. Recorded so a silent plan-edit — the
+-- plan = 48: BLOCK B 17 · C 10 · S 7 · P 5 · W 6 · G 3 (+G3, the inversion-reversal check —
+-- which must stay LAST and OUTSIDE any savepoint; see its own note). Recorded so a silent plan-edit — the
 -- cheapest way to make a battery green — shows up in review as an arithmetic change.
-select plan(47);
+select plan(48);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 
@@ -658,13 +661,27 @@ select throws_ok(
   format($$ update pfin.account set is_active = false where account_id = %s $$, :cash),
   '23514',
   null,
-  '(S4a) GATE-BYPASS IS CLOSED AT THE WRITE (inverted 2026-08-04; Sec case 3 expected reachable-but-visible): a tenant session CANNOT flip is_active directly, because account_closure_biconditional refuses is_active=false while closed_at is null. A bidirectional sync would have set closed_at and thus SATISFIED the CHECK — so this refusal is positive evidence that the sync is one-directionallist). This must SUCCEED — the legacy column is deliberately still writable in phase 1; what must not happen is (S4b)'
+  '(S4a) GATE-BYPASS IS CLOSED AT THE WRITE — THIS STATEMENT MUST FAIL, AND ITS FAILURE IS THE ASSERTION. A tenant session CANNOT flip is_active directly: account_closure_biconditional refuses is_active=false while closed_at is null, so the write is REJECTED (23514) rather than landing. Positive evidence for ONE-DIRECTIONALITY, not merely compatible with it — a BIDIRECTIONAL sync would have set closed_at, SATISFIED the CHECK, and let the flip SUCCEED, closing a value-bearing account with the three-leg gate never running. **THIS IS THE ASSERTION STANDING BETWEEN THE LEGACY COLUMN AND AN UNVALIDATED CLOSURE** — (S4b) corroborates it and cannot replace it. Inverted 2026-08-04: Sec case 3 expected reachable-but-visible; measured, the mismatch cannot be created at all'
 );
 select set_config('role', 'postgres', true);
+-- (S4b) ⚑ DEMOTED 2026-08-04 (Sec F5(a)) — CORROBORATION, NOT THE FENCE.
+--   It USED to carry the load-bearing sentence, from before (S4a) was inverted. Post-inversion
+--   that sentence belongs to (S4a) and has been moved there. **The demotion is the finding, not
+--   a wording tidy:** left as it was, the next reader treats (S4b) as the fence and (S4a) as
+--   redundant setup — and DELETING (S4a) is what actually opens the hole.
+--   ⚠ AND IT IS WEAKER THAN IT LOOKS, which is why it must not be relied on: (S4a) is a
+--     `throws_ok`, so the statement was ROLLED BACK. This assertion therefore reads closed_at
+--     on a row THAT WAS NEVER WRITTEN. It passes on TRANSACTION SEMANTICS, not on trigger
+--     directionality — it would pass identically against a bidirectional trigger, because the
+--     write never landed either way. It is retained as a post-condition (a refused write left
+--     NO trace, not a partial one), and for exactly nothing more.
+--   ⚑ GENERAL FORM, worth carrying: **a post-condition after a refused write is corroboration
+--     of the refusal, never evidence about the mechanism that refused it.** Any assertion
+--     following a `throws_ok` on the same row inherits this limit.
 select is(
   (select closed_at from pfin.account where account_id = :cash),
   null::timestamptz,
-  '(S4b) GATE-BYPASS FENCE: flipping is_active = false on a NON-ZERO account did NOT set closed_at. The sync is ONE-DIRECTIONAL (closed_at drives is_active, never the reverse). A bidirectional trigger would let any tenant close a value-bearing account with `update pfin.account set is_active = false` — reachable today via the no-column-list UPDATE grant — and the three-leg gate would never run. This is the single assertion standing between the legacy column and an unvalidated closure'
+  '(S4b) CORROBORATION ONLY: after (S4a)''s REFUSED flip, closed_at is still NULL — the rejected write left no partial trace. ⚠ THIS ASSERTION IS NOT THE FENCE. (S4a) is. Because (S4a) is a throws_ok the statement was rolled back, so this reads a row that was never written: it passes on transaction semantics and would pass identically against a BIDIRECTIONAL trigger. Do not treat it as evidence of one-directionality, and do not delete (S4a) on the strength of it'
 );
 -- (S4c) ⚑ INVERTED WITH (S4a) — NO mismatched row exists, because none can be created.
 --   It asserted the flip leaves a visible mismatch for `059`'s reconciliation to abort on.
@@ -681,7 +698,14 @@ select is(
   0,
   '(S4c) NO MISMATCH IS CREATABLE (inverted 2026-08-04): the refused flip leaves the row consistent. 059''s reconciliation is still required for rows PREDATING 058 — NOT VALID fences new writes only — so this is containment, not discharge of the reconciliation. One-directionality and the reconciliation are the same control seen from two ends: the trigger refuses to invent a closure, and the migration refuses to drop the evidence'
 );
-update pfin.account set is_active = true where account_id = :cash;  -- restore for BLOCK P
+-- ⚑ THE `restore for BLOCK P` LINE THAT STOOD HERE IS DELETED, and the deletion is the point.
+--   It set is_active back to true after the flip — correct against the PRE-inversion block,
+--   where the flip SUCCEEDED. Post-inversion the flip is REFUSED and never landed, so the
+--   restore was a no-op that silently asserted the opposite: a reader reconstructing the block
+--   from its statements would conclude the flip works. Same residue class as the (S4a) message
+--   splice Sec caught (F5(b)) — an inversion leaves BOTH prose and setup statements behind it,
+--   and only the prose gets re-read. Verified: nothing downstream depends on :cash's is_active
+--   (BLOCK P asserts catalog shape only).
 
 -- =====================================================================
 -- BLOCK P — TWO-PHASE POSTURE
@@ -826,6 +850,45 @@ select lives_ok(
   '(G2) TEETH: with the close-gate trigger DROPPED, the (B2) non-zero account CLOSES -> (B2)/(B3)/(B4)/(B7)/(B8) are gate-driven and non-vacuous'
 );
 rollback to savepoint sp_g2;
+
+-- (G3) ⚑⚑ THE SABOTAGE WAS ACTUALLY UNDONE — and this assertion has a SECOND job that is the
+--   reason it sits HERE, last, outside every savepoint. Both jobs are real; neither is filler.
+--
+--   JOB 1 — assert the precondition separately from the result (DESIGN.md rule 3). (G1)/(G2)
+--     DROP two live fences to prove the refusals above are non-vacuous. Nothing until now
+--     asserted the drops were REVERSED. A `rollback to savepoint` that silently failed to
+--     restore them would leave this database — and, at `supabase test` where files share a
+--     container, anything after it — running against a stack missing its transfer-in fence and
+--     its close gate, with every subsequent green earned against no fence at all. An inversion
+--     block is the one place in a battery that deliberately breaks the system under test, so it
+--     is the one place that owes a restoration check.
+--
+--   JOB 2 — ⚠ MEASURED HARNESS PROPERTY, 2026-08-04, and it is a trap for every battery in this
+--     directory, not only this one:
+--       **pgTAP's TAP NUMBERING comes from a sequence (non-transactional) but the counter
+--       `finish()` compares against the plan is a TEMP-TABLE value (transactional). So
+--       `rollback to savepoint` REWINDS the counter while the emitted numbering marches on.**
+--     Measured: with (G2) trailing, this file emitted 47 numbered results, every one `ok`, and
+--     `finish()` reported `# Looks like you planned 47 tests but ran 45` — because sp_g2 was
+--     taken when the counter read 45 and nothing after it re-set the counter.
+--     ⚑ WHY THAT IS WORSE THAN A COSMETIC MISCOUNT: THE FALSE MESSAGE IS THIS BLOCK'S OWN
+--       ALARM. The header directly above cites `planned 19 but ran 0` as proof that an aborted
+--       run cannot pass quietly. A fully-green file emitting a same-shaped diagnostic trains
+--       the reader to discount the one signal that distinguishes a real abort — the assertion-
+--       count integrity mechanism reporting a false positive against itself.
+--     THE FIX IS STRUCTURAL, NOT ARITHMETIC: an assertion outside any savepoint re-sets the
+--     counter to its own number, so the plan is satisfied. **Do NOT "fix" a future recurrence
+--     by lowering plan() to the reported figure** — that hides the rewind, and it silently
+--     re-breaks the moment a savepoint is added or moved. Keep a non-savepoint assertion last.
+select is(
+  (select count(*)::int from pg_trigger t
+     join pg_class c on c.oid = t.tgrelid
+     join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'pfin' and not t.tgisinternal
+      and t.tgname in ('account_trans_block_closed_account', 'account_closure_gate')),
+  2,
+  '(G3) INVERSION IS FULLY REVERSED: both triggers (G1)/(G2) dropped are present again after their savepoint rollbacks. Without this, a rollback that failed to restore would leave every later assertion — here and, under `supabase test`''s shared container, in every file after it — running against a stack with no transfer-in fence and no close gate, earning greens against nothing. It also sits LAST and OUTSIDE every savepoint on purpose: pgTAP''s plan counter is transactional while its TAP numbering is not, so a trailing rolled-back savepoint rewinds the count and makes a fully-green file report "planned 47 but ran 45" — this block''s own abort alarm, firing falsely. Keep a non-savepoint assertion last; never lower plan() to match'
+);
 
 select * from finish();
 rollback;

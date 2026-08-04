@@ -82,6 +82,29 @@
 --   an account exactly when it is about to stop being current-state.
 --   NATIVE currency, NO FX multiplier — load-bearing, see (E4).
 --
+-- ┌─ ⛔ THIS BATTERY IS A LOAD-BEARING DEPENDENCY OF `058`'s CLOSE GATE ⛔ ────────────┐
+-- │ Sec F9(b), 2026-08-04. Stated HERE, in the header, because it was already stated   │
+-- │ mid-file (immediately above (E4), ~`:256`) and that was NOT ENOUGH — the block is  │
+-- │ findable only by someone already reading the assertions it protects, and the       │
+-- │ person who prunes an assertion as redundant is reading the header to decide what   │
+-- │ this file is for. **Discoverability, not coverage** — the same failure this suite   │
+-- │ recorded once already at `account_event` reachability (DESIGN.md rule 1 corollary). │
+-- │                                                                                    │
+-- │ `058`'s gate borrows THREE guarantees from this function (its CONTRACTS block       │
+-- │ names them). Two are guarded by a RUNTIME RAISE in the gate itself. The third is    │
+-- │ NOT:                                                                                │
+-- │                                                                                    │
+-- │   **CONTRACT (3) — NATIVE / NO FX MULTIPLIER — IS GUARDED BY (E4)/(E4b)/(E4c) AND   │
+-- │   BY NOTHING ELSE, ANYWHERE.** It is not runtime-detectable: you cannot tell from a │
+-- │   scalar whether it was converted, so the gate has no way to raise on a breach.     │
+-- │   A test is the only instrument available.                                          │
+-- │                                                                                    │
+-- │ CONSEQUENCE: weakening or pruning (E4)/(E4b)/(E4c) silently removes `058`'s only    │
+-- │ protection on contract (3), and NOTHING IN `058` GOES RED. The weakening is         │
+-- │ invisible at the site where it happens — which is why the warning has to live where │
+-- │ someone would do it. Mechanism + measurements: the ⛔⛔ block above (E4).            │
+-- └────────────────────────────────────────────────────────────────────────────────────┘
+--
 -- ⟦FIXTURE-VERIFIED 2026-08-03⟧ `056` is applied nowhere reachable (the local DB is at
 --   `051`), so NO assertion below has run. What HAS run against the live DB in a rolled-back
 --   txn: every seed statement, and the probes proving each trap actually discriminates —
@@ -256,8 +279,10 @@ select is(
 -- =====================================================================
 -- ⛔⛔ (E4)/(E4b)/(E4c) ARE A FENCE GUARD FOR `058` — DO NOT PRUNE AS REDUNDANT ⛔⛔
 --   Sec ruling 2026-08-03. These look like property assertions about `056` that duplicate
---   its own comment. **They are the only guard on one of the three `056` contracts that
---   `058`'s close gate depends on**, and unlike the other two it is NOT runtime-detectable:
+--   its own comment. **They are the only guard on CONTRACT (3) of the three that `058`'s
+--   close gate depends on** — named by that number in `058`'s own CONTRACTS block, so the
+--   two files can be cross-read without either restating the other — and unlike contracts
+--   (1) and (2), which the gate guards with a runtime raise, (3) is NOT runtime-detectable:
 --   you cannot tell from a scalar whether it was converted, so `058` cannot raise on it.
 --
 --   THE MECHANISM, which is why this outranks the other two contracts:
