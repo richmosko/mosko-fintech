@@ -259,6 +259,21 @@ an inline copy in the close gate — the single worst case it could catch. And p
 natural failure mode to calibrate against, which is why it took four tries and the
 behavioural form took one.
 
+### The rename trap (a sub-rule of 3, and the same precondition shape)
+
+**Two identical adjacent literals can belong to different vocabularies.** When
+`reason_code` was renamed `closed` → `no_longer_used`, every fixture row read
+`('closed', 'closed')` — `event_type` then `reason_code`, adjacent, both the same literal,
+and **`event_type` still legitimately uses `'closed'`.** A blind find-and-replace would have
+silently broken the vocabulary that did *not* change.
+
+What prevented it was not care: it was **counting the sites and asserting the count before
+replacing** — the same precondition shape as `assert anchor in s` and as refusing a `||`
+fallback on a verification command. **Three tools, three people, one pattern: check the
+operation had the right thing to operate on.**
+
+Generalises to any rename where a value collides with a sibling column's vocabulary.
+
 ### Provenance: three coordinates, re-derived at use
 
 A result is uninterpretable without **database state · artifact ref · fixture reach**. All
