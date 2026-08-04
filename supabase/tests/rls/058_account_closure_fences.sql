@@ -418,6 +418,10 @@ select lives_ok(
 --   exists to prove. Reopening re-enters the gate, so the cash leg is genuinely re-evaluated
 --   at the new date. This IS the correction path Decision 3 ratifies: reopen -> edit ->
 --   re-close, which RE-PROVES the invariant instead of assuming it survived.
+--   Inside a SAVEPOINT so the reopen does not leak: (S1)/(S2) later assert :asof is CLOSED,
+--   and an un-rolled-back reopen silently changes what they measure — the cross-block
+--   coupling this file already had to partition BLOCK W for.
+savepoint sp_b6b;
 select set_config('pfin.reason_code', 'no_longer_used', true);
 update pfin.account set closed_at = null where account_id = :asof;
 select throws_like(
@@ -425,6 +429,7 @@ select throws_like(
   :'m_gate_cash',
   '(B6b) AS-OF, THE DEFECT THE MODEL REMOVES: the SAME account closed dated 2026-05-31 is REFUSED — it held 800 then. A boolean flag cannot express this distinction, which is precisely why is_active could not be retained as a derived column'
 );
+rollback to savepoint sp_b6b;
 
 -- (B7) EXACT ZERO, NO TOLERANCE. `056`'s contract: numeric(20,4) addition only, no division
 --   and no multiplier, so exact zero is exactly representable and the gate needs no epsilon.

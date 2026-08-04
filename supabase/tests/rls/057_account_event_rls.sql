@@ -98,9 +98,9 @@ begin;
 
 \set m_fence16 '%Decision 3 #16 matched-tenant fence%'
 
--- plan = 18: D1 3 · D2 4 · D3 2 · D4 3 · D5 3 · D6 2 · D7 1. Recorded so a silent plan-edit is
+-- plan = 20: D1 5 (3 + D1d/D1d2, the declarative policy pair) · D2 4 · D3 2 · D4 3 · D5 3 · D6 2 · D7 1. Recorded so a silent plan-edit is
 -- visible in review as an arithmetic change.
-select plan(18);
+select plan(20);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 
@@ -151,13 +151,58 @@ insert into pfin.account_event (users_id, account_id, event_type, reason_code, a
 select _rls.expect_owner_can_read('pfin.account_event'::regclass, :'ta'::uuid, 1::bigint);
 select _rls.expect_cross_tenant_read_empty('pfin.account_event'::regclass, :'ta'::uuid, :'tb'::uuid);
 select _rls.set_tenant(:'tb'::uuid);
+-- (D1c) ⚑ REBOUND AND RENAMED. It asserted an RLS-POLICY denial; it gets the #16 fence, and
+--   THE RLS PATTERN CAN NEVER MATCH. Postgres applies a policy's WITH CHECK *after* BEFORE ROW
+--   triggers, and #16 is INVOKER — running as B, A's account row is INVISIBLE, so its
+--   NOT EXISTS is true and it raises first.
+--   ⚑ THIS IS THE MIRROR IMAGE OF THE HAZARD THIS FILE'S LAYER MAP ALREADY CAUGHT for (D2a):
+--     there, an assertion phrased as an RLS denial would have gone green while proving nothing
+--     about the fence. Here it goes red for the same underlying reason. Same defect, opposite
+--     symptom — which is why it survived longer.
+--   ⚠ AND THE POLICY IS BEHAVIOURALLY UNPROVABLE AT authenticated, BY CONSTRUCTION — not
+--     merely untested. Reaching the WITH CHECK requires an (account_id, users_id) pair that is
+--     both MATCHED and VISIBLE; a forged cross-tenant pair can never be both. The aal2 route
+--     fails identically: account_select carries the character-identical conjunct, so an
+--     aal1 session under mfa_policy='totp' cannot see its own account either and #16
+--     intercepts again. NO ROW EXISTS THAT PASSES #16 AND FAILS THE POLICY.
+--     So the policy is proven DECLARATIVELY below — the honest instrument when the
+--     behavioural one is unreachable, and the idiom this file already uses for D3a/D3b/D6a/D6b.
+--   ⚑ COROLLARY, AND IT IS A FINDING RATHER THAN A NOTE: #16'S FAIL-CLOSED DEPENDS ON RLS.
+--     Invisibility is what makes its NOT EXISTS true — the layers are NOT independent in the
+--     direction this battery assumed. If account_select ever gains a broader read predicate
+--     (V2 sharing, rd_access), #16 STOPS RAISING on a cross-tenant forge and the RLS WITH
+--     CHECK silently becomes the only fence. That is BACKLOG §7.7's V2-grantee / rd_access
+--     class, on a surface nobody has filed it against.
+--     ADR-042's symmetric rule says every fence states what makes it NECESSARY; this one must
+--     also state what makes it SUFFICIENT, because it borrows that from somewhere else.
 select throws_like(
   format($$ insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor, effective_date)
               values (%L, %s, 'closed', 'no_longer_used', 'user:%s', '2026-06-30') $$, :'ta', :aacct, :'ta'),
-  'new row violates row-level security policy%for table "account_event"',
-  '(D1c) cross-tenant INSERT: B forging users_id=A is rejected by the account_event INSERT WITH CHECK — an RLS-policy violation specifically, not an incidental 42501'
+  :'m_fence16',
+  '(D1c) cross-tenant INSERT FAILS CLOSED AT #16 (rebound + renamed): B forging users_id=A is rejected by the Decision-3 #16 matched-tenant fence, which fires BEFORE the RLS WITH CHECK. Renamed because it previously claimed an RLS-policy denial, which is unreachable on this path — see the corollary above'
 );
 select set_config('role', 'postgres', true);
+
+-- (D1d) THE POLICY ITSELF, asserted DECLARATIVELY because (D1c) shows it is behaviourally
+--   unreachable at authenticated. This is what stops the rebind above from quietly reducing
+--   coverage: the fence is proven by behaviour, the policy by catalog, and neither is assumed
+--   from the other.
+select is(
+  (select count(*)::int from pg_policies
+    where schemaname = 'pfin' and tablename = 'account_event'
+      and policyname = 'account_event_insert' and cmd = 'INSERT'
+      and with_check like '%users_id = auth.uid()%'),
+  1,
+  '(D1d) DECLARATIVE: the account_event_insert policy exists, is scoped to INSERT, and its WITH CHECK binds users_id to auth.uid(). RED if the tenant binding were dropped or loosened — the case (D1c) structurally cannot reach, since #16 intercepts every forged pair first'
+);
+select is(
+  (select count(*)::int from pg_policies
+    where schemaname = 'pfin' and tablename = 'account_event'
+      and policyname = 'account_event_insert'
+      and with_check like '%aal2%'),
+  1,
+  '(D1d2) DECLARATIVE: the same policy still carries the 025 aal2 step-up conjunct. Behaviourally unreachable for the same reason — an aal1 session under a totp policy cannot see its own account, so #16 raises before the conjunct is evaluated'
+);
 
 -- =====================================================================
 -- D2 — DECISION-3 INSTANCE #16 (account_event.account_id matched-tenant fence)
