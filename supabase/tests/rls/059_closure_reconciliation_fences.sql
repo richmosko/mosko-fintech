@@ -333,7 +333,8 @@ select is(
 -- │ reading `f699a62`: the re-point of 049/050 is at statements 107/234, every drop is  │
 -- │ at 298+. Re-point precedes removal, so the window cannot open.                      │
 -- │                                                                                     │
--- │ WHY NO ASSERTION. Three homes were considered and all three fail:                   │
+-- │ WHY NO ASSERTION. All three candidate homes are dead, each for its own reason —     │
+-- │ and the property is FULLY DISCHARGED WITHOUT A TEST, deliberately:                  │
 -- │  (1) build each prefix in a rolled-back txn from an INLINED copy of `059`.           │
 -- │      REJECTED (Sec) on a ground stronger than cost: it is regression protection for  │
 -- │      a file that BY CONVENTION IS MERGED ONCE AND NEVER EDITED. The ordering risk    │
@@ -343,11 +344,19 @@ select is(
 -- │      battery's stack is `059`-APPLIED, so `is_active` is already gone. Recorded so   │
 -- │      it is not re-proposed; it is not a judgment, it is unreachable.                 │
 -- │  (3) assert structurally that no drop precedes the re-point WITHIN `059`.            │
--- │      ⚑ NOT EXPRESSIBLE HERE — that is a claim about MIGRATION FILE TEXT, and pgTAP   │
--- │      reads a database, not a repository. It is a CI/lint check on DevOps' surface,   │
--- │      not an assertion on mine. Flagged rather than approximated: an assertion that   │
--- │      inspects the catalog cannot see statement order, because post-`059` every       │
--- │      statement has already run and the ordering leaves no trace.                     │
+-- │      DROPPED ENTIRELY — for TWO independent reasons, either sufficient:               │
+-- │      (a) WRONG INSTRUMENT. That is a claim about MIGRATION FILE TEXT, and pgTAP reads │
+-- │          a database, not a repository. Post-`059` every statement has run and the     │
+-- │          ordering leaves no trace in the catalog.                                     │
+-- │      (b) AND RELOCATING IT TO CI DOES NOT SAVE IT (Sec, applying their own argument   │
+-- │          against (1) consistently): a lint asserting statement order in `059`         │
+-- │          protects against an EDIT TO `059` THAT WILL NOT HAPPEN. It is cheaper than   │
+-- │          (1) and covers the identical closed risk. **Cheap protection of a closed     │
+-- │          risk is zero value plus maintenance.** "Non-vacuous" was the wrong bar;      │
+-- │          *covers a live risk* is the bar.                                             │
+-- │      Recorded because the instinct that kept it alive — leaving SOMETHING rather than │
+-- │      nothing — is the same instinct that produced the withdrawn `prosrc` gate:        │
+-- │      **building to the shape of diligence rather than to the risk.**                  │
 -- │                                                                                     │
 -- │ WHERE THE PROPERTY DOES LIVE: `059`'s own header (Architect), stated for the only    │
 -- │ consumer it has — an operator mid-incident on a non-CLI path (`psql -f`, a hand-run) │
