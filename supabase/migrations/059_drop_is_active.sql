@@ -23,6 +23,56 @@
 --   still true, and fn_compute_nav COUNTS IT AS ACTIVE. A closed account
 --   contributing to net worth, silently, reporting green.
 --
+-- IF THIS MIGRATION FAILS PART-WAY — READ THIS FIRST.
+--   Written for an OPERATOR MID-INCIDENT, not for a test. Under the CLI's
+--   per-file transaction none of these states is reachable; this is for the
+--   paths that are not the CLI, and for the person who has one anyway.
+--
+--     failed at (1) VALIDATE      Nothing has changed. The failure IS the
+--                                 finding: the operator step left a row where
+--                                 is_active and closed_at disagree. Both
+--                                 columns still exist, so the mismatch is
+--                                 diagnosable — find it before re-running.
+--                                 Match the MESSAGE, not SQLSTATE 23514.
+--     failed inside (2) or (2b)   Some functions re-pointed, some not. SAFE:
+--                                 both columns exist AND both the sync trigger
+--                                 and the biconditional are still maintaining
+--                                 them, so re-pointed and un-re-pointed
+--                                 functions agree. FIX AND RE-RUN THE WHOLE
+--                                 FILE — verified re-runnable from this prefix
+--                                 (VALIDATE is repeatable while the constraint
+--                                 exists, and every re-point is CREATE OR
+--                                 REPLACE).
+--     failed at (4) itself        Constraint still present (the drop is what
+--                                 failed), everything re-pointed. SAFE, and
+--                                 re-running the whole file still works.
+--     failed at (5) or (6)        Constraint ALREADY DROPPED, column still
+--                                 present, everything re-pointed. SAFE —
+--                                 nothing reads is_active. ⚠ BUT DO NOT re-run
+--                                 the whole file: step (1) will fail with
+--                                 `constraint "account_closure_biconditional"
+--                                 of relation "account" does not exist`.
+--                                 MEASURED, not assumed. Resume from the
+--                                 statement that failed. (The drops are NOT
+--                                 written `if exists`, deliberately: a guard
+--                                 there would make a re-run silently skip a
+--                                 step that had not actually happened, which is
+--                                 the 057 trap in the other direction.)
+--     failed at (6) DROP COLUMN   If it failed, something TRACKED depends on the
+--                                 column (a view, policy or constraint). That
+--                                 is the good outcome. Enumerate the dependent
+--                                 and handle it explicitly. DO NOT reach for
+--                                 CASCADE — see below.
+--     failed at (7) SMOKE         ⚠ THE ONLY STATE NEEDING JUDGEMENT. The column
+--                                 is gone and a function still references it.
+--                                 **DO NOT RE-ADD is_active.** Re-adding
+--                                 restores a column nothing maintains — the
+--                                 sync trigger and the biconditional are
+--                                 already gone at this point — so the two
+--                                 representations would silently diverge and
+--                                 the NAV path would read a stale flag. The
+--                                 raise names the function: RE-POINT IT.
+--
 -- WHY A CLEAN APPLY IS NOT EVIDENCE OF A COMPLETE RE-POINT (Sec, measured):
 --   every SQL reader of is_active uses an OLD-STYLE text body (`as $$ … $$`,
 --   not BEGIN ATOMIC), and old-style bodies carry NO DEPENDENCY RECORDS.
