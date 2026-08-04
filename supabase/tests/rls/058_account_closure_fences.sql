@@ -381,7 +381,7 @@ select _rls.set_tenant(:'ta'::uuid);
 update pfin.account set closed_at = null where account_id = :z;
 select throws_like(
   format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = %s $$, :z),
-  '%returned no row from fn_account_cash_as_of%totality contract is broken%',
+  '%got no usable cash balance from fn_account_cash_as_of%TOTAL over pfin.account%',
   '(B4c) TOTALITY BREACH: with fn_account_cash_as_of sabotaged to omit this account, the gate REFUSES rather than reading absent-as-zero. Fails CLOSED on a broken upstream contract — the alternative is a closure admitted because the measure went silent. This is the CP4 absent-row-vs-zero-row class at the FENCE layer, and the only gate raise no data fixture can reach'
 );
 select set_config('role', 'postgres', true);

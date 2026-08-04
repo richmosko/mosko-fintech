@@ -96,7 +96,7 @@ begin;
 
 \ir ../_fixtures/rls_verbs.psql
 
-\set m_fence16 '%Decision-3 #16 matched-tenant fence%'
+\set m_fence16 '%Decision 3 #16 matched-tenant fence%'
 
 -- plan = 18: D1 3 · D2 4 · D3 2 · D4 3 · D5 3 · D6 2 · D7 1. Recorded so a silent plan-edit is
 -- visible in review as an arithmetic change.
