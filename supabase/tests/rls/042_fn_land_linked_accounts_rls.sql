@@ -262,6 +262,9 @@ select _rls.set_tenant(:'ta'::uuid);
 -- the 058 sync trigger is ONE-DIRECTIONAL (closed_at -> is_active), so an is_active-only write
 -- leaves closed_at NULL and the account_closure_biconditional CHECK rejects it. The account
 -- carries no value, so it passes the close gate's zero-value legs.
+-- reason_code is MANDATORY on the into-closed transition and has NO other carrier — 058's audit
+-- writer cannot invent one and must not. Transaction-local, mirroring the 058 battery.
+select set_config('pfin.reason_code', 'no_longer_used', true);
 update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = :acct_a1;
 
 -- (5) RE-LAND RETURNING (DO UPDATE, not DO NOTHING): re-landing the SAME (a_src1, ext-a-1) RETURNS
