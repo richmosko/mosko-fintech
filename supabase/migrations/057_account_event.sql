@@ -81,9 +81,43 @@ create table if not exists pfin.account_event (
                    references pfin.account (account_id) on delete restrict,
   event_type     text not null
                    check (event_type in ('closed', 'reopened')),
+  -- VOCABULARY: PM-proposed, F/CTO-ratified 2026-08-03 (ADR-042 Amendment 1 A6).
+  --   'closed' RENAMED to 'no_longer_used'. The sense is grounded in PRD §2.4.2
+  --   and worth keeping; the NAME collided with event_type='closed', and a value
+  --   that reads as a tautology against its own event_type becomes the
+  --   safe-looking dumping ground — worse than 'other', because it looks
+  --   informative.
+  --   'institution_closed' is NEW: bank merges and product discontinuations are
+  --   common, are NOT the user's decision, and were previously unrepresentable,
+  --   so they landed in 'other' or were misfiled as a user-initiated closure.
+  --
+  -- ⚠ 'other' IS A BARE VOCABULARY MEMBER. NO COMPANION FREE-TEXT FIELD — no
+  --   "please specify", not here, not in the UI, nowhere on this surface
+  --   (F/CTO-ratified; ADR-042 Decision 5). An escape-hatch text box
+  --   reintroduces the unredactable-PII problem while LOOKING like a closed
+  --   vocabulary, and this table is append-only with no redaction path for
+  --   anyone, including the row's own tenant. Stated here because a "please
+  --   specify" box is how anyone would build an Other option by default, and
+  --   THE PROHIBITION IS INVISIBLE FROM THE CHECK.
+  --
+  -- ⚠ 'other' IS NOT A WEAKENING. Requiredness below is MANDATORY, and 'other'
+  --   is what makes mandatory safe: without it, mandatory FORCES
+  --   misclassification, and this ADR ruled wrong classification is worse than
+  --   absent classification on a row that can never be corrected.
+  --   A HIGH 'other' RATE IS EVIDENCE THE VOCABULARY IS WRONG, NOT THAT THE
+  --   MANDATE IS WRONG — revisit the values; do not relax the requirement, or
+  --   the first signal of a bad taxonomy is lost along with the data.
+  --
+  -- ONE AXIS, PERMANENTLY (Amendment 1 A7; F/CTO-ratified). These values mix
+  --   "why the account ended" with "where the value went", and that conflation
+  --   is DECIDED, not pending. No `disposition` column, now or later — one
+  --   added later is NULL for every prior row, unbackfillable. Do NOT reopen
+  --   this if account_trans later gains transfer-pairing: the rows written
+  --   before that change still cannot carry the distinction.
   reason_code    text
                    check (reason_code in
-                     ('closed', 'sold', 'transferred_out', 'duplicate', 'other')),
+                     ('no_longer_used', 'sold', 'transferred_out',
+                      'duplicate', 'institution_closed', 'other')),
   -- ENUMERATED, NOT OPEN-ENDED (Sec, 057 review). `system:[a-z_]+` would let a
   -- NEW SYSTEM WRITER APPEAR SILENTLY — and the whole matched_on/decided removal
   -- rests on there being exactly one non-session writer. An open pattern admits a

@@ -300,6 +300,100 @@ create trigger account_closure_gate
   for each row execute function pfin.fn_account_closure_gate();
 
 -- ----------------------------------------------------------------------------
+-- (3b) THE AUDIT WRITER (ADR-042 Amendment 1, A3 + A5).
+--
+--   THIS IS A SECOND TRIGGER, NOT PART OF THE GATE. Conflating the two is what
+--   hid its absence: ADR-042 Decision 5 always specified two objects — the GATE
+--   fires into-closed only and REFUSES; the AUDIT trigger fires in BOTH
+--   directions and RECORDS — but the build sequence called it "the gate's
+--   trigger", 058's deliverables list never contained it, and once the gate
+--   existed the writer felt shipped. Nothing wrote pfin.account_event until
+--   this block. Do not merge them.
+--
+--   AFTER, not BEFORE: the audit must record only transitions that actually
+--   survived the row-level constraints (incl. account_closure_biconditional).
+--   A BEFORE writer would log closures that then failed.
+--
+--   ⚠ ACTOR PRECEDENCE IS SECURITY-LOAD-BEARING AND THE ORDER IS NOT ARBITRARY.
+--     auth.uid() is checked FIRST. The GUC is consulted ONLY when it is null.
+--     NEVER the reverse — and "explicit beats inferred" is exactly the argument
+--     someone will use to reorder it. `set local` is available to ANY session,
+--     so a GUC-first derivation would let a user set pfin.actor and FORGE
+--     'system:remediation' into an append-only, indefinitely-retained audit
+--     record. With auth.uid() first, a user session NEVER REACHES the GUC
+--     branch, so the forgery is unreachable rather than merely discouraged.
+--
+--   Neither present -> RAISE. A context that is neither a session nor a
+--   declared remediation must not write an audit row at all; a misattributed
+--   row is permanent and indistinguishable from a true one.
+--
+--   ⚠ reason_code IS NEVER DEFAULTED. Defaulting it (say to 'no_longer_used')
+--     is the obvious way to make account_event_reason_required satisfiable and
+--     it is the WORST option available: it makes ABSENCE A VALUE in a table
+--     with no redaction path. It is what the next reader will reach for the
+--     first time a closure fails. The raise below names the remedy instead, so
+--     the fix is to supply the reason, not to invent one.
+-- ----------------------------------------------------------------------------
+create or replace function pfin.fn_account_event_write()
+returns trigger
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+declare
+  v_actor  text;
+  v_reason text;
+  v_uid    uuid := auth.uid();
+begin
+  -- PRECEDENCE: session identity first, ALWAYS. See the header.
+  if v_uid is not null then
+    v_actor := 'user:' || v_uid::text;
+  else
+    v_actor := nullif(current_setting('pfin.actor', true), '');
+    if v_actor is null then
+      raise exception
+        'account_event: no acting identity — auth.uid() is null and no pfin.actor is set. A non-session writer must declare itself with: set local pfin.actor = ''system:remediation''; in the same transaction.';
+    end if;
+  end if;
+
+  if new.closed_at is not null then
+    -- INTO-CLOSED. reason_code is required by 057's
+    -- account_event_reason_required and has no other carrier: this trigger
+    -- cannot invent one, and must not.
+    v_reason := nullif(current_setting('pfin.reason_code', true), '');
+    if v_reason is null then
+      raise exception
+        'account closure blocked: no pfin.reason_code set for account %. The close path must supply one in the same transaction: set local pfin.reason_code = ''<value>''; (no_longer_used | sold | transferred_out | duplicate | institution_closed | other). It is NOT defaulted — a guessed reason is permanent and unredactable.',
+        new.account_id;
+    end if;
+
+    insert into pfin.account_event
+      (users_id, account_id, event_type, reason_code, actor, effective_date)
+    values
+      (new.users_id, new.account_id, 'closed', v_reason, v_actor, new.closed_at::date);
+  else
+    -- REOPENED. No reason_code: account_event_reason_required scopes
+    -- requiredness to event_type = 'closed', and a reopen has no vocabulary.
+    insert into pfin.account_event
+      (users_id, account_id, event_type, reason_code, actor, effective_date)
+    values
+      (new.users_id, new.account_id, 'reopened', null, v_actor, current_date);
+  end if;
+
+  return null;  -- AFTER trigger; return value is ignored.
+end;
+$$;
+
+comment on function pfin.fn_account_event_write() is
+  'AFTER UPDATE audit writer for pfin.account_event (ADR-042 Decision 5 + Amendment 1 A5). SEPARATE FROM THE CLOSE GATE — the gate fires into-closed only and REFUSES; this fires BOTH directions and RECORDS. Their conflation in ADR-042''s build sequence is why nothing wrote this table until Amendment 1. AFTER, not BEFORE, so only transitions that survived the row-level constraints are recorded. ACTOR PRECEDENCE IS SECURITY-LOAD-BEARING: auth.uid() FIRST, the pfin.actor GUC only when it is null, NEVER the reverse — set local is available to any session, so a GUC-first derivation would let a user forge system:remediation into an append-only record; with auth.uid() first a user session never reaches the GUC branch. Neither present RAISES rather than writing a misattributed row. reason_code comes from the pfin.reason_code GUC and is NEVER DEFAULTED: defaulting makes absence a value in a table with no redaction path, and the raise names the remedy so the fix is to supply a reason rather than invent one. SECURITY INVOKER; DEFINER allowlist stays 4.';
+
+create trigger account_event_write
+  after update on pfin.account
+  for each row
+  when (new.closed_at is distinct from old.closed_at)
+  execute function pfin.fn_account_event_write();
+
+-- ----------------------------------------------------------------------------
 -- (4) Transfer-in fences: a closed account is FROZEN.
 --
 --   REJECT ALL WRITES, not just post-closure-dated ones. The permissive form
