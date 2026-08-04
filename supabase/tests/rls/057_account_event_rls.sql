@@ -49,6 +49,19 @@
 --   one of its columns and constraints are created in `057` and exist nowhere earlier, so
 --   every assertion in this file fails against `056` and below.
 --
+-- ┌─ ⚠ MEASURED vs WRITTEN — READ BEFORE QUOTING A COUNT FROM THIS FILE ─────────────┐
+-- │ This file's assertions are **WRITTEN, NOT MEASURED**: its migration is not applied │
+-- │ to any database I can reach (local stack at `056`; verified `account_event`,       │
+-- │ `closed_at` and `account_closure_gate` all ABSENT). **No assertion here has ever   │
+-- │ run.** They are authored against the DDL text at a cited ref, which is a weaker    │
+-- │ claim than green and must not be aggregated with one.                              │
+-- │ Reporting rule adopted 2026-08-03 after Architect flagged that a single total      │
+-- │ ("95 assertions") sitting beside a green ("22/22") invites reading all of them as  │
+-- │ measured — wrong about 57. **Quote two numbers, never one sum.**                   │
+-- │ Same defect as the (B5) it superseded: comparing what I had WRITTEN rather than    │
+-- │ what the database SAID. Applied there to an assertion, here to a status report.    │
+-- └───────────────────────────────────────────────────────────────────────────────────┘
+--
 -- ┌─ ⟦EXPECTED STACK⟧ — READ BEFORE INTERPRETING ANY RESULT FROM THIS FILE ──────────┐
 -- │ **A RESULT FROM THIS BATTERY IS UNINTERPRETABLE WITHOUT THE MIGRATION SET IT RAN │
 -- │ AGAINST.** A red cannot be distinguished from "this DB predates the change"; a    │
@@ -85,9 +98,9 @@ begin;
 
 \set m_fence16 '%Decision-3 #16 matched-tenant fence%'
 
--- plan = 17: D1 3 · D2 4 · D3 2 · D4 3 · D5 3 · D6 2. Recorded so a silent plan-edit is
+-- plan = 18: D1 3 · D2 4 · D3 2 · D4 3 · D5 3 · D6 2 · D7 1. Recorded so a silent plan-edit is
 -- visible in review as an arithmetic change.
-select plan(17);
+select plan(18);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 
@@ -98,10 +111,40 @@ insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
   values (:'tb', 'B-acct', 'depository', 'household', 'taxable') returning account_id as bacct \gset
 
 insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor)
-  values (:'ta', :aacct, 'closed', 'closed', 'user:' || :'ta');
+  values (:'ta', :aacct, 'closed', 'no_longer_used', 'user:' || :'ta');
 insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor)
   values (:'tb', :bacct, 'closed', 'sold', 'user:' || :'tb');
 
+-- ⟦VOCABULARY REBOUND at `e88b76c` (ADR-042 Amendment 1, F/CTO-ratified): reason_code
+--   `closed` is RENAMED to `no_longer_used`, and `institution_closed` is NEW. Six values:
+--   no_longer_used | sold | transferred_out | duplicate | institution_closed | other.
+--   ⚑ Every fixture row here used `reason_code = 'closed'` and would now FAIL THE CHECK —
+--     five sites, corrected. Note event_type STAYS 'closed'; only reason_code renamed, and
+--     the two are adjacent in every VALUES list, which is exactly how a blind rename would
+--     have broken the event_type vocabulary instead. Changed by counting sites first.⟧
+--
+-- ┌─ ⚠ WHAT THIS BATTERY STRUCTURALLY CANNOT PROVE ──────────────────────────────────┐
+-- │ **Nothing in this file can establish that anything ever WRITES pfin.account_event.**│
+-- │ Every assertion below inserts its OWN rows and then checks the table's PROPERTIES — │
+-- │ RLS isolation, the #16 fence, the vocabularies, immutability. **All of that goes    │
+-- │ green forever against a table no production path writes**, because THE FIXTURE IS   │
+-- │ THE WRITER. A table's own battery cannot prove the table is reached.                │
+-- │                                                                                     │
+-- │ REACHABILITY IS ASSERTED ELSEWHERE, in the would-be writer's battery:                │
+-- │   `058_account_closure_fences.sql` (B1b) — closing an account produces a row         │
+-- │   `058_account_closure_fences.sql` (B9b) — reopening produces one too                │
+-- │ Those drive the gated control and assert a row appears. As of `2cd4457` they are the │
+-- │ only assertions in the whole set that FAIL, because nothing writes this table yet.   │
+-- │                                                                                     │
+-- │ ⚑ THIS NOTE EXISTS BECAUSE THE ABSENCE WAS FOUND TWICE AND ALMOST WRITTEN TWICE.     │
+-- │   Coverage did not fail — DISCOVERABILITY did. Sec independently derived (B1b) as a  │
+-- │   required addition while it already existed, because anyone auditing account_event  │
+-- │   coverage reads THIS file and finds only property tests. Without this pointer the   │
+-- │   next auditor concludes there is a gap, or writes a duplicate.                      │
+-- │   General form (Architect): **a battery should state what it structurally cannot     │
+-- │   prove.** Queued for tests/rls/DESIGN.md alongside the other three lessons.         │
+-- └───────────────────────────────────────────────────────────────────────────────────┘
+--
 -- =====================================================================
 -- D1 — TWO-TENANT ISOLATION (the standing per-Wave battery obligation)
 -- =====================================================================
@@ -110,7 +153,7 @@ select _rls.expect_cross_tenant_read_empty('pfin.account_event'::regclass, :'ta'
 select _rls.set_tenant(:'tb'::uuid);
 select throws_like(
   format($$ insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor)
-              values (%L, %s, 'closed', 'closed', 'user:%s') $$, :'ta', :aacct, :'ta'),
+              values (%L, %s, 'closed', 'no_longer_used', 'user:%s') $$, :'ta', :aacct, :'ta'),
   'new row violates row-level security policy%for table "account_event"',
   '(D1c) cross-tenant INSERT: B forging users_id=A is rejected by the account_event INSERT WITH CHECK — an RLS-policy violation specifically, not an incidental 42501'
 );
@@ -131,7 +174,7 @@ select set_config('role', 'postgres', true);
 select _rls.set_tenant(:'ta'::uuid);
 select throws_like(
   format($$ insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor)
-              values (%L, %s, 'closed', 'closed', 'user:%s') $$, :'ta', :bacct, :'ta'),
+              values (%L, %s, 'closed', 'no_longer_used', 'user:%s') $$, :'ta', :bacct, :'ta'),
   :'m_fence16',
   '(D2a) #16 TEETH at authenticated: users_id=A + account_id=B''s account RAISES the fence. This row PASSES RLS (its users_id is A''s own), so the fence is the SOLE gate here — a test asserting only "B cannot write A''s row" would be testing RLS and reporting it as the fence'
 );
@@ -140,7 +183,7 @@ select set_config('role', 'postgres', true);
 -- (D2b) MIGRATION-ROLE tier — the writer #16 actually exists for. RLS-exempt entirely.
 select throws_like(
   format($$ insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor)
-              values (%L, %s, 'closed', 'closed', 'system:remediation') $$, :'ta', :bacct),
+              values (%L, %s, 'closed', 'no_longer_used', 'system:remediation') $$, :'ta', :bacct),
   :'m_fence16',
   '(D2b) #16 TEETH at the MIGRATION ROLE (RLS-exempt): the same mismatched pair RAISES. This is the writer the fence exists for per ADR-042 D5a — the one-time remediation script runs privileged and is gated by nothing else'
 );
@@ -217,7 +260,7 @@ select throws_ok(
 --   means "system" when null. Absence is not a value — the ADR-011 D1(d) detectability class.
 select throws_ok(
   format($$ insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor)
-              values (%L, %s, 'closed', 'closed', %L) $$, :'ta', :aacct, :'ta'),
+              values (%L, %s, 'closed', 'no_longer_used', %L) $$, :'ta', :aacct, :'ta'),
   '23514',
   null,
   '(D4c) `actor` is DISCRIMINATED: a BARE uid is rejected — it must be `user:<uid>` or `system:<source>`. A bare uid, or a NULL meaning "system", makes "we did not record the actor" indistinguishable from "the actor was the system" on a permanent audit record'
@@ -251,6 +294,27 @@ select throws_like(
   $$ update pfin.account_event set reason_code = 'sold' $$,
   '%immutable%',
   '(D5c) CROSS-TIER: service_role UPDATE is blocked by the immutability TRIGGER with the ACL deliberately held OPEN -> the fence is the trigger, not the absent grant. RLS-bypass does not bypass a trigger'
+);
+
+-- (D7) THE INDEX CARRIES `nulls last` — queued at the measurement, landed at `9e16a5a`.
+--   MEASURED (two independent runs, 20k and 5k rows, ANALYZEd, enable_seqscan=off):
+--     index (account_id, effective_date desc)            -> `desc nulls last` query SORTS
+--     index (account_id, effective_date desc nulls last) -> Index Only Scan
+--   Each index shape serves exactly ONE ordering, so this is a trade, not a free fix — and
+--   it is decidable because plain `desc` returns the WRONG ROW: with a closure dated
+--   2026-02-20 and a NULL-dated reopen, `desc` returns the reopen. The ordering that gives
+--   up its index is the one nobody should write.
+--   ⚑ WHY THIS NEEDS A TEST AT ALL: the property has a SILENT failure mode. Rebuild the
+--     index without `nulls last` and nothing goes red — the latest-event query returns a
+--     wrong row with a sort node attached, and a sort node reads as a performance
+--     characteristic rather than a correctness signal.
+--   ⚑ AND IT IS THE STRUCTURAL HALF OF A TWO-PART FIX. The column comment is the procedural
+--     half ("ANY latest-event lookup MUST use nulls last") and depends on someone reading
+--     it. This assertion depends on nobody.
+select ok(
+  (select indexdef like '%effective\_date DESC NULLS LAST%' escape '\'
+     from pg_indexes where schemaname = 'pfin' and indexname = 'account_event_account_idx'),
+  '(D7) account_event_account_idx is declared (account_id, effective_date DESC NULLS LAST). Without it a `desc nulls last` latest-event lookup silently acquires a Sort, and a plain `desc` lookup returns a NULL-dated reopen ahead of every dated event. Measured independently by QA and team-lead at 20k and 5k rows. RED means the index was rebuilt without the qualifier — fix the index, never this assertion'
 );
 
 -- =====================================================================
