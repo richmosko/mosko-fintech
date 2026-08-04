@@ -204,7 +204,27 @@ grant select, insert on pfin.account_event to authenticated;
 
 -- RLS-predicate index + the per-account history read path.
 create index if not exists account_event_uid_idx on pfin.account_event (users_id);
-create index if not exists account_event_account_idx on pfin.account_event (account_id, effective_date desc);
+-- NULLS LAST IS NOT AN OPTIMIZATION — IT COMPLETES THE NULL-DATE FIX (Sec ruling).
+--   Postgres DESC defaults to NULLS FIRST. Since effective_date became nullable,
+--   a plain `desc` index sorts an UNKNOWN-DATE reopen AHEAD OF EVERY DATED EVENT,
+--   which partially reintroduces the harm the nullability removed:
+--     current_date  made an unknown date look like TODAY'S event;
+--     NULLS FIRST   makes an unknown date sort as the LATEST event.
+--   Both make ABSENCE READ AS RECENCY. Measured with rows (2026-01-10 closed),
+--   (2026-02-20 closed), (NULL reopened): `order by effective_date desc limit 1`
+--   returns the NULL row; `desc nulls last` returns 2026-02-20.
+--
+--   And telling consumers to write `nulls last` is NOT sufficient — measured on
+--   20k rows, ANALYZEd: the correct query against a plain `desc` index acquires a
+--   Sort node, while against `desc nulls last` it is an Index Only Scan. The
+--   index declaration IS the choice of which ordering is intended.
+--
+--   INTENDED CONSUMER: latest-event-per-account lookups
+--     (order by effective_date desc nulls last limit 1).
+--   This index serves exactly ONE of the two orderings. Anyone adding an
+--   `order by` on this table should find that written here rather than infer it.
+create index if not exists account_event_account_idx
+  on pfin.account_event (account_id, effective_date desc nulls last);
 
 -- ----------------------------------------------------------------------------
 -- Decision-3 canonical instance #16 — account_event.account_id -> pfin.account.
