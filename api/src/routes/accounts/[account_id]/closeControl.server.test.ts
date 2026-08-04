@@ -160,6 +160,47 @@ describe('POST /accounts/[account_id]?/toggleActive — the close control', () =
 		expect(shown).not.toContain('500 native');
 	});
 
+	// Architect's catch: the RPCs refuse with their OWN prefix, not the gate's, so before this
+	// mapping a double-submit fell through to "This account cannot be closed yet — it still
+	// holds value." Telling someone their already-closed account still holds value is worse
+	// than saying nothing, and it is the case a user is most likely to actually hit.
+	it('an already-closed account reads as already-closed, not as blocked', async () => {
+		const { event } = makeEvent(CLOSE, { id: SESSION_UID }, '7', {
+			message:
+				'close refused: no OPEN account 7 is reachable in this session — it does not exist, is not yours, or is already closed. Reopen it first if you meant to re-date it.'
+		});
+		const res = (await actions.toggleActive(event)) as {
+			status: number;
+			data: { errors: { _form: string[] } };
+		};
+		expect(res.status).toBe(409);
+		expect(res.data.errors._form[0]).toBe('This account is already closed.');
+		expect(res.data.errors._form[0]).not.toContain('holds value');
+	});
+
+	it('an already-open account reads as already-open on reopen', async () => {
+		const { event } = makeEvent(REOPEN, { id: SESSION_UID }, '7', {
+			message:
+				'reopen refused: no CLOSED account 7 is reachable in this session — it does not exist, is not yours, or is already open.'
+		});
+		const res = (await actions.toggleActive(event)) as {
+			status: number;
+			data: { errors: { _form: string[] } };
+		};
+		expect(res.status).toBe(409);
+		expect(res.data.errors._form[0]).toBe('This account is already open.');
+	});
+
+	it('the RPC refusal does not leak the interpolated account id', async () => {
+		const { event } = makeEvent(CLOSE, { id: SESSION_UID }, '7', {
+			message: 'close refused: no OPEN account 7 is reachable in this session — it is already closed.'
+		});
+		const res = (await actions.toggleActive(event)) as {
+			data: { errors: { _form: string[] } };
+		};
+		expect(res.data.errors._form[0]).not.toMatch(/\b7\b/);
+	});
+
 	it('a non-gate DB error falls back to the generic envelope', async () => {
 		const { event } = makeEvent(CLOSE, { id: SESSION_UID }, '7', {
 			message: 'could not serialize access due to concurrent update'

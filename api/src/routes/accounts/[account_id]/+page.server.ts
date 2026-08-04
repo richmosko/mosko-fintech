@@ -223,6 +223,23 @@ function gateRefusalMessage(raw: string): string {
 	return 'This account cannot be closed yet — it still holds value.';
 }
 
+/**
+ * The RPCs' own narrow-by-construction refusals, which are NOT gate refusals.
+ *
+ * `fn_close_account` matches `… and closed_at is null`, `fn_reopen_account` the inverse, so a
+ * zero-row match means the account is already in the requested state (or is not the caller's).
+ * Architect made these prefixes deliberately distinct from the gate's so the two stay separable.
+ * The common cause is a double-submit — benign, and it must not read as a failure to close, and
+ * certainly not as "it still holds value", which is what it fell through to before.
+ *
+ * The raises interpolate the account id; that is operator detail and is not surfaced.
+ */
+function rpcRefusalMessage(raw: string): string | null {
+	if (raw.includes('close refused:')) return 'This account is already closed.';
+	if (raw.includes('reopen refused:')) return 'This account is already open.';
+	return null;
+}
+
 export const actions: Actions = {
 	// The account CLOSE / REOPEN control (ADR-042 Decision 1; the RPC pair per Amendment 2).
 	// Named `toggleActive` and posting `is_active` for now: PR 2 changes the WRITE MECHANISM
@@ -271,6 +288,10 @@ export const actions: Actions = {
 			if (updErr.message?.includes('account closure blocked')) {
 				return fail(422, { errors: { _form: [gateRefusalMessage(updErr.message)] } });
 			}
+			// The RPCs' own refusals carry a distinct prefix and mean "already in that state",
+			// not "blocked". Checked after the gate so a gate raise always wins.
+			const rpcMsg = rpcRefusalMessage(updErr.message ?? '');
+			if (rpcMsg) return fail(409, { errors: { _form: [rpcMsg] } });
 			return fail(422, { errors: { _form: ['Could not update the account.'] } });
 		}
 		return { success: true, is_active: parsed.data.is_active };
