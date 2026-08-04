@@ -7,7 +7,7 @@
 ## What lives here
 - `migrations/` — Architect-authored SQL migrations. **Migrations live in code, not the dashboard** (root CLAUDE.md). Current: `001_pfin_foundation.sql` (foundational — `pfin` schema + `fn_refresh_updated_at` SECURITY DEFINER `updated_at` trigger helper; SELF-186 Phase 5 close-gate) + `002_fn_mask_acct_number.sql` (SD-15 masking primitive).
 - `config.toml` — Supabase CLI config. **`[db] major_version = 17`** is the chosen forward target **by decision** ([ADR-021](../DECISIONS.md#adr-021) — V1 greenfield; cax21/pfindash.com incumbent is reference-only, not a deploy dependency). See gotchas.
-- `tests/` — **QA-owned** pgTAP RLS battery (`supabase test db`, directory-mode). Architect does not author here, but every migration extending RLS surface is paired with a QA battery test. See [`tests/README.md`](tests/README.md) + [`tests/rls/DESIGN.md`](../tests/rls/DESIGN.md).
+- `tests/` — **QA-owned** pgTAP RLS battery (`supabase test db`, directory-mode). Architect does not author here, but every migration extending RLS surface is paired with a QA battery test. See [`tests/README.md`](tests/README.md) + [`tests/rls/DESIGN.md`](tests/rls/DESIGN.md).
 
 ## Conventions
 1. **Migration file shape** (model: `002_fn_mask_acct_number.sql`). One migration per logical lock-set. Header carries: numbering rationale, a **POSTURE RATIONALE** block (INVOKER vs DEFINER + why), a **CONTRACT** block (signature + behavior + security-load-bearing edges), and `comment on function`. Functions set `set search_path = ''`; schema creation is idempotent (`create schema if not exists pfin`). Pure helpers are order-independent; base-table/RLS migrations are order-dependent — sequence them deliberately.
@@ -22,7 +22,7 @@
 ## Canonical references
 - [`../DECISIONS.md`](../DECISIONS.md) — ADR-011 D3 (FK-bypass family) / D4 (§10 ledger) / D9 (SD-15 + DEFINER allowlist) / Lock 11 (INVOKER read-composition) · [ADR-019](../DECISIONS.md#adr-019) (monorepo; ETL at `workers/etl/`).
 - [`../docs/ARCH/index.html`](../docs/ARCH/index.html) §10 (SD+RT) · [`../docs/SECURITY/index.html`](../docs/SECURITY/index.html) (SD matrix + RT catalog + [§4.5](../docs/SECURITY/index.html#sec-4-5) two-tenant posture).
-- [`tests/README.md`](tests/README.md) · [`tests/rls/DESIGN.md`](../tests/rls/DESIGN.md).
+- [`tests/README.md`](tests/README.md) · [`tests/rls/DESIGN.md`](tests/rls/DESIGN.md).
 
 ## Fail-closed / gotchas
 - **`grant`-then-RLS shape** (durable root-cause, PR #106). Postgres checks the **table ACL before RLS**. A table needs `grant select, insert, … to authenticated` *even with RLS enabled* — RLS filters rows; the GRANT lets the role reach the table at all. A missing grant denies at the ACL layer before RLS is consulted (you'd be testing GRANTs, not RLS). Every base-table migration pairs its RLS policy with the matching table-level GRANT.
