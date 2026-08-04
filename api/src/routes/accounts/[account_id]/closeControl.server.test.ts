@@ -25,7 +25,9 @@ function makeEvent(
 	updErr: { message: string } | null = null
 ) {
 	const eq = vi.fn(async () => ({ error: updErr }));
-	const update = vi.fn(() => ({ eq }));
+	// Typed payload param: without it `update.mock.calls[0]` is the empty tuple and the
+	// write-shape assertion below cannot index it.
+	const update = vi.fn((_payload: Record<string, unknown>) => ({ eq }));
 	const from = vi.fn(() => ({ update }));
 	const schema = vi.fn(() => ({ from }));
 	const request = new Request(`http://localhost/accounts/${accountId}`, {
