@@ -217,6 +217,22 @@ construction and detect nothing.
 
 That test is what stops rule 4 becoming ritual.
 
+**Sub-rule — the artifact-state ladder (Sec).** The same independence test applies to claims
+about an artifact's own state. Not a pair but a ladder, and **each rung protects against a
+different failure**, which is what makes it actionable rather than ceremony:
+
+| rung | protects against |
+|---|---|
+| **written** | *nothing* — a `checkout` loses it |
+| **committed** | checkout loss; visible to every worktree (shared object store) |
+| **pushed** | **machine loss** — otherwise there is one copy, on one machine |
+| **merged** | **discoverability** — reachable from `main` without knowing a branch name |
+
+Each adjacent pair is independently derived and can disagree — a commit can fail, a push can
+be rejected, a merge can be blocked — so each junction is a real check. **"Written" names one
+rung and implies three.** This section was itself reported as "written, not queued" while
+uncommitted: the rule that would have caught it was in the file that wasn't committed.
+
 ### 5. A false assertion is worse than a vacuous one
 
 A **vacuous** assertion gets fixed by strengthening the test. A **false** one gets "fixed" by
