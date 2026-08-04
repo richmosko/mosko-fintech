@@ -161,10 +161,21 @@ insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
 insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_of_date, source)
   values (:a5, -2000.0000, 'USD', '2026-06-01', 'seed');
 
-insert into pfin.account (users_id, name, account_type, scope, tax_treatment, is_active)
-  values (:'ta', 'a-dep-inactive-7', 'depository', 'household', 'taxable', false) returning account_id as a7 \gset
+-- a7: CLOSED as of 2026-06-30 (was `is_active=false` + a live 9999; see 049's note — that
+--   state is unconstructible under ADR-042). Seeded through the real gate: funded, zeroed, closed.
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
+  values (:'ta', 'a-dep-closed-7', 'depository', 'household', 'taxable') returning account_id as a7 \gset
 insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_of_date, source)
   values (:a7, 9999.0000, 'USD', '2026-06-01', 'seed');
+insert into pfin.account_trans (account_id, transaction_date, amount, quantity, vendor)
+  values (:a7, '2026-06-30', -9999.0000, 0, 'wind-down-a7');
+-- The seed block runs at postgres with no tenant, so auth.uid() is NULL and 057's
+-- writer refuses rather than letting absence become a value. Declare the writer, as
+-- its own raise instructs. 'system:remediation' is the ONLY system actor 057 admits
+-- (enumerated, not an open pattern, so a new system identity fails the CHECK).
+select set_config('pfin.actor', 'system:remediation', true);
+select set_config('pfin.reason_code', 'no_longer_used', true);
+update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = :a7;
 
 -- =====================================================================
 -- TENANT B — the cross-tenant victim/control. One investment account so B's OWN call is non-empty.
@@ -287,11 +298,20 @@ select is(
   (pfin.fn_nav_composition('2026-06-30'::date) ->> 'nav')::numeric,
   pfin.fn_compute_nav('2026-06-30'::date, true),
   '(F1) FOOT-TO-NAV EXACT: nav == fn_compute_nav(2026-06-30, TRUE) — the §2.1.5 composition foots to the §2.1.1 active-scoped headline by construction (single-substrate natural summation)');
--- (F2) non-vacuous: nav ≠ fn_compute_nav(as_of, FALSE) — a7''s 9999 lives only in the all-accounts figure.
-select isnt(
+-- (F2) ⚑ INVERTED AT ADR-042, and the inversion is a DISCHARGE rather than a loss.
+--   It asserted nav ≠ the all-accounts figure, which held only because a7 was inactive WHILE
+--   HOLDING 9999. That state is unconstructible now, so a7 contributes zero to both and the
+--   foot is exact against BOTH scopes. The ADR-038 foot-to-NAV invariant therefore becomes
+--   UNCONDITIONAL — previously it was exact only for tenants holding no value-bearing
+--   inactive account, a caveat 049's header carried and which ADR-042 discharges.
+--   051 asserts PROPAGATION, not a predicate of its own: it inherits 049's exclusion and adds
+--   nothing (058's header — "two functions are re-pointed (049 + 050), not three"). Asserting
+--   a predicate here would duplicate 049's and drift from it.
+--   This assertion now foots ACROSS the closure boundary, which is the stronger claim.
+select is(
   (pfin.fn_nav_composition('2026-06-30'::date) ->> 'nav')::numeric,
   pfin.fn_compute_nav('2026-06-30'::date, false),
-  '(F2) foot is to the ACTIVE scope: nav (409800) ≠ fn_compute_nav(2026-06-30, FALSE) (419799 — includes the inactive a7''s 9999). Confirms F1 is an active-scoped foot, not a coincidence');
+  '(F2) FOOT IS UNCONDITIONAL (inverted at ADR-042): nav == fn_compute_nav(2026-06-30, FALSE) as well as TRUE — a closed account holds zero past its closing date, so both scopes agree. The ADR-038 foot-to-NAV invariant is now exact for EVERY tenant, discharging the value-bearing-inactive caveat. RED if a closed account can carry value into either scope. Confirms F1 is an active-scoped foot, not a coincidence');
 
 -- ---- D: DEBT SIGN D-1 ------------------------------------------------
 -- (D1) liability leaf a5 current_market_value carries 049's natural NEGATIVE sign.

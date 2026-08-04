@@ -82,6 +82,29 @@
 --   an account exactly when it is about to stop being current-state.
 --   NATIVE currency, NO FX multiplier — load-bearing, see (E4).
 --
+-- ┌─ ⛔ THIS BATTERY IS A LOAD-BEARING DEPENDENCY OF `058`'s CLOSE GATE ⛔ ────────────┐
+-- │ Sec F9(b), 2026-08-04. Stated HERE, in the header, because it was already stated   │
+-- │ mid-file (immediately above (E4), ~`:256`) and that was NOT ENOUGH — the block is  │
+-- │ findable only by someone already reading the assertions it protects, and the       │
+-- │ person who prunes an assertion as redundant is reading the header to decide what   │
+-- │ this file is for. **Discoverability, not coverage** — the same failure this suite   │
+-- │ recorded once already at `account_event` reachability (DESIGN.md rule 1 corollary). │
+-- │                                                                                    │
+-- │ `058`'s gate borrows THREE guarantees from this function (its CONTRACTS block       │
+-- │ names them). Two are guarded by a RUNTIME RAISE in the gate itself. The third is    │
+-- │ NOT:                                                                                │
+-- │                                                                                    │
+-- │   **CONTRACT (3) — NATIVE / NO FX MULTIPLIER — IS GUARDED BY (E4)/(E4b)/(E4c) AND   │
+-- │   BY NOTHING ELSE, ANYWHERE.** It is not runtime-detectable: you cannot tell from a │
+-- │   scalar whether it was converted, so the gate has no way to raise on a breach.     │
+-- │   A test is the only instrument available.                                          │
+-- │                                                                                    │
+-- │ CONSEQUENCE: weakening or pruning (E4)/(E4b)/(E4c) silently removes `058`'s only    │
+-- │ protection on contract (3), and NOTHING IN `058` GOES RED. The weakening is         │
+-- │ invisible at the site where it happens — which is why the warning has to live where │
+-- │ someone would do it. Mechanism + measurements: the ⛔⛔ block above (E4).            │
+-- └────────────────────────────────────────────────────────────────────────────────────┘
+--
 -- ⟦FIXTURE-VERIFIED 2026-08-03⟧ `056` is applied nowhere reachable (the local DB is at
 --   `051`), so NO assertion below has run. What HAS run against the live DB in a rolled-back
 --   txn: every seed statement, and the probes proving each trap actually discriminates —
@@ -256,8 +279,10 @@ select is(
 -- =====================================================================
 -- ⛔⛔ (E4)/(E4b)/(E4c) ARE A FENCE GUARD FOR `058` — DO NOT PRUNE AS REDUNDANT ⛔⛔
 --   Sec ruling 2026-08-03. These look like property assertions about `056` that duplicate
---   its own comment. **They are the only guard on one of the three `056` contracts that
---   `058`'s close gate depends on**, and unlike the other two it is NOT runtime-detectable:
+--   its own comment. **They are the only guard on CONTRACT (3) of the three that `058`'s
+--   close gate depends on** — named by that number in `058`'s own CONTRACTS block, so the
+--   two files can be cross-read without either restating the other — and unlike contracts
+--   (1) and (2), which the gate guards with a runtime raise, (3) is NOT runtime-detectable:
 --   you cannot tell from a scalar whether it was converted, so `058` cannot raise on it.
 --
 --   THE MECHANISM, which is why this outranks the other two contracts:
@@ -644,7 +669,22 @@ select set_eq(
       where pg_get_functiondef(q.oid) like '%pfin.account_balance_checkpoint%' $$,
   $$ values ('fn_account_balance_checkpoint_block_mutation'::text),
             ('fn_account_balance_checkpoint_block_truncate'),
-            ('fn_account_cash_as_of') $$,
+            ('fn_account_cash_as_of'),
+            -- EXTENDED 2026-08-04 for `058`'s close gate, AFTER READING IT — which is what
+            -- this assertion instructs, and the only response it permits besides finding a
+            -- defect. Reviewed against the exact distinction the signal exists to draw:
+            --   · its CASH leg DELEGATES — `from pfin.fn_account_cash_as_of(...)`. It does not
+            --     compute a balance. No sum(), no order by, no '-infinity', no roll-forward.
+            --   · its ONE direct reference to the table is an EXISTENCE PROBE in leg 3:
+            --     `where b.account_id = ... and b.as_of_date > new.closed_at::date`, asking
+            --     "is there post-closure activity", never "what is the balance".
+            -- So it is a LEGITIMATE CONSUMER, and it joins the set for the SAME reason the two
+            -- `018` guards already in it do: it MENTIONS the table without computing cash.
+            -- That is the honest-limit note's whole point — this is a TEXT-MENTION set.
+            -- ⚠ NOT relaxed and NOT deleted: the set GREW BY ONE NAMED ROUTINE, so a second
+            --   new consumer still fires this red. Extending is what keeps the signal live;
+            --   deleting is what the header forbids.
+            ('fn_account_closure_gate') $$,
   '(E10a) REVIEW SIGNAL — schema-wide TEXT-MENTION set (NOT a computes-cash set; see the honest-limit note): the pfin routines whose TEXT MENTIONS pfin.account_balance_checkpoint are EXACTLY the table''s two `018` mutation/truncate GUARDS (members because the anchor matches the table NAME wherever it appears — their own function names AND raise-message text — without computing cash at all; bodies use tg_op and never read it. Permanent, expected, NOT drift) plus fn_account_cash_as_of (the one cash home). A red means a NEW routine touches the table: LOOK, then extend the set under review. Do NOT delete this assertion to resolve a red. Catches PROLIFERATION into unknown consumers, which (E10b)/(E10c) structurally cannot. ⚑ EXPECTED RED until the re-point lands — measured live pre-re-point the set also contains fn_account_unrealized_gl and fn_compute_nav(date,boolean)'
 );
 select is(

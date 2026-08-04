@@ -402,3 +402,144 @@ three are provenance records, not guarantees — **cite at rest, re-derive at us
 ref goes stale exactly as silently as an unpinned file, only more slowly. And record what the
 fixture can *reach*, not merely what it contains: a EUR account with no `fx_feed` price looks
 complete and exercises nothing.
+
+---
+
+## 9. Three more, from the ADR-042 Sec-review round (2026-08-04)
+
+All three were **measured in the batteries, not reasoned into them** — each is recorded with
+the observation that produced it, per §8's calibration rule.
+
+### A trigger's NAME is its firing ORDER — renaming one re-points every message-matched assertion
+
+Postgres fires row-level triggers on one event **alphabetically by trigger name**. So a rename
+with no behavioural intent silently changes *which fence a given write meets first*, and every
+assertion that matched on a raise message re-points with it.
+
+**What makes this worse than an ordinary rebind: the assertions do not break, they LIE.** The
+write is still refused, a raise still fires, the SQLSTATE is still `P0001` — only the
+*diagnosis* changed. A bare SQLSTATE or "any exception" match would have stayed green through
+the whole reordering while testing a different mechanism.
+
+Measured: `account_event_origin_fence` → `account_event_block_direct_insert` sorts from after
+`m` to before it, and `(D1c)`/`(D2a)` flipped from the `#16` matched-tenant fence to the
+wrong-origin fence **mid-session, with no edit to either the battery or any fence body.**
+
+> **The consequence was not a rename. `#16` stopped being reachable at `authenticated` at all.**
+
+That is a coverage change wearing a rename's clothes, and the battery's standing prose ("the
+fence is the SOLE gate at authenticated") became false while every assertion still passed.
+**When a trigger is renamed, re-derive which mechanism each assertion now targets** — and if a
+fence has become unreachable at a tier, say so where the old claim was, rather than deleting it.
+
+Related to §8's *rename trap* but a distinct mechanism: that one is two identical literals in
+different vocabularies; this one is a name that is also an ordering key.
+
+### A BEFORE-trigger fence makes every WITH CHECK conjunct behind it behaviourally unfalsifiable
+
+Architect's generalisation, and it is worth stating once as a rule because it has now been
+re-derived three separate times on one table.
+
+Postgres evaluates a policy's `WITH CHECK` **after** BEFORE ROW triggers. So on any table where
+a BEFORE INSERT fence refuses a class of writes, **every policy conjunct sitting behind that
+fence is unreachable by any behavioural probe of that class** — not untested, *unfalsifiable*.
+
+> **On `pfin.account_event`, no `WITH CHECK` conjunct can be proven behaviourally at
+> `authenticated`. They must be proven DECLARATIVELY, from `pg_policies`.**
+
+Three cases, one cause:
+
+| conjunct | why unreachable | proven by |
+|---|---|---|
+| `users_id = auth.uid()` | `#16` intercepts every forged pair first | `(D1d)` |
+| the `025` aal2 step-up | same — an aal1 session cannot see its own account | `(D1d2)` |
+| `actor = 'user:' \|\| auth.uid()` | the wrong-origin fence refuses the POST first | `(D1g)` |
+
+**The trap is that a behavioural probe still goes GREEN.** It is refused — by the fence in
+front — so the assertion passes while the conjunct it names is never consulted, and would keep
+passing if that conjunct were deleted. Any such probe kept for corroboration **must say in its
+own message that it is corroborating**, or it becomes the load-bearing-looking assertion and
+the declarative one reads as redundant. That is the `(S4b)` defect, one file over.
+
+Corollary for reviewers: *"the fence covers it"* is not a reason to drop the conjunct. A policy
+survives `ALTER TABLE … DISABLE TRIGGER` and `session_replication_role = replica`; a trigger
+does not.
+
+### An "any exception" assertion cannot tell its fence from a fence that refuses everything
+
+A self-catch, and the cleanest available instance of §8 rule 4.
+
+`(D1e)` — the Sec-veto assertion for the matched-tenant actor forge — was first written
+deliberately mechanism-agnostic (`throws_ok(sql, null, null, …)`), reasoning that naming a
+SQLSTATE would encode whichever fix landed rather than the requirement. **It passed on its
+first run, and for the wrong reason:** a separate fence had already landed that refuses *every*
+direct authenticated INSERT whatever the actor says.
+
+Nothing about the green distinguished those two worlds. What exposed it was its **non-vacuous
+companion going red in the same run** — two independently-derived results that disagreed.
+
+> **Mechanism-agnosticism buys independence from the fix and pays for it in vacuity.**
+> It is the right instrument only where the companion is strong enough to price it.
+
+The general rule is unchanged — *write against the catch criterion, not the fix* — but the
+criterion has to be sharp enough to fail against the wrong mechanism. Here that meant binding
+to the fence's own message once the fence was readable, which is also what this suite's
+distinct-message discipline already required.
+
+### A battery organised around one axis reports coverage of the TIER
+
+Sec's F1 veto — any tenant could POST `actor = 'system:remediation'` for their **own** account —
+survived a file that was **15/15 green**, had a LAYER MAP, and carried authenticated-tier
+assertions.
+
+Why it was invisible: **every authenticated-tier assertion in that file probed the
+CROSS-TENANT axis.** `(D1c)` forges `users_id`; `(D2a)` forges `account_id`. Both are caught,
+and their green reads as *"the authenticated tier is covered."* The forge needing no
+cross-tenant step — a tenant, its own account, a false actor — had no assertion at any tier.
+
+The LAYER MAP did not prevent this; **its completeness concealed it.** A map that accounts for
+every mechanism looks exhaustive, and a reader checking "is this mechanism covered?" gets yes
+every time.
+
+> **Before adding a case, name the AXIS it probes as well as the MECHANISM it targets.**
+> One-axis coverage of a tier is what a single-axis map cannot show you is missing.
+
+Same family as *a battery cannot prove it is reached* (§8 rule 0): the missing case is
+invisible from inside the set of cases that exist.
+
+### Harness note — a rolled-back savepoint rewinds pgTAP's plan counter, not its numbering
+
+Measured, because it produces **a false instance of this suite's own abort alarm**.
+
+pgTAP's TAP *numbering* comes from a sequence (non-transactional); the counter `finish()`
+compares against `plan()` is a temp-table value (**transactional**). So `rollback to savepoint`
+rewinds the counter while the emitted numbering marches on — and only the **last** rolled-back
+savepoint's rewind survives, because any later assertion re-sets the counter to its own number.
+
+Observed in `058`: 47 emitted results, **every one `ok`**, and
+`# Looks like you planned 47 tests but ran 45` — because the trailing inversion block (G1/G2)
+runs inside savepoints that are rolled back.
+
+That message is the exact shape the inversion block's own header cites as proof an aborted run
+cannot pass quietly (`053` reported *"planned 19 but ran 0"*). **A fully-green file emitting it
+trains the reader to discount the one signal that distinguishes a real abort.**
+
+- **Fix structurally: keep a non-savepoint assertion LAST.** In `058` that is `(G3)`, which
+  independently earns its place by asserting the inversion block's sabotage was actually undone.
+- **Never lower `plan()` to the reported figure.** That hides the rewind and silently re-breaks
+  the moment a savepoint is added or moved.
+
+### Calibration table — updated at this round
+
+Applications and self-catches from this review, appended to §8's table rather than replacing it:
+
+| rule | +applications | +self-catches |
+|---|---|---|
+| print the pair — and check the pair is independent | 1 | **1** (the `(D1e)`/`(D1f)` disagreement) |
+| anchoring: anchor on the subject, not a co-occurring token | 2 | **1** (`'%closed%'` matched `037`'s freeze-closed trigger) |
+| a trigger's name is its firing order *(new)* | 1 | 0 |
+| one-axis coverage reports the tier *(new)* | 1 | 0 |
+| an "any exception" assertion cannot identify its fence *(new)* | 1 | **1** |
+
+Both new zero-catch rules sit at ONE application. Per §8's own reading rule that is **UNTESTED,
+not MISCALIBRATED** — leave them alone and use them; revisit at ~5 applications still at zero.

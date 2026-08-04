@@ -129,13 +129,30 @@ insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
 insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_of_date, source)
   values (:a3, -2000.0000, 'USD', '2026-06-01', 'seed');
 
--- a4: INACTIVE investment WITH securities (10 NVSECA) — tests BOTH legs' is_active gating.
-insert into pfin.account (users_id, name, account_type, scope, tax_treatment, is_active)
-  values (:'ta', 'a-inv-inactive-4', 'investment', 'household', 'taxable', false) returning account_id as a4 \gset
+-- a4: investment CLOSED as of 2026-06-30, having held BOTH legs (10 NVSECA + cash).
+--   ⚑ RE-SEEDED AT ADR-042 — was `is_active=false` while still holding both. That state is
+--     unconstructible now (see 049's note); the wind-down below is what the close gate
+--     actually requires, and it exercises BOTH zero-value legs rather than asserting around
+--     them. Trigger-disabling to rebuild the old state is REFUSED.
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
+  values (:'ta', 'a-inv-closed-4', 'investment', 'household', 'taxable') returning account_id as a4 \gset
 insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_of_date, source)
   values (:a4, 1000.0000, 'USD', '2026-06-01', 'seed');
 insert into pfin.account_trans (account_id, transaction_date, amount, quantity, security_id, cost_basis, transaction_type, vendor)
   values (:a4, '2026-06-05', -1000.0000, 10, :seca, 1000.0000, 'standard', 'buy-a4');
+-- wind-down, both legs, all dated ON OR BEFORE the closing date:
+--   sell the 10 back (holdings leg -> 0, cash -> 1000), then sweep the cash out (cash leg -> 0).
+insert into pfin.account_trans (account_id, transaction_date, amount, quantity, security_id, cost_basis, transaction_type, vendor)
+  values (:a4, '2026-06-20', 1000.0000, -10, :seca, 1000.0000, 'standard', 'sell-a4');
+insert into pfin.account_trans (account_id, transaction_date, amount, quantity, vendor)
+  values (:a4, '2026-06-30', -1000.0000, 0, 'sweep-a4');
+-- The seed block runs at postgres with no tenant, so auth.uid() is NULL and 057's
+-- writer refuses rather than letting absence become a value. Declare the writer, as
+-- its own raise instructs. 'system:remediation' is the ONLY system actor 057 admits
+-- (enumerated, not an open pattern, so a new system identity fails the CHECK).
+select set_config('pfin.actor', 'system:remediation', true);
+select set_config('pfin.reason_code', 'no_longer_used', true);
+update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = :a4;
 
 -- =====================================================================
 -- TENANT L — liability-only (R-7 sign): one ACTIVE liability, checkpoint -1500.
@@ -202,18 +219,35 @@ select is(
 -- (A2) all-accounts INCLUDES a4.
 select is(
   pfin.fn_compute_nav('2026-06-30'::date, false),
-  8000.0000::numeric,
-  '(A2) fn_compute_nav(as_of, FALSE) = 8000 — INCLUDES the inactive a4 (byte-identical to 019 all-accounts). RED if the false path gated is_active');
+  6500.0000::numeric,
+  '(A2) fn_compute_nav(as_of, FALSE) = 6500 — the all-accounts path. ⚑ WAS 8000, which INCLUDED the inactive-and-value-bearing a4. a4 is now wound down to zero before closing, because ADR-042 makes closed-while-holding-value unconstructible, so it contributes 0 to BOTH paths. RED if the false path gated closure');
 -- (A3) 1-arg wrapper = all-accounts (the 037 memo path).
 select is(
   pfin.fn_compute_nav('2026-06-30'::date),
-  8000.0000::numeric,
-  '(A3) fn_compute_nav(as_of) 1-arg = 8000 — the wrapper delegates to (as_of, false) = all-accounts. RED if the wrapper filtered active (would break the 037 memo)');
--- (A4) exclusion is non-vacuous: true ≠ false.
-select isnt(
+  6500.0000::numeric,
+  '(A3) fn_compute_nav(as_of) 1-arg = 6500 — the wrapper delegates to (as_of, false) = all-accounts. RED if the wrapper filtered closure (would break the 037 memo)');
+-- (A4) ⚑ INVERTED AT ADR-042 — this is the assertion whose ARGUMENT reversed, not just its
+--   expected value, so it is inverted rather than re-tuned.
+--   It asserted TRUE ≠ FALSE, and that was only ever satisfiable because a4 was inactive
+--   WHILE HOLDING VALUE. ADR-042's standing zero-value invariant makes that state
+--   unconstructible: past its closing date a closed account holds zero (legs 1+2 at
+--   closed_at, leg 3 plus the transfer-in fence after it), so it contributes zero to BOTH
+--   paths. `p_active_only` is therefore a PROVABLE NO-OP ON VALUE.
+--   ⚠ THIS IS THE DETECTOR, and it is why the assertion is kept rather than deleted. When
+--     059 re-points the predicate, the correct form is AS-OF
+--     (`closed_at is null or closed_at > p_as_of`) and the naive form is CURRENT-STATE
+--     (`closed_at is null`). Under V1 the two are behaviourally identical, so choosing wrong
+--     leaves NO FOOTPRINT — BACKLOG §7.7's V2-grantee entry records exactly that hazard.
+--     This equality goes RED under the current-state form at any as-of BEFORE a closure.
+--     Deleting (A4) as "no longer meaningful" would remove the only thing that catches it.
+--   The four dependencies that keep this true, per ADR-042's symmetric rule — weaken any one
+--   and p_active_only becomes load-bearing again: the gate's three legs; the transfer-in
+--   fence; the position-neutrality of the two exempted tables (029 Σ=parent,
+--   004 immutability); and the 059 re-point being as-of rather than current-state.
+select is(
   pfin.fn_compute_nav('2026-06-30'::date, true),
   pfin.fn_compute_nav('2026-06-30'::date, false),
-  '(A4) active-only exclusion is non-vacuous: TRUE (6500) ≠ FALSE (8000) — a4 genuinely carries value that only the false path counts');
+  '(A4) EQUIVALENCE (inverted at ADR-042): TRUE = FALSE at this as-of — a closed account holds zero past its closing date, so p_active_only cannot change the answer. RED if a closed account can carry value, or if 059 re-points to the CURRENT-STATE predicate instead of the AS-OF one');
 -- (A5) wrapper delegation proven directly: 1-arg == 2-arg(false).
 select is(
   pfin.fn_compute_nav('2026-06-30'::date),
@@ -224,11 +258,16 @@ select is(
   (select coalesce(sum(current_market_value), 0) from pfin.fn_account_unrealized_gl('2026-06-30')),
   pfin.fn_compute_nav('2026-06-30'::date, true),
   '(A6) §2.1.1 == §2.1.5: Σ 049.current_market_value over A''s ACTIVE accounts (6500) == fn_compute_nav(as_of, TRUE) — the headline NAV and the per-account composition reconcile for a tenant holding a value-bearing INACTIVE account. The whole point of 050');
--- (A7) tie the delta to a4's securities-leg contribution (both-legs gating, non-vacuous).
+-- (A7) ⚑ INVERTED AT ADR-042 — the NUMERIC form of (A4), kept because it localises the failure.
+--   It tied the delta to a4's securities-leg contribution (1500), which existed only while a4
+--   was inactive AND still holding. Wound down before closing, a4 contributes 0 to both paths.
+--   Kept rather than folded into (A4): (A4) says "the two agree", this says "and the gap is
+--   exactly zero" — under a wrong 059 re-point the delta becomes a NUMBER, which names how
+--   much value moved rather than only that something did.
 select is(
   pfin.fn_compute_nav('2026-06-30'::date, false) - pfin.fn_compute_nav('2026-06-30'::date, true),
-  1500.0000::numeric,
-  '(A7) false − true = 1500 = exactly a4''s contribution (1500 securities + 0 cash) — confirms the LEFT-JOIN security-leg is_active gate drops an inactive account''s HOLDINGS, not only its cash');
+  0.0000::numeric,
+  '(A7) false − true = 0 (inverted at ADR-042): the two scopes agree EXACTLY. A non-zero delta names how much value a wrongly-re-pointed 059 predicate moved — RED if a closed account carries value into either scope, or if 059 re-points to current-state rather than as-of''s contribution (1500 securities + 0 cash) — confirms the LEFT-JOIN security-leg is_active gate drops an inactive account''s HOLDINGS, not only its cash');
 -- (A8) 037 memo unchanged: fn_gl_entries still balances with an inactive holding present.
 select is(
   (select coalesce(sum(amount_book), 0) from pfin.fn_gl_entries('2026-06-30'::date)),

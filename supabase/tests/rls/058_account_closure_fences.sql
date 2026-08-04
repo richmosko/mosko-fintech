@@ -1,0 +1,894 @@
+-- =====================================================================
+-- 058 — ACCOUNT CLOSURE, PHASE 1 (ADR-042): the dated `closed_at` column, the three-leg
+--        close gate, the `currency` conjunct, the transfer-in fences, and the transitional
+--        `is_active` sync trigger.
+-- =====================================================================
+-- QA-owned. Authors NO schema. Pairs with Architect's `058`.
+-- Sec joint-review-mandatory (financial calculation · multi-tenant isolation · new fences
+-- on a privileged-context write path).
+--
+-- ⟦DESIGN: TWO-PHASE — Sec-adjudicated + Architect-confirmed 2026-08-03⟧
+--   The DECLARED-SET mechanism is WITHDRAWN. This battery was originally authored against
+--   it and BLOCK A has been deleted. Under two-phase:
+--     `058` (this file) — `closed_at` + gate + currency conjunct + transfer-in fences +
+--                         the transitional sync trigger. **`is_active` UNTOUCHED.**
+--     operator step     — each inactive account is closed THROUGH THE REAL GATED CONTROL
+--                         (which validates it) or reactivated.
+--     `059`             — assert the biconditional, drop the assert function, drop
+--                         `is_active`, then the as-of re-point. See 059_*_rls.sql.
+--   WHY IT WINS, and it changes what this file proves: the migration-time check stops being
+--   a PROXY for the gate and BECOMES the gate — the actual trigger, per account. Sec's
+--   standing requirement was "the migration's check must BE the gate's check"; two-phase
+--   satisfies it literally rather than fencing a workaround. Every gate assertion below is
+--   therefore now exercising THE PRODUCTION PATH, not an approximation of it (ADR-040 B9).
+--
+--   It also deletes a disclosure channel: no declared list means no cross-tenant
+--   `account_id`s committed to a migration file and preserved in git history.
+--
+-- ┌─ WHY THIS FILE EXISTS ─────────────────────────────────────────────────────────────┐
+-- │ `pfin.account` holds 4 rows, ALL ACTIVE — zero inactive (measured on the live local │
+-- │ DB 2026-08-03). So on production data the operator step has NOTHING to disposition  │
+-- │ and every closure fence ships UNEXERCISED — it evaluates, takes the pass branch, and│
+-- │ reports success without ever having fired. A guard that never fires has never been  │
+-- │ shown to fire; the same failure class as a `grep` pattern that cannot match         │
+-- │ returning "clean" (ADR-042 checkpoint 7). This file seeds deliberate violators of   │
+-- │ every shape and asserts each fence ABORTS on its own.                               │
+-- └────────────────────────────────────────────────────────────────────────────────────┘
+--
+-- LAYER DISCIPLINE — three separate traps on this surface, all verified against the LIVE
+--   catalog rather than assumed:
+--   (1) NONE OF THESE FENCES IS RLS (Sec). They are BEFORE-trigger raises. An RLS-denial
+--       assertion would go GREEN FOR THE WRONG REASON — RLS denies CROSS-TENANT, a
+--       different property that holds independently and would keep holding if every fence
+--       in this ADR were deleted. Every fence assertion below matches the RAISE TEXT.
+--   (2) `account_balance_checkpoint` + `holdings_checkpoint` grant authenticated **SELECT
+--       ONLY** (service_role holds SELECT+INSERT). An authenticated INSERT into either is
+--       refused at the TABLE ACL before any trigger runs — a green that exercised the grant
+--       and reported it as the fence. Both are therefore driven at **service_role** (C3/C4)
+--       with the grant held open, so the TRIGGER is the sole gate (the `self209` (b3)/(b4)
+--       grant-then-trigger pattern). `account_trans` DOES grant INSERT to authenticated,
+--       so C1 runs there and asserts the trigger message.
+--   (3) 42501 is ambiguous: schema-USAGE-denied, table-ACL-denied and RLS-WITH-CHECK are
+--       ALL 42501. ACL denials are matched on 'permission denied for table X', RLS on
+--       'new row violates row-level security policy%for table "X"'. A bare SQLSTATE match
+--       would be satisfied by any of the three.
+--   Sec also notes P0001 (raise_exception) is expected for the trigger raises — so a bare
+--   P0001 match would pass on ANY raise, including an unrelated one. Hence message matching
+--   throughout, never SQLSTATE alone.
+--
+-- ┌─ LAYER MAP — WHICH MECHANISM EACH ASSERTION ACTUALLY TARGETS ──────────────────────┐
+-- │ Required by Sec 2026-08-03. The file was originally named `..._rls.sql`; that name  │
+-- │ was WRONG and is why this block exists. **NOT ONE ASSERTION IN THIS FILE TARGETS    │
+-- │ RLS.** An RLS-denial assertion here would go GREEN — RLS denies cross-tenant, a      │
+-- │ property that holds independently and would keep holding if every trigger in this    │
+-- │ ADR were deleted. A green that survives deleting the thing under test is not a test. │
+-- │ Renamed `..._fences.sql` for that reason.                                            │
+-- │                                                                                      │
+-- │   BEFORE UPDATE trigger on pfin.account (the close gate)                             │
+-- │     B1 · B2 · B3 · B4 · B6a · B6b · B7 · B8 · B9 · G2                                │
+-- │   BEFORE UPDATE trigger, currency conjunct (D4)                                      │
+-- │     B10 · B11a · B11b                                                                │
+-- │   BEFORE INSERT triggers (transfer-in fences, 3 tables)                              │
+-- │     C1 · C2 · C3 · C4 · C5a · C5b · C5c · G1                                         │
+-- │   Transitional is_active sync trigger                                                │
+-- │     S1 · S2a · S2b · S3 · S4c   (S4a is the CHECK, S4b targets no mechanism — above)  │
+-- │   Audit-row side effect (pfin.account_event insert)                                  │
+-- │     B1b                                                                              │
+-- │   pg_catalog / information_schema — structural, no runtime mechanism                 │
+-- │     B5 · C6b · C7 · P1 · P2 · P3 · P5 · G3                                           │
+-- │   CHECK constraint `account_closure_biconditional` — covers INSERT *and* UPDATE      │
+-- │     P4 · S4a  (S4a MOVED HERE 2026-08-04: it was listed under the sync trigger, but   │
+-- │     the flip is refused by the CHECK, not by the trigger. S4b is a post-condition of  │
+-- │     that refusal and targets NO mechanism — see its own note.)                        │
+-- │   Table ACL — none in this file. Where a probe RUNS as `authenticated` (C1, S4a) it   │
+-- │     asserts a TRIGGER raise or a successful write, never `permission denied`.         │
+-- │                                                                                      │
+-- │ ADDING A CASE: state its mechanism here first. If you cannot name one, the assertion │
+-- │ is probably testing a property that holds without the fence.                         │
+-- └────────────────────────────────────────────────────────────────────────────────────┘
+--
+-- CORRESPONDENCE (Sec's joint-review check — run on this file before sending): does at
+--   least one assertion reference an object existing ONLY in the migration this battery
+--   names? YES — `pfin.account.closed_at`, the close-gate trigger, and all three transfer-in
+--   triggers are created in `058` and exist nowhere earlier. `P1` additionally FAILS against
+--   `059` (which drops `is_active`), so this file discriminates in BOTH directions rather
+--   than merely being present alongside the right migration.
+--
+-- ┌─ ⚠ MEASURED vs WRITTEN — READ BEFORE QUOTING A COUNT FROM THIS FILE ─────────────┐
+-- │ This file's assertions are **WRITTEN, NOT MEASURED**: its migration is not applied │
+-- │ to any database I can reach (local stack at `056`; verified `account_event`,       │
+-- │ `closed_at` and `account_closure_gate` all ABSENT). **No assertion here has ever   │
+-- │ run.** They are authored against the DDL text at a cited ref, which is a weaker    │
+-- │ claim than green and must not be aggregated with one.                              │
+-- │ Reporting rule adopted 2026-08-03 after Architect flagged that a single total      │
+-- │ ("95 assertions") sitting beside a green ("22/22") invites reading all of them as  │
+-- │ measured — wrong about 57. **Quote two numbers, never one sum.**                   │
+-- │ Same defect as the (B5) it superseded: comparing what I had WRITTEN rather than    │
+-- │ what the database SAID. Applied there to an assertion, here to a status report.    │
+-- └───────────────────────────────────────────────────────────────────────────────────┘
+--
+-- ┌─ ⟦EXPECTED STACK⟧ — READ BEFORE INTERPRETING ANY RESULT FROM THIS FILE ──────────┐
+-- │ **A RESULT FROM THIS BATTERY IS UNINTERPRETABLE WITHOUT THE MIGRATION SET IT RAN │
+-- │ AGAINST.** A red cannot be distinguished from "this DB predates the change"; a    │
+-- │ green cannot be distinguished from "this DB already had it". Report the applied   │
+-- │ set alongside the result, every run — `select max(version) from                   │
+-- │ supabase_migrations.schema_migrations;`                                           │
+-- │                                                                                   │
+-- │ EXPECTED STACK: `058`-applied.                                                      │
+-- │ `closed_at` + close gate + currency conjunct + transfer-in fences + the transiti
+-- │   onal sync trigger, with `is_active` STILL PRESENT. Below `058`: all RED (no co
+-- │   lumn). At/above `059`: (P1) RED because `is_active` is gone — this file is onl
+-- │   y meaningful in the `058`-applied, pre-`059` window.
+-- │                                                                                   │
+-- │ ⚠ SECOND STATE VARIABLE, added after it bit us: **WHICH BRANCH / WORKTREE.** A     │
+-- │ FILE read is branch-dependent, so "I read the migration" is not a fixed referent   │
+-- │ either. Cite migrations by COMMIT REF, never by working-tree path:                 │
+-- │   git show <ref>:supabase/migrations/<file>                                        │
+-- │ So a claim needs THREE coordinates, not one: DATABASE STATE (this block) +         │
+-- │ ARTIFACT REF + the assertion itself. Two of the three bit this review.             │
+-- │                                                                                   │
+-- │ Convention follows `self209_close_gate.sql`'s ⟦WIRE-VALIDATE⟧ note. Generalized    │
+-- │ to every file 2026-08-03 after I reported a pre-`056` database's expected red as   │
+-- │ a code defect — the error was mine and this header is the fence on repeating it.   │
+-- └───────────────────────────────────────────────────────────────────────────────────┘
+--
+-- POSTURE (SECURITY §4.5): SYNTHETIC ONLY — fixed-UUID tenants; NO PII / no real account
+--   numbers (SD-15) / no real Plaid tokens (SD-03) / no prod data. Rolled-back txn.
+--   This file requires NO `supabase db reset` and drops no column — it seeds and rolls back
+--   in place. (The COLUMN DROP lives in `059`; see that file's scratch-DB note.)
+--
+-- ⟦FIXTURE-VERIFIED 2026-08-03⟧ The DDL does not exist yet, so NO assertion below has run.
+--   What HAS run against the live local DB in a rolled-back txn: every seed statement, and
+--   the three probes that give this file its discriminating power. Measured, not assumed:
+--     · :unp (unpriced holding) → QUANTITY reads 10.00000000, MARKET VALUE reads 0. The
+--       (B8) fail-open trap is REAL on this schema, not merely argued from the ADR.
+--     · :asof                   → 800.0000 as of 2026-05-31, 0.0000 as of 2026-06-30.
+--     · :tiny                   → 0.0001 survives numeric(20,4).
+--   A fixture whose violators do not actually violate yields assertions that cannot fail.
+--   One real defect was caught by that run: account_type 'brokerage' violates
+--   account_account_type_check (vocabulary: depository/investment/retirement/crypto/
+--   manual_other/real_estate/liability) — fixed to 'investment'.
+--
+-- ⟦WIRE — raise messages PROVISIONAL per Architect 2026-08-03⟧ bound ONCE below. Patterns
+--   are held deliberately loose (the discriminating phrase only) until Architect pins the
+--   literals in the DDL header. Rebind there, never inline.
+-- =====================================================================
+
+begin;
+
+\ir ../_fixtures/rls_verbs.psql
+
+-- ---------------------------------------------------------------------
+-- ⟦WIRE⟧ Architect confirmed THREE DISTINGUISHABLE gate messages and PER-TABLE transfer-in
+--   messages, for the reason (B5) asserts: an assertion that cannot identify which leg
+--   fired proves less than it appears to. `054` is the cited distinct-message precedent.
+-- ---------------------------------------------------------------------
+-- ⟦WIRE-BOUND 2026-08-03 against the REAL DDL at `407b190` — verified by reading
+--   `git show 407b190:supabase/migrations/058_account_closure.sql`, not from a summary.
+--   THREE corrections the rebinding forced, all of which would have produced wrong results:
+--     · the fence message interpolates `tg_table_name`, which is the BARE table name — my
+--       patterns said `(pfin.account_trans)` and the actual text is `(account_trans)`.
+--       A schema-qualified pattern matches NOTHING and every fence assertion goes red for
+--       a reason unrelated to the fence.
+--     · trigger names carry NO `trg_` prefix — see the inversion block.
+--     · the gate has FOUR raises, not three. See (B4b).⟧
+\set m_gate_holdings   '%closure blocked%leg 1 of 3: holdings%'
+\set m_gate_cash       '%closure blocked%leg 2 of 3: cash%'
+\set m_gate_activity   '%closure blocked%leg 3 of 3: post-closure activity%'
+\set m_gate_future     '%closure blocked%future closed_at%not-in-the-future%'
+\set m_fence_trans     '%write blocked%is closed (account_trans)%'
+\set m_fence_bal       '%write blocked%is closed (account_balance_checkpoint)%'
+\set m_fence_hold      '%write blocked%is closed (holdings_checkpoint)%'
+\set m_currency_frozen '%currency is immutable on a closed account%'
+
+-- plan = 48: BLOCK B 17 · C 10 · S 7 · P 5 · W 6 · G 3 (+G3, the inversion-reversal check —
+-- which must stay LAST and OUTSIDE any savepoint; see its own note). Recorded so a silent plan-edit — the
+-- cheapest way to make a battery green — shows up in review as an arithmetic change.
+select plan(48);
+
+select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
+
+-- ⟦CARRIER REBOUND at `e88b76c` — EVERY closure in this file now needs TWO `set local`s in
+--   the same transaction, not one. The `account_event` AFTER writer RAISES if
+--   `pfin.reason_code` is unset, and it is MANDATORY, never defaulted. Without this every
+--   one of the 12 closure statements below fails — and it would fail with the WRITER's
+--   message, not the gate's, so (B1)/(B6a)/(B9) would go red for a cause that has nothing
+--   to do with what they assert. Set once here at the txn level; individual assertions
+--   override it only where the point is its ABSENCE (see (W2)).⟧
+select set_config('pfin.reason_code', 'no_longer_used', true);
+
+-- ---------------------------------------------------------------------
+-- FIXTURE (PRIVILEGED postgres — RLS-bypassed; the sole seed path).
+--   Each account isolates exactly ONE property of the gate.
+-- ---------------------------------------------------------------------
+insert into auth.users (id) values (:'ta'), (:'tb');
+
+-- A global PRICED equity and a global UNPRICED equity. The unpriced one is the fail-open
+-- trap: a MARKET-VALUE zero test drops its NULL price term via SUM and reads the account as
+-- empty. Only a QUANTITY-based test sees it (ADR-042 D3: "price coverage is not a security
+-- control"). Verified live: quantity 10.00000000 vs market value 0.
+insert into pfin.asset (users_id, asset_type, pricing_source, symbol, name)
+  values (null, 'equity', 'market_feed', 'QAPRC', 'Priced Equity') returning asset_id as a_priced \gset
+insert into pfin.asset (users_id, asset_type, pricing_source, symbol, name)
+  values (null, 'equity', 'market_feed', 'QAUNP', 'Unpriced Equity') returning asset_id as a_unpriced \gset
+insert into pfin.eod_price (asset_id, price_date, source, price)
+  values (:a_priced, '2026-01-31', 'market_feed', 100.0000);
+-- NOTE: NO eod_price row for :a_unpriced. That absence IS the assertion surface.
+
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
+  values (:'ta', 'zero-open', 'depository', 'household', 'taxable') returning account_id as z \gset
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
+  values (:'ta', 'nonzero-cash', 'depository', 'household', 'taxable') returning account_id as cash \gset
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
+  values (:'ta', 'nonzero-holdings', 'investment', 'household', 'taxable') returning account_id as hold \gset
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
+  values (:'ta', 'unpriced-holdings', 'investment', 'household', 'taxable') returning account_id as unp \gset
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
+  values (:'ta', 'asof-zeroed-in-june', 'depository', 'household', 'taxable') returning account_id as asof \gset
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
+  values (:'ta', 'activity-after', 'depository', 'household', 'taxable') returning account_id as post \gset
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
+  values (:'ta', 'sub-cent-residue', 'depository', 'household', 'taxable') returning account_id as tiny \gset
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
+  values (:'ta', 'stays-open', 'depository', 'household', 'taxable') returning account_id as open1 \gset
+-- :wopen — DEDICATED TO BLOCK W, and the dedication is the fix for a real defect.
+--   BLOCK W's assertions are about the AUDIT WRITER, so they must reach it: they close an
+--   account and inspect what was recorded. They previously borrowed :open1 — but C5a/C5b/C5c
+--   insert into :open1 at 2026-08-01 as their non-vacuity companions, OUTSIDE any savepoint.
+--   Closing at 2026-06-30 then trips the gate's leg 3 (post-closure activity) and the writer
+--   is never reached, so W1/W2/W3a/W3b went red for a cause unrelated to what they assert —
+--   including the ⭐ forgery assertion.
+--   ⚑ ITS OWN CLASS: CROSS-BLOCK FIXTURE COUPLING ON AN APPEND-ONLY TABLE. Distinct from
+--     (B4b) (an unenumerated raise) and (B4c) (a raise unreachable by data), and the remedy is
+--     different in kind: B4b/B4c were fixed by RESETTING the fixture, which cannot work here
+--     because the leaking state is an immutable account_trans row (004, no DELETE) — it is
+--     UNRESETTABLE BY CONSTRUCTION. Partition is the only remedy.
+--   ⚠ A PLAN-COUNT GUARD STRUCTURALLY CANNOT CATCH THIS. The assertions execute; they simply
+--     go red for the wrong reason. "Nothing failed" and "nothing ran" are distinguishable by
+--     counting — "failed for an unrelated cause" is not.
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
+  values (:'ta', 'w-audit-writer', 'depository', 'household', 'taxable') returning account_id as wopen \gset
+
+insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_of_date, source)
+  values (:cash, 500.0000, 'USD', '2026-01-31', 'seed');
+insert into pfin.holdings_checkpoint (account_id, symbol, as_of_date, quantity, balance, security_id)
+  values (:hold, 'QAPRC', '2026-01-31', 10, 1000, :a_priced);
+insert into pfin.holdings_checkpoint (account_id, symbol, as_of_date, quantity, balance, security_id)
+  values (:unp, 'QAUNP', '2026-01-31', 10, 0, :a_unpriced);
+insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_of_date, source)
+  values (:asof, 800.0000, 'USD', '2026-04-30', 'seed');
+insert into pfin.account_trans (account_id, transaction_date, amount, quantity, vendor)
+  values (:asof, '2026-06-15', -800.0000, 0, 'zeroed');
+insert into pfin.account_trans (account_id, transaction_date, amount, quantity, vendor)
+  values (:post, '2026-07-10', 0.0000, 0, 'post-closure activity');
+insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_of_date, source)
+  values (:tiny, 0.0001, 'USD', '2026-01-31', 'seed');
+
+-- =====================================================================
+-- BLOCK B — THE THREE-LEG CLOSE GATE  (Sec revised cases 1 + 2)
+--   Invariant (ADR-042 D3): a closed account's position AS OF closed_at is zero, and no
+--   activity is dated after closed_at. Enforced at the NULL -> NOT NULL transition.
+--   Under two-phase these run through THE REAL PRODUCTION CONTROL — the BEFORE UPDATE
+--   trigger on pfin.account — not a migration-time proxy of it.
+-- =====================================================================
+
+select _rls.set_tenant(:'ta'::uuid);
+
+-- (B1) SEC CASE 2, and the non-vacuous positive the whole block rests on. Without it every
+--   refusal below could be a blanket refusal of all closures, indistinguishable from a
+--   broken column.
+select lives_ok(
+  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = %s $$, :z),
+  '(B1) SEC CASE 2: a zero-valued account CLOSES through the real control. NON-VACUOUS ANCHOR — without it, (B2)-(B8) would all pass against a gate that refuses everything'
+);
+-- (B1b) …and the closure is AUDITED. Sec case 2 is two properties, not one.
+select set_config('role', 'postgres', true);
+select is(
+  (select count(*)::int from pfin.account_event where account_id = :z and event_type = 'closed'),
+  1,
+  '(B1b) SEC CASE 2, second half: the successful closure WROTE a pfin.account_event row. A gate that admits the right closures but records none of them satisfies the invariant and leaves no trail — and the audit surface is the only durable evidence of which accounts were dispositioned and by whom'
+);
+select _rls.set_tenant(:'ta'::uuid);
+
+-- (B2)/(B3)/(B4) SEC CASE 1 — the three legs, each on its own message.
+select throws_like(
+  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = %s $$, :cash),
+  :'m_gate_cash',
+  '(B2) SEC CASE 1, CASH LEG: closing an account holding 500 cash as of closed_at is REFUSED by the gate trigger'
+);
+select throws_like(
+  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = %s $$, :hold),
+  :'m_gate_holdings',
+  '(B3) SEC CASE 1, HOLDINGS LEG: closing an account holding 10 shares as of closed_at is REFUSED'
+);
+select throws_like(
+  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = %s $$, :post),
+  :'m_gate_activity',
+  '(B4) SEC CASE 1, POST-ACTIVITY LEG: closing with an entry dated 2026-07-10 (after the proposed closed_at) is REFUSED. This is the leg most likely to be omitted — at closed_at=now() it is trivially satisfied, so ONLY a backdated closure exercises it'
+);
+
+-- (B4b) THE FOURTH GATE CHECK — a PLAUSIBILITY BOUND I did not know existed until I read
+--   the DDL. `058` raises on a closed_at in the FUTURE. Architect's comment records why it
+--   lives in the trigger and not a CHECK: now() is STABLE, so a temporal CHECK is a
+--   dump/restore foot-gun. And it is deliberately ONE-SIDED — `closed_at >= created_at`
+--   would be wrong, because a historical account may legitimately be closed as of a date
+--   before its row existed.
+--   ⚑ This assertion exists because I ENUMERATED the raises rather than assuming the three
+--     legs I had been told about were all of them. A fence with no test is the defect this
+--     battery was created for; I nearly shipped one.
+--   ⚑ ORDERING: (B1) already closed `:z`, and the gate fires ONLY on the into-closed
+--     transition (`old.closed_at is null and new.closed_at is not null`). Without reopening
+--     first this UPDATE is closed->closed, the branch is skipped, and the assertion reports
+--     "no exception thrown" — a GREEN GATE read as a missing one. Reopened inside a savepoint
+--     so (B9b)'s `reopened` count is not inflated; reopening is deliberately ungated.
+savepoint sp_future_bound;
+update pfin.account set closed_at = null where account_id = :z;
+select throws_like(
+  format($$ update pfin.account set closed_at = (now() + interval '1 year') where account_id = %s $$, :z),
+  :'m_gate_future',
+  '(B4b) PLAUSIBILITY BOUND: a closed_at dated one year in the FUTURE is REFUSED. One-sided by design — a past closed_at before created_at is legitimate for a historical account, so only the future bound is fenced. Found by enumerating the gate''s raises against the DDL, not by working from the three legs I was told about'
+);
+rollback to savepoint sp_future_bound;
+
+-- (B5) LEG INDEPENDENCE. B2/B3/B4 are three assertions only if their messages are three
+--   messages. Under one merged 'closure gate failed' each would pass on ANY leg's fire and
+--   this file would assert one thing three times while appearing to assert three.
+select is(
+  (select (length(pg_get_functiondef(p.oid))
+           - length(replace(pg_get_functiondef(p.oid), 'raise exception', '')))
+          / length('raise exception')
+     from pg_proc p where p.pronamespace = 'pfin'::regnamespace
+      and p.proname = 'fn_account_closure_gate'),
+  7,
+  '(B5) RAISE-SITE COUNT — the gate has EXACTLY 7 raise sites. ⚑ WAS 6; the seventh is the ADR-042 Amendment 2 B4 immutability conjunct (closed_at cannot be re-dated on an already-closed account), F/CTO-ratified 2026-08-03. Read, then asserted — per this assertion own instruction — rather than bumped to make the red go away. ⚑ REPLACES a version keyed on the `leg N of 3` tag, which was LOSSY: raises 4 and 5 BOTH end `(leg 2 of 3: cash)`, so a distinct-tag check finds 3 values across 6 messages and REPORTS SUCCESS. The tag distinguishes LEGS; I was using it to distinguish RAISES. Counting sites fails when the gate changes SHAPE, not merely when a message changes value — the same correction as `drop trigger if exists` -> bare `drop trigger`. A red here means a raise was added or removed: go read it, then assert it'
+);
+-- (B4c) ⭐ THE TOTALITY-CONTRACT RAISE — reachable ONLY by a code edit, never by data.
+--   `058` raises if fn_account_cash_as_of returns NO ROW for the account, because `056`'s
+--   contract is that it is TOTAL over pfin.account. A missing row means that contract is
+--   broken, and the gate refuses rather than treating absent-as-zero.
+--   ⚑ WHY I MISSED IT, and it generalises: every OTHER raise is reachable by setting up a
+--     DATA STATE. This one is reachable only by BREAKING `056`. So the method that correctly
+--     found (B4b) — "enumerate the states I must construct" — CANNOT surface it, because
+--     there is no state that produces it. **A fence against a code-edit hazard is unreachable
+--     from data fixtures by construction**, and is therefore systematically missed by
+--     fixture-driven enumeration. Found by Architect re-running my own raise-enumeration
+--     against my count.
+--   ⟦HARNESS PRECONDITIONS VERIFIED 2026-08-03, not assumed (Architect asked for both):
+--     · the test role CAN `create or replace` a function in pfin inside a txn — measured
+--     · the replacement ROLLS BACK — measured, and independently confirmed by (E12) in the
+--       `056` battery, whose sentinel did not leak: the live fn is still the real one.⟧
+-- ⚠ STATUS: THIS ASSERTION HAS NEVER RUN AND CANNOT AT THE CURRENT STACK. It sabotages
+--   `056` and asserts THE GATE refuses; the gate does not exist at migration `056`. Stated
+--   here so its status is legible without deriving it from the expected-stack block.
+-- ⚠ PENDING REBIND — Sec ruled option A 2026-08-03: the NULL fail-open folds into THIS
+--   raise (`if not found or v_cash is null`) rather than becoming a seventh distinct one,
+--   because both causes mean the same thing to an operator: **`056` is wrong, fix `056`.**
+--   ⟦FINAL RAISE TEXT — Architect `2cd4457`, for a mechanical rebind (NOT yet applied here;
+--     holding until Sec rules on the `057` writer so I rebind once):
+--       'account closure blocked: account % got no usable cash balance from
+--        fn_account_cash_as_of (row %, value %) — … (leg 2 of 3: cash)'
+--     with `row MISSING`/`row present` and `value NULL`. **Raise count stays 6**, so the
+--     (B5) raise-site assertion is unchanged — Sec ruled this is one expression inside one
+--     raise, not a seventh code path. And the two causes render DISTINGUISHABLY, so both
+--     (B4c) halves can assert the SAME raise and still tell each other apart — which is
+--     what makes "one raise, two seeded conditions" testable rather than merely stated.⟧
+--   >> CONSEQUENCE FOR THIS ASSERTION: ONE RAISE, **TWO SEEDED CONDITIONS**. It must be
+--      shown to fire on a MISSING ROW (below) *and* on a NULL `balance_native`. Only the
+--      first is written, because Architect has not yet committed option A and I will not
+--      harden against the superseded gate. **Asserting one cause of a two-cause raise is
+--      testing half a guard** — the exact shape this battery exists to remove — so this
+--      note stands in for the missing half until the rebind, rather than the gap being
+--      invisible.
+--   >> AND THE STAKES ARE THE INVERSE OF WHAT THEY LOOK LIKE: of the gate's runtime guards
+--      this was the LAST one untested, and it is the one guarding the contract MOST likely
+--      to break silently — someone adding a filter to `056`. The untested guard was the
+--      load-bearing one.
+select set_config('role', 'postgres', true);
+savepoint sp_totality;
+-- `:z` cannot be interpolated INSIDE a dollar-quoted body — psql does not substitute
+-- variables there, and closing the quote to concatenate is invalid: `as` takes a single
+-- string literal, not an expression. Build the whole statement with format() and \gexec.
+select format($fmt$
+create or replace function pfin.fn_account_cash_as_of(p_as_of date)
+returns table (account_id bigint, balance_native numeric)
+language sql security invoker stable set search_path = '' as $totality$
+  select acc.account_id, 0.0000::numeric from pfin.account acc where acc.account_id <> %s
+$totality$
+$fmt$, :z) \gexec
+select _rls.set_tenant(:'ta'::uuid);
+-- Same into-closed ordering as (B4b): reopen so the gate is actually entered. Inside
+-- sp_totality, so both this and the sabotage are rolled back together.
+update pfin.account set closed_at = null where account_id = :z;
+select throws_like(
+  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = %s $$, :z),
+  '%got no usable cash balance from fn_account_cash_as_of%TOTAL over pfin.account%',
+  '(B4c) TOTALITY BREACH: with fn_account_cash_as_of sabotaged to omit this account, the gate REFUSES rather than reading absent-as-zero. Fails CLOSED on a broken upstream contract — the alternative is a closure admitted because the measure went silent. This is the CP4 absent-row-vs-zero-row class at the FENCE layer, and the only gate raise no data fixture can reach'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint sp_totality;
+select _rls.set_tenant(:'ta'::uuid);
+
+-- (B6) THE AS-OF PROPERTY — the entire point of the dated model. :asof held 800 through May
+--   and was zeroed 2026-06-15. Verified live: 800.0000 @05-31, 0.0000 @06-30.
+select lives_ok(
+  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = %s $$, :asof),
+  '(B6a) AS-OF: closing :asof dated 2026-06-30 SUCCEEDS — it is zero as of that instant'
+);
+-- ⚑ REOPEN FIRST — required by the Amendment 2 B4 immutability fence, and it makes (B6b) a
+--   STRONGER assertion rather than a workaround. :asof is closed by (B6a), and a closed
+--   account's date is now immutable, so a bare re-date would be refused by the FENCE and
+--   (B6b) would pass on the wrong raise — proving the fence rather than the as-of property it
+--   exists to prove. Reopening re-enters the gate, so the cash leg is genuinely re-evaluated
+--   at the new date. This IS the correction path Decision 3 ratifies: reopen -> edit ->
+--   re-close, which RE-PROVES the invariant instead of assuming it survived.
+--   Inside a SAVEPOINT so the reopen does not leak: (S1)/(S2) later assert :asof is CLOSED,
+--   and an un-rolled-back reopen silently changes what they measure — the cross-block
+--   coupling this file already had to partition BLOCK W for.
+savepoint sp_b6b;
+select set_config('pfin.reason_code', 'no_longer_used', true);
+update pfin.account set closed_at = null where account_id = :asof;
+select throws_like(
+  format($$ update pfin.account set closed_at = '2026-05-31'::timestamptz where account_id = %s $$, :asof),
+  :'m_gate_cash',
+  '(B6b) AS-OF, THE DEFECT THE MODEL REMOVES: the SAME account closed dated 2026-05-31 is REFUSED — it held 800 then. A boolean flag cannot express this distinction, which is precisely why is_active could not be retained as a derived column'
+);
+rollback to savepoint sp_b6b;
+
+-- (B7) EXACT ZERO, NO TOLERANCE. `056`'s contract: numeric(20,4) addition only, no division
+--   and no multiplier, so exact zero is exactly representable and the gate needs no epsilon.
+select throws_like(
+  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = %s $$, :tiny),
+  :'m_gate_cash',
+  '(B7) EXACT ZERO, NO TOLERANCE: a 0.0001 cash residue is REFUSED. Any epsilon tolerance is an invented allowance on a surface whose arithmetic is exactly representable — this goes RED the moment one is introduced'
+);
+
+-- (B8) QUANTITY-NOT-VALUE. The fail-open trap, verified live (quantity 10, market value 0).
+select throws_like(
+  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = %s $$, :unp),
+  :'m_gate_holdings',
+  '(B8) QUANTITY-NOT-VALUE: 10 shares of an UNPRICED asset are REFUSED. A market-value gate reads this account as EMPTY and admits the closure, stranding a real position inside a closed account. This single assertion separates a gate that measures POSITION from one that trusts PRICE COVERAGE'
+);
+
+-- (B9) REOPEN IS UNGATED AND DELIBERATELY ASYMMETRIC (ADR-042 D3). Gating the exit would be
+--   incoherent: a closed account is already at zero by the gate that admitted it.
+select lives_ok(
+  format($$ update pfin.account set closed_at = null where account_id = %s $$, :z),
+  '(B9) REOPEN IS UNGATED: NOT NULL -> NULL succeeds. Asymmetric by design — closure entries are historical facts and are not un-booked; a reopened account starts at zero and is funded by new dated entries'
+);
+select set_config('role', 'postgres', true);
+-- (B9b) ⭐ REOPEN IS AUDITED TOO — Sec-required, and the half I was missing.
+--   (B1b) asserts CLOSING writes an account_event row. The vocabulary has TWO values and
+--   only one production path was even claimed, so `reopened` had no test at all.
+--   ⚑ WHY THIS PAIR IS THE ONLY THING IN THE SET THAT TESTS THE WRITER: every other
+--     account_event assertion — all 17 in `057` — inserts its OWN rows and checks the
+--     table's PROPERTIES. Those go green forever against a table nothing writes. **These
+--     two drive the PRODUCTION PATH and assert a row appears.** They are the standing form
+--     of the "what writes this?" sweep, and as of `2cd4457` they are the only assertions in
+--     the set that FAIL — because nothing writes account_event yet. That failure IS the
+--     finding, kept running rather than resolved as a one-time check.
+select is(
+  (select count(*)::int from pfin.account_event
+    where account_id = :z and event_type = 'reopened'),
+  1,
+  '(B9b) REOPEN IS AUDITED: clearing closed_at wrote a `reopened` account_event row. Without it the audit trail is one-directional and every reopen — the correction path the whole reject-all fence design depends on being visible — leaves no trace. Field-level shape binds AFTER THE WRITER LANDS — not merely after Sec''s actor ruling, because the reason_code carrier is unresolved and may change what the trigger writes; actor, reason_code and effective_date bind in ONE pass. ⚑ WHEN IT BINDS, THE LOAD-BEARING ASSERTION IS: actor derives auth.uid() FIRST, GUC second, RAISE third — a GUC-first order is a FORGEABLE SYSTEM IDENTITY in an append-only record, because `set local` is available to any session. And assert only that what is written matches its context; do NOT assert `system:` is reachable, since under the ratified model the operator dispositions as a user session and it may never be written'
+);
+update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = :z;  -- re-close for BLOCK C
+select _rls.set_tenant(:'ta'::uuid);
+
+-- (B10)/(B11) DECISION 4 — `currency` immutable on a closed account. Reachable because
+--   `003:124` grants authenticated table-level UPDATE with NO COLUMN LIST (verified live)
+--   and pfin is Data-API-exposed; updateAttributes' Zod schema is app-layer, not a control.
+select throws_like(
+  format($$ update pfin.account set currency = 'EUR' where account_id = %s $$, :z),
+  :'m_currency_frozen',
+  '(B10) D4: UPDATE currency on a CLOSED account is REFUSED. currency feeds the fn_compute_nav cash-leg FX multiplier, so changing it retroactively re-values every date INCLUDING closed_at — falsifying the very invariant that admitted the closure'
+);
+select lives_ok(
+  format($$ update pfin.account set name = 'renamed-while-closed' where account_id = %s $$, :z),
+  '(B11a) COLUMN-SCOPED: renaming a CLOSED account still SUCCEEDS -> (B10) fences the currency column, not the row. A whole-row freeze would pass (B10) while silently breaking every legitimate attribute correction'
+);
+select lives_ok(
+  format($$ update pfin.account set currency = 'EUR' where account_id = %s $$, :open1),
+  '(B11b) CLOSURE-SCOPED: UPDATE currency on an OPEN account still SUCCEEDS -> (B10) is closure-conditional, by design. The open-account restatement half is explicitly OUT OF SCOPE (BACKLOG §7.7); this pins it as genuinely out of scope rather than accidentally covered'
+);
+select set_config('role', 'postgres', true);
+
+-- =====================================================================
+-- BLOCK C — THE STANDING TRANSFER-IN FENCES  (Sec case 6, DB HALF ONLY)
+--   ⚑ SEC: CASE 6 SPLITS ACROSS TWO LAYERS AND THEY MUST NOT BE CONFLATED.
+--     The DATABASE REFUSES — trigger raise, asserted here.
+--     The RECORDING of the refusal is the ingest worker's skip-and-record loop plus a NEW
+--     named scalar COUNT key on the `040` view — APPLICATION LAYER, BACKEND-OWNED, and NOT
+--     a DB assertion. Asserting that the database records the refusal would fail for the
+--     right reason and read as a spec error. Asserting only the raise and calling case 6
+--     done would leave the quarantine path unproven.
+--     >> THIS FILE COVERS THE REFUSAL ONLY. The recording half is REPORTED AS AN OPEN GAP
+--        routed to Backend — it is not silently counted as covered here. Its requirements
+--        (a NEW key, not `transactions_skipped`; NULL != 0 so historical rows read "we
+--        weren't counting" rather than "nothing was refused") are Backend's to satisfy and
+--        need an integration-layer test, which pgTAP cannot provide.
+-- =====================================================================
+
+-- (C1) account_trans, AUTHENTICATED tier — grants INSERT to authenticated, so this reaches
+--   the TRIGGER. Matched on the raise text; a bare 42501 or P0001 would also match an ACL
+--   denial or an unrelated raise.
+select _rls.set_tenant(:'ta'::uuid);
+select throws_like(
+  format($$ insert into pfin.account_trans (account_id, transaction_date, amount, vendor)
+              values (%s, '2026-08-01', 25, 'transfer-in') $$, :z),
+  :'m_fence_trans',
+  '(C1) SEC CASE 6 (DB half), authenticated -> TRIGGER: the INSERT reaches the trigger (the grant exists) and is refused BY THE TRIGGER, not by a missing grant'
+);
+select set_config('role', 'postgres', true);
+
+-- (C2) account_trans, SERVICE_ROLE tier — the tier provider sync actually runs at.
+grant usage on schema pfin to service_role;
+grant insert on pfin.account_trans to service_role;
+select set_config('role', 'service_role', true);
+select throws_like(
+  format($$ insert into pfin.account_trans (account_id, transaction_date, amount, vendor)
+              values (%s, '2026-08-01', 25, 'sync-transfer-in') $$, :z),
+  :'m_fence_trans',
+  '(C2) CROSS-TIER: service_role INSERT into a closed account is refused BY THE TRIGGER (RLS-bypass is not trigger-bypass, `004:165`). This is the tier provider sync runs at — the fence is only load-bearing if it holds here'
+);
+
+-- (C3)/(C4) the checkpoint tables, at service_role. ⚑ authenticated holds SELECT ONLY on
+--   both (verified live), so an authenticated probe is refused at the ACL and would
+--   exercise the grant rather than the fence.
+select throws_like(
+  format($$ insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_of_date, source)
+              values (%s, 25.0000, 'USD', '2026-08-01', 'sync') $$, :z),
+  :'m_fence_bal',
+  '(C3) account_balance_checkpoint INSERT into a closed account refused BY THE TRIGGER at service_role. Driven at service_role deliberately: an authenticated probe hits the SELECT-only ACL first and reports a grant as a fence'
+);
+select throws_like(
+  format($$ insert into pfin.holdings_checkpoint (account_id, symbol, as_of_date, quantity, balance, security_id)
+              values (%s, 'QAPRC', '2026-08-01', 5, 500, %s) $$, :z, :a_priced),
+  :'m_fence_hold',
+  '(C4) holdings_checkpoint INSERT into a closed account refused BY THE TRIGGER at service_role (same layer discipline as C3). Per-table messages confirmed by Architect so (C2)/(C3)/(C4) identify WHICH fence fired'
+);
+
+-- (C5) NON-VACUOUS COMPANIONS — the identical writes into an OPEN account SUCCEED.
+select lives_ok(
+  format($$ insert into pfin.account_trans (account_id, transaction_date, amount, vendor)
+              values (%s, '2026-08-01', 25, 'open-ok') $$, :open1),
+  '(C5a) NON-VACUOUS: the identical account_trans INSERT into an OPEN account SUCCEEDS -> (C1)/(C2) are closure-driven refusals, not malformed statements'
+);
+select lives_ok(
+  format($$ insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_of_date, source)
+              values (%s, 25.0000, 'USD', '2026-08-01', 'sync') $$, :open1),
+  '(C5b) NON-VACUOUS companion for (C3)'
+);
+select lives_ok(
+  format($$ insert into pfin.holdings_checkpoint (account_id, symbol, as_of_date, quantity, balance, security_id)
+              values (%s, 'QAPRC', '2026-08-01', 5, 500, %s) $$, :open1, :a_priced),
+  '(C5c) NON-VACUOUS companion for (C4)'
+);
+select set_config('role', 'postgres', true);
+
+-- (C6) FENCE SCOPE — the EXEMPT tables must STILL ACCEPT writes against a closed account.
+--   ADR-042 D3 names every exemption's dependency; these pin them so an over-broadened
+--   fence is visible. Nothing else in this file tests the fence's OUTER boundary.
+select lives_ok(
+  format($$ insert into pfin.account_trans_annotation (trans_id, sub_cat_id)
+              values ((select trans_id from pfin.account_trans where account_id = %s limit 1), null) $$, :open1),
+  '(C6a) EXEMPTION HOLDS — account_trans_annotation is NOT fenced. Dependency: `004` immutability of account_trans.account_id + amount, so an annotation can only re-classify a value it cannot change'
+);
+select ok(
+  (select count(*)::int from pg_trigger t join pg_class c on c.oid = t.tgrelid
+     join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'pfin' and c.relname in ('account_trans_split', 'account_trans_annotation')
+      and t.tgname like '%block_closed_account%' and not t.tgisinternal) = 0,
+  '(C6b) EXEMPTION HOLDS — neither account_trans_split nor account_trans_annotation carries a closed-ACCOUNT fence. ⚑ PATTERN NARROWED: it was `%closed%`, which OVER-MATCHED `account_trans_annotation_freeze_closed` (037) — a GL-PERIOD-close trigger, an unrelated concept sharing the word. Pre-existing false positive, not caused by 058. Now keyed on the fence naming 058 actually uses (`%block_closed_account%`), which still catches an over-broadened fence but cannot catch period-close. split''s dependency is `029`''s Sigma=parent deferred constraint. Asserted STRUCTURALLY because a passing INSERT could also mean the fence exists but did not fire'
+);
+
+-- (C7) `042` MUST NOT CLEAR closed_at ON RE-LAND. Landing is concept 3; reopening is
+--   concept 2; a concept-3 action must not silently perform a concept-2 transition.
+select ok(
+  (select pg_get_functiondef(p.oid) not like '%closed_at = null%'
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'pfin' and p.proname = 'fn_land_linked_accounts'),
+  '(C7) fn_land_linked_accounts (`042`) does NOT clear closed_at on re-land -> a landing action cannot silently perform a reopen. Also closes the unaudited-silent-reopen finding. SOURCE-LEVEL, not behavioural — the behavioural path needs a full provider payload; flagged as such in the report'
+);
+
+-- =====================================================================
+-- BLOCK S — THE TRANSITIONAL SYNC TRIGGER  (Sec case 7 — CONFIRMED, not conditional)
+--   Sec required this: without it, every account the operator correctly closes through the
+--   gate lands `closed_at` SET while `is_active` stays TRUE — and `059`'s reconciliation
+--   then ABORTS ON EXACTLY THE ACCOUNTS THAT WERE DISPOSITIONED PROPERLY. The trigger makes
+--   the biconditional hold BY CONSTRUCTION across the `058`->`059` window.
+--   It lives in `058` and is DROPPED in `059`.
+-- =====================================================================
+select _rls.set_tenant(:'ta'::uuid);
+-- (S1) closing sets BOTH.
+select is(
+  (select is_active from pfin.account where account_id = :asof),
+  false,
+  '(S1) SEC CASE 7: closing :asof through the gate ALSO set is_active = false. Without this sync, `059` aborts on precisely the accounts the operator dispositioned CORRECTLY — the reconciliation would fire on good work and pass over nothing'
+);
+-- (S2) clearing sets BOTH back.
+select lives_ok(
+  format($$ update pfin.account set closed_at = null where account_id = %s $$, :asof),
+  '(S2a) reopening :asof succeeds (reopen is ungated)'
+);
+select set_config('role', 'postgres', true);
+select is(
+  (select is_active from pfin.account where account_id = :asof),
+  true,
+  '(S2b) SEC CASE 7, reverse direction: clearing closed_at set is_active back to TRUE. A one-directional sync would leave reopened accounts inactive and `059` would abort on those instead — the same defect mirrored'
+);
+-- (S3) THE BICONDITIONAL, over every row — the property `059` will assert and the reason
+--   this trigger exists. Asserted here too so a sync gap surfaces in `058`'s own PR rather
+--   than as an unexplained `059` abort one migration later.
+select is(
+  (select count(*)::int from pfin.account
+    where (is_active = false) is distinct from (closed_at is not null)),
+  0,
+  '(S3) THE BICONDITIONAL HOLDS across every row after all of BLOCK B''s closures and reopens: is_active = false <=> closed_at IS NOT NULL. This is exactly what `059` asserts — checked here so a sync gap surfaces in `058`''s own PR instead of as an unexplained `059` abort a migration later'
+);
+
+-- (S4) ⚑ THE SYNC TRIGGER IS ONE-DIRECTIONAL, AND THIS IS A GATE-BYPASS ASSERTION.
+--   Architect's precision, relayed 2026-08-03: a BIDIRECTIONAL sync would let a user close
+--   an account by flipping the legacy boolean — `closed_at` would follow, and THE THREE-LEG
+--   GATE WOULD NEVER RUN. That is not a tidiness concern: `003:124` grants authenticated
+--   table-level UPDATE on pfin.account with NO COLUMN LIST (verified live), and pfin is
+--   Data-API-exposed, so `update pfin.account set is_active = false` is reachable from a
+--   tenant session TODAY. A bidirectional trigger would turn that statement into an
+--   unvalidated closure of a value-bearing account — the exact write the entire ADR exists
+--   to make impossible.
+--   Driven at AUTHENTICATED deliberately: that is the tier the bypass would be reached from,
+--   and a privileged probe would not prove the tenant-facing path is closed.
+-- ⚑⚑ INVERTED 2026-08-04 — MEASURED, AND IT CONTRADICTS A SEC-REVIEWED EXPECTATION.
+--   ⚠ FLAGGED FOR SEC CONFIRMATION, not silently rewritten. This block encoded Sec case 3:
+--     that the is_active flip is REACHABLE during the 058->059 window, leaves a VISIBLE
+--     biconditional mismatch, and that 059's reconciliation aborts on exactly that row.
+--   MEASURED BEHAVIOUR: the flip is REJECTED AT THE WRITE. `account_closure_biconditional`
+--     evaluates is_active = (closed_at is null); an is_active-only UPDATE leaves closed_at
+--     alone, so false = true and the CHECK refuses. NOT VALID skips PRE-EXISTING rows only —
+--     it still enforces every new write.
+--   ⚑ SO THE OUTCOME IS STRICTLY STRONGER THAN SEC CASE 3 ANTICIPATED: rather than leaving a
+--     mismatch for 059 to abort on, THE MISMATCH CANNOT BE CREATED AT ALL. The window Sec
+--     worried about is closed by the CHECK rather than by the reconciliation.
+--   ⚑ DISCHARGED, NOT INVERTED-IN-SUBSTANCE — the fence Sec asked for exists; it is simply a
+--     different (earlier) mechanism than the one the case assumed. (S4b)'s one-directionality
+--     claim SURVIVES and is now proven by the refusal itself: if the sync were bidirectional,
+--     the flip would have set closed_at and satisfied the biconditional, so it would SUCCEED.
+--     The rejection is therefore evidence FOR one-directionality, not merely compatible with it.
+--   Driven at AUTHENTICATED deliberately: that is the tier the bypass would be reached from,
+--   and a privileged probe would not prove the tenant-facing path is closed.
+select _rls.set_tenant(:'ta'::uuid);
+select throws_ok(
+  format($$ update pfin.account set is_active = false where account_id = %s $$, :cash),
+  '23514',
+  null,
+  '(S4a) GATE-BYPASS IS CLOSED AT THE WRITE — THIS STATEMENT MUST FAIL, AND ITS FAILURE IS THE ASSERTION. A tenant session CANNOT flip is_active directly: account_closure_biconditional refuses is_active=false while closed_at is null, so the write is REJECTED (23514) rather than landing. Positive evidence for ONE-DIRECTIONALITY, not merely compatible with it — a BIDIRECTIONAL sync would have set closed_at, SATISFIED the CHECK, and let the flip SUCCEED, closing a value-bearing account with the three-leg gate never running. **THIS IS THE ASSERTION STANDING BETWEEN THE LEGACY COLUMN AND AN UNVALIDATED CLOSURE** — (S4b) corroborates it and cannot replace it. Inverted 2026-08-04: Sec case 3 expected reachable-but-visible; measured, the mismatch cannot be created at all'
+);
+select set_config('role', 'postgres', true);
+-- (S4b) ⚑ DEMOTED 2026-08-04 (Sec F5(a)) — CORROBORATION, NOT THE FENCE.
+--   It USED to carry the load-bearing sentence, from before (S4a) was inverted. Post-inversion
+--   that sentence belongs to (S4a) and has been moved there. **The demotion is the finding, not
+--   a wording tidy:** left as it was, the next reader treats (S4b) as the fence and (S4a) as
+--   redundant setup — and DELETING (S4a) is what actually opens the hole.
+--   ⚠ AND IT IS WEAKER THAN IT LOOKS, which is why it must not be relied on: (S4a) is a
+--     `throws_ok`, so the statement was ROLLED BACK. This assertion therefore reads closed_at
+--     on a row THAT WAS NEVER WRITTEN. It passes on TRANSACTION SEMANTICS, not on trigger
+--     directionality — it would pass identically against a bidirectional trigger, because the
+--     write never landed either way. It is retained as a post-condition (a refused write left
+--     NO trace, not a partial one), and for exactly nothing more.
+--   ⚑ GENERAL FORM, worth carrying: **a post-condition after a refused write is corroboration
+--     of the refusal, never evidence about the mechanism that refused it.** Any assertion
+--     following a `throws_ok` on the same row inherits this limit.
+select is(
+  (select closed_at from pfin.account where account_id = :cash),
+  null::timestamptz,
+  '(S4b) CORROBORATION ONLY: after (S4a)''s REFUSED flip, closed_at is still NULL — the rejected write left no partial trace. ⚠ THIS ASSERTION IS NOT THE FENCE. (S4a) is. Because (S4a) is a throws_ok the statement was rolled back, so this reads a row that was never written: it passes on transaction semantics and would pass identically against a BIDIRECTIONAL trigger. Do not treat it as evidence of one-directionality, and do not delete (S4a) on the strength of it'
+);
+-- (S4c) ⚑ INVERTED WITH (S4a) — NO mismatched row exists, because none can be created.
+--   It asserted the flip leaves a visible mismatch for `059`'s reconciliation to abort on.
+--   With the flip refused at the write, the row never enters the mismatched state at all.
+--   ⚠ THIS DOES NOT MAKE `059`'s RECONCILIATION DEAD CODE, and that is the load-bearing point:
+--     the CHECK is NOT VALID, so it fences NEW writes while saying nothing about rows that
+--     PREDATE `058`. The reconciliation still has to run against exactly those. What changed
+--     is that the window cannot GROW after `058` lands — which is a containment result, not a
+--     removal of the obligation. Deleting the reconciliation on the strength of this assertion
+--     would be the error it is worded to prevent.
+select is(
+  (select count(*)::int from pfin.account
+    where account_id = :cash and (is_active = false) is distinct from (closed_at is not null)),
+  0,
+  '(S4c) NO MISMATCH IS CREATABLE (inverted 2026-08-04): the refused flip leaves the row consistent. 059''s reconciliation is still required for rows PREDATING 058 — NOT VALID fences new writes only — so this is containment, not discharge of the reconciliation. One-directionality and the reconciliation are the same control seen from two ends: the trigger refuses to invent a closure, and the migration refuses to drop the evidence'
+);
+-- ⚑ THE `restore for BLOCK P` LINE THAT STOOD HERE IS DELETED, and the deletion is the point.
+--   It set is_active back to true after the flip — correct against the PRE-inversion block,
+--   where the flip SUCCEEDED. Post-inversion the flip is REFUSED and never landed, so the
+--   restore was a no-op that silently asserted the opposite: a reader reconstructing the block
+--   from its statements would conclude the flip works. Same residue class as the (S4a) message
+--   splice Sec caught (F5(b)) — an inversion leaves BOTH prose and setup statements behind it,
+--   and only the prose gets re-read. Verified: nothing downstream depends on :cash's is_active
+--   (BLOCK P asserts catalog shape only).
+
+-- =====================================================================
+-- BLOCK P — TWO-PHASE POSTURE
+-- =====================================================================
+-- (P1) THE ASSERTION THAT CATCHES `058` BEING BUILT FROM THE SUPERSEDED SINGLE-FILE DESIGN.
+select has_column('pfin', 'account', 'is_active',
+  '(P1) TWO-PHASE: `058` leaves is_active IN PLACE — it does NOT drop it. The drop belongs to `059`, AFTER the operator has dispositioned each account through the real control. RED if `058` is built from the withdrawn single-file/declared-set design, which dropped the column in the same file');
+select col_type_is('pfin', 'account', 'closed_at', 'timestamp with time zone',
+  '(P2) closed_at is timestamptz — a DATED closure, which is what makes "closed in June still counts in a May NAV" expressible at all');
+select is(
+  (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'pfin' and p.prosecdef
+       and p.proname not in ('fn_refresh_updated_at', 'fn_grant_creator_access', 'fn_reclass_history_insert')),
+  0,
+  '(P3) `058` authors ZERO SECURITY DEFINER functions — every fence is INVOKER per ADR-042 Consequences and Architect''s confirmation. NOTE the referent: this counts AUTHORED DEFINER functions (3); the ALLOWLIST is 4, the fourth being the reserved-but-unauthored audit-log helper. Both numbers are correct and they measure different things — do not "correct" 3 to 4, which would silently widen the fence by one slot'
+);
+
+-- (P4) THE INSERT PATH — the specific hole the design changed shape to close.
+--   `058:66-73` records why the biconditional is a CHECK and not a trigger: **a BEFORE
+--   UPDATE trigger does not see an INSERT**, and the `049`/`050`/`051` batteries INSERT
+--   `is_active` in the column list, so `INSERT (is_active=false, closed_at=null)` creates
+--   exactly the state `059` must abort on. A CHECK covers INSERT and UPDATE for ALL ROLES
+--   (a CHECK is not RLS) with no ordering concerns.
+--   Driven PRIVILEGED deliberately — that proves the "all roles" property. An authenticated
+--   probe would meet the RLS WITH CHECK first and would prove only that RLS works.
+select throws_like(
+  format($$ insert into pfin.account (users_id, name, account_type, scope, tax_treatment, is_active, closed_at)
+              values (%L, 'insert-path-violator', 'depository', 'household', 'taxable', false, null) $$, :'ta'),
+  '%violates check constraint "account_closure_biconditional"%',
+  '(P4) INSERT PATH: an INSERT carrying (is_active=false, closed_at=null) is REJECTED by the CHECK, privileged. That is the state `059` aborts on and it is INVISIBLE to a BEFORE UPDATE trigger — the reason the biconditional is a CHECK rather than a trigger. Without this, the design decision that closed the hole has a comment and no test'
+);
+
+-- (P5) THE NULL TRIPWIRE — converts a recorded caveat into a mechanical check.
+--   `058:88` and the constraint comment both record it: **a CHECK PASSES ON NULL.** The
+--   plain `=` is correct only because `is_active` is NOT NULL — and that is INHERITED from
+--   `003:104`, not restated by `058`. So if `is_active` were ever made nullable,
+--   `account_closure_biconditional` would SILENTLY PASS EVERYTHING and `059`'s VALIDATE
+--   would succeed over a table full of violators.
+select col_not_null('pfin', 'account', 'is_active',
+  '(P5) NULL TRIPWIRE: pfin.account.is_active is still NOT NULL (inherited from `003:104`, not restated by `058`). A CHECK passes on NULL, so a nullable is_active makes the biconditional silently pass EVERYTHING and `059`''s VALIDATE succeed over a table of violators. RED here means the fence was disarmed by a change somewhere else entirely — the only way this defect can arrive');
+
+-- =====================================================================
+-- BLOCK W — THE account_event WRITER (`e88b76c`, ADR-042 Amendment 1)
+--   The writer exists, so (B1b)/(B9b) stop being standing reds. These three assert the
+--   writer's OWN fences, which live in `fn_account_event_write` — NOT in the gate, so the
+--   (B5) raise-site count of 6 on `fn_account_closure_gate` is unchanged.
+--   ⚑ THREE DISTINGUISHABLE OUTCOMES now exist where there were two, which is why (B1) and
+--     (B1b) had to be separate assertions: gate refuses · gate admits and WRITER refuses ·
+--     both succeed. A single "did the closure work" assertion cannot tell the middle case
+--     from the first, and the middle case is new as of this commit.
+-- =====================================================================
+-- (W1) no acting identity -> RAISE. Absence must not silently become 'system:remediation'.
+select set_config('role', 'postgres', true);
+select set_config('request.jwt.claims', '', true);
+savepoint sp_w1;
+select throws_like(
+  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz, is_active = false where account_id = %s $$, :wopen),
+  '%no acting identity%auth.uid() is null and no pfin.actor is set%',
+  '(W1) NO ACTING IDENTITY: a writer with null auth.uid() and no pfin.actor RAISES rather than defaulting. Absence must not BECOME a value on an append-only record — "we did not record who" and "the system did it" must stay distinguishable'
+);
+rollback to savepoint sp_w1;
+
+-- (W2) no reason -> RAISE, and the message must name the remedy.
+savepoint sp_w2;
+select set_config('pfin.reason_code', '', true);
+select _rls.set_tenant(:'ta'::uuid);
+select throws_like(
+  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz, is_active = false where account_id = %s $$, :wopen),
+  '%no pfin.reason_code set%set local pfin.reason_code%',
+  '(W2) NO REASON: a session closure without pfin.reason_code RAISES, and the message NAMES THE REMEDY. Asserted on the remedy text deliberately — a mandatory field whose error does not say how to supply it produces a correct refusal that reads as a broken feature'
+);
+rollback to savepoint sp_w2;
+
+-- (W3) ⭐ FORGERY — auth.uid() must WIN over the GUC. Architect asked me to own this one
+--   rather than take their measurement, because they wrote the ordering and then tested it,
+--   which tests their understanding of their own code. Same reason byte-identity was mine.
+--   THE HAZARD: `set local` is available to ANY session, so a GUC-first derivation lets a
+--   user forge a system identity into a permanent, append-only audit record.
+select set_config('role', 'postgres', true);
+select set_config('pfin.reason_code', 'no_longer_used', true);
+select _rls.set_tenant(:'ta'::uuid);
+select set_config('pfin.actor', 'system:remediation', true);   -- the forgery attempt
+select lives_ok(
+  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz, is_active = false where account_id = %s $$, :wopen),
+  '(W3a) a session that ALSO sets pfin.actor closes successfully — the forgery does not error, which is what makes (W3b) the assertion that matters'
+);
+select set_config('role', 'postgres', true);
+select is(
+  (select actor from pfin.account_event where account_id = :wopen and event_type = 'closed'),
+  'user:' || :'ta',
+  '(W3b) FORGERY REFUSED: the recorded actor is `user:<uid>`, NOT the forged `system:remediation`. auth.uid() is consulted FIRST and a user session never reaches the GUC. A GUC-first ordering would let any session write a system identity into an append-only record — and it would look correct, because the row lands and the value is in the vocabulary'
+);
+
+-- (W4) UNKNOWN DATE STAYS UNKNOWN — the reopen branch records NULL, not today.
+--   `243079c`: `effective_date` is now NULLABLE and the reopen branch reads an OPTIONAL
+--   `pfin.effective_date` GUC. Sec's finding is the reason, and it is the sharpest form of
+--   a rule this battery has applied all day: the writer PROHIBITED a guessed `reason_code`
+--   and then GUESSED `effective_date` six lines later. `current_date` on a reopen makes a
+--   real same-day reopen **byte-identical** to an unknown-date one — **indistinguishable,
+--   not merely lossy**, on an append-only table with no redaction path.
+select set_config('role', 'postgres', true);
+select set_config('pfin.effective_date', '', true);
+select set_config('pfin.reason_code', 'no_longer_used', true);
+select _rls.set_tenant(:'ta'::uuid);
+select is(
+  (select effective_date from pfin.account_event
+    where account_id = :z and event_type = 'reopened' order by created_at desc limit 1),
+  null::date,
+  '(W4) UNKNOWN STAYS UNKNOWN: a reopen with no pfin.effective_date GUC records NULL, not current_date. A defaulted date makes "we know it happened today" and "we do not know when" byte-identical on a permanent record — absence becoming a value, which is the same defect the writer already refuses for reason_code'
+);
+
+-- (W5) …but a CLOSED row may NOT be dateless. Asymmetry is the point, and it is a CHECK.
+select set_config('role', 'postgres', true);
+select throws_like(
+  format($$ insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor, effective_date)
+              values (%L, %s, 'closed', 'no_longer_used', 'system:remediation', null) $$, :'ta', :wopen),
+  '%account_event_effective_date_required%',
+  '(W5) A CLOSED ROW MUST CARRY A DATE: the constraint admits NULL effective_date for `reopened` and refuses it for `closed`. Asserted as the COMPANION to (W4) — without it, "nullable" would read as "optional everywhere" and the closure date, which the whole as-of model depends on, could go unrecorded'
+);
+
+-- =====================================================================
+-- BLOCK G — INVERSION (non-vacuity, proved IN FILE)
+--   Assertion-count integrity: pgTAP's plan(33) + finish() IS the executed-assertion count.
+--   A partial or aborted run reports "planned 33 but ran N" and FAILS, so a 0-RED result is
+--   never inferred from the absence of failures. Demonstrated live on this suite 2026-08-03:
+--   `053` reported "planned 19 but ran 0" and `054` "planned 63 but ran 10" on a stale DB —
+--   both correctly FAILED rather than passing quietly.
+-- =====================================================================
+savepoint sp_g1;
+drop trigger account_trans_block_closed_account on pfin.account_trans;  -- real name @407b190; bare DROP (not IF EXISTS) so a rename fails LOUDLY here rather than making G1 a silent no-op
+select lives_ok(
+  format($$ insert into pfin.account_trans (account_id, transaction_date, amount, vendor)
+              values (%s, '2026-08-02', 25, 'canary') $$, :z),
+  '(G1) TEETH: with the closed-account trigger DROPPED, the (C1)/(C2) INSERT SUCCEEDS -> those refusals are trigger-driven and non-vacuous. Had it still failed, C1/C2 were passing on something other than the fence'
+);
+rollback to savepoint sp_g1;
+
+savepoint sp_g2;
+drop trigger account_closure_gate on pfin.account;  -- real name @407b190; bare DROP so a rename fails loudly
+select lives_ok(
+  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = %s $$, :cash),
+  '(G2) TEETH: with the close-gate trigger DROPPED, the (B2) non-zero account CLOSES -> (B2)/(B3)/(B4)/(B7)/(B8) are gate-driven and non-vacuous'
+);
+rollback to savepoint sp_g2;
+
+-- (G3) ⚑⚑ THE SABOTAGE WAS ACTUALLY UNDONE — and this assertion has a SECOND job that is the
+--   reason it sits HERE, last, outside every savepoint. Both jobs are real; neither is filler.
+--
+--   JOB 1 — assert the precondition separately from the result (DESIGN.md rule 3). (G1)/(G2)
+--     DROP two live fences to prove the refusals above are non-vacuous. Nothing until now
+--     asserted the drops were REVERSED. A `rollback to savepoint` that silently failed to
+--     restore them would leave this database — and, at `supabase test` where files share a
+--     container, anything after it — running against a stack missing its transfer-in fence and
+--     its close gate, with every subsequent green earned against no fence at all. An inversion
+--     block is the one place in a battery that deliberately breaks the system under test, so it
+--     is the one place that owes a restoration check.
+--
+--   JOB 2 — ⚠ MEASURED HARNESS PROPERTY, 2026-08-04, and it is a trap for every battery in this
+--     directory, not only this one:
+--       **pgTAP's TAP NUMBERING comes from a sequence (non-transactional) but the counter
+--       `finish()` compares against the plan is a TEMP-TABLE value (transactional). So
+--       `rollback to savepoint` REWINDS the counter while the emitted numbering marches on.**
+--     Measured: with (G2) trailing, this file emitted 47 numbered results, every one `ok`, and
+--     `finish()` reported `# Looks like you planned 47 tests but ran 45` — because sp_g2 was
+--     taken when the counter read 45 and nothing after it re-set the counter.
+--     ⚑ WHY THAT IS WORSE THAN A COSMETIC MISCOUNT: THE FALSE MESSAGE IS THIS BLOCK'S OWN
+--       ALARM. The header directly above cites `planned 19 but ran 0` as proof that an aborted
+--       run cannot pass quietly. A fully-green file emitting a same-shaped diagnostic trains
+--       the reader to discount the one signal that distinguishes a real abort — the assertion-
+--       count integrity mechanism reporting a false positive against itself.
+--     THE FIX IS STRUCTURAL, NOT ARITHMETIC: an assertion outside any savepoint re-sets the
+--     counter to its own number, so the plan is satisfied. **Do NOT "fix" a future recurrence
+--     by lowering plan() to the reported figure** — that hides the rewind, and it silently
+--     re-breaks the moment a savepoint is added or moved. Keep a non-savepoint assertion last.
+select is(
+  (select count(*)::int from pg_trigger t
+     join pg_class c on c.oid = t.tgrelid
+     join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'pfin' and not t.tgisinternal
+      and t.tgname in ('account_trans_block_closed_account', 'account_closure_gate')),
+  2,
+  '(G3) INVERSION IS FULLY REVERSED: both triggers (G1)/(G2) dropped are present again after their savepoint rollbacks. Without this, a rollback that failed to restore would leave every later assertion — here and, under `supabase test`''s shared container, in every file after it — running against a stack with no transfer-in fence and no close gate, earning greens against nothing. It also sits LAST and OUTSIDE every savepoint on purpose: pgTAP''s plan counter is transactional while its TAP numbering is not, so a trailing rolled-back savepoint rewinds the count and makes a fully-green file report "planned 47 but ran 45" — this block''s own abort alarm, firing falsely. Keep a non-savepoint assertion last; never lower plan() to match'
+);
+
+select * from finish();
+rollback;

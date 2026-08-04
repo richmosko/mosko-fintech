@@ -56,13 +56,19 @@
 -- │      drop fn_gl_entries' internal fn_compute_nav memo double-call (flag to team-lead+Architect).│
 -- └───────────────────────────────────────────────────────────────────────────────────────────┘
 --
--- ⚑ is_active / FOOT-TO-NAV NOTE (QA finding, surfaced to team-lead + Architect):
---   049 filters `where acc.is_active`; fn_compute_nav (019) does NOT filter is_active (its cash_leg
---   reads `from pfin.account acc` unqualified, and fn_holdings_as_of images all accounts). So the
---   "Σ current_market_value = NAV" invariant in the 049 header holds ONLY for a tenant with NO
---   value-bearing INACTIVE account. Tenant A here HAS one (a5, 9999) → for A, Σ049.cmv ≠ NAV(A) by
---   design. Foot-to-NAV (T3) is therefore proven on tenant F (all-active), where the invariant is
---   exact. Not a bug in 049 — a documented scope divergence worth an explicit ADR-038 footnote.
+-- ⚑ FOOT-TO-NAV CAVEAT — DISCHARGED BY ADR-042 (2026-08-03). STRUCK, NOT REWORDED.
+--   It read: the "Σ current_market_value = NAV" invariant holds ONLY for a tenant with no
+--   value-bearing INACTIVE account, and tenant A had one (a5, 9999), so Σ049.cmv ≠ NAV(A) by
+--   design.
+--   ⚑ THE CAVEAT'S PRECONDITION NO LONGER EXISTS. A value-bearing closed account is
+--     unconstructible under ADR-042's standing zero-value invariant — the close gate refuses
+--     while value remains, and the transfer-in fence refuses afterwards. So the divergence the
+--     caveat described cannot arise, and FOOT-TO-NAV IS NOW EXACT FOR EVERY TENANT.
+--   Struck rather than reworded, per the p_active_only temporal-constraint precedent: a caveat
+--   whose precondition is gone is not a smaller caveat, and leaving a softened version invites
+--   the next reader to re-derive a limitation that no longer applies.
+--   ⚠ DISCHARGED, NOT INVERTED — this is good news worth noticing, so nobody redoes the work.
+--     051 (F2) now asserts the unconditional reconciliation this makes available.
 --
 -- §10 / DECISION 3: §10 ledger UNCHANGED at 3 (RT-22/RT-26/RT-27; 049 is a single authenticated-tier
 --   INVOKER READ function — no service_role grant, no credential, no admission/network surface).
@@ -153,11 +159,32 @@ insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
 insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_of_date, source)
   values (:a4, -2000.0000, 'USD', '2026-06-01', 'seed');
 
--- a5 (depository, INACTIVE + value-bearing 9999): must be EXCLUDED from the fn (T1 is_active filter).
-insert into pfin.account (users_id, name, account_type, scope, tax_treatment, is_active)
-  values (:'ta', 'a-inactive-5', 'depository', 'household', 'taxable', false) returning account_id as a5 \gset
+-- a5 (depository, CLOSED as of 2026-06-30): must be EXCLUDED from the fn.
+--   ⚑ RE-SEEDED AT ADR-042. This was `is_active = false` + a live 9999 balance — a
+--     value-bearing INACTIVE account. THAT STATE IS NOW UNCONSTRUCTIBLE, and that is the
+--     ADR's point, not an obstacle to it: the biconditional CHECK rejects the flag without a
+--     date, the transfer-in fence rejects funding a closed account, and the close gate rejects
+--     closing one that holds value. `disable trigger` / `session_replication_role` WOULD build
+--     it and are REFUSED — fabricating a state the system prevents, to preserve an assertion
+--     about it, is the defect ADR-042 removes.
+--   Seeded through the REAL gate instead: funded while open, counter-booked to zero, closed.
+--     Non-vacuity is now carried by the DATE (it really held 9999 on 2026-06-01) rather than
+--     by a closed account still holding value.
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
+  values (:'ta', 'a-closed-5', 'depository', 'household', 'taxable') returning account_id as a5 \gset
 insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_of_date, source)
   values (:a5, 9999.0000, 'USD', '2026-06-01', 'seed');
+-- counter-book to zero ON the closing date, so leg 2 (cash) and leg 3 (post-closure activity)
+-- both pass at closed_at.
+insert into pfin.account_trans (account_id, transaction_date, amount, quantity, vendor)
+  values (:a5, '2026-06-30', -9999.0000, 0, 'wind-down-a5');
+-- The seed block runs at postgres with no tenant, so auth.uid() is NULL and 057's
+-- writer refuses rather than letting absence become a value. Declare the writer, as
+-- its own raise instructs. 'system:remediation' is the ONLY system actor 057 admits
+-- (enumerated, not an open pattern, so a new system identity fails the CHECK).
+select set_config('pfin.actor', 'system:remediation', true);
+select set_config('pfin.reason_code', 'no_longer_used', true);
+update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = :a5;
 
 -- =====================================================================
 -- TENANT B — the cross-tenant victim/control. One investment account so B's OWN call is non-empty.

@@ -82,9 +82,11 @@ export const actions: Actions = {
 		//   RETURNS TABLE(account_id bigint, provider_account_id text). SECURITY INVOKER,
 		//   EXECUTE granted to authenticated (anon denied). Atomic all-or-nothing under the
 		//   caller's RLS: one pfin.account per element; users_id defaults to auth.uid() (NOT a
-		//   param). ON CONFLICT (linked_source_id, provider_account_id) reactivates the
-		//   canonical row (021 dedup arbiter) — a re-land is idempotent (never a 2nd row) and
-		//   does NOT overwrite stored attributes. Fences evaluate as the caller and fail closed
+		//   param). ON CONFLICT (linked_source_id, provider_account_id) is a NO-OP SELF-ASSIGNMENT
+		//   on the canonical row (021 dedup arbiter) — a re-land is idempotent (never a 2nd row),
+		//   does NOT overwrite stored attributes, and since 058 does NOT reopen a closed account
+		//   (ADR-042 D1b: reopening is a bookkeeping event belonging to the account's own close
+		//   control, never a side effect of connecting). Fences evaluate as the caller and fail closed
 		//   cross-tenant (account_insert WITH CHECK, fn_account_matched_linked_source #6,
 		//   inherited 025 aal2 clause). source_id is a small bigint sequence value → Number()
 		//   is exact for the bigint param.

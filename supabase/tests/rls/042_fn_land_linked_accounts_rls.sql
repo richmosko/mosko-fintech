@@ -15,7 +15,9 @@
 --          provider_account_id from the object)
 --         ON CONFLICT (linked_source_id, provider_account_id)
 --           WHERE linked_source_id IS NOT NULL
---           DO UPDATE SET is_active = true
+--           DO UPDATE SET provider_account_id = excluded.provider_account_id
+--             (a NO-OP self-assignment; 058 re-authored this from `SET is_active = true`
+--              per ADR-042 D1b — a re-land must not reopen a closed account)
 --         RETURNING (account_id, provider_account_id) appended to the result set.
 --       Fail-closed input guards: p_accounts must be a JSON array (else raise 22023);
 --       each element must carry a non-null provider_account_id (else raise 22023).
@@ -52,8 +54,9 @@
 -- │ introduces:                                                                             │
 -- │  • MULTI-ROW: ONE call lands N pfin.account rows (one per selected AccountRef), each     │
 -- │    caller-bound (users_id DEFAULT auth.uid() — NOT a param), is_active, attrs-as-passed. │
--- │  • RE-LAND = REACTIVATE, NEVER a 2nd row: the DO UPDATE arbiter reactivates the canonical│
--- │    (source, provider_account) row (recovers a soft-deleted account) and — the 042-       │
+-- │  • RE-LAND = NO-OP, NEVER a 2nd row: the DO UPDATE arbiter is a self-assignment on the   │
+-- │    canonical (source, provider_account) row — it does NOT reopen a closed account        │
+-- │    (ADR-042 D1b; 058 re-authored it) — and — the 042-                                    │
 -- │    specific contract — RETURNS its id (DO UPDATE, so RETURNING yields existing rows too, │
 -- │    unlike 021's DO NOTHING), and does NOT overwrite the user's stored attributes.        │
 -- │  • ATOMICITY / ALL-OR-NOTHING: a batch with one invalid element lands NONE (the forcing- │
@@ -76,12 +79,12 @@
 --           in-txn). RED if the grant were not seeded (landed accounts would be read-invisible).
 --   (5)  -> RE-LAND RETURNING (042-specific, DO UPDATE not DO NOTHING): a re-land of the SAME
 --           (a_src1, ext-a-1) RETURNS exactly 1 row (the existing account's id) — the caller gets
---           an id for a reactivated account too. RED if the arbiter were DO NOTHING (would return 0).
+--           an id for an already-landed account too. RED if the arbiter were DO NOTHING (returns 0).
 --   (6)  -> LOAD-BEARING no-2nd-row: after the re-land, (a_src1, ext-a-1) still resolves to exactly
 --           1 pfin.account row. RED if the 021 arbiter were dropped/mis-keyed -> duplicate landing.
---   (7)  -> LOAD-BEARING reactivate: the re-land flipped is_active false->true (recovered the soft-
---           deleted account). RED if DO UPDATE SET is_active=true were absent.
---   (8)  -> reactivate-ONLY semantics: the re-land did NOT overwrite the stored attributes (name is
+--   (7)  -> LOAD-BEARING no-silent-reopen (INVERTED at ADR-042): the re-land did NOT clear
+--           closed_at. RED if the conflict clause ever regained a closure-state write.
+--   (8)  -> no-clobber semantics: the re-land did NOT overwrite the stored attributes (name is
 --           STILL the original 'A Brokerage', not the re-land payload). RED if DO UPDATE also SET
 --           attrs -> a re-land would silently clobber user edits (attr edits are a separate path).
 --   (9)  -> creator-grant NO-REFIRE: the re-land (DO UPDATE, no INSERT) did NOT re-fire the AFTER
@@ -248,25 +251,33 @@ select is(
 select set_config('role', 'postgres', true);
 
 -- =====================================================================
--- BLOCK 2 (authenticated A) — RE-LAND semantics: reactivate a soft-deleted account, DO UPDATE
---   RETURNING (042-specific), no 2nd row, no attribute overwrite, creator-grant no-refire.
---   Setup: soft-delete ext-a-1 (owner UPDATE; A ungated at aal1), then re-land the SAME
---   (a_src1, ext-a-1) with DIFFERENT attrs to prove reactivate-ONLY semantics.
+-- BLOCK 2 (authenticated A) — RE-LAND semantics: a re-land of a CLOSED account, DO UPDATE
+--   RETURNING (042-specific), no 2nd row, no reopen, no attribute overwrite, creator-grant
+--   no-refire. Setup: close ext-a-1 through the gate (owner UPDATE; A ungated at aal1), then
+--   re-land the SAME (a_src1, ext-a-1) with DIFFERENT attrs to prove no-clobber semantics.
 -- =====================================================================
 select _rls.set_tenant(:'ta'::uuid);
 
--- soft-delete the canonical ext-a-1 row (is_active false) — the recover-target for the re-land.
-update pfin.account set is_active = false where account_id = :acct_a1;
+-- CLOSE the canonical ext-a-1 row — the re-land target. Written as closed_at, never is_active:
+-- the 058 sync trigger is ONE-DIRECTIONAL (closed_at -> is_active), so an is_active-only write
+-- leaves closed_at NULL and the account_closure_biconditional CHECK rejects it. The account
+-- carries no value, so it passes the close gate's zero-value legs.
+-- reason_code is MANDATORY on the into-closed transition and has NO other carrier — 058's audit
+-- writer cannot invent one and must not. Transaction-local, mirroring the 058 battery.
+select set_config('pfin.reason_code', 'no_longer_used', true);
+update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = :acct_a1;
 
 -- (5) RE-LAND RETURNING (DO UPDATE, not DO NOTHING): re-landing the SAME (a_src1, ext-a-1) RETURNS
 --     exactly 1 row (the existing account's id). The 042-specific contract choice — the caller gets
---     an id for a reactivated account too (021's DO NOTHING would return 0).
+--     an id for an already-landed account too (021's DO NOTHING would return 0). The DO UPDATE is
+--     now a NO-OP SELF-ASSIGNMENT (058 re-authored it from `set is_active = true`), so what is
+--     being asserted here is the RETURNING contract alone, not any state change.
 select is(
   (select count(*) from pfin.fn_land_linked_accounts(
      :a_src1,
      $j$[{"provider_account_id":"ext-a-1","name":"RELAND MUST NOT OVERWRITE","account_type":"depository","scope":"personal","tax_treatment":"tax_deferred"}]$j$::jsonb))::bigint,
   1::bigint,
-  '(5) re-land RETURNING (DO UPDATE not DO NOTHING): a re-land of the SAME (a_src1, ext-a-1) RETURNS exactly 1 row (the existing account id) — the caller receives an id for a reactivated account too (021 DO NOTHING would return 0)'
+  '(5) re-land RETURNING (DO UPDATE not DO NOTHING): a re-land of the SAME (a_src1, ext-a-1) RETURNS exactly 1 row (the existing account id) — the caller receives an id for an already-landed account too (021 DO NOTHING would return 0)'
 );
 
 -- (6) LOAD-BEARING no-2nd-row: (a_src1, ext-a-1) still resolves to exactly 1 pfin.account row.
@@ -276,18 +287,25 @@ select is(
   '(6) LOAD-BEARING no-2nd-row: after the re-land, (a_src1, ext-a-1) still resolves to exactly 1 pfin.account row (the 021 partial-UNIQUE arbiter prevented a duplicate landing)'
 );
 
--- (7) LOAD-BEARING reactivate: the re-land flipped is_active false->true (recovered the soft-delete).
-select is(
-  (select is_active from pfin.account where account_id = :acct_a1),
-  true,
-  '(7) LOAD-BEARING reactivate: the re-land flipped is_active false->true on the canonical row (DO UPDATE SET is_active=true recovers a soft-deleted account)'
+-- (7) INVERTED at ADR-042. This assertion previously proved the re-land REACTIVATED a
+--     soft-deleted account (`DO UPDATE SET is_active = true`). ADR-042 Decision 1b removed that
+--     behaviour deliberately: *ignored* and *closed* are different facts, reopening is a
+--     bookkeeping event belonging to the account's own close control, and a connect flow must not
+--     perform one as a side effect. 058 re-authored the conflict clause to a no-op
+--     self-assignment. The assertion is INVERTED rather than deleted, because "a re-land does not
+--     silently reopen a closed account" is the property that now carries the load — and deleting
+--     it would leave the reopen path unfenced at exactly the site that used to perform it.
+select isnt(
+  (select closed_at from pfin.account where account_id = :acct_a1),
+  null,
+  '(7) LOAD-BEARING no-silent-reopen: the re-land did NOT clear closed_at — a connect-time re-land never reopens a closed account (ADR-042 D1b; 058 made the conflict clause a no-op self-assignment). Reopening is done from the account close control, which produces an account_event row'
 );
 
--- (8) reactivate-ONLY: the re-land did NOT overwrite stored attributes — name is STILL the original.
+-- (8) no-clobber: the re-land did NOT overwrite stored attributes — name is STILL the original.
 select is(
   (select name from pfin.account where account_id = :acct_a1),
   'A Brokerage',
-  '(8) reactivate-ONLY semantics: the re-land did NOT overwrite the stored attributes (name is STILL ''A Brokerage'', not the re-land payload) — attribute edits are a separate update path, RED if DO UPDATE also SET attrs (silent clobber of user edits)'
+  '(8) no-clobber semantics: the re-land did NOT overwrite the stored attributes (name is STILL ''A Brokerage'', not the re-land payload) — attribute edits are a separate update path, RED if DO UPDATE also SET attrs (silent clobber of user edits)'
 );
 
 -- (9) creator-grant NO-REFIRE: the re-land (DO UPDATE, no INSERT) did not re-fire the AFTER INSERT

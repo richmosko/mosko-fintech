@@ -11,7 +11,7 @@ import { sanitizeCurrencyAmount } from '$lib/server/validation/numeric';
 // Shared value-sets live in a browser-safe module so Frontend's client mirror
 // imports the SAME canonical enums (anti-drift). Re-exported here for server-side
 // consumers that already reference them via this module.
-import { ACCOUNT_TYPES, TAX_TREATMENTS } from '$lib/schemas/account-constants';
+import { ACCOUNT_TYPES, TAX_TREATMENTS, CLOSURE_REASONS } from '$lib/schemas/account-constants';
 export { ACCOUNT_TYPES, TAX_TREATMENTS };
 
 /** Zod adapter over the shared numeric-sanitization battery → a validated `number`. */
@@ -109,9 +109,17 @@ export const toggleActiveSchema = z
 		is_active: z.preprocess(
 			(v) => v === true || v === 'true' || v === 'on' || v === '1',
 			z.boolean()
-		)
+		),
+		// Required to CLOSE, absent to REOPEN — 058's audit writer refuses a close with no
+		// reason and deliberately will not invent one. Optional here and enforced by the
+		// refinement below, so the reopen path is not forced to post a meaningless value.
+		reason_code: z.enum(CLOSURE_REASONS).optional()
 	})
-	.strict();
+	.strict()
+	.refine((v) => v.is_active || v.reason_code !== undefined, {
+		path: ['reason_code'],
+		message: 'Choose a reason for closing this account.'
+	});
 
 export type ToggleActive = z.infer<typeof toggleActiveSchema>;
 
