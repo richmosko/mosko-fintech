@@ -219,18 +219,35 @@ select is(
 -- (A2) all-accounts INCLUDES a4.
 select is(
   pfin.fn_compute_nav('2026-06-30'::date, false),
-  8000.0000::numeric,
-  '(A2) fn_compute_nav(as_of, FALSE) = 8000 — INCLUDES the inactive a4 (byte-identical to 019 all-accounts). RED if the false path gated is_active');
+  6500.0000::numeric,
+  '(A2) fn_compute_nav(as_of, FALSE) = 6500 — the all-accounts path. ⚑ WAS 8000, which INCLUDED the inactive-and-value-bearing a4. a4 is now wound down to zero before closing, because ADR-042 makes closed-while-holding-value unconstructible, so it contributes 0 to BOTH paths. RED if the false path gated closure');
 -- (A3) 1-arg wrapper = all-accounts (the 037 memo path).
 select is(
   pfin.fn_compute_nav('2026-06-30'::date),
-  8000.0000::numeric,
-  '(A3) fn_compute_nav(as_of) 1-arg = 8000 — the wrapper delegates to (as_of, false) = all-accounts. RED if the wrapper filtered active (would break the 037 memo)');
--- (A4) exclusion is non-vacuous: true ≠ false.
-select isnt(
+  6500.0000::numeric,
+  '(A3) fn_compute_nav(as_of) 1-arg = 6500 — the wrapper delegates to (as_of, false) = all-accounts. RED if the wrapper filtered closure (would break the 037 memo)');
+-- (A4) ⚑ INVERTED AT ADR-042 — this is the assertion whose ARGUMENT reversed, not just its
+--   expected value, so it is inverted rather than re-tuned.
+--   It asserted TRUE ≠ FALSE, and that was only ever satisfiable because a4 was inactive
+--   WHILE HOLDING VALUE. ADR-042's standing zero-value invariant makes that state
+--   unconstructible: past its closing date a closed account holds zero (legs 1+2 at
+--   closed_at, leg 3 plus the transfer-in fence after it), so it contributes zero to BOTH
+--   paths. `p_active_only` is therefore a PROVABLE NO-OP ON VALUE.
+--   ⚠ THIS IS THE DETECTOR, and it is why the assertion is kept rather than deleted. When
+--     059 re-points the predicate, the correct form is AS-OF
+--     (`closed_at is null or closed_at > p_as_of`) and the naive form is CURRENT-STATE
+--     (`closed_at is null`). Under V1 the two are behaviourally identical, so choosing wrong
+--     leaves NO FOOTPRINT — BACKLOG §7.7's V2-grantee entry records exactly that hazard.
+--     This equality goes RED under the current-state form at any as-of BEFORE a closure.
+--     Deleting (A4) as "no longer meaningful" would remove the only thing that catches it.
+--   The four dependencies that keep this true, per ADR-042's symmetric rule — weaken any one
+--   and p_active_only becomes load-bearing again: the gate's three legs; the transfer-in
+--   fence; the position-neutrality of the two exempted tables (029 Σ=parent,
+--   004 immutability); and the 059 re-point being as-of rather than current-state.
+select is(
   pfin.fn_compute_nav('2026-06-30'::date, true),
   pfin.fn_compute_nav('2026-06-30'::date, false),
-  '(A4) active-only exclusion is non-vacuous: TRUE (6500) ≠ FALSE (8000) — a4 genuinely carries value that only the false path counts');
+  '(A4) EQUIVALENCE (inverted at ADR-042): TRUE = FALSE at this as-of — a closed account holds zero past its closing date, so p_active_only cannot change the answer. RED if a closed account can carry value, or if 059 re-points to the CURRENT-STATE predicate instead of the AS-OF one');
 -- (A5) wrapper delegation proven directly: 1-arg == 2-arg(false).
 select is(
   pfin.fn_compute_nav('2026-06-30'::date),

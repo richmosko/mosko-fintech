@@ -56,13 +56,19 @@
 -- │      drop fn_gl_entries' internal fn_compute_nav memo double-call (flag to team-lead+Architect).│
 -- └───────────────────────────────────────────────────────────────────────────────────────────┘
 --
--- ⚑ is_active / FOOT-TO-NAV NOTE (QA finding, surfaced to team-lead + Architect):
---   049 filters `where acc.is_active`; fn_compute_nav (019) does NOT filter is_active (its cash_leg
---   reads `from pfin.account acc` unqualified, and fn_holdings_as_of images all accounts). So the
---   "Σ current_market_value = NAV" invariant in the 049 header holds ONLY for a tenant with NO
---   value-bearing INACTIVE account. Tenant A here HAS one (a5, 9999) → for A, Σ049.cmv ≠ NAV(A) by
---   design. Foot-to-NAV (T3) is therefore proven on tenant F (all-active), where the invariant is
---   exact. Not a bug in 049 — a documented scope divergence worth an explicit ADR-038 footnote.
+-- ⚑ FOOT-TO-NAV CAVEAT — DISCHARGED BY ADR-042 (2026-08-03). STRUCK, NOT REWORDED.
+--   It read: the "Σ current_market_value = NAV" invariant holds ONLY for a tenant with no
+--   value-bearing INACTIVE account, and tenant A had one (a5, 9999), so Σ049.cmv ≠ NAV(A) by
+--   design.
+--   ⚑ THE CAVEAT'S PRECONDITION NO LONGER EXISTS. A value-bearing closed account is
+--     unconstructible under ADR-042's standing zero-value invariant — the close gate refuses
+--     while value remains, and the transfer-in fence refuses afterwards. So the divergence the
+--     caveat described cannot arise, and FOOT-TO-NAV IS NOW EXACT FOR EVERY TENANT.
+--   Struck rather than reworded, per the p_active_only temporal-constraint precedent: a caveat
+--   whose precondition is gone is not a smaller caveat, and leaving a softened version invites
+--   the next reader to re-derive a limitation that no longer applies.
+--   ⚠ DISCHARGED, NOT INVERTED — this is good news worth noticing, so nobody redoes the work.
+--     051 (F2) now asserts the unconditional reconciliation this makes available.
 --
 -- §10 / DECISION 3: §10 ledger UNCHANGED at 3 (RT-22/RT-26/RT-27; 049 is a single authenticated-tier
 --   INVOKER READ function — no service_role grant, no credential, no admission/network surface).

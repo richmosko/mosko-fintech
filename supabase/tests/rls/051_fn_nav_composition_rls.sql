@@ -298,11 +298,20 @@ select is(
   (pfin.fn_nav_composition('2026-06-30'::date) ->> 'nav')::numeric,
   pfin.fn_compute_nav('2026-06-30'::date, true),
   '(F1) FOOT-TO-NAV EXACT: nav == fn_compute_nav(2026-06-30, TRUE) — the §2.1.5 composition foots to the §2.1.1 active-scoped headline by construction (single-substrate natural summation)');
--- (F2) non-vacuous: nav ≠ fn_compute_nav(as_of, FALSE) — a7''s 9999 lives only in the all-accounts figure.
-select isnt(
+-- (F2) ⚑ INVERTED AT ADR-042, and the inversion is a DISCHARGE rather than a loss.
+--   It asserted nav ≠ the all-accounts figure, which held only because a7 was inactive WHILE
+--   HOLDING 9999. That state is unconstructible now, so a7 contributes zero to both and the
+--   foot is exact against BOTH scopes. The ADR-038 foot-to-NAV invariant therefore becomes
+--   UNCONDITIONAL — previously it was exact only for tenants holding no value-bearing
+--   inactive account, a caveat 049's header carried and which ADR-042 discharges.
+--   051 asserts PROPAGATION, not a predicate of its own: it inherits 049's exclusion and adds
+--   nothing (058's header — "two functions are re-pointed (049 + 050), not three"). Asserting
+--   a predicate here would duplicate 049's and drift from it.
+--   This assertion now foots ACROSS the closure boundary, which is the stronger claim.
+select is(
   (pfin.fn_nav_composition('2026-06-30'::date) ->> 'nav')::numeric,
   pfin.fn_compute_nav('2026-06-30'::date, false),
-  '(F2) foot is to the ACTIVE scope: nav (409800) ≠ fn_compute_nav(2026-06-30, FALSE) (419799 — includes the inactive a7''s 9999). Confirms F1 is an active-scoped foot, not a coincidence');
+  '(F2) FOOT IS UNCONDITIONAL (inverted at ADR-042): nav == fn_compute_nav(2026-06-30, FALSE) as well as TRUE — a closed account holds zero past its closing date, so both scopes agree. The ADR-038 foot-to-NAV invariant is now exact for EVERY tenant, discharging the value-bearing-inactive caveat. RED if a closed account can carry value into either scope. Confirms F1 is an active-scoped foot, not a coincidence');
 
 -- ---- D: DEBT SIGN D-1 ------------------------------------------------
 -- (D1) liability leaf a5 current_market_value carries 049's natural NEGATIVE sign.
