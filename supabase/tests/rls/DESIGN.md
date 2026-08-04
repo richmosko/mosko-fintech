@@ -154,6 +154,28 @@ Sec-relevant because it touches where synthetic seed data lives — flagging for
 
 ## 8. Battery-design rules (ADR-042 close-gate review, 2026-08-03)
 
+> **CALIBRATION DATA — read before trusting any rule below.**
+>
+> **A rule that only ever catches other people is a rule shaped around its author's blind
+> spots** (Sec). That test is only runnable if the catches are attributed, and in six months
+> none of it is recoverable from the rules themselves — so it is recorded here as data, not
+> as credit.
+>
+> | rule | caught whom |
+> |---|---|
+> | route by shape, not by confidence | **its author, twice** — an arithmetic decomposition and a negative existential, both stated confidently, both wrong |
+> | a caveat is a claim | **its author** — an unmeasured "the table is empty" that would have argued against running the test that found the defect |
+> | confidence has a timestamp | **its author** — a battery-binding claim true when made and silently false six commits later |
+> | build to the risk, not the shape of diligence | **its author** — twice: the withdrawn `prosrc` gate, then a structural check relocated rather than dropped |
+> | regenerate from the catalog and diff | **its author** — three function bodies written from recall that would have applied clean |
+> | the rename trap | its author (prevented, by counting sites before replacing) |
+> | absence reads as recency · a battery cannot prove it is reached | found by others; **treat as least calibrated** and re-examine first |
+>
+> The bottom row is the one to distrust. Not because those rules are wrong — because
+> nothing has yet tested them against the person who wrote them.
+
+
+
 Seven rules, from a single review. They are not seven lessons — **six are one sentence at
 different layers**, and rule 0 generates rule 1.
 
