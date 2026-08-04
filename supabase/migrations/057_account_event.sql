@@ -128,13 +128,36 @@ create table if not exists pfin.account_event (
                      actor ~ '^user:[0-9a-f-]{36}$'
                      or actor in ('system:remediation')
                    ),
-  effective_date date not null,
+  -- NULLABLE BY DECISION, requiredness enforced per event type below (Sec flag,
+  -- ADR-042 Amendment 1 A5). A closure takes its date from the DATA
+  -- (new.closed_at); a REOPEN has no carrier — the reopen path is a bare
+  -- `closed_at = null` UPDATE with nowhere to say WHEN. The rejected fix was to
+  -- default it to current_date. That is a GUESSED DATE, permanent and
+  -- unredactable, in the same function that already prohibits a guessed
+  -- reason_code — and worse, a real same-day reopen and an unknown-date reopen
+  -- would produce BYTE-IDENTICAL rows. Not lossy: INDISTINGUISHABLE, forever,
+  -- because this table has no redaction path.
+  --
+  -- This is ADR-011 D4's third bullet (Lock 15 catch on Lock 9) INVERTED, which
+  -- is the harder shape: Lock 9 lost insertion-time by OMISSION, so the gap was
+  -- visible. Defaulting here would lose the distinction BY VALUE — both columns
+  -- present, effective_date === created_at::date on every reopen row, and the
+  -- orthogonality collapsed while nothing looks missing.
+  -- AN OMISSION ANNOUNCES ITSELF; A COLLAPSE LOOKS LIKE DATA.
+  effective_date date,
   created_at     timestamptz not null default now(),
 
   -- Requiredness is PER EVENT TYPE, so it is a CHECK and NOT a column-level
   -- NOT NULL — a global NOT NULL would fail for the types that do not need it.
   constraint account_event_reason_required
-    check (event_type <> 'closed' or reason_code is not null)
+    check (event_type <> 'closed' or reason_code is not null),
+
+  -- SAME SHAPE, SAME REASON, deliberately mirroring the constraint above rather
+  -- than inventing a mechanism: the table already had this pattern for exactly
+  -- this problem. A closure must carry its date; a reopen may leave it NULL,
+  -- and NULL means "not recorded" rather than "today".
+  constraint account_event_effective_date_required
+    check (event_type <> 'closed' or effective_date is not null)
 );
 
 comment on table pfin.account_event is
