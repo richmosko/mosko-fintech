@@ -378,7 +378,11 @@ begin
     --
     -- ⚠ effective_date IS NOT DEFAULTED TO current_date — for the SAME reason
     --   reason_code is not defaulted six lines up, and that inconsistency
-    --   within one function is how it was caught (Sec, at the e88b76c review).
+    --   within one function is how it was caught (Sec joint-review; ADR-042
+    --   Amendment 1 A5 — an ARTIFACT, deliberately not the review commit: this
+    --   branch squashes, so a pinned hash would name nothing, and being
+    --   provenance it would invite a lookup that finds no signal it ever
+    --   resolved).
     --   A closure takes its date from the DATA; a reopen would have INVENTED
     --   one. current_date here is a guessed date, permanent and unredactable,
     --   and it makes a real same-day reopen BYTE-IDENTICAL to an unknown-date
