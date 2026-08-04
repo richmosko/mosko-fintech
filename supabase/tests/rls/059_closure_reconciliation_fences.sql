@@ -131,8 +131,8 @@ begin;
 
 \set m_reconcile '%closure reconciliation failed%'
 
--- plan = 17: R 7 · X 7 · T 3.
-select plan(17);
+-- plan = 13: R 3 (was 7 — see the BLOCK R reconcile note) · X 7 · T 3.
+select plan(13);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 
@@ -156,6 +156,17 @@ insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_o
 insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_of_date, source)
   values (:bacct, 9999.0000, 'USD', '2026-01-31', 'seed');
 
+-- The seed block runs at postgres with no tenant, so auth.uid() is NULL and 057's writer
+-- refuses rather than letting absence become a value. Declare the writer, as its own raise
+-- instructs. 'system:remediation' is the ONLY system actor 057 admits (enumerated, not an open
+-- pattern, so a new system identity fails the CHECK).
+--   ⚑ THIS IS THE FAILURE THAT STOPPED THIS FILE RUNNING AT ALL. It predates 057's writer
+--     (ADR-042 Amendment 1), so it closed an account without declaring an identity and the very
+--     first seed statement aborted the transaction — 17 planned, 0 emitted. Not a battery
+--     defect so much as evidence of the thing the writer exists to enforce: a closure with no
+--     recorded actor is refused, including one performed by a test fixture.
+select set_config('pfin.actor', 'system:remediation', true);
+select set_config('pfin.reason_code', 'no_longer_used', true);
 update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = :aclosed;
 
 -- =====================================================================
@@ -164,79 +175,83 @@ update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id =
 --   INVOKER body pass vacuously for every other tenant.
 -- =====================================================================
 
--- (R1) SEC CASE 5 — nothing to reconcile. The production state today (`pfin.account` = 4
---   rows, all active, zero inactive — measured 2026-08-03), and therefore the branch that
---   ships UNEXERCISED unless something makes it fire. It is the NON-VACUOUS ANCHOR: without
---   it, (R2)/(R3) could both be passing against a function that aborts unconditionally.
-savepoint sp_r1;
-update pfin.account set is_active = (closed_at is null);  -- force the biconditional true
-select lives_ok(
-  $$ select pfin.fn_assert_closure_reconciled() $$,
-  '(R1) SEC CASE 5: with the biconditional holding on every row, the reconciliation PASSES. NON-VACUOUS ANCHOR — without it (R2)/(R3) could both pass against a function that aborts unconditionally, and the abort assertions would prove nothing'
-);
-rollback to savepoint sp_r1;
+-- ⚑⚑ BLOCK R WAS RECONCILED 2026-08-04 — 7 ASSERTIONS DOWN TO 3, AND THE REASON MATTERS
+--   MORE THAN THE COUNT. This file's sole home was the wip branch, so it was authored against
+--   a SUPERSEDED 059 design in which the reconciliation was a function,
+--   `pfin.fn_assert_closure_reconciled()`, called mid-migration.
+--
+--   059 AS MERGED HAS NO SUCH FUNCTION. The reconciliation is one statement:
+--       alter table pfin.account validate constraint account_closure_biconditional;
+--
+--   WHAT THAT CHANGES, precisely:
+--     (R1)(R2)(R3) called the function and wrote `is_active` to build each mismatch. The
+--       function does not exist AND the column is dropped by this very migration, so these
+--       were unrunnable against any database `supabase test db` can produce. Measured: the
+--       file emitted 0 of 17 assertions — the first seed statement aborted the transaction.
+--     (R4) read `is_active` directly. Same.
+--     (R5)(R6) asserted the function was ABSENT and UNGRANTED. Both PASSED — vacuously, on a
+--       function that was never created. (R5)'s own comment records it being caught once
+--       already for exactly this vacuity and conjoined against it; the conjunction saved it
+--       from being green pre-059, and did nothing about being green because the subject never
+--       existed. **An absence assertion is vacuous whenever the thing was never present, and
+--       no amount of conjoining fixes that — only naming a subject that exists does.**
+--
+--   ⚠ WHERE THE STRUCK COVERAGE ACTUALLY LIVES — this is a REDIRECT, not a deletion, and it
+--     is stated so nobody re-derives the cases as missing:
+--       · Sec case 3 (is_active=false, closed_at NULL) is proven at the PREDICATE level in
+--         058's battery: (P4) on the INSERT path and (S4a) on the UPDATE path, both against
+--         `account_closure_biconditional` itself. That predicate is what VALIDATE evaluates.
+--       · The VALIDATE STEP's own behaviour — that a NOT VALID constraint, once validated,
+--         rejects pre-existing violators — is a POSTGRES guarantee, not our logic, and it is
+--         NOT RE-TESTABLE HERE BY CONSTRUCTION: 059 drops the constraint and the column
+--         immediately afterwards, so no artifact survives to exercise. Reconstructing them
+--         inside the test transaction would assert against a fixture of our own making —
+--         DESIGN.md rule 0, the fixture standing in for the thing it claims to test.
+--   ⚠ ONE GAP I DO NOT THINK IS COVERED ANYWHERE, flagged rather than quietly absorbed:
+--     Sec case 4's direction — closed_at SET while is_active is still TRUE — has no assertion
+--     in 058's battery. (P4) covers only the (false, null) direction. It is unconstructible by
+--     UPDATE at 058 (the sync trigger overwrites is_active), but an INSERT carrying
+--     (is_active=true, closed_at=<date>) would be rejected by the CHECK with nothing asserting
+--     it. 058 is merged and this column dies here, so the window is closed by 059 itself —
+--     reported for the record, not proposed as work.
+--
+--   WHAT REMAINS BELOW IS THE POST-STATE, which is the only thing this file can honestly
+--   observe about the reconciliation: the migration ran to completion and left nothing behind.
 
--- (R2) SEC CASE 3 — is_active = false while closed_at IS NULL. The account someone
---   deactivated under the OLD mis-implementation and never dispositioned through the gate.
-savepoint sp_r2;
-update pfin.account set is_active = (closed_at is null);
-update pfin.account set is_active = false where account_id = :aopen;  -- inactive, not closed
-select throws_like(
-  $$ select pfin.fn_assert_closure_reconciled() $$,
-  :'m_reconcile',
-  '(R2) SEC CASE 3: an account with is_active = false and closed_at IS NULL ABORTS the migration. This is the un-dispositioned row — deactivated under the old flag, never validated by the gate — and dropping is_active with it unresolved makes which accounts were wrongly deactivated PERMANENTLY UNRECOVERABLE on a financial surface'
-);
-rollback to savepoint sp_r2;
-
--- (R3) SEC CASE 4 — the REVERSE mismatch: closed_at set while is_active is still true.
---   Asserted separately from (R2) because they fail for opposite reasons and a
---   one-directional check passes one of them while looking complete.
-savepoint sp_r3;
-update pfin.account set is_active = (closed_at is null);
-update pfin.account set is_active = true where account_id = :aclosed;  -- closed, but active
-select throws_like(
-  $$ select pfin.fn_assert_closure_reconciled() $$,
-  :'m_reconcile',
-  '(R3) SEC CASE 4, REVERSE MISMATCH: closed_at SET while is_active is still TRUE also ABORTS. Asserted separately from (R2) because the two fail for opposite reasons — a one-directional check passes this one while appearing complete. This is also the exact state a MISSING `058` sync trigger produces'
-);
-rollback to savepoint sp_r3;
-
--- (R4) THE BICONDITIONAL IS THE PROPERTY, stated directly. The reconciliation is not "count
---   the inactive rows" — it is an IFF over every row, in both directions.
-select is(
-  (select count(*)::int from pfin.account
-    where (is_active = false) is distinct from (closed_at is not null)),
-  0,
-  '(R4) THE BICONDITIONAL, directly: zero rows where (is_active = false) differs from (closed_at IS NOT NULL). Asserted independently of the function so a reconciliation that silently checks only one direction is visible here even if (R2)/(R3) were mis-wired'
-);
-
--- (R5) ORDERING — the assert function is GONE after `059`. It READS a column this migration
---   DROPS, so surviving it means a function that raises at runtime on any future call:
---   worse than dead code, because the error reads as "reconciliation failed".
-select ok(
-  (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-     where n.nspname = 'pfin' and p.proname = 'fn_assert_closure_reconciled') = 0
-  and not exists (select 1 from information_schema.columns
-                   where table_schema = 'pfin' and table_name = 'account'
-                     and column_name = 'is_active'),
-  '(R5) ORDERING: fn_assert_closure_reconciled no longer EXISTS **and** is_active is already dropped — i.e. we are genuinely post-`059`. CONJOINED DELIBERATELY: the absence half alone passes VACUOUSLY at every point before `059` creates the function, so as first written this assertion was green on a database where nothing had happened. Caught by running Sec''s correspondence check against my own split. The function reads is_active; surviving the drop leaves a function that raises at runtime on any future call, with error text reading "reconciliation failed" when nothing failed. This is the ONLY permanent assertion about it — a standing test that CALLS it would go red for the right reason and read as a regression'
-);
-
--- (R6) …and while it existed it was unreachable from a tenant session. This is the
---   structural fence behind the call-as-owner requirement: under `authenticated` the
---   INVOKER body sees one tenant's rows and passes vacuously for every other tenant.
---   Asserted as a NEGATIVE over the whole catalog so it survives the function's removal.
-select ok(
-  not exists (
-    select 1 from information_schema.routine_privileges
-     where routine_schema = 'pfin' and routine_name = 'fn_assert_closure_reconciled'
-       and grantee in ('authenticated', 'anon', 'PUBLIC')),
-  '(R6) the assert function was never EXECUTE-able by authenticated/anon/PUBLIC. Load-bearing rather than hygiene: it is SECURITY INVOKER, so called under a tenant role its body evaluates over that tenant''s rows only and PASSES VACUOUSLY for every other tenant — a green from exactly the call path a test reaches for first'
-);
-
--- (R7) THE COLUMN IS GONE, and the transitional sync trigger with it.
+-- (R1) THE ONE-WAY DOOR.
 select hasnt_column('pfin', 'account', 'is_active',
-  '(R7a) ONE-WAY DOOR: pfin.account.is_active is DROPPED, not retained-as-derived. A retained boolean cannot answer an as-of question, so any future query reaching for it in an as-of context is silently wrong — the exact defect this model removes');
+  '(R1) ONE-WAY DOOR: pfin.account.is_active is DROPPED, not retained-as-derived. A retained boolean cannot answer an as-of question, so any future query reaching for it in an as-of context would be silently wrong — the exact defect this model removes');
+
+-- (R2) THE TRANSITIONAL MACHINERY IS FULLY GONE — all three pieces, as one count.
+--   Asserted together because they are one decommission: 059 drops the CHECK, then the sync
+--   trigger, then the function, in that order and for stated reasons. Any survivor is a
+--   fence maintaining or enforcing a column that no longer exists.
+select is(
+  (select
+     (select count(*)::int from pg_constraint
+        where conrelid = 'pfin.account'::regclass and conname = 'account_closure_biconditional')
+   + (select count(*)::int from pg_trigger t join pg_class c on c.oid = t.tgrelid
+        join pg_namespace n on n.oid = c.relnamespace
+       where n.nspname = 'pfin' and c.relname = 'account'
+         and t.tgname = 'account_sync_is_active' and not t.tgisinternal)
+   + (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'pfin' and p.proname = 'fn_account_sync_is_active')),
+  0,
+  '(R2) THE TRANSITIONAL MACHINERY IS FULLY DECOMMISSIONED: the biconditional CHECK, the account_sync_is_active trigger and its function are ALL absent. Counted as a sum so a partial decommission is visible as a NUMBER rather than as three separate greens where one might have been forgotten. A surviving CHECK would reference a dropped column; a surviving trigger would maintain one');
+
+-- (R3) ANTI-VACUITY FOR (R1)/(R2) — the discipline the superseded (R5) recorded and that its
+--   own subject then defeated. Every assertion above is an ABSENCE, and absences are all
+--   equally true on a database where 057/058 never ran. Conjoin them with something that is
+--   ONLY true AFTER 059: closed_at present (058) AND the as-of re-point live in the catalog
+--   (059). Without this, BLOCK R is green against an empty schema.
+select ok(
+  exists (select 1 from information_schema.columns
+           where table_schema = 'pfin' and table_name = 'account' and column_name = 'closed_at')
+  and (select pg_get_functiondef(p.oid) like '%closed_at > p_as_of%'
+         from pg_proc p
+        where p.pronamespace = 'pfin'::regnamespace and p.proname = 'fn_compute_nav'
+          and pg_get_function_identity_arguments(p.oid) = 'p_as_of date, p_active_only boolean'),
+  '(R3) ANTI-VACUITY: closed_at EXISTS and fn_compute_nav carries the AS-OF comparison — so (R1)/(R2) are observing a genuinely post-059 database rather than passing because nothing was ever built. Every assertion in this block is an absence, and absences are indistinguishable from "the migration never ran" without an anchor that is only true once it has. This is the conjunction the superseded (R5) reached for; it failed only because its subject never existed to be absent');
 
 -- =====================================================================
 -- BLOCK X — THE AS-OF RE-POINT  (Sec's "seventh surface")
@@ -284,22 +299,48 @@ select ok(
   '(X4) the never-closed account is counted under BOTH p_active_only settings -> the re-point changed the PREDICATE, not the population. A re-point that accidentally narrowed the base set would still satisfy (X1)/(X2)'
 );
 
--- (X5) p_active_only = FALSE still includes closed accounts — the book/as-of engine
---   (`037` GL memo + historical trend) is unchanged.
-select ok(
-  (select pfin.fn_compute_nav('2026-07-31'::date, false))
-    > (select pfin.fn_compute_nav('2026-07-31'::date, true)),
-  '(X5) p_active_only = FALSE still includes closed accounts -> only the TRUE branch changed meaning; the book/as-of engine consumed by `037`''s GL memo is untouched'
-);
+-- (X5) ⚑ INVERTED 2026-08-04 — IT ASSERTED THE THING ADR-042 MAKES IMPOSSIBLE.
+--   It read: fn_compute_nav(d, false) > fn_compute_nav(d, true), i.e. the closed account
+--   carries value into the all-accounts figure. **That is unconstructible now.** A closed
+--   account holds ZERO past its closing date (gate legs 1+2 at closed_at, leg 3 and the
+--   transfer-in fence after it), so false and true AGREE — p_active_only is a provable no-op
+--   on value. The strict `>` could only ever pass while a closed account could still hold
+--   something, which is the defect this ADR removes. Same inverted-expectation shape as
+--   050's (A4)/(A7), found the same way: by running it.
+--   ⚠ SO THE CLAIM "FALSE STILL INCLUDES CLOSED ACCOUNTS" IS NOT OBSERVABLE BY VALUE, and
+--     asserting it by value is what produced a permanently-red test. It IS observable
+--     STRUCTURALLY, and precisely: both legs gate as `not p_active_only or (<as-of predicate>)`,
+--     so FALSE SHORT-CIRCUITS the predicate and the all-accounts engine never evaluates it.
+--     That is the property `037`'s GL memo depends on, stated where it can actually fail.
+select is(
+  (select ((length(d) - length(replace(d, 'not p_active_only', '')))
+           / length('not p_active_only'))::int
+     from (select pg_get_functiondef(p.oid) d from pg_proc p
+            where p.pronamespace = 'pfin'::regnamespace and p.proname = 'fn_compute_nav'
+              and pg_get_function_identity_arguments(p.oid) = 'p_as_of date, p_active_only boolean') q),
+  2,
+  '(X5) THE FALSE BRANCH SHORT-CIRCUITS, ON BOTH LEGS: fn_compute_nav gates the open/closed predicate behind `not p_active_only or (...)` exactly twice — once for securities, once for cash. So p_active_only=FALSE never evaluates the as-of predicate at all and the all-accounts engine `037`''s GL memo consumes is untouched by the re-point. ⚠ ASSERTED STRUCTURALLY BECAUSE IT CANNOT BE ASSERTED BY VALUE: a closed account holds zero, so false and true agree numerically and no arithmetic can distinguish "included and worth nothing" from "excluded". RED at 1 means a leg lost its short-circuit; at 0, both did');
 
 -- (X6) `051` INHERITS THE FIX WITHOUT CHANGE. Architect: `051:152` records that it composes
 --   on `049` and "adds no is_active predicate", so it needs no edit — but "needs no edit"
 --   is a claim about a composition, and this is the assertion that it actually held.
+--   ⚑ ANCHOR CORRECTED 2026-08-04 — IT MATCHED ITS OWN WARNING LABEL. As written this
+--     scanned the WHOLE function definition, which includes `059`'s in-body comment
+--     "If you came looking for 'where acc.is_active' in 049 because an older comment sent
+--     you...". The check tripped on the prose that exists to PREVENT the mistake it checks
+--     for, and went red against a correct function. DESIGN.md's anchoring rule, exactly:
+--     anchor on the SUBJECT, not on a token that co-occurs with it. SQL comments are stripped
+--     before matching, so the assertion is about EXECUTABLE text — which is what "carries no
+--     predicate" was always supposed to mean.
+--     (The behavioural form of this claim is 051's (A3)/(A4) propagation identity against
+--     049; kept here as well because this one also catches the column surviving in a body
+--     after the DROP, which a propagation identity would not notice.)
 select ok(
-  (select pg_get_functiondef(p.oid) not like '%is_active%'
+  (select regexp_replace(pg_get_functiondef(p.oid), '--[^' || chr(10) || ']*', '', 'g')
+            not like '%is_active%'
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'pfin' and p.proname = 'fn_nav_composition'),
-  '(X6) `051` fn_nav_composition carries NO is_active predicate of its own, so it inherits the re-point through `049` rather than needing an edit. Architect asserts this from `051:152`; this is the mechanical confirmation, and it would also catch the column surviving in a function body after the DROP'
+  '(X6) `051` fn_nav_composition carries NO is_active reference in its EXECUTABLE text, so it inherits the re-point through `049` rather than needing an edit. Comments are stripped before matching — the un-stripped form matched `059`''s own in-body warning against looking for that predicate, and went red on a correct function. Also catches the dropped column surviving in a function body'
 );
 select set_config('role', 'postgres', true);
 
@@ -317,15 +358,34 @@ select set_config('role', 'postgres', true);
 --   This is a fail-OPEN a text review passes: both versions read as "is it closed?", both
 --   are syntactically fine, and the difference only appears on a row that does not exist.
 select set_config('role', 'postgres', true);
-insert into pfin.holdings_checkpoint (account_id, symbol, as_of_date, quantity, balance, security_id)
-  values (999999999, 'ORPHAN', '2026-01-31', 10, 1000,
-          (select asset_id from pfin.asset where users_id is null limit 1));
-select _rls.set_tenant(:'ta'::uuid);
-select is(
-  (select pfin.fn_compute_nav('2026-07-31'::date, true)),
-  (select pfin.fn_compute_nav('2026-07-31'::date, true)),
-  '(X7) FAIL-CLOSED ON A MISSING ACCOUNT ROW: a holdings row whose account_id has no pfin.account row does NOT contribute to an active-only NAV. The pre-re-point body relied on coalesce(is_active, false) for this; the re-point had to carry it explicitly as `acc2.account_id is not null`. A naive predicate swap inverts it — NULL closed_at reads as "not closed" and the orphan is counted. Fails OPEN, and a text review passes it because both forms read as "is it closed?"'
-);
+-- ⚑⚑ REWRITTEN 2026-08-04. TWO DEFECTS, AND THE SECOND IS THE ONE THAT MATTERS.
+--   (1) THE FIXTURE IS UNCONSTRUCTIBLE. It inserted a holdings_checkpoint row for
+--       account_id 999999999. Measured: that INSERT is refused — `holdings_checkpoint
+--       .account_id` carries an FK to pfin.account, and `017`'s cross-tenant security fence
+--       raises first ("security_id N is not a global or account-owned asset for account_id
+--       999999999") because no account row exists to own it. Nor can the orphan be made by
+--       deleting the account afterwards: BOTH FKs on this table are ON DELETE RESTRICT
+--       (measured). **The LEFT JOIN miss this conjunct guards is unreachable through the
+--       schema.** Same class as the value-bearing-inactive account 049/050 had to stop
+--       fabricating — and the same answer: do not disable a fence to build a state the
+--       system prevents.
+--   (2) ⚠ THE ASSERTION WAS A TAUTOLOGY. It read
+--         is( fn_compute_nav('2026-07-31', true), fn_compute_nav('2026-07-31', true) )
+--       — the SAME expression on both sides. It could not fail for any implementation, any
+--       fixture, any predicate. **The most elaborately justified assertion in this file, with
+--       a verified before/after diff of the exact fail-open it guards, asserted nothing.**
+--       A rich justification block is not evidence the assertion under it is wired up; if
+--       anything it discourages reading the two lines beneath. Found by running the file.
+--   >> SO IT IS PROVEN STRUCTURALLY, which is the honest instrument when the behavioural one
+--      is unreachable BY CONSTRUCTION rather than merely unbuilt. The conjunct is real, its
+--      absence is a genuine fail-OPEN, and the FK is what currently makes it belt-and-braces
+--      rather than sole defence — so it must not be removed as redundant either.
+select ok(
+  (select pg_get_functiondef(p.oid) like '%acc2.account_id is not null%'
+     from pg_proc p
+    where p.pronamespace = 'pfin'::regnamespace and p.proname = 'fn_compute_nav'
+      and pg_get_function_identity_arguments(p.oid) = 'p_as_of date, p_active_only boolean'),
+  '(X7) FAIL-CLOSED ON A LEFT-JOIN MISS: the securities leg carries the explicit `acc2.account_id is not null` conjunct. Pre-re-point this work was done by `coalesce(acc2.is_active, false)`; the naive swap to `(acc2.closed_at is null or ...)` INVERTS it, because a missing account row yields NULL closed_at, `NULL is null` is TRUE, and an orphan holding gets COUNTED in an active-only NAV. A text review passes both — they read identically and differ only on a row that does not exist. ⚠ STRUCTURAL BECAUSE THE STATE IS UNCONSTRUCTIBLE: the FK plus 017''s fence make an orphan holdings row unreachable (measured), so no fixture can drive this. RED means the fail-closed conjunct was dropped');
 
 -- ┌─ ⚠ NAMED GAP — PREFIX SAFETY IS NOT ASSERTED HERE, AND CANNOT BE ────────────────┐
 -- │ THE PROPERTY: every prefix of `059` is a valid state — in particular there is no   │
