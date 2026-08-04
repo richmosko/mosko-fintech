@@ -202,15 +202,38 @@ create policy account_event_select on pfin.account_event
     )
   );
 
+-- ⚠ THE `actor` CONJUNCT IS A SEC VETO FIX (F1, joint-review 2026-08-04). DO NOT
+--   DROP IT AS REDUNDANT WITH THE actor CHECK — the CHECK constrains SHAPE, this
+--   constrains VALUE-TO-IDENTITY, and only the second closes the forgery.
+--   WHAT WAS OPEN: `pfin` is Data-API-exposed (config.toml) and this table grants
+--   `insert` to authenticated, so a tenant could POST a row directly, bypassing
+--   the writer entirely. #16 passes (the pair is genuinely matched — their own
+--   account), the old WITH CHECK passed (users_id IS their uid), and the actor
+--   CHECK passed because it admits 'system:remediation' UNCONDITIONALLY. A
+--   forged system-attributed row then landed PERMANENTLY in an append-only table
+--   with no redaction path for anyone, including its own tenant.
+--   >> 058's longest passage argues this forgery is "unreachable rather than
+--      merely discouraged". That argument is TRUE ABOUT THE TRIGGER and was
+--      defeated by a route that never enters it. A fence's reachability argument
+--      must be made over EVERY path to the table, not over the path it guards. <<
+--   COMPATIBILITY, verified rather than assumed: the writer is SECURITY INVOKER
+--   and emits exactly `'user:' || auth.uid()` on its auth.uid() branch; its GUC
+--   branch is reachable only when auth.uid() IS NULL, which cannot occur under a
+--   `to authenticated` policy; and the migration-role remediation writer is
+--   RLS-exempt, so this conjunct never applies to it.
 create policy account_event_insert on pfin.account_event
   for insert to authenticated
   with check (
     (users_id = auth.uid())
+    and (actor = 'user:' || auth.uid()::text)
     and (
       coalesce((select s.mfa_policy from pfin.user_settings s where s.users_id = auth.uid()), 'none') not in ('totp', 'passkey')
       or (auth.jwt() ->> 'aal') = 'aal2'
     )
   );
+
+comment on policy account_event_insert on pfin.account_event is
+  'INSERT WITH CHECK for authenticated (ADR-042; the actor conjunct added at Amendment 3 F1, Sec VETO fix 2026-08-04). THREE conjuncts, and each closes something the others do not. (1) users_id = auth.uid() — tenant binding. (2) actor = ''user:'' || auth.uid()::text — IDENTITY binding, and it is NOT redundant with the actor CHECK: the CHECK constrains the column''s SHAPE and admits ''system:remediation'' UNCONDITIONALLY, so before this conjunct any authenticated tenant could POST a system-attributed row for their own account directly over the Data API — #16 passes (the pair really is matched), the tenant conjunct passes (it really is their uid), and the row lands PERMANENTLY in an append-only table with no redaction path. The trigger''s auth.uid()-first precedence made the forgery unreachable THROUGH THE TRIGGER; this closes the route that never enters it. (3) the 025 aal2 step-up conjunct, inherited. Compatible with the writer by construction: it is SECURITY INVOKER and emits exactly this string on its auth.uid() branch, its GUC branch is unreachable when auth.uid() is non-null, and the migration-role remediation path is RLS-exempt so no policy applies to it.';
 
 comment on policy account_event_select on pfin.account_event is
   'Direct-owner read (users_id = auth.uid()) AND the 025 aal2 step-up conjunct, INHERITED not re-argued — a closure history exposes account existence, names, closure dates and reasons, which is at least as sensitive as the account rows it describes. Character-identical conjunct to account_select (025:201) by construction.';
@@ -276,11 +299,89 @@ end;
 $$;
 
 comment on function pfin.fn_account_event_matched_account() is
-  'BEFORE INSERT matched-tenant fence on pfin.account_event.account_id (ADR-011 Decision 3 CANONICAL INSTANCE #16; P1 local-anchor, copying the #15 shape at 044). The row carries its own resolved users_id; the referenced pfin.account row must share it. NULL-safe fail-closed (NOT EXISTS -> raise). SECURITY INVOKER + set search_path = '''' — NOT a DEFINER allowlist entry, allowlist stays 4. BEFORE INSERT only: the table is immutable audit-class so UPDATE/DELETE are trigger-blocked and an UPDATE fence would be dead. LOAD-BEARING for the one RLS-exempt writer — the migration-role remediation path could otherwise write a mismatched (account_id, users_id) pair that no policy would catch.';
+  'BEFORE INSERT matched-tenant fence on pfin.account_event.account_id (ADR-011 Decision 3 CANONICAL INSTANCE #16; P1 local-anchor, copying the #15 shape at 044). The row carries its own resolved users_id; the referenced pfin.account row must share it. NULL-safe fail-closed (NOT EXISTS -> raise). SECURITY INVOKER + set search_path = '''' — NOT a DEFINER allowlist entry, allowlist stays 4. BEFORE INSERT only: the table is immutable audit-class so UPDATE/DELETE are trigger-blocked and an UPDATE fence would be dead. LOAD-BEARING for the one RLS-exempt writer — the migration-role remediation path could otherwise write a mismatched (account_id, users_id) pair that no policy would catch. ⚠ THIS FENCE BORROWS PART OF ITS SUFFICIENCY FROM RLS, AND THE DEPENDENCY IS ASYMMETRIC — stated here because the catalog comment is where the next author will be standing, and because ADR-042''s symmetric rule (every exemption names its dependency; every fence states what makes it necessary) needs a third clause: a fence must also state what makes it SUFFICIENT when that comes from elsewhere. It runs SECURITY INVOKER, so `not exists` is true both when the pair genuinely mismatches and when the referenced row is merely INVISIBLE under the caller''s RLS. The two forge directions are NOT equally protected. Forging (account_id = another tenant''s, users_id = MY OWN) still raises on DATA — no account row carries that pair regardless of who is looking — so it survives any widening of read visibility, and the tenant conjunct in account_event_insert is a second independent layer. Forging (account_id = another tenant''s, users_id = THEIRS) is the fragile direction: the pair genuinely matches in the data, so ONLY invisibility makes `not exists` true here, with the WITH CHECK tenant conjunct as the remaining layer. So if account_select ever widens (V2 sharing / the rd_access read path), this fence stops contributing on that direction and the policy carries it alone — a silent narrowing of defense-in-depth, with no DDL change in this file to mark it. Whoever widens account_select should re-derive this comment rather than re-read it. Composition note: this trigger fires BEFORE account_event_origin_fence (alphabetical), so a direct POST carrying a MISMATCHED pair raises THIS message and never reaches the origin fence — the messages are deliberately distinct so a battery can assert which fence fired.';
 
 create trigger account_event_matched_account
   before insert on pfin.account_event
   for each row execute function pfin.fn_account_event_matched_account();
+
+-- ----------------------------------------------------------------------------
+-- ORIGIN FENCE — only the trigger writes this table (ADR-042 Amendment 3 F2;
+--   F/CTO ratified OPTION B, 2026-08-04). Sec finding: even with F1's identity
+--   binding, a tenant could still POST *fabricated* `closed` / `reopened` rows
+--   for their OWN accounts — correctly attributed, correctly tenanted, and
+--   describing transitions that never happened. F1 closes WHO the row claims to
+--   be; this closes WHETHER THE EVENT OCCURRED. Different questions.
+--
+--   WHY THIS EXISTS AT ALL — [ADR-011](DECISIONS.md#adr-011) Decision 9 already
+--   ruled this exact shape on a structurally identical surface, and 057 inverted
+--   it WITHOUT NAMING IT. D9, verbatim, on the reclass-history table:
+--     >> "an INVOKER+grant path would let a user POST forged history rows —
+--        defeating the tamper-evidence." <<
+--   That is precisely what `grant insert … to authenticated` on an append-only
+--   audit table does. The precedent was not argued against; it was not noticed.
+--   ⚑ A ratified precedent inverted SILENTLY is worse than one overruled loudly:
+--     an overruled precedent leaves an argument someone can check.
+--
+--   WHY B (origin fence, INVOKER) AND NOT A (DEFINER writer + no INSERT grant,
+--   D9's own remedy): A is the stronger fence and costs the allowlist 4 -> 5,
+--   putting the closure path inside the elevated set. B keeps every write
+--   evaluating under the caller's RLS — so #16, the tenant conjunct and the aal2
+--   conjunct all still bind — while removing the direct route. B is weaker in
+--   exactly one respect, stated so nobody discovers it later: it authenticates
+--   the CALL PATH, not the caller, so it rests on there being no other trigger
+--   on pfin.account that inserts here. There is one writer; a second would need
+--   a migration, therefore a review.
+--
+--   *** THE EXEMPTION IS ROLE-BASED AND MUST NEVER BECOME GUC-KEYED. ***
+--     (Sec's ratify condition, and it is the load-bearing half.) A GUC-keyed
+--     exemption — `current_setting('pfin.remediation')` or any cousin — would
+--     REINTRODUCE F1'S ENTIRE CLASS one fence over: `set local` is available to
+--     ANY session, so the exemption would be self-issuable and the fence would
+--     check a claim the attacker writes. Ownership is not self-issuable.
+--
+--   THE EXEMPTION IS "YOU OWN THIS TABLE", NOT a hardcoded role name. The
+--   migration role owns what it created, so the predicate names the property
+--   rather than the identity and does not rot when the role is renamed or
+--   differs between local / CI / production. `authenticated` and `service_role`
+--   are not owners.
+--
+--   pg_trigger_depth() MEASURED, NOT ASSUMED (live DB, rolled-back txn):
+--     direct user INSERT              -> this fence sees 1
+--     INSERT issued from inside the
+--     account_event_write trigger     -> this fence sees 2
+--   Hence `< 2` is the refusal condition. It is NOT `= 0`: the fence is itself a
+--   trigger, so the depth is never 0 when it runs — a reader reaching for `= 0`
+--   would write a fence that refuses nothing.
+-- ----------------------------------------------------------------------------
+create or replace function pfin.fn_account_event_origin_fence()
+returns trigger
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+begin
+  if pg_catalog.pg_trigger_depth() < 2
+     and current_user <> (
+       select pg_catalog.pg_get_userbyid(c.relowner)
+         from pg_catalog.pg_class c
+         join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+        where n.nspname = 'pfin' and c.relname = 'account_event'
+     )
+  then
+    raise exception
+      'pfin.account_event rejects direct INSERT: rows are written ONLY by the account_event_write trigger on pfin.account (ADR-042 Amendment 3 F2). A state transition is RECORDED BY THE TRANSITION, never asserted by a caller — close or reopen the account and the row follows. The only exempt writer is the table OWNER (the one-time migration-role remediation), and that exemption is deliberately role-based: a GUC-keyed one would be self-issuable by any session.';
+  end if;
+  return new;
+end;
+$$;
+
+comment on function pfin.fn_account_event_origin_fence() is
+  'BEFORE INSERT origin fence on pfin.account_event (ADR-042 Amendment 3 F2; F/CTO-ratified option B, 2026-08-04). Admits ONLY trigger-originated rows plus the table owner. CLOSES A DIFFERENT HOLE FROM F1''s WITH CHECK conjunct and neither substitutes for the other: F1 binds WHO the row claims to be, this binds WHETHER THE EVENT OCCURRED — without it a tenant could POST fabricated but correctly-attributed closed/reopened rows for their own accounts. Exists because [ADR-011](DECISIONS.md#adr-011) Decision 9 already ruled this shape on the structurally identical reclass-history surface — "an INVOKER+grant path would let a user POST forged history rows, defeating the tamper-evidence" — and 057 inverted that precedent SILENTLY; a precedent inverted without being named is worse than one overruled, because an overruled one leaves a checkable argument. Option B (origin fence, INVOKER) over option A (DEFINER writer + no INSERT grant, D9''s own remedy): A is stronger and costs the DEFINER allowlist 4 -> 5, putting the closure path inside the elevated set; B keeps every write under the caller''s RLS so #16, the tenant conjunct and the 025 aal2 conjunct all still bind. B''s one weakness, stated rather than left to be discovered: it authenticates the CALL PATH, not the caller, so it rests on there being exactly one trigger on pfin.account that inserts here — a second would require a migration, therefore a review. ⚠ THE EXEMPTION IS ROLE-BASED AND MUST NEVER BECOME GUC-KEYED (Sec ratify condition): set local is available to ANY session, so a GUC-keyed exemption would be self-issuable and the fence would be checking a claim the attacker writes — F1''s exact class, one fence over. It is expressed as OWNERSHIP of pfin.account_event rather than a hardcoded role name, so it names the property instead of the identity and does not rot across local / CI / production. pg_trigger_depth() < 2 is MEASURED (direct INSERT sees 1; an INSERT from inside account_event_write sees 2) — NOT = 0, since this fence is itself a trigger and the depth is never 0 when it runs; a reader reaching for = 0 would write a fence that refuses nothing. SECURITY INVOKER; DEFINER allowlist stays 4.';
+
+create trigger account_event_origin_fence
+  before insert on pfin.account_event
+  for each row execute function pfin.fn_account_event_origin_fence();
 
 -- ----------------------------------------------------------------------------
 -- Immutability, Lock 10 mod #8 CROSS-TIER (the 004 / 054 pattern reproduced).
