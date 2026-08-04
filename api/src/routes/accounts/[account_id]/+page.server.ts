@@ -3,9 +3,10 @@
 // Backend-owned server source (ARCH §4.1 allowlist).
 //
 //  - load(): account row + transaction history — all RLS-scoped. Non-owner → 404.
-//  - actions.toggleActive: the account CLOSE control (ADR-042 Decision 1). Single-row
-//    RLS-scoped UPDATE of closed_at — NOT is_active, which 059 drops. Gated by the 058
-//    BEFORE UPDATE close gate; refusals name which leg fired.
+//  - actions.closeAccount / actions.reopenAccount: the account CLOSE / REOPEN control
+//    (ADR-042 Decision 1). Each maps 1:1 onto its INVOKER RPC, which performs a single-row
+//    RLS-scoped UPDATE of closed_at. Gated by the 058 BEFORE UPDATE close gate; refusals name
+//    which leg fired. is_active is GONE (dropped at 059) — there is no boolean here to flip.
 //
 // The account-level asset Sub-Cat surface (reassignSubCat action + the asset-domain
 // picker + the account.sub_cat_id label embed) is REMOVED — allocation classifies
@@ -14,15 +15,22 @@
 // stay dormant (a full column drop is a separate future Architect ADR). The
 // per-TRANSACTION cashflow category (account_trans_annotation.sub_cat_id) is unaffected.
 //
-// SUPERSEDED BY ADR-042: the AC #3 is_active polarity note described a boolean that is
-// retired at 059. Closure is now as-of dated (closed_at); a boolean cannot answer an
-// as-of question, which is the defect the three-concept model removes. The NAV/
-// current-state read contract re-points with the §7.9 application-layer landing.
-// AC #4: inactive accounts retain account_trans history (schema-guaranteed).
+// SUPERSEDED BY ADR-042, and DISCHARGED at 059: the AC #3 is_active polarity note described a
+// boolean that no longer exists. Closure is as-of dated (closed_at); a boolean cannot answer an
+// as-of question, which is the defect the three-concept model removes. The NAV/current-state
+// read contract re-pointed here in the §7.9 application-layer landing — see api/CLAUDE.md for
+// the replacement contract, and note the predicate is AS-OF (`closed_at is null or closed_at >
+// as_of`), never the naive `closed_at is null`.
+// AC #4: closed accounts retain account_trans history (schema-guaranteed).
 // acct_number intentionally NOT selected — masked-only render posture (SD-15).
 
 import { error, fail, redirect } from '@sveltejs/kit';
-import { toggleActiveSchema, updateAttributesSchema, fieldErrors } from '$lib/server/schemas/account';
+import {
+	closeAccountSchema,
+	reopenAccountSchema,
+	updateAttributesSchema,
+	fieldErrors
+} from '$lib/server/schemas/account';
 import { loadConnectionState } from '$lib/server/queries/connectionState';
 import {
 	manualTransCreateSchema,
@@ -69,7 +77,7 @@ function toActionResult(r: WriteResult) {
 // account.sub_cat_id + its user_taxonomy label embed are intentionally NOT selected — the
 // account-level asset Sub-Cat surface is removed (allocation classifies per-asset/per-txn).
 const ACCOUNT_COLUMNS =
-	'account_id, name, account_type, scope, tax_treatment, is_active, linked_source_id, created_at';
+	'account_id, name, account_type, scope, tax_treatment, closed_at, linked_source_id, created_at';
 
 function parseAccountId(param: string): number | null {
 	const n = Number(param);
@@ -297,86 +305,92 @@ function failureLabel(f: CloseFailure): string {
 	return 'unclassified';
 }
 
+/**
+ * The close-control error path, SHARED by closeAccount and reopenAccount.
+ *
+ * Shared deliberately rather than duplicated per action: both directions can trip 058's two
+ * already-closed immutability conjuncts, both get an RPC refusal, and the F8 redaction below is a
+ * property of the RAISES, not of the direction. Two copies would let one drift back to logging
+ * `updErr.message` while the other stayed correct — and the drifted one would look fine in review.
+ */
+function closeControlFailure(updErr: { message?: string | null; code?: string }) {
+	const failure = classifyCloseFailure(updErr.message ?? '');
+	// ⚠ NEVER LOG `updErr.message` ON THIS PATH (Sec joint-review, PR #318 F8).
+	//   058's gate raises are operator-precise BY VALUE: leg 2 interpolates a real account CASH
+	//   BALANCE (`% native`), legs 1/2/3 interpolate the closing DATE, and the two already-closed
+	//   immutability conjuncts interpolate both closure dates. Logs are operator-only, which is
+	//   why this is a redaction and not a veto — but this project redacts concrete money even from
+	//   committed artifacts, and log shipping/retention is a Phase-7 surface nobody has scoped for
+	//   financial values. Shipping the amount into the log stream on every blocked close
+	//   pre-commits that decision.
+	//   The operator still gets what they need to act: the SQLSTATE and WHICH LEG FIRED, derived
+	//   from the SAME classification the user-facing copy uses — one classifier, so the log and
+	//   the message cannot drift apart. What they do not get is the amount.
+	console.error(
+		`[accounts/[account_id]] close-control RPC failed: code=${updErr.code ?? 'none'} ${failureLabel(failure)}`
+	);
+	// The close gate refuses with a named leg (holdings / cash / post-closure activity /
+	// future-dated). ADR-042 Decision 1 requires the refusal to NAME why, so the user knows the
+	// account holds value rather than that "something went wrong" — a guided close-with-funds
+	// walkthrough is future work and the message stands in for it.
+	if (failure.kind === 'gate')
+		return fail(422, { errors: { _form: [GATE_LEG_MESSAGE[failure.leg]] } });
+	// The RPCs' own refusals carry a distinct prefix and mean "already in that state", not
+	// "blocked". Classified after the gate so a gate raise always wins.
+	if (failure.kind === 'rpc')
+		return fail(409, { errors: { _form: [RPC_REFUSAL_MESSAGE[failure.refusal]] } });
+	return fail(422, { errors: { _form: ['Could not update the account.'] } });
+}
+
 export const actions: Actions = {
-	// The account CLOSE / REOPEN control (ADR-042 Decision 1; the RPC pair per Amendment 2).
-	// Named `toggleActive` and posting `is_active` for now: PR 2 changes the WRITE MECHANISM
-	// only, and the reads still resolve through is_active until 059 drops it. The rename rides
-	// with the §7.9 application-layer landing, so this file is not touched twice for a
-	// half-migrated surface.
-	toggleActive: async ({ request, locals, params }) => {
+	// ── The account CLOSE / REOPEN control (ADR-042 Decision 1; the RPC pair per Amendment 2) ──
+	//
+	// TWO ACTIONS, NOT A TOGGLE. `toggleActive` (which posted an `is_active` boolean) is retired
+	// with the column at 059, and it is SPLIT rather than renamed. A toggle models closure as a
+	// flag with two values; ADR-042 ruled it a dated TRANSITION with two directions that carry
+	// different payloads — a close needs a reason_code, a reopen has no reason vocabulary at all.
+	// Keeping one action meant a boolean plus a cross-field `.refine()` making reason_code
+	// conditionally required, i.e. a state machine wearing a boolean. That is the same shape at
+	// the app layer that 059 removed at the schema layer, and renaming it would have carried it
+	// forward under a better name. Each action now maps 1:1 onto its INVOKER RPC.
+	//
+	// WHY AN RPC AND NOT A PATCH (both directions): 058's audit writer requires `pfin.reason_code`
+	// to be set in the SAME TRANSACTION as the close, and it deliberately will not invent one. A
+	// PostgREST PATCH is its own transaction with no way to carry a GUC alongside it, so a direct
+	// .update() CANNOT close an account — it fails every time. The INVOKER RPC sets the GUC and
+	// performs the UPDATE in one request, so the two share a transaction BY CONSTRUCTION rather
+	// than by convention. RLS, the aal2 conjunct, the close gate, the biconditional and the audit
+	// writer all still evaluate as the caller.
+	closeAccount: async ({ request, locals, params }) => {
 		const { user } = await locals.safeGetSession();
 		if (!user) return fail(401, { errors: { _form: ['You must be signed in.'] } });
 
 		const accountId = parseAccountId(params.account_id);
 		if (accountId === null) return fail(400, { errors: { _form: ['Invalid account.'] } });
 
-		const parsed = toggleActiveSchema.safeParse(Object.fromEntries(await request.formData()));
+		const parsed = closeAccountSchema.safeParse(Object.fromEntries(await request.formData()));
 		if (!parsed.success) return fail(400, { errors: fieldErrors(parsed.error) });
 
-		// ADR-042 Decision 1 + Amendment 2: closure is a dated bookkeeping event, so this
-		// writes closed_at — never is_active, which 059 drops.
-		//
-		// WHY AN RPC AND NOT A PATCH: 058's audit writer requires `pfin.reason_code` to be set
-		// in the SAME TRANSACTION as the close, and it deliberately will not invent one. A
-		// PostgREST PATCH is its own transaction with no way to carry a GUC alongside it, so a
-		// direct .update() CANNOT close an account — it fails every time. The INVOKER RPC sets
-		// the GUC and performs the UPDATE in one request, so the two share a transaction BY
-		// CONSTRUCTION rather than by convention. RLS, the aal2 conjunct, the close gate, the
-		// biconditional and the audit writer all still evaluate as the caller.
-		//
 		// closed_at is NOT sent: p_closed_at defaults to server now(). Sending a client clock
 		// would let a machine a minute fast trip the gate's own future-date bound.
-		const closing = !parsed.data.is_active;
-		const { data: applied, error: updErr } = closing
-			? await locals.supabase.schema('pfin').rpc('fn_close_account', {
-					p_account_id: accountId,
-					p_reason_code: parsed.data.reason_code
-				})
-			: await locals.supabase.schema('pfin').rpc('fn_reopen_account', {
-					p_account_id: accountId
-				});
+		const { data: applied, error: updErr } = await locals.supabase
+			.schema('pfin')
+			.rpc('fn_close_account', {
+				p_account_id: accountId,
+				p_reason_code: parsed.data.reason_code
+			});
 
-		if (updErr) {
-			const failure = classifyCloseFailure(updErr.message ?? '');
-			// ⚠ NEVER LOG `updErr.message` ON THIS PATH (Sec joint-review, PR #318 F8).
-			//   058's gate raises are operator-precise BY VALUE: leg 2 interpolates a real account
-			//   CASH BALANCE (`% native`), legs 1/2/3 interpolate the closing DATE, and the two
-			//   already-closed immutability conjuncts interpolate both closure dates. Logs are
-			//   operator-only, which is why this is a redaction and not a veto — but this project
-			//   redacts concrete money even from committed artifacts, and log shipping/retention is
-			//   a Phase-7 surface nobody has scoped for financial values. Shipping the amount into
-			//   the log stream on every blocked close pre-commits that decision.
-			//   The operator still gets what they need to act: the SQLSTATE and WHICH LEG FIRED,
-			//   derived from the SAME classification the user-facing copy uses — one classifier, so
-			//   the log and the message cannot drift apart. What they do not get is the amount.
-			console.error(
-				`[accounts/[account_id]] close-control RPC failed: code=${updErr.code ?? 'none'} ${failureLabel(failure)}`
-			);
-			// The close gate refuses with a named leg (holdings / cash / post-closure activity /
-			// future-dated). ADR-042 Decision 1 requires the refusal to NAME why, so the user
-			// knows the account holds value rather than that "something went wrong" — a guided
-			// close-with-funds walkthrough is future work and the message stands in for it.
-			if (failure.kind === 'gate')
-				return fail(422, { errors: { _form: [GATE_LEG_MESSAGE[failure.leg]] } });
-			// The RPCs' own refusals carry a distinct prefix and mean "already in that state",
-			// not "blocked". Classified after the gate so a gate raise always wins.
-			if (failure.kind === 'rpc')
-				return fail(409, { errors: { _form: [RPC_REFUSAL_MESSAGE[failure.refusal]] } });
-			return fail(422, { errors: { _form: ['Could not update the account.'] } });
-		}
+		if (updErr) return closeControlFailure(updErr);
 
 		// SERVER-APPLIED STATE, not the posted value (Sec joint-review, PR #318 F8 note).
 		// 058 §(7)'s CONTRACT block: fn_close_account RETURNS the closed_at actually applied, and
 		// that value is SERVER-derived — p_closed_at is deliberately not sent so it defaults to
-		// server now(), which means the caller CANNOT otherwise know it. Echoing back the posted
-		// is_active reported what the client asked for and discarded the one value the return type
-		// exists to carry. fn_reopen_account RETURNS void because a reopen applies NULL; that
-		// asymmetry is the contract, so `null` here is the applied state, not a missing one.
-		const closedAt = closing ? ((applied as string | null) ?? null) : null;
-		if (closing && closedAt === null) {
+		// server now(), which means the caller CANNOT otherwise know it.
+		const closedAt = (applied as string | null) ?? null;
+		if (closedAt === null) {
 			// Contract breach, not a user condition: fn_close_account raises P0002 when it matches
 			// no open row, so a no-error result with no timestamp means its RETURNING is broken.
-			// Named in the log rather than reported to the user as a reopen.
+			// Named in the log rather than reported to the user as an open account.
 			console.error(
 				'[accounts/[account_id]] fn_close_account returned no closed_at despite no error — RETURNING contract broken'
 			);
@@ -384,9 +398,33 @@ export const actions: Actions = {
 		return { success: true, closed_at: closedAt };
 	},
 
+	reopenAccount: async ({ request, locals, params }) => {
+		const { user } = await locals.safeGetSession();
+		if (!user) return fail(401, { errors: { _form: ['You must be signed in.'] } });
+
+		const accountId = parseAccountId(params.account_id);
+		if (accountId === null) return fail(400, { errors: { _form: ['Invalid account.'] } });
+
+		// The schema is EMPTY-and-`.strict()`, so this is a real fence and not a formality: a
+		// posted reason_code or closed_at is REJECTED rather than silently dropped.
+		const parsed = reopenAccountSchema.safeParse(Object.fromEntries(await request.formData()));
+		if (!parsed.success) return fail(400, { errors: fieldErrors(parsed.error) });
+
+		const { error: updErr } = await locals.supabase
+			.schema('pfin')
+			.rpc('fn_reopen_account', { p_account_id: accountId });
+
+		if (updErr) return closeControlFailure(updErr);
+
+		// fn_reopen_account RETURNS void because a reopen applies NULL; that asymmetry IS the
+		// contract (058 §(7)), so null here is the applied state, not a missing one.
+		return { success: true, closed_at: null };
+	},
+
 	// Edit the account's user attributes: name / account_type / scope / tax_treatment. RLS-scoped
 	// single-row UPDATE (account_update = users_id = auth.uid()). Deliberately does NOT touch the
-	// aggregator / connection binding (deferred) nor is_active (that's toggleActive). `.strict()` +
+	// aggregator / connection binding (deferred) nor closed_at (that's the close/reopen pair, and
+	// 058 fences it at the DB regardless). `.strict()` +
 	// the shared enums are the mass-assignment + type-confusion fences (Lock 14 mods #1/#2).
 	updateAttributes: async ({ request, locals, params }) => {
 		const { user } = await locals.safeGetSession();

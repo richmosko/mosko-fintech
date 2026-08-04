@@ -79,9 +79,15 @@ describe('POST /accounts/[account_id]?/updateAttributes', () => {
 		expect(res.status).toBe(400);
 	});
 
-	it('mass-assignment: is_active / linked_source_id posted → rejected by .strict() → 400', async () => {
+	it('mass-assignment: closed_at / linked_source_id posted → rejected by .strict() → 400', async () => {
+		// closed_at replaces is_active as the interesting mass-assignment target at 059: it is the
+		// column the close gate governs, and 003's TABLE-LEVEL update grant means the DB would
+		// accept it from this path if `.strict()` did not reject it first. (058's gate is the real
+		// boundary; this is the app-layer fence in front of it.) `is_active` is deliberately NOT
+		// asserted here any more — a dropped column is rejected by every layer trivially, so
+		// testing it would prove nothing while reading like coverage.
 		const { event, update } = makeEvent(
-			{ ...VALID, is_active: 'false', linked_source_id: '99' },
+			{ ...VALID, closed_at: '2026-06-03T10:00:00Z', linked_source_id: '99' },
 			{ id: SESSION_UID }
 		);
 		const res = (await actions.updateAttributes(event)) as { status: number };

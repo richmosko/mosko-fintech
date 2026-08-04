@@ -162,14 +162,18 @@ describe('loadConnectionState', () => {
 	});
 });
 
+// ⚠ ACCT models a pfin.ACCOUNT row → `closed_at` (ADR-042 / 059). The `conn()` factory above
+// models a linked_source row and KEEPS its `is_active` — a different, preserved column. Both
+// live in this one file, which is why the fixtures name their table.
 const ACCT = (over: Record<string, unknown> = {}) => ({
 	account_id: 1,
 	name: 'Checking',
 	account_type: 'depository',
-	is_active: true,
+	closed_at: null,
 	linked_source_id: 42,
 	...over
 });
+const CLOSED_AT = '2026-06-03T10:00:00Z';
 
 describe('loadAccountsBySource', () => {
 	/** Mock a `.schema().from().select().not().order()` chain. */
@@ -186,7 +190,7 @@ describe('loadAccountsBySource', () => {
 		const { supabase, not } = makeMulti({
 			data: [
 				ACCT({ account_id: 1, linked_source_id: 42 }),
-				ACCT({ account_id: 2, is_active: false, linked_source_id: 42 }),
+				ACCT({ account_id: 2, closed_at: CLOSED_AT, linked_source_id: 42 }),
 				ACCT({ account_id: 3, linked_source_id: 7 }),
 				ACCT({ account_id: 4, linked_source_id: null }) // defensive guard
 			],
@@ -196,8 +200,8 @@ describe('loadAccountsBySource', () => {
 		expect(not).toHaveBeenCalledWith('linked_source_id', 'is', null);
 		expect(error).toBe(false);
 		expect(accountsBySource.get('42')).toEqual([
-			{ account_id: 1, name: 'Checking', account_type: 'depository', is_active: true },
-			{ account_id: 2, name: 'Checking', account_type: 'depository', is_active: false }
+			{ account_id: 1, name: 'Checking', account_type: 'depository', closed_at: null },
+			{ account_id: 2, name: 'Checking', account_type: 'depository', closed_at: CLOSED_AT }
 		]);
 		expect(accountsBySource.get('7')).toHaveLength(1);
 		expect(accountsBySource.has('null')).toBe(false);
@@ -224,16 +228,19 @@ describe('loadAccountsForSource', () => {
 		return { supabase: { schema } as unknown as SupabaseClient, eq };
 	}
 
-	it('returns this connection\'s accounts (active AND inactive)', async () => {
+	it('returns this connection\'s accounts (OPEN AND CLOSED — management view)', async () => {
 		const { supabase, eq } = makeForSource({
-			data: [ACCT({ account_id: 1 }), ACCT({ account_id: 2, is_active: false })],
+			data: [ACCT({ account_id: 1 }), ACCT({ account_id: 2, closed_at: CLOSED_AT })],
 			error: null
 		});
 		const accounts = await loadAccountsForSource(supabase, '42');
 		expect(eq).toHaveBeenCalledWith('linked_source_id', '42');
+		// No closure filter is applied: a connections surface is a MANAGEMENT view, so a closed
+		// account must still appear (as closed). The DATE is carried through rather than
+		// collapsed to a boolean — that is the shape change, not a rename.
 		expect(accounts).toEqual([
-			{ account_id: 1, name: 'Checking', account_type: 'depository', is_active: true },
-			{ account_id: 2, name: 'Checking', account_type: 'depository', is_active: false }
+			{ account_id: 1, name: 'Checking', account_type: 'depository', closed_at: null },
+			{ account_id: 2, name: 'Checking', account_type: 'depository', closed_at: CLOSED_AT }
 		]);
 	});
 

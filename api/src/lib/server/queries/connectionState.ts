@@ -31,19 +31,27 @@ export type ConnectionState = {
 /** Layout banner summary — the two counts the P4 banner needs (present-N vs info vs zero). */
 export type ConnectionHealth = { reauthCount: number; institutionDownCount: number };
 
-/** One account nested under its connection (connections-redesign). Both active and inactive
- *  are surfaced — the connections surfaces are MANAGEMENT views, not current-state/NAV, so the
- *  `WHERE is_active = TRUE` contract (api/CLAUDE.md) does NOT apply here. */
+/** One account nested under its connection (connections-redesign). Open AND closed accounts are
+ *  surfaced — the connections surfaces are MANAGEMENT views, not current-state/NAV, so the
+ *  open-as-of filter of the ADR-042 closure contract (api/CLAUDE.md) does NOT apply here.
+ *
+ *  ⚠ `is_active: boolean` became `closed_at: string | null` at 059 (ADR-042). This is a SHAPE
+ *  CHANGE ACROSS THE BACKEND↔FRONTEND BOUNDARY, not a rename: a closure is DATED, so the field
+ *  carries WHEN, and "closed" is `closed_at !== null`. It is deliberately NOT re-derived into a
+ *  boolean at this boundary — collapsing it here would hand Frontend back exactly the
+ *  current-state flag 059 removed, and the date is the only thing that makes a management view
+ *  able to say "closed 3 June" rather than merely "closed". */
 export type ConnectionAccount = {
 	account_id: number;
 	name: string;
 	account_type: string;
-	is_active: boolean;
+	/** Closure timestamp (ISO) or null when open. NULL = open — never absent. */
+	closed_at: string | null;
 };
 
 // Account columns for the connection-nested account rows. acct_number intentionally NOT
 // selected — masked-only render posture (SD-15). linked_source_id is the grouping key.
-const CONNECTION_ACCOUNT_COLUMNS = 'account_id, name, account_type, is_active, linked_source_id';
+const CONNECTION_ACCOUNT_COLUMNS = 'account_id, name, account_type, closed_at, linked_source_id';
 
 type ConnectionAccountRow = ConnectionAccount & { linked_source_id: number | string | null };
 
@@ -161,7 +169,7 @@ export async function loadConnectionState(
  * All of the caller's LINKED accounts grouped by their connection (linked_source_id), owner-scoped
  * via the anon client (account_select RLS). Manual / non-linked accounts (linked_source_id IS NULL)
  * are excluded — they are not connections. Returns a Map keyed by source_id (numeric string, to
- * match ConnectionState.source_id) → the account rows (active AND inactive: management view, not
+ * match ConnectionState.source_id) → the account rows (OPEN AND CLOSED: management view, not
  * NAV). Fail-soft: `error:true` on a read failure with an empty map (the connections page renders a
  * retriable error). Feeds the connections-list loader's per-connection nesting.
  */
@@ -189,7 +197,7 @@ export async function loadAccountsBySource(
 			account_id: a.account_id,
 			name: a.name,
 			account_type: a.account_type,
-			is_active: a.is_active
+			closed_at: a.closed_at
 		});
 		accountsBySource.set(key, bucket);
 	}
@@ -198,7 +206,7 @@ export async function loadAccountsBySource(
 
 /**
  * The caller's accounts under ONE connection (linked_source_id = sourceId), owner-scoped via the
- * anon client (account_select RLS). Active AND inactive (management view). Fail-soft: [] on a read
+ * anon client (account_select RLS). Open AND closed (management view). Fail-soft: [] on a read
  * error. Used by the connections-redesign `[source_id]` use/ignore edit page.
  */
 export async function loadAccountsForSource(
@@ -220,7 +228,7 @@ export async function loadAccountsForSource(
 		account_id: a.account_id,
 		name: a.name,
 		account_type: a.account_type,
-		is_active: a.is_active
+		closed_at: a.closed_at
 	}));
 }
 

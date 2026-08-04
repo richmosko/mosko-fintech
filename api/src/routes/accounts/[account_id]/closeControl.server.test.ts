@@ -1,9 +1,12 @@
 // closeControl.server.test.ts — the account CLOSE / REOPEN control
 // (ADR-042 Decision 1; the INVOKER RPC pair per Amendment 2).
 //
-// The action is still named `toggleActive` and still posts `is_active` (the rename rides with
-// the §7.9 application-layer landing), but the MECHANISM is now an RPC. These assertions exist
-// because this path had NO coverage at all while it wrote is_active.
+// TWO ACTIONS as of 059 (§7.9 application-layer landing). `toggleActive`, which posted an
+// `is_active` boolean, is SPLIT into `closeAccount` + `reopenAccount` rather than RENAMED — a
+// toggle models closure as a flag with two values, and ADR-042 ruled it a dated TRANSITION whose
+// two directions carry different payloads. The split is what lets `reason_code` be plainly
+// REQUIRED on close and ABSENT on reopen instead of a cross-field `.refine()` over the flag, so
+// `.strict()` alone is the fence. Renaming would have carried the wrong model forward.
 //
 // THE LOAD-BEARING ONE IS `no-direct-patch`. 058's audit writer requires pfin.reason_code in
 // the SAME TRANSACTION as the close and will not invent one; a PostgREST PATCH is its own
@@ -19,8 +22,8 @@ import { describe, it, expect, vi } from 'vitest';
 import { actions } from './+page.server';
 
 const SESSION_UID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-const CLOSE = { is_active: 'false', reason_code: 'no_longer_used' };
-const REOPEN = { is_active: 'true' };
+const CLOSE = { reason_code: 'no_longer_used' };
+const REOPEN = {};
 // 058 §(7): fn_close_account RETURNS the closed_at it actually applied, SERVER-derived from
 // now(). Nothing the client sent can produce this value — that is the point of asserting it.
 const APPLIED_CLOSED_AT = '2026-08-04T11:22:33.456Z';
@@ -55,14 +58,14 @@ function makeEvent(
 		request,
 		locals,
 		params: { account_id: accountId }
-	} as unknown as Parameters<typeof actions.toggleActive>[0];
+	} as unknown as Parameters<typeof actions.closeAccount>[0];
 	return { event, rpc, update };
 }
 
-describe('POST /accounts/[account_id]?/toggleActive — the close control', () => {
+describe('POST /accounts/[account_id]?/closeAccount|reopenAccount — the close control', () => {
 	it('unauthenticated → 401, nothing written', async () => {
 		const { event, rpc, update } = makeEvent(CLOSE, null);
-		const res = (await actions.toggleActive(event)) as { status: number };
+		const res = (await actions.closeAccount(event)) as { status: number };
 		expect(res.status).toBe(401);
 		expect(rpc).not.toHaveBeenCalled();
 		expect(update).not.toHaveBeenCalled();
@@ -70,7 +73,7 @@ describe('POST /accounts/[account_id]?/toggleActive — the close control', () =
 
 	it('no-direct-patch: closing goes through fn_close_account, NEVER a PATCH', async () => {
 		const { event, rpc, update } = makeEvent(CLOSE, { id: SESSION_UID }, '7');
-		await actions.toggleActive(event);
+		await actions.closeAccount(event);
 
 		expect(update).not.toHaveBeenCalled();
 		expect(rpc).toHaveBeenCalledTimes(1);
@@ -79,7 +82,7 @@ describe('POST /accounts/[account_id]?/toggleActive — the close control', () =
 
 	it('close call-shape: account id + reason only — no client clock is sent', async () => {
 		const { event, rpc } = makeEvent(CLOSE, { id: SESSION_UID }, '7');
-		await actions.toggleActive(event);
+		await actions.closeAccount(event);
 
 		const args = rpc.mock.calls[0][1];
 		expect(args).toEqual({ p_account_id: 7, p_reason_code: 'no_longer_used' });
@@ -90,28 +93,32 @@ describe('POST /accounts/[account_id]?/toggleActive — the close control', () =
 
 	it('reopen goes through fn_reopen_account and carries no reason', async () => {
 		const { event, rpc, update } = makeEvent(REOPEN, { id: SESSION_UID }, '7');
-		await actions.toggleActive(event);
+		await actions.reopenAccount(event);
 
 		expect(update).not.toHaveBeenCalled();
 		expect(rpc).toHaveBeenCalledWith('fn_reopen_account', { p_account_id: 7 });
+		// No p_effective_date: the reopen schema is empty-and-strict and the GUC is OPTIONAL by
+		// design, so 058's writer records NULL = "not recorded" rather than a guessed current_date.
 	});
 
 	it('closing without a reason is rejected before any DB call', async () => {
 		// reason_code is MANDATORY on the into-closed transition and has no other carrier.
 		// Catching it here keeps the gate's raise as a backstop rather than the primary UX.
-		const { event, rpc } = makeEvent({ is_active: 'false' }, { id: SESSION_UID }, '7');
-		const res = (await actions.toggleActive(event)) as { status: number };
+		// Post-split this is plain schema requiredness on closeAccountSchema, not a cross-field
+		// refinement over a boolean — the empty post has nothing to satisfy it.
+		const { event, rpc } = makeEvent({}, { id: SESSION_UID }, '7');
+		const res = (await actions.closeAccount(event)) as { status: number };
 		expect(res.status).toBe(400);
 		expect(rpc).not.toHaveBeenCalled();
 	});
 
 	it('an out-of-vocabulary reason is rejected before any DB call', async () => {
 		const { event, rpc } = makeEvent(
-			{ is_active: 'false', reason_code: 'not-a-reason' },
+			{ reason_code: 'not-a-reason' },
 			{ id: SESSION_UID },
 			'7'
 		);
-		const res = (await actions.toggleActive(event)) as { status: number };
+		const res = (await actions.closeAccount(event)) as { status: number };
 		expect(res.status).toBe(400);
 		expect(rpc).not.toHaveBeenCalled();
 	});
@@ -145,7 +152,7 @@ describe('POST /accounts/[account_id]?/toggleActive — the close control', () =
 	for (const [name, raw, expected] of legs) {
 		it(`gate refusal names the leg that fired: ${name}`, async () => {
 			const { event } = makeEvent(CLOSE, { id: SESSION_UID }, '7', { message: raw });
-			const res = (await actions.toggleActive(event)) as {
+			const res = (await actions.closeAccount(event)) as {
 				status: number;
 				data: { errors: { _form: string[] } };
 			};
@@ -159,7 +166,7 @@ describe('POST /accounts/[account_id]?/toggleActive — the close control', () =
 			message:
 				'account closure blocked: account 7 holds a non-zero cash balance (500 native) as of 2026-06-30 (leg 2 of 3: cash)'
 		});
-		const res = (await actions.toggleActive(event)) as {
+		const res = (await actions.closeAccount(event)) as {
 			data: { errors: { _form: string[] } };
 		};
 		const shown = res.data.errors._form[0];
@@ -176,7 +183,7 @@ describe('POST /accounts/[account_id]?/toggleActive — the close control', () =
 			message:
 				'close refused: no OPEN account 7 is reachable in this session — it does not exist, is not yours, or is already closed. Reopen it first if you meant to re-date it.'
 		});
-		const res = (await actions.toggleActive(event)) as {
+		const res = (await actions.closeAccount(event)) as {
 			status: number;
 			data: { errors: { _form: string[] } };
 		};
@@ -190,7 +197,7 @@ describe('POST /accounts/[account_id]?/toggleActive — the close control', () =
 			message:
 				'reopen refused: no CLOSED account 7 is reachable in this session — it does not exist, is not yours, or is already open.'
 		});
-		const res = (await actions.toggleActive(event)) as {
+		const res = (await actions.reopenAccount(event)) as {
 			status: number;
 			data: { errors: { _form: string[] } };
 		};
@@ -202,7 +209,7 @@ describe('POST /accounts/[account_id]?/toggleActive — the close control', () =
 		const { event } = makeEvent(CLOSE, { id: SESSION_UID }, '7', {
 			message: 'close refused: no OPEN account 7 is reachable in this session — it is already closed.'
 		});
-		const res = (await actions.toggleActive(event)) as {
+		const res = (await actions.closeAccount(event)) as {
 			data: { errors: { _form: string[] } };
 		};
 		expect(res.data.errors._form[0]).not.toMatch(/\b7\b/);
@@ -221,7 +228,7 @@ describe('POST /accounts/[account_id]?/toggleActive — the close control', () =
 					'account closure blocked: account 7 holds a non-zero cash balance (500 native) as of 2026-06-30 (leg 2 of 3: cash)',
 				code: 'P0001'
 			});
-			await actions.toggleActive(event);
+			await actions.closeAccount(event);
 
 			expect(spy).toHaveBeenCalledTimes(1);
 			const logged = spy.mock.calls[0].join(' ');
@@ -250,7 +257,7 @@ describe('POST /accounts/[account_id]?/toggleActive — the close control', () =
 					'account closure blocked: account 7 got no usable cash balance from fn_account_cash_as_of (row MISSING, value NULL) — that function is TOTAL over pfin.account and double-coalesces to non-NULL, so either result means its contract is broken (leg 2 of 3: cash)',
 				code: 'P0001'
 			});
-			const res = (await actions.toggleActive(event)) as {
+			const res = (await actions.closeAccount(event)) as {
 				status: number;
 				data: { errors: { _form: string[] } };
 			};
@@ -272,7 +279,7 @@ describe('POST /accounts/[account_id]?/toggleActive — the close control', () =
 					'close refused: no OPEN account 7 is reachable in this session — it does not exist, is not yours, or is already closed.',
 				code: 'P0002'
 			});
-			await actions.toggleActive(event);
+			await actions.closeAccount(event);
 			const logged = spy.mock.calls[0].join(' ');
 			expect(logged).toContain('code=P0002');
 			expect(logged).toContain('rpc:already-closed');
@@ -288,18 +295,19 @@ describe('POST /accounts/[account_id]?/toggleActive — the close control', () =
 	// is_active back reported what the client ASKED FOR and discarded that value.
 	it('a successful close returns the SERVER-applied closed_at', async () => {
 		const { event } = makeEvent(CLOSE, { id: SESSION_UID }, '7');
-		const res = (await actions.toggleActive(event)) as Record<string, unknown>;
+		const res = (await actions.closeAccount(event)) as Record<string, unknown>;
 
 		expect(res).toEqual({ success: true, closed_at: APPLIED_CLOSED_AT });
 		// The posted value is not echoed back — that was the defect, and it is the assertion that
-		// would fail if someone re-added `is_active: parsed.data.is_active` alongside.
+		// would fail if someone re-added a client-echoed field alongside. `is_active` is named
+		// explicitly because it is what USED to be here and is the thing a revert would restore.
 		expect(res).not.toHaveProperty('is_active');
 	});
 
 	it('a successful reopen returns closed_at: null — the applied state, not a missing one', async () => {
 		// fn_reopen_account RETURNS void (a reopen applies NULL); the asymmetry is the contract.
 		const { event } = makeEvent(REOPEN, { id: SESSION_UID }, '7', null, null);
-		const res = (await actions.toggleActive(event)) as Record<string, unknown>;
+		const res = (await actions.reopenAccount(event)) as Record<string, unknown>;
 
 		expect(res).toEqual({ success: true, closed_at: null });
 	});
@@ -308,7 +316,7 @@ describe('POST /accounts/[account_id]?/toggleActive — the close control', () =
 		const { event } = makeEvent(CLOSE, { id: SESSION_UID }, '7', {
 			message: 'could not serialize access due to concurrent update'
 		});
-		const res = (await actions.toggleActive(event)) as {
+		const res = (await actions.closeAccount(event)) as {
 			status: number;
 			data: { errors: { _form: string[] } };
 		};

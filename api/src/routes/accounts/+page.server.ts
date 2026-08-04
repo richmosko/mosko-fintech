@@ -13,9 +13,9 @@
 // SOFT — a connection-read failure degrades linked accounts to a neutral chip; it never
 // blocks the account list.
 //
-// Shows BOTH active and inactive accounts (partitioned client-side into the grouped list +
-// the collapsed Inactive group per the wireframe) — this is a management surface, so the
-// NAV/current-state `WHERE is_active = TRUE` CONTRACT (api/CLAUDE.md) does NOT apply here.
+// Shows BOTH open and closed accounts (partitioned client-side into the grouped list + the
+// collapsed Closed group per the wireframe) — this is a management surface, so the NAV
+// open-as-of filter of the ADR-042 closure CONTRACT (api/CLAUDE.md) does NOT apply here.
 // This page renders NO gross total / NAV (PM-2 value-semantics pin); the number lives on
 // the Net Worth dashboard.
 
@@ -25,7 +25,7 @@ import type { PageServerLoad } from './$types';
 
 // RLS-scoped read. acct_number intentionally NOT selected — masked-only render posture (SD-15).
 const ACCOUNT_COLUMNS =
-	'account_id, name, account_type, scope, tax_treatment, is_active, linked_source_id';
+	'account_id, name, account_type, scope, tax_treatment, closed_at, linked_source_id';
 
 /** The account-row shape the Hub renders — chip inputs resolved server-side (anti-drift). */
 export type HubAccount = {
@@ -34,7 +34,11 @@ export type HubAccount = {
 	account_type: string;
 	scope: string;
 	tax_treatment: string;
-	is_active: boolean;
+	/** Closure timestamp (ISO) or null when open — ADR-042 / 059. NULL = open, never absent.
+	 *  Replaces `is_active: boolean`: this is a SHAPE change across the Backend↔Frontend
+	 *  boundary, not a rename, and the date is what lets the list say WHEN rather than merely
+	 *  THAT. Partition on `closed_at !== null`; do not collapse it back to a boolean here. */
+	closed_at: string | null;
 	/** connectionChipState() inputs — `provider: 'manual'` + `connection_status: 'healthy'`
 	 *  for a non-linked (manual) account → the neutral "Manual" chip. */
 	provider: string;
@@ -47,7 +51,7 @@ type AccountRow = {
 	account_type: string;
 	scope: string;
 	tax_treatment: string;
-	is_active: boolean;
+	closed_at: string | null;
 	linked_source_id: number | string | null;
 };
 
@@ -85,7 +89,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			account_type: a.account_type,
 			scope: a.scope,
 			tax_treatment: a.tax_treatment,
-			is_active: a.is_active,
+			closed_at: a.closed_at,
 			provider: conn?.provider ?? 'manual',
 			connection_status: conn?.connection_status ?? 'healthy'
 		};

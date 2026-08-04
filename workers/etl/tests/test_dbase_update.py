@@ -106,15 +106,20 @@ def test_update_table_all(backend):
 # `SET ROLE authenticated` (see the Sec/DevOps flag). Forward-only.
 # ---------------------------------------------------------------------------
 @pytest.mark.integration
-def test_nav_daily_enumerates_active_users(nav_worker):
+def test_nav_daily_enumerates_account_owning_users(nav_worker):
     # Enumeration is a service_role read on pfin.account — no 054 dependency.
-    user_ids = nav_worker.active_account_user_ids()
+    # Renamed with the method at 059 (ADR-042): the enumeration is no longer
+    # "active users", it is every tenant owning any account. A tenant whose
+    # accounts are ALL CLOSED is now ENUMERATED and gets a real 0 checkpoint
+    # rather than a gap — see account_user_ids' docstring for why absence is
+    # not an acceptable encoding of that state.
+    user_ids = nav_worker.account_user_ids()
     assert isinstance(user_ids, list)
 
 
 @pytest.mark.integration
 def test_nav_daily_run(nav_worker):
-    # Full W-1 run: impersonate each active-account tenant, compute
+    # Full W-1 run: impersonate each account-owning tenant, compute
     # fn_compute_nav(current_date, true) under RLS, append to pfin.nav_daily.
     # Idempotent: run twice; second run must be a clean no-op (ON CONFLICT DO
     # NOTHING), not an error. Requires migration 054 applied.
