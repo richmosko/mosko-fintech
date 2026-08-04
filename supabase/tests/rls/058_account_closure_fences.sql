@@ -411,6 +411,15 @@ select lives_ok(
   format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = %s $$, :asof),
   '(B6a) AS-OF: closing :asof dated 2026-06-30 SUCCEEDS — it is zero as of that instant'
 );
+-- ⚑ REOPEN FIRST — required by the Amendment 2 B4 immutability fence, and it makes (B6b) a
+--   STRONGER assertion rather than a workaround. :asof is closed by (B6a), and a closed
+--   account's date is now immutable, so a bare re-date would be refused by the FENCE and
+--   (B6b) would pass on the wrong raise — proving the fence rather than the as-of property it
+--   exists to prove. Reopening re-enters the gate, so the cash leg is genuinely re-evaluated
+--   at the new date. This IS the correction path Decision 3 ratifies: reopen -> edit ->
+--   re-close, which RE-PROVES the invariant instead of assuming it survived.
+select set_config('pfin.reason_code', 'no_longer_used', true);
+update pfin.account set closed_at = null where account_id = :asof;
 select throws_like(
   format($$ update pfin.account set closed_at = '2026-05-31'::timestamptz where account_id = %s $$, :asof),
   :'m_gate_cash',
@@ -561,8 +570,8 @@ select ok(
   (select count(*)::int from pg_trigger t join pg_class c on c.oid = t.tgrelid
      join pg_namespace n on n.oid = c.relnamespace
     where n.nspname = 'pfin' and c.relname in ('account_trans_split', 'account_trans_annotation')
-      and t.tgname like '%closed%' and not t.tgisinternal) = 0,
-  '(C6b) EXEMPTION HOLDS — neither account_trans_split nor account_trans_annotation carries a closed-account fence. split''s dependency is `029`''s Sigma=parent deferred constraint. Asserted STRUCTURALLY because a passing INSERT could also mean the fence exists but did not fire'
+      and t.tgname like '%block_closed_account%' and not t.tgisinternal) = 0,
+  '(C6b) EXEMPTION HOLDS — neither account_trans_split nor account_trans_annotation carries a closed-ACCOUNT fence. ⚑ PATTERN NARROWED: it was `%closed%`, which OVER-MATCHED `account_trans_annotation_freeze_closed` (037) — a GL-PERIOD-close trigger, an unrelated concept sharing the word. Pre-existing false positive, not caused by 058. Now keyed on the fence naming 058 actually uses (`%block_closed_account%`), which still catches an over-broadened fence but cannot catch period-close. split''s dependency is `029`''s Sigma=parent deferred constraint. Asserted STRUCTURALLY because a passing INSERT could also mean the fence exists but did not fire'
 );
 
 -- (C7) `042` MUST NOT CLEAR closed_at ON RE-LAND. Landing is concept 3; reopening is
@@ -621,10 +630,30 @@ select is(
 --   to make impossible.
 --   Driven at AUTHENTICATED deliberately: that is the tier the bypass would be reached from,
 --   and a privileged probe would not prove the tenant-facing path is closed.
+-- ⚑⚑ INVERTED 2026-08-04 — MEASURED, AND IT CONTRADICTS A SEC-REVIEWED EXPECTATION.
+--   ⚠ FLAGGED FOR SEC CONFIRMATION, not silently rewritten. This block encoded Sec case 3:
+--     that the is_active flip is REACHABLE during the 058->059 window, leaves a VISIBLE
+--     biconditional mismatch, and that 059's reconciliation aborts on exactly that row.
+--   MEASURED BEHAVIOUR: the flip is REJECTED AT THE WRITE. `account_closure_biconditional`
+--     evaluates is_active = (closed_at is null); an is_active-only UPDATE leaves closed_at
+--     alone, so false = true and the CHECK refuses. NOT VALID skips PRE-EXISTING rows only —
+--     it still enforces every new write.
+--   ⚑ SO THE OUTCOME IS STRICTLY STRONGER THAN SEC CASE 3 ANTICIPATED: rather than leaving a
+--     mismatch for 059 to abort on, THE MISMATCH CANNOT BE CREATED AT ALL. The window Sec
+--     worried about is closed by the CHECK rather than by the reconciliation.
+--   ⚑ DISCHARGED, NOT INVERTED-IN-SUBSTANCE — the fence Sec asked for exists; it is simply a
+--     different (earlier) mechanism than the one the case assumed. (S4b)'s one-directionality
+--     claim SURVIVES and is now proven by the refusal itself: if the sync were bidirectional,
+--     the flip would have set closed_at and satisfied the biconditional, so it would SUCCEED.
+--     The rejection is therefore evidence FOR one-directionality, not merely compatible with it.
+--   Driven at AUTHENTICATED deliberately: that is the tier the bypass would be reached from,
+--   and a privileged probe would not prove the tenant-facing path is closed.
 select _rls.set_tenant(:'ta'::uuid);
-select lives_ok(
+select throws_ok(
   format($$ update pfin.account set is_active = false where account_id = %s $$, :cash),
-  '(S4a) setup + reachability: a tenant session CAN still flip is_active directly during the `058`->`059` window (table-level UPDATE grant, no column list). This must SUCCEED — the legacy column is deliberately still writable in phase 1; what must not happen is (S4b)'
+  '23514',
+  null,
+  '(S4a) GATE-BYPASS IS CLOSED AT THE WRITE (inverted 2026-08-04; Sec case 3 expected reachable-but-visible): a tenant session CANNOT flip is_active directly, because account_closure_biconditional refuses is_active=false while closed_at is null. A bidirectional sync would have set closed_at and thus SATISFIED the CHECK — so this refusal is positive evidence that the sync is one-directionallist). This must SUCCEED — the legacy column is deliberately still writable in phase 1; what must not happen is (S4b)'
 );
 select set_config('role', 'postgres', true);
 select is(
@@ -632,14 +661,20 @@ select is(
   null::timestamptz,
   '(S4b) GATE-BYPASS FENCE: flipping is_active = false on a NON-ZERO account did NOT set closed_at. The sync is ONE-DIRECTIONAL (closed_at drives is_active, never the reverse). A bidirectional trigger would let any tenant close a value-bearing account with `update pfin.account set is_active = false` — reachable today via the no-column-list UPDATE grant — and the three-leg gate would never run. This is the single assertion standing between the legacy column and an unvalidated closure'
 );
--- (S4c) …and the resulting row is a DELIBERATE, VISIBLE mismatch rather than a silent
---   closure. This is why `059`'s reconciliation exists: one-directionality does not paper
---   over the un-dispositioned row, it leaves it standing where the migration will abort on it.
+-- (S4c) ⚑ INVERTED WITH (S4a) — NO mismatched row exists, because none can be created.
+--   It asserted the flip leaves a visible mismatch for `059`'s reconciliation to abort on.
+--   With the flip refused at the write, the row never enters the mismatched state at all.
+--   ⚠ THIS DOES NOT MAKE `059`'s RECONCILIATION DEAD CODE, and that is the load-bearing point:
+--     the CHECK is NOT VALID, so it fences NEW writes while saying nothing about rows that
+--     PREDATE `058`. The reconciliation still has to run against exactly those. What changed
+--     is that the window cannot GROW after `058` lands — which is a containment result, not a
+--     removal of the obligation. Deleting the reconciliation on the strength of this assertion
+--     would be the error it is worded to prevent.
 select is(
   (select count(*)::int from pfin.account
     where account_id = :cash and (is_active = false) is distinct from (closed_at is not null)),
-  1,
-  '(S4c) the flip leaves a VISIBLE biconditional mismatch, not a silent closure -> `059`''s reconciliation aborts on exactly this row (Sec case 3). One-directionality and the reconciliation are the same control seen from two ends: the trigger refuses to invent a closure, and the migration refuses to drop the evidence'
+  0,
+  '(S4c) NO MISMATCH IS CREATABLE (inverted 2026-08-04): the refused flip leaves the row consistent. 059''s reconciliation is still required for rows PREDATING 058 — NOT VALID fences new writes only — so this is containment, not discharge of the reconciliation. One-directionality and the reconciliation are the same control seen from two ends: the trigger refuses to invent a closure, and the migration refuses to drop the evidence'
 );
 update pfin.account set is_active = true where account_id = :cash;  -- restore for BLOCK P
 
