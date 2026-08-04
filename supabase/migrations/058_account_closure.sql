@@ -4,20 +4,23 @@
 --
 -- Numbering: 058 follows 057 (account_event must exist before anything writes it).
 --
--- ⚠ OPEN — THE WRITER DOES NOT EXIST YET. This file creates FIVE triggers and
---   NONE of them writes pfin.account_event. Verified 2026-08-03: the only
---   `insert into` in this file is the 042 re-point, and `account_event` appears
---   outside 057 in exactly two places repo-wide, both comments.
---   Three artifacts asserted the writer as shipped fact — this line's earlier
---   wording ("the gate writes to it"), 057's INSERT-policy comment, and
---   ADR-042 Decision 5's build sequence. Each was checked against the others
---   and none against the DDL. So 057 currently ships an audit table, an INSERT
---   RLS policy, and the #16 matched-tenant fence for a write path nobody built,
---   and A CLOSURE IS GATED BUT UNRECORDED.
---   Sec holds the ruling on the writer's shape and on how `actor` is derived
---   (absence of auth.uid() must not silently BECOME 'system:remediation' —
---   absence is not a value). ADR-042 needs an amendment; routed to F/CTO.
---   DO NOT resolve this by deleting the line. The gap is real.
+-- THE AUDIT WRITER — RESOLVED, and the history is kept because the mechanism
+--   recurs. For a time this file created FIVE triggers and NONE of them wrote
+--   pfin.account_event. Three artifacts asserted that writer as shipped fact —
+--   this header's earlier wording ("the gate writes to it"), 057's INSERT-policy
+--   comment, and ADR-042 Decision 5's build sequence — and EACH WAS CHECKED
+--   AGAINST THE OTHERS, NONE AGAINST THE DDL. So 057 shipped an audit table, an
+--   INSERT RLS policy and the #16 fence for a write path nobody had built: a
+--   closure gated but unrecorded.
+--   ROOT CAUSE, worth more than the fix: the writer appeared in ADR-042 exactly
+--   ONCE, as ORDERING RATIONALE for a dependency ("057 first BECAUSE the gate
+--   writes into it"), and never as a deliverable of any slice. 058 was built
+--   from its own enumeration, which was complete except for the item living in
+--   another slice's reasoning. >> A deliverable named only in another item's
+--   rationale is structurally unbuildable-from. <<
+--   CLOSED: fn_account_event_write + trigger account_event_write below, and
+--   ADR-042 Amendment 1 records the absence as the finding rather than quietly
+--   adding the writer.
 --
 -- EVERYTHING IN THIS FILE IS ONE UNIT. 003:124 grants authenticated a
 --   TABLE-LEVEL update on pfin.account with no column list, so closed_at is
@@ -27,9 +30,13 @@
 --   transaction, so a failure between files would strand a real database in the
 --   ungated state.
 --
--- WHAT 059 DOES, so this file is read as half a pair: validates the constraint
---   added NOT VALID below, then drops the sync trigger, the constraint and
---   is_active, then re-points 049/050/051 to the as-of predicate.
+-- WHAT 059 DOES, so this file is read as half a pair — AND THE ORDER MATTERS,
+--   because an earlier draft of this sentence had it backwards: 059 validates
+--   the constraint added NOT VALID below, then RE-POINTS THE READERS FIRST, and
+--   only then drops the constraint, the sync trigger and is_active. Dropping
+--   before re-pointing has an unsafe prefix on the NAV path — closed_at set with
+--   is_active still true, counted as active. Two functions are re-pointed
+--   (049 + 050), not three: 051 composes on 049 and adds no predicate of its own.
 -- ============================================================================
 
 create schema if not exists pfin;
@@ -589,3 +596,40 @@ begin
   end loop;
 end;
 $$;
+
+-- ----------------------------------------------------------------------------
+-- (6) CATALOG COMMENTS THIS MIGRATION FALSIFIES (Sec ruling, post-approval).
+--
+--   >> A migration must not leave behind documentation that its own change
+--      falsifies. <<
+--
+--   058 replaced fn_land_linked_accounts' ON CONFLICT clause and thereby removed
+--   the re-land reactivation behaviour. Two CATALOG comments still describe the
+--   old model. They are objects, not migration text — reachable, and reported by
+--   \df+ / \di+ — so they ride with the slice that falsified them rather than
+--   waiting for a cleanup migration. The window between falsification and fix IS
+--   the defect, not a side effect of deferring it.
+--
+--   THE INDEX COMMENT IS NORMATIVE, NOT MERELY STALE, and that is why it cannot
+--   wait: "Pins the reconciliation model … SELF-212 remove/re-add UX honors it"
+--   is a DIRECTIVE TO AN UNBUILT SURFACE. Whoever builds that UX would read a
+--   catalog comment instructing them that re-add reactivates, and build against
+--   a behaviour 058 removed. Fail-safe (a closed account stays closed, so it is
+--   a UX defect and not a hole) but it is a SPECIFICATION defect, discovered
+--   only after the surface is built wrong.
+--
+--   ⚠ §10-ADJACENT, FLAGGED FOR JOINT REVIEW: the index comment also asserted
+--     "§10 ledger unchanged at 2". That was true when 021 landed and is stale —
+--     the catalogued count is 3 (RT-22 / RT-26 / RT-27, the last catalogued at
+--     SELF-212). This does NOT change the ledger; it corrects a comment that
+--     misquotes it, and it now points the reader at ADR-011 Decision 4 rather
+--     than restating a number that went stale once already.
+--
+--   Both regenerated from obj_description() with one substitution each,
+--   DIFF-PROVED, zero residual references to the retired column.
+-- ----------------------------------------------------------------------------
+comment on function pfin.fn_land_linked_accounts(bigint, jsonb) is
+  'SECURITY INVOKER write-composition RPC (SELF-199 §2.4.1.d; ADR-037; A2 F/CTO-ratified). Atomically lands one pfin.account row per SELECTED provider account from the adapter''s AccountRef[] (passed as p_accounts jsonb array of {provider_account_id,name,scope,tax_treatment,account_type}), each carrying linked_source_id = p_linked_source_id, in ONE transaction under the caller''s RLS, RETURNING (account_id, provider_account_id) per landed account. Multi-row provider-linked analogue of 013 fn_create_manual_account (ADR-026 pattern). users_id is NOT a parameter (defaults to auth.uid() per 003 — un-forgeable). All fences evaluate as the caller: account_insert WITH CHECK, the same-txn fn_grant_creator_access creator-grant per row (003 DEFINER trigger), fn_account_matched_linked_source (015, Decision-3 #6 — cross-tenant p_linked_source_id fails closed), and the inherited 025 aal2 step-up clause on both account and linked_source (on the linked path an aal1 caller fails closed at the #6 fence FIRST — linked_source is aal2-invisible so the NOT EXISTS raises — with account_insert WITH CHECK as backstop). ON CONFLICT (linked_source_id, provider_account_id) WHERE linked_source_id IS NOT NULL DO UPDATE SET provider_account_id = excluded.provider_account_id reuses the 021 dedup arbiter: a re-land is a NO-OP SELF-ASSIGNMENT that yields the canonical row via RETURNING, never a 2nd row, and does not overwrite stored attributes. It DELIBERATELY DOES NOT REACTIVATE (ADR-042, migration 058): a concept-3 action (re-land) must not perform a concept-2 transition (reopen). DO NOTHING was rejected because RETURNING would then omit already-existing rows. provider_account_id guarded non-null (dedup key). Malformed input fails closed (NOT NULL + CHECK constraints abort the txn; non-array p_accounts raises). NOT a DEFINER allowlist entry — needs no elevation; allowlist stays 4. Needs NO service_role (anon-key client + RLS + INVOKER). set search_path = '''' injection fence. EXECUTE revoked from PUBLIC, granted to authenticated only (anon denied). Same-transaction audit-log DEFERRED (A2-lite; forward-hook in body; SELF-201 Task #7). Adds no FK-shaped column — Decision-3 family unchanged (exercises #6); §10 ledger unchanged at 3. Signature + p_accounts object keys are an API contract (PostgREST /rpc; pfin is [api]-exposed).';
+
+comment on index pfin.account_linked_source_provider_uidx is
+  'Partial UNIQUE dedup index for the provider-sync account-mapping slice (ADR-027 amendment / account-mapping Q5-(b)). Enforces one canonical pfin.account row per (linked_source_id, provider_account_id) for provider-linked accounts; the ON CONFLICT arbiter for landAccounts so a re-run of connect+map is a no-op, not a duplicate. Partial WHERE linked_source_id IS NOT NULL: manual/unlinked accounts (SELF-201) are exempt (no provider identity to dedup). Role-agnostic (fences under authenticated INVOKER + service_role). NOT a Decision-3 instance: provider_account_id is TEXT (not a FK); linked_source_id already carries canonical instance #6 (fn_account_matched_linked_source, 015) — this index exercises #6, adds none. Pins the reconciliation model: a re-map resolves to the canonical row, NEVER a second row. IT NO LONGER REACTIVATES — ADR-042 / migration 058 removed that, so a re-add does NOT reopen a closed account (reopening is its own gated transition). THIS SENTENCE IS NORMATIVE, NOT DESCRIPTIVE: the remove/re-add UX is UNBUILT, and whoever builds it must honor the current model, not the reactivating one this comment previously specified. DEFINER allowlist unchanged (no function); §10 ledger unchanged BY THIS INDEX; the catalogued count stood at 2 when 021 landed and is 3 today (RT-22 / RT-26 / RT-27) — read ADR-011 Decision 4 live rather than this sentence.';
