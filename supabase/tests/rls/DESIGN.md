@@ -317,6 +317,26 @@ Removing the fabricated date so absence stops masquerading as information leaves
 masquerading as *the most recent* information. **Fixing the value without fixing the
 ordering fixes nothing at the point of use.**
 
+### Regenerate from the catalog and diff — never retype a body you are re-pointing
+
+When changing a predicate inside an existing function, take the body from
+`pg_get_functiondef()`, substitute only the predicate lines, and **prove by diff that
+nothing else moved.** A body written from recall is accepted by `create or replace` and
+applies clean — wrong return types, wrong column counts, invented logic and all.
+
+**And the diff earns its keep twice.** It prevents fabrication, and it **exposes semantics
+that exist only in the difference.** Instance: a securities-leg predicate read
+`coalesce(acc2.is_active, false)`. That `coalesce` was doing **fail-closed work on a LEFT
+JOIN miss** — invisible in the new text, because the natural replacement
+`(acc2.closed_at is null)` reads correctly and **inverts it**: a missing account row yields
+NULL `closed_at`, `NULL is null` is TRUE, and an orphan holding gets **counted** in an
+active-only NAV. Only the before/after pair shows it.
+
+> **A correct-looking new body cannot reveal what the old one was doing.**
+
+Same family as *a caveat is a claim*: both are about not trusting the careful-looking half
+of your own work.
+
 ### The rename trap (a sub-rule of 3, and the same precondition shape)
 
 **Two identical adjacent literals can belong to different vocabularies.** When
