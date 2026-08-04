@@ -43,6 +43,24 @@ export type HubAccount = {
 	 *  for a non-linked (manual) account → the neutral "Manual" chip. */
 	provider: string;
 	connection_status: string;
+	/**
+	 * The CONNECTION's lifecycle flag (`linked_source.is_active`), for the chip's inactive-first
+	 * precedence — NOT the account's closure state (F/CTO ruling).
+	 *
+	 * ⚠ NAMED `connection_is_active`, NOT `is_active`, DELIBERATELY. The hub previously fed the
+	 * chip the ACCOUNT's `is_active` while the chip's documented precedence — "inactive
+	 * (is_active=false) → sync is paused regardless of connection health" — describes the
+	 * LINKED_SOURCE lifecycle. Two different columns, the same spelling, so no text search could
+	 * ever surface the mismatch: it typechecked, it rendered, and it was wrong. The prefix is the
+	 * fix — a bare `is_active` on an account-row type is the ambiguity itself.
+	 *
+	 * `?? true` IS LOAD-BEARING, not a tidy default: a manual account HAS no connection, and
+	 * `false` there would render every manual account as sync-paused. There is no sync to pause.
+	 * A linked account whose connection-state read degraded also lands here, and `true` is right
+	 * for the same reason the neutral 'manual' chip is — degrade to "nothing to report", never to
+	 * a false alarm.
+	 */
+	connection_is_active: boolean;
 };
 
 type AccountRow = {
@@ -91,7 +109,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			tax_treatment: a.tax_treatment,
 			closed_at: a.closed_at,
 			provider: conn?.provider ?? 'manual',
-			connection_status: conn?.connection_status ?? 'healthy'
+			connection_status: conn?.connection_status ?? 'healthy',
+			connection_is_active: conn?.is_active ?? true
 		};
 	});
 
