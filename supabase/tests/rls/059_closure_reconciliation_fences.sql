@@ -244,10 +244,21 @@ select is(
 --   equally true on a database where 057/058 never ran. Conjoin them with something that is
 --   ONLY true AFTER 059: closed_at present (058) AND the as-of re-point live in the catalog
 --   (059). Without this, BLOCK R is green against an empty schema.
+--   ⚑ ANCHOR LOOSENED 2026-08-04, AND THE TIGHT ONE DID ITS JOB ON THE WAY OUT. It matched the
+--     literal `closed_at > p_as_of`. Architect then ruled the as-of boundary and the predicate
+--     became `closed_at::date > p_as_of` (16d9e52) — a CORRECT change — and this assertion went
+--     RED. That is the right failure for an anti-vacuity anchor: it noticed. But it noticed the
+--     wrong thing, because it was pinned to the predicate's EXACT FORM when its job is only to
+--     establish that the re-point HAPPENED. Now: `closed_at` and `p_as_of` both present in the
+--     function's EXECUTABLE text (comments stripped — the (X6) lesson), which is true under any
+--     boundary ruling and false pre-059, where the filter was `is_active`.
+--     >> AN ANTI-VACUITY ANCHOR MUST BE COARSER THAN THE THING IT GUARDS. Pinned as tightly as
+--        the subject, it becomes a second copy of the assertion and reds on correct changes.
 select ok(
   exists (select 1 from information_schema.columns
            where table_schema = 'pfin' and table_name = 'account' and column_name = 'closed_at')
-  and (select pg_get_functiondef(p.oid) like '%closed_at > p_as_of%'
+  and (select regexp_replace(pg_get_functiondef(p.oid), '--[^' || chr(10) || ']*', '', 'g')
+              like '%closed_at%p_as_of%'
          from pg_proc p
         where p.pronamespace = 'pfin'::regnamespace and p.proname = 'fn_compute_nav'
           and pg_get_function_identity_arguments(p.oid) = 'p_as_of date, p_active_only boolean'),

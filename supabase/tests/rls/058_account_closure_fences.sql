@@ -188,6 +188,27 @@ select plan(48);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 
+-- ┌─ ⚠ STACK PROBE — THIS FILE SPANS A MIGRATION THAT DELETES ITS OWN SUBJECT ────────┐
+-- │ Added 2026-08-04 after CI red. This battery's expected-stack block already SAID it: │
+-- │ "At/above `059`: (P1) RED because is_active is gone — this file is only meaningful  │
+-- │ in the `058`-applied, pre-`059` window." **`supabase test db` APPLIES EVERY         │
+-- │ MIGRATION, so that window is one CI can never produce.** The file predicted its own │
+-- │ breakage in prose and left the assertions unconditioned; it aborted at (S1) on a    │
+-- │ dropped column, 27 of 48 emitted.                                                    │
+-- │                                                                                      │
+-- │ CONDITIONED, NOT DELETED. The transitional assertions are REAL and Sec-reviewed —    │
+-- │ they prove the sync trigger, the biconditional and Sec cases 3/4/7 hold across the    │
+-- │ 058->059 window. They still run for anyone at 001..058 (development, a bisect, a      │
+-- │ staged deploy) and SKIP with a stated reason once the column is gone. A skip counts   │
+-- │ toward plan(), so the arithmetic stays honest either way.                             │
+-- │ ⚠ SKIP IS NOT PASS. If every one of these skips, this file proves nothing about the   │
+-- │   transitional window — which is CORRECT post-`059`, because the window is closed.    │
+-- └────────────────────────────────────────────────────────────────────────────────────┘
+select (exists (select 1 from information_schema.columns
+                 where table_schema = 'pfin' and table_name = 'account'
+                   and column_name = 'is_active'))::text as in_window \gset
+
+
 -- ⟦CARRIER REBOUND at `e88b76c` — EVERY closure in this file now needs TWO `set local`s in
 --   the same transaction, not one. The `account_event` AFTER writer RAISES if
 --   `pfin.reason_code` is unset, and it is MANDATORY, never defaulted. Without this every
@@ -599,19 +620,28 @@ select ok(
 --   the biconditional hold BY CONSTRUCTION across the `058`->`059` window.
 --   It lives in `058` and is DROPPED in `059`.
 -- =====================================================================
+--   ⚑ (S2a) IS THE ONE ASSERTION HERE THAT SURVIVES `059`: reopening is a real operation in
+--     both windows and touches no dropped column, so it stays unconditional. Everything else
+--     in this block reads or writes `is_active` and is gated on the stack probe above.
 select _rls.set_tenant(:'ta'::uuid);
 -- (S1) closing sets BOTH.
+\if :in_window
 select is(
   (select is_active from pfin.account where account_id = :asof),
   false,
   '(S1) SEC CASE 7: closing :asof through the gate ALSO set is_active = false. Without this sync, `059` aborts on precisely the accounts the operator dispositioned CORRECTLY — the reconciliation would fire on good work and pass over nothing'
 );
--- (S2) clearing sets BOTH back.
+\else
+select skip('(S1) the transitional sync sets is_active on close — the column is dropped at 059', 1);
+\endif
+-- (S2a) clearing succeeds. UNCONDITIONAL: reopening is a real operation in BOTH windows and
+--   touches no dropped column. It is also the setup (S2b) depends on, so it must run either way.
 select lives_ok(
   format($$ update pfin.account set closed_at = null where account_id = %s $$, :asof),
-  '(S2a) reopening :asof succeeds (reopen is ungated)'
+  '(S2a) reopening :asof succeeds (reopen is ungated) — the one assertion in BLOCK S that survives 059 intact, and the setup the rest of the block needs'
 );
 select set_config('role', 'postgres', true);
+\if :in_window
 select is(
   (select is_active from pfin.account where account_id = :asof),
   true,
@@ -698,6 +728,9 @@ select is(
   0,
   '(S4c) NO MISMATCH IS CREATABLE (inverted 2026-08-04): the refused flip leaves the row consistent. 059''s reconciliation is still required for rows PREDATING 058 — NOT VALID fences new writes only — so this is containment, not discharge of the reconciliation. One-directionality and the reconciliation are the same control seen from two ends: the trigger refuses to invent a closure, and the migration refuses to drop the evidence'
 );
+\else
+select skip('BLOCK S: the transitional sync trigger, the biconditional and Sec cases 3/4/7 are UNTESTABLE at/above 059 — the column, the CHECK and the trigger are all dropped there. Not a gap: the window these prove is closed, and 059''s own battery asserts the decommission (R1)/(R2). SKIP IS NOT PASS', 5);
+\endif
 -- ⚑ THE `restore for BLOCK P` LINE THAT STOOD HERE IS DELETED, and the deletion is the point.
 --   It set is_active back to true after the flip — correct against the PRE-inversion block,
 --   where the flip SUCCEEDED. Post-inversion the flip is REFUSED and never landed, so the
