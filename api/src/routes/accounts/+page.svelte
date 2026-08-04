@@ -63,10 +63,13 @@
 	const typeLabel = (t: string) => TYPE_LABEL[t] ?? t;
 	const taxLabel = (t: string) => TAX_LABEL[t] ?? t;
 
-	// ADR-042 / `059`: partition on the closure DATE. `closed_at === null` is the current-state
-	// question this page asks ("is it closed now?"), which is the one question the naive form
-	// answers correctly — the as-of form (`closed_at is null or closed_at > <as_of>`) belongs to
-	// surfaces that read a date, and this one reads none. Noted because the two are easy to swap.
+	// ADR-042 / `059`: partition on the closure DATE. A list partition is a RENDER surface — it
+	// asks "is this closed right now?" — so `closed_at === null` is the correct AND COMPLETE
+	// answer (api/CLAUDE.md closure contract, render-vs-valuation split). The as-of form
+	// (`closed_at is null or closed_at > <as_of>`) is not merely heavier here, it is WRONG: it
+	// needs an `as_of` this page has no business choosing. That form is mandatory on VALUATION
+	// surfaces because that is where the silent-flip risk lives — the two are indistinguishable
+	// there until a closed account exists. No such trap on a partition you can see.
 	const open = $derived(accounts.filter((a) => a.closed_at === null));
 	const closed = $derived(accounts.filter((a) => a.closed_at !== null));
 

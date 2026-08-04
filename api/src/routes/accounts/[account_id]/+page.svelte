@@ -51,12 +51,17 @@
 	const account = $derived(data.account);
 	const transactions = $derived(data.transactions);
 
-	// ADR-042 / `059`: closure is a DATE, not a flag. `closed_at === null` is the open state and
-	// is the ONLY predicate this page needs — it is a current-state question ("is it closed
-	// right now?"), which is the one question a naive `closed_at is null` answers correctly.
-	// The as-of form (`closed_at is null or closed_at > <as_of>`) belongs to the NAV/aggregation
-	// surfaces that read a date; this page reads no date, so importing that shape here would be
-	// ceremony. Recorded because the two are easy to swap in the wrong direction.
+	// ADR-042 / `059`: closure is a DATE, not a flag. This is a RENDER surface — it asks "is this
+	// account closed right now?" — so `closed_at !== null` is the correct AND COMPLETE answer
+	// (api/CLAUDE.md closure contract, render-vs-valuation split).
+	//
+	// The as-of form (`closed_at is null or closed_at > <as_of>`) is not merely heavier here, it
+	// is WRONG: it needs an `as_of` this page has no business choosing, to answer a question
+	// nobody asked. That form is mandatory on VALUATION surfaces (NAV, aggregation, any
+	// presence-check paired with a NAV read) BECAUSE THAT IS WHERE THE SILENT-FLIP RISK LIVES —
+	// there the two forms are behaviourally identical until a closed account exists, so no test
+	// on today's data separates them. No such trap here: the current-state answer is the one
+	// being asked for, and it is verifiable by looking at the screen.
 	const isClosed = $derived(account.closed_at !== null);
 
 	// Connections-redesign Aggregation section: THIS account's connection state (provider + health +
