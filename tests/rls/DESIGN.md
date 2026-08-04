@@ -149,3 +149,104 @@ Where do the reusable assertion verbs + two-tenant baseline live?
 
 **Recommendation: C.** Reusable verbs shouldn't be copy-pasted; per-test data shouldn't bleed.
 Sec-relevant because it touches where synthetic seed data lives — flagging for the joint-review.
+
+---
+
+## 8. Battery-design rules (ADR-042 close-gate review, 2026-08-03)
+
+Seven rules, from a single review. They are not seven lessons — **six are one sentence at
+different layers**, and rule 0 generates rule 1.
+
+### 0. A test's fixture is the thing it cannot test  *(the generator)*
+
+A battery that seeds its own rows has **by construction substituted for the production
+path**, so it can never detect that path's absence — however thorough it is. A fixture
+supplying an `fx_feed` rate cannot detect that production never sets one; one creating a
+non-USD account cannot detect that production never creates them; one seeding a checkpoint
+cannot detect that nothing writes checkpoints.
+
+> **The more complete the fixture, the more of production it conceals.**
+
+Found via `pfin.account_event`: its battery inserts its own rows and checks RLS, the
+matched-tenant fence, the vocabularies and immutability — **all green forever against a
+table nothing in the system writes.** Reachability can only be asserted in the *would-be
+writer's* battery, never the table's.
+
+### 1. A battery must state what it structurally cannot prove
+
+The disclosure. **Rule 0 is how you know what to disclose** — start from what the fixture
+supplies, because that is the list. Without it, *"what can't this prove?"* is a question
+with no method.
+
+Corollary found the hard way: coverage can be correct while **discoverability** fails. The
+`account_event` reachability assertion existed and was independently re-derived as missing,
+because anyone auditing that table reads its own battery and finds only property tests.
+
+### 2. Count raise sites in the subject against raises asserted — not assertions against `plan()`
+
+A plan count proves the **file** is internally consistent. It says nothing about coverage of
+the **thing under test**, and stays correct while a fence goes untested. This is the only
+method in the review that found a *missing* fence rather than a broken one.
+
+### 3. Assert the precondition separately from the result
+
+For any operation that can silently no-op. Three instances in one day, all reporting success
+by not doing the work:
+
+| mechanism | reported success by |
+|---|---|
+| `EXPLAIN` without `ANALYZE` | never executing |
+| `count(*)` over an unconsumed projection | never evaluating (the call is elided) |
+| `str.replace` with a stale anchor | never matching |
+| `\|\|` fallback on a verification command | turning an error into a plausible answer |
+
+`assert anchor in s` before the replace. Consume the projection. No `||` on a verification
+command. **Check the operation had something to operate on.**
+
+### 4. Print the pair — and check the pair is independent
+
+**None of the rule-3 instances was caught by a check.** Each was caught by an implausible
+number visible only because two figures were printed adjacent — a plan count against an
+assertion count, a raise count against zero, a NAV that did not move.
+
+Adjacency is not the property; **independence is.** Two numbers from one source agree by
+construction and detect nothing.
+
+> **Validity test: what would have to be wrong for these two numbers to disagree?**
+> If the answer is *"nothing — they come from the same place,"* it is not a check.
+
+That test is what stops rule 4 becoming ritual.
+
+### 5. A false assertion is worse than a vacuous one
+
+A **vacuous** assertion gets fixed by strengthening the test. A **false** one gets "fixed" by
+weakening the code.
+
+Concrete: asserting `actor = 'system:remediation'` ever appears would fail on *correct*
+behaviour under a model where the operator dispositions as a user session — and the natural
+response to that red is to make the writer emit a value the model says should not exist.
+**Assert that what is written matches its context; never that a particular context is
+reachable.**
+
+### 6. A failing assertion is a gate; the same fact as a note is a hope
+
+A red that resolves when a writer lands belongs in the suite, not in a TODO. Anyone can mark
+a note done.
+
+### Anchoring (a sub-rule of 0, learned over four iterations on one assertion)
+
+**Anchor on the subject, not on a token that co-occurs with it.** Each "cleaner" version was
+weaker: a shared idiom collided with an unrelated function; a bare table name matched
+routines *named* for the table; excluding trigger functions would have blinded the check to
+an inline copy in the close gate — the single worst case it could catch. And prefer a
+**behavioural** assertion over a textual one where both are available: text inspection has no
+natural failure mode to calibrate against, which is why it took four tries and the
+behavioural form took one.
+
+### Provenance: three coordinates, re-derived at use
+
+A result is uninterpretable without **database state · artifact ref · fixture reach**. All
+three are provenance records, not guarantees — **cite at rest, re-derive at use.** A pinned
+ref goes stale exactly as silently as an unpinned file, only more slowly. And record what the
+fixture can *reach*, not merely what it contains: a EUR account with no `fx_feed` price looks
+complete and exercises nothing.
