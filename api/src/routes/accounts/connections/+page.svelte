@@ -8,7 +8,7 @@
 	page (`/accounts/connections/{source_id}`); a small external "↗" links out to the provider's
 	public home page (new tab). institution_name is a secondary detail line, not the primary label.
 	Under each connection: an indented list of its accounts (each → Account Detail), with a
-	"Closed" marker for closed accounts.
+	"Closed account" marker for closed accounts.
 
 	⚠ TWO COLUMNS NAMED `is_active` MEET ON THIS PAGE, AND ONLY ONE SURVIVED `059`.
 	  • `c.is_active` — `linked_source.is_active`, the CONNECTION lifecycle flag (ADR-013 A1–A3).
@@ -154,16 +154,21 @@
 										to undo. The old word marks a state this application can no longer
 										produce.
 
-										"Closed" over the longer "Closed account": the marker sits inline,
-										one element after the account's own name, so position already fixes
-										the referent — and it matches the accounts hub's "Closed" group, so
-										one vocabulary spans both surfaces. PROVISIONAL — PM/UX own the final
-										word; the alternative ("Closed account": explicit, at the cost of
-										reading redundantly inside a list of accounts) is recorded here
-										rather than lost.
+										"Closed account", not bare "Closed" — team-lead's call, and it is the
+										right one FOR THIS SURFACE specifically. I argued for the short form
+										on vocabulary-consistency grounds (the hub's group and the detail
+										pill both say "Closed"), but consistency is the weaker argument
+										here: this marker is the only one of the three that renders INSIDE
+										A CONNECTION CARD, where "Closed" has a second plausible referent —
+										the connection — and a closed connection is a real state this app
+										has. The other two surfaces have no competing subject, so they stay
+										short. Same vocabulary, disambiguated only where something to
+										disambiguate from actually exists.
+
+										PROVISIONAL — batched to PM/UX with the rest of the closure copy.
 									-->
 									{#if a.closed_at !== null}
-										<span class="closed-marker">Closed</span>
+										<span class="closed-marker">Closed account</span>
 									{/if}
 								</li>
 							{/each}

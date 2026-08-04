@@ -123,27 +123,27 @@
 									<span class="acct-meta">{a.scope} · {taxLabel(a.tax_treatment)}</span>
 								</span>
 								<!--
-									⚠ `is_active` is NOT passed any more, and the omission is load-bearing.
-									This chip's `is_active` prop means `linked_source.is_active` — the
-									CONNECTION lifecycle flag, "sync is paused" (see connectionChipState's
-									own precedence note). This page was feeding it `pfin.account.is_active`,
-									a different column with accounting semantics, so a *closed* account
-									rendered as a *paused connection*. Both spell `is_active`, so no text
-									search could see it. Post-`059` the account column is gone; closedness
-									is carried by the Closed group and the detail page's pill, and the chip
-									falls back to its `true` default so it describes the connection alone.
+									⚠ `connection_is_active`, NOT the account's closure state. F/CTO ruling.
+									RECORDED HERE BECAUSE THE BUG WAS INVISIBLE, and a bare
+									`a.connection_is_active` would read as if it had always been that way:
 
-									STILL OWED: the hub cannot yet pass the connection's REAL flag, because
-									`HubAccount` does not carry it (Backend resolves `provider` +
-									`connection_status` from the connection but not `is_active`). Until it
-									does, a linked account under a DEACTIVATED connection shows a health
-									chip instead of "paused". Requested from Backend; tracked in the PR
-									report rather than papered over with `closed_at`, which would re-commit
-									the conflation under the new column.
+									this chip's `is_active` prop means `linked_source.is_active` — the
+									CONNECTION lifecycle flag, "sync is paused regardless of connection
+									health" (connectionChipState's own documented precedence). This page fed
+									it `pfin.account.is_active`, a different column on a different table
+									carrying ACCOUNTING semantics, so a *closed* account rendered as a
+									*paused connection*. Both columns spell `is_active`, so no text search
+									could surface it: the code typechecked, rendered, and was wrong.
+
+									Do not "restore" the account's flag here when the pixels change. The
+									account's closure state is `closed_at`, and it is carried by the Closed
+									group below and by the detail page's pill — never by this chip. The two
+									were never the same question; they were only ever the same word.
 								-->
 								<ConnectionStatusChip
 									connection_status={a.connection_status}
 									provider={a.provider}
+									is_active={a.connection_is_active}
 								/>
 							</a>
 						</li>
@@ -177,9 +177,17 @@
 										Closed {closedAtLabel(a.closed_at)}
 									</span>
 								</span>
+								<!--
+									The CONNECTION's flag here too — see the note on the open-group chip.
+									This row is inside the Closed group, which is exactly where reaching for
+									the account's own state feels most natural and is most wrong: a closed
+									account can sit under a perfectly healthy connection, and this chip's
+									only subject is that connection.
+								-->
 								<ConnectionStatusChip
 									connection_status={a.connection_status}
 									provider={a.provider}
+									is_active={a.connection_is_active}
 								/>
 							</a>
 						</li>
