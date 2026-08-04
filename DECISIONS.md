@@ -616,6 +616,34 @@ Stated in the DDL as well as here, since a future reader meets the catalog befor
 
 **Related, and it is the sharper half of (2):** because `BEFORE INSERT` triggers fire *before* RLS `WITH CHECK` is evaluated, the direct-insert fence now **masks** F1 for every authenticated POST — so **F1's conjunct is behaviourally unfalsifiable at `authenticated`**. It remains live on the trigger-originated path (the writer is INVOKER, so its INSERT does pass the policy) and it is the layer that survives trigger disablement. **General rule for this table, covering F1 and the `(D1c)` finding together: every `WITH CHECK` conjunct on `pfin.account_event` is behaviourally unfalsifiable at `authenticated`, because BEFORE-trigger fences structurally precede the policy — they must be proven declaratively, via `pg_policies`.**
 
+### Amendment 4 (2026-08-04) — the as-of boundary at `059` is `::date`, and the bare form was a regression
+
+**Status: RATIFIED** — Architect ruling under the standing delegation for predicate granularity; Sec required it be **ruled explicitly at `059` rather than inherited as "free"**, and QA held their assertion pending it rather than pinning current behaviour.
+
+**The question.** `closed_at` is `timestamptz`, `p_as_of` is `date`, so a bare `closed_at > p_as_of` promotes the date to **midnight**: an account closed at 14:00 on `p_as_of` is *included*, one closed at 00:00 is *excluded*.
+
+**I originally recorded this as free-on-value and declined to change it. That was wrong**, and the measurement is what changed it — not the argument, which I had already made in both directions.
+
+| closure time on `p_as_of` | pre-`059` `is_active` | bare `>` | **`::date >`** |
+|---|---|---|---|
+| 00:00 | EXCLUDED | EXCLUDED | EXCLUDED |
+| 14:00 | EXCLUDED | **INCLUDED** | EXCLUDED |
+| 23:59 | EXCLUDED | **INCLUDED** | EXCLUDED |
+
+> **The bare form silently changes current-state behaviour AT THIS MIGRATION.** `is_active` went false the instant `closed_at` was set, so an account closed this afternoon left the §2.1.1 headline **immediately**; under the bare form it **stays until midnight**. And it is the **universal case, not an edge** — `fn_close_account` defaults `p_closed_at` to `now()`, so **every app-closed account carries a non-midnight time.** A user closes an account and it is still on the dashboard, which reads as *"the close silently failed"*, on the one control whose entire job is to be believed.
+
+**Why it was so easy to wave through:** NAV **value** is identical under all three forms, because the gate proved zero as of the closure date. **The regression is invisible to every value assertion** and surfaces only in `049`'s **row set** and in account **counts** — which is precisely the class QA's `(A4)` measurement had just exposed, one predicate over.
+
+**Decision — `acc.closed_at::date > p_as_of`, at all three sites** (`049`; `fn_compute_nav`'s securities leg on `acc2`; its cash leg on `acc`). Applied to all three deliberately: **`059` re-points two predicates in `fn_compute_nav` alone**, in different subqueries, so a partial edit is realistic — QA verified each leg reds independently.
+
+Beyond fixing the regression, `::date` puts the read at **the same granularity as everything it reads**: `fn_holdings_as_of(date)`, `fn_account_cash_as_of(date)`, `account_trans.transaction_date`, both checkpoints' `as_of_date`, and the close gate's own `new.closed_at::date` legs. **The time-of-day component of `closed_at` is a precision no other surface acts on** — letting it decide row-set membership would make an otherwise-ignored field load-bearing in exactly one place.
+
+**Rejected — `closed_at::date >= p_as_of`** (an account closed *on* `p_as_of` stays visible for that day). Genuinely defensible: it existed that day, and leg 3 permits activity dated *on* the closure date, so it may have transacted. But it reintroduces the same-day *"close didn't work"* lag for **every** closure including midnight ones, and it disagrees with the retired boolean it replaces.
+
+**Not a one-way door** — a predicate in a function, changeable by a migration. It is a **silent-difference** decision, which is why it gets an explicit ruling and an assertion rather than a default: both forms agree on every value and differ only in row sets, so a wrong choice leaves no footprint. ⚠ **Recorded against the specific rewrite that would undo it:** `closed_at >= (p_as_of + 1)` is behaviourally equivalent and safe, but the tempting **nearby** form — simply dropping the cast for sargability — is the regression. `pfin.account` holds a handful of rows per tenant and carries no index on `closed_at`: nothing to win, a silent behaviour change to lose.
+
+**Verified end-to-end** — `057` → `058` → `059` applied as a chain against a live database in a rolled-back transaction (no reset), then an account closed at 14:00 today: **0 `049` cards today** (matching pre-`059`), **1 card yesterday** (temporally sound — it was open then), one audit row, and `fn_compute_nav(d, true) = fn_compute_nav(d, false)` still holding. *(The chain apply also caught an unescaped apostrophe in a comment string that no amount of reading had — which is the argument for running it rather than reviewing it.)*
+
 ---
 
 ## ADR-041 — ETL database login identity: a dedicated `pfin_etl` NOINHERIT role, not a shared `authenticator` (SELF-214)
