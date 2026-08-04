@@ -258,11 +258,16 @@ select is(
   (select coalesce(sum(current_market_value), 0) from pfin.fn_account_unrealized_gl('2026-06-30')),
   pfin.fn_compute_nav('2026-06-30'::date, true),
   '(A6) §2.1.1 == §2.1.5: Σ 049.current_market_value over A''s ACTIVE accounts (6500) == fn_compute_nav(as_of, TRUE) — the headline NAV and the per-account composition reconcile for a tenant holding a value-bearing INACTIVE account. The whole point of 050');
--- (A7) tie the delta to a4's securities-leg contribution (both-legs gating, non-vacuous).
+-- (A7) ⚑ INVERTED AT ADR-042 — the NUMERIC form of (A4), kept because it localises the failure.
+--   It tied the delta to a4's securities-leg contribution (1500), which existed only while a4
+--   was inactive AND still holding. Wound down before closing, a4 contributes 0 to both paths.
+--   Kept rather than folded into (A4): (A4) says "the two agree", this says "and the gap is
+--   exactly zero" — under a wrong 059 re-point the delta becomes a NUMBER, which names how
+--   much value moved rather than only that something did.
 select is(
   pfin.fn_compute_nav('2026-06-30'::date, false) - pfin.fn_compute_nav('2026-06-30'::date, true),
-  1500.0000::numeric,
-  '(A7) false − true = 1500 = exactly a4''s contribution (1500 securities + 0 cash) — confirms the LEFT-JOIN security-leg is_active gate drops an inactive account''s HOLDINGS, not only its cash');
+  0.0000::numeric,
+  '(A7) false − true = 0 (inverted at ADR-042): the two scopes agree EXACTLY. A non-zero delta names how much value a wrongly-re-pointed 059 predicate moved — RED if a closed account carries value into either scope, or if 059 re-points to current-state rather than as-of''s contribution (1500 securities + 0 cash) — confirms the LEFT-JOIN security-leg is_active gate drops an inactive account''s HOLDINGS, not only its cash');
 -- (A8) 037 memo unchanged: fn_gl_entries still balances with an inactive holding present.
 select is(
   (select coalesce(sum(amount_book), 0) from pfin.fn_gl_entries('2026-06-30'::date)),

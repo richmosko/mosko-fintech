@@ -228,6 +228,23 @@ insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
   values (:'ta', 'sub-cent-residue', 'depository', 'household', 'taxable') returning account_id as tiny \gset
 insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
   values (:'ta', 'stays-open', 'depository', 'household', 'taxable') returning account_id as open1 \gset
+-- :wopen — DEDICATED TO BLOCK W, and the dedication is the fix for a real defect.
+--   BLOCK W's assertions are about the AUDIT WRITER, so they must reach it: they close an
+--   account and inspect what was recorded. They previously borrowed :open1 — but C5a/C5b/C5c
+--   insert into :open1 at 2026-08-01 as their non-vacuity companions, OUTSIDE any savepoint.
+--   Closing at 2026-06-30 then trips the gate's leg 3 (post-closure activity) and the writer
+--   is never reached, so W1/W2/W3a/W3b went red for a cause unrelated to what they assert —
+--   including the ⭐ forgery assertion.
+--   ⚑ ITS OWN CLASS: CROSS-BLOCK FIXTURE COUPLING ON AN APPEND-ONLY TABLE. Distinct from
+--     (B4b) (an unenumerated raise) and (B4c) (a raise unreachable by data), and the remedy is
+--     different in kind: B4b/B4c were fixed by RESETTING the fixture, which cannot work here
+--     because the leaking state is an immutable account_trans row (004, no DELETE) — it is
+--     UNRESETTABLE BY CONSTRUCTION. Partition is the only remedy.
+--   ⚠ A PLAN-COUNT GUARD STRUCTURALLY CANNOT CATCH THIS. The assertions execute; they simply
+--     go red for the wrong reason. "Nothing failed" and "nothing ran" are distinguishable by
+--     counting — "failed for an unrelated cause" is not.
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
+  values (:'ta', 'w-audit-writer', 'depository', 'household', 'taxable') returning account_id as wopen \gset
 
 insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_of_date, source)
   values (:cash, 500.0000, 'USD', '2026-01-31', 'seed');
@@ -681,7 +698,7 @@ select set_config('role', 'postgres', true);
 select set_config('request.jwt.claims', '', true);
 savepoint sp_w1;
 select throws_like(
-  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz, is_active = false where account_id = %s $$, :open1),
+  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz, is_active = false where account_id = %s $$, :wopen),
   '%no acting identity%auth.uid() is null and no pfin.actor is set%',
   '(W1) NO ACTING IDENTITY: a writer with null auth.uid() and no pfin.actor RAISES rather than defaulting. Absence must not BECOME a value on an append-only record — "we did not record who" and "the system did it" must stay distinguishable'
 );
@@ -692,7 +709,7 @@ savepoint sp_w2;
 select set_config('pfin.reason_code', '', true);
 select _rls.set_tenant(:'ta'::uuid);
 select throws_like(
-  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz, is_active = false where account_id = %s $$, :open1),
+  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz, is_active = false where account_id = %s $$, :wopen),
   '%no pfin.reason_code set%set local pfin.reason_code%',
   '(W2) NO REASON: a session closure without pfin.reason_code RAISES, and the message NAMES THE REMEDY. Asserted on the remedy text deliberately — a mandatory field whose error does not say how to supply it produces a correct refusal that reads as a broken feature'
 );
@@ -708,12 +725,12 @@ select set_config('pfin.reason_code', 'no_longer_used', true);
 select _rls.set_tenant(:'ta'::uuid);
 select set_config('pfin.actor', 'system:remediation', true);   -- the forgery attempt
 select lives_ok(
-  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz, is_active = false where account_id = %s $$, :open1),
+  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz, is_active = false where account_id = %s $$, :wopen),
   '(W3a) a session that ALSO sets pfin.actor closes successfully — the forgery does not error, which is what makes (W3b) the assertion that matters'
 );
 select set_config('role', 'postgres', true);
 select is(
-  (select actor from pfin.account_event where account_id = :open1 and event_type = 'closed'),
+  (select actor from pfin.account_event where account_id = :wopen and event_type = 'closed'),
   'user:' || :'ta',
   '(W3b) FORGERY REFUSED: the recorded actor is `user:<uid>`, NOT the forged `system:remediation`. auth.uid() is consulted FIRST and a user session never reaches the GUC. A GUC-first ordering would let any session write a system identity into an append-only record — and it would look correct, because the row lands and the value is in the vocabulary'
 );
@@ -740,7 +757,7 @@ select is(
 select set_config('role', 'postgres', true);
 select throws_like(
   format($$ insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor, effective_date)
-              values (%L, %s, 'closed', 'no_longer_used', 'system:remediation', null) $$, :'ta', :open1),
+              values (%L, %s, 'closed', 'no_longer_used', 'system:remediation', null) $$, :'ta', :wopen),
   '%account_event_effective_date_required%',
   '(W5) A CLOSED ROW MUST CARRY A DATE: the constraint admits NULL effective_date for `reopened` and refuses it for `closed`. Asserted as the COMPANION to (W4) — without it, "nullable" would read as "optional everywhere" and the closure date, which the whole as-of model depends on, could go unrecorded'
 );
