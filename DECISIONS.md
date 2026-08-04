@@ -316,7 +316,9 @@ A1–A3 govern the **Item / connection**, not the account: their own label is *"
 
 ### Amendment 1 (2026-08-03) — `account_event` had no writer; the audit-column criterion is replaced; `reason_code` requiredness and vocabulary ratified
 
-**Status: PROPOSED.** Architect-authored, Sec-reviewed, PM-ruled on the product half. **Merging this PR is the F/CTO ratification.**
+**Status: RATIFIED** — F/CTO, 2026-08-04 (PR #305). Architect-authored, Sec-reviewed, PM-ruled on the product half.
+
+> *This line read **"Status: PROPOSED … merging this PR is the F/CTO ratification"** until the merge, which is the event that falsified it. Corrected rather than left to be resolved by the reader working out that a merged amendment must have been ratified — the second sentence did do that work, but a bold **PROPOSED** at the head of a ratified decision is exactly the authoritative-looking-but-stale statement this amendment spends A2 and A7 on. **A migration must not leave behind documentation its own change falsifies** (Sec, at the `058`/`059` catalog-comment ruling); the same holds for a merge.*
 
 #### A1 — The finding: nothing writes `pfin.account_event`
 
