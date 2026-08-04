@@ -343,6 +343,7 @@ as $$
 declare
   v_actor  text;
   v_reason text;
+  v_eff    date;
   v_uid    uuid := auth.uid();
 begin
   -- PRECEDENCE: session identity first, ALWAYS. See the header.
@@ -374,10 +375,25 @@ begin
   else
     -- REOPENED. No reason_code: account_event_reason_required scopes
     -- requiredness to event_type = 'closed', and a reopen has no vocabulary.
+    --
+    -- ⚠ effective_date IS NOT DEFAULTED TO current_date — for the SAME reason
+    --   reason_code is not defaulted six lines up, and that inconsistency
+    --   within one function is how it was caught (Sec, at the e88b76c review).
+    --   A closure takes its date from the DATA; a reopen would have INVENTED
+    --   one. current_date here is a guessed date, permanent and unredactable,
+    --   and it makes a real same-day reopen BYTE-IDENTICAL to an unknown-date
+    --   one — not lossy, INDISTINGUISHABLE, with no redaction path to separate
+    --   the populations afterwards.
+    --   NULL means "not recorded". A date means "recorded".
+    --   The GUC is OPTIONAL BY DESIGN: requiring it would gate an operation
+    --   ADR-042 deliberately left ungated. Absent -> NULL, and 057's
+    --   account_event_effective_date_required permits NULL for reopens only.
+    v_eff := nullif(current_setting('pfin.effective_date', true), '')::date;
+
     insert into pfin.account_event
       (users_id, account_id, event_type, reason_code, actor, effective_date)
     values
-      (new.users_id, new.account_id, 'reopened', null, v_actor, current_date);
+      (new.users_id, new.account_id, 'reopened', null, v_actor, v_eff);
   end if;
 
   return null;  -- AFTER trigger; return value is ignored.
@@ -385,7 +401,7 @@ end;
 $$;
 
 comment on function pfin.fn_account_event_write() is
-  'AFTER UPDATE audit writer for pfin.account_event (ADR-042 Decision 5 + Amendment 1 A5). SEPARATE FROM THE CLOSE GATE — the gate fires into-closed only and REFUSES; this fires BOTH directions and RECORDS. Their conflation in ADR-042''s build sequence is why nothing wrote this table until Amendment 1. AFTER, not BEFORE, so only transitions that survived the row-level constraints are recorded. ACTOR PRECEDENCE IS SECURITY-LOAD-BEARING: auth.uid() FIRST, the pfin.actor GUC only when it is null, NEVER the reverse — set local is available to any session, so a GUC-first derivation would let a user forge system:remediation into an append-only record; with auth.uid() first a user session never reaches the GUC branch. Neither present RAISES rather than writing a misattributed row. reason_code comes from the pfin.reason_code GUC and is NEVER DEFAULTED: defaulting makes absence a value in a table with no redaction path, and the raise names the remedy so the fix is to supply a reason rather than invent one. SECURITY INVOKER; DEFINER allowlist stays 4.';
+  'AFTER UPDATE audit writer for pfin.account_event (ADR-042 Decision 5 + Amendment 1 A5). SEPARATE FROM THE CLOSE GATE — the gate fires into-closed only and REFUSES; this fires BOTH directions and RECORDS. Their conflation in ADR-042''s build sequence is why nothing wrote this table until Amendment 1. AFTER, not BEFORE, so only transitions that survived the row-level constraints are recorded. ACTOR PRECEDENCE IS SECURITY-LOAD-BEARING: auth.uid() FIRST, the pfin.actor GUC only when it is null, NEVER the reverse — set local is available to any session, so a GUC-first derivation would let a user forge system:remediation into an append-only record; with auth.uid() first a user session never reaches the GUC branch. Neither present RAISES rather than writing a misattributed row. reason_code comes from the pfin.reason_code GUC and is NEVER DEFAULTED: defaulting makes absence a value in a table with no redaction path, and the raise names the remedy so the fix is to supply a reason rather than invent one. effective_date on a REOPEN is NOT defaulted to current_date and is NULL when unsupplied: a closure takes its date from the data, a reopen would invent one, and an invented date makes a real same-day reopen byte-identical to an unknown-date one — indistinguishable rather than lossy, on a table with no redaction path. This is ADR-011 D4 third bullet INVERTED (Lock 9 lost insertion-time by omission, which is visible; defaulting here would collapse the distinction BY VALUE, which is not). ⚠ ACTOR TRUTHFULNESS HAS A DEPENDENCY OUTSIDE THIS FILE: the user->system forgery is closed here by the auth.uid()-first precedence, but the system->user direction rests on TenantBoundConnection.impersonate() (Lock 13 mod #3, workers/etl/, PYTHON) being fenced read-only — it mints a synthetic JWT claim, so under an impersonation auth.uid() is NON-NULL and this function would record user:<uuid> for a system action, through the FIRST branch, never touching the GUC. If impersonate() ever gains write capability, actor starts lying with no change to this file and nothing failing. Whoever proposes widening it should find this sentence first. SECURITY INVOKER; DEFINER allowlist stays 4.';
 
 create trigger account_event_write
   after update on pfin.account
