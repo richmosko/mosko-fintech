@@ -26,3 +26,35 @@ export type AccountType = (typeof ACCOUNT_TYPES)[number];
 /** tax_treatment — VERBATIM from 003 pfin.account CHECK. */
 export const TAX_TREATMENTS = ['taxable', 'tax_deferred', 'tax_free'] as const;
 export type TaxTreatment = (typeof TAX_TREATMENTS)[number];
+
+/**
+ * closure reason_code — VERBATIM from 057 pfin.account_event CHECK.
+ *
+ * MANDATORY on the into-closed transition (058's audit writer refuses without it and
+ * deliberately will not invent one). This is a THIRD representation of the vocabulary
+ * (DB CHECK -> here -> the picker); per Architect it is NOT re-validated inside
+ * fn_close_account, which would make a fourth. Drift is caught by a QA assertion against
+ * pg_constraint rather than by a comment — the §7.6 S1 shape.
+ *
+ * Labels are placeholders pending PM + UX copy; the VALUES are Backend-sourced and track
+ * the migration, never UI preference.
+ */
+export const CLOSURE_REASONS = [
+	'no_longer_used',
+	'sold',
+	'transferred_out',
+	'duplicate',
+	'institution_closed',
+	'other'
+] as const;
+export type ClosureReason = (typeof CLOSURE_REASONS)[number];
+
+/** Placeholder copy — PM + UX own the final strings. */
+export const CLOSURE_REASON_LABELS: Record<ClosureReason, string> = {
+	no_longer_used: 'No longer used',
+	sold: 'Sold',
+	transferred_out: 'Transferred out',
+	duplicate: 'Duplicate',
+	institution_closed: 'Closed by the institution',
+	other: 'Other'
+};

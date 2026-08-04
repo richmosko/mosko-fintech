@@ -14,6 +14,7 @@
 	import { enhance } from '$app/forms';
 	import type { SubmitFunction } from '@sveltejs/kit';
 	import type { PageData, ActionData } from './$types';
+	import { CLOSURE_REASONS, CLOSURE_REASON_LABELS } from '$lib/schemas/account-constants';
 	import { accountTypeLabel, taxTreatmentLabel } from '$lib/account-display';
 	import Button from '$lib/components/Button.svelte';
 	import TextField from '$lib/components/TextField.svelte';
@@ -294,12 +295,24 @@
 
 		<form method="POST" action="?/toggleActive" use:enhance={toggleHandler}>
 			<input type="hidden" name="is_active" value={String(!account.is_active)} />
+			{#if account.is_active}
+				<!-- reason_code is MANDATORY on the into-closed transition (057's CHECK; 058's audit
+				     writer refuses without it and will not invent one). Values come from the shared
+				     account-constants, copied verbatim from the CHECK — the labels are placeholders
+				     pending PM + UX copy. Reopening carries no reason, so this is close-only. -->
+				<label class="reason" for="reason_code">Reason for closing</label>
+				<select id="reason_code" name="reason_code" required>
+					{#each CLOSURE_REASONS as r (r)}
+						<option value={r}>{CLOSURE_REASON_LABELS[r]}</option>
+					{/each}
+				</select>
+			{/if}
 			<Button
 				type="submit"
 				variant={account.is_active ? 'secondary' : 'primary'}
 				loading={toggling}
 			>
-				{account.is_active ? 'Mark account inactive' : 'Reactivate account'}
+				{account.is_active ? 'Close account' : 'Reopen account'}
 			</Button>
 		</form>
 	</section>

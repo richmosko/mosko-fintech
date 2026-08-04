@@ -9,7 +9,7 @@
 // source of truth; when the server schema changes, this mirror updates in lockstep.
 
 import { z } from 'zod';
-import { ACCOUNT_TYPES, TAX_TREATMENTS } from '$lib/schemas/account-constants';
+import { ACCOUNT_TYPES, TAX_TREATMENTS, CLOSURE_REASONS } from '$lib/schemas/account-constants';
 import { sanitizeCurrencyAmount } from '$lib/validation/numeric';
 
 /** Zod adapter over the client numeric-sanitization battery → a validated `number`. */
@@ -63,9 +63,17 @@ export const toggleActiveSchema = z
 		is_active: z.preprocess(
 			(v) => v === true || v === 'true' || v === 'on' || v === '1',
 			z.boolean()
-		)
+		),
+		// Required to CLOSE, absent to REOPEN — 058's audit writer refuses a close with no
+		// reason and deliberately will not invent one. Optional here and enforced by the
+		// refinement below, so the reopen path is not forced to post a meaningless value.
+		reason_code: z.enum(CLOSURE_REASONS).optional()
 	})
-	.strict();
+	.strict()
+	.refine((v) => v.is_active || v.reason_code !== undefined, {
+		path: ['reason_code'],
+		message: 'Choose a reason for closing this account.'
+	});
 
 export type ToggleActive = z.infer<typeof toggleActiveSchema>;
 

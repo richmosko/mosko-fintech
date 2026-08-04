@@ -224,10 +224,11 @@ function gateRefusalMessage(raw: string): string {
 }
 
 export const actions: Actions = {
-	// The account CLOSE control (ADR-042 Decision 1). Named `toggleActive` and posting
-	// `is_active` for now: PR 2 fixes the WRITE only, and the reads still resolve through
-	// is_active until 059 drops it. The rename rides with the §7.9 application-layer landing,
-	// so this file is not touched twice for a half-migrated surface.
+	// The account CLOSE / REOPEN control (ADR-042 Decision 1; the RPC pair per Amendment 2).
+	// Named `toggleActive` and posting `is_active` for now: PR 2 changes the WRITE MECHANISM
+	// only, and the reads still resolve through is_active until 059 drops it. The rename rides
+	// with the §7.9 application-layer landing, so this file is not touched twice for a
+	// half-migrated surface.
 	toggleActive: async ({ request, locals, params }) => {
 		const { user } = await locals.safeGetSession();
 		if (!user) return fail(401, { errors: { _form: ['You must be signed in.'] } });
@@ -238,22 +239,31 @@ export const actions: Actions = {
 		const parsed = toggleActiveSchema.safeParse(Object.fromEntries(await request.formData()));
 		if (!parsed.success) return fail(400, { errors: fieldErrors(parsed.error) });
 
-		// ADR-042 Decision 1: this is the CLOSE control, and closure is a dated bookkeeping
-		// event — so it writes closed_at, never is_active. The 058 sync trigger is
-		// ONE-DIRECTIONAL (closed_at -> is_active); writing is_active directly would leave
-		// closed_at untouched and be REJECTED by account_closure_biconditional. is_active is
-		// dropped entirely at 059.
-		//   is_active=false (posted) -> CLOSE  -> closed_at = now()
-		//   is_active=true  (posted) -> REOPEN -> closed_at = null (deliberately ungated)
+		// ADR-042 Decision 1 + Amendment 2: closure is a dated bookkeeping event, so this
+		// writes closed_at — never is_active, which 059 drops.
+		//
+		// WHY AN RPC AND NOT A PATCH: 058's audit writer requires `pfin.reason_code` to be set
+		// in the SAME TRANSACTION as the close, and it deliberately will not invent one. A
+		// PostgREST PATCH is its own transaction with no way to carry a GUC alongside it, so a
+		// direct .update() CANNOT close an account — it fails every time. The INVOKER RPC sets
+		// the GUC and performs the UPDATE in one request, so the two share a transaction BY
+		// CONSTRUCTION rather than by convention. RLS, the aal2 conjunct, the close gate, the
+		// biconditional and the audit writer all still evaluate as the caller.
+		//
+		// closed_at is NOT sent: p_closed_at defaults to server now(). Sending a client clock
+		// would let a machine a minute fast trip the gate's own future-date bound.
 		const closing = !parsed.data.is_active;
-		const { error: updErr } = await locals.supabase
-			.schema('pfin')
-			.from('account')
-			.update({ closed_at: closing ? new Date().toISOString() : null })
-			.eq('account_id', accountId);
+		const { error: updErr } = closing
+			? await locals.supabase.schema('pfin').rpc('fn_close_account', {
+					p_account_id: accountId,
+					p_reason_code: parsed.data.reason_code
+				})
+			: await locals.supabase.schema('pfin').rpc('fn_reopen_account', {
+					p_account_id: accountId
+				});
 
 		if (updErr) {
-			console.error('[accounts/[account_id]] close-control update failed:', updErr.message);
+			console.error('[accounts/[account_id]] close-control RPC failed:', updErr.message);
 			// The close gate refuses with a named leg (holdings / cash / post-closure activity /
 			// future-dated). ADR-042 Decision 1 requires the refusal to NAME why, so the user
 			// knows the account holds value rather than that "something went wrong" — a guided
