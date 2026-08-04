@@ -43,7 +43,13 @@
 --   unbuildable-from. This list is what the file must contain:
 --     (1) the one-directional closed_at -> is_active sync trigger
 --     (2) account_closure_biconditional (NOT VALID, validated at 059)
---     (3) the close gate + the Decision-4 currency conjunct
+--     (3) the close gate + TWO already-closed immutability conjuncts:
+--         the Decision-4 currency one, and the closed_at one (Amendment 2 B4)
+--         ⚑ (3) NOW HAS SEVEN raise sites, not six. The battery's (B5) counts
+--           them from pg_get_functiondef and WILL go red until QA re-asserts —
+--           that red is this fence, by design, not a regression. (B5)'s own
+--           text says it: "a red here means a raise was added or removed: go
+--           read it, then assert it."
 --     (3b) the account_event AFTER writer (added at Amendment 1)
 --     (4) the transfer-in fences on the three position-determining tables
 --     (5) 042's re-land clause change
@@ -255,6 +261,45 @@ begin
       new.account_id;
   end if;
 
+  -- closed_at immutability on an already-closed account (ADR-042 Amendment 2 B4,
+  -- F/CTO-ratified 2026-08-03). SIBLING of the currency conjunct above, and the
+  -- same argument one column over: the gate below fires ONLY on the into-closed
+  -- transition, so without this a CLOSED account's closed_at could be MOVED to
+  -- another past date by a direct PATCH under the 003 table-level UPDATE grant,
+  -- with none of the three legs re-firing. Moved EARLIER, to a date the account
+  -- still held value, it falsifies the standing invariant and — after 059's
+  -- as-of re-point — silently restates historical NAV.
+  --
+  -- *** THIS FENCES THE DATE MOVE. IT MUST NOT FENCE REOPEN. ***
+  --   `new.closed_at is not null` is the load-bearing conjunct, not a tidiness
+  --   guard. Drop it and `closed_at = null` starts raising — which blocks the
+  --   reopen -> correct -> re-close path Decision 3 RATIFIES as the correction
+  --   route, and this fence's whole justification is that that route exists.
+  --   A fence that blocks its own remedy is self-defeating: it would leave a
+  --   mis-dated closure permanently uncorrectable, which is strictly worse than
+  --   the mutability it set out to remove.
+  --
+  -- WHAT IT DOES NOT COVER, stated so it is not read as total:
+  --   - it does NOT constrain a re-close to a DIFFERENT date after a legitimate
+  --     reopen. That path re-enters the gate below (old.closed_at is null) and
+  --     RE-PROVES all three legs at the new date, which is the entire point —
+  --     the date may move, but only through a transition that re-validates it.
+  --   - it does NOT reach closed_at on an OPEN account (old.closed_at is null);
+  --     that is a closure, and the gate below is what governs it.
+  --
+  -- HARDENING, NOT AN INCIDENT: every re-date was already AUDITED before this
+  --   fence existed — the (3b) writer fires on `closed_at is distinct from` in
+  --   both directions, so any historical instance wrote a second `closed` row to
+  --   pfin.account_event and is recoverable from it. The defect was that the
+  --   move was recorded and not REFUSED.
+  if old.closed_at is not null
+     and new.closed_at is not null
+     and new.closed_at is distinct from old.closed_at then
+    raise exception
+      'closed_at is immutable on a closed account (account %): moving a closure date does NOT re-run the gate, so an earlier date would assert zero value at a time the account still held some — and after 059''s as-of re-point that silently restates historical NAV. To correct a closure date: REOPEN the account, then close it again at the intended date (ADR-042 Decision 3''s reopen -> edit -> re-close, which RE-PROVES all three legs rather than assuming they survived). Attempted move: % -> %.',
+      new.account_id, old.closed_at, new.closed_at;
+  end if;
+
   -- gate only the into-closed transition
   if old.closed_at is null and new.closed_at is not null then
 
@@ -323,7 +368,7 @@ end;
 $$;
 
 comment on function pfin.fn_account_closure_gate() is
-  'BEFORE UPDATE close gate + currency conjunct on pfin.account (ADR-042 Decisions 3 + 4). Gate fires on the INTO-CLOSED transition ONLY; reopening is deliberately ungated (a reopened account starts at zero and is funded by new dated entries; closure entries are historical facts and are not un-booked). Three legs with THREE DISTINCT messages so a battery can assert which fired: (1) zero holdings as of closed_at, QUANTITY-based via fn_holdings_as_of — a market-value test reads 10 shares of an unpriced asset as zero, and price coverage is not a security control; (2) zero cash via fn_account_cash_as_of, which is NATIVE and applies no fx multiplier — measured live, a negative fx_feed rate sign-flips fn_compute_nav and leaves the measure unchanged, so the gate is immune to a rate a bad feed controls; a missing row RAISES because that function is total over pfin.account; (3) no activity dated after closed_at, without which a backdated closure orphans live activity. Plausibility bound is here rather than in a CHECK because now() is STABLE and a temporal CHECK is a dump/restore foot-gun; ONE-SIDED only — closed_at >= created_at would be wrong, since a historical account may legitimately be closed as of a date before its row existed. Currency conjunct: account.currency feeds the fn_compute_nav cash-leg FX multiplier (015:541), so changing it on a closed account retroactively re-values the closure date. SECURITY INVOKER; allowlist stays 4.';
+  'BEFORE UPDATE close gate + TWO already-closed immutability conjuncts on pfin.account (ADR-042 Decisions 3 + 4; the closed_at conjunct added at Amendment 2 B4). ⚠ THE CONJUNCTS AND THE GATE HAVE DIFFERENT FIRING CONDITIONS AND THAT IS THE DESIGN: the conjuncts fire when old.closed_at IS NOT NULL (the account is already closed), the gate when it is NULL (the account is being closed). closed_at conjunct: a closed account''s closure date is IMMUTABLE, because moving it does not re-run the gate — an earlier date asserts zero value at a time the account still held some, and after 059''s as-of re-point that silently restates historical NAV. It fences the DATE MOVE ONLY: `new.closed_at is not null` is load-bearing, since fencing `closed_at = null` would block the reopen -> correct -> re-close path Decision 3 ratifies as the correction route, and a fence that blocks its own remedy leaves a mis-dated closure permanently uncorrectable — strictly worse than the mutability it removes. It does NOT constrain a re-close to a different date after a legitimate reopen: that path re-enters the gate and RE-PROVES all three legs, so the date may move, but only through a transition that re-validates it. Hardening rather than incident response — the re-date was already AUDITED by the (3b) writer (which fires on closed_at IS DISTINCT FROM in both directions, so any historical instance left a second `closed` account_event row and is recoverable); what was missing was the REFUSAL. Gate fires on the INTO-CLOSED transition ONLY; reopening is deliberately ungated (a reopened account starts at zero and is funded by new dated entries; closure entries are historical facts and are not un-booked). Three legs with THREE DISTINCT messages so a battery can assert which fired: (1) zero holdings as of closed_at, QUANTITY-based via fn_holdings_as_of — a market-value test reads 10 shares of an unpriced asset as zero, and price coverage is not a security control; (2) zero cash via fn_account_cash_as_of, which is NATIVE and applies no fx multiplier — measured live, a negative fx_feed rate sign-flips fn_compute_nav and leaves the measure unchanged, so the gate is immune to a rate a bad feed controls; a missing row RAISES because that function is total over pfin.account; (3) no activity dated after closed_at, without which a backdated closure orphans live activity. Plausibility bound is here rather than in a CHECK because now() is STABLE and a temporal CHECK is a dump/restore foot-gun; ONE-SIDED only — closed_at >= created_at would be wrong, since a historical account may legitimately be closed as of a date before its row existed. Currency conjunct: account.currency feeds the fn_compute_nav cash-leg FX multiplier (015:541), so changing it on a closed account retroactively re-values the closure date. SECURITY INVOKER; allowlist stays 4.';
 
 create trigger account_closure_gate
   before update on pfin.account
