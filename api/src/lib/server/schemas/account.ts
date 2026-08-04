@@ -126,7 +126,7 @@ export type LandLinkedAccounts = z.infer<typeof landLinkedAccountsSchema>;
 export const closeAccountSchema = z
 	.object({
 		reason_code: z.enum(CLOSURE_REASONS, {
-			errorMap: () => ({ message: 'Choose a reason for closing this account.' })
+			message: 'Choose a reason for closing this account.'
 		})
 	})
 	.strict();
