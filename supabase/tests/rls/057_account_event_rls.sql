@@ -110,10 +110,10 @@ insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
 insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
   values (:'tb', 'B-acct', 'depository', 'household', 'taxable') returning account_id as bacct \gset
 
-insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor)
-  values (:'ta', :aacct, 'closed', 'no_longer_used', 'user:' || :'ta');
-insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor)
-  values (:'tb', :bacct, 'closed', 'sold', 'user:' || :'tb');
+insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor, effective_date)
+  values (:'ta', :aacct, 'closed', 'no_longer_used', 'user:' || :'ta', '2026-06-30');
+insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor, effective_date)
+  values (:'tb', :bacct, 'closed', 'sold', 'user:' || :'tb', '2026-06-30');
 
 -- ⟦VOCABULARY REBOUND at `e88b76c` (ADR-042 Amendment 1, F/CTO-ratified): reason_code
 --   `closed` is RENAMED to `no_longer_used`, and `institution_closed` is NEW. Six values:
@@ -152,8 +152,8 @@ select _rls.expect_owner_can_read('pfin.account_event'::regclass, :'ta'::uuid, 1
 select _rls.expect_cross_tenant_read_empty('pfin.account_event'::regclass, :'ta'::uuid, :'tb'::uuid);
 select _rls.set_tenant(:'tb'::uuid);
 select throws_like(
-  format($$ insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor)
-              values (%L, %s, 'closed', 'no_longer_used', 'user:%s') $$, :'ta', :aacct, :'ta'),
+  format($$ insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor, effective_date)
+              values (%L, %s, 'closed', 'no_longer_used', 'user:%s', '2026-06-30') $$, :'ta', :aacct, :'ta'),
   'new row violates row-level security policy%for table "account_event"',
   '(D1c) cross-tenant INSERT: B forging users_id=A is rejected by the account_event INSERT WITH CHECK — an RLS-policy violation specifically, not an incidental 42501'
 );
@@ -173,8 +173,8 @@ select set_config('role', 'postgres', true);
 --   B's account. RLS admits this row; ONLY the fence rejects it.
 select _rls.set_tenant(:'ta'::uuid);
 select throws_like(
-  format($$ insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor)
-              values (%L, %s, 'closed', 'no_longer_used', 'user:%s') $$, :'ta', :bacct, :'ta'),
+  format($$ insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor, effective_date)
+              values (%L, %s, 'closed', 'no_longer_used', 'user:%s', '2026-06-30') $$, :'ta', :bacct, :'ta'),
   :'m_fence16',
   '(D2a) #16 TEETH at authenticated: users_id=A + account_id=B''s account RAISES the fence. This row PASSES RLS (its users_id is A''s own), so the fence is the SOLE gate here — a test asserting only "B cannot write A''s row" would be testing RLS and reporting it as the fence'
 );
@@ -182,16 +182,16 @@ select set_config('role', 'postgres', true);
 
 -- (D2b) MIGRATION-ROLE tier — the writer #16 actually exists for. RLS-exempt entirely.
 select throws_like(
-  format($$ insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor)
-              values (%L, %s, 'closed', 'no_longer_used', 'system:remediation') $$, :'ta', :bacct),
+  format($$ insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor, effective_date)
+              values (%L, %s, 'closed', 'no_longer_used', 'system:remediation', '2026-06-30') $$, :'ta', :bacct),
   :'m_fence16',
   '(D2b) #16 TEETH at the MIGRATION ROLE (RLS-exempt): the same mismatched pair RAISES. This is the writer the fence exists for per ADR-042 D5a — the one-time remediation script runs privileged and is gated by nothing else'
 );
 
 -- (D2c) NON-VACUOUS: the matched pair SUCCEEDS at the privileged tier.
 select lives_ok(
-  format($$ insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor)
-              values (%L, %s, 'sold', 'sold', 'system:remediation') $$, :'ta', :aacct),
+  format($$ insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor, effective_date)
+              values (%L, %s, 'closed', 'sold', 'system:remediation', '2026-06-30') $$, :'ta', :aacct),
   '(D2c) NON-VACUOUS: a MATCHED (users_id=A, account_id=A''s) pair succeeds privileged -> (D2a)/(D2b) are mismatch-driven, not a blanket privileged-write block'
 );
 
@@ -243,8 +243,8 @@ select is(
 --   three indistinguishable and one broken vocabulary would hide behind the other two.
 -- =====================================================================
 select throws_ok(
-  format($$ insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor)
-              values (%L, %s, 'closed', 'not-a-reason', 'system:remediation') $$, :'ta', :aacct),
+  format($$ insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor, effective_date)
+              values (%L, %s, 'closed', 'not-a-reason', 'system:remediation', '2026-06-30') $$, :'ta', :aacct),
   '23514',
   null,
   '(D4a) reason_code is a CLOSED vocabulary: an out-of-vocabulary value is rejected by CHECK. No free text anywhere on this surface — and no `other` + "please specify", which reintroduces the unredactable-PII problem while LOOKING like a closed vocabulary'
@@ -259,8 +259,8 @@ select throws_ok(
 -- (D4c) `actor` is DISCRIMINATED: `user:<uid>` / `system:<source>`, never a bare uid that
 --   means "system" when null. Absence is not a value — the ADR-011 D1(d) detectability class.
 select throws_ok(
-  format($$ insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor)
-              values (%L, %s, 'closed', 'no_longer_used', %L) $$, :'ta', :aacct, :'ta'),
+  format($$ insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor, effective_date)
+              values (%L, %s, 'closed', 'no_longer_used', %L, '2026-06-30') $$, :'ta', :aacct, :'ta'),
   '23514',
   null,
   '(D4c) `actor` is DISCRIMINATED: a BARE uid is rejected — it must be `user:<uid>` or `system:<source>`. A bare uid, or a NULL meaning "system", makes "we did not record the actor" indistinguishable from "the actor was the system" on a permanent audit record'

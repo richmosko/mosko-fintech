@@ -357,11 +357,16 @@ select is(
 --      load-bearing one.
 select set_config('role', 'postgres', true);
 savepoint sp_totality;
+-- `:z` cannot be interpolated INSIDE a dollar-quoted body — psql does not substitute
+-- variables there, and closing the quote to concatenate is invalid: `as` takes a single
+-- string literal, not an expression. Build the whole statement with format() and \gexec.
+select format($fmt$
 create or replace function pfin.fn_account_cash_as_of(p_as_of date)
 returns table (account_id bigint, balance_native numeric)
 language sql security invoker stable set search_path = '' as $totality$
-  select acc.account_id, 0.0000::numeric from pfin.account acc where acc.account_id <> $totality$ || :z || $totality$
-$totality$;
+  select acc.account_id, 0.0000::numeric from pfin.account acc where acc.account_id <> %s
+$totality$
+$fmt$, :z) \gexec
 select _rls.set_tenant(:'ta'::uuid);
 select throws_like(
   format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = %s $$, :z),
