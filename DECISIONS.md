@@ -65,6 +65,20 @@ Architect + Security joint scoping established that the column carried **three d
 
 **Consequence:** `toggleAccount` writing `account.is_active` was a **mis-implementation** — concept 3 landed one level too high because its correct home did not exist. It becomes a **close-account control gated on zero value**. A guided close-with-funds walkthrough is future work; **the refusal message must name it** so the gate is not a dead end.
 
+> **⚠ AMBIGUOUS REFERENT — Architect to confirm.** The sentence above names **`toggleAccount`** (the connections use/ignore control, `accounts/connections/[source_id]`). Its author described it in review as being about **`toggleActive`** (the account-detail control, `accounts/[account_id]`) — and in the same message routed `toggleAccount` to the F/CTO as *undecided*, which they would not have done if Decision 1 had already settled it. **Both controls wrote `account.is_active`, so either reading parses.** Decision 1b below is written as filling a gap; **if the referent really is `toggleAccount`, then 1b supersedes this sentence instead.** The built outcome is identical either way — recorded because a wrong referent in a ratified decision is the failure class this ADR's own review caught repeatedly.
+
+### Decision 1b — The connect surface: `toggleAccount` is REMOVED, and closed accounts are not re-offered (F/CTO-ratified 2026-08-04)
+
+Concept 3 states there is **no registry, no marker, no persistent selection state**. A control whose two positions are *"In use"* and *"Ignored"* persists exactly that state. It is not re-pointed onto `closed_at` — ***ignored* and *closed* are different facts**, and merging them re-commits the conflation this ADR exists to undo, under a new column.
+
+1. **`toggleAccount` is removed**, with its server action, schemas, client mirror and markup. Import selection lives at connect time and nowhere else.
+2. **Already-landed accounts that are closed are filtered OUT of the connect offer list.** Concept 3 re-offers every provider account on each connect, so without this a closed account reappears; selecting it does nothing, because `042`'s conflict clause is a no-op self-assignment. **A UI that accepts a deliberate action and silently discards it is the *gate-with-no-way-forward* shape Decision 1 already fences for the duplicate case** — reaching the same defect through a different door.
+3. **Reopening is done from the account's own close control** (`accounts/[account_id]`), which is the single home for concept 2.
+
+**Accepted cost, stated rather than discovered:** someone who closes an account by mistake has no path back from the connections page and must find the account itself. Considered and accepted in preference to a second close control, or to a reopen prompt inside a flow about connecting rather than about bookkeeping.
+
+**Not affected:** `toggleActive` is untouched by this decision and becomes the close control per Decision 1.
+
 ### Decision 2 — `closed_at timestamptz` replaces `is_active`, which is DROPPED. **ONE-WAY DOOR.**
 
 `is_active` is retired, not retained-as-derived. Two reasons beyond redundancy:
