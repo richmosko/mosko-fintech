@@ -65,6 +65,20 @@ Architect + Security joint scoping established that the column carried **three d
 
 **Consequence:** `toggleAccount` writing `account.is_active` was a **mis-implementation** — concept 3 landed one level too high because its correct home did not exist. It becomes a **close-account control gated on zero value**. A guided close-with-funds walkthrough is future work; **the refusal message must name it** so the gate is not a dead end.
 
+> **⚠ AMBIGUOUS REFERENT — Architect to confirm.** The sentence above names **`toggleAccount`** (the connections use/ignore control, `accounts/connections/[source_id]`). Its author described it in review as being about **`toggleActive`** (the account-detail control, `accounts/[account_id]`) — and in the same message routed `toggleAccount` to the F/CTO as *undecided*, which they would not have done if Decision 1 had already settled it. **Both controls wrote `account.is_active`, so either reading parses.** Decision 1b below is written as filling a gap; **if the referent really is `toggleAccount`, then 1b supersedes this sentence instead.** The built outcome is identical either way — recorded because a wrong referent in a ratified decision is the failure class this ADR's own review caught repeatedly.
+
+### Decision 1b — The connect surface: `toggleAccount` is REMOVED, and closed accounts are not re-offered (F/CTO-ratified 2026-08-04)
+
+Concept 3 states there is **no registry, no marker, no persistent selection state**. A control whose two positions are *"In use"* and *"Ignored"* persists exactly that state. It is not re-pointed onto `closed_at` — ***ignored* and *closed* are different facts**, and merging them re-commits the conflation this ADR exists to undo, under a new column.
+
+1. **`toggleAccount` is removed**, with its server action, schemas, client mirror and markup. Import selection lives at connect time and nowhere else.
+2. **Already-landed accounts that are closed are filtered OUT of the connect offer list.** Concept 3 re-offers every provider account on each connect, so without this a closed account reappears; selecting it does nothing, because `042`'s conflict clause is a no-op self-assignment. **A UI that accepts a deliberate action and silently discards it is the *gate-with-no-way-forward* shape Decision 1 already fences for the duplicate case** — reaching the same defect through a different door.
+3. **Reopening is done from the account's own close control** (`accounts/[account_id]`), which is the single home for concept 2.
+
+**Accepted cost, stated rather than discovered:** someone who closes an account by mistake has no path back from the connections page and must find the account itself. Considered and accepted in preference to a second close control, or to a reopen prompt inside a flow about connecting rather than about bookkeeping.
+
+**Not affected:** `toggleActive` is untouched by this decision and becomes the close control per Decision 1.
+
 ### Decision 2 — `closed_at timestamptz` replaces `is_active`, which is DROPPED. **ONE-WAY DOOR.**
 
 `is_active` is retired, not retained-as-derived. Two reasons beyond redundancy:
@@ -299,6 +313,136 @@ A1–A3 govern the **Item / connection**, not the account: their own label is *"
 **Approved by:** Founder/CTO (2026-08-03).
 
 **Cross-references.** [ADR-039](#adr-039) (Option D ratified) · [ADR-040](#adr-040) (temporal rationale struck; decision stands) · [ADR-013](#adr-013) A1–A3 (preserved) · [ADR-038](#adr-038) · [ADR-031](#adr-031) · [ADR-035](#adr-035) (R1) · [ADR-011](#adr-011) D1 / D2 / D3 / D4 / D9 / Lock 10 / Lock 11 / Lock 14 · `003` `004` `015` `019` `029` `037` `040` `042` `049` `050` `051` `054` · PRD §2.4.1 / §2.4.2 / §2.4.3 · `BACKLOG.md` §7.4 (*statement-vs-GL tie-out*) / §7.6 (*merged-migration comment scoping guard*) / §7.7.
+
+### Amendment 1 (2026-08-03) — `account_event` had no writer; the audit-column criterion is replaced; `reason_code` requiredness and vocabulary ratified
+
+**Status: PROPOSED.** Architect-authored, Sec-reviewed, PM-ruled on the product half. **Merging this PR is the F/CTO ratification.**
+
+#### A1 — The finding: nothing writes `pfin.account_event`
+
+Measured 2026-08-03 against the `058` working branch: `058` creates **five** triggers and none writes the table; the only `insert into` in `058` is the `042` re-point; repo-wide, `account_event` appears outside `057` in exactly two places, **both comments**; no app or worker reference exists.
+
+So `057` as designed ships an audit table, an INSERT RLS policy, the **#16** matched-tenant fence and a closed vocabulary **for a write path nobody built**. A closure would be gated and unrecorded.
+
+**Recorded as a finding rather than silently corrected**, because the mechanism is the durable part: a corrected build sequence with no note reads as though it was always right.
+
+#### A2 — Root cause: a deliverable that existed only as another slice's rationale
+
+Decision 5 specifies the audit writer as a trigger **distinct** from the gate — *"Fires on `closed_at IS DISTINCT FROM old.closed_at` in **both** directions …; the **gate** fires into-closed only."* The build sequence then **collapses the two into one object**, under `057`: *"the gate's trigger writes closure rows into it."* And **`058`'s own deliverables list does not contain it.**
+
+**The writer appears in this ADR exactly once — as ordering rationale for a dependency ("`057` first *because* the gate writes into it") — and never as a deliverable of any slice.** `058` was built from its own enumeration, which was complete with respect to everything except the item living in another slice's reasoning.
+
+Two mechanisms compounding: **rationale read as specification**, and **a conflation that made the omission invisible** — call it *"the gate's trigger"* and once the gate exists the writer feels shipped.
+
+> **Transferable rule.** A deliverable named only in another item's rationale is structurally unbuildable-from. **The list you build from must contain everything you must build.**
+>
+> **Companion sweep (Sec).** *Consumer sweep — what reads this? — when you CHANGE something. **Writer sweep — what writes this? — when you CREATE something.*** Nobody swept for writers of a new table, because creating a table feels like the writer question is answered by the reason you created it.
+
+Four agents asserted the writer before anyone checked the DDL; the review pair was structurally blind to a premise all of them held.
+
+#### A3 — Build-sequence corrections
+
+- **`057` entry** — strike *"the gate's trigger writes closure rows into it."* Replace with: *`057` precedes `058` because `058`'s audit trigger inserts into this table.* Ordering rationale must not double as a writer's only specification.
+- **`058` entry** — **add the writer as an explicit deliverable:** *+ the AFTER trigger that writes `account_event` rows.*
+- **Decision 5** — the audit trigger and the close gate are **two triggers**. The gate fires into-closed only and **REFUSES**; the audit trigger fires both directions and **RECORDS**. Conflating them is what hid the omission.
+
+#### A4 — Decision 5a's audit-column criterion is REPLACED
+
+Old: *does the column take more than one value across the writers that exist?* That is an **operational-column** test applied to an **audit** column — precedent-without-its-surrounding-conditions.
+
+> **New criterion.** An audit column earns its place if the information it captures **exists at write time and cannot be reconstructed afterwards.**
+
+- **`actor` KEEPS.** Generated by every event, unreconstructable later. Its justification is the record-now-or-never asymmetry, not value-count. (Under the old test it would have been dropped: the ratified operator model dispositions through the gated control **as a user session**, so `system:remediation` may never be written and the column is single-valued.)
+- **`matched_on` / `decided` stay DROPPED**, for a stronger reason than before: not that they would hold one value, but that **the information is never generated at all.**
+
+Same governing principle F/CTO ratified the same day on the `currency` event: *record now, mark later — the information needed to mark retroactively is destroyed by not recording it now.*
+
+#### A5 — Writer specification (Sec-ruled)
+
+**AFTER**, not BEFORE — the audit records only transitions that survived the constraints.
+
+**`actor` derivation — the precedence order is security-load-bearing:**
+
+> **`auth.uid()` is checked FIRST. The GUC is consulted ONLY when `auth.uid()` is null. Never the reverse.**
+
+Because `set local` is available to any session. GUC-first — which *"explicit beats inferred"* would justify in a later review — would let a user **forge `system:remediation` into an append-only audit record**. With `auth.uid()` first a user session never reaches the GUC branch, so the forgery is **unreachable rather than discouraged**. Neither present → **RAISE**: a context that is neither a session nor a declared remediation cannot write an audit row rather than writing a misattributed one. **The order ships with its reason at the site**, because the ordering reads arbitrary without it.
+
+**`reason_code` carrier — option B (a `set local` GUC).** A `fn_close_account` control was **rejected on structure, not size**: the trigger still needs a signal that the function was used, so it is B *plus* a function *plus* a sentinel — or `SECURITY DEFINER` and the allowlist **4 → 5**, putting the close path inside the elevated set. And §3d already ruled the gate is a **trigger, not an RPC**, because `authenticated` holds a **table-level** UPDATE on `pfin.account` — granted in `003` with **no column list**, so it covers columns added later — and `pfin` is Data-API-exposed. *(Catalog-checkable, and the check demonstrates the load-bearing property rather than merely the grant's existence: `information_schema.role_table_grants` shows the UPDATE, and `information_schema.column_privileges` returns **one row per column** — currently 14 — which is how a table-level grant manifests and why a new column is writable the instant it exists.)* *"Gated control"* described the **UI affordance** replacing `toggleAccount`, not a database entry point. A `closure_reason` column on `pfin.account` was rejected for reintroducing two-representations-of-one-fact — the `closed_at`/`is_active` shape this ADR exists to remove, one table over.
+
+**Two requirements on B:** the raise **names its remedy** (*"no `pfin.reason_code` set; the close path must `set local pfin.reason_code = '<value>'` in the same transaction"*), and **the trigger MUST NOT default `reason_code`** — that makes absence a value, permanently, in an append-only record. Recorded in the DDL as a prohibition *with its reason*, because it is what a future reader reaches for the first time a closure fails.
+
+> **Method note, recorded because the failure is reusable.** These were presented to Sec as three peer options. They were not: the control option **contained** the GUC option plus machinery. **Presenting a dominated option as an alternative makes a decision look wider than it is** — worse than picking wrong, because it corrupts the record of what was actually considered, and *a dominated option makes an options set look more considered.* **Check an options set for containment before choosing within it.**
+
+#### A6 — `reason_code` requiredness and vocabulary (PM-ruled; F/CTO ratifies here)
+
+**Reason is MANDATORY, and `other` is included — one decision, not two.** Per `:164`'s own asymmetry: **without `other`, mandatory forces misclassification** — the outcome this ADR names as worst on an append-only row — **with `other`, mandatory costs one click and can never force a lie.** `other` is not a concession that weakens the requirement; **it is what makes the requirement safe.** Mandatory is also the reversible direction: mandatory→optional is a CHECK relaxation; optional→mandatory cannot backfill.
+
+**Fence:** a high `other` rate is **evidence the vocabulary is wrong, not that the mandate is wrong.** Revisit the vocabulary; do not relax the requirement — otherwise the first sign of a bad taxonomy is misread as a case for optionality and the signal is lost along with the data.
+
+**No `other` + "please specify"** stands unchanged from the ratified line above: if the vocabulary carries `other`, it is `other` and nothing else. **The prohibition is invisible from the CHECK** — a free-text companion box is the default way anyone builds an Other option — so it is stated in the migration header, not only here.
+
+**Vocabulary:**
+
+| value | change | grounding |
+|---|---|---|
+| `no_longer_used` | **renamed** from `closed` | same PRD §2.4.2 sense; removes the collision with `event_type = 'closed'` |
+| `sold` | keep | PRD §2.4.2 |
+| `transferred_out` | keep | Decision 1's close-with-funds walkthrough |
+| `duplicate` | keep | a manual account duplicating a later-connected provider account |
+| `institution_closed` | **NEW** | institution-initiated closure (bank merges, product discontinuations); not the user's decision, currently unrepresentable |
+| `other` | include | the append-only asymmetry at `:164` |
+
+The rename matters beyond tidiness: a value that looks tautological (`reason_code = 'closed'` on `event_type = 'closed'`) becomes **the safe-looking default dumping ground — worse than `other`, because it looks informative.**
+
+#### A7 — ⚠ ONE-WAY DOOR: the disposition axis. **RULED — one axis; the omission is permanent**
+
+The vocabulary **mixes two axes** — *why the account ended* (`no_longer_used`, `duplicate`, `institution_closed`) versus *where the value went* (`sold`, `transferred_out`). They are independent: an institution can close an account whose holdings were sold. Forcing one picker across two axes is the likeliest driver of `other` inflation.
+
+**A premise was tested and withdrawn.** The argument for accepting the conflation was that the ledger recovers axis 2. Measured: `account_trans.transaction_type` is `standard | acct_setup | basis_adjust | corp_action` — **no `sell`, no `transfer_out`.** `030` deliberately kept disposition out of the fact-level set (*"open/close lives in the Cat on the overlay"*). What survives is narrower and still argues the same direction: **the underlying transactions are recorded; only the summary label is absent — and a one-word enum is strictly less informative than the transactions it would summarize.**
+
+**Axis 2 asks WHAT KIND of exit, not WHERE the value went — and collapsing those produced three successive wrong answers before anyone measured.** Against the live catalog and `account_trans`'s CHECK constraints:
+
+- **KIND is not recorded as a labeled fact; it is DERIVABLE FROM THE LEDGER'S STRUCTURAL SHAPE**, under `017`'s one-way-door grain convention — **one row per economic event**, carrying both legs — *"A securities BUY carries BOTH amount=−cash AND quantity=+shares"*, the stated convention on **`account_trans_qty_requires_security`** (`quantity = 0 OR security_id IS NOT NULL`), which is where it is **enforced** rather than merely described. **Cited by constraint name, not line:** that sentence appears **twice** in `017` — on the `quantity` column comment and on the constraint comment — so a line number is ambiguous *today* and rots on the next edit above it, in a passage meant to outlive everyone here. The constraint carries its own `comment on constraint`, so it is catalog-reachable via `pg_constraint` without opening the file at all. So on a quantity-decreasing row **`amount > 0` is a sale and `amount = 0` is a transfer out in kind**; a write-off is `corp_action`, whose CHECK pins `amount = 0` and `cost_basis = 0`. **No pairing is required, because both legs land on the same row.** The discriminator reads off ratified structure and NOT off `sub_cat` BTO/STC categorization, which is user-assigned, optional, and unchecked for uncategorized rows.
+  > **Soft spot, belonging to the derivation and NOT to this decision — recorded here deliberately so it is fixed in the right place.** The `017` convention says a BUY carries both legs; **it does not forbid a writer from splitting them.** A sale landing as a security leg (`quantity < 0`, `amount = 0`) plus a separate cash row (`quantity = 0`, `security_id NULL`) is **schema-legal** — both rows satisfy the CHECK, the second via `quantity = 0` — and **no pairing column exists to relate them**, so such a sale reads as an in-kind transfer plus an unrelated deposit. **Schema-legal, not observed:** the constraint is measured; no provider's behaviour is. Multiple writers exist (Plaid, SimpleFIN, manual, `042`) with no fence holding them to the convention. **Someone who hits this should refine the VIEW below, not reopen the closure decision.**
+- **DESTINATION is not derivable** — there is no counterparty, transfer-pair or link column on `account_trans`, so cash moved to another institution and cash spent are the same row shape. **But axis 2 never asks it**, and no value in the proposed vocabulary records it either way.
+- **For a pure-cash account the axis-2 question does not arise at all**: `sold` has no referent without a security, so there is no kind ambiguity to resolve.
+
+**Three claims, each corrected by the next, and the correction reversed direction twice.** *"Inferable only from user categorization"* was too weak — a missing **label** read as a missing **fact**. *"The distinction exists nowhere in the schema"* was too strong — a missing **counterparty column** read as an unrecoverable **kind**. *"Recoverability is split between securities and cash"* was **still wrong**, because the cash half was answering the destination question, which axis 2 does not pose.
+
+> **The class, which no existing checkpoint covers:** *reasoning from a schema gap to a capability gap.* Not a wrong citation and not a vacuous check — **two people, two absent columns, two conclusions about what the data cannot support, and the data supported it both times.** **Absence of a name is not absence of the thing**, and absence of a link is not absence of a distinction.
+>
+> **Why it went undetected from every vantage point, and the cheap fix.** Each of us generalized from the artifact in front of us — one reading `transaction_type`, one reading the cash leg, one confirming an inference because it matched a conclusion already held. No error was visible from another's position, and **all of them were corrected by the same move: reading the CHECK constraints instead of the column list.** *The column list is the artifact everyone reaches for, and it under-describes the schema, because the constraints carry the semantics.*
+>
+> **A third, measured rather than argued, and it is why every citation in this amendment is a NAME.** One line of `058` — the `042` no-op self-assignment — was cited three times in one afternoon as `:467`, `:561` and `:577`. **Every citation was correct when taken.** The first was invalidated by its own author's next commit before the message was read; **the correction was itself stale on arrival**, invalidated by a commit that landed between writing and sending. Nobody was careless and nothing announced itself, because a stale line number resolves to a **real line about something else** — plausible, checkable, and wrong. *A line number cannot survive its own file being edited, and neither can a correction to one.* The same shape as any measurement reported as current after the reporter's own subsequent edit invalidated it.
+>
+> **A second class, distinct and more durable, from Sec's self-diagnosis of the retracted claim.** Having just argued that an absence claim has no target and so deserves a *higher* standard, they wrote a negative existential — *"the information was never captured anywhere at write time"* — into the sentence they'd argued should be permanent, and built it that way **on purpose**, reasoning that a claim not mentioning the schema's shape could not be falsified by a schema change. It could not. **It was falsified by never having been measured at all.** ***Hardening a claim against the failure you last saw, while shipping it untested against the failure you did not.*** This is the one that survives review, because **the hardening looks like rigour and draws attention away from the untested half.**
+
+**What one axis actually gives up, so it is not re-litigated on a wrong premise:** not axis 2 — `sold` and `transferred_out` remain selectable — but **the CONJUNCTION.** A user whose institution closed an account after they transferred the balance out picks one fact and loses the other. Note the loss runs the *helpful* way for cash: the single pick captures `transferred_out`, which is the one thing the ledger genuinely cannot recover.
+
+**This is why the omission is PERMANENT, not deferred.** Delivering axis 2 through the disposal-reference shape below would additionally require widening `account_trans`'s own vocabulary or adding transfer-pairing — **a second one-way door, on a different table.** Someone who adds transfer-pairing in a year should not read this decision as reopened: the rows written before it can never carry the distinction, which is the same append-only asymmetry that decided the question in the first place.
+
+**Also considered — and DOMINATED BY ANALYSIS THAT DID NOT EXIST WHEN IT WAS RAISED: record a REFERENCE to the disposal rather than a category of it** (Sec). Deliberately **not** recorded as "rejected": it correctly identified that the missing thing is the *link*, not the fact, and **raising it is why the derivability measurement was taken at all.** The grounds that dominate it are all downstream of that measurement. Four: *which transaction emptied the account* is a **set** in the normal case, so it is an `INTEGER[]` carrying a Decision-3 instance or a junction table, not a column; **the set's boundary is itself a derivation** (*transactions since the account was last non-zero*), so storing it materializes a query definition and any later refinement makes every stored set wrong and unbackfillable — importing the append-only irreversibility into the thing meant to solve it; it is *record a derivable fact plus machinery*, **contained by** the option chosen, and Decision 5a spent its argument removing exactly that; and the pointed-at row does not itself distinguish a cash transfer from cash spending, so it delivers *which* and never *what kind*. **The link is worth having and worth not storing: if it is ever wanted, it is a VIEW** — zero schema cost, no append-only exposure, refinable forever because nothing is written.
+
+**The irreversible thing is COLUMN EXISTENCE, not requiredness and not the axis choice** — and the two must not be collapsed:
+
+- **Reversible:** whether a `disposition` column is mandatory, optional, or unsurfaced. A CHECK tightens and relaxes freely.
+- **Irreversible:** whether the column exists at `057`. Added later it is NULL for every prior row, unbackfillable, append-only. ***It reads as reversible because the schema change is.***
+
+**Options put to F/CTO:** (a) one column, conflation documented · (b) two columns now · (c) `disposition` nullable-and-optional at `057` — the hedge that keeps the door open, put up explicitly and recommended by nobody, since *"add it just in case"* is how schemas rot.
+
+> **RULED (F/CTO, 2026-08-03): ONE AXIS — (a).** Closure captures *why the account ended*, not *where the value went*. **No `disposition` column, now or later. The omission is PERMANENT, not deferred.**
+
+**The decisive argument is that the enum is a lossy cast, not a summary.** Axis 2 offers two values; the real shapes are at least four — sold, transferred in kind, written off by corp action, and **never funded.** **A never-funded account has no honest axis-2 value at all**, so that column would be NULL or a lie on one of the commonest closures. A vocabulary that cannot represent a common case is not summarizing the ledger; it is discarding it and adding noise.
+
+Supporting: a second mandatory picker on an axis the user may not be thinking about, at the end of a multi-step close flow, manufactures false precision in a permanent record — and this ADR already ruled that **wrong classification is worse than absent classification.** The `other`-makes-mandatory-safe argument that carries axis 1 **does not transfer** to axis 2, which has no equivalent honest default a user will actually reach for.
+
+**Why PERMANENT and not deferred, stated so a future reader does not reopen it on a changed schema.** Delivering axis 2 later — by any route, including the disposal reference below — would additionally require widening `account_trans`'s own vocabulary or adding transfer-pairing: **a second one-way door, on a different table.** Someone who adds transfer-pairing in a year will find kind-recoverability improved and should still not reopen this: **the rows written before that change can never carry the distinction**, which is the same append-only asymmetry that decided the question.
+
+**Scheduling note, now historical:** the door's cost is proportional to closures written before the column exists, which was **≈zero** at ruling time (greenfield, pre-deploy, effectively one user) and would have become real at **public signup**. That is why the question did not block `057` and could have joined the consolidated pre-signup gate had it stayed open. It did not.
+
+#### A8 — Unchanged by this amendment
+
+**#16** stands — `account_event` is INSERT-able by `authenticated` under RLS, so the matched-tenant fence binds regardless of which writer exists. Decision-3 family stays **16 labeled / 13 DDL-realized**; **#17** still not created. DEFINER allowlist stays **4 (3 authored)** — the writer adds none. §10 catalogued ledger stays **3** (RT-22 / RT-26 / RT-27); no attribution moves. `056` is unaffected in every respect.
 
 ---
 
