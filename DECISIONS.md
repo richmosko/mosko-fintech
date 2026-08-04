@@ -582,7 +582,15 @@ F1 closes **who a row claims to be**. It does not close **whether the event happ
 
 > **⚠ Sec's ratify condition, and it is the load-bearing half: THE EXEMPTION MUST NOT BE GUC-KEYED.** A `current_setting('pfin.remediation')`-style exemption would **reintroduce F1's entire class one fence over** — `set local` is available to any session, so the exemption would be **self-issuable** and the fence would be checking a claim the attacker writes. Implemented as **ownership of `pfin.account_event`** rather than a hardcoded role name: it names the *property* instead of the *identity*, so it does not rot when the role is renamed or differs across local / CI / production, and **ownership is not self-issuable**.
 
-**`pg_trigger_depth()` measured, not assumed** (live DB, rolled-back transaction): a direct user INSERT makes the fence see **1**; an INSERT issued from inside `account_event_write` makes it see **2**. Hence `< 2` refuses. **It is NOT `= 0`** — the fence is itself a trigger, so depth is never 0 when it runs, and a reader reaching for `= 0` would write a fence that refuses nothing. This is recorded in the DDL because `= 0` is the intuitive form and it fails **open**.
+**`pg_trigger_depth()` measured, not assumed** (live DB, rolled-back transaction; the authenticated path reproduced with `set local role authenticated`, which is what PostgREST does — authenticator connection plus `SET LOCAL ROLE` — so nothing about the transport adds nesting): a direct INSERT makes the fence see **1**; an INSERT issued from inside `account_event_write` makes it see **2**. Hence `< 2` refuses.
+
+> **⚠ BOTH NAIVE FORMS FAIL OPEN, which is why the numbers are in the DDL rather than the reasoning.** `pg_trigger_depth() > 0` — the form anyone would reach for to mean *"came from a trigger"* — **admits every write this fence exists to refuse**, because a direct insert presents **1, not 0**: the fence is itself a trigger. `= 0` refuses nothing, for the same reason. Under either, the legitimate path keeps working and nothing looks wrong. ***A silently inert fence is worse than no fence, because it is claimed.*** Re-measure before changing the predicate; do not derive it.
+
+**The trigger NAME is ordering, not labelling — and this reverses my first implementation.** Triggers on one event fire **alphabetically**. I first named it `account_event_origin_fence`, which sorts *after* `account_event_matched_account`, so **#16 fired first** — meaning a direct POST was diagnosed as a *cross-tenant* defect when it is really a *wrong-origin* one, and the origin fence was reached only when the pair happened to match. Renamed to **`account_event_block_direct_insert`**, which sorts first and also joins the existing `_block_mutation` / `_block_truncate` family. **Ordering the DDL around a test's convenience would be backwards; the expectations get renamed, not the trigger.**
+
+> **DESIGNED RED, PRE-ANNOUNCED (the Amendment 2 `(B5)` precedent).** `057`'s **(D1c)** and **(D2a)** are authenticated-tier and now raise the direct-insert fence instead of the `#16` pattern. **That red is this fence, not a regression in `#16`.** (D2b)/(D2c) are migration-role, exempt, unaffected. *(This supersedes my earlier report that nothing QA had written would go red from F2 — true of the first naming, false of the ratified one.)*
+
+**And the rename SHARPENS `#16`'s justification rather than weakening it.** With the direct-insert fence firing first, what still reaches `#16` is (a) trigger-originated inserts, where the writer derives `users_id` from the account row and is therefore always matched, and (b) **the migration-role remediation**, which the direct-insert fence exempts by ownership and which is RLS-exempt. So `#16`'s live blast radius is now almost exactly the writer Decision 5a justified it by. **⚠ Do not read *"#16 rarely fires"* as *"#16 is redundant"*** — see C5.
 
 #### C3 — F3: #16 folded into Decision 3's canonical enumeration
 
@@ -598,6 +606,15 @@ My original corollary — that #16's fail-closed depends on RLS invisibility —
 - **Decision-3 family: 15 labeled / 12 DDL-realized → 16 / 13**, via C3. **This PR does grow the family**, and the `058` object comments that said otherwise were **object-scoped claims phrased so they could be quoted as PR-scoped ones** — corrected in place, and recorded at Decision 3's fold-in note (e) rather than quietly, since the misrelay is the reusable part.
 - **§10 catalogued ledger unchanged at 3** (RT-22 / RT-26 / RT-27; Decision 4 read verbatim). No attribution moves; no surface becomes four-layer. Sec confirmed **3-axis clean** at this review.
 - **ADR-011 D1 still does not apply** — unchanged by this amendment. The origin fence narrows *who may write*; it does not make the surface a privileged-context write. **D2 applies**, more strongly than before.
+
+#### C6 — Two consolidations to refuse, recorded because both will read as cleanups
+
+Stated in the DDL as well as here, since a future reader meets the catalog before the ADR:
+
+1. **The direct-insert fence does NOT make `#16` redundant.** They cover **disjoint writers**: `#16` exists for the **migration-role remediation**, which is precisely the writer the direct-insert fence must **exempt**. Two `BEFORE INSERT` triggers on one small table look like duplication; remove either and the other does not cover its case. The rename makes this *more* tempting, not less, because `#16` now fires rarely.
+2. **It does NOT make F1's policy conjunct redundant.** A policy survives `ALTER TABLE … DISABLE TRIGGER` and `session_replication_role = replica`; a trigger does not. [Decision 4](#adr-011) commits to fencing at **multiple layers simultaneously**, and *"the new fence covers it"* is exactly the argument that would reopen F1 as a cleanup six months out.
+
+**Related, and it is the sharper half of (2):** because `BEFORE INSERT` triggers fire *before* RLS `WITH CHECK` is evaluated, the direct-insert fence now **masks** F1 for every authenticated POST — so **F1's conjunct is behaviourally unfalsifiable at `authenticated`**. It remains live on the trigger-originated path (the writer is INVOKER, so its INSERT does pass the policy) and it is the layer that survives trigger disablement. **General rule for this table, covering F1 and the `(D1c)` finding together: every `WITH CHECK` conjunct on `pfin.account_event` is behaviourally unfalsifiable at `authenticated`, because BEFORE-trigger fences structurally precede the policy — they must be proven declaratively, via `pg_policies`.**
 
 ---
 
