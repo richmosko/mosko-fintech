@@ -4,15 +4,30 @@
 
 	The page is organised by DATA AGGREGATOR CONNECTION, not by account. Each card leads with the
 	provider (Plaid / SimpleFIN) — the connection's identity is its provider (a system value, not a
-	user nickname). The provider name is the click target to the per-connection use/ignore edit page
-	(`/accounts/connections/{source_id}`); a small external "↗" links out to the provider's public
-	home page (new tab). institution_name is a secondary detail line, not the primary label. Under
-	each connection: an indented list of its accounts (each → Account Detail), with an "Ignored"
-	marker for inactive (ignored) accounts.
+	user nickname). The provider name is the click target to the per-connection READ-ONLY detail
+	page (`/accounts/connections/{source_id}`); a small external "↗" links out to the provider's
+	public home page (new tab). institution_name is a secondary detail line, not the primary label.
+	Under each connection: an indented list of its accounts (each → Account Detail), with a
+	"Closed" marker for closed accounts.
+
+	⚠ TWO COLUMNS NAMED `is_active` MEET ON THIS PAGE, AND ONLY ONE SURVIVED `059`.
+	  • `c.is_active` — `linked_source.is_active`, the CONNECTION lifecycle flag (ADR-013 A1–A3).
+	    PRESERVED. Read below at the chip and at the actions block.
+	  • the per-account flag — `pfin.account.is_active`, RETIRED at `059` (ADR-042 Decision 2).
+	    It is now `a.closed_at` (NULL = open), read below at the account sublist.
+	  They alternate within nine lines of markup. Classify by which TABLE the value came from,
+	  never by the token — that conflation is the specific thing ADR-042 exists to undo.
+
+	NOT A USE/IGNORE SURFACE ANY MORE. `toggleAccount` — the per-account "In use / Ignored"
+	control — was REMOVED at `496c405` per ADR-042 Decision 1b: a control whose two positions are
+	"In use" and "Ignored" persists exactly the selection state Decision 1's concept 3 says must
+	not exist, and it was deliberately NOT re-pointed onto `closed_at`, because *ignored* and
+	*closed* are different facts. Import selection lives at connect time; closing lives on the
+	account's own control. Nothing here selects, ignores, or closes.
 
 	DATA (server-known at render → boring-Svelte loader, not client fetch): consumes
 	`data.connections: ConnectionWithAccounts[]` from Backend's `+page.server.ts` load — each row is
-	a ConnectionState PLUS `accounts` (active AND inactive; management view, not NAV).
+	a ConnectionState PLUS `accounts` (open AND closed; management view, not NAV).
 	`last_successful_sync_at` is DERIVED server-side (ADR-037). Keeps the `ConnectionStatusChip` +
 	last-synced + `SyncNowControl`, and the per-connection `ReauthControl` for re-auth-actionable states.
 
@@ -53,10 +68,20 @@
 	</nav>
 
 	<h1>Data aggregator connections</h1>
+	<!--
+		⚠ THIS IS A DELETION OF A FALSE INSTRUCTION, NOT A COPY CHOICE — and the distinction is why
+		it is being made by Frontend rather than routed. It read "Open a connection to choose which
+		of its accounts to use or ignore", which instructed the user to do something the app has not
+		been able to do since `496c405` removed `toggleAccount` (ADR-042 Decision 1b). Following it
+		leads to a read-only page and no control. A stale developer comment is a cost; a live
+		instruction to use a removed control is a defect, so the false clause goes now.
+		WHAT REPLACES IT IS PROVISIONAL and belongs to PM/UX — this is the minimum true sentence,
+		not a considered rewrite.
+	-->
 	<p class="lede">
 		The data aggregators you've linked — one entry per connection, not per account. Open a
-		connection to choose which of its accounts to use or ignore, or re-authenticate any that need
-		attention to keep their data up to date.
+		connection to see the accounts it brings in, or re-authenticate any that need attention to
+		keep their data up to date.
 	</p>
 
 	{#if loadError}
@@ -116,8 +141,29 @@
 							{#each c.accounts as a (a.account_id)}
 								<li class="acct-subrow">
 									<a class="acct-sublink" href="/accounts/{a.account_id}">{a.name}</a>
-									{#if !a.is_active}
-										<span class="ignored-marker">Ignored</span>
+									<!--
+										`a.closed_at` — the ACCOUNT column (retired `is_active` → `closed_at`
+										at `059`). NOT `c.is_active` nine lines up, which is the CONNECTION's
+										and is preserved.
+
+										The word changed from "Ignored" to "Closed", and that is a copy
+										decision with a ratified constraint behind it rather than a token
+										swap. "Ignored" marked `toggleAccount`, removed at `496c405`; ADR-042
+										Decision 1b states plainly that *ignored* and *closed* are DIFFERENT
+										FACTS and that merging them re-commits the conflation the ADR exists
+										to undo. The old word marks a state this application can no longer
+										produce.
+
+										"Closed" over the longer "Closed account": the marker sits inline,
+										one element after the account's own name, so position already fixes
+										the referent — and it matches the accounts hub's "Closed" group, so
+										one vocabulary spans both surfaces. PROVISIONAL — PM/UX own the final
+										word; the alternative ("Closed account": explicit, at the cost of
+										reading redundantly inside a list of accounts) is recorded here
+										rather than lost.
+									-->
+									{#if a.closed_at !== null}
+										<span class="closed-marker">Closed</span>
 									{/if}
 								</li>
 							{/each}
@@ -312,7 +358,10 @@
 		box-shadow: var(--focus-ring);
 		border-radius: var(--radius-sm);
 	}
-	.ignored-marker {
+	/* Muted + dashed, matching the account-detail status pill's closed treatment so one state
+	   reads the same on both surfaces. Deliberately NOT --c-neg: closure is a bookkeeping
+	   state, not an error. */
+	.closed-marker {
 		font-size: var(--fs-small);
 		font-weight: var(--weight-med);
 		color: var(--c-text-muted);

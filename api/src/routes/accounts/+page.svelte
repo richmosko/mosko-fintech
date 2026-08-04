@@ -4,8 +4,14 @@
 	chip inputs resolved server-side); authors NO server logic.
 
 	The account list grouped by account-type category (the §2.1.5 vocabulary), the two
-	onboarding CTAs (Connect institution / Add manual), a collapsed Inactive group, and links
+	onboarding CTAs (Connect institution / Add manual), a collapsed Closed group, and links
 	out to Net Worth + Connections. Each row deep-links to Account Detail.
+
+	CLOSURE IS A DATE, NOT A FLAG (ADR-042 / `059`). `pfin.account.is_active` is gone; the hub
+	partitions on `HubAccount.closed_at !== null` and the collapsed group is "Closed", not
+	"Inactive". This is a MANAGEMENT surface, so it deliberately shows closed accounts rather
+	than filtering them — only NAV / current-state / aggregation scopes narrow (api/CLAUDE.md).
+	The closed rows carry their closure DATE, which is the thing a boolean could never say.
 
 	SCOPE (v1.129 — kills the /accounts 404): this is the locked Hub MINUS the per-account
 	gross-value column + the "Gross total (pre-tax-adjustment)" footer — those need a new
@@ -19,6 +25,7 @@
 <script lang="ts">
 	import type { PageData } from './$types';
 	import ConnectionStatusChip from '$lib/components/ConnectionStatusChip.svelte';
+	import { closedAtLabel } from '$lib/account-display';
 
 	let { data }: { data: PageData } = $props();
 
@@ -56,15 +63,19 @@
 	const typeLabel = (t: string) => TYPE_LABEL[t] ?? t;
 	const taxLabel = (t: string) => TAX_LABEL[t] ?? t;
 
-	const active = $derived(accounts.filter((a) => a.is_active));
-	const inactive = $derived(accounts.filter((a) => !a.is_active));
+	// ADR-042 / `059`: partition on the closure DATE. `closed_at === null` is the current-state
+	// question this page asks ("is it closed now?"), which is the one question the naive form
+	// answers correctly — the as-of form (`closed_at is null or closed_at > <as_of>`) belongs to
+	// surfaces that read a date, and this one reads none. Noted because the two are easy to swap.
+	const open = $derived(accounts.filter((a) => a.closed_at === null));
+	const closed = $derived(accounts.filter((a) => a.closed_at !== null));
 
-	// Active accounts grouped by type, in the locked category order; empty groups dropped.
-	const activeGroups = $derived(
+	// Open accounts grouped by type, in the locked category order; empty groups dropped.
+	const openGroups = $derived(
 		TYPE_ORDER.map((type) => ({
 			type,
 			label: typeLabel(type),
-			rows: active.filter((a) => a.account_type === type)
+			rows: open.filter((a) => a.account_type === type)
 		})).filter((g) => g.rows.length > 0)
 	);
 </script>
@@ -100,7 +111,7 @@
 			</div>
 		</section>
 	{:else}
-		{#each activeGroups as group (group.type)}
+		{#each openGroups as group (group.type)}
 			<section class="group" aria-labelledby="grp-{group.type}">
 				<h2 class="group-heading" id="grp-{group.type}">{group.label}</h2>
 				<ul class="acct-list">
@@ -111,10 +122,28 @@
 									<span class="acct-name">{a.name}</span>
 									<span class="acct-meta">{a.scope} · {taxLabel(a.tax_treatment)}</span>
 								</span>
+								<!--
+									⚠ `is_active` is NOT passed any more, and the omission is load-bearing.
+									This chip's `is_active` prop means `linked_source.is_active` — the
+									CONNECTION lifecycle flag, "sync is paused" (see connectionChipState's
+									own precedence note). This page was feeding it `pfin.account.is_active`,
+									a different column with accounting semantics, so a *closed* account
+									rendered as a *paused connection*. Both spell `is_active`, so no text
+									search could see it. Post-`059` the account column is gone; closedness
+									is carried by the Closed group and the detail page's pill, and the chip
+									falls back to its `true` default so it describes the connection alone.
+
+									STILL OWED: the hub cannot yet pass the connection's REAL flag, because
+									`HubAccount` does not carry it (Backend resolves `provider` +
+									`connection_status` from the connection but not `is_active`). Until it
+									does, a linked account under a DEACTIVATED connection shows a health
+									chip instead of "paused". Requested from Backend; tracked in the PR
+									report rather than papered over with `closed_at`, which would re-commit
+									the conflation under the new column.
+								-->
 								<ConnectionStatusChip
 									connection_status={a.connection_status}
 									provider={a.provider}
-									is_active={a.is_active}
 								/>
 							</a>
 						</li>
@@ -123,31 +152,34 @@
 			</section>
 		{/each}
 
-		{#if active.length === 0}
-			<!-- Every account is inactive: no active groups rendered, so nudge toward the Inactive
+		{#if open.length === 0}
+			<!-- Every account is closed: no open groups rendered, so nudge toward the Closed
 			     group below rather than showing a blank hub. -->
-			<p class="card-note all-inactive">
-				All of your accounts are inactive. Expand the group below to review them, or add a new one.
+			<p class="card-note all-closed">
+				All of your accounts are closed. Expand the group below to review them, or add a new one.
 			</p>
 		{/if}
 
-		{#if inactive.length > 0}
-			<details class="inactive-group card">
-				<summary>Inactive ({inactive.length})</summary>
-				<ul class="acct-list inactive-list">
-					{#each inactive as a (a.account_id)}
+		{#if closed.length > 0}
+			<details class="closed-group card">
+				<summary>Closed ({closed.length})</summary>
+				<ul class="acct-list closed-list">
+					{#each closed as a (a.account_id)}
 						<li>
 							<a class="acct-row" href="/accounts/{a.account_id}">
 								<span class="acct-id">
 									<span class="acct-name">{a.name}</span>
+									<!-- The closure DATE is the whole reason `closed_at` replaced a boolean;
+									     a management view that can only say THAT an account is closed, not
+									     WHEN, throws away the field's only added information. -->
 									<span class="acct-meta">
-										{typeLabel(a.account_type)} · {a.scope} · {taxLabel(a.tax_treatment)}
+										{typeLabel(a.account_type)} · {a.scope} · {taxLabel(a.tax_treatment)} ·
+										Closed {closedAtLabel(a.closed_at)}
 									</span>
 								</span>
 								<ConnectionStatusChip
 									connection_status={a.connection_status}
 									provider={a.provider}
-									is_active={a.is_active}
 								/>
 							</a>
 						</li>
@@ -308,7 +340,7 @@
 		font: var(--weight-reg) var(--fs-small) / var(--lh-body) var(--font-ui);
 		color: var(--c-text-secondary);
 	}
-	.all-inactive {
+	.all-closed {
 		margin: 0;
 	}
 	.empty-cta {
@@ -318,28 +350,28 @@
 		margin-top: var(--space-1);
 	}
 
-	/* ── inactive group ───────────────────────────────────────────────────── */
-	.inactive-group {
+	/* ── closed group ─────────────────────────────────────────────────────── */
+	.closed-group {
 		padding: var(--space-3) var(--space-5);
 	}
-	.inactive-group summary {
+	.closed-group summary {
 		cursor: pointer;
 		font: var(--weight-med) var(--fs-small) / 1 var(--font-ui);
 		color: var(--c-text-secondary);
 	}
-	.inactive-group summary:focus-visible {
+	.closed-group summary:focus-visible {
 		outline: none;
 		box-shadow: var(--focus-ring);
 		border-radius: var(--radius-sm);
 	}
-	.inactive-list {
+	.closed-list {
 		margin-top: var(--space-3);
 	}
-	.inactive-list .acct-row {
+	.closed-list .acct-row {
 		padding: var(--space-3) 0;
 		border-top: 1px solid var(--c-border);
 	}
-	.inactive-list .acct-name {
+	.closed-list .acct-name {
 		color: var(--c-text-secondary);
 	}
 
