@@ -164,7 +164,7 @@ comment on table pfin.account_event is
   'Append-only audit of pfin.account open/closed transitions (ADR-042 Decision 5 + 5a; ADR-011 Decision 2 audit-class). The TRANSITION is audit-class; pfin.account is not and must not become so. Named for the general class, NOT closure_history: event_type widens by one-line ALTER (030 precedent) rather than by a second near-identical table — but WIDENING IS SEC-JOINT-REVIEW-MANDATORY, because the SD tier, the read posture and indefinite retention were all calibrated for closure events, and the tier rates what the CHECK admits, not what the table is named. NO free text anywhere: this table is immutable and retained indefinitely, so admission is the ONLY control — there is no redaction path for anyone, including the row''s tenant. Every column takes more than one value across the writers that exist (Sec''s criterion); matched_on/decided/provider_event_id/linked_source_id were DROPPED because the ratified model removed their only writer, and #17 is therefore never created (Decision-3 family stays 16 labeled / 13 DDL-realized). Writers: the user''s own close/reopen (session write under RLS — NOT a Decision 1 privileged-context surface, so clause (d) does not apply) and the one-time remediation as the migration role, which is RLS-exempt and is why #16 is load-bearing.';
 
 comment on column pfin.account_event.effective_date is
-  'WHEN THE TRANSITION TOOK EFFECT — deliberately SEPARATE from created_at (row-insertion time), per ADR-011 Decision 4''s third bullet (the Lock 15 catch on Lock 9: conflating event-date with insertion-time is the documented schema-orthogonality failure). A backdated closure has effective_date < created_at and that is CORRECT, not drift. NULLABLE, and NULL means NOT RECORDED — never "today": a reopen has no date carrier unless the caller sets pfin.effective_date, and defaulting to current_date would make a real same-day reopen BYTE-IDENTICAL to an unknown-date one, indistinguishable forever on a table with no redaction path. Requiredness is asymmetric and enforced by account_event_effective_date_required: a closure MUST carry a date (it comes from the data, new.closed_at), a reopen MAY be NULL. ⚠ QUERY HAZARD, MEASURED: Postgres DESC defaults to NULLS FIRST, and account_event_account_idx is (account_id, effective_date desc) — so a naive `order by effective_date desc limit 1` returns a NULL-dated reopen AHEAD OF EVERY DATED EVENT. Verified: with a closure dated 2026-01-15 and a NULL-dated reopen, the naive query returns the reopen and `desc nulls last` returns the closure. ANY latest-event lookup MUST use `nulls last` or filter explicitly. The nullability is deliberate and correct; this ordering consequence rides with it.';
+  'WHEN THE TRANSITION TOOK EFFECT — deliberately SEPARATE from created_at (row-insertion time), per ADR-011 Decision 4''s third bullet (the Lock 15 catch on Lock 9: conflating event-date with insertion-time is the documented schema-orthogonality failure). A backdated closure has effective_date < created_at and that is CORRECT, not drift. NULLABLE, and NULL means NOT RECORDED — never "today": a reopen has no date carrier unless the caller sets pfin.effective_date, and defaulting to current_date would make a real same-day reopen BYTE-IDENTICAL to an unknown-date one, indistinguishable forever on a table with no redaction path. Requiredness is asymmetric and enforced by account_event_effective_date_required: a closure MUST carry a date (it comes from the data, new.closed_at), a reopen MAY be NULL. ⚠ QUERY HAZARD, MEASURED — AND IT IS A PROPERTY OF THE QUERY, NOT OF THE INDEX: Postgres DESC defaults to NULLS FIRST, so a naive `order by effective_date desc limit 1` returns a NULL-dated reopen AHEAD OF EVERY DATED EVENT — REGARDLESS OF HOW ANY INDEX IS DECLARED. Verified: with a closure dated 2026-01-15 and a NULL-dated reopen, the naive query returns the reopen and `desc nulls last` returns the closure. account_event_account_idx IS declared `desc nulls last`, but that only means the CORRECT query is served without a sort — IT DOES NOT MAKE THE NAIVE QUERY SAFE. Do not read the index declaration as the remedy. ANY latest-event lookup MUST use `nulls last` or filter explicitly. The nullability is deliberate and correct; this ordering consequence rides with it.';
 
 comment on column pfin.account_event.actor is
   'Discriminated: `user:<uuid>` or `system:<source>`. NEVER a bare uid that silently means "system" when null — the discrimination is the point. Justified by the REMEDIATION path (the one non-session writer, running as the migration role), where users_id (tenant) and the acting identity genuinely diverge. Without that path this column would be redundant with users_id and should have been dropped with the others.';
@@ -175,6 +175,23 @@ alter table pfin.account_event enable row level security;
 -- SECURITY INVOKER and therefore writes AS THE CALLING USER. No UPDATE/DELETE
 -- policy and no grant: audit-class, and the triggers below fence it for every
 -- role regardless of grant state.
+-- ⚠ DELIBERATELY NOT `if not exists` — DO NOT ADD ONE, AND DO NOT "TIDY" THE
+--   GUARDS IN THIS FILE FOR CONSISTENCY.
+--   The table (`create table if not exists`, above) and both indexes ARE
+--   guarded. So against a database already holding a stale pfin.account_event
+--   from an earlier revision of 057, the table creation would silently no-op
+--   and the database would keep `effective_date NOT NULL` with NO
+--   account_event_effective_date_required — THE ENTIRE A′ FIX ABSENT, WITH
+--   NOTHING FAILING. This unguarded CREATE POLICY is the ONLY statement that
+--   catches that case. Making the guards consistent looks like a cleanup and
+--   is the removal of the only protection.
+--
+--   ⚠ AND IT REPORTS THE WRONG SYMPTOM. If this fires as
+--     `ERROR: policy "account_event_select" ... already exists`
+--   the likely condition is NOT a policy problem — it is a stale
+--   pfin.account_event from an earlier 057. CHECK THE TABLE'S effective_date
+--   NULLABILITY FIRST. Undocumented, the protection is also a red herring that
+--   sends the next person to the wrong file.
 create policy account_event_select on pfin.account_event
   for select to authenticated
   using (

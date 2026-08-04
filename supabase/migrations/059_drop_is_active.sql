@@ -287,61 +287,6 @@ AS $function$
 $function$
 
 ;
-
--- ----------------------------------------------------------------------------
--- (3) FAIL-CLOSED GATE — refuse to CREATE the breakage rather than report it.
---   Step (6) will succeed however incomplete step (2) was, because old-style
---   bodies are not dependency-tracked. This block is the only thing between an
---   incomplete re-point and a NAV path that breaks at first call.
---
---   ALLOWLIST, NOT DENYLIST: it names the functions PERMITTED to mention
---   is_active and fires on anything else. A denylist of known-bad patterns
---   would pass a consumer nobody thought of — precisely the failure guarded.
---
---   THE NAIVE FORM OF THIS CHECK CANNOT EVER PASS. A zero-rows criterion on
---   `prosrc ilike '%is_active%'` returns SEVEN rows on a CORRECT 059, because
---   other tables legitimately have that column. A gate that can never go green
---   is waived the first time it is hit, and then it is gone. Each exemption
---   below is justified individually, and the two re-pointed functions are
---   deliberately NOT exempt — their comments were reworded to drop the literal
---   so the gate stays tight. An exemption costs more than a word.
---
---   THIS CHECK DECLARES ITS OWN BLIND SPOT: prosrc is EMPTY for new-style
---   BEGIN ATOMIC bodies (they live in prosqlbody). Measured today: zero such
---   functions in pfin, so it is complete NOW. It silently under-reports the
---   moment anyone writes one.
--- ----------------------------------------------------------------------------
-do $$
-declare
-  v_left text;
-begin
-  select string_agg(p.proname, ', ' order by p.proname) into v_left
-  from pg_proc p
-  join pg_namespace n on n.oid = p.pronamespace
-  where n.nspname = 'pfin'
-    -- COMMENT-STRIPPED: match CODE, not prose. Measured — without this the gate
-    -- also reports fn_land_linked_accounts, fn_nav_composition and
-    -- fn_create_manual_account, every one of which mentions the column ONLY in
-    -- a comment. That would be three more exemptions, each needing its own
-    -- justification and each widening the hole. Distinguishing code from prose
-    -- removes them instead of excusing them.
-    -- DECLARED BLIND SPOTS, measured not assumed: handles `--` only (there are
-    -- ZERO /* */ block comments in pfin today), and a match inside a STRING
-    -- LITERAL would false-positive (three pfin functions carry one somewhere;
-    -- none of them survives step (2) as a code reference).
-    and regexp_replace(p.prosrc, '--[^\n]*', '', 'g') ilike '%is_active%'
-    and p.proname not in (
-      'fn_aggregation_has_stale_constituent', -- reads linked_source_connection_state.is_active (a DIFFERENT table)
-      'fn_account_sync_is_active'             -- dropped at step (5); legitimate at this prefix
-    );
-
-  if v_left is not null then
-    raise exception
-      'pfin.account.is_active still referenced IN CODE by: % — re-point BEFORE dropping. Old-style SQL bodies carry no dependency records, so the DROP would SUCCEED and these would fail at first call, on the NAV path. If one of these legitimately reads a DIFFERENT table''s is_active, add it to this allowlist WITH a justification rather than widening the pattern.',
-      v_left;
-  end if;
-end $$;
-
 -- ----------------------------------------------------------------------------
 -- (4) Drop the biconditional. Prefix: the columns may now diverge and NOTHING
 --   READS EITHER for correctness — step (2) already re-pointed.
@@ -363,6 +308,60 @@ drop function if exists pfin.fn_account_sync_is_active();
 -- (6) The column. BARE — see the header.
 -- ----------------------------------------------------------------------------
 alter table pfin.account drop column is_active;
+
+-- ----------------------------------------------------------------------------
+-- (7) ACCEPTANCE GATE — SMOKE INVOCATION. The modality is the point.
+--
+--   THE WITHDRAWN GATE, AND WHY NO REFINEMENT OF IT COULD HAVE WORKED. The
+--   first design was a static `pg_proc.prosrc ilike '%is_active%'` check
+--   asserting zero rows. Two reasons it is gone; only the second is the disease:
+--     (a) IT CAN NEVER RETURN ZERO ON A CORRECT 059. `is_active` is declared on
+--         FIVE pfin tables — account (003) · user_taxonomy (009) ·
+--         linked_source (015) · asset (016) ·
+--         linked_source_connection_state (043) — and a text match cannot tell
+--         which table a reference belongs to, so legitimate residue is
+--         permanent. A GATE THAT CAN NEVER GO GREEN IS WAIVED THE FIRST TIME IT
+--         IS HIT, and then it occupies the slot a working one would have had.
+--     (b) MODALITY MISMATCH. The failure guarded is a RUNTIME one: an old-style
+--         SQL body is not parsed at DDL time and breaks at FIRST CALL. A STATIC
+--         TEXT SEARCH CANNOT DECIDE A RUNTIME PROPERTY, and no refinement of
+--         that query could have. (a) was a symptom of (b).
+--         Discovery finds candidates; only EXECUTION proves absence.
+--
+--   WHY ONE CALL PER FUNCTION SUFFICES — and the condition EXPIRES, so it is
+--   stated rather than assumed. These are `language sql` with OLD-STYLE text
+--   bodies, parsed AS A WHOLE at execution. A missing column therefore raises
+--   regardless of argument values — including fn_compute_nav(_, false), where
+--   the predicate branch might look skippable. It is not; it is parsed anyway.
+--   ⚠ THIS DOES NOT HOLD FOR plpgsql, where statements parse LAZILY PER BRANCH
+--     at first execution — one call would prove only the branch it took.
+--     Measured today: zero plpgsql among these. IF ANY IS EVER CONVERTED TO
+--     plpgsql THIS GATE SILENTLY STOPS PROVING WHAT IT CLAIMS.
+--
+--   Sited AFTER the drop because that is the only point at which the runtime
+--   failure is reachable at all. Under the CLI's per-file transaction a raise
+--   here aborts the migration, making it a genuine fail-closed gate; if that
+--   wrapper is ever absent it still fails loudly in the same run, and the
+--   prefix-safe ORDERING above is what keeps intermediate states coherent
+--   independently of it.
+-- ----------------------------------------------------------------------------
+do $$
+declare
+  v_num  numeric;
+  v_rows bigint;
+  v_json jsonb;
+begin
+  select pfin.fn_compute_nav(current_date)        into v_num;
+  select pfin.fn_compute_nav(current_date, true)  into v_num;
+  select pfin.fn_compute_nav(current_date, false) into v_num;
+  select count(*) into v_rows from pfin.fn_account_unrealized_gl(current_date);
+  select count(*) into v_rows from pfin.fn_account_cash_as_of(current_date);
+  select pfin.fn_nav_composition(current_date)    into v_json;
+exception
+  when undefined_column then
+    raise exception
+      'POST-DROP SMOKE FAILED — a function still references the dropped column: %. The re-point at step (2) was INCOMPLETE. Old-style SQL bodies carry no dependency records, so the DROP above succeeded regardless; this call is the only thing that detects it. Re-point the function — do NOT re-add the column.', sqlerrm;
+end $$;
 
 comment on column pfin.account.closed_at is
   'THE ONLY representation of open/closed (ADR-042). The boolean flag was retired at 059: it answered "open NOW" where closed_at answers "open AS OF a date" — strictly more information, and the two coexisting was the three-way overloading ADR-042 exists to remove. Readers use (closed_at is null or closed_at > p_as_of); NEVER a bare `closed_at is null` in an as-of context, and never a LEFT-JOINed `closed_at is null` without an accompanying `account_id is not null`, which fails OPEN by asserting "not closed" from no information.';
