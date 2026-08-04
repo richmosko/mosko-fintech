@@ -75,7 +75,9 @@
 -- │   Audit-row side effect (pfin.account_event insert)                                  │
 -- │     B1b                                                                              │
 -- │   pg_catalog / information_schema — structural, no runtime mechanism                 │
--- │     B5 · C6b · C7 · P1 · P2 · P3                                                     │
+-- │     B5 · C6b · C7 · P1 · P2 · P3 · P5                                                │
+-- │   CHECK constraint `account_closure_biconditional` — covers INSERT *and* UPDATE      │
+-- │     P4                                                                               │
 -- │   Table ACL — none in this file. Where a probe RUNS as `authenticated` (C1, S4a) it   │
 -- │     asserts a TRIGGER raise or a successful write, never `permission denied`.         │
 -- │                                                                                      │
@@ -164,9 +166,9 @@ begin;
 \set m_fence_hold      '%write blocked%is closed (holdings_checkpoint)%'
 \set m_currency_frozen '%currency is immutable on a closed account%'
 
--- plan = 37: BLOCK B 15 · C 10 · S 7 · P 3 · G 2. Recorded so a silent plan-edit — the
+-- plan = 40: BLOCK B 16 · C 10 · S 7 · P 5 · G 2. Recorded so a silent plan-edit — the
 -- cheapest way to make a battery green — shows up in review as an arithmetic change.
-select plan(37);
+select plan(40);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 
@@ -281,10 +283,60 @@ select throws_like(
 -- (B5) LEG INDEPENDENCE. B2/B3/B4 are three assertions only if their messages are three
 --   messages. Under one merged 'closure gate failed' each would pass on ANY leg's fire and
 --   this file would assert one thing three times while appearing to assert three.
-select ok(
-  (select count(distinct m) = 4 from (values (:'m_gate_cash'), (:'m_gate_holdings'), (:'m_gate_activity'), (:'m_gate_future')) v(m)),
-  '(B5) LEG INDEPENDENCE: all FOUR gate checks raise DISTINGUISHABLE messages — the DDL even numbers them ''leg N of 3'', so (B2)/(B3)/(B4) each prove their own leg. Architect confirmed per-leg messages for exactly this reason; `054` is the precedent. RED on a merged message'
+select is(
+  (select (length(pg_get_functiondef(p.oid))
+           - length(replace(pg_get_functiondef(p.oid), 'raise exception', '')))
+          / length('raise exception')
+     from pg_proc p where p.pronamespace = 'pfin'::regnamespace
+      and p.proname = 'fn_account_closure_gate'),
+  6,
+  '(B5) RAISE-SITE COUNT — the gate has EXACTLY 6 raise sites. ⚑ REPLACES a version keyed on the `leg N of 3` tag, which was LOSSY: raises 4 and 5 BOTH end `(leg 2 of 3: cash)`, so a distinct-tag check finds 3 values across 6 messages and REPORTS SUCCESS. The tag distinguishes LEGS; I was using it to distinguish RAISES. Counting sites fails when the gate changes SHAPE, not merely when a message changes value — the same correction as `drop trigger if exists` -> bare `drop trigger`. A red here means a raise was added or removed: go read it, then assert it'
 );
+-- (B4c) ⭐ THE TOTALITY-CONTRACT RAISE — reachable ONLY by a code edit, never by data.
+--   `058` raises if fn_account_cash_as_of returns NO ROW for the account, because `056`'s
+--   contract is that it is TOTAL over pfin.account. A missing row means that contract is
+--   broken, and the gate refuses rather than treating absent-as-zero.
+--   ⚑ WHY I MISSED IT, and it generalises: every OTHER raise is reachable by setting up a
+--     DATA STATE. This one is reachable only by BREAKING `056`. So the method that correctly
+--     found (B4b) — "enumerate the states I must construct" — CANNOT surface it, because
+--     there is no state that produces it. **A fence against a code-edit hazard is unreachable
+--     from data fixtures by construction**, and is therefore systematically missed by
+--     fixture-driven enumeration. Found by Architect re-running my own raise-enumeration
+--     against my count.
+--   ⟦HARNESS PRECONDITIONS VERIFIED 2026-08-03, not assumed (Architect asked for both):
+--     · the test role CAN `create or replace` a function in pfin inside a txn — measured
+--     · the replacement ROLLS BACK — measured, and independently confirmed by (E12) in the
+--       `056` battery, whose sentinel did not leak: the live fn is still the real one.⟧
+-- ⚠ PENDING REBIND — Sec ruled option A 2026-08-03: the NULL fail-open folds into THIS
+--   raise (`if not found or v_cash is null`) rather than becoming a seventh distinct one,
+--   because both causes mean the same thing to an operator: **`056` is wrong, fix `056`.**
+--   >> CONSEQUENCE FOR THIS ASSERTION: ONE RAISE, **TWO SEEDED CONDITIONS**. It must be
+--      shown to fire on a MISSING ROW (below) *and* on a NULL `balance_native`. Only the
+--      first is written, because Architect has not yet committed option A and I will not
+--      harden against the superseded gate. **Asserting one cause of a two-cause raise is
+--      testing half a guard** — the exact shape this battery exists to remove — so this
+--      note stands in for the missing half until the rebind, rather than the gap being
+--      invisible.
+--   >> AND THE STAKES ARE THE INVERSE OF WHAT THEY LOOK LIKE: of the gate's runtime guards
+--      this was the LAST one untested, and it is the one guarding the contract MOST likely
+--      to break silently — someone adding a filter to `056`. The untested guard was the
+--      load-bearing one.
+select set_config('role', 'postgres', true);
+savepoint sp_totality;
+create or replace function pfin.fn_account_cash_as_of(p_as_of date)
+returns table (account_id bigint, balance_native numeric)
+language sql security invoker stable set search_path = '' as $totality$
+  select acc.account_id, 0.0000::numeric from pfin.account acc where acc.account_id <> $totality$ || :z || $totality$
+$totality$;
+select _rls.set_tenant(:'ta'::uuid);
+select throws_like(
+  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = %s $$, :z),
+  '%returned no row from fn_account_cash_as_of%totality contract is broken%',
+  '(B4c) TOTALITY BREACH: with fn_account_cash_as_of sabotaged to omit this account, the gate REFUSES rather than reading absent-as-zero. Fails CLOSED on a broken upstream contract — the alternative is a closure admitted because the measure went silent. This is the CP4 absent-row-vs-zero-row class at the FENCE layer, and the only gate raise no data fixture can reach'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint sp_totality;
+select _rls.set_tenant(:'ta'::uuid);
 
 -- (B6) THE AS-OF PROPERTY — the entire point of the dated model. :asof held 800 through May
 --   and was zeroed 2026-06-15. Verified live: 800.0000 @05-31, 0.0000 @06-30.
@@ -523,6 +575,30 @@ select is(
   0,
   '(P3) `058` authors ZERO SECURITY DEFINER functions — every fence is INVOKER per ADR-042 Consequences and Architect''s confirmation. NOTE the referent: this counts AUTHORED DEFINER functions (3); the ALLOWLIST is 4, the fourth being the reserved-but-unauthored audit-log helper. Both numbers are correct and they measure different things — do not "correct" 3 to 4, which would silently widen the fence by one slot'
 );
+
+-- (P4) THE INSERT PATH — the specific hole the design changed shape to close.
+--   `058:66-73` records why the biconditional is a CHECK and not a trigger: **a BEFORE
+--   UPDATE trigger does not see an INSERT**, and the `049`/`050`/`051` batteries INSERT
+--   `is_active` in the column list, so `INSERT (is_active=false, closed_at=null)` creates
+--   exactly the state `059` must abort on. A CHECK covers INSERT and UPDATE for ALL ROLES
+--   (a CHECK is not RLS) with no ordering concerns.
+--   Driven PRIVILEGED deliberately — that proves the "all roles" property. An authenticated
+--   probe would meet the RLS WITH CHECK first and would prove only that RLS works.
+select throws_like(
+  format($$ insert into pfin.account (users_id, name, account_type, scope, tax_treatment, is_active, closed_at)
+              values (%L, 'insert-path-violator', 'depository', 'household', 'taxable', false, null) $$, :'ta'),
+  '%violates check constraint "account_closure_biconditional"%',
+  '(P4) INSERT PATH: an INSERT carrying (is_active=false, closed_at=null) is REJECTED by the CHECK, privileged. That is the state `059` aborts on and it is INVISIBLE to a BEFORE UPDATE trigger — the reason the biconditional is a CHECK rather than a trigger. Without this, the design decision that closed the hole has a comment and no test'
+);
+
+-- (P5) THE NULL TRIPWIRE — converts a recorded caveat into a mechanical check.
+--   `058:88` and the constraint comment both record it: **a CHECK PASSES ON NULL.** The
+--   plain `=` is correct only because `is_active` is NOT NULL — and that is INHERITED from
+--   `003:104`, not restated by `058`. So if `is_active` were ever made nullable,
+--   `account_closure_biconditional` would SILENTLY PASS EVERYTHING and `059`'s VALIDATE
+--   would succeed over a table full of violators.
+select col_not_null('pfin', 'account', 'is_active',
+  '(P5) NULL TRIPWIRE: pfin.account.is_active is still NOT NULL (inherited from `003:104`, not restated by `058`). A CHECK passes on NULL, so a nullable is_active makes the biconditional silently pass EVERYTHING and `059`''s VALIDATE succeed over a table of violators. RED here means the fence was disarmed by a change somewhere else entirely — the only way this defect can arrive');
 
 -- =====================================================================
 -- BLOCK G — INVERSION (non-vacuity, proved IN FILE)
