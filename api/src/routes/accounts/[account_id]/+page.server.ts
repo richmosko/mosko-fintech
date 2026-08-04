@@ -17,10 +17,23 @@
 //
 // SUPERSEDED BY ADR-042, and DISCHARGED at 059: the AC #3 is_active polarity note described a
 // boolean that no longer exists. Closure is as-of dated (closed_at); a boolean cannot answer an
-// as-of question, which is the defect the three-concept model removes. The NAV/current-state
-// read contract re-pointed here in the §7.9 application-layer landing — see api/CLAUDE.md for
-// the replacement contract, and note the predicate is AS-OF (`closed_at is null or closed_at >
-// as_of`), never the naive `closed_at is null`.
+// as-of question, which is the defect the three-concept model removes.
+//
+// THIS PAGE IS A RENDER SURFACE, AND THAT DETERMINES ITS PREDICATE (api/CLAUDE.md, closure
+// contract). It asks "is this account closed RIGHT NOW", so `closed_at !== null` — which the
+// consuming +page.svelte does — is CORRECT AND COMPLETE. The as-of form belongs to the
+// VALUATION surfaces (NAV / aggregation / counts); using it here would be WRONG, not merely
+// heavier, because it needs an `as_of` this page has no business choosing in order to answer a
+// question nobody asked. This load() therefore selects closed_at and applies NO closure
+// predicate at all.
+//   ⚠ An earlier version of this very comment said "the predicate is AS-OF … never the naive
+//   `closed_at is null`", unconditionally. That was the pre-bfc2fd8 root contract, which was
+//   written from the NAV path and over-generalised from it — so this header told the reader
+//   that what the page's own consumer correctly does is the naive mistake. Recorded rather than
+//   silently replaced, because the failure mode is the one §7.9 AC 5 names ARRIVING FROM THE
+//   OPPOSITE DIRECTION: not a stale root re-seeding its leaves, but a root CORRECTED while its
+//   leaves kept the superseded reading. A contract sharpened in one place and not the others
+//   has two answers, and the weaker one is the copy sitting next to the code.
 // AC #4: closed accounts retain account_trans history (schema-guaranteed).
 // acct_number intentionally NOT selected — masked-only render posture (SD-15).
 

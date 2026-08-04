@@ -14,8 +14,13 @@
 // blocks the account list.
 //
 // Shows BOTH open and closed accounts (partitioned client-side into the grouped list + the
-// collapsed Closed group per the wireframe) — this is a management surface, so the NAV
-// open-as-of filter of the ADR-042 closure CONTRACT (api/CLAUDE.md) does NOT apply here.
+// collapsed Closed group per the wireframe) — this is a MANAGEMENT + RENDER surface, so it
+// applies NO closure filter at all, and the partition is a CURRENT-STATE question:
+// `closed_at !== null`, which is correct AND complete here. The as-of form of the ADR-042
+// closure contract (api/CLAUDE.md) belongs to the VALUATION surfaces (NAV / aggregation /
+// counts) and would be WRONG here rather than merely heavier — it needs an `as_of` this page
+// has no business choosing. Stated affirmatively, not as "the filter does not apply": saying
+// only what does NOT apply leaves the next reader to guess what does.
 // This page renders NO gross total / NAV (PM-2 value-semantics pin); the number lives on
 // the Net Worth dashboard.
 
