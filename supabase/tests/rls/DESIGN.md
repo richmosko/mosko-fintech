@@ -154,6 +154,43 @@ Sec-relevant because it touches where synthetic seed data lives — flagging for
 
 ## 8. Battery-design rules (ADR-042 close-gate review, 2026-08-03)
 
+> **CALIBRATION DATA — read before trusting any rule below.**
+>
+> **A rule that only ever catches other people is a rule shaped around its author's blind
+> spots** (Sec). That test is only runnable if the catches are attributed, and in six months
+> none of it is recoverable from the rules themselves — so it is recorded here as data, not
+> as credit.
+>
+> | rule | applications | self-catches |
+> |---|---|---|
+> | route by shape, not by confidence | 3 | **2** |
+> | build to the risk, not the shape of diligence | 2 | **2** |
+> | a caveat is a claim | 1 | **1** |
+> | confidence has a timestamp | 1 | **1** |
+> | regenerate from the catalog and diff | 1 | **1** |
+> | the rename trap | 1 | **1** (prevented) |
+> | absence reads as recency | 1 | 0 |
+> | a battery cannot prove it is reached | 1 | 0 |
+>
+> **THE COUNT IS LOAD-BEARING — without it the test conflates two opposite failures** (Sec):
+>
+> - **MISCALIBRATED** — many applications, no self-catch. **The shape is the problem; reshape it.**
+> - **UNTESTED** — few applications, so no self-catch has had the chance. **Nothing is wrong; it needs use.**
+>
+> Same cell, opposite remedies — and **reshaping an untested rule is how a good rule gets
+> damaged by its own audit.**
+>
+> **Applying it: both zero-catch entries sit at ONE application. Neither is miscalibrated;
+> both are young.** The first recording of this table flagged them "re-examine first,"
+> which was the wrong disposition for the right observation. **Leave them alone and use
+> them.** Revisit if either reaches ~5 applications still at zero.
+>
+> Nothing here is flagged for reshaping. The table's value is that it can be re-run: a rule
+> drifting toward many-applications-zero-self-catches is shaped around its author's blind
+> spots, and that is only visible if the counts are kept.
+
+
+
 Seven rules, from a single review. They are not seven lessons — **six are one sentence at
 different layers**, and rule 0 generates rule 1.
 
@@ -227,6 +264,12 @@ different failure**, which is what makes it actionable rather than ceremony:
 | **committed** | checkout loss; visible to every worktree (shared object store) |
 | **pushed** | **machine loss** — otherwise there is one copy, on one machine |
 | **merged** | **discoverability** — reachable from `main` without knowing a branch name |
+
+**Confidence has a timestamp and does not display it.** A binding is a claim about a ref —
+and so is *a memory of having checked one*. "These batteries are bound to current refs" was
+true when verified and silently false six commits later; nothing about holding the belief
+changed when the underlying file moved. **Re-derive at use applies to your own prior
+verification, not only to other people's claims.**
 
 **And there is a rung BELOW `written`, which is the one that bit us:** **decided.** A
 decision that lives only in a conversation has exactly the durability of the conversation —
@@ -316,6 +359,26 @@ leaves the other:
 Removing the fabricated date so absence stops masquerading as information leaves it
 masquerading as *the most recent* information. **Fixing the value without fixing the
 ordering fixes nothing at the point of use.**
+
+### Regenerate from the catalog and diff — never retype a body you are re-pointing
+
+When changing a predicate inside an existing function, take the body from
+`pg_get_functiondef()`, substitute only the predicate lines, and **prove by diff that
+nothing else moved.** A body written from recall is accepted by `create or replace` and
+applies clean — wrong return types, wrong column counts, invented logic and all.
+
+**And the diff earns its keep twice.** It prevents fabrication, and it **exposes semantics
+that exist only in the difference.** Instance: a securities-leg predicate read
+`coalesce(acc2.is_active, false)`. That `coalesce` was doing **fail-closed work on a LEFT
+JOIN miss** — invisible in the new text, because the natural replacement
+`(acc2.closed_at is null)` reads correctly and **inverts it**: a missing account row yields
+NULL `closed_at`, `NULL is null` is TRUE, and an orphan holding gets **counted** in an
+active-only NAV. Only the before/after pair shows it.
+
+> **A correct-looking new body cannot reveal what the old one was doing.**
+
+Same family as *a caveat is a claim*: both are about not trusting the careful-looking half
+of your own work.
 
 ### The rename trap (a sub-rule of 3, and the same precondition shape)
 
