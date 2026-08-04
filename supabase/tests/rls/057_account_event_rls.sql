@@ -227,15 +227,27 @@ select _rls.set_tenant(:'tb'::uuid);
 --   ⚠ SEC'S "LEAVE D1c AS IT IS" RULING WAS MADE AGAINST THE PRIOR ORDERING AND IS SUPERSEDED
 --     BY A LATER DDL CHANGE — flagged rather than quietly worked around. An approval names a
 --     REF, not a readiness; this rebind is a ruled delta on top of it, not a reopening of it.
---   ⚑ AND THE REAL CONSEQUENCE, WHICH IS A COVERAGE CHANGE AND NOT A RENAME: **#16 IS NOW
---     BEHAVIOURALLY UNREACHABLE AT `authenticated` ALTOGETHER.** The direct-insert fence
---     refuses every non-owner INSERT before #16 evaluates, so NO authenticated probe can reach
---     #16 — not this one, not (D2a), not any future one. #16's remaining behavioural proof is
---     (D2b)/(D2c) at the OWNER tier, which is exactly the RLS-exempt migration-role writer #16
---     was justified for. So coverage is not lost, but it is NARROWED, and the file's LAYER
---     DISCIPLINE note above — "the fence is the SOLE gate at authenticated" — is now FALSE as
---     written and is corrected there. Left uncorrected it would be the most misleading
---     sentence in the file: an argument for a fence that no longer participates at that tier.
+--   ⚑ AND THE REAL CONSEQUENCE, WHICH IS A COVERAGE CHANGE AND NOT A RENAME: **NO DIRECT
+--     authenticated INSERT REACHES #16 ANY MORE.** The direct-insert fence refuses every
+--     non-owner, non-trigger INSERT before #16 evaluates, so no direct probe can reach it —
+--     not this one, not (D2a), not any future one. #16's behavioural proof is now (D2b)/(D2c)
+--     at the OWNER tier. So coverage is NARROWED, not lost, and the file's LAYER DISCIPLINE
+--     note above — "the fence is the SOLE gate at authenticated" — is now FALSE as written and
+--     is corrected there. Left uncorrected it would be the most misleading sentence in the
+--     file: an argument for a fence that no longer participates on that path.
+--   ⚠⚠ AND #16 IS NOT REDUNDANT — READ THIS BEFORE PROPOSING THE CONSOLIDATION, BECAUSE THE
+--     RENAME MAKES IT MORE TEMPTING, NOT LESS. Architect's correction to my first draft of this
+--     note, and they are right: I wrote that #16's only surviving reach is the migration-role
+--     remediation. **It is TWO writers, not one.** The origin fence admits (a) the table OWNER
+--     and (b) anything at `pg_trigger_depth() >= 2` — i.e. the ORDINARY PRODUCTION PATH,
+--     `fn_account_event_write` firing on every close and reopen. Both then meet #16, which is
+--     INVOKER and still validates the tenant pair on each. So #16 guards the live writer AND
+--     the remediation — almost exactly the writers Decision 5a justified it by.
+--     **A fence that now fires on fewer paths is not a fence that matters less**; it fires on
+--     precisely the paths that can write, and it is the only tenant-pair check on either.
+--     Two BEFORE INSERT triggers on one small table will read as duplication to someone later.
+--     They cover DISJOINT cases and neither substitutes for the other — `057`'s own catalog
+--     comment says so, and this is the battery-side copy of that refusal.
 select throws_like(
   format($$ insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor, effective_date)
               values (%L, %s, 'closed', 'no_longer_used', 'user:%s', '2026-06-30') $$, :'ta', :aacct, :'ta'),
@@ -322,7 +334,7 @@ select throws_like(
   format($$ insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor, effective_date)
               values (%L, %s, 'closed', 'no_longer_used', 'system:remediation', '2026-06-30') $$, :'ta', :aacct),
   :'m_direct',
-  '(D1e) SEC F1/F2 — MATCHED-TENANT ACTOR FORGE IS REFUSED: an authenticated session inserting into its OWN account with actor = ''system:remediation'' is REJECTED BY THE ORIGIN FENCE. Every other layer admits this row — #16 passes (the pair really is matched), the tenant conjunct passes (it really is their uid), and account_event_actor_check passes (the value IS in the vocabulary; that CHECK bounds the string''s SHAPE, never its RELATIONSHIP to the session). Before F1+F2 the row LANDED, permanently, on an append-only table with no redaction path'
+  '(D1e) CORROBORATING ONLY — the matched-tenant actor forge is REFUSED, BY THE WRONG-ORIGIN FENCE (F2), which refuses it WITHOUT EVER CONSULTING THE ACTOR. ⚠ THIS ASSERTION PROVES NOTHING ABOUT F1''s ACTOR BINDING; (D1g) is what proves that, declaratively, and this one would stay green if F1''s conjunct were deleted tomorrow. Kept because it fixes the forge''s REACHABILITY in place: every other layer admits this row — #16 passes (the pair really is matched), the tenant conjunct passes (it really is their uid), and account_event_actor_check passes (the value IS in the vocabulary; that CHECK bounds the string''s SHAPE, never its RELATIONSHIP to the session). Before F1+F2 it LANDED, permanently, on an append-only table with no redaction path'
 );
 -- (D1f) THE REFUSAL IS ORIGIN-BASED, NOT ACTOR-VALUE-BASED — a strictly stronger property than
 --   the veto asked for, and the assertion that replaced my broken companion. An actor-VALUE
@@ -334,7 +346,7 @@ select throws_like(
   format($$ insert into pfin.account_event (users_id, account_id, event_type, reason_code, actor, effective_date)
               values (%L, %s, 'closed', 'sold', 'user:%s', '2026-06-30') $$, :'ta', :aacct, :'ta'),
   :'m_direct',
-  '(D1f) ORIGIN-BASED, NOT ACTOR-VALUE-BASED: the same direct INSERT with a LEGITIMATE actor = ''user:<own uid>'' hits the SAME origin fence. So the refusal in (D1e) is not "that particular string is disallowed" — no caller-supplied actor buys a direct write at all, and a state transition is recorded BY THE TRANSITION. RED here with (D1e) green would mean the fence had been narrowed to an actor-value blocklist, which admits every well-formed-but-false actor that is not on it'
+  '(D1f) ⭐ THE WRONG-ORIGIN FENCE''S OWN NON-VACUITY PROOF, and the only assertion in this file that isolates it. A MATCHED pair for the caller''s OWN account with a CORRECT actor passes #16, would pass every WITH CHECK conjunct, and is refused by NOTHING ELSE — so the fence is the sole possible cause and this is the assertion that shows it FIRES rather than merely existing. It doubles as the proof the refusal is ORIGIN-based and not an actor-VALUE blocklist: no caller-supplied actor buys a direct write, because a state transition is recorded BY THE TRANSITION. RED here with (D1e) green means the fence was narrowed to a blocklist, which admits every well-formed-but-false actor not on it'
 );
 select set_config('role', 'postgres', true);
 -- (D1g) F1's ACTOR CONJUNCT, proven DECLARATIVELY — the only instrument available, because F2

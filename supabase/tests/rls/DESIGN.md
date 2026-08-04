@@ -435,6 +435,36 @@ fence has become unreachable at a tier, say so where the old claim was, rather t
 Related to §8's *rename trap* but a distinct mechanism: that one is two identical literals in
 different vocabularies; this one is a name that is also an ordering key.
 
+### A BEFORE-trigger fence makes every WITH CHECK conjunct behind it behaviourally unfalsifiable
+
+Architect's generalisation, and it is worth stating once as a rule because it has now been
+re-derived three separate times on one table.
+
+Postgres evaluates a policy's `WITH CHECK` **after** BEFORE ROW triggers. So on any table where
+a BEFORE INSERT fence refuses a class of writes, **every policy conjunct sitting behind that
+fence is unreachable by any behavioural probe of that class** — not untested, *unfalsifiable*.
+
+> **On `pfin.account_event`, no `WITH CHECK` conjunct can be proven behaviourally at
+> `authenticated`. They must be proven DECLARATIVELY, from `pg_policies`.**
+
+Three cases, one cause:
+
+| conjunct | why unreachable | proven by |
+|---|---|---|
+| `users_id = auth.uid()` | `#16` intercepts every forged pair first | `(D1d)` |
+| the `025` aal2 step-up | same — an aal1 session cannot see its own account | `(D1d2)` |
+| `actor = 'user:' \|\| auth.uid()` | the wrong-origin fence refuses the POST first | `(D1g)` |
+
+**The trap is that a behavioural probe still goes GREEN.** It is refused — by the fence in
+front — so the assertion passes while the conjunct it names is never consulted, and would keep
+passing if that conjunct were deleted. Any such probe kept for corroboration **must say in its
+own message that it is corroborating**, or it becomes the load-bearing-looking assertion and
+the declarative one reads as redundant. That is the `(S4b)` defect, one file over.
+
+Corollary for reviewers: *"the fence covers it"* is not a reason to drop the conjunct. A policy
+survives `ALTER TABLE … DISABLE TRIGGER` and `session_replication_role = replica`; a trigger
+does not.
+
 ### An "any exception" assertion cannot tell its fence from a fence that refuses everything
 
 A self-catch, and the cleanest available instance of §8 rule 4.
