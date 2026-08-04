@@ -228,6 +228,12 @@ different failure**, which is what makes it actionable rather than ceremony:
 | **pushed** | **machine loss** — otherwise there is one copy, on one machine |
 | **merged** | **discoverability** — reachable from `main` without knowing a branch name |
 
+**Confidence has a timestamp and does not display it.** A binding is a claim about a ref —
+and so is *a memory of having checked one*. "These batteries are bound to current refs" was
+true when verified and silently false six commits later; nothing about holding the belief
+changed when the underlying file moved. **Re-derive at use applies to your own prior
+verification, not only to other people's claims.**
+
 **And there is a rung BELOW `written`, which is the one that bit us:** **decided.** A
 decision that lives only in a conversation has exactly the durability of the conversation —
 and from the next person's position it is **indistinguishable from a decision never made.**
