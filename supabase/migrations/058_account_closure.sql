@@ -37,6 +37,29 @@
 --   before re-pointing has an unsafe prefix on the NAV path — closed_at set with
 --   is_active still true, counted as active. Two functions are re-pointed
 --   (049 + 050), not three: 051 composes on 049 and adds no predicate of its own.
+--
+-- DELIVERABLES OF THIS FILE, ENUMERATED — because Amendment 1 A2's finding was
+--   that a deliverable named only in another item's RATIONALE is structurally
+--   unbuildable-from. This list is what the file must contain:
+--     (1) the one-directional closed_at -> is_active sync trigger
+--     (2) account_closure_biconditional (NOT VALID, validated at 059)
+--     (3) the close gate + the Decision-4 currency conjunct
+--     (3b) the account_event AFTER writer (added at Amendment 1)
+--     (4) the transfer-in fences on the three position-determining tables
+--     (5) 042's re-land clause change
+--     (6) the two catalog comments this migration falsifies
+--     (7) fn_close_account + fn_reopen_account — THE APP'S PATH TO (3)/(3b)
+--         (added at Amendment 2; see that section's own header for why an RPC
+--          does not contradict Amendment 1 A5's rejection of one)
+--   ⚠ (7) IS NOT A SECOND GATE AND MUST NOT BECOME ONE. It is a CALLER. The
+--     gate stays a trigger for the reason A5 gives: `authenticated` holds a
+--     TABLE-LEVEL UPDATE on pfin.account (003:124, no column list) and pfin is
+--     Data-API-exposed, so a direct PATCH reaches closed_at whatever functions
+--     exist. Anything moved OUT of the triggers and INTO (7) stops being enforced.
+--
+-- SECTION (7) IS APPENDED, NOT INSERTED, and (6) was deliberately NOT renumbered
+--   — an existing section number that already appears in review threads and a
+--   battery is a citation that silently rots if it moves.
 -- ============================================================================
 
 create schema if not exists pfin;
@@ -633,3 +656,207 @@ comment on function pfin.fn_land_linked_accounts(bigint, jsonb) is
 
 comment on index pfin.account_linked_source_provider_uidx is
   'Partial UNIQUE dedup index for the provider-sync account-mapping slice (ADR-027 amendment / account-mapping Q5-(b)). Enforces one canonical pfin.account row per (linked_source_id, provider_account_id) for provider-linked accounts; the ON CONFLICT arbiter for landAccounts so a re-run of connect+map is a no-op, not a duplicate. Partial WHERE linked_source_id IS NOT NULL: manual/unlinked accounts (SELF-201) are exempt (no provider identity to dedup). Role-agnostic (fences under authenticated INVOKER + service_role). NOT a Decision-3 instance: provider_account_id is TEXT (not a FK); linked_source_id already carries canonical instance #6 (fn_account_matched_linked_source, 015) — this index exercises #6, adds none. Pins the reconciliation model: a re-map resolves to the canonical row, NEVER a second row. IT NO LONGER REACTIVATES — ADR-042 / migration 058 removed that, so a re-add does NOT reopen a closed account (reopening is its own gated transition). THIS SENTENCE IS NORMATIVE, NOT DESCRIPTIVE: the remove/re-add UX is UNBUILT, and whoever builds it must honor the current model, not the reactivating one this comment previously specified. DEFINER allowlist unchanged (no function); §10 catalogued ledger UNCHANGED BY THIS OBJECT — and NO COUNT IS STATED HERE, deliberately. A ledger-impact claim is AUTHORING-TIME PROVENANCE: it belongs in a migration header, which is a dated artifact, not in a catalog comment, which reads as LIVE STATE. Read ADR-011 Decision 4 live.';
+
+-- ----------------------------------------------------------------------------
+-- (7) THE APP'S CLOSE / REOPEN PATH (ADR-042 Amendment 2, F/CTO-ratified
+--     2026-08-03). Two SECURITY INVOKER write-composition RPCs.
+--
+--   WHY THIS EXISTS AT ALL — the gap is narrow and it is worth stating exactly,
+--   because it looks like a gap somebody already closed. Amendment 1 A5 ruled
+--   the reason_code CARRIER: option B, a `set local` GUC. But `set local` and
+--   the UPDATE must share ONE TRANSACTION, and supabase-js/PostgREST issues each
+--   UPDATE as its own transaction with no way to set a GUC alongside it. So the
+--   app could write the right column and STILL FAIL EVERY TIME. A5 answered the
+--   carrier question and stopped; how the app SUPPLIES the carrier over PostgREST
+--   was never decided. That is the gap, and it is the whole of it.
+--
+--   *** THIS DOES NOT CONTRADICT A5's REJECTION OF `fn_close_account`. ***
+--   Re-derived rather than re-read (CP8), because the names collide and the next
+--   reader will find a ratified "rejected" and a shipped function:
+--     A5 rejected a function used AS THE CARRIER — one that REPLACES the GUC.
+--     That shape needs the trigger to know the function was used, so it is
+--     "B plus a function plus a SENTINEL", or SECURITY DEFINER and the allowlist
+--     4 -> 5. THIS function does neither. It SETS the GUC and performs the
+--     UPDATE: the trigger contract is byte-unchanged, no sentinel exists, the
+--     posture is INVOKER, the allowlist stays 4. It is the shape A5 itself
+--     priced as "B plus a function", minus both costs A5 attached to it.
+--
+--   POSTURE RATIONALE — SECURITY INVOKER (Lock 11 default), NOT DEFINER.
+--   The function needs NO elevated privilege: every write it composes is one the
+--   caller is already entitled to make, and each still evaluates AS THE CALLER —
+--   account_update RLS + the 025 aal2 step-up conjunct, the close gate, the
+--   currency conjunct, account_closure_biconditional, and the AFTER audit writer
+--   (which therefore records `user:<uid>` through auth.uid(), never the GUC
+--   branch). DEFINER allowlist STAYS 4. Pattern precedents, both INVOKER
+--   write-composition RPCs: 013 fn_create_manual_account (ADR-026) and 042
+--   fn_land_linked_accounts (ADR-037).
+--
+--   ⚠ IT DOES NOT ENABLE A FUTURE COLUMN-LEVEL `revoke update (closed_at)`, and
+--     this is stated because it is the obvious next inference and it is FALSE.
+--     "All writes go through a named function, so we can revoke the column
+--     grant" does not follow for an INVOKER function: it runs with the CALLER's
+--     privileges and would lose the same grant, so the revoke would break this
+--     path and leave no path at all. That hardening requires SECURITY DEFINER,
+--     i.e. allowlist 4 -> 5 and its own F/CTO ratify (Decision 9). Nobody should
+--     build a Lock-3-mod-1 column-restriction plan on top of this function
+--     believing the groundwork is done.
+--
+--   ⚠ IT DELIBERATELY DOES NOT SET `pfin.actor`. A session always has
+--     auth.uid(), so the writer never reaches the GUC branch; setting it here
+--     would be inert today and would become a FORGERY CHANNEL the moment the
+--     precedence in (3b) were ever reordered. The one thing this function must
+--     not do is pre-load the value that a reordering would start trusting.
+--
+--   ⚠ IT DELIBERATELY DOES NOT RE-VALIDATE THE reason_code VOCABULARY. 057's
+--     CHECK is the single enforcement point. A NULL/empty argument is passed
+--     through as '' so the writer's own `nullif(...,'')` raises ITS message,
+--     which names the remedy; an out-of-vocabulary value fails 057's CHECK. A
+--     copy of the vocabulary here would be a THIRD representation (CHECK / GUC /
+--     client picker) of a closed set that this ADR spent Decision 5 bounding.
+--
+--   ⚠ NARROW BY CONSTRUCTION — `and closed_at is null` / `is not null`.
+--     Each function acts ONLY on the transition it is named for. Two consequences
+--     worth having: a double-submitted close gets a legible refusal instead of
+--     silently RE-DATING a closure, and the RPCs cannot be used to reach the
+--     re-dating path at all. *** THE RE-DATING PATH IS NOT CLOSED BY THIS FILE
+--     — see the FINDING below; it is a live direct-PATCH exposure and it is
+--     routed, not fixed here. Do not read this narrowness as a fence. ***
+--
+--   > FINDING, ROUTED TO SEC (2026-08-03, Architect; not fixed in this file
+--   > because it changes a Sec-reviewed gate's firing condition):
+--   > the gate at (3) fires on `old.closed_at is null and new.closed_at is not
+--   > null` — the INTO-CLOSED transition only, per Decision 3's own wording.
+--   > A CLOSED account's closed_at can therefore be MOVED to any other past date
+--   > by a direct PATCH under the table-level UPDATE grant, WITHOUT the three
+--   > legs re-firing. Moving it EARLIER, to a date when the account held value,
+--   > falsifies the standing invariant and — after 059's as-of re-point —
+--   > silently changes historical NAV. It is AUDITED (the AFTER writer records a
+--   > second `closed` event, since closed_at IS DISTINCT FROM), so it is
+--   > detectable rather than silent; it is not PREVENTED. Same class as the
+--   > Decision-4 currency conjunct, one column over.
+--   > Architect lean: make closed_at IMMUTABLE ON A CLOSED ACCOUNT, as a second
+--   > conjunct on the existing (3) fence — because Decision 3 already ratifies
+--   > the correction path it forces ("corrections go through reopen -> edit ->
+--   > re-close, which re-proves the invariant rather than assuming it survived").
+--   > Alternative: widen the gate's condition to `new.closed_at is not null and
+--   > new.closed_at is distinct from old.closed_at`. F/CTO decides; Sec reviews.
+--
+--   CONTRACT
+--     pfin.fn_close_account(p_account_id bigint, p_reason_code text,
+--                           p_closed_at timestamptz default now())
+--       RETURNS the closed_at actually applied. Sets pfin.reason_code
+--       transaction-locally, then performs the single-row gated UPDATE. Refuses
+--       with 'close refused:' — DELIBERATELY DISTINCT from the gate's 'account
+--       closure blocked' prefix, so the app can tell "the gate named a leg" from
+--       "there was nothing to close" — when no OPEN account is reachable. That
+--       message does NOT discriminate absent / not-yours / already-closed: under
+--       RLS those are one condition, and separating them would leak existence.
+--       RETURNING a timestamptz is not symmetry-breaking for its own sake: the
+--       applied value is SERVER-derived (`now()`) and the caller cannot otherwise
+--       know it. The prior app path sent a CLIENT clock into a column the gate
+--       bounds against server now(), so a fast client got a spurious
+--       future-closed_at refusal; the default closes that.
+--
+--     pfin.fn_reopen_account(p_account_id bigint, p_effective_date date
+--                            default null)
+--       RETURNS void — a reopen has no server-derived value to hand back, which
+--       is the whole of the asymmetry. Sets the OPTIONAL pfin.effective_date GUC
+--       ('' when absent, so the writer records NULL = "not recorded" rather than
+--       a guessed date) and clears closed_at. Reopening stays UNGATED per
+--       Decision 3; this function adds no gate and must not acquire one.
+--
+--   Adds NO FK-shaped column -> the Decision-3 family is unchanged (read the
+--   count live from ADR-011 Decision 3; do not cite it from here). §10
+--   catalogued ledger unchanged by this migration — these are Lock 14
+--   user-facing-direct-DB-write CLASS members, and class membership is not a
+--   catalogued instance (the identical ruling ADR-042's Consequences already
+--   made for the fences above). Read ADR-011 Decision 4 live.
+-- ----------------------------------------------------------------------------
+create or replace function pfin.fn_close_account(
+  p_account_id  bigint,
+  p_reason_code text,
+  p_closed_at   timestamptz default now()
+)
+returns timestamptz
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+declare
+  v_applied timestamptz;
+begin
+  -- The carrier, per Amendment 1 A5 option B. `set_config(..., is_local => true)`
+  -- IS `set local` — plain `SET LOCAL <name> = <variable>` is not available in
+  -- PL/pgSQL, and this is the reason the app could not do it over PostgREST.
+  -- coalesce to '' rather than guarding NULL here: the writer's nullif(...,'')
+  -- then raises ITS message, which names the remedy. One enforcement point.
+  perform set_config('pfin.reason_code', coalesce(p_reason_code, ''), true);
+
+  update pfin.account
+     set closed_at = p_closed_at
+   where account_id = p_account_id
+     and closed_at is null
+  returning closed_at into v_applied;
+
+  if not found then
+    raise exception
+      'close refused: no OPEN account % is reachable in this session — it does not exist, is not yours, or is already closed. Reopen it first if you meant to re-date a closure (a closed account is not re-closed in place).',
+      p_account_id
+      using errcode = 'P0002';  -- no_data_found
+  end if;
+
+  -- AUDIT FORWARD-HOOK (A2-lite deferral — conscious documented deviation;
+  -- mirrors 013 and 042 §(5) verbatim in intent). WHEN the audit-infra issue
+  -- (SELF-201 Task #7) lands, insert the same-transaction GENERAL audit row HERE
+  -- (this body, same txn; Decision 1 / Lock 4 mod #5). ⚠ pfin.account_event is
+  -- NOT that log and does not discharge this: it records the STATE TRANSITION,
+  -- and the general log records the ACTION on this write path. Reading the
+  -- former as satisfying the latter is how clause (d) gets quietly marked done.
+  return v_applied;
+end;
+$$;
+
+comment on function pfin.fn_close_account(bigint, text, timestamptz) is
+  'SECURITY INVOKER write-composition RPC — the application''s close path (ADR-042 Amendment 2; migration 058 section 7). Sets pfin.reason_code TRANSACTION-LOCALLY via set_config(..., true) and performs the gated single-row UPDATE in the SAME transaction, which is the entire reason it exists: PostgREST issues each supabase-js UPDATE as its own transaction with no way to set a GUC alongside it, so the app could write closed_at correctly and still fail every time on the Amendment 1 A5 carrier requirement. IT IS A CALLER, NOT A GATE — the gate stays a BEFORE UPDATE trigger because authenticated holds a TABLE-LEVEL UPDATE on pfin.account (003, no column list) and pfin is Data-API-exposed, so a direct PATCH reaches closed_at whatever functions exist; anything moved out of the triggers and into this function stops being enforced. DOES NOT CONTRADICT A5''s rejection of a fn_close_account: A5 rejected a function used AS THE CARRIER (replacing the GUC), which needs a sentinel or DEFINER and allowlist 4 -> 5; this one SETS the carrier, so the trigger contract is byte-unchanged, there is no sentinel, and the allowlist STAYS 4. Every fence evaluates as the caller (account_update RLS + the 025 aal2 conjunct, the close gate''s three legs, the currency conjunct, account_closure_biconditional, and the AFTER writer — which records user:<uid> through auth.uid() and never reaches the pfin.actor branch). It DELIBERATELY does not set pfin.actor (inert today; a forgery channel the moment the writer''s precedence were reordered) and DELIBERATELY does not re-validate the reason_code vocabulary (057''s CHECK is the single enforcement point; a copy here would be a third representation of a closed set). ⚠ IT DOES NOT ENABLE a future column-level revoke update (closed_at): an INVOKER function runs with the caller''s privileges and would lose the same grant, so that hardening needs DEFINER and allowlist 4 -> 5 — do not build a column-restriction plan on this believing the groundwork is done. NARROW BY CONSTRUCTION (`and closed_at is null`): acts only on the into-closed transition, so a double-submit is refused legibly rather than silently re-dating a closure — but this is NOT a fence on re-dating, which stays reachable by direct PATCH and is routed to Sec in the section header. p_closed_at defaults to SERVER now(); the prior app path sent a client clock into a column the gate bounds against server now(). Refusal prefix ''close refused:'' is deliberately distinct from the gate''s ''account closure blocked'' so the app can distinguish a named-leg refusal from nothing-to-close, and the message does not discriminate absent / not-yours / already-closed (one condition under RLS; separating them leaks existence). Adds no FK-shaped column — Decision-3 family unchanged. Same-transaction GENERAL audit-log DEFERRED (A2-lite forward-hook in body; SELF-201 Task #7) — pfin.account_event is the state-transition record and does NOT discharge clause (d). Signature is an API contract (PostgREST /rpc; pfin is [api]-exposed): PostgREST passes named arguments, so a later DEFAULTED parameter is backward-compatible while a rename or removal is breaking.';
+
+create or replace function pfin.fn_reopen_account(
+  p_account_id     bigint,
+  p_effective_date date default null
+)
+returns void
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+begin
+  -- OPTIONAL BY DESIGN (Amendment 1 A5 / 057's effective_date rule). '' when
+  -- absent so the writer's nullif(...,'') yields NULL = "not recorded" — never a
+  -- guessed current_date, which would make a real same-day reopen
+  -- byte-identical to an unknown-date one on a table with no redaction path.
+  perform set_config('pfin.effective_date', coalesce(p_effective_date::text, ''), true);
+
+  update pfin.account
+     set closed_at = null
+   where account_id = p_account_id
+     and closed_at is not null;
+
+  if not found then
+    raise exception
+      'reopen refused: no CLOSED account % is reachable in this session — it does not exist, is not yours, or is already open.',
+      p_account_id
+      using errcode = 'P0002';  -- no_data_found
+  end if;
+end;
+$$;
+
+comment on function pfin.fn_reopen_account(bigint, date) is
+  'SECURITY INVOKER write-composition RPC — the application''s reopen path (ADR-042 Amendment 2; migration 058 section 7). Sibling to fn_close_account, and shipped WITH it rather than after it so that exactly ONE mechanism writes pfin.account.closed_at from the app: a close-only RPC would have left reopen on a bare PATCH, i.e. two mechanisms on one column and no way to record a reopen date if one is ever wanted. Sets the OPTIONAL pfin.effective_date GUC transaction-locally ('''' when absent, so the AFTER writer records NULL = "not recorded" rather than a guessed current_date — the byte-identical-rows defect Amendment 1 A5 closed) and clears closed_at. REOPENING STAYS UNGATED per ADR-042 Decision 3 and this function must not acquire a gate: a reopened account starts at zero and is funded by new dated entries, closure entries are historical facts and are not un-booked, and gating the exit would be incoherent since a closed account is already at zero by the gate that admitted it. RETURNS void, not a timestamp — the asymmetry with fn_close_account is deliberate and has a reason: a close applies a SERVER-derived value the caller cannot otherwise know, a reopen applies NULL. NARROW BY CONSTRUCTION (`and closed_at is not null`). SECURITY INVOKER; DEFINER allowlist stays 4. Adds no FK-shaped column — Decision-3 family unchanged. Signature is an API contract (PostgREST /rpc).';
+
+-- EXECUTE defaults to PUBLIC on a new function, so the revoke is the load-bearing
+-- half and the grant is the narrowing (013 / 038 / 042 precedent).
+-- anon is denied by omission — it is never granted, rather than granted-then-revoked.
+revoke execute on function pfin.fn_close_account(bigint, text, timestamptz) from public;
+grant  execute on function pfin.fn_close_account(bigint, text, timestamptz) to authenticated;
+
+revoke execute on function pfin.fn_reopen_account(bigint, date) from public;
+grant  execute on function pfin.fn_reopen_account(bigint, date) to authenticated;
