@@ -2,7 +2,22 @@
 -- 058_account_closure.sql — closed_at + the standing zero-value invariant
 --   (ADR-042 Decisions 2/3/4). THE COLUMN NEVER EXISTS UNGATED.
 --
--- Numbering: 058 follows 057 (account_event must exist — the gate writes to it).
+-- Numbering: 058 follows 057 (account_event must exist before anything writes it).
+--
+-- ⚠ OPEN — THE WRITER DOES NOT EXIST YET. This file creates FIVE triggers and
+--   NONE of them writes pfin.account_event. Verified 2026-08-03: the only
+--   `insert into` in this file is the 042 re-point, and `account_event` appears
+--   outside 057 in exactly two places repo-wide, both comments.
+--   Three artifacts asserted the writer as shipped fact — this line's earlier
+--   wording ("the gate writes to it"), 057's INSERT-policy comment, and
+--   ADR-042 Decision 5's build sequence. Each was checked against the others
+--   and none against the DDL. So 057 currently ships an audit table, an INSERT
+--   RLS policy, and the #16 matched-tenant fence for a write path nobody built,
+--   and A CLOSURE IS GATED BUT UNRECORDED.
+--   Sec holds the ruling on the writer's shape and on how `actor` is derived
+--   (absence of auth.uid() must not silently BECOME 'system:remediation' —
+--   absence is not a value). ADR-042 needs an amendment; routed to F/CTO.
+--   DO NOT resolve this by deleting the line. The gap is real.
 --
 -- EVERYTHING IN THIS FILE IS ONE UNIT. 003:124 grants authenticated a
 --   TABLE-LEVEL update on pfin.account with no column list, so closed_at is
@@ -142,6 +157,57 @@ comment on constraint account_closure_biconditional on pfin.account is
 --   account_update's WITH CHECK.
 --   (The OPEN-account half — currency is mutable on every account and silently
 --   restates history — is deliberately OUT OF SCOPE here; BACKLOG.md §7.7.)
+--
+-- ----------------------------------------------------------------------------
+--   CONTRACTS THIS FENCE DEPENDS ON (Sec ruling 2026-08-03)
+--
+--   This gate is not self-contained. It borrows three guarantees from 056's
+--   fn_account_cash_as_of. A fence must state not merely THAT it depends on
+--   something but HOW each dependency is guarded and BY WHAT — because all
+--   three fail OPEN when breached, and one of them cannot raise at all.
+--   (A table recording only the binding is a manifest. One recording the
+--   consequence is an argument, and only the second survives a cleanup ticket.)
+--
+--     (1) TOTALITY — one row per account in pfin.account, always.
+--         GUARDED BY: runtime raise, the `not found` branch below.
+--         Breach = someone adds a filter to 056. Fails OPEN without the raise:
+--         no row means no comparison, and the closure proceeds UNMEASURED.
+--
+--     (2) NON-NULL balance_native — 056 double-coalesces both terms.
+--         GUARDED BY: the same runtime raise (`or v_cash is null`), folded per
+--         Sec option A. NULL and absent are one class — both mean "056 is
+--         wrong, stop and fix 056" — so one raise carries both causes.
+--         Fails OPEN without it: `v_cash <> 0` on NULL evaluates to NULL, not
+--         true, and the gate admits the closure IN SILENCE. A fence built to
+--         REFUSE returns nothing at all.
+--
+--     (3) NATIVE / NO FX MULTIPLIER — 056 returns native currency, applies no
+--         rate.
+--         GUARDED BY: **NOT RUNTIME-DETECTABLE. Guarded behaviourally, by 056's
+--         battery assertions (E4)/(E4b)/(E4c) — a TEST, not a raise.** You
+--         cannot tell from a scalar whether it was converted, so this gate has
+--         no way to raise on it. WEAKENING (E4) WEAKENS THIS FENCE, and the
+--         weakening is invisible at the site where it happens.
+--
+--   WHY (3) IS THE SECURITY-LOAD-BEARING ONE, not a peer of the other two:
+--     fn_compute_nav's cash leg multiplies by an fx rate read from
+--     pfin.eod_price where source = 'fx_feed'. That table's ONLY price
+--     constraint is `eod_price_price_finite` — finiteness. There is NO
+--     positivity constraint, so a rate of 0 is admissible in the store TODAY.
+--     (Cited by NAME, not line: the constraint carries its own
+--     `comment on constraint`, so it is catalog-reachable via pg_constraint and
+--     verifiable without opening 019. A line number here would rot the next
+--     time anyone edits that file above it — in a comment whose whole purpose
+--     is to survive people who were not here.)
+--     If 056 ever applied fx and the rate were 0, converted cash reads 0 while
+--     native cash is non-zero, `v_cash <> 0` is false, and THE GATE ADMITS A
+--     CLOSURE ON A FUNDED ACCOUNT. A negative rate is worse: it inverts rather
+--     than zeroes, so a funded account can present as negative and still fail
+--     an `= 0` test in whichever direction the check is written.
+--     This is the open eod_price positivity item (BACKLOG.md §7.7) reaching the
+--     close gate. It is the reason 056 is NATIVE, and the reason that choice is
+--     not a style preference for someone to "simplify" later by applying fx at
+--     the source.
 -- ----------------------------------------------------------------------------
 create or replace function pfin.fn_account_closure_gate()
 returns trigger
@@ -181,10 +247,22 @@ begin
     from pfin.fn_account_cash_as_of(new.closed_at::date) c
     where c.account_id = new.account_id;
 
-    if not found then
+    -- Contracts (1) and (2) above, in ONE raise. Folded per Sec option A: both
+    -- causes mean "056 is wrong, stop and fix 056", so a second raise would buy
+    -- a distinction nobody can act on differently. The DIAGNOSTIC is kept and is
+    -- not option B — B added a seventh code path; this is one expression inside
+    -- one raise. It earns its keep because the two causes differ in WHERE TO
+    -- LOOK even though they agree on what to do: a missing row sends you to
+    -- 056's filters, a NULL sends you to its coalesces.
+    -- `v_cash is null` is load-bearing, not defensive: without it `v_cash <> 0`
+    -- evaluates to NULL, which is not true, and the gate admits the closure in
+    -- silence.
+    if not found or v_cash is null then
       raise exception
-        'account closure blocked: account % returned no row from fn_account_cash_as_of — that function is TOTAL over pfin.account, so this means its totality contract is broken (leg 2 of 3: cash)',
-        new.account_id;
+        'account closure blocked: account % got no usable cash balance from fn_account_cash_as_of (row %, value %) — that function is TOTAL over pfin.account and double-coalesces to non-NULL, so either result means its contract is broken (leg 2 of 3: cash)',
+        new.account_id,
+        case when found then 'present' else 'MISSING' end,
+        coalesce(v_cash::text, 'NULL');
     end if;
 
     if v_cash <> 0 then
