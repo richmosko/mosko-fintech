@@ -21,16 +21,23 @@ import { actions } from './+page.server';
 const SESSION_UID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const CLOSE = { is_active: 'false', reason_code: 'no_longer_used' };
 const REOPEN = { is_active: 'true' };
+// 058 §(7): fn_close_account RETURNS the closed_at it actually applied, SERVER-derived from
+// now(). Nothing the client sent can produce this value — that is the point of asserting it.
+const APPLIED_CLOSED_AT = '2026-08-04T11:22:33.456Z';
 
 function makeEvent(
 	fields: Record<string, string>,
 	user: { id: string } | null,
 	accountId = '7',
-	rpcErr: { message: string } | null = null
+	rpcErr: { message: string; code?: string } | null = null,
+	rpcData: string | null = APPLIED_CLOSED_AT
 ) {
 	// Typed params: without them `rpc.mock.calls[0]` is the empty tuple and the call-shape
 	// assertions below cannot index it.
-	const rpc = vi.fn(async (_fn: string, _args: Record<string, unknown>) => ({ error: rpcErr }));
+	const rpc = vi.fn(async (_fn: string, _args: Record<string, unknown>) => ({
+		data: rpcData,
+		error: rpcErr
+	}));
 	// `update` is mocked purely so a regression to the PATCH path is OBSERVABLE rather than a
 	// TypeError. Nothing here should ever call it.
 	const update = vi.fn((_payload: Record<string, unknown>) => ({ eq: vi.fn() }));
@@ -199,6 +206,102 @@ describe('POST /accounts/[account_id]?/toggleActive — the close control', () =
 			data: { errors: { _form: string[] } };
 		};
 		expect(res.data.errors._form[0]).not.toMatch(/\b7\b/);
+	});
+
+	// ── Sec joint-review (PR #318, F8): the OPERATOR LOG must not carry the raise text ────────
+	// 058's leg-2 raise interpolates a real account cash balance and every leg interpolates the
+	// closing date. Logs are operator-only, so this is a redaction rather than a veto — but log
+	// shipping/retention is an unscoped Phase-7 surface and this project redacts concrete money
+	// even from committed artifacts. The operator keeps the SQLSTATE and the leg; not the amount.
+	it('a blocked close logs the code and the leg — never the raise, never the amount', async () => {
+		const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+		try {
+			const { event } = makeEvent(CLOSE, { id: SESSION_UID }, '7', {
+				message:
+					'account closure blocked: account 7 holds a non-zero cash balance (500 native) as of 2026-06-30 (leg 2 of 3: cash)',
+				code: 'P0001'
+			});
+			await actions.toggleActive(event);
+
+			expect(spy).toHaveBeenCalledTimes(1);
+			const logged = spy.mock.calls[0].join(' ');
+			expect(logged).toContain('code=P0001');
+			expect(logged).toContain('gate:cash');
+			// The three things that must never reach the log stream: the amount, the date, and the
+			// raise verbatim. The account id is asserted too — it rides in the same string.
+			expect(logged).not.toContain('500');
+			expect(logged).not.toContain('2026-06-30');
+			expect(logged).not.toContain('non-zero cash balance');
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	// 058's leg-2 CONTRACT-BREACH raise ("got no usable cash balance") also carries the
+	// `leg 2 of 3: cash` marker, so a naive classifier folds it into the ordinary cash refusal and
+	// the operator cannot tell "the user holds cash" (act on the account) from "056's contract is
+	// broken" (act on 056). It gets its own LOG key — and deliberately the SAME user-facing copy,
+	// because Sec ruled that mapping GREEN and this change alters no byte the user sees.
+	it('the leg-2 contract breach logs distinctly but reads identically to the user', async () => {
+		const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+		try {
+			const { event } = makeEvent(CLOSE, { id: SESSION_UID }, '7', {
+				message:
+					'account closure blocked: account 7 got no usable cash balance from fn_account_cash_as_of (row MISSING, value NULL) — that function is TOTAL over pfin.account and double-coalesces to non-NULL, so either result means its contract is broken (leg 2 of 3: cash)',
+				code: 'P0001'
+			});
+			const res = (await actions.toggleActive(event)) as {
+				status: number;
+				data: { errors: { _form: string[] } };
+			};
+			expect(spy.mock.calls[0].join(' ')).toContain('gate:cash-contract');
+			expect(res.status).toBe(422);
+			expect(res.data.errors._form[0]).toBe(
+				'This account still holds a cash balance. Move the funds out, then close it.'
+			);
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	it('an RPC refusal logs its own key, not the interpolated account id', async () => {
+		const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+		try {
+			const { event } = makeEvent(CLOSE, { id: SESSION_UID }, '7', {
+				message:
+					'close refused: no OPEN account 7 is reachable in this session — it does not exist, is not yours, or is already closed.',
+				code: 'P0002'
+			});
+			await actions.toggleActive(event);
+			const logged = spy.mock.calls[0].join(' ');
+			expect(logged).toContain('code=P0002');
+			expect(logged).toContain('rpc:already-closed');
+			expect(logged).not.toContain('no OPEN account');
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	// ── Sec joint-review (PR #318, F8 note): return SERVER state, not the client's input ──────
+	// 058 §(7) gives fn_close_account a return type for exactly one value: the applied closed_at,
+	// derived from server now() because p_closed_at is deliberately not sent. Echoing the posted
+	// is_active back reported what the client ASKED FOR and discarded that value.
+	it('a successful close returns the SERVER-applied closed_at', async () => {
+		const { event } = makeEvent(CLOSE, { id: SESSION_UID }, '7');
+		const res = (await actions.toggleActive(event)) as Record<string, unknown>;
+
+		expect(res).toEqual({ success: true, closed_at: APPLIED_CLOSED_AT });
+		// The posted value is not echoed back — that was the defect, and it is the assertion that
+		// would fail if someone re-added `is_active: parsed.data.is_active` alongside.
+		expect(res).not.toHaveProperty('is_active');
+	});
+
+	it('a successful reopen returns closed_at: null — the applied state, not a missing one', async () => {
+		// fn_reopen_account RETURNS void (a reopen applies NULL); the asymmetry is the contract.
+		const { event } = makeEvent(REOPEN, { id: SESSION_UID }, '7', null, null);
+		const res = (await actions.toggleActive(event)) as Record<string, unknown>;
+
+		expect(res).toEqual({ success: true, closed_at: null });
 	});
 
 	it('a non-gate DB error falls back to the generic envelope', async () => {
