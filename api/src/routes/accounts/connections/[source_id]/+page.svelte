@@ -1,44 +1,31 @@
 <!--
-	accounts/connections/[source_id]/+page.svelte — connections-redesign per-connection USE / IGNORE
-	edit page. Frontend-owned browser surface. Consumes Backend's `[source_id]/+page.server.ts`:
-	load → { connection: ConnectionState, accounts: ConnectionAccount[] } (active AND inactive —
-	management view, not NAV); action `?/toggleAccount` (body { account_id, is_active }, `.strict()`)
-	flips one account's is_active.
+	accounts/connections/[source_id]/+page.svelte — connections-redesign per-connection view.
+	Frontend-owned browser surface. Consumes Backend's `[source_id]/+page.server.ts`:
+	load → { connection: ConnectionState, accounts: ConnectionAccount[] }.
 
-	The page titles the provider + connection and lists every account under it. Each row carries a
-	"Use / Ignore" control: one `<form method="POST" action="?/toggleAccount">` per row (hidden
-	account_id + the is_active FLIP), use:enhance. "Use" = is_active true; "Ignore" = false. Ignored
-	accounts are hidden from balances/totals but their history is kept — stated up front.
+	The page titles the provider + connection and lists every account under it. READ-ONLY: the
+	per-row "Use / Ignore" control was REMOVED per ADR-042 Decision 1b — a control whose two
+	positions are "In use" and "Ignored" persists exactly the selection state concept 3 says must
+	not exist, and it is deliberately NOT re-pointed onto `closed_at` (*ignored* and *closed* are
+	different facts). Import selection lives at connect time; closing is done from the account's
+	own control at `accounts/[account_id]`.
 
-	Tokens ONLY (var(--c-*)). a11y: semantic list, current state carries an sr-only prefix, the flip
-	button names the account + the action it performs, per-connection error role="alert",
-	keyboard-native. No secrets, no server imports.
--->
-<script lang="ts">
-	import { enhance } from '$app/forms';
-	import type { SubmitFunction } from '@sveltejs/kit';
-	import type { PageData, ActionData } from './$types';
+	Accepted cost, per Decision 1b: someone who closes an account by mistake has no path back from
+	here and must find the account itself. Preferred over a second close control, or a reopen prompt
+	inside a flow about connecting rather than about bookkeeping.
+
+	Tokens ONLY (var(--c-*)). a11y: semantic list, keyboard-native. No secrets, no server imports.
+--><script lang="ts">
+	import type { PageData } from './$types';
 	import ConnectionStatusChip from '$lib/components/ConnectionStatusChip.svelte';
-	import Button from '$lib/components/Button.svelte';
 	import { accountTypeLabel } from '$lib/account-display';
 	import { providerLabel, providerHomeUrl } from '$lib/accounts/connection-display';
 
-	let { data, form }: { data: PageData; form: ActionData } = $props();
+	let { data }: { data: PageData } = $props();
 
 	const connection = $derived(data.connection);
 	const accounts = $derived(data.accounts);
 	const homeUrl = $derived(providerHomeUrl(connection.provider));
-
-	// Which account row is mid-submit — a per-row loading state so only its button spins.
-	let togglingId = $state<number | null>(null);
-
-	const toggleHandler: (accountId: number) => SubmitFunction = (accountId) => () => {
-		togglingId = accountId;
-		return async ({ update }) => {
-			await update(); // success → load reruns → the row's is_active refreshes; failure → form.errors
-			togglingId = null;
-		};
-	};
 </script>
 
 <svelte:head>
@@ -83,14 +70,9 @@
 	<section class="region" aria-label="Use or ignore accounts">
 		<h2 class="section-title">Accounts in this connection</h2>
 		<p class="help">
-			Choose which accounts from this aggregator to <strong>use</strong>. Ignored accounts are
-			hidden from your balances and totals, but their transaction history is kept — you can bring an
-			account back into use any time.
+			Every account imported from this aggregator. Which accounts get imported is chosen when you
+			connect. To close an account, open it and use its close control.
 		</p>
-
-		{#if form && 'errors' in form && form.errors?._form}
-			<p class="form-error" role="alert">{form.errors._form.join(' ')}</p>
-		{/if}
 
 		{#if accounts.length === 0}
 			<p class="empty">No accounts under this connection yet.</p>
@@ -101,27 +83,6 @@
 						<div class="acct-id">
 							<a class="acct-name" href="/accounts/{a.account_id}">{a.name}</a>
 							<span class="acct-meta">{accountTypeLabel(a.account_type)}</span>
-						</div>
-						<div class="acct-control">
-							<span class="state" class:ignored={!a.is_active}>
-								<span class="sr-only">Current state:</span>
-								{a.is_active ? 'In use' : 'Ignored'}
-							</span>
-							<form
-								method="POST"
-								action="?/toggleAccount"
-								use:enhance={toggleHandler(a.account_id)}
-							>
-								<input type="hidden" name="account_id" value={a.account_id} />
-								<input type="hidden" name="is_active" value={String(!a.is_active)} />
-								<Button
-									type="submit"
-									variant={a.is_active ? 'secondary' : 'primary'}
-									loading={togglingId === a.account_id}
-								>
-									{a.is_active ? `Ignore ${a.name}` : `Use ${a.name}`}
-								</Button>
-							</form>
 						</div>
 					</li>
 				{/each}
@@ -263,33 +224,10 @@
 		font-size: var(--fs-small);
 		color: var(--c-text-muted);
 	}
-	.acct-control {
-		display: flex;
-		align-items: center;
-		gap: var(--space-3);
-		flex-shrink: 0;
-	}
-	.state {
-		font-size: var(--fs-small);
-		font-weight: var(--weight-med);
-		color: var(--c-text-secondary);
-	}
-	.state.ignored {
-		color: var(--c-text-muted);
-	}
 	.empty {
 		margin: 0;
 		color: var(--c-text-muted);
 		font-style: italic;
-	}
-	.form-error {
-		margin: 0 0 var(--space-3);
-		padding: var(--space-2) var(--space-3);
-		border: 1px solid var(--c-neg);
-		border-radius: var(--radius-md);
-		background: color-mix(in srgb, var(--c-neg) 8%, var(--c-surface));
-		color: var(--c-neg);
-		font-size: var(--fs-small);
 	}
 	.sr-only {
 		position: absolute;

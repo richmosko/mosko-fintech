@@ -115,27 +115,6 @@ export const toggleActiveSchema = z
 
 export type ToggleActive = z.infer<typeof toggleActiveSchema>;
 
-/** Coerce a form boolean the same way toggleActiveSchema does (checkbox/string/'1'). */
-const formBoolean = () =>
-	z.preprocess((v) => v === true || v === 'true' || v === 'on' || v === '1', z.boolean());
-
-/**
- * Connections-redesign use/ignore toggle (`accounts/connections/[source_id]`). A single
- * account's `is_active` keyed by account_id — the per-connection "use / ignore" control.
- * Ownership is fenced by the account_update RLS policy (users_id = auth.uid()); the action
- * does a single-row UPDATE keyed on account_id, mirroring the `[account_id]` toggleActive
- * path. `.strict()` is the mass-assignment fence (Lock 14 mod #2) — a stray posted column
- * (e.g. users_id, linked_source_id) is rejected, never silently forwarded to the UPDATE.
- */
-export const toggleAccountSchema = z
-	.object({
-		account_id: z.coerce.number().int('Invalid account.').positive('Invalid account.'),
-		is_active: formBoolean()
-	})
-	.strict();
-
-export type ToggleAccount = z.infer<typeof toggleAccountSchema>;
-
 /**
  * Account-detail attribute edit (`accounts/[account_id]` updateAttributes action). The four
  * user-editable account attributes — name / account_type / scope / tax_treatment. Mirrors the

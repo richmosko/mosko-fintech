@@ -69,25 +69,6 @@ export const toggleActiveSchema = z
 
 export type ToggleActive = z.infer<typeof toggleActiveSchema>;
 
-/** Coerce a form boolean the same way the server does (checkbox/string/'1'). */
-const formBoolean = () =>
-	z.preprocess((v) => v === true || v === 'true' || v === 'on' || v === '1', z.boolean());
-
-/**
- * Connections-redesign use/ignore toggle — CLIENT mirror of the server `toggleAccountSchema`
- * (`accounts/connections/[source_id]` `?/toggleAccount`). A single account's `is_active` keyed
- * by `account_id`. Same `.strict()` posture + same coercions as the server (the security
- * boundary); this is the browser-side UX mirror. Never looser than the server.
- */
-export const toggleAccountSchema = z
-	.object({
-		account_id: z.coerce.number().int('Invalid account.').positive('Invalid account.'),
-		is_active: formBoolean()
-	})
-	.strict();
-
-export type ToggleAccount = z.infer<typeof toggleAccountSchema>;
-
 /**
  * Account-detail attribute edit — CLIENT mirror of the server `updateAttributesSchema`
  * (`accounts/[account_id]` `?/updateAttributes`). The four user-editable attributes:
