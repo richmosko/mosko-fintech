@@ -6,7 +6,7 @@ scaffold relay 2026-06-25 — `supabase init` created `config.toml` + `migration
 so this dir is QA's with no collision.)
 
 **Framework shape:** pgTAP via `supabase test db` (locked, W3-A routing). Design rationale:
-[`tests/rls/DESIGN.md`](../../tests/rls/DESIGN.md).
+[`rls/DESIGN.md`](rls/DESIGN.md).
 
 ## What runs
 
