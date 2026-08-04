@@ -648,3 +648,51 @@ green; `acc` does the exact inverse.
 
 Every new rule here arrived as a self-catch except the last, which is at one application and is
 therefore **untested, not miscalibrated** — leave it and use it.
+
+### A mocked chain shape pins nothing — the residue no token-classification reaches
+
+Backend's finding at the §7.9 AC-4 sweep, carried here because it names a gap in **AC 1's own
+method** and this file is where that method lives.
+
+AC 1 says: classify a test by the TABLE it targets, not by the token it contains — because
+`is_active` means different things on `pfin.account` and on `linked_source`. Sound, and it
+found real instances.
+
+**But `netWorth.test.ts` had no token to classify.** It stubbed `.eq()` and asserted nothing
+about the predicate — no column name, no value, no `is_active` anywhere in the file. It would
+have gone on passing while the production query 400'd against a dropped column.
+
+> **A test that mocks a chain's SHAPE without pinning what the chain ASKS FOR is invisible to
+> every method that works by reading tests for what they mention.**
+
+It surfaced only because the suite was actually run. Generalises past this migration: any
+fluent-builder mock (`.from().select().eq().order()`) asserts the calls happened in a shape,
+which is exactly the part that does not break when the schema moves underneath it.
+
+Practical form: **when a mock stands in for a query, assert the ARGUMENTS, not just the call.**
+`expect(eq).toHaveBeenCalledWith('closed_at', null)` survives a rename by failing; `expect(eq)
+.toHaveBeenCalled()` survives it by passing.
+
+Same family as rule 0 — the fixture (here, the mock) substitutes for the production path and
+therefore cannot detect that path's absence — but sharper, because the substitution is
+invisible to a text sweep rather than merely undetectable by the test.
+
+### An inversion result stated without its condition reads as a live failure
+
+Mine, from this round, and it cost a teammate a real decision point.
+
+I committed the detector work under the subject **"the pre-closure re-point detector — 7 reds
+where there were 0"**. Against `059` as authored the suite is **0 failures**; the seven reds
+exist only under a deliberate sabotage of the predicate, and are the proof the detector has
+teeth. The subject line stated a red count with no database state attached, and the team lead
+correctly stopped to ask whether `059` was broken.
+
+This is this file's own ⟦EXPECTED STACK⟧ rule — *a result is uninterpretable without the
+migration set it ran against* — broken by me, in a commit subject, in the same session I
+extended that rule twice.
+
+> **The three-coordinates rule applies to every surface a result is quoted on, and a commit
+> subject is the surface most likely to be read alone.**
+
+Fix is one clause: *"7 reds UNDER SABOTAGE, 0 against `059` as authored."* Say what the number
+was measured against, or do not quote the number.
