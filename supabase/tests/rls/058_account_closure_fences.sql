@@ -319,8 +319,8 @@ select is(
           / length('raise exception')
      from pg_proc p where p.pronamespace = 'pfin'::regnamespace
       and p.proname = 'fn_account_closure_gate'),
-  6,
-  '(B5) RAISE-SITE COUNT — the gate has EXACTLY 6 raise sites. ⚑ REPLACES a version keyed on the `leg N of 3` tag, which was LOSSY: raises 4 and 5 BOTH end `(leg 2 of 3: cash)`, so a distinct-tag check finds 3 values across 6 messages and REPORTS SUCCESS. The tag distinguishes LEGS; I was using it to distinguish RAISES. Counting sites fails when the gate changes SHAPE, not merely when a message changes value — the same correction as `drop trigger if exists` -> bare `drop trigger`. A red here means a raise was added or removed: go read it, then assert it'
+  7,
+  '(B5) RAISE-SITE COUNT — the gate has EXACTLY 7 raise sites. ⚑ WAS 6; the seventh is the ADR-042 Amendment 2 B4 immutability conjunct (closed_at cannot be re-dated on an already-closed account), F/CTO-ratified 2026-08-03. Read, then asserted — per this assertion own instruction — rather than bumped to make the red go away. ⚑ REPLACES a version keyed on the `leg N of 3` tag, which was LOSSY: raises 4 and 5 BOTH end `(leg 2 of 3: cash)`, so a distinct-tag check finds 3 values across 6 messages and REPORTS SUCCESS. The tag distinguishes LEGS; I was using it to distinguish RAISES. Counting sites fails when the gate changes SHAPE, not merely when a message changes value — the same correction as `drop trigger if exists` -> bare `drop trigger`. A red here means a raise was added or removed: go read it, then assert it'
 );
 -- (B4c) ⭐ THE TOTALITY-CONTRACT RAISE — reachable ONLY by a code edit, never by data.
 --   `058` raises if fn_account_cash_as_of returns NO ROW for the account, because `056`'s

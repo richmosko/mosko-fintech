@@ -129,13 +129,25 @@ insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
 insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_of_date, source)
   values (:a3, -2000.0000, 'USD', '2026-06-01', 'seed');
 
--- a4: INACTIVE investment WITH securities (10 NVSECA) — tests BOTH legs' is_active gating.
-insert into pfin.account (users_id, name, account_type, scope, tax_treatment, is_active, closed_at)
-  values (:'ta', 'a-inv-inactive-4', 'investment', 'household', 'taxable', false, '2026-06-30'::timestamptz) returning account_id as a4 \gset
+-- a4: investment CLOSED as of 2026-06-30, having held BOTH legs (10 NVSECA + cash).
+--   ⚑ RE-SEEDED AT ADR-042 — was `is_active=false` while still holding both. That state is
+--     unconstructible now (see 049's note); the wind-down below is what the close gate
+--     actually requires, and it exercises BOTH zero-value legs rather than asserting around
+--     them. Trigger-disabling to rebuild the old state is REFUSED.
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
+  values (:'ta', 'a-inv-closed-4', 'investment', 'household', 'taxable') returning account_id as a4 \gset
 insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_of_date, source)
   values (:a4, 1000.0000, 'USD', '2026-06-01', 'seed');
 insert into pfin.account_trans (account_id, transaction_date, amount, quantity, security_id, cost_basis, transaction_type, vendor)
   values (:a4, '2026-06-05', -1000.0000, 10, :seca, 1000.0000, 'standard', 'buy-a4');
+-- wind-down, both legs, all dated ON OR BEFORE the closing date:
+--   sell the 10 back (holdings leg -> 0, cash -> 1000), then sweep the cash out (cash leg -> 0).
+insert into pfin.account_trans (account_id, transaction_date, amount, quantity, security_id, cost_basis, transaction_type, vendor)
+  values (:a4, '2026-06-20', 1000.0000, -10, :seca, 1000.0000, 'standard', 'sell-a4');
+insert into pfin.account_trans (account_id, transaction_date, amount, quantity, vendor)
+  values (:a4, '2026-06-30', -1000.0000, 0, 'sweep-a4');
+select set_config('pfin.reason_code', 'no_longer_used', true);
+update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = :a4;
 
 -- =====================================================================
 -- TENANT L — liability-only (R-7 sign): one ACTIVE liability, checkpoint -1500.

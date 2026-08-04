@@ -161,10 +161,16 @@ insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
 insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_of_date, source)
   values (:a5, -2000.0000, 'USD', '2026-06-01', 'seed');
 
-insert into pfin.account (users_id, name, account_type, scope, tax_treatment, is_active, closed_at)
-  values (:'ta', 'a-dep-inactive-7', 'depository', 'household', 'taxable', false, '2026-06-30'::timestamptz) returning account_id as a7 \gset
+-- a7: CLOSED as of 2026-06-30 (was `is_active=false` + a live 9999; see 049's note — that
+--   state is unconstructible under ADR-042). Seeded through the real gate: funded, zeroed, closed.
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
+  values (:'ta', 'a-dep-closed-7', 'depository', 'household', 'taxable') returning account_id as a7 \gset
 insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_of_date, source)
   values (:a7, 9999.0000, 'USD', '2026-06-01', 'seed');
+insert into pfin.account_trans (account_id, transaction_date, amount, quantity, vendor)
+  values (:a7, '2026-06-30', -9999.0000, 0, 'wind-down-a7');
+select set_config('pfin.reason_code', 'no_longer_used', true);
+update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = :a7;
 
 -- =====================================================================
 -- TENANT B — the cross-tenant victim/control. One investment account so B's OWN call is non-empty.

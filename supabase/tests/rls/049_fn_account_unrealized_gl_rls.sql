@@ -153,11 +153,27 @@ insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
 insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_of_date, source)
   values (:a4, -2000.0000, 'USD', '2026-06-01', 'seed');
 
--- a5 (depository, INACTIVE + value-bearing 9999): must be EXCLUDED from the fn (T1 is_active filter).
-insert into pfin.account (users_id, name, account_type, scope, tax_treatment, is_active, closed_at)
-  values (:'ta', 'a-inactive-5', 'depository', 'household', 'taxable', false, '2026-06-30'::timestamptz) returning account_id as a5 \gset
+-- a5 (depository, CLOSED as of 2026-06-30): must be EXCLUDED from the fn.
+--   ⚑ RE-SEEDED AT ADR-042. This was `is_active = false` + a live 9999 balance — a
+--     value-bearing INACTIVE account. THAT STATE IS NOW UNCONSTRUCTIBLE, and that is the
+--     ADR's point, not an obstacle to it: the biconditional CHECK rejects the flag without a
+--     date, the transfer-in fence rejects funding a closed account, and the close gate rejects
+--     closing one that holds value. `disable trigger` / `session_replication_role` WOULD build
+--     it and are REFUSED — fabricating a state the system prevents, to preserve an assertion
+--     about it, is the defect ADR-042 removes.
+--   Seeded through the REAL gate instead: funded while open, counter-booked to zero, closed.
+--     Non-vacuity is now carried by the DATE (it really held 9999 on 2026-06-01) rather than
+--     by a closed account still holding value.
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
+  values (:'ta', 'a-closed-5', 'depository', 'household', 'taxable') returning account_id as a5 \gset
 insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_of_date, source)
   values (:a5, 9999.0000, 'USD', '2026-06-01', 'seed');
+-- counter-book to zero ON the closing date, so leg 2 (cash) and leg 3 (post-closure activity)
+-- both pass at closed_at.
+insert into pfin.account_trans (account_id, transaction_date, amount, quantity, vendor)
+  values (:a5, '2026-06-30', -9999.0000, 0, 'wind-down-a5');
+select set_config('pfin.reason_code', 'no_longer_used', true);
+update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = :a5;
 
 -- =====================================================================
 -- TENANT B — the cross-tenant victim/control. One investment account so B's OWN call is non-empty.
