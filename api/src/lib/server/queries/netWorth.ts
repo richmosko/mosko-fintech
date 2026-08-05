@@ -88,6 +88,17 @@ export type NetWorthView = {
 	 *   a field that says "I deduced it from something else" is wrong the moment the something
 	 *   else moves. Keep the measurement and the inference in different places.
 	 *
+	 * ⚠ AN OBLIGATION THIS FIELD CREATES AND CANNOT EXPRESS (fe-adr042, building the consumer).
+	 *   The third state tempts a consumer into a FOURTH TOP-LEVEL BRANCH — "render something else
+	 *   when presence is unknown". Do not. On this surface the NAV hero carries the ADR-013 INV-1
+	 *   StaleConstituentBadge, so a sibling branch that re-renders the hero produces A NAV RENDER
+	 *   PATH WITH NO STALENESS BADGE ON IT — a silent-staleness V1-ship-block defect, introduced
+	 *   by the SHAPE of a fix for something unrelated. The third state belongs NESTED INSIDE the
+	 *   number surface, where the badge is present by construction rather than by remembering.
+	 *   Recorded here because the obligation is invisible from this type: nothing in
+	 *   `'some' | 'none' | 'unknown'` hints that adding a branch can drop a badge, and the next
+	 *   consumer to widen this will be reading the type, not the dashboard.
+	 *
 	 * PRECEDENCE FOR CONSUMERS (the rule, not a rendering): this field is only LOAD-BEARING when
 	 * `netWorth === 0`, which is the sole cell where the NAV cannot distinguish "no accounts" from
 	 * "a real $0 position". When `netWorth` is non-zero the NAV is itself proof that accounts
