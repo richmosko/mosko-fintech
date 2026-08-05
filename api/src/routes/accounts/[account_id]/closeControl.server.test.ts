@@ -140,7 +140,12 @@ describe('POST /accounts/[account_id]?/closeAccount|reopenAccount — the close 
 		[
 			'post-activity',
 			'account closure blocked: account 7 has activity dated after 2026-06-30 (leg 3 of 3: post-closure activity)',
-			'activity dated after'
+			// Asserts the REMEDY, not the restatement. The old copy said "Close it as of a later
+			// date" and this asserted "activity dated after" — a phrase that merely echoed the
+			// raise back, so it would have passed against copy instructing a control the UI does
+			// not have (which is exactly what it was passing against). The user-actionable half is
+			// what the leg has to name.
+			'dated in the future'
 		],
 		[
 			'future-dated',

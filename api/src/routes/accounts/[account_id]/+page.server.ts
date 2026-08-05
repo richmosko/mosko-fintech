@@ -60,6 +60,8 @@ import {
 	upsertAnnotation,
 	createStockSplit,
 	loadHeldSecurities,
+	isClosedAccountWrite,
+	CLOSED_ACCOUNT_WRITE_MESSAGE,
 	type WriteResult
 } from '$lib/server/queries/transactions';
 import { loadCashflowSubCats, subCatLabel } from '$lib/server/queries/taxonomy';
@@ -280,8 +282,25 @@ const GATE_LEG_MESSAGE: Record<GateLeg, string> = {
 	holdings: 'This account still holds positions. Sell or transfer them out, then close it.',
 	cash: 'This account still holds a cash balance. Move the funds out, then close it.',
 	'cash-contract': 'This account still holds a cash balance. Move the funds out, then close it.',
+	// ⚠ REWRITTEN: this said "Close it as of a later date", which INSTRUCTS THE USER TO USE A
+	//   CONTROL THAT DOES NOT EXIST. GATE_LEG_MESSAGE was written against a close flow that took a
+	//   closing date; the flow that shipped does not — closeAccount sends no p_closed_at, so the
+	//   closure is always server-now(). Same defect class as the `use or ignore` clause #319
+	//   removed: copy describing an affordance the UI never gained. (pm-copy / ux-copy.)
+	//   Because closed_at is always today, the blocking activity is always FUTURE-dated, so the
+	//   remedy is about those entries rather than about the closing date.
 	'post-closure':
-		'This account has activity dated after the closing date. Close it as of a later date.',
+		'This account has entries dated in the future. Remove or re-date them, or wait until those dates have passed, then close it.',
+	// ⚠ UNREACHABLE FROM THIS APP PATH TODAY, AND DELIBERATELY KEPT. closeAccount never sends
+	//   p_closed_at, so closed_at = now() and the gate's `new.closed_at > now()` cannot fire.
+	//   KEPT rather than deleted for two reasons, in order of weight:
+	//     1. Deleting it does not remove the case, it RE-ROUTES it — the raise would fall through
+	//        to `other`, whose copy is "it still holds value", which is FALSE for a future-date
+	//        refusal. A wrong message is worse than an unused correct one.
+	//     2. p_closed_at is a DEFAULTED PARAMETER on a PostgREST-exposed signature (058 §(7)),
+	//        so it is reachable by construction to any future caller that supplies a date —
+	//        including a backfill or an admin path — without touching this file.
+	//   Recorded so nobody exercises the UI, fails to reach it, and concludes it is dead.
 	'future-dated': 'An account cannot be closed as of a future date.',
 	other: 'This account cannot be closed yet — it still holds value.'
 };
@@ -508,6 +527,16 @@ export const actions: Actions = {
 			});
 		if (rpcErr) {
 			console.error('[accounts/[account_id]] createTrans RPC failed:', rpcErr.message);
+			// 058 §(4)'s closed-account fence, classified FIRST and separately from the generic
+			// envelope. fn_create_manual_trans INSERTs into pfin.account_trans, which 058 freezes on
+			// a closed account — so this write CANNOT succeed while the account is closed, and the
+			// old fallback ("Please try again") was retry advice for something that never will.
+			// ⚠ THE UI GATING IS NOT WHAT MAKES THIS SAFE. The write stays reachable from a stale
+			//   tab, a second window, or a provider sync landing on a freshly-closed account —
+			//   hiding the form reduces how often this is seen and changes nothing about whether it
+			//   can happen. The DB trigger is the fence; this is only its rendering.
+			if (isClosedAccountWrite(rpcErr.message))
+				return fail(409, { errors: { _form: [CLOSED_ACCOUNT_WRITE_MESSAGE] }, values: raw });
 			return fail(422, {
 				errors: isCrossTenantSubCat(rpcErr.message)
 					? { sub_cat_id: ['That category is not available.'] }
