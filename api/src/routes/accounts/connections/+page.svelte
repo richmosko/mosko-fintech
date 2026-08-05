@@ -75,13 +75,23 @@
 		been able to do since `496c405` removed `toggleAccount` (ADR-042 Decision 1b). Following it
 		leads to a read-only page and no control. A stale developer comment is a cost; a live
 		instruction to use a removed control is a defect, so the false clause goes now.
-		WHAT REPLACES IT IS PROVISIONAL and belongs to PM/UX — this is the minimum true sentence,
-		not a considered rewrite.
+
+		PM COPY RULING (2026-08-04) — the provisional replacement is REPLACED, and not because it
+		was false. It read "Open a connection to see the accounts it brings in", which points at
+		`connections/[source_id]`. That page renders account NAME + TYPE; this page already renders
+		account name + the closed marker inline, so the detail page is close to a subset of what the
+		user is already looking at. Directing them there to see what is on screen is a misdirection
+		— the same shape as the clause just deleted, minus the falseness. It now says "for more
+		detail", which is true and does not oversell the trip.
+
+		Also dropped: "one entry per connection, not per account". It states the page's organising
+		principle by NEGATION, which is spec-shaped; "with the accounts each one brings in" states
+		the same structure positively and shorter. Whether `[source_id]` should carry MORE (and so
+		earn a stronger pointer) is an IA question, routed to UX — not resolvable in this sentence.
 	-->
 	<p class="lede">
-		The data aggregators you've linked — one entry per connection, not per account. Open a
-		connection to see the accounts it brings in, or re-authenticate any that need attention to
-		keep their data up to date.
+		The data aggregators you've linked, with the accounts each one brings in. Open a connection
+		for more detail, or re-authenticate any that need attention to keep their data up to date.
 	</p>
 
 	{#if loadError}
@@ -165,7 +175,16 @@
 										short. Same vocabulary, disambiguated only where something to
 										disambiguate from actually exists.
 
-										PROVISIONAL — batched to PM/UX with the rest of the closure copy.
+										PM COPY RULING (2026-08-04): SHIP AS IS, long form, and the deciding
+										argument is cost asymmetry rather than either of the two already
+										made. If the long form is unnecessary the cost is two words on a
+										marker most users never see; if the short form is ambiguous the
+										cost is a user concluding their CONNECTION is closed and going off
+										to re-link a connection that is fine. Cheap insurance against an
+										expensive misread, on a financial surface. Vocabulary consistency
+										survives in the sense that matters — the word is "Closed"
+										everywhere; only the referent is added where a competing referent
+										actually renders. No longer provisional.
 									-->
 									{#if a.closed_at !== null}
 										<span class="closed-marker">Closed account</span>
