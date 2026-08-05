@@ -404,9 +404,17 @@
 
 				(1) REQUIRED FIX, not taste: "on the closing date" named a control that does not
 				    exist. This form posts `reason_code` and nothing else; `p_closed_at` defaults to
-				    server `now()` (see `closeAccountSchema`). "The closing date" is therefore an
-				    unexplained referent for a date the user cannot choose — it is always now. Copy
-				    must not name a variable the UI does not expose.
+				    server `now()` (see `closeAccountSchema`). Copy must not name a variable the UI
+				    does not expose.
+
+				    ⚠ REFINED, because the paragraph now says "from its closing date onward" and a
+				    flat reading of the rule above would forbid exactly that. The rule is about a
+				    date the user must CHOOSE, not a date the account HAS. "Close it as of a later
+				    date" is forbidden — it demands an input this form has no control for. "From its
+				    closing date onward" is fine and is now REQUIRED, because the account genuinely
+				    has one and the page renders it. **The test is whether the phrase implies an
+				    input, not whether it contains the word "date".** Stated because the two readings
+				    are one word apart and the narrow one would delete a correction.
 
 				(2) ⚠ THE TRIM WAS REVERSED, AND THE NOTE IS KEPT BECAUSE ITS DEPENDENCY IS WHAT
 				    REVERSED IT. This paragraph used to enumerate only the two legs a user can be
@@ -467,10 +475,31 @@
 				    closed-state copy, which the user only reads AFTER closing. Said here, it is
 				    the one warning that reaches a user who is about to close an account they are
 				    still posting to.
+
+				(7) ⚠ THIS PARAGRAPH MAKES NO DAY-CLAIM, AND THAT IS THE POINT. It said "marks it
+				    finished as of today"; it now says "from its closing date onward". PM's
+				    correction of their own line, found by UX.
+
+				    "Today" was a promise this page can CONTRADICT SECONDS LATER. `closedAtLabel`
+				    renders in UTC by deliberate design (see `account-display.ts`, and `059`'s
+				    column comment at the DDL layer), so a close at 18:00 Pacific prints
+				    "Closed 5 Aug" to a user whose today is the 4th. The copy would have said
+				    "today" and the very next render would have named a different day.
+
+				    "From its closing date onward" is true of WHATEVER date the render prints, so
+				    the two cannot disagree — the fix is the absence of a day-claim, not a better
+				    one. It also matches the closed-state copy's "dated on or after that day".
+
+				    ⛔ DO NOT "FIX" THE UTC RENDERING TO LOCAL to make "today" work again. The UTC
+				    choice is deliberate and load-bearing: the ledger renders UTC and `058`'s gate
+				    evaluates as of the same instant, so a local render would show the account
+				    closed the day BEFORE the entries the gate checked. **The three surfaces
+				    agreeing is the property protecting them — it is not the same defect copied
+				    three times.** Ruled by UX for V1 (UTC stays, unlabelled).
 			-->
 			<p class="help">
-				Closing an account marks it finished as of today: it stops counting toward your
-				balances and totals from that point, and stops accepting new entries. Its
+				Closing an account marks it finished: from its closing date onward it stops
+				counting toward your balances and totals, and stops accepting new entries. Its
 				transaction history is kept, and you can reopen it at any time. Because of that, an
 				account can only be closed once it's empty and has no transactions dated in the
 				future — if it still holds securities or cash, record the sale or transfer out
