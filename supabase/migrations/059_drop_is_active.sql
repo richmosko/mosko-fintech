@@ -28,6 +28,36 @@
 --   per-file transaction none of these states is reachable; this is for the
 --   paths that are not the CLI, and for the person who has one anyway.
 --
+--   ⚑ THERE IS NO STEP (3), AND THE ANSWER IS NOT "RETIRED IN PLACE" — IT WAS
+--     SUPERSEDED, AND THE SUCCESSOR IS STRONGER. Written out because the gap is
+--     the wrong thing to be reverse-engineering mid-incident, which is exactly
+--     when this block gets read.
+--       (3) WAS a FAIL-CLOSED GATE: a `do $$ … $$` block scanning pg_proc.prosrc
+--           for functions still mentioning is_active, allowlist-shaped, aborting
+--           the migration if any survived step (2).
+--       (7) ACCEPTANCE GATE — SMOKE INVOCATION replaced it, in one commit.
+--     WHY THE SUCCESSOR IS STRICTLY BETTER, so nobody restores (3) thinking
+--     coverage was lost: (3) carried THREE declared blind spots — it could not
+--     see new-style BEGIN ATOMIC bodies (prosqlbody, not prosrc), it handled
+--     only `--` comments, and a match inside a string literal false-positived.
+--     (7) has none of them, because it does not inspect TEXT at all: it CALLS
+--     each re-pointed function, and a stale is_active reference raises
+--     undefined_column at PLAN time, on first execution, REGARDLESS OF ROW
+--     COUNT — so it fires even against an empty database, which no static
+--     prosrc scan can do. (3) checked whether the code LOOKED re-pointed; (7)
+--     checks whether it RUNS.
+--     ⚠ THE NUMBER IS DELIBERATELY NOT REUSED (the 058 §(6) do-not-renumber
+--       convention): (3) is cited in review threads and in this file's own
+--       history, and renumbering (7) down into the hole would silently
+--       re-point every one of those citations at a different mechanism.
+--     ⚑ AND THE PROVENANCE IS RECORDED BECAUSE THE COMMIT DID NOT. The
+--       substitution landed under the subject "comment-only re-emit of
+--       fn_nav_composition" — a subject that is TRUE of the commit's largest
+--       hunk and SILENT about it removing a fail-closed gate. A reader auditing
+--       by subject line would never look there. This is the "a commit subject
+--       is the surface most likely to be read alone" lesson, and this file
+--       contains an instance of it that predates the lesson being written down.
+--
 --     failed at (1) VALIDATE      Nothing has changed. The failure IS the
 --                                 finding: the operator step left a row where
 --                                 is_active and closed_at disagree. Both
@@ -739,4 +769,4 @@ exception
 end $$;
 
 comment on column pfin.account.closed_at is
-  'THE ONLY representation of open/closed (ADR-042). The boolean flag was retired at 059: it answered "open NOW" where closed_at answers "open AS OF a date" — strictly more information, and the two coexisting was the three-way overloading ADR-042 exists to remove. Readers use (closed_at is null or closed_at::date > p_as_of). ⚠ THE `::date` IS REQUIRED, NOT INCIDENTAL — this column is timestamptz and every as-of parameter in the schema is a date, so a bare `closed_at > p_as_of` promotes the date to MIDNIGHT and an account closed at any time after 00:00 on p_as_of stays INCLUDED for the rest of that day. Since fn_close_account defaults p_closed_at to now(), that is EVERY app-closed account, and it means a just-closed account remains in the §2.1.1 headline until midnight — reading as "the close did not work". NAV VALUE is identical either way (the gate proved zero as of that date), so the defect is invisible to value assertions and shows up only in ROW SETS and COUNTS. Cast to date, matching fn_holdings_as_of / fn_account_cash_as_of / transaction_date / as_of_date and the close gate''s own legs. NEVER a bare `closed_at is null` in an as-of context, and never a LEFT-JOINed `closed_at is null` without an accompanying `account_id is not null`, which fails OPEN by asserting "not closed" from no information.';
+  'THE ONLY representation of open/closed (ADR-042). The boolean flag was retired at 059: it answered "open NOW" where closed_at answers "open AS OF a date" — strictly more information, and the two coexisting was the three-way overloading ADR-042 exists to remove. Readers use (closed_at is null or closed_at::date > p_as_of). ⚠ THE `::date` IS REQUIRED, NOT INCIDENTAL — this column is timestamptz and every as-of parameter in the schema is a date, so a bare `closed_at > p_as_of` promotes the date to MIDNIGHT and an account closed at any time after 00:00 on p_as_of stays INCLUDED for the rest of that day. Since fn_close_account defaults p_closed_at to now(), that is EVERY app-closed account, and it means a just-closed account remains in the §2.1.1 headline until midnight — reading as "the close did not work". NAV VALUE is identical either way (the gate proved zero as of that date), so the defect is invisible to value assertions and shows up only in ROW SETS and COUNTS. Cast to date, matching fn_holdings_as_of / fn_account_cash_as_of / transaction_date / as_of_date and the close gate''s own legs. ⚠ THE CAST IS EVALUATED IN THE SESSION TimeZone, AND THAT IS SAFE ONLY BY A DEPENDENCY OUTSIDE THIS COLUMN — stated per the symmetric rule, since a fence whose sufficiency comes from elsewhere must say so. MEASURED: a user in UTC−5 closing at 20:00 local on Mar 1 records the instant 2026-03-02 01:00Z; under session TimeZone UTC that is closed_at::date = Mar 2 and the account is INCLUDED at p_as_of = Mar 1, while under session −05 it is Mar 1 and EXCLUDED. Same row, same predicate, opposite answers — an off-by-one-DAY for any closure near local midnight. WHAT HOLDS IT TODAY: p_as_of is SERVER-DERIVED (Lock 15 mod #2, server-derived-only; V1 consumers pass CURRENT_DATE), which is evaluated on the same clock in the same session, so the two sides always agree and a just-closed account excludes immediately regardless of the session zone. ⚠ THAT DEPENDENCY IS NARROWING, NOT STABLE: 059 STRUCK the ADR-039 sound-only-at-current_date constraint and thereby LEGALISED past as-of dates, so a §2.1.2 trajectory passing a USER-CHOSEN date is now a sanctioned path — and the first caller that supplies p_as_of from a user''s calendar rather than the server''s breaks the agreement, silently, in the user''s favour or against it depending on which side of midnight they closed. Whoever makes p_as_of user-supplied owns resolving the zone explicitly (store or thread the tenant''s zone; do not let the session default decide), and should find this sentence before they do. NEVER a bare `closed_at is null` in an as-of context, and never a LEFT-JOINed `closed_at is null` without an accompanying `account_id is not null`, which fails OPEN by asserting "not closed" from no information.';
