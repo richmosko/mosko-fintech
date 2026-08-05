@@ -49,16 +49,39 @@ export function taxTreatmentLabel(v: string): string {
  *     locally, so the account would appear closed the day BEFORE the entries the gate checked.
  *     Small, plausible, and un-diagnosable from the screen.
  *
- * ⚠ SETTLED AT ADR-043 — this no longer carries an open flag. Whether a user-facing surface should
- * show UTC at all was a UX/Visual question; it is ruled: **UTC, unlabelled, for V1**, on all three
- * closure surfaces (accounts hub · account detail · connections detail).
+ * ⚠ SETTLED AT ADR-043 — this no longer carries an open UX flag. Whether a user-facing surface
+ * should show UTC at all was a UX/Visual question; it is ruled: **UTC, unlabelled, for V1**, on all
+ * three closure surfaces (accounts hub · account detail · connections detail).
+ *
+ * ⚠⚠ IT DOES, HOWEVER, CARRY A LIVE DEPENDENCY — AND CLOSING THE UX FLAG IS WHAT NEARLY BURIED IT.
+ * The claim that makes this rendering *correct* rather than merely *consistent* — that the date on
+ * the screen is the date the ledger reasoned with — holds **IF AND ONLY IF the Postgres session
+ * TimeZone is UTC**. This function pins the RENDER to UTC; `closed_at::date` is evaluated in the
+ * DATABASE SESSION zone. Off UTC the screen shows one day, the gate reasoned about another, and
+ * NOTHING ERRORS. The pin is declared at migration `061` (`alter database … set timezone`) and is
+ * NECESSARY-NOT-SUFFICIENT: a client `PGTZ`, or a role-level override on a LOGIN role, each defeat
+ * it — both measured, both outranking the database-level setting. Deploy-gated at runbook §10 TZ-1.
+ *
+ * ⚠ The later `fn_server_today()` slice does NOT relieve this. It makes both sides of the DB-side
+ * comparison share a zone; it does not make THIS render agree with them, because `current_date` is
+ * session-zone-evaluated while the line below is hard-pinned to UTC. **For this function the
+ * database pin is the sole load-bearing dependency, permanently.** Do not weaken this note when
+ * that slice lands and the other TZ surfaces get re-pointed.
  *
  * **ANY CHANGE HERE IS ALL-THREE-SURFACES OR NONE.** A per-surface "fix" re-opens the
  * off-by-one-day that `059` measures. The trap is that ONE screen looks wrong in isolation — a
  * sweep of these three to local rendering was already proposed and stopped once — so the intuition
  * that prompts the change is exactly the one that must not be acted on per-surface. **The three
  * agreeing is the property; it is not the same defect copied three times.**
- * Re-opens when the first caller supplies `p_as_of` from a user's calendar rather than the server's.
+ * Re-opens on EITHER trigger (ADR-043 expiry conditions): (E1) a database whose session TimeZone is
+ * not UTC, or reads UTC from `source = client` / `source = user` — which fires with NO user action
+ * at all; or (E2) the first caller supplying `p_as_of` from a user's calendar rather than the
+ * server's. E1 was missing from the original ruling and is the one that fires by itself.
+ *
+ * ⚠ NO TEST GUARDS ANY OF THE ABOVE AS OF THIS WRITING. The UTC pin, the three-surface invariant and
+ * the unlabelled decision are enforced by this comment alone; QA's battery is specified at
+ * `temp/closedatlabel-test-spec.md`. A test that passes under every process TZ is blind to the
+ * variable at issue, not robust to it — it must be made to fail once with the zone pinned off UTC.
  *
  * `formatTimestamp` in transaction-util.ts carries a similarly-worded flag and **ADR-043 does NOT
  * settle it** — deliberately, not by omission. It is a different question: its single consumer is
