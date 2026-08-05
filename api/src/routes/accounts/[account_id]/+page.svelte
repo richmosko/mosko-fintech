@@ -565,9 +565,44 @@
 		{/if}
 	</section>
 
+	<!--
+		FROZEN-ACCOUNT WRITE CONTROLS (F1a). ADR-042 Decision 3: every write into a closed account
+		is REJECTED by `058`'s fence. These controls used to render live and enabled on a closed
+		account, so the user got "Could not save the transaction. Please try again." — retry advice
+		for something that can never succeed.
+
+		REPLACED, not hidden and not `disabled`. F/CTO ruled the mechanism as "disable + named
+		reason"; the refinement to replacement was escalated by UX and CONFIRMED by F/CTO — the
+		reason stands untouched, only the carrier moves.
+		  · not HIDDEN — an absence cannot name its own cause. A vanished section reads as "this
+		    feature doesn't apply to this account", and the remedy is then discoverable only by
+		    connecting an absence to a section further up the page. (Contrast `isSourceOfTruth`
+		    below, which correctly hides: that condition is permanent and the user cannot lift it.
+		    Closed is a condition the user CAN lift, which is why it must state itself.)
+		  · not `disabled` — right for `Change aggregator`, which is ONE button. Wrong for a
+		    multi-field form and N per-row action pairs, where it leaves a large amount of dead
+		    tabbable UI and noise proportional to the user's transaction history.
+		The section and its heading stay, so the page's shape is stable across open→closed and the
+		remedy is stated where the intent was formed.
+
+		⚠ THIS IS NOT A FENCE. The write stays reachable from a stale tab, a second window, or a
+		provider sync landing on a freshly-closed account. `058` is the enforcement. This reduces
+		how often the refusal is seen; it does not make it unreachable, and Backend's classification
+		of that raise is the other half — neither alone is sufficient.
+
+		NO reopen control here (Decision 1b): closure has one home, and a second control elsewhere
+		spends the cost D1b deliberately accepted. The path is named in words.
+	-->
 	<section class="region" aria-label="Add a transaction">
 		<h2 class="section-title">Add a transaction</h2>
-		<TransactionEntryForm subCatGroups={cashflowGroups} />
+		{#if isClosed}
+			<p class="frozen-note">
+				This account is closed, so it can't take new entries. To add one, reopen it under
+				Account status above, add the transaction, then close it again.
+			</p>
+		{:else}
+			<TransactionEntryForm subCatGroups={cashflowGroups} />
+		{/if}
 	</section>
 
 	<!--
@@ -578,7 +613,20 @@
 	{#if isSourceOfTruth}
 		<section class="region" aria-label="Record a stock split">
 			<h2 class="section-title">Record a stock split</h2>
-			{#if heldSecurities.length === 0}
+			<!--
+				THREE NESTED CONDITIONS, DELIBERATELY NOT COLLAPSED. `isSourceOfTruth`, `isClosed`
+				and "no securities held" are three DIFFERENT facts with three different remedies —
+				permanent / user-liftable / data-dependent — and folding any two into one condition
+				is this ADR's own failure mode one layer up. (UX caught the temptation; the shorter
+				expression is the wrong one.) Order matters too: source-of-truth is the outermost
+				because it is the only one that means "this control does not belong here at all".
+			-->
+			{#if isClosed}
+				<p class="frozen-note">
+					This account is closed, so it can't take new entries. Reopen it under Account status
+					above to record a split, then close it again.
+				</p>
+			{:else if heldSecurities.length === 0}
 				<p class="empty">No securities held in this account to split.</p>
 			{:else}
 				<StockSplitEntryForm securities={heldSecurities} />
@@ -601,6 +649,22 @@
 		{#if transactions.length === 0}
 			<p class="empty">No transactions yet.</p>
 		{:else}
+			<!--
+				ONE note above the table, not N disabled button pairs in it. The rows keep their data
+				in full (SELF-201 AC #4 — a closed account retains its history); only the per-row
+				write controls go, via TransactionRow's `frozen` prop.
+
+				⚠ The Actions column header STAYS when frozen. Dropping it would change TABLE_COLUMNS,
+				and that constant is what TransactionRow's full-width editor rows span via `colspan`.
+				An empty cell, never a missing one — the coupling runs through this constant and is
+				not visible from either file alone.
+			-->
+			{#if isClosed}
+				<p class="frozen-note">
+					This account is closed, so its transactions can't be edited. Reopen it under Account
+					status above to make a correction, then close it again.
+				</p>
+			{/if}
 			<div class="table-scroll">
 				<table class="tbl">
 					<thead>
@@ -615,7 +679,12 @@
 					</thead>
 					<tbody>
 						{#each transactions as t (t.trans_id)}
-							<TransactionRow transaction={t} subCatGroups={cashflowGroups} columns={TABLE_COLUMNS} />
+							<TransactionRow
+								transaction={t}
+								subCatGroups={cashflowGroups}
+								columns={TABLE_COLUMNS}
+								frozen={isClosed}
+							/>
 						{/each}
 					</tbody>
 				</table>
@@ -866,5 +935,15 @@
 		margin: 0;
 		color: var(--c-text-muted);
 		font-style: italic;
+	}
+	/* Sibling of .empty and DELIBERATELY NOT italic, because it is a different fact: .empty means
+	   "nothing here yet"; this means "the action is unavailable and here is how to make it
+	   available". Collapsing the two would be the third conflation in this family. Matches .help
+	   visually; kept as its own class so pm-copy can find these strings by class name. */
+	.frozen-note {
+		margin: 0 0 var(--space-3);
+		font-size: var(--fs-small);
+		color: var(--c-text-secondary);
+		max-width: 44rem;
 	}
 </style>
