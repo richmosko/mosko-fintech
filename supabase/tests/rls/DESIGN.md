@@ -759,3 +759,70 @@ predicate change into a passing test over an empty population.
 Note the layer split, because neither file substitutes for the other: the DB battery proves the
 SQL is right; the app test proves the app asks the SQL **the same question**. **The bug lived in
 the gap between two green suites.**
+
+---
+
+## 12. Rule 0 at the system boundary — when the fixture is the other half of the system
+
+§8 rule 0 says **a test's fixture is the thing it cannot test**. That was written about fixtures
+*inside* a battery — seeded rows standing in for a production writer. It has a larger form, and
+the ADR-042 timezone defect is the instance that made it visible.
+
+### The defect
+
+`+page.server.ts` computes the NAV as-of as `new Date().toISOString().slice(0,10)` —
+unconditionally **UTC, in the Node process**. Postgres evaluates `closed_at::date` in the
+**session's `TimeZone`**. Two clocks in two processes; they agree only if the session is UTC.
+
+Measured, session `Asia/Tokyo`, instant `2026-03-01 23:00Z`: `closed_at::date` is `2026-03-02`
+while Node says `2026-03-01`, so `closed_at::date > '2026-03-01'` is TRUE and **a just-closed
+account stays in the NAV headline for ~9 hours.** Under `America/Los_Angeles` it is FALSE —
+west of UTC fails *safe*, which is worse than failing loudly, because the defect becomes
+hemisphere-dependent and a US-based reviewer cannot reproduce it.
+
+### Why no test catches it, and why that is structural rather than an oversight
+
+> **No test at any layer can see this defect, and the reason is structural — each layer's tests
+> stub the other.** The pgTAP batteries never involve Node, so they cannot observe the app's
+> UTC-derived as-of. The vitest tests mock the database, so they cannot observe the session
+> TimeZone. **The defect lives in the disagreement *between* two processes, and every test we
+> have replaces one of them with a fixture.**
+
+That is rule 0 one level up: the fixture is not a seeded row, it is **the other half of the
+system**. Each suite is complete and correct about its own half, and the invariant is a
+*relation between the halves* that neither can express.
+
+### The detector
+
+> **For any invariant that spans two processes, ask which process each test replaces with a
+> fixture. If every test replaces one of them, the invariant is untested — however many tests
+> there are, and however green.**
+
+Symptom worth recognising, because it presents as reassurance: **a suite that passes under every
+value of a variable is not robust to that variable — it is blind to it.** `049`'s boundary
+battery returns 33/33 under UTC, Asia/Tokyo *and* America/Los_Angeles. That reads as
+zone-independence. It is zone-*blindness*: the fixtures use naive timestamps interpreted in the
+session zone and compare in that same zone, so both shift together and cancel. Invariance to an
+input is evidence the input is not reaching the assertion.
+
+### The consequence, which is the part that must not be lost
+
+**The database TimeZone pin and Backend's as-of branding are not belt-and-braces. They are the
+only two controls** — because no test will ever catch a regression in either.
+
+That changes how both must be treated. Neither may be removed as redundant on the strength of
+the other, and neither may be justified by "the tests would catch it." Any future proposal to
+simplify one of them has to be argued on its own, against the fact that nothing downstream is
+watching.
+
+### What would actually close it
+
+Only a test in which **both halves are real**: the app's date derivation and a live database
+session, in one assertion. That is an integration test, and `api/` has no integration harness
+today (all query tests mock the client). Naming that as the gap is more honest than adding more
+tests on either side, which would raise the count and change nothing.
+
+Until such a harness exists, the honest posture is the one above: two sole controls, documented
+as such, plus `01_session_timezone.sql` — which asserts the CI stack's zone and **says in its
+own message that it cannot observe the deployment.** A narrow true claim beats a broad one that
+reads as covering production.
