@@ -82,7 +82,7 @@ Scope: bring up a fresh self-hosted Supabase stack (Postgres 17) on the new box 
 | Layer | Why not primary |
 |---|---|
 | `postgresql.conf` / container `-c timezone=UTC` | This is the layer whose default we are *already* implicitly trusting, and it is **not visible from this repo** (Coolify holds the compose per ARCH §5). Pinning at the same unversioned layer adds no repo-verifiable claim. Keep as a **belt-and-braces** setting if the compose is ours to edit, never as the guarantee. |
-| `ALTER ROLE … SET timezone` (`authenticated` / `anon` / `authenticator`) | **Outranks** the database pin, so it is the layer that could silently *break* it — four roles to keep in sync and a fragmented guarantee. Correct posture: assert it is **absent**, don't use it. |
+| `ALTER ROLE … SET timezone` | **Outranks** the database pin, so it is the layer that could silently *break* it. Pinning N roles puts the guarantee in N places and still misses role N+1. Correct posture: keep **one** declaration (the database pin) and **assert at catalog level that no role-level `TimeZone` exists at all** — a sweep that covers roles not yet created. See the role-precedence measurement below, which determines *which* role even matters. |
 | A manual runbook step only | A human step nobody verifies is the same unmeasured premise in a new costume. The runbook's job here is to state the invariant and its **verification**, not to be the pin. |
 
 **MEASURED precedence ladder** (local stack, `supabase/postgres:17.6.1.132`, 2026-08-04 — recorded because this is what makes the pin sufficient *or not*):
@@ -93,23 +93,49 @@ Scope: bring up a fresh self-hosted Supabase stack (Postgres 17) on the new box 
 | `ALTER DATABASE … SET timezone='UTC'` | `UTC` | `database` ← the pin, working |
 | Client env `TZ=Asia/Tokyo` | `UTC` | `database` (unaffected) |
 | **Client env `PGTZ=Asia/Tokyo`** | **`Asia/Tokyo`** | **`client`** ← **the pin is DEFEATED** |
+| `ALTER ROLE **authenticated** SET TimeZone='Asia/Tokyo'`, then `SET ROLE authenticated` | `UTC` — **NO-OP** | `database` (unaffected) |
+| `ALTER ROLE **authenticator** SET TimeZone='Asia/Tokyo'`, login as `authenticator` | **`Asia/Tokyo`** | **`user`** ← **the pin is DEFEATED**, and it **survives `SET ROLE authenticated`** |
 
-Two operational consequences, both load-bearing:
+**⚠ The role-level vector is real, but it is on the LOGIN role — and that is not the role people name.** Per-role settings (`ALTER ROLE … SET`) are applied **at login**, from the role actually connected as. `SET ROLE` does **not** re-apply them. PostgREST logs in as **`authenticator`** and then `SET ROLE`s to `authenticated`, so:
+
+- `ALTER ROLE **authenticated** SET TimeZone` is a **no-op** — MEASURED: `current_user` becomes `authenticated`, the setting is visibly present in `pg_db_role_setting`, and the session zone does not move.
+- `ALTER ROLE **authenticator** SET TimeZone` is the live vector — MEASURED: it applies at connect (`source = user`) and **persists across the `SET ROLE`**, so every Data API request runs in that zone.
+
+Consequence for anyone hardening this: **pinning or inspecting `authenticated` protects nothing.** The login roles are `authenticator` (Data API / web app) and `pfin_etl` (`workers/etl`, direct psycopg login). And a read-back executed as `postgres` — which is how `pg_prove` and a plain `psql` connect — observes **`postgres`'s** login-time settings, so it will read a clean `UTC | database` while every PostgREST request runs in another zone. **Inspect the catalog, or connect as the login role; do not infer from a `postgres` session.**
+
+Three operational consequences, all load-bearing:
 
 1. **⚠ NEVER set `PGTZ` in any container env, Coolify variable, or `.env`.** libpq (and therefore `psycopg` in `workers/etl`, and any libpq-backed client) sends `PGTZ` as a **startup parameter that overrides the database pin**. `TZ` alone does *not* — so the intuitive "just set `TZ=UTC` on the containers" is a **no-op** for the database session and must not be mistaken for this pin. `PGTZ` appears in no `.env.example` today; it must stay that way.
 2. **Verify by `source`, not by value.** A read-back asserting only `TimeZone = 'UTC'` passes when the pin is entirely absent (the image default already says UTC) — that assertion can be satisfied without the discipline holding. `source = 'database'` is the one that proves the *declaration* is supplying the value, and it also catches both override vectors above (`client` / `user`).
+3. **Sweep the catalog for role-level overrides.** `source` only reports the session you are *in*. The single check that covers every role — including ones created after this was written — is that **no role carries a `TimeZone` setting at all**, which is what makes the database pin authoritative rather than merely present.
 
 **Capability-verified (2026-08-04), not assumed:** `ALTER DATABASE … SET timezone` succeeds under the `postgres` role as it actually ships in the Supabase image — `rolsuper = f`, but `datdba` owner, and ownership is sufficient. The setting lands in `pg_db_role_setting` and new sessions report `source = database`. No role-level `TimeZone` override exists in the stack today (checked across all roles in `pg_db_role_setting`).
 
 **Deploy-time verification (run after §6 migrations, before §10 sign-off):**
 
 ```sh
-psql "$PROD_DB_URL" -Atc \
-  "select setting, source from pg_settings where name = 'TimeZone'"
-# REQUIRED: UTC|database
+# (1) THE PIN — run as EACH login role the app actually connects as, not as `postgres`.
+#     A `postgres` session reads `postgres`'s login-time settings and will show a clean
+#     UTC|database while every PostgREST request runs in another zone.
+for URL in "$PROD_URL_AUTHENTICATOR" "$PROD_URL_PFIN_ETL"; do
+  psql "$URL" -Atc "select current_user, setting, source from pg_settings where name='TimeZone'"
+done
+# REQUIRED, for every role: <role>|UTC|database
 #   UTC|configuration file  -> the migration did not apply here. The value is right BY ACCIDENT. Fix.
-#   *|client                -> PGTZ is set in the connecting environment. Remove it.
-#   anything else           -> STOP. Do not cut over (§9); the NAV as-of path is wrong by up to a day.
+#   *|user                  -> a role-level override on THIS LOGIN ROLE. See (2).
+#   *|client                -> PGTZ is set in that container's environment. Remove it.
+
+# (2) THE SWEEP — no role may carry a TimeZone at all, so the database pin is authoritative.
+#     Covers roles that do not exist yet; catches the `authenticator` vector that a
+#     `postgres`-session read-back structurally cannot see.
+psql "$PROD_DB_URL" -Atc \
+  "select coalesce(r.rolname,'ALL') , s.setconfig
+     from pg_db_role_setting s left join pg_roles r on r.oid = s.setrole
+    where array_to_string(s.setconfig, ',') ilike '%timezone%'"
+# REQUIRED: zero rows. Any row -> that role's sessions outrank the pin.
+
+# Any deviation -> STOP. Do not cut over (§9); the NAV as-of path is wrong by up to a day,
+# and nothing will error.
 ```
 
 ---
@@ -267,6 +293,7 @@ Scope: prove the from-scratch stand-up actually works before declaring V1 deploy
 
 - **TZ-1 — database TimeZone pin read-back (§4.1; ship-block; DevOps-owned deploy assertion):** assert `select setting, source from pg_settings where name='TimeZone'` returns exactly **`UTC` / `database`** against the production database, and against the connection *each* container actually uses (web-app and `workers/etl` — a per-container `PGTZ` would override the pin for that container alone, and only that container's reads would be wrong).
   - **`source` is the assertion, not `setting`.** `UTC | configuration file` means the pin never applied and the value is right *by accident* — that is the exact unmeasured premise §4.1 exists to remove, and it reads identical to success if you only check the value.
+  - **Run it as each LOGIN role (`authenticator`, `pfin_etl`) — never as `postgres` — and add the catalog sweep.** MEASURED (§4.1): per-role settings apply at login and `SET ROLE` does not re-apply them, so `ALTER ROLE authenticator SET TimeZone` moves every Data API request while a `postgres` session still reads `UTC | database`. A read-back that connects as `postgres` **structurally cannot see the one role-level vector that exists.** Pinning or inspecting `authenticated` protects nothing — it is not the login role.
   - **Why this is deploy-time and cannot be delegated to CI:** QA's [`supabase/tests/01_session_timezone.sql`](../supabase/tests/01_session_timezone.sql) asserts this property of the **ephemeral CI container**, and says so in its own header — it cannot observe the deployment. Two claims, two instruments; a green CI is never evidence about production here.
   - Gate this **before** §9 teardown. A failure is a silent up-to-one-day error in the §2.1.1 NAV headline and open-account count, with nothing erroring — not a degraded surface.
 
