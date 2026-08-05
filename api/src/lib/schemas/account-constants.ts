@@ -49,12 +49,41 @@ export const CLOSURE_REASONS = [
 ] as const;
 export type ClosureReason = (typeof CLOSURE_REASONS)[number];
 
-/** Placeholder copy — PM + UX own the final strings. */
+/**
+ * PM copy ruling, 2026-08-04 — no longer placeholders. Four of six kept verbatim; two changed.
+ *
+ * THE GOVERNING CONSTRAINT IS NOT READABILITY, IT IS DISTINGUISHABILITY. What the user picks is
+ * written to `pfin.account_event`, which is IMMUTABLE audit-class (ADR-011 Decision 2) with no
+ * correction path. So the failure mode is not an ugly label — it is TWO LABELS A USER CANNOT
+ * CHOOSE BETWEEN, because then the picked value is noise and the audit trail records a fact
+ * nobody asserted. Every label must let the user answer "is this the true one?" without guessing.
+ *
+ * CHANGED:
+ *  - `duplicate`: "Duplicate" -> "Duplicate of another account". Bare "Duplicate" left the object
+ *    unnamed — duplicate transaction? duplicate connection? It is also the only value in the set
+ *    that is about the RECORD rather than the real-world account, so it is the one most worth
+ *    disambiguating.
+ *  - `transferred_out`: "Transferred out" -> "Transferred to another account". "Out" names a
+ *    direction with no destination, and it was the value most confusable with "Sold" — both mean
+ *    "the assets left". Naming the destination-shape separates them at a glance: sold = converted,
+ *    transferred = moved.
+ *
+ * KEPT: "No longer used" (dormant-but-real, distinct from every other value), "Sold" (correct for
+ * both a brokerage position and a §2.4.2 manual asset like a house or vehicle), "Closed by the
+ * institution" (names the actor, which is the whole distinction from "No longer used"), "Other".
+ *
+ * PM FLAG, out of scope here and NOT fixed by relabelling: "Other" writes a value that records
+ * nothing, into the one table that cannot be corrected. There is no free-text companion field. A
+ * reason-note is a schema + form change, not copy — routed to team-lead as a BACKLOG §7 candidate.
+ *
+ * The VALUES above remain Backend-sourced and track `057`'s CHECK; nothing here may reorder or
+ * rename them.
+ */
 export const CLOSURE_REASON_LABELS: Record<ClosureReason, string> = {
 	no_longer_used: 'No longer used',
 	sold: 'Sold',
-	transferred_out: 'Transferred out',
-	duplicate: 'Duplicate',
+	transferred_out: 'Transferred to another account',
+	duplicate: 'Duplicate of another account',
 	institution_closed: 'Closed by the institution',
 	other: 'Other'
 };

@@ -26,7 +26,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 	if (!user) throw redirect(303, '/login');
 
 	const asOf = todayIso();
-	const { netWorth, hasAccounts } = await loadNetWorthView(locals.supabase, asOf);
+	// accountPresence is THREE-VALUED ('some' | 'none' | 'unknown') — 'unknown' means the count
+	// read FAILED and is emphatically not 'none'. Passed through verbatim, never collapsed to a
+	// boolean here: collapsing is what this change exists to undo, and doing it at the loader
+	// would just move the lie one file closer to the render.
+	const { netWorth, accountPresence } = await loadNetWorthView(locals.supabase, asOf);
 
 	// D1 non-silent staleness marker (SELF-208 §2.4.4.c). FAIL-SOFT is load-bearing: a
 	// staleness-read failure must NEVER break or block the NAV number — degrade to an empty
@@ -55,5 +59,5 @@ export const load: PageServerLoad = async ({ locals }) => {
 		composition = null;
 	}
 
-	return { netWorth, hasAccounts, asOf, staleness, composition };
+	return { netWorth, accountPresence, asOf, staleness, composition };
 };
