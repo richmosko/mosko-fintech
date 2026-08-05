@@ -69,6 +69,49 @@ Scope: bring up a fresh self-hosted Supabase stack (Postgres 17) on the new box 
 
 > **STUB —** Fill in: self-hosted Supabase bring-up procedure (Coolify one-click vs. compose), which Supabase services are in scope for V1 (db / auth / storage / realtime / studio — cross-check against `supabase/config.toml` enabled sections), the from-scratch DB init, and how `config.toml` settings map onto the self-hosted stack. **Note:** `supabase/config.toml` is owned elsewhere — this runbook *consumes* it, does not edit it.
 
+### 4.1 Database TimeZone — pinned to UTC · NOT a stub · financial-correctness dependency
+
+**The invariant: the production database's session `TimeZone` is `UTC`, by declaration, and that declaration is read back — never inferred from an image default.**
+
+**Why this is a correctness dependency and not a preference.** The app derives every as-of date in the **Node** process as `new Date().toISOString().slice(0,10)` — unconditionally UTC. Postgres evaluates `closed_at::date` in the **database session's** `TimeZone`. Two clocks in two processes; they agree **if and only if** the session zone is UTC. Under a session zone east of UTC, a just-closed account stays in the §2.1.1 NAV headline and the open-account count until the zones re-converge (Sec's construction: `Asia/Tokyo`, close at 08:00 local Mar 2 → instant `2026-03-01 23:00Z` → Node says Mar 1, `closed_at::date` says Mar 2 → the predicate `closed_at::date > p_as_of` is TRUE for ~9 hours). West of UTC fails *safe*, which is worse: the defect becomes hemisphere-dependent and invisible to a single deployment. Migration [`060`](../supabase/migrations/060_closed_at_comment_corrections.sql) records the full analysis on the `closed_at` column comment and names this pin as its declared dependency; [ADR-043](../DECISIONS.md#adr-043)'s accepted cost rests on it.
+
+**Chosen layer: a migration (`ALTER DATABASE … SET timezone = 'UTC'`), Architect-authored.** Rationale — it is the only instrument that reaches **local, CI, and production through one artifact**, is repo-versioned, re-applies on every `supabase db reset`, and outranks the container's `postgresql.conf`. Because CI applies the *same* migration production runs, a green CI is evidence about production's **mechanism** (not merely about CI's own ambient state).
+
+**Why the other layers are wrong as the primary:**
+
+| Layer | Why not primary |
+|---|---|
+| `postgresql.conf` / container `-c timezone=UTC` | This is the layer whose default we are *already* implicitly trusting, and it is **not visible from this repo** (Coolify holds the compose per ARCH §5). Pinning at the same unversioned layer adds no repo-verifiable claim. Keep as a **belt-and-braces** setting if the compose is ours to edit, never as the guarantee. |
+| `ALTER ROLE … SET timezone` (`authenticated` / `anon` / `authenticator`) | **Outranks** the database pin, so it is the layer that could silently *break* it — four roles to keep in sync and a fragmented guarantee. Correct posture: assert it is **absent**, don't use it. |
+| A manual runbook step only | A human step nobody verifies is the same unmeasured premise in a new costume. The runbook's job here is to state the invariant and its **verification**, not to be the pin. |
+
+**MEASURED precedence ladder** (local stack, `supabase/postgres:17.6.1.132`, 2026-08-04 — recorded because this is what makes the pin sufficient *or not*):
+
+| Condition | Effective zone | `pg_settings.source` |
+|---|---|---|
+| As shipped, no pin | `UTC` | `configuration file` ← **the unmeasured premise** |
+| `ALTER DATABASE … SET timezone='UTC'` | `UTC` | `database` ← the pin, working |
+| Client env `TZ=Asia/Tokyo` | `UTC` | `database` (unaffected) |
+| **Client env `PGTZ=Asia/Tokyo`** | **`Asia/Tokyo`** | **`client`** ← **the pin is DEFEATED** |
+
+Two operational consequences, both load-bearing:
+
+1. **⚠ NEVER set `PGTZ` in any container env, Coolify variable, or `.env`.** libpq (and therefore `psycopg` in `workers/etl`, and any libpq-backed client) sends `PGTZ` as a **startup parameter that overrides the database pin**. `TZ` alone does *not* — so the intuitive "just set `TZ=UTC` on the containers" is a **no-op** for the database session and must not be mistaken for this pin. `PGTZ` appears in no `.env.example` today; it must stay that way.
+2. **Verify by `source`, not by value.** A read-back asserting only `TimeZone = 'UTC'` passes when the pin is entirely absent (the image default already says UTC) — that assertion can be satisfied without the discipline holding. `source = 'database'` is the one that proves the *declaration* is supplying the value, and it also catches both override vectors above (`client` / `user`).
+
+**Capability-verified (2026-08-04), not assumed:** `ALTER DATABASE … SET timezone` succeeds under the `postgres` role as it actually ships in the Supabase image — `rolsuper = f`, but `datdba` owner, and ownership is sufficient. The setting lands in `pg_db_role_setting` and new sessions report `source = database`. No role-level `TimeZone` override exists in the stack today (checked across all roles in `pg_db_role_setting`).
+
+**Deploy-time verification (run after §6 migrations, before §10 sign-off):**
+
+```sh
+psql "$PROD_DB_URL" -Atc \
+  "select setting, source from pg_settings where name = 'TimeZone'"
+# REQUIRED: UTC|database
+#   UTC|configuration file  -> the migration did not apply here. The value is right BY ACCIDENT. Fix.
+#   *|client                -> PGTZ is set in the connecting environment. Remove it.
+#   anything else           -> STOP. Do not cut over (§9); the NAV as-of path is wrong by up to a day.
+```
+
 ---
 
 ## 5. Secrets provisioning · 🔒 SECURITY-SENSITIVE (Sec joint-review gates this section)
@@ -222,6 +265,11 @@ Scope: prove the from-scratch stand-up actually works before declaring V1 deploy
   - **CA-4 same-project check:** the positive control passing IS the same-project-internal-DNS assertion — if `http://provider-sync:8081` does not resolve from the api/ container, api/ and provider-sync are not co-located in one project (fix before proceeding; do NOT "fix" by assigning a public Domain).
   - Wire this as a go/no-go gate item alongside the §9 teardown gate. QA owns the cross-tenant/RLS assertions; DevOps owns this infra-reachability assertion.
 
+- **TZ-1 — database TimeZone pin read-back (§4.1; ship-block; DevOps-owned deploy assertion):** assert `select setting, source from pg_settings where name='TimeZone'` returns exactly **`UTC` / `database`** against the production database, and against the connection *each* container actually uses (web-app and `workers/etl` — a per-container `PGTZ` would override the pin for that container alone, and only that container's reads would be wrong).
+  - **`source` is the assertion, not `setting`.** `UTC | configuration file` means the pin never applied and the value is right *by accident* — that is the exact unmeasured premise §4.1 exists to remove, and it reads identical to success if you only check the value.
+  - **Why this is deploy-time and cannot be delegated to CI:** QA's [`supabase/tests/01_session_timezone.sql`](../supabase/tests/01_session_timezone.sql) asserts this property of the **ephemeral CI container**, and says so in its own header — it cannot observe the deployment. Two claims, two instruments; a green CI is never evidence about production here.
+  - Gate this **before** §9 teardown. A failure is a silent up-to-one-day error in the §2.1.1 NAV headline and open-account count, with nothing erroring — not a degraded surface.
+
 > **STUB —** Fill in: the end-to-end smoke checklist (web-app reachable over TLS; auth login; a seeded user sees only their own rows — RLS isolation; a migration-backed query returns; PDF render round-trips via the signed-JWT path; ETL container runs one poll; Discord notification fires). This gates §9 teardown — define the explicit pass/fail go/no-go criteria here. QA owns the RLS/isolation assertions; DevOps owns the infra-reachability assertions.
 
 ---
@@ -258,6 +306,7 @@ Net effect: **deleting a user who has grouped legs FAILS** (the `journal` cascad
 | 7 | BLS key: code requires `BLS_API_KEY` vs. ARCH §5 "free/open" — reconcile | Architect / Sec | §5 |
 | 8 | Cutover timing + teardown go/no-go (**one-way door**) | F/CTO | §9 |
 | 9 | ✅ Cross-ref greenfield-deployment ADR-021 (resolved) | DevOps | Overview |
+| 11 | DB TimeZone pin — runbook §4.1 + §10 TZ-1 landed; **the pin itself needs an Architect-authored migration** (`ALTER DATABASE … SET timezone='UTC'`). Until it lands, production's UTC is an image default, not a declaration | Architect (authors) / DevOps (verifies) | §4.1 / §10 |
 | 10 | ✅ `ALTER ROLE … PASSWORD` plaintext handling — **resolved**: measured `log_statement = ddl` (exposure real, not theoretical); single-statement form prohibited, replaced by the `\password` + `ALTER ROLE … LOGIN` two-step (§6.1). Sec-ruled | DevOps + Sec | §6.1 |
 
 > **STUB —** This runbook is a skeleton. Each `> **STUB —**` marker above is a fill-in point as Phase 6 reveals the operational detail. Do not treat any section as complete until its STUB marker is removed and (for §5 + fence-touching content) Sec joint-review has signed off.
