@@ -44,6 +44,14 @@ import { describe, it, expect, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { loadNetWorthView } from './netWorth';
 
+// TYPED EXPECTATIONS, and this is not decoration — it closes a real asymmetry.
+// `toEqual` takes `unknown`, so a shape assertion against a CHANGED return type fails only at
+// RUNTIME: `npm run check` stays green and only `npm test` catches it. That is the same
+// "a green check is not a green suite" gap this slice kept finding one layer down. Binding the
+// expected object to the function's own return type makes a renamed or removed field a
+// TYPECHECK failure as well — two independent detectors instead of one.
+type View = Awaited<ReturnType<typeof loadNetWorthView>>;
+
 const AS_OF = '2026-07-20';
 
 /** One account row, reduced to the only column this predicate reads. */
@@ -140,13 +148,18 @@ describe('loadNetWorthView — the ADR-042 as-of boundary (behavioural, not stri
 	it('the count and the NAV describe ONE population — the empty-state disambiguator', async () => {
 		// The user-visible defect, reduced: a tenant whose ONLY account was closed this
 		// afternoon. The NAV excludes it (SQL `::date`), so net worth is 0 — and if the count
-		// includes it, `hasAccounts` is true and the UI renders a real $0 instead of the empty
+		// INCLUDES it, presence reads 'some' and the UI renders a real $0 instead of the empty
 		// state. Asserting the two AGREE is the invariant; asserting either alone is not.
+		// ⚑ 'none' HERE IS A MEASURED ZERO, NOT AN ABSENCE OF INFORMATION. The mock's count read
+		//   SUCCEEDS and returns 0, so the third state ('unknown', a FAILED read) is not in play —
+		//   which matters, because this assertion is precisely about the population the count
+		//   measured. A boundary claim over an unmeasured population would be meaningless.
 		const only = [ROWS[1]];
 		const { client } = makeSupabase(only, 0);
 		const view = await loadNetWorthView(client, AS_OF);
 
-		expect(view).toEqual({ netWorth: 0, hasAccounts: false });
+		const expected: View = { netWorth: 0, accountPresence: 'none' };
+		expect(view).toEqual(expected);
 	});
 
 	it('is NON-VACUOUS: the same fixture one day earlier DOES count the account', async () => {
@@ -157,6 +170,7 @@ describe('loadNetWorthView — the ADR-042 as-of boundary (behavioural, not stri
 		const { client } = makeSupabase(only, 5555);
 		const view = await loadNetWorthView(client, '2026-07-19');
 
-		expect(view).toEqual({ netWorth: 5555, hasAccounts: true });
+		const expected: View = { netWorth: 5555, accountPresence: 'some' };
+		expect(view).toEqual(expected);
 	});
 });
