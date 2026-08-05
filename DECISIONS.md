@@ -41,6 +41,37 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-043 — Closure dates render in UTC, not the viewer's zone (terse pattern)
+
+**Date:** 2026-08-04
+**Status:** Accepted
+**Phase:** Phase 6 Build Loop (records a `closedAtLabel` choice already shipped in PR #319; no code change).
+**Approved by:** F/CTO (2026-08-04 — ratified as written, via team-lead. Gated at `pm-copy`'s insistence rather than recorded directly: the ruling accepts a V1 cost, and *an accepted cost that never passed a gate is indistinguishable later from one nobody noticed*.)
+
+**Decision.** Closure dates render in **UTC**, **unlabelled**, on all three surfaces that show one — the accounts hub `Closed (N)` group, account detail's Account status section, and `accounts/connections/[source_id]`. `closedAtLabel` (`api/src/lib/account-display.ts`) pins `timeZone: 'UTC'`. No surface renders a closure date in the viewer's local zone, and none appends a `(UTC)` marker. This **closes the standing flag** in `account-display.ts`: *"Whether a user-facing surface should show UTC at all is a UX/Visual decision — flagged, not settled here."*
+
+**Why.** Three reasons, in order of weight:
+
+1. **Local rendering would front-run a question [ADR-042](#adr-042)'s `059` explicitly assigns elsewhere.** `closed_at::date` is evaluated **in the session TimeZone**. What makes that safe today is that `p_as_of` is **server-derived**, so both sides sit on one clock. `059`'s `closed_at` column comment assigns the zone question to *"whoever makes `p_as_of` user-supplied"* — a display change must not pre-empt it.
+2. **The three surfaces agreeing IS the property protecting them.** A partial change disagrees with the close gate on one screen; a coordinated switch to local disagrees on **all three at once, silently**. Per `account-display.ts`: a closure stamped 18:00 Pacific *"is 4 August here and 5 August in the ledger if this one surface alone renders locally, so the account would appear closed the day BEFORE the entries the gate checked. Small, plausible, and un-diagnosable from the screen."*
+3. **The rendered date is the date the system reasoned with** — see the accepted cost, which turns on this.
+
+**Accepted cost, stated rather than discovered.** For a closure near local midnight the rendered date can be **one day later than the viewer's wall-clock day** — an 18:00 Pacific close renders 5 Aug. **This is not a "wrong date," and the imprecise form was corrected before ratify precisely because it would have been ratifying something false.** It is the UTC date of the closure **instant** — exactly the date [ADR-042](#adr-042) Decision 3's gate evaluated its three legs against, and the date every as-of reader uses. The render is *correct with respect to the ledger* and *potentially surprising with respect to the viewer's wall clock*; only the second is true. That is what makes the cost acceptable rather than merely cheap: the surprise is bounded, visible, and **consistent with the system's own reasoning**, where a local render would be **silently inconsistent** with it.
+
+**Alternatives considered:**
+- **Render in the viewer's local zone** — rejected, reasons 1 + 2. Independently a hydration mismatch: an unpinned `toLocale*` renders in the server zone, then re-renders in the browser's.
+- **Keep UTC and label it `(UTC)`** — rejected for V1. Puts an implementation detail on three surfaces of a personal-finance app, permanently, for an ambiguity that bites only on closures near local midnight. Reconsider if the expiry condition fires.
+
+**Standing constraint this creates.** Any future change here is **all-three-surfaces or none**. A per-surface "fix" re-opens exactly the off-by-one-day `059` measures. **Do not fix one screen** — the intuition that a single surface looks wrong is the trap, and it has now been reached from two directions (a proposed three-surface "sweep" to local, and this ruling's own reasoning).
+
+**Expiry condition — the named trigger that re-opens this.** The **first caller that supplies `p_as_of` from a user's calendar rather than the server's.** At that point the session-zone agreement stops holding by accident, the tenant zone must be stored or threaded explicitly, and this ruling is re-decided **with** that work rather than before it. Per `059`: *"Whoever makes `p_as_of` user-supplied owns resolving the zone explicitly (store or thread the tenant's zone; do not let the session default decide)."*
+
+**Related, not superseded.** The deferred **capability** — per-user timezone for date rendering, blocked on the same tenant-zone question — is filed separately in `BACKLOG.md` §5 (PM-owned). Two artifacts, two jobs: this ADR answers *"why is this UTC?"*; the backlog entry answers *"when do we get local dates?"* Both exist because the flag has been raised twice, and the third person to raise it should find an **answer and a home** rather than re-deriving both.
+
+**Adjacent defect this surfaced, fixed separately.** The open-state close help said closing *"marks it finished **as of today**"* — a day-claim the render can falsify within seconds of the close, the flow contradicting itself across the transition. Replaced with *"from its closing date onward"*, which is true of **whatever date `closedAtLabel` prints**, so copy and render **structurally cannot disagree** — and it survives a future change to the rendering, including one this ADR's own expiry condition triggers. Recorded because the contradiction was produced by **two decisions each correct in isolation**, which is a class worth being able to find again.
+
+---
+
 ## ADR-042 — Account closure is a bookkeeping event: the dated `closed_at` model, the standing zero-value invariant, and the retirement of `pfin.account.is_active`
 
 **Date:** 2026-08-03 · **Status:** Accepted — F/CTO ratified 2026-08-03 (three-concept model; `is_active` dropped entirely — generated-column and keep-both-with-CHECK alternatives rejected; pre-existing-row disposition = fail-loud) · **Phase:** 6 Build Loop · **Migrations:** `056` / `057` / `058` / `059` — **four slices; see Build sequence.** *(This header read `056`/`057`/`058` at merge. Sec's two-phase adjudication split the last slice AFTER the ADR landed; corrected 2026-08-03.)*
