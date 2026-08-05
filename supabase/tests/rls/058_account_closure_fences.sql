@@ -744,8 +744,16 @@ select skip('BLOCK S: the transitional sync trigger, the biconditional and Sec c
 -- BLOCK P — TWO-PHASE POSTURE
 -- =====================================================================
 -- (P1) THE ASSERTION THAT CATCHES `058` BEING BUILT FROM THE SUPERSEDED SINGLE-FILE DESIGN.
+--   Window-scoped: it asserts the column is STILL PRESENT, which is `058`'s whole two-phase
+--   claim and is false by design at `059`. The post-`059` half — that it is GONE — is asserted
+--   in `059`'s own battery at (R1), so the property is continuously covered across the seam by
+--   two files, each asserting it where it is true.
+\if :in_window
 select has_column('pfin', 'account', 'is_active',
   '(P1) TWO-PHASE: `058` leaves is_active IN PLACE — it does NOT drop it. The drop belongs to `059`, AFTER the operator has dispositioned each account through the real control. RED if `058` is built from the withdrawn single-file/declared-set design, which dropped the column in the same file');
+\else
+select skip('(P1) two-phase: `058` leaves is_active in place — window-scoped, and the post-059 half is 059 (R1)', 1);
+\endif
 select col_type_is('pfin', 'account', 'closed_at', 'timestamp with time zone',
   '(P2) closed_at is timestamptz — a DATED closure, which is what makes "closed in June still counts in a May NAV" expressible at all');
 select is(
@@ -764,6 +772,7 @@ select is(
 --   (a CHECK is not RLS) with no ordering concerns.
 --   Driven PRIVILEGED deliberately — that proves the "all roles" property. An authenticated
 --   probe would meet the RLS WITH CHECK first and would prove only that RLS works.
+\if :in_window
 select throws_like(
   format($$ insert into pfin.account (users_id, name, account_type, scope, tax_treatment, is_active, closed_at)
               values (%L, 'insert-path-violator', 'depository', 'household', 'taxable', false, null) $$, :'ta'),
@@ -779,6 +788,9 @@ select throws_like(
 --   would succeed over a table full of violators.
 select col_not_null('pfin', 'account', 'is_active',
   '(P5) NULL TRIPWIRE: pfin.account.is_active is still NOT NULL (inherited from `003:104`, not restated by `058`). A CHECK passes on NULL, so a nullable is_active makes the biconditional silently pass EVERYTHING and `059`''s VALIDATE succeed over a table of violators. RED here means the fence was disarmed by a change somewhere else entirely — the only way this defect can arrive');
+\else
+select skip('(P4)/(P5) the biconditional CHECK and the is_active NOT NULL tripwire — both objects are dropped at 059, so the INSERT-path hole and the nullable-column hazard no longer exist to fence', 2);
+\endif
 
 -- =====================================================================
 -- BLOCK W — THE account_event WRITER (`e88b76c`, ADR-042 Amendment 1)
@@ -795,7 +807,7 @@ select set_config('role', 'postgres', true);
 select set_config('request.jwt.claims', '', true);
 savepoint sp_w1;
 select throws_like(
-  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz, is_active = false where account_id = %s $$, :wopen),
+  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = %s $$, :wopen),
   '%no acting identity%auth.uid() is null and no pfin.actor is set%',
   '(W1) NO ACTING IDENTITY: a writer with null auth.uid() and no pfin.actor RAISES rather than defaulting. Absence must not BECOME a value on an append-only record — "we did not record who" and "the system did it" must stay distinguishable'
 );
@@ -806,7 +818,7 @@ savepoint sp_w2;
 select set_config('pfin.reason_code', '', true);
 select _rls.set_tenant(:'ta'::uuid);
 select throws_like(
-  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz, is_active = false where account_id = %s $$, :wopen),
+  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = %s $$, :wopen),
   '%no pfin.reason_code set%set local pfin.reason_code%',
   '(W2) NO REASON: a session closure without pfin.reason_code RAISES, and the message NAMES THE REMEDY. Asserted on the remedy text deliberately — a mandatory field whose error does not say how to supply it produces a correct refusal that reads as a broken feature'
 );
@@ -822,7 +834,7 @@ select set_config('pfin.reason_code', 'no_longer_used', true);
 select _rls.set_tenant(:'ta'::uuid);
 select set_config('pfin.actor', 'system:remediation', true);   -- the forgery attempt
 select lives_ok(
-  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz, is_active = false where account_id = %s $$, :wopen),
+  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = %s $$, :wopen),
   '(W3a) a session that ALSO sets pfin.actor closes successfully — the forgery does not error, which is what makes (W3b) the assertion that matters'
 );
 select set_config('role', 'postgres', true);

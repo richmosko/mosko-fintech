@@ -73,6 +73,20 @@
 --   intact). Authoritative gate is CI pg_prove directory-mode after Backend's clean-apply. plan(23).
 -- =====================================================================
 
+--
+-- ┌─ ⟦EXPECTED STACK⟧ — THIS FILE NOW REQUIRES `059` ────────────────────────────────┐
+-- │ Added 2026-08-04 with the pre-closure detector. **A RESULT HERE IS               │
+-- │ UNINTERPRETABLE WITHOUT THE MIGRATION SET IT RAN AGAINST** — report the applied  │
+-- │ set alongside it: `select max(version) from supabase_migrations.schema_migrations;` │
+-- │                                                                                   │
+-- │ EXPECTED STACK: `059`-applied. The detector asserts the AS-OF open/closed         │
+-- │ predicate (`closed_at is null or closed_at::date > p_as_of`). At `058` the filter │
+-- │ is still the CURRENT-STATE boolean, so (A9)-(A12) are correctly RED there.                    │
+-- │ Verified in both directions rather than assumed: green at 057+058+059, red at     │
+-- │ 057+058. A file that passes on both sides of the migration it is about is not     │
+-- │ discriminating — that is the CORRESPONDENCE property, measured.                    │
+-- └───────────────────────────────────────────────────────────────────────────────────┘
+
 begin;
 
 -- shared cross-tenant verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
