@@ -154,11 +154,17 @@ describe('loadNetWorthView', () => {
 	// a DELIBERATE PRIOR DECISION, not an oversight. Fail-soft was chosen because a headline read
 	// that throws breaks the whole dashboard, and degrading beat exploding.
 	//
-	// F/CTO superseded it, and the reason generalises past this file: FAIL-SOFT IS SAFE ONLY WHEN
-	// THE DEGRADED VALUE IS INERT. `hasAccounts: false` is not inert — it drives a screen that
-	// tells the user they own nothing. Degrading to a CLAIM is not degrading gracefully; it trades
-	// a visible failure for a confident falsehood, which is strictly worse on a surface whose
-	// whole job is to be believed.
+	// F/CTO superseded it, and the principle generalises well past this file — stated in the form
+	// that says WHEN the distinction matters rather than asserting it always does:
+	//
+	//   >> FAIL-SOFT IS FINE WHEN THE DEGRADED VALUE IS INERT. `hasAccounts: false` is not
+	//      inert — it drives a screen that tells the user they own nothing. Fail-soft to a
+	//      FALSE-AND-ACTIONABLE state is worse than fail-soft to a neutral one, because the
+	//      neutral one DEGRADES and the actionable one LIES. <<
+	//
+	// It trades a visible failure for a confident falsehood, on a surface whose whole job is to
+	// be believed. Contrast /accounts, which degrades to `accounts: []` — a container that happens
+	// to be empty, asserting nothing, and therefore safe in the same position.
 	//
 	// The expectation is not flipped, it is REPLACED: the third state did not exist before, so
 	// there is no old assertion that could have been "corrected" into this one.

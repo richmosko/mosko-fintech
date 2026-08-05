@@ -56,6 +56,20 @@ export type NetWorthView = {
 	 *   `false` here is not inert — it drives a screen that TELLS THE USER THEY OWN NOTHING.
 	 *   Degrading to a claim is not degrading gracefully.
 	 *
+	 * ⚠ THIS DELIBERATELY DIVERGES FROM `/accounts`, WHICH RETURNS `{ accounts: [], error: true }`.
+	 *   Stated here rather than left to be discovered, because a future reader will otherwise
+	 *   either "harmonise" them back or wonder which is house style. The two are NOT the same
+	 *   situation, and the difference is what the payload MEANS on the error path:
+	 *     `/accounts` degrades to an EMPTY ARRAY — a container that happens to be empty. It is
+	 *       INERT: the page checks `error` first and never reads it. Nothing is asserted.
+	 *     this surface degraded to `false` — which is a CLAIM, and the specific wrong one. The
+	 *       boolean form has a falsy value for "unknown" to collapse into, and THAT COLLAPSE IS
+	 *       THE DEFECT.
+	 *   So the precedent's shape is safe because its payload is inert, not because the shape is
+	 *   inherently safe; copying the silhouette here would inherit the look and not the safety.
+	 *   (fe-adr042's framing.) Whether `/accounts` should eventually move to a union too is a
+	 *   real question and deliberately NOT decided here — it has no defect to justify the churn.
+	 *
 	 * ⚠ AND IT IS A STRING UNION, NOT `boolean | null`, BY CONSTRUCTION. Under `boolean | null`
 	 *   every existing `!hasAccounts` call site keeps compiling and keeps being wrong, because
 	 *   `!null` is `true` — the unknown state collapses into exactly the branch it must not take.
@@ -184,6 +198,24 @@ export async function loadNetWorthView(
 		: (count ?? 0) > 0
 			? 'some'
 			: 'none';
+
+	// ⚠ 'none' WITH A NON-ZERO NAV SHOULD BE IMPOSSIBLE, and nothing else would ever report it.
+	// fn_compute_nav(asOf, true) and this count describe the SAME population at the SAME date, so
+	// a non-empty position implies a non-empty count. The combination becomes reachable only if an
+	// account closes BETWEEN the two reads — or if the two predicates drift apart, which is the
+	// failure the asOf-and-granularity synchronization above exists to prevent and the ONLY
+	// symptom it would ever produce. The UI cannot surface it (it renders the number either way,
+	// correctly), so without this line the drift is invisible everywhere. (fe-adr042's catch.)
+	// Logged WITHOUT the amount: netWorth is a real account balance and operator logs are not a
+	// scoped destination for financial values (Sec #318 F8). The FACT is the diagnostic here; the
+	// figure adds nothing an operator could act on differently.
+	if (accountPresence === 'none' && netWorth !== null && netWorth !== 0) {
+		console.error(
+			'[netWorth] INVARIANT: non-zero NAV with a zero open-account count — the two reads ' +
+				'disagree about one population. Check that the count predicate still matches ' +
+				'fn_compute_nav (same asOf, same ::date granularity).'
+		);
+	}
 
 	return { netWorth, accountPresence };
 }
