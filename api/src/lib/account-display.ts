@@ -49,8 +49,22 @@ export function taxTreatmentLabel(v: string): string {
  *     locally, so the account would appear closed the day BEFORE the entries the gate checked.
  *     Small, plausible, and un-diagnosable from the screen.
  *
- * Whether a user-facing surface should show UTC at all is a UX/Visual decision — flagged, not
- * settled here; the same standing flag `formatTimestamp` already carries.
+ * ⚠ SETTLED AT ADR-043 — this no longer carries an open flag. Whether a user-facing surface should
+ * show UTC at all was a UX/Visual question; it is ruled: **UTC, unlabelled, for V1**, on all three
+ * closure surfaces (accounts hub · account detail · connections detail).
+ *
+ * **ANY CHANGE HERE IS ALL-THREE-SURFACES OR NONE.** A per-surface "fix" re-opens the
+ * off-by-one-day that `059` measures. The trap is that ONE screen looks wrong in isolation — a
+ * sweep of these three to local rendering was already proposed and stopped once — so the intuition
+ * that prompts the change is exactly the one that must not be acted on per-surface. **The three
+ * agreeing is the property; it is not the same defect copied three times.**
+ * Re-opens when the first caller supplies `p_as_of` from a user's calendar rather than the server's.
+ *
+ * `formatTimestamp` in transaction-util.ts carries a similarly-worded flag and **ADR-043 does NOT
+ * settle it** — deliberately, not by omission. It is a different question: its single consumer is
+ * SyncHistoryTable rendering provider-sync event times, which no gate compares against and which
+ * no second surface has to agree with. The reasoning above is entirely about closure dates footing
+ * to the ledger and to `058`'s legs, and none of it transfers. Left open on purpose.
  *
  * `null` → `''`: callers branch on open/closed and never render this for an open account.
  */
