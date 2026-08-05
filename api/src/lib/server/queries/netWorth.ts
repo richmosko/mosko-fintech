@@ -53,6 +53,20 @@ export type NetWorthView = {
 };
 
 /**
+ * The day AFTER an ISO date, as an ISO date — the upper half of the half-open closure bound.
+ *
+ * Exists because PostgREST cannot express `closed_at::date > p_as_of` and the equivalent it CAN
+ * express is `closed_at >= (p_as_of + 1 day)`. UTC arithmetic, so month / year / leap boundaries
+ * come from Date rather than from string surgery: '2026-02-28' -> '2026-03-01',
+ * '2028-02-28' -> '2028-02-29', '2026-12-31' -> '2027-01-01'.
+ */
+function nextDayIso(iso: string): string {
+	const d = new Date(`${iso}T00:00:00Z`);
+	d.setUTCDate(d.getUTCDate() + 1);
+	return d.toISOString().slice(0, 10);
+}
+
+/**
  * Load the §2.1.1 headline view for the caller, RLS-scoped via the per-request anon client.
  * Two independent reads (both fail soft, logged): the NAV compute + an open-account count, BOTH
  * scoped to the same `asOf`. `asOf` is an ISO date string (YYYY-MM-DD) — the LOCF valuation date
@@ -89,26 +103,36 @@ export async function loadNetWorthView(
 	// ── open-account presence (empty-state disambiguator) ─────────────────────────
 	// head:true + count:'exact' → no rows shipped, just the RLS-scoped count.
 	//
-	// THE PREDICATE MIRRORS fn_compute_nav's, DELIBERATELY LITERALLY (059 / ADR-042):
-	//   SQL:       (acc.closed_at is null or acc.closed_at > p_as_of)
-	//   PostgREST: closed_at.is.null,closed_at.gt.<asOf>
-	// It is written AS-OF and not as the shorter `.is('closed_at', null)`, and THAT CHOICE IS THE
-	// WHOLE POINT OF THIS COMMENT. The two forms are behaviourally IDENTICAL at asOf = today —
-	// 058's gate refuses a future closed_at, so no row can satisfy `closed_at > today` — which
-	// means a current-state re-point here would be indistinguishable from a correct one under
-	// every test we can write today, and would diverge silently the first time a caller passes a
-	// past date. 059 has just made that legal (the ADR-039 N3 fence is struck — see the header),
-	// so "the sole caller passes today" is no longer a property anyone may build on.
-	// 059's own fn_compute_nav comment names this same trap as its dependency (4), "the one with
-	// no footprint". This is that dependency, one layer up.
+	// THE PREDICATE MIRRORS fn_compute_nav's, WHICH IS DATE-GRANULAR (059 / ADR-042):
+	//   SQL:       (acc.closed_at is null or acc.closed_at::date > p_as_of)
+	//   PostgREST: closed_at.is.null,closed_at.gte.<asOf + 1 day>
 	//
-	// asOf is the SAME value passed to fn_compute_nav above. Do not re-derive it from a clock
-	// here: two reads that must describe one population must not read two different dates.
+	// ⚠ THE `::date` CAST IS THE WHOLE PREDICATE, AND PostgREST CANNOT EXPRESS A CAST — which is
+	//   why this is a half-open bound on the NEXT DAY rather than the obvious `.gt.<asOf>`.
+	//   `closed_at` is timestamptz and `asOf` is a date, so `.gt.<asOf>` promotes to MIDNIGHT and
+	//   an account closed at 14:00 on asOf counts as still OPEN. 059 measures that exact table:
+	//     closure at 00:00 → excluded either way; at 14:00 or 23:59 → `::date >` EXCLUDES,
+	//     bare `>` INCLUDES.
+	//   And it is the UNIVERSAL case, not an edge: fn_close_account defaults p_closed_at to
+	//   now(), so EVERY app-closed account carries a non-midnight time.
+	//
+	//   `closed_at >= (asOf + 1 day)` is the rewrite 059 explicitly rules "behaviourally
+	//   EQUIVALENT and therefore safe" — its ⚠ DO NOT OPTIMIZE THE CAST AWAY warns against the
+	//   TEMPTING NEARBY form (simply dropping the cast), which is the regression above. This is
+	//   the safe one, and it is the only one PostgREST can say.
+	//   Timezone is not a hazard here: `closed_at::date` resolves in the session TimeZone and the
+	//   bound literal is parsed in the SAME session, so the equivalence holds under any zone —
+	//   what would break it is the two sides resolving in different sessions, which they cannot.
+	//
+	// THIS COUNT IS A VALUATION SURFACE, not a render one (api/CLAUDE.md): it is paired with a NAV
+	// read, so it takes the as-of form at the SAME asOf the NAV used. Do not re-derive that date
+	// from a clock here — two reads that must describe one population must not read two different
+	// dates, and post-059 they must also not read two different GRANULARITIES.
 	const { count, error: countErr } = await supabase
 		.schema('pfin')
 		.from('account')
 		.select('account_id', { count: 'exact', head: true })
-		.or(`closed_at.is.null,closed_at.gt.${asOf}`);
+		.or(`closed_at.is.null,closed_at.gte.${nextDayIso(asOf)}`);
 	if (countErr) {
 		console.error('[netWorth] active-account count failed:', countErr.message);
 	}

@@ -1,7 +1,7 @@
 // syncProviderData.g2.integration.test.ts — QA G2: land-path + guard-#3 upsert idempotency,
 // LIVE-DB (slice 3b). Design ref: temp/provider-sync-scheduler-design.md §2 (map-straight-in
 // landing) + §8 (idempotency contract). Consumes the SHIPPED mapper.ts syncProviderData end-
-// to-end against migrations 001–021 — QA authors the test only; the landing functions +
+// to-end against ALL migrations applied — QA authors the test only; the landing functions +
 // resolution.ts are Backend/Architect-owned and NOT re-implemented here.
 //
 // ── THE PROPERTY UNDER TEST (load-bearing) ──────────────────────────────────────────────

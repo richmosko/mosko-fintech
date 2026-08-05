@@ -60,27 +60,51 @@ describe('loadNetWorthView', () => {
 	});
 
 	// THE PREDICATE, PINNED — the assertion whose absence let this file survive a dropped column.
-	it('the account count uses the AS-OF closure predicate, at the SAME asOf as the NAV', async () => {
+	//
+	// ⚠ AND THE FIRST VERSION OF THIS ASSERTION WAS ITSELF THE DEFECT IT WAS ADDED TO CATCH.
+	//   It pinned the literal string `closed_at.gt.${AS_OF}` — the BARE form, which 059 measures
+	//   and rejects: `closed_at` is timestamptz, so `.gt.<date>` promotes to midnight and an
+	//   account closed at 14:00 on asOf still counts as open. The assertion passed because it
+	//   asserted THE CALL WE MADE rather than THE BEHAVIOUR WE NEEDED, and its comment repeated
+	//   the same false reasoning the production comment did. Caught by Sec (#319 F1), not here.
+	//   The cases below therefore test the DERIVATION — that the bound is the day AFTER asOf —
+	//   with expected values written out by hand. A test that recomputes the bound with the same
+	//   helper the production code uses would agree with it while both were wrong.
+	it('the count bound is the DAY AFTER asOf, at the SAME asOf as the NAV', async () => {
 		const { client, or, rpc } = makeSupabase({ navData: 1, count: 1 });
-		await loadNetWorthView(client, AS_OF);
+		await loadNetWorthView(client, AS_OF); // 2026-07-20
 
-		// Mirrors fn_compute_nav's `closed_at is null or closed_at > p_as_of` (059 / ADR-042).
-		expect(or).toHaveBeenCalledWith(`closed_at.is.null,closed_at.gt.${AS_OF}`);
+		// PostgREST cannot express `closed_at::date > p_as_of`, so the equivalent 059 rules
+		// "behaviourally EQUIVALENT and therefore safe" is a half-open bound on the next day.
+		expect(or).toHaveBeenCalledWith('closed_at.is.null,closed_at.gte.2026-07-21');
 
-		// ⚠ NOT `.eq('closed_at', null)`. The current-state form is behaviourally IDENTICAL at
-		// today's date — 058's gate refuses a future closed_at, so nothing satisfies
-		// `closed_at > today` — which means no data-driven test can separate them and the wrong
-		// re-point would be chosen silently. 059's own fn_compute_nav comment names this as its
-		// dependency (4), "the one with no footprint". This assertion IS that footprint.
-		//
-		// And the date must be the SAME one the NAV used: the count exists to disambiguate the
-		// empty-state from a real $0 AGAINST THAT NAV, so two dates would make the disambiguator
-		// disagree with the thing it disambiguates the first time a past asOf is passed — which
-		// 059 has just made legal by striking the ADR-039 N3 temporal fence.
-		const navArgs = rpc.mock.calls[0][1];
+		// NOT `.gt.2026-07-20` (the bare form — includes an account closed at 14:00 that day) and
+		// NOT `.eq('closed_at', null)` (current-state; drops the as-of question entirely).
 		const orArg = or.mock.calls[0][0];
-		expect(orArg).toContain(String(navArgs.p_as_of));
+		expect(orArg).not.toContain(`gt.${AS_OF}`);
+
+		// The NAV and the count must read ONE population: same date, and post-059 the same
+		// GRANULARITY. The count's bound is derived FROM the NAV's date, so read it back out of
+		// the recorded call rather than from a shared constant.
+		const navArgs = rpc.mock.calls[0][1];
+		expect(String(navArgs.p_as_of)).toBe(AS_OF);
 	});
+
+	// The +1-day arithmetic is where a hand-rolled bound goes wrong, so the boundaries are named
+	// cases with hand-written expectations rather than a loop over a helper.
+	const boundaries: Array<[string, string]> = [
+		['2026-02-28', '2026-03-01'], // non-leap February end
+		['2028-02-28', '2028-02-29'], // leap February, the day that only sometimes exists
+		['2026-12-31', '2027-01-01'], // year end
+		['2026-07-31', '2026-08-01'] // month end
+	];
+	for (const [asOf, expected] of boundaries) {
+		it(`count bound rolls ${asOf} -> ${expected}`, async () => {
+			const { client, or } = makeSupabase({ navData: 1, count: 1 });
+			await loadNetWorthView(client, asOf);
+			expect(or).toHaveBeenCalledWith(`closed_at.is.null,closed_at.gte.${expected}`);
+		});
+	}
 
 	it('coerces a Postgres numeric returned as a string', async () => {
 		const { client } = makeSupabase({ navData: '987654.3210', count: 1 });
