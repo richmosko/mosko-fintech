@@ -408,14 +408,30 @@
 				    unexplained referent for a date the user cannot choose — it is always now. Copy
 				    must not name a variable the UI does not expose.
 
-				(2) The enumeration is trimmed to the two legs a user can be holding TODAY. The
-				    third — activity dated after closure — is, with `closed_at = now()`, exactly
-				    "a future-dated transaction": real, rare, and already covered where it belongs.
-				    ⚠ THIS TRIM HAS A DEPENDENCY, stated so it can be revisited rather than
-				    rediscovered: it assumes the post-closure REFUSAL is fixed. That message
-				    currently reads "Close it as of a later date", naming a date control this form
-				    does not have — so today that leg's user-visible path is a dead end at BOTH
-				    ends. If the refusal is not corrected, re-add the leg here.
+				(2) ⚠ THE TRIM WAS REVERSED, AND THE NOTE IS KEPT BECAUSE ITS DEPENDENCY IS WHAT
+				    REVERSED IT. This paragraph used to enumerate only the two legs a user can be
+				    holding TODAY, on the reasoning that the third — activity dated after closure,
+				    which with `closed_at = now()` is exactly "a future-dated transaction" — was
+				    covered by the refusal. That trim was recorded WITH its dependency: it assumed
+				    the post-closure refusal was fixed, and said in as many words that if the
+				    refusal was not corrected, the leg must come back here.
+
+				    It was not corrected. `GATE_LEG_MESSAGE`'s post-closure string still reads
+				    "Close it as of a later date", naming a date control this form does not have
+				    (`closeAccount` posts `reason_code` only; `p_closed_at` is always server
+				    `now()`). So that leg had no correct information at EITHER end — trimmed from
+				    the copy on the strength of a refusal that was itself wrong. The six words are
+				    back (PM ruling), and they stay until the refusal string is fixed.
+
+				    Two things worth keeping from how this played out. First: **the dependency
+				    fired as written, which is the whole reason it was written down** — the trim
+				    was revisited rather than rediscovered, and a stated assumption is what made
+				    that a one-line check instead of an archaeology problem. Second, UX's finding,
+				    which outranks the trim argument entirely: leg 3 is the LEAST SELF-DERIVABLE
+				    of the three. A user can guess that "emptied" covers securities and cash.
+				    **Nobody guesses that a future-dated transaction blocks closing.** So even a
+				    perfect refusal would not make this leg safe to omit — the refusal teaches it
+				    only to someone who has already hit it.
 
 				(3) Why trimming is safe, and the correction to the argument that produced the long
 				    form: ADR-042 Decision 1 does NOT fence "learning a precondition from a
@@ -456,8 +472,9 @@
 				Closing an account marks it finished as of today: it stops counting toward your
 				balances and totals from that point, and stops accepting new entries. Its
 				transaction history is kept, and you can reopen it at any time. Because of that, an
-				account can only be closed once it's empty — if it still holds securities or cash,
-				record the sale or transfer out first.
+				account can only be closed once it's empty and has no transactions dated in the
+				future — if it still holds securities or cash, record the sale or transfer out
+				first.
 			</p>
 		{/if}
 
