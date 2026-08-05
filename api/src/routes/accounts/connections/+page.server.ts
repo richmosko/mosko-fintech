@@ -7,8 +7,9 @@
 // alongside each connection, the accounts under it (account.linked_source_id === source_id).
 // Manual / non-linked accounts are NOT connections and are excluded (they live on the Hub).
 // Returns { connections, error } where each connection carries `accounts: ConnectionAccount[]`
-// (active AND inactive — a management view, not NAV, so the `WHERE is_active = TRUE` contract
-// does not apply). `error` is the OR of the two fail-soft reads: Frontend distinguishes a read
+// (OPEN AND CLOSED — a management view, not NAV, so the open-as-of filter of the ADR-042 closure
+// contract does not apply; each account carries `closed_at`, a DATE, not a flag — 059 dropped
+// is_active). `error` is the OR of the two fail-soft reads: Frontend distinguishes a read
 // failure (error:true) from a true-empty (no connections yet). Both reads fail soft (never throw).
 
 import { redirect } from '@sveltejs/kit';

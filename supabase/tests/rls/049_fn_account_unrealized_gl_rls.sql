@@ -96,12 +96,28 @@
 --   plan(28).
 -- =====================================================================
 
+--
+-- ┌─ ⟦EXPECTED STACK⟧ — THIS FILE NOW REQUIRES `059` ────────────────────────────────┐
+-- │ Added 2026-08-04 with the pre-closure detector. **A RESULT HERE IS               │
+-- │ UNINTERPRETABLE WITHOUT THE MIGRATION SET IT RAN AGAINST** — report the applied  │
+-- │ set alongside it: `select max(version) from supabase_migrations.schema_migrations;` │
+-- │                                                                                   │
+-- │ EXPECTED STACK: `059`-applied. The detector asserts the AS-OF open/closed         │
+-- │ predicate (`closed_at is null or closed_at::date > p_as_of`). At `058` the filter │
+-- │ is still the CURRENT-STATE boolean, so (1g)/(1h)/(1k) are correctly RED there.                    │
+-- │ Verified in both directions rather than assumed: green at 057+058+059, red at     │
+-- │ 057+058. A file that passes on both sides of the migration it is about is not     │
+-- │ discriminating — that is the CORRESPONDENCE property, measured.                    │
+-- └───────────────────────────────────────────────────────────────────────────────────┘
+
 begin;
 
 -- shared cross-tenant verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(28);
+-- plan = 33: T1 11 (+1g/1h pre-closure row set, +1i/1j/1k the ::date as-of boundary) · T2 4 · T3 3 · T4 3 · T5 3 ·
+-- T6 2 · T7 3 · T8 2 · T9 2. Recorded so a silent plan-edit shows as an arithmetic change.
+select plan(33);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
@@ -186,6 +202,27 @@ select set_config('pfin.actor', 'system:remediation', true);
 select set_config('pfin.reason_code', 'no_longer_used', true);
 update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = :a5;
 
+-- a6 (depository, CLOSED at 2026-06-30 **14:00** — the ONLY non-midnight closed_at in the
+--   whole battery directory, and it exists for exactly one assertion pair).
+--   ⚑ WHY IT HAD TO BE ADDED RATHER THAN REUSING a5: every existing fixture closes at a BARE
+--     DATE, which casts to MIDNIGHT — and at midnight `closed_at > p_as_of` and
+--     `closed_at::date > p_as_of` AGREE. Architect measured all eight fixture-date x
+--     plausible-as-of combinations: 8 of 8 agree. So a boundary assertion written on the
+--     existing values would pass under the ruling, pass under the bare form, AND pass under a
+--     re-introduced regression — green, and proving nothing. That is (X7)'s defect, on the very
+--     ruling it exists to pin. A NON-MIDNIGHT closed_at is the only thing in the fixture space
+--     that separates the two forms.
+--   ⚑ AND IT IS THE UNIVERSAL CASE, NOT AN EDGE: fn_close_account defaults p_closed_at to
+--     now(), so EVERY app-closed account carries a non-midnight time. Midnight is the fixture
+--     artefact; the afternoon is production.
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
+  values (:'ta', 'a-closed-afternoon-6', 'depository', 'household', 'taxable') returning account_id as a6 \gset
+insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_of_date, source)
+  values (:a6, 5555.0000, 'USD', '2026-06-01', 'seed');
+insert into pfin.account_trans (account_id, transaction_date, amount, quantity, vendor)
+  values (:a6, '2026-06-30', -5555.0000, 0, 'wind-down-a6');
+update pfin.account set closed_at = '2026-06-30 14:00'::timestamptz where account_id = :a6;
+
 -- =====================================================================
 -- TENANT B — the cross-tenant victim/control. One investment account so B's OWN call is non-empty.
 -- =====================================================================
@@ -247,11 +284,11 @@ insert into pfin.account_trans (account_id, transaction_date, amount, quantity, 
 -- =====================================================================
 select _rls.set_tenant(:'ta'::uuid);
 
--- (1a) A sees EXACTLY its 4 ACTIVE accounts (a5 inactive excluded). RED=5 if is_active unfiltered.
+-- (1a) A sees EXACTLY its 4 accounts OPEN AS OF this date (a5 closed 06-30, excluded).
 select is(
   (select count(*)::int from pfin.fn_account_unrealized_gl('2026-06-30')),
   4,
-  '(1a) owner-only-active: A sees EXACTLY 4 rows (a1..a4 active); the value-bearing INACTIVE a5 is EXCLUDED. RED=5 if the is_active filter were dropped');
+  '(1a) open-as-of scoping: A sees EXACTLY 4 rows (a1..a4, open as of 2026-06-30); a5, closed AS OF that date, is EXCLUDED. RED=5 if the open/closed filter were dropped entirely');
 
 -- (1b) A's returned account-id set = EXACTLY {a1,a2,a3,a4} (identity, not just count).
 select is(
@@ -259,10 +296,70 @@ select is(
   (select array_agg(x order by x) from (values (:a1::bigint),(:a2),(:a3),(:a4)) v(x)),
   '(1b) owner identity set: A''s rows are EXACTLY {a1,a2,a3,a4} — every active account, only active accounts');
 
--- (1c) a5 (inactive, value-bearing 9999) is NOT among A's rows — non-vacuous is_active exclusion.
+-- (1c) NO CARD, NOT A ZERO CARD — the distinction 049 exists to make.
 select ok(
   not exists (select 1 from pfin.fn_account_unrealized_gl('2026-06-30') where account_id = :a5),
-  '(1c) is_active exclusion is non-vacuous: a5 EXISTS + carries 9999 cash, yet NEVER appears in the fn output (a suspended account feeds no per-account G/L card). RED if is_active were unfiltered');
+  '(1c) A CLOSED-AS-OF ACCOUNT PRODUCES NO CARD, NOT A ZERO CARD: a5 is absent from the row set entirely. This is the substantive difference from 050 — there the filter cannot change a scalar total (a closed account is worth zero), so the exclusion is invisible in the answer; HERE it changes the ROW COUNT, so 049''s filter is genuinely not a no-op even though it can never move a sum. A zero-valued card for a closed account would render as a live account holding nothing');
+
+-- (1g)/(1h) ⭐ THE PRE-CLOSURE HALF — 049's share of the 059 re-point detector.
+--   (1a)/(1c) assert at 2026-06-30, a POST-closure as-of, where the as-of predicate and the
+--   naive current-state predicate agree. MEASURED: under the naive re-point this file passes
+--   28/28. The row set only diverges BEFORE the closing date, which is where these two look.
+--   a5 held 9999 from 2026-06-01 and was counter-booked to zero on its closing date, so at
+--   2026-06-10 it was open AND value-bearing — the state a current-state filter erases.
+select is(
+  (select count(*)::int from pfin.fn_account_unrealized_gl('2026-06-10')),
+  6,
+  '(1g) ⭐ PRE-CLOSURE ROW SET: at 2026-06-10 A sees SIX cards — a5 was OPEN as of that date and belongs in the composition for it. Under a current-state re-point (`closed_at is null`) a5 and a6 are excluded at EVERY date and this reads 4. Together with (1a)''s 4 at 2026-06-30, the pair pins that the row set is a function of the AS-OF, not of the account''s state today');
+select is(
+  (select current_market_value from pfin.fn_account_unrealized_gl('2026-06-10') where account_id = :a5),
+  9999.0000::numeric,
+  '(1h) ⭐ …AND THE PRE-CLOSURE CARD CARRIES ITS REAL VALUE: a5''s card at 2026-06-10 reads 9999, not 0 and not NULL. A history that showed the account present but empty would be as wrong as omitting it — the account genuinely held that on that date, and the whole point of a dated closure over a boolean is that a past as-of is not rewritten by a later closure. RED (row absent) under a current-state re-point');
+
+-- (1i)–(1k) ⭐⭐ THE AS-OF BOUNDARY — F/CTO-ratified `::date`, Architect landed at `16d9e52`.
+--   THE RULING: a closure at ANY time on p_as_of ⇒ the account is EXCLUDED as of that date.
+--   Same-day is closed-day, whatever the hour, so the row set matches what `is_active` did
+--   before this migration.
+--
+--   ⚑ WHY THE BARE FORM IS A REGRESSION AND NOT MERELY A DIFFERENT CHOICE, which is what makes
+--     this worth a test rather than a comment:
+--       pre-059 `is_active`      -> went false THE INSTANT closed_at was set. Closed at 14:00,
+--                                   gone from the headline at 14:00.
+--       bare `closed_at >`       -> the account STAYS in the headline until MIDNIGHT.
+--       ruled `closed_at::date >`-> excluded at 14:00, matching the pre-059 behaviour.
+--     So the bare form silently changes current-state behaviour AT THIS MIGRATION: a user
+--     closes an account and it is still on their dashboard. And it is the UNIVERSAL case —
+--     fn_close_account defaults p_closed_at to now(), so every app-closed account has a time.
+--
+--   ⚑ INVISIBLE TO EVERY VALUE ASSERTION, which is why it lives here in the ROW SET and not in
+--     050: the account is zero either way, so NAV is byte-identical under all three forms. The
+--     difference is a CARD vs NO CARD. Same shape as the re-point detector one section up —
+--     value-blind, row-set-visible — and the second instance in this file of a defect that
+--     only a count can see.
+--
+--   ⚑ THE SAFE REWRITE IS NAMED so a future optimisation reds instead of silently reverting:
+--     `closed_at >= (p_as_of + 1)` is equivalent and sargable. **Dropping the cast to make the
+--     predicate index-friendly IS the regression.** If someone rewrites for sargability, that
+--     is the form to use.
+
+-- (1i) THE RULING ITSELF.
+select ok(
+  not exists (select 1 from pfin.fn_account_unrealized_gl('2026-06-30') where account_id = :a6),
+  '(1i) ⭐ SAME-DAY CLOSURE IS EXCLUDED: a6, closed 2026-06-30 at 14:00, produces NO card at p_as_of = 2026-06-30. Same-day is closed-day whatever the hour — which is what `is_active` did before 059, so the ruled `::date` form PRESERVES current-state behaviour where the bare `closed_at > p_as_of` would CHANGE it, leaving the account on the dashboard until midnight. RED means the cast was dropped (see the safe sargable rewrite named above)');
+
+-- (1j) THE ASSERTION ABOVE IS ONLY MEANINGFUL IF THE FIXTURE IS NON-MIDNIGHT.
+--   Without this, a6 could be silently re-seeded to a bare date, (1i) would still pass, and it
+--   would pass under the regression too — the exact vacuity this pair was written to avoid.
+select isnt(
+  (select closed_at::time from pfin.account where account_id = :a6),
+  '00:00:00'::time,
+  '(1j) THE BOUNDARY FIXTURE IS GENUINELY NON-MIDNIGHT: a6.closed_at carries a time-of-day. This is the ONLY value in the battery directory that separates `closed_at >` from `closed_at::date >` — at midnight the two forms AGREE on all eight fixture-date x as-of combinations (Architect measured). RED here means a6 was re-seeded to a bare date and (1i) silently went decorative');
+
+-- (1k) …and the exclusion is DATED, not permanent — a6 before its closing date is a real card.
+select is(
+  (select current_market_value from pfin.fn_account_unrealized_gl('2026-06-10') where account_id = :a6),
+  5555.0000::numeric,
+  '(1k) THE SAME-DAY EXCLUSION IS DATED, NOT PERMANENT: a6 carries a 5555 card at 2026-06-10, three weeks before the closure (1i) proves excludes it. Without this, (1i) would also pass against a predicate that dropped a6 from every as-of — which is the current-state regression the section above detects. The two failures are different and both are covered');
 
 -- (1f) cross-tenant: A sees ZERO of B's accounts.
 select is(

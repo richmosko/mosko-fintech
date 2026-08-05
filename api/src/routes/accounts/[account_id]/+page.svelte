@@ -1,10 +1,25 @@
 <!--
-	accounts/[account_id]/+page.svelte — account detail + inactive toggle.
-	SELF-201 §2.4.2 AC #3/#4. Renders the account attributes + its transaction history
-	(the AcctSetup opening-balance row appears here), and an inactive toggle wired to the
-	`toggleActive` named action. Marking inactive = is_active=false; history is RETAINED
-	(AC #4) — the transactions list still shows — but the account is excluded from
-	current-value surfaces (other issues' backend concern).
+	accounts/[account_id]/+page.svelte — account detail + the CLOSE / REOPEN control.
+	SELF-201 §2.4.2 AC #3/#4, re-pointed at `059` per ADR-042. Renders the account attributes +
+	its transaction history (the AcctSetup opening-balance row appears here).
+
+	CLOSURE IS A DATED EVENT, NOT A FLAG (ADR-042 Decision 1 + 2). `pfin.account.is_active` was
+	dropped at `059`; the account carries `closed_at timestamptz` (NULL = open) and the page
+	branches on `closed_at !== null`. Two named actions, NOT a toggle: `?/closeAccount` (posts a
+	required `reason_code`) and `?/reopenAccount` (posts NOTHING — its server schema is
+	`z.object({}).strict()`, so any stray field is a 400 rather than an ignored value).
+
+	WHAT THIS PAGE MUST NOT IMPLY. The old copy here read "marking inactive = is_active=false …
+	the account is excluded from current-value surfaces (other issues' backend concern)". Both
+	halves are now false. There is no flag; and the exclusion is not delegated — Decision 3 makes
+	ZERO VALUE A PRECONDITION `058` ENFORCES, so a close is REFUSED while the account still holds
+	securities or cash as of the closing date, or has activity dated after it. The user must learn
+	that BEFORE they press the button, which is why the help text names the gate rather than
+	describing a label change. History is still RETAINED (AC #4) — and a closed account is
+	additionally FROZEN: corrections go reopen → correct → re-close.
+
+	COPY IS PROVISIONAL — the closure help text, the status pill wording and the reason labels are
+	placeholders pending PM/UX. Flagged at authoring, not settled here.
 
 	FENCES: no --c-pos/--c-neg on values (those are ACTUAL-performance only; ledger amounts
 	are neutral). No staleness banner — a manual account has no Plaid re-auth. INV-1: name +
@@ -15,7 +30,7 @@
 	import type { SubmitFunction } from '@sveltejs/kit';
 	import type { PageData, ActionData } from './$types';
 	import { CLOSURE_REASONS, CLOSURE_REASON_LABELS } from '$lib/schemas/account-constants';
-	import { accountTypeLabel, taxTreatmentLabel } from '$lib/account-display';
+	import { accountTypeLabel, taxTreatmentLabel, closedAtLabel } from '$lib/account-display';
 	import Button from '$lib/components/Button.svelte';
 	import TextField from '$lib/components/TextField.svelte';
 	import SelectField from '$lib/components/SelectField.svelte';
@@ -28,13 +43,26 @@
 	import TransactionRow from '$lib/components/TransactionRow.svelte';
 	import { subCatGroupsOf } from '$lib/transaction-util';
 	import { ACCOUNT_TYPES, TAX_TREATMENTS } from '$lib/schemas/account-constants';
-	import { updateAttributesSchema, fieldErrors } from '$lib/schemas/account';
+	import { updateAttributesSchema, closeAccountSchema, fieldErrors } from '$lib/schemas/account';
 	import { providerLabel } from '$lib/accounts/connection-display';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
 	const account = $derived(data.account);
 	const transactions = $derived(data.transactions);
+
+	// ADR-042 / `059`: closure is a DATE, not a flag. This is a RENDER surface — it asks "is this
+	// account closed right now?" — so `closed_at !== null` is the correct AND COMPLETE answer
+	// (api/CLAUDE.md closure contract, render-vs-valuation split).
+	//
+	// The as-of form (`closed_at is null or closed_at > <as_of>`) is not merely heavier here, it
+	// is WRONG: it needs an `as_of` this page has no business choosing, to answer a question
+	// nobody asked. That form is mandatory on VALUATION surfaces (NAV, aggregation, any
+	// presence-check paired with a NAV read) BECAUSE THAT IS WHERE THE SILENT-FLIP RISK LIVES —
+	// there the two forms are behaviourally identical until a closed account exists, so no test
+	// on today's data separates them. No such trap here: the current-state answer is the one
+	// being asked for, and it is verifiable by looking at the screen.
+	const isClosed = $derived(account.closed_at !== null);
 
 	// Connections-redesign Aggregation section: THIS account's connection state (provider + health +
 	// last-sync), resolved server-side from its linked_source_id. null = manual / non-linked account.
@@ -124,13 +152,46 @@
 	// (<td colspan>) span correctly: Date | Category | Vendor | Description | Amount | Actions.
 	const TABLE_COLUMNS = 6;
 
-	let toggling = $state(false);
+	// ── Close / reopen (ADR-042 Decision 1) ──────────────────────────────────────────────────
+	// One `submitting` flag, because the two forms are mutually exclusive by `isClosed` — only
+	// ever one of them is on the page.
+	let submitting = $state(false);
+	let closeErrors = $state<Record<string, string[]>>({});
+	// Seeded EMPTY, not to the first reason — see the placeholder note on the form below.
+	let reasonCode = $state('');
 
-	const toggleHandler: SubmitFunction = () => {
-		toggling = true;
+	const closureReasonOptions = CLOSURE_REASONS.map((r) => ({
+		value: r,
+		label: CLOSURE_REASON_LABELS[r]
+	}));
+
+	// CLOSE — the client `.strict()` mirror runs before the POST (fast field feedback). It is
+	// NOT the boundary: `058`'s gate is, and it is the only thing that can answer "does this
+	// account still hold value?", which no client check can. All the mirror does is refuse a
+	// missing/out-of-set reason_code before a round trip.
+	const closeHandler: SubmitFunction = ({ formData, cancel }) => {
+		const parsed = closeAccountSchema.safeParse(Object.fromEntries(formData));
+		if (!parsed.success) {
+			closeErrors = fieldErrors(parsed.error);
+			cancel();
+			return;
+		}
+		closeErrors = {};
+		submitting = true;
 		return async ({ update }) => {
-			await update(); // success → load reruns → is_active refreshes; failure → form.errors
-			toggling = false;
+			await update(); // success → load reruns → closed_at refreshes; failure → form.errors
+			submitting = false;
+		};
+	};
+
+	// REOPEN — posts nothing at all, so there is nothing to validate client-side. See
+	// `reopenAccountSchema` in $lib/schemas/account for why the empty mirror is deliberately NOT
+	// wired here (a client cancel() on a stray field would be silent; the server 400 is visible).
+	const reopenHandler: SubmitFunction = () => {
+		submitting = true;
+		return async ({ update }) => {
+			await update();
+			submitting = false;
 		};
 	};
 </script>
@@ -149,8 +210,11 @@
 	<header class="head">
 		<div class="title">
 			<h1>{account.name}</h1>
-			<span class="status" class:inactive={!account.is_active}>
-				{account.is_active ? 'Active' : 'Inactive'}
+			<!-- The pill carries the STATE only; the DATE lives in the Account status section
+			     below. Splitting them keeps the pill short next to a free-text account name that
+			     can be 200 characters, and puts the date next to the copy that explains it. -->
+			<span class="status" class:closed={isClosed}>
+				{isClosed ? 'Closed' : 'Open'}
 			</span>
 		</div>
 	</header>
@@ -284,37 +348,85 @@
 
 	<section class="region" aria-label="Account status">
 		<h2 class="section-title">Account status</h2>
-		<p class="help">
-			Mark this account inactive when it's closed or sold. Its transaction history is kept, but
-			it's excluded from your current balances and totals. You can reactivate it any time.
-		</p>
+
+		{#if isClosed}
+			<p class="help">
+				Closed {closedAtLabel(account.closed_at)}. Its transaction history is kept, and it no
+				longer counts toward balances or totals dated on or after that day. While it's closed
+				it can't take new entries — including automatic ones from a connected institution. To
+				correct something, reopen it, make the correction, and close it again.
+			</p>
+		{:else}
+			<!--
+				This copy NAMES THE GATE rather than describing a label change, because `058` refuses
+				a close that the user has every reason to expect will succeed. Learning about the
+				precondition from a refusal is the *gate-with-no-way-forward* shape ADR-042 Decision 1
+				fences for elsewhere. Provisional wording — PM/UX own the final text.
+			-->
+			<p class="help">
+				Close this account once it's been emptied. Closing is only allowed when the account
+				holds nothing on the closing date — no securities, no cash — and has no activity dated
+				after it. If it still holds value, record the sale or transfer out first, then close.
+				Its transaction history is always kept, and you can reopen it at any time.
+			</p>
+		{/if}
 
 		{#if form && 'errors' in form && form.errors?._form}
 			<p class="form-error" role="alert">{form.errors._form.join(' ')}</p>
 		{/if}
 
-		<form method="POST" action="?/toggleActive" use:enhance={toggleHandler}>
-			<input type="hidden" name="is_active" value={String(!account.is_active)} />
-			{#if account.is_active}
-				<!-- reason_code is MANDATORY on the into-closed transition (057's CHECK; 058's audit
-				     writer refuses without it and will not invent one). Values come from the shared
-				     account-constants, copied verbatim from the CHECK — the labels are placeholders
-				     pending PM + UX copy. Reopening carries no reason, so this is close-only. -->
-				<label class="reason" for="reason_code">Reason for closing</label>
-				<select id="reason_code" name="reason_code" required>
-					{#each CLOSURE_REASONS as r (r)}
-						<option value={r}>{CLOSURE_REASON_LABELS[r]}</option>
-					{/each}
-				</select>
-			{/if}
-			<Button
-				type="submit"
-				variant={account.is_active ? 'secondary' : 'primary'}
-				loading={toggling}
-			>
-				{account.is_active ? 'Close account' : 'Reopen account'}
-			</Button>
-		</form>
+		<!--
+			TWO FORMS, NOT A TOGGLE — mirroring Backend's two named actions, which mirror the two
+			INVOKER RPCs (`fn_close_account` / `fn_reopen_account`). One form posting a direction
+			boolean is what `059` retired; the directions carry different payloads.
+		-->
+		{#if isClosed}
+			<!--
+				REOPEN posts NOTHING. `reopenAccountSchema` is `z.object({}).strict()` server-side, so
+				a stray field is a 400, not an ignored value. Keep it that way: no hidden inputs, and
+				`Button` must stay `name`-less (a named submit button posts its own name/value).
+				Reopening is deliberately UNGATED (Decision 3) — a closed account is already at zero
+				by the gate that admitted it, so gating the exit would be incoherent.
+			-->
+			<form method="POST" action="?/reopenAccount" use:enhance={reopenHandler}>
+				<Button type="submit" variant="primary" loading={submitting}>Reopen account</Button>
+			</form>
+		{:else}
+			<form method="POST" action="?/closeAccount" use:enhance={closeHandler} class="close-form">
+				<!--
+					reason_code is MANDATORY on the into-closed transition (`057`'s CHECK; `058`'s audit
+					writer refuses without it and will not invent one). Values come from the shared
+					account-constants, copied verbatim from the CHECK — the LABELS are placeholders
+					pending PM + UX copy. Reopening carries no reason vocabulary at all, which is why
+					this control lives only on the close branch.
+
+					THE EMPTY PLACEHOLDER IS DELIBERATE and is a change from the hand-rolled <select>
+					that stood here, which auto-selected the first reason. That reason is written into
+					`pfin.account_event`, which is IMMUTABLE audit-class (ADR-011 Decision 2) — so a
+					defaulted reason records a fact the user never asserted, in the one table that
+					cannot later be corrected. "Sold" and "no longer used" are not interchangeable to
+					anyone reading that history back. The empty value fails the client mirror's
+					`z.enum` and renders inline, so the cost of requiring a choice is one visible
+					error rather than a silent falsehood.
+
+					Rendered through the design-system SelectField rather than a raw <select>: the
+					hand-rolled one carried no token styling, no aria-invalid/describedby wiring and
+					no error slot at all.
+				-->
+				<SelectField
+					label="Reason for closing"
+					name="reason_code"
+					bind:value={reasonCode}
+					required
+					placeholder={{ value: '', label: 'Select a reason…' }}
+					options={closureReasonOptions}
+					errors={closeErrors.reason_code ?? []}
+				/>
+				<div class="close-actions">
+					<Button type="submit" variant="secondary" loading={submitting}>Close account</Button>
+				</div>
+			</form>
+		{/if}
 	</section>
 
 	<section class="region" aria-label="Add a transaction">
@@ -452,7 +564,10 @@
 		color: var(--c-text-secondary);
 		background: var(--c-surface);
 	}
-	.status.inactive {
+	/* Closed = muted + dashed. Deliberately NOT --c-neg: a closed account is a bookkeeping
+	   state, not an error or a negative value, and --c-neg is reserved for ACTUAL-performance
+	   amounts (the page's standing fence). Tone is carried by weight + border style. */
+	.status.closed {
 		color: var(--c-text-muted);
 		border-style: dashed;
 	}
@@ -539,6 +654,18 @@
 		flex-wrap: wrap;
 		gap: var(--space-2);
 		margin-top: var(--space-1);
+	}
+	/* Close form — same column rhythm as .edit-form so the two forms on this page match. */
+	.close-form {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-3);
+		max-width: 24rem;
+	}
+	.close-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--space-2);
 	}
 	.sync-note {
 		margin: var(--space-3) 0 var(--space-2);

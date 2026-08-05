@@ -67,7 +67,16 @@
 		{/if}
 	</header>
 
-	<section class="region" aria-label="Use or ignore accounts">
+	<!--
+		The accessible name is "Accounts in this connection", matching this section's own <h2>.
+		It read "Use or ignore accounts" until now — the name of a control REMOVED at `496c405`
+		(ADR-042 Decision 1b). The file's header comment correctly said the page was read-only, so
+		a sighted reader of either the page or the source was fine; the ACCESSIBLE NAME was the one
+		surface still announcing the removed control, telling a screen-reader user the section does
+		something everyone else can see it does not. A stale comment misleads a developer; a stale
+		accessible name misleads a user, and only one class of user.
+	-->
+	<section class="region" aria-label="Accounts in this connection">
 		<h2 class="section-title">Accounts in this connection</h2>
 		<p class="help">
 			Every account imported from this aggregator. Which accounts get imported is chosen when you

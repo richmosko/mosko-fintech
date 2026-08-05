@@ -57,33 +57,62 @@ export const manualAccountCreateSchema = z
 
 export type ManualAccountCreate = z.infer<typeof manualAccountCreateSchema>;
 
-/** Inactive-toggle (AC #3) — mirrors toggleActiveSchema server-side. */
-export const toggleActiveSchema = z
-	.object({
-		is_active: z.preprocess(
-			(v) => v === true || v === 'true' || v === 'on' || v === '1',
-			z.boolean()
-		),
-		// Required to CLOSE, absent to REOPEN — 058's audit writer refuses a close with no
-		// reason and deliberately will not invent one. Optional here and enforced by the
-		// refinement below, so the reopen path is not forced to post a meaningless value.
-		reason_code: z.enum(CLOSURE_REASONS).optional()
-	})
-	.strict()
-	.refine((v) => v.is_active || v.reason_code !== undefined, {
-		path: ['reason_code'],
-		message: 'Choose a reason for closing this account.'
-	});
+/**
+ * CLOSE / REOPEN — two schemas, mirroring Backend's split of the same name (ADR-042; `059`).
+ *
+ * These REPLACE the single `toggleActiveSchema`. The split is the point, not fallout from the
+ * `is_active` drop: one schema meant a boolean whose two values needed different payloads, so
+ * `reason_code` had to be optional-in-the-shape and then made mandatory by a cross-field
+ * `.refine()`. That is a state machine wearing a boolean — the same mistake at the app layer
+ * that ADR-042 removed at the schema layer. Two schemas make `reason_code` plainly REQUIRED
+ * where it is required and ABSENT where it is meaningless, so `.strict()` alone is the fence.
+ *
+ * Mirror discipline (api/CLAUDE.md): never LOOSER than the server. Worth stating what that means
+ * once the shapes are this small — `closeAccountSchema` below is field-for-field identical to
+ * Backend's, and `reopenAccountSchema` is identical *including its emptiness*, which is the half
+ * a reader is most likely to assume is a stub.
+ */
 
-export type ToggleActive = z.infer<typeof toggleActiveSchema>;
+/**
+ * CLOSE. `reason_code` REQUIRED — `058`'s audit writer refuses a close with no reason and
+ * deliberately will not invent one, so neither does the app. No date field: `p_closed_at`
+ * defaults to server `now()`, and a client clock would trip the gate's own future-date bound.
+ */
+export const closeAccountSchema = z
+	.object({
+		reason_code: z.enum(CLOSURE_REASONS, {
+			message: 'Choose a reason for closing this account.'
+		})
+	})
+	.strict();
+
+export type CloseAccount = z.infer<typeof closeAccountSchema>;
+
+/**
+ * REOPEN. Deliberately EMPTY — a reopen has no reason vocabulary (`057` scopes requiredness to
+ * `event_type = 'closed'`) and takes no date from the client. `.strict()` on an empty object is
+ * load-bearing server-side: it REJECTS a stray `reason_code` or `closed_at` rather than ignoring
+ * it.
+ *
+ * ⚠ EXPORTED BUT DELIBERATELY NOT WIRED to the reopen form's `use:enhance`, and the reason is a
+ * trap rather than an oversight. A client mirror's only job here would be to `cancel()` the
+ * submit on a stray field — but the stray field's name is by definition one no error slot on the
+ * page renders, so the user would press Reopen and see NOTHING HAPPEN. The server's 400 is the
+ * better outcome: it is visible. Kept in the file so the mirror stays in lockstep with Backend's
+ * schema and a future non-empty reopen payload has an obvious home — NOT because it is dead.
+ */
+export const reopenAccountSchema = z.object({}).strict();
+
+export type ReopenAccount = z.infer<typeof reopenAccountSchema>;
 
 /**
  * Account-detail attribute edit — CLIENT mirror of the server `updateAttributesSchema`
  * (`accounts/[account_id]` `?/updateAttributes`). The four user-editable attributes:
  * name / account_type / scope / tax_treatment. Field rules copied VERBATIM from the manual-create
  * mirror (name/scope free-text 1..200; enums from the shared account-constants, anti-drift with the
- * DB CHECK). Deliberately excludes the aggregator/connection binding (deferred) and is_active (the
- * toggle path) — `.strict()` rejects any stray posted field, matching the server mass-assignment fence.
+ * DB CHECK). Deliberately excludes the aggregator/connection binding (deferred) and `closed_at`
+ * (that is the close/reopen pair above, and `058` fences it at the DB regardless) — `.strict()`
+ * rejects any stray posted field, matching the server mass-assignment fence.
  */
 export const updateAttributesSchema = z
 	.object({

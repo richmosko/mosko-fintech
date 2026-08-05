@@ -103,33 +103,51 @@ export const landLinkedAccountsSchema = z
 
 export type LandLinkedAccounts = z.infer<typeof landLinkedAccountsSchema>;
 
-/** Inactive-toggle (AC #3). Single boolean; coerces form string/checkbox values. */
-export const toggleActiveSchema = z
-	.object({
-		is_active: z.preprocess(
-			(v) => v === true || v === 'true' || v === 'on' || v === '1',
-			z.boolean()
-		),
-		// Required to CLOSE, absent to REOPEN — 058's audit writer refuses a close with no
-		// reason and deliberately will not invent one. Optional here and enforced by the
-		// refinement below, so the reopen path is not forced to post a meaningless value.
-		reason_code: z.enum(CLOSURE_REASONS).optional()
-	})
-	.strict()
-	.refine((v) => v.is_active || v.reason_code !== undefined, {
-		path: ['reason_code'],
-		message: 'Choose a reason for closing this account.'
-	});
+/**
+ * CLOSE / REOPEN — two schemas, because they are two operations (ADR-042; 059).
+ *
+ * These replace the single `toggleActiveSchema`, and the split is the point rather than a
+ * side-effect of the `is_active` drop. That schema carried a boolean whose two values needed
+ * DIFFERENT payloads, so requiredness had to be expressed as a `.refine()` over the flag —
+ * `reason_code` optional in the shape, then conditionally mandatory. That is a state machine
+ * wearing a boolean, and it is the same mistake at the app layer that ADR-042 removed at the
+ * schema layer: a boolean cannot carry a transition. Two schemas make `reason_code` plainly
+ * REQUIRED where it is required and ABSENT where it is meaningless, so `.strict()` alone is the
+ * fence and there is no cross-field rule to keep in step with 058.
+ *
+ * They mirror the two INVOKER RPCs 1:1 (`fn_close_account` / `fn_reopen_account`), which is the
+ * property worth preserving: one posted shape per DB entry point, so a mismatch is a type error
+ * rather than a runtime refusal.
+ */
 
-export type ToggleActive = z.infer<typeof toggleActiveSchema>;
+/** CLOSE. `reason_code` is REQUIRED — 058's audit writer refuses a close without one and
+ *  deliberately will not invent it, so the app must not either. No date field: `p_closed_at`
+ *  defaults to server now(), and a client clock would trip the gate's own future-date bound. */
+export const closeAccountSchema = z
+	.object({
+		reason_code: z.enum(CLOSURE_REASONS, {
+			message: 'Choose a reason for closing this account.'
+		})
+	})
+	.strict();
+
+export type CloseAccount = z.infer<typeof closeAccountSchema>;
+
+/** REOPEN. Deliberately EMPTY: a reopen has no reason vocabulary (057 scopes requiredness to
+ *  `event_type = 'closed'`) and takes no date from the client. `.strict()` on an empty object is
+ *  load-bearing — it rejects a stray `reason_code` or `closed_at` rather than ignoring it. */
+export const reopenAccountSchema = z.object({}).strict();
+
+export type ReopenAccount = z.infer<typeof reopenAccountSchema>;
 
 /**
  * Account-detail attribute edit (`accounts/[account_id]` updateAttributes action). The four
  * user-editable account attributes — name / account_type / scope / tax_treatment. Mirrors the
  * manual-create field rules VERBATIM (name/scope free-text 1..200; enums from the shared
  * account-constants, anti-drift with the DB CHECK). Deliberately does NOT include the aggregator
- * / connection binding (deferred) nor is_active (that's the toggle path) — `.strict()` rejects
- * any of those if posted (Lock 14 mass-assignment fence).
+ * / connection binding (deferred) nor `closed_at` (that's the close/reopen path, and 058 fences
+ * it at the DB regardless) — `.strict()` rejects any of those if posted (Lock 14 mass-assignment
+ * fence).
  */
 export const updateAttributesSchema = z
 	.object({

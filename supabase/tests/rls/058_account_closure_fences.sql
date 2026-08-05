@@ -188,6 +188,48 @@ select plan(48);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 
+-- ┌─ ⚠ STACK PROBE — THIS FILE SPANS A MIGRATION THAT DELETES ITS OWN SUBJECT ────────┐
+-- │ Added 2026-08-04 after CI red. This battery's expected-stack block already SAID it: │
+-- │ "At/above `059`: (P1) RED because is_active is gone — this file is only meaningful  │
+-- │ in the `058`-applied, pre-`059` window." **`supabase test db` APPLIES EVERY         │
+-- │ MIGRATION, so that window is one CI can never produce.** The file predicted its own │
+-- │ breakage in prose and left the assertions unconditioned; it aborted at (S1) on a    │
+-- │ dropped column, 27 of 48 emitted.                                                    │
+-- │                                                                                      │
+-- │ CONDITIONED, NOT DELETED. The transitional assertions are REAL and Sec-reviewed —    │
+-- │ they prove the sync trigger, the biconditional and Sec cases 3/4/7 hold across the    │
+-- │ 058->059 window. They still run for anyone at 001..058 (development, a bisect, a      │
+-- │ staged deploy) and SKIP with a stated reason once the column is gone. A skip counts   │
+-- │ toward plan(), so the arithmetic stays honest either way.                             │
+-- │ ⚠ SKIP IS NOT PASS. If every one of these skips, this file proves nothing about the   │
+-- │   transitional window — which is CORRECT post-`059`, because the window is closed.    │
+-- └────────────────────────────────────────────────────────────────────────────────────┘
+--
+-- ┌─ ⏳ SUNSET — DELETE THESE WHEN `059` MERGES TO `main` (Sec, 2026-08-04) ───────────┐
+-- │ TRIGGER: **`059` merged to `main`** — NOT "applied to the F/CTO's database", which  │
+-- │ was my first proposal and keys on ONE machine. Sec retargeted it: once `059` is in  │
+-- │ the migration sequence, EVERY environment that will ever exist runs to head, so     │
+-- │ `in_window` is false everywhere — clean applies, CI from scratch, a rebuild, a      │
+-- │ second user's stack. The battery runs AFTER migrations, so it never observes the    │
+-- │ window even on a fresh apply. A fact about the repo, checkable, and earlier.        │
+-- │                                                                                     │
+-- │ ⚠ THE DELETION MUST CARRY THIS FORWARD — it is the important half of the condition: │
+-- │   **MEASURED IN-WINDOW GREEN at ref `22bb11d`: all NINE conditioned assertions RAN       │
+-- │   (0 skips) and PASSED against a 057+058 stack; at 057+058+059 all nine SKIP.**     │
+-- │   (S1)·(S2b)·(S3)·(S4a)·(S4b)·(S4c) — the one-directional sync + Sec cases 3/4/7    │
+-- │   (P1)·(P4)·(P5) — two-phase posture, the INSERT path, the NULL tripwire            │
+-- │                                                                                     │
+-- │   DELETING AN ASSERTION THAT ONCE HAD TEETH, WITHOUT RECORDING THAT IT DID,         │
+-- │   SILENTLY CONVERTS A PROVEN PROPERTY INTO AN UNPROVEN ONE. These prove the         │
+-- │   ONE-DIRECTIONALITY of the sync trigger — the property the whole ADR rests on —    │
+-- │   and after deletion this note is the only evidence it was ever demonstrated rather  │
+-- │   than assumed. Keep the note when the assertions go.                                │
+-- └─────────────────────────────────────────────────────────────────────────────────────┘
+select (exists (select 1 from information_schema.columns
+                 where table_schema = 'pfin' and table_name = 'account'
+                   and column_name = 'is_active'))::text as in_window \gset
+
+
 -- ⟦CARRIER REBOUND at `e88b76c` — EVERY closure in this file now needs TWO `set local`s in
 --   the same transaction, not one. The `account_event` AFTER writer RAISES if
 --   `pfin.reason_code` is unset, and it is MANDATORY, never defaulted. Without this every
@@ -599,19 +641,28 @@ select ok(
 --   the biconditional hold BY CONSTRUCTION across the `058`->`059` window.
 --   It lives in `058` and is DROPPED in `059`.
 -- =====================================================================
+--   ⚑ (S2a) IS THE ONE ASSERTION HERE THAT SURVIVES `059`: reopening is a real operation in
+--     both windows and touches no dropped column, so it stays unconditional. Everything else
+--     in this block reads or writes `is_active` and is gated on the stack probe above.
 select _rls.set_tenant(:'ta'::uuid);
 -- (S1) closing sets BOTH.
+\if :in_window
 select is(
   (select is_active from pfin.account where account_id = :asof),
   false,
   '(S1) SEC CASE 7: closing :asof through the gate ALSO set is_active = false. Without this sync, `059` aborts on precisely the accounts the operator dispositioned CORRECTLY — the reconciliation would fire on good work and pass over nothing'
 );
--- (S2) clearing sets BOTH back.
+\else
+select skip('(S1) the transitional sync sets is_active on close — the column is dropped at 059', 1);
+\endif
+-- (S2a) clearing succeeds. UNCONDITIONAL: reopening is a real operation in BOTH windows and
+--   touches no dropped column. It is also the setup (S2b) depends on, so it must run either way.
 select lives_ok(
   format($$ update pfin.account set closed_at = null where account_id = %s $$, :asof),
-  '(S2a) reopening :asof succeeds (reopen is ungated)'
+  '(S2a) reopening :asof succeeds (reopen is ungated) — the one assertion in BLOCK S that survives 059 intact, and the setup the rest of the block needs'
 );
 select set_config('role', 'postgres', true);
+\if :in_window
 select is(
   (select is_active from pfin.account where account_id = :asof),
   true,
@@ -698,6 +749,9 @@ select is(
   0,
   '(S4c) NO MISMATCH IS CREATABLE (inverted 2026-08-04): the refused flip leaves the row consistent. 059''s reconciliation is still required for rows PREDATING 058 — NOT VALID fences new writes only — so this is containment, not discharge of the reconciliation. One-directionality and the reconciliation are the same control seen from two ends: the trigger refuses to invent a closure, and the migration refuses to drop the evidence'
 );
+\else
+select skip('BLOCK S: the transitional sync trigger, the biconditional and Sec cases 3/4/7 are UNTESTABLE at/above 059 — the column, the CHECK and the trigger are all dropped there. Not a gap: the window these prove is closed, and 059''s own battery asserts the decommission (R1)/(R2). SKIP IS NOT PASS', 5);
+\endif
 -- ⚑ THE `restore for BLOCK P` LINE THAT STOOD HERE IS DELETED, and the deletion is the point.
 --   It set is_active back to true after the flip — correct against the PRE-inversion block,
 --   where the flip SUCCEEDED. Post-inversion the flip is REFUSED and never landed, so the
@@ -711,8 +765,16 @@ select is(
 -- BLOCK P — TWO-PHASE POSTURE
 -- =====================================================================
 -- (P1) THE ASSERTION THAT CATCHES `058` BEING BUILT FROM THE SUPERSEDED SINGLE-FILE DESIGN.
+--   Window-scoped: it asserts the column is STILL PRESENT, which is `058`'s whole two-phase
+--   claim and is false by design at `059`. The post-`059` half — that it is GONE — is asserted
+--   in `059`'s own battery at (R1), so the property is continuously covered across the seam by
+--   two files, each asserting it where it is true.
+\if :in_window
 select has_column('pfin', 'account', 'is_active',
   '(P1) TWO-PHASE: `058` leaves is_active IN PLACE — it does NOT drop it. The drop belongs to `059`, AFTER the operator has dispositioned each account through the real control. RED if `058` is built from the withdrawn single-file/declared-set design, which dropped the column in the same file');
+\else
+select skip('(P1) two-phase: `058` leaves is_active in place — window-scoped, and the post-059 half is 059 (R1)', 1);
+\endif
 select col_type_is('pfin', 'account', 'closed_at', 'timestamp with time zone',
   '(P2) closed_at is timestamptz — a DATED closure, which is what makes "closed in June still counts in a May NAV" expressible at all');
 select is(
@@ -731,6 +793,7 @@ select is(
 --   (a CHECK is not RLS) with no ordering concerns.
 --   Driven PRIVILEGED deliberately — that proves the "all roles" property. An authenticated
 --   probe would meet the RLS WITH CHECK first and would prove only that RLS works.
+\if :in_window
 select throws_like(
   format($$ insert into pfin.account (users_id, name, account_type, scope, tax_treatment, is_active, closed_at)
               values (%L, 'insert-path-violator', 'depository', 'household', 'taxable', false, null) $$, :'ta'),
@@ -746,6 +809,9 @@ select throws_like(
 --   would succeed over a table full of violators.
 select col_not_null('pfin', 'account', 'is_active',
   '(P5) NULL TRIPWIRE: pfin.account.is_active is still NOT NULL (inherited from `003:104`, not restated by `058`). A CHECK passes on NULL, so a nullable is_active makes the biconditional silently pass EVERYTHING and `059`''s VALIDATE succeed over a table of violators. RED here means the fence was disarmed by a change somewhere else entirely — the only way this defect can arrive');
+\else
+select skip('(P4)/(P5) the biconditional CHECK and the is_active NOT NULL tripwire — both objects are dropped at 059, so the INSERT-path hole and the nullable-column hazard no longer exist to fence', 2);
+\endif
 
 -- =====================================================================
 -- BLOCK W — THE account_event WRITER (`e88b76c`, ADR-042 Amendment 1)
@@ -762,7 +828,7 @@ select set_config('role', 'postgres', true);
 select set_config('request.jwt.claims', '', true);
 savepoint sp_w1;
 select throws_like(
-  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz, is_active = false where account_id = %s $$, :wopen),
+  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = %s $$, :wopen),
   '%no acting identity%auth.uid() is null and no pfin.actor is set%',
   '(W1) NO ACTING IDENTITY: a writer with null auth.uid() and no pfin.actor RAISES rather than defaulting. Absence must not BECOME a value on an append-only record — "we did not record who" and "the system did it" must stay distinguishable'
 );
@@ -773,7 +839,7 @@ savepoint sp_w2;
 select set_config('pfin.reason_code', '', true);
 select _rls.set_tenant(:'ta'::uuid);
 select throws_like(
-  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz, is_active = false where account_id = %s $$, :wopen),
+  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = %s $$, :wopen),
   '%no pfin.reason_code set%set local pfin.reason_code%',
   '(W2) NO REASON: a session closure without pfin.reason_code RAISES, and the message NAMES THE REMEDY. Asserted on the remedy text deliberately — a mandatory field whose error does not say how to supply it produces a correct refusal that reads as a broken feature'
 );
@@ -789,7 +855,7 @@ select set_config('pfin.reason_code', 'no_longer_used', true);
 select _rls.set_tenant(:'ta'::uuid);
 select set_config('pfin.actor', 'system:remediation', true);   -- the forgery attempt
 select lives_ok(
-  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz, is_active = false where account_id = %s $$, :wopen),
+  format($$ update pfin.account set closed_at = '2026-06-30'::timestamptz where account_id = %s $$, :wopen),
   '(W3a) a session that ALSO sets pfin.actor closes successfully — the forgery does not error, which is what makes (W3b) the assertion that matters'
 );
 select set_config('role', 'postgres', true);

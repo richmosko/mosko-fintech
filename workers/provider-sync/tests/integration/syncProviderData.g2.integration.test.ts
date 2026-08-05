@@ -1,7 +1,7 @@
 // syncProviderData.g2.integration.test.ts — QA G2: land-path + guard-#3 upsert idempotency,
 // LIVE-DB (slice 3b). Design ref: temp/provider-sync-scheduler-design.md §2 (map-straight-in
 // landing) + §8 (idempotency contract). Consumes the SHIPPED mapper.ts syncProviderData end-
-// to-end against migrations 001–021 — QA authors the test only; the landing functions +
+// to-end against ALL migrations applied — QA authors the test only; the landing functions +
 // resolution.ts are Backend/Architect-owned and NOT re-implemented here.
 //
 // ── THE PROPERTY UNDER TEST (load-bearing) ──────────────────────────────────────────────
@@ -178,13 +178,18 @@ beforeAll(async () => {
 		returning source_id`;
 	const sourceId = Number(ls[0]!.source_id);
 
-	// pfin.account — investment account linked to the source. The AFTER INSERT
+	// pfin.account — investment account linked to the source. is_active is NOT in the column
+	// list: it was DROPPED at 059 (ADR-042), and the row is open by construction because
+	// closed_at defaults to NULL. ⚠ The pfin.linked_source insert above KEEPS its is_active —
+	// that is a DIFFERENT COLUMN on a different table (connection lifecycle, ADR-013 A1-A3) and
+	// it is preserved. Two `is_active` inserts ten lines apart, one dropped and one kept, is
+	// exactly the conflation ADR-042 records being made three times. The AFTER INSERT
 	// fn_grant_creator_access DEFINER trigger auto-creates the account_users (rd+wr) grant for
 	// TENANT, so both account_select (owner) and the account_trans_insert wr_access-JOIN pass.
 	const acct = await db<{ account_id: string }[]>`
 		insert into pfin.account
-			(users_id, name, account_type, scope, tax_treatment, is_active, linked_source_id, provider_account_id)
-		values (${TENANT}, 'G2 Brokerage', 'investment', 'self', 'taxable', true, ${sourceId}, ${PROVIDER_ACCT})
+			(users_id, name, account_type, scope, tax_treatment, linked_source_id, provider_account_id)
+		values (${TENANT}, 'G2 Brokerage', 'investment', 'self', 'taxable', ${sourceId}, ${PROVIDER_ACCT})
 		returning account_id`;
 	accountId = Number(acct[0]!.account_id);
 

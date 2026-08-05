@@ -22,8 +22,16 @@ describe('connectAccountAttributesSchema', () => {
 		expect(connectAccountAttributesSchema.safeParse(validAccount).success).toBe(true);
 	});
 
+	// The stray key is `closed_at` DELIBERATELY, and it changed from `is_active` at `059`
+	// (ADR-042 Decision 2 retires `pfin.account.is_active`). A mass-assignment assertion is
+	// only worth its runtime if the key it smuggles is one that would DO something — this
+	// path lands provider accounts through `fn_land_linked_accounts`, so a `closed_at` riding
+	// in would land an account already closed, past the `057` gate, without an
+	// `account_event` row naming a reason. `is_active` names no column on any table now, so
+	// the same assertion would have gone green against a schema silently loosened for every
+	// field that does exist — §7.9 AC 4's shape, in a test rather than a query.
 	it('is .strict() — rejects an unexpected key (mass-assignment fence)', () => {
-		const res = connectAccountAttributesSchema.safeParse({ ...validAccount, is_active: false });
+		const res = connectAccountAttributesSchema.safeParse({ ...validAccount, closed_at: null });
 		expect(res.success).toBe(false);
 	});
 

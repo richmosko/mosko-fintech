@@ -543,3 +543,219 @@ Applications and self-catches from this review, appended to §8's table rather t
 
 Both new zero-catch rules sit at ONE application. Per §8's own reading rule that is **UNTESTED,
 not MISCALIBRATED** — leave them alone and use them; revisit at ~5 applications still at zero.
+
+---
+
+## 10. From the ADR-042 `059` round (2026-08-04)
+
+Five, all found by RUNNING files that were green or believed green. Four are one sentence at
+different scopes: **the thing a test says about itself is not evidence.**
+
+### A test's claim that it detects something is itself an assertion — and it is usually unrun
+
+The sharpest instance this project has produced.
+
+`050`'s `(A4)`/`(A7)` carried explicit prose: *"RED if 059 re-points to the CURRENT-STATE
+predicate instead of the AS-OF one"*, naming the exact defect, citing the BACKLOG entry that
+records why it leaves no footprint. **Measured: re-point `059` to the naive current-state
+predicate and `049`, `050` and `051` all pass, zero failures.** The assertions were at a
+*post-closure* as-of, where both predicate forms agree and the account is worth zero either way.
+
+> **A whole battery agreed with the defect its own comments described.**
+
+The prose was not wrong about the danger. It was wrong that these assertions saw it — and that
+claim had never been run, because *running the detector* means running it **against the defect**,
+not against a correct implementation.
+
+**Method: to believe an assertion detects X, build X and watch it go red.** Anything less is a
+claim about a test, in a file whose entire purpose is to replace claims with tests. Same family
+as *a caveat is a claim*, applied to a test's self-description.
+
+### An assertion can compare an expression to itself
+
+`(X7)` in the `059` battery — the ⭐-marked fail-closed guard, carrying the longest
+justification block in the file, with a verified before/after diff of the exact fail-open it
+protects against — read:
+
+```sql
+is( pfin.fn_compute_nav('2026-07-31', true),
+    pfin.fn_compute_nav('2026-07-31', true) )   -- the SAME expression, both sides
+```
+
+It could not fail for any implementation, fixture, or predicate.
+
+> **A rich justification block is not evidence that the assertion beneath it is wired up — and
+> it actively discourages reading the two lines that are.**
+
+Pairs with rule 4: print the pair, *and check the pair is independent*. Here the two "sides"
+were not merely dependent, they were **textually identical**, which is the degenerate case the
+independence test exists to catch. It survived review by everyone who read the prose.
+
+### Absence assertions are vacuous whenever the subject never existed
+
+`(R5)`/`(R6)` asserted `fn_assert_closure_reconciled` was absent and ungranted. Both **passed**.
+`059` as merged never creates that function — the design changed to a plain
+`ALTER TABLE … VALIDATE CONSTRAINT` and the battery predated it.
+
+`(R5)`'s own comment records being caught once already for vacuity and being *conjoined* against
+it. The conjunction stopped it passing pre-`059`; it did nothing about passing because the
+subject was never built.
+
+> **No conjunction rescues an absence assertion whose subject does not exist. Only anchoring it
+> to a subject that DOES exist does.**
+
+The replacement asserts the decommission of things that were genuinely there (the CHECK, the
+sync trigger, its function), conjoined with something only true *after* the migration
+(`closed_at` present **and** the as-of comparison live in `fn_compute_nav`) — verified by
+running the block against a pre-`059` stack and watching it go red.
+
+### Anchoring, again: a check matched the warning label written to prevent its own defect
+
+`(X6)` asserted `fn_nav_composition`'s definition does not contain `is_active`. It went RED
+against a **correct** function, because `059` had added an in-body comment reading *"If you came
+looking for `where acc.is_active` in 049 because an older comment sent you…"*.
+
+**The check tripped on the prose that exists to prevent the mistake it checks for.** Strip SQL
+comments and match executable text only. Second self-catch of the anchoring rule; it keeps
+arriving as *"my pattern matched something that merely mentions the subject."*
+
+### Two predicates need two fixtures — one date guards one leg
+
+`059` re-points **two** predicates: the securities leg (`acc2`, via LEFT JOIN) and the cash leg
+(`acc`). Different lines, different subqueries — so flipping *one* is a realistic partial edit.
+
+A single as-of catches it only if that date happens to exercise that leg. The fixture's
+wind-down separates them by construction: at `2026-06-10` the closed account is
+securities-only (1500), at `2026-06-25` cash-only (1000).
+
+**Verified by flipping each leg alone:** `acc2` reds the securities pair and leaves the cash pair
+green; `acc` does the exact inverse.
+
+> **Count the predicates in the subject, then check each has a fixture that reaches it** —
+> the fixture-side twin of rule 2 (count raise sites in the subject, not assertions against
+> `plan()`).
+
+### Calibration table — this round
+
+| rule | +applications | +self-catches |
+|---|---|---|
+| a claim that an assertion detects X is itself an assertion *(new)* | 1 | **1** |
+| an assertion can compare an expression to itself *(new)* | 1 | **1** |
+| absence is vacuous when the subject never existed *(new)* | 1 | **1** |
+| anchoring: anchor on the subject, not a co-occurring token | 1 | **1** |
+| count the predicates, then check each has a fixture *(new)* | 1 | 0 |
+| print the pair — and check the pair is independent | 1 | **1** |
+
+Every new rule here arrived as a self-catch except the last, which is at one application and is
+therefore **untested, not miscalibrated** — leave it and use it.
+
+### A mocked chain shape pins nothing — the residue no token-classification reaches
+
+Backend's finding at the §7.9 AC-4 sweep, carried here because it names a gap in **AC 1's own
+method** and this file is where that method lives.
+
+AC 1 says: classify a test by the TABLE it targets, not by the token it contains — because
+`is_active` means different things on `pfin.account` and on `linked_source`. Sound, and it
+found real instances.
+
+**But `netWorth.test.ts` had no token to classify.** It stubbed `.eq()` and asserted nothing
+about the predicate — no column name, no value, no `is_active` anywhere in the file. It would
+have gone on passing while the production query 400'd against a dropped column.
+
+> **A test that mocks a chain's SHAPE without pinning what the chain ASKS FOR is invisible to
+> every method that works by reading tests for what they mention.**
+
+It surfaced only because the suite was actually run. Generalises past this migration: any
+fluent-builder mock (`.from().select().eq().order()`) asserts the calls happened in a shape,
+which is exactly the part that does not break when the schema moves underneath it.
+
+Practical form: **when a mock stands in for a query, assert the ARGUMENTS, not just the call.**
+`expect(eq).toHaveBeenCalledWith('closed_at', null)` survives a rename by failing; `expect(eq)
+.toHaveBeenCalled()` survives it by passing.
+
+Same family as rule 0 — the fixture (here, the mock) substitutes for the production path and
+therefore cannot detect that path's absence — but sharper, because the substitution is
+invisible to a text sweep rather than merely undetectable by the test.
+
+### An inversion result stated without its condition reads as a live failure
+
+Mine, from this round, and it cost a teammate a real decision point.
+
+I committed the detector work under the subject **"the pre-closure re-point detector — 7 reds
+where there were 0"**. Against `059` as authored the suite is **0 failures**; the seven reds
+exist only under a deliberate sabotage of the predicate, and are the proof the detector has
+teeth. The subject line stated a red count with no database state attached, and the team lead
+correctly stopped to ask whether `059` was broken.
+
+This is this file's own ⟦EXPECTED STACK⟧ rule — *a result is uninterpretable without the
+migration set it ran against* — broken by me, in a commit subject, in the same session I
+extended that rule twice.
+
+> **The three-coordinates rule applies to every surface a result is quoted on, and a commit
+> subject is the surface most likely to be read alone.**
+
+Fix is one clause: *"7 reds UNDER SABOTAGE, 0 against `059` as authored."* Say what the number
+was measured against, or do not quote the number.
+
+---
+
+## 11. Standing cautions (Sec-requested, 2026-08-04)
+
+### "A whole battery agreed with the defect its own comments described"
+
+Sec asked for this in the file as a standing caution, not as a war story. The full instance is
+§10; what follows is the part that generalises.
+
+`050` carried prose naming a specific defect — a current-state re-point where an as-of one was
+required — citing the BACKLOG entry recording why it leaves no footprint. **Re-pointing the
+migration to that exact defect left `049`, `050` and `051` all passing, zero failures.**
+
+**Sec's addition, which is the load-bearing half and was not in my finding:** the
+undetectability is **STRUCTURAL, not an oversight**. Under V1, with no closed account in
+existence, the two predicates are **extensionally identical** — they select the same rows for
+every input. No data-driven test can separate expressions that agree on all reachable data.
+
+> So the instrument is not "test harder". It is to find the **one input where the two must
+> agree for a reason other than emptiness**, and assert there.
+
+Concretely: `fn_compute_nav(d, true) ≡ fn_compute_nav(d, false)` at a **pre-closure** date with
+a **non-zero shared contribution**. Both predicates include the account there — but only the
+as-of one includes it *because it was open then*; the current-state one excludes it and the
+equivalence breaks. The non-zero contribution is what makes the agreement meaningful rather
+than a comparison of two empty sets.
+
+**The general rule:**
+
+> **When two candidate implementations agree on all currently-reachable data, no amount of
+> coverage distinguishes them. Construct the input where they must agree for DIFFERENT
+> reasons, and assert the agreement there.**
+
+And the meta-rule the episode is really about:
+
+> **Prose in a test file that says "this catches X" is an untested claim about a test.**
+> Verify it the only way a detector can be verified: **build X and watch it go red.**
+
+### An assertion on a filter STRING cannot distinguish a correct predicate from a consistent pair of wrong ones
+
+The app-layer twin of the above, from the same review.
+
+`netWorth.ts` filtered `closed_at.gt.<asOf>` while the SQL filtered `closed_at::date > p_as_of`.
+PostgREST promotes the bare form to midnight, so the count and the NAV described **different
+populations for up to 24 hours after every app-initiated close** — a user closing their last
+account at 14:00 saw a real `$0` instead of the empty state.
+
+It survived every check because the test asserted the **string**. A string assertion is only as
+correct as the string someone typed into it, and it goes green the moment the code and the test
+are edited together — which is precisely what "update the test to match" means.
+
+> **A string assertion pins agreement between a test and an implementation. It says nothing
+> about whether either is right.**
+
+The instrument: **evaluate the emitted predicate against a fixture and assert the resulting
+population** (`netWorth.boundary.test.ts`). With the precondition that every clause must be
+*recognised* — a parser that silently returns "no match" on an unknown operator converts a
+predicate change into a passing test over an empty population.
+
+Note the layer split, because neither file substitutes for the other: the DB battery proves the
+SQL is right; the app test proves the app asks the SQL **the same question**. **The bug lived in
+the gap between two green suites.**

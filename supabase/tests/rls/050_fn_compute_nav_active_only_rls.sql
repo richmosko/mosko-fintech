@@ -73,12 +73,28 @@
 --   intact). Authoritative gate is CI pg_prove directory-mode after Backend's clean-apply. plan(23).
 -- =====================================================================
 
+--
+-- ┌─ ⟦EXPECTED STACK⟧ — THIS FILE NOW REQUIRES `059` ────────────────────────────────┐
+-- │ Added 2026-08-04 with the pre-closure detector. **A RESULT HERE IS               │
+-- │ UNINTERPRETABLE WITHOUT THE MIGRATION SET IT RAN AGAINST** — report the applied  │
+-- │ set alongside it: `select max(version) from supabase_migrations.schema_migrations;` │
+-- │                                                                                   │
+-- │ EXPECTED STACK: `059`-applied. The detector asserts the AS-OF open/closed         │
+-- │ predicate (`closed_at is null or closed_at::date > p_as_of`). At `058` the filter │
+-- │ is still the CURRENT-STATE boolean, so (A9)-(A12) are correctly RED there.                    │
+-- │ Verified in both directions rather than assumed: green at 057+058+059, red at     │
+-- │ 057+058. A file that passes on both sides of the migration it is about is not     │
+-- │ discriminating — that is the CORRESPONDENCE property, measured.                    │
+-- └───────────────────────────────────────────────────────────────────────────────────┘
+
 begin;
 
 -- shared cross-tenant verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(23);
+-- plan = 27: BLOCK A 12 (A1..A8 + A9..A12, the pre-closure re-point detector) · L 2 · F 3 ·
+-- Z 4 · H 4 · U 2. Recorded so a silent plan-edit is visible in review as an arithmetic change.
+select plan(27);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta \gset
@@ -247,7 +263,7 @@ select is(
 select is(
   pfin.fn_compute_nav('2026-06-30'::date, true),
   pfin.fn_compute_nav('2026-06-30'::date, false),
-  '(A4) EQUIVALENCE (inverted at ADR-042): TRUE = FALSE at this as-of — a closed account holds zero past its closing date, so p_active_only cannot change the answer. RED if a closed account can carry value, or if 059 re-points to the CURRENT-STATE predicate instead of the AS-OF one');
+  '(A4) EQUIVALENCE AT A POST-CLOSURE AS-OF: TRUE = FALSE here — a closed account holds zero past its closing date, so p_active_only cannot change the answer. ⚠ ITS "or if 059 re-points to current-state" CLAIM WAS STRUCK 2026-08-04 AS FALSE: measured, this assertion passes unchanged under the naive current-state predicate, because at a post-closure date BOTH forms exclude a4 and it is worth zero anyway. The re-point detector is (A9)/(A11). This assertion proves the post-closure half only');
 -- (A5) wrapper delegation proven directly: 1-arg == 2-arg(false).
 select is(
   pfin.fn_compute_nav('2026-06-30'::date),
@@ -267,12 +283,73 @@ select is(
 select is(
   pfin.fn_compute_nav('2026-06-30'::date, false) - pfin.fn_compute_nav('2026-06-30'::date, true),
   0.0000::numeric,
-  '(A7) false − true = 0 (inverted at ADR-042): the two scopes agree EXACTLY. A non-zero delta names how much value a wrongly-re-pointed 059 predicate moved — RED if a closed account carries value into either scope, or if 059 re-points to current-state rather than as-of''s contribution (1500 securities + 0 cash) — confirms the LEFT-JOIN security-leg is_active gate drops an inactive account''s HOLDINGS, not only its cash');
+  '(A7) false − true = 0 AT A POST-CLOSURE AS-OF: the two scopes agree exactly, because a closed account holds zero past its closing date and contributes nothing to either. ⚠ THIS DOES NOT DETECT A WRONG 059 RE-POINT and must not be read as doing so — measured: under the naive current-state predicate this assertion still passes. The detector is (A9)/(A11) at PRE-closure dates. What this one adds is the post-closure half of the invariant: value cannot leak into a closed account after the fact');
 -- (A8) 037 memo unchanged: fn_gl_entries still balances with an inactive holding present.
 select is(
   (select coalesce(sum(amount_book), 0) from pfin.fn_gl_entries('2026-06-30'::date)),
   0::numeric,
-  '(A8) 037 memo UNCHANGED: fn_gl_entries(as_of) Σ(amount_book) = 0 — the Unrealized memo''s 1-arg NAV dependency stayed all-accounts (wrapper→false), so the trial balance still zeroes with a4''s inactive holding imaged');
+  '(A8) 037 memo UNCHANGED: fn_gl_entries(as_of) Σ(amount_book) = 0 — the Unrealized memo''s 1-arg NAV dependency stayed all-accounts (wrapper→false), so the trial balance still zeroes with a4''s closed-account holding imaged');
+
+-- =====================================================================
+-- (A9)–(A12) ⭐⭐ THE PRE-CLOSURE DETECTOR — the assertions that catch a wrong 059 re-point.
+--
+-- ⚑ MEASURED FIRST, AND THE MEASUREMENT IS WHY THIS BLOCK EXISTS: (A4) and (A7) carry prose
+--   calling themselves the detector. **THEY ARE NOT, AND IT IS MEASURED.** Both assert at
+--   2026-06-30, a POST-closure as-of, where a closed account is excluded under BOTH predicate
+--   forms and contributes zero either way. Re-pointing 059 to the naive current-state form
+--   (`closed_at is null`, both functions) and running the suite: **049, 050 AND 051 all pass,
+--   zero failures.** A whole battery agreed with the defect its own comments described.
+--   >> A CLAIM THAT AN ASSERTION DETECTS SOMETHING IS ITSELF AN ASSERTION, and that one had
+--      never been run. Same shape as DESIGN.md's `a caveat is a claim`, applied to a test's
+--      self-description rather than to a hedge. <<
+--
+-- MEASURED FIXTURE BEHAVIOUR (tenant A, a4 closed 2026-06-30), correct vs naive re-point:
+--
+--     as_of     | correct: true / false / 049 cards | naive: true / false / cards
+--   ------------+-----------------------------------+-----------------------------
+--   2026-06-10  |     8000 / 8000 / 4               |   6500 / 8000 / 3   <- DIVERGES
+--   2026-06-25  |     7500 / 7500 / 4               |   6500 / 7500 / 3   <- DIVERGES
+--   2026-06-30  |     6500 / 6500 / 3               |   6500 / 6500 / 3     identical
+--   2026-07-15  |     6500 / 6500 / 3               |   6500 / 6500 / 3     identical
+--
+--   The post-closure rows are why the old assertions could not see it. The pre-closure rows
+--   are the detector, and the divergence is 1500 and 1000 — a NUMBER, not merely a mismatch.
+--
+-- ⚑⚑ TWO DATES, BECAUSE 059 HAS TWO PREDICATES AND ONE DATE GUARDS ONLY ONE OF THEM.
+--   The securities leg gates on `acc2` (LEFT JOIN via holdings); the cash leg gates on `acc`.
+--   A re-point flipping ONE is a realistic edit — different lines, different subqueries — and
+--   a single as-of catches it only if that date happens to exercise that leg. a4's wind-down
+--   separates them by construction:
+--     2026-06-10 — a4 holds 10 NVSECA (1500) and ZERO cash      -> SECURITIES leg
+--     2026-06-25 — a4 sold on 06-20: 1000 cash, ZERO securities -> CASH leg
+--   So (A9) and (A11) are not one assertion at two dates; they guard two predicates.
+-- =====================================================================
+
+-- (A9) ⭐ SECURITIES-LEG DETECTOR, at a pre-closure as-of.
+select is(
+  pfin.fn_compute_nav('2026-06-10'::date, true),
+  pfin.fn_compute_nav('2026-06-10'::date, false),
+  '(A9) ⭐ PRE-CLOSURE EQUIVALENCE, SECURITIES LEG: at 2026-06-10 — before a4''s closing date, when it held 1500 in securities and no cash — TRUE = FALSE, because a4 was OPEN as of that date and the as-of predicate includes it in BOTH scopes. Under a current-state re-point it is excluded from the active scope at EVERY date, TRUE reads 6500 against FALSE''s 8000, and this goes RED by 1500. THIS IS THE ASSERTION THAT CATCHES A WRONG 059 RE-POINT; (A4) at a post-closure date cannot, which was measured rather than assumed');
+
+-- (A10) NON-VACUITY of (A9) — without it the equivalence could hold because a4 was worth
+--   NOTHING before closure, which is exactly what a careless re-seed would produce.
+select is(
+  pfin.fn_compute_nav('2026-06-10'::date, true) - pfin.fn_compute_nav('2026-06-30'::date, true),
+  1500.0000::numeric,
+  '(A10) THE DETECTOR IS NON-VACUOUS: the active-scope NAV falls by exactly 1500 between the pre-closure as-of and the closing date — a4''s real securities position, present on one side of its closure and gone on the other. At 0, (A9) would be comparing a closed account that never carried value and would prove nothing. RED at 0 means the fixture stopped exercising what (A9) detects');
+
+-- (A11) ⭐ CASH-LEG DETECTOR — the SAME property at a date where a4 is cash-only.
+select is(
+  pfin.fn_compute_nav('2026-06-25'::date, true),
+  pfin.fn_compute_nav('2026-06-25'::date, false),
+  '(A11) ⭐ PRE-CLOSURE EQUIVALENCE, CASH LEG: at 2026-06-25 a4 has sold its securities (06-20) and holds 1000 in cash and nothing else, so this exercises the cash leg''s `acc` predicate where (A9) exercises the securities leg''s `acc2`. They are separate lines in separate subqueries of 059 and a re-point can flip one without the other; a single as-of leaves whichever leg it does not exercise unguarded. Naive re-point: 6500 against 7500, RED by 1000');
+
+-- (A12) …and the two legs are genuinely separate in the fixture, rather than both non-zero at
+--   both dates — otherwise (A9)/(A11) would be one assertion written twice.
+select is(
+  pfin.fn_compute_nav('2026-06-25'::date, true) - pfin.fn_compute_nav('2026-06-30'::date, true),
+  1000.0000::numeric,
+  '(A12) CASH-LEG NON-VACUITY, AND LEG SEPARATION: a4''s contribution at 2026-06-25 is 1000 — swept cash, securities already sold — against 1500 of pure securities at 2026-06-10. The two detector dates carry DIFFERENT amounts from DIFFERENT legs, which is what makes them two guards rather than one guard twice. RED if the wind-down dates move and both dates collapse onto the same leg');
 select set_config('role', 'postgres', true);
 
 -- =====================================================================

@@ -4,7 +4,7 @@ Author:        Rich Mosko (mosko-fintech Backend)
 
 Description:
     SELF-214 daily-NAV checkpoint worker — the FIRST live per-user worker write
-    path in pfin_back_etl. Computes each active-account tenant's net-asset-value
+    path in pfin_back_etl. Computes each account-owning tenant's net-asset-value
     for the current day and appends a frozen checkpoint row to pfin.nav_daily.
 
     DB identity model (SELF-214 Sec joint-review v3 B1 + B8 option (B), both
@@ -50,10 +50,17 @@ Description:
            auth.uid() — the tenant as THE DATABASE resolved it, not the Python
            variable. Architect's 054 BEFORE INSERT trigger rejects any row whose
            users_id disagrees, and fails closed when the GUC is unset.
-        3. READ: select pfin.fn_compute_nav(current_date, true)  -- active-only,
-           current-state headline NAV (sound only at current_date per 050's
-           TEMPORAL CONSTRAINT — hence FORWARD-ONLY: today's checkpoint only;
-           historical backfill is SELF-217, not this worker).
+        3. READ: select pfin.fn_compute_nav(current_date, true)  -- the headline
+           NAV, scoped to accounts OPEN AS OF the valuation date.
+           ⚠ 050's "sound only at current_date" TEMPORAL CONSTRAINT IS STRUCK at
+           059 (ADR-042), NOT relaxed: it rested entirely on is_active being a
+           current-state boolean, and closed_at IS temporal, so fn_compute_nav is
+           now sound at ANY p_as_of. THIS WORKER REMAINS FORWARD-ONLY ANYWAY —
+           but the reason is now the only reason it ever really had: historical
+           backfill is SELF-217's scope, and freezing a checkpoint for a past date
+           is a decision about nav_daily's append-only semantics, not about
+           whether the valuation is trustworthy. Do NOT cite the struck constraint
+           as the justification; if backfill is wanted, the blocker is SELF-217.
         4. Teardown (impersonate() exit: claims cleared, RESET ROLE) → back to the
            privilege-less `pfin_etl`. Then `set local role service_role` and
            the PRIVILEGED append-only checkpoint INSERT. `authenticated` holds no
@@ -180,7 +187,7 @@ _CHECKPOINT_INSERT = (
 class NavDailyWorker:
     """Daily per-user NAV checkpoint worker (SELF-214 W-1).
 
-    Construct once, then call run() (all active-account tenants) or
+    Construct once, then call run() (all account-owning tenants) or
     compute_and_checkpoint_user(users_id) (a single tenant).
     """
 
@@ -189,30 +196,50 @@ class NavDailyWorker:
         self._db_url = utils.build_database_url(self._params)
         # System-mode engine for tenant ENUMERATION only (no per-tenant assertion
         # registered; the enumeration query assumes `service_role` itself — see
-        # active_account_user_ids). Per-tenant reads/writes go through a fresh
+        # account_user_ids). Per-tenant reads/writes go through a fresh
         # for_tenant() TBC each — never this engine.
         self._system_tbc = TenantBoundConnection.system(self._db_url)
 
     # ------------------------------------------------------------------ #
     # Tenant enumeration (service_role; legitimate cross-tenant read).
     # ------------------------------------------------------------------ #
-    def active_account_user_ids(self):
-        """Distinct users_id having at least one ACTIVE account — the tenants to
-        checkpoint. A deliberate cross-tenant enumeration of WHOM to value, NOT a
-        per-tenant data read (it returns users_id values only, no financial data),
-        so it runs on the system-mode TBC where no per-tenant assertion registers —
-        exemption by construction, not a bypass. The active-account filter mirrors
-        fn_compute_nav(_, true)'s active-only scope (a user with only inactive
-        accounts has a 0 active NAV — nothing to freeze).
+    def account_user_ids(self):
+        """Distinct users_id owning AT LEAST ONE ACCOUNT — the tenants to checkpoint.
+        A deliberate cross-tenant enumeration of WHOM to value, NOT a per-tenant data
+        read (it returns users_id values only, no financial data), so it runs on the
+        system-mode TBC where no per-tenant assertion registers — exemption by
+        construction, not a bypass.
+
+        ⚠ THE FILTER IS GONE, AND IT WAS DELIBERATELY *NOT* RE-POINTED TO A CLOSURE
+        PREDICATE (ADR-042 / migration 059; BACKLOG §7.7 + §7.9). Two reasons, and the
+        second is the one a faithful-looking translation would have missed:
+
+        (1) `where is_active = true` no longer resolves — the column drops at 059. This
+            method is why that break is FORCED work inside this slice rather than a
+            latent one: it raises at runtime, in the nightly cron, at tenant
+            enumeration, before any tenant is valued.
+
+        (2) Re-pointing it to `closed_at is null` would have PRESERVED A LIVE DEFECT
+            while looking like a careful translation. The old filter meant a tenant
+            whose accounts were ALL inactive was skipped, so that tenant got NO
+            nav_daily ROW — a GAP. A gap conflates four distinct states (not a user /
+            owns no accounts / owns only closed accounts / the job never ran), while a
+            `0` row asserts one fact and is distinguishable from every one of them.
+            Absence is not a value. Enumerating every tenant that owns any account
+            yields a real 0 for the all-closed case, which is both true and legible.
+
+        The as-of scoping still happens, and still happens in exactly ONE place:
+        fn_compute_nav(current_date, true) applies `closed_at is null or closed_at >
+        p_as_of` per tenant, under that tenant's RLS. Filtering here as well would
+        restate that predicate in a second language, where the two would drift apart
+        silently — and the DB's copy is the one with the battery behind it.
 
         Runs AS `service_role`, assumed explicitly: the login role `pfin_etl`
         is NOINHERIT and holds no privileges, so a bare SELECT here would fail
         42501. `service_role` bypasses RLS (so the enumeration sees all tenants) and
         holds `grant select on pfin.account` from migration 008.
         """
-        stmt = sqla.text(
-            "select distinct users_id from pfin.account where is_active = true"
-        )
+        stmt = sqla.text("select distinct users_id from pfin.account")
         with self._system_tbc.engine.connect() as conn:
             with conn.begin():  # `set local` needs an explicit transaction scope
                 conn.execute(sqla.text(_SET_WRITE_ROLE))
@@ -271,18 +298,18 @@ class NavDailyWorker:
         return nav_value, inserted
 
     # ------------------------------------------------------------------ #
-    # Nightly entry — checkpoint every active-account tenant for today.
+    # Nightly entry — checkpoint every account-owning tenant for today.
     # ------------------------------------------------------------------ #
     def run(self):
-        """Checkpoint today's NAV for every active-account tenant. Forward-only
+        """Checkpoint today's NAV for every account-owning tenant. Forward-only
         (today only; backfill is SELF-217). Per-tenant failures are isolated and
         logged so one bad tenant does not abort the whole run. Returns a summary
         dict {total, ok, failed}.
         """
         logger.info("==== " * 16)
         logger.info("==== Running daily NAV checkpoint (SELF-214 W-1; forward-only)")
-        user_ids = self.active_account_user_ids()
-        logger.info(f"Active-account tenants to checkpoint: {len(user_ids)}")
+        user_ids = self.account_user_ids()
+        logger.info(f"Tenants to checkpoint: {len(user_ids)}")
 
         ok = 0
         failed = 0

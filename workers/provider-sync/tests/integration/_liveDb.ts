@@ -13,8 +13,8 @@
 //     the REAL 016 (symbol) + 020 (cusip) partial-unique indexes on pfin.asset.
 //
 // ── DETERMINISM + CI POSTURE (QA discipline: no silent green, no flaky CI) ──────────────
-// These require the local Supabase stack (config.toml Postgres @ 127.0.0.1:54322, migrations
-// 001–021 applied, vault extension). They are GATED behind RUN_DB_INTEGRATION=1 so the default
+// These require the local Supabase stack (config.toml Postgres @ 127.0.0.1:54322, ALL migrations
+// applied — not a fixed range, vault extension). They are GATED behind RUN_DB_INTEGRATION=1 so the default
 // `vitest run` (which must stay hermetic until DevOps provisions a DB in CI) SKIPS them
 // LOUDLY (a visible skip, never a false pass). Locally: `RUN_DB_INTEGRATION=1 npx vitest run
 // tests/integration`. Wiring them into a blocking CI lane (provision the stack + set the flag)
@@ -42,7 +42,7 @@ if (!RUN_DB_INTEGRATION) {
 	// eslint-disable-next-line no-console
 	console.warn(
 		'[provider-sync integration] SKIPPED — set RUN_DB_INTEGRATION=1 with the local Supabase ' +
-			'stack up (127.0.0.1:54322, migrations 001–021) to run G3/SC-4 live-DB tests.'
+			'stack up (127.0.0.1:54322, ALL migrations applied) to run the live-DB tests.'
 	);
 }
 

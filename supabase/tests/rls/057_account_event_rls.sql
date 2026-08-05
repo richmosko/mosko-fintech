@@ -137,10 +137,10 @@ begin;
 --     edit to either battery or fence logic.⟧
 \set m_direct  '%rejects direct INSERT%written ONLY by the account_event_write trigger%'
 
--- plan = 24: D1 8 (3 + D1d/D1d2 declarative policy pair + D1e/D1f/D1g, the Amendment-3 forge
+-- plan = 25: D1 8 (3 + D1d/D1d2 declarative policy pair + D1e/D1f/D1g, the Amendment-3 forge
 -- trio) · D2 4 · D3 2 · D4 4 (+D4d vocabulary pin) · D5 3 · D6 2 · D7 1. Recorded so a silent
 -- plan-edit is visible in review as an arithmetic change.
-select plan(24);
+select plan(25);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 
@@ -416,6 +416,34 @@ select lives_ok(
 --   the ADR's stale Consequences block.
 select hasnt_column('pfin', 'account_event', 'linked_source_id',
   '(D2d) #17 IS NEVER CREATED: account_event has NO linked_source_id column. ADR-042''s body reasoned it out of existence while its Consequences block still counted it — this assertion is the fence on Architect building from the stale summary. An unused fenced column is an attractive nuisance: it looks authoritative and someone eventually populates it, at which point the fence validates tenant-match but not meaning');
+
+-- (D2e) ⚑ #16 MUST BE UNCONDITIONAL — Sec's post-merge note, 2026-08-04.
+--   (D2b) covers #16's EXISTENCE: drop the trigger and it reds. It does NOT cover #16 becoming
+--   CONDITIONAL, and that is a different and more likely edit. The reasoning that produces it
+--   is locally plausible — *"the wrong-origin fence already refuses direct inserts, so #16 only
+--   needs to run for the owner"* — and it is MORE tempting now, because the F2 rename made #16
+--   fire on fewer paths (see the rebind note at D1c). It is also plausible by IMITATION: the
+--   fence in the very next block legitimately keys on `pg_trigger_depth()`, so a depth-guard
+--   here would look like the house style rather than like a narrowing.
+--   ⚠ WHAT IT WOULD COST, and it is not hypothetical: MEASURED (2026-08-04) that #16 IS reached
+--     on the ORDINARY PRODUCTION PATH at trigger depth 2 — fn_account_event_write firing on
+--     every close and reopen. A WHEN clause or a depth-keyed early return would leave that path
+--     silently unguarded for tenant-pair mismatches while (D2b) STAYED GREEN.
+--   BOTH ROUTES ARE COVERED because they are not the same mechanism: a WHEN clause lives on the
+--   TRIGGER (catalog), an early return lives in the FUNCTION (body). Asserting one leaves the
+--   other open, and the two read identically from the outside.
+--   Idiom follows (D6a), which already reads a trigger definition from the catalog.
+select ok(
+  (select pg_get_triggerdef(t.oid) not like '%% WHEN %%'
+     from pg_trigger t join pg_class c on c.oid = t.tgrelid
+     join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'pfin' and c.relname = 'account_event'
+      and t.tgname = 'account_event_matched_account' and not t.tgisinternal)
+  and (select pg_get_functiondef(p.oid) not like '%%pg_trigger_depth%%'
+         from pg_proc p
+        where p.pronamespace = 'pfin'::regnamespace
+          and p.proname = 'fn_account_event_matched_account'),
+  '(D2e) #16 IS UNCONDITIONAL, BY BOTH ROUTES: account_event_matched_account carries NO WHEN clause, and fn_account_event_matched_account contains NO pg_trigger_depth guard. Either would make the matched-tenant fence skip a path while (D2b) — which only proves the trigger EXISTS — stayed green. The path it would skip is the live one: #16 is reached at depth 2 on every close and reopen through fn_account_event_write, measured. Conjoined because a WHEN clause is on the TRIGGER and an early return is in the FUNCTION; asserting either alone leaves the other open. RED means #16 was narrowed — re-derive whether the production writer is still guarded before accepting it');
 
 -- =====================================================================
 -- D3 — THE BOUNDING CLAIM, ASSERTED AS STATED RATHER THAN AS HOPED

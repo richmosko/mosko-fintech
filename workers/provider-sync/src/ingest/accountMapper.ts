@@ -69,7 +69,13 @@ export type AccountTypeMapper = (type: string, subtype: string | null) => string
  *   - linked_source_id  ← sourceId
  *   - provider_account_id ← ref.providerAccountId
  * users_id is NOT built here (DEFAULT auth.uid() stamps it — §Q1); backfill_cutover_date
- * stays NULL (import/reconciliation → SELF-212); is_active defaults true.
+ * stays NULL (import/reconciliation → SELF-212); closed_at stays NULL, i.e. the landed account
+ * is OPEN (is_active was dropped at 059 / ADR-042 — a landed account is open because it has no
+ * closure date, not because a flag defaults true).
+ *   ⚠ 058 changed what a RE-LAND does: fn_land_linked_accounts NO LONGER REACTIVATES. Re-landing
+ *   a connection containing a CLOSED account leaves it closed, so a user re-selecting it gets a
+ *   no-op. That is deliberate (a concept-3 action must not perform a concept-2 transition) and
+ *   the UX resolution is PM/UX's, not this mapper's — do not "fix" it by clearing closed_at here.
  */
 export function buildAccountRows(
 	refs: readonly ProviderAccountRef[],
