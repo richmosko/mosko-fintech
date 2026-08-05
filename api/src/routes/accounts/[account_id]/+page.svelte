@@ -396,28 +396,53 @@
 				(2) The enumeration is trimmed to the two legs a user can be holding TODAY. The
 				    third — activity dated after closure — is, with `closed_at = now()`, exactly
 				    "a future-dated transaction": real, rare, and already covered where it belongs.
+				    ⚠ THIS TRIM HAS A DEPENDENCY, stated so it can be revisited rather than
+				    rediscovered: it assumes the post-closure REFUSAL is fixed. That message
+				    currently reads "Close it as of a later date", naming a date control this form
+				    does not have — so today that leg's user-visible path is a dead end at BOTH
+				    ends. If the refusal is not corrected, re-add the leg here.
 
 				(3) Why trimming is safe, and the correction to the argument that produced the long
 				    form: ADR-042 Decision 1 does NOT fence "learning a precondition from a
 				    refusal". Verbatim, it fences a DEAD END — *"the refusal message must name it so
 				    the gate is not a dead end"* — and it places that burden on the refusal, which
-				    it treats as the teaching surface. That burden is already discharged:
-				    `GATE_LEG_MESSAGE` in `+page.server.ts` names the failing leg AND its remedy,
-				    per leg. So this paragraph was duplicating a message that is strictly more
-				    specific than anything it can say in advance. What is left here is the job the
-				    refusal cannot do — setting the expectation that "close" is gated at all, before
-				    the user has invested in the attempt.
+				    it treats as the teaching surface. That burden is largely discharged:
+				    `GATE_LEG_MESSAGE` in `+page.server.ts` names the failing leg AND its remedy for
+				    each CLASSIFIED leg (its `other` fallback names neither, and `cash-contract` is
+				    byte-identical to `cash` by Sec's ruling — so four visible strings over six
+				    keys; do not restate that as a leg count anywhere).
 
-				(4) NOT changed, deliberately: "holds securities or cash" stays a QUANTITY claim.
+				(4) BUT THE TRIM IS NOT THE WHOLE JOB, and UX corrected the ordering — on my
+				    replacement, not only on the original. Both the brief's framings assume this
+				    paragraph's job is to PREVENT a refusal. It isn't. Its job is to say what
+				    closing MEANS: a bookkeeping event with a zero precondition, not a way to get a
+				    row out of sight. Someone holding the second model closes an account that still
+				    holds value and is confused by the refusal EVEN IF THE REFUSAL IS PERFECT,
+				    because it contradicts their reading of the verb. So the precondition is not an
+				    edge case being front-loaded — it is the definition. What was actually wrong was
+				    ORDER: leading with the constraint makes the common case (empty account, just
+				    close it) read a restriction first. Now the verb is defined by what it DOES,
+				    reversibility lands early where it defuses hesitation, and the precondition
+				    follows as a CONSEQUENCE ("because of that") rather than as an arbitrary rule —
+				    still landing before the button.
+
+				(5) NOT changed, deliberately: "holds securities or cash" stays a QUANTITY claim.
 				    Decision 3 measures holdings quantity-based via `fn_holdings_as_of` precisely
 				    because an unpriced asset fails a market-value test OPEN. So "empty" here must
 				    never become "worth nothing" or "zero balance" — those are the wrong test, and
 				    an account that reads as worth nothing can still be refused.
+
+				(6) "Stops accepting new entries" is load-bearing and is NOT redundant with the
+				    closed-state copy, which the user only reads AFTER closing. Said here, it is
+				    the one warning that reaches a user who is about to close an account they are
+				    still posting to.
 			-->
 			<p class="help">
-				Close this account once it's empty — closing is blocked while it still holds
-				securities or cash, so record the sale or transfer out first. Its transaction
-				history is kept either way, and you can reopen it at any time.
+				Closing an account marks it finished as of today: it stops counting toward your
+				balances and totals from that point, and stops accepting new entries. Its
+				transaction history is kept, and you can reopen it at any time. Because of that, an
+				account can only be closed once it's empty — if it still holds securities or cash,
+				record the sale or transfer out first.
 			</p>
 		{/if}
 
