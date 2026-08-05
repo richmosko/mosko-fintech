@@ -41,15 +41,54 @@ export type NetWorthView = {
 	 */
 	netWorth: number | null;
 	/**
-	 * Whether the caller owns any account OPEN AS OF the same `asOf` the NAV was computed at.
-	 * Distinguishes the zero-account empty-state ("connect your first account") from a real $0
-	 * net worth — fn_compute_nav returns 0 in BOTH cases, so the count is the disambiguator.
+	 * Whether the caller owns any account OPEN AS OF the same `asOf` the NAV was computed at —
+	 * THREE-VALUED, and deliberately not a boolean.
 	 *
-	 * "As of the SAME asOf" is the load-bearing half: this count and the NAV are two reads that
-	 * must describe one population. Scoping them differently makes the disambiguator disagree with
-	 * the thing it disambiguates.
+	 *   'some'    — the count read succeeded and found at least one open account
+	 *   'none'    — the count read succeeded and found zero
+	 *   'unknown' — THE COUNT READ FAILED. We did not measure it. This is NOT 'none'.
+	 *
+	 * ⚠ THE THIRD MEMBER EXISTS BECAUSE `false` WAS A LIE. This was `hasAccounts: boolean`, and a
+	 *   failed count degraded to `false` — so any read error rendered "connect your first account"
+	 *   to a user with a real net worth. That was FAIL-SOFT, and it was a deliberate prior
+	 *   decision, not an oversight (see netWorth.test.ts for the superseded contract). What it got
+	 *   wrong is the thing worth carrying: fail-soft is safe when the degraded value is INERT.
+	 *   `false` here is not inert — it drives a screen that TELLS THE USER THEY OWN NOTHING.
+	 *   Degrading to a claim is not degrading gracefully.
+	 *
+	 * ⚠ AND IT IS A STRING UNION, NOT `boolean | null`, BY CONSTRUCTION. Under `boolean | null`
+	 *   every existing `!hasAccounts` call site keeps compiling and keeps being wrong, because
+	 *   `!null` is `true` — the unknown state collapses into exactly the branch it must not take.
+	 *   Removing the boolean makes the old reading a COMPILE ERROR rather than a runtime surprise.
+	 *   Same principle as 059's `closed_at is null` trap: a wrong form that is indistinguishable
+	 *   from the right one under today's data will be chosen, and will not announce itself.
+	 *
+	 * ⚠ THIS FIELD REPORTS WHAT THE COUNT READ SAID. IT IS NEVER INFERRED FROM `netWorth`.
+	 *   The inference is available and SOUND — a non-zero NAV entails at least one open account,
+	 *   since fn_compute_nav sums over the same population at the same asOf, so an empty set
+	 *   yields exactly 0 — and consumers SHOULD use it (see the precedence note below). But it is
+	 *   not applied here, deliberately. Deriving 'some' from a non-zero NAV would make this field
+	 *   depend on an invariant living in ANOTHER function: if fn_compute_nav's scope ever stopped
+	 *   matching this count's population, the field would silently report a presence nobody
+	 *   measured, and nothing would catch it. A field that says "the read failed" is never wrong;
+	 *   a field that says "I deduced it from something else" is wrong the moment the something
+	 *   else moves. Keep the measurement and the inference in different places.
+	 *
+	 * PRECEDENCE FOR CONSUMERS (the rule, not a rendering): this field is only LOAD-BEARING when
+	 * `netWorth === 0`, which is the sole cell where the NAV cannot distinguish "no accounts" from
+	 * "a real $0 position". When `netWorth` is non-zero the NAV is itself proof that accounts
+	 * exist and OUTRANKS this field, including when it is 'unknown'. When `netWorth === null` the
+	 * compute failed and this field is moot. Check the NAV first; a consumer that branches on
+	 * presence BEFORE the number lets a failed count override evidence that outranks it — which is
+	 * precisely how the original defect rendered onboarding over a perfectly good number.
+	 * (Finding: fe-adr042.)
+	 *
+	 * "As of the SAME asOf" is the load-bearing half of the measurement: this count and the NAV are
+	 * two reads that must describe one population. Scoping them differently makes the disambiguator
+	 * disagree with the thing it disambiguates — and it is also what would break the entailment
+	 * above, which is the second reason the two dates must not drift apart.
 	 */
-	hasAccounts: boolean;
+	accountPresence: 'some' | 'none' | 'unknown';
 };
 
 /**
@@ -134,9 +173,17 @@ export async function loadNetWorthView(
 		.select('account_id', { count: 'exact', head: true })
 		.or(`closed_at.is.null,closed_at.gte.${nextDayIso(asOf)}`);
 	if (countErr) {
-		console.error('[netWorth] active-account count failed:', countErr.message);
+		console.error('[netWorth] open-account count failed:', countErr.message);
 	}
-	const hasAccounts = !countErr && (count ?? 0) > 0;
+	// THREE STATES, and the error case is resolved FIRST so it can never be reached by the
+	// count-comparison path. `count` is null on a failed read, so a single expression ordered the
+	// other way (`(count ?? 0) > 0`) silently maps failure onto 'none' — which is the original
+	// defect written more compactly. The branch is separate on purpose.
+	const accountPresence: NetWorthView['accountPresence'] = countErr
+		? 'unknown'
+		: (count ?? 0) > 0
+			? 'some'
+			: 'none';
 
-	return { netWorth, hasAccounts };
+	return { netWorth, accountPresence };
 }
