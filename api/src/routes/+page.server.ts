@@ -14,18 +14,15 @@ import { loadNetWorthView } from '$lib/server/queries/netWorth';
 import { loadNavComposition } from '$lib/server/queries/navComposition';
 import { loadStaleness } from '$lib/server/queries/staleness';
 import { EMPTY_STALENESS } from '$lib/staleness/stale-constituent';
+import { serverTodayAsOf } from '$lib/server/time/asOf';
 import type { PageServerLoad } from './$types';
 
-/** Today's date as an ISO YYYY-MM-DD string — the as-of/LOCF valuation date. */
-function todayIso(): string {
-	return new Date().toISOString().slice(0, 10);
-}
 
 export const load: PageServerLoad = async ({ locals }) => {
 	const { user } = await locals.safeGetSession();
 	if (!user) throw redirect(303, '/login');
 
-	const asOf = todayIso();
+	const asOf = serverTodayAsOf();
 	const { netWorth, hasAccounts } = await loadNetWorthView(locals.supabase, asOf);
 
 	// D1 non-silent staleness marker (SELF-208 §2.4.4.c). FAIL-SOFT is load-bearing: a

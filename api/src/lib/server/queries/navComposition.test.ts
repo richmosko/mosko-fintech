@@ -10,8 +10,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { loadNavComposition, type NavComposition } from './navComposition';
+import { unsafeAsOfForTest } from '$lib/server/time/asOf';
 
-const AS_OF = '2026-07-20';
+const AS_OF = unsafeAsOfForTest('2026-07-20');
 
 type MockOpts = {
 	data?: unknown;

@@ -12,6 +12,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ManualTransEdit, SplitSet, StockSplitCreate } from '$lib/server/schemas/transaction';
 import { computeImportHash } from '$lib/server/dedup/importHash';
+import type { ZoneResolvedAsOf } from '$lib/server/time/asOf';
 
 export type WriteResult =
 	| { ok: true; transId?: number }
@@ -366,7 +367,7 @@ export type HeldSecurity = {
 export async function loadHeldSecurities(
 	supabase: SupabaseClient,
 	accountId: number,
-	asOf: string
+	asOf: ZoneResolvedAsOf
 ): Promise<HeldSecurity[]> {
 	const { data: holdings, error: hErr } = await supabase
 		.schema('pfin')
