@@ -5,6 +5,26 @@
 	list AND grouped `groups` (rendered as <optgroup> — used for Sub-Cat grouped by cat).
 	Native <select> is retained (keyboard + screen-reader semantics come for free);
 	tokens ONLY (var(--c-*)), reproducing the locked screen.css `.select` focus/error.
+
+	⚠ `required` SETS `aria-required` AND IS DELIBERATELY NOT FORWARDED TO THE NATIVE <select>.
+	  This looks like an omission and is load-bearing. Forwarding it would make the BROWSER block
+	  submit first, with an untokened native validation bubble — which pre-empts the page's
+	  client-side Zod mirror, so the error would never reach the `.field-error-msg` slot below,
+	  never be styled by the design system, and never be announced through the `role="alert"`
+	  wiring this component exists to provide.
+
+	  A live consumer depends on exactly this: the account close control
+	  (`accounts/[account_id]`) renders an EMPTY placeholder option so the closure reason cannot
+	  be defaulted — the reason lands in `pfin.account_event`, which is immutable audit-class, so
+	  a reason nobody chose is permanent. That empty value is caught by the page's Zod mirror and
+	  rendered inline HERE. "Fixing" this by forwarding `required` silently degrades that path to
+	  a browser bubble, and NOTHING IN THE ACCOUNT PAGE FAILS — no test breaks, no type changes,
+	  the control still refuses an empty submit. The regression is entirely in which layer
+	  reports it and how it looks.
+
+	  If a native-`required` variant is ever genuinely needed, add it as a separate opt-in prop
+	  rather than changing this one. (Dependency found by UX Designer during the ADR-042 review;
+	  recorded here rather than in the consuming page, because the page cannot see it.)
 -->
 <script lang="ts">
 	type Opt = { value: string; label: string };

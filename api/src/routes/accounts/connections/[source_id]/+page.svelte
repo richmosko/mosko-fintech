@@ -18,7 +18,7 @@
 --><script lang="ts">
 	import type { PageData } from './$types';
 	import ConnectionStatusChip from '$lib/components/ConnectionStatusChip.svelte';
-	import { accountTypeLabel } from '$lib/account-display';
+	import { accountTypeLabel, closedAtLabel } from '$lib/account-display';
 	import { providerLabel, providerHomeUrl } from '$lib/accounts/connection-display';
 
 	let { data }: { data: PageData } = $props();
@@ -91,7 +91,27 @@
 					<li class="acct-row">
 						<div class="acct-id">
 							<a class="acct-name" href="/accounts/{a.account_id}">{a.name}</a>
-							<span class="acct-meta">{accountTypeLabel(a.account_type)}</span>
+							<!--
+								`a.closed_at` — the ACCOUNT column. `loadAccountsForSource` has always mapped
+								it into `ConnectionAccount`; this template simply ignored it, so the SAME
+								account read as open here and as closed-with-a-date on the accounts hub.
+								One account, two truths, decided by the route you arrived through.
+
+								"Closed account", not bare "Closed" — pm-copy's asymmetric-cost ruling, and
+								it binds harder on this page than on the parent list: a `ConnectionStatusChip`
+								sits directly above in the header, so a bare "Closed" invites reading the
+								CONNECTION as closed and sends the user off to re-link something that is fine.
+
+								Guarded on `a.closed_at`, NOT on `closedAtLabel(...)` being non-empty — the
+								helper returns '' for null, and leaning on that would make the render depend
+								on a formatter's null-handling rather than on the fact itself.
+							-->
+							<span class="acct-meta">
+								{accountTypeLabel(a.account_type)}
+								{#if a.closed_at}
+									<span class="acct-closed">· Closed account · {closedAtLabel(a.closed_at)}</span>
+								{/if}
+							</span>
 						</div>
 					</li>
 				{/each}
@@ -197,10 +217,12 @@
 		display: flex;
 		flex-direction: column;
 	}
+	/* No `justify-content: space-between` — it was residue from the per-row use/ignore control
+	   removed at `496c405`, and with a single child it did nothing. Removed rather than left,
+	   because a space-between with one child reads as "an element is missing here". */
 	.acct-row {
 		display: flex;
 		align-items: center;
-		justify-content: space-between;
 		gap: var(--space-3);
 		padding: var(--space-3) 0;
 		border-top: 1px solid var(--c-border);
@@ -231,6 +253,11 @@
 	}
 	.acct-meta {
 		font-size: var(--fs-small);
+		color: var(--c-text-muted);
+	}
+	/* Same muted register as the rest of the meta line — closure is a bookkeeping state, not an
+	   error, so no --c-neg (the page's standing value-color fence). */
+	.acct-closed {
 		color: var(--c-text-muted);
 	}
 	.empty {

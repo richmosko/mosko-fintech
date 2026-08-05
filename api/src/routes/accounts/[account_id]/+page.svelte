@@ -184,7 +184,18 @@
 		closeErrors = {};
 		submitting = true;
 		return async ({ update }) => {
-			await update(); // success → load reruns → closed_at refreshes; failure → form.errors
+			// `{ reset: false }` MIRRORS editHandler, and it matters MORE here: on this form a
+			// refusal is the EXPECTED outcome — `058`'s gate refuses a close on an account that
+			// still holds value — so the reset path is the common path, not the edge case.
+			//
+			// A reset blanks the reason the user picked while the bound `$state` KEEPS it:
+			// `form.reset()` fires neither `input` nor `change`, so `bind:value` never observes
+			// it and nothing re-renders the DOM back from state. Re-submitting then produces a
+			// SECOND error — a client-side "Choose a reason" — that looks unrelated to anything
+			// the user did, on top of the legitimate gate refusal they were already reading.
+			// Spelled out because a bare `update()` looks correct to the next reader, and the
+			// sibling handler carrying the same flag is not something you notice from here.
+			await update({ reset: false }); // success → load reruns → closed_at refreshes
 			submitting = false;
 		};
 	};
@@ -195,6 +206,10 @@
 	const reopenHandler: SubmitFunction = () => {
 		submitting = true;
 		return async ({ update }) => {
+			// Bare `update()` is CORRECT here and is not an oversight: this form has no inputs,
+			// so `reset: true` has nothing to reset. Do not "fix" it for symmetry with
+			// closeHandler above — the flag there is load-bearing for a reason that does not
+			// exist on this form.
 			await update();
 			submitting = false;
 		};
