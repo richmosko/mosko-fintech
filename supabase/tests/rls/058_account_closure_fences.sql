@@ -204,6 +204,27 @@ select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 -- │ ⚠ SKIP IS NOT PASS. If every one of these skips, this file proves nothing about the   │
 -- │   transitional window — which is CORRECT post-`059`, because the window is closed.    │
 -- └────────────────────────────────────────────────────────────────────────────────────┘
+--
+-- ┌─ ⏳ SUNSET — DELETE THESE WHEN `059` MERGES TO `main` (Sec, 2026-08-04) ───────────┐
+-- │ TRIGGER: **`059` merged to `main`** — NOT "applied to the F/CTO's database", which  │
+-- │ was my first proposal and keys on ONE machine. Sec retargeted it: once `059` is in  │
+-- │ the migration sequence, EVERY environment that will ever exist runs to head, so     │
+-- │ `in_window` is false everywhere — clean applies, CI from scratch, a rebuild, a      │
+-- │ second user's stack. The battery runs AFTER migrations, so it never observes the    │
+-- │ window even on a fresh apply. A fact about the repo, checkable, and earlier.        │
+-- │                                                                                     │
+-- │ ⚠ THE DELETION MUST CARRY THIS FORWARD — it is the important half of the condition: │
+-- │   **MEASURED IN-WINDOW GREEN at ref `22bb11d`: all NINE conditioned assertions RAN       │
+-- │   (0 skips) and PASSED against a 057+058 stack; at 057+058+059 all nine SKIP.**     │
+-- │   (S1)·(S2b)·(S3)·(S4a)·(S4b)·(S4c) — the one-directional sync + Sec cases 3/4/7    │
+-- │   (P1)·(P4)·(P5) — two-phase posture, the INSERT path, the NULL tripwire            │
+-- │                                                                                     │
+-- │   DELETING AN ASSERTION THAT ONCE HAD TEETH, WITHOUT RECORDING THAT IT DID,         │
+-- │   SILENTLY CONVERTS A PROVEN PROPERTY INTO AN UNPROVEN ONE. These prove the         │
+-- │   ONE-DIRECTIONALITY of the sync trigger — the property the whole ADR rests on —    │
+-- │   and after deletion this note is the only evidence it was ever demonstrated rather  │
+-- │   than assumed. Keep the note when the assertions go.                                │
+-- └─────────────────────────────────────────────────────────────────────────────────────┘
 select (exists (select 1 from information_schema.columns
                  where table_schema = 'pfin' and table_name = 'account'
                    and column_name = 'is_active'))::text as in_window \gset

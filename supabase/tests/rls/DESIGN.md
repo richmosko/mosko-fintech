@@ -696,3 +696,66 @@ extended that rule twice.
 
 Fix is one clause: *"7 reds UNDER SABOTAGE, 0 against `059` as authored."* Say what the number
 was measured against, or do not quote the number.
+
+---
+
+## 11. Standing cautions (Sec-requested, 2026-08-04)
+
+### "A whole battery agreed with the defect its own comments described"
+
+Sec asked for this in the file as a standing caution, not as a war story. The full instance is
+§10; what follows is the part that generalises.
+
+`050` carried prose naming a specific defect — a current-state re-point where an as-of one was
+required — citing the BACKLOG entry recording why it leaves no footprint. **Re-pointing the
+migration to that exact defect left `049`, `050` and `051` all passing, zero failures.**
+
+**Sec's addition, which is the load-bearing half and was not in my finding:** the
+undetectability is **STRUCTURAL, not an oversight**. Under V1, with no closed account in
+existence, the two predicates are **extensionally identical** — they select the same rows for
+every input. No data-driven test can separate expressions that agree on all reachable data.
+
+> So the instrument is not "test harder". It is to find the **one input where the two must
+> agree for a reason other than emptiness**, and assert there.
+
+Concretely: `fn_compute_nav(d, true) ≡ fn_compute_nav(d, false)` at a **pre-closure** date with
+a **non-zero shared contribution**. Both predicates include the account there — but only the
+as-of one includes it *because it was open then*; the current-state one excludes it and the
+equivalence breaks. The non-zero contribution is what makes the agreement meaningful rather
+than a comparison of two empty sets.
+
+**The general rule:**
+
+> **When two candidate implementations agree on all currently-reachable data, no amount of
+> coverage distinguishes them. Construct the input where they must agree for DIFFERENT
+> reasons, and assert the agreement there.**
+
+And the meta-rule the episode is really about:
+
+> **Prose in a test file that says "this catches X" is an untested claim about a test.**
+> Verify it the only way a detector can be verified: **build X and watch it go red.**
+
+### An assertion on a filter STRING cannot distinguish a correct predicate from a consistent pair of wrong ones
+
+The app-layer twin of the above, from the same review.
+
+`netWorth.ts` filtered `closed_at.gt.<asOf>` while the SQL filtered `closed_at::date > p_as_of`.
+PostgREST promotes the bare form to midnight, so the count and the NAV described **different
+populations for up to 24 hours after every app-initiated close** — a user closing their last
+account at 14:00 saw a real `$0` instead of the empty state.
+
+It survived every check because the test asserted the **string**. A string assertion is only as
+correct as the string someone typed into it, and it goes green the moment the code and the test
+are edited together — which is precisely what "update the test to match" means.
+
+> **A string assertion pins agreement between a test and an implementation. It says nothing
+> about whether either is right.**
+
+The instrument: **evaluate the emitted predicate against a fixture and assert the resulting
+population** (`netWorth.boundary.test.ts`). With the precondition that every clause must be
+*recognised* — a parser that silently returns "no match" on an unknown operator converts a
+predicate change into a passing test over an empty population.
+
+Note the layer split, because neither file substitutes for the other: the DB battery proves the
+SQL is right; the app test proves the app asks the SQL **the same question**. **The bug lived in
+the gap between two green suites.**
