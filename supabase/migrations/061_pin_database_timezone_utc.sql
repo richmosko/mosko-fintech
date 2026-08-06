@@ -59,7 +59,13 @@
 --   sees no change, and concludes the environment cannot affect the session.
 --
 --   ALSO NOT CLOSED: `ALTER ROLE ... SET timezone` outranks the database-level
---   setting. Nothing sets it today; adding one would silently defeat this file.
+--   setting, and this is a DEMONSTRATED vector rather than a theoretical one:
+--   one was live on the LOGIN role `authenticator` on 2026-08-04 — found by QA,
+--   cleared 2026-08-05 — while a `postgres`-session read-back showed a clean
+--   UTC | database throughout, and the suite ran green. NOT `authenticated`:
+--   per-role settings apply at LOGIN and do not survive `SET ROLE`, so checking
+--   that role finds nothing and proves nothing.
+--   The runbook §4.1 catalog sweep is what checks this, not this comment.
 --
 --   SO THE SUFFICIENCY CONDITION IS: this pin, AND no client supplying PGTZ,
 --   AND no role-level override. Only the first is enforced here. The other two
