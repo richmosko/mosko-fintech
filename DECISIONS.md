@@ -41,6 +41,107 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-044 — The as-of / TimeZone two-clock hazard: pin the database AND derive the date from it (R1 + R2, sequenced)
+
+**Date:** 2026-08-06 · **Status:** Accepted — F/CTO ratified **R1 + R2** 2026-08-04 on the Architect brief; recorded here after both halves of R1 merged (#324 `060`/`061`, #325 [ADR-043](#adr-043)) · **Phase:** 6 Build Loop · **Migrations:** `060` + `061` (R1, merged); the R2 migration is **unauthored and deliberately unnumbered** — see Decision 2.
+
+**Scope note.** This ADR records a **decision**. It does **not** schedule the R2 build; the work-spec is `temp/option-3-as-of-derivation-workspec.md` and its §7-or-Linear home is an open F/CTO question.
+
+### The hazard
+
+`fn_compute_nav` / `fn_nav_composition` / `fn_holdings_as_of` compare a `date` parameter against `timestamptz::date`, which Postgres evaluates **in the session TimeZone**. The app produced that date in the **Node** process (`new Date().toISOString().slice(0,10)` — unconditionally UTC). **Two clocks in two processes.** They agreed only because the dev stack happened to be UTC. `059`'s `closed_at` comment claimed the opposite mechanism was protecting it — *"V1 consumers pass CURRENT_DATE"* — and **zero app callers did**; `060` corrects that comment.
+
+### Decision 1 (R1) — pin the database TimeZone to UTC, via migration `061`
+
+`alter database … set timezone = 'UTC'`, with a fail-loud catalog read-back. **Layer ruled by precedent, not preference:** `055` already ships a cluster-level object (a LOGIN role) through the migration channel per [ADR-041](#adr-041), and a database-scoped `SET` is strictly less invasive. The decisive property: **because CI applies the same migration production runs, a green CI is evidence about production's mechanism** rather than about CI's ambient state.
+
+**⚠ The pin is NECESSARY AND NOT SUFFICIENT, and `061` says so itself rather than being caught at it.** The full condition is **three conjuncts — the pin, AND no client supplying `PGTZ`, AND no role-level `TimeZone` override on a login role** — of which **only the first is enforced in DDL**. Both defeat vectors are measured: `PGTZ` resolves at `source = client` and a role override at `source = user`, and **both outrank `source = database`**, so a half-pinned deployment **inspects clean**. The other two conjuncts are held by the runbook §4.1 / §10 TZ-1 deploy gate. Quoted rather than paraphrased, from `061`:
+
+> *"`PGTZ` IN A CONNECTING CLIENT'S ENVIRONMENT DEFEATS THIS PIN OUTRIGHT. … THAT IS THE DANGEROUS SHAPE: a half-pinned deployment that INSPECTS CLEAN."*
+
+**Verified live 2026-08-06, not argued:** applying `057`→`061` against a real stack flipped **(T2) `configuration file` → `database`**, 429 rows before and after, zero loss. **That transition was observable only because a hand-run local entry was cleared first** — otherwise `061` would have written `TimeZone=UTC` onto a row already saying it, and the apply would have proven nothing. *A migration applied onto its own outcome demonstrates nothing, and looks identical to success.*
+
+### Decision 2 (R2) — the app derives the as-of date from the database (`fn_server_today()`), as a later slice
+
+A `SECURITY INVOKER`, `stable`, `set search_path = ''` function returning `current_date`, called **once per request** and threaded to all three consumers — the shape the ETL worker already has, since `nav_daily.py` executes `select pfin.fn_compute_nav(current_date, true)` as **SQL**. **Not built here.** No migration number is reserved: taking one ahead of authoring is the shared-mutable-namespace hazard already recorded at the `058`→`059` slip.
+
+**⚠ The correction most likely to be lost in re-telling: `current_date` is ITSELF session-TimeZone-evaluated.** R2 does **not** make the as-of date zone-*independent*. It makes **both sides of the comparison use the same zone, whatever that zone is.** That is why it survives both defeat vectors — not because it prevents them, but because they move both sides together.
+
+**Zero-round-trip variant — RULED OUT.** Letting `p_as_of` default to `current_date` and not passing it looks free and looks precedented: `fn_nav_composition` (`051`) and `fn_account_unrealized_gl` (`049`, re-emitted at `056`) **already default that way**. It is neither. **(i)** It silently breaks the documented foot-to-NAV coupling — headline and composition are two separate PostgREST requests, each defaulting independently, and a pair straddling midnight stops footing with no error. **(ii)** The app loses a date it must display and log. The existing defaults are **not** evidence for it: every V1 caller passes an explicit argument, so the default is an ad-hoc-SQL convenience, not the app path.
+
+### Decision 3 — R1 and R2 are NOT alternatives, and R2 does not retire the pin
+
+This is the crux, and the reason a ruled decision was re-opened and then re-affirmed.
+
+| | Guarantees | Does **not** |
+|---|---|---|
+| **`061` (R1)** | **Which** day "today" is — UTC — for **every** container and login role, from **one** declaration | That the two sides agree if a vector defeats it |
+| **`fn_server_today()` (R2)** | That **both sides of one comparison** use the **same** day | **Which** day that is; and nothing **across containers** |
+
+**The finding that decided it, and it was in neither prior framing:** `pfin.nav_daily.nav_date` is `current_date` in the **ETL worker's** session — a different container and login role (`pfin_etl`, [ADR-041](#adr-041)) from the web app (`authenticator`) — on a table that is **append-only** (`054`) and whose entire justification in [ADR-040](#adr-040) is that the series is **unrecomputable**. **R2 cannot make the worker's "today" equal the app's; only the pin can.** So `061` is not dead weight under R2 — it is a cheap, reversible, cross-container floor.
+
+**⚠ AND R2 DOES NOT RELIEVE [ADR-043](#adr-043) EITHER — this is the stronger form of the same point, found after the work-spec was written.** R2 makes the gate self-consistent **in the session zone**, while `closedAtLabel` renders **hard-pinned UTC**. If that zone is not UTC, ADR-043's accepted cost — *the rendered date is the date the system reasoned with* — is **false again, in a new way**. **For ADR-043 the database pin is the SOLE load-bearing dependency, under every path, permanently, R2 included.**
+
+> **Instruction to whoever re-points `060` / the runbook / `asOf.ts` when R2 lands — verbatim, because a paraphrase loses it:** the correction owed is ***"the pin is no longer the app's within-comparison guarantee."*** **NEVER** ***"the pin is no longer load-bearing."*** Replacing *"the pin is everything"* with *"the pin is nothing"* is a **new** confidently-wrong dependency claim — the symmetric form of the defect `060` exists to fix.
+
+### One-way doors — and which things are NOT one
+
+**⚠ ONE-WAY DOOR: which zone `pfin.nav_daily.nav_date` derives in.** Once production checkpoints accumulate, the series carries a day-boundary convention that cannot be re-derived (append-only, `ON CONFLICT DO NOTHING`, unrecomputable by ADR-040's own grounds). Reversing means a data migration over an append-only audit-class table. **Open today — greenfield, zero production checkpoints. Closes at Phase 7 cutover.** That deadline, not a priority, is what paces R2.
+
+**Explicitly NOT one-way doors**, so they are not treated as heavier than they are: **`061` reverses in one line** (`alter database … reset timezone`); **`fn_server_today()` reverses with `drop function`.**
+
+### Alternatives considered
+
+- **A only (pin, no derivation)** — what was originally ruled. Defensible and cheap; leaves two of three conjuncts on prose and a manual gate, and leaves the app with a two-clock structure the worker does not have.
+- **B — make UTC explicit in the DDL.** Rejected earlier: would have re-pointed `049`/`050`, the highest-risk edit in the slice.
+- **3 only (derive, drop the pin).** Rejected: leaves `nav_daily`'s cross-container zone undecided with its door closing at deploy, and re-points three artifacts that are currently correct.
+- **A ∩ 3 in a single PR.** Rejected on **sequencing, not substance** — it would author `060` against a mechanism landing in the same PR, entangling a correction with a feature.
+
+### Consequences
+
+- **Merge order is a rule, not a preference, and it generalized.** *A document may forward-reference a document; **a correctness claim must not forward-reference the mechanism that makes it true**.* Applied here: `061` merged (#324) before ADR-043 (#325). Had ADR-043 landed first, `main` would have carried a **ratified financial-correctness claim whose named dependency was absent from the repo** — the zone UTC by image default, right by accident, which is the exact condition ADR-043's **E1** exists to flag.
+- **Per-container, not per-session — and this is REASONING, not measurement.** PostgREST pools, so `select current_date` and `fn_compute_nav` are not literally the same session. R2's property holds at **container** granularity; it still defeats both vectors, since each moves every connection that container makes identically. **Labelled because the stronger claim would be over-trusted**, and nobody has measured it.
+- **Recorded against the recommendation: sunk cost did not drive this.** 7 of 8 commits on the R1 branch survived under **every** path; only the `061` commit was path-dependent. The decision turned on the architecture. *A brief that cannot argue against its own recommendation has not tested it.*
+- **The ETL worker is the model, not a target.** It already derives `current_date` in SQL in its own session. **Do not "harmonize" it onto `fn_server_today()`** — that adds a round-trip and buys nothing. "Make it consistent" is the natural sweep and would be a regression.
+- **[ADR-039](#adr-039) / [ADR-042](#adr-042) unaffected.** No schema shape, tenant model, or ID strategy changes.
+
+### §10 boundary — the TZ pin is a multi-layer fence that deliberately does NOT enter the catalogued ledger
+
+**Question raised by Sec: should the pin be catalogued as a §10 instance?** It is a genuine multi-layer fence — DDL pin + TZ-1 deploy gate + `.env.example` prohibition + declarative pgTAP. **Ruled: no.** Recorded because **an unasked question and a deliberately-answered one look identical a year later**, and this one was asked.
+
+**The membership predicate is in [ADR-011](#adr-011) Decision 4's own opening sentence** — defense-in-depth fencing for ***security-load-bearing*** surfaces. **Multi-layer is the METHOD, not the membership test.** The TZ pin is **financial-correctness-load-bearing**: no privilege boundary, no credential, no admission channel, no isolation predicate. `PGTZ` in a container env is a **misconfiguration, not an adversary.** It fails at the first clause.
+
+**The consequence that makes this load-bearing rather than pedantic:** cataloguing would silently widen the predicate from *"security-load-bearing surface fenced at multiple layers"* to *"anything fenced at multiple layers"* — which admits nearly everything this project builds, since **we fence at multiple layers by habit**. **A ledger that admits everything discriminates nothing**, and Sec's ability to read it verbatim at every gate depends on it staying small. Cataloguing also adds a *review obligation*, not enforcement — the weakest instrument in a stack that already has a DDL declaration, a fail-loud read-back, pgTAP mechanism assertions, a deploy gate, `.env.example` prohibitions, ADR-043's E1, and a `closedAtLabel` battery.
+
+> **`layer ≠ class` — the sentence that stops this being re-derived.** RT-27 looks like precedent because its layer is *network-exposure/config*, which reads as a config-correctness concern. It is not: **RT-27's SUBJECT is a credential-admission channel; its LAYER is network/config.** All catalogued instances share one threat model — *what stops a credential or an adversary crossing a trust boundary*. **The TZ pin has no credential subject at any layer.**
+
+> **The honest counter, recorded because the ruling is only trustworthy with it attached.** The pin has the **half-pinned-deployment-that-inspects-clean** property — a fence that *appears* to hold while defeated — which is the detectability class Decision 1 clause (d) governs, and which the §10 ledger genuinely attracts. That resemblance is real and is why the question deserved an answer rather than a dismissal. **But detectability-failure is a property the fence HAS, not the class of surface it PROTECTS**, and Decision 4 is scoped by surface class.
+
+**Governance shape — this is NOT a Decision 4 change.** No instance added, no layer attribution moved, no paraphrase of the three-layer composition; Decision 4 is **referenced, not absorbed** (Path B). **The §10 catalogued-instance ledger is unchanged** — read live at drafting, 3-axis cross-check clean. **Distinct from the CI-fenced set**, measured separately at drafting; ⚠ **the two are different sets and must not be reconciled.** Requires **Sec review** (§10-adjacent, and Sec raised it); requires **no F/CTO D4 ratify**, which is the practical difference from cataloguing.
+
+### The compound defect — recorded against `061`, not as a sweep bug
+
+During #324, the runbook §4.1 role-sweep was found to **print the live JWT signing secret** and to **STOP the cutover on a correctly-pinned database**. Both were closed before merge. The transferable part is not the query.
+
+**`061` armed it.** Before the pin, the `setrole = 0` row held only the two `app.settings.*` entries and an `ilike '%timezone%'` filter would not have matched it. **The pin is what put a timezone entry into the row that carries the JWT secret** — so the sweep *was genuinely safe on `main` and would have become unsafe the instant `061` landed.*
+
+**And `061`'s own header contains the premise that made it unsafe**, written as a reassurance:
+
+> *"MEASURED, and it is why this is safe to run against a provisioned database: `ALTER DATABASE ... SET` is ADDITIVE. The local cluster already carries `app.settings.jwt_secret` and `app.settings.jwt_exp` in `pg_db_role_setting`; applying this appends `TimeZone=UTC` and leaves both intact. It does not replace the array."*
+
+> **⚑ THE LESSON: the measurement that proves one thing SAFE is the one that proves another thing UNSAFE, and nobody joins them because they live in different artifacts with different authors.** Neither reviewer was careless — the reassurance is complete on its own, the sweep is correct on its own. **The seam existed only between them**, the same shape as [ADR-040](#adr-040)'s `ON CONFLICT` privilege defect that passed four reviewers. **Recorded against `061` deliberately, because the transferable lesson is about the seam, not the query.**
+
+**Precision on the fix, since "two load-bearing clauses" invites a false symmetry — the clauses are NOT equivalent:**
+- **`s.setrole <> 0` is the primary**, and the **only** thing closing the **false positive** (a correct pin STOPping the cutover).
+- **Either clause independently closes the disclosure.**
+- **⚠ Durability (Sec):** `setrole <> 0` protects against disclosure **only because the sole secret-bearing row is `setrole = 0` in today's catalog layout** — a fact about the current image, not an invariant. **The anchored `unnest` + `c ilike 'timezone=%'` form is the structurally durable one**, because it prints only the entry it matched regardless of what else the row carries. **Never widen the select list back to `s.setconfig`.**
+
+**Arrival route, recorded as a class instance rather than a new fact.** This branch catalogued *held-by-accident* arriving three distinct ways: by **locale** (`059`'s clause held because the dev stack was UTC), by **ordering** (the sweep was safe until `061` landed), and by **connection age** — `alter database … set timezone` reaches **new sessions only**, so a warm pool keeps reporting the old value and an operator reading `configuration file` off it concludes the pin **failed**. `061`'s CONTRACT already draws the recorded-vs-effective distinction and is the canonical home; **this is not a second copy** — it names only the direction CONTRACT does not: CONTRACT warns against a false **positive** (claiming effective when merely recorded), the warm pool produces a false **negative**. Any operational restatement belongs in the runbook §10 TZ-1 gate, **not in a second canonical home here.**
+
+**Cross-references.** [ADR-011](#adr-011) Decision 4 (§10 — referenced, ledger unchanged) / Decision 9 (DEFINER allowlist — unchanged; R2's `fn_server_today()` is INVOKER) / Decision 3 (unchanged — no FK-shaped column) / Decision 1 clause (d) (detectability, the honest counter) · **Lock 11** (INVOKER read-composition — the shape R2's helper takes) · **Lock 13 mod #3** (`TenantBoundConnection` — the worker path R2 imitates) · **Lock 15 mod #2** (server-derived-only — *says nothing about WHICH SERVER*, and that is the precise gap) · [ADR-039](#adr-039) (the struck `current_date`-only constraint that legalised past as-of dates) · [ADR-040](#adr-040) (`nav_daily` append-only + unrecomputable; the assembled-statement lesson this compounds) · [ADR-041](#adr-041) (`pfin_etl` login identity; the `055` migration-channel precedent) · [ADR-042](#adr-042) (`closed_at` model) · [ADR-043](#adr-043) (the display side — **the pin is its sole load-bearing dependency**; E1) · migrations `049` `050` `051` `054` `055` `056` `059` `060` `061` · `docs/deployment-runbook.md` §4.1 / §10 TZ-1 · `supabase/tests/01_session_timezone.sql` · `api/src/lib/server/time/asOf.ts` · work-spec `temp/option-3-as-of-derivation-workspec.md`.
+
+---
+
 ## ADR-043 — Closure dates render in UTC, not the viewer's zone (terse pattern)
 
 **Date:** 2026-08-04 · **amended 2026-08-05** (Sec AMBER on PR #323; F/CTO-authorized amendment)
