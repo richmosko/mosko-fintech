@@ -169,6 +169,14 @@ done
 #        (This paragraph deliberately DESCRIBES that anchor instead of quoting it — an
 #        earlier draft quoted it verbatim and thereby became the second match itself,
 #        which the fence's ambiguity guard caught. Do not "helpfully" quote it here.)
+#
+#      ⚠ UNTIL THE R3 FENCE LANDS, UNIQUENESS OF THAT SWEEP INVOCATION IS HELD BY REVIEW
+#        ALONE — no automated check enforces it on `main` yet. Any change to this file must
+#        re-verify BY HAND that the spelling described above still occurs exactly ONCE,
+#        AND THAT INCLUDES A PROSE-ONLY CHANGE: this file has already broken that property
+#        once, in a comment written to warn about it, by an author who knew. So the usual
+#        reassurance — "a careful editor would not do this" — is already disproven here.
+#        Describe that invocation; never reproduce it.
 psql "$PROD_DB_URL" -At -c "select c from pg_db_role_setting s join pg_database d on d.oid = s.setdatabase cross join lateral unnest(s.setconfig) as c where s.setrole = 0 and d.datname = current_database() and c ilike 'timezone=%'"
 # A row (TimeZone=UTC)  -> the declaration IS recorded. The pin landed; the session you read
 #                          through is STALE. Do NOT re-run or "fix" the migration. Recycle
