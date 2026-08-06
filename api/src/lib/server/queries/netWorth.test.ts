@@ -16,8 +16,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { loadNetWorthView } from './netWorth';
+import { unsafeAsOfForTest } from '$lib/server/time/asOf';
 
-const AS_OF = '2026-07-20';
+const AS_OF = unsafeAsOfForTest('2026-07-20');
 
 type MockOpts = {
 	navData?: unknown;
@@ -101,7 +102,7 @@ describe('loadNetWorthView', () => {
 	for (const [asOf, expected] of boundaries) {
 		it(`count bound rolls ${asOf} -> ${expected}`, async () => {
 			const { client, or } = makeSupabase({ navData: 1, count: 1 });
-			await loadNetWorthView(client, asOf);
+			await loadNetWorthView(client, unsafeAsOfForTest(asOf));
 			expect(or).toHaveBeenCalledWith(`closed_at.is.null,closed_at.gte.${expected}`);
 		});
 	}
