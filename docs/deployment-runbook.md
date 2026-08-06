@@ -125,14 +125,40 @@ done
 #   *|user                  -> a role-level override on THIS LOGIN ROLE. See (2).
 #   *|client                -> PGTZ is set in that container's environment. Remove it.
 
-# (2) THE SWEEP — no role may carry a TimeZone at all, so the database pin is authoritative.
+# (2) THE SWEEP — no ROLE may carry a TimeZone at all, so the database pin is authoritative.
 #     Covers roles that do not exist yet; catches the `authenticator` vector that a
 #     `postgres`-session read-back structurally cannot see.
+#
+#     ⚠ TWO LOAD-BEARING CLAUSES — do not "simplify" either away. Both were absent in the
+#       first version of this sweep, and each defect was found by RUNNING it:
+#       * `s.setrole <> 0` scopes this to ROLE-level entries. 061's own database-level pin is
+#         itself a `setrole = 0` row whose setconfig contains `TimeZone=UTC` — so without this
+#         filter a CORRECTLY pinned database returns one row and this check STOPs the cutover
+#         on the very declaration it exists to confirm. Worse than a false positive: the
+#         operator learns "that row is always there" and starts eyeballing past it, which is
+#         how the real row gets waved through.
+#       * the `unnest` + `c ilike 'timezone=%'` form prints ONLY the timezone entry. Selecting
+#         `s.setconfig` wholesale prints the entire array — and the `setrole = 0` row carries
+#         `app.settings.jwt_secret` (the image provisions it there; /etc/postgresql.schema.sql),
+#         i.e. it writes the LIVE JWT SIGNING SECRET to this terminal and into anything
+#         capturing the stream: the Coolify deploy log, a Discord notification body, CI output.
+#         Never widen the select list back to `s.setconfig`.
+#
+#     Kept query-identical — token-for-token, modulo indentation — to (T3) in
+#     supabase/tests/01_session_timezone.sql, so the two cannot drift.
 psql "$PROD_DB_URL" -Atc \
-  "select coalesce(r.rolname,'ALL') , s.setconfig
-     from pg_db_role_setting s left join pg_roles r on r.oid = s.setrole
-    where array_to_string(s.setconfig, ',') ilike '%timezone%'"
-# REQUIRED: zero rows. Any row -> that role's sessions outrank the pin.
+  "select r.rolname, d.datname, c as setting
+     from pg_db_role_setting s
+     join pg_roles r on r.oid = s.setrole
+     left join pg_database d on d.oid = s.setdatabase
+     cross join lateral unnest(s.setconfig) as c
+    where s.setrole <> 0
+      and c ilike 'timezone=%'"
+# REQUIRED: zero rows. Any row -> that role's sessions outrank the pin. Clear it with
+#   `alter role <role> reset timezone`
+# ⚠ NOT `reset all` — these roles carry other load-bearing settings (`authenticator` ships with
+#   session_preload_libraries=supautils,safeupdate + statement_timeout + lock_timeout), and
+#   dropping them breaks the stack in a way that is not obviously connected to this change.
 
 # Any deviation -> STOP. Do not cut over (§9); the NAV as-of path is wrong by up to a day,
 # and nothing will error.
