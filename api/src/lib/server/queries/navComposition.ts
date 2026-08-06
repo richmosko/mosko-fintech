@@ -20,6 +20,7 @@
 // tenant still gets a well-formed tree ({ groups: [], buildups: {…0…}, nav: 0 }), not null.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import type { ZoneResolvedAsOf } from '$lib/server/time/asOf';
 
 /** One per-account leaf row inside a category group (straight from 051 → 049, naturally signed). */
 export type NavCompositionAccount = {
@@ -68,7 +69,7 @@ export type NavComposition = {
  */
 export async function loadNavComposition(
 	supabase: SupabaseClient,
-	asOf: string
+	asOf: ZoneResolvedAsOf
 ): Promise<NavComposition | null> {
 	const { data, error } = await supabase
 		.schema('pfin')

@@ -14,18 +14,18 @@ import { loadNetWorthView } from '$lib/server/queries/netWorth';
 import { loadNavComposition } from '$lib/server/queries/navComposition';
 import { loadStaleness } from '$lib/server/queries/staleness';
 import { EMPTY_STALENESS } from '$lib/staleness/stale-constituent';
+import { serverTodayAsOf } from '$lib/server/time/asOf';
 import type { PageServerLoad } from './$types';
 
-/** Today's date as an ISO YYYY-MM-DD string — the as-of/LOCF valuation date. */
-function todayIso(): string {
-	return new Date().toISOString().slice(0, 10);
-}
 
 export const load: PageServerLoad = async ({ locals }) => {
 	const { user } = await locals.safeGetSession();
 	if (!user) throw redirect(303, '/login');
 
-	const asOf = todayIso();
+	// serverTodayAsOf() replaces the former bare-string todayIso(): the as-of is now a BRANDED
+	// ZoneResolvedAsOf, so a plain string cannot reach loadNetWorthView's p_as_of at all. The
+	// brand describes the GUARANTEE (the zone question is resolved), not the provenance.
+	const asOf = serverTodayAsOf();
 	// accountPresence is THREE-VALUED ('some' | 'none' | 'unknown') — 'unknown' means the count
 	// read FAILED and is emphatically not 'none'. Passed through verbatim, never collapsed to a
 	// boolean here: collapsing is what this change exists to undo, and doing it at the loader

@@ -45,6 +45,7 @@ import {
 	fieldErrors
 } from '$lib/server/schemas/account';
 import { loadConnectionState } from '$lib/server/queries/connectionState';
+import { serverTodayAsOf } from '$lib/server/time/asOf';
 import {
 	manualTransCreateSchema,
 	manualTransEditSchema,
@@ -99,10 +100,6 @@ function parseAccountId(param: string): number | null {
 	return Number.isInteger(n) && n > 0 ? n : null;
 }
 
-/** Today's date as an ISO YYYY-MM-DD string — the as-of date for the held-security picker. */
-function todayIso(): string {
-	return new Date().toISOString().slice(0, 10);
-}
 
 /** 012 fn_account_matched_sub_cat raise-message signature → map to the sub_cat field. */
 function isCrossTenantSubCat(message: string): boolean {
@@ -186,7 +183,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	// RLS-scoped, fail-soft ([] on error → cash-only accounts have nothing to split). The
 	// OWD-2 source-of-truth UI gate reads account.linked_source_id directly (the same column
 	// the fn_create_stock_split DB guard keys on — UI + DB gate on one source, no derived drift).
-	const heldSecurities = await loadHeldSecurities(locals.supabase, accountId, todayIso());
+	const heldSecurities = await loadHeldSecurities(locals.supabase, accountId, serverTodayAsOf());
 
 	// SELF-204 manual↔provider dedup DETECTION (migration 040 / ADR-034 D2) — candidate pairs
 	// for this account (a manual row that looks like a synced provider row). Detection-only:

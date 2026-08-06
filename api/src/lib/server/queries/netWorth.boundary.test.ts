@@ -43,6 +43,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { loadNetWorthView } from './netWorth';
+import { unsafeAsOfForTest } from '$lib/server/time/asOf';
 
 // TYPED EXPECTATIONS, and this is not decoration — it closes a real asymmetry.
 // `toEqual` takes `unknown`, so a shape assertion against a CHANGED return type fails only at
@@ -52,7 +53,17 @@ import { loadNetWorthView } from './netWorth';
 // TYPECHECK failure as well — two independent detectors instead of one.
 type View = Awaited<ReturnType<typeof loadNetWorthView>>;
 
-const AS_OF = '2026-07-20';
+// BRANDED (Backend's ZoneResolvedAsOf). The brand fences the PROVENANCE of a production as-of
+// — that it came from a zone-resolved server clock — which is precisely what a battery must be
+// able to bypass, because behaviour has to be exercised at CHOSEN dates: month ends, leap days,
+// and the `::date` boundary this file exists for. The server-clock factory cannot express those.
+// `unsafeAsOfForTest` is deliberately ugly and greppable so an import from a non-test file is a
+// one-line review stop rather than a judgement call.
+//
+// ⚠ THE TWO DETECTORS ABOVE AND BELOW ARE INDEPENDENT AND BOTH LOAD-BEARING: `View` catches a
+//   changed RETURN shape at typecheck, the brand catches an unresolved as-of at the ARGUMENT.
+//   Neither subsumes the other — one guards what comes back, the other what goes in.
+const AS_OF = unsafeAsOfForTest('2026-07-20');
 
 /** One account row, reduced to the only column this predicate reads. */
 type Row = { id: string; closed_at: string | null };
@@ -168,7 +179,7 @@ describe('loadNetWorthView — the ADR-042 as-of boundary (behavioural, not stri
 		// with the same symptom here. The boundary is a boundary only if one side of it differs.
 		const only = [ROWS[1]];
 		const { client } = makeSupabase(only, 5555);
-		const view = await loadNetWorthView(client, '2026-07-19');
+		const view = await loadNetWorthView(client, unsafeAsOfForTest('2026-07-19'));
 
 		const expected: View = { netWorth: 5555, accountPresence: 'some' };
 		expect(view).toEqual(expected);

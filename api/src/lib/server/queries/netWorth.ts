@@ -32,6 +32,7 @@
 // renders the single number only, per PRD §2.1.1 verbatim + F/CTO Option A.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import type { ZoneResolvedAsOf } from '$lib/server/time/asOf';
 
 export type NetWorthView = {
 	/**
@@ -138,7 +139,7 @@ function nextDayIso(iso: string): string {
  */
 export async function loadNetWorthView(
 	supabase: SupabaseClient,
-	asOf: string
+	asOf: ZoneResolvedAsOf
 ): Promise<NetWorthView> {
 	// ── NAV compute (INVOKER; RLS-scoped to auth.uid()) ───────────────────────────
 	// fn_compute_nav(p_as_of date, p_active_only boolean) RETURNS numeric. p_active_only:true =
