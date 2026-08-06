@@ -2,6 +2,15 @@
 #
 # tz-sweep-identical — the TimeZone role-sweep query drift fence (R3 Part A).
 #
+# ⚠⚠ BINDING MERGE CONDITION (Sec, 2026-08-06): THIS FENCE MUST NOT SHIP WITHOUT ITS
+#   AMBIGUITY GUARD — require_unique_anchor() below, and the `ambiguous-runbook.md` golden
+#   plus its CI step. Stated as a CONSTRAINT rather than left as an incidental property of
+#   how the branch happens to be composed, because branches get split and this one has a
+#   live collision waiting for it: the deployment runbook grew a second `psql` invocation
+#   in §4.1 in the very next change after this fence was written. Without the guard, the
+#   anchor collision arms itself silently and this fence reports GREEN over a property it
+#   is no longer looking at — which is the exact defect class it was built to prevent.
+#
 # WHAT IT ENFORCES, stated as the artifact's own claim so the fence cannot assert more
 # than the thing it fences:
 #
