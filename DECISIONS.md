@@ -44,11 +44,27 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 ## ADR-043 — Closure dates render in UTC, not the viewer's zone (terse pattern)
 
 **Date:** 2026-08-04 · **amended 2026-08-05** (Sec AMBER on PR #323; F/CTO-authorized amendment)
-**Status:** **PENDING THIRD RATIFY.** Not Accepted. Do not merge to `main` on the strength of the amendment alone.
+**Status:** **Accepted** — third ratify granted by F/CTO 2026-08-05, on the corrected grounds below.
 **Phase:** Phase 6 Build Loop (records a `closedAtLabel` choice already shipped in PR #319; no code change).
-**Approved by:** F/CTO — **ratified twice, and by this ADR's own standard it has not been ratified once.** The ruling was first put to F/CTO (2026-08-04, via team-lead) described as accepting *"a known user-facing wrong-day render across three surfaces"*, and ratified on that basis. **That description was false** (see the accepted cost below); it was corrected, re-put on the corrected grounds, and **ratified again**. Recorded in full because *a ratify against a false description is not a ratify*.
 
-> **⚠ AND THE SECOND DESCRIPTION WAS ALSO FALSE — differently, and measurably (Sec, 2026-08-05).** Reason 1 below rested on a clause quoted from `059` that **is not true of the code**: *"V1 consumers pass CURRENT_DATE."* **Measured on `main` 2026-08-05: ZERO app callers pass `CURRENT_DATE`.** `p_as_of` is `todayIso()` — `new Date().toISOString().slice(0,10)`, in the **Node** process — at two definitions serving three consumers. So the accepted cost (*"the rendered date is the date the system reasoned with"*) rested on a premise that was **never true**, and the standard this header sets applies to the second ratify exactly as it applied to the first. **The amendment below corrects the substance; the THIRD ratify is F/CTO's and is required regardless of how good the amendment is.** Two ratifies against two false descriptions do not sum to one good one.
+**Approved by:** F/CTO — **ratified THREE times, against three different descriptions, and only the third was true.** The standard is this ADR's own and it is applied to itself without exception: *a ratify against a false description is not a ratify.* The sequence is recorded in full because **the count is not the point — what each ratify was given against is**, and two of the three would read as ordinary approvals if only their dates survived.
+
+| # | Date | Described as | Verdict |
+|---|---|---|---|
+| 1 | 2026-08-04 | accepting *"a known user-facing wrong-day render across three surfaces"* | **FALSE description.** The render is not a wrong date — it is the UTC date of the closure instant. Corrected before it could stand. |
+| 2 | 2026-08-04 | the corrected accepted cost, supported by reason 1's `059` quote | **ALSO FALSE, differently and measurably** — found by Sec 2026-08-05, a day after ratify. See below. |
+| 3 | **2026-08-05** | the amended ADR: the dependency named, the false support struck, E1 added | **The one that counts.** |
+
+**What was corrected between the second ratify and the third** — stated plainly, because that delta is the whole reason a third was required:
+
+1. **Reason 1's support was struck, not reworded.** It quoted `059` **byte-exactly** and the clause it quoted is **false**: measured on `main` 2026-08-05, **ZERO app callers pass `CURRENT_DATE`** (`p_as_of` is `todayIso()` — `new Date().toISOString().slice(0,10)`, in the **Node** process). **And the quote was only the first of two independent defects** — the gloss *"so both sides sit on one clock"* did not follow **even if the quoted clause had been true**, because **Lock 15 mod #2 says nothing about WHICH SERVER**. Fixing the quotation alone would have produced a fourth false description. The full analysis stays at reason 1, where an auditor of reason 1 will land; it is not restated here.
+2. **The dependency was named** — the accepted cost holds **iff the Postgres session TimeZone is UTC**, declared by the pin at `061` and **necessary-not-sufficient**. Reason 3 previously asserted the conclusion with nothing under it. See *The dependency this rests on*.
+3. **A second expiry trigger (E1) was added** — an unpinned or defeated session zone falsifies this ADR **with no user action at all**. The original named only the user-supplied-`p_as_of` trigger, so a justification falsifiable by a deployment setting had a re-open condition waiting on a user.
+4. **The `060` pairing was made mutual** — `060` asserted *"ADR-043 names it"* while this ADR cited `060` and `061` **zero** times.
+
+> **⚑ The two findings that carried the third ratify are NOT in the ratify record** — they are load-bearing analysis, and the project's own rule is that two committed homes for one finding drift and hand the reader two versions. They live where a reader hits them: the **two-independent-defects** point at reason 1's strike, and **`fn_server_today()` does not relieve this ADR** in the dependency section. **The second is a live constraint on the ratified R2 slice** and is the sentence most likely to be lost in re-telling.
+
+> **Provenance of the ratify-2 defect:** found by **Sec, 2026-08-05**, a day after that ratify, during review of PR #323 — where **ADR-043 was the blocker and the write fence was not.** The measurement is at item 1 above and is not repeated here. **Two ratifies against two false descriptions do not sum to one good one** — which is why the correction was routed back to F/CTO as a third ratify rather than landed as an editorial amendment, even though the amendment was authorized and the substance was not in dispute.
 
 **Decision.** Closure dates render in **UTC**, **unlabelled**, on all three surfaces that show one — the accounts hub `Closed (N)` group, account detail's Account status section, and `accounts/connections/[source_id]`. `closedAtLabel` (`api/src/lib/account-display.ts`) pins `timeZone: 'UTC'`. No surface renders a closure date in the viewer's local zone, and none appends a `(UTC)` marker. This **closes the standing flag** in `account-display.ts`: *"Whether a user-facing surface should show UTC at all is a UX/Visual decision — flagged, not settled here."*
 
