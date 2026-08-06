@@ -68,7 +68,13 @@ If those succeed, the push failed for some *other* reason — read the actual er
 
 #### HTTPS temp-switch — LAST RESORT, and only for one failure mode
 
-**The deploy key cannot fix a blocked or timing-out port 22** — deploy keys still use port 22. On a hostile network or behind a corporate firewall, SSH will **time out or be refused at the connection level** (as distinct from being *rejected on authentication*), and HTTPS over 443 is then the genuine answer. **That case is why this fallback still exists.**
+**The deploy key cannot fix a blocked or timing-out port 22** — deploy keys still use port 22. On a hostile network or behind a corporate firewall, SSH will **time out or be refused at the connection level** — literally:
+
+```
+ssh: connect to host github.com port 22: Connection timed out
+```
+
+which is distinct from being *rejected on authentication* (`Permission denied (publickey)`). HTTPS over 443 is then the genuine answer to the former and no answer at all to the latter. **That case is why this fallback still exists.**
 
 ⚠ **HTTPS SILENTLY REFUSES WORKFLOW-FILE PUSHES.** It authenticates with the `gh` OAuth token, which lacks `workflow` scope, so any push touching `.github/workflows/` is rejected:
 

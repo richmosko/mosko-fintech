@@ -73,9 +73,15 @@ If those succeed, the failure is something else — read the actual error. If `c
 
 #### HTTPS temp-switch — LAST RESORT, one failure mode only
 
-**The deploy key cannot fix a blocked or timing-out port 22** — deploy keys still use port 22. On a hostile network or behind a corporate firewall SSH will **time out or be refused at the connection level** (distinct from being *rejected on authentication*), and HTTPS over 443 is the genuine answer. **That case is why this fallback is demoted rather than deleted.**
+**The deploy key cannot fix a blocked or timing-out port 22** — deploy keys still use port 22. On a hostile network or behind a corporate firewall SSH will **time out or be refused at the connection level** — literally:
 
-⚠ Note for the push-side sibling (`/finish-doc-update`): **HTTPS silently refuses pushes touching `.github/workflows/`**, because the `gh` OAuth token lacks `workflow` scope. A read-only `git pull` is unaffected, but do not carry the HTTPS habit back to a push.
+```
+ssh: connect to host github.com port 22: Connection timed out
+```
+
+which is distinct from being *rejected on authentication* (`Permission denied (publickey)`). HTTPS over 443 is the genuine answer to the former and no answer at all to the latter. **That case is why this fallback is demoted rather than deleted.**
+
+⚠ Note for the push-side sibling (`/finish-doc-update`): **HTTPS silently refuses pushes touching `.github/workflows/`**, because the `gh` OAuth token lacks `workflow` scope. This skill is unaffected — its `git pull` is read-only **and its one push (`git push origin vX.Y.Z`, the optional release-tagging path at the end) touches no workflow path**. That second clause is the one doing the work: this skill is not push-free, so "it only pulls" would be the wrong reason. Do not carry the HTTPS habit back to a push that *does* touch one.
 
 With per-use authorization (each use gets its own approval):
 
