@@ -517,3 +517,18 @@ jobs:
             exit 1
           fi
           echo "OK: fence failed closed on a missing anchor (exit $rc)."
+
+      - name: Ambiguity guard — two anchor matches must FAIL CLOSED, not silently pick one
+        run: |
+          set +e
+          python3 scripts/ci/check-tz-sweep-identical.py \
+            --runbook tests/fixtures/ci/tz-sweep-drift/ambiguous-runbook.md \
+            --test    supabase/tests/01_session_timezone.sql
+          rc=$?
+          set -e
+          if [ $rc -ne 1 ]; then
+            echo "FATAL: tz-sweep fence did not fail closed on an ambiguous anchor (exit $rc)."
+            echo "A fence that silently compares 'the first match' would check the WRONG pair and report green while the guarded property went unexamined."
+            exit 1
+          fi
+          echo "OK: fence refused to guess between two anchor matches (exit $rc)."

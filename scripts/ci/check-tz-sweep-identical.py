@@ -115,6 +115,31 @@ def fail_closed(msg: str) -> "None":
     sys.exit(1)
 
 
+def require_unique_anchor(pattern, text: str, path: str, human: str):
+    """Return the sole anchor match, failing closed on ZERO **or MORE THAN ONE**.
+
+    The >1 case is not defensive padding — it is a measured hazard. These anchors select
+    *which* block gets compared, and both files are ones people add blocks to: the runbook
+    grew a step (1b) catalog query in the very next change after this fence was written,
+    and the pgTAP file would grow a second `select is_empty(` the moment a (T4) is added.
+    A second match would silently move the comparison to a DIFFERENT query, and the fence
+    would then be confidently checking the wrong pair — green while the property it claims
+    to guard went unexamined. Ambiguity must fail closed, not resolve to "the first one".
+    """
+    matches = list(pattern.finditer(text))
+    if not matches:
+        fail_closed(f"{path}: no `{human}` anchor found.")
+    if len(matches) > 1:
+        lines = [text[: m.start()].count("\n") + 1 for m in matches]
+        fail_closed(
+            f"{path}: `{human}` anchor is AMBIGUOUS — {len(matches)} matches "
+            f"(lines {', '.join(str(n) for n in lines)}). "
+            "The fence cannot tell which block is the sweep, so it will not guess. "
+            "Keep exactly one such block, or update this fence's anchor in the same commit."
+        )
+    return matches[0]
+
+
 def read(path: str) -> str:
     try:
         with open(path, encoding="utf-8") as fh:
@@ -126,9 +151,7 @@ def read(path: str) -> str:
 
 def extract_runbook(text: str, path: str) -> str:
     """The sweep is the shell double-quoted argument following the `psql … -Atc \\` line."""
-    m = RUNBOOK_ANCHOR.search(text)
-    if not m:
-        fail_closed(f"{path}: no `psql \"$PROD_DB_URL\" -Atc \\` anchor found.")
+    m = require_unique_anchor(RUNBOOK_ANCHOR, text, path, 'psql "$PROD_DB_URL" -Atc \\')
     rest = text[m.end():]
     open_q = rest.find('"')
     if open_q == -1:
@@ -140,10 +163,8 @@ def extract_runbook(text: str, path: str) -> str:
 
 
 def extract_test(text: str, path: str) -> str:
-    """The (T3) query is the first `$$ … $$` dollar-quoted literal after `select is_empty(`."""
-    m = TEST_ANCHOR.search(text)
-    if not m:
-        fail_closed(f"{path}: no `select is_empty(` anchor found.")
+    """The (T3) query is the `$$ … $$` dollar-quoted literal after `select is_empty(`."""
+    m = require_unique_anchor(TEST_ANCHOR, text, path, "select is_empty(")
     rest = text[m.end():]
     open_d = rest.find("$$")
     if open_d == -1:
