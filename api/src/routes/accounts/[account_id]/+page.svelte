@@ -18,8 +18,13 @@
 	describing a label change. History is still RETAINED (AC #4) — and a closed account is
 	additionally FROZEN: corrections go reopen → correct → re-close.
 
-	COPY IS PROVISIONAL — the closure help text, the status pill wording and the reason labels are
-	placeholders pending PM/UX. Flagged at authoring, not settled here.
+	COPY IS SETTLED as of the PM review 2026-08-04 — no longer provisional. Closure help text
+	(open state rewritten, closed state shipped as authored), status pill and reason labels all
+	ruled; the reasoning sits at each string. The pill stays SHORT ("Open" / "Closed") on the same
+	logic that made the connections marker long: it renders beside the account name with no
+	competing referent in view, whereas that marker renders inside a connection card where a closed
+	CONNECTION is a real state. Same vocabulary, disambiguated only where there is something to
+	disambiguate from.
 
 	FENCES: no --c-pos/--c-neg on values (those are ACTUAL-performance only; ledger amounts
 	are neutral). No staleness banner — a manual account has no Plaid re-auth. INV-1: name +
@@ -179,7 +184,18 @@
 		closeErrors = {};
 		submitting = true;
 		return async ({ update }) => {
-			await update(); // success → load reruns → closed_at refreshes; failure → form.errors
+			// `{ reset: false }` MIRRORS editHandler, and it matters MORE here: on this form a
+			// refusal is the EXPECTED outcome — `058`'s gate refuses a close on an account that
+			// still holds value — so the reset path is the common path, not the edge case.
+			//
+			// A reset blanks the reason the user picked while the bound `$state` KEEPS it:
+			// `form.reset()` fires neither `input` nor `change`, so `bind:value` never observes
+			// it and nothing re-renders the DOM back from state. Re-submitting then produces a
+			// SECOND error — a client-side "Choose a reason" — that looks unrelated to anything
+			// the user did, on top of the legitimate gate refusal they were already reading.
+			// Spelled out because a bare `update()` looks correct to the next reader, and the
+			// sibling handler carrying the same flag is not something you notice from here.
+			await update({ reset: false }); // success → load reruns → closed_at refreshes
 			submitting = false;
 		};
 	};
@@ -190,6 +206,10 @@
 	const reopenHandler: SubmitFunction = () => {
 		submitting = true;
 		return async ({ update }) => {
+			// Bare `update()` is CORRECT here and is not an oversight: this form has no inputs,
+			// so `reset: true` has nothing to reset. Do not "fix" it for symmetry with
+			// closeHandler above — the flag there is load-bearing for a reason that does not
+			// exist on this form.
 			await update();
 			submitting = false;
 		};
@@ -350,6 +370,24 @@
 		<h2 class="section-title">Account status</h2>
 
 		{#if isClosed}
+			<!--
+				PM COPY RULING (2026-08-04): SHIP AS IS. Every clause earns its place, and the last
+				one earns it most. "Reopen it, make the correction, and close it again" is the right
+				level of detail for help text and does NOT belong behind a disclosure, because the
+				affordance it explains — the "Reopen account" button — is already on screen and
+				MISREADS WITHOUT IT: unlabelled, reopening looks like an admission that the closure
+				was a mistake, so a user with a genuine correction to make will not press it and will
+				conclude the history is frozen. Naming reopen as the correction MECHANISM (Decision
+				3's reopen → edit → re-close) is what makes the visible control legible.
+
+				The sync sentence is the second-most valuable and is easy to under-rate: a user
+				closing a still-connected account otherwise has no way to know provider writes will
+				be refused (Decision 6 surfaces those only as a quarantine counter — the user sees
+				nothing). Keep it.
+
+				NOT copy, flagged onward: `closedAtLabel` formats in UTC, so a close at 18:00 PDT
+				renders tomorrow's date next to copy that then says "on or after that day".
+			-->
 			<p class="help">
 				Closed {closedAtLabel(account.closed_at)}. Its transaction history is kept, and it no
 				longer counts toward balances or totals dated on or after that day. While it's closed
@@ -359,15 +397,126 @@
 		{:else}
 			<!--
 				This copy NAMES THE GATE rather than describing a label change, because `058` refuses
-				a close that the user has every reason to expect will succeed. Learning about the
-				precondition from a refusal is the *gate-with-no-way-forward* shape ADR-042 Decision 1
-				fences for elsewhere. Provisional wording — PM/UX own the final text.
+				a close that the user has every reason to expect will succeed.
+
+				PM COPY RULING (2026-08-04) — the instinct is right, the dose was too high, and ONE
+				CLAUSE OF IT WAS NOT TRUE OF THIS FORM.
+
+				(1) REQUIRED FIX, not taste: "on the closing date" named a control that does not
+				    exist. This form posts `reason_code` and nothing else; `p_closed_at` defaults to
+				    server `now()` (see `closeAccountSchema`). Copy must not name a variable the UI
+				    does not expose.
+
+				    ⚠ REFINED, because the paragraph now says "from its closing date onward" and a
+				    flat reading of the rule above would forbid exactly that. The rule is about a
+				    date the user must CHOOSE, not a date the account HAS. "Close it as of a later
+				    date" is forbidden — it demands an input this form has no control for. "From its
+				    closing date onward" is fine and is now REQUIRED, because the account genuinely
+				    has one and the page renders it. **The test is whether the phrase implies an
+				    input, not whether it contains the word "date".** Stated because the two readings
+				    are one word apart and the narrow one would delete a correction.
+
+				(2) ⚠ THE TRIM WAS REVERSED, AND THE NOTE IS KEPT BECAUSE ITS DEPENDENCY IS WHAT
+				    REVERSED IT. This paragraph used to enumerate only the two legs a user can be
+				    holding TODAY, on the reasoning that the third — activity dated after closure,
+				    which with `closed_at = now()` is exactly "a future-dated transaction" — was
+				    covered by the refusal. That trim was recorded WITH its dependency: it assumed
+				    the post-closure refusal was fixed, and said in as many words that if the
+				    refusal was not corrected, the leg must come back here.
+
+				    IT WAS CORRECTED, AND THAT DOES NOT REOPEN THE TRIM. `c06c984`, on this
+				    branch, rewrote `GATE_LEG_MESSAGE['post-closure']` off "Close it as of a
+				    later date" — which named a date control this form does not have
+				    (`closeAccount` posts `reason_code` only; `p_closed_at` is always server
+				    `now()`) — to "This account has entries dated in the future. Remove or
+				    re-date them, or wait until those dates have passed, then close it." That
+				    string implies no input and is correct as it stands. The six words are back
+				    (PM ruling) and they STAY — unconditionally, on UX's finding below. Nothing
+				    in this note licenses removing them.
+
+				    Two things worth keeping from how this played out. First: **the dependency
+				    fired as written, which is the whole reason it was written down** — the trim
+				    was revisited rather than rediscovered, and a stated assumption is what made
+				    that a one-line check instead of an archaeology problem. Second, UX's finding,
+				    which outranks the trim argument entirely: leg 3 is the LEAST SELF-DERIVABLE
+				    of the three. A user can guess that "emptied" covers securities and cash.
+				    **Nobody guesses that a future-dated transaction blocks closing.** So even a
+				    perfect refusal would not make this leg safe to omit — the refusal teaches it
+				    only to someone who has already hit it. THAT is why the leg stays, and it is
+				    conditional on nothing.
+
+				    And the warning this episode is actually worth, which is sharper than the
+				    first lesson: the version of this note written in `99dede8` asserted the
+				    refusal "was not corrected" — ONE COMMIT AFTER `c06c984` corrected it. Its
+				    condition was already met the moment it was written, so a correctly-shaped
+				    conditional ("keep this until X") had silently become a removal-license
+				    aimed at the copy it existed to protect. A conditional in a comment is a
+				    live claim about the tree: check it against the tree as you write it, and
+				    prefer the unconditional reason whenever one exists.
+
+				(3) Why trimming is safe, and the correction to the argument that produced the long
+				    form: ADR-042 Decision 1 does NOT fence "learning a precondition from a
+				    refusal". Verbatim, it fences a DEAD END — *"the refusal message must name it so
+				    the gate is not a dead end"* — and it places that burden on the refusal, which
+				    it treats as the teaching surface. That burden is largely discharged:
+				    `GATE_LEG_MESSAGE` in `+page.server.ts` names the failing leg AND its remedy for
+				    each CLASSIFIED leg (its `other` fallback names neither, and `cash-contract` is
+				    byte-identical to `cash` by Sec's ruling — so four visible strings over six
+				    keys; do not restate that as a leg count anywhere).
+
+				(4) BUT THE TRIM IS NOT THE WHOLE JOB, and UX corrected the ordering — on my
+				    replacement, not only on the original. Both the brief's framings assume this
+				    paragraph's job is to PREVENT a refusal. It isn't. Its job is to say what
+				    closing MEANS: a bookkeeping event with a zero precondition, not a way to get a
+				    row out of sight. Someone holding the second model closes an account that still
+				    holds value and is confused by the refusal EVEN IF THE REFUSAL IS PERFECT,
+				    because it contradicts their reading of the verb. So the precondition is not an
+				    edge case being front-loaded — it is the definition. What was actually wrong was
+				    ORDER: leading with the constraint makes the common case (empty account, just
+				    close it) read a restriction first. Now the verb is defined by what it DOES,
+				    reversibility lands early where it defuses hesitation, and the precondition
+				    follows as a CONSEQUENCE ("because of that") rather than as an arbitrary rule —
+				    still landing before the button.
+
+				(5) NOT changed, deliberately: "holds securities or cash" stays a QUANTITY claim.
+				    Decision 3 measures holdings quantity-based via `fn_holdings_as_of` precisely
+				    because an unpriced asset fails a market-value test OPEN. So "empty" here must
+				    never become "worth nothing" or "zero balance" — those are the wrong test, and
+				    an account that reads as worth nothing can still be refused.
+
+				(6) "Stops accepting new entries" is load-bearing and is NOT redundant with the
+				    closed-state copy, which the user only reads AFTER closing. Said here, it is
+				    the one warning that reaches a user who is about to close an account they are
+				    still posting to.
+
+				(7) ⚠ THIS PARAGRAPH MAKES NO DAY-CLAIM, AND THAT IS THE POINT. It said "marks it
+				    finished as of today"; it now says "from its closing date onward". PM's
+				    correction of their own line, found by UX.
+
+				    "Today" was a promise this page can CONTRADICT SECONDS LATER. `closedAtLabel`
+				    renders in UTC by deliberate design (see `account-display.ts`, and `059`'s
+				    column comment at the DDL layer), so a close at 18:00 Pacific prints
+				    "Closed 5 Aug" to a user whose today is the 4th. The copy would have said
+				    "today" and the very next render would have named a different day.
+
+				    "From its closing date onward" is true of WHATEVER date the render prints, so
+				    the two cannot disagree — the fix is the absence of a day-claim, not a better
+				    one. It also matches the closed-state copy's "dated on or after that day".
+
+				    ⛔ DO NOT "FIX" THE UTC RENDERING TO LOCAL to make "today" work again. The UTC
+				    choice is deliberate and load-bearing: the ledger renders UTC and `058`'s gate
+				    evaluates as of the same instant, so a local render would show the account
+				    closed the day BEFORE the entries the gate checked. **The three surfaces
+				    agreeing is the property protecting them — it is not the same defect copied
+				    three times.** Ruled by UX for V1 (UTC stays, unlabelled).
 			-->
 			<p class="help">
-				Close this account once it's been emptied. Closing is only allowed when the account
-				holds nothing on the closing date — no securities, no cash — and has no activity dated
-				after it. If it still holds value, record the sale or transfer out first, then close.
-				Its transaction history is always kept, and you can reopen it at any time.
+				Closing an account marks it finished: from its closing date onward it stops
+				counting toward your balances and totals, and stops accepting new entries. Its
+				transaction history is kept, and you can reopen it at any time. Because of that, an
+				account can only be closed once it's empty and has no transactions dated in the
+				future — if it still holds securities or cash, record the sale or transfer out
+				first.
 			</p>
 		{/if}
 
@@ -429,9 +578,44 @@
 		{/if}
 	</section>
 
+	<!--
+		FROZEN-ACCOUNT WRITE CONTROLS (F1a). ADR-042 Decision 3: every write into a closed account
+		is REJECTED by `058`'s fence. These controls used to render live and enabled on a closed
+		account, so the user got "Could not save the transaction. Please try again." — retry advice
+		for something that can never succeed.
+
+		REPLACED, not hidden and not `disabled`. F/CTO ruled the mechanism as "disable + named
+		reason"; the refinement to replacement was escalated by UX and CONFIRMED by F/CTO — the
+		reason stands untouched, only the carrier moves.
+		  · not HIDDEN — an absence cannot name its own cause. A vanished section reads as "this
+		    feature doesn't apply to this account", and the remedy is then discoverable only by
+		    connecting an absence to a section further up the page. (Contrast `isSourceOfTruth`
+		    below, which correctly hides: that condition is permanent and the user cannot lift it.
+		    Closed is a condition the user CAN lift, which is why it must state itself.)
+		  · not `disabled` — right for `Change aggregator`, which is ONE button. Wrong for a
+		    multi-field form and N per-row action pairs, where it leaves a large amount of dead
+		    tabbable UI and noise proportional to the user's transaction history.
+		The section and its heading stay, so the page's shape is stable across open→closed and the
+		remedy is stated where the intent was formed.
+
+		⚠ THIS IS NOT A FENCE. The write stays reachable from a stale tab, a second window, or a
+		provider sync landing on a freshly-closed account. `058` is the enforcement. This reduces
+		how often the refusal is seen; it does not make it unreachable, and Backend's classification
+		of that raise is the other half — neither alone is sufficient.
+
+		NO reopen control here (Decision 1b): closure has one home, and a second control elsewhere
+		spends the cost D1b deliberately accepted. The path is named in words.
+	-->
 	<section class="region" aria-label="Add a transaction">
 		<h2 class="section-title">Add a transaction</h2>
-		<TransactionEntryForm subCatGroups={cashflowGroups} />
+		{#if isClosed}
+			<p class="frozen-note">
+				This account is closed, so it can't take new entries. To add one, reopen it under
+				Account status above, add the transaction, then close it again.
+			</p>
+		{:else}
+			<TransactionEntryForm subCatGroups={cashflowGroups} />
+		{/if}
 	</section>
 
 	<!--
@@ -442,7 +626,20 @@
 	{#if isSourceOfTruth}
 		<section class="region" aria-label="Record a stock split">
 			<h2 class="section-title">Record a stock split</h2>
-			{#if heldSecurities.length === 0}
+			<!--
+				THREE NESTED CONDITIONS, DELIBERATELY NOT COLLAPSED. `isSourceOfTruth`, `isClosed`
+				and "no securities held" are three DIFFERENT facts with three different remedies —
+				permanent / user-liftable / data-dependent — and folding any two into one condition
+				is this ADR's own failure mode one layer up. (UX caught the temptation; the shorter
+				expression is the wrong one.) Order matters too: source-of-truth is the outermost
+				because it is the only one that means "this control does not belong here at all".
+			-->
+			{#if isClosed}
+				<p class="frozen-note">
+					This account is closed, so it can't take new entries. Reopen it under Account status
+					above to record a split, then close it again.
+				</p>
+			{:else if heldSecurities.length === 0}
 				<p class="empty">No securities held in this account to split.</p>
 			{:else}
 				<StockSplitEntryForm securities={heldSecurities} />
@@ -465,6 +662,22 @@
 		{#if transactions.length === 0}
 			<p class="empty">No transactions yet.</p>
 		{:else}
+			<!--
+				ONE note above the table, not N disabled button pairs in it. The rows keep their data
+				in full (SELF-201 AC #4 — a closed account retains its history); only the per-row
+				write controls go, via TransactionRow's `frozen` prop.
+
+				⚠ The Actions column header STAYS when frozen. Dropping it would change TABLE_COLUMNS,
+				and that constant is what TransactionRow's full-width editor rows span via `colspan`.
+				An empty cell, never a missing one — the coupling runs through this constant and is
+				not visible from either file alone.
+			-->
+			{#if isClosed}
+				<p class="frozen-note">
+					This account is closed, so its transactions can't be edited. Reopen it under Account
+					status above to make a correction, then close it again.
+				</p>
+			{/if}
 			<div class="table-scroll">
 				<table class="tbl">
 					<thead>
@@ -479,7 +692,12 @@
 					</thead>
 					<tbody>
 						{#each transactions as t (t.trans_id)}
-							<TransactionRow transaction={t} subCatGroups={cashflowGroups} columns={TABLE_COLUMNS} />
+							<TransactionRow
+								transaction={t}
+								subCatGroups={cashflowGroups}
+								columns={TABLE_COLUMNS}
+								frozen={isClosed}
+							/>
 						{/each}
 					</tbody>
 				</table>
@@ -730,5 +948,15 @@
 		margin: 0;
 		color: var(--c-text-muted);
 		font-style: italic;
+	}
+	/* Sibling of .empty and DELIBERATELY NOT italic, because it is a different fact: .empty means
+	   "nothing here yet"; this means "the action is unavailable and here is how to make it
+	   available". Collapsing the two would be the third conflation in this family. Matches .help
+	   visually; kept as its own class so pm-copy can find these strings by class name. */
+	.frozen-note {
+		margin: 0 0 var(--space-3);
+		font-size: var(--fs-small);
+		color: var(--c-text-secondary);
+		max-width: 44rem;
 	}
 </style>

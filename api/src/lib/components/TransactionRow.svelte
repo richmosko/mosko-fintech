@@ -38,15 +38,35 @@
 	let {
 		transaction,
 		subCatGroups,
-		columns
+		columns,
+		frozen = false
 	}: {
 		transaction: TransactionView;
 		subCatGroups: SubCatGroup[];
 		columns: number;
+		/**
+		 * The owning account is CLOSED (ADR-042 Decision 3), so every write into it is rejected by
+		 * `058`'s fence. Suppresses this row's edit / re-categorize / split controls and any open
+		 * inline editor — the row's DATA stays fully visible (SELF-201 AC #4: a closed account
+		 * keeps its history; only the write paths change).
+		 *
+		 * Defaults to `false` so every existing call site keeps today's behaviour untouched.
+		 *
+		 * ⚠ Not a fence — a UI affordance. The write is still reachable from a stale tab or a
+		 * provider sync; `058` is the enforcement. This stops the user being offered a control
+		 * whose only outcome is a refusal.
+		 */
+		frozen?: boolean;
 	} = $props();
 
 	type Mode = null | 'edit' | 'recat' | 'split';
 	let mode = $state<Mode>(null);
+
+	// The mode the row actually RENDERS. `frozen` can flip while an editor is open — the close
+	// lands in another tab, the load reruns, and an edit form for a now-frozen account would be
+	// left on screen posting into `058`'s fence. Derived ONCE rather than guarding each editor
+	// block, so a fourth editor added later inherits the guard instead of needing to remember it.
+	const activeMode = $derived(frozen ? null : mode);
 
 	const catLabel = $derived(
 		transaction.category
@@ -193,19 +213,28 @@
 		{money(transaction.amount)}
 		{#if transaction.is_reverse}<span class="rev-tag">Reversal</span>{/if}
 	</td>
+	<!--
+		⚠ THE CELL STAYS WHEN FROZEN — only its CONTENTS go. Dropping the <td> would desynchronize
+		this row from the page's `TABLE_COLUMNS`, and that constant is what every full-width editor
+		row below spans via `colspan`. An empty cell, never a missing one. (UX caught this; the
+		coupling is invisible from here, since the header lives in the page and the colspan lives
+		in this file.)
+	-->
 	<td class="actions-cell">
-		<div class="row-actions">
-			<Button variant="link" type="button" onclick={openEdit}>Edit</Button>
-			<Button variant="link" type="button" onclick={openRecat}>Categorize</Button>
-			{#if transaction.split_count > 0}
-				<form method="POST" action="?/unsplitTrans" use:enhance={unsplitHandler} class="inline-form">
-					<input type="hidden" name="trans_id" value={transaction.trans_id} />
-					<Button variant="link" type="submit" loading={unsplitting}>Unsplit</Button>
-				</form>
-			{:else}
-				<Button variant="link" type="button" onclick={() => (mode = 'split')}>Split</Button>
-			{/if}
-		</div>
+		{#if !frozen}
+			<div class="row-actions">
+				<Button variant="link" type="button" onclick={openEdit}>Edit</Button>
+				<Button variant="link" type="button" onclick={openRecat}>Categorize</Button>
+				{#if transaction.split_count > 0}
+					<form method="POST" action="?/unsplitTrans" use:enhance={unsplitHandler} class="inline-form">
+						<input type="hidden" name="trans_id" value={transaction.trans_id} />
+						<Button variant="link" type="submit" loading={unsplitting}>Unsplit</Button>
+					</form>
+				{:else}
+					<Button variant="link" type="button" onclick={() => (mode = 'split')}>Split</Button>
+				{/if}
+			</div>
+		{/if}
 	</td>
 </tr>
 
@@ -222,7 +251,7 @@
 	{/each}
 {/if}
 
-{#if mode === 'edit'}
+{#if activeMode === 'edit'}
 	<tr class="editor-row">
 		<td colspan={columns}>
 			<form method="POST" action="?/editTransFact" use:enhance={editHandler} class="editor" novalidate>
@@ -256,7 +285,7 @@
 	</tr>
 {/if}
 
-{#if mode === 'recat'}
+{#if activeMode === 'recat'}
 	<tr class="editor-row">
 		<td colspan={columns}>
 			<form method="POST" action="?/recategorize" use:enhance={recatHandler} class="editor" novalidate>
@@ -284,7 +313,7 @@
 	</tr>
 {/if}
 
-{#if mode === 'split'}
+{#if activeMode === 'split'}
 	<tr class="editor-row">
 		<td colspan={columns}>
 			<div class="editor">

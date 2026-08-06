@@ -22,6 +22,41 @@ export type WriteResult =
 function isCrossTenantSubCat(message: string): boolean {
 	return /sub_cat|Decision 3|matched-tenant/i.test(message);
 }
+/**
+ * DB raise-message → 058 §(4)'s CLOSED-ACCOUNT TRANSFER-IN FENCE.
+ *
+ * ⚠ EXPORTED AND SHARED ON PURPOSE. Three write paths reach this fence — manual entry
+ *   (fn_create_manual_trans, 038), reverse-and-replace (below), and stock-split entry
+ *   (fn_create_stock_split, 039) — because all three INSERT into pfin.account_trans, which 058
+ *   fences. A private copy per call site is how the classifications in this codebase drift; the
+ *   duplicated `isCrossTenantSubCat` (this file AND [account_id]/+page.server.ts, two identical
+ *   regexes maintained separately) is the precedent NOT to follow, and is flagged rather than
+ *   fixed here — a drive-by dedup of a working fence belongs in its own change.
+ *
+ * Matches on the `write blocked:` prefix, which 058 chose to be subject-carrying precisely
+ * because THREE different fences in this schema use the word "closed" for three different
+ * subjects (037's closed JOURNAL freeze raises `journal % cannot close:`; the §2.4.5 onboarding
+ * close-gate is a third). Matching on "closed" alone would collide with all of them.
+ */
+export function isClosedAccountWrite(message: string): boolean {
+	return /write blocked:.*is closed/i.test(message);
+}
+
+/**
+ * The single user-facing rendering of that fence.
+ *
+ * ⚠ IT CARRIES THE REMEDY, AND THAT IS THE ENTIRE POINT. The generic fallbacks these call sites
+ *   used before said "Please try again" — RETRY ADVICE FOR SOMETHING THAT CAN NEVER SUCCEED,
+ *   while the database was supplying the exact remedy the app then discarded. A closed account
+ *   does not become writable by retrying; it becomes writable by being reopened.
+ *
+ * The raise interpolates the account id and the table name (tg_table_name). Both are operator
+ * detail and neither is surfaced — the user already knows which account they are looking at, and
+ * the table name names an implementation.
+ */
+export const CLOSED_ACCOUNT_WRITE_MESSAGE =
+	'This account is closed, so it can no longer accept entries. Reopen it, make the change, then close it again.';
+
 /** DB raise-message → the 029 Σ=parent balance violation. */
 function isImbalance(message: string): boolean {
 	return /imbalance|sum to|Σ|parent\.amount/i.test(message);
@@ -180,6 +215,12 @@ export async function reverseAndReplaceTrans(
 		.select('trans_id, is_reverse');
 	if (insErr || !inserted) {
 		console.error('[transactions] reverse-and-replace INSERT failed:', insErr?.message);
+		// 058 §(4): a closed account is FROZEN — this INSERT can never succeed while it is closed,
+		// so "try again" is advice that cannot work. 409, not 422: the request is well-formed and
+		// the account's STATE is the conflict (same reading as the close control's already-closed
+		// refusal).
+		if (insErr && isClosedAccountWrite(insErr.message))
+			return { ok: false, status: 409, message: CLOSED_ACCOUNT_WRITE_MESSAGE };
 		return { ok: false, status: 422, message: 'Could not save the edit. Please try again.' };
 	}
 
@@ -317,6 +358,11 @@ export async function createStockSplit(
 	if (rpcErr) {
 		const msg = rpcErr.message;
 		console.error('[transactions] createStockSplit RPC failed:', msg);
+		// 058 §(4) closed-account fence, checked BEFORE the 039-specific classifications: a closed
+		// account rejects the write regardless of which 039 guard would also have had an opinion,
+		// and its remedy (reopen first) is the one the user must act on first.
+		if (isClosedAccountWrite(msg))
+			return { ok: false, status: 409, message: CLOSED_ACCOUNT_WRITE_MESSAGE };
 		if (isAccountNotVisible(msg)) return { ok: false, status: 404, message: 'Account not found.' };
 		if (isProviderLinked(msg))
 			return {

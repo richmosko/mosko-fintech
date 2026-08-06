@@ -59,8 +59,37 @@
 </svelte:head>
 
 <main class="dashboard">
-	{#if !data.hasAccounts}
-		<!-- Empty-state (AC#5): zero active accounts → onboarding CTAs. -->
+	<!--
+		⚠ THE ORDER OF THIS CHAIN IS THE FIX. DO NOT "TIDY" IT BACK.
+
+		It used to open with `{#if !data.hasAccounts}` — presence tested FIRST, ahead of both the
+		compute-failure check and the number itself. That is the one position where a failed
+		account count can override evidence that outranks it, and it is how a read error rendered
+		"connect your first account" to a user with a real net worth. The type change alone would
+		NOT have fixed that: re-pointing the flag while leaving it first in the chain yields a
+		narrower version of the same bug, and a narrower one is HARDER to find, because the obvious
+		fix has been applied and looks done.
+
+		The rule, from `NetWorthView.accountPresence`'s own contract: **check the NAV first.**
+		`accountPresence` is load-bearing ONLY when `netWorth === 0` — the sole cell where the
+		number cannot distinguish "no accounts" from "a real $0 position", because fn_compute_nav
+		returns 0 for both. A non-zero NAV is itself proof that accounts exist and OUTRANKS this
+		field, including when it is 'unknown'.
+
+		  netWorth === null   → unavailable          (presence moot: the compute failed)
+		  netWorth === 0      → presence decides     ('none' onboarding · 'some'/'unknown' below)
+		  netWorth !== 0      → the number, always   (presence cannot overrule it)
+	-->
+	{#if data.netWorth === null}
+		<!-- Degrade: the compute failed (logged server-side). Never render a wrong number. -->
+		<section class="unavailable" aria-labelledby="unavail-title">
+			<h1 id="unavail-title" class="nav-label">Net Worth</h1>
+			<p class="unavail-msg">Net worth is temporarily unavailable. Please try again shortly.</p>
+		</section>
+	{:else if data.netWorth === 0 && data.accountPresence === 'none'}
+		<!-- Empty-state (AC#5): the count SUCCEEDED and found zero → onboarding CTAs.
+		     Reachable only on a MEASURED zero. 'unknown' must never land here — that claim is
+		     precisely what we cannot make when the read failed. -->
 		<section class="empty" aria-labelledby="empty-title">
 			<h1 id="empty-title" class="empty-title">Net Worth</h1>
 			<p class="empty-msg">Connect your first account to see your net worth.</p>
@@ -68,12 +97,6 @@
 				<a class="cta cta-primary" href="/accounts/connect">Connect an account</a>
 				<a class="cta" href="/accounts/new">Add a manual account</a>
 			</div>
-		</section>
-	{:else if data.netWorth === null}
-		<!-- Degrade: the compute failed (logged server-side). Never render a wrong number. -->
-		<section class="unavailable" aria-labelledby="unavail-title">
-			<h1 id="unavail-title" class="nav-label">Net Worth</h1>
-			<p class="unavail-msg">Net worth is temporarily unavailable. Please try again shortly.</p>
 		</section>
 	{:else}
 		<!-- The single trustworthy number (AC#1). -->
@@ -87,6 +110,32 @@
 				isStale={staleness.is_stale}
 				staleItems={staleness.stale_items}
 			/>
+
+			<!--
+				THE THIRD STATE — and it is a NOTICE INSIDE THE NUMBER SURFACE, not a fourth branch
+				replacing it. That structure is deliberate, for two reasons:
+
+				(1) The number always renders. `netWorth === 0` is a successful compute and is never
+				    wrong — what the failed count costs us is the ability to INTERPRET it, not the
+				    value. An error screen here would discard a number we actually have.
+				(2) INV-1 (ADR-013 D1). Any surface rendering this aggregation must carry the
+				    staleness marker; a separate branch that re-rendered the hero would have been one
+				    NAV render path with no badge on it, i.e. silent staleness — a V1 ship-block
+				    defect — introduced by the shape of a fix for something else. Nesting the notice
+				    means the badge above is present by construction rather than by remembering.
+
+				Only reachable at netWorth === 0 with the count unknown: the one cell where the
+				number genuinely does not stand alone. At any non-zero NAV this is deliberately
+				SILENT — the headline already proves accounts exist, so a "couldn't confirm your
+				account list" note there would warn about a resolved question during a transient
+				blip, and noise that trains people to ignore the honest warning is worse than
+				silence. (Ratified: team-lead.) Copy provisional — PM/UX.
+			-->
+			{#if data.netWorth === 0 && data.accountPresence === 'unknown'}
+				<p class="notice">
+					We couldn't load your account list just now. Please try again shortly.
+				</p>
+			{/if}
 		</section>
 
 		<!-- §2.1.5 composition foot (SELF-226) — the build-up below the headline on the single
@@ -147,6 +196,15 @@
 	}
 	.nav-asof {
 		margin: 0;
+		font: var(--weight-reg) var(--fs-small) / var(--lh-body) var(--font-ui);
+		color: var(--c-text-muted);
+	}
+
+	/* Retriable notice under the number — the third state. Muted and secondary on purpose:
+	   it qualifies the number's INTERPRETATION, it does not impeach the number. Deliberately
+	   not --c-neg and not the .unavail-msg treatment; nothing here failed that the user did. */
+	.notice {
+		margin: var(--space-2) 0 0;
 		font: var(--weight-reg) var(--fs-small) / var(--lh-body) var(--font-ui);
 		color: var(--c-text-muted);
 	}

@@ -22,8 +22,15 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const { user } = await locals.safeGetSession();
 	if (!user) throw redirect(303, '/login');
 
+	// serverTodayAsOf() replaces the former bare-string todayIso(): the as-of is now a BRANDED
+	// ZoneResolvedAsOf, so a plain string cannot reach loadNetWorthView's p_as_of at all. The
+	// brand describes the GUARANTEE (the zone question is resolved), not the provenance.
 	const asOf = serverTodayAsOf();
-	const { netWorth, hasAccounts } = await loadNetWorthView(locals.supabase, asOf);
+	// accountPresence is THREE-VALUED ('some' | 'none' | 'unknown') — 'unknown' means the count
+	// read FAILED and is emphatically not 'none'. Passed through verbatim, never collapsed to a
+	// boolean here: collapsing is what this change exists to undo, and doing it at the loader
+	// would just move the lie one file closer to the render.
+	const { netWorth, accountPresence } = await loadNetWorthView(locals.supabase, asOf);
 
 	// D1 non-silent staleness marker (SELF-208 §2.4.4.c). FAIL-SOFT is load-bearing: a
 	// staleness-read failure must NEVER break or block the NAV number — degrade to an empty
@@ -52,5 +59,5 @@ export const load: PageServerLoad = async ({ locals }) => {
 		composition = null;
 	}
 
-	return { netWorth, hasAccounts, asOf, staleness, composition };
+	return { netWorth, accountPresence, asOf, staleness, composition };
 };

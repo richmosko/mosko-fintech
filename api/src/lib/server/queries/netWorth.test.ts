@@ -48,11 +48,11 @@ function makeSupabase(opts: MockOpts) {
 }
 
 describe('loadNetWorthView', () => {
-	it('happy path: numeric NAV + active accounts → number + hasAccounts', async () => {
+	it('happy path: numeric NAV + open accounts → number + presence some', async () => {
 		const { client, rpc, schema } = makeSupabase({ navData: 123456.78, count: 3 });
 		const view = await loadNetWorthView(client, AS_OF);
 
-		expect(view).toEqual({ netWorth: 123456.78, hasAccounts: true });
+		expect(view).toEqual({ netWorth: 123456.78, accountPresence: 'some' });
 		// Called the INVOKER helper in the pfin schema with the as-of date + the current-state
 		// active-only scope (SELF-322 / ADR-039 — the 2-arg fn_compute_nav; p_active_only:true
 		// excludes soft-deleted accounts so the headline reconciles with §2.1.5 composition).
@@ -111,19 +111,19 @@ describe('loadNetWorthView', () => {
 		const { client } = makeSupabase({ navData: '987654.3210', count: 1 });
 		const view = await loadNetWorthView(client, AS_OF);
 		expect(view.netWorth).toBe(987654.321);
-		expect(view.hasAccounts).toBe(true);
+		expect(view.accountPresence).toBe('some');
 	});
 
 	it('$0 WITH accounts is a real zero, not the empty-state', async () => {
 		const { client } = makeSupabase({ navData: 0, count: 2 });
 		const view = await loadNetWorthView(client, AS_OF);
-		expect(view).toEqual({ netWorth: 0, hasAccounts: true });
+		expect(view).toEqual({ netWorth: 0, accountPresence: 'some' });
 	});
 
-	it('zero accounts → hasAccounts false (empty-state), even though NAV computes 0', async () => {
+	it('zero accounts → presence none (empty-state), even though NAV computes 0', async () => {
 		const { client } = makeSupabase({ navData: 0, count: 0 });
 		const view = await loadNetWorthView(client, AS_OF);
-		expect(view).toEqual({ netWorth: 0, hasAccounts: false });
+		expect(view).toEqual({ netWorth: 0, accountPresence: 'none' });
 	});
 
 	it('negative net worth passes through (liabilities > assets)', async () => {
@@ -141,7 +141,7 @@ describe('loadNetWorthView', () => {
 	it('compute error → netWorth null (degrade), account presence still read', async () => {
 		const { client } = makeSupabase({ navError: { message: 'permission denied' }, count: 2 });
 		const view = await loadNetWorthView(client, AS_OF);
-		expect(view).toEqual({ netWorth: null, hasAccounts: true });
+		expect(view).toEqual({ netWorth: null, accountPresence: 'some' });
 	});
 
 	it('non-finite coercion (NaN) → null, never a poisoned render', async () => {
@@ -150,10 +150,51 @@ describe('loadNetWorthView', () => {
 		expect(view.netWorth).toBeNull();
 	});
 
-	it('count error → hasAccounts false (fail-soft)', async () => {
+	// ── SUPERSEDED CONTRACT, recorded rather than silently flipped ────────────────────────────
+	// This assertion used to read: it('count error → hasAccounts false (fail-soft)') — and it was
+	// a DELIBERATE PRIOR DECISION, not an oversight. Fail-soft was chosen because a headline read
+	// that throws breaks the whole dashboard, and degrading beat exploding.
+	//
+	// F/CTO superseded it, and the principle generalises well past this file — stated in the form
+	// that says WHEN the distinction matters rather than asserting it always does:
+	//
+	//   >> FAIL-SOFT IS FINE WHEN THE DEGRADED VALUE IS INERT. `hasAccounts: false` is not
+	//      inert — it drives a screen that tells the user they own nothing. Fail-soft to a
+	//      FALSE-AND-ACTIONABLE state is worse than fail-soft to a neutral one, because the
+	//      neutral one DEGRADES and the actionable one LIES. <<
+	//
+	// It trades a visible failure for a confident falsehood, on a surface whose whole job is to
+	// be believed. Contrast /accounts, which degrades to `accounts: []` — a container that happens
+	// to be empty, asserting nothing, and therefore safe in the same position.
+	//
+	// The expectation is not flipped, it is REPLACED: the third state did not exist before, so
+	// there is no old assertion that could have been "corrected" into this one.
+	it('count error → presence UNKNOWN, never none — and the NAV survives it', async () => {
 		const { client } = makeSupabase({ navData: 100, countError: { message: 'boom' } });
 		const view = await loadNetWorthView(client, AS_OF);
-		expect(view.hasAccounts).toBe(false);
+
+		expect(view.accountPresence).toBe('unknown');
+		// The two reads are independent: a failed count must not discard a NAV we computed.
 		expect(view.netWorth).toBe(100);
+	});
+
+	it("'unknown' is not falsy-equivalent to 'none' — the property the boolean could not hold", async () => {
+		const { client } = makeSupabase({ navData: 0, countError: { message: 'boom' } });
+		const view = await loadNetWorthView(client, AS_OF);
+
+		// The regression this file exists to prevent: a failed count reading as "no accounts" and
+		// rendering onboarding to a user with a real position. Asserted as a NON-EQUALITY rather
+		// than by checking a boolean, because the whole point of the union is that there is no
+		// boolean left to check — under `boolean | null` this test could not be written at all.
+		expect(view.accountPresence).not.toBe('none');
+		expect(view.accountPresence).toBe('unknown');
+	});
+
+	it('a zero count is still none, not unknown — the error branch must not over-claim', async () => {
+		// The mirror-image failure: resolving the error case first is right, but it must not
+		// swallow a legitimate zero. 'none' is a MEASUREMENT and must survive.
+		const { client } = makeSupabase({ navData: 0, count: 0 });
+		const view = await loadNetWorthView(client, AS_OF);
+		expect(view.accountPresence).toBe('none');
 	});
 });
