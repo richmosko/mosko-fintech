@@ -141,7 +141,35 @@ done
 #      "is the declaration recorded?" without depending on the session that cannot see it.
 #      Same move (T3) makes for the role vector: when a runtime probe structurally cannot
 #      reach the property, prove it DECLARATIVELY from the catalog.
-psql "$PROD_DB_URL" -At -c "select c from pg_db_role_setting s cross join lateral unnest(s.setconfig) as c where s.setrole = 0 and c ilike 'timezone=%'"
+#
+#      ⚠ THE `d.datname = current_database()` FILTER IS LOAD-BEARING. `setrole = 0` alone
+#        selects database-level rows for EVERY database on the cluster, so a pin recorded
+#        against a DIFFERENT database would satisfy this query and the operator would be
+#        told the declaration is recorded when it is not recorded HERE. That is not a
+#        theoretical mode: 061's own read-back names it ("applied to a different database
+#        than current_database() resolved to"), and by the time anyone reaches §4.1 an
+#        entirely unapplied 061 would already have failed the deploy loudly — so
+#        wrong-database IS the most plausible surviving form of cause (a), i.e. exactly
+#        the one this check exists to catch. Matches 061's read-back shape deliberately.
+#
+#      ⚠ ALSO LOAD-BEARING: select ONLY the unnested, anchored `c` — never `s.setconfig`.
+#        This query reads the `setrole = 0` row, and that row carries
+#        `app.settings.jwt_secret`. Selecting the array wholesale would print the LIVE JWT
+#        SIGNING SECRET into this terminal and into anything capturing the stream. Same
+#        rule as the sweep in (2); it applies here for the same reason.
+#
+#      ⚠ `-At -c`, NOT `-Atc` — DELIBERATE, do not normalize these flags. They are
+#        semantically identical, so this looks like an inconsistency worth tidying. It is
+#        not. The R3 anti-drift fence anchors on the SWEEP invocation in (2) below — the
+#        `-Atc` spelling followed by a trailing line-continuation — and writing this block
+#        that way too would give the fence a SECOND match, which it must not silently
+#        resolve. Recorded rather than left to chance: a fence whose correctness depends
+#        on the next author happening to pick a different flag spelling is not fenced, it
+#        is lucky.
+#        (This paragraph deliberately DESCRIBES that anchor instead of quoting it — an
+#        earlier draft quoted it verbatim and thereby became the second match itself,
+#        which the fence's ambiguity guard caught. Do not "helpfully" quote it here.)
+psql "$PROD_DB_URL" -At -c "select c from pg_db_role_setting s join pg_database d on d.oid = s.setdatabase cross join lateral unnest(s.setconfig) as c where s.setrole = 0 and d.datname = current_database() and c ilike 'timezone=%'"
 # A row (TimeZone=UTC)  -> the declaration IS recorded. The pin landed; the session you read
 #                          through is STALE. Do NOT re-run or "fix" the migration. Recycle
 #                          the connections — see the note below.
