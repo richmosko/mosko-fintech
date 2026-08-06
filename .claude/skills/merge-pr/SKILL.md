@@ -1,6 +1,6 @@
 ---
 name: merge-pr
-description: Merges an open PR to main on F/CTO sign-off, then syncs local main over SSH (HTTPS is a last-resort fallback for a blocked port 22 only). Handles doc-update PRs (phase/*, meta/* — the live flow) and feature PRs (feature/* — Phase 6+, Linear/QA-gated). Uses merge-commit style (--merge), not squash. Optional argument: PR number (defaults to the current branch's PR). Per ADR-009 Decision 9.
+description: "Merges an open PR to main on F/CTO sign-off, then syncs local main over SSH (HTTPS is a last-resort fallback for a blocked port 22 only). Handles doc-update PRs (phase/*, meta/* — the live flow) and feature PRs (feature/* — Phase 6+, Linear/QA-gated). Uses merge-commit style (--merge), not squash. Optional argument: PR number (defaults to the current branch's PR). Per ADR-009 Decision 9."
 user-invocable: true
 allowed-tools:
   - Bash
