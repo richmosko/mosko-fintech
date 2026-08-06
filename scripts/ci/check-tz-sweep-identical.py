@@ -18,8 +18,8 @@
 #     "Kept query-identical — token-for-token, modulo indentation — to (T3) in
 #      supabase/tests/01_session_timezone.sql, so the two cannot drift."
 #   supabase/tests/01_session_timezone.sql (T3) says of itself:
-#     "the runbook §4.1 sweep as an executable assertion, kept query-identical to the
-#      runbook so the two cannot drift."
+#     "the runbook §4.1 catalog sweep as an executable assertion, kept query-identical to
+#      the runbook so the two cannot drift."
 #
 #   THIS FENCE ENFORCES EXACTLY THAT CLAIM AND NOTHING STRONGER: the two query texts are
 #   identical after whitespace normalization. It deliberately does NOT assert byte
@@ -80,6 +80,19 @@
 #   0 — the two query texts are token-identical (modulo indentation).
 #   1 — drift, OR extraction failed (fail-closed).
 #   2 — argument / environment error (a named file is missing).
+#
+# ⚠ THE THREE-WAY SPLIT IS LOAD-BEARING — DO NOT COLLAPSE IT TO 0/nonzero. Keeping "a named
+#   file is missing" (2) DISTINCT from "fail-closed" (1) is what stops a DELETED GOLDEN
+#   FIXTURE FROM MASQUERADING AS A PASSING TEST. The inversion steps assert an expected
+#   FAILURE (`rc -ne 1 → FATAL`), so under a two-way scheme a vanished fixture would raise
+#   FileNotFoundError, exit 1, satisfy "expects exit 1", and report GREEN — the fence
+#   certified by a test that no longer had anything to test. read() therefore handles the
+#   missing-file case explicitly and exits 2, which those steps reject.
+#   Both directions are covered, and each needs a different code:
+#     fixture present, fence broken  -> returns 0 -> step reds (0 != 1)
+#     fixture absent                 -> returns 2 -> step reds (2 != 1)
+#   A future "simplify the exit codes" pass would silently reopen the first hole. This
+#   paragraph exists so that pass meets the reason before it makes the change.
 
 import argparse
 import difflib
