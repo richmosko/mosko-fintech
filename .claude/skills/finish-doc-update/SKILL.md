@@ -1,6 +1,6 @@
 ---
 name: finish-doc-update
-description: Closes a doc-only update — commits the doc edits, pushes the `phase/*` or `meta/*` branch (with SSH→HTTPS fallback per feedback_ssh_push_fallback), and opens a PR with mosko's elaborate body shape (Summary / Motivation / Files / Test plan / Follow-ups). Mirrors `/finish-feature` but lighter (no Linear issue update, no QA handshake) and replaces the retired `/ship-branch` skill. Per ADR-009 Decision 9.
+description: Closes a doc-only update — commits the doc edits, pushes the `phase/*` or `meta/*` branch over SSH (HTTPS is a last-resort fallback for a blocked port 22 only), and opens a PR with mosko's elaborate body shape (Summary / Motivation / Files / Test plan / Follow-ups). Mirrors `/finish-feature` but lighter (no Linear issue update, no QA handshake) and replaces the retired `/ship-branch` skill. Per ADR-009 Decision 9.
 user-invocable: true
 allowed-tools:
   - Bash
@@ -13,7 +13,7 @@ Wraps a doc-update branch into a PR. Does not auto-merge — that's `/merge-pr`'
 
 mosko-fintech adaptation of `richmosko/project_template`'s `/finish-doc-update` per [ADR-009](../../../DECISIONS.md#adr-009) Decision 9. Differences from template:
 
-1. **Adds SSH→HTTPS fallback** with per-use authorization — ported from the retired `/ship-branch` skill per `feedback_ssh_push_fallback` memory. Template's version did plain `git push` and surfaced errors; mosko's adaptation surfaces the fallback path on `Permission denied (publickey)`.
+1. **Documents the SSH deploy-key path plus a narrow HTTPS last resort.** Template's version does plain `git push` and surfaces errors — which is now also mosko's behaviour, because the repo deploy key makes SSH work. The HTTPS temp-switch is retained ONLY for a blocked/timing-out port 22, with per-use authorization, and carries an explicit warning that it silently refuses workflow-file pushes.
 2. **Commit message format** uses `docs(<outer>): <subject>` matching the R/P/I+V outer-category prefix from `/start-doc-update` (`docs(research):` / `docs(plan):` / `docs(iv):` / `docs(meta):`).
 3. **PR body shape** uses mosko's elaborate shape (Summary / Motivation / Files changed / Test plan / Follow-ups) replacing template's lean Summary+Type-line shape. F/CTO consistently finds the richer shape useful for PR review.
 
@@ -45,15 +45,41 @@ Add the standard Claude trailer per global git instructions:
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 ```
 
-### 2. Push with SSH→HTTPS fallback
+### 2. Push over SSH
 
-Attempt the SSH push first:
+**SSH is the working path — push plainly.**
 
 ```bash
 git push -u origin HEAD
 ```
 
-If it fails with `Permission denied (publickey)`, do **not** retry. Surface the failure and propose the HTTPS temp-switch, asking explicitly for per-use authorization (matches `feedback_ssh_push_fallback` — each push gets its own approval). On approval:
+A repo-scoped **deploy key** is configured for mosko-fintech in the shared git config (`core.sshCommand`, which every worktree inherits), so pushes work without a TTY. The passphrase-key problem that the old HTTPS-first guidance existed for was solved on 2026-05-14.
+
+⚠ **`Permission denied (publickey)` is NOT expected here, and is NOT a cue to reach for HTTPS.** Verify the premise before concluding SSH is unavailable — both checks are read-only and take seconds:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_claude_mosko-fintech -o IdentitiesOnly=yes -T git@github.com
+#   expect: Hi richmosko/mosko-fintech! You've successfully authenticated
+git config --get core.sshCommand
+#   expect: ssh -i ~/.ssh/id_ed25519_claude_mosko-fintech -o IdentitiesOnly=yes
+```
+
+If those succeed, the push failed for some *other* reason — read the actual error rather than assuming it is the key. If `core.sshCommand` is missing (fresh machine, rotated key), run `/setup-claude-deploy-key`; that is the fix, not HTTPS.
+
+#### HTTPS temp-switch — LAST RESORT, and only for one failure mode
+
+**The deploy key cannot fix a blocked or timing-out port 22** — deploy keys still use port 22. On a hostile network or behind a corporate firewall, SSH will **time out or be refused at the connection level** (as distinct from being *rejected on authentication*), and HTTPS over 443 is then the genuine answer. **That case is why this fallback still exists.**
+
+⚠ **HTTPS SILENTLY REFUSES WORKFLOW-FILE PUSHES.** It authenticates with the `gh` OAuth token, which lacks `workflow` scope, so any push touching `.github/workflows/` is rejected:
+
+```
+! [remote rejected] refusing to allow an OAuth App to create or update workflow
+  `.github/workflows/<file>.yml` without `workflow` scope
+```
+
+This arrives as a *mysterious permissions error* and reads like a repo/branch problem rather than a transport one. **If the branch touches a workflow file, HTTPS is not an option at all** — fix the SSH path instead.
+
+With per-use authorization (each push gets its own approval):
 
 ```bash
 git remote set-url origin https://github.com/richmosko/mosko-fintech.git
@@ -62,9 +88,9 @@ git remote set-url origin git@github.com:richmosko/mosko-fintech.git
 git remote -v   # confirm SSH restored
 ```
 
-Always restore origin to SSH after the push, even on push failure. The HTTPS form uses the gh CLI's stored credentials (system keyring) which Claude's bash can reach.
+Always restore origin to SSH afterward, even on failure. The HTTPS form uses the gh CLI's stored credentials (system keyring), which Claude's bash can reach.
 
-This SSH→HTTPS fallback is the mosko-specific extension to template's `/finish-doc-update`. It exists because the F/CTO's main SSH key is passphrase-protected and Claude Code's bash has no TTY to unlock it. See `feedback_ssh_push_fallback` for the full root-cause analysis; the primary fix (`/setup-claude-deploy-key`) eliminates the friction per-repo, with HTTPS temp-switch as the secondary fallback.
+> **Why this is a demotion and not a deletion.** The port-22 case is real and HTTPS is the only answer to it. What was wrong was the *ordering*: the fallback was documented as the expected path, so agents matched `Permission denied (publickey)` to a familiar story and switched transport without ever testing whether SSH worked. On 2026-08-06 that cost six unnecessary HTTPS pushes and a spurious credential escalation to the F/CTO, on a repo where SSH had worked for nearly three months. **A documented workaround is a claim about the world with a timestamp on it, and it decays.**
 
 ### 3. Open the PR
 
@@ -153,14 +179,14 @@ These updates may need their own subsequent `/start-doc-update meta/<slug>` cycl
 
 - **Not on a `phase/*` or `meta/*` branch**: bail; suggest `/start-doc-update` first to create the branch.
 - **No uncommitted changes**: bail; nothing to commit. Either make edits or abandon the branch.
-- **SSH push fails (`Permission denied (publickey)`)**: surface and propose the HTTPS temp-switch with per-use authorization. Do not retry SSH automatically.
+- **SSH push fails (`Permission denied (publickey)`)**: this is NOT the expected outcome and NOT a cue to switch to HTTPS. Verify the deploy key first (`ssh -T` + `git config --get core.sshCommand`, step 2). If the key checks out, the failure is something else — read the actual error. If `core.sshCommand` is absent, run `/setup-claude-deploy-key`. Reach for HTTPS only on a connection-level timeout/refusal (port 22 blocked), and never when the branch touches `.github/workflows/`.
 - **`gh pr create` fails**: surface the error verbatim (auth, branch-protection mismatch, etc.). Don't pretend success.
 - **Branch protection rejects the push** (rare on initial push; common if main was force-changed): surface the error and advise the user to rebase or pull.
 
 ## Notes
 
 - `gh pr merge --merge --delete-branch` is the merge style used on `main` (preserves `Merge pull request #N from …` history). Do not propose `--squash` or `--rebase` unless explicitly asked.
-- The HTTPS temp-switch needs per-use authorization every time — the user's network and credential environment can differ between sessions, and the `feedback_ssh_push_fallback` memory is explicit on this point.
-- After merge, the post-merge sync (`git checkout main && git pull`) will also need the HTTPS temp-switch if SSH is still blocked. That's a separate authorization moment, handled outside this skill (or absorbed by `/merge-pr`).
-- Per ADR-009 Decision 9, this skill **replaces `/ship-branch`** (which was the single-step push+PR skill from mosko's pre-template-adoption convention). Branch creation is now handled by the sibling `/start-doc-update`. The two-step flow matches template's convention while preserving mosko's SSH fallback + elaborate PR body shape.
-- This skill is mosko-fintech-specific. The repo URLs, branch conventions, PR body shape, and SSH fallback live with this repo. A different repo running the template would have its own version of this skill.
+- The HTTPS temp-switch needs per-use authorization every time — the user's network and credential environment can differ between sessions. It is a last resort for a blocked port 22, not the expected path.
+- After merge, the post-merge sync (`git checkout main && git pull`) uses the same SSH path. It would only need the HTTPS temp-switch in the same narrow port-22 case, which is a separate authorization moment handled outside this skill (or absorbed by `/merge-pr`).
+- Per ADR-009 Decision 9, this skill **replaces `/ship-branch`** (which was the single-step push+PR skill from mosko's pre-template-adoption convention). Branch creation is now handled by the sibling `/start-doc-update`. The two-step flow matches template's convention while preserving mosko's push guidance + elaborate PR body shape.
+- This skill is mosko-fintech-specific. The repo URLs, branch conventions, PR body shape, and push guidance live with this repo. A different repo running the template would have its own version of this skill.
