@@ -237,6 +237,35 @@ function stripComments(src: string): string {
 
 /** Date-RENDERING APIs called directly. `toISOString` is deliberately excluded — see the test body. */
 const DIRECT_FORMAT = /toLocaleString|toLocaleDateString|toLocaleTimeString|Intl\.DateTimeFormat/;
+/**
+ * ⚑ THIS MATCHES MORE THAN THE COLUMN NAME, AND THE OVER-MATCH IS LOAD-BEARING IN BOTH
+ * DIRECTIONS. `closed` + optional `_` + `[aA]t` also matches the `closedAt` SUBSTRING INSIDE THE
+ * IDENTIFIER `closedAtLabel`. So an ordinary `import { closedAtLabel } from '$lib/account-display'`
+ * satisfies the proximity window on its own, with nothing to do with any closure date being
+ * formatted. Two consequences, and the second is the one that reaches production readers:
+ *
+ *   (1) PROBE HAZARD. A probe that declares its formatter near that import gets a hit FOR THE
+ *       WRONG REASON and looks covered when it is not. **This has flattered a probe twice, in
+ *       two separate rounds, for two different authors** — once when the declaration landed near
+ *       a `closed_at` filter, once on the import line itself. Both times the hole was FULL, not
+ *       partial, and stopping at the first green would have understated the fix. If you are
+ *       probing this check, put the binding in its OWN MODULE and confirm the pre-fix run
+ *       returns a literal `[]` before believing any of it.
+ *
+ *   (2) DIAGNOSABILITY IN THE SHIPPED CHECK, which is the larger half. A live offender may point
+ *       at CORRECT CODE whose only sin is sitting two lines from that import. Not firing today
+ *       (`offenders` is `[]`), but if it ever does, the reader gets a file:line, goes hunting for
+ *       a formatting violation, and finds an import statement. **A false red with an opaque
+ *       cause** — the exact condition this file keeps naming as what gets a check deleted,
+ *       arriving by a path neither hardening round had written down. >> READ THE REPORTED LINE
+ *       BEFORE BELIEVING IT. <<
+ *
+ * ⚠ DELIBERATELY NOT FIXED, and not by neglect. Narrowing the pattern to the column name alone
+ *   would cost real detection — `closedAt`-cased locals and mapped fields are exactly what a
+ *   regression looks like — and a date format call genuinely sitting two lines from the canonical
+ *   `closedAtLabel` call site is worth a look on its own merits. Same disposition as
+ *   `stripComments` above: the imprecision is recorded and argued rather than silently carried.
+ */
 const CLOSED_AT = /closed_?[aA]t/;
 
 /**
