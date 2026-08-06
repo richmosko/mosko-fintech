@@ -117,13 +117,45 @@ Three operational consequences, all load-bearing:
 # (1) THE PIN — run as EACH login role the app actually connects as, not as `postgres`.
 #     A `postgres` session reads `postgres`'s login-time settings and will show a clean
 #     UTC|database while every PostgREST request runs in another zone.
+#
+#     ⚠ EVERY psql INVOCATION BELOW OPENS A FRESH CONNECTION, AND THAT IS LOAD-BEARING.
+#       `alter database ... set timezone` reaches NEW SESSIONS ONLY. It never reaches a
+#       session that was already open — so anything holding a long-lived pooled connection
+#       across the migration (PostgREST, the web-app container, workers/etl, a psql left
+#       open in another pane) keeps reporting the PRE-migration value indefinitely.
+#       MEASURED on a scratch database, with the alter issued from a separate connection:
+#         warm session  -> UTC        | configuration file   (unchanged, indefinitely)
+#         fresh session -> Asia/Tokyo | database             (same instant, same database)
 for URL in "$PROD_URL_AUTHENTICATOR" "$PROD_URL_PFIN_ETL"; do
   psql "$URL" -Atc "select current_user, setting, source from pg_settings where name='TimeZone'"
 done
 # REQUIRED, for every role: <role>|UTC|database
-#   UTC|configuration file  -> the migration did not apply here. The value is right BY ACCIDENT. Fix.
+#   UTC|configuration file  -> TWO CAUSES. This line previously named only the first, and so
+#                              instructed the operator to "fix" a pin that had already landed:
+#                                (a) the migration did not apply here — value right BY ACCIDENT; or
+#                                (b) you are not reading through a fresh session (see 1b).
 #   *|user                  -> a role-level override on THIS LOGIN ROLE. See (2).
 #   *|client                -> PGTZ is set in that container's environment. Remove it.
+
+# (1b) DISAMBIGUATE (a) FROM (b) WITH THE CATALOG — it is SESSION-INDEPENDENT, so it answers
+#      "is the declaration recorded?" without depending on the session that cannot see it.
+#      Same move (T3) makes for the role vector: when a runtime probe structurally cannot
+#      reach the property, prove it DECLARATIVELY from the catalog.
+psql "$PROD_DB_URL" -At -c "select c from pg_db_role_setting s cross join lateral unnest(s.setconfig) as c where s.setrole = 0 and c ilike 'timezone=%'"
+# A row (TimeZone=UTC)  -> the declaration IS recorded. The pin landed; the session you read
+#                          through is STALE. Do NOT re-run or "fix" the migration. Recycle
+#                          the connections — see the note below.
+# No row               -> the migration really did not apply. Cause (a). Fix it.
+#
+# ⚠ AFTER THE PIN APPLIES, RECYCLE THE APP AND WORKER CONTAINERS. Their pooled connections
+#   were opened before the pin and hold the pre-migration session zone until they reconnect.
+#   A deployment that applies the pin without recycling is pinned AT THE DATABASE and unpinned
+#   IN EVERY LONG-LIVED CONNECTION — the half-pinned shape this section exists to prevent,
+#   reached from the other direction.
+#   SEVERITY, stated honestly rather than inflated: in THIS deployment the pre-pin value is
+#   ALSO UTC (the image's postgresql.conf), so a stale pool is MIS-LABELLED, not wrong, and
+#   no date is currently computed incorrectly by one. It becomes a CORRECTNESS problem the
+#   moment the two values differ — which is precisely what the measurement above shows.
 
 # (2) THE SWEEP — no ROLE may carry a TimeZone at all, so the database pin is authoritative.
 #     Covers roles that do not exist yet; catches the `authenticator` vector that a
