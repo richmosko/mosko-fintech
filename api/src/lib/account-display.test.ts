@@ -266,6 +266,34 @@ function intlBindings(ctor: string): Set<string> {
 const CURRENCY_FORMATTERS = intlBindings('NumberFormat');
 
 /**
+ * Date formatters — `Intl.DateTimeFormat` bindings. These OVERRIDE the currency exclusion.
+ *
+ * ⚑⚑ THIS EXISTS TO FIX A COLLISION IN THE EXCLUSION ABOVE, and the collision was the SAME
+ * FAILURE DIRECTION as the hole this whole commit closes — a receiver wrongly EXCLUDED, going
+ * silently green (Sec, 2026-08-06). Because the scan is tree-wide and flat, one name bound to
+ * different constructors in different modules collapses into a single verdict:
+ *
+ *     // file A                                  // file B
+ *     const fmt = new Intl.NumberFormat(...)     const fmt = new Intl.DateTimeFormat(...)
+ *                                                {fmt.format(new Date(a.closed_at))}   // was EXCLUDED
+ *
+ * The name is in CURRENCY_FORMATTERS from file A, so file B's genuine closure-date render was
+ * skipped everywhere. Generic names — `fmt`, `formatter`, `df` — are exactly where this comes from.
+ *
+ * ⚠ AND IT CONTRADICTED THE RULE STATED ONE FUNCTION BELOW IT: *"an unresolvable receiver
+ * COUNTS. Fail toward flagging."* An UNRESOLVABLE receiver failed toward flagging; a COLLIDED
+ * one failed toward excluding. Two receivers the check cannot confidently classify, resolved in
+ * opposite directions, with the silent one unstated. Date-binding now WINS over currency-binding:
+ * a name ever bound to a DateTimeFormat anywhere is never excluded anywhere, which puts both
+ * unclassifiable cases on the same side — the flagging side.
+ *
+ * Latent when found (measured: zero bound DateTimeFormats in the tree today) — which is exactly
+ * the status the `.format(` hole itself had when it was raised. Latent-and-idiomatic is the
+ * category this file has now been wrong about twice; it is not a reason to defer.
+ */
+const DATE_FORMATTERS = intlBindings('DateTimeFormat');
+
+/**
  * Does this line format a DATE?
  *
  * ⚑ THE `.format(` LEG EXISTS BECAUSE ITS ABSENCE WAS A LIVE HOLE (Sec, follow-up to the
@@ -297,19 +325,29 @@ const CURRENCY_FORMATTERS = intlBindings('NumberFormat');
  * The exclusion is STRUCTURAL, not a name allowlist: `usd` is skipped because it is bound to a
  * NumberFormat, and a NumberFormat cannot render a date. Nothing here depends on what it is called.
  *
- * `currency` is a PARAMETER, defaulted, so the self-test below can exercise this logic against a
- * fixed set instead of against whatever the tree happens to contain today. Otherwise renaming
- * `usd` would red the self-test — which is the very failure mode this function was designed around.
+ * `currency` and `dates` are PARAMETERS, defaulted, so the self-test below can exercise this
+ * logic against fixed sets instead of against whatever the tree happens to contain today.
+ * Otherwise renaming `usd` would red the self-test — the very failure mode this was designed around.
  */
-function formatsDate(line: string, currency: Set<string> = CURRENCY_FORMATTERS): boolean {
+function formatsDate(
+	line: string,
+	currency: Set<string> = CURRENCY_FORMATTERS,
+	dates: Set<string> = DATE_FORMATTERS
+): boolean {
 	if (DIRECT_FORMAT.test(line)) return true;
 	if (!/\.format\s*\(/.test(line)) return false;
 	// Inline currency construction: `new Intl.NumberFormat(...).format(n)` — no binding to look up.
 	if (/Intl\.NumberFormat/.test(line)) return false;
 	const receivers = [...line.matchAll(/([A-Za-z_$][\w$]*)\s*\.format\s*\(/g)].map((m) => m[1]);
+	// A receiver is excluded ONLY if it is bound to a currency formatter AND never to a date one.
+	// The `!dates.has(r)` conjunct is the collision fix: a name bound to DateTimeFormat ANYWHERE
+	// outranks a NumberFormat binding elsewhere, so a flat tree-wide namespace cannot silently
+	// exclude a real closure render.
+	const excluded = (r: string) => currency.has(r) && !dates.has(r);
 	// An unresolvable receiver — a chained call, a property access — COUNTS. Fail toward flagging:
 	// a false red on an exotic shape is reviewable, a false green is the hole this leg closes.
-	return receivers.length === 0 || receivers.some((r) => !currency.has(r));
+	// A COLLIDED receiver now lands on this same side, which it did not before.
+	return receivers.length === 0 || receivers.some((r) => !excluded(r));
 }
 
 /** Files allowed to format a closure date. Exactly one, and that is the invariant. */
@@ -388,19 +426,39 @@ describe('(T4) closure dates are formatted in exactly one place — ADR-043 all-
 			["{new Intl.NumberFormat('en-US').format(n)}", false],
 			['const open = accounts.filter((a) => a.closed_at === null);', false]
 		] as const;
-		// Fixed set, NOT the tree's: renaming `usd` in the app must not red this self-test.
+		// Fixed sets, NOT the tree's: renaming `usd` in the app must not red this self-test.
 		const currency = new Set(['usd', 'usdSigned']);
+		const dates = new Set(['closedFmt']);
 		for (const [line, expected] of verdicts) {
-			expect({ line, matches: formatsDate(line, currency) }).toEqual({ line, matches: expected });
+			expect({ line, matches: formatsDate(line, currency, dates) }).toEqual({
+				line,
+				matches: expected
+			});
 		}
-		// ⚑ THE REAL `CURRENCY_FORMATTERS` SCAN IS DELIBERATELY NOT ASSERTED, and the asymmetry is
-		//   the reasoning worth keeping: if that scan silently returned an empty set, every
-		//   `.format(` would count and the check would get STRICTER — which can only produce a loud
-		//   false RED, never a false GREEN. The invariant's integrity is preserved either way.
-		//   Pinning the inventory here (`toEqual(['usd','usdSigned'])`) would instead red the day
-		//   someone legitimately adds a third currency formatter — reddening on correct code to
-		//   guard a failure mode that cannot hide. Assert what prevents false greens; leave what
-		//   can only announce itself.
+
+		// THE COLLISION CASE — one name bound to BOTH constructors in different modules. The flat
+		// tree-wide namespace cannot tell them apart, so the date binding must WIN. Without the
+		// `!dates.has(r)` conjunct this row returns false and a real closure render goes unflagged.
+		expect(formatsDate('{fmt.format(new Date(a.closed_at))}', new Set(['fmt']), new Set(['fmt']))).toBe(
+			true
+		);
+
+		// ⚑ THE SCAN'S PRECONDITION — asserted NON-EMPTY, never PINNED.
+		//   My original reasoning stopped one step short and Sec carried it the rest of the way.
+		//   Correct half: a silently-empty scan cannot produce a false GREEN — every `.format(`
+		//   would count, so the check only gets STRICTER. That half still holds.
+		//   MISSING half: "stricter" is not free. A broken scan turns every legitimate
+		//   `usd.format(...)` near a `closed_at` into an offender — a false RED on correct code,
+		//   which is the precise condition this file names as what *"gets this check deleted, and
+		//   it takes the real assertion with it."* The cascade is also indistinguishable from the
+		//   invariant genuinely failing, so the reader cannot tell a broken instrument from a real
+		//   violation. Non-empty converts that into ONE named failure. It cannot red on a third
+		//   currency formatter, so it is not the inventory pin I rejected — it is the same move as
+		//   (T0) and the source-walk guard: assert the instrument found SOMETHING, not WHAT.
+		//   >> THE RULE, AMENDED (Sec's wording, adopted): assert what prevents false greens;
+		//      leave what can only announce itself — UNLESS what it announces is indistinguishable
+		//      from the invariant failing.
+		expect(CURRENCY_FORMATTERS.size).toBeGreaterThan(0);
 	});
 
 	it('no closure date is formatted outside account-display.ts', () => {
