@@ -174,10 +174,11 @@
 --   names them freely; `prosrc` excludes everything above the $$ delimiter,
 --   which is exactly why the discussion lives up here.
 --   ⚠ MEASURED, and recorded because it is the reusable part. The same root
---   trap was hit SIX TIMES across this surface — five of them by the author of
---   the rule against it, and the sixth by the reviewer who caught the fifth.
---   THAT is what makes the lesson general rather than anecdotal: knowing the
---   rule demonstrably does not confer immunity to it.
+--   trap was hit SEVEN TIMES across this surface — five by the author of
+--   the rule against it, one by the reviewer who caught the fifth, and one in
+--   the DESIGN both of them agreed on. THAT is what makes the lesson general
+--   rather than anecdotal: knowing the rule demonstrably does not confer
+--   immunity to it.
 --     (1) the fence itself — the reason the valuation function is discussed
 --         only up here and never in the body;
 --     (2) the first draft's inline body comment warning "do not change this to
@@ -240,6 +241,30 @@
 --         >> COUNTING THE PRESENCE OF A CONTROL CANNOT OBSERVE ITS INTEGRITY. <<
 --         Same shape as the ledger-count discipline this project already runs
 --         on: a tally is not a description of the thing tallied.
+--     (7) THE DESIGN OF THIS VERY BLOCK — recorded as the HONEST COST of a
+--         deliberate choice, not as a slip in executing it. Every "(TAG)"
+--         above points at a battery leg instead of restating it, chosen so
+--         that only ONE artifact can go stale and so that it fails LOUDLY.
+--         >> BUT THE LOUDNESS IS NOT A PROPERTY OF THE POINTER — IT IS A
+--            PROPERTY OF SOMEBODY DEREFERENCING IT. Until someone follows the
+--            citation, a dangling pointer is exactly as silent as the
+--            divergence it was preferred over. A CITATION IS A FENCE WHOSE
+--            ENFORCEMENT IS DEFERRED TO A HUMAN WHO MAY NEVER ARRIVE. <<
+--         It happened here: QA froze these tags (renaming one is a
+--         cross-artifact change, stated in the battery), the tags were renamed,
+--         and this header shipped one commit citing the old short forms.
+--         ⚠ AND THE CHECK ITSELF HAS A FAILURE MODE, which is the part worth
+--         carrying: the dangling citations were caught by a MANUAL grep — run
+--         against the PREVIOUS COMMIT, one revision behind the repair, which
+--         reported a defect that had already been fixed. A pointer-checker is
+--         an instrument like any other and can be AIMED AT THE WRONG VERSION
+--         OF THE ARTIFACT. So the mechanical form must run against the SAME
+--         TREE it is validating, not against a remembered or reported state.
+--         REMEDY (routed to DevOps, deliberately NOT built here — a migration
+--         is the wrong home for a repo-wide fence): a CI check asserting that
+--         every "(TAG)" cited in a migration resolves in its paired battery,
+--         run on the PR's own tree. Until that exists, this block's soundness
+--         rests on a human doing it, and that is the standing exposure.
 --   >> THE GENERALIZATION: A FILE THAT FORBIDS A TOKEN WILL CONTAIN THAT TOKEN
 --      MOST DENSELY IN THE PROSE EXPLAINING THE PROHIBITION. So a fence's scope
 --      must be defined by STRUCTURE (`prosrc` — mechanically checkable) and
@@ -247,7 +272,7 @@
 --      you write it down). AND A SPECIFICATION IS ITSELF EXHORTATION UNTIL AN
 --      ASSERTION IMPLEMENTS IT: (5) happened because the rule was stated in one
 --      block and only partly encoded in another.
---   >> THE THREE DIAGNOSTIC QUESTIONS — the transferable part; the six anecdotes
+--   >> THE THREE DIAGNOSTIC QUESTIONS — the transferable part; the seven anecdotes
 --      above are disposable, these are not:
 --        · "CAN THIS CHECK EVER FAIL?" — catches an instrument that cannot
 --          observe the property at all (the rejected EXPLAIN fence: plpgsql
