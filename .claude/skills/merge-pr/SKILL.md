@@ -76,11 +76,22 @@ A repo-scoped **deploy key** is configured for mosko-fintech in the shared git c
 ⚠ **`Permission denied (publickey)` is NOT expected, and is NOT a cue to switch to HTTPS.** Verify the premise first — both checks are read-only and take seconds:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_claude_mosko-fintech -o IdentitiesOnly=yes -T git@github.com
-#   expect: Hi richmosko/mosko-fintech! You've successfully authenticated
+git ls-remote origin HEAD
+#   expect: a SHA. THIS is the check — it goes through git's own path (core.sshCommand,
+#   and therefore the deploy key), so it answers the question you actually have,
+#   "can git reach the remote?", rather than "can my default SSH identity authenticate?"
+```
+
+If that returns a SHA, SSH works and the failure is something else — read the actual error rather than assuming it is the key. If it fails, these two say *why*:
+
+```bash
 git config --get core.sshCommand
 #   expect: ssh -i ~/.ssh/id_ed25519_claude_mosko-fintech -o IdentitiesOnly=yes
+eval "$(git config --get core.sshCommand)" -T git@github.com
+#   expect: Hi richmosko/mosko-fintech! You've successfully authenticated
 ```
+
+⚠ **NEVER probe with a bare `ssh -T git@github.com`.** It ignores `core.sshCommand` and offers the default, passphrase-protected identity, so it returns **`Permission denied (publickey)` on a perfectly working setup** — MEASURED on `main` 2026-08-06, where `git ls-remote` succeeded in the same shell seconds later. A probe that reds when the real operation is green is worse than no probe: it is read *only* by someone already staring at that exact error, and it hands them a false confirmation.
 
 If those succeed, the failure is something else — read the actual error. If `core.sshCommand` is absent (fresh machine, rotated key), run `/setup-claude-deploy-key`; that is the fix, not HTTPS.
 
@@ -150,7 +161,7 @@ Report the merge SHA + confirm `main` is synced and the branch is cleaned up. Th
 - **No explicit F/CTO sign-off:** stop; confirm before merging.
 - **`mergeable != MERGEABLE`:** surface the conflict; advise rebasing the head branch on `main` (the branch owner does this, not `merge-pr`).
 - **CI not green / required reviews missing:** surface verbatim; do not merge.
-- **`git pull` fails (`Permission denied (publickey)`):** NOT expected and NOT a cue to switch to HTTPS. Verify the deploy key first (`ssh -T` + `git config --get core.sshCommand`, step 3); if it checks out, read the actual error. Reach for HTTPS only on a connection-level timeout/refusal (port 22 blocked).
+- **`git pull` fails (`Permission denied (publickey)`):** NOT expected and NOT a cue to switch to HTTPS. Verify the premise first with **`git ls-remote origin HEAD`** (step 3) — **not** a bare `ssh -T`, which ignores `core.sshCommand` and reds on a working setup; if it checks out, read the actual error. Reach for HTTPS only on a connection-level timeout/refusal (port 22 blocked).
 - **`git branch -d` refuses (unmerged):** investigate before forcing — do not jump to `-D`. Usually means the local branch has commits the merge didn't include (e.g., the PR merged a different head); reconcile first.
 
 ## Notes

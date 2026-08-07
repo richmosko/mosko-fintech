@@ -58,11 +58,22 @@ A repo-scoped **deploy key** is configured for mosko-fintech in the shared git c
 ⚠ **`Permission denied (publickey)` is NOT expected here, and is NOT a cue to reach for HTTPS.** Verify the premise before concluding SSH is unavailable — both checks are read-only and take seconds:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_claude_mosko-fintech -o IdentitiesOnly=yes -T git@github.com
-#   expect: Hi richmosko/mosko-fintech! You've successfully authenticated
+git ls-remote origin HEAD
+#   expect: a SHA. THIS is the check — it goes through git's own path (core.sshCommand,
+#   and therefore the deploy key), so it answers the question you actually have,
+#   "can git reach the remote?", rather than "can my default SSH identity authenticate?"
+```
+
+If that returns a SHA, SSH works and the failure is something else — read the actual error rather than assuming it is the key. If it fails, these two say *why*:
+
+```bash
 git config --get core.sshCommand
 #   expect: ssh -i ~/.ssh/id_ed25519_claude_mosko-fintech -o IdentitiesOnly=yes
+eval "$(git config --get core.sshCommand)" -T git@github.com
+#   expect: Hi richmosko/mosko-fintech! You've successfully authenticated
 ```
+
+⚠ **NEVER probe with a bare `ssh -T git@github.com`.** It ignores `core.sshCommand` and offers the default, passphrase-protected identity, so it returns **`Permission denied (publickey)` on a perfectly working setup** — MEASURED on `main` 2026-08-06, where `git ls-remote` succeeded in the same shell seconds later. A probe that reds when the real operation is green is worse than no probe: it is read *only* by someone already staring at that exact error, and it hands them a false confirmation.
 
 If those succeed, the push failed for some *other* reason — read the actual error rather than assuming it is the key. If `core.sshCommand` is missing (fresh machine, rotated key), run `/setup-claude-deploy-key`; that is the fix, not HTTPS.
 
@@ -185,7 +196,7 @@ These updates may need their own subsequent `/start-doc-update meta/<slug>` cycl
 
 - **Not on a `phase/*` or `meta/*` branch**: bail; suggest `/start-doc-update` first to create the branch.
 - **No uncommitted changes**: bail; nothing to commit. Either make edits or abandon the branch.
-- **SSH push fails (`Permission denied (publickey)`)**: this is NOT the expected outcome and NOT a cue to switch to HTTPS. Verify the deploy key first (`ssh -T` + `git config --get core.sshCommand`, step 2). If the key checks out, the failure is something else — read the actual error. If `core.sshCommand` is absent, run `/setup-claude-deploy-key`. Reach for HTTPS only on a connection-level timeout/refusal (port 22 blocked), and never when the branch touches `.github/workflows/`.
+- **SSH push fails (`Permission denied (publickey)`)**: this is NOT the expected outcome and NOT a cue to switch to HTTPS. Verify the premise first with **`git ls-remote origin HEAD`** (step 2) — **not** a bare `ssh -T`, which ignores `core.sshCommand` and reds on a working setup. If the key checks out, the failure is something else — read the actual error. If `core.sshCommand` is absent, run `/setup-claude-deploy-key`. Reach for HTTPS only on a connection-level timeout/refusal (port 22 blocked), and never when the branch touches `.github/workflows/`.
 - **`gh pr create` fails**: surface the error verbatim (auth, branch-protection mismatch, etc.). Don't pretend success.
 - **Branch protection rejects the push** (rare on initial push; common if main was force-changed): surface the error and advise the user to rebase or pull.
 
