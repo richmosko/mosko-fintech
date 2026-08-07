@@ -1006,6 +1006,26 @@ re-verification is trusting a label over a measurement, and in this file the in-
 **exactly where fence-defeating prose has historically landed** (three recorded instances).
 Conventional prefixes will keep being emitted correctly-by-convention and wrongly-by-implication.
 
+**The three label defects this round form a set, and they ESCALATE BY SCOPE** — which is what
+makes this an entry rather than a list:
+
+| defect | scope | how it ends |
+|---|---|---|
+| `(empty = clean)` printed after `git status` | **one agent's habit** | dropped when its owner notices |
+| *"comment-only ⇒ `prosrc` must not move"* | **one lead's malformed condition** | dropped at the first case that separates its two halves |
+| `docs(…)` as a commit-subject prefix | **a project-wide convention** | **never** — it is emitted *correctly* by everyone, indefinitely, while implying something false |
+
+> **Blast radius grows with how many people emit the label CORRECTLY.** A habit has one owner
+> who can notice it. A convention has no owner, and every correct use reinforces the false
+> implication.
+
+**The actionable half, and the reason to re-verify on every commit touching this file whatever
+its subject prefix:** the fences were green through that `docs(…)` commit **because the added
+prose happened to avoid every fenced token. That is luck, not design.** The argument is not that
+`docs(…)` commits are usually dangerous — they usually are not. It is that the check is cheap
+and the label is load-bearing **in the wrong direction**: it points attention away from the one
+place this file has repeatedly been bitten.
+
 ### "I asked a question that could not return the roles I hadn't thought of, and read its silence as absence" *(Security Reviewer, verbatim, at its own request)*
 
 The purest statement anyone produced of the instrument-cannot-observe-the-property family. Sec
