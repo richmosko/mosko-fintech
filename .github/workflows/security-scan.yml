@@ -426,3 +426,109 @@ jobs:
             exit 1
           fi
           echo "OK: fence caught the diverged-copy drift (exit $rc)."
+
+  tz-sweep-identical:
+    name: tz-sweep — runbook §4.1 ↔ (T3) query drift fence
+    runs-on: ubuntu-latest
+    # R3 Part A (DevOps-owned; Sec-consult — this fences the sweep Sec reviewed at #324).
+    #
+    # The TimeZone role-sweep query lives in TWO places and each claims to be kept
+    # identical to the other: docs/deployment-runbook.md §4.1 (the operator-facing deploy
+    # step) and supabase/tests/01_session_timezone.sql (T3) (the CI assertion). R3's
+    # eventual production-gate script would be a THIRD. Prose cannot hold three copies
+    # identical — and it did not hold two: the copies HAD already drifted when the claim
+    # was written, the runbook copy missing both `s.setrole <> 0` (red-by-construction on
+    # a correctly pinned database) and the `unnest` + anchored filter (which printed
+    # app.settings.jwt_secret — the LIVE JWT SIGNING SECRET — into deploy logs). Both were
+    # found by RUNNING the sweep, not by reading it. This job is the fence that claim
+    # needed.
+    #
+    # NORMALIZES WHITESPACE BEFORE COMPARING, deliberately. The two copies live in
+    # structurally different contexts (a shell double-quoted `psql -Atc` argument vs a
+    # `$$ … $$` SQL literal) and CANNOT be byte-identical; their indentation differs by
+    # construction. The artifacts claim "token-for-token, modulo indentation", and this
+    # fence enforces exactly that claim and nothing stronger — a fence asserting more than
+    # its artifact promises is a false red, and false reds get fences deleted.
+    #
+    # NEEDS NO PRODUCTION REACH: it is a text comparison over two committed files. That is
+    # what makes it buildable now, independent of whether the R3 production gate is ever
+    # ratified.
+    #
+    # RUN-ALWAYS (no `paths:` filter) DELIBERATELY: this is a CROSS-TREE fence
+    # (docs/ ↔ supabase/tests/). Path-filtering it to either tree would green-by-absence
+    # when a PR edits only the other — the F-2 / RT-27 trigger-drift hole, and the same
+    # reasoning as dedup-hash-identical above. Should ALSO become a REQUIRED status check
+    # on `main` (F/CTO branch-protection action, registrable after this job's first report).
+    #
+    # THREE-MODE inversion, not two. The whitespace-only golden must stay GREEN: a fence
+    # proven only to RED has not been shown to red for the RIGHT REASON, and one that reds
+    # on a re-indent is indistinguishable from a working one until someone reformats the
+    # runbook, gets an unexplainable red, and deletes the job.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'   # stdlib only — no pip install step needed
+
+      - name: Production-mode — real runbook §4.1 vs real (T3) (expects identical, exit 0)
+        run: python3 scripts/ci/check-tz-sweep-identical.py
+
+      - name: Inversion A — semantic drift, missing `s.setrole <> 0` (expects drift, exit 1)
+        run: |
+          set +e
+          python3 scripts/ci/check-tz-sweep-identical.py \
+            --runbook tests/fixtures/ci/tz-sweep-drift/semantic-runbook.md \
+            --test    tests/fixtures/ci/tz-sweep-drift/semantic-test.sql
+          rc=$?
+          set -e
+          if [ $rc -ne 1 ]; then
+            echo "FATAL: tz-sweep fence expected exit 1 on the semantic-drift golden but got $rc — fence is broken; failing closed."
+            exit 1
+          fi
+          echo "OK: fence caught the semantic drift (exit $rc)."
+
+      - name: Inversion B — whitespace-only difference (expects GREEN, exit 0)
+        run: |
+          set +e
+          python3 scripts/ci/check-tz-sweep-identical.py \
+            --runbook tests/fixtures/ci/tz-sweep-drift/whitespace-runbook.md \
+            --test    tests/fixtures/ci/tz-sweep-drift/whitespace-test.sql
+          rc=$?
+          set -e
+          if [ $rc -ne 0 ]; then
+            echo "FATAL: tz-sweep fence RED on a whitespace-only difference (exit $rc) — the normalization is broken."
+            echo "This direction matters as much as the drift catch: a fence that reds on a re-indent will be deleted the first time someone reformats the runbook."
+            exit 1
+          fi
+          echo "OK: fence stayed green through re-indentation (exit $rc) — reds are attributable to semantics, not formatting."
+
+      - name: Extraction guard — a missing anchor must FAIL CLOSED, never green
+        run: |
+          set +e
+          python3 scripts/ci/check-tz-sweep-identical.py \
+            --runbook tests/fixtures/ci/tz-sweep-drift/no-anchor-runbook.md \
+            --test    supabase/tests/01_session_timezone.sql
+          rc=$?
+          set -e
+          if [ $rc -ne 1 ]; then
+            echo "FATAL: tz-sweep fence did not fail closed when the runbook anchor was absent (exit $rc)."
+            echo "A fence that cannot locate the thing it compares must never report green — comparing nothing to nothing is the defect class this surface exists to remove."
+            exit 1
+          fi
+          echo "OK: fence failed closed on a missing anchor (exit $rc)."
+
+      - name: Ambiguity guard — two anchor matches must FAIL CLOSED, not silently pick one
+        run: |
+          set +e
+          python3 scripts/ci/check-tz-sweep-identical.py \
+            --runbook tests/fixtures/ci/tz-sweep-drift/ambiguous-runbook.md \
+            --test    supabase/tests/01_session_timezone.sql
+          rc=$?
+          set -e
+          if [ $rc -ne 1 ]; then
+            echo "FATAL: tz-sweep fence did not fail closed on an ambiguous anchor (exit $rc)."
+            echo "A fence that silently compares 'the first match' would check the WRONG pair and report green while the guarded property went unexamined."
+            exit 1
+          fi
+          echo "OK: fence refused to guess between two anchor matches (exit $rc)."

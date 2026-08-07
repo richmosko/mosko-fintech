@@ -48,6 +48,7 @@ scripts/ci/
 ├── fence-rt26-service-role-allowlist.sh  # RT-26 grep fence (γ-hybrid)
 ├── fence-tbc-pfin-back-etl.sh            # TBC grep fence (single-repo; scans workers/etl/src/)
 ├── check-dedup-hash-identical.sh         # import_hash canonical↔copy drift fence (SELF-204 / ADR-034 D4)
+├── check-tz-sweep-identical.py           # TimeZone role-sweep query drift fence (runbook §4.1 ↔ (T3); R3 Part A)
 ├── rt26-allowlist.txt                    # RT-26 allowlist registry (3 ADR-016 D1 file paths)
 └── README.md                             # (this file)
 ```
