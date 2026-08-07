@@ -43,33 +43,47 @@
 -- │             SABOTAGING the fence and watching the assertions go red. See below.      │
 -- └────────────────────────────────────────────────────────────────────────────────────┘
 --
--- ┌─ ⭐ (V) — WHY THIS FILE SABOTAGES THE POLICY, AND WHAT THE MEASUREMENT SHOWED ─────┐
+-- ┌─ ⭐ (V) — CORRUPT THE CONTROL. THE METHOD, AND WHAT THE MEASUREMENT SHOWED ────────┐
 -- │ `062` deliberately carries NO local `users_id` predicate: RLS on pfin.nav_daily is  │
--- │ the SOLE tenant fence (the 049/050/051 precedent). Its header argues that a         │
--- │ redundant predicate would make this battery pass EVEN WITH THE POLICY DROPPED.      │
--- │ Per §10 of rls/DESIGN.md — *a test's claim that it detects something is itself an   │
--- │ assertion, and it is usually unrun* — that argument is TESTED here, not accepted.   │
+-- │ the SOLE tenant fence (the 049/050/051 precedent), on the argument that a redundant │
+-- │ predicate would make this battery pass even with the fence gone. Per rls/DESIGN.md  │
+-- │ §10 — *a test's claim that it detects something is itself an assertion, and it is   │
+-- │ usually unrun* — that argument is TESTED here, not accepted.                        │
 -- │                                                                                     │
--- │ MEASURED, and the result is not one number but TWO, because there are two distinct  │
--- │ ways to remove the fence and THEY ARE CAUGHT BY DIFFERENT ASSERTIONS:               │
+-- │ ⚠ THE METHOD MATTERS, AND THE OBVIOUS FORM OF IT IS WRONG.                          │
+-- │ "Remove the control and see if the test notices" falsifies a battery ONLY WHERE     │
+-- │ REMOVAL FAILS OPEN. Postgres RLS fails CLOSED on absence: drop the policy and RLS   │
+-- │ default-denies, so EVERY tenant — the owner included — sees zero rows. A            │
+-- │ cross-tenant leg asserting "A sees none of B's rows" then passes ON THE NOTHING.    │
+-- │   >> WHEN A CONTROL FAILS CLOSED, CORRUPT IT RATHER THAN DELETE IT. <<              │
+-- │ So the fence is BROKEN OPEN (`using (true)`), not removed. The deleted-fence world  │
+-- │ is kept as its own leg and LABELLED AS THE VACUITY IT IS, never as a proof.         │
 -- │                                                                                     │
--- │   S2  policy REPLACED with `using (true)` — fence gone, reads still permitted.      │
--- │       062 as authored          → 3 rows {80,300,5000}, daily provenance 2026-02-10  │
--- │                                  (B's rows leak in) ⇒ (I)/(X) go RED. ✅            │
--- │       the redundant-predicate variant → 2 rows {80,300}, provenance 2026-01-20      │
--- │                                  ⇒ IDENTICAL TO BASELINE. **GREEN over a removed    │
--- │                                  fence.** Architect's rationale is CONFIRMED, and   │
--- │                                  it is the sharper of the two modes.                │
+-- │ MEASURED — the two modes are caught by DIFFERENT halves of the battery:             │
 -- │                                                                                     │
--- │   S1  policy DROPPED outright — RLS still enabled, no policy ⇒ deny-all.            │
--- │       062 as authored → 0 rows. The NEGATIVE assertion ("A sees none of B's rows")  │
--- │       PASSES VACUOUSLY here. **Only the POSITIVE legs fire** — (I1) A sees its own  │
--- │       2 points, (M2) the aal2 reader sees N>0, (E)'s non-vacuity companion.         │
+-- │   CORRUPTED  policy → `using (true)`. Fence broken open, reads still permitted.     │
+-- │     062 as authored     → 3 rows {80,300,5000}, provenance 2026-02-10 (B leaks in)  │
+-- │                           ⇒ (V1)+(V1b)+(V2) RED. The battery SEES a broken fence.✅ │
+-- │     redundant variant   → 2 rows {80,300}, provenance 2026-01-20 — IDENTICAL TO     │
+-- │                           BASELINE on BOTH value set and cardinality.               │
+-- │                           ⇒ (V3)+(V3b) GREEN OVER A BROKEN FENCE.                   │
+-- │                           **062's rationale is CONFIRMED. Do not add the predicate.**│
 -- │                                                                                     │
--- │ CONSEQUENCE, STATED SO IT IS NOT LOST: the cross-tenant negative alone does NOT     │
--- │ cover S1. The pairing is load-bearing, not stylistic. Deleting any positive leg     │
--- │ here as "redundant" reopens S1 as an undetectable failure. (rls/DESIGN.md §8 rule 4 │
--- │ — print the pair, and check the pair is independent.)                                │
+-- │   ABSENT     policy dropped. RLS on, no policy ⇒ deny-all. 062 → 0 rows.            │
+-- │     The cross-tenant NEGATIVE passes VACUOUSLY. Only the POSITIVE legs fire —       │
+-- │     (I1), (I5), (M2), (X3). ⇒ (V4), kept as the counter-example to the method.      │
+-- │                                                                                     │
+-- │ TWO CONSEQUENCES, STATED SO THEY ARE NOT LOST:                                      │
+-- │  1. The pairing is LOAD-BEARING, not stylistic. Deleting any positive leg as        │
+-- │     "redundant" reopens the ABSENT mode as an undetectable failure.                 │
+-- │  2. The fixture's DIFFERING VALUES are load-bearing too — and are still not enough. │
+-- │     A broken fence can leak rows whose values match the owner's, so the corrupt-    │
+-- │     the-control legs assert CARDINALITY as well as the value set ((V1b), (V3b)).    │
+-- │     A value-only assertion can pass while leaking.                                  │
+-- │                                                                                     │
+-- │ CITATION ANCHOR: the (V…) tags are self-describing by design because 062's header   │
+-- │ cites them as the instrument enforcing its design. Renaming one is a cross-artifact │
+-- │ change. The (V) legs are the reason every OTHER assertion here is believable.        │
 -- └────────────────────────────────────────────────────────────────────────────────────┘
 --
 -- ┌─ WHAT THIS BATTERY STRUCTURALLY CANNOT PROVE (rls/DESIGN.md §8 rules 0 + 1) ───────┐
@@ -123,14 +137,15 @@ begin;
 -- shared cross-tenant verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
--- plan = 55 : 46 property assertions (I6 X3 M3 P6 G4 E3 B5 L6 N3 Z3 A4) + the 9-leg (V)
--- inversion block. Recorded as an arithmetic decomposition so a silent plan-edit is visible
--- in review. ⚠ DO NOT "fix" this by lowering it to a reported figure: (V1)–(V7) run inside
--- savepoints, and a rolled-back savepoint REWINDS pgTAP's plan counter while the emitted
--- numbering marches on (rls/DESIGN.md §9 harness note). 55 is correct here only because
--- (V8)/(V9) are OUTSIDE any savepoint and re-set the counter to their own numbers — that is
--- the structural guard, not a coincidence, and moving (V9) would silently re-break it.
-select plan(55);
+-- plan = 57 : 46 property assertions (I6 X3 M3 P6 G4 E3 B5 L6 N3 Z3 A4) + the 11-leg (V)
+-- inversion block (V1 V1b V2 V3 V3b V4 V5 V6 V7 V8 V9). Recorded as an arithmetic
+-- decomposition so a silent plan-edit is visible in review as a changed sum.
+-- ⚠ DO NOT "fix" this by lowering it to a reported figure: (V1)–(V7) run inside savepoints,
+-- and a rolled-back savepoint REWINDS pgTAP's plan counter while the emitted numbering
+-- marches on (rls/DESIGN.md §9 harness note). 57 reconciles here only because (V8)/(V9) sit
+-- OUTSIDE any savepoint and re-set the counter to their own numbers — that is the structural
+-- guard, not a coincidence, and moving (V9) off the end would silently re-break it.
+select plan(57);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb, _rls.tenant_c() as tc \gset
@@ -464,18 +479,41 @@ select ok(
 --   marches on — so (V9) below is deliberately OUTSIDE any savepoint and runs LAST.
 -- =====================================================================
 
--- ---- V/S2: the fence REMOVED but reads still permitted. The sharp mode. ----
+-- ---- V/S2 — CORRUPT-THE-CONTROL. The fence BROKEN OPEN, not absent. The sharp mode. ----
+--   ⚠ THE METHOD, AND WHY THE OBVIOUS FORM IS WRONG. "Remove the control and see if the
+--   test notices" is a valid falsification ONLY WHERE REMOVAL FAILS OPEN. Postgres RLS
+--   fails CLOSED on absence: with the policy DROPPED, RLS is still enabled and default-
+--   denies, so every tenant — including the owner — sees zero rows. A cross-tenant leg
+--   asserting "A sees none of B's rows" then passes on the NOTHING, which is the opposite
+--   of the property it exists to prove. An ABSENT fence cannot demonstrate a LEAK.
+--   >> WHEN A CONTROL FAILS CLOSED, CORRUPT IT RATHER THAN DELETE IT. <<
+--   That absent-fence world is still worth pinning, so it is kept as its own leg below
+--   (V4-FENCE-ABSENT-IS-VACUOUS) — labelled as the vacuity it is, not as a proof.
+--
+--   FORM: `alter policy … using (true)` is used instead of drop-then-recreate. Measured
+--   equivalent — both yield exactly `cmd=SELECT roles={authenticated} qual=true` — and
+--   it is the more surgical of the two, since it cannot leave a differently-shaped policy
+--   behind if the savepoint were ever mishandled. Recorded so this does not read as a
+--   deviation from the drop+create form the instruction was relayed in.
+--
+--   ⚠ CITATION ANCHOR. The (V…) tags below are self-describing BY DESIGN and are cited
+--   from 062's migration header as the instrument enforcing its no-local-users_id-
+--   predicate design. RENAMING ONE IS A CROSS-ARTIFACT CHANGE, not a cosmetic edit.
 savepoint v_s2;
 alter policy nav_daily_select on pfin.nav_daily using (true);
 select _rls.set_tenant(:'ta'::uuid);
 select is(
   (select array_agg(nav_value order by point_date) from pfin.fn_nav_series('monthly','2026-01-01','2026-03-31')),
   array[80, 300, 5000]::numeric[],
-  '(V1) SABOTAGE S2 — with nav_daily_select replaced by `using (true)`, A''s monthly series GAINS a third point valued 5000 from B''s 2026-03-31 checkpoint. This is (I1) going RED, measured rather than asserted: the cross-tenant fence is REAL and this battery SEES its removal');
+  '(V1-FENCE-CORRUPTED-IS-DETECTED) ⭐ CORRUPT-THE-CONTROL: with nav_daily_select broken OPEN to `using (true)`, A''s monthly series GAINS a third point valued 5000 — B''s 2026-03-31 checkpoint. This is (I1) going RED, measured rather than asserted. THE PROPERTY THIS ENFORCES: because 062 carries no local users_id predicate, RLS is the sole tenant fence AND this battery can SEE that fence break. RED here is the proof; green here would mean the battery is blind to a broken fence');
+select is(
+  (select count(*)::int from pfin.fn_nav_series('monthly','2026-01-01','2026-03-31')),
+  3,
+  '(V1b-FENCE-CORRUPTED-ROW-COUNT) …asserted on CARDINALITY as well as on the value set, and not as a belt-and-braces duplicate. A broken tenant fence leaks rows whose VALUES may be indistinguishable from the owner''s — under a same-value fixture the leak is invisible to any value-only assertion and shows up ONLY as extra rows. This fixture varies the values so (V1) also fires, but the count leg is what survives a fixture someone later "simplifies" into uniformity');
 select is(
   (select array_agg(checkpoint_date order by point_date) from pfin.fn_nav_series('daily','2026-02-14','2026-02-16')),
   array['2026-02-10','2026-02-10','2026-02-10']::date[],
-  '(V2) …and (I3)''s leak canary fires: the daily provenance moves from A''s 2026-01-20 to B''s 2026-02-10. DETERMINISTIC because B''s 02-10 sits inside A''s hole and is strictly later — on a shared date the `order by nav_date desc limit 1` tie could have resolved either way and this sabotage could have passed by luck');
+  '(V2-FENCE-CORRUPTED-PROVENANCE-LEAKS) …and (I3)''s leak canary fires: the daily provenance moves from A''s 2026-01-20 to B''s 2026-02-10. DETERMINISTIC because B''s 02-10 sits inside A''s hole and is strictly later — on a shared date the `order by nav_date desc limit 1` tie could have resolved either way and this sabotage could have passed by luck');
 select set_config('role', 'postgres', true);
 
 -- The COUNTERFACTUAL, built to answer the question the migration header ASSERTS an answer
@@ -521,7 +559,11 @@ select _rls.set_tenant(:'ta'::uuid);
 select is(
   (select array_agg(nav_value order by point_date) from pfin.fn_nav_series_qa_counterfactual('monthly','2026-01-01','2026-03-31')),
   array[80, 300]::numeric[],
-  '(V3) ⭐⭐ THE MIGRATION''S OWN RATIONALE, TESTED RATHER THAN ACCEPTED — and CONFIRMED. Under the IDENTICAL sabotage that reds (V1), the redundant-predicate variant returns the BASELINE answer {80,300}: green, indistinguishable from a healthy fence. So adding a local users_id filter as "defense-in-depth" would buy a second layer at the cost of the ability to verify the first — exactly what 062''s TENANT FENCE block claims. RED HERE would mean the rationale is wrong and 062 should carry the predicate after all');
+  '(V3-REDUNDANT-PREDICATE-WOULD-BLIND-US) ⭐⭐ 062''S OWN RATIONALE, TESTED RATHER THAN ACCEPTED — and CONFIRMED. Under the IDENTICAL corruption that reds (V1), the redundant-predicate variant returns the BASELINE answer {80,300}: green, indistinguishable from a healthy fence. So adding a local users_id filter as "defense-in-depth" would buy a second layer at the cost of the ability to verify the FIRST — which is the one the whole V1 isolation model rests on. RED HERE would mean the rationale is wrong and 062 must carry the predicate after all');
+select is(
+  (select count(*)::int from pfin.fn_nav_series_qa_counterfactual('monthly','2026-01-01','2026-03-31')),
+  2,
+  '(V3b-REDUNDANT-PREDICATE-BLINDS-THE-COUNT-TOO) …and the blinding is not partial: the redundant variant matches the baseline on CARDINALITY as well as on values, so neither half of the (V1)/(V1b) pair would have caught the broken fence. Stated separately because "the value assertion would still have fired" is the natural objection to (V3), and this is the measurement that answers it');
 select set_config('role', 'postgres', true);
 rollback to savepoint v_s2;
 
@@ -532,7 +574,7 @@ select _rls.set_tenant(:'ta'::uuid);
 select is(
   (select count(*)::int from pfin.fn_nav_series('monthly','2026-01-01','2026-03-31')),
   0,
-  '(V4) SABOTAGE S1 — with the policy DROPPED (RLS still enabled, no policy ⇒ deny-all) A sees NOTHING. Recorded because of what it implies: a cross-tenant NEGATIVE assertion ("A sees none of B''s rows") would pass VACUOUSLY here. Under S1 it is the POSITIVE legs — (I1), (I5), (M2), (X3) — that fire. THE PAIRING IS LOAD-BEARING: deleting any positive leg as redundant reopens S1 as an undetectable failure');
+  '(V4-FENCE-ABSENT-IS-VACUOUS) ⚠ THE COUNTER-EXAMPLE TO THE OBVIOUS METHOD, kept deliberately. With the policy DROPPED (RLS still enabled, no policy ⇒ deny-all) A sees NOTHING — so a cross-tenant NEGATIVE assertion ("A sees none of B''s rows") passes VACUOUSLY here, on the nothing. THIS LEG IS NOT A PROOF OF ISOLATION and must never be cited as one; it is the demonstration that DELETING a fail-closed control tests the opposite of the intended property, which is why (V1) CORRUPTS instead. Under this mode only the POSITIVE legs fire — (I1), (I5), (M2), (X3) — so THE PAIRING IS LOAD-BEARING: deleting any positive leg as redundant reopens this mode as an undetectable failure');
 select set_config('role', 'postgres', true);
 rollback to savepoint v_s1;
 
@@ -548,7 +590,7 @@ $sab$;
 select ok(
   (select p.prosrc ~ 'compute_nav' from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'pfin' and p.proname = 'fn_nav_series'),
-  '(V5) the (N1) no-recompute fence HAS TEETH: rebuilt with a body that actually calls the valuation function, the source predicate flips. Without this leg, (N1) is an absence assertion whose detection capability had never been run — the failure mode rls/DESIGN.md §10 records a whole battery agreeing with the defect its own comments described');
+  '(V5-NO-RECOMPUTE-FENCE-HAS-TEETH) the (N1) no-recompute fence HAS TEETH: rebuilt with a body that actually calls the valuation function, the source predicate flips. Without this leg, (N1) is an absence assertion whose detection capability had never been run — the failure mode rls/DESIGN.md §10 records a whole battery agreeing with the defect its own comments described');
 select set_config('role', 'postgres', true);
 rollback to savepoint v_src;
 
@@ -564,7 +606,7 @@ select ok(
   (select p.prosrc !~* 'timestamptz' and p.prosrc ~* 'time zone'
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'pfin' and p.proname = 'fn_nav_series'),
-  '(V6) ⭐ the zone fence needs BOTH spellings, PROVEN: this sabotage introduces a real zone-aware cast written as `timestamp with time zone`, and (Z1)''s `timestamptz` predicate STAYS GREEN on it while (Z2)''s catches it. That is the measurement behind (Z2) existing — item 10 as specified in the migration header fences only the abbreviation and would have passed over this body');
+  '(V6-ZONE-FENCE-NEEDS-BOTH-SPELLINGS) ⭐ the zone fence needs BOTH spellings, PROVEN: this sabotage introduces a real zone-aware cast written as `timestamp with time zone`, and (Z1)''s `timestamptz` predicate STAYS GREEN on it while (Z2)''s catches it. That is the measurement behind (Z2) existing — item 10 as specified in the migration header fences only the abbreviation and would have passed over this body');
 select set_config('role', 'postgres', true);
 rollback to savepoint v_zone;
 
@@ -580,21 +622,25 @@ select ok(
   (select p.prosrc !~* 'timestamptz|time zone' and p.prosrc ~* '\mcurrent_date\M'
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'pfin' and p.proname = 'fn_nav_series'),
-  '(V7) ⭐ …and the CLOCK fence is not covered by either type fence, PROVEN: a body using `current_date` — evaluated in the session TimeZone, and the exact token the migration header forbids a future editor — carries NEITHER spelling of the zone-aware type. (Z1) AND (Z2) both stay green on it; only (Z3) fires. This is why (Z3) exists');
+  '(V7-CLOCK-FENCE-IS-NOT-COVERED-BY-TYPE-FENCES) ⭐ …and the CLOCK fence is not covered by either type fence, PROVEN: a body using `current_date` — evaluated in the session TimeZone, and the exact token the migration header forbids a future editor — carries NEITHER spelling of the zone-aware type. (Z1) AND (Z2) both stay green on it; only (Z3) fires. This is why (Z3) exists');
 select set_config('role', 'postgres', true);
 rollback to savepoint v_clock;
 
 -- ---- V/final: restoration, asserted rather than assumed. NOT in a savepoint. ----
 select is(
-  (select count(*)::int from pg_policies
-    where schemaname = 'pfin' and tablename = 'nav_daily' and policyname = 'nav_daily_select'),
+  (select count(*)::int
+     from pg_policies
+    where schemaname = 'pfin' and tablename = 'nav_daily' and policyname = 'nav_daily_select'
+      and qual like '%users_id = auth.uid()%'
+      and qual like '%aal2%'
+      and qual <> 'true'),
   1,
-  '(V8) the sabotaged policy is BACK. Asserted, not assumed: (V1)–(V4) mutated a shared RLS policy, and a savepoint that failed to roll back would leave every later assertion in this file measuring a broken fence');
+  '(V8-CONTROL-RESTORED) the corrupted policy is BACK, asserted on its QUAL and not merely on its existence. ⚑ AUTHORED AS A BARE `count(*) = 1` AND CORRECTED ON MEASUREMENT: `alter policy … using (true)` leaves the policy PRESENT with the same name, so pg_policies still reports exactly 1 row in BOTH the corrupted and the restored world — the original assertion could not tell them apart and would have passed over a still-broken fence. The predicate now requires the tenant conjunct to be back and the qualifier not to be `true`. Same defect class this file exists to catch, found in its own restoration check');
 select _rls.set_tenant(:'ta'::uuid);
 select is(
   (select array_agg(nav_value order by point_date) from pfin.fn_nav_series('monthly','2026-01-01','2026-03-31')),
   array[80, 300]::numeric[],
-  '(V9) ⭐ STRUCTURAL, AND DELIBERATELY LAST + OUTSIDE ANY SAVEPOINT (rls/DESIGN.md §9 harness note): it re-establishes pgTAP''s plan counter after the savepoint rewinds, so this file cannot emit a spurious "planned 46 but ran N" that would train a reader to discount the one signal distinguishing a real aborted run. It also earns its place independently — the function and the policy are both back to their authored behaviour, so the (V) block undid everything it did');
+  '(V9-PLAN-COUNTER-REARMED) ⭐ STRUCTURAL, AND DELIBERATELY LAST + OUTSIDE ANY SAVEPOINT (rls/DESIGN.md §9 harness note): it re-establishes pgTAP''s plan counter after the savepoint rewinds, so this file cannot emit a spurious "planned 46 but ran N" that would train a reader to discount the one signal distinguishing a real aborted run. It also earns its place independently — the function and the policy are both back to their authored behaviour, so the (V) block undid everything it did');
 select set_config('role', 'postgres', true);
 
 select * from finish();
