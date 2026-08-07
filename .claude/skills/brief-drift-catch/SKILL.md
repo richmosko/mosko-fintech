@@ -84,6 +84,14 @@ Routed here out of `apply-migration`, which keeps only the catalog-comment case.
 
 A specific new rule usually has one — a count, a tense, a citation shape. Running it over the **whole** document beats re-reading the passages you think are relevant, because it **catches violations wherever they sit** rather than relying on the author correctly guessing which passages are "justifying." That is what converts *"be careful"* into *"produce a check."*
 
+⚠ **THE SIGNATURE MUST OVER-MATCH AND BE FILTERED BY HAND** (Discipline 3 / CP7). **This is part of the checkpoint, not advice attached to it** — without it the checkpoint has the same defect as the row above: *"derive a signature and run it"* is **fully satisfied by a narrow pattern returning clean, while the violation stands.**
+
+**A narrow signature returning clean is the same false assurance as an exact-string sweep returning complete — and it is how this checkpoint fails on its FIRST use.** Worse than no signature, because **a clean result is indistinguishable from compliance: you now believe you looked.**
+
+> **MEASURED, on this checkpoint's own first live run — in the PR that adopted it.** A narrow pattern returned **clean**. Widening it to *any spelled-out number before a noun* found the opening line still claiming **"two composable disciplines"** in the very PR that added a third. **The checkpoint is what prompted the run, and over-match-and-filter is what made the run true.**
+>
+> **The filtering cost, recorded because the reflex against over-matching is always "too much noise":** that run produced **one real find against ten hand-cleared hits** — prescriptions, quoted content, and dated measurements that survive the past-tense carve-out. Second datapoint, alongside the sweep that went **5 files / 7 sites → 6 / 11** when widened. **Both say the cost is affordable.** The evidence sits here, next to the instruction it defends, so the instruction does not get narrowed the first time someone finds the filtering tedious.
+
 ⚠ **Domain, stated honestly: this applies only when the rule HAS a greppable signature.** Outside that condition it does not fire at all.
 
 ⚠ **It does NOT carry CP9's authority. CP9 is unconditional and mechanical; this is conditional and mechanical only inside its condition.** Do not cite them as equivalent.
