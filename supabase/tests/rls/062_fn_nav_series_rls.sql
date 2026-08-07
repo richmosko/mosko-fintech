@@ -137,17 +137,19 @@ begin;
 -- shared cross-tenant verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
--- plan = 65 : 48 property assertions (I6 X3 M3 P6 G4 E3 B5 L6 N3 Z4 A5) + the 17-leg (V)
--- inversion block (V1 V1b V2 V3 V3b V4 V5 V6 V7 V8 V9 V10a V10b V10c V11 V12 V12b).
+-- plan = 67 : 49 property assertions (I6 X3 M3 P6 G4 E3 B6 L6 N3 Z4 A5) + the 18-leg (V)
+-- inversion block (V1 V1b V2 V3 V3b V4 V5 V6 V7 V8 V9 V10a V10b V10c V11 V12 V12b V13).
 -- Recorded as an arithmetic decomposition so a silent plan-edit shows up in review as a
--- changed sum. Grew 57 -> 65 at the Sec AMBER round: +(Z4) differential zone-invariance,
--- +(A5) the service_role EXECUTE negative, and their six inversion controls.
--- ⚠ DO NOT "fix" this by lowering it to a reported figure: (V1)–(V12b) run inside savepoints,
+-- changed sum. Grew 57 -> 65 at the Sec AMBER round (+(Z4) differential zone-invariance,
+-- +(A5) the service_role EXECUTE negative, and six inversion controls), then 65 -> 67 against
+-- Architect's 4e28deb clamp: +(B6) declarative inner-join + its (V13) control, because the
+-- clamp made that property behaviourally unfalsifiable.
+-- ⚠ DO NOT "fix" this by lowering it to a reported figure: (V1)–(V13) run inside savepoints,
 -- and a rolled-back savepoint REWINDS pgTAP's plan counter while the emitted numbering
--- marches on (rls/DESIGN.md §9 harness note). 65 reconciles here only because (V8)/(V9) sit
+-- marches on (rls/DESIGN.md §9 harness note). 67 reconciles here only because (V8)/(V9) sit
 -- OUTSIDE any savepoint and re-set the counter to their own numbers — that is the structural
 -- guard, not a coincidence, and moving (V9) off the end would silently re-break it.
-select plan(65);
+select plan(67);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb, _rls.tenant_c() as tc \gset
@@ -351,10 +353,15 @@ select _rls.set_tenant(:'ta'::uuid);
 select is(
   (select array_agg(point_date order by point_date) from pfin.fn_nav_series('daily','2025-12-28','2026-01-06')),
   array['2026-01-05','2026-01-06']::date[],
-  '(B1) LOWER BOUND: a window opening 8 days BEFORE A''s first checkpoint emits nothing until 2026-01-05. The chart begins where the data begins. THE NEGATIVE THAT FIRES: a fabricated leading zero — the exact defect Option A exists to avoid, arriving from the other side (a LEFT JOIN in place of the inner CROSS JOIN LATERAL would emit 2025-12-28..2026-01-04 with NULL/0)');
+  '(B1) LOWER BOUND: a window opening 8 days BEFORE A''s first checkpoint emits nothing until 2026-01-05. The chart begins where the data begins, not at a fabricated leading zero. ⚑ RE-POINTED AT THE `4e28deb` CLAMP, AND THE OLD CLAIM WAS RETIRED AS FALSE: this leg used to say a LEFT JOIN in place of the inner CROSS JOIN LATERAL would emit 2025-12-28..2026-01-04 with NULL/0. That is no longer true. The clamp starts the day expansion at max(p_start_date, first visible checkpoint), so EVERY generated period end now has a checkpoint at-or-before it and the lateral CAN NEVER MISS — measured: swapping cross->left join lateral produces byte-identical output and no NULL anywhere. This assertion still proves the lower bound holds; it no longer proves WHICH mechanism holds it. The join semantics is now provable only DECLARATIVELY — see (B6)');
 select ok(
   not exists (select 1 from pfin.fn_nav_series('weekly','2026-01-01','2026-02-28') where point_date = '2026-01-04'),
-  '(B2) the lower bound holds on the WEEKLY path too: 2026-01-04 is a Sunday inside the window, but it precedes A''s first checkpoint (01-05) so no point is emitted. Asserted separately because bucketing and bounding are different code paths and one can be fixed without the other');
+  '(B2) the lower bound holds on the WEEKLY path too: 2026-01-04 is a Sunday inside the window, but it precedes A''s first checkpoint (01-05) so no point is emitted. Asserted separately because bucketing and bounding are different code paths and one can be fixed without the other. ⚑ ITS MECHANISM MOVED AT `4e28deb` — 01-04 used to be GENERATED and then dropped by the lateral finding nothing; under the clamp it is never generated at all. Same green, different fence behind it. Recorded because an assertion whose mechanism silently re-points while staying green is the failure this suite exists to notice (rls/DESIGN.md §9)');
+select ok(
+  (select p.prosrc ~* 'cross\s+join\s+lateral'
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'pfin' and p.proname = 'fn_nav_series'),
+  '(B6) ⭐ THE INNER-JOIN SEMANTICS, PROVEN DECLARATIVELY BECAUSE IT IS NO LONGER PROVABLE BEHAVIOURALLY. The `4e28deb` clamp sits IN FRONT of the lateral and guarantees every period end has a match, so `cross join lateral` and `left join lateral` are now extensionally identical on all reachable input — measured, byte-identical output and zero NULLs. No data-driven test can separate expressions that agree on every reachable input (rls/DESIGN.md §11), so the inner semantics must be asserted from the SOURCE or not at all. It still matters: it is the fail-closed backstop if the clamp is ever narrowed, and a LEFT JOIN would then emit fabricated NULL/0 leading points — two individually-reasonable edits that are only jointly a defect. Teeth proven at (V13)');
 select is(
   (select array_agg(nav_value order by point_date) from pfin.fn_nav_series('monthly','2026-01-01','2027-12-31')),
   array[80, 300]::numeric[],
@@ -761,6 +768,24 @@ select is(
   '(V12b-TWO-GRANT-LEAKED-VALUE-IS-IDENTIFIED) …and the leaked datum is named: 5000 is B''s 2026-03-31 checkpoint, returned to a caller authenticated as A. Asserted on the VALUE and not only on (V12)''s cardinality, so the leak is identified rather than merely counted. THE POINT FOR REVIEW: the two grants are individually reasonable, land in different PRs, and are jointly a cross-tenant disclosure of the datum SD-24 is rated HIGH to protect — neither review necessarily sees the other. That is why (A5) is a merge-gate assertion and why widening 054''s column grant is Sec joint-review-mandatory');
 select set_config('role', 'postgres', true);
 rollback to savepoint v_svc;
+
+-- ---- V/B6: does the declarative join assertion have teeth? ----
+savepoint v_join;
+create or replace function pfin.fn_nav_series(p_granularity text, p_start_date date, p_end_date date)
+returns table (point_date date, nav_value numeric, checkpoint_date date)
+language plpgsql stable security invoker set search_path = '' as $sab$
+begin
+  return query select p_start_date, 1::numeric, p_end_date
+  from (select 1) s left join lateral (select 1) t on true;
+end;
+$sab$;
+select ok(
+  (select p.prosrc !~* 'cross\s+join\s+lateral'
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'pfin' and p.proname = 'fn_nav_series'),
+  '(V13-DECLARATIVE-JOIN-ASSERTION-HAS-TEETH) (B6) is not vacuous: a body whose lateral is a LEFT JOIN flips it. Needed because (B6) is a source-text assertion and text inspection has no natural failure mode to calibrate against (rls/DESIGN.md anchoring rule) — and because (B6) exists precisely to cover a property that behaviour can no longer reach, so nothing else in this file would notice if it silently stopped matching');
+select set_config('role', 'postgres', true);
+rollback to savepoint v_join;
 
 -- ---- V/final: restoration, asserted rather than assumed. NOT in a savepoint. ----
 select is(
