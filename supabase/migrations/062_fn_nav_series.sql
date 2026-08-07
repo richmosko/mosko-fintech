@@ -253,13 +253,32 @@
 --         It happened here: QA froze these tags (renaming one is a
 --         cross-artifact change, stated in the battery), the tags were renamed,
 --         and this header shipped one commit citing the old short forms.
---         ⚠ AND THE CHECK ITSELF HAS A FAILURE MODE, which is the part worth
---         carrying: the dangling citations were caught by a MANUAL grep — run
---         against the PREVIOUS COMMIT, one revision behind the repair, which
---         reported a defect that had already been fixed. A pointer-checker is
---         an instrument like any other and can be AIMED AT THE WRONG VERSION
---         OF THE ARTIFACT. So the mechanical form must run against the SAME
---         TREE it is validating, not against a remembered or reported state.
+--         ⚠ AND THE CHECK ITSELF HAS TWO DISTINCT FAILURE MODES, which must
+--         NOT be collapsed — they have DIFFERENT REMEDIES, and filing one
+--         under the other prescribes a fix that cannot work on it:
+--           (a) AIMED AT THE WRONG VERSION. A pointer-checker is an instrument
+--               like any other and can read a remembered or reported state
+--               instead of the tree. REMEDY: pin the ref — quote the commit
+--               measured alongside every finding, and assert on the tree under
+--               review. (Instance: a hash "independently verified" by
+--               re-reading the SAME working tree the first reader used, which
+--               proved nothing; `git show <commit>:<path>` settled it.)
+--           (b) CORRECT WHEN TAKEN, OVERTAKEN IN FLIGHT. The dangling
+--               citations WERE really dangling when the grep ran; the repair
+--               commit did not exist yet. Nothing was mis-measured and the
+--               finding did its job. REMEDY: none available at the checker —
+--               this is inherent to async review. The discipline is on the
+--               RECEIVER: re-measure whether the finding still holds before
+--               acting, and say which ref you re-measured at.
+--         >> (b) IS NOT A DEFECT IN (a)'s CLOTHING. Ref-pinning cannot fix a
+--            latency artifact, and an over-eager reading that files every
+--            surprising finding under "stale instrument" would suppress
+--            correct findings — the costliest possible failure for a review
+--            channel, because it degrades silently and looks calm doing it. <<
+--         (This distinction is itself a correction: an earlier revision of
+--         this block filed (b) under (a) and prescribed ref-pinning for both.
+--         A block naming a remedy for every failure mode would have been the
+--         more satisfying artifact and the less true one.)
 --         REMEDY (routed to DevOps, deliberately NOT built here — a migration
 --         is the wrong home for a repo-wide fence): a CI check asserting that
 --         every "(TAG)" cited in a migration resolves in its paired battery,
