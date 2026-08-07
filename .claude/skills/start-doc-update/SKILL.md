@@ -80,7 +80,7 @@ Tell the user:
 Branch created: <prefix>/<slug>
 
 Make your doc edits. When done:
-  /finish-doc-update  →  commit + push + open PR (with SSH→HTTPS fallback per feedback_ssh_push_fallback)
+  /finish-doc-update  →  commit + push over SSH + open PR
   /merge-pr           →  team-lead merges the PR (or merge via GitHub UI)
 ```
 
