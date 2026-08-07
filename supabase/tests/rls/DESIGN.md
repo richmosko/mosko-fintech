@@ -954,3 +954,136 @@ application, so it is **UNTESTED, not miscalibrated**; leave it and use it.
 The load-bearing row is *build X and watch it go red* at 4/4. Every one of those four was an
 assertion its author had already written a confident explanation for. **That is the whole
 content of this section.**
+
+---
+
+## 14. From the SELF-219 delta round (2026-08-07) — instruments, labels, and who caught what
+
+Five more, and **only one of them is a self-catch.** Three arrived as corrections from the team
+lead, one from Sec. Recorded with that provenance intact, because §8's calibration test is
+worthless if "I found this" and "someone told me this" blur together.
+
+### A hash over a whole artifact cannot tell a safe edit from an unsafe one *(team lead)*
+
+The instruction was *"comment-only — `prosrc` must not move."* **Those two halves contradict
+each other**, and the contradiction was invisible because the condition named a concrete hash
+and therefore looked rigorous.
+
+`prosrc` is the text between the `$$` delimiters. **Header comments sit outside it; body
+comments do not.** A raw `prosrc` hash had agreed with the intended property across three
+prior passes — but only because those happened to be header-only edits. It diverged on the
+first pass where a body comment moved, going `b735bdc7…` (6926) → `5cf0cb19…` (7290).
+
+> **If the property you care about is invariance of a SUBSET, hash the subset.** A whole-artifact
+> hash is a change-detector, not an invariance-checker, and the two are indistinguishable until
+> the first edit that is safe but not byte-identical.
+
+Remedy: strip comment and blank lines from `prosrc`, then hash. Executable text was invariant
+across the change, which is what "comment-only" was actually claiming.
+
+**And a refinement found by re-deriving it rather than accepting the reported number:** two
+independent strip normalisations produced **two different digests** for the same invariant
+executable text — `086a9067…` and `81cb97b4…`. The *invariance* reproduced; the *number* did
+not, because it is method-dependent.
+
+> **A normalised hash is only a usable baseline if the normalisation is published beside it.**
+> Otherwise the next person derives a different digest from correct code and concludes the
+> artifact moved. Same defect as an unlabelled check: the number looks self-describing and isn't.
+
+### A check's label must describe what was RUN, not what it is expected to SHOW *(team lead + QA, jointly)*
+
+Both of us had been printing `(empty = clean)` after `git status --short` in verification
+commands — **including a run whose output was `M supabase/migrations/062_fn_nav_series.sql`
+followed immediately by the line `(empty = clean)`.** A skimmer reads the label, not the output.
+
+> **A label printed unconditionally is a prediction. `git status --short` printed alone is a
+> measurement. The first survives being wrong.**
+
+**The strongest instance is a convention, not a habit:** a commit subject-prefixed `docs(…)`
+moved `prosrc` by 364 bytes, because the edit was a comment *inside* the body. The change was
+correct and the fences stayed green — but a reviewer who reads `docs(…)` and skips fence
+re-verification is trusting a label over a measurement, and in this file the in-body comment is
+**exactly where fence-defeating prose has historically landed** (three recorded instances).
+Conventional prefixes will keep being emitted correctly-by-convention and wrongly-by-implication.
+
+### "I asked a question that could not return the roles I hadn't thought of, and read its silence as absence" *(Security Reviewer, verbatim, at its own request)*
+
+The purest statement anyone produced of the instrument-cannot-observe-the-property family. Sec
+generalised `service_role` to *"the only role with `rolbypassrls`"* from a probe run over a
+role list Sec itself had chosen. Measurement found **five**.
+
+> The instrument did not malfunction. **It answered exactly what it was asked, and what it was
+> asked was the wrong question.** Silence is the most persuasive wrong answer available, because
+> it reads as a clean bill of health rather than as an error.
+
+Diagnostic form: **"could this query have returned the thing I am about to claim is not there?"**
+
+**This applies to `(Z3)` in this project's own battery, and that is the honest entry.** `(Z3)`
+is a token deny-list — an enumeration that cannot return the tokens its author did not think
+of, whose silence reads as absence. It was written while its author believed the trap had been
+escaped, and it is non-vacuous only because `(Z4)` covers a different axis and `(V10c)` proves
+the gap between them. **Not a rule that caught us; a rule we applied to someone else's artifact
+while an instance of it sat in our own.**
+
+Second thing to carry, and it is the load-bearing half: **authority is not evidence.** Two of
+Sec's four round-1 claims were wrong, and that was established by measuring them rather than
+deferring to the reviewer who raised them — on a surface where that reviewer holds veto. Had
+they been accepted, two false findings would have been remediated into the migration **and the
+remedies would have looked like diligence.** A review channel where findings flow only downhill
+cannot catch this; it degrades silently while everyone behaves impeccably.
+
+### A wrongly-scoped fence is negative value, not neutral *(team lead)*
+
+"Add the obvious extra assertion" is not free. `(A5)` fences `service_role` from EXECUTE.
+Extending it to the other four `rolbypassrls` roles looks obviously right and is wrong:
+`postgres`/`supabase_admin` are owner and superuser, so the negative is **unassertable** — it
+could never pass, and "fixing" the red means revoking from the owner and breaking migrations.
+The other two **already read `nav_daily` cross-tenant with `nav_value` visible**, so fencing
+the function against them is a door beside an open wall.
+
+> **The aggravating factor is what makes it worse than absence: a wrongly-scoped fence shows up
+> in a coverage review as GREEN.** An assertion that cannot fail, whose presence implies
+> protection it does not provide, is the same defect as a vacuous one — arriving from the
+> opposite direction.
+
+Same shape as `(E3)`, which asserted "no point carries 0" over a set already proved empty. Both
+landed in the same session, one found in our own work and one corrected in someone else's.
+
+### During an in-flight review at a named ref, freeze the WHOLE tree *(team lead)*
+
+The conditional form — *"commits are fine if they don't touch the reviewed surface"* — is
+correct and needs its condition evaluated every time. The unconditional form has no evaluation
+step to get wrong.
+
+**But the argument that actually settles it is not about verification cost.** A doc-only commit
+landed during review; under the conditional rule it would have been unremarkable and unread.
+Under the freeze it became a **visible delta someone had to reconcile** — and that reconciliation
+is what surfaced that the reviewer was about to re-request work already done one commit above
+its review point.
+
+> **The rule earned its keep through the friction that was argued to be unnecessary. A rule whose
+> overhead IS its function is a different and better category than a rule with acceptable overhead.**
+
+Concrete cost of the conditional form, invisible from the writer's side: the reviewer reports
+*"measured at `<ref>`"* while HEAD reads something later, and someone else pays to reconcile it.
+
+### Calibration table — this round
+
+| rule | +applications | +self-catches | provenance |
+|---|---|---|---|
+| hash the subset, not the artifact *(new)* | 1 | 0 | **team lead**, self-caught in their own instruction |
+| a normalised hash needs its normalisation published *(new)* | 1 | **1** | QA, by re-deriving instead of accepting a reported digit |
+| a label must describe the check, not its expected result *(new)* | 2 | **1** | joint — both parties were emitting it |
+| could this query have returned what I claim is absent *(new)* | 2 | **1** | **Sec**, verbatim; the `(Z3)` self-application is QA's |
+| authority is not evidence *(new)* | 2 | **2** | QA, by measuring a veto-holder's claims |
+| a wrongly-scoped fence reads as green *(new)* | 1 | 0 | **team lead** |
+| freeze the whole tree during in-flight review *(new)* | 1 | 0 | **team lead** |
+| absence is vacuous when the subject never existed (§10) | 1 | **1** | `(E3)`, found by self-audit |
+| build X and watch it go red (§10) | 1 | **1** | `(V14)` — `(E3)` could not be made red at all |
+
+**Four zero-self-catch rows, and every one of them arrived as a correction from someone else.**
+Per §8's reading rule they sit at ONE application each: **UNTESTED, not miscalibrated** — leave
+them and use them. But note what the column is really showing: *this round, the corrections
+mostly ran toward us rather than from us.* That is the expected shape when the work is being
+reviewed properly, and it is only visible because the provenance column exists. A table that
+recorded these as plain applications would show a flattering nine-for-nine.

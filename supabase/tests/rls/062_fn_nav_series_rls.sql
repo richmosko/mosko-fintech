@@ -137,19 +137,20 @@ begin;
 -- shared cross-tenant verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
--- plan = 67 : 49 property assertions (I6 X3 M3 P6 G4 E3 B6 L6 N3 Z4 A5) + the 18-leg (V)
--- inversion block (V1 V1b V2 V3 V3b V4 V5 V6 V7 V8 V9 V10a V10b V10c V11 V12 V12b V13).
+-- plan = 68 : 49 property assertions (I6 X3 M3 P6 G4 E3 B6 L6 N3 Z4 A5) + the 19-leg (V)
+-- inversion block (V1 V1b V2 V3 V3b V4 V5 V6 V7 V8 V9 V10a V10b V10c V11 V12 V12b V13 V14).
 -- Recorded as an arithmetic decomposition so a silent plan-edit shows up in review as a
 -- changed sum. Grew 57 -> 65 at the Sec AMBER round (+(Z4) differential zone-invariance,
 -- +(A5) the service_role EXECUTE negative, and six inversion controls), then 65 -> 67 against
 -- Architect's 4e28deb clamp: +(B6) declarative inner-join + its (V13) control, because the
--- clamp made that property behaviourally unfalsifiable.
--- ⚠ DO NOT "fix" this by lowering it to a reported figure: (V1)–(V13) run inside savepoints,
+-- clamp made that property behaviourally unfalsifiable. Then 67 -> 68 at the Sec-GREEN
+-- delta: +(V14), the teeth control for (E3) after re-anchoring it off an empty tenant.
+-- ⚠ DO NOT "fix" this by lowering it to a reported figure: (V1)–(V14) run inside savepoints,
 -- and a rolled-back savepoint REWINDS pgTAP's plan counter while the emitted numbering
--- marches on (rls/DESIGN.md §9 harness note). 67 reconciles here only because (V8)/(V9) sit
+-- marches on (rls/DESIGN.md §9 harness note). 68 reconciles here only because (V8)/(V9) sit
 -- OUTSIDE any savepoint and re-set the counter to their own numbers — that is the structural
 -- guard, not a coincidence, and moving (V9) off the end would silently re-break it.
-select plan(67);
+select plan(68);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb, _rls.tenant_c() as tc \gset
@@ -341,9 +342,12 @@ select is(
   (select count(*)::int from pfin.fn_nav_series('monthly','2026-01-01','2026-03-31')),
   0,
   '(E2) …and returns ZERO ROWS. THE NEGATIVE THAT FIRES: a single row carrying nav_value 0. RED if the upper-bound NULL comparison were ever "fixed" with a coalesce, or a leading zero fabricated');
+select set_config('role', 'postgres', true);
+-- (E3) runs under TENANT A, not C. That relocation IS the assertion — see below.
+select _rls.set_tenant(:'ta'::uuid);
 select ok(
   not exists (select 1 from pfin.fn_nav_series('daily','2026-01-01','2026-03-31') where nav_value = 0),
-  '(E3) stated as its own assertion because it is the one that matters at the UI: NO point anywhere in an empty tenant''s daily series carries the VALUE 0. (E2) counts rows; this one names the specific wrong answer — a $0 chart where the honest answer is "no data yet"');
+  '(E3) NO point in A''s POPULATED 70-point daily series carries the VALUE 0 — a fabricated zero on a series that genuinely has data, which is the $0-chart defect as a user would actually meet it. ⚑ RE-ANCHORED FROM TENANT C, AND THE OLD FORM WAS VACUOUS: against C it asserted "no row carries 0" over a set (E2) had already proved EMPTY, so it could not fail unless (E2) failed first — an absence assertion whose subject never existed (rls/DESIGN.md §10), rescued only by anchoring it to a subject that DOES exist. Its own message claimed it "names the specific wrong answer", which was a claim about a test that had never been run. Retired on the record rather than quietly rewritten. Teeth proven at (V14)');
 select set_config('role', 'postgres', true);
 
 -- =====================================================================
@@ -786,6 +790,23 @@ select ok(
   '(V13-DECLARATIVE-JOIN-ASSERTION-HAS-TEETH) (B6) is not vacuous: a body whose lateral is a LEFT JOIN flips it. Needed because (B6) is a source-text assertion and text inspection has no natural failure mode to calibrate against (rls/DESIGN.md anchoring rule) — and because (B6) exists precisely to cover a property that behaviour can no longer reach, so nothing else in this file would notice if it silently stopped matching');
 select set_config('role', 'postgres', true);
 rollback to savepoint v_join;
+
+-- ---- V/E3: can the zero-fabrication fence actually fire on a populated series? ----
+savepoint v_zero;
+create or replace function pfin.fn_nav_series(p_granularity text, p_start_date date, p_end_date date)
+returns table (point_date date, nav_value numeric, checkpoint_date date)
+language plpgsql stable security invoker set search_path = '' as $sab$
+begin
+  -- the $0-chart defect: a real point, fabricated at zero.
+  return query select p_start_date, 0::numeric, p_start_date;
+end;
+$sab$;
+select _rls.set_tenant(:'ta'::uuid);
+select ok(
+  exists (select 1 from pfin.fn_nav_series('daily','2026-01-01','2026-03-31') where nav_value = 0),
+  '(V14-ZERO-FABRICATION-FENCE-HAS-TEETH) ⭐ (E3) is now non-vacuous, PROVEN: a body that emits a real point valued 0 flips it. This control is the entire reason the re-anchor was worth doing — against tenant C the same assertion could not be made to fail by ANY implementation, because there were no rows for a zero to appear in. An assertion that cannot be made red is not a test, and (E3) shipped in that state through a Sec GREEN');
+select set_config('role', 'postgres', true);
+rollback to savepoint v_zero;
 
 -- ---- V/final: restoration, asserted rather than assumed. NOT in a savepoint. ----
 select is(
