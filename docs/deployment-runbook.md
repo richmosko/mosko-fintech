@@ -117,13 +117,81 @@ Three operational consequences, all load-bearing:
 # (1) THE PIN — run as EACH login role the app actually connects as, not as `postgres`.
 #     A `postgres` session reads `postgres`'s login-time settings and will show a clean
 #     UTC|database while every PostgREST request runs in another zone.
+#
+#     ⚠ EVERY psql INVOCATION BELOW OPENS A FRESH CONNECTION, AND THAT IS LOAD-BEARING.
+#       `alter database ... set timezone` reaches NEW SESSIONS ONLY. It never reaches a
+#       session that was already open — so anything holding a long-lived pooled connection
+#       across the migration (PostgREST, the web-app container, workers/etl, a psql left
+#       open in another pane) keeps reporting the PRE-migration value indefinitely.
+#       MEASURED on a scratch database, with the alter issued from a separate connection:
+#         warm session  -> UTC        | configuration file   (unchanged, indefinitely)
+#         fresh session -> Asia/Tokyo | database             (same instant, same database)
 for URL in "$PROD_URL_AUTHENTICATOR" "$PROD_URL_PFIN_ETL"; do
   psql "$URL" -Atc "select current_user, setting, source from pg_settings where name='TimeZone'"
 done
 # REQUIRED, for every role: <role>|UTC|database
-#   UTC|configuration file  -> the migration did not apply here. The value is right BY ACCIDENT. Fix.
+#   UTC|configuration file  -> TWO CAUSES. This line previously named only the first, and so
+#                              instructed the operator to "fix" a pin that had already landed:
+#                                (a) the migration did not apply here — value right BY ACCIDENT; or
+#                                (b) you are not reading through a fresh session (see 1b).
 #   *|user                  -> a role-level override on THIS LOGIN ROLE. See (2).
 #   *|client                -> PGTZ is set in that container's environment. Remove it.
+
+# (1b) DISAMBIGUATE (a) FROM (b) WITH THE CATALOG — it is SESSION-INDEPENDENT, so it answers
+#      "is the declaration recorded?" without depending on the session that cannot see it.
+#      Same move (T3) makes for the role vector: when a runtime probe structurally cannot
+#      reach the property, prove it DECLARATIVELY from the catalog.
+#
+#      ⚠ THE `d.datname = current_database()` FILTER IS LOAD-BEARING. `setrole = 0` alone
+#        selects database-level rows for EVERY database on the cluster, so a pin recorded
+#        against a DIFFERENT database would satisfy this query and the operator would be
+#        told the declaration is recorded when it is not recorded HERE. That is not a
+#        theoretical mode: 061's own read-back names it ("applied to a different database
+#        than current_database() resolved to"), and by the time anyone reaches §4.1 an
+#        entirely unapplied 061 would already have failed the deploy loudly — so
+#        wrong-database IS the most plausible surviving form of cause (a), i.e. exactly
+#        the one this check exists to catch. Matches 061's read-back shape deliberately.
+#
+#      ⚠ ALSO LOAD-BEARING: select ONLY the unnested, anchored `c` — never `s.setconfig`.
+#        This query reads the `setrole = 0` row, and that row carries
+#        `app.settings.jwt_secret`. Selecting the array wholesale would print the LIVE JWT
+#        SIGNING SECRET into this terminal and into anything capturing the stream. Same
+#        rule as the sweep in (2); it applies here for the same reason.
+#
+#      ⚠ `-At -c`, NOT `-Atc` — DELIBERATE, do not normalize these flags. They are
+#        semantically identical, so this looks like an inconsistency worth tidying. It is
+#        not. The R3 anti-drift fence anchors on the SWEEP invocation in (2) below — the
+#        `-Atc` spelling followed by a trailing line-continuation — and writing this block
+#        that way too would give the fence a SECOND match, which it must not silently
+#        resolve. Recorded rather than left to chance: a fence whose correctness depends
+#        on the next author happening to pick a different flag spelling is not fenced, it
+#        is lucky.
+#        (This paragraph deliberately DESCRIBES that anchor instead of quoting it — an
+#        earlier draft quoted it verbatim and thereby became the second match itself,
+#        which the fence's ambiguity guard caught. Do not "helpfully" quote it here.)
+#
+#      ⚠ UNTIL THE R3 FENCE LANDS, UNIQUENESS OF THAT SWEEP INVOCATION IS HELD BY REVIEW
+#        ALONE — no automated check enforces it on `main` yet. Any change to this file must
+#        re-verify BY HAND that the spelling described above still occurs exactly ONCE,
+#        AND THAT INCLUDES A PROSE-ONLY CHANGE: this file has already broken that property
+#        once, in a comment written to warn about it, by an author who knew. So the usual
+#        reassurance — "a careful editor would not do this" — is already disproven here.
+#        Describe that invocation; never reproduce it.
+psql "$PROD_DB_URL" -At -c "select c from pg_db_role_setting s join pg_database d on d.oid = s.setdatabase cross join lateral unnest(s.setconfig) as c where s.setrole = 0 and d.datname = current_database() and c ilike 'timezone=%'"
+# A row (TimeZone=UTC)  -> the declaration IS recorded. The pin landed; the session you read
+#                          through is STALE. Do NOT re-run or "fix" the migration. Recycle
+#                          the connections — see the note below.
+# No row               -> the migration really did not apply. Cause (a). Fix it.
+#
+# ⚠ AFTER THE PIN APPLIES, RECYCLE THE APP AND WORKER CONTAINERS. Their pooled connections
+#   were opened before the pin and hold the pre-migration session zone until they reconnect.
+#   A deployment that applies the pin without recycling is pinned AT THE DATABASE and unpinned
+#   IN EVERY LONG-LIVED CONNECTION — the half-pinned shape this section exists to prevent,
+#   reached from the other direction.
+#   SEVERITY, stated honestly rather than inflated: in THIS deployment the pre-pin value is
+#   ALSO UTC (the image's postgresql.conf), so a stale pool is MIS-LABELLED, not wrong, and
+#   no date is currently computed incorrectly by one. It becomes a CORRECTNESS problem the
+#   moment the two values differ — which is precisely what the measurement above shows.
 
 # (2) THE SWEEP — no ROLE may carry a TimeZone at all, so the database pin is authoritative.
 #     Covers roles that do not exist yet; catches the `authenticator` vector that a
@@ -281,6 +349,17 @@ Scope: deploy the background-worker containers. Per ARCH Lock 13, the V1 runtime
   - **`provider-sync` daily poll** — Scheduled Task, cron **`@daily`** (cadence lean per DevOps; SimpleFIN flat-fee + Plaid bills per-Item/month so cadence ≈ cost-neutral; F/CTO may adjust at deploy — reversible dashboard config), command **`node dist/cli/poll.js`** (design memo §1). Fleet-fatal (can't enumerate / DB unreachable) → **exit 1** → Scheduled-Task failure routes **Coolify→Discord** (§8); a completed run **exits 0 even with per-source failures** — each is isolated, captured in a `scheduled_poll` `linked_source_sync_audit` row + emitted as a structured `FAILED source_id=…` log line (Coolify-log-routable, never a page). A gappy/revoked institution never exits non-zero.
     - **Poll env (required subset — confirmed against `loadConfig()`):** `PFIN_DB_*` (login role `authenticator`) **+ `PLAID_CLIENT_ID` / `PLAID_SECRET` / `PLAID_ENV`**. Plaid creds are **required at boot** — `loadConfig()` throws on absence *even for a SimpleFIN-only source set* (Plaid is a live V1 provider, so this is fine for V1; making Plaid optional is a small `env.ts` change if a Plaid-less container is ever wanted). **NOT** `SIMPLEFIN_TOKEN` (the poll reads each source's stored Access URL from `decrypted_source_credential`; the bridge token is only the `admit` entrypoint's concern), **NOT** a Discord webhook secret (Discord is Coolify-side, §8), **NEVER** `SUPABASE_SERVICE_ROLE_KEY` (off-RT-26 posture; `fence-tbc-node` LEG 2 zero-hit). All are `production_only` secrets (§5) — non-overlap fence unaffected.
 
+- **TimeZone drift sweep (R3) — Scheduled Task · ⏸ RATIFIED, NOT YET ACTIVE · DevOps-owned.**
+  **This is a decided thing awaiting a box, not an open question.** F/CTO-ratified 2026-08-06; **build deferred to Phase 7** for one reason only — a Scheduled Task needs a Coolify instance to attach to, and V1's is not stood up yet (§1). **Wire it at first deploy.** It is recorded here rather than in a note because a runbook step gets *executed*; a note gets *recalled*.
+  - **What it runs:** the §4.1 catalog sweep (limb 2) on a cron, exiting non-zero when any role carries a `TimeZone` override, so the failure routes **Coolify→Discord** (§8) on the incumbent notification path. Cadence `@daily` to start; it is a dial, see the latency note below.
+  - **⚠ It is DETECTION WITH BOUNDED LATENCY, NEVER PREVENTION.** Nothing stops a privileged human running `ALTER ROLE … SET timezone` on production. At `@daily` that is **up to 24h of silently-wrong as-of dates** (§4.1: the NAV headline and open-account count are wrong, and nothing errors). Tightening the cron tightens the window; it never closes it. **Do not describe this as a gate** — overclaiming here is the same failure §4.1 documents, one layer up.
+  - **Why a recurring sweep and not a deploy-time check:** the vector is **drift-shaped, not deploy-shaped**. The override that motivated all of this arrived on a stack nobody was deploying, and a deploy-time gate samples only at deploys — it would not have caught the real instance. *(Measured 2026-08-04: `authenticator` carrying `TimeZone=Asia/Tokyo` while a `postgres`-session read-back showed a clean `UTC | database`.)*
+  - **Needs NO new credential.** Capability-verified: `pg_db_role_setting` is readable by an unprivileged login role (`authenticator` sees every row), so the sweep runs over a connection the deployment already has. **The script is repo-versionable and testable against a local stack today** — none of it is gated on cutover.
+  - **⚠ TWO INSTRUMENTS AT TWO PRIVILEGE LEVELS — do not merge them.** The *provenance* limb (`select 1 from supabase_migrations.schema_migrations where version = '061'`, which distinguishes our declaration from a hand-run `alter database … set timezone` — see §10 TZ-1b for what it does and does not prove) requires the migration-applying identity: **`authenticator` gets `permission denied for schema supabase_migrations`** (measured). So that limb belongs to **deploy time (§6/§10)**, and the recurring sweep stays unprivileged. Least privilege for the thing that runs forever on a timer.
+  - **⚠ WHY THIS IS NOT A CI JOB — do not re-propose one.** Two independent blockers, either sufficient alone. **(a)** `PFIN_DB_PASSWORD` is `production_only` in [`secrets-manifest.yml`](../secrets-manifest.yml); putting it in the CI store is exactly what the non-overlap discipline prevents — and worse, **the fence would stay green while the discipline was broken**, because `check-secrets-nonoverlap.py` validates the *manifest declaration*, not GitHub's secret store. **(b)** GitHub runners have no fixed egress, so reaching production Postgres means publishing `5432` or allowlisting GitHub's entire IP space — while §10 CA-2 spends real effort proving the admission endpoint is *not* externally reachable.
+  - **Options considered, so nobody re-opens a closed one:** **γ (this)** chosen — the only shape that catches post-deploy drift. **β** (container healthcheck) **HELD, not rejected**: it fails closed to an *outage* on a live single-user app, buying detection γ already provides — easy to add later if γ's latency proves too loose. **δ** (leave it a human step) rejected: it is the posture that failed. **α** below.
+  - **⚠ α's PREMISE IS STILL UNVERIFIED, AND TESTING IT IS *NOT* GATED ON CUTOVER.** α was a Coolify **post-deploy command**; it rests on whether a **non-zero exit from one actually FAILS the deployment** rather than merely logging. That is a question about **Coolify's behaviour, not about V1's box** — the F/CTO already runs Coolify on cax21 with Discord notifications working, so it is answerable today. **If it merely logs, α is worth ~nothing.** Everything else in this bullet waits for Phase 7; this one does not, and it is the item most likely to be wrongly assumed blocked because everything around it is.
+
 > **STUB —** Fill in per container: Coolify service config (Base Directory, build pack = Dockerfile, ports/networking), env-var wiring (→ §5), the cron schedule expressions for `monthly_report` + Plaid poll (the `provider-sync` daily-poll Scheduled Task is captured above), and resource limits. Note the web-app container (the 3rd of the 3) is owned at `api/` — its deploy config slots in here once the SvelteKit scaffold lands in Phase 6.
 
 ---
@@ -322,6 +401,11 @@ Scope: prove the from-scratch stand-up actually works before declaring V1 deploy
   - **Run it as each LOGIN role (`authenticator`, `pfin_etl`) — never as `postgres` — and add the catalog sweep.** MEASURED (§4.1): per-role settings apply at login and `SET ROLE` does not re-apply them, so `ALTER ROLE authenticator SET TimeZone` moves every Data API request while a `postgres` session still reads `UTC | database`. A read-back that connects as `postgres` **structurally cannot see the one role-level vector that exists.** Pinning or inspecting `authenticated` protects nothing — it is not the login role.
   - **Why this is deploy-time and cannot be delegated to CI:** QA's [`supabase/tests/01_session_timezone.sql`](../supabase/tests/01_session_timezone.sql) asserts this property of the **ephemeral CI container**, and says so in its own header — it cannot observe the deployment. Two claims, two instruments; a green CI is never evidence about production here.
   - Gate this **before** §9 teardown. A failure is a silent up-to-one-day error in the §2.1.1 NAV headline and open-account count, with nothing erroring — not a degraded surface.
+  - **⏸ TZ-1b — wire the R3 drift sweep before sign-off (ratified 2026-08-06; NOT YET ACTIVE).** TZ-1 is a **one-shot** assertion: it proves the pin is correct *at deploy*, and says nothing about the next six weeks. The vector is **drift-shaped** — the real instance arrived on a stack nobody was deploying — so a deployment that passes TZ-1 and never wires the recurring sweep is verified once and unmonitored thereafter. **Wire the §7 Scheduled Task (R3) as part of this gate**, and confirm one run has reported to Discord (§8) before §9 teardown. Full rationale, options considered, and the two-privilege-level split: **§7, "TimeZone drift sweep (R3)"**. **⚠ It is detection with bounded latency, not prevention** — do not let its presence read as "the pin cannot drift".
+  - **⏸ Also at first deploy: the PROVENANCE limb.** Assert `select 1 from supabase_migrations.schema_migrations where version = '061'` returns a row. **What it buys is provenance and nothing else** — it distinguishes *our* declaration from a **hand-run `alter database … set timezone`**, which TZ-1's `source` reading cannot do once a database-level entry exists **by any route**. That is not hypothetical: exactly such an entry was found on a dev stack on 2026-08-05, reporting a clean `UTC | database` while `061` had never been applied there. *(It does **not** separate "by declaration" from "by accident, no declaration" — TZ-1 already does that: `source = database` means a database-level declaration exists, and the no-declaration case reports `configuration file`, which TZ-1 rejects.)*
+    - ⚠ **It proves the migration RAN, not that the declaration SURVIVES.** `schema_migrations` is **append-only**: a later `alter database … reset timezone` leaves the `061` row sitting there while the declaration is gone. **Do not read a history row as current state** — that is the recorded-vs-effective conflation [`061`](../supabase/migrations/061_pin_database_timezone_utc.sql)'s own CONTRACT warns about, one layer out and in the opposite direction. *(The limb was originally named "declaration-applied", which invited exactly that reading; renamed for the same reason.)*
+    - **Three questions, three instruments — they compose, none substitutes:** **provenance** (`schema_migrations` — did our migration run here?) · **current state** (the §4.1 (1b) catalog read — is a database-level declaration recorded right now?) · **effective value** (TZ-1's `setting` / `source` — what is this session actually resolving?).
+    - **This limb needs the migration-applying identity** (`authenticator` gets `permission denied for schema supabase_migrations`), which is why it lives here at deploy time and not in the unprivileged recurring sweep.
 
 > **STUB —** Fill in: the end-to-end smoke checklist (web-app reachable over TLS; auth login; a seeded user sees only their own rows — RLS isolation; a migration-backed query returns; PDF render round-trips via the signed-JWT path; ETL container runs one poll; Discord notification fires). This gates §9 teardown — define the explicit pass/fail go/no-go criteria here. QA owns the RLS/isolation assertions; DevOps owns the infra-reachability assertions.
 

@@ -1,6 +1,6 @@
 ---
 name: apply-migration
-description: Invoke when authoring a new Supabase migration — adding a base table, extending an RLS surface, writing a new SECURITY INVOKER helper, or proposing any function with SECURITY DEFINER posture. Codifies the Architect-owned procedure: migration file shape (POSTURE RATIONALE + CONTRACT blocks + `comment on function` + `set search_path = ''` + idempotent schema creation), mandatory §10 3-axis cross-check before drafting, Decision 3 matched-tenant validation rule for every FK-shaped column, Sec joint-review routing triggers, and QA pgTAP test-pairing requirement. Also invoke when evaluating whether a new column or array type activates the cross-tenant FK-bypass family. Do NOT invoke for Backend `supabase migration up` execution (Backend role) or pgTAP test authorship (QA role).
+description: Invoke when authoring a new Supabase migration — adding a base table, extending an RLS surface, writing a new SECURITY INVOKER helper, or proposing any function with SECURITY DEFINER posture. Codifies the Architect-owned procedure: migration file shape (POSTURE RATIONALE + CONTRACT blocks + `comment on function` + `set search_path = ''` + idempotent schema creation), mandatory §10 3-axis cross-check before drafting, Decision 3 matched-tenant validation rule for every FK-shaped column, Sec joint-review routing triggers, and QA pgTAP test-pairing requirement. Also invoke when evaluating whether a new column or array type activates the cross-tenant FK-bypass family, when deciding what a `comment on` may claim (present-tense/checkability, counts, forward-references, naming where sufficiency comes from), and when correcting a comment on an already-merged migration (the comment-only `052` shape — regenerate-and-diff, containment proof, render-verify). Do NOT invoke for Backend `supabase migration up` execution (Backend role) or pgTAP test authorship (QA role).
 user-invocable: true
 allowed-tools:
   - Read
@@ -26,13 +26,17 @@ Architect-owned procedure for authoring migrations in `supabase/migrations/`. Op
 
 ## Step 0 — §10 3-axis cross-check (MANDATORY before drafting)
 
-Before writing a single line of SQL, read [ADR-011 Decision 4](../../../DECISIONS.md#adr-011) verbatim. Cross-check the draft against three axes:
+Before writing a single line of SQL, read [ADR-011 Decision 4](../../../DECISIONS.md#adr-011) **verbatim, live, every time — never from recall and never from this file.** Cross-check the draft against three axes:
 
-1. **Instance-numbering** — canonical ordering is RT-22 first, RT-26 second. Do not reorder or renumber.
-2. **Layer-attribution** — do not re-attribute which layer a catalogued instance operates at (RT-22 = infrastructure-credential-presence layer; RT-26 = code-layer CI grep fence).
-3. **Verbatim-vs-paraphrase** — the catalogued numbered list is not restated in migration files; link to Decision 4 (Path B: drop-enumeration-let-link-carry). Only restate verbatim if the migration file IS the canonical anchor (it never is — Decision 4 is).
+1. **Instance-numbering** — do not reorder, renumber, or silently add a catalogued instance.
+2. **Layer-attribution** — do not re-attribute which layer a catalogued instance operates at.
+3. **Verbatim-vs-paraphrase** — the catalogued list is **not** restated in migration files; link to Decision 4 (**Path B: drop-enumeration-let-link-carry**). Restate verbatim only if the file IS the canonical anchor — a migration never is.
 
-The V1 §10 ledger commitment is **3 instances** (RT-22 + RT-26 + RT-27; RT-27 = the app→worker credential-admission network-exposure/config layer, catalogued at SELF-212 / v1.83). Do not silently add a catalogued instance. Any ledger change (count or layer-attribution) is **Sec joint-review-mandatory** before the migration is finalized.
+> **⚠ This section deliberately states NO count and NO enumeration, and that is the point.** It previously named both. The ledger **grew** (2→3 when RT-27 was catalogued), the restatement went stale, and it went on reading as authoritative. **A derived surface that copies a count acquires a maintenance obligation it will not honour.** The only instruction that cannot rot is *go read the canonical list*. **Applies to your draft too:** a `comment on …` that references the ledger should **link, not enumerate**.
+
+**Any ledger change (count or layer-attribution) is Sec joint-review-mandatory** before the migration is finalized.
+
+⚠ **The §10 CATALOGUED set and the CI-FENCED set are DIFFERENT SETS.** Measure the fence set when you need it — `grep -rhoE 'RT-[0-9]{2}' .github/workflows/` — it is **not** a copy of the catalogued ledger. **Do not "tidy" either one to match the other**; that cleanup destroys a real distinction.
 
 ## Step 1 — Migration file shape
 
@@ -66,6 +70,53 @@ Every function also carries:
 
 **Sequencing:** pure helpers (no table dependencies) are order-independent. Base-table migrations and RLS policies are order-dependent — sequence them deliberately; note the dependency in the header.
 
+**Numbering:** take the next free number **at authoring time**, never reserve one ahead. A reserved number in a shared, growing namespace goes wrong silently when slices split (the `058`→`059` slip).
+
+## Step 1.5 — What a comment may CLAIM
+
+A `comment on …` is a **database object**. It ships into the catalog, is read at `\d+` by someone with **no repo in front of them**, and can only be corrected by a **new comment-only migration** (the `052` shape — never an edit to a merged file). That asymmetry is what makes the rules below sharper for catalog comments than for `--` header comments.
+
+**(a) No present-tense claim about state the reader cannot check from where they are standing.** The discriminator is *checkability*, not tense. *"Nothing sets one today"*, *"no override exists"*, *"each names the other"* — all true when written, all false within days, and **five such claims appeared in one branch**. A repo-state claim in a repo file is fine; **the same sentence in a catalog comment is not**, because the reader cannot verify it.
+
+Durable rewrites — prefer either:
+- a **past-tense event**: *"the constraint was struck at `059`"* (dated, stays true), or
+- a **standing requirement**: *"each MUST name the other"* (converts a fact into a check).
+
+**(b) No counts, no enumerations.** Same reason as Step 0 — a copied count is a maintenance obligation the copy will not honour. Link to the canonical anchor.
+
+> **⚠ A self-aware caveat does NOT rescue a count.** *"N instances — but verify against the live body, not from memory"* is **worse** than a bare stale number: **the figure still anchors the reader, and the caveat makes the surface feel handled.** Measured case — a dispatch skill carried exactly that construction and it was the last surviving instance of a class the sweep had otherwise closed. **If the strongest available mitigation fails, the only safe amount is none.**
+>
+> **⚠ The past-tense carve-out is NARROWER than "past tense is fine" (Sec, 2026-08-06).** A past-tense count is permissible only when the event is **durable** *and* **the figure was canonical at that event**. Both conditions, not either. The failing case: *"7 at Phase 4 close"* is a durable-sounding waypoint whose figure **[ADR-011](../../../DECISIONS.md#adr-011) Decision 3 itself repudiates** as *"an un-reconciled operational count, NOT canonical."* **A repudiated tally does not become safe by being placed in the past — it becomes harder to catch, because it then reads as a record rather than as a claim.** This is why (a) leads with **checkability** rather than tense: tense was never the discriminator.
+>
+> **✅ What DOES survive the carve-out** — so nobody applies it by mistake: *"this line previously read X, and X was wrong by Y"* (Step 0 and Step 3 both use it). The **event** is durable and the figure is **accurately reported as the erroneous one**. Quoting a wrong number **as wrong** is a dated record; restating it **as history** is a fresh claim.
+>
+> **⚠⚠ NEVER STRIP LABELS. This rule governs COUNTS ONLY, and the difference is canonical, not stylistic (Sec, 2026-08-06).** **Counts are canonically MUTABLE; instance labels are canonically GUARANTEED STABLE** — Decision 3 fixes its own labels in its own text (*a dropped instance keeps its label; the others do not move; no future instance reuses a retired one*). So a label is a **reference into the canonical enumeration**, and it is the thing that lets a reader look up an instance's **shape**. **Removing one is not tidying — it severs the reference**, and leaves the reader with a rule and no way to check an instance against it.
+>
+> The usable line: **a label naming a SPECIFIC instance is load-bearing — keep it** (*`#5` DROPPED at `048`*, *`#3`/`#4` DDL-deferred*). **A restatement of the full enumeration or its ordering is not — drop it and let the link carry** (Path B). Step 0 drops an ordering; `supabase/CLAUDE.md` keeps its instance labels. **Both are correct, and they are not in tension.** *"Strip the numbers"* applied indiscriminately is a one-directional failure someone will attempt.
+>
+> *If you must trim label examples, prefer the **shape-illustrating** ones (a dropped instance, a deferred one) over the highest-numbered — a high label reads to a skimmer as a size hint.*
+
+**(c) Do not cite an artifact that does not exist yet.** ***A document may forward-reference a document; a CORRECTNESS CLAIM must not forward-reference the mechanism that makes it true.*** A comment asserting *"this is safe because ADR-NNN / migration `0NN` establishes X"* — where that artifact is unmerged — puts a ratified-sounding claim in the catalog with its support absent. **State the dependency as the PROPERTY, naming the artifact as its current instrument** (*"…holds iff the session TimeZone is UTC, declared by `061`"*) — true before and after the other half lands, and it survives the instrument being renumbered or replaced. *(The general form of this rule lives in `brief-drift-catch`; the catalog-comment case is here because the cost of being wrong is a migration.)*
+
+**(d) Name where your sufficiency comes from — and what makes it verifiable.** A fence whose sufficiency depends on something outside itself must say so. **A confidently-wrong dependency is worse than none**: an absent dependency invites a check, a wrong one answers it in advance and stops people looking. If a fence is necessary-but-not-sufficient, **say so in the comment** rather than implying it is the whole answer.
+
+**(e) Ask the dual of every MEASURED reassurance.** *"This is safe because X"* — now ask **what does X make UNSAFE for a reader elsewhere?** A live case: a migration header measured *"`ALTER DATABASE … SET` is ADDITIVE; the row already carries `app.settings.jwt_secret`"* as a **reassurance** that the pin would not clobber existing settings. That same measured fact was the **hazard notice** for a deploy-runbook sweep that selected the whole `setconfig` array — and the pin is what made that row match, leaking the JWT secret into deploy logs. **Both artifacts read as complete alone; the defect lived only in the seam between them.**
+
+**(f) If the migration removes or weakens a fail-closed mechanism, name it — in the header AND the commit subject.** A default that flips from fail-closed to fail-open is behaviourally invisible while the two coincide, so the change leaves no footprint at review time. The header must say what was removed and what now holds the line.
+
+## Step 1.6 — Correcting a comment on a MERGED migration
+
+Never edit a merged migration file. Emit a new **comment-only** migration (the `052` shape). While a migration is still **unmerged**, edit in place — the merged-history guard does not apply.
+
+Catalog comments are frequently multi-KB single-quoted string literals, where a botched edit is a **syntax error**, not a wording problem. **Regenerate and diff; never retype** — retyping a comment of that size is how the correct halves get silently altered alongside the wrong one.
+
+1. **One anchored substitution, asserted to match EXACTLY ONCE.** More than one match means your anchor is not unique; zero means the source drifted.
+2. **Containment proof** — prove the prefix before the replaced span and the suffix after it are **byte-identical** to the original, with **one contiguous replaced span**. ⚠ **Prefer this to counting diff regions:** a region count only characterises what *changed*; the containment proof makes a positive claim about everything that **did not**.
+3. **Parse-in-rollback** — apply inside a transaction and roll back, so the literal is proven to parse.
+4. **Render-verify via `col_description` / `obj_description`** — read the comment back **as the catalog renders it**. The catalog string is what actually ships, and a doubled `''` leaking into rendered text is **invisible in source**.
+
+⚠ **Where step 3 does not earn its keep:** for a comment-only migration, *"the non-comment SQL body is byte-identical to the previous file"* is a **stronger** claim than re-running the parser — it proves no behaviour changed at all, which parsing does not.
+
 ## Step 2 — INVOKER vs DEFINER decision
 
 **Default posture: SECURITY INVOKER** ([Lock 11](../../../DECISIONS.md#adr-011)). The canonical V1 read-composition path (`fn_compute_nav` / `fn_compute_tax_liability` / `fn_render_monthly_report`) is entirely INVOKER — functions run as the calling user, inheriting their RLS context.
@@ -88,7 +139,9 @@ Any FK-shaped reference column — single FK, self-FK, or `INTEGER[]` array elem
 - Single FK column → `WITH CHECK` constraint matching tenant anchor
 - `INTEGER[]` array → `BEFORE INSERT/UPDATE` trigger validating every array element's `users_id` equals row's `users_id` (PostgreSQL cannot express this declaratively)
 
-**Family count:** 7 instances at Phase 4 close (Lock 9 / Lock 10 / Lock 11 / Lock 12 from Phase 1 Step 4 + 3 additions across Phase 4 Wave 5 decomposition). This is a **non-negotiable** discipline — matched-tenant validation in the DDL is mandatory; it does not skip even when the surface "looks safe."
+**Family size: read [ADR-011 Decision 3](../../../DECISIONS.md#adr-011)'s body live — this file deliberately does not carry the number.** The family **grows**, the labels are **non-contiguous**, and at least one has been **dropped** (a third status class, distinct from DDL-deferred), so *labeled* and *DDL-realized* are two different counts that diverge. ⚠ **This line previously read "7 instances at Phase 4 close" and was stale by more than half** — anyone sizing the discipline from it would have badly under-read it. **Verify the SHAPE of the instance you are adding against the canonical body, not just the count.**
+
+This is a **non-negotiable** discipline — matched-tenant validation in the DDL is mandatory; it does not skip even when the surface "looks safe."
 
 Decision 3 extensions are **Sec joint-review triggers** — every new FK-shaped reference column that joins the family routes to Sec before the migration lands.
 
@@ -128,9 +181,21 @@ QA authors the tests (Architect does not edit `tests/`). Sec sign-off gates V1-S
 - **`major_version = 17` is PROVISIONAL** in `config.toml` — confirm against prod (`SHOW server_version;` or Studio → Settings → Infrastructure) before Phase 6 base-table work, where version-skew bites harder. Today's pure-function migrations are PG 15/17-identical.
 - **Migrations live in code, not the Supabase dashboard.** Any dashboard-applied change that doesn't have a migration file is invisible to CI and is a discipline violation.
 - **`supabase/tests/` is QA-owned.** Architect does not author or edit there; QA does not edit `supabase/migrations/`.
+- **`BEFORE INSERT` fires BEFORE conflict detection.** With `ON CONFLICT … DO NOTHING`, a BEFORE INSERT fence **still fires** on the conflicting row — so a tenant-binding check is *not* bypassed by a same-key re-run (verified at `054`). ⚠ **The trap is the other direction:** a BEFORE INSERT trigger with a **side effect** (audit row, GUC set, sequence bump) also runs for rows that are then **silently discarded**. Do not put side effects in a BEFORE trigger on an `ON CONFLICT DO NOTHING` path without deciding you want them on discarded rows.
+- **A change that is value-neutral is NOT free.** *"NAV is identical either way"* only means the defect is **invisible to value assertions** — it can still move **row sets and counts**. Say which surface a change is neutral on, and pair it with an assertion on the surface it is *not* neutral on, or the test battery will go green over it.
+- **`ALTER DATABASE … SET` reaches NEW SESSIONS ONLY.** A warm connection pool (dev server, worker) keeps reporting the old value until it reconnects — which looks **exactly** like the setting having failed to apply. Distinguish *recorded* from *effective*: a catalog read-back proves it was recorded; only a **new session** proves it is effective.
+- **Capability-verify at the real POST-migration state, not merely "against a real database."** ADR/Lock-named DB primitives are unrun assumptions until executed as the deploying role. **`post-` is the load-bearing half:** a deploy-runbook query was genuinely safe on `main` and became unsafe the instant a migration landed, because the migration added a row the query then matched. ⚠ And **apply onto a clean state** — a migration applied on top of its own prior outcome demonstrates nothing and looks identical to success.
 
 ## Notes
 
 - Composes with `spawn-sec-joint-review` (Sec routing for DEFINER / Decision 3 / §10 ledger changes).
 - Composes with `brief-drift-catch` (verbatim-source cross-check on Lock/ADR citations before forwarding a draft to F/CTO ratify).
+
+### Deliberately NOT in this skill
+
+Recorded so they are not re-added by someone who notices the gap. **A skill that absorbs everything discriminates nothing** — the same argument that keeps the §10 ledger small.
+
+- **The general forward-reference rule** (*a document may forward-reference a document; a correctness claim must not forward-reference its mechanism*) — it governs ADRs, briefs and merge order far beyond migrations. **Home: `brief-drift-catch`.** Only the catalog-comment case is here (Step 1.5c), because there the cost of being wrong is a migration.
+- **"Describe a pattern, don't quote it"** — any check that scans a corpus will eventually scan the prose written *about* the check, since that prose is the densest concentration of the tokens it hunts. **Real, and not migration authoring**: it belongs wherever grep-shaped fences are authored (CI fences = DevOps; battery-level invariant greps = QA). Not routed here.
+- **`git commit --only <path>` takes the whole file**, so two edits to one file cannot become two commits — plan *"one commit describing both"* rather than promising a granularity the tool cannot deliver. **Git mechanics, not migration authoring.** Home: the commit-hygiene memory and the `finish-*` skills.
 - Origin: [`supabase/CLAUDE.md`](../../../supabase/CLAUDE.md) (Step 5 canonical) + [ADR-011](../../../DECISIONS.md#adr-011) Decisions 3 / 4 / 9 / Lock 11 + PR #106 grant-then-RLS root-cause. Track record: `002_fn_mask_acct_number.sql` is the first V1 migration exercising this procedure end-to-end.

@@ -28,6 +28,18 @@
 // │    RED — e.g. `expected 4 to be 5`, the literal off-by-one-day ADR-043 exists to prevent. │
 // │    Restored -> 5 passed. If you change these assertions, REDO THAT PROBE. An assertion    │
 // │    nobody has seen fail is an assertion nobody has shown reaches its subject.              │
+// │                                                                                           │
+// │ ⚠⚠ THE ONE CHANGE THAT SILENTLY DEFEATS ALL OF THIS — and it is not a change to this file. │
+// │    `withTZ` mutates `process.env.TZ`, which is GLOBAL. That is safe today for exactly one  │
+// │    reason: vitest runs the tests within a file SEQUENTIALLY, and this project has no       │
+// │    concurrency opt-in (checked: no `sequence.concurrent` in vitest.config.ts, and no       │
+// │    `describe.concurrent` here). **Turn suite-wide concurrency on and this battery races —  │
+// │    one test's zone leaks into another's assertion — and it can go FALSELY GREEN.**         │
+// │    >> AND THE SAME CHANGE DEFEATS (T0), because T0 would be racing too. The precondition   │
+// │    written to catch a dead harness is the one thing that cannot catch this. <<             │
+// │    Whoever enables concurrency will have no reason to open this file, so this is written   │
+// │    for whoever afterwards has to explain why a TZ battery went green over a broken pin.    │
+// │    If that day comes the fix is `describe.sequential` here — NOT deleting the assertions.  │
 // └──────────────────────────────────────────────────────────────────────────────────────────┘
 //
 // ┌─ ⚠ SCOPE FENCES — three claims, three instruments; do not let this file annex the others ┐
@@ -207,6 +219,13 @@ const rel = (f: string) => relative(SRC, f).replace(/\\/g, '/');
  * check matches the documentation written about it and reds on its own explanation. That is the
  * same self-match the asOfBrand battery hit on its first run; it is now the third occurrence of
  * the pattern in this suite, so it is treated as the default rather than as a surprise.
+ *
+ * ⚑ KNOWN IMPRECISION, DELIBERATELY NOT FIXED (Sec, 2026-08-06). This is a regex, not a lexer:
+ * a `//` INSIDE a string literal — a URL, say — blanks the rest of that real line. Doing it
+ * properly needs tokenisation. Left as-is because of which DIRECTION it fails in: blanking real
+ * code can only make the negative half MISS an offender, never manufacture one. It cannot
+ * produce a false RED, and false reds are what get this check deleted. Recorded rather than
+ * fixed so the next reader does not spend the afternoon rediscovering it and calling it a bug.
  */
 function stripComments(src: string): string {
 	const blank = (m: string) => m.replace(/[^\n]/g, ' ');
@@ -216,9 +235,149 @@ function stripComments(src: string): string {
 		.replace(/\/\/[^\n]*/g, blank); // //
 }
 
-/** Date-RENDERING APIs. `toISOString` is deliberately excluded — see the test body. */
-const FORMAT_CALL = /toLocaleString|toLocaleDateString|toLocaleTimeString|Intl\.DateTimeFormat/;
+/** Date-RENDERING APIs called directly. `toISOString` is deliberately excluded — see the test body. */
+const DIRECT_FORMAT = /toLocaleString|toLocaleDateString|toLocaleTimeString|Intl\.DateTimeFormat/;
+/**
+ * ⚑ THIS MATCHES MORE THAN THE COLUMN NAME, AND THE OVER-MATCH IS LOAD-BEARING IN BOTH
+ * DIRECTIONS. `closed` + optional `_` + `[aA]t` also matches the `closedAt` SUBSTRING INSIDE THE
+ * IDENTIFIER `closedAtLabel`. So an ordinary `import { closedAtLabel } from '$lib/account-display'`
+ * satisfies the proximity window on its own, with nothing to do with any closure date being
+ * formatted. Two consequences, and the second is the one that reaches production readers:
+ *
+ *   (1) PROBE HAZARD. A probe that declares its formatter near that import gets a hit FOR THE
+ *       WRONG REASON and looks covered when it is not. **This has flattered a probe twice, in
+ *       two separate rounds, for two different authors** — once when the declaration landed near
+ *       a `closed_at` filter, once on the import line itself. Both times the hole was FULL, not
+ *       partial, and stopping at the first green would have understated the fix. If you are
+ *       probing this check, put the binding in its OWN MODULE and confirm the pre-fix run
+ *       returns a literal `[]` before believing any of it.
+ *
+ *   (2) DIAGNOSABILITY IN THE SHIPPED CHECK, which is the larger half. A live offender may point
+ *       at CORRECT CODE whose only sin is sitting two lines from that import. Not firing today
+ *       (`offenders` is `[]`), but if it ever does, the reader gets a file:line, goes hunting for
+ *       a formatting violation, and finds an import statement. **A false red with an opaque
+ *       cause** — the exact condition this file keeps naming as what gets a check deleted,
+ *       arriving by a path neither hardening round had written down. >> READ THE REPORTED LINE
+ *       BEFORE BELIEVING IT. <<
+ *
+ * ⚠ DELIBERATELY NOT FIXED, and not by neglect. Narrowing the pattern to the column name alone
+ *   would cost real detection — `closedAt`-cased locals and mapped fields are exactly what a
+ *   regression looks like — and a date format call genuinely sitting two lines from the canonical
+ *   `closedAtLabel` call site is worth a look on its own merits. Same disposition as
+ *   `stripComments` above: the imprecision is recorded and argued rather than silently carried.
+ */
 const CLOSED_AT = /closed_?[aA]t/;
+
+/**
+ * Every identifier bound tree-wide to `new Intl.<ctor>`.
+ *
+ * Tree-wide rather than per-file ON PURPOSE: a formatter declared in one module and imported
+ * into a surface is the shape that most needs catching, and a per-file scan would not know
+ * what the imported name IS.
+ */
+function intlBindings(ctor: string): Set<string> {
+	const re = new RegExp(`(?:const|let|var)\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*new\\s+Intl\\.${ctor}`, 'g');
+	const out = new Set<string>();
+	for (const f of FILES) {
+		const src = stripComments(readFileSync(f, 'utf8'));
+		let m: RegExpExecArray | null;
+		re.lastIndex = 0;
+		while ((m = re.exec(src))) out.add(m[1]);
+	}
+	return out;
+}
+
+/**
+ * Currency formatters — `Intl.NumberFormat` bindings. These are EXCLUDED from `.format(`
+ * matching, and that exclusion is the whole reason this file does not use the simpler regex.
+ * Self-maintaining: a new `const eur = new Intl.NumberFormat(...)` joins the set automatically.
+ */
+const CURRENCY_FORMATTERS = intlBindings('NumberFormat');
+
+/**
+ * Date formatters — `Intl.DateTimeFormat` bindings. These OVERRIDE the currency exclusion.
+ *
+ * ⚑⚑ THIS EXISTS TO FIX A COLLISION IN THE EXCLUSION ABOVE, and the collision was the SAME
+ * FAILURE DIRECTION as the hole this whole commit closes — a receiver wrongly EXCLUDED, going
+ * silently green (Sec, 2026-08-06). Because the scan is tree-wide and flat, one name bound to
+ * different constructors in different modules collapses into a single verdict:
+ *
+ *     // file A                                  // file B
+ *     const fmt = new Intl.NumberFormat(...)     const fmt = new Intl.DateTimeFormat(...)
+ *                                                {fmt.format(new Date(a.closed_at))}   // was EXCLUDED
+ *
+ * The name is in CURRENCY_FORMATTERS from file A, so file B's genuine closure-date render was
+ * skipped everywhere. Generic names — `fmt`, `formatter`, `df` — are exactly where this comes from.
+ *
+ * ⚠ AND IT CONTRADICTED THE RULE STATED ONE FUNCTION BELOW IT: *"an unresolvable receiver
+ * COUNTS. Fail toward flagging."* An UNRESOLVABLE receiver failed toward flagging; a COLLIDED
+ * one failed toward excluding. Two receivers the check cannot confidently classify, resolved in
+ * opposite directions, with the silent one unstated. Date-binding now WINS over currency-binding:
+ * a name ever bound to a DateTimeFormat anywhere is never excluded anywhere, which puts both
+ * unclassifiable cases on the same side — the flagging side.
+ *
+ * Latent when found (measured: zero bound DateTimeFormats in the tree today) — which is exactly
+ * the status the `.format(` hole itself had when it was raised. Latent-and-idiomatic is the
+ * category this file has now been wrong about twice; it is not a reason to defer.
+ */
+const DATE_FORMATTERS = intlBindings('DateTimeFormat');
+
+/**
+ * Does this line format a DATE?
+ *
+ * ⚑ THE `.format(` LEG EXISTS BECAUSE ITS ABSENCE WAS A LIVE HOLE (Sec, follow-up to the
+ * original battery). A module-scope formatter escapes a direct-call-only check completely —
+ * the DECLARATION line matches `Intl.DateTimeFormat` but has no `closed_at` within the window,
+ * and the USE line has the `closed_at` but calls `.format(`, which was not matched at all:
+ *
+ *     const closedFmt = new Intl.DateTimeFormat('en-US', { dateStyle: 'medium' });  // no closed_at near
+ *     ...
+ *     {closedFmt.format(new Date(a.closed_at))}                                     // was not a match
+ *
+ * Neither line was an offender, so the regression shipped green. And it is not a hypothetical
+ * idiom: `usd` / `usdSigned` are exactly this shape in NavCompositionTable.svelte and
+ * routes/+page.svelte, so a contributor reaching for the ESTABLISHED pattern lands in the hole.
+ *
+ * ⚑⚑ WHY NOT SIMPLY ADD `\.format\s*\(` TO THE ALTERNATION — MEASURED, and the measurement is
+ * the reason this function exists instead of one more `|` character. That form is clean against
+ * the tree as it stands today, but only by luck: it reds on the first CORRECT use of the
+ * currency formatter near a closure guard, which is idiomatic and which someone will write:
+ *
+ *     {#if a.closed_at}
+ *       <span class="bal">{usd.format(a.balance)}</span>     <-- correct code; naive form REDS
+ *
+ * Measured 2026-08-06 by planting exactly that: the naive alternation reports it as an
+ * offender; this receiver-aware form stays clean. **A check that reds on correct code gets
+ * deleted, and it takes the real assertion with it** — the same rule that kept this from being
+ * file-scoped in the first place, applied a second time to its own hardening.
+ *
+ * The exclusion is STRUCTURAL, not a name allowlist: `usd` is skipped because it is bound to a
+ * NumberFormat, and a NumberFormat cannot render a date. Nothing here depends on what it is called.
+ *
+ * `currency` and `dates` are PARAMETERS, defaulted, so the self-test below can exercise this
+ * logic against fixed sets instead of against whatever the tree happens to contain today.
+ * Otherwise renaming `usd` would red the self-test — the very failure mode this was designed around.
+ */
+function formatsDate(
+	line: string,
+	currency: Set<string> = CURRENCY_FORMATTERS,
+	dates: Set<string> = DATE_FORMATTERS
+): boolean {
+	if (DIRECT_FORMAT.test(line)) return true;
+	if (!/\.format\s*\(/.test(line)) return false;
+	// Inline currency construction: `new Intl.NumberFormat(...).format(n)` — no binding to look up.
+	if (/Intl\.NumberFormat/.test(line)) return false;
+	const receivers = [...line.matchAll(/([A-Za-z_$][\w$]*)\s*\.format\s*\(/g)].map((m) => m[1]);
+	// A receiver is excluded ONLY if it is bound to a currency formatter AND never to a date one.
+	// The `!dates.has(r)` conjunct is the collision fix: a name bound to DateTimeFormat ANYWHERE
+	// outranks a NumberFormat binding elsewhere, so a flat tree-wide namespace cannot silently
+	// exclude a real closure render.
+	const excluded = (r: string) => currency.has(r) && !dates.has(r);
+	// An unresolvable receiver — a chained call, a property access — COUNTS. Fail toward flagging:
+	// a false red on an exotic shape is reviewable, a false green is the hole this leg closes.
+	// A COLLIDED receiver now lands on this same side, which it did not before.
+	return receivers.length === 0 || receivers.some((r) => !excluded(r));
+}
 
 /** Files allowed to format a closure date. Exactly one, and that is the invariant. */
 const FORMATTER = 'lib/account-display.ts';
@@ -269,9 +428,68 @@ describe('(T4) closure dates are formatted in exactly one place — ADR-043 all-
 	// template expression and the immediate `const d = new Date(a.closed_at)` hop, which are the
 	// two shapes the regression actually takes.
 	//
-	// `toISOString` is NOT in FORMAT_CALL: it is zone-invariant by definition, so it cannot
+	// `toISOString` is NOT in DIRECT_FORMAT: it is zone-invariant by definition, so it cannot
 	// produce this defect, and including it would red on the schema validators for no gain.
 	// A check that reds on correct code gets deleted, and it takes the real assertion with it.
+	//
+	// See `formatsDate` for the `.format(` leg and why it is receiver-aware rather than a plain
+	// alternation — that distinction was measured, not assumed.
+
+	// THE INSTRUMENT'S OWN SELF-TEST — the (T0) role for the source-scanning half.
+	//
+	// The negative assertion below reports "clean" over an empty offender list, and an empty list
+	// is produced BOTH by a healthy tree and by a `formatsDate` that has stopped matching anything.
+	// Those are indistinguishable from the outside, so the discriminating power is asserted here
+	// directly rather than inferred from a green. Every row is a shape this check exists to
+	// classify, including the two it must NOT flag.
+	it('formatsDate discriminates — without this, a clean offender list proves nothing', () => {
+		const verdicts = [
+			// must MATCH — the shapes that can render a date
+			["return d.toLocaleString('en-US', { dateStyle: 'medium' });", true],
+			['{new Date(a.closed_at).toLocaleDateString("en-US")}', true],
+			["new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(d)", true],
+			['{closedFmt.format(new Date(a.closed_at))}', true], // the hole this leg closes
+			['{makeFmt().format(d)}', true], // unresolvable receiver -> fail toward flagging
+			// must NOT match — correct code that would make this check deletable
+			['<td class="num">{usd.format(g.subtotal)}</td>', false],
+			["{new Intl.NumberFormat('en-US').format(n)}", false],
+			['const open = accounts.filter((a) => a.closed_at === null);', false]
+		] as const;
+		// Fixed sets, NOT the tree's: renaming `usd` in the app must not red this self-test.
+		const currency = new Set(['usd', 'usdSigned']);
+		const dates = new Set(['closedFmt']);
+		for (const [line, expected] of verdicts) {
+			expect({ line, matches: formatsDate(line, currency, dates) }).toEqual({
+				line,
+				matches: expected
+			});
+		}
+
+		// THE COLLISION CASE — one name bound to BOTH constructors in different modules. The flat
+		// tree-wide namespace cannot tell them apart, so the date binding must WIN. Without the
+		// `!dates.has(r)` conjunct this row returns false and a real closure render goes unflagged.
+		expect(formatsDate('{fmt.format(new Date(a.closed_at))}', new Set(['fmt']), new Set(['fmt']))).toBe(
+			true
+		);
+
+		// ⚑ THE SCAN'S PRECONDITION — asserted NON-EMPTY, never PINNED.
+		//   My original reasoning stopped one step short and Sec carried it the rest of the way.
+		//   Correct half: a silently-empty scan cannot produce a false GREEN — every `.format(`
+		//   would count, so the check only gets STRICTER. That half still holds.
+		//   MISSING half: "stricter" is not free. A broken scan turns every legitimate
+		//   `usd.format(...)` near a `closed_at` into an offender — a false RED on correct code,
+		//   which is the precise condition this file names as what *"gets this check deleted, and
+		//   it takes the real assertion with it."* The cascade is also indistinguishable from the
+		//   invariant genuinely failing, so the reader cannot tell a broken instrument from a real
+		//   violation. Non-empty converts that into ONE named failure. It cannot red on a third
+		//   currency formatter, so it is not the inventory pin I rejected — it is the same move as
+		//   (T0) and the source-walk guard: assert the instrument found SOMETHING, not WHAT.
+		//   >> THE RULE, AMENDED (Sec's wording, adopted): assert what prevents false greens;
+		//      leave what can only announce itself — UNLESS what it announces is indistinguishable
+		//      from the invariant failing.
+		expect(CURRENCY_FORMATTERS.size).toBeGreaterThan(0);
+	});
+
 	it('no closure date is formatted outside account-display.ts', () => {
 		const WINDOW = 2;
 		const offenders: string[] = [];
@@ -281,7 +499,7 @@ describe('(T4) closure dates are formatted in exactly one place — ADR-043 all-
 			if (name === FORMATTER || /\.(test|spec)\.ts$/.test(name)) continue;
 			const lines = stripComments(readFileSync(file, 'utf8')).split('\n');
 			lines.forEach((line, i) => {
-				if (!FORMAT_CALL.test(line)) return;
+				if (!formatsDate(line)) return;
 				const from = Math.max(0, i - WINDOW);
 				const near = lines.slice(from, i + WINDOW + 1).join('\n');
 				if (CLOSED_AT.test(near)) offenders.push(`${name}:${i + 1}`);
