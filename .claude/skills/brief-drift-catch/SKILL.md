@@ -1,6 +1,6 @@
 ---
 name: brief-drift-catch
-description: Mandatory pre-reading before forwarding a teammate brief, a Sec/QA finding, or a v1 draft to F/CTO ratify. Codifies the verbatim-source cross-check (read the cited Lock/ADR/§-anchor VERBATIM before relaying — catches paraphrase / citation-attribution / quote-completeness / count drift) + the 2-teammate independent verification pattern for high-stakes brief-vs-canonical boundaries. CoS/team-lead-owned meta-skill.
+description: Mandatory pre-reading before forwarding a teammate brief, a Sec/QA finding, or a v1 draft to F/CTO ratify. Codifies the verbatim-source cross-check (read the cited Lock/ADR/§-anchor VERBATIM before relaying — catches paraphrase / citation-attribution / quote-completeness / count drift) + the 2-teammate independent verification pattern for high-stakes brief-vs-canonical boundaries + sweep-completeness (CP9 — re-grep the file, never read the diff hunk; over-match and filter; bound the claim's predicate not just its location) + the rule that a correctness claim must not forward-reference the mechanism that makes it true. Also invoke when a fix is a sweep across many surfaces rather than a single edit. CoS/team-lead-owned meta-skill.
 user-invocable: true
 allowed-tools:
   - Read
@@ -21,7 +21,7 @@ mosko-fintech meta-skill (net-new; not a template adaptation). It operationalize
 
 ## Discipline 1 — verbatim-source cross-check
 
-Before forwarding any claim that cites canonical wording, **read the cited source verbatim** (don't trust the paraphrase, even your own). Grep the anchor, open the Lock, count the instances. Then compare against the claim. This catches five drift classes:
+Before forwarding any claim that cites canonical wording, **read the cited source verbatim** (don't trust the paraphrase, even your own). Grep the anchor, open the Lock, count the instances. Then compare against the claim. The drift classes it catches — **the table grows; it deliberately carries no total**:
 
 | Drift class | What it looks like | Live example |
 |---|---|---|
@@ -30,6 +30,11 @@ Before forwarding any claim that cites canonical wording, **read the cited sourc
 | **Quote-completeness drift** | Dropped word/phrase from a verbatim quote | PR-B dropped prepositional phrase from a PR #66 quote |
 | **Header/TOC-vs-body drift** | Stale TOC or count vs the body it summarizes | row #7 SECURITY HTML stale TOC |
 | **Count / number drift** | Wrong instance count or mod number | Step 5: `api/` labeled Lock-14 mass-assignment as mod #1; canonical is #1 typed-input / #2 mass-assignment |
+| **Sound-quote / false-gloss** | A **byte-exact** quote of a source whose **claim is false**, plus a conclusion drawn from it | [ADR-043](../../../DECISIONS.md#adr-043) reason 1 quoted `059` exactly — *"V1 consumers pass CURRENT_DATE"* — and **zero callers did**. Every verbatim check passed |
+
+> **⚠ Sound-quote / false-gloss defeats this discipline as written, which is why it is the row worth reading twice.** The quote matches, the citation resolves, the attribution is right — **and the conclusion is still false.** Catching it requires verifying the **cited source's CLAIM against measurement**, not the quotation against the source. **A verbatim check confirms fidelity, never truth.** Routed here by ADR-043, whose own text names this skill as the durable home.
+>
+> It also has a second failure axis worth separating: in that case the gloss *"so both sides sit on one clock"* **did not follow even if the quoted clause had been true** — the cited Lock guaranteed the date was *server*-derived and said nothing about *which server*. **Fixing the quotation alone would have produced a fourth false description.** So check the **inference** as well as the **premise**; they fail independently.
 
 **Procedure:**
 1. Identify every canonical citation in the brief/finding/draft (Lock N, ADR-NN Decision M, `§x.y`, "K instances", "mod #N").
@@ -46,6 +51,45 @@ For a **high-stakes brief-vs-canonical boundary** (a one-way door, a §10 ledger
 - Live example: Wave 5 — PM caught a team-lead Lock-14 `5→7` dispatch drift; Architect v2 **independently** caught the same drift ~30 sec later. Two-teammate convergence validated the discipline extends beyond Sec-load-bearing surfaces to architectural housekeeping.
 
 Reserve this for genuinely load-bearing boundaries — most claims need only Discipline 1. Use the cost (a second dispatch) only where a wrong promotion is expensive to unwind.
+
+## Discipline 3 — sweep completeness (CP9)
+
+When a fix is a **sweep** — one claim copied to many places — the thing to verify is not each edit but **that the class is closed.** Two rules, and they are the same failure on different axes.
+
+**CP9 — a reviewed-adjacent line reads as reviewed. Re-grep the file; do not read the diff hunk.**
+The lines most likely to escape a sweep are the ones **sitting inside the changed hunk**, because **proximity to a fix is indistinguishable from having been fixed.** Live case: a stale figure survived at `spawn-sec-joint-review` **one bullet below** a line the same PR corrected — it appeared in the diff as *context*, so every reviewer saw it and read it as handled.
+
+**Over-match and filter by hand** (per the CP7 formulation — referenced, not restated). An exact-string sweep **cannot find a claim expressed differently**, and that limitation is **invisible from inside the result**. Live case: an exact sweep returned 5 files / 7 sites; an over-matching probe found **6 files / 11 sites**, the extra being a *growth narrative* whose terminal figure was not the hunted phrase. The over-match returned two false positives, which is the correct trade — **over-matching is auditable by hand; under-matching is not auditable at all, and its silence reads as absence.**
+
+**Then state the sweep's scope as a predicate, not just a location.** *"Complete across these files"* invites the broad reading *"these files no longer carry X"* — which may be false about a file you just edited. **Bound what, not only where**, and name what is deliberately excluded **with the reason**, so the exclusion is a decision rather than a gap.
+
+## What a correctness claim may cite
+
+***A document may forward-reference a document; a CORRECTNESS CLAIM must not forward-reference the mechanism that makes it true.***
+
+Routed here out of `apply-migration`, which keeps only the catalog-comment case. The general form governs ADRs, briefs, and **merge order**: a ratified-sounding claim whose named support is not yet in the repo is right **by accident** until the other half lands, and nothing signals the gap.
+
+- **The fix is not to delay the claim — it is to state the dependency as the PROPERTY, naming the artifact as its current instrument.** *"…holds iff the session TimeZone is UTC, declared by `061`"* is true before and after `061` merges, and survives the instrument being renumbered or replaced.
+- **Distinguish this from a dangling link.** A dangling link is a **discoverability** problem that heals on merge; a forward-referenced correctness claim is a **reasoning trap**. Conflating them produces an over-correction — they warrant different responses.
+
+## Candidate — NOT YET RULED: authorial proximity
+
+**Flagged as a candidate, not a checkpoint.** It clears the CP bar **less cleanly** than CP9 and is recorded here so Sec can rule the substance with that stated in view — the same route CP8 and CP9 took.
+
+> **The prose most likely to violate a new rule is the prose written to JUSTIFY it.**
+
+Three independent arrivals in one day, from three agents, which is what argues it is a property of the activity rather than of any author. Instances: an over-correction warning violated by its author's own re-pointing reasoning; a just-added carve-out violated by its author's own exclusion rationale; a demotion rationale whose claim was checked against one subject and never against the file it was written in.
+
+**Why it matters:** it is **predictive**, not merely cautionary — it names *where to look first*. Operationally: **after authoring a rule, re-audit the same document for violations of it, beginning with the passages that motivate it.**
+
+**Relation to CP9 — the same failure on a second axis:**
+
+| | Deceiving proximity |
+|---|---|
+| **CP9** | **Spatial** — adjacent-to-fixed reads as fixed |
+| **This** | **Authorial** — written-by-the-rule's-author reads as compliant |
+
+⚠ **Stated weakness, which is the reason it is a candidate.** CP5 / CP7 / CP9 are **greppable**; *"re-audit with intent"* is not, so it clears **cheap** and **re-runnable** but only partly clears **mechanical**. **The proposed form that may carry it over the bar is narrower and is not the general instruction:** a specific new rule usually has a **greppable signature** — a count, a tense, a citation shape — so the checkpoint would be ***derive a greppable signature for the rule you just authored, and run it***. That converts *"be careful"* into *"produce a check,"* which is the bar's actual shape. **If Sec rules against it, that is the correct outcome; it must not inherit CP9's authority by arriving alongside it.**
 
 ## Where to apply (the boundary hooks)
 
