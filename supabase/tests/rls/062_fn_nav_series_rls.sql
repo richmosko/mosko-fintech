@@ -137,15 +137,17 @@ begin;
 -- shared cross-tenant verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
--- plan = 57 : 46 property assertions (I6 X3 M3 P6 G4 E3 B5 L6 N3 Z3 A4) + the 11-leg (V)
--- inversion block (V1 V1b V2 V3 V3b V4 V5 V6 V7 V8 V9). Recorded as an arithmetic
--- decomposition so a silent plan-edit is visible in review as a changed sum.
--- ⚠ DO NOT "fix" this by lowering it to a reported figure: (V1)–(V7) run inside savepoints,
+-- plan = 65 : 48 property assertions (I6 X3 M3 P6 G4 E3 B5 L6 N3 Z4 A5) + the 17-leg (V)
+-- inversion block (V1 V1b V2 V3 V3b V4 V5 V6 V7 V8 V9 V10a V10b V10c V11 V12 V12b).
+-- Recorded as an arithmetic decomposition so a silent plan-edit shows up in review as a
+-- changed sum. Grew 57 -> 65 at the Sec AMBER round: +(Z4) differential zone-invariance,
+-- +(A5) the service_role EXECUTE negative, and their six inversion controls.
+-- ⚠ DO NOT "fix" this by lowering it to a reported figure: (V1)–(V12b) run inside savepoints,
 -- and a rolled-back savepoint REWINDS pgTAP's plan counter while the emitted numbering
--- marches on (rls/DESIGN.md §9 harness note). 57 reconciles here only because (V8)/(V9) sit
+-- marches on (rls/DESIGN.md §9 harness note). 65 reconciles here only because (V8)/(V9) sit
 -- OUTSIDE any savepoint and re-set the counter to their own numbers — that is the structural
 -- guard, not a coincidence, and moving (V9) off the end would silently re-break it.
-select plan(57);
+select plan(65);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb, _rls.tenant_c() as tc \gset
@@ -439,10 +441,62 @@ select ok(
     where n.nspname = 'pfin' and p.proname = 'fn_nav_series'),
   '(Z2) ⭐ …and no `time zone` in the SPELLED-OUT form either. Asserted separately and deliberately: `timestamptz` and `timestamp with time zone` are the SAME TYPE under two names, so a (Z1)-only fence — which is what the migration header specifies — is defeated by an editor who writes the canonical spelling. The alias is not a synonym a regex knows about');
 select ok(
-  (select p.prosrc !~* '\mcurrent_date\M|\mnow\s*\(|\mlocaltimestamp\M|\mcurrent_timestamp\M|\mstatement_timestamp\s*\(|\mclock_timestamp\s*\('
+  (select p.prosrc !~* '\mcurrent_date\M|\mcurrent_timestamp\M|\mlocaltimestamp\M|\mlocaltime\M|\mnow\s*\(|\mstatement_timestamp\s*\(|\mclock_timestamp\s*\(|\mtransaction_timestamp\s*\(|\mtimezone\s*\(|''(now|today|tomorrow|yesterday)'''
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'pfin' and p.proname = 'fn_nav_series'),
-  '(Z3) ⭐ …and no CLOCK FUNCTION of any kind. The migration header instructs a future editor never to introduce current_date / now() / localtimestamp "or any timestamptz cast" — but item 10 as specified fences only the TYPE. A clock call needs no timestamptz token to make this surface a party to the zone decision: `current_date` alone is evaluated in the session TimeZone. This assertion is what makes that instruction MECHANICAL rather than an exhortation, which is the migration''s own stated rule for fences');
+  '(Z3) …and no CLOCK FUNCTION or zone-dependent SPECIAL LITERAL. The migration header instructs a future editor never to introduce current_date / now() / localtimestamp "or any timestamptz cast" — but item 10 as specified fences only the TYPE, and a clock call needs no timestamptz token to make this surface a party to the zone decision. ⚠ READ (Z4) BEFORE TRUSTING THIS LEG: the list now also covers transaction_timestamp(), timezone() — which (Z2) misses because it has NO SPACE — and the special literals ''now''/''today''/''tomorrow''/''yesterday'', all four verified genuinely zone-dependent. But AN ENUMERATION IS STILL EXHORTATION WEARING A REGEX. It closes the evasions we know about and will not close the next one. (Z4) is the leg that ends this class; this one is the cheap fast fence in front of it');
+
+-- ---------------------------------------------------------------------
+-- (Z4) ⭐ THE DIFFERENTIAL ZONE LEG — measures the PROPERTY, not a proxy for it.
+--   (Z1)–(Z3) are TEXT fences: they enumerate tokens a zone-dependent body might
+--   contain. Every such list is an ENUMERATION, and an enumeration is exhortation
+--   wearing a regex — it closes the evasions already thought of. Sec found four that
+--   pass all three ('today'::date · 'now'::timestamp · transaction_timestamp() ·
+--   timezone(...) with no space), each verified genuinely zone-dependent. Patching the
+--   list would have closed those four and not the fifth.
+--   THIS LEG OBSERVES ZONE-INVARIANCE ITSELF: run the function under two extreme
+--   session TimeZones — Kiritimati (UTC+14) and Midway (UTC-11), 25 hours apart, so
+--   they straddle a calendar day for most of the UTC day — against the identical
+--   fixture, and assert BYTE-IDENTICAL output. Nothing a future editor writes can
+--   evade it, because it does not care HOW the body might read the clock.
+--   ⚠ AND IT IS PROVEN NON-BLIND: a suite that passes under every value of a variable
+--   is not robust to that variable, it is BLIND to it (rls/DESIGN.md §12) — so the
+--   instrument is only meaningful because (V10) makes it go RED against a body that
+--   IS zone-dependent. Without that control this leg would be indistinguishable from
+--   a test that never reaches the variable at all.
+--   Local helper (this file only; _rls is created per-test by the \ir and rolls back).
+--   Follows the _rls.count_as model: called at role=postgres, switches tenant
+--   internally, restores role=postgres — `_rls` grants no USAGE to authenticated.
+create or replace function _rls.qa219_series_digest(p_tenant uuid) returns text
+  language plpgsql as $qd$
+declare v text;
+begin
+  perform _rls.set_tenant(p_tenant);
+  select coalesce(string_agg(g || ':' || pd::text || '/' || nv::text || '/' || cd::text, ' ' order by g, pd), '<empty>')
+    into v
+  from (
+    select 'M'::text as g, point_date as pd, nav_value as nv, checkpoint_date as cd
+      from pfin.fn_nav_series('monthly','2026-01-01','2026-03-31')
+    union all
+    select 'W', point_date, nav_value, checkpoint_date
+      from pfin.fn_nav_series('weekly','2026-01-01','2026-02-28')
+    union all
+    select 'D', point_date, nav_value, checkpoint_date
+      from pfin.fn_nav_series('daily','2026-02-25','2026-03-02')
+  ) t;
+  perform set_config('role', 'postgres', true);
+  return v;
+end;
+$qd$;
+
+set local TimeZone = 'Pacific/Kiritimati';
+select _rls.qa219_series_digest(:'ta'::uuid) as z_east \gset
+set local TimeZone = 'Pacific/Midway';
+select _rls.qa219_series_digest(:'ta'::uuid) as z_west \gset
+reset TimeZone;
+select is(
+  :'z_east'::text, :'z_west'::text,
+  '(Z4) ⭐⭐ ZONE-INVARIANCE MEASURED DIRECTLY: the full monthly+weekly+daily output is BYTE-IDENTICAL under Pacific/Kiritimati (UTC+14) and Pacific/Midway (UTC-11) — 25 hours apart, so they sit on different calendar days for most of the UTC day. This asserts the PROPERTY (Z1)-(Z3) only approximate with token lists, and it is immune to evasions nobody has thought of yet, because it never asks HOW the body reads a clock. All three granularities are covered in one digest, so a zone dependency reachable from only one date-arithmetic path still fires. Teeth proven at (V10) — without that control this green would be zone-BLINDNESS, not zone-independence');
 
 -- =====================================================================
 -- (A) item 11 — ADR-040 ASSEMBLED-STATEMENT DISCIPLINE. The EXACT production statement
@@ -469,6 +523,9 @@ select ok(
 select ok(
   not has_function_privilege('public', 'pfin.fn_nav_series(text,date,date)', 'execute'),
   '(A4) …and PUBLIC does NOT. `create function` grants EXECUTE to PUBLIC by default, so the revoke is load-bearing and its removal is silent: every assertion in this file would stay green while the function became callable by `anon`');
+select ok(
+  not has_function_privilege('service_role', 'pfin.fn_nav_series(text,date,date)', 'execute'),
+  '(A5) ⭐ …and neither does `service_role` — THE HIGHEST-SEVERITY NEGATIVE, and the one (A4)''s own rationale ("its removal is silent") argues for most strongly. service_role is the ONLY role in this cluster with rolbypassrls = t, so an EXECUTE grant to it turns this INVOKER helper into a cross-tenant read of EVERY tenant''s net-worth sequence — the exact datum SD-24 is rated HIGH to protect. TODAY IT IS FENCED TWICE: no EXECUTE here, and 054 grants service_role only a COLUMN-LEVEL select (users_id, nav_date) that withholds nav_value. This leg pins the FIRST fence, which is the one a broad `grant execute on all functions in schema pfin to service_role` would silently dissolve. See (V12) for the measured two-grant world');
 
 -- =====================================================================
 -- (V) ⭐ INVERSION BLOCK — the battery testing the battery.
@@ -625,6 +682,85 @@ select ok(
   '(V7-CLOCK-FENCE-IS-NOT-COVERED-BY-TYPE-FENCES) ⭐ …and the CLOCK fence is not covered by either type fence, PROVEN: a body using `current_date` — evaluated in the session TimeZone, and the exact token the migration header forbids a future editor — carries NEITHER spelling of the zone-aware type. (Z1) AND (Z2) both stay green on it; only (Z3) fires. This is why (Z3) exists');
 select set_config('role', 'postgres', true);
 rollback to savepoint v_clock;
+
+-- ---- V/Z4: is the DIFFERENTIAL leg non-blind where the TEXT fences are blind? ----
+savepoint v_zonediff;
+create or replace function pfin.fn_nav_series(p_granularity text, p_start_date date, p_end_date date)
+returns table (point_date date, nav_value numeric, checkpoint_date date)
+language plpgsql stable security invoker set search_path = '' as $sab$
+begin
+  -- Genuinely zone-dependent AND re-evaluated per call. transaction_timestamp() is
+  -- STABLE, so it names the SAME INSTANT in both probes below — the only thing varying
+  -- between them is the session TimeZone, which is what isolates the variable.
+  return query select transaction_timestamp()::date, 1::numeric, p_end_date;
+end;
+$sab$;
+select ok(
+  (select p.prosrc !~* 'timestamptz'
+      and p.prosrc !~* 'with time zone|time zone'
+      and p.prosrc ~* '\mtransaction_timestamp\s*\('
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'pfin' and p.proname = 'fn_nav_series'),
+  '(V10a-TYPE-FENCES-ARE-BLIND-TO-THIS) ⚠ the body is now GENUINELY ZONE-DEPENDENT, and BOTH TYPE FENCES REPORT CLEAN on it: no `timestamptz` (Z1), no `time zone` (Z2). Those two are exactly what 062''s item 10 specifies. Only (Z3) catches it, and only because someone had already thought of transaction_timestamp() and put it in a list — which is the whole problem with (Z3). ⚑ STATED AS WHAT IS TRUE rather than the stronger "all three fences are blind": the first draft of this leg used `''today''::date` to claim exactly that, and the claim was FALSE for a reason worth knowing — see (V10c). A false assertion is worse than a vacuous one (rls/DESIGN.md §8 rule 5)');
+set local TimeZone = 'Pacific/Kiritimati';
+select _rls.qa219_series_digest(:'ta'::uuid) as sab_east \gset
+set local TimeZone = 'Pacific/Midway';
+select _rls.qa219_series_digest(:'ta'::uuid) as sab_west \gset
+reset TimeZone;
+select isnt(
+  :'sab_east'::text, :'sab_west'::text,
+  '(V10b-DIFFERENTIAL-CATCHES-WHAT-TEXT-CANNOT) ⭐⭐ …and (Z4) FIRES on it: a body both TYPE fences passed produces DIFFERENT output under Kiritimati than under Midway. This is the justification for (Z4) existing — and it is what makes (Z4)''s green against the real 062 zone-INDEPENDENCE rather than zone-BLINDNESS. Invariance is evidence only once the instrument has been shown to vary (rls/DESIGN.md §12)');
+select set_config('role', 'postgres', true);
+rollback to savepoint v_zonediff;
+
+-- ---- V/Z4b: the LIMIT of the differential leg. Measured, not assumed. ----
+savepoint v_zonefold;
+create or replace function pfin.fn_nav_series(p_granularity text, p_start_date date, p_end_date date)
+returns table (point_date date, nav_value numeric, checkpoint_date date)
+language plpgsql stable security invoker set search_path = '' as $sab$
+begin
+  return query select 'today'::date, 1::numeric, p_end_date;
+end;
+$sab$;
+set local TimeZone = 'Pacific/Kiritimati';
+select _rls.qa219_series_digest(:'ta'::uuid) as fold_east \gset
+set local TimeZone = 'Pacific/Midway';
+select _rls.qa219_series_digest(:'ta'::uuid) as fold_west \gset
+reset TimeZone;
+select is(
+  :'fold_east'::text, :'fold_west'::text,
+  '(V10c-DIFFERENTIAL-CANNOT-SEE-A-FOLDED-LITERAL) ⚠⚠ THE LIMIT OF (Z4), AND THE REASON (Z3) IS NOT REDUNDANT. `''today''::date` inside a plpgsql body is CONST-FOLDED INTO THE CACHED PLAN at first call, so both probes return the SAME date even though the session zone changed between them — measured: 2026-08-08 under BOTH. This assertion therefore asserts that (Z4) is BLIND here, which is the honest statement of an instrument''s limit. The defect is still real: the plan cache is per SESSION, so a new backend re-plans and gets a different day — it drifts across restarts and deploys while looking stable in any single test. >> THE TWO FENCES ARE COMPLEMENTARY, NOT LAYERED: (Z3)''s literal arm catches what (Z4) structurally cannot see, and (Z4) catches the runtime evasions (Z3) can never finish enumerating. NEITHER SUBSUMES THE OTHER, so neither may be deleted as redundant. <<');
+select set_config('role', 'postgres', true);
+rollback to savepoint v_zonefold;
+
+-- ---- V/A5: the service_role negative, and Sec's measured two-grant residue. ----
+savepoint v_svc;
+grant execute on function pfin.fn_nav_series(text,date,date) to service_role;
+select ok(
+  has_function_privilege('service_role', 'pfin.fn_nav_series(text,date,date)', 'execute'),
+  '(V11-SERVICE-ROLE-NEGATIVE-HAS-TEETH) (A5) is not vacuous: granting EXECUTE to service_role flips it. Worth pinning because an absence assertion whose subject can never appear proves nothing (rls/DESIGN.md §10), and `has_function_privilege` against a role that simply never holds grants would look identical to a real fence');
+-- The second grant is the one that completes Sec's hypothetical. 054 deliberately gives
+-- service_role only a COLUMN-LEVEL select (users_id, nav_date); the FULL-TABLE form below
+-- is the more common thing to write, and Sec's B9 ruling rejected it for exactly this reason.
+grant select on pfin.nav_daily to service_role;
+select set_config('role', 'service_role', true);
+-- ⚑ THE PROBE WINDOW IS CHOSEN, NOT ARBITRARY. fn_nav_series returns ONE row per period,
+--   so a leak can never surface as "several tenants' values in one result" — my first
+--   draft asserted exactly that and was wrong about the function's own shape. The
+--   observable signature of a bypassed fence here is that the series REACHES PAST the
+--   JWT subject's evidence. 2026-03-16..03-31 is the window where A has nothing at all
+--   ((X2) proves A gets 0 rows there) and B's 03-31 checkpoint is the unique global
+--   latest — so the leaked value is DETERMINISTIC rather than a tie-break coin-flip.
+select is(
+  (select count(*)::int from pfin.fn_nav_series('daily','2026-03-16','2026-03-31')),
+  16,
+  '(V12-TWO-GRANT-CROSS-TENANT-REACH) ⚠ SEC''S MEASURED RESIDUE, REPRODUCED AND KEPT AS A STANDING DEMONSTRATION OF A HYPOTHETICAL WORLD — not a claim about current state; per (A5) neither grant exists today. With BOTH plausible future grants in place (`grant execute on all functions in schema pfin to service_role` + the FULL-TABLE `grant select on pfin.nav_daily`), a service_role caller carrying tenant A''s JWT gets 16 daily points over a window where A HAS NO CHECKPOINTS AT ALL — (X2) asserts 0 rows there under a healthy fence. The series reached into another tenant''s data because service_role is rolbypassrls and 062 has no local predicate to fall back on');
+select is(
+  (select nav_value from pfin.fn_nav_series('daily','2026-03-16','2026-03-31') where point_date = '2026-03-31'),
+  5000::numeric,
+  '(V12b-TWO-GRANT-LEAKED-VALUE-IS-IDENTIFIED) …and the leaked datum is named: 5000 is B''s 2026-03-31 checkpoint, returned to a caller authenticated as A. Asserted on the VALUE and not only on (V12)''s cardinality, so the leak is identified rather than merely counted. THE POINT FOR REVIEW: the two grants are individually reasonable, land in different PRs, and are jointly a cross-tenant disclosure of the datum SD-24 is rated HIGH to protect — neither review necessarily sees the other. That is why (A5) is a merge-gate assertion and why widening 054''s column grant is Sec joint-review-mandatory');
+select set_config('role', 'postgres', true);
+rollback to savepoint v_svc;
 
 -- ---- V/final: restoration, asserted rather than assumed. NOT in a savepoint. ----
 select is(
