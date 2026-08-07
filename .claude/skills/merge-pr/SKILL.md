@@ -49,6 +49,19 @@ gh pr merge <pr-num> --merge --delete-branch
 
 `--merge` preserves the `Merge pull request #N from …` history `main` uses. `--delete-branch` removes the remote branch. **Do not** use `--squash` or `--rebase` unless the F/CTO explicitly asks.
 
+> **`gh pr merge` is NOT subject to the `workflow`-scope restriction — MEASURED 2026-08-06.**
+> A PR modifying `.github/workflows/` merged cleanly on a token carrying
+> `admin:public_key, gist, read:org, repo` and **no `workflow` scope**: PR #330
+> (`.github/workflows/security-scan.yml`, +106/-0) → `gh pr merge --merge` → exit 0,
+> merge commit `7d13568`. **A workflow-modifying PR does not need a re-scoped token to merge.**
+>
+> ⚠ **This says nothing about pushes, and the two must not be conflated.** A `git push`
+> touching `.github/workflows/` over an **HTTPS** remote authenticated by that same OAuth
+> token **is** refused — see `/finish-doc-update`. Same token, different operation, opposite
+> answer. Recorded as a measurement rather than left as an assumption in either direction:
+> the question was open long enough to be worth settling, and a warning about an unverified
+> mechanism would have been the wrong way to close it.
+
 ### 3. Sync local main (over SSH)
 
 **SSH is the working path — pull plainly.**
