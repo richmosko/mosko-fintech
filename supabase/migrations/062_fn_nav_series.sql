@@ -174,10 +174,11 @@
 --   names them freely; `prosrc` excludes everything above the $$ delimiter,
 --   which is exactly why the discussion lives up here.
 --   ⚠ MEASURED, and recorded because it is the reusable part. The same root
---   trap was hit NINE TIMES across this surface — five by the author of
+--   trap was hit TEN TIMES across this surface — five by the author of
 --   the rule against it, one by the reviewer who caught the fifth, one in
 --   the DESIGN both of them agreed on, and two found by Sec at joint-review
---   AFTER all of the above had been fixed. THAT is what makes the lesson general
+--   AFTER all of the above had been fixed, and one by Sec against ITSELF.
+--   THAT is what makes the lesson general
 --   rather than anecdotal: knowing the rule demonstrably does not confer
 --   immunity to it.
 --     (1) the fence itself — the reason the valuation function is discussed
@@ -311,6 +312,30 @@
 --            OWN IDIOM. A defect can be fully understood and still be fixed
 --            with a bigger instance of itself, because the idiom that produced
 --            it is the one you reach for while fixing it. <<
+--    (10) THE REVIEWER WAS NOT EXEMPT EITHER, and this one is recorded at Sec's
+--         own request because it is the family's purest form. TWO of Sec's four
+--         round-1 claims were WRONG, and QA established that BY MEASURING them
+--         rather than deferring to the reviewer who raised them. Sec's account
+--         of how the first happened is worth quoting rather than paraphrasing:
+--         >> "I ASKED A QUESTION THAT COULD NOT RETURN THE ROLES I HADN'T
+--            THOUGHT OF, AND READ ITS SILENCE AS ABSENCE." <<
+--         That is the whole family in one sentence: a query whose SHAPE
+--         excludes the candidates being hunted returns empty, and EMPTY READS
+--         AS PROOF OF ABSENCE. The instrument did not malfunction; it answered
+--         exactly what it was asked, and what it was asked was the wrong
+--         question. Sec named it as the same trap it had spent the review
+--         hunting in someone else's work.
+--         TWO THINGS TO CARRY, and the second is the load-bearing one:
+--           · A FOURTH DIAGNOSTIC QUESTION (below): "could this query have
+--             returned the thing I am about to claim is not there?"
+--           · AUTHORITY IS NOT EVIDENCE. The correction ran UPWARD — QA
+--             measured a reviewer's claim instead of accepting it, on a
+--             surface where the reviewer holds veto. Had QA deferred, two
+--             false findings would have been remediated into this file and
+--             the remedies would have looked like diligence. A review channel
+--             where findings flow only downhill cannot catch this, and it is
+--             the same failure as suppressing a correct finding — the channel
+--             degrades silently while everyone behaves impeccably.
 --         REMEDY (routed to DevOps, deliberately NOT built here — a migration
 --         is the wrong home for a repo-wide fence): a CI check asserting that
 --         every "(TAG)" cited in a migration resolves in its paired battery,
@@ -323,7 +348,7 @@
 --      you write it down). AND A SPECIFICATION IS ITSELF EXHORTATION UNTIL AN
 --      ASSERTION IMPLEMENTS IT: (5) happened because the rule was stated in one
 --      block and only partly encoded in another.
---   >> THE THREE DIAGNOSTIC QUESTIONS — the transferable part; the nine anecdotes
+--   >> THE FOUR DIAGNOSTIC QUESTIONS — the transferable part; the ten anecdotes
 --      above are disposable, these are not:
 --        · "CAN THIS CHECK EVER FAIL?" — catches an instrument that cannot
 --          observe the property at all (the rejected EXPLAIN fence: plpgsql
@@ -339,7 +364,14 @@
 --          a ledger TALLY in place of the enumeration). The proxy is almost
 --          always the cheaper thing to measure, which is why it gets reached
 --          for, and it agrees with the property right up until the moment the
---          two diverge — which is the only moment that mattered. <<
+--          two diverge — which is the only moment that mattered.
+--        · "COULD THIS QUERY HAVE RETURNED THE THING I AM ABOUT TO CLAIM IS
+--          NOT THERE?" — catches an instrument whose SHAPE excludes the answer
+--          (near-miss (10)). An empty result is only evidence of absence if the
+--          query could have contained the candidate. The instrument does not
+--          malfunction here: it answers exactly what it was asked, and silence
+--          is the most persuasive wrong answer there is, because it looks like
+--          a clean bill of health rather than like an error. <<
 --
 --   WHY THAT MATTERS SPECIFICALLY. `060`'s comment on pfin.account.closed_at
 --   records that `059` legalised past as-of dates and warns that a §2.1.2
@@ -366,10 +398,12 @@
 -- ----------------------------------------------------------------------------
 -- SERIES BOUNDS — the series never extends past evidence, in EITHER direction.
 --   · LOWER: a period whose end precedes the caller's FIRST checkpoint yields no
---     row at all (the lateral finds nothing at-or-before it). The chart begins
---     where the data begins; it does not begin at zero. A fabricated leading
---     zero is the exact defect Option A exists to avoid, and emitting one here
---     would reintroduce it from the other side.
+--     row at all — HELD BY THE EXPANSION CLAMP (`v_from`), which never generates
+--     such a day. The inner lateral is the fail-closed BACKSTOP, not the
+--     mechanism: post-clamp it never misses (measured). The chart begins where
+--     the data begins; it does not begin at zero. A fabricated leading zero is
+--     the exact defect Option A exists to avoid, and emitting one here would
+--     reintroduce it from the other side.
 --   · UPPER: no point is emitted beyond the caller's NEWEST checkpoint. Without
 --     this, a caller passing an end date in the future would get a FLAT LINE
 --     carried forward from the last checkpoint — reading as "net worth stopped
@@ -668,8 +702,13 @@ begin
     cp.nav_date
   from bounded
   -- CROSS JOIN LATERAL (inner semantics) is deliberate: a period with no
-  -- checkpoint at-or-before it produces NO ROW. That is the LOWER BOUND — the
-  -- chart begins where the data begins rather than at a fabricated zero.
+  -- checkpoint at-or-before it produces NO ROW.
+  -- ⚠ BUT THE CLAMP NOW HOLDS THE LOWER BOUND; this lateral is the FAIL-CLOSED
+  -- BACKSTOP. Post-clamp it never misses (measured) — so a comment attributing
+  -- the bound here would describe a path that cannot execute, and would mislead
+  -- exactly the reader most likely to act on it. NARROWING THE CLAMP RE-ARMS
+  -- this lateral as load-bearing and re-arms (B1)'s retired negative — see
+  -- (B6). Keep the inner semantics: they are what makes re-arming safe.
   cross join lateral (
     select nd.nav_value, nd.nav_date
     from pfin.nav_daily nd
