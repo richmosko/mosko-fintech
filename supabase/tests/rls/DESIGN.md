@@ -826,3 +826,131 @@ Until such a harness exists, the honest posture is the one above: two sole contr
 as such, plus `01_session_timezone.sql` — which asserts the CI stack's zone and **says in its
 own message that it cannot observe the deployment.** A narrow true claim beats a broad one that
 reads as covering production.
+
+---
+
+## 13. From the SELF-219 `062` round (2026-08-07) — what confident prose is worth
+
+Six corrections across one issue, every one of them found by **running something**. Not one
+was found by reading, and several had survived repeated careful reading by three parties.
+That distribution is the finding; the individual rules below are downstream of it.
+
+### Confident prose is not weak evidence of correctness — it is NO evidence, and it correlates with error
+
+The headline, and it indicts this document as much as anything else.
+
+Every correction in this round that cost a commit sat underneath **confident, specific,
+well-reasoned prose** — and in several cases the prose was the *reason* nobody looked:
+
+| what the prose said | what measurement said |
+|---|---|
+| `(G3)` "exactly 4 of the 6 points are stale", with the dates enumerated | **5** — the author counted the pre-checkpoint side and forgot carry-forward continues after |
+| `(V8)` "the sabotaged policy is BACK", asserted on `pg_policies` | `count(*)` is **1 in both the corrupted and restored worlds** — it could not tell them apart |
+| `(E3)` "names the specific wrong answer" a `$0` chart would show | asserted over a set `(E2)` already proved empty — **it cannot fail unless `(E2)` fails first** |
+| `062` item 10: fence "the zone-aware timestamp type's **name**" | `timestamp with time zone` and `timestamptz` are two names for one type — the fence passed over the canonical spelling |
+| `(B1)` "a LEFT JOIN would emit fabricated NULL/0 leading points" | after the clamp landed, **cross→left produces byte-identical output** — the claim had silently become false |
+| `(V10)` sabotage built to make the zone fence fire | `'today'::date` is **const-folded into the plpgsql plan cache** — it did not fire |
+
+> **A rich justification block is not evidence that the assertion beneath it is wired up**
+> (§10 already says this). The stronger claim this round supports: **confidence is
+> ANTI-correlated with having measured**, because the cases that feel obvious are exactly
+> the ones that get written down instead of run.
+
+Operationally: **when reviewing an assertion, read its message LAST.** Read the predicate,
+predict the result, then run it. The message is the author's hypothesis, and reading it first
+recruits you into it.
+
+### The better instrument does not subsume the cruder one
+
+`(Z4)` measures zone-invariance directly — run the function under two extreme session
+TimeZones against one fixture, assert byte-identical output. It is immune to evasions nobody
+has enumerated, and it looked like it retired `(Z3)`'s token deny-list entirely.
+
+**It does not.** `'today'::date` inside a plpgsql body is const-folded into the cached plan,
+so both probes return the same date and `(Z4)` is **structurally blind to it** — while `(Z3)`'s
+literal arm catches it outright. The defect is real: the plan cache is per-session, so it
+drifts across restarts and deploys while looking stable in any single test.
+
+> **A property test and an enumeration fence fail in DIFFERENT directions. Neither subsumes
+> the other, so neither may be deleted as redundant** — and the "better" test is exactly the
+> one that makes deleting the cruder one feel safe.
+
+Found only because the sabotage was **built and watched** rather than assumed to fire. Asserted
+in-file as `(V10c)`, which asserts the blindness, so the limit is a test rather than a caveat.
+
+### Re-derive what an assertion targets after ANY change that adds an early bound
+
+§9 records this for BEFORE-triggers in front of `WITH CHECK` conjuncts. It is more general,
+and this round produced a second mechanism with no trigger in sight.
+
+A clamp was added ahead of the day expansion, starting it at the caller's first visible
+checkpoint. Consequence: every generated period end now has a checkpoint at-or-before it, so
+the inner `CROSS JOIN LATERAL` **can never miss** — its inner-join semantics became
+extensionally identical to a LEFT JOIN on all reachable input, and `(B1)`'s stated negative
+became false while staying green. `(B2)` kept passing for an entirely different reason than
+the one its message gave.
+
+> **Any change that bounds an input EARLIER can silently move a downstream assertion's
+> mechanism. Green is not evidence the mechanism survived.**
+
+Remedy is §9's: prove it **declaratively** from `prosrc` (`(B6)`), and give the declarative
+leg its own teeth control (`(V13)`), since text assertions have no natural failure mode.
+
+### When a control fails CLOSED, corrupt it — do not delete it
+
+"Remove the control and see if the test notices" is valid falsification **only where removal
+fails open.** Postgres RLS fails closed: drop the policy and RLS default-denies, so every
+tenant including the owner sees zero rows, and a cross-tenant negative passes **on the
+nothing**. An absent fence cannot demonstrate a leak.
+
+Break it OPEN instead (`using (true)`). And keep the deleted-fence world as its own leg,
+**labelled as the vacuity it is** — it is the counter-example that stops the obvious method
+being re-derived later.
+
+Corollary measured the same round: the two modes are caught by **different halves** of a
+battery. Corruption fires the cross-tenant negatives; deletion fires only the positive
+"owner sees its own rows" legs. **The pairing is load-bearing** — deleting either half as
+redundant reopens one mode as undetectable.
+
+### An agent mid-write owes the tree a coherent state
+
+Shared-worktree concurrency, and the fourth diagnostic question to sit alongside the three in
+`062`'s header: **"is the thing I'm measuring even finished being written?"**
+
+Two agents partitioned by path (one owning `migrations/`, one owning `tests/`) cannot clobber
+each other — and that safety is precisely what removes any signal that intermediate states are
+public. A combined run against a half-written battery returned a hard error, and the natural
+reading was that the *other* agent's change had broken it. Both readings were true at once:
+the body change was innocent **and** the red was a genuine defect, already fixed in the window
+being measured.
+
+> **A red from a mid-edit artifact is indistinguishable from a red you caused.** Commit at
+> green — not at "green once the next leg lands."
+
+And the handoff form that makes this cheap: **state the ref AND the expected plan count in the
+same message.** A re-measurement that derives its own expected value from its own run cannot
+detect a plan-count drift. This is §8 rule 4 — print the pair, and check the pair is
+independent — applied to the channel between agents rather than inside a file.
+
+### Calibration table — this round
+
+| rule | +applications | +self-catches |
+|---|---|---|
+| build X and watch it go red (§10) | 4 | **4** (`G3`, `V8`, `E3`, and `V10`'s non-firing) |
+| absence is vacuous when the subject never existed (§10) | 2 | **2** (`V8`, `E3`) |
+| anchoring: anchor on the subject, not a co-occurring token | 1 | **1** (the `timestamptz` / `time zone` alias gap) |
+| print the pair — and check the pair is independent | 2 | **1** (the handoff ref+count form is the new application) |
+| count the predicates, then check each has a fixture | 1 | **1** (`L6`'s raise-site count, which held across a body change) |
+| confident prose is anti-correlated with measurement *(new)* | 6 | **5** |
+| the better instrument does not subsume the cruder one *(new)* | 1 | **1** |
+| re-derive the target after an early bound is added *(new)* | 1 | **1** |
+| corrupt a fail-closed control, do not delete it *(new)* | 1 | 0 — arrived as a **correction from the team lead**, not a self-catch |
+| an agent mid-write owes the tree a coherent state *(new)* | 1 | **1** |
+
+Note the one zero, and that it is honest: *corrupt-don't-delete* was **not** self-caught — it
+came in as a correction and is recorded that way. Per §8's own reading rule it sits at ONE
+application, so it is **UNTESTED, not miscalibrated**; leave it and use it.
+
+The load-bearing row is *build X and watch it go red* at 4/4. Every one of those four was an
+assertion its author had already written a confident explanation for. **That is the whole
+content of this section.**
