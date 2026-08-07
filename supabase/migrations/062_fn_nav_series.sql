@@ -117,14 +117,23 @@
 --      function returned the other tenant's rows and went RED; the
 --      redundant-predicate variant stayed GREEN over the removed fence. The
 --      omission is therefore load-bearing, and re-adding a "harmless" local
---      predicate would silently blind the battery. Enforced and re-proven on
---      every run at battery leg (V3). <<
+--      predicate would silently blind the battery. Re-proven on every run by
+--      TWO legs that must BOTH be cited, because they prove DIFFERENT halves:
+--        · (V1-FENCE-CORRUPTED-IS-DETECTED) — the battery CAN see a broken
+--          fence. Necessary, but on its own it says nothing about the predicate.
+--        · (V3-REDUNDANT-PREDICATE-WOULD-BLIND-US) — the predicate WOULD HAVE
+--          HIDDEN it. THIS is the leg that justifies the omission; citing only
+--          the first would point at evidence for a weaker claim than this block
+--          makes. <<
 --   A NOTE ON THE OTHER SABOTAGE, because it changes which legs are load-bearing:
 --   under a DROPPED policy (rather than one broken open) RLS default-denies and
 --   the cross-tenant NEGATIVE passes VACUOUSLY — only the paired POSITIVE legs
 --   fire. The two sabotage modes are caught by DIFFERENT HALVES of the battery,
 --   so deleting any positive leg as "redundant with the negative" silently
---   reopens one of them. See battery legs (V1)–(V4).
+--   reopens one of them. Demonstrated at (V4-FENCE-ABSENT-IS-VACUOUS) — which
+--   the battery labels, correctly, as a demonstration of VACUITY and NOT a proof
+--   of isolation. ⚠ NEVER CITE IT AS SUPPORT FOR THE FENCE WORKING; it is the
+--   worked example of a leg that passes while proving nothing.
 --
 --   AAL2 STEP-UP BACKSTOP — INHERITED, NOT RESTATED (C3 standing obligation /
 --   ADR-029 / 025). This migration creates NO table and NO policy, so it has no
@@ -165,8 +174,10 @@
 --   names them freely; `prosrc` excludes everything above the $$ delimiter,
 --   which is exactly why the discussion lives up here.
 --   ⚠ MEASURED, and recorded because it is the reusable part. The same root
---   trap was hit FIVE TIMES in this one file, by the author of the rule against
---   it, which is what makes the lesson general rather than anecdotal:
+--   trap was hit SIX TIMES across this surface — five of them by the author of
+--   the rule against it, and the sixth by the reviewer who caught the fifth.
+--   THAT is what makes the lesson general rather than anecdotal: knowing the
+--   rule demonstrably does not confer immunity to it.
 --     (1) the fence itself — the reason the valuation function is discussed
 --         only up here and never in the body;
 --     (2) the first draft's inline body comment warning "do not change this to
@@ -192,10 +203,20 @@
 --         IS A VALID FALSIFICATION ONLY WHEN REMOVAL FAILS *OPEN*. WHEN A
 --         CONTROL FAILS CLOSED YOU MUST *CORRUPT* IT (`using (true)`), NOT
 --         REMOVE IT. << Corollary, and the half most easily dropped as
---         stylistic: under `using (true)` a SAME-VALUE fixture leaks INVISIBLY
---         — the owner's query simply returns twice the rows, all values
---         plausible — so the leg must assert the ROW COUNT as well as the value
---         set. Both halves are enforced at battery leg (V3).
+--         stylistic: under `using (true)` a SAME-VALUE fixture leaks INVISIBLY.
+--         ⚠ AND THE MECHANISM IS NOT ROW-DOUBLING — an earlier draft of this
+--         line said it was, and QA measured otherwise. This function reads
+--         through a `cross join lateral (… limit 1)`, so a leak does not
+--         duplicate rows: it changes WHICH checkpoint the lateral selects and
+--         it extends the upper bound (2 → 3 rows in the fixture). The
+--         cardinality assertion still earns its place, for the reason QA
+--         recorded rather than the one first guessed — it survives a fixture
+--         that someone later "simplifies" into uniform values. Enforced at
+--         (V1b-FENCE-CORRUPTED-ROW-COUNT) and
+--         (V3b-REDUNDANT-PREDICATE-BLINDS-THE-COUNT-TOO).
+--         >> A CORRECT CONCLUSION REACHED THROUGH A WRONG MECHANISM IS STILL A
+--            DEFECT: it survives review because the conclusion checks out, and
+--            it misleads the next person who reasons FROM the mechanism. <<
 --     (5) THIS BLOCK'S OWN RULE, APPLIED ONLY HALFWAY. Having argued that a
 --         fence must be structural rather than exhortation, the zone fence was
 --         then SPECIFIED as "no occurrence of the zone-aware type's NAME" —
@@ -204,8 +225,21 @@
 --         the CANONICAL spelling (`timestamp with time zone`) carries a real
 --         zone-aware cast and PASSES a fence written against the alias, and a
 --         body using `current_date` carries NEITHER spelling and passes BOTH
---         type fences. Closed at battery legs (Z2) + (Z3); (V6) + (V7) are the
+--         type fences. Closed at battery legs (Z2) + (Z3);
+--         (V6-ZONE-FENCE-NEEDS-BOTH-SPELLINGS) +
+--         (V7-CLOCK-FENCE-IS-NOT-COVERED-BY-TYPE-FENCES) are the sabotage
 --         bodies that prove they are necessary rather than decorative.
+--     (6) QA'S OWN RESTORATION CHECK, and it belongs in this list even though
+--         it lives in the battery rather than here, because it is the cleanest
+--         statement of the family. The check that confirmed the sabotaged
+--         policy had been RESTORED counted rows in `pg_policies` — but
+--         `alter policy … using (true)` leaves the policy PRESENT UNDER THE
+--         SAME NAME, so the count reads 1 in BOTH the corrupted and the
+--         restored world. It could not tell them apart and would have passed
+--         over a still-broken fence. Now asserts the qual itself.
+--         >> COUNTING THE PRESENCE OF A CONTROL CANNOT OBSERVE ITS INTEGRITY. <<
+--         Same shape as the ledger-count discipline this project already runs
+--         on: a tally is not a description of the thing tallied.
 --   >> THE GENERALIZATION: A FILE THAT FORBIDS A TOKEN WILL CONTAIN THAT TOKEN
 --      MOST DENSELY IN THE PROSE EXPLAINING THE PROHIBITION. So a fence's scope
 --      must be defined by STRUCTURE (`prosrc` — mechanically checkable) and
@@ -213,7 +247,7 @@
 --      you write it down). AND A SPECIFICATION IS ITSELF EXHORTATION UNTIL AN
 --      ASSERTION IMPLEMENTS IT: (5) happened because the rule was stated in one
 --      block and only partly encoded in another.
---   >> THE TWO DIAGNOSTIC QUESTIONS — the transferable part; the five anecdotes
+--   >> THE THREE DIAGNOSTIC QUESTIONS — the transferable part; the six anecdotes
 --      above are disposable, these are not:
 --        · "CAN THIS CHECK EVER FAIL?" — catches an instrument that cannot
 --          observe the property at all (the rejected EXPLAIN fence: plpgsql
@@ -222,7 +256,14 @@
 --        · "WHICH WAY DOES THE THING I REMOVED FAIL?" — catches an instrument
 --          that observes in the wrong DIRECTION (near-miss (4)). This question
 --          does not occur to you when a control's ABSENCE resembles its
---          VIOLATION, which is exactly when you need it. <<
+--          VIOLATION, which is exactly when you need it.
+--        · "AM I OBSERVING THE PROPERTY, OR A PROXY FOR IT?" — catches an
+--          instrument aimed at the wrong OBJECT (near-miss (6): a policy COUNT
+--          in place of the policy's QUAL; a token's ALIAS in place of the type;
+--          a ledger TALLY in place of the enumeration). The proxy is almost
+--          always the cheaper thing to measure, which is why it gets reached
+--          for, and it agrees with the property right up until the moment the
+--          two diverge — which is the only moment that mattered. <<
 --
 --   WHY THAT MATTERS SPECIFICALLY. `060`'s comment on pfin.account.closed_at
 --   records that `059` legalised past as-of dates and warns that a §2.1.2
@@ -370,7 +411,9 @@
 --      DEFEATABLE and was measured so: a body spelled canonically carries a
 --      real zone-aware cast and passes it, and a `current_date` body carries
 --      neither spelling and passes both type fences. See near-miss (5) under
---      ZONE NEUTRALITY. Enforced at battery legs (Z2) + (Z3); (V6) + (V7) are
+--      ZONE NEUTRALITY. Enforced at battery legs (Z2) + (Z3);
+--      (V6-ZONE-FENCE-NEEDS-BOTH-SPELLINGS) +
+--      (V7-CLOCK-FENCE-IS-NOT-COVERED-BY-TYPE-FENCES) are
 --      the defeating bodies that prove they are necessary.
 --      All three are checkable ONLY because the body is worded to keep every
 --      such token out — including out of its own comments.
@@ -536,7 +579,8 @@ comment on function pfin.fn_nav_series(text, date, date) is
   'therefore hits prose, not code, and is the wrong instrument). The assertion covers BOTH SPELLINGS of the zone-aware type — the '
   'alias and the canonical "timestamp with time zone" — AND the clock functions, because a body using only the canonical spelling, or '
   'only a clock function, would otherwise pass a fence written against the alias alone (measured; QA legs (Z2) / (Z3), proven '
-  'necessary by (V6) / (V7)). Nothing here is evaluated in the session TimeZone. This surface takes USER-SUPPLIED date bounds, which is the caller class 060''s '
+  'necessary by (V6-ZONE-FENCE-NEEDS-BOTH-SPELLINGS) / (V7-CLOCK-FENCE-IS-NOT-COVERED-BY-TYPE-FENCES)). Nothing here is evaluated '
+  'in the session TimeZone. This surface takes USER-SUPPLIED date bounds, which is the caller class 060''s '
   'comment on pfin.account.closed_at warns owns resolving the zone explicitly — the obligation is discharged BY CONSTRUCTION here, '
   'because the bounds are compared only against nav_daily.nav_date (itself a date) and the as-of/closed_at comparison that warning '
   'concerns is never constructed. A future editor MUST NOT introduce current_date, now(), localtimestamp, or any timestamptz cast: '
