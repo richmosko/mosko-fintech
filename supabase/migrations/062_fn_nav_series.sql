@@ -174,9 +174,10 @@
 --   names them freely; `prosrc` excludes everything above the $$ delimiter,
 --   which is exactly why the discussion lives up here.
 --   ⚠ MEASURED, and recorded because it is the reusable part. The same root
---   trap was hit SEVEN TIMES across this surface — five by the author of
---   the rule against it, one by the reviewer who caught the fifth, and one in
---   the DESIGN both of them agreed on. THAT is what makes the lesson general
+--   trap was hit NINE TIMES across this surface — five by the author of
+--   the rule against it, one by the reviewer who caught the fifth, one in
+--   the DESIGN both of them agreed on, and two found by Sec at joint-review
+--   AFTER all of the above had been fixed. THAT is what makes the lesson general
 --   rather than anecdotal: knowing the rule demonstrably does not confer
 --   immunity to it.
 --     (1) the fence itself — the reason the valuation function is discussed
@@ -279,6 +280,37 @@
 --         this block filed (b) under (a) and prescribed ref-pinning for both.
 --         A block naming a remedy for every failure mode would have been the
 --         more satisfying artifact and the less true one.)
+--     (8) THE `comment on` CLAIMED FENCE REACH THE FENCE DOES NOT HAVE — found
+--         by Sec at joint-review. It read that this function "reaches NO
+--         valuation function DIRECTLY OR TRANSITIVELY … fenced by a
+--         source-level QA assertion." The STATE was true; the CLAIM was false
+--         for the transitive half, because (N1)/(N2) grep the prosrc of ONE
+--         function and a source grep over one function structurally cannot
+--         observe transitivity. Sec built two bodies passing both fences while
+--         genuinely recomputing: a one-line `language sql` wrapper, and a name
+--         assembled by concatenation in dynamic SQL.
+--         >> PURE SOUND-QUOTE: every word of the sentence survives a verbatim
+--            check, and the cited instrument does not support the claim.
+--            VERBATIM-CHECKING A CITATION VERIFIES THE QUOTATION, NEVER THE
+--            CLAIM — for that you must ask what the cited instrument can
+--            actually observe. <<
+--         Now bounded to what (N1)/(N2) see, with the transitive half stated
+--         as HELD BY REVIEW, NOT BY THE FENCE — and whoever adds a helper call
+--         warned they owe that review, because nothing will fail if they skip
+--         it. ⚠ It also survived the fix to (3) for the SAME reason (3)
+--         survived (2): DIFFERENT BLOCK. That is CP9 recurring a THIRD time in
+--         this one file — re-scan the whole file, never the hunk.
+--     (9) THE FIX FOR (5) WAS ITSELF A DENY-LIST. Having learned that one
+--         spelling was too narrow, the remedy was "two spellings plus an
+--         enumerated clock list" — which is the same error one level up, and
+--         Sec found four more evasions that pass all three. AN ENUMERATION IS
+--         EXHORTATION WEARING A REGEX. The structural fix is to stop measuring
+--         the proxy and measure the property: assert output is byte-identical
+--         under two extreme session TimeZones (see QA item 10).
+--         >> NOTE THE SHAPE: (5) was diagnosed correctly and REMEDIED IN ITS
+--            OWN IDIOM. A defect can be fully understood and still be fixed
+--            with a bigger instance of itself, because the idiom that produced
+--            it is the one you reach for while fixing it. <<
 --         REMEDY (routed to DevOps, deliberately NOT built here — a migration
 --         is the wrong home for a repo-wide fence): a CI check asserting that
 --         every "(TAG)" cited in a migration resolves in its paired battery,
@@ -291,7 +323,7 @@
 --      you write it down). AND A SPECIFICATION IS ITSELF EXHORTATION UNTIL AN
 --      ASSERTION IMPLEMENTS IT: (5) happened because the rule was stated in one
 --      block and only partly encoded in another.
---   >> THE THREE DIAGNOSTIC QUESTIONS — the transferable part; the seven anecdotes
+--   >> THE THREE DIAGNOSTIC QUESTIONS — the transferable part; the nine anecdotes
 --      above are disposable, these are not:
 --        · "CAN THIS CHECK EVER FAIL?" — catches an instrument that cannot
 --          observe the property at all (the rejected EXPLAIN fence: plpgsql
@@ -461,6 +493,25 @@
 --      the defeating bodies that prove they are necessary.
 --      All three are checkable ONLY because the body is worded to keep every
 --      such token out — including out of its own comments.
+--      ⚠⚠ BUT (a)/(b)/(c) ARE A DENY-LIST, AND A DENY-LIST IS EXHORTATION
+--      WEARING A REGEX (near-miss (9)). Sec found FOUR further evasions that
+--      pass all three and are each measurably zone-dependent: `'today'::date`,
+--      `'now'::timestamp`, `transaction_timestamp()`, and `timezone('<zone>',
+--      …)` — whose spelling carries no space and so slips the `time zone`
+--      pattern that `at time zone` trips. Extending the list closes those four
+--      and not the fifth.
+--      >> THE PRIMARY FENCE IS THEREFORE NOT A TOKEN CHECK AT ALL: run the
+--         function twice over the SAME fixture under two extreme session
+--         TimeZones and assert the output is BYTE-IDENTICAL. That observes
+--         ZONE-INVARIANCE — the actual property — rather than a proxy for it,
+--         and it is immune to spellings nobody has thought of yet. It is the
+--         third diagnostic question ("am I observing the property, or a proxy
+--         for it?") applied to this file's own fence, which until now failed
+--         it. <<
+--      Keep the token legs as a CHEAP SECONDARY: they localise a failure to
+--      the offending token, which the invariance test cannot do. They are the
+--      convenience, not the guarantee. Leg coordination is QA's; this
+--      specification is the migration's.
 --  11. ADR-040 ASSEMBLED-STATEMENT DISCIPLINE: execute the EXACT production
 --      statement text — the real PostgREST-shaped call under the real
 --      `authenticated` role with a real JWT claim — against a live database in a
@@ -495,6 +546,14 @@ as $$
 -- at runtime with "column reference is ambiguous" instead of doing the obvious
 -- thing. The three p_* parameters match no column name, so they are unaffected.
 #variable_conflict use_column
+declare
+  -- The caller's OWN checkpoint extent (RLS-scoped — INVOKER, so these are this
+  -- tenant's rows and nobody else's). Used to clamp the day expansion; see
+  -- EXPANSION CLAMP in the header for why the output-side bound was not enough.
+  v_first date;   -- earliest nav_date visible to the caller
+  v_last  date;   -- latest   nav_date visible to the caller
+  v_from  date;   -- clamped expansion start
+  v_to    date;   -- clamped expansion end
 begin
   -- FAIL LOUD on a bad granularity. Deliberately NOT a silent empty result:
   -- an empty set is indistinguishable from "this tenant has no checkpoints yet",
@@ -520,6 +579,36 @@ begin
       p_start_date, p_end_date;
   end if;
 
+  -- ---------------------------------------------------------------------
+  -- EXPANSION CLAMP (Sec joint-review Condition 1). Resolve the caller's own
+  -- checkpoint extent FIRST and expand only across it. Without this the day
+  -- expansion is driven by CALLER-SUPPLIED bounds, so a request spanning
+  -- millennia materialises millions of rows before the downstream bound ever
+  -- filters them — measured at 6.7 s and +636 MB of temp files for a caller
+  -- owning ONE row, by any authenticated user, with public signup live.
+  -- ⚠ `greatest`/`least` IGNORE NULLs in Postgres (unlike most functions), so
+  -- they CANNOT carry the no-checkpoints case: greatest(<date>, NULL) returns
+  -- the date, which would leave the range UNCLAMPED in exactly the situation
+  -- with no data to clamp to. The NULL is therefore tested explicitly, first.
+  -- ---------------------------------------------------------------------
+  select min(nd.nav_date), max(nd.nav_date) into v_first, v_last
+  from pfin.nav_daily nd;
+
+  -- No checkpoints visible → empty series. Zero rows, NOT a zero value, and
+  -- NOT an error: "no data yet" is a legitimate state (battery (E1)/(E2)/(E3)).
+  if v_first is null then
+    return;
+  end if;
+
+  v_from := greatest(p_start_date, v_first);
+  v_to   := least(p_end_date,  v_last);
+
+  -- Requested window lies entirely outside the caller's data. Same zero-row
+  -- outcome the downstream filters produced before, reached without expanding.
+  if v_from > v_to then
+    return;
+  end if;
+
   return query
   with days as (
     -- Every calendar day in the requested range. The ::timestamp casts are
@@ -531,10 +620,14 @@ begin
     -- body — including from this comment, which is why it is worded around it —
     -- so that a source-level zone fence cannot be defeated by prose ABOUT the
     -- fence. See ZONE NEUTRALITY and NO-RECOMPUTE FENCE in the header.
+    -- Bounds are v_from / v_to (the CLAMPED extent), never the raw parameters —
+    -- that substitution IS the Condition 1 fix. The downstream `bounded` filters
+    -- still apply the caller's original range, so OUTPUT is unchanged; what
+    -- changes is that the expansion can no longer exceed the caller's own data.
     select gs::date as d
     from generate_series(
-           p_start_date::timestamp,
-           p_end_date::timestamp,
+           v_from::timestamp,
+           v_to::timestamp,
            '1 day'::interval
          ) as gs
   ),
@@ -609,9 +702,13 @@ comment on function pfin.fn_nav_series(text, date, date) is
   'begins where the data begins, NOT at a fabricated zero), and no point after their newest (so a future end date cannot draw a flat '
   'carried-forward line reading as "net worth stopped moving"). A caller with no checkpoints gets ZERO ROWS — not a zero value; '
   '"no data yet" and "net worth is $0" must never render identically. '
-  'READS EXACTLY ONE RELATION, pfin.nav_daily, and reaches NO valuation function directly or transitively — which is why no '
-  'unpriced-asset zero-fabrication path exists on this surface. That property is fenced by a source-level QA assertion, and the '
-  'function body is deliberately worded so prose cannot defeat that check. '
+  'READS EXACTLY ONE RELATION, pfin.nav_daily, and reaches no valuation function — which is why no unpriced-asset '
+  'zero-fabrication path exists on this surface. ⚠ MIND WHAT HOLDS THAT, because the two halves are held by DIFFERENT things and an '
+  'earlier revision of this comment claimed the fence covered both: the (N1)/(N2) QA fences assert the absence of a DIRECT reference '
+  'in this function''s own prosrc, and the body is deliberately worded so prose about the fence cannot defeat it. They do NOT — and '
+  'structurally CANNOT — observe a TRANSITIVE call through a helper function, nor a name assembled in dynamic SQL; a source grep over '
+  'one function cannot see either. THE TRANSITIVE PROPERTY IS HELD BY REVIEW, NOT BY THE FENCE. Anyone adding a helper call here owes '
+  'that review, because nothing will fail if they skip it. '
   'TENANT FENCE: RLS on pfin.nav_daily is the SOLE mechanism — this function adds no users_id predicate of its own, deliberately, so '
   'that QA''s cross-tenant battery tests the real fence rather than a local redundancy that would pass even if the policy were dropped '
   '(the 049 / 050 / 051 precedent). Cross-tenant caller sees zero rows (fails closed). The 025 aal2 step-up backstop is INHERITED '
