@@ -831,9 +831,78 @@ reads as covering production.
 
 ## 13. From the SELF-219 `062` round (2026-08-07) — what confident prose is worth
 
-Six corrections across one issue, every one of them found by **running something**. Not one
-was found by reading, and several had survived repeated careful reading by three parties.
-That distribution is the finding; the individual rules below are downstream of it.
+Six corrections across one issue, **every one of them found by running something** — and several
+had survived repeated careful reading by three parties. That distribution is the finding; the
+individual rules below are downstream of it.
+
+> ⚑ **CORRECTED — the original opener said "not one was found by reading," and that was FALSE.**
+> A seventh correction arrived later in the same issue and came from reading. See the correction
+> immediately below; it is placed here, where the false claim was, rather than at the end of the
+> section.
+
+### Correction: measurement and failure-history pattern-matching catch different things
+
+The claim *"not one was found by reading"* held over the six rows above and **was falsified by
+the seventh**. A reviewer pre-flagged a defect in a sentence **that did not yet exist**, from the
+failure history of the surface alone: *"demoting `(N2)` to corroborating is a good reason to
+restate `(N1)`'s strength, and restating a fence's strength is exactly where the round-1
+Condition 2 defect came from."* No measurement, no diff. By the time it landed the sentence had
+already shipped, unqualified, exactly as predicted.
+
+> **Measurement catches defects that EXIST. Failure-history pattern-matching catches defects
+> BEFORE they exist — and it is cheaper, because there is nothing to build. Neither substitutes
+> for the other:** measurement cannot fire on a line not yet written, and pattern-matching cannot
+> tell you whether the thing it predicted actually happened.
+
+**The cost asymmetry is the practical part.** A pre-flag's cost scales with the *surface's
+history*, not its *content* — so it is the only technique here that gets **cheaper as a file
+accumulates scars**, while every measurement-based check gets more expensive as the artifact
+grows.
+
+**Consequence, stated because the naive reading points the other way:** *"fresh eyes catch more"*
+is true for **content** and false for **history**. On a surface with accumulated scars, a
+reviewer's model of *where this file has already been bitten* is the cheapest catch available and
+**is destroyed by rotation.** The instance: three specifics — mechanism, surface, precedent — all
+correct, from a reviewer who had them only because it had been bitten there before.
+
+### How the false claim got in: a headline over your own data is a relay
+
+Worth separating from the §14 relay corollary, because the verbatim-relay rule **would not have
+prevented this and nobody violated it.**
+
+The six-row table above never made the universal claim. It appeared only in the **headline
+written over that table by its own author.** Then it was compressed again — into a finding
+relayed upward, and from there into durable session memory, which is the copy that outlives the
+branch and loads into the next session as established fact.
+
+1. author compresses his own table into a headline → scope dropped
+2. lead compresses the headline into a finding → dropped further, **authority added**
+3. it lands in the persisted record as fact
+
+> **A headline over your own data is a relay. The verbatim-relay discipline does not exempt you
+> from it because the source is yours.**
+
+And the compounding: **compression toward higher authority strips qualifiers and adds weight
+simultaneously**, so the effects multiply rather than merely co-occur. The furthest copy from the
+data carried the highest standing and the longest half-life — which is why the persisted one was
+the worst instance and why correcting *it* mattered more than correcting the section.
+
+**Structural note with a real consequence:** the author cannot see the durable memory. Any
+overstatement shipped in an artifact can only be corrected there by whoever relays it — which is
+an argument for relaying findings **with their qualifiers** rather than as headlines.
+
+### What the re-measure discipline actually costs *(Security Reviewer)*
+
+Recorded because it is the honest accounting, and it is the reviewer's own note about churn it
+had itself caused — the fifth ref-move on this branch was its own pre-flag landing:
+
+> *"The churn came from the channel being responsive, not from anyone being sloppy. Cheap to
+> absorb when the receiver re-measures; expensive exactly once, if they don't."*
+
+That is the whole trade. A responsive review channel **moves the ref repeatedly**, and every
+move is harmless to a receiver who re-derives state and silently fatal to one who quotes a
+remembered hash. The discipline is not defensive bookkeeping; it is what makes responsiveness
+affordable.
 
 ### Confident prose is not weak evidence of correctness — it is NO evidence, and it correlates with error
 
@@ -1147,3 +1216,48 @@ meant. **Relay a reviewer's finding verbatim; a compression of a finding is a ne
 | rank narration defects by portability *(new)* | 1 | 0 | **Sec** |
 | relay a finding verbatim, never compressed | 1 | 0 | **team lead**, self-caught in their own summary |
 | a redundant layer that cannot fail alone is mistaken for coverage | 1 | **1** | QA, applying Sec's stripper finding to `(N2)` |
+
+### A reviewer's model of a surface's scars is the cheapest catch available *(Security Reviewer)*
+
+Logged as its **own** entry rather than folded into *overreach from proximity*, deliberately: a
+rule whose only catches are its author's neighbours reads as self-validating, and §8's
+calibration test exists to expose exactly that. Keeping them separate is what makes the table
+worth having.
+
+**What happened.** While `(N2)` was being demoted to corroborating-only, Sec pre-flagged that the
+natural way to write that demotion — restating `(N1)`'s strength — was where a **blocking**
+round-1 condition had already come from once. It named three specifics: the **mechanism**
+(demote-then-restate), the **surface** (`(N1)`'s reach), and the **precedent** (near-miss (8),
+the sound-quote defect). All three correct. The sentence had in fact already shipped, reading
+*"(N1) … is therefore STRICTLY STRONGER"* — unqualified, and false as a general claim, since both
+`(N)` legs grep the prosrc of **one** function and structurally cannot observe a transitive call.
+
+**The author's process could not have caught it.** The line was written, the suite run 68/68,
+commit isolation verified, and committed. **Nothing in that sequence examines a scope qualifier on
+a true sentence.** That is not a lapse — it is the boundary between what an author can check and
+what only a second reader can, and it is why the correct fix restates the boundary affirmatively
+rather than merely omitting the overstatement: *a future editor tightening the prose cannot delete
+a qualifier whose reason is visible.*
+
+> **Same principle as pointing at the instrument instead of restating the assertion: make the
+> reason visible, so the shortcut is unavailable.**
+
+**Related disclosure, and the ordering matters.** Two defects in `(N2)`'s own stripper were
+self-disclosed and then independently verified rather than accepted — a string literal containing
+`--` makes the token **vanish** (a genuine false-pass for `(N2)` alone), a block comment makes it
+**survive**. Both real; neither can bite, because `(N1)` reads raw `prosrc` and fires first.
+**Finding your own fence's flaw and then proving it cannot bite is the right order** — the reverse
+(proving safety first, disclosing the flaw after) is how a known defect becomes a footnote.
+
+Sec also recorded — explicitly *not* as a request — that `(N2)` is now subsumed by `(N1)` in the
+same structural sense old-`(E3)` was subsumed by `(E2)`, and that a future reviewer may reasonably
+re-open whether it should exist. That question is already answered **in the leg, with an exit
+condition attached**. Its reason for logging rather than asking generalises: *"manufacturing work
+at a merge gate over a fully-disclosed choice would be the wrong use of this seat."*
+
+| rule | +applications | +self-catches | provenance |
+|---|---|---|---|
+| a reviewer's scar-model is the cheapest catch *(new)* | 1 | 0 | **Sec** — predicted the defect in a commit it had not seen |
+| restate a boundary affirmatively, don't merely omit the overstatement *(new)* | 1 | 0 | **Sec**'s flag; wording is QA's |
+| disclose a fence's flaw BEFORE proving it cannot bite *(new)* | 1 | **1** | QA, applying Sec's stripper finding to `(N2)` |
+| a headline over your own data is a relay *(new)* | 2 | **1** | QA on §13's opener; the lead self-caught the second compression |
