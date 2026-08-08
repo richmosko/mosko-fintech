@@ -641,11 +641,24 @@ jobs:
           # plugin broken) — deliberately a distinct value, never conflated with a
           # real status. stderr is echoed, not discarded: it was discarding stderr
           # that produced the fail-open this guard replaces.
+          # Anchored on the status LINE, and the reason phrase is optional. HTTP/2
+          # has no reason phrase in the protocol at all — whether a client renders
+          # one is its own choice, not a guarantee. An earlier version matched
+          # ' [0-9]{3} ' with a REQUIRED trailing space, so `HTTP/2 200` parsed as
+          # "000" and FATAL'd a perfectly healthy workflow. That direction is
+          # fail-closed, so it was not a security hole — but a fence that goes red
+          # for a reason nobody can diagnose is how a fence gets discounted, which
+          # costs the same in the end. Guarded by the parser self-test below.
+          status_of() {  # $1 = status line
+            printf '%s\n' "$1" | grep -oE '^HTTP/[0-9.]+[[:space:]]+[0-9]{3}' \
+              | grep -oE '[0-9]{3}$' | head -n 1 || true
+          }
+
           api_call() {
             local raw err code
             raw="$(mktemp)"; err="$(mktemp)"
             set +e; gh api -i "$1" >"$raw" 2>"$err"; set -e
-            code="$(head -n 1 "$raw" | grep -oE ' [0-9]{3} ' | tr -d ' ' | head -n 1 || true)"
+            code="$(status_of "$(head -n 1 "$raw")")"
             if [ -z "$code" ]; then
               code="000"
               sed 's/^/    gh stderr: /' "$err" >&2 || true
@@ -654,6 +667,44 @@ jobs:
             rm -f "$raw" "$err"
             printf '%s' "$code"
           }
+
+          # ---------------------------------------------------------------------
+          # PARSER SELF-TEST — asserts on parsed VALUES, not on exit status.
+          #
+          # This job has many branches that all exit 1. Against a fail-closed
+          # instrument a broken probe produces a false NEGATIVE that is invisible in
+          # the probe's own result: every malformed input still fails, so the probe
+          # looks like it works. The fence's best property is exactly what hides a
+          # broken harness. Asserting "exit 1" would therefore verify nothing here —
+          # only the parsed value discriminates.
+          #
+          # Concretely: if status_of() silently returned "" for every input, every
+          # branch below would still FATAL and every exit-code assertion would still
+          # pass, while the job had stopped distinguishing 401 from 404 from healthy.
+          # ---------------------------------------------------------------------
+          selftest_fail=0
+          while IFS='|' read -r line want; do
+            [ -n "$line" ] || continue
+            got="$(status_of "$line")"; got="${got:-000}"
+            if [ "$got" != "$want" ]; then
+              echo "FATAL: status parser returned '$got' for '$line' (expected '$want')."
+              selftest_fail=1
+            fi
+          done <<'CASES'
+          HTTP/2.0 404 Not Found|404
+          HTTP/1.1 401 Unauthorized|401
+          HTTP/2 403|403
+          HTTP/2 200|200
+          HTTP/2.0 429 Too Many Requests|429
+          garbage with 200 in it|000
+          |000
+          CASES
+          if [ "$selftest_fail" -ne 0 ]; then
+            echo "       The status parser cannot tell these apart, so every verdict below"
+            echo "       would be unreliable in a way that still LOOKS like a working fence."
+            exit 1
+          fi
+          echo "OK: status parser discriminates all probed status-line forms."
 
           BODY="$(mktemp)"
           CODE="$(api_call "/repos/$REPO/actions/workflows/$WF" "$BODY")"
