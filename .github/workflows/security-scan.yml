@@ -568,3 +568,112 @@ jobs:
             exit 1
           fi
           echo "OK: fence refused to guess between two anchor matches (exit $rc)."
+
+  scheduled-audit-liveness:
+    name: Scheduled dep audit — liveness (cron not disabled or stalled)
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    # A1's companion check. The scheduled unfiltered audit
+    # (scheduled-dep-audit.yml) closes a TIME-BASED failure mode — but it has a
+    # time-based fail-open of its own, and it is a silent one:
+    #
+    #   (i)  GitHub documents that "in a public repository, scheduled workflows
+    #        are automatically disabled when no repository activity has occurred
+    #        in 60 days." This repo is PUBLIC (verified: `gh repo view --json
+    #        visibility`), so the rule applies. A remediation for a time-based gap
+    #        that is itself switched off by inactivity reproduces the original
+    #        failure one level up.
+    #   (ii) GitHub also documents that scheduled runs "can be delayed during
+    #        periods of high loads" and that "some queued jobs may be dropped".
+    #        So a cron can silently skip runs while still enabled.
+    #
+    # In BOTH cases nothing goes red. A disabled or stalled cron does not fail —
+    # it stops existing, and the Actions UI shows an absence, which no one is
+    # watching for. "Low risk today" is exactly how the gap this all started with
+    # got built, so the disablement is checked rather than assumed away.
+    #
+    # This job lives here, in the UNFILTERED workflow, on purpose: security-scan.yml
+    # has no `paths:` filter, so anything that can disable the cron through
+    # inactivity is by definition also stopping this check from running — but the
+    # moment activity resumes, the first PR or push re-checks it. Something that
+    # still fires when the cron does not has to be the observer; nothing inside the
+    # cron can report its own absence.
+    #
+    # It queries the workflow's `state` DIRECTLY rather than inferring liveness
+    # from run history alone — `disabled_inactivity` is an observable fact, not
+    # something to deduce from a gap. Run age is checked too, for case (ii).
+    #
+    # Adds no secret and no integration: GITHUB_TOKEN with `actions: read`.
+    # Scoped to a NEW job — it re-scopes no existing fence.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assert the scheduled audit is active and running
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          WF: scheduled-dep-audit.yml
+          MAX_GAP_DAYS: '3'          # daily cron + slack for documented delays/drops
+          FIRST_RUN_GRACE_DAYS: '2'  # after merge, before the first cron fires
+        run: |
+          set -euo pipefail
+
+          if ! META=$(gh api "/repos/$REPO/actions/workflows/$WF" 2>/dev/null); then
+            echo "INFO: $WF is not registered on the default branch yet."
+            echo "INFO: Expected on the PR that introduces it — GitHub registers a workflow"
+            echo "INFO: only once it lands on the default branch. Becomes load-bearing at merge."
+            exit 0
+          fi
+
+          STATE=$(printf '%s' "$META" | python3 -c 'import sys,json; print(json.load(sys.stdin)["state"])')
+          CREATED=$(printf '%s' "$META" | python3 -c 'import sys,json; print(json.load(sys.stdin)["created_at"])')
+
+          if [ "$STATE" != "active" ]; then
+            echo "FATAL: $WF state is '$STATE', not 'active'."
+            echo "       'disabled_inactivity' means GitHub switched it off after 60 days with no"
+            echo "       repository activity. 'disabled_manually' means someone turned it off."
+            echo "       Either way the unfiltered dependency audit has NOT been running, and its"
+            echo "       silence has been reading as 'clean'. Re-enable it in the Actions tab."
+            exit 1
+          fi
+
+          LAST=$(gh api "/repos/$REPO/actions/workflows/$WF/runs?per_page=1" \
+                   --jq '.workflow_runs[0].updated_at // empty' 2>/dev/null || true)
+
+          # Conclusion-agnostic on purpose: a FAILING scheduled run still proves the
+          # cron is alive, and the audit job itself is what reports the advisory.
+          # Liveness must not double-report a finding, or a real advisory would show
+          # up as two unrelated-looking red checks.
+          python3 - "$STATE" "$CREATED" "$LAST" <<'PY'
+          import sys, os
+          from datetime import datetime, timezone
+
+          _, state, created, last = sys.argv
+          max_gap = float(os.environ["MAX_GAP_DAYS"])
+          grace   = float(os.environ["FIRST_RUN_GRACE_DAYS"])
+          now     = datetime.now(timezone.utc)
+
+          def age_days(ts):
+              return (now - datetime.fromisoformat(ts)).total_seconds() / 86400.0
+
+          if not last:
+              a = age_days(created)
+              if a > grace:
+                  print(f"FATAL: {os.environ['WF']} is active but has NEVER run, and it was")
+                  print(f"       registered {a:.1f} days ago (grace {grace}).")
+                  print( "       An active cron that never fires is the same exposure as a disabled")
+                  print( "       one, with none of the visibility. Check the cron expression.")
+                  sys.exit(1)
+              print(f"OK: active, registered {a:.1f}d ago, first scheduled run still pending (grace {grace}d).")
+              sys.exit(0)
+
+          a = age_days(last)
+          if a > max_gap:
+              print(f"FATAL: {os.environ['WF']} is active but its last run was {a:.1f} days ago")
+              print(f"       (max {max_gap}). A daily cron this stale has been dropping runs, so")
+              print( "       the tree has gone unaudited for that window while nothing showed red.")
+              sys.exit(1)
+          print(f"OK: active, last run {a:.1f}d ago (max {max_gap}d).")
+          PY

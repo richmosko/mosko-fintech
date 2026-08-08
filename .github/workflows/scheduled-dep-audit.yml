@@ -1,0 +1,174 @@
+# .github/workflows/scheduled-dep-audit.yml
+#
+# A1 (F/CTO-ratified 2026-08-08) — scheduled UNFILTERED dependency audit of `main`.
+#
+# WHY THIS EXISTS — the failure mode is TIME-BASED, and nothing commit-triggered
+# can observe it. Advisories are published and patched in the registry advisory DB
+# with NO commit in this repo, so a lockfile that was clean at merge can be
+# carrying a live advisory a day later with the tree byte-identical. Every other
+# audit venue here is commit-triggered:
+#   - security-scan.yml :: scanner-npm-audit — unfiltered, but high+critical only
+#   - web-tests.yml :: dependency-audit      — moderate, but PATH-FILTERED on api/**
+# Neither fires during a quiet period, which is exactly when the exposure accrues.
+# Sec chose this shape over dropping the `paths:` filter or lowering the
+# high+critical threshold for precisely that reason: both alternatives are still
+# commit-triggered, so both shorten the window without ever observing the property.
+#
+# WHAT IT DOES NOT FIX — this job closes "notice an advisory without a commit". It
+# does NOT close false attribution: a PR touching api/** still inherits whatever
+# published since the last such PR, and still goes red for a condition it did not
+# introduce. That is A2, filed but deliberately not built here (see the FOLLOW-UP
+# block at the bottom of this file).
+#
+# SCOPE — A1 changes no existing fence. It adds a venue; it re-scopes nothing.
+# The api/**-filtered job in web-tests.yml is untouched by design.
+
+name: Scheduled dep audit (unfiltered, moderate+)
+
+on:
+  schedule:
+    # Daily at 06:17 UTC. Deliberately NOT on the hour: GitHub documents that the
+    # `schedule` event "can be delayed during periods of high loads of GitHub
+    # Actions workflow runs. High load times include the start of every hour. If
+    # the load is sufficiently high enough, some queued jobs may be dropped."
+    # An off-peak odd minute reduces both the delay and the drop probability.
+    # Daily rather than weekly: weekly leaves a published advisory sitting up to
+    # 7 days, and the run costs ~1 minute.
+    - cron: '17 6 * * *'
+  workflow_dispatch:  # manual trigger — lets this be exercised without waiting a day
+
+# Scheduled workflows always run on the latest commit of the default branch, which
+# is exactly the "state of main" semantics this job wants. There is no ref to pick.
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Dep audit — all manifests (moderate+)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # ---------------------------------------------------------------------
+      # INVERSION PROBE — proves this job CAN go red on a real advisory.
+      #
+      # A scheduled audit that has never been shown to fail is indistinguishable
+      # from one that cannot fail, and it degrades silently: if the audit
+      # invocation were ever broken (wrong flag, wrong directory, npm exiting 0 on
+      # error) every run would be green and the fence would report "clean" forever.
+      # Nobody would look, because green is the expected state for this job — that
+      # is what makes THIS fence, more than the PR-time ones, need a live probe.
+      #
+      # The probe builds a throwaway tree pinning a package at a version with a
+      # real published advisory and asserts the SAME command used below exits
+      # non-zero. Runs OUTSIDE the repo so it cannot perturb the real audit.
+      #
+      # If the pinned advisory is ever withdrawn upstream, the probe fails and this
+      # job goes red — fail-closed. That is the correct direction: a loud, obvious
+      # "your probe is stale, repin it" beats a fence quietly losing its test.
+      # ---------------------------------------------------------------------
+      - name: Inversion probe (audit must FAIL on a known-vulnerable tree)
+        run: |
+          set -euo pipefail
+          PROBE_DIR="$(mktemp -d)"
+          # nanoid 3.3.16 — GHSA-2v37-7h3g-55p8, high, "custom generators can loop
+          # indefinitely when size is zero". Fixed in 3.3.17; pinned below it here.
+          (
+            cd "$PROBE_DIR"
+            npm init -y >/dev/null
+            npm install nanoid@3.3.16 --package-lock-only --no-audit --no-fund >/dev/null
+          )
+          set +e
+          (cd "$PROBE_DIR" && npm audit --audit-level=moderate >/dev/null 2>&1)
+          rc=$?
+          set -e
+          rm -rf "$PROBE_DIR"
+          if [ "$rc" -eq 0 ]; then
+            echo "FATAL: the audit command exited 0 on a tree pinned to a known-vulnerable"
+            echo "       nanoid@3.3.16 (GHSA-2v37-7h3g-55p8). This job cannot detect the"
+            echo "       thing it exists to detect — every green run below is vacuous."
+            echo "       Either the audit invocation is broken or the advisory was withdrawn."
+            echo "       Failing closed."
+            exit 1
+          fi
+          echo "OK: audit exited $rc on the known-vulnerable probe tree — the fence can fail."
+
+      - name: Audit every tracked manifest (moderate+)
+        run: |
+          set -euo pipefail
+          # Same enumerator as security-scan.yml :: scanner-npm-audit — `git ls-files`,
+          # never `find`. See that job's ENUMERATOR RATIONALE: a `find` with a
+          # root-only node_modules prune enumerated 314 paths against an intended 3
+          # on a warm workspace, and was invisible on cold CI runners.
+          PKG_FILES=$(git ls-files '*package.json' 'package.json' | grep -v '^tests/' || true)
+          if [ -z "$PKG_FILES" ]; then
+            echo "FATAL: no tracked package.json found. This job audits a known-nonempty"
+            echo "       set; an empty enumeration means the enumerator broke, not that"
+            echo "       there is nothing to audit. Failing closed."
+            exit 1
+          fi
+          echo "Enumerated $(printf '%s\n' "$PKG_FILES" | wc -l | tr -d ' ') manifest(s):"
+          printf '  %s\n' $PKG_FILES
+
+          # THRESHOLD — moderate, matching the stricter incumbent (web-tests.yml).
+          # NOT `low`: the `cookie <0.7.0` advisory (GHSA-pxg6-pf52-xh8x) reaches
+          # @sveltejs/kit and @sveltejs/adapter-node and has no non-breaking
+          # remediation, so `low` would pin this job red permanently — and a fence
+          # that is always red is ignored just as fast as one that is always green.
+          rc_total=0
+          for p in $PKG_FILES; do
+            d=$(dirname "$p")
+            echo "::group::Auditing $d"
+            set +e
+            (cd "$d" && npm audit --audit-level=moderate)
+            rc=$?
+            set -e
+            echo "::endgroup::"
+            if [ "$rc" -ne 0 ]; then
+              echo "::error title=Dependency advisory in $d::npm audit --audit-level=moderate exited $rc"
+              rc_total=1
+            fi
+          done
+          # Audit ALL directories before failing, rather than exiting on the first.
+          # One run should report every affected manifest; failing fast would hide
+          # the second and third behind the first and turn one fix into three runs.
+          exit "$rc_total"
+
+# =============================================================================
+# FOLLOW-UP — A2 (FILED, NOT BUILT). Sec consult mandatory; Sec may veto.
+#
+# This job closes G1 (notice an advisory without a commit). It does NOT close G2
+# (false attribution): with the api/**-filtered job in web-tests.yml unchanged, the
+# next PR touching api/ still inherits every advisory published since the last one
+# did, and still goes red for a condition its author did not introduce. The cost of
+# that is not noise — per Sec, "a fence that presents an inherited condition as a
+# new one manufactures false attribution, and false attribution is what trains
+# reviewers to discount the fence."
+#
+# A2's shape: narrow the PR-time job from "is the tree clean?" to "did THIS PR
+# introduce an advisory that main does not already have?" — audit both the PR tree
+# and the merge-base tree, diff the advisory ID sets, fail only on IDs the PR adds.
+# Each venue then answers exactly one question: this cron owns "is the tree clean
+# now", the PR job owns "did you make it worse". False attribution becomes
+# impossible by construction rather than less likely.
+#
+# Two things make A2 harder than it looks, and both are why it is not bundled here:
+#
+#   1. It NEEDS ITS OWN INVERSION TEST — a fixture PR that genuinely introduces an
+#      advisory must fail closed. A delta check whose set-difference is subtly
+#      wrong passes EVERYTHING silently, which is strictly worse than the noise it
+#      replaces: today's failure mode is a red check with the wrong author, and
+#      that one is no check at all.
+#   2. It RE-SCOPES A SEC-CONDITIONED FENCE (web-tests.yml :: dependency-audit,
+#      added as a Sec condition under SELF-206). Changing what a Sec-conditioned
+#      fence asserts is Sec's call, not DevOps'. Routed to Sec at filing time
+#      rather than at a merge gate.
+#
+# A third option — making the PR job non-blocking — was considered and REJECTED:
+# a fence that cannot fail is theater, and it deletes a Sec condition rather than
+# re-scoping it.
+# =============================================================================
