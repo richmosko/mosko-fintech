@@ -607,28 +607,140 @@ jobs:
     #
     # Adds no secret and no integration: GITHUB_TOKEN with `actions: read`.
     # Scoped to a NEW job — it re-scopes no existing fence.
+    #
+    # ERROR-BRANCH RULE (adopted after Sec's finding on the first cut of this job):
+    # every error branch in a fence script exits non-zero unless there is a written
+    # reason it cannot. The first version collapsed 404-missing-workflow,
+    # 404-missing-repo and 401-bad-credentials into one silent `exit 0`, because it
+    # tested only `gh api` failing and discarded stderr. That is the same shape the
+    # fence exists to prevent: an absence rendering as a pass. Worse, it was
+    # one-directional — once the workflow is registered, "not registered" is
+    # impossible, so every later trip down that branch was necessarily false, and it
+    # would never have expired on its own. Realistic trigger: this job declares
+    # `permissions: actions: read`; tighten that or narrow github.token and the call
+    # 403s and this job goes GREEN. A fence that dies quietly when someone hardens
+    # permissions fails exactly when it is being taken seriously.
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # need the workflow file's first-commit date to bound the bootstrap window
 
       - name: Assert the scheduled audit is active and running
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           WF: scheduled-dep-audit.yml
+          WF_PATH: .github/workflows/scheduled-dep-audit.yml
           MAX_GAP_DAYS: '3'          # daily cron + slack for documented delays/drops
           FIRST_RUN_GRACE_DAYS: '2'  # after merge, before the first cron fires
         run: |
           set -euo pipefail
 
-          if ! META=$(gh api "/repos/$REPO/actions/workflows/$WF" 2>/dev/null); then
-            echo "INFO: $WF is not registered on the default branch yet."
-            echo "INFO: Expected on the PR that introduces it — GitHub registers a workflow"
-            echo "INFO: only once it lands on the default branch. Becomes load-bearing at merge."
+          # Returns the HTTP status on stdout and writes the response body to $2.
+          # "000" means no HTTP response at all (network failure, gh missing, auth
+          # plugin broken) — deliberately a distinct value, never conflated with a
+          # real status. stderr is echoed, not discarded: it was discarding stderr
+          # that produced the fail-open this guard replaces.
+          api_call() {
+            local raw err code
+            raw="$(mktemp)"; err="$(mktemp)"
+            set +e; gh api -i "$1" >"$raw" 2>"$err"; set -e
+            code="$(head -n 1 "$raw" | grep -oE ' [0-9]{3} ' | tr -d ' ' | head -n 1 || true)"
+            if [ -z "$code" ]; then
+              code="000"
+              sed 's/^/    gh stderr: /' "$err" >&2 || true
+            fi
+            awk 'b{print} /^\r?$/{b=1}' "$raw" > "$2"
+            rm -f "$raw" "$err"
+            printf '%s' "$code"
+          }
+
+          BODY="$(mktemp)"
+          CODE="$(api_call "/repos/$REPO/actions/workflows/$WF" "$BODY")"
+
+          if [ "$CODE" = "404" ]; then
+            # A 404 is ambiguous: the workflow may genuinely not be on the default
+            # branch yet (the legitimate bootstrap case), OR the repo path/token
+            # scope may be wrong — which returns 404, not 403, for a repo the token
+            # cannot see. Disambiguate with a second call instead of assuming the
+            # benign reading of an ambiguous signal.
+            REPO_BODY="$(mktemp)"
+            REPO_CODE="$(api_call "/repos/$REPO" "$REPO_BODY")"
+            rm -f "$REPO_BODY"
+            if [ "$REPO_CODE" != "200" ]; then
+              echo "FATAL: workflow lookup returned 404 and the repo itself returned $REPO_CODE."
+              echo "       That is not the bootstrap case — the repo is unreachable or the token"
+              echo "       cannot see it. Liveness is UNKNOWN, and unknown is not green."
+              exit 1
+            fi
+
+            # True 404 with a reachable repo. Bounded: if the workflow file has been
+            # in the tree longer than the grace window and STILL is not registered,
+            # something is wrong with the file, not with the timing.
+            FIRST_SEEN="$(git log --format=%cI --reverse -- "$WF_PATH" 2>/dev/null | head -n 1 || true)"
+            if [ -z "$FIRST_SEEN" ]; then
+              echo "FATAL: $WF is not registered AND $WF_PATH has no commit history here."
+              echo "       Cannot bound the bootstrap window, so cannot justify passing."
+              exit 1
+            fi
+            python3 - "$FIRST_SEEN" <<'PY'
+          import os, sys
+          from datetime import datetime, timezone
+          age = (datetime.now(timezone.utc) - datetime.fromisoformat(sys.argv[1])).total_seconds()/86400.0
+          grace = float(os.environ["FIRST_RUN_GRACE_DAYS"])
+          wf = os.environ["WF"]
+          if age > grace:
+              print(f"FATAL: {wf} has been in the tree {age:.1f} days (grace {grace}) but is still")
+              print( "       not registered on the default branch. Either it never merged or its")
+              print( "       filename/location is wrong. The unfiltered audit is NOT running.")
+              sys.exit(1)
+          print(f"INFO: {wf} not registered yet; file is {age:.1f}d old, within the {grace}d bootstrap")
+          print( "INFO: window. GitHub registers a workflow only once it lands on the default")
+          print( "INFO: branch. This check becomes load-bearing at merge.")
+          PY
             exit 0
           fi
 
-          STATE=$(printf '%s' "$META" | python3 -c 'import sys,json; print(json.load(sys.stdin)["state"])')
-          CREATED=$(printf '%s' "$META" | python3 -c 'import sys,json; print(json.load(sys.stdin)["created_at"])')
+          if [ "$CODE" != "200" ]; then
+            echo "FATAL: workflow lookup returned HTTP $CODE (expected 200, or 404 while bootstrapping)."
+            case "$CODE" in
+              401) echo "       401 — bad or expired credentials." ;;
+              403) echo "       403 — token lacks 'actions: read', or rate-limited. NOTE: this job"
+                   echo "             declares that permission; if it was tightened, this is why." ;;
+              000) echo "       000 — no HTTP response at all: network failure, or gh unavailable." ;;
+              *)   echo "       Unexpected status." ;;
+            esac
+            echo "       Liveness could not be determined. An undetermined check is not a passing"
+            echo "       check — this is the one job whose whole purpose is detecting silent absence."
+            exit 1
+          fi
+
+          # A 200 whose body does not parse, or lacks the field we read, is another
+          # UNDETERMINED result — not a pass. Without this it surfaces as a Python
+          # traceback: that does fail closed, but a stack trace is not an actionable
+          # fence message, and "the fence is broken" must not read like "the cron is
+          # fine". Same error-branch rule as everything else in this job.
+          assert_json() {  # $1=file $2=required key $3=human description
+            python3 - "$1" "$2" "$3" <<'PY'
+          import sys, json
+          path, key, what = sys.argv[1:4]
+          try:
+              data = json.load(open(path))
+          except Exception as e:
+              print(f"FATAL: {what} returned HTTP 200 but its body did not parse as JSON: {e}")
+              print( "       Liveness is UNDETERMINED. Undetermined is not green.")
+              sys.exit(1)
+          if key not in data:
+              print(f"FATAL: {what} returned JSON with no '{key}' field — the API shape changed,")
+              print( "       or the response is not the one that was requested.")
+              sys.exit(1)
+          PY
+          }
+
+          assert_json "$BODY" state "the workflow lookup"
+          STATE=$(python3 -c 'import sys,json; print(json.load(open(sys.argv[1]))["state"])' "$BODY")
+          CREATED=$(python3 -c 'import sys,json; print(json.load(open(sys.argv[1]))["created_at"])' "$BODY")
+          rm -f "$BODY"
 
           if [ "$STATE" != "active" ]; then
             echo "FATAL: $WF state is '$STATE', not 'active'."
@@ -639,20 +751,33 @@ jobs:
             exit 1
           fi
 
-          LAST=$(gh api "/repos/$REPO/actions/workflows/$WF/runs?per_page=1" \
-                   --jq '.workflow_runs[0].updated_at // empty' 2>/dev/null || true)
+          RUNS_BODY="$(mktemp)"
+          RUNS_CODE="$(api_call "/repos/$REPO/actions/workflows/$WF/runs?per_page=1" "$RUNS_BODY")"
+          if [ "$RUNS_CODE" != "200" ]; then
+            echo "FATAL: run-history lookup returned HTTP $RUNS_CODE. Cannot determine whether the"
+            echo "       cron has been firing. Undetermined is not green."
+            exit 1
+          fi
+          assert_json "$RUNS_BODY" workflow_runs "the run-history lookup"
+          LAST=$(python3 -c '
+          import sys, json
+          runs = json.load(open(sys.argv[1])).get("workflow_runs") or []
+          print(runs[0]["updated_at"] if runs else "")
+          ' "$RUNS_BODY")
+          rm -f "$RUNS_BODY"
 
           # Conclusion-agnostic on purpose: a FAILING scheduled run still proves the
           # cron is alive, and the audit job itself is what reports the advisory.
           # Liveness must not double-report a finding, or a real advisory would show
           # up as two unrelated-looking red checks.
-          python3 - "$STATE" "$CREATED" "$LAST" <<'PY'
+          python3 - "$CREATED" "$LAST" <<'PY'
           import sys, os
           from datetime import datetime, timezone
 
-          _, state, created, last = sys.argv
+          _, created, last = sys.argv
           max_gap = float(os.environ["MAX_GAP_DAYS"])
           grace   = float(os.environ["FIRST_RUN_GRACE_DAYS"])
+          wf      = os.environ["WF"]
           now     = datetime.now(timezone.utc)
 
           def age_days(ts):
@@ -661,7 +786,7 @@ jobs:
           if not last:
               a = age_days(created)
               if a > grace:
-                  print(f"FATAL: {os.environ['WF']} is active but has NEVER run, and it was")
+                  print(f"FATAL: {wf} is active but has NEVER run, and it was")
                   print(f"       registered {a:.1f} days ago (grace {grace}).")
                   print( "       An active cron that never fires is the same exposure as a disabled")
                   print( "       one, with none of the visibility. Check the cron expression.")
@@ -671,7 +796,7 @@ jobs:
 
           a = age_days(last)
           if a > max_gap:
-              print(f"FATAL: {os.environ['WF']} is active but its last run was {a:.1f} days ago")
+              print(f"FATAL: {wf} is active but its last run was {a:.1f} days ago")
               print(f"       (max {max_gap}). A daily cron this stale has been dropping runs, so")
               print( "       the tree has gone unaudited for that window while nothing showed red.")
               sys.exit(1)
