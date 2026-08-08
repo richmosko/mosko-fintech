@@ -826,3 +826,438 @@ Until such a harness exists, the honest posture is the one above: two sole contr
 as such, plus `01_session_timezone.sql` — which asserts the CI stack's zone and **says in its
 own message that it cannot observe the deployment.** A narrow true claim beats a broad one that
 reads as covering production.
+
+---
+
+## 13. From the SELF-219 `062` round (2026-08-07) — what confident prose is worth
+
+Six corrections across one issue, **every one of them found by running something** — and several
+had survived repeated careful reading by three parties. That distribution is the finding; the
+individual rules below are downstream of it.
+
+> ⚑ **CORRECTED — the original opener said "not one was found by reading," and that was FALSE.**
+> A seventh correction arrived later in the same issue and came from reading. See the correction
+> immediately below; it is placed here, where the false claim was, rather than at the end of the
+> section.
+
+### Correction: measurement and failure-history pattern-matching catch different things
+
+The claim *"not one was found by reading"* held over the six rows above and **was falsified by
+the seventh**. A reviewer pre-flagged a defect in a sentence **that did not yet exist**, from the
+failure history of the surface alone: *"demoting `(N2)` to corroborating is a good reason to
+restate `(N1)`'s strength, and restating a fence's strength is exactly where the round-1
+Condition 2 defect came from."* No measurement, no diff. By the time it landed the sentence had
+already shipped, unqualified, exactly as predicted.
+
+> **Measurement catches defects that EXIST. Failure-history pattern-matching catches defects
+> BEFORE they exist — and it is cheaper, because there is nothing to build. Neither substitutes
+> for the other:** measurement cannot fire on a line not yet written, and pattern-matching cannot
+> tell you whether the thing it predicted actually happened.
+
+**The cost asymmetry is the practical part.** A pre-flag's cost scales with the *surface's
+history*, not its *content* — so it is the only technique here that gets **cheaper as a file
+accumulates scars**, while every measurement-based check gets more expensive as the artifact
+grows.
+
+**Consequence, stated because the naive reading points the other way:** *"fresh eyes catch more"*
+is true for **content** and false for **history**. On a surface with accumulated scars, a
+reviewer's model of *where this file has already been bitten* is the cheapest catch available and
+**is destroyed by rotation.** The instance: three specifics — mechanism, surface, precedent — all
+correct, from a reviewer who had them only because it had been bitten there before.
+
+### How the false claim got in: a headline over your own data is a relay
+
+Worth separating from the §14 relay corollary, because the verbatim-relay rule **would not have
+prevented this and nobody violated it.**
+
+The six-row table above never made the universal claim. It appeared only in the **headline
+written over that table by its own author.** Then it was compressed again — into a finding
+relayed upward, and from there into durable session memory, which is the copy that outlives the
+branch and loads into the next session as established fact.
+
+1. author compresses his own table into a headline → scope dropped
+2. lead compresses the headline into a finding → dropped further, **authority added**
+3. it lands in the persisted record as fact
+
+> **A headline over your own data is a relay. The verbatim-relay discipline does not exempt you
+> from it because the source is yours.**
+
+And the compounding: **compression toward higher authority strips qualifiers and adds weight
+simultaneously**, so the effects multiply rather than merely co-occur. The furthest copy from the
+data carried the highest standing and the longest half-life — which is why the persisted one was
+the worst instance and why correcting *it* mattered more than correcting the section.
+
+**Structural note with a real consequence:** the author cannot see the durable memory. Any
+overstatement shipped in an artifact can only be corrected there by whoever relays it — which is
+an argument for relaying findings **with their qualifiers** rather than as headlines.
+
+### What the re-measure discipline actually costs *(Security Reviewer)*
+
+Recorded because it is the honest accounting, and it is the reviewer's own note about churn it
+had itself caused — the fifth ref-move on this branch was its own pre-flag landing:
+
+> *"The churn came from the channel being responsive, not from anyone being sloppy. Cheap to
+> absorb when the receiver re-measures; expensive exactly once, if they don't."*
+
+That is the whole trade. A responsive review channel **moves the ref repeatedly**, and every
+move is harmless to a receiver who re-derives state and silently fatal to one who quotes a
+remembered hash. The discipline is not defensive bookkeeping; it is what makes responsiveness
+affordable.
+
+### Confident prose is not weak evidence of correctness — it is NO evidence, and it correlates with error
+
+The headline, and it indicts this document as much as anything else.
+
+Every correction in this round that cost a commit sat underneath **confident, specific,
+well-reasoned prose** — and in several cases the prose was the *reason* nobody looked:
+
+| what the prose said | what measurement said |
+|---|---|
+| `(G3)` "exactly 4 of the 6 points are stale", with the dates enumerated | **5** — the author counted the pre-checkpoint side and forgot carry-forward continues after |
+| `(V8)` "the sabotaged policy is BACK", asserted on `pg_policies` | `count(*)` is **1 in both the corrupted and restored worlds** — it could not tell them apart |
+| `(E3)` "names the specific wrong answer" a `$0` chart would show | asserted over a set `(E2)` already proved empty — **it cannot fail unless `(E2)` fails first** |
+| `062` item 10: fence "the zone-aware timestamp type's **name**" | `timestamp with time zone` and `timestamptz` are two names for one type — the fence passed over the canonical spelling |
+| `(B1)` "a LEFT JOIN would emit fabricated NULL/0 leading points" | after the clamp landed, **cross→left produces byte-identical output** — the claim had silently become false |
+| `(V10)` sabotage built to make the zone fence fire | `'today'::date` is **const-folded into the plpgsql plan cache** — it did not fire |
+
+> **A rich justification block is not evidence that the assertion beneath it is wired up**
+> (§10 already says this). The stronger claim this round supports: **confidence is
+> ANTI-correlated with having measured**, because the cases that feel obvious are exactly
+> the ones that get written down instead of run.
+
+Operationally: **when reviewing an assertion, read its message LAST.** Read the predicate,
+predict the result, then run it. The message is the author's hypothesis, and reading it first
+recruits you into it.
+
+### The better instrument does not subsume the cruder one
+
+`(Z4)` measures zone-invariance directly — run the function under two extreme session
+TimeZones against one fixture, assert byte-identical output. It is immune to evasions nobody
+has enumerated, and it looked like it retired `(Z3)`'s token deny-list entirely.
+
+**It does not.** `'today'::date` inside a plpgsql body is const-folded into the cached plan,
+so both probes return the same date and `(Z4)` is **structurally blind to it** — while `(Z3)`'s
+literal arm catches it outright. The defect is real: the plan cache is per-session, so it
+drifts across restarts and deploys while looking stable in any single test.
+
+> **A property test and an enumeration fence fail in DIFFERENT directions. Neither subsumes
+> the other, so neither may be deleted as redundant** — and the "better" test is exactly the
+> one that makes deleting the cruder one feel safe.
+
+Found only because the sabotage was **built and watched** rather than assumed to fire. Asserted
+in-file as `(V10c)`, which asserts the blindness, so the limit is a test rather than a caveat.
+
+### Re-derive what an assertion targets after ANY change that adds an early bound
+
+§9 records this for BEFORE-triggers in front of `WITH CHECK` conjuncts. It is more general,
+and this round produced a second mechanism with no trigger in sight.
+
+A clamp was added ahead of the day expansion, starting it at the caller's first visible
+checkpoint. Consequence: every generated period end now has a checkpoint at-or-before it, so
+the inner `CROSS JOIN LATERAL` **can never miss** — its inner-join semantics became
+extensionally identical to a LEFT JOIN on all reachable input, and `(B1)`'s stated negative
+became false while staying green. `(B2)` kept passing for an entirely different reason than
+the one its message gave.
+
+> **Any change that bounds an input EARLIER can silently move a downstream assertion's
+> mechanism. Green is not evidence the mechanism survived.**
+
+Remedy is §9's: prove it **declaratively** from `prosrc` (`(B6)`), and give the declarative
+leg its own teeth control (`(V13)`), since text assertions have no natural failure mode.
+
+### When a control fails CLOSED, corrupt it — do not delete it
+
+"Remove the control and see if the test notices" is valid falsification **only where removal
+fails open.** Postgres RLS fails closed: drop the policy and RLS default-denies, so every
+tenant including the owner sees zero rows, and a cross-tenant negative passes **on the
+nothing**. An absent fence cannot demonstrate a leak.
+
+Break it OPEN instead (`using (true)`). And keep the deleted-fence world as its own leg,
+**labelled as the vacuity it is** — it is the counter-example that stops the obvious method
+being re-derived later.
+
+Corollary measured the same round: the two modes are caught by **different halves** of a
+battery. Corruption fires the cross-tenant negatives; deletion fires only the positive
+"owner sees its own rows" legs. **The pairing is load-bearing** — deleting either half as
+redundant reopens one mode as undetectable.
+
+### An agent mid-write owes the tree a coherent state
+
+Shared-worktree concurrency, and the fourth diagnostic question to sit alongside the three in
+`062`'s header: **"is the thing I'm measuring even finished being written?"**
+
+Two agents partitioned by path (one owning `migrations/`, one owning `tests/`) cannot clobber
+each other — and that safety is precisely what removes any signal that intermediate states are
+public. A combined run against a half-written battery returned a hard error, and the natural
+reading was that the *other* agent's change had broken it. Both readings were true at once:
+the body change was innocent **and** the red was a genuine defect, already fixed in the window
+being measured.
+
+> **A red from a mid-edit artifact is indistinguishable from a red you caused.** Commit at
+> green — not at "green once the next leg lands."
+
+And the handoff form that makes this cheap: **state the ref AND the expected plan count in the
+same message.** A re-measurement that derives its own expected value from its own run cannot
+detect a plan-count drift. This is §8 rule 4 — print the pair, and check the pair is
+independent — applied to the channel between agents rather than inside a file.
+
+### Calibration table — this round
+
+| rule | +applications | +self-catches |
+|---|---|---|
+| build X and watch it go red (§10) | 4 | **4** (`G3`, `V8`, `E3`, and `V10`'s non-firing) |
+| absence is vacuous when the subject never existed (§10) | 2 | **2** (`V8`, `E3`) |
+| anchoring: anchor on the subject, not a co-occurring token | 1 | **1** (the `timestamptz` / `time zone` alias gap) |
+| print the pair — and check the pair is independent | 2 | **1** (the handoff ref+count form is the new application) |
+| count the predicates, then check each has a fixture | 1 | **1** (`L6`'s raise-site count, which held across a body change) |
+| confident prose is anti-correlated with measurement *(new)* | 6 | **5** |
+| the better instrument does not subsume the cruder one *(new)* | 1 | **1** |
+| re-derive the target after an early bound is added *(new)* | 1 | **1** |
+| corrupt a fail-closed control, do not delete it *(new)* | 1 | 0 — arrived as a **correction from the team lead**, not a self-catch |
+| an agent mid-write owes the tree a coherent state *(new)* | 1 | **1** |
+
+Note the one zero, and that it is honest: *corrupt-don't-delete* was **not** self-caught — it
+came in as a correction and is recorded that way. Per §8's own reading rule it sits at ONE
+application, so it is **UNTESTED, not miscalibrated**; leave it and use it.
+
+The load-bearing row is *build X and watch it go red* at 4/4. Every one of those four was an
+assertion its author had already written a confident explanation for. **That is the whole
+content of this section.**
+
+---
+
+## 14. From the SELF-219 delta round (2026-08-07) — instruments, labels, and who caught what
+
+Five more, and **only one of them is a self-catch.** Three arrived as corrections from the team
+lead, one from Sec. Recorded with that provenance intact, because §8's calibration test is
+worthless if "I found this" and "someone told me this" blur together.
+
+### A hash over a whole artifact cannot tell a safe edit from an unsafe one *(team lead)*
+
+The instruction was *"comment-only — `prosrc` must not move."* **Those two halves contradict
+each other**, and the contradiction was invisible because the condition named a concrete hash
+and therefore looked rigorous.
+
+`prosrc` is the text between the `$$` delimiters. **Header comments sit outside it; body
+comments do not.** A raw `prosrc` hash had agreed with the intended property across three
+prior passes — but only because those happened to be header-only edits. It diverged on the
+first pass where a body comment moved, going `b735bdc7…` (6926) → `5cf0cb19…` (7290).
+
+> **If the property you care about is invariance of a SUBSET, hash the subset.** A whole-artifact
+> hash is a change-detector, not an invariance-checker, and the two are indistinguishable until
+> the first edit that is safe but not byte-identical.
+
+Remedy: strip comment and blank lines from `prosrc`, then hash. Executable text was invariant
+across the change, which is what "comment-only" was actually claiming.
+
+**And a refinement found by re-deriving it rather than accepting the reported number:** two
+independent strip normalisations produced **two different digests** for the same invariant
+executable text — `086a9067…` and `81cb97b4…`. The *invariance* reproduced; the *number* did
+not, because it is method-dependent.
+
+> **A normalised hash is only a usable baseline if the normalisation is published beside it.**
+> Otherwise the next person derives a different digest from correct code and concludes the
+> artifact moved. Same defect as an unlabelled check: the number looks self-describing and isn't.
+
+### A check's label must describe what was RUN, not what it is expected to SHOW *(team lead + QA, jointly)*
+
+Both of us had been printing `(empty = clean)` after `git status --short` in verification
+commands — **including a run whose output was `M supabase/migrations/062_fn_nav_series.sql`
+followed immediately by the line `(empty = clean)`.** A skimmer reads the label, not the output.
+
+> **A label printed unconditionally is a prediction. `git status --short` printed alone is a
+> measurement. The first survives being wrong.**
+
+**The strongest instance is a convention, not a habit:** a commit subject-prefixed `docs(…)`
+moved `prosrc` by 364 bytes, because the edit was a comment *inside* the body. The change was
+correct and the fences stayed green — but a reviewer who reads `docs(…)` and skips fence
+re-verification is trusting a label over a measurement, and in this file the in-body comment is
+**exactly where fence-defeating prose has historically landed** (three recorded instances).
+Conventional prefixes will keep being emitted correctly-by-convention and wrongly-by-implication.
+
+**The three label defects this round form a set, and they ESCALATE BY SCOPE** — which is what
+makes this an entry rather than a list:
+
+| defect | scope | how it ends |
+|---|---|---|
+| `(empty = clean)` printed after `git status` | **one agent's habit** | dropped when its owner notices |
+| *"comment-only ⇒ `prosrc` must not move"* | **one lead's malformed condition** | dropped at the first case that separates its two halves |
+| `docs(…)` as a commit-subject prefix | **a project-wide convention** | **never** — it is emitted *correctly* by everyone, indefinitely, while implying something false |
+
+> **Blast radius grows with how many people emit the label CORRECTLY.** A habit has one owner
+> who can notice it. A convention has no owner, and every correct use reinforces the false
+> implication.
+
+**The actionable half, and the reason to re-verify on every commit touching this file whatever
+its subject prefix:** the fences were green through that `docs(…)` commit **because the added
+prose happened to avoid every fenced token. That is luck, not design.** The argument is not that
+`docs(…)` commits are usually dangerous — they usually are not. It is that the check is cheap
+and the label is load-bearing **in the wrong direction**: it points attention away from the one
+place this file has repeatedly been bitten.
+
+### "I asked a question that could not return the roles I hadn't thought of, and read its silence as absence" *(Security Reviewer, verbatim, at its own request)*
+
+The purest statement anyone produced of the instrument-cannot-observe-the-property family. Sec
+generalised `service_role` to *"the only role with `rolbypassrls`"* from a probe run over a
+role list Sec itself had chosen. Measurement found **five**.
+
+> The instrument did not malfunction. **It answered exactly what it was asked, and what it was
+> asked was the wrong question.** Silence is the most persuasive wrong answer available, because
+> it reads as a clean bill of health rather than as an error.
+
+Diagnostic form: **"could this query have returned the thing I am about to claim is not there?"**
+
+**This applies to `(Z3)` in this project's own battery, and that is the honest entry.** `(Z3)`
+is a token deny-list — an enumeration that cannot return the tokens its author did not think
+of, whose silence reads as absence. It was written while its author believed the trap had been
+escaped, and it is non-vacuous only because `(Z4)` covers a different axis and `(V10c)` proves
+the gap between them. **Not a rule that caught us; a rule we applied to someone else's artifact
+while an instance of it sat in our own.**
+
+Second thing to carry, and it is the load-bearing half: **authority is not evidence.** Two of
+Sec's four round-1 claims were wrong, and that was established by measuring them rather than
+deferring to the reviewer who raised them — on a surface where that reviewer holds veto. Had
+they been accepted, two false findings would have been remediated into the migration **and the
+remedies would have looked like diligence.** A review channel where findings flow only downhill
+cannot catch this; it degrades silently while everyone behaves impeccably.
+
+### A wrongly-scoped fence is negative value, not neutral *(team lead)*
+
+"Add the obvious extra assertion" is not free. `(A5)` fences `service_role` from EXECUTE.
+Extending it to the other four `rolbypassrls` roles looks obviously right and is wrong:
+`postgres`/`supabase_admin` are owner and superuser, so the negative is **unassertable** — it
+could never pass, and "fixing" the red means revoking from the owner and breaking migrations.
+The other two **already read `nav_daily` cross-tenant with `nav_value` visible**, so fencing
+the function against them is a door beside an open wall.
+
+> **The aggravating factor is what makes it worse than absence: a wrongly-scoped fence shows up
+> in a coverage review as GREEN.** An assertion that cannot fail, whose presence implies
+> protection it does not provide, is the same defect as a vacuous one — arriving from the
+> opposite direction.
+
+Same shape as `(E3)`, which asserted "no point carries 0" over a set already proved empty. Both
+landed in the same session, one found in our own work and one corrected in someone else's.
+
+### During an in-flight review at a named ref, freeze the WHOLE tree *(team lead)*
+
+The conditional form — *"commits are fine if they don't touch the reviewed surface"* — is
+correct and needs its condition evaluated every time. The unconditional form has no evaluation
+step to get wrong.
+
+**But the argument that actually settles it is not about verification cost.** A doc-only commit
+landed during review; under the conditional rule it would have been unremarkable and unread.
+Under the freeze it became a **visible delta someone had to reconcile** — and that reconciliation
+is what surfaced that the reviewer was about to re-request work already done one commit above
+its review point.
+
+> **The rule earned its keep through the friction that was argued to be unnecessary. A rule whose
+> overhead IS its function is a different and better category than a rule with acceptable overhead.**
+
+Concrete cost of the conditional form, invisible from the writer's side: the reviewer reports
+*"measured at `<ref>`"* while HEAD reads something later, and someone else pays to reconcile it.
+
+### Calibration table — this round
+
+| rule | +applications | +self-catches | provenance |
+|---|---|---|---|
+| hash the subset, not the artifact *(new)* | 1 | 0 | **team lead**, self-caught in their own instruction |
+| a normalised hash needs its normalisation published *(new)* | 1 | **1** | QA, by re-deriving instead of accepting a reported digit |
+| a label must describe the check, not its expected result *(new)* | 2 | **1** | joint — both parties were emitting it |
+| could this query have returned what I claim is absent *(new)* | 2 | **1** | **Sec**, verbatim; the `(Z3)` self-application is QA's |
+| authority is not evidence *(new)* | 2 | **2** | QA, by measuring a veto-holder's claims |
+| a wrongly-scoped fence reads as green *(new)* | 1 | 0 | **team lead** |
+| freeze the whole tree during in-flight review *(new)* | 1 | 0 | **team lead** |
+| absence is vacuous when the subject never existed (§10) | 1 | **1** | `(E3)`, found by self-audit |
+| build X and watch it go red (§10) | 1 | **1** | `(V14)` — `(E3)` could not be made red at all |
+
+**Four zero-self-catch rows, and every one of them arrived as a correction from someone else.**
+Per §8's reading rule they sit at ONE application each: **UNTESTED, not miscalibrated** — leave
+them and use them. But note what the column is really showing: *this round, the corrections
+mostly ran toward us rather than from us.* That is the expected shape when the work is being
+reviewed properly, and it is only visible because the provenance column exists. A table that
+recorded these as plain applications would show a flattering nine-for-nine.
+
+### Overreach from proximity — *"I had it right one line up"* is the mechanism, not the mitigation
+
+The last correction of the round, and it is a distinct failure from not knowing.
+
+`(E3)`'s message stated the accurate diagnosis: *"it could not fail unless `(E2)` failed
+first."* The neighbouring leg `(V14)`, **in the same commit**, generalised past it into
+something false: *"could not be made to fail by ANY implementation."* Sec measured the
+difference — a body fabricating a 0-valued point reds the old anchor — and the true form is
+**subsumption**, which settles by construction: `(E2)` asserts `count = 0`, and where there are
+no rows there is no row for a zero to sit in, so the old leg was green **whenever** `(E2)` was
+green. Never fired alone; added no independent detection.
+
+> **A correct formulation sitting one line away makes the incorrect generalisation feel DERIVED
+> rather than INVENTED — so it skips the scrutiny a fresh claim would have received.**
+
+That is why "I had it right next to it" is not mitigation. Proximity to a true statement is the
+*delivery mechanism* for the false one: the reasoning feels like a restatement, and restatements
+do not get checked.
+
+**And the severity is in the portability, not the wrongness.** Three other candidate
+overstatements were identified in the same message and none was the one that mattered; each
+would have cost a single correction. The clause Sec flagged encodes a **rule a reader carries to
+other legs** — *"an absence assertion over an empty subject can never be red"* — which is wrong
+and would mis-classify assertions elsewhere in the file.
+
+> **A wrong claim about THIS assertion costs one message. A wrong claim about ASSERTIONS IN
+> GENERAL costs every future one.** When triaging narration defects, rank by how far the claim
+> travels, not by how wrong it is locally.
+
+Corollary on relaying, learned the same turn: the team lead's summary — *"`(V14)`'s overstated
+clause"* — was itself the drift source, and led to three wrong guesses at which sentence was
+meant. **Relay a reviewer's finding verbatim; a compression of a finding is a new claim.**
+
+| rule | +applications | +self-catches | provenance |
+|---|---|---|---|
+| overreach from proximity *(new)* | 1 | 0 | **Sec**, measured; QA reproduced before accepting |
+| rank narration defects by portability *(new)* | 1 | 0 | **Sec** |
+| relay a finding verbatim, never compressed | 1 | 0 | **team lead**, self-caught in their own summary |
+| a redundant layer that cannot fail alone is mistaken for coverage | 1 | **1** | QA, applying Sec's stripper finding to `(N2)` |
+
+### A reviewer's model of a surface's scars is the cheapest catch available *(Security Reviewer)*
+
+Logged as its **own** entry rather than folded into *overreach from proximity*, deliberately: a
+rule whose only catches are its author's neighbours reads as self-validating, and §8's
+calibration test exists to expose exactly that. Keeping them separate is what makes the table
+worth having.
+
+**What happened.** While `(N2)` was being demoted to corroborating-only, Sec pre-flagged that the
+natural way to write that demotion — restating `(N1)`'s strength — was where a **blocking**
+round-1 condition had already come from once. It named three specifics: the **mechanism**
+(demote-then-restate), the **surface** (`(N1)`'s reach), and the **precedent** (near-miss (8),
+the sound-quote defect). All three correct. The sentence had in fact already shipped, reading
+*"(N1) … is therefore STRICTLY STRONGER"* — unqualified, and false as a general claim, since both
+`(N)` legs grep the prosrc of **one** function and structurally cannot observe a transitive call.
+
+**The author's process could not have caught it.** The line was written, the suite run 68/68,
+commit isolation verified, and committed. **Nothing in that sequence examines a scope qualifier on
+a true sentence.** That is not a lapse — it is the boundary between what an author can check and
+what only a second reader can, and it is why the correct fix restates the boundary affirmatively
+rather than merely omitting the overstatement: *a future editor tightening the prose cannot delete
+a qualifier whose reason is visible.*
+
+> **Same principle as pointing at the instrument instead of restating the assertion: make the
+> reason visible, so the shortcut is unavailable.**
+
+**Related disclosure, and the ordering matters.** Two defects in `(N2)`'s own stripper were
+self-disclosed and then independently verified rather than accepted — a string literal containing
+`--` makes the token **vanish** (a genuine false-pass for `(N2)` alone), a block comment makes it
+**survive**. Both real; neither can bite, because `(N1)` reads raw `prosrc` and fires first.
+**Finding your own fence's flaw and then proving it cannot bite is the right order** — the reverse
+(proving safety first, disclosing the flaw after) is how a known defect becomes a footnote.
+
+Sec also recorded — explicitly *not* as a request — that `(N2)` is now subsumed by `(N1)` in the
+same structural sense old-`(E3)` was subsumed by `(E2)`, and that a future reviewer may reasonably
+re-open whether it should exist. That question is already answered **in the leg, with an exit
+condition attached**. Its reason for logging rather than asking generalises: *"manufacturing work
+at a merge gate over a fully-disclosed choice would be the wrong use of this seat."*
+
+| rule | +applications | +self-catches | provenance |
+|---|---|---|---|
+| a reviewer's scar-model is the cheapest catch *(new)* | 1 | 0 | **Sec** — predicted the defect in a commit it had not seen |
+| restate a boundary affirmatively, don't merely omit the overstatement *(new)* | 1 | 0 | **Sec**'s flag; wording is QA's |
+| disclose a fence's flaw BEFORE proving it cannot bite *(new)* | 1 | **1** | QA, applying Sec's stripper finding to `(N2)` |
+| a headline over your own data is a relay *(new)* | 2 | **1** | QA on §13's opener; the lead self-caught the second compression |

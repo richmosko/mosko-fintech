@@ -224,14 +224,50 @@ jobs:
 
       - name: npm audit (fails on high or critical)
         run: |
-          # Find package.json files under V1 scope (V1 web-app + PDF worker; both Node).
-          # Skip W1 if no package.json lands yet — pre-SvelteKit-init posture.
-          PKG_FILES=$(find . -name 'package.json' -not -path './node_modules/*' -not -path './tests/*' || true)
+          set -euo pipefail
+          # Enumerate package.json files under V1 scope (V1 web-app + PDF worker;
+          # both Node). Skip if none land yet — pre-SvelteKit-init posture.
+          #
+          # ENUMERATOR RATIONALE — `git ls-files`, not `find`:
+          #   The previous `find . -name 'package.json' -not -path './node_modules/*'`
+          #   pruned only the ROOT node_modules; './api/node_modules/*' and
+          #   './workers/provider-sync/node_modules/*' were not excluded. On a fresh
+          #   CI checkout there is no node_modules, so the job behaved correctly and
+          #   the bug was invisible. On any warm workspace it is not close: measured
+          #   on a tree with deps installed, that pattern enumerated 314 paths
+          #   against an intended 3 — it would have audited every vendored
+          #   dependency's own package.json. That also made the job impossible to
+          #   reproduce locally, which is how a CI fence stops being checkable.
+          #
+          #   `git ls-files` returns exactly the TRACKED files. It cannot see
+          #   node_modules at any depth (gitignored), so the whole class of
+          #   nested-prune bugs is removed rather than one instance patched. The
+          #   checkout is a git repo, so this is available at zero cost.
+          PKG_FILES=$(git ls-files '*package.json' 'package.json' | grep -v '^tests/' || true)
           if [ -z "$PKG_FILES" ]; then
             echo "INFO: no package.json under mosko-fintech V1 scope — npm audit no-op as expected at W1."
             echo "INFO: This scanner becomes load-bearing at first npm-init commit."
             exit 0
           fi
+          echo "Enumerated $(printf '%s\n' "$PKG_FILES" | wc -l | tr -d ' ') package.json file(s):"
+          printf '  %s\n' $PKG_FILES
+
+          # INVERSION CHECK — proves the enumerator ignores vendored manifests.
+          # Without this, a future refactor back to a `find` could silently restore
+          # the 314-vs-3 behavior and every audit would still exit 0 on a cold
+          # runner, so the regression would ship unseen. Plant a package.json inside
+          # a nested node_modules and assert it is NOT enumerated; fail closed if it
+          # is. Cleaned up before the real audit runs.
+          mkdir -p api/node_modules/__fence_probe__
+          echo '{"name":"fence-probe","version":"1.0.0"}' > api/node_modules/__fence_probe__/package.json
+          PROBE=$(git ls-files '*package.json' 'package.json' | grep -v '^tests/' || true)
+          rm -rf api/node_modules/__fence_probe__
+          if printf '%s\n' "$PROBE" | grep -q '__fence_probe__'; then
+            echo "FATAL: enumerator picked up a vendored node_modules manifest — nested-prune regression; failing closed."
+            exit 1
+          fi
+          echo "OK: enumerator ignored the planted node_modules manifest."
+
           for p in $PKG_FILES; do
             d=$(dirname "$p")
             echo "Auditing $d"
