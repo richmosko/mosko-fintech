@@ -76,14 +76,61 @@ jobs:
     #
     # THRESHOLD RATIONALE (fail-closed on real risk, not on pre-existing noise):
     #   --audit-level=moderate ⇒ the job FAILS on any moderate/high/critical
-    #   advisory (e.g. a future compromised `jose`), and PASSES on the 3
-    #   pre-existing LOW-severity advisories (cookie <0.7.0, transitively via
-    #   @sveltejs/kit → @sveltejs/adapter-node), whose only remediation today is a
-    #   BREAKING SvelteKit downgrade (`npm audit fix --force`) — deliberately not
-    #   taken. jose itself added 0 new advisories. If those low-sev items ever gain
-    #   a non-breaking fix, apply it and tighten the threshold to `low`.
+    #   advisory (e.g. a future compromised `jose`) and PASSES on LOW-severity
+    #   ones. The triaged low-sev baseline is the `cookie <0.7.0` advisory
+    #   (GHSA-pxg6-pf52-xh8x), which npm surfaces on `cookie` itself and on each
+    #   dependent that pins it (@sveltejs/kit → @sveltejs/adapter-node); its only
+    #   remediation today is a BREAKING SvelteKit downgrade (`npm audit fix
+    #   --force`) — deliberately not taken. jose itself added 0 new advisories.
+    #   If it ever gains a non-breaking fix, apply it and tighten to `low`.
     #   Runs off the lockfile (no npm ci) — npm audit builds the tree from
     #   package-lock.json and queries the registry advisory DB.
+    #
+    #   This block deliberately carries NO advisory tally. The count is a live
+    #   property of the registry advisory DB, not of the lockfile: advisories get
+    #   published and patched upstream without any commit here. A number written
+    #   down goes stale silently and then the comment misdescribes the fence's own
+    #   baseline. Measure it (`cd api && npm audit --json | jq .metadata`), never
+    #   recall it. A previous revision of this block asserted a fixed low-sev
+    #   count and had drifted by the time anyone read it.
+    #
+    # READING `npm audit` OUTPUT — the `range` field is a UNION, not an advisory:
+    #   npm collapses every advisory reaching a package into one node and prints
+    #   the widest vulnerable range across all of them plus the highest severity.
+    #   So a package can be reported at a range that INCLUDES its own patched
+    #   version, because a second, lower-severity advisory reaches it too. Worked
+    #   example (measured 2026-08-08, api/ @ bd7ec36): npm printed
+    #   `@sveltejs/kit <=2.70.2 / Severity: moderate`, but the moderate advisory
+    #   (GHSA-29g2-3rmr-qm68, SvelteKit ReDoS) is `<= 2.70.1`, first patched
+    #   `2.70.2` per the GitHub Advisory API. The `<=2.70.2` came from unioning it
+    #   with the low `cookie` advisory. Verify a range against
+    #   `gh api /advisories/<GHSA-ID>`, not against npm's rendering — otherwise a
+    #   real fix looks like a fence going green over an unfixed condition, and a
+    #   real non-fix can look like a fix.
+    #
+    #   That moderate is REMEDIATED as of this commit (kit 2.70.1 -> 2.70.2, in
+    #   this same PR) — the example above is a historical measurement at bd7ec36,
+    #   not an outstanding finding. Kept because the union mechanism is a property
+    #   of npm's output, not of that one advisory, and it will mislead again.
+    #
+    #   The false-alarm direction cost as much as a miss would have: reading the
+    #   union as the advisory's own range made a genuine, non-breaking security
+    #   patch look unsafe to apply, and the response to "suspicious" was to
+    #   withhold it. That failure mode looks exactly like caution and is invisible
+    #   while it runs — nothing breaks, it just stays broken. Resolve the
+    #   suspicion by measuring; do not let it settle into inaction.
+    #
+    # SCOPE CAVEAT — this job is PATH-FILTERED on `api/**` (see the workflow-level
+    #   `on:` block). It reports the state of the last commit that touched that
+    #   path, NOT the state of the tree. A newly published advisory against an
+    #   api/ dependency leaves `main` reading green until some PR happens to touch
+    #   api/ — at which point that PR inherits a failure it did not cause. This
+    #   happened on 2026-08-08: a moderate sat unreported on main until an
+    #   unrelated lockfile PR triggered the lane. The unfiltered fail-closed
+    #   counterpart is `scanner-npm-audit` in security-scan.yml (high+critical,
+    #   no `paths:` filter), so nothing above `high` can hide this way — but
+    #   moderate-only findings can, and "main is green" does not mean "the tree
+    #   is clean at moderate".
     steps:
       - uses: actions/checkout@v4
 
