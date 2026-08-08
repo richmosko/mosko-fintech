@@ -1107,3 +1107,43 @@ them and use them. But note what the column is really showing: *this round, the 
 mostly ran toward us rather than from us.* That is the expected shape when the work is being
 reviewed properly, and it is only visible because the provenance column exists. A table that
 recorded these as plain applications would show a flattering nine-for-nine.
+
+### Overreach from proximity — *"I had it right one line up"* is the mechanism, not the mitigation
+
+The last correction of the round, and it is a distinct failure from not knowing.
+
+`(E3)`'s message stated the accurate diagnosis: *"it could not fail unless `(E2)` failed
+first."* The neighbouring leg `(V14)`, **in the same commit**, generalised past it into
+something false: *"could not be made to fail by ANY implementation."* Sec measured the
+difference — a body fabricating a 0-valued point reds the old anchor — and the true form is
+**subsumption**, which settles by construction: `(E2)` asserts `count = 0`, and where there are
+no rows there is no row for a zero to sit in, so the old leg was green **whenever** `(E2)` was
+green. Never fired alone; added no independent detection.
+
+> **A correct formulation sitting one line away makes the incorrect generalisation feel DERIVED
+> rather than INVENTED — so it skips the scrutiny a fresh claim would have received.**
+
+That is why "I had it right next to it" is not mitigation. Proximity to a true statement is the
+*delivery mechanism* for the false one: the reasoning feels like a restatement, and restatements
+do not get checked.
+
+**And the severity is in the portability, not the wrongness.** Three other candidate
+overstatements were identified in the same message and none was the one that mattered; each
+would have cost a single correction. The clause Sec flagged encodes a **rule a reader carries to
+other legs** — *"an absence assertion over an empty subject can never be red"* — which is wrong
+and would mis-classify assertions elsewhere in the file.
+
+> **A wrong claim about THIS assertion costs one message. A wrong claim about ASSERTIONS IN
+> GENERAL costs every future one.** When triaging narration defects, rank by how far the claim
+> travels, not by how wrong it is locally.
+
+Corollary on relaying, learned the same turn: the team lead's summary — *"`(V14)`'s overstated
+clause"* — was itself the drift source, and led to three wrong guesses at which sentence was
+meant. **Relay a reviewer's finding verbatim; a compression of a finding is a new claim.**
+
+| rule | +applications | +self-catches | provenance |
+|---|---|---|---|
+| overreach from proximity *(new)* | 1 | 0 | **Sec**, measured; QA reproduced before accepting |
+| rank narration defects by portability *(new)* | 1 | 0 | **Sec** |
+| relay a finding verbatim, never compressed | 1 | 0 | **team lead**, self-caught in their own summary |
+| a redundant layer that cannot fail alone is mistaken for coverage | 1 | **1** | QA, applying Sec's stripper finding to `(N2)` |
