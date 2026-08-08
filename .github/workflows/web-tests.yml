@@ -108,6 +108,18 @@ jobs:
     #   real fix looks like a fence going green over an unfixed condition, and a
     #   real non-fix can look like a fix.
     #
+    #   That moderate is REMEDIATED as of this commit (kit 2.70.1 -> 2.70.2, in
+    #   this same PR) — the example above is a historical measurement at bd7ec36,
+    #   not an outstanding finding. Kept because the union mechanism is a property
+    #   of npm's output, not of that one advisory, and it will mislead again.
+    #
+    #   The false-alarm direction cost as much as a miss would have: reading the
+    #   union as the advisory's own range made a genuine, non-breaking security
+    #   patch look unsafe to apply, and the response to "suspicious" was to
+    #   withhold it. That failure mode looks exactly like caution and is invisible
+    #   while it runs — nothing breaks, it just stays broken. Resolve the
+    #   suspicion by measuring; do not let it settle into inaction.
+    #
     # SCOPE CAVEAT — this job is PATH-FILTERED on `api/**` (see the workflow-level
     #   `on:` block). It reports the state of the last commit that touched that
     #   path, NOT the state of the tree. A newly published advisory against an
