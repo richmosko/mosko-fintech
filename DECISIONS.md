@@ -3700,6 +3700,30 @@ This is the ADR-008 index amendment **flagged-required at Lock 9 ([ADR-011](#adr
 
 ---
 
+### Amendment (2026-08-09 / Phase 6 — §4.1 axis (iv) rewritten; the write-path universal was measured FALSE)
+
+**F/CTO-ratified 2026-08-09** on the Sec ruling. **This is an amendment rather than a plain doc edit, and the distinction from [ADR-045](#adr-045) is the point** — ADR-045 landed a tier qualifier as a plain edit because it *described* a scope axis (i) always had. This does not: axis (iv) **was true when written and was outrun by the architecture**, and the correction *adds* posture content about a write tier the axis never contemplated. That lands inside this ADR's own enumerated trigger (*new posture commitments*), and axis (iv) is one of the six the immutability bullet holds as *"immutable canonical references"*. Sec recommended the amendment and stated the counter-argument against itself (that this is mere precision about mechanism, on which ADR-045's logic would carry); F/CTO ruled for the amendment.
+
+**What was false.** Axis (iv) read *"No write path in V1 bypasses the tenant-scoping the read path enforces."* Measured at `e0f95b3` on the local PG 17 stack, with a known-positive control so a pass could not be a broken test:
+
+- **CONTROL** — `pfin.nav_daily`, which carries the SELF-214 B7 (c′) write-tenant fence: INSERT as `service_role` with no serving context → **rejected**, *"write-tenant binding REJECTED … app.nav_computed_for=<UNSET>"*.
+- **TEST** — `pfin.account_balance_checkpoint`, same role, same session, same absence of context → **`INSERT 0 1`, succeeded.**
+
+Both rolled back. Reproduced independently by team-lead before ratify.
+
+**The population, enumerated before testing rather than after.** Write paths bottom out in a DB write under some role, so the roles bound the universal: measured `rolbypassrls` false for `anon` / `authenticated` / `authenticator` / `pfin_etl` and **true for `service_role`**; write grants across all 62 migrations go to exactly two roles (`authenticated`, `service_role`). So every candidate counterexample is a `service_role` path. Six tenant-scoped tables it writes carry **zero write policies** — `account_balance_checkpoint`, `holdings_checkpoint`, `linked_source_state_history`, `nav_daily`, `mfa_recovery_code`, `mfa_recovery_attempt` — so there is no read-path scoping for a write path to inherit. **28 write policies exist across `pfin`, all serving the `authenticated` tier**, which is the half of the axis that was always true and stays.
+
+⚠ **Sec's original flag named the W-1 NAV worker as the counterexample and was WRONG about that, while right that the axis is false.** `nav_daily` is the one privileged write path that *is* fenced — it pointed at the only non-counterexample. The real ones surfaced only because the dispatch required the population to be enumerated first. **A universal claim cannot be settled by one candidate, in either direction: clearing the candidate would have left the universal standing and unexamined.**
+
+**What the rewrite does.** Retitles axis (iv) to *"Write-path RLS symmetry within the JWT-authenticated tier"*, keeps the `authenticated`-tier claim (measured true) and the manual-entry-integrity remainder unchanged, and adds that V1 has a second write tier this axis does not cover — privileged non-JWT writers under `service_role`, whose tenant correctness rests on application-layer binding, Decision-3 matched-tenant triggers (**not** bypassed by `BYPASSRLS`), and per-surface DB fences where authored. **Coverage by those fences is explicitly stated as non-uniform.** No new `<li>` was created: a fifth bullet in the axes list would read as a fifth axis, which is this ADR's *new axes* trigger.
+
+**⚠ The real asymmetry the rewrite discloses rather than closes.** `nav_daily` received its DB fence at SELF-214 **because Sec argued application-layer binding alone was insufficient and F/CTO ratified that argument**. `account_balance_checkpoint` and `holdings_checkpoint` are written by the same worker tier, under the same role, with the same absence of DB-layer serving context, and the (c′) reasoning was **never extended to them**. Severity **flag, not veto** — V1 is single-user, the worker is ours, `TenantBoundConnection` binds in application code, and the FK topology fully determines these rows' tenant via `account_id` (no second anchor, so **not** a Decision-3 instance). The realistic failure is a worker serving tenant A writing into tenant B — an application bug away, with no DB backstop. **Extend-or-accept is a separate Architect + F/CTO decision and is deliberately not settled here**; the artifact must not phrase around it, because a bound reading as closure over a gap that remains is worse than the false universal it replaces.
+
+**Open and unresolved, flagged uncertain by Sec:** `mfa_recovery_code` / `mfa_recovery_attempt` carry no policies and no fence, and how they are written was not established.
+
+**Immutability discipline unchanged.** This amendment rewrites one canonical axis's *claim* under the amendment rule the discipline provides for; the six-axis structure, the closed-enum column shapes, the severity rubric, and the *"new canonical references require ADR-008 amendment"* rule all still bind. **No count is superseded and no §10 attribution moves** — [ADR-011](#adr-011) Decision 4's catalogued ledger is untouched, and Sec's §10 three-axis cross-check returned CLEAN.
+
+
 ## ADR-007 — Amendment to ADR-002 Finding (b): tax-loss-harvesting recommendations reclassified from V2+ candidate to permanent non-goal
 
 **Date:** 2026-05-17
