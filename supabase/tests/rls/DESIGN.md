@@ -1309,9 +1309,34 @@ asserts the *premise* it can reach (`supabase_admin` is a superuser, is not a me
 
 An earlier draft of `(i6)` asserted the consequence in its message as though the assertion
 covered it. Every fact in that message was true; the *scope* was not, and a reader would have
-credited the assertion with coverage it does not have. Per §13's standing rule about findings
-that ship without their method: **a claim whose method cannot be re-run is the expensive case**,
-so where the method cannot live in the battery it lives adjacent to it, executable.
+credited the assertion with coverage it does not have.
+
+**Stated here for the first time, not cited** — a draft of this paragraph attributed it to §13
+as *"§13's standing rule about findings that ship without their method"*, in bold, which reads
+as a quotation. §13 contains no such rule; it was coined here and dressed as a citation. Sec
+caught it at the PR #343 review, and the way it got in is worth more than the rule: the idea
+*came from* a prior session's finding about veto-holders asserting things with no re-runnable
+method, so it felt remembered rather than invented, and a half-remembered provenance reaches
+for the nearest plausible anchor. **A citation is a claim about a location, and it is checkable
+in one grep** — which is exactly what the surrounding section is about, missed on its own page:
+
+> Where a method cannot live in the battery, it lives adjacent to it, executable — a finding
+> whose method cannot be re-run is the expensive kind.
+
+### The corollary Sec measured, which the leg had backwards
+
+`(i6)` pins the premise so the fence's mechanism is re-measured where an editor would stand.
+It does **not** stop the edit, and an earlier draft said it did. Measured 2026-08-09: applying
+the membership-join swap passes **the entire battery — all 74 assertions, `(i6)` included**.
+`(i6)` reads `pg_authid` directly and never calls the fence, so no edit to the fence can red it;
+and the `pg_read_all_data` probe is a *real member*, so the membership join catches it too. Only
+a non-member superuser separates the variants, and the battery cannot mint one.
+
+> **An assertion sited next to a hazard is not thereby a fence against it.** Proximity to the
+> edit is a real benefit — the premise is re-measured where the edit gets made — but it is a
+> different property from *failing when the edit lands*, and the two are easy to conflate
+> precisely because the assertion is in the right place. Ask which one you have, and answer it
+> by applying the edit and running the suite.
 
 ### Check the exclusion, not just the inclusion
 

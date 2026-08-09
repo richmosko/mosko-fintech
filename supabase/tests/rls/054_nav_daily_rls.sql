@@ -1445,8 +1445,22 @@ select throws_ok(
 --        -- membership-join "simplification"  -> returns nothing          [BLIND]
 --        -- has_column_privilege(...,'nav_value','SELECT') -> t           [hazard is real]
 --        rollback; EOF
---      So the simplification would leave the fence blind to every superuser while still passing
---      (i1)-(i4), which is precisely why this pin is an assertion and not a comment.
+--      So the simplification would leave the fence blind to every superuser.
+--
+--      ⚠ AND THIS COMMENT IS THE ONLY CONTROL ON THAT EDIT — measured 2026-08-09 on Sec's flag
+--      (PR #343): applying the swap passes THE ENTIRE BATTERY, all 74 assertions green, **(i6)
+--      included**. Two independent reasons, and both have to be understood before anyone trusts
+--      this leg to police the change: (i6) reads `pg_authid` directly and never calls
+--      qa_rt31_offenders(), so no edit to the fence can red it; and (i3)'s probe IS a real
+--      member of pg_read_all_data, so the membership join catches it too. Only a NON-MEMBER
+--      superuser separates the two variants, and this battery cannot mint one.
+--
+--      An earlier draft of this line read "...which is precisely why this pin is an assertion
+--      and not a comment." That was FALSE, and it is left recorded rather than quietly replaced
+--      because it is the SECOND over-claim of the same shape at this one assertion — the first
+--      was in the message, credited to coverage it did not have. What (i6) buys is that the
+--      premise is re-measured on every run AT THE SITE where the edit would be made. That is
+--      worth having. It is not a fence, and must not be read as one.
 select is(
   (select array[ a.rolsuper,
                  exists (select 1 from pg_auth_members m join pg_roles g on g.oid = m.roleid
@@ -1490,9 +1504,15 @@ select is(
   '(i9) leg (i) positive negative — `anon`, the pre-authentication identity: NOT bypassrls, NOT pg_read_all_data, NO SELECT on nav_value. Overlaps (h9)''s zero-grant assertion on the GRANT axis and is deliberately kept: (h9) proves no grant exists, this proves no BYPASS route exists, and a role can acquire the second without ever touching the first'
 );
 
--- (i10) NON-VACUITY CONTROL for (i7)-(i9). Without it, three `false` triples would be
---       indistinguishable from a has_column_privilege() call that returns false for everyone —
---       e.g. against a renamed column, where all three would go green while proving nothing.
+-- (i10) NON-VACUITY CONTROL for (i7)-(i9). Without it, three `false` triples cannot be told
+--       apart from a column NO role can read — if the `authenticated` grant were ever dropped,
+--       all three would stay green while measuring nothing about those three roles.
+--       ⚠ The example this comment originally gave — "a renamed column" — was IMPOSSIBLE, and
+--       the correction is worth more than the assertion it justifies: has_column_privilege()
+--       on a column that does not exist RAISES 42703 (measured 2026-08-09 on Sec's flag,
+--       PR #343); it does not return false. Against a rename, (i7)-(i9) would ERROR, not pass
+--       vacuously. A rationale invented rather than measured, inside a battery whose subject is
+--       that rationale must be measured — which is why it is corrected in place, not deleted.
 select is(
   has_column_privilege('authenticated','pfin.nav_daily','nav_value','SELECT'),
   true,
