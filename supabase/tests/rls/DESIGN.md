@@ -1261,3 +1261,67 @@ at a merge gate over a fully-disclosed choice would be the wrong use of this sea
 | restate a boundary affirmatively, don't merely omit the overstatement *(new)* | 1 | 0 | **Sec**'s flag; wording is QA's |
 | disclose a fence's flaw BEFORE proving it cannot bite *(new)* | 1 | **1** | QA, applying Sec's stripper finding to `(N2)` |
 | a headline over your own data is a relay *(new)* | 2 | **1** | QA on §13's opener; the lead self-caught the second compression |
+
+---
+
+## 15. From the RT-31 leg (i) round (2026-08-09) — isolating the disjunct under test
+
+Leg (i) of RT-31 (the bypass-capable role-set fence, `054_nav_daily_rls.sql`) is a fence over
+`pg_authid`, authored to Sec's mandated set-complement shape. Three things came out of building
+it that generalise past this leg.
+
+### A differential whose witness satisfies BOTH branches proves nothing about either
+
+The fence's predicate is a disjunction: `rolbypassrls OR pg_has_role(…,'pg_read_all_data',…)`.
+A plausible "simplification" replaces the second disjunct with a `pg_auth_members` join, and the
+question is whether that changes anything. The first attempt to answer it ran both variants
+against `supabase_admin` and got **the same answer from both** — so the simplification looked
+safe, and the differential looked like confirmation.
+
+It was worthless. `supabase_admin` carries `rolbypassrls = t`, so **the first disjunct caught it
+under both variants** and the second was never load-bearing in either run. The witness could not
+discriminate, and a non-discriminating witness returns a clean-looking result no matter which
+way the truth falls.
+
+The correct witness had to satisfy **exactly one** disjunct — a *bare* superuser
+(`rolsuper = t`, `rolbypassrls = f`, not a member of `pg_read_all_data`, `pg_has_role` true
+anyway). Against that witness the mandated shape **catches** and the membership-join variant is
+**blind**, and the role can read `nav_value`. Same two queries, same tree, opposite conclusion —
+the only thing that changed was the witness.
+
+> **When you are testing which of N branches is load-bearing, the witness must isolate the
+> branch under test.** A witness that satisfies several makes the run uninformative *whatever it
+> returns* — and it fails in the reassuring direction, because agreement between the variants
+> reads as evidence they are equivalent. This is the disjunctive form of the vacuity problem
+> already catalogued at §14: there the query could not return the answer, here the *witness*
+> cannot distinguish the answers.
+
+Related but distinct from *"a fence that cannot fail reads as GREEN"*: that one is about the
+instrument, this one is about the specimen. Both produce a green you cannot bank.
+
+### Some consequences are not assertable in-battery — pin the premise, ship the method
+
+The bare-superuser measurement cannot become an assertion in this battery: `postgres` is **not**
+a superuser on this stack (`rolsuper = f`), and only a superuser may create one. So `(i6)`
+asserts the *premise* it can reach (`supabase_admin` is a superuser, is not a member, and
+`pg_has_role` says true anyway) and carries the out-of-band method for the consequence
+**verbatim, as a runnable command**, not as a summary of a result.
+
+An earlier draft of `(i6)` asserted the consequence in its message as though the assertion
+covered it. Every fact in that message was true; the *scope* was not, and a reader would have
+credited the assertion with coverage it does not have. Per §13's standing rule about findings
+that ship without their method: **a claim whose method cannot be re-run is the expensive case**,
+so where the method cannot live in the battery it lives adjacent to it, executable.
+
+### Check the exclusion, not just the inclusion
+
+The fence excludes `rolname like 'pg\_%'` on the grounds that those are PostgreSQL's predefined
+roles. That is only sound if the prefix is *reserved* — otherwise the exclusion is a hiding
+place, and the fence would be blind to anything named `pg_…` by an attacker or by accident.
+Measured rather than assumed: PostgreSQL refuses such a name with **SQLSTATE `42939`**
+(`reserved_name`), and `(i5)` now asserts it, so the day that stops being true the fence's own
+battery says so.
+
+Worth stating because the reflex on reviewing a fence is to ask *does the WHERE clause catch
+everything it should* — the exclusion list is part of the predicate too, and nothing about a
+green run examines it.
