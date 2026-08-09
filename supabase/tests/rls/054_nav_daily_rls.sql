@@ -68,6 +68,15 @@
 -- │        legacy singular-GUC path — and because rows are append-only AND forward-only, such  │
 -- │        a poisoned checkpoint could not be UPDATEd or DELETEd by ANY role afterwards. The   │
 -- │        blast radius is permanent, which is why this fence is worth its own leg.            │
+-- │  (VI)  BYPASS-CAPABLE ROLE SET HAS NOT GROWN (SD-24 tier boundary; NEW 2026-08-09) —       │
+-- │        the ONE control this project actually owns over the DB-admin tier. SD-24's          │
+-- │        "never cross-tenant" claim is scoped to the APPLICATION tier; the admin tier reads  │
+-- │        across tenants and that residual is documented and non-remediable. What is ours is  │
+-- │        that the set stays at the five known platform roles. Guarded by LEG (i), which is   │
+-- │        set-complement-shaped by Sec mandate and re-proves its own non-vacuity on every     │
+-- │        run. NOTE THE ASYMMETRY WITH EVERY OTHER PROPERTY HERE: (I)-(V) fence identities    │
+-- │        RLS and triggers can reach; (VI) fences a tier they cannot, so its only instrument  │
+-- │        is detection — it cannot prevent, and must never be read as if it does.             │
 -- └───────────────────────────────────────────────────────────────────────────────────────────┘
 --
 -- ┌─ WHO THE WORKER ACTUALLY IS — B1 CREDENTIAL MODEL (F/CTO-ratified 2026-08-02) ─────────────┐
@@ -417,7 +426,7 @@ begin;
 -- shared verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(63);
+select plan(74);   -- 63 + 11 for RT-31 leg (i) (the bypass-capable role-set fence), authored 2026-08-09
 
 -- ---------------------------------------------------------------------
 -- Local helpers (pg_temp — session-scoped, auto-dropped, rolled back with the txn).
@@ -1264,6 +1273,251 @@ select throws_like(
   '(o7) B1 non-owner write role: `service_role` CANNOT ALTER TABLE … DISABLE TRIGGER (must be owner of table nav_daily) — the second owner-only bypass is also out of reach. Together with (o6) this proves the worker''s write role cannot switch off the immutability or binding fences that constrain it'
 );
 select set_config('role', 'postgres', true);
+
+-- =====================================================================
+-- LEG (i) BYPASS-CAPABLE ROLE-SET FENCE — the standing regression detector for the SD-24
+--   TIER BOUNDARY. Authored 2026-08-09 (QA). Sec specified the catch criterion and the
+--   mandatory query shape at PR #341; this leg is the NEW obligation carried from SELF-219.
+--
+--   WHAT IT GUARDS. SD-24's "never cross-tenant" claim is scoped to the APPLICATION tier.
+--   The DB-admin tier reads across tenants and that is a documented, non-remediable residual —
+--   RLS is not a control against it. What IS ours, and what this leg is, is the assertion that
+--   the bypass-capable set HAS NOT GROWN: five platform roles hold it today, and a sixth
+--   arriving is a change nobody would otherwise notice.
+--
+--   ⚠ SET-COMPLEMENT SHAPE, NON-NEGOTIABLE (Sec). `is_empty()` over a query that RETURNS the
+--   offending rows — never a per-role deny-list. A deny-list cannot return the role nobody
+--   thought of, and its silence reads as a clean bill of health. This is the direct remediation
+--   of the failure recorded at DESIGN.md: "I asked a question that could not return the roles I
+--   hadn't thought of, and read its silence as absence" — a probe over a hand-chosen role list
+--   missed that five roles carry rolbypassrls.
+--
+--   ONE DEFINITION, THREE CALL SITES — and why the query is in a function rather than written
+--   out three times. (i1) asserts the fence is green; (i2)/(i3) exist to prove that green MEANS
+--   something. If those were three literal copies, an edit to one would leave the probes
+--   validating a query the fence no longer runs — the probes would still pass, and they would be
+--   proving a fence that is no longer deployed. That is exactly the defect #330 found in the TZ
+--   sweep, where two copies each claimed to be kept identical to the other and the claim was
+--   already false when it was written. qa_rt31_offenders() IS the mandated shape, verbatim and
+--   once; read the function body as the fence. Defined here rather than with the other pg_temp
+--   helpers at the top deliberately — a reviewer verifying non-vacuity must read the fence and
+--   the probes together, and 800 lines of separation is how that check gets skipped.
+--
+--   NON-VACUITY IS RE-PROVEN ON EVERY RUN, not argued in a comment. (i2)/(i3) each create a
+--   probe role of ONE violation shape and assert the fence names it. The two shapes are
+--   independent — a BYPASSRLS-only role holds no pg_read_all_data, and a pg_read_all_data-only
+--   role is not BYPASSRLS — so neither leg subsumes the other and deleting either reopens one
+--   half. Sec demonstrated this once in a rolled-back transaction on 2026-08-08; QA reproduced
+--   it while authoring rather than porting the green result, and then wired it in so it repeats.
+--   A fence that has never been made to fail is an assumption.
+--
+--   THE PROBE ROLE CANNOT LEAK, under any path. qa_rt31_probe() creates the role inside a
+--   plpgsql BEGIN…EXCEPTION block — an implicit subtransaction — and leaves that block by
+--   RAISING, so the CREATE ROLE is unwound whether the fence caught the probe or not. The
+--   fence's output rides out in the exception message. Any OTHER error returns NULL, which
+--   makes the assertion RED rather than aborting the file: the (h11)/qa_rc hard-abort lesson,
+--   where a raise inside an assertion's argument list killed a run with ZERO reported failures.
+--   (i4) asserts the absence directly rather than trusting the mechanism.
+--
+--   SCOPE DISCIPLINE (team-lead ruling, DESIGN.md — "a wrongly-scoped fence is negative value,
+--   not neutral"). This leg does NOT extend the (A5) EXECUTE fence to the other four bypassrls
+--   roles. For postgres/supabase_admin that negative is unassertable; for supabase_etl_admin/
+--   supabase_read_only_user it is a door beside an open wall, since pg_read_all_data already
+--   reaches nav_value directly. A fence that CANNOT fail shows up in a coverage review as
+--   GREEN — the same defect as a vacuous one, arriving from the opposite direction.
+-- =====================================================================
+create function pg_temp.qa_rt31_offenders() returns table (rolname text)
+language sql volatile as $qa$
+  -- THE FENCE. Sec-mandated set-complement shape, verbatim (PR #341 / RT-31 leg (i)).
+  -- The allowlist is the platform set MEASURED on 2026-08-08 and re-measured 2026-08-09.
+  -- Adding a role here is how this fence gets silently defeated — (i7)-(i9) exist because
+  -- of that, and any addition is Sec joint-review-mandatory.
+  select a.rolname::text
+  from pg_authid a
+  where (a.rolbypassrls or pg_has_role(a.rolname,'pg_read_all_data','USAGE'))
+    and a.rolname not like 'pg\_%'
+    and a.rolname not in ('postgres','supabase_admin','supabase_etl_admin',
+                          'supabase_read_only_user','service_role')
+$qa$;
+
+create function pg_temp.qa_rt31_probe(p_shape text) returns text
+language plpgsql as $qa$
+declare result text;
+begin
+  begin
+    if p_shape = 'bypassrls' then
+      execute 'create role qa_rt31_probe_bypassrls bypassrls';
+    elsif p_shape = 'read_all_data' then
+      execute 'create role qa_rt31_probe_readall';
+      execute 'grant pg_read_all_data to qa_rt31_probe_readall';
+    else
+      return null;                                   -- unknown shape => RED, never a silent pass
+    end if;
+    select coalesce(string_agg(o.rolname, ', ' order by o.rolname), '<fence returned nothing>')
+      into result from pg_temp.qa_rt31_offenders() o;
+    raise exception using errcode = 'QA031', message = result;   -- unwinds the CREATE ROLE
+  exception
+    when sqlstate 'QA031' then return sqlerrm;       -- probe rolled back; fence output carried out
+    when others then return null;                    -- NULL => pgTAP FAILS. Never a hard abort.
+  end;
+end $qa$;
+
+create function pg_temp.qa_rt31_can_probe() returns boolean
+language plpgsql as $qa$
+begin
+  return (select a.rolcreaterole and a.rolbypassrls from pg_authid a where a.rolname = current_user)
+     and not exists (select 1 from pg_authid where rolname like 'qa\_rt31\_probe%');
+exception when insufficient_privilege then
+  return null;   -- NULL => pgTAP FAILS the assertion. Never a silent skip.
+end $qa$;
+
+-- (i0) DEPENDENCY GUARD — must come first and must be LEGIBLE. (i2)/(i3) create roles, which no
+--      other battery in this suite does; if the running identity cannot, they would abort the
+--      FILE rather than fail an assertion. This turns that into one readable RED. It does not
+--      cover admin-on-pg_read_all_data (not cheaply checkable) — that shows up as (i3) NULL.
+select is(
+  pg_temp.qa_rt31_can_probe(),
+  true,
+  '(i0) leg (i) dependency guard: the running identity can read pg_authid, holds CREATEROLE + BYPASSRLS (both required to mint the (i2)/(i3) probes), and neither probe name is already taken. RED here means (i1)-(i4) below cannot be trusted — read this before reading them'
+);
+
+-- (i1) THE FENCE ITSELF. Green today; (i2)/(i3) are what make that green mean something.
+select is_empty(
+  $$ select * from pg_temp.qa_rt31_offenders() $$,
+  '(i1) RT-31 leg (i) BYPASS-CAPABLE ROLE-SET FENCE: no role outside the known platform set holds rolbypassrls or pg_read_all_data. Measured 0 rows on 2026-08-08 (Sec) and 2026-08-09 (QA), against 32 roles of which exactly five carry the capability. RED means the bypass-capable set has GROWN — a new role can read every tenant''s nav_value irrespective of the GRANTs this project writes, which is the SD-24 disclosure event with no application-tier symptom at all'
+);
+
+-- (i2) NON-VACUITY, SHAPE 1 of 2 — a BYPASSRLS-only role (holds NO pg_read_all_data).
+select is(
+  pg_temp.qa_rt31_probe('bypassrls'),
+  'qa_rt31_probe_bypassrls',
+  '(i2) leg (i) NON-VACUITY, BYPASSRLS shape: with a probe role holding BYPASSRLS and nothing else, the fence returns EXACTLY that role — proving (i1)''s green is a measurement and not a query that cannot return anything. Reproduced by QA at authoring, not ported from Sec''s 2026-08-08 run. RED means the fence has stopped observing the rolbypassrls disjunct, at which point (i1) is decorative'
+);
+
+-- (i3) NON-VACUITY, SHAPE 2 of 2 — a pg_read_all_data member that is NOT bypassrls. NOT redundant
+--      with (i2): these are independent grants and the fence catches them through different
+--      disjuncts. Deleting either leg silently reopens one half of the property.
+select is(
+  pg_temp.qa_rt31_probe('read_all_data'),
+  'qa_rt31_probe_readall',
+  '(i3) leg (i) NON-VACUITY, pg_read_all_data shape: with a probe role holding pg_read_all_data membership and NOT bypassrls, the fence returns EXACTLY that role. This is the mechanism SD-24 measured as the actual reach — a PostgreSQL predefined role granting SELECT on every table irrespective of our GRANTs — and it is caught through a DIFFERENT disjunct than (i2). RED means the fence sees only bypassrls, which would miss the two platform roles that reach nav_value that way'
+);
+
+-- (i4) THE PROBES LEFT NOTHING BEHIND. Asserted, not trusted: a leaked BYPASSRLS role would
+--      sit in this transaction as a live cross-tenant reader for every assertion after it.
+select is(
+  (select count(*) from pg_authid where rolname like 'qa\_rt31\_probe%'),
+  0::bigint,
+  '(i4) leg (i) probe hygiene: neither (i2) nor (i3) leaked its probe role — the plpgsql subtransaction unwound both CREATE ROLEs. RED means a test-only BYPASSRLS role is live in this session, which would both contaminate every later assertion and, if the unwind ever failed outside a rolled-back battery, mint exactly the capability this leg exists to detect'
+);
+
+-- (i5) THE EXCLUSION IS SAFE — measured, not assumed. The fence excludes `pg_%` because those are
+--      PostgreSQL's predefined roles. That is only sound if the prefix is RESERVED; if a role
+--      could be named `pg_anything`, the exclusion would be a hiding place rather than a filter.
+select throws_ok(
+  $$ create role pg_qa_rt31_reserved_probe $$,
+  '42939',
+  null,
+  '(i5) leg (i) exclusion soundness: PostgreSQL REFUSES a role name starting with `pg_` (SQLSTATE 42939, reserved_name) — measured on PG 17, not assumed. This is what makes the fence''s `rolname not like ''pg\_%''` clause a filter over predefined roles rather than an attacker- or mistake-usable hiding place. RED means the prefix stopped being reserved and the exclusion must be narrowed to the actual predefined set'
+);
+
+-- (i6) DO NOT "SIMPLIFY" pg_has_role() INTO A MEMBERSHIP LOOKUP. This assertion exists to stop
+--      one specific, plausible edit. pg_read_all_data has exactly THREE real members here
+--      (postgres, supabase_etl_admin, supabase_read_only_user) while pg_has_role() returns true
+--      for FOUR roles; a reader who notices that gap may conclude the function is doing something
+--      loose and swap in a pg_auth_members join. It is not loose — the fourth is a SUPERUSER, and
+--      pg_has_role reports a superuser as holding every role.
+--
+--      ⚠ WHAT THIS ASSERTION MEASURES, AND WHAT IT DOES NOT. In-battery it measures only the
+--      premise: supabase_admin is a superuser, is NOT a member, and pg_has_role says true anyway.
+--      It does NOT measure the consequence, because the consequence needs a role this battery
+--      cannot create — `postgres` is NOT a superuser on this stack (rolsuper = f), and only a
+--      superuser may create one. An earlier draft of this message asserted the consequence as
+--      though this assertion covered it; it does not, and the first differential run "confirming"
+--      it was worthless because it used supabase_admin as the witness — a role that ALSO carries
+--      rolbypassrls, so the FIRST disjunct caught it and pg_has_role was never load-bearing.
+--
+--      THE CONSEQUENCE IS MEASURED, out of band, on 2026-08-09, with the correct witness — a BARE
+--      superuser (rolsuper = t, rolbypassrls = f). Re-runnable; this is the method, not a summary:
+--        docker exec -i supabase_db_<project> psql -U supabase_admin -d postgres <<'EOF'
+--        begin; create role qa_bare_super superuser;
+--        -- mandated shape (pg_has_role)      -> returns qa_bare_super   [CAUGHT]
+--        -- membership-join "simplification"  -> returns nothing          [BLIND]
+--        -- has_column_privilege(...,'nav_value','SELECT') -> t           [hazard is real]
+--        rollback; EOF
+--      So the simplification would leave the fence blind to every superuser.
+--
+--      ⚠ AND THIS COMMENT IS THE ONLY CONTROL ON THAT EDIT — measured 2026-08-09 on Sec's flag
+--      (PR #343): applying the swap passes THE ENTIRE BATTERY, all 74 assertions green, **(i6)
+--      included**. Two independent reasons, and both have to be understood before anyone trusts
+--      this leg to police the change: (i6) reads `pg_authid` directly and never calls
+--      qa_rt31_offenders(), so no edit to the fence can red it; and (i3)'s probe IS a real
+--      member of pg_read_all_data, so the membership join catches it too. Only a NON-MEMBER
+--      superuser separates the two variants, and this battery cannot mint one.
+--
+--      An earlier draft of this line read "...which is precisely why this pin is an assertion
+--      and not a comment." That was FALSE, and it is left recorded rather than quietly replaced
+--      because it is the SECOND over-claim of the same shape at this one assertion — the first
+--      was in the message, credited to coverage it did not have. What (i6) buys is that the
+--      premise is re-measured on every run AT THE SITE where the edit would be made. That is
+--      worth having. It is not a fence, and must not be read as one.
+select is(
+  (select array[ a.rolsuper,
+                 exists (select 1 from pg_auth_members m join pg_roles g on g.oid = m.roleid
+                          where m.member = a.oid and g.rolname = 'pg_read_all_data'),
+                 pg_has_role(a.rolname,'pg_read_all_data','USAGE') ]
+     from pg_authid a where a.rolname = 'supabase_admin'),
+  array[true, false, true],
+  '(i6) leg (i) mechanism pin — `supabase_admin` is a SUPERUSER, is NOT a member of pg_read_all_data, and pg_has_role() reports it as holding pg_read_all_data anyway. This assertion measures that PREMISE only. The consequence it protects — that swapping pg_has_role for a membership join blinds the fence to a bare SUPERUSER (rolbypassrls = f) — was measured out of band with a bare-superuser witness on 2026-08-09 and cannot be asserted here, because `postgres` is not a superuser on this stack and so cannot mint one. RED means the premise moved, and the fence''s superuser coverage must be re-measured by the method in the comment above before this leg is trusted'
+);
+
+-- (i7)-(i9) THE POSITIVE NEGATIVES. The complement query alone stays GREEN if one of OUR OWN
+--   roles is quietly added to its allowlist by a future edit — the fence would then be excluding
+--   the very thing it exists to catch, and reporting clean. These three assert the property
+--   directly for every identity this project provisions, so an allowlist edit cannot hide here.
+--   Each asserts the full triple [bypassrls, pg_read_all_data, nav_value SELECT]; the array form
+--   is deliberate — a failure names WHICH of the three moved rather than just "false <> true".
+select is(
+  (select array[ a.rolbypassrls,
+                 pg_has_role(a.rolname,'pg_read_all_data','USAGE'),
+                 has_column_privilege(a.rolname,'pfin.nav_daily','nav_value','SELECT') ]
+     from pg_authid a where a.rolname = 'pfin_etl'),
+  array[false, false, false],
+  '(i7) leg (i) positive negative — `pfin_etl`, the ETL''s dedicated login role (055): NOT bypassrls, NOT pg_read_all_data, and NO SELECT on nav_value. This is the identity the W-1 cron authenticates as, so it is the one an operator is most likely to "just give read access" to. RED means the worker''s own login can read every tenant''s frozen net worth, independent of anything RLS does'
+);
+
+select is(
+  (select array[ a.rolbypassrls,
+                 pg_has_role(a.rolname,'pg_read_all_data','USAGE'),
+                 has_column_privilege(a.rolname,'pfin.nav_daily','nav_value','SELECT') ]
+     from pg_authid a where a.rolname = 'authenticator'),
+  array[false, false, false],
+  '(i8) leg (i) positive negative — `authenticator`, the LOGIN role PostgREST connects as for EVERY web request: NOT bypassrls, NOT pg_read_all_data, NO SELECT on nav_value. The highest-consequence row of the three — this role is reached by every unauthenticated HTTP request that arrives, and #324 already measured a role-level GUC being silently attached to exactly this identity'
+);
+
+select is(
+  (select array[ a.rolbypassrls,
+                 pg_has_role(a.rolname,'pg_read_all_data','USAGE'),
+                 has_column_privilege(a.rolname,'pfin.nav_daily','nav_value','SELECT') ]
+     from pg_authid a where a.rolname = 'anon'),
+  array[false, false, false],
+  '(i9) leg (i) positive negative — `anon`, the pre-authentication identity: NOT bypassrls, NOT pg_read_all_data, NO SELECT on nav_value. Overlaps (h9)''s zero-grant assertion on the GRANT axis and is deliberately kept: (h9) proves no grant exists, this proves no BYPASS route exists, and a role can acquire the second without ever touching the first'
+);
+
+-- (i10) NON-VACUITY CONTROL for (i7)-(i9). Without it, three `false` triples cannot be told
+--       apart from a column NO role can read — if the `authenticated` grant were ever dropped,
+--       all three would stay green while measuring nothing about those three roles.
+--       ⚠ The example this comment originally gave — "a renamed column" — was IMPOSSIBLE, and
+--       the correction is worth more than the assertion it justifies: has_column_privilege()
+--       on a column that does not exist RAISES 42703 (measured 2026-08-09 on Sec's flag,
+--       PR #343); it does not return false. Against a rename, (i7)-(i9) would ERROR, not pass
+--       vacuously. A rationale invented rather than measured, inside a battery whose subject is
+--       that rationale must be measured — which is why it is corrected in place, not deleted.
+select is(
+  has_column_privilege('authenticated','pfin.nav_daily','nav_value','SELECT'),
+  true,
+  '(i10) leg (i) non-vacuity control: `authenticated` DOES hold SELECT on nav_value (RLS-filtered to the owner — intended, and the (a)/(e) legs are what fence it). This is what proves (i7)-(i9)''s three false triples are a measurement of those roles rather than an artifact of has_column_privilege returning false for everything on this column'
+);
 
 select * from finish();
 rollback;
