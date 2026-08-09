@@ -41,6 +41,55 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-046 — Privileged write-path tenant fencing: where (c′) applies, where it cannot, and the residual accepted at the checkpoint tables (terse pattern)
+
+**Date:** 2026-08-09 · **Status:** **Accepted** — F/CTO ratified 2026-08-09.
+**Phase:** 6 Build Loop · **Surfaces:** `pfin.account_balance_checkpoint` + `pfin.holdings_checkpoint` (residual **accepted**) · `pfin.mfa_recovery_code` + `pfin.mfa_recovery_attempt` (**no action**; posture correct as designed).
+**Origin:** the [ADR-008 Amendment 2026-08-09](#adr-008) axis (iv) rewrite, which measured six tenant-scoped tables written by `service_role` with zero write policies. This ADR dispositions the four that were not already fenced.
+
+**Decision.** **(1)** The checkpoint tables get **no** write-tenant fence in V1; the residual is **explicitly accepted and recorded here.** **(2)** The `mfa_recovery_*` tables need none — their posture is correct as designed per [ADR-030](#adr-030), and a (c′)-shaped fence there is **measurably impossible to fail** and would be vetoed if proposed.
+
+### The distinguishing test, which is the transferable part
+
+The SELF-214 B7 **(c′)** fence works because the writer **impersonates** — the tenant GUC is captured from `auth.uid()` **as the database resolved it**, so the row's tenant can be compared against *the tenant the database actually served*. **That precondition is a property of the write path, not of the table's column shape**, and the two families here diverge on exactly it:
+
+| | writer | DB-resolved identity at write time | (c′) applicable? |
+|---|---|---|---|
+| checkpoint tables | `TenantBoundClient` — `set local role authenticated` + claims, **then** `set local role service_role` | **yes** | **yes** |
+| `mfa_recovery_*` | `supabaseAdmin()` — plain PostgREST client, `persistSession: false`, no impersonation | **no** — measured `auth.uid()` NULL, `request.jwt.claims` NULL under bare `service_role` | **no** |
+
+> ⚠ **A fence pattern ported by column-shape match onto a write path lacking the mechanism it depends on becomes a fence that cannot fail.** Team-lead proposed extending (c′) to `mfa_recovery_*` on the reasoning that its `users_id` is a direct writer-supplied anchor — *the same shape as `nav_daily`* — and that reasoning was **wrong**. With no impersonated block there is no database-resolved identity, so such a trigger could only compare a writer-supplied value against a writer-supplied GUC: **green in every case, including the one it purports to catch.** Sec would have vetoed it. Recorded because the hypothesis was plausible, was stated as a hypothesis, and was killed by one measurement — **the shape matched and the mechanism did not.**
+
+### (1) The checkpoint tables — residual ACCEPTED
+
+**What is unfenced, precisely.** `holdings_checkpoint`'s existing `holdings_checkpoint_security_asset` trigger (Decision-3 canonical instance **#11**) asserts that the **asset and the account agree with each other**. Nothing on either table asserts that the account belongs to **the tenant the worker was serving**. So a worker impersonating tenant A that writes a checkpoint against tenant B's account and B's asset **passes every existing fence** — both anchors agree; they are simply the wrong tenant. `account_balance_checkpoint` carries only append-only, TRUNCATE and closed-account triggers; neither table carries a write-tenant binding.
+
+**⚠ This is accept-despite-feasible, not accept-because-impossible — and the distinction is the point.** Remediation exists, is cheap, and the precedent sits in the same table: `holdings_checkpoint_security_asset`'s own body states *"LOAD-BEARING UNDER service_role: the provider-sync path writes checkpoints under service_role (RLS bypassed), so this trigger is the SOLE fence."* DB-layer fencing of these tables under `service_role` is **already established practice here.** The decision is to decline it for V1, not that it was unavailable.
+
+**Why accepted.** Severity **flag, not veto** (Sec): V1 is single-user, the worker is ours, `TenantBoundClient` binds in application code, and reaching the failure requires an application bug rather than an adversary. Sec's own disposition: *"this should be an explicit accepted risk, not an artifact of which table I happened to review."* **The objection was to the choice being accidental; making it is what discharges that.**
+
+**⚠ One premise of the severity rating was measurably FALSE, and the rating is retained on corrected grounds.** Sec rated low partly because *"no second anchor to mismatch, so not a Decision-3 instance."* Measured: `holdings_checkpoint` **has** a second anchor (`security_id` → `pfin.asset`, which carries `users_id`), and it **is** a catalogued Decision-3 instance (#11). The conclusion survives on a **better** reason than the one given — the second anchor is *already fenced* — but a rating whose stated basis is false must be re-grounded rather than inherited, and it is re-grounded here.
+
+**⚠ Honest limit — the gap is INFERRED, not demonstrated.** No one constructed a cross-tenant checkpoint write and observed it land; the finding rests on the **absence** of a fence, not on an exercised failure. Nor was it established whether `TenantBoundClient`'s callers can reach a mismatched `account_id` at all — if the account set is derived from the same impersonated read, the bug may not be constructible. **This is the standard this project held Sec to at axis (iv) and it is not met here.** Anyone re-opening this should demonstrate the failure first; a residual accepted on an unexercised hypothesis is accepted at lower confidence than one accepted on a measurement.
+
+**Re-open triggers.** (a) **A second user** — §4.1 commits that the isolation posture is multi-tenant from day one, and the single-user premise is doing real work in this acceptance. (b) Any new writer of these tables that is not `TenantBoundClient`. (c) A demonstrated cross-tenant write. **Any of the three voids this acceptance.**
+
+**No artifact change is owed.** §4.1 (as rewritten at the ADR-008 Amendment 2026-08-09) already states that privileged-tier fence coverage is **non-uniform** and that *"a privileged write surface is tenant-safe only where one of those mechanisms is demonstrated for it, and that demonstration belongs at the surface's own row."* The checkpoint rows demonstrate none, so a reader following that rule reaches the correct conclusion. **The silence is the signal, and it is load-bearing — do not "tidy" those rows with reassuring language.**
+
+### (2) `mfa_recovery_*` — no action; posture correct as designed
+
+Intentional per [ADR-030](#adr-030), which records the alternative as **rejected**: *"(table RLS) owner-readable — rejected (exposes bcrypt hashes to a stolen aal1 session; needlessly widens the surface; the count UI is served by a server endpoint instead)."* Migrations `026`/`027` state the `SERVICE_ROLE-ONLY` default-deny posture repeatedly, including in a `comment on table`. RLS-on + zero policies + **no `authenticated` grant** is default-deny by construction, with `linked_source_sync_audit` named as the sibling pattern.
+
+Tenant correctness rests on the application: `users_id` is caller-supplied, and Sec **verified rather than inherited** the file's claim, confirming all four call sites across `settings/security` and `mfa/recover` pass an id derived from `locals.safeGetSession()`, none from the request body. One precision recorded: the file's *"the explicit `.eq('users_id', userId)` on EVERY query"* is true of reads and updates, but **an INSERT carries no `.eq`** — on the write path tenant correctness rests on the parameter alone.
+
+**Two items noted and NOT actioned.** (a) The durable control for that residual would be **code-layer** — an RT-26-style fence asserting those entry points are called only with session-derived ids — **not** a database trigger; not recommended for V1 (two routes, Backend-owned), recorded so the decision is explicit. (b) `026` grants **table-wide** UPDATE on `mfa_recovery_code` while the application only ever writes `used_at`, and the *same migration* column-scopes its neighbour (`grant select (users_id), update (mfa_policy) on pfin.user_settings to service_role`). Narrowing to `update (used_at)` would match the migration's own precedent. **Marginal security gain is small and deliberately not inflated** — `service_role` already holds unrestricted INSERT with an arbitrary `users_id`, so anything re-tenanting achieves a fresh INSERT achieves too. Hygiene; worth one line if a migration touches `026` anyway, not worth its own PR.
+
+**Also sound, checked and reported rather than left silent:** `mfa_recovery_attempt`'s append-only property is enforced by **grant absence** (INSERT+SELECT only) rather than by trigger — a cleaner mechanism, not a gap; and `mfa-recovery.ts` references no key, so the sole-`SUPABASE_SERVICE_ROLE_KEY`-home discipline (RT-26) holds.
+
+**Governance.** No migration, no DDL, no policy, no trigger. **[ADR-011](#adr-011) Decision 4 §10 ledger unchanged; Decision 3 family unchanged** (#11 is referenced, not moved); DEFINER allowlist unchanged. Sec §10 three-axis cross-check CLEAN on both rulings. **No veto on either.**
+
+**Cross-references.** [ADR-008](#adr-008) Amendment 2026-08-09 (axis (iv) — the sweep that found these) · [ADR-045](#adr-045) (the §4 tier bound; a *different* vehicle question, do not apply by analogy) · [ADR-030](#adr-030) (the MFA store posture) · [ADR-011](#adr-011) Decision 1 (privileged-context-write) / Decision 3 (#11, the fenced second anchor) / Decision 4 (§10, unchanged) · [ADR-023](#adr-023) (login-as-broker / write-as-`service_role`) · [ADR-040](#adr-040) + SELF-214 B7 (c′) (the fence pattern) · `workers/provider-sync/src/db/TenantBoundClient.ts` · `api/src/lib/server/auth/mfa-recovery.ts` · migrations `005` `018` `026` `027` `054`.
+
 ## ADR-045 — The §4 tier qualifier DESCRIBES axis (i); it does not narrow it (terse pattern)
 
 **Date:** 2026-08-09 · **Status:** **Accepted** — F/CTO ratified 2026-08-09 on the Sec ruling.
