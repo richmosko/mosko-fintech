@@ -1299,6 +1299,35 @@ the only thing that changed was the witness.
 Related but distinct from *"a fence that cannot fail reads as GREEN"*: that one is about the
 instrument, this one is about the specimen. Both produce a green you cannot bank.
 
+### The same failure on the mutant side — test the edit you fear, not a stronger one *(Security Reviewer, self-reported)*
+
+The witness problem above has a twin, and Sec found it in **its own review instrument** rather than
+in the artifact under review. Its mutation test of leg (i) **deleted** the `pg_has_role` disjunct
+and observed the probe leg go RED, which it read as coverage. But the edit actually being guarded
+does not delete that disjunct — it **substitutes** a `pg_auth_members` join for it.
+
+The two are not the same strength, and the gap runs the wrong way:
+
+| mutant | `(i2)` BYPASSRLS probe | `(i3)` `pg_read_all_data` probe |
+|---|---|---|
+| disjunct **deleted** (what was tested) | green | **RED** — looks like coverage |
+| disjunct **substituted** (what is feared) | green | **green** — the probe is a *real member*, so the join catches it too |
+
+Deletion is visible to a probe that holds real membership; substitution is visible only to a
+**non-member superuser**, which this battery cannot mint. So the mutation test established that
+the disjunct is load-bearing, and said nothing about whether the *specific replacement* is weaker
+— which was the actual question.
+
+> **A mutant that is easier to catch than the edit you fear produces a green you cannot bank.**
+> Mutation testing answers *"is this clause doing work?"*. It does not answer *"is the change
+> someone will actually make weaker than this clause?"* unless the mutant **is** that change.
+> Derive mutants from the edits you are trying to prevent, not from the syntax that is easiest to
+> break.
+
+Same shape as the witness problem, arriving through the **instrument** instead of the specimen —
+and it produced a confident RED rather than a confident green, which is why it survived: a fence
+going red on cue is the last place anyone looks for a measurement error.
+
 ### Some consequences are not assertable in-battery — pin the premise, ship the method
 
 The bare-superuser measurement cannot become an assertion in this battery: `postgres` is **not**
