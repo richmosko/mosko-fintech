@@ -5,7 +5,7 @@
 -- BINDS TO MIGRATION: supabase/migrations/064_fn_cpi_u_index_for_period.sql
 --   - pfin.fn_cpi_u_index_for_period(p_period date)
 --       returns table (cpi_period date, cpi_value numeric, is_carried boolean,
---                      carried_from date, gap_class text)
+--                      carried_from date, gap_class text, nonpublication_on_record boolean)
 --       SECURITY INVOKER · STABLE · set search_path = ''  (ADR-011 Lock 11 read-composition
 --       over pfin.cpi_u_index (053) and pfin.cpi_u_nonpublication (063), both GLOBAL with
 --       `using (true)` SELECT policies)
@@ -13,8 +13,18 @@
 --                                      is the whole of the access control, and its removal is
 --                                      SILENT: every behavioural leg here would stay green)
 --   - grant execute ... to authenticated
---   - gap_class closed TEXT set: published / recorded_nonpublication / unrecorded_gap /
---                                beyond_coverage
+--   - gap_class TEXT set (FIVE members): published / recorded_nonpublication / unrecorded_gap /
+--                                before_coverage / beyond_coverage
+--
+-- ⚠ THIS BATTERY PINS A SIGNATURE 064 ITSELF CALLS PROVISIONAL. 064's `comment on function`
+--   states the gap_class MEMBER SET is provisional pending the ADR-049 Decision 5 product
+--   ruling (the PRD §2.4.4 non-silent-staleness amendment plus the two-tier marker, PM-owned
+--   and not yet F/CTO-ratified), because Decision 4 locked the composite return and left the
+--   SIGNATURE to the implementing PR. So (B8a) and (E4) are STATE PINS, not fences: when that
+--   ruling lands they are EXPECTED to go red and are to be updated, not defended. Stated here
+--   so a future reader does not read a red (B8a) as a regression and "fix" the function back.
+--   What is NOT provisional, per the same comment, and IS a fence: both coverage edges are
+--   bounded — (C4)/(B8b)/(V7) hold that independently of any product ruling.
 --
 -- ┌─ ⚠ WHAT "TWO-TENANT" MEANS FOR A HELPER OVER TWO TENANT-LESS TABLES ───────────────────────┐
 -- │ Both tables this function reads are GLOBAL: no users_id, no FK-shaped column, no tenant     │
@@ -45,24 +55,28 @@
 -- │ it cannot be enforced.                                                                      │
 -- └────────────────────────────────────────────────────────────────────────────────────────────┘
 --
--- ┌─ THE FOUR gap_class OUTCOMES ARE REACHED BY REAL DATA STATE, NOT BY ARGUMENT SHAPE ────────┐
+-- ┌─ THE FIVE gap_class OUTCOMES ARE REACHED BY REAL DATA STATE, NOT BY ARGUMENT SHAPE ────────┐
 -- │   published               (B1)  2025-09-01 — its own print exists                           │
--- │   unrecorded_gap          (B2)  2025-10-01 — absent, 2025-11 present, NO record yet         │
+-- │   unrecorded_gap          (B2)  2025-10-01 — absent, STRICTLY INTERIOR, no record yet       │
+-- │                           (B2b) 2025-07-01 — a second interior gap NO leg ever records, so   │
+-- │                                  the alarm class stays reachable after (B3) converts 2025-10 │
 -- │   recorded_nonpublication (B3)  2025-10-01 — THE SAME PERIOD, after the 063 record lands    │
--- │   beyond_coverage         (B4)  2026-01-01 — absent, nothing later present                  │
+-- │   before_coverage         (C4)  2014-01-01 — earlier than the leading edge. NOT an alarm    │
+-- │   beyond_coverage         (B4)  2026-01-01 — later than the trailing edge. NOT an alarm     │
 -- │ (B2)/(B3) are the load-bearing pair: same function, same argument, same table contents      │
 -- │ EXCEPT the one row 063 exists to hold. A suite that reached the two classes from two        │
 -- │ different periods would pass without ever showing that the RECORD is what changed the       │
 -- │ answer. Varying exactly one variable is the whole design of this leg.                       │
--- │ (B5) then pins the TRAILING-EDGE COMPLEMENTARITY the migration calls out: a record at a      │
--- │ period beyond the trailing edge classifies `recorded_nonpublication`, not `beyond_coverage`, │
--- │ because the record is consulted at all and consulted ahead of the `else`. (V3b) removes the  │
--- │ consultation and watches (B5) flip.                                                          │
--- │ ⚠ THE ORDER OF THE RECORD CHECK RELATIVE TO THE CONTIGUITY CHECK IS A SEPARATE PROPERTY, and │
--- │ (B5) CANNOT SEE IT — measured, not assumed: at the trailing edge the two branches are        │
--- │ mutually exclusive, so swapping them changes nothing there. The order is observable only at  │
--- │ the INTERIOR gap, i.e. at (B3), and (V3a) is where it is measured. Recorded because the      │
--- │ first draft of this file asserted the opposite and the run refuted it.                       │
+-- │ (B5) pins the EDGE COMPLEMENTARITY: a record beyond the trailing edge classifies             │
+-- │ recorded_nonpublication, because at an edge the extent test has nothing to see and the       │
+-- │ record is the only evidence there is. (V3b) removes the consultation and watches it flip.    │
+-- │ (B7) pins the AUDIT TRAIL — record present AND the period later published — which reads      │
+-- │ gap_class = 'published' AND nonpublication_on_record = true. That pairing is NOT derivable   │
+-- │ from gap_class, and (V6) is the proof: the derived form is correct in all four other states. │
+-- │ (B8a)/(B8b) pin the closed set and ALARM UNIQUENESS. Bounding both edges is what makes       │
+-- │ `unrecorded_gap` mean STRICTLY INTERIOR — bracketed by prints on both sides — and therefore  │
+-- │ the one class worth alarming on. (V7) restores the unbounded-leading-edge world, in which    │
+-- │ every period back to year zero raises the alarm and the alarm gets trained away.             │
 -- └────────────────────────────────────────────────────────────────────────────────────────────┘
 --
 -- ┌─ NON-VACUITY IS ENCODED, NOT REPORTED — leg (V) ───────────────────────────────────────────┐
@@ -74,14 +88,19 @@
 -- │   (V1) grant EXECUTE to service_role        -> (A4)/(A6) flip                                │
 -- │   (V2) narrow the return to `returns numeric` -> (E4) flips: the by-construction non-silence │
 -- │                                                mechanism is gone and NOTHING ELSE notices    │
--- │  (V3a) classify contiguity BEFORE the record  -> (B3) flips. ⚠ THIS WAS A REFUTED           │
--- │        HYPOTHESIS: the leg was first written against (B5), the trailing-edge probe, and the  │
--- │        run showed NO change — at the trailing edge the two swapped branches are mutually     │
--- │        exclusive. The order is observable ONLY at the interior gap. The refutation is kept   │
--- │        in place at the leg, because "which probe can see this property" is the finding.      │
--- │  (V3b) remove the record consultation entirely -> (B5) flips to beyond_coverage: the         │
--- │        trailing edge is where the record is the ONLY evidence, and (V3a) cannot reach it     │
+-- │  (V3a) DEMOTE the record below the edge rules -> (B5) flips; (V3a2) …and (B3) does NOT.      │
+-- │ (V3b)  REMOVE the record from classification  -> (B5) flips; (V3b2) …and (B3) DOES.          │
+-- │        ⚠ TWO MUTATIONS, DIFFERENT BLAST RADII, AND THE CONCLUSION INVERTED ONCE ALREADY.     │
+-- │        Against the original THREE-branch shape, precedence was observable at the interior    │
+-- │        and not at the edge. Under the FIVE-branch exhaustive shape it is the reverse — the   │
+-- │        interior case IS the final `else`, so a demotion cannot move it and only a removal    │
+-- │        can. Both the flip and the NON-flip are asserted in each pair: an instrument's limit  │
+-- │        is worth as much as its reach, and asserting only the half that moved would leave     │
+-- │        the other half looking covered. Two drafts of these legs were refuted by the run.     │
 -- │   (V4) fabricate 0 where the value is unknown -> (C4)/(C5) flip: the $0 defect, made real    │
+-- │   (V6) derive nonpublication_on_record from gap_class -> (B7) flips: correct in four states  │
+-- │        out of five, wrong in exactly the one the column exists for                           │
+-- │   (V7) unbound the leading edge -> (C4)/(B8b) flip: reproduces the pre-fix alarm defect      │
 -- │   (V5) structural, OUTSIDE any savepoint: the function is back, and the plan counter with it │
 -- └────────────────────────────────────────────────────────────────────────────────────────────┘
 --
@@ -113,10 +132,21 @@
 --   (B1)-(B4) -> a misclassification in any of the four states. Each is reached by real data.
 --   (B3)  -> the 063 record NOT being consulted at all: (B2) would still pass, and a recorded
 --            non-publication would read as an unexplained gap forever.
---   (B5)  -> the 063 record dropping out of the classification entirely (the shape 064 would
---            have had if written against 053 alone). The trailing edge is exactly where the
---            contiguity test has nothing to see, so the record is the ONLY evidence available.
---            ⚠ It does NOT catch a record-vs-contiguity REORDER — (B3) is the probe that does.
+--   (B2b) -> the alarm class becoming unreachable by any probe once (B3) records 2025-10. A
+--            second, never-recorded interior gap keeps (B8b) meaningful.
+--   (B5)  -> the 063 record dropping out of the classification, OR being demoted below the edge
+--            rules. At an edge the extent test has nothing to see, so the record is the ONLY
+--            evidence available. ⚠ (B5) catches BOTH mutations; (B3) catches only removal —
+--            measured in (V3a2)/(V3b2), not assumed.
+--   (B7)  -> the audit trail becoming unreachable. A period in BOTH tables short-circuits to
+--            gap_class = 'published', so without the sixth column the "unpublished when we
+--            looked, published later" case cannot be seen through the one helper consumers may
+--            call — and 063 retains those rows specifically so it can be.
+--   (B8a) -> a branch emitting something outside the closed set, or a period falling through
+--            with a NULL class. ⚠ STATE PIN, not a fence — see the provisional-signature note.
+--   (B8b) -> the alarm firing on more than the one class that earns it. This is the assertion
+--            that would have caught the pre-fix leading-edge defect in production terms: an
+--            alarm that fires on all of history is an alarm nobody reads.
 --   (B6)  -> the "exactly one row, always" contract breaking. A consumer would then have to
 --            distinguish "the function returned nothing" from "the answer is nothing" — the
 --            ambiguity ADR-049 Decision 4 exists to prevent.
@@ -127,7 +157,9 @@
 --            classification, so a mid-month probe in a gap month is not misclassified.
 --   (C4)/(C5) -> a FABRICATED ZERO where no carry source exists. This is the $0-chart defect:
 --            0 is a plausible-looking number that silently understates a real-terms figure by
---            100%, where NULL forces the consumer to handle the unknown.
+--            100%, where NULL forces the consumer to handle the unknown. (C4) ALSO catches the
+--            leading edge going unbounded again, which would classify a pre-coverage period as
+--            the alarm — (V7) reproduces that world.
 --   (C6)  -> a session-TimeZone dependency creeping into the period normalization (ADR-044's
 --            two-clock hazard). 064 makes the `::timestamp` cast load-bearing for exactly this.
 --   (D0)-(D2) -> a tenant predicate being introduced into a helper over two tenant-less tables,
@@ -176,7 +208,7 @@ begin;
 -- shared verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(35);
+select plan(44);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
@@ -190,15 +222,22 @@ select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 -- ---------------------------------------------------------------------
 delete from pfin.cpi_u_index;
 insert into pfin.cpi_u_index (cpi_period, cpi_value) values
+  ('2025-06-01', 322.500),
   ('2025-08-01', 323.976),
   ('2025-09-01', 324.800),
   ('2025-11-01', 326.100);
 
--- (z1) the trailing edge is where the fixture says it is — every `beyond_coverage` /
---      `unrecorded_gap` assertion below is a claim ABOUT this value.
+-- (z1) the trailing edge is where the fixture says it is — every `beyond_coverage` assertion
+--      below is a claim ABOUT this value.
 select is(
   (select max(cpi_period) from pfin.cpi_u_index), '2025-11-01'::date,
-  '(z1) fixture pin: the trailing edge of cpi_u_index is 2025-11-01 — the boundary that decides `unrecorded_gap` (a later period exists) from `beyond_coverage` (none does) for every probe below'
+  '(z1) fixture pin: the trailing edge of cpi_u_index is 2025-11-01 — the boundary above which a period is `beyond_coverage` rather than interior'
+);
+-- (z1b) the LEADING edge, added when 064 gained `before_coverage`. Both edges are now bounded,
+--       so `unrecorded_gap` means STRICTLY INTERIOR and both edges must be pinned, not just one.
+select is(
+  (select min(cpi_period) from pfin.cpi_u_index), '2025-06-01'::date,
+  '(z1b) fixture pin: the LEADING edge of cpi_u_index is 2025-06-01 — the boundary below which a period is `before_coverage` rather than an alarm. Pinned because 064 now bounds BOTH edges: with only the trailing edge pinned, every pre-coverage assertion below would be a claim about an unstated value'
 );
 -- (z2) the gap is a real absence, not a row with a NULL value (053 forbids that anyway).
 select is(
@@ -253,17 +292,26 @@ select set_config('role', 'postgres', true);
 -- =====================================================================
 -- (B1) EXACT PRINT.
 select results_eq(
-  $$ select cpi_period, cpi_value, is_carried, carried_from, gap_class
+  $$ select cpi_period, cpi_value, is_carried, carried_from, gap_class, nonpublication_on_record
        from pfin.fn_cpi_u_index_for_period('2025-09-01') $$,
-  $$ values ('2025-09-01'::date, 324.800::numeric, false, '2025-09-01'::date, 'published'::text) $$,
-  '(B1) published: a period with its own print returns that print, is_carried = false, and carried_from set to the period ITSELF rather than NULL — so "where did this value come from?" has the same answer SHAPE in every row a consumer receives. Asserted on all five columns at once'
+  $$ values ('2025-09-01'::date, 324.800::numeric, false, '2025-09-01'::date, 'published'::text, false) $$,
+  '(B1) published: a period with its own print returns that print, is_carried = false, and carried_from set to the period ITSELF rather than NULL — so "where did this value come from?" has the same answer SHAPE in every row a consumer receives. nonpublication_on_record is false: this period was never observed valueless. Asserted on all six columns at once'
 );
--- (B2) ABSENT, LATER PERIOD PRESENT, NO RECORD YET.
+-- (B2) ABSENT, STRICTLY INTERIOR, NO RECORD YET.
 select results_eq(
-  $$ select cpi_period, cpi_value, is_carried, carried_from, gap_class
+  $$ select cpi_period, cpi_value, is_carried, carried_from, gap_class, nonpublication_on_record
        from pfin.fn_cpi_u_index_for_period('2025-10-01') $$,
-  $$ values ('2025-10-01'::date, 324.800::numeric, true, '2025-09-01'::date, 'unrecorded_gap'::text) $$,
-  '(B2) unrecorded_gap: 2025-10 is absent and 2025-11 IS present, so the period was due and nothing explains it. The value is CARRIED from 2025-09 and says so — is_carried = true with carried_from naming the source. Silent carry-forward on a monthly-complete series understates inflation for the gap month; the provenance columns are the mechanism that makes it non-silent'
+  $$ values ('2025-10-01'::date, 324.800::numeric, true, '2025-09-01'::date, 'unrecorded_gap'::text, false) $$,
+  '(B2) unrecorded_gap: 2025-10 is absent and is BRACKETED BY PRINTS ON BOTH SIDES (2025-09 and 2025-11), so it was demonstrably due and nothing explains it. That bracketing is what makes this the one class worth alarming on. The value is CARRIED from 2025-09 and says so — silent carry-forward on a monthly-complete series understates inflation for the gap month, and the provenance columns are what make it non-silent'
+);
+-- (B2b) THE PERMANENT ALARM PROBE. (B2) stops being an unrecorded gap the moment (B3) records
+--       it, so a second interior gap is seeded that NO leg ever records — otherwise every later
+--       leg would be reasoning about a class no probe still reaches.
+select results_eq(
+  $$ select cpi_period, cpi_value, is_carried, carried_from, gap_class, nonpublication_on_record
+       from pfin.fn_cpi_u_index_for_period('2025-07-01') $$,
+  $$ values ('2025-07-01'::date, 322.500::numeric, true, '2025-06-01'::date, 'unrecorded_gap'::text, false) $$,
+  '(B2b) unrecorded_gap, permanent probe: 2025-07 is interior (bracketed by 2025-06 and 2025-08) and is never recorded by any leg in this file, so the ALARM class stays reachable after (B3) converts 2025-10. (B8b) depends on this probe existing'
 );
 
 -- ⭐ THE ONE VARIABLE CHANGES HERE — and only this one. Same function, same argument, same
@@ -273,17 +321,17 @@ insert into pfin.cpi_u_nonpublication (cpi_period, published_value_raw)
 
 -- (B3) THE SAME PERIOD, AFTER THE RECORD LANDS.
 select results_eq(
-  $$ select cpi_period, cpi_value, is_carried, carried_from, gap_class
+  $$ select cpi_period, cpi_value, is_carried, carried_from, gap_class, nonpublication_on_record
        from pfin.fn_cpi_u_index_for_period('2025-10-01') $$,
-  $$ values ('2025-10-01'::date, 324.800::numeric, true, '2025-09-01'::date, 'recorded_nonpublication'::text) $$,
+  $$ values ('2025-10-01'::date, 324.800::numeric, true, '2025-09-01'::date, 'recorded_nonpublication'::text, true) $$,
   '(B3) ⭐ recorded_nonpublication: the SAME period as (B2), with the ONLY difference being the 063 record. This is the pair that proves the record is consulted at all — a suite reaching the two classes from two different periods would pass without ever showing that. Note the carry outcome is IDENTICAL to (B2): gap_class reports the ABSENCE REASON and is orthogonal to what could be resolved, exactly as 064 documents. This is also the ONLY probe sensitive to the record-vs-contiguity ORDER — the interior gap is where both branches are true at once (see (V3a))'
 );
 -- (B4) TRAILING EDGE — nothing later is present.
 select results_eq(
-  $$ select cpi_period, cpi_value, is_carried, carried_from, gap_class
+  $$ select cpi_period, cpi_value, is_carried, carried_from, gap_class, nonpublication_on_record
        from pfin.fn_cpi_u_index_for_period('2026-01-01') $$,
-  $$ values ('2026-01-01'::date, 326.100::numeric, true, '2025-11-01'::date, 'beyond_coverage'::text) $$,
-  '(B4) beyond_coverage: absent with NO later period present. NOT an alarm — 064''s bound is data-derived rather than calendar-derived, so it consults no clock and is outside ADR-044''s two-clock hazard. ITS STATED COST, which this leg does NOT and cannot cover: a stalled ingest yields this same class indefinitely, indistinguishable from "not yet published"'
+  $$ values ('2026-01-01'::date, 326.100::numeric, true, '2025-11-01'::date, 'beyond_coverage'::text, false) $$,
+  '(B4) beyond_coverage: absent, later than the trailing edge. NOT an alarm — 064''s bound is data-derived rather than calendar-derived, so it consults no clock and is outside ADR-044''s two-clock hazard. ITS STATED COST, which this leg does NOT and cannot cover: a stalled ingest yields this same class indefinitely, indistinguishable from "not yet published"'
 );
 
 -- (B5) PRECEDENCE — the record is consulted FIRST, so it works where contiguity cannot.
@@ -295,17 +343,68 @@ select is(
   '(B5) TRAILING-EDGE COMPLEMENTARITY: a period BEYOND the trailing edge that HAS a record classifies recorded_nonpublication, NOT beyond_coverage — the record is consulted, and consulted ahead of the `else` branch that would otherwise swallow it. ⚠ PRECISE ABOUT WHAT THIS DOES AND DOES NOT SEE: it is sensitive to the record being consulted AT ALL (proven in (V3b)), but NOT to the record-vs-contiguity ORDER — at the trailing edge those two branches are mutually exclusive. The order is observable only at the interior gap, which is (B3), and (V3a) measures it there'
 );
 
--- (B6) EXACTLY ONE ROW, ALWAYS — across every class plus the below-coverage edge.
+-- (B6) EXACTLY ONE ROW, ALWAYS — across all five classes.
 select is(
   (select count(*) from (
      select * from pfin.fn_cpi_u_index_for_period('2025-09-01')
+     union all select * from pfin.fn_cpi_u_index_for_period('2025-07-01')
      union all select * from pfin.fn_cpi_u_index_for_period('2025-10-01')
+     union all select * from pfin.fn_cpi_u_index_for_period('2014-01-01')
      union all select * from pfin.fn_cpi_u_index_for_period('2026-01-01')
      union all select * from pfin.fn_cpi_u_index_for_period('2026-02-01')
-     union all select * from pfin.fn_cpi_u_index_for_period('2014-01-01')
    ) s)::bigint,
-  5::bigint,
-  '(B6) exactly ONE row per call, across all four gap classes plus the below-coverage edge (5 calls, 5 rows). A consumer must never have to distinguish "the function returned nothing" from "the answer is nothing" — that ambiguity on a financial surface is the silence ADR-049 Decision 4 exists to prevent'
+  6::bigint,
+  '(B6) exactly ONE row per call, across all five gap classes (6 calls, 6 rows). A consumer must never have to distinguish "the function returned nothing" from "the answer is nothing" — that ambiguity on a financial surface is the silence ADR-049 Decision 4 exists to prevent'
+);
+
+-- ---------------------------------------------------------------------
+-- (B7) ⭐ THE AUDIT TRAIL, AND WHY IT NEEDED A SIXTH COLUMN.
+--   063 retains a record after the period is later published — a period present in BOTH tables
+--   reads as "unpublished when we looked, published later", and 063 calls that the audit trail.
+--   But the helper short-circuits on the exact print, so gap_class reads 'published' in exactly
+--   that case and the audit trail was UNREACHABLE through the only helper consumers are
+--   permitted to use. nonpublication_on_record is what makes it reachable, and it is
+--   DELIBERATELY NOT DERIVABLE from gap_class — (V6) is the proof of the non-derivability.
+--   Savepoint-scoped: filling the 2025-10 gap would change what (C3) and (B8b) probe.
+-- ---------------------------------------------------------------------
+savepoint b_published_later;
+insert into pfin.cpi_u_index (cpi_period, cpi_value) values ('2025-10-01', 325.400);
+select results_eq(
+  $$ select cpi_period, cpi_value, is_carried, carried_from, gap_class, nonpublication_on_record
+       from pfin.fn_cpi_u_index_for_period('2025-10-01') $$,
+  $$ values ('2025-10-01'::date, 325.400::numeric, false, '2025-10-01'::date, 'published'::text, true) $$,
+  '(B7) ⭐ "unpublished when we looked, published later": with BOTH a 063 record and a later 053 print for the same period, gap_class reads `published` — correctly, the print is real — AND nonpublication_on_record reads TRUE. That pairing IS the audit trail 063 exists to preserve, and before the sixth column existed it was unreachable through the one helper consumers are allowed to call. RED if the column were dropped, or wired to gap_class'
+);
+rollback to savepoint b_published_later;
+
+-- (B8a)/(B8b) THE CLOSED SET AND THE ALARM. 064 now classifies exhaustively with every branch
+--   positive, and `unrecorded_gap` means STRICTLY INTERIOR — which is what makes it the ONE
+--   class worth alarming on. Both halves are asserted: membership, and alarm-uniqueness.
+select is(
+  (select count(*) from (
+     select gap_class from pfin.fn_cpi_u_index_for_period('2025-09-01')
+     union all select gap_class from pfin.fn_cpi_u_index_for_period('2025-07-01')
+     union all select gap_class from pfin.fn_cpi_u_index_for_period('2025-10-01')
+     union all select gap_class from pfin.fn_cpi_u_index_for_period('2014-01-01')
+     union all select gap_class from pfin.fn_cpi_u_index_for_period('2026-01-01')
+     union all select gap_class from pfin.fn_cpi_u_index_for_period('2026-02-01')
+   ) s where gap_class not in
+     ('published', 'recorded_nonpublication', 'unrecorded_gap', 'before_coverage', 'beyond_coverage')
+  )::bigint,
+  0::bigint,
+  '(B8a) closed set: every one of the six probes returns a member of the five-element gap_class set — no NULL, no empty string, no unclassified fall-through. RED if a branch were added that emits something outside the set, or if a period fell through the classification with a NULL class'
+);
+select is(
+  (select count(*) from (
+     select gap_class from pfin.fn_cpi_u_index_for_period('2025-09-01')
+     union all select gap_class from pfin.fn_cpi_u_index_for_period('2025-07-01')
+     union all select gap_class from pfin.fn_cpi_u_index_for_period('2025-10-01')
+     union all select gap_class from pfin.fn_cpi_u_index_for_period('2014-01-01')
+     union all select gap_class from pfin.fn_cpi_u_index_for_period('2026-01-01')
+     union all select gap_class from pfin.fn_cpi_u_index_for_period('2026-02-01')
+   ) s where gap_class = 'unrecorded_gap')::bigint,
+  1::bigint,
+  '(B8b) ALARM UNIQUENESS: of the six probes — one published, one interior gap, one recorded, one before the leading edge, one beyond the trailing edge, one recorded beyond the edge — EXACTLY ONE returns the alarm class. That is the whole point of bounding both edges: before the fix, every pre-coverage period reported as an unrecorded gap, so the alarm fired on spans nobody ever claimed to hold and would have been trained away. (V7) restores that world and watches this go to 2'
 );
 
 -- =====================================================================
@@ -319,9 +418,9 @@ select throws_like(
 );
 -- (C2) mid-month normalizes AND says which period answered.
 select results_eq(
-  $$ select cpi_period, cpi_value, is_carried, carried_from, gap_class
+  $$ select cpi_period, cpi_value, is_carried, carried_from, gap_class, nonpublication_on_record
        from pfin.fn_cpi_u_index_for_period('2025-09-17') $$,
-  $$ values ('2025-09-01'::date, 324.800::numeric, false, '2025-09-01'::date, 'published'::text) $$,
+  $$ values ('2025-09-01'::date, 324.800::numeric, false, '2025-09-01'::date, 'published'::text, false) $$,
   '(C2) NON-SILENT normalization: a mid-month date resolves to the CPI grain AND the normalized period is RETURNED as cpi_period, so the caller is TOLD which period answered instead of having to know. RED if the normalization were dropped (no row) or made silent (the input date echoed back)'
 );
 -- (C3) normalization happens BEFORE classification.
@@ -330,21 +429,21 @@ select is(
   'recorded_nonpublication',
   '(C3) normalization precedes classification: a mid-month probe INSIDE the gap month resolves to 2025-10-01 and picks up that period''s record. RED if classification ran against the raw input, which would never match a first-of-month key and would misclassify every mid-month probe as an unrecorded gap'
 );
--- (C4) below coverage — NULL, never a fabricated zero.
+-- (C4) BEFORE the leading edge — NULL, never a fabricated zero, and NOT the alarm class.
 select results_eq(
-  $$ select cpi_period, cpi_value, is_carried, carried_from, gap_class
+  $$ select cpi_period, cpi_value, is_carried, carried_from, gap_class, nonpublication_on_record
        from pfin.fn_cpi_u_index_for_period('2014-01-01') $$,
-  $$ values ('2014-01-01'::date, null::numeric, false, null::date, 'unrecorded_gap'::text) $$,
-  '(C4) below coverage: nothing at or before the period exists, so cpi_value is NULL, is_carried is false and carried_from is NULL — the "no carry source" case, REPORTED rather than papered over. ⚠ NULL and not 0: a zero is a plausible-looking number that would silently understate a real-terms figure by 100%, where NULL forces the consumer to handle the unknown. (V4) makes that world real'
+  $$ values ('2014-01-01'::date, null::numeric, false, null::date, 'before_coverage'::text, false) $$,
+  '(C4) before_coverage: earlier than anything held, so cpi_value is NULL, is_carried is false and carried_from is NULL — the "no carry source" case, REPORTED rather than papered over. ⚠ TWO fences in one row. (i) NULL and not 0: a zero is a plausible-looking number that would silently understate a real-terms figure by 100%, where NULL forces the consumer to handle the unknown ((V4) makes that world real). (ii) `before_coverage` and NOT `unrecorded_gap`: a period the backfill never claimed to cover is not an unexplained gap, and classifying it as one fires the alarm on all of history ((V7) restores that world)'
 );
 
 -- (C5) the empty-table edge — savepoint-scoped, since it removes the fixture.
 savepoint c_empty_index;
 delete from pfin.cpi_u_index;
 select results_eq(
-  $$ select cpi_period, cpi_value, is_carried, carried_from, gap_class
+  $$ select cpi_period, cpi_value, is_carried, carried_from, gap_class, nonpublication_on_record
        from pfin.fn_cpi_u_index_for_period('2025-09-01') $$,
-  $$ values ('2025-09-01'::date, null::numeric, false, null::date, 'beyond_coverage'::text) $$,
+  $$ values ('2025-09-01'::date, null::numeric, false, null::date, 'beyond_coverage'::text, false) $$,
   '(C5) empty-source edge: with cpi_u_index holding NO rows at all, the helper still returns EXACTLY ONE row, with a NULL value and beyond_coverage — it does not return an empty set, does not raise, and does not fabricate a zero. This is the state a fresh deploy is in before the first ETL run, so a consumer meets it on day one'
 );
 rollback to savepoint c_empty_index;
@@ -427,7 +526,7 @@ select ok(
 select is(
   (select pg_get_function_result(p.oid) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'pfin' and p.proname = 'fn_cpi_u_index_for_period'),
-  'TABLE(cpi_period date, cpi_value numeric, is_carried boolean, carried_from date, gap_class text)',
+  'TABLE(cpi_period date, cpi_value numeric, is_carried boolean, carried_from date, gap_class text, nonpublication_on_record boolean)',
   '(E4) ⭐ THE RETURN IS A ROW, AND STAYS A ROW. 064: a consumer wanting only the number must EXPLICITLY PROJECT THE OTHER COLUMNS AWAY, which turns "don''t ignore carried-ness" from a rule someone must REMEMBER into a step someone must TAKE — and a deliberate projection is visible in a diff where an unread boolean is not. Narrowing this to `returns numeric` removes the only mechanism enforcing non-silence, and removes it invisibly: every behavioural leg above would still pass. (V2) measures exactly that'
 );
 
@@ -466,45 +565,63 @@ select is(
 );
 rollback to savepoint v_scalar_return;
 
--- ---- (V3) does the classification ORDER matter, and does (B5) detect it? ----
+-- ---- (V3a) is the RECORD-vs-INTERIOR order load-bearing, and which probe can see it? ----
 savepoint v_class_order;
 create or replace function pfin.fn_cpi_u_index_for_period(p_period date)
 returns table (cpi_period date, cpi_value numeric, is_carried boolean,
-               carried_from date, gap_class text)
+               carried_from date, gap_class text, nonpublication_on_record boolean)
 language plpgsql stable security invoker set search_path = '' as $qa$
 #variable_conflict use_column
-declare v_period date; v_from date; v_val numeric; v_max date; v_class text;
+declare v_period date; v_from date; v_val numeric; v_min date; v_max date;
+        v_class text; v_recorded boolean;
 begin
   v_period := date_trunc('month', p_period::timestamp)::date;
-  return query select v_period, c.cpi_value, false, v_period, 'published'::text
+  v_recorded := exists (select 1 from pfin.cpi_u_nonpublication n where n.cpi_period = v_period);
+  return query select v_period, c.cpi_value, false, v_period, 'published'::text, v_recorded
     from pfin.cpi_u_index c where c.cpi_period = v_period;
   if found then return; end if;
   select c.cpi_period, c.cpi_value into v_from, v_val from pfin.cpi_u_index c
    where c.cpi_period < v_period order by c.cpi_period desc limit 1;
-  select max(c.cpi_period) into v_max from pfin.cpi_u_index c;
-  -- THE ONLY CHANGE: contiguity is tested BEFORE the record. Reads as a harmless reordering.
-  if v_max is not null and v_max > v_period then
-    v_class := 'unrecorded_gap';
-  elsif exists (select 1 from pfin.cpi_u_nonpublication n where n.cpi_period = v_period) then
+  select min(c.cpi_period), max(c.cpi_period) into v_min, v_max from pfin.cpi_u_index c;
+  -- THE ONLY CHANGE: the classification is made purely EDGE-BASED, with the record consulted
+  -- only where no edge rule applies. Reads as a tidy-up — every branch is still positive and
+  -- the set is still closed — and it is the shape a reviewer would most plausibly wave through.
+  if v_max is null then
+    v_class := 'beyond_coverage';
+  elsif v_period < v_min then
+    v_class := 'before_coverage';
+  elsif v_period > v_max then
+    v_class := 'beyond_coverage';
+  elsif v_recorded then
     v_class := 'recorded_nonpublication';
   else
-    v_class := 'beyond_coverage';
+    v_class := 'unrecorded_gap';
   end if;
-  return query select v_period, v_val, (v_from is not null), v_from, v_class;
+  return query select v_period, v_val, (v_from is not null), v_from, v_class, v_recorded;
 end;
 $qa$;
--- ⚠ REFUTED HYPOTHESIS, KEPT AS THE FINDING. This leg was first written to assert that the
---   reordering flips (B5) — the TRAILING-EDGE probe. THE RUN SAID recorded_nonpublication, i.e.
---   unchanged. The reason is worth more than the assertion was: at the trailing edge the two
---   swapped branches are MUTUALLY EXCLUSIVE (no later period exists, so the contiguity arm is
---   false either way) and the record arm still wins over the `else`. The ordering is therefore
---   load-bearing at the INTERIOR gap — the one period where BOTH conditions are true at once —
---   and that is 2025-10-01, the (B3) probe. So the ordering mutation is asserted against (B3)
---   here, and (B5)'s own teeth are proven by a DIFFERENT mutation in (V3b).
+-- ⚠ TWO REFUTATIONS AND AN INVERSION, RECORDED BECAUSE THE CONCLUSION FLIPPED WITH THE CODE.
+--   Against the ORIGINAL three-branch shape (record / contiguity / else) this leg was written to
+--   flip the TRAILING-EDGE probe and was refuted: the order was observable only at the INTERIOR.
+--   Re-aimed at the interior against the FIVE-branch shape, it was refuted AGAIN — and the reason
+--   is the inversion. In the exhaustive form the interior case IS the final `else`, so demoting
+--   the record below the edge rules cannot change an interior answer: the record branch is still
+--   the last thing before the else and still claims it. What the demotion DOES change is the
+--   EDGES, where an explicit `v_period > v_max` branch now claims the period first.
+--   >> SO PRECEDENCE MOVED HOUSE: under the old shape it was observable at the interior and not
+--   at the edge; under the new shape it is observable at the edge and not at the interior. <<
+--   Both directions are asserted below — the flip AND the non-flip — because an instrument's
+--   limit is worth exactly as much as its reach, and asserting only the half that moved would
+--   leave the other half looking covered.
+select is(
+  (select gap_class from pfin.fn_cpi_u_index_for_period('2026-02-01')),
+  'beyond_coverage',
+  '(V3a-EDGE-PRECEDENCE-HAS-TEETH) (B5) is not vacuous: with the record DEMOTED below the edge rules — still consulted, just later — a period the source published valueless beyond the trailing edge is claimed by the `> v_max` branch first and reports as "not yet published". The demotion reads as a pure tidy-up: every branch stays positive, the set stays closed, and nothing is deleted'
+);
 select is(
   (select gap_class from pfin.fn_cpi_u_index_for_period('2025-10-01')),
-  'unrecorded_gap',
-  '(V3a-CLASSIFICATION-ORDER-HAS-TEETH) (B3) is not vacuous: with contiguity tested before the record — a reordering that reads as harmless and that (B1)/(B2)/(B4)/(B5) all still pass — the ONE period the source actually published valueless silently reclassifies as an unrecorded gap. The interior gap is where the two branches are both true, so it is the only place the ORDER can be observed at all'
+  'recorded_nonpublication',
+  '(V3a2-…AND-THE-INTERIOR-CANNOT-SEE-IT) ⚠ THE LIMIT OF (V3a), ASSERTED RATHER THAN ASSUMED: the SAME demotion leaves the interior gap UNCHANGED, because in the exhaustive five-branch form the interior case is the final `else` and the record branch still precedes it. So (B3) is blind to a demotion and (B5) is not — the exact reverse of the three-branch shape, where the first draft of this leg measured the opposite. This is why (V3b) exists: removing the record is a different mutation from demoting it, and only removal reaches the interior'
 );
 rollback to savepoint v_class_order;
 
@@ -512,32 +629,40 @@ rollback to savepoint v_class_order;
 savepoint v_record_dropped;
 create or replace function pfin.fn_cpi_u_index_for_period(p_period date)
 returns table (cpi_period date, cpi_value numeric, is_carried boolean,
-               carried_from date, gap_class text)
+               carried_from date, gap_class text, nonpublication_on_record boolean)
 language plpgsql stable security invoker set search_path = '' as $qa$
 #variable_conflict use_column
-declare v_period date; v_from date; v_val numeric; v_max date; v_class text;
+declare v_period date; v_from date; v_val numeric; v_min date; v_max date;
+        v_class text; v_recorded boolean;
 begin
   v_period := date_trunc('month', p_period::timestamp)::date;
-  return query select v_period, c.cpi_value, false, v_period, 'published'::text
+  v_recorded := exists (select 1 from pfin.cpi_u_nonpublication n where n.cpi_period = v_period);
+  return query select v_period, c.cpi_value, false, v_period, 'published'::text, v_recorded
     from pfin.cpi_u_index c where c.cpi_period = v_period;
   if found then return; end if;
   select c.cpi_period, c.cpi_value into v_from, v_val from pfin.cpi_u_index c
    where c.cpi_period < v_period order by c.cpi_period desc limit 1;
-  select max(c.cpi_period) into v_max from pfin.cpi_u_index c;
-  -- THE ONLY CHANGE: the cpi_u_nonpublication consultation is gone entirely — the shape 064
-  -- would have had if the helper had been written against 053 alone.
-  if v_max is not null and v_max > v_period then
-    v_class := 'unrecorded_gap';
-  else
-    v_class := 'beyond_coverage';
+  select min(c.cpi_period), max(c.cpi_period) into v_min, v_max from pfin.cpi_u_index c;
+  -- THE ONLY CHANGE: the record no longer participates in CLASSIFICATION at all — the shape 064
+  -- would have had if written against 053 alone. Note the sixth column is still populated, so
+  -- the mutation is isolated to the classification and nothing else can account for the flip.
+  if v_max is null then v_class := 'beyond_coverage';
+  elsif v_period < v_min then v_class := 'before_coverage';
+  elsif v_period > v_max then v_class := 'beyond_coverage';
+  else v_class := 'unrecorded_gap';
   end if;
-  return query select v_period, v_val, (v_from is not null), v_from, v_class;
+  return query select v_period, v_val, (v_from is not null), v_from, v_class, v_recorded;
 end;
 $qa$;
 select is(
   (select gap_class from pfin.fn_cpi_u_index_for_period('2026-02-01')),
   'beyond_coverage',
-  '(V3b-TRAILING-EDGE-RECORD-CONSULTATION-HAS-TEETH) (B5) is not vacuous: with the record consultation removed, a period the source PUBLISHED VALUELESS at the trailing edge reclassifies as beyond_coverage — "not yet published". THE POINT: at the trailing edge the contiguity test has nothing to see, so the 063 record is the ONLY evidence that exists, and its loss is invisible to every other leg in this file'
+  '(V3b-TRAILING-EDGE-RECORD-CONSULTATION-HAS-TEETH) (B5) is not vacuous: with the record removed from the classification, a period the source PUBLISHED VALUELESS beyond the trailing edge reclassifies as beyond_coverage — "not yet published". At an edge the extent test has nothing to see, so the 063 record is the ONLY evidence that exists'
+);
+select is(
+  (select gap_class from pfin.fn_cpi_u_index_for_period('2025-10-01')),
+  'unrecorded_gap',
+  '(V3b2-INTERIOR-RECORD-CONSULTATION-HAS-TEETH) …and (B3) flips too — which (V3a)''s demotion could NOT achieve. REMOVING the record and DEMOTING it are different mutations with different blast radii, and this is the one that reaches the interior: the period the source actually published valueless raises the alarm class, so the table 063 exists to fill would be written, read, and then ignored'
 );
 rollback to savepoint v_record_dropped;
 
@@ -545,7 +670,7 @@ rollback to savepoint v_record_dropped;
 savepoint v_zero_fill;
 create or replace function pfin.fn_cpi_u_index_for_period(p_period date)
 returns table (cpi_period date, cpi_value numeric, is_carried boolean,
-               carried_from date, gap_class text)
+               carried_from date, gap_class text, nonpublication_on_record boolean)
 language plpgsql stable security invoker set search_path = '' as $qa$
 #variable_conflict use_column
 declare v_period date; v_from date; v_val numeric;
@@ -555,7 +680,7 @@ begin
    where c.cpi_period <= v_period order by c.cpi_period desc limit 1;
   -- The $0 defect: an unknown, rendered as a number.
   return query select v_period, coalesce(v_val, 0::numeric), (v_from is not null and v_from <> v_period),
-                      v_from, 'unrecorded_gap'::text;
+                      v_from, 'before_coverage'::text, false;
 end;
 $qa$;
 select is(
@@ -565,13 +690,90 @@ select is(
 );
 rollback to savepoint v_zero_fill;
 
+-- ---- (V6) is nonpublication_on_record really NOT derivable from gap_class? ----
+--   064 states the column is deliberately not derivable. That is a claim about INFORMATION, and
+--   the only way to test it is to build the derived version and find a state where it is wrong.
+--   The state is the audit trail: record present AND the period later published.
+savepoint v_derived_flag;
+insert into pfin.cpi_u_index (cpi_period, cpi_value) values ('2025-10-01', 325.400);
+create or replace function pfin.fn_cpi_u_index_for_period(p_period date)
+returns table (cpi_period date, cpi_value numeric, is_carried boolean,
+               carried_from date, gap_class text, nonpublication_on_record boolean)
+language plpgsql stable security invoker set search_path = '' as $qa$
+#variable_conflict use_column
+declare v_period date; v_from date; v_val numeric; v_min date; v_max date;
+        v_class text; v_recorded boolean;
+begin
+  v_period := date_trunc('month', p_period::timestamp)::date;
+  v_recorded := exists (select 1 from pfin.cpi_u_nonpublication n where n.cpi_period = v_period);
+  -- THE ONLY CHANGE: the sixth column is DERIVED from gap_class instead of read from the table.
+  -- This is the "simplification" the column's own contract warns against, and it looks correct
+  -- in every state except one.
+  return query select v_period, c.cpi_value, false, v_period, 'published'::text,
+                      ('published' = 'recorded_nonpublication')
+    from pfin.cpi_u_index c where c.cpi_period = v_period;
+  if found then return; end if;
+  select c.cpi_period, c.cpi_value into v_from, v_val from pfin.cpi_u_index c
+   where c.cpi_period < v_period order by c.cpi_period desc limit 1;
+  select min(c.cpi_period), max(c.cpi_period) into v_min, v_max from pfin.cpi_u_index c;
+  if v_recorded then v_class := 'recorded_nonpublication';
+  elsif v_max is null then v_class := 'beyond_coverage';
+  elsif v_period < v_min then v_class := 'before_coverage';
+  elsif v_period > v_max then v_class := 'beyond_coverage';
+  else v_class := 'unrecorded_gap';
+  end if;
+  return query select v_period, v_val, (v_from is not null), v_from, v_class,
+                      (v_class = 'recorded_nonpublication');
+end;
+$qa$;
+select is(
+  (select nonpublication_on_record from pfin.fn_cpi_u_index_for_period('2025-10-01')),
+  false,
+  '(V6-SIXTH-COLUMN-IS-NOT-DERIVABLE) ⭐ (B7) is not vacuous, and the column earns its existence: with nonpublication_on_record DERIVED from gap_class, the audit-trail state — record present, period later published — reports FALSE, because gap_class correctly reads `published` there. The derived version is right in all four other states, which is exactly what makes it the change someone would make. The audit trail 063 exists to preserve would be silently unreachable through the only helper consumers may call'
+);
+rollback to savepoint v_derived_flag;
+
+-- ---- (V7) does bounding the LEADING edge have teeth — i.e. was there a real alarm defect? ----
+savepoint v_leading_edge;
+create or replace function pfin.fn_cpi_u_index_for_period(p_period date)
+returns table (cpi_period date, cpi_value numeric, is_carried boolean,
+               carried_from date, gap_class text, nonpublication_on_record boolean)
+language plpgsql stable security invoker set search_path = '' as $qa$
+#variable_conflict use_column
+declare v_period date; v_from date; v_val numeric; v_max date;
+        v_class text; v_recorded boolean;
+begin
+  v_period := date_trunc('month', p_period::timestamp)::date;
+  v_recorded := exists (select 1 from pfin.cpi_u_nonpublication n where n.cpi_period = v_period);
+  return query select v_period, c.cpi_value, false, v_period, 'published'::text, v_recorded
+    from pfin.cpi_u_index c where c.cpi_period = v_period;
+  if found then return; end if;
+  select c.cpi_period, c.cpi_value into v_from, v_val from pfin.cpi_u_index c
+   where c.cpi_period < v_period order by c.cpi_period desc limit 1;
+  select max(c.cpi_period) into v_max from pfin.cpi_u_index c;
+  -- THE ONLY CHANGE: the leading edge is unbounded again — the pre-fix shape, in which any
+  -- period earlier than coverage falls through to the alarm class.
+  if v_recorded then v_class := 'recorded_nonpublication';
+  elsif v_max is not null and v_max > v_period then v_class := 'unrecorded_gap';
+  else v_class := 'beyond_coverage';
+  end if;
+  return query select v_period, v_val, (v_from is not null), v_from, v_class, v_recorded;
+end;
+$qa$;
+select is(
+  (select gap_class from pfin.fn_cpi_u_index_for_period('2014-01-01')),
+  'unrecorded_gap',
+  '(V7-LEADING-EDGE-BOUND-HAS-TEETH) ⚠ (C4)/(B8b) are not vacuous, and this reproduces the DEFECT the bound was added to fix: with the leading edge unbounded, a period a decade before anything the store ever claimed to cover reports as an unrecorded gap — the ALARM class. Every period in history back to year zero would do the same, which is how an alarm gets trained away. This is the world before the fix, kept runnable so the fix cannot silently regress'
+);
+rollback to savepoint v_leading_edge;
+
 -- ---- (V5) STRUCTURAL, DELIBERATELY LAST + OUTSIDE ANY SAVEPOINT ----
---   Two jobs: it asserts the (V) block put the function back exactly as authored (three of the
+--   Two jobs: it asserts the (V) block put the function back exactly as authored (five of the
 --   legs above REPLACED it, and a battery that left a stub behind would invalidate everything
 --   after it), and it re-arms pgTAP's plan counter after the savepoint rewinds. Moving this leg
 --   off the end, or inside a savepoint, silently re-breaks the plan arithmetic.
 select ok(
-  (select pg_get_function_result(p.oid) = 'TABLE(cpi_period date, cpi_value numeric, is_carried boolean, carried_from date, gap_class text)'
+  (select pg_get_function_result(p.oid) = 'TABLE(cpi_period date, cpi_value numeric, is_carried boolean, carried_from date, gap_class text, nonpublication_on_record boolean)'
       and not p.prosecdef and p.provolatile = 's'
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'pfin' and p.proname = 'fn_cpi_u_index_for_period')

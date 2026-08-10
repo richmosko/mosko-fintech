@@ -53,6 +53,17 @@
 -- │ 004/054 idiom) opens service_role's ACL so the TRIGGER becomes the sole remaining gate for  │
 -- │ the REAL WRITER identity. (h5)-(h9) assert the PRODUCTION least-privilege ACL and run       │
 -- │ BEFORE that grant, so the grant cannot mask them.                                           │
+-- │                                                                                             │
+-- │ ⚠ THIS BATTERY AND 063's OWN COMMENTS NOW SAY THE SAME THING, AND THE ORDER MATTERS:        │
+-- │ 063 states that the WITHHELD GRANTS ARE THE OPERATIVE FENCE and the triggers are the        │
+-- │ BACKSTOP that "becomes load-bearing if a future migration widens that grant". This file is  │
+-- │ structured to prove exactly that division rather than to blur it: (c3)-(c5) prove the ACL   │
+-- │ refuses FIRST for the writer (the operative half), and (d5)-(d7) prove the conditional the  │
+-- │ backstop claim rests on — WITH the grant widened, the trigger still holds. A battery that   │
+-- │ asserted only "the mutation was blocked" would be satisfied by the ACL alone and would go   │
+-- │ on passing if the triggers were deleted; one that asserted only the trigger message under   │
+-- │ service_role would be permanently RED against a fence that is working. Two mechanisms, two  │
+-- │ fences, and every leg here names which one it exercises.                                    │
 -- └────────────────────────────────────────────────────────────────────────────────────────────┘
 --
 -- ┌─ SIGNAL PRECISION — no fence can pass for another (the 004 all-42501 false-green lesson) ──┐
