@@ -42,11 +42,34 @@ logger = logging.getLogger("pfin_etl")
 # Every other failure is a defect and must PROPAGATE.
 #
 # ⚠ WHY isinstance AND NOT SQLSTATE. The obvious discriminator is "the server
-# answered and refused" vs "no server answered". MEASURED against psycopg2 and
-# the local stack: `pgcode` is None for EVERY connect-time failure — connection
-# refused, password authentication failed, nonexistent role, NOLOGIN role
-# alike. The discriminator does not exist, so this also deliberately does NOT
-# match on message text (assert by code, never by message).
+# answered and refused" vs "no server answered". MEASURED against psycopg2 over
+# the SCRAM path: `pgcode` is None for connection refused, password
+# authentication failed, nonexistent role, and NOLOGIN role alike. No
+# discriminator is available there, so this also deliberately does NOT match on
+# message text (assert by code, never by message).
+#
+# ⚠ THAT MEASUREMENT IS PATH-SCOPED, AND AN EARLIER FORM OF THIS COMMENT
+# OVERSTATED IT AS "EVERY connect-time failure". Corrected, because the
+# over-broad version was wrong in an instructive way. The local stack's
+# published `:54322` is a DOCKER NAT HOP — a host-side client presents to the
+# server as `192.168.65.1`, NOT loopback (verified via
+# `select host(inet_client_addr())`) — so it matches a `scram-sha-256` line and
+# CANNOT REACH the `host all all 127.0.0.1/32 trust` line that also exists in
+# that same `pg_hba.conf` (verified in-container). On the TRUST path the server
+# DOES emit distinctive errors — `role "pfin_etl" is not permitted to log in`,
+# `role "…" does not exist`, both measured from inside the container — so a
+# discriminator plausibly exists there. The generic collapse is the SCRAM path's
+# anti-enumeration behaviour, not a protocol-wide fact. A measurement that
+# cannot reach the path it generalises about is not evidence about that path.
+#
+# WHY THE DESIGN IS UNCHANGED ANYWAY, which is the part that matters: this code
+# never runs on the trust path. Local dev reaches the database through the NAT
+# hop (scram); production is a remote TLS connection (scram). On every path this
+# policy actually executes on, no discriminator is available.
+#
+# RESIDUAL, stated rather than left implicit: psycopg2's `pgcode` on the TRUST
+# path is UNMEASURED — the DB container has no Python and the trust path is not
+# reachable from the host. Do not assume it is None there.
 #
 # Consequence, stated rather than discovered later: a missing credential FAILS
 # this lane instead of skipping it, because `load_env_variables` raises
