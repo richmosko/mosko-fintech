@@ -43,16 +43,11 @@ Description:
         over-read under `service_role`.
 """
 
-import os
-
 import pytest
 import sqlalchemy as sqla
 
+import pgtest_support
 from pfin_back_etl.core import staging_seed_sql
-
-#: Bare connection URL. Deliberately NOT the `backend` fixture: these need a
-#: Postgres, not a configured ETL. No credentials, no schema, no API keys.
-_PG_URL_ENV = "PFIN_PGTEST_URL"
 
 #: ⚠ THE REAL STATEMENT, imported from the module under test — NOT a re-typed
 #: copy. A test asserting on its own copy of the SQL pins the PATTERN and would
@@ -70,22 +65,15 @@ _SEED_BROKEN = "create temp table stg as select * from pg_temp.tgt"
 def pg_conn():
     """A bare Postgres connection, rolled back at teardown.
 
-    ⚠ SKIPPING IS A FAILURE UNDER CI. A skip here is indistinguishable from a
-    pass in a summary line, and these tests are the only detector for a
-    veto-level property — so when `CI` is set, an unconfigured URL FAILS rather
-    than skips. Outside CI a skip is legitimate: a developer without a Postgres
-    is not a defect.
+    URL resolution and the CI-fails-rather-than-skips rule live in
+    `pgtest_support`, so the tier has ONE definition rather than a copy per
+    module — two copies of one policy drift, which is exactly what produced
+    the second, ungoverned skip policy reconciled earlier in this work.
+
+    These tests need nothing the tier provides beyond a connection: temp
+    tables only, no roles, no schemas.
     """
-    url = os.getenv(_PG_URL_ENV)
-    if not url:
-        if os.getenv("CI"):
-            raise AssertionError(
-                f"{_PG_URL_ENV} is unset under CI. These tests are the only "
-                f"detector for (a′)'s security property; skipping them would "
-                f"report green for a lane that ran nothing."
-            )
-        pytest.skip(f"{_PG_URL_ENV} unset — no Postgres for the pgtest tier")
-    engine = sqla.create_engine(url)
+    engine = sqla.create_engine(pgtest_support.resolve_url())
     with engine.connect() as conn:
         yield conn
         conn.rollback()

@@ -187,7 +187,7 @@ class SBaseConn:
         (self.engine, self.metadata, self.base) = self._sbase_setup()
 
     @contextmanager
-    def _role(self, session, role):
+    def _role(self, executor, role):
         """Assume `role` transaction-locally for the duration of the block.
 
         THE ROLE ARGUMENT IS REQUIRED AND HAS NO DEFAULT — DELIBERATELY (Sec,
@@ -214,7 +214,11 @@ class SBaseConn:
         role was correctly assumed, which is why it reviews as correct. Callers
         must not commit inside this block.
 
-        args:    session (an open sqlalchemy Session), role (allowlisted)
+        args:    executor — an open Session OR Connection. Named for what it
+                 must DO (execute) rather than what it usually IS: reflection
+                 passes a Connection while the data methods pass a Session, and
+                 a `session` parameter misdescribed half its call sites.
+                 role — allowlisted.
         raises:  ValueError if `role` is not in _ROLE_ALLOWLIST.
         """
         if role not in _ROLE_ALLOWLIST:
@@ -225,9 +229,9 @@ class SBaseConn:
                 f"fence as well as the privilege policy — refusing to "
                 f"interpolate an unvetted value."
             )
-        session.execute(sqla.text(f"set local role {role}"))
+        executor.execute(sqla.text(f"set local role {role}"))
         try:
-            yield session
+            yield executor
         finally:
             # N1 teardown shape, copied from connection.impersonate(): if the
             # block raised a DB error the transaction is ABORTED, and `reset
@@ -236,7 +240,7 @@ class SBaseConn:
             # the original propagates. Safe because SET LOCAL is transaction-
             # scoped and auto-clears at COMMIT/ROLLBACK regardless.
             try:
-                session.execute(sqla.text("reset role"))
+                executor.execute(sqla.text("reset role"))
             except Exception as exc_reset:
                 logger.warning(
                     f"reset role failed during teardown (transaction likely "
@@ -453,26 +457,71 @@ class SBaseConn:
         metadata = sqla.MetaData()
         base = sqla_automap.automap_base(metadata=metadata)
 
-        # 3. Reflect tables from each schema into the *same* metadata object
-        logger.info("Reflect database tables to sqlalchemy MetaData object...")
-        for sch in self._schema_list:
-            metadata.reflect(bind=engine, schema=sch)
-            metadata.reflect(bind=engine, schema=sch)
+        # 3 + 4. Reflect, then prepare the automap base — BOTH INSIDE ONE ROLE
+        #        BLOCK, ON ONE CONNECTION.
+        #
+        # ⚠ THIS IS THE STATEMENT THAT RUNS FIRST, AND THE S17 FIX MISSED IT.
+        # Every `_role()` call site was a DATA method; reflection sits in
+        # `__init__`, ahead of all of them, so under the production login
+        # `PFinBackend()` died here before any data path was reached —
+        # `permission denied for schema pfin`, found by the acceptance run.
+        # A fix covering every statement except the first one covers nothing.
+        #
+        # THE FAULT IS SCHEMA `USAGE`, ONE GATE EARLIER THAN THE TABLE
+        # PRIVILEGES S17 WAS FILED AGAINST. Measured:
+        #     has_schema_privilege('pfin_etl','pfin','USAGE')      -> f
+        #     has_schema_privilege('authenticated','pfin','USAGE') -> t
+        #     has_schema_privilege('service_role','pfin','USAGE')  -> t
+        # which is why the operator's RED read "permission denied for SCHEMA
+        # pfin" rather than naming a table.
+        #
+        # WHY `authenticated`, NOT `service_role`. Reflection is a READ and the
+        # ADR-023 amendment's read role-of-record is `authenticated`. The
+        # amendment's partition-class rule is SILENT here — reflection reads no
+        # tenant rows at all, only catalog shape — and where the rule is silent
+        # the least-privileged sufficient role is the correct default, which is
+        # the same reasoning that produced the reads veto. `service_role` would
+        # confer write-tier context for a metadata read that does not need it.
+        #
+        # ⚠ THE RISK THAT MADE THIS WORTH MEASURING RATHER THAN REASONING: if
+        # the less-privileged role saw FEWER objects, reflection would silently
+        # produce a PARTIAL base, automap would omit tables, and the failure
+        # would surface later, elsewhere, and confusingly. MEASURED —
+        # reflecting `auth` + `pfin` returns an IDENTICAL 50-table set under
+        # `postgres`, `authenticated` and `service_role`; zero missing, zero
+        # extra. The dialect reflects from `pg_catalog`, which is not
+        # row-filtered by privilege; only schema USAGE gates it. So
+        # `authenticated` is both sufficient and least-privileged. RE-MEASURE
+        # if the dialect changes — do not re-derive it from the role names.
+        with engine.connect() as conn:
+            with conn.begin():
+                with self._role(conn, _READ_ROLE):
+                    logger.info("Reflect database tables to MetaData object...")
+                    for sch in self._schema_list:
+                        # ONCE per schema. This was called TWICE in the same
+                        # loop body — every schema reflected twice for
+                        # identical results. Harmless but real, and now doubly
+                        # so, since each round trip sits inside the role block.
+                        metadata.reflect(bind=conn, schema=sch)
 
-        # 4. Prepare the Automap base
-        #    The two name_for_*_relationship hooks are the BACKLOG §7.6 S13
-        #    collision guard: automap names a generated relationship after the
-        #    referred table, which collides with a same-named column and RAISES
-        #    here (pfin.user_taxonomy.tax_character + FK -> pfin.tax_character).
-        #    The guard renames the RELATIONSHIP, never the column — see the
-        #    block comment in utils.py. Non-colliding names are untouched.
-        logger.info("Automapping DB tables to sqlalchemy base object...")
-        base.prepare(
-            autoload_with=engine,
-            modulename_for_table=utils.sqla_modulename_for_table,
-            name_for_scalar_relationship=utils.sqla_name_for_scalar_relationship,
-            name_for_collection_relationship=utils.sqla_name_for_collection_relationship,
-        )
+                    # The two name_for_*_relationship hooks are the BACKLOG
+                    # §7.6 S13 collision guard: automap names a generated
+                    # relationship after the referred table, which collides
+                    # with a same-named column and RAISES here
+                    # (pfin.user_taxonomy.tax_character + FK ->
+                    # pfin.tax_character). The guard renames the RELATIONSHIP,
+                    # never the column — see the block comment in utils.py.
+                    logger.info("Automapping DB tables to base object...")
+                    base.prepare(
+                        autoload_with=conn,
+                        modulename_for_table=utils.sqla_modulename_for_table,
+                        name_for_scalar_relationship=(
+                            utils.sqla_name_for_scalar_relationship
+                        ),
+                        name_for_collection_relationship=(
+                            utils.sqla_name_for_collection_relationship
+                        ),
+                    )
         return (engine, metadata, base)
 
     def _staging_update(self, session, tab_sbase, key_list, ldict_update):
