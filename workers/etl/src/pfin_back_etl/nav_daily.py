@@ -192,7 +192,11 @@ class NavDailyWorker:
     """
 
     def __init__(self, env_prefix="PFIN_"):
-        self._params = utils.load_env_variables(env_prefix)
+        # S12: DB parameters ONLY. This worker makes ZERO external API calls
+        # (measured: no FMP/BLS reference anywhere in this module), so it must
+        # not require — and its cron container must not be handed — credentials
+        # scoped to other jobs.
+        self._params = utils.load_db_params(env_prefix)
         self._db_url = utils.build_database_url(self._params)
         # System-mode engine for tenant ENUMERATION only (no per-tenant assertion
         # registered; the enumeration query assumes `service_role` itself — see
