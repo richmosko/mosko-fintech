@@ -98,21 +98,60 @@ def load_env_variables(env_prefix):
     params["DB_PORT"] = os.getenv(env_prefix + "DB_PORT")
     params["DB_NAME"] = os.getenv(env_prefix + "DB_NAME")
     params["DB_PASSWORD"] = os.getenv(env_prefix + "DB_PASSWORD")
+
+    # OPTIONAL, and the default is the security-load-bearing part. Unset -> "require",
+    # so production is unchanged and an environment that simply forgot to set it still
+    # demands TLS. Only an EXPLICIT value can weaken the transport, and only to a value
+    # on the allowlist in build_database_url().
+    params["DB_SSLMODE"] = os.getenv(env_prefix + "DB_SSLMODE")
     return params
+
+
+# libpq's sslmode vocabulary. An explicit value must be one of these; anything else
+# RAISES rather than being passed through, because a typo ("requre") would otherwise
+# reach libpq as an error at connect time — far from the misconfiguration — and a
+# silently-substituted default would be worse still: it would change the transport
+# posture without anyone being told.
+_SSLMODES = ("disable", "allow", "prefer", "require", "verify-ca", "verify-full")
+_SSLMODE_DEFAULT = "require"
 
 
 def build_database_url(params):
     """Build the psycopg2 SQLAlchemy URL from a loaded params dict (as returned by
     load_env_variables). Single source of the connection string so every engine —
     the ETL system engine (_sbase_setup) and the SELF-214 per-tenant NAV worker —
-    constructs it identically. TLS required (sslmode=require).
+    constructs it identically.
 
-    args:    params (dict with DB_USER / DB_PASSWORD / DB_HOST / DB_PORT / DB_NAME)
+    TLS: `sslmode` defaults to **require** and is overridable via `<prefix>DB_SSLMODE`.
+
+    ⚠ THE DEFAULT IS THE SECURITY-LOAD-BEARING PART, NOT THE OVERRIDE. Unset, absent,
+    or empty -> "require": production is unchanged, and an environment that forgot to
+    set it still demands TLS. Only an EXPLICIT value can weaken the transport, and only
+    to a member of _SSLMODES; anything else raises rather than silently falling back.
+
+    WHY IT IS CONFIGURABLE AT ALL (BACKLOG §7.6 S11). It was hard-coded to "require",
+    and the local Supabase CLI stack offers no TLS — so the ETL could not be pointed at
+    the local stack AT ALL, and the barrier sat at connect time, before any logic. That
+    made every worker unrunnable locally without editing this file, which is plausibly
+    why the assembled NAV path went unrun until SELF-214 S10 forced it. A verification
+    gate you must patch the code under test to execute does not get executed.
+
+    args:    params (dict with DB_USER / DB_PASSWORD / DB_HOST / DB_PORT / DB_NAME,
+             and optionally DB_SSLMODE)
     returns: database_url (str) for TenantBoundConnection.system()/.for_tenant().
+    raises:  ValueError if DB_SSLMODE is set to something outside _SSLMODES.
     """
+    sslmode = (params.get("DB_SSLMODE") or "").strip() or _SSLMODE_DEFAULT
+    if sslmode not in _SSLMODES:
+        raise ValueError(
+            f"DB_SSLMODE={sslmode!r} is not a valid libpq sslmode. "
+            f"Expected one of {_SSLMODES}. Refusing to guess: an unrecognised value "
+            f"must not silently become the default, because that would change the "
+            f"transport posture without saying so."
+        )
     url = f"postgresql+psycopg2://{params['DB_USER']}:{params['DB_PASSWORD']}@"
     url += f"{params['DB_HOST']}:{params['DB_PORT']}/{params['DB_NAME']}"
-    url += "?sslmode=require"
+    url += f"?sslmode={sslmode}"
     return url
 
 

@@ -278,3 +278,69 @@ class TestSqlaModuleNameForTable:
         mock_reflect.schema = None
         result = utils.sqla_modulename_for_table("some_table", None, mock_reflect)
         assert result == "public"
+
+# ===================================================================
+# build_database_url  (BACKLOG §7.6 S11)
+# ===================================================================
+class TestBuildDatabaseUrl:
+    """Transport posture of the single connection-string builder.
+
+    The DEFAULT is what these tests are really guarding. S11 made sslmode
+    configurable so the ETL could be run against a TLS-less local stack at all;
+    the risk that change introduces is a silent downgrade in production, so the
+    unset / empty / absent cases are asserted explicitly and separately.
+    """
+
+    BASE = {
+        "DB_USER": "u", "DB_PASSWORD": "p", "DB_HOST": "h",
+        "DB_PORT": "5432", "DB_NAME": "d",
+    }
+
+    @pytest.mark.unit
+    def test_defaults_to_require_when_key_absent(self):
+        """No DB_SSLMODE key at all -> require. Guards callers that build params
+        dicts by hand and never learn the key exists."""
+        assert utils.build_database_url(dict(self.BASE)).endswith("?sslmode=require")
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("value", [None, "", "   "])
+    def test_defaults_to_require_when_unset_or_blank(self, value):
+        """Present-but-empty is the realistic misconfiguration: an env var declared
+        in a .env file and left blank. It must NOT read as 'disable'."""
+        p = dict(self.BASE, DB_SSLMODE=value)
+        assert utils.build_database_url(p).endswith("?sslmode=require")
+
+    @pytest.mark.unit
+    def test_explicit_disable_is_honoured(self):
+        """The whole point of S11 — the local stack has no TLS."""
+        p = dict(self.BASE, DB_SSLMODE="disable")
+        assert utils.build_database_url(p).endswith("?sslmode=disable")
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("mode", ["disable", "allow", "prefer", "require",
+                                      "verify-ca", "verify-full"])
+    def test_every_libpq_mode_round_trips(self, mode):
+        """Includes the hardening directions (verify-ca / verify-full), so the
+        allowlist cannot be read as 'require or weaker'."""
+        p = dict(self.BASE, DB_SSLMODE=mode)
+        assert utils.build_database_url(p).endswith(f"?sslmode={mode}")
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("bad", ["requre", "REQUIRE", "true", "1", "yes", "off"])
+    def test_unrecognised_value_raises_rather_than_falling_back(self, bad):
+        """A typo must fail loudly. Falling back to the default would be worse than
+        failing: it would change the transport posture without saying so. 'REQUIRE'
+        is included deliberately — libpq is case-sensitive here, so a plausible
+        capitalisation is a real defect, not a courtesy to absorb."""
+        p = dict(self.BASE, DB_SSLMODE=bad)
+        with pytest.raises(ValueError, match="not a valid libpq sslmode"):
+            utils.build_database_url(p)
+
+    @pytest.mark.unit
+    def test_only_the_transport_parameter_changed(self):
+        """Non-vacuity: the override must alter the sslmode and NOTHING else, or a
+        future refactor could pass this suite while mangling the credentials."""
+        req = utils.build_database_url(dict(self.BASE, DB_SSLMODE="require"))
+        dis = utils.build_database_url(dict(self.BASE, DB_SSLMODE="disable"))
+        assert req.replace("?sslmode=require", "") == dis.replace("?sslmode=disable", "")
+        assert req.startswith("postgresql+psycopg2://u:p@h:5432/d?")
