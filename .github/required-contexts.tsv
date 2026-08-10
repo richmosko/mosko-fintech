@@ -17,9 +17,13 @@
 #
 #     - An entry listed here that is NOT actually required → the fence over-enforces.
 #       Harmless: it holds an unfiltered workflow unfiltered.
-#     - A context actually required that is MISSING here → the fence under-enforces,
-#       silently. THAT is the live gap. A newly-required path-filtered workflow would
-#       deadlock PRs with nothing having warned.
+#     - A context actually required that is MISSING here → the fence under-enforces.
+#       THAT is the live gap — but it is NOT uniformly silent, and the difference is
+#       what you hunt for at re-verify (Sec, F-3 accuracy addition, 2026-08-10):
+#         · unmanifested AND path-filtered → a VISIBLE DEADLOCK. PRs hang at
+#           "Expected — waiting for status to be reported". Loud and self-announcing.
+#         · unmanifested AND carrying a job-level `if:` → SILENTLY GREEN.
+#       Only the second shape is the dangerous residual. Look for that one.
 #
 #   The gap is accepted deliberately rather than closed with a PAT: a token with
 #   admin scope in CI would put a production-reaching credential in the CI secret

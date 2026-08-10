@@ -49,10 +49,24 @@
 #     (a future `paths:` refactor silently disabling the fence) that is not
 #     acceptable for this surface."
 #
-#     Under RUN-ALWAYS there is no execution path that reports success without the
-#     battery having run — and that is checkable by INSPECTING THIS FILE, rather than
-#     by reasoning about GitHub's skip semantics. The `required-unfiltered` fence in
-#     security-scan.yml holds that property mechanically.
+#     As this file stands, there is no execution path that reports success without
+#     the battery having run — verified by parsing it, not by reading it.
+#
+#     ⚠ BE PRECISE ABOUT WHAT KEEPS THAT TRUE. `green ⇒ ran` is a property of this
+#     file's CURRENT CONTENT, not a guarantee the CI system provides. GitHub offers
+#     several ways to break it, and they sit at different levels: a `paths:` filter
+#     on the workflow, a job-level `if:`, a STEP-level `if:`, and `continue-on-error`
+#     at either level. The last two were missed by the first cut of the
+#     `required-unfiltered` fence and found by Sec at F-1 (2026-08-10): a step-level
+#     changed-files gate is the rejected remedy expressed one level below where the
+#     checker was looking, and `continue-on-error` produces green from a battery that
+#     RAN AND FAILED. Both now fail closed.
+#
+#     So: `required-unfiltered` in security-scan.yml mechanically enforces the four
+#     evasions ENUMERATED THERE. It does not, and cannot, prove the enumeration is
+#     complete — GitHub can add a fifth. Treat that list as the fence's scope, not as
+#     a proof of the property, and extend it when a new shape is found rather than
+#     assuming silence means coverage.
 #
 #   - db-only spin-up per the battery's SQL-seeded-auth design (QA + DevOps lane,
 #     2026-06-25): tenant identities are SQL-seeded into auth.users and auth.uid()

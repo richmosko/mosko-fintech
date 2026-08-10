@@ -50,6 +50,28 @@ WORKFLOW_DIR = os.path.join(REPO_ROOT, ".github", "workflows")
 FILTERABLE_EVENTS = ("pull_request", "pull_request_target", "push")
 FILTER_KEYS = ("paths", "paths-ignore")
 
+# Step-level `if:` expressions that are legitimate CLEANUP conditionals and must keep
+# passing — `if: always()` on a stack-teardown step is correct and common (both
+# db-tests.yml and worker-ci.yml have one).
+#
+# ⚠ EXACT MATCH, NOT SUBSTRING, AND THAT IS THE WHOLE POINT. `always() &&
+# contains(..., 'supabase/')` CONTAINS an allowed conditional while being exactly the
+# path-gate this fence exists to reject — a filter wearing cleanup clothing. A
+# substring test would pass it. So a compound expression is rejected even when one of
+# its terms is allowed. If a genuine compound cleanup conditional is ever needed, add
+# it here deliberately, with a self-test case — do not loosen the matching rule.
+CLEANUP_CONDITIONALS = frozenset(
+    ("always()", "success()", "failure()", "cancelled()")
+)
+
+
+def _normalize_expr(expr):
+    """Strip `${{ }}` wrapping and whitespace so `${{ always() }}` == `always()`."""
+    text = str(expr).strip()
+    if text.startswith("${{") and text.endswith("}}"):
+        text = text[3:-2].strip()
+    return "".join(text.split()).lower()
+
 
 def check_workflow(doc, job_id):
     """Return a list of violation strings for `job_id` within parsed workflow `doc`.
@@ -101,6 +123,52 @@ def check_workflow(doc, job_id):
             f"SUCCESS to branch protection, so this context could go green without "
             f"ever running"
         )
+
+    # `continue-on-error` at JOB level: the job's failure stops failing the check.
+    # Distinct hazard from a skip — here the battery RAN, FAILED, and the context is
+    # still green. Nothing about the run looks unusual.
+    if job.get("continue-on-error"):
+        violations.append(
+            f"job `{job_id}` sets `continue-on-error` — the job can FAIL and still "
+            f"report green, so this context would survive a genuinely broken battery"
+        )
+
+    # STEP level. Both hazards recur one level below where a job-only checker reads,
+    # and this is the level a real refactor reaches for: gating the expensive step is
+    # a smaller-looking diff than gating the job, and it defeats a job-level check
+    # completely. The job runs, reports success, and the work inside it never happened.
+    steps = job.get("steps")
+    if steps is None:
+        # A job with no `steps:` is a `uses:` reusable-workflow call. Its guts are in
+        # another file this checker does not follow, so it cannot assert anything
+        # about them. Undetermined is not passing.
+        if "uses" in job:
+            violations.append(
+                f"job `{job_id}` delegates to a reusable workflow (`uses:`) — this "
+                f"checker cannot see inside it, so it cannot assert the job is "
+                f"unskippable. Inline the job or extend this checker before making "
+                f"this context required"
+            )
+    elif isinstance(steps, list):
+        for idx, step in enumerate(steps):
+            if not isinstance(step, dict):
+                continue
+            label = step.get("name") or step.get("uses") or f"index {idx}"
+            if "if" in step:
+                expr = _normalize_expr(step["if"])
+                if expr not in CLEANUP_CONDITIONALS:
+                    violations.append(
+                        f"step {label!r} in job `{job_id}` carries `if: {step['if']}` "
+                        f"— a conditional step is silently skipped while the job "
+                        f"still reports success, so the context can go green with "
+                        f"the real work never having run. Only bare "
+                        f"{sorted(CLEANUP_CONDITIONALS)} are permitted (cleanup)"
+                    )
+            if step.get("continue-on-error"):
+                violations.append(
+                    f"step {label!r} in job `{job_id}` sets `continue-on-error` — "
+                    f"that step can FAIL while the job reports green"
+                )
 
     return violations
 
@@ -163,6 +231,93 @@ SELFTEST_CASES = [
         True,
     ),
     ("missing `on` block entirely", {"jobs": {"good": {}}}, "good", True),
+    # --- Step/job-level evasions (Sec F-1, 2026-08-10). A job-only checker passed
+    # all of these. Each discriminator below gets its own probe, because an added
+    # check with no probe is the next gutted checker.
+    (
+        "step-level if: (the rejected remedy, one level down)",
+        {
+            "on": {"pull_request": {"branches": ["main"]}},
+            "jobs": {
+                "good": {
+                    "steps": [
+                        {"name": "heavy", "if": "contains(github.event.pull_request.changed_files, 'supabase/')"}
+                    ]
+                }
+            },
+        },
+        "good",
+        True,
+    ),
+    (
+        "step-level if: always() — CLEANUP, must stay green",
+        {
+            "on": {"pull_request": {"branches": ["main"]}},
+            "jobs": {"good": {"steps": [{"name": "teardown", "if": "always()"}]}},
+        },
+        "good",
+        False,
+    ),
+    (
+        "step-level if: ${{ always() }} — wrapped cleanup, must stay green",
+        {
+            "on": {"pull_request": {"branches": ["main"]}},
+            "jobs": {"good": {"steps": [{"name": "teardown", "if": "${{ always() }}"}]}},
+        },
+        "good",
+        False,
+    ),
+    (
+        "compound always() && <filter> — a filter wearing cleanup clothing",
+        {
+            "on": {"pull_request": {"branches": ["main"]}},
+            "jobs": {
+                "good": {
+                    "steps": [
+                        {"name": "heavy", "if": "always() && contains(github.event.head_commit.message, 'db')"}
+                    ]
+                }
+            },
+        },
+        "good",
+        True,
+    ),
+    (
+        "continue-on-error at JOB level",
+        {
+            "on": {"pull_request": {"branches": ["main"]}},
+            "jobs": {"good": {"continue-on-error": True, "steps": [{"name": "x"}]}},
+        },
+        "good",
+        True,
+    ),
+    (
+        "continue-on-error at STEP level",
+        {
+            "on": {"pull_request": {"branches": ["main"]}},
+            "jobs": {"good": {"steps": [{"name": "x", "continue-on-error": True}]}},
+        },
+        "good",
+        True,
+    ),
+    (
+        "continue-on-error: false is not a violation",
+        {
+            "on": {"pull_request": {"branches": ["main"]}},
+            "jobs": {"good": {"continue-on-error": False, "steps": [{"name": "x", "continue-on-error": False}]}},
+        },
+        "good",
+        False,
+    ),
+    (
+        "job delegating to a reusable workflow (opaque to this checker)",
+        {
+            "on": {"pull_request": {"branches": ["main"]}},
+            "jobs": {"good": {"uses": "./.github/workflows/other.yml"}},
+        },
+        "good",
+        True,
+    ),
 ]
 
 
