@@ -2,12 +2,39 @@
 #
 # provider-sync worker CI — slice 3b (DevOps, folds task #13 live-DB lane).
 #
-# Design anchors (mirrors the established run-always-vs-path-triggered split):
+# Design anchors:
 #   - security-scan.yml = cheap grep fences, run-always, NO paths filter (fail-closed).
-#   - db-tests.yml      = heavy Postgres spin-up, path-triggered (opposite rationale).
-#   This file follows db-tests.yml: the worker suite (esp. the live-DB integration
-#   lane) is a heavier Node + Postgres job, so it is PATH-TRIGGERED on the worker
-#   tree + the migrations/config it consumes — a doc-only PR shouldn't spin a DB.
+#   - db-tests.yml      = heavy Postgres spin-up, ALSO run-always as of 2026-08-10.
+#   This file follows db-tests.yml, which now means RUN-ALWAYS, no `paths:` filter.
+#
+# RUN-ALWAYS (no `paths:` filter). Both jobs here were PATH-TRIGGERED until
+# 2026-08-10, on the rationale that "a doc-only PR shouldn't spin a DB." Measurement
+# and a correctness constraint together retired that rationale:
+#
+#   (i)  COST. Measured over the last six runs, this workflow completes in 1–2 min,
+#        concurrent with the sub-minute security-scan fences. The repo is PUBLIC
+#        (`gh repo view --json visibility`), so standard-runner Actions minutes are
+#        free and unmetered. A doc-only PR now spins a DB for ~2 min at $0 — which
+#        is a real cost, just a much smaller one than the original estimate implied.
+#        Re-measure before citing this; do not recall it.
+#
+#   (ii) CORRECTNESS — the half that forces the choice. A path-filtered workflow
+#        CANNOT be a branch-protection required check. GitHub: "If a workflow is
+#        skipped due to path filtering, branch filtering or a commit message, then
+#        checks associated with that workflow will remain in a 'Pending' state." So
+#        a required-but-filtered context deadlocks every PR touching no matching
+#        path. GitHub's guidance: "You should not use path or branch filtering to
+#        skip workflow runs if the workflow is required to pass before merging."
+#        <https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks>
+#
+# WHY NOT the standard remedy (job-level `if:` off a changed-files detector, which
+# GitHub reports as "Success" when skipped): that green is emitted by GitHub's skip
+# semantics and is indistinguishable in the checks list from a real pass, making the
+# filter an unguarded input to a required check. Same reasoning Sec applied at F-2
+# relocating RT-27 below. Full argument in db-tests.yml's header; not restated here.
+#
+# The `required-unfiltered` fence in security-scan.yml fails closed if a `paths:`
+# key reappears in this file.
 #
 # Two jobs:
 #   - `unit`        : hermetic vitest + typecheck + build. Closes the gap that TODAY
@@ -29,23 +56,15 @@
 
 name: Worker CI (provider-sync)
 
+# NO `paths:` FILTER — deliberate, and load-bearing. See "RUN-ALWAYS" above before
+# adding one back: both jobs here back branch-protection required contexts, and a
+# `paths:` key would silently convert those gates into permanent deadlocks. The
+# `required-unfiltered` fence in security-scan.yml fails closed if one reappears.
 on:
   pull_request:
     branches: [main]
-    paths:
-      - 'workers/provider-sync/**'
-      - 'supabase/migrations/**'
-      - 'supabase/config.toml'
-      - '.github/workflows/worker-ci.yml'
-      - '.github/actions/supabase-cli-setup/**'
   push:
     branches: [main]  # also on main to catch direct-push regressions if branch protection ever lapses
-    paths:
-      - 'workers/provider-sync/**'
-      - 'supabase/migrations/**'
-      - 'supabase/config.toml'
-      - '.github/workflows/worker-ci.yml'
-      - '.github/actions/supabase-cli-setup/**'
 
 defaults:
   run:

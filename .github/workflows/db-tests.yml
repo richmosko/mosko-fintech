@@ -4,10 +4,70 @@
 # supabase/tests/; this is the DevOps-owned CI venue that operationalizes them).
 #
 # Design anchors:
-#   - Own workflow (NOT a job in security-scan.yml): the fences there are cheap
-#     grep, run-always, no `paths:` filter (fail-closed). This battery is a heavy
-#     Postgres-stack spin-up (minutes) → path-triggered. Opposite rationale,
-#     opposite choice — intentional.
+#   - Own workflow (NOT a job in security-scan.yml): keeps the heavy Postgres-stack
+#     spin-up out of the cheap-grep fence workflow, so a stack failure stays legible
+#     as a stack failure. It is nonetheless RUN-ALWAYS with no `paths:` filter —
+#     the SAME fail-closed posture as the fences there, not the opposite one.
+#
+#   - RUN-ALWAYS (no `paths:` filter). This workflow WAS path-triggered until
+#     2026-08-10, on the stated rationale that it is "a heavy Postgres-stack spin-up
+#     (minutes)" and so too expensive to run on every PR. That rationale did not
+#     survive its own measurement, and both halves of it were wrong:
+#
+#       (i)  COST. Measured over the last six runs, this battery completes in
+#            2 minutes — six for six (121s / 132s / 143s / 131s on 2026-08-10
+#            alone). It runs concurrently with the sub-minute security-scan fences,
+#            so the marginal wall-clock on a doc-only PR is ~1.5 min. The repo is
+#            PUBLIC (`gh repo view --json visibility`), so standard-runner Actions
+#            minutes are free and unmetered. Measured price of running this on every
+#            PR: ~1.5 min and $0. Re-measure before citing; do not recall this.
+#
+#       (ii) CORRECTNESS — the half that actually forces the choice. A path-filtered
+#            workflow CANNOT be a branch-protection required check. GitHub: "If a
+#            workflow is skipped due to path filtering, branch filtering or a commit
+#            message, then checks associated with that workflow will remain in a
+#            'Pending' state." A required-but-filtered context therefore deadlocks
+#            every PR touching no matching path — both doc-only PRs merged on
+#            2026-08-10 (#388, #390) would have hung forever. GitHub's own guidance
+#            is explicit: "You should not use path or branch filtering to skip
+#            workflow runs if the workflow is required to pass before merging."
+#            <https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks>
+#
+#     This battery is the C2 merge gate on the ADR-049 migration (Sec joint-review).
+#     It must be a REQUIRED context; therefore it must not be path-filtered.
+#
+#     WHY NOT the standard remedy. The usual fix keeps the workflow triggering always
+#     and gates the JOB on a changed-files `if:`, exploiting the fact that GitHub
+#     reports a conditionally-skipped job as "Success" (unlike a skipped workflow,
+#     which hangs Pending). Rejected. That green is emitted by GitHub's skip
+#     semantics and is INDISTINGUISHABLE IN THE CHECKS LIST from a real pass, which
+#     makes the filter an unguarded input to a Sec merge gate: narrow it in some
+#     future refactor and the gate goes permanently, silently green. An enforced gate
+#     that cannot fail is worse than an advisory one everybody knows is advisory.
+#     This is the same reasoning Sec applied at F-2 relocating RT-27 into the
+#     unfiltered security-scan.yml: "a path-trigger leaves a trigger-drift meta-risk
+#     (a future `paths:` refactor silently disabling the fence) that is not
+#     acceptable for this surface."
+#
+#     As this file stands, there is no execution path that reports success without
+#     the battery having run — verified by parsing it, not by reading it.
+#
+#     ⚠ BE PRECISE ABOUT WHAT KEEPS THAT TRUE. `green ⇒ ran` is a property of this
+#     file's CURRENT CONTENT, not a guarantee the CI system provides. GitHub offers
+#     several ways to break it, and they sit at different levels: a `paths:` filter
+#     on the workflow, a job-level `if:`, a STEP-level `if:`, and `continue-on-error`
+#     at either level. The last two were missed by the first cut of the
+#     `required-unfiltered` fence and found by Sec at F-1 (2026-08-10): a step-level
+#     changed-files gate is the rejected remedy expressed one level below where the
+#     checker was looking, and `continue-on-error` produces green from a battery that
+#     RAN AND FAILED. Both now fail closed.
+#
+#     So: `required-unfiltered` in security-scan.yml mechanically enforces the four
+#     evasions ENUMERATED THERE. It does not, and cannot, prove the enumeration is
+#     complete — GitHub can add a fifth. Treat that list as the fence's scope, not as
+#     a proof of the property, and extend it when a new shape is found rather than
+#     assuming silence means coverage.
+#
 #   - db-only spin-up per the battery's SQL-seeded-auth design (QA + DevOps lane,
 #     2026-06-25): tenant identities are SQL-seeded into auth.users and auth.uid()
 #     reads request.jwt.claims (a DB function present from migrations). No GoTrue
@@ -33,23 +93,15 @@
 
 name: DB tests (pgTAP RLS battery)
 
+# NO `paths:` FILTER — deliberate, and load-bearing. See "RUN-ALWAYS" above before
+# adding one back: this workflow backs a branch-protection required context, and a
+# `paths:` key here would silently convert that gate into a permanent deadlock. The
+# `required-unfiltered` fence in security-scan.yml fails closed if one reappears.
 on:
   pull_request:
     branches: [main]
-    paths:
-      - 'supabase/migrations/**'
-      - 'supabase/tests/**'
-      - 'supabase/config.toml'
-      - '.github/workflows/db-tests.yml'
-      - '.github/actions/supabase-cli-setup/**'
   push:
     branches: [main]  # also on main to catch direct-push regressions if branch protection ever lapses
-    paths:
-      - 'supabase/migrations/**'
-      - 'supabase/tests/**'
-      - 'supabase/config.toml'
-      - '.github/workflows/db-tests.yml'
-      - '.github/actions/supabase-cli-setup/**'
 
 jobs:
   rls-battery:
