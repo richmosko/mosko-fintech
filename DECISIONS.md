@@ -41,6 +41,36 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-048 — BLS CPI-U ingest is keyed by decision; ARCH §7's "no credential" cell recorded an inference, not a choice (terse pattern)
+
+**Date:** 2026-08-09 · **Status:** **Accepted** — F/CTO ratified 2026-08-09 (Architect recommendation KEYED, adopted with both riders).
+**Phase:** 6 Build Loop · **Surface:** [ARCH §7](docs/ARCH/index.html#sec-7) BLS CPI-U row (auth-shape + rate-limit + failure-mode cells) + [ARCH §2](docs/ARCH/index.html#sec-2) component table. **Source:** [`BACKLOG.md`](BACKLOG.md) §7.6 **S14**.
+
+**Decision.** V1 consumes the BLS API **keyed** — `registrationkey` in the POST body to the **v2** endpoint, supplied by `BLS_API_KEY`. ARCH §7's BLS auth cell is corrected from *"None (public API; no credential)"* to the keyed shape, and its failure-mode cell — which read *"Transport-class failures only (no auth-error class — public API)"* — gains an **auth/quota error class**.
+
+**Why this needed an ADR rather than a silent doc fix.** The §7 cell is not a typo. It states a *rationale* — public data, therefore public API, therefore no credential-error semantics — and that rationale is a plausible inference anyone re-derives on contact. It survived from the Phase-3 §7 lock to now precisely because it reads as reasoned. Correcting the cell without recording why would leave the next reader free to re-derive it and flip it back. **What is being recorded is that the keyed posture is a decision, not an accident.**
+
+**The disagreement was intra-ARCH, and §5 was already right.** [ARCH §5](docs/ARCH/index.html#sec-5) states in three places that BLS requires `BLS_API_KEY` — the External-integration-endpoints paragraph (*"requires `BLS_API_KEY` — a low-sensitivity rate-limit key over public CPI data, per Sec disposition"*), the per-container Credentials surface, and the topology diagram. `secrets-manifest.yml` carries `BLS_API_KEY` under `production_only`. The code has always been keyed (`utils.py` `fetch_cpi_df` POSTs `registrationkey` to `…/publicAPI/v2/…`). **Only §7 dissented**, and a note in `workers/etl/.env.example` misattributed the dissent to §5, from where it propagated into S14's own title. Repointing those is companion work, not this ADR's content.
+
+**Alternatives considered — both viable, neither a one-way door.**
+
+- **KEYLESS (BLS v1, drop the credential).** Measured v1 limits: **25 queries/day, 25 series/query, 10 years/query** (vs v2's 500 / 50 / 20). V1's shape *fits* — the backfill loops year-by-year (12 single-year requests for 2015→present) and the nightly refresh is 1 request over a 2-year window. **Rejected** on three grounds. (i) It trades a free, self-service credential for a permanent 25/day ceiling on every future BLS feature, including any additional series (`BLS_SERIES_ID` is already parameterized). (ii) **The documented recovery action is the one the quota forbids** — the backfill's own docstring promises *"a re-run resumes cleanly,"* but a mid-backfill quota abort leaves the re-run failing for the same reason; 12 + 12 + 1 = 25, exactly at the cap. (iii) It would make an **unbuilt** promise load-bearing: §7's failure-mode cell already commits to *"non-silent-staleness at the §2.1.3 deflator consumer,"* and that consumer does not exist — under a hard daily ceiling, CPI could stale silently behind a green ETL.
+- **HYBRID (v2 when the key is present, v1 when absent).** **Rejected as the worst of the three.** The branch taken in production (keyed) is never the branch taken locally (keyless), so the v1 path would be exercised **only where its failure is invisible** and dead in the environment that matters. That is the shape already filed as §7.6 **S16** — a green that carries no information — and adopting it would file a fifth concealment layer while clearing the fourth.
+
+**What was NOT the reason, because the tempting reason is wrong.** S14 argues the key is worth removing as a dependency-reduction. The dependency it names is not the one that hurt: on 2026-08-09 a `production_only` credential was borrowed for a local run, and **that happened because no non-production BLS credential exists**, not because a credential exists. BLS registration is free and self-service, so the fix is a second key, not zero keys.
+
+**Riders adopted with the decision.** **(1)** `utils.py`'s eager `raise ValueError` on absent `BLS_API_KEY` sits in the **shared** param loader, so a missing BLS key kills FMP and Plaid work too — the §7.6 **S12** shape. Make it a per-task check. *Survives every option; it is not this decision's consequence.* Backend, PR-3. **(2)** Register a free non-production key and add a distinct-named `ci_only` analogue to `secrets-manifest.yml`, matching the `PLAID_SANDBOX_*` / `PDF_WORKER_SIGNING_KEY_TEST` / `SIMPLEFIN_TOKEN_TEST` convention — the manifest currently has **no** BLS entry in `ci_only`. F/CTO registers; DevOps + Sec take the manifest half.
+
+**Not a one-way door.** Reversible in hours — drop the key, drop the manifest rows, revert the cells. Recorded explicitly because the alternative (KEYLESS) is *also* not a one-way door, so neither option earned slow-down on reversibility grounds; the decision turned on operating cost, not on lock-in.
+
+**Sec surface — smaller than it appears, and aimed elsewhere.** This adds **no new credential**: `BLS_API_KEY` is already in `secrets-manifest.yml` `production_only` and already carries a §5 Sec disposition. The live Sec item is rider (2) — the missing non-production tier — which is owed under *any* of the three options.
+
+**Ledgers.** §10 catalogued-instance ledger **unchanged** ([ADR-011](#adr-011) Decision 4 read verbatim before drafting; no catalogued instance touched, no layer re-attributed; Path B). SECURITY DEFINER allowlist **unchanged** — no function authored. [ADR-011](#adr-011) Decision 3 cross-tenant FK-bypass family **unchanged** — no FK-shaped column. **No migration, no DDL, no policy, no grant.**
+
+**Cross-references.** [ARCH §7](docs/ARCH/index.html#sec-7) BLS CPI-U row (the corrected cells) · [ARCH §5](docs/ARCH/index.html#sec-5) External integration endpoints + Credentials surface (already keyed; unchanged) · [ARCH §2](docs/ARCH/index.html#sec-2) component table · [ADR-002](#adr-002) §6.0 (secrets discipline) · [ADR-011](#adr-011) Decision 12 / Lock 8 (CPI-U ingest cadence + the read-only-public-data advisory) · [`BACKLOG.md`](BACKLOG.md) §7.6 S14 (source), S12 (rider 1's class), S16 (why HYBRID was rejected) · `secrets-manifest.yml` · `workers/etl/src/pfin_back_etl/utils.py` (`fetch_cpi_df`) + `core.py` (`update_table_cpi_u_index`, `backfill_cpi_u_index`).
+
+---
+
 ## ADR-047 — "One production-shaped checkpoint" means written by the real worker path, not written in production (terse pattern)
 
 **Date:** 2026-08-09 · **Status:** **Accepted** — F/CTO ratified 2026-08-09.
