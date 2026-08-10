@@ -1,0 +1,380 @@
+-- ============================================================================
+-- Migration: pfin.cpi_u_nonpublication — the record of periods the CPI-U source
+--   published WITHOUT a usable value. Global public reference data (NOT tenant-
+--   owned), append-only, immutable. Realizes ADR-049 Decision 1 (Option C,
+--   F/CTO-ratified 2026-08-10). Companion migration 064 authors the single
+--   consumption helper required by ADR-049 Decision 4.
+--   JOINT-REVIEW-MANDATORY (Sec veto surface): ADR-011 Decision 1 — a new table
+--   feeding financial figures (inflation-adjusted / real-terms surfaces).
+--
+-- ----------------------------------------------------------------------------
+-- WHAT FORCED THIS (ADR-049, read verbatim before drafting). BLS published
+--   2025-10 for series CUUR0000SA0 with `value = '-'`. 053 declares
+--   `cpi_value NOT NULL` plus a finiteness CHECK, so a valueless period CANNOT
+--   be stored — the ETL's drop is FORCED BY THE SCHEMA, not an importer defect.
+--   Absence therefore carried no explanation, and a CPI-U gap propagates into
+--   inflation-adjusted financial figures. ADR-049 rejected making cpi_value
+--   nullable (Option B — pays the largest consumer-side cost and weakens the
+--   exact invariant 053 was built around) and rejected recording nothing
+--   (Option A — "you cannot retrospectively classify a gap you did not record";
+--   reversible in schema, IRREVERSIBLE IN DATA). This table is the purely
+--   additive third option.
+--
+-- ----------------------------------------------------------------------------
+-- Numbering: 063 follows 062 (fn_nav_series). Next free number taken AT
+--   AUTHORING TIME, never reserved ahead (ADR-049 Consequences states this
+--   explicitly; the 058->059 slip is the precedent for why).
+--   Depends on: 001 (pfin schema). Deliberately does NOT depend on 053 —
+--   see NO FK, BY CONSTRUCTION below. Paired with: 064 (the consumption
+--   helper), which reads BOTH this table and 053 and must apply after both.
+--
+-- ----------------------------------------------------------------------------
+-- POSTURE RATIONALE — the two functions authored here are SECURITY INVOKER
+--   (default per ADR-011 Lock 11). They are immutability trigger fences: they
+--   read no table and need no elevated privilege — the raise is the entire body.
+--   NO SECURITY DEFINER function is authored or proposed by this migration, so
+--   the ADR-011 Decision 9 DEFINER allowlist is UNCHANGED by it (+0). Stated as
+--   a DELTA, not as a level: the allowlist's size is read live from Decision 9,
+--   never copied into a file that cannot maintain it.
+--
+-- ----------------------------------------------------------------------------
+-- IMMUTABLE + APPEND-ONLY — and WHY RESTATEMENT IS A FEATURE (ADR-049 D1).
+--   053 is MUTABLE because BLS revises published prints: a period can go
+--   absent -> present. This table is the opposite posture. A row records what
+--   was observed at observation time, and it is RETAINED even after the period
+--   is later published — a period present in BOTH tables reads as "unpublished
+--   when we looked, published later", which IS the audit trail.
+--   >> NO `resolved` FLAG, DELIBERATELY. <<  A reader derives resolution by
+--   joining this table to 053 on cpi_period; per the ADR-011 Decision 4
+--   derive-by-looking test, anything derivable by looking is not stored. A
+--   later reader who "notices the gap" and adds a status column would be
+--   re-introducing exactly what Option B was rejected for, one table over.
+--
+--   STANDING REQUIREMENT ON THE WRITER: the ingest MUST append with
+--   `on conflict (cpi_period) do nothing`. `do update` reaches the UPDATE fence
+--   below and fails loud. First observation wins; a re-run is a no-op. This is
+--   what makes a monthly re-fetch of the same series bounded rather than
+--   accumulating one duplicate row per run, forever.
+--
+-- ----------------------------------------------------------------------------
+-- SHAPE — the resemblance a later reader will reach for DOES NOT HOLD, and
+--   ADR-049 D1 records it so nobody "aligns" this table to a family it does not
+--   belong to. The `*_state_history` family (linked_source_state_history 015,
+--   account_trans_annotation_history 031) are HISTORIES OF A TENANT-OWNED ROW
+--   THAT EXISTS, FK-anchored to it. This table is the opposite on both axes: it
+--   is GLOBAL (no tenant) and it describes a period for which NO ROW EXISTS —
+--   that absence is its entire subject. Closest in PURPOSE is a sync-audit
+--   record; that is tenant-scoped, so it is not precedent either. The append-
+--   only POSTURE is precedent; the SHAPE is new.
+--
+--   >> NO FK, BY CONSTRUCTION. <<  No FK to pfin.cpi_u_index is POSSIBLE: the
+--   subject of a row here is precisely a cpi_period for which cpi_u_index holds
+--   no row. A future reader adding `references pfin.cpi_u_index` would make the
+--   table unable to store the only thing it exists to store.
+--
+-- ----------------------------------------------------------------------------
+-- SINGLE-SERIES KEY — INHERITED, and the coupling is stated rather than hidden.
+--   The PRIMARY KEY is cpi_period alone, mirroring 053. `source` is carried as a
+--   column for provenance, exactly as 053 carries it. The two tables are joined
+--   on cpi_period, so their key grains MUST match; a composite (cpi_period,
+--   source) key here would resolve a limitation 053 does not resolve and would
+--   put the join grain in question for no present benefit (one series is
+--   ingested). STANDING REQUIREMENT: if 053's key ever widens to admit a second
+--   series, THIS TABLE'S KEY MUST WIDEN WITH IT, and 064's join with it.
+--
+-- ----------------------------------------------------------------------------
+-- aal2 STEP-UP BACKSTOP (C3 / ADR-029 / 025) — EXCLUDED, reason (i) GLOBAL
+--   SHARED-READ. cpi_u_nonpublication is public macro reference read by every
+--   authenticated user via `using (true)` — it is NOT a sensitive tenant-owned
+--   pfin table, so the per-user-conditional aal2 clause does NOT apply (same
+--   class as tax_character and 053 itself). Stated here per the 025 in-header
+--   convention.
+--
+-- ----------------------------------------------------------------------------
+-- §10 3-AXIS CROSS-CHECK (Path B — ADR-011 Decision 4 is LINKED, not restated;
+--   read verbatim live before drafting this file. This migration is not the
+--   canonical anchor, so the catalogued numbered list is deliberately NOT
+--   reproduced here and NO count appears — a derived surface that copies a
+--   count acquires a maintenance obligation it will not honour.)
+--   (i)   Instance-numbering: this migration catalogues NO new §10 instance and
+--         reorders none. Ledger DELTA = 0.
+--   (ii)  Layer-attribution: the service_role SELECT+INSERT grant below is a
+--         DB-LAYER ACL. It is NOT the code-layer SUPABASE_SERVICE_ROLE_KEY
+--         allowlist grep fence, NOT the PDF-worker container credential audit,
+--         NOT the app->worker admission network/config surface. Identical
+--         reasoning to 053's and eod_price/019's global-writer grants. The BLS
+--         ETL writer is an already-sanctioned service_role consumer and this
+--         migration adds no new file to any code-layer fence.
+--   (iii) Verbatim-vs-paraphrase: Decision 4 linked, not restated (Path B).
+--   DE-CONFLATION GUARD: no FK-shaped column, no credential-presence surface,
+--   no admission endpoint — none of the three is a §10 catalogued instance.
+--   ⚠ The §10 CATALOGUED set and the CI-FENCED set are DIFFERENT SETS. Neither
+--   is reconciled to the other here, and neither should be "tidied" to match.
+--
+-- ----------------------------------------------------------------------------
+-- ADR-011 DECISION 3 (cross-tenant FK-bypass family) — family UNCHANGED (+0).
+--   ADR-049 D1 pins NON-MEMBERSHIP on TWO INDEPENDENT GROUNDS, both recorded so
+--   a later reader who re-derives only one does not conclude the other was
+--   missed:
+--     (i)  there is NO FK-SHAPED REFERENCE COLUMN AT ALL — the four columns are
+--          cpi_period DATE PK / source TEXT / published_value_raw TEXT /
+--          observed_at TIMESTAMPTZ; none references another pfin row, there is
+--          no self-FK and no INTEGER[] array; and per NO FK, BY CONSTRUCTION
+--          above, none is even possible; and
+--     (ii) both this table and 053 are GLOBAL, so there is NO TENANT BOUNDARY
+--          TO BYPASS EVEN IF SUCH A COLUMN EXISTED — no users_id, no tenant
+--          anchor, nothing to matched-tenant-validate.
+--   Either ground alone is sufficient; neither is load-bearing on the other.
+--   Same "global shared reference, not a family member" class as tax_character.
+--   The family's size is read live from ADR-011 Decision 3's body — this file
+--   carries no tally, by the same rule that governs the §10 block above.
+--
+-- ----------------------------------------------------------------------------
+-- ADR-023 STEP 0 CLASSIFICATION — PURE-GLOBAL. The SELECT policy is
+--   `using (true)` with no tenant discrimination, so reads execute under
+--   `authenticated`, composing with the ETL read-role amendment's Step 0 rule
+--   rather than creating an exception to it. Writes execute under service_role,
+--   the write role-of-record.
+--
+-- ----------------------------------------------------------------------------
+-- WHAT THIS TABLE DOES **NOT** DISTINGUISH (ADR-049 Decision 2, stated because
+--   "C fixes the ambiguity" is the natural misreading and it is WRONG).
+--   Absence of a cpi_u_index row collapses FOUR states:
+--     (a) published with no value   (b) not yet published
+--     (c) our ingest dropped it     (d) backfill never covered the span
+--   This table positively records (a) ONLY. It converts a four-way ambiguity
+--   into a TWO-WAY one; it does not eliminate it. (c) and (d) STAY COLLAPSED
+--   WITH EACH OTHER and are separated from (b) only BY CONVENTION (064's
+--   trailing-edge rule), never by record.
+--   Rejected as the heavier alternative, so the boundary reads as CHOSEN rather
+--   than overlooked: C' — record the outcome of EVERY fetched period, making
+--   absence mean "never fetched" and separating (c) from (d). That is a full
+--   ingest log; at V1 single-user scale its cost exceeds the value of
+--   distinguishing two operational states a run log already narrows. If (c)/(d)
+--   separation is later wanted, C' IS ADDITIVE ON TOP OF C — no rework.
+--
+-- ----------------------------------------------------------------------------
+-- LEDGER DELTAS (all confirmed FLAT, stated as deltas): §10 catalogued
+--   instances +0 · SECURITY DEFINER allowlist +0 (two INVOKER trigger fences
+--   authored) · ADR-011 Decision 3 family +0 · SD matrix — NO expansion (public
+--   read-only reference data; ADR-011 Decision 12 class). Sec review is
+--   MANDATORY here notwithstanding the flat ledgers: ADR-011 Decision 1, new
+--   table feeding financial figures.
+--
+-- ----------------------------------------------------------------------------
+-- CONTRACT
+--   pfin.cpi_u_nonpublication — global public record of CPI-U periods the
+--     source published WITHOUT a usable value.
+--     Columns: cpi_period DATE PK (first-of-month, CHECK-fenced),
+--       source TEXT DEFAULT 'BLS_CUUR0000SA0',
+--       published_value_raw TEXT NULL (what the source actually emitted, e.g.
+--       '-'; length-bounded), observed_at TIMESTAMPTZ DEFAULT NOW().
+--     IMMUTABLE + APPEND-ONLY: UPDATE + DELETE + TRUNCATE blocked for ALL roles
+--       by DB trigger (service_role bypasses RLS but NOT triggers). INSERT is
+--       the only mutation, service_role-only, first-observation-wins.
+--     RLS: SELECT to authenticated `using (true)` (public reference);
+--       INSERT/UPDATE/DELETE default-deny at authenticated (no policy) → writes
+--       are service_role-only via DB-ACL grant.
+--   Security-load-bearing edges: NO tenant isolation surface (global public
+--     data, no users_id); authenticated holds SELECT only and therefore cannot
+--     forge or erase a non-publication record; the immutability triggers are the
+--     ONLY fence that holds against a privileged context (ACL and RLS are both
+--     bypassable by the table owner, triggers are not); the first-of-month CHECK
+--     is role-agnostic (service_role bypasses RLS but NOT CHECK) and keeps a
+--     mis-keyed row from silently never joining 053 — a record that cannot be
+--     joined is indistinguishable from a record that was never written, which
+--     would defeat this table's entire purpose.
+--   ⚠ NECESSARY, NOT SUFFICIENT: this table records (a) only, and only for
+--     periods the ingest actually observed and wrote. It is not a completeness
+--     guarantee and cannot detect a stalled ingest — see 064's trailing-edge
+--     limitation and Decision 2's four-state list above.
+-- ============================================================================
+
+create schema if not exists pfin;
+
+-- ----------------------------------------------------------------------------
+-- pfin.cpi_u_nonpublication — global, append-only, immutable. PK = cpi_period
+-- (mirrors 053's grain so the two join cleanly; see SINGLE-SERIES KEY above).
+-- ----------------------------------------------------------------------------
+create table if not exists pfin.cpi_u_nonpublication (
+  cpi_period           date        not null primary key,                 -- first-of-month period the source published with no usable value
+  source               text        not null default 'BLS_CUUR0000SA0',   -- BLS series id provenance (mirrors 053)
+  published_value_raw  text        null,                                 -- what the source actually emitted (e.g. '-'); NULL if not captured
+  observed_at          timestamptz not null default now(),               -- when WE observed the non-publication (first observation wins)
+  constraint cpi_u_nonpublication_period_first_of_month
+    check (extract(day from cpi_period) = 1),                            -- zone-free by construction: extract(day from date) involves no TimeZone
+  constraint cpi_u_nonpublication_raw_bounded
+    check (published_value_raw is null or length(published_value_raw) <= 64)
+);
+
+comment on table pfin.cpi_u_nonpublication is
+  'Global public record of CPI-U periods (BLS series CUUR0000SA0) that the source '
+  'PUBLISHED WITHOUT A USABLE VALUE — ADR-049 Decision 1, Option C. Exists because '
+  'pfin.cpi_u_index (053) declares cpi_value NOT NULL plus a finiteness CHECK, so a '
+  'valueless period CANNOT be stored there; the ingest drop is forced by the schema, '
+  'not an importer defect. NOT tenant-owned — public macro reference read by all '
+  'authenticated users (RLS SELECT using(true)); NO users_id, NO FK-shaped column '
+  '→ NOT an ADR-011 Decision-3 family member, on two independent grounds (no '
+  'FK-shaped column at all; and both tables are global, so there is no tenant '
+  'boundary to bypass even if one existed). Same class as tax_character. '
+  'IMMUTABLE + APPEND-ONLY (unlike 053, which is MUTABLE because BLS revises '
+  'prints): UPDATE + DELETE + TRUNCATE are blocked for ALL roles by DB trigger. A '
+  'row is RETAINED after the period is later published — a cpi_period present in '
+  'BOTH tables reads as "unpublished when we looked, published later", which is the '
+  'audit trail. There is deliberately NO resolved flag: resolution is derived by '
+  'joining this table to pfin.cpi_u_index on cpi_period, and per the ADR-011 '
+  'Decision 4 derive-by-looking test anything derivable by looking is not stored. '
+  'STANDING REQUIREMENT — the ingest MUST append with `on conflict (cpi_period) do '
+  'nothing`; `do update` reaches the immutability fence and fails loud. STANDING '
+  'REQUIREMENT — if 053''s key ever widens to admit a second series, this table''s '
+  'key and pfin.fn_cpi_u_index_for_period''s join MUST widen with it. Consumption '
+  'policy lives in ONE helper (ADR-049 Decision 4): pfin.fn_cpi_u_index_for_period. '
+  'Do NOT re-derive the carry/gap policy inline in a consumer. This table records '
+  'only "published with no value" — it does not distinguish "not yet published" '
+  'from "our ingest dropped it" from "backfill never covered the span" (ADR-049 '
+  'Decision 2). aal2 step-up backstop EXCLUDED (reason (i) global shared-read).';
+
+comment on column pfin.cpi_u_nonpublication.cpi_period is
+  'PRIMARY KEY = the calendar month the source published with no usable value, '
+  'normalized to first-of-month (DATE), CHECK-fenced. Same grain as '
+  'pfin.cpi_u_index.cpi_period so the two tables join on it directly. A period '
+  'appearing in BOTH tables is not a contradiction — it is the "unpublished when we '
+  'looked, published later" case that this table exists to preserve.';
+comment on column pfin.cpi_u_nonpublication.source is
+  'BLS series-id provenance (DEFAULT ''BLS_CUUR0000SA0'' = CPI-U, all urban '
+  'consumers, US city average, all items, not seasonally adjusted). Mirrors '
+  'pfin.cpi_u_index.source. Carried for provenance; it is NOT part of the key — see '
+  'the SINGLE-SERIES KEY block in this migration''s header for why the grain is '
+  'deliberately coupled to 053''s.';
+comment on column pfin.cpi_u_nonpublication.published_value_raw is
+  'What the source actually emitted in the value field for this period — the '
+  'evidence for the record. The observed real-world case was the single character '
+  '''-''. NULL is permitted: it means the ingest did not capture the raw token, NOT '
+  'that the source emitted an empty value. Length-bounded (<= 64) so a global '
+  'service_role-writable table carries no unbounded-text write vector.';
+comment on column pfin.cpi_u_nonpublication.observed_at is
+  'Wall-clock of the INSERT that recorded this non-publication (DEFAULT now()). '
+  'FIRST-observation time, not latest: the writer appends with `on conflict do '
+  'nothing`, and UPDATE is trigger-blocked, so this value never moves. '
+  'Ingest-provenance, NOT the CPI observation date (that is cpi_period).';
+
+comment on constraint cpi_u_nonpublication_period_first_of_month on pfin.cpi_u_nonpublication is
+  'Fences cpi_period to a first-of-month DATE, matching pfin.cpi_u_index''s '
+  'documented grain. Load-bearing rather than cosmetic: a mis-keyed row (say '
+  '2025-10-15) would silently never join 053 or match a consumer''s period lookup, '
+  'making a WRITTEN record indistinguishable from a record that was NEVER WRITTEN — '
+  'which defeats the table''s entire purpose. Role-agnostic (service_role bypasses '
+  'RLS but NOT CHECK). Written as `extract(day from cpi_period) = 1` deliberately: '
+  'it is zone-free by construction, whereas a date_trunc formulation invites a '
+  'timestamptz variant that would be evaluated in the session TimeZone (ADR-044).';
+comment on constraint cpi_u_nonpublication_raw_bounded on pfin.cpi_u_nonpublication is
+  'Bounds published_value_raw to 64 characters. The column is written by '
+  'service_role on a GLOBAL table (no tenant scoping to limit blast radius), so the '
+  'bound removes an unbounded-text write vector by construction. 64 is far above any '
+  'plausible BLS value token (the observed case is one character).';
+
+-- ----------------------------------------------------------------------------
+-- IMMUTABILITY — Surface 1: row-level UPDATE + DELETE fence.
+-- The 004 / 054 append-only pattern. This is the ONLY fence that holds against a
+-- privileged context: service_role bypasses RLS but NOT triggers, and the table
+-- owner bypasses the ACL too. RLS default-deny and the withheld UPDATE/DELETE
+-- grants below are real defense-in-depth, but they are NOT the guarantee.
+-- ----------------------------------------------------------------------------
+create or replace function pfin.fn_cpi_u_nonpublication_block_mutation()
+returns trigger
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+begin
+  -- Fail LOUD (raise, NOT return null — return null would silently no-op the row
+  -- and read as "succeeded"). Blocks UPDATE + DELETE for ALL roles.
+  raise exception
+    'pfin.cpi_u_nonpublication is immutable (append-only; ADR-049 Decision 1 / ADR-011 Decision 2). % blocked — a recorded non-publication was true at observation time and is retained even after the period is later published. Append with `on conflict (cpi_period) do nothing`, never `do update`.', tg_op;
+end;
+$$;
+
+revoke execute on function pfin.fn_cpi_u_nonpublication_block_mutation() from public;
+
+comment on function pfin.fn_cpi_u_nonpublication_block_mutation() is
+  'BEFORE UPDATE OR DELETE immutability fence on pfin.cpi_u_nonpublication '
+  '(ADR-049 Decision 1; ADR-011 Decision 2 / Lock 10 append-only class). SECURITY '
+  'INVOKER — touches nothing, needs no elevated privilege, and is NOT a DEFINER '
+  'allowlist entry (this migration adds none). raise exception (fail loud). Blocks '
+  'UPDATE + DELETE for ALL roles incl. service_role, which bypasses RLS but not '
+  'triggers — the privileged-context immutability fence that RLS default-deny alone '
+  'cannot provide. INSERT is NOT blocked here: it is the ingest append path, and '
+  'first-observation-wins is enforced by the primary key plus the writer''s '
+  '`on conflict do nothing`, not by a trigger.';
+
+create trigger cpi_u_nonpublication_block_mutation
+  before update or delete on pfin.cpi_u_nonpublication
+  for each row execute function pfin.fn_cpi_u_nonpublication_block_mutation();
+
+-- ----------------------------------------------------------------------------
+-- IMMUTABILITY — Surface 2: statement-level TRUNCATE fence.
+-- Row-level triggers do NOT fire on TRUNCATE (Postgres runs only STATEMENT-level
+-- BEFORE TRUNCATE triggers), so a role holding TRUNCATE could wipe the whole
+-- record without tripping Surface 1. Statement-level fence (holds regardless of
+-- grant) plus a defensive REVOKE.
+-- ----------------------------------------------------------------------------
+create or replace function pfin.fn_cpi_u_nonpublication_block_truncate()
+returns trigger
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+begin
+  raise exception
+    'pfin.cpi_u_nonpublication is immutable (append-only; ADR-049 Decision 1 / ADR-011 Decision 2). TRUNCATE blocked — the non-publication record cannot be wiped; per ADR-049 a gap you did not record cannot be retrospectively classified.';
+end;
+$$;
+
+revoke execute on function pfin.fn_cpi_u_nonpublication_block_truncate() from public;
+
+comment on function pfin.fn_cpi_u_nonpublication_block_truncate() is
+  'BEFORE TRUNCATE (statement-level) immutability fence on '
+  'pfin.cpi_u_nonpublication (ADR-049 Decision 1; ADR-011 Decision 2 / Lock 10). '
+  'SECURITY INVOKER (touches nothing; not a DEFINER allowlist entry). raise '
+  'exception (fail loud). Closes the TRUNCATE bypass: row-level UPDATE/DELETE '
+  'triggers do NOT fire on TRUNCATE, so this statement-level trigger fences the '
+  'wipe path for ALL roles regardless of grant state. Message deliberately distinct '
+  'from the row-level fence so a battery can tell which surface fired.';
+
+create trigger cpi_u_nonpublication_block_truncate
+  before truncate on pfin.cpi_u_nonpublication
+  for each statement execute function pfin.fn_cpi_u_nonpublication_block_truncate();
+
+-- Defense-in-depth: PUBLIC holds no TRUNCATE by default, but revoke explicitly so
+-- a broad platform/default grant cannot reintroduce it. The statement-level
+-- trigger above is the regardless-of-grant guarantee.
+revoke truncate on pfin.cpi_u_nonpublication from public;
+
+-- ----------------------------------------------------------------------------
+-- RLS — public reference read; service_role-only append.
+-- grant-before-RLS shape (PR #106): the table ACL is checked BEFORE RLS, so the
+-- authenticated SELECT grant is required even with RLS enabled (RLS filters rows;
+-- the GRANT lets the role reach the table at all). authenticated gets SELECT only
+-- (no write grant → cannot INSERT/UPDATE/DELETE regardless of policy).
+-- service_role gets SELECT + INSERT ONLY — no UPDATE, no DELETE. That withholding
+-- is the ACL half of append-only; the triggers above are the half that holds when
+-- ACL and RLS are both bypassed. anon: nothing (schema USAGE denies before ACL).
+-- ----------------------------------------------------------------------------
+alter table pfin.cpi_u_nonpublication enable row level security;
+
+create policy cpi_u_nonpublication_select on pfin.cpi_u_nonpublication
+  for select to authenticated
+  using (true);
+
+comment on policy cpi_u_nonpublication_select on pfin.cpi_u_nonpublication is
+  'SELECT: every authenticated user reads every non-publication row — public macro '
+  'reference data (using(true), the global shared-read class, same as 053 and '
+  'tax_character). NO tenant predicate (there is no users_id). This is the ONLY '
+  'authenticated policy: INSERT / UPDATE / DELETE have no policy → default-deny for '
+  'authenticated, so a user can neither forge nor erase a non-publication record. '
+  'service_role writes bypass RLS but are still bounded by the ACL (INSERT only) '
+  'and by the immutability triggers. aal2 backstop excluded (global shared-read) — '
+  'no per-user-conditional clause.';
+
+grant select on pfin.cpi_u_nonpublication to authenticated;
+grant select, insert on pfin.cpi_u_nonpublication to service_role;
