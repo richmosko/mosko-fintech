@@ -71,6 +71,29 @@ commands and migrations under revision control to execute to the postgresql data
 on SupaBase.
 TBD: Add a link to project and how to setup the database.
 
+#### Automap relationship names (BACKLOG §7.6 S13)
+
+`SBaseConn` reflects the schema with SQLAlchemy **automap**, which names a
+generated relationship after the **referred table**. When a table carries both
+an FK to table `T` and a column literally named `T`, the two claim the same
+attribute name and automap raises inside `base.prepare()` — so `PFinBackend()`
+cannot be constructed at all and nothing in `main.py` can start.
+
+`utils.sqla_name_for_scalar_relationship` / `sqla_name_for_collection_relationship`
+guard this generally. **The column always wins**; the relationship is renamed to
+`<fk column(s)>_ref`. Names that do not collide are left exactly as automap
+produced them.
+
+The one instance in the schema today (migration 062):
+
+| table              | attribute            | what it is                        |
+| ------------------ | -------------------- | --------------------------------- |
+| `pfin.user_taxonomy` | `.tax_character`     | the `text` column (unchanged)     |
+| `pfin.user_taxonomy` | `.tax_character_ref` | the FK relationship to `pfin.tax_character` |
+
+If you add a table whose column name matches a table it also references, you get
+the `_ref` suffix automatically — no code change needed, and no startup failure.
+
 ## Installation
 1. Install uv (see above)
 2. Clone the project
