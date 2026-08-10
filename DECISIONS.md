@@ -41,6 +41,92 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-050 — RT-05 signature-rejection has no detection surface: the honest downgrade, why a rename would conceal it, and the rate-not-row reframing (F2); RT-21 (g) inherits the defect unbuilt (F3)
+
+**Date:** 2026-08-10 · **Status:** **PROPOSED** — Decision 1 (the honest downgrade) approved in substance by F/CTO 2026-08-10; Decisions 4 + 5 pending F/CTO ratify. Sec-authored; Sec owns the finding and the catch criterion, Architect owns whichever storage shape is ratified.
+**Phase:** 6
+
+**Context — what was measured, and where.**
+
+ARCH §4's **F2** is V1's ratified Sec-relevant-event detection surface, stated as *"active pull-based query against `pfin.plaid_sync_audit` rows with the signature-invalid event-type discriminator."* It fails twice, independently:
+
+| Claim | Measured | Verdict |
+|---|---|---|
+| the surface is `pfin.plaid_sync_audit` | `supabase/migrations/015_linked_source_fold.sql:174` — `drop table if exists pfin.plaid_sync_audit;`. Successor is `pfin.linked_source_sync_audit` (`015:441`) | the named table does not exist |
+| signature-invalid rows are queryable there | `api/src/routes/api/plaid/webhook/+server.ts:85` — *"Invalid → 401, NO writes. Fails CLOSED on every error mode."* Line 92 emits `console.error` carrying `verification.reason`, then returns 401 | **no row is written to any table** |
+
+**The second finding is the load-bearing one, and it is not a defect in the webhook.** Failing closed with no writes is correct and must stay: SECURITY §4.5's RT-05 entry commits to *"Invalid → 401, NO writes"*, and the alternative was already adjudicated — ARCH §4 records that the Architect's pre-ratification design (*"Plaid webhook handler emits explicit error→exit-1 to trigger a Coolify event on signature failure"*) was **Sec-REJECTED** as a DOS vector. **RT-05 is right. F2 is what is wrong.**
+
+**Why this matters beyond a broken pointer.** The same §4 row states, in its *"Coverage NOT delivered"* block, that an RT-05 signature failure returning an HTTP error without crashing the container triggers no Coolify event **by-construction** — and immediately names the compensating control: *"**This is by-design** — the F2 pull-based-detection posture below carries V1's Sec-relevant-event detection surface."* So the argument that made the DOS-safe design acceptable rests on a detection surface that is empty by construction. SECURITY §4.6's incident-handling trigger — *"a suspicious webhook signature failure pattern"* — has nothing to fire on.
+
+**The shape, recorded because it is the reusable half.** RT-05's *"NO writes"* is a **safety** property and simultaneously **F2's hazard notice**. Each artifact reads complete and correct on its own; the defect exists only in the seam, and only a reader holding both at once can see it. Neither artifact is wrong about itself.
+
+---
+
+### Decision 1 — The record stops asserting a control that does not exist (the honest downgrade)
+
+V1's **actual** capability on RT-05 signature rejection is: a `console.error` line in the web-app container's stdout, carrying the rejection reason code, captured by Coolify's log viewer. That is what the artifacts must say until a control is built. F2 is **not** a pull-based query surface and must stop being described as one.
+
+**⚠ The loss is RETENTION, not ergonomics — say retention.** *"Manual"* understates it in exactly the direction that gets it filed as an inconvenience and deferred. Container logs **rotate**; an audit surface does not. F2's own stated cadence is *F/CTO weekly pull-based review*, and **a weekly review against a log that rotates faster than the review cadence detects nothing — and that failure is silent**, because the reviewer sees a clean window rather than an absent one. Ergonomics degrade gracefully. Retention does not: past the rotation horizon the evidence is gone, and nothing indicates it was ever there.
+
+**Paired artifact edits — named here, deliberately not performed in this PR.** ARCH §4's F2 block and the *"Coverage NOT delivered"* compensating-control sentence (Architect-owned); SECURITY §4.6's detection-mechanism sentence and the RT-21 (g) storage-surface sentence (Sec-owned). They land once Decision 5 is ratified, so the corrected text states the disposition rather than a gap awaiting one.
+
+### Decision 2 — A rename is not the fix, and doing it first would conceal the finding
+
+`pfin.plaid_sync_audit` is stale in **7** places in SECURITY, **9** in ARCH, and **1** in BACKLOG (DECISIONS' occurrences are overwhelmingly inside dated blocks and stay, per the ADR-016 Decision 4 precedent). **That reconciliation is real and worth doing** — SD-19's identity, RT-17, and the successful webhook + scheduled-poll write paths all genuinely renamed at the `015` fold and genuinely still write.
+
+**But it must not be done in the same pass as this finding, and it must not be done first.** Renaming F2's pointer to `pfin.linked_source_sync_audit` produces a **correct pointer to an empty surface**: the fail-closed path writes nothing to that table either. The finding would read as closed, the reviewer's eye would move on, and V1 would ship with the detection gap and a tidy citation. **A naming reconciliation and a control gap are different classes of defect, and the cheap one must not be allowed to discharge the expensive one.**
+
+Sequence: ratify the control (Decisions 4 + 5) → land the corrected F2 text → **then** sweep the naming, as its own change, with F2's text already saying something true.
+
+### Decision 3 — F2 was over-specified: a pattern is a rate, and a rate needs a count, not a row per event
+
+SECURITY §4.6 asks about a *"suspicious webhook signature failure **pattern**"*. RT-21 (g) likewise names a *"PDF-JWT trip **pattern**"*. **A pattern is a rate.** A rate is detected from a **count**; it does not require one row per event, and F2 committed to row-level querying to serve a rate-level trigger.
+
+**That over-specification is why both obvious options look unattractive**, and recording the reasoning is the point of this Decision: the next person to meet this will otherwise re-derive the same two options and never find the third. Row-per-event drags in every constraint below; a bounded tally drags in none of them, and answers the question §4.6 actually asks.
+
+### Decision 4 — The catch criterion, which any ratified shape must meet
+
+> **A bounded, retained, queryable signal sufficient to detect a rate anomaly in signature rejections — carrying no attacker-controlled content, requiring no tenant resolution, and with retention independent of container-log rotation.**
+
+Each clause earns its place: **bounded** because the writer is reachable by an unauthenticated attacker; **retained** per Decision 1; **no attacker-controlled content** because the write is driven by an unverified request; **no tenant resolution** because on an invalid signature there is none to resolve; **retention independent of log rotation** because that is the property actually being lost today.
+
+### Decision 5 — Shapes considered; (c) is Sec's lean; F/CTO decides
+
+**(a) Row-per-event audit write on signature rejection.** Two constraints make this harder than it looks, and both are structural rather than fiddly:
+- **There is no verified tenant.** Tenant is resolved from the Item id *in the verified payload* (per ADR-011 Decision 1 clause (d) code-side binding). A rejection row is therefore tenant-less, colliding with `pfin.linked_source_sync_audit`'s `users_id`-records-the-code-resolved-tenant shape and its immutable-audit-class posture. This would need a **separate** surface, not a widened existing one.
+- **It hands an unauthenticated attacker an unbounded INSERT channel** into a compliance-grade table — a storage/cost DOS that is *different from* the crash-loop DOS already rejected, and not obviously preferable to it.
+
+**(b) Record the downgrade and build nothing.** Truthful and free; that is Decision 1 and it lands regardless. As a **terminal** answer it leaves §4.6's trigger unserved and the compensating-control argument standing at reduced strength.
+
+**(c) A bounded counter — Sec's lean.** A fixed-size, tenant-less, per-period tally of rejections keyed by rejection class. The class already exists in code (`verification.reason` at the `console.error`). No attacker-controlled content, no unbounded growth, no tenant resolution, retention independent of log rotation — it meets Decision 4 on every clause, and it is materially cheaper than (a) and materially stronger than (b).
+
+**Decision 1 is not an alternative to (a)/(c) and is not on the same clock.** (b) is a **truth repair** and lands now; (a)/(c) is a **control decision**. Landing the repair first also means the ratifying discussion argues from an accurate baseline instead of from the claim it is replacing.
+
+### Decision 6 — F3 is a different disposition and must not inherit F2's answer
+
+**The RT-21 surface is unbuilt.** Measured: `workers/pdf-render/` contains a `Dockerfile` and `.env.example` and nothing else; there is no `/internal/pdf-render` route in `api/src`; `PDF_WORKER_SIGNING_KEY` has **no consumer in source anywhere** in the tree. So F3 is not a live gap — it is a **forward commitment on a surface that does not exist yet**, and the correct action is to fix the instruction before the surface is built rather than to repair anything now.
+
+**What it inherits if left alone.** RT-21 clause (g) reads verbatim: *"Rejected JWT payloads dropped with audit-log entry — **mirrors RT-05's pattern**. Storage surface: `pfin.plaid_sync_audit` row with appropriate source/event-type discriminator."* **It commits to mirroring a pattern that was never built**, and names the dropped table to do it. Built as written, it would reproduce F2's defect one surface over.
+
+**⚠ But the threat models differ, and the shape that is wrong for F2 may be right for F3.** RT-05's webhook is **internet-facing** — anyone can drive rejections. `/internal/pdf-render` is a **cross-container endpoint on the private Docker network**; an attacker must already be inside it to drive rejections at volume, and an adversary who is inside has produced a far larger incident than a full audit table. So the unbounded-INSERT objection that rules out (a) for F2 **does not transfer**, and row-per-event may be legitimately correct for F3. The no-verified-tenant objection needs its own check at build time — RT-21 (e) has the JWT carrying a `users_id` claim, but on a *rejected* JWT that claim is unverified and must not be trusted as a tenant.
+
+**⚠ This is exactly why F2's finding was not allowed to transfer by inference.** Two commitments that read as siblings — same clause shape, same *"mirrors RT-05's pattern"* language, same §4.6 trigger vocabulary — have different attacker models and therefore different right answers. Reasoning from the resemblance would have produced a confident wrong answer for one of them.
+
+**Action:** F3's clause (g) is corrected when RT-21 is built, against Decision 4's criterion evaluated under the internal-network threat model. It is **not** repaired by this ADR and **not** blocked on Decision 5.
+
+---
+
+**The question for F/CTO, put explicitly.** The DOS-safe webhook design was accepted **on the strength of F2**. Nothing about that design changes here and this ADR does not reopen it — **RT-05 must keep failing closed without crashing.** What needs answering is narrower and is not *"should we add a counter?"*:
+
+> **Does the compensating-control argument still carry at the control's actual strength — a rotating container log — or does V1 ship a control that meets Decision 4?**
+
+**§10 3-axis cross-check ([ADR-011](#adr-011) Decision 4 read verbatim before drafting).** Catalogued ledger **stays 3** (RT-22 first / RT-26 second / RT-27 third). (i) **Numbering** unchanged — no instance added, removed, or reordered; RT-05 and RT-21 are catalog entries in SECURITY §4.5, **not** §10 catalogued instances, and this ADR makes no claim that either becomes one. (ii) **Layer-attribution** unchanged — no surface becomes "four-layer"; RT-21's own three-layer defense language (JWT verification + nonce + infrastructure-credential-presence per RT-22) is referenced, not restated or re-attributed. (iii) **Path B** — Decision 4 is linked, not restated. **SECURITY DEFINER allowlist unchanged** (no function authored). **[ADR-011](#adr-011) Decision 3 cross-tenant FK-bypass family unchanged** — no migration, no DDL, no FK-shaped column; should Decision 5 ratify (a) or (c), the storage shape returns to Sec joint-review and the family is re-read live at that point. **CI fence boundary unchanged** — re-measured `grep -rhoE 'RT-[0-9]{2}' .github/workflows/` at `f6087e0`: RT-05 / RT-22 / RT-26 / RT-27. ⚠ The **catalogued** and **CI-fenced** sets remain different sets and are not reconciled here.
+
+**Cross-references.** [ADR-011](#adr-011) Decision 1 (privileged-context-write; clause (d) code-side tenant binding — the reason a rejection row has no tenant) / Decision 2 (immutable audit-class — the posture a rejection row would collide with) / Decision 4 (§10 — referenced, unchanged at 3) / Decision 17 + Lock 13 mod #1 (RT-21 JWT verification) + mod #8 (the cross-language audit-log discipline SD-19 carries) · [ADR-037](#adr-037) (the ES256/JWK verification model RT-05 ships) · `supabase/migrations/015_linked_source_fold.sql` (`:174` the drop, `:441` the successor) · `api/src/routes/api/plaid/webhook/+server.ts` (`:85` fail-closed-no-writes, `:92` the reason-carrying log line) · [SECURITY §4.5](docs/SECURITY/index.html#sec-4-5) RT-05 + RT-21 (g) + RT-17 · [SECURITY §4.6](docs/SECURITY/index.html#sec-4-6) (the incident-handling trigger this serves) · SECURITY SD-19 / SD-20 · [ARCH §4](docs/ARCH/index.html#sec-4) Observability row (F2 + F3 + the *"Coverage NOT delivered"* compensating-control sentence) · [ARCH §3.2](docs/ARCH/index.html#sec-3-2) (`/internal/pdf-render`) · [ADR-008](#adr-008) Decision 4 (incident-handling ramp).
+
+---
+
 ## ADR-049 — `pfin.cpi_u_index` gap contract: the value table stays strictly non-null; non-publication is recorded separately, and the consumption policy lives in one helper
 
 **Date:** 2026-08-10 · **Status:** **Accepted** — F/CTO ratified **Option C** 2026-08-10; Sec joint-review gates the migration.
