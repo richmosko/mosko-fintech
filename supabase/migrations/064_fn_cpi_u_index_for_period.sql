@@ -145,7 +145,12 @@
 -- gap_class — the member set, and what each member means. TEXT, not an enum
 --   (the 062 `p_granularity text` precedent, F/CTO-ratified 2026-08-07).
 --
---   ⚠⚠ THIS SET IS PROVISIONAL, NOT SETTLED — Sec joint-review C4. ADR-049
+--   ⚠⚠ PROVISIONAL, NOT SETTLED — Sec joint-review C4. ⚠ AND THE SCOPE IS THE
+--   WHOLE RETURN SHAPE, NOT THIS MEMBER SET ALONE: an earlier pass marked only
+--   gap_class and under-read the finding. What D4 leaves open is THE SIGNATURE
+--   — the COLUMN SET and the gap_class MEMBERS alike. See PROVISIONAL SIGNATURE
+--   in the CONTRACT block below, which is where the signature is stated.
+--   ADR-049
 --   Decision 4's sentence must be read WHOLE, because its first half alone reads
 --   as a blank cheque and its second half is the part that binds:
 --     "The exact signature is the implementing PR's call PENDING THE PRODUCT
@@ -156,9 +161,14 @@
 --   below is part of. The ruling it is pending on is the ADR-049 Decision 5
 --   product question (the PRD §2.4.4 non-silent-staleness amendment plus the
 --   two-tier marker), which is PM's and is NOT YET RATIFIED with F/CTO.
---   >> So the first consumer MUST NOT inherit this set as frozen. If the product
---   ruling reshapes what the user is told apart, the member set may move with
---   it, and that is sanctioned rather than a breach. <<
+--   >> So the first consumer MUST NOT inherit this signature as frozen. If the
+--   product ruling reshapes what the user is told apart, the member set AND the
+--   column set may move with it, and that is sanctioned rather than a breach. <<
+--   ⚠ SHARPENED BY THE SIXTH COLUMN, not relieved by it: nonpublication_on_record
+--   was added at Sec note N1 AFTER D4 was written, so the signature now sits
+--   FURTHER from what D4 contemplated than it did at ratify. That makes marking
+--   it provisional MORE necessary, not less — the instinct to treat a just-added
+--   column as settled because it was just deliberated is exactly backwards.
 --   Cleared now rather than after merge for the same reason as C3: this set is
 --   also stated in a `comment on function`, which HAS a database representation
 --   — an edit today, a comment-only migration once merged.
@@ -253,6 +263,16 @@
 --     returns table (cpi_period date, cpi_value numeric, is_carried boolean,
 --                    carried_from date, gap_class text,
 --                    nonpublication_on_record boolean)
+--     ⚠ PROVISIONAL SIGNATURE (Sec joint-review C4). The COLUMN SET above and
+--       the gap_class MEMBER SET are BOTH the implementing PR's call "pending
+--       the product ruling" per ADR-049 D4, and that ruling — the D5 / PRD
+--       §2.4.4 question — is PM-owned and NOT YET F/CTO-RATIFIED. Either may
+--       move when it lands; a consumer must not treat this shape as frozen.
+--       WHAT IS LOCKED and is NOT the implementing PR's call, per the same
+--       sentence: that the return is a COMPOSITE/ROW and the NON-SILENCE it
+--       enforces. Those do not move. Also not provisional: both coverage edges
+--       being bounded (C1) — that is a correctness fix, independent of any
+--       product ruling.
 --     — resolves the CPI-U index level to use for p_period, and says how it was
 --       resolved. Exactly ONE row, always. SECURITY INVOKER, STABLE,
 --       set search_path = ''.
@@ -479,12 +499,16 @@ comment on function pfin.fn_cpi_u_index_for_period(date) is
   'forward silently understates inflation, and the row return is the '
   'by-construction mechanism forcing a consumer to project carried-ness away '
   'deliberately and visibly rather than merely forget it. '
-  '⚠ THE gap_class MEMBER SET IS PROVISIONAL pending the ADR-049 Decision 5 '
+  '⚠ THE RETURN SHAPE IS PROVISIONAL — BOTH the column set and the gap_class '
+  'member set — pending the ADR-049 Decision 5 '
   'product ruling (the PRD 2.4.4 non-silent-staleness amendment plus the two-tier '
   'marker, PM-owned and not yet F/CTO-ratified). ADR-049 Decision 4 locks the '
   'composite return and the non-silence it enforces, and explicitly leaves THE '
-  'SIGNATURE to the implementing PR "pending the product ruling" — the member set '
-  'is part of that signature. Do NOT inherit it as frozen; it may move when that '
+  'SIGNATURE to the implementing PR "pending the product ruling" — and the column '
+  'set and member set are both part of that signature. The sixth column '
+  '(nonpublication_on_record) was added after D4 was written, so the shape now '
+  'sits further from what D4 contemplated, which sharpens this caveat rather than '
+  'relieving it. Do NOT inherit it as frozen; it may move when that '
   'ruling lands. What is NOT provisional: both coverage edges are bounded, which '
   'is independent of any product ruling. '
   'gap_class is a TEXT set: ''published'' (own print) / '
