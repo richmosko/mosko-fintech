@@ -15,15 +15,31 @@
 #   separate file (not a job in worker-ci.yml) so an ETL change doesn't cross-trigger
 #   the provider-sync jobs and vice versa — one worker, one workflow, house style.
 #
-# UNIT-ONLY, SECRETS-FREE by design:
-#   - Runs `pytest -m unit` (the README-documented, no-credentials-needed selector):
-#     55 unit tests RUN; the 17 non-unit tests (@integration/@deployment/@replay) are
-#     DESELECTED under --strict-markers. The @integration lane needs a live BLS key +
-#     a real DB and is keyed/manual — it MUST NOT hard-fail CI for lack of a BLS key.
-#     This unit lane is the gate; integration stays local/manual.
-#   - No .env is checked out (.env is gitignored; only .env.example is tracked). The
-#     unit tests mock os.environ, so they are hermetic — verified green with creds unset.
-#   - Touches NO secret → does NOT interact with the secrets-manifest non-overlap fence.
+# TWO LANES, BOTH SECRETS-FREE by design:
+#
+#   `unit` — runs `pytest -m unit` (the README-documented, no-credentials-needed
+#     selector). The @integration lane needs a live BLS key + a real DB and is
+#     keyed/manual — it MUST NOT hard-fail CI for lack of a BLS key, so it stays
+#     DESELECTED under --strict-markers. No .env is checked out (.env is gitignored;
+#     only .env.example is tracked); the unit tests mock os.environ, so they are
+#     hermetic — verified green with creds unset.
+#
+#   `pgtest` — runs `pytest -m pgtest` against a `postgres:17` SERVICE CONTAINER.
+#     ⚠ THE DISTINCTION THAT MAKES THIS LANE POSSIBLE IS "REAL POSTGRES" vs "REAL
+#     STACK", AND THEY ARE NOT THE SAME REQUIREMENT. These tests create ONLY
+#     `create temp table` — no V1 schema, no migrations, no project roles, no
+#     credentials, no API keys. So a bare Postgres satisfies them, and a bare
+#     Postgres needs nothing from either secret store. Conflating the two is what
+#     had this suite filed as @integration and permanently ungateable.
+#
+#   NEITHER LANE TOUCHES A SECRET → this workflow does NOT interact with the
+#   secrets-manifest non-overlap fence, and must not start. The `postgres:postgres`
+#   credential below is NOT a secret in the manifest's sense: it is a literal for an
+#   ephemeral container that exists only for the life of one job and is reachable
+#   only from that job's network namespace. Same posture, and the same reasoning, as
+#   db-tests.yml's hardcoded local DSN. If wiring anything here ever appears to need
+#   a real secret, that means the tier boundary has been breached — STOP and route to
+#   DevOps + Sec rather than adding one.
 #
 # PACKAGE-IMPORT NOTE: pyproject.toml declares no [build-system], so `uv sync` alone
 # does NOT install the pfin_back_etl package into site-packages (src-layout → import
@@ -31,7 +47,7 @@
 # package importable, then run pytest with --no-sync so the run doesn't drop the
 # editable install.
 
-name: ETL CI (workers/etl unit)
+name: ETL CI (workers/etl)
 
 on:
   pull_request:
@@ -82,3 +98,77 @@ jobs:
         # are DESELECTED, never hard-failing CI for a missing key. Hermetic: unit tests
         # mock os.environ, so no .env / no credentials are required.
         run: uv run --no-sync pytest -m unit
+
+  pgtest:
+    name: Staging-update regression (pgtest; real Postgres, zero secrets)
+    runs-on: ubuntu-latest
+
+    # ⚠ WHY THIS JOB EXISTS. `_staging_update` seeded its staging table with a full
+    # copy of the target PLUS the update rows, so every updated key matched TWO
+    # staging rows and Postgres consistently took the STALE one — `update_table_df`
+    # never reliably updated anything (BACKLOG §7.6 S17). Until this lane ran, A
+    # REVERT OF THAT FIX PASSED CI. The defect is a Postgres join semantic, so only a
+    # real Postgres can observe it; a SQLite stand-in would report coverage of the one
+    # thing it structurally cannot see.
+    services:
+      postgres:
+        # ⚠ MAJOR PINNED TO MATCH THE LOCAL STACK (17; measured 17.6 local / 17.10 on
+        # the verification container). The major is the semantic boundary that matters
+        # here — these tests assert on `UPDATE … FROM` multi-match behaviour, and a
+        # CI/local major split is how a semantic test quietly starts asserting against
+        # a different database than the one developers run. The patch is deliberately
+        # left floating: pinning it would drift from the local stack in the other
+        # direction as local takes patch bumps.
+        image: postgres:17
+        env:
+          # ⚠ NOT A SECRET, and must never become one. Ephemeral container, one job's
+          # lifetime, reachable only from this job. Literal by design — see the
+          # secrets-free note in the file header.
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: pgtest
+        ports:
+          - 5432:5432
+        # Health-gated so the first connection cannot race the container's init. The
+        # -d flag matters: the server restarts once during init, and `pg_isready`
+        # without a target database reports ready during that window.
+        options: >-
+          --health-cmd "pg_isready -U postgres -d pgtest"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # psycopg2 (workers/etl pins psycopg2-binary), so the bare `postgresql://`
+      # scheme — NOT `postgresql+psycopg://`, which selects the uninstalled psycopg3.
+      PFIN_PGTEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/pgtest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv (provisions Python per workers/etl/.python-version = 3.14)
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: 'workers/etl/uv.lock'
+
+      - name: Sync deps (frozen lockfile; test group)
+        run: uv sync --frozen --group test
+
+      - name: Install project editable (src-layout; see PACKAGE-IMPORT NOTE)
+        # The suite imports `staging_seed_sql` from the module under test rather than
+        # re-typing the SQL, so the package must be importable or the tests would
+        # pin their own copy — a detector blind to the code it guards.
+        run: uv pip install -e .
+
+      - name: Staging-update regression (pytest -m pgtest)
+        # ⚠ THIS STEP IS FAIL-CLOSED BY DEFAULT AND MUST STAY THAT WAY. Two ways the
+        # lane could go vacuous, and neither is green:
+        #   · tests deleted / marker unregistered → 0 collected → pytest EXIT CODE 5
+        #     → job red. (Measured: exit 5 on an unmatched -m selector, 0 when the
+        #     tier is populated.) Do NOT add `|| true`, `--exitfirst` tolerance, or a
+        #     `continue-on-error` — each would have to ACTIVELY DEFEAT this default.
+        #   · PFIN_PGTEST_URL unset → the fixture RAISES rather than skipping, because
+        #     GitHub sets CI=true. That guard is Backend's and it is deliberate: a
+        #     skip is indistinguishable from a pass in a summary line. Do NOT "fix"
+        #     it into a skip.
+        run: uv run --no-sync pytest -m pgtest
