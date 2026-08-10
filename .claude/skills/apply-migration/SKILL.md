@@ -1,6 +1,6 @@
 ---
 name: apply-migration
-description: Invoke when authoring a new Supabase migration — adding a base table, extending an RLS surface, writing a new SECURITY INVOKER helper, or proposing any function with SECURITY DEFINER posture. Codifies the Architect-owned procedure: migration file shape (POSTURE RATIONALE + CONTRACT blocks + `comment on function` + `set search_path = ''` + idempotent schema creation), mandatory §10 3-axis cross-check before drafting, Decision 3 matched-tenant validation rule for every FK-shaped column, Sec joint-review routing triggers, and QA pgTAP test-pairing requirement. Also invoke when evaluating whether a new column or array type activates the cross-tenant FK-bypass family, when deciding what a `comment on` may claim (present-tense/checkability, counts, forward-references, naming where sufficiency comes from), and when correcting a comment on an already-merged migration (the comment-only `052` shape — regenerate-and-diff, containment proof, render-verify). Do NOT invoke for Backend `supabase migration up` execution (Backend role) or pgTAP test authorship (QA role).
+description: Invoke when authoring a new Supabase migration — adding a base table, extending an RLS surface, writing a new SECURITY INVOKER helper, or proposing any function with SECURITY DEFINER posture. Codifies the Architect-owned procedure: migration file shape (POSTURE RATIONALE + CONTRACT blocks + `comment on function` + `set search_path = ''` + idempotent schema creation), mandatory §10 3-axis cross-check before drafting, Decision 3 matched-tenant validation rule for every FK-shaped column, Sec joint-review routing triggers, and QA pgTAP test-pairing requirement. Also invoke when evaluating whether a new column or array type activates the cross-tenant FK-bypass family, when deciding what a `comment on` may claim (present-tense/checkability, counts, forward-references, naming where sufficiency comes from), and when correcting ANY text on an already-merged migration — the vehicle follows WHERE THE TEXT LIVES: a `comment on …` has a database representation and requires a new comment-only migration (the `052` shape — regenerate-and-diff, containment proof, render-verify), while a file-header `--` block has none and is corrected IN PLACE under three conditions, because a no-op correction migration would leave the false text where readers actually look. Do NOT invoke for Backend `supabase migration up` execution (Backend role) or pgTAP test authorship (QA role).
 user-invocable: true
 allowed-tools:
   - Read
@@ -104,9 +104,27 @@ Durable rewrites — prefer either:
 
 **(f) If the migration removes or weakens a fail-closed mechanism, name it — in the header AND the commit subject.** A default that flips from fail-closed to fail-open is behaviourally invisible while the two coincide, so the change leaves no footprint at review time. The header must say what was removed and what now holds the line.
 
-## Step 1.6 — Correcting a comment on a MERGED migration
+## Step 1.6 — Correcting text on a MERGED migration
 
-Never edit a merged migration file. Emit a new **comment-only** migration (the `052` shape). While a migration is still **unmerged**, edit in place — the merged-history guard does not apply.
+**The vehicle follows WHERE THE TEXT LIVES** (Sec ruling 2026-08-10, at `055`; F/CTO-cleared). Two cases. Conflating them gives the wrong answer in both directions — and "never edit a merged migration" is the over-broad form this rule replaces.
+
+**(A) Text WITH a database representation** — `comment on …`, which ships into `pg_description` and is read at `\d+` by someone with **no repo in front of them**. **Never edit the merged file.** It can only change by issuing new SQL, so the vehicle is a new **comment-only** migration (the `052` shape) — procedure immediately below.
+
+**(B) Text with NO database representation** — a file-header `--` block. **Edit in place.** For (B) this is not the *preferred* vehicle, it is the **only** one: there is nothing a new migration could correct. Sec's decisive argument — **a no-op "correction migration" leaves the false text where readers look.** An operator running a credential handoff reads the header of the migration that creates the role; a `063` announcing that header is wrong reaches only someone who already knew to look. **A correction must land where the reader is.**
+
+**Three conditions on (B) — all three, demonstrated in the PR body, never asserted:**
+
+1. **Mechanically proven comment-only** — zero non-comment lines added **or removed**. Prove it (`git diff -U0 … | grep "^+" | grep -vcE "^\+--"`, and the same for `-`). This makes replay-equivalence true **by construction** rather than by inspection.
+2. **Descriptions only, never commitments.** Correcting what the file *says about the world* is permitted. Changing a **procedure, grant, role attribute, or operator instruction** is **not** — that voids a prior approval and needs a new migration. At `055` the deploy-time `\password` / `ALTER ROLE … LOGIN` steps were verified **absent from the diff**; Sec called that the check that mattered — *"this changes what the file says about the world, not what it tells an operator to do."*
+3. **The supersession is visible** — name the claim being replaced, so a reader who remembers the old text **learns it changed** rather than doubting their memory.
+
+⚠ **Extends to nothing else. Editing an applied migration's SQL is out under every framing — including "it was wrong and never worked."**
+
+**Sec joint-review whenever the file is Sec-load-bearing** (`055` is).
+
+While a migration is still **unmerged**, edit in place freely — the merged-history guard applies to neither case.
+
+### (A) procedure — the `052` comment-only shape
 
 Catalog comments are frequently multi-KB single-quoted string literals, where a botched edit is a **syntax error**, not a wording problem. **Regenerate and diff; never retype** — retyping a comment of that size is how the correct halves get silently altered alongside the wrong one.
 
