@@ -476,6 +476,47 @@ $$;
 -- the grant below is the whole of the access, rather than a redundant addition
 -- on top of an implicit one (054's discipline). anon is denied earlier by schema
 -- USAGE, but that is a second fence, not this one.
+--
+-- ⚠ THE `authenticated`-ONLY GRANT IS DELIBERATE. service_role is NOT granted
+-- EXECUTE, and that is a decision, not an oversight — recorded here because the
+-- next person to hit `permission denied for function` will otherwise read
+-- silence as a gap and "fix" it by widening the grant. Raised by QA (measured
+-- posture, correctly declined as a ruling) and disposed here at Sec joint-review.
+--
+--   WHY. Both tables this helper reads are PURE-GLOBAL (SELECT policy
+--   `using (true)`, no tenant discrimination), and ADR-023's ETL read-role
+--   amendment Step 0 rules that pure-global reads execute under `authenticated`.
+--   Granting service_role EXECUTE would open a SECOND read path for exactly the
+--   data that rule assigns to the first, turning a file that COMPOSES with Step 0
+--   into one that excepts it. It would also buy nothing: service_role's
+--   distinguishing power is BYPASSRLS, and there is no RLS restriction here to
+--   bypass — `using (true)` already admits every authenticated caller.
+--
+--   AND NO CALLER IS SHUT OUT BY IT, which is the part worth measuring rather
+--   than assuming:
+--     · App server routes read under `authenticated` per ADR-023 — covered.
+--     · The worker identity is a member of BOTH `authenticated` and
+--       `service_role` (granted at 055), so it reaches this helper by taking the
+--       former. >> IT IS NOINHERIT: it must EXPLICITLY `set role authenticated`;
+--       privileges do not arrive implicitly. <<
+--       MEASURED END-TO-END 2026-08-10, not inferred from the memberships:
+--       under the worker identity, `set role service_role` then calling this
+--       function gives `permission denied for FUNCTION`; `set role authenticated`
+--       then calling it SUCCEEDS. >> THE FIX IS `set role authenticated`, NOT
+--       WIDENING THIS GRANT. <<
+--       ⚠ TWO DIFFERENT ERRORS LEAD HERE, and only one of them names this
+--       function — worth stating because someone will grep the error text and
+--       conclude the two cases are unrelated. In BARE worker-identity context
+--       (NOINHERIT, no SET ROLE at all) the failure arrives EARLIER and reads
+--       `permission denied for SCHEMA pfin`, since schema USAGE is checked before
+--       the function ACL. Same cause, same fix, different message.
+--     · The 063 writer does not need this helper at all: it WRITES
+--       non-publication records; it does not read carry-forward or gap
+--       classification.
+--
+--   ⚠ IF a future caller genuinely needs service_role EXECUTE, that is a GRANT
+--   CHANGE ON A FUNCTION FEEDING FINANCIAL FIGURES and routes to Sec re-review.
+--   It does not ride along with an unrelated migration.
 revoke execute on function pfin.fn_cpi_u_index_for_period(date) from public;
 grant execute on function pfin.fn_cpi_u_index_for_period(date) to authenticated;
 
@@ -536,4 +577,18 @@ comment on function pfin.fn_cpi_u_index_for_period(date) is
   'Ingest-freshness monitoring is NOT this function''s job and must not be '
   'inferred from its output. This function also does not decide what the USER '
   'sees: that routes to the existing non-silent-staleness framework per ADR-049 '
-  'Decision 5.';
+  'Decision 5. '
+  '⚠ EXECUTE IS GRANTED TO authenticated ONLY, DELIBERATELY — service_role is not '
+  'granted EXECUTE and that is a decision, not an oversight. Both tables read here '
+  'are pure-global, and ADR-023 Step 0 assigns pure-global reads to authenticated; '
+  'a service_role grant would open a second read path for the same data and would '
+  'buy nothing, since service_role''s distinguishing power is BYPASSRLS and '
+  '`using (true)` leaves no RLS restriction to bypass. A privileged-context caller '
+  'must SET ROLE authenticated — note the worker identity is NOINHERIT, so it must '
+  'do so EXPLICITLY. Measured end-to-end 2026-08-10: under that identity, '
+  'service_role context gives `permission denied for function`, and bare context '
+  'with no SET ROLE fails EARLIER still with `permission denied for schema pfin` '
+  '(schema USAGE is checked before the function ACL) — two different messages, '
+  'same cause, same fix. SET ROLE authenticated then succeeds. THE '
+  'FIX FOR EITHER ERROR IS SET ROLE, NOT WIDENING THIS GRANT. Widening it is a grant '
+  'change on a function feeding financial figures and requires Sec re-review.';
