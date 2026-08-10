@@ -40,7 +40,12 @@ def _env(mapping):
     """Patch dotenv + os.getenv so only `mapping` exists."""
     return (
         patch("pfin_back_etl.utils.dotenv.load_dotenv"),
-        patch("pfin_back_etl.utils.os.getenv", side_effect=lambda k: mapping.get(k)),
+        # `d=None` so a future `os.getenv(x, "default")` in utils does not
+        # break these with a confusing TypeError instead of a real failure.
+        patch(
+            "pfin_back_etl.utils.os.getenv",
+            side_effect=lambda k, d=None: mapping.get(k, d),
+        ),
     )
 
 
@@ -61,8 +66,20 @@ def test_nav_worker_constructs_with_database_parameters_alone():
 
 @pytest.mark.unit
 def test_nav_worker_holds_no_api_credentials_at_all():
-    """Least-privilege stated as an assertion: the NAV cron's process must not
-    be carrying a credential scoped to a different job, even unused."""
+    """The worker must not LOAD a credential scoped to a different job.
+
+    ⚠ BOUNDED TO WHAT IT PROVES. This asserts `worker._params` does not carry
+    the value. It says NOTHING about the process environment — `os.environ`
+    still holds whatever the container was handed, and this test cannot see
+    that. The deployment half (the NAV cron container not being HANDED keys
+    scoped to other jobs) is per-container env scoping and is DevOps-owned.
+    A green here must not be read as the containers already being scoped.
+
+    The sentinel values matter: the keys are SET to "leaked" rather than left
+    absent, so the test varies the variable and asserts the property survives.
+    Asserting absence in an environment where they are absent anyway would
+    pass without being able to fail.
+    """
     dotenv_patch, getenv_patch = _env(
         {**_DB_ONLY_ENV, "FMP_API_KEY": "leaked", "BLS_API_KEY": "leaked"}
     )
