@@ -565,9 +565,11 @@
     <li>(b) the V1 codebase has no integration with any advertising / affiliate / data-broker / marketing-analytics third-party service;</li>
     <li>(c) the only external services V1 calls are:
       <ul>
-        <li>Plaid (per ADR-002 §1.5 — account/transaction aggregation);</li>
-        <li>the CPI-U data source (Architect routing flag from §2.1, source TBD Phase 3);</li>
-        <li>the bracket-schedule data source if any (Architect routing flag from §2.5, source TBD Phase 3).</li>
+        <li><strong>Plaid</strong> (per ADR-002 §1.5 — account/transaction aggregation; the <strong>primary</strong> aggregator per <a href="../../DECISIONS.md#adr-027">ADR-027</a>);</li>
+        <li><strong>SimpleFIN</strong> (the <strong>secondary</strong> aggregator per <a href="../../DECISIONS.md#adr-027">ADR-027</a>, covering one Plaid-unsupported account; same account/transaction-aggregation purpose, no monetization surface);</li>
+        <li><strong>BLS</strong> (the CPI-U reference series consumed by <code>pfin_back_etl</code>; keyed public-data API per <a href="../../DECISIONS.md#adr-048">ADR-048</a> — the credential is a rate-limit key over public data, not a data-sharing arrangement);</li>
+        <li><strong>FMP</strong> (security prices consumed by <code>pfin_back_etl</code>; paid subscription for market reference data — mosko-fintech is the paying customer, and no user data flows outbound);</li>
+        <li>the bracket-schedule data source if any (Architect routing flag from §2.5; §2.5.2 tax brackets are user-authored planning values per <a href="../../DECISIONS.md#adr-013">ADR-013</a> Decision 7, so V1 may consume no external bracket source at all — the conditional stands until §2.5 implementation settles it).</li>
       </ul>
     </li>
   </ul>
