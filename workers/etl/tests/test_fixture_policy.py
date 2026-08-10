@@ -209,6 +209,30 @@ def test_fixture_body_still_skips_an_unreachable_database(
         _fixture_body(fixture_name)()
 
 
+@pytest.mark.unit
+def test_every_construction_call_site_uses_the_shared_policy(monkeypatch):
+    """⚠ THE SECOND CALL SITE. `test_dbase_setup._construct_backend_or_skip`
+    was an INDEPENDENT copy of this policy that skipped on `ValueError` — the
+    case the fixture policy deliberately makes FAIL, since an absent credential
+    IS the S12 defect. So two skip policies disagreed about whether a missing
+    credential is a defect, and the UNGOVERNED one covered S13's acceptance
+    test: the green that matters most.
+
+    Written in REACTION to conftest's over-broad `except`, it reproduced a
+    milder form of it. Each file read correctly alone; the defect was in the
+    seam. This asserts the reconciliation is real rather than assumed —
+    ONE policy, TWO call sites, because two copies of one policy drift.
+    """
+    import test_dbase_setup
+    import pfin_back_etl as pfbe
+
+    monkeypatch.delenv(ROLE_ENV_VAR, raising=False)
+    monkeypatch.setattr(
+        pfbe, "PFinBackend", _raiser(ValueError("BLS_API_KEY does not exist"))
+    )
+    expect_raises_not_skip(ValueError, test_dbase_setup._construct_backend_or_skip)
+
+
 # ---------------------------------------------------------------------------
 # #3 — a wrong DATABASE_URL is indistinguishable from no database
 # ---------------------------------------------------------------------------
