@@ -853,3 +853,90 @@ jobs:
               sys.exit(1)
           print(f"OK: active, last run {a:.1f}d ago (max {max_gap}d).")
           PY
+
+  required-unfiltered:
+    name: required-unfiltered — required contexts cannot be skipped
+    runs-on: ubuntu-latest
+    # Added 2026-08-10 alongside de-filtering db-tests.yml + worker-ci.yml.
+    #
+    # WHAT IT ENFORCES. A workflow backing a branch-protection REQUIRED status check
+    # must not be skippable. Two distinct skip mechanisms, two distinct hazards:
+    #
+    #   (a) `paths:` / `paths-ignore:` on the WORKFLOW → the check never reports.
+    #       GitHub: "If a workflow is skipped due to path filtering, branch filtering
+    #       or a commit message, then checks associated with that workflow will remain
+    #       in a 'Pending' state." The PR does not go red — it HANGS, unmergeable,
+    #       with nothing anywhere showing a failure. Both doc-only PRs merged on
+    #       2026-08-10 (#388, #390) would have deadlocked this way had the three
+    #       path-filtered contexts been required at the time. That is why they were
+    #       withdrawn from the required list rather than promoted.
+    #
+    #   (b) A job-level `if:` on the JOB → the check reports SUCCESS without running.
+    #       This is the more dangerous one and it is not symmetrical with (a). GitHub
+    #       reports a conditionally-skipped job as "Success" to branch protection, and
+    #       that green is INDISTINGUISHABLE IN THE CHECKS LIST from a real pass. It is
+    #       the standard remedy for (a), and it is rejected here: it makes the filter
+    #       an unguarded input to a required gate, so narrowing the filter in some
+    #       later refactor turns the gate permanently, silently green. An enforced
+    #       gate that cannot fail is strictly worse than an advisory one everybody
+    #       knows is advisory — the second is merely unenforced, the first is
+    #       unfalsifiable while looking enforced.
+    #
+    # This matters most for `pgTAP RLS battery`, which is the C2 merge gate on the
+    # ADR-049 migration (Sec joint-review). Until this change that gate was enforced
+    # only by a human reading the result.
+    #
+    # ⚠ KNOWN BLIND SPOT — stated here and not only in the PR that added it, because
+    #   a fence whose limitation is documented somewhere else is a fence whose
+    #   limitation is undocumented:
+    #
+    #     This job proves that every context LISTED in .github/required-contexts.tsv
+    #     is unskippable. It CANNOT prove the manifest matches actual branch
+    #     protection. Reading branch protection needs repo-ADMIN scope; CI's
+    #     GITHUB_TOKEN 404s on GET /repos/{o}/{r}/branches/main/protection. So a
+    #     context that is required in GitHub but absent from the manifest is
+    #     unchecked, silently — that is the live gap, and it is the under-enforcing
+    #     direction. (Over-enforcing — a manifest line for something not actually
+    #     required — is harmless: it holds an unfiltered workflow unfiltered.)
+    #
+    #     Rejected fix: a PAT with admin scope in a CI secret. That would place a
+    #     production-reaching credential in the CI secret store, colliding head-on
+    #     with the CI/production non-overlap commitment that `secrets-nonoverlap`
+    #     (this same workflow) exists to enforce. Trading a documented manifest-sync
+    #     gap for a hole in the non-overlap posture is a bad trade.
+    #
+    #     Accepted compensating control: a HUMAN re-verification at every promotion,
+    #     run by the F/CTO. The command is in the header of required-contexts.tsv.
+    #     Do not read this job's green as "the manifest is current."
+    #
+    # WHY THE CHECK IS A YAML PARSE AND NOT A grep — the pattern used by the other
+    # fences here. A grep for `paths:` cannot distinguish a live filter from the
+    # string appearing in a comment, and the headers of db-tests.yml and worker-ci.yml
+    # both discuss `paths:` at length precisely because they explain why they must not
+    # have one. A grep fence would go red on its own documentation, get discounted as
+    # noisy, and then get deleted. Structure has to be read as structure.
+    #
+    # The checker self-tests its own discriminator on every run (see the SELF-TEST
+    # block in the script). Against a fail-closed instrument a gutted checker produces
+    # a false GREEN that is invisible in the checker's own result — every real
+    # workflow passes and the job looks healthy. Verified 2026-08-10 by gutting
+    # check_workflow() to `return []`: the self-test caught it and failed the job.
+    steps:
+      - uses: actions/checkout@v4
+
+      # setup-python rather than the runner's system python: a bare `pip install`
+      # into system python fails with PEP 668 "externally-managed-environment" on
+      # newer Ubuntu images, and the image's preinstalled package set is not a
+      # contract this repo controls. Both failure modes are fail-CLOSED (the job
+      # goes red; it never goes green without having checked) — but a fence that
+      # reds for an install reason nobody can diagnose is how a fence gets
+      # discounted and then deleted. Boring and pinned.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install PyYAML (parse workflows as structure, not as text)
+        run: python3 -m pip install --quiet pyyaml
+
+      - name: Assert no required context can be skipped
+        run: python3 .github/scripts/required_unfiltered.py

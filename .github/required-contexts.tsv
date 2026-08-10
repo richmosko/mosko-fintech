@@ -1,0 +1,86 @@
+# .github/required-contexts.tsv
+#
+# The branch-protection required-status-check contexts for `main`, and the workflow
+# job backing each one. Read by the `required-unfiltered` fence in security-scan.yml,
+# which asserts that no workflow listed here can be skipped — because a skipped
+# workflow's required context hangs Pending forever and deadlocks the PR.
+#
+# FORMAT (tab-separated, 3 fields):  <workflow file>  <job id>  <context name>
+# The context name is the job's `name:` — that is the string branch protection
+# matches on. Lines starting with `#` and blank lines are ignored.
+#
+# ⚠ THIS FILE'S KNOWN BLIND SPOT — read before trusting it.
+#   This is a MANIFEST, not a mirror. Nothing mechanically proves it matches the
+#   actual branch-protection configuration, because reading branch protection
+#   requires repo-ADMIN scope and CI's `GITHUB_TOKEN` cannot do it (the read is
+#   `GET /repos/{o}/{r}/branches/main/protection`; the token 404s on it). So:
+#
+#     - An entry listed here that is NOT actually required → the fence over-enforces.
+#       Harmless: it holds an unfiltered workflow unfiltered.
+#     - A context actually required that is MISSING here → the fence under-enforces,
+#       silently. THAT is the live gap. A newly-required path-filtered workflow would
+#       deadlock PRs with nothing having warned.
+#
+#   The gap is accepted deliberately rather than closed with a PAT: a token with
+#   admin scope in CI would put a production-reaching credential in the CI secret
+#   store, which collides head-on with the secrets-manifest CI/production
+#   non-overlap commitment that `secrets-nonoverlap` exists to enforce. Trading a
+#   documented manifest-sync gap for a hole in the non-overlap posture is a bad
+#   trade. (Considered and rejected 2026-08-10, DevOps → F/CTO.)
+#
+#   THE COMPENSATING CONTROL IS A HUMAN STEP, AND IT IS NOT OPTIONAL: whenever a
+#   context is added to or removed from branch protection, update this file in the
+#   same change. Verify with:
+#
+#     gh api repos/richmosko/mosko-fintech/branches/main/protection \
+#       --jq '.required_status_checks.contexts[]' | sort > /tmp/actual
+#     grep -v '^#' .github/required-contexts.tsv | grep -v '^$' \
+#       | cut -f3 | sort > /tmp/manifest
+#     diff /tmp/actual /tmp/manifest && echo "IN SYNC"
+#
+#   That command needs admin scope, so it is run by the F/CTO, not by CI. Run it at
+#   every promotion. Do not assume this file is current because CI is green — CI
+#   green says only that what IS listed here is unfiltered.
+
+# --- Required as of 2026-08-10 (11 contexts, all run-always by construction) ---
+security-scan.yml	fence-rt22	RT-22 — PDF worker Dockerfile audit
+security-scan.yml	fence-rt26	RT-26 — SUPABASE_SERVICE_ROLE_KEY allowlist
+security-scan.yml	fence-tbc	TBC — TenantBoundConnection grep (production + inversion)
+security-scan.yml	fence-tbc-node	TBC-node — TenantBoundClient grep (production + inversion)
+security-scan.yml	fence-admission-bind	RT-27 — admission endpoint private-bind config-lint
+security-scan.yml	scanner-npm-audit	Dep scan — npm audit (high+critical)
+security-scan.yml	scanner-pip-audit	Dep scan — pip-audit (high+critical)
+security-scan.yml	scanner-gitleaks	Secrets scan — gitleaks
+security-scan.yml	secrets-nonoverlap	Secrets manifest — CI/production non-overlap
+security-scan.yml	dedup-hash-identical	dedup-hash — import_hash canonical↔copy drift fence
+security-scan.yml	tz-sweep-identical	tz-sweep — runbook §4.1 ↔ (T3) query drift fence
+
+# --- Promoted in this change: previously advisory because they were path-filtered ---
+# Listed here BEFORE branch protection is updated, on purpose. The fence's job is to
+# hold these unfiltered; that must be true and enforced at the moment they are
+# promoted, not afterwards. Until the F/CTO adds them to branch protection, these
+# three lines over-enforce — which is the harmless direction.
+db-tests.yml	rls-battery	pgTAP RLS battery (supabase test db)
+worker-ci.yml	unit	Unit + typecheck + build (hermetic)
+worker-ci.yml	integration	Live-DB integration lane (G2/G3/SC-4)
+
+# The fence that enforces this file, listed in it deliberately. If
+# `required-unfiltered` is not itself a required context, someone can break it and
+# merge anyway — and the failure is quiet, because a broken guard looks exactly like
+# a satisfied one. It is self-consistent to list: security-scan.yml carries no
+# `paths:` filter and this job carries no `if:`, so it checks itself and passes.
+# ⚠ It is NOT yet in branch protection — promoting it is an F/CTO action, and this
+# line over-enforces (the harmless direction) until then.
+security-scan.yml	required-unfiltered	required-unfiltered — required contexts cannot be skipped
+
+# --- NOT listed, and why ---
+# etl-ci.yml (unit, pgtest) and web-tests.yml (web-app, dependency-audit) are still
+# path-filtered and still advisory. They are candidates for a SECOND batch after this
+# one lands and one clean doc-PR cycle is observed. Do not add them here until they
+# are de-filtered — listing a filtered workflow makes this fence go red, which is the
+# correct fail-closed direction but is not a useful way to discover the intent.
+#
+# scheduled-dep-audit.yml has no PR trigger at all (schedule + workflow_dispatch), so
+# it can never report a PR check and can never be a required context. Its PR-visible
+# proxy is the `scheduled-audit-liveness` job in security-scan.yml, which is not yet
+# required — pending the red-then-green demonstration agreed 2026-08-10.
