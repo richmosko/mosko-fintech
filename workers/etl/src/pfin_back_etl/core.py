@@ -266,25 +266,28 @@ class SBaseConn:
         temp table. It then updates the data locally in the database
         which executes much faster than a sqlalchemy update command.
 
-        ⚠⚠ NOT YET ROLE-WRAPPED — THIS PATH STILL FAILS 42501 UNDER THE
-        PRODUCTION LOGIN. Stated here rather than left to be discovered.
-        `_staging_update` COMMITS MID-FLIGHT (`DISCARD TEMPORARY` followed by
-        `session.commit()`) before creating the staging table, and COMMIT
-        clears `SET LOCAL ROLE` (measured). So a role assumed at the top of
-        this method is silently dropped part-way through, and every statement
-        after that point runs privilege-less — failing AFTER the role was
-        correctly assumed, which is exactly why it would review as correct and
-        fail at night in the cron.
+        ⚠ THE WHOLE PATH IS ONE TRANSACTION UNDER ONE ROLE ASSUMPTION, and it
+        must stay that way. `_staging_update` used to COMMIT MID-FLIGHT, and
+        COMMIT clears `SET LOCAL ROLE` (measured) — so a role assumed here was
+        silently dropped part-way through and every later statement ran
+        privilege-less, failing AFTER the role was correctly assumed. Do not
+        reintroduce a commit inside the helper.
 
-        Fixing it means changing `_staging_update`'s transaction semantics
-        (removing the mid-flight commit — measured legal, `DISCARD TEMPORARY`
-        runs fine inside a transaction), which widens this change beyond
-        "assume the role", so it is routed for a ruling rather than decided
-        here. The alternatives were considered and are worse: re-assuming the
-        role after the internal commit re-creates the invisible-privileged-
-        choice defect the no-default-argument rule exists to prevent, and
-        session-level `SET ROLE` is the vetoed engine-level approach at
-        connection scope, with pool poisoning as its failure mode.
+        Two options were rejected rather than overlooked. Re-assuming the role
+        after an internal commit leaves a LIVE WINDOW in which any
+        later-inserted statement runs privilege-less — S17's own shape re-armed
+        inside the function fixing S17; it fixes the instance, not the class.
+        Session-level `SET ROLE` survives commits but confers ambient privilege
+        for the connection's lifetime, and SQLAlchemy pools connections with
+        `pool_reset_on_return='rollback'`, which does NOT reset role — so a
+        missed teardown hands a privileged role to the next checkout.
+
+        Atomicity is a deliberate gain, not a tolerated side effect: a bulk
+        update of price reference data that fails part-way must not leave
+        durable partial work, because the next night's run derives its diff
+        from whatever state it finds. Bound: this holds a transaction open for
+        the length of the bulk update — negligible at V1 scale, revisit only if
+        these tables grow enough for lock duration to matter.
         """
         with sqla.orm.Session(self.engine) as session:
             s_name = tab_sbase.__table__.schema
@@ -294,8 +297,9 @@ class SBaseConn:
             )
             ldict_update = df_update.to_dicts()
             if ldict_update:
-                self._staging_update(session, tab_sbase, key_list, ldict_update)
-                session.commit()
+                with self._role(session, _WRITE_ROLE):
+                    self._staging_update(session, tab_sbase, key_list, ldict_update)
+                session.commit()  # outside the role block — COMMIT clears SET LOCAL
 
     def upsert_table_df(self, tab_sbase, index_elements, df_upsert):
         """
@@ -466,8 +470,16 @@ class SBaseConn:
         if not isinstance(key_list, list):
             key_list = [key_list]
 
+        # (a) NO COMMIT HERE. `SET LOCAL ROLE` is cleared by COMMIT (measured),
+        # so a mid-flight commit silently drops the write role and every
+        # statement after it runs privilege-less — failing AFTER the role was
+        # correctly assumed, which is why it would review as correct and fail
+        # at night. `DISCARD TEMPORARY` is legal inside a transaction
+        # (measured), so the whole path now runs in ONE transaction under ONE
+        # role assumption. Atomicity is a deliberate gain, not a side effect: a
+        # bulk update of price data that fails part-way must not leave durable
+        # partial work for the next night's run to derive a diff from.
         session.execute(sqla.text("DISCARD TEMPORARY"))
-        session.commit()
 
         tab_stag = tab_sbase.__table__.to_metadata(
             self.metadata,
@@ -482,8 +494,32 @@ class SBaseConn:
         tg_sch_name = tab_sbase.__table__.schema
         tg_name = tab_sbase.__table__.name
         st_name = tab_stag.name
+        # (a′) `WHERE false` — SEED THE SHAPE, NOT THE ROWS. THREE defects in
+        # one line, and the third is the one that makes this a repair rather
+        # than a hardening:
+        #
+        #  1. SECURITY. This is an unbounded whole-table read INSIDE the write
+        #     path, independent of fetch_table_df. Under the write role it
+        #     copies EVERY TENANT'S ROWS into staging — reintroducing, inside
+        #     the write path, exactly the over-read the read/write split
+        #     exists to prevent. pfin.eod_price carries per-user
+        #     `manual_valuation` rows, so this is user-entered money.
+        #  2. WASTE. A full copy of the target, discarded immediately.
+        #  3. ⚠ CORRECTNESS — MEASURED, and it means this path did not work.
+        #     Seeded with the full copy AND then the update rows, every updated
+        #     key matches TWO staging rows. Postgres documents `UPDATE … FROM`
+        #     with a multi-row match as UNPREDICTABLE which row is used, and
+        #     reproduced in a rolled-back transaction it took the STALE one:
+        #     the new values were silently discarded and the row kept its old
+        #     value, while every untouched row was self-updated anyway (firing
+        #     its `updated_at` and BEFORE UPDATE triggers). `UPDATE 3` where 2
+        #     were intended, and neither intended change landed.
+        #
+        # Seeding empty removes all three: the join becomes unambiguous, no
+        # untouched row is written, and no other tenant's row is ever read.
         stmt = sqla.text(f"""CREATE TEMP TABLE {st_name} AS
-                             SELECT * FROM {tg_sch_name}.{tg_name};""")
+                             SELECT * FROM {tg_sch_name}.{tg_name}
+                             WHERE false;""")
         session.execute(stmt)
 
         stmt = sqla.insert(tab_stag)
@@ -505,9 +541,9 @@ class SBaseConn:
         ud_stmt += " AND ".join(cond_list)
         ud_stmt += ";"
         stmt = sqla.text(ud_stmt)
-        # print(stmt)
         session.execute(stmt)
-        session.commit()
+        # (a) The caller commits, ONCE, outside the role block. Committing here
+        # would end the transaction mid-helper and tear down the assumed role.
         self.metadata.remove(tab_stag)
 
     def _calc_common_cols_df(self, tab_sbase, df_sbase, df_api):
