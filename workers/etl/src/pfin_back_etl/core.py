@@ -481,12 +481,32 @@ class PFinBackend(SBaseConn):
         env_prefix = "PFIN_"
         schema_list = ["auth", "pfin"]
         super().__init__(env_prefix, schema_list)
-        self.fmp_client = PFinFMP(api_key=self._params["FMP_API_KEY"])
+        self._fmp_client = None
         self._stock_screener_min_mkt_cap = 1000000000
         self._stock_screener_result_limit = 5000
         self._tmp_date_fut = "4000-12-31"
         self._tmp_year_fut = 4000
         self._tmp_period_fut = "NA"
+
+    @property
+    def fmp_client(self):
+        """The FMP client, constructed on FIRST USE — S12.
+
+        It used to be built in __init__, which made `FMP_API_KEY` a hard
+        requirement of PFinBackend ITSELF: a CPI-only container had to carry a
+        credential it never uses, and a machine without one could not construct
+        the object at all. That is the same least-privilege objection S12 makes
+        against the NAV cron, on the worker that actually does the CPI-U work.
+
+        Lazy construction moves the requirement to the FMP call sites, where
+        `require_api_key` raises with the operation named. The CPI-U path never
+        touches this property, so it never needs the key.
+        """
+        if self._fmp_client is None:
+            self._fmp_client = PFinFMP(
+                api_key=utils.require_api_key(self._params, "FMP_API_KEY")
+            )
+        return self._fmp_client
 
     def update_table_all(self, sym_list=None):
         """
@@ -512,7 +532,7 @@ class PFinBackend(SBaseConn):
         """
         logger.info("==== " * 16)
         logger.info("==== Updating pfin.cpi Table")
-        api_key = self._params["BLS_API_KEY"]
+        api_key = utils.require_api_key(self._params, "BLS_API_KEY")
 
         logger.info("Fetch current CPI data from the BLS...")
         current_year = date.today().year
@@ -622,7 +642,7 @@ class PFinBackend(SBaseConn):
         """
         logger.info("==== " * 16)
         logger.info("==== Updating pfin.cpi_u_index Table (CPI-U / BLS CUUR0000SA0)")
-        api_key = self._params["BLS_API_KEY"]
+        api_key = utils.require_api_key(self._params, "BLS_API_KEY")
 
         current_year = date.today().year
         if end_year is None:
