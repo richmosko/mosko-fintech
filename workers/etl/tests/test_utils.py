@@ -541,6 +541,127 @@ class TestAutomapRelationshipNaming:
         assert name == "widget_ref"
 
     @pytest.mark.unit
+    def test_multi_fk_names_carry_MEANING_when_nothing_collides(self):
+        """⚠ THE S15 CASE, AND IT IS NOT THE S13 CASE.
+
+        The S13 guard fires on a relationship-vs-COLUMN collision. Here there
+        is none — `trade` has no `person` column — so nothing is claimed and
+        nothing looks wrong, while automap names BOTH relationships after the
+        referred table and the second silently overwrites the first. No error,
+        no warning: the mapping is present and means something other than it
+        reads.
+
+        The names must carry MEANING, not merely be distinct: the bare target
+        name says which table, `buyer`/`seller` say which leg.
+        """
+        md = sqla.MetaData()
+        person = sqla.Table(
+            "person", md, sqla.Column("id", sqla.Integer, primary_key=True),
+            schema="pfin",
+        )
+        trade = sqla.Table(
+            "trade",
+            md,
+            sqla.Column("id", sqla.Integer, primary_key=True),
+            sqla.Column("buyer_id", sqla.Integer, sqla.ForeignKey("pfin.person.id")),
+            sqla.Column("seller_id", sqla.Integer, sqla.ForeignKey("pfin.person.id")),
+            schema="pfin",
+        )
+        names = {
+            utils.sqla_name_for_scalar_relationship(
+                None, self._mapped(trade), self._mapped(person), c
+            )
+            for c in trade.foreign_key_constraints
+        }
+        assert names == {"buyer", "seller"}, (
+            f"expected meaning-carrying names, got {names} — a bare target-table "
+            f"name is the ambiguity this exists to remove"
+        )
+
+    @pytest.mark.unit
+    def test_multi_fk_generality_holds_beyond_two(self):
+        """⚠ THE GUARD IS UNEXERCISED BY ANY OTHER PAIR IN THE LIVE SCHEMA —
+        exactly ONE (child -> parent) pair carries >1 FK (re-measured at
+        applied head 062). So the test must CONSTRUCT the generality it claims
+        rather than infer it from the single real case; three FKs is the
+        cheapest evidence that nothing about the fix is two-specific.
+        """
+        md = sqla.MetaData()
+        person = sqla.Table(
+            "person", md, sqla.Column("id", sqla.Integer, primary_key=True),
+            schema="pfin",
+        )
+        deal = sqla.Table(
+            "deal",
+            md,
+            sqla.Column("id", sqla.Integer, primary_key=True),
+            sqla.Column("buyer_id", sqla.Integer, sqla.ForeignKey("pfin.person.id")),
+            sqla.Column("seller_id", sqla.Integer, sqla.ForeignKey("pfin.person.id")),
+            sqla.Column("broker_id", sqla.Integer, sqla.ForeignKey("pfin.person.id")),
+            schema="pfin",
+        )
+        names = {
+            utils.sqla_name_for_scalar_relationship(
+                None, self._mapped(deal), self._mapped(person), c
+            )
+            for c in deal.foreign_key_constraints
+        }
+        assert names == {"buyer", "seller", "broker"}
+        assert len(names) == 3, "three FKs must yield three names, not fewer"
+
+    @pytest.mark.unit
+    def test_the_reverse_side_is_also_disambiguated(self):
+        """⚠ BOTH SIDES COLLAPSE INDEPENDENTLY, which is what made the scalar
+        and its NOMINAL REVERSE resolve to DIFFERENT legs — they were not
+        reverses of each other, and a reader following one got the other's FK.
+        """
+        md = sqla.MetaData()
+        person = sqla.Table(
+            "person", md, sqla.Column("id", sqla.Integer, primary_key=True),
+            schema="pfin",
+        )
+        trade = sqla.Table(
+            "trade",
+            md,
+            sqla.Column("id", sqla.Integer, primary_key=True),
+            sqla.Column("buyer_id", sqla.Integer, sqla.ForeignKey("pfin.person.id")),
+            sqla.Column("seller_id", sqla.Integer, sqla.ForeignKey("pfin.person.id")),
+            schema="pfin",
+        )
+        names = {
+            utils.sqla_name_for_collection_relationship(
+                None, self._mapped(person), self._mapped(trade), c
+            )
+            for c in trade.foreign_key_constraints
+        }
+        assert names == {"trade_buyer_collection", "trade_seller_collection"}
+
+    @pytest.mark.unit
+    def test_a_single_fk_to_a_target_is_left_alone(self):
+        """NON-INTERVENTION. The guard must fire only on genuine ambiguity —
+        otherwise it renames relationships across the whole schema, and every
+        existing consumer breaks for no reason."""
+        md = sqla.MetaData()
+        person = sqla.Table(
+            "person", md, sqla.Column("id", sqla.Integer, primary_key=True),
+            schema="pfin",
+        )
+        note = sqla.Table(
+            "note",
+            md,
+            sqla.Column("id", sqla.Integer, primary_key=True),
+            sqla.Column("author_id", sqla.Integer, sqla.ForeignKey("pfin.person.id")),
+            schema="pfin",
+        )
+        (fk,) = list(note.foreign_key_constraints)
+        assert (
+            utils.sqla_name_for_scalar_relationship(
+                None, self._mapped(note), self._mapped(person), fk
+            )
+            == "person"
+        ), "a single FK must keep automap's default name"
+
+    @pytest.mark.unit
     def test_two_fks_to_one_target_get_distinct_names(self):
         """Why the fallback is keyed on the FK's own columns and not a fixed
         suffix: one table can hold several FKs to one target (pfin.lot_match holds
