@@ -298,6 +298,33 @@ def _sqla_fk_qualifier(constraint):
     return "_".join(col.name for col in constraint.columns)
 
 
+def _sqla_fk_count_to_target(child_table, parent_table):
+    """How many FKs `child_table` declares against `parent_table`.
+
+    Compared by (schema, name) rather than object identity: reflection can
+    yield distinct Table objects for the same relation across MetaData
+    instances, and an identity check would silently return 1 and disable the
+    guard — failing OPEN, in a way no error would report.
+    """
+    key = (parent_table.schema, parent_table.name)
+    return sum(
+        1
+        for fk in child_table.foreign_key_constraints
+        if (fk.referred_table.schema, fk.referred_table.name) == key
+    )
+
+
+def _sqla_meaning_name(constraint):
+    """A meaning-carrying name from the FK's own columns: buy_trans_id -> buy_trans.
+
+    The bare target-table name is the ambiguity, so the FK's columns are what
+    carry the meaning — `buy_trans` and `sell_trans` say which leg, where
+    `account_trans` says only which table.
+    """
+    qualifier = _sqla_fk_qualifier(constraint)
+    return qualifier[:-3] if qualifier.endswith("_id") else qualifier
+
+
 def _sqla_disambiguate(default_name, local_cls, fallback_base):
     """Return `default_name` unless it is already claimed on `local_cls`, in
     which case return `fallback_base` (numerically suffixed if that is claimed
@@ -323,6 +350,21 @@ def sqla_name_for_scalar_relationship(base, local_cls, referred_cls, constraint)
     default = sqla_automap.name_for_scalar_relationship(
         base, local_cls, referred_cls, constraint
     )
+    # BACKLOG §7.6 S15. Automap names the relationship after the REFERRED
+    # TABLE, so a table with TWO FKs to one target produces the SAME name
+    # twice and the second silently overwrites the first. Unlike S13 there is
+    # no error and no warning: the mapping is present and means something
+    # other than it reads. Measured on `pfin.lot_match` -> `pfin.account_trans`
+    # (buy_trans_id / sell_trans_id) — the scalar resolved to the SELL leg and
+    # the nominal reverse collection to the BUY leg, so the two were NOT
+    # reverses of each other and the buy side was unreachable.
+    #
+    # ⚠ THE S13 GUARD BELOW CORRECTLY DECLINES TO ACT HERE, which is why this
+    # is a separate condition rather than a widening of it: that guard fires on
+    # a relationship-vs-COLUMN collision, and there is none — `lot_match` has
+    # no `account_trans` column. Nothing was claimed, so nothing looked wrong.
+    if _sqla_fk_count_to_target(local_cls.__table__, referred_cls.__table__) > 1:
+        default = _sqla_meaning_name(constraint)
     fallback = f"{_sqla_fk_qualifier(constraint)}_ref"
     return _sqla_disambiguate(default, local_cls, fallback)
 
@@ -339,6 +381,14 @@ def sqla_name_for_collection_relationship(base, local_cls, referred_cls, constra
     default = sqla_automap.name_for_collection_relationship(
         base, local_cls, referred_cls, constraint
     )
+    # S15, reverse side. The default is `<child>_collection`, which collapses
+    # identically when the child holds two FKs to this parent — and the two
+    # sides collapse INDEPENDENTLY, which is what made the scalar and its
+    # nominal reverse resolve to DIFFERENT legs.
+    if _sqla_fk_count_to_target(constraint.table, local_cls.__table__) > 1:
+        default = (
+            f"{constraint.table.name}_{_sqla_meaning_name(constraint)}_collection"
+        )
     fallback = f"{constraint.table.name}_{_sqla_fk_qualifier(constraint)}_collection"
     return _sqla_disambiguate(default, local_cls, fallback)
 
