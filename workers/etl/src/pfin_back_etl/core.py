@@ -187,7 +187,7 @@ class SBaseConn:
         (self.engine, self.metadata, self.base) = self._sbase_setup()
 
     @contextmanager
-    def _role(self, session, role):
+    def _role(self, executor, role):
         """Assume `role` transaction-locally for the duration of the block.
 
         THE ROLE ARGUMENT IS REQUIRED AND HAS NO DEFAULT — DELIBERATELY (Sec,
@@ -214,7 +214,11 @@ class SBaseConn:
         role was correctly assumed, which is why it reviews as correct. Callers
         must not commit inside this block.
 
-        args:    session (an open sqlalchemy Session), role (allowlisted)
+        args:    executor — an open Session OR Connection. Named for what it
+                 must DO (execute) rather than what it usually IS: reflection
+                 passes a Connection while the data methods pass a Session, and
+                 a `session` parameter misdescribed half its call sites.
+                 role — allowlisted.
         raises:  ValueError if `role` is not in _ROLE_ALLOWLIST.
         """
         if role not in _ROLE_ALLOWLIST:
@@ -225,9 +229,9 @@ class SBaseConn:
                 f"fence as well as the privilege policy — refusing to "
                 f"interpolate an unvetted value."
             )
-        session.execute(sqla.text(f"set local role {role}"))
+        executor.execute(sqla.text(f"set local role {role}"))
         try:
-            yield session
+            yield executor
         finally:
             # N1 teardown shape, copied from connection.impersonate(): if the
             # block raised a DB error the transaction is ABORTED, and `reset
@@ -236,7 +240,7 @@ class SBaseConn:
             # the original propagates. Safe because SET LOCAL is transaction-
             # scoped and auto-clears at COMMIT/ROLLBACK regardless.
             try:
-                session.execute(sqla.text("reset role"))
+                executor.execute(sqla.text("reset role"))
             except Exception as exc_reset:
                 logger.warning(
                     f"reset role failed during teardown (transaction likely "
