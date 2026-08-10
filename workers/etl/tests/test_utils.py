@@ -217,24 +217,92 @@ class TestFetchCpiDf:
 class TestLoadEnvVariables:
     """Tests for environment variable loading."""
 
+    # ⚠ THE TWO TESTS THAT USED TO LIVE HERE ASSERTED THAT THE LOADER RAISES
+    # ON AN ABSENT KEY. That behaviour is REMOVED by S12, deliberately: both
+    # workers load through this function, and `nav_daily` makes zero external
+    # API calls, so requiring the keys at load time forced the NAV cron to hold
+    # two credentials scoped to other jobs or die on its first scheduled run.
+    # They are REPOINTED rather than deleted — the requirement did not vanish,
+    # it MOVED to the point of use, and these now pin where.
+
     @pytest.mark.unit
-    def test_missing_fmp_key_raises(self):
+    def test_loader_does_not_raise_on_absent_api_keys(self):
+        """The loader raises for nothing; absent keys are None."""
         with patch("pfin_back_etl.utils.dotenv.load_dotenv"):
             with patch("pfin_back_etl.utils.os.getenv", return_value=None):
-                with pytest.raises(ValueError, match="FMP_API_KEY"):
-                    utils.load_env_variables("PFIN_")
+                params = utils.load_env_variables("PFIN_")
+        assert params["FMP_API_KEY"] is None
+        assert params["BLS_API_KEY"] is None
 
     @pytest.mark.unit
-    def test_missing_bls_key_raises(self):
-        def mock_getenv(key):
-            if key == "FMP_API_KEY":
-                return "fake_fmp_key"
-            return None
+    @pytest.mark.parametrize("key_name", ["FMP_API_KEY", "BLS_API_KEY"])
+    def test_require_api_key_raises_at_the_point_of_use(self, key_name):
+        """The raise MOVED here — and it names the key, so the failure says
+        which credential the operation actually needed."""
+        with pytest.raises(ValueError, match=key_name):
+            utils.require_api_key({key_name: None}, key_name)
 
+    @pytest.mark.unit
+    def test_require_api_key_returns_the_value_when_present(self):
+        assert utils.require_api_key({"BLS_API_KEY": "abc"}, "BLS_API_KEY") == "abc"
+
+    @pytest.mark.unit
+    def test_require_api_key_tolerates_a_missing_params_dict(self):
+        """A worker that loaded only DB params has no key entry at all — that
+        must raise the same located error, not a KeyError/TypeError."""
+        with pytest.raises(ValueError, match="FMP_API_KEY"):
+            utils.require_api_key(None, "FMP_API_KEY")
+
+    @pytest.mark.unit
+    def test_db_params_carry_no_api_keys(self):
+        """`load_db_params` is what a no-API worker calls; it must not even
+        surface the key names, so a reader can see the job's credential needs
+        from WHICH FUNCTION IT CALLS."""
         with patch("pfin_back_etl.utils.dotenv.load_dotenv"):
-            with patch("pfin_back_etl.utils.os.getenv", side_effect=mock_getenv):
-                with pytest.raises(ValueError, match="BLS_API_KEY"):
-                    utils.load_env_variables("PFIN_")
+            with patch("pfin_back_etl.utils.os.getenv", return_value=None):
+                params = utils.load_db_params("PFIN_")
+        assert "FMP_API_KEY" not in params
+        assert "BLS_API_KEY" not in params
+        assert set(params) == {
+            "DB_USER", "DB_HOST", "DB_PORT", "DB_NAME", "DB_PASSWORD", "DB_SSLMODE",
+        }
+
+    # --- BLS_API_KEY_TEST override ---------------------------------------
+    @pytest.mark.unit
+    def test_bls_test_name_is_preferred_when_present(self):
+        """So a dev machine holds the test key under the TEST name and the
+        PRODUCTION name is absent from the laptop entirely. Not a fence —
+        nothing can inspect a local .env — but it extends the manifest's
+        name-carries-tier convention across the boundary where it snapped."""
+        env = {"BLS_API_KEY_TEST": "test-value", "BLS_API_KEY": "prod-value"}
+        with patch("pfin_back_etl.utils.dotenv.load_dotenv"):
+            with patch(
+                "pfin_back_etl.utils.os.getenv", side_effect=lambda k: env.get(k)
+            ):
+                keys = utils.load_api_keys()
+        assert keys["BLS_API_KEY"] == "test-value"
+
+    @pytest.mark.unit
+    def test_bls_falls_back_to_the_production_name(self):
+        """Deployed containers set only the production name; the override must
+        not become a requirement."""
+        env = {"BLS_API_KEY": "prod-value"}
+        with patch("pfin_back_etl.utils.dotenv.load_dotenv"):
+            with patch(
+                "pfin_back_etl.utils.os.getenv", side_effect=lambda k: env.get(k)
+            ):
+                keys = utils.load_api_keys()
+        assert keys["BLS_API_KEY"] == "prod-value"
+
+    @pytest.mark.unit
+    def test_fmp_has_no_test_override(self):
+        """Anti-vacuity: the override is PER-KEY, and only BLS has one today.
+        A blanket `<NAME>_TEST` rule would silently change FMP's behaviour too."""
+        assert utils._API_KEY_SOURCES.get("FMP_API_KEY") is None
+        assert utils._API_KEY_SOURCES["BLS_API_KEY"] == (
+            "BLS_API_KEY_TEST",
+            "BLS_API_KEY",
+        )
 
     @pytest.mark.unit
     def test_successful_load(self):
