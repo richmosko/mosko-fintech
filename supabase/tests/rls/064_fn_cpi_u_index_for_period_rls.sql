@@ -104,6 +104,30 @@
 -- │   (V5) structural, OUTSIDE any savepoint: the function is back, and the plan counter with it │
 -- └────────────────────────────────────────────────────────────────────────────────────────────┘
 --
+-- ┌─ DISCRIMINATOR RUNS — the battery mutated AGAINST THE REAL MIGRATION, measured 2026-08-10 ─┐
+-- │ The (V) legs mutate a function this file replaced itself. That proves the primary legs have │
+-- │ teeth against a mutant, which is NOT the same as proving they track the SHIPPED contract.   │
+-- │ So the migration itself was mutated in a scratch copy and the battery re-run. Recorded here │
+-- │ because a green suite cannot tell you any of it, and re-runnable by the same method.        │
+-- │   D1  remove the `v_period < v_min` branch (pre-coverage falls back to the alarm — Sec's C1 │
+-- │       defect, exactly) -> RED at (B8b) and (C4). Two legs, both naming the leading edge.    │
+-- │   D2  drop the sixth column from the return  -> RED at (E4), the leg that names the cause.  │
+-- │   D3  make the empty-store branch alarm      -> RED at (C5). The zero-row branch IS reached.│
+-- │ ⚠ D2 IS WHY LEG (E) RUNS BEFORE LEG (B). With the catalog pins last, D2's first six-column  │
+-- │ results_eq raised `column "nonpublication_on_record" does not exist`, ABORTED the txn, and  │
+-- │ cascaded ~40 "current transaction is aborted" lines — the run still failed, so the fence    │
+-- │ held, but the reader got no diagnosis and (E4) never ran. Reordered; D2 now names itself.   │
+-- │                                                                                             │
+-- │ ⚠ AND A PREDICTION THAT NAMED THE WRONG LEG — kept because the distinction is reusable.     │
+-- │ Running the PRE-EXTENSION battery against the POST-e1c68f7 migration was expected to turn   │
+-- │ (V2) — the `returns numeric` inversion — red. IT DID NOT, and could not: (V2) replaces the  │
+-- │ function with its OWN mutant and asserts THAT mutant's signature, so it is invariant to     │
+-- │ what the real function does. The legs that actually went red were (C4), (E4) and (V5) — the │
+-- │ ones whose subject is the SHIPPED object. THE GENERAL RULE: an inversion leg calibrates a   │
+-- │ primary assertion; it never tracks the contract, because its subject is something the test  │
+-- │ built. Do not read a green (V) leg as evidence the contract is unchanged.                   │
+-- └────────────────────────────────────────────────────────────────────────────────────────────┘
+--
 -- ┌─ HARNESS NOTE — a rolled-back savepoint REWINDS pgTAP's plan counter ──────────────────────┐
 -- │ …while the emitted test NUMBERING marches on from a non-transactional sequence (rls/        │
 -- │ DESIGN.md §9; the 062 idiom, re-measured here). ⚠ DO NOT reconcile a "planned N but ran M"  │
@@ -284,6 +308,41 @@ select lives_ok(
   '(A7) non-vacuous positive: an authenticated caller CAN execute the helper — so (A2)-(A6) are real fences around a live function, not the uniform silence of a function nobody can call'
 );
 select set_config('role', 'postgres', true);
+
+-- ⚠ RUN ORDER IS DELIBERATE: the CATALOG pins run BEFORE the behavioural legs. Measured
+--   2026-08-10 against a mutated migration with the sixth column dropped — with leg (E)
+--   last, the first six-column results_eq raised `column "nonpublication_on_record" does
+--   not exist`, which ABORTS the transaction and cascades every later assertion into
+--   "current transaction is aborted". The run still fails, so the fence held — but the
+--   reader is handed forty error lines and no diagnosis, and (E4), the leg that actually
+--   NAMES the cause, never got to run. Ordering the signature pin first converts an abort
+--   cascade into one named red. Same principle as message-precise throws_like: a fence
+--   that fires is worth less than a fence that says which fence it was.
+-- =====================================================================
+-- LEG (E) POSTURE PINS — catalog facts that no behavioural assertion can see.
+-- =====================================================================
+select ok(
+  (select not p.prosecdef from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'pfin' and p.proname = 'fn_cpi_u_index_for_period'),
+  '(E1) SECURITY INVOKER, not DEFINER (ADR-011 Lock 11 read-composition). 064 declares the Decision 9 DEFINER allowlist delta as +0 and this is what holds it: a conversion to DEFINER is an allowlist change and a Sec-veto surface, and it would change WHOSE policies the two reads run under while every behavioural leg in this file stayed green'
+);
+select is(
+  (select p.provolatile::text from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'pfin' and p.proname = 'fn_cpi_u_index_for_period'),
+  's',
+  '(E2) STABLE: the function is declared STABLE (provolatile = s) — it reads tables and consults no clock, which is exactly the volatility class 064''s data-derived bound argues for. A VOLATILE marking would signal side effects this function must never have'
+);
+select ok(
+  (select 'search_path=""' = any(p.proconfig) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'pfin' and p.proname = 'fn_cpi_u_index_for_period'),
+  '(E3) `set search_path = ''''` is in force — the search_path-injection fence. Every object reference in the body is schema-qualified accordingly, so its removal would not break the function; it would only remove the fence, silently'
+);
+select is(
+  (select pg_get_function_result(p.oid) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'pfin' and p.proname = 'fn_cpi_u_index_for_period'),
+  'TABLE(cpi_period date, cpi_value numeric, is_carried boolean, carried_from date, gap_class text, nonpublication_on_record boolean)',
+  '(E4) ⭐ THE RETURN IS A ROW, AND STAYS A ROW. 064: a consumer wanting only the number must EXPLICITLY PROJECT THE OTHER COLUMNS AWAY, which turns "don''t ignore carried-ness" from a rule someone must REMEMBER into a step someone must TAKE — and a deliberate projection is visible in a diff where an unread boolean is not. Narrowing this to `returns numeric` removes the only mechanism enforcing non-silence, and removes it invisibly: every behavioural leg above would still pass. (V2) measures exactly that'
+);
 
 -- =====================================================================
 -- LEG (B) THE FOUR gap_class OUTCOMES — each reached by real data state.
@@ -502,32 +561,6 @@ select isnt(
 select is(
   :'diga'::text, :'digb'::text,
   '(D2) SECURITY INVOKER over two GLOBAL tables: tenant A and tenant B receive byte-identical output across all five probe periods. The INVOKER posture gives each caller exactly what their own policies permit, and both `using (true)` policies permit the same thing — so RED here means a tenant predicate was introduced into a helper reading two tables that have no tenant column'
-);
-
--- =====================================================================
--- LEG (E) POSTURE PINS — catalog facts that no behavioural assertion can see.
--- =====================================================================
-select ok(
-  (select not p.prosecdef from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-    where n.nspname = 'pfin' and p.proname = 'fn_cpi_u_index_for_period'),
-  '(E1) SECURITY INVOKER, not DEFINER (ADR-011 Lock 11 read-composition). 064 declares the Decision 9 DEFINER allowlist delta as +0 and this is what holds it: a conversion to DEFINER is an allowlist change and a Sec-veto surface, and it would change WHOSE policies the two reads run under while every behavioural leg in this file stayed green'
-);
-select is(
-  (select p.provolatile::text from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-    where n.nspname = 'pfin' and p.proname = 'fn_cpi_u_index_for_period'),
-  's',
-  '(E2) STABLE: the function is declared STABLE (provolatile = s) — it reads tables and consults no clock, which is exactly the volatility class 064''s data-derived bound argues for. A VOLATILE marking would signal side effects this function must never have'
-);
-select ok(
-  (select 'search_path=""' = any(p.proconfig) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-    where n.nspname = 'pfin' and p.proname = 'fn_cpi_u_index_for_period'),
-  '(E3) `set search_path = ''''` is in force — the search_path-injection fence. Every object reference in the body is schema-qualified accordingly, so its removal would not break the function; it would only remove the fence, silently'
-);
-select is(
-  (select pg_get_function_result(p.oid) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-    where n.nspname = 'pfin' and p.proname = 'fn_cpi_u_index_for_period'),
-  'TABLE(cpi_period date, cpi_value numeric, is_carried boolean, carried_from date, gap_class text, nonpublication_on_record boolean)',
-  '(E4) ⭐ THE RETURN IS A ROW, AND STAYS A ROW. 064: a consumer wanting only the number must EXPLICITLY PROJECT THE OTHER COLUMNS AWAY, which turns "don''t ignore carried-ness" from a rule someone must REMEMBER into a step someone must TAKE — and a deliberate projection is visible in a diff where an unread boolean is not. Narrowing this to `returns numeric` removes the only mechanism enforcing non-silence, and removes it invisibly: every behavioural leg above would still pass. (V2) measures exactly that'
 );
 
 -- =====================================================================
