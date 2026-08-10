@@ -12,6 +12,7 @@ Description:
 
 # library imports
 import logging
+from contextlib import contextmanager
 from datetime import date, datetime, timezone, timedelta
 import sqlalchemy as sqla
 import sqlalchemy.ext.automap as sqla_automap
@@ -37,6 +38,41 @@ CPI_U_BASE_YEAR = 2015
 # recent prints, so a short trailing window catches revisions cheaply; the deep
 # history is laid down once by backfill_cpi_u_index() (the AC4 one-shot).
 CPI_U_NIGHTLY_WINDOW_YEARS = 2
+
+# ---------------------------------------------------------------------------
+# ROLE ASSUMPTION — BACKLOG §7.6 S17. ADR-023 write role-of-record + the
+# ADR-023 amendment's read role-of-record. Sec-ruled 2026-08-09 (D-A option c).
+# ---------------------------------------------------------------------------
+# The ETL LOGS IN as `pfin_etl`, a NOINHERIT role that `055` deliberately grants
+# NO direct table privileges. A NOINHERIT session holds NOTHING until an
+# explicit SET ROLE, so EVERY statement — reads included — must assume a role or
+# fail 42501. `nav_daily.py` already did this; `SBaseConn` did not, which is S17.
+#
+# ⚠ READS ARE `authenticated`, NOT `service_role`, AND THE REASON IS NOT
+# COSMETIC. [ADR-011] Decision 1 clause (b) says *WRITES* execute under
+# `service_role` and is SILENT on reads; reading it as "the privileged context
+# runs as service_role" is the widening that produced the hazard. Two of the
+# three tables this worker touches are NOT global reference data:
+#   • pfin.asset    (016) is HYBRID — users_id nullable; non-NULL rows are a
+#                   user's private assets.
+#   • pfin.eod_price(019) is asset-anchored and carries per-user
+#                   `manual_valuation` rows — user-entered money figures.
+# Under `service_role` a plain SELECT returns EVERY tenant's private rows, and
+# the read is the smaller half: `update_table_df` bulk-UPDATEs from that frame,
+# so a refresh could silently overwrite another tenant's row. Widening the read
+# role to fix a permissions defect would have manufactured a cross-tenant WRITE
+# hazard — fixing a fail-closed bug by failing open, one layer down.
+# `authenticated` with no JWT is not degraded: it resolves to exactly the global
+# partition this worker wants, fail-closed, with no SQL change.
+_READ_ROLE = "authenticated"
+_WRITE_ROLE = "service_role"
+
+# ⚠ THIS ALLOWLIST IS ALSO THE INJECTION FENCE. `SET ROLE` takes an identifier,
+# not a parameter, so it CANNOT be bound — the role name is interpolated. Every
+# value reaching that interpolation must therefore come from this frozen set.
+# Do not add a caller-supplied fallback, and do not relax it to "any role the
+# login is a member of": both re-open the interpolation.
+_ROLE_ALLOWLIST = frozenset({_READ_ROLE, _WRITE_ROLE})
 
 
 class PFinFMP(fmpstab.FMPStab):
@@ -128,6 +164,64 @@ class SBaseConn:
         self._params = utils.load_env_variables(env_prefix)
         (self.engine, self.metadata, self.base) = self._sbase_setup()
 
+    @contextmanager
+    def _role(self, session, role):
+        """Assume `role` transaction-locally for the duration of the block.
+
+        THE ROLE ARGUMENT IS REQUIRED AND HAS NO DEFAULT — DELIBERATELY (Sec,
+        D-A). A default would make the privileged choice invisible at the call
+        site, which is the same defect as assuming privilege at the engine
+        level wearing a different costume: the reader of a call site must be
+        able to see which role it runs under without navigating anywhere.
+
+        ⚠ WHY NOT AT THE ENGINE LEVEL. Setting the role on the engine (a
+        connect/execute listener) was considered and VETOED on two independent
+        grounds: it confers ambient privilege for the engine's lifetime,
+        defeating the whole point of `055`'s NOINHERIT choice; and it would
+        alter `TenantBoundConnection`'s semantics, which ADR-011 Decision 4
+        names BY NAME as the code-layer fence of the Lock 13 privileged-context
+        surface class. Session-level `SET ROLE` is the same veto at connection
+        scope, and worse in one way: SQLAlchemy pools connections with
+        `pool_reset_on_return='rollback'`, which does NOT reset role, so a
+        missed teardown poisons the pool for whatever borrows it next.
+
+        ⚠ TRANSACTION-LOCAL MEANS EXACTLY THAT. `SET LOCAL ROLE` is cleared by
+        COMMIT and by ROLLBACK (measured). A caller that commits in the middle
+        of a block silently loses the role, and every statement after that
+        point runs privilege-less and fails 42501 PART-WAY THROUGH — after the
+        role was correctly assumed, which is why it reviews as correct. Callers
+        must not commit inside this block.
+
+        args:    session (an open sqlalchemy Session), role (allowlisted)
+        raises:  ValueError if `role` is not in _ROLE_ALLOWLIST.
+        """
+        if role not in _ROLE_ALLOWLIST:
+            raise ValueError(
+                f"role {role!r} is not allowlisted. Permitted: "
+                f"{sorted(_ROLE_ALLOWLIST)}. SET ROLE takes an identifier and "
+                f"cannot be parameterised, so this allowlist is the injection "
+                f"fence as well as the privilege policy — refusing to "
+                f"interpolate an unvetted value."
+            )
+        session.execute(sqla.text(f"set local role {role}"))
+        try:
+            yield session
+        finally:
+            # N1 teardown shape, copied from connection.impersonate(): if the
+            # block raised a DB error the transaction is ABORTED, and `reset
+            # role` would raise InFailedSqlTransaction, REPLACING the original
+            # exception exactly where diagnosis matters most. Swallow and log;
+            # the original propagates. Safe because SET LOCAL is transaction-
+            # scoped and auto-clears at COMMIT/ROLLBACK regardless.
+            try:
+                session.execute(sqla.text("reset role"))
+            except Exception as exc_reset:
+                logger.warning(
+                    f"reset role failed during teardown (transaction likely "
+                    f"already aborted; SET LOCAL clears at COMMIT/ROLLBACK "
+                    f"regardless): {exc_reset}"
+                )
+
     def fetch_table_df(self, table):
         """
         Fetch what's already in {table}
@@ -137,7 +231,8 @@ class SBaseConn:
         tab = table.__table__
         stmt = sqla.select(tab)
         with sqla.orm.Session(self.engine) as session:
-            df_tab = pl.read_database(stmt, session)
+            with self._role(session, _READ_ROLE):
+                df_tab = pl.read_database(stmt, session)
         # print(f"self.fetch_table_df():\n {df_tab}")
         return df_tab
 
@@ -154,8 +249,13 @@ class SBaseConn:
             )
             ldict_insert = df_insert.to_dicts()
             if ldict_insert:
-                stmt = sqla.insert(tab_sbase)
-                session.execute(stmt, ldict_insert)
+                with self._role(session, _WRITE_ROLE):
+                    stmt = sqla.insert(tab_sbase)
+                    session.execute(stmt, ldict_insert)
+                # COMMIT IS OUTSIDE THE ROLE BLOCK, DELIBERATELY. SET LOCAL
+                # ROLE is cleared by COMMIT, so committing inside would tear
+                # the role down mid-block and leave the teardown `reset role`
+                # running in a fresh, privilege-less transaction.
                 session.commit()
 
     def update_table_df(self, tab_sbase, key_list, df_update):
@@ -165,6 +265,26 @@ class SBaseConn:
         table matching tab_sbase, and insert the rows into the
         temp table. It then updates the data locally in the database
         which executes much faster than a sqlalchemy update command.
+
+        ⚠⚠ NOT YET ROLE-WRAPPED — THIS PATH STILL FAILS 42501 UNDER THE
+        PRODUCTION LOGIN. Stated here rather than left to be discovered.
+        `_staging_update` COMMITS MID-FLIGHT (`DISCARD TEMPORARY` followed by
+        `session.commit()`) before creating the staging table, and COMMIT
+        clears `SET LOCAL ROLE` (measured). So a role assumed at the top of
+        this method is silently dropped part-way through, and every statement
+        after that point runs privilege-less — failing AFTER the role was
+        correctly assumed, which is exactly why it would review as correct and
+        fail at night in the cron.
+
+        Fixing it means changing `_staging_update`'s transaction semantics
+        (removing the mid-flight commit — measured legal, `DISCARD TEMPORARY`
+        runs fine inside a transaction), which widens this change beyond
+        "assume the role", so it is routed for a ruling rather than decided
+        here. The alternatives were considered and are worse: re-assuming the
+        role after the internal commit re-creates the invisible-privileged-
+        choice defect the no-default-argument rule exists to prevent, and
+        session-level `SET ROLE` is the vetoed engine-level approach at
+        connection scope, with pool poisoning as its failure mode.
         """
         with sqla.orm.Session(self.engine) as session:
             s_name = tab_sbase.__table__.schema
@@ -225,8 +345,12 @@ class SBaseConn:
             stmt = stmt.on_conflict_do_update(
                 index_elements=index_elements, set_=update_cols
             )
-            session.execute(stmt)
-            session.commit()
+            # ON CONFLICT DO UPDATE needs the arbiter read as well as the
+            # write, which is why `053` grants service_role SELECT alongside
+            # INSERT + UPDATE. Do not tighten that grant to write-only.
+            with self._role(session, _WRITE_ROLE):
+                session.execute(stmt)
+            session.commit()  # outside the role block — COMMIT clears SET LOCAL
 
     def print_schema_info(self):
         """
@@ -460,11 +584,12 @@ class SBaseConn:
             ldict:         List of dictionaries, one dict per row
         """
         with sqla.orm.Session(self.engine) as session:
-            result = session.execute(stmt)
-            ldict = []
-            for row in result:
-                row_as_dict = row._asdict()
-                ldict.append(row_as_dict)
+            with self._role(session, _READ_ROLE):
+                result = session.execute(stmt)
+                ldict = []
+                for row in result:
+                    row_as_dict = row._asdict()
+                    ldict.append(row_as_dict)
         return ldict
 
 
