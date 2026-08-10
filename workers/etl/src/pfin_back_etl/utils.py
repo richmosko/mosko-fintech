@@ -58,53 +58,113 @@ def apply_schema_df(df_src, df_tgt):
     return df_cast
 
 
-def load_env_variables(env_prefix):
-    """
-    Load the environmental variables from a '.env' file. The variables read
-    should countain the specific setup constraints and passwords for use in
-    the database access and API calls.
+# ---------------------------------------------------------------------------
+# CREDENTIAL LOADING — BACKLOG §7.6 S12. Shape ruled 2026-08-09.
+# ---------------------------------------------------------------------------
+# THE LOADER RAISES FOR NOTHING; THE ACCESSOR RAISES AT THE POINT OF USE.
+#
+# It used to hard-require FMP_API_KEY and BLS_API_KEY at load time, and both
+# workers load through here. Measured: `nav_daily.py` contains ZERO references
+# to either key and makes ZERO external API calls — it computes NAV from the
+# database. So the NAV cron had to be handed two credentials it has no business
+# holding, cutting against least-privilege and the secrets non-overlap
+# commitment, or die on its first scheduled run before doing any work.
+#
+# Chosen over a `require=(...)` argument on one function: a requirement-set
+# parameter keeps one function answering two questions, and every new caller
+# has to remember to pass the right set — where FORGETTING IT SILENTLY LOOSENS
+# THE CHECK rather than tripping it. Splitting makes "which credentials does
+# this job need?" answerable by WHICH FUNCTION IT CALLS, and moving the raise
+# to the accessor keeps the failure loud and located at the consumer.
 
-    returns: params (dictionary of the desired environmental variables)
-    """
-    params = {}
+#: Per-key env-name preference, highest priority first. A key absent from this
+#: mapping is read from its own name only.
+_API_KEY_SOURCES = {
+    # BLS_API_KEY_TEST is preferred when present. NOT a security control and
+    # not a fence — nothing can inspect a local .env and nothing should try.
+    #
+    # What it buys: the secrets manifest's whole convention rests on DISTINCT
+    # NAMES CARRYING THE TIER, and the code defeated that at the local boundary
+    # — `BLS_API_KEY_TEST` had no reader, so a dev machine necessarily held a
+    # PRODUCTION-NAMED credential whatever value was in it. With this, a dev's
+    # .env holds the test key under the TEST name, the production name is
+    # absent from developer machines entirely, and "is there a production-named
+    # credential on this laptop?" becomes a question with a checkable right
+    # answer of NO. The discipline becomes auditable by SHAPE rather than by
+    # trust.
+    "BLS_API_KEY": ("BLS_API_KEY_TEST", "BLS_API_KEY"),
+}
 
-    # Load environment variables from local .env file
+
+def load_db_params(env_prefix):
+    """Database connection parameters only. RAISES FOR NOTHING.
+
+    This is everything a worker needs to construct a connection — and for
+    `nav_daily`, everything it needs at all.
+    """
     dotenv.load_dotenv()
+    params = {
+        "DB_USER": os.getenv(env_prefix + "DB_USER"),
+        "DB_HOST": os.getenv(env_prefix + "DB_HOST"),
+        "DB_PORT": os.getenv(env_prefix + "DB_PORT"),
+        "DB_NAME": os.getenv(env_prefix + "DB_NAME"),
+        "DB_PASSWORD": os.getenv(env_prefix + "DB_PASSWORD"),
+        # OPTIONAL, and the default is the security-load-bearing part. Unset ->
+        # "require", so production is unchanged and an environment that simply
+        # forgot to set it still demands TLS. Only an EXPLICIT value can weaken
+        # the transport, and only to a value on build_database_url()'s allowlist.
+        "DB_SSLMODE": os.getenv(env_prefix + "DB_SSLMODE"),
+    }
+    return params
 
-    # Check for API Key in FMP_API_KEY env variable
-    key_name = "FMP_API_KEY"
-    key_value = os.getenv(key_name)
-    params["FMP_API_KEY"] = key_value
-    if key_value is not None:
-        logger.info(f"{key_name} value found...")
-    else:
+
+def load_api_keys():
+    """External-API credentials. RAISES FOR NOTHING — absent keys are None.
+
+    A worker that never calls the API never notices the key is missing, which
+    is the whole point: absence is only an error at the point of USE.
+    """
+    dotenv.load_dotenv()
+    keys = {}
+    for key_name in ("FMP_API_KEY", "BLS_API_KEY"):
+        for source in _API_KEY_SOURCES.get(key_name, (key_name,)):
+            value = os.getenv(source)
+            if value is not None:
+                keys[key_name] = value
+                logger.info(f"{key_name} value found (from {source})...")
+                break
+        else:
+            keys[key_name] = None
+    return keys
+
+
+def require_api_key(params, key_name):
+    """Return `params[key_name]`, raising HERE if it is absent.
+
+    THE POINT-OF-USE RAISE. Call this at the moment the key is about to be
+    used, never at construction — so the error names the job that actually
+    needed the credential, and a job that does not need it constructs and runs.
+    """
+    value = (params or {}).get(key_name)
+    if value is None:
         raise ValueError(
-            f"Environment variable {key_name} does not exist in .env file."
+            f"{key_name} is required by this operation but is not set. "
+            f"Looked at: {', '.join(_API_KEY_SOURCES.get(key_name, (key_name,)))}. "
+            f"Note this is raised AT THE POINT OF USE — a worker that does not "
+            f"call this API does not need the credential and will not raise."
         )
+    return value
 
-    # Check for BLS API Key in env variable
-    key_name = "BLS_API_KEY"
-    key_value = os.getenv(key_name)
-    params["BLS_API_KEY"] = key_value
-    if key_value is not None:
-        logger.info(f"{key_name} value found...")
-    else:
-        raise ValueError(
-            f"Environment variable {key_name} does not exist in .env file."
-        )
 
-    # Fetch other env variables
-    params["DB_USER"] = os.getenv(env_prefix + "DB_USER")
-    params["DB_HOST"] = os.getenv(env_prefix + "DB_HOST")
-    params["DB_PORT"] = os.getenv(env_prefix + "DB_PORT")
-    params["DB_NAME"] = os.getenv(env_prefix + "DB_NAME")
-    params["DB_PASSWORD"] = os.getenv(env_prefix + "DB_PASSWORD")
+def load_env_variables(env_prefix):
+    """DB params + API keys in one dict. RAISES FOR NOTHING (see S12 above).
 
-    # OPTIONAL, and the default is the security-load-bearing part. Unset -> "require",
-    # so production is unchanged and an environment that simply forgot to set it still
-    # demands TLS. Only an EXPLICIT value can weaken the transport, and only to a value
-    # on the allowlist in build_database_url().
-    params["DB_SSLMODE"] = os.getenv(env_prefix + "DB_SSLMODE")
+    Retained because both workers and the test-suite call it; the behaviour
+    change is that absent API keys are now None rather than a ValueError at
+    load time. Prefer `load_db_params()` in a worker that makes no API calls.
+    """
+    params = load_db_params(env_prefix)
+    params.update(load_api_keys())
     return params
 
 
