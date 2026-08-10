@@ -191,7 +191,7 @@
 --   This table positively records (a) ONLY. It converts a four-way ambiguity
 --   into a TWO-WAY one; it does not eliminate it. (c) and (d) STAY COLLAPSED
 --   WITH EACH OTHER and are separated from (b) only BY CONVENTION (064's
---   trailing-edge rule), never by record.
+--   coverage-edge rule), never by record.
 --   Rejected as the heavier alternative, so the boundary reads as CHOSEN rather
 --   than overlooked: C' — record the outcome of EVERY fetched period, making
 --   absence mean "never fetched" and separating (c) from (d). That is a full
@@ -208,6 +208,41 @@
 --   table feeding financial figures.
 --
 -- ----------------------------------------------------------------------------
+-- ⚠ WHAT ACTUALLY HOLDS THE LINE — MEASURED PER ROLE, because an earlier draft
+--   of this header got it BACKWARDS in both directions and the wrong reason for
+--   a correct outcome is the thing that rots. Corrected at Sec joint-review
+--   2026-08-10 (findings F1 + F2), re-measured independently before the edit.
+--
+--     authenticated   — no write grant and no write policy. The ACL refuses.
+--     service_role    — holds SELECT + INSERT only. UPDATE / DELETE / TRUNCATE /
+--                       `on conflict … do update` all fail with `permission
+--                       denied for table`. >> THE ACL REFUSES FIRST AND THE
+--                       TRIGGERS NEVER FIRE AT ALL. << Plain INSERT succeeds —
+--                       the sanctioned append path is unaffected.
+--     table owner /
+--     superuser       — the ACL does NOT refuse, so the triggers fire and fail
+--                       loud. But the owner can `alter table … disable trigger`
+--                       and then mutate; measured, it succeeds. The triggers are
+--                       therefore NOT un-bypassable by the owner.
+--
+--   >> SO: the WITHHELD service_role UPDATE/DELETE grants are the OPERATIVE
+--   fence in production, and the triggers are a BACKSTOP — not the reverse. <<
+--   The backstop is still worth its keep, for two reasons that do not depend on
+--   the false one: (1) it becomes load-bearing the moment a future migration
+--   WIDENS the service_role grant, which is exactly the drift an ACL cannot
+--   defend against; and (2) it fails LOUD in owner context, catching the
+--   realistic error — a migration or maintenance script that mutates this table
+--   by accident — even though it does not stop an owner who means to.
+--
+--   ⚠ METHOD NOTE, recorded because the error was in the VERIFICATION, not the
+--   design: a superuser smoke test observed these triggers firing and concluded
+--   they were the guarantee everywhere. They fired precisely BECAUSE the owner's
+--   ACL does not refuse — i.e. in the one context where the trigger is reachable
+--   at all. Under the roles that exist in production it never fires. A fence
+--   observed in the only context that can reach it tells you nothing about the
+--   contexts that cannot.
+--
+-- ----------------------------------------------------------------------------
 -- CONTRACT
 --   pfin.cpi_u_nonpublication — global public record of CPI-U periods the
 --     source published WITHOUT a usable value.
@@ -215,24 +250,27 @@
 --       source TEXT DEFAULT 'BLS_CUUR0000SA0',
 --       published_value_raw TEXT NULL (what the source actually emitted, e.g.
 --       '-'; length-bounded), observed_at TIMESTAMPTZ DEFAULT NOW().
---     IMMUTABLE + APPEND-ONLY: UPDATE + DELETE + TRUNCATE blocked for ALL roles
---       by DB trigger (service_role bypasses RLS but NOT triggers). INSERT is
---       the only mutation, service_role-only, first-observation-wins.
+--     IMMUTABLE + APPEND-ONLY: UPDATE + DELETE + TRUNCATE are refused for every
+--       role that exists in production. INSERT is the only mutation,
+--       service_role-only, first-observation-wins. WHICH LAYER REFUSES IS
+--       ROLE-DEPENDENT — see the WHAT ACTUALLY HOLDS THE LINE block below; do
+--       not summarize it as "the trigger blocks everyone".
 --     RLS: SELECT to authenticated `using (true)` (public reference);
 --       INSERT/UPDATE/DELETE default-deny at authenticated (no policy) → writes
 --       are service_role-only via DB-ACL grant.
 --   Security-load-bearing edges: NO tenant isolation surface (global public
 --     data, no users_id); authenticated holds SELECT only and therefore cannot
---     forge or erase a non-publication record; the immutability triggers are the
---     ONLY fence that holds against a privileged context (ACL and RLS are both
---     bypassable by the table owner, triggers are not); the first-of-month CHECK
+--     forge or erase a non-publication record; the WITHHELD service_role
+--     UPDATE/DELETE grants are the operative append-only fence in production and
+--     the triggers are the backstop behind them (again: see WHAT ACTUALLY HOLDS
+--     THE LINE); the first-of-month CHECK
 --     is role-agnostic (service_role bypasses RLS but NOT CHECK) and keeps a
 --     mis-keyed row from silently never joining 053 — a record that cannot be
 --     joined is indistinguishable from a record that was never written, which
 --     would defeat this table's entire purpose.
 --   ⚠ NECESSARY, NOT SUFFICIENT: this table records (a) only, and only for
 --     periods the ingest actually observed and wrote. It is not a completeness
---     guarantee and cannot detect a stalled ingest — see 064's trailing-edge
+--     guarantee and cannot detect a stalled ingest — see 064's coverage-edge
 --     limitation and Decision 2's four-state list above.
 -- ============================================================================
 
@@ -264,7 +302,13 @@ comment on table pfin.cpi_u_nonpublication is
   'FK-shaped column at all; and both tables are global, so there is no tenant '
   'boundary to bypass even if one existed). Same class as tax_character. '
   'IMMUTABLE + APPEND-ONLY (unlike 053, which is MUTABLE because BLS revises '
-  'prints): UPDATE + DELETE + TRUNCATE are blocked for ALL roles by DB trigger. A '
+  'prints): UPDATE + DELETE + TRUNCATE are refused for every role that exists in '
+  'production — but WHICH LAYER refuses is role-dependent. Measured 2026-08-10: for '
+  'service_role the ACL refuses first (no UPDATE/DELETE grant) and the immutability '
+  'triggers never fire; the triggers fire only where the ACL does not refuse, i.e. '
+  'owner/superuser context, and an owner can disable them. The withheld grants are '
+  'the operative fence; the triggers are the backstop that becomes load-bearing if '
+  'a future migration widens that grant. A '
   'row is RETAINED after the period is later published — a cpi_period present in '
   'BOTH tables reads as "unpublished when we looked, published later", which is the '
   'audit trail. There is deliberately NO resolved flag: resolution is derived by '
@@ -333,10 +377,13 @@ comment on constraint cpi_u_nonpublication_raw_bounded on pfin.cpi_u_nonpublicat
 
 -- ----------------------------------------------------------------------------
 -- IMMUTABILITY — Surface 1: row-level UPDATE + DELETE fence.
--- The 004 / 054 append-only pattern. This is the ONLY fence that holds against a
--- privileged context: service_role bypasses RLS but NOT triggers, and the table
--- owner bypasses the ACL too. RLS default-deny and the withheld UPDATE/DELETE
--- grants below are real defense-in-depth, but they are NOT the guarantee.
+-- The 004 / 054 append-only pattern. ⚠ READ THE "WHAT ACTUALLY HOLDS THE LINE"
+-- BLOCK IN THE HEADER BEFORE REASONING ABOUT THIS TRIGGER. In production it does
+-- NOT fire: service_role holds no UPDATE/DELETE grant, so the ACL refuses first.
+-- This is a BACKSTOP, load-bearing exactly when a future migration widens that
+-- grant, plus a fail-loud guard against an accidental owner-context mutation.
+-- It is NOT the operative fence today and it is NOT un-bypassable by the owner,
+-- who can disable it.
 -- ----------------------------------------------------------------------------
 create or replace function pfin.fn_cpi_u_nonpublication_block_mutation()
 returns trigger
@@ -346,7 +393,8 @@ set search_path = ''
 as $$
 begin
   -- Fail LOUD (raise, NOT return null — return null would silently no-op the row
-  -- and read as "succeeded"). Blocks UPDATE + DELETE for ALL roles.
+  -- and read as "succeeded"). Reached only when the ACL did not refuse first —
+  -- in practice, owner/superuser context. See the header block.
   raise exception
     'pfin.cpi_u_nonpublication is immutable (append-only; ADR-049 Decision 1 / ADR-011 Decision 2). % blocked — a recorded non-publication was true at observation time and is retained even after the period is later published. Append with `on conflict (cpi_period) do nothing`, never `do update`.', tg_op;
 end;
@@ -358,10 +406,15 @@ comment on function pfin.fn_cpi_u_nonpublication_block_mutation() is
   'BEFORE UPDATE OR DELETE immutability fence on pfin.cpi_u_nonpublication '
   '(ADR-049 Decision 1; ADR-011 Decision 2 / Lock 10 append-only class). SECURITY '
   'INVOKER — touches nothing, needs no elevated privilege, and is NOT a DEFINER '
-  'allowlist entry (this migration adds none). raise exception (fail loud). Blocks '
-  'UPDATE + DELETE for ALL roles incl. service_role, which bypasses RLS but not '
-  'triggers — the privileged-context immutability fence that RLS default-deny alone '
-  'cannot provide. INSERT is NOT blocked here: it is the ingest append path, and '
+  'allowlist entry (this migration adds none). raise exception (fail loud). ⚠ THIS '
+  'IS A BACKSTOP, NOT THE OPERATIVE FENCE — measured 2026-08-10: service_role holds '
+  'no UPDATE/DELETE grant, so those statements fail with `permission denied for '
+  'table` and this trigger NEVER FIRES for it; and the table owner, for whom the '
+  'ACL does not refuse, can `alter table ... disable trigger` and then mutate. What '
+  'this earns: it becomes load-bearing if a future migration WIDENS the '
+  'service_role grant, and it fails loud on an accidental owner-context mutation. '
+  'Do not cite it as proof that mutation is impossible. INSERT is NOT blocked here: '
+  'it is the ingest append path, and '
   'first-observation-wins is enforced by the primary key plus the writer''s '
   '`on conflict do nothing`, not by a trigger.';
 
@@ -395,17 +448,21 @@ comment on function pfin.fn_cpi_u_nonpublication_block_truncate() is
   'pfin.cpi_u_nonpublication (ADR-049 Decision 1; ADR-011 Decision 2 / Lock 10). '
   'SECURITY INVOKER (touches nothing; not a DEFINER allowlist entry). raise '
   'exception (fail loud). Closes the TRUNCATE bypass: row-level UPDATE/DELETE '
-  'triggers do NOT fire on TRUNCATE, so this statement-level trigger fences the '
-  'wipe path for ALL roles regardless of grant state. Message deliberately distinct '
-  'from the row-level fence so a battery can tell which surface fired.';
+  'triggers do NOT fire on TRUNCATE, so a role holding TRUNCATE would not trip the '
+  'row-level fence. ⚠ SAME BACKSTOP CAVEAT as the row-level fence — measured '
+  '2026-08-10: service_role holds no TRUNCATE privilege, so TRUNCATE fails with '
+  '`permission denied for table` and this trigger never fires for it; it fires '
+  'where the ACL does not refuse, and an owner can disable it. Message deliberately '
+  'distinct from the row-level fence so a battery can tell which surface fired.';
 
 create trigger cpi_u_nonpublication_block_truncate
   before truncate on pfin.cpi_u_nonpublication
   for each statement execute function pfin.fn_cpi_u_nonpublication_block_truncate();
 
 -- Defense-in-depth: PUBLIC holds no TRUNCATE by default, but revoke explicitly so
--- a broad platform/default grant cannot reintroduce it. The statement-level
--- trigger above is the regardless-of-grant guarantee.
+-- a broad platform/default grant cannot reintroduce it. Note this REVOKE is the
+-- layer that actually refuses in production — the statement-level trigger above
+-- is reached only where the ACL does not (see WHAT ACTUALLY HOLDS THE LINE).
 revoke truncate on pfin.cpi_u_nonpublication from public;
 
 -- ----------------------------------------------------------------------------
@@ -414,9 +471,14 @@ revoke truncate on pfin.cpi_u_nonpublication from public;
 -- authenticated SELECT grant is required even with RLS enabled (RLS filters rows;
 -- the GRANT lets the role reach the table at all). authenticated gets SELECT only
 -- (no write grant → cannot INSERT/UPDATE/DELETE regardless of policy).
--- service_role gets SELECT + INSERT ONLY — no UPDATE, no DELETE. That withholding
--- is the ACL half of append-only; the triggers above are the half that holds when
--- ACL and RLS are both bypassed. anon: nothing (schema USAGE denies before ACL).
+-- service_role gets SELECT + INSERT ONLY — no UPDATE, no DELETE. ⚠ THAT
+-- WITHHOLDING IS THE OPERATIVE APPEND-ONLY FENCE, not a secondary layer:
+-- measured 2026-08-10, service_role UPDATE / DELETE / TRUNCATE / `on conflict …
+-- do update` all fail with `permission denied for table` and the immutability
+-- triggers never fire. The triggers stand BEHIND this line, and they become
+-- load-bearing precisely if someone later widens it. Treat any widening of this
+-- grant as a security change, not a convenience.
+-- anon: nothing (schema USAGE denies before ACL).
 -- ----------------------------------------------------------------------------
 alter table pfin.cpi_u_nonpublication enable row level security;
 
@@ -431,7 +493,8 @@ comment on policy cpi_u_nonpublication_select on pfin.cpi_u_nonpublication is
   'authenticated policy: INSERT / UPDATE / DELETE have no policy → default-deny for '
   'authenticated, so a user can neither forge nor erase a non-publication record. '
   'service_role writes bypass RLS but are still bounded by the ACL (INSERT only) '
-  'and by the immutability triggers. aal2 backstop excluded (global shared-read) — '
+  '(the triggers stand behind that ACL, not in front of it). aal2 backstop '
+  'excluded (global shared-read) — '
   'no per-user-conditional clause.';
 
 grant select on pfin.cpi_u_nonpublication to authenticated;

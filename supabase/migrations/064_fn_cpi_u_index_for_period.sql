@@ -79,8 +79,10 @@
 --   rather than requiring the consumer to compare two dates.
 --
 -- ----------------------------------------------------------------------------
--- ⚠ THE TRAILING-EDGE RULE — and a DELIBERATE DEVIATION from the shape ADR-049
---   Decision 3 sketched. FLAGGED FOR SEC / F/CTO, not slipped in.
+-- ⚠ THE COVERAGE-EDGE RULE — and a DELIBERATE DEVIATION from the shape ADR-049
+--   Decision 3 sketched. Flagged at authoring, ACCEPTED at Sec joint-review
+--   2026-08-10, which also caught that the first draft bounded only ONE edge
+--   (finding C1); both edges are bounded below.
 --   Decision 3's requirement: "Any gap detector MUST bound itself to periods
 --   that are actually due", because "not yet published" and "missing" are
 --   indistinguishable by contiguity — an unbounded contiguity check false-
@@ -89,8 +91,18 @@
 --   BOUND, with the exact lag constant to be VERIFIED against BLS's published
 --   release schedule at implementation, never assumed.
 --   >> THIS HELPER TAKES THE STRICTER BOUND, AND IT IS DATA-DERIVED RATHER THAN
---   CALENDAR-DERIVED: a period is treated as a GAP only if a LATER period is
---   PRESENT in cpi_u_index. <<
+--   CALENDAR-DERIVED: a period is treated as a GAP only if it is STRICTLY
+--   INSIDE the coverage window — bracketed by prints we hold on BOTH sides. <<
+--   ⚠ BOTH SIDES IS THE C1 CORRECTION, AND IT IS NOT COSMETIC. The first draft
+--   tested only "is a LATER period present", which is true of every period back
+--   to antiquity: with coverage starting 2015-01, asking for 1990-01 returned
+--   `unrecorded_gap` — "this period was due and nothing explains it" — for a
+--   period that was never due and that no backfill ever claimed to cover. That
+--   is ADR-049 D2 state (d) landing in the ALARM class, unboundedly. It is the
+--   exact false-positive shape D3 spent a whole decision preventing, arriving
+--   at the other end of the series: a one-sided bound is not a bound.
+--   No wrong NUMBER was ever produced (cpi_value is NULL there) — the defect was
+--   in the CLASSIFICATION, which is the part being locked as a contract.
 --   Why that is stricter, and why it is preferable here:
 --     · It needs NO lag constant. A guessed constant reproduces the false
 --       positive one month later instead of removing it, and a verified one is
@@ -112,10 +124,18 @@
 --   inferred from its output. ADR-049 Decision 2 already collapses (b)/(c)/(d)
 --   and points at a RUN LOG as what narrows them; `beyond_coverage` is exactly
 --   that collapsed class, named honestly.
---   Complementarity worth noting: the 063 RECORD works at the trailing edge
---   where this contiguity test cannot — a period BLS published valueless as the
---   most recent period classifies `recorded_nonpublication`, not
---   `beyond_coverage`, because the record is checked FIRST.
+--   Complementarity worth noting: the 063 RECORD works at either edge where the
+--   extent test cannot — a period BLS published valueless as the most recent
+--   period classifies `recorded_nonpublication`, not `beyond_coverage`, because
+--   the record is checked FIRST.
+--   ⚠ WHY A CLASS AND NOT JUST A NULL VALUE, since the alternative disposition
+--   was available and was declined: `before_coverage` is derivable-ish from
+--   `cpi_value IS NULL`, which is normally an argument for dropping it. It is
+--   kept because gap_class is a CLOSED, CONSUMER-VISIBLE set being locked at
+--   ZERO consumers — adding a member after the first consumer ships is a
+--   contract change, and the cost of carrying it now is one branch. Symmetry is
+--   the second reason: an edge rule that fences one end and not the other is
+--   the thing a future reader trips on.
 --
 -- ----------------------------------------------------------------------------
 -- gap_class — the CLOSED set, and what each member means. TEXT, not an enum
@@ -127,17 +147,43 @@
 --                                  the period with no usable value. This is
 --                                  ADR-049 Decision 2 state (a) — the ONLY
 --                                  positively-recorded absence.
---     'unrecorded_gap'           — absent, and a LATER period IS present, so the
---                                  period was due and nothing explains it.
---                                  States (c)/(d) collapsed; (b) is impossible
---                                  here.
---     'beyond_coverage'          — absent, and NO later period is present. States
+--     'unrecorded_gap'           — absent, and STRICTLY INTERIOR to the coverage
+--                                  window (prints exist on BOTH sides), so the
+--                                  period was demonstrably due and nothing
+--                                  explains it. States (c)/(d) collapsed; (b) is
+--                                  impossible here. >> THIS IS THE ONLY ALARM
+--                                  CLASS. Keep it that way. <<
+--     'before_coverage'          — absent, and EARLIER than anything the store
+--                                  holds. States (c)/(d) collapsed, most
+--                                  plausibly "backfill never covered this span".
+--                                  NOT an alarm.
+--     'beyond_coverage'          — absent, and LATER than anything the store
+--                                  holds; also the empty-store case, where no
+--                                  coverage window exists at all. States
 --                                  (b)/(c)/(d) collapsed. NOT an alarm — see the
---                                  trailing-edge block above.
+--                                  coverage-edge block above.
 --   ⚠ These are ABSENCE REASONS. They are ORTHOGONAL to the carry outcome:
 --   cpi_value / is_carried / carried_from report what could be RESOLVED, and a
 --   period can be `recorded_nonpublication` with NO carry available (nothing at
 --   or before it). Read both, never one as a proxy for the other.
+--
+-- ----------------------------------------------------------------------------
+-- nonpublication_on_record — the SIXTH column, added at Sec joint-review note
+--   N1. TRUE iff pfin.cpi_u_nonpublication holds a row for the resolved period,
+--   REGARDLESS of whether cpi_u_index now holds a print for it.
+--   >> ITS WHOLE REASON FOR EXISTING IS THE `published` CASE. << 063 is built so
+--   that a period present in BOTH tables reads as "unpublished when we looked,
+--   published later" — 063 calls that the audit trail. Consulting the record
+--   only on the absent path would short-circuit exactly that case to
+--   'published' and make the audit trail UNREACHABLE through the one helper
+--   consumers are permitted to use, while they are simultaneously forbidden
+--   from hand-rolling the join. The table would be preserving evidence that
+--   nothing could read.
+--   NOT derivable from gap_class: on the absent paths the two agree, but for a
+--   later-published period gap_class is 'published' and only this flag carries
+--   the history. That non-derivability is precisely why it is a column and not
+--   a comment (ADR-011 Decision 4 derive-by-looking test cuts BOTH ways — it
+--   removes what a reader can derive, and it keeps what a reader cannot).
 --
 -- ----------------------------------------------------------------------------
 -- §10 3-AXIS CROSS-CHECK (Path B — ADR-011 Decision 4 is LINKED, not restated;
@@ -176,7 +222,8 @@
 -- CONTRACT
 --   pfin.fn_cpi_u_index_for_period(p_period date)
 --     returns table (cpi_period date, cpi_value numeric, is_carried boolean,
---                    carried_from date, gap_class text)
+--                    carried_from date, gap_class text,
+--                    nonpublication_on_record boolean)
 --     — resolves the CPI-U index level to use for p_period, and says how it was
 --       resolved. Exactly ONE row, always. SECURITY INVOKER, STABLE,
 --       set search_path = ''.
@@ -188,6 +235,15 @@
 --       forbids.
 --     cpi_value is NULL only when nothing at or before the period is present in
 --       cpi_u_index (no carry source). It is NEVER a fabricated zero.
+--   ⚠ AN INHERITED PRECONDITION, recorded because all three branches depend on
+--     it and none of them can check it: 053 documents cpi_period as
+--     first-of-month but does NOT enforce it (063 does, for its own rows). A
+--     mis-keyed 053 row such as 2025-10-15 would be INVISIBLE to branch (1)
+--     (no equality match), yet SELECTED as a carry source by branch (2), and it
+--     would MOVE THE COVERAGE EDGE in branch (3) — so one malformed row can
+--     change another period's answer and its classification at once. Fixing 053
+--     is a separate vehicle (its CHECK cannot be added by editing a merged
+--     file); this helper's correctness is conditional on that grain holding.
 --   Security-load-bearing edges: INVOKER over two `using (true)` global tables —
 --     NO tenant isolation surface is crossed and no tenant predicate exists to
 --     get wrong; `set search_path = ''` fences search_path injection, and every
@@ -196,7 +252,7 @@
 --     mechanism that prevents a silently-carried CPI value from entering a real-
 --     terms figure); the p_period NULL raise is fail-loud, not fail-quiet.
 --   ⚠ WHAT THIS FUNCTION DELIBERATELY DOES NOT DO — recorded so no consumer
---     infers it: it does NOT detect a stalled ingest (see the trailing-edge
+--     infers it: it does NOT detect a stalled ingest (see the coverage-edge
 --     block); it does NOT separate "our ingest dropped it" from "backfill never
 --     covered the span" (ADR-049 Decision 2 keeps (c)/(d) collapsed, and C' was
 --     rejected as the heavier alternative); it does NOT decide what the USER
@@ -216,11 +272,12 @@ create schema if not exists pfin;
 -- ----------------------------------------------------------------------------
 create or replace function pfin.fn_cpi_u_index_for_period(p_period date)
 returns table (
-  cpi_period    date,
-  cpi_value     numeric,
-  is_carried    boolean,
-  carried_from  date,
-  gap_class     text
+  cpi_period                date,
+  cpi_value                 numeric,
+  is_carried                boolean,
+  carried_from              date,
+  gap_class                 text,
+  nonpublication_on_record  boolean
 )
 language plpgsql
 stable
@@ -236,11 +293,13 @@ as $$
 -- parameter and the v_* locals match no column name, so they are unaffected.
 #variable_conflict use_column
 declare
-  v_period date;     -- p_period normalized to the CPI grain (first-of-month)
-  v_from   date;     -- period the carried value came from; NULL if none exists
-  v_val    numeric;  -- the carried value itself
-  v_max    date;     -- latest period present in cpi_u_index (the trailing edge)
-  v_class  text;     -- resolved gap_class
+  v_period   date;     -- p_period normalized to the CPI grain (first-of-month)
+  v_from     date;     -- period the carried value came from; NULL if none exists
+  v_val      numeric;  -- the carried value itself
+  v_min      date;     -- earliest period present in cpi_u_index (leading edge)
+  v_max      date;     -- latest   period present in cpi_u_index (trailing edge)
+  v_class    text;     -- resolved gap_class
+  v_recorded boolean;  -- a non-publication record exists for this period
 begin
   -- FAIL LOUD on a missing period. Deliberately NOT a silent empty result: an
   -- empty set is indistinguishable from "there is no CPI data", and this
@@ -262,13 +321,34 @@ begin
   v_period := date_trunc('month', p_period::timestamp)::date;
 
   -- ---------------------------------------------------------------------
+  -- (0) RECORD LOOKUP — resolved ONCE, BEFORE the exact-print branch, and
+  -- returned on EVERY path.
+  -- ⚠ THIS ORDERING IS THE WHOLE POINT (Sec joint-review note N1). 063 exists
+  -- so that a period present in BOTH tables reads as "unpublished when we
+  -- looked, published later" — that IS the audit trail, in 063's own words. If
+  -- the record were only consulted on the absent path, that case would
+  -- short-circuit to 'published' at branch (1) and the audit trail would be
+  -- INVISIBLE through the one helper consumers are permitted to use, while they
+  -- are simultaneously forbidden from hand-rolling the join. The table would be
+  -- preserving evidence nothing could read.
+  -- Note this column is NOT derivable from gap_class: on the absent paths the
+  -- two agree, but for a LATER-PUBLISHED period gap_class is 'published' and
+  -- only this flag carries the history. That non-derivability is why it is a
+  -- column and not a comment (ADR-011 Decision 4 derive-by-looking test).
+  -- ---------------------------------------------------------------------
+  v_recorded := exists (
+    select 1 from pfin.cpi_u_nonpublication n
+    where n.cpi_period = v_period
+  );
+
+  -- ---------------------------------------------------------------------
   -- (1) EXACT PRINT. The period has its own row — nothing is carried and no
   -- classification is needed. carried_from is set to the period itself rather
   -- than NULL so that "where did this value come from?" has the same answer
   -- shape in every row a consumer receives.
   -- ---------------------------------------------------------------------
   return query
-  select v_period, c.cpi_value, false, v_period, 'published'::text
+  select v_period, c.cpi_value, false, v_period, 'published'::text, v_recorded
   from pfin.cpi_u_index c
   where c.cpi_period = v_period;
 
@@ -293,29 +373,45 @@ begin
   limit 1;
 
   -- ---------------------------------------------------------------------
-  -- (3) TRAILING EDGE. The data-derived bound that replaces a calendar lag
-  -- constant — see the trailing-edge block in the header for why this is the
-  -- "stricter bound" ADR-049 Decision 3 permits, and for the stalled-ingest
-  -- cost it accepts. No "today" is consulted anywhere in this function.
+  -- (3) COVERAGE EXTENT — BOTH EDGES. The data-derived bound that replaces a
+  -- calendar lag constant; see the coverage-edge block in the header for why
+  -- this is the "stricter bound" ADR-049 Decision 3 permits, and for the
+  -- stalled-ingest cost it accepts. No "today" is consulted anywhere in this
+  -- function.
+  -- ⚠ BOTH edges, not just the trailing one (Sec joint-review C1). An earlier
+  -- draft resolved max() only, which left every period before the store's first
+  -- print falling through to 'unrecorded_gap' — unboundedly, back forever.
   -- ---------------------------------------------------------------------
-  select max(c.cpi_period) into v_max from pfin.cpi_u_index c;
+  select min(c.cpi_period), max(c.cpi_period) into v_min, v_max
+  from pfin.cpi_u_index c;
 
   -- ---------------------------------------------------------------------
-  -- (4) CLASSIFY THE ABSENCE. Order matters: the RECORD is consulted FIRST, so
-  -- a period the source published valueless is named as such even when it sits
-  -- at the trailing edge, where the contiguity test alone could not tell.
+  -- (4) CLASSIFY THE ABSENCE. Order matters, and every branch is positive.
+  -- The RECORD is consulted first, so a period the source published valueless
+  -- is named as such even at an edge, where the extent test alone could not
+  -- tell. Then the two edges are excluded explicitly, which leaves
+  -- 'unrecorded_gap' meaning STRICTLY INTERIOR — bracketed on BOTH sides by
+  -- prints we hold. That is what makes it an alarm worth having: a period that
+  -- was demonstrably due, and is unexplained.
   -- ---------------------------------------------------------------------
-  if exists (
-    select 1 from pfin.cpi_u_nonpublication n
-    where n.cpi_period = v_period
-  ) then
+  if v_recorded then
     v_class := 'recorded_nonpublication';
-  elsif v_max is not null and v_max > v_period then
-    -- A LATER period is present, so this one was due and nothing explains it.
-    v_class := 'unrecorded_gap';
-  else
-    -- Nothing later is present. NOT an alarm: (b)/(c)/(d) collapsed.
+  elsif v_max is null then
+    -- The store is EMPTY: there is no coverage window at all, so no period can
+    -- be shown to have been due. Lands in the not-an-alarm class deliberately —
+    -- an empty store must not report every period in history as a gap.
     v_class := 'beyond_coverage';
+  elsif v_period < v_min then
+    -- Earlier than anything we hold. States (c)/(d) collapsed — most plausibly
+    -- "backfill never covered this span". NOT an alarm.
+    v_class := 'before_coverage';
+  elsif v_period > v_max then
+    -- Later than anything we hold. States (b)/(c)/(d) collapsed. NOT an alarm.
+    v_class := 'beyond_coverage';
+  else
+    -- Strictly inside the window and absent: bracketed by prints on both sides,
+    -- so it was due, and nothing explains it.
+    v_class := 'unrecorded_gap';
   end if;
 
   -- ---------------------------------------------------------------------
@@ -323,7 +419,7 @@ begin
   -- "the function returned nothing" from "the answer is nothing".
   -- ---------------------------------------------------------------------
   return query
-  select v_period, v_val, (v_from is not null), v_from, v_class;
+  select v_period, v_val, (v_from is not null), v_from, v_class, v_recorded;
 end;
 $$;
 
@@ -342,7 +438,8 @@ comment on function pfin.fn_cpi_u_index_for_period(date) is
   '(053) and pfin.cpi_u_nonpublication (063), both global public reference tables '
   'with `using (true)` SELECT policies, so no tenant boundary is crossed. '
   'Returns EXACTLY ONE ROW: (cpi_period, cpi_value, is_carried, carried_from, '
-  'gap_class). p_period is normalized to first-of-month and the normalized value '
+  'gap_class, nonpublication_on_record). p_period is normalized to first-of-month '
+  'and the normalized value '
   'is returned, so a caller passing a mid-month date is told which period '
   'answered; NULL p_period raises rather than returning an empty set. '
   'STANDING REQUIREMENT — a consumer needing a CPI-U level calls this function; '
@@ -356,13 +453,22 @@ comment on function pfin.fn_cpi_u_index_for_period(date) is
   'gap_class is a closed TEXT set: ''published'' (own print) / '
   '''recorded_nonpublication'' (source published the period with no usable value; '
   'ADR-049 Decision 2 state (a), the only positively-recorded absence) / '
-  '''unrecorded_gap'' (absent and a LATER period is present, so it was due and '
-  'nothing explains it) / ''beyond_coverage'' (absent and nothing later is '
-  'present — NOT an alarm). gap_class reports the ABSENCE REASON and is '
-  'ORTHOGONAL to the carry outcome: cpi_value is NULL when no period at or before '
-  'the requested one exists, never a fabricated zero. '
-  'BOUNDED BY CONSTRUCTION — the due-period test is DATA-DERIVED (is a later '
-  'period present?), not calendar-derived, which is the stricter bound ADR-049 '
+  '''unrecorded_gap'' (absent and STRICTLY INTERIOR to the coverage window, so it '
+  'was demonstrably due and nothing explains it — THE ONLY ALARM CLASS) / ''before_coverage'' (absent and '
+  'earlier than anything the store holds) / ''beyond_coverage'' (absent and later '
+  'than anything the store holds; also the empty-store case) — the last two are '
+  'NOT alarms. Both coverage edges are bounded: a period is called a gap only '
+  'when prints bracket it on BOTH sides. gap_class reports the ABSENCE REASON and '
+  'is ORTHOGONAL to the carry outcome: cpi_value is NULL when no period at or '
+  'before the requested one exists, never a fabricated zero. '
+  'nonpublication_on_record is TRUE iff a non-publication record exists for the '
+  'period REGARDLESS of whether a print now exists — it is the only way the '
+  '"unpublished when we looked, published later" audit trail is readable through '
+  'this helper, and it is NOT derivable from gap_class, which reads ''published'' '
+  'in exactly that case. '
+  'BOUNDED BY CONSTRUCTION — the due-period test is DATA-DERIVED (is the period '
+  'bracketed by prints on BOTH sides?), not calendar-derived, which is the '
+  'stricter bound ADR-049 '
   'Decision 3 permits; it consults no clock, so it is outside ADR-044''s two-clock '
   'hazard. ITS COST: it CANNOT detect a stalled ingest — a dead ETL yields '
   '''beyond_coverage'' indefinitely, indistinguishable from "not yet published". '
