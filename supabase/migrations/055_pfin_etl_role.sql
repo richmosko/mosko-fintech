@@ -237,12 +237,38 @@
 --   adopted 2026-08-02). An earlier draft created the role LOGIN with no password and
 --   argued the pre-provision state was fail-closed because "a LOGIN role with no
 --   password cannot authenticate under scram-sha-256." That claim is TRUE IN
---   PRODUCTION but does NOT generalize, and the gap was measured, not theorized: the
---   LOCAL stack's pg_hba.conf grants `trust` on 127.0.0.1/32, ::1/128 and local — and
---   `trust` NEVER CONSULTS A PASSWORD AT ALL. Under a `trust` line a passwordless
---   LOGIN role is reachable with NO CREDENTIAL. So the old shape's fail-closed
---   property was outsourced to pg_hba.conf, a file outside this repo that differs
---   between production, local dev, and CI.
+--   PRODUCTION but does NOT generalize. The gap is measured, not theorized — and the
+--   measurement is bounded BY PATH, not merely by environment (see MEASUREMENT BOUND
+--   below, which is the part that matters):
+--     Local stack pg_hba.conf, read from the running container 2026-08-10:
+--       host  all all 127.0.0.1/32  trust      ← passwordless LOGIN reachable here
+--       host  all all ::1/128       trust      ← and here
+--       local all supabase_admin    trust      ← `local` is trust for THIS ROLE ONLY
+--       local all all               peer map=supabase_map   ← everyone else on the socket
+--       host  all all 10/8, 172.16/12, 192.168/16, 0.0.0.0/0   scram-sha-256
+--   `trust` NEVER CONSULTS A PASSWORD AT ALL. Confirmed by connecting from INSIDE the
+--   container to 127.0.0.1 with a deliberately wrong password — it authenticated. So
+--   under a `trust` line a passwordless LOGIN role is reachable with NO CREDENTIAL,
+--   and the old shape's fail-closed property was outsourced to pg_hba.conf: a file
+--   outside this repo that differs between production, local dev, and CI, AND that is
+--   indexed by connection path so it differs WITHIN a single environment.
+--
+--   ⚠ MEASUREMENT BOUND — PATH, NOT JUST ENVIRONMENT. Measured on the local stack VIA
+--   THE CONTAINER-INTERNAL LOOPBACK PATH. The published :54322 is a NAT HOP: a
+--   host-side client presents to the server as a private-range address (measured:
+--   192.168.65.1) and therefore matches the scram-sha-256 rule, NEVER the trust line.
+--   MEASURING FROM THE HOST DOES NOT OBSERVE THIS — it reports password auth enforced
+--   and looks like a refutation of everything above. It is not; it is a different
+--   path. Production pg_hba is NOT measured.
+--     Cheapest diagnostic (Sec, 2026-08-10): a host-side client is PROMPTED for a
+--     password. Under `trust` no password is requested at all — so THE PROMPT ITSELF
+--     proves the connection did not traverse the trust line. No query needed.
+--   Why this bound is stricter than the `log_statement = ddl` bound above, which names
+--   only the stack: bound a claim by whatever its SUBJECT varies by. `log_statement`
+--   is a server-wide GUC and varies by environment alone. `pg_hba` is a table INDEXED
+--   BY CONNECTION PATH, so an environment-only bound is insufficient by construction —
+--   and that insufficiency is exactly what produced a false refutation of this
+--   paragraph on 2026-08-10.
 --   NOLOGIN removes that dependency entirely: `rolcanlogin = false` is checked from
 --   the ROLE ATTRIBUTE ITSELF, before any authentication method is consulted, so the
 --   role is unreachable under `trust`, `scram-sha-256`, `md5`, or anything else. The
@@ -251,8 +277,28 @@
 --
 --   SYMPTOMS — note there are TWO, and only one of them is safe:
 --     · SKIP STEP 2 (`ALTER ROLE ... LOGIN`) → the role stays NOLOGIN and the ETL
---       fails at connect with `role "pfin_etl" is not permitted to log in`. Loud,
---       immediate, and SAFE: an outage, never an exposure.
+--       fails at connect. Immediate, and SAFE: an outage, never an exposure. The
+--       safety is path-independent — `rolcanlogin = false` is read from the role
+--       attribute BEFORE any authentication method is consulted.
+--       ⚠ BUT THE ERROR TEXT IS NOT WHAT YOU WILL SEE, AND IS NOT DIAGNOSTIC. Measured
+--       2026-08-10 against the real NOLOGIN role, on both paths:
+--         trust path (in-container, 127.0.0.1) → `role "pfin_etl" is not permitted to
+--           log in`   ← distinctive, but NOT the path the ETL uses
+--         scram path — BOTH measured, not inferred: host via :54322 (client presents
+--           as 192.168.65.1), and container-network (client presents as 172.19.0.2,
+--           matching the 172.16/12 rule — this is the container-to-container hop the
+--           deployed ETL uses) → both give `password authentication failed for user
+--           "pfin_etl"`   ← THIS is what an operator debugging the ETL actually sees
+--       On the scram path a NOLOGIN role, a nonexistent role, and a plain typo in the
+--       password are ALL indistinguishable — Postgres collapses them deliberately, to
+--       prevent role enumeration. So: you cannot tell "I skipped step 2" from "I
+--       mistyped the password" by reading the error. Check `rolcanlogin` in
+--       `pg_roles` instead. An earlier revision of this bullet called the failure
+--       "Loud"; that is true only on the trust path, which the ETL never takes.
+--       ⚠ NO AUTOMATED CHECK MAY DISCRIMINATE ON CONNECT-TIME ERROR TEXT. A control
+--       built on the distinctive message passes or fails for reasons unrelated to the
+--       property it claims to test — this already happened once (the S17 negative
+--       control), which is why it is stated here as a prohibition rather than a note.
 --     · RUN STEP 2 WITHOUT STEP 1 → THIS IS THE ONE DANGEROUS ORDERING. It succeeds,
 --       and leaves exactly the LOGIN-with-no-password state this migration is shaped
 --       to avoid — reachable with no credential under any `trust` line. The guarded
