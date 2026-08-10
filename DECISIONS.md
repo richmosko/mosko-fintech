@@ -41,6 +41,73 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-049 — `pfin.cpi_u_index` gap contract: the value table stays strictly non-null; non-publication is recorded separately, and the consumption policy lives in one helper
+
+**Date:** 2026-08-10 · **Status:** **Accepted** — F/CTO ratified **Option C** 2026-08-10; Sec joint-review gates the migration.
+**Phase:** 6 Build Loop · **Surface:** `pfin.cpi_u_index` (`053`) + the first consumer, **SELF-218** (CPI-U inflation-adjusted overlay).
+
+**What forced this.** The real worker's first successful CPI-U run wrote **137** rows for `2015-01 … 2026-06`. A complete series is 138. **`2025-10` is absent**, and the cause is real-world: BLS published the period **with no value** (`value = '-'`), `fetch_cpi_df` cast it to null, and `drop_nulls` removed the row — **for the 2025 fetch specifically: 12 monthly periods returned, 11 stored, 1 dropped, silently**. (Stated with its year because *"12 in, 11 out"* unqualified has already been read once as *"12 were dropped"*; the whole-series arithmetic is 138 expected − 137 stored = **1**.) This is **not an importer defect**: `053` declares `cpi_value NOT NULL` plus a finiteness CHECK, so a valueless period **cannot** be stored. The drop is **forced by the schema**, and October 2025 is a recurrence class (interrupted publication), not an incident. **A CPI-U gap propagates into inflation-adjusted financial figures**, so this is data integrity, not bookkeeping.
+
+**Measured at ratify** (`4a5a9ad`, direct query — not inferred from the row count): exactly **one** gap, `2025-10`; no malformed or non-first-of-month periods. **137-of-138 is one real gap, not a coincidental total.**
+
+**⚠ There are ZERO built consumers of `cpi_u_index` today** — every reference in `supabase/ api/ workers/ docs/` is the ETL writer, its tests, `.env.example`, `workers/CLAUDE.md`, or `054`'s *numbering* comment. `053`'s named consumers (the §2.1.x real/inflation-adjusted views; the SELF-214 net-worth-trend surface) **do not exist yet.** That is why this is settled now: the question is not *"fix N consumers"* but ***"what does the first consumer inherit"*** — and SELF-218 would otherwise set the contract implicitly by being first.
+
+### Decision 1 — storage: Option C (purely additive)
+
+**`pfin.cpi_u_index` keeps `cpi_value NOT NULL` and its finiteness CHECK, unchanged.** A **separate, global, append-only record** captures periods the source published **without a usable value**. Rejected: **Option A** (absence stays absence, no record) and **Option B** (nullable `cpi_value` + status discriminator).
+
+**Why not A.** Its cost is **invisible and cumulative** — you cannot retrospectively classify a gap you did not record, so the door closes a little further every month. Reversible in schema, **irreversible in data**.
+
+**Why not B.** It pays the **largest** consumer-side cost — every consumer must handle NULL — to buy what C buys additively, while weakening the exact invariant `053` was built around (`053`: the finiteness fence *"keeps a poisoned index level out of downstream real/inflation-adjusted SUMs"*). Note the existing CHECK already tolerates NULL (a NULL CHECK result is treated as satisfied), so B's fence is quieter than it looks. B is also the only option that is **partially one-way** — re-tightening later requires backfill-or-delete.
+
+**⚠ Shape: append-only POSTURE is precedent; the table SHAPE is new — and the resemblance I first reached for does not hold.** The `*_state_history` family (`linked_source_state_history` `015`, `account_trans_annotation_history` `031`) are **histories of a tenant-owned row that exists**, FK-anchored to it. This record is the opposite on both axes: it is **global** (no tenant) and it describes a period for which **no row exists** — that absence is its entire subject. **No FK to `cpi_u_index` is possible, by construction.** Closest in *purpose* is a sync-audit record; that is tenant-scoped, so it is not precedent either. Recorded so a later reader does not "align" this table to a family it does not belong to.
+
+**Tenancy + posture, inherited from `053` and stated so the classification is not re-derived. Decision 3 non-membership holds on TWO INDEPENDENT grounds — both recorded, so a later reader who re-derives only one does not conclude the other was missed:** **(i)** there is **no FK-shaped reference column** at all, and **(ii)** both tables are **global**, so there is **no tenant boundary to bypass even if such a column existed**. Either ground alone is sufficient; neither is load-bearing on the other. Concretely: global public reference — **no `users_id`, no FK-shaped column → NOT an [ADR-011](#adr-011) Decision 3 family member** (`053`'s own words for itself: *"NO users_id, NO FK-shaped column → NOT a Decision-3 family"*, same class as `tax_character`). RLS mirrors `053`: `select to authenticated using (true)`; writes `service_role` only. Under the [ADR-023](#adr-023) ETL read-role amendment's Step 0 this is therefore **pure-global → reads under `authenticated`**, composing with that rule rather than creating an exception.
+
+**Restatement is a feature of this shape, not a problem.** `053` is MUTABLE because BLS revises prints, so a period can go absent → present. The non-publication record is **immutable and retained** when that happens: it was true at observation time, and a period appearing in **both** tables reads as *"unpublished when we looked, published later"* — which is exactly the audit trail. **No `resolved` flag** — a reader derives it by joining, and per the [Decision 4 CHANGELOG](#adr-011) derive-by-looking test, **anything derivable by looking is not stored.**
+
+### Decision 2 — ⚠ what C distinguishes, and what it does NOT
+
+Absence of a row currently collapses **four** states: **(a)** published with no value; **(b)** not yet published; **(c)** our ingest dropped it; **(d)** backfill never covered the span.
+
+**C converts a four-way ambiguity into a two-way one — it does not eliminate it.** Positively recorded: **(a)**. Everything else remains *"absent for an unrecorded reason"*. **(c) and (d) stay collapsed with each other**, and are separated from **(b)** only **by convention** (the lag rule below), **not by record**. Stated plainly because *"C fixes the ambiguity"* is the natural misreading and it is wrong.
+
+**Rejected as the heavier alternative, so the boundary reads as chosen rather than overlooked: C′** — record the outcome of *every* fetched period, making absence mean *"never fetched"* and separating (c) from (d). That is a full ingest log; at V1 single-user scale its cost exceeds the value of distinguishing two operational states that a run log already narrows. **If (c)/(d) separation is later wanted, C′ is additive on top of C** — no rework.
+
+### Decision 3 — ⚠ the publication-lag rule, without which any gap detector is noise
+
+**"Not yet published" and "missing" are indistinguishable by contiguity.** The trailing edge today is `2026-06`; `2026-07` is absent because BLS has not published it. **A contiguity check with no expected-lag encoding false-positives every month, forever** — it would have been built and it would have been abandoned as noise within two cycles.
+
+**Any gap detector MUST bound itself to periods that are actually due.** Shape: consider a period `M` only once it is past its publication window — i.e. compare against `date_trunc('month', <server today>) - interval '1 month'` or a stricter bound, never against the current month. **⚠ The exact lag constant must be verified against BLS's published release schedule at implementation, not assumed** — CPI-U for month `M` is released partway through `M+1`, and a guessed constant reproduces the false-positive one month later instead of removing it. The comparison date must be **server-derived, not client-supplied**, per [ADR-044](#adr-044)'s two-clock hazard — a client-side "today" reintroduces exactly the drift that ADR pins the database to avoid. **⚠ Do not reach for `fn_server_today()`: it is booked, not built** (verified — it appears in no migration), so an implementer must either author it or derive the date in-helper; assuming it exists is a forward-reference to a mechanism that does not yet exist.
+
+### Decision 4 — the consumption policy lives in ONE helper
+
+**Precedent, and it is a real one this time:** `pfin.eod_price` (`019`) is declared **SPARSE → last-observation-carried-forward**, and that LOCF is implemented **once**, inside `fn_compute_nav`'s D-FIRST source-priority composition — not re-derived per consumer. That is the Lock 11 SECURITY INVOKER read-composition pattern doing exactly this job.
+
+**So: the CPI gap policy is implemented in a single SECURITY INVOKER composition helper, and never inline in a consumer.** With zero consumers today the cost is nil; with two, we would have two answers.
+
+**⚠ But CPI is not `eod_price`, and the difference is the crux.** Price sparsity is *expected*; **CPI-U is supposed to be monthly-complete**, so carry-forward **silently understates inflation** for the gap month. **Carry-forward is defensible arithmetic; silent carry-forward is not** — for a financial figure the defect is the silence. **The helper MUST surface carried-ness in its result** — the period, the value, whether it was carried, and the period carried from.
+
+**⚠ And that requirement is fenced BY CONSTRUCTION, not by documentation: the helper returns a COMPOSITE / row type, never a bare scalar.** With zero consumers today, *"surface carried-ness"* is otherwise documentation only — nothing stops the first consumer selecting the value and dropping the flag. A composite return forces a consumer that wants only the number to **explicitly project it away**, which converts *"don't ignore carried-ness"* from a rule someone must **remember** into a step someone must **take** — and a deliberate `.value` projection is **visible in a diff**, where an unread boolean is not. Same principle as the pure-append proof and `WHERE false` elsewhere in this project: **a property enforced by construction beats one enforced by review.** The exact signature is the implementing PR's call pending the product ruling; **the composite return and the non-silence it enforces are not.**
+
+### Decision 5 — ⚠ the presentation half routes to the EXISTING non-silent-staleness framework; no second mechanism
+
+**A carried-forward CPI value rendered inside an inflation-adjusted figure IS a staleness condition** — a displayed number derived from data that is not what it appears to be. That is precisely the class [ADR-013](#adr-013) already governs via **[PRD §2.4.4](docs/PRD/index.html)'s non-silent-staleness principle**, whose governing rule reads: *"every derived aggregation that consumes stale-account data carries the staleness marker; **aggregations are never silently presented as fresh**"* — and whose enumerated surface list ADR-013 states is **illustrative**, explicitly extending to surfaces the list omits.
+
+**So the CPI presentation question is answered inside that framework, not by a new affordance.** Two mechanisms answering *"how do we tell the user this figure is not what it looks like?"* will diverge, **and the second one always loses.** Stating it now costs a sentence; retrofitting it after SELF-218 ships its own marker costs a UI convergence.
+
+**⚠ But this is a SCOPE EXTENSION, and it is flagged rather than absorbed.** The governing rule's literal predicate is *stale-**account** data*. A carried CPI value is a **stale reference series** — a second, structurally different staleness source feeding the same surfaces. The rule's spirit plainly covers it and its surface list is illustrative by construction, so the extension is well-founded; but it **widens the marker's trigger set**, which is UX- and PM-visible and must be ruled as such, not slipped in under an existing citation.
+
+**⚠ Citation accuracy, recorded because the mis-citation nearly landed:** this framework is **[PRD §2.4.4](docs/PRD/index.html)'s non-silent-staleness principle** per ADR-013. It is **NOT "INV-1"** — `INV-1` is an unrelated **§2.6 injection invariant** (plain-text-only commentary/owner-id). The two were conflated in routing; **a composite citation pointing at a real ADR and a real label that do not belong together passes every spot-check**, which is why the correct name is pinned here.
+
+**Consequences.** No migration lands with this ADR — it settles the contract. The table + helper take **the next free migration numbers at authoring time** (never reserved ahead). **Sec joint-review gates the migration**: new table feeding financial figures. **PM owns the product half** — *given the system can distinguish a recorded non-publication from an unexplained absence, what does the user see?* — now well-posed, and constrained by Decision 2's four-state list rather than a blank page. **This ADR must land before SELF-218 is built**, which is the whole point of settling it at zero consumers.
+
+**§10 3-axis cross-check ([ADR-011](#adr-011) Decision 4 read verbatim before drafting, live at `3ac486b`):** ledger unchanged at **3**; (i) instance-numbering RT-22 first / RT-26 second / RT-27 third — untouched, none added; (ii) layer-attribution — untouched; (iii) **Path B** — Decision 4 linked, not restated. **SECURITY DEFINER allowlist unchanged** — the helper is INVOKER by Lock 11 default; a DEFINER proposal here would route to Sec joint-review and none is made. **[ADR-011](#adr-011) Decision 3 family unchanged** — no FK-shaped column; see Decision 1.
+
+**Cross-references.** `supabase/migrations/053_cpi_u_index.sql` (the NOT NULL + finiteness fence this preserves) · `019_eod_price_and_valuation.sql` (the SPARSE→LOCF-in-one-helper precedent) · [ADR-011](#adr-011) Lock 11 (INVOKER read-composition) / Decision 12 + Lock 8 (CPI-U ingest cadence) / Decision 3 + Decision 4 (both unchanged) · [ADR-023](#adr-023) ETL read-role amendment (Step 0 pure-global classification) · [ADR-044](#adr-044) (server-date derivation for the lag rule) · [ADR-048](#adr-048) (the keyed BLS ingest that produced the measurement) · `workers/etl/src/pfin_back_etl/{utils,core}.py` (`fetch_cpi_df` drop path) · SELF-218 (first consumer).
+
+---
+
 ## ADR-048 — BLS CPI-U ingest is keyed by decision; ARCH §7's "no credential" cell recorded an inference, not a choice (terse pattern)
 
 **Date:** 2026-08-09 · **Status:** **Accepted** — F/CTO ratified 2026-08-09 (Architect recommendation KEYED, adopted with both riders).
