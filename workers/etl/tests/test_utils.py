@@ -9,6 +9,8 @@ Description:
 
 import pytest
 import polars as pl
+import sqlalchemy as sqla
+import sqlalchemy.ext.automap as sqla_automap
 from unittest.mock import patch, MagicMock
 from pfin_back_etl import utils
 
@@ -344,3 +346,264 @@ class TestBuildDatabaseUrl:
         dis = utils.build_database_url(dict(self.BASE, DB_SSLMODE="disable"))
         assert req.replace("?sslmode=require", "") == dis.replace("?sslmode=disable", "")
         assert req.startswith("postgresql+psycopg2://u:p@h:5432/d?")
+
+
+# ===================================================================
+# automap relationship-name collision guard  (BACKLOG §7.6 S13)
+# ===================================================================
+class TestAutomapRelationshipNaming:
+    """Hermetic tests for the automap naming hooks — no DB, no credentials.
+
+    S13: pfin.user_taxonomy carries a column `tax_character` AND an FK to table
+    pfin.tax_character. Automap names the generated scalar relationship after
+    the referred TABLE, it collides with the same-named column, and automap
+    RAISES inside base.prepare() — so PFinBackend() cannot be constructed and
+    the production ETL entry point (main.py) cannot start. Latent ~50 migrations.
+
+    These build SQLAlchemy Table objects in an unbound MetaData, so they run in
+    the `unit` lane (CI's `pytest -m unit --strict-markers`) with no stack up.
+    """
+
+    @staticmethod
+    def _mapped(table):
+        """A stand-in for an automap-generated class: automap's own default hooks
+        read only `__name__` and the mapped columns."""
+        return type(table.name, (), {"__table__": table})
+
+    @staticmethod
+    def _s13_metadata():
+        """The measured S13 shape: a text column and an FK sharing one name."""
+        md = sqla.MetaData()
+        tax_character = sqla.Table(
+            "tax_character",
+            md,
+            sqla.Column("code", sqla.Text, primary_key=True),
+            schema="pfin",
+        )
+        user_taxonomy = sqla.Table(
+            "user_taxonomy",
+            md,
+            sqla.Column("id", sqla.Integer, primary_key=True),
+            sqla.Column(
+                "tax_character", sqla.Text, sqla.ForeignKey("pfin.tax_character.code")
+            ),
+            schema="pfin",
+        )
+        return user_taxonomy, tax_character
+
+    @classmethod
+    def _s13_args(cls):
+        local_tbl, referred_tbl = cls._s13_metadata()
+        constraint = list(local_tbl.foreign_key_constraints)[0]
+        return (None, cls._mapped(local_tbl), cls._mapped(referred_tbl), constraint)
+
+    # -- the defect itself -------------------------------------------------
+
+    @pytest.mark.unit
+    def test_upstream_default_produces_the_colliding_name(self):
+        """RED anchor. Asserts the DEFECT still exists upstream, so this suite
+        cannot pass vacuously: if SQLAlchemy ever starts disambiguating on its
+        own, this fails and tells us the guard's premise has changed. It is also
+        the assertion that fails against a guard that does nothing."""
+        _, local_cls, referred_cls, constraint = self._s13_args()
+        default = sqla_automap.name_for_scalar_relationship(
+            None, local_cls, referred_cls, constraint
+        )
+        assert default == "tax_character"
+        assert default in local_cls.__table__.columns.keys()  # the collision
+
+    @pytest.mark.unit
+    def test_collision_renames_the_relationship_not_the_column(self):
+        """The load-bearing assertion. `tax_character` is a ratified domain term
+        on a locked migration surface — the COLUMN keeps its natural name and the
+        RELATIONSHIP is the thing that moves, to `tax_character_ref`."""
+        args = self._s13_args()
+        name = utils.sqla_name_for_scalar_relationship(*args)
+        local_cls = args[1]
+        assert name == "tax_character_ref"
+        assert name not in local_cls.__table__.columns.keys()
+        assert "tax_character" in local_cls.__table__.columns.keys()
+
+    # -- generality: the guard is not a special case for tax_character -----
+
+    @pytest.mark.unit
+    def test_non_colliding_names_are_left_alone(self):
+        """Every existing base.by_module.<schema>.<table>.<rel> access site must
+        be unaffected — the guard intervenes ONLY on a real collision."""
+        md = sqla.MetaData()
+        sqla.Table(
+            "account", md, sqla.Column("id", sqla.Integer, primary_key=True),
+            schema="pfin",
+        )
+        child = sqla.Table(
+            "holding",
+            md,
+            sqla.Column("id", sqla.Integer, primary_key=True),
+            sqla.Column("account_id", sqla.Integer, sqla.ForeignKey("pfin.account.id")),
+            schema="pfin",
+        )
+        constraint = list(child.foreign_key_constraints)[0]
+        name = utils.sqla_name_for_scalar_relationship(
+            None, self._mapped(child), self._mapped(md.tables["pfin.account"]),
+            constraint,
+        )
+        assert name == "account"
+
+    @pytest.mark.unit
+    def test_arbitrary_table_name_collides_the_same_way(self):
+        """Generality, stated as a test: nothing here knows the word
+        `tax_character`. Any column named after a table it also FKs to gets the
+        same treatment — which is the point of a guard over an exception list."""
+        md = sqla.MetaData()
+        sqla.Table(
+            "widget", md, sqla.Column("code", sqla.Text, primary_key=True),
+            schema="pfin",
+        )
+        local = sqla.Table(
+            "gizmo",
+            md,
+            sqla.Column("id", sqla.Integer, primary_key=True),
+            sqla.Column("widget", sqla.Text, sqla.ForeignKey("pfin.widget.code")),
+            schema="pfin",
+        )
+        name = utils.sqla_name_for_scalar_relationship(
+            None, self._mapped(local), self._mapped(md.tables["pfin.widget"]),
+            list(local.foreign_key_constraints)[0],
+        )
+        assert name == "widget_ref"
+
+    @pytest.mark.unit
+    def test_two_fks_to_one_target_get_distinct_names(self):
+        """Why the fallback is keyed on the FK's own columns and not a fixed
+        suffix: one table can hold several FKs to one target (pfin.lot_match holds
+        two to pfin.account_trans). A `_ref` constant would collapse them onto one
+        name — trading a loud failure for a silent wrong one."""
+        md = sqla.MetaData()
+        person = sqla.Table(
+            "person", md, sqla.Column("id", sqla.Integer, primary_key=True),
+            schema="pfin",
+        )
+        local = sqla.Table(
+            "task",
+            md,
+            sqla.Column("id", sqla.Integer, primary_key=True),
+            sqla.Column("person", sqla.Text),  # the colliding column
+            sqla.Column("owner", sqla.Integer, sqla.ForeignKey("pfin.person.id")),
+            sqla.Column("manager", sqla.Integer, sqla.ForeignKey("pfin.person.id")),
+            schema="pfin",
+        )
+        names = {
+            utils.sqla_name_for_scalar_relationship(
+                None, self._mapped(local), self._mapped(person), c
+            )
+            for c in local.foreign_key_constraints
+        }
+        assert names == {"owner_ref", "manager_ref"}
+
+    @pytest.mark.unit
+    def test_fallback_name_also_taken_gets_a_numeric_suffix(self):
+        """Fail-closed on the second-order case: the disambiguated name must not
+        itself land on a column."""
+        md = sqla.MetaData()
+        sqla.Table(
+            "widget", md, sqla.Column("code", sqla.Text, primary_key=True),
+            schema="pfin",
+        )
+        local = sqla.Table(
+            "gizmo",
+            md,
+            sqla.Column("id", sqla.Integer, primary_key=True),
+            sqla.Column("widget", sqla.Text, sqla.ForeignKey("pfin.widget.code")),
+            sqla.Column("widget_ref", sqla.Text),  # fallback already occupied
+            schema="pfin",
+        )
+        name = utils.sqla_name_for_scalar_relationship(
+            None, self._mapped(local), self._mapped(md.tables["pfin.widget"]),
+            list(local.foreign_key_constraints)[0],
+        )
+        assert name == "widget_ref2"
+
+    @pytest.mark.unit
+    def test_declarative_reserved_names_are_also_guarded(self):
+        """A relationship named `metadata` would shadow a declarative attribute
+        without being a column, so the column scan alone would miss it."""
+        md = sqla.MetaData()
+        sqla.Table(
+            "metadata", md, sqla.Column("id", sqla.Integer, primary_key=True),
+            schema="pfin",
+        )
+        local = sqla.Table(
+            "doc",
+            md,
+            sqla.Column("id", sqla.Integer, primary_key=True),
+            sqla.Column("meta_id", sqla.Integer, sqla.ForeignKey("pfin.metadata.id")),
+            schema="pfin",
+        )
+        name = utils.sqla_name_for_scalar_relationship(
+            None, self._mapped(local), self._mapped(md.tables["pfin.metadata"]),
+            list(local.foreign_key_constraints)[0],
+        )
+        assert name == "meta_id_ref"
+
+    # -- the collection side ----------------------------------------------
+
+    @pytest.mark.unit
+    def test_collection_default_is_preserved(self):
+        """No collision of this shape exists at migration 062; the hook is wired
+        because `<child>_collection` fails identically if a parent ever carries a
+        column of that name."""
+        md = sqla.MetaData()
+        parent = sqla.Table(
+            "account", md, sqla.Column("id", sqla.Integer, primary_key=True),
+            schema="pfin",
+        )
+        child = sqla.Table(
+            "holding",
+            md,
+            sqla.Column("id", sqla.Integer, primary_key=True),
+            sqla.Column("account_id", sqla.Integer, sqla.ForeignKey("pfin.account.id")),
+            schema="pfin",
+        )
+        name = utils.sqla_name_for_collection_relationship(
+            None, self._mapped(parent), self._mapped(child),
+            list(child.foreign_key_constraints)[0],
+        )
+        assert name == "holding_collection"
+
+    @pytest.mark.unit
+    def test_collection_collision_is_disambiguated(self):
+        md = sqla.MetaData()
+        parent = sqla.Table(
+            "account",
+            md,
+            sqla.Column("id", sqla.Integer, primary_key=True),
+            sqla.Column("holding_collection", sqla.Text),  # the collision
+            schema="pfin",
+        )
+        child = sqla.Table(
+            "holding",
+            md,
+            sqla.Column("id", sqla.Integer, primary_key=True),
+            sqla.Column("account_id", sqla.Integer, sqla.ForeignKey("pfin.account.id")),
+            schema="pfin",
+        )
+        name = utils.sqla_name_for_collection_relationship(
+            None, self._mapped(parent), self._mapped(child),
+            list(child.foreign_key_constraints)[0],
+        )
+        assert name == "holding_account_id_collection"
+        assert name not in parent.columns.keys()
+
+    # -- purity -------------------------------------------------------------
+
+    @pytest.mark.unit
+    def test_hooks_are_pure_and_repeatable(self):
+        """Guards against a future rewrite that disambiguates via a module-level
+        registry: that would make a second prepare() on a fresh base produce
+        DIFFERENT names than the first, which is a worse defect than S13 because
+        it is intermittent."""
+        args = self._s13_args()
+        first = utils.sqla_name_for_scalar_relationship(*args)
+        second = utils.sqla_name_for_scalar_relationship(*self._s13_args())
+        third = utils.sqla_name_for_scalar_relationship(*args)
+        assert first == second == third == "tax_character_ref"

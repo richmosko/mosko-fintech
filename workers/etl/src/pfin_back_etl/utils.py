@@ -15,6 +15,7 @@ import re
 import requests
 import json
 import polars as pl
+import sqlalchemy.ext.automap as sqla_automap
 
 logger = logging.getLogger("pfin_etl")
 
@@ -171,6 +172,115 @@ def sqla_modulename_for_table(tablename, declarativetable, reflecttable):
     else:
         # Default module name if no schema is present
         return "public"
+
+
+# ---------------------------------------------------------------------------
+# Automap relationship-name collision guard (BACKLOG §7.6 S13).
+# ---------------------------------------------------------------------------
+# SQLAlchemy's automap names a generated SCALAR relationship after the REFERRED
+# TABLE. When a table carries both an FK to table T and a column literally named
+# T, the generated relationship and the mapped column claim the same attribute
+# name, and automap RAISES rather than disambiguating:
+#
+#   ArgumentError: when configuring property 'tax_character' on
+#   Mapper[user_taxonomy(user_taxonomy)], column 'tax_character' conflicts with
+#   property '<_RelationshipDeclared ... tax_character>'
+#
+# That fires inside base.prepare(), i.e. during SBaseConn.__init__ — so
+# PFinBackend() cannot be CONSTRUCTED and no ETL method is reachable at all.
+# pfin.user_taxonomy (migration 009) + pfin.tax_character (011) is the instance
+# that was found, ~50 migrations after it was introduced.
+#
+# THE GUARD IS GENERAL ON PURPOSE. A hard-coded exception for tax_character
+# would fix one name and leave the next one to be discovered the same way — by
+# a production entry point failing to start. This is a property of the SCHEMA
+# SHAPE (any FK-to-T alongside a column named T), not of one table.
+#
+# THE COLUMN ALWAYS WINS. `tax_character` is a ratified domain term on a locked
+# migration surface and the defect is in the mapper, not the model, so attribute
+# access for the COLUMN is unchanged: `user_taxonomy.tax_character` is still the
+# text column. It is the RELATIONSHIP that is renamed. Its new name is derived
+# from the FK's own local column names:
+#
+#     pfin.user_taxonomy  ->  .tax_character        the text column (unchanged)
+#                         ->  .tax_character_ref    the FK relationship to
+#                                                   pfin.tax_character
+#
+# WHY THE FK COLUMNS AND NOT A FIXED SUFFIX. The disambiguator has to stay
+# unique when one table holds several FKs to the same target — pfin.lot_match
+# holds two to pfin.account_trans (buy_trans_id / sell_trans_id). Keying the
+# fallback on the constraint's own columns keeps it unique without any
+# cross-call state, so the hooks stay pure functions of their arguments and a
+# second prepare() on a fresh base produces identical names.
+#
+# NON-COLLIDING NAMES ARE LEFT ALONE. The hooks delegate to automap's own
+# defaults and only intervene on an actual collision, so every existing
+# `base.by_module.<schema>.<table>.<rel>` access site is unaffected.
+
+# Declarative attribute names a generated relationship must not take even though
+# they are not columns; the column scan below would not catch them.
+_SQLA_RESERVED_ATTRS = frozenset({"metadata", "registry"})
+
+
+def _sqla_reserved_names(local_cls):
+    """Attribute names already claimed on `local_cls` that a generated
+    relationship must not collide with (its mapped columns, plus the declarative
+    names above)."""
+    return set(local_cls.__table__.columns.keys()) | _SQLA_RESERVED_ATTRS
+
+
+def _sqla_fk_qualifier(constraint):
+    """Constraint-unique disambiguator: the FK's own local column names.
+
+    Unique per constraint, so several FKs from one table to one target resolve
+    to distinct fallback names without any shared state.
+    """
+    return "_".join(col.name for col in constraint.columns)
+
+
+def _sqla_disambiguate(default_name, local_cls, fallback_base):
+    """Return `default_name` unless it is already claimed on `local_cls`, in
+    which case return `fallback_base` (numerically suffixed if that is claimed
+    too). Pure: no state carried between calls."""
+    reserved = _sqla_reserved_names(local_cls)
+    if default_name not in reserved:
+        return default_name
+    candidate = fallback_base
+    n = 2
+    while candidate in reserved:
+        candidate = f"{fallback_base}{n}"
+        n += 1
+    return candidate
+
+
+def sqla_name_for_scalar_relationship(base, local_cls, referred_cls, constraint):
+    """automap hook — see the collision-guard block above.
+
+    The argument signature is fixed by SQLAlchemy. Wired in core.py's
+    SBaseConn._sbase_setup() at base.prepare(). Delegates to automap's own
+    default so upstream naming is tracked, and only renames on a real collision.
+    """
+    default = sqla_automap.name_for_scalar_relationship(
+        base, local_cls, referred_cls, constraint
+    )
+    fallback = f"{_sqla_fk_qualifier(constraint)}_ref"
+    return _sqla_disambiguate(default, local_cls, fallback)
+
+
+def sqla_name_for_collection_relationship(base, local_cls, referred_cls, constraint):
+    """automap hook for the one-to-many side — see the collision-guard block.
+
+    Here `local_cls` is the PARENT (referred) class and `constraint` lives on the
+    CHILD table, so the fallback names the child table as well as its columns.
+    No collision of this shape exists in the schema today (measured at migration
+    062); the hook is wired because the default name is `<child>_collection` and
+    a parent column of that name would fail identically.
+    """
+    default = sqla_automap.name_for_collection_relationship(
+        base, local_cls, referred_cls, constraint
+    )
+    fallback = f"{constraint.table.name}_{_sqla_fk_qualifier(constraint)}_collection"
+    return _sqla_disambiguate(default, local_cls, fallback)
 
 
 def sqla_resolve_referred_schema(table, to_metadata, constraint, referred_schema):

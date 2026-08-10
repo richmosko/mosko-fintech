@@ -310,9 +310,18 @@ class SBaseConn:
             metadata.reflect(bind=engine, schema=sch)
 
         # 4. Prepare the Automap base
+        #    The two name_for_*_relationship hooks are the BACKLOG §7.6 S13
+        #    collision guard: automap names a generated relationship after the
+        #    referred table, which collides with a same-named column and RAISES
+        #    here (pfin.user_taxonomy.tax_character + FK -> pfin.tax_character).
+        #    The guard renames the RELATIONSHIP, never the column — see the
+        #    block comment in utils.py. Non-colliding names are untouched.
         logger.info("Automapping DB tables to sqlalchemy base object...")
         base.prepare(
-            autoload_with=engine, modulename_for_table=utils.sqla_modulename_for_table
+            autoload_with=engine,
+            modulename_for_table=utils.sqla_modulename_for_table,
+            name_for_scalar_relationship=utils.sqla_name_for_scalar_relationship,
+            name_for_collection_relationship=utils.sqla_name_for_collection_relationship,
         )
         return (engine, metadata, base)
 
