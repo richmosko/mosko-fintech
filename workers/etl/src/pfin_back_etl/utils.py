@@ -414,6 +414,34 @@ def fetch_cpi_df(api_key, startyear, endyear, series_id_lst):
 
     returns:
         df_cpi:            polars dataframe of CPI index data
+
+    ⚠ INPUT CONTRACT — READ THIS BEFORE ADDING A CONSUMER.
+
+    1. This returns RAW BLS PERIOD CODES. That includes NON-MONTHLY ones —
+       `M13` (annual average) and `S01`/`S02` (semiannual) — WHENEVER THE
+       REQUEST ASKS FOR THEM (`annualaverage` / `aspects`). The payload built
+       above sets neither, which is why only M01–M12 come back today.
+       MEASURED at the live API for 2015–2026: 138 rows, every one M01–M12.
+    2. NO MONTHLY-GRAIN FILTERING HAPPENS HERE, AND THAT IS DELIBERATE. This
+       function is a faithful transport of what BLS returned; deciding which
+       periods are meaningful belongs to the consumer that knows its own grain.
+    3. THE LIVE CONSUMER'S GUARD IS ELSEWHERE — `PFinBackend._map_cpi_u_index_df`
+       in `core.py` filters to `month` non-null and 1..12 (and re-checks
+       `series_value` non-null and finite). It is documented in that function's
+       own docstring and pinned by a test that deliberately injects an `M13`
+       row. Dropping `M13` there is CORRECT, not a swallow: an annual average
+       is not a monthly observation, and a monthly series should discard it.
+    4. ⚠ A NEW CONSUMER DOES NOT INHERIT THAT GUARD AND MUST APPLY ITS OWN.
+       The protection lives in one consumer and is invisible from here, which
+       is why this note exists. `update_table_cpi` is the only other caller and
+       applies no grain filter — it targets `pfin.cpi`, which no V1 migration
+       creates, so nothing live depends on that today.
+
+    WHEN TO REPLACE THIS NOTE WITH A FENCE: when a SECOND LIVE CONSUMER of this
+    function exists. Zero are pending. Until then, asserting the grain here
+    would break working, tested behaviour to protect a beneficiary that does
+    not exist — which is the over-correction this note replaced, and it was
+    caught only because the fence failed that `M13` test.
     """
     headers = {"Content-type": "application/json"}
     data = json.dumps(
@@ -449,6 +477,20 @@ def fetch_cpi_df(api_key, startyear, endyear, series_id_lst):
                 pl.col("value").cast(pl.Float64, strict=False).alias("value"),
             ]
         )
+        # ⚠ WHY THE SUBSET IS `value` AND ONLY `value` — IT IS THE COMPLEMENT
+        # OF A GUARD IN ANOTHER FUNCTION, not per-column timidity.
+        # `series_value` is the only column that can legitimately be null HERE,
+        # because `_map_cpi_u_index_df` already fences `month` (non-null, 1..12)
+        # for the live consumer. Widening this subset to `month` would silently
+        # duplicate that guard and make the parser grain-aware, which point 2 of
+        # the input contract above deliberately refuses.
+        #
+        # PROVENANCE, stated because it changes how much weight the scope
+        # carries: `drop_nulls(subset=["value"])` entered at the monorepo import
+        # (`20ca752`) and has NEVER been modified — `git log -S` returns exactly
+        # one commit. So the scope was never CHOSEN, in either direction. It is
+        # correct today for the reason above; it was not reasoned to.
+        #
         # ⚠ THIS DROP WAS SILENT, AND SILENCE IS THE DEFECT — not the drop.
         # BLS returns a period it has published NOTHING for with the literal
         # value "-" (measured: 2025-M10, a real non-publication). The
