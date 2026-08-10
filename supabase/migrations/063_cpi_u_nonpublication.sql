@@ -8,8 +8,14 @@
 --   feeding financial figures (inflation-adjusted / real-terms surfaces).
 --
 -- ----------------------------------------------------------------------------
--- WHAT FORCED THIS (ADR-049, read verbatim before drafting). BLS published
---   2025-10 for series CUUR0000SA0 with `value = '-'`. 053 declares
+-- WHAT FORCED THIS (ADR-049, read verbatim before drafting). MEASURED AT RATIFY
+--   and carried here rather than re-derived: over the full 2015-2026 range the
+--   BLS series returned 138 periods, 137 were stored, and exactly ONE was
+--   dropped — 2025 M10, published with `value = '-'`. All returned codes were
+--   M-prefixed, M01-M12 only. The live table at ratify held 137 rows spanning
+--   2015-01 .. 2026-06 with exactly one gap and no non-first-of-month periods —
+--   so 137-of-138 is ONE REAL GAP, not a coincidental total.
+--   053 declares
 --   `cpi_value NOT NULL` plus a finiteness CHECK, so a valueless period CANNOT
 --   be stored — the ETL's drop is FORCED BY THE SCHEMA, not an importer defect.
 --   Absence therefore carried no explanation, and a CPI-U gap propagates into
@@ -55,6 +61,46 @@
 --   below and fails loud. First observation wins; a re-run is a no-op. This is
 --   what makes a monthly re-fetch of the same series bounded rather than
 --   accumulating one duplicate row per run, forever.
+--
+-- ----------------------------------------------------------------------------
+-- ⚠ STANDING REQUIREMENT ON WHATEVER FIRST POPULATES THIS TABLE: IT MUST READ
+--   FROM AN EXPLICITLY MONTHLY-PROJECTED SOURCE.
+--   Sec ruling (b), 2026-08-10. Its home is this header rather than an ADR
+--   amendment because both halves of that ruling live in worker code that is
+--   Backend's, and an ADR whose whole content is two code comments records the
+--   thread rather than the decision.
+--   >> The constraint is on what the writer READS, not on what the parser
+--   REJECTS, and it is satisfied by REUSING the monthly projection the CPI-U
+--   mapper (PFinBackend._map_cpi_u_index_df) already applies — NOT by adding a
+--   new fence. <<
+--
+--   WHY IT IS LOAD-BEARING HERE. BLS period codes are not all calendar months:
+--   M13 is the ANNUAL AVERAGE and S01/S02 are semiannual. The transport function
+--   (utils.fetch_cpi_df) returns raw BLS period codes, and returns the
+--   non-monthly ones WHENEVER THE REQUEST ASKS FOR THEM. The CPI-U request
+--   payload asks for neither `annualaverage` nor `aspects`, which is why only
+--   M01-M12 come back today — but THE REQUEST IS THE GUARANTEE AND THE RESPONSE
+--   IS ONLY AN OBSERVATION, so a writer that trusts the observation has
+--   inherited nothing it can rely on. The transport function deliberately
+--   applies no grain filter, says so in its own input contract, and states
+--   plainly that A NEW CONSUMER DOES NOT INHERIT THE LIVE CONSUMER'S GUARD AND
+--   MUST APPLY ITS OWN. A writer for this table is exactly such a consumer.
+--   The live mapper's projection filters `month` non-null and 1..12 BEFORE
+--   constructing a date; that projection is the thing to reuse.
+--
+--   ⚠ PRECISION THE ONE-LINE FORM LOSES — REUSE THE MONTH PROJECTION, NOT THE
+--   VALUE FILTER. The mapper's filter ALSO requires `series_value` non-null and
+--   finite, and THOSE ARE PRECISELY THE ROWS THIS TABLE EXISTS TO RECORD.
+--   Applying the mapper wholesale would filter the subject away and yield an
+--   EMPTY record that is indistinguishable from a clean run. The reusable half
+--   is the MONTHLY-GRAIN half, and only that half.
+--
+--   ⚠ THE DDL BELOW CANNOT SUBSTITUTE FOR THIS, AND MUST NOT BE READ AS DOING
+--   SO. The first-of-month CHECK fences the DAY component of a date that has
+--   already been constructed; it cannot tell a real calendar month from a
+--   non-monthly BLS code that some writer mapped onto a first-of-month date.
+--   This is a NECESSARY-NOT-SUFFICIENT boundary: the sufficiency lives in the
+--   writer's source projection, not in this schema.
 --
 -- ----------------------------------------------------------------------------
 -- SHAPE — the resemblance a later reader will reach for DOES NOT HOLD, and
@@ -226,6 +272,18 @@ comment on table pfin.cpi_u_nonpublication is
   'Decision 4 derive-by-looking test anything derivable by looking is not stored. '
   'STANDING REQUIREMENT — the ingest MUST append with `on conflict (cpi_period) do '
   'nothing`; `do update` reaches the immutability fence and fails loud. STANDING '
+  'REQUIREMENT — whatever populates this table MUST read from an EXPLICITLY '
+  'MONTHLY-PROJECTED source: the period must be filtered to a real calendar month '
+  '(month non-null and 1..12) BEFORE a date is constructed from it, reusing the '
+  'projection the CPI-U mapper already applies rather than adding a new fence. BLS '
+  'period codes are not all calendar months (M13 is the annual average, S01/S02 are '
+  'semiannual) and the transport function returns raw codes with no grain filter by '
+  'design, so a new consumer inherits no guard. ⚠ Reuse the MONTH projection only, '
+  'NOT that mapper''s value filter — it also drops non-null/finite series values, '
+  'which are exactly the rows this table exists to record, so applying it wholesale '
+  'yields an empty record indistinguishable from a clean run. The first-of-month '
+  'CHECK on this table fences the DAY of an already-constructed date and CANNOT '
+  'substitute for that projection — necessary, not sufficient. STANDING '
   'REQUIREMENT — if 053''s key ever widens to admit a second series, this table''s '
   'key and pfin.fn_cpi_u_index_for_period''s join MUST widen with it. Consumption '
   'policy lives in ONE helper (ADR-049 Decision 4): pfin.fn_cpi_u_index_for_period. '
