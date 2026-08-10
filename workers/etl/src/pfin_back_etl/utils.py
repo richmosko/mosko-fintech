@@ -399,7 +399,42 @@ def fetch_cpi_df(api_key, startyear, endyear, series_id_lst):
                 pl.col("value").cast(pl.Float64, strict=False).alias("value"),
             ]
         )
+        # ⚠ THIS DROP WAS SILENT, AND SILENCE IS THE DEFECT — not the drop.
+        # BLS returns a period it has published NOTHING for with the literal
+        # value "-" (measured: 2025-M10, a real non-publication). The
+        # `strict=False` cast above turns that into null and this line removes
+        # the row. Storing it is IMPOSSIBLE anyway — `053` has NOT NULL plus a
+        # finiteness CHECK on `cpi_u_index.cpi_value` — so dropping is FORCED
+        # BY THE SCHEMA and is correct.
+        #
+        # What was wrong is that nothing, at any layer, distinguished "BLS
+        # published no value" from "we lost a row". The gap then reaches
+        # `pfin.cpi_u_index`, whose PK is `cpi_period DATE` with NOTHING
+        # asserting contiguity — so a missing month is undetectable by
+        # construction, and it propagates into inflation-adjusted figures.
+        #
+        # ⚠ THE RECONCILIATION IS THE LOAD-BEARING HALF, NOT THE PER-ROW LINE.
+        # A per-row warning still says nothing about a SYSTEMATIC drop — a
+        # future change that removes rows for a different reason would be
+        # equally silent. Counting in and out catches the class; naming the
+        # period and its raw value explains the instance.
+        n_before = len(df)
+        dropped = df.filter(pl.col("value").is_null())
         df = df.drop_nulls(subset=["value"])
+        n_dropped = n_before - len(df)
+        if n_dropped:
+            for row in dropped.iter_rows(named=True):
+                logger.warning(
+                    f"BLS {series['seriesID']}: dropping period "
+                    f"{row.get('year')}-{row.get('month'):02d} — "
+                    f"no numeric value published (raw value was not castable "
+                    f"to a number). The series has a REAL GAP here; it is not "
+                    f"a fetch failure."
+                )
+        logger.info(
+            f"BLS {series['seriesID']}: {n_before} period(s) returned, "
+            f"{len(df)} kept, {n_dropped} dropped for a missing value."
+        )
         df = df.rename({"value": "series_value"})
         df = df.drop("footnotes")
         df = df.with_columns(pl.format("{}-{}-14", "year", "month").alias("ref_date"))
