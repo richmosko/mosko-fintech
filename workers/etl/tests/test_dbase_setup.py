@@ -63,28 +63,40 @@ def test_table_reflection(backend):
 # the end-to-end confirmation, run against a stack by hand or in a future
 # integration lane.
 #
-# WHY NOT THE `backend` FIXTURE. conftest's session-scoped `backend` wraps
-# PFinBackend() in `except Exception: pytest.skip(...)`. That converts a
-# production-fatal construction failure into a GREEN SKIP — which is part of why
-# S13 survived ~50 migrations. These construct directly and skip ONLY on the two
-# environmental causes (absent credentials, unreachable DB), so a mapper defect
-# reaches the report as a FAILURE.
+# WHY NOT THE `backend` FIXTURE (HISTORICAL — and the reason this comment is
+# now a lesson rather than a rationale). conftest's `backend` used to wrap
+# construction in `except Exception: pytest.skip(...)`, converting a
+# production-fatal failure into a GREEN SKIP, which is part of why S13 survived
+# ~50 migrations. So this file grew its OWN narrower helper to avoid it.
+#
+# ⚠ THAT HELPER THEN REPRODUCED A NARROWER VERSION OF THE SAME DEFECT, and it
+# is the fourth instance today of a shape worth naming: it skipped on
+# ValueError — the case the fixture policy deliberately makes FAIL, because
+# `load_env_variables` raising on an absent API key IS the S12 defect and must
+# be visible. `main` therefore carried TWO skip policies that DISAGREED about
+# whether a missing credential is a defect, with the governed one covering the
+# fixtures and the UNGOVERNED one covering S13's acceptance test — the green
+# that matters most.
+#
+# Each file read correctly alone. The defect lived in the seam. Written in
+# REACTION to the over-broad `except`, it inherited a milder form of it.
+#
+# The reconciliation is not "copy the narrower list here": it is ONE policy
+# with TWO call sites. Two copies of one policy drift, which is how this
+# happened. See tests/fixture_policy.py.
+from fixture_policy import construct_or_skip  # noqa: E402
 
 
 def _construct_backend_or_skip():
-    """Construct PFinBackend(), skipping only on environment, never on defect."""
+    """Construct PFinBackend() under the single shared failure policy.
+
+    Skips ONLY when no database is reachable. Everything else — automap
+    ArgumentError (S13), permission denied (S17), an absent credential (S12) —
+    propagates and FAILS, which is the whole point of the tests below.
+    """
     import pfin_back_etl as pfbe
 
-    try:
-        return pfbe.PFinBackend()
-    except ValueError as e:
-        # utils.load_env_variables raises on absent FMP_API_KEY / BLS_API_KEY
-        # (see BACKLOG §7.6 S12) — an environment fact, not a defect here.
-        pytest.skip(f"ETL env not configured: {e}")
-    except sqla.exc.OperationalError as e:
-        pytest.skip(f"No database reachable: {e}")
-    # Everything else — notably sqlalchemy.exc.ArgumentError from automap —
-    # propagates and FAILS. That is the whole point of this test.
+    return construct_or_skip("PFinBackend", pfbe.PFinBackend)
 
 
 @pytest.mark.integration
