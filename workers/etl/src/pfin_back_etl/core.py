@@ -75,6 +75,28 @@ _WRITE_ROLE = "service_role"
 _ROLE_ALLOWLIST = frozenset({_READ_ROLE, _WRITE_ROLE})
 
 
+def staging_seed_sql(staging_name, target_schema, target_name):
+    """The staging-table seed statement — S17 requirement (a′).
+
+    ⚠ MODULE-LEVEL AND EXPORTED SO THE REGRESSION TESTS EXERCISE THE REAL
+    STATEMENT. Kept inline, the tests could only re-type the SQL and assert on
+    their own copy — pinning the PATTERN while a refactor of this function went
+    unobserved. A detector that cannot see the code it guards is the failure
+    this whole entry exists to stop; do not inline it again.
+
+    `WHERE false` seeds the target's column SHAPE and none of its rows. Three
+    defects turn on that clause — an unbounded cross-tenant read inside the
+    write path, a full copy discarded immediately, and (measured) an ambiguous
+    `UPDATE … FROM` join that silently kept the OLD values while self-updating
+    every untouched row. See update_table_df's docstring.
+    """
+    return (
+        f"CREATE TEMP TABLE {staging_name} AS\n"
+        f"SELECT * FROM {target_schema}.{target_name}\n"
+        f"WHERE false;"
+    )
+
+
 class PFinFMP(fmpstab.FMPStab):
     """
     Personal Finance Fiancial Modeling Prep Connection
@@ -517,10 +539,7 @@ class SBaseConn:
         #
         # Seeding empty removes all three: the join becomes unambiguous, no
         # untouched row is written, and no other tenant's row is ever read.
-        stmt = sqla.text(f"""CREATE TEMP TABLE {st_name} AS
-                             SELECT * FROM {tg_sch_name}.{tg_name}
-                             WHERE false;""")
-        session.execute(stmt)
+        session.execute(sqla.text(staging_seed_sql(st_name, tg_sch_name, tg_name)))
 
         stmt = sqla.insert(tab_stag)
         session.execute(stmt, ldict_update)
