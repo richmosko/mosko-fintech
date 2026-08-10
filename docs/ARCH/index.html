@@ -146,7 +146,7 @@ flowchart LR
       </tr>
       <tr>
         <td><strong>BLS + FMP</strong> (external)</td>
-        <td>Reference data — CPI-U (BLS, free/open); security prices (FMP, subscription)</td>
+        <td>Reference data — CPI-U (BLS, free tier but <strong>registration-keyed</strong> per <a href="#sec-7">§7</a> / <a href="../../DECISIONS.md#adr-048">ADR-048</a>); security prices (FMP, subscription)</td>
         <td><code>backend-engineer</code></td>
         <td>public / subscription data APIs</td>
         <td>API keys (Coolify env vars)</td>
@@ -604,9 +604,9 @@ flowchart TB
       <tr>
         <td><strong>BLS CPI-U</strong></td>
         <td>Outbound (from <code>pfin_back_etl</code> only)</td>
-        <td>None (public API; no credential)</td>
-        <td>BLS-side fair-use rate limit (low-throughput; CPI-U ingest is monthly cadence per <a href="../../DECISIONS.md#adr-011">Decision 12</a> / Lock 8); retry on transport 5xx with exponential backoff</td>
-        <td>Transport-class failures only (no auth-error class — public API); CPI-U is read-only public reference data, no credential-error semantics. Stale-CPI surface bounded by monthly cadence + non-silent-staleness at the §2.1.3 deflator consumer if CPI is older than expected</td>
+        <td><strong>API key</strong> — <code>registrationkey</code> in the POST body to BLS API <strong>v2</strong> (<code>BLS_API_KEY</code> per <a href="../../DECISIONS.md#adr-002">ADR-002</a> §6.0; <code>pfin_back_etl</code> container env-var per <a href="#sec-5">§5 Credentials surface</a>). A <strong>rate-limit key, not an access gate</strong> — the CPI-U data is public and BLS also publishes a keyless v1 endpoint; V1 is keyed <em>by decision</em> per <a href="../../DECISIONS.md#adr-048">ADR-048</a>. Registration is free and self-service. Low-sensitivity per the <a href="#sec-5">§5</a> Sec disposition</td>
+        <td>BLS <strong>v2 registered</strong> limits: <strong>500 queries/day</strong>, 50 series/query, 20 years/query. V1 consumption sits far below — nightly CPI-U refresh is <strong>1 request</strong> over a 2-year window; the one-shot 2015→present backfill is <strong>12 single-year requests</strong>. Monthly print cadence per <a href="../../DECISIONS.md#adr-011">Decision 12</a> / Lock 8; retry on transport 5xx with exponential backoff</td>
+        <td><strong>Two classes.</strong> <strong>(i) Auth / quota</strong> — an absent, invalid, or quota-exhausted key yields a non-<code>REQUEST_SUCCEEDED</code> status and the ingest raises; the backfill commits per year, so completed years persist and a re-run resumes. <strong>(ii) Transport</strong> — 5xx / connection failures, retried with backoff. CPI-U is read-only public reference data, so there are no <em>tenant</em>-credential-error semantics — but there IS a credential and therefore an auth-error class, which this row previously denied. Stale-CPI surface bounded by monthly cadence + non-silent-staleness at the §2.1.3 deflator consumer if CPI is older than expected</td>
         <td>Errors surface to Coolify→Discord via <code>pfin_back_etl</code> container event (<a href="#sec-4">§4 Observability row</a>); no application-level audit-log row (BLS is read-only public-data per <a href="../../DECISIONS.md#adr-011">Decision 12</a> advisory mod #2 — no new SECURITY surface)</td>
       </tr>
       <tr>
