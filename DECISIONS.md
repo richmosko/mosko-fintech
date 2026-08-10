@@ -41,6 +41,29 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-047 — "One production-shaped checkpoint" means written by the real worker path, not written in production (terse pattern)
+
+**Date:** 2026-08-09 · **Status:** **Accepted** — F/CTO ratified 2026-08-09.
+**Phase:** 6 Build Loop · **Surface:** the V1.1 close-gate's checkpoint condition (§2.1.2 chain; `pfin.nav_daily`).
+
+**Decision.** The V1.1 requirement that *"one production-shaped checkpoint must exist"* is satisfied by a row written **through the real W-1 worker path** — real impersonation, the real `fn_nav_daily_assert_computed_for` (B7) write-tenant fence, and a real `service_role` append — **regardless of which host it runs on.** It does **not** require a row written on production infrastructure.
+
+**Why this needed deciding.** Read literally, the gate names a chain beginning `cron → …`, and the cron is a **Phase-7 Coolify container on a VPS that is not provisioned**. Under that reading **V1.1 could not close until Phase 7**, and the milestone would have been blocked on infrastructure rather than on software. That is a materially different project shape and it should not have been arrived at by accident of wording.
+
+**What the gate is actually protecting against, which is what settles it.** The hazard, in the gate's own prior wording (retracted at this ratify for a different error, but accurate on this point): the RT-31 battery **inserts its own rows**, so it stays green forever against an empty table — *"green here does not observe the property."* The defect being fenced is **a test that manufactures its own subject.** A row written by the real worker is not that, on any host. The property the gate wants is **provenance, not location**.
+
+**⚠ What this does NOT relax.** The checkpoint must come through the **real** path. A row hand-inserted with `psql`, or written by a test fixture, or by any code that is not the W-1 worker, does **not** satisfy this — it would reproduce the exact defect the gate exists to catch, one layer out. The impersonation, the B7 fence, and the `service_role` append are the load-bearing parts; the host is not.
+
+**Consequence for Phase 6, and it is not new work.** The checkpoint is obtainable now: provision `pfin_etl` locally by the [deployment-runbook](docs/deployment-runbook.md) §6.1 two-step (`\password` then `ALTER ROLE … LOGIN`), run the worker against the local stack, and revoke afterwards with `ALTER ROLE pfin_etl NOLOGIN` — which stops the ETL and nothing else.
+
+**⚠ This execution is ALREADY FILED as [`BACKLOG.md`](BACKLOG.md) §7.6 **S10**, with Sec's ratified AC verbatim** — *"Before the ETL container is scheduled in Phase 7: execute `compute_and_checkpoint_user` **once, through the Python worker**, **authenticating** as `pfin_etl`, against a real database, and verify a same-day re-run returns `row_count = 0`."* **Do it to that spec, not to an improvised one.** S10 also bounds what must not be re-litigated (the SQL *composition* is already proven against a live database in a rolled-back transaction) and names precisely what is unproven: **(i) authentication** as `pfin_etl` — the prior verification *assumed* the role via `SET ROLE`, while production **logs in**, which needs a password and a commit; and **(ii) the Python layer** — `impersonate()`, `_check_tenant_statement` and SQLAlchemy's binding all sit **above** what was executed. **Backend's suite cannot reach it either: SQLite does not model Postgres grants.**
+
+**Why running it early is worth more than it looks.** S10's own source records that the **B9 defect** — a targeted `ON CONFLICT` failing `42501` on every run under an INSERT-only grant — *"existed because nobody had run the assembled statement,"* and was invisible to every static review including Sec's. The first real run finding a defect is worth strictly more before a deploy than during one. **S10 remains a Phase-7 deploy gate regardless of this ADR**; satisfying it early discharges the V1.1 checkpoint condition as a side effect, not the reverse.
+
+**Not a licence to skip the deploy verification.** Runbook §6.1's deploy-time steps and the TZ-1 / TZ-1b gates are unchanged and still owed at Phase 7. This ADR settles what **closes V1.1**, not what constitutes a verified deployment.
+
+**Cross-references.** [ADR-040](#adr-040) (`nav_daily` append-only + forward-only; why history comes from frozen checkpoints) · [ADR-041](#adr-041) (`pfin_etl` login identity) · [ADR-023](#adr-023) (login-as-broker / write-as-`service_role`) · migrations `054` (the table + B7 fence) `055` (the inert role) `062` (`fn_nav_series`) · `docs/deployment-runbook.md` §6.1 · `supabase/tests/rls/054_nav_daily_rls.sql` (RT-31) · SELF-228 (the §2.1.7 battery that is the actual V1.1 close-gate) · SELF-220 (the chart the chain terminates in).
+
 ## ADR-046 — Privileged write-path tenant fencing: where (c′) applies, where it cannot, and the residual accepted at the checkpoint tables (terse pattern)
 
 **Date:** 2026-08-09 · **Status:** **Accepted** — F/CTO ratified 2026-08-09.
