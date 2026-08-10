@@ -131,15 +131,44 @@
 --   ⚠ WHY A CLASS AND NOT JUST A NULL VALUE, since the alternative disposition
 --   was available and was declined: `before_coverage` is derivable-ish from
 --   `cpi_value IS NULL`, which is normally an argument for dropping it. It is
---   kept because gap_class is a CLOSED, CONSUMER-VISIBLE set being locked at
---   ZERO consumers — adding a member after the first consumer ships is a
---   contract change, and the cost of carrying it now is one branch. Symmetry is
---   the second reason: an edge rule that fences one end and not the other is
---   the thing a future reader trips on.
+--   kept because gap_class is CONSUMER-VISIBLE and the cheapest moment to add a
+--   member is BEFORE any consumer exists — the cost of carrying it now is one
+--   branch, and after the first consumer ships it is a contract change.
+--   ⚠ Consistent with C4's provisionality, not in tension with it: that
+--   provisionality is scoped to what the PRODUCT RULING may reshape about what
+--   the user is told apart. It does not reach the question of whether a
+--   never-due period belongs in the alarm class, which no ruling would want.
+--   Symmetry is the second reason: an edge rule that fences one end and not the
+--   other is the thing a future reader trips on.
 --
 -- ----------------------------------------------------------------------------
--- gap_class — the CLOSED set, and what each member means. TEXT, not an enum
+-- gap_class — the member set, and what each member means. TEXT, not an enum
 --   (the 062 `p_granularity text` precedent, F/CTO-ratified 2026-08-07).
+--
+--   ⚠⚠ THIS SET IS PROVISIONAL, NOT SETTLED — Sec joint-review C4. ADR-049
+--   Decision 4's sentence must be read WHOLE, because its first half alone reads
+--   as a blank cheque and its second half is the part that binds:
+--     "The exact signature is the implementing PR's call PENDING THE PRODUCT
+--      RULING; the composite return and the non-silence it enforces are not."
+--   That draws a line THROUGH this function, not around it. LOCKED and NOT the
+--   implementing PR's call: the composite/row return and the non-silence it
+--   enforces. MUTABLE and pending: THE SIGNATURE — which is what the member set
+--   below is part of. The ruling it is pending on is the ADR-049 Decision 5
+--   product question (the PRD §2.4.4 non-silent-staleness amendment plus the
+--   two-tier marker), which is PM's and is NOT YET RATIFIED with F/CTO.
+--   >> So the first consumer MUST NOT inherit this set as frozen. If the product
+--   ruling reshapes what the user is told apart, the member set may move with
+--   it, and that is sanctioned rather than a breach. <<
+--   Cleared now rather than after merge for the same reason as C3: this set is
+--   also stated in a `comment on function`, which HAS a database representation
+--   — an edit today, a comment-only migration once merged.
+--
+--   ⚠ WHAT IS **NOT** PROVISIONAL, so the caveat is not read as license: the
+--   C1 correction below (both coverage edges bounded) is INDEPENDENT of the
+--   product ruling and is NOT deferred into it. No ruling PM could plausibly
+--   make would want a pre-coverage period labelled "the period was due and
+--   nothing explains it". C1 fixes the CLASSIFICATION; C4 marks the SET OPEN.
+--   Provisionality is not a reason to leave a misclassification standing.
 --     'published'                — cpi_u_index holds this period's own print.
 --                                  is_carried = false.
 --     'recorded_nonpublication'  — absent from cpi_u_index AND recorded in
@@ -450,7 +479,15 @@ comment on function pfin.fn_cpi_u_index_for_period(date) is
   'forward silently understates inflation, and the row return is the '
   'by-construction mechanism forcing a consumer to project carried-ness away '
   'deliberately and visibly rather than merely forget it. '
-  'gap_class is a closed TEXT set: ''published'' (own print) / '
+  '⚠ THE gap_class MEMBER SET IS PROVISIONAL pending the ADR-049 Decision 5 '
+  'product ruling (the PRD 2.4.4 non-silent-staleness amendment plus the two-tier '
+  'marker, PM-owned and not yet F/CTO-ratified). ADR-049 Decision 4 locks the '
+  'composite return and the non-silence it enforces, and explicitly leaves THE '
+  'SIGNATURE to the implementing PR "pending the product ruling" — the member set '
+  'is part of that signature. Do NOT inherit it as frozen; it may move when that '
+  'ruling lands. What is NOT provisional: both coverage edges are bounded, which '
+  'is independent of any product ruling. '
+  'gap_class is a TEXT set: ''published'' (own print) / '
   '''recorded_nonpublication'' (source published the period with no usable value; '
   'ADR-049 Decision 2 state (a), the only positively-recorded absence) / '
   '''unrecorded_gap'' (absent and STRICTLY INTERIOR to the coverage window, so it '

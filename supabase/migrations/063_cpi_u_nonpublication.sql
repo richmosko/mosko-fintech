@@ -63,44 +63,94 @@
 --   accumulating one duplicate row per run, forever.
 --
 -- ----------------------------------------------------------------------------
--- ⚠ STANDING REQUIREMENT ON WHATEVER FIRST POPULATES THIS TABLE: IT MUST READ
---   FROM AN EXPLICITLY MONTHLY-PROJECTED SOURCE.
---   Sec ruling (b), 2026-08-10. Its home is this header rather than an ADR
---   amendment because both halves of that ruling live in worker code that is
---   Backend's, and an ADR whose whole content is two code comments records the
---   thread rather than the decision.
---   >> The constraint is on what the writer READS, not on what the parser
---   REJECTS, and it is satisfied by REUSING the monthly projection the CPI-U
---   mapper (PFinBackend._map_cpi_u_index_df) already applies — NOT by adding a
---   new fence. <<
+-- ⚠⚠ STANDING REQUIREMENT ON WHATEVER FIRST POPULATES THIS TABLE.
+--   Sec ruling (b), 2026-08-10.
+--   ⚠ THIS BLOCK IS THE SOLE DURABLE RECORD OF THAT RULING IN CANON. PR #386,
+--   which would have carried it as an ADR amendment, was deliberately CLOSED
+--   UNMERGED — a decision whose whole content is two code comments records the
+--   thread rather than the decision. There is no other copy. Edit accordingly.
 --
---   WHY IT IS LOAD-BEARING HERE. BLS period codes are not all calendar months:
---   M13 is the ANNUAL AVERAGE and S01/S02 are semiannual. The transport function
---   (utils.fetch_cpi_df) returns raw BLS period codes, and returns the
---   non-monthly ones WHENEVER THE REQUEST ASKS FOR THEM. The CPI-U request
---   payload asks for neither `annualaverage` nor `aspects`, which is why only
---   M01-M12 come back today — but THE REQUEST IS THE GUARANTEE AND THE RESPONSE
---   IS ONLY AN OBSERVATION, so a writer that trusts the observation has
---   inherited nothing it can rely on. The transport function deliberately
---   applies no grain filter, says so in its own input contract, and states
---   plainly that A NEW CONSUMER DOES NOT INHERIT THE LIVE CONSUMER'S GUARD AND
---   MUST APPLY ITS OWN. A writer for this table is exactly such a consumer.
---   The live mapper's projection filters `month` non-null and 1..12 BEFORE
---   constructing a date; that projection is the thing to reuse.
+--   THE REQUIREMENT. A period may be recorded here only if it came from an
+--   EXPLICITLY MONTHLY-PROJECTED source: filtered to a real calendar month
+--   (`month` non-null and 1..12) BEFORE any date is constructed from it,
+--   REUSING the projection the CPI-U mapper (PFinBackend._map_cpi_u_index_df)
+--   already applies rather than adding a new fence. It constrains what the
+--   writer READS, not what any parser REJECTS.
+--   Why the grain matters: BLS period codes are not all calendar months (M13 is
+--   the annual average, S01/S02 are semiannual), and the transport returns raw
+--   codes with no grain filter BY DESIGN, saying so in its own input contract
+--   and stating that A NEW CONSUMER DOES NOT INHERIT THE LIVE CONSUMER'S GUARD
+--   AND MUST APPLY ITS OWN. The CPI-U request payload asks for neither
+--   `annualaverage` nor `aspects`, which is why only M01-M12 come back today —
+--   but THE REQUEST IS THE GUARANTEE AND THE RESPONSE IS ONLY AN OBSERVATION.
 --
---   ⚠ PRECISION THE ONE-LINE FORM LOSES — REUSE THE MONTH PROJECTION, NOT THE
---   VALUE FILTER. The mapper's filter ALSO requires `series_value` non-null and
---   finite, and THOSE ARE PRECISELY THE ROWS THIS TABLE EXISTS TO RECORD.
---   Applying the mapper wholesale would filter the subject away and yield an
---   EMPTY record that is indistinguishable from a clean run. The reusable half
---   is the MONTHLY-GRAIN half, and only that half.
+--   ⚠ TWO OBSTACLES STAND IN THE WAY, IN THIS ORDER — and an earlier draft of
+--   this block named only the second. That made the requirement CORRECT BUT
+--   UNEXECUTABLE, which is worse than an omission and is the SAME FAILURE MODE
+--   THIS TABLE EXISTS TO PREVENT: a writer that does exactly what it was told,
+--   gets an EMPTY record, and has therefore DISCHARGED THE STATED OBLIGATION HAS
+--   NO REASON TO LOOK FURTHER. An omission invites a question; a false sense of
+--   completion answers it in advance. Corrected at Sec joint-review (C3).
 --
---   ⚠ THE DDL BELOW CANNOT SUBSTITUTE FOR THIS, AND MUST NOT BE READ AS DOING
---   SO. The first-of-month CHECK fences the DAY component of a date that has
---   already been constructed; it cannot tell a real calendar month from a
---   non-monthly BLS code that some writer mapped onto a first-of-month date.
---   This is a NECESSARY-NOT-SUFFICIENT boundary: the sufficiency lives in the
---   writer's source projection, not in this schema.
+--     OBSTACLE 1 — THE TRANSPORT DROPS THESE ROWS BEFORE ANY CONSUMER SEES THEM.
+--       `utils.fetch_cpi_df` removes value-null rows from its OWN RETURN VALUE:
+--       it logs each one and discards it, then returns only the kept rows. The
+--       2025-10 row NEVER LEAVES that function. So a writer following this
+--       block to the letter — reuse the month projection, skip the value filter
+--       — HAS NOTHING TO APPLY THE PROJECTION TO, and still records nothing.
+--       >> THIS OBSTACLE IS FIRST, AND SOLVING IT IS NOT OPTIONAL. <<
+--     OBSTACLE 2 — THE MAPPER'S FILTER WOULD DROP THEM AGAIN. That projection's
+--       five conjuncts include `series_value` non-null AND finite, and THOSE TWO
+--       ARE PRECISELY THE ROWS THIS TABLE EXISTS TO RECORD. Reuse the MONTH
+--       conjuncts only. Applying the mapper wholesale filters the subject away
+--       and yields an empty record indistinguishable from a clean run.
+--
+--   ⚠ THE ENFORCEABLE HALF — A COUNT RECONCILIATION, NOT A REMEMBERED RULE.
+--   The transport's own note already states the principle: "THE RECONCILIATION
+--   IS THE LOAD-BEARING HALF, NOT THE PER-ROW LINE" — a per-row warning says
+--   nothing about a SYSTEMATIC drop, whereas counting in and out catches the
+--   class. It already computes the counts it needs (periods returned, kept,
+--   dropped). So the writer's run MUST ASSERT:
+--       periods returned by transport
+--         = rows upserted to pfin.cpi_u_index + rows recorded in this table
+--   and FAIL LOUD on any imbalance. That single assertion catches BOTH obstacles
+--   above without either having to be individually remembered, and it catches a
+--   future drop introduced for some third reason nobody has thought of. It
+--   converts a rule someone must REMEMBER into an assertion that CANNOT PASS
+--   QUIETLY — which is the only form that survives this file being skimmed.
+--
+--   ⚠ ROUTED, OWNED, AND OUT OF SCOPE FOR THIS MIGRATION — stated as an item,
+--   not left as an implication: making value-null periods reachable by a
+--   consumer that wants them (lifting the transport-level drop, or making it
+--   opt-out) is BACKEND'S, in `workers/etl/src/pfin_back_etl/utils.py`. Until
+--   that lands, THIS TABLE CANNOT BE POPULATED BY ANY WRITER, however correct.
+--
+--   ⚠ AND THE SECOND-CONSUMER TRIGGER — Sec's reasoning, recorded because it is
+--   SHARPER THAN THE ONE IT REPLACES. The transport's note says to replace it
+--   with a fence "when a SECOND LIVE CONSUMER of this function exists", and a
+--   writer for this table would be that consumer. It is tempting to dismiss the
+--   trigger by citing the note's own points 2 and 4 (the transport is
+--   deliberately grain-agnostic; a new consumer must bring its own guard) — but
+--   THOSE POINTS WERE ALREADY TRUE WHEN THE TRIGGER WAS WRITTEN, by the same
+--   author, who knew them and wrote the trigger anyway. A reading that disposes
+--   of a trigger using facts that PREDATE it makes the trigger dead on arrival,
+--   and must not be adopted.
+--   What the trigger actually misses is that it conflates TWO DIMENSIONS which
+--   the second consumer SPLITS APART. The two consumers AGREE on grain (both
+--   want month 1..12) and are EXACTLY OPPOSED on value (053's writer wants only
+--   valued rows; this table's writer wants only the valueless ones). Hence:
+--       · GRAIN fence — PERMITTED. Both consumers want it. Optional, not
+--         required; nothing breaks either way.
+--       · VALUE fence — FORBIDDEN. It would destroy this table's subject.
+--       · The EXISTING value DROP — MUST BE LIFTED OR MADE OPT-OUT. This is the
+--         mandatory work, and note that it runs OPPOSITE to "add a fence": the
+--         second consumer's arrival calls for REMOVING a filter, not adding one.
+--
+--   ⚠ THE DDL BELOW CANNOT SUBSTITUTE FOR ANY OF THIS. The first-of-month CHECK
+--   fences the DAY component of an already-constructed date; it cannot tell a
+--   real calendar month from a non-monthly code some writer mapped onto a
+--   first-of-month date, and it cannot conjure a row the transport discarded.
+--   Necessary, not sufficient: the sufficiency lives in the writer.
 --
 -- ----------------------------------------------------------------------------
 -- SHAPE — the resemblance a later reader will reach for DOES NOT HOLD, and
@@ -322,12 +372,24 @@ comment on table pfin.cpi_u_nonpublication is
   'projection the CPI-U mapper already applies rather than adding a new fence. BLS '
   'period codes are not all calendar months (M13 is the annual average, S01/S02 are '
   'semiannual) and the transport function returns raw codes with no grain filter by '
-  'design, so a new consumer inherits no guard. ⚠ Reuse the MONTH projection only, '
-  'NOT that mapper''s value filter — it also drops non-null/finite series values, '
-  'which are exactly the rows this table exists to record, so applying it wholesale '
-  'yields an empty record indistinguishable from a clean run. The first-of-month '
-  'CHECK on this table fences the DAY of an already-constructed date and CANNOT '
-  'substitute for that projection — necessary, not sufficient. STANDING '
+  'design, so a new consumer inherits no guard. ⚠ TWO OBSTACLES, IN THIS ORDER. '
+  'FIRST, the transport (utils.fetch_cpi_df) removes value-null rows from its OWN '
+  'RETURN VALUE — it logs and discards them — so those periods never reach any '
+  'consumer at all and a writer following only the projection rule has NOTHING to '
+  'project and still records nothing. Lifting or making that drop opt-out is '
+  'Backend-owned work, and until it lands this table cannot be populated by any '
+  'writer, however correct. SECOND, the mapper''s filter also requires series_value '
+  'non-null and finite — exactly the rows this table exists to record — so reuse '
+  'its MONTH conjuncts only; applying it wholesale yields an empty record '
+  'indistinguishable from a clean run. ⚠ THE ENFORCEABLE FORM IS A COUNT '
+  'RECONCILIATION, not a remembered rule: the writer''s run MUST assert that '
+  'periods returned by transport = rows upserted to pfin.cpi_u_index + rows '
+  'recorded here, and FAIL LOUD on imbalance. That catches both obstacles without '
+  'either being individually remembered, and catches a future drop added for some '
+  'third reason. The first-of-month '
+  'CHECK on this table fences the DAY of an already-constructed date, cannot '
+  'conjure a row the transport discarded, and CANNOT '
+  'substitute for any of this — necessary, not sufficient. STANDING '
   'REQUIREMENT — if 053''s key ever widens to admit a second series, this table''s '
   'key and pfin.fn_cpi_u_index_for_period''s join MUST widen with it. Consumption '
   'policy lives in ONE helper (ADR-049 Decision 4): pfin.fn_cpi_u_index_for_period. '
