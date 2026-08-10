@@ -1,8 +1,8 @@
 # WORKFLOW.md
 
 **Project:** mosko-fintech
-**Current version:** v1.43
-**Last updated:** 2026-05-31
+**Current version:** v1.44
+**Last updated:** 2026-08-10
 **Current phase:** **Phase 5 (Workshop Setup) — entered 2026-06-04 per [ADR-018](DECISIONS.md#adr-018) Phase 4 close + Phase 5 entry approval.** Phase 4 (Project Scoping) closed ✅ 2026-06-04 — all 6 exit criteria + mosko-specific §10 SD+RT extension PASS; **107 V1 issues decomposed across 6 Waves** (89 Linear SELF-181 → SELF-269 covering V1.0–V1.4 + 18 BACKLOG.md §7 entries covering V1.5 + V1.final); cumulative PRD §2 trace **32/32 stories**; Settings ramp 4/4 closed; Lock 14 family 5/5 closed; both V1 catalogued §10 instances (RT-22 + RT-26) ship V1; §10 attribution streak 25+ (PM grain) / 31+ (Architect grain) consecutive CLEAN surfaces. **F/CTO ratified at Phase 4 Step 9 close:** Phase 4.5 (Agentic Flow Ramp) SKIPPED per Phase 4 execution materially exercising the agentic loop; SELF-186 (B1 Apply migration `001_users_id_rename.sql`) is the V1.0 first-implementation-issue Phase 5 close-gate exercise. **Meta-process M1 (Plan / ARCH + SECURITY docs locked) ✅ COMPLETE.** Phase 5 CoS-led with DevOps + Architect + Sec + PM consult; 9-step detailed scaffold below; consumes locked PRD + ARCH + DESIGN + Linear inventory + BACKLOG.md §7. First Phase 5 work: pre-entry gates verification + `TeamCreate phase-5-workshop-setup`. See [MILESTONES.md](MILESTONES.md) for live current-phase state. Phase-1-through-Phase-4 historical narrative at [CHANGELOG.md](CHANGELOG.md) v1.18 → v1.46 (Phase 1 Step 4 drilling at v1.32; Phase 2+3 joint close at v1.44; Phase 4 Step 5 Waves 1–5 + ADR-017 at v1.45; Phase 4 Step 5 Wave 6 + Gate E + Step 9 close + ADR-018 at v1.46).
 
 ---
@@ -85,6 +85,79 @@ mosko-fintech operates as a one-human-many-agents team. The human (the owner) ho
 **Task tracking via Linear:** Project work is tracked in **Linear**, organized as initiatives → projects → issues. Agents are granted scoped access to Linear via the official Linear MCP server, so an agent picking up an assigned issue can read its full context (description, priority, labels, linked PRs), update its status as work progresses (Todo → In Progress → In Review → Done), and post comments capturing decisions or blockers. This closes the loop between planning and execution: issues created during Phase 4 scoping become the actual unit of work agents pick up in Phase 6, with status changes flowing back automatically rather than requiring manual sync. Agent permissions in Linear are scoped — agents may read, comment, and update status on issues assigned to their role; reassignment, priority changes, and issue creation outside their scope require Founder/CTO action. Specific permission policy per agent role is defined in Phase 5.
 
 **Team-mode for agent dispatches.** Execution-agent dispatches in the active phase use Claude Code team-mode with `team_name` set to the current phase identifier (e.g., `phase-1` for Phase 1). Plain `Agent` calls without `team_name` spawn inline subagents whose work renders in the orchestrator's pane; team-mode spawns appear in their own split-pane, so the Founder/CTO can watch teammate progress live and intervene if work drifts. The convention is forward-looking — Step 3.5 PRs 1–6 ran without it (inline subagents); PR 7 onward uses team-mode. New phases create their own team under the same `phase-<N>` naming.
+
+### Per-agent git worktrees
+
+Team-mode gives each teammate its own pane; **per-agent git worktrees give each teammate its own working tree**, so concurrent agents don't clobber one another's checkout. This is the filesystem half of the convention above. It had existed in practice and nowhere in the repo, so every agent rediscovered it — which is what this subsection ends. *(Every figure and command output below was measured on 2026-08-10 at `7d54e97`; re-measure rather than re-cite if you need a current number.)*
+
+**Layout.** One worktree per agent, in a sibling directory:
+
+```
+~/Projects/mosko-fintech-worktrees/<agent>     # e.g. .../backend-etl, .../devops
+```
+
+The main repo at `/Users/mosko/Projects/mosko-fintech` **stays on `main` and is the canonical read anchor.** Unqualified *"read the file"* / *"check the tree"* means that checkout unless a branch is named explicitly.
+
+**⚠ Creating or reusing one — branch off the fetched remote ref, never local `main`.**
+
+```sh
+git fetch origin
+git checkout -b <new-branch> origin/main     # in the agent's worktree
+```
+
+**Do not `git checkout main` in a worktree.** `main` is held by the main repo, so git refuses it:
+
+```
+fatal: 'main' is already used by worktree at '/Users/mosko/Projects/mosko-fintech'
+```
+
+It exits **128 and leaves HEAD on the branch that was already checked out** — so a following `git reset --hard` silently retargets whatever that branch is. This is not hypothetical: an agent hit it on 2026-08-10, suppressed the error with `2>/dev/null`, and reset an already-merged branch. Its own summary: *"`2>/dev/null` on a checkout hid a failure I then built on."* **Never `2>/dev/null` a checkout.**
+
+**⚠ Then push with `-u`, because `checkout -b … origin/main` sets the wrong upstream.** The recipe leaves the new branch tracking `origin/main`. A bare `git push` fails closed under the default `push.default = simple` — but its **first suggested remedy is `git push origin HEAD:main`, which pushes your branch straight onto `main`, bypassing PR and branch protection.** Do not paste it. Use:
+
+```sh
+git push -u origin HEAD
+```
+
+**Reuse the per-agent directory; do not create one per task.** A worktree carrying an installed Python venv measured **363 MB** (348 MB of it `workers/etl/.venv` alone); a doc-only worktree measured **14 MB**. Per-task directories re-pay that setup cost and accumulate. Per-task is justified only when two branches genuinely must exist at once.
+
+**⚠ Nothing cleans worktrees up — no GC, no prune-on-merge.** They persist after their branch merges. Before removing, verify the tree is clean and fully merged, then remove and prune:
+
+```sh
+git status --porcelain              # must be empty
+git log origin/main..<branch>       # must be empty — nothing unpushed
+git worktree remove <path>
+git worktree prune
+git branch --merged origin/main     # then: git branch -d <branch>
+```
+
+Both destructive steps are **safe by construction**: `git worktree remove` refuses a tree with modified or untracked files (`fatal: … contains modified or untracked files, use --force to delete it`), and `git branch -d` refuses an unmerged branch. Reach for `--force` / `-D` only when you have separately established the work is expendable.
+
+**Why a sibling directory rather than a gitignored one inside the repo.** A nested worktree is a second working copy *inside* the first, and repo-wide sweeps traverse it. Measured with a probe worktree at `./nested-probe`:
+
+| sweep | sees the nested copy? |
+|---|---|
+| `grep -r` | **yes — double-counts** (`MILESTONES.md` *and* `nested-probe/MILESTONES.md`) |
+| `find` | **yes — double-counts** |
+| `git status` | reports it as one untracked entry (`?? nested-probe/`) — doesn't descend, but **permanently dirties status**, breaking the clean-tree precondition the cleanup recipe above depends on |
+| `git grep` | no — single hit |
+
+Same class as the ~1,200 vendored `.py` files under `workers/etl/.venv` swamping a repo-wide grep, which is why sweeps here use **`git grep`**. A sibling directory keeps the main checkout's file set honest and keeps `git status` meaningful.
+
+**⚠ Editable Python installs resolve to the tree they were installed from — a worktree can silently run *another* tree's code.** `uv pip install -e .` writes an **absolute** source path into the venv:
+
+```
+$ cat .venv/lib/python3.14/site-packages/__editable__.pfin_back_etl-0.2.4.pth
+/Users/mosko/Projects/mosko-fintech-worktrees/backend-etl/workers/etl/src
+```
+
+A stale `VIRTUAL_ENV` or a reused venv therefore imports from whatever tree that path names, and can produce a **byte-identical error that reads like a genuine result from the tree you are standing in** — that cost a round trip during an acceptance run on 2026-08-10. Verify before trusting any run:
+
+```sh
+python -c "import pfin_back_etl, os; print(os.path.dirname(pfin_back_etl.__file__))"
+```
+
+Note also that **`uv sync` alone is insufficient here**: `workers/etl/pyproject.toml` declares no `[build-system]`, so sync does not install the package into site-packages and a src-layout import fails at collection. `uv pip install -e .` is also required — which is what `.github/workflows/etl-ci.yml` does (its own `PACKAGE-IMPORT NOTE` records why).
 
 ---
 
