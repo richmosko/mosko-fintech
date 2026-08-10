@@ -41,6 +41,7 @@ markers = [
     "integration: tests that require database and/or API connections",
     "deployment: tests that replicate actual deployment function calls",
     "replay: deterministic tests using synthetic record-replay fixtures (no live API, no creds; RT-15 parity)",
+    "pgtest: needs a real Postgres but NO credentials and NO project schema (temp tables only) — CI-runnable with zero secrets",
 ]
 addopts = [
     "--strict-markers",
