@@ -4,8 +4,28 @@
 --   owned), append-only, immutable. Realizes ADR-049 Decision 1 (Option C,
 --   F/CTO-ratified 2026-08-10). Companion migration 064 authors the single
 --   consumption helper required by ADR-049 Decision 4.
---   JOINT-REVIEW-MANDATORY (Sec veto surface): ADR-011 Decision 1 — a new table
---   feeding financial figures (inflation-adjusted / real-terms surfaces).
+--   JOINT-REVIEW-MANDATORY (Sec veto surface) ON TWO INDEPENDENT GROUNDS:
+--     · ADR-011 Decision 1 — a NON-JWT WRITE surface. The ETL writes this table
+--       with no JWT, under `service_role`. That, and not the financial
+--       exposure, is Decision 1's actual test, and it is why the citation holds.
+--     · A FINANCIAL-CALCULATION surface — a new table feeding inflation-
+--       adjusted / real-terms figures. A separate ground, sufficient alone.
+--   ⚠ THE CITATION WAS RIGHT AND ITS STATED REASON WAS WRONG — the INVERSE of
+--   the mis-citation corrected in `064` / `065` / `066`, and worth distinguishing
+--   from it. This block read "ADR-011 Decision 1 — a new table feeding financial
+--   figures", giving Decision 1 a reason that is not Decision 1's. A correct
+--   citation resting on a wrong reason survives review MORE easily than a wrong
+--   citation does, because the reason is the part a reader checks.
+--   ⚠ CLAUSES (c) AND (d) ARE VACUOUS HERE — A PROPERTY OF THIS TABLE TODAY,
+--   NOT A PERMANENT ONE. Decision 1 requires tenant correctness from code (c)
+--   and an audit of the tenant-resolution chain (d). This table is GLOBAL — no
+--   `users_id`, no tenant to resolve — so both are satisfied VACUOUSLY rather
+--   than violated, and Decision 1 applies on its own predicate, binding through
+--   (a) + (b). Architect ruling, recorded rather than left open: a four-clause
+--   discipline is not disapplied by two of its clauses having no subject.
+--   >> STANDING REQUIREMENT: if this table ever gains a tenant column, (c) and
+--   (d) STOP being vacuous and MUST be discharged with real mechanisms. << The
+--   vacuity is load-bearing; it must not be read as Decision 1 not applying.
 --
 -- ----------------------------------------------------------------------------
 -- WHAT FORCED THIS (ADR-049, read verbatim before drafting). MEASURED AT RATIFY
@@ -297,8 +317,13 @@
 --   instances +0 · SECURITY DEFINER allowlist +0 (two INVOKER trigger fences
 --   authored) · ADR-011 Decision 3 family +0 · SD matrix — NO expansion (public
 --   read-only reference data; ADR-011 Decision 12 class). Sec review is
---   MANDATORY here notwithstanding the flat ledgers: ADR-011 Decision 1, new
+--   MANDATORY here notwithstanding the flat ledgers, on two independent grounds:
+--   ADR-011 Decision 1 — this is a NON-JWT WRITE surface, the ETL writing under
+--   `service_role`, which is Decision 1's own test — and, separately, a new
 --   table feeding financial figures.
+--   ⚠ These previously ran together as one ground, giving Decision 1 the
+--   financial reason rather than its own. See the header for the disposition,
+--   and for why clauses (c) and (d) are vacuous on a global table.
 --
 -- ----------------------------------------------------------------------------
 -- ⚠ WHAT ACTUALLY HOLDS THE LINE — MEASURED PER ROLE, because an earlier draft
