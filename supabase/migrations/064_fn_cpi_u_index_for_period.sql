@@ -19,9 +19,19 @@
 --   helper, and never inline in a consumer."
 --   SECURITY INVOKER read-composition (ADR-011 Lock 11) over pfin.cpi_u_index
 --   (053) and pfin.cpi_u_nonpublication (063).
---   JOINT-REVIEW-MANDATORY (Sec veto surface): ADR-011 Decision 1 — this helper
---   is the read path by which a recorded non-publication reaches an
---   inflation-adjusted financial figure.
+--   JOINT-REVIEW-MANDATORY (Sec veto surface): this helper is a FINANCIAL-
+--   CALCULATION surface — the read path by which a recorded non-publication
+--   reaches an inflation-adjusted financial figure.
+--   ⚠ THAT GROUND REPLACES A MIS-CITATION, named so the next reader learns WHY
+--   it was wrong. This block read "ADR-011 Decision 1", which does not reach
+--   this surface: Decision 1 is privileged-context-write discipline for NON-JWT
+--   WRITES — ingress under no JWT, writes under `service_role`, tenant
+--   correctness from code, audit of the tenant-resolution chain. This helper
+--   satisfies NONE: a STABLE READ, `security invoker`, granted to
+--   `authenticated` with `service_role` denied, over two global tables with no
+--   tenant boundary. THE GATE IS UNCHANGED — only its stated ground moved, and
+--   a wrong ground is worse than a missing one because it answers the question
+--   in advance with something false.
 --
 -- ----------------------------------------------------------------------------
 -- Numbering: 064 follows 063 (cpi_u_nonpublication). Next free number taken AT
@@ -306,8 +316,11 @@
 -- LEDGER DELTAS (all confirmed FLAT, stated as deltas): §10 catalogued
 --   instances +0 · SECURITY DEFINER allowlist +0 · ADR-011 Decision 3 family +0
 --   · SD matrix — NO expansion (reads public reference data only). Sec review is
---   MANDATORY notwithstanding the flat ledgers: ADR-011 Decision 1, the read
---   path into an inflation-adjusted financial figure.
+--   MANDATORY notwithstanding the flat ledgers: the read path into an
+--   inflation-adjusted financial figure — a FINANCIAL-CALCULATION surface.
+--   ⚠ "ADR-011 Decision 1" was listed here alongside that ground and was a
+--   MIS-CITATION; see the header for the disposition. The ground that remains
+--   was always the correct one and was already in this sentence.
 --
 -- ----------------------------------------------------------------------------
 -- CONTRACT

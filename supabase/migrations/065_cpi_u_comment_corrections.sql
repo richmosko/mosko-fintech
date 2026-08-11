@@ -3,10 +3,21 @@
 --   comment and `064`'s fn_cpi_u_index_for_period function comment. NO DDL, NO
 --   grant, NO policy, NO trigger, NO function body. The `052` comment-only
 --   shape.
---   JOINT-REVIEW-MANDATORY (Sec veto surface): both corrected comments sit on
---   ADR-011 Decision 1 surfaces (the record feeding, and the read path into,
---   inflation-adjusted financial figures), and `063` is ADR-011 Decision 2
---   audit-class. Sec gates this migration.
+--   JOINT-REVIEW-MANDATORY (Sec veto surface), AND THE TWO CORRECTED COMMENTS
+--   ARE GATED ON DIFFERENT GROUNDS — stated separately, because compounding
+--   them is what carried a mis-citation here:
+--     · `063`'s table IS an ADR-011 Decision 1 privileged-context-write surface
+--       — the ETL writes it with no JWT, under `service_role` — and it is also
+--       ADR-011 Decision 2 audit-class (append-only, immutable).
+--     · `064`'s helper is NEITHER. It is a FINANCIAL-CALCULATION surface: a
+--       STABLE `security invoker` read, granted to `authenticated` with
+--       `service_role` denied, over global tables with no tenant boundary.
+--   ⚠ THIS PREVIOUSLY READ that "both corrected comments sit on ADR-011
+--   Decision 1 surfaces (the record feeding, and the read path into,
+--   inflation-adjusted financial figures)". The `063` half was RIGHT and the
+--   helper half was WRONG, and the compound phrasing CARRIED THE WRONG HALF ON
+--   THE STRENGTH OF THE RIGHT ONE — which is why it survived review intact.
+--   Sec gates this migration on both grounds; neither is weakened by the split.
 --
 -- ----------------------------------------------------------------------------
 -- WHY A MIGRATION AND NOT AN EDIT — the vehicle follows WHERE THE TEXT LIVES
@@ -161,8 +172,12 @@
 -- LEDGER DELTAS (all confirmed FLAT, stated as deltas): §10 catalogued
 --   instances +0 · SECURITY DEFINER allowlist +0 (no function authored) ·
 --   ADR-011 Decision 3 family +0 · SD matrix — NO expansion. Sec review is
---   MANDATORY notwithstanding the flat ledgers: ADR-011 Decision 1 + Decision 2
---   surfaces.
+--   MANDATORY notwithstanding the flat ledgers, and the grounds DIFFER by
+--   surface: `063`'s table is an ADR-011 Decision 1 + Decision 2 surface;
+--   `064`'s helper is a FINANCIAL-CALCULATION surface and is neither.
+--   ⚠ This previously read "ADR-011 Decision 1 + Decision 2 surfaces" over
+--   both — right for `063`, wrong for the helper. Same compounded mis-citation
+--   as the header block above, and the Decision 2 half was correct throughout.
 -- ============================================================================
 
 create schema if not exists pfin;

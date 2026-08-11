@@ -3,10 +3,25 @@
 --   columns. Adds `period_was_due boolean` (Option A) and `coverage_through
 --   date` (rider A'), F/CTO-ratified 2026-08-10 against the Architect ratify
 --   gate opened after the PRD §2.4.4 amendment landed.
---   JOINT-REVIEW-MANDATORY (Sec veto surface): ADR-011 Decision 1 — this helper
---   is the read path by which a recorded non-publication reaches an
---   inflation-adjusted financial figure. Unlike `065` (comment-only), this is
---   REAL DDL: it DROPS and RECREATES a function on that path.
+--   JOINT-REVIEW-MANDATORY (Sec veto surface) ON TWO GROUNDS: this helper is a
+--   FINANCIAL-CALCULATION surface — the read path by which a recorded
+--   non-publication reaches an inflation-adjusted financial figure — and this
+--   migration makes an ACL CHANGE on that path. Unlike `065` (comment-only),
+--   this is REAL DDL: it DROPS and RECREATES the function.
+--   ⚠ THOSE GROUNDS REPLACE A MIS-CITATION, named so the next reader learns WHY
+--   it was wrong rather than only that it changed. This block read "ADR-011
+--   Decision 1", which does not reach this surface. Decision 1 is
+--   privileged-context-write discipline for NON-JWT WRITES, and its four
+--   clauses are: ingress under no JWT; writes execute under `service_role`;
+--   tenant correctness from code rather than RLS; an audit log capturing the
+--   tenant-resolution chain. This helper satisfies NONE — it is a STABLE READ,
+--   `security invoker`, granted to `authenticated` with `service_role`
+--   EXPLICITLY DENIED (see the grant block below), over two global tables with
+--   no tenant boundary to resolve.
+--   >> THE GATE IS UNCHANGED AND IS NOT WEAKENED BY THIS CORRECTION. << Only
+--   the stated ground moved. A wrong ground is worse than a missing one: it
+--   answers "why is Sec required here?" in advance, so the reader who would
+--   have asked stops asking, and the answer they stop at is false.
 --
 -- ----------------------------------------------------------------------------
 -- ⚠ WITHDRAWN-QUOTE GUARD — READ BEFORE ANY AUTOMATED SWEEP OF THIS FILE.
@@ -531,9 +546,14 @@
 -- LEDGER DELTAS (all confirmed FLAT, stated as deltas): §10 catalogued
 --   instances +0 · SECURITY DEFINER allowlist +0 · ADR-011 Decision 3 family +0
 --   · SD matrix — NO expansion (reads public reference data only). Sec review is
---   MANDATORY notwithstanding the flat ledgers: ADR-011 Decision 1, the read
---   path into an inflation-adjusted financial figure, and a DROP + regrant on
---   that path.
+--   MANDATORY notwithstanding the flat ledgers, on two grounds: the read path
+--   into an inflation-adjusted financial figure — a FINANCIAL-CALCULATION
+--   surface — and a DROP + regrant on that path, an ACL change.
+--   ⚠ A third ground was listed here and was a MIS-CITATION: "ADR-011 Decision
+--   1", which governs non-JWT writes under `service_role` and does not reach a
+--   `security invoker` read. See the header for the full disposition. The two
+--   grounds that remain were always the correct ones and were already in this
+--   sentence — the wrong citation was carried on their strength.
 --
 -- ----------------------------------------------------------------------------
 -- CONTRACT
