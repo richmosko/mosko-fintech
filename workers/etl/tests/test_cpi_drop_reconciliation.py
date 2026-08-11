@@ -3,26 +3,38 @@ Project:       pfin-back-etl
 Author:        Rich Mosko (mosko-fintech Backend)
 
 Description:
-    Unit tests for the BLS drop reconciliation in `utils.fetch_cpi_df`.
+    Unit tests for how `utils.fetch_cpi_df` REPORTS AND RETAINS the BLS periods
+    published with no usable value.
 
-    ⚠ WHAT THIS EXISTS FOR. BLS returns a period it has published nothing for
-    with the literal value `"-"` — measured against the live API for
-    **2025-M10**, a real non-publication. A `strict=False` cast turns that into
-    null and `drop_nulls` removes the row. **Storing it is impossible anyway**
-    (`053` has NOT NULL plus a finiteness CHECK), so the drop is FORCED BY THE
-    SCHEMA and is correct.
+    ⚠ FILENAME NOTE — THE DROP THIS FILE IS NAMED AFTER NO LONGER EXISTS.
+    Written for BACKLOG §7.6 S20, when `fetch_cpi_df` dropped value-null rows
+    and the defect was that it did so SILENTLY. S21 (2026-08-10) LIFTED that
+    drop: those rows are the subject of `pfin.cpi_u_nonpublication` (063 /
+    ADR-049) and could not reach any writer while the transport discarded them.
+    The name is kept so this file stays findable as S20's discharge; read
+    "drop" here as "the periods that used to be dropped".
 
-    The defect was that it was SILENT. Nothing at any layer distinguished "BLS
+    ⚠ WHAT THIS EXISTS FOR, RESTATED FOR THE POST-LIFT WORLD. BLS returns a
+    period it has published nothing for with the literal token `"-"` — measured
+    against the live API for **2025-M10**, a real non-publication. A
+    `strict=False` cast turns that into null. `053` still cannot store it (NOT
+    NULL plus a finiteness CHECK), so it is still dropped — but by
+    `_map_cpi_u_index_df`, WHERE THE CONSTRAINT LIVES, not by the transport,
+    where the drop destroyed the row for every consumer at once.
+
+    The original defect was SILENCE: nothing at any layer distinguished "BLS
     published no value" from "we lost a row", and `pfin.cpi_u_index` asserts
-    nothing about contiguity — so the gap is undetectable by construction and
-    propagates into inflation-adjusted figures.
+    nothing about contiguity — so the gap was undetectable by construction and
+    propagated into inflation-adjusted figures.
 
-    ⚠ THE RECONCILIATION IS THE LOAD-BEARING HALF. A per-row warning alone
-    would still be silent about a SYSTEMATIC drop: a future change that removed
-    rows for a different reason would log nothing. Counting in and out catches
-    the class; naming the period explains the instance. Both are tested, and
-    the count test is deliberately written so it FAILS if only the per-row
-    warning survives a refactor.
+    ⚠ THE COUNTS HERE ARE OBSERVABILITY; THE GATE IS ELSEWHERE. S20's note said
+    the reconciliation is the load-bearing half and that is still true — but a
+    count this function computes about its own return value cannot see a row
+    lost AFTER it returns, which is exactly what S21 found. The gate lives in
+    `PFinBackend._prepare_cpi_u_frames` and is tested in
+    `test_cpi_nonpublication_writer.py`. What is tested HERE is that the
+    transport hands both halves onward, names the instance, carries the raw
+    token, and counts unconditionally.
 
     `unit`-tier: the HTTP call is stubbed, so no network, no BLS key.
 """
@@ -86,7 +98,13 @@ def test_a_period_with_no_published_value_is_named_in_a_warning(stub_bls, caplog
     with caplog.at_level(logging.WARNING, logger="pfin_etl"):
         df = utils.fetch_cpi_df("key", 2025, 2025, [_SERIES])
 
-    assert len(df) == 2, "the valueless period must still be dropped — 053 forbids it"
+    # ⚠ THIS ASSERTION INVERTED AT S21, AND THE INVERSION IS THE POINT.
+    # It used to read `len(df) == 2, "the valueless period must still be
+    # dropped — 053 forbids it"`. What 053 forbids is STORING the period, and
+    # the transport is not 053. Enforcing 053's constraint one layer early made
+    # `pfin.cpi_u_nonpublication` unpopulable by any writer.
+    assert len(df) == 3, "the valueless period must be RETAINED by the transport"
+    assert df["series_value"].null_count() == 1
     warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
     assert warnings, "the drop was silent — that is the defect this closes"
     assert any("2025-10" in m for m in warnings), (
@@ -125,13 +143,16 @@ def test_counts_are_reconciled_in_and_out(stub_bls, caplog):
     with caplog.at_level(logging.INFO, logger="pfin_etl"):
         df = utils.fetch_cpi_df("key", 2025, 2025, [_SERIES])
 
-    assert len(df) == 2
-    recon = [m for m in (r.message for r in caplog.records) if "returned" in m]
+    assert len(df) == 4, "post-S21 the transport returns both halves"
+    # ⚠ Match on "period(s) returned", not bare "returned": the per-row WARNING
+    # also contains the word, and a looser selector would pick it up and assert
+    # the count line's content against a line that never carries counts.
+    recon = [m for m in (r.message for r in caplog.records) if "period(s) returned" in m]
     assert recon, "no reconciliation line — a systematic drop would be silent"
     line = recon[0]
     assert "4 period(s) returned" in line, line
-    assert "2 kept" in line, line
-    assert "2 dropped" in line, line
+    assert "2 with a published value" in line, line
+    assert "2 published with no usable value" in line, line
 
 
 @pytest.mark.unit
@@ -146,22 +167,58 @@ def test_reconciliation_is_emitted_even_when_nothing_is_dropped(stub_bls, caplog
     stub_bls({"M01": "1.0", "M02": "2.0"})
     with caplog.at_level(logging.INFO, logger="pfin_etl"):
         utils.fetch_cpi_df("key", 2025, 2025, [_SERIES])
-    recon = [m for m in (r.message for r in caplog.records) if "returned" in m]
+    # ⚠ Match on "period(s) returned", not bare "returned": the per-row WARNING
+    # also contains the word, and a looser selector would pick it up and assert
+    # the count line's content against a line that never carries counts.
+    recon = [m for m in (r.message for r in caplog.records) if "period(s) returned" in m]
     assert recon, "reconciliation must be unconditional"
-    assert "0 dropped" in recon[0], recon[0]
+    assert "0 published with no usable value" in recon[0], recon[0]
     assert not [r for r in caplog.records if r.levelno == logging.WARNING], (
         "a clean fetch must not warn — otherwise the warning stops meaning anything"
     )
 
 
 @pytest.mark.unit
-def test_a_kept_period_is_not_reported_as_dropped(stub_bls, caplog):
-    """Non-vacuity: the fixture must be able to distinguish kept from dropped,
-    or every assertion above could pass on a stub that drops everything."""
+def test_a_valued_period_is_not_reported_as_valueless(stub_bls, caplog):
+    """Non-vacuity: the fixture must be able to distinguish a valued period from
+    a valueless one, or every assertion above could pass on a stub that reports
+    everything."""
     stub_bls({"M05": "5.0", "M06": "-"})
     with caplog.at_level(logging.WARNING, logger="pfin_etl"):
         df = utils.fetch_cpi_df("key", 2025, 2025, [_SERIES])
     joined = " ".join(r.message for r in caplog.records)
     assert "2025-06" in joined
-    assert "2025-05" not in joined, "a KEPT period was reported as dropped"
-    assert df["month"].to_list() == [5]
+    assert "2025-05" not in joined, "a VALUED period was reported as valueless"
+    assert df["month"].to_list() == [5, 6]
+    assert df["series_value"].to_list() == [5.0, None]
+
+
+# ---------------------------------------------------------------------------
+# The raw token — 063.published_value_raw's only possible source
+# ---------------------------------------------------------------------------
+@pytest.mark.unit
+def test_the_raw_token_survives_the_float_cast(stub_bls):
+    """⚠ `cast(pl.Float64, strict=False)` overwrites `value` IN PLACE, so the
+    literal '-' was destroyed one layer before any consumer could see it —
+    while `063.published_value_raw` is documented as "what the source actually
+    emitted". The column is nullable, so had this been missed the table would
+    have filled with legal, evidence-free rows and nothing would have noticed.
+    """
+    stub_bls({"M09": "324.800", "M10": "-"})
+    df = utils.fetch_cpi_df("key", 2025, 2025, [_SERIES])
+
+    assert "series_value_raw" in df.columns
+    raw = dict(zip(df["month"].to_list(), df["series_value_raw"].to_list()))
+    assert raw[10] == "-", "the BLS non-publication token must survive verbatim"
+    assert raw[9] == "324.800"
+
+
+@pytest.mark.unit
+def test_the_raw_token_is_named_in_the_warning(stub_bls, caplog):
+    """The per-row line must carry the evidence, not just the period — a reader
+    checking whether a gap is real needs to see what BLS actually sent."""
+    stub_bls({"M10": "-"})
+    with caplog.at_level(logging.WARNING, logger="pfin_etl"):
+        utils.fetch_cpi_df("key", 2025, 2025, [_SERIES])
+    joined = " ".join(r.message for r in caplog.records)
+    assert "'-'" in joined, joined
