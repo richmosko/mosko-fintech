@@ -147,9 +147,13 @@
 -- │ catalog inspection has no natural failure mode to calibrate against, so without (V1)/(V2)   │
 -- │ a reader cannot tell a real fence from an assertion whose subject never varies.             │
 -- │   (V1) grant EXECUTE to service_role        -> (A4)/(A6) flip                                │
--- │  (V10) ⭐ grant EXECUTE to PUBLIC            -> (A2) flips. The fail-open fence for the       │
--- │        drop-discards-the-ACL hazard; (V10b) …and the anon BEHAVIOURAL probe does NOT flip,   │
--- │        because schema USAGE is a second independent fence. Both halves asserted             │
+-- │  (V10) ⭐ grant EXECUTE to PUBLIC            -> (A2) flips. ⚠ NOT "the fail-open fence":      │
+-- │        that characterization was WITHDRAWN after D9 measured the ladder. (A2) is ONE OF      │
+-- │        THREE independent fences (function ACL / schema USAGE / table SELECT under            │
+-- │        INVOKER), so a missing revoke is a least-privilege regression for an already-         │
+-- │        privileged role, NOT an open door. Still worth catching where it happens.             │
+-- │        (V10b) …and the anon BEHAVIOURAL probe does NOT flip — see D9 for why, and note       │
+-- │        it is NOT simply "anon lacks schema USAGE". Both halves asserted.                     │
 -- │   (V2) narrow the return to `returns numeric` -> (E4) flips: the by-construction non-silence │
 -- │                                                mechanism is gone and NOTHING ELSE notices    │
 -- │  (V3a) DEMOTE the record below the edge rules -> (B5) flips; (V3a2) …and (B3) does NOT.      │
@@ -449,7 +453,7 @@ select ok(
 );
 select ok(
   not has_function_privilege('anon', 'pfin.fn_cpi_u_index_for_period(date)', 'execute'),
-  '(A3) anon holds NO EXECUTE — a second fence in front of anon''s lack of USAGE on schema pfin'
+  '(A3) anon holds NO EXECUTE — one of THREE independent fences in front of anon, not the only one. The others are USAGE on schema pfin and table-level SELECT on both source tables (the latter because this helper is SECURITY INVOKER, so the caller''s own privileges apply). D9 measures the ladder by removing them one at a time; read it before citing this assertion as the barrier, because a red (A3) is a least-privilege regression rather than an exposure on its own'
 );
 select ok(
   not has_function_privilege('service_role', 'pfin.fn_cpi_u_index_for_period(date)', 'execute'),
@@ -805,7 +809,7 @@ savepoint v_public_grant;
 grant execute on function pfin.fn_cpi_u_index_for_period(date) to public;
 select ok(
   has_function_privilege('public', 'pfin.fn_cpi_u_index_for_period(date)', 'execute'),
-  '(V10-PUBLIC-NEGATIVE-HAS-TEETH) ⭐ (A2) is not vacuous: a single `grant execute … to public` flips it. Without this leg, (A2) — the assertion guarding the EXACTLY-THIS-MIGRATION hazard that a DROP discards the ACL and Postgres re-grants EXECUTE to PUBLIC by default — was an absence assertion whose subject had never once been shown to appear. An unfalsifiable fence on a fail-open surface is decoration, and this is the surface where decoration is most expensive: every behavioural leg in this file stays green while the function becomes callable by every role in the cluster'
+  '(V10-PUBLIC-NEGATIVE-HAS-TEETH) ⭐ (A2) is not vacuous: a single `grant execute … to public` flips it. Without this leg, (A2) — the assertion guarding the EXACTLY-THIS-MIGRATION hazard that a DROP discards the ACL and Postgres re-grants EXECUTE to PUBLIC by default — was an absence assertion whose subject had never once been shown to appear. An unfalsifiable fence is decoration, and this ACL is genuinely fail-open by default — `create function` grants EXECUTE to PUBLIC unless something revokes it, and every behavioural leg in this file stays green either way. ⚠ BE PRECISE ABOUT THE CONSEQUENCE — D9 measured it and an earlier draft of this very message overstated it. Every role would HOLD EXECUTE, but holding is not calling: a caller still needs USAGE on schema pfin AND SELECT on both source tables, because this helper is SECURITY INVOKER and the caller''s own privileges apply. So a missing revoke is a least-privilege regression for roles that are already privileged, NOT an open door for anon. Worth catching precisely where it happens; not worth overstating'
 );
 -- (V10b) …AND THE LIMIT OF IT, asserted rather than assumed — the (V3a)/(V3a2) idiom.
 --   The obvious "improvement" to (V10) is to pair it with a behavioural probe. That probe would
@@ -1160,7 +1164,7 @@ select ok(
     where n.nspname = 'pfin' and p.proname = 'fn_cpi_u_index_for_period')
   and not has_function_privilege('service_role', 'pfin.fn_cpi_u_index_for_period(date)', 'execute')
   and not has_function_privilege('public', 'pfin.fn_cpi_u_index_for_period(date)', 'execute'),
-  '(V5-FUNCTION-RESTORED-AND-PLAN-COUNTER-REARMED) structural: after the inversion block the function is back to its authored shape (row return, INVOKER, STABLE) and NEITHER EXECUTE grant the (V) block opened survived — (V1)''s to service_role and (V10)''s to PUBLIC. The PUBLIC half matters most: a leaked savepoint there would leave the battery asserting against a cluster-wide-callable function while every leg stayed green, which is the same fail-open shape (A2) exists to catch. So nothing above was evaluated against a stub or a widened ACL this file left behind. It also re-arms pgTAP''s plan counter after the savepoint rewinds, so this file cannot emit a spurious "planned N but ran M" that would train a reader to discount the one diagnostic distinguishing a genuinely aborted run'
+  '(V5-FUNCTION-RESTORED-AND-PLAN-COUNTER-REARMED) structural: after the inversion block the function is back to its authored shape (row return, INVOKER, STABLE) and NEITHER EXECUTE grant the (V) block opened survived — (V1)''s to service_role and (V10)''s to PUBLIC. The PUBLIC half matters most: a leaked savepoint there would leave every later leg asserting against a function whose ACL this file had widened itself, while every leg stayed green — the same fail-open shape (A2) exists to catch. (Stated as an ACL fact, not as reachability: per D9, holding EXECUTE is not the same as being able to call.) So nothing above was evaluated against a stub or a widened ACL this file left behind. It also re-arms pgTAP''s plan counter after the savepoint rewinds, so this file cannot emit a spurious "planned N but ran M" that would train a reader to discount the one diagnostic distinguishing a genuinely aborted run'
 );
 
 select * from finish();
