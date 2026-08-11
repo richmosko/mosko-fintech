@@ -1,6 +1,11 @@
 # .husky/pre-commit — mosko-fintech pre-commit linters (Phase 5 Step 8; DevOps-owned).
 #
 # F/CTO-ratified scope (Phase 5 Step 8): runnable linters ONLY.
+#   ⚠ WIDENED, RATIFY PENDING: the shared-path commit guard added below is NOT a
+#     linter and DOES hard-block. It is the sole exception to both the "linters
+#     ONLY" scope and the graceful-degradation contract stated here. Both
+#     statements in this header remain accurate for every OTHER check in this
+#     file. See the SCOPE NOTE on the guard block itself.
 #   - ruff check    on staged Python under workers/etl/
 #   - hadolint      on staged Dockerfiles (workers/etl/Dockerfile, workers/pdf-render/Dockerfile)
 # svelte-check + eslint are DEFERRED to Phase 6 (SvelteKit not scaffolded yet) —
@@ -15,6 +20,78 @@
 # pre-filter, not the enforcement boundary.
 
 set -e
+
+# --- shared-path commit guard (β) --------------------------------------------
+# SCOPE NOTE: this is the one NON-linter check in this file, and the one check
+# that HARD-BLOCKS. It is outside the Phase 5 Step 8 "runnable linters ONLY" +
+# graceful-degradation scope above and requires its own F/CTO ratify.
+#
+# What it prevents: commits made in the SHARED main repo checkout while that
+# checkout is on any branch other than `main`. The shared path is the team's read
+# anchor. When it sits on a feature branch, agents reading it see a tree that
+# moves under them mid-review — measured on 2026-08-11, when 066 grew 772 -> 795
+# -> 835 lines across three readers and one amend orphaned a commit that had
+# already been cited.
+#
+# Why it hard-blocks rather than warns: the sibling hazard is that `git switch`
+# only refuses to carry an uncommitted edit when the file DIFFERS between the two
+# refs. When it is identical, the edit is carried onto the destination branch
+# silently. The hazard is therefore inversely correlated with the size of the
+# change — small edits travel undetected — so an advisory would be quietest in
+# exactly the case that most needs to be loud.
+#
+# Discriminator: in the main checkout, git-dir == git-common-dir. In a linked
+# worktree they differ (.git/worktrees/<name> vs .git). Hooks are SHARED across
+# worktrees (they resolve to the common dir), so the branch name alone CANNOT
+# distinguish the two contexts — this path comparison is load-bearing, not
+# defensive. Verified empirically in this repo, git 2.55.0.
+GUARD_GIT_DIR=$(git rev-parse --absolute-git-dir)
+GUARD_COMMON_DIR=$(git rev-parse --path-format=absolute --git-common-dir)
+if [ "$GUARD_GIT_DIR" = "$GUARD_COMMON_DIR" ]; then
+  # `symbolic-ref --short -q HEAD` is the correct primitive here: it yields the
+  # branch name for an attached HEAD INCLUDING an unborn one (fresh `git init`,
+  # before the first commit), and exits non-zero with EMPTY output when detached.
+  # `rev-parse --abbrev-ref HEAD` must NOT be used: on an unborn HEAD it prints
+  # "HEAD" *and* exits non-zero, so a `|| echo HEAD` fallback emits it twice and
+  # the comparison below silently misfires. Caught by the proof matrix.
+  # A detached HEAD is also a moved-anchor state, so it is refused too; the
+  # escape hatch covers bisect and detached maintenance.
+  GUARD_BRANCH=$(git symbolic-ref --short -q HEAD || echo "(detached HEAD)")
+  if [ "$GUARD_BRANCH" != "main" ]; then
+    if [ "${MOSKO_ALLOW_SHARED_COMMIT:-}" = "1" ]; then
+      echo "pre-commit: WARN — shared-path guard BYPASSED (MOSKO_ALLOW_SHARED_COMMIT=1), branch '$GUARD_BRANCH'."
+      echo "pre-commit:        Return the shared checkout to 'main' as soon as the incident is over."
+    else
+      echo ""
+      echo "pre-commit: REFUSED — commit in the SHARED repo checkout while on branch '$GUARD_BRANCH'."
+      echo ""
+      echo "  The shared checkout at $GUARD_COMMON_DIR/.."
+      echo "  is the team's read anchor and must stay on 'main'. Feature work belongs in a"
+      echo "  per-agent worktree:"
+      echo ""
+      echo "    ~/Projects/mosko-fintech-worktrees/<agent>      e.g. .../architect, .../sec, .../devops"
+      echo ""
+      echo "  To move this work into a worktree without losing it:"
+      echo ""
+      echo "    git -C <shared-path> switch main"
+      echo "    git worktree add ~/Projects/mosko-fintech-worktrees/<agent> <your-branch>"
+      echo "    cd ~/Projects/mosko-fintech-worktrees/<agent>     # your commits go here"
+      echo ""
+      echo "  Uncommitted work? Commit it in a worktree instead, or 'git stash' first —"
+      echo "  do NOT 'git switch' with a dirty tree: if the file is IDENTICAL between the"
+      echo "  two branches git carries your edit across silently rather than refusing."
+      echo ""
+      echo "  Escape hatch (incidents only, bypasses this guard for one command):"
+      echo ""
+      echo "    MOSKO_ALLOW_SHARED_COMMIT=1 git commit ..."
+      echo ""
+      echo "  Prefer the escape hatch over 'git commit --no-verify': --no-verify also"
+      echo "  skips ruff and hadolint below, this variable does not."
+      echo ""
+      exit 1
+    fi
+  fi
+fi
 
 # --- ruff (Python; workers/etl/ surface) -------------------------------------
 # Pathspec 'workers/etl' + grep '\.py$' is robust (git pathspec '**' globbing is
