@@ -110,11 +110,31 @@ def probe(engine):
         #     backstop that only becomes load-bearing if the grant ever widens.
         #
         # (2) WHY IT IS RESTATED RATHER THAN DERIVED — deliberate, not lazy.
-        #     This tier is a bare `postgres:17` with NO `pfin` schema, so there
-        #     is no production ACL here to read: a catalog lookup CANNOT work in
-        #     this lane. Do not "fix" this into one. Restatement is chosen here
-        #     because the mechanical option is UNREACHABLE, not because prose is
-        #     generally adequate — elsewhere, prefer the mechanical form.
+        #     There are two ways to "fix" this into a derivation. The first is
+        #     impossible; the second is possible and WORSE, and it is the one
+        #     someone will actually reach for.
+        #       · READ THE LIVE ACL. Impossible here: this tier is a bare
+        #         `postgres:17` with NO `pfin` schema, so there is no production
+        #         ACL to query.
+        #       · ⚠ TEXT-PARSE `063`. Perfectly possible — parsing a file needs
+        #         no schema — and it must still be refused, for two reasons.
+        #         (i) It makes a `pgtest` depend on `supabase/migrations/`,
+        #             breaking the tier premise (no project schema, no
+        #             migrations, no credentials) that is what made this lane
+        #             gateable in the first place.
+        #         (ii) ⚠ THE REAL HAZARD: a parse of `063` ALONE yields a mirror
+        #             that is AUTHORITATIVE-LOOKING AND STRUCTURALLY STALE. A
+        #             LATER migration can `grant update … to service_role`, and
+        #             a parse of `063` would still report no-UPDATE — so this
+        #             fixture would PASS WHILE THE REAL FENCE WAS DOWN, and it
+        #             would pass BECAUSE it looked derived. Derivation from one
+        #             file is not derivation from the truth.
+        #     ⚠ SO THE PRINCIPLE IS NOT "WE HAD NO CHOICE". An honest
+        #     restatement that REDS LOUDLY beats a derivation that can SILENTLY
+        #     AGREE WITH THE WRONG FILE. This project's standing preference is
+        #     the mechanical form and that preference is right in general —
+        #     this is a considered local exception, not licence to prefer prose
+        #     elsewhere.
         #
         # (3) ⚠ IF THIS FILE GOES RED, THE pgTAP BATTERY IS THE DISCRIMINATOR.
         #     `supabase/tests/rls/063_cpi_u_nonpublication_rls.sql` asserts the
@@ -130,8 +150,16 @@ def probe(engine):
         #       · red HERE and green at (h7) -> THIS FIXTURE DRIFTED from a
         #         grant that did not change. Fix the fixture.
         #     That battery is PRIMARY and runs in the required `rls-battery`
-        #     lane; this file is CORROBORATING. It is also why no pointer was
-        #     added to 063 itself — the authoritative assertion already exists.
+        #     lane; this file is CORROBORATING.
+        #     ⚠ A RECIPROCAL POINTER ON `063` IS ALSO WANTED and is Architect's
+        #     (Sec, 2026-08-11). Do not read this block as the only record of
+        #     the coupling: a pointer that lives ONLY in the file under
+        #     suspicion is read by nobody at the moment it matters, because the
+        #     person widening the grant is editing the migration, not this test.
+        #     A cross-file precondition needs an entry on BOTH sides or the side
+        #     that moves first never sees it. If you are here and no such
+        #     pointer exists on `063`, that is the gap — file it, do not
+        #     conclude the coupling is undocumented and relax the fixture.
         #
         # (4) ⚠ A GRANT CHANGE ON 063 IS Sec JOINT-REVIEW-MANDATORY. It is the
         #     operative append-only fence per ADR-011 Decision 2, not an
