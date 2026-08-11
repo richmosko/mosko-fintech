@@ -24,6 +24,13 @@ import polars as pl
 # reverted both fixtures with all 14 tests still green).
 from fixture_policy import construct_or_skip, report_login_identity  # noqa: F401
 
+# `replay` is a sibling module too (tests/ is on sys.path under pytest), so it
+# imports at top level exactly like fixture_policy above. It lives here rather
+# than beside the RT-15 fixtures that use it because a module-level import must
+# be at the top of the file (ruff E402); the fixtures' explanatory block stays
+# with the fixtures.
+import replay as _replay
+
 
 # ---------------------------------------------------------------------------
 # Session-scoped backend fixture (shared across all integration tests)
@@ -191,8 +198,8 @@ def sample_df_new():
 # Replays frozen *synthetic* BLS + FMP HTTP responses so deterministic tests
 # run with no live API and no API keys. Governance + MUST-NOT discipline:
 # tests/fixtures/parity/README.md (central). Payloads: tests/fixtures/replay/.
-# Pair with `@pytest.mark.replay`.
-import replay as _replay  # sibling module; tests/ dir is on sys.path under pytest
+# Pair with `@pytest.mark.replay`. The `replay` import itself sits at the top of
+# this file with the other sibling-module import (ruff E402).
 
 
 @pytest.fixture
