@@ -159,6 +159,32 @@ python -c "import pfin_back_etl, os; print(os.path.dirname(pfin_back_etl.__file_
 
 Note also that **`uv sync` alone is insufficient here**: `workers/etl/pyproject.toml` declares no `[build-system]`, so sync does not install the package into site-packages and a src-layout import fails at collection. `uv pip install -e .` is also required — which is what `.github/workflows/etl-ci.yml` does (its own `PACKAGE-IMPORT NOTE` records why).
 
+### Verification discipline
+
+**This subsection owns how a claim about the tree is ESTABLISHED and how a measurement is reported.** It does not own how work is handed between agents — that is *Coordination discipline* below, which references these rules rather than restating them. Neither subsection restates the migration-authoring checks in `.claude/skills/`; those link here.
+
+Every rule below exists because the failure it names actually happened, in a single day of comment-and-config work, across agents who were all being careful. **That is the argument for writing them down: none was caught by care. Each was caught by a second query disagreeing with the first.** *(This set deliberately carries NO count — of rules or of failures. It grows as new instrument failures are found, and a tally beside a growing list is a maintenance obligation that goes stale on the first append.)*
+
+**Sweeping comment or header text: strip, join, normalise — and prove the instrument.** A search over `--` comment blocks MUST strip the comment prefix, join continuation lines, and normalise case before matching, and MUST be confirmed by a **control string known to be present, which must match**. Each clause has its own measured failure: a phrase spanning a line break; a phrase whose case had been shifted to a file's emphasis convention; and a `git show "$ref:$path"` in which zsh consumed `$ref:` as a history modifier and silently resolved the wrong object. **A `0` from an unconfirmed filter is not evidence of absence** — it is equally consistent with a filter that could never have matched anything.
+
+**A control proves REACHABILITY, not WELL-FORMEDNESS.** A passing control shows the corpus is readable and the filter runs. It does **not** show the pattern is correctly shaped for its target — a query has failed on two intervening words while its own control matched. Mitigation is shape, not more controls: **match the shortest distinctive fragment and filter the results**, rather than a phrase long enough that an adjective breaks it.
+
+**Invariance is the tell for a broken instrument.** A check that cannot distinguish *present-in-both* from *broken-in-both* is not measuring the property. Identical answers on both sides of a comparison read as confirmation, and have repeatedly been failure instead. **Where a check compares two refs or two states, vary the input and require the answer to change: a check that cannot fail has not passed.**
+
+**A completion record is not an operating assertion.** An artifact recording that a control was *built* says nothing about whether it *runs*. A sweep for undocumented mechanisms finds nothing, because the mechanism is documented; a sweep for unbacked claims finds nothing, because the claim is true. **The gap sits exactly where neither traversal crosses**, and a ratified hook set sat in it for weeks with its completion record staying accurate the whole time. **A control that cannot report that it ran is indistinguishable from one that is not installed.** A control MUST therefore carry an operating assertion distinct from its completion record, and an operating assertion MUST have a watcher.
+
+### Coordination discipline
+
+**This subsection owns how work, rulings, and findings move BETWEEN agents.** Establishing a fact is *Verification discipline* above; this is what happens to a fact once someone else depends on it. These rules exist because async agents make decisions from a snapshot that has already moved.
+
+**A measured ref is pinned.** The moment anyone other than its author measures a ref and reports the measurement, that commit MUST NOT be rewritten — new commits only; no `--amend`, no rebase, no force-push. **What this protects is not an approval but a measurement someone else can no longer reproduce.** Measured-and-reported commits have been destroyed by amends that were entirely reasonable at the moment they were made, and in at least one case by an author acting on an instruction that was itself current. Note what it does *not* constrain: the work stays freely revisable, because stacking leaves the measured commit reachable where rewriting orphans it. *(Named rather than numbered on purpose — this was "condition 10" in the review that produced it, and a bare ordinal carried into a new document is a false composite waiting to happen.)*
+
+**An edit instruction MUST name the defect, not only the location.** Its dual is the operative half: **an instruction naming only a location cannot be safely executed, so refusing it is correct rather than obstructive.** A location-only instruction has repeatedly put correct text at risk of being edited on an unstated premise — in one instance it would have turned a *correct* tally into a wrong one — and refusal, not review, is what stopped it each time. Being made to write down why an unverifiable instruction is nonetheless worth executing also produces better artifacts when the instruction turns out to be right.
+
+**Dispatch rulings as artifacts, not as conversation.** A crossing on finished text produces a visible conflict that git surfaces; a crossing on an *instruction* produces a silent reversal and costs a round trip. Where a decision has been made, send the commit-ready clause rather than the reasoning that would let someone reconstruct it — the dispatch carrying ready text landed first time while instruction-shaped dispatches crossed repeatedly.
+
+**Relay by quotation and attribution; never by paraphrase.** Quote the source, name whose reasoning each part is, and label your own as yours. **A quoted argument cannot be fused with another; a paraphrased one always can.** False composites have been assembled from two individually-true halves and passed every spot-check, because nothing in either half was wrong — only their joining. This applies to attributing positions as much as to citing text: check that the person you are crediting or overruling actually held the position.
+
 ---
 
 ## Agent roster
