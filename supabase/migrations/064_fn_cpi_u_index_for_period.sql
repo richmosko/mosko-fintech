@@ -158,12 +158,27 @@
 --   That draws a line THROUGH this function, not around it. LOCKED and NOT the
 --   implementing PR's call: the composite/row return and the non-silence it
 --   enforces. MUTABLE and pending: THE SIGNATURE — which is what the member set
---   below is part of. The ruling it is pending on is the ADR-049 Decision 5
---   product question (the PRD §2.4.4 non-silent-staleness amendment plus the
---   two-tier marker), which is PM's and is NOT YET RATIFIED with F/CTO.
---   >> So the first consumer MUST NOT inherit this signature as frozen. If the
---   product ruling reshapes what the user is told apart, the member set AND the
---   column set may move with it, and that is sanctioned rather than a breach. <<
+--   below is part of.
+--   ⚠ WHAT THIS BLOCK PREVIOUSLY SAID, AND WHY IT NO LONGER HOLDS — named so a
+--   reader who remembers the old text learns it CHANGED rather than doubting
+--   their memory. It read: "The ruling it is pending on is the ADR-049
+--   Decision 5 product question (the PRD §2.4.4 non-silent-staleness amendment
+--   plus the two-tier marker), which is PM's and is NOT YET RATIFIED with
+--   F/CTO." >> THAT RULING LANDED. << F/CTO ratified it 2026-08-10 and PR #391
+--   ("rule the second staleness source — one marker system, two tiers", sole
+--   file docs/PRD/index.html) merged the amendment into §2.4.4. The PM blocker
+--   is DISCHARGED; read §2.4.4 verbatim, not this summary of it.
+--   >> WHAT REMAINS OPEN IS NO LONGER PM'S — IT IS ARCHITECT'S, AND THE SHAPE
+--   STAYS PROVISIONAL UNTIL IT IS RULED. << §2.4.4 routes the remainder here in
+--   its own words: "how these product distinctions map onto that helper's
+--   result shape is architecture-layer detail carried there, not pinned in this
+--   story" — and PRD Appendix B §2.1 flag (d) names the same residue as "still
+--   Architect". The open question is therefore the MAPPING: whether this column
+--   set carries §2.4.4's two required independent signals without a consumer
+--   having to re-derive gap policy. That is an F/CTO ratify gate, and it is a
+--   ONE-WAY DOOR the moment the first consumer (SELF-218) ships.
+--   >> So the first consumer STILL MUST NOT inherit this signature as frozen.
+--   The reason changed; the instruction did not. <<
 --   ⚠ SHARPENED BY THE SIXTH COLUMN, not relieved by it: nonpublication_on_record
 --   was added at Sec note N1 AFTER D4 was written, so the signature now sits
 --   FURTHER from what D4 contemplated than it did at ratify. That makes marking
@@ -265,9 +280,14 @@
 --                    nonpublication_on_record boolean)
 --     ⚠ PROVISIONAL SIGNATURE (Sec joint-review C4). The COLUMN SET above and
 --       the gap_class MEMBER SET are BOTH the implementing PR's call "pending
---       the product ruling" per ADR-049 D4, and that ruling — the D5 / PRD
---       §2.4.4 question — is PM-owned and NOT YET F/CTO-RATIFIED. Either may
---       move when it lands; a consumer must not treat this shape as frozen.
+--       the product ruling" per ADR-049 D4. ⚠ THAT PRODUCT RULING HAS LANDED —
+--       this block previously read "PM-owned and NOT YET F/CTO-RATIFIED", which
+--       is superseded: F/CTO ratified 2026-08-10 and PR #391 merged the PRD
+--       §2.4.4 amendment. The signature nevertheless STAYS PROVISIONAL, because
+--       §2.4.4 explicitly carries the mapping of its distinctions onto this
+--       helper's result shape as architecture-layer detail — an ARCHITECT ruling
+--       still pending F/CTO ratify, not a PM one. Either set may move when it
+--       lands; a consumer must not treat this shape as frozen.
 --       WHAT IS LOCKED and is NOT the implementing PR's call, per the same
 --       sentence: that the return is a COMPOSITE/ROW and the NON-SILENCE it
 --       enforces. Those do not move. Also not provisional: both coverage edges

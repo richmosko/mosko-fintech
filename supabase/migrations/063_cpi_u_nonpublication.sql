@@ -109,21 +109,55 @@
 --   The transport's own note already states the principle: "THE RECONCILIATION
 --   IS THE LOAD-BEARING HALF, NOT THE PER-ROW LINE" — a per-row warning says
 --   nothing about a SYSTEMATIC drop, whereas counting in and out catches the
---   class. It already computes the counts it needs (periods returned, kept,
---   dropped). So the writer's run MUST ASSERT:
+--   class. So the writer's run MUST ASSERT:
 --       periods returned by transport
---         = rows upserted to pfin.cpi_u_index + rows recorded in this table
---   and FAIL LOUD on any imbalance. That single assertion catches BOTH obstacles
---   above without either having to be individually remembered, and it catches a
---   future drop introduced for some third reason nobody has thought of. It
---   converts a rule someone must REMEMBER into an assertion that CANNOT PASS
---   QUIETLY — which is the only form that survives this file being skimmed.
+--         = rows for pfin.cpi_u_index
+--         + rows for pfin.cpi_u_nonpublication
+--         + periods that are not calendar months
+--   and FAIL LOUD on any imbalance. It converts a rule someone must REMEMBER
+--   into an assertion that CANNOT PASS QUIETLY — which is the only form that
+--   survives this file being skimmed.
+--
+--   ⚠ THE THIRD TERM IS REQUIRED, NOT DEFENSIVE. This block previously stated
+--   the assertion with TWO terms, and in that form IT CANNOT BALANCE. The
+--   transport is deliberately grain-agnostic and returns raw BLS period codes;
+--   an M13 (annual average) or S01/S02 (semiannual) belongs to NEITHER table, so
+--   under the two-term form a single M13 row fails the assertion FALSELY and
+--   kills the nightly ingest. That today's CPI-U payload requests neither
+--   `annualaverage` nor `aspects` is no defence: THE REQUEST IS THE GUARANTEE
+--   AND THE RESPONSE IS ONLY AN OBSERVATION (stated above), so the assertion
+--   must not be built on the observation. The third term must be computed
+--   DIRECTLY FROM THE TRANSPORT'S RETURN by an expression that calls NEITHER
+--   mapper — that independence is what lets the sum come up short, and therefore
+--   fail, when a mapper grows a filter for some future reason nobody has
+--   thought of.
+--
+--   ⚠ AND WHAT THE RECONCILIATION CANNOT SEE — corrected here because an earlier
+--   draft of this block claimed the assertion "catches BOTH obstacles above
+--   without either having to be individually remembered", and that claim is
+--   FALSE for OBSTACLE 1. The first term is "periods RETURNED by transport", so
+--   a row discarded BEFORE the return is absent from EVERY term and the sum
+--   still balances. The gate is therefore STRUCTURALLY BLIND to the exact
+--   regression it was specified to catch. This was DEMONSTRATED, not argued:
+--   with the transport drop re-armed, the gate did NOT raise. Coverage for
+--   OBSTACLE 1 lives ONE LAYER EARLIER, in a transport contract test asserting
+--   the valueless period is RETAINED in the return value. NEITHER SUBSTITUTES
+--   FOR THE OTHER, and a reader who takes this assertion as covering both will
+--   delete that contract test as redundant. What the reconciliation DOES cover:
+--   OBSTACLE 2 (a mapper filtering the subject away) and a future drop
+--   introduced at mapper level for some third reason — because those shrink a
+--   term that IS counted.
 --
 --   ⚠ ROUTED, OWNED, AND OUT OF SCOPE FOR THIS MIGRATION — stated as an item,
 --   not left as an implication: making value-null periods reachable by a
 --   consumer that wants them (lifting the transport-level drop, or making it
---   opt-out) is BACKEND'S, in `workers/etl/src/pfin_back_etl/utils.py`. Until
---   that lands, THIS TABLE CANNOT BE POPULATED BY ANY WRITER, however correct.
+--   opt-out) is BACKEND'S, in `workers/etl/src/pfin_back_etl/utils.py`.
+--   STANDING PROPERTY, stated as a property rather than as a merge-order state
+--   so it does not go stale the moment that work lands: THIS TABLE CAN ONLY BE
+--   POPULATED FROM A TRANSPORT RETURN THAT CARRIES VALUE-NULL PERIODS. No
+--   writer, however correct, can record a row the transport discarded before
+--   returning — the writer's correctness is not the binding constraint, the
+--   transport's return is.
 --
 --   ⚠ AND THE SECOND-CONSUMER TRIGGER — Sec's reasoning, recorded because it is
 --   SHARPER THAN THE ONE IT REPLACES. The transport's note says to replace it
