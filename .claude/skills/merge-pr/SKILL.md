@@ -142,9 +142,34 @@ This skill does **not** auto-edit state files. If the merged PR materially chang
 - `MILESTONES.md` → Current Phase / Recent activity,
 - `DECISIONS.md` → a phase-gate-approval ADR if applicable (consolidation vs terse per ADR-009 Decision 8).
 
-Merging *this* PR does not trigger those automatically — they are deliberate, separate edits.
+Merging *this* PR does not trigger those automatically — they are deliberate, separate edits. ⚠ **But "separate" does not mean "optional or deferred indefinitely" — see step 6, which is mandatory.**
 
-### 6. Hand off
+### 6. Ledger currency — MANDATORY, every merge, both flows
+
+**Measure the gap. Do not skip it because the PR was small.**
+
+```bash
+git rev-parse --short main                                  # where main actually is
+grep -o 'main` = `[0-9a-f]\{7\}' MILESTONES.md | head -1    # where the ledger says it is
+git log --oneline <ledger-sha>..main | wc -l                # how many merges behind
+```
+
+⚠ **The ledger is stale BY CONSTRUCTION the instant any PR merges — an entry cannot name its own merge SHA.** So "equal" is not the test and never will be; **the gap size is.** One behind is the floor; more than that is debt.
+
+**The rule:**
+
+- **Bookkeeping MAY batch across a working block.** A companion PR per PR would double the PR count, and the companion would itself need one — the regress is real, not pedantry.
+- **It MUST NOT batch across a session boundary.** ⚠ `MILESTONES.md` is the SessionStart auto-load anchor: a stale ledger does not merely lag, it **actively misdirects the next session**, which orients off it before reading anything else.
+- **If you are not clearing it now, say the gap out loud** — *"ledger is 3 merges behind; clearing at end of block."* **Silent lag is the failure; recorded lag is fine.**
+- **A session must not end with it owed.** That is the hard edge.
+
+**Measured twice on 2026-08-11, which is why this step exists.** At session start the ledger read `main = 024e474` while `main` was two merges past it, and the "next" item it named — the PM product question — had already landed at PR #391; time was spent re-opening settled work. It then went three merges stale again **within hours of being fixed**.
+
+**To clear it:** `MILESTONES.md` head anchor + `## Pending` CURRENT block + `## Recent activity` (prepend, trim to five per [ADR-017](../../../DECISIONS.md#adr-017)), plus a `CHANGELOG.md` `### vN.NN` entry. Doc-only, so it lands under the pre-cleared merge class.
+
+⚠ **Re-measure anything in `## Pending` you re-assert rather than carrying it forward.** That block accumulates conditionals whose triggers fire elsewhere, and rewriting one without re-measuring **re-arms it**.
+
+### 7. Hand off
 
 Report the merge SHA + confirm `main` is synced and the branch is cleaned up. Then ask the team-lead (the main session) for the next move. For doc PRs the lead reads MILESTONES.md and picks the next deliverable; for feature PRs the lead picks the next feature, plans the next sprint, or escalates a phase transition.
 
@@ -155,6 +180,7 @@ Report the merge SHA + confirm `main` is synced and the branch is cleaned up. Th
 - **Watch CI.** Out of scope — verify once in step 1; if checks are pending, wait and re-run or abort.
 - **Publish releases.** Drafts only; the F/CTO curates + publishes.
 - **Bump WORKFLOW.md version or write ADRs.** Those are separate, deliberate edits (flag them as follow-ups).
+- ⚠ **Auto-edit the ledger.** Step 6 requires you to **measure the gap and either clear it or state it**; it does not silently rewrite `MILESTONES.md` inside a merge. What it forbids is finishing a merge without knowing the number.
 
 ## Failure modes
 
