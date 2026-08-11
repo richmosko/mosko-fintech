@@ -41,6 +41,49 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-052 — A ref is pinned at first EXTERNAL MEASUREMENT: what a rewrite destroys is a measurement nobody else can reproduce
+
+**Date:** 2026-08-11 · **Status:** PROPOSED — pending F/CTO ratify. Architect-authored; routed after Sec ruled the convention needed an authority surface separate from the executable rule. · **Phase:** 6 (Build Loop).
+
+**Context — this was ruled after the failure it prevents had already happened twice, and then happened once more during the ruling.**
+
+A single comment-only correction to one migration header ran as a stack of commits across repeatedly-crossed dispatches, between an author and reviewers working asynchronously. In that window the branch tip was rewritten by `--amend` more than once, and **two specific commits that another agent had already measured and reported in detail** — verified line counts, diffstats, content hashes — were destroyed that way: **`32a134c`** and **`a1a9f31`**. The objects survive until garbage collection and are recoverable by hash, but the refs are unreachable; `git for-each-ref --contains <sha>` returns empty for both.
+
+*(Named rather than tallied, deliberately. A count of amends or of destroyed refs is a figure this ADR would have to maintain and would get wrong — the first draft of this paragraph asserted a number of amend occasions that was itself incorrect. The two refs above are checkable; a tally is not, and the discipline it violates is the one this same review produced.)*
+
+**Nobody was careless.** Each amend was correct under the instruction current when it was made; each measurement was correct at the moment it was taken. The gap is structural — an async reviewer measures a ref, reports it, and the author has already moved on by the time the report lands. **This is the same async-boundary gap that produced every stale-premise crossing in that review**, surfacing in the one place where the cost is not a round trip but a destroyed record.
+
+**What is actually lost is not the work.** The work was never at risk; every rewrite preserved and improved the content. What is lost is a **reviewer's ability to reproduce their own measurement** — and therefore the meaning of any sign-off, finding, or verification that named that ref. A review that cites a sha which no longer resolves is not a weaker review; it is an unfalsifiable one.
+
+### Decision 1 — A ref is pinned the moment anyone other than its author measures it and reports the measurement
+
+From that point the commit is immutable: **new commits only — no `--amend`, no rebase, no force-push, for any reason.** Iteration continues freely by stacking; the constraint is on **rewriting history, not on changing the work**.
+
+**Rationale — and it is the rejected alternatives that carry it, because the obvious rule is wrong.**
+
+- **(α) Arm at first commit.** Rejected as too broad. It forbids the ordinary authoring loop — an author refining their own uncommitted-quality work before anyone has looked at it destroys nothing, and a rule that forbids it will be ignored, which costs more than it saves.
+- **(β) Arm at first sign-off.** Rejected, **and this is the alternative that looked right.** It protects approvals, which is what a freeze intuitively exists to do. **It is refuted by the measured case:** the first destroyed ref had been measured and reported by two agents and **signed off by nobody**. Under (β) that amend would have been *permitted*, and the record would have been destroyed anyway. **A sign-off rule protects the wrong artifact** — it treats approval as the thing worth preserving when the fragile thing is the measurement underneath it.
+- **(γ) Arm at first external measurement.** Adopted. It is the earliest point at which a rewrite can destroy something another agent cannot rebuild, and it is **mechanically checkable** — an author knows whether anyone has reported a measurement of their ref, where "has anyone approved this yet" invites interpretation.
+
+**⚠ The rule was itself violated after being drafted, by a crossing.** A STOP instruction carrying it was sent against a ref the author had already amended twice; the instruction's own premise (*"still the tip, so this reaches you in time"*) was stale on arrival. **The rule is needed precisely because care does not prevent this** — it is a race, not an error, and it is not fixed by anyone trying harder.
+
+### Decision 2 — A destroyed ref is cited AS destroyed, never silently re-anchored
+
+Where a verification named a ref that has since become unreachable, the citation keeps the original sha and marks it unreachable-but-recoverable. It is **not** rewritten to point at the surviving commit.
+
+**Rationale.** Re-anchoring makes the record read as though the verification had been performed against the surviving object, which it was not — a false-composite of a real measurement and a different ref, of exactly the kind [ADR-051](#adr-051) Decision 2 prefers a mechanical discriminator to prevent. **That a verification named a ref which then vanished is itself a fact about the review**, and it is the fact that motivates Decision 1. Erasing it removes the evidence for the rule.
+
+**Consequences.**
+
+- The executable convention lives in [`WORKFLOW.md`](WORKFLOW.md) under *Operating model → Coordination discipline*, and cites this ADR for authority and alternatives. **This split is the established pattern, not a new one** — [ADR-009](#adr-009) Decision 9 (skills) and [ADR-017](#adr-017) (backlog scope) both place decision-plus-alternatives here and the operative rule there. Filing a merge gate in `WORKFLOW.md` alone would read as advisory; filing it here alone would be unreachable at the moment of use, because **nobody consults an ADR at the instant they are about to amend.**
+- **Costs, stated rather than discovered later:** branch histories get longer and carry visible churn, including add-then-remove round trips where an instruction reversed. That churn is the intended output — the alternative is a clean history that conceals a real reversal.
+- **This ADR does not rule on garbage collection.** Recoverability of an orphaned object is time-bounded and nothing here extends it; if a destroyed ref must survive, it needs a real ref, which is a separate decision.
+- **Scope:** applies to agent-authored branches under review. It says nothing about `main`, which branch protection already governs.
+
+**Cross-references.** [ADR-009](#adr-009) Decision 9 + [ADR-017](#adr-017) (the DECISIONS-plus-WORKFLOW split this follows) · [ADR-051](#adr-051) Decision 2 (mechanical over judgment discriminators — why "has anyone measured it" beats "has anyone approved it") · [`WORKFLOW.md`](WORKFLOW.md) *Operating model → Coordination discipline* (the executable rule).
+
+---
+
 ## ADR-051 — Label namespacing: permanent gate labels take a prefix, per-PR finding labels stay bare — and prefer the mechanical discriminator
 
 **Date:** 2026-08-10 · **Status:** PROPOSED — pending F/CTO ratify. Architect-authored; routed after Sec and Architect independently named the same root cause at the ARCH §4 Observability review. · **Phase:** 6
