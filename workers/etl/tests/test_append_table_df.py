@@ -26,6 +26,13 @@ Description:
     pin the pattern and never observe a refactor of the code it guards — the
     same trap `test_staging_update` calls out for `staging_seed_sql`.
 
+    ⚠ THIS FILE RESTATES A PRODUCTION GRANT AND IS THEREFORE COUPLED TO 063.
+    That is deliberate and Sec-ruled (2026-08-11). If it goes red, the four-part
+    pointer at the `grant` statement in the `probe` fixture tells you how to
+    tell "the fence moved" from "this fixture drifted" — read it before
+    changing anything here. Short version: `063`'s pgTAP battery is PRIMARY and
+    this file is CORROBORATING.
+
     ⚠ THE TEMP TABLE MIRRORS 063 INCLUDING ITS CHECKS AND ITS GRANT, on purpose.
     The grant is `select, insert` — exactly what 063 gives `service_role`, and
     NOT `update`/`delete`. That makes two of this module's claims testable
@@ -93,7 +100,43 @@ def probe(engine):
     with engine.connect() as conn:
         conn.execute(sqla.text(f"drop table if exists pg_temp.{_TBL}"))
         conn.execute(sqla.text(_DDL))
-        # Exactly 063's ACL: SELECT + INSERT, no UPDATE, no DELETE.
+        # ⚠⚠ THE NEXT STATEMENT RESTATES A PRODUCTION GRANT. READ THIS BEFORE
+        # CHANGING IT, AND BEFORE "FIXING" A RED IN THIS FILE.
+        #
+        # (1) WHAT IT MIRRORS, exactly. Migration 063 carries:
+        #       grant select, insert on pfin.cpi_u_nonpublication to service_role
+        #     No UPDATE. No DELETE. Those withheld grants are the OPERATIVE
+        #     append-only fence in production; the immutability triggers are the
+        #     backstop that only becomes load-bearing if the grant ever widens.
+        #
+        # (2) WHY IT IS RESTATED RATHER THAN DERIVED — deliberate, not lazy.
+        #     This tier is a bare `postgres:17` with NO `pfin` schema, so there
+        #     is no production ACL here to read: a catalog lookup CANNOT work in
+        #     this lane. Do not "fix" this into one. Restatement is chosen here
+        #     because the mechanical option is UNREACHABLE, not because prose is
+        #     generally adequate — elsewhere, prefer the mechanical form.
+        #
+        # (3) ⚠ IF THIS FILE GOES RED, THE pgTAP BATTERY IS THE DISCRIMINATOR.
+        #     `supabase/tests/rls/063_cpi_u_nonpublication_rls.sql` asserts the
+        #     REAL object's ACL via `has_table_privilege`. Its leg (h7) is the
+        #     direct counterpart to this line and already names this exact
+        #     drift: "LOAD-BEARING least-privilege: service_role holds NO UPDATE
+        #     — the ACL half of append-only, in FRONT of the immutability
+        #     trigger. RED if a `grant update` ever reached the writer (the
+        #     plausible drift: someone "fixing" a failing `on conflict do
+        #     update`)". So the decision procedure is:
+        #       · red HERE and red at (h7)   -> THE FENCE MOVED. The grant is
+        #         the question; do NOT touch this fixture.
+        #       · red HERE and green at (h7) -> THIS FIXTURE DRIFTED from a
+        #         grant that did not change. Fix the fixture.
+        #     That battery is PRIMARY and runs in the required `rls-battery`
+        #     lane; this file is CORROBORATING. It is also why no pointer was
+        #     added to 063 itself — the authoritative assertion already exists.
+        #
+        # (4) ⚠ A GRANT CHANGE ON 063 IS Sec JOINT-REVIEW-MANDATORY. It is the
+        #     operative append-only fence per ADR-011 Decision 2, not an
+        #     incidental permission. A red here is a ROUTING EVENT, not
+        #     something to relax.
         conn.execute(
             sqla.text(f"grant select, insert on pg_temp.{_TBL} to service_role")
         )
