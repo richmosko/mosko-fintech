@@ -126,6 +126,24 @@ if [ -n "$ALLOWED_PATHS" ]; then
   # ITSELF. If api/src/lib/server/supabase-admin.ts ever stops referencing
   # SUPABASE_SERVICE_ROLE_KEY, this fires.
   #
+  # ⚠ BUT "REFERENCES" MEANS ONLY THAT THE STRING APPEARS IN THE FILE — comments and
+  # string literals included. This check CANNOT distinguish a live use from a mention,
+  # and today supabase-admin.ts satisfies it TWICE OVER WITHOUT ITS LIVE USE: its own
+  # line-1 header comment names the key, and its "Missing …" error message names it in
+  # a string literal. Measured 2026-08-10 by replacing the live read on line 48 and
+  # re-running: the fence stayed GREEN. So the tripwire would NOT catch a refactor that
+  # removed the real use while leaving the prose behind. It catches deletion of the
+  # file, and the registry-vs-tree drift class it was built for; it does not verify
+  # live use. (Sec finding on this header's first wording, 2026-08-10.)
+  #
+  # NOT TIGHTENED, deliberately. Excluding comments would be brittle across block
+  # comments and would not even be sufficient here — line 51 is a string literal, and
+  # an error message naming the env var it could not find is correct code. Telling
+  # those apart needs a TypeScript parse. More importantly the AUDIT side is grep-based
+  # too, so the behaviour is at least SYMMETRIC: a bare mention in an unlisted file
+  # TRIPS the fence exactly as a bare mention in a listed file SATISFIES it. Consistency
+  # holds; only the wording had over-claimed, so the wording is what changed.
+  #
   # ⚠ AND THE FIX IS TO REMOVE THE ENTRY — NEVER TO RE-ADD THE KEY. That inversion
   # is the whole reason this diagnostic is worded the way it is (Sec condition, and
   # it is the condition most likely to be got wrong under time pressure): the

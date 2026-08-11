@@ -36,6 +36,16 @@
 #   TO REMOVE THIS ENTRY, never to re-add a key to satisfy the check. A surface that
 #   stopped needing service_role is good news; the registry shrinks to match it.
 #
+#   ⚠ READ "REFERENCING" NARROWLY: it means the STRING APPEARS IN THE FILE, comments
+#   and string literals included. The check cannot tell a live use from a mention, and
+#   supabase-admin.ts satisfies it twice over WITHOUT its live use — its line-1 header
+#   comment names the key, and its "Missing …" error message names it in a string
+#   literal. Measured 2026-08-10: replacing the live read on line 48 left the fence
+#   GREEN. So this does NOT verify live use, and a refactor that removed the real use
+#   while leaving the prose would pass. Not tightened on purpose — see the fence
+#   script for why (comment-exclusion is insufficient AND the audit side is grep-based,
+#   so the behaviour is symmetric in both directions). (Sec finding, 2026-08-10.)
+#
 #   ⚠ TEMPO CONSTRAINT this introduces on ADR-016 D2. D2 gates changes at "the
 #   surface-introducing lock"; an entry could previously be ratified and land BEFORE
 #   its code. It cannot now — an entry whose file does not yet reference the key
