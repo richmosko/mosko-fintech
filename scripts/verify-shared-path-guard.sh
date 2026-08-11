@@ -22,11 +22,29 @@
 #     sh scripts/verify-shared-path-guard.sh .husky/pre-commit
 #   Exits 0 only if all six states are distinguished correctly.
 #
-# ⚠ NOT WIRED INTO CI. Wiring it would add a required context, which needs its
-#   own F/CTO ratify. Until then the guard has NO automated watcher: nothing
-#   re-runs this on change, and a regression in the discriminator would land
-#   silently. Closing that gap means a CI job invoking this script and a
-#   required-contexts entry. Run it by hand after ANY edit to the guard block.
+# ⚠ NOT WIRED INTO CI. Two different watchers are in play here and they must not
+#   be conflated — one is untestable in CI, the other is merely unwired:
+#
+#     (i) "Is the fence ARMED in this checkout?" — NOT CI-testable, and a job
+#         claiming to test it would be theater. core.hooksPath is local git
+#         config, NOT repo content; CI runs in a fresh clone where it is unset by
+#         definition. Such a job could only assert that .husky/pre-commit EXISTS
+#         — and that file was tracked on main from 2026-06-28 through six weeks
+#         of this entire hook set being inert. It would have been GREEN for every
+#         one of those weeks. A check that cannot fail on a real violation is
+#         worse than no check: it reads as coverage. Do not add it.
+#
+#    (ii) "Does the guard LOGIC still distinguish the six states?" — this IS
+#         testable. This harness is hermetic: it builds its own scratch repo and
+#         sets its own core.hooksPath, so it does not depend on the ambient
+#         config CI lacks. Run against a guard-less pre-commit it fails 2/6, so
+#         it can fail on a real violation.
+#
+#   (ii) is nonetheless NOT wired as of 2026-08-11 — it would add a required
+#   context, which needs its own F/CTO ratify. The honest consequence: the guard
+#   has NO automated watcher today. Nothing re-runs this on change and a
+#   discriminator regression would land silently. Run it by hand after ANY edit
+#   to the guard block.
 #
 # WHY THE PRECONDITION ASSERTION EXISTS (do not remove it)
 #   Two earlier versions of this harness reported confident verdicts about

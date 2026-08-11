@@ -8,16 +8,22 @@
 #   are widened to admit EXACTLY ONE exception: the shared-path commit guard
 #   implemented below, which is not a linter and does hard-block.
 #
-#   THE BOUNDARY — this admits that one guard and nothing else:
-#     - Exactly one non-linter check may live in this file: the shared-path
-#       commit guard. It is the only one, and it is named, not described by
-#       category. "Workspace-integrity check" is NOT a category this widening
-#       opens; a second such check is not covered by having ratified the first.
-#     - Every OTHER check in this file remains bound by BOTH original clauses:
-#       runnable linters only, and warn-and-skip rather than hard-block.
-#     - Any further non-linter check, or any additional hard-blocking behaviour
-#       in any check, requires its own F/CTO ratify. This entry is not a
-#       precedent to cite; it is a single named exemption.
+#   THE CRITERION — a standing rule, deliberately NOT a count of exceptions:
+#
+#     Any blocking or non-linter behaviour in this hook set is an exception to
+#     the scope above and requires F/CTO ratification, annotated at both scope
+#     statements at the point of widening.
+#
+#   Every other check in this file remains bound by both original clauses:
+#   runnable linters only, warn-and-skip rather than hard-block.
+#
+#   Why a criterion and not "this is the only exception": a count goes FALSE the
+#   moment a second exception is ratified — in a header whose entire job is to
+#   state scope. A tally sitting beside the thing it counts is a maintenance
+#   obligation nobody signed up for, and it decays into a confident, inverted
+#   claim that misdirects exactly the reader it was written to protect. Phrased
+#   as an obligation, a second exception is GOVERNED by this sentence rather
+#   than falsifying it: discharge the criterion, do not edit a number.
 #   Rationale, and the measurement that motivated it, are on the guard block.
 #   - ruff check    on staged Python under workers/etl/
 #   - hadolint      on staged Dockerfiles (workers/etl/Dockerfile, workers/pdf-render/Dockerfile)
@@ -35,12 +41,11 @@
 set -e
 
 # --- shared-path commit guard (β) --------------------------------------------
-# SCOPE NOTE: this is the one NON-linter check in this file, and the one check
-# that HARD-BLOCKS. It sits outside the Phase 5 Step 8 "runnable linters ONLY" +
-# graceful-degradation scope, under the single named exemption F/CTO ratified on
-# 2026-08-11 (see SCOPE WIDENING in the header). That exemption covers this guard
-# specifically and opens no category — a second non-linter or hard-blocking check
-# needs its own ratify.
+# SCOPE NOTE: this check is non-linter and hard-blocking, so it is an exception
+# to the Phase 5 Step 8 scope, F/CTO-ratified 2026-08-11 and annotated at both
+# scope statements as the SCOPE WIDENING criterion in the header requires. Any
+# further blocking or non-linter behaviour in this file is governed by that same
+# criterion and needs its own ratify.
 #
 # What it prevents: commits made in the SHARED main repo checkout while that
 # checkout is on any branch other than `main`. The shared path is the team's read
