@@ -327,6 +327,64 @@
 --   realistic error — a migration or maintenance script that mutates this table
 --   by accident — even though it does not stop an owner who means to.
 --
+--   ⚠⚠ IF YOU ARE HERE TO WIDEN THIS GRANT, READ THIS PARAGRAPH FIRST.
+--   The property above is not only documented — it is ASSERTED EXECUTABLY, on
+--   TWO surfaces, and widening the grant will turn BOTH of them RED. That is the
+--   correct outcome and NEITHER IS THE THING TO RELAX.
+--     · AUTHORITATIVELY, by this table's pgTAP battery at LEG (h) PRODUCTION ACL
+--       MATRIX, which asserts the ACL facts directly (has_table_privilege) — the
+--       negative grants included. Named because that battery's path is
+--       conventionally bound to this migration's number and therefore does not
+--       drift. Within it, `(h7)` is the leg that fires on THIS drift
+--       specifically: it asserts service_role holds NO UPDATE, and names the
+--       plausible cause in its own failure text — someone "fixing" a failing
+--       `on conflict do update`. Both anchors are given deliberately: the block
+--       is the stable one, the leg is the precise one.
+--     · MIRRORED, by the `pgtest` fixture whose temp table reproduces this GRANT
+--       exactly (select + insert, no UPDATE, no DELETE) —
+--       `workers/etl/tests/test_append_table_df.py`.
+--       ⚠ THE PATH IS A CONVENIENCE; THE SHAPE IS THE AUTHORITY. Unlike the
+--       battery's, this path is NOT bound to this migration's number, so a
+--       rename silently falsifies it and nothing watches for that. It is given
+--       anyway, with the shape description kept beside it, so a rename DEGRADES
+--       this pointer to what it would otherwise have been rather than breaking
+--       it: look for the fixture that mirrors this GRANT.
+--       ⚠ AN EARLIER DRAFT WITHHELD THIS PATH ON A REASON THAT DOES NOT HOLD —
+--       that naming it would be "asserting from the database that that file
+--       exists". That reason belongs to a `comment on`; THIS IS A `--` HEADER
+--       WITH NO DATABASE REPRESENTATION. It also contradicted the rule that put
+--       this block in the header rather than the catalog in the first place: a
+--       repo-state claim is FINE in a repo file. Re-decided on the reason that
+--       does hold — rename-staleness, stated above — and the answer CHANGED,
+--       because withholding the path aimed the harder-to-locate pointer at THE
+--       SURFACE MOST LIKELY TO BE WRONGLY RELAXED, which is the opposite of what
+--       this block is for.
+--
+--   ⚠ WHY THE SECOND SURFACE IS THE ONE AT RISK, which is the whole reason this
+--   paragraph exists. Its red appears in a file about append behaviour, NOT in
+--   the migration that moved the fence — so it "goes red for the right reason in
+--   a place that looks wrong", and the cheapest-looking repair is to relax the
+--   fixture. Doing that retires the only executable record of WHICH LAYER is
+--   operative, and leaves this header's claim standing with nothing behind it.
+--   This pointer exists on the 063 side, not only on the fixture side, because a
+--   CROSS-FILE PRECONDITION NEEDS AN ENTRY ON BOTH SIDES — otherwise the side
+--   that MOVES FIRST (a migration widening the grant) never sees it, and a
+--   warning living only in the file under suspicion is where a reader discounts
+--   it.
+--
+--   ⚠ AND THE FIXTURE MIRRORS THIS GRANT — IT MUST NOT DERIVE IT. Deriving looks
+--   strictly better and is strictly worse: a text-parse of this file is
+--   AUTHORITATIVE-LOOKING AND STRUCTURALLY STALE. A later migration can
+--   `grant update … to service_role` without touching a byte here, and the parse
+--   would still report no-UPDATE — so the fixture would PASS WHILE THE FENCE WAS
+--   DOWN, precisely BECAUSE it looked derived. A hand-mirrored grant fails loudly
+--   when reality moves; a derived one fails silently, and its derivation is what
+--   buys the silence.
+--
+--   ⚠ WIDENING THIS GRANT IS Sec JOINT-REVIEW-MANDATORY (ADR-011 Decision 2
+--   audit-class, plus the per-role measurement recorded above). This states an
+--   obligation that already exists; it creates none.
+--
 --   ⚠ METHOD NOTE, recorded because the error was in the VERIFICATION, not the
 --   design: a superuser smoke test observed these triggers firing and concluded
 --   they were the guarantee everywhere. They fired precisely BECAUSE the owner's
