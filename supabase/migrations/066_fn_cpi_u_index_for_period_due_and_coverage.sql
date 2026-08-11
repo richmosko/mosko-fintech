@@ -74,6 +74,34 @@
 --   The comment at the foot of this file is authored fresh for the EIGHT-column
 --   shape and carries `065`'s correction forward rather than reverting it.
 --
+--   ⚠⚠⚠ THE DUAL (iii) OMITS — (iii)'s PROTECTION IS REAL IN ONE REVERT MODEL
+--   AND ABSENT IN THE OTHER, AND (iii) DOES NOT SAY WHICH IT MEANS. (iii) is
+--   preserved above and is NOT withdrawn; it is QUALIFIED here, so a reader who
+--   remembers it alone learns that it acquired a scope it did not originally
+--   state. (iii) argues that keeping `065` is what stops `064`'s FALSE comment
+--   being resurrected by a revert of this migration. Which is true depends
+--   entirely on what "revert" means:
+--     · REPLAY-REVERT — rebuild a database from a tree with this file REMOVED.
+--       `064` runs, `065` runs after it, and `065`'s six-column correction is
+--       the live comment on the six-column function. (iii) holds EXACTLY as
+--       written: had `065` been trimmed, `064`'s false text would stand. This
+--       is a dev/CI model — it discards the database.
+--     · FORWARD-REVERT — a NEW migration, applied to a database on which THIS
+--       one has ALREADY RUN. This is the only revert model a deployed database
+--       has, and under it (iii)'s protection DOES NOT EXIST. The `drop function`
+--       below has ALREADY destroyed the comment `065` set, and `065` has already
+--       run — a migration does not run twice. A forward-revert therefore
+--       inherits NOTHING from `065`. Nor is `064`'s false text resurrected: the
+--       recreated function is left with NO COMMENT AT ALL, which is a quieter
+--       failure than a false one and not a better one.
+--   STANDING REQUIREMENT on any migration that reverts or replaces this one (a
+--   return-type change cannot be a `create or replace`, so it too must DROP):
+--   it MUST ISSUE ITS OWN `comment on function` AND ITS OWN `revoke` + `grant`.
+--   It may lean on neither `065` nor this file. This is not a new rule — it is
+--   the ">> DROP DESTROYS THE FUNCTION'S ACL AND ITS CATALOG COMMENT <<" block
+--   above, applied to the NEXT drop instead of this one. What is added here is
+--   only that (iii) must not be read as an exception to it.
+--
 -- ----------------------------------------------------------------------------
 -- WHAT FORCED THIS — the gap was in marker-versus-nothing, not in the signals.
 --   PRD §2.4.4 (F/CTO-ratified 2026-08-10) discharged the PM half of ADR-049
