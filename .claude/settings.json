@@ -6,6 +6,11 @@
         "hooks": [
           {
             "type": "command",
+            "command": "current=$(git config --get core.hooksPath); if [ -z \"$current\" ]; then git config core.hooksPath .husky && jq -nc '{systemMessage:\"[hooks] core.hooksPath was UNSET — armed to .husky. The pre-commit fence was inert until now.\"}'; elif [ \"$current\" != \".husky\" ]; then jq -nc --arg c \"$current\" '{systemMessage:(\"[hooks] WARNING: core.hooksPath is \\($c), not .husky — NOT overwriting; the pre-commit fence may be inactive.\")}'; fi",
+            "statusMessage": "Checking pre-commit hook arming"
+          },
+          {
+            "type": "command",
             "command": "{ echo \"[Claude Code SessionStart hook — auto-loads MILESTONES.md head per ADR-009 Decision 6 (compact-ledger auto-load model)]\"; echo \"\"; echo \"Before responding to the user's first message: read the MILESTONES.md head (auto-loaded below). Cross-check against main: 'git worktree list', 'git log --all --not main --oneline', 'git status'. Summarize in 4-6 lines: current phase + step, active feature (if any), recent activity, what is the immediate next deliverable. Surface any unmerged-branch deltas as a separate 'discrepancies' list — do NOT fold them into the main-anchored summary (per memory feedback_main_anchored_orient).\"; echo \"\"; echo \"Phase-transition check: if MILESTONES.md's Current Phase block shows the phase as complete with a next phase ready to enter, append a one-liner: 'Phase transition pending — see docs/handoff-prompts.md (## Phase-transition prompt). Invoke when ready.'\"; echo \"\"; echo \"Deeper context is consult-on-demand: WORKFLOW.md (conventions), DECISIONS.md (ADRs), CHANGELOG.md (per-version PR history), docs/PRD/ + docs/ARCH/ + docs/SECURITY/ (artifact detail). Do NOT auto-read these unless the user's question requires them.\"; echo \"\"; echo \"--- MILESTONES.md (head section; auto-loaded) ---\"; echo \"\"; awk '/^## Roadmap/{exit} {print}' MILESTONES.md; } | jq -Rs '{hookSpecificOutput: {hookEventName: \"SessionStart\", additionalContext: .}}'",
             "statusMessage": "Loading session orientation from MILESTONES.md"
           }
