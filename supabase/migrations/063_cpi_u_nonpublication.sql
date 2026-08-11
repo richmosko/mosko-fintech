@@ -335,13 +335,30 @@
 --       MATRIX, which asserts the ACL facts directly (has_table_privilege) — the
 --       negative grants included. Named because that battery's path is
 --       conventionally bound to this migration's number and therefore does not
---       drift.
---     · MIRRORED, by a `pgtest` fixture whose temp table reproduces this GRANT
---       exactly (select + insert, no UPDATE, no DELETE). Deliberately described
---       by WHAT IT IS rather than WHERE IT LIVES: a migration that named a
---       specific repo file would be asserting from the database that that file
---       exists, with nothing watching for a rename — an assertion with no
---       watcher, correctable only by another migration.
+--       drift. Within it, `(h7)` is the leg that fires on THIS drift
+--       specifically: it asserts service_role holds NO UPDATE, and names the
+--       plausible cause in its own failure text — someone "fixing" a failing
+--       `on conflict do update`. Both anchors are given deliberately: the block
+--       is the stable one, the leg is the precise one.
+--     · MIRRORED, by the `pgtest` fixture whose temp table reproduces this GRANT
+--       exactly (select + insert, no UPDATE, no DELETE) —
+--       `workers/etl/tests/test_append_table_df.py`.
+--       ⚠ THE PATH IS A CONVENIENCE; THE SHAPE IS THE AUTHORITY. Unlike the
+--       battery's, this path is NOT bound to this migration's number, so a
+--       rename silently falsifies it and nothing watches for that. It is given
+--       anyway, with the shape description kept beside it, so a rename DEGRADES
+--       this pointer to what it would otherwise have been rather than breaking
+--       it: look for the fixture that mirrors this GRANT.
+--       ⚠ AN EARLIER DRAFT WITHHELD THIS PATH ON A REASON THAT DOES NOT HOLD —
+--       that naming it would be "asserting from the database that that file
+--       exists". That reason belongs to a `comment on`; THIS IS A `--` HEADER
+--       WITH NO DATABASE REPRESENTATION. It also contradicted the rule that put
+--       this block in the header rather than the catalog in the first place: a
+--       repo-state claim is FINE in a repo file. Re-decided on the reason that
+--       does hold — rename-staleness, stated above — and the answer CHANGED,
+--       because withholding the path aimed the harder-to-locate pointer at THE
+--       SURFACE MOST LIKELY TO BE WRONGLY RELAXED, which is the opposite of what
+--       this block is for.
 --
 --   ⚠ WHY THE SECOND SURFACE IS THE ONE AT RISK, which is the whole reason this
 --   paragraph exists. Its red appears in a file about append behaviour, NOT in
