@@ -9,11 +9,23 @@
 # The context name is the job's `name:` — that is the string branch protection
 # matches on. Lines starting with `#` and blank lines are ignored.
 #
-# ⚠ THIS FILE'S KNOWN BLIND SPOT — read before trusting it.
-#   This is a MANIFEST, not a mirror. Nothing mechanically proves it matches the
-#   actual branch-protection configuration, because reading branch protection
-#   requires repo-ADMIN scope and CI's `GITHUB_TOKEN` cannot do it (the read is
-#   `GET /repos/{o}/{r}/branches/main/protection`; the token 404s on it). So:
+# ⚠ WHAT THIS FILE IS NOT — read before trusting it.
+#
+#   ⚠ FIRST, A CATEGORY DISTINCTION THAT IS EASY TO OVER-READ. Required status
+#   checks gate **the merge of a pull request**. A DIRECT PUSH to `main` never opens
+#   a PR, so NO required context is ever evaluated against it. Every context listed
+#   below could be green, required, and enforced, and not one of them would resist a
+#   force-push by a single inch. What resists that is `allow_force_pushes: false` —
+#   a branch-protection FIELD, not a check. On 2026-08-10 that field is what actually
+#   stopped an accidental force-push at `main` (a `git checkout -B <branch>
+#   origin/main` had set the branch's upstream to `origin/main`, so a subsequent bare
+#   `git push --force-with-lease` targeted `main`). The contexts were irrelevant to
+#   that outcome. Do not reason about push safety from this file's contents.
+#
+#   SECOND, THIS IS A MANIFEST, NOT A MIRROR. Nothing mechanically proves it matches
+#   the actual branch-protection configuration: that read needs repo-ADMIN scope and
+#   CI's `GITHUB_TOKEN` cannot do it (`GET /repos/{o}/{r}/branches/main/protection`
+#   404s for the token). So:
 #
 #     - An entry listed here that is NOT actually required → the fence over-enforces.
 #       Harmless: it holds an unfiltered workflow unfiltered.
@@ -25,28 +37,76 @@
 #         · unmanifested AND carrying a job-level `if:` → SILENTLY GREEN.
 #       Only the second shape is the dangerous residual. Look for that one.
 #
+#   ⚠ THIRD — AND THIS IS THE SCOPING ERROR SEC CORRECTED (2026-08-10). The residual
+#   above was originally scoped to "a required context absent from the manifest."
+#   That was too narrow: it should have been scoped to BRANCH PROTECTION. Required
+#   contexts are ONE of five fields that matter, and the four this manifest does not
+#   cover are the ones that held on 2026-08-10. Flipping `allow_force_pushes` to true
+#   would be noticed by NOTHING — not by CI, which structurally cannot see it, and
+#   not by the human check, which until now did not look there. Hence the widened
+#   command below.
+#
 #   The gap is accepted deliberately rather than closed with a PAT: a token with
 #   admin scope in CI would put a production-reaching credential in the CI secret
 #   store, which collides head-on with the secrets-manifest CI/production
 #   non-overlap commitment that `secrets-nonoverlap` exists to enforce. Trading a
-#   documented manifest-sync gap for a hole in the non-overlap posture is a bad
-#   trade. (Considered and rejected 2026-08-10, DevOps → F/CTO.)
+#   documented sync gap for a hole in the non-overlap posture is a bad trade.
+#   (Considered and rejected 2026-08-10, DevOps → F/CTO; Sec: would have vetoed.)
 #
-#   THE COMPENSATING CONTROL IS A HUMAN STEP, AND IT IS NOT OPTIONAL: whenever a
-#   context is added to or removed from branch protection, update this file in the
-#   same change. Verify with:
+#   THE COMPENSATING CONTROL IS A HUMAN STEP, AND IT IS NOT OPTIONAL. Whenever ANY
+#   branch-protection field changes — not only the context list — update this file in
+#   the same change. Verify with:
 #
-#     gh api repos/richmosko/mosko-fintech/branches/main/protection \
-#       --jq '.required_status_checks.contexts[]' | sort > /tmp/actual
+#     P=repos/richmosko/mosko-fintech/branches/main/protection
+#     gh api $P --jq '.required_status_checks.contexts[]' | sort > /tmp/actual
 #     grep -v '^#' .github/required-contexts.tsv | grep -v '^$' \
 #       | cut -f3 | sort > /tmp/manifest
-#     diff /tmp/actual /tmp/manifest && echo "IN SYNC"
+#     diff /tmp/actual /tmp/manifest && echo "CONTEXTS IN SYNC"
+#     gh api $P --jq '{allow_force_pushes:.allow_force_pushes.enabled,
+#                      allow_deletions:.allow_deletions.enabled,
+#                      enforce_admins:.enforce_admins.enabled,
+#                      required_pull_request_reviews:(.required_pull_request_reviews!=null),
+#                      strict:.required_status_checks.strict}'
 #
-#   That command needs admin scope, so it is run by the F/CTO, not by CI. Run it at
-#   every promotion. Do not assume this file is current because CI is green — CI
-#   green says only that what IS listed here is unfiltered.
+#   ⚠ CHECK THE SECOND COMMAND'S OUTPUT AGAINST THIS EXPECTED POSTURE — which is a
+#   JUDGMENT THIS PROJECT OWNS, deliberately NOT a record of what the API currently
+#   returns. A committed value is a claim that goes stale silently; that is the exact
+#   defect this whole line of work has been removing. The VALUES are derivable by
+#   running the command. The EXPECTATION is the thing worth writing down:
+#
+#     · allow_force_pushes                → expected FALSE. History on `main` is not
+#       rewritable. This is the field that stops the accident described above, and it
+#       is the one no CI check can ever observe.
+#     · allow_deletions                   → expected FALSE. `main` is not deletable.
+#     · enforce_admins                    → expected TRUE. A rule the owner can walk
+#       around is a rule that is off on the days it matters.
+#     · required_pull_request_reviews     → expected PRESENT. Solo-maintainer, so the
+#       approval COUNT may legitimately be 0; presence is what carries the review
+#       plumbing (e.g. dismiss-stale behaviour) and is what to confirm.
+#     · strict (require branches up to date) → expected TRUE. Without it a context can
+#       pass against a base that no longer exists.
+#
+#   If an observed value disagrees with an expectation above, that is EITHER a
+#   misconfiguration OR a deliberate change nobody recorded. Both need a human; do
+#   not silently update the expectation to match what you observed — that converts a
+#   finding into a rubber stamp.
+#
+#   Run this at every promotion. Do not assume this file is current because CI is
+#   green: CI green says ONLY that what IS listed here is unfiltered.
+#
+# ⚠ PUSH SAFETY — the standing incantation, because a discipline fails exactly once.
+#   `git checkout -B <branch> origin/main` sets the branch's upstream to `origin/main`,
+#   so a later bare `git push --force-with-lease` TARGETS MAIN. The fix is not "remember
+#   to fix the upstream afterwards" — a rule you must remember to apply is a rule that
+#   gets skipped. Prefer the form that names its target and cannot silently inherit it:
+#
+#     git push --force-with-lease=<branch>:<sha> origin HEAD:<branch>
+#
+#   (Sec, 2026-08-10.) This belongs wherever the re-derive-don't-conflict-resolve
+#   method is written down; it is restated here because this file is where the
+#   force-push question gets asked.
 
-# --- Required as of 2026-08-10 (11 contexts, all run-always by construction) ---
+# --- Fences in security-scan.yml (run-always by construction; no paths filter) ---
 security-scan.yml	fence-rt22	RT-22 — PDF worker Dockerfile audit
 security-scan.yml	fence-rt26	RT-26 — SUPABASE_SERVICE_ROLE_KEY allowlist
 security-scan.yml	fence-tbc	TBC — TenantBoundConnection grep (production + inversion)
@@ -59,11 +119,11 @@ security-scan.yml	secrets-nonoverlap	Secrets manifest — CI/production non-over
 security-scan.yml	dedup-hash-identical	dedup-hash — import_hash canonical↔copy drift fence
 security-scan.yml	tz-sweep-identical	tz-sweep — runbook §4.1 ↔ (T3) query drift fence
 
-# --- Promoted in this change: previously advisory because they were path-filtered ---
-# Listed here BEFORE branch protection is updated, on purpose. The fence's job is to
-# hold these unfiltered; that must be true and enforced at the moment they are
-# promoted, not afterwards. Until the F/CTO adds them to branch protection, these
-# three lines over-enforce — which is the harmless direction.
+# --- Heavy lanes: de-filtered so they could become required (ADR: PR #393) ---
+# These were advisory until 2026-08-10 because a `paths:` filter made them
+# un-requireable — a filtered workflow's required context hangs Pending forever.
+# Dropping the filters is what made them eligible; keeping them dropped is what keeps
+# them eligible, which `required-unfiltered` enforces.
 db-tests.yml	rls-battery	pgTAP RLS battery (supabase test db)
 worker-ci.yml	unit	Unit + typecheck + build (hermetic)
 worker-ci.yml	integration	Live-DB integration lane (G2/G3/SC-4)
@@ -73,8 +133,9 @@ worker-ci.yml	integration	Live-DB integration lane (G2/G3/SC-4)
 # merge anyway — and the failure is quiet, because a broken guard looks exactly like
 # a satisfied one. It is self-consistent to list: security-scan.yml carries no
 # `paths:` filter and this job carries no `if:`, so it checks itself and passes.
-# ⚠ It is NOT yet in branch protection — promoting it is an F/CTO action, and this
-# line over-enforces (the harmless direction) until then.
+# ⚠ Whether it is in branch protection at any given moment is NOT recorded here —
+# that is a live fact, derivable by the command above, and a recorded copy of it
+# would go stale silently. If it is ever NOT required, that is the thing to fix.
 security-scan.yml	required-unfiltered	required-unfiltered — required contexts cannot be skipped
 
 # --- NOT listed, and why ---

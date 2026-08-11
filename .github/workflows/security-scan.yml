@@ -140,6 +140,38 @@ jobs:
           fi
           echo "OK: fence rejected a stale registry entry (exit 2, as asserted)."
 
+      - name: RT-26 registry-unused-permit probe (expects exit 2)
+        # The probe for the USE validation (Sec-adopted follow-up to (D)). Distinct
+        # from the staleness probe above, and it must stay distinct: that one names a
+        # path that does NOT exist; this one names a path that DOES exist and holds no
+        # key. Existence validation passes this case — it is exactly the shape that
+        # let the Plaid `webhook/` entry survive the (D) check, so a probe that only
+        # exercised the nonexistent-path branch would leave the stronger check
+        # unverified while looking like it covered it.
+        #
+        # The fixture file is created here rather than committed: a committed
+        # key-less file inside the audit scope is indistinguishable from ordinary
+        # source, and someone would eventually "helpfully" delete it or add a key.
+        run: |
+          set +e
+          mkdir -p /tmp/rt26probe && TMP_SRC="api/src/lib/server/__rt26_probe_unused.ts"
+          printf '// probe fixture — deliberately holds NO service_role key.\nexport const nothing = true;\n' > "$TMP_SRC"
+          TMP_REG="$(mktemp)"
+          printf '# synthetic registry — probe only\napi/src/lib/server/supabase-admin.ts\n%s\n' "$TMP_SRC" > "$TMP_REG"
+          bash scripts/ci/fence-rt26-service-role-allowlist.sh api/src/ "$TMP_REG"
+          rc=$?
+          rm -f "$TMP_REG" "$TMP_SRC"
+          set -e
+          if [ "$rc" -ne 2 ]; then
+            echo "FATAL: unused-permit probe expected exit 2; got $rc."
+            echo "       The fence did NOT reject a registry entry that exists but"
+            echo "       references no SUPABASE_SERVICE_ROLE_KEY. That is the exact shape"
+            echo "       existence-validation misses — the Plaid webhook/ entry survived"
+            echo "       precisely this way before the ADR-016 D4 prune. Failing closed."
+            exit 1
+          fi
+          echo "OK: fence rejected an unused permit (exit 2, as asserted)."
+
   fence-tbc:
     name: TBC — TenantBoundConnection grep (production + inversion)
     runs-on: ubuntu-latest

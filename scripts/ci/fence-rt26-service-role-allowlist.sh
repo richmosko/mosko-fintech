@@ -21,7 +21,9 @@
 #   1. grep -rEln 'SUPABASE_SERVICE_ROLE_KEY' over <audit-scope>.
 #   2. For each hit, extract repo-root-relative file path.
 #   3. If hit path matches any allowlist registry entry (exact string match) → permitted.
-#   4. Else → trip (non-zero exit; fence fails closed).
+#   4. Else → trip (exit 1; fence fails closed).
+#   Before any of that: the registry itself is validated — every entry must name a
+#   file that EXISTS and that actually REFERENCES the key (exit 2 on either).
 #
 # Allowlist shape: exact-file-path-shaped, NOT glob-shaped. ANY change to the
 # composition — addition OR removal — requires ADR-016 amendment + Sec-consult per
@@ -36,10 +38,13 @@
 #   <audit-scope-path>           File or directory to scan (e.g., src/ or tests/fixtures/ci/rt26-violation/).
 #   <allowlist-registry-path>    Path to the registry file (e.g., scripts/ci/rt26-allowlist.txt).
 #
-# Exit codes:
+# Exit codes — three DISTINCT classes; do not collapse them (see the registry
+# validation block for why the inversion probe depends on the distinction):
 #   0   — audit scope clean (zero hits OR all hits at allowlisted paths).
-#   1   — one or more hits outside allowlist (fail-closed).
-#   2   — argument / environment error.
+#   1   — one or more hits outside allowlist. A statement about the CODE.
+#   2   — argument / environment error, OR registry integrity failure (an entry
+#         naming a nonexistent file, or naming a file that references no key).
+#         A statement about the REGISTRY — the scan did not run.
 #
 
 set -euo pipefail
@@ -95,7 +100,9 @@ if [ -n "$ALLOWED_PATHS" ]; then
       STALE="${STALE}${allow}"$'\n'
     fi
   done <<< "$ALLOWED_PATHS"
+  REGISTRY_BAD=0
   if [ -n "$STALE" ]; then
+    REGISTRY_BAD=1
     echo "FATAL: allowlist registry names path(s) that do not exist:" >&2
     printf '%s' "$STALE" | sed 's/^/  /' >&2
     echo "" >&2
@@ -103,9 +110,97 @@ if [ -n "$ALLOWED_PATHS" ]; then
     echo "TODAY, so the fence stays green — but the moment a file lands at that" >&2
     echo "path holding a raw SUPABASE_SERVICE_ROLE_KEY, this fence PERMITS it." >&2
     echo "" >&2
-    echo "Fix the registry, not this check. Removing an entry REQUIRES Sec-consult" >&2
-    echo "+ an ADR-016 amendment per D2 (scope fixed to cover removals by D4) —" >&2
-    echo "a prune is not editorial. Registry: $ALLOWLIST" >&2
+  fi
+
+  # -------------------------------------------------------------------------
+  # REGISTRY USE VALIDATION (Sec-adopted follow-up to (D), 2026-08-10).
+  #
+  # Existence validation asks "does this path name a real file?". It is the weaker
+  # question, and it MISSED one of the three entries the ADR-016 D4 prune removed:
+  # the Plaid `webhook/` route EXISTED while holding no key. This asks the stronger
+  # one — "does this file actually reference the key?" — which makes the registry
+  # SELF-DESCRIBING rather than merely non-fictional. An entry that uses no key is a
+  # permit nothing needs, i.e. the same standing pre-authorization, one step subtler.
+  #
+  # ⚠ NOW THAT THE REGISTRY IS A SINGLE ENTRY, THIS IS A TRIPWIRE ON THE FACTORY
+  # ITSELF. If api/src/lib/server/supabase-admin.ts ever stops referencing
+  # SUPABASE_SERVICE_ROLE_KEY, this fires.
+  #
+  # ⚠ BUT "REFERENCES" MEANS ONLY THAT THE STRING APPEARS IN THE FILE — comments and
+  # string literals included. This check CANNOT distinguish a live use from a mention,
+  # and today supabase-admin.ts satisfies it TWICE OVER WITHOUT ITS LIVE USE: its own
+  # line-1 header comment names the key, and its "Missing …" error message names it in
+  # a string literal. Measured 2026-08-10 by replacing the live read on line 48 and
+  # re-running: the fence stayed GREEN. So the tripwire would NOT catch a refactor that
+  # removed the real use while leaving the prose behind. It catches deletion of the
+  # file, and the registry-vs-tree drift class it was built for; it does not verify
+  # live use. (Sec finding on this header's first wording, 2026-08-10.)
+  #
+  # NOT TIGHTENED, deliberately. Excluding comments would be brittle across block
+  # comments and would not even be sufficient here — line 51 is a string literal, and
+  # an error message naming the env var it could not find is correct code. Telling
+  # those apart needs a TypeScript parse. More importantly the AUDIT side is grep-based
+  # too, so the behaviour is at least SYMMETRIC: a bare mention in an unlisted file
+  # TRIPS the fence exactly as a bare mention in a listed file SATISFIES it. Consistency
+  # holds; only the wording had over-claimed, so the wording is what changed.
+  #
+  # ⚠ AND THE FIX IS TO REMOVE THE ENTRY — NEVER TO RE-ADD THE KEY. That inversion
+  # is the whole reason this diagnostic is worded the way it is (Sec condition, and
+  # it is the condition most likely to be got wrong under time pressure): the
+  # obvious-looking repair for "allowlisted file has no key" is to put a key back,
+  # which would re-introduce exactly the raw reference RT-26 exists to confine. A
+  # surface that stopped needing service_role is GOOD NEWS. The registry should
+  # shrink to match; per ADR-016 D3 the factory is one audited key-home, and if the
+  # home itself is gone the permit has nothing to protect.
+  #
+  # ⚠ TEMPO CHANGE AGAINST ADR-016 D2 — recorded because it narrows a ratified
+  # process. D2 requires Sec-consult + an ADR-016 amendment "at the surface-
+  # introducing lock". Before this check, an entry could be ratified and land in the
+  # amendment PR while its code landed later. It cannot now: an entry whose file
+  # does not yet reference the key FAILS CI. So the entry must land in the SAME
+  # change as the key-referencing code, or after it — never before. D2's gate is
+  # unchanged in substance; only the ORDER is constrained. Flagged to Architect as
+  # possibly worth an ADR-016 note; ADR authorship is not DevOps's to perform.
+  # -------------------------------------------------------------------------
+  UNUSED=""
+  while IFS= read -r allow; do
+    [ -z "$allow" ] && continue
+    # Skip paths already reported as nonexistent — otherwise a stale entry would be
+    # reported twice under two different diagnoses, and the second would be wrong.
+    [ -f "$allow" ] || continue
+    if ! grep -q 'SUPABASE_SERVICE_ROLE_KEY' "$allow" 2>/dev/null; then
+      UNUSED="${UNUSED}${allow}"$'\n'
+    fi
+  done <<< "$ALLOWED_PATHS"
+  if [ -n "$UNUSED" ]; then
+    REGISTRY_BAD=1
+    echo "FATAL: allowlist registry permits path(s) that reference no service_role key:" >&2
+    printf '%s' "$UNUSED" | sed 's/^/  /' >&2
+    echo "" >&2
+    echo "The file exists but holds no SUPABASE_SERVICE_ROLE_KEY, so the permit" >&2
+    echo "protects nothing and stands open for whatever lands there next." >&2
+    echo "" >&2
+    echo "⚠ THE FIX IS TO REMOVE THE ENTRY. DO NOT ADD A KEY REFERENCE TO MAKE THIS" >&2
+    echo "  PASS — that would re-introduce the raw reference RT-26 exists to confine," >&2
+    echo "  and it inverts the finding. A surface that no longer needs service_role" >&2
+    echo "  is a GOOD outcome; the registry shrinks to match it." >&2
+    echo "" >&2
+    echo "Per ADR-016 D3 the factory is one audited key-home: callers import" >&2
+    echo "supabaseAdmin() and hold no key. Removing an entry REQUIRES Sec-consult +" >&2
+    echo "an ADR-016 amendment per D2 (scope fixed to cover removals by D4)." >&2
+    echo "" >&2
+  fi
+
+  # Single exit covering BOTH registry-integrity classes. They are reported together
+  # on purpose: a registry carrying both defects should surface both in ONE run.
+  # Exiting inside the existence branch would show only the nonexistent paths, invite
+  # a fix, and then reveal the unused permits on the NEXT run — which reads as "a new
+  # problem appeared" rather than "you were shown half of it". That is precisely the
+  # shape that let the four-entry registry look one defect smaller than it was.
+  if [ "$REGISTRY_BAD" -ne 0 ]; then
+    echo "Fix the REGISTRY, not this check. Changing the composition in EITHER" >&2
+    echo "direction REQUIRES Sec-consult + an ADR-016 amendment per D2 (scope fixed" >&2
+    echo "to cover removals by D4) — a prune is not editorial. Registry: $ALLOWLIST" >&2
     exit 2
   fi
 fi

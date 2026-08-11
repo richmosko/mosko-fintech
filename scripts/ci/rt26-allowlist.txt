@@ -25,9 +25,34 @@
 #   that path — at which point the fence SILENTLY PERMITTED it. Each stale line was
 #   a standing pre-authorization to bypass the factory discipline Decision 3
 #   ratifies, at exactly the paths where Decision 3 says raw references must not
-#   exist. (That specific hole is now closed: the fence validates entry existence —
-#   see `fence-rt26-service-role-allowlist.sh`. A stale entry now fails CI instead
-#   of waiting silently for a file to land on it.)
+#   exist. (That hole is now closed at BOTH levels. The fence validates that every
+#   entry names a file that EXISTS and that actually REFERENCES the key — see
+#   `fence-rt26-service-role-allowlist.sh`. Existence alone was not enough: it
+#   catches `onboard/` and `revoke/` but NOT `webhook/`, which existed while holding
+#   no key. Both checks together catch all three, in a single pass.
+#
+#   ⚠ WITH A SINGLE ENTRY, USE-VALIDATION IS A TRIPWIRE ON THE FACTORY ITSELF. If
+#   supabase-admin.ts ever stops referencing the key, CI goes red — and THE FIX IS
+#   TO REMOVE THIS ENTRY, never to re-add a key to satisfy the check. A surface that
+#   stopped needing service_role is good news; the registry shrinks to match it.
+#
+#   ⚠ READ "REFERENCING" NARROWLY: it means the STRING APPEARS IN THE FILE, comments
+#   and string literals included. The check cannot tell a live use from a mention, and
+#   supabase-admin.ts satisfies it twice over WITHOUT its live use — its line-1 header
+#   comment names the key, and its "Missing …" error message names it in a string
+#   literal. Measured 2026-08-10: replacing the live read on line 48 left the fence
+#   GREEN. So this does NOT verify live use, and a refactor that removed the real use
+#   while leaving the prose would pass. Not tightened on purpose — see the fence
+#   script for why (comment-exclusion is insufficient AND the audit side is grep-based,
+#   so the behaviour is symmetric in both directions). (Sec finding, 2026-08-10.)
+#
+#   ⚠ TEMPO CONSTRAINT this introduces on ADR-016 D2. D2 gates changes at "the
+#   surface-introducing lock"; an entry could previously be ratified and land BEFORE
+#   its code. It cannot now — an entry whose file does not yet reference the key
+#   fails CI. The entry must land in the SAME change as the key-referencing code, or
+#   after it, never before. D2's gate is unchanged in substance; only the ORDER is
+#   constrained. Flagged to Architect as possibly worth an ADR-016 note; ADR
+#   authorship is not DevOps's to perform.)
 #
 #   The route that actually implements the old entry-2 surface is
 #   `api/src/routes/api/plaid/exchange/+server.ts`, whose header reads: "This route
