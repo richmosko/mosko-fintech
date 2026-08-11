@@ -113,7 +113,7 @@ A **mechanical** discriminator makes the distinction observable without the read
 
 ## ADR-050 — RT-05 signature-rejection has no detection surface: the honest downgrade, why a rename would conceal it, and the rate-not-row reframing (F2); RT-21 (g) inherits the defect unbuilt (F3)
 
-**Date:** 2026-08-10 · **Status:** **PROPOSED** — Decision 1 (the honest downgrade) approved in substance by F/CTO 2026-08-10; Decisions 4 + 5 pending F/CTO ratify. Sec-authored; Sec owns the finding and the catch criterion, Architect owns whichever storage shape is ratified.
+**Date:** 2026-08-10 · **Status:** **Accepted** — F/CTO ratified 2026-08-10. Decision 1 (the honest downgrade) approved in substance; Decisions 4 + 5 ratified, **shape (c) adopted** (see the Decision 5 ratify note). Sec-authored; Sec owns the finding and the catch criterion, Architect owns the adopted storage shape.
 **Phase:** 6
 
 **Context — what was measured, and where.**
@@ -161,7 +161,13 @@ SECURITY §4.6 asks about a *"suspicious webhook signature failure **pattern**"*
 
 Each clause earns its place: **bounded** because the writer is reachable by an unauthenticated attacker; **retained** per Decision 1; **no attacker-controlled content** because the write is driven by an unverified request; **no tenant resolution** because on an invalid signature there is none to resolve; **retention independent of log rotation** because that is the property actually being lost today.
 
-### Decision 5 — Shapes considered; (c) is Sec's lean; F/CTO decides
+### Decision 5 — Shapes considered; **(c) adopted** (F/CTO ratify 2026-08-10)
+
+**Ratified 2026-08-10 — shape (c) is adopted.** The question put to F/CTO was *"Adopt (c) — the bounded per-period counter keyed by rejection class?"*; the answer was ***"adopt (c)."*** Recorded in the ruling's own words, and this heading corrected from *"F/CTO decides"* in the same change.
+
+⚠ **Why the heading is part of the record and not bookkeeping.** *"F/CTO decides"* was accurate while this Decision was PROPOSED and **became wrong at the instant it was decided** — falsified by the single event most certain to occur, with nothing watching for it. Left uncorrected it would have had the tree recording an **open** decision while implementation proceeded on a **closed** one: two artifacts each complete and correct read alone, disagreeing only in the seam. That is this ADR's own subject matter, one layer up. A heading that goes stale on ratify is a heading that needed its ratify line built in from the start.
+
+**Decision 1 lands regardless and is not superseded by (c).** It is the truth repair — the record stops asserting a control that does not exist — and it is what makes the corrected artifact text state a **disposition** rather than a gap awaiting one. (c) is the control that follows it.
 
 **(a) Row-per-event audit write on signature rejection.** Two constraints make this harder than it looks, and both are structural rather than fiddly:
 - **There is no verified tenant.** Tenant is resolved from the Item id *in the verified payload* (per ADR-011 Decision 1 clause (d) code-side binding). A rejection row is therefore tenant-less, colliding with `pfin.linked_source_sync_audit`'s `users_id`-records-the-code-resolved-tenant shape and its immutable-audit-class posture. This would need a **separate** surface, not a widened existing one.
