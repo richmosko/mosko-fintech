@@ -14,9 +14,11 @@
 --       SECURITY INVOKER · STABLE · set search_path = ''  (ADR-011 Lock 11 read-composition
 --       over pfin.cpi_u_index (053) and pfin.cpi_u_nonpublication (063), both GLOBAL with
 --       `using (true)` SELECT policies)
---   - revoke execute ... from public   (EXECUTE is granted to PUBLIC by default — the revoke
---                                      is the whole of the access control, and its removal is
---                                      SILENT: every behavioural leg here would stay green)
+--   - revoke execute ... from public   (EXECUTE is granted to PUBLIC by default, so the revoke
+--                                      is load-bearing and its removal is SILENT: every
+--                                      behavioural leg here would stay green. It is NOT the
+--                                      whole of the access control — per D9 it is ONE OF THREE
+--                                      fences, with schema USAGE and table SELECT under INVOKER)
 --   - grant execute ... to authenticated
 --   - gap_class TEXT set (FIVE members): published / recorded_nonpublication / unrecorded_gap /
 --                                before_coverage / beyond_coverage
@@ -435,10 +437,15 @@ select is(
 --   `create or replace` (the return type changed), so it had to `DROP FUNCTION` and CREATE.
 --   ⚠ `drop function` TAKES THE ACL WITH IT, and PostgreSQL grants EXECUTE **to PUBLIC** by
 --   default on every freshly created function. So the revoke/grant pair in 066 is not
---   boilerplate carried over from 064 — it is the only thing standing between this drop-and-
---   recreate and a function feeding financial figures being callable by every role in the
---   cluster. Omitting it would have widened access WHILE LOOKING EXACTLY LIKE SUCCESS: the
---   function works, every behavioural leg in this file stays green, and nothing says a word.
+--   boilerplate carried over from 064: without it, every role in the cluster would HOLD EXECUTE
+--   on a function feeding financial figures. Omitting it would have widened access WHILE LOOKING
+--   EXACTLY LIKE SUCCESS: the function works, every behavioural leg in this file stays green,
+--   and nothing says a word — which is the case for keeping the leg.
+--   ⚠ BUT NOT "THE ONLY THING STANDING BETWEEN": per D9 this ACL is ONE OF THREE fences (EXECUTE
+--   ACL / schema USAGE / table SELECT under INVOKER), and holding EXECUTE is not being able to
+--   CALL. The reachable consequence of a missing revoke is a least-privilege regression for
+--   already-privileged roles, not exposure to anon. Both halves matter: the fence is worth
+--   keeping AND the alarm is worth sizing correctly.
 --   (A2) is the assertion that would have caught it. It is now load-bearing for a hazard that
 --   did not exist when it was written, and it will be load-bearing again for the NEXT migration
 --   that changes this function's return shape — because that one will have to DROP as well.
@@ -449,7 +456,7 @@ select ok(
 );
 select ok(
   not has_function_privilege('public', 'pfin.fn_cpi_u_index_for_period(date)', 'execute'),
-  '(A2) LOAD-BEARING: PUBLIC does NOT hold EXECUTE. `create function` grants EXECUTE to PUBLIC by default, so 064''s explicit revoke is the whole of the access control — and its removal is SILENT: every behavioural leg in this file would stay green while the function became callable by every role in the cluster'
+  '(A2) LOAD-BEARING: PUBLIC does NOT hold EXECUTE. `create function` grants EXECUTE to PUBLIC by default, so 066''s explicit revoke is load-bearing, and its removal is SILENT: every behavioural leg in this file would stay green while every role in the cluster came to HOLD EXECUTE. ⚠ IF YOU ARE READING THIS BECAUSE IT WENT RED, TRIAGE IT AS A LEAST-PRIVILEGE REGRESSION, NOT AS A DATA EXPOSURE. This is NOT the whole of the access control. Per D9 there are THREE independent fences — this EXECUTE ACL, USAGE on schema pfin, and table-level SELECT on both source tables (the helper is SECURITY INVOKER, so the caller''s own privileges apply) — and holding EXECUTE is not the same as being able to CALL. anon holds neither of the other two, so a red here means roles that were ALREADY privileged gained a grant they should not have, which is worth fixing promptly and is not an incident. Escalating it as public exposure would be a false-severity alarm'
 );
 select ok(
   not has_function_privilege('anon', 'pfin.fn_cpi_u_index_for_period(date)', 'execute'),
@@ -796,10 +803,15 @@ rollback to savepoint v_exec_grant;
 --   `not has_function_privilege('public', …)` that were permanently true for some unrelated
 --   reason would look IDENTICAL to a live revoke — which is this file's own stated standard for
 --   absence assertions, applied everywhere except the one place it matters most.
---   ⚠ AND (A2) IS THE FAIL-OPEN FENCE FOR THE HAZARD 066 CREATED: `drop function` takes the ACL
---   with it and PostgreSQL defaults a fresh function to EXECUTE-to-PUBLIC, so (A2) is the only
---   assertion standing between a drop-and-recreate and a cluster-wide-callable financial helper.
---   The one negative that was unproven was the one guarding the durable finding.
+--   ⚠ AND (A2) GUARDS THE HAZARD 066 CREATED: `drop function` takes the ACL with it and
+--   PostgreSQL defaults a fresh function to EXECUTE-to-PUBLIC, so (A2) is the assertion that
+--   sees a silent re-widening — and it was the one EXECUTE negative never shown able to flip.
+--   ⚠ NOT "THE fail-open fence", and NOT "the only assertion standing between": that framing
+--   came from the joint-review verdict and was WITHDRAWN once D9 measured the ladder. (A2) is
+--   ONE OF THREE fences (EXECUTE ACL / schema USAGE / table SELECT under INVOKER); a missing
+--   revoke is a least-privilege regression for already-privileged roles, not a cluster-wide
+--   exposure. The leg is still worth having — an unfalsifiable absence assertion is decoration
+--   wherever it sits — but it is worth having at its true size.
 --   ⚠ DISTINCT FROM DISCRIMINATOR D7, NOT REDUNDANT WITH IT: D7 deletes the revoke from the
 --   MIGRATION and watches (A2) redden — that tests the migration. This grants to PUBLIC directly
 --   and watches (A2) redden — that tests the ASSERTION, against the ACL itself, independent of
