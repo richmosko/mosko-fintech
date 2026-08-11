@@ -7,13 +7,51 @@
 # workers/provider-sync/** only. That left the ETL unit suite CI-invisible — a
 # green PR gave VACUOUS assurance for the ETL half of any change under workers/etl/.
 #
-# Design anchors (mirrors the established run-always-vs-path-triggered split):
+# Design anchors:
 #   - security-scan.yml = cheap grep fences, run-always, NO paths filter (fail-closed).
-#   - db-tests.yml / worker-ci.yml = heavier stack spin-ups, PATH-triggered.
-#   This file follows worker-ci.yml: the ETL suite is a Python + uv job, so it is
-#   PATH-TRIGGERED on the workers/etl tree — a doc-only PR shouldn't run it. It is a
-#   separate file (not a job in worker-ci.yml) so an ETL change doesn't cross-trigger
-#   the provider-sync jobs and vice versa — one worker, one workflow, house style.
+#   - db-tests.yml / worker-ci.yml = heavier stack spin-ups, ALSO run-always as of
+#     2026-08-10 (PR #393 / #406) — they were de-filtered precisely so they could
+#     become required contexts.
+#   This file follows worker-ci.yml, which now means RUN-ALWAYS, no `paths:` filter.
+#   It stays a separate FILE (not a job in worker-ci.yml) so an ETL change doesn't
+#   cross-trigger the provider-sync jobs and vice versa — one worker, one workflow,
+#   house style. Separate file and run-always are independent choices; only the
+#   second one changed.
+#
+# RUN-ALWAYS (no `paths:` filter). Both jobs here were PATH-TRIGGERED on the
+# workers/etl tree until this change, on the rationale that "a doc-only PR shouldn't
+# run the ETL suite." That rationale is retired, for two reasons — and the second one
+# is not a preference, it is a constraint:
+#
+#   (i)  COST. Measured over the last eight runs of this workflow, it completes in
+#        29–48s. The repo is PUBLIC (`gh repo view --json visibility`), so
+#        standard-runner Actions minutes are free and unmetered. A doc-only PR now
+#        runs the ETL suite for well under a minute at $0. Re-measure before citing
+#        this; do not recall it.
+#
+#   (ii) CORRECTNESS — the half that forces the choice. A path-filtered workflow
+#        CANNOT be a branch-protection required check. GitHub: "If a workflow is
+#        skipped due to path filtering, branch filtering or a commit message, then
+#        checks associated with that workflow will remain in a 'Pending' state." So a
+#        required-but-filtered context does not go red — it HANGS, and deadlocks every
+#        PR that touches no matching path. GitHub's guidance: "You should not use path
+#        or branch filtering to skip workflow runs if the workflow is required to pass
+#        before merging."
+#        <https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks>
+#
+# BOTH JOBS BELOW BACK REQUIRED CONTEXTS (.github/required-contexts.tsv). That is what
+# makes the filter deletion load-bearing rather than cosmetic: re-adding a `paths:`
+# key here would not merely widen coverage back down, it would convert two live merge
+# gates into permanent deadlocks.
+#
+# WHY NOT the standard remedy (a job-level `if:` off a changed-files detector, which
+# GitHub reports as "Success" when skipped): that green is emitted by GitHub's skip
+# semantics and is indistinguishable in the checks list from a real pass, which makes
+# the path filter an unguarded input to a required gate. Full argument in
+# db-tests.yml's header; not restated here.
+#
+# The `required-unfiltered` fence in security-scan.yml fails closed if a `paths:` key
+# reappears in this file.
 #
 # TWO LANES, BOTH SECRETS-FREE by design:
 #
@@ -49,17 +87,15 @@
 
 name: ETL CI (workers/etl)
 
+# NO `paths:` FILTER — deliberate, and load-bearing. See "RUN-ALWAYS" above before
+# adding one back: both jobs here back branch-protection required contexts, and a
+# `paths:` key would silently convert those gates into permanent deadlocks. The
+# `required-unfiltered` fence in security-scan.yml fails closed if one reappears.
 on:
   pull_request:
     branches: [main]
-    paths:
-      - 'workers/etl/**'
-      - '.github/workflows/etl-ci.yml'
   push:
     branches: [main]  # also on main to catch direct-push regressions if branch protection ever lapses
-    paths:
-      - 'workers/etl/**'
-      - '.github/workflows/etl-ci.yml'
 
 defaults:
   run:
@@ -92,11 +128,24 @@ jobs:
         # scope). Scoping to src/ lints the changed importer without red-on-incumbent-debt.
         run: uv run --no-sync ruff check src
 
-      - name: Unit tests (pytest -m unit → 55 run; non-unit markers deselected)
+      - name: Unit tests (pytest -m unit; non-unit markers deselected)
+        # ⚠ NO TEST COUNT IN THIS STEP NAME OR THESE COMMENTS, DELIBERATELY. Both
+        # numerals that used to live here ("55 run", "17 non-unit") were stale, and
+        # nothing in CI could ever have noticed: a count written into a step name has
+        # no watcher on the event that falsifies it — every new test invalidates it
+        # silently while the step keeps passing. Adding a test is supposed to be a
+        # non-event here. Do not "helpfully" restore a number; if a specific count
+        # ever needs to be enforced, enforce it with an assertion that fails, not with
+        # a string a reader has to trust.
+        #
         # --strict-markers (pyproject addopts): unknown markers error. `-m unit` selects
-        # ONLY unit-marked tests → the 17 non-unit tests (incl. BLS-keyed @integration)
+        # ONLY unit-marked tests → the non-unit tests (incl. BLS-keyed @integration)
         # are DESELECTED, never hard-failing CI for a missing key. Hermetic: unit tests
         # mock os.environ, so no .env / no credentials are required.
+        #
+        # FAIL-CLOSED, same as the pgtest lane: if the `unit` marker is ever
+        # unregistered or every unit test deleted, pytest collects 0 and exits 5 →
+        # job red. Do not add `|| true` or `continue-on-error`.
         run: uv run --no-sync pytest -m unit
 
   pgtest:
