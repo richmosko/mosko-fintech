@@ -413,9 +413,31 @@ def fetch_cpi_df(api_key, startyear, endyear, series_id_lst):
         series_id_lst:     list of series IDs to fetch. id: ['CUUR0000SA0']
 
     returns:
-        df_cpi:            polars dataframe of CPI index data
+        df_cpi:            polars dataframe of CPI index data. Columns of note:
+                           `series_value` (Float64, NULL where BLS published no
+                           usable value) and `series_value_raw` (String, the
+                           token BLS actually emitted — e.g. the literal '-').
 
     ⚠ INPUT CONTRACT — READ THIS BEFORE ADDING A CONSUMER.
+
+    0. ⚠ VALUE-NULL PERIODS ARE RETURNED, NOT DROPPED — and that is the whole
+       point of this function's second consumer. BLS publishes a period it has
+       no value for with the literal token "-" (measured: 2025-M10, a real
+       non-publication). The `strict=False` cast below turns that into null.
+       This function KEEPS the row and hands it to its callers, because
+       `pfin.cpi_u_nonpublication` (migration 063, ADR-049 Decision 1) exists
+       precisely to record those periods and CANNOT BE POPULATED BY ANY WRITER
+       if the transport discards them first.
+       ⚠ THE DROP THAT USED TO LIVE HERE IS GONE ON PURPOSE. Do not restore it,
+       and do not add a `drop_value_nulls=True` parameter "for safety" — a
+       filter with a default is where this class of defect lives, and the 053
+       write path never needed one: `PFinBackend._map_cpi_u_index_df` already
+       re-checks `series_value` non-null AND finite, so it is unaffected by the
+       lift. `053` still forbids storing a valueless period (NOT NULL plus a
+       finiteness CHECK), so the drop is still correct THERE. It was never
+       correct HERE, where it destroyed the row for every consumer at once.
+       `series_value_raw` is carried for the same reason: the cast overwrote the
+       token in place, so `063.published_value_raw` had no possible source.
 
     1. This returns RAW BLS PERIOD CODES. That includes NON-MONTHLY ones —
        `M13` (annual average) and `S01`/`S02` (semiannual) — WHENEVER THE
@@ -437,11 +459,29 @@ def fetch_cpi_df(api_key, startyear, endyear, series_id_lst):
        applies no grain filter — it targets `pfin.cpi`, which no V1 migration
        creates, so nothing live depends on that today.
 
-    WHEN TO REPLACE THIS NOTE WITH A FENCE: when a SECOND LIVE CONSUMER of this
-    function exists. Zero are pending. Until then, asserting the grain here
-    would break working, tested behaviour to protect a beneficiary that does
-    not exist — which is the over-correction this note replaced, and it was
-    caught only because the fence failed that `M13` test.
+    ⚠ THE SECOND-CONSUMER TRIGGER HAS FIRED, AND IT DID NOT MEAN "ADD A FENCE."
+    This note used to say: replace it with a fence when a SECOND LIVE CONSUMER
+    exists, and that zero were pending. One exists now —
+    `PFinBackend._map_cpi_u_nonpublication_df`, the writer for `063`. Sec ruled
+    the consequence on 2026-08-10 (recorded in `063`'s header, the sole durable
+    copy) and it runs OPPOSITE to the instinct the old sentence invites, because
+    the trigger conflated two dimensions the second consumer splits apart. The
+    two consumers AGREE on grain (both want month 1..12) and are EXACTLY OPPOSED
+    on value (053's writer wants only valued rows; 063's wants only the
+    valueless ones). Therefore:
+      · GRAIN fence — PERMITTED but OPTIONAL, and deliberately NOT taken here.
+        Both consumers apply their own month projection; asserting the grain in
+        the transport would still break the `M13` test that caught the earlier
+        over-correction, and point 2 above refuses it on contract grounds.
+      · VALUE fence — FORBIDDEN. It would destroy `063`'s entire subject.
+      · The EXISTING value drop — LIFTED (point 0). That was the mandatory work.
+    ⚠ THE ENFORCEABLE HALF IS NOT IN THIS FUNCTION. The counts logged below are
+    observability, not a gate — a reconciliation that only this function can see
+    cannot prove the rows reached a table. The gate is
+    `PFinBackend._prepare_cpi_u_frames`, which asserts
+    `periods returned by transport = rows for 053 + rows for 063 + non-monthly
+    periods` and raises on imbalance. If you change the shape of what this
+    function returns, that assertion is what will tell you.
     """
     headers = {"Content-type": "application/json"}
     data = json.dumps(
@@ -475,59 +515,66 @@ def fetch_cpi_df(api_key, startyear, endyear, series_id_lst):
                 .alias("month"),
                 pl.col("year").cast(pl.Int64, strict=False).alias("year"),
                 pl.col("value").cast(pl.Float64, strict=False).alias("value"),
+                # ⚠ THE RAW TOKEN, CAPTURED BEFORE THE CAST DESTROYS IT.
+                # Every expression in a single `with_columns` evaluates against
+                # the INPUT frame, so this sees the pre-cast string even though
+                # the line above overwrites `value` in place. That in-place
+                # overwrite is why `063.published_value_raw` — nullable, <= 64
+                # chars, and documented as "what the source actually emitted" —
+                # had no possible source until now. Do not reorder these into
+                # separate `with_columns` calls: the second would see the cast
+                # column and this would silently become all-null, which is a
+                # legal value for that column and would therefore be INVISIBLE.
+                pl.col("value").cast(pl.String).alias("value_raw"),
             ]
         )
-        # ⚠ WHY THE SUBSET IS `value` AND ONLY `value` — IT IS THE COMPLEMENT
-        # OF A GUARD IN ANOTHER FUNCTION, not per-column timidity.
-        # `series_value` is the only column that can legitimately be null HERE,
-        # because `_map_cpi_u_index_df` already fences `month` (non-null, 1..12)
-        # for the live consumer. Widening this subset to `month` would silently
-        # duplicate that guard and make the parser grain-aware, which point 2 of
-        # the input contract above deliberately refuses.
+        # ⚠ WHAT USED TO BE HERE, AND WHY IT IS NOT.
+        # `df = df.drop_nulls(subset=["value"])` stood on this spot from the
+        # monorepo import (`20ca752`) until 2026-08-10. It entered unreasoned
+        # (`git log -S` returned exactly one commit, so the scope was never
+        # CHOSEN in either direction), was made non-silent by BACKLOG §7.6 S20,
+        # and is now LIFTED by S21 because it made `pfin.cpi_u_nonpublication`
+        # (063 / ADR-049) unpopulable by any writer — the row it removed IS that
+        # table's subject, and it never left this function.
         #
-        # PROVENANCE, stated because it changes how much weight the scope
-        # carries: `drop_nulls(subset=["value"])` entered at the monorepo import
-        # (`20ca752`) and has NEVER been modified — `git log -S` returns exactly
-        # one commit. So the scope was never CHOSEN, in either direction. It is
-        # correct today for the reason above; it was not reasoned to.
+        # ⚠ WHAT REPLACES IT IS NOT A WEAKER DROP — IT IS A PARTITION.
+        # Nothing is discarded here. The valueless rows are REPORTED and
+        # RETURNED; deciding what to do with them belongs to the consumer that
+        # knows its own table. `053` still refuses to store them (NOT NULL plus
+        # a finiteness CHECK) and `_map_cpi_u_index_df` still filters them out
+        # for that path — the drop moved to where the constraint lives, which is
+        # where it was always correct.
         #
-        # ⚠ THIS DROP WAS SILENT, AND SILENCE IS THE DEFECT — not the drop.
-        # BLS returns a period it has published NOTHING for with the literal
-        # value "-" (measured: 2025-M10, a real non-publication). The
-        # `strict=False` cast above turns that into null and this line removes
-        # the row. Storing it is IMPOSSIBLE anyway — `053` has NOT NULL plus a
-        # finiteness CHECK on `cpi_u_index.cpi_value` — so dropping is FORCED
-        # BY THE SCHEMA and is correct.
-        #
-        # What was wrong is that nothing, at any layer, distinguished "BLS
-        # published no value" from "we lost a row". The gap then reaches
-        # `pfin.cpi_u_index`, whose PK is `cpi_period DATE` with NOTHING
-        # asserting contiguity — so a missing month is undetectable by
-        # construction, and it propagates into inflation-adjusted figures.
-        #
-        # ⚠ THE RECONCILIATION IS THE LOAD-BEARING HALF, NOT THE PER-ROW LINE.
-        # A per-row warning still says nothing about a SYSTEMATIC drop — a
-        # future change that removes rows for a different reason would be
-        # equally silent. Counting in and out catches the class; naming the
-        # period and its raw value explains the instance.
-        n_before = len(df)
-        dropped = df.filter(pl.col("value").is_null())
-        df = df.drop_nulls(subset=["value"])
-        n_dropped = n_before - len(df)
-        if n_dropped:
-            for row in dropped.iter_rows(named=True):
-                logger.warning(
-                    f"BLS {series['seriesID']}: dropping period "
-                    f"{row.get('year')}-{row.get('month'):02d} — "
-                    f"no numeric value published (raw value was not castable "
-                    f"to a number). The series has a REAL GAP here; it is not "
-                    f"a fetch failure."
-                )
+        # ⚠ THESE COUNTS ARE OBSERVABILITY, NOT THE GATE. S20's note said the
+        # reconciliation is the load-bearing half, and that is still true — but
+        # a count this function computes about its own return value cannot
+        # notice a row lost AFTER it returns, which is exactly what happened.
+        # The gate is `PFinBackend._prepare_cpi_u_frames`, which balances what
+        # this function returned against what actually reaches both tables.
+        # Emitted UNCONDITIONALLY, including when nothing is valueless:
+        # otherwise its absence would be ambiguous and "nothing to report" would
+        # look identical to "the logging broke".
+        n_returned = len(df)
+        valueless = df.filter(pl.col("value").is_null())
+        n_valueless = len(valueless)
+        for row in valueless.iter_rows(named=True):
+            month = row.get("month")
+            period = f"{row.get('year')}-{month:02d}" if month is not None else (
+                f"{row.get('year')}-M?? (non-monthly or unparsable period code)"
+            )
+            logger.warning(
+                f"BLS {series['seriesID']}: period {period} was published with "
+                f"NO USABLE VALUE (raw token {row.get('value_raw')!r}). The "
+                f"series has a REAL GAP here; it is NOT a fetch failure. The "
+                f"row is RETAINED and returned so the non-publication record "
+                f"(pfin.cpi_u_nonpublication) can be written from it."
+            )
         logger.info(
-            f"BLS {series['seriesID']}: {n_before} period(s) returned, "
-            f"{len(df)} kept, {n_dropped} dropped for a missing value."
+            f"BLS {series['seriesID']}: {n_returned} period(s) returned, "
+            f"{n_returned - n_valueless} with a published value, "
+            f"{n_valueless} published with no usable value (retained)."
         )
-        df = df.rename({"value": "series_value"})
+        df = df.rename({"value": "series_value", "value_raw": "series_value_raw"})
         df = df.drop("footnotes")
         df = df.with_columns(pl.format("{}-{}-14", "year", "month").alias("ref_date"))
         df_list.append(df)
