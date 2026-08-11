@@ -12,6 +12,30 @@ Per-version execution narrative for mosko-fintech. Each entry documents what lan
 
 ---
 
+### v1.191 — 2026-08-11
+
+**Phase 6 — the five-agent shutdown carry-forward, and what asking for it found.** No code. `main` `1a750f7`+.
+
+**Why this entry exists.** The previous teardown lost context, so every agent was asked for a handoff note **before** shutdown was approved rather than after. ⚠ **The notes surfaced five gaps that appeared in no list beforehand, and two of them were created by the same day's work** — every one found by an agent writing up what it knew, not by any check that ran.
+
+**(1) The revert gap.** Sec's revert-independence argument said not to trim `065`, because reverting `066` would resurrect `064`'s false comment. Architect, writing its note, found the **unstated dual**: `066`'s DROP **already destroyed** the function comment `065` set, so a revert — a `067` recreating the six-column function — **must re-issue that comment itself** and cannot lean on `065`, which is applied and will not re-run. **Shipped as written today, the reverted function lands with no comment at all.**
+
+**(2) The `app_id` blind spot, self-inflicted by choosing Option B.** Protection pins all 17 contexts to `app_id: 15368`; the manifest records no `app_id` and the sync compares names only. A future registration through the append endpoint lands **unpinned — satisfiable by any integration reporting that name — while `CONTEXTS IN SYNC` still prints.** Option B was the right call and it made pinning a real property that nothing enforces.
+
+**(3) `053` does not enforce first-of-month; `063` does.** One malformed row changes another period's value, classification, `period_was_due` and `coverage_through` for every caller. Unowned, and not in `BACKLOG.md` §7.
+
+**(4) The sweep buckets will rot.** `NO-ANCHOR` ended at 64 entries, nearly all legitimate; with no triaged allowlist the next reader learns *"it's always 64"* and stops looking — **how a check becomes decoration.**
+
+**(5) A rejected ADR option recorded nowhere.** `marker_basis` was rejected **on the ratified text** — any version rich enough to drive copy folds §2.4.4's two required signals into one — and it looks tidier than two columns, so it will be re-proposed.
+
+**The methodological finding that outranks the individual items.** ⚠ **Three consecutive sweeps under-counted, and each was verified by whoever chose its predicate.** The structural fix is Architect's — **print every bucket, including the one that needs judgment** (*a filter that reports one bucket and drops the rest is indistinguishable from a filter that found nothing in the others*) — plus **have the re-run done by someone who did not choose the predicate**, which Sec applied to its own grep by refusing to be its gate. And ⚠ **the blind-spot list — emphasis-loss, substitution, synonymy, line-orientation — is not a list to finish**: every entry was found by someone *using* the instrument, never by auditing it, so the durable form is procedural: **state the predicate AND its window alongside every clean result.**
+
+**Sec's account of its own two retractions, which is the most transferable thing in the batch.** Both wrong claims were **mechanism claims about a counterfactual** — *"if the revoke were missing, Y"*, *"a derivation would have to read the catalog"* — and neither is checkable by reading the actual state, **because the actual state is the one where the counterfactual does not obtain.** Both were caught by someone *operating* the mechanism (granting the privilege; specifying the parse), and could not have been caught by anyone reading it. ⚠ **Sec demanded an inversion leg for an assertion and did not demand one for its own claim about what that assertion protects** — the discipline was already its own, applied outward and not inward. And both errors were **qualifiers on calls that were right**, which is material nobody audits because it reads as description: *"the fail-open fence"* propagated into four places within a day while the actual ruling propagated nowhere. **A quotable phrase is a liability with fan-out risk.**
+
+**Two other durable forms worth the space.** Backend: *"a check chosen from the description of a change inherits the description's blind spots"* — the safety condition on 137 live rows was picked from what the run was *called*, and reading `upsert_table_df`'s body is what revealed it would have read clean through a full re-stamp. DevOps: **when a step's failure mode is a hang rather than an error, its verification must precede it** — a wrong context name does not go red, so a post-registration check discovers it as a deadlock on `main`; *a check placed after an irreversible step is not verification, it is an autopsy.*
+
+**Corrections recorded rather than quietly absorbed.** Team-lead's §7.7 brief said 10 cross-references where PM measured 23 — PM wrote against its own number and did not surface the discrepancy, and flagged that omission itself in its handoff. QA proposed three new battery legs for an unwatched claim; **all three already existed** in the `053`/`063` batteries, and landing them would have duplicated assertions across a third file. `db-tests.yml` is **60/60**, not the 40/40 reported earlier the same day.
+
 ### v1.190 — 2026-08-11
 
 **Phase 6 — the ADR-049 chain stopped being a set of merged migrations and became a measured one.** PRs #414–#417. `main` `3f209de`.
