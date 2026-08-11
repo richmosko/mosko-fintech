@@ -1,4 +1,18 @@
 -- ============================================================================
+-- ⚠⚠ THE RETURN SHAPE CREATED HERE IS SUPERSEDED BY MIGRATION 066, which DROPS
+--   and RECREATES this function with EIGHT columns — adding `period_was_due`
+--   and `coverage_through` (F/CTO-ratified 2026-08-10). Read 066 for the live
+--   contract; this file is the historical record of the six-column shape.
+--   ⚠ IN PARTICULAR, THE C4 PROVISIONALITY DISCUSSION BELOW IS SPENT. It named
+--   two pending inputs; BOTH are now discharged (the PRD §2.4.4 product ruling,
+--   and the architecture-layer mapping 066 realizes), and 066 CLEARS the marker
+--   and replaces it with a standing change-control requirement. A reader who
+--   stops here would conclude the signature is still open. It is not.
+--   Everything else in this file — the posture, the coverage-edge reasoning, the
+--   C1 both-edges correction, the N1 record-first ordering, the grant rationale
+--   — is carried forward by 066 unchanged.
+-- ============================================================================
+-- ============================================================================
 -- Migration: pfin.fn_cpi_u_index_for_period — THE single CPI-U consumption
 --   helper. Realizes ADR-049 Decision 4 (F/CTO-ratified Option C, 2026-08-10):
 --   "the CPI gap policy is implemented in a single SECURITY INVOKER composition
@@ -37,7 +51,9 @@
 --   That is the Lock 11 INVOKER read-composition pattern doing exactly this job.
 --   ADR-049 recorded ZERO built consumers of cpi_u_index at ratify (2026-08-10),
 --   which is precisely why the contract was settled then: the question was never
---   "fix N consumers" but "what does the FIRST consumer inherit". With zero
+--   "fix N consumers" but "what does the first consumer inherit" (quoted flat;
+--   ADR-049 already emphasises that whole phrase, so capitals here would be this
+--   file's stress, not the source's). With zero
 --   consumers the cost of centralizing is nil; with two, we would have two
 --   answers to the same question.
 --   >> STANDING REQUIREMENT: a consumer needing a CPI-U level for a period calls
@@ -153,17 +169,53 @@
 --   ADR-049
 --   Decision 4's sentence must be read WHOLE, because its first half alone reads
 --   as a blank cheque and its second half is the part that binds:
---     "The exact signature is the implementing PR's call PENDING THE PRODUCT
---      RULING; the composite return and the non-silence it enforces are not."
+--     "The exact signature is the implementing PR's call pending the product
+--      ruling; the composite return and the non-silence it enforces are not."
+--   ⚠ QUOTED FLAT, CORRECTED HERE. This rendering previously upper-cased
+--   "PENDING THE PRODUCT RULING" — and ADR-049 places no emphasis there. It
+--   ⚠ SWEEP GUARD: the capitalized string on the line above is HELD OUT. It NAMES
+--   the erroneous rendering in order to retract it; it does not USE it. A sweep
+--   that "corrects" it deletes the record of the correction and leaves the next
+--   reader unable to tell the text ever changed. Text that NAMES a drift must not
+--   be swept with text that COMMITS it (ADR-011 Decision 4 CHANGELOG). It
+--   emphasises the OTHER half, "the composite return and the non-silence it
+--   enforces are not." So the old rendering inverted the source: it added stress
+--   to the blank-cheque clause and dropped it from the binding one — inside a
+--   block whose very next line insists the sentence must be read WHOLE. Emphasis
+--   is noted out of band because a `--` comment cannot render it; capitals are
+--   not a substitute, because they read as the source's own stress.
 --   That draws a line THROUGH this function, not around it. LOCKED and NOT the
 --   implementing PR's call: the composite/row return and the non-silence it
 --   enforces. MUTABLE and pending: THE SIGNATURE — which is what the member set
---   below is part of. The ruling it is pending on is the ADR-049 Decision 5
---   product question (the PRD §2.4.4 non-silent-staleness amendment plus the
---   two-tier marker), which is PM's and is NOT YET RATIFIED with F/CTO.
---   >> So the first consumer MUST NOT inherit this signature as frozen. If the
---   product ruling reshapes what the user is told apart, the member set AND the
---   column set may move with it, and that is sanctioned rather than a breach. <<
+--   below is part of.
+--   ⚠ WHAT THIS BLOCK PREVIOUSLY SAID, AND WHY IT NO LONGER HOLDS — named so a
+--   reader who remembers the old text learns it CHANGED rather than doubting
+--   their memory. It read: "The ruling it is pending on is the ADR-049
+--   Decision 5 product question (the PRD §2.4.4 non-silent-staleness amendment
+--   plus the two-tier marker), which is PM's and is NOT YET RATIFIED with
+--   F/CTO." >> THAT RULING LANDED. << F/CTO ratified it 2026-08-10 and PR #391
+--   ("rule the second staleness source — one marker system, two tiers", sole
+--   file docs/PRD/index.html) merged the amendment into §2.4.4. The PM blocker
+--   is DISCHARGED; read §2.4.4 verbatim, not this summary of it.
+--   >> AND THE ARCHITECT RULING HAS SINCE LANDED TOO — SO NOTHING HERE IS STILL
+--   PROVISIONAL. << This block previously read "WHAT REMAINS OPEN IS NO LONGER
+--   PM'S — IT IS ARCHITECT'S, AND THE SHAPE STAYS PROVISIONAL UNTIL IT IS
+--   RULED", which was true when written and was falsified by migration 066:
+--   F/CTO ratified the eight-column shape 2026-08-10 and 066 DROPS and RECREATES
+--   this function to realize it. The C4 provisionality marker is CLEARED at 066
+--   and replaced with a standing change-control requirement. Read 066 and the
+--   ADR-049 amendment for the live contract. The paragraph below is retained as
+--   the record of the question 066 answered — not as a live open question.
+--   §2.4.4 routes the remainder here in
+--   its own words: "how these product distinctions map onto that helper's
+--   result shape is architecture-layer detail carried there, not pinned in this
+--   story" — and PRD Appendix B §2.1 flag (d) names the same residue as "still
+--   Architect". The open question is therefore the MAPPING: whether this column
+--   set carries §2.4.4's two required independent signals without a consumer
+--   having to re-derive gap policy. That is an F/CTO ratify gate, and it is a
+--   ONE-WAY DOOR the moment the first consumer (SELF-218) ships.
+--   >> So the first consumer STILL MUST NOT inherit this signature as frozen.
+--   The reason changed; the instruction did not. <<
 --   ⚠ SHARPENED BY THE SIXTH COLUMN, not relieved by it: nonpublication_on_record
 --   was added at Sec note N1 AFTER D4 was written, so the signature now sits
 --   FURTHER from what D4 contemplated than it did at ratify. That makes marking
@@ -263,11 +315,24 @@
 --     returns table (cpi_period date, cpi_value numeric, is_carried boolean,
 --                    carried_from date, gap_class text,
 --                    nonpublication_on_record boolean)
---     ⚠ PROVISIONAL SIGNATURE (Sec joint-review C4). The COLUMN SET above and
---       the gap_class MEMBER SET are BOTH the implementing PR's call "pending
---       the product ruling" per ADR-049 D4, and that ruling — the D5 / PRD
---       §2.4.4 question — is PM-owned and NOT YET F/CTO-RATIFIED. Either may
---       move when it lands; a consumer must not treat this shape as frozen.
+--     ⚠⚠ THIS SIX-COLUMN SIGNATURE IS SUPERSEDED BY MIGRATION 066 — READ 066,
+--       NOT THIS BLOCK, FOR THE LIVE CONTRACT. 066 DROPS and RECREATES this
+--       function with EIGHT columns, appending `period_was_due boolean` and
+--       `coverage_through date` (F/CTO-ratified 2026-08-10).
+--     ⚠ AND THE C4 PROVISIONALITY IS DISCHARGED, NOT MERELY MOVED. This block
+--       previously said the signature "STAYS PROVISIONAL" pending an ARCHITECT
+--       ruling — true when written, falsified by 066, and corrected HERE rather
+--       than only in the banner at the head of this file, because THIS is the
+--       block a consumer reads. Both inputs C4 named are discharged: the product
+--       ruling (F/CTO 2026-08-10; PR #391 merged the PRD §2.4.4 amendment) and
+--       the architecture ruling (the eight-column shape 066 realizes). 066
+--       clears the marker and replaces it with a STANDING CHANGE-CONTROL
+--       REQUIREMENT — any change to the column set or the gap_class member set
+--       requires Sec re-review + F/CTO ratify + an ADR-049 amendment + a new
+--       migration that RE-ISSUES THE GRANT.
+--       >> DO NOT READ THIS SHAPE AS NEGOTIABLE. << That reading is what licenses
+--       a consumer to re-derive the gap policy locally, which is the exact harm
+--       ADR-049 Decision 4 exists to prevent.
 --       WHAT IS LOCKED and is NOT the implementing PR's call, per the same
 --       sentence: that the return is a COMPOSITE/ROW and the NON-SILENCE it
 --       enforces. Those do not move. Also not provisional: both coverage edges
