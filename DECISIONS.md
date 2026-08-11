@@ -41,6 +41,76 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-051 — Label namespacing: permanent gate labels take a prefix, per-PR finding labels stay bare — and prefer the mechanical discriminator
+
+**Date:** 2026-08-10 · **Status:** PROPOSED — pending F/CTO ratify. Architect-authored; routed after Sec and Architect independently named the same root cause at the ARCH §4 Observability review. · **Phase:** 6
+
+**Context — the collision is not hypothetical, and it is still minting.**
+
+`F<n>` is this project's per-PR Sec-finding label convention: a review opens, findings are numbered `F1`, `F2`, …, they are disposed, and the numbers are reused by the next review. That is a good convention for what it is — the labels are cheap, local, and die with their PR.
+
+The same `F<n>` shape was also used for **permanent, cross-referenced gate labels** — ARCH §4 Observability's `F1`–`F4` Phase-5 gates, which are cited from other sections, other artifacts, and other ADRs, and which will still be cited when V1 ships. Two populations, one namespace, and only one of them is ephemeral.
+
+**Measured at 2026-08-10, bare `F1` alone resolved to four different things:** the ARCH §4 Observability PII-audit gate; SELF-279's probe-fingerprint subset-match disposition (*disposed* at PR #179 / [ADR-027](#adr-027) (hh.1)); a finding on `pfin.account_event`'s `WITH CHECK` conjunct; and a SimpleFIN `new URL()` `.input`-leak at [SECURITY §4.5](docs/SECURITY/index.html#sec-4-5). **A fifth was minted the same day** — DevOps closed *"Sec F-1"* at PR #393, during the very session that catalogued the problem.
+
+**That fifth is the whole argument.** A collision catalogue is a snapshot of a process that keeps running; the convention **mints faster than a cleanup removes**. So the fix cannot be a cleanup — it has to change what gets minted.
+
+**The concrete hazard is a false discharge.** *"F1 disposed"* appears in `CHANGELOG.md` as a true statement about a per-PR finding. Read one grep away from its context, it discharges a V1-SHIP-BLOCK gate that nobody has audited. Two real labels, wrongly paired, passing every spot-check — the false-composite shape, where verifying each part individually confirms nothing about the pairing.
+
+### Decision 1 — Permanent labels take a namespaced prefix; per-PR finding labels stay bare and stay scoped to their PR
+
+- A label that is **cross-referenced from outside the PR that created it, and outlives it**, takes a **namespaced prefix** naming its home territory — `OBS-F1`…`OBS-F4` for the ARCH §4 Observability gates being the first application.
+- A label that is **scoped to one review and dies with it** stays bare `F<n>`. No change is asked of the per-PR convention; it is doing its job.
+- **The test is lifetime and reach, not importance.** A per-PR finding can be severe and still stay bare; a low-stakes gate that three artifacts cite takes a prefix. The question is only *"will something outside this PR still be pointing at this label next month?"*
+
+**Rationale.** The two populations need different things and were sharing a namespace by accident rather than by design. Prefixing the permanent population is the smaller change — it is the one with a bounded, enumerable membership, and the one whose citations we control.
+
+### Decision 2 — Where a mechanical discriminator and a judgment discriminator are both available, prefer the mechanical one
+
+A **judgment** discriminator asks the reader to notice something and apply it — a ⚠ note, a naming convention held in someone's head, a "be careful here" comment. It works exactly as often as the reader reaches it.
+
+A **mechanical** discriminator makes the distinction observable without the reader knowing it exists — `grep OBS-F1` returns the gate and nothing else, whether or not anyone read the warning.
+
+**This is the reason the rename is worth doing at all**, given a perfectly good explanatory note already existed. It generalises past labels, and it is why the project already prefers a composite return type over a documented obligation ([ADR-049](#adr-049) Decision 4), `WHERE false` over a review rule, and an allowlist-shaped fence over a wrapping-shaped one ([ADR-016](#adr-016) Decision 1). **A property enforced by construction beats one enforced by review**; this is that principle applied to naming.
+
+**⚠ The sharp qualifier, learned by performing the first migration.** *"Mechanical beats judgment"* is a claim about the **reader**, not about the **migration**. Executing the ARCH rename was **not** mechanical: a blind `s/F1/OBS-F1/g` would have rewritten *"SELF-279's F1"* into *"SELF-279's `OBS-F1`"* — **inventing a label that does not exist and manufacturing the exact false-composite the change exists to prevent.** The distinction that saves it is already in this repo: [ADR-011](#adr-011) Decision 4's CHANGELOG records that *"an artifact that **ASSERTS** a composition can drift; one that **NAMES** a drift class by its proper name cannot"* — and is left alone. **Text that *names* a label must not be swept with text that *uses* it.** Every namespacing migration must classify occurrence-by-occurrence and leave a durable guard at the held-out region.
+
+**This qualifier is co-equal with the decision it qualifies, not a footnote to it.** The rename is the disposable half of the migration — once done, it is done, and nobody consults it again. **The `SWEEP GUARD` comment left at the held-out region is the durable half**: it is what stops a later editor "finishing the sweep" and reintroducing the defect the rename removed. A namespacing decision that ships without one has fixed the labels and left the trap. Applies to any future application of Decision 1.
+
+### Decision 3 — Migration scope, and what is deliberately not retro-edited
+
+**Renamed:** the ARCH §4 Observability gates, in `docs/ARCH/index.html` only (PR #400 — 47 occurrences; a `SWEEP GUARD` comment marks the held-out region).
+
+**Routed to their owners, not folded in:** [SECURITY](docs/SECURITY/index.html) (2 citations, Sec-owned) · [PRD](docs/PRD/index.html) (3, PM-owned) · **`DECISIONS.md` — 23 `F2` + 8 `F3` measured at `main` on 2026-08-10, of which [ADR-050](#adr-050) carries 27 (20 `F2` + 7 `F3`), Sec-owned**.
+
+**⚠ How this scope was got wrong the first time — recorded because the correction generalises, and because it arrived inside the fix for the very failure it is an instance of.** The first estimate was *"36 occurrences, ARCH-internal only."* It was produced by measuring bare `F1` in the sibling artifacts, finding a single hit (an unrelated SimpleFIN finding), and concluding about `F1`–`F4`. **The sibling citations are to `F2` and `F3`** — `DECISIONS.md` alone holds 31 of them. The instrument answered the question it was asked; the claim was about a wider one.
+
+**The part worth keeping is that the review condition which caught the *count* could not have caught this.** A re-measure re-runs the same instrument: it returns a corrected `F1` number and leaves the scope claim standing, now with fresh evidence behind it. Only **widening** the instrument found it. So: **a re-measure verifies the reading; it does not verify that the reading is of the right thing.** When a claim quantifies over a set, the measurement must range over the whole set, and *"I re-measured"* is not the check that establishes that — it is the check that hides its absence.
+
+**⚠ [ADR-050](#adr-050) is the time-sensitive one, and it is an opportunity rather than a problem.** It is **PROPOSED**, not ratified — so it is *in flight*, not history. **If ADR-051 ratifies first, ADR-050 adopts the prefix at its own ratify and costs nothing. If ADR-050 ratifies first, it becomes the single largest stale-citation site in the repo the moment it lands**, and fixing it then means retro-editing a freshly-ratified ADR, which Decision 3's own rule below forbids. This is a sequencing decision with a short window.
+
+**Not retro-edited:** bare `F<n>` strings in `CHANGELOG.md`, `MILESTONES.md`, and dated ADR blocks written before 2026-08-10. Same reasoning that leaves [ADR-037](#adr-037) Decision 4's *"allowlist stays 4"* alone ([ADR-016](#adr-016) Decision 4): a dated entry records what was believed when, and rewriting it destroys that record. **The rename cannot reach history and should not try.** The explanatory note therefore survives the rename — re-pointed at exactly these historical strings — which is why Decision 2 says *prefer* the mechanical form, not *replace with*.
+
+**Alternatives considered.**
+
+- **(α) Keep the ⚠ note, no rename.** Rejected. The note is a judgment discriminator; it protects the reader who reads it, which is not the reader the false discharge happens to. It also does nothing about the fifth collision minted the same week.
+- **(β) Rename, drop the note.** Rejected. The rename cannot reach `CHANGELOG.md` or dated ADR entries, so bare gate references survive permanently in history; without the note a reader meeting one has nothing to resolve it against. Note **and** rename.
+- **(γ) Retro-edit history so the namespace is uniform.** Rejected on the same grounds as [ADR-016](#adr-016) Decision 4: uniformity bought by destroying the record of what was believed when is a bad trade, and it converts a legible seam into a silent one.
+- **(δ) Prefix the per-PR labels instead, leaving the gates bare.** Rejected. That population is unbounded, generated by every review forever, and has no stable home territory to name; the bounded population is the one to move.
+
+**§10 3-axis cross-check** ([ADR-011](#adr-011) Decision 4 read verbatim before drafting). Catalogued ledger **stays 3** (RT-22 first / RT-26 second / RT-27 third). (i) numbering unchanged; (ii) layer-attribution unchanged — no surface becomes "four-layer"; (iii) Path B — Decision 4 referenced, not restated. This ADR renames labels and touches no mechanism. SECURITY DEFINER allowlist unchanged; Decision-3 FK-bypass family unchanged (no migration); RT-26 registry untouched.
+
+**Consequences.**
+
+- **ARCH §4's gates are `OBS-F1`–`OBS-F4`** and the §4 note carries a cross-artifact mapping so readers following a sibling artifact's bare citation are not stranded while those passes are pending.
+- **A precedent exists for the next permanent label.** New gate/commitment labels intended for cross-artifact citation take a territory prefix at creation, which is cheaper than every later rename.
+- **The convention is a project commitment, not a preference**, in the same way [ADR-016](#adr-016) Decision 2 made the webhook-allowlist convention one: with a ratified home, future cases inherit a precedent shape instead of re-litigating.
+- **Open, deliberately.** This ADR does not audit the tree for *other* permanent-label populations sharing an ephemeral namespace. `C<n>` (Sec joint-review conditions) and `RF<n>` are the obvious candidates and are unexamined — flagged rather than assumed clean.
+
+**Cross-references.** [ADR-011](#adr-011) Decision 4 (§10 ledger — referenced, unchanged; and the ASSERTS-vs-NAMES distinction Decision 2 depends on) · [ADR-016](#adr-016) Decision 2 (convention-with-a-ratified-home precedent) + Decision 4 (the don't-retro-edit-dated-blocks rule) · [ADR-049](#adr-049) Decision 4 (composite-return-over-documented-obligation — the same enforce-by-construction principle) · [ADR-050](#adr-050) (27 bare gate citations; PROPOSED, hence the sequencing window) · [ADR-027](#adr-027) (hh.1) (SELF-279's F1, one of the colliding labels) · [ARCH §4 Observability row](docs/ARCH/index.html#sec-4) (the renamed gates + the surviving note) · PR #400 (the migration) · PR #396 (the review that surfaced the collision).
+
+---
+
 ## ADR-050 — RT-05 signature-rejection has no detection surface: the honest downgrade, why a rename would conceal it, and the rate-not-row reframing (F2); RT-21 (g) inherits the defect unbuilt (F3)
 
 **Date:** 2026-08-10 · **Status:** **PROPOSED** — Decision 1 (the honest downgrade) approved in substance by F/CTO 2026-08-10; Decisions 4 + 5 pending F/CTO ratify. Sec-authored; Sec owns the finding and the catch criterion, Architect owns whichever storage shape is ratified.

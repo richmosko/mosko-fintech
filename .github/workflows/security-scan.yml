@@ -84,16 +84,61 @@ jobs:
           fi
 
       - name: RT-26 inversion-mode (golden fixture; expects violation)
+        # ⚠ ASSERTS rc == 1 EXACTLY, not merely "non-zero". A previous revision
+        # accepted ANY non-zero rc as proof the fence caught the fixture — which
+        # means it also accepted exit 2 (argument / environment / stale-registry
+        # error), i.e. the fence ABORTING BEFORE IT SCANNED ANYTHING would have been
+        # reported as "OK: fence caught fixture violation." The probe could not tell
+        # a working fence from a fence that never ran, which is the one distinction
+        # an inversion probe exists to make. Widened exit-code semantics (the
+        # registry-existence check below returns 2) made that reachable rather than
+        # merely latent, so the assertion is tightened here in the same change.
         run: |
           set +e
           bash scripts/ci/fence-rt26-service-role-allowlist.sh tests/fixtures/ci/rt26-violation/ scripts/ci/rt26-allowlist.txt
           rc=$?
           set -e
-          if [ $rc -eq 0 ]; then
-            echo "FATAL: RT-26 fence reported clean against violation fixture — fence is broken; failing closed."
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: RT-26 inversion expected exit 1 (violation detected); got $rc."
+            case "$rc" in
+              0) echo "       0 = fence reported the violation fixture CLEAN. The fence is broken." ;;
+              2) echo "       2 = fence aborted on an argument/registry error and never scanned." ;;
+              *) echo "       Unexpected exit code — the fence did something unmodelled." ;;
+            esac
+            echo "       Failing closed."
             exit 1
           fi
-          echo "OK: RT-26 fence caught fixture violation (exit $rc)."
+          echo "OK: RT-26 fence caught fixture violation (exit 1, as asserted)."
+
+      - name: RT-26 registry-staleness probe (expects exit 2)
+        # The probe for the existence check added at ADR-016 D4 alternative (D).
+        # An added check with no probe is the next gutted checker: without this, the
+        # existence validation could be deleted, or silently stop working, and every
+        # CI run would stay green because the real registry is currently clean — the
+        # check's own correctness would be invisible in its own result.
+        #
+        # This makes it go red ON PURPOSE: synthesize a registry naming a path that
+        # cannot exist, and assert the fence refuses to scan. Asserting exit 2
+        # specifically (not just non-zero) is what distinguishes "rejected a stale
+        # registry" from "found a violation" — collapsing them would let a fence that
+        # had stopped validating still pass this probe via the ordinary violation path.
+        run: |
+          set +e
+          TMP_REG="$(mktemp)"
+          printf '# synthetic stale registry — probe only\napi/src/lib/server/supabase-admin.ts\napi/src/routes/api/plaid/does-not-exist/+server.ts\n' > "$TMP_REG"
+          bash scripts/ci/fence-rt26-service-role-allowlist.sh api/src/ "$TMP_REG"
+          rc=$?
+          rm -f "$TMP_REG"
+          set -e
+          if [ "$rc" -ne 2 ]; then
+            echo "FATAL: registry-staleness probe expected exit 2; got $rc."
+            echo "       The fence did NOT reject a registry naming a nonexistent path."
+            echo "       That is the exact fail-open ADR-016 D4 documents: a stale entry is"
+            echo "       a standing pre-authorization that costs nothing until a file lands"
+            echo "       on it. Failing closed."
+            exit 1
+          fi
+          echo "OK: fence rejected a stale registry entry (exit 2, as asserted)."
 
   fence-tbc:
     name: TBC — TenantBoundConnection grep (production + inversion)
