@@ -9,15 +9,45 @@
 --   REAL DDL: it DROPS and RECREATES a function on that path.
 --
 -- ----------------------------------------------------------------------------
+-- ⚠ WITHDRAWN-QUOTE GUARD — READ BEFORE ANY AUTOMATED SWEEP OF THIS FILE.
+--   Several strings in this header are quoted PRECISELY BECAUSE THEY ARE FALSE.
+--   They are the SUBJECT of a withdrawal, not support for an argument: their
+--   falsity is the assertion, not the premise. They are kept so a reader who
+--   remembers the old text learns it CHANGED rather than doubting their memory.
+--   >> EVERY LINE CARRYING SUCH A QUOTATION IS PREFIXED `WQ>`. <<
+--   THE MARKER REPEATS ON EVERY LINE OF A QUOTATION rather than heading it once,
+--   and that redundancy is the entire point: a marker that a trim, a `grep -A1`,
+--   a partial-block copy or a context boundary can separate from its quote is a
+--   conditional waiting to be RE-ARMED BY TRANSCRIPTION. Inseparable beats
+--   nearby. If you add a withdrawn quote here, mark every line of it.
+--   >> A STALENESS SWEEP MUST EXCLUDE `WQ>` LINES. << They will match a search
+--   for stale state claims — that is exactly what they are, quoted as such.
+--   "Correcting" one RESTORES the false text this file exists to retire, and it
+--   would look like a cleanup. The precedent is DECISIONS.md's ratified rule
+--   that an artifact which NAMES a drift class by its proper name is not itself
+--   drift and is left alone; only an artifact that ASSERTS can drift.
+--
+-- ----------------------------------------------------------------------------
 -- Numbering: 066 follows 065 (the cpi_u comment corrections). Next free number
 --   taken AT AUTHORING TIME by reading the tree, never reserved ahead.
---   ⚠ THE READING IS BRANCH-DEPENDENT AND THAT MATTERS HERE: `065` is not yet on
---   `main`, so a tree read at `main` reports 064 as the maximum and would hand
---   the next author 065 — a silent collision with an open branch. This file is
---   authored on a branch STACKED on `065` precisely so the number is read from a
---   tree that contains it. The 058->059 slip is the precedent for why numbers
---   are never reserved ahead; this is its mirror image — a number must be read
---   from a tree that can actually see its neighbours.
+--   ⚠ THE READING IS BRANCH-DEPENDENT, AND THIS FILE IS ITS OWN WORKED EXAMPLE.
+--   AT AUTHORING TIME `065` was not yet on `main`, so a tree read at `main`
+--   reported 064 as the maximum and would have handed the next author 065 — a
+--   silent collision with an open branch. This file was therefore authored on a
+--   branch STACKED on `065`, so its number was read from a tree that contained
+--   it.
+--   ⚠ THIS PARAGRAPH PREVIOUSLY STATED THAT IN THE PRESENT TENSE:
+--   WQ> "`065` is not yet on `main`, so a tree read at `main` reports 064 as
+--   WQ>  the maximum"
+--   — which
+--   went FALSE the moment `065` merged, and would then have misdirected the very
+--   numbering author it exists to protect. Restated above as the dated event it
+--   always was. This is the SAME DRIFT CLASS `065`'s own correction (C) fixed in
+--   `063`: a merge-order state claim, true when written, false on merge —
+--   committed one file later by the author who wrote the rule.
+--   THE STANDING RULE, which depends on none of that history: a migration number
+--   MUST be read from a tree that can actually see its neighbours, and MUST NOT
+--   be reserved ahead. The 058->059 slip is the precedent.
 --   Depends on: 001 (pfin schema) + 053 (cpi_u_index) + 063
 --   (cpi_u_nonpublication) + 064 (the function this replaces). Order-DEPENDENT.
 --
@@ -48,12 +78,26 @@
 --   the DROP must FAIL LOUD rather than quietly removing the dependent.
 --
 --   ⚠⚠ AND THE DROP TAKES `065`'s FUNCTION COMMENT WITH IT — stated here because
---   it is a REVIEW FACT, not a defect, and Sec is reviewing `065` separately.
+--   it is a REVIEW FACT, not a defect. `065` was reviewed on its own. (That
+--   clause previously read
+--   WQ> "and Sec is reviewing `065` separately"
+--   — a review-STATE claim that went false when `065` merged. Same drift class
+--   as the numbering paragraph above.)
 --   `065` is a comment-only migration that corrects, among other things, this
 --   function's catalog comment. This migration DROPS the function, so on a full
 --   replay `065`'s function-comment correction is applied and then SUPERSEDED
 --   moments later by the comment at the foot of this file. That is not wasted
---   work and `065` must NOT be trimmed on account of it, for two reasons:
+--   work and `065` must NOT be trimmed on account of it. THE REASONS BELOW ARE
+--   LABELLED, NOT COUNTED.
+--   ⚠ This sentence previously ended
+--   WQ> "for two reasons:"
+--   — above a list of THREE, which this PR then extended again. A tally sitting
+--   beside the list it counts, in the header whose whole subject is text that
+--   went false. Same lesson as the sites-named-not-counted note further down,
+--   landing TWICE IN ONE COMMIT by the same author: A LABEL IS A STABLE
+--   REFERENCE AND A COUNT IS A MAINTENANCE OBLIGATION. The labels (i)/(ii)/(iii)
+--   are load-bearing and MUST NOT be stripped — they are how a reader looks an
+--   instance up. Only the tally goes. Do not re-count; stop counting:
 --     (i)  `065`'s TABLE-comment corrections (the reconciliation formula, the
 --          "catches both obstacles" over-claim, and the merge-order state claim)
 --          are on pfin.cpi_u_nonpublication and are NOT touched by this
@@ -72,7 +116,13 @@
 --          reader might catch; (iii) describes a durable regression that a
 --          revert would introduce silently.
 --   The comment at the foot of this file is authored fresh for the EIGHT-column
---   shape and carries `065`'s correction forward rather than reverting it.
+--   shape. It SUPERSEDES `065`'s correction with a later-true statement, and in
+--   particular does NOT resurrect the `064` claim `065` corrected. (This
+--   previously read that it
+--   WQ> "carries `065`'s correction forward"
+--   — wrong in a
+--   way that fed the same misreading (iii) invites: "carries forward" implies
+--   `065`'s text survives somewhere, and the DROP guarantees it does not.)
 --
 --   ⚠⚠⚠ THE DUAL (iii) OMITS — (iii)'s PROTECTION IS REAL IN ONE REVERT MODEL
 --   AND ABSENT IN THE OTHER, AND (iii) DOES NOT SAY WHICH IT MEANS. (iii) is
@@ -81,26 +131,61 @@
 --   state. (iii) argues that keeping `065` is what stops `064`'s FALSE comment
 --   being resurrected by a revert of this migration. Which is true depends
 --   entirely on what "revert" means:
---     · REPLAY-REVERT — rebuild a database from a tree with this file REMOVED.
+--     · CHAIN REMOVAL — this file is REMOVED from the tree and the chain is
+--       applied from `001` onto a database that has therefore never run it.
 --       `064` runs, `065` runs after it, and `065`'s six-column correction is
 --       the live comment on the six-column function. (iii) holds EXACTLY as
---       written: had `065` been trimmed, `064`'s false text would stand. This
---       is a dev/CI model — it discards the database.
+--       written: had `065` been trimmed, `064`'s false text would stand.
+--       ⚠ THIS IS NOT A CI-ONLY CURIOSITY, AND CALLING IT ONE WOULD BE THE
+--       ERROR. V1 is GREENFIELD (ADR-021), so V1's FIRST DEPLOY applies the
+--       chain from `001` onto a database that has run nothing. Chain-from-`001`
+--       is therefore a real deploy path and not a lab exercise, and removing a
+--       file from that chain is a real revert. (Stated as the FIRST DEPLOY — a
+--       fixed event — rather than as
+--       WQ> "the deploy target stands up from scratch",
+--       which was a present-tense state claim of exactly the kind corrected in
+--       the numbering paragraph above: it goes false once V1 is deployed, after
+--       which the selector below is what governs.)
 --     · FORWARD-REVERT — a NEW migration, applied to a database on which THIS
---       one has ALREADY RUN. This is the only revert model a deployed database
---       has, and under it (iii)'s protection DOES NOT EXIST. The `drop function`
---       below has ALREADY destroyed the comment `065` set, and `065` has already
---       run — a migration does not run twice. A forward-revert therefore
---       inherits NOTHING from `065`. Nor is `064`'s false text resurrected: the
---       recreated function is left with NO COMMENT AT ALL, which is a quieter
---       failure than a false one and not a better one.
---   STANDING REQUIREMENT on any migration that reverts or replaces this one (a
---   return-type change cannot be a `create or replace`, so it too must DROP):
---   it MUST ISSUE ITS OWN `comment on function` AND ITS OWN `revoke` + `grant`.
---   It may lean on neither `065` nor this file. This is not a new rule — it is
---   the ">> DROP DESTROYS THE FUNCTION'S ACL AND ITS CATALOG COMMENT <<" block
---   above, applied to the NEXT drop instead of this one. What is added here is
---   only that (iii) must not be read as an exception to it.
+--       one has ALREADY RUN. Under it (iii)'s protection DOES NOT EXIST. The
+--       `drop function` below has ALREADY destroyed the comment `065` set, and
+--       `065` has already run — a migration does not run twice. A forward-revert
+--       therefore inherits NOTHING from `065`. Nor is `064`'s false text
+--       resurrected: the recreated function is left with NO COMMENT AT ALL,
+--       which is a quieter failure than a false one and not a better one.
+--   ⚠ WHICH MECHANISM APPLIES IS FIXED BY THE TARGET'S STATE, NOT BY PREFERENCE:
+--   chain removal is available only where this file has NOT been applied,
+--   forward-revert only where it HAS. Neither reverter gets to choose.
+--
+--   STANDING REQUIREMENT — AND IT IS A PROPERTY OF `DROP`, NOT OF "CHANGING THIS
+--   FUNCTION". Any migration that DROPS this function MUST ISSUE ITS OWN
+--   `comment on function` AND ITS OWN `revoke` + `grant`, leaning on neither
+--   `065` nor this file.
+--   ⚠ THE CONVERSE IS EQUALLY LOAD-BEARING AND MUST NOT BE LOST IN THE WARNING:
+--   `create or replace function`, and `alter function ... rename to` /
+--   `... set schema`, PRESERVE BOTH THE COMMENT AND THE ACL — the pg_proc OID
+--   SURVIVES those, and pg_description and proacl are keyed to it. ONLY THE DROP
+--   DESTROYS THEM. Writing this as "any change to this function loses the
+--   comment" would be an OVERCLAIM that trains the next author to distrust
+--   `create or replace` — the cheap, safe, OID-preserving path — and to reach
+--   instead for a drop-and-recreate that drags this entire hazard along with it.
+--   What forces the DROP here is narrow and specific: a change to the RETURN
+--   TYPE (`returns table` IS the return type) or to the argument types. A change
+--   confined to the BODY is a `create or replace` and loses nothing.
+--   None of this is a new rule, and the mechanism is NOT newly stated — this
+--   file already states it at the ">> DROP DESTROYS THE FUNCTION'S ACL AND ITS
+--   CATALOG COMMENT. <<" block above, again at the `065` clause above, and again
+--   in the note at the `drop function` itself. (Sites named, not counted: a
+--   tally of them would be a maintenance obligation this sentence cannot
+--   honour, and it would go stale the first time anyone states the mechanism a
+--   further time.) What was missing, and is added here, is the OBLIGATION THE
+--   MECHANISM TRANSFERS TO THE NEXT AUTHOR — and that (iii) must not be read as
+--   an exception to it.
+--   ⚠ SCOPE OF THE PAIR NAMED ABOVE, so it is not read as an exhaustive account
+--   of everything a DROP can destroy: it is scoped to what THIS drop
+--   demonstrably destroys and what this file therefore re-issues — the ACL and
+--   the catalog comment. An author dropping some OTHER function must ask the
+--   question again for that function rather than inherit this answer.
 --
 -- ----------------------------------------------------------------------------
 -- WHAT FORCED THIS — the gap was in marker-versus-nothing, not in the signals.
@@ -236,6 +321,21 @@
 --   the PRD §2.4.4 amendment) was F/CTO-ratified 2026-08-10, and the Architect
 --   half (this shape) was F/CTO-ratified at the ratify gate that produced this
 --   migration. Nothing pending remains for the caveat to name.
+--   ⚠ THIS DISCHARGE STATEMENT HAS A TWIN IN THE CATALOG COMMENT AT THE FOOT OF
+--   THIS FILE, WHICH STATES THE SAME DISCHARGE IN ITS OWN WORDS. THE TWO MUST BE
+--   READ AND CORRECTED TOGETHER. The catalog half is NOT corrected here — a
+--   catalog string has a database representation, so it is OWED the same
+--   dedicated comment-only migration the obligation enumeration below is owed,
+--   and it should ride in THAT one rather than wait for a second.
+--   ⚠ NO DEFECT IS ASSERTED IN THE TEXT ABOVE, AND THIS NOTE DOES NOT CORRECT
+--   IT. That text is dated, past-tense, and enumerates its own members in the
+--   same sentence, so a reader derives the count by looking rather than
+--   inheriting it. The note exists to PAIR THE HALVES, not to fix either.
+--   ⚠ WHY PAIR THEM AT ALL, RECORDED SO THE NOTE IS NOT LATER READ AS NOISE: a
+--   header/catalog pair that states ONE fact in TWO places drifts the moment one
+--   half is edited alone, and THAT SEPARATION IS HOW THIS FILE'S CORRECTIONS
+--   ACCUMULATED IN THE FIRST PLACE. Whoever discharges the obligation must leave
+--   both halves saying the same thing.
 --   WHY CLEARING IS CORRECT RATHER THAN MERELY PERMITTED — the argument that
 --   kept it alive last time now runs the other way. Keeping a provisionality
 --   marker that names no live dependency does not preserve caution: it ANCHORS a
@@ -249,8 +349,65 @@
 --   rather than a state claim: THE RETURN SHAPE IS F/CTO-RATIFIED; ANY CHANGE TO
 --   THE COLUMN SET OR THE gap_class MEMBER SET REQUIRES Sec RE-REVIEW + F/CTO
 --   RATIFY + AN ADR-049 AMENDMENT, AND — because of the DROP above — A NEW
---   MIGRATION THAT RE-ISSUES THE GRANT. That is durable; a marker that merely
---   records something as pending was not. (An earlier draft quoted "pending a
+--   MIGRATION THAT RE-ISSUES BOTH THE GRANT AND THE CATALOG COMMENT. That is
+--   durable; a marker that merely records something as pending was not.
+--   ⚠ THE COMMENT WAS ADDED TO THIS ENUMERATION LATER — IT PREVIOUSLY READ
+--   WQ> "A NEW MIGRATION THAT RE-ISSUES THE GRANT"
+--   AND STOPPED THERE. Recorded because
+--   of HOW it failed, which is reusable: an omission in PROSE reads as prose,
+--   but AN OMISSION IN A LIST READS AS A COMPLETE LIST. An author working this
+--   sentence as a checklist could tick Sec, F/CTO, the ADR amendment and the
+--   grant — and ship with no comment, having followed every instruction given.
+--   See the STANDING REQUIREMENT block above for why the obligation attaches to
+--   the DROP itself and not to "changing this function".
+--   ⚠⚠ KNOWN-INCOMPLETE COPY, MARKED RATHER THAN LEFT SILENT: this same
+--   enumeration also appears in the CATALOG comment at the foot of this file,
+--   and THERE IT STILL NAMES ONLY THE GRANT. It is not corrected here because a
+--   catalog string HAS a database representation and can change only by issuing
+--   new SQL — which this correction deliberately does not do. THIS CORRECTION IS
+--   OWED A DEDICATED COMMENT-ONLY MIGRATION under the full `052` shape
+--   (regenerate-and-diff, anchor asserted to match EXACTLY ONCE, containment
+--   proof, parse-in-rollback, render-verify via obj_description).
+--   ⚠ STATED AS AN OBLIGATION, NOT AS A PLAN, AND THE DIFFERENCE IS THE POINT —
+--   the shape `065` uses for its transport contract test: an obligation is TRUE
+--   THE MOMENT IT IS WRITTEN and stays true until DISCHARGED, and it still reads
+--   as UNMET WORK if nothing satisfies it. A plan does not: any construction
+--   asserting that the correction ALREADY HAS a vehicle — a present-tense
+--   passive naming one, a scheduling verb, an ordering clause — asserts a
+--   mechanism that may not exist. (Those forms are DESCRIBED rather than quoted
+--   here, deliberately: a sweep hunting stale plan-claims scans the prose
+--   written ABOUT plan-claims too, and that prose is the densest concentration
+--   of exactly the tokens it hunts. Measured during this correction — a grep for
+--   the forbidden forms matched only this paragraph.)
+--   A CORRECTNESS CLAIM MUST NOT FORWARD-REFERENCE THE
+--   MECHANISM THAT MAKES IT TRUE — `065`'s own rule, which `065` honoured by
+--   DELIBERATELY REFUSING to name the branch that would lift the transport drop.
+--   Carrying NO migration number, NO issue reference and NO ordering claim is
+--   the same decision as that one, not three separate ones: a number would be
+--   reserved ahead of the tree, and an issue reference inside a merged PR closes
+--   the very tracker that holds this work open.
+--   ⚠ THIS PARAGRAPH PREVIOUSLY SAID THE CORRECTION WOULD
+--   WQ> "ride along with the next migration that touches this function's
+--   WQ>  comment for an independent reason."
+--   THAT DISPOSITION IS WITHDRAWN, and the circularity note below is the reason:
+--   A TRIGGER THAT MAY BE THE FAILURE ITSELF IS NOT A SCHEDULE. Recorded rather
+--   than quietly swapped, because of WHAT it was — an OPEN QUESTION WRITTEN DOWN
+--   AS A PLAN, asserted from the vantage current at authoring time. That is the
+--   same authoring habit the STANDING REQUIREMENT block above exists to
+--   document, committed in the text documenting it: THE HABIT SURVIVED BEING
+--   NAMED, IN THE PARAGRAPH NAMING IT. Naming a habit does not cure it; the
+--   check is whether a claim is stated from a vantage other readers share.
+--   ⚠ THE CIRCULARITY IS REAL AND IS STATED RATHER THAN HOPED AWAY: the next
+--   migration to touch this function's comment for an independent reason is most
+--   likely authored by the very person this sentence warns — which is precisely
+--   WHY the correction is SCHEDULED as its own migration rather than left
+--   opportunistic.
+--   THIS HEADER IS THEREFORE THE LOAD-BEARING SITE AND THE CATALOG COMPLETION IS
+--   HYGIENE — which is the right way round, because this sentence is an
+--   INSTRUCTION TO A MIGRATION AUTHOR, who necessarily has the repo in front of
+--   them (migrations live in code, not the dashboard). It is not a fact about
+--   the data, so the `\d+`-reader-with-no-repo argument that justifies the
+--   comment-only migration vehicle does not reach it. (An earlier draft quoted "pending a
 --   ruling" as if from ADR-049. That string is in no ADR — D4 reads "pending the
 --   product ruling" — so the quotation marks dressed a paraphrase as a citation.
 --   De-quoted.)
