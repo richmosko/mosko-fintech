@@ -1,4 +1,18 @@
 -- ============================================================================
+-- ⚠⚠ THE RETURN SHAPE CREATED HERE IS SUPERSEDED BY MIGRATION 066, which DROPS
+--   and RECREATES this function with EIGHT columns — adding `period_was_due`
+--   and `coverage_through` (F/CTO-ratified 2026-08-10). Read 066 for the live
+--   contract; this file is the historical record of the six-column shape.
+--   ⚠ IN PARTICULAR, THE C4 PROVISIONALITY DISCUSSION BELOW IS SPENT. It named
+--   two pending inputs; BOTH are now discharged (the PRD §2.4.4 product ruling,
+--   and the architecture-layer mapping 066 realizes), and 066 CLEARS the marker
+--   and replaces it with a standing change-control requirement. A reader who
+--   stops here would conclude the signature is still open. It is not.
+--   Everything else in this file — the posture, the coverage-edge reasoning, the
+--   C1 both-edges correction, the N1 record-first ordering, the grant rationale
+--   — is carried forward by 066 unchanged.
+-- ============================================================================
+-- ============================================================================
 -- Migration: pfin.fn_cpi_u_index_for_period — THE single CPI-U consumption
 --   helper. Realizes ADR-049 Decision 4 (F/CTO-ratified Option C, 2026-08-10):
 --   "the CPI gap policy is implemented in a single SECURITY INVOKER composition
