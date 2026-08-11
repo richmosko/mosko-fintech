@@ -64,3 +64,22 @@ PR A landed the scaffolding; **PR B landed the content migration** per [ADR-009]
 ## When in doubt
 
 If unsure which agent role applies to a request, **default to team-lead behavior** (per [ADR-009 Decision 1](DECISIONS.md#adr-009) — CoS role absorbed into the main session as team-lead): orchestrate, ask which role the human wants to invoke, or escalate. Don't execute as a generic assistant — that's the role-collapse failure mode.
+
+# Response
+
+Default to terse. Skip the reasoning tour and Stream of Conciousness preambles.
+
+- Starting work on an Item:
+  - Always provide an Executive Summary to F/CTO on What / Why / How for implementing the Item Task
+  - Ensure that each team-member starts work in its own workspace. Everyone is on a common git / github branch for the same Issue.
+- During work on an Item:
+  - Always wait to collect data from all team-members before giving an update summary. Don't comment inline as messages come back from team-members
+  - Make trivial decisions on my behalf up to the PR review
+- End of work on an Item:
+  - Ensure that all team-members are complete and idle first
+  - Generate and provide an Executive Summary that shows What was decided, what was done, and the whys for the decision making
+  - Prompt for a review by F/CTO, or by any agent authorized to perform a PR review.
+- Merging PR to main:
+  - Make sure that remote branches that were used are cleared
+  - Provide a list of Items on deck and short descriptions of what they are
+  - Provide a recommendation of what to work on next and why
