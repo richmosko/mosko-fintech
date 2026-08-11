@@ -151,10 +151,12 @@ Merging *this* PR does not trigger those automatically — they are deliberate, 
 ```bash
 git rev-parse --short main                                  # where main actually is
 grep -o 'main` = `[0-9a-f]\{7\}' MILESTONES.md | head -1    # where the ledger says it is
-git log --oneline <ledger-sha>..main | wc -l                # how many merges behind
+git log --merges --oneline <ledger-sha>..main | wc -l        # how many merges behind
 ```
 
-⚠ **The ledger is stale BY CONSTRUCTION the instant any PR merges — an entry cannot name its own merge SHA.** So "equal" is not the test and never will be; **the gap size is.** One behind is the floor; more than that is debt.
+⚠ **`--merges` is load-bearing; `git log --oneline` counts the wrong thing.** Under merge-commit style every PR contributes **at least two** commits — the branch commit plus the merge commit — and a multi-commit branch contributes more. A bare commit count therefore reports a gap of 2+ when the ledger is exactly one merge behind, i.e. **at the floor and correct.** *(Measured: the first run of this step, against the PR that introduced it, read "2 merges behind" from a command that was counting commits. The label named merges; the instrument counted commits. Fixed here.)*
+
+⚠ **The ledger is stale BY CONSTRUCTION the instant any PR merges — an entry cannot name its own merge SHA.** So "equal" is not the test and never will be; **the gap size is. Exactly 1 is the floor and means current; ≥ 2 is debt.**
 
 **The rule:**
 
