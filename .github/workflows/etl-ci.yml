@@ -129,14 +129,28 @@ jobs:
         run: uv run --no-sync ruff check src
 
       - name: Unit tests (pytest -m unit; non-unit markers deselected)
-        # ⚠ NO TEST COUNT IN THIS STEP NAME OR THESE COMMENTS, DELIBERATELY. Both
-        # numerals that used to live here ("55 run", "17 non-unit") were stale, and
-        # nothing in CI could ever have noticed: a count written into a step name has
-        # no watcher on the event that falsifies it — every new test invalidates it
-        # silently while the step keeps passing. Adding a test is supposed to be a
-        # non-event here. Do not "helpfully" restore a number; if a specific count
-        # ever needs to be enforced, enforce it with an assertion that fails, not with
-        # a string a reader has to trust.
+        # ⚠ NO TEST COUNT IN THIS STEP NAME OR THESE COMMENTS, DELIBERATELY. Two
+        # numerals used to live here — "55 run" and "17 non-unit" — and both were
+        # wrong. Nothing in CI could ever have noticed: a count in a step name has no
+        # watcher on the event that falsifies it, so every new test invalidates it
+        # silently while the step keeps passing.
+        #
+        # ⚠ AND STALENESS IS NOT THE STRONGEST REASON — THIS ONE IS. The count is not
+        # a property of the suite, it is a property of A TREE. Measured on 2026-08-10,
+        # the same `pytest -m unit`, the same day, both correct:
+        #
+        #     main @ afe573f                      → 210 passed, 30 deselected
+        #     an open branch adding CPI tests     → 225 passed, 30 deselected
+        #
+        # So any number written here is simultaneously right on one live branch and
+        # wrong on another, and which one it is flips on merge order. That is not a
+        # defect care can fix — being more diligent cannot make one string true of two
+        # trees. It is the case for the number not existing rather than for the number
+        # being maintained.
+        #
+        # Adding a test is supposed to be a non-event here. Do not "helpfully" restore
+        # a count; if one ever genuinely needs enforcing, enforce it with an assertion
+        # that FAILS, not with a string a reader has to trust.
         #
         # --strict-markers (pyproject addopts): unknown markers error. `-m unit` selects
         # ONLY unit-marked tests → the non-unit tests (incl. BLS-keyed @integration)
