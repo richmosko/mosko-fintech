@@ -442,6 +442,12 @@ def main():
     print("      the manifest matches branch protection — that read needs admin scope")
     print("      CI's GITHUB_TOKEN does not have. See the header of")
     print("      .github/required-contexts.tsv for the F/CTO-run sync command.")
+    print("NOTE: required contexts are ONE of five branch-protection fields that")
+    print("      matter, and this check sees only that one. A required context gates")
+    print("      the merge of a PULL REQUEST; a direct push opens no PR, so no context")
+    print("      is ever evaluated against one. What resists a force-push is")
+    print("      allow_force_pushes=false — a field no CI check can observe. Do not")
+    print("      read this green as a statement about push safety.")
     return 0
 
 
