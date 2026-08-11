@@ -1,11 +1,17 @@
 # Repro: a pgTAP file can lose assertions and still exit 0 under `psql`
 
-**Author:** QA · **Measured:** 2026-08-10 · **Status:** ⚠ ONE ROUTE ONLY — needs independent re-run
+**Author:** QA · **Measured:** 2026-08-10 · **Status:** ✅ **RESOLVED** — re-run independently by
+DevOps on two non-`psql` routes. **The alarming branch is CLOSED: CI is not blind.**
 
 This note exists because a refutation of a standing belief gets re-run by a different route
 **before** anything is changed on its strength. It records a measurement and, just as
 importantly, **the boundary of what that measurement establishes.** Do not act on the headline
 without reading "What this does NOT establish".
+
+**What survives, in one line:** *never verify a battery locally with bare `psql` — the exit code
+lies.* The plan count enforces only through a TAP-aware consumer; `pg_prove` is one and `psql`
+is not. **`supabase test db` exits `1` on Repro B**, so a required CI context cannot report
+success on a battery that did not run. See "How it was settled" below.
 
 ---
 
@@ -110,29 +116,62 @@ finding. A green local run is not evidence the battery ran.
   `supabase test db` runs against the linked local stack, which does not have `063`/`066`
   applied — so it would fail for an unrelated reason and prove nothing.
 - Therefore: **"a battery can lose a fifth of its assertions and still report success to CI"
-  is NOT supported by this measurement.** It is supported only for `psql`. Anyone repeating
-  the stronger claim is generalizing past the evidence.
+  was NOT supported by this measurement.** It was supported only for `psql`. Anyone repeating
+  the stronger claim was generalizing past the evidence — and the re-run below confirmed the
+  stronger claim is **false**.
 
-## The one open question, and how to settle it
+## How it was settled
+
+The question this note originally left open was:
 
 > Does `supabase test db` (i.e. `pg_prove`) exit **non-zero** on Repro B — a plan shortfall
 > with zero failing assertions?
 
-Decisive test, cheap to run, **DevOps-owned** (CI harness is not QA's authoring surface):
+**Answered by DevOps, 2026-08-10, on two independent non-`psql` routes** — `pg_prove` invoked
+directly inside the CLI's own image, and the literal `supabase test db` — each run with **pass
+*and* fail controls** so a uniform result could not be mistaken for a measurement.
 
-1. Drop Repro B into a scratch `supabase/tests/` tree as a `.sql` file.
-2. `supabase test db` against a throwaway stack.
-3. Read `echo $?`.
+**Result: `supabase test db` exits `1` on Repro B.** Reported tail:
 
-- **Non-zero** → CI is fine, the standing pgTAP note stands as written, and the correct fix is
-  a narrower one: *never verify a battery locally with bare `psql`; the exit code lies.*
-- **Zero** → this outranks everything else and becomes a CI-fence gap: a required context that
-  can report success on a battery that did not run. That would need a DevOps fence
-  (e.g. assert the printed plan against the printed test count) and a Sec look.
+```
+Failed: 0 … Parse errors: Bad plan. You planned 3 tests but ran 2
+```
 
-⚠ Do **not** rewrite the standing pgTAP-immunity note until step 3 has been run by someone
-other than me, on a route other than `psql`. That is the whole reason this note stops here
-instead of concluding.
+Note the shape: **zero failed assertions, and a non-zero exit anyway** — the harness fails the
+run on the *plan mismatch itself*, which is exactly the property `psql` lacks.
+
+⚠ **The controls were load-bearing, not ceremony.** Mid-measurement, all three cases returned
+exit `1` because of an unrelated connection error. Without a passing control that result would
+have been reported as the right answer on false evidence — the correct conclusion reached by a
+procedure that could not have distinguished it from the wrong one.
+
+**Consequences:**
+
+- **The alarming branch is closed.** A required CI context *cannot* report success on a battery
+  that did not run. No DevOps fence is needed, and there is nothing here for Sec.
+- **The narrow finding stands and is the durable half:** *never verify a battery locally with
+  bare `psql`.* The plan count enforces only through a TAP-aware consumer.
+- The standing pgTAP-immunity note has been updated to carry that scope: pgTAP's plan count is a
+  real fence, but it is a fence **in the harness**, not in the SQL — so which harness reads the
+  output decides whether it fences anything.
+
+## ⚠ Why this note went stale, and the reusable half
+
+Between being written and being read, this file was **false**. It said the question was open
+after it had been answered, and it carried a `Zero →` branch predicting a CI-fence gap that had
+been measured not to exist — the alarming branch left standing as a live possibility, which is
+the worst of the four stale claims and is why it was deleted outright rather than annotated.
+
+The mechanism is worth more than the instance: **the note carried a conditional, the condition
+was discharged by someone else's measurement, and nothing in the file watched for that.** The
+instruction "do not rewrite the standing note until step 3 has been run" was correct when
+written and became satisfied-and-misleading the moment DevOps ran it — a claim with no watcher
+on the event that falsifies it.
+
+**The rule:** a note that opens a question must say **who closes it and where the answer lands**,
+so the answer has a defined destination instead of depending on the author noticing. This file
+now names DevOps as the owner and this section as the destination. Had it done so originally,
+the staleness would have been a routing step rather than a catch.
 
 ---
 
