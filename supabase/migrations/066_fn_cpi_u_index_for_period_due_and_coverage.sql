@@ -186,6 +186,20 @@
 --   demonstrably destroys and what this file therefore re-issues — the ACL and
 --   the catalog comment. An author dropping some OTHER function must ask the
 --   question again for that function rather than inherit this answer.
+--   ⚠⚠ TWO THINGS, NOT THREE — READ THIS BEFORE COUNTING. The `revoke`/`grant`
+--   statements above and "the ACL" ARE THE SAME OBJECT, named by its STATEMENT
+--   and by its STORAGE (pg_proc.proacl). They are not two separate casualties of
+--   the DROP. The DROP takes exactly two things: THE ACL AND THE CATALOG
+--   COMMENT — which is what the header's opening block says in as many words.
+--   ⚠ NAMING ONE OBJECT TWICE IN TWO VOCABULARIES IS WHAT LETS AN ENUMERATION
+--   READ AS COMPLETE WHILE A MEMBER IS MISSING, and this file is the worked
+--   example: the catalog comment at the foot names the grant by its statement
+--   ("RE-ISSUES THE GRANT") and again by its storage ("the DROP takes the ACL
+--   with it"), and omits the comment entirely — which is precisely WHY it reads
+--   as though it covers everything. A reviewer of this very file then counted
+--   three casualties from that construction and nearly corrected the correct
+--   tally in the opening block to match. THE MISCOUNT IS A PROPERTY OF THE
+--   PROSE, NOT OF THE READER.
 --
 -- ----------------------------------------------------------------------------
 -- WHAT FORCED THIS — the gap was in marker-versus-nothing, not in the signals.
@@ -321,21 +335,6 @@
 --   the PRD §2.4.4 amendment) was F/CTO-ratified 2026-08-10, and the Architect
 --   half (this shape) was F/CTO-ratified at the ratify gate that produced this
 --   migration. Nothing pending remains for the caveat to name.
---   ⚠ THIS DISCHARGE STATEMENT HAS A TWIN IN THE CATALOG COMMENT AT THE FOOT OF
---   THIS FILE, WHICH STATES THE SAME DISCHARGE IN ITS OWN WORDS. THE TWO MUST BE
---   READ AND CORRECTED TOGETHER. The catalog half is NOT corrected here — a
---   catalog string has a database representation, so it is OWED the same
---   dedicated comment-only migration the obligation enumeration below is owed,
---   and it should ride in THAT one rather than wait for a second.
---   ⚠ NO DEFECT IS ASSERTED IN THE TEXT ABOVE, AND THIS NOTE DOES NOT CORRECT
---   IT. That text is dated, past-tense, and enumerates its own members in the
---   same sentence, so a reader derives the count by looking rather than
---   inheriting it. The note exists to PAIR THE HALVES, not to fix either.
---   ⚠ WHY PAIR THEM AT ALL, RECORDED SO THE NOTE IS NOT LATER READ AS NOISE: a
---   header/catalog pair that states ONE fact in TWO places drifts the moment one
---   half is edited alone, and THAT SEPARATION IS HOW THIS FILE'S CORRECTIONS
---   ACCUMULATED IN THE FIRST PLACE. Whoever discharges the obligation must leave
---   both halves saying the same thing.
 --   WHY CLEARING IS CORRECT RATHER THAN MERELY PERMITTED — the argument that
 --   kept it alive last time now runs the other way. Keeping a provisionality
 --   marker that names no live dependency does not preserve caution: it ANCHORS a
