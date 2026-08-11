@@ -45,6 +45,7 @@ import pytest
 
 from pfin_back_etl import utils
 from pfin_back_etl.core import (
+    CPI_U_RAW_TOKEN_MAX,
     CPI_U_SOURCE,
     CpiReconciliationError,
     PFinBackend,
@@ -172,6 +173,73 @@ def test_a_frame_without_the_raw_token_fails_loud():
     )
     with pytest.raises(CpiReconciliationError, match="series_value_raw"):
         PFinBackend._map_cpi_u_nonpublication_df(df_api)
+
+
+# ---------------------------------------------------------------------------
+# The 64-char bound on published_value_raw — Sec FLAG-1
+#
+# ⚠ TRUNCATE-OVER-ABORT IS THE RULED BEHAVIOUR, so these tests pin BOTH halves:
+# that an overlong token does NOT abort the append (the bound protects the
+# table; it is not a reason to lose every other period's evidence), AND that the
+# truncation is ANNOUNCED. 063's column comment says this column is "what the
+# source actually emitted" — a truncated token is not, and an unannounced
+# alteration would be ADR-049's own thesis reappearing inside the fix for it.
+# ---------------------------------------------------------------------------
+@pytest.mark.unit
+def test_a_token_at_the_bound_is_stored_verbatim_and_unwarned(fetch, caplog):
+    """N = 64 exactly. The boundary itself, from the side that must NOT fire —
+    an off-by-one here would warn on every legal token and the warning would
+    stop meaning anything."""
+    token = "x" * CPI_U_RAW_TOKEN_MAX
+    df_api = fetch([(2025, "M10", token)])
+    with caplog.at_level(logging.WARNING, logger="pfin_etl"):
+        out = PFinBackend._map_cpi_u_nonpublication_df(df_api)
+
+    assert out["published_value_raw"].to_list() == [token]
+    assert not [r for r in caplog.records if "STORED TRUNCATED" in r.message]
+
+
+@pytest.mark.unit
+def test_a_token_over_the_bound_is_truncated_and_the_alteration_is_announced(
+    fetch, caplog
+):
+    """N = 65. ⚠ The row must STILL BE RECORDED — aborting would convert an
+    upstream anomaly into a DB CHECK violation and lose the whole append."""
+    token = "y" * (CPI_U_RAW_TOKEN_MAX + 1)
+    df_api = fetch([(2025, "M10", token)])
+    with caplog.at_level(logging.WARNING, logger="pfin_etl"):
+        out = PFinBackend._map_cpi_u_nonpublication_df(df_api)
+
+    stored = out["published_value_raw"].to_list()
+    assert stored == ["y" * CPI_U_RAW_TOKEN_MAX], "must truncate, not drop or abort"
+    assert len(stored[0]) == CPI_U_RAW_TOKEN_MAX, "063's CHECK would reject > 64"
+    assert out["cpi_period"].to_list() == [date(2025, 10, 1)], (
+        "the non-publication record itself must be unaffected by the anomaly"
+    )
+
+    warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    truncation = [m for m in warnings if "STORED TRUNCATED" in m]
+    assert truncation, (
+        "the stored token is NOT what the source emitted and nothing said so — "
+        "silent alteration of the evidence is the defect FLAG-1 names"
+    )
+    assert "65 chars" in truncation[0], (
+        f"the ORIGINAL LENGTH is what truncation destroys and no reader could "
+        f"recover; it must survive in the log. Got: {truncation[0]}"
+    )
+    assert "2025-10" in truncation[0], "the warning must name the period"
+
+
+@pytest.mark.unit
+def test_an_overlong_token_still_balances_the_reconciliation(fetch):
+    """⚠ The anomaly must not become a second, silent failure. A truncated row
+    is still one row for 063, so the gate must pass — if truncation had instead
+    dropped it, the balance would break and this is what would say so."""
+    df_api = fetch(
+        [(2025, "M09", "324.800"), (2025, "M10", "z" * (CPI_U_RAW_TOKEN_MAX + 40))]
+    )
+    df_index, df_nonpub = PFinBackend._prepare_cpi_u_frames(df_api)
+    assert len(df_index) == 1 and len(df_nonpub) == 1
 
 
 # ---------------------------------------------------------------------------

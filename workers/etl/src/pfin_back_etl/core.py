@@ -952,7 +952,9 @@ class PFinBackend(SBaseConn):
         observed real case is the single character '-'), captured by the
         transport BEFORE its Float64 cast destroys it. NULL is permitted by 063
         and means "the ingest did not capture the token" — NOT that the source
-        emitted an empty value.
+        emitted an empty value. A token longer than 063's 64-char bound is
+        TRUNCATED, not rejected, and the truncation is WARNED — see the comment
+        at the truncation itself for why each half of that is deliberate.
 
         args:    df_api (polars DataFrame from utils.fetch_cpi_df; MUST carry
                  `series_value_raw` — see the guard below)
@@ -971,17 +973,50 @@ class PFinBackend(SBaseConn):
                 "not supplying the raw BLS token, so pfin.cpi_u_nonpublication "
                 "would be written with no evidence. Check utils.fetch_cpi_df."
             )
-        df_rows = (
-            df_api.filter(
-                pl.col("month").is_not_null()
-                & (pl.col("month") >= 1)
-                & (pl.col("month") <= 12)
-                & (
-                    pl.col("series_value").is_null()
-                    | ~pl.col("series_value").is_finite()
-                )
+        df_hits = df_api.filter(
+            pl.col("month").is_not_null()
+            & (pl.col("month") >= 1)
+            & (pl.col("month") <= 12)
+            & (pl.col("series_value").is_null() | ~pl.col("series_value").is_finite())
+        )
+
+        # ⚠ TRUNCATION IS DELIBERATE, AND SILENCE ABOUT IT WOULD NOT BE.
+        # 063 bounds published_value_raw at 64 chars so a global,
+        # service_role-writable table carries no unbounded-text write vector.
+        # We TRUNCATE rather than let the DB CHECK abort: an upstream anomaly in
+        # source-controlled text must not take down the whole append, which
+        # would lose the OTHER periods' evidence too — the bound protects the
+        # table, it is not a reason to record nothing.
+        #
+        # But 063's column comment says this column is "what the source actually
+        # emitted", and A TRUNCATED TOKEN IS NOT THAT. A >64-char token is
+        # exactly the anomalous case where the evidence matters MOST, and it is
+        # the one case where the evidence is silently altered — which is
+        # ADR-049's own thesis (an unexplained absence is indistinguishable from
+        # a correct one) reappearing inside the fix for it. So the alteration is
+        # announced, with the original length, which is the part truncation
+        # destroys and no reader could otherwise recover.
+        overlong = df_hits.filter(
+            pl.col("series_value_raw").cast(pl.String).str.len_chars()
+            > CPI_U_RAW_TOKEN_MAX
+        )
+        for row in overlong.iter_rows(named=True):
+            token = row.get("series_value_raw")
+            logger.warning(
+                f"CPI-U {row.get('year')}-{row.get('month'):02d}: the BLS token "
+                f"is {len(token)} chars, over the {CPI_U_RAW_TOKEN_MAX}-char "
+                "bound on pfin.cpi_u_nonpublication.published_value_raw. It is "
+                f"STORED TRUNCATED to {CPI_U_RAW_TOKEN_MAX} chars, so that "
+                "column is NOT what the source emitted for this period — the "
+                f"full token began {token[:CPI_U_RAW_TOKEN_MAX]!r}. Truncating "
+                "rather than aborting is deliberate: a bounded column fed "
+                "source-controlled text must not turn an upstream anomaly into "
+                "a CHECK violation that loses every other period's evidence. "
+                "The non-publication record itself is unaffected and correct."
             )
-            .with_columns(
+
+        df_rows = (
+            df_hits.with_columns(
                 pl.date(pl.col("year"), pl.col("month"), 1).alias("cpi_period"),
                 pl.lit(CPI_U_SOURCE).alias("source"),
                 pl.col("series_value_raw")
