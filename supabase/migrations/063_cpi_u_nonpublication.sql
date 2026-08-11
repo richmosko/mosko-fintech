@@ -327,6 +327,47 @@
 --   realistic error — a migration or maintenance script that mutates this table
 --   by accident — even though it does not stop an owner who means to.
 --
+--   ⚠⚠ IF YOU ARE HERE TO WIDEN THIS GRANT, READ THIS PARAGRAPH FIRST.
+--   The property above is not only documented — it is ASSERTED EXECUTABLY, on
+--   TWO surfaces, and widening the grant will turn BOTH of them RED. That is the
+--   correct outcome and NEITHER IS THE THING TO RELAX.
+--     · AUTHORITATIVELY, by this table's pgTAP battery at LEG (h) PRODUCTION ACL
+--       MATRIX, which asserts the ACL facts directly (has_table_privilege) — the
+--       negative grants included. Named because that battery's path is
+--       conventionally bound to this migration's number and therefore does not
+--       drift.
+--     · MIRRORED, by a `pgtest` fixture whose temp table reproduces this GRANT
+--       exactly (select + insert, no UPDATE, no DELETE). Deliberately described
+--       by WHAT IT IS rather than WHERE IT LIVES: a migration that named a
+--       specific repo file would be asserting from the database that that file
+--       exists, with nothing watching for a rename — an assertion with no
+--       watcher, correctable only by another migration.
+--
+--   ⚠ WHY THE SECOND SURFACE IS THE ONE AT RISK, which is the whole reason this
+--   paragraph exists. Its red appears in a file about append behaviour, NOT in
+--   the migration that moved the fence — so it "goes red for the right reason in
+--   a place that looks wrong", and the cheapest-looking repair is to relax the
+--   fixture. Doing that retires the only executable record of WHICH LAYER is
+--   operative, and leaves this header's claim standing with nothing behind it.
+--   This pointer exists on the 063 side, not only on the fixture side, because a
+--   CROSS-FILE PRECONDITION NEEDS AN ENTRY ON BOTH SIDES — otherwise the side
+--   that MOVES FIRST (a migration widening the grant) never sees it, and a
+--   warning living only in the file under suspicion is where a reader discounts
+--   it.
+--
+--   ⚠ AND THE FIXTURE MIRRORS THIS GRANT — IT MUST NOT DERIVE IT. Deriving looks
+--   strictly better and is strictly worse: a text-parse of this file is
+--   AUTHORITATIVE-LOOKING AND STRUCTURALLY STALE. A later migration can
+--   `grant update … to service_role` without touching a byte here, and the parse
+--   would still report no-UPDATE — so the fixture would PASS WHILE THE FENCE WAS
+--   DOWN, precisely BECAUSE it looked derived. A hand-mirrored grant fails loudly
+--   when reality moves; a derived one fails silently, and its derivation is what
+--   buys the silence.
+--
+--   ⚠ WIDENING THIS GRANT IS Sec JOINT-REVIEW-MANDATORY (ADR-011 Decision 2
+--   audit-class, plus the per-role measurement recorded above). This states an
+--   obligation that already exists; it creates none.
+--
 --   ⚠ METHOD NOTE, recorded because the error was in the VERIFICATION, not the
 --   design: a superuser smoke test observed these triggers firing and concluded
 --   they were the guarantee everywhere. They fired precisely BECAUSE the owner's
