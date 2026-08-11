@@ -147,6 +147,9 @@
 -- │ catalog inspection has no natural failure mode to calibrate against, so without (V1)/(V2)   │
 -- │ a reader cannot tell a real fence from an assertion whose subject never varies.             │
 -- │   (V1) grant EXECUTE to service_role        -> (A4)/(A6) flip                                │
+-- │  (V10) ⭐ grant EXECUTE to PUBLIC            -> (A2) flips. The fail-open fence for the       │
+-- │        drop-discards-the-ACL hazard; (V10b) …and the anon BEHAVIOURAL probe does NOT flip,   │
+-- │        because schema USAGE is a second independent fence. Both halves asserted             │
 -- │   (V2) narrow the return to `returns numeric` -> (E4) flips: the by-construction non-silence │
 -- │                                                mechanism is gone and NOTHING ELSE notices    │
 -- │  (V3a) DEMOTE the record below the edge rules -> (B5) flips; (V3a2) …and (B3) does NOT.      │
@@ -189,11 +192,26 @@
 -- │                                             -> RED at (B2), (B2b), (B8c). 45 pass.           │
 -- │   D7  delete 066's `revoke execute … from public` — THE HAZARD THE DROP CREATED               │
 -- │                                             -> RED at (A2), (A3), (A4), (A6), (V5). 43 pass. │
--- │       ⚠ (A5) STAYS GREEN, and that is correct, not a miss: anon holds no USAGE on schema     │
--- │       pfin, so the behavioural call is still refused by a SECOND, independent fence even     │
--- │       though the ACL went wide. The ACL assertion (A3) is what sees it. This is the concrete │
--- │       demonstration that (A3)'s "second fence" wording is load-bearing and that an ACL fact  │
--- │       and a behavioural probe are not substitutes for one another.                           │
+-- │       ⚠ (A5) STAYS GREEN, and that is correct, not a miss: the behavioural call is still     │
+-- │       refused by fences the function ACL knows nothing about, even though the ACL went wide. │
+-- │       The ACL assertion (A3) is what sees the widening. An ACL fact and a behavioural probe  │
+-- │       are not substitutes for one another. ⚠ FOR WHY — AND FOR WHY THE OBVIOUS ANSWER IS     │
+-- │       WRONG — SEE D9; it is not simply "anon lacks schema USAGE".                            │
+-- │   D9  ⚠ THE FENCE LADDER — run because (V10b)'s first draft named the wrong mechanism, and   │
+-- │       the correction outlives the leg. Removing the fences ONE AT A TIME, as anon, with      │
+-- │       EXECUTE already granted to PUBLIC:                                                     │
+-- │         (a) usage=no,  select=no   -> denied: permission denied for SCHEMA pfin              │
+-- │         (b) usage=YES, select=no   -> denied: permission denied for TABLE cpi_u_nonpublication│
+-- │         (c) usage=YES, select=YES  -> ⚠ SUCCEEDS. All three fences down.                      │
+-- │       So there are THREE independent fences, not one: the function EXECUTE ACL, schema       │
+-- │       USAGE, and TABLE-LEVEL SELECT on both source tables. The third exists because this     │
+-- │       helper is SECURITY INVOKER — the CALLER'S OWN privileges apply — and it is the fence   │
+-- │       that survives the other two being removed.                                             │
+-- │       ⚠ READ THIS BEFORE CITING (A2)/(A3) AS "THE" FENCE. They are least-privilege and       │
+-- │       defence-in-depth; the INVOKER posture plus table grants is what actually holds. That   │
+-- │       does NOT make (A2) prunable — a silent widening should still be caught where it        │
+-- │       happens — but it does mean a red (A2) is not by itself an exposure, and a green (A2)   │
+-- │       is not by itself a proof of one. Measured, because the plausible story was wrong.      │
 -- │   D8  ⭐ THE MUTATION ONLY (B9) CATCHES. `v_due and (v_from is not null)` on the gap path —   │
 -- │       the defensive-looking edit "don't claim the period was due if we carried nothing".      │
 -- │                                             -> RED at (B9) ALONE. 47 pass.                   │
@@ -353,13 +371,15 @@ begin;
 -- shared verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
--- PLAN = 48. Was 44 through 064; 066 adds (B8c), (B9), (V8), (V9).
+-- PLAN = 50. Was 44 through 064; 066 adds (B8c), (B9), (V8), (V9), plus (V10)/(V10b) at Sec's
+-- joint-review request — the (A2) inversion, the one EXECUTE negative that had never been shown
+-- capable of flipping.
 -- ⚠ MEASURED, NOT COUNTED BY GREP: a naive `grep -c` over assertion names lands on 43 because
 --   several legs open their call on a continuation line. Both a call-site count and a distinct
 --   leg-label count were run against this file and both return the same number. If you change
 --   this plan, re-measure both ways — pg_prove compares the PRINTED plan against the PRINTED
 --   test lines, and a plan that is merely plausible fails the run.
-select plan(48);
+select plan(50);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
@@ -767,6 +787,39 @@ select ok(
 );
 rollback to savepoint v_exec_grant;
 
+-- ---- (V10) ⭐ does (A2) — THE PUBLIC NEGATIVE — have teeth? (Sec joint-review, 066) ----
+--   (V1) proves the service_role negatives flip. NOTHING proved (A2) could. A
+--   `not has_function_privilege('public', …)` that were permanently true for some unrelated
+--   reason would look IDENTICAL to a live revoke — which is this file's own stated standard for
+--   absence assertions, applied everywhere except the one place it matters most.
+--   ⚠ AND (A2) IS THE FAIL-OPEN FENCE FOR THE HAZARD 066 CREATED: `drop function` takes the ACL
+--   with it and PostgreSQL defaults a fresh function to EXECUTE-to-PUBLIC, so (A2) is the only
+--   assertion standing between a drop-and-recreate and a cluster-wide-callable financial helper.
+--   The one negative that was unproven was the one guarding the durable finding.
+--   ⚠ DISTINCT FROM DISCRIMINATOR D7, NOT REDUNDANT WITH IT: D7 deletes the revoke from the
+--   MIGRATION and watches (A2) redden — that tests the migration. This grants to PUBLIC directly
+--   and watches (A2) redden — that tests the ASSERTION, against the ACL itself, independent of
+--   how the ACL came to be that way. A future migration could widen PUBLIC by a route that is
+--   not "someone deleted line N of 066", and this is the leg that would still see it.
+savepoint v_public_grant;
+grant execute on function pfin.fn_cpi_u_index_for_period(date) to public;
+select ok(
+  has_function_privilege('public', 'pfin.fn_cpi_u_index_for_period(date)', 'execute'),
+  '(V10-PUBLIC-NEGATIVE-HAS-TEETH) ⭐ (A2) is not vacuous: a single `grant execute … to public` flips it. Without this leg, (A2) — the assertion guarding the EXACTLY-THIS-MIGRATION hazard that a DROP discards the ACL and Postgres re-grants EXECUTE to PUBLIC by default — was an absence assertion whose subject had never once been shown to appear. An unfalsifiable fence on a fail-open surface is decoration, and this is the surface where decoration is most expensive: every behavioural leg in this file stays green while the function becomes callable by every role in the cluster'
+);
+-- (V10b) …AND THE LIMIT OF IT, asserted rather than assumed — the (V3a)/(V3a2) idiom.
+--   The obvious "improvement" to (V10) is to pair it with a behavioural probe. That probe would
+--   NOT flip, and a future author who adds one will be confused by a red they cannot explain.
+--   ⚠ THE FIRST DRAFT OF THIS LEG NAMED THE WRONG REASON, and the correction is worth more than
+--   the leg itself. It said anon is refused "because anon holds no USAGE on schema pfin" — read
+--   off the shape of the (A3) message rather than measured. Granting USAGE does NOT make the
+--   call succeed. It takes THREE removals, measured one at a time in discriminator D9 below.
+select ok(
+  _rls.stmt_denied_as('anon', $q$ select 1 from pfin.fn_cpi_u_index_for_period('2025-09-01') $q$),
+  '(V10b-…AND-THE-BEHAVIOURAL-PROBE-CANNOT-SEE-IT) ⚠ THE LIMIT OF (V10): with EXECUTE granted to PUBLIC — so anon now HOLDS the function privilege — an actual call AS anon is STILL REFUSED. The ACL went wide and the behavioural probe did not notice. ⚠ AND THE REASON IS NOT THE ONE THIS LEG FIRST CLAIMED. There are THREE independent fences in front of anon, established by removing them one at a time (D9): (1) the function EXECUTE ACL, which is what (A2)/(A3) assert; (2) USAGE on schema pfin; (3) table-level SELECT on pfin.cpi_u_index AND pfin.cpi_u_nonpublication. With (1) AND (2) both down the call still fails — `permission denied for table cpi_u_nonpublication` — because this helper is SECURITY INVOKER, so the CALLER''S OWN table privileges apply and anon holds none. All three must fall together for a call to land. CONSEQUENCE FOR HOW THIS FILE IS READ: (A2)/(A3) are least-privilege and defence-in-depth, NOT the sole barrier on this surface; the INVOKER posture plus table grants is the load-bearing one. So an ACL fact and a behavioural probe are not substitutes in EITHER direction, and neither may be pruned as redundant. Reproduced independently by D7, which deleted 066''s revoke and reddened (A2)/(A3)/(A4)/(A6) while (A5) stayed correctly green'
+);
+rollback to savepoint v_public_grant;
+
 -- ---- (V2) does the row-return assertion have teeth, and is it really the only fence? ----
 savepoint v_scalar_return;
 drop function pfin.fn_cpi_u_index_for_period(date);
@@ -1105,8 +1158,9 @@ select ok(
       and not p.prosecdef and p.provolatile = 's'
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'pfin' and p.proname = 'fn_cpi_u_index_for_period')
-  and not has_function_privilege('service_role', 'pfin.fn_cpi_u_index_for_period(date)', 'execute'),
-  '(V5-FUNCTION-RESTORED-AND-PLAN-COUNTER-REARMED) structural: after the inversion block the function is back to its authored shape (row return, INVOKER, STABLE) and the EXECUTE grant it opened did not survive — so nothing above was evaluated against a stub this file left behind. It also re-arms pgTAP''s plan counter after the savepoint rewinds, so this file cannot emit a spurious "planned N but ran M" that would train a reader to discount the one diagnostic distinguishing a genuinely aborted run'
+  and not has_function_privilege('service_role', 'pfin.fn_cpi_u_index_for_period(date)', 'execute')
+  and not has_function_privilege('public', 'pfin.fn_cpi_u_index_for_period(date)', 'execute'),
+  '(V5-FUNCTION-RESTORED-AND-PLAN-COUNTER-REARMED) structural: after the inversion block the function is back to its authored shape (row return, INVOKER, STABLE) and NEITHER EXECUTE grant the (V) block opened survived — (V1)''s to service_role and (V10)''s to PUBLIC. The PUBLIC half matters most: a leaked savepoint there would leave the battery asserting against a cluster-wide-callable function while every leg stayed green, which is the same fail-open shape (A2) exists to catch. So nothing above was evaluated against a stub or a widened ACL this file left behind. It also re-arms pgTAP''s plan counter after the savepoint rewinds, so this file cannot emit a spurious "planned N but ran M" that would train a reader to discount the one diagnostic distinguishing a genuinely aborted run'
 );
 
 select * from finish();
