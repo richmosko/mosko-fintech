@@ -335,6 +335,21 @@
 --   the PRD §2.4.4 amendment) was F/CTO-ratified 2026-08-10, and the Architect
 --   half (this shape) was F/CTO-ratified at the ratify gate that produced this
 --   migration. Nothing pending remains for the caveat to name.
+--   ⚠ THIS DISCHARGE STATEMENT HAS A TWIN IN THE CATALOG COMMENT AT THE FOOT OF
+--   THIS FILE, WHICH STATES THE SAME DISCHARGE IN ITS OWN WORDS. THE TWO MUST BE
+--   READ AND CORRECTED TOGETHER. The catalog half is NOT corrected here — a
+--   catalog string has a database representation, so it is OWED the same
+--   dedicated comment-only migration the obligation enumeration below is owed,
+--   and it should ride in THAT one rather than wait for a second.
+--   ⚠ NO DEFECT IS ASSERTED IN THE TEXT ABOVE, AND THIS NOTE DOES NOT CORRECT
+--   IT. That text is dated, past-tense, and enumerates its own members in the
+--   same sentence, so a reader derives the count by looking rather than
+--   inheriting it. The note exists to PAIR THE HALVES, not to fix either.
+--   ⚠ WHY PAIR THEM AT ALL, RECORDED SO THE NOTE IS NOT LATER READ AS NOISE: a
+--   header/catalog pair that states ONE fact in TWO places drifts the moment one
+--   half is edited alone, and THAT SEPARATION IS HOW THIS FILE'S CORRECTIONS
+--   ACCUMULATED IN THE FIRST PLACE. Whoever discharges the obligation must leave
+--   both halves saying the same thing.
 --   WHY CLEARING IS CORRECT RATHER THAN MERELY PERMITTED — the argument that
 --   kept it alive last time now runs the other way. Keeping a provisionality
 --   marker that names no live dependency does not preserve caution: it ANCHORS a
