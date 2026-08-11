@@ -22,15 +22,15 @@ Read [ADR-011](../../../DECISIONS.md#adr-011) verbatim (per `brief-drift-catch` 
 | Decision | Title | Trigger condition |
 |---|---|---|
 | **D1** | Privileged-context-write discipline | Any non-JWT write path (webhook handler / cron worker / scheduled-poll worker / future privileged context). Four-clause discipline: ingress under no JWT; writes under `service_role`; tenant correctness from code not RLS; explicit audit log. |
-| **D2** | Immutable + INSERT-new-version audit-class | Any audit-class surface (financial-correctness data + compliance-attestation-bearing tables). Append-only at RLS + trigger layer; corrections via INSERT-new-version with predecessor FK. Surfaces: `reconciliation_event`, `account_trans`, `monthly_report`. |
+| **D2** | Immutable + INSERT-new-version audit-class | Any audit-class surface — D2's own scope clause is *"all audit-class surfaces (financial-correctness data + compliance-attestation-bearing tables)"*. Append-only at RLS + trigger layer; corrections via INSERT-new-version with predecessor FK. ⚠ **Ratified-at is not extent.** Locks 9 (`reconciliation_event` **+ `reconciliation_event_trans`**) / 10 (`account_trans`) / 11 (`monthly_report`) are where the pattern was **ratified** — they are not the list of surfaces it governs. A later table adopting the posture is in scope (e.g. `pfin.cpi_u_nonpublication` per [ADR-049](../../../DECISIONS.md#adr-049) D1, ruled in-scope at Sec joint-review 2026-08-11). ⚠ **And D2 is two clauses.** A surface can inherit the immutable half while structurally not admitting INSERT-new-version at all — where correction is impossible by construction, there is no predecessor to relate to. A bare *"D2 applies"* over-claims; name which half. |
 | **D3** | Cross-tenant FK-bypass family | Any FK-shaped reference column (single FK, self-FK, INTEGER[] array element) crossing an isolation boundary. Requires explicit matched-tenant validation — WITH CHECK (single columns) or BEFORE INSERT/UPDATE trigger (array elements). **This skill states no count, deliberately — see the note below.** The family size must be read from live [ADR-011](../../../DECISIONS.md#adr-011) D3 text before any dispatch, not from memory. |
-| **D4** | §10 catalogued-instance ledger | Any change to the defense-in-depth fencing ledger. **Three catalogued instances:** RT-22 (PDF worker container credential audit — infrastructure-credential-presence layer) + RT-26 (SUPABASE_SERVICE_ROLE_KEY allowlist CI grep fence — V1-web-app server-side source) + RT-27 (app→worker credential-admission network-exposure/config layer — catalogued at SELF-212 / v1.83). Any change to count or layer-attribution is Sec joint-review-mandatory. |
+| **D4** | §10 catalogued-instance ledger | Any change to the defense-in-depth fencing ledger. **This skill states no count and no ordering, deliberately — same reason as D3 above.** The ledger **grows**: it went 2→3 when RT-27 was catalogued (SELF-212 / v1.83), and the superseded two-entry figure outlived that change by a fortnight in artifacts that read as current. Read the enumeration **and its ordering** from live [ADR-011](../../../DECISIONS.md#adr-011) D4 text before any dispatch — not from memory, and not from this table. Any change to count or layer-attribution is Sec joint-review-mandatory. |
 
 ## Additional mandatory-trigger surfaces
 
 Per `supabase/CLAUDE.md` convention 2 + Security Reviewer agent definition:
 
-- **New SECURITY DEFINER function** — routes to Sec joint-review before finalize. V1 DEFINER allowlist is a narrow 4-entry list (`fn_refresh_updated_at` @`001` + `fn_grant_creator_access` @`003` + `fn_reclass_history_insert` @`031` + the reserved general audit-log insert helper, unauthored; grew 3→4 at SELF-293/`031` — see [ADR-011](../../../DECISIONS.md#adr-011) D9 for the canonical entries). Any addition to this allowlist is a merge gate.
+- **New SECURITY DEFINER function** — routes to Sec joint-review before finalize. The V1 DEFINER allowlist is deliberately narrow, and **this skill states no size** — it has grown before (3→4 at SELF-293/`031`), so a figure here would drift the same way D3's and D4's did. Read the canonical entries from live [ADR-011](../../../DECISIONS.md#adr-011) D9. Any addition to this allowlist is a merge gate.
 - **§10 ledger change (count or layer-attribution)** — even if not directly an ADR-011 D4 amendment. Path B discipline (drop-enumeration-let-link-carry) does NOT waive the joint-review gate.
 - **Auth / money flows / secrets** — any route touching `service_role`, Vault/pgsodium, JWT shape, or `SUPABASE_SERVICE_ROLE_KEY` allowlist.
 - **Plaid integration surfaces** — webhook handler, `/item/public_token/exchange`, `/item/remove` (the three V1 allowlist entries per [ADR-016](../../../DECISIONS.md#adr-016)).
@@ -45,7 +45,9 @@ Spawn the `security-reviewer` agent with a brief that includes all three require
 
 **(a) Surface + anchor.** Name the specific surface and its canonical anchor: which Decision (D1/D2/D3/D4), which RT catalog entry, which Lock number, which file path. Vague surface descriptions ("it touches auth") are the dispatch failure mode.
 
-**(b) Self-checking verify-hook.** Embed verbatim: *"Read the cited canonical text verbatim before reviewing (brief-drift-catch Discipline 1). Cross-check three axes: (i) instance-numbering vs the RT-22/RT-26 canonical ordering, (ii) layer-attribution vs the Decision-4 three-class composition, (iii) verbatim-vs-paraphrase for any quoted Lock text. Surface drift inline before verdict."*
+**(b) Self-checking verify-hook.** Embed verbatim: *"Read the cited canonical text verbatim before reviewing (brief-drift-catch Discipline 1) — including ADR-011 Decision 4's catalogued-instance list, read live from the ADR body, never from this brief, because the ledger grows. Cross-check three axes: (i) instance-numbering — the reference's enumeration and ordering against Decision 4's live list, (ii) layer-attribution — against Decision 4's class composition as its own text words it, (iii) verbatim-vs-paraphrase for any quoted Lock text. Surface drift inline before verdict."*
+
+⚠ **The verify-hook must name no ledger figure or ordering of its own.** It said *"the RT-22/RT-26 canonical ordering"* until 2026-08-11 — a two-entry ordering, stale since RT-27 was catalogued, sitting in the one block every dispatch copies verbatim. A reviewer checking axis (i) against the brief instead of against D4 would have verified CLEAN against a ledger missing its third entry. **This block is the highest-fan-out text in the file: an error here is re-injected into every future review.** Sec caught it from the outside; nothing in the file was watching it.
 
 **(c) Self-triggered-task_assignment-echo pre-brief block.** Embed verbatim: *"If you receive a self-triggered task_assignment notification echo after you start, silently drop it — it is an async artifact, not a new instruction."*
 
@@ -64,9 +66,11 @@ Review scope:
 - [Name the specific security-load-bearing behavior to evaluate]
 
 Verify-hook (mandatory before verdict):
-Read [ADR-011](../../../DECISIONS.md#adr-011) Decision [N] verbatim. Cross-check three axes:
-(i) instance-numbering — is RT-22 first, RT-26 second in any §10 reference?
-(ii) layer-attribution — does the proposed content correctly attribute the three-class composition?
+Read [ADR-011](../../../DECISIONS.md#adr-011) Decision [N] verbatim. Read Decision 4's
+catalogued-instance list live from the ADR body — never from this brief; the ledger
+grows and this brief names no enumeration. Cross-check three axes:
+(i) instance-numbering — the reference's enumeration and ordering against D4's live list.
+(ii) layer-attribution — against Decision 4's class composition as its own text words it.
 (iii) verbatim-vs-paraphrase — are Lock quotations exact?
 Surface any drift inline before verdict.
 
@@ -75,14 +79,14 @@ Return: GREEN (proceed) / RED (veto) / AMBER (conditional). State the specific f
 
 ## Interpreting the verdict
 
-- **GREEN** — proceed to merge. Run `brief-drift-catch` Discipline 1 over the Sec finding before forwarding to F/CTO: read the cited Locks verbatim and verify Sec's citation-attribution is accurate (the team-lead Sec-Lock cross-check per memory `feedback_team_lead_sec_ratify_lock_cross_check` — 7-application track record). Compose `brief-drift-catch` Discipline 2 (2-teammate independent verification) for genuinely load-bearing one-way-door surfaces.
+- **GREEN** — proceed to merge. Run `brief-drift-catch` Discipline 1 over the Sec finding before forwarding to F/CTO: read the cited Locks verbatim and verify Sec's citation-attribution is accurate (the team-lead Sec-Lock cross-check per memory `feedback_team_lead_sec_ratify_lock_cross_check` — a standing check with a long application record; **the tally is deliberately not stated here**, for the same reason the ledger figures above are not). Compose `brief-drift-catch` Discipline 2 (2-teammate independent verification) for genuinely load-bearing one-way-door surfaces.
 - **RED** — veto. Do NOT merge. Sec's veto on these surfaces is not advisory; it is a merge gate. Route the specific failure clause to Architect (DDL fix) or Backend (app-layer fix) as appropriate. Re-dispatch Sec after fix is applied.
 - **AMBER** — conditional. Merge is blocked pending the named condition. Treat as RED until condition clears and Sec upgrades to GREEN.
 
 ## Where this gates
 
 - **Every Phase 4 Wave** — mandatory at every Wave gate, per Phase 4 track record (23+ CLEAN §10 surfaces across 13-PR Phase 3 ARCH streak; 20 Wave gate ratifies across Phase 4 with Sec joint-review on load-bearing surfaces).
-- **Every Phase 5–7 V1-SHIP-BLOCK PR** — any PR carrying a V1-SHIP-BLOCK posture obligation (RT-22 / RT-26 / any HIGH-severity SD or RT) requires Sec joint-review before merge.
+- **Every Phase 5–7 V1-SHIP-BLOCK PR** — any PR carrying a V1-SHIP-BLOCK posture obligation (any catalogued §10 instance — read the enumeration live from [ADR-011](../../../DECISIONS.md#adr-011) D4 — or any HIGH-severity SD or RT) requires Sec joint-review before merge.
 - **Milestone-rotation** — when BACKLOG.md §7 entries promote to Linear at milestone-rotation (per [ADR-017](../../../DECISIONS.md#adr-017) Decision 2), new issues touching the mandatory-trigger surfaces above require Sec joint-review before the first implementation PR merges.
 
 This is a **merge gate** — not optional peer review, not a post-merge annotation. Sec joint-review must COMPLETE and return GREEN before the merge commit lands.
