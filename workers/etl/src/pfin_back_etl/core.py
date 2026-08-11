@@ -38,6 +38,27 @@ CPI_U_BASE_YEAR = 2015
 # recent prints, so a short trailing window catches revisions cheaply; the deep
 # history is laid down once by backfill_cpi_u_index() (the AC4 one-shot).
 CPI_U_NIGHTLY_WINDOW_YEARS = 2
+# 063's published_value_raw CHECK bounds the token at 64 chars. Carried here so
+# the worker fails-closed by truncating rather than aborting the whole append on
+# a DB CHECK; the observed real token is the single character '-'.
+CPI_U_RAW_TOKEN_MAX = 64
+
+
+class CpiReconciliationError(RuntimeError):
+    """
+    Raised when a CPI-U fetch cannot be fully accounted for across its two
+    destination tables. See PFinBackend._prepare_cpi_u_frames.
+
+    ⚠ THIS IS A FAIL-LOUD GATE, NOT A WARNING, and the reason is specific.
+    `pfin.cpi_u_nonpublication` (063 / ADR-049 Decision 1) has exactly one
+    reachable failure mode: silence. An EMPTY non-publication record is
+    INDISTINGUISHABLE from a clean run at every layer — no constraint, no test
+    and no query can tell "BLS published every period" from "something upstream
+    ate the valueless rows again". Degrading this to a log line restores that
+    indistinguishability, which is precisely the defect the table exists to
+    close. A run that cannot account for every period it fetched must not write.
+    """
+
 
 # ---------------------------------------------------------------------------
 # ROLE ASSUMPTION — BACKLOG §7.6 S17. ADR-023 write role-of-record + the
@@ -378,6 +399,58 @@ class SBaseConn:
             # ON CONFLICT DO UPDATE needs the arbiter read as well as the
             # write, which is why `053` grants service_role SELECT alongside
             # INSERT + UPDATE. Do not tighten that grant to write-only.
+            with self._role(session, _WRITE_ROLE):
+                session.execute(stmt)
+            session.commit()  # outside the role block — COMMIT clears SET LOCAL
+
+    def append_table_df(self, tab_sbase, index_elements, df_append):
+        """
+        APPEND rows from polars dataframe df_append into an APPEND-ONLY table
+        using INSERT ... ON CONFLICT (index_elements) DO NOTHING. First
+        observation wins; a re-run of the same fetch is a no-op.
+
+        ⚠ `DO NOTHING` IS A STANDING REQUIREMENT OF THE TARGET, NOT A STYLE
+        CHOICE, and this helper exists so it cannot be forgotten at a call site.
+        `pfin.cpi_u_nonpublication` (063) is IMMUTABLE + APPEND-ONLY: its BEFORE
+        UPDATE / DELETE triggers raise, and its header states in as many words
+        that the ingest MUST append with `on conflict (cpi_period) do nothing`
+        because `do update` reaches that fence and fails loud. Reaching for
+        upsert_table_df() on such a table is the mistake this method prevents —
+        that one writes `on_conflict_do_update` unconditionally.
+        Also why: `observed_at` records when WE FIRST OBSERVED the
+        non-publication. DO NOTHING preserves the first observation across a
+        monthly re-fetch of the same window; DO UPDATE would re-stamp it from
+        EXCLUDED and quietly convert an audit trail into a "last run" clock.
+
+        Bounded re-run cost: without a conflict target this would accumulate one
+        duplicate row per run, forever — which is why index_elements is REQUIRED
+        rather than optional.
+
+        args:
+            tab_sbase:       sqlalchemy ORM table object (the target)
+            index_elements:  list of column names forming the conflict target
+                             (must be a PK / unique constraint on tab_sbase)
+            df_append:       polars dataframe of rows to append
+        """
+        if not isinstance(index_elements, list):
+            index_elements = [index_elements]
+
+        ldict_append = df_append.to_dicts()
+        if not ldict_append:
+            return
+
+        tab = tab_sbase.__table__
+        with sqla.orm.Session(self.engine) as session:
+            logger.info(
+                f"Appending {len(ldict_append)} entries into "
+                f"{tab.schema}.{tab.name} on conflict {index_elements} "
+                "do nothing..."
+            )
+            stmt = pg_insert(tab).values(ldict_append)
+            stmt = stmt.on_conflict_do_nothing(index_elements=index_elements)
+            # DO NOTHING still needs the arbiter READ, which is why `063` grants
+            # service_role SELECT alongside INSERT. Do not tighten to
+            # insert-only — the append would start failing on every re-run.
             with self._role(session, _WRITE_ROLE):
                 session.execute(stmt)
             session.commit()  # outside the role block — COMMIT clears SET LOCAL
@@ -847,12 +920,220 @@ class PFinBackend(SBaseConn):
         )
         return df_rows
 
+    @staticmethod
+    def _map_cpi_u_nonpublication_df(df_api):
+        """
+        Map a raw BLS CPI-U dataframe (as returned by utils.fetch_cpi_df) to the
+        pfin.cpi_u_nonpublication grain: one row per calendar month that the
+        source PUBLISHED WITHOUT A USABLE VALUE. Migration 063 / ADR-049
+        Decision 1 (Option C, F/CTO-ratified 2026-08-10).
+
+        ⚠ THIS IS THE EXACT COMPLEMENT OF _map_cpi_u_index_df ON VALUE, AND THE
+        SAME FILTER ON GRAIN. That is the whole design, and it is what makes the
+        reconciliation in _prepare_cpi_u_frames balance:
+            · GRAIN — IDENTICAL. `month` non-null and 1..12, applied BEFORE any
+              date is constructed. 063's standing requirement says to reuse the
+              CPI-U mapper's month projection rather than invent a new fence,
+              because BLS period codes are not all calendar months (M13 is the
+              annual average, S01/S02 semiannual) and the transport returns raw
+              codes with no grain filter BY DESIGN. 063's first-of-month CHECK
+              fences the DAY of an already-constructed date; it cannot tell a
+              real month from a non-monthly code mapped onto one. Necessary,
+              not sufficient — the sufficiency is here.
+            · VALUE — EXACTLY OPPOSED. The index mapper keeps `series_value`
+              non-null AND finite; this keeps the negation (null OR non-finite).
+              ⚠ DO NOT "REUSE THE MAPPER" WHOLESALE. Its five conjuncts include
+              the two value ones, and those are PRECISELY THE ROWS THIS TABLE
+              EXISTS TO RECORD. Applying it whole yields an empty record that is
+              indistinguishable from a clean run — the failure this table was
+              built to make impossible. Reuse the MONTH conjuncts only.
+
+        `published_value_raw` is the token the source actually emitted (the
+        observed real case is the single character '-'), captured by the
+        transport BEFORE its Float64 cast destroys it. NULL is permitted by 063
+        and means "the ingest did not capture the token" — NOT that the source
+        emitted an empty value.
+
+        args:    df_api (polars DataFrame from utils.fetch_cpi_df; MUST carry
+                 `series_value_raw` — see the guard below)
+        returns: df_rows (polars DataFrame: cpi_period[Date], source[str],
+                 published_value_raw[str|null]) — ready for append_table_df on
+                 cpi_period with ON CONFLICT DO NOTHING. `observed_at` is NOT
+                 set here: the DB DEFAULT now() stamps the first observation,
+                 and DO NOTHING is what preserves it.
+        """
+        if "series_value_raw" not in df_api.columns:
+            # ⚠ FAIL LOUD RATHER THAN RECORD NULLS. `published_value_raw` is
+            # nullable, so a missing token column would produce a table full of
+            # legal, evidence-free rows and nothing would ever notice.
+            raise CpiReconciliationError(
+                "df_api carries no `series_value_raw` column — the transport is "
+                "not supplying the raw BLS token, so pfin.cpi_u_nonpublication "
+                "would be written with no evidence. Check utils.fetch_cpi_df."
+            )
+        df_rows = (
+            df_api.filter(
+                pl.col("month").is_not_null()
+                & (pl.col("month") >= 1)
+                & (pl.col("month") <= 12)
+                & (
+                    pl.col("series_value").is_null()
+                    | ~pl.col("series_value").is_finite()
+                )
+            )
+            .with_columns(
+                pl.date(pl.col("year"), pl.col("month"), 1).alias("cpi_period"),
+                pl.lit(CPI_U_SOURCE).alias("source"),
+                pl.col("series_value_raw")
+                .cast(pl.String)
+                .str.slice(0, CPI_U_RAW_TOKEN_MAX)
+                .alias("published_value_raw"),
+            )
+            .select(["cpi_period", "source", "published_value_raw"])
+            .unique(subset=["cpi_period"], keep="first")
+            .sort("cpi_period")
+        )
+        return df_rows
+
+    @staticmethod
+    def _prepare_cpi_u_frames(df_api):
+        """
+        Split one BLS CPI-U fetch into its two destination frames and REFUSE TO
+        PROCEED unless every period fetched is accounted for.
+
+        ⚠⚠ THIS IS THE ENFORCEABLE HALF OF ADR-049, AND IT IS THE REASON THE
+        TRANSPORT LIFT (utils.fetch_cpi_df) AND THIS WRITER SHIP TOGETHER.
+        Lifting the drop without this assertion is STRICTLY WORSE THAN LANDING
+        NOTHING: today an empty pfin.cpi_u_nonpublication means CORRECT, because
+        empty is its only reachable state. The moment valueless rows can reach a
+        writer, "empty" silently changes meaning to BROKEN — and no test, no
+        constraint and no layer would notice, because the two worlds are
+        identical at every layer. The balance is what tells them apart.
+
+        THE ASSERTION, verbatim from 063's standing requirement, with the third
+        term made explicit because the transport is grain-agnostic by design:
+
+            periods returned by transport
+              = rows for pfin.cpi_u_index
+              + rows for pfin.cpi_u_nonpublication
+              + periods that are not calendar months
+
+        ⚠ IT IS NOT A MIRROR OF THE MAPPERS, WHICH IS WHAT MAKES IT ABLE TO
+        FAIL. `n_nonmonthly` is computed here, directly from df_api, by an
+        expression that does not call either mapper. The other two terms are the
+        mappers' ACTUAL OUTPUT COUNTS. So if a mapper grows a filter for some
+        third reason nobody has thought of, its output shrinks, the sum comes up
+        short, and the run dies — WITHOUT that future filter having to be
+        remembered, forbidden, or individually tested. That is the property
+        063's header asks for: a rule someone must remember converted into an
+        assertion that cannot pass quietly.
+
+        ⚠ THE DISJOINTNESS CHECK IS NOT REDUNDANT WITH THE COUNT. The two value
+        filters are exact complements, so no single ROW can land in both frames
+        — but both mappers dedupe on cpi_period, so two rows for the SAME period
+        (one valued, one not) put that period in BOTH frames while the counts
+        still balance (2 = 1 + 1 + 0). That state is wrong: it would record a
+        period as unpublished in the same breath as storing its value. The count
+        cannot see it; this can.
+
+        ⚠ WHAT THIS ASSERTION CANNOT SEE — STATED BECAUSE THE ALTERNATIVE IS
+        CLAIMING COVERAGE IT DOES NOT PROVIDE.
+          (a) A VALUE DROP RESTORED INSIDE utils.fetch_cpi_df. Its first term is
+              "periods RETURNED by transport", so a row discarded before the
+              return is absent from every term and the sum still balances. This
+              gate is structurally blind to the exact regression S21 fixed. What
+              covers it is one layer down and one layer earlier: the transport
+              contract test in `test_cpi_drop_reconciliation.py`, which asserts
+              the valueless period is RETAINED. Both run in the `unit` lane, and
+              neither substitutes for the other.
+          (b) BLS COMPLETENESS. A period the source omits entirely is invisible
+              to every layer here — ADR-049 Decision 2's four-state list, and
+              why 063's own header says it is not a completeness guarantee.
+          (c) THE WRITES THEMSELVES. This balances what is STAGED, before either
+              write; it is not a post-write read-back.
+
+        args:    df_api (polars DataFrame from utils.fetch_cpi_df)
+        returns: (df_index, df_nonpub) — both ready to write
+        raises:  CpiReconciliationError on any imbalance or overlap
+        """
+        df_index = PFinBackend._map_cpi_u_index_df(df_api)
+        df_nonpub = PFinBackend._map_cpi_u_nonpublication_df(df_api)
+
+        n_returned = len(df_api)
+        # Computed from df_api independently of both mappers — see the docstring.
+        n_nonmonthly = len(
+            df_api.filter(
+                pl.col("month").is_null()
+                | (pl.col("month") < 1)
+                | (pl.col("month") > 12)
+            )
+        )
+        n_index = len(df_index)
+        n_nonpub = len(df_nonpub)
+
+        # Unconditional, exactly as the transport's own line is: if the
+        # reconciliation only appeared on imbalance, its absence would be
+        # ambiguous and "balanced" would look identical to "never ran".
+        logger.info(
+            f"CPI-U reconciliation: {n_returned} period(s) returned by "
+            f"transport = {n_index} for pfin.cpi_u_index + {n_nonpub} for "
+            f"pfin.cpi_u_nonpublication + {n_nonmonthly} non-monthly."
+        )
+
+        if n_index + n_nonpub + n_nonmonthly != n_returned:
+            raise CpiReconciliationError(
+                "CPI-U period reconciliation FAILED — the fetch cannot be fully "
+                "accounted for and NOTHING has been written. "
+                f"transport returned {n_returned}; "
+                f"pfin.cpi_u_index rows {n_index} + "
+                f"pfin.cpi_u_nonpublication rows {n_nonpub} + "
+                f"non-monthly periods {n_nonmonthly} = "
+                f"{n_index + n_nonpub + n_nonmonthly}. "
+                "A shortfall means periods were discarded between the transport "
+                "and the tables — check for a filter added to either mapper, or "
+                "a value drop restored in utils.fetch_cpi_df. A shortfall also "
+                "results from DUPLICATE cpi_periods in one fetch (both mappers "
+                "dedupe on cpi_period): that happens when more than one BLS "
+                "series is fetched in a single call, which pfin.cpi_u_index "
+                "cannot represent anyway — its PRIMARY KEY is cpi_period alone."
+            )
+
+        overlap = sorted(
+            set(df_index["cpi_period"].to_list())
+            & set(df_nonpub["cpi_period"].to_list())
+        )
+        if overlap:
+            raise CpiReconciliationError(
+                "CPI-U period reconciliation FAILED — NOTHING has been written. "
+                f"{len(overlap)} period(s) are staged for BOTH pfin.cpi_u_index "
+                f"and pfin.cpi_u_nonpublication in the same fetch: {overlap}. "
+                "A period cannot be simultaneously published-with-a-value and "
+                "published-without-one at one observation. (The two tables MAY "
+                "legitimately share a period ACROSS runs — that is the "
+                "'unpublished when we looked, published later' audit trail — "
+                "but not from a single response.)"
+            )
+
+        return df_index, df_nonpub
+
     def update_table_cpi_u_index(self, start_year=None, end_year=None):
         """
-        Fetch CPI-U (BLS series CUUR0000SA0) and UPSERT into pfin.cpi_u_index on
-        cpi_period (first-of-month DATE). New months INSERT; BLS-revised prints
-        UPDATE in place (the table is MUTABLE per migration 053 — eod_price/019
-        global-reference posture, not append-only).
+        Fetch CPI-U (BLS series CUUR0000SA0) and write BOTH of its destination
+        tables from that ONE response:
+          · pfin.cpi_u_index (053) — UPSERT on cpi_period (first-of-month DATE).
+            New months INSERT; BLS-revised prints UPDATE in place (the table is
+            MUTABLE — eod_price/019 global-reference posture, not append-only).
+          · pfin.cpi_u_nonpublication (063 / ADR-049) — APPEND with ON CONFLICT
+            DO NOTHING, for periods the source published with NO usable value.
+
+        ⚠ WHY ONE FUNCTION SPANS TWO TABLES, despite its name. The reconciliation
+        that makes either write trustworthy — periods returned = rows for 053 +
+        rows for 063 + non-monthly — is only computable where BOTH halves of a
+        SINGLE response are visible. Splitting this into a second function with
+        its own fetch would make the two sides un-balanceable against each other
+        and re-create exactly the defect ADR-049 exists to close. If this is ever
+        split, the reconciliation must move somewhere that still sees both, and
+        that place must exist BEFORE the split, not after.
 
         Global public reference data (no tenant): the engine is the SYSTEM-mode
         TenantBoundConnection (TenantBoundConnection.system() in _sbase_setup) —
@@ -886,8 +1167,35 @@ class PFinBackend(SBaseConn):
         df_api = utils.fetch_cpi_df(
             api_key, start_year, end_year, [CPI_U_SERIES_ID]
         )
-        df_rows = self._map_cpi_u_index_df(df_api)
+        # ⚠ THE GATE RUNS BEFORE EITHER WRITE. If the fetch cannot be fully
+        # accounted for, this raises and nothing is written — a partially
+        # recorded window is worse than an unrun one, because the next run's
+        # `on conflict do nothing` would preserve the partial state as if it
+        # were a first observation.
+        df_rows, df_nonpub = self._prepare_cpi_u_frames(df_api)
         logger.info(f"CPI-U rows mapped to first-of-month grain: {len(df_rows)}")
+
+        # ⚠ THE NON-PUBLICATION RECORD IS WRITTEN FIRST, AND THE ORDER IS
+        # ARGUED, NOT INCIDENTAL. Both writes are idempotent and either order
+        # self-heals on the next run inside the fetch window, so ordering only
+        # matters for the run that dies between them. What 053 holds is
+        # RECONSTRUCTIBLE from any later fetch. What 063 holds is not: a period
+        # observed as unpublished NOW may be published later, and once it is,
+        # the observation can never be made again — 053 will simply have a value
+        # and nothing will record that we ever saw a gap. So the irrecoverable
+        # write goes first. (They are separate transactions: these are two
+        # global-reference tables, not a state change and its audit row, so the
+        # same-transaction audit-log discipline is not what governs here.)
+        if not df_nonpub.is_empty():
+            tab_nonpub = self.base.by_module.pfin.cpi_u_nonpublication
+            self.append_table_df(tab_nonpub, ["cpi_period"], df_nonpub)
+            logger.warning(
+                f"pfin.cpi_u_nonpublication: recorded {len(df_nonpub)} "
+                "period(s) the BLS published with no usable value "
+                f"({df_nonpub['cpi_period'].to_list()}). These are REAL GAPS in "
+                "the CPI-U series, not ingest failures; consumers resolve them "
+                "through pfin.fn_cpi_u_index_for_period."
+            )
 
         if df_rows.is_empty():
             logger.warning(
