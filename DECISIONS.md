@@ -43,7 +43,7 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ## ADR-052 — A ref is pinned at first EXTERNAL MEASUREMENT: what a rewrite destroys is a measurement nobody else can reproduce
 
-**Date:** 2026-08-11 · **Status:** PROPOSED — pending F/CTO ratify. Architect-authored; routed after Sec ruled the convention needed an authority surface separate from the executable rule. · **Phase:** 6 (Build Loop).
+**Date:** 2026-08-11 · **Status:** Accepted — F/CTO ratified 2026-08-11. Architect-authored; routed after Sec ruled the convention needed an authority surface separate from the executable rule. · **Phase:** 6 (Build Loop).
 
 **Context — this was ruled after the failure it prevents had already happened twice, and then happened once more during the ruling.**
 
