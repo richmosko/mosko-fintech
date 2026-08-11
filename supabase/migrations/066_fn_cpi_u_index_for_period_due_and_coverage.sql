@@ -161,7 +161,14 @@
 --   the reason recorded rather than the clearance asserted. Sec raised C4;
 --   Sec should see the disposition.
 --   WHAT C4 SAID: the return shape — column set AND gap_class member set alike —
---   was "the implementing PR's call PENDING THE PRODUCT RULING" per ADR-049 D4.
+--   was, per ADR-049 D4's closing sentence quoted here at source capitalization,
+--   "the implementing PR's call pending the product ruling; the composite return
+--   and the non-silence it enforces are not."
+--   ⚠ QUOTED FLAT DELIBERATELY: `064` renders this same sentence with "PENDING
+--   THE PRODUCT RULING" upper-cased for emphasis, and that emphasis is NOT in
+--   ADR-049. Harmless there, but this file is the one a reader will now cite, and
+--   a quotation that adds stress the source did not place is a quotation that has
+--   been edited. Re-read D4 rather than either rendering.
 --   BOTH INPUTS IT NAMED ARE NOW DISCHARGED: the PM half (ADR-049 Decision 5 /
 --   the PRD §2.4.4 amendment) was F/CTO-ratified 2026-08-10, and the Architect
 --   half (this shape) was F/CTO-ratified at the ratify gate that produced this
