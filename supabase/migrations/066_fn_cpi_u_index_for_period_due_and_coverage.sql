@@ -126,16 +126,20 @@
 --     the SAME if/elsif, which is what keeps them from drifting apart.
 --
 --   coverage_through date  ->  §2.4.4, same paragraph: the trailing edge "is
---     disclosed once, statically, as part of each surface's stated
---     inflation-adjustment basis, and that disclosure NAMES THE PERIOD IT RUNS
---     THROUGH (in the spirit of 'real terms, CPI-U through March 2026') rather
+--     instead disclosed once, statically, as part of each surface's stated
+--     inflation-adjustment basis, and that disclosure names the period it runs
+--     through (in the spirit of 'real terms, CPI-U through March 2026') rather
 --     than describing the basis as current. Naming the period is load-bearing,
 --     not cosmetic."
 --     (§2.4.4 emphasises "once, statically" and "names the period it runs
 --     through"; the load-bearing sentence is PLAIN in the source. An earlier
 --     draft here had that exactly inverted — capitalising the plain sentence
---     while flattening the two emphasised phrases. Quoted flat, emphasis noted
---     out of band.)
+--     while flattening the two emphasised phrases, AND dropping "instead" with
+--     no ellipsis. Quoted flat, emphasis noted out of band. The ONLY remaining
+--     departure from the source bytes: the nested quotation marks around 'real
+--     terms, CPI-U through March 2026' are single here because they cannot nest
+--     inside a double-quoted span — stated rather than left for the next
+--     mechanical check to re-flag.)
 --     = the latest period present in cpi_u_index; NULL on an empty store, where
 --     there is no basis to name and saying so is the honest answer.
 --     ⚠ IT IS A PROPERTY OF THE STORE, NOT OF THE REQUESTED PERIOD — the only

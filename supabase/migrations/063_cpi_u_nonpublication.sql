@@ -135,7 +135,7 @@
 --   ⚠ AND WHAT THE RECONCILIATION CANNOT SEE — corrected here because an earlier
 --   draft of this block claimed the assertion "catches BOTH obstacles above
 --   without either having to be individually remembered", and that claim is
---   FALSE for OBSTACLE 1. The first term is "periods RETURNED by transport", so
+--   FALSE for OBSTACLE 1. The first term is "periods returned by transport", so
 --   a row discarded BEFORE the return is absent from EVERY term and the sum
 --   still balances. The gate is therefore STRUCTURALLY BLIND to the exact
 --   regression it was specified to catch. This was DEMONSTRATED, not argued:
