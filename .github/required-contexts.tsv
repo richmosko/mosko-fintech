@@ -128,6 +128,30 @@ db-tests.yml	rls-battery	pgTAP RLS battery (supabase test db)
 worker-ci.yml	unit	Unit + typecheck + build (hermetic)
 worker-ci.yml	integration	Live-DB integration lane (G2/G3/SC-4)
 
+# --- Second batch: etl-ci.yml, de-filtered 2026-08-10 (Sec BC-1) ---
+# ⚠ THE ROW ABOVE NAMED `worker-ci.yml unit` IS THE NODE PROVIDER-SYNC WORKER, NOT
+# THIS ONE. Two different workflows each have a job id `unit`, and their contexts read
+# similarly at a glance ("Unit + typecheck + build (hermetic)" vs "Unit tests + lint
+# (pytest -m unit; hermetic, no secrets)"). Field 1 is what distinguishes them. That
+# near-collision is how the ETL lane stayed unregistered while a reader scanning this
+# file for "the unit lane" found one and stopped.
+#
+# WHY THESE ARRIVED LATE. etl-ci.yml was left path-filtered when #393/#406 de-filtered
+# db-tests.yml and worker-ci.yml, so it was the one lane still un-requireable. Its two
+# jobs were the ONLY encoded watcher for the ETL staging-update regression class, and
+# they ran advisory-only — a red could be merged straight past. Sec caught this as
+# blocking condition BC-1 (AMBER on the S21 review, 2026-08-10).
+#
+# ⚠ WHAT MADE IT INVISIBLE, AND WHY CI GREEN DID NOT HELP. Live branch protection and
+# this manifest AGREED EXACTLY — 15 contexts each — so the five-field sync command in
+# the header printed CONTEXTS IN SYNC while both lists were missing the same two
+# entries. A diff of two lists cannot see an entry absent from both. This was an
+# UNRECORDED GAP, not a misconfiguration, and it is a third failure shape alongside
+# the two enumerated above: not "required but unmanifested" and not "manifested but
+# not required", but ABSENT FROM BOTH while every check reports healthy.
+etl-ci.yml	unit	Unit tests + lint (pytest -m unit; hermetic, no secrets)
+etl-ci.yml	pgtest	Staging-update regression (pgtest; real Postgres, zero secrets)
+
 # The fence that enforces this file, listed in it deliberately. If
 # `required-unfiltered` is not itself a required context, someone can break it and
 # merge anyway — and the failure is quiet, because a broken guard looks exactly like
@@ -139,11 +163,23 @@ worker-ci.yml	integration	Live-DB integration lane (G2/G3/SC-4)
 security-scan.yml	required-unfiltered	required-unfiltered — required contexts cannot be skipped
 
 # --- NOT listed, and why ---
-# etl-ci.yml (unit, pgtest) and web-tests.yml (web-app, dependency-audit) are still
-# path-filtered and still advisory. They are candidates for a SECOND batch after this
-# one lands and one clean doc-PR cycle is observed. Do not add them here until they
-# are de-filtered — listing a filtered workflow makes this fence go red, which is the
-# correct fail-closed direction but is not a useful way to discover the intent.
+# web-tests.yml (web-app, dependency-audit) is still path-filtered and still advisory.
+# It is the LAST remaining candidate: etl-ci.yml was the other half of this paragraph
+# until 2026-08-10 and is now de-filtered and listed above. Do not add web-tests.yml
+# here until it is de-filtered too — listing a filtered workflow makes
+# `required-unfiltered` go red, which is the correct fail-closed direction but is not
+# a useful way to discover the intent.
+#
+# ⚠ THIS PARAGRAPH IS ITSELF A CLAIM WITH NO WATCHER. Nothing in CI checks that the
+# workflows named here are the ones actually absent from the rows above — it went
+# stale the moment etl-ci.yml was registered, and the only reason it did not stay
+# stale is that a human happened to be editing this file. Whoever registers
+# web-tests.yml must empty this paragraph in the same change. Derive the real answer
+# instead of trusting this text:
+#
+#   ls .github/workflows/*.yml | xargs -n1 basename | sort > /tmp/wf
+#   grep -v '^#' .github/required-contexts.tsv | grep -v '^$' | cut -f1 | sort -u > /tmp/listed
+#   comm -23 /tmp/wf /tmp/listed    # workflows with NO required context at all
 #
 # scheduled-dep-audit.yml has no PR trigger at all (schedule + workflow_dispatch), so
 # it can never report a PR check and can never be a required context. Its PR-visible
