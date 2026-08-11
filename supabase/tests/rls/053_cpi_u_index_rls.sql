@@ -301,7 +301,7 @@ select ok(
 -- (h6) anon zero-grant by construction — CRITICAL for a USING (true) global-read table.
 select ok(
   not has_table_privilege('anon', 'pfin.cpi_u_index', 'SELECT'),
-  '(h6) anon zero-grant: anon holds NO SELECT on pfin.cpi_u_index (a USING (true) global-read table must NEVER be anon-reachable — anon would read ALL rows if it ever held a grant)'
+  '(h6) anon zero-grant: anon holds NO SELECT on pfin.cpi_u_index (a USING (true) global-read table must NEVER be anon-reachable — anon would read ALL rows if it ever held a grant). ⚠ THIS LEG HAS A REMOTE CONSUMER: 064''s (A2) triage message tells an operator to downgrade a red (A2) from data-exposure to least-privilege, and it cites THIS leg as one of the three facts that downgrade rests on. If (h6) reddens, that downgrade is VOID — fix this first, and treat any concurrent red (A2) as potentially real exposure rather than a grant tidy-up'
 );
 
 select * from finish();

@@ -407,11 +407,11 @@ select ok(
 );
 select ok(
   not has_table_privilege('anon', 'pfin.cpi_u_nonpublication', 'SELECT'),
-  '(h10) anon zero-grant: anon holds NO SELECT. CRITICAL on a USING (true) table — the policy has NO row filter to fall back on, so anon would read EVERY row the instant a grant landed. (V2) measures exactly that'
+  '(h10) anon zero-grant: anon holds NO SELECT. CRITICAL on a USING (true) table — the policy has NO row filter to fall back on, so anon would read EVERY row the instant a grant landed. (V2) measures exactly that. ⚠ REMOTE CONSUMER: 064''s (A2) triage message cites this leg (with (h11) and 053''s (h6)) as a fact its downgrade-to-least-privilege depends on. A red here VOIDS that downgrade'
 );
 select ok(
   not has_schema_privilege('anon', 'pfin', 'USAGE'),
-  '(h11) anon is fenced ONE LAYER IN FRONT of the table ACL: it holds no USAGE on schema pfin (MEASURED: anon''s denial message is "permission denied for schema pfin", never the table ACL message) — so (h10) is the second fence, not the only one'
+  '(h11) anon is fenced ONE LAYER IN FRONT of the table ACL: it holds no USAGE on schema pfin (MEASURED: anon''s denial message is "permission denied for schema pfin", never the table ACL message) — so (h10) is the second fence, not the only one. ⚠ REMOTE CONSUMER: 064''s (A2) triage message cites this leg (with (h10) and 053''s (h6)) as a fact its downgrade-to-least-privilege depends on. A red here VOIDS that downgrade. 064''s D9 fence ladder measures the same three-fence structure from the function side and agrees with this leg''s measured denial message'
 );
 
 -- (n1) anon behavioural probe — the ACL facts above, exercised rather than inspected.
