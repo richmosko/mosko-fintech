@@ -60,7 +60,17 @@
 --          migration at all; and
 --     (ii) a deployment that stops between `065` and `066` — or a `065` that
 --          merges while this branch is still in review — must still hold a TRUE
---          function comment rather than the false one `064` shipped.
+--          function comment rather than the false one `064` shipped; and
+--    (iii) ⚠ REVERT-INDEPENDENCE, which is the LOAD-BEARING reason and is
+--          stronger than (ii). Sec's, recorded because it beats the ground this
+--          block originally gave. `065` and `066` are SEPARATELY REVERTABLE, and
+--          a return-type change on a function feeding financial figures is a
+--          plausible thing to back out. If `066` were reverted and `065` had been
+--          trimmed on the argument that `066` supersedes it, `064`'s FALSE
+--          comment would be RESURRECTED — because the only correction of it
+--          would have left with `066`. (ii) describes a transient window a `\d+`
+--          reader might catch; (iii) describes a durable regression that a
+--          revert would introduce silently.
 --   The comment at the foot of this file is authored fresh for the EIGHT-column
 --   shape and carries `065`'s correction forward rather than reverting it.
 --
@@ -73,8 +83,13 @@
 --   `064`'s six columns already carried §2.4.4's two required independent
 --   signals. What they did NOT carry was the predicate that gates the marker:
 --     §2.4.4, verbatim — "The informational marker therefore fires only where
---     the period WAS ACTUALLY DUE, and never where the absence is explained by
---     the EDGE OF COVERAGE alone."
+--     the period was actually due, and never where the absence is explained by
+--     the edge of coverage alone."
+--     (§2.4.4 emphasises "was actually due" and leaves the rest plain. Quoted
+--     flat here: this file cannot render emphasis, so ADDING capitals under the
+--     label "verbatim" would attribute stress to the source that it does not
+--     carry. Where the source's emphasis matters, it is stated OUT OF BAND like
+--     this rather than smuggled into the quotation.)
 --   Under the six-column shape a consumer had to compute that as
 --   `is_carried AND gap_class in ('recorded_nonpublication','unrecorded_gap')`
 --   — i.e. it had to know WHICH MEMBERS MEAN DUE. That mapping IS the gap
@@ -114,8 +129,13 @@
 --     disclosed once, statically, as part of each surface's stated
 --     inflation-adjustment basis, and that disclosure NAMES THE PERIOD IT RUNS
 --     THROUGH (in the spirit of 'real terms, CPI-U through March 2026') rather
---     than describing the basis as current. NAMING THE PERIOD IS LOAD-BEARING,
---     NOT COSMETIC."
+--     than describing the basis as current. Naming the period is load-bearing,
+--     not cosmetic."
+--     (§2.4.4 emphasises "once, statically" and "names the period it runs
+--     through"; the load-bearing sentence is PLAIN in the source. An earlier
+--     draft here had that exactly inverted — capitalising the plain sentence
+--     while flattening the two emphasised phrases. Quoted flat, emphasis noted
+--     out of band.)
 --     = the latest period present in cpi_u_index; NULL on an empty store, where
 --     there is no basis to name and saying so is the honest answer.
 --     ⚠ IT IS A PROPERTY OF THE STORE, NOT OF THE REQUESTED PERIOD — the only
@@ -138,10 +158,18 @@
 -- ----------------------------------------------------------------------------
 -- ⚠ THE TWO SIGNALS STAY UNCOLLAPSED — the constraint §2.4.4 states twice.
 --   "The rendering above requires exactly two independent signals to reach the
---   presentation layer, and they MUST NOT BE COLLAPSED INTO ONE" — and, on the
---   uncomputable case, "The trigger is whether a value could be resolved, NOT
---   why the period is absent — the two are independent, and A REASON-FOR-ABSENCE
---   MUST NEVER BE READ AS A PROXY FOR THE CARRY OUTCOME."
+--   presentation layer, and they must not be collapsed into one" — and, on the
+--   uncomputable case, "The trigger is whether a value could be resolved, not
+--   why the period is absent — the two are independent, and a reason-for-absence
+--   must never be read as a proxy for the carry outcome."
+--   (Both quoted flat. §2.4.4 carries NO emphasis on the first; on the second it
+--   emphasises the WHOLE opening clause — "The trigger is whether a value could
+--   be resolved, not why the period is absent" — and leaves the proxy warning
+--   plain. ⚠ An earlier draft here inverted precisely that: it reduced the
+--   emphasised clause to a lone capitalised "NOT" and then capitalised the plain
+--   clause in full. That is the more damaging direction, because the clause the
+--   source stresses IS the marker rule an implementer has to get right, and
+--   moving stress off it moves attention off it.)
 --     Signal (1) — could a value be resolved: `cpi_value IS NULL`. Directly the
 --       fact itself, not a proxy for it.
 --     Signal (2) — exact-or-carried + which period + from where + cause on
@@ -165,7 +193,10 @@
 --   "the implementing PR's call pending the product ruling; the composite return
 --   and the non-silence it enforces are not."
 --   ⚠ QUOTED FLAT DELIBERATELY: `064` renders this same sentence with "PENDING
---   THE PRODUCT RULING" upper-cased for emphasis, and that emphasis is NOT in
+--   THE PRODUCT RULING" upper-cased for emphasis (⚠ SWEEP GUARD: that
+--   capitalized string is HELD OUT — it NAMES the erroneous rendering in order to
+--   retract it, and must not be swept with text that COMMITS it), and that
+--   emphasis is NOT in
 --   ADR-049. Harmless there, but this file is the one a reader will now cite, and
 --   a quotation that adds stress the source did not place is a quotation that has
 --   been edited. Re-read D4 rather than either rendering.
@@ -186,8 +217,22 @@
 --   rather than a state claim: THE RETURN SHAPE IS F/CTO-RATIFIED; ANY CHANGE TO
 --   THE COLUMN SET OR THE gap_class MEMBER SET REQUIRES Sec RE-REVIEW + F/CTO
 --   RATIFY + AN ADR-049 AMENDMENT, AND — because of the DROP above — A NEW
---   MIGRATION THAT RE-ISSUES THE GRANT. That is durable; "pending a ruling" was
---   not.
+--   MIGRATION THAT RE-ISSUES THE GRANT. That is durable; a marker that merely
+--   records something as pending was not. (An earlier draft quoted "pending a
+--   ruling" as if from ADR-049. That string is in no ADR — D4 reads "pending the
+--   product ruling" — so the quotation marks dressed a paraphrase as a citation.
+--   De-quoted.)
+--   ⚠ DECISION 3's SKETCHED CALENDAR MECHANISM WAS DELIBERATELY NOT TAKEN, and
+--   that is a DISCHARGE, not an omission. D3 sketches the due-period bound as a
+--   comparison against `date_trunc('month', <server today>) - interval '1 month'`
+--   "or a stricter bound". period_was_due takes the stricter bound and takes it
+--   DATA-DERIVED: bracketed by prints on both sides, consulting NO clock — no
+--   current_date, no now(), no fn_server_today(). D3 itself warns that the lag
+--   constant "must be verified against BLS's published release schedule at
+--   implementation, not assumed", and a bound needing no constant cannot be got
+--   wrong by guessing one. ⚠ Recorded because otherwise D3 reads as an UNMET
+--   instruction, and the natural way for a later reader to "discharge" it is to
+--   add the very constant it cautioned against.
 --   ⚠ AND THE RESIDUE THAT IS **STILL OPEN** IS NOT THIS ONE — recorded so it is
 --   not mistaken for a survival of C4. PRD Appendix B §2.1 flag (d) names TWO
 --   Architect residues: (1) mapping the helper's result shape onto §2.4.4's
@@ -324,7 +369,7 @@
 --   ⚠ WHAT THIS FUNCTION DELIBERATELY DOES NOT DO — recorded so no consumer
 --     infers it: it does NOT detect a stalled ingest (coverage_through is a
 --     DISCLOSURE, not a freshness monitor — §2.4.4 is explicit that the dated
---     basis line "is NOT ingest-freshness monitoring and does not substitute for
+--     basis line "is not ingest-freshness monitoring and does not substitute for
 --     it"); it does NOT separate "our ingest dropped it" from "backfill never
 --     covered the span" (ADR-049 Decision 2 keeps (c)/(d) collapsed, and §2.4.4
 --     rules the user must NOT be asked to distinguish them); it does NOT decide

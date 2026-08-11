@@ -74,9 +74,13 @@
 --       term and the sum still balances. The reconciliation is therefore
 --       STRUCTURALLY BLIND to the exact regression it was specified to catch.
 --       DEMONSTRATED, NOT ARGUED: with the transport drop re-armed, the gate did
---       NOT raise. Coverage for that obstacle lives ONE LAYER EARLIER, in a
---       transport contract test asserting the valueless period is RETAINED in
---       the return value. ⚠ The consequence that makes this worth a migration:
+--       NOT raise. Coverage for that obstacle BELONGS ONE LAYER EARLIER, as a
+--       STANDING REQUIREMENT on the transport rather than a report of an
+--       existing test: the transport MUST carry a contract test asserting the
+--       valueless period is RETAINED in its return value. Phrased as an
+--       obligation, not a location — this file cannot check another component's
+--       tree, and an obligation still reads as UNMET work if nothing satisfies
+--       it. ⚠ The consequence that makes this worth a migration:
 --       a reader who believes the reconciliation covers both obstacles will
 --       DELETE THAT CONTRACT TEST AS REDUNDANT, and the two worlds are identical
 --       at every other layer.
@@ -228,8 +232,12 @@ comment on table pfin.cpi_u_nonpublication is
   'term and the sum still balances — the gate is STRUCTURALLY BLIND to the exact '
   'regression it was specified to catch (demonstrated, not argued: with the '
   'transport drop re-armed, the gate did NOT raise). Coverage for the FIRST obstacle '
-  'lives one layer earlier, in a transport contract test asserting the valueless '
-  'period is RETAINED in the return value; NEITHER SUBSTITUTES FOR THE OTHER, and a '
+  'BELONGS one layer earlier, as a STANDING REQUIREMENT on the transport rather than '
+  'a report of an existing test: the transport MUST carry a contract test asserting '
+  'the valueless period is RETAINED in its return value. Stated as an obligation, not '
+  'a location — a catalog comment cannot check whether a named test exists, and an '
+  'obligation still reads as UNMET work if nothing satisfies it, where a location '
+  'claim would simply be wrong. NEITHER SUBSTITUTES FOR THE OTHER, and a '
   'reader who takes this assertion as covering both will delete that contract test '
   'as redundant. What the reconciliation DOES cover: the SECOND obstacle, and a '
   'future drop introduced at mapper level. The first-of-month '

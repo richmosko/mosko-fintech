@@ -140,10 +140,19 @@
 --   still balances. The gate is therefore STRUCTURALLY BLIND to the exact
 --   regression it was specified to catch. This was DEMONSTRATED, not argued:
 --   with the transport drop re-armed, the gate did NOT raise. Coverage for
---   OBSTACLE 1 lives ONE LAYER EARLIER, in a transport contract test asserting
---   the valueless period is RETAINED in the return value. NEITHER SUBSTITUTES
---   FOR THE OTHER, and a reader who takes this assertion as covering both will
---   delete that contract test as redundant. What the reconciliation DOES cover:
+--   OBSTACLE 1 BELONGS ONE LAYER EARLIER — it is a STANDING REQUIREMENT on the
+--   transport, not a report of an existing test: the transport MUST carry a
+--   contract test asserting the valueless period is RETAINED in its return
+--   value. ⚠ PHRASED AS AN OBLIGATION RATHER THAN AS A LOCATION, DELIBERATELY.
+--   Saying that coverage "lives" in a particular test asserts a fence EXISTS,
+--   which is a present-tense claim about another component's tree that this file
+--   cannot check and that goes false the moment that test is renamed, moved, or
+--   never lands. Saying where it BELONGS stays true either way, and — unlike a
+--   location claim — it still reads as UNMET work if nothing satisfies it. Same
+--   correction as the standing-property rewrite two paragraphs above; an earlier
+--   draft applied it there and missed it here.
+--   NEITHER SUBSTITUTES FOR THE OTHER, and a reader who takes this reconciliation
+--   as covering both obstacles will delete that contract test as redundant. What the reconciliation DOES cover:
 --   OBSTACLE 2 (a mapper filtering the subject away) and a future drop
 --   introduced at mapper level for some third reason — because those shrink a
 --   term that IS counted.
