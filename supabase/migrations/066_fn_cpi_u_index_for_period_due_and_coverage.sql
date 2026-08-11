@@ -12,8 +12,33 @@
 -- ⚠ WITHDRAWN-QUOTE GUARD — READ BEFORE ANY AUTOMATED SWEEP OF THIS FILE.
 --   Several strings in this header are quoted PRECISELY BECAUSE THEY ARE FALSE.
 --   They are the SUBJECT of a withdrawal, not support for an argument: their
---   falsity is the assertion, not the premise. They are kept so a reader who
---   remembers the old text learns it CHANGED rather than doubting their memory.
+--   falsity is the assertion, not the premise.
+--   >> SCOPE — MARK ANY QUOTED STRING THAT WOULD ITSELF MATCH A STALENESS
+--   SWEEP, whether this file once ASSERTED it or CONSIDERED AND REJECTED it. <<
+--   THE TEST IS THE HAZARD, NOT THE PROVENANCE.
+--   ⚠ THAT IS DELIBERATELY WIDER THAN "text a reader might remember", and the
+--   reason is recorded because the narrow version was tried and failed: an
+--   earlier form of this block justified the marker by rememberability alone,
+--   and therefore FAILED TO DESCRIBE TWO OF ITS OWN INSTANCES. One quotes a
+--   phrasing that was ALREADY a rejected alternative when it was written; the
+--   other quotes an assertion whose only source commit is ORPHANED. No reader of
+--   merged history can remember either — yet both are stale-SHAPED, so a sweep
+--   would match them, which is the only thing that matters. A DEFINITION THAT
+--   DOES NOT DESCRIBE ITS OWN INSTANCES IS A DEFECT FOR THE ONE READER IT EXISTS
+--   TO SERVE: the sweep author, who reasons from the definition and not from the
+--   instances. (Those two are worth keeping for a second reason, stated where
+--   they sit: they record that an AUTHORING HABIT RECURRED.)
+--   ⚠ AND IT IS STILL NOT "any false-looking string". AN ILLUSTRATIVE WRONG
+--   PHRASING — one this file never asserted and never rejected, written only to
+--   show what to avoid — IS NOT MARKED. A sweep cannot RESURRECT it: there is no
+--   prior state to restore it to, so touching it yields a visibly novel edit
+--   rather than a reversion to real history, and that is exactly the property
+--   `WQ>` exists to flag. If such a string ever needs protection it gets a
+--   DIFFERENT marker; widening `WQ>` to cover it destroys the one distinction
+--   that makes this marker actionable.
+--   Marked quotations also let a reader who remembers the old text learn it
+--   CHANGED rather than doubt their memory — true of most of them, but NOT the
+--   defining property, which is the hazard rule above.
 --   >> EVERY LINE CARRYING SUCH A QUOTATION IS PREFIXED `WQ>`. <<
 --   THE MARKER REPEATS ON EVERY LINE OF A QUOTATION rather than heading it once,
 --   and that redundancy is the entire point: a marker that a trim, a `grep -A1`,
@@ -400,8 +425,8 @@
 --   the same decision as that one, not three separate ones: a number would be
 --   reserved ahead of the tree, and an issue reference inside a merged PR closes
 --   the very tracker that holds this work open.
---   ⚠ THIS PARAGRAPH PREVIOUSLY SAID THE CORRECTION WOULD
---   WQ> "ride along with the next migration that touches this function's
+--   ⚠ THIS PARAGRAPH PREVIOUSLY SAID:
+--   WQ> "It rides along with the next migration that touches this function's
 --   WQ>  comment for an independent reason."
 --   THAT DISPOSITION IS WITHDRAWN, and the circularity note below is the reason:
 --   A TRIGGER THAT MAY BE THE FAILURE ITSELF IS NOT A SCHEDULE. Recorded rather
