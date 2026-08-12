@@ -223,6 +223,36 @@ Orphaned commits survive as unreachable objects until `gc`. **Cite a destroyed r
 
 **Relay by quotation and attribution; never by paraphrase.** Quote the source, name whose reasoning each part is, and label your own as yours. **A quoted argument cannot be fused with another; a paraphrased one always can.** False composites have been assembled from two individually-true halves and passed every spot-check, because nothing in either half was wrong — only their joining. This applies to attributing positions as much as to citing text: check that the person you are crediting or overruling actually held the position.
 
+### Hand-off protocol
+
+**This subsection owns the SHAPE of a completed-work report — what an agent returns when it hands work back to `team-lead` or the Founder/CTO.** *Coordination discipline* above owns what happens to a fact once someone else depends on it; this owns the envelope that fact arrives in. It references those rules rather than restating them, and it does not govern artifacts — a report is not a deliverable.
+
+It exists because agent reports have dumped everything read, encountered and scratchpadded, bloating the orchestrator's context until sessions had to be abandoned and restarted. **The bloat and the value are different text:** value is conclusions, bloat is evidence transcription. A length cap would have suppressed this week's best findings, which arrived *inside* long reports — so the rule separates the two rather than capping either, and item 4 below is deliberately uncapped.
+
+**The block below is duplicated verbatim into every file in `.claude/agents/`.** A pointer fires when someone looks something up; **this rule must fire at report time, when nobody is looking anything up** — the same completion-record-vs-operating-assertion distinction as *Verification discipline* above. Duplicating **behaviour** is far less drift-prone than duplicating facts: the block carries no counts, paths, owners or phase state to go stale. The copies are byte-identical by construction and must stay so; the only permitted difference is this heading's level (`###` here for document hierarchy, `##` in the agent files).
+
+**`temp/` is gitignored** — confirmed against `.gitignore` (`# Local working files (planning drafts, scratch)`). An evidence file written there is readable by the recipient on the same machine and never enters a commit, which is what makes "write it to a file and give the path" a real alternative to pasting rather than a way to smuggle the paste into the repo.
+
+Return **conclusions, not evidence.**
+
+Never include raw file contents, command output, diffs, execution logs, scratchpad
+contents, or re-narration of what you read.
+
+Return exactly:
+
+1. **Summary** — 3 sentences, what you did.
+2. **Paths changed** — exact, nothing else.
+3. **Broken** — failing tests, gates, or checks. "None" is a complete answer.
+4. **Bubble up** — findings team-lead or F/CTO must act on. One line each. If a
+   finding needs evidence, write it to `temp/<agent>-<topic>.md` and give the
+   path — do not paste it.
+
+⚠ Item 4 has no length limit on the *finding*, only on the *message*. Suppressing
+a real finding to fit the format is worse than the bloat this prevents.
+
+If you believe an exception is warranted, say so in one line and ask. Do not take
+it unilaterally.
+
 ---
 
 ## Agent roster
@@ -286,13 +316,18 @@ All artifacts live in the GitHub repo. Source of truth is the repo, not local fi
 | Artifact | Purpose | Owner | Update cadence |
 |---|---|---|---|
 | `WORKFLOW.md` | This document. Map and execution log. | Chief of Staff | Per phase transition; major workflow changes |
-| `PRD.md` | Product requirements. V1 scope, user stories, success metrics. | Product Manager | Per scope decision; reviewed each phase |
-| `ARCHITECTURE.md` | System design, data model, tech choices, security posture. | Architect | Per architectural decision; reviewed each phase |
-| `DECISIONS.md` | Architectural Decision Records (ADRs). One entry per non-obvious choice. | Whoever made the decision | Per decision |
+| `PRD.md` | Product requirements. V1 scope, user stories, success metrics. Its security-facing sections are **pointers to `docs/SECURITY/index.html`, not content** — PM owns every word in PRD; there is no second author. | Product Manager | Per scope decision; reviewed each phase |
+| `ARCHITECTURE.md` | System design, data model, tech choices, security posture. Its security-posture sections are **pointers to `docs/SECURITY/index.html`, not content** — Architect owns every word in ARCH; there is no second author. | Architect | Per architectural decision; reviewed each phase |
+| `docs/SECURITY/index.html` | V1 canonical security reference per [ADR-008](DECISIONS.md#adr-008) — SD matrix, RT catalog, posture sub-sections. The only home for security content; ARCH and PRD point here. | Security Engineer | Per security decision; joint-review-gated |
+| `DECISIONS.md` | Architectural Decision Records (ADRs). One entry per non-obvious choice. | Architect | Per decision |
 | **Linear** (external) | Backlog and active task tracking. Initiatives → projects → issues. Accessed by agents via Linear MCP. Single source of truth for what's being worked on; no `TASKS.md` artifact exists. | Product Manager (issue creation); execution agents (status updates) | Continuous during build phases |
 | `docs/linear-setup.md` | Operational companion to WORKFLOW.md's Linear policy. Covers MCP installation, OAuth flow, label/milestone conventions, issue templates, troubleshooting. WORKFLOW.md owns the *decision and policy*; this doc owns the *how-to*. | DevOps (initial draft); Chief of Staff (kept current) | Per Linear configuration change |
 | `README.md` | Project intro, setup instructions, contribution model (solo). | Founder/CTO | Rarely |
 | `CLAUDE.md` (root) | Project conventions for Claude Code at the repo level. | Chief of Staff | Per workshop setup; refined during build |
+
+**`DECISIONS.md` — Architect always holds the pen, including for security ADRs**, where Sec supplies the text and Architect commits it verbatim. The previous owner cell read *"whoever made the decision"*, which was never an ownership assignment: it assigned ownership at write time, by the writer, to the writer — which is why two agent files could both legally claim the file. Absent a real semaphore for who is writing a file in a branch or worktree, **a negotiated pen-holder is a convention with no mechanism, and conventions with no mechanism rot.**
+
+⚠ **`PRD.md` and `ARCHITECTURE.md` above name files PR B archived** — the canonical artifacts are `docs/PRD/index.html` and `docs/ARCH/index.html`. The rows are otherwise accurate as to purpose and owner; renaming them is part of the pending table rebuild, deliberately not done here.
 
 ### `/docs/` directory convention
 

@@ -146,3 +146,27 @@ Operationalized in Phase 5 Step 7 once per-agent verification completes; documen
 **Hand off to Chief of Staff (team-lead)** when:
 - A Linear issue ratify gate is met — team-lead orchestrates F/CTO sign-off.
 - A cross-agent ownership question surfaces (e.g., does this PR belong to Frontend or Backend, given the seam runs through `+page.server.ts`).
+
+---
+
+## Hand-off protocol
+
+Return **conclusions, not evidence.**
+
+Never include raw file contents, command output, diffs, execution logs, scratchpad
+contents, or re-narration of what you read.
+
+Return exactly:
+
+1. **Summary** — 3 sentences, what you did.
+2. **Paths changed** — exact, nothing else.
+3. **Broken** — failing tests, gates, or checks. "None" is a complete answer.
+4. **Bubble up** — findings team-lead or F/CTO must act on. One line each. If a
+   finding needs evidence, write it to `temp/<agent>-<topic>.md` and give the
+   path — do not paste it.
+
+⚠ Item 4 has no length limit on the *finding*, only on the *message*. Suppressing
+a real finding to fit the format is worse than the bloat this prevents.
+
+If you believe an exception is warranted, say so in one line and ask. Do not take
+it unilaterally.
