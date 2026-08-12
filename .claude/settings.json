@@ -6,6 +6,11 @@
         "hooks": [
           {
             "type": "command",
+            "command": "[ -f .claude/roles/team-lead.md ] || exit 0; { echo \"[Claude Code SessionStart hook — loads the team-lead role definition per ADR-009 Decision 1. You are the main session acting as team-lead. This role is not spawnable.]\"; echo \"\"; cat .claude/roles/team-lead.md; } | jq -Rs '{hookSpecificOutput: {hookEventName: \"SessionStart\", additionalContext: .}}'",
+            "statusMessage": "Loading team-lead role definition"
+          },
+          {
+            "type": "command",
             "command": "current=$(git config --get core.hooksPath); if [ -z \"$current\" ]; then git config core.hooksPath .husky && jq -nc '{systemMessage:\"[hooks] core.hooksPath was UNSET — armed to .husky. The pre-commit fence was inert until now.\"}'; elif [ \"$current\" != \".husky\" ]; then jq -nc --arg c \"$current\" '{systemMessage:(\"[hooks] WARNING: core.hooksPath is \\($c), not .husky — NOT overwriting; the pre-commit fence may be inactive.\")}'; fi",
             "statusMessage": "Checking pre-commit hook arming"
           },
