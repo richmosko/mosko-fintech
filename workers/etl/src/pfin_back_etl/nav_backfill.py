@@ -151,6 +151,35 @@ _THOUSAND = Decimal(1000)
 _MONEY_BODY_RE = re.compile(r"\d+(\.\d+)?")
 
 
+def _validate_resolved_uid(resolved_uid, users_id, *, purpose):
+    """Shared guard: auth.uid(), as resolved by the DATABASE while
+    impersonating `users_id`, must be non-NULL and identical to `users_id`.
+    Raises RuntimeError otherwise — a NULL or disagreeing resolution means
+    the tenant-resolution chain this whole module rests on is not
+    trustworthy, at whichever moment it's checked.
+
+    Shared between write_backfill()'s write-time check and
+    NavBackfillWorker.resolve_uid()'s run-record check (Sec AMBER clause
+    (d)) — same property, same failure condition, checked at two different
+    moments for two different reasons (one gates a write; the other exists
+    so the run record can show its work in dry-run too, where no write ever
+    happens). `purpose` customizes only the tail of the message so each call
+    site still names what it was about to trust the value FOR.
+    """
+    if resolved_uid is None:
+        raise RuntimeError(
+            f"auth.uid() resolved to NULL while impersonating "
+            f"users_id={users_id!r} — refusing to {purpose} a NULL value."
+        )
+    if str(resolved_uid) != str(users_id):
+        raise RuntimeError(
+            f"auth.uid() resolved to {resolved_uid!r} while impersonating "
+            f"users_id={users_id!r} — these must be identical. Refusing to "
+            f"{purpose} a value that disagrees with the tenant this "
+            f"connection is bound to."
+        )
+
+
 class NavBackfillCsvError(ValueError):
     """Raised on a malformed / out-of-contract CSV row or header. Fail loud
     rather than silently skip, coerce, or default a row — a silently-dropped
@@ -315,10 +344,8 @@ class NavBackfillWorker:
 
     Construct once, call first_cron_checkpoint(users_id) to determine the
     refusal boundary, then run(users_id, admissible_rows, commit=...) to
-    (optionally) write. Every write is its own transaction — one bad
-    historical row must not abort the rest of the backfill, mirroring
-    nav_daily.py's run() per-tenant isolation, here per-ROW instead of
-    per-tenant (this worker backfills exactly one tenant per invocation).
+    (optionally) write. ALL rows for the run land in ONE transaction or NONE
+    do (ADR-053 Decision 6, F/CTO-ratified) — see write_backfill.
     """
 
     def __init__(self, env_prefix="PFIN_"):
@@ -355,8 +382,45 @@ class NavBackfillWorker:
         return row[0] if row and row[0] is not None else None
 
     # ------------------------------------------------------------------ #
+    # Run-record tenant resolution (Sec AMBER clause (d)) — read-only, ONE
+    # dedicated transaction, runs in BOTH dry-run and --commit.
+    # ------------------------------------------------------------------ #
+    def resolve_uid(self, users_id):
+        """auth.uid() as the DATABASE resolves it while impersonating
+        `users_id` — the key link in the tenant-resolution chain, surfaced
+        for the run record rather than trusted silently. Sec's point (AMBER
+        clause (d)): once this import erases the pre-import
+        first_cron_checkpoint boundary, the RUN RECORD is the only surviving
+        evidence that the chain resolved correctly — so the record has to
+        carry the resolved value, not just the CLI-supplied one.
+
+        DELIBERATELY SEPARATE from write_backfill()'s own internal
+        read-back. That one is a SECURITY CONTROL, run at write time, inside
+        the write transaction, and it must stay there (ADR-053 Decision 5)
+        — it is what proves the row about to be written is scoped to the
+        tenant the database actually served, at the moment it's served.
+        This one is a REPORTING convenience, run at report time, so it can
+        run during a pure dry-run where no write transaction exists yet.
+        Neither may substitute for the other: reusing THIS call's value
+        inside write_backfill would reintroduce exactly the gap Decision 5
+        closed (trusting an earlier resolution instead of the one live at
+        write time).
+
+        Raises the same NULL/mismatch guard as write_backfill (see
+        _validate_resolved_uid) — a value the run record can't trust is not
+        one this method will report as if it could.
+        """
+        tbc = TenantBoundConnection.for_tenant(self._db_url, users_id)
+        with tbc.engine.connect() as conn:
+            with conn.begin():
+                with tbc.impersonate(conn):
+                    resolved_uid = conn.execute(sqla.text("select auth.uid()")).scalar()
+        _validate_resolved_uid(resolved_uid, users_id, purpose="report")
+        return resolved_uid
+
+    # ------------------------------------------------------------------ #
     # AC5 comparand (F/CTO-ratified 2026-08-12) — read-only, ONE dedicated
-    # transaction, deliberately SEPARATE from every backfill_row() write
+    # transaction, deliberately SEPARATE from every write_backfill() write
     # transaction rather than folded into one of them.
     #
     # fn_compute_nav is a plain SELECT (head 'select', a member of
@@ -439,20 +503,9 @@ class NavBackfillWorker:
                 with tbc.impersonate(conn):
                     resolved_uid = conn.execute(sqla.text("select auth.uid()")).scalar()
 
-                if resolved_uid is None:
-                    raise RuntimeError(
-                        f"auth.uid() resolved to NULL while impersonating "
-                        f"users_id={users_id!r} — refusing to bind "
-                        f"'{_NAV_TENANT_GUC}' to a NULL value."
-                    )
-                if str(resolved_uid) != str(users_id):
-                    raise RuntimeError(
-                        f"auth.uid() resolved to {resolved_uid!r} while "
-                        f"impersonating users_id={users_id!r} — these must be "
-                        f"identical. Refusing to bind '{_NAV_TENANT_GUC}' to a "
-                        f"value that disagrees with the tenant this "
-                        f"connection is bound to."
-                    )
+                _validate_resolved_uid(
+                    resolved_uid, users_id, purpose=f"bind '{_NAV_TENANT_GUC}' to"
+                )
 
                 # (post-teardown) bind the WRITE tenant from the value already
                 # READ BACK, as a literal parameter — binding (a), not (b);

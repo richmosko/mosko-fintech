@@ -40,6 +40,16 @@ Description:
     without --ack-delta whenever |delta| >= $1,000 (the source CSV's
     whole-$K quantization floor — see nav_backfill.py's precision note).
 
+    TRACKED-SAFE SUMMARY (Sec-ruled). Every run also prints a clearly
+    delimited, redacted block — pre-import first_cron_checkpoint, run date,
+    requested date range, admissible/refused counts, an identity-agreement
+    line (first-8-char uid PREFIX only), whether/why --ack-delta was
+    required, and the AC5 delta as a PERCENTAGE of the boundary figure
+    (never dollars) — safe to paste verbatim into a tracked artifact. The
+    real dollar figures and the full UUID stay in the normal full output,
+    written to LOG_FILE (temp/nav-history/, gitignored — beside the source
+    CSV, not bare CWD) as the local record the summary block points at.
+
     This is a ONE-SHOT script, not a recurring worker — there is no cron
     entry for it and none is planned. The real seeding run against a
     production tenant is F/CTO-gated, after this ships.
@@ -61,7 +71,13 @@ from pfin_back_etl.nav_backfill import NavBackfillCsvError, parse_baseline_csv, 
 # --ack-delta, not a claim that a smaller delta is "fine".
 _AC5_ACK_THRESHOLD = Decimal(1000)
 
-LOG_FILE = os.path.join(os.getcwd(), "pfin_back_etl.log")
+# Sec-ruled log location: BESIDE the source CSV in temp/nav-history/, not
+# bare CWD — the whole temp/ tree is gitignored (repo .gitignore line 7),
+# whereas a bare `pfin_back_etl.log` in an arbitrary CWD is not guaranteed
+# to be. This log carries real dollar figures and a full tenant UUID (see
+# print_run_record / print_ac5_comparand) — the local gitignored record the
+# tracked-safe summary block below points at rather than duplicates.
+LOG_FILE = os.path.join("temp", "nav-history", "nav_backfill_run.log")
 
 
 def setup_logging():
@@ -74,6 +90,7 @@ def setup_logging():
     console.setFormatter(formatter)
     logger.addHandler(console)
 
+    os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
     file_handler = logging.FileHandler(LOG_FILE, mode="a")
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
@@ -183,6 +200,52 @@ def print_dry_run_summary(logger, rows, admissible, refused, first_checkpoint):
         )
 
 
+def print_run_record(logger, *, resolved_uid, pre_import_first_checkpoint, admissible):
+    """Sec AMBER clause (d) — the RUN RECORD. Printed in BOTH dry-run and
+    --commit, and always includes the resolved tenant, because a
+    SUCCESSFUL import erases the pre-import first_cron_checkpoint boundary
+    (the imported rows become the new one) — the run record is the only
+    surviving evidence that the tenant-resolution chain resolved correctly
+    for THIS run, once that boundary is gone.
+
+    `resolved_uid` is auth.uid() AS THE DATABASE RESOLVED IT while
+    impersonating the CLI-supplied users_id (NavBackfillWorker.resolve_uid)
+    — not the CLI argument echoed back; the whole point is that this is a
+    value the database confirmed, not one this script merely repeated.
+
+    Where this record durably lives at the production run (a log, a ticket,
+    a file) is being reconciled with Sec separately — real tenant UUIDs and
+    NAV figures cannot enter the repo per the redaction rule, so that
+    storage decision is out of this script's scope. This function's only
+    job is to make sure every figure that record will need is actually
+    EMITTED somewhere a human can capture it.
+    """
+    logger.info("=== RUN RECORD (Sec AMBER clause (d)) ===")
+    logger.info(
+        f"RUN RECORD — resolved tenant (auth.uid(), DB-confirmed): "
+        f"{resolved_uid}"
+    )
+    logger.info(
+        "RUN RECORD — pre-import first_cron_checkpoint: "
+        + (
+            pre_import_first_checkpoint.isoformat()
+            if pre_import_first_checkpoint
+            else "NONE (no prior checkpoint for this tenant)"
+        )
+    )
+    logger.info(f"RUN RECORD — rows to import: {len(admissible)}")
+    if admissible:
+        logger.info(
+            f"RUN RECORD — import date range: "
+            f"{admissible[0].nav_date.isoformat()} .. "
+            f"{admissible[-1].nav_date.isoformat()}"
+        )
+    logger.info(
+        "RUN RECORD — AC5 comparand figures printed separately below "
+        "(imported boundary-month NAV / computed NAV today / delta)."
+    )
+
+
 def print_ac5_comparand(logger, boundary_row, computed_today, delta):
     """AC5 (F/CTO-ratified 2026-08-12): the imported boundary-month NAV
     alongside this app's own computed NAV today, and their delta — always in
@@ -211,9 +274,100 @@ def print_ac5_comparand(logger, boundary_row, computed_today, delta):
         )
 
 
+def _uid_prefix(uid):
+    """First 8 chars only — the seed.sql precedent for letting a human
+    recognize/match a tenant identity in tracked text without the full UUID
+    ever landing there."""
+    return str(uid)[:8]
+
+
+def _fmt_percent(delta, boundary_value):
+    """AC5 delta AS A PERCENTAGE of the boundary-month figure — Sec's
+    keep-structure-redact-dollars shape for the tracked-safe summary: the
+    RATIO is safe to paste into a tracked artifact; the dollar figures
+    behind it (see print_ac5_comparand) are not."""
+    if boundary_value == 0:
+        return "N/A (boundary figure is $0)"
+    pct = (delta / boundary_value) * 100
+    sign = "+" if pct >= 0 else ""
+    return f"{sign}{pct:.2f}%"
+
+
+def print_tracked_safe_summary(
+    logger,
+    *,
+    run_started_at,
+    args,
+    admissible,
+    refused,
+    first_checkpoint,
+    resolved_uid,
+    boundary_row,
+    delta,
+):
+    """Sec-ruled TRACKED-SAFE SUMMARY BLOCK. NO dollar figures, NO full
+    UUID — every field here is deliberately safe to paste VERBATIM into a
+    tracked artifact (a PR, a doc, a Linear comment) at the F/CTO-gated
+    production run. Printed in BOTH dry-run and --commit, after the AC5
+    comparand is computed (the percentage below needs it) and before the
+    commit gate's decision, so it reflects the run's state regardless of
+    whether --commit goes on to proceed or refuse.
+
+    Deliberately a POINTER, not a duplicate, for anything sensitive: the
+    full dollar figures live in print_ac5_comparand's output and the full
+    UUID lives in print_run_record's — both already written to LOG_FILE
+    (temp/nav-history/, gitignored) as part of "the normal full output".
+    This block's last line names that file rather than repeating its
+    contents.
+
+    `resolved_uid` (not the raw CLI string) backs the identity-agreement
+    line: by the time this runs, worker.resolve_uid() has already RAISED if
+    the CLI-supplied and DB-resolved identities disagreed (see main()), so
+    printing "AGREED" here states a property this function did not have to
+    re-check — it was already enforced upstream, fail-closed, before this
+    block could ever be reached.
+    """
+    ack_required = delta is not None and abs(delta) >= _AC5_ACK_THRESHOLD
+    logger.info(
+        "=== TRACKED-SAFE SUMMARY (no dollar figures, no full UUID — safe "
+        "to paste into a tracked artifact) ==="
+    )
+    logger.info(
+        "Pre-import first_cron_checkpoint (the fact this import ERASES): "
+        + (
+            first_checkpoint.isoformat()
+            if first_checkpoint
+            else "NONE (no prior checkpoint for this tenant)"
+        )
+    )
+    logger.info(f"Run date (UTC): {run_started_at.date().isoformat()}")
+    logger.info(
+        f"Requested date range (inclusive): {args.start_date} .. {args.end_date}"
+    )
+    logger.info(f"Admissible rows: {len(admissible)} | Refused rows: {len(refused)}")
+    logger.info(
+        f"Tenant identity: CLI-supplied and DB-resolved uid AGREED "
+        f"(prefix {_uid_prefix(resolved_uid)}...)"
+    )
+    logger.info(f"--commit requested: {args.commit}")
+    logger.info(
+        f"--ack-delta passed: {args.ack_delta} (required for this run: "
+        f"{ack_required})"
+    )
+    if boundary_row is not None and delta is not None:
+        logger.info(
+            f"AC5 delta as % of the boundary-month figure: "
+            f"{_fmt_percent(delta, boundary_row.nav_value_dollars)}"
+        )
+    else:
+        logger.info("AC5 delta: N/A (no admissible rows to compare)")
+    logger.info(f"Full local record (dollar figures + full UUID): {LOG_FILE}")
+
+
 def main(argv=None):
     argv = sys.argv if argv is None else argv
     logger = setup_logging()
+    run_started_at = dt.datetime.now(dt.timezone.utc)
 
     try:
         args = parse_args(argv)
@@ -234,7 +388,26 @@ def main(argv=None):
     first_checkpoint = worker.first_cron_checkpoint(args.users_id)
     admissible, refused = split_before_first_checkpoint(rows, first_checkpoint)
 
+    # Sec AMBER clause (d) — read-only, runs in BOTH dry-run and --commit,
+    # and runs FIRST: if the tenant-resolution chain is broken, nothing
+    # downstream (the AC5 comparand, the commit gate, the write itself) is
+    # worth attempting either. See NavBackfillWorker.resolve_uid for why
+    # this is a separate read from write_backfill's own internal one.
+    try:
+        resolved_uid = worker.resolve_uid(args.users_id)
+    except RuntimeError as exc:
+        raise SystemExit(
+            f"Tenant resolution failed before anything else ran — refusing "
+            f"to proceed. Error: {exc}"
+        ) from exc
+
     print_dry_run_summary(logger, rows, admissible, refused, first_checkpoint)
+    print_run_record(
+        logger,
+        resolved_uid=resolved_uid,
+        pre_import_first_checkpoint=first_checkpoint,
+        admissible=admissible,
+    )
 
     # AC5 (F/CTO-ratified 2026-08-12) — read-only, runs in BOTH dry-run and
     # --commit. boundary_row is the most recent ADMISSIBLE row (the historical
@@ -251,6 +424,23 @@ def main(argv=None):
             "AC5 comparand: no admissible rows — nothing to compare against "
             "this app's own computed NAV."
         )
+
+    # Sec-ruled TRACKED-SAFE SUMMARY — printed AFTER the AC5 comparand (the
+    # percentage line needs `delta`) and BEFORE the commit gate's decision,
+    # so it reflects the run's state whether --commit goes on to proceed or
+    # refuse. See print_tracked_safe_summary's docstring for why every field
+    # in it is safe to paste into a tracked artifact.
+    print_tracked_safe_summary(
+        logger,
+        run_started_at=run_started_at,
+        args=args,
+        admissible=admissible,
+        refused=refused,
+        first_checkpoint=first_checkpoint,
+        resolved_uid=resolved_uid,
+        boundary_row=boundary_row,
+        delta=delta,
+    )
 
     if not args.commit:
         logger.info("DRY RUN — no writes performed. Pass --commit to write for real.")
