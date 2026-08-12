@@ -167,14 +167,14 @@ git log --merges --oneline <ledger-sha>..main | wc -l        # how many merges b
 
 **Measured twice on 2026-08-11, which is why this step exists.** At session start the ledger read `main = 024e474` while `main` was two merges past it, and the "next" item it named — the PM product question — had already landed at PR #391; time was spent re-opening settled work. It then went three merges stale again **within hours of being fixed**.
 
-**To clear it:** `MILESTONES.md`'s `## Current Phase` + `## Active Feature` + `## Recent activity` (prepend, trim to five per [ADR-017](../../../DECISIONS.md#adr-017)), plus a `CHANGELOG.md` `### vN.NN` entry. Doc-only, so it lands under the pre-cleared merge class.
+**To clear it:** `MILESTONES.md`'s `## Current Phase` + `## Active Feature` + `## Recent activity` (prepend, trim to five per [ADR-017](../../../DECISIONS.md#adr-017)). Doc-only, so it lands under the pre-cleared merge class. ⚠ **No `CHANGELOG.md` entry — that file is frozen and unmaintained** (see `WORKFLOW.md` § Artifact list).
 
 ⚠ **There is no `## Pending` block to update — the section was removed deliberately and nothing replaces it.** It had no defined purpose, no size bound and no owner, and it grew to ~90% of a 141 KB auto-load that the session-start channel then truncated to ~2 KB, so the head was arriving empty while looking fine. **Do not re-create it, and do not park "just this one thing" in the head.** Every kind of content it held now has a home:
 
 | what you are about to write down | where it goes |
 |---|---|
 | session state — `main` sha, open-PR count, worktree list | **nowhere.** One command answers it; recording it guarantees staleness. |
-| completed work | the PR body, plus `CHANGELOG.md` if you are writing an entry |
+| completed work | the PR body. GitHub keeps it, and `CHANGELOG.md` is frozen — do not add to it. |
 | work awaiting an owner or a schedule | `BACKLOG.md` §7, or Linear if it is the current or next milestone |
 | current build / next deliverable | `## Current Phase` or `## Active Feature` — the ledger proper |
 | ⚠ a standing constraint — *"if you touch this, here is what you will get wrong"* | **the file whose reader would get it wrong**: the migration, the function, the workflow, the ADR. Never a ledger. |
