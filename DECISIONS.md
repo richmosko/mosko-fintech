@@ -63,7 +63,7 @@ Read `054`'s own words with its own reason attached: *"no historical backfill (*
 
 Three places in the tree anticipate it, one of them already shipped into the catalog:
 
-- `054` header: *"any INSERT into pfin.nav_daily — QA fixtures, seeds, **future backfills**, manual repair — MUST set the GUC first."*
+- `054` header: *"any INSERT into pfin.nav_daily — QA fixtures, seeds, **future backfills**, manual repair — MUST set the GUC first, **in the same transaction**."* ⚠ The trailing qualifier is restored here after Sec caught this quotation truncating at "first." — and it is not incidental to this ADR: *in the same transaction* is precisely the property Decision 6's all-or-nothing write path satisfies, so the dropped clause was the one that made `054` a supporting authority rather than merely a permissive one.
 - `054`'s `comment on function fn_nav_daily_assert_computed_for` — a **catalog** comment: *"Every INSERT path (worker, QA fixture, seed, **future backfill**) must set the GUC first."*
 - `062` header: the temporally-sound path *"is a **BOUNDED backfill that WRITES checkpoints**, not an on-read recompute"*, and **"THIS FILE'S CONTRACT IS UNCHANGED BY THAT FUTURE DECISION: rows appear, the series lengthens, this function is not touched."**
 

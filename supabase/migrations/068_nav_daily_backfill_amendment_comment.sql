@@ -116,18 +116,31 @@
 --   of needing reversal.
 --
 -- ----------------------------------------------------------------------------
--- REGENERATE-AND-DIFF PROVENANCE (the 052 shape; the comment literal below was
---   NOT retyped). The statement was extracted verbatim from 054, ONE anchored
---   substitution was applied, and the result was proven to contain the original
---   byte-for-byte outside the replaced span:
---     · anchor matched EXACTLY ONCE in 054 (asserted; more than one match would
---       mean the anchor is not unique, zero would mean the source drifted);
---     · CONTAINMENT: 518 bytes of prefix and 2149 bytes of suffix are
---       byte-identical to 054's statement, with ONE contiguous replaced region;
---     · single-quote parity is even on every line of the regenerated literal.
---   ⚠ Containment is asserted rather than a diff-region count, deliberately: a
---   region count characterises only what CHANGED, while containment makes a
---   positive claim about everything that did NOT.
+-- RECONSTRUCTION PROVENANCE (the 052 shape; the comment literal below was NEVER
+--   retyped, and — stronger — was never EDITED either). The literal was REBUILT
+--   programmatically from 054's statement as it stands at 58ca6ed, by applying
+--   exactly TWO anchored substitutions:
+--     (A) the FORWARD-ONLY clause -> the amended clause (see WHAT CHANGED above);
+--     (B) the three ledger tallies -> no tally (see LEDGER TALLIES STRUCK below).
+--   Each anchor was asserted to match EXACTLY ONCE in 054 before substitution —
+--   more than one match would mean the anchor is not unique, zero would mean the
+--   source drifted. Single-quote parity is even on every line of the result.
+--   >> BECAUSE THE FILE WAS REBUILT FROM 054 RATHER THAN EDITED TOWARD IT,
+--      "byte-identical outside the two anchor spans" is TRUE BY CONSTRUCTION
+--      rather than by inspection. There is no third region to have missed. <<
+--
+--   ⚠ NO UNCHANGED-BYTE COUNTS ARE STATED HERE, and the reason is a measured
+--   near-miss worth more than the figures were. An earlier revision of this block
+--   claimed "518 bytes of prefix and 2149 of suffix". Sec independently measured
+--   481 and 2068. BOTH WERE CORRECT — Sec measured the RENDERED CATALOG STRING
+--   (what pg_description stores), this file measured the FILE-TEXT (SQL source
+--   including the per-line quote wrappers). Two scopes, one unlabelled number,
+--   and the disagreement looked like an error in one of them.
+--   >> A COUNT WITHOUT ITS SCOPE INVITES RECONCILIATION OF TWO THINGS THAT WERE
+--      NEVER THE SAME MEASUREMENT. << The reconstruction claim above needs no
+--   byte count at either scope, so none is given; if you must cite one, say which
+--   scope it is over. (This is the same discipline the tallies below are struck
+--   under, applied to this block's own numbers — the rule did not exempt itself.)
 --   REMAINING VERIFICATION IS BACKEND'S AND QA'S, and neither is discharged
 --   here: apply-in-transaction-and-roll-back proves the literal PARSES, and
 --   reading it back through obj_description proves what the CATALOG RENDERS —
@@ -163,6 +176,28 @@
 --   ONLY; NOT restated in the comment below, and not to be copied forward.
 --
 -- ----------------------------------------------------------------------------
+-- LEDGER TALLIES STRUCK — substitution (B). Sec Blocking-1; F/CTO ratified
+--   option A (STRIKE, not correct) 2026-08-12. 054's comment carried three
+--   counts: the §10 catalogued ledger, the SECURITY DEFINER allowlist, and the
+--   ADR-011 Decision 3 family as "labeled / DDL-realized". They are REMOVED, and
+--   the substance that was NOT a tally is kept — the fences 054 authors are
+--   INVOKER and its worker authors no function, so the allowlist is untouched.
+--
+--   WHY STRUCK RATHER THAN CORRECTED, which is the whole of the ruling: **a
+--   derived surface carries no tally** (the 059 precedent). Correcting the
+--   numbers would have re-armed the same failure one revision later — and the
+--   proof that it fails is in the text being replaced. The Decision 3 tally had
+--   ALREADY gone stale: it read "15 labeled / 12 DDL-realized" while the
+--   canonical body, read verbatim at 58ca6ed on 2026-08-12, stands at SIXTEEN
+--   labeled and THIRTEEN DDL-realized. **Nobody edited it wrong; the family grew
+--   and the copy could not follow.** That is what a tally in a catalog comment
+--   always eventually does, and it is why the replacement states the prohibition
+--   rather than a fresher number.
+--   ⚠ The struck figures are named ABOVE as the ERRONEOUS ones, in a dated
+--   header, which is the permitted form. They are NOT restated in the comment
+--   below, where they would read as live state.
+--
+-- ----------------------------------------------------------------------------
 -- LEDGER DELTAS (all confirmed FLAT, stated as deltas): §10 catalogued
 --   instances +0 · SECURITY DEFINER allowlist +0 (no function authored) ·
 --   ADR-011 Decision 3 family +0 · SD matrix — NO expansion · grants unchanged ·
@@ -193,6 +228,15 @@
 --   4. NOTHING ELSE MOVED: 054's policies, grants and triggers are unchanged —
 --      assert the nav_daily grant set and the presence of both mutation-block
 --      triggers, so a comment migration that quietly did more would fail.
+--   5. NO TALLY IS PRESENT (substitution B). Assert obj_description matches
+--      NEITHER a ledger-count phrase (e.g. 'ledger stays' / 'allowlist stays')
+--      NOR a Decision-3 tally shape (e.g. 'labeled' / 'DDL-realized').
+--      ⚠ ASSERT THE SHAPE, NOT THE STALE VALUES. A leg written against "15" and
+--      "12" would go green the moment someone re-added a FRESH count — which is
+--      the regression, not the fix. The prohibition is on carrying a tally at
+--      all, so the assertion has to be on tally-ness rather than on wrongness.
+--      This is the leg that fires if a future editor "helpfully" restores an
+--      accurate number, and it is the only one that would.
 --   ⚠ `supabase db reset` is PROHIBITED here — it destroys the F/CTO's active
 --   local test data. Verify non-destructively (apply-in-txn + rollback).
 -- ============================================================================
@@ -245,6 +289,10 @@ comment on table pfin.nav_daily is
   'resolved it — so the row''s tenant is proven to BE the tenant served. Every INSERT '
   'path (incl. QA fixtures + seeds) must set that GUC. aal2 step-up backstop '
   'INHERITED on the SELECT policy (C3 / 025). JOINT-REVIEW-MANDATORY (tenant-scoped '
-  'financial data). §10 ledger stays 3; DEFINER allowlist stays 4 (all three fences '
-  'here are INVOKER; W-1 authors no fn); Decision-3 family stays 15 labeled / 12 '
-  'DDL-realized. SECURITY: SD-24 (high) + RT-31 — both landed by Sec 2026-08-02.';
+  'financial data). The fences here are INVOKER and W-1 authors no function, so the '
+  'SECURITY DEFINER allowlist is untouched. NO TALLY IS CARRIED HERE, deliberately: '
+  'the §10 catalogued ledger, that allowlist and the ADR-011 Decision 3 family all '
+  'GROW, and a count copied into a catalog comment is a maintenance obligation the '
+  'copy will not honour — this text previously carried three, and the Decision-3 one '
+  'had gone stale by the time anyone read it. Read each at its canonical anchor. '
+  'SECURITY: SD-24 (high) + RT-31 — both landed by Sec 2026-08-02.';
