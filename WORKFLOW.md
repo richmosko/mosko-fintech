@@ -231,7 +231,7 @@ It exists because agent reports have dumped everything read, encountered and scr
 
 **The block below is duplicated verbatim into every file in `.claude/agents/`.** A pointer fires when someone looks something up; **this rule must fire at report time, when nobody is looking anything up** — the same completion-record-vs-operating-assertion distinction as *Verification discipline* above. Duplicating **behaviour** is far less drift-prone than duplicating facts: the block carries no counts, paths, owners or phase state to go stale. The copies are byte-identical by construction and must stay so; the only permitted difference is this heading's level (`###` here for document hierarchy, `##` in the agent files).
 
-**`temp/` is gitignored** — confirmed against `.gitignore` (`# Local working files (planning drafts, scratch)`). An evidence file written there is readable by the recipient on the same machine and never enters a commit, which is what makes "write it to a file and give the path" a real alternative to pasting rather than a way to smuggle the paste into the repo.
+**`temp/` is gitignored** — confirmed against `.gitignore` (`# Local working files (planning drafts, scratch)`). That is what makes "write it to a file and give the path" a real alternative to pasting rather than a way to smuggle the paste into the repo — and it is also why the block's second ⚠ exists. **An overflow file has no watcher.** The routing agent has discharged its half by writing it; the finding is not *recorded* until the coordinator places it in a tracked artifact or explicitly discards it. Without that second half, both parties can believe the other has it — which is the failure this protocol exists to prevent, one level up.
 
 Return **conclusions, not evidence.**
 
@@ -251,6 +251,12 @@ Return exactly:
 
 ⚠ Item 4 has no length limit on the *finding*, only on the *message*. Suppressing
 a real finding to fit the format is worse than the bloat this prevents.
+
+⚠ **`temp/` is a hand-off buffer, not storage.** It is gitignored: an overflow file
+has no watcher and does not survive cleanup. **The coordinator owns placing anything
+durable into a tracked artifact — or discarding it — before session close.** An agent
+that routes a finding to `temp/` has discharged its half; the finding is not recorded
+until the coordinator places it.
 
 If you believe an exception is warranted, say so in one line and ask. Do not take
 it unilaterally.

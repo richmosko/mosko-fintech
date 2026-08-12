@@ -121,5 +121,11 @@ Return exactly:
 ⚠ Item 4 has no length limit on the *finding*, only on the *message*. Suppressing
 a real finding to fit the format is worse than the bloat this prevents.
 
+⚠ **`temp/` is a hand-off buffer, not storage.** It is gitignored: an overflow file
+has no watcher and does not survive cleanup. **The coordinator owns placing anything
+durable into a tracked artifact — or discarding it — before session close.** An agent
+that routes a finding to `temp/` has discharged its half; the finding is not recorded
+until the coordinator places it.
+
 If you believe an exception is warranted, say so in one line and ask. Do not take
 it unilaterally.
