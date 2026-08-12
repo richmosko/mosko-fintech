@@ -78,7 +78,7 @@ mosko-fintech operates as a one-human-many-agents team. The human (the owner) ho
 - For non-trivial decisions, agents present 2–3 options with tradeoffs. The Founder/CTO picks one and the choice goes into `DECISIONS.md` with a short rationale.
 - For trivial decisions (naming, formatting, obvious right answers), agents just decide and execute.
 - For decisions touching auth, money, data, or anything irreversible, the Security Reviewer reviews and the Founder/CTO signs off explicitly.
-- The **Chief of Staff** agent maintains workflow and orchestrates phase transitions, but does not make execution decisions itself.
+- The **team-lead** (the main session itself, per `.claude/roles/team-lead.md`) maintains workflow and orchestrates phase transitions, but does not make execution decisions itself.
 
 **Cadence:** Async, single-developer. Work happens in bursts, with multi-week gaps possible. The project must be reconstructable from `WORKFLOW.md` + `DECISIONS.md` + the open branch at any time. Nothing important lives only in the owner's head.
 
@@ -294,13 +294,17 @@ it unilaterally.
 
 ## Agent roster
 
-Nine roles total. Each role has a corresponding `.claude/agents/<role>.md` file containing its system prompt, scoped tools, and behavioral guidelines. Agent definitions are split across two phases by when they're first needed: roles active in Phases 1–4 are defined in **Phase 0.5**; build-time roles activated in Phase 5+ are defined in **Phase 5** alongside the rest of workshop setup. The "Definition timing" note on each role below indicates which phase produces its definition file.
+Each execution role has a corresponding `.claude/agents/<role>.md` file containing its system prompt, scoped tools, and behavioral guidelines — every `.md` there becomes a spawnable `subagent_type`. Agent definitions were split across two phases by when they were first needed: roles active in Phases 1–4 were defined in **Phase 0.5**; build-time roles activated in Phase 5+ were defined in **Phase 5** alongside the rest of workshop setup. The "Definition timing" note on each role below records which phase produced its definition file.
 
 ### Meta role
 
-**Chief of Staff** (`.claude/agents/chief-of-staff.md`)
-The orchestrator. Maintains WORKFLOW.md, ensures phase transitions are clean, escalates when execution agents drift outside their roles, and is the agent the Founder/CTO talks to when unsure which agent to engage. Does not execute on the build itself. Primary artifact: WORKFLOW.md.
-*Definition timing:* Phase 0.5 (formalization of the role that has been operating informally since Phase 0).
+**Team-lead** (`.claude/roles/team-lead.md` — a role, not a spawnable agent)
+The orchestrator: the main session itself, loaded by a SessionStart hook. Maintains the workflow surface, dispatches the roster, verifies results against the tree, and is the only party that talks to F/CTO directly. Does not execute on the build itself. It lives in `roles/` rather than `agents/` precisely because it must never become a `subagent_type`. Absorbed the former Chief of Staff role per [ADR-009](DECISIONS.md#adr-009) Decision 1; the standalone `chief-of-staff` agent file was retired at the roster rewrite (PR #441).
+
+### Utility subagents
+
+**Linear Liaison** (`.claude/agents/linear-liaison.md`)
+Not a role — a context firewall. Every agent (team-lead included) routes ALL Linear MCP calls through it so Linear's multi-KB JSON responses never land in the caller's context. Returns compact distillations only.
 
 ### Execution roster
 
@@ -352,15 +356,15 @@ All artifacts live in the GitHub repo. Source of truth is the repo, not local fi
 
 | Artifact | Purpose | Owner | Update cadence |
 |---|---|---|---|
-| `WORKFLOW.md` | This document. Map and execution log. | Chief of Staff | Per phase transition; major workflow changes |
+| `WORKFLOW.md` | This document. Map and execution log. | team-lead | Per phase transition; major workflow changes |
 | `PRD.md` | Product requirements. V1 scope, user stories, success metrics. Its security-facing sections are **pointers to `docs/SECURITY/index.html`, not content** — PM owns every word in PRD; there is no second author. | Product Manager | Per scope decision; reviewed each phase |
 | `ARCHITECTURE.md` | System design, data model, tech choices, security posture. Its security-posture sections are **pointers to `docs/SECURITY/index.html`, not content** — Architect owns every word in ARCH; there is no second author. | Architect | Per architectural decision; reviewed each phase |
 | `docs/SECURITY/index.html` | V1 canonical security reference per [ADR-008](DECISIONS.md#adr-008) — SD matrix, RT catalog, posture sub-sections. The only home for security content; ARCH and PRD point here. | Security Engineer | Per security decision; joint-review-gated |
 | `DECISIONS.md` | Architectural Decision Records (ADRs). One entry per non-obvious choice. | Architect | Per decision |
 | **Linear** (external) | Backlog and active task tracking. Initiatives → projects → issues. Accessed by agents via Linear MCP. Single source of truth for what's being worked on; no `TASKS.md` artifact exists. | Product Manager (issue creation); execution agents (status updates) | Continuous during build phases |
-| `docs/linear-setup.md` | Operational companion to WORKFLOW.md's Linear policy. Covers MCP installation, OAuth flow, label/milestone conventions, issue templates, troubleshooting. WORKFLOW.md owns the *decision and policy*; this doc owns the *how-to*. | DevOps (initial draft); Chief of Staff (kept current) | Per Linear configuration change |
+| `docs/linear-setup.md` | Operational companion to WORKFLOW.md's Linear policy. Covers MCP installation, OAuth flow, label/milestone conventions, issue templates, troubleshooting. WORKFLOW.md owns the *decision and policy*; this doc owns the *how-to*. | DevOps (initial draft); team-lead (kept current) | Per Linear configuration change |
 | `README.md` | Project intro, setup instructions, contribution model (solo). | Founder/CTO | Rarely |
-| `CLAUDE.md` (root) | Project conventions for Claude Code at the repo level. | Chief of Staff | Per workshop setup; refined during build |
+| `CLAUDE.md` (root) | Project conventions for Claude Code at the repo level. | team-lead | Per workshop setup; refined during build |
 
 **`DECISIONS.md` — Architect always holds the pen, including for security ADRs**, where Sec supplies the text and Architect commits it verbatim. The previous owner cell read *"whoever made the decision"*, which was never an ownership assignment: it assigned ownership at write time, by the writer, to the writer — which is why two agent files could both legally claim the file. Absent a real semaphore for who is writing a file in a branch or worktree, **a negotiated pen-holder is a convention with no mechanism, and conventions with no mechanism rot.**
 
@@ -1202,7 +1206,7 @@ Phase 4 ran 2026-06-02 → 2026-06-04 (3 calendar days; intensive parallel PM/Ar
 
 - All execution agents, per task assignment
 - Security Reviewer on every PR touching sensitive surfaces
-- Chief of Staff on phase-level retrospectives between milestones
+- team-lead on phase-level retrospectives between milestones
 - Founder/CTO on review and merge
 
 **Exit criteria:**
@@ -1244,7 +1248,7 @@ Phase 4 ran 2026-06-02 → 2026-06-04 (3 calendar days; intensive parallel PM/Ar
 - Security Reviewer (final pre-production sign-off)
 - Founder/CTO (production decisions, monitoring posture)
 - Product Manager (V2 planning based on actual use)
-- Chief of Staff (project retrospective)
+- team-lead (project retrospective)
 
 **Exit criteria:**
 
@@ -1270,7 +1274,7 @@ Phase 4 ran 2026-06-02 → 2026-06-04 (3 calendar days; intensive parallel PM/Ar
 
 **Agent** — In this project, a Claude Code subagent with a scoped system prompt, scoped tools, and a defined role. Distinct from a generic "AI assistant" — agents have role-specific behavior.
 
-**Chief of Staff** — The meta-role that orchestrates the project, maintains WORKFLOW.md, and ensures phase transitions are clean. Does not execute on the build itself.
+**Chief of Staff** — Retired meta-role, absorbed into the **team-lead** per [ADR-009](DECISIONS.md#adr-009) Decision 1. The team-lead is the main session itself, defined in `.claude/roles/team-lead.md` and deliberately not spawnable. Appears by its old name in phase records, which are history and stay as written.
 
 **CLAUDE.md** — A markdown file Claude Code reads automatically to get context. Can exist at the repo root (project-wide conventions) or in subdirectories (scoped conventions).
 
