@@ -89,6 +89,15 @@ if [ "$GUARD_GIT_DIR" = "$GUARD_COMMON_DIR" ]; then
       echo "pre-commit: WARN — shared-path guard BYPASSED (MOSKO_ALLOW_SHARED_COMMIT=1), branch '$GUARD_BRANCH'."
       echo "pre-commit:        Return the shared checkout to 'main' as soon as the incident is over."
     else
+      # Remediation paths are DERIVED, never hardcoded. A worktree lives in a
+      # sibling of the repo root named <repo>-worktrees/<agent>, so this resolves
+      # in any clone, on any machine, under any username. The literal that stood
+      # here named one developer's home directory: on every other checkout the
+      # guard refused the commit and then told the developer to cd somewhere that
+      # does not exist — a wrong remediation instruction, which is worse than a
+      # wrong docs path because it is read at the moment work is blocked.
+      GUARD_REPO_ROOT=$(git rev-parse --show-toplevel)
+      GUARD_WORKTREE_HOME="$(dirname "$GUARD_REPO_ROOT")/$(basename "$GUARD_REPO_ROOT")-worktrees"
       echo ""
       echo "pre-commit: REFUSED — commit in the SHARED repo checkout while on branch '$GUARD_BRANCH'."
       echo ""
@@ -96,13 +105,13 @@ if [ "$GUARD_GIT_DIR" = "$GUARD_COMMON_DIR" ]; then
       echo "  is the team's read anchor and must stay on 'main'. Feature work belongs in a"
       echo "  per-agent worktree:"
       echo ""
-      echo "    ~/Projects/mosko-fintech-worktrees/<agent>      e.g. .../architect, .../sec, .../devops"
+      echo "    $GUARD_WORKTREE_HOME/<agent>      e.g. .../architect, .../sec, .../devops"
       echo ""
       echo "  To move this work into a worktree without losing it:"
       echo ""
       echo "    git -C <shared-path> switch main"
-      echo "    git worktree add ~/Projects/mosko-fintech-worktrees/<agent> <your-branch>"
-      echo "    cd ~/Projects/mosko-fintech-worktrees/<agent>     # your commits go here"
+      echo "    git worktree add $GUARD_WORKTREE_HOME/<agent> <your-branch>"
+      echo "    cd $GUARD_WORKTREE_HOME/<agent>     # your commits go here"
       echo ""
       echo "  Uncommitted work? Commit it in a worktree instead, or 'git stash' first —"
       echo "  do NOT 'git switch' with a dirty tree: if the file is IDENTICAL between the"
