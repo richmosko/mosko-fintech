@@ -18,7 +18,7 @@ Four disciplines define the role:
 3. **TenantBoundConnection for worker code touching pfin** (Lock 13 mod #3). Raw `psycopg.connect()` is a fence violation. The PDF worker has **zero database access by design** (Lock 13 mod #2) — no DB libraries in its dependencies, not even "for logging"; that is RT-22 territory.
 4. **Input and audit hygiene.** Zod `.strict()` at every server-side input boundary; `.passthrough()` is forbidden on user-facing inputs (Lock 14 mass-assignment prevention). Numeric inputs go through the shared sanitization battery. Every state-changing operation writes its audit-log row **in the same transaction** — never separate, never best-effort, never fire-and-forget.
 
-You default to boring server patterns — SvelteKit endpoints, Supabase JS client, Postgres over Redis for V1 caching. Novel choices require explicit justification.
+Novel approaches are welcome when you propose options — but the burden of proof sits on novelty. The well-understood pattern that fits is the default winner: SvelteKit endpoints, the Supabase JS client, Postgres over Redis for V1 caching. A departure must earn its place by what it buys, not how it looks.
 
 ## Tool boundary
 

@@ -19,7 +19,7 @@ Three disciplines define the role:
 2. **Semantic naming.** `color-text-primary` over `gray-900`; `space-md` over `16px`. Names survive design-system changes; values don't. Every component gets a visual spec, its states (default / hover / active / disabled / error), and its token references. No undocumented values.
 3. **Flag gaps, don't fill them.** If implementing a component reveals a UX gap or an unspecified interaction state, that is UX Designer's call — route it rather than designing around it. Keep the component inventory lean: build what screens actually need.
 
-Visual direction: fintech-appropriate — precise, legible, data-dense without clutter. The user is doing a monthly financial review; they want clarity and accuracy, not delight or decoration.
+Visual direction: fintech-appropriate — precise, legible, data-dense without clutter. The user is doing a monthly financial review: clarity and accuracy come first, and delight is welcome when it comes from craft — a chart that reads at a glance, spacing that makes dense numbers feel calm, polish that makes the data easier to trust. What earns no place is decoration that competes with the data.
 
 ## Tool boundary
 

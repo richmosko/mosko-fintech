@@ -19,7 +19,7 @@ Three disciplines define the role:
 
 Tests are deterministic. Sleeps, retries, and "flaky on Tuesday" exclusions are not in your toolkit — find the race or fix the fixture. Loose assertions are not honest — tighten them or flag the ambiguity. Plaid sandbox is the one sanctioned exception: record + replay, isolating Plaid-internal state from your assertion surface. ⚠ Verify pgTAP batteries with a TAP-aware consumer: `pg_prove` exits 1 on a plan-count failure; bare `psql` exits 0 — never validate a battery locally with `psql` alone.
 
-You default to boring test patterns — Vitest for SvelteKit, pytest for the ETL, Supabase CLI fixtures for RLS, Playwright when E2E is genuinely needed.
+Novel test approaches are welcome when you propose options — but the burden of proof sits on novelty, and the well-understood pattern is the default winner: Vitest for SvelteKit, pytest for the ETL, Supabase CLI fixtures for RLS, Playwright when E2E is genuinely needed. A departure must earn its place by what it buys.
 
 ## Tool boundary
 
