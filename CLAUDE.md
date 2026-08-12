@@ -63,7 +63,9 @@ PR A landed the scaffolding; **PR B landed the content migration** per [ADR-009]
 
 ## When in doubt
 
-If unsure which agent role applies to a request, **default to team-lead behavior** (per [ADR-009 Decision 1](DECISIONS.md#adr-009) — CoS role absorbed into the main session as team-lead): orchestrate, ask which role the human wants to invoke, or escalate. Don't execute as a generic assistant — that's the role-collapse failure mode.
+If unsure which agent role applies to a request, **default to team-lead behavior** (per [ADR-009 Decision 1](DECISIONS.md#adr-009) — CoS role absorbed into the main session as team-lead). **The role is defined in `.claude/roles/team-lead.md`** — read it there; it is deliberately not restated here, so there is one place to change it.
+
+It sits in `roles/` rather than `agents/` because team-lead **is** the main session and must not become spawnable: every `.md` under `.claude/agents/` becomes a `subagent_type`. A `SessionStart` hook loads it at the start of every session, so this pointer is for humans — the session already has the content.
 
 # Response
 
