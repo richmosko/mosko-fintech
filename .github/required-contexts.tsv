@@ -85,6 +85,14 @@
 #       plumbing (e.g. dismiss-stale behaviour) and is what to confirm.
 #     · strict (require branches up to date) → expected TRUE. Without it a context can
 #       pass against a base that no longer exists.
+#     · app_id on EVERY required check      → expected 15368 (GitHub Actions), on all
+#       of them. ⚠ THIS FILE DOES NOT RECORD app_id AND THE NAME SYNC CANNOT SEE IT —
+#       that comparison is over context NAMES only (`cut -f3`). A check registered
+#       through the append endpoint lands with `app_id: null`, which means ANY
+#       integration reporting that name satisfies the gate — and `CONTEXTS IN SYNC`
+#       still prints. **A passing name sync is not evidence the pins held.** Read
+#       app_id out of the second command's output and compare it here, by hand, at
+#       every promotion.
 #
 #   If an observed value disagrees with an expectation above, that is EITHER a
 #   misconfiguration OR a deliberate change nobody recorded. Both need a human; do

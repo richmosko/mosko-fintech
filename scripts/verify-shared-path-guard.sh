@@ -46,6 +46,14 @@
 #   discriminator regression would land silently. Run it by hand after ANY edit
 #   to the guard block.
 #
+# ⚠ TWO BEHAVIOURS HERE ARE DELIBERATE AND LOOK LIKE BUGS — DO NOT "CLEAN UP"
+#   EITHER. (1) The harness SETS ITS OWN GIT IDENTITY, so it runs on an
+#   identity-less runner rather than dying at the first commit. (2) It leaves
+#   `/tmp/mosko-guard-verify` BEHIND ON FAILURE ONLY — that directory is the
+#   evidence of the failing case, and removing it on the failure path is
+#   removing the only thing that explains a red run. Both read as sloppiness to
+#   a reader tidying the script; both are load-bearing.
+#
 # WHY THE PRECONDITION ASSERTION EXISTS (do not remove it)
 #   Two earlier versions of this harness reported confident verdicts about
 #   states they never reached:

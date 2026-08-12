@@ -1,6 +1,6 @@
 ---
 name: start-doc-update
-description: Kicks off a doc-only update on a `phase/<outer>-<slug>` or `meta/<slug>` branch — for changes to PRD/ARCH/SECURITY HTML docs, WORKFLOW.md, DECISIONS.md, MILESTONES.md, BACKLOG.md, CHANGELOG.md, CLAUDE.md, etc. that aren't tied to a Linear feature. Replaces the retired `/ship-branch` skill (which only handled the push+PR step); use `/finish-doc-update` for that step. Per ADR-009 Decision 9.
+description: Kicks off a doc-only update on a `phase/<outer>-<slug>` or `meta/<slug>` branch — for changes to PRD/ARCH/SECURITY HTML docs, WORKFLOW.md, DECISIONS.md, MILESTONES.md, BACKLOG.md, CLAUDE.md, etc. that aren't tied to a Linear feature. Replaces the retired `/ship-branch` skill (which only handled the push+PR step); use `/finish-doc-update` for that step. Per ADR-009 Decision 9.
 user-invocable: true
 allowed-tools:
   - Bash
@@ -9,7 +9,7 @@ allowed-tools:
 
 # start-doc-update — Bootstrap a phase- or meta-scoped doc-update branch
 
-Use when you need to revise PRD/ARCH/SECURITY/MILESTONES/DECISIONS/WORKFLOW/CLAUDE/CHANGELOG/BACKLOG/MILESTONE-FRAMING/etc. and the change isn't tied to a Linear feature.
+Use when you need to revise PRD/ARCH/SECURITY/MILESTONES/DECISIONS/WORKFLOW/CLAUDE/BACKLOG/MILESTONE-FRAMING/etc. and the change isn't tied to a Linear feature.
 
 mosko-fintech adaptation of `richmosko/project_template`'s `/start-doc-update` per [ADR-009](../../../DECISIONS.md#adr-009) Decision 9. Differences from template:
 
@@ -53,6 +53,8 @@ Match the doc being edited to the prefix per ADR-009 Decision 9 sub-option 3:
 | `docs/SECURITY/*` (security HTML artifacts) | `phase/plan-<slug>` |
 | (Future) implementation code | `phase/iv-<slug>` |
 | `MILESTONES.md`, `DECISIONS.md`, `BACKLOG.md`, `CHANGELOG.md` | `meta/<slug>` |
+
+⚠ **`CHANGELOG.md` is frozen and no longer maintained** (see `WORKFLOW.md` § Artifact list). It is listed above because the routing still applies if it must ever be touched — not as an invitation to add entries. No skill writes to it.
 | `docs/MILESTONE-FRAMING.md` | `meta/<slug>` |
 | `WORKFLOW.md`, `CLAUDE.md`, `README.md` | `meta/<slug>` |
 | `.claude/agents/*.md`, `.claude/skills/*/SKILL.md` | `meta/<slug>` |

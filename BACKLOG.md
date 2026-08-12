@@ -832,7 +832,7 @@ Per ADR-009 Decision 7's feature-flow scheme, BACKLOG.md doubles as the overflow
 
 *Filed 2026-08-11. **These are RECORDED, not worked** — the session that produced them consumed itself on process at the expense of product, and the correct response was to write them down and stop. Each entry states the finding and its routing; none is investigated further here. **The heading carries no count**, per the ruling that a count in a §7 heading goes stale on the first append.*
 
-*⚠ **Deliberately NOT duplicated here:** the items already held in [`MILESTONES.md`](MILESTONES.md) "Pending" — the `app_id` blind spot, `053`'s first-of-month grain hole, the sweep buckets, the rejected `marker_basis` option, S22, `test_staging_update.py`'s unqualified `drop table`, and `db-tests.yml` never going red. A second home drifts; that one is theirs.*
+*⚠ **The "deliberately not duplicated here" carve-out is VOID — the items it excluded are in §7.12 below.** It read: the `app_id` blind spot, `053`'s first-of-month grain hole, the sweep buckets, the rejected `marker_basis` option, S22, `test_staging_update.py`'s unqualified `drop table` and `db-tests.yml` never going red live in `MILESTONES.md` "Pending", and a second home would drift. **`## Pending` was removed on 2026-08-12** — no purpose, no size bound, no owner, ~90% of an auto-load that was being truncated to nothing. There is no first home left for them to drift from.*
 
 **`067` — the catalog-comment completion.** [pointer]
 - **Source.** Sec's concession during the `066` review, after initially blocking it. `066`'s **catalog** comment names the GRANT and the ACL and is **silent on the COMMENT**, though the DROP takes both — the same omission corrected in `066`'s header, surviving in the copy a `\d+` reader with no repo actually sees.
@@ -863,3 +863,89 @@ Per ADR-009 Decision 7's feature-flow scheme, BACKLOG.md doubles as the overflow
 - **(i) A citation must state the RELATION it asserts — contains / governs / is-an-instance-of / is-adjacent-to — not merely the target's name.** The generalisable result of the ADR-011 Decision 1 sweep: *"ADR-011 Decision 1"* attached to a `security invoker` read path and survived review precisely because a bare citation asserts nothing checkable. A named relation is falsifiable; a bare name is not.
 - **(ii) The no-count discipline needs its boundary stated, because the rule as written invites the error in both directions.** A count over a **growing** list is a maintenance obligation and gets dropped. A count over a **closed, bounded historical measurement** carries no obligation and is **load-bearing evidence** — *"14 sample files were counted as 14 active hooks"* is a **plausible** number, which is why the wrong answer was believed; stripping it removes the part that explains the failure. **Two agents over-applied the discipline in opposite directions on the same day**, which is the argument that the boundary belongs in the rule rather than in the reader.
 - Owner: **team-lead** to route to a home (candidates: `brief-drift-catch`, `WORKFLOW.md` Verification discipline). **Recorded here so they are not lost between skills.**
+
+---
+
+### §7.12 — Carried out of `MILESTONES.md` `## Pending` at its removal
+
+*Filed 2026-08-12, when `## Pending (immediate)` was removed. **These are RECORDED, not worked.** Every entry below existed in that section; nothing here is new analysis. Session state (`main` sha, PR counts, worktree lists) and completed-work narrative were deleted rather than moved — GitHub holds the PR record, and recorded session state guarantees staleness. **Standing constraints did not come here: they went to the file whose reader would get it wrong**, and the ones whose destination was out of this PR's bounds are listed under "relocation pending" at the end. **The heading carries no count.***
+
+**Architect — the `067` revert gap.** [defect]
+- `066`'s DROP already destroyed the function comment `065` set. A revert of `066` — a `067` recreating the six-column function — **must re-issue that comment itself**; it cannot lean on `065`, which is applied and will not re-run. **Ship the revert as written and the function lands with no comment at all.**
+- Joins the `067` catalog-comment work already recorded in §7.11.
+
+**Architect + Sec — `063`'s catalog comments were never re-checked.** [verification gap]
+- `063:447/562/570/603/611` cite ADR-049 Decision 1. **Believed correct but assumed, not verified** — consciously set aside when #427 was scoped to headers. These have a **database representation**, so any wrong ground is a **`052`-shape comment-only migration, not a header edit**.
+
+**Sec — the `WQ>` marker set is verified CORRECT but never verified COMPLETE.** [verification gap]
+- The seven marked quotations are accurate. **Nobody checked `066` for withdrawn text that should be marked and is not** — the false-negative direction, unexamined in the session's own sign-off.
+
+**Architect + Backend — `053` does not enforce first-of-month grain; `063` does.** [defect · needs a ticket]
+- One malformed `053` row (e.g. `2025-10-15`) changes another period's **value**, **classification**, **`period_was_due`** and **`coverage_through`** for every caller — four outputs from one bad row. `066`'s CONTRACT makes correctness conditional on that grain. **Unowned and not in §7.6.**
+
+**DevOps — `workers/etl/.venv` is not gitignored.** [defect · ordering constraint]
+- `git check-ignore` returns nothing for it; root `node_modules/` is ignored, `.venv` is not, so any `uv run` there recreates it untracked.
+- ⚠ **ORDERING: add the ignore BEFORE building §7.6 S4's untracked-file pre-push fence**, or the fence's first real firing is a false positive.
+
+**Backend — the ETL suite cannot collect in a fresh environment.** [defect]
+- `uv run pytest` dies at `import polars`. Pre-existing. **This is why #424's E402 fix was verified by property rather than end-to-end** — recorded so that verification's bound stays visible.
+
+**DevOps — the sweep buckets will rot into decoration.** [refinement]
+- `NO-ANCHOR` ended at **64 entries**, nearly all legitimate. With no checked-in triaged allowlist the next reader learns *"it's always 64"* and stops looking. Unowned.
+
+**Backend + DevOps — S22, stalled-ingest detection.** [defect]
+- Unowned anywhere, and it now gates a user-facing marker.
+
+**QA — `test_staging_update.py`'s unqualified `drop table`.** [defect]
+- A data-loss path. ⚠ **Its own docstring vouches for the thing that makes it unsafe.**
+
+**DevOps — `db-tests.yml` is 60/60 green and has never been red.** [verification gap]
+- The bench measurement proved the *harness* exits 1. **"A required context actually blocks a PR on a red battery" has never once fired.**
+
+**Architect — ADR-051's `C<n>` / `RF<n>` / `F<n>` label surfaces are unaudited.** [refinement]
+- Same permanent-label-in-ephemeral-namespace problem the ADR fixed elsewhere; `C1` is already cited as a permanent condition in two artifacts. ⚠ **`BACKLOG.md` appears nowhere in ADR-051** — unexamined, not out-of-scope.
+
+**PM — S6's priority consequence is unruled.** [ruling needed]
+- S24 made S6's *implementation* the arming event for a NAV-affecting blast radius; a fresh PM reading it sees a calm scope question.
+
+**F/CTO — branch-protection promotion of six advisory fences.** [ratify]
+- `pgTAP RLS battery` · `Live-DB integration lane` · `Unit + typecheck + build` · `RT-27` · `TBC-node` · `tz-sweep`. Deliberately **excluding `Scheduled dep audit — liveness`**, which asserts external cron state and would block merges for reasons unrelated to the diff.
+- ⚠ **F/CTO-executed by construction** — the team-lead's permission classifier refuses branch-protection writes. Until it lands, the pgTAP battery is a Sec merge gate **enforced only by a human reading the result**; QA asked that its sign-off be called **advisory, not enforced**, and that framing stands.
+
+**F/CTO — S19's outstanding half.** [chore]
+- Rename one line in the local `.env`: `BLS_API_KEY` → `BLS_API_KEY_TEST` (the loader already prefers it; no code impact). ⚠ **Deliberately not struck**: the property is *"the production name is absent from developer machines"*, and until the rename that still answers YES. Not blocking.
+
+**PM — the PRD §2.4.4 amendment text.** [in flight]
+- F/CTO-ratified as **(a) + Option B**. ⚠ It un-freezes `064`'s provisional return shape, so it is on the migration's critical path, not parallel to it.
+
+**Architect + Sec — §7.6 S23, the two `053` defects.** [defect]
+- Low priority; **(b) is the half with teeth.**
+
+**The documentation queue — agent-side, none blocking product work. Cap it; do not drain it first.** [refinement]
+- **team-lead → `CLAUDE.md` Repo conventions:** the push-safety incantation and the re-derive method, **with their reasons inline**. Measured 2026-08-11: they exist **nowhere in the repo** (`grep -rl force-with-lease --include='*.md'` → 0) despite being standing practice that caused a near-miss. *(Partly discharged 2026-08-12: the force-push hazard is now in `WORKFLOW.md` § Per-agent git worktrees.)*
+- **Sec:** the `plaid_sync_audit` → `linked_source_sync_audit` naming sweep — ⚠ **after** the F2 text, never before: renaming the pointer first yields a correct pointer to an empty surface and the finding reads as closed. Plus SECURITY §4.2's RT-26 reconciliation and ADR-050's own bare-label update to `OBS-` names.
+- **Architect:** the ADR-016 tempo note — an allowlist entry can no longer land before its code.
+- **Architect + Sec:** **ARCH §4.1 and SECURITY §4.2 still carry the superseded RT-26 composition in the present tense** (open since #401), and **ARCH §4.1 still says RT-26 enforcement details "land at Phase 5"** — stale, noticed, never routed.
+
+**Linear-side, recorded here only so it is visible from the repo.** [pointer]
+- **SELF-197** (Plaid Link + token exchange) is **paused / superseded-as-scoped** under the aggregator pivot. ⚠ Its cited design notes live in `temp/`, which is gitignored — **either land them or drop the references**, because they will not survive.
+- **SELF-201** deferred, non-blocking: audit-log infra (the reserved 4th `SECURITY DEFINER` allowlist entry, wiring `013`'s forward-hook — joint-review-mandatory to author), UX copy pass, optional visual-fidelity pass.
+- **SELF-217** shows **Backlog** in Linear but is **PARKED** per F/CTO Option A; [ADR-040](DECISIONS.md#adr-040)'s forward-only decision forecloses it and its ACs are schema-impossible against `054`. ⚠ **The Linear status is the stale one — do not pick it up from there.** Un-parking needs a new ADR + Sec + F/CTO, not a re-read.
+- **SELF-228** (the §2.1.7 multi-function cross-tenant RLS battery) is the **close-gate for the whole V1.1 milestone**, not for §2.1.2: no V1.1 issue closes to milestone until it passes. **It is therefore the LAST item, not the next one.**
+
+**Long-standing, out-of-band — Plaid production-tier monthly minimum.** [chore]
+- A sales/onboarding call **before V1 ships**; the only load-bearing cost-target unknown per [ADR-011](DECISIONS.md#adr-011) Decision 20. Phase 1 closeout origin.
+
+**Housekeeping carried from the PR-A row #4 audit.** [refinement]
+- `docs/SECURITY/index.html` §4.2 / §4.3 / §4.6 paraphrase the ADR-011 Decision 4 four-sub-layer composition into three-layer naming — the same drift class the §10 cross-check exists to catch. **Sec-owned.**
+- ARCH §3 / §4 / §4.1 / §5 do not carry the full section-hint canonical-territory statement (they predate the convention; **not violations**). Optional at the next ARCH refresh. **Architect-owned.**
+
+**⚠ RELOCATION PENDING — content preserved here because its destination was outside this PR's bounds.** [pointer]
+- **ADR-049 — the rejected `marker_basis` option (Option C) is recorded nowhere.** It was rejected **on the ratified text**: any version rich enough to drive copy needs an `unresolvable` member, folding §2.4.4's signal (1) into signal (2), which the text forbids twice. ⚠ **It looks tidier than two columns and someone will re-propose it.** Same class: `period_was_due` **is** derivable from `gap_class` today and was kept deliberately, because deriving it means re-deriving the policy, which ADR-049 D4 forbids. → **belongs in ADR-049's alternatives.**
+- **ADR-046 — the checkpoint residual is ACCEPT-DESPITE-FEASIBLE**, not accept-because-infeasible: remediation is cheap and precedented in the same table; it was **declined, not unavailable**. **Re-open triggers: a second user · any new writer of those tables · a demonstrated cross-tenant write — any one voids the acceptance.** ⚠ The gap is **inferred from fence absence, never demonstrated** — whoever re-opens should exercise the failure first. ⚠ **Do not tidy the checkpoint SD rows: §4.1 says a surface is safe only where a mechanism is demonstrated at its own row, so their silence is the signal.** → **belongs in ADR-046.**
+- **ADR-027 — the aggregator-strategy pivot (2026-07-07).** Empirical testing against real accounts plus research established that **no general aggregator reliably returns complete Fidelity transactions**. ⚠ The recurring drift is re-describing the posture as "SimpleFIN-forward", which is wrong. → **belongs in ADR-027**, which exists; verify it states the pivot in these terms and drop this entry once confirmed.
+- **ADR-011 Decision 4 — no §10 three-axis cross-check ran in the 2026-08-11 session**, correctly, since nothing reviewed was §10-adjacent. **Consequence: those PRs neither extend nor break the CLEAN streak — they are OUTSIDE it.** Any later claim that the streak extended through that session is **unverified; do not silently advance it.** → **belongs in ADR-011 D4's CHANGELOG annotation, where the streak is asserted.**
+- **PRD §2.4.4 — route further staleness-marker work there, NOT to "INV-1"**, an unrelated §2.6 injection invariant the two were conflated with once already. Still open downstream: the per-surface signal threading residue at PRD Appendix B §2.1 flag (d), which is presentation-layer and does **not** reopen the signature. → **belongs at PRD §2.4.4. PM-owned.**
+- **SECURITY / the unbuilt F3 surface — do NOT transfer F2's (OBS-F2's) answer to F3.** They read as siblings — same clause shape, same *"mirrors RT-05's pattern"* language, same §4.6 vocabulary — **and have different attacker models.** RT-05's webhook is internet-facing, so the unbounded-INSERT objection rules out row-per-event; `/internal/pdf-render` is on the **private Docker network**, so row-per-event may be legitimately correct for F3. ⚠ RT-21 (e)'s JWT carries a `users_id` claim that is **unverified on a rejected JWT** and must not be trusted as a tenant. → **belongs at SECURITY §4.6. Sec-owned; build-time design instruction.**
+- **`054` / SECURITY — the `service_role` double fence is DO-NOT-TOUCH.** No `pg_read_all_data` membership **plus** `054`'s column grant withholding `nav_value`. Against the other four `rolbypassrls` roles it reads as an inconsistency worth harmonising. ***It is not.*** Harmonising it would look like tidy-up and would remove the only real fence on the surface. → **belongs in `054`'s header and in SECURITY.**
+- **SECURITY / ops — the atomic `ALTER ROLE … WITH LOGIN PASSWORD '<plaintext>'` prohibition is MEASUREMENT-INDEPENDENT** (`log_statement = ddl` measured; Postgres does not redact). Use `\password` then `ALTER ROLE … LOGIN`. ⚠ **Do not measure a target, find logging off, and conclude it is safe there** — the prohibition does not depend on the setting. → **belongs in SECURITY's secrets posture.**

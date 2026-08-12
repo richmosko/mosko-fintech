@@ -453,6 +453,17 @@ def fetch_cpi_df(api_key, startyear, endyear, series_id_lst):
        own docstring and pinned by a test that deliberately injects an `M13`
        row. Dropping `M13` there is CORRECT, not a swallow: an annual average
        is not a monthly observation, and a monthly series should discard it.
+    3a. ⚠ THE STORED SERIES IS LEGITIMATELY NON-CONTIGUOUS, AND A CONSUMER MUST
+       TOLERATE A MISSING PERIOD. `2025-M10` is absent from `pfin.cpi_u_index`
+       and that is CORRECT — not a gap to backfill, interpolate, or "fix".
+       Measured by direct query (ADR-049) rather than inferred from a row count:
+       BLS published the period with the literal '-', the cast above nulls it,
+       and `053`'s NOT NULL forbids storing it. Exactly one such gap exists
+       across Jan-2015 → Jun-2026, so 137-of-138 is one real gap rather than a
+       coincidental total. ⚠ **The measurement settled WHY the gap exists; it did
+       not remove the requirement to handle one.** The CPI-U overlay and every
+       other consumer of this series must not assume contiguous months.
+
     4. ⚠ A NEW CONSUMER DOES NOT INHERIT THAT GUARD AND MUST APPLY ITS OWN.
        The protection lives in one consumer and is invisible from here, which
        is why this note exists. `update_table_cpi` is the only other caller and
