@@ -90,13 +90,18 @@ mosko-fintech operates as a one-human-many-agents team. The human (the owner) ho
 
 Team-mode gives each teammate its own pane; **per-agent git worktrees give each teammate its own working tree**, so concurrent agents don't clobber one another's checkout. This is the filesystem half of the convention above. It had existed in practice and nowhere in the repo, so every agent rediscovered it — which is what this subsection ends. *(Every figure and command output below was measured on 2026-08-10 at `7d54e97`; re-measure rather than re-cite if you need a current number.)*
 
-**Layout.** One worktree per agent, in a sibling directory:
+**⚠ Absolute paths inside the fenced command output below are RECORDED RESULTS, not instructions — do not portabilise them.** The derivation rule stated next governs every path this subsection *tells you to use*; it does not reach a transcript of what a command actually printed on one machine on one date. Rewriting `git`'s own `fatal:` text, or the line a `.pth` file was measured to contain, manufactures output that was never produced — and it reads as a cleanup, which is what makes it worth stating rather than leaving to judgement. **The instances carry no inline marker on purpose:** a per-line marker inside a transcript would corrupt the very bytes it exists to protect, so the fence is the boundary and this sentence is the rule. **Rewrite the prose; leave the transcripts.**
 
-```
-~/Projects/mosko-fintech-worktrees/<agent>     # e.g. .../backend-etl, .../devops
+**Layout — a rule, not a path.** One worktree per agent, in a **sibling of the repo root, named `<repo>-worktrees/<agent>`**:
+
+```sh
+ROOT=$(git rev-parse --show-toplevel)
+"$(dirname "$ROOT")/$(basename "$ROOT")-worktrees/<agent>"   # e.g. …-worktrees/backend-etl, …-worktrees/devops
 ```
 
-The main repo at `/Users/mosko/Projects/mosko-fintech` **stays on `main` and is the canonical read anchor.** Unqualified *"read the file"* / *"check the tree"* means that checkout unless a branch is named explicitly.
+**Derive it; never paste an absolute path.** An absolute path names one machine and one username and survives neither a fresh clone nor a second user — and the damage is not confined to docs. The same literal had reached the shared-path guard's **remediation message**, so on any checkout but the original the guard would refuse the commit and then instruct the developer to `cd` somewhere that need not exist. **A wrong remediation instruction is worse than a wrong docs path**, because it is read at the moment work is already blocked.
+
+The **main checkout** — the one `git worktree list` prints first, equivalently the one where `git rev-parse --git-dir` and `--git-common-dir` resolve to the same directory — **stays on `main` and is the canonical read anchor.** Unqualified *"read the file"* / *"check the tree"* means that checkout unless a branch is named explicitly.
 
 **⚠ Creating or reusing one — branch off the fetched remote ref, never local `main`.**
 
