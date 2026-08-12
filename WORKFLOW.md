@@ -200,6 +200,13 @@ Prefer guards that hold **by construction** over guards that hold by discipline.
 
 **A definition that does not describe its own instances is a defect for the one reader it exists to serve** — the sweep author, who reasons from the definition and not from the instances.
 
+**⚠ `RN>` — recorded agent name. Do NOT sweep.** A **distinct** marker from `WQ>`, per the never-widen rule above. `RN>` prefixes — glued, no space — any occurrence of a **superseded agent identifier that was correct when written and must stay**. Live identifiers carry no marker; that asymmetry is the whole control, so **never mark a live one to be safe.** **This definition's own prose carries no marker either** — per the illustrative-phrasing rule above, a name written only to define the marker was never asserted as current, so a sweep touching it produces a visibly novel edit rather than a plausible reversion.
+
+- **Current instance:** the agent formerly named `security-reviewer` was renamed to `security-engineer` (2026-08-11; [ADR-009](DECISIONS.md#adr-009) Decision 1 amendment). The rename changed the identifier **only where the identifier must resolve today**: the agent file + its frontmatter `name:`, the `spawn-sec-joint-review` skill's dispatch line, the **Agent roster** entry below, and `docs/SECURITY/index.html`'s two present-tense owner declarations. **Every phase block held.**
+- **Everything else naming `security-reviewer` is a record of what was actually invoked or produced at the time, and rewriting it manufactures false history.** The mechanical test used, and the one to reuse: **an occurrence inside a `## Phase` block whose phase is complete is a record; an occurrence in an un-phased section is live.**
+- **⚠ Do not read that phase status out of this file — the test's input is the part that broke.** The Phase 5 Inputs list was first changed on the strength of its `**Status:** 🟢 Active` line, then reverted: **Phase 5 closed 2026-06-29 per [ADR-020](DECISIONS.md#adr-020), six weeks before the rename.** The status line was stale, and so is this document's header — `Current version:` reads `v1.44` against `CHANGELOG.md`'s `v1.191`, and `Current phase:` reads Phase 5 against `MILESTONES.md`'s Phase 6. **Two independent header fields, both unwatched, and the staleness reached a live decision before anyone read it.** So: the test is sound, the input is not. **Resolve phase status against `MILESTONES.md`, never against the `Status:` line next to the occurrence.** Phase 0.5's Outputs list and Phase 5's Inputs list are the same sentence shape and take the same disposition — both held — and it took a cross-document check to see that.
+- **File-class exemption — these carry no `RN>` because the whole file is the guard:** `CHANGELOG.md`, `DECISIONS.md`, `MILESTONES.md`, and `docs/archive/**` are wholly historical records. A sweep that "corrects" a name in any of them is already out of bounds. `BACKLOG.md` is **not** exempt — its §7 is a live queue — so its one occurrence is marked inline.
+
 ### Coordination discipline
 
 **This subsection owns how work, rulings, and findings move BETWEEN agents.** Establishing a fact is *Verification discipline* above; this is what happens to a fact once someone else depends on it. These rules exist because async agents make decisions from a snapshot that has already moved.
@@ -246,7 +253,7 @@ Owns user flows and interaction patterns. Translates PRD user stories into navig
 Owns the design system — typography, color tokens, component inventory, visual polish. Outputs code-ready tokens. Operates from UX flows. Fully delegated.
 *Definition timing:* Phase 0.5 (lead on Phase 2).
 
-**Security Reviewer** (`.claude/agents/security-reviewer.md`)
+**Security Engineer** (`.claude/agents/security-engineer.md`)
 Non-optional for fintech. Reviews every PR touching auth, data handling, external APIs, secrets, or financial calculations. Has veto power. Co-piloted by Founder/CTO; Founder/CTO signs off on all security-flagged changes.
 *Definition timing:* Phase 0.5 (consulted in Phase 1; lead reviewer on Phase 3 auth/data/secrets work).
 
@@ -531,7 +538,7 @@ Build-time roles (Backend Engineer, Frontend Engineer, QA, DevOps) are deliberat
 - `.claude/agents/chief-of-staff.md` — formalizes the role that has been operating informally since Phase 0 began
 - `.claude/agents/product-manager.md` — Phase 1 lead
 - `.claude/agents/architect.md` — Phase 1 consultant, Phase 3 lead
-- `.claude/agents/security-reviewer.md` — Phase 1 consultant, Phase 3 reviewer
+- RN>`.claude/agents/security-reviewer.md` — Phase 1 consultant, Phase 3 reviewer
 - `.claude/agents/ux-designer.md` — Phase 2 lead
 - `.claude/agents/visual-designer.md` — Phase 2 lead
 - `DECISIONS.md` entries for any non-obvious choices in agent prompt design (e.g., scope of veto power, escalation triggers, when an agent must present options vs. just decide)
@@ -590,7 +597,7 @@ These come from the "Preliminary product findings" section of this document. The
 - **Likely permanent non-goals** to confirm: public sign-up; money movement; advisor role; multi-currency in V1
 - **Likely user model** to confirm: solo owner initially with invite-only friends-and-family path; multi-tenant from day one in data model; UI single-user-only until a second user actually onboards
 - **Likely operating cost shape** to confirm: ~$0/month single-user on Plaid Trial; ~$10–40/month range for small family network
-- **Agent definitions for Phase 1 roles** (from Phase 0.5): `.claude/agents/product-manager.md`, `.claude/agents/architect.md`, `.claude/agents/security-reviewer.md`, `.claude/agents/chief-of-staff.md` all exist and are signed off
+- **Agent definitions for Phase 1 roles** (from Phase 0.5): `.claude/agents/product-manager.md`, `.claude/agents/architect.md`, RN>`.claude/agents/security-reviewer.md`, `.claude/agents/chief-of-staff.md` all exist and are signed off
 - Owner's domain knowledge of personal finance workflows
 - Any insights from owner's existing manual scripts (worth reviewing as PRD input — they encode requirements)
 
@@ -620,7 +627,7 @@ These come from the "Preliminary product findings" section of this document. The
 
 **Detailed steps:**
 
-1. **Session prerequisites (Founder/CTO + CoS).** Before kicking off Phase 1 work, **restart Claude Code** so the six subagents from `.claude/agents/*.md` are loaded into the session's registry. Verify by attempting an explicit subagent invocation (e.g., `Task` with `subagent_type: product-manager` and a trivial smoke prompt). If the subagents do not appear, **do not proceed** — stop and debug the wiring before drafting any PRD content. Mandatory pre-reading for the session: `WORKFLOW.md`, `DECISIONS.md`, and the four agent files active in this phase (`.claude/agents/chief-of-staff.md`, `.claude/agents/product-manager.md`, `.claude/agents/architect.md`, `.claude/agents/security-reviewer.md`).
+1. **Session prerequisites (Founder/CTO + CoS).** Before kicking off Phase 1 work, **restart Claude Code** so the six subagents from `.claude/agents/*.md` are loaded into the session's registry. Verify by attempting an explicit subagent invocation (e.g., `Task` with `subagent_type: product-manager` and a trivial smoke prompt). If the subagents do not appear, **do not proceed** — stop and debug the wiring before drafting any PRD content. Mandatory pre-reading for the session: `WORKFLOW.md`, `DECISIONS.md`, and the four agent files active in this phase (`.claude/agents/chief-of-staff.md`, `.claude/agents/product-manager.md`, `.claude/agents/architect.md`, RN>`.claude/agents/security-reviewer.md`).
 
 2. **Ratification pass over Phase 0's preliminary findings (PM-led, CoS-orchestrated).** Invoke the Product Manager subagent for a focused working session whose only goal is to ratify, refine, or reject each preliminary finding currently captured in WORKFLOW.md's "Preliminary product findings" subsection. For each finding, the PM produces one of three verdicts: **(a) confirmed** — finding becomes a V1 PRD requirement as-is; **(b) revised** — new framing recorded as a DECISIONS.md ADR; **(c) rejected** — rationale recorded as an ADR. Founder/CTO signs off on each verdict explicitly. PM does NOT begin PRD section drafting until ratification is complete — ratification first, drafting second.
 
@@ -628,14 +635,14 @@ These come from the "Preliminary product findings" section of this document. The
    - Vision and target user (PM only)
    - User stories per V1 surface, in priority order: net worth → asset allocation → spending categorization (PM; consult Architect via `subagent_type: architect` when a story implies non-trivial architectural cost)
    - Success metrics (PM; Founder/CTO signs off on what's measurable)
-   - **Security and compliance posture** (PM drafts, then **mandatory Security Reviewer pass** via `subagent_type: security-reviewer` before locking — covers auth, multi-tenant data isolation, Plaid integration boundaries, secrets handling, financial calculation integrity)
+   - **Security and compliance posture** (PM drafts, then **mandatory Security Reviewer pass** via RN>`subagent_type: security-reviewer` before locking — covers auth, multi-tenant data isolation, Plaid integration boundaries, secrets handling, financial calculation integrity)
    - V2 deferred candidates (PM only)
    - Permanent non-goals (PM; Founder/CTO sign-off)
    - Constraints — cost, scale, single-user vs. invite-only (PM)
 
 4. **Cross-cutting reviews on the full PRD draft.** Once a draft PRD exists end-to-end:
    - **Architect feasibility pass** — invoke `subagent_type: architect` to review the full PRD and flag any requirement with significant architectural cost. Architect presents 2–3 options for each flag; Founder/CTO decides; decisions recorded in DECISIONS.md.
-   - **Security Reviewer pass** — invoke `subagent_type: security-reviewer` to review the full PRD with veto authority on auth, money flows, secrets, Plaid integration, multi-tenant isolation. Any veto requires PRD revision before proceeding to lock.
+   - **Security Reviewer pass** — invoke RN>`subagent_type: security-reviewer` to review the full PRD with veto authority on auth, money flows, secrets, Plaid integration, multi-tenant isolation. Any veto requires PRD revision before proceeding to lock.
 
 5. **Founder/CTO sign-off on PRD v1.0.** Read the full PRD in one sitting. Confirm scope, non-goals, success metrics, security posture. Sign off explicitly in chat — silence is not approval.
 
@@ -813,7 +820,7 @@ Phase 2 ran in parallel with Phase 3 per [ADR-012](DECISIONS.md#adr-012). UX Des
 1. **Pre-entry gates (Architect-led; F/CTO + Sec + PM consults).** Before any ARCH drafting, three entry-gate items resolve:
    - **Plaid production-tier monthly minimum confirmation** (out-of-band; F/CTO-driven sales/onboarding call). Per [ADR-011](DECISIONS.md#adr-011) Decision 20 this is the only load-bearing cost-target unknown — the cost projection ($15–$65/mo, mid-range ~$35/mo) holds only under a Plaid production-tier monthly minimum below the V1 budget. Resolution does NOT block ARCH drafting, but DOES block any Phase 3 lock that depends on the production-tier shape (notably the webhook handler + scheduled-poll architecture per [ADR-011](DECISIONS.md#adr-011) Decision 8 + Decision 17). Track as a Phase 3 task in the team tracker.
    - **Candidate P3 PM consult** — FMP API + stock-screening incumbent-exceeds-V1 surface. Per `feedback_incumbent_exceeds_v1_review`, the P3 V1-default disposition (ingest + no UI) per [ADR-011](DECISIONS.md#adr-011) Decision 20 requires PM ratification of "no V1 UI surface" before ARCH drafting touches the `pfin_back_etl` ingestion architecture. Invoke PM via `Agent(team_name="phase-3-arch-drafting", subagent_type="product-manager", name="pm")` with a P3-scoped brief; PM produces verdict (confirm / refine / reject) → ADR-011 amendment or BACKLOG.md update lands as needed.
-   - **Team setup.** `TeamCreate phase-3-arch-drafting` at phase entry per [ADR-003](DECISIONS.md#adr-003). Architect is the workhorse (persistent context across the phase); Sec is mandatory joint-review at every architectural surface touch (see Step 3); PM is spawn-on-need for product-feasibility questions; Backend Engineer is consulted on implementation feasibility per the agents-involved scaffold. Mandatory pre-reading: `WORKFLOW.md`, `DECISIONS.md` (especially [ADR-011](DECISIONS.md#adr-011)), `temp/step-4-locks-log.md`, `docs/PRD/index.html`, `docs/SECURITY/index.html`, `.claude/agents/architect.md` + `.claude/agents/security-reviewer.md`.
+   - **Team setup.** `TeamCreate phase-3-arch-drafting` at phase entry per [ADR-003](DECISIONS.md#adr-003). Architect is the workhorse (persistent context across the phase); Sec is mandatory joint-review at every architectural surface touch (see Step 3); PM is spawn-on-need for product-feasibility questions; Backend Engineer is consulted on implementation feasibility per the agents-involved scaffold. Mandatory pre-reading: `WORKFLOW.md`, `DECISIONS.md` (especially [ADR-011](DECISIONS.md#adr-011)), `temp/step-4-locks-log.md`, `docs/PRD/index.html`, `docs/SECURITY/index.html`, `.claude/agents/architect.md` + RN>`.claude/agents/security-reviewer.md`.
 
 2. **ARCH HTML §-by-§ drafting cadence (Architect-led, consuming ADR-011 + locks log).** `docs/ARCH/index.html` was scaffolded in PR A; Phase 3 drafts its content. Draft sections in the order V1-mandatory implementation surface flows, NOT the scaffold's section order — sequencing matters per [ADR-011](DECISIONS.md#adr-011) Consequences (Task #26 precedes #36; #32 follows #35):
    - **§ System overview + component diagram** (Architect only; consumes [ADR-011](DECISIONS.md#adr-011) Decision 17 hybrid-worker topology + `reference_pfin_back_etl` + `reference_hetzner_cax21`).
@@ -1028,7 +1035,7 @@ Phase 4 ran 2026-06-02 → 2026-06-04 (3 calendar days; intensive parallel PM/Ar
 **Inputs:**
 
 - Locked PRD, ARCHITECTURE, backlog
-- Existing agent definitions from Phase 0.5 (`.claude/agents/chief-of-staff.md`, `.claude/agents/product-manager.md`, `.claude/agents/architect.md`, `.claude/agents/security-reviewer.md`, `.claude/agents/ux-designer.md`, `.claude/agents/visual-designer.md`)
+- Existing agent definitions from Phase 0.5 (`.claude/agents/chief-of-staff.md`, `.claude/agents/product-manager.md`, `.claude/agents/architect.md`, RN>`.claude/agents/security-reviewer.md`, `.claude/agents/ux-designer.md`, `.claude/agents/visual-designer.md`)
 - Lessons from Phase 4.5
 - Owner's existing GitHub setup
 

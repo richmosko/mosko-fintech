@@ -39,7 +39,7 @@ Per `supabase/CLAUDE.md` convention 2 + Security Reviewer agent definition:
 
 ## How to dispatch
 
-Spawn the `security-reviewer` agent with a brief that includes all three required blocks. Never omit any block.
+Spawn the `security-engineer` agent with a brief that includes all three required blocks. Never omit any block.
 
 **Required brief blocks:**
 

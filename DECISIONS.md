@@ -3837,7 +3837,7 @@ The mosko-fintech agent roster is **main session (acting as team-lead) + 9 speci
 | **team-lead** | Main session itself (not spawnable) | Absorbs orchestration responsibilities formerly held by spawnable `chief-of-staff` |
 | `product-manager` | Both mosko + template | Name aligned |
 | `architect` | Both | Name aligned |
-| `seceng` | Renamed from mosko's `security-reviewer` | Template-aligned name |
+| `seceng` | Renamed from mosko's `security-reviewer` | Template-aligned name. **⚠ Ratified 2026-05-23, never executed — superseded by `security-engineer` on 2026-08-11; see the amendment below.** |
 | `ux-designer` | Both | Name aligned; scope is flows + IA only |
 | `visual-designer` | **mosko-specific addition** | Owns design tokens, typography, color, spacing; runs palette/typography F/CTO checkpoint; flags missing components back to UX |
 | `frontend-lead` | Template (new to mosko) | Phase 5+ |
@@ -3854,6 +3854,24 @@ The mosko-fintech agent roster is **main session (acting as team-lead) + 9 speci
 - **`implementation-lead`** (template's CLI / library / ML / data-pipeline generalist). Not applicable to mosko-fintech's full-stack web app shape.
 
 **Visual Designer kept as mosko-specific because** the role encodes load-bearing discipline: a mandatory palette-and-typography checkpoint with the F/CTO before design-system lock, and a "flags missing components back to UX rather than designing around them" boundary that breaks the moment one head holds both roles. The template's single `ux-designer` doesn't encode this discipline. The deviation is logged to the template-feedback log (`temp/project_template_feedback.md` entry: "Visual Designer as a project-specific extension for trust-driven domains") for potential upstream contribution once Phase 2 actually exercises the role.
+
+**Amendment (2026-08-11) — `seceng` was ratified and never executed; superseded by `security-engineer`.**
+
+The row above renamed `security-reviewer` → `seceng` on 2026-05-23. **That rename was never executed.** Measured on 2026-08-11 at `main` = `f7e6c1f`: the string `seceng` appeared **exactly once in the repo — in that table row.** Every artifact on disk, the agent file, its frontmatter `name:`, the roster, the skills, still said `security-reviewer`. The ADR asserted a roster the repo did not have, for eleven weeks, and nothing detected it.
+
+**What F/CTO ratified instead, on 2026-08-11: `security-engineer`.**
+
+- **Why the role needed a rename at all.** `security-reviewer` names one of the role's two phases. The role authors `docs/SECURITY/index.html` during planning (Phase 1 Steps 3–4, per [ADR-008](#adr-008)) **and** performs ongoing PR vulnerability review with veto authority. The definition file already described both halves; only the name advertised half.
+- **Why `security-engineer` over `seceng`.** `security-engineer` matches house naming — `backend-engineer.md`, `frontend-engineer.md` — and says what the role is. `seceng`'s recorded justification was *"template-aligned name"*: alignment to `richmosko/project_template`, which is outside this project. When the only argument for a name is conformance to an external artifact, and the name is also less legible, the external argument does not carry.
+- **Why this amendment is not optional, and why the row above was not rewritten.** Landing the rename without amending would leave the identical defect pointing the other way — a second ratified name the artifacts don't reflect. And silently rewriting the row as though `seceng` never happened would erase the un-executed rename, which is the thing that makes the amendment necessary. **A ratified name that never reaches disk is invisible precisely because the ADR reads correct in isolation.** The row stays, flagged.
+
+**What executed.** `git mv .claude/agents/security-reviewer.md .claude/agents/security-engineer.md`; frontmatter `name: security-engineer` (**the frontmatter `name:` is what the registry resolves — renaming the file alone would have changed nothing**); the file's own H1 and self-title; `.claude/skills/spawn-sec-joint-review/SKILL.md` dispatch line; `WORKFLOW.md` Agent-roster entry; `docs/SECURITY/index.html` header and footer owner declarations. **No phase block changed.**
+
+**What deliberately did not, and the test used.** Occurrences inside a completed `## Phase` block, and every occurrence in `CHANGELOG.md` / `MILESTONES.md` / this file / `docs/archive/**`, are **records of what was actually invoked or produced at the time** and were left intact — rewriting them manufactures false history. The held-out occurrences in `WORKFLOW.md` and `BACKLOG.md` (files that are not wholly historical) carry the `RN>` marker defined in WORKFLOW.md's marker-guidance section.
+
+**⚠ The test was applied once with a stale input, and that is the transferable lesson.** `WORKFLOW.md`'s Phase 5 Inputs list was first changed on the strength of its adjacent `**Status:** 🟢 Active` line, then reverted at team-lead review: **Phase 5 closed 2026-06-29 per [ADR-020](#adr-020)**, six weeks before this rename. The status line was stale. So is the same document's header — `Current version:` reads `v1.44` against `CHANGELOG.md`'s `v1.191`, and `Current phase:` reads Phase 5 against `MILESTONES.md`'s Phase 6. **Two independent fields in one header, both unwatched, and the staleness propagated into a live disposition before any reader caught it** — a second instance of `BACKLOG.md` §7.11's *"a version field nobody watches is the same shape as a fence nobody armed"*, and the first where the unwatched field actually decided something. **A mechanical test is only as good as the field it reads; resolve phase status against `MILESTONES.md`, not against the `Status:` line next to the occurrence.** The header itself is left stale here deliberately — out of scope for a rename — and is a live defect.
+
+**Open, deliberately not chased here:** the same table above still lists `frontend-lead` / `backend-lead` / `qa-engineer` / `devops-engineer`, none of which match the files on disk (`frontend-engineer.md` / `backend-engineer.md` / `qa.md` / `devops.md`) — four more instances of the identical un-executed-rename defect, unamended.
 
 ### Decision 2 — Phase model under R/P/I+V outer frame
 
