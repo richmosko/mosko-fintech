@@ -825,3 +825,41 @@ Per ADR-009 Decision 7's feature-flow scheme, BACKLOG.md doubles as the overflow
   5. **Do not assert the parser self-test's cases a second time.** They are already committed; re-asserting them creates a second home for one claim.
 
 - **Not blocking.** A1 is validated end to end as of 2026-08-09 and its own probe is committed. This hardens the observer, and the failure it guards against is silent degradation over months rather than anything live today.
+
+---
+
+### §7.11 — Open findings from the 2026-08-11 verification-discipline session
+
+*Filed 2026-08-11. **These are RECORDED, not worked** — the session that produced them consumed itself on process at the expense of product, and the correct response was to write them down and stop. Each entry states the finding and its routing; none is investigated further here. **The heading carries no count**, per the ruling that a count in a §7 heading goes stale on the first append.*
+
+*⚠ **Deliberately NOT duplicated here:** the items already held in [`MILESTONES.md`](MILESTONES.md) "Pending" — the `app_id` blind spot, `053`'s first-of-month grain hole, the sweep buckets, the rejected `marker_basis` option, S22, `test_staging_update.py`'s unqualified `drop table`, and `db-tests.yml` never going red. A second home drifts; that one is theirs.*
+
+**`067` — the catalog-comment completion.** [pointer]
+- **Source.** Sec's concession during the `066` review, after initially blocking it. `066`'s **catalog** comment names the GRANT and the ACL and is **silent on the COMMENT**, though the DROP takes both — the same omission corrected in `066`'s header, surviving in the copy a `\d+` reader with no repo actually sees.
+- **Disposition.** A **dedicated** `052`-shape comment-only migration. **Ride-along was considered and rejected**: the trigger for a ride-along is plausibly the very migration the sentence warns, so waiting gates the fix on the failure it prevents.
+- **Tracked in Linear.** Recorded here only so it is visible from the repo. Owner: **Architect**. Routing: **Sec** (catalog surface on a function feeding financial figures).
+
+**§10 catalogued instances — does a catalogued instance require an OPERATING assertion, or is an enforcement MECHANISM sufficient?** [ruling needed]
+- **Source.** Architect, from the six-week dead-hook finding. Academic **today** — every catalogued fence lives in GitHub Actions, which self-reports by construction, goes red per PR, and gates on branch protection. **But that is a property of where those fences happen to live, not of anything [ADR-011](DECISIONS.md#adr-011) Decision 4 requires.** Nothing stops a future catalogued instance being attributed to a layer that cannot report it operates — at which point the layer attribution is an unverified claim, and §10's defense-in-depth argument rests on layers being real.
+- **Routing.** **Sec joint-review-mandatory; F/CTO ruling needed.** Recorded, deliberately **not answered** — it is a Decision 4 scope question and answering it in a backlog entry would be the wrong surface.
+
+**`guard-logic-matrix` — a CI watcher for the shared-path commit guard.** [needs F/CTO ratify]
+- **Source.** DevOps, ruled **for**: the harness is hermetic and deterministic, and fails **2/6** against a guard-less `pre-commit`, which is what makes a green run mean anything. Cost: one required context (**17 → 18**).
+- **⚠ THE NAMING CONDITION IS THE LOAD-BEARING PART, and it must survive into whatever ships.** The job proves the guard's **LOGIC** is intact. It does **NOT** prove the guard is **ARMED** anywhere — armed-ness is untestable in CI. A check named or read as *"the guard is protecting us"* would **recreate the green-while-dead failure one level up**, which is the exact defect the harness exists to answer.
+- Owner: **DevOps**. Required-context changes are F/CTO's ratify.
+
+**`WORKFLOW.md`'s self-declared version has stopped tracking `CHANGELOG.md`.** [refinement]
+- **Source.** Architect, found while landing the verification rules. `WORKFLOW.md:4` reads `Current version: v1.44`; `CHANGELOG.md`'s newest entry is `v1.191`.
+- **The finding is not the gap, it is the silence.** Either the header is stale by a wide margin or the convention was retired — **and nothing in the repo says which.** **A version field nobody watches is the same shape as a fence nobody armed**: a self-description that stopped tracking reality while still reading as authoritative.
+- **Not fixed at discovery, deliberately** — the correct next number lives in `CHANGELOG.md`, and asserting one would have invented a version the series passed long ago. Owner: **team-lead** (CoS-owned surface).
+
+**Five artifacts describe the pre-commit hook set at five different accuracies.** [refinement]
+- **Source.** Architect + DevOps, from the dead-hook finding. As merged, **only `ruff` and `hadolint` are wired**; `svelte-check` and `eslint` appear in `.husky/pre-commit` **only inside comments** deferring them until SvelteKit scaffolds, and lint/test/type-check are absent.
+- **The spread:** [`MILESTONES.md`](MILESTONES.md) is exact (*"ruff + hadolint; JS deferred to Phase 6"*). [`WORKFLOW.md`](WORKFLOW.md) lists the **intended** set and is silent on what is live. `BACKLOG.md`, [`CHANGELOG.md`](CHANGELOG.md) and **`.claude/agents/devops.md`** all describe a lint/test/type-check/svelte-check set that does not exist.
+- **⚠ The role-definition instance matters most: it regenerates the error through the agent that owns the surface.** A wrong description in a doc misleads a reader once; a wrong description in an agent definition is re-asserted every time that agent works.
+- **Adjacent, not duplicate:** §7.6 S4's Dependencies line already carries this correction *scoped to S4's own sizing*. This entry is the artifact-spread; S4's is the dependency. Owner: **team-lead** to route (spans DevOps + doc surfaces).
+
+**Two authoring rules produced by this session that have no home yet.** [refinement]
+- **(i) A citation must state the RELATION it asserts — contains / governs / is-an-instance-of / is-adjacent-to — not merely the target's name.** The generalisable result of the ADR-011 Decision 1 sweep: *"ADR-011 Decision 1"* attached to a `security invoker` read path and survived review precisely because a bare citation asserts nothing checkable. A named relation is falsifiable; a bare name is not.
+- **(ii) The no-count discipline needs its boundary stated, because the rule as written invites the error in both directions.** A count over a **growing** list is a maintenance obligation and gets dropped. A count over a **closed, bounded historical measurement** carries no obligation and is **load-bearing evidence** — *"14 sample files were counted as 14 active hooks"* is a **plausible** number, which is why the wrong answer was believed; stripping it removes the part that explains the failure. **Two agents over-applied the discipline in opposite directions on the same day**, which is the argument that the boundary belongs in the rule rather than in the reader.
+- Owner: **team-lead** to route to a home (candidates: `brief-drift-catch`, `WORKFLOW.md` Verification discipline). **Recorded here so they are not lost between skills.**
