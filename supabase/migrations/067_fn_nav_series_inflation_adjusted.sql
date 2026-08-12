@@ -304,8 +304,23 @@
 --   WHAT BOUNDS IT: the point count is not caller-controlled. 062's expansion
 --   clamp (its Sec joint-review Condition 1) restricts the series to the
 --   CALLER'S OWN checkpoint extent, so an adversarial millennium-wide request
---   cannot inflate this loop — it is bounded by rows that tenant actually owns,
---   and the series is forward-only from the first cron run.
+--   cannot inflate this loop — it is bounded by rows that tenant actually owns.
+--   ⚠ CORRECTION at SELF-217 (2026-08-12): this block originally closed "and the
+--   series is forward-only from the first cron run", which sized the bound at
+--   whatever the cron had accumulated. THAT PREMISE NO LONGER HOLDS — ADR-053
+--   admits an IMPORTED monthly history from Dec-2015 forward, so a tenant's own
+--   checkpoint extent now spans about a decade and a 'daily' request over it
+--   emits on the order of thousands of points rather than the handful the cron
+--   had produced when this was written.
+--   >> THE SECURITY PROPERTY IS UNCHANGED AND THE PERFORMANCE ESTIMATE IS NOT.
+--      The clamp still bounds the loop to rows the caller owns, so it is still
+--      not caller-inflatable; what moved is the MAGNITUDE, by roughly two orders
+--      of magnitude. Those are different claims and only the second one broke. <<
+--   ⚠⚠ AND THIS IS THE REVISIT CONDITION THE NEXT PARAGRAPH NAMES, now met. It
+--   is recorded here rather than acted on because the trade below is unchanged
+--   in KIND — taking the optimization still re-opens the zone question for this
+--   file, which was always the real cost. Whoever revisits it owes that, not a
+--   benchmark.
 --   THE OPTIMIZATION DELIBERATELY NOT TAKEN, so it is not mistaken for an
 --   oversight: resolving 066 once per DISTINCT MONTH instead of once per point
 --   would require normalizing point_date to first-of-month HERE, which means a

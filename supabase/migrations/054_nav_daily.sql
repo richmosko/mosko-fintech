@@ -85,6 +85,27 @@
 --   historical backfill (a past active-only NAV is unsound; a seeded all-accounts
 --   backfill via fn_compute_nav(d,false) is a possible future decision, NOT V1.1).
 --
+--   ⚠ SUPERSEDED IN PART at SELF-217 (F/CTO ratify 2026-08-12; ADR-053; catalog
+--   half issued as migration 068). THE PARAGRAPH ABOVE IS LEFT INTACT ON PURPOSE
+--   — it records what was ratified on 2026-08-02, and rewriting a ratified record
+--   destroys the evidence of what was believed when. Read it together with this:
+--     · STILL TRUE, and the amendment does not touch it: no RECOMPUTED history.
+--       A past active-only NAV is unsound and a seeded backfill via
+--       fn_compute_nav(d, false) remains UNAUTHORIZED. 050's TEMPORAL CONSTRAINT
+--       above stands unchanged.
+--     · NO LONGER TRUE: "no historical backfill" as a blanket statement.
+--       Externally-measured NAV may be IMPORTED at nav_dates preceding the first
+--       cron checkpoint, landing at month-end.
+--   >> THE DISTINCTION IS PROVENANCE, NOT DATES. The forward-only rule was a rule
+--      against FABRICATION, not against IMPORT — 062's header records the hazard
+--      it was guarding: the valuation path values an unpriced asset at zero
+--      silently, so a RECOMPUTED historical point is a confident, plausible,
+--      wrong number. An IMPORTED figure was measured contemporaneously by the
+--      system that held the positions and carries none of that. <<
+--   Whoever reads only the paragraph above will conclude the import is forbidden.
+--   That is the misreading this note exists to prevent, and it is why ADR-053
+--   exists rather than a one-line edit.
+--
 -- ----------------------------------------------------------------------------
 -- Numbering: 054 follows 053 (cpi_u_index). Depends on: 001 (pfin schema +
 --   fn_refresh_updated_at, not used here), 003 (auth.users FK target + the

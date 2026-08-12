@@ -41,6 +41,90 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-053 — Forward-only was a rule against FABRICATION, not against IMPORT: `pfin.nav_daily` admits externally-measured history and still forbids recomputed history
+
+**Date:** 2026-08-12 · **Status:** Accepted — F/CTO ratified 2026-08-12. Architect-authored; Sec joint-review mandatory (it edits `054`'s surface, which `054`'s own text makes a trigger, and it authorizes a new write path into a multi-tenant financial table). · **Phase:** 6 (Build Loop).
+
+**Context.** [SELF-217](docs/PRD/index.html#story-2-1-2) imports the existing Google Sheet's monthly NAV history (Dec-2015 forward) into `pfin.nav_daily`. That collides, on its face, with a ratified position: `054`'s header and its `comment on table` both read *"FORWARD-ONLY (ratified): accumulates from first run; no historical backfill in V1.1."* This ADR exists because that collision is **apparent rather than real**, and because the distinction that dissolves it is the kind a future reader will re-litigate from the FORWARD-ONLY line alone.
+
+**⚠ The requirement is not merely locked, it is load-bearing.** PRD **Appendix B flag (c)** carries the lock — *"V1 imports the existing Google Sheet's monthly NAV history (Dec-2015 forward) so the 5-Year horizon in §2.1.3 is meaningful at launch — F/CTO has locked the whether"* — and assigns the *how* to Architect. But the stronger argument needs no lock at all: [PRD §2.1.3](docs/PRD/index.html#story-2-1-3) mandates 1-Year, 3-Year and 5-Year delta horizons **in V1**; `062` is forward-only from the first cron run; there are **zero production checkpoints**. **Three of §2.1.3's five horizons are unsatisfiable at launch without imported rows.** That is derivable from two artifacts in the tree and does not depend on anyone's recollection of a ratify. *(Recorded because the originating brief cited the lock to §2.1.3 itself, which contains no import clause — the two are adjacent and easily fused.)*
+
+### Decision 1 — The prohibition is on RECOMPUTATION, and it stands
+
+Read `054`'s own words with its own reason attached: *"no historical backfill (**a past active-only NAV is unsound**; a seeded all-accounts backfill **via `fn_compute_nav(d,false)`** is a possible future decision, NOT V1.1)."* **Both named alternatives are recompute paths.** `062`'s header spends its longest block on why recomputation is the hazard: the valuation engine values an unpriced asset at zero silently, so a recomputed historical point is *"a CONFIDENT, PLAUSIBLE, WRONG NUMBER"* — indistinguishable from genuine wealth accumulation and invisible to every assertion on the value.
+
+**An imported figure carries none of that pathology.** It was measured contemporaneously, by the system that actually held the positions, against prices current at the time. It is a record, not a reconstruction.
+
+> **Forward-only was a rule against fabrication, not against import.** The amendment turns on **provenance**, not on dates.
+
+**Recomputed history remains unauthorized.** `050`'s TEMPORAL CONSTRAINT is untouched, and nothing in this ADR licenses `fn_compute_nav(d, false)` over past dates.
+
+### Decision 2 — The substrate already reserved this, so this is an amendment and not a reversal
+
+Three places in the tree anticipate it, one of them already shipped into the catalog:
+
+- `054` header: *"any INSERT into pfin.nav_daily — QA fixtures, seeds, **future backfills**, manual repair — MUST set the GUC first."*
+- `054`'s `comment on function fn_nav_daily_assert_computed_for` — a **catalog** comment: *"Every INSERT path (worker, QA fixture, seed, **future backfill**) must set the GUC first."*
+- `062` header: the temporally-sound path *"is a **BOUNDED backfill that WRITES checkpoints**, not an on-read recompute"*, and **"THIS FILE'S CONTRACT IS UNCHANGED BY THAT FUTURE DECISION: rows appear, the series lengthens, this function is not touched."**
+
+**Consequently `062` and `067` are not modified by this decision** — only `067`'s header cost estimate, which is a description and not a contract (Decision 5).
+
+### Decision 3 — Split vehicle: the correction follows where the text lives
+
+The same claim exists in two representations and gets two different treatments, per the apply-migration Step 1.6 rule.
+
+| Text | Representation | Vehicle |
+|---|---|---|
+| `comment on table pfin.nav_daily` | Ships to `pg_description`; read at `\d+` with no repo present | **Migration `068`**, comment-only (the `052` shape). `054`'s file is not edited. |
+| `054` file header, FORWARD-ONLY paragraph | None | **Corrected in place** — a dated supersession note **placed beside** the original, which is preserved verbatim. |
+
+**⚠ The original paragraph is preserved rather than rewritten, and that is not squeamishness.** It records a position ratified on 2026-08-02; rewriting it destroys the evidence of what was believed when — the same reason [ADR-016](#adr-016) Decision 4 leaves dated blocks alone. **A third site is left entirely untouched**: `054`'s dated *"F/CTO-ratified 2026-08-02: Option B … + forward-only"* summary line, which is a record of a ratify rather than a live claim. Do not "finish the job" by editing it.
+
+**Alternatives considered.** *(α)* Edit `054`'s merged file including its `comment on` — rejected outright; a catalog comment can only change by issuing SQL. *(β)* Migration only, leaving the header false — rejected: a no-op correction migration leaves the false text exactly where readers look. *(γ)* Rewrite the header paragraph rather than annotate it — rejected per the dated-record rule above.
+
+### Decision 4 — Provenance is DERIVED, not stored: no `source` column
+
+A checkpoint whose `nav_date` **precedes the first cron-written checkpoint** is an imported historical row. This is exact rather than heuristic: forward-only means the cron wrote nothing earlier.
+
+**Why not a `source` column.** It is the project's own **derive-by-looking test** ([ADR-011](#adr-011) Decision 4's CHANGELOG — *"anything derivable by looking is not stored"*), which [ADR-049](#adr-049) Decision 1 invoked to reject a `resolved` flag of exactly this shape. Two further reasons:
+
+- A column added to an append-only audit-class table gives **every existing row** a value nobody verified — a retroactive claim.
+- **Decisively: deriving is reversible into a column; a column is not reversible out of.** `alter table … add column` is cheap and is not blocked by the immutability trigger (which fences row UPDATE/DELETE, not DDL), and rows already written could be labelled correctly *using this derivation*. Dropping a column from an audit-class table later is the move nobody wants to make. **On a surface whose defining property is irreversibility, take the reversible option first.**
+
+*(A grant objection was raised and does not hold: `054`'s `grant insert … to service_role` is **table-level** and therefore column-agnostic, automatically covering columns added later. The column-level `grant select (users_id, nav_date)` exists only so the targeted `ON CONFLICT` can read its arbiter. A `source` column would have carried no grant cost — it is rejected on the grounds above, not that one.)*
+
+**Rejected — a separate seed table.** `062` reads **exactly one relation** and its NO-RECOMPUTE fence is built on that fact. A separate table forces either a logic change to a Sec-gated financial surface whose contract `062` says this decision must not touch, or backfilled rows invisible to the series — which defeats §2.1.3, the entire point.
+
+### Decision 5 — ⚠ The W-1 tenant fence is VACUOUS on an import path unless the writer restores it
+
+`fn_nav_daily_assert_computed_for` compares the transaction-local GUC `app.nav_computed_for` against `new.users_id`. Its catalog comment states what that buys: the GUC is *"captured from `auth.uid()` AS THE DATABASE RESOLVED IT, never from the application's own variable … it proves the row's tenant IS the tenant whose data was actually served."*
+
+**An import serves no read.** There is no impersonated block and no `auth.uid()` to capture from, so a script setting the GUC from its own target-user variable passes the trigger **as a tautology** — asserting its own variable against itself — while the catalog goes on claiming a property that no longer holds for those rows.
+
+**Remedy, bound into SELF-217's AC7 rather than into the DDL, because it is a property of the writer:** the import script establishes an impersonation binding for the target user, **reads `auth.uid()` back from the database**, and sets the GUC from that value — the sequence `run_nav_daily.py` already performs. **Nothing in the database enforces this**; the trigger cannot distinguish a DB-resolved GUC from an app-supplied one. That is precisely why it is written in the ADR, in `068`'s header, and asserted by QA.
+
+### Decision 6 — One-way door, and the mitigations are not reversibility
+
+`054`'s `fn_nav_daily_block_mutation` blocks UPDATE and DELETE for **every** role including `service_role` — a DB trigger, which `service_role` does not bypass the way it bypasses RLS — and TRUNCATE is blocked besides. **An imported row written at a wrong value, date, or tenant is removable only by a migration.** `054` lists this first among its own reasons for the fence (*"(1) IRREVERSIBILITY … The blast radius of a write-tenant bug is permanent"*), and that reasoning now covers a second writer.
+
+Bound into the AC: **dry-run by default** with an explicit commit flag; **one transaction** (a partial import is the worst outcome — irreversible *and* incomplete); an **explicitly bounded date range with no defaults**; and `ON CONFLICT (users_id, nav_date) DO NOTHING` so a re-run can never overwrite a cron checkpoint. **None of these make it reversible.** They reduce the chance of needing reversal.
+
+**Also bound: dry-run output prints DOLLARS, not $K.** The source CSV is headed in $K units, and a units error is the 1000×-wrong-forever class on an irreversible surface. The eyeball check must operate in the units the reviewer knows.
+
+### Decision 7 — Imported rows land at MONTH-END, and the staleness consequence is a product question
+
+Rows land on the calendar month-end. This is not cosmetic: `062` buckets `'monthly'` to the month-end and returns `checkpoint_date`, and its contract tells consumers to *"surface staleness when `checkpoint_date <> point_date`."* A month-end row makes the two coincide, so the monthly view renders clean; a first-of-month row would mark **every** imported point as stale.
+
+**⚠ The consequence that remains, and it is a product ruling, not an architectural one.** At `'daily'` and `'weekly'` granularity, every non-month-end point over the imported decade has `checkpoint_date < point_date` and therefore renders as stale — on the order of thousands of points, with `067` inheriting it. **This is correct behaviour that will read as a defect**: the marker was designed to flag a cron outage, not a by-design difference in historical resolution. **Routed to PM with UX**; the Architect lean is to suppress the marker before the first cron checkpoint and disclose the resolution change instead, mirroring what [ADR-049](#adr-049) / PRD §2.4.4 already do for CPI — *disclose a known basis rather than mark it as an anomaly*. **Nothing about that ruling changes this decision's schema or mechanics.**
+
+**Open, deliberately not closed here:** SELF-217's AC5 comparand and tolerance. *"Within $10 of the incumbent"* admits three readings — the sheet itself (tautological), the live incumbent (conflicts with the greenfield reference-only posture), or this system's own current computed NAV (a genuine reconciliation, and the only one that could fail for an interesting reason). The CSV grain also appears to be whole-$K, which a $10 tolerance cannot bind against. Backend is confirming column precision; F/CTO ratifies comparand and tolerance together.
+
+**Governance.** §10 catalogued-instance ledger **unchanged** ([ADR-011](#adr-011) Decision 4 read verbatim before drafting, 2026-08-12 at `58ca6ed`; Path B — linked, not restated, no count carried; no instance added or reordered, no layer re-attributed). ⚠ The **catalogued** and **CI-fenced** sets are different sets and are not reconciled here. **SECURITY DEFINER allowlist unchanged** — `068` authors no function; read [ADR-011](#adr-011) Decision 9 live. **[ADR-011](#adr-011) Decision 3 family unchanged** — no table, column, or FK-shaped reference; `054`'s `users_id` remains its sole tenant anchor. **Grants, RLS policies and triggers all unchanged.** QA pairing required: `068` ships with obj_description render-verify legs asserting the amended clause is present, the falsified clause is gone, **and the surviving recompute prohibition is still stated** — that third leg is what stops a future simplification dropping the prohibition while the first two stay green.
+
+**Cross-references.** `supabase/migrations/054_nav_daily.sql` (the amended surface; W-1 fence + immutability triggers) · `062_fn_nav_series.sql` (the bounded-backfill reservation; contract unchanged) · `067_fn_nav_series_inflation_adjusted.sql` (header cost estimate corrected; contract unchanged) · **`068_nav_daily_backfill_amendment_comment.sql`** (this decision's migration) · `workers/etl/run_nav_daily.py` (the impersonate-then-write sequence AC7 requires) · `run_cpi_backfill.py` (the one-shot script precedent, incl. its refusal to fall back to a default) · [ADR-040](#adr-040) (forward-only trajectory; Option B precomputed table) · [ADR-042](#adr-042) (*absence is not a value*) · [ADR-011](#adr-011) Decision 1 (privileged-context-write — the W-1 fence's parent) / Decision 2 (immutable audit-class) / Decision 3 + Decision 4 (both unchanged) / Lock 11 · [ADR-016](#adr-016) Decision 4 (don't retro-edit dated blocks — why the original paragraph survives) · [ADR-023](#adr-023) (ETL credential model: `pfin_etl` logs in, `service_role` writes) · [ADR-049](#adr-049) Decision 1 + PRD §2.4.4 (the disclose-don't-mark precedent Decision 7 leans on) · [PRD §2.1.3](docs/PRD/index.html#story-2-1-3) (the horizons this serves) · PRD Appendix B flag (c) (the lock, and the *how* assignment).
+
+---
+
 ## ADR-052 — A ref is pinned at first EXTERNAL MEASUREMENT: what a rewrite destroys is a measurement nobody else can reproduce
 
 **Date:** 2026-08-11 · **Status:** Accepted — F/CTO ratified 2026-08-11. Architect-authored; routed after Sec ruled the convention needed an authority surface separate from the executable rule. · **Phase:** 6 (Build Loop).
