@@ -61,6 +61,27 @@ Convention per [ADR-017](DECISIONS.md#adr-017): last 5 entries; 1-sentence each;
 >
 > ⚠ **STANDING RULE — A FINDING GETS RECORDED UNLESS IT HAS RUNTIME EFFECT OR BLOCKS A SHIP GATE.** 26 PRs merged 2026-08-11 UTC and only **two** touched shipping code; this rule exists so that does not repeat. Open findings live in [`BACKLOG.md`](BACKLOG.md) §7.11 — read them there, **do not re-derive them here.**
 >
+> ⚠ **HOW THIS SESSION'S BEST FINDS ACTUALLY HAPPENED (Sec, verbatim):** *"All three came from distrusting a result that arrived too cleanly. None required expertise. All required refusing to accept a correct-looking answer."*
+>
+> **TEARDOWN RESIDUALS (Sec's handoff — recorded, NOT worked):**
+> - ✅ **`067`'s tracker EXISTS** — created in Linear this session with `sec-joint-review`; its ID appears in no merged PR, so nothing auto-closed it. **Sec's condition 9 is satisfied.** *(ID deliberately not written here — an ID in a merged PR closes the issue, and this one must survive.)*
+> - ⚠ **`063`'s catalog comments were never re-checked** — `063:447/562/570/603/611` cite ADR-049 Decision 1, **believed correct but assumed, not verified**; consciously set aside when #427 was scoped to headers. These have a **database representation**: any wrong ground there is a **`052`-shape migration, not a header edit**, and it joins `067`.
+> - ⚠ **The `WQ>` marker set was verified CORRECT but never verified COMPLETE** — the seven marked quotations are accurate; **nobody checked `066` for withdrawn text that should be marked and is not.** The false-negative direction, unexamined in the session's own sign-off.
+> - **Class D residual** — *"vacuous satisfaction is satisfaction"* holds, but **D1's protective content over a global table is nil** (its purpose is tenant-correctness where there is no JWT, and there is no tenant), so *"this is a D1 surface"* now signals less than it did. Fine as recorded; **revisit only if D1 is ever used as a filter** (*"enumerate all D1 surfaces"*) rather than as a citation.
+> - ⚠ **No §10 three-axis cross-check ran this session** — correctly, nothing reviewed was §10-adjacent. **Consequence: these four PRs neither extend nor break the CLEAN streak — they are OUTSIDE it.** Any later claim that the streak extended through this session is **unverified**; do not silently advance it by four.
+> - **Sec's final GREEN partly rested on a relayed measurement** — it accepted the `apply-migration` case-(B) confirmation rather than re-running it, having verified the body sha1s instead (adjacent, not the same check). Minor; it would still sign. Recorded because it is the thing it spent the session telling everyone not to do.
+>
+> **DEVOPS RESIDUALS** *(its handoff arrived after stand-down — **a message-delivery gap, not an agent that went quiet**; recorded, NOT worked):*
+> - ⚠ **`workers/etl/.venv` is NOT gitignored** (team-lead-measured: `git check-ignore` returns nothing; root `node_modules/` is ignored, `.venv` is not). Any `uv run` there recreates it untracked. **ORDERING CONSTRAINT — add the ignore BEFORE building [`BACKLOG.md`](BACKLOG.md) §7.6 S4's untracked-file pre-push fence, or its first real firing is a false positive.**
+> - **The ETL suite cannot collect in a fresh environment** — `uv run pytest` dies at `import polars`. Pre-existing, unrelated to today. **This is why #424's E402 fix was verified by property rather than end-to-end** — recorded so that verification's bound stays visible.
+> - **If `guard-logic-matrix` is ratified:** the harness **deliberately** sets its own git identity (so it runs on an identity-less runner) and **deliberately** leaves `/tmp/mosko-guard-verify` behind **only on failure**. **Neither is a bug — do not "clean up" either.**
+> - **`.github/` was never touched this session and the `app_id` contexts-sync gap was never examined.** Stated to bound the claim, so silence is not read as coverage.
+> - **Root `node_modules/` was already gitignored before today and holds only `.vite`.** Arming the hooks created nothing.
+>
+> ⚠ **ASYNC MESSAGE-DELIVERY MISMATCH was this session's highest-frequency failure** — DevOps replied to the handoff repeatedly with none reaching team-lead; Item (3) was re-dispatched after delivery; rulings were issued against a ref HEAD had already moved past. **Log it as a DELIVERY GAP, not as agents going quiet — otherwise the next session inherits a wrong model of what happened.** Not in [`WORKFLOW.md`](WORKFLOW.md); it should be findable.
+>
+> ⚠ **REQUIRED BEFORE NEXT USE — re-point the `sec` worktree to current `main`.** It sits **detached at `5e9093b`, measured 24 commits behind**. A reviewer opening it sees stale content with **nothing announcing that** — the same stale-anchor failure as `066`, only slower. *(DevOps recommended REMOVE, on staleness rather than size; re-pointing is its own stated compatible alternative. Team-lead owns the re-point.)*
+>
 > **▶ NEXT SESSION — the ADR-049 measurement is DONE; do not re-run it.** `063`–`066` applied and committed, all four first-execution assumptions proven under a real login, the writer's INSERT branch covered by a **required** `pgtest` check. ⚠ **But the single row in `cpi_u_nonpublication` was written by `psql`, NOT by the ETL** — a populated table plus green CI does **not** mean the writer inserted it, and it never can be arranged there (`063` blocks DELETE/TRUNCATE by trigger).
 >
 > ⚠⚠ **FIVE GAPS FOUND DURING THE TEARDOWN HANDOFF — none existed in any list before the notes were written, and TWO were created by today's own work.**
