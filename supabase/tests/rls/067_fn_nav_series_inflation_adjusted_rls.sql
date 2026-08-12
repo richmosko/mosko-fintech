@@ -33,10 +33,35 @@
 --   a number reasoned into a fixture is unrun until the battery actually runs.
 --   Also added on this pass: leg (NP) — architect found no row anywhere in the
 --   original fixture ever set cpi_nonpublication_on_record TRUE, so nothing
---   distinguished a correct pass-through from a hardcoded false; and (ZN2) was
---   rewritten from a clock-function token list (which architect measured misses
---   the parenthesis-free evasions 'today'::date / 'now'::timestamp) to a
---   structural "no date arithmetic at all" assertion, per architect's review.
+--   distinguished a correct pass-through from a hardcoded false.
+--
+--   ⚠ RECONCILIATION ROUND 3 (Sec, AMBER on f03caa2 — team-lead relay): round 2's
+--   (ZN2) rewrite REPLACED the clock-token deny-list instead of supplementing it.
+--   FIX: (ZN2) kept UNCHANGED (structural — date_trunc/interval/::timestamp cast;
+--   a DIFFERENT CLASS from clock reads, per architect's own correction of their
+--   round-2 recommendation: a body containing only `where x <= current_date` has
+--   no date_trunc/interval/::timestamp/timestamptz and passes ZN1+ZN2 both, so the
+--   structural leg was never a superset of the token leg — it tests a different
+--   property). (ZN3) ADDED as a separate leg, restoring the token deny-list.
+--
+--   ⚠ ZN3 WENT THROUGH THREE DRAFTS BEFORE LANDING, RECORDED SO THE NEXT REBUILD
+--   HAS A SOURCE TO DIFF AGAINST INSTEAD OF SOMEONE'S RECOLLECTION (architect's
+--   root-cause diagnosis: "the list is being rebuilt from memory each round
+--   because it has no source"). ZN3's member set is stated here as ITS OWN
+--   ANCHOR — the UNION of two named sources, nothing else:
+--     SOURCE A — the original (pre-round-2) token list this file carried:
+--       current_date · current_timestamp · localtimestamp · localtime · now( ·
+--       statement_timestamp( · clock_timestamp( · transaction_timestamp( · timezone(
+--     SOURCE B —062's header near-miss (9), the evasions Sec catalogued there:
+--       'today'::date · 'now'::timestamp · transaction_timestamp() ·
+--       timezone('<zone>', …) [no space, so it slips a "time zone" text search] ·
+--       plus date 'today' (the un-cast literal spelling of the same class).
+--   Draft 1 (Sec's verbatim relay) covered Source A's first four members plus
+--   Source B — missing localtime/statement_timestamp/clock_timestamp/
+--   transaction_timestamp/timezone(. Draft 2 added transaction_timestamp/
+--   timezone/statement_timestamp/clock_timestamp back — missing only localtime.
+--   Draft 3 (this one) adds localtime. ANY FUTURE EDIT TO THIS LEG MUST BE STATED
+--   AS A CHANGE TO SOURCE A OR SOURCE B ABOVE, not as a token added from memory.
 --
 --   Contract as landed:
 --     returns table (point_date date, nav_nominal numeric, checkpoint_date date,
@@ -71,7 +96,10 @@
 -- │ (9)  P   nav_nominal + checkpoint_date byte-identical to 062's own output over the  │
 -- │          SAME args — catches a re-implementation instead of composition.            │
 -- │ (10) L   fail-loud inherited: bad granularity / inverted dates still raise.         │
--- │ (11) ZN  zone fence — SCOPED DOWN to source-text (see disclosure below).            │
+-- │ (11) ZN  zone fence — a STRUCTURAL leg (ZN2, "no date arithmetic at all") PLUS a     │
+-- │          TOKEN leg (ZN3, the clock-keyword deny-list) — DIFFERENT CLASSES, both     │
+-- │          required per the migration's own #11; the differential digest is scoped   │
+-- │          out (see below).                                                          │
 -- │ (12) A   ACL: authenticated yes, PUBLIC / service_role no.                          │
 -- │ (13) ADR ADR-040 assembled-statement discipline: the EXACT PostgREST-shaped named-  │
 -- │          argument call, real `authenticated` role, real JWT claim, live DB,         │
@@ -79,20 +107,20 @@
 -- │ (V)  ⭐  two inversion controls proving (X)/(ZC) are not vacuous — see below.        │
 -- └──────────────────────────────────────────────────────────────────────────────────────┘
 --
--- ┌─ ⚠ SCOPE DISCLOSURE — (ZN) is a text fence, NOT the differential digest 062/066 use ─┐
--- │ 062's (Z4) and 064/066's zone legs run the function under two extreme session         │
--- │ TimeZones and assert byte-identical output — the property, not a token proxy. This    │
--- │ battery does NOT reproduce that here: 067 imprints no NEW zone surface of its own (it │
--- │ reads nav_date/cpi_period through 062/066, both already zone-fenced that way), so the  │
--- │ marginal risk this leg exists to catch is a clock call ADDED IN 067's OWN BODY, which  │
--- │ the source-text fence (ZN1/ZN2) does catch. Recorded as a deliberate scope call, not   │
--- │ an oversight — bubble this up if F/CTO wants the differential digest added anyway.     │
+-- ┌─ ⚠ SCOPE DISCLOSURE — the DIFFERENTIAL DIGEST (062/066's two-TimeZone run) is scoped ─┐
+-- │ OUT; the TOKEN LEG is NOT. 062's (Z4) and 064/066's zone legs run the function under   │
+-- │ two extreme session TimeZones and assert byte-identical output — the property, not a   │
+-- │ token proxy. This battery does NOT reproduce THAT here: 067 imprints no NEW zone       │
+-- │ surface of its own (it reads nav_date/cpi_period through 062/066, both already zone-   │
+-- │ fenced that way), so the marginal risk this leg exists to catch is a clock call ADDED  │
+-- │ IN 067's OWN BODY, which the source-text fences below (ZN1/ZN2/ZN3) do catch.          │
 -- │ ⚠ ACCEPTED BY ARCHITECT ON RECONCILIATION (temp/architect-self218-qa-reconcile.md):    │
--- │ "067's body performs no date arithmetic at all: it passes dates through and multiplies │
--- │ two numerics, so there is no zone-dependent expression for a differential digest to    │
--- │ catch that the text fence cannot." (ZN2) below was independently strengthened on the   │
--- │ same review, from a clock-function token list to a structural no-date-arithmetic       │
--- │ assertion — see (ZN2)'s own comment for why the token-list form was insufficient.      │
+-- │ "067's body performs no date arithmetic at all... so there is no zone-dependent        │
+-- │ expression for a differential digest to catch that the text fence cannot." Sec         │
+-- │ CONFIRMED this scope-down stands (AMBER round) — only the TOKEN LEG half of the        │
+-- │ text-fence pair was found deficient, and is restored below as (ZN3). (ZN2) alone was   │
+-- │ NEVER a substitute for it (different class — see RECONCILIATION ROUND 3 above), and    │
+-- │ its comment previously implied otherwise — corrected.                                  │
 -- └──────────────────────────────────────────────────────────────────────────────────────┘
 --
 -- ┌─ ⭐ (V) INVERSION — proving the negative legs are not vacuous ─────────────────────────┐
@@ -127,12 +155,10 @@
 --   _rls.set_tenant / _rls.count_as call runs at role=postgres and restores role=postgres
 --   before the next assertion.
 --
--- ⚠ NOT YET RUN AGAINST A LIVE DATABASE. Reconciled twice against the committed migration
---   text (commit e0c1b5c) — the second pass fixed 8 fixture-semantics failures architect
---   found by reconciling this file's ORIGINAL fixture against 062's landed body (see above).
---   Verify on a SCRATCH database only (067 creates no table and drops nothing existing, so
---   a rolled-back transaction against the local 001->067 stack should suffice) — pg_prove,
---   never bare psql (plan-count enforcement).
+-- ⚠ NOT YET RE-RUN AGAINST A LIVE DATABASE since this ZN fix. The prior version (f03caa2,
+--   39 assertions) verified GREEN via pg_prove on a scratch database. Verify THIS version
+--   the same way before trusting the new plan(40) — scratch database only (067 creates no
+--   table and drops nothing existing), pg_prove, never bare psql (plan-count enforcement).
 -- =====================================================================
 
 begin;
@@ -140,12 +166,13 @@ begin;
 -- shared cross-tenant verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
--- plan = 39 : 3 fixture pins (z) + 2 two-tenant (T) + 1 formula anchor (F) + 1 carried-CPI
+-- plan = 40 : 3 fixture pins (z) + 2 two-tenant (T) + 1 formula anchor (F) + 1 carried-CPI
 -- anchor (C) + 4 before-coverage NULL (N) + 1 nonpublication passthrough (NP) + 4 empty-store
 -- (Z) + 6 zero/negative-CPI (ZC) + 3 cross-tenant (X) + 1 062-parity passthrough (P) +
--- 2 aal2 backstop (M) + 2 fail-loud (L) + 2 zone fence (ZN) + 3 ACL (A) +
--- 2 ADR-040 assembled-statement (ADR) + 2 inversion (V).
-select plan(39);
+-- 2 aal2 backstop (M) + 2 fail-loud (L) + 3 zone fence (ZN: ZN1 timestamptz + ZN2 structural
+-- + ZN3 token, restored per Sec AMBER) + 3 ACL (A) + 2 ADR-040 assembled-statement (ADR) +
+-- 2 inversion (V).
+select plan(40);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
@@ -515,7 +542,12 @@ select throws_like(
 select set_config('role', 'postgres', true);
 
 -- =====================================================================
--- (ZN) ZONE TEXT-FENCE — scoped down; see the disclosure block at the top of this file.
+-- (ZN) ZONE TEXT-FENCE — a STRUCTURAL leg (ZN2) plus a TOKEN leg (ZN3). Sec's AMBER
+--   finding on the prior commit: round 2 REPLACED the token deny-list with the
+--   structural check instead of keeping both, dropping this function's own paired-QA
+--   requirement #11 ("keep token legs ... as the cheap secondary") on the floor. Both
+--   now run. ZN3's member set is anchored at the top of this file (Source A / Source B)
+--   after two rounds of an incomplete rebuild — read that block before editing this leg.
 -- =====================================================================
 select ok(
   (select p.prosrc !~* 'timestamptz'
@@ -527,7 +559,13 @@ select ok(
   (select p.prosrc !~* 'date_trunc|interval|::\s*timestamp'
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'pfin' and p.proname = 'fn_nav_series_inflation_adjusted'),
-  '(ZN2) ⭐ STRUCTURAL, per architect''s review — replaces a token deny-list rather than extending it. The original form here enumerated clock functions/keywords but missed the parenthesis-free evasions ''today''::date and ''now''::timestamp (062''s near-miss (9): "an enumeration is exhortation wearing a regex"). The stronger positive property: NO DATE ARITHMETIC OF ANY KIND is present — no date_trunc, no interval, no ::timestamp cast. True of the committed body (it passes dates through and multiplies two numerics), and it fires the moment someone adds the per-distinct-month optimization the migration header explicitly parks — exactly the change that would re-open the zone question for this file'
+  '(ZN2) STRUCTURAL: no date_trunc, no interval, no ::timestamp cast anywhere in prosrc — the positive property that 067 performs no date arithmetic at all (it passes dates through and multiplies two numerics). ⚠ CORROBORATING, NOT SUBSTITUTIVE — a DIFFERENT CLASS from (ZN3): a body containing only `where x <= current_date` has no date_trunc/interval/::timestamp cast and passes this leg cleanly, so this leg was never a superset of the clock-keyword class (ZN3)''s job, restored below after Sec found an earlier version of THIS comment claiming coverage it never had. True of the committed body today, and it fires the moment someone adds the per-distinct-month optimization the migration header explicitly parks — exactly the change that would re-open the zone question for this file'
+);
+select ok(
+  (select p.prosrc !~* '\mcurrent_date\M|\mcurrent_timestamp\M|\mlocaltimestamp\M|\mlocaltime\M|\mnow\s*\(|\mstatement_timestamp\s*\(|\mclock_timestamp\s*\(|\mtransaction_timestamp\s*\(|\mtimezone\s*\(|''(now|today|tomorrow|yesterday)''|timestamp\s+with\s+time\s+zone'
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'pfin' and p.proname = 'fn_nav_series_inflation_adjusted'),
+  '(ZN3) ⭐ RESTORED PER SEC (AMBER on f03caa2), member set = Source A UNION Source B stated in the header (read there before editing — this leg took three drafts to reach the full set and the header records why). Catches the full clock-function family (current_date, current_timestamp, localtimestamp, localtime, now(, statement_timestamp(, clock_timestamp(, transaction_timestamp(, timezone() plus the bare-quoted keywords today/now/yesterday/tomorrow — ONE pattern catching BOTH the ''x''::date and the date ''x'' spelling, since it matches the quoted keyword regardless of what precedes or follows it (the idiom proven at 062''s (Z3)) — plus the uncast "timestamp with time zone" spelling. Measured NOT to false-positive on `date ''1913-01-01''`, the fixed CPI-U series epoch literal in the coverage probe: the keyword alternation matches only the four clock words, never an arbitrary date literal. An enumeration is still exhortation wearing a regex (062''s near-miss (9)) — which is exactly why (ZN2) exists too, and why this leg alone was never sufficient either'
 );
 
 -- =====================================================================
