@@ -236,3 +236,213 @@ Cross-cutting components consumed/authored here: `stale-data-marker` (consumed f
 - **PM flags status:** PM-1 ✅ RESOLVED (→ D1 global); PM-2 ✅ CONFIRMED; PM-3 ✅ CONFIRMED.
 - **Next:** §2.2 asset allocation (cluster 3 of 6). Then §2.3 → §2.5 → §2.6, the Step 3 F/CTO walk-through, then wireframing (Step 4).
 - **No wireframing** until the Step 3 gate confirms the flow set.
+
+## 12. Addendum (2026-08-12) — SELF-220: NAV chart interaction/marker states + ADR-053 Decision 7 disposition [RATIFIED]
+
+**Status:** F/CTO-ratified 2026-08-12. Extends **FLOW F-2.1.B — Explore net worth over time** (§4 above,
+LOCKED 2026-05-28) with interaction/marker detail that postdates that lock — `067`'s data contract and
+ADR-049/ADR-053's staleness mechanics didn't exist when §4 was drafted. §4's original text is preserved
+verbatim above; nothing here contradicts it, this fills in detail the lock deferred.
+
+**PM+UX joint ruling; PM concurred and reframed before F/CTO ratify** (see `temp/ux-self220.md`, superseded by
+this addendum on landing). **Render-agnostic by design** — the charting render approach (LayerChart/LayerCake
+or otherwise) is still being assessed; nothing below assumes a specific library's line-styling API. Behavior
+and legibility requirements are specified; implementation mechanics are Frontend's.
+
+**Mount point:** the chart mounts on the existing dashboard route, below `nav-composition-table` — the
+foot-below-headline single-canvas pattern §7 Open Decision 1 resolved toward. Not a dedicated route.
+
+### 12.1 ADR-053 Decision 7 disposition — RATIFIED: suppress-and-disclose
+
+The imported Dec-2015-forward NAV history lands at calendar month-end (monthly-grain by construction — no
+cron existed yet). `062`'s existing contract surfaces staleness whenever `checkpoint_date <> point_date`; at
+weekly/daily chart granularity that fires on ~3,600 imported-decade points for a reason that has nothing to
+do with data freshness.
+
+**Ratified disposition, and how it should be read:** this is not a new exception carved out for the imported
+decade — it is **§2.4.4's already-ratified "fires only where due" rule applied to a second axis.** §2.4.4
+verbatim: *"the informational marker... fires only where the period was actually due, and never where the
+absence is explained by the edge of coverage alone."* Pre-boundary (before the first cron-written
+checkpoint), no daily/weekly checkpoint was ever due — no cron existed — so the mismatch is explained entirely
+by the edge of the cron era, exactly the case §2.4.4 already excludes. This ruling changes no ADR-053
+schema or mechanics (D7 pre-commits that); it is presentation-layer plus a boundary-date exposure on the
+chart-UI side.
+
+**Mechanism, ratified:**
+- **Pre-boundary** (before the first cron-written checkpoint): the per-point checkpoint-carry treatment
+  (`chart-placeholder`'s `stale-segment` state) does **not** fire. In its place, the `resolution-disclosure`
+  piece (§12.6) renders. The line itself draws as an honest stepped/plateaued shape (§12.6) rather than a
+  smoothed interpolation, so the resolution limit is legible even before any text is read.
+- **Post-boundary:** unchanged — `checkpoint_date <> point_date` retains full diagnostic meaning (a real cron
+  gap) and fires `stale-segment` exactly as it does today, sharing that visual primitive with account
+  pending-re-auth (differentiated by copy, not shape — see §12.2).
+- The boundary date is an **architecture-exposed value** (Architect's ask, routed via team-lead — a
+  store-scoped fact, same shape as `067`'s `cpi_coverage_through`), never inferred client-side by scanning
+  point density. This is the resolve-once-not-per-consumer principle ADR-049 already established for the CPI
+  gap policy, applied here.
+
+**Rejected, with the product reasoning that closes them (not to be re-litigated):**
+- *(a) Accept-marked, no change* — inverts trust on exactly the points ADR-053 Decision 1 establishes as *"a
+  record, not a reconstruction"*: it applies outage semantics to a by-design property, and marking nearly the
+  entire imported decade violates §2.4.4's own principle that *"a marker present on every figure at all times
+  would carry no information and would dilute the actionable tier beside it."*
+- *(c) Monthly-only granularity before the boundary* — conditions §2.1.2's locked on-demand-granularity and
+  inflection-point-drill promise in a way the locked PRD text doesn't contemplate, while saving nothing: it
+  needs the identical boundary-date dependency, just to gate a control instead of a marker.
+
+### 12.2 Three staleness/carry signals converge on this chart — kept uncollapsed in meaning
+
+Per ADR-049's standing rule (*"the two signals stay uncollapsed... must not be collapsed into one"*), this
+chart carries three independent "why doesn't this point look fresh" sources. They stay distinguishable in
+**what the user is told**, even where two share one visual primitive:
+
+| Signal | Source | Tier | Realized as |
+|---|---|---|---|
+| Account pending re-auth | §2.4.4 actionable tier | Actionable — "re-authenticate" | `chart-placeholder` `stale-segment`, typically anchored at the latest/current point (existing `stale-data-marker` semantics, §6 above, unchanged) |
+| NAV checkpoint carried forward (`checkpoint_date <> point_date`) | `062`, inherited through `067` | Post-boundary: actionable-weight, real cron gap. Pre-boundary: suppressed per §12.1 | Post-boundary: the same `stale-segment` state, differentiated by copy only ("last sync N days ago" vs. "NAV checkpoint carried from N days prior"). Pre-boundary: not `stale-segment` at all — `resolution-disclosure` instead |
+| CPI-U reference value carried forward (`cpi_is_carried AND cpi_period_was_due`) | `066`/`067`, §2.4.4 informational tier | Informational — non-actionable, self-heals | `informational-marker-badge` (§12.4) — confirmed a real gap; none of `chart-placeholder`'s five states is this tier, and reusing `stale-segment` would collapse the actionable/informational distinction §2.4.4 exists to preserve |
+
+### 12.3 Dual-line legend + CPI dated basis line
+
+- Solid black — **"Net Worth (Nominal)"**; token `--c-viz-nominal`.
+- Red dashed — **"Net Worth (Inflation-Adjusted)"**; token `--c-viz-infl`.
+- Both drawn simultaneously always; no toggle (PRD §2.1.2-locked).
+- Legend is permanently visible, not hover-revealed — same "legible without hover, survives PDF export"
+  standard §2.4.4 sets for the informational marker.
+- CPI dated basis line, always on, beside the legend: **"Real terms, CPI-U through \<`cpi_coverage_through`,
+  Month Year\>."** Updates automatically as `cpi_coverage_through` advances with each ETL run. Disclosure, not
+  a freshness monitor (`067`'s own words) — degrades gracefully rather than needing a separate freshness
+  check.
+
+### 12.4 Informational marker — carried CPI (`cpi_is_carried AND cpi_period_was_due`)
+
+Confirmed a real design-system gap (team-lead, 2026-08-12) — dispatched to Visual Designer alongside §12.5's
+density indicator.
+
+- **Series-level, not per-point** — §2.4.4 explicit for a whole rendered series: *"one series-level mark, not
+  one per point."* One static badge anchored at the "Net Worth (Inflation-Adjusted)" legend entry.
+- Copy, cause-clause conditional on `cpi_nonpublication_on_record` (same tier and visual weight either way —
+  only the sentence differs, per §2.4.4's "cause asserted only when on record" rule):
+  - Cause on record: *"Includes a carried CPI-U value for \<cpi_period\> (from \<cpi_carried_from\>) — CPI-U
+    for \<cpi_period\> was not published; carried forward. No action needed."*
+  - No cause on record: *"Includes a carried CPI-U value for \<cpi_period\> (from \<cpi_carried_from\>)."*
+- Multiple distinct carried spans in the visible window collapse into one badge naming the count: *"Includes
+  N carried CPI-U months in this range."* Per-month hover attribution is explicitly **V2+** (§2.4.4's own
+  V1/V2 boundary) — not built here.
+- Non-hover-legible by construction (static badge, not a tooltip).
+- Never raises the top-chrome staleness banner (§2.4.4: informational tier is surface-local). Where an
+  actionable-tier marker is also live on the same chart, the actionable marker takes visual precedence and
+  this badge stays readable beside it (§2.4.4's "where both tiers are live" rule).
+
+### 12.5 Gap rendering in the dashed (real) line — `nav_inflation_adjusted IS NULL`
+
+Two distinct cases, mapped onto locked states rather than treated as one:
+
+- **Whole-series unavailable** (every point NULL — empty CPI store, `067` QA leg #6): locked
+  `cpi-unavailable(nominal-only)` state — no dashed line at all, nominal only, explicit note. Already
+  specified.
+- **Isolated in-series gaps** (some points NULL inside an otherwise-present dashed line — e.g. a point
+  before CPI-U's own historical start, or a zero/negative print per `067`'s DIVISION SAFETY guard): a
+  rendering rule inside `chart-placeholder`'s `default` state, not its own placeholder state. The dashed line
+  has a **visible break** at that point — no connecting segment, never interpolated, never rendered as zero
+  (ADR-042 "absence is not a value"). The solid nominal line draws through unaffected. Interaction on the gap
+  (hover/tap, but the break must be visible without either): **"Inflation-adjusted figure unavailable for
+  \<point_date\> — no CPI-U data for this period."** §2.4.4's "uncomputable is not stale": rendered as
+  unavailable, never marked/carried.
+- Distinguish an isolated gap from **sparse-history left-truncation** (§12.7) at the rendering level: a gap
+  has open/rounded endpoints on both sides (reads as "something's missing here"); a left-truncation is a
+  flat, deliberate edge with no dangling stub.
+
+### 12.6 `resolution-disclosure` — LIVE (no longer conditional)
+
+Fires per §12.1's ratified mechanism. Inherits PM's four binding conditions directly, restated here as the
+authoritative shape:
+
+1. **Informational-tier by construction**: static, dated (names the boundary), readable without hover,
+   survives PDF export / print / assistive tech, **one series-level mark** (not per point), never raises the
+   chrome banner. Where an actionable-tier marker (account re-auth, or a post-boundary real cron gap) is also
+   live in the same view, the actionable marker takes visual precedence and this disclosure stays readable
+   beside it.
+2. Fires **strictly pre-boundary**; the boundary date is the architecture-exposed value only — never inferred
+   by scanning point density client-side.
+3. Copy is a **factual resolution statement** — *"Monthly resolution before \<date\>"* — never "stale," never
+   framed as current.
+4. **Application inside the existing two-tier system, not a third tier** — same shape as §2.4.4's cause-clause
+   variation on the informational tier.
+
+**Line rendering, pre-boundary weekly/daily views:** honest **stepped/plateaued** shape — flat between known
+month-end values, vertical risers only at month boundaries — never a smoothed curve. A smoothed interpolation
+across an all-flat month implies day-to-day data that doesn't exist.
+
+### 12.7 Granularity toggle + zoom/drill — density-bounded by design
+
+Realized as the locked `chart-granularity chip-group`: **Monthly (default) / Weekly / Daily**, scoped to
+whatever date range is currently in view (60-month default, or a drilled sub-range). Chip-group mechanics are
+locked; the density behavior below is new interaction detail.
+
+- Switching to **Weekly** or **Daily** while the current view spans more than a density threshold
+  auto-narrows the view to a shorter recent default (Daily → last 3 months; Weekly → last 6 months) rather
+  than rendering ~1,800+ points across two lines illegibly. A **"Showing: \<range\>"** affordance plus a
+  **"Reset to 60 months"** breadcrumb lets the user widen back out or drag a different sub-range at that
+  resolution.
+- **Zoom/drill** (click-drag a range, or click a point) narrows the date range only; drilling to a sub-range
+  under ~3 months auto-suggests Daily, 3–12 months auto-suggests Weekly — a suggestion the toggle still shows
+  and the user can override.
+- UX density-hierarchy decision, made within role authority, not escalated. Flagging to Visual Designer /
+  Frontend: confirm this auto-narrow/auto-suggest behavior is smooth in whatever charting approach is chosen
+  — a UX decision, not a rendering guarantee.
+
+### 12.8 Empty state (zero NAV checkpoints)
+
+Locked `chart-placeholder` `empty-insufficient-history` state at its zero-data extreme (no axes/gridlines
+drawn as if data existed):
+- **"Collect data over time."**
+- Supporting subtext: *"Your net-worth trend will appear here once monthly reviews accumulate history."*
+
+### 12.9 Sparse state (< 12 months of history) — density indicator confirmed a real gap
+
+Also `empty-insufficient-history`, at its partial-data extreme:
+- **Anchoring, corrected 2026-08-12 (Visual's routed question):** PRD §2.1.2 specifies a **rolling** 60-month
+  window — trailing, ending at *today*, not a fixed span measured forward from tracking-start. So the frame's
+  **right edge is always today** (moving forward continuously) and its **left edge is always today-60mo**
+  (moving with it). The line is therefore **right-anchored**: it ends at today (coincident with the frame's
+  right edge) and its own start (the earliest checkpoint / tracking-start) sits wherever it falls inside the
+  frame — at the frame's left edge once 60 months have elapsed, short of it before then. **The hatch sits on
+  the LEFT** — the span between the frame's left edge (today-60mo) and the line's actual start — representing
+  months that predate this user's tracking, not "months not yet lived." (Confirms the original locked flow's
+  §4 error-state note, "history begins [import-anchor]," which already implies a right-anchored-at-today
+  chart with the boundary label marking where the data picks up from the left.) My earlier "left-anchored"
+  phrasing in this addendum was ambiguous and caused Visual's reading — it referred to the line's own start
+  being fixed/non-extrapolated, not to its position within the frame. Corrected here; Visual's CSS should
+  reverse the hatch side.
+- The line draws only across months with data, never stretched or extrapolated to fill the frame. Likely uses
+  `--c-viz-fill` for the "no data yet" (hatched, left) region — Visual Designer's call.
+- **Confirmed gap (team-lead, 2026-08-12), dispatched to Visual Designer alongside §12.4's badge:** a density
+  indicator distinguishing "no data yet" from "value is zero" in the partial region. Functional spec, not
+  visual: legible without hover; likely pairs a visual treatment of the empty region with a text calibration
+  cue (e.g. *"6 of 60 months of history"*), since a shaded region alone risks being missed and text alone
+  doesn't calibrate scale — exact shape is Visual's to design.
+- Granularity toggle unrestricted here — sparseness is window *length*, not *resolution*.
+
+### 12.10 Component inventory — hand-off to Visual Designer
+
+**Already locked — reference directly:** `chart-granularity chip-group`; `chart-placeholder`
+`empty-insufficient-history` (§12.8/§12.9); `chart-placeholder` `cpi-unavailable(nominal-only)` (§12.5);
+`chart-placeholder` `stale-segment` (§12.2); `--c-viz-nominal` / `--c-viz-infl` (§12.3).
+
+**New — confirmed gaps, single dispatch after this ratify:**
+- `informational-marker-badge` (§12.4) — informational tier, must read visually distinct from `stale-segment`
+  (not a recolor — the distinction is actionable-vs-not, and a mere palette swap reads as "less urgent" rather
+  than "not your problem to fix").
+- Sparse-history density indicator (§12.9).
+- `resolution-disclosure` (§12.6) — now live, ships in the same dispatch.
+
+**Not a new component, a rendering rule:** the broken-line treatment for isolated
+`nav_inflation_adjusted IS NULL` points (§12.5) lives inside `chart-placeholder`'s `default` state.
+
+---
+
+**Traceability:** PRD §2.1.2 (verbatim-locked chart requirements) · §2.4.4 (two-tier staleness, verbatim) ·
+ADR-053 Decision 7 (disposition ratified above) · ADR-049 (CPI gap contract, the fires-only-where-due
+precedent) · `067_fn_nav_series_inflation_adjusted.sql` (the 11-column data contract this spec is written
+against).
