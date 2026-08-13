@@ -37,6 +37,7 @@
 	} from '$lib/nav-series';
 	import { EMPTY_NAV_BOUNDARY, resolutionDisclosureFires, type NavBoundary } from '$lib/nav-boundary';
 	import { sharedYDomain, suggestGranularity, autoNarrowWindow } from '$lib/nav-chart-domain';
+	import { NAV_SERIES_PARAM_PREFIX } from '$lib/schemas/nav-series-params';
 	import ChartGranularityChipGroup from './ChartGranularityChipGroup.svelte';
 	import InformationalMarkerBadge from './InformationalMarkerBadge.svelte';
 	import NavChartLines from './NavChartLines.svelte';
@@ -96,13 +97,21 @@
 
 	// ---- §12.7 granularity toggle + zoom/drill navigation ----
 	const suggested = $derived(suggestGranularity(params.start, params.end));
-	const showResetBreadcrumb = $derived(page.url.searchParams.toString() !== '');
+	// NAMESPACED (F/CTO-ratified 2026-08-13, Sec's param-fence finding): scoped to whether
+	// THIS surface's own chart_* params are present, not whether the URL carries ANY query
+	// string at all — a stray unrelated param (a tracker's ?utm_source=, anything) must not
+	// make the breadcrumb claim "you've drilled into a custom range" when nothing chart-
+	// related has changed. Same reasoning as the schema-level namespace fix in
+	// $lib/schemas/nav-series-params.ts: this surface's state is scoped to keys it owns.
+	const showResetBreadcrumb = $derived(
+		Array.from(page.url.searchParams.keys()).some((k) => k.startsWith(NAV_SERIES_PARAM_PREFIX))
+	);
 
 	function navigateTo(granularity: NavSeriesGranularity, start: string, end: string) {
 		const url = new URL(page.url);
-		url.searchParams.set('granularity', granularity);
-		url.searchParams.set('start', start);
-		url.searchParams.set('end', end);
+		url.searchParams.set(`${NAV_SERIES_PARAM_PREFIX}granularity`, granularity);
+		url.searchParams.set(`${NAV_SERIES_PARAM_PREFIX}start`, start);
+		url.searchParams.set(`${NAV_SERIES_PARAM_PREFIX}end`, end);
 		goto(url.toString(), { keepFocus: true, noScroll: true });
 	}
 
@@ -121,8 +130,14 @@
 	}
 
 	function resetWindow() {
+		// NAMESPACED: clears only this surface's own chart_* keys, not `url.search = ''`
+		// wholesale — the prior form wiped ANY other page param a reset click happened to
+		// find on the URL, which is exactly the page-scoped blast radius the namespace fix
+		// closes everywhere else on this surface too.
 		const url = new URL(page.url);
-		url.search = '';
+		for (const key of Array.from(url.searchParams.keys())) {
+			if (key.startsWith(NAV_SERIES_PARAM_PREFIX)) url.searchParams.delete(key);
+		}
 		goto(url.toString(), { keepFocus: true, noScroll: true });
 	}
 </script>

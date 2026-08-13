@@ -28,10 +28,29 @@ import { EMPTY_NAV_BOUNDARY } from '$lib/nav-boundary';
 // `goto` signature, not a mock. The vitest ALIAS (vitest.config.ts) still resolves
 // the RUNTIME value to the stub. Cast once, here, rather than fight svelte-check.
 import { goto as gotoImport } from '$app/navigation';
+// Same alias-resolved stub idiom as `goto` above — resolves to tests/stubs/app-state.ts, a
+// plain mutable object (not genuinely Svelte-reactive). Reassigning `page.url` directly between
+// tests is that stub's own documented usage for varying the URL mid-suite.
+import { page } from '$app/state';
 const goto = gotoImport as unknown as Mock;
+
+// Same type-vs-runtime split as `goto` above, one level deeper: svelte-check types
+// `page.url` against SvelteKit's real route-manifest-derived literal union for
+// `pathname` (the ambient `$app/state` declarations), which a plain `new URL(...)`
+// never satisfies — even though the vitest alias resolves `page` to the plain-object
+// stub (tests/stubs/app-state.ts) at runtime, where `url` is just `URL`. Reassigning
+// through this typed helper (instead of `page.url = ...` at each call site) casts
+// once, here, rather than fighting svelte-check five times over.
+function setPageUrl(url: string): void {
+	(page as unknown as { url: URL }).url = new URL(url);
+}
 
 beforeEach(() => {
 	goto.mockClear();
+	// page is a module-level singleton stub (tests/stubs/app-state.ts) — reset between tests
+	// so a test that mutates page.url (e.g. to prove a stray param survives navigation) can't
+	// leak its URL into an unrelated later test.
+	setPageUrl('http://localhost/');
 });
 
 // jsdom has no ResizeObserver (a real browser API) — LayerCake's container binds
@@ -146,7 +165,7 @@ describe('NavHistoryChart — default render (populated series)', () => {
 		expect(getByText(/Inflation-adjusted figures are unavailable/)).toBeTruthy();
 	});
 
-	it('clicking a granularity chip navigates via goto with updated query params', async () => {
+	it('clicking a granularity chip navigates via goto with the NAMESPACED query param', async () => {
 		const { getByRole } = render(NavHistoryChart, {
 			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
 		});
@@ -155,7 +174,65 @@ describe('NavHistoryChart — default render (populated series)', () => {
 		await Promise.resolve();
 		expect(goto).toHaveBeenCalledTimes(1);
 		const [calledUrl] = goto.mock.calls[0] as [string];
-		expect(calledUrl).toContain('granularity=daily');
+		const params = new URL(calledUrl, 'http://localhost').searchParams;
+		expect(params.get('chart_granularity')).toBe('daily');
+		expect(params.has('granularity')).toBe(false);
+	});
+
+	// ⭐ F/CTO-ratified 2026-08-13 (Sec's param-fence finding) — every goto() URL write on this
+	// surface must preserve params it doesn't own, not just avoid rejecting them on read.
+	it('⭐ a stray non-chart param on the page URL survives a granularity-chip navigation untouched', async () => {
+		setPageUrl('http://localhost/?utm_source=newsletter');
+		const { getByRole } = render(NavHistoryChart, {
+			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+		});
+		const daily = getByRole('radio', { name: 'Daily' });
+		daily.click();
+		await Promise.resolve();
+		const [calledUrl] = goto.mock.calls[0] as [string];
+		const params = new URL(calledUrl, 'http://localhost').searchParams;
+		expect(params.get('utm_source')).toBe('newsletter');
+		expect(params.get('chart_granularity')).toBe('daily');
+	});
+});
+
+// ⭐ F/CTO-ratified 2026-08-13 (Sec's param-fence finding, option A) — the reset breadcrumb and
+// its goto() write are namespace-scoped exactly like the granularity toggle above: the
+// breadcrumb reflects THIS surface's own drilled state, and a reset clears only what this
+// surface owns.
+describe('NavHistoryChart — reset breadcrumb is namespace-scoped, not page-scoped', () => {
+	it('a page URL with ONLY a stray non-chart param does NOT show "Reset to 60 months"', () => {
+		setPageUrl('http://localhost/?utm_source=newsletter');
+		const { queryByText, getByText } = render(NavHistoryChart, {
+			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+		});
+		expect(queryByText('Reset to 60 months')).toBeNull();
+		// The non-breadcrumb range label renders instead — proves the false branch is reachable
+		// and this isn't a fixture that happens to show neither.
+		expect(getByText(/Showing:/)).toBeTruthy();
+	});
+
+	it('a page URL WITH a chart_* param shows "Reset to 60 months"', () => {
+		setPageUrl('http://localhost/?chart_granularity=daily');
+		const { getByText } = render(NavHistoryChart, {
+			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+		});
+		expect(getByText('Reset to 60 months')).toBeTruthy();
+	});
+
+	it('⭐ clicking reset clears only chart_* keys — a stray non-chart param on the URL survives', async () => {
+		setPageUrl('http://localhost/?utm_source=newsletter&chart_granularity=daily&chart_start=2026-01-01');
+		const { getByText } = render(NavHistoryChart, {
+			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+		});
+		getByText('Reset to 60 months').click();
+		await Promise.resolve();
+		expect(goto).toHaveBeenCalledTimes(1);
+		const [calledUrl] = goto.mock.calls[0] as [string];
+		const params = new URL(calledUrl, 'http://localhost').searchParams;
+		expect(params.get('utm_source')).toBe('newsletter');
+		expect(params.has('chart_granularity')).toBe(false);
+		expect(params.has('chart_start')).toBe(false);
 	});
 });
 
