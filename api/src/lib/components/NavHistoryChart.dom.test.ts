@@ -158,3 +158,107 @@ describe('NavHistoryChart — default render (populated series)', () => {
 		expect(calledUrl).toContain('granularity=daily');
 	});
 });
+
+// ============================================================================
+// SELF-220-QA-r1 — QA-added coverage (content marker for this revision). Three
+// gaps identified by audit against the SELF-220 dispatch's items 3/4: none of
+// the RULED disclosure copy, the `sparse` placeholder state, or the
+// post-boundary-only staleness-marker property had a DOM-level assertion
+// anywhere in the existing suite (the pure functions they're built on —
+// isSparseHistory / isPreBoundaryPoint / shouldSuppressCarryStaleness — are
+// covered node-side in nav-series.test.ts / nav-boundary.test.ts, but the
+// COMPONENT WIRING that reads those functions and renders accordingly was
+// not). Added here rather than as new files, matching this file's own
+// established idiom (render + testing-library queries, no SVG path-geometry
+// assertions — see this file's SCOPE NOTE at the top).
+// ============================================================================
+
+describe('SELF-220-QA-r1 — resolution-disclosure copy, bound to the UX-ruled string exactly', () => {
+	it('imported-only (no cron yet): renders the RULED no-boundary-date copy verbatim', () => {
+		const boundary = { first_cron_checkpoint: null, has_cron_rows: false, has_imported_rows: true };
+		const { getByText } = render(NavHistoryChart, {
+			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary }
+		});
+		// Bound to the EXACT ruled string (team-lead, 2026-08-12) — not a substring/regex
+		// match, so a future edit that alters the copy fails here rather than passing on a
+		// loose /Monthly resolution/ match that both branches would satisfy.
+		expect(
+			getByText("Monthly resolution — daily/weekly tracking hasn't started yet.")
+		).toBeTruthy();
+	});
+
+	it('mixed (a real boundary date): renders the dated variant, NOT the no-boundary-date copy', () => {
+		const boundary = { first_cron_checkpoint: '2026-01-01', has_cron_rows: true, has_imported_rows: true };
+		const preBoundaryPoint = point({ point_date: '2025-06-15', checkpoint_date: '2025-06-15' });
+		const { getByText, queryByText } = render(NavHistoryChart, {
+			props: { points: [preBoundaryPoint, ...POPULATED], paramsError: null, params: PARAMS, boundary }
+		});
+		expect(getByText(/Monthly resolution before/)).toBeTruthy();
+		expect(getByText('January 2026', { selector: '.basis-value' })).toBeTruthy();
+		expect(queryByText("Monthly resolution — daily/weekly tracking hasn't started yet.")).toBeNull();
+	});
+
+	it('cron-only (no imported rows at all): the disclosure never renders — nothing to disclose', () => {
+		const boundary = { first_cron_checkpoint: '2026-01-01', has_cron_rows: true, has_imported_rows: false };
+		const { queryByText } = render(NavHistoryChart, {
+			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary }
+		});
+		expect(queryByText(/Monthly resolution/)).toBeNull();
+	});
+});
+
+describe('SELF-220-QA-r1 — sparse-history state (§12.9) does not collapse into the default render', () => {
+	// Fewer than 12 distinct months — isSparseHistory's own threshold (nav-series.test.ts).
+	const SPARSE = Array.from({ length: 5 }, (_, i) =>
+		point({ point_date: `2026-0${i + 1}-15`, nav_nominal: 100_000 + i * 1_000 })
+	);
+
+	it('sparse series: the tracking-history label renders with the correct "N of M months" text', () => {
+		const { getByText } = render(NavHistoryChart, {
+			props: { points: SPARSE, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+		});
+		// PARAMS spans 2021-06-01..2026-06-01 = 60 requested months; SPARSE carries 5
+		// distinct calendar months — both halves of the label are asserted so a
+		// regression in EITHER the numerator (months-of-history) or the denominator
+		// (windowMonths threaded down from the parent's own params) is caught.
+		expect(getByText('5 of 60 months of history')).toBeTruthy();
+	});
+
+	it('a populated (non-sparse) series never renders the tracking-history label', () => {
+		const { queryByText } = render(NavHistoryChart, {
+			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+		});
+		expect(queryByText(/months of history/)).toBeNull();
+	});
+});
+
+describe('SELF-220-QA-r1 — staleness markers fire post-boundary ONLY (§12.1/§12.2)', () => {
+	it('a pre-boundary carried point gets NO marker; a post-boundary carried point DOES', () => {
+		const boundary = { first_cron_checkpoint: '2026-01-01', has_cron_rows: true, has_imported_rows: true };
+		const preBoundaryCarried = point({
+			point_date: '2025-06-30',
+			checkpoint_date: '2025-05-31' // carried (checkpoint_date !== point_date), but pre-boundary
+		});
+		const postBoundaryCarried = point({
+			point_date: '2026-03-31',
+			checkpoint_date: '2026-02-28' // carried, and post-boundary — a real cron gap
+		});
+		const postBoundaryFresh = point({ point_date: '2026-04-30', checkpoint_date: '2026-04-30' });
+		const { getAllByRole } = render(NavHistoryChart, {
+			props: {
+				points: [preBoundaryCarried, postBoundaryCarried, postBoundaryFresh],
+				paramsError: null,
+				params: PARAMS,
+				boundary
+			}
+		});
+		// EXACTLY one marker — proves both directions at once: the post-boundary carried
+		// point got one (not silently dropped) AND the pre-boundary carried point did not
+		// (not over-rendered). A count of 0 or 2 would each fail a different half of §12.1.
+		const markers = getAllByRole('img', { name: /NAV checkpoint carried from/ });
+		expect(markers).toHaveLength(1);
+		expect(markers[0].getAttribute('aria-label')).toBe(
+			'NAV checkpoint carried from 2026-02-28 to 2026-03-31'
+		);
+	});
+});
