@@ -1,0 +1,11 @@
+# Memory index
+
+- [Scratch-DB pgTAP harness gotchas](feedback_scratch_db_pgtap_harness_gotchas.md) — `docker exec -i`, pgtap must live in `public` schema, and the harness is permissive (not just incomplete) vs. real prod ACLs.
+- [Verify a causal mechanism before stating it](feedback_verify_causal_mechanism_before_stating.md) — a true result + an unverified "why" is still a defect; architect caught mine.
+- [Scope the grep to what the assertion checks](feedback_scope_the_grep_to_what_the_assertion_checks.md) — a "no token X anywhere" claim must be scoped to prosrc, never the whole file; the header's own prohibition prose contains the token.
+- [Send full text, not a path pointer, to a non-authoring role](feedback_full_text_not_path_pointer_to_non_authoring_role.md) — paste for a first/small hand-off; switch to own-worktree + path + self-verified `git diff --no-index` once a file is large and under repeated revision.
+- [Never write into a teammate's worktree](feedback_never_write_into_a_teammates_worktree.md) — not even a temporary, self-removed copy; it collided with Backend's live run mid-flight. Verify from their path or ask them to run it, never write into it.
+- [CSV test fixtures need csv.writer, not f-strings](feedback_csv_test_fixtures_use_csv_writer.md) — an unquoted internal comma read as a 10x-class scaling defect in the code, not the fixture bug it was.
+- **[⚠ Postgres roles are cluster-level, not per-DB](feedback_postgres_roles_are_cluster_level_not_per_db.md) — a real incident.** `ALTER ROLE pfin_etl` inside a "scratch DB" session overwrote the REAL shared credential's password cluster-wide, unrecoverably. Never arm a real role for a test; create+drop a throwaway one.
+- [Run ruff before every Python handoff](feedback_run_ruff_before_python_handoff.md) — 28/28 green pytest said nothing about an unused import; the commit hook caught it because I never commit, so `ruff check` has to run on my side first.
+- [Re-diff the source before a re-verification run](feedback_rediff_source_before_reverify.md) — diff your copy against the authoring teammate's live worktree BEFORE re-running, not after; architect confirmed this closed the "tested a copy that happens to match" gap unprompted.
