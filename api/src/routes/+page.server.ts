@@ -14,7 +14,11 @@ import { loadNetWorthView } from '$lib/server/queries/netWorth';
 import { loadNavComposition } from '$lib/server/queries/navComposition';
 import { loadStaleness } from '$lib/server/queries/staleness';
 import { loadNavSeries, resolveNavSeriesWindow } from '$lib/server/queries/nav-series';
-import { navSeriesParamsSchema } from '$lib/server/schemas/nav-series-params';
+import {
+	navSeriesParamsSchema,
+	extractNamespacedParams,
+	NAV_SERIES_PARAM_PREFIX
+} from '$lib/server/schemas/nav-series-params';
 import { loadNavBoundary } from '$lib/server/queries/nav-boundary';
 import type { NavSeriesGranularity } from '$lib/nav-series';
 import { EMPTY_STALENESS } from '$lib/staleness/stale-constituent';
@@ -74,6 +78,22 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	// also serves. A page-wide 400 turns a hand-edited URL into a dashboard
 	// outage, which is a worse posture than the bad param it was rejecting.
 	//
+	// THE `chart_` NAMESPACE IS THE SAME INVARIANT APPLIED A SECOND TIME, ONE
+	// LEVEL DOWN (F/CTO-ratified 2026-08-13, Sec's param-fence finding, option
+	// A). `Object.fromEntries(url.searchParams)` strict-parsed the WHOLE
+	// page's query string — an unrelated param anywhere on the URL (a
+	// tracker's `?utm_source=`) tripped `.strict()`'s unknown-key rejection
+	// and disabled the chart, which is the page-scoped-blast-radius defect
+	// AGAIN, just triggered by a param instead of a read failure. The fix:
+	// extract ONLY the `chart_`-prefixed subset by structural PREFIX
+	// MEMBERSHIP (`extractNamespacedParams`), then `.strict()`-parse THAT
+	// subset. A key outside the namespace is simply not chart input, never
+	// presented to the schema; a key INSIDE the namespace the schema doesn't
+	// recognize (`chart_bogus`) still reaches `.strict()` and is still
+	// REJECTED — see nav-series-params.ts's header for why this is NOT
+	// "pick expected keys then parse" (that shape would hide an unrecognized
+	// key WITHIN the namespace from the fence, defeating it).
+	//
 	// THE REJECTION ITSELF STAYS STRICT WITHIN THAT SCOPE — an invalid
 	// granularity/date is NEVER silently coerced into the default window.
 	// Lock 14's reject-don't-launder instinct survives at chart scope even
@@ -81,14 +101,15 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	// mass-assignment) and this is a READ boundary — route-consistency
 	// (soft-degrade, chart-scoped, matching staleness/composition below) is
 	// the stronger precedent here, not a page-wide throw. `navSeriesParamsError`
-	// carries the REASON as a factual message ("granularity: Invalid enum
-	// value...") for Frontend to render as an explicit chart error state —
-	// this is the THIRD distinguishable navSeries state, alongside `null`
-	// (read failed) and `[]` (read succeeded, nothing in range): invalid
-	// params never even reach a read, so `navSeries` stays `null` here too,
-	// but `navSeriesParamsError` being non-null is what tells Frontend WHY,
-	// rather than leaving "read failed" and "params rejected" indistinguishable.
-	const rawNavSeriesParams = Object.fromEntries(url.searchParams);
+	// carries the REASON as a factual message ("chart_granularity: Invalid
+	// enum value...") for Frontend to render as an explicit chart error
+	// state — this is the THIRD distinguishable navSeries state, alongside
+	// `null` (read failed) and `[]` (read succeeded, nothing in range):
+	// invalid params never even reach a read, so `navSeries` stays `null`
+	// here too, but `navSeriesParamsError` being non-null is what tells
+	// Frontend WHY, rather than leaving "read failed" and "params rejected"
+	// indistinguishable.
+	const rawNavSeriesParams = extractNamespacedParams(url.searchParams, NAV_SERIES_PARAM_PREFIX);
 	const parsedNavSeriesParams = navSeriesParamsSchema.safeParse(rawNavSeriesParams);
 
 	let navSeries: Awaited<ReturnType<typeof loadNavSeries>> = null;
@@ -110,10 +131,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		navSeriesStart = defaults.start;
 		navSeriesEnd = defaults.end;
 	} else {
-		navSeriesGranularity = parsedNavSeriesParams.data.granularity ?? 'monthly';
+		navSeriesGranularity = parsedNavSeriesParams.data.chart_granularity ?? 'monthly';
 		const resolved = resolveNavSeriesWindow(
-			parsedNavSeriesParams.data.start,
-			parsedNavSeriesParams.data.end
+			parsedNavSeriesParams.data.chart_start,
+			parsedNavSeriesParams.data.chart_end
 		);
 		navSeriesStart = resolved.start;
 		navSeriesEnd = resolved.end;

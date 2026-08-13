@@ -8,6 +8,13 @@
 //   2. navSeriesParamsError === null, navSeries === null — valid params, the READ failed.
 //   3. navSeriesParamsError === null, navSeries deep-equals [] — valid params, genuinely empty.
 //
+// ALSO locks the `chart_` NAMESPACE FIX (F/CTO-ratified 2026-08-13, Sec's param-fence
+// finding, option A): a NON-namespaced param (e.g. `?utm_source=`) must be IGNORED, not
+// rejected — the original defect was `Object.fromEntries(url.searchParams)` strict-parsing
+// the WHOLE page's query string, so any unrelated param disabled the chart. A CHART-
+// namespaced but unrecognized param (`chart_bogus`) must still be REJECTED — proving the
+// fix is a namespace, not a loosened fence (see the two dedicated tests below).
+//
 // The rest of the route's RPCs (netWorth / staleness / composition) are mocked to trivial
 // happy-path defaults — their own behavior is proven by netWorth.test.ts / navComposition.test.ts;
 // this file exists only to lock the chart-scoping dispatch added around loadNavSeries().
@@ -98,11 +105,11 @@ function makeEvent(
 
 describe('load() — §2.1.2.d chart-scoped navSeries dispatch', () => {
 	it('invalid params: navSeriesParamsError set, navSeries stays null, NO RPC attempted, page still loads', async () => {
-		const { event, rpc } = makeEvent('granularity=yearly', { data: [] });
+		const { event, rpc } = makeEvent('chart_granularity=yearly', { data: [] });
 		const data = await runLoad(event);
 
 		expect(data.navSeriesParamsError).not.toBeNull();
-		expect(data.navSeriesParamsError).toContain('granularity');
+		expect(data.navSeriesParamsError).toContain('chart_granularity');
 		expect(data.navSeries).toBeNull();
 		// The page's other sections still resolved — this is the "chart-scoped, not
 		// page-scoped" property under test. No throw reached this point at all.
@@ -111,15 +118,33 @@ describe('load() — §2.1.2.d chart-scoped navSeries dispatch', () => {
 		expect(rpc).not.toHaveBeenCalledWith('fn_nav_series_inflation_adjusted', expect.anything());
 	});
 
-	it('an UNRECOGNIZED key is also chart-scoped (the .strict() fence, not a page throw)', async () => {
-		const { event } = makeEvent('bogus=anything', { data: [] });
+	it("a NON-NAMESPACED key (e.g. an analytics tracker param) is IGNORED, not rejected — the chart_ namespace fix under test (F/CTO-ratified 2026-08-13, Sec's param-fence finding)", async () => {
+		const { event } = makeEvent('utm_source=newsletter', { data: [] });
+		const data = await runLoad(event);
+		// This is the actual regression this namespace exists to close: before
+		// the fix, ANY unrelated page param tripped .strict() on the WHOLE
+		// query string and disabled the chart. Now it's simply not chart input.
+		expect(data.navSeriesParamsError).toBeNull();
+		expect(data.navSeries).toEqual([]);
+	});
+
+	it('a CHART-NAMESPACED but UNRECOGNIZED key (chart_bogus) still trips the fence — NOT pick-then-parse', async () => {
+		const { event, rpc } = makeEvent('chart_bogus=anything', { data: [] });
 		const data = await runLoad(event);
 		expect(data.navSeriesParamsError).not.toBeNull();
 		expect(data.navSeries).toBeNull();
+		expect(rpc).not.toHaveBeenCalledWith('fn_nav_series_inflation_adjusted', expect.anything());
+	});
+
+	it('a non-namespaced key ALONGSIDE valid chart_ params does not interfere with them', async () => {
+		const { event } = makeEvent('chart_granularity=weekly&utm_source=newsletter', { data: [] });
+		const data = await runLoad(event);
+		expect(data.navSeriesParamsError).toBeNull();
+		expect(data.navSeriesParams.granularity).toBe('weekly');
 	});
 
 	it('valid params, RPC error: navSeriesParamsError stays null, navSeries is null (read failed)', async () => {
-		const { event } = makeEvent('granularity=monthly', { error: { message: 'permission denied' } });
+		const { event } = makeEvent('chart_granularity=monthly', { error: { message: 'permission denied' } });
 		const data = await runLoad(event);
 
 		expect(data.navSeriesParamsError).toBeNull();
@@ -127,7 +152,7 @@ describe('load() — §2.1.2.d chart-scoped navSeries dispatch', () => {
 	});
 
 	it('valid params, genuinely empty result: navSeriesParamsError null, navSeries is [] (NOT null)', async () => {
-		const { event } = makeEvent('granularity=monthly', { data: [] });
+		const { event } = makeEvent('chart_granularity=monthly', { data: [] });
 		const data = await runLoad(event);
 
 		expect(data.navSeriesParamsError).toBeNull();
@@ -149,7 +174,7 @@ describe('load() — §2.1.2.d chart-scoped navSeries dispatch', () => {
 			cpi_nonpublication_on_record: false,
 			cpi_coverage_through: '2026-06-01'
 		};
-		const { event } = makeEvent('granularity=monthly', { data: [row] });
+		const { event } = makeEvent('chart_granularity=monthly', { data: [row] });
 		const data = await runLoad(event);
 
 		expect(data.navSeriesParamsError).toBeNull();
@@ -157,7 +182,7 @@ describe('load() — §2.1.2.d chart-scoped navSeries dispatch', () => {
 	});
 
 	it('navSeriesParams reflects the resolved (defaulted) window even on the invalid-params path', async () => {
-		const { event } = makeEvent('granularity=yearly', { data: [] });
+		const { event } = makeEvent('chart_granularity=yearly', { data: [] });
 		const data = await runLoad(event);
 		// Coherent defaults for Frontend's controls, even though nothing was queried.
 		expect(data.navSeriesParams.granularity).toBe('monthly');
@@ -168,7 +193,7 @@ describe('load() — §2.1.2.d chart-scoped navSeries dispatch', () => {
 
 describe('load() — §2.1.2 navBoundary (069), fetched independently of chart params', () => {
 	it('the REAL empty-store row (state a) passes through — NOT null', async () => {
-		const { event } = makeEvent('granularity=monthly', { data: [] }, {
+		const { event } = makeEvent('chart_granularity=monthly', { data: [] }, {
 			data: [{ first_cron_checkpoint: null, has_cron_rows: false, has_imported_rows: false }]
 		});
 		const data = await runLoad(event);
@@ -181,7 +206,7 @@ describe('load() — §2.1.2 navBoundary (069), fetched independently of chart p
 	});
 
 	it('the mixed state (d) passes through with a real date', async () => {
-		const { event } = makeEvent('granularity=monthly', { data: [] }, {
+		const { event } = makeEvent('chart_granularity=monthly', { data: [] }, {
 			data: [{ first_cron_checkpoint: '2026-08-01', has_cron_rows: true, has_imported_rows: true }]
 		});
 		const data = await runLoad(event);
@@ -193,7 +218,7 @@ describe('load() — §2.1.2 navBoundary (069), fetched independently of chart p
 	});
 
 	it('an RPC error → navBoundary is null (distinguishable from the real empty-store row)', async () => {
-		const { event } = makeEvent('granularity=monthly', { data: [] }, {
+		const { event } = makeEvent('chart_granularity=monthly', { data: [] }, {
 			error: { message: 'permission denied' }
 		});
 		const data = await runLoad(event);
@@ -201,7 +226,7 @@ describe('load() — §2.1.2 navBoundary (069), fetched independently of chart p
 	});
 
 	it('is fetched even when navSeriesParamsError is set — independent of chart params', async () => {
-		const { event, rpc } = makeEvent('granularity=yearly', { data: [] }, {
+		const { event, rpc } = makeEvent('chart_granularity=yearly', { data: [] }, {
 			data: [{ first_cron_checkpoint: '2026-08-01', has_cron_rows: true, has_imported_rows: false }]
 		});
 		const data = await runLoad(event);
