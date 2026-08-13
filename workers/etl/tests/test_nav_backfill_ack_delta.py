@@ -28,12 +28,31 @@ Description:
     run_nav_backfill.py's log FileHandler (which writes `pfin_back_etl.log`
     to whatever the current working directory is) never touches this repo
     checkout.
+
+    IMPORT PATH — self-contained, does not depend on invocation. `uv pip
+    install -e .` (both locally and in CI's unit lane) makes src/pfin_back_etl
+    importable, but run_nav_backfill.py is a ROOT-level script at
+    workers/etl/, outside that src-layout package, so an editable install
+    does not put it on sys.path. A local `PYTHONPATH=src:.` invocation masked
+    this (the `.` component put workers/etl on sys.path incidentally); CI's
+    hermetic `uv run --no-sync pytest -m unit` sets no PYTHONPATH and failed
+    with ModuleNotFoundError on every test in this file — reproduced locally
+    under CI's exact invocation before this fix, not assumed. The bootstrap
+    below derives workers/etl's path from THIS FILE's own location (parent of
+    tests/), so the import resolves under any invocation, not just the one
+    that happened to work on this machine.
 """
 
 import logging
+import sys
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
+
+_ETL_ROOT = Path(__file__).resolve().parent.parent  # tests/.. == workers/etl
+if str(_ETL_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ETL_ROOT))
 
 pytestmark = pytest.mark.unit
 
