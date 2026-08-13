@@ -43,3 +43,6 @@ Thumbs.db
 
 # Python editable-install artifacts
 *.egg-info/
+
+# Sec flag 2026-08-12 (SELF-217 review): run logs concentrate real financial figures
+*.log
