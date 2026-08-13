@@ -54,16 +54,46 @@ export function isPreBoundaryPoint(pointDate: string, boundary: NavBoundary): bo
 }
 
 /**
+ * True when `pointDate` belongs to the IMPORTED ERA — the broader question
+ * `isPreBoundaryPoint` alone cannot answer, and the bug this function exists to
+ * fix (Architect, 2026-08-13 contract-conformance flag): "before the boundary
+ * date" and "in the imported era" COINCIDE in states (c)/(d), where a real
+ * `first_cron_checkpoint` exists, but DIVERGE in state (b) — imported-only, where
+ * `first_cron_checkpoint` is NULL because there is no cron era yet at all.
+ * `isPreBoundaryPoint` alone returns `false` for every point in state (b) (there
+ * is no date to be "before"), which is the CORRECT answer to ITS OWN narrow
+ * question but the WRONG one for "is this point imported" — every point in state
+ * (b) IS imported, by definition of the state.
+ *
+ * The correct predicate, covering all four of 069's states:
+ *   - (a) no rows: moot, no points exist to ask this of.
+ *   - (b) imported-only (`has_cron_rows === false`): TRUE for every point — there
+ *     is no cron era to be "post-" anything relative to.
+ *   - (c) cron-only: `has_cron_rows === true` and `first_cron_checkpoint` is the
+ *     MINIMUM cron nav_date, so no real cron row can be pre-boundary — `false`
+ *     for every actual point, same answer `isPreBoundaryPoint` alone would give.
+ *   - (d) mixed: `has_cron_rows === true`, so this reduces to `isPreBoundaryPoint`
+ *     exactly as before — the case the original (buggy) implementation was
+ *     built and tested against, which is why the bug shipped: (d) never
+ *     exercises the divergence.
+ */
+export function isImportedEraPoint(pointDate: string, boundary: NavBoundary): boolean {
+	return !boundary.has_cron_rows || isPreBoundaryPoint(pointDate, boundary);
+}
+
+/**
  * §12.1/§12.2: whether a point's `checkpoint_date <> point_date` carry should be
- * rendered as staleness (`chart-placeholder`'s `stale-segment`) at all. Post-boundary
- * (or when the caller has only ever had a cron store — no imported rows) this is a
- * pure pass-through of the existing 062/067 signal; pre-boundary it is suppressed —
- * the `resolution-disclosure` (§12.6) carries that information instead, and the two
- * must never both fire for the same point (they answer different questions: "is
- * this specific value late" vs. "is this whole span coarser-grained by design").
+ * rendered as staleness (`chart-placeholder`'s `stale-segment`) at all. Outside
+ * the imported era this is a pure pass-through of the existing 062/067 signal;
+ * inside it, suppressed — the `resolution-disclosure` (§12.6) carries that
+ * information instead, and the two must never both fire for the same point (they
+ * answer different questions: "is this specific value late" vs. "is this whole
+ * span coarser-grained by design"). Delegates to `isImportedEraPoint`, NOT
+ * `isPreBoundaryPoint` directly — see that function's header for why the
+ * distinction is load-bearing in state (b).
  */
 export function shouldSuppressCarryStaleness(pointDate: string, boundary: NavBoundary): boolean {
-	return isPreBoundaryPoint(pointDate, boundary);
+	return isImportedEraPoint(pointDate, boundary);
 }
 
 /**

@@ -261,4 +261,30 @@ describe('SELF-220-QA-r1 — staleness markers fire post-boundary ONLY (§12.1/�
 			'NAV checkpoint carried from 2026-02-28 to 2026-03-31'
 		);
 	});
+
+	// ⭐ REGRESSION test, added in response to Architect's contract-conformance flag
+	// (2026-08-13) — not QA's SELF-220-QA-r1 content above, a Frontend fix-verification
+	// added alongside the isImportedEraPoint correction in nav-boundary.ts. The bug: in
+	// the IMPORTED-ONLY state (has_cron_rows === false), every point's staleness
+	// suppression was computed via isPreBoundaryPoint alone, which answers `false` for
+	// every point when first_cron_checkpoint is NULL (there is no date to be "before")
+	// — so the ENTIRE imported-only series rendered stale-carry markers, exactly the
+	// defect §12.1's suppress-and-disclose ruling exists to prevent. This is the DOM-
+	// level assertion Architect named as the one that would have caught it: a unit test
+	// of resolutionDisclosureFires alone (which was always correct) passes right over
+	// this, because the bug is confined to the SEPARATE suppression path.
+	it('⭐ imported-only state (no cron era at all): ZERO staleness markers render, however many carried points exist', () => {
+		const boundary = { first_cron_checkpoint: null, has_cron_rows: false, has_imported_rows: true };
+		const carried1 = point({ point_date: '2018-01-31', checkpoint_date: '2017-12-31' });
+		const carried2 = point({ point_date: '2018-02-28', checkpoint_date: '2018-01-31' });
+		const { queryAllByRole } = render(NavHistoryChart, {
+			props: {
+				points: [carried1, carried2],
+				paramsError: null,
+				params: PARAMS,
+				boundary
+			}
+		});
+		expect(queryAllByRole('img', { name: /NAV checkpoint carried from/ })).toHaveLength(0);
+	});
 });

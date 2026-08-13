@@ -26,7 +26,7 @@
 		isCarriedNavPoint,
 		type NavSeriesPoint
 	} from '$lib/nav-series';
-	import { isPreBoundaryPoint, shouldSuppressCarryStaleness, type NavBoundary } from '$lib/nav-boundary';
+	import { isImportedEraPoint, shouldSuppressCarryStaleness, type NavBoundary } from '$lib/nav-boundary';
 
 	/** The slice of LayerCake's context this component reads. LayerCake's own
 	 * .d.ts types the context as a slot-prop bag (its Svelte-4-legacy internals
@@ -67,16 +67,23 @@
 	const toIso = (d: Date) => d.toISOString().slice(0, 10);
 
 	// ---- nominal line, split at the boundary (§12.6) ----
-	const preBoundaryPoints = $derived(points.filter((p) => isPreBoundaryPoint(p.point_date, boundary)));
-	const postBoundaryPoints = $derived(points.filter((p) => !isPreBoundaryPoint(p.point_date, boundary)));
+	// isImportedEraPoint, NOT isPreBoundaryPoint directly — the imported-only state
+	// (has_cron_rows === false) has NO boundary date to compare against, and every
+	// point in it is imported by definition of the state. Using isPreBoundaryPoint
+	// alone here was a real bug (Architect, 2026-08-13): it classified every point
+	// as post-boundary in that state (since "before null" is false), so the WHOLE
+	// imported-only series lost its stepped/plateau treatment. See nav-boundary.ts's
+	// isImportedEraPoint header for the full four-state reasoning.
+	const preBoundaryPoints = $derived(points.filter((p) => isImportedEraPoint(p.point_date, boundary)));
+	const postBoundaryPoints = $derived(points.filter((p) => !isImportedEraPoint(p.point_date, boundary)));
 	// The two segments share their join point (the last pre-boundary point re-appears
 	// as the first post-boundary point isn't guaranteed — nav_daily rows are keyed by
 	// distinct dates, so the boundary date itself is POST-boundary by construction
-	// (isPreBoundaryPoint is strict '<'). To avoid a visible gap at the join, the
-	// pre-boundary path is extended with the first post-boundary point as its final
-	// vertex — drawn once by the pre-boundary path (stepped) and again as the start
-	// of the post-boundary path (linear); the two agree exactly at that shared vertex
-	// so no seam is visible.
+	// (isImportedEraPoint is strict '<' in the states where a boundary date exists).
+	// To avoid a visible gap at the join, the pre-boundary path is extended with the
+	// first post-boundary point as its final vertex — drawn once by the pre-boundary
+	// path (stepped) and again as the start of the post-boundary path (linear); the
+	// two agree exactly at that shared vertex so no seam is visible.
 	const preBoundaryJoined = $derived(
 		postBoundaryPoints.length > 0 ? [...preBoundaryPoints, postBoundaryPoints[0]] : preBoundaryPoints
 	);

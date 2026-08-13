@@ -6,6 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import {
 	isPreBoundaryPoint,
+	isImportedEraPoint,
 	shouldSuppressCarryStaleness,
 	resolutionDisclosureFires,
 	EMPTY_NAV_BOUNDARY,
@@ -45,6 +46,22 @@ describe('isPreBoundaryPoint', () => {
 	});
 });
 
+describe('isImportedEraPoint — the corrected predicate (Architect contract-conformance flag, 2026-08-13)', () => {
+	it('imported-only state (has_cron_rows === false): TRUE for every point, regardless of date — the state IS the imported era, with no boundary date to compare against', () => {
+		expect(isImportedEraPoint('2020-01-01', IMPORTED_ONLY)).toBe(true);
+		expect(isImportedEraPoint('2026-08-13', IMPORTED_ONLY)).toBe(true);
+	});
+
+	it('mixed state: reduces to isPreBoundaryPoint exactly (a real boundary date exists to compare against)', () => {
+		expect(isImportedEraPoint('2026-05-31', MIXED)).toBe(true);
+		expect(isImportedEraPoint('2026-07-01', MIXED)).toBe(false);
+	});
+
+	it('cron-only state: false for every point — has_cron_rows is true and no real cron row precedes the min cron date', () => {
+		expect(isImportedEraPoint('2026-06-15', CRON_ONLY)).toBe(false);
+	});
+});
+
 describe('shouldSuppressCarryStaleness — §12.1/§12.2', () => {
 	it('suppresses pre-boundary (mixed state)', () => {
 		expect(shouldSuppressCarryStaleness('2026-05-31', MIXED)).toBe(true);
@@ -56,6 +73,11 @@ describe('shouldSuppressCarryStaleness — §12.1/§12.2', () => {
 
 	it('does NOT suppress in a pure cron-only store — nothing pre-boundary exists', () => {
 		expect(shouldSuppressCarryStaleness('2026-06-15', CRON_ONLY)).toBe(false);
+	});
+
+	it('⭐ REGRESSION (Architect, 2026-08-13): suppresses EVERY point in the imported-only state — the bug this leg exists to catch had this returning false for every point, because isPreBoundaryPoint alone answers false when first_cron_checkpoint is null', () => {
+		expect(shouldSuppressCarryStaleness('2018-01-31', IMPORTED_ONLY)).toBe(true);
+		expect(shouldSuppressCarryStaleness('2026-08-01', IMPORTED_ONLY)).toBe(true);
 	});
 });
 
