@@ -15,6 +15,7 @@ import { loadNavComposition } from '$lib/server/queries/navComposition';
 import { loadStaleness } from '$lib/server/queries/staleness';
 import { loadNavSeries, resolveNavSeriesWindow } from '$lib/server/queries/nav-series';
 import { navSeriesParamsSchema } from '$lib/server/schemas/nav-series-params';
+import { loadNavBoundary } from '$lib/server/queries/nav-boundary';
 import type { NavSeriesGranularity } from '$lib/nav-series';
 import { EMPTY_STALENESS } from '$lib/staleness/stale-constituent';
 import { serverTodayAsOf } from '$lib/server/time/asOf';
@@ -146,6 +147,36 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		}
 	}
 
+	// §2.1.2 cron/imported boundary signal (SELF-220 / 069), fetched FRESH
+	// alongside the series on every load() — no caching, no client-side
+	// derivation (the whole reason 069 exists is that this must NOT be
+	// inferred from point density — see nav-boundary.ts's module header and
+	// $lib/nav-boundary.ts's own header). Independent of the chart's
+	// granularity/date-range params — it is a property of the tenant's STORE,
+	// not of any requested window — so it is fetched unconditionally, even
+	// when navSeriesParamsError is set: Frontend's resolution-disclosure and
+	// staleness-suppression logic need it regardless of what range is
+	// currently selected.
+	//
+	// Same fail-soft-to-`null` posture as navSeries, for the SAME reason:
+	// `null` = the read failed (logged, never thrown); a genuinely returned
+	// `{ first_cron_checkpoint: null, has_cron_rows: false,
+	// has_imported_rows: false }` = the read succeeded and this tenant
+	// genuinely has no rows yet — 069's own state (a), a REAL row, not an
+	// absence. Collapsing the two would be the identical hazard one layer up
+	// from what 069's three-field (not scalar) return already prevents at
+	// the DB layer. loadNavBoundary() already fails soft internally to
+	// `null`; this try/catch is the belt-and-suspenders boundary so an
+	// unexpected throw degrades to the SAME `null` rather than taking down
+	// the whole route.
+	let navBoundary: Awaited<ReturnType<typeof loadNavBoundary>> = null;
+	try {
+		navBoundary = await loadNavBoundary(locals.supabase);
+	} catch (err) {
+		console.error('[+page.server] nav-boundary load threw; degrading to null:', err);
+		navBoundary = null;
+	}
+
 	return {
 		netWorth,
 		accountPresence,
@@ -158,6 +189,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			granularity: navSeriesGranularity,
 			start: navSeriesStart,
 			end: navSeriesEnd
-		}
+		},
+		navBoundary
 	};
 };

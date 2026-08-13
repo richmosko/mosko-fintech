@@ -30,6 +30,11 @@ type LoadResult = {
 	navSeries: NavSeriesPoint[] | null;
 	navSeriesParamsError: string | null;
 	navSeriesParams: { granularity: string; start: string; end: string };
+	navBoundary: {
+		first_cron_checkpoint: string | null;
+		has_cron_rows: boolean;
+		has_imported_rows: boolean;
+	} | null;
 };
 
 async function runLoad(event: Parameters<typeof load>[0]): Promise<LoadResult> {
@@ -41,7 +46,12 @@ async function runLoad(event: Parameters<typeof load>[0]): Promise<LoadResult> {
  * so the SAME mock instance serves netWorth.ts / staleness.ts / navComposition.ts (trivial
  * happy defaults) AND the nav-series RPC under test (configurable per call).
  */
-function makeLocals(navSeriesRpc: { data?: unknown; error?: { message: string } | null }) {
+function makeLocals(
+	navSeriesRpc: { data?: unknown; error?: { message: string } | null },
+	navBoundaryRpc: { data?: unknown; error?: { message: string } | null } = {
+		data: [{ first_cron_checkpoint: null, has_cron_rows: false, has_imported_rows: false }]
+	}
+) {
 	const rpc = vi.fn(async (fnName: string) => {
 		switch (fnName) {
 			case 'fn_compute_nav':
@@ -55,6 +65,8 @@ function makeLocals(navSeriesRpc: { data?: unknown; error?: { message: string } 
 				};
 			case 'fn_nav_series_inflation_adjusted':
 				return { data: navSeriesRpc.data ?? null, error: navSeriesRpc.error ?? null };
+			case 'fn_first_cron_checkpoint':
+				return { data: navBoundaryRpc.data ?? null, error: navBoundaryRpc.error ?? null };
 			default:
 				throw new Error(`unexpected rpc: ${fnName}`);
 		}
@@ -72,8 +84,13 @@ function makeLocals(navSeriesRpc: { data?: unknown; error?: { message: string } 
 	return { locals, rpc };
 }
 
-function makeEvent(searchParams: string, navSeriesRpc: { data?: unknown; error?: { message: string } | null }) {
-	const { locals, rpc } = makeLocals(navSeriesRpc);
+function makeEvent(
+	searchParams: string,
+	navSeriesRpc: { data?: unknown; error?: { message: string } | null },
+	navBoundaryRpc?: { data?: unknown; error?: { message: string } | null }
+) {
+	const { locals, rpc } =
+		navBoundaryRpc !== undefined ? makeLocals(navSeriesRpc, navBoundaryRpc) : makeLocals(navSeriesRpc);
 	const url = new URL(`http://localhost/${searchParams ? `?${searchParams}` : ''}`);
 	const event = { locals, url } as unknown as Parameters<typeof load>[0];
 	return { event, rpc };
@@ -146,5 +163,54 @@ describe('load() — §2.1.2.d chart-scoped navSeries dispatch', () => {
 		expect(data.navSeriesParams.granularity).toBe('monthly');
 		expect(typeof data.navSeriesParams.start).toBe('string');
 		expect(typeof data.navSeriesParams.end).toBe('string');
+	});
+});
+
+describe('load() — §2.1.2 navBoundary (069), fetched independently of chart params', () => {
+	it('the REAL empty-store row (state a) passes through — NOT null', async () => {
+		const { event } = makeEvent('granularity=monthly', { data: [] }, {
+			data: [{ first_cron_checkpoint: null, has_cron_rows: false, has_imported_rows: false }]
+		});
+		const data = await runLoad(event);
+		expect(data.navBoundary).toEqual({
+			first_cron_checkpoint: null,
+			has_cron_rows: false,
+			has_imported_rows: false
+		});
+		expect(data.navBoundary).not.toBeNull();
+	});
+
+	it('the mixed state (d) passes through with a real date', async () => {
+		const { event } = makeEvent('granularity=monthly', { data: [] }, {
+			data: [{ first_cron_checkpoint: '2026-08-01', has_cron_rows: true, has_imported_rows: true }]
+		});
+		const data = await runLoad(event);
+		expect(data.navBoundary).toEqual({
+			first_cron_checkpoint: '2026-08-01',
+			has_cron_rows: true,
+			has_imported_rows: true
+		});
+	});
+
+	it('an RPC error → navBoundary is null (distinguishable from the real empty-store row)', async () => {
+		const { event } = makeEvent('granularity=monthly', { data: [] }, {
+			error: { message: 'permission denied' }
+		});
+		const data = await runLoad(event);
+		expect(data.navBoundary).toBeNull();
+	});
+
+	it('is fetched even when navSeriesParamsError is set — independent of chart params', async () => {
+		const { event, rpc } = makeEvent('granularity=yearly', { data: [] }, {
+			data: [{ first_cron_checkpoint: '2026-08-01', has_cron_rows: true, has_imported_rows: false }]
+		});
+		const data = await runLoad(event);
+		expect(data.navSeriesParamsError).not.toBeNull();
+		expect(data.navBoundary).toEqual({
+			first_cron_checkpoint: '2026-08-01',
+			has_cron_rows: true,
+			has_imported_rows: false
+		});
+		expect(rpc).toHaveBeenCalledWith('fn_first_cron_checkpoint');
 	});
 });

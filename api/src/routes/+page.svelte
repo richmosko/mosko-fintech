@@ -155,17 +155,16 @@
 		     NavHistoryChart owns its own fail-soft/error/empty-state gating internally
 		     (data.navSeries is independently fail-soft per +page.server.ts — a chart-data
 		     read failure never took down the headline above, and doesn't gate on it here
-		     either). `EMPTY_NAV_BOUNDARY` is a TEMPORARY stand-in for `data.navBoundary`:
-		     Backend's 069 (pfin.fn_first_cron_checkpoint) load-path is not yet wired
-		     through this loader — see the SELF-220 branch notes. EMPTY_NAV_BOUNDARY
-		     degrades safely (every point treated as post-boundary, i.e. today's actual
-		     behavior), not silently wrong; swap for `data.navBoundary ?? EMPTY_NAV_BOUNDARY`
-		     once that field lands. -->
+		     either). `data.navBoundary` is 069's (pfin.fn_first_cron_checkpoint) signal,
+		     fetched fresh every load() — `null` on a read failure degrades to
+		     EMPTY_NAV_BOUNDARY (every point treated as post-boundary, the safe default);
+		     a genuinely returned empty-store row is NOT this — it flows straight through,
+		     never collapsed with the failure case (nav-boundary.ts's own header). -->
 		<NavHistoryChart
 			points={data.navSeries}
 			paramsError={data.navSeriesParamsError}
 			params={data.navSeriesParams}
-			boundary={EMPTY_NAV_BOUNDARY}
+			boundary={data.navBoundary ?? EMPTY_NAV_BOUNDARY}
 		/>
 	{/if}
 </main>
