@@ -66,9 +66,19 @@ export function isPreBoundaryPoint(pointDate: string, boundary: NavBoundary): bo
  * (b) IS imported, by definition of the state.
  *
  * The correct predicate, covering all four of 069's states:
- *   - (a) no rows: moot, no points exist to ask this of.
- *   - (b) imported-only (`has_cron_rows === false`): TRUE for every point — there
- *     is no cron era to be "post-" anything relative to.
+ *   - (a) no rows (`NULL, false, false` — includes `EMPTY_NAV_BOUNDARY`, the
+ *     value `+page.svelte` substitutes on a 069 READ FAILURE): moot for a real
+ *     boundary, but must NOT be conflated with (b) — `has_imported_rows` is what
+ *     tells the two apart, not `has_cron_rows` alone (Sec, 2026-08-13 round-2
+ *     finding: keying on `!has_cron_rows` alone made EMPTY indistinguishable
+ *     from (b), so a boundary READ FAILURE silently suppressed every marker —
+ *     regressing the fail-open case to fail-CLOSED-on-visibility instead of
+ *     falling through to the safe post-boundary default). `false` for every
+ *     point here — falls through to `isPreBoundaryPoint`, which is `false` with
+ *     no boundary date, so nothing is (wrongly) suppressed.
+ *   - (b) imported-only (`has_imported_rows === true`, `has_cron_rows === false`):
+ *     TRUE for every point — there is no cron era to be "post-" anything
+ *     relative to. This is the ONLY state the first clause may fire for.
  *   - (c) cron-only: `has_cron_rows === true` and `first_cron_checkpoint` is the
  *     MINIMUM cron nav_date, so no real cron row can be pre-boundary — `false`
  *     for every actual point, same answer `isPreBoundaryPoint` alone would give.
@@ -78,7 +88,10 @@ export function isPreBoundaryPoint(pointDate: string, boundary: NavBoundary): bo
  *     exercises the divergence.
  */
 export function isImportedEraPoint(pointDate: string, boundary: NavBoundary): boolean {
-	return !boundary.has_cron_rows || isPreBoundaryPoint(pointDate, boundary);
+	return (
+		(boundary.has_imported_rows && !boundary.has_cron_rows) ||
+		isPreBoundaryPoint(pointDate, boundary)
+	);
 }
 
 /**

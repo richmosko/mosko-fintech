@@ -435,3 +435,78 @@ describe('SELF-220-QA-r3 — imported-only state, reconciled: state-driven marke
 		expect(plainLinearSegments.length).toBe(0);
 	});
 });
+
+// ============================================================================
+// SELF-220-QA-r4 — Sec's round-2 finding (2026-08-13), fail-OPEN on a boundary
+// READ FAILURE, not a data state. Base sha for this catching test: `e0edfac`.
+//
+// isImportedEraPoint's `!has_cron_rows` guard is TRUE on EMPTY_NAV_BOUNDARY
+// (null, false, false) — it was written to answer "is this the imported-only
+// STATE" (069 state (b): has_cron_rows=false, has_imported_rows=true), but
+// EMPTY_NAV_BOUNDARY shares has_cron_rows=false with state (b) while actually
+// meaning something else entirely: "the boundary READ FAILED" (nav-boundary.ts
+// / server/queries/nav-boundary.ts's own fail-soft-to-null contract) or "the
+// store is genuinely empty" (state (a)). Keying suppression on has_cron_rows
+// ALONE collapses THOSE two into state (b) too — the same single-field
+// conflation the original imported-only bug had, one field over. Sec's own
+// framing: my prior four-consumer enumeration passed because the criterion
+// checked "does this branch on a state FIELD" without checking "does it
+// branch on the FULL three-field tuple" — a single boolean is never enough to
+// disambiguate four states.
+//
+// REACHABILITY (Sec, why this isn't hypothetical): a genuinely empty store
+// yields `[]` for `points` under the same RLS the boundary read uses — so
+// EMPTY_NAV_BOUNDARY paired with REAL, non-empty, carried points can only
+// happen via the fail-soft substitution: +page.svelte's
+// `boundary={data.navBoundary ?? EMPTY_NAV_BOUNDARY}` fires when the 069 RPC
+// call failed, while the SEPARATE navSeries fetch on the same load() may have
+// succeeded independently and returned real carried points. In that reachable
+// state: EVERY point gets treated as imported-era (has_cron_rows is false,
+// same as it would be for a genuine state (b)) — every real staleness marker
+// is SUPPRESSED, and the resolution-disclosure ALSO never fires (it requires
+// has_imported_rows === true, and EMPTY has that false) — so the user sees
+// NEITHER signal. A real cron-gap staleness event goes completely silent on a
+// transient, unrelated read failure. Fail-OPEN, not fail-closed.
+// ============================================================================
+
+describe('SELF-220-QA-r4 — boundary READ FAILURE (EMPTY tuple) + real carried points: markers must SHOW, not silently suppress', () => {
+	const CARRIED_POINTS_UNDER_FAILED_BOUNDARY = [
+		point({ point_date: '2026-01-31', checkpoint_date: '2025-12-01' }),
+		point({ point_date: '2026-02-28', checkpoint_date: '2025-12-01' }),
+		point({ point_date: '2026-03-31', checkpoint_date: '2026-03-31' }) // one fresh, non-carried point too
+	];
+
+	it('⭐ RED-at-e0edfac: staleness markers SHOW under EMPTY_NAV_BOUNDARY — a boundary read failure must not silently hide real staleness', () => {
+		const { container } = render(NavHistoryChart, {
+			props: {
+				points: CARRIED_POINTS_UNDER_FAILED_BOUNDARY,
+				paramsError: null,
+				params: PARAMS,
+				boundary: EMPTY_NAV_BOUNDARY
+			}
+		});
+		// State-driven input (EMPTY_NAV_BOUNDARY, the exact tuple), structural
+		// assertion (class presence + count, never rendered text) — not a DOM
+		// string pin. Two real carried points in the fixture; the third is fresh
+		// and must NOT produce a marker, so this also isn't satisfied by an
+		// implementation that marks everything regardless of carry state.
+		const markers = container.querySelectorAll('.stale-marker');
+		expect(markers.length).toBe(2);
+	});
+
+	it('⭐ RED-at-e0edfac: the resolution-disclosure does NOT fire under EMPTY_NAV_BOUNDARY — nothing to disclose when has_imported_rows is false', () => {
+		const { container } = render(NavHistoryChart, {
+			props: {
+				points: CARRIED_POINTS_UNDER_FAILED_BOUNDARY,
+				paramsError: null,
+				params: PARAMS,
+				boundary: EMPTY_NAV_BOUNDARY
+			}
+		});
+		// Structural class check (.resolution-disclosure), not a copy-string match —
+		// this leg is expected to ALREADY pass at e0edfac (resolutionDisclosureFires
+		// keys on has_imported_rows, which is false on EMPTY); included as the
+		// non-vacuity companion to the marker leg above, on the SAME input.
+		expect(container.querySelector('.resolution-disclosure')).toBeNull();
+	});
+});
