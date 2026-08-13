@@ -46,6 +46,10 @@
 -- │          boundary. Without the positive leg the negative passes vacuously.         │
 -- │ (7)  A   ACL: authenticated yes, PUBLIC no, service_role no (structural exclusion   │
 -- │          per the migration header — service_role cannot read created_at at all).   │
+-- │ (8)  PST CATALOG POSTURE, read declaratively (Sec AMBER, 2026-08-13, added post-    │
+-- │          review): prosecdef/provolatile/proconfig assert INVOKER/STABLE/search_path │
+-- │          pinned — none of legs (1)-(7) would catch a DEFINER swap, a VOLATILE       │
+-- │          relaxation, or a dropped search_path pin. 067's (ADR2) idiom.              │
 -- └──────────────────────────────────────────────────────────────────────────────────────┘
 --
 -- ⚠ `supabase db reset` is PROHIBITED — destroys F/CTO's active local test data.
@@ -58,10 +62,11 @@ begin;
 -- shared cross-tenant verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
--- plan = 18 : 3 fixture pins (Z) + 2 zone-invariance (Z-INV incl. inversion control)
+-- plan = 19 : 3 fixture pins (Z) + 2 zone-invariance (Z-INV incl. inversion control)
 -- + 4 four-state matrix (MTX; (a) doubles as leg 5's non-vacuous cross-tenant proof)
--- + 2 margin-discriminates (MRG) + 2 two-tenant (T) + 2 aal2 backstop (M) + 3 ACL (A).
-select plan(18);
+-- + 2 margin-discriminates (MRG) + 2 two-tenant (T) + 2 aal2 backstop (M) + 3 ACL (A)
+-- + 1 catalog posture (PST; Sec AMBER, 2026-08-13 — item 8, added post-review).
+select plan(19);
 
 -- Resolve the shared fixed tenant UUIDs while privileged (role=postgres); three
 -- more purpose-built tenants beyond what _fixtures/rls_verbs.psql provides, one
@@ -300,6 +305,23 @@ select ok(
 select ok(
   not has_function_privilege('service_role', 'pfin.fn_first_cron_checkpoint()', 'execute'),
   '(A3) service_role does NOT hold EXECUTE — and structurally could not use it if it did: 054 gives service_role only a column-level select on (users_id, nav_date), and this function reads created_at. A grant here would produce a broken path, not a wider one (migration header''s own recorded reasoning)'
+);
+
+-- =====================================================================
+-- (8) PST — CATALOG POSTURE, read DECLARATIVELY. Sec AMBER finding (2026-08-13):
+--   the ACL legs above prove WHO may call this function, never WHAT POSTURE it
+--   runs under. Behaviour alone cannot distinguish SECURITY INVOKER from a
+--   DEFINER owned by a non-privileged role — a DEFINER swap would leave every
+--   leg above green while detaching the read from nav_daily's RLS context and
+--   the inherited aal2 backstop (the migration header's own POSTURE RATIONALE
+--   section). Same idiom as 067's (ADR2) leg.
+-- =====================================================================
+select is(
+  (select array[p.prosecdef::text, p.provolatile::text, array_to_string(p.proconfig, ',')]
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'pfin' and p.proname = 'fn_first_cron_checkpoint'),
+  array['false','s','search_path=""'],
+  '(PST1) POSTURE, read DECLARATIVELY from the catalog: SECURITY INVOKER (prosecdef false), STABLE (provolatile s), search_path pinned empty. A DEFINER swap, a VOLATILE relaxation, or a dropped search_path pin would each leave every leg above green and only this one would catch it'
 );
 
 select * from finish();

@@ -262,42 +262,70 @@ describe('SELF-220-QA-r1 — staleness markers fire post-boundary ONLY (§12.1/�
 		);
 	});
 
+	// ⭐ REGRESSION test, added in response to Architect's contract-conformance flag
+	// (2026-08-13) — not QA's SELF-220-QA-r1 content above, a Frontend fix-verification
+	// added alongside the isImportedEraPoint correction in nav-boundary.ts. The bug: in
+	// the IMPORTED-ONLY state (has_cron_rows === false), every point's staleness
+	// suppression was computed via isPreBoundaryPoint alone, which answers `false` for
+	// every point when first_cron_checkpoint is NULL (there is no date to be "before")
+	// — so the ENTIRE imported-only series rendered stale-carry markers, exactly the
+	// defect §12.1's suppress-and-disclose ruling exists to prevent. This is the DOM-
+	// level assertion Architect named as the one that would have caught it: a unit test
+	// of resolutionDisclosureFires alone (which was always correct) passes right over
+	// this, because the bug is confined to the SEPARATE suppression path.
+	it('⭐ imported-only state (no cron era at all): ZERO staleness markers render, however many carried points exist', () => {
+		const boundary = { first_cron_checkpoint: null, has_cron_rows: false, has_imported_rows: true };
+		const carried1 = point({ point_date: '2018-01-31', checkpoint_date: '2017-12-31' });
+		const carried2 = point({ point_date: '2018-02-28', checkpoint_date: '2018-01-31' });
+		const { queryAllByRole } = render(NavHistoryChart, {
+			props: {
+				points: [carried1, carried2],
+				paramsError: null,
+				params: PARAMS,
+				boundary
+			}
+		});
+		expect(queryAllByRole('img', { name: /NAV checkpoint carried from/ })).toHaveLength(0);
+	});
 });
 
 // ============================================================================
-// SELF-220-QA-r2 — 069 four-state RENDERED OUTPUT, not just helper math.
-// Architect-traced finding (2026-08-13, verified at b409e29): isPreBoundaryPoint
-// requires `boundary.first_cron_checkpoint !== null`, so in the IMPORTED-ONLY
-// state (069 state (b) — has_cron_rows=false, no boundary DATE exists yet
-// because no cron row exists yet) it returns FALSE for every point — there is
-// no date to compare against. That collapses suppression entirely in exactly
-// the state where it matters most: every carried imported point gets an
-// actionable staleness marker it shouldn't, and the nominal line's stepped
-// pre-boundary treatment never draws — the whole line renders as the post-
-// boundary linear segment instead. nav-boundary.test.ts's unit tests don't
-// catch this: they test isPreBoundaryPoint's RETURN VALUE correctly for what
-// it's asked, not what the COMPONENT does when that value is false across an
-// entire series. This describe block is the catching test, RED-proven at
-// b409e29 before Frontend's era-membership fix (isImportedEraPoint, landed
-// 94c298c) — re-run and confirmed GREEN on the combined tree before this file
-// itself was committed.
+// SELF-220-QA-r3 — QA reconcile pass (2026-08-13) against Frontend's landed
+// regression test above and team-lead/Sec's audit of it. Two residuals, not a
+// full re-cover: the disclosure-still-fires and mixed-state-splits-correctly
+// controls this reconcile also asked about are ALREADY covered by
+// SELF-220-QA-r1 above (the "resolution-disclosure copy" and "staleness
+// markers fire post-boundary ONLY" blocks) — nothing duplicated here.
+//
+// (A) SEC'S STATE-DRIVEN REQUIREMENT: the landed regression test above queries
+// `getByRole('img', { name: /NAV checkpoint carried from/ })` — coupled to the
+// marker's aria-label COPY, which a wording change would silently decouple
+// (the query would just stop matching and the test would pass VACUOUSLY, not
+// because the bug is fixed). It also independently reproduces a real crash: run
+// as-landed against the pre-fix source, `queryAllByRole` + `toHaveLength` on
+// the failing (non-empty) case throws an unrelated Svelte-internals error
+// instead of failing cleanly (same root cause recorded against SELF-220-QA-r2's
+// draft: the failure-message pretty-printer chokes serializing a raw array of
+// DOM elements) — confirmed while retro-proving RED, see hand-off notes.
+// Supplementing with a class-selector, state-driven form: same (null, false,
+// true) input Sec asked for, asserts on `.stale-marker` (the semantic marker
+// class) and on `.length` (a number, not the array), not on rendered text.
+//
+// (B) LINE-TREATMENT COVERAGE GAP: the landed regression test only asserts on
+// markers. It does not touch §12.6's other imported-only-state requirement —
+// the nominal line must draw its stepped treatment for EVERY point, not
+// collapse into the plain post-boundary linear segment. Added here.
 // ============================================================================
 
-describe('SELF-220-QA-r2 — imported-only state: suppression and line-split by ERA MEMBERSHIP, not boundary-date presence', () => {
+describe('SELF-220-QA-r3 — imported-only state, reconciled: state-driven marker check + line-treatment (residual after 94c298c)', () => {
 	const IMPORTED_ONLY_BOUNDARY = { first_cron_checkpoint: null, has_cron_rows: false, has_imported_rows: true };
-	// All three carried (checkpoint_date !== point_date) — a historical import gap, the
-	// exact shape ADR-053 Decision 7 exists to suppress. Dates sit inside PARAMS' window.
 	const CARRIED_IMPORTED_POINTS = [
 		point({ point_date: '2025-01-15', checkpoint_date: '2015-12-31' }),
 		point({ point_date: '2025-02-15', checkpoint_date: '2015-12-31' }),
 		point({ point_date: '2025-03-15', checkpoint_date: '2015-12-31' })
 	];
 
-	it('⭐ RED-at-b409e29: zero staleness markers — every point is carried, but there is no cron era yet to be stale relative to', () => {
-		// Plain DOM query (not queryAllByRole) — matches this block's other assertions'
-		// idiom and sidesteps an unrelated testing-library/jsdom role-query interaction
-		// that throws under this specific fixture; .stale-marker is the exact class
-		// NavChartLines.svelte applies to the same circles' role="img" element.
+	it('(A) state-driven: zero .stale-marker elements — not coupled to aria-label copy', () => {
 		const { container } = render(NavHistoryChart, {
 			props: {
 				points: CARRIED_IMPORTED_POINTS,
@@ -307,32 +335,15 @@ describe('SELF-220-QA-r2 — imported-only state: suppression and line-split by 
 			}
 		});
 		const markers = container.querySelectorAll('.stale-marker');
-		expect(markers).toHaveLength(0);
+		expect(markers.length).toBe(0);
 	});
 
-	it('control — already correct at b409e29: the resolution-disclosure still fires, isolating the marker/line defect from the disclosure logic', () => {
-		const { getByText } = render(NavHistoryChart, {
-			props: {
-				points: CARRIED_IMPORTED_POINTS,
-				paramsError: null,
-				params: PARAMS,
-				boundary: IMPORTED_ONLY_BOUNDARY
-			}
-		});
-		expect(getByText("Monthly resolution — daily/weekly tracking hasn't started yet.")).toBeTruthy();
-	});
-
-	it('⭐ RED-at-b409e29: the nominal line draws ENTIRELY as the stepped PRE-boundary treatment — no plain post-boundary linear segment renders', () => {
-		// NOTE: a bare "does .line-stepped exist" check is NOT sufficient here and was
-		// caught as a false-negative while authoring this leg — NavChartLines.svelte's
-		// join-point mechanism (preBoundaryJoined always appends postBoundaryPoints[0]
-		// when it's non-empty, so the two segments visually meet) makes a degenerate
-		// ONE-POINT `.line-stepped` path render even under the bug, because the single
-		// shared join point still satisfies `preBoundaryJoined.length > 0`. The actual
-		// defect is that ALL THREE real points end up classified post-boundary instead
-		// of pre-boundary, so the discriminating signal is the PLAIN linear segment's
-		// PRESENCE (it shouldn't exist at all when every point is pre-era), not the
-		// stepped segment's presence alone.
+	it('(B) the nominal line draws ENTIRELY as the stepped treatment — no plain post-boundary linear segment renders', () => {
+		// A bare ".line-stepped exists" check is NOT sufficient — NavChartLines.svelte's
+		// join-point mechanism always appends the first post-boundary point to the
+		// pre-boundary array when the latter is non-empty, so a degenerate ONE-POINT
+		// stepped path can render even under a bug that misclassifies everything else.
+		// The discriminating signal is the ABSENCE of the plain (non-stepped) segment.
 		const { container } = render(NavHistoryChart, {
 			props: {
 				points: CARRIED_IMPORTED_POINTS,
@@ -341,35 +352,9 @@ describe('SELF-220-QA-r2 — imported-only state: suppression and line-split by 
 				boundary: IMPORTED_ONLY_BOUNDARY
 			}
 		});
-		// Plain JS filtering over querySelectorAll results, not a `:not()` compound CSS
-		// selector — the compound form triggered an unrelated jsdom/Svelte-internals
-		// interaction under this specific fixture while authoring this leg. Root-caused
-		// further: it wasn't the selector OR the filter, it was asserting `toHaveLength`
-		// on an ARRAY OF RAW DOM ELEMENTS on a FAILING case — the failure-message
-		// pretty-printer tries to serialize the SVG <path> element and that's what
-		// crashes (a plain NodeList, e.g. the marker test's `.stale-marker` query below,
-		// printed fine on the identical kind of failure). Asserting on `.length` (a
-		// number) rather than the array itself sidesteps the printer entirely and keeps
-		// a clean, readable failure message on the actual RED case.
 		const nominalPaths = Array.from(container.querySelectorAll('.line-nominal'));
 		const plainLinearSegments = nominalPaths.filter((el) => !el.classList.contains('line-stepped'));
 		expect(container.querySelector('.line-stepped')).not.toBeNull();
 		expect(plainLinearSegments.length).toBe(0);
-	});
-
-	it('control — mixed state (already correct at b409e29): BOTH the stepped pre-boundary and linear post-boundary segments render, proving the selectors above are real and not absent-by-construction', () => {
-		const boundary = { first_cron_checkpoint: '2026-06-01', has_cron_rows: true, has_imported_rows: true };
-		const mixedPoints = [
-			point({ point_date: '2025-06-15', checkpoint_date: '2025-06-15' }),
-			point({ point_date: '2026-06-15', checkpoint_date: '2026-06-15' }),
-			point({ point_date: '2026-07-15', checkpoint_date: '2026-07-15' })
-		];
-		const { container } = render(NavHistoryChart, {
-			props: { points: mixedPoints, paramsError: null, params: PARAMS, boundary }
-		});
-		const nominalPaths = Array.from(container.querySelectorAll('.line-nominal'));
-		const plainLinearSegments = nominalPaths.filter((el) => !el.classList.contains('line-stepped'));
-		expect(container.querySelector('.line-stepped')).not.toBeNull();
-		expect(plainLinearSegments.length).toBeGreaterThan(0);
 	});
 });
