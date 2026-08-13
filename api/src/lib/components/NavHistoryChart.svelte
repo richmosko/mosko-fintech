@@ -177,7 +177,7 @@
 					{#if boundary.first_cron_checkpoint}
 						Monthly resolution before <span class="basis-value">{monthYear(boundary.first_cron_checkpoint)}</span>.
 					{:else}
-						Monthly resolution — daily tracking hasn't started yet.
+						Monthly resolution — daily/weekly tracking hasn't started yet.
 					{/if}
 				</p>
 			{/if}
