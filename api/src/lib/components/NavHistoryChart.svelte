@@ -218,6 +218,16 @@
 </section>
 
 <style>
+	/* Component-scoped custom property, set once and referenced by both the empty
+	   placeholder and the real chart canvas below — Visual Designer's optional DRY
+	   suggestion, taken: keeps the two states' height from silently drifting apart
+	   if one is ever tuned without the other. NOT a design-system token (Visual's
+	   ruling: no token needed here — same "component-intrinsic constant" category
+	   as count-badge's 1.25rem, per design-system-spec.md §4). */
+	.nav-history {
+		--_chart-canvas-height: 20rem;
+	}
+
 	.section-label {
 		margin: 0 0 var(--space-3);
 		font: var(--weight-semi) var(--fs-h3) / var(--lh-tight) var(--font-ui);
@@ -239,7 +249,7 @@
 		align-items: center;
 		justify-content: center;
 		gap: var(--space-2);
-		height: 20rem;
+		height: var(--_chart-canvas-height);
 		border: 1px dashed var(--c-border);
 		border-radius: var(--radius-md);
 		background: var(--c-surface);
@@ -308,11 +318,11 @@
 	/* ── chart canvas — LayerCake needs an explicit sized container ─────── */
 	.chart-canvas {
 		width: 100%;
-		/* No spacing/height token exists for a chart canvas intrinsic dimension
-		   (distinct from --space-* layout gaps) — flagged to Visual Designer as a
-		   possible future token; a plain rem value is used deliberately rather than
-		   inventing an unratified token name. */
-		height: 20rem;
+		/* Visual Designer's ruling: no design-system token needed for a chart-canvas
+		   intrinsic dimension (component-intrinsic constant, same category as
+		   count-badge's 1.25rem — design-system-spec.md §4). Shared with the empty
+		   placeholder above via --_chart-canvas-height so the two never drift apart. */
+		height: var(--_chart-canvas-height);
 	}
 
 	.chart-controls {
