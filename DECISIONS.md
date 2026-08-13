@@ -43,7 +43,7 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ## ADR-054 — Capture the observations now, defer the picture: a component-checkpoint substrate in V1.x, visualization and sheet-history in V2
 
-**Date:** 2026-08-12 · **Status:** **Proposed** — ⚠ deliberately not "Accepted". **Option C itself WAS F/CTO-ratified 2026-08-12** (the incumbent-exceeds-V1 component-history P-flag), and Decisions 1–4 and 6 record that ratify. **Decision 5's two scope-precision questions were NOT covered by the ratified P-flag text and remain OPEN; they close at this ADR's own F/CTO review, which flips the status to Accepted.** Marking the whole ADR Accepted now would claim a gate two of its statements have not passed. PM-framed, Architect-authored; Sec joint-review travels with the implementing migration, not with this ADR. · **Phase:** 6 (Build Loop).
+**Date:** 2026-08-12 · **Status:** **Accepted** (both Decision-5 questions ruled at this ADR's F/CTO doc-PR review, 2026-08-12 — the gate the Proposed-state text reserved for them). **Option C itself WAS F/CTO-ratified 2026-08-12** (the incumbent-exceeds-V1 component-history P-flag), and Decisions 1–4 and 6 record that ratify. Decision 5's two scope-precision questions were deliberately held OPEN until this review because the ratified P-flag text covered neither; their closure lines are recorded in Decision 5, and the surrounding recommendation/analysis text is preserved as the record of what the ruling was made over. PM-framed, Architect-authored; Sec joint-review travels with the implementing migration, not with this ADR. · **Phase:** 6 (Build Loop).
 
 **Numbering note.** ADR-053 was authored on a separate branch and lands with the historical-NAV-backfill item. This entry took **054** rather than 053 so that two different ADRs could never share one number and make every citation to "ADR-053" ambiguous. If this entry merged first, 053 was briefly absent from the sequence — **that gap was deliberate and self-resolving. Do not renumber to close it.**
 
@@ -95,15 +95,15 @@ Leaf granularity means the table carries an **`account_id`**, which is an FK-sha
 
 **Read Decision 3's body live when the migration is authored** — the family grows, its labels are non-contiguous, and *labeled* versus *DDL-realized* diverge. No count is carried here.
 
-### Decision 5 — The never-list (ratified), and two scope-precision questions that remain OPEN and close at this ADR's ratify
+### Decision 5 — The never-list (ratified), and two scope-precision questions, held open until this ADR's ratify and CLOSED there
 
-**⚠ The two questions below are OPEN, not decided.** Both carry a PM recommendation and an Architect analysis, and **both close at this ADR's own F/CTO ratify.** They are recorded this way deliberately: the ratified P-flag text covered neither statement, so presenting them as settled would claim a gate they have not passed. Attaching them to this ADR's review gives them a real gate at no extra cost.
+**Both questions below were held OPEN until this ADR's own F/CTO review and were RULED there (2026-08-12, doc-PR review):** the ratified P-flag text covered neither statement, so presenting them as settled earlier would have claimed a gate they had not passed. **(1) closed: no V1.x read helper — capture-only means write-path only, per the PM recommendation. (2) closed: documented parity property, not schema-enforced, per the PM recommendation — with one F/CTO rider recorded at the ruling: the scope of this identity/reconciliation treatment may become CONFIGURABLE in V2.x versions**, so the V2 visualization work should treat the documented-property posture as the V1-era default rather than a permanent ceiling. The recommendation and analysis text below is preserved unedited as the record of what the ruling was made over.
 
-**OPEN (1) — does "capture-only" forbid a V1.x READ HELPER?**
+**CLOSED (1) — does "capture-only" forbid a V1.x READ HELPER? Ruled: YES, forbidden.**
 *PM recommends: yes, forbid it — capture-only means write-path only; the read surface is V2 scope and ships with the visualization as its first consumer.*
 Architect concurs on the reasoning: a helper is not a UI, but it **is** a surface — an INVOKER read-composition function under Lock 11 carries its own contract, its own grants, and its own QA battery, i.e. **fence cost with no consumer**. Recording it as a recommendation rather than a ruling so that ratify decides it.
 
-**OPEN (2) — is the sheet identity a SCHEMA-ENFORCED INVARIANT or a DOCUMENTED PARITY PROPERTY?**
+**CLOSED (2) — is the sheet identity a SCHEMA-ENFORCED INVARIANT or a DOCUMENTED PARITY PROPERTY? Ruled: DOCUMENTED PARITY PROPERTY, with the V2.x-configurability rider above.**
 *PM recommends: documented parity property, not enforced — and identifies the schema-meaningful statement as a different one: for a given `(users_id, date)`, **Σ(leaf values) reconciles with the scalar `nav_daily` checkpoint**.*
 
 **PM's reframing is sharper than the question Architect first posed, and is adopted into the analysis.** Architect asked whether to enforce `Real Estate + Cash + Bonds + Equity + Alternatives − Liabilities = NAV`. Under Decision 3's leaf granularity **the schema never knows asset classes at all**, so enforcing that identity would mean fencing a taxonomy this substrate deliberately declines to carry. It would additionally presume the component set is **closed** and that every account maps to **exactly one** component — neither established.
@@ -120,7 +120,7 @@ Architect concurs on the reasoning: a helper is not a UI, but it **is** a surfac
 
 ⚠⚠ **THE ANALYSIS ABOVE IS CONTINGENT ON THE RECOMMENDED ANSWER, and says so rather than reading as unconditional** (PM's framing catch). Everything from "Architect analysis on the reconciliation form" onward presumes question (2) closes on **documented parity property**. **If F/CTO ratifies the other way — an enforced invariant — the fence question is REOPENED, not settled by this text:** an enforced asset-class identity would first have to establish that the component set is closed and that every account maps to exactly one component, and the watcher-over-fence argument would then have to be re-made against a different property than the one analysed here. **Do not carry this analysis across a ratify that goes the other way.**
 
-**Neither open question blocks Decision 1 or Decision 3**, and both must be closed before the implementing migration is drafted.
+**Neither question blocked Decision 1 or Decision 3; both are now closed ahead of the implementing migration**, whose preconditions they were. Because (2) closed on documented-parity-property, the contingent Architect analysis above stands as live design input: the Σ(leaves) ↔ scalar reconciliation is watched by a QA battery leg, not fenced by a CHECK (see Governance).
 
 **The never-list — RATIFIED, and recorded so these are not re-litigated:**
 - **No component columns on `pfin.nav_daily` (`054`)** — see Decision 2.
