@@ -13,8 +13,8 @@ import { error, redirect } from '@sveltejs/kit';
 import { loadNetWorthView } from '$lib/server/queries/netWorth';
 import { loadNavComposition } from '$lib/server/queries/navComposition';
 import { loadStaleness } from '$lib/server/queries/staleness';
-import { loadNavHistory, resolveNavHistoryWindow } from '$lib/server/queries/navHistory';
-import { navHistoryParamsSchema } from '$lib/server/schemas/navHistory';
+import { loadNavSeries, resolveNavSeriesWindow } from '$lib/server/queries/nav-series';
+import { navSeriesParamsSchema } from '$lib/server/schemas/nav-series-params';
 import { EMPTY_STALENESS } from '$lib/staleness/stale-constituent';
 import { serverTodayAsOf } from '$lib/server/time/asOf';
 import type { PageServerLoad } from './$types';
@@ -61,13 +61,14 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		composition = null;
 	}
 
-	// §2.1.2.c NAV-over-time chart (SELF-220), mounted below the composition
+	// §2.1.2.d NAV-over-time chart (SELF-220), mounted below the composition
 	// table (SELF-211/226). Query-param boundary: Zod `.strict()` REJECTS an
-	// unrecognized key or an unparseable value with a clean 400 — this is Lock
-	// 14's actual security boundary (input validation), a DIFFERENT failure
-	// class from a DB-read failure, and it is deliberately NOT fail-soft the
-	// way the reads below it are. A malformed chart param is caller error
-	// (or a deliberately hand-edited URL — normal UI interaction goes through
+	// unrecognized key, an unparseable value, or an inverted start/end (the
+	// schema's own `.refine()`) with a clean 400 — this is Lock 14's actual
+	// security boundary (input validation), a DIFFERENT failure class from a
+	// DB-read failure, and it is deliberately NOT fail-soft the way the reads
+	// below it are. A malformed chart param is caller error (or a
+	// deliberately hand-edited URL — normal UI interaction goes through
 	// Frontend's client-side mirror guard first and never sends one), and
 	// Lock 14's posture on caller error is REJECT OUTRIGHT, not silently
 	// coerce or default around it. Every OTHER read on this route degrades on
@@ -75,50 +76,47 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	// has always chosen to survive; this 400 is not a departure from that
 	// posture, it is upstream of it — bad input never reaches a "read failed"
 	// state at all, because it never becomes a read.
-	const rawNavHistoryParams = Object.fromEntries(url.searchParams);
-	const parsedNavHistoryParams = navHistoryParamsSchema.safeParse(rawNavHistoryParams);
-	if (!parsedNavHistoryParams.success) {
+	const rawNavSeriesParams = Object.fromEntries(url.searchParams);
+	const parsedNavSeriesParams = navSeriesParamsSchema.safeParse(rawNavSeriesParams);
+	if (!parsedNavSeriesParams.success) {
 		throw error(
 			400,
-			`Invalid nav-history query parameters: ${parsedNavHistoryParams.error.issues
+			`Invalid nav-series query parameters: ${parsedNavSeriesParams.error.issues
 				.map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)
 				.join('; ')}`
 		);
 	}
-	const navHistoryGranularity = parsedNavHistoryParams.data.granularity ?? 'monthly';
-	const { start: navHistoryStart, end: navHistoryEnd } = resolveNavHistoryWindow(
-		parsedNavHistoryParams.data.start,
-		parsedNavHistoryParams.data.end
+	const navSeriesGranularity = parsedNavSeriesParams.data.granularity ?? 'monthly';
+	const { start: navSeriesStart, end: navSeriesEnd } = resolveNavSeriesWindow(
+		parsedNavSeriesParams.data.start,
+		parsedNavSeriesParams.data.end
 	);
-	if (navHistoryStart > navHistoryEnd) {
-		// Only reachable when BOTH were caller-supplied and inverted —
-		// resolveNavHistoryWindow's own derivation can never produce this
-		// (a defaulted start is computed AS an offset before its own end).
-		// 067 would itself RAISE on this (062's argument validation), but
-		// failing here is a clean 400 naming the actual mistake rather than
-		// a Postgres exception surfacing through the RPC error path.
-		throw error(
-			400,
-			`Invalid nav-history query parameters: start (${navHistoryStart}) is after end (${navHistoryEnd}).`
-		);
-	}
+	// No post-resolve inversion check needed here: the schema's own
+	// `.refine()` above already rejects an inverted CALLER-SUPPLIED range,
+	// and resolveNavSeriesWindow can never PRODUCE one from defaulting (a
+	// defaulted start is computed as an offset before its own resolved end).
 
-	// Same FAIL-SOFT posture as staleness/composition above: a chart-data
-	// read failure must never take down the §2.1.1 headline NAV or any other
-	// section of this dashboard. loadNavHistory() already fails soft
-	// internally (degrades to []); this try/catch is the belt-and-suspenders
-	// boundary so an unexpected throw can't take down the whole route either.
-	let navHistory: Awaited<ReturnType<typeof loadNavHistory>> = [];
+	// §2.1.2.d fail-soft posture DIFFERS from staleness/composition above on
+	// PURPOSE: `null` = the read failed (logged, never thrown); `[]` = the
+	// read succeeded and found no points in range — a real, distinguishable
+	// state. Collapsing both into `[]` would make an RPC failure render the
+	// SAME "Collect data over time" empty-state copy (AC6) as a genuine
+	// zero-row series — the same class of hazard netWorth.ts's own header
+	// names at length for the old boolean `hasAccounts`. loadNavSeries()
+	// already fails soft internally to `null`; this try/catch is the
+	// belt-and-suspenders boundary so an unexpected throw degrades to the
+	// SAME `null` rather than taking down the whole route.
+	let navSeries: Awaited<ReturnType<typeof loadNavSeries>> = null;
 	try {
-		navHistory = await loadNavHistory(
+		navSeries = await loadNavSeries(
 			locals.supabase,
-			navHistoryGranularity,
-			navHistoryStart,
-			navHistoryEnd
+			navSeriesGranularity,
+			navSeriesStart,
+			navSeriesEnd
 		);
 	} catch (err) {
-		console.error('[+page.server] nav-history load threw; degrading to empty series:', err);
-		navHistory = [];
+		console.error('[+page.server] nav-series load threw; degrading to null:', err);
+		navSeries = null;
 	}
 
 	return {
@@ -127,11 +125,11 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		asOf,
 		staleness,
 		composition,
-		navHistory,
-		navHistoryParams: {
-			granularity: navHistoryGranularity,
-			start: navHistoryStart,
-			end: navHistoryEnd
+		navSeries,
+		navSeriesParams: {
+			granularity: navSeriesGranularity,
+			start: navSeriesStart,
+			end: navSeriesEnd
 		}
 	};
 };

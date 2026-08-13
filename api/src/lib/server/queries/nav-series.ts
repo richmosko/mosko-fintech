@@ -1,4 +1,4 @@
-// navHistory.ts — server-side read for the §2.1.2.c NAV-over-time chart
+// nav-series.ts — server-side read for the §2.1.2.d NAV-over-time chart
 // (SELF-220: nominal + inflation-adjusted, dual series). Backend-owned server
 // surface (ARCH §4.1 allowlist).
 //
@@ -13,6 +13,14 @@
 // RLS on `pfin.nav_daily` reached through 062 — a cross-tenant caller sees
 // zero rows, fails closed (067's own TENANT FENCE section).
 //
+// Row type is IMPORTED from $lib/nav-series.ts (Frontend-owned, browser-safe
+// — server code may import a non-server module, just not the reverse), not
+// redeclared here: that file is the single canonical mirror of 067's
+// eleven-column contract, complete with the gap/staleness/availability
+// presentation helpers built on top of it. A second, server-side type
+// declaration of the same shape would be exactly the drift risk this
+// codebase's account.ts / account-constants.ts split already fenced once.
+//
 // 067 RETURNS TABLE(...) — a SET-RETURNING RPC. supabase-js hands back an
 // ARRAY of rows (contrast navComposition.ts's SCALAR jsonb RPC, which takes
 // the object directly, and staleness.ts's set-returning-but-exactly-one-row
@@ -22,51 +30,29 @@
 // ⚠ NO AGGREGATION HAPPENS HERE, AND NONE MAY BE ADDED. 067's own header is
 // explicit that `nav_inflation_adjusted` is NULLABLE BY DESIGN and that a
 // consumer summing/averaging/maxing across the series must decide EXPLICITLY
-// what a NULL point means — this function is not that consumer. It returns
-// 067's row set exactly as emitted, in 067's own ascending-by-point_date
-// order (067's CONTRACT: "callers may rely on it"), so that decision stays
-// with whatever renders the chart, not buried in a query helper nobody
-// reviewing the chart code would think to check.
+// what a NULL point means — this function is not that consumer, and neither
+// is $lib/nav-series.ts's `inflationAdjustedSegments()` (it gaps, never
+// interpolates or skips). This function returns 067's row set exactly as
+// emitted, in 067's own ascending-by-point_date order (067's CONTRACT:
+// "callers may rely on it").
 //
-// Fail-soft is load-bearing (mirrors netWorth.ts / navComposition.ts /
-// staleness.ts): any error degrades to an EMPTY ARRAY (logged server-side,
-// never thrown) — a chart-data failure must never take down the §2.1.1
-// headline NAV or any other section of this dashboard route. Unlike
-// netWorth.ts's `accountPresence` hazard, there is no ambiguous falsy value
-// to guard here: an empty array IS the correct, legible "nothing to plot"
-// state, not a collapsed unknown.
+// ⚠ FAIL-SOFT TO `null`, NOT `[]` — DELIBERATELY DIFFERENT FROM
+// navHistory.ts's SUPERSEDED SHAPE (this file's earlier revision returned []
+// on every failure). Frontend caught the defect this would have reproduced:
+// AC6 renders an empty-series affordance ("Collect data over time") on a
+// GENUINE zero-row result, and `[]` cannot distinguish that from "the read
+// failed" — collapsing both into one falsy-shaped value is the SAME class of
+// hazard netWorth.ts's own header names at length for `accountPresence`
+// (`false` meaning both "verified none" and "unknown" was the original
+// defect there). This function mirrors navComposition.ts's convention
+// instead: `null` = the read failed (logged, never thrown); `[]` = the read
+// SUCCEEDED and found no points in range — a real, distinguishable state the
+// chart is expected to render as its own `empty` placeholder, not as
+// "unavailable".
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { NavHistoryGranularity } from '$lib/server/schemas/navHistory';
+import type { NavSeriesPoint, NavSeriesGranularity } from '$lib/nav-series';
 import { serverTodayAsOf } from '$lib/server/time/asOf';
-
-/**
- * One point of the §2.1.2.c series, normalized. Mirrors 067's ELEVEN-column
- * contract field-for-field — see migration 067's CONTRACT block for full
- * per-column semantics (the `cpi_*` columns implement the §2.4.4 CPI
- * rendering rule: NULL cpi_value → UNAVAILABLE; cpi_is_carried AND
- * cpi_period_was_due → an informational carried-basis marker; otherwise the
- * plain figure — rendering that rule is the chart's job, not this file's).
- */
-export type NavHistoryRow = {
-	point_date: string;
-	/** 062's nav_value, passed through unmodified. */
-	nav_nominal: number;
-	/** 062's checkpoint_date — surface NAV staleness when this differs from point_date. */
-	checkpoint_date: string;
-	/** NULL — never zero — when either CPI leg is absent or non-positive (067 DIVISION SAFETY). */
-	nav_inflation_adjusted: number | null;
-	/** point_date normalized to first-of-month (066's grain). */
-	cpi_period: string;
-	/** NULL when the CPI store has no usable print for cpi_period. */
-	cpi_value: number | null;
-	cpi_is_carried: boolean;
-	cpi_carried_from: string | null;
-	cpi_period_was_due: boolean;
-	cpi_nonpublication_on_record: boolean;
-	/** The CPI store's trailing coverage edge — identical on every row (067). */
-	cpi_coverage_through: string | null;
-};
 
 /**
  * Raw shape as it arrives from the RPC. Numeric columns may arrive as
@@ -74,7 +60,7 @@ export type NavHistoryRow = {
  * to be a JSON number for every value, mirroring netWorth.ts's own coercion
  * idiom ("a Postgres numeric may arrive as number OR string → coerce").
  */
-type RawNavHistoryRow = {
+type RawNavSeriesPoint = {
 	point_date: string;
 	nav_nominal: number | string;
 	checkpoint_date: string;
@@ -90,19 +76,18 @@ type RawNavHistoryRow = {
 
 /** NULL passes through; a non-NULL value that fails to coerce to a finite
  * number degrades to NULL rather than poisoning the chart with NaN — 067's
- * own DB-side guards mean this should never fire in practice (nav_value is
- * NOT NULL on every emitted row and the CPI legs are finiteness-fenced at
- * 053), but a transport-layer surprise degrading to the SAME "unavailable"
- * state a legitimate NULL already means is a safe failure, not a silent one:
- * it is logged, and every one of these columns is designed to be readably
- * absent on the rendered chart. */
+ * own DB-side guards mean this should never fire in practice (the CPI legs
+ * are finiteness-fenced at 053), but a transport-layer surprise degrading to
+ * the SAME "unavailable" state a legitimate NULL already means is a safe
+ * failure, not a silent one: it is logged, and every one of these columns is
+ * designed to be readably absent on the rendered chart. */
 function toNumberOrNull(v: number | string | null): number | null {
 	if (v === null) return null;
 	const n = Number(v);
 	return Number.isFinite(n) ? n : null;
 }
 
-function normalize(r: RawNavHistoryRow): NavHistoryRow {
+function normalize(r: RawNavSeriesPoint): NavSeriesPoint {
 	// nav_nominal is NOT NULL on every row 062 emits (067's CONTRACT) — a
 	// coercion failure here is transport corruption, not a legitimate state,
 	// so it degrades to 0 rather than null (there is no "nav unavailable for
@@ -149,8 +134,10 @@ function monthsBeforeIso(iso: string, months: number): string {
  * when absent: `end` defaults to TODAY (via `serverTodayAsOf()` — the SAME
  * server-clock-in-UTC derivation every other as-of on this route uses, see
  * asOf.ts; NOT re-derived here with a bare `new Date()`, which is exactly the
- * proliferation that file's header warns against) and `start` defaults to
- * `end` minus DEFAULT_WINDOW_MONTHS — relative to the RESOLVED end, so a
+ * proliferation that file's header warns against — and exactly the
+ * client-clock hazard Frontend's own client schema comment names as the
+ * reason this default must be SERVER-derived) and `start` defaults to `end`
+ * minus DEFAULT_WINDOW_MONTHS — relative to the RESOLVED end, so a
  * caller-supplied `end` with no `start` still gets a sensible trailing window
  * ending where they asked, not one anchored to today regardless.
  *
@@ -172,10 +159,10 @@ function monthsBeforeIso(iso: string, months: number): string {
  * brand becomes load-bearing.
  *
  * If BOTH `start` and `end` are supplied, both are returned unchanged
- * (already validated by navHistoryParamsSchema) — this function only fills
+ * (already validated by navSeriesParamsSchema) — this function only fills
  * in what is MISSING, never overrides what was given.
  */
-export function resolveNavHistoryWindow(
+export function resolveNavSeriesWindow(
 	start: string | undefined,
 	end: string | undefined
 ): { start: string; end: string } {
@@ -185,23 +172,26 @@ export function resolveNavHistoryWindow(
 }
 
 /**
- * Load the caller's §2.1.2.c NAV-over-time series, RLS-scoped via the
+ * Load the caller's §2.1.2.d NAV-over-time series, RLS-scoped via the
  * per-request anon/authenticated client. `startDate`/`endDate` are ISO date
- * strings (YYYY-MM-DD) — already validated by navHistoryParamsSchema and/or
- * defaulted to the 60-month window by the caller; this function performs no
- * further validation and trusts its arguments (067 itself still RAISEs on an
+ * strings (YYYY-MM-DD) — already validated by navSeriesParamsSchema and/or
+ * defaulted by resolveNavSeriesWindow; this function performs no further
+ * validation and trusts its arguments (067 itself still RAISEs on an
  * inverted or malformed range — see 062's CONTRACT — so a caller bug here
  * fails loud at the RPC boundary rather than returning silently-wrong rows).
  *
  * Fail-soft on any READ error (network, RPC failure, unexpected payload
- * shape): degrades to `[]`, logged server-side. See module header.
+ * shape): degrades to `null` — logged server-side, never thrown. `null`
+ * means "the read failed"; `[]` means "the read succeeded and found nothing
+ * in range" — see the module header for why these must never collapse into
+ * one value.
  */
-export async function loadNavHistory(
+export async function loadNavSeries(
 	supabase: SupabaseClient,
-	granularity: NavHistoryGranularity,
+	granularity: NavSeriesGranularity,
 	startDate: string,
 	endDate: string
-): Promise<NavHistoryRow[]> {
+): Promise<NavSeriesPoint[] | null> {
 	const { data, error } = await supabase.schema('pfin').rpc('fn_nav_series_inflation_adjusted', {
 		p_granularity: granularity,
 		p_start_date: startDate,
@@ -209,15 +199,15 @@ export async function loadNavHistory(
 	});
 
 	if (error) {
-		console.error('[navHistory] fn_nav_series_inflation_adjusted failed:', error.message);
-		return [];
+		console.error('[nav-series] fn_nav_series_inflation_adjusted failed:', error.message);
+		return null;
 	}
 	if (!Array.isArray(data)) {
 		console.error(
-			'[navHistory] fn_nav_series_inflation_adjusted returned a non-array payload; degrading to empty series'
+			'[nav-series] fn_nav_series_inflation_adjusted returned a non-array payload; degrading to null'
 		);
-		return [];
+		return null;
 	}
 
-	return (data as RawNavHistoryRow[]).map(normalize);
+	return (data as RawNavSeriesPoint[]).map(normalize);
 }
