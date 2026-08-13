@@ -36,7 +36,12 @@ const alias = {
 	),
 	'$env/dynamic/public': fileURLToPath(
 		new URL('./tests/stubs/env-dynamic-private.ts', import.meta.url)
-	)
+	),
+	// SELF-220: NavHistoryChart.svelte calls `goto()` / reads `page.url` from
+	// `$app/navigation` / `$app/state` — likewise unresolvable without `svelte-kit
+	// sync`. Same stub convention as the `$env/dynamic/*` aliases above.
+	'$app/navigation': fileURLToPath(new URL('./tests/stubs/app-navigation.ts', import.meta.url)),
+	'$app/state': fileURLToPath(new URL('./tests/stubs/app-state.ts', import.meta.url))
 };
 
 // Discovery excludes shared by both projects.
