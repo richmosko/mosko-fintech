@@ -4,7 +4,9 @@
 --   gate (a) pre-boundary staleness-marker suppression and (b) the
 --   "Monthly resolution before <date>" disclosure. SECURITY INVOKER
 --   read-composition (Lock 11). Linear SELF-220 (V1.1; PRD §2.1.2).
---   F/CTO-ratified 2026-08-12 (ADR-054 Decision 7(b) follow-on; three-field row
+--   F/CTO-ratified 2026-08-12 (ADR-053 Decision 7 follow-on — its RATIFIED
+--   suppress-and-disclose disposition, recorded at §12.1 of
+--   docs/DESIGN/flows/phase-2-flows-2.1-net-worth.md; three-field row
 --   as proposed). apply-migration procedure applied. JOINT-REVIEW-MANDATORY
 --   (Sec veto surface): new read-surface function over a multi-tenant financial
 --   table. Design note: temp/architect-boundary-date-exposure.md.
@@ -254,7 +256,8 @@ revoke execute on function pfin.fn_first_cron_checkpoint() from public;
 grant  execute on function pfin.fn_first_cron_checkpoint() to authenticated;
 
 comment on function pfin.fn_first_cron_checkpoint() is
-  'SECURITY INVOKER §2.1.2 boundary-date signal (V1.1; PRD §2.1.2 / SELF-220; ADR-054 Decision 7(b) follow-on; '
+  'SECURITY INVOKER §2.1.2 boundary-date signal (V1.1; PRD §2.1.2 / SELF-220; ADR-053 Decision 7 follow-on — its '
+  'ratified suppress-and-disclose disposition, flow doc §12.1; '
   'ADR-011 Lock 11 read-composition). Returns EXACTLY ONE ROW: (first_cron_checkpoint date, has_cron_rows boolean, '
   'has_imported_rows boolean) — where the cron era begins in pfin.nav_daily (054) FOR THE CALLING TENANT, so a consumer '
   'can gate pre-boundary staleness-marker suppression and the "Monthly resolution before <date>" disclosure. STABLE, '
