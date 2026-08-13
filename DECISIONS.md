@@ -41,6 +41,102 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-054 — Capture the observations now, defer the picture: a component-checkpoint substrate in V1.x, visualization and sheet-history in V2
+
+**Date:** 2026-08-12 · **Status:** **Accepted** (both Decision-5 questions ruled at this ADR's F/CTO doc-PR review, 2026-08-12 — the gate the Proposed-state text reserved for them). **Option C itself WAS F/CTO-ratified 2026-08-12** (the incumbent-exceeds-V1 component-history P-flag), and Decisions 1–4 and 6 record that ratify. Decision 5's two scope-precision questions were deliberately held OPEN until this review because the ratified P-flag text covered neither; their closure lines are recorded in Decision 5, and the surrounding recommendation/analysis text is preserved as the record of what the ruling was made over. PM-framed, Architect-authored; Sec joint-review travels with the implementing migration, not with this ADR. · **Phase:** 6 (Build Loop).
+
+**Numbering note.** ADR-053 was authored on a separate branch and lands with the historical-NAV-backfill item. This entry took **054** rather than 053 so that two different ADRs could never share one number and make every citation to "ADR-053" ambiguous. If this entry merged first, 053 was briefly absent from the sequence — **that gap was deliberate and self-resolving. Do not renumber to close it.**
+
+**Context.** The incumbent spreadsheet's page-3 "Category Totals" chart carries a component legend — Real Estate, Cash, Bonds, Equities, Alternatives, Liabilities — while [PRD §2.1.2](docs/PRD/index.html#story-2-1-2) locked only the two aggregate NAV lines. That is a documented incumbent-exceeds-V1 gap with **no owning story**. F/CTO holds the full historical component series and wants the visualization eventually.
+
+**The want's Expenses half is deliberately outside this ADR's scope** (PM, routed verbatim): *"Expenses history itself is NOT deferred here — it remains owned by the locked §2.3.4 Historical Expenditures story and its existing V1.3 backend issue."* The related *"Expenses roll up under Distributions (E)"* statement is an accounting-classification question and belongs to the Chart-of-Accounts decision (Decision 6), not to this one.
+
+**⚠ The asymmetry that decides the whole question, and it is not about cost.** A visualization can be built at any time from data that exists. **An observation not captured on the day it occurred cannot be recovered, ever.** The incumbent sheet stops producing component observations at drop-replace cutover; every day between that cutover and a V2 build is a permanent hole in the series — one that the sheet's *historical* data does not fill, because it covers the past and not the gap. **The irreplaceable asset is the daily observations, and it is the only part of this want with a clock on it.**
+
+### Decision 1 — Option C: capture-only substrate in V1.x; visualization and sheet-history import in V2
+
+**V1.x ships** a minimal capture-only component-checkpoint table, written by the same W-1 cron worker that writes the scalar checkpoint, under the same credential model (`054` header: LOGIN as `pfin_etl`, WRITE as `service_role` via `SET LOCAL ROLE`). **No UI, no chart, no backfill.** The series accrues from the moment it lands.
+
+**V2 ships** the subcomponent visualization, the import path for the incumbent's historical component data, and the Distributions-rollup presentation.
+
+**Rejected — Option A (full V1 treatment).** Milestone-scale: new Sec-fenced audit-class table *plus* joint-review *plus* QA battery *plus* worker change *plus* chart UI *plus* an import path, and it forces the taxonomy question to be answered now. It effectively re-opens the §2.1.2 scalar-only V1 lock, which is what "eventually" was said to avoid.
+
+**Rejected — Option B (pure V2 deferral).** Zero V1 cost and a **permanent data gap**. It trades a cost that recurs once for a loss that cannot be undone.
+
+> **The split is not a compromise between A and B — it is the recognition that the two halves have different reversibility.** Capture is urgent because it is irreversible if skipped; presentation is patient because it is reversible whenever built.
+
+### Decision 2 — A sibling table, NOT columns on the scalar checkpoint table
+
+The component data lands in a new append-only audit-class table beside `pfin.nav_daily` (`054`). **Adding component columns to `054` is a ratified never-item**, and the reasons are independent of taste:
+
+- `054`'s surface is Sec-fenced and joint-review-mandatory in its own header; widening it widens that surface.
+- `054` is **append-only with UPDATE and DELETE blocked by trigger for every role including `service_role`.** A column added to it gives **every existing row** a value nobody measured — a retroactive claim about history, on a table whose entire purpose is that its rows are historical facts.
+- The scalar series and the component series have different failure modes and should be able to fail independently. A component-capture bug must not be able to corrupt or block the scalar NAV checkpoint that [PRD §2.1.2](docs/PRD/index.html#story-2-1-2) actually locked.
+
+### Decision 3 — Capture at PER-ACCOUNT LEAF granularity, not pre-rolled categories
+
+PM flagged granularity as Architect's call. **Leaf.**
+
+> **A leaf capture is re-aggregatable retroactively under any taxonomy. A pre-rolled category capture is not.** Leaves can always be rolled up later; a rolled category can never be split back down.
+
+On an **append-only** table that asymmetry is permanent, which makes this the same reversibility argument the historical-backfill item's ADR turned on — *take the reversible option on a surface whose defining property is irreversibility*. Three things make it nearly free:
+
+- `pfin.fn_nav_composition` (`051`) **already emits per-account leaf values** — verified in the tree: its output shape is `{account_id, account_name, current_market_value, unrealized_gl}`. No new computation, and no new correctness surface to fence.
+- **It dissolves the only coupling to the Chart-of-Accounts question.** A category-keyed schema would commit to a category model *before* that question is answered; a leaf-keyed one lets any future taxonomy cut be applied retroactively. The CoA question then runs on its own clock.
+- **The taxonomy it would otherwise have to choose is not even settled.** `051`'s `category` output is literally `a.account_type` (verified: `a.account_type as category`) — an **account-type** taxonomy. F/CTO's sheet legend is **asset-class**, which cuts *across* accounts and lives in `user_taxonomy` / `user_asset_category` territory. **Those are two different cuts of the same portfolio**, and pre-rolling would have silently picked one.
+
+**Honest cost, stated rather than discovered:** row count scales with account count, daily, forever, on an append-only table. That is a growth commitment, not a free choice. It is bounded and cheap at V1 scale, and it is the price of not guessing the taxonomy.
+
+### Decision 4 — The new table joins the cross-tenant FK-bypass family, and matched-tenant validation is non-negotiable
+
+Leaf granularity means the table carries an **`account_id`**, which is an FK-shaped reference on a tenant-scoped table. That makes it an [ADR-011](DECISIONS.md#adr-011) **Decision 3** family member, requiring **explicit matched-tenant validation in the DDL** — a PostgreSQL FK validates that the referenced row *exists*, never that it is within the referring user's isolation scope.
+
+⚠ **This lands either way and is not a consequence of choosing leaf.** A category-keyed schema would reference `user_taxonomy` instead and would be equally in the family. **There is no granularity choice that avoids it**, which is worth stating so nobody reaches for pre-rolled categories believing it dodges the fence.
+
+**Read Decision 3's body live when the migration is authored** — the family grows, its labels are non-contiguous, and *labeled* versus *DDL-realized* diverge. No count is carried here.
+
+### Decision 5 — The never-list (ratified), and two scope-precision questions, held open until this ADR's ratify and CLOSED there
+
+**Both questions below were held OPEN until this ADR's own F/CTO review and were RULED there (2026-08-12, doc-PR review):** the ratified P-flag text covered neither statement, so presenting them as settled earlier would have claimed a gate they had not passed. **(1) closed: no V1.x read helper — capture-only means write-path only, per the PM recommendation. (2) closed: documented parity property, not schema-enforced, per the PM recommendation** — **with one F/CTO rider recorded at the ruling, in F/CTO's own words: *"the scope of this might be configurable in V2.x versions."*** (⚠ "this" is read as the identity/reconciliation treatment, the subject of the ruling — that expansion is the transcriber's, not F/CTO's.) **No inference is drawn from the rider here:** "might be configurable" is equally compatible with the posture remaining fixed, so it is recorded as a possibility F/CTO named rather than as a direction for V2 work. The recommendation and analysis text below is preserved unedited as the record of what the ruling was made over.
+
+**CLOSED (1) — does "capture-only" forbid a V1.x READ HELPER? Ruled: YES, forbidden.**
+*PM recommends: yes, forbid it — capture-only means write-path only; the read surface is V2 scope and ships with the visualization as its first consumer.*
+Architect concurs on the reasoning: a helper is not a UI, but it **is** a surface — an INVOKER read-composition function under Lock 11 carries its own contract, its own grants, and its own QA battery, i.e. **fence cost with no consumer**. Recording it as a recommendation rather than a ruling so that ratify decides it.
+
+**CLOSED (2) — is the sheet identity a SCHEMA-ENFORCED INVARIANT or a DOCUMENTED PARITY PROPERTY? Ruled: DOCUMENTED PARITY PROPERTY, with the V2.x-configurability rider above.**
+*PM recommends: documented parity property, not enforced — and identifies the schema-meaningful statement as a different one: for a given `(users_id, date)`, **Σ(leaf values) reconciles with the scalar `nav_daily` checkpoint**.*
+
+**PM's reframing is sharper than the question Architect first posed, and is adopted into the analysis.** Architect asked whether to enforce `Real Estate + Cash + Bonds + Equity + Alternatives − Liabilities = NAV`. Under Decision 3's leaf granularity **the schema never knows asset classes at all**, so enforcing that identity would mean fencing a taxonomy this substrate deliberately declines to carry. It would additionally presume the component set is **closed** and that every account maps to **exactly one** component — neither established.
+
+**Architect analysis on the reconciliation form, offered as design input to the same ratify — a WATCHER, not a FENCE:**
+
+- **The property holds BY CONSTRUCTION today.** Both figures derive from the same computation in the same cron transaction — `051`'s own header records that its NAV equals `Σ 049(active)` equals `fn_compute_nav(as_of, true)` *by construction*, from a single substrate by natural summation.
+- **A constraint enforcing a by-construction equality can never fire.** Its green is evidence of nothing — it is the first diagnostic question in `062`'s header (*"can this check ever fail?"*) answered wrongly — and it would impose a per-write cross-table aggregate on the nightly cron path to buy that.
+- **What deserves a watcher is whether the property STAYS by-construction.** A future change sourcing the components and the scalar differently, or applying a different active/as-of filter to each, would break it silently. **A battery assertion reports that regression; a write-time fence would instead start rejecting the cron's writes** — turning a derivation drift into a nightly outage.
+
+> **Prefer a watcher over a fence when the property is already guaranteed by construction — the fence adds runtime cost, cannot fail, and converts a future regression into an outage instead of a report.**
+
+⚠ **One coupling to state, because the equality quietly depends on it:** Σ(leaves) equals the scalar **only if both sides apply the same account-set filter** (the same active / as-of scoping). True today by shared derivation. If either filter is ever changed independently the reconciliation breaks for reasons unrelated to capture — and a battery leg is what would say so.
+
+⚠⚠ **THE ANALYSIS ABOVE IS CONTINGENT ON THE RECOMMENDED ANSWER, and says so rather than reading as unconditional** (PM's framing catch). Everything from "Architect analysis on the reconciliation form" onward presumes question (2) closes on **documented parity property**. **If F/CTO ratifies the other way — an enforced invariant — the fence question is REOPENED, not settled by this text:** an enforced asset-class identity would first have to establish that the component set is closed and that every account maps to exactly one component, and the watcher-over-fence argument would then have to be re-made against a different property than the one analysed here. **Do not carry this analysis across a ratify that goes the other way.**
+
+**Neither question blocked Decision 1 or Decision 3; both are now closed ahead of the implementing migration**, whose preconditions they were. Because (2) closed on documented-parity-property, the contingent Architect analysis above stands as live design input: the Σ(leaves) ↔ scalar reconciliation is watched by a QA battery leg, not fenced by a CHECK (see Governance).
+
+**The never-list — RATIFIED, and recorded so these are not re-litigated:**
+- **No component columns on `pfin.nav_daily` (`054`)** — see Decision 2.
+- **No reopening of the [PRD §2.1.2](docs/PRD/index.html#story-2-1-2) scalar-only V1 lock.** This ADR adds a substrate; it changes nothing the user sees in V1.
+- **Expenses history stays where it is** — owned by the locked §2.3.4 Historical Expenditures story and its existing backend item. It does not fold into this substrate, and the "Expenses roll up under Distributions (E)" statement is an accounting-classification question belonging to the Chart-of-Accounts decision, not to this one.
+
+### Decision 6 — Orthogonality to the Chart-of-Accounts question is preserved by construction
+
+The CoA / hierarchical-accounts question is a **separate** decision with its own proposal and its own ADR. **Ratifying Option C ratifies no CoA position, and the CoA answer does not reopen this decision's V1/V2 boundary.** Their single coupling point was a category-keyed capture schema — and **Decision 3 dissolves it**, so the orthogonality is now structural rather than merely asserted.
+
+**Governance.** §10 catalogued-instance ledger **unchanged** ([ADR-011](DECISIONS.md#adr-011) Decision 4 read verbatim before drafting, 2026-08-12 at `58ca6ed`; Path B — linked, not restated, no count carried). ⚠ The **catalogued** and **CI-fenced** sets are different sets and are not reconciled here. **SECURITY DEFINER allowlist unchanged** — this ADR authors no function; read [ADR-011](DECISIONS.md#adr-011) Decision 9 live. **[ADR-011](DECISIONS.md#adr-011) Decision 3 family — UNCHANGED BY THIS ADR, which authors no DDL, and +1 WHEN THE IMPLEMENTING MIGRATION LANDS** (Decision 4 above). **No migration, no DDL, no policy, no grant, no trigger in this ADR.**
+
+**Gates that travel with the implementing migration, not with this ADR:** Sec joint-review is **mandatory** (new tenant-scoped audit-class financial table + new RLS + a cron write-path extension + a Decision 3 family extension — four independent triggers). QA pairs a two-tenant pgTAP battery in the same PR — and **if Decision 5's open question (2) closes on the reconciliation form, that battery carries the Σ(leaves) ↔ scalar-checkpoint leg**: the property is by-construction today, so the leg exists to catch it ceasing to be, which nothing else would notice. The aal2 step-up backstop clause is **required** on the new table's `authenticated` policies — it is a new sensitive tenant-owned `pfin` table and therefore inherits the standing obligation; none of the three documented exclusions apply.
+
+**Cross-references.** `supabase/migrations/054_nav_daily.sql` (the scalar sibling; its credential model, append-only triggers, and the never-add-columns ruling) · `051_fn_nav_composition.sql` (the per-account leaf source; its `category` output is `account_type`, which is why Decision 3 declines to pre-roll) · `049_fn_account_unrealized_gl.sql` (the leaf substrate `051` composes on) · `009_user_taxonomy.sql` + `022_user_asset_category.sql` (the asset-class cut, distinct from account-type) · [ADR-011](DECISIONS.md#adr-011) Decision 2 (immutable audit-class posture) / Decision 3 (the family this will join) / Decision 4 (§10, unchanged) / Lock 11 · [ADR-029](DECISIONS.md#adr-029) + `025` (the aal2 backstop the new table must clause) · [ADR-040](DECISIONS.md#adr-040) (the forward-only checkpoint model this parallels) · [PRD §2.1.2](docs/PRD/index.html#story-2-1-2) (the scalar-only V1 lock, unchanged by this ADR) · PRD §2.2.2 (the asset-class taxonomy territory) · the ADR accompanying the historical-NAV-backfill item (the reversibility principle Decision 3 reuses — **note it lands with that item's branch, so this link dangles until that merges**).
+
 ## ADR-053 — Forward-only was a rule against FABRICATION, not against IMPORT: `pfin.nav_daily` admits externally-measured history and still forbids recomputed history
 
 **Date:** 2026-08-12 · **Status:** Accepted — F/CTO ratified 2026-08-12. Architect-authored; Sec joint-review mandatory (it edits `054`'s surface, which `054`'s own text makes a trigger, and it authorizes a new write path into a multi-tenant financial table). · **Phase:** 6 (Build Loop).
