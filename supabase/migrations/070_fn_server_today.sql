@@ -121,11 +121,22 @@
 --   2. SAME-TRANSACTION STABILITY — two calls inside one transaction return the
 --      SAME value. This is R2's guarantee in its testable form; assert it
 --      directly rather than trusting the STABLE marker.
---   3. AGREES WITH THE SESSION'S OWN `current_date` in the same session. ⚠ This
---      leg exists to pin that the function does NOT try to be clever — a future
---      "improvement" hard-pinning UTC inside it would BREAK R2 by making the
---      function and its caller disagree, which is the exact inversion the header
---      warns about.
+--   3. ⭐ TRACKS THE LIVE CLOCK — `fn_server_today() = current_date`, asserted
+--      UNDER BOTH EXTREME SESSION ZONES (e.g. Pacific/Kiritimati UTC+14 and
+--      Pacific/Midway UTC-11). The two values must AGREE WITH EACH OTHER in each
+--      zone; they need NOT agree ACROSS zones.
+--      ⚠⚠ DO NOT AUTHOR THIS AS 069's ZONE LEG BY HABIT. 069 asserts
+--      BYTE-IDENTICAL OUTPUT ACROSS two extreme zones. Asserting that here would
+--      test something R2 DOES NOT PROMISE and which may legitimately be FALSE —
+--      near a day boundary the honest answer genuinely differs by zone, and a
+--      passing "identical across zones" leg would mean the function had stopped
+--      tracking the session, i.e. had BROKEN R2. **The 069 shape is not merely
+--      inapplicable here; it is inverted.** (QA raised this from a close reading
+--      of R2; recorded because the habit is the hazard.)
+--      What the leg pins: the function does not cache, and does not try to be
+--      clever — a future "improvement" hard-pinning UTC inside it would make the
+--      function and its caller disagree, which is exactly the inversion the
+--      header warns about.
 --   4. PST1-SHAPE POSTURE LEG, read declaratively from the catalog: prosecdef
 --      false (INVOKER), provolatile 's' (STABLE), proconfig pins search_path
 --      empty. Behaviour alone cannot distinguish INVOKER from DEFINER.

@@ -251,6 +251,36 @@
 --  12. ⚠ SEC'S FULL-STATE-TUPLE CRITERION applies wherever this consumes another
 --      helper's row: assert the WHOLE returned tuple, not only the field under
 --      test, so a neighbouring field silently changing is caught.
+--
+--   ⚠⚠ HOW THE BATTERY PINS "TODAY" WHEN THIS FUNCTION DERIVES IT INTERNALLY.
+--   QA asked, having assumed a `p_as_of` parameter. THERE IS NONE AND THERE MUST
+--   NOT BE: a client-suppliable as-of is precisely the two-clock hazard ADR-044
+--   exists to pin, and a test-only override would be that same surface wearing a
+--   different name — Sec-reviewable, and it would make the battery exercise a
+--   code path production never takes. The determinism comes from three
+--   properties that already exist, not from a new mechanism:
+--     (a) TRANSACTION-SCOPED STABILITY. `current_date` is fixed for the lifetime
+--         of a transaction and 070 is STABLE, so INSIDE ONE ROLLED-BACK TEST
+--         TRANSACTION this function's "today" CANNOT MOVE. Read
+--         pfin.fn_server_today() ONCE at the top of the transaction into a
+--         variable and every later call in that transaction agrees with it —
+--         including a suite that straddles midnight, which is the case a
+--         read-at-the-start-of-the-file approach would silently get wrong.
+--     (b) ⭐ THE ARITHMETIC NEEDS NO PREDICTED ANCHOR, because this function
+--         RETURNS the anchor it used. Seed month-end checkpoints densely enough
+--         to cover all five horizons, then assert
+--             delta_nominal = nav_at(anchor_checkpoint_date) - nav_at(current cp)
+--         reading BOTH from the fixture by the dates the function REPORTS. The
+--         crux arithmetic leg is then fully deterministic and INDEPENDENT OF WHAT
+--         DAY IT IS. >> The provenance columns added for the UI turn out to be
+--         what makes the battery deterministic; that was not the reason for them,
+--         and it is a reason to keep them. <<
+--     (c) ANCHOR DERIVATION IS TESTED SEPARATELY AND BY AN INDEPENDENT ROUTE.
+--         A small number of legs assert anchor_date itself against month-ends
+--         computed in the TEST by different arithmetic than the body uses.
+--         ⚠ Do NOT compute the expected anchor with the body's own expression —
+--         a shared mistake in month-end derivation would then be invisible,
+--         which is testing the implementation against itself.
 --   ⚠ `supabase db reset` is PROHIBITED — it destroys F/CTO's local test data.
 --   Verify non-destructively (apply-in-txn + rollback).
 -- ============================================================================
