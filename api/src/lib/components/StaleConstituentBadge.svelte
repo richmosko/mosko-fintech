@@ -67,7 +67,15 @@
 </script>
 
 {#if show}
-	<div class="stale-marker" role="group" aria-label={summary}>
+	<!-- CLASS NAME: `.stale-connection-marker`, not the shorter `.stale-marker` — QA flagged
+	     (SELF-229) that NavChartLines.svelte's UNRELATED checkpoint-carry marker
+	     (<g class="stale-marker" role="img">, a per-point chart annotation) already owns that
+	     name and both render inside NavHistoryChart's tree; a bare `.stale-marker` DOM query
+	     would silently sum two different signals. Renamed here (this component's own class,
+	     not NavChartLines') to remove the landmine — the two are discriminable by `role`
+	     ("group" here vs "img" there) but a distinct class name is cheaper than relying on
+	     every future query remembering that. -->
+	<div class="stale-connection-marker" role="group" aria-label={summary}>
 		<button
 			type="button"
 			class="stale-tag"
@@ -105,7 +113,7 @@
 {/if}
 
 <style>
-	.stale-marker {
+	.stale-connection-marker {
 		display: inline-flex;
 		flex-direction: column;
 		align-items: flex-start;

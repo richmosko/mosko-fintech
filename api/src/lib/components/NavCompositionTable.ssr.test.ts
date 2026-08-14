@@ -135,7 +135,7 @@ describe('NavCompositionTable — SELF-229 section shell + D1 stale-data-marker'
 
 	it('staleness prop omitted → zero-footprint, no badge markup', () => {
 		const { body } = render(NavCompositionTable, { props: { composition: fixture } });
-		expect(body).not.toContain('stale-marker');
+		expect(body).not.toContain('stale-connection-marker');
 		expect(body).not.toContain('May be stale');
 	});
 

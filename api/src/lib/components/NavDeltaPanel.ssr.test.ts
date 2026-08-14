@@ -326,7 +326,7 @@ describe('NavDeltaPanel — SELF-229 D1 stale-data-marker (whole-user, shared wi
 	it('staleness prop omitted → zero-footprint, no badge markup', () => {
 		const rows = fixture();
 		const { body } = render(NavDeltaPanel, { props: { rows } });
-		expect(body).not.toContain('stale-marker');
+		expect(body).not.toContain('stale-connection-marker');
 		expect(body).not.toContain('May be stale');
 	});
 

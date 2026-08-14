@@ -3,8 +3,12 @@
 // `svelte/server` (already-installed `svelte` 5) — NO jsdom / NO @testing-library.
 //
 // WHAT THIS COVERS (the zero-footprint render/remove discipline — AC#5 marks-never-suppresses):
-//   • stale-injected  → the marker RENDERS (a visible ".stale-marker" group + the "May be stale"
-//                        tag + the accessible standing-condition summary naming the stale count).
+//   • stale-injected  → the marker RENDERS (a visible ".stale-connection-marker" group + the "May
+//                        be stale" tag + the accessible standing-condition summary naming the
+//                        stale count). Renamed from ".stale-marker" (SELF-229, QA finding) — that
+//                        shorter name collides with NavChartLines.svelte's UNRELATED per-point
+//                        checkpoint-carry marker (<g class="stale-marker" role="img">), which
+//                        renders inside the SAME NavHistoryChart tree this badge also mounts in.
 //   • un-stale         → the badge renders NOTHING (zero-footprint) — proves it REMOVES on the next
 //                        render cycle after re-auth (mirrors CountBadge zero-footprint discipline).
 //   • flag/list disagree (isStale=true but empty list) → NOTHING (the component's defensive
@@ -43,7 +47,7 @@ describe('StaleConstituentBadge — render/remove footprint (SSR)', () => {
 		const { body } = render(StaleConstituentBadge, {
 			props: { isStale: true, staleItems: [item('login_required', 1)] }
 		});
-		expect(body).toContain('stale-marker');
+		expect(body).toContain('stale-connection-marker');
 		expect(body).toContain('May be stale');
 		// The accessible standing-condition summary names the stale count on the control.
 		expect(body).toContain('1 account is contributing possibly-stale data to this total.');
@@ -65,7 +69,7 @@ describe('StaleConstituentBadge — render/remove footprint (SSR)', () => {
 			props: { isStale: false, staleItems: [] }
 		});
 		expect(visible(body)).toBe('');
-		expect(body).not.toContain('stale-marker');
+		expect(body).not.toContain('stale-connection-marker');
 		expect(body).not.toContain('May be stale');
 	});
 

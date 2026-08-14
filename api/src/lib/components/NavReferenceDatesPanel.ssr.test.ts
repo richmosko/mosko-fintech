@@ -271,7 +271,7 @@ describe('NavReferenceDatesPanel — SELF-229 D1 stale-data-marker (whole-user, 
 	it('staleness prop omitted → zero-footprint, no badge markup', () => {
 		const rows = fixture();
 		const { body } = render(NavReferenceDatesPanel, { props: { rows } });
-		expect(body).not.toContain('stale-marker');
+		expect(body).not.toContain('stale-connection-marker');
 		expect(body).not.toContain('May be stale');
 	});
 
