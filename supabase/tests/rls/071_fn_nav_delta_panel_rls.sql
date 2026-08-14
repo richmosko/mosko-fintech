@@ -10,9 +10,16 @@
 --   83cf781 (return-shape option A adds current_checkpoint_date; the
 --   negative-anchor guard widens from `<> 0` to `> 0`; the two-clock/ytd
 --   header paragraph gained a documentation-only correction, no code change —
---   see the migration header, no battery leg needed for that one). Every leg
---   below is one line of that migration's own QA TEST-PAIRING block
---   (items 1-12).
+--   see the migration header, no battery leg needed for that one), AND
+--   supabase/migrations/072_fn_nav_delta_panel_real_percent.sql (the
+--   §2.1.3.b AC3 amendment — DROP+CREATE adds delta_inflation_adjusted_percent
+--   at ordinal 8, shifting cpi_basis_period/cpi_any_carried/cpi_unavailable
+--   down one ordinal each; re-issues the grants and the comment the DROP
+--   destroys). This file now binds to the CURRENT (072) object — there is
+--   only one live `pfin.fn_nav_delta_panel()` at a time, so this battery
+--   evolves with it rather than forking a parallel file per migration. Every
+--   leg below is one line of 072's own QA TEST-PAIRING block (items 1-16;
+--   items 1-12 inherited from 071, items 13-16 new at 072).
 --
 --   ⚠ NO p_as_of PARAMETER — DELIBERATE (a client-suppliable as-of would BE
 --   the two-clock hazard ADR-044 closes). "Today" is derived internally via
@@ -24,22 +31,42 @@
 --   YTD anchor, 1y/3y/5y offsets) — this is fixture SCAFFOLDING (knowing
 --   WHICH calendar dates to seed), not the thing under test. What IS
 --   independently computed, by hand, in plain arithmetic, is the
---   inflation-adjusted VALUE at (1) below — the crux this migration exists
---   to fix.
+--   inflation-adjusted VALUE at (1) below — the crux 071 exists to fix, now
+--   extended to the real-terms PERCENT 072 adds on the SAME fixture.
 --
---   Contract as landed:
+--   ⚠ POSITIONAL-READ AUDIT (072 handoff instruction): every one of the 34
+--   legs inherited from 071 was checked against the ordinal shift. NONE of
+--   them read the row positionally — each SELECT lists columns BY NAME (or
+--   accesses a `select *`-sourced CTE's fields by name, see (ANCHOR-P2)),
+--   which Postgres resolves by name regardless of physical catalog order.
+--   No leg needed re-deriving; (SHAPE1) below is the ONE leg in this file
+--   that deliberately reads the row positionally, by design, so an ordinal
+--   regression is caught by name going forward instead of by accident.
+--
+--   Contract as landed (071 + 072):
 --     returns table (horizon text, anchor_date date, anchor_checkpoint_date
 --       date, current_checkpoint_date date, delta_nominal numeric,
 --       delta_percent numeric, delta_inflation_adjusted numeric,
---       cpi_basis_period date, cpi_any_carried boolean, cpi_unavailable
---       boolean) — TEN columns, current_checkpoint_date newly inserted at
---       position 4 (F/CTO ratify 2026-08-13, return-shape option A).
+--       delta_inflation_adjusted_percent numeric, cpi_basis_period date,
+--       cpi_any_carried boolean, cpi_unavailable boolean) — ELEVEN columns,
+--       delta_inflation_adjusted_percent newly inserted at position 8 (072,
+--       F/CTO ratify 2026-08-14, the §2.1.3.b AC3 amendment).
 --     SECURITY INVOKER · STABLE · set search_path = '' · NO ARGUMENTS.
 --     EXACTLY FIVE ROWS ALWAYS: month/ytd/1y/3y/5y, fixed order.
 --     Formula: delta_inflation_adjusted = nav_current*(cpi_ye/cpi_current)
 --       - nav_anchor*(cpi_ye/cpi_anchor) — THREE CPI observations, each
 --       endpoint deflated separately THEN differenced (never the single-ratio
---       defective draft this migration's header records at length).
+--       defective draft the 071 migration header records at length).
+--     072: delta_inflation_adjusted_percent = delta_inflation_adjusted /
+--       real_base * 100, where real_base = nav_anchor*(cpi_ye/cpi_anchor) —
+--       the SAME deflated-anchor term the dollar formula's subtrahend already
+--       is, bound once in the body. NULL — never 0 — wherever
+--       delta_inflation_adjusted is NULL, or where real_base is not strictly
+--       positive (equivalent to a non-positive anchor NAV under the CPI
+--       guard, but written on the actual denominator). ⚠ NO ROUNDING IS
+--       APPLIED — `numeric` division residue means an exact-equality leg
+--       against a hand-computed decimal can RED on a correct function; use
+--       ROUND or a tolerance (see (CRUX1P)).
 --     delta_percent guard is `v_a_nav > 0` (was `<> 0`): a NEGATIVE anchor now
 --       NULLs delta_percent too (a negative base inverts the sign), while
 --       delta_nominal/delta_inflation_adjusted stay computed and unguarded.
@@ -72,16 +99,42 @@
 -- │          never sign-flipped.                                                        │
 -- │ (7)  T   two-tenant, non-vacuously: identical dates, different nav_values.          │
 -- │ (8)  X   cross-tenant / zero-checkpoint tenant -> five all-NULL rows. (LEAK)         │
--- │          corrupt-the-control: nav_daily_select broken open to using(true)           │
--- │          leaks B's checkpoint into A's read DETERMINISTICALLY — A and B's           │
--- │          month-anchor dates are deliberately one day apart (Sec's note) so a        │
--- │          same-date tie can never make this leg flaky.                              │
+-- │          corrupt-the-control: nav_daily_select broken open to using(true) proves    │
+-- │          A's read returns something OTHER than A's OWN row. Asserted as a           │
+-- │          NEGATIVE (Sec finding, 2026-08-14: NOT a specific other tenant's value —    │
+-- │          the A/B one-day offset defends A-vs-B ties, not a third party landing on    │
+-- │          :base), so it is robust to whatever else the database carries.             │
 -- │ (9)  M   aal2 backstop, both legs.                                                  │
 -- │ (10) PST1 catalog posture for 071 (070's own posture is 070's own battery).         │
--- │ (11) A   ACL: authenticated yes, PUBLIC no, service_role no.                        │
+-- │ (11) A   ACL: authenticated yes, PUBLIC no, service_role no, anon no (A4, 072).      │
 -- │ (12) TUP full-state-tuple discipline — every full-row assertion below reads         │
 -- │          the WHOLE row (results_eq / multi-field ok()), never a single column       │
--- │          in isolation, satisfying Sec's criterion at the point of use.              │
+-- │          in isolation, satisfying Sec's criterion at the point of use. NOW          │
+-- │          PRIMARY (072 item 12): the DROP+CREATE means a botched re-issue is         │
+-- │          silent to any leg that doesn't read the full row.                          │
+-- │ (13) SHAPE eleven columns by NAME, TYPE and ORDINAL, read off pg_proc's own         │
+-- │          catalog (unnest WITH ORDINALITY) — the one leg that IS positional,         │
+-- │          by design, so a future column drop/reorder is loud.                        │
+-- │ (14) BASE0 NULL — never 0 — on a non-positive DEFLATED anchor base, both            │
+-- │          sub-cases: zero anchor NAV (REALBASE0) and negative anchor NAV with a      │
+-- │          positive current NAV (NEG1P) — both dollar columns still present,          │
+-- │          only the two percent columns go NULL.                                     │
+-- │ (15) CAUSE1c the insufficient-history NULL cause, now proven on an ADJ-ELIGIBLE     │
+-- │          horizon (072's percent column goes NULL via that path too) — (CAUSE2)      │
+-- │          and (CAUSE3) widened in place to cover the same column on the              │
+-- │          CPI-unresolvable and not-applicable rows.                                  │
+-- │ (16) COMMENT1 the catalog comment SURVIVES the DROP+CREATE — otherwise invisible    │
+-- │          to every other leg, none of which reads it. (PST1)/(A1-A3) unchanged in    │
+-- │          content but now PRIMARY, not confirmatory (the DROP defaults to            │
+-- │          EXECUTABLE BY PUBLIC if the re-grant is ever dropped).                     │
+-- └─ 072 item 1 (AMENDED): (CRUX1P/2P/3P) assert delta_inflation_adjusted_percent on the SAME
+--    fixture as (CRUX1-3), rounded/exact per residue; (INV1) the co-null check plus the
+--    same-sign-where-both-present check, needing nothing but the rows — ⚠ TENANT-A-SCOPED,
+--    NOT a universal claim: the dollar/percent relation is a ONE-WAY implication (dollar NULL
+--    -> percent NULL), never a biconditional (REALBASE0/NEG1P prove the dollar column STAYS
+--    PRESENT while the percent goes NULL on a non-positive real_base) — INV1's co-null half
+--    only holds because A's fixture never hits that state; do not widen INV1 to another
+--    tenant's panel expecting it to still pass.
 -- └──────────────────────────────────────────────────────────────────────────────────────┘
 --
 -- ⚠ `supabase db reset` is PROHIBITED — destroys F/CTO's active local test data.
@@ -92,14 +145,20 @@ begin;
 
 \ir ../_fixtures/rls_verbs.psql
 
--- plan = 34 : 3 fixture pins (Z) + 3 crux arithmetic (CRUX) + 1 five-rows-order
--- (FIVE) + 5 independent anchor-derivation properties (ANCHOR-P1..P5)
--- + 4 null-cause (CAUSE) + 4 carry provenance (CARRY1 NAV-side, CARRY2
--- CPI-side, CARRY3 current-side, CARRY4 jan/feb basis-carry) + 1 zero-anchor
--- percent (PCT0) + 1 negative-anchor percent (NEG1) + 2 CPI guard (CPIG)
--- + 2 two-tenant (T) + 1 cross-tenant (X) + 1 corrupt-the-control leak canary
--- (LEAK) + 2 aal2 (M) + 1 catalog posture (PST1) + 3 ACL (A).
-select plan(34);
+-- plan = 44 : the 34 inherited from 071 (3 fixture pins (Z) + 3 crux arithmetic
+-- (CRUX) + 1 five-rows-order (FIVE) + 5 independent anchor-derivation properties
+-- (ANCHOR-P1..P5) + 4 null-cause (CAUSE) + 4 carry provenance (CARRY1 NAV-side,
+-- CARRY2 CPI-side, CARRY3 current-side, CARRY4 jan/feb basis-carry) + 1
+-- zero-anchor percent (PCT0) + 1 negative-anchor percent (NEG1) + 2 CPI guard
+-- (CPIG) + 2 two-tenant (T) + 1 cross-tenant (X) + 1 corrupt-the-control leak
+-- canary (LEAK) + 2 aal2 (M) + 1 catalog posture (PST1) + 3 ACL (A)) + 10 new
+-- at 072 (SHAPE1 + CRUX1P/CRUX2P/CRUX3P + INV1 + REALBASE0 + NEG1P + CAUSE1c +
+-- COMMENT1 + A4 anon ACL, Sec finding). CAUSE2/CAUSE3/X1/M1 are WIDENED in
+-- place (same leg, one more column in an existing predicate) — not counted
+-- as new. (LEAK1) is REWRITTEN in place (Sec finding: assert the negative,
+-- `<> 690000`, not the specific value `= 6900000` — see its own header) —
+-- also not a count change.
+select plan(44);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb, _rls.tenant_c() as tc \gset
 \set td '00000000-0000-0000-0000-000000000d71'
@@ -258,11 +317,19 @@ select set_config('role', 'postgres', true);
 -- at the 1y checkpoint (-50,000) for the sibling negative-anchor leg (NEG1) —
 -- 1y is adj-eligible, so this tenant proves delta_inflation_adjusted stays
 -- present over a negative base too, not just delta_nominal.
+-- 072 ADDITION (item 14(a), REALBASE0): a THIRD row at the 3y anchor, ALSO
+-- value ZERO — 3y is adj-eligible (month is not), so this is the case the
+-- month row can't reach: a zero anchor NAV feeding a zero DEFLATED base
+-- (real_base = 0 * cpi_ratio = 0), which must NULL delta_inflation_adjusted_
+-- percent by the SAME "never 0" principle as delta_percent, while
+-- delta_nominal and delta_inflation_adjusted (500000*(300/320) - 0 = 468750)
+-- both still stand. Additive only — does not touch the month/1y rows above.
 select set_config('app.nav_computed_for', :'tf', true);
 insert into pfin.nav_daily (users_id, nav_date, nav_value) values
   (:'tf', :'today'::date, 500000),
   (:'tf', :'base'::date, 0),
-  (:'tf', :'a1y'::date, -50000)
+  (:'tf', :'a1y'::date, -50000),
+  (:'tf', :'a3y'::date, 0)
 on conflict (users_id, nav_date) do nothing;
 select set_config('role', 'postgres', true);
 
@@ -300,6 +367,58 @@ select is(
 select set_config('role', 'postgres', true);
 
 -- =====================================================================
+-- (1, AMENDED) 072 item 1 — THE AMENDED COLUMN: delta_inflation_adjusted_percent,
+--   on the SAME fixture as (CRUX1-3). real_base = anchor NAV * (cpi_ye/cpi_anchor)
+--   — the SAME term the dollar formula's subtrahend already is:
+--     1y: real_base = 580000*(300/250) = 696000 (exact); percent = -39750/696000*100
+--         ≈ -5.7112...% — NOT a terminating decimal (696000 = 2^5*3*5^3*29), so
+--         ROUNDED per the migration header's own warning: exact equality here
+--         would RED a correct function. Nominal delta_percent on the SAME row =
+--         120000/580000*100 ≈ +20.69% — OPPOSITE SIGN from the real percent, the
+--         one fixture shape no nominal-base substitution can reproduce (071's own
+--         Tenant A fixture already produces this; no new tenant was needed).
+--     3y: real_base = 400000*(300/200) = 600000 (the CARRIED anchor value, per
+--         CARRY1); percent = 56250/600000*100 = 9.375 EXACT (this fixture's ratios
+--         happen to terminate here).
+--     5y: real_base = 300000*(300/240) = 375000; percent = 281250/375000*100 = 75
+--         EXACT.
+-- =====================================================================
+select _rls.set_tenant(:'ta'::uuid);
+select ok(
+  (select round(delta_inflation_adjusted_percent, 2) = -5.71
+          and round(delta_percent, 2) = 20.69
+          and delta_inflation_adjusted_percent <> delta_percent
+          and sign(delta_inflation_adjusted_percent) <> sign(delta_percent)
+     from pfin.fn_nav_delta_panel() where horizon = '1y'),
+  '(CRUX1P) ⭐⭐ 072 item 1, AMENDED COLUMN: 1y real-terms PERCENT against the deflated anchor (real_base = 580000*(300/250) = 696000): -39750/696000*100 ≈ -5.71%, ROUNDED (numeric division residue — exact equality would RED a correct function). OPPOSITE SIGN from the nominal delta_percent (+20.69%) — the two figures disagree about the DIRECTION of the change, which is exactly what a nominal-base substitution cannot reproduce'
+);
+select set_config('role', 'postgres', true);
+select _rls.set_tenant(:'ta'::uuid);
+select is(
+  (select delta_inflation_adjusted_percent from pfin.fn_nav_delta_panel() where horizon = '3y'),
+  9.375::numeric,
+  '(CRUX2P) 3y real-terms percent, EXACT (this fixture''s ratios happen to terminate): real_base = 400000*(300/200) = 600000 (the CARRIED anchor value, per CARRY1); 56250/600000*100 = 9.375 exactly'
+);
+select set_config('role', 'postgres', true);
+select _rls.set_tenant(:'ta'::uuid);
+select is(
+  (select delta_inflation_adjusted_percent from pfin.fn_nav_delta_panel() where horizon = '5y'),
+  75::numeric,
+  '(CRUX3P) 5y real-terms percent, EXACT: real_base = 300000*(300/240) = 375000; 281250/375000*100 = 75 exactly'
+);
+select set_config('role', 'postgres', true);
+
+select _rls.set_tenant(:'ta'::uuid);
+select ok(
+  (select bool_and((delta_inflation_adjusted is null) = (delta_inflation_adjusted_percent is null))
+      and bool_and(delta_inflation_adjusted is null or delta_inflation_adjusted_percent is null
+                   or sign(delta_inflation_adjusted) = sign(delta_inflation_adjusted_percent))
+     from pfin.fn_nav_delta_panel()),
+  '(INV1) ⭐ 072 item 1, the two invariants that need nothing but the returned rows: across A''s full five-row panel, delta_inflation_adjusted and delta_inflation_adjusted_percent are NULL TOGETHER on every row (month/ytd not-applicable, 1y/3y/5y both present) and, wherever both are present, carry THE SAME SIGN — exactly what fails first if the real_base > 0 guard is ever dropped'
+);
+select set_config('role', 'postgres', true);
+
+-- =====================================================================
 -- (2) FIVE — five rows, fixed order, on tenant A.
 -- =====================================================================
 select _rls.set_tenant(:'ta'::uuid);
@@ -309,6 +428,38 @@ select is(
   '(FIVE1) exactly five rows, in fixed order — a horizon is never dropped from the result set'
 );
 select set_config('role', 'postgres', true);
+
+-- =====================================================================
+-- (13) SHAPE — 072 item 13: RETURN SHAPE, eleven columns by NAME, TYPE and
+--   ORDINAL. This is the ONE leg in this file that deliberately reads the
+--   row POSITIONALLY — off pg_proc's own catalog storage (unnest(proargnames)
+--   / proallargtypes WITH ORDINALITY), not a hand-written SELECT list (which
+--   would just re-resolve every column by name regardless of physical order,
+--   the reason none of the OTHER 42 legs in this file needed re-deriving for
+--   the ordinal shift). delta_inflation_adjusted_percent sits at ordinal 8,
+--   immediately after delta_inflation_adjusted; cpi_basis_period/
+--   cpi_any_carried/cpi_unavailable each shift down one ordinal from 071 —
+--   this is what makes a future accidental drop or reorder of a column loud.
+-- =====================================================================
+-- array_agg + is(), not results_eq(): pgTAP's results_eq() drives an internal
+-- cursor EXCEPT that can raise "could not determine which collation to use"
+-- comparing pg_proc's `name`-typed catalog columns against VALUES literals
+-- (measured on this leg, local scratch DB, 2026-08-14) — array equality
+-- sidesteps it entirely and is no less exact, since `is()` on arrays is a
+-- plain element-wise comparison, not a set operation.
+select is(
+  (select array_agg(a.name::text || ':' || format_type(t.oid, null)::text order by a.ord)
+     from pg_proc p,
+          unnest(p.proargnames) with ordinality as a(name, ord)
+          join unnest(p.proallargtypes) with ordinality as b(typid, ord2) on a.ord = b.ord2
+          join pg_type t on t.oid = b.typid
+    where p.pronamespace = 'pfin'::regnamespace and p.proname = 'fn_nav_delta_panel'),
+  array['horizon:text', 'anchor_date:date', 'anchor_checkpoint_date:date',
+        'current_checkpoint_date:date', 'delta_nominal:numeric', 'delta_percent:numeric',
+        'delta_inflation_adjusted:numeric', 'delta_inflation_adjusted_percent:numeric',
+        'cpi_basis_period:date', 'cpi_any_carried:boolean', 'cpi_unavailable:boolean'],
+  '(SHAPE1) ⭐ 072 item 13: eleven columns by NAME, TYPE and ORDINAL, straight off pg_proc''s own catalog (unnest(proargnames)/proallargtypes WITH ORDINALITY, array_agg''d in ordinal order) — delta_inflation_adjusted_percent at ordinal 8 immediately after delta_inflation_adjusted; cpi_basis_period/cpi_any_carried/cpi_unavailable each shifted down one ordinal from 071'
+);
 
 -- =====================================================================
 -- (ANCHOR) — anchor-date DERIVATION, verified by INDEPENDENT arithmetic
@@ -411,6 +562,24 @@ select ok(
 );
 select set_config('role', 'postgres', true);
 
+-- (a, 072 item 15) INSUFFICIENT HISTORY on an ADJ-ELIGIBLE horizon — (CAUSE1)
+--     above uses tenant E's ytd row, which is BOTH insufficient-history AND
+--     not-applicable (ytd never carries a real-terms figure), so it cannot by
+--     itself prove the percent column goes NULL via the insufficient-history
+--     PATH rather than the not-applicable one. Tenant E's earliest checkpoint
+--     (base - 4 months) is also more recent than the 1y anchor (base - 12
+--     months), so E's 1y row is insufficient-history too — and 1y IS
+--     adj-eligible, so this is the row that actually isolates the path.
+select _rls.set_tenant(:'te'::uuid);
+select results_eq(
+  $$ select anchor_date is not null, anchor_checkpoint_date is null, delta_nominal is null,
+            delta_percent is null, delta_inflation_adjusted is null, delta_inflation_adjusted_percent is null
+       from pfin.fn_nav_delta_panel() where horizon = '1y' $$,
+  $$ values (true, true, true, true, true, true) $$,
+  '(CAUSE1c) ⭐ 072 item 15: INSUFFICIENT HISTORY on an ADJ-ELIGIBLE horizon — tenant E''s 1y anchor also predates its earliest checkpoint (unlike (CAUSE1)''s ytd row, 1y DOES carry real-terms columns when resolvable), so BOTH real-terms columns (delta_inflation_adjusted, and 072''s delta_inflation_adjusted_percent) go NULL via the insufficient-history path specifically, not the not-applicable or CPI-unresolvable one — the third distinct NULL cause, now proven on a row where the percent column could otherwise have existed'
+);
+select set_config('role', 'postgres', true);
+
 -- (b) CPI UNRESOLVABLE — savepoint: delete the 5y-anchor month''s CPI print
 --     entirely (and seed nothing earlier for it to carry from), on tenant A,
 --     which has full NAV depth so delta_nominal must still be present.
@@ -418,10 +587,11 @@ savepoint cpi_unresolvable;
 delete from pfin.cpi_u_index where cpi_period = :'a5ymonth'::date;
 select _rls.set_tenant(:'ta'::uuid);
 select results_eq(
-  $$ select cpi_unavailable, delta_inflation_adjusted is null, delta_nominal is not null
+  $$ select cpi_unavailable, delta_inflation_adjusted is null, delta_nominal is not null,
+            delta_inflation_adjusted_percent is null
        from pfin.fn_nav_delta_panel() where horizon = '5y' $$,
-  $$ values (true, true, true) $$,
-  '(CAUSE2) ⭐ CPI UNRESOLVABLE: with no print (and nothing to carry from) for the 5y anchor month, cpi_unavailable is TRUE and delta_inflation_adjusted is NULL — but delta_nominal STANDS, because the nominal figure never depended on CPI'
+  $$ values (true, true, true, true) $$,
+  '(CAUSE2) ⭐ CPI UNRESOLVABLE: with no print (and nothing to carry from) for the 5y anchor month, cpi_unavailable is TRUE and BOTH real-terms columns (delta_inflation_adjusted, and 072''s delta_inflation_adjusted_percent — item 15) are NULL — but delta_nominal STANDS, because the nominal figure never depended on CPI'
 );
 select set_config('role', 'postgres', true);
 rollback to savepoint cpi_unresolvable;
@@ -430,11 +600,11 @@ rollback to savepoint cpi_unresolvable;
 --     cpi_* column NULL, by design, never attempted.
 select _rls.set_tenant(:'ta'::uuid);
 select results_eq(
-  $$ select horizon, cpi_basis_period, cpi_any_carried, cpi_unavailable
+  $$ select horizon, cpi_basis_period, cpi_any_carried, cpi_unavailable, delta_inflation_adjusted_percent
        from pfin.fn_nav_delta_panel() where horizon in ('month','ytd') order by horizon $$,
-  $$ values ('month'::text, null::date, null::boolean, null::boolean),
-            ('ytd'::text, null::date, null::boolean, null::boolean) $$,
-  '(CAUSE3) NOT APPLICABLE: month and ytd carry ALL THREE cpi_* columns NULL — the adjusted column does not EXIST for these horizons, distinguishable in shape from either NULL cause above'
+  $$ values ('month'::text, null::date, null::boolean, null::boolean, null::numeric),
+            ('ytd'::text, null::date, null::boolean, null::boolean, null::numeric) $$,
+  '(CAUSE3) NOT APPLICABLE: month and ytd carry ALL FOUR cpi_*/real-terms-percent columns NULL (072 item 15 adds delta_inflation_adjusted_percent to this row) — the adjusted columns do not EXIST for these horizons, distinguishable in shape from either NULL cause above'
 );
 select set_config('role', 'postgres', true);
 
@@ -536,6 +706,35 @@ select ok(
 select set_config('role', 'postgres', true);
 
 -- =====================================================================
+-- (14) BASE0 — 072 item 14: NULL, never 0, on a non-positive DEFLATED anchor
+--   base, both sub-cases. real_base = anchor NAV * (cpi_ye/cpi_anchor), so
+--   either sub-case here composes with tenant F's existing rows above.
+-- =====================================================================
+-- (b) NEGATIVE anchor NAV with a POSITIVE current NAV — tenant F's 1y row
+--     (current 500000, anchor -50000) already proven by (NEG1) for the dollar
+--     column; this is the SAME row, the new percent column.
+select _rls.set_tenant(:'tf'::uuid);
+select ok(
+  (select delta_inflation_adjusted_percent is null and delta_inflation_adjusted is not null
+     from pfin.fn_nav_delta_panel() where horizon = '1y'),
+  '(NEG1P) ⭐ 072 item 14(b): NEGATIVE ANCHOR NAV with a POSITIVE current NAV (tenant F''s 1y anchor = -50000, current = 500000) — real_base = -50000*(300/250) = -60000, NOT strictly positive, so delta_inflation_adjusted_percent is NULL while delta_inflation_adjusted itself stays present and sound over the negative base, exactly as (NEG1) already established for the dollar figure alone'
+);
+select set_config('role', 'postgres', true);
+
+-- (a) ZERO anchor NAV on an ADJ-ELIGIBLE horizon — (PCT0) above used tenant
+--     F's month anchor (also zero), but month is NOT adj-eligible, so it
+--     cannot exercise real_base at all. Tenant F's NEW 3y row (also zero) is
+--     the case that isolates it: real_base = 0*(300/200) = 0.
+select _rls.set_tenant(:'tf'::uuid);
+select results_eq(
+  $$ select delta_nominal, delta_percent is null, delta_inflation_adjusted, delta_inflation_adjusted_percent is null
+       from pfin.fn_nav_delta_panel() where horizon = '3y' $$,
+  $$ values (500000::numeric, true, 468750::numeric, true) $$,
+  '(REALBASE0) ⭐ 072 item 14(a): ZERO ANCHOR NAV on tenant F''s 3y checkpoint (0), a CPI-applicable horizon — real_base = 0*(300/200) = 0, not strictly positive, so delta_inflation_adjusted_percent is NULL (never 0) exactly like delta_percent already is on the same row; delta_nominal (500000) and delta_inflation_adjusted (500000*(300/320) - 0 = 468750) BOTH still stand — only the two percent columns go NULL, not the dollar ones'
+);
+select set_config('role', 'postgres', true);
+
+-- =====================================================================
 -- (6) CPIG — zero AND negative CPI guard.
 -- =====================================================================
 savepoint cpi_zero;
@@ -583,9 +782,9 @@ select _rls.set_tenant(:'tc'::uuid);
 select is(
   (select count(*) from pfin.fn_nav_delta_panel()
     where anchor_checkpoint_date is null and delta_nominal is null and delta_percent is null
-      and delta_inflation_adjusted is null)::int,
+      and delta_inflation_adjusted is null and delta_inflation_adjusted_percent is null)::int,
   5,
-  '(X1) tenant C (zero checkpoints): all FIVE rows are present with every value-bearing column NULL — fails closed, never an error, never another tenant''s figures leaking through'
+  '(X1) tenant C (zero checkpoints): all FIVE rows are present with every value-bearing column NULL, including 072''s delta_inflation_adjusted_percent — fails closed, never an error, never another tenant''s figures leaking through'
 );
 select set_config('role', 'postgres', true);
 
@@ -597,17 +796,52 @@ select set_config('role', 'postgres', true);
 --   `using (true)` would leave TWO rows tied on the same nav_date for the
 --   at-or-before query, and "order by nav_date desc limit 1" would tie-break
 --   nondeterministically, making this leg flaky rather than a reliable RED.
---   With the one-date gap, B's checkpoint is UNAMBIGUOUSLY the more recent
---   of the two once both are visible, so the leak is deterministic.
+--   With the TWO-DAY gap, B's checkpoint is UNAMBIGUOUSLY the more recent
+--   of the two once both are visible, so the A-vs-B leak is deterministic —
+--   see below for what that guarantee does NOT extend to.
 --   Savepoint-scoped; the real policy is restored immediately after.
 -- =====================================================================
+-- ⚠ (LEAK1) ASSERTS A NEGATIVE — the predicate is `nav_value is not null
+--   and nav_value <> 690000` (Sec's required shape, 2026-08-14), NOT a bare
+--   `<> 690000` or `isnt(..., 690000)`: on an empty result the subquery
+--   yields NULL, and NULL compared either way is NULL/passes — the exact
+--   vacuous-green path this leg exists to close. Fails closed on no rows,
+--   written rather than relied on.
+--
+--   ⚠ TYPO-TRAP: `690000` (A's own value, Tenant A fixture above) and
+--   `6900000` (B's canary, Tenant B fixture above) are BOTH live in this
+--   file and differ by ONE DIGIT. `<> 690000` is deliberate — do NOT
+--   "restore" it to `6900000` thinking a digit was dropped; that would
+--   silently defeat the leg (it would stop checking that A sees something
+--   other than its OWN value and start checking something else entirely).
+--
+--   WHAT CHANGED, AND THE LOSING SIDE OF THE TRADE: an earlier draft
+--   asserted `= 6900000` and additionally proved B SPECIFICALLY was the
+--   deterministic winner once the fence opened. The negative form proves
+--   only that SOME foreign row wins, not WHICH one — that determinism is
+--   exactly what a non-pristine database destroys, so trading it away is
+--   what makes the leg hold everywhere rather than only on a fixture-only
+--   DB. The trade was necessary, not cosmetic: the exact-match form's
+--   determinism claim was already false outside a pristine fixture, and not
+--   for the reason an earlier draft of THIS comment gave ("a more recent
+--   row" — impossible, B's canary sits EXACTLY at :base, the maximum date
+--   `nav_date <= :base` admits). The real failure mode was a TIE at :base,
+--   not lateness: SELF-217 laid month-end checkpoints
+--   (docs/records/self217-nav-seeding-run.md, tenant b1aa21a2), and :base is
+--   itself a month-end, so a seeded tenant can land on B's exact date;
+--   `order by nav_date desc limit 1` has no secondary sort key, so a tie's
+--   winner is not guaranteed. Confirmed empirically on a scratch clone of
+--   the seeded shared dev DB: the broken-open query returned 8267000 — a
+--   THIRD tenant's value, neither A's own (690000) nor B's canary
+--   (6900000) — proving a genuine leak of some other tenant's row, not a
+--   more benign same-tenant artifact.
 savepoint leak_canary;
 alter policy nav_daily_select on pfin.nav_daily using (true);
 select _rls.set_tenant(:'ta'::uuid);
-select is(
-  (select nav_value from pfin.nav_daily where nav_date <= :'base'::date order by nav_date desc limit 1),
-  6900000::numeric,
-  '(LEAK1) ⭐ CORRUPT-THE-CONTROL: with nav_daily_select broken OPEN, A''s month-anchor query picks up B''s checkpoint (6900000) DETERMINISTICALLY — not A''s own (690000) — because B''s canary sits exactly on the boundary date while A''s is one day earlier by design, so there is no tie to arbitrate. RED here is the proof the fence is real; green here would mean this battery is blind to a broken policy'
+select ok(
+  (select nav_value is not null and nav_value <> 690000
+     from pfin.nav_daily where nav_date <= :'base'::date order by nav_date desc limit 1),
+  '(LEAK1) ⭐ CORRUPT-THE-CONTROL: with nav_daily_select broken OPEN, A''s month-anchor query returns a NON-NULL value OTHER than A''s own (690000) — proving RLS, not application logic, is what confines tenant A to its own rows. Fails CLOSED on an empty result rather than passing vacuously, and is robust to whichever other tenant''s row wins the read: RED here is the proof the fence is real; green here would mean this battery is blind to a broken policy'
 );
 select set_config('role', 'postgres', true);
 rollback to savepoint leak_canary;
@@ -617,9 +851,10 @@ rollback to savepoint leak_canary;
 -- =====================================================================
 select is(
   _rls.count_as(:'td'::uuid, 'aal1',
-    $$ select count(*) from pfin.fn_nav_delta_panel() where delta_nominal is null $$
+    $$ select count(*) from pfin.fn_nav_delta_panel()
+         where delta_nominal is null and delta_inflation_adjusted_percent is null $$
   ), 5::bigint,
-  '(M1) an aal1 session for the totp-declared tenant D gets all FIVE rows all-NULL, even though D genuinely has checkpoints — the aal2 backstop fails this read closed'
+  '(M1) an aal1 session for the totp-declared tenant D gets all FIVE rows all-NULL (delta_nominal AND 072''s delta_inflation_adjusted_percent both null on every row), even though D genuinely has checkpoints — the aal2 backstop fails this read closed'
 );
 select is(
   _rls.count_as(:'td'::uuid, 'aal2',
@@ -629,7 +864,11 @@ select is(
 );
 
 -- =====================================================================
--- (10) PST1 — CATALOG POSTURE for 071.
+-- (10) PST1 — CATALOG POSTURE. ⭐ 072 item 16: content UNCHANGED from 071 (072
+--   re-issues the SAME posture), but NOW PRIMARY, not confirmatory — the
+--   DROP+CREATE means a botched re-issue after a future amendment would be
+--   silent to every behavioral leg in this file, and this is one of the two
+--   that would actually catch it.
 -- =====================================================================
 select is(
   (select array[p.prosecdef::text, p.provolatile::text, array_to_string(p.proconfig, ',')]
@@ -639,8 +878,26 @@ select is(
   '(PST1) POSTURE, read DECLARATIVELY: SECURITY INVOKER, STABLE, search_path pinned empty. A DEFINER swap here would detach the read from nav_daily''s RLS context AND break 070''s shared-session guarantee, while every behavioral leg above stayed green'
 );
 
+-- 072 item 16: the catalog COMMENT is destroyed by the same DROP that
+-- destroys the grants (see (A1-A3) below) and re-issued by the migration —
+-- but unlike the grants, nothing else in this file ever reads it, so its
+-- silent absence would be invisible without a dedicated leg. Checks for the
+-- stable 'SECURITY INVOKER' marker every function comment in this migration
+-- family opens with, not the full text (expected to be re-worded over time).
+select ok(
+  obj_description('pfin.fn_nav_delta_panel()'::regprocedure, 'pg_proc') is not null
+    and obj_description('pfin.fn_nav_delta_panel()'::regprocedure, 'pg_proc') ~ 'SECURITY INVOKER',
+  '(COMMENT1) ⭐ 072 item 16: the catalog comment SURVIVES the DROP+CREATE — its absence would otherwise be invisible to every other leg in this file'
+);
+
 -- =====================================================================
--- (11) A — ACL.
+-- (11) A — ACL. ⭐ 072 item 16: content UNCHANGED from 071, NOW PRIMARY — a
+--   freshly created function is EXECUTABLE BY PUBLIC by default, so these
+--   legs are what catch a forgotten revoke/grant after the DROP. (A4) is
+--   NEW here (Sec finding, 2026-08-14): no leg in this family pinned `anon`
+--   specifically before now — 064 has one, 062/067/069/070/071 do not. anon
+--   is the role reached WITHOUT a JWT at all, so it closes a family-wide
+--   convention gap rather than responding to a specific defect.
 -- =====================================================================
 select ok(
   has_function_privilege('authenticated', 'pfin.fn_nav_delta_panel()', 'execute'),
@@ -653,6 +910,10 @@ select ok(
 select ok(
   not has_function_privilege('service_role', 'pfin.fn_nav_delta_panel()', 'execute'),
   '(A3) service_role does NOT hold EXECUTE — an INVOKER helper granted to service_role would be a de facto cross-tenant read, the same reasoning 067/069 already record'
+);
+select ok(
+  not has_function_privilege('anon', 'pfin.fn_nav_delta_panel()', 'execute'),
+  '(A4) ⭐ Sec finding, 072-adjacent: anon does NOT hold EXECUTE — anon is the role reached WITHOUT a JWT at all, so this is the fence in front of every OTHER identity check this function depends on (RLS keys off auth.uid(), which anon never carries). Closes a family-wide convention gap: 064 has this leg, 062/067/069/070/071 do not'
 );
 
 select * from finish();
