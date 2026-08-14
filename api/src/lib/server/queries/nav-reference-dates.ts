@@ -60,8 +60,8 @@ type RawNavReferenceDateRow = {
 	nav_prior_yr_dollars: number | string | null;
 	cpi_period: string | null;
 	cpi_basis_period: string;
-	cpi_any_carried: boolean | null;
-	cpi_unavailable: boolean | null;
+	cpi_any_carried: boolean;
+	cpi_unavailable: boolean;
 };
 
 /** NULL passes through; a non-NULL value that fails to coerce to a finite

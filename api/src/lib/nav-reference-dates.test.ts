@@ -60,9 +60,6 @@ describe('isCpiUnresolvable — AC5 discriminator #2 (no isCpiApplicable gate ne
 	it('cpi_unavailable = false → false', () => {
 		expect(isCpiUnresolvable(row({ reference: 'this_month' }))).toBe(false);
 	});
-	it('cpi_unavailable = null (defensive nullable reading) → false, not a crash', () => {
-		expect(isCpiUnresolvable(row({ reference: 'this_month', cpi_unavailable: null }))).toBe(false);
-	});
 });
 
 describe('formatUsd — plain, UNSIGNED whole-dollar formatting (a NAV LEVEL, not a delta)', () => {

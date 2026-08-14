@@ -1,19 +1,23 @@
 // nav-reference-dates.ts — SELF-223 client-side shape + predicates for the §2.1.4 NAV-at-
-// three-reference-dates panel (frontend-owned, non-server). Mirrors the RATIFIED CONTRACT for
-// `pfin.fn_nav_reference_dates()` (temp/pm-self223-ac-rewrite.md v3, jointly agreed with
-// temp/architect-self223-reconciliation.md §5) — migration 073 had NOT merged as of this file's
-// authoring, so this is built against the ratified contract text, not an applied
-// `supabase/migrations/*.sql` file. Re-verify against the live 073 migration once it merges —
-// same discipline nav-delta-panel.ts's own header applies retroactively to 071/072.
+// three-reference-dates panel (frontend-owned, non-server). Mirrors migration 073's applied
+// CONTRACT (merged 2026-08-14) for `pfin.fn_nav_reference_dates()` — originally built against
+// the ratified contract text (temp/pm-self223-ac-rewrite.md v3) ahead of 073 landing, per
+// team-lead's routing; reconciled against the live migration below.
 //
 // SHAPE CROSS-CHECKED AGAINST BACKEND'S SELF-223 HAND-OFF (2026-08-14, their
-// $lib/nav-reference-dates.ts drafted independently from the same ratified contract): the two
-// files' NavReferenceDateRow interfaces matched FIELD-FOR-FIELD, including every nullability
-// call — no reconciliation edit to the type was needed, only these doc comments, folding in two
-// semantic notes backend's version stated more precisely than this file's first draft did:
+// $lib/nav-reference-dates.ts drafted independently from the same ratified contract, THEN
+// re-verified by Backend against the applied 073 DDL): the two files' NavReferenceDateRow
+// interfaces matched FIELD-FOR-FIELD except ONE nullability call, corrected post-merge —
+// cpi_any_carried / cpi_unavailable are NEVER NULL (073's own contract: every row of this
+// surface is CPI-eligible, so there is no not-applicable case; confirmed by Backend both from
+// the function body — v_carried/v_unavail are always real booleans by construction — and a live
+// shape smoke returning real true/false on all three rows). Every other field matched, including
+// reference_date / cpi_basis_period non-null and reference_checkpoint_date / nav /
+// nav_prior_yr_dollars / cpi_period nullable. Two semantic notes folded in from backend's text:
 //   · cpi_period is per-row — the specific CPI observation THIS row's own deflation used (This
 //     Month: 066's coverage_through print; Prior Month: first-of-month of the calendar anchor;
-//     Prior Year-End: December of the prior year) — not a shared/panel-wide value.
+//     Prior Year-End: December of the prior year) — not a shared/panel-wide value. Nulls only on
+//     the this_month row when the global CPI store has no coverage at all.
 //   · cpi_any_carried is a TWO-leg OR per row (this row's own cpi_period leg + the shared
 //     cpi_basis_period leg) — NOT a three-leg OR identically shared across all three rows the
 //     way 071/072's panel-wide flag was. Do not assume it is the same value on all three rows.
@@ -76,11 +80,13 @@ export interface NavReferenceDateRow {
 	cpi_basis_period: string;
 	/** OR over this row's TWO CPI legs (its own cpi_period leg + the shared cpi_basis_period
 	 * leg) — NOT a three-leg OR identically shared across all three rows the way 071/072's
-	 * panel-wide flag was; each row's own reference-date leg can differ. No predicate exposed
-	 * here (SELF-229 scope). */
-	cpi_any_carried: boolean | null;
-	/** Nullable (defensive reading). true → nav_prior_yr_dollars is NULL while nav stands. */
-	cpi_unavailable: boolean | null;
+	 * panel-wide flag was; each row's own reference-date leg can differ. NEVER NULL — 073's own
+	 * contract: every row here is CPI-eligible, so there is no not-applicable case the way
+	 * 071/072 have on month/ytd. No predicate exposed here (SELF-229 scope). */
+	cpi_any_carried: boolean;
+	/** True when this row's real-terms figure could not be formed (a non-positive CPI leg); nav
+	 * still stands in that case. NEVER NULL, same reason as cpi_any_carried above. */
+	cpi_unavailable: boolean;
 }
 
 // Fixed row order per AC1 ("EXACTLY three rows, always, fixed order").
@@ -111,7 +117,7 @@ export function isInsufficientHistory(row: NavReferenceDateRow): boolean {
 // No isCpiApplicable gate here (unlike NavDeltaPanel's Month/YTD) — every reference-date row
 // always wants a prior-Yr-$ figure, so there is no "not applicable" horizon to gate against.
 export function isCpiUnresolvable(row: NavReferenceDateRow): boolean {
-	return row.cpi_unavailable === true;
+	return row.cpi_unavailable;
 }
 
 // Plain, UNSIGNED whole-dollar formatting — a NAV LEVEL, not a delta (see the module header's
