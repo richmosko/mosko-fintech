@@ -192,7 +192,21 @@
 --       December, so its deflator is v/v = 1 as well. >> ANY TEST ASSERTING THAT
 --       prior_year_end IS THE ONLY EXACT ROW WILL RED EVERY JANUARY. << The
 --       exactness property belongs to "the row whose CPI period is the basis
---       period", which is one row for eleven months and two for one.
+--       period" — NOT to a particular row.
+--       ⚠⚠ AND UNDER REALISTIC CPI ARREARS IT CAN BE ALL THREE. CPI publishes
+--       one to two months behind, so on a JANUARY run 066's coverage_through is
+--       itself December of the prior year — which makes this_month's CPI period
+--       the basis period too. MEASURED (scratch DB, run day 2026-01-15,
+--       coverage_through 2025-12-01): all three rows returned cpi_period =
+--       cpi_basis_period and nav_prior_yr_dollars = nav EXACTLY.
+--       >> SO FOR PART OF JANUARY THE ENTIRE PRIOR-YEAR-DOLLAR COLUMN EQUALS THE
+--          NOMINAL COLUMN. That is arithmetically correct — in December-of-last-
+--          year dollars, December-of-last-year figures are themselves — and it is
+--          a RENDERING consequence the consumer must not present as an error or
+--          as a data problem. <<
+--       ⚠ A FIXTURE THAT PINS CPI COVERAGE TO THE CURRENT MONTH CANNOT SEE THIS,
+--       because it removes the arrears that cause it. Arrears is the production
+--       case, not the exceptional one.
 --     · A PER-ROW INSUFFICIENT-HISTORY CASE CANNOT BE CONSTRUCTED BETWEEN THOSE
 --       TWO ROWS IN JANUARY: identical reference dates resolve identically, so no
 --       checkpoint can serve one and not the other. A battery leg proving the
