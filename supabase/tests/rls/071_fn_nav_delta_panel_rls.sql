@@ -791,6 +791,19 @@ select set_config('role', 'postgres', true);
 --   of the two once both are visible, so the leak is deterministic.
 --   Savepoint-scoped; the real policy is restored immediately after.
 -- =====================================================================
+-- ⚠ ENVIRONMENT CAVEAT (QA, 2026-08-14, confirmed against a scratch clone of
+--   the shared local dev DB with 072 applied): this leg is sound ONLY
+--   against a DB whose pfin.nav_daily holds nothing but this file's own
+--   synthetic fixture. Run it against a DB that ALSO carries real
+--   seeded-tenant rows — e.g. the shared local dev DB post the SELF-217
+--   seeding run (docs/records/self217-nav-seeding-run.md, tenant b1aa21a2)
+--   — and breaking the policy open exposes ALL tenants' rows, not just A's
+--   and B's: if a real tenant's checkpoint at-or-before :base is more recent
+--   than B's canary, THAT row wins instead, and this leg reds on an
+--   untouched fixture. That is a property of the DB under test, not a
+--   regression in this battery or in 072 — verify in a genuinely clean,
+--   migrations-only scratch DB (never `supabase db reset` against F/CTO's
+--   local data; clone or rebuild instead).
 savepoint leak_canary;
 alter policy nav_daily_select on pfin.nav_daily using (true);
 select _rls.set_tenant(:'ta'::uuid);
