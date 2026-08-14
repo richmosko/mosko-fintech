@@ -791,19 +791,42 @@ select set_config('role', 'postgres', true);
 --   of the two once both are visible, so the leak is deterministic.
 --   Savepoint-scoped; the real policy is restored immediately after.
 -- =====================================================================
--- ⚠ ENVIRONMENT CAVEAT (QA, 2026-08-14, confirmed against a scratch clone of
---   the shared local dev DB with 072 applied): this leg is sound ONLY
---   against a DB whose pfin.nav_daily holds nothing but this file's own
---   synthetic fixture. Run it against a DB that ALSO carries real
---   seeded-tenant rows — e.g. the shared local dev DB post the SELF-217
---   seeding run (docs/records/self217-nav-seeding-run.md, tenant b1aa21a2)
---   — and breaking the policy open exposes ALL tenants' rows, not just A's
---   and B's: if a real tenant's checkpoint at-or-before :base is more recent
---   than B's canary, THAT row wins instead, and this leg reds on an
---   untouched fixture. That is a property of the DB under test, not a
---   regression in this battery or in 072 — verify in a genuinely clean,
---   migrations-only scratch DB (never `supabase db reset` against F/CTO's
---   local data; clone or rebuild instead).
+-- ⚠ (LEAK1) IS ENVIRONMENT-SENSITIVE BY DESIGN — the SAME class of RED as
+--   054's (h14) (`pfin_etl` credential provisioning; see that leg's own
+--   header for the canonical statement of this pattern): the assertion is
+--   correct AS SHIPPED, but a legitimate state elsewhere in the deployment
+--   lifecycle makes it read RED without any regression in the code under
+--   test. Recorded here, not just in session chat, so the first person to
+--   rediscover it treats it as known rather than as a new finding.
+--
+--   WHAT (LEAK1) DOES: deliberately breaks `nav_daily_select` open
+--   (`using (true)`) inside a savepoint, then re-runs A's month-anchor query
+--   and asserts it returns B's canary value (6900000) — proving RLS, not
+--   application logic, is what normally fences tenant A from seeing tenant
+--   B's row. A green result here would mean the RLS policy is what makes
+--   every OTHER leg in this file pass, not merely coincide with the right
+--   answer.
+--
+--   WHY IT REDS AGAINST A SEEDED SHARED DEV DB (QA, 2026-08-14, confirmed
+--   against a scratch clone of the shared local dev DB with 072 applied):
+--   this leg's determinism depends on B's canary being the MOST RECENT
+--   at-or-before-:base row in the WHOLE nav_daily table once the policy is
+--   open — true in a DB that holds nothing but this file's own synthetic
+--   fixture. The shared local dev DB is not that DB post the SELF-217
+--   seeding run (docs/records/self217-nav-seeding-run.md, tenant b1aa21a2):
+--   it carries a REAL tenant's checkpoints, and if one of them is more
+--   recent than B's canary at-or-before :base, THAT row wins instead once
+--   the fence is opened, and (LEAK1) reds — not because the fence broke, but
+--   because the fixture's assumption ("only A and B exist") stopped holding
+--   in that DB.
+--
+--   WHY CI IS UNAFFECTED: CI runs pgTAP against a database built ONLY from
+--   `supabase/migrations/` — no seed data, so nav_daily holds nothing this
+--   file did not insert itself, and B's canary is unambiguously the most
+--   recent row once the policy opens. The RED is specific to running this
+--   file against an already-seeded, long-lived database — verify in a
+--   genuinely clean, migrations-only scratch DB instead (never
+--   `supabase db reset` against F/CTO's local data; clone or rebuild).
 savepoint leak_canary;
 alter policy nav_daily_select on pfin.nav_daily using (true);
 select _rls.set_tenant(:'ta'::uuid);
