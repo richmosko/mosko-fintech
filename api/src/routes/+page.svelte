@@ -20,6 +20,7 @@
 <script lang="ts">
 	import type { PageData } from './$types';
 	import StaleConstituentBadge from '$lib/components/StaleConstituentBadge.svelte';
+	import NavReferenceDatesPanel from '$lib/components/NavReferenceDatesPanel.svelte';
 	import NavDeltaPanel from '$lib/components/NavDeltaPanel.svelte';
 	import NavCompositionTable from '$lib/components/NavCompositionTable.svelte';
 	import NavHistoryChart from '$lib/components/NavHistoryChart.svelte';
@@ -31,6 +32,14 @@
 	// Loader field Backend wires (`+page.server.ts` → `046` read). Default to the healthy
 	// zero-value so the surface renders cleanly before/if the field is absent (no silent throw).
 	const staleness = $derived(data.staleness ?? EMPTY_STALENESS);
+
+	// §2.1.4 NAV-at-three-reference-dates panel (SELF-223 · V1.1). Backend threads
+	// `pfin.fn_nav_reference_dates()` rows through the loader as `data.navReferenceDates`,
+	// FAIL-SOFT to `null` on a read failure — same convention as `data.navDeltaPanel` below.
+	// ⚠ `navReferenceDates` is a naming assumption pending Backend's actual +page.server.ts
+	// text (same flow as SELF-222: Backend authors it and sends commit-ready text; the
+	// migration itself is being authored in parallel per team-lead's routing).
+	const navReferenceDates = $derived(data.navReferenceDates ?? null);
 
 	// §2.1.3 multi-horizon NAV-delta panel (SELF-222 · V1.1). Backend threads the `071`
 	// fn_nav_delta_panel() rows through the loader as `data.navDeltaPanel`, FAIL-SOFT to `null`
@@ -146,6 +155,12 @@
 				</p>
 			{/if}
 		</section>
+
+		<!-- §2.1.4 NAV-at-three-reference-dates panel (SELF-223 · V1.1 — AC4: sub-surface order
+		     matches Finance_Report page 3, the §2.1.4 table ABOVE the §2.1.3 panel, both below
+		     the headline under the ADR-013 P2 lock). NavReferenceDatesPanel owns its own
+		     fail-soft/unavailable-notice gating internally, same posture as NavDeltaPanel below. -->
+		<NavReferenceDatesPanel rows={navReferenceDates} />
 
 		<!-- §2.1.3 multi-horizon NAV-delta panel (SELF-222 · V1.1) — Phase 2 P2 lock (ADR-013
 		     Decision 3): "Headline NAV + deltas lead → 60-mo trend → composition table." Mounted
