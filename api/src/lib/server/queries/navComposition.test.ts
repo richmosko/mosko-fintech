@@ -7,8 +7,10 @@
 // asOf is threaded explicitly (so it foots to the headline), the fail-soft degrade-to-null
 // on both an RPC error and a null payload — the composition read must never take down the
 // §2.1.1 headline netWorth — and the SELF-229 per-row staleness join, including its REWORKED
-// tri-state degrade (join failure → is_stale=null, never false; team-lead catch, mirrors the
-// SELF-220 Sec round 2 silent-fresh-on-failure rejection).
+// tri-state degrade. TWO independent causes of is_stale=null are both covered here: the caller's
+// root staleness read being unknown (staleLinkedSourceIds === null, passed straight through
+// without querying), and the per-row join itself failing — neither may ever collapse to `false`
+// (team-lead catch, mirrors the SELF-220 Sec round 2 silent-fresh-on-failure rejection).
 
 import { describe, it, expect, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -189,6 +191,24 @@ describe('loadNavComposition', () => {
 			});
 			const tree = await loadNavComposition(client, AS_OF, new Set(['7']));
 			expect(tree?.groups[0].accounts[0].is_stale).toBe(true);
+		});
+	});
+
+	// ── SELF-229 SECOND REWORK: the CALLER's own root staleness read can itself be unknown
+	// (staleness.is_stale === null, e.g. the 046 RPC failed upstream in +page.server.ts). That
+	// propagates here as `staleLinkedSourceIds === null` — a THIRD input distinct from both
+	// EMPTY_STALE_LINKED_SOURCE_IDS (known: nothing stale) and a populated Set (known: some stale).
+	describe('root staleness unknown (staleLinkedSourceIds === null)', () => {
+		it('null input → every leaf is_stale=NULL, and the pfin.account join is never attempted', async () => {
+			const { client, from } = makeSupabase({ data: SAMPLE_TREE_RAW });
+			const tree = await loadNavComposition(client, AS_OF, null);
+
+			expect(tree).not.toBeNull();
+			const allLeaves = tree?.groups.flatMap((g) => g.accounts) ?? [];
+			expect(allLeaves.every((a) => a.is_stale === null)).toBe(true);
+			expect(allLeaves.some((a) => a.is_stale === false)).toBe(false);
+			// No point querying pfin.account when we don't even know what to look up.
+			expect(from).not.toHaveBeenCalled();
 		});
 	});
 });

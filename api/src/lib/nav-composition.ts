@@ -33,9 +33,11 @@
 // surfaces ramp at V1.2-V1.5 milestones (§2.2/§2.3/§2.5/§2.6).
 //
 // is_stale IS TRI-STATE (boolean | null), not a plain boolean — see the field's own doc comment.
-// This is a REWORK: the first cut collapsed a join-query failure to `false`, which is the exact
-// silent-fresh-on-failure shape SELF-220 Sec round 2 rejected on the chart. Render `null` as an
-// explicit "staleness unknown" state on the affected row — NEVER as "confirmed not stale."
+// This is a REWORK (F/CTO-ruled, mirrors SELF-220 Sec round 2): the first cut collapsed a
+// failure to `false`, which is the exact silent-fresh-on-failure shape Sec rejected on the chart.
+// TWO independent things can produce `null` — the root `046` staleness read itself being unknown,
+// or just this table's own per-row join failing — both degrade every leaf together. Render `null`
+// as an explicit "staleness unknown" state on the affected row — NEVER as "confirmed not stale."
 
 /** One account leaf row — mirrors a 051 groups[].accounts[] element. */
 export interface NavCompositionLeaf {
@@ -50,9 +52,15 @@ export interface NavCompositionLeaf {
 	 * SELF-229 (ratified D4): TRI-STATE.
 	 *   true  = this leaf's owning `pfin.account.linked_source_id` IS currently in the caller's
 	 *           `046` stale_items[].
-	 *   false = CONFIRMED not stale (join succeeded; not in that set, or a manual/unlinked account).
-	 *   null  = UNKNOWN — the server-side join couldn't run. Render an explicit "staleness unknown"
-	 *           affordance, never treat this the same as `false` (SELF-220 precedent).
+	 *   false = CONFIRMED not stale (a KNOWN root read + a successful join; not in that set, or a
+	 *           manual/unlinked account).
+	 *   null  = UNKNOWN — either the root `046` staleness read failed, or the server-side join
+	 *           couldn't run. Render an explicit "staleness unknown" affordance, never treat this
+	 *           the same as `false`.
+	 * Computed server-side in the loader — NOT a change to 051 — and threaded straight through as
+	 * this field. This is the PER-ROW signal (AC4) — distinct from and additional to the rollup
+	 * `<StaleConstituentBadge>` the page renders off `data.staleness` directly; both are shown
+	 * together (neither replaces the other).
 	 */
 	is_stale: boolean | null;
 }

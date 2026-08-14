@@ -19,12 +19,34 @@
 // doesn't render) — it must NEVER take down the §2.1.1 headline NAV. A genuine zero-account
 // tenant still gets a well-formed tree ({ groups: [], buildups: {…0…}, nav: 0 }), not null.
 //
-// PER-ROW STALENESS (SELF-229). NO migration: server-side join over pfin.account.linked_source_id
-// (existing column) against the caller's already-loaded 046 stale_items[]. NOT a change to 051.
-// SECURITY INVOKER throughout — plain RLS-scoped select, no service_role.
+// PER-ROW STALENESS (SELF-229 · ADR-013 D1 — surface list at PRD §2.4.4 is illustrative-not-
+// exhaustive; further surfaces ramp at V1.2-V1.5 milestones §2.2/§2.3/§2.5/§2.6). `051` carries
+// NO staleness of its own — `fn_nav_composition` leaf rows key on `account_id` only, while `046`
+// `fn_aggregation_has_stale_constituent()`'s stale_items[] key on `linked_source_id`. NO migration:
+// per nav-composition.ts's own deferral note (ratified D4) this needs "a Backend contract
+// extension + a linked_source_id↔account_id join" — realized here as a SERVER-SIDE join, NOT a
+// change to 051 or a new DB function (a schema/function change would pull in Architect + Sec for
+// a join `pfin.account.linked_source_id` already makes possible with zero new DDL). Stays
+// SECURITY INVOKER throughout: the extra read is a plain RLS-scoped select on `pfin.account`
+// through the SAME per-request client as the 051 RPC — `account_select`'s owner + aal2 policy
+// applies unchanged, never service_role.
 //
-// ⚠ is_stale IS TRI-STATE (boolean | null) — REWORK per team-lead catch (mirrors SELF-220 Sec
-// round 2): a join-query failure must degrade to null (UNKNOWN) on every leaf, never to false.
+// ⚠ is_stale IS TRI-STATE (`boolean | null`), NOT a plain boolean. Two INDEPENDENT causes can
+// produce the UNKNOWN (`null`) value, and BOTH degrade every leaf together — never a mix of
+// `null` and `false` from the same call:
+//   (1) THE CALLER'S ROOT STALENESS READ WAS ITSELF UNKNOWN (SELF-229 second REWORK, F/CTO-ruled
+//       2026-08-14, after staleness.ts's own `046` degrade was fixed from EMPTY_STALENESS to
+//       UNKNOWN_STALENESS on failure). `staleLinkedSourceIds` is `null` in this case — the caller
+//       (+page.server.ts) passes `null` rather than an empty Set when `staleness.is_stale ===
+//       null`, and this function skips the join ENTIRELY: there is nothing meaningful to look up
+//       against if we don't even know whether anything is stale tenant-wide.
+//   (2) THE JOIN QUERY ITSELF FAILED (the original SELF-229 rework, team-lead-caught) — the root
+//       staleness read succeeded (a real, possibly-empty set of stale linked_source_ids), but the
+//       pfin.account lookup that maps those to account_ids errored.
+// Both are the EXACT shape SELF-220 Sec round 2 rejected on the chart: a staleness marker
+// suppressed on a read failure, so the user sees fresh-looking data precisely when the system can
+// least vouch for it. `null` = "could not determine" is a DISTINCT value from `false` = "confirmed
+// not stale" (a successful read that checked and found this leaf healthy).
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ZoneResolvedAsOf } from '$lib/server/time/asOf';
@@ -39,10 +61,16 @@ export type NavCompositionAccount = {
 	/** 049 unrealized G/L; NULL for non-investment accounts (051 AC#3). */
 	unrealized_gl: number | null;
 	/**
-	 * SELF-229: TRI-STATE, not a plain boolean.
+	 * SELF-229: TRI-STATE, not a plain boolean — see the module header's REWORK notes (two
+	 * independent causes of `null`).
 	 *   true  = this leaf's `pfin.account.linked_source_id` IS in the caller's `046` stale_items[].
-	 *   false = the join succeeded and it is CONFIRMED not in that set (or manual/unlinked).
-	 *   null  = UNKNOWN — the join query itself failed. NEVER collapsed to `false`.
+	 *   false = the join succeeded (against a KNOWN root staleness read) and it is CONFIRMED not
+	 *           in that set (or the account is manual/unlinked — `linked_source_id IS NULL` never
+	 *           has anything to go stale).
+	 *   null  = UNKNOWN — either the root `046` staleness read itself failed, or the per-row join
+	 *           against `pfin.account` failed. NEVER collapsed to `false`. Render this as an
+	 *           explicit "staleness unknown" state, not as "not stale" (Frontend's call on the
+	 *           visual).
 	 */
 	is_stale: boolean | null;
 };
@@ -82,13 +110,18 @@ export type NavComposition = {
  * Fail-soft: any error (read failure, unexpected null) degrades to `null` — logged, never thrown.
  *
  * `staleLinkedSourceIds` (SELF-229) — the CALLER's already-loaded `046` stale_items[], as a set of
- * `linked_source_id` strings (SELF-199 bigint→string convention). Pass
- * `EMPTY_STALE_LINKED_SOURCE_IDS` when the caller has nothing stale — the join is skipped entirely.
+ * `linked_source_id` strings (mirrors the SELF-199 bigint→string convention `staleness.ts` already
+ * applies). THREE distinct inputs, all meaningful:
+ *   `EMPTY_STALE_LINKED_SOURCE_IDS` (or any empty, non-null Set) — a KNOWN root read: nothing is
+ *     stale tenant-wide. The join is skipped (nothing to look up), every leaf becomes `false`.
+ *   a non-empty Set — a KNOWN root read with real stale sources. The join runs.
+ *   `null` — the caller's OWN `046` read was itself UNKNOWN (staleness.is_stale === null). The
+ *     join is skipped (there is nothing meaningful to check against), every leaf becomes `null`.
  */
 export async function loadNavComposition(
 	supabase: SupabaseClient,
 	asOf: ZoneResolvedAsOf,
-	staleLinkedSourceIds: ReadonlySet<string>
+	staleLinkedSourceIds: ReadonlySet<string> | null
 ): Promise<NavComposition | null> {
 	const { data, error } = await supabase
 		.schema('pfin')
@@ -107,10 +140,20 @@ export async function loadNavComposition(
 	}
 
 	const composition = data as NavComposition;
-	const staleAccountIds = await resolveStaleAccountIds(supabase, staleLinkedSourceIds);
 
-	// staleAccountIds is `null` ONLY when the join query itself failed — every leaf gets `null`
-	// together in that case, never `false`.
+	// staleLinkedSourceIds === null means the CALLER's own root staleness read was unknown — skip
+	// the join entirely (there's nothing meaningful to check against) and propagate UNKNOWN
+	// straight through. Otherwise resolve the join normally (it may itself still fail — see
+	// resolveStaleAccountIds).
+	const staleAccountIds =
+		staleLinkedSourceIds === null
+			? null
+			: await resolveStaleAccountIds(supabase, staleLinkedSourceIds);
+
+	// Attach is_stale per leaf. A brand-new object tree, not a mutation of `composition` in place —
+	// `051`'s own return is treated as read-only, same discipline as the rest of this loader.
+	// `staleAccountIds` is `null` when EITHER cause in the module header applies — every leaf gets
+	// `null` together in that case, never `false`.
 	return {
 		...composition,
 		groups: composition.groups.map((group) => ({
@@ -124,10 +167,28 @@ export async function loadNavComposition(
 }
 
 /**
- * SELF-229 per-row join. Return value is TRI-STATE:
- *   Set<string> (possibly empty) = join KNOWN — every leaf's is_stale can be asserted true/false.
- *   null                         = join FAILED — every leaf's is_stale must become null (UNKNOWN),
- *                                   never false. This is the SELF-220-precedent fix.
+ * SELF-229 per-row join: which of the caller's OWN `pfin.account` rows are fed by a currently-
+ * stale `linked_source_id`. Plain RLS-scoped select through the SAME per-request client the 051
+ * RPC uses above — `account_select`'s owner + aal2 policy applies unchanged (SECURITY INVOKER
+ * throughout this module; no service_role, no new DB object). Returns account_id as STRING
+ * (SELF-199 bigint convention, mirroring staleness.ts's toItem()) so callers never compare a
+ * bigint-as-number against a bigint-as-string and silently miss on precision.
+ *
+ * Skips the query entirely when there's nothing stale to look up — the common (healthy) case
+ * costs zero extra round-trips (returns an EMPTY set, a KNOWN "nothing is stale", not `null`).
+ * Only called when the caller's root staleness read was itself KNOWN (see loadNavComposition) —
+ * the null-root case never reaches this function at all.
+ *
+ * Return value is TRI-STATE, mirroring is_stale above:
+ *   Set<string> (possibly empty) = the join is KNOWN — every leaf's is_stale can be asserted true
+ *                                   or false with confidence.
+ *   null                         = the join FAILED — every leaf's is_stale must become `null`
+ *                                   (UNKNOWN), never `false`. This is the SELF-220-precedent fix:
+ *                                   a metadata-enrichment failure must not silently read as "this
+ *                                   account is confirmed healthy" when it was never checked.
+ * The rollup `data.staleness` badge (loaded independently, upstream of this call) remains the
+ * surface of record that SOMETHING is stale even when this per-row detail is unknown — but
+ * "something, we just don't know which row" is what must reach the render, not silence.
  */
 async function resolveStaleAccountIds(
 	supabase: SupabaseClient,

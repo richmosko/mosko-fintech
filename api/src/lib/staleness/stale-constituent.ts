@@ -30,14 +30,27 @@ export interface StaleConstituentItem {
 /**
  * The aggregate payload = one `046` row: is_stale flag + the (possibly empty) list.
  * `stale_items` is never NULL server-side ('[]' coalesce) — default to [] defensively here.
+ *
+ * `is_stale` is TRI-STATE (`boolean | null`), NOT a plain boolean — SELF-229 REWORK (F/CTO-ruled,
+ * mirrors the SELF-220 Sec round 2 catch). The ORIGINAL shape degraded a `046` RPC failure to
+ * `is_stale: false` — silently indistinguishable from "confirmed healthy." `null` = UNKNOWN (the
+ * read failed); see UNKNOWN_STALENESS below. NO consumer may treat `null` the same as `false`.
  */
 export interface StalenessData {
-	is_stale: boolean;
+	is_stale: boolean | null;
 	stale_items: StaleConstituentItem[];
 }
 
-/** Safe zero-value: healthy / no stale constituents (the loader-absent default). */
+/** CONFIRMED-healthy zero-value: the `046` read SUCCEEDED and found nothing stale. */
 export const EMPTY_STALENESS: StalenessData = { is_stale: false, stale_items: [] };
+
+/**
+ * SELF-229 REWORK: the `046` read FAILED — genuinely UNKNOWN, not "confirmed healthy." This is
+ * `staleness.ts`'s degrade target on an RPC error / malformed response, replacing what used to be
+ * EMPTY_STALENESS there. Render an explicit "staleness unknown" affordance for this value — never
+ * the same treatment as EMPTY_STALENESS (silence) or a stale badge (a specific known list).
+ */
+export const UNKNOWN_STALENESS: StalenessData = { is_stale: null, stale_items: [] };
 
 /**
  * Per-item affordance kind, keyed on connection_status:
