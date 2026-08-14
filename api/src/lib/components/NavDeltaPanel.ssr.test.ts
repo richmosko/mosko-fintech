@@ -1,0 +1,158 @@
+// NavDeltaPanel.ssr.test.ts — SELF-222 render-state coverage for the §2.1.3 multi-horizon
+// NAV-delta panel. Dep-free: server-side render via `svelte/server` (already-installed svelte
+// 5) — NO jsdom / NO @testing-library, same idiom as StaleConstituentBadge.ssr.test.ts.
+//
+// COVERS THE FIVE STATES the SELF-222 brief calls out: normal (incl. both delta directions),
+// insufficient-history, cpi_unavailable, carried (panel-wide Jan/Feb basis-line copy), and the
+// delta_percent NULL-vs-zero distinction. Also covers the read-failed fail-soft branch.
+
+// @vitest-environment node
+import { describe, it, expect } from 'vitest';
+import { render } from 'svelte/server';
+import NavDeltaPanel from './NavDeltaPanel.svelte';
+import { isCpiApplicable, type NavDeltaPanelRow } from '$lib/nav-delta-panel';
+
+function row(overrides: Partial<NavDeltaPanelRow> & { horizon: NavDeltaPanelRow['horizon'] }): NavDeltaPanelRow {
+	return {
+		anchor_date: '2025-08-31',
+		anchor_checkpoint_date: '2025-08-31',
+		current_checkpoint_date: '2026-08-12',
+		delta_nominal: 15_000,
+		delta_percent: 6.2,
+		delta_inflation_adjusted: isCpiApplicable(overrides.horizon) ? 9_000 : null,
+		cpi_basis_period: isCpiApplicable(overrides.horizon) ? '2025-12-01' : null,
+		cpi_any_carried: false,
+		cpi_unavailable: false,
+		...overrides
+	};
+}
+
+// A complete, "everything normal" five-row fixture — individual tests override one row.
+function fixture(overrides: Partial<Record<NavDeltaPanelRow['horizon'], Partial<NavDeltaPanelRow>>> = {}): NavDeltaPanelRow[] {
+	return (['month', 'ytd', '1y', '3y', '5y'] as const).map((h) => row({ horizon: h, ...(overrides[h] ?? {}) }));
+}
+
+describe('NavDeltaPanel — read-failed (fail-soft)', () => {
+	it('rows === null → unavailable notice, no table', () => {
+		const { body } = render(NavDeltaPanel, { props: { rows: null } });
+		expect(body).toContain('temporarily unavailable');
+		expect(body).not.toContain('<table');
+	});
+});
+
+describe('NavDeltaPanel — normal state', () => {
+	it('renders 5 rows × the Horizon/NAV Delta/Inflation Adjusted columns, both delta directions', () => {
+		const rows = fixture({
+			month: { delta_nominal: -1200, delta_percent: -0.8 },
+			ytd: { delta_nominal: 3400, delta_percent: 2.1 }
+		});
+		const { body } = render(NavDeltaPanel, { props: { rows } });
+
+		// All 5 horizon labels present.
+		for (const label of ['Month', 'YTD', '1-Year', '3-Year', '5-Year']) {
+			expect(body).toContain(`>${label}<`);
+		}
+		expect(body).toContain('NAV Delta');
+		expect(body).toContain('Inflation Adjusted');
+
+		// Negative delta: U+2212 minus, never a hyphen-minus, .neg class present (Svelte injects
+		// a scoped-style hash class alongside the static/dynamic ones, so match loosely on the
+		// class ATTRIBUTE containing the "neg" token rather than an exact string).
+		expect(body).toContain('−$1,200');
+		expect(body).toContain('−0.8%');
+		expect(body).toMatch(/class="num[^"]*\bneg\b[^"]*"/);
+
+		// Positive delta: '+' sign, .pos class present.
+		expect(body).toContain('+$3,400');
+		expect(body).toContain('+2.1%');
+		expect(body).toMatch(/class="num[^"]*\bpos\b[^"]*"/);
+
+		// Month/YTD Inflation Adjusted cells render '—' (NOT APPLICABLE), never a computed value.
+		expect(body).not.toContain('Insufficient history');
+		expect(body).not.toContain('CPI unavailable');
+	});
+
+	it('a CPI-applicable row with a real inflation-adjusted figure renders it signed', () => {
+		const rows = fixture({ '1y': { delta_inflation_adjusted: 9_000 } });
+		const { body } = render(NavDeltaPanel, { props: { rows } });
+		expect(body).toContain('+$9,000');
+	});
+});
+
+describe('NavDeltaPanel — insufficient history (AC4)', () => {
+	it('anchor_checkpoint_date NULL → "Insufficient history" badge spans both value columns', () => {
+		const rows = fixture({
+			'5y': { anchor_checkpoint_date: null, delta_nominal: null, delta_percent: null, delta_inflation_adjusted: null }
+		});
+		const { body } = render(NavDeltaPanel, { props: { rows } });
+		expect(body).toContain('Insufficient history');
+		expect(body).toContain('colspan="2"');
+		// The other four rows are unaffected.
+		expect(body).toContain('+$15,000');
+	});
+});
+
+describe('NavDeltaPanel — cpi_unavailable (structural discriminator #2)', () => {
+	it('nominal stands, Inflation Adjusted cell shows "CPI unavailable", not "—"', () => {
+		const rows = fixture({
+			'3y': { cpi_unavailable: true, delta_inflation_adjusted: null, delta_nominal: 22_000, delta_percent: 9.4 }
+		});
+		const { body } = render(NavDeltaPanel, { props: { rows } });
+		expect(body).toContain('CPI unavailable');
+		// The nominal figure for that same row still renders — the outage is scoped to real terms only.
+		expect(body).toContain('+$22,000');
+	});
+});
+
+describe('NavDeltaPanel — carried CPI basis (AC5(iv), panel-wide Jan/Feb copy)', () => {
+	it('cpi_any_carried on any CPI-applicable row → ONE panel-wide basis-line note, dated + cause-named, not an outage', () => {
+		const rows = fixture({
+			'1y': { cpi_any_carried: true },
+			'3y': { cpi_any_carried: true },
+			'5y': { cpi_any_carried: true }
+		});
+		const { body } = render(NavDeltaPanel, { props: { rows } });
+		expect(body).toContain('December 2025');
+		expect(body).toContain('Carried forward');
+		expect(body).toContain('one to two months in arrears');
+		expect(body).toContain('No action needed');
+		// Reads as a dated calendar fact, not an incident/error/outage.
+		expect(body.toLowerCase()).not.toContain('outage');
+		expect(body.toLowerCase()).not.toContain('error');
+		// Series-level: exactly one note, not three (one per CPI-applicable row).
+		expect(body.split('Carried forward').length - 1).toBe(1);
+	});
+
+	it('no carried rows → basis line present, no carried-note copy', () => {
+		const { body } = render(NavDeltaPanel, { props: { rows: fixture() } });
+		expect(body).toContain('CPI-U basis through');
+		expect(body).not.toContain('Carried forward');
+	});
+});
+
+describe('NavDeltaPanel — delta_percent NULL vs zero (AC2 / migration AC2)', () => {
+	it('a real zero percent renders "0.0%", never "—"', () => {
+		const rows = fixture({ month: { delta_nominal: 0, delta_percent: 0 } });
+		const { body } = render(NavDeltaPanel, { props: { rows } });
+		expect(body).toContain('0.0%');
+		expect(body).toContain('$0');
+	});
+
+	it('a NULL percent (non-positive anchor) renders "—" in the percent slot, never "0.0%", nominal still shows', () => {
+		const rows = fixture({ ytd: { delta_nominal: 500, delta_percent: null } });
+		const { body } = render(NavDeltaPanel, { props: { rows } });
+		expect(body).toContain('+$500');
+		expect(body).not.toContain('(+0.0%)');
+		expect(body).not.toContain('0.0%');
+	});
+
+	it('the two cases render distinguishably in the SAME document (no collapse)', () => {
+		const rows = fixture({
+			month: { delta_nominal: 0, delta_percent: 0 },
+			ytd: { delta_nominal: 500, delta_percent: null }
+		});
+		const { body } = render(NavDeltaPanel, { props: { rows } });
+		expect(body).toContain('0.0%');
+		expect(body).toContain('+$500');
+	});
+});
