@@ -510,3 +510,36 @@ describe('SELF-220-QA-r4 — boundary READ FAILURE (EMPTY tuple) + real carried 
 		expect(container.querySelector('.resolution-disclosure')).toBeNull();
 	});
 });
+
+describe('NavHistoryChart — SELF-229 D1 stale-data-marker (whole-user, shared with the other 3 surfaces)', () => {
+	it('staleness prop omitted → zero-footprint, no badge markup', () => {
+		const { queryByText } = render(NavHistoryChart, {
+			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+		});
+		expect(queryByText('May be stale')).toBeNull();
+	});
+
+	it('is_stale true → the shared StaleConstituentBadge renders beside the section heading', () => {
+		const { getByText } = render(NavHistoryChart, {
+			props: {
+				points: POPULATED,
+				paramsError: null,
+				params: PARAMS,
+				boundary: EMPTY_NAV_BOUNDARY,
+				staleness: {
+					is_stale: true,
+					stale_items: [
+						{
+							linked_source_id: '42',
+							institution_name: 'Test Bank',
+							provider: 'plaid',
+							connection_status: 'login_required',
+							status_class: null
+						}
+					]
+				}
+			}
+		});
+		expect(getByText('May be stale')).toBeTruthy();
+	});
+});

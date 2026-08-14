@@ -23,6 +23,7 @@ import { describe, it, expect } from 'vitest';
 import { render } from 'svelte/server';
 import NavCompositionTable from './NavCompositionTable.svelte';
 import type { NavComposition } from '$lib/nav-composition';
+import type { StaleConstituentItem } from '$lib/staleness/stale-constituent';
 
 const fixture: NavComposition = {
 	groups: [
@@ -123,5 +124,34 @@ describe('NavCompositionTable — empty-groups tree (D3 empty categories omitted
 		expect(body).toContain('Net Assets Value (NAV)');
 		expect(body).toContain('Total Non-RE');
 		expect(body).not.toContain('group-head'); // no category headers
+	});
+});
+
+describe('NavCompositionTable — SELF-229 section shell + D1 stale-data-marker', () => {
+	it('owns its own "Composition" section heading (moved in from +page.svelte)', () => {
+		const { body } = render(NavCompositionTable, { props: { composition: fixture } });
+		expect(body).toContain('>Composition<');
+	});
+
+	it('staleness prop omitted → zero-footprint, no badge markup', () => {
+		const { body } = render(NavCompositionTable, { props: { composition: fixture } });
+		expect(body).not.toContain('stale-marker');
+		expect(body).not.toContain('May be stale');
+	});
+
+	it('is_stale true → the shared StaleConstituentBadge renders beside the heading (AGGREGATION level; per-leaf marking is a separate, currently-blocked AC)', () => {
+		const staleItem: StaleConstituentItem = {
+			linked_source_id: '42',
+			institution_name: 'Test Bank',
+			provider: 'plaid',
+			connection_status: 'login_required',
+			status_class: null
+		};
+		const { body } = render(NavCompositionTable, {
+			props: { composition: fixture, staleness: { is_stale: true, stale_items: [staleItem] } }
+		});
+		expect(body).toContain('May be stale');
+		// Institution name only renders inside the collapsed disclosure panel (StaleConstituentBadge's own {#if open} — closed by default); the tag + its accessible summary are what SSR proves here.
+		expect(body).toContain('possibly-stale');
 	});
 });

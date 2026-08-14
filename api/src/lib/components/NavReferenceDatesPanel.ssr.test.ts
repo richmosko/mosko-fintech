@@ -27,6 +27,7 @@ import { describe, it, expect } from 'vitest';
 import { render } from 'svelte/server';
 import NavReferenceDatesPanel from './NavReferenceDatesPanel.svelte';
 import type { NavReferenceDateRow } from '$lib/nav-reference-dates';
+import type { StaleConstituentItem } from '$lib/staleness/stale-constituent';
 
 function row(
 	overrides: Partial<NavReferenceDateRow> & { reference: NavReferenceDateRow['reference'] }
@@ -195,5 +196,92 @@ describe('NavReferenceDatesPanel — January edge case: This Month = Prior Year-
 		expect(tbody.split('<tr').length - 1).toBe(3);
 		// The distinct Prior Month row is unaffected and un-conflated with the shared date.
 		expect(body).toContain('$470,000');
+	});
+});
+
+describe('NavReferenceDatesPanel — SELF-229 January-family copy (words only, no shape change)', () => {
+	it('priorMonthDuplicatesPriorYearEnd fires → the duplicate-rows caption renders, columns caption does not', () => {
+		const rows = fixture({
+			this_month: { reference_date: '2026-01-15', reference_checkpoint_date: '2026-01-15' },
+			prior_month: { reference_date: '2025-12-31', reference_checkpoint_date: '2025-12-31', nav: 480_000 },
+			prior_year_end: { reference_date: '2025-12-31', reference_checkpoint_date: '2025-12-31', nav: 480_000 }
+		});
+		const { body } = render(NavReferenceDatesPanel, { props: { rows } });
+		expect(body).toContain('Prior Month and Prior Year-End show identical figures this month');
+		// Never claims either row is the ONLY exact one (migration 073's own ruling).
+		expect(body).not.toContain('only exact row');
+		expect(body).not.toContain('match exactly across all three rows');
+		// Still exactly 3 <tr> data rows — no de-duplication.
+		const tbody = body.split('<tbody')[1] ?? '';
+		expect(tbody.split('<tr').length - 1).toBe(3);
+	});
+
+	it('columnsCollapseUnderArrears fires → the duplicate-columns caption renders', () => {
+		const rows = fixture({
+			this_month: { cpi_period: '2025-12-01', cpi_basis_period: '2025-12-01' },
+			prior_month: { cpi_period: '2025-12-01', cpi_basis_period: '2025-12-01' },
+			prior_year_end: { cpi_period: '2025-12-01', cpi_basis_period: '2025-12-01' }
+		});
+		const { body } = render(NavReferenceDatesPanel, { props: { rows } });
+		expect(body).toContain('match exactly across all three rows');
+	});
+
+	it('the ordinary case (no January coincidence) → neither caption renders', () => {
+		// The base row() builder defaults every row to the SAME checkpoint/cpi_period unless
+		// overridden — realistic non-January dates given explicitly so this fixture doesn't
+		// vacuously trip the January predicates by sharing the builder's defaults.
+		const rows = fixture({
+			this_month: { reference_date: '2026-07-31', reference_checkpoint_date: '2026-07-31', cpi_period: '2026-06-01' },
+			prior_month: { reference_date: '2026-06-30', reference_checkpoint_date: '2026-06-30', cpi_period: '2026-06-01' },
+			prior_year_end: { reference_date: '2025-12-31', reference_checkpoint_date: '2025-12-31', cpi_period: '2025-12-01' }
+		});
+		const { body } = render(NavReferenceDatesPanel, { props: { rows } });
+		expect(body).not.toContain('Prior Month and Prior Year-End show identical figures');
+		expect(body).not.toContain('match exactly across all three rows');
+	});
+
+	it('a per-row carried-CPI marker renders next to the Prior Yr $ value for a carried row only', () => {
+		const rows = fixture({
+			this_month: { cpi_any_carried: true, cpi_period: '2025-12-01' },
+			prior_month: { cpi_any_carried: false }
+		});
+		const { body } = render(NavReferenceDatesPanel, { props: { rows } });
+		expect(body).toContain('carried-flag');
+		expect(body).toContain('Carried forward');
+		expect(body).toContain('No action needed');
+	});
+
+	it('no carried rows → zero carried-flag markers', () => {
+		const rows = fixture();
+		const { body } = render(NavReferenceDatesPanel, { props: { rows } });
+		expect(body).not.toContain('carried-flag');
+		expect(body).not.toContain('Carried forward');
+	});
+});
+
+describe('NavReferenceDatesPanel — SELF-229 D1 stale-data-marker (whole-user, shared with the other 3 surfaces)', () => {
+	const staleItem: StaleConstituentItem = {
+		linked_source_id: '42',
+		institution_name: 'Test Bank',
+		provider: 'plaid',
+		connection_status: 'login_required',
+		status_class: null
+	};
+
+	it('staleness prop omitted → zero-footprint, no badge markup', () => {
+		const rows = fixture();
+		const { body } = render(NavReferenceDatesPanel, { props: { rows } });
+		expect(body).not.toContain('stale-marker');
+		expect(body).not.toContain('May be stale');
+	});
+
+	it('is_stale true → the shared StaleConstituentBadge renders beside the section heading', () => {
+		const rows = fixture();
+		const { body } = render(NavReferenceDatesPanel, {
+			props: { rows, staleness: { is_stale: true, stale_items: [staleItem] } }
+		});
+		expect(body).toContain('May be stale');
+		// Institution name only renders inside the collapsed disclosure panel (StaleConstituentBadge's own {#if open} — closed by default); the tag + its accessible summary are what SSR proves here.
+		expect(body).toContain('possibly-stale');
 	});
 });

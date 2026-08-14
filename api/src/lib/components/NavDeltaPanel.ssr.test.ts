@@ -17,6 +17,7 @@ import { describe, it, expect } from 'vitest';
 import { render } from 'svelte/server';
 import NavDeltaPanel from './NavDeltaPanel.svelte';
 import { isCpiApplicable, type NavDeltaPanelRow } from '$lib/nav-delta-panel';
+import type { StaleConstituentItem } from '$lib/staleness/stale-constituent';
 
 function row(overrides: Partial<NavDeltaPanelRow> & { horizon: NavDeltaPanelRow['horizon'] }): NavDeltaPanelRow {
 	return {
@@ -310,5 +311,32 @@ describe('NavDeltaPanel — Inflation Adjusted percent (072 AC3 amendment)', () 
 		const { body } = render(NavDeltaPanel, { props: { rows } });
 		expect(body).toContain('0.0%');
 		expect(body).toContain('−$1,800');
+	});
+});
+
+describe('NavDeltaPanel — SELF-229 D1 stale-data-marker (whole-user, shared with the other 3 surfaces)', () => {
+	const staleItem: StaleConstituentItem = {
+		linked_source_id: '42',
+		institution_name: 'Test Bank',
+		provider: 'plaid',
+		connection_status: 'login_required',
+		status_class: null
+	};
+
+	it('staleness prop omitted → zero-footprint, no badge markup', () => {
+		const rows = fixture();
+		const { body } = render(NavDeltaPanel, { props: { rows } });
+		expect(body).not.toContain('stale-marker');
+		expect(body).not.toContain('May be stale');
+	});
+
+	it('is_stale true → the shared StaleConstituentBadge renders beside the section heading, distinct from the carried-CPI basis line', () => {
+		const rows = fixture();
+		const { body } = render(NavDeltaPanel, {
+			props: { rows, staleness: { is_stale: true, stale_items: [staleItem] } }
+		});
+		expect(body).toContain('May be stale');
+		// Institution name only renders inside the collapsed disclosure panel (StaleConstituentBadge's own {#if open} — closed by default); the tag + its accessible summary are what SSR proves here.
+		expect(body).toContain('possibly-stale');
 	});
 });

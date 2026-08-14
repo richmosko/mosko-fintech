@@ -24,15 +24,36 @@
 	  • Whole-dollar, tabular-nums (D9): the NAV foot reads identical to the §2.1.1 headline and
 	    subtotals never appear off-by-rounding.
 
-	Per-row STALENESS is deferred to SELF-229 (D4) — the JSONB carries no staleness flags yet.
+	D1 stale-data-marker (SELF-229 ramp): the AGGREGATION-level badge is wired below off the SAME
+	whole-user `046` fn_aggregation_has_stale_constituent() payload the §2.1.1 headline already
+	consumes (+page.server.ts's `data.staleness`, threaded down unchanged). This component now owns
+	its own section heading (moved in from +page.svelte's wrapper) so the badge sits adjacent to it,
+	matching NavHistoryChart / NavDeltaPanel / NavReferenceDatesPanel's self-contained pattern.
+	ADR-013 D1: the surface list at PRD §2.4.4 is illustrative-not-exhaustive; further surfaces ramp
+	at V1.2-V1.5 milestones (§2.2, §2.3, §2.5, §2.6).
+
+	⚠ PER-ROW LEAF staleness (AC#2 — a per-account indicator IN ADDITION to the aggregation badge
+	above) is BLOCKED, not merely deferred: the 051 fn_nav_composition JSONB leaf carries only
+	`account_id`; `staleness.stale_items[]` is keyed on `linked_source_id`. There is no client-side
+	join between the two — matching an unrelated pair of IDs would be exactly the client-side
+	inference this framework forbids (server discriminators only). Needs a Backend contract
+	extension to 051 (or a new small read) attaching either `linked_source_id` or a precomputed
+	`is_stale` boolean to each leaf; requested, not yet landed (see team-lead sync, SELF-229). Wire
+	the leaf marker the moment that field ships — do not approximate it in the meantime.
+
 	Tokens only (var(--c-*)); no hardcoded hex/px-spacing/font (ADR-013 P5).
 -->
 <script lang="ts">
 	import type { NavComposition } from '$lib/nav-composition';
 	import { buildupRows } from '$lib/nav-composition';
 	import { accountTypeLabel } from '$lib/account-display';
+	import { EMPTY_STALENESS, type StalenessData } from '$lib/staleness/stale-constituent';
+	import StaleConstituentBadge from './StaleConstituentBadge.svelte';
 
-	let { composition }: { composition: NavComposition } = $props();
+	let {
+		composition,
+		staleness = EMPTY_STALENESS
+	}: { composition: NavComposition; staleness?: StalenessData } = $props();
 
 	const groups = $derived(composition.groups);
 	const ladder = $derived(buildupRows(composition.buildups));
@@ -61,7 +82,13 @@
 	}
 </script>
 
-<div class="table-scroll">
+<section class="composition" aria-labelledby="composition-label">
+	<h2 id="composition-label" class="section-label">Composition</h2>
+	<!-- D1 stale-data-marker: marks stale contribution beside the surface, never hides it.
+	     Per-leaf marking (AC#2) is BLOCKED — see the module header. -->
+	<StaleConstituentBadge isStale={staleness.is_stale} staleItems={staleness.stale_items} />
+
+	<div class="table-scroll">
 	<table class="comp">
 		<caption class="sr-only">Net worth composition by account category, with the build-up to net assets value.</caption>
 		<thead>
@@ -136,6 +163,7 @@
 		</tbody>
 	</table>
 </div>
+</section>
 
 <style>
 	/* Accessible-name-only caption (visually hidden; keeps the table named for AT). */
@@ -149,6 +177,22 @@
 		clip: rect(0, 0, 0, 0);
 		white-space: nowrap;
 		border: 0;
+	}
+
+	/* §2.1.5 composition foot section shell — moved in from +page.svelte's wrapper (SELF-229) so
+	   the D1 stale-data-marker badge can sit adjacent to this surface's own heading, matching
+	   NavHistoryChart / NavDeltaPanel / NavReferenceDatesPanel's self-contained pattern. */
+	.composition {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-3);
+	}
+	.section-label {
+		margin: 0;
+		font: var(--weight-semi) var(--fs-h3) / var(--lh-tight) var(--font-ui);
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+		color: var(--c-text-secondary);
 	}
 
 	.table-scroll {

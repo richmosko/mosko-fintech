@@ -16,6 +16,14 @@
 	Staleness marker (AC#4) attaches here (SELF-208): the D1 stale-data-marker off the `046`
 	fn_aggregation_has_stale_constituent primitive, threaded through the loader as `data.staleness`
 	({ is_stale, stale_items }). It MARKS beside the number, never suppresses it (D1).
+
+	SELF-229 RAMP: the SAME `staleness` object (the fn takes no scope filter — it is a whole-user
+	aggregate, not per-surface) is threaded down unchanged as a `staleness` prop to
+	NavHistoryChart / NavDeltaPanel / NavReferenceDatesPanel / NavCompositionTable below, each of
+	which renders its own <StaleConstituentBadge> adjacent to its own section heading. This is why
+	NavCompositionTable now owns its "Composition" heading + wrapping <section> itself (moved in
+	from this file) rather than this file rendering a bare h2 around it — every consuming surface
+	follows the same self-contained badge-beside-heading pattern.
 -->
 <script lang="ts">
 	import type { PageData } from './$types';
@@ -158,7 +166,7 @@
 		     matches Finance_Report page 3, the §2.1.4 table ABOVE the §2.1.3 panel, both below
 		     the headline under the ADR-013 P2 lock). NavReferenceDatesPanel owns its own
 		     fail-soft/unavailable-notice gating internally, same posture as NavDeltaPanel below. -->
-		<NavReferenceDatesPanel rows={navReferenceDates} />
+		<NavReferenceDatesPanel rows={navReferenceDates} {staleness} />
 
 		<!-- §2.1.3 multi-horizon NAV-delta panel (SELF-222 · V1.1) — Phase 2 P2 lock (ADR-013
 		     Decision 3): "Headline NAV + deltas lead → 60-mo trend → composition table." Mounted
@@ -166,16 +174,13 @@
 		     (NavDeltaPanel's own `.section-label` heading, not a second hero number).
 		     NavDeltaPanel owns its own fail-soft/unavailable-notice gating internally — a delta
 		     read failure never takes down the headline above. -->
-		<NavDeltaPanel rows={navDeltaPanel} />
+		<NavDeltaPanel rows={navDeltaPanel} {staleness} />
 
 		<!-- §2.1.5 composition foot (SELF-226) — the build-up below the headline on the single
 		     canvas (P2 number-first). Fail-soft: renders only when the composition load succeeded;
 		     absent → the headline still stands on its own. -->
 		{#if composition}
-			<section class="composition" aria-labelledby="composition-label">
-				<h2 id="composition-label" class="section-label">Composition</h2>
-				<NavCompositionTable {composition} />
-			</section>
+			<NavCompositionTable {composition} {staleness} />
 		{/if}
 
 		<!-- §2.1.2.d NAV-over-time chart (SELF-220 · V1.1) — mounted below composition,
@@ -193,6 +198,7 @@
 			paramsError={data.navSeriesParamsError}
 			params={data.navSeriesParams}
 			boundary={data.navBoundary ?? EMPTY_NAV_BOUNDARY}
+			{staleness}
 		/>
 	{/if}
 </main>
@@ -205,20 +211,6 @@
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-6);
-	}
-
-	/* ── §2.1.5 composition foot ──────────────────────────────────────────────── */
-	.composition {
-		display: flex;
-		flex-direction: column;
-		gap: var(--space-3);
-	}
-	.section-label {
-		margin: 0;
-		font: var(--weight-semi) var(--fs-h3) / var(--lh-tight) var(--font-ui);
-		letter-spacing: 0.06em;
-		text-transform: uppercase;
-		color: var(--c-text-secondary);
 	}
 
 	/* ── headline ─────────────────────────────────────────────────────────── */
