@@ -32,14 +32,21 @@
 	ADR-013 D1: the surface list at PRD §2.4.4 is illustrative-not-exhaustive; further surfaces ramp
 	at V1.2-V1.5 milestones (§2.2, §2.3, §2.5, §2.6).
 
-	⚠ PER-ROW LEAF staleness (AC#2 — a per-account indicator IN ADDITION to the aggregation badge
-	above) is BLOCKED, not merely deferred: the 051 fn_nav_composition JSONB leaf carries only
-	`account_id`; `staleness.stale_items[]` is keyed on `linked_source_id`. There is no client-side
-	join between the two — matching an unrelated pair of IDs would be exactly the client-side
-	inference this framework forbids (server discriminators only). Needs a Backend contract
-	extension to 051 (or a new small read) attaching either `linked_source_id` or a precomputed
-	`is_stale` boolean to each leaf; requested, not yet landed (see team-lead sync, SELF-229). Wire
-	the leaf marker the moment that field ships — do not approximate it in the meantime.
+	PER-ROW LEAF staleness (AC#2 — a per-account indicator IN ADDITION to the aggregation badge
+	above): Backend delivers `NavCompositionLeaf.is_stale` via a SERVER-SIDE join in the loader
+	(pfin.account.linked_source_id ↔ staleness.stale_items[].linked_source_id — NO 051 change, no
+	migration; see $lib/nav-composition.ts's header). TRI-STATE, not a plain boolean:
+	  • true  → CONFIRMED stale. Rendered as an italic, canary-hued (--c-attn-text) inline tag next
+	    to the account name — the SAME signal family as the aggregation badge above (a server
+	    discriminator, never inferred here), just localized to this leaf. No duplicate re-auth CTA
+	    at leaf level; the aggregation badge above already carries that action.
+	  • false → confirmed NOT stale. Renders nothing (plain leaf row).
+	  • null  → UNKNOWN (the server-side join query itself failed). Rendered DISTINCTLY from `true`
+	    — a quiet, muted (--c-text-muted) note, matching the house idiom for "couldn't confirm X"
+	    (`+page.svelte`'s own `data.accountPresence === 'unknown'` notice under the headline NAV).
+	    NEVER collapsed with `false` (that would silently present an unconfirmed row as fresh — the
+	    exact SELF-220 Sec round 2 defect this tri-state shape exists to avoid) and NEVER collapsed
+	    with `true` (an unconfirmed row is not evidence of staleness either).
 
 	Tokens only (var(--c-*)); no hardcoded hex/px-spacing/font (ADR-013 P5).
 -->
@@ -125,6 +132,20 @@
 						<tr class="leaf">
 							<td class="indent">
 								<a class="leaf-link" href={`/accounts/${a.account_id}`}>{a.account_name}</a>
+								<!-- AC#2 per-leaf staleness (SELF-229) — TRI-STATE, `false` renders nothing. -->
+								{#if a.is_stale === true}
+									<span
+										class="leaf-stale-flag"
+										title="This account is contributing possibly-stale data — see the staleness notice above."
+										>May be stale</span
+									>
+								{:else if a.is_stale === null}
+									<span
+										class="leaf-stale-unknown"
+										title="Couldn't confirm whether this account is contributing stale data."
+										>Staleness unknown</span
+									>
+								{/if}
 							</td>
 							<td class="num">{usd.format(a.current_market_value)}</td>
 							<td
@@ -278,6 +299,27 @@
 		outline: none;
 		box-shadow: var(--focus-ring);
 		border-radius: var(--radius-sm);
+	}
+
+	/* AC#2 per-leaf staleness (SELF-229) — TRI-STATE, two DISTINCT treatments, never merged:
+	   confirmed-stale uses the RESERVED canary hue (same signal family as the aggregation badge
+	   above — a server discriminator, not decoration, per §5 fence 8); unknown is the QUIET
+	   muted-informational register this codebase already uses for "couldn't confirm X"
+	   (+page.svelte's accountPresence==='unknown' notice) — never the canary hue, since an
+	   unconfirmed row is not evidence of staleness either. */
+	.leaf-stale-flag {
+		display: inline-block;
+		margin-left: var(--space-2);
+		font-style: italic;
+		font-size: var(--fs-small);
+		color: var(--c-attn-text);
+	}
+	.leaf-stale-unknown {
+		display: inline-block;
+		margin-left: var(--space-2);
+		font-style: italic;
+		font-size: var(--fs-small);
+		color: var(--c-text-muted);
 	}
 
 	/* VALUE-COLOR FENCE (§5 fence 1): pos/neg ONLY on the Unrealized G/L column. */

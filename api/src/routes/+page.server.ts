@@ -42,11 +42,14 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	// would just move the lie one file closer to the render.
 	const { netWorth, accountPresence } = await loadNetWorthView(locals.supabase, asOf);
 
-	// D1 non-silent staleness marker (SELF-208 §2.4.4.c). FAIL-SOFT is load-bearing: a
-	// staleness-read failure must NEVER break or block the NAV number — degrade to an empty
-	// staleness (badge simply doesn't render), mirroring the NAV's degrade-never-wrong-number
-	// posture. loadStaleness() already fails soft internally; this try/catch is the belt-and-
-	// suspenders boundary so an unexpected throw can never take down the NAV surface.
+	// D1 non-silent staleness marker (SELF-208 §2.4.4.c; ramped at SELF-229). FAIL-SOFT is
+	// load-bearing: a staleness-read failure must NEVER break or block the NAV number — degrade to
+	// an empty staleness (badge simply doesn't render), mirroring the NAV's degrade-never-wrong-
+	// number posture. loadStaleness() already fails soft internally; this try/catch is the
+	// belt-and-suspenders boundary so an unexpected throw can never take down the NAV surface.
+	// staleness is loaded ONCE (046 is zero-arg — no p_scope_filter, it doesn't exist) and is the
+	// SAME value every V1.1 NW surface reads. Composition additionally joins it to per-row
+	// granularity below.
 	let staleness = EMPTY_STALENESS;
 	try {
 		staleness = await loadStaleness(locals.supabase);
@@ -55,15 +58,25 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		staleness = EMPTY_STALENESS;
 	}
 
+	// SELF-229: caller's stale linked_source_ids as the string set loadNavComposition's join
+	// expects. Built ONCE from the SAME staleness read above — never a second 046 call.
+	const staleLinkedSourceIds = new Set(
+		staleness.stale_items.map((item) => String(item.linked_source_id))
+	);
+
 	// §2.1.5 NAV-composition table (V1.1 / SELF-226). Same FAIL-SOFT posture as staleness above:
 	// a composition-read failure must NEVER take down the §2.1.1 headline netWorth — degrade to
 	// `null` (the table just doesn't render; the headline still shows). loadNavComposition() fails
 	// soft internally; this try/catch is the belt-and-suspenders boundary so an unexpected throw
 	// can't take down the NAV surface. asOf is passed explicitly so the composition foots to the
 	// headline's fn_compute_nav(asOf, true) by construction (051 FOOT-TO-NAV EXACT).
+	// NOTE: this `null` degrade below is for the WHOLE TREE (051 RPC failure) — a DIFFERENT,
+	// narrower failure inside the per-row join (SELF-229) degrades to `is_stale: null` per leaf
+	// instead (navComposition.ts), so the table still renders with an explicit "unknown" state
+	// rather than disappearing over a metadata-only failure.
 	let composition = null;
 	try {
-		composition = await loadNavComposition(locals.supabase, asOf);
+		composition = await loadNavComposition(locals.supabase, asOf, staleLinkedSourceIds);
 	} catch (err) {
 		console.error('[+page.server] composition load threw; degrading to null:', err);
 		composition = null;

@@ -31,14 +31,14 @@ const fixture: NavComposition = {
 			category: 'investment',
 			subtotal: 500_000,
 			accounts: [
-				{ account_id: 1, account_name: 'Brokerage', current_market_value: 500_000, unrealized_gl: 42_000 }
+				{ account_id: 1, account_name: 'Brokerage', current_market_value: 500_000, unrealized_gl: 42_000, is_stale: false }
 			]
 		},
 		{
 			category: 'liability',
 			subtotal: -150_000, // natural-negative (D5)
 			accounts: [
-				{ account_id: 2, account_name: 'Mortgage', current_market_value: -150_000, unrealized_gl: null }
+				{ account_id: 2, account_name: 'Mortgage', current_market_value: -150_000, unrealized_gl: null, is_stale: false }
 			]
 		}
 	],

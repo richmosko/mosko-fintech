@@ -25,9 +25,17 @@
 //   • `nav` foots EXACT to the §2.1.1 headline (051 FOOT-TO-NAV) — rendered whole-dollar to match
 //     the headline so the foot reads identical to it (ratified D9).
 //
-// Per-row STALENESS marking is intentionally NOT modelled here — deferred to SELF-229 (ratified
-// D4; the composition JSONB carries no staleness flags, and marking needs a Backend contract
-// extension + a linked_source_id↔account_id join). This surface is structure only for V1.1.
+// Per-row STALENESS (SELF-229, ratified D4) is modelled as `NavCompositionLeaf.is_stale` below.
+// The 051 JSONB itself still carries none of this — the loader computes it via a server-side
+// linked_source_id↔account_id join over `pfin.account` and attaches it per leaf before this
+// shape ever reaches the browser (see api/src/lib/server/queries/navComposition.ts). ADR-013 D1:
+// the staleness-marking surface list at PRD §2.4.4 is illustrative-not-exhaustive; further
+// surfaces ramp at V1.2-V1.5 milestones (§2.2/§2.3/§2.5/§2.6).
+//
+// is_stale IS TRI-STATE (boolean | null), not a plain boolean — see the field's own doc comment.
+// This is a REWORK: the first cut collapsed a join-query failure to `false`, which is the exact
+// silent-fresh-on-failure shape SELF-220 Sec round 2 rejected on the chart. Render `null` as an
+// explicit "staleness unknown" state on the affected row — NEVER as "confirmed not stale."
 
 /** One account leaf row — mirrors a 051 groups[].accounts[] element. */
 export interface NavCompositionLeaf {
@@ -38,6 +46,15 @@ export interface NavCompositionLeaf {
 	current_market_value: number;
 	/** NULL for non-investment accounts (straight from 049). */
 	unrealized_gl: number | null;
+	/**
+	 * SELF-229 (ratified D4): TRI-STATE.
+	 *   true  = this leaf's owning `pfin.account.linked_source_id` IS currently in the caller's
+	 *           `046` stale_items[].
+	 *   false = CONFIRMED not stale (join succeeded; not in that set, or a manual/unlinked account).
+	 *   null  = UNKNOWN — the server-side join couldn't run. Render an explicit "staleness unknown"
+	 *           affordance, never treat this the same as `false` (SELF-220 precedent).
+	 */
+	is_stale: boolean | null;
 }
 
 /** One category group — mirrors a 051 groups[] element. Empty categories are omitted upstream. */

@@ -18,6 +18,13 @@
 // (logged server-side, never thrown). `null` = "composition unavailable" (the table simply
 // doesn't render) — it must NEVER take down the §2.1.1 headline NAV. A genuine zero-account
 // tenant still gets a well-formed tree ({ groups: [], buildups: {…0…}, nav: 0 }), not null.
+//
+// PER-ROW STALENESS (SELF-229). NO migration: server-side join over pfin.account.linked_source_id
+// (existing column) against the caller's already-loaded 046 stale_items[]. NOT a change to 051.
+// SECURITY INVOKER throughout — plain RLS-scoped select, no service_role.
+//
+// ⚠ is_stale IS TRI-STATE (boolean | null) — REWORK per team-lead catch (mirrors SELF-220 Sec
+// round 2): a join-query failure must degrade to null (UNKNOWN) on every leaf, never to false.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ZoneResolvedAsOf } from '$lib/server/time/asOf';
@@ -31,6 +38,13 @@ export type NavCompositionAccount = {
 	current_market_value: number;
 	/** 049 unrealized G/L; NULL for non-investment accounts (051 AC#3). */
 	unrealized_gl: number | null;
+	/**
+	 * SELF-229: TRI-STATE, not a plain boolean.
+	 *   true  = this leaf's `pfin.account.linked_source_id` IS in the caller's `046` stale_items[].
+	 *   false = the join succeeded and it is CONFIRMED not in that set (or manual/unlinked).
+	 *   null  = UNKNOWN — the join query itself failed. NEVER collapsed to `false`.
+	 */
+	is_stale: boolean | null;
 };
 
 /** One category group — canonical order, empty categories omitted (051 A4). */
@@ -66,10 +80,15 @@ export type NavComposition = {
  * `asOf` is an ISO date string (YYYY-MM-DD) — passed explicitly (not left to the fn default) so
  * the composition foots to the §2.1.1 headline's fn_compute_nav(asOf, true) by construction.
  * Fail-soft: any error (read failure, unexpected null) degrades to `null` — logged, never thrown.
+ *
+ * `staleLinkedSourceIds` (SELF-229) — the CALLER's already-loaded `046` stale_items[], as a set of
+ * `linked_source_id` strings (SELF-199 bigint→string convention). Pass
+ * `EMPTY_STALE_LINKED_SOURCE_IDS` when the caller has nothing stale — the join is skipped entirely.
  */
 export async function loadNavComposition(
 	supabase: SupabaseClient,
-	asOf: ZoneResolvedAsOf
+	asOf: ZoneResolvedAsOf,
+	staleLinkedSourceIds: ReadonlySet<string>
 ): Promise<NavComposition | null> {
 	const { data, error } = await supabase
 		.schema('pfin')
@@ -87,5 +106,53 @@ export async function loadNavComposition(
 		return null;
 	}
 
-	return data as NavComposition;
+	const composition = data as NavComposition;
+	const staleAccountIds = await resolveStaleAccountIds(supabase, staleLinkedSourceIds);
+
+	// staleAccountIds is `null` ONLY when the join query itself failed — every leaf gets `null`
+	// together in that case, never `false`.
+	return {
+		...composition,
+		groups: composition.groups.map((group) => ({
+			...group,
+			accounts: group.accounts.map((account) => ({
+				...account,
+				is_stale: staleAccountIds === null ? null : staleAccountIds.has(String(account.account_id))
+			}))
+		}))
+	};
 }
+
+/**
+ * SELF-229 per-row join. Return value is TRI-STATE:
+ *   Set<string> (possibly empty) = join KNOWN — every leaf's is_stale can be asserted true/false.
+ *   null                         = join FAILED — every leaf's is_stale must become null (UNKNOWN),
+ *                                   never false. This is the SELF-220-precedent fix.
+ */
+async function resolveStaleAccountIds(
+	supabase: SupabaseClient,
+	staleLinkedSourceIds: ReadonlySet<string>
+): Promise<ReadonlySet<string> | null> {
+	if (staleLinkedSourceIds.size === 0) return EMPTY_STALE_ACCOUNT_IDS;
+
+	const { data, error } = await supabase
+		.schema('pfin')
+		.from('account')
+		.select('account_id, linked_source_id')
+		.in('linked_source_id', Array.from(staleLinkedSourceIds));
+
+	if (error) {
+		console.error(
+			'[navComposition] stale-account join failed; every leaf degrades to is_stale=null ' +
+				'(UNKNOWN) — NEVER false, per the SELF-220 silent-fresh-on-failure precedent:',
+			error.message
+		);
+		return null;
+	}
+
+	return new Set((data ?? []).map((row) => String(row.account_id)));
+}
+
+/** Shared zero-value — avoids allocating a fresh empty Set at every no-op call site. */
+export const EMPTY_STALE_LINKED_SOURCE_IDS: ReadonlySet<string> = new Set();
+const EMPTY_STALE_ACCOUNT_IDS: ReadonlySet<string> = new Set();

@@ -23,15 +23,15 @@ const fixture: NavComposition = {
 			category: 'investment',
 			subtotal: 500_000,
 			accounts: [
-				{ account_id: 1, account_name: 'Brokerage', current_market_value: 500_000, unrealized_gl: 42_000 },
-				{ account_id: 7, account_name: 'Old IRA', current_market_value: 90_000, unrealized_gl: -3_500 }
+				{ account_id: 1, account_name: 'Brokerage', current_market_value: 500_000, unrealized_gl: 42_000, is_stale: false },
+				{ account_id: 7, account_name: 'Old IRA', current_market_value: 90_000, unrealized_gl: -3_500, is_stale: false }
 			]
 		},
 		{
 			category: 'liability',
 			subtotal: -150_000,
 			accounts: [
-				{ account_id: 2, account_name: 'Mortgage', current_market_value: -150_000, unrealized_gl: null }
+				{ account_id: 2, account_name: 'Mortgage', current_market_value: -150_000, unrealized_gl: null, is_stale: false }
 			]
 		}
 	],
@@ -126,5 +126,54 @@ describe('NavCompositionTable — keyboard / disclosure a11y', () => {
 		expect(toggle.getAttribute('type')).toBe('button');
 		// aria-controls points at the group tbody so AT announces the controlled region.
 		expect(toggle.getAttribute('aria-controls')).toBe('comp-grp-investment');
+	});
+});
+
+describe('NavCompositionTable — SELF-229 AC#2 per-leaf staleness (TRI-STATE, never merged)', () => {
+	function triStateFixture(is_stale: boolean | null): NavComposition {
+		return {
+			groups: [
+				{
+					category: 'investment',
+					subtotal: 500_000,
+					accounts: [
+						{ account_id: 1, account_name: 'Brokerage', current_market_value: 500_000, unrealized_gl: 42_000, is_stale }
+					]
+				}
+			],
+			buildups: { total_non_re: 500_000, gross_total: 500_000, debt: 0, realized_tax_liab: 0, unrealized_tax_liab: 0 },
+			nav: 500_000
+		};
+	}
+
+	it('is_stale === true → "May be stale" tag renders beside the leaf link, no "unknown" text', async () => {
+		const { getByRole, findByText, queryByText } = render(NavCompositionTable, {
+			props: { composition: triStateFixture(true) }
+		});
+		await fireEvent.click(getByRole('button', { name: /Investment/i }));
+		await findByText('Brokerage');
+		expect(await findByText('May be stale')).toBeTruthy();
+		expect(queryByText('Staleness unknown')).toBeNull();
+	});
+
+	it('is_stale === null (UNKNOWN — join failed) → "Staleness unknown" renders, DISTINCT from "May be stale"', async () => {
+		const { getByRole, findByText, queryByText } = render(NavCompositionTable, {
+			props: { composition: triStateFixture(null) }
+		});
+		await fireEvent.click(getByRole('button', { name: /Investment/i }));
+		await findByText('Brokerage');
+		expect(await findByText('Staleness unknown')).toBeTruthy();
+		// UNKNOWN must never render as, or alongside, the confirmed-stale tag.
+		expect(queryByText('May be stale')).toBeNull();
+	});
+
+	it('is_stale === false (confirmed not stale) → neither marker renders', async () => {
+		const { getByRole, findByText, queryByText } = render(NavCompositionTable, {
+			props: { composition: triStateFixture(false) }
+		});
+		await fireEvent.click(getByRole('button', { name: /Investment/i }));
+		await findByText('Brokerage');
+		expect(queryByText('May be stale')).toBeNull();
+		expect(queryByText('Staleness unknown')).toBeNull();
 	});
 });
