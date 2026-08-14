@@ -16,6 +16,14 @@
 // Fail-soft is load-bearing: a staleness-read failure degrades to EMPTY_STALENESS (the badge
 // just doesn't render) — it must NEVER throw and take down the NAV surface (D1 governs honesty
 // of the number the user sees; it must not gate the number's availability).
+//
+// ADR-013 D1 (SELF-229 AC5 annotation, verbatim): "surface list at PRD §2.4.4 is
+// illustrative-not-exhaustive; further surfaces ramp at V1.2-V1.5 milestones (§2.2, §2.3, §2.5,
+// §2.6)." This is the FRAMEWORK's own consumption site — loadStaleness() is called exactly ONCE
+// per request (from `+page.server.ts`) and its result is the SAME value every V1.1 NW surface on
+// that route reads (§2.1.1 headline / §2.1.2 chart / §2.1.3 delta panel / §2.1.4 reference-dates
+// panel), plus §2.1.5 composition's additional per-row join in navComposition.ts. No surface here
+// re-invokes this function — see +page.server.ts's own D1 annotation for why.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
