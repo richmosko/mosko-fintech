@@ -39,9 +39,15 @@ assertion with no watcher.**
    (read-only), not from the report.
 3. **Recovery assets preserved and dual-verified** (sha256 by team-lead, then
    independently by Architect) at `~/Projects/mosko-fintech-recovery/nav-history-20260814/`
-   — `nav_backfill_run.log` (the recovery source: complete per-row record incl.
-   the 2026-08-10 cron checkpoint) and `baseline_nav.csv` (⚠ NOT the run's
-   input — it ends 2025-09-30; the log is the asset).
+   — `nav_backfill_run.log` (complete per-row record incl. the 2026-08-10 cron
+   checkpoint) and `baseline_nav.csv`. **Corrected 2026-08-14, same day:** this
+   record originally described the CSV as "NOT the run's input — it ends
+   2025-09-30". That was false against the file: `baseline_nav.csv` **is** the
+   run's exact input, complete `2015-12-31..2026-07-31` (2025-09-30 is an
+   interior row, not the last), sha256-identical to
+   `temp/nav-history/baseline_nav.csv` — the path the run log's own header line
+   names as its input. Either preserved file therefore suffices for a faithful
+   re-run; no reconstruction from the log is needed.
 4. **`supabase db reset` is banned outright for all agents, any flags** —
    effective immediately, permanent. Scratch DBs are hand-built: `createdb` +
    `psql -f` per migration file (or a same-cluster schema dump), never a CLI
