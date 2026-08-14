@@ -73,10 +73,11 @@ function toItem(r: RawStaleItem): StaleConstituentItem {
 
 /**
  * Load the caller's aggregation-staleness state, RLS-scoped via the per-request anon client.
- * Fail-soft: any error (read failure, unexpected empty result set) degrades to UNKNOWN_STALENESS
- * ({ is_stale: null, stale_items: [] }) — logged server-side, never surfaced, never thrown, and
- * NEVER EMPTY_STALENESS (SELF-229 REWORK — see module header). EMPTY_STALENESS is reserved for
- * the genuine case: a SUCCESSFUL read that found nothing stale.
+ * Fail-soft: any error (read failure, unexpected empty result set, OR a malformed/inconsistent
+ * row shape — Sec F1) degrades to UNKNOWN_STALENESS ({ is_stale: null, stale_items: [] }) —
+ * logged server-side, never surfaced, never thrown, and NEVER EMPTY_STALENESS (SELF-229 REWORK —
+ * see module header). EMPTY_STALENESS is reserved for the genuine case: a SUCCESSFUL read, with a
+ * well-formed two-field row, that found nothing stale.
  */
 export async function loadStaleness(supabase: SupabaseClient): Promise<StalenessData> {
 	const { data, error } = await supabase
@@ -98,6 +99,22 @@ export async function loadStaleness(supabase: SupabaseClient): Promise<Staleness
 		return UNKNOWN_STALENESS;
 	}
 
-	const items = Array.isArray(row.stale_items) ? row.stale_items.map(toItem) : [];
-	return { is_stale: Boolean(row.is_stale), stale_items: items };
+	// Sec F1 (AMBER, 2026-08-14): the `046` contract is a TWO-FIELD tuple (is_stale boolean,
+	// stale_items jsonb) and the pair must be validated TOGETHER, not coerced field-by-field.
+	// `Boolean(row.is_stale)` alone silently turns null/absent/non-boolean into `false` —
+	// EMPTY_STALENESS's exact value, reintroducing this file's own REWORK defect through a side
+	// door the RPC-error/no-row guards above don't cover. `Array.isArray(...) ? ... : []` alone
+	// can pair a truthy `is_stale` with an empty list. NOT reachable from `046` today (Sec
+	// verified the CTE makes the pair consistent by construction) — this guards a CONTRACT-DRIFT
+	// trap, not a currently-live path, so it degrades to UNKNOWN rather than asserting a shape a
+	// malformed row cannot actually support.
+	if (typeof row.is_stale !== 'boolean' || !Array.isArray(row.stale_items)) {
+		console.error(
+			'[staleness] malformed aggregate row (is_stale/stale_items shape mismatch); degrading to unknown staleness:',
+			row
+		);
+		return UNKNOWN_STALENESS;
+	}
+
+	return { is_stale: row.is_stale, stale_items: row.stale_items.map(toItem) };
 }

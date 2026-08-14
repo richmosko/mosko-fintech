@@ -97,5 +97,40 @@ describe('loadStaleness', () => {
 			expect(result).toEqual(UNKNOWN_STALENESS);
 			expect(result.is_stale).not.toBe(false);
 		});
+
+		// ── Sec F1 (AMBER, 2026-08-14): the malformed-row guard. NOT reachable from the real `046`
+		// RPC today (Sec verified the CTE keeps is_stale/stale_items consistent by construction) —
+		// this is a contract-drift trap, exercised here by feeding the mock a row the real fn
+		// cannot actually produce.
+		it('Sec F1 — {is_stale: true, stale_items: null} (inconsistent pair) → UNKNOWN_STALENESS, not a coerced is_stale=true', async () => {
+			const { client } = makeSupabase({ data: [{ is_stale: true, stale_items: null }] });
+			const result = await loadStaleness(client);
+
+			expect(result).toEqual(UNKNOWN_STALENESS);
+			expect(result.is_stale).toBeNull();
+			// The failure this guards: Array.isArray(null) ? ... : [] alone would have paired a
+			// truthy is_stale with an empty list instead of refusing the whole malformed row.
+			expect(result.stale_items).toEqual([]);
+		});
+
+		it('Sec F1 — is_stale is a non-boolean (e.g. a string) → UNKNOWN_STALENESS, never coerced via Boolean()', async () => {
+			const { client } = makeSupabase({ data: [{ is_stale: 'true', stale_items: [] }] });
+			const result = await loadStaleness(client);
+
+			expect(result).toEqual(UNKNOWN_STALENESS);
+			// The failure this guards: Boolean('true') === true, which would have silently
+			// asserted staleness from a value that was never actually a boolean.
+			expect(result.is_stale).not.toBe(true);
+		});
+
+		it('Sec F1 — is_stale is null (absent-like) → UNKNOWN_STALENESS, never silently coerced to false', async () => {
+			const { client } = makeSupabase({ data: [{ is_stale: null, stale_items: [] }] });
+			const result = await loadStaleness(client);
+
+			expect(result).toEqual(UNKNOWN_STALENESS);
+			// The failure this guards: Boolean(null) === false, which is EMPTY_STALENESS's exact
+			// value — the original REWORK defect reintroduced through this one field.
+			expect(result.is_stale).not.toBe(false);
+		});
 	});
 });
