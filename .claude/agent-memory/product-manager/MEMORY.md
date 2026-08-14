@@ -1,3 +1,3 @@
 # Memory index
 
-- [Component-history Option C ratify](project_component_history_option_c.md) — 2026-08-12 ratify; capture V1.x / viz V2; CoA orthogonal; verify landed vs temp-only.
+- [Component-history Option C ratify](project_component_history_option_c.md) — chain LANDED 2026-08-12 (ADR-054 Accepted, A9/§5.1/§7.13 placed); residuals: D5(2) rider is possibility-not-direction; never-list at D5; held-open-questions pattern.

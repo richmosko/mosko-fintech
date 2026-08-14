@@ -1027,3 +1027,12 @@ Per ADR-009 Decision 7's feature-flow scheme, BACKLOG.md doubles as the overflow
 
 **`workers/etl` packaging shape.** [Backend + DevOps]
 - `pyproject.toml` has no `[build-system]` table and no `[tool.uv] package = true`, so `uv sync` treats the project as a dependency container and never installs `src/pfin_back_etl`; imports are invocation-dependent (`uv run --with-editable .` or `PYTHONPATH`), which cost one CI red on PR #445 (fixed file-locally with a location-derived bootstrap). Decide the durable packaging shape once, with the CI invocation as the reference environment.
+
+### §7.15 — Phase-7 deploy-gate bookings (re-homed assertions)
+
+*Assertions whose binding point is the Phase-7 deploy pass, re-homed from issue ACs so they survive issue closure. Tag convention `[PHASE-7 DEPLOY GATE]` per the §7.6 precedent; gates that arose as Sec follow-ups keep their §7.6 homes — one home per gate, no copies.*
+
+**NAV-chart render-latency assertion (§2.1.2.d chart AC5 re-home).** [PHASE-7 DEPLOY GATE]
+- **Source.** F/CTO ratify 2026-08-12 — Option A of the AC5 re-anchor. The original criterion pinned its measurement to Hetzner cax21, which is reference-only infrastructure per [ADR-021](DECISIONS.md#adr-021) greenfield (not the V1 deploy target); **the anchor moved, the budgets did not.** The chart issue's AC5 carries the matching re-homed text; this entry is the home that survives that issue's closure.
+- **AC.** Measured on the **V1 deployment environment**, before the [PRD §2.1.2](docs/PRD/index.html#story-2-1-2) chart surface is declared deploy-complete: monthly-60-month default render within **800ms p95**; daily-90-day render within **1.5s p95**. The budgets are the ratified user-experience numbers and are **not re-litigatable here** — a miss on the deploy environment routes to F/CTO as a product decision (relax the budget vs optimize), never a silent re-anchor. QA's non-binding local-dev measurement (recorded at issue review) is early-warning evidence, not the binding measurement.
+- **Dependencies.** **Blocked-by:** Phase 7 arrival — per ADR-021 greenfield the deployment environment does not exist until deploy, so there is nothing to measure before it. Owners: QA (measurement) + DevOps (environment) + PM (budget custody). **Deploy blocker for the chart surface, not a merge blocker** (the ratified deploy-blocker-not-merge-blocker shape).

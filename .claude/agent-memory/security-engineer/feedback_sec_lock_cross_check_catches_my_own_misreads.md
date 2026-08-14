@@ -16,6 +16,15 @@ consults no clock at all"* verbatim. My finding was wrong; the Sec-Lock cross-ch
 boundary, before it went to team-lead. Forwarding it would have cost a round trip and, worse, would
 have pushed a correct quotation toward being "fixed".
 
+**Third instance, and the sharpest — the CANONICAL ANCHOR can be the stale one.** Reviewing SELF-220,
+migration `069`'s catalog comment cited a *ratified* ADR-053 Decision 7 disposition while
+`DECISIONS.md` still read *"Routed to PM with UX; the Architect lean is…"*. Following the standing
+read-DECISIONS.md-live discipline yields "built on an unratified premise" — false. The ratify was real
+and recorded in `docs/DESIGN/flows/phase-2-flows-2.1-net-worth.md` §12.1, titled `RATIFIED`. **Product
+and UX dispositions get ratified in the DESIGN flow docs, not always folded back into `DECISIONS.md`.**
+Before filing an unratified-premise finding, check `docs/DESIGN/flows/` for a `RATIFIED` section. The
+finding that survives is the missing *pointer* in the ADR, not the missing ratify.
+
 **The same shape, second instance:** grepping for a promised deliverable across the test files I already
 knew about returned zero hits — the tests were in a NEW file added by the same commit. I was one step
 from reporting a missing deliverable that was present. **A zero-hit grep is a claim about the SEARCH
