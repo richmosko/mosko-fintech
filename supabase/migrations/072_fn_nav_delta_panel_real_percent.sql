@@ -257,7 +257,7 @@
 --   · delta_inflation_adjusted_percent is that same figure as a PERCENT of the
 --     DEFLATED ANCHOR — base = nav_anchor × (cpi_ye / cpi_anchor), the second
 --     term of the dollar formula, bound once in the body and shared. It rides
---     the dollar column exactly: NULL on every row where
+--     the dollar column ONE-WAY: NULL on every row where
 --     delta_inflation_adjusted is NULL (month / ytd by design, either NAV
 --     endpoint absent, any CPI leg unresolvable), so no row can carry a percent
 --     without the dollar figure it derives from.
