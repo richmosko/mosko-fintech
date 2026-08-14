@@ -374,6 +374,13 @@ authoritative shape:
 month-end values, vertical risers only at month boundaries — never a smoothed curve. A smoothed interpolation
 across an all-flat month implies day-to-day data that doesn't exist.
 
+**Second copy variant — imported-only state (UX-ruled 2026-08-13):** resolution-disclosure has a second copy
+variant for the imported-only state (no cron checkpoint has ever been written, so no boundary date is resolvable
+to name). Condition 1's "dated (names the boundary)" applies only when a boundary is resolvable — in the
+no-boundary case the disclosure still fires unconditionally (the ratified suppress-and-disclose disposition, even
+at zero visible points) with the ruled string: **"Monthly resolution — daily/weekly tracking hasn't started
+yet."** Landed in the chart component at `03b0595` (SELF-220).
+
 ### 12.7 Granularity toggle + zoom/drill — density-bounded by design
 
 Realized as the locked `chart-granularity chip-group`: **Monthly (default) / Weekly / Daily**, scoped to

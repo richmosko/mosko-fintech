@@ -1,36 +1,36 @@
 ---
 name: 053-cpi-positivity-check-followup
-description: pfin.cpi_u_index.cpi_value has no positivity CHECK — zero/negative prints are admissible and 067 only routes around it; needs its own migration
+description: The cpi_value positivity CHECK now has a tracked home in BACKLOG §7.14 with Sec's four binding conditions — read it there, not here
 metadata:
   type: project
 ---
 
-`pfin.cpi_u_index.cpi_value` (migration `053`) is fenced by
-`cpi_u_index_value_finite`, which bars **NaN and ±Infinity only**. It does **not**
-bar zero or negative values, and the column is `NOT NULL`, so a poisoned `0` or
-negative print is admissible today.
+**`pfin.cpi_u_index.cpi_value` (migration `053`) is fenced finiteness-only**, so a
+poisoned `0` / negative print reaches the deflator. `067` guards internally (both CPI
+legs strictly positive, else NULL); the base table holds no fence of its own.
 
-**Why:** surfaced 2026-08-12 while authoring `067`
-(`fn_nav_series_inflation_adjusted`), whose deflator divides by the point-period
-CPI level. An unguarded ratio would raise `division by zero` on a `0` print —
-violating SELF-218's never-throw AC through a path no existing fence closes — and a
-negative print would silently flip the sign of a net-worth figure, which is worse
-than an error.
+**⚠ CANONICAL HOME: `BACKLOG.md` §7.14** — "SELF-217 / SELF-218 build-day follow-ups",
+landed in PR #446, carrying Sec's **four binding conditions**. **Read it there.** This
+note is a pointer, not a copy: two homes drift and hand the reader two versions.
 
-**How to apply:**
-- `067` **routes around it**, it does not fix it: the ratio is computed only when
-  both CPI legs are strictly positive, else `nav_inflation_adjusted` is NULL. That
-  guard is correct with or without the CHECK.
-- The authoritative repair is a `cpi_value > 0` CHECK on `053`. **It cannot be done
-  by editing the merged file** (that is SQL, not a `--` header comment — see the
-  apply-migration Step 1.6 vehicle rule) and it touches a table the ETL writes, so
-  it needs its own migration and its own review.
-- ⚠ When that CHECK lands, **keep** the paired QA leg that asserts a zero print
-  yields NULL rather than a raise. It becomes unreachable-by-construction, which is
-  a reason to keep it — deleting it is how the guard silently stops being tested if
-  the CHECK is ever relaxed. This instruction is also written into `067`'s header.
-- **Verify before acting:** grep `053` and any later migration for a positivity
-  constraint on `cpi_value` — this may have landed since. As of 2026-08-12 it had
-  not, and it had no tracked home beyond `067`'s header and a commit message.
+**Why the pointer exists at all** — two things a future reader will otherwise get wrong,
+and one is a correction to what I originally recorded:
 
-Related: [[fixture-is-shared-state]]
+- **⚠ `> 0` ALONE IS NOT ENOUGH, and my first framing of this was too narrow.** I flagged
+  only NaN; Sec established the predicate must be **finite AND strictly positive**,
+  because in Postgres numeric ordering **both `NaN > 0` AND `Infinity > 0` are TRUE.**
+  A positivity CHECK written as a replacement would re-admit *both*.
+- **The CHECK must be ADDITIVE** to `cpi_u_index_value_finite`, which survives by name.
+  Never a replacement.
+
+**Also worth carrying, because it is the inverse of a fact easy to file as reassurance:**
+Sec's condition 3 requires the same PR to `create or replace` `067`'s guard with an
+explicit NaN clause **and re-issue its `comment on`** — precisely *because* create-or-
+replace **preserves** comments, so `067`'s DIVISION SAFETY paragraph would otherwise
+describe a guard the function no longer has. **The same property that makes
+create-or-replace safe for ACLs makes it a staleness hazard for comments** — see
+[[prove-derived-text-against-its-source]] and the safety-proof-is-a-hazard-notice shape.
+
+**How to apply:** if this comes up, go to §7.14 first and treat its four conditions as
+binding; joint-review is mandatory when it lands (a financial-correctness constraint on
+the divisor of an inflation-adjusted figure).
