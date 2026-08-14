@@ -28,11 +28,18 @@
 // real mock case (default: the happy 5-row payload, so every EXISTING test above now takes
 // the success path instead of the accidental-throw path) plus two dedicated tests below that
 // assert the success-threads-through and explicit-RPC-error-fails-soft states.
+//
+// QA FINDING 1 (SELF-223 PR review) FIX: same gap, same fix, one surface later —
+// fn_nav_reference_dates had no mock case either. Given a real-shaped default payload (the
+// EMPTY-DB all-three-rows-insufficient-history shape — Backend's live smoke against the
+// post-incident unseeded DB, migration 073's X1 leg) plus the same success/fail-soft/
+// independent-of-chart-params test trio.
 
 import { describe, it, expect, vi } from 'vitest';
 import { load } from './+page.server';
 import type { NavSeriesPoint } from '$lib/nav-series';
 import type { NavDeltaPanelRow } from '$lib/nav-delta-panel';
+import type { NavReferenceDateRow } from '$lib/nav-reference-dates';
 
 const SESSION_USER = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' };
 
@@ -111,6 +118,51 @@ const REAL_NAV_DELTA_PANEL_SAMPLE: NavDeltaPanelRow[] = [
 	}
 ];
 
+// EMPTY-DB all-three-rows-insufficient-history shape (Backend's SELF-223 live smoke against the
+// post-incident unseeded local DB, migration 073's X1 leg — literally the state a brand-new
+// user boots into: zero nav_daily rows, so no checkpoint reaches ANY of the three reference
+// dates). reference_checkpoint_date / nav / nav_prior_yr_dollars are the LOAD-BEARING, verified
+// part of this fixture (all NULL on all three rows). The cpi_* fields don't affect rendering
+// here at all — isInsufficientHistory takes precedence over isCpiUnresolvable in the component
+// — so their values below are a best-effort "no CPI coverage at all" reading (cpi_period null
+// only on this_month per Backend's note; cpi_any_carried/cpi_unavailable never null per the 073
+// correction), not independently verified against a real payload.
+const EMPTY_DB_NAV_REFERENCE_DATES: NavReferenceDateRow[] = [
+	{
+		reference: 'this_month',
+		reference_date: '2026-08-31',
+		reference_checkpoint_date: null,
+		nav: null,
+		nav_prior_yr_dollars: null,
+		cpi_period: null,
+		cpi_basis_period: '2025-12-01',
+		cpi_any_carried: false,
+		cpi_unavailable: true
+	},
+	{
+		reference: 'prior_month',
+		reference_date: '2026-07-31',
+		reference_checkpoint_date: null,
+		nav: null,
+		nav_prior_yr_dollars: null,
+		cpi_period: '2026-07-01',
+		cpi_basis_period: '2025-12-01',
+		cpi_any_carried: false,
+		cpi_unavailable: true
+	},
+	{
+		reference: 'prior_year_end',
+		reference_date: '2025-12-31',
+		reference_checkpoint_date: null,
+		nav: null,
+		nav_prior_yr_dollars: null,
+		cpi_period: '2025-12-01',
+		cpi_basis_period: '2025-12-01',
+		cpi_any_carried: false,
+		cpi_unavailable: true
+	}
+];
+
 /**
  * Explicit result shape for `await runLoad(event)`. Needed only because this test bypasses
  * SvelteKit's generated `./$types` event typing (the mock `event` isn't a real
@@ -129,6 +181,7 @@ type LoadResult = {
 		has_imported_rows: boolean;
 	} | null;
 	navDeltaPanel: NavDeltaPanelRow[] | null;
+	navReferenceDates: NavReferenceDateRow[] | null;
 };
 
 async function runLoad(event: Parameters<typeof load>[0]): Promise<LoadResult> {
@@ -147,6 +200,9 @@ function makeLocals(
 	},
 	navDeltaPanelRpc: { data?: unknown; error?: { message: string } | null } = {
 		data: REAL_NAV_DELTA_PANEL_SAMPLE
+	},
+	navReferenceDatesRpc: { data?: unknown; error?: { message: string } | null } = {
+		data: EMPTY_DB_NAV_REFERENCE_DATES
 	}
 ) {
 	const rpc = vi.fn(async (fnName: string) => {
@@ -166,6 +222,8 @@ function makeLocals(
 				return { data: navBoundaryRpc.data ?? null, error: navBoundaryRpc.error ?? null };
 			case 'fn_nav_delta_panel':
 				return { data: navDeltaPanelRpc.data ?? null, error: navDeltaPanelRpc.error ?? null };
+			case 'fn_nav_reference_dates':
+				return { data: navReferenceDatesRpc.data ?? null, error: navReferenceDatesRpc.error ?? null };
 			default:
 				throw new Error(`unexpected rpc: ${fnName}`);
 		}
@@ -187,12 +245,18 @@ function makeEvent(
 	searchParams: string,
 	navSeriesRpc: { data?: unknown; error?: { message: string } | null },
 	navBoundaryRpc?: { data?: unknown; error?: { message: string } | null },
-	navDeltaPanelRpc?: { data?: unknown; error?: { message: string } | null }
+	navDeltaPanelRpc?: { data?: unknown; error?: { message: string } | null },
+	navReferenceDatesRpc?: { data?: unknown; error?: { message: string } | null }
 ) {
+	// Nested rather than flattened: each optional RPC config is passed only when EVERY preceding
+	// one was also explicitly supplied, so makeLocals' own defaults still apply to any trailing
+	// gap (a caller can't skip a positional arg without supplying the ones before it).
 	const { locals, rpc } =
 		navBoundaryRpc !== undefined
 			? navDeltaPanelRpc !== undefined
-				? makeLocals(navSeriesRpc, navBoundaryRpc, navDeltaPanelRpc)
+				? navReferenceDatesRpc !== undefined
+					? makeLocals(navSeriesRpc, navBoundaryRpc, navDeltaPanelRpc, navReferenceDatesRpc)
+					: makeLocals(navSeriesRpc, navBoundaryRpc, navDeltaPanelRpc)
 				: makeLocals(navSeriesRpc, navBoundaryRpc)
 			: makeLocals(navSeriesRpc);
 	const url = new URL(`http://localhost/${searchParams ? `?${searchParams}` : ''}`);
@@ -381,5 +445,57 @@ describe('load() — §2.1.3.a navDeltaPanel (071), fetched independently of cha
 		expect(data.navSeriesParamsError).not.toBeNull();
 		expect(data.navDeltaPanel).toEqual(REAL_NAV_DELTA_PANEL_SAMPLE);
 		expect(rpc).toHaveBeenCalledWith('fn_nav_delta_panel');
+	});
+});
+
+// QA Finding 1 (SELF-223 PR review): same load-level gap, same fix, one surface later — before
+// this, EVERY test above exercised navReferenceDates only via the accidental
+// `default:`-throw-swallowed-by-try/catch path. These three tests are the CATCH CRITERION: one
+// fails if +page.server.ts stops returning the RPC's rows as `data.navReferenceDates` (success
+// path, using the real-shaped empty-DB fixture), one fails if an RPC error stops degrading to
+// `null` (explicit fail-soft, not accidental), one fails if the fetch stops being independent of
+// chart params — mirrors the navDeltaPanel trio directly above.
+describe('load() — §2.1.4 navReferenceDates (073), fetched independently of chart params', () => {
+	it('a genuine 3-row RPC result threads through to data.navReferenceDates UNCHANGED (success path)', async () => {
+		const { event, rpc } = makeEvent(
+			'chart_granularity=monthly',
+			{ data: [] },
+			{ data: [{ first_cron_checkpoint: null, has_cron_rows: false, has_imported_rows: false }] },
+			{ data: REAL_NAV_DELTA_PANEL_SAMPLE },
+			{ data: EMPTY_DB_NAV_REFERENCE_DATES }
+		);
+		const data = await runLoad(event);
+
+		expect(data.navReferenceDates).toEqual(EMPTY_DB_NAV_REFERENCE_DATES);
+		expect(data.navReferenceDates).not.toBeNull();
+		expect(rpc).toHaveBeenCalledWith('fn_nav_reference_dates');
+	});
+
+	it('an RPC error → navReferenceDates is null (EXPLICIT fail-soft, not the accidental unmocked-throw path)', async () => {
+		const { event } = makeEvent(
+			'chart_granularity=monthly',
+			{ data: [] },
+			{ data: [{ first_cron_checkpoint: null, has_cron_rows: false, has_imported_rows: false }] },
+			{ data: REAL_NAV_DELTA_PANEL_SAMPLE },
+			{ error: { message: 'permission denied' } }
+		);
+		const data = await runLoad(event);
+
+		expect(data.navReferenceDates).toBeNull();
+	});
+
+	it('is fetched even when navSeriesParamsError is set — independent of chart params, same as navDeltaPanel', async () => {
+		const { event, rpc } = makeEvent(
+			'chart_granularity=yearly',
+			{ data: [] },
+			{ data: [{ first_cron_checkpoint: null, has_cron_rows: false, has_imported_rows: false }] },
+			{ data: REAL_NAV_DELTA_PANEL_SAMPLE },
+			{ data: EMPTY_DB_NAV_REFERENCE_DATES }
+		);
+		const data = await runLoad(event);
+
+		expect(data.navSeriesParamsError).not.toBeNull();
+		expect(data.navReferenceDates).toEqual(EMPTY_DB_NAV_REFERENCE_DATES);
+		expect(rpc).toHaveBeenCalledWith('fn_nav_reference_dates');
 	});
 });
