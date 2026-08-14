@@ -545,6 +545,44 @@ describe('NavHistoryChart — SELF-229 D1 stale-data-marker (whole-user, shared 
 });
 
 // ============================================================================
+// F/CTO ruling (a), FINAL BATTERY PASS (team-lead, post-442dac8): the badge's own tri-state
+// distinguishability is proven exhaustively at the shared-component level
+// (StaleConstituentBadge.ssr.test.ts). What was NOT proven anywhere: that `staleness.is_stale
+// === null` (UNKNOWN_STALENESS) actually reaches THIS surface's own mount and renders — every
+// prior wiring-fidelity leg on this file only ever exercised `is_stale: true`. Closing that gap.
+// ============================================================================
+
+describe('NavHistoryChart — SELF-229 tri-state wiring: staleness.is_stale === null reaches this surface', () => {
+	it('is_stale === null renders "Staleness unknown" at this surface, distinct from "May be stale"', () => {
+		const { getByText, queryByText } = render(NavHistoryChart, {
+			props: {
+				points: POPULATED,
+				paramsError: null,
+				params: PARAMS,
+				boundary: EMPTY_NAV_BOUNDARY,
+				staleness: { is_stale: null, stale_items: [] }
+			}
+		});
+		expect(getByText('Staleness unknown')).toBeTruthy();
+		expect(queryByText('May be stale')).toBeNull();
+	});
+
+	it('is_stale === false (confirmed healthy) stays zero-footprint — never confused with the unknown case above', () => {
+		const { queryByText } = render(NavHistoryChart, {
+			props: {
+				points: POPULATED,
+				paramsError: null,
+				params: PARAMS,
+				boundary: EMPTY_NAV_BOUNDARY,
+				staleness: { is_stale: false, stale_items: [] }
+			}
+		});
+		expect(queryByText('Staleness unknown')).toBeNull();
+		expect(queryByText('May be stale')).toBeNull();
+	});
+});
+
+// ============================================================================
 // SELF-229-QA — the D1 stale-data-marker (StaleConstituentBadge, wired in f103586) now
 // coexists on this ONE surface with the two markers already proven above: the checkpoint-carry
 // marker (NavChartLines' `<circle class="stale-marker" role="img">`, §12.1/§12.2) and the
@@ -649,5 +687,43 @@ describe('SELF-229-QA — three distinct staleness/carry signals never collapse 
 		// as a count of 0 on one side and 2 on the other, or the wrong element under the wrong
 		// role; a duplication would show up as >1 on a signal that should be singular.
 		expect(counts(container)).toEqual({ badge: 1, carry: 1, cpi: 1 });
+	});
+
+	// FINAL BATTERY PASS addition (team-lead, post-442dac8): the badge is now TRI-STATE — the
+	// UNKNOWN render (`.staleness-unknown`, a DIFFERENT class from the confirmed-stale
+	// `.stale-connection-marker` counted above) must be independently isolable from the other two
+	// signals too, same rigor as the confirmed-stale case.
+	it('D1 UNKNOWN varied ALONE (staleness read failed, no carry, no CPI-carry): only the unknown note renders, never the confirmed-stale badge', () => {
+		const { container } = render(NavHistoryChart, {
+			props: {
+				points: FRESH_SERIES,
+				paramsError: null,
+				params: PARAMS,
+				boundary: EMPTY_NAV_BOUNDARY,
+				staleness: { is_stale: null, stale_items: [] }
+			}
+		});
+		expect(container.querySelectorAll('.staleness-unknown').length).toBe(1);
+		expect(counts(container)).toEqual({ badge: 0, carry: 0, cpi: 0 });
+	});
+
+	it('D1 UNKNOWN + checkpoint-carry + CPI-carry all present at once: the unknown note and the two carry signals render independently, none suppresses another', () => {
+		const points = [
+			FRESH('2026-01-15'),
+			CHECKPOINT_CARRIED('2026-02-15', '2026-01-10'),
+			CPI_CARRIED('2026-03-15'),
+			FRESH('2026-04-15')
+		];
+		const { container } = render(NavHistoryChart, {
+			props: {
+				points,
+				paramsError: null,
+				params: PARAMS,
+				boundary: EMPTY_NAV_BOUNDARY,
+				staleness: { is_stale: null, stale_items: [] }
+			}
+		});
+		expect(container.querySelectorAll('.staleness-unknown').length).toBe(1);
+		expect(counts(container)).toEqual({ badge: 0, carry: 1, cpi: 1 });
 	});
 });

@@ -75,3 +75,31 @@ describe('NavReferenceDatesPanel — D1 badge (canary, connection-health) stays 
 		expect(container.querySelector('.carried-flag')).not.toBeNull();
 	});
 });
+
+// ============================================================================
+// F/CTO ruling (a), FINAL BATTERY PASS (team-lead, post-442dac8): the badge's own tri-state
+// distinguishability is proven exhaustively at the shared-component level
+// (StaleConstituentBadge.ssr.test.ts). What was NOT proven anywhere: that `staleness.is_stale
+// === null` (UNKNOWN_STALENESS) actually reaches THIS surface's own mount and renders — every
+// prior wiring-fidelity leg on this file only ever exercised `is_stale: true`. Closing that gap.
+// ============================================================================
+
+describe('NavReferenceDatesPanel — SELF-229 tri-state wiring: staleness.is_stale === null reaches this surface', () => {
+	it('is_stale === null renders "Staleness unknown" at this surface, distinct from "May be stale"', () => {
+		const rows = fixture();
+		const { getByText, queryByText } = render(NavReferenceDatesPanel, {
+			props: { rows, staleness: { is_stale: null, stale_items: [] } }
+		});
+		expect(getByText('Staleness unknown')).toBeTruthy();
+		expect(queryByText('May be stale')).toBeNull();
+	});
+
+	it('is_stale === false (confirmed healthy) stays zero-footprint — never confused with the unknown case above', () => {
+		const rows = fixture();
+		const { queryByText } = render(NavReferenceDatesPanel, {
+			props: { rows, staleness: { is_stale: false, stale_items: [] } }
+		});
+		expect(queryByText('Staleness unknown')).toBeNull();
+		expect(queryByText('May be stale')).toBeNull();
+	});
+});

@@ -309,3 +309,46 @@ describe('NavCompositionTable — aggregation badge (canary, connection health) 
 		expect(glCell.classList.contains('pos')).toBe(true);
 	});
 });
+
+// ============================================================================
+// F/CTO ruling (a), FINAL BATTERY PASS (team-lead, post-442dac8): the badge's own tri-state
+// distinguishability is proven exhaustively at the shared-component level
+// (StaleConstituentBadge.ssr.test.ts), and the PER-LEAF tri-state is proven by the "SELF-229
+// AC#2 per-leaf staleness (TRI-STATE, never merged)" describe block above. What was NOT proven
+// anywhere: that the AGGREGATION-level `staleness.is_stale === null` (a DIFFERENT signal from any
+// per-leaf null — this is the rollup badge fed by `data.staleness` directly, not a leaf's own
+// `is_stale`) actually reaches this surface's mount and renders. Closing that gap.
+// ============================================================================
+
+describe('NavCompositionTable — SELF-229 tri-state wiring: the AGGREGATION badge\'s staleness.is_stale === null reaches this surface', () => {
+	it('aggregation is_stale === null renders "Staleness unknown" beside the heading, distinct from "May be stale"', () => {
+		const { getByText, queryByText } = render(NavCompositionTable, {
+			props: { composition: fixture, staleness: { is_stale: null, stale_items: [] } }
+		});
+		expect(getByText('Staleness unknown')).toBeTruthy();
+		expect(queryByText('May be stale')).toBeNull();
+	});
+
+	it('aggregation is_stale === false (confirmed healthy) stays zero-footprint — never confused with the unknown case above', () => {
+		const { queryByText } = render(NavCompositionTable, {
+			props: { composition: fixture, staleness: { is_stale: false, stale_items: [] } }
+		});
+		expect(queryByText('Staleness unknown')).toBeNull();
+		expect(queryByText('May be stale')).toBeNull();
+	});
+
+	it('aggregation is_stale === null does NOT imply any leaf\'s own per-leaf is_stale is null — the two are independent signals, unaffected by each other', async () => {
+		// fixture's leaves are all is_stale: false (confirmed not stale per-leaf), while the
+		// AGGREGATION badge is unknown — proves the rollup and the per-row detail are fed by
+		// genuinely separate values, not one derived from the other.
+		const { getByRole, getByText, findByText, queryByText } = render(NavCompositionTable, {
+			props: { composition: fixture, staleness: { is_stale: null, stale_items: [] } }
+		});
+		expect(getByText('Staleness unknown')).toBeTruthy();
+		await fireEvent.click(getByRole('button', { name: /Investment/i }));
+		const row = (await findByText('Brokerage')).closest('tr')!;
+		// The leaf itself is confirmed false (fixture's own value) — no per-row marker of any kind.
+		expect(within(row).queryByText('May be stale')).toBeNull();
+		expect(within(row).queryByText('Staleness unknown')).toBeNull();
+	});
+});
