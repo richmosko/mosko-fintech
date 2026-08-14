@@ -130,6 +130,92 @@ describe('NavDeltaPanel — carried CPI basis (AC5(iv), panel-wide Jan/Feb copy)
 	});
 });
 
+describe('NavDeltaPanel — real backend sample (SELF-222 hand-off, seeded tenant b1aa21a2)', () => {
+	// Verbatim local smoke-verify payload from Backend's SELF-222 hand-off (migration 071 against
+	// real seed data). Exercises the "everything resolved cleanly" happy path against a REAL
+	// payload shape rather than only synthetic fixtures — including the SQL-NULL (not `false`)
+	// cpi_any_carried/cpi_unavailable on month/ytd that motivated widening this file's types.
+	const realSample: NavDeltaPanelRow[] = [
+		{
+			horizon: 'month',
+			anchor_date: '2026-07-31',
+			anchor_checkpoint_date: '2026-07-31',
+			current_checkpoint_date: '2026-08-10',
+			delta_nominal: -8217654.37,
+			delta_percent: -99.40310112495464,
+			delta_inflation_adjusted: null,
+			cpi_basis_period: null,
+			cpi_any_carried: null,
+			cpi_unavailable: null
+		},
+		{
+			horizon: 'ytd',
+			anchor_date: '2025-12-31',
+			anchor_checkpoint_date: '2025-12-31',
+			current_checkpoint_date: '2026-08-10',
+			delta_nominal: -7828654.37,
+			delta_percent: -99.37362744351358,
+			delta_inflation_adjusted: null,
+			cpi_basis_period: null,
+			cpi_any_carried: null,
+			cpi_unavailable: null
+		},
+		{
+			horizon: '1y',
+			anchor_date: '2025-07-31',
+			anchor_checkpoint_date: '2025-07-31',
+			current_checkpoint_date: '2026-08-10',
+			delta_nominal: -7546654.37,
+			delta_percent: -99.35037348604529,
+			delta_inflation_adjusted: -7571771.53943,
+			cpi_basis_period: '2025-12-01',
+			cpi_any_carried: false,
+			cpi_unavailable: false
+		},
+		{
+			horizon: '3y',
+			anchor_date: '2023-07-31',
+			anchor_checkpoint_date: '2023-07-31',
+			current_checkpoint_date: '2026-08-10',
+			delta_nominal: -6955654.37,
+			delta_percent: -99.2955655960029,
+			delta_inflation_adjusted: -7377910.52013,
+			cpi_basis_period: '2025-12-01',
+			cpi_any_carried: false,
+			cpi_unavailable: false
+		},
+		{
+			horizon: '5y',
+			anchor_date: '2021-07-31',
+			anchor_checkpoint_date: '2021-07-31',
+			current_checkpoint_date: '2026-08-10',
+			delta_nominal: -6307654.37,
+			delta_percent: -99.22375916312726,
+			delta_inflation_adjusted: -7497862.86149,
+			cpi_basis_period: '2025-12-01',
+			cpi_any_carried: false,
+			cpi_unavailable: false
+		}
+	];
+
+	it('renders without crashing and shows all-negative deltas correctly signed', () => {
+		const { body } = render(NavDeltaPanel, { props: { rows: realSample } });
+		// Every horizon is a loss in this seed — every NAV Delta cell should be a .neg U+2212 figure.
+		expect(body).toContain('−$8,217,654');
+		expect(body).toContain('−99.4%');
+		expect(body).toContain('−$7,497,863'); // 5y inflation-adjusted, rounds to nearest dollar
+		expect(body).not.toContain('Insufficient history');
+		expect(body).not.toContain('CPI unavailable');
+		expect(body).not.toContain('Carried forward');
+	});
+
+	it('month/ytd rows with SQL-NULL (not false) cpi_any_carried/cpi_unavailable render "—" for Inflation Adjusted', () => {
+		const { body } = render(NavDeltaPanel, { props: { rows: realSample } });
+		const monthRow = body.split('>Month<')[1]?.split('</tr>')[0] ?? '';
+		expect(monthRow).toContain('—');
+	});
+});
+
 describe('NavDeltaPanel — delta_percent NULL vs zero (AC2 / migration AC2)', () => {
 	it('a real zero percent renders "0.0%", never "—"', () => {
 		const rows = fixture({ month: { delta_nominal: 0, delta_percent: 0 } });

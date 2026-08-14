@@ -68,11 +68,6 @@ describe('isInsufficientHistory — structural discriminator #1', () => {
 	it('both resolved → false', () => {
 		expect(isInsufficientHistory(row({ horizon: '5y' }))).toBe(false);
 	});
-	it('anchor_date itself NULL (should not occur per 071, but defensive) → false, not a crash', () => {
-		expect(isInsufficientHistory(row({ horizon: '5y', anchor_date: null, anchor_checkpoint_date: null }))).toBe(
-			false
-		);
-	});
 });
 
 describe('isCpiUnresolvable — structural discriminator #2', () => {

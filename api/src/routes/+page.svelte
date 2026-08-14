@@ -35,8 +35,7 @@
 	// §2.1.3 multi-horizon NAV-delta panel (SELF-222 · V1.1). Backend threads the `071`
 	// fn_nav_delta_panel() rows through the loader as `data.navDeltaPanel`, FAIL-SOFT to `null`
 	// on a read failure (NavDeltaPanel renders its own unavailable notice) — same convention as
-	// `data.composition` below. ⚠ Field name `navDeltaPanel` is this component's naming
-	// assumption pending Backend's actual +page.server.ts text; trivial to rename if it differs.
+	// `data.composition` below.
 	const navDeltaPanel = $derived(data.navDeltaPanel ?? null);
 
 	// §2.1.5 composition build-up (SELF-226). Backend threads the `051` fn_nav_composition tree

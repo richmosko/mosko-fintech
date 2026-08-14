@@ -18,20 +18,34 @@
 // The panel reads them off the row set once, rather than re-deriving a staleness verdict from
 // a client-side clock comparison — ADR-044 R2 is the whole reason a second, client-side "is
 // this stale" clock check must not exist here; the disclosure IS the returned checkpoint date.
+//
+// SHAPE RECONCILED AGAINST BACKEND'S SELF-222 HAND-OFF (2026-08-13, real local smoke-verify
+// sample against seeded tenant b1aa21a2): anchor_date is NEVER NULL — it is a computed calendar
+// anchor (month-end date arithmetic), not a lookup that could fail to resolve, so the
+// insufficient-history discriminator collapses to the single anchor_checkpoint_date check below.
+// cpi_any_carried / cpi_unavailable arrive as SQL NULL (not `false`) on month/ytd, where the CPI
+// columns don't apply at all — typed `boolean | null` to match the real payload rather than the
+// `boolean`-always this file originally assumed.
 
 export type NavDeltaHorizon = 'month' | 'ytd' | '1y' | '3y' | '5y';
 
 export interface NavDeltaPanelRow {
 	horizon: NavDeltaHorizon;
-	anchor_date: string | null;
+	/** The CALENDAR anchor (a month-end). NOT NULL — always present, even when no observation
+	 * reaches it (see anchor_checkpoint_date). */
+	anchor_date: string;
 	anchor_checkpoint_date: string | null;
 	current_checkpoint_date: string | null;
 	delta_nominal: number | null;
 	delta_percent: number | null;
 	delta_inflation_adjusted: number | null;
 	cpi_basis_period: string | null;
-	cpi_any_carried: boolean;
-	cpi_unavailable: boolean;
+	/** NULL on month/ytd (not applicable — the CPI columns don't exist for those horizons).
+	 * Otherwise true/false: whether any of the three CPI legs was carried-forward. */
+	cpi_any_carried: boolean | null;
+	/** NULL on month/ytd (not applicable). Otherwise true when the inflation-adjusted figure
+	 * could not be formed; delta_nominal still stands in that case. */
+	cpi_unavailable: boolean | null;
 }
 
 // Fixed row order per the 071 CONTRACT ("EXACTLY FIVE ROWS, ALWAYS, in fixed order").
@@ -59,9 +73,10 @@ export function isCpiApplicable(horizon: NavDeltaHorizon): boolean {
 	return horizon === '1y' || horizon === '3y' || horizon === '5y';
 }
 
-// Structural discriminator #1: anchor resolved, no checkpoint ever reached it. Deltas NULL.
+// Structural discriminator #1: anchor resolved (anchor_date is guaranteed non-NULL — see the
+// module header), no checkpoint ever reached it. Deltas NULL.
 export function isInsufficientHistory(row: NavDeltaPanelRow): boolean {
-	return row.anchor_date !== null && row.anchor_checkpoint_date === null;
+	return row.anchor_checkpoint_date === null;
 }
 
 // Structural discriminator #2: the nominal figure stands; only the real-terms one is unformed.
