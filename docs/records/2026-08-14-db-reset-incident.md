@@ -64,6 +64,36 @@ ADR-053 contract (F/CTO executes: `--ack-delta` judgment and `pfin_etl` arming
 are theirs). The pre-incident 2026-08-10 cron checkpoint value is plausibly in
 the run log; a fresh checkpoint also regenerates on the next local cron run.
 
+## Recovery completed (2026-08-14, same day — F/CTO option (b): supervised run)
+
+Backend executed the recovery path with F/CTO personally holding the two
+ADR-053-reserved gates (`pfin_etl` arming; `--ack-delta`, ratified at −100.00%
+— larger than the original −99.40% because the computed-NAV comparand's
+`pfin.account`/`linked_source` tables are empty post-wipe, a structural cause
+verified from the DB before ratify). End state, all team-lead-verified from the
+database:
+
+- `auth.users` = 2 — the `seed.sql` dev stub plus the tenant recreated as a
+  **bare-id stub on the exact original uuid** (F/CTO option (a), preserving
+  every recorded `b1aa21a2` reference; auth fields can be layered onto the same
+  row later — see BACKLOG §7.17).
+- `pfin.user_taxonomy` = 63; `pfin.cpi_u_index` = 138 (2015-01..2026-07) plus
+  one recorded nonpublication (2025-10, a real BLS gap).
+- `pfin.nav_daily` = 128 rows, 2015-12-31..2026-07-31, **byte-identical
+  per-row to the preserved run log**. The 129th pre-incident row (the
+  2026-08-10 cron checkpoint) regenerates on the next local cron run.
+- `pfin_etl` re-disarmed (`rolcanlogin = f`, password retained), matching the
+  original run's close.
+
+Two findings from the recovery itself: **(1)** the first committed attempt
+failed clean (all-or-nothing held, zero rows) because nothing in the recovery
+path recreated the tenant's `auth.users` row and preflight had checked row
+*count*, not *identity* — an identity-aware preflight is the durable fix shape;
+**(2)** this record's original description of `baseline_nav.csv` was false
+against the file (corrected in place above, PR #458) and was inherited verbatim
+by the recovery run's operator before being refuted from the file — the same
+no-watcher lesson as the ban itself.
+
 ## The lesson in one line
 
 `--db-url` on `supabase db reset` names a connection string, not a blast
