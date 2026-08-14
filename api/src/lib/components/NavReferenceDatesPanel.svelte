@@ -73,7 +73,7 @@
 
 	function carriedTitle(row: NavReferenceDateRow): string | undefined {
 		if (!row.cpi_period) return undefined;
-		return `Carried forward — CPI-U for ${monthYear(row.cpi_period)} isn't published yet (publishes one to two months in arrears). No action needed.`;
+		return `Carried forward — ${monthYear(row.cpi_period)}'s CPI-U print isn't published yet (CPI-U publishes one to two months in arrears). No action needed.`;
 	}
 </script>
 
