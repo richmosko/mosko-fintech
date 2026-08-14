@@ -39,10 +39,14 @@
 -- │ (1)  CRUX ⭐⭐ THE ARITHMETIC, cpi_current ≠ cpi_anchor ≠ cpi_ye on EVERY adj leg.   │
 -- │          Independently hand-computed expected values for 1y/3y/5y.                 │
 -- │ (2)  FIVE five rows always, fixed order, incl. a zero-checkpoint tenant.            │
--- │ (—)  ANCHOR anchor-date DERIVATION verified by INDEPENDENT arithmetic (Architect,   │
--- │          d97f444 header (c)) — extract()-based, never the body's own                │
--- │          date_trunc/interval expressions, so a shared month-end mistake between     │
--- │          this file's fixture scaffolding and the body cannot hide.                  │
+-- │ (—)  ANCHOR anchor-date DERIVATION verified by FIVE INDEPENDENT PROPERTIES           │
+-- │          (Architect, d97f444 header (c), sharpened round-2): make_date()-based       │
+-- │          reconstruction for ytd/cpi_basis_period (P3/P4, the load-bearing pair —     │
+-- │          the body's own most-convoluted line), relational month-spacing (P2),        │
+-- │          self-consistency month-end check (P1), loose recency bound (P5) — none      │
+-- │          recompute an anchor from `today` using the body's own machinery, so a       │
+-- │          shared month-end mistake between this file's fixture scaffolding and the    │
+-- │          body cannot hide.                                                           │
 -- │ (3)  CAUSE the three NULL causes distinguished on the full row: insufficient        │
 -- │          history, CPI-unresolvable, not-applicable (month/ytd).                     │
 -- │ (4)  CARRY carry provenance, BOTH sides: a NAV anchor served by an earlier          │
@@ -69,12 +73,12 @@ begin;
 
 \ir ../_fixtures/rls_verbs.psql
 
--- plan = 28 : 3 fixture pins (Z) + 3 crux arithmetic (CRUX) + 1 five-rows-order
--- (FIVE) + 3 independent anchor-derivation (ANCHOR) + 4 null-cause (CAUSE)
--- + 2 carry provenance (CARRY) + 1 zero-anchor percent (PCT0) + 2 CPI guard
--- (CPIG) + 2 two-tenant (T) + 1 cross-tenant (X) + 2 aal2 (M) + 1 catalog
--- posture (PST1) + 3 ACL (A).
-select plan(28);
+-- plan = 30 : 3 fixture pins (Z) + 3 crux arithmetic (CRUX) + 1 five-rows-order
+-- (FIVE) + 5 independent anchor-derivation properties (ANCHOR-P1..P5)
+-- + 4 null-cause (CAUSE) + 2 carry provenance (CARRY) + 1 zero-anchor percent
+-- (PCT0) + 2 CPI guard (CPIG) + 2 two-tenant (T) + 1 cross-tenant (X)
+-- + 2 aal2 (M) + 1 catalog posture (PST1) + 3 ACL (A).
+select plan(30);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb, _rls.tenant_c() as tc \gset
 \set td '00000000-0000-0000-0000-000000000d71'
@@ -258,48 +262,79 @@ select set_config('role', 'postgres', true);
 
 -- =====================================================================
 -- (ANCHOR) — anchor-date DERIVATION, verified by INDEPENDENT arithmetic
---   (Architect, d97f444, header (c)): extract()-based integer arithmetic on
---   year/month/day components, NEVER the body's own date_trunc/interval
---   expressions — this file's own fixture-scaffolding section above DOES
---   reuse those expressions (to know where to seed checkpoints), so THESE
---   three legs are what actually close the "shared mistake in month-end
---   derivation would be invisible" gap the header warns about. They check
---   the function's OWN reported anchor_date, not a value this file predicted.
+--   (Architect, d97f444 header (c); five properties confirmed by name in
+--   round-2 review). This file's own fixture-scaffolding section above DOES
+--   reuse the body's date_trunc/interval expressions (to know where to seed
+--   checkpoints) — legitimate for THAT purpose, but insufficient on its own:
+--   a shared mistake in month-end derivation would place the fixture at the
+--   SAME wrong date the function looks for, and every arithmetic leg above
+--   would still pass. These five legs are what actually close that gap, each
+--   checking the function's OWN reported value against a DIFFERENT route
+--   than the body's:
+--     (P1) every anchor_date is the last day of its OWN month — a
+--          self-consistency check on the returned value, never a
+--          recomputation from `today`.
+--     (P2) 1y/3y/5y sit exactly 12/36/60 months before the month anchor —
+--          purely relational between returned rows, no date arithmetic on
+--          `today` at all.
+--     (P3) ⭐ ytd.anchor_date = make_date(year(today)-1, 12, 31) — make_date
+--          RECONSTRUCTS a date from components; the body reaches this via
+--          date_trunc('year', today) - 1 day, which shares NO machinery
+--          with make_date.
+--     (P4) ⭐⭐ cpi_basis_period = make_date(year(today)-1, 12, 1) — the
+--          load-bearing pair with (P3). The body's own expression for this
+--          (date_trunc('year') - 1 year + 11 mon) is the most convoluted
+--          line in the function and the one Architect flagged as least
+--          likely to be right by luck; make_date shares nothing with it.
+--     (P5) month.anchor_date is not in the future and sits within one
+--          month of today (a loose bound — catches a base landing a whole
+--          month too far back, not a precise recomputation).
 -- =====================================================================
 select _rls.set_tenant(:'ta'::uuid);
-select (select anchor_date from pfin.fn_nav_delta_panel() where horizon = 'month') as reportedmonthanchor \gset
-select set_config('role', 'postgres', true);
-
-select _rls.set_tenant(:'ta'::uuid);
 select ok(
-  (select extract(day from :'reportedmonthanchor'::date + 1) = 1
-      and :'reportedmonthanchor'::date <= :'today'::date
-      and :'today'::date - :'reportedmonthanchor'::date < 31),
-  '(ANCHOR1) ⭐ month anchor is a valid month-end — the day AFTER it falls on the 1st of a month, checked via extract(), never date_trunc — is not in the future, and sits within 31 days of today'
+  (select bool_and(anchor_date = (date_trunc('month', anchor_date::timestamp) + interval '1 month' - interval '1 day')::date)
+     from pfin.fn_nav_delta_panel()),
+  '(ANCHOR-P1) every anchor_date, across all five horizons, is the last day of its own calendar month — a self-consistency check on the returned value'
 );
 select set_config('role', 'postgres', true);
 
 select _rls.set_tenant(:'ta'::uuid);
 select ok(
-  (select extract(month from anchor_date) = 12
-      and extract(day from anchor_date) = 31
-      and extract(year from anchor_date) = extract(year from :'today'::date) - 1
-     from pfin.fn_nav_delta_panel() where horizon = 'ytd'),
-  '(ANCHOR2) ⭐ ytd anchor is December 31 of the year before today''s — via extract() on year/month/day, never the body''s date_trunc(''year'', ...) expression'
-);
-select set_config('role', 'postgres', true);
-
-select _rls.set_tenant(:'ta'::uuid);
-select ok(
-  (select bool_and(
-     extract(day from p.anchor_date + 1) = 1
-     and (12 * (extract(year from :'reportedmonthanchor'::date) - extract(year from p.anchor_date))
-          + (extract(month from :'reportedmonthanchor'::date) - extract(month from p.anchor_date)))
-         = n.months_back
+  (with panel as (select * from pfin.fn_nav_delta_panel()),
+        m as (select anchor_date as month_anchor from panel where horizon = 'month')
+   select bool_and(
+     (12 * (extract(year from m.month_anchor) - extract(year from p.anchor_date))
+          + (extract(month from m.month_anchor) - extract(month from p.anchor_date)))
+       = n.months_back
    )
-     from pfin.fn_nav_delta_panel() p
-     join (values ('1y',12), ('3y',36), ('5y',60)) as n(horizon, months_back) on n.horizon = p.horizon),
-  '(ANCHOR3) ⭐ 1y/3y/5y anchors are each a valid month-end AND each EXACTLY 12/36/60 calendar months before the month anchor — via integer year/month-component arithmetic (never interval subtraction), across all three horizons in one assertion'
+   from panel p
+   join (values ('1y',12), ('3y',36), ('5y',60)) as n(horizon, months_back) on n.horizon = p.horizon
+   cross join m),
+  '(ANCHOR-P2) 1y/3y/5y anchors sit EXACTLY 12/36/60 calendar months before the month anchor — purely relational between returned rows (one call to the function, via a CTE), no arithmetic on `today` at all'
+);
+select set_config('role', 'postgres', true);
+
+select _rls.set_tenant(:'ta'::uuid);
+select ok(
+  (select anchor_date = make_date(extract(year from :'today'::date)::int - 1, 12, 31)
+     from pfin.fn_nav_delta_panel() where horizon = 'ytd'),
+  '(ANCHOR-P3) ⭐ ytd.anchor_date = make_date(year(today)-1, 12, 31) — make_date RECONSTRUCTS a date from components, sharing no machinery with the body''s date_trunc(''year'', today) - 1 day'
+);
+select set_config('role', 'postgres', true);
+
+select _rls.set_tenant(:'ta'::uuid);
+select ok(
+  (select bool_and(cpi_basis_period = make_date(extract(year from :'today'::date)::int - 1, 12, 1))
+     from pfin.fn_nav_delta_panel() where horizon in ('1y','3y','5y')),
+  '(ANCHOR-P4) ⭐⭐ THE LOAD-BEARING PAIR WITH (P3): cpi_basis_period = make_date(year(today)-1, 12, 1) on all three adj-eligible horizons — the body''s own expression here (date_trunc(''year'') - 1 year + 11 mon) is the most convoluted line in the function; make_date shares nothing with it'
+);
+select set_config('role', 'postgres', true);
+
+select _rls.set_tenant(:'ta'::uuid);
+select ok(
+  (select anchor_date <= :'today'::date and :'today'::date - anchor_date < 31
+     from pfin.fn_nav_delta_panel() where horizon = 'month'),
+  '(ANCHOR-P5) month anchor is not in the future and sits within one month of today — a loose bound, catches a base landing a whole month too far back'
 );
 select set_config('role', 'postgres', true);
 
