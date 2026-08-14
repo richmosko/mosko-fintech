@@ -14,13 +14,23 @@
 // three-badge render has no cross-row special-casing (no "all rows blank → different treatment"
 // shortcut) by construction.
 //
-// QA FINDING 3 (SELF-223 PR review, cheap guard, taken): the January edge case where This Month
-// and Prior Year-End resolve to the IDENTICAL calendar date (PM's ratified "most recent completed
-// month-end" Prior-Month definition: in January, before that month's own close, This Month's
-// most-recent-completed-month-end IS December 31 of the prior year — the same date Prior Year-End
-// names by definition). Locks that two rows sharing reference_date/checkpoint/nav render as two
-// PLAIN, independent, identical rows — no dedup, no merge, no "same as above" special-casing —
-// against a future "helpful" cleanup that would collapse them.
+// QA FINDING 3 (SELF-223 PR review, cheap guard, taken; comment + fixture CORRECTED 2026-08-14
+// against migration 073's own header — team-lead flagged the narrative drift, verified against
+// 073 directly rather than the relay before touching anything, see 073 lines 179-183): the
+// January edge case where PRIOR MONTH and PRIOR YEAR-END resolve to the IDENTICAL calendar date
+// — NOT This Month, which the original comment AND fixture both named. 073's header: prior_month
+// is 072's `month` horizon anchor, defined as "THE MOST RECENT COMPLETED MONTH-END"; for the
+// WHOLE of January that most-recent-completed-month-end IS 31 December of the prior year — the
+// same fixed date prior_year_end always names. This is a STRUCTURAL (calendar) coincidence, true
+// every January by construction, not a data-dependent one. This_month is a DIFFERENT concept
+// entirely (072's CURRENT ENDPOINT — the LOCF checkpoint at-or-before TODAY) and only happens to
+// coincide with prior_year_end on the narrow, data-dependent days before a fresh January
+// checkpoint has landed — it is not the coincidence 073 documents, and the original fixture
+// (this_month sharing prior_year_end's date, prior_month given a distinct one) tested the wrong
+// pairing while its own prose described it backwards. Locks that two rows sharing
+// reference_date/checkpoint/nav render as two PLAIN, independent, identical rows — no dedup, no
+// merge, no "same as above" special-casing — against a future "helpful" cleanup that would
+// collapse them.
 
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
@@ -162,20 +172,26 @@ describe('NavReferenceDatesPanel — ALL THREE ROWS insufficient history (QA Fin
 	});
 });
 
-describe('NavReferenceDatesPanel — January edge case: This Month = Prior Year-End (QA Finding 3)', () => {
+describe('NavReferenceDatesPanel — January edge case: Prior Month = Prior Year-End (QA Finding 3)', () => {
 	it('two rows sharing reference_date/checkpoint/nav render as two PLAIN identical rows, no dedup', () => {
 		const rows = fixture({
+			// This Month: 072's CURRENT ENDPOINT — the LOCF checkpoint at-or-before TODAY. A
+			// January run day, distinct from the December coincidence below (a fresh January
+			// checkpoint has already landed by this reference date, so it does NOT collide).
 			this_month: {
+				reference_date: '2026-01-05',
+				reference_checkpoint_date: '2026-01-05',
+				nav: 490_000,
+				nav_prior_yr_dollars: 491_000
+			},
+			// Prior Month: 073's "most recent COMPLETED month-end" — for the whole of January
+			// that is 31 December of the prior year, structurally, by construction (073 header
+			// lines 179-183) — the SAME date Prior Year-End always names.
+			prior_month: {
 				reference_date: '2025-12-31',
 				reference_checkpoint_date: '2025-12-31',
 				nav: 480_000,
 				nav_prior_yr_dollars: 480_000
-			},
-			prior_month: {
-				reference_date: '2025-11-30',
-				reference_checkpoint_date: '2025-11-30',
-				nav: 470_000,
-				nav_prior_yr_dollars: 471_000
 			},
 			prior_year_end: {
 				reference_date: '2025-12-31',
@@ -187,15 +203,15 @@ describe('NavReferenceDatesPanel — January edge case: This Month = Prior Year-
 		const { body } = render(NavReferenceDatesPanel, { props: { rows } });
 
 		// Both labels present — no row was dropped, hidden, or merged into the other.
-		expect(body).toContain('>This Month<');
+		expect(body).toContain('>Prior Month<');
 		expect(body).toContain('>Prior Year-End<');
 		// The shared figure appears TWICE — one full render per row, not deduplicated to one.
 		expect(body.split('$480,000').length - 1).toBe(4); // 2 occurrences x 2 columns (NAV + Prior Yr $)
 		// Still exactly 3 <tr> data rows in <tbody> — no row collapsed away.
 		const tbody = body.split('<tbody')[1] ?? '';
 		expect(tbody.split('<tr').length - 1).toBe(3);
-		// The distinct Prior Month row is unaffected and un-conflated with the shared date.
-		expect(body).toContain('$470,000');
+		// The distinct This Month row is unaffected and un-conflated with the shared date.
+		expect(body).toContain('$490,000');
 	});
 });
 
