@@ -667,6 +667,8 @@ Tenant correctness rests on the application: `users_id` is caller-supplied, and 
 
 **Scope note.** This ADR records a **decision**. It does **not** schedule the R2 build; the work-spec is `temp/option-3-as-of-derivation-workspec.md` and its §7-or-Linear home is an open F/CTO question.
 
+> **R2 BUILT 2026-08-13 (migration `070`), pulled forward into SELF-221.** The Scope note above records that this ADR decided R2 without scheduling it; that scheduling question is now closed. **The decision is unchanged** — `070` implements the ratified shape and adds no policy. Its first consumer is `pfin.fn_nav_delta_panel` (`071`), whose horizon arithmetic is date-relative and therefore could not be authored without it. ⚠ **The R1 pin remains load-bearing and this build does not relieve it**; the correction owed to `060` / the runbook / `asOf.ts` is *"the pin is no longer the app's within-comparison guarantee"* and remains **outstanding** — `070` re-points nothing.
+
 ### The hazard
 
 `fn_compute_nav` / `fn_nav_composition` / `fn_holdings_as_of` compare a `date` parameter against `timestamptz::date`, which Postgres evaluates **in the session TimeZone**. The app produced that date in the **Node** process (`new Date().toISOString().slice(0,10)` — unconditionally UTC). **Two clocks in two processes.** They agreed only because the dev stack happened to be UTC. `059`'s `closed_at` comment claimed the opposite mechanism was protecting it — *"V1 consumers pass CURRENT_DATE"* — and **zero app callers did**; `060` corrects that comment.

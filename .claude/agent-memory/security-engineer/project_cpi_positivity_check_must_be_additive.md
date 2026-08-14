@@ -30,6 +30,12 @@ function no longer has; (4) once finiteness holds, a NaN print is un-seedable, s
 the constraint inside a savepoint (the corrupt-the-control idiom the 067 battery already uses on
 `nav_daily_select`) or it cannot exist at all.
 
+**Widened 2026-08-13 — this is a FAMILY, not one constraint.** `054` carries `nav_daily_value_finite`
+(NaN + ±Infinity barred on `nav_value`), and `071`'s `v_a_nav > 0` percent guard is sound only because
+of it. So at least two fences — `cpi_u_index_value_finite` on `053` and `nav_daily_value_finite` on
+`054` — stand behind a `> 0` comparison elsewhere in the tree. **Any migration replacing either with a
+positivity CHECK re-admits NaN.** `071` is also the second dependent of the `053` fence (after `067`).
+
 Sec position on sequencing: the hardening is **no-later-than-mandatory**, not same-PR-mandatory — it
 is independently correct today and better landing earlier. More generally on this codebase: a
 numeric-comparison guard is never a NaN guard — see [[measure-the-fence-regex-not-its-comment]] for
