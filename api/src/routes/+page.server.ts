@@ -13,12 +13,20 @@ import { redirect } from '@sveltejs/kit';
 import { loadNetWorthView } from '$lib/server/queries/netWorth';
 import { loadNavComposition } from '$lib/server/queries/navComposition';
 import { loadStaleness } from '$lib/server/queries/staleness';
+import { loadNavSeries, resolveNavSeriesWindow } from '$lib/server/queries/nav-series';
+import {
+	navSeriesParamsSchema,
+	extractNamespacedParams,
+	NAV_SERIES_PARAM_PREFIX
+} from '$lib/server/schemas/nav-series-params';
+import { loadNavBoundary } from '$lib/server/queries/nav-boundary';
+import type { NavSeriesGranularity } from '$lib/nav-series';
 import { EMPTY_STALENESS } from '$lib/staleness/stale-constituent';
 import { serverTodayAsOf } from '$lib/server/time/asOf';
 import type { PageServerLoad } from './$types';
 
 
-export const load: PageServerLoad = async ({ locals }) => {
+export const load: PageServerLoad = async ({ locals, url }) => {
 	const { user } = await locals.safeGetSession();
 	if (!user) throw redirect(303, '/login');
 
@@ -59,5 +67,150 @@ export const load: PageServerLoad = async ({ locals }) => {
 		composition = null;
 	}
 
-	return { netWorth, accountPresence, asOf, staleness, composition };
+	// §2.1.2.d NAV-over-time chart (SELF-220), mounted below the composition
+	// table (SELF-211/226).
+	//
+	// QUERY-PARAM VALIDATION IS CHART-SCOPED, NOT PAGE-SCOPED (F/CTO-adjacent
+	// team-lead ruling, aligned with Frontend's independent read, 2026-08-12
+	// — REVISES this route's earlier page-wide `error(400, ...)` shape). The
+	// params gate only the chart's own data window: their blast radius must
+	// be the chart, not the §2.1.1 headline or composition table this route
+	// also serves. A page-wide 400 turns a hand-edited URL into a dashboard
+	// outage, which is a worse posture than the bad param it was rejecting.
+	//
+	// THE `chart_` NAMESPACE IS THE SAME INVARIANT APPLIED A SECOND TIME, ONE
+	// LEVEL DOWN (F/CTO-ratified 2026-08-13, Sec's param-fence finding, option
+	// A). `Object.fromEntries(url.searchParams)` strict-parsed the WHOLE
+	// page's query string — an unrelated param anywhere on the URL (a
+	// tracker's `?utm_source=`) tripped `.strict()`'s unknown-key rejection
+	// and disabled the chart, which is the page-scoped-blast-radius defect
+	// AGAIN, just triggered by a param instead of a read failure. The fix:
+	// extract ONLY the `chart_`-prefixed subset by structural PREFIX
+	// MEMBERSHIP (`extractNamespacedParams`), then `.strict()`-parse THAT
+	// subset. A key outside the namespace is simply not chart input, never
+	// presented to the schema; a key INSIDE the namespace the schema doesn't
+	// recognize (`chart_bogus`) still reaches `.strict()` and is still
+	// REJECTED — see nav-series-params.ts's header for why this is NOT
+	// "pick expected keys then parse" (that shape would hide an unrecognized
+	// key WITHIN the namespace from the fence, defeating it).
+	//
+	// THE REJECTION ITSELF STAYS STRICT WITHIN THAT SCOPE — an invalid
+	// granularity/date is NEVER silently coerced into the default window.
+	// Lock 14's reject-don't-launder instinct survives at chart scope even
+	// though Lock 14 itself is a WRITE-path posture (settings
+	// mass-assignment) and this is a READ boundary — route-consistency
+	// (soft-degrade, chart-scoped, matching staleness/composition below) is
+	// the stronger precedent here, not a page-wide throw. `navSeriesParamsError`
+	// carries the REASON as a factual message ("chart_granularity: Invalid
+	// enum value...") for Frontend to render as an explicit chart error
+	// state — this is the THIRD distinguishable navSeries state, alongside
+	// `null` (read failed) and `[]` (read succeeded, nothing in range):
+	// invalid params never even reach a read, so `navSeries` stays `null`
+	// here too, but `navSeriesParamsError` being non-null is what tells
+	// Frontend WHY, rather than leaving "read failed" and "params rejected"
+	// indistinguishable.
+	const rawNavSeriesParams = extractNamespacedParams(url.searchParams, NAV_SERIES_PARAM_PREFIX);
+	const parsedNavSeriesParams = navSeriesParamsSchema.safeParse(rawNavSeriesParams);
+
+	let navSeries: Awaited<ReturnType<typeof loadNavSeries>> = null;
+	let navSeriesParamsError: string | null = null;
+	let navSeriesGranularity: NavSeriesGranularity = 'monthly';
+	let navSeriesStart: string;
+	let navSeriesEnd: string;
+
+	if (!parsedNavSeriesParams.success) {
+		navSeriesParamsError = parsedNavSeriesParams.error.issues
+			.map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)
+			.join('; ');
+		// Params rejected — nothing is queried. The DEFAULT window still
+		// resolves so `navSeriesParams` always has a coherent value for
+		// Frontend's controls to initialize from, but it is NOT what was
+		// requested and NOT what produced `navSeries` (which stays `null`,
+		// unattempted) — `navSeriesParamsError` is what marks that gap.
+		const defaults = resolveNavSeriesWindow(undefined, undefined);
+		navSeriesStart = defaults.start;
+		navSeriesEnd = defaults.end;
+	} else {
+		navSeriesGranularity = parsedNavSeriesParams.data.chart_granularity ?? 'monthly';
+		const resolved = resolveNavSeriesWindow(
+			parsedNavSeriesParams.data.chart_start,
+			parsedNavSeriesParams.data.chart_end
+		);
+		navSeriesStart = resolved.start;
+		navSeriesEnd = resolved.end;
+		// No post-resolve inversion check needed here: the schema's own
+		// `.refine()` above already rejects an inverted CALLER-SUPPLIED range
+		// (caught by the `!parsedNavSeriesParams.success` branch), and
+		// resolveNavSeriesWindow can never PRODUCE one from defaulting (a
+		// defaulted start is computed as an offset before its own resolved end).
+
+		// §2.1.2.d fail-soft posture DIFFERS from staleness/composition above
+		// on PURPOSE: `null` = the read failed (logged, never thrown); `[]` =
+		// the read succeeded and found no points in range — a real,
+		// distinguishable state. Collapsing both into `[]` would make an RPC
+		// failure render the SAME "Collect data over time" empty-state copy
+		// (AC6) as a genuine zero-row series — the same class of hazard
+		// netWorth.ts's own header names at length for the old boolean
+		// `hasAccounts`. loadNavSeries() already fails soft internally to
+		// `null`; this try/catch is the belt-and-suspenders boundary so an
+		// unexpected throw degrades to the SAME `null` rather than taking
+		// down the whole route.
+		try {
+			navSeries = await loadNavSeries(
+				locals.supabase,
+				navSeriesGranularity,
+				navSeriesStart,
+				navSeriesEnd
+			);
+		} catch (err) {
+			console.error('[+page.server] nav-series load threw; degrading to null:', err);
+			navSeries = null;
+		}
+	}
+
+	// §2.1.2 cron/imported boundary signal (SELF-220 / 069), fetched FRESH
+	// alongside the series on every load() — no caching, no client-side
+	// derivation (the whole reason 069 exists is that this must NOT be
+	// inferred from point density — see nav-boundary.ts's module header and
+	// $lib/nav-boundary.ts's own header). Independent of the chart's
+	// granularity/date-range params — it is a property of the tenant's STORE,
+	// not of any requested window — so it is fetched unconditionally, even
+	// when navSeriesParamsError is set: Frontend's resolution-disclosure and
+	// staleness-suppression logic need it regardless of what range is
+	// currently selected.
+	//
+	// Same fail-soft-to-`null` posture as navSeries, for the SAME reason:
+	// `null` = the read failed (logged, never thrown); a genuinely returned
+	// `{ first_cron_checkpoint: null, has_cron_rows: false,
+	// has_imported_rows: false }` = the read succeeded and this tenant
+	// genuinely has no rows yet — 069's own state (a), a REAL row, not an
+	// absence. Collapsing the two would be the identical hazard one layer up
+	// from what 069's three-field (not scalar) return already prevents at
+	// the DB layer. loadNavBoundary() already fails soft internally to
+	// `null`; this try/catch is the belt-and-suspenders boundary so an
+	// unexpected throw degrades to the SAME `null` rather than taking down
+	// the whole route.
+	let navBoundary: Awaited<ReturnType<typeof loadNavBoundary>> = null;
+	try {
+		navBoundary = await loadNavBoundary(locals.supabase);
+	} catch (err) {
+		console.error('[+page.server] nav-boundary load threw; degrading to null:', err);
+		navBoundary = null;
+	}
+
+	return {
+		netWorth,
+		accountPresence,
+		asOf,
+		staleness,
+		composition,
+		navSeries,
+		navSeriesParamsError,
+		navSeriesParams: {
+			granularity: navSeriesGranularity,
+			start: navSeriesStart,
+			end: navSeriesEnd
+		},
+		navBoundary
+	};
 };

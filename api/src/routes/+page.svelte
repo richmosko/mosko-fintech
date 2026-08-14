@@ -21,7 +21,9 @@
 	import type { PageData } from './$types';
 	import StaleConstituentBadge from '$lib/components/StaleConstituentBadge.svelte';
 	import NavCompositionTable from '$lib/components/NavCompositionTable.svelte';
+	import NavHistoryChart from '$lib/components/NavHistoryChart.svelte';
 	import { EMPTY_STALENESS } from '$lib/staleness/stale-constituent';
+	import { EMPTY_NAV_BOUNDARY } from '$lib/nav-boundary';
 
 	let { data }: { data: PageData } = $props();
 
@@ -147,6 +149,23 @@
 				<NavCompositionTable {composition} />
 			</section>
 		{/if}
+
+		<!-- §2.1.2.d NAV-over-time chart (SELF-220 · V1.1) — mounted below composition,
+		     per flows/phase-2-flows-2.1-net-worth.md §12 "Mount point" (merged dba7bf1).
+		     NavHistoryChart owns its own fail-soft/error/empty-state gating internally
+		     (data.navSeries is independently fail-soft per +page.server.ts — a chart-data
+		     read failure never took down the headline above, and doesn't gate on it here
+		     either). `data.navBoundary` is 069's (pfin.fn_first_cron_checkpoint) signal,
+		     fetched fresh every load() — `null` on a read failure degrades to
+		     EMPTY_NAV_BOUNDARY (every point treated as post-boundary, the safe default);
+		     a genuinely returned empty-store row is NOT this — it flows straight through,
+		     never collapsed with the failure case (nav-boundary.ts's own header). -->
+		<NavHistoryChart
+			points={data.navSeries}
+			paramsError={data.navSeriesParamsError}
+			params={data.navSeriesParams}
+			boundary={data.navBoundary ?? EMPTY_NAV_BOUNDARY}
+		/>
 	{/if}
 </main>
 

@@ -1,0 +1,512 @@
+// NavHistoryChart.dom.test.ts — SELF-220 §2.1.2.d NAV chart battery. Proves the
+// placeholder-state gating (the highest-value, easiest-to-get-wrong logic: error vs
+// read-failed vs genuinely-empty must never collapse into one rendered message —
+// see nav-series.ts / nav-boundary.ts headers for why) and the top-level structural
+// render for a populated series (legend, basis-line, chip-group present).
+//
+// SCOPE NOTE: this does not assert exact SVG path geometry — LayerCake's
+// ResizeObserver-driven container sizing is unreliable under jsdom (no real layout
+// engine), so pixel-level path assertions would be fragile and low-value here. The
+// pure MATH that geometry depends on (gap segmentation, boundary suppression,
+// shared y-domain, zoom/narrow math) is already covered node-side in
+// nav-series.test.ts / nav-boundary.test.ts / nav-chart-domain.test.ts, DOM-free.
+//
+// @vitest-environment jsdom
+
+import { describe, it, expect, beforeEach, type Mock } from 'vitest';
+import { render } from '@testing-library/svelte';
+import NavHistoryChart from './NavHistoryChart.svelte';
+import type { NavSeriesPoint } from '$lib/nav-series';
+import { EMPTY_NAV_BOUNDARY } from '$lib/nav-boundary';
+// Resolves to tests/stubs/app-navigation.ts under the vitest.config.ts alias — a real
+// vi.fn(), the SAME instance NavHistoryChart.svelte calls internally (the alias IS
+// the resolution, no vi.mock() needed). See that stub's header for why it exists.
+//
+// TYPE vs RUNTIME SPLIT, WORTH NAMING: svelte-check resolves `$app/navigation`'s
+// TYPE against SvelteKit's real ambient declarations (from `svelte-kit sync`), which
+// know nothing of the vitest alias below — so the imported binding types as the real
+// `goto` signature, not a mock. The vitest ALIAS (vitest.config.ts) still resolves
+// the RUNTIME value to the stub. Cast once, here, rather than fight svelte-check.
+import { goto as gotoImport } from '$app/navigation';
+// Same alias-resolved stub idiom as `goto` above — resolves to tests/stubs/app-state.ts, a
+// plain mutable object (not genuinely Svelte-reactive). Reassigning `page.url` directly between
+// tests is that stub's own documented usage for varying the URL mid-suite.
+import { page } from '$app/state';
+const goto = gotoImport as unknown as Mock;
+
+// Same type-vs-runtime split as `goto` above, one level deeper: svelte-check types
+// `page.url` against SvelteKit's real route-manifest-derived literal union for
+// `pathname` (the ambient `$app/state` declarations), which a plain `new URL(...)`
+// never satisfies — even though the vitest alias resolves `page` to the plain-object
+// stub (tests/stubs/app-state.ts) at runtime, where `url` is just `URL`. Reassigning
+// through this typed helper (instead of `page.url = ...` at each call site) casts
+// once, here, rather than fighting svelte-check five times over.
+function setPageUrl(url: string): void {
+	(page as unknown as { url: URL }).url = new URL(url);
+}
+
+beforeEach(() => {
+	goto.mockClear();
+	// page is a module-level singleton stub (tests/stubs/app-state.ts) — reset between tests
+	// so a test that mutates page.url (e.g. to prove a stray param survives navigation) can't
+	// leak its URL into an unrelated later test.
+	setPageUrl('http://localhost/');
+});
+
+// jsdom has no ResizeObserver (a real browser API) — LayerCake's container binds
+// `clientWidth`/`clientHeight` via one to size the SVG canvas. A minimal no-op stub
+// (never actually fires, matching every other component in this suite that doesn't
+// assert on real layout) is enough to let LayerCake mount without throwing; the
+// component's own logic being tested here doesn't depend on real pixel dimensions.
+class ResizeObserverStub {
+	observe() {}
+	unobserve() {}
+	disconnect() {}
+}
+globalThis.ResizeObserver ??= ResizeObserverStub;
+
+const PARAMS = { granularity: 'monthly' as const, start: '2021-06-01', end: '2026-06-01' };
+
+function point(overrides: Partial<NavSeriesPoint>): NavSeriesPoint {
+	return {
+		point_date: '2026-01-31',
+		nav_nominal: 100_000,
+		checkpoint_date: '2026-01-31',
+		nav_inflation_adjusted: 95_000,
+		cpi_period: '2026-01-01',
+		cpi_value: 300,
+		cpi_is_carried: false,
+		cpi_carried_from: null,
+		cpi_period_was_due: false,
+		cpi_nonpublication_on_record: false,
+		cpi_coverage_through: '2026-06-01',
+		...overrides
+	};
+}
+
+// A well-formed 12+ month series so isSparseHistory is false and the default
+// (non-placeholder) render path is exercised.
+const POPULATED = Array.from({ length: 13 }, (_, i) =>
+	point({
+		point_date: `202${5 + Math.floor((6 + i) / 12)}-${String(((6 + i) % 12) + 1).padStart(2, '0')}-15`,
+		nav_nominal: 100_000 + i * 1_000,
+		nav_inflation_adjusted: 95_000 + i * 900
+	})
+);
+
+describe('NavHistoryChart — placeholder-state gating never collapses distinct states', () => {
+	it('paramsError set: renders the error notice, never the empty/unavailable copy', () => {
+		const { getByText, queryByText } = render(NavHistoryChart, {
+			props: {
+				points: [],
+				paramsError: 'granularity: Invalid enum value',
+				params: PARAMS,
+				boundary: EMPTY_NAV_BOUNDARY
+			}
+		});
+		expect(getByText(/Chart parameters were invalid/)).toBeTruthy();
+		expect(queryByText('Collect data over time.')).toBeNull();
+		expect(queryByText(/temporarily unavailable/)).toBeNull();
+	});
+
+	it('points === null (read failed): renders the unavailable notice, never the empty-history copy', () => {
+		const { getByText, queryByText } = render(NavHistoryChart, {
+			props: { points: null, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+		});
+		expect(getByText(/temporarily unavailable/)).toBeTruthy();
+		expect(queryByText('Collect data over time.')).toBeNull();
+	});
+
+	it('points === [] (genuinely empty): renders "Collect data over time.", never the unavailable copy', () => {
+		const { getByText, queryByText } = render(NavHistoryChart, {
+			props: { points: [], paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+		});
+		expect(getByText('Collect data over time.')).toBeTruthy();
+		expect(queryByText(/temporarily unavailable/)).toBeNull();
+	});
+});
+
+describe('NavHistoryChart — default render (populated series)', () => {
+	it('renders both legend entries and the granularity chip-group', () => {
+		const { getByText, getByRole } = render(NavHistoryChart, {
+			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+		});
+		expect(getByText('Net Worth (Nominal)')).toBeTruthy();
+		expect(getByText('Net Worth (Inflation-Adjusted)')).toBeTruthy();
+		expect(getByRole('radiogroup', { name: 'Chart granularity' })).toBeTruthy();
+	});
+
+	it('the selected granularity chip carries aria-checked="true"; the others false', () => {
+		const { getByRole } = render(NavHistoryChart, {
+			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+		});
+		const monthly = getByRole('radio', { name: 'Monthly' });
+		const weekly = getByRole('radio', { name: 'Weekly' });
+		expect(monthly.getAttribute('aria-checked')).toBe('true');
+		expect(weekly.getAttribute('aria-checked')).toBe('false');
+	});
+
+	it('cpi-unavailable series (every point NULL): omits the inflation-adjusted legend entry, shows the unavailable basis line', () => {
+		const cpiUnavailablePoints = POPULATED.map((p) => ({
+			...p,
+			nav_inflation_adjusted: null,
+			cpi_value: null,
+			cpi_coverage_through: null
+		}));
+		const { queryByText, getByText } = render(NavHistoryChart, {
+			props: {
+				points: cpiUnavailablePoints,
+				paramsError: null,
+				params: PARAMS,
+				boundary: EMPTY_NAV_BOUNDARY
+			}
+		});
+		expect(queryByText('Net Worth (Inflation-Adjusted)')).toBeNull();
+		expect(getByText(/Inflation-adjusted figures are unavailable/)).toBeTruthy();
+	});
+
+	it('clicking a granularity chip navigates via goto with the NAMESPACED query param', async () => {
+		const { getByRole } = render(NavHistoryChart, {
+			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+		});
+		const daily = getByRole('radio', { name: 'Daily' });
+		daily.click();
+		await Promise.resolve();
+		expect(goto).toHaveBeenCalledTimes(1);
+		const [calledUrl] = goto.mock.calls[0] as [string];
+		const params = new URL(calledUrl, 'http://localhost').searchParams;
+		expect(params.get('chart_granularity')).toBe('daily');
+		expect(params.has('granularity')).toBe(false);
+	});
+
+	// ⭐ F/CTO-ratified 2026-08-13 (Sec's param-fence finding) — every goto() URL write on this
+	// surface must preserve params it doesn't own, not just avoid rejecting them on read.
+	it('⭐ a stray non-chart param on the page URL survives a granularity-chip navigation untouched', async () => {
+		setPageUrl('http://localhost/?utm_source=newsletter');
+		const { getByRole } = render(NavHistoryChart, {
+			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+		});
+		const daily = getByRole('radio', { name: 'Daily' });
+		daily.click();
+		await Promise.resolve();
+		const [calledUrl] = goto.mock.calls[0] as [string];
+		const params = new URL(calledUrl, 'http://localhost').searchParams;
+		expect(params.get('utm_source')).toBe('newsletter');
+		expect(params.get('chart_granularity')).toBe('daily');
+	});
+});
+
+// ⭐ F/CTO-ratified 2026-08-13 (Sec's param-fence finding, option A) — the reset breadcrumb and
+// its goto() write are namespace-scoped exactly like the granularity toggle above: the
+// breadcrumb reflects THIS surface's own drilled state, and a reset clears only what this
+// surface owns.
+describe('NavHistoryChart — reset breadcrumb is namespace-scoped, not page-scoped', () => {
+	it('a page URL with ONLY a stray non-chart param does NOT show "Reset to 60 months"', () => {
+		setPageUrl('http://localhost/?utm_source=newsletter');
+		const { queryByText, getByText } = render(NavHistoryChart, {
+			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+		});
+		expect(queryByText('Reset to 60 months')).toBeNull();
+		// The non-breadcrumb range label renders instead — proves the false branch is reachable
+		// and this isn't a fixture that happens to show neither.
+		expect(getByText(/Showing:/)).toBeTruthy();
+	});
+
+	it('a page URL WITH a chart_* param shows "Reset to 60 months"', () => {
+		setPageUrl('http://localhost/?chart_granularity=daily');
+		const { getByText } = render(NavHistoryChart, {
+			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+		});
+		expect(getByText('Reset to 60 months')).toBeTruthy();
+	});
+
+	it('⭐ clicking reset clears only chart_* keys — a stray non-chart param on the URL survives', async () => {
+		setPageUrl('http://localhost/?utm_source=newsletter&chart_granularity=daily&chart_start=2026-01-01');
+		const { getByText } = render(NavHistoryChart, {
+			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+		});
+		getByText('Reset to 60 months').click();
+		await Promise.resolve();
+		expect(goto).toHaveBeenCalledTimes(1);
+		const [calledUrl] = goto.mock.calls[0] as [string];
+		const params = new URL(calledUrl, 'http://localhost').searchParams;
+		expect(params.get('utm_source')).toBe('newsletter');
+		expect(params.has('chart_granularity')).toBe(false);
+		expect(params.has('chart_start')).toBe(false);
+	});
+});
+
+// ============================================================================
+// SELF-220-QA-r1 — QA-added coverage (content marker for this revision). Three
+// gaps identified by audit against the SELF-220 dispatch's items 3/4: none of
+// the RULED disclosure copy, the `sparse` placeholder state, or the
+// post-boundary-only staleness-marker property had a DOM-level assertion
+// anywhere in the existing suite (the pure functions they're built on —
+// isSparseHistory / isPreBoundaryPoint / shouldSuppressCarryStaleness — are
+// covered node-side in nav-series.test.ts / nav-boundary.test.ts, but the
+// COMPONENT WIRING that reads those functions and renders accordingly was
+// not). Added here rather than as new files, matching this file's own
+// established idiom (render + testing-library queries, no SVG path-geometry
+// assertions — see this file's SCOPE NOTE at the top).
+// ============================================================================
+
+describe('SELF-220-QA-r1 — resolution-disclosure copy, bound to the UX-ruled string exactly', () => {
+	it('imported-only (no cron yet): renders the RULED no-boundary-date copy verbatim', () => {
+		const boundary = { first_cron_checkpoint: null, has_cron_rows: false, has_imported_rows: true };
+		const { getByText } = render(NavHistoryChart, {
+			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary }
+		});
+		// Bound to the EXACT ruled string (team-lead, 2026-08-12) — not a substring/regex
+		// match, so a future edit that alters the copy fails here rather than passing on a
+		// loose /Monthly resolution/ match that both branches would satisfy.
+		expect(
+			getByText("Monthly resolution — daily/weekly tracking hasn't started yet.")
+		).toBeTruthy();
+	});
+
+	it('mixed (a real boundary date): renders the dated variant, NOT the no-boundary-date copy', () => {
+		const boundary = { first_cron_checkpoint: '2026-01-01', has_cron_rows: true, has_imported_rows: true };
+		const preBoundaryPoint = point({ point_date: '2025-06-15', checkpoint_date: '2025-06-15' });
+		const { getByText, queryByText } = render(NavHistoryChart, {
+			props: { points: [preBoundaryPoint, ...POPULATED], paramsError: null, params: PARAMS, boundary }
+		});
+		expect(getByText(/Monthly resolution before/)).toBeTruthy();
+		expect(getByText('January 2026', { selector: '.basis-value' })).toBeTruthy();
+		expect(queryByText("Monthly resolution — daily/weekly tracking hasn't started yet.")).toBeNull();
+	});
+
+	it('cron-only (no imported rows at all): the disclosure never renders — nothing to disclose', () => {
+		const boundary = { first_cron_checkpoint: '2026-01-01', has_cron_rows: true, has_imported_rows: false };
+		const { queryByText } = render(NavHistoryChart, {
+			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary }
+		});
+		expect(queryByText(/Monthly resolution/)).toBeNull();
+	});
+});
+
+describe('SELF-220-QA-r1 — sparse-history state (§12.9) does not collapse into the default render', () => {
+	// Fewer than 12 distinct months — isSparseHistory's own threshold (nav-series.test.ts).
+	const SPARSE = Array.from({ length: 5 }, (_, i) =>
+		point({ point_date: `2026-0${i + 1}-15`, nav_nominal: 100_000 + i * 1_000 })
+	);
+
+	it('sparse series: the tracking-history label renders with the correct "N of M months" text', () => {
+		const { getByText } = render(NavHistoryChart, {
+			props: { points: SPARSE, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+		});
+		// PARAMS spans 2021-06-01..2026-06-01 = 60 requested months; SPARSE carries 5
+		// distinct calendar months — both halves of the label are asserted so a
+		// regression in EITHER the numerator (months-of-history) or the denominator
+		// (windowMonths threaded down from the parent's own params) is caught.
+		expect(getByText('5 of 60 months of history')).toBeTruthy();
+	});
+
+	it('a populated (non-sparse) series never renders the tracking-history label', () => {
+		const { queryByText } = render(NavHistoryChart, {
+			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+		});
+		expect(queryByText(/months of history/)).toBeNull();
+	});
+});
+
+describe('SELF-220-QA-r1 — staleness markers fire post-boundary ONLY (§12.1/§12.2)', () => {
+	it('a pre-boundary carried point gets NO marker; a post-boundary carried point DOES', () => {
+		const boundary = { first_cron_checkpoint: '2026-01-01', has_cron_rows: true, has_imported_rows: true };
+		const preBoundaryCarried = point({
+			point_date: '2025-06-30',
+			checkpoint_date: '2025-05-31' // carried (checkpoint_date !== point_date), but pre-boundary
+		});
+		const postBoundaryCarried = point({
+			point_date: '2026-03-31',
+			checkpoint_date: '2026-02-28' // carried, and post-boundary — a real cron gap
+		});
+		const postBoundaryFresh = point({ point_date: '2026-04-30', checkpoint_date: '2026-04-30' });
+		const { getAllByRole } = render(NavHistoryChart, {
+			props: {
+				points: [preBoundaryCarried, postBoundaryCarried, postBoundaryFresh],
+				paramsError: null,
+				params: PARAMS,
+				boundary
+			}
+		});
+		// EXACTLY one marker — proves both directions at once: the post-boundary carried
+		// point got one (not silently dropped) AND the pre-boundary carried point did not
+		// (not over-rendered). A count of 0 or 2 would each fail a different half of §12.1.
+		const markers = getAllByRole('img', { name: /NAV checkpoint carried from/ });
+		expect(markers).toHaveLength(1);
+		expect(markers[0].getAttribute('aria-label')).toBe(
+			'NAV checkpoint carried from 2026-02-28 to 2026-03-31'
+		);
+	});
+
+	// ⭐ REGRESSION test, added in response to Architect's contract-conformance flag
+	// (2026-08-13) — not QA's SELF-220-QA-r1 content above, a Frontend fix-verification
+	// added alongside the isImportedEraPoint correction in nav-boundary.ts. The bug: in
+	// the IMPORTED-ONLY state (has_cron_rows === false), every point's staleness
+	// suppression was computed via isPreBoundaryPoint alone, which answers `false` for
+	// every point when first_cron_checkpoint is NULL (there is no date to be "before")
+	// — so the ENTIRE imported-only series rendered stale-carry markers, exactly the
+	// defect §12.1's suppress-and-disclose ruling exists to prevent. This is the DOM-
+	// level assertion Architect named as the one that would have caught it: a unit test
+	// of resolutionDisclosureFires alone (which was always correct) passes right over
+	// this, because the bug is confined to the SEPARATE suppression path.
+	it('⭐ imported-only state (no cron era at all): ZERO staleness markers render, however many carried points exist', () => {
+		const boundary = { first_cron_checkpoint: null, has_cron_rows: false, has_imported_rows: true };
+		const carried1 = point({ point_date: '2018-01-31', checkpoint_date: '2017-12-31' });
+		const carried2 = point({ point_date: '2018-02-28', checkpoint_date: '2018-01-31' });
+		const { queryAllByRole } = render(NavHistoryChart, {
+			props: {
+				points: [carried1, carried2],
+				paramsError: null,
+				params: PARAMS,
+				boundary
+			}
+		});
+		expect(queryAllByRole('img', { name: /NAV checkpoint carried from/ })).toHaveLength(0);
+	});
+});
+
+// ============================================================================
+// SELF-220-QA-r3 — QA reconcile pass (2026-08-13) against Frontend's landed
+// regression test above and team-lead/Sec's audit of it. Two residuals, not a
+// full re-cover: the disclosure-still-fires and mixed-state-splits-correctly
+// controls this reconcile also asked about are ALREADY covered by
+// SELF-220-QA-r1 above (the "resolution-disclosure copy" and "staleness
+// markers fire post-boundary ONLY" blocks) — nothing duplicated here.
+//
+// (A) SEC'S STATE-DRIVEN REQUIREMENT: the landed regression test above queries
+// `getByRole('img', { name: /NAV checkpoint carried from/ })` — coupled to the
+// marker's aria-label COPY, which a wording change would silently decouple
+// (the query would just stop matching and the test would pass VACUOUSLY, not
+// because the bug is fixed). It also independently reproduces a real crash: run
+// as-landed against the pre-fix source, `queryAllByRole` + `toHaveLength` on
+// the failing (non-empty) case throws an unrelated Svelte-internals error
+// instead of failing cleanly (same root cause recorded against SELF-220-QA-r2's
+// draft: the failure-message pretty-printer chokes serializing a raw array of
+// DOM elements) — confirmed while retro-proving RED, see hand-off notes.
+// Supplementing with a class-selector, state-driven form: same (null, false,
+// true) input Sec asked for, asserts on `.stale-marker` (the semantic marker
+// class) and on `.length` (a number, not the array), not on rendered text.
+//
+// (B) LINE-TREATMENT COVERAGE GAP: the landed regression test only asserts on
+// markers. It does not touch §12.6's other imported-only-state requirement —
+// the nominal line must draw its stepped treatment for EVERY point, not
+// collapse into the plain post-boundary linear segment. Added here.
+// ============================================================================
+
+describe('SELF-220-QA-r3 — imported-only state, reconciled: state-driven marker check + line-treatment (residual after 94c298c)', () => {
+	const IMPORTED_ONLY_BOUNDARY = { first_cron_checkpoint: null, has_cron_rows: false, has_imported_rows: true };
+	const CARRIED_IMPORTED_POINTS = [
+		point({ point_date: '2025-01-15', checkpoint_date: '2015-12-31' }),
+		point({ point_date: '2025-02-15', checkpoint_date: '2015-12-31' }),
+		point({ point_date: '2025-03-15', checkpoint_date: '2015-12-31' })
+	];
+
+	it('(A) state-driven: zero .stale-marker elements — not coupled to aria-label copy', () => {
+		const { container } = render(NavHistoryChart, {
+			props: {
+				points: CARRIED_IMPORTED_POINTS,
+				paramsError: null,
+				params: PARAMS,
+				boundary: IMPORTED_ONLY_BOUNDARY
+			}
+		});
+		const markers = container.querySelectorAll('.stale-marker');
+		expect(markers.length).toBe(0);
+	});
+
+	it('(B) the nominal line draws ENTIRELY as the stepped treatment — no plain post-boundary linear segment renders', () => {
+		// A bare ".line-stepped exists" check is NOT sufficient — NavChartLines.svelte's
+		// join-point mechanism always appends the first post-boundary point to the
+		// pre-boundary array when the latter is non-empty, so a degenerate ONE-POINT
+		// stepped path can render even under a bug that misclassifies everything else.
+		// The discriminating signal is the ABSENCE of the plain (non-stepped) segment.
+		const { container } = render(NavHistoryChart, {
+			props: {
+				points: CARRIED_IMPORTED_POINTS,
+				paramsError: null,
+				params: PARAMS,
+				boundary: IMPORTED_ONLY_BOUNDARY
+			}
+		});
+		const nominalPaths = Array.from(container.querySelectorAll('.line-nominal'));
+		const plainLinearSegments = nominalPaths.filter((el) => !el.classList.contains('line-stepped'));
+		expect(container.querySelector('.line-stepped')).not.toBeNull();
+		expect(plainLinearSegments.length).toBe(0);
+	});
+});
+
+// ============================================================================
+// SELF-220-QA-r4 — Sec's round-2 finding (2026-08-13), fail-OPEN on a boundary
+// READ FAILURE, not a data state. Base sha for this catching test: `e0edfac`.
+//
+// isImportedEraPoint's `!has_cron_rows` guard is TRUE on EMPTY_NAV_BOUNDARY
+// (null, false, false) — it was written to answer "is this the imported-only
+// STATE" (069 state (b): has_cron_rows=false, has_imported_rows=true), but
+// EMPTY_NAV_BOUNDARY shares has_cron_rows=false with state (b) while actually
+// meaning something else entirely: "the boundary READ FAILED" (nav-boundary.ts
+// / server/queries/nav-boundary.ts's own fail-soft-to-null contract) or "the
+// store is genuinely empty" (state (a)). Keying suppression on has_cron_rows
+// ALONE collapses THOSE two into state (b) too — the same single-field
+// conflation the original imported-only bug had, one field over. Sec's own
+// framing: my prior four-consumer enumeration passed because the criterion
+// checked "does this branch on a state FIELD" without checking "does it
+// branch on the FULL three-field tuple" — a single boolean is never enough to
+// disambiguate four states.
+//
+// REACHABILITY (Sec, why this isn't hypothetical): a genuinely empty store
+// yields `[]` for `points` under the same RLS the boundary read uses — so
+// EMPTY_NAV_BOUNDARY paired with REAL, non-empty, carried points can only
+// happen via the fail-soft substitution: +page.svelte's
+// `boundary={data.navBoundary ?? EMPTY_NAV_BOUNDARY}` fires when the 069 RPC
+// call failed, while the SEPARATE navSeries fetch on the same load() may have
+// succeeded independently and returned real carried points. In that reachable
+// state: EVERY point gets treated as imported-era (has_cron_rows is false,
+// same as it would be for a genuine state (b)) — every real staleness marker
+// is SUPPRESSED, and the resolution-disclosure ALSO never fires (it requires
+// has_imported_rows === true, and EMPTY has that false) — so the user sees
+// NEITHER signal. A real cron-gap staleness event goes completely silent on a
+// transient, unrelated read failure. Fail-OPEN, not fail-closed.
+// ============================================================================
+
+describe('SELF-220-QA-r4 — boundary READ FAILURE (EMPTY tuple) + real carried points: markers must SHOW, not silently suppress', () => {
+	const CARRIED_POINTS_UNDER_FAILED_BOUNDARY = [
+		point({ point_date: '2026-01-31', checkpoint_date: '2025-12-01' }),
+		point({ point_date: '2026-02-28', checkpoint_date: '2025-12-01' }),
+		point({ point_date: '2026-03-31', checkpoint_date: '2026-03-31' }) // one fresh, non-carried point too
+	];
+
+	it('⭐ RED-at-e0edfac: staleness markers SHOW under EMPTY_NAV_BOUNDARY — a boundary read failure must not silently hide real staleness', () => {
+		const { container } = render(NavHistoryChart, {
+			props: {
+				points: CARRIED_POINTS_UNDER_FAILED_BOUNDARY,
+				paramsError: null,
+				params: PARAMS,
+				boundary: EMPTY_NAV_BOUNDARY
+			}
+		});
+		// State-driven input (EMPTY_NAV_BOUNDARY, the exact tuple), structural
+		// assertion (class presence + count, never rendered text) — not a DOM
+		// string pin. Two real carried points in the fixture; the third is fresh
+		// and must NOT produce a marker, so this also isn't satisfied by an
+		// implementation that marks everything regardless of carry state.
+		const markers = container.querySelectorAll('.stale-marker');
+		expect(markers.length).toBe(2);
+	});
+
+	it('⭐ RED-at-e0edfac: the resolution-disclosure does NOT fire under EMPTY_NAV_BOUNDARY — nothing to disclose when has_imported_rows is false', () => {
+		const { container } = render(NavHistoryChart, {
+			props: {
+				points: CARRIED_POINTS_UNDER_FAILED_BOUNDARY,
+				paramsError: null,
+				params: PARAMS,
+				boundary: EMPTY_NAV_BOUNDARY
+			}
+		});
+		// Structural class check (.resolution-disclosure), not a copy-string match —
+		// this leg is expected to ALREADY pass at e0edfac (resolutionDisclosureFires
+		// keys on has_imported_rows, which is false on EMPTY); included as the
+		// non-vacuity companion to the marker leg above, on the SAME input.
+		expect(container.querySelector('.resolution-disclosure')).toBeNull();
+	});
+});
