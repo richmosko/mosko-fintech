@@ -7,8 +7,12 @@
 --   migration in the SAME PR.
 -- =====================================================================
 -- BINDS TO MIGRATION: supabase/migrations/071_fn_nav_delta_panel.sql, commit
---   14600bd. Every leg below is one line of that migration's own QA
---   TEST-PAIRING block (items 1-12).
+--   83cf781 (return-shape option A adds current_checkpoint_date; the
+--   negative-anchor guard widens from `<> 0` to `> 0`; the two-clock/ytd
+--   header paragraph gained a documentation-only correction, no code change —
+--   see the migration header, no battery leg needed for that one). Every leg
+--   below is one line of that migration's own QA TEST-PAIRING block
+--   (items 1-12).
 --
 --   ⚠ NO p_as_of PARAMETER — DELIBERATE (a client-suppliable as-of would BE
 --   the two-clock hazard ADR-044 closes). "Today" is derived internally via
@@ -25,15 +29,20 @@
 --
 --   Contract as landed:
 --     returns table (horizon text, anchor_date date, anchor_checkpoint_date
---       date, delta_nominal numeric, delta_percent numeric,
---       delta_inflation_adjusted numeric, cpi_basis_period date,
---       cpi_any_carried boolean, cpi_unavailable boolean)
+--       date, current_checkpoint_date date, delta_nominal numeric,
+--       delta_percent numeric, delta_inflation_adjusted numeric,
+--       cpi_basis_period date, cpi_any_carried boolean, cpi_unavailable
+--       boolean) — TEN columns, current_checkpoint_date newly inserted at
+--       position 4 (F/CTO ratify 2026-08-13, return-shape option A).
 --     SECURITY INVOKER · STABLE · set search_path = '' · NO ARGUMENTS.
 --     EXACTLY FIVE ROWS ALWAYS: month/ytd/1y/3y/5y, fixed order.
 --     Formula: delta_inflation_adjusted = nav_current*(cpi_ye/cpi_current)
 --       - nav_anchor*(cpi_ye/cpi_anchor) — THREE CPI observations, each
 --       endpoint deflated separately THEN differenced (never the single-ratio
 --       defective draft this migration's header records at length).
+--     delta_percent guard is `v_a_nav > 0` (was `<> 0`): a NEGATIVE anchor now
+--       NULLs delta_percent too (a negative base inverts the sign), while
+--       delta_nominal/delta_inflation_adjusted stay computed and unguarded.
 --
 -- ┌─ WHAT THIS BATTERY PROVES — one line per migration-header QA TEST-PAIRING item ────┐
 -- │ (1)  CRUX ⭐⭐ THE ARITHMETIC, cpi_current ≠ cpi_anchor ≠ cpi_ye on EVERY adj leg.   │
@@ -49,14 +58,24 @@
 -- │          body cannot hide.                                                           │
 -- │ (3)  CAUSE the three NULL causes distinguished on the full row: insufficient        │
 -- │          history, CPI-unresolvable, not-applicable (month/ytd).                     │
--- │ (4)  CARRY carry provenance, BOTH sides: a NAV anchor served by an earlier          │
--- │          checkpoint, AND a CPI leg actually carried (cpi_any_carried true).         │
+-- │ (4)  CARRY carry provenance, THREE sides: a NAV anchor served by an earlier         │
+-- │          checkpoint, a CPI leg actually carried (cpi_any_carried true), AND         │
+-- │          (CARRY3, F/CTO ratify 2026-08-13 return-shape A) the CURRENT endpoint      │
+-- │          itself carried — current_checkpoint_date older than today, identical      │
+-- │          on all five rows, the cron-outage shape.                                  │
 -- │ (5)  PCT0 delta_percent NULL (not 0, not a raise) on a zero anchor NAV, with        │
--- │          delta_nominal still present.                                               │
+-- │          delta_nominal still present. (NEG1) the sibling: a NEGATIVE anchor NAV     │
+-- │          also NULLs delta_percent (guard widened to `> 0`), while delta_nominal     │
+-- │          AND delta_inflation_adjusted stay present — unguarded, sound over a        │
+-- │          negative base.                                                            │
 -- │ (6)  CPIG zero AND negative CPI on the denominator -> NULL adj, never raised,       │
 -- │          never sign-flipped.                                                        │
 -- │ (7)  T   two-tenant, non-vacuously: identical dates, different nav_values.          │
--- │ (8)  X   cross-tenant / zero-checkpoint tenant -> five all-NULL rows.               │
+-- │ (8)  X   cross-tenant / zero-checkpoint tenant -> five all-NULL rows. (LEAK)         │
+-- │          corrupt-the-control: nav_daily_select broken open to using(true)           │
+-- │          leaks B's checkpoint into A's read DETERMINISTICALLY — A and B's           │
+-- │          month-anchor dates are deliberately one day apart (Sec's note) so a        │
+-- │          same-date tie can never make this leg flaky.                              │
 -- │ (9)  M   aal2 backstop, both legs.                                                  │
 -- │ (10) PST1 catalog posture for 071 (070's own posture is 070's own battery).         │
 -- │ (11) A   ACL: authenticated yes, PUBLIC no, service_role no.                        │
@@ -73,21 +92,24 @@ begin;
 
 \ir ../_fixtures/rls_verbs.psql
 
--- plan = 30 : 3 fixture pins (Z) + 3 crux arithmetic (CRUX) + 1 five-rows-order
+-- plan = 34 : 3 fixture pins (Z) + 3 crux arithmetic (CRUX) + 1 five-rows-order
 -- (FIVE) + 5 independent anchor-derivation properties (ANCHOR-P1..P5)
--- + 4 null-cause (CAUSE) + 2 carry provenance (CARRY) + 1 zero-anchor percent
--- (PCT0) + 2 CPI guard (CPIG) + 2 two-tenant (T) + 1 cross-tenant (X)
--- + 2 aal2 (M) + 1 catalog posture (PST1) + 3 ACL (A).
-select plan(30);
+-- + 4 null-cause (CAUSE) + 4 carry provenance (CARRY1 NAV-side, CARRY2
+-- CPI-side, CARRY3 current-side, CARRY4 jan/feb basis-carry) + 1 zero-anchor
+-- percent (PCT0) + 1 negative-anchor percent (NEG1) + 2 CPI guard (CPIG)
+-- + 2 two-tenant (T) + 1 cross-tenant (X) + 1 corrupt-the-control leak canary
+-- (LEAK) + 2 aal2 (M) + 1 catalog posture (PST1) + 3 ACL (A).
+select plan(34);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb, _rls.tenant_c() as tc \gset
 \set td '00000000-0000-0000-0000-000000000d71'
 \set te '00000000-0000-0000-0000-000000000e71'
 \set tf '00000000-0000-0000-0000-000000000f71'
+\set tg '00000000-0000-0000-0000-000000000071'
 
-insert into auth.users (id) values (:'ta'), (:'tb'), (:'tc'), (:'td'), (:'te'), (:'tf');
+insert into auth.users (id) values (:'ta'), (:'tb'), (:'tc'), (:'td'), (:'te'), (:'tf'), (:'tg');
 insert into pfin.user_settings (users_id, mfa_policy) values
-  (:'ta','none'), (:'tb','none'), (:'tc','none'), (:'td','totp'), (:'te','none'), (:'tf','none');
+  (:'ta','none'), (:'tb','none'), (:'tc','none'), (:'td','totp'), (:'te','none'), (:'tf','none'), (:'tg','none');
 
 -- =====================================================================
 -- ANCHOR-DATE SCAFFOLDING — mirrors the migration body's OWN date expressions
@@ -153,7 +175,13 @@ select is(
 -- =====================================================================
 -- FIXTURE — Tenant A: full-depth, every anchor case in one tenant.
 --   current (:today)        = 700,000  (exact — latest checkpoint <= today)
---   month anchor (:base)    = 690,000  (EXACT HIT)
+--   month anchor (:base)    = 690,000  — served by CARRY from (:base - 2), NOT
+--     an exact hit. ⚠ Deliberately offset from B's exact-hit date below (Sec's
+--     leak-canary note, see (LEAK1)): if A and B both sat exactly on :base, a
+--     `using(true)` sabotage would find TWO rows tied on the same nav_date and
+--     tie-break nondeterministically, making a corrupt-the-control leg flaky.
+--     delta_nominal for the month horizon is UNCHANGED by this (still
+--     700000-690000=10000 — only WHICH DATE serves it moves, not the value).
 --   ytd anchor               = 600,000  (EXACT HIT)
 --   1y anchor (:a1y)         = 580,000  (EXACT HIT)
 --   3y anchor: NO checkpoint AT :a3y — seeded 5 days EARLIER at 400,000, so
@@ -163,7 +191,7 @@ select is(
 select set_config('app.nav_computed_for', :'ta', true);
 insert into pfin.nav_daily (users_id, nav_date, nav_value) values
   (:'ta', :'today'::date, 700000),
-  (:'ta', :'base'::date, 690000),
+  (:'ta', (:'base'::date - 2), 690000),
   (:'ta', :'ytdanchor'::date, 600000),
   (:'ta', :'a1y'::date, 580000),
   (:'ta', (:'a3y'::date - 5), 400000),
@@ -171,7 +199,10 @@ insert into pfin.nav_daily (users_id, nav_date, nav_value) values
 on conflict (users_id, nav_date) do nothing;
 select set_config('role', 'postgres', true);
 
--- Tenant B: SAME dates, 10x values — the two-tenant non-vacuity pair.
+-- Tenant B: SAME dates as A for ytd/1y/3y/5y, 10x values — the two-tenant
+-- non-vacuity pair. Month anchor is the ONE exception: B sits EXACTLY on
+-- :base (A does not, see above) — this is Sec's leak-canary date, the single
+-- checkpoint only B holds at that exact date, used by (LEAK1) below.
 select set_config('app.nav_computed_for', :'tb', true);
 insert into pfin.nav_daily (users_id, nav_date, nav_value) values
   (:'tb', :'today'::date, 7000000),
@@ -184,6 +215,21 @@ on conflict (users_id, nav_date) do nothing;
 select set_config('role', 'postgres', true);
 
 -- Tenant C: ZERO checkpoints — cross-tenant / no-history leg.
+
+-- Tenant G: current-side CARRY (cron-outage shape) — the LATEST checkpoint is
+-- 10 days before :today, not fresh, so current_checkpoint_date must be that
+-- older date on ALL FIVE rows, not today itself. Mirrors A's other anchors
+-- so all five horizons still resolve cleanly.
+select set_config('app.nav_computed_for', :'tg', true);
+insert into pfin.nav_daily (users_id, nav_date, nav_value) values
+  (:'tg', (:'today'::date - 10), 750000),
+  (:'tg', (:'base'::date - 2), 740000),
+  (:'tg', :'ytdanchor'::date, 650000),
+  (:'tg', :'a1y'::date, 630000),
+  (:'tg', (:'a3y'::date - 5), 450000),
+  (:'tg', :'a5y'::date, 350000)
+on conflict (users_id, nav_date) do nothing;
+select set_config('role', 'postgres', true);
 
 -- Tenant D: aal2 backstop, mirrors A's exact-hit shape with distinct values.
 select set_config('app.nav_computed_for', :'td', true);
@@ -208,11 +254,15 @@ on conflict (users_id, nav_date) do nothing;
 select set_config('role', 'postgres', true);
 
 -- Tenant F: isolates the zero-anchor-NAV / delta_percent case — a checkpoint
--- of VALUE ZERO exactly on the month anchor.
+-- of VALUE ZERO exactly on the month anchor. ALSO carries a NEGATIVE anchor
+-- at the 1y checkpoint (-50,000) for the sibling negative-anchor leg (NEG1) —
+-- 1y is adj-eligible, so this tenant proves delta_inflation_adjusted stays
+-- present over a negative base too, not just delta_nominal.
 select set_config('app.nav_computed_for', :'tf', true);
 insert into pfin.nav_daily (users_id, nav_date, nav_value) values
   (:'tf', :'today'::date, 500000),
-  (:'tf', :'base'::date, 0)
+  (:'tf', :'base'::date, 0),
+  (:'tf', :'a1y'::date, -50000)
 on conflict (users_id, nav_date) do nothing;
 select set_config('role', 'postgres', true);
 
@@ -417,6 +467,46 @@ select ok(
 select set_config('role', 'postgres', true);
 rollback to savepoint cpi_carry;
 
+-- JAN/FEB BASIS-CARRY (Architect addendum, 83cf781 header): structural, not a
+-- bug — cpi_ye names the December that JUST ENDED, whose print doesn't exist
+-- yet (CPI publishes 1-2 months in arrears), so 066 serves it CARRIED and
+-- cpi_any_carried comes back TRUE panel-wide for ~2 months every year. Needs
+-- its OWN savepoint (not the crux fixture): omitting the basis December would
+-- move cpi_ye and with it all three hand-computed crux values. Sharper than
+-- "carried is true" alone: also asserts cpi_unavailable is FALSE on the SAME
+-- rows — fences the conflation of "carried" with "unavailable", which is the
+-- more damaging failure (it would suppress a real figure) and the exact
+-- distinction SELF-222's copy rests on ("the year just turned" vs "the figure
+-- can't be formed").
+savepoint ye_carry;
+delete from pfin.cpi_u_index where cpi_period = :'yeperiod'::date;
+insert into pfin.cpi_u_index (cpi_period, cpi_value) values
+  ((:'yeperiod'::date - interval '1 month')::date, 295.000);
+select _rls.set_tenant(:'ta'::uuid);
+select ok(
+  (select bool_and(cpi_any_carried = true and cpi_unavailable = false)
+     from pfin.fn_nav_delta_panel() where horizon in ('1y','3y','5y')),
+  '(CARRY4) ⭐ JAN/FEB BASIS-CARRY: with the basis December''s print absent and only November''s available, cpi_any_carried is TRUE panel-wide across 1y/3y/5y AND cpi_unavailable stays FALSE on the same rows — a carried basis must never render as an unavailable one, or a real figure would be silently suppressed'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint ye_carry;
+
+-- CURRENT-side carry (F/CTO ratify 2026-08-13, return-shape option A): tenant
+-- G's latest checkpoint is 10 days before :today, not a fresh same-day write
+-- — the cron-outage shape. current_checkpoint_date must reflect that OLDER
+-- date, IDENTICAL across all five rows (a store property, like
+-- cpi_basis_period), and strictly less than today — the leg that would fail
+-- if this column merely echoed :today instead of the checkpoint that
+-- actually served it.
+select _rls.set_tenant(:'tg'::uuid);
+select ok(
+  (select bool_and(current_checkpoint_date = (:'today'::date - 10)
+                    and current_checkpoint_date < :'today'::date)
+     from pfin.fn_nav_delta_panel()),
+  '(CARRY3) ⭐ CURRENT-SIDE CARRY: tenant G''s current_checkpoint_date is 10 days before today (the cron-outage shape) on ALL FIVE rows, not today itself — every horizon''s delta is disclosed as measured against a stale present, which is exactly why this column earns its place (every delta has TWO endpoints; until now only the anchor side disclosed provenance)'
+);
+select set_config('role', 'postgres', true);
+
 -- =====================================================================
 -- (5) PCT0 — delta_percent NULL (never 0) on a zero anchor NAV.
 -- =====================================================================
@@ -425,6 +515,23 @@ select ok(
   (select delta_percent is null and delta_nominal = 500000
      from pfin.fn_nav_delta_panel() where horizon = 'month'),
   '(PCT0) ⭐ zero anchor NAV (tenant F''s month anchor = 0): delta_percent is NULL — no division attempted — while delta_nominal (500000) is a real, present figure. "No change" and "cannot be expressed" must not render alike'
+);
+select set_config('role', 'postgres', true);
+
+-- (NEG1) ⭐ the sibling to (PCT0): NEGATIVE anchor NAV (tenant F's 1y anchor
+-- = -50000). delta_percent is NULL here too (guard is now `> 0`, not `<> 0` —
+-- a negative base would otherwise invert the sign: -100 -> +100 reporting
+-- -200%). delta_nominal and delta_inflation_adjusted are NOT guarded — both
+-- must remain PRESENT, since they're arithmetically sound over a negative
+-- base. Full row, per Architect's note: a partial check can't tell "percent
+-- suppressed" from "everything suppressed".
+select _rls.set_tenant(:'tf'::uuid);
+select ok(
+  (select delta_percent is null
+          and delta_nominal = 550000
+          and delta_inflation_adjusted is not null
+     from pfin.fn_nav_delta_panel() where horizon = '1y'),
+  '(NEG1) ⭐ NEGATIVE anchor NAV (tenant F''s 1y anchor = -50000): delta_percent is NULL (same NULL cause as the zero case, deliberately undiscriminated — no fourth signal exists), while delta_nominal (500000-(-50000)=550000) and delta_inflation_adjusted are BOTH still present — sound over a negative base, and NOT guarded'
 );
 select set_config('role', 'postgres', true);
 
@@ -481,6 +588,29 @@ select is(
   '(X1) tenant C (zero checkpoints): all FIVE rows are present with every value-bearing column NULL — fails closed, never an error, never another tenant''s figures leaking through'
 );
 select set_config('role', 'postgres', true);
+
+-- =====================================================================
+-- (LEAK) ⭐ CORRUPT-THE-CONTROL — proving RLS, not application logic, is the
+--   fence. Sec's note: A's month-anchor checkpoint was deliberately dated
+--   TWO DAYS BEFORE B's (see the Tenant A/B fixture comments above) — if both
+--   sat on the IDENTICAL date, a `nav_daily_select` policy broken open to
+--   `using (true)` would leave TWO rows tied on the same nav_date for the
+--   at-or-before query, and "order by nav_date desc limit 1" would tie-break
+--   nondeterministically, making this leg flaky rather than a reliable RED.
+--   With the one-date gap, B's checkpoint is UNAMBIGUOUSLY the more recent
+--   of the two once both are visible, so the leak is deterministic.
+--   Savepoint-scoped; the real policy is restored immediately after.
+-- =====================================================================
+savepoint leak_canary;
+alter policy nav_daily_select on pfin.nav_daily using (true);
+select _rls.set_tenant(:'ta'::uuid);
+select is(
+  (select nav_value from pfin.nav_daily where nav_date <= :'base'::date order by nav_date desc limit 1),
+  6900000::numeric,
+  '(LEAK1) ⭐ CORRUPT-THE-CONTROL: with nav_daily_select broken OPEN, A''s month-anchor query picks up B''s checkpoint (6900000) DETERMINISTICALLY — not A''s own (690000) — because B''s canary sits exactly on the boundary date while A''s is one day earlier by design, so there is no tie to arbitrate. RED here is the proof the fence is real; green here would mean this battery is blind to a broken policy'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint leak_canary;
 
 -- =====================================================================
 -- (9) M — AAL2 BACKSTOP, BOTH LEGS.
