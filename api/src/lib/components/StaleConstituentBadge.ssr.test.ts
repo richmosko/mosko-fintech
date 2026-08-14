@@ -85,3 +85,54 @@ describe('StaleConstituentBadge — render/remove footprint (SSR)', () => {
 		expect(visible(body)).toBe('');
 	});
 });
+
+describe('StaleConstituentBadge — SELF-229 tri-state UNKNOWN (isStale === null)', () => {
+	it('isStale === null → renders the DISTINCT "Staleness unknown" note, never "May be stale"', () => {
+		const { body } = render(StaleConstituentBadge, {
+			props: { isStale: null, staleItems: [] }
+		});
+		expect(body).toContain('Staleness unknown');
+		expect(body).not.toContain('May be stale');
+		// Copy tone matches +page.svelte's existing accountPresence==='unknown' idiom
+		// ("We couldn't load your account list just now. Please try again shortly.").
+		expect(body).toContain("we couldn't confirm");
+		expect(body).toContain('Please try again shortly');
+	});
+
+	it('the UNKNOWN note is NOT zero-footprint (unlike the healthy/false case) — visible without interaction', () => {
+		const { body } = render(StaleConstituentBadge, { props: { isStale: null, staleItems: [] } });
+		expect(visible(body)).not.toBe('');
+	});
+
+	it('is structurally distinguishable from the confirmed-stale branch (different class, no disclosure button)', () => {
+		const { body } = render(StaleConstituentBadge, { props: { isStale: null, staleItems: [] } });
+		expect(body).not.toContain('stale-connection-marker');
+		expect(body).not.toContain('<button');
+		expect(body).toContain('staleness-unknown');
+	});
+
+	it('isStale === false stays zero-footprint — UNKNOWN and healthy are never conflated', () => {
+		const { body } = render(StaleConstituentBadge, { props: { isStale: false, staleItems: [] } });
+		expect(visible(body)).toBe('');
+		expect(body).not.toContain('Staleness unknown');
+	});
+
+	it('isStale === true with real items still renders the confirmed-stale disclosure, unaffected by the tri-state widening', () => {
+		const { body } = render(StaleConstituentBadge, {
+			props: {
+				isStale: true,
+				staleItems: [
+					{
+						linked_source_id: '1',
+						institution_name: 'Test Bank',
+						provider: 'plaid',
+						connection_status: 'login_required',
+						status_class: null
+					}
+				]
+			}
+		});
+		expect(body).toContain('May be stale');
+		expect(body).not.toContain('Staleness unknown');
+	});
+});

@@ -11,6 +11,21 @@
 	(renders NOTHING) when not stale / empty list — mirrors CountBadge's zero-footprint discipline.
 	When stale it MARKS, never SUPPRESSES: it sits beside the net-worth number, never hides it (D1).
 
+	TRI-STATE `isStale` (SELF-229 REWORK, F/CTO-ruled, mirrors the SELF-220 Sec round 2 catch):
+	`is_stale` is now `boolean | null` at the source (staleness.ts's loadStaleness() degrades an
+	RPC failure to `null` — UNKNOWN_STALENESS — never to `false`, because `false` would be silently
+	indistinguishable from "confirmed healthy"). This component renders THREE visibly distinct
+	states, not two: `true` (+ a non-empty list) → the existing "May be stale" disclosure below,
+	unchanged; `null` → a SEPARATE, quieter "Staleness unknown" note (no disclosure — there is
+	nothing to list, since the read that would have populated stale_items itself failed); `false`
+	(or a defensive true-with-empty-list) → zero-footprint, same as before. The unknown state's
+	copy tone mirrors this route's own existing "couldn't load / try again shortly" idiom
+	(+page.svelte's accountPresence==='unknown' notice) rather than inventing new wording, and its
+	visual register borrows the muted-informational-chip vocabulary NavDeltaPanel /
+	NavReferenceDatesPanel already use for `.insufficient-badge` — NOT the canary `--c-attn-*` hue,
+	which stays reserved for the CONFIRMED-stale branch below (§5 fence 8): "we don't know" is not
+	the same claim as "this is stale," and must not borrow that hue's urgency.
+
 	PER-STATUS AFFORDANCE (keyed on connection_status via the canonical predicates in
 	stale-constituent.ts → connection-status-constants.ts):
 	  • REAUTH set {login_required, revoked, disconnected} → a "Re-authenticate" link routing to
@@ -44,14 +59,19 @@
 		/** Where the re-auth affordance routes — the connection-state list (SELF-207). */
 		reviewHref = '/accounts/connections'
 	}: {
-		isStale?: boolean;
+		isStale?: boolean | null;
 		staleItems?: StaleConstituentItem[];
 		reviewHref?: string;
 	} = $props();
 
 	// Zero-footprint gate: honour BOTH the flag and a non-empty list (defensive — never render
-	// an empty marker if the flag and the list ever disagree).
-	const show = $derived(isStale && staleItems.length > 0);
+	// an empty marker if the flag and the list ever disagree). `isStale === true` only — `null`
+	// (unknown) is a SEPARATE branch below, never routed through the confirmed-stale disclosure.
+	const show = $derived(isStale === true && staleItems.length > 0);
+
+	// SELF-229: the UNKNOWN branch — the root (or per-surface) read itself failed. Distinct from
+	// `show` above: never both true at once (isStale is exactly one of true/false/null at a time).
+	const showUnknown = $derived(isStale === null);
 
 	const count = $derived(staleItems.length);
 	const anyReauth = $derived(hasReauthActionable(staleItems));
@@ -109,6 +129,21 @@
 				{/if}
 			</div>
 		{/if}
+	</div>
+{:else if showUnknown}
+	<!-- SELF-229 tri-state: no items to disclose (the read that would have populated stale_items
+	     failed) — a static advisory note, not the interactive disclosure above. Muted-informational
+	     register (matches NavDeltaPanel/NavReferenceDatesPanel's .insufficient-badge vocabulary),
+	     NEVER the canary hue — "we don't know" is not "this is stale." role="status" so the note
+	     is announced without requiring focus; text is fully visible, no hover-only content. -->
+	<div class="staleness-unknown" role="status">
+		<span class="unknown-tag">
+			<span class="unknown-dot" aria-hidden="true"></span>
+			<span class="unknown-tag-text">Staleness unknown</span>
+		</span>
+		<span class="unknown-note">
+			— we couldn't confirm your accounts' staleness just now. Please try again shortly.
+		</span>
 	</div>
 {/if}
 
@@ -199,5 +234,38 @@
 		outline: none;
 		box-shadow: var(--focus-ring);
 		border-radius: var(--radius-sm);
+	}
+
+	/* SELF-229 UNKNOWN state — muted-informational register, borrowed from NavDeltaPanel /
+	   NavReferenceDatesPanel's .insufficient-badge chip vocabulary. Deliberately NOT --c-attn-*:
+	   that hue is reserved for the CONFIRMED-stale branch above (§5 fence 8) — "we don't know"
+	   must read calmer than "this is stale," never the same register. */
+	.staleness-unknown {
+		display: inline-flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: var(--space-1);
+	}
+	.unknown-tag {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-1);
+		padding: var(--space-1) var(--space-2);
+		border: 1px solid var(--c-border);
+		border-radius: var(--radius-sm);
+		background: var(--c-surface-alt);
+		color: var(--c-text-muted);
+		font: var(--weight-semi) var(--fs-small) / 1 var(--font-ui);
+		font-style: italic;
+	}
+	.unknown-dot {
+		width: 0.5rem;
+		height: 0.5rem;
+		border-radius: var(--radius-pill);
+		background: var(--c-text-muted);
+	}
+	.unknown-note {
+		font: var(--weight-reg) var(--fs-small) / var(--lh-body) var(--font-ui);
+		color: var(--c-text-muted);
 	}
 </style>
