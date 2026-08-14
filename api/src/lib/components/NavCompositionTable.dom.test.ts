@@ -177,3 +177,135 @@ describe('NavCompositionTable — SELF-229 AC#2 per-leaf staleness (TRI-STATE, n
 		expect(queryByText('Staleness unknown')).toBeNull();
 	});
 });
+
+// ============================================================================
+// SELF-229-QA — brief AC4: "a stale leaf shows BOTH the per-row indicator AND the
+// aggregation-level badge — assert both, and assert a non-stale leaf next to a stale one shows
+// neither per-row marking." The tri-state block above proves each per-row state in isolation
+// (single-leaf fixtures, aggregation `staleness` prop omitted); this block proves the TWO-LEVEL
+// signal — per-row AND aggregation — together, and proves a MIXED group (one stale leaf beside a
+// confirmed-not-stale one) marks only the actually-stale row.
+// ============================================================================
+
+describe('NavCompositionTable — SELF-229 AC4: per-row marker AND aggregation badge coexist; a mixed group marks only the stale leaf', () => {
+	const MIXED: NavComposition = {
+		groups: [
+			{
+				category: 'investment',
+				subtotal: 590_000,
+				accounts: [
+					{ account_id: 1, account_name: 'Brokerage', current_market_value: 500_000, unrealized_gl: 42_000, is_stale: true },
+					{ account_id: 7, account_name: 'Old IRA', current_market_value: 90_000, unrealized_gl: -3_500, is_stale: false }
+				]
+			}
+		],
+		buildups: { total_non_re: 590_000, gross_total: 590_000, debt: 0, realized_tax_liab: 0, unrealized_tax_liab: 0 },
+		nav: 590_000
+	};
+
+	it('a stale leaf shows the per-row tag AND the aggregation badge is present at the same time', async () => {
+		const { container, getByRole, findByText } = render(NavCompositionTable, {
+			props: {
+				composition: MIXED,
+				staleness: {
+					is_stale: true,
+					stale_items: [
+						{ linked_source_id: '1', institution_name: 'Bank 1', provider: 'plaid', connection_status: 'login_required', status_class: null }
+					]
+				}
+			}
+		});
+		// Aggregation-level badge (section heading).
+		expect(container.querySelector('.stale-connection-marker')).not.toBeNull();
+		// Per-row leaf marker.
+		await fireEvent.click(getByRole('button', { name: /Investment/i }));
+		const staleRow = (await findByText('Brokerage')).closest('tr')!;
+		expect(within(staleRow).getByText('May be stale')).toBeTruthy();
+	});
+
+	it('in the SAME mixed group, the non-stale leaf beside the stale one shows NEITHER per-row marker', async () => {
+		const { getByRole, findByText, getAllByText } = render(NavCompositionTable, {
+			props: {
+				composition: MIXED,
+				staleness: {
+					is_stale: true,
+					stale_items: [
+						{ linked_source_id: '1', institution_name: 'Bank 1', provider: 'plaid', connection_status: 'login_required', status_class: null }
+					]
+				}
+			}
+		});
+		await fireEvent.click(getByRole('button', { name: /Investment/i }));
+		const healthyRow = (await findByText('Old IRA')).closest('tr')!;
+		expect(within(healthyRow).queryByText('May be stale')).toBeNull();
+		expect(within(healthyRow).queryByText('Staleness unknown')).toBeNull();
+		// The stale sibling's own tag is unaffected — this isn't just an "always absent" bug. TWO
+		// "May be stale" occurrences are expected on this fixture (the aggregation badge's tag +
+		// Brokerage's own leaf flag), so this asserts the COUNT rather than using a single-match
+		// query, which would throw AmbiguousElementError on this exact page.
+		expect(getAllByText('May be stale')).toHaveLength(2);
+	});
+});
+
+// ============================================================================
+// SELF-229-QA — wiring fidelity + signal-distinctness. Disclosure CONTENT for the aggregation
+// badge (account names, Re-authenticate link) is proven once, generically, in
+// StaleConstituentBadge.dom.test.ts since all four ramp surfaces pass the identical props
+// through unchanged. This block covers what's specific to THIS surface: the actual staleItems
+// array reaching the aggregation badge, and the aggregation badge staying structurally distinct
+// from the Unrealized-G/L value-color fence (`.gl.pos` / `.gl.neg`) proven above — two unrelated
+// signal families (connection health vs. investment performance) that must never share a
+// selector or a hue.
+// ============================================================================
+
+describe('NavCompositionTable — SELF-229 wiring fidelity: the ACTUAL staleItems array reaches the aggregation badge', () => {
+	it('a two-item staleItems array yields the PLURAL summary, not a single-item count', () => {
+		const { getByRole } = render(NavCompositionTable, {
+			props: {
+				composition: fixture,
+				staleness: {
+					is_stale: true,
+					stale_items: [
+						{ linked_source_id: '1', institution_name: 'Bank 1', provider: 'plaid', connection_status: 'login_required', status_class: null },
+						{ linked_source_id: '2', institution_name: 'Bank 2', provider: 'plaid', connection_status: 'login_required', status_class: null }
+					]
+				}
+			}
+		});
+		expect(getByRole('group', { name: '2 accounts are contributing possibly-stale data to this total.' })).toBeTruthy();
+	});
+});
+
+describe('NavCompositionTable — aggregation badge (canary, connection health) never shares a selector with the Unrealized-G/L value-color fence (investment performance)', () => {
+	it('aggregation badge stale + a positive G/L leaf BOTH present: the badge carries no .pos/.neg, the G/L cell carries no D1 classes', async () => {
+		const { container, getByRole, findByText } = render(NavCompositionTable, {
+			props: {
+				composition: fixture,
+				staleness: {
+					is_stale: true,
+					stale_items: [
+						{ linked_source_id: '1', institution_name: 'Bank 1', provider: 'plaid', connection_status: 'login_required', status_class: null }
+					]
+				}
+			}
+		});
+		const badge = container.querySelector('.stale-connection-marker')!;
+		expect(badge).not.toBeNull();
+		expect(badge.classList.contains('pos')).toBe(false);
+		expect(badge.classList.contains('neg')).toBe(false);
+
+		await fireEvent.click(getByRole('button', { name: /Investment/i }));
+		const row = (await findByText('Brokerage')).closest('tr')!;
+		const glCell = within(row).getAllByRole('cell').slice(-1)[0];
+		expect(glCell.classList.contains('stale-connection-marker')).toBe(false);
+	});
+
+	it('aggregation badge healthy (staleness omitted): no badge renders at all, the G/L fence is unaffected', async () => {
+		const { container, getByRole, findByText } = render(NavCompositionTable, { props: { composition: fixture } });
+		expect(container.querySelector('.stale-connection-marker')).toBeNull();
+		await fireEvent.click(getByRole('button', { name: /Investment/i }));
+		const row = (await findByText('Brokerage')).closest('tr')!;
+		const glCell = within(row).getAllByRole('cell').slice(-1)[0];
+		expect(glCell.classList.contains('pos')).toBe(true);
+	});
+});

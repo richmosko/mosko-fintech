@@ -543,3 +543,111 @@ describe('NavHistoryChart — SELF-229 D1 stale-data-marker (whole-user, shared 
 		expect(getByText('May be stale')).toBeTruthy();
 	});
 });
+
+// ============================================================================
+// SELF-229-QA — the D1 stale-data-marker (StaleConstituentBadge, wired in f103586) now
+// coexists on this ONE surface with the two markers already proven above: the checkpoint-carry
+// marker (NavChartLines' `<circle class="stale-marker" role="img">`, §12.1/§12.2) and the
+// CPI-carry InformationalMarkerBadge (`.info-marker-badge`). ⚠ NAME COLLISION (FOUND, FIXED):
+// the badge's wrapper originally carried the IDENTICAL class `stale-marker` as the
+// checkpoint-carry `<circle>` — flagged to Frontend, who renamed it to `.stale-connection-marker`
+// in 1a5745d. A bare `.querySelectorAll('.stale-marker')` — exactly the pattern
+// SELF-220-QA-r3/r4 above use — would have SILENTLY SUMMED both signals pre-rename. The distinct
+// class name is now the primary discriminator below; `role` (group vs img) is asserted too as a
+// belt-and-suspenders check against a future rename collision.
+//
+// Team-lead's ramp brief: "a leg must fail if any two [of the three signals] collapse into one
+// rendered element (vary each signal independently; invariance to a varied signal = blindness)."
+// Four legs: each signal varied ALONE (the other two absent), then all three present at once —
+// the last leg is the one that actually catches a collapse, since the first three would each
+// individually pass even under an implementation that conflated any TWO of the signals whenever
+// only one is present in the fixture.
+// ============================================================================
+
+describe('SELF-229-QA — three distinct staleness/carry signals never collapse into one rendered element', () => {
+	const D1_BADGE_SEL = '.stale-connection-marker[role="group"]';
+	const CARRY_MARKER_SEL = '.stale-marker[role="img"]';
+	const CPI_INFO_BADGE_SEL = '.info-marker-badge';
+
+	const D1_STALE = {
+		is_stale: true,
+		stale_items: [
+			{
+				linked_source_id: '42',
+				institution_name: 'Test Bank',
+				provider: 'plaid',
+				connection_status: 'login_required',
+				status_class: null
+			}
+		]
+	};
+
+	// NOTE: deliberately NOT reusing the shared `POPULATED` fixture here — its `point_date`
+	// overrides shift each point off `point()`'s FIXED default `checkpoint_date` ('2026-01-31'),
+	// so nearly every POPULATED point is ALREADY checkpoint-carried by construction (confirmed:
+	// carry=13 on a first draft of this leg). Every fixture below sets checkpoint_date EXPLICITLY
+	// so each signal is genuinely isolated rather than accidentally tripping another.
+	const FRESH = (dateIso: string) => point({ point_date: dateIso, checkpoint_date: dateIso, cpi_is_carried: false, cpi_period_was_due: false });
+	const CHECKPOINT_CARRIED = (dateIso: string, fromIso: string) =>
+		point({ point_date: dateIso, checkpoint_date: fromIso, cpi_is_carried: false, cpi_period_was_due: false });
+	// cpi_carried_from MUST be set (not left at point()'s default null): InformationalMarkerBadge
+	// only renders when its computed `message` is non-empty, and with a single carried point
+	// (carriedCount === 1) the message branch requires `cpiPeriod && carriedFrom` BOTH truthy —
+	// confirmed by a first draft of this leg going cpi:0 instead of 1 with carriedFrom left null.
+	const CPI_CARRIED = (dateIso: string) =>
+		point({
+			point_date: dateIso,
+			checkpoint_date: dateIso,
+			cpi_is_carried: true,
+			cpi_period_was_due: true,
+			cpi_carried_from: '2025-12-01'
+		});
+	const FRESH_SERIES = [FRESH('2026-01-15'), FRESH('2026-02-15'), FRESH('2026-03-15'), FRESH('2026-04-15')];
+
+	function counts(container: HTMLElement) {
+		return {
+			badge: container.querySelectorAll(D1_BADGE_SEL).length,
+			carry: container.querySelectorAll(CARRY_MARKER_SEL).length,
+			cpi: container.querySelectorAll(CPI_INFO_BADGE_SEL).length
+		};
+	}
+
+	it('D1 signal varied ALONE (stale connection, no carry, no CPI-carry): only the badge renders', () => {
+		const { container } = render(NavHistoryChart, {
+			props: { points: FRESH_SERIES, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY, staleness: D1_STALE }
+		});
+		expect(counts(container)).toEqual({ badge: 1, carry: 0, cpi: 0 });
+	});
+
+	it('checkpoint-carry signal varied ALONE (no D1 staleness, no CPI-carry): only the carry marker renders', () => {
+		const points = [FRESH('2026-01-15'), CHECKPOINT_CARRIED('2026-02-15', '2026-01-10'), FRESH('2026-03-15')];
+		const { container } = render(NavHistoryChart, {
+			props: { points, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+		});
+		expect(counts(container)).toEqual({ badge: 0, carry: 1, cpi: 0 });
+	});
+
+	it('CPI-carry signal varied ALONE (no D1 staleness, no checkpoint-carry): only the info-badge renders', () => {
+		const points = [FRESH('2026-01-15'), CPI_CARRIED('2026-02-15'), FRESH('2026-03-15')];
+		const { container } = render(NavHistoryChart, {
+			props: { points, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+		});
+		expect(counts(container)).toEqual({ badge: 0, carry: 0, cpi: 1 });
+	});
+
+	it('⭐ all THREE signals present at once: each renders independently — none suppresses or duplicates another', () => {
+		const points = [
+			FRESH('2026-01-15'),
+			CHECKPOINT_CARRIED('2026-02-15', '2026-01-10'),
+			CPI_CARRIED('2026-03-15'),
+			FRESH('2026-04-15')
+		];
+		const { container } = render(NavHistoryChart, {
+			props: { points, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY, staleness: D1_STALE }
+		});
+		// Exactly one of each — a collapse (two signals rendering as one element) would show up
+		// as a count of 0 on one side and 2 on the other, or the wrong element under the wrong
+		// role; a duplication would show up as >1 on a signal that should be singular.
+		expect(counts(container)).toEqual({ badge: 1, carry: 1, cpi: 1 });
+	});
+});
