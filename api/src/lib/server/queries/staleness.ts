@@ -18,9 +18,12 @@
 // availability) — but "fail-soft" does NOT mean "degrade to confirmed-healthy." See the REWORK
 // note below.
 //
-// ADR-013 D1 (SELF-229 AC5 annotation, verbatim): "surface list at PRD §2.4.4 is
-// illustrative-not-exhaustive; further surfaces ramp at V1.2-V1.5 milestones (§2.2, §2.3, §2.5,
-// §2.6)." This is the FRAMEWORK's own consumption site — loadStaleness() is called exactly ONCE
+// Per ADR-013 D1 (staleness-marking surface scope is illustrative, not exhaustive), further
+// surfaces ramp later — Sec F4 (AMBER round): the prior form of this note labeled itself a
+// "verbatim" quote of D1 in quote marks; it was a PARAPHRASE (D1's live text has no
+// "illustrative-not-exhaustive" phrase, no V1.2-V1.5 milestone clause, and a finer surface
+// enumeration than what was quoted here) — read D1 live rather than treating this line as a
+// quote. This is the FRAMEWORK's own consumption site — loadStaleness() is called exactly ONCE
 // per request (from `+page.server.ts`) and its result is the SAME value every V1.1 NW surface on
 // that route reads (§2.1.1 headline / §2.1.2 chart / §2.1.3 delta panel / §2.1.4 reference-dates
 // panel), plus §2.1.5 composition's additional per-row join in navComposition.ts. No surface here

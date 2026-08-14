@@ -51,8 +51,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	// SAME UNKNOWN_STALENESS for the same reason — an uncaught exception tells us nothing about
 	// whether the tenant's data is actually stale.
 	//
-	// ADR-013 D1: the staleness-marking surface list at PRD §2.4.4 is illustrative-not-exhaustive
-	// — every aggregation that consumed stale-account data carries the marker. `staleness` is
+	// Per ADR-013 D1 (staleness-marking surface scope is illustrative, not exhaustive) — Sec F4
+	// (AMBER round): read D1 live rather than treating this line as its wording, this is a
+	// paraphrase — every aggregation that consumed stale-account data carries the marker.
+	// `staleness` is
 	// loaded ONCE here (fn_aggregation_has_stale_constituent() takes no per-surface argument — a
 	// whole-tenant read, not a scoped one; SELF-229 corrected a drafted AC that assumed a
 	// `p_scope_filter` parameter which does not exist) and is the SAME value every V1.1 NW surface
@@ -61,8 +63,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	// this identical `staleness`, not a re-invocation of the primitive. §2.1.5 composition (below)
 	// additionally joins it down to per-row granularity, because its leaves need to know WHICH
 	// account is stale, not just THAT something is — and inherits the SAME unknown-vs-healthy
-	// distinction (see staleLinkedSourceIds below). Further surfaces ramp at V1.2-V1.5 milestones
-	// (§2.2 / §2.3 / §2.5 / §2.6) — the surface list here is not meant to be exhaustive either.
+	// distinction (see staleLinkedSourceIds below). Further surfaces ramp later, per D1 — the
+	// surface list here is not meant to be exhaustive either.
 	let staleness = UNKNOWN_STALENESS;
 	try {
 		staleness = await loadStaleness(locals.supabase);

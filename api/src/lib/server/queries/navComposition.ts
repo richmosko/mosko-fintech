@@ -19,8 +19,9 @@
 // doesn't render) — it must NEVER take down the §2.1.1 headline NAV. A genuine zero-account
 // tenant still gets a well-formed tree ({ groups: [], buildups: {…0…}, nav: 0 }), not null.
 //
-// PER-ROW STALENESS (SELF-229 · ADR-013 D1 — surface list at PRD §2.4.4 is illustrative-not-
-// exhaustive; further surfaces ramp at V1.2-V1.5 milestones §2.2/§2.3/§2.5/§2.6). `051` carries
+// PER-ROW STALENESS (SELF-229 · per ADR-013 D1, staleness-marking surface scope is illustrative,
+// not exhaustive — further surfaces ramp later; Sec F4 (AMBER round): read D1 live, this is a
+// paraphrase not a quote). `051` carries
 // NO staleness of its own — `fn_nav_composition` leaf rows key on `account_id` only, while `046`
 // `fn_aggregation_has_stale_constituent()`'s stale_items[] key on `linked_source_id`. NO migration:
 // per nav-composition.ts's own deferral note (ratified D4) this needs "a Backend contract

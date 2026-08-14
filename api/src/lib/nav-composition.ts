@@ -28,9 +28,10 @@
 // Per-row STALENESS (SELF-229, ratified D4) is modelled as `NavCompositionLeaf.is_stale` below.
 // The 051 JSONB itself still carries none of this — the loader computes it via a server-side
 // linked_source_id↔account_id join over `pfin.account` and attaches it per leaf before this
-// shape ever reaches the browser (see api/src/lib/server/queries/navComposition.ts). ADR-013 D1:
-// the staleness-marking surface list at PRD §2.4.4 is illustrative-not-exhaustive; further
-// surfaces ramp at V1.2-V1.5 milestones (§2.2/§2.3/§2.5/§2.6).
+// shape ever reaches the browser (see api/src/lib/server/queries/navComposition.ts). Per ADR-013
+// D1 (staleness-marking surface scope is illustrative, not exhaustive), further surfaces ramp
+// later — Sec F4 (AMBER round): this is a PARAPHRASE, not D1's own wording; read D1 live rather
+// than treating this line as a quote.
 //
 // is_stale IS TRI-STATE (boolean | null), not a plain boolean — see the field's own doc comment.
 // This is a REWORK (F/CTO-ruled, mirrors SELF-220 Sec round 2): the first cut collapsed a
