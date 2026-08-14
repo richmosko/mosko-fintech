@@ -5,6 +5,12 @@
 // COVERS THE FIVE STATES the SELF-222 brief calls out: normal (incl. both delta directions),
 // insufficient-history, cpi_unavailable, carried (panel-wide Jan/Feb basis-line copy), and the
 // delta_percent NULL-vs-zero distinction. Also covers the read-failed fail-soft branch.
+//
+// EXTENDED FOR MIGRATION 072 (2026-08-14, F/CTO-ratified Option B on the AC3 gap):
+// delta_inflation_adjusted_percent now renders alongside the dollar figure for 1Y/3Y/5Y, same
+// format as the NAV Delta column. New coverage: dollar+percent together, and the ONE-WAY NULL
+// case (dollar present, percent NULL on a non-positive deflated base) — distinguished from a
+// real 0.0% the same way the existing NAV-delta NULL-vs-zero tests already prove for delta_percent.
 
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
@@ -20,6 +26,7 @@ function row(overrides: Partial<NavDeltaPanelRow> & { horizon: NavDeltaPanelRow[
 		delta_nominal: 15_000,
 		delta_percent: 6.2,
 		delta_inflation_adjusted: isCpiApplicable(overrides.horizon) ? 9_000 : null,
+		delta_inflation_adjusted_percent: isCpiApplicable(overrides.horizon) ? 4.5 : null,
 		cpi_basis_period: isCpiApplicable(overrides.horizon) ? '2025-12-01' : null,
 		cpi_any_carried: false,
 		cpi_unavailable: false,
@@ -72,17 +79,24 @@ describe('NavDeltaPanel — normal state', () => {
 		expect(body).not.toContain('CPI unavailable');
 	});
 
-	it('a CPI-applicable row with a real inflation-adjusted figure renders it signed', () => {
-		const rows = fixture({ '1y': { delta_inflation_adjusted: 9_000 } });
+	it('a CPI-applicable row with a real inflation-adjusted figure renders dollar + percent (AC3)', () => {
+		const rows = fixture({ '1y': { delta_inflation_adjusted: 9_000, delta_inflation_adjusted_percent: 4.5 } });
 		const { body } = render(NavDeltaPanel, { props: { rows } });
 		expect(body).toContain('+$9,000');
+		expect(body).toContain('+4.5%');
 	});
 });
 
 describe('NavDeltaPanel — insufficient history (AC4)', () => {
 	it('anchor_checkpoint_date NULL → "Insufficient history" badge spans both value columns', () => {
 		const rows = fixture({
-			'5y': { anchor_checkpoint_date: null, delta_nominal: null, delta_percent: null, delta_inflation_adjusted: null }
+			'5y': {
+				anchor_checkpoint_date: null,
+				delta_nominal: null,
+				delta_percent: null,
+				delta_inflation_adjusted: null,
+				delta_inflation_adjusted_percent: null
+			}
 		});
 		const { body } = render(NavDeltaPanel, { props: { rows } });
 		expect(body).toContain('Insufficient history');
@@ -95,7 +109,13 @@ describe('NavDeltaPanel — insufficient history (AC4)', () => {
 describe('NavDeltaPanel — cpi_unavailable (structural discriminator #2)', () => {
 	it('nominal stands, Inflation Adjusted cell shows "CPI unavailable", not "—"', () => {
 		const rows = fixture({
-			'3y': { cpi_unavailable: true, delta_inflation_adjusted: null, delta_nominal: 22_000, delta_percent: 9.4 }
+			'3y': {
+				cpi_unavailable: true,
+				delta_inflation_adjusted: null,
+				delta_inflation_adjusted_percent: null,
+				delta_nominal: 22_000,
+				delta_percent: 9.4
+			}
 		});
 		const { body } = render(NavDeltaPanel, { props: { rows } });
 		expect(body).toContain('CPI unavailable');
@@ -135,6 +155,13 @@ describe('NavDeltaPanel — real backend sample (SELF-222 hand-off, seeded tenan
 	// real seed data). Exercises the "everything resolved cleanly" happy path against a REAL
 	// payload shape rather than only synthetic fixtures — including the SQL-NULL (not `false`)
 	// cpi_any_carried/cpi_unavailable on month/ytd that motivated widening this file's types.
+	//
+	// ⚠ delta_inflation_adjusted_percent values below are SYNTHETIC, not backend-verified: this
+	// sample predates migration 072 (which added the column), and no regenerated real sample was
+	// available at the time of this update — the local DB lost its seed data in a QA incident
+	// (recovery is F/CTO-gated per team-lead). Deliberately round, non-derived placeholder values
+	// (NOT computed from the dollar figures above) so this fixture can never be mistaken for a
+	// client-side derivation of the real formula — exactly what this surface must never do.
 	const realSample: NavDeltaPanelRow[] = [
 		{
 			horizon: 'month',
@@ -144,6 +171,7 @@ describe('NavDeltaPanel — real backend sample (SELF-222 hand-off, seeded tenan
 			delta_nominal: -8217654.37,
 			delta_percent: -99.40310112495464,
 			delta_inflation_adjusted: null,
+			delta_inflation_adjusted_percent: null,
 			cpi_basis_period: null,
 			cpi_any_carried: null,
 			cpi_unavailable: null
@@ -156,6 +184,7 @@ describe('NavDeltaPanel — real backend sample (SELF-222 hand-off, seeded tenan
 			delta_nominal: -7828654.37,
 			delta_percent: -99.37362744351358,
 			delta_inflation_adjusted: null,
+			delta_inflation_adjusted_percent: null,
 			cpi_basis_period: null,
 			cpi_any_carried: null,
 			cpi_unavailable: null
@@ -168,6 +197,7 @@ describe('NavDeltaPanel — real backend sample (SELF-222 hand-off, seeded tenan
 			delta_nominal: -7546654.37,
 			delta_percent: -99.35037348604529,
 			delta_inflation_adjusted: -7571771.53943,
+			delta_inflation_adjusted_percent: -95.1,
 			cpi_basis_period: '2025-12-01',
 			cpi_any_carried: false,
 			cpi_unavailable: false
@@ -180,6 +210,7 @@ describe('NavDeltaPanel — real backend sample (SELF-222 hand-off, seeded tenan
 			delta_nominal: -6955654.37,
 			delta_percent: -99.2955655960029,
 			delta_inflation_adjusted: -7377910.52013,
+			delta_inflation_adjusted_percent: -94.8,
 			cpi_basis_period: '2025-12-01',
 			cpi_any_carried: false,
 			cpi_unavailable: false
@@ -192,6 +223,7 @@ describe('NavDeltaPanel — real backend sample (SELF-222 hand-off, seeded tenan
 			delta_nominal: -6307654.37,
 			delta_percent: -99.22375916312726,
 			delta_inflation_adjusted: -7497862.86149,
+			delta_inflation_adjusted_percent: -94.5,
 			cpi_basis_period: '2025-12-01',
 			cpi_any_carried: false,
 			cpi_unavailable: false
@@ -204,6 +236,7 @@ describe('NavDeltaPanel — real backend sample (SELF-222 hand-off, seeded tenan
 		expect(body).toContain('−$8,217,654');
 		expect(body).toContain('−99.4%');
 		expect(body).toContain('−$7,497,863'); // 5y inflation-adjusted, rounds to nearest dollar
+		expect(body).toContain('−94.5%'); // 5y inflation-adjusted percent (synthetic fixture value)
 		expect(body).not.toContain('Insufficient history');
 		expect(body).not.toContain('CPI unavailable');
 		expect(body).not.toContain('Carried forward');
@@ -240,5 +273,42 @@ describe('NavDeltaPanel — delta_percent NULL vs zero (AC2 / migration AC2)', (
 		const { body } = render(NavDeltaPanel, { props: { rows } });
 		expect(body).toContain('0.0%');
 		expect(body).toContain('+$500');
+	});
+});
+
+describe('NavDeltaPanel — Inflation Adjusted percent (072 AC3 amendment)', () => {
+	it('a normal CPI-applicable row renders dollar + percent in the NAV-Delta-matching format', () => {
+		const rows = fixture({ '3y': { delta_inflation_adjusted: -2500, delta_inflation_adjusted_percent: -12.3 } });
+		const { body } = render(NavDeltaPanel, { props: { rows } });
+		expect(body).toContain('−$2,500');
+		expect(body).toContain('−12.3%');
+		expect(body).toMatch(/class="num[^"]*\bneg\b[^"]*"/);
+	});
+
+	it('a real zero inflation-adjusted percent renders "0.0%", never "—"', () => {
+		const rows = fixture({ '1y': { delta_inflation_adjusted: 0, delta_inflation_adjusted_percent: 0 } });
+		const { body } = render(NavDeltaPanel, { props: { rows } });
+		expect(body).toContain('$0');
+		expect(body).toContain('0.0%');
+	});
+
+	it('ONE-WAY NULL: dollar PRESENT, percent NULL (non-positive deflated base) → dollar shown, "—" in the percent slot, never "0.0%"', () => {
+		const rows = fixture({ '5y': { delta_inflation_adjusted: -1800, delta_inflation_adjusted_percent: null } });
+		const { body } = render(NavDeltaPanel, { props: { rows } });
+		expect(body).toContain('−$1,800');
+		expect(body).not.toContain('(−0.0%)');
+		expect(body).not.toContain('(+0.0%)');
+		// The inexpressible-percent title fires for this cell specifically.
+		expect(body).toContain('Percent change cannot be expressed against a zero or negative deflated starting value.');
+	});
+
+	it('the zero and NULL real-terms-percent cases render distinguishably in the SAME document (no collapse)', () => {
+		const rows = fixture({
+			'1y': { delta_inflation_adjusted: 0, delta_inflation_adjusted_percent: 0 },
+			'3y': { delta_inflation_adjusted: -1800, delta_inflation_adjusted_percent: null }
+		});
+		const { body } = render(NavDeltaPanel, { props: { rows } });
+		expect(body).toContain('0.0%');
+		expect(body).toContain('−$1,800');
 	});
 });

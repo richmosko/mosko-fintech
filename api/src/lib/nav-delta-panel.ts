@@ -26,6 +26,23 @@
 // cpi_any_carried / cpi_unavailable arrive as SQL NULL (not `false`) on month/ytd, where the CPI
 // columns don't apply at all — typed `boolean | null` to match the real payload rather than the
 // `boolean`-always this file originally assumed.
+//
+// AMENDED FOR MIGRATION 072 (2026-08-14, F/CTO-ratified Option B on the AC3 gap):
+// `delta_inflation_adjusted_percent` added immediately after `delta_inflation_adjusted` — the
+// real-terms figure as a PERCENT of the deflated anchor (nav_anchor × cpi_ye/cpi_anchor), bound
+// once in the function body alongside the dollar figure so the two cannot disagree about the
+// anchor's worth. NOT CONSUMER-DERIVABLE: 072's own header is explicit that no NAV level is
+// returned, so back-deriving it from delta_nominal/delta_percent/delta_inflation_adjusted would
+// divide a REAL numerator by a NOMINAL base — the exact mixed-basis defect class 071's header
+// documents, arrived at from the consumer side. This module never attempts that derivation.
+// RIDES delta_inflation_adjusted ONE-WAY: NULL on every row where the dollar is NULL (same three
+// causes), and ADDITIONALLY NULL — never 0 — when the deflated anchor base is non-positive while
+// the dollar stays PRESENT (isInflationPercentInexpressible below; mirrors isPercentInexpressible
+// for the nominal column, same "no change vs cannot be expressed" principle). NO ROUNDING IS
+// APPLIED AT THE SOURCE (072: "a real delta of exactly 52.5 surfaces as 52.4999…") — this file's
+// formatSignedUsd/formatSignedPercent already round at presentation (Intl currency formatting +
+// toFixed(1) respectively), which is where 072 says rounding belongs; no separate rounding step
+// is needed here.
 
 export type NavDeltaHorizon = 'month' | 'ytd' | '1y' | '3y' | '5y';
 
@@ -39,6 +56,10 @@ export interface NavDeltaPanelRow {
 	delta_nominal: number | null;
 	delta_percent: number | null;
 	delta_inflation_adjusted: number | null;
+	/** The real-terms delta as a percent of the deflated anchor. Rides delta_inflation_adjusted
+	 * ONE-WAY (see the module header) — never present when the dollar is NULL, and can be NULL
+	 * even when the dollar IS present (non-positive deflated anchor base). */
+	delta_inflation_adjusted_percent: number | null;
 	cpi_basis_period: string | null;
 	/** NULL on month/ytd (not applicable — the CPI columns don't exist for those horizons).
 	 * Otherwise true/false: whether any of the three CPI legs was carried-forward. */
@@ -91,6 +112,16 @@ export function isCpiUnresolvable(row: NavDeltaPanelRow): boolean {
 // header). "No change" and "cannot be expressed" must not render alike.
 export function isPercentInexpressible(row: NavDeltaPanelRow): boolean {
 	return row.delta_nominal !== null && row.delta_percent === null;
+}
+
+// 072's real-terms sibling of isPercentInexpressible: delta_inflation_adjusted_percent is NULL
+// — never 0 — when the deflated anchor base is non-positive, while delta_inflation_adjusted (the
+// dollar) stays PRESENT. Same "no real-terms change" vs "cannot be expressed in real terms"
+// principle, one column over. Naturally false whenever delta_inflation_adjusted itself is NULL
+// (insufficient-history / CPI-unresolvable / not-applicable) — those states are handled by their
+// own branches before this predicate is ever consulted.
+export function isInflationPercentInexpressible(row: NavDeltaPanelRow): boolean {
+	return row.delta_inflation_adjusted !== null && row.delta_inflation_adjusted_percent === null;
 }
 
 /** null (neutral ink) at exactly zero — mirrors NavCompositionTable's pos/neg fence convention

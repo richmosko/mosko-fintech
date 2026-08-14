@@ -1,10 +1,18 @@
 <!--
 	NavDeltaPanel.svelte — the §2.1.3 multi-horizon NAV-delta panel (SELF-222 · V1.1).
 	Frontend-owned browser surface. Consumes `pfin.fn_nav_delta_panel()` (migration
-	supabase/migrations/071_fn_nav_delta_panel.sql, SELF-221) threaded through
-	`+page.server.ts` as `data.navDeltaPanel: NavDeltaPanelRow[] | null` — fail-soft to
-	`null` on a read failure, same convention as `data.composition` / `data.navBoundary`.
-	Authors NO server logic.
+	supabase/migrations/072_fn_nav_delta_panel_real_percent.sql, which supersedes 071's
+	return shape by adding `delta_inflation_adjusted_percent` — the AC3 amendment,
+	F/CTO-ratified 2026-08-14) threaded through `+page.server.ts` as
+	`data.navDeltaPanel: NavDeltaPanelRow[] | null` — fail-soft to `null` on a read
+	failure, same convention as `data.composition` / `data.navBoundary`. Authors NO
+	server logic.
+
+	Inflation Adjusted cells render dollar + percent for 1Y/3Y/5Y (AC3, matching the NAV
+	Delta column's format) — the percent is NEVER derived client-side; it rides
+	delta_inflation_adjusted_percent exactly as returned. See $lib/nav-delta-panel.ts's
+	header for why a client-side derivation would be arithmetically wrong (a mixed-basis
+	defect, not merely redundant work).
 
 	Mount point: on the root Net Worth dashboard, directly below the §2.1.1 headline NAV
 	and ABOVE the §2.1.5 composition table — Phase 2 P2 lock (ADR-013 Decision 3):
@@ -36,6 +44,7 @@
 		isCpiUnresolvable,
 		isInsufficientHistory,
 		isPercentInexpressible,
+		isInflationPercentInexpressible,
 		orderRows,
 		signClass,
 		formatSignedUsd,
@@ -143,6 +152,15 @@
 										</span>
 									{:else if row.delta_inflation_adjusted !== null}
 										{formatSignedUsd(row.delta_inflation_adjusted)}
+										<span
+											title={isInflationPercentInexpressible(row)
+												? 'Percent change cannot be expressed against a zero or negative deflated starting value.'
+												: undefined}
+										>
+											({row.delta_inflation_adjusted_percent !== null
+												? formatSignedPercent(row.delta_inflation_adjusted_percent)
+												: '—'})
+										</span>
 									{:else}
 										—
 									{/if}

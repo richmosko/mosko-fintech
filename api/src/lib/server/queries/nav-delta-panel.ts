@@ -2,7 +2,8 @@
 // NAV-delta panel (V1.1 / SELF-221 backend; SELF-222 is the UI consumer).
 // Backend-owned server surface (ARCH §4.1 allowlist).
 //
-// Calls Architect's `071` pfin.fn_nav_delta_panel — a SECURITY INVOKER
+// Calls Architect's pfin.fn_nav_delta_panel (071, superseded by 072's added
+// percent column — see the EXTENDED note below) — a SECURITY INVOKER
 // read-composition helper (Lock 11; prosecdef=f) that reads pfin.nav_daily
 // (054) directly by at-or-before carry-forward and pfin.fn_cpi_u_index_for_period
 // (066) for every CPI observation, with "today" from pfin.fn_server_today
@@ -37,6 +38,17 @@
 // through exactly as returned, coercing only the numeric transport
 // representation — never re-sorting, never dropping a row, never computing
 // a date client-side.
+//
+// ⚠ EXTENDED FOR MIGRATION 072 (2026-08-14, F/CTO-ratified Option B on the AC3
+// gap): the RPC's return shape grew `delta_inflation_adjusted_percent numeric`
+// immediately after `delta_inflation_adjusted`. This file is normally
+// Backend-authored; this specific one-column, pattern-matching extension
+// (identical toNumberOrNull coercion to the sibling `delta_inflation_adjusted`
+// field) was made by Frontend to keep this file's normalize() in sync with the
+// $lib/nav-delta-panel.ts type change 072 required — flagged prominently for
+// Backend's review at PR rather than left silently stale (an un-updated
+// normalize() here would silently DROP the new column, making 072's percent
+// unreachable at runtime despite the DB now returning it).
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { NavDeltaPanelRow } from '$lib/nav-delta-panel';
@@ -53,6 +65,7 @@ type RawNavDeltaPanelRow = {
 	delta_nominal: number | string | null;
 	delta_percent: number | string | null;
 	delta_inflation_adjusted: number | string | null;
+	delta_inflation_adjusted_percent: number | string | null;
 	cpi_basis_period: string | null;
 	cpi_any_carried: boolean | null;
 	cpi_unavailable: boolean | null;
@@ -81,6 +94,7 @@ function normalize(r: RawNavDeltaPanelRow): NavDeltaPanelRow {
 		delta_nominal: toNumberOrNull(r.delta_nominal),
 		delta_percent: toNumberOrNull(r.delta_percent),
 		delta_inflation_adjusted: toNumberOrNull(r.delta_inflation_adjusted),
+		delta_inflation_adjusted_percent: toNumberOrNull(r.delta_inflation_adjusted_percent),
 		cpi_basis_period: r.cpi_basis_period,
 		cpi_any_carried: r.cpi_any_carried,
 		cpi_unavailable: r.cpi_unavailable

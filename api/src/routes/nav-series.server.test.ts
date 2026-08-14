@@ -39,6 +39,10 @@ const SESSION_USER = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' };
 // Verbatim real local smoke-verify sample from Backend's SELF-222 hand-off (migration 071
 // against seeded tenant b1aa21a2) — same fixture already used in
 // $lib/components/NavDeltaPanel.ssr.test.ts, reused here as the default happy-path RPC payload.
+// ⚠ delta_inflation_adjusted_percent values are SYNTHETIC (071's sample predates migration 072,
+// which added the column; no regenerated real sample was available — the local DB lost its seed
+// data in a QA incident, recovery F/CTO-gated). Deliberately round, non-derived placeholders —
+// see the identical fixture + fuller note in $lib/components/NavDeltaPanel.ssr.test.ts.
 const REAL_NAV_DELTA_PANEL_SAMPLE: NavDeltaPanelRow[] = [
 	{
 		horizon: 'month',
@@ -48,6 +52,7 @@ const REAL_NAV_DELTA_PANEL_SAMPLE: NavDeltaPanelRow[] = [
 		delta_nominal: -8217654.37,
 		delta_percent: -99.40310112495464,
 		delta_inflation_adjusted: null,
+		delta_inflation_adjusted_percent: null,
 		cpi_basis_period: null,
 		cpi_any_carried: null,
 		cpi_unavailable: null
@@ -60,6 +65,7 @@ const REAL_NAV_DELTA_PANEL_SAMPLE: NavDeltaPanelRow[] = [
 		delta_nominal: -7828654.37,
 		delta_percent: -99.37362744351358,
 		delta_inflation_adjusted: null,
+		delta_inflation_adjusted_percent: null,
 		cpi_basis_period: null,
 		cpi_any_carried: null,
 		cpi_unavailable: null
@@ -72,6 +78,7 @@ const REAL_NAV_DELTA_PANEL_SAMPLE: NavDeltaPanelRow[] = [
 		delta_nominal: -7546654.37,
 		delta_percent: -99.35037348604529,
 		delta_inflation_adjusted: -7571771.53943,
+		delta_inflation_adjusted_percent: -95.1,
 		cpi_basis_period: '2025-12-01',
 		cpi_any_carried: false,
 		cpi_unavailable: false
@@ -84,6 +91,7 @@ const REAL_NAV_DELTA_PANEL_SAMPLE: NavDeltaPanelRow[] = [
 		delta_nominal: -6955654.37,
 		delta_percent: -99.2955655960029,
 		delta_inflation_adjusted: -7377910.52013,
+		delta_inflation_adjusted_percent: -94.8,
 		cpi_basis_period: '2025-12-01',
 		cpi_any_carried: false,
 		cpi_unavailable: false
@@ -96,6 +104,7 @@ const REAL_NAV_DELTA_PANEL_SAMPLE: NavDeltaPanelRow[] = [
 		delta_nominal: -6307654.37,
 		delta_percent: -99.22375916312726,
 		delta_inflation_adjusted: -7497862.86149,
+		delta_inflation_adjusted_percent: -94.5,
 		cpi_basis_period: '2025-12-01',
 		cpi_any_carried: false,
 		cpi_unavailable: false

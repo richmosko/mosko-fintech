@@ -10,6 +10,7 @@ import {
 	isInsufficientHistory,
 	isCpiUnresolvable,
 	isPercentInexpressible,
+	isInflationPercentInexpressible,
 	orderRows,
 	signClass,
 	formatSignedUsd,
@@ -31,6 +32,7 @@ function row(overrides: Partial<NavDeltaPanelRow> & { horizon: NavDeltaPanelRow[
 		delta_nominal: 15_000,
 		delta_percent: 6.2,
 		delta_inflation_adjusted: isCpiApplicable(overrides.horizon) ? 9_000 : null,
+		delta_inflation_adjusted_percent: isCpiApplicable(overrides.horizon) ? 4.5 : null,
 		cpi_basis_period: isCpiApplicable(overrides.horizon) ? '2025-12-01' : null,
 		cpi_any_carried: false,
 		cpi_unavailable: false,
@@ -95,6 +97,40 @@ describe('isPercentInexpressible — AC2: "no change" vs "cannot be expressed" m
 		expect(
 			isPercentInexpressible(
 				row({ horizon: '5y', anchor_checkpoint_date: null, delta_nominal: null, delta_percent: null })
+			)
+		).toBe(false);
+	});
+});
+
+describe('isInflationPercentInexpressible — 072 amendment, real-terms sibling of isPercentInexpressible', () => {
+	it('delta_inflation_adjusted present, delta_inflation_adjusted_percent NULL → true (non-positive deflated base)', () => {
+		expect(
+			isInflationPercentInexpressible(
+				row({ horizon: '3y', delta_inflation_adjusted: -500, delta_inflation_adjusted_percent: null })
+			)
+		).toBe(true);
+	});
+	it('delta_inflation_adjusted_percent = 0 (a real zero) → false — must NOT be confused with the NULL case', () => {
+		expect(
+			isInflationPercentInexpressible(
+				row({ horizon: '3y', delta_inflation_adjusted: 0, delta_inflation_adjusted_percent: 0 })
+			)
+		).toBe(false);
+	});
+	it('delta_inflation_adjusted itself NULL (not-applicable / CPI-unresolvable / insufficient-history) → false', () => {
+		expect(
+			isInflationPercentInexpressible(
+				row({ horizon: 'month', delta_inflation_adjusted: null, delta_inflation_adjusted_percent: null })
+			)
+		).toBe(false);
+		expect(
+			isInflationPercentInexpressible(
+				row({
+					horizon: '3y',
+					cpi_unavailable: true,
+					delta_inflation_adjusted: null,
+					delta_inflation_adjusted_percent: null
+				})
 			)
 		).toBe(false);
 	});
