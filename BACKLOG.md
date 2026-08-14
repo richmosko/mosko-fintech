@@ -1066,3 +1066,18 @@ Per ADR-009 Decision 7's feature-flow scheme, BACKLOG.md doubles as the overflow
 - **pgTAP `isnt()` is fail-open on NULL** (IS DISTINCT FROM; `isnt(NULL, x)` passes) while `ok()` fails on NULL — a negative assertion over a subquery needs an explicit NULL guard, proven in three states (empty must fail / not-yet-detected must fail / detected must pass). Measured twice this session.
 - **A suite whose fixtures derive from the run day needs legs exercised at synthetic run days** — the 073 battery's first draft carried a leg red for five months of the year, green only because it was August; the fix (override `fn_server_today` in scratch across 24+ dates incl. every month-end, then restore) needs no `p_as_of` parameter and does not touch the ratified no-client-clock design.
 - **Fixture-vs-fixture disagreements are informative**: every Architect-vs-QA "contradiction" this session resolved into two different fixtures (seeded-vs-clean DB, pinned-vs-arrears CPI coverage, hardcoded-vs-file-built), not two readings of one fact — reproduce the OTHER party's exact fixture before contradicting their measurement.
+
+### §7.17 — Seed-recovery follow-ups (2026-08-14)
+
+*Source: the F/CTO-supervised recovery run (option (b)) closing the 2026-08-14 db-reset incident — see the incident record's Recovery-completed section. Detail in `temp/backend-seed-recovery.md` (session buffer; this entry is the surviving record).*
+
+**`workers/etl` `pyproject.toml` has no `[build-system]` — the package does not install itself.** [Backend]
+- **Source.** Backend, during the recovery CPI re-pull: `uv sync` installs dependencies but not `pfin_back_etl`; every script invocation needs a `PYTHONPATH=src` workaround.
+- **AC.** Add the `[build-system]` table (hatchling or setuptools per repo convention) so `uv sync` yields an importable `pfin_back_etl` with no `PYTHONPATH`; prove by running one ETL script from a clean venv without the workaround.
+- **Dependencies.** None; rides any next `workers/etl` PR.
+
+**Tenant `b1aa21a2` is a bare-id auth stub — add auth fields on the SAME row if live login is ever needed.** [Backend; F/CTO checkpoint before touching auth]
+- **Source.** F/CTO option (a) ruling during recovery: identity continuity via a `seed.sql`-shape bare-`id` insert on the exact original uuid. The row cannot authenticate (no email/password). A future live-login demo layers auth fields onto this row — never a re-signup, which would mint a new uuid and orphan every recorded `b1aa21a2` reference.
+- **AC.** Only if/when a demo needs login: set auth fields on the existing uuid and verify the uid is unchanged afterward.
+
+**Recovery-scope note (no action):** `pfin.account` / `pfin.linked_source` / `pfin.user_settings` remain empty by design — `seed.sql` never covered them and the incident's recovery scope was users/taxonomy/CPI/NAV only. Consequence already visible once: any "computed NAV today" comparand reads $0 until account data exists (why the recovery's `--ack-delta` was −100.00% vs the original −99.40%).
