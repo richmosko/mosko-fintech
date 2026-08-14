@@ -65,6 +65,33 @@
 --   checkpoint serves an anchor by at most one checkpoint, and the served date
 --   is RETURNED (anchor_checkpoint_date) rather than hidden. It does not change
 --   which month the anchor names.
+--
+--   ⚠ YTD IS THE EXCEPTION TO THAT BOUND, AND THE EXPOSURE IS A DIFFERENT ONE.
+--   The paragraph above bounds the CROSS-CONTAINER residual. YTD surfaces R2's
+--   OTHER non-guarantee — WHICH day. Two sessions in different zones can get
+--   different fn_server_today() values, and ACROSS A YEAR BOUNDARY that changes
+--   extract(year from today), moving ytd's anchor and cpi_basis_period BY A
+--   FULL YEAR — not by a day. Because cpi_basis_period denominates EVERY
+--   adjusted figure, 1y/3y/5y move with it, not just the ytd row.
+--   >> SO "it does not change which month the anchor names" IS TRUE OF THE
+--      MONTH AND NOT OF THE YEAR. The month is stable; on 31 December / 1
+--      January the year is not. <<
+--   ⚠⚠ DOCUMENTATION ONLY — DO NOT "FIX" THIS IN CODE. The computation is
+--   RIGHT; the bound sentence was overstated. Pinning ytd's year would make the
+--   panel disagree with the caller's own calendar, and would correctly RED the
+--   (P3)/(P4) battery legs, which assert the derivation against make_date.
+--   Practical exposure is small — one user, one session, one panel load is
+--   self-consistent; divergence needs two sessions in different zones on the
+--   same boundary — but the bound as written understated it.
+--
+--   ⚠ A STRUCTURAL CONSEQUENCE OF THE SAME ANCHOR, stated so it is not read as
+--   a fault: in JANUARY AND FEBRUARY, cpi_basis_period is the December that has
+--   just ended, whose CPI print does not exist yet — CPI publishes one to two
+--   months in arrears. 066 therefore serves it CARRIED, and cpi_any_carried
+--   comes back TRUE PANEL-WIDE for roughly two months every year. That is
+--   correct behaviour, correctly signalled. A consumer must distinguish "the
+--   basis is carried because the year just turned" from "the basis is carried
+--   because ingest is behind" — the copy is SELF-222's, the signal is here.
 --   >> DO NOT "FIX" THIS BY HARMONIZING THE ETL WORKER ONTO 070. ADR-044 names
 --      that as the natural sweep that would be wrong. <<
 --
@@ -127,6 +154,7 @@
 -- CONTRACT
 --   pfin.fn_nav_delta_panel()
 --     RETURNS TABLE (horizon text, anchor_date date, anchor_checkpoint_date date,
+--                    current_checkpoint_date date,
 --                    delta_nominal numeric, delta_percent numeric,
 --                    delta_inflation_adjusted numeric, cpi_basis_period date,
 --                    cpi_any_carried boolean, cpi_unavailable boolean)
@@ -135,11 +163,20 @@
 --     A horizon is NEVER absent — an uncomputable horizon returns its row with
 --     NULL deltas. "The query dropped it" and "it is not computable" must not
 --     render identically.
+--   · current_checkpoint_date = the checkpoint that served the CURRENT endpoint.
+--     Identical on all five rows (a property of the store, not of a horizon).
+--     ⚠ WHY IT EARNS ITS PLACE (F/CTO ratify 2026-08-13, option A): every delta
+--     has TWO endpoints and only the anchor side disclosed its provenance.
+--     During a cron outage the "now" side is itself carried, so EVERY horizon
+--     is measured against a stale present — and the anchor side would look
+--     perfectly fresh while it happened. This column is how a consumer sees it.
 --   · anchor_date = the CALENDAR anchor (a month-end). anchor_checkpoint_date =
 --     the checkpoint that actually served it, which is EARLIER when carried.
 --     BOTH are returned so "measured on the anchor" stays distinguishable from
 --     "carried from before it" — 062's carry-forward-with-provenance pattern.
---   · delta_percent is NULL — never 0 — when the anchor NAV is zero or NULL. No
+--   · delta_percent is NULL — never 0 — when the anchor NAV is zero, NEGATIVE
+--     or NULL (a negative base inverts the sign: -100 -> +100 would report
+--     -200%). Nominal and adjusted are sound over a negative base and keep it. No
 --     division is attempted. "No change" and "cannot be expressed" must not
 --     render alike.
 --   · delta_inflation_adjusted applies to 1y/3y/5y ONLY. Month and YTD carry
@@ -297,6 +334,7 @@ returns table (
   horizon                   text,
   anchor_date               date,
   anchor_checkpoint_date    date,
+  current_checkpoint_date   date,
   delta_nominal             numeric,
   delta_percent             numeric,
   delta_inflation_adjusted  numeric,
@@ -428,11 +466,15 @@ begin
       h.name,
       h.anchor,
       v_a_cp,
+      v_cur_cp,
       case when v_cur_nav is not null and v_a_nav is not null
            then v_cur_nav - v_a_nav end,
-      -- NULL, never 0, on a zero or absent anchor: no division is attempted, and
-      -- "no change" must not render like "cannot be expressed".
-      case when v_cur_nav is not null and v_a_nav is not null and v_a_nav <> 0
+      -- NULL, never 0, on a zero, NEGATIVE or absent anchor. A NEGATIVE base
+      -- INVERTS THE SIGN — improving from -100 to +100 would report -200%,
+      -- a negative percentage for a positive improvement — which is the
+      -- alike-rendering the ratified principle bars. Nominal and adjusted are
+      -- arithmetically sound over a negative base and are NOT guarded here.
+      case when v_cur_nav is not null and v_a_nav is not null and v_a_nav > 0
            then (v_cur_nav - v_a_nav) / v_a_nav * 100 end,
       v_adj,
       case when h.adj then v_ye_period end,
@@ -477,10 +519,20 @@ comment on function pfin.fn_nav_delta_panel() is
   'month/ytd, where the adjusted column does not exist by design (PRD verbatim, parity-grounded). They can co-occur '
   'and live in different columns, so no two are confusable. cpi_any_carried and cpi_unavailable stay SEPARATE '
   'booleans: a carried figure is shown WITH A MARKER, an unavailable one is NOT SHOWN AT ALL. '
-  'delta_percent is NULL — never 0 — when the anchor NAV is zero or absent; no division is attempted. '
+  'delta_percent is NULL — never 0 — when the anchor NAV is zero, NEGATIVE or absent; no division is attempted. A '
+  'NEGATIVE base INVERTS THE SIGN (improving from -100 to +100 would report -200%, a negative percentage for a '
+  'positive improvement), which is the alike-rendering the ratified principle bars. delta_nominal and '
+  'delta_inflation_adjusted are arithmetically sound over a negative base and are NOT guarded. ⚠ The two NULL '
+  'causes here — zero base and negative base — render IDENTICALLY and are deliberately NOT discriminated; no '
+  'fourth NULL-cause signal exists for them. '
   'anchor_date is the CALENDAR anchor and anchor_checkpoint_date is the checkpoint that actually served it, EARLIER '
   'when carried — both returned so "measured on the anchor" stays distinguishable from "carried from before it" '
-  '(062''s carry-forward-with-provenance pattern). '
+  '(062''s carry-forward-with-provenance pattern). ⚠ current_checkpoint_date discloses the SAME property for the '
+  'OTHER endpoint (F/CTO ratify 2026-08-13, return-shape option A): every delta has TWO endpoints and until now '
+  'only one carried its provenance. During a cron outage the "now" side is itself carried, so EVERY horizon''s '
+  'delta is measured against a stale present — and without this column a consumer could not tell, because the '
+  'anchor side would look perfectly fresh. It is identical on all five rows (a property of the store, not of a '
+  'horizon), like cpi_basis_period. '
   '⚠ TWO-CLOCK RESIDUAL, stated because 070 does NOT close it: ADR-044 R2 guarantees both sides of ONE COMPARISON use '
   'the same day and guarantees NOTHING ACROSS CONTAINERS — and nav_daily.nav_date is current_date in the ETL worker''s '
   'session, a different container. The residual is bounded to a one-day boundary effect at a month-end, moves which '
