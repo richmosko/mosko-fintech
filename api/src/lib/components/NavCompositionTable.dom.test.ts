@@ -10,6 +10,7 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect } from 'vitest';
+import { EMPTY_STALENESS } from '$lib/staleness/stale-constituent';
 import { render, fireEvent, within } from '@testing-library/svelte';
 import NavCompositionTable from './NavCompositionTable.svelte';
 import type { NavComposition } from '$lib/nav-composition';
@@ -41,7 +42,7 @@ const fixture: NavComposition = {
 
 describe('NavCompositionTable — expanded-leaf interaction (AC#2/AC#3)', () => {
 	it('collapsed default: leaf rows absent, every toggle aria-expanded="false"', () => {
-		const { queryByText, getAllByRole } = render(NavCompositionTable, { props: { composition: fixture } });
+		const { queryByText, getAllByRole } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: fixture } });
 		expect(queryByText('Brokerage')).toBeNull();
 		for (const btn of getAllByRole('button')) {
 			expect(btn.getAttribute('aria-expanded')).toBe('false');
@@ -49,7 +50,7 @@ describe('NavCompositionTable — expanded-leaf interaction (AC#2/AC#3)', () => 
 	});
 
 	it('click a category → leaf rows appear; aria-expanded flips to "true"', async () => {
-		const { getByRole, findByText } = render(NavCompositionTable, { props: { composition: fixture } });
+		const { getByRole, findByText } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: fixture } });
 		const toggle = getByRole('button', { name: /Investment/i });
 		await fireEvent.click(toggle);
 		expect(toggle.getAttribute('aria-expanded')).toBe('true');
@@ -58,14 +59,14 @@ describe('NavCompositionTable — expanded-leaf interaction (AC#2/AC#3)', () => 
 	});
 
 	it('leaf account-name links to /accounts/[account_id]', async () => {
-		const { getByRole, findByRole } = render(NavCompositionTable, { props: { composition: fixture } });
+		const { getByRole, findByRole } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: fixture } });
 		await fireEvent.click(getByRole('button', { name: /Investment/i }));
 		const link = await findByRole('link', { name: 'Brokerage' });
 		expect(link.getAttribute('href')).toBe('/accounts/1');
 	});
 
 	it('NULL unrealized_gl renders as "—" (em dash), never $0/blank', async () => {
-		const { getByRole, findByText } = render(NavCompositionTable, { props: { composition: fixture } });
+		const { getByRole, findByText } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: fixture } });
 		await fireEvent.click(getByRole('button', { name: /Liability/i }));
 		const mortgage = await findByText('Mortgage');
 		const row = mortgage.closest('tr')!;
@@ -75,7 +76,7 @@ describe('NavCompositionTable — expanded-leaf interaction (AC#2/AC#3)', () => 
 
 describe('NavCompositionTable — value-color FENCE (§5 fence 1: G/L column ONLY)', () => {
 	it('positive G/L → .pos on the G/L cell; current-value cell stays NEUTRAL', async () => {
-		const { getByRole, findByText } = render(NavCompositionTable, { props: { composition: fixture } });
+		const { getByRole, findByText } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: fixture } });
 		await fireEvent.click(getByRole('button', { name: /Investment/i }));
 		const row = (await findByText('Brokerage')).closest('tr')!;
 		const cells = within(row).getAllByRole('cell'); // [current-value, G/L]
@@ -90,7 +91,7 @@ describe('NavCompositionTable — value-color FENCE (§5 fence 1: G/L column ONL
 	});
 
 	it('negative G/L → .neg on the G/L cell (and not .pos)', async () => {
-		const { getByRole, findByText } = render(NavCompositionTable, { props: { composition: fixture } });
+		const { getByRole, findByText } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: fixture } });
 		await fireEvent.click(getByRole('button', { name: /Investment/i }));
 		const row = (await findByText('Old IRA')).closest('tr')!;
 		const glCell = within(row).getAllByRole('cell').slice(-1)[0];
@@ -99,7 +100,7 @@ describe('NavCompositionTable — value-color FENCE (§5 fence 1: G/L column ONL
 	});
 
 	it('NULL G/L cell carries NEITHER pos NOR neg (— is not a performance value)', async () => {
-		const { getByRole, findByText } = render(NavCompositionTable, { props: { composition: fixture } });
+		const { getByRole, findByText } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: fixture } });
 		await fireEvent.click(getByRole('button', { name: /Liability/i }));
 		const row = (await findByText('Mortgage')).closest('tr')!;
 		const glCell = within(row).getAllByRole('cell').slice(-1)[0];
@@ -110,7 +111,7 @@ describe('NavCompositionTable — value-color FENCE (§5 fence 1: G/L column ONL
 
 describe('NavCompositionTable — keyboard / disclosure a11y', () => {
 	it('re-clicking collapses (aria-expanded back to "false", leaf rows removed)', async () => {
-		const { getByRole, queryByText, findByText } = render(NavCompositionTable, { props: { composition: fixture } });
+		const { getByRole, queryByText, findByText } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: fixture } });
 		const toggle = getByRole('button', { name: /Investment/i });
 		await fireEvent.click(toggle);
 		await findByText('Brokerage');
@@ -120,7 +121,7 @@ describe('NavCompositionTable — keyboard / disclosure a11y', () => {
 	});
 
 	it('toggle is keyboard-operable: a native <button> (Enter/Space fire onclick) w/ aria-controls', () => {
-		const { getByRole } = render(NavCompositionTable, { props: { composition: fixture } });
+		const { getByRole } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: fixture } });
 		const toggle = getByRole('button', { name: /Investment/i });
 		expect(toggle.tagName).toBe('BUTTON');
 		expect(toggle.getAttribute('type')).toBe('button');
@@ -148,7 +149,7 @@ describe('NavCompositionTable — SELF-229 AC#2 per-leaf staleness (TRI-STATE, n
 
 	it('is_stale === true → "May be stale" tag renders beside the leaf link, no "unknown" text', async () => {
 		const { getByRole, findByText, queryByText } = render(NavCompositionTable, {
-			props: { composition: triStateFixture(true) }
+			props: { staleness: EMPTY_STALENESS, composition: triStateFixture(true) }
 		});
 		await fireEvent.click(getByRole('button', { name: /Investment/i }));
 		await findByText('Brokerage');
@@ -158,7 +159,7 @@ describe('NavCompositionTable — SELF-229 AC#2 per-leaf staleness (TRI-STATE, n
 
 	it('is_stale === null (UNKNOWN — join failed) → "Staleness unknown" renders, DISTINCT from "May be stale"', async () => {
 		const { getByRole, findByText, queryByText } = render(NavCompositionTable, {
-			props: { composition: triStateFixture(null) }
+			props: { staleness: EMPTY_STALENESS, composition: triStateFixture(null) }
 		});
 		await fireEvent.click(getByRole('button', { name: /Investment/i }));
 		await findByText('Brokerage');
@@ -169,7 +170,7 @@ describe('NavCompositionTable — SELF-229 AC#2 per-leaf staleness (TRI-STATE, n
 
 	it('is_stale === false (confirmed not stale) → neither marker renders', async () => {
 		const { getByRole, findByText, queryByText } = render(NavCompositionTable, {
-			props: { composition: triStateFixture(false) }
+			props: { staleness: EMPTY_STALENESS, composition: triStateFixture(false) }
 		});
 		await fireEvent.click(getByRole('button', { name: /Investment/i }));
 		await findByText('Brokerage');
@@ -182,9 +183,9 @@ describe('NavCompositionTable — SELF-229 AC#2 per-leaf staleness (TRI-STATE, n
 // SELF-229-QA — brief AC4: "a stale leaf shows BOTH the per-row indicator AND the
 // aggregation-level badge — assert both, and assert a non-stale leaf next to a stale one shows
 // neither per-row marking." The tri-state block above proves each per-row state in isolation
-// (single-leaf fixtures, aggregation `staleness` prop omitted); this block proves the TWO-LEVEL
-// signal — per-row AND aggregation — together, and proves a MIXED group (one stale leaf beside a
-// confirmed-not-stale one) marks only the actually-stale row.
+// (single-leaf fixtures, aggregation `staleness` confirmed healthy / EMPTY_STALENESS); this block
+// proves the TWO-LEVEL signal — per-row AND aggregation — together, and proves a MIXED group
+// (one stale leaf beside a confirmed-not-stale one) marks only the actually-stale row.
 // ============================================================================
 
 describe('NavCompositionTable — SELF-229 AC4: per-row marker AND aggregation badge coexist; a mixed group marks only the stale leaf', () => {
@@ -301,7 +302,7 @@ describe('NavCompositionTable — aggregation badge (canary, connection health) 
 	});
 
 	it('aggregation badge healthy (staleness omitted): no badge renders at all, the G/L fence is unaffected', async () => {
-		const { container, getByRole, findByText } = render(NavCompositionTable, { props: { composition: fixture } });
+		const { container, getByRole, findByText } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: fixture } });
 		expect(container.querySelector('.stale-connection-marker')).toBeNull();
 		await fireEvent.click(getByRole('button', { name: /Investment/i }));
 		const row = (await findByText('Brokerage')).closest('tr')!;

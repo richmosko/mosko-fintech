@@ -15,16 +15,26 @@
 	`is_stale` is now `boolean | null` at the source (staleness.ts's loadStaleness() degrades an
 	RPC failure to `null` — UNKNOWN_STALENESS — never to `false`, because `false` would be silently
 	indistinguishable from "confirmed healthy"). This component renders THREE visibly distinct
-	states, not two: `true` (+ a non-empty list) → the existing "May be stale" disclosure below,
-	unchanged; `null` → a SEPARATE, quieter "Staleness unknown" note (no disclosure — there is
-	nothing to list, since the read that would have populated stale_items itself failed); `false`
-	(or a defensive true-with-empty-list) → zero-footprint, same as before. The unknown state's
-	copy tone mirrors this route's own existing "couldn't load / try again shortly" idiom
-	(+page.svelte's accountPresence==='unknown' notice) rather than inventing new wording, and its
-	visual register borrows the muted-informational-chip vocabulary NavDeltaPanel /
-	NavReferenceDatesPanel already use for `.insufficient-badge` — NOT the canary `--c-attn-*` hue,
-	which stays reserved for the CONFIRMED-stale branch below (§5 fence 8): "we don't know" is not
-	the same claim as "this is stale," and must not borrow that hue's urgency.
+	states: `true` + a NON-EMPTY list → the existing "May be stale" disclosure below, unchanged;
+	`null`, OR `true` with an EMPTY list → a SEPARATE, quieter "Staleness unknown" note (no
+	disclosure — there is nothing to list); `false` → zero-footprint. The unknown state's copy tone
+	mirrors this route's own existing "couldn't load / try again shortly" idiom (+page.svelte's
+	accountPresence==='unknown' notice) rather than inventing new wording, and its visual register
+	borrows the muted-informational-chip vocabulary NavDeltaPanel / NavReferenceDatesPanel already
+	use for `.insufficient-badge` — NOT the canary `--c-attn-*` hue, which stays reserved for the
+	CONFIRMED-stale branch below (§5 fence 8): "we don't know" is not the same claim as "this is
+	stale," and must not borrow that hue's urgency.
+
+	⚠ Sec F2 (AMBER round, no veto): `true` + an EMPTY list is a MALFORMED tuple, not a healthy one
+	— the prior gate (`show` requiring both the flag AND a non-empty list) silently rendered NOTHING
+	for it, indistinguishable from confirmed-healthy. It now routes to the SAME "unknown" branch as
+	`null` — never confirmed-stale (nothing to disclose) and never silence (the flag says something
+	IS wrong).
+
+	⚠ Sec F3(B) (F/CTO-ruled): `isStale` / `staleItems` are REQUIRED props, no default. A caller
+	that forgets to pass real staleness data now fails at TYPECHECK, not at runtime as a silent
+	"confirmed healthy" — the compiler is the watcher for every future V1.2-V1.5 ramp site. All five
+	live mounts (the headline + the four SELF-229 surfaces) already pass real values.
 
 	PER-STATUS AFFORDANCE (keyed on connection_status via the canonical predicates in
 	stale-constituent.ts → connection-status-constants.ts):
@@ -54,24 +64,31 @@
 	} from '$lib/staleness/stale-constituent';
 
 	let {
-		isStale = false,
-		staleItems = [],
+		isStale,
+		staleItems,
 		/** Where the re-auth affordance routes — the connection-state list (SELF-207). */
 		reviewHref = '/accounts/connections'
 	}: {
-		isStale?: boolean | null;
-		staleItems?: StaleConstituentItem[];
+		isStale: boolean | null;
+		staleItems: StaleConstituentItem[];
 		reviewHref?: string;
 	} = $props();
 
-	// Zero-footprint gate: honour BOTH the flag and a non-empty list (defensive — never render
-	// an empty marker if the flag and the list ever disagree). `isStale === true` only — `null`
-	// (unknown) is a SEPARATE branch below, never routed through the confirmed-stale disclosure.
+	// Zero-footprint gate: honour BOTH the flag and a non-empty list. `isStale === true` alone is
+	// NOT sufficient — see the Sec F2 note on `showUnknown` below for the malformed-tuple case.
 	const show = $derived(isStale === true && staleItems.length > 0);
 
-	// SELF-229: the UNKNOWN branch — the root (or per-surface) read itself failed. Distinct from
-	// `show` above: never both true at once (isStale is exactly one of true/false/null at a time).
-	const showUnknown = $derived(isStale === null);
+	// SELF-229: the UNKNOWN branch. Two causes route here, both rendered identically:
+	//   (1) the root (or per-surface) read itself failed — isStale === null.
+	//   (2) Sec F2 (AMBER round): a MALFORMED tuple — isStale === true but staleItems is EMPTY.
+	//       The prior gate silently rendered NOTHING for this case (the same `show` && length>0
+	//       check that protects the disclosure from an empty list also, as a side effect, made a
+	//       "confirmed stale but we have nothing to tell you" tuple indistinguishable from
+	//       healthy). That is a fail-OPEN default one contract violation away from a real
+	//       silent-fresh regression, so it now takes the SAME distinct "unknown" treatment as a
+	//       genuine read failure — never confirmed-stale (nothing to disclose) and never silence
+	//       (the flag says something IS wrong).
+	const showUnknown = $derived(isStale === null || (isStale === true && staleItems.length === 0));
 
 	const count = $derived(staleItems.length);
 	const anyReauth = $derived(hasReauthActionable(staleItems));

@@ -73,18 +73,24 @@ describe('StaleConstituentBadge — render/remove footprint (SSR)', () => {
 		expect(body).not.toContain('May be stale');
 	});
 
-	it('defensive: isStale=true but EMPTY list → renders NOTHING (show gate honours BOTH)', () => {
+	// Sec F2 (AMBER round, no veto): a MALFORMED tuple (isStale=true, EMPTY list) used to render
+	// NOTHING here — silently indistinguishable from confirmed-healthy. It now routes to the SAME
+	// "Staleness unknown" branch as isStale=null (see the SELF-229 tri-state UNKNOWN describe
+	// block below), never the confirmed-stale disclosure (nothing to disclose) and never silence.
+	it('isStale=true but EMPTY list (malformed tuple) → "Staleness unknown", NEVER silence and NEVER "May be stale"', () => {
 		const { body } = render(StaleConstituentBadge, {
 			props: { isStale: true, staleItems: [] }
 		});
-		expect(visible(body)).toBe('');
-	});
-
-	it('default props (no staleness data) → renders NOTHING (loader-absent safe default)', () => {
-		const { body } = render(StaleConstituentBadge, { props: {} });
-		expect(visible(body)).toBe('');
+		expect(body).toContain('Staleness unknown');
+		expect(body).not.toContain('May be stale');
 	});
 });
+
+// Sec F3(B) (F/CTO-ruled): `isStale` / `staleItems` are now REQUIRED props — there is no more
+// "default props" state to test. A caller that omits them fails at TYPECHECK (verified by
+// `npm run check`), not at runtime, so there is no loader-absent runtime fallback left to assert
+// on here. The prior "default props (no staleness data) → renders NOTHING" test asserted a
+// behavior (a fail-open `isStale = false` default) that no longer exists — removed, not weakened.
 
 describe('StaleConstituentBadge — SELF-229 tri-state UNKNOWN (isStale === null)', () => {
 	it('isStale === null → renders the DISTINCT "Staleness unknown" note, never "May be stale"', () => {

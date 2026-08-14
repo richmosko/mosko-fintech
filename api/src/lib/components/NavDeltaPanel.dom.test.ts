@@ -17,6 +17,7 @@ import { describe, it, expect } from 'vitest';
 import { render } from '@testing-library/svelte';
 import NavDeltaPanel from './NavDeltaPanel.svelte';
 import { isCpiApplicable, type NavDeltaPanelRow } from '$lib/nav-delta-panel';
+import { EMPTY_STALENESS } from '$lib/staleness/stale-constituent';
 import type { StaleConstituentItem } from '$lib/staleness/stale-constituent';
 
 function row(overrides: Partial<NavDeltaPanelRow> & { horizon: NavDeltaPanelRow['horizon'] }): NavDeltaPanelRow {
@@ -82,7 +83,7 @@ describe('NavDeltaPanel — D1 badge (canary, connection-health) stays distinct 
 			'3y': { cpi_any_carried: true, cpi_basis_period: '2026-06-01' },
 			'5y': { cpi_any_carried: true, cpi_basis_period: '2026-06-01' }
 		});
-		const { container, getByText } = render(NavDeltaPanel, { props: { rows } });
+		const { container, getByText } = render(NavDeltaPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 		expect(container.querySelector('.stale-connection-marker')).toBeNull();
 		expect(getByText(/Carried forward/)).toBeTruthy();
 	});

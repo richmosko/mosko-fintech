@@ -29,8 +29,8 @@
 	consumes (+page.server.ts's `data.staleness`, threaded down unchanged). This component now owns
 	its own section heading (moved in from +page.svelte's wrapper) so the badge sits adjacent to it,
 	matching NavHistoryChart / NavDeltaPanel / NavReferenceDatesPanel's self-contained pattern.
-	ADR-013 D1: the surface list at PRD §2.4.4 is illustrative-not-exhaustive; further surfaces ramp
-	at V1.2-V1.5 milestones (§2.2, §2.3, §2.5, §2.6).
+	Per ADR-013 D1 (staleness-marking surface scope is illustrative, not exhaustive), further
+	surfaces ramp later — Sec F4 (AMBER round): read D1 live, this line is a paraphrase not a quote.
 
 	PER-ROW LEAF staleness (AC#2 — a per-account indicator IN ADDITION to the aggregation badge
 	above): Backend delivers `NavCompositionLeaf.is_stale` via a SERVER-SIDE join in the loader
@@ -54,13 +54,14 @@
 	import type { NavComposition } from '$lib/nav-composition';
 	import { buildupRows } from '$lib/nav-composition';
 	import { accountTypeLabel } from '$lib/account-display';
-	import { EMPTY_STALENESS, type StalenessData } from '$lib/staleness/stale-constituent';
+	import type { StalenessData } from '$lib/staleness/stale-constituent';
 	import StaleConstituentBadge from './StaleConstituentBadge.svelte';
 
-	let {
-		composition,
-		staleness = EMPTY_STALENESS
-	}: { composition: NavComposition; staleness?: StalenessData } = $props();
+	// Sec F3(B) (F/CTO-ruled): `staleness` is REQUIRED, no default — a caller that forgets to
+	// thread real staleness data now fails at TYPECHECK, not as a silent "confirmed healthy"
+	// fallback. The live mount (+page.svelte) already passes the real loader value unconditionally.
+	let { composition, staleness }: { composition: NavComposition; staleness: StalenessData } =
+		$props();
 
 	const groups = $derived(composition.groups);
 	const ladder = $derived(buildupRows(composition.buildups));

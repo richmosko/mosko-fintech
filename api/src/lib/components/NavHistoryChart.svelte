@@ -30,8 +30,8 @@
 	no scope filter, so every consuming surface reads the identical aggregate). Rendered
 	beside this surface's own section heading (D1: mark adjacent to the surface, never a
 	floating banner — that's the separate P4 reauth-staleness-banner, SELF-207 territory).
-	ADR-013 D1: the surface list at PRD §2.4.4 is illustrative-not-exhaustive; further
-	surfaces ramp at V1.2-V1.5 milestones (§2.2, §2.3, §2.5, §2.6).
+	Per ADR-013 D1 (staleness-marking surface scope is illustrative, not exhaustive), further
+	surfaces ramp later — Sec F4 (AMBER round): read D1 live, this line is a paraphrase not a quote.
 -->
 <script lang="ts">
 	import { goto } from '$app/navigation';
@@ -47,24 +47,29 @@
 	import { EMPTY_NAV_BOUNDARY, resolutionDisclosureFires, type NavBoundary } from '$lib/nav-boundary';
 	import { sharedYDomain, suggestGranularity, autoNarrowWindow } from '$lib/nav-chart-domain';
 	import { NAV_SERIES_PARAM_PREFIX } from '$lib/schemas/nav-series-params';
-	import { EMPTY_STALENESS, type StalenessData } from '$lib/staleness/stale-constituent';
+	import type { StalenessData } from '$lib/staleness/stale-constituent';
 	import ChartGranularityChipGroup from './ChartGranularityChipGroup.svelte';
 	import InformationalMarkerBadge from './InformationalMarkerBadge.svelte';
 	import NavChartLines from './NavChartLines.svelte';
 	import StaleConstituentBadge from './StaleConstituentBadge.svelte';
 
+	// Sec F3(B) (F/CTO-ruled): `staleness` is REQUIRED, no default — a caller that forgets to
+	// thread real staleness data now fails at TYPECHECK, not as a silent "confirmed healthy"
+	// fallback. The live mount (+page.svelte) already passes the real loader value unconditionally.
+	// (`boundary` keeps its own pre-existing EMPTY_NAV_BOUNDARY default — a different signal, out
+	// of scope for this Sec finding.)
 	let {
 		points,
 		paramsError,
 		params,
 		boundary = EMPTY_NAV_BOUNDARY,
-		staleness = EMPTY_STALENESS
+		staleness
 	}: {
 		points: NavSeriesPoint[] | null;
 		paramsError: string | null;
 		params: { granularity: NavSeriesGranularity; start: string; end: string };
 		boundary?: NavBoundary;
-		staleness?: StalenessData;
+		staleness: StalenessData;
 	} = $props();
 
 	// ---- state classification — see the module header for why these are checked

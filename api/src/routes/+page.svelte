@@ -32,14 +32,17 @@
 	import NavDeltaPanel from '$lib/components/NavDeltaPanel.svelte';
 	import NavCompositionTable from '$lib/components/NavCompositionTable.svelte';
 	import NavHistoryChart from '$lib/components/NavHistoryChart.svelte';
-	import { EMPTY_STALENESS } from '$lib/staleness/stale-constituent';
 	import { EMPTY_NAV_BOUNDARY } from '$lib/nav-boundary';
 
 	let { data }: { data: PageData } = $props();
 
-	// Loader field Backend wires (`+page.server.ts` → `046` read). Default to the healthy
-	// zero-value so the surface renders cleanly before/if the field is absent (no silent throw).
-	const staleness = $derived(data.staleness ?? EMPTY_STALENESS);
+	// Sec F3(B) (F/CTO-ruled, AMBER round): NO `?? EMPTY_STALENESS` fallback here anymore.
+	// +page.server.ts's loader always returns a real StalenessData value — UNKNOWN_STALENESS on a
+	// read failure, never absent — so a `?? EMPTY_STALENESS` guard on this line could only ever
+	// have MASKED a genuine contract violation by silently reading it as "confirmed healthy," which
+	// is the exact fail-open shape this whole framework exists to rule out. `data.staleness` is
+	// passed straight through.
+	const staleness = $derived(data.staleness);
 
 	// §2.1.4 NAV-at-three-reference-dates panel (SELF-223 · V1.1). Backend threads
 	// `pfin.fn_nav_reference_dates()` (migration 073 — authored in parallel, not yet merged as

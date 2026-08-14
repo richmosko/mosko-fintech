@@ -33,8 +33,9 @@
 	D1 stale-data-marker (SELF-229 ramp, distinct signal from the carried-CPI note above):
 	`staleness` is the SAME whole-user `046` fn_aggregation_has_stale_constituent() payload the
 	§2.1.1 headline already consumes, threaded down unchanged. Rendered beside this surface's own
-	section heading. ADR-013 D1: the surface list at PRD §2.4.4 is illustrative-not-exhaustive;
-	further surfaces ramp at V1.2-V1.5 milestones (§2.2, §2.3, §2.5, §2.6).
+	section heading. Per ADR-013 D1 (staleness-marking surface scope is illustrative, not
+	exhaustive), further surfaces ramp later — Sec F4 (AMBER round): read D1 live, this line is a
+	paraphrase not a quote.
 
 	VALUE-COLOR FENCE (design-system-spec §5 fence 1) — THE OPPOSITE SCOPING FROM NavDeltaPanel:
 	`nav` / `nav_prior_yr_dollars` are NAV LEVELS (positions), not deltas, so NEITHER --c-pos NOR
@@ -55,13 +56,14 @@
 		formatUsd,
 		type NavReferenceDateRow
 	} from '$lib/nav-reference-dates';
-	import { EMPTY_STALENESS, type StalenessData } from '$lib/staleness/stale-constituent';
+	import type { StalenessData } from '$lib/staleness/stale-constituent';
 	import StaleConstituentBadge from './StaleConstituentBadge.svelte';
 
-	let {
-		rows,
-		staleness = EMPTY_STALENESS
-	}: { rows: NavReferenceDateRow[] | null; staleness?: StalenessData } = $props();
+	// Sec F3(B) (F/CTO-ruled): `staleness` is REQUIRED, no default — a caller that forgets to
+	// thread real staleness data now fails at TYPECHECK, not as a silent "confirmed healthy"
+	// fallback. The live mount (+page.svelte) already passes the real loader value unconditionally.
+	let { rows, staleness }: { rows: NavReferenceDateRow[] | null; staleness: StalenessData } =
+		$props();
 
 	const readFailed = $derived(rows === null);
 	const orderedRows = $derived(rows ? orderReferenceRows(rows) : []);

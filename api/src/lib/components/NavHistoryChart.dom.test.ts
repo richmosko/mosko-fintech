@@ -14,6 +14,7 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect, beforeEach, type Mock } from 'vitest';
+import { EMPTY_STALENESS } from '$lib/staleness/stale-constituent';
 import { render } from '@testing-library/svelte';
 import NavHistoryChart from './NavHistoryChart.svelte';
 import type { NavSeriesPoint } from '$lib/nav-series';
@@ -97,7 +98,7 @@ const POPULATED = Array.from({ length: 13 }, (_, i) =>
 describe('NavHistoryChart — placeholder-state gating never collapses distinct states', () => {
 	it('paramsError set: renders the error notice, never the empty/unavailable copy', () => {
 		const { getByText, queryByText } = render(NavHistoryChart, {
-			props: {
+			props: { staleness: EMPTY_STALENESS,
 				points: [],
 				paramsError: 'granularity: Invalid enum value',
 				params: PARAMS,
@@ -111,7 +112,7 @@ describe('NavHistoryChart — placeholder-state gating never collapses distinct 
 
 	it('points === null (read failed): renders the unavailable notice, never the empty-history copy', () => {
 		const { getByText, queryByText } = render(NavHistoryChart, {
-			props: { points: null, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+			props: { staleness: EMPTY_STALENESS, points: null, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
 		});
 		expect(getByText(/temporarily unavailable/)).toBeTruthy();
 		expect(queryByText('Collect data over time.')).toBeNull();
@@ -119,7 +120,7 @@ describe('NavHistoryChart — placeholder-state gating never collapses distinct 
 
 	it('points === [] (genuinely empty): renders "Collect data over time.", never the unavailable copy', () => {
 		const { getByText, queryByText } = render(NavHistoryChart, {
-			props: { points: [], paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+			props: { staleness: EMPTY_STALENESS, points: [], paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
 		});
 		expect(getByText('Collect data over time.')).toBeTruthy();
 		expect(queryByText(/temporarily unavailable/)).toBeNull();
@@ -129,7 +130,7 @@ describe('NavHistoryChart — placeholder-state gating never collapses distinct 
 describe('NavHistoryChart — default render (populated series)', () => {
 	it('renders both legend entries and the granularity chip-group', () => {
 		const { getByText, getByRole } = render(NavHistoryChart, {
-			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+			props: { staleness: EMPTY_STALENESS, points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
 		});
 		expect(getByText('Net Worth (Nominal)')).toBeTruthy();
 		expect(getByText('Net Worth (Inflation-Adjusted)')).toBeTruthy();
@@ -138,7 +139,7 @@ describe('NavHistoryChart — default render (populated series)', () => {
 
 	it('the selected granularity chip carries aria-checked="true"; the others false', () => {
 		const { getByRole } = render(NavHistoryChart, {
-			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+			props: { staleness: EMPTY_STALENESS, points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
 		});
 		const monthly = getByRole('radio', { name: 'Monthly' });
 		const weekly = getByRole('radio', { name: 'Weekly' });
@@ -154,7 +155,7 @@ describe('NavHistoryChart — default render (populated series)', () => {
 			cpi_coverage_through: null
 		}));
 		const { queryByText, getByText } = render(NavHistoryChart, {
-			props: {
+			props: { staleness: EMPTY_STALENESS,
 				points: cpiUnavailablePoints,
 				paramsError: null,
 				params: PARAMS,
@@ -167,7 +168,7 @@ describe('NavHistoryChart — default render (populated series)', () => {
 
 	it('clicking a granularity chip navigates via goto with the NAMESPACED query param', async () => {
 		const { getByRole } = render(NavHistoryChart, {
-			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+			props: { staleness: EMPTY_STALENESS, points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
 		});
 		const daily = getByRole('radio', { name: 'Daily' });
 		daily.click();
@@ -184,7 +185,7 @@ describe('NavHistoryChart — default render (populated series)', () => {
 	it('⭐ a stray non-chart param on the page URL survives a granularity-chip navigation untouched', async () => {
 		setPageUrl('http://localhost/?utm_source=newsletter');
 		const { getByRole } = render(NavHistoryChart, {
-			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+			props: { staleness: EMPTY_STALENESS, points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
 		});
 		const daily = getByRole('radio', { name: 'Daily' });
 		daily.click();
@@ -204,7 +205,7 @@ describe('NavHistoryChart — reset breadcrumb is namespace-scoped, not page-sco
 	it('a page URL with ONLY a stray non-chart param does NOT show "Reset to 60 months"', () => {
 		setPageUrl('http://localhost/?utm_source=newsletter');
 		const { queryByText, getByText } = render(NavHistoryChart, {
-			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+			props: { staleness: EMPTY_STALENESS, points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
 		});
 		expect(queryByText('Reset to 60 months')).toBeNull();
 		// The non-breadcrumb range label renders instead — proves the false branch is reachable
@@ -215,7 +216,7 @@ describe('NavHistoryChart — reset breadcrumb is namespace-scoped, not page-sco
 	it('a page URL WITH a chart_* param shows "Reset to 60 months"', () => {
 		setPageUrl('http://localhost/?chart_granularity=daily');
 		const { getByText } = render(NavHistoryChart, {
-			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+			props: { staleness: EMPTY_STALENESS, points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
 		});
 		expect(getByText('Reset to 60 months')).toBeTruthy();
 	});
@@ -223,7 +224,7 @@ describe('NavHistoryChart — reset breadcrumb is namespace-scoped, not page-sco
 	it('⭐ clicking reset clears only chart_* keys — a stray non-chart param on the URL survives', async () => {
 		setPageUrl('http://localhost/?utm_source=newsletter&chart_granularity=daily&chart_start=2026-01-01');
 		const { getByText } = render(NavHistoryChart, {
-			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+			props: { staleness: EMPTY_STALENESS, points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
 		});
 		getByText('Reset to 60 months').click();
 		await Promise.resolve();
@@ -254,7 +255,7 @@ describe('SELF-220-QA-r1 — resolution-disclosure copy, bound to the UX-ruled s
 	it('imported-only (no cron yet): renders the RULED no-boundary-date copy verbatim', () => {
 		const boundary = { first_cron_checkpoint: null, has_cron_rows: false, has_imported_rows: true };
 		const { getByText } = render(NavHistoryChart, {
-			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary }
+			props: { staleness: EMPTY_STALENESS, points: POPULATED, paramsError: null, params: PARAMS, boundary }
 		});
 		// Bound to the EXACT ruled string (team-lead, 2026-08-12) — not a substring/regex
 		// match, so a future edit that alters the copy fails here rather than passing on a
@@ -268,7 +269,7 @@ describe('SELF-220-QA-r1 — resolution-disclosure copy, bound to the UX-ruled s
 		const boundary = { first_cron_checkpoint: '2026-01-01', has_cron_rows: true, has_imported_rows: true };
 		const preBoundaryPoint = point({ point_date: '2025-06-15', checkpoint_date: '2025-06-15' });
 		const { getByText, queryByText } = render(NavHistoryChart, {
-			props: { points: [preBoundaryPoint, ...POPULATED], paramsError: null, params: PARAMS, boundary }
+			props: { staleness: EMPTY_STALENESS, points: [preBoundaryPoint, ...POPULATED], paramsError: null, params: PARAMS, boundary }
 		});
 		expect(getByText(/Monthly resolution before/)).toBeTruthy();
 		expect(getByText('January 2026', { selector: '.basis-value' })).toBeTruthy();
@@ -278,7 +279,7 @@ describe('SELF-220-QA-r1 — resolution-disclosure copy, bound to the UX-ruled s
 	it('cron-only (no imported rows at all): the disclosure never renders — nothing to disclose', () => {
 		const boundary = { first_cron_checkpoint: '2026-01-01', has_cron_rows: true, has_imported_rows: false };
 		const { queryByText } = render(NavHistoryChart, {
-			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary }
+			props: { staleness: EMPTY_STALENESS, points: POPULATED, paramsError: null, params: PARAMS, boundary }
 		});
 		expect(queryByText(/Monthly resolution/)).toBeNull();
 	});
@@ -292,7 +293,7 @@ describe('SELF-220-QA-r1 — sparse-history state (§12.9) does not collapse int
 
 	it('sparse series: the tracking-history label renders with the correct "N of M months" text', () => {
 		const { getByText } = render(NavHistoryChart, {
-			props: { points: SPARSE, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+			props: { staleness: EMPTY_STALENESS, points: SPARSE, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
 		});
 		// PARAMS spans 2021-06-01..2026-06-01 = 60 requested months; SPARSE carries 5
 		// distinct calendar months — both halves of the label are asserted so a
@@ -303,7 +304,7 @@ describe('SELF-220-QA-r1 — sparse-history state (§12.9) does not collapse int
 
 	it('a populated (non-sparse) series never renders the tracking-history label', () => {
 		const { queryByText } = render(NavHistoryChart, {
-			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+			props: { staleness: EMPTY_STALENESS, points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
 		});
 		expect(queryByText(/months of history/)).toBeNull();
 	});
@@ -322,7 +323,7 @@ describe('SELF-220-QA-r1 — staleness markers fire post-boundary ONLY (§12.1/�
 		});
 		const postBoundaryFresh = point({ point_date: '2026-04-30', checkpoint_date: '2026-04-30' });
 		const { getAllByRole } = render(NavHistoryChart, {
-			props: {
+			props: { staleness: EMPTY_STALENESS,
 				points: [preBoundaryCarried, postBoundaryCarried, postBoundaryFresh],
 				paramsError: null,
 				params: PARAMS,
@@ -355,7 +356,7 @@ describe('SELF-220-QA-r1 — staleness markers fire post-boundary ONLY (§12.1/�
 		const carried1 = point({ point_date: '2018-01-31', checkpoint_date: '2017-12-31' });
 		const carried2 = point({ point_date: '2018-02-28', checkpoint_date: '2018-01-31' });
 		const { queryAllByRole } = render(NavHistoryChart, {
-			props: {
+			props: { staleness: EMPTY_STALENESS,
 				points: [carried1, carried2],
 				paramsError: null,
 				params: PARAMS,
@@ -404,7 +405,7 @@ describe('SELF-220-QA-r3 — imported-only state, reconciled: state-driven marke
 
 	it('(A) state-driven: zero .stale-marker elements — not coupled to aria-label copy', () => {
 		const { container } = render(NavHistoryChart, {
-			props: {
+			props: { staleness: EMPTY_STALENESS,
 				points: CARRIED_IMPORTED_POINTS,
 				paramsError: null,
 				params: PARAMS,
@@ -422,7 +423,7 @@ describe('SELF-220-QA-r3 — imported-only state, reconciled: state-driven marke
 		// stepped path can render even under a bug that misclassifies everything else.
 		// The discriminating signal is the ABSENCE of the plain (non-stepped) segment.
 		const { container } = render(NavHistoryChart, {
-			props: {
+			props: { staleness: EMPTY_STALENESS,
 				points: CARRIED_IMPORTED_POINTS,
 				paramsError: null,
 				params: PARAMS,
@@ -478,7 +479,7 @@ describe('SELF-220-QA-r4 — boundary READ FAILURE (EMPTY tuple) + real carried 
 
 	it('⭐ RED-at-e0edfac: staleness markers SHOW under EMPTY_NAV_BOUNDARY — a boundary read failure must not silently hide real staleness', () => {
 		const { container } = render(NavHistoryChart, {
-			props: {
+			props: { staleness: EMPTY_STALENESS,
 				points: CARRIED_POINTS_UNDER_FAILED_BOUNDARY,
 				paramsError: null,
 				params: PARAMS,
@@ -496,7 +497,7 @@ describe('SELF-220-QA-r4 — boundary READ FAILURE (EMPTY tuple) + real carried 
 
 	it('⭐ RED-at-e0edfac: the resolution-disclosure does NOT fire under EMPTY_NAV_BOUNDARY — nothing to disclose when has_imported_rows is false', () => {
 		const { container } = render(NavHistoryChart, {
-			props: {
+			props: { staleness: EMPTY_STALENESS,
 				points: CARRIED_POINTS_UNDER_FAILED_BOUNDARY,
 				paramsError: null,
 				params: PARAMS,
@@ -512,9 +513,12 @@ describe('SELF-220-QA-r4 — boundary READ FAILURE (EMPTY tuple) + real carried 
 });
 
 describe('NavHistoryChart — SELF-229 D1 stale-data-marker (whole-user, shared with the other 3 surfaces)', () => {
-	it('staleness prop omitted → zero-footprint, no badge markup', () => {
+	// Sec F3(B) (F/CTO-ruled): `staleness` is now a REQUIRED prop — there is no more implicit
+	// "omitted" case (a caller that forgets it fails at TYPECHECK). This asserts the explicit
+	// EMPTY_STALENESS (confirmed-healthy) value stays zero-footprint, same as before.
+	it('staleness confirmed healthy (EMPTY_STALENESS) → zero-footprint, no badge markup', () => {
 		const { queryByText } = render(NavHistoryChart, {
-			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+			props: { staleness: EMPTY_STALENESS, points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
 		});
 		expect(queryByText('May be stale')).toBeNull();
 	});
@@ -660,7 +664,7 @@ describe('SELF-229-QA — three distinct staleness/carry signals never collapse 
 	it('checkpoint-carry signal varied ALONE (no D1 staleness, no CPI-carry): only the carry marker renders', () => {
 		const points = [FRESH('2026-01-15'), CHECKPOINT_CARRIED('2026-02-15', '2026-01-10'), FRESH('2026-03-15')];
 		const { container } = render(NavHistoryChart, {
-			props: { points, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+			props: { staleness: EMPTY_STALENESS, points, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
 		});
 		expect(counts(container)).toEqual({ badge: 0, carry: 1, cpi: 0 });
 	});
@@ -668,7 +672,7 @@ describe('SELF-229-QA — three distinct staleness/carry signals never collapse 
 	it('CPI-carry signal varied ALONE (no D1 staleness, no checkpoint-carry): only the info-badge renders', () => {
 		const points = [FRESH('2026-01-15'), CPI_CARRIED('2026-02-15'), FRESH('2026-03-15')];
 		const { container } = render(NavHistoryChart, {
-			props: { points, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+			props: { staleness: EMPTY_STALENESS, points, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
 		});
 		expect(counts(container)).toEqual({ badge: 0, carry: 0, cpi: 1 });
 	});

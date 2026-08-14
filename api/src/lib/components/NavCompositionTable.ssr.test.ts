@@ -23,6 +23,7 @@ import { describe, it, expect } from 'vitest';
 import { render } from 'svelte/server';
 import NavCompositionTable from './NavCompositionTable.svelte';
 import type { NavComposition } from '$lib/nav-composition';
+import { EMPTY_STALENESS } from '$lib/staleness/stale-constituent';
 import type { StaleConstituentItem } from '$lib/staleness/stale-constituent';
 
 const fixture: NavComposition = {
@@ -54,7 +55,7 @@ const fixture: NavComposition = {
 
 describe('NavCompositionTable — 3 visual tiers (AC#4)', () => {
 	it('renders category group-rows, buildup subtotals, and the NAV foot as distinct tiers', () => {
-		const { body } = render(NavCompositionTable, { props: { composition: fixture } });
+		const { body } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: fixture } });
 		// Svelte scopes component classes (e.g. `class="subtotal svelte-xxxx"`) → substring match.
 		expect(body).toContain('group-head'); // tier 1 — category header
 		expect(body).toContain('subtotal'); // tier 2 — buildup ladder
@@ -64,20 +65,20 @@ describe('NavCompositionTable — 3 visual tiers (AC#4)', () => {
 
 describe('NavCompositionTable — collapse default COLLAPSED (AC#2)', () => {
 	it('every category is a keyboard-native <button aria-expanded="false"> disclosure', () => {
-		const { body } = render(NavCompositionTable, { props: { composition: fixture } });
+		const { body } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: fixture } });
 		expect(body).toContain('aria-expanded="false"');
 		expect(body).toContain('▸'); // closed caret
 		expect(body).not.toContain('▾'); // no open caret in the collapsed default
 	});
 
 	it('leaf account rows are ABSENT until expanded (no /accounts/[id] link in the initial render)', () => {
-		const { body } = render(NavCompositionTable, { props: { composition: fixture } });
+		const { body } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: fixture } });
 		expect(body).not.toContain('/accounts/1');
 		expect(body).not.toContain('Brokerage');
 	});
 
 	it('renders the category display labels on the (collapsed) group headers', () => {
-		const { body } = render(NavCompositionTable, { props: { composition: fixture } });
+		const { body } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: fixture } });
 		expect(body).toContain('Investment');
 		expect(body).toContain('Liability');
 	});
@@ -85,7 +86,7 @@ describe('NavCompositionTable — collapse default COLLAPSED (AC#2)', () => {
 
 describe('NavCompositionTable — buildup ladder (AC#4) + signs (D5) + tax placeholders (AC#6/D7)', () => {
 	it('renders the ladder labels in the exact ratified order', () => {
-		const { body } = render(NavCompositionTable, { props: { composition: fixture } });
+		const { body } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: fixture } });
 		const order = ['Total Non-RE', 'Gross Total', 'Debt', 'Realized Tax Liab', 'Unrealized Tax Liab'];
 		let cursor = -1;
 		for (const label of order) {
@@ -96,18 +97,18 @@ describe('NavCompositionTable — buildup ladder (AC#4) + signs (D5) + tax place
 	});
 
 	it('renders Debt as a SUBTRACTION (−$150,000) — the positive magnitude negated (D5)', () => {
-		const { body } = render(NavCompositionTable, { props: { composition: fixture } });
+		const { body } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: fixture } });
 		expect(body).toContain('-$150,000');
 	});
 
 	it('renders the two tax placeholders as $0 + the V1.4 caption (AC#6 / D7)', () => {
-		const { body } = render(NavCompositionTable, { props: { composition: fixture } });
+		const { body } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: fixture } });
 		expect(body).toContain('$0');
 		expect(body).toContain('(from §2.5) · full estimate arrives in V1.4');
 	});
 
 	it('renders the NAV foot whole-dollar (echoes the §2.1.1 headline, D9)', () => {
-		const { body } = render(NavCompositionTable, { props: { composition: fixture } });
+		const { body } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: fixture } });
 		expect(body).toContain('Net Assets Value (NAV)');
 		expect(body).toContain('$350,000');
 	});
@@ -120,7 +121,7 @@ describe('NavCompositionTable — empty-groups tree (D3 empty categories omitted
 			buildups: { total_non_re: 0, gross_total: 0, debt: 0, realized_tax_liab: 0, unrealized_tax_liab: 0 },
 			nav: 0
 		};
-		const { body } = render(NavCompositionTable, { props: { composition: empty } });
+		const { body } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: empty } });
 		expect(body).toContain('Net Assets Value (NAV)');
 		expect(body).toContain('Total Non-RE');
 		expect(body).not.toContain('group-head'); // no category headers
@@ -129,12 +130,15 @@ describe('NavCompositionTable — empty-groups tree (D3 empty categories omitted
 
 describe('NavCompositionTable — SELF-229 section shell + D1 stale-data-marker', () => {
 	it('owns its own "Composition" section heading (moved in from +page.svelte)', () => {
-		const { body } = render(NavCompositionTable, { props: { composition: fixture } });
+		const { body } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: fixture } });
 		expect(body).toContain('>Composition<');
 	});
 
-	it('staleness prop omitted → zero-footprint, no badge markup', () => {
-		const { body } = render(NavCompositionTable, { props: { composition: fixture } });
+	// Sec F3(B) (F/CTO-ruled): `staleness` is now a REQUIRED prop — there is no more implicit
+	// "omitted" case (a caller that forgets it fails at TYPECHECK). This asserts the explicit
+	// EMPTY_STALENESS (confirmed-healthy) value stays zero-footprint, same as before.
+	it('staleness confirmed healthy (EMPTY_STALENESS) → zero-footprint, no badge markup', () => {
+		const { body } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: fixture } });
 		expect(body).not.toContain('stale-connection-marker');
 		expect(body).not.toContain('May be stale');
 	});

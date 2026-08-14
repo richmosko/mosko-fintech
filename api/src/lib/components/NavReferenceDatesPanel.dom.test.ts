@@ -13,6 +13,7 @@ import { describe, it, expect } from 'vitest';
 import { render } from '@testing-library/svelte';
 import NavReferenceDatesPanel from './NavReferenceDatesPanel.svelte';
 import type { NavReferenceDateRow } from '$lib/nav-reference-dates';
+import { EMPTY_STALENESS } from '$lib/staleness/stale-constituent';
 import type { StaleConstituentItem } from '$lib/staleness/stale-constituent';
 
 function row(
@@ -70,7 +71,7 @@ describe('NavReferenceDatesPanel — D1 badge (canary, connection-health) stays 
 
 	it('D1 healthy + a per-row carried-CPI flag present: ONLY the carried-flag renders, no D1 badge', () => {
 		const rows = fixture({ this_month: { cpi_any_carried: true, cpi_period: '2026-06-01' } });
-		const { container } = render(NavReferenceDatesPanel, { props: { rows } });
+		const { container } = render(NavReferenceDatesPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 		expect(container.querySelector('.stale-connection-marker')).toBeNull();
 		expect(container.querySelector('.carried-flag')).not.toBeNull();
 	});

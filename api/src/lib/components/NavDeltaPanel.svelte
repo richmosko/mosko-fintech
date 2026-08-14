@@ -46,8 +46,9 @@
 	from the `.carried-note` basis line below: the stale-data-marker (canary hue) flags an
 	unhealthy CONNECTION; the carried-note (neutral ink, informational tier) flags a carried
 	CPI-U REFERENCE SERIES — two different staleness sources per PRD §2.4.4, never merged
-	into one signal. ADR-013 D1: the surface list at PRD §2.4.4 is illustrative-not-exhaustive;
-	further surfaces ramp at V1.2-V1.5 milestones (§2.2, §2.3, §2.5, §2.6).
+	into one signal. Per ADR-013 D1 (staleness-marking surface scope is illustrative, not
+	exhaustive), further surfaces ramp later — Sec F4 (AMBER round): read D1 live, this line is a
+	paraphrase not a quote.
 -->
 <script lang="ts">
 	import {
@@ -68,13 +69,14 @@
 		anyCpiCarried,
 		type NavDeltaPanelRow
 	} from '$lib/nav-delta-panel';
-	import { EMPTY_STALENESS, type StalenessData } from '$lib/staleness/stale-constituent';
+	import type { StalenessData } from '$lib/staleness/stale-constituent';
 	import StaleConstituentBadge from './StaleConstituentBadge.svelte';
 
-	let {
-		rows,
-		staleness = EMPTY_STALENESS
-	}: { rows: NavDeltaPanelRow[] | null; staleness?: StalenessData } = $props();
+	// Sec F3(B) (F/CTO-ruled): `staleness` is REQUIRED, no default — a caller that forgets to
+	// thread real staleness data now fails at TYPECHECK, not as a silent "confirmed healthy"
+	// fallback. The live mount (+page.svelte) already passes the real loader value unconditionally.
+	let { rows, staleness }: { rows: NavDeltaPanelRow[] | null; staleness: StalenessData } =
+		$props();
 
 	const readFailed = $derived(rows === null);
 	const orderedRows = $derived(rows ? orderRows(rows) : []);

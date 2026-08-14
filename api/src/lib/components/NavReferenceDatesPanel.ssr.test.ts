@@ -37,6 +37,7 @@ import { describe, it, expect } from 'vitest';
 import { render } from 'svelte/server';
 import NavReferenceDatesPanel from './NavReferenceDatesPanel.svelte';
 import type { NavReferenceDateRow } from '$lib/nav-reference-dates';
+import { EMPTY_STALENESS } from '$lib/staleness/stale-constituent';
 import type { StaleConstituentItem } from '$lib/staleness/stale-constituent';
 
 function row(
@@ -66,7 +67,7 @@ function fixture(
 
 describe('NavReferenceDatesPanel — read-failed (fail-soft)', () => {
 	it('rows === null → unavailable notice, no table', () => {
-		const { body } = render(NavReferenceDatesPanel, { props: { rows: null } });
+		const { body } = render(NavReferenceDatesPanel, { props: { staleness: EMPTY_STALENESS, rows: null } });
 		expect(body).toContain('temporarily unavailable');
 		expect(body).not.toContain('<table');
 	});
@@ -78,7 +79,7 @@ describe('NavReferenceDatesPanel — normal state', () => {
 			this_month: { nav: 500_000, nav_prior_yr_dollars: 510_000 },
 			prior_month: { nav: -25_000, nav_prior_yr_dollars: -25_500 }
 		});
-		const { body } = render(NavReferenceDatesPanel, { props: { rows } });
+		const { body } = render(NavReferenceDatesPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 
 		for (const label of ['This Month', 'Prior Month', 'Prior Year-End']) {
 			expect(body).toContain(`>${label}<`);
@@ -111,7 +112,7 @@ describe('NavReferenceDatesPanel — insufficient history (AC5 discriminator #1)
 				nav_prior_yr_dollars: null
 			}
 		});
-		const { body } = render(NavReferenceDatesPanel, { props: { rows } });
+		const { body } = render(NavReferenceDatesPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 		expect(body).toContain('Insufficient history');
 		expect(body).toContain('colspan="2"');
 		// The other two rows are unaffected.
@@ -124,7 +125,7 @@ describe('NavReferenceDatesPanel — cpi_unavailable (AC5 discriminator #2)', ()
 		const rows = fixture({
 			this_month: { cpi_unavailable: true, nav: 500_000, nav_prior_yr_dollars: null }
 		});
-		const { body } = render(NavReferenceDatesPanel, { props: { rows } });
+		const { body } = render(NavReferenceDatesPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 		expect(body).toContain('CPI unavailable');
 		expect(body).toContain('$500,000');
 		expect(body).not.toContain('Insufficient history');
@@ -139,7 +140,7 @@ describe('NavReferenceDatesPanel — cpi_unavailable (AC5 discriminator #2)', ()
 				nav_prior_yr_dollars: null
 			}
 		});
-		const { body } = render(NavReferenceDatesPanel, { props: { rows } });
+		const { body } = render(NavReferenceDatesPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 		expect(body).toContain('CPI unavailable');
 		expect(body).toContain('Insufficient history');
 		// Structurally distinct markup, not the same "—" glyph used for both.
@@ -154,7 +155,7 @@ describe('NavReferenceDatesPanel — ALL THREE ROWS insufficient history (QA Fin
 			prior_month: { reference_checkpoint_date: null, nav: null, nav_prior_yr_dollars: null },
 			prior_year_end: { reference_checkpoint_date: null, nav: null, nav_prior_yr_dollars: null }
 		});
-		const { body } = render(NavReferenceDatesPanel, { props: { rows } });
+		const { body } = render(NavReferenceDatesPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 
 		// Three badges, one per row — not a single page-level "no data" fallback in place of the
 		// table (that would be the readFailed/null-rows branch, a DIFFERENT state entirely).
@@ -200,7 +201,7 @@ describe('NavReferenceDatesPanel — January edge case: Prior Month = Prior Year
 				nav_prior_yr_dollars: 480_000
 			}
 		});
-		const { body } = render(NavReferenceDatesPanel, { props: { rows } });
+		const { body } = render(NavReferenceDatesPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 
 		// Both labels present — no row was dropped, hidden, or merged into the other.
 		expect(body).toContain('>Prior Month<');
@@ -222,7 +223,7 @@ describe('NavReferenceDatesPanel — SELF-229 January-family copy (words only, n
 			prior_month: { reference_date: '2025-12-31', reference_checkpoint_date: '2025-12-31', nav: 480_000 },
 			prior_year_end: { reference_date: '2025-12-31', reference_checkpoint_date: '2025-12-31', nav: 480_000 }
 		});
-		const { body } = render(NavReferenceDatesPanel, { props: { rows } });
+		const { body } = render(NavReferenceDatesPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 		expect(body).toContain('Prior Month and Prior Year-End show identical figures this month');
 		// Never claims either row is the ONLY exact one (migration 073's own ruling).
 		expect(body).not.toContain('only exact row');
@@ -238,7 +239,7 @@ describe('NavReferenceDatesPanel — SELF-229 January-family copy (words only, n
 			prior_month: { cpi_period: '2025-12-01', cpi_basis_period: '2025-12-01' },
 			prior_year_end: { cpi_period: '2025-12-01', cpi_basis_period: '2025-12-01' }
 		});
-		const { body } = render(NavReferenceDatesPanel, { props: { rows } });
+		const { body } = render(NavReferenceDatesPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 		expect(body).toContain('match exactly across all three rows');
 	});
 
@@ -251,7 +252,7 @@ describe('NavReferenceDatesPanel — SELF-229 January-family copy (words only, n
 			prior_month: { reference_date: '2026-06-30', reference_checkpoint_date: '2026-06-30', cpi_period: '2026-06-01' },
 			prior_year_end: { reference_date: '2025-12-31', reference_checkpoint_date: '2025-12-31', cpi_period: '2025-12-01' }
 		});
-		const { body } = render(NavReferenceDatesPanel, { props: { rows } });
+		const { body } = render(NavReferenceDatesPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 		expect(body).not.toContain('Prior Month and Prior Year-End show identical figures');
 		expect(body).not.toContain('match exactly across all three rows');
 	});
@@ -261,7 +262,7 @@ describe('NavReferenceDatesPanel — SELF-229 January-family copy (words only, n
 			this_month: { cpi_any_carried: true, cpi_period: '2025-12-01' },
 			prior_month: { cpi_any_carried: false }
 		});
-		const { body } = render(NavReferenceDatesPanel, { props: { rows } });
+		const { body } = render(NavReferenceDatesPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 		expect(body).toContain('carried-flag');
 		expect(body).toContain('Carried forward');
 		expect(body).toContain('No action needed');
@@ -269,7 +270,7 @@ describe('NavReferenceDatesPanel — SELF-229 January-family copy (words only, n
 
 	it('no carried rows → zero carried-flag markers', () => {
 		const rows = fixture();
-		const { body } = render(NavReferenceDatesPanel, { props: { rows } });
+		const { body } = render(NavReferenceDatesPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 		expect(body).not.toContain('carried-flag');
 		expect(body).not.toContain('Carried forward');
 	});
@@ -284,9 +285,12 @@ describe('NavReferenceDatesPanel — SELF-229 D1 stale-data-marker (whole-user, 
 		status_class: null
 	};
 
-	it('staleness prop omitted → zero-footprint, no badge markup', () => {
+	// Sec F3(B) (F/CTO-ruled): `staleness` is now a REQUIRED prop — there is no more implicit
+	// "omitted" case (a caller that forgets it fails at TYPECHECK). This asserts the explicit
+	// EMPTY_STALENESS (confirmed-healthy) value stays zero-footprint, same as before.
+	it('staleness confirmed healthy (EMPTY_STALENESS) → zero-footprint, no badge markup', () => {
 		const rows = fixture();
-		const { body } = render(NavReferenceDatesPanel, { props: { rows } });
+		const { body } = render(NavReferenceDatesPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 		expect(body).not.toContain('stale-connection-marker');
 		expect(body).not.toContain('May be stale');
 	});

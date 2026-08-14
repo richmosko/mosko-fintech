@@ -17,6 +17,7 @@ import { describe, it, expect } from 'vitest';
 import { render } from 'svelte/server';
 import NavDeltaPanel from './NavDeltaPanel.svelte';
 import { isCpiApplicable, type NavDeltaPanelRow } from '$lib/nav-delta-panel';
+import { EMPTY_STALENESS } from '$lib/staleness/stale-constituent';
 import type { StaleConstituentItem } from '$lib/staleness/stale-constituent';
 
 function row(overrides: Partial<NavDeltaPanelRow> & { horizon: NavDeltaPanelRow['horizon'] }): NavDeltaPanelRow {
@@ -42,7 +43,7 @@ function fixture(overrides: Partial<Record<NavDeltaPanelRow['horizon'], Partial<
 
 describe('NavDeltaPanel — read-failed (fail-soft)', () => {
 	it('rows === null → unavailable notice, no table', () => {
-		const { body } = render(NavDeltaPanel, { props: { rows: null } });
+		const { body } = render(NavDeltaPanel, { props: { staleness: EMPTY_STALENESS, rows: null } });
 		expect(body).toContain('temporarily unavailable');
 		expect(body).not.toContain('<table');
 	});
@@ -54,7 +55,7 @@ describe('NavDeltaPanel — normal state', () => {
 			month: { delta_nominal: -1200, delta_percent: -0.8 },
 			ytd: { delta_nominal: 3400, delta_percent: 2.1 }
 		});
-		const { body } = render(NavDeltaPanel, { props: { rows } });
+		const { body } = render(NavDeltaPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 
 		// All 5 horizon labels present.
 		for (const label of ['Month', 'YTD', '1-Year', '3-Year', '5-Year']) {
@@ -82,7 +83,7 @@ describe('NavDeltaPanel — normal state', () => {
 
 	it('a CPI-applicable row with a real inflation-adjusted figure renders dollar + percent (AC3)', () => {
 		const rows = fixture({ '1y': { delta_inflation_adjusted: 9_000, delta_inflation_adjusted_percent: 4.5 } });
-		const { body } = render(NavDeltaPanel, { props: { rows } });
+		const { body } = render(NavDeltaPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 		expect(body).toContain('+$9,000');
 		expect(body).toContain('+4.5%');
 	});
@@ -99,7 +100,7 @@ describe('NavDeltaPanel — insufficient history (AC4)', () => {
 				delta_inflation_adjusted_percent: null
 			}
 		});
-		const { body } = render(NavDeltaPanel, { props: { rows } });
+		const { body } = render(NavDeltaPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 		expect(body).toContain('Insufficient history');
 		expect(body).toContain('colspan="2"');
 		// The other four rows are unaffected.
@@ -118,7 +119,7 @@ describe('NavDeltaPanel — cpi_unavailable (structural discriminator #2)', () =
 				delta_percent: 9.4
 			}
 		});
-		const { body } = render(NavDeltaPanel, { props: { rows } });
+		const { body } = render(NavDeltaPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 		expect(body).toContain('CPI unavailable');
 		// The nominal figure for that same row still renders — the outage is scoped to real terms only.
 		expect(body).toContain('+$22,000');
@@ -132,7 +133,7 @@ describe('NavDeltaPanel — carried CPI basis (AC5(iv), panel-wide Jan/Feb copy)
 			'3y': { cpi_any_carried: true },
 			'5y': { cpi_any_carried: true }
 		});
-		const { body } = render(NavDeltaPanel, { props: { rows } });
+		const { body } = render(NavDeltaPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 		expect(body).toContain('December 2025');
 		expect(body).toContain('Carried forward');
 		expect(body).toContain('one to two months in arrears');
@@ -145,7 +146,7 @@ describe('NavDeltaPanel — carried CPI basis (AC5(iv), panel-wide Jan/Feb copy)
 	});
 
 	it('no carried rows → basis line present, no carried-note copy', () => {
-		const { body } = render(NavDeltaPanel, { props: { rows: fixture() } });
+		const { body } = render(NavDeltaPanel, { props: { staleness: EMPTY_STALENESS, rows: fixture() } });
 		expect(body).toContain('CPI-U basis through');
 		expect(body).not.toContain('Carried forward');
 	});
@@ -232,7 +233,7 @@ describe('NavDeltaPanel — real backend sample (SELF-222 hand-off, seeded tenan
 	];
 
 	it('renders without crashing and shows all-negative deltas correctly signed', () => {
-		const { body } = render(NavDeltaPanel, { props: { rows: realSample } });
+		const { body } = render(NavDeltaPanel, { props: { staleness: EMPTY_STALENESS, rows: realSample } });
 		// Every horizon is a loss in this seed — every NAV Delta cell should be a .neg U+2212 figure.
 		expect(body).toContain('−$8,217,654');
 		expect(body).toContain('−99.4%');
@@ -244,7 +245,7 @@ describe('NavDeltaPanel — real backend sample (SELF-222 hand-off, seeded tenan
 	});
 
 	it('month/ytd rows with SQL-NULL (not false) cpi_any_carried/cpi_unavailable render "—" for Inflation Adjusted', () => {
-		const { body } = render(NavDeltaPanel, { props: { rows: realSample } });
+		const { body } = render(NavDeltaPanel, { props: { staleness: EMPTY_STALENESS, rows: realSample } });
 		const monthRow = body.split('>Month<')[1]?.split('</tr>')[0] ?? '';
 		expect(monthRow).toContain('—');
 	});
@@ -253,14 +254,14 @@ describe('NavDeltaPanel — real backend sample (SELF-222 hand-off, seeded tenan
 describe('NavDeltaPanel — delta_percent NULL vs zero (AC2 / migration AC2)', () => {
 	it('a real zero percent renders "0.0%", never "—"', () => {
 		const rows = fixture({ month: { delta_nominal: 0, delta_percent: 0 } });
-		const { body } = render(NavDeltaPanel, { props: { rows } });
+		const { body } = render(NavDeltaPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 		expect(body).toContain('0.0%');
 		expect(body).toContain('$0');
 	});
 
 	it('a NULL percent (non-positive anchor) renders "—" in the percent slot, never "0.0%", nominal still shows', () => {
 		const rows = fixture({ ytd: { delta_nominal: 500, delta_percent: null } });
-		const { body } = render(NavDeltaPanel, { props: { rows } });
+		const { body } = render(NavDeltaPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 		expect(body).toContain('+$500');
 		expect(body).not.toContain('(+0.0%)');
 		expect(body).not.toContain('0.0%');
@@ -271,7 +272,7 @@ describe('NavDeltaPanel — delta_percent NULL vs zero (AC2 / migration AC2)', (
 			month: { delta_nominal: 0, delta_percent: 0 },
 			ytd: { delta_nominal: 500, delta_percent: null }
 		});
-		const { body } = render(NavDeltaPanel, { props: { rows } });
+		const { body } = render(NavDeltaPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 		expect(body).toContain('0.0%');
 		expect(body).toContain('+$500');
 	});
@@ -280,7 +281,7 @@ describe('NavDeltaPanel — delta_percent NULL vs zero (AC2 / migration AC2)', (
 describe('NavDeltaPanel — Inflation Adjusted percent (072 AC3 amendment)', () => {
 	it('a normal CPI-applicable row renders dollar + percent in the NAV-Delta-matching format', () => {
 		const rows = fixture({ '3y': { delta_inflation_adjusted: -2500, delta_inflation_adjusted_percent: -12.3 } });
-		const { body } = render(NavDeltaPanel, { props: { rows } });
+		const { body } = render(NavDeltaPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 		expect(body).toContain('−$2,500');
 		expect(body).toContain('−12.3%');
 		expect(body).toMatch(/class="num[^"]*\bneg\b[^"]*"/);
@@ -288,14 +289,14 @@ describe('NavDeltaPanel — Inflation Adjusted percent (072 AC3 amendment)', () 
 
 	it('a real zero inflation-adjusted percent renders "0.0%", never "—"', () => {
 		const rows = fixture({ '1y': { delta_inflation_adjusted: 0, delta_inflation_adjusted_percent: 0 } });
-		const { body } = render(NavDeltaPanel, { props: { rows } });
+		const { body } = render(NavDeltaPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 		expect(body).toContain('$0');
 		expect(body).toContain('0.0%');
 	});
 
 	it('ONE-WAY NULL: dollar PRESENT, percent NULL (non-positive deflated base) → dollar shown, "—" in the percent slot, never "0.0%"', () => {
 		const rows = fixture({ '5y': { delta_inflation_adjusted: -1800, delta_inflation_adjusted_percent: null } });
-		const { body } = render(NavDeltaPanel, { props: { rows } });
+		const { body } = render(NavDeltaPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 		expect(body).toContain('−$1,800');
 		expect(body).not.toContain('(−0.0%)');
 		expect(body).not.toContain('(+0.0%)');
@@ -308,7 +309,7 @@ describe('NavDeltaPanel — Inflation Adjusted percent (072 AC3 amendment)', () 
 			'1y': { delta_inflation_adjusted: 0, delta_inflation_adjusted_percent: 0 },
 			'3y': { delta_inflation_adjusted: -1800, delta_inflation_adjusted_percent: null }
 		});
-		const { body } = render(NavDeltaPanel, { props: { rows } });
+		const { body } = render(NavDeltaPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 		expect(body).toContain('0.0%');
 		expect(body).toContain('−$1,800');
 	});
@@ -323,9 +324,12 @@ describe('NavDeltaPanel — SELF-229 D1 stale-data-marker (whole-user, shared wi
 		status_class: null
 	};
 
-	it('staleness prop omitted → zero-footprint, no badge markup', () => {
+	// Sec F3(B) (F/CTO-ruled): `staleness` is now a REQUIRED prop — there is no more implicit
+	// "omitted" case (a caller that forgets it fails at TYPECHECK). This asserts the explicit
+	// EMPTY_STALENESS (confirmed-healthy) value stays zero-footprint, same as before.
+	it('staleness confirmed healthy (EMPTY_STALENESS) → zero-footprint, no badge markup', () => {
 		const rows = fixture();
-		const { body } = render(NavDeltaPanel, { props: { rows } });
+		const { body } = render(NavDeltaPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 		expect(body).not.toContain('stale-connection-marker');
 		expect(body).not.toContain('May be stale');
 	});
