@@ -77,16 +77,19 @@
 -- │          collapses onto the basis-leg case in January, documented not engineered    │
 -- │          around), AND THE BASIS LEG CARRIED ALONE still ORs true table-wide.        │
 -- │ (8)  CPIG zero AND negative CPI on the denominator -> NULL, never raised, never     │
--- │          sign-flipped. Isolated to this_month's own print (⚠ REVISED from           │
--- │          prior_month, which collides with the shared basis in January) — always    │
--- │          isolation-safe, not just eleven months of it.                             │
+-- │          sign-flipped. this_month's own print (⚠ REVISED from prior_month, which    │
+-- │          collides with the shared basis in January) — always isolation-safe. PLUS   │
+-- │          the SHARED BASIS print negative (Sec finding: previously unexercised,      │
+-- │          table-wide cascade, not a duplicate of the this_month leg).                │
 -- │ (9)  T   two-tenant, non-vacuously: identical dates, different nav_values.          │
 -- │ (10) X   cross-tenant / zero-checkpoint tenant -> three all-NULL rows.              │
 -- │ (—)  LEAK ⭐ corrupt-the-control, family convention (not itemized in the migration   │
 -- │          header): nav_daily_select broken open to using(true) must surface a       │
--- │          value OTHER than A's own. NEGATIVE predicate from the start (071/072's    │
--- │          fragile exact-match trap is not repeated here) — fails closed on an       │
--- │          empty result, robust to whichever other tenant's row wins.                │
+-- │          value OTHER than A's own. Probes fn_nav_reference_dates() ITSELF, not the  │
+-- │          table (Sec finding — a table-level probe cannot catch a redundant local    │
+-- │          predicate added to the function). NEGATIVE predicate from the start        │
+-- │          (071/072's fragile exact-match trap is not repeated here) — fails closed   │
+-- │          on an empty result, robust to whichever other tenant's row wins.           │
 -- │ (11) M   aal2 backstop, both legs.                                                  │
 -- │ (12) PST1 catalog posture.                                                          │
 -- │ (13) A   ACL: authenticated yes, PUBLIC no, service_role no, anon no.               │
@@ -104,7 +107,7 @@ begin;
 
 \ir ../_fixtures/rls_verbs.psql
 
--- plan = 37 : 2 fixture pins (Z — z3's "3 pairwise-distinct values" claim was
+-- plan = 38 : 2 fixture pins (Z — z3's "3 pairwise-distinct values" claim was
 -- dropped, it is false in the January CPI-period collision, see the fixture
 -- note below) + 2 prior-year-end exactness (EXACT) + 2 arithmetic (ARITH) +
 -- 1 realistic-CPI-arrears proof (ARREARS1 — not itemized in the migration
@@ -116,12 +119,16 @@ begin;
 -- the month-end coincidence positively rather than skipping it + CAUSE1b
 -- per-row-gate proof on this_month) + 1 CPI-unresolvable full-table (CAUSE2,
 -- also proves item 6) + 1 NAV-side carry on an isolated tenant (CARRY1) + 2
--- CPI-side carry (CARRY-CPI1 reference-leg-only, CARRY-CPI2 basis-only) + 4
+-- CPI-side carry (CARRY-CPI1 reference-leg-only, CARRY-CPI2 basis-only) + 5
 -- CPI guard (CPIG1 zero + CPIG1b prior_year_end unconditional + CPIG1c
--- prior_month, asserting the coincidence positively + CPIG2 negative) + 2
--- two-tenant (T) + 1 cross-tenant (X) + 1 corrupt-the-control leak canary
--- (LEAK) + 2 aal2 (M) + 1 catalog posture (PST1) + 4 ACL (A, incl. anon).
-select plan(37);
+-- prior_month, asserting the coincidence positively + CPIG2 negative on
+-- this_month's own print + CPIG3 negative on the SHARED BASIS print, Sec
+-- finding — the other half of the positivity guard, previously
+-- unexercised, table-wide cascade) + 2 two-tenant (T) + 1 cross-tenant (X)
+-- + 1 corrupt-the-control leak canary (LEAK — Sec finding: now probes
+-- fn_nav_reference_dates() itself, not pfin.nav_daily directly) + 2 aal2
+-- (M) + 1 catalog posture (PST1) + 4 ACL (A, incl. anon).
+select plan(38);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb, _rls.tenant_c() as tc \gset
 \set td '00000000-0000-0000-0000-000000000d73'
@@ -738,6 +745,32 @@ select ok(
 select set_config('role', 'postgres', true);
 rollback to savepoint cpi_negative;
 
+-- ⚠ (CPIG3) THE BASIS-SIDE GUARD HAD NO WATCHER (Sec finding, 2026-08-14,
+--   GREEN verdict flag 2): (CPIG1)/(CPIG2) above corrupt only this_month's
+--   OWN denominator print; nothing in this file made the shared BASIS print
+--   (:yeperiod) itself zero or negative. Deleting the strictly-positive
+--   guard on v_cpi_ye specifically (`and v_cpi_ye > 0` in the body) would
+--   leave all other legs green while re-admitting a sign-flipped
+--   prior-year-dollar figure across the WHOLE table — the basis feeds every
+--   row's deflation, so this is not a duplicate of (CPIG1)/(CPIG2), it is
+--   the other half of the same guard, previously unexercised. Because the
+--   basis is shared, the cascade is table-wide by construction (the SAME
+--   mechanism (CAUSE2) already proves for a deleted basis print) — asserted
+--   on the FULL row, all three references, in one leg.
+savepoint cpi_basis_negative;
+update pfin.cpi_u_index set cpi_value = -50 where cpi_period = :'yeperiod'::date;
+select _rls.set_tenant(:'ta'::uuid);
+select results_eq(
+  $$ select reference, cpi_unavailable, nav_prior_yr_dollars is null, nav is not null
+       from pfin.fn_nav_reference_dates() order by reference $$,
+  $$ values ('prior_month'::text, true, true, true),
+            ('prior_year_end'::text, true, true, true),
+            ('this_month'::text, true, true, true) $$,
+  '(CPIG3) ⭐ NEGATIVE CPI ON THE SHARED BASIS: cpi_unavailable TRUE on ALL THREE rows, nav_prior_yr_dollars NULL everywhere, nav STANDS everywhere — the basis-side positivity guard, exercised for the first time in this file, cascades exactly like a deleted basis print (CAUSE2) rather than degrading silently or sign-flipping a net-worth figure'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint cpi_basis_negative;
+
 -- =====================================================================
 -- (9) T — TWO-TENANT, NON-VACUOUSLY.
 -- =====================================================================
@@ -770,22 +803,33 @@ select set_config('role', 'postgres', true);
 -- (LEAK) ⭐ CORRUPT-THE-CONTROL — proving RLS, not application logic, is the
 --   fence. Family convention (071/072), not individually itemized in this
 --   migration's own header. NEGATIVE predicate from the start: `nav is not
---   null and nav <> 690000` (A''s own this_month checkpoint value at :today
---   is 700000, but the row under test here is the SAME shape as 072''s — we
---   probe nav_daily directly, at-or-before :today, mirroring this_month''s
---   own query). Fails closed on an empty result rather than passing
---   vacuously (the exact vacuous-green path a bare `isnt()` would open, per
---   072''s own corrected leg — not repeated here). Robust to whichever other
---   tenant''s row wins, so it needs no engineered date offset between A and
---   B to stay deterministic.
+--   null and nav <> 700000` (A''s own this_month value). Fails closed on an
+--   empty result rather than passing vacuously (the exact vacuous-green path
+--   a bare `isnt()` would open, per 072''s own corrected leg — not repeated
+--   here). Robust to whichever other tenant''s row wins, so it needs no
+--   engineered date offset between A and B to stay deterministic.
+--   ⚠ SUBJECT IS THE FUNCTION, NOT THE TABLE (Sec finding, 2026-08-14, GREEN
+--   verdict flag 1): an earlier draft probed pfin.nav_daily directly,
+--   at-or-before :today — the SAME shape as 072's leg, but it meant this
+--   canary could never catch the hazard 062's own header calls load-bearing:
+--   a future redundant `users_id = auth.uid()` predicate added LOCALLY to
+--   fn_nav_reference_dates() would keep this leg green (nav_daily's own
+--   policy is still broken open, so the table-level probe still leaks) even
+--   though the function itself had grown a second, masking fence. Probing
+--   pfin.fn_nav_reference_dates() directly closes that gap — this leg now
+--   exercises the SAME code path every other leg in this file does.
+--   Determinism verified: under the sabotage below, every competing
+--   checkpoint at-or-before :today (B 7000000, D 111000, E 45000) differs
+--   from A''s 700000, so the negative predicate cannot pass vacuously
+--   regardless of which one wins.
 -- =====================================================================
 savepoint leak_canary;
 alter policy nav_daily_select on pfin.nav_daily using (true);
 select _rls.set_tenant(:'ta'::uuid);
 select ok(
-  (select nav_value is not null and nav_value <> 700000
-     from pfin.nav_daily where nav_date <= :'today'::date order by nav_date desc limit 1),
-  '(LEAK1) ⭐ CORRUPT-THE-CONTROL: with nav_daily_select broken OPEN, A''s this_month-shaped query (at-or-before :today) returns a NON-NULL value OTHER than A''s own (700000) — proving RLS, not application logic, is what confines tenant A to its own rows. Fails CLOSED on an empty result; robust to whichever other tenant''s row wins: RED here is the proof the fence is real'
+  (select nav is not null and nav <> 700000
+     from pfin.fn_nav_reference_dates() where reference = 'this_month'),
+  '(LEAK1) ⭐ CORRUPT-THE-CONTROL: with nav_daily_select broken OPEN, A''s this_month nav (via fn_nav_reference_dates() itself, not a table probe) is NON-NULL and OTHER than A''s own (700000) — proving RLS, not application logic, is what confines tenant A to its own rows, exercised on the SAME code path the function''s real callers use. Fails CLOSED on an empty result; robust to whichever other tenant''s row wins: RED here is the proof the fence is real'
 );
 select set_config('role', 'postgres', true);
 rollback to savepoint leak_canary;
