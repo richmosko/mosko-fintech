@@ -116,3 +116,14 @@ describe('NavDeltaPanel — SELF-229 tri-state wiring: staleness.is_stale === nu
 		expect(queryByText('May be stale')).toBeNull();
 	});
 });
+
+describe('NavDeltaPanel — Sec F2 surface-level wiring: a malformed (is_stale:true, stale_items:[]) tuple reaches this surface as UNKNOWN', () => {
+	it('is_stale:true paired with an EMPTY stale_items array renders "Staleness unknown", never "May be stale" and never silence', () => {
+		const rows = fixture();
+		const { getByText, queryByText } = render(NavDeltaPanel, {
+			props: { rows, staleness: { is_stale: true, stale_items: [] } }
+		});
+		expect(getByText('Staleness unknown')).toBeTruthy();
+		expect(queryByText('May be stale')).toBeNull();
+	});
+});
