@@ -34,11 +34,9 @@
 	const staleness = $derived(data.staleness ?? EMPTY_STALENESS);
 
 	// §2.1.4 NAV-at-three-reference-dates panel (SELF-223 · V1.1). Backend threads
-	// `pfin.fn_nav_reference_dates()` rows through the loader as `data.navReferenceDates`,
-	// FAIL-SOFT to `null` on a read failure — same convention as `data.navDeltaPanel` below.
-	// ⚠ `navReferenceDates` is a naming assumption pending Backend's actual +page.server.ts
-	// text (same flow as SELF-222: Backend authors it and sends commit-ready text; the
-	// migration itself is being authored in parallel per team-lead's routing).
+	// `pfin.fn_nav_reference_dates()` (migration 073 — authored in parallel, not yet merged as
+	// of this loader) rows through the loader as `data.navReferenceDates`, FAIL-SOFT to `null`
+	// on a read failure — same convention as `data.navDeltaPanel` below.
 	const navReferenceDates = $derived(data.navReferenceDates ?? null);
 
 	// §2.1.3 multi-horizon NAV-delta panel (SELF-222 · V1.1). Backend threads the `071`

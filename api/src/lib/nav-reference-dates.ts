@@ -1,16 +1,22 @@
 // nav-reference-dates.ts — SELF-223 client-side shape + predicates for the §2.1.4 NAV-at-
 // three-reference-dates panel (frontend-owned, non-server). Mirrors the RATIFIED CONTRACT for
-// `pfin.fn_nav_reference_dates()` verbatim (temp/pm-self223-ac-rewrite.md v3-final, jointly
-// agreed PM/Architect, F/CTO ratify pending only the "Prior Month" product call) — the migration
-// itself is being authored in PARALLEL (per team-lead: "don't block on the migration"), so this
-// file is built against the ratified AC text, not an applied `supabase/migrations/*.sql` file.
+// `pfin.fn_nav_reference_dates()` (temp/pm-self223-ac-rewrite.md v3, jointly agreed with
+// temp/architect-self223-reconciliation.md §5) — migration 073 had NOT merged as of this file's
+// authoring, so this is built against the ratified contract text, not an applied
+// `supabase/migrations/*.sql` file. Re-verify against the live 073 migration once it merges —
+// same discipline nav-delta-panel.ts's own header applies retroactively to 071/072.
 //
-// ⚠ NULLABILITY CALLS MARKED BELOW ARE CONTRACT-TEXT INFERENCES, NOT VERIFIED AGAINST A REAL
-// MIGRATION — flag prominently at reconciliation time (same shape as the 071→072 reconciliation
-// this surface's sibling, $lib/nav-delta-panel.ts, already went through once). Where the AC text
-// states a fact explicitly (reference_date, cpi_basis_period are non-NULL), this file follows it;
-// where it is silent, this file defaults to the MORE DEFENSIVE (nullable) reading rather than
-// assuming a shape that would crash if the real migration is stricter or looser.
+// SHAPE CROSS-CHECKED AGAINST BACKEND'S SELF-223 HAND-OFF (2026-08-14, their
+// $lib/nav-reference-dates.ts drafted independently from the same ratified contract): the two
+// files' NavReferenceDateRow interfaces matched FIELD-FOR-FIELD, including every nullability
+// call — no reconciliation edit to the type was needed, only these doc comments, folding in two
+// semantic notes backend's version stated more precisely than this file's first draft did:
+//   · cpi_period is per-row — the specific CPI observation THIS row's own deflation used (This
+//     Month: 066's coverage_through print; Prior Month: first-of-month of the calendar anchor;
+//     Prior Year-End: December of the prior year) — not a shared/panel-wide value.
+//   · cpi_any_carried is a TWO-leg OR per row (this row's own cpi_period leg + the shared
+//     cpi_basis_period leg) — NOT a three-leg OR identically shared across all three rows the
+//     way 071/072's panel-wide flag was. Do not assume it is the same value on all three rows.
 //
 // STRUCTURAL RENDERING ONLY — AC5's TWO discriminated NULL causes (there is no third
 // "not-applicable" horizon here, unlike SELF-221/222's month/ytd: every one of the three
@@ -59,14 +65,19 @@ export interface NavReferenceDateRow {
 	/** `nav` expressed in prior-Year-End dollars. NULL when reference_checkpoint_date is NULL
 	 * (insufficient history) OR when cpi_unavailable is true — see the module header. */
 	nav_prior_yr_dollars: number | null;
-	/** The CPI observation period this row deflated at. Nullable (defensive reading — AC3 gives
-	 * cpi_basis_period an explicit non-NULL guarantee it does NOT extend to this column). */
+	/** The CPI observation THIS row's own deflation used (This Month: 066's coverage_through
+	 * print; Prior Month: first-of-month of the calendar anchor; Prior Year-End: December of the
+	 * prior year) — per-row, not shared across rows. Nullable (AC3 gives cpi_basis_period an
+	 * explicit non-NULL guarantee it does NOT extend to this column). */
 	cpi_period: string | null;
 	/** December of the prior calendar year — a pure calendar label (AC3: "non-NULL on all three
 	 * rows even when cpi_unavailable is true"). Not exposed via any predicate in this file
 	 * (SELF-229 scope); carried for completeness and future reconciliation. */
 	cpi_basis_period: string;
-	/** Nullable (defensive reading, no predicate exposed here — SELF-229 scope). */
+	/** OR over this row's TWO CPI legs (its own cpi_period leg + the shared cpi_basis_period
+	 * leg) — NOT a three-leg OR identically shared across all three rows the way 071/072's
+	 * panel-wide flag was; each row's own reference-date leg can differ. No predicate exposed
+	 * here (SELF-229 scope). */
 	cpi_any_carried: boolean | null;
 	/** Nullable (defensive reading). true → nav_prior_yr_dollars is NULL while nav stands. */
 	cpi_unavailable: boolean | null;

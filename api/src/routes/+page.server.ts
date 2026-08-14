@@ -21,6 +21,7 @@ import {
 } from '$lib/server/schemas/nav-series-params';
 import { loadNavBoundary } from '$lib/server/queries/nav-boundary';
 import { loadNavDeltaPanel } from '$lib/server/queries/nav-delta-panel';
+import { loadNavReferenceDates } from '$lib/server/queries/nav-reference-dates';
 import type { NavSeriesGranularity } from '$lib/nav-series';
 import { EMPTY_STALENESS } from '$lib/staleness/stale-constituent';
 import { serverTodayAsOf } from '$lib/server/time/asOf';
@@ -220,6 +221,28 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		navDeltaPanel = null;
 	}
 
+	// §2.1.4 NAV-at-three-reference-dates panel (V1.1 / SELF-223 backend;
+	// SELF-223's own UI is the consumer). Zero-arg RPC — pfin.fn_nav_reference_dates()
+	// derives tenant from session RLS and "today" from pfin.fn_server_today()
+	// (070, ADR-044 R2) entirely server-side, same as navDeltaPanel above;
+	// nothing is passed in from this loader. Same FAIL-SOFT posture: `null` =
+	// the read failed (RPC error, wrong-shaped payload) — logged, never
+	// thrown. A genuine result is passed straight through unreordered and
+	// unfiltered — the ratified contract is "EXACTLY THREE ROWS, ALWAYS, in
+	// fixed order", so this loader performs no ordering, filtering, or date
+	// arithmetic of its own; that is loadNavReferenceDates()'s and,
+	// downstream, the panel component's job. loadNavReferenceDates() already
+	// fails soft internally to `null`; this try/catch is the
+	// belt-and-suspenders boundary so an unexpected throw can't take down the
+	// NAV surface.
+	let navReferenceDates: Awaited<ReturnType<typeof loadNavReferenceDates>> = null;
+	try {
+		navReferenceDates = await loadNavReferenceDates(locals.supabase);
+	} catch (err) {
+		console.error('[+page.server] nav-reference-dates load threw; degrading to null:', err);
+		navReferenceDates = null;
+	}
+
 	return {
 		netWorth,
 		accountPresence,
@@ -234,6 +257,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			end: navSeriesEnd
 		},
 		navBoundary,
-		navDeltaPanel
+		navDeltaPanel,
+		navReferenceDates
 	};
 };
