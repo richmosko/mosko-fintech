@@ -99,13 +99,14 @@
 -- │          never sign-flipped.                                                        │
 -- │ (7)  T   two-tenant, non-vacuously: identical dates, different nav_values.          │
 -- │ (8)  X   cross-tenant / zero-checkpoint tenant -> five all-NULL rows. (LEAK)         │
--- │          corrupt-the-control: nav_daily_select broken open to using(true)           │
--- │          leaks B's checkpoint into A's read DETERMINISTICALLY — A and B's           │
--- │          month-anchor dates are deliberately one day apart (Sec's note) so a        │
--- │          same-date tie can never make this leg flaky.                              │
+-- │          corrupt-the-control: nav_daily_select broken open to using(true) proves    │
+-- │          A's read returns something OTHER than A's OWN row. Asserted as a           │
+-- │          NEGATIVE (Sec finding, 2026-08-14: NOT a specific other tenant's value —    │
+-- │          the A/B one-day offset defends A-vs-B ties, not a third party landing on    │
+-- │          :base), so it is robust to whatever else the database carries.             │
 -- │ (9)  M   aal2 backstop, both legs.                                                  │
 -- │ (10) PST1 catalog posture for 071 (070's own posture is 070's own battery).         │
--- │ (11) A   ACL: authenticated yes, PUBLIC no, service_role no.                        │
+-- │ (11) A   ACL: authenticated yes, PUBLIC no, service_role no, anon no (A4, 072).      │
 -- │ (12) TUP full-state-tuple discipline — every full-row assertion below reads         │
 -- │          the WHOLE row (results_eq / multi-field ok()), never a single column       │
 -- │          in isolation, satisfying Sec's criterion at the point of use. NOW          │
@@ -127,8 +128,13 @@
 -- │          content but now PRIMARY, not confirmatory (the DROP defaults to            │
 -- │          EXECUTABLE BY PUBLIC if the re-grant is ever dropped).                     │
 -- └─ 072 item 1 (AMENDED): (CRUX1P/2P/3P) assert delta_inflation_adjusted_percent on the SAME
---    fixture as (CRUX1-3), rounded/exact per residue; (INV1) the two panel-wide invariants
---    (dollar/percent NULL together; same sign where both present) needing nothing but the rows.
+--    fixture as (CRUX1-3), rounded/exact per residue; (INV1) the co-null check plus the
+--    same-sign-where-both-present check, needing nothing but the rows — ⚠ TENANT-A-SCOPED,
+--    NOT a universal claim: the dollar/percent relation is a ONE-WAY implication (dollar NULL
+--    -> percent NULL), never a biconditional (REALBASE0/NEG1P prove the dollar column STAYS
+--    PRESENT while the percent goes NULL on a non-positive real_base) — INV1's co-null half
+--    only holds because A's fixture never hits that state; do not widen INV1 to another
+--    tenant's panel expecting it to still pass.
 -- └──────────────────────────────────────────────────────────────────────────────────────┘
 --
 -- ⚠ `supabase db reset` is PROHIBITED — destroys F/CTO's active local test data.
@@ -139,17 +145,20 @@ begin;
 
 \ir ../_fixtures/rls_verbs.psql
 
--- plan = 43 : the 34 inherited from 071 (3 fixture pins (Z) + 3 crux arithmetic
+-- plan = 44 : the 34 inherited from 071 (3 fixture pins (Z) + 3 crux arithmetic
 -- (CRUX) + 1 five-rows-order (FIVE) + 5 independent anchor-derivation properties
 -- (ANCHOR-P1..P5) + 4 null-cause (CAUSE) + 4 carry provenance (CARRY1 NAV-side,
 -- CARRY2 CPI-side, CARRY3 current-side, CARRY4 jan/feb basis-carry) + 1
 -- zero-anchor percent (PCT0) + 1 negative-anchor percent (NEG1) + 2 CPI guard
 -- (CPIG) + 2 two-tenant (T) + 1 cross-tenant (X) + 1 corrupt-the-control leak
--- canary (LEAK) + 2 aal2 (M) + 1 catalog posture (PST1) + 3 ACL (A)) + 9 new at
--- 072 (SHAPE1 + CRUX1P/CRUX2P/CRUX3P + INV1 + REALBASE0 + NEG1P + CAUSE1c +
--- COMMENT1). CAUSE2/CAUSE3/X1/M1 are WIDENED in place (same leg, one more
--- column in an existing predicate) — not counted as new.
-select plan(43);
+-- canary (LEAK) + 2 aal2 (M) + 1 catalog posture (PST1) + 3 ACL (A)) + 10 new
+-- at 072 (SHAPE1 + CRUX1P/CRUX2P/CRUX3P + INV1 + REALBASE0 + NEG1P + CAUSE1c +
+-- COMMENT1 + A4 anon ACL, Sec finding). CAUSE2/CAUSE3/X1/M1 are WIDENED in
+-- place (same leg, one more column in an existing predicate) — not counted
+-- as new. (LEAK1) is REWRITTEN in place (Sec finding: assert the negative,
+-- `<> 690000`, not the specific value `= 6900000` — see its own header) —
+-- also not a count change.
+select plan(44);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb, _rls.tenant_c() as tc \gset
 \set td '00000000-0000-0000-0000-000000000d71'
@@ -787,53 +796,52 @@ select set_config('role', 'postgres', true);
 --   `using (true)` would leave TWO rows tied on the same nav_date for the
 --   at-or-before query, and "order by nav_date desc limit 1" would tie-break
 --   nondeterministically, making this leg flaky rather than a reliable RED.
---   With the one-date gap, B's checkpoint is UNAMBIGUOUSLY the more recent
---   of the two once both are visible, so the leak is deterministic.
+--   With the TWO-DAY gap, B's checkpoint is UNAMBIGUOUSLY the more recent
+--   of the two once both are visible, so the A-vs-B leak is deterministic —
+--   see below for what that guarantee does NOT extend to.
 --   Savepoint-scoped; the real policy is restored immediately after.
 -- =====================================================================
--- ⚠ (LEAK1) IS ENVIRONMENT-SENSITIVE BY DESIGN — the SAME class of RED as
---   054's (h14) (`pfin_etl` credential provisioning; see that leg's own
---   header for the canonical statement of this pattern): the assertion is
---   correct AS SHIPPED, but a legitimate state elsewhere in the deployment
---   lifecycle makes it read RED without any regression in the code under
---   test. Recorded here, not just in session chat, so the first person to
---   rediscover it treats it as known rather than as a new finding.
+-- ⚠ (LEAK1) ASSERTS A NEGATIVE — the predicate is `nav_value is not null
+--   and nav_value <> 690000` (Sec's required shape, 2026-08-14), NOT a bare
+--   `<> 690000` or `isnt(..., 690000)`: on an empty result the subquery
+--   yields NULL, and NULL compared either way is NULL/passes — the exact
+--   vacuous-green path this leg exists to close. Fails closed on no rows,
+--   written rather than relied on.
 --
---   WHAT (LEAK1) DOES: deliberately breaks `nav_daily_select` open
---   (`using (true)`) inside a savepoint, then re-runs A's month-anchor query
---   and asserts it returns B's canary value (6900000) — proving RLS, not
---   application logic, is what normally fences tenant A from seeing tenant
---   B's row. A green result here would mean the RLS policy is what makes
---   every OTHER leg in this file pass, not merely coincide with the right
---   answer.
+--   ⚠ TYPO-TRAP: `690000` (A's own value, Tenant A fixture above) and
+--   `6900000` (B's canary, Tenant B fixture above) are BOTH live in this
+--   file and differ by ONE DIGIT. `<> 690000` is deliberate — do NOT
+--   "restore" it to `6900000` thinking a digit was dropped; that would
+--   silently defeat the leg (it would stop checking that A sees something
+--   other than its OWN value and start checking something else entirely).
 --
---   WHY IT REDS AGAINST A SEEDED SHARED DEV DB (QA, 2026-08-14, confirmed
---   against a scratch clone of the shared local dev DB with 072 applied):
---   this leg's determinism depends on B's canary being the MOST RECENT
---   at-or-before-:base row in the WHOLE nav_daily table once the policy is
---   open — true in a DB that holds nothing but this file's own synthetic
---   fixture. The shared local dev DB is not that DB post the SELF-217
---   seeding run (docs/records/self217-nav-seeding-run.md, tenant b1aa21a2):
---   it carries a REAL tenant's checkpoints, and if one of them is more
---   recent than B's canary at-or-before :base, THAT row wins instead once
---   the fence is opened, and (LEAK1) reds — not because the fence broke, but
---   because the fixture's assumption ("only A and B exist") stopped holding
---   in that DB.
---
---   WHY CI IS UNAFFECTED: CI runs pgTAP against a database built ONLY from
---   `supabase/migrations/` — no seed data, so nav_daily holds nothing this
---   file did not insert itself, and B's canary is unambiguously the most
---   recent row once the policy opens. The RED is specific to running this
---   file against an already-seeded, long-lived database — verify in a
---   genuinely clean, migrations-only scratch DB instead (never
---   `supabase db reset` against F/CTO's local data; clone or rebuild).
+--   WHAT CHANGED, AND THE LOSING SIDE OF THE TRADE: an earlier draft
+--   asserted `= 6900000` and additionally proved B SPECIFICALLY was the
+--   deterministic winner once the fence opened. The negative form proves
+--   only that SOME foreign row wins, not WHICH one — that determinism is
+--   exactly what a non-pristine database destroys, so trading it away is
+--   what makes the leg hold everywhere rather than only on a fixture-only
+--   DB. The trade was necessary, not cosmetic: the exact-match form's
+--   determinism claim was already false outside a pristine fixture, and not
+--   for the reason an earlier draft of THIS comment gave ("a more recent
+--   row" — impossible, B's canary sits EXACTLY at :base, the maximum date
+--   `nav_date <= :base` admits). The real failure mode was a TIE at :base,
+--   not lateness: SELF-217 laid month-end checkpoints
+--   (docs/records/self217-nav-seeding-run.md, tenant b1aa21a2), and :base is
+--   itself a month-end, so a seeded tenant can land on B's exact date;
+--   `order by nav_date desc limit 1` has no secondary sort key, so a tie's
+--   winner is not guaranteed. Confirmed empirically on a scratch clone of
+--   the seeded shared dev DB: the broken-open query returned 8267000 — a
+--   THIRD tenant's value, neither A's own (690000) nor B's canary
+--   (6900000) — proving a genuine leak of some other tenant's row, not a
+--   more benign same-tenant artifact.
 savepoint leak_canary;
 alter policy nav_daily_select on pfin.nav_daily using (true);
 select _rls.set_tenant(:'ta'::uuid);
-select is(
-  (select nav_value from pfin.nav_daily where nav_date <= :'base'::date order by nav_date desc limit 1),
-  6900000::numeric,
-  '(LEAK1) ⭐ CORRUPT-THE-CONTROL: with nav_daily_select broken OPEN, A''s month-anchor query picks up B''s checkpoint (6900000) DETERMINISTICALLY — not A''s own (690000) — because B''s canary sits exactly on the boundary date while A''s is one day earlier by design, so there is no tie to arbitrate. RED here is the proof the fence is real; green here would mean this battery is blind to a broken policy'
+select ok(
+  (select nav_value is not null and nav_value <> 690000
+     from pfin.nav_daily where nav_date <= :'base'::date order by nav_date desc limit 1),
+  '(LEAK1) ⭐ CORRUPT-THE-CONTROL: with nav_daily_select broken OPEN, A''s month-anchor query returns a NON-NULL value OTHER than A''s own (690000) — proving RLS, not application logic, is what confines tenant A to its own rows. Fails CLOSED on an empty result rather than passing vacuously, and is robust to whichever other tenant''s row wins the read: RED here is the proof the fence is real; green here would mean this battery is blind to a broken policy'
 );
 select set_config('role', 'postgres', true);
 rollback to savepoint leak_canary;
@@ -885,7 +893,11 @@ select ok(
 -- =====================================================================
 -- (11) A — ACL. ⭐ 072 item 16: content UNCHANGED from 071, NOW PRIMARY — a
 --   freshly created function is EXECUTABLE BY PUBLIC by default, so these
---   three legs are what catch a forgotten revoke/grant after the DROP.
+--   legs are what catch a forgotten revoke/grant after the DROP. (A4) is
+--   NEW here (Sec finding, 2026-08-14): no leg in this family pinned `anon`
+--   specifically before now — 064 has one, 062/067/069/070/071 do not. anon
+--   is the role reached WITHOUT a JWT at all, so it closes a family-wide
+--   convention gap rather than responding to a specific defect.
 -- =====================================================================
 select ok(
   has_function_privilege('authenticated', 'pfin.fn_nav_delta_panel()', 'execute'),
@@ -898,6 +910,10 @@ select ok(
 select ok(
   not has_function_privilege('service_role', 'pfin.fn_nav_delta_panel()', 'execute'),
   '(A3) service_role does NOT hold EXECUTE — an INVOKER helper granted to service_role would be a de facto cross-tenant read, the same reasoning 067/069 already record'
+);
+select ok(
+  not has_function_privilege('anon', 'pfin.fn_nav_delta_panel()', 'execute'),
+  '(A4) ⭐ Sec finding, 072-adjacent: anon does NOT hold EXECUTE — anon is the role reached WITHOUT a JWT at all, so this is the fence in front of every OTHER identity check this function depends on (RLS keys off auth.uid(), which anon never carries). Closes a family-wide convention gap: 064 has this leg, 062/067/069/070/071 do not'
 );
 
 select * from finish();
