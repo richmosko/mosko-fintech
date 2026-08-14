@@ -386,10 +386,14 @@
 --      OPPOSITE SIGNS, which no nominal-base substitution can reproduce.
 --      ⚠ AND ASSERT TWO INVARIANTS THAT NEED NOTHING BUT THE RETURNED ROWS, so
 --      they cannot be satisfied by re-deriving the body's own expression in the
---      fixture: (a) the dollar and percent columns are NULL TOGETHER on every
---      row — neither can appear without the other; (b) where both are non-NULL
---      they have THE SAME SIGN, which is what fails first if the base is ever
---      allowed non-positive.
+--      fixture: (a) the percent is NULL on every row where the DOLLAR column is
+--      NULL — a ONE-WAY implication, NOT "NULL together". ⚠ DO NOT WIDEN THIS TO
+--      A BICONDITIONAL: on a non-positive real_base (item 14) the dollar column
+--      is PRESENT while the percent is NULL, so the biconditional is FALSE and
+--      the leg must be scoped to a fixture whose base is strictly positive —
+--      which is why the battery's (INV1) is scoped to tenant A and must stay so;
+--      (b) where both are non-NULL they have THE SAME SIGN, which is what fails
+--      first if the base is ever allowed non-positive.
 --   2. FIVE ROWS ALWAYS, in fixed order, including the all-NULL uncomputable
 --      case and a tenant with zero checkpoints.
 --   3. THE THREE NULL CAUSES ARE DISTINGUISHABLE: insufficient history
@@ -697,9 +701,10 @@ comment on function pfin.fn_nav_delta_panel() is
   'the percent cannot disagree about what the anchor was worth. It is NOT consumer-derivable, which is checkable from '
   'this signature: NO NAV LEVEL IS RETURNED, so neither base appears in the output, and the available back-derivation '
   '(delta_inflation_adjusted over delta_nominal / delta_percent) reconstructs the NOMINAL anchor and divides a REAL '
-  'numerator by it — the mixed-basis defect class described above, reached from the consumer side. NULL exactly where '
-  'delta_inflation_adjusted is NULL, so no row carries a percent without the figure it derives from; and NULL — never '
-  '0 — when real_base is NOT STRICTLY POSITIVE. Under the CPI guard that is equivalent to a zero or negative anchor '
+  'numerator by it — the mixed-basis defect class described above, reached from the consumer side. NULL WHEREVER '
+  'delta_inflation_adjusted is NULL, so no row carries a percent without the figure it derives from — a ONE-WAY '
+  'implication and NOT a biconditional: the percent is ADDITIONALLY NULL — never 0 — when real_base is NOT STRICTLY '
+  'POSITIVE, and on those rows delta_inflation_adjusted itself STAYS PRESENT and sound. Under the CPI guard that is equivalent to a zero or negative anchor '
   'NAV, but the guard is written on the denominator actually divided by, not on the NAV, so it survives a reshaping of '
   'the CPI guard. '
   '⚠ 072 REPLACED THIS FUNCTION BY DROP + CREATE, because adding an output column is a return-type change that '
