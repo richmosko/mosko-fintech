@@ -48,6 +48,13 @@
 -- │          the seeded CPI value at assertion time rather than a hardcoded literal —   │
 -- │          :basemonth collides with the basis period in January (Architect finding),  │
 -- │          and this stays correct on both sides of that collision.                    │
+-- │ (—)  ARREARS ⭐ realistic CPI arrears, family convention (not itemized in the        │
+-- │          migration header): (z1) pins coverage_through to the current month,        │
+-- │          removing arrears — the NORMAL production state. Proves this_month's        │
+-- │          deflation follows coverage_through's real fallback once that pin is        │
+-- │          removed, without spending a slot on the specific January all-three-exact   │
+-- │          case Architect found (documented in prose, Architect's call to spend a     │
+-- │          slot on it).                                                               │
 -- │ (3)  RECON ⭐ THE TWO-PANEL RECONCILIATION against pfin.fn_nav_delta_panel() (072)   │
 -- │          on the SAME seeded fixture: level differences equal the panel's deltas,    │
 -- │          and the current-side checkpoint dates agree. this_month and prior_month    │
@@ -97,22 +104,24 @@ begin;
 
 \ir ../_fixtures/rls_verbs.psql
 
--- plan = 36 : 2 fixture pins (Z — z3's "3 pairwise-distinct values" claim was
+-- plan = 37 : 2 fixture pins (Z — z3's "3 pairwise-distinct values" claim was
 -- dropped, it is false in the January CPI-period collision, see the fixture
 -- note below) + 2 prior-year-end exactness (EXACT) + 2 arithmetic (ARITH) +
--- 3 two-panel reconciliation (RECON) + 1 three-rows-order (THREE) + 4
--- independent reference-date derivation (REF-P1..P4) + 3 null-cause (CAUSE1
--- insufficient-history on prior_year_end unconditionally + CAUSE1-prior_month
--- the same, guarded true on the ~12 month-end days a year it is structurally
--- inapplicable + CAUSE1b per-row-gate proof on this_month) + 1
--- CPI-unresolvable full-table (CAUSE2, also proves item 6) + 1 NAV-side carry
--- on an isolated tenant (CARRY1) + 2 CPI-side carry (CARRY-CPI1
--- reference-leg-only, CARRY-CPI2 basis-only) + 4 CPI guard (CPIG1 zero +
--- CPIG1b prior_year_end unconditional + CPIG1c prior_month guarded + CPIG2
--- negative) + 2 two-tenant (T) + 1 cross-tenant (X) + 1 corrupt-the-control
--- leak canary (LEAK) + 2 aal2 (M) + 1 catalog posture (PST1) + 4 ACL (A,
--- incl. anon).
-select plan(36);
+-- 1 realistic-CPI-arrears proof (ARREARS1 — not itemized in the migration
+-- header, added per Architect's second-round finding: (z1)'s fixture pin
+-- removes arrears, the normal production state) + 3 two-panel reconciliation
+-- (RECON) + 1 three-rows-order (THREE) + 4 independent reference-date
+-- derivation (REF-P1..P4) + 3 null-cause (CAUSE1 insufficient-history on
+-- prior_year_end unconditionally + CAUSE1-prior_month the same, asserting
+-- the month-end coincidence positively rather than skipping it + CAUSE1b
+-- per-row-gate proof on this_month) + 1 CPI-unresolvable full-table (CAUSE2,
+-- also proves item 6) + 1 NAV-side carry on an isolated tenant (CARRY1) + 2
+-- CPI-side carry (CARRY-CPI1 reference-leg-only, CARRY-CPI2 basis-only) + 4
+-- CPI guard (CPIG1 zero + CPIG1b prior_year_end unconditional + CPIG1c
+-- prior_month, asserting the coincidence positively + CPIG2 negative) + 2
+-- two-tenant (T) + 1 cross-tenant (X) + 1 corrupt-the-control leak canary
+-- (LEAK) + 2 aal2 (M) + 1 catalog posture (PST1) + 4 ACL (A, incl. anon).
+select plan(37);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb, _rls.tenant_c() as tc \gset
 \set td '00000000-0000-0000-0000-000000000d73'
@@ -199,7 +208,20 @@ select is(
 select isnt(
   (select cpi_value from pfin.cpi_u_index where cpi_period = :'yeperiod'::date),
   (select cpi_value from pfin.cpi_u_index where cpi_period = date_trunc('month', :'today'::date::timestamp)::date),
-  '(z2) fixture pin: cpi_ye (300.000) != cpi_this_month (320.000) — this_month''s CPI period is coverage_through, structurally never December of the prior year, so this holds on every run day — the arithmetic legs'' own precondition, checked directly rather than assumed'
+  -- ⚠ SCOPED TO THIS FIXTURE (Architect finding, 2026-08-14, second round):
+  -- an earlier version of this claim said "structurally never December of
+  -- the prior year, so this holds on every run day" — true of THIS fixture
+  -- (z1 pins coverage_through to the current month, seeded fresh every run),
+  -- but FALSE of the function in general under realistic CPI arrears:
+  -- Architect measured that in January, with coverage_through genuinely
+  -- lagging to December of the prior year (one-to-two-month arrears, the
+  -- normal production state), this_month's CPI period IS the basis period —
+  -- all three rows become exact that month. That state is a real, correct,
+  -- product-visible behavior this battery does not exercise (see ARREARS1
+  -- below) because z1 deliberately removes the arrears this fixture pin
+  -- would otherwise be checking. The claim below is about the FIXTURE, not
+  -- a structural guarantee of the function.
+  '(z2) fixture pin: cpi_ye (300.000) != cpi_this_month (320.000) UNDER THIS FIXTURE''S z1 PIN — the arithmetic legs'' own precondition here, checked directly rather than assumed. Not a general property of the function: see (ARREARS1) for the realistic-arrears case where this equality can legitimately fail'
 );
 
 -- =====================================================================
@@ -336,8 +358,9 @@ select set_config('role', 'postgres', true);
 -- =====================================================================
 -- (2) ARITH ⭐⭐ this_month / prior_month DEFLATION, independently computed:
 --   this_month (tenant A):  700000 * (300/320) = 656250 — cpi_basis (300)
---     <> cpi_at_reference (320) on EVERY run day (z2), so this leg always
---     exercises a real deflation.
+--     <> cpi_at_reference (320) UNDER THIS FIXTURE'S z1 PIN (z2), so this leg
+--     exercises a real deflation here; see (ARREARS1) for why z1's coverage
+--     pin, not a structural guarantee, is what makes that hold.
 --   prior_month (tenant F, ⚠ NOT A — see F's own fixture note above for why
 --     A's prior_month NAV is not safe to hardcode): 690000 * (300/cpi_value
 --     at :basemonth) — the CPI side is read from the SEEDED value at
@@ -363,6 +386,35 @@ select is(
   '(ARITH2) ⭐⭐ prior_month prior-year-dollars (tenant F): 690000*(300/cpi_at_:basemonth) — this reference is CARRIED (see (CARRY1)), proving the formula reads the SERVED value, not a fabricated exact-reference one. Reads the fixture''s actual seeded CPI value rather than a hardcoded 250, so this holds on both sides of the January CPI collision'
 );
 select set_config('role', 'postgres', true);
+
+-- =====================================================================
+-- (ARREARS) ⭐ REALISTIC CPI ARREARS — not itemized in the migration header,
+--   added per Architect's second-round finding (2026-08-14): (z1)'s fixture
+--   pin (coverage_through = the current month, seeded fresh every run)
+--   removes CPI arrears entirely, but arrears is the NORMAL production
+--   state (CPI publishes one to two months behind — the migration header's
+--   own words). This proves this_month's deflation reads whatever
+--   coverage_through ACTUALLY resolves to once the current-month print is
+--   absent — not a value baked into this fixture's assumptions — without
+--   spending a plan slot reproducing the SPECIFIC product-visible case
+--   Architect measured (realistic January arrears pushing coverage_through
+--   onto the basis period itself, making all three rows exact for about a
+--   month a year): that would need its own January-guarded branch, the same
+--   shape as (CAUSE1-prior_month)/(CPIG1c) above, for one dated finding
+--   rather than a defect. Recorded here in prose; Architect's own call to
+--   spend a slot on it, not taken without agreement.
+-- =====================================================================
+savepoint cpi_arrears;
+delete from pfin.cpi_u_index where cpi_period = date_trunc('month', :'today'::date::timestamp)::date;
+select _rls.set_tenant(:'ta'::uuid);
+select is(
+  (select nav_prior_yr_dollars from pfin.fn_nav_reference_dates() where reference = 'this_month'),
+  (select 700000 * (300.000 / cpi_value)
+     from pfin.cpi_u_index where cpi_period = (select max(cpi_period) from pfin.cpi_u_index)),
+  '(ARREARS1) ⭐ with the current-month print absent (realistic arrears — the state (z1) otherwise pins away), this_month''s deflation reads whatever coverage_through ACTUALLY falls back to (the fixture''s remaining freshest print — the basis period itself in January, per Architect''s finding; the prior-month print otherwise), not the deleted value — proving the formula follows 066''s real coverage_through rather than an assumption this fixture bakes in'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint cpi_arrears;
 
 -- =====================================================================
 -- (3) RECON ⭐ THE TWO-PANEL RECONCILIATION against pfin.fn_nav_delta_panel()
@@ -478,17 +530,28 @@ select ok(
   '(CAUSE1) ⭐ INSUFFICIENT HISTORY, proven on prior_year_end SPECIFICALLY: E''s only checkpoint is AT :today, strictly after :yedate on every run day (:yedate <= :base <= :today, always), so "at-or-before :yedate" finds nothing — reference_checkpoint_date and both value columns are NULL. This is the row the UI renders as "Insufficient history"'
 );
 select set_config('role', 'postgres', true);
+-- ⚠ STRENGTHENED (Architect's second finding, 2026-08-14): an earlier draft
+-- guarded the month-end branch with a bare `else true` — vacuous on exactly
+-- the ~12 days a year the coincidence is LIVE, and a 24-day calendar sweep
+-- cannot catch a vacuous branch passing on every day it fires. Rewritten to
+-- assert what SHOULD be true that day instead of skipping it: prior_month
+-- and this_month share the identical reference_date, checkpoint and nav
+-- (measured directly on run day 2026-09-30: both rows read reference_date
+-- 2026-09-30, reference_checkpoint_date 2026-09-30, nav 45000).
 select _rls.set_tenant(:'te'::uuid);
 select ok(
-  (select case when :'base'::date < :'today'::date
-            then reference_checkpoint_date is null and nav is null
-            else true  -- :base = :today (month-end run day): this_month and
-                       -- prior_month are the SAME query that day, so
-                       -- prior_month resolving is CORRECT, not a red — see
-                       -- the note above.
+  (with p as (select reference_date, reference_checkpoint_date, nav
+                from pfin.fn_nav_reference_dates() where reference = 'prior_month'),
+        m as (select reference_date, reference_checkpoint_date, nav
+                from pfin.fn_nav_reference_dates() where reference = 'this_month')
+   select case when :'base'::date < :'today'::date
+            then p.reference_checkpoint_date is null and p.nav is null
+            else p.reference_date = m.reference_date
+                 and p.reference_checkpoint_date = m.reference_checkpoint_date
+                 and p.nav = m.nav
           end
-     from pfin.fn_nav_reference_dates() where reference = 'prior_month'),
-  '(CAUSE1-prior_month) …and prior_month fails the SAME way on every ordinary run day (guarded true on the ~12 days a year :today is itself a month-end, where this distinction is structurally inapplicable — documented, not silently passed)'
+     from p cross join m),
+  '(CAUSE1-prior_month) …and prior_month fails the SAME way on every ordinary run day; on the ~12 days a year :today is itself a month-end (:base = :today), prior_month and this_month become the SAME query BY CONSTRUCTION — asserted as identical reference_date/checkpoint/nav that day, not skipped'
 );
 select set_config('role', 'postgres', true);
 -- Same tenant''s this_month resolves fine (exact hit at :today) — proving
@@ -630,16 +693,36 @@ select ok(
   '(CPIG1b) …and prior_year_end is unaffected on every run day — its CPI period is the basis period, which coverage_through can never equal'
 );
 select set_config('role', 'postgres', true);
+-- ⚠ STRENGTHENED (Architect's second finding, 2026-08-14): the same vacuous-
+-- branch issue as (CAUSE1-prior_month) above — rewritten to assert the
+-- month-end day's expected state instead of skipping it.
+--   ⚠ ON THE RATIONALE ITSELF (Architect's first finding, re-verified rather
+--   than accepted): re-measured directly on a fresh scratch DB, run day
+--   2026-09-30, reproducing this file's OWN fixture sequence exactly —
+--   `select cpi_period from pfin.cpi_u_index` showed only TWO rows,
+--   2025-12-01 (basis) and 2026-09-01, because the fixture's own insert
+--   order (this_month before basemonth, both `on conflict do nothing`)
+--   makes basemonth's insert DEFER to the identical period this_month
+--   already claimed. `select reference, cpi_period from
+--   pfin.fn_nav_reference_dates()` confirmed this_month AND prior_month both
+--   report cpi_period = 2026-09-01 — the SAME period, not merely close ones
+--   — and corrupting it flips cpi_unavailable TRUE on BOTH rows. The
+--   original rationale stands for THIS fixture; a differently-built fixture
+--   (coverage_through genuinely lagging, as it would in an unmanipulated
+--   table under normal CPI-publication arrears) could show the two periods
+--   differing, but that is not the state this savepoint or the battery's own
+--   insert sequence ever produces.
 select _rls.set_tenant(:'ta'::uuid);
 select ok(
   (select case when :'basemonth'::date <> date_trunc('month', :'today'::date::timestamp)::date
             then not cpi_unavailable
-            else true  -- :base = :today: prior_month's own CPI period IS
-                       -- this_month's, so this row is EXPECTED to be
-                       -- affected that day — see (CAUSE1)'s sibling note.
+            else cpi_unavailable  -- :base = :today: prior_month's own CPI
+                                  -- period IS this_month's (re-verified
+                                  -- above, not assumed) — corrupting the
+                                  -- shared period MUST flip this row too.
           end
      from pfin.fn_nav_reference_dates() where reference = 'prior_month'),
-  '(CPIG1c) …and prior_month is unaffected on every ORDINARY run day (guarded true on the ~12 days a year its own CPI period coincides with this_month''s — documented, not silently passed)'
+  '(CPIG1c) …and prior_month is unaffected on every ORDINARY run day; on the ~12 days a year its own CPI period coincides with this_month''s (:base = :today), it is asserted AFFECTED — the shared period was just corrupted, so cpi_unavailable must be true, not silently skipped'
 );
 select set_config('role', 'postgres', true);
 rollback to savepoint cpi_zero;
