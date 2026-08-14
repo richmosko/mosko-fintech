@@ -176,6 +176,34 @@
 --   zero` and a negative silently flips the sign of a net-worth figure.
 --
 -- ----------------------------------------------------------------------------
+-- ⚠ A STRUCTURAL COINCIDENCE IN JANUARY, stated so it is not read as a fault and
+--   NOT "FIXED". For the whole of January, prior_month and prior_year_end ARE
+--   THE SAME REFERENCE DATE — 31 December of the prior year — because the most
+--   recent COMPLETED month-end IS the prior year-end. The two rows then return
+--   identical values in EVERY column, by construction.
+--   MEASURED, not predicted: scratch DB, run day 2026-01-15, both rows returned
+--   reference_date 2025-12-31 with the same checkpoint, nav, cpi_period and flags.
+--   THREE CONSEQUENCES, none of them defects:
+--     · THE UI RENDERS TWO ROWS WITH THE SAME DATE AND THE SAME FIGURES for one
+--       month a year. That is correct — "one month ago" and "the most recent
+--       December close" genuinely coincide in January — and it is the consumer's
+--       copy, not this function's, that must make it read as intentional.
+--     · prior_month IS ALSO EXACT IN JANUARY. Its CPI period is that same
+--       December, so its deflator is v/v = 1 as well. >> ANY TEST ASSERTING THAT
+--       prior_year_end IS THE ONLY EXACT ROW WILL RED EVERY JANUARY. << The
+--       exactness property belongs to "the row whose CPI period is the basis
+--       period", which is one row for eleven months and two for one.
+--     · A PER-ROW INSUFFICIENT-HISTORY CASE CANNOT BE CONSTRUCTED BETWEEN THOSE
+--       TWO ROWS IN JANUARY: identical reference dates resolve identically, so no
+--       checkpoint can serve one and not the other. A battery leg proving the
+--       per-row predicate must use this_month against the other two, or accept
+--       that the prior_month/prior_year_end pairing is unprovable for one month
+--       a year. ⚠ A fixture that derives its floor checkpoint from `base` minus a
+--       fixed offset is run-day-dependent for the same reason — measured across
+--       twelve run months, a `base - 4 months` floor lands at-or-before the prior
+--       year-end for every run day from JANUARY THROUGH MAY.
+--
+-- ----------------------------------------------------------------------------
 -- WHY THE LEVELS ARE READ DIRECTLY AND NOT COMPOSED.
 --   · 072 CANNOT be composed, and this is structural rather than a preference:
 --     IT RETURNS NO NAV LEVEL AT ALL, by design — that property is why its
