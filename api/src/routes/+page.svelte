@@ -20,6 +20,7 @@
 <script lang="ts">
 	import type { PageData } from './$types';
 	import StaleConstituentBadge from '$lib/components/StaleConstituentBadge.svelte';
+	import NavDeltaPanel from '$lib/components/NavDeltaPanel.svelte';
 	import NavCompositionTable from '$lib/components/NavCompositionTable.svelte';
 	import NavHistoryChart from '$lib/components/NavHistoryChart.svelte';
 	import { EMPTY_STALENESS } from '$lib/staleness/stale-constituent';
@@ -30,6 +31,12 @@
 	// Loader field Backend wires (`+page.server.ts` → `046` read). Default to the healthy
 	// zero-value so the surface renders cleanly before/if the field is absent (no silent throw).
 	const staleness = $derived(data.staleness ?? EMPTY_STALENESS);
+
+	// §2.1.3 multi-horizon NAV-delta panel (SELF-222 · V1.1). Backend threads the `071`
+	// fn_nav_delta_panel() rows through the loader as `data.navDeltaPanel`, FAIL-SOFT to `null`
+	// on a read failure (NavDeltaPanel renders its own unavailable notice) — same convention as
+	// `data.composition` below.
+	const navDeltaPanel = $derived(data.navDeltaPanel ?? null);
 
 	// §2.1.5 composition build-up (SELF-226). Backend threads the `051` fn_nav_composition tree
 	// through the loader as `data.composition`, FAIL-SOFT to `null` (composition-read failure must
@@ -139,6 +146,14 @@
 				</p>
 			{/if}
 		</section>
+
+		<!-- §2.1.3 multi-horizon NAV-delta panel (SELF-222 · V1.1) — Phase 2 P2 lock (ADR-013
+		     Decision 3): "Headline NAV + deltas lead → 60-mo trend → composition table." Mounted
+		     directly below the headline, ahead of composition/chart, visually subordinate to it
+		     (NavDeltaPanel's own `.section-label` heading, not a second hero number).
+		     NavDeltaPanel owns its own fail-soft/unavailable-notice gating internally — a delta
+		     read failure never takes down the headline above. -->
+		<NavDeltaPanel rows={navDeltaPanel} />
 
 		<!-- §2.1.5 composition foot (SELF-226) — the build-up below the headline on the single
 		     canvas (P2 number-first). Fail-soft: renders only when the composition load succeeded;

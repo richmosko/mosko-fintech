@@ -1,0 +1,190 @@
+// nav-delta-panel.ts — SELF-222 client-side shape + predicates for the §2.1.3 multi-horizon
+// NAV-delta panel (frontend-owned, non-server). Mirrors `pfin.fn_nav_delta_panel()`'s RETURNS
+// TABLE verbatim (migration supabase/migrations/071_fn_nav_delta_panel.sql, SELF-221) — no
+// field renamed, no field invented, no state inferred here that the backend didn't already
+// resolve structurally.
+//
+// THE THREE-WAY NULL DISCRIMINATOR (071 CONTRACT) IS STRUCTURAL, NOT A FLAG TO INTERPRET:
+//   INSUFFICIENT HISTORY   anchor_date NOT NULL, anchor_checkpoint_date NULL
+//   CPI UNRESOLVABLE       cpi_unavailable = true, delta_nominal PRESENT
+//   NOT APPLICABLE         cpi_* columns ALL NULL (month / ytd — no Inflation Adjusted value
+//                           exists for these horizons at all, per PRD §2.1.3)
+// These can co-occur and live in different columns; the predicates below read the columns
+// directly rather than collapsing them into one derived "quality" enum (066/071's own
+// precedent — see the migration header).
+//
+// current_checkpoint_date / cpi_basis_period / cpi_any_carried are PANEL-WIDE facts returned
+// per-row (071: "a property of the store, not of a horizon" / "comes back TRUE PANEL-WIDE").
+// The panel reads them off the row set once, rather than re-deriving a staleness verdict from
+// a client-side clock comparison — ADR-044 R2 is the whole reason a second, client-side "is
+// this stale" clock check must not exist here; the disclosure IS the returned checkpoint date.
+//
+// SHAPE RECONCILED AGAINST BACKEND'S SELF-222 HAND-OFF (2026-08-13, real local smoke-verify
+// sample against seeded tenant b1aa21a2): anchor_date is NEVER NULL — it is a computed calendar
+// anchor (month-end date arithmetic), not a lookup that could fail to resolve, so the
+// insufficient-history discriminator collapses to the single anchor_checkpoint_date check below.
+// cpi_any_carried / cpi_unavailable arrive as SQL NULL (not `false`) on month/ytd, where the CPI
+// columns don't apply at all — typed `boolean | null` to match the real payload rather than the
+// `boolean`-always this file originally assumed.
+//
+// AMENDED FOR MIGRATION 072 (2026-08-14, F/CTO-ratified Option B on the AC3 gap):
+// `delta_inflation_adjusted_percent` added immediately after `delta_inflation_adjusted` — the
+// real-terms figure as a PERCENT of the deflated anchor (nav_anchor × cpi_ye/cpi_anchor), bound
+// once in the function body alongside the dollar figure so the two cannot disagree about the
+// anchor's worth. NOT CONSUMER-DERIVABLE: 072's own header is explicit that no NAV level is
+// returned, so back-deriving it from delta_nominal/delta_percent/delta_inflation_adjusted would
+// divide a REAL numerator by a NOMINAL base — the exact mixed-basis defect class 071's header
+// documents, arrived at from the consumer side. This module never attempts that derivation.
+// RIDES delta_inflation_adjusted ONE-WAY: NULL on every row where the dollar is NULL (same three
+// causes), and ADDITIONALLY NULL — never 0 — when the deflated anchor base is non-positive while
+// the dollar stays PRESENT (isInflationPercentInexpressible below; mirrors isPercentInexpressible
+// for the nominal column, same "no change vs cannot be expressed" principle). NO ROUNDING IS
+// APPLIED AT THE SOURCE (072: "a real delta of exactly 52.5 surfaces as 52.4999…") — this file's
+// formatSignedUsd/formatSignedPercent already round at presentation (Intl currency formatting +
+// toFixed(1) respectively), which is where 072 says rounding belongs; no separate rounding step
+// is needed here.
+
+export type NavDeltaHorizon = 'month' | 'ytd' | '1y' | '3y' | '5y';
+
+export interface NavDeltaPanelRow {
+	horizon: NavDeltaHorizon;
+	/** The CALENDAR anchor (a month-end). NOT NULL — always present, even when no observation
+	 * reaches it (see anchor_checkpoint_date). */
+	anchor_date: string;
+	anchor_checkpoint_date: string | null;
+	current_checkpoint_date: string | null;
+	delta_nominal: number | null;
+	delta_percent: number | null;
+	delta_inflation_adjusted: number | null;
+	/** The real-terms delta as a percent of the deflated anchor. Rides delta_inflation_adjusted
+	 * ONE-WAY (see the module header) — never present when the dollar is NULL, and can be NULL
+	 * even when the dollar IS present (non-positive deflated anchor base). */
+	delta_inflation_adjusted_percent: number | null;
+	cpi_basis_period: string | null;
+	/** NULL on month/ytd (not applicable — the CPI columns don't exist for those horizons).
+	 * Otherwise true/false: whether any of the three CPI legs was carried-forward. */
+	cpi_any_carried: boolean | null;
+	/** NULL on month/ytd (not applicable). Otherwise true when the inflation-adjusted figure
+	 * could not be formed; delta_nominal still stands in that case. */
+	cpi_unavailable: boolean | null;
+}
+
+// Fixed row order per the 071 CONTRACT ("EXACTLY FIVE ROWS, ALWAYS, in fixed order").
+export const HORIZON_ORDER: NavDeltaHorizon[] = ['month', 'ytd', '1y', '3y', '5y'];
+
+export const HORIZON_LABEL: Record<NavDeltaHorizon, string> = {
+	month: 'Month',
+	ytd: 'YTD',
+	'1y': '1-Year',
+	'3y': '3-Year',
+	'5y': '5-Year'
+};
+
+/** Re-orders a possibly-scrambled row set to HORIZON_ORDER, dropping any row whose horizon
+ * isn't recognized (defensive — never crash the panel on an unexpected label; the fixed-order
+ * guarantee is the backend's, this just doesn't trust wire order blindly). */
+export function orderRows(rows: NavDeltaPanelRow[]): NavDeltaPanelRow[] {
+	return HORIZON_ORDER.map((h) => rows.find((r) => r.horizon === h)).filter(
+		(r): r is NavDeltaPanelRow => r != null
+	);
+}
+
+// PRD §2.1.3 verbatim: Inflation Adjusted is populated for 1-Year / 3-Year / 5-Year ONLY.
+export function isCpiApplicable(horizon: NavDeltaHorizon): boolean {
+	return horizon === '1y' || horizon === '3y' || horizon === '5y';
+}
+
+// Structural discriminator #1: anchor resolved (anchor_date is guaranteed non-NULL — see the
+// module header), no checkpoint ever reached it. Deltas NULL.
+export function isInsufficientHistory(row: NavDeltaPanelRow): boolean {
+	return row.anchor_checkpoint_date === null;
+}
+
+// Structural discriminator #2: the nominal figure stands; only the real-terms one is unformed.
+// Gated on isCpiApplicable so a future backend change can't silently steer a Month/YTD row into
+// this branch — 071 documents cpi_unavailable as false-by-construction there, but the gate here
+// doesn't take that on trust.
+export function isCpiUnresolvable(row: NavDeltaPanelRow): boolean {
+	return isCpiApplicable(row.horizon) && row.cpi_unavailable === true;
+}
+
+// delta_percent is NULL — never 0 — when the anchor NAV is non-positive (071 AC2 / migration
+// header). "No change" and "cannot be expressed" must not render alike.
+export function isPercentInexpressible(row: NavDeltaPanelRow): boolean {
+	return row.delta_nominal !== null && row.delta_percent === null;
+}
+
+// 072's real-terms sibling of isPercentInexpressible: delta_inflation_adjusted_percent is NULL
+// — never 0 — when the deflated anchor base is non-positive, while delta_inflation_adjusted (the
+// dollar) stays PRESENT. Same "no real-terms change" vs "cannot be expressed in real terms"
+// principle, one column over. Naturally false whenever delta_inflation_adjusted itself is NULL
+// (insufficient-history / CPI-unresolvable / not-applicable) — those states are handled by their
+// own branches before this predicate is ever consulted.
+export function isInflationPercentInexpressible(row: NavDeltaPanelRow): boolean {
+	return row.delta_inflation_adjusted !== null && row.delta_inflation_adjusted_percent === null;
+}
+
+/** null (neutral ink) at exactly zero — mirrors NavCompositionTable's pos/neg fence convention
+ * (design-system-spec §5 fence 1): a delta is ACTUAL performance, so pos/neg applies, but a
+ * zero delta is not a claim of gain or loss either direction. */
+export function signClass(n: number | null): 'pos' | 'neg' | null {
+	if (n === null || n === 0) return null;
+	return n > 0 ? 'pos' : 'neg';
+}
+
+const usd = new Intl.NumberFormat('en-US', {
+	style: 'currency',
+	currency: 'USD',
+	minimumFractionDigits: 0,
+	maximumFractionDigits: 0
+});
+
+// U+2212 MINUS SIGN, never U+002D hyphen-minus — AC2 verbatim ("−$X,XXX"). Zero renders
+// unsigned, matching NavCompositionTable's usdSigned `signDisplay: 'exceptZero'` convention
+// already locked for signed-delta cells elsewhere on this surface.
+export function formatSignedUsd(n: number): string {
+	if (n === 0) return usd.format(0);
+	return `${n < 0 ? '−' : '+'}${usd.format(Math.abs(n))}`;
+}
+
+export function formatSignedPercent(p: number): string {
+	if (p === 0) return '0.0%';
+	return `${p < 0 ? '−' : '+'}${Math.abs(p).toFixed(1)}%`;
+}
+
+export function monthYear(iso: string): string {
+	return new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-US', {
+		month: 'long',
+		year: 'numeric',
+		timeZone: 'UTC'
+	});
+}
+
+export function fullDate(iso: string): string {
+	return new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-US', {
+		month: 'long',
+		day: 'numeric',
+		year: 'numeric',
+		timeZone: 'UTC'
+	});
+}
+
+// current_checkpoint_date is identical on all five rows (071 CONTRACT) — read once rather than
+// re-reading per row. Returns null on an empty set (fail-soft; the caller gates rendering).
+export function currentCheckpointDate(rows: NavDeltaPanelRow[]): string | null {
+	return rows[0]?.current_checkpoint_date ?? null;
+}
+
+// cpi_basis_period is likewise one shared denomination (cpi_ye — December of the prior calendar
+// year) — read off the first CPI-applicable row rather than assuming index [2].
+export function cpiBasisPeriod(rows: NavDeltaPanelRow[]): string | null {
+	return rows.find((r) => isCpiApplicable(r.horizon))?.cpi_basis_period ?? null;
+}
+
+// Panel-wide carried signal (071 header: "cpi_any_carried comes back TRUE PANEL-WIDE" during
+// the Jan/Feb structural window) — true if ANY CPI-applicable row reports it. Rendered as ONE
+// series-level basis-line note (§2.4.4: "one series-level mark, not one per point"), not a
+// per-cell marker repeated three times for what is functionally one fact.
+export function anyCpiCarried(rows: NavDeltaPanelRow[]): boolean {
+	return rows.some((r) => isCpiApplicable(r.horizon) && r.cpi_any_carried);
+}

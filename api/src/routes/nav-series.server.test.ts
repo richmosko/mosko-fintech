@@ -18,12 +18,98 @@
 // The rest of the route's RPCs (netWorth / staleness / composition) are mocked to trivial
 // happy-path defaults — their own behavior is proven by netWorth.test.ts / navComposition.test.ts;
 // this file exists only to lock the chart-scoping dispatch added around loadNavSeries().
+//
+// QA FINDING 1 (SELF-222 PR review) FIX: fn_nav_delta_panel had NO mock case — the switch's
+// `default:` throws for an unmocked RPC name, and +page.server.ts's belt-and-suspenders
+// try/catch around loadNavDeltaPanel() silently swallows that throw into `navDeltaPanel = null`.
+// Every test in this file was therefore accidentally exercising ONLY the fail-soft path for
+// navDeltaPanel, with nothing at load()-integration level proving the RPC's rows actually
+// thread through to `data.navDeltaPanel` on success. Fixed by giving `fn_nav_delta_panel` a
+// real mock case (default: the happy 5-row payload, so every EXISTING test above now takes
+// the success path instead of the accidental-throw path) plus two dedicated tests below that
+// assert the success-threads-through and explicit-RPC-error-fails-soft states.
 
 import { describe, it, expect, vi } from 'vitest';
 import { load } from './+page.server';
 import type { NavSeriesPoint } from '$lib/nav-series';
+import type { NavDeltaPanelRow } from '$lib/nav-delta-panel';
 
 const SESSION_USER = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' };
+
+// Verbatim real local smoke-verify sample from Backend's SELF-222 hand-off (migration 071
+// against seeded tenant b1aa21a2) — same fixture already used in
+// $lib/components/NavDeltaPanel.ssr.test.ts, reused here as the default happy-path RPC payload.
+// ⚠ delta_inflation_adjusted_percent values are SYNTHETIC (071's sample predates migration 072,
+// which added the column; no regenerated real sample was available — the local DB lost its seed
+// data in a QA incident, recovery F/CTO-gated). Deliberately round, non-derived placeholders —
+// see the identical fixture + fuller note in $lib/components/NavDeltaPanel.ssr.test.ts.
+const REAL_NAV_DELTA_PANEL_SAMPLE: NavDeltaPanelRow[] = [
+	{
+		horizon: 'month',
+		anchor_date: '2026-07-31',
+		anchor_checkpoint_date: '2026-07-31',
+		current_checkpoint_date: '2026-08-10',
+		delta_nominal: -8217654.37,
+		delta_percent: -99.40310112495464,
+		delta_inflation_adjusted: null,
+		delta_inflation_adjusted_percent: null,
+		cpi_basis_period: null,
+		cpi_any_carried: null,
+		cpi_unavailable: null
+	},
+	{
+		horizon: 'ytd',
+		anchor_date: '2025-12-31',
+		anchor_checkpoint_date: '2025-12-31',
+		current_checkpoint_date: '2026-08-10',
+		delta_nominal: -7828654.37,
+		delta_percent: -99.37362744351358,
+		delta_inflation_adjusted: null,
+		delta_inflation_adjusted_percent: null,
+		cpi_basis_period: null,
+		cpi_any_carried: null,
+		cpi_unavailable: null
+	},
+	{
+		horizon: '1y',
+		anchor_date: '2025-07-31',
+		anchor_checkpoint_date: '2025-07-31',
+		current_checkpoint_date: '2026-08-10',
+		delta_nominal: -7546654.37,
+		delta_percent: -99.35037348604529,
+		delta_inflation_adjusted: -7571771.53943,
+		delta_inflation_adjusted_percent: -95.1,
+		cpi_basis_period: '2025-12-01',
+		cpi_any_carried: false,
+		cpi_unavailable: false
+	},
+	{
+		horizon: '3y',
+		anchor_date: '2023-07-31',
+		anchor_checkpoint_date: '2023-07-31',
+		current_checkpoint_date: '2026-08-10',
+		delta_nominal: -6955654.37,
+		delta_percent: -99.2955655960029,
+		delta_inflation_adjusted: -7377910.52013,
+		delta_inflation_adjusted_percent: -94.8,
+		cpi_basis_period: '2025-12-01',
+		cpi_any_carried: false,
+		cpi_unavailable: false
+	},
+	{
+		horizon: '5y',
+		anchor_date: '2021-07-31',
+		anchor_checkpoint_date: '2021-07-31',
+		current_checkpoint_date: '2026-08-10',
+		delta_nominal: -6307654.37,
+		delta_percent: -99.22375916312726,
+		delta_inflation_adjusted: -7497862.86149,
+		delta_inflation_adjusted_percent: -94.5,
+		cpi_basis_period: '2025-12-01',
+		cpi_any_carried: false,
+		cpi_unavailable: false
+	}
+];
 
 /**
  * Explicit result shape for `await runLoad(event)`. Needed only because this test bypasses
@@ -42,6 +128,7 @@ type LoadResult = {
 		has_cron_rows: boolean;
 		has_imported_rows: boolean;
 	} | null;
+	navDeltaPanel: NavDeltaPanelRow[] | null;
 };
 
 async function runLoad(event: Parameters<typeof load>[0]): Promise<LoadResult> {
@@ -57,6 +144,9 @@ function makeLocals(
 	navSeriesRpc: { data?: unknown; error?: { message: string } | null },
 	navBoundaryRpc: { data?: unknown; error?: { message: string } | null } = {
 		data: [{ first_cron_checkpoint: null, has_cron_rows: false, has_imported_rows: false }]
+	},
+	navDeltaPanelRpc: { data?: unknown; error?: { message: string } | null } = {
+		data: REAL_NAV_DELTA_PANEL_SAMPLE
 	}
 ) {
 	const rpc = vi.fn(async (fnName: string) => {
@@ -74,6 +164,8 @@ function makeLocals(
 				return { data: navSeriesRpc.data ?? null, error: navSeriesRpc.error ?? null };
 			case 'fn_first_cron_checkpoint':
 				return { data: navBoundaryRpc.data ?? null, error: navBoundaryRpc.error ?? null };
+			case 'fn_nav_delta_panel':
+				return { data: navDeltaPanelRpc.data ?? null, error: navDeltaPanelRpc.error ?? null };
 			default:
 				throw new Error(`unexpected rpc: ${fnName}`);
 		}
@@ -94,10 +186,15 @@ function makeLocals(
 function makeEvent(
 	searchParams: string,
 	navSeriesRpc: { data?: unknown; error?: { message: string } | null },
-	navBoundaryRpc?: { data?: unknown; error?: { message: string } | null }
+	navBoundaryRpc?: { data?: unknown; error?: { message: string } | null },
+	navDeltaPanelRpc?: { data?: unknown; error?: { message: string } | null }
 ) {
 	const { locals, rpc } =
-		navBoundaryRpc !== undefined ? makeLocals(navSeriesRpc, navBoundaryRpc) : makeLocals(navSeriesRpc);
+		navBoundaryRpc !== undefined
+			? navDeltaPanelRpc !== undefined
+				? makeLocals(navSeriesRpc, navBoundaryRpc, navDeltaPanelRpc)
+				: makeLocals(navSeriesRpc, navBoundaryRpc)
+			: makeLocals(navSeriesRpc);
 	const url = new URL(`http://localhost/${searchParams ? `?${searchParams}` : ''}`);
 	const event = { locals, url } as unknown as Parameters<typeof load>[0];
 	return { event, rpc };
@@ -237,5 +334,52 @@ describe('load() — §2.1.2 navBoundary (069), fetched independently of chart p
 			has_imported_rows: false
 		});
 		expect(rpc).toHaveBeenCalledWith('fn_first_cron_checkpoint');
+	});
+});
+
+// QA Finding 1 (SELF-222 PR review): closes the load-level gap — before this, EVERY test above
+// exercised navDeltaPanel only via the accidental `default:`-throw-swallowed-by-try/catch path
+// (see the module header). These two tests are the CATCH CRITERION: one fails if +page.server.ts
+// stops returning the RPC's rows as `data.navDeltaPanel` (success path), the other fails if an
+// RPC error stops degrading to `null` (explicit fail-soft, not accidental).
+describe('load() — §2.1.3.a navDeltaPanel (071), fetched independently of chart params', () => {
+	it('a genuine 5-row RPC result threads through to data.navDeltaPanel UNCHANGED (success path)', async () => {
+		const { event, rpc } = makeEvent(
+			'chart_granularity=monthly',
+			{ data: [] },
+			{ data: [{ first_cron_checkpoint: null, has_cron_rows: false, has_imported_rows: false }] },
+			{ data: REAL_NAV_DELTA_PANEL_SAMPLE }
+		);
+		const data = await runLoad(event);
+
+		expect(data.navDeltaPanel).toEqual(REAL_NAV_DELTA_PANEL_SAMPLE);
+		expect(data.navDeltaPanel).not.toBeNull();
+		expect(rpc).toHaveBeenCalledWith('fn_nav_delta_panel');
+	});
+
+	it('an RPC error → navDeltaPanel is null (EXPLICIT fail-soft, not the accidental unmocked-throw path)', async () => {
+		const { event } = makeEvent(
+			'chart_granularity=monthly',
+			{ data: [] },
+			{ data: [{ first_cron_checkpoint: null, has_cron_rows: false, has_imported_rows: false }] },
+			{ error: { message: 'permission denied' } }
+		);
+		const data = await runLoad(event);
+
+		expect(data.navDeltaPanel).toBeNull();
+	});
+
+	it('is fetched even when navSeriesParamsError is set — independent of chart params, same as navBoundary', async () => {
+		const { event, rpc } = makeEvent(
+			'chart_granularity=yearly',
+			{ data: [] },
+			{ data: [{ first_cron_checkpoint: null, has_cron_rows: false, has_imported_rows: false }] },
+			{ data: REAL_NAV_DELTA_PANEL_SAMPLE }
+		);
+		const data = await runLoad(event);
+
+		expect(data.navSeriesParamsError).not.toBeNull();
+		expect(data.navDeltaPanel).toEqual(REAL_NAV_DELTA_PANEL_SAMPLE);
+		expect(rpc).toHaveBeenCalledWith('fn_nav_delta_panel');
 	});
 });
