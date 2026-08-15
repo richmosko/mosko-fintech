@@ -114,3 +114,78 @@ describe('loadStaleness — data-layer prerequisite: healthy vs unknown are two 
 		expect((healthy as { is_stale: unknown }).is_stale).not.toBe((unknown_ as { is_stale: unknown }).is_stale);
 	});
 });
+
+// ============================================================================
+// Sec R2 (GREEN round, non-blocking; both F1's original log site AND R1's new one were extended
+// to the same shape-only principle): a malformed/inconsistent row can carry REAL tenant data
+// (institution_name / provider / linked_source_id) — the log call must never emit the row
+// content, only its shape (types, array-ness, lengths). Proven here by VALUE, not by asserting a
+// specific logged object shape (which would drift the moment backend renames a metadata key) —
+// this leg plants a distinctive institution name / linked_source_id in the malformed input and
+// asserts neither ever appears in ANY console.error call's serialized output, across BOTH guard
+// branches (F1's type mismatch, R1's pair inconsistency).
+// ============================================================================
+
+describe("loadStaleness — Sec R2: neither malformed-row log call ever emits the row's own tenant data", () => {
+	const PLANTED_NAME = 'Canary National Bank';
+	const PLANTED_SOURCE_ID = 'ls_98765_canary';
+
+	function assertNoLeak(errorSpy: ReturnType<typeof vi.spyOn>) {
+		expect(errorSpy).toHaveBeenCalled();
+		const serialized = errorSpy.mock.calls.map((call: unknown[]) => JSON.stringify(call)).join('\n');
+		expect(serialized).not.toContain(PLANTED_NAME);
+		expect(serialized).not.toContain(PLANTED_SOURCE_ID);
+	}
+
+	it('⭐ F1 branch (type mismatch: stale_items not an array): the planted institution name/linked_source_id never reach console.error', async () => {
+		const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+		try {
+			const client = makeSupabase({
+				data: [
+					{
+						is_stale: true,
+						// Malformed on purpose (not an array) — the planted values ride along inside the
+						// non-array payload, exactly the shape a real malformed 046 response could carry.
+						stale_items: {
+							linked_source_id: PLANTED_SOURCE_ID,
+							institution_name: PLANTED_NAME,
+							provider: 'plaid'
+						}
+					}
+				],
+				error: null
+			});
+			await loadStaleness(client);
+			assertNoLeak(errorSpy);
+		} finally {
+			errorSpy.mockRestore();
+		}
+	});
+
+	it('⭐ R1 branch (pair inconsistency: is_stale disagrees with stale_items.length): the planted institution name/linked_source_id never reach console.error', async () => {
+		const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+		try {
+			const client = makeSupabase({
+				data: [
+					{
+						is_stale: false, // inconsistent with a non-empty list below
+						stale_items: [
+							{
+								linked_source_id: PLANTED_SOURCE_ID,
+								institution_name: PLANTED_NAME,
+								provider: 'plaid',
+								connection_status: 'login_required',
+								status_class: null
+							}
+						]
+					}
+				],
+				error: null
+			});
+			await loadStaleness(client);
+			assertNoLeak(errorSpy);
+		} finally {
+			errorSpy.mockRestore();
+		}
+	});
+});
