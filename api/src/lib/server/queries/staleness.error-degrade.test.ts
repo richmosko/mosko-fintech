@@ -116,6 +116,72 @@ describe('loadStaleness — data-layer prerequisite: healthy vs unknown are two 
 });
 
 // ============================================================================
+// Sec R1 (post-GREEN re-verdict, cebe96d, dispatched to backend): the F1 guard above only catches
+// TYPE mismatches (non-boolean is_stale / non-array stale_items) — it does not catch a
+// well-TYPED but logically INCONSISTENT pair, e.g. `is_stale: false` alongside a NON-EMPTY
+// `stale_items` array. Backend's fold-in adds a pair-consistency guard —
+// `is_stale !== (stale_items.length > 0)` → degrade to UNKNOWN — mirroring F1's own
+// `is_stale:true, stale_items:[]` case (already guarded at the RENDER layer via showUnknown, but
+// this is the LOADER-layer mirror of that same inconsistency, the other direction).
+//
+// ⭐ RAN AS A LITERAL, MEASURED RED RUN against the pre-R1 loader (2026-08-15): this leg FAILED —
+// `is_stale` came back `false` (the row's own field, passed through unmodified — the F1 type
+// guard passed it as well-typed and the function had no cross-field check). RE-VERIFIED GREEN
+// (2026-08-15) against backend's landed fold-in (334a043) — confirmed against the real committed
+// diff, not the relay.
+// ============================================================================
+
+describe('loadStaleness — Sec R1: a well-typed but INCONSISTENT (is_stale, stale_items) pair degrades to UNKNOWN', () => {
+	it('⭐ is_stale: false paired with a NON-EMPTY stale_items array → UNKNOWN, NOT the raw false passed through', async () => {
+		const client = makeSupabase({
+			data: [
+				{
+					is_stale: false,
+					stale_items: [
+						{
+							linked_source_id: 7,
+							institution_name: 'Test Bank',
+							provider: 'plaid',
+							connection_status: 'login_required',
+							status_class: null
+						}
+					]
+				}
+			],
+			error: null
+		});
+		const result: unknown = await loadStaleness(client);
+		expect((result as { is_stale: unknown }).is_stale).toBe(null);
+		// The wrong answer this leg rules out: passing `is_stale: false` straight through despite a
+		// non-empty stale_items list — a "confirmed not stale" claim contradicted by its own list.
+		expect((result as { is_stale: unknown }).is_stale).not.toBe(false);
+	});
+
+	it('a well-formed CONSISTENT pair (is_stale: true with a non-empty list) is UNAFFECTED by the R1 guard (regression check on the guard itself)', async () => {
+		const client = makeSupabase({
+			data: [
+				{
+					is_stale: true,
+					stale_items: [
+						{
+							linked_source_id: 7,
+							institution_name: 'Test Bank',
+							provider: 'plaid',
+							connection_status: 'login_required',
+							status_class: null
+						}
+					]
+				}
+			],
+			error: null
+		});
+		const result: unknown = await loadStaleness(client);
+		expect((result as { is_stale: unknown }).is_stale).toBe(true);
+		expect((result as { stale_items: unknown[] }).stale_items).toHaveLength(1);
+	});
+});
+
+// ============================================================================
 // Sec R2 (GREEN round, non-blocking; both F1's original log site AND R1's new one were extended
 // to the same shape-only principle): a malformed/inconsistent row can carry REAL tenant data
 // (institution_name / provider / linked_source_id) — the log call must never emit the row
