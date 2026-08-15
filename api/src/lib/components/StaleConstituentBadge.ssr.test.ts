@@ -3,8 +3,12 @@
 // `svelte/server` (already-installed `svelte` 5) — NO jsdom / NO @testing-library.
 //
 // WHAT THIS COVERS (the zero-footprint render/remove discipline — AC#5 marks-never-suppresses):
-//   • stale-injected  → the marker RENDERS (a visible ".stale-marker" group + the "May be stale"
-//                        tag + the accessible standing-condition summary naming the stale count).
+//   • stale-injected  → the marker RENDERS (a visible ".stale-connection-marker" group + the "May
+//                        be stale" tag + the accessible standing-condition summary naming the
+//                        stale count). Renamed from ".stale-marker" (SELF-229, QA finding) — that
+//                        shorter name collides with NavChartLines.svelte's UNRELATED per-point
+//                        checkpoint-carry marker (<g class="stale-marker" role="img">), which
+//                        renders inside the SAME NavHistoryChart tree this badge also mounts in.
 //   • un-stale         → the badge renders NOTHING (zero-footprint) — proves it REMOVES on the next
 //                        render cycle after re-auth (mirrors CountBadge zero-footprint discipline).
 //   • flag/list disagree (isStale=true but empty list) → NOTHING (the component's defensive
@@ -43,7 +47,7 @@ describe('StaleConstituentBadge — render/remove footprint (SSR)', () => {
 		const { body } = render(StaleConstituentBadge, {
 			props: { isStale: true, staleItems: [item('login_required', 1)] }
 		});
-		expect(body).toContain('stale-marker');
+		expect(body).toContain('stale-connection-marker');
 		expect(body).toContain('May be stale');
 		// The accessible standing-condition summary names the stale count on the control.
 		expect(body).toContain('1 account is contributing possibly-stale data to this total.');
@@ -65,19 +69,76 @@ describe('StaleConstituentBadge — render/remove footprint (SSR)', () => {
 			props: { isStale: false, staleItems: [] }
 		});
 		expect(visible(body)).toBe('');
-		expect(body).not.toContain('stale-marker');
+		expect(body).not.toContain('stale-connection-marker');
 		expect(body).not.toContain('May be stale');
 	});
 
-	it('defensive: isStale=true but EMPTY list → renders NOTHING (show gate honours BOTH)', () => {
+	// Sec F2 (AMBER round, no veto): a MALFORMED tuple (isStale=true, EMPTY list) used to render
+	// NOTHING here — silently indistinguishable from confirmed-healthy. It now routes to the SAME
+	// "Staleness unknown" branch as isStale=null (see the SELF-229 tri-state UNKNOWN describe
+	// block below), never the confirmed-stale disclosure (nothing to disclose) and never silence.
+	it('isStale=true but EMPTY list (malformed tuple) → "Staleness unknown", NEVER silence and NEVER "May be stale"', () => {
 		const { body } = render(StaleConstituentBadge, {
 			props: { isStale: true, staleItems: [] }
 		});
-		expect(visible(body)).toBe('');
+		expect(body).toContain('Staleness unknown');
+		expect(body).not.toContain('May be stale');
+	});
+});
+
+// Sec F3(B) (F/CTO-ruled): `isStale` / `staleItems` are now REQUIRED props — there is no more
+// "default props" state to test. A caller that omits them fails at TYPECHECK (verified by
+// `npm run check`), not at runtime, so there is no loader-absent runtime fallback left to assert
+// on here. The prior "default props (no staleness data) → renders NOTHING" test asserted a
+// behavior (a fail-open `isStale = false` default) that no longer exists — removed, not weakened.
+
+describe('StaleConstituentBadge — SELF-229 tri-state UNKNOWN (isStale === null)', () => {
+	it('isStale === null → renders the DISTINCT "Staleness unknown" note, never "May be stale"', () => {
+		const { body } = render(StaleConstituentBadge, {
+			props: { isStale: null, staleItems: [] }
+		});
+		expect(body).toContain('Staleness unknown');
+		expect(body).not.toContain('May be stale');
+		// Copy tone matches +page.svelte's existing accountPresence==='unknown' idiom
+		// ("We couldn't load your account list just now. Please try again shortly.").
+		expect(body).toContain("we couldn't confirm");
+		expect(body).toContain('Please try again shortly');
 	});
 
-	it('default props (no staleness data) → renders NOTHING (loader-absent safe default)', () => {
-		const { body } = render(StaleConstituentBadge, { props: {} });
+	it('the UNKNOWN note is NOT zero-footprint (unlike the healthy/false case) — visible without interaction', () => {
+		const { body } = render(StaleConstituentBadge, { props: { isStale: null, staleItems: [] } });
+		expect(visible(body)).not.toBe('');
+	});
+
+	it('is structurally distinguishable from the confirmed-stale branch (different class, no disclosure button)', () => {
+		const { body } = render(StaleConstituentBadge, { props: { isStale: null, staleItems: [] } });
+		expect(body).not.toContain('stale-connection-marker');
+		expect(body).not.toContain('<button');
+		expect(body).toContain('staleness-unknown');
+	});
+
+	it('isStale === false stays zero-footprint — UNKNOWN and healthy are never conflated', () => {
+		const { body } = render(StaleConstituentBadge, { props: { isStale: false, staleItems: [] } });
 		expect(visible(body)).toBe('');
+		expect(body).not.toContain('Staleness unknown');
+	});
+
+	it('isStale === true with real items still renders the confirmed-stale disclosure, unaffected by the tri-state widening', () => {
+		const { body } = render(StaleConstituentBadge, {
+			props: {
+				isStale: true,
+				staleItems: [
+					{
+						linked_source_id: '1',
+						institution_name: 'Test Bank',
+						provider: 'plaid',
+						connection_status: 'login_required',
+						status_class: null
+					}
+				]
+			}
+		});
+		expect(body).toContain('May be stale');
+		expect(body).not.toContain('Staleness unknown');
 	});
 });

@@ -13,6 +13,7 @@ import {
 	staleAffordance,
 	hasReauthActionable,
 	EMPTY_STALENESS,
+	UNKNOWN_STALENESS,
 	type StaleConstituentItem
 } from './stale-constituent';
 
@@ -62,9 +63,23 @@ describe('hasReauthActionable — drives the panel-level "Review connections" CT
 	});
 });
 
-describe('EMPTY_STALENESS — the loader-absent / fail-soft zero-value (staleness.ts degrade target)', () => {
+describe('EMPTY_STALENESS — the CONFIRMED-healthy zero-value (a successful 046 read, nothing stale)', () => {
 	it('is the unambiguous not-stale value: is_stale=false, stale_items=[]', () => {
 		expect(EMPTY_STALENESS.is_stale).toBe(false);
 		expect(EMPTY_STALENESS.stale_items).toEqual([]);
+	});
+});
+
+// SELF-229 REWORK (F/CTO-ruled, mirrors SELF-220 Sec round 2): staleness.ts's degrade target on
+// an RPC failure moved from EMPTY_STALENESS to UNKNOWN_STALENESS — a `046` read failure must never
+// be indistinguishable from a confirmed-healthy read.
+describe('UNKNOWN_STALENESS — the FAILED-read zero-value (staleness.ts\'s degrade target on error)', () => {
+	it('is distinct from EMPTY_STALENESS: is_stale=null, NOT false', () => {
+		expect(UNKNOWN_STALENESS.is_stale).toBeNull();
+		expect(UNKNOWN_STALENESS.stale_items).toEqual([]);
+	});
+
+	it('is never equal to EMPTY_STALENESS — the negative assertion is the point', () => {
+		expect(UNKNOWN_STALENESS.is_stale).not.toBe(EMPTY_STALENESS.is_stale);
 	});
 });

@@ -36,6 +36,19 @@
 	performance), which is exactly what the fence scopes the tokens to.
 
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5).
+
+	D1 stale-data-marker (SELF-229 ramp): `staleness` is the SAME whole-user `046`
+	fn_aggregation_has_stale_constituent() payload the §2.1.1 headline already consumes
+	(+page.server.ts's `data.staleness`, threaded down unchanged — the fn takes no scope
+	filter, so every consuming surface reads the identical aggregate). Rendered beside this
+	surface's own section heading (D1: mark adjacent to the surface, never a floating banner
+	— that's the separate P4 reauth-staleness-banner, SELF-207 territory). This is DISTINCT
+	from the `.carried-note` basis line below: the stale-data-marker (canary hue) flags an
+	unhealthy CONNECTION; the carried-note (neutral ink, informational tier) flags a carried
+	CPI-U REFERENCE SERIES — two different staleness sources per PRD §2.4.4, never merged
+	into one signal. Per ADR-013 D1 (staleness-marking surface scope is illustrative, not
+	exhaustive), further surfaces ramp later — Sec F4 (AMBER round): read D1 live, this line is a
+	paraphrase not a quote.
 -->
 <script lang="ts">
 	import {
@@ -56,8 +69,14 @@
 		anyCpiCarried,
 		type NavDeltaPanelRow
 	} from '$lib/nav-delta-panel';
+	import type { StalenessData } from '$lib/staleness/stale-constituent';
+	import StaleConstituentBadge from './StaleConstituentBadge.svelte';
 
-	let { rows }: { rows: NavDeltaPanelRow[] | null } = $props();
+	// Sec F3(B) (F/CTO-ruled): `staleness` is REQUIRED, no default — a caller that forgets to
+	// thread real staleness data now fails at TYPECHECK, not as a silent "confirmed healthy"
+	// fallback. The live mount (+page.svelte) already passes the real loader value unconditionally.
+	let { rows, staleness }: { rows: NavDeltaPanelRow[] | null; staleness: StalenessData } =
+		$props();
 
 	const readFailed = $derived(rows === null);
 	const orderedRows = $derived(rows ? orderRows(rows) : []);
@@ -68,6 +87,8 @@
 
 <section class="nav-delta-panel" aria-labelledby="nav-delta-panel-label">
 	<h2 id="nav-delta-panel-label" class="section-label">NAV Performance</h2>
+	<!-- D1 stale-data-marker: marks stale contribution beside the surface, never hides it. -->
+	<StaleConstituentBadge isStale={staleness.is_stale} staleItems={staleness.stale_items} />
 
 	{#if readFailed}
 		<p class="panel-notice">NAV performance is temporarily unavailable. Please try again shortly.</p>

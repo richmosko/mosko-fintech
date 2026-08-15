@@ -20,11 +20,22 @@
 	inferred client-side, and none is borrowed from NavDeltaPanel's current_checkpoint_date
 	disclosure (F/CTO-ratified 2026-08-13: a surface carries its own staleness signal).
 
-	§2.4.4 INFORMATIONAL-TIER MARKERS (the "carried" badge/basis-line vocabulary NavDeltaPanel
-	and NavHistoryChart use) ARE DELIBERATELY ABSENT — SELF-229, per team-lead's explicit
-	routing. Do not add a basis line, a carried-CPI badge, or a checkpoint-provenance disclosure
-	here; the columns that will feed that surface are threaded through the type but have no UI
-	yet.
+	§2.4.4 INFORMATIONAL-TIER MARKERS (SELF-229 ramp): a PER-ROW carried-CPI marker now renders
+	next to the "NAV — Prior Yr $" cell (073's cpi_any_carried is per-row, NOT the panel-wide flag
+	NavDeltaPanel/NavHistoryChart read — see $lib/nav-reference-dates.ts's header). Vocabulary
+	("Carried forward — …No action needed") is harmonized with NavDeltaPanel's existing basis-line
+	wording so the two panels read as one system despite the different per-row vs panel-wide shape.
+	The JANUARY-FAMILY COPY PROBLEM (PM comment 775fb0d1) is also handled here — two independent,
+	data-driven captions below the table (never a structural row/column change — SELF-229 owns
+	words only): priorMonthDuplicatesPriorYearEnd (duplicate rows) and columnsCollapseUnderArrears
+	(duplicate columns). Draft copy in temp/frontend-self229-copy.md pending PM review.
+
+	D1 stale-data-marker (SELF-229 ramp, distinct signal from the carried-CPI note above):
+	`staleness` is the SAME whole-user `046` fn_aggregation_has_stale_constituent() payload the
+	§2.1.1 headline already consumes, threaded down unchanged. Rendered beside this surface's own
+	section heading. Per ADR-013 D1 (staleness-marking surface scope is illustrative, not
+	exhaustive), further surfaces ramp later — Sec F4 (AMBER round): read D1 live, this line is a
+	paraphrase not a quote.
 
 	VALUE-COLOR FENCE (design-system-spec §5 fence 1) — THE OPPOSITE SCOPING FROM NavDeltaPanel:
 	`nav` / `nav_prior_yr_dollars` are NAV LEVELS (positions), not deltas, so NEITHER --c-pos NOR
@@ -38,19 +49,40 @@
 		REFERENCE_LABEL,
 		isCpiUnresolvable,
 		isInsufficientHistory,
+		isRowCpiCarried,
+		priorMonthDuplicatesPriorYearEnd,
+		columnsCollapseUnderArrears,
 		orderReferenceRows,
 		formatUsd,
 		type NavReferenceDateRow
 	} from '$lib/nav-reference-dates';
+	import type { StalenessData } from '$lib/staleness/stale-constituent';
+	import StaleConstituentBadge from './StaleConstituentBadge.svelte';
 
-	let { rows }: { rows: NavReferenceDateRow[] | null } = $props();
+	// Sec F3(B) (F/CTO-ruled): `staleness` is REQUIRED, no default — a caller that forgets to
+	// thread real staleness data now fails at TYPECHECK, not as a silent "confirmed healthy"
+	// fallback. The live mount (+page.svelte) already passes the real loader value unconditionally.
+	let { rows, staleness }: { rows: NavReferenceDateRow[] | null; staleness: StalenessData } =
+		$props();
 
 	const readFailed = $derived(rows === null);
 	const orderedRows = $derived(rows ? orderReferenceRows(rows) : []);
+	const duplicateRows = $derived(rows ? priorMonthDuplicatesPriorYearEnd(orderedRows) : false);
+	const columnsCollapsed = $derived(rows ? columnsCollapseUnderArrears(orderedRows) : false);
+
+	const monthYear = (iso: string) =>
+		new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+
+	function carriedTitle(row: NavReferenceDateRow): string | undefined {
+		if (!row.cpi_period) return undefined;
+		return `Carried forward — ${monthYear(row.cpi_period)}'s CPI-U print isn't published yet (CPI-U publishes one to two months in arrears). No action needed.`;
+	}
 </script>
 
 <section class="nav-reference-panel" aria-labelledby="nav-reference-panel-label">
 	<h2 id="nav-reference-panel-label" class="section-label">Reference NAV</h2>
+	<!-- D1 stale-data-marker: marks stale contribution beside the surface, never hides it. -->
+	<StaleConstituentBadge isStale={staleness.is_stale} staleItems={staleness.stale_items} />
 
 	{#if readFailed}
 		<p class="panel-notice">Reference NAV is temporarily unavailable. Please try again shortly.</p>
@@ -95,6 +127,9 @@
 										</span>
 									{:else if row.nav_prior_yr_dollars !== null}
 										{formatUsd(row.nav_prior_yr_dollars)}
+										{#if isRowCpiCarried(row)}
+											<span class="carried-flag" title={carriedTitle(row)}>Carried</span>
+										{/if}
 									{:else}
 										—
 									{/if}
@@ -105,6 +140,27 @@
 				</tbody>
 			</table>
 		</div>
+
+		<!-- THE JANUARY-FAMILY COPY PROBLEM (SELF-229 · PM comment 775fb0d1) — two independent,
+		     data-driven captions. Neither changes the table's shape (three rows always render, no
+		     de-duplication); both are words-only, gated on facts the panel's own rows already carry. -->
+		{#if duplicateRows || columnsCollapsed}
+			<div class="panel-footnotes">
+				{#if duplicateRows}
+					<p class="panel-footnote">
+						Prior Month and Prior Year-End show identical figures this month — both reference the
+						same December date, so this is expected, not a duplicate entry.
+					</p>
+				{/if}
+				{#if columnsCollapsed}
+					<p class="panel-footnote">
+						NAV and NAV — Prior Yr $ match exactly across all three rows this month — CPI-U's most
+						recent print is still catching up (it publishes one to two months in arrears), so the
+						conversion hasn't moved yet. This is expected, not a stalled figure.
+					</p>
+				{/if}
+			</div>
+		{/if}
 	{/if}
 </section>
 
@@ -198,5 +254,34 @@
 		font-style: italic;
 		color: var(--c-text-muted);
 		font-family: var(--font-ui);
+	}
+
+	/* PER-ROW carried-CPI marker (§2.4.4 informational tier) — deliberately NOT --c-attn-*
+	   (that hue is reserved for the D1 actionable/stale-connection signal the StaleConstituentBadge
+	   above renders); same quiet-neutral register as InformationalMarkerBadge / NavDeltaPanel's
+	   .carried-note. A compact inline tag (not a whole sentence) since it repeats per row. */
+	.carried-flag {
+		display: inline-flex;
+		align-items: center;
+		margin-left: var(--space-1);
+		font-family: var(--font-ui);
+		font-size: var(--fs-small);
+		font-style: italic;
+		color: var(--c-text-muted);
+	}
+
+	/* Duplicate-row / duplicate-column January-family captions — same basis-line vocabulary
+	   (neutral, secondary ink) NavDeltaPanel / NavHistoryChart use for their own disclosures. */
+	.panel-footnotes {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		margin-top: var(--space-3);
+	}
+	.panel-footnote {
+		margin: 0;
+		font-size: var(--fs-small);
+		color: var(--c-text-secondary);
+		line-height: var(--lh-body);
 	}
 </style>

@@ -9,6 +9,9 @@ import {
 	REFERENCE_LABEL,
 	isInsufficientHistory,
 	isCpiUnresolvable,
+	isRowCpiCarried,
+	priorMonthDuplicatesPriorYearEnd,
+	columnsCollapseUnderArrears,
 	orderReferenceRows,
 	formatUsd,
 	type NavReferenceDateRow
@@ -73,6 +76,82 @@ describe('formatUsd — plain, UNSIGNED whole-dollar formatting (a NAV LEVEL, no
 	});
 	it('zero renders as a plain "$0"', () => {
 		expect(formatUsd(0)).toBe('$0');
+	});
+});
+
+describe('isRowCpiCarried — SELF-229 PER-ROW marker (not NavDeltaPanel\'s panel-wide anyCpiCarried)', () => {
+	it('cpi_any_carried = true → true', () => {
+		expect(isRowCpiCarried(row({ reference: 'this_month', cpi_any_carried: true }))).toBe(true);
+	});
+	it('cpi_any_carried = false → false', () => {
+		expect(isRowCpiCarried(row({ reference: 'this_month', cpi_any_carried: false }))).toBe(false);
+	});
+	it('varies independently per row — a carried this_month row does not imply a carried prior_month row', () => {
+		const rows = [
+			row({ reference: 'this_month', cpi_any_carried: true }),
+			row({ reference: 'prior_month', cpi_any_carried: false })
+		];
+		expect(rows.map(isRowCpiCarried)).toEqual([true, false]);
+	});
+});
+
+describe('priorMonthDuplicatesPriorYearEnd — SELF-229 (ii) duplicate-ROWS January coincidence', () => {
+	it('same non-null checkpoint on both rows → true', () => {
+		const rows = [
+			row({ reference: 'this_month' }),
+			row({ reference: 'prior_month', reference_checkpoint_date: '2025-12-31' }),
+			row({ reference: 'prior_year_end', reference_checkpoint_date: '2025-12-31' })
+		];
+		expect(priorMonthDuplicatesPriorYearEnd(rows)).toBe(true);
+	});
+	it('different checkpoints (the ordinary non-January case) → false', () => {
+		const rows = [
+			row({ reference: 'this_month' }),
+			row({ reference: 'prior_month', reference_checkpoint_date: '2026-06-30' }),
+			row({ reference: 'prior_year_end', reference_checkpoint_date: '2025-12-31' })
+		];
+		expect(priorMonthDuplicatesPriorYearEnd(rows)).toBe(false);
+	});
+	it('either row insufficient-history (null checkpoint) → false, never a vacuous match', () => {
+		const rows = [
+			row({ reference: 'this_month' }),
+			row({ reference: 'prior_month', reference_checkpoint_date: null }),
+			row({ reference: 'prior_year_end', reference_checkpoint_date: null })
+		];
+		expect(priorMonthDuplicatesPriorYearEnd(rows)).toBe(false);
+	});
+	it('a row missing from the set → false rather than throwing', () => {
+		expect(priorMonthDuplicatesPriorYearEnd([row({ reference: 'this_month' })])).toBe(false);
+	});
+});
+
+describe('columnsCollapseUnderArrears — SELF-229 (iii) duplicate-COLUMNS CPI-arrears window', () => {
+	it('every row cpi_period === the shared cpi_basis_period → true', () => {
+		const rows = [
+			row({ reference: 'this_month', cpi_period: '2025-12-01', cpi_basis_period: '2025-12-01' }),
+			row({ reference: 'prior_month', cpi_period: '2025-12-01', cpi_basis_period: '2025-12-01' }),
+			row({ reference: 'prior_year_end', cpi_period: '2025-12-01', cpi_basis_period: '2025-12-01' })
+		];
+		expect(columnsCollapseUnderArrears(rows)).toBe(true);
+	});
+	it('one row diverges (the ordinary case) → false', () => {
+		const rows = [
+			row({ reference: 'this_month', cpi_period: '2026-07-01', cpi_basis_period: '2025-12-01' }),
+			row({ reference: 'prior_month', cpi_period: '2026-06-01', cpi_basis_period: '2025-12-01' }),
+			row({ reference: 'prior_year_end', cpi_period: '2025-12-01', cpi_basis_period: '2025-12-01' })
+		];
+		expect(columnsCollapseUnderArrears(rows)).toBe(false);
+	});
+	it('cpi_period null on any row (CPI-unresolvable, a different fact) → false, not a vacuous match', () => {
+		const rows = [
+			row({ reference: 'this_month', cpi_period: null, cpi_basis_period: '2025-12-01' }),
+			row({ reference: 'prior_month', cpi_period: '2025-12-01', cpi_basis_period: '2025-12-01' }),
+			row({ reference: 'prior_year_end', cpi_period: '2025-12-01', cpi_basis_period: '2025-12-01' })
+		];
+		expect(columnsCollapseUnderArrears(rows)).toBe(false);
+	});
+	it('empty row set → false', () => {
+		expect(columnsCollapseUnderArrears([])).toBe(false);
 	});
 });
 

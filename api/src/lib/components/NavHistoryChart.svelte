@@ -23,6 +23,15 @@
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5). CSS for the
 	legend row / basis-line family / informational badge is Visual Designer's
 	deliverable (temp/visual-designer-self220-tokens.md), reproduced verbatim.
+
+	D1 stale-data-marker (SELF-229 ramp): `staleness` is the SAME whole-user
+	`046` fn_aggregation_has_stale_constituent() payload the §2.1.1 headline already
+	consumes (+page.server.ts's `data.staleness`, threaded down unchanged — the fn takes
+	no scope filter, so every consuming surface reads the identical aggregate). Rendered
+	beside this surface's own section heading (D1: mark adjacent to the surface, never a
+	floating banner — that's the separate P4 reauth-staleness-banner, SELF-207 territory).
+	Per ADR-013 D1 (staleness-marking surface scope is illustrative, not exhaustive), further
+	surfaces ramp later — Sec F4 (AMBER round): read D1 live, this line is a paraphrase not a quote.
 -->
 <script lang="ts">
 	import { goto } from '$app/navigation';
@@ -38,20 +47,29 @@
 	import { EMPTY_NAV_BOUNDARY, resolutionDisclosureFires, type NavBoundary } from '$lib/nav-boundary';
 	import { sharedYDomain, suggestGranularity, autoNarrowWindow } from '$lib/nav-chart-domain';
 	import { NAV_SERIES_PARAM_PREFIX } from '$lib/schemas/nav-series-params';
+	import type { StalenessData } from '$lib/staleness/stale-constituent';
 	import ChartGranularityChipGroup from './ChartGranularityChipGroup.svelte';
 	import InformationalMarkerBadge from './InformationalMarkerBadge.svelte';
 	import NavChartLines from './NavChartLines.svelte';
+	import StaleConstituentBadge from './StaleConstituentBadge.svelte';
 
+	// Sec F3(B) (F/CTO-ruled): `staleness` is REQUIRED, no default — a caller that forgets to
+	// thread real staleness data now fails at TYPECHECK, not as a silent "confirmed healthy"
+	// fallback. The live mount (+page.svelte) already passes the real loader value unconditionally.
+	// (`boundary` keeps its own pre-existing EMPTY_NAV_BOUNDARY default — a different signal, out
+	// of scope for this Sec finding.)
 	let {
 		points,
 		paramsError,
 		params,
-		boundary = EMPTY_NAV_BOUNDARY
+		boundary = EMPTY_NAV_BOUNDARY,
+		staleness
 	}: {
 		points: NavSeriesPoint[] | null;
 		paramsError: string | null;
 		params: { granularity: NavSeriesGranularity; start: string; end: string };
 		boundary?: NavBoundary;
+		staleness: StalenessData;
 	} = $props();
 
 	// ---- state classification — see the module header for why these are checked
@@ -144,6 +162,8 @@
 
 <section class="nav-history" aria-labelledby="nav-history-label">
 	<h2 id="nav-history-label" class="section-label">Net Worth Over Time</h2>
+	<!-- D1 stale-data-marker: marks stale contribution beside the surface, never hides it. -->
+	<StaleConstituentBadge isStale={staleness.is_stale} staleItems={staleness.stale_items} />
 
 	{#if hasError}
 		<p class="chart-notice">Chart parameters were invalid: {paramsError}</p>

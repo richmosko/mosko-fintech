@@ -24,15 +24,44 @@
 	  • Whole-dollar, tabular-nums (D9): the NAV foot reads identical to the §2.1.1 headline and
 	    subtotals never appear off-by-rounding.
 
-	Per-row STALENESS is deferred to SELF-229 (D4) — the JSONB carries no staleness flags yet.
+	D1 stale-data-marker (SELF-229 ramp): the AGGREGATION-level badge is wired below off the SAME
+	whole-user `046` fn_aggregation_has_stale_constituent() payload the §2.1.1 headline already
+	consumes (+page.server.ts's `data.staleness`, threaded down unchanged). This component now owns
+	its own section heading (moved in from +page.svelte's wrapper) so the badge sits adjacent to it,
+	matching NavHistoryChart / NavDeltaPanel / NavReferenceDatesPanel's self-contained pattern.
+	Per ADR-013 D1 (staleness-marking surface scope is illustrative, not exhaustive), further
+	surfaces ramp later — Sec F4 (AMBER round): read D1 live, this line is a paraphrase not a quote.
+
+	PER-ROW LEAF staleness (AC#2 — a per-account indicator IN ADDITION to the aggregation badge
+	above): Backend delivers `NavCompositionLeaf.is_stale` via a SERVER-SIDE join in the loader
+	(pfin.account.linked_source_id ↔ staleness.stale_items[].linked_source_id — NO 051 change, no
+	migration; see $lib/nav-composition.ts's header). TRI-STATE, not a plain boolean:
+	  • true  → CONFIRMED stale. Rendered as an italic, canary-hued (--c-attn-text) inline tag next
+	    to the account name — the SAME signal family as the aggregation badge above (a server
+	    discriminator, never inferred here), just localized to this leaf. No duplicate re-auth CTA
+	    at leaf level; the aggregation badge above already carries that action.
+	  • false → confirmed NOT stale. Renders nothing (plain leaf row).
+	  • null  → UNKNOWN (the server-side join query itself failed). Rendered DISTINCTLY from `true`
+	    — a quiet, muted (--c-text-muted) note, matching the house idiom for "couldn't confirm X"
+	    (`+page.svelte`'s own `data.accountPresence === 'unknown'` notice under the headline NAV).
+	    NEVER collapsed with `false` (that would silently present an unconfirmed row as fresh — the
+	    exact SELF-220 Sec round 2 defect this tri-state shape exists to avoid) and NEVER collapsed
+	    with `true` (an unconfirmed row is not evidence of staleness either).
+
 	Tokens only (var(--c-*)); no hardcoded hex/px-spacing/font (ADR-013 P5).
 -->
 <script lang="ts">
 	import type { NavComposition } from '$lib/nav-composition';
 	import { buildupRows } from '$lib/nav-composition';
 	import { accountTypeLabel } from '$lib/account-display';
+	import type { StalenessData } from '$lib/staleness/stale-constituent';
+	import StaleConstituentBadge from './StaleConstituentBadge.svelte';
 
-	let { composition }: { composition: NavComposition } = $props();
+	// Sec F3(B) (F/CTO-ruled): `staleness` is REQUIRED, no default — a caller that forgets to
+	// thread real staleness data now fails at TYPECHECK, not as a silent "confirmed healthy"
+	// fallback. The live mount (+page.svelte) already passes the real loader value unconditionally.
+	let { composition, staleness }: { composition: NavComposition; staleness: StalenessData } =
+		$props();
 
 	const groups = $derived(composition.groups);
 	const ladder = $derived(buildupRows(composition.buildups));
@@ -61,7 +90,13 @@
 	}
 </script>
 
-<div class="table-scroll">
+<section class="composition" aria-labelledby="composition-label">
+	<h2 id="composition-label" class="section-label">Composition</h2>
+	<!-- D1 stale-data-marker: marks stale contribution beside the surface, never hides it.
+	     Per-leaf marking (AC#2) is BLOCKED — see the module header. -->
+	<StaleConstituentBadge isStale={staleness.is_stale} staleItems={staleness.stale_items} />
+
+	<div class="table-scroll">
 	<table class="comp">
 		<caption class="sr-only">Net worth composition by account category, with the build-up to net assets value.</caption>
 		<thead>
@@ -98,6 +133,20 @@
 						<tr class="leaf">
 							<td class="indent">
 								<a class="leaf-link" href={`/accounts/${a.account_id}`}>{a.account_name}</a>
+								<!-- AC#2 per-leaf staleness (SELF-229) — TRI-STATE, `false` renders nothing. -->
+								{#if a.is_stale === true}
+									<span
+										class="leaf-stale-flag"
+										title="This account is contributing possibly-stale data — see the staleness notice above."
+										>May be stale</span
+									>
+								{:else if a.is_stale === null}
+									<span
+										class="leaf-stale-unknown"
+										title="Couldn't confirm whether this account is contributing stale data."
+										>Staleness unknown</span
+									>
+								{/if}
 							</td>
 							<td class="num">{usd.format(a.current_market_value)}</td>
 							<td
@@ -136,6 +185,7 @@
 		</tbody>
 	</table>
 </div>
+</section>
 
 <style>
 	/* Accessible-name-only caption (visually hidden; keeps the table named for AT). */
@@ -149,6 +199,22 @@
 		clip: rect(0, 0, 0, 0);
 		white-space: nowrap;
 		border: 0;
+	}
+
+	/* §2.1.5 composition foot section shell — moved in from +page.svelte's wrapper (SELF-229) so
+	   the D1 stale-data-marker badge can sit adjacent to this surface's own heading, matching
+	   NavHistoryChart / NavDeltaPanel / NavReferenceDatesPanel's self-contained pattern. */
+	.composition {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-3);
+	}
+	.section-label {
+		margin: 0;
+		font: var(--weight-semi) var(--fs-h3) / var(--lh-tight) var(--font-ui);
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+		color: var(--c-text-secondary);
 	}
 
 	.table-scroll {
@@ -234,6 +300,27 @@
 		outline: none;
 		box-shadow: var(--focus-ring);
 		border-radius: var(--radius-sm);
+	}
+
+	/* AC#2 per-leaf staleness (SELF-229) — TRI-STATE, two DISTINCT treatments, never merged:
+	   confirmed-stale uses the RESERVED canary hue (same signal family as the aggregation badge
+	   above — a server discriminator, not decoration, per §5 fence 8); unknown is the QUIET
+	   muted-informational register this codebase already uses for "couldn't confirm X"
+	   (+page.svelte's accountPresence==='unknown' notice) — never the canary hue, since an
+	   unconfirmed row is not evidence of staleness either. */
+	.leaf-stale-flag {
+		display: inline-block;
+		margin-left: var(--space-2);
+		font-style: italic;
+		font-size: var(--fs-small);
+		color: var(--c-attn-text);
+	}
+	.leaf-stale-unknown {
+		display: inline-block;
+		margin-left: var(--space-2);
+		font-style: italic;
+		font-size: var(--fs-small);
+		color: var(--c-text-muted);
 	}
 
 	/* VALUE-COLOR FENCE (§5 fence 1): pos/neg ONLY on the Unrealized G/L column. */

@@ -38,12 +38,29 @@
 // this contract returns for THIS row; it never reaches into $lib/nav-delta-panel.ts's rows or
 // reuses NavDeltaPanel's current_checkpoint_date disclosure.
 //
-// §2.4.4 INFORMATIONAL-TIER MARKER RENDERING (the "carried" badge/basis-line vocabulary
-// NavDeltaPanel and NavHistoryChart use) IS DELIBERATELY OUT OF SCOPE — SELF-229, per team-lead's
-// explicit routing. cpi_any_carried / cpi_period / reference_checkpoint_date are carried in the
-// type below (the columns this contract ships now, per AC5's own "the columns that will feed it
-// ship in this contract now") but this file exposes NO predicate or basis-line helper for them —
-// adding one here would be building the SELF-229 surface early, not a SELF-223 concern.
+// §2.4.4 INFORMATIONAL-TIER MARKER RENDERING (SELF-229 — the framework ramp this file's own
+// predecessor comment deferred to). cpi_any_carried is a PER-ROW two-leg OR (see the interface
+// doc below) — NOT the panel-wide flag NavDeltaPanel's anyCpiCarried() reads off row[0], so this
+// file exposes a PER-ROW predicate (isRowCpiCarried) rather than a whole-rows-array one. Vocabulary
+// harmonized with NavDeltaPanel's carried-note ("Carried forward — …no action needed") — same
+// leading phrase, adapted to a per-row cell marker instead of a panel-wide basis line since the
+// underlying signal here varies row-to-row.
+//
+// THE JANUARY-FAMILY COPY PROBLEM (PM comment 775fb0d1; SELF-229 owns WORDS ONLY, never shape —
+// three rows always render, no de-duplication, no structural special-casing):
+//   (ii) DUPLICATE ROWS — in January, prior_month's reference_date IS prior_year_end's reference_date
+//        (both December of the prior year), so the SAME checkpoint serves both rows and every column
+//        matches by construction. Detected here via reference_checkpoint_date equality (a plain
+//        comparison of two already-server-supplied dates — not a staleness inference, not a client
+//        clock check) so the explanatory caption below the table appears ONLY when the coincidence
+//        is actually present, never as a permanent disclaimer.
+//   (iii) DUPLICATE COLUMNS — under CPI-U arrears, THIS row's own cpi_period lands on the SAME
+//        month as the shared cpi_basis_period for every one of the three rows, so NAV and
+//        NAV — Prior Yr $ read identically across the whole table. Detected via cpi_period ===
+//        cpi_basis_period on every row (again a plain per-row column comparison, not inference).
+// Both predicates read ONLY columns this contract already returns; neither compares against a
+// client-side clock or infers a connection-health state — that axis stays exclusively on `046`
+// fn_aggregation_has_stale_constituent() via the StaleConstituentBadge the component also renders.
 //
 // VALUE-COLOR FENCE (design-system-spec §5 fence 1) — THE OPPOSITE SCOPING FROM
 // $lib/nav-delta-panel.ts: `nav` / `nav_prior_yr_dollars` are NAV LEVELS (positions, PRD §2.1.4:
@@ -133,4 +150,36 @@ const usd = new Intl.NumberFormat('en-US', {
 
 export function formatUsd(n: number): string {
 	return usd.format(n);
+}
+
+// ── SELF-229 §2.4.4 informational-tier + January-family predicates ──────────────────────────
+
+// PER-ROW carried-CPI marker (see module header — NOT NavDeltaPanel's panel-wide anyCpiCarried).
+// Gated by the caller on !isCpiUnresolvable(row): a carried note attaches to a rendered figure,
+// never to an already-"CPI unavailable" cell.
+export function isRowCpiCarried(row: NavReferenceDateRow): boolean {
+	return row.cpi_any_carried;
+}
+
+// (ii) DUPLICATE ROWS — prior_month and prior_year_end are served by the identical checkpoint
+// (both non-null and equal). Both rows must have resolved (not insufficient-history) for the
+// coincidence to be a real, renderable fact rather than two absent rows trivially "matching".
+export function priorMonthDuplicatesPriorYearEnd(rows: NavReferenceDateRow[]): boolean {
+	const priorMonth = rows.find((r) => r.reference === 'prior_month');
+	const priorYearEnd = rows.find((r) => r.reference === 'prior_year_end');
+	if (!priorMonth || !priorYearEnd) return false;
+	if (priorMonth.reference_checkpoint_date === null || priorYearEnd.reference_checkpoint_date === null) {
+		return false;
+	}
+	return priorMonth.reference_checkpoint_date === priorYearEnd.reference_checkpoint_date;
+}
+
+// (iii) DUPLICATE COLUMNS — every row's own cpi_period lands on the same month as the shared
+// cpi_basis_period, so NAV and NAV — Prior Yr $ read identically across the whole table. A row
+// with cpi_period === null (This Month, no CPI coverage at all) is NOT a match — that is the
+// CPI-unresolvable state, a different fact, so it fails this predicate rather than vacuously
+// passing it.
+export function columnsCollapseUnderArrears(rows: NavReferenceDateRow[]): boolean {
+	if (rows.length === 0) return false;
+	return rows.every((r) => r.cpi_period !== null && r.cpi_period === r.cpi_basis_period);
 }

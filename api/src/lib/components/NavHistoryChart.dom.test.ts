@@ -14,6 +14,7 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect, beforeEach, type Mock } from 'vitest';
+import { EMPTY_STALENESS } from '$lib/staleness/stale-constituent';
 import { render } from '@testing-library/svelte';
 import NavHistoryChart from './NavHistoryChart.svelte';
 import type { NavSeriesPoint } from '$lib/nav-series';
@@ -97,7 +98,7 @@ const POPULATED = Array.from({ length: 13 }, (_, i) =>
 describe('NavHistoryChart — placeholder-state gating never collapses distinct states', () => {
 	it('paramsError set: renders the error notice, never the empty/unavailable copy', () => {
 		const { getByText, queryByText } = render(NavHistoryChart, {
-			props: {
+			props: { staleness: EMPTY_STALENESS,
 				points: [],
 				paramsError: 'granularity: Invalid enum value',
 				params: PARAMS,
@@ -111,7 +112,7 @@ describe('NavHistoryChart — placeholder-state gating never collapses distinct 
 
 	it('points === null (read failed): renders the unavailable notice, never the empty-history copy', () => {
 		const { getByText, queryByText } = render(NavHistoryChart, {
-			props: { points: null, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+			props: { staleness: EMPTY_STALENESS, points: null, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
 		});
 		expect(getByText(/temporarily unavailable/)).toBeTruthy();
 		expect(queryByText('Collect data over time.')).toBeNull();
@@ -119,7 +120,7 @@ describe('NavHistoryChart — placeholder-state gating never collapses distinct 
 
 	it('points === [] (genuinely empty): renders "Collect data over time.", never the unavailable copy', () => {
 		const { getByText, queryByText } = render(NavHistoryChart, {
-			props: { points: [], paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+			props: { staleness: EMPTY_STALENESS, points: [], paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
 		});
 		expect(getByText('Collect data over time.')).toBeTruthy();
 		expect(queryByText(/temporarily unavailable/)).toBeNull();
@@ -129,7 +130,7 @@ describe('NavHistoryChart — placeholder-state gating never collapses distinct 
 describe('NavHistoryChart — default render (populated series)', () => {
 	it('renders both legend entries and the granularity chip-group', () => {
 		const { getByText, getByRole } = render(NavHistoryChart, {
-			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+			props: { staleness: EMPTY_STALENESS, points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
 		});
 		expect(getByText('Net Worth (Nominal)')).toBeTruthy();
 		expect(getByText('Net Worth (Inflation-Adjusted)')).toBeTruthy();
@@ -138,7 +139,7 @@ describe('NavHistoryChart — default render (populated series)', () => {
 
 	it('the selected granularity chip carries aria-checked="true"; the others false', () => {
 		const { getByRole } = render(NavHistoryChart, {
-			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+			props: { staleness: EMPTY_STALENESS, points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
 		});
 		const monthly = getByRole('radio', { name: 'Monthly' });
 		const weekly = getByRole('radio', { name: 'Weekly' });
@@ -154,7 +155,7 @@ describe('NavHistoryChart — default render (populated series)', () => {
 			cpi_coverage_through: null
 		}));
 		const { queryByText, getByText } = render(NavHistoryChart, {
-			props: {
+			props: { staleness: EMPTY_STALENESS,
 				points: cpiUnavailablePoints,
 				paramsError: null,
 				params: PARAMS,
@@ -167,7 +168,7 @@ describe('NavHistoryChart — default render (populated series)', () => {
 
 	it('clicking a granularity chip navigates via goto with the NAMESPACED query param', async () => {
 		const { getByRole } = render(NavHistoryChart, {
-			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+			props: { staleness: EMPTY_STALENESS, points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
 		});
 		const daily = getByRole('radio', { name: 'Daily' });
 		daily.click();
@@ -184,7 +185,7 @@ describe('NavHistoryChart — default render (populated series)', () => {
 	it('⭐ a stray non-chart param on the page URL survives a granularity-chip navigation untouched', async () => {
 		setPageUrl('http://localhost/?utm_source=newsletter');
 		const { getByRole } = render(NavHistoryChart, {
-			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+			props: { staleness: EMPTY_STALENESS, points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
 		});
 		const daily = getByRole('radio', { name: 'Daily' });
 		daily.click();
@@ -204,7 +205,7 @@ describe('NavHistoryChart — reset breadcrumb is namespace-scoped, not page-sco
 	it('a page URL with ONLY a stray non-chart param does NOT show "Reset to 60 months"', () => {
 		setPageUrl('http://localhost/?utm_source=newsletter');
 		const { queryByText, getByText } = render(NavHistoryChart, {
-			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+			props: { staleness: EMPTY_STALENESS, points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
 		});
 		expect(queryByText('Reset to 60 months')).toBeNull();
 		// The non-breadcrumb range label renders instead — proves the false branch is reachable
@@ -215,7 +216,7 @@ describe('NavHistoryChart — reset breadcrumb is namespace-scoped, not page-sco
 	it('a page URL WITH a chart_* param shows "Reset to 60 months"', () => {
 		setPageUrl('http://localhost/?chart_granularity=daily');
 		const { getByText } = render(NavHistoryChart, {
-			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+			props: { staleness: EMPTY_STALENESS, points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
 		});
 		expect(getByText('Reset to 60 months')).toBeTruthy();
 	});
@@ -223,7 +224,7 @@ describe('NavHistoryChart — reset breadcrumb is namespace-scoped, not page-sco
 	it('⭐ clicking reset clears only chart_* keys — a stray non-chart param on the URL survives', async () => {
 		setPageUrl('http://localhost/?utm_source=newsletter&chart_granularity=daily&chart_start=2026-01-01');
 		const { getByText } = render(NavHistoryChart, {
-			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+			props: { staleness: EMPTY_STALENESS, points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
 		});
 		getByText('Reset to 60 months').click();
 		await Promise.resolve();
@@ -254,7 +255,7 @@ describe('SELF-220-QA-r1 — resolution-disclosure copy, bound to the UX-ruled s
 	it('imported-only (no cron yet): renders the RULED no-boundary-date copy verbatim', () => {
 		const boundary = { first_cron_checkpoint: null, has_cron_rows: false, has_imported_rows: true };
 		const { getByText } = render(NavHistoryChart, {
-			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary }
+			props: { staleness: EMPTY_STALENESS, points: POPULATED, paramsError: null, params: PARAMS, boundary }
 		});
 		// Bound to the EXACT ruled string (team-lead, 2026-08-12) — not a substring/regex
 		// match, so a future edit that alters the copy fails here rather than passing on a
@@ -268,7 +269,7 @@ describe('SELF-220-QA-r1 — resolution-disclosure copy, bound to the UX-ruled s
 		const boundary = { first_cron_checkpoint: '2026-01-01', has_cron_rows: true, has_imported_rows: true };
 		const preBoundaryPoint = point({ point_date: '2025-06-15', checkpoint_date: '2025-06-15' });
 		const { getByText, queryByText } = render(NavHistoryChart, {
-			props: { points: [preBoundaryPoint, ...POPULATED], paramsError: null, params: PARAMS, boundary }
+			props: { staleness: EMPTY_STALENESS, points: [preBoundaryPoint, ...POPULATED], paramsError: null, params: PARAMS, boundary }
 		});
 		expect(getByText(/Monthly resolution before/)).toBeTruthy();
 		expect(getByText('January 2026', { selector: '.basis-value' })).toBeTruthy();
@@ -278,7 +279,7 @@ describe('SELF-220-QA-r1 — resolution-disclosure copy, bound to the UX-ruled s
 	it('cron-only (no imported rows at all): the disclosure never renders — nothing to disclose', () => {
 		const boundary = { first_cron_checkpoint: '2026-01-01', has_cron_rows: true, has_imported_rows: false };
 		const { queryByText } = render(NavHistoryChart, {
-			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary }
+			props: { staleness: EMPTY_STALENESS, points: POPULATED, paramsError: null, params: PARAMS, boundary }
 		});
 		expect(queryByText(/Monthly resolution/)).toBeNull();
 	});
@@ -292,7 +293,7 @@ describe('SELF-220-QA-r1 — sparse-history state (§12.9) does not collapse int
 
 	it('sparse series: the tracking-history label renders with the correct "N of M months" text', () => {
 		const { getByText } = render(NavHistoryChart, {
-			props: { points: SPARSE, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+			props: { staleness: EMPTY_STALENESS, points: SPARSE, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
 		});
 		// PARAMS spans 2021-06-01..2026-06-01 = 60 requested months; SPARSE carries 5
 		// distinct calendar months — both halves of the label are asserted so a
@@ -303,7 +304,7 @@ describe('SELF-220-QA-r1 — sparse-history state (§12.9) does not collapse int
 
 	it('a populated (non-sparse) series never renders the tracking-history label', () => {
 		const { queryByText } = render(NavHistoryChart, {
-			props: { points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+			props: { staleness: EMPTY_STALENESS, points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
 		});
 		expect(queryByText(/months of history/)).toBeNull();
 	});
@@ -322,7 +323,7 @@ describe('SELF-220-QA-r1 — staleness markers fire post-boundary ONLY (§12.1/�
 		});
 		const postBoundaryFresh = point({ point_date: '2026-04-30', checkpoint_date: '2026-04-30' });
 		const { getAllByRole } = render(NavHistoryChart, {
-			props: {
+			props: { staleness: EMPTY_STALENESS,
 				points: [preBoundaryCarried, postBoundaryCarried, postBoundaryFresh],
 				paramsError: null,
 				params: PARAMS,
@@ -355,7 +356,7 @@ describe('SELF-220-QA-r1 — staleness markers fire post-boundary ONLY (§12.1/�
 		const carried1 = point({ point_date: '2018-01-31', checkpoint_date: '2017-12-31' });
 		const carried2 = point({ point_date: '2018-02-28', checkpoint_date: '2018-01-31' });
 		const { queryAllByRole } = render(NavHistoryChart, {
-			props: {
+			props: { staleness: EMPTY_STALENESS,
 				points: [carried1, carried2],
 				paramsError: null,
 				params: PARAMS,
@@ -404,7 +405,7 @@ describe('SELF-220-QA-r3 — imported-only state, reconciled: state-driven marke
 
 	it('(A) state-driven: zero .stale-marker elements — not coupled to aria-label copy', () => {
 		const { container } = render(NavHistoryChart, {
-			props: {
+			props: { staleness: EMPTY_STALENESS,
 				points: CARRIED_IMPORTED_POINTS,
 				paramsError: null,
 				params: PARAMS,
@@ -422,7 +423,7 @@ describe('SELF-220-QA-r3 — imported-only state, reconciled: state-driven marke
 		// stepped path can render even under a bug that misclassifies everything else.
 		// The discriminating signal is the ABSENCE of the plain (non-stepped) segment.
 		const { container } = render(NavHistoryChart, {
-			props: {
+			props: { staleness: EMPTY_STALENESS,
 				points: CARRIED_IMPORTED_POINTS,
 				paramsError: null,
 				params: PARAMS,
@@ -478,7 +479,7 @@ describe('SELF-220-QA-r4 — boundary READ FAILURE (EMPTY tuple) + real carried 
 
 	it('⭐ RED-at-e0edfac: staleness markers SHOW under EMPTY_NAV_BOUNDARY — a boundary read failure must not silently hide real staleness', () => {
 		const { container } = render(NavHistoryChart, {
-			props: {
+			props: { staleness: EMPTY_STALENESS,
 				points: CARRIED_POINTS_UNDER_FAILED_BOUNDARY,
 				paramsError: null,
 				params: PARAMS,
@@ -496,7 +497,7 @@ describe('SELF-220-QA-r4 — boundary READ FAILURE (EMPTY tuple) + real carried 
 
 	it('⭐ RED-at-e0edfac: the resolution-disclosure does NOT fire under EMPTY_NAV_BOUNDARY — nothing to disclose when has_imported_rows is false', () => {
 		const { container } = render(NavHistoryChart, {
-			props: {
+			props: { staleness: EMPTY_STALENESS,
 				points: CARRIED_POINTS_UNDER_FAILED_BOUNDARY,
 				paramsError: null,
 				params: PARAMS,
@@ -508,5 +509,225 @@ describe('SELF-220-QA-r4 — boundary READ FAILURE (EMPTY tuple) + real carried 
 		// keys on has_imported_rows, which is false on EMPTY); included as the
 		// non-vacuity companion to the marker leg above, on the SAME input.
 		expect(container.querySelector('.resolution-disclosure')).toBeNull();
+	});
+});
+
+describe('NavHistoryChart — SELF-229 D1 stale-data-marker (whole-user, shared with the other 3 surfaces)', () => {
+	// Sec F3(B) (F/CTO-ruled): `staleness` is now a REQUIRED prop — there is no more implicit
+	// "omitted" case (a caller that forgets it fails at TYPECHECK). This asserts the explicit
+	// EMPTY_STALENESS (confirmed-healthy) value stays zero-footprint, same as before.
+	it('staleness confirmed healthy (EMPTY_STALENESS) → zero-footprint, no badge markup', () => {
+		const { queryByText } = render(NavHistoryChart, {
+			props: { staleness: EMPTY_STALENESS, points: POPULATED, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+		});
+		expect(queryByText('May be stale')).toBeNull();
+	});
+
+	it('is_stale true → the shared StaleConstituentBadge renders beside the section heading', () => {
+		const { getByText } = render(NavHistoryChart, {
+			props: {
+				points: POPULATED,
+				paramsError: null,
+				params: PARAMS,
+				boundary: EMPTY_NAV_BOUNDARY,
+				staleness: {
+					is_stale: true,
+					stale_items: [
+						{
+							linked_source_id: '42',
+							institution_name: 'Test Bank',
+							provider: 'plaid',
+							connection_status: 'login_required',
+							status_class: null
+						}
+					]
+				}
+			}
+		});
+		expect(getByText('May be stale')).toBeTruthy();
+	});
+});
+
+// ============================================================================
+// F/CTO ruling (a), FINAL BATTERY PASS (team-lead, post-442dac8): the badge's own tri-state
+// distinguishability is proven exhaustively at the shared-component level
+// (StaleConstituentBadge.ssr.test.ts). What was NOT proven anywhere: that `staleness.is_stale
+// === null` (UNKNOWN_STALENESS) actually reaches THIS surface's own mount and renders — every
+// prior wiring-fidelity leg on this file only ever exercised `is_stale: true`. Closing that gap.
+// ============================================================================
+
+describe('NavHistoryChart — SELF-229 tri-state wiring: staleness.is_stale === null reaches this surface', () => {
+	it('is_stale === null renders "Staleness unknown" at this surface, distinct from "May be stale"', () => {
+		const { getByText, queryByText } = render(NavHistoryChart, {
+			props: {
+				points: POPULATED,
+				paramsError: null,
+				params: PARAMS,
+				boundary: EMPTY_NAV_BOUNDARY,
+				staleness: { is_stale: null, stale_items: [] }
+			}
+		});
+		expect(getByText('Staleness unknown')).toBeTruthy();
+		expect(queryByText('May be stale')).toBeNull();
+	});
+
+	it('is_stale === false (confirmed healthy) stays zero-footprint — never confused with the unknown case above', () => {
+		const { queryByText } = render(NavHistoryChart, {
+			props: {
+				points: POPULATED,
+				paramsError: null,
+				params: PARAMS,
+				boundary: EMPTY_NAV_BOUNDARY,
+				staleness: { is_stale: false, stale_items: [] }
+			}
+		});
+		expect(queryByText('Staleness unknown')).toBeNull();
+		expect(queryByText('May be stale')).toBeNull();
+	});
+});
+
+// ============================================================================
+// SELF-229-QA — the D1 stale-data-marker (StaleConstituentBadge, wired in f103586) now
+// coexists on this ONE surface with the two markers already proven above: the checkpoint-carry
+// marker (NavChartLines' `<circle class="stale-marker" role="img">`, §12.1/§12.2) and the
+// CPI-carry InformationalMarkerBadge (`.info-marker-badge`). ⚠ NAME COLLISION (FOUND, FIXED):
+// the badge's wrapper originally carried the IDENTICAL class `stale-marker` as the
+// checkpoint-carry `<circle>` — flagged to Frontend, who renamed it to `.stale-connection-marker`
+// in 1a5745d. A bare `.querySelectorAll('.stale-marker')` — exactly the pattern
+// SELF-220-QA-r3/r4 above use — would have SILENTLY SUMMED both signals pre-rename. The distinct
+// class name is now the primary discriminator below; `role` (group vs img) is asserted too as a
+// belt-and-suspenders check against a future rename collision.
+//
+// Team-lead's ramp brief: "a leg must fail if any two [of the three signals] collapse into one
+// rendered element (vary each signal independently; invariance to a varied signal = blindness)."
+// Four legs: each signal varied ALONE (the other two absent), then all three present at once —
+// the last leg is the one that actually catches a collapse, since the first three would each
+// individually pass even under an implementation that conflated any TWO of the signals whenever
+// only one is present in the fixture.
+// ============================================================================
+
+describe('SELF-229-QA — three distinct staleness/carry signals never collapse into one rendered element', () => {
+	const D1_BADGE_SEL = '.stale-connection-marker[role="group"]';
+	const CARRY_MARKER_SEL = '.stale-marker[role="img"]';
+	const CPI_INFO_BADGE_SEL = '.info-marker-badge';
+
+	const D1_STALE = {
+		is_stale: true,
+		stale_items: [
+			{
+				linked_source_id: '42',
+				institution_name: 'Test Bank',
+				provider: 'plaid',
+				connection_status: 'login_required',
+				status_class: null
+			}
+		]
+	};
+
+	// NOTE: deliberately NOT reusing the shared `POPULATED` fixture here — its `point_date`
+	// overrides shift each point off `point()`'s FIXED default `checkpoint_date` ('2026-01-31'),
+	// so nearly every POPULATED point is ALREADY checkpoint-carried by construction (confirmed:
+	// carry=13 on a first draft of this leg). Every fixture below sets checkpoint_date EXPLICITLY
+	// so each signal is genuinely isolated rather than accidentally tripping another.
+	const FRESH = (dateIso: string) => point({ point_date: dateIso, checkpoint_date: dateIso, cpi_is_carried: false, cpi_period_was_due: false });
+	const CHECKPOINT_CARRIED = (dateIso: string, fromIso: string) =>
+		point({ point_date: dateIso, checkpoint_date: fromIso, cpi_is_carried: false, cpi_period_was_due: false });
+	// cpi_carried_from MUST be set (not left at point()'s default null): InformationalMarkerBadge
+	// only renders when its computed `message` is non-empty, and with a single carried point
+	// (carriedCount === 1) the message branch requires `cpiPeriod && carriedFrom` BOTH truthy —
+	// confirmed by a first draft of this leg going cpi:0 instead of 1 with carriedFrom left null.
+	const CPI_CARRIED = (dateIso: string) =>
+		point({
+			point_date: dateIso,
+			checkpoint_date: dateIso,
+			cpi_is_carried: true,
+			cpi_period_was_due: true,
+			cpi_carried_from: '2025-12-01'
+		});
+	const FRESH_SERIES = [FRESH('2026-01-15'), FRESH('2026-02-15'), FRESH('2026-03-15'), FRESH('2026-04-15')];
+
+	function counts(container: HTMLElement) {
+		return {
+			badge: container.querySelectorAll(D1_BADGE_SEL).length,
+			carry: container.querySelectorAll(CARRY_MARKER_SEL).length,
+			cpi: container.querySelectorAll(CPI_INFO_BADGE_SEL).length
+		};
+	}
+
+	it('D1 signal varied ALONE (stale connection, no carry, no CPI-carry): only the badge renders', () => {
+		const { container } = render(NavHistoryChart, {
+			props: { points: FRESH_SERIES, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY, staleness: D1_STALE }
+		});
+		expect(counts(container)).toEqual({ badge: 1, carry: 0, cpi: 0 });
+	});
+
+	it('checkpoint-carry signal varied ALONE (no D1 staleness, no CPI-carry): only the carry marker renders', () => {
+		const points = [FRESH('2026-01-15'), CHECKPOINT_CARRIED('2026-02-15', '2026-01-10'), FRESH('2026-03-15')];
+		const { container } = render(NavHistoryChart, {
+			props: { staleness: EMPTY_STALENESS, points, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+		});
+		expect(counts(container)).toEqual({ badge: 0, carry: 1, cpi: 0 });
+	});
+
+	it('CPI-carry signal varied ALONE (no D1 staleness, no checkpoint-carry): only the info-badge renders', () => {
+		const points = [FRESH('2026-01-15'), CPI_CARRIED('2026-02-15'), FRESH('2026-03-15')];
+		const { container } = render(NavHistoryChart, {
+			props: { staleness: EMPTY_STALENESS, points, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY }
+		});
+		expect(counts(container)).toEqual({ badge: 0, carry: 0, cpi: 1 });
+	});
+
+	it('⭐ all THREE signals present at once: each renders independently — none suppresses or duplicates another', () => {
+		const points = [
+			FRESH('2026-01-15'),
+			CHECKPOINT_CARRIED('2026-02-15', '2026-01-10'),
+			CPI_CARRIED('2026-03-15'),
+			FRESH('2026-04-15')
+		];
+		const { container } = render(NavHistoryChart, {
+			props: { points, paramsError: null, params: PARAMS, boundary: EMPTY_NAV_BOUNDARY, staleness: D1_STALE }
+		});
+		// Exactly one of each — a collapse (two signals rendering as one element) would show up
+		// as a count of 0 on one side and 2 on the other, or the wrong element under the wrong
+		// role; a duplication would show up as >1 on a signal that should be singular.
+		expect(counts(container)).toEqual({ badge: 1, carry: 1, cpi: 1 });
+	});
+
+	// FINAL BATTERY PASS addition (team-lead, post-442dac8): the badge is now TRI-STATE — the
+	// UNKNOWN render (`.staleness-unknown`, a DIFFERENT class from the confirmed-stale
+	// `.stale-connection-marker` counted above) must be independently isolable from the other two
+	// signals too, same rigor as the confirmed-stale case.
+	it('D1 UNKNOWN varied ALONE (staleness read failed, no carry, no CPI-carry): only the unknown note renders, never the confirmed-stale badge', () => {
+		const { container } = render(NavHistoryChart, {
+			props: {
+				points: FRESH_SERIES,
+				paramsError: null,
+				params: PARAMS,
+				boundary: EMPTY_NAV_BOUNDARY,
+				staleness: { is_stale: null, stale_items: [] }
+			}
+		});
+		expect(container.querySelectorAll('.staleness-unknown').length).toBe(1);
+		expect(counts(container)).toEqual({ badge: 0, carry: 0, cpi: 0 });
+	});
+
+	it('D1 UNKNOWN + checkpoint-carry + CPI-carry all present at once: the unknown note and the two carry signals render independently, none suppresses another', () => {
+		const points = [
+			FRESH('2026-01-15'),
+			CHECKPOINT_CARRIED('2026-02-15', '2026-01-10'),
+			CPI_CARRIED('2026-03-15'),
+			FRESH('2026-04-15')
+		];
+		const { container } = render(NavHistoryChart, {
+			props: {
+				points,
+				paramsError: null,
+				params: PARAMS,
+				boundary: EMPTY_NAV_BOUNDARY,
+				staleness: { is_stale: null, stale_items: [] }
+			}
+		});
+		expect(container.querySelectorAll('.staleness-unknown').length).toBe(1);
+		expect(counts(container)).toEqual({ badge: 0, carry: 1, cpi: 1 });
 	});
 });

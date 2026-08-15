@@ -14,19 +14,31 @@
 // three-badge render has no cross-row special-casing (no "all rows blank → different treatment"
 // shortcut) by construction.
 //
-// QA FINDING 3 (SELF-223 PR review, cheap guard, taken): the January edge case where This Month
-// and Prior Year-End resolve to the IDENTICAL calendar date (PM's ratified "most recent completed
-// month-end" Prior-Month definition: in January, before that month's own close, This Month's
-// most-recent-completed-month-end IS December 31 of the prior year — the same date Prior Year-End
-// names by definition). Locks that two rows sharing reference_date/checkpoint/nav render as two
-// PLAIN, independent, identical rows — no dedup, no merge, no "same as above" special-casing —
-// against a future "helpful" cleanup that would collapse them.
+// QA FINDING 3 (SELF-223 PR review, cheap guard, taken; comment + fixture CORRECTED 2026-08-14
+// against migration 073's own header — team-lead flagged the narrative drift, verified against
+// 073 directly rather than the relay before touching anything, see 073 lines 179-183): the
+// January edge case where PRIOR MONTH and PRIOR YEAR-END resolve to the IDENTICAL calendar date
+// — NOT This Month, which the original comment AND fixture both named. 073's header: prior_month
+// is 072's `month` horizon anchor, defined as "THE MOST RECENT COMPLETED MONTH-END"; for the
+// WHOLE of January that most-recent-completed-month-end IS 31 December of the prior year — the
+// same fixed date prior_year_end always names. This is a STRUCTURAL (calendar) coincidence, true
+// every January by construction, not a data-dependent one. This_month is a DIFFERENT concept
+// entirely (072's CURRENT ENDPOINT — the LOCF checkpoint at-or-before TODAY) and only happens to
+// coincide with prior_year_end on the narrow, data-dependent days before a fresh January
+// checkpoint has landed — it is not the coincidence 073 documents, and the original fixture
+// (this_month sharing prior_year_end's date, prior_month given a distinct one) tested the wrong
+// pairing while its own prose described it backwards. Locks that two rows sharing
+// reference_date/checkpoint/nav render as two PLAIN, independent, identical rows — no dedup, no
+// merge, no "same as above" special-casing — against a future "helpful" cleanup that would
+// collapse them.
 
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { render } from 'svelte/server';
 import NavReferenceDatesPanel from './NavReferenceDatesPanel.svelte';
 import type { NavReferenceDateRow } from '$lib/nav-reference-dates';
+import { EMPTY_STALENESS } from '$lib/staleness/stale-constituent';
+import type { StaleConstituentItem } from '$lib/staleness/stale-constituent';
 
 function row(
 	overrides: Partial<NavReferenceDateRow> & { reference: NavReferenceDateRow['reference'] }
@@ -55,7 +67,7 @@ function fixture(
 
 describe('NavReferenceDatesPanel — read-failed (fail-soft)', () => {
 	it('rows === null → unavailable notice, no table', () => {
-		const { body } = render(NavReferenceDatesPanel, { props: { rows: null } });
+		const { body } = render(NavReferenceDatesPanel, { props: { staleness: EMPTY_STALENESS, rows: null } });
 		expect(body).toContain('temporarily unavailable');
 		expect(body).not.toContain('<table');
 	});
@@ -67,7 +79,7 @@ describe('NavReferenceDatesPanel — normal state', () => {
 			this_month: { nav: 500_000, nav_prior_yr_dollars: 510_000 },
 			prior_month: { nav: -25_000, nav_prior_yr_dollars: -25_500 }
 		});
-		const { body } = render(NavReferenceDatesPanel, { props: { rows } });
+		const { body } = render(NavReferenceDatesPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 
 		for (const label of ['This Month', 'Prior Month', 'Prior Year-End']) {
 			expect(body).toContain(`>${label}<`);
@@ -100,7 +112,7 @@ describe('NavReferenceDatesPanel — insufficient history (AC5 discriminator #1)
 				nav_prior_yr_dollars: null
 			}
 		});
-		const { body } = render(NavReferenceDatesPanel, { props: { rows } });
+		const { body } = render(NavReferenceDatesPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 		expect(body).toContain('Insufficient history');
 		expect(body).toContain('colspan="2"');
 		// The other two rows are unaffected.
@@ -113,7 +125,7 @@ describe('NavReferenceDatesPanel — cpi_unavailable (AC5 discriminator #2)', ()
 		const rows = fixture({
 			this_month: { cpi_unavailable: true, nav: 500_000, nav_prior_yr_dollars: null }
 		});
-		const { body } = render(NavReferenceDatesPanel, { props: { rows } });
+		const { body } = render(NavReferenceDatesPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 		expect(body).toContain('CPI unavailable');
 		expect(body).toContain('$500,000');
 		expect(body).not.toContain('Insufficient history');
@@ -128,7 +140,7 @@ describe('NavReferenceDatesPanel — cpi_unavailable (AC5 discriminator #2)', ()
 				nav_prior_yr_dollars: null
 			}
 		});
-		const { body } = render(NavReferenceDatesPanel, { props: { rows } });
+		const { body } = render(NavReferenceDatesPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 		expect(body).toContain('CPI unavailable');
 		expect(body).toContain('Insufficient history');
 		// Structurally distinct markup, not the same "—" glyph used for both.
@@ -143,7 +155,7 @@ describe('NavReferenceDatesPanel — ALL THREE ROWS insufficient history (QA Fin
 			prior_month: { reference_checkpoint_date: null, nav: null, nav_prior_yr_dollars: null },
 			prior_year_end: { reference_checkpoint_date: null, nav: null, nav_prior_yr_dollars: null }
 		});
-		const { body } = render(NavReferenceDatesPanel, { props: { rows } });
+		const { body } = render(NavReferenceDatesPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 
 		// Three badges, one per row — not a single page-level "no data" fallback in place of the
 		// table (that would be the readFailed/null-rows branch, a DIFFERENT state entirely).
@@ -161,20 +173,26 @@ describe('NavReferenceDatesPanel — ALL THREE ROWS insufficient history (QA Fin
 	});
 });
 
-describe('NavReferenceDatesPanel — January edge case: This Month = Prior Year-End (QA Finding 3)', () => {
+describe('NavReferenceDatesPanel — January edge case: Prior Month = Prior Year-End (QA Finding 3)', () => {
 	it('two rows sharing reference_date/checkpoint/nav render as two PLAIN identical rows, no dedup', () => {
 		const rows = fixture({
+			// This Month: 072's CURRENT ENDPOINT — the LOCF checkpoint at-or-before TODAY. A
+			// January run day, distinct from the December coincidence below (a fresh January
+			// checkpoint has already landed by this reference date, so it does NOT collide).
 			this_month: {
+				reference_date: '2026-01-05',
+				reference_checkpoint_date: '2026-01-05',
+				nav: 490_000,
+				nav_prior_yr_dollars: 491_000
+			},
+			// Prior Month: 073's "most recent COMPLETED month-end" — for the whole of January
+			// that is 31 December of the prior year, structurally, by construction (073 header
+			// lines 179-183) — the SAME date Prior Year-End always names.
+			prior_month: {
 				reference_date: '2025-12-31',
 				reference_checkpoint_date: '2025-12-31',
 				nav: 480_000,
 				nav_prior_yr_dollars: 480_000
-			},
-			prior_month: {
-				reference_date: '2025-11-30',
-				reference_checkpoint_date: '2025-11-30',
-				nav: 470_000,
-				nav_prior_yr_dollars: 471_000
 			},
 			prior_year_end: {
 				reference_date: '2025-12-31',
@@ -183,17 +201,107 @@ describe('NavReferenceDatesPanel — January edge case: This Month = Prior Year-
 				nav_prior_yr_dollars: 480_000
 			}
 		});
-		const { body } = render(NavReferenceDatesPanel, { props: { rows } });
+		const { body } = render(NavReferenceDatesPanel, { props: { staleness: EMPTY_STALENESS, rows } });
 
 		// Both labels present — no row was dropped, hidden, or merged into the other.
-		expect(body).toContain('>This Month<');
+		expect(body).toContain('>Prior Month<');
 		expect(body).toContain('>Prior Year-End<');
 		// The shared figure appears TWICE — one full render per row, not deduplicated to one.
 		expect(body.split('$480,000').length - 1).toBe(4); // 2 occurrences x 2 columns (NAV + Prior Yr $)
 		// Still exactly 3 <tr> data rows in <tbody> — no row collapsed away.
 		const tbody = body.split('<tbody')[1] ?? '';
 		expect(tbody.split('<tr').length - 1).toBe(3);
-		// The distinct Prior Month row is unaffected and un-conflated with the shared date.
-		expect(body).toContain('$470,000');
+		// The distinct This Month row is unaffected and un-conflated with the shared date.
+		expect(body).toContain('$490,000');
+	});
+});
+
+describe('NavReferenceDatesPanel — SELF-229 January-family copy (words only, no shape change)', () => {
+	it('priorMonthDuplicatesPriorYearEnd fires → the duplicate-rows caption renders, columns caption does not', () => {
+		const rows = fixture({
+			this_month: { reference_date: '2026-01-15', reference_checkpoint_date: '2026-01-15' },
+			prior_month: { reference_date: '2025-12-31', reference_checkpoint_date: '2025-12-31', nav: 480_000 },
+			prior_year_end: { reference_date: '2025-12-31', reference_checkpoint_date: '2025-12-31', nav: 480_000 }
+		});
+		const { body } = render(NavReferenceDatesPanel, { props: { staleness: EMPTY_STALENESS, rows } });
+		expect(body).toContain('Prior Month and Prior Year-End show identical figures this month');
+		// Never claims either row is the ONLY exact one (migration 073's own ruling).
+		expect(body).not.toContain('only exact row');
+		expect(body).not.toContain('match exactly across all three rows');
+		// Still exactly 3 <tr> data rows — no de-duplication.
+		const tbody = body.split('<tbody')[1] ?? '';
+		expect(tbody.split('<tr').length - 1).toBe(3);
+	});
+
+	it('columnsCollapseUnderArrears fires → the duplicate-columns caption renders', () => {
+		const rows = fixture({
+			this_month: { cpi_period: '2025-12-01', cpi_basis_period: '2025-12-01' },
+			prior_month: { cpi_period: '2025-12-01', cpi_basis_period: '2025-12-01' },
+			prior_year_end: { cpi_period: '2025-12-01', cpi_basis_period: '2025-12-01' }
+		});
+		const { body } = render(NavReferenceDatesPanel, { props: { staleness: EMPTY_STALENESS, rows } });
+		expect(body).toContain('match exactly across all three rows');
+	});
+
+	it('the ordinary case (no January coincidence) → neither caption renders', () => {
+		// The base row() builder defaults every row to the SAME checkpoint/cpi_period unless
+		// overridden — realistic non-January dates given explicitly so this fixture doesn't
+		// vacuously trip the January predicates by sharing the builder's defaults.
+		const rows = fixture({
+			this_month: { reference_date: '2026-07-31', reference_checkpoint_date: '2026-07-31', cpi_period: '2026-06-01' },
+			prior_month: { reference_date: '2026-06-30', reference_checkpoint_date: '2026-06-30', cpi_period: '2026-06-01' },
+			prior_year_end: { reference_date: '2025-12-31', reference_checkpoint_date: '2025-12-31', cpi_period: '2025-12-01' }
+		});
+		const { body } = render(NavReferenceDatesPanel, { props: { staleness: EMPTY_STALENESS, rows } });
+		expect(body).not.toContain('Prior Month and Prior Year-End show identical figures');
+		expect(body).not.toContain('match exactly across all three rows');
+	});
+
+	it('a per-row carried-CPI marker renders next to the Prior Yr $ value for a carried row only', () => {
+		const rows = fixture({
+			this_month: { cpi_any_carried: true, cpi_period: '2025-12-01' },
+			prior_month: { cpi_any_carried: false }
+		});
+		const { body } = render(NavReferenceDatesPanel, { props: { staleness: EMPTY_STALENESS, rows } });
+		expect(body).toContain('carried-flag');
+		expect(body).toContain('Carried forward');
+		expect(body).toContain('No action needed');
+	});
+
+	it('no carried rows → zero carried-flag markers', () => {
+		const rows = fixture();
+		const { body } = render(NavReferenceDatesPanel, { props: { staleness: EMPTY_STALENESS, rows } });
+		expect(body).not.toContain('carried-flag');
+		expect(body).not.toContain('Carried forward');
+	});
+});
+
+describe('NavReferenceDatesPanel — SELF-229 D1 stale-data-marker (whole-user, shared with the other 3 surfaces)', () => {
+	const staleItem: StaleConstituentItem = {
+		linked_source_id: '42',
+		institution_name: 'Test Bank',
+		provider: 'plaid',
+		connection_status: 'login_required',
+		status_class: null
+	};
+
+	// Sec F3(B) (F/CTO-ruled): `staleness` is now a REQUIRED prop — there is no more implicit
+	// "omitted" case (a caller that forgets it fails at TYPECHECK). This asserts the explicit
+	// EMPTY_STALENESS (confirmed-healthy) value stays zero-footprint, same as before.
+	it('staleness confirmed healthy (EMPTY_STALENESS) → zero-footprint, no badge markup', () => {
+		const rows = fixture();
+		const { body } = render(NavReferenceDatesPanel, { props: { staleness: EMPTY_STALENESS, rows } });
+		expect(body).not.toContain('stale-connection-marker');
+		expect(body).not.toContain('May be stale');
+	});
+
+	it('is_stale true → the shared StaleConstituentBadge renders beside the section heading', () => {
+		const rows = fixture();
+		const { body } = render(NavReferenceDatesPanel, {
+			props: { rows, staleness: { is_stale: true, stale_items: [staleItem] } }
+		});
+		expect(body).toContain('May be stale');
+		// Institution name only renders inside the collapsed disclosure panel (StaleConstituentBadge's own {#if open} — closed by default); the tag + its accessible summary are what SSR proves here.
+		expect(body).toContain('possibly-stale');
 	});
 });
