@@ -132,5 +132,36 @@ describe('loadStaleness', () => {
 			// value — the original REWORK defect reintroduced through this one field.
 			expect(result.is_stale).not.toBe(false);
 		});
+
+		// Sec R1 (GREEN round, non-blocking): the shape guard above proves is_stale IS a boolean and
+		// stale_items IS an array — but a well-TYPED pair can still be internally INCONSISTENT.
+		// {is_stale: false, stale_items: [...]} passes F1's shape check cleanly (a real boolean, a
+		// real array) yet contradicts `046`'s own contract that is_stale means "stale_items is
+		// non-empty." This is the diagonal cell F1's shape guard structurally cannot see.
+		it('Sec R1 — {is_stale: false, stale_items: [oneItem]} (well-typed but inconsistent pair) → UNKNOWN_STALENESS', async () => {
+			const { client } = makeSupabase({
+				data: [
+					{
+						is_stale: false,
+						stale_items: [
+							{
+								linked_source_id: 1,
+								institution_name: 'Chase',
+								provider: 'plaid',
+								connection_status: 'login_required',
+								status_class: null
+							}
+						]
+					}
+				]
+			});
+			const result = await loadStaleness(client);
+
+			expect(result).toEqual(UNKNOWN_STALENESS);
+			// The failure this guards: a naive shape-only guard would have passed this row through
+			// as EMPTY_STALENESS-shaped (is_stale: false) while silently dropping a real stale item.
+			expect(result.is_stale).not.toBe(false);
+			expect(result.stale_items).toEqual([]);
+		});
 	});
 });

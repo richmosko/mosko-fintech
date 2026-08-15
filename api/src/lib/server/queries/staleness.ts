@@ -108,11 +108,32 @@ export async function loadStaleness(supabase: SupabaseClient): Promise<Staleness
 	// verified the CTE makes the pair consistent by construction) — this guards a CONTRACT-DRIFT
 	// trap, not a currently-live path, so it degrades to UNKNOWN rather than asserting a shape a
 	// malformed row cannot actually support.
+	//
+	// Sec R2 (GREEN round, non-blocking): log SHAPE only, never the row's own content. `row` can
+	// carry real tenant data (institution_name / provider / linked_source_id) — this was the only
+	// payload-logging call in api/src/lib/server (Sec-measured); every other malformed-input log
+	// in this codebase already logs a description, not the value.
 	if (typeof row.is_stale !== 'boolean' || !Array.isArray(row.stale_items)) {
-		console.error(
-			'[staleness] malformed aggregate row (is_stale/stale_items shape mismatch); degrading to unknown staleness:',
-			row
-		);
+		console.error('[staleness] malformed aggregate row; degrading to unknown staleness:', {
+			is_stale_type: typeof row.is_stale,
+			items_is_array: Array.isArray(row.stale_items),
+			items_len: Array.isArray(row.stale_items) ? row.stale_items.length : undefined
+		});
+		return UNKNOWN_STALENESS;
+	}
+
+	// Sec R1 (GREEN round, non-blocking): the SHAPE guard above proves the types are right but not
+	// that the PAIR agrees — a well-typed `{ is_stale: false, stale_items: [...] }` (or
+	// `{ is_stale: true, stale_items: [] }`) is still internally inconsistent and must not survive
+	// as a partial truth. `046`'s own contract is that is_stale is exactly "stale_items is
+	// non-empty" — verified true here, not assumed, so a row that violates it degrades to UNKNOWN
+	// same as the shape mismatch above, rather than silently returning whichever half looks more
+	// plausible.
+	if (row.is_stale !== (row.stale_items.length > 0)) {
+		console.error('[staleness] inconsistent aggregate row (is_stale disagrees with stale_items.length); degrading to unknown staleness:', {
+			is_stale: row.is_stale,
+			items_len: row.stale_items.length
+		});
 		return UNKNOWN_STALENESS;
 	}
 
