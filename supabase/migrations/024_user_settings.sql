@@ -29,12 +29,31 @@
 --   RLS still fully fences them — see ISOLATION INVARIANT below). Also fulfills
 --   SELF-285 AC#5's deferred profile/settings row.
 --
--- SELF-232 COORDINATION (this table is SELF-232's future home): the deferred
---   SELF-232 settings work (planning-target / display / preference columns) lands
---   ADDITIVELY here as `ALTER TABLE pfin.user_settings ADD COLUMN ...` — NOT a
---   second per-user own-row table, NOT a rebuild. The grain (one row per user,
---   PK = users_id) is chosen precisely so additive growth needs no migration of
---   THIS table. mfa_policy is the only functional column in V1.
+-- SELF-232 COORDINATION — ⚠ SUPERSEDED 2026-08-16 (ADR-056; realized at 074).
+--   THIS BLOCK PREVIOUSLY READ that this table is SELF-232's future home and that
+--   the deferred SELF-232 settings work (planning-target / display / preference
+--   columns) would land ADDITIVELY here as `ALTER TABLE pfin.user_settings ADD
+--   COLUMN ...` — NOT a second per-user own-row table, NOT a rebuild. THAT IS NO
+--   LONGER THE DESIGN. It was also, as written, in conflict with ADR-011 Decision
+--   18 / Lock 14 ("four per-domain tables"), and leaving that conflict
+--   unadjudicated is what produced SELF-324.
+--   The %Target half of SELF-232 is a per-Sub-Cat VECTOR, which no additive scalar
+--   ALTER can express; it lands at 074 as pfin.planning_target, one row per
+--   (users_id, sub_cat_id). Two further reasons it could not be sited here, both
+--   independent of the vector shape: Decision 18 fences JSONB out of the settings
+--   store by name, and 025 excludes pfin.user_settings from the aal2 step-up
+--   backstop as a NON-NEGOTIABLE exclusion (clausing it recurses into the policy
+--   that reads it) — so tenant planning data sited here could never carry the
+--   step-up fence every other tenant-owned pfin table carries.
+--   WHAT IS UNCHANGED: the grain of THIS table (one row per user, PK = users_id),
+--   and every executable line in this file — no DDL, policy, grant or trigger is
+--   affected by this correction. mfa_policy remains the only functional column in
+--   V1. Whether some FUTURE non-vector preference column lands here is left open;
+--   ADR-056 does not decide it.
+--   The `comment on table` below carries the same superseded claim. It has a
+--   database representation, so it is NOT edited here — it is corrected by the
+--   comment-only migration 075 (the 052 shape), because a correction has to land
+--   where the reader is, and a `\d+` reader has no repo in front of them.
 --
 -- ----------------------------------------------------------------------------
 -- Numbering: 024 follows 023 (account_trans_annotation). Depends ONLY on 001
