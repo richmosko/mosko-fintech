@@ -2,6 +2,18 @@
 -- Per-Wave battery — pfin.cpi_u_index GLOBAL public reference table
 --   (CPI-U / BLS series CUUR0000SA0; SELF-230 / migration 053 / V1.1 Platform)
 -- =====================================================================
+-- ⚠ EXPECTED-TO-FAIL AGAINST A LIVE LOCAL STACK carrying the real committed CPI reference
+--   data (the 2026-08-14 recovery; docs/records/2026-08-14-db-reset-incident.md) — this
+--   fixture's "table is EMPTY before I seed it" precondition (z1) collides with real,
+--   PERMANENT, monotonically-growing BLS prints. Not a bug in this file, and not fixed by
+--   picking different fixture dates: CPI is an ever-advancing real time series, so any date
+--   chosen today to dodge today's coverage will itself collide once BLS catches up to it —
+--   a fixture-side date pick has a built-in expiration, not a permanent fix (team-lead/QA
+--   disposition, meta/battery-local-stack-disposition). THE SANCTIONED LOCAL RUN for this
+--   file is a hand-built scratch DB (`createdb` + `psql -f` per migration, never `supabase
+--   db reset` — mechanically banned). CI's clean-apply lane builds a fresh DB every run and
+--   is UNAFFECTED — it is the actual gating venue for this file.
+-- =====================================================================
 -- BINDS TO MIGRATION: supabase/migrations/053_cpi_u_index.sql
 --   - pfin.cpi_u_index                    (NEW global public reference table: cpi_period
 --                                         DATE PK (first-of-month) / cpi_value NUMERIC
