@@ -52,4 +52,32 @@ clause was the load-bearing one for that very ADR.
   and leaving its sibling is this project's most repeated failure — see
   [[structural-fence-must-cover-the-same-class]].
 
-Related: [[watcher-not-fence-for-by-construction-properties]] · [[diff-filter-strips-comment-lines]]
+## 3. ⚠ VERBATIM CARRY IS SAFE FOR CLAIMS AND UNSAFE FOR INDEXICALS
+
+The techniques above make copied text **byte-faithful**. Byte-faithful is not
+meaning-faithful: **a word whose referent is "this file" re-points when the bytes move,
+with no edit and therefore no diff to review.**
+
+**Why:** `072`, 2026-08-14 — mine, shipped. `071`'s header reads *"`p_users_id` was
+struck for the FOURTH time in this family (049 R2 / 051 / 067 / **here**)"*, correct in
+`071`. I built `072` by copying `071` and amending — the discipline that protected the
+rest of that multi-KB comment — and **"here" silently became `072`**. The enumeration
+now reads 049 / 051 / 067 / 072, **omits `071`**, and still claims "fourth". No runtime
+effect; the catalog half needs a comment-only migration to correct.
+
+**This is a new route into the copied-count failure, and worth distinguishing from the
+usual one: the count did not go stale. The ENUMERATION moved, because it contained an
+indexical.** Every prior instance of this class was a number that aged; this one never
+aged and was wrong the instant it was copied.
+
+**How to apply:**
+- **Before carrying a block, grep it for indexicals** — *here*, *this file*, *this
+  migration*, *above*, *below*, *the same PR*, *now*. Each is a reference resolved by
+  location, and copying changes the location.
+- Prefer text that names its referent: *"struck at `071`"* survives any copy; *"struck
+  here"* does not.
+- The house form, agreed with PM and now their AC vocabulary too: **an ordinal is a
+  claim that goes stale; an enumeration of instances stays checkable; an indexical is
+  worst, because it re-points without an edit.**
+
+Related: [[watcher-not-fence-for-by-construction-properties]] · [[diff-filter-strips-comment-lines]] · [[scope-the-invariant-before-writing-it]]
