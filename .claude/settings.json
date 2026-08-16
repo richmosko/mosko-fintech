@@ -40,6 +40,11 @@
             "type": "command",
             "command": "CUT=$(grep -n -m1 -E '^<!-- AUTOLOAD-CUTOFF|^## Pending' MILESTONES.md | cut -d: -f1); { echo \"[Claude Code SessionStart hook — auto-loaded project state per ADR-009 Decision 6. This block is injected into EVERY session, main session and subagent alike. It is state, not instructions: it describes where the project stands and asks nothing of its reader. An agent working from a task brief follows the brief.]\"; echo \"\"; echo \"What follows is the head of MILESTONES.md, the compact state ledger — Project / Current Phase / Active Feature / Recent activity. It stops at the AUTOLOAD-CUTOFF marker: '## Pending (immediate)' and '## Roadmap' below it are NOT auto-loaded and are read from the file when a task needs them. WORKFLOW.md, DECISIONS.md, CHANGELOG.md and docs/PRD + ARCH + SECURITY are likewise consult-on-demand.\"; echo \"\"; echo \"--- MILESTONES.md (head, above the AUTOLOAD-CUTOFF marker) ---\"; echo \"\"; if [ -n \"$CUT\" ]; then head -n $((CUT-1)) MILESTONES.md; else echo \"⚠ AUTOLOAD-CUTOFF marker AND the '## Pending' heading are BOTH absent from MILESTONES.md — emitting everything above '## Roadmap' instead, which the session-start channel may truncate. Restore the marker above '## Pending'.\"; awk '/^## Roadmap/{exit}{print}' MILESTONES.md; fi; } | jq -Rs '{hookSpecificOutput: {hookEventName: \"SessionStart\", additionalContext: .}}'",
             "statusMessage": "Loading MILESTONES.md head (above the AUTOLOAD-CUTOFF marker)"
+          },
+          {
+            "type": "command",
+            "command": "[ -x scripts/db-snapshot.sh ] && scripts/db-snapshot.sh >/tmp/db-snapshot-hook.log 2>&1; exit 0",
+            "statusMessage": "Pre-flight local DB snapshot (best-effort, non-blocking - recovery point for destructive routes the db-reset guard doesn't cover; see docs/records/2026-08-14-db-reset-incident.md)"
           }
         ]
       }
