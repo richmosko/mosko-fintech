@@ -79,9 +79,9 @@
 	<header class="head">
 		<h1>Securities &amp; categories</h1>
 		<p class="lede">
-			Every security you've ever held, with its current category. Until a security is
-			categorized, it rolls up under Uncategorized › Unsorted in your allocation and net-worth
-			views — visible, just not yet categorized.
+			Every security you've ever traded, with its current category. A security stays pending
+			until you assign one — each security takes a single category that applies across every
+			account holding it.
 		</p>
 	</header>
 
