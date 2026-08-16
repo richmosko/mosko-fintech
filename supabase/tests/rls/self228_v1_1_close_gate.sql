@@ -26,24 +26,26 @@
 --         does not re-derive a per-migration battery's heavy fixture).
 --
 -- ┌─ COMPOSE (verified green by the full suite; this file re-proves the cross-cutting seam) ─┐
--- │ 049_fn_account_unrealized_gl_rls.sql (plan 33; latest DEFINITION is 059 — retired the      │
--- │   is_active boolean per ADR-042 — signature/posture unchanged throughout 049→056→059) ·    │
--- │ 051_fn_nav_composition_rls.sql (plan 34) · 062_fn_nav_series_rls.sql (plan 68, SELF-219) · │
--- │ 067_fn_nav_series_inflation_adjusted_rls.sql (plan 43+) · 071_fn_nav_delta_panel_rls.sql   │
--- │   (plan 44 — extended IN PLACE for 072's real-terms-percent amendment; the battery file    │
--- │   stays keyed to 071, the function's ORIGINAL migration) · 073_fn_nav_reference_dates_rls  │
--- │   .sql (plan 38). SELF-227 (§2.1.6 audit issue) is OUT of this gate's function list — its   │
--- │   surfaces are already fenced by self227_investment_mv_verification.sql.                    │
+-- │ 049_fn_account_unrealized_gl_rls.sql (latest DEFINITION is 059 — retired the is_active     │
+-- │   boolean per ADR-042 — signature/posture unchanged throughout 049→056→059) ·               │
+-- │ 051_fn_nav_composition_rls.sql · 062_fn_nav_series_rls.sql (SELF-219) ·                     │
+-- │ 067_fn_nav_series_inflation_adjusted_rls.sql · 071_fn_nav_delta_panel_rls.sql (extended IN  │
+-- │   PLACE for 072's real-terms-percent amendment; the battery file stays keyed to 071, the    │
+-- │   function's ORIGINAL migration) · 073_fn_nav_reference_dates_rls.sql. SELF-227 (§2.1.6     │
+-- │   audit issue) is OUT of this gate's function list — its surfaces are already fenced by     │
+-- │   self227_investment_mv_verification.sql. Plan counts are a derived, unwatched property —   │
+-- │   read each file's own plan() line live, never transcribe it here (Sec F3).                 │
 -- │ Per-function arithmetic, NULL-vs-zero, foot-to-NAV, as-of history, and the AC#6 perf smoke  │
 -- │ are COMPOSED from those green batteries — this gate does not re-derive their fixtures; it   │
 -- │ proves the seam: all 6 exercised TOGETHER under ONE shared two-tenant fixture (no existing  │
 -- │ file does this), plus the two net-new AC2/AC3 assertions neither battery makes.             │
 -- └───────────────────────────────────────────────────────────────────────────────────────────┘
 --
--- Ledgers all FLAT (SEAM-only, no schema authored): §10 = 3 (RT-22/RT-26/RT-27); SECURITY
--- DEFINER allowlist unchanged at 4 (3 authored + 1 reserved-unauthored; all 6 functions here
--- are INVOKER, so they touch neither count); Decision-3 family unchanged. Read ADR-011
--- Decisions live at point of use — this file moves no ledger.
+-- Ledgers all FLAT (SEAM-only, no schema authored): §10 catalogued-instance ledger (ADR-011
+-- Decision 4) and the SECURITY DEFINER allowlist (ADR-011 Decision 9) are both untouched — all
+-- 6 functions here are INVOKER, so they touch neither. Decision-3 family unchanged. Read ADR-011
+-- Decisions 4/9 live at point of use (Path B; Sec N1) — this file moves no ledger and states no
+-- count of its own.
 --
 -- POSTURE (SECURITY §4.5): SYNTHETIC ONLY — fixed-UUID tenants from _rls.tenant_a()/_b()/_c();
 -- NO PII / NO real account numbers (SD-15) / NO production data. All seeds PRIVILEGED
@@ -61,11 +63,14 @@ begin;
 -- shared cross-tenant verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
--- plan = 27: A 1 (AC5 posture) + B 2 (AC2a signature + non-vacuous match) +
--- C 18 (6 functions x 3: A-only / zero-owner-closed / cross-tenant-or-param-probe) +
+-- plan = 34: A 1 (AC5 posture) + B 7 (AC2a: 6 positive-pin IN-argument-vector legs, one
+-- per function per Sec F1, + 1 non-vacuous six-function match) + C 20 (fn_nav_series and
+-- fn_nav_series_inflation_adjusted carry 4 legs each — A-only / B-side non-vacuity (Sec F2)
+-- / zero-owner-closed / cross-tenant parameter-probe; the other 4 functions carry 3 each —
+-- A-only / B-side non-vacuity / zero-owner-closed, zero-arg so no separate probe leg) +
 -- D 6 (D0 fixture pin + AC2b x2 + AC3 x3). Recorded so a silent plan-edit shows as an
 -- arithmetic change.
-select plan(27);
+select plan(34);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb, _rls.tenant_c() as tc \gset
@@ -166,18 +171,54 @@ select set_eq(
 );
 
 -- =====================================================================
--- BLOCK B — AC2(a): full-household-by-construction, SIGNATURE level.
+-- BLOCK B — AC2(a): full-household-by-construction, SIGNATURE level. POSITIVE PIN (Sec F1
+--   — replaces a prior five-name denylist, which could only ever catch those five spellings).
+--   Each leg asserts a function's ORDERED IN-argument name vector via proargnames[1:pronargs].
+--   pronargs counts IN/INOUT/VARIADIC parameters only (Sec's caveat) — CONFIRMED live against
+--   proargmodes before writing these six legs (not taken on Sec's word): for every RETURNS
+--   TABLE function among the six, the 'i'-mode entries are a CONTIGUOUS PREFIX of proargnames
+--   of length EXACTLY pronargs, and every entry after that prefix is 't' (the implicit
+--   table-output column PostgreSQL appends for RETURNS TABLE — never an 'i' argument). The
+--   slice therefore isolates true IN arguments only, in declaration order, for all six shapes
+--   (0-arg / 1-arg / 3-arg alike) with no risk of an OUT/table-column name leaking into the
+--   comparison. A positive pin also catches an ADDED param under ANY name (e.g. a differently
+--   spelled scope/tenant param) — the old denylist only ever covered five specific spellings.
 -- =====================================================================
 select is(
-  (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-     where n.nspname = 'pfin'
-       and p.proname in ('fn_nav_series','fn_nav_series_inflation_adjusted',
-                          'fn_nav_delta_panel','fn_nav_reference_dates',
-                          'fn_nav_composition','fn_account_unrealized_gl')
-       and coalesce(p.proargnames, '{}'::text[])
-             && array['p_scope','p_users_id','p_tenant','p_tenant_id','p_household_id']),
-  0,
-  '(B1) AC2(a) signature-level: NONE of the six V1.1 NAV read functions accept a scope/tenant/household parameter (live pg_proc.proargnames check) — a future V2 per-scope param addition turns this leg RED by design (F/CTO knowingly accepted this fence; requires an ADR + test change to widen)'
+  (select proargnames[1:pronargs] from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'pfin' and p.proname = 'fn_nav_series'),
+  array['p_granularity', 'p_start_date', 'p_end_date']::text[],
+  '(B1a) fn_nav_series IN-argument vector = {p_granularity,p_start_date,p_end_date} exactly — no scope/tenant/household parameter present'
+);
+select is(
+  (select proargnames[1:pronargs] from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'pfin' and p.proname = 'fn_nav_series_inflation_adjusted'),
+  array['p_granularity', 'p_start_date', 'p_end_date']::text[],
+  '(B1b) fn_nav_series_inflation_adjusted IN-argument vector = {p_granularity,p_start_date,p_end_date} exactly'
+);
+select is(
+  (select proargnames[1:pronargs] from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'pfin' and p.proname = 'fn_nav_delta_panel'),
+  array[]::text[],
+  '(B1c) fn_nav_delta_panel IN-argument vector = {} exactly — zero-arg, confirmed against proargmodes (every entry is the ''t'' table-output mode, none ''i'')'
+);
+select is(
+  (select proargnames[1:pronargs] from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'pfin' and p.proname = 'fn_nav_reference_dates'),
+  array[]::text[],
+  '(B1d) fn_nav_reference_dates IN-argument vector = {} exactly — zero-arg'
+);
+select is(
+  (select proargnames[1:pronargs] from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'pfin' and p.proname = 'fn_nav_composition'),
+  array['p_as_of']::text[],
+  '(B1e) fn_nav_composition IN-argument vector = {p_as_of} exactly — no scope/tenant/household parameter'
+);
+select is(
+  (select proargnames[1:pronargs] from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'pfin' and p.proname = 'fn_account_unrealized_gl'),
+  array['p_as_of']::text[],
+  '(B1f) fn_account_unrealized_gl IN-argument vector = {p_as_of} exactly — no scope/tenant/household parameter'
 );
 select is(
   (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
@@ -186,7 +227,7 @@ select is(
                           'fn_nav_delta_panel','fn_nav_reference_dates',
                           'fn_nav_composition','fn_account_unrealized_gl')),
   6,
-  '(B2) non-vacuous companion: the six-name IN-list resolves to EXACTLY 6 live pfin functions — (A1)/(B1) are not silently narrowed by a typo''d name nor inflated by an unexpected overload'
+  '(B2) non-vacuous companion: the six-name IN-list resolves to EXACTLY 6 live pfin functions — (A1)/(B1a-f) are not silently narrowed by a typo''d name nor inflated by an unexpected overload'
 );
 
 -- =====================================================================
@@ -208,6 +249,14 @@ select ok(
      where nav_value in (900000, 910000, 5000000, 4900000, 4000000)
   ),
   '(C1c) fn_nav_series PARAMETER-PROBE: widening the window to span BOTH fixtures'' full date range (2024-01-01 through today), still under tenant A auth — no returned point carries ANY of tenant B''s five known values, regardless of how wide the caller-chosen range is'
+);
+select set_config('role', 'postgres', true);
+select _rls.set_tenant(:'tb'::uuid);
+select is(
+  (select array_agg(nav_value order by point_date)
+     from pfin.fn_nav_series('monthly', '2024-01-01', '2024-02-29')),
+  array[900000, 910000]::numeric[],
+  '(C1d) fn_nav_series NON-VACUITY (Sec F2): the IDENTICAL call under tenant B returns EXACTLY {900000,910000}, not {100000,110000} — 062''s checkpoint selector is `order by nav_date desc limit 1` with NO tiebreak, and A/B share the SAME nav_date values in FIXTURE 1; under a hypothetical RLS leak, (C1a) and (C1d) cannot BOTH hold, whatever an implementation-defined tie resolves to'
 );
 select set_config('role', 'postgres', true);
 select _rls.set_tenant(:'tc'::uuid);
@@ -234,6 +283,14 @@ select ok(
      where nav_nominal in (900000, 910000, 5000000, 4900000, 4000000)
   ),
   '(C2c) fn_nav_series_inflation_adjusted PARAMETER-PROBE: widened window (2024-01-01 through today), still under tenant A auth — no returned nav_nominal carries ANY of tenant B''s five known values'
+);
+select set_config('role', 'postgres', true);
+select _rls.set_tenant(:'tb'::uuid);
+select is(
+  (select array_agg(nav_nominal order by point_date)
+     from pfin.fn_nav_series_inflation_adjusted('monthly', '2024-01-01', '2024-02-29')),
+  array[900000, 910000]::numeric[],
+  '(C2d) fn_nav_series_inflation_adjusted NON-VACUITY (Sec F2): the IDENTICAL call under tenant B returns EXACTLY {900000,910000}, not {100000,110000} — 067 inherits 062''s no-tiebreak checkpoint selector via composition; under a hypothetical RLS leak, (C2a) and (C2d) cannot BOTH hold'
 );
 select set_config('role', 'postgres', true);
 select _rls.set_tenant(:'tc'::uuid);
