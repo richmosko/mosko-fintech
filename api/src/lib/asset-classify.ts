@@ -1,16 +1,18 @@
-// asset-classify.ts — browser-side view types + helpers for the SELF-200 pending-symbol
-// classify surface (§2.4.1.e). Non-server: ships to the browser. Label + metadata-hint formatting
-// lives here (single anti-drift point) so the list row + any future surface shape the hint the
-// same way.
+// asset-classify.ts — browser-side view types + helpers for the SELF-200/SELF-235 symbol
+// classify surface (§2.4.1.e / §2.2.1.b). Non-server: ships to the browser. Label + metadata-hint
+// formatting lives here (single anti-drift point) so the list row + any future surface shape the
+// hint the same way.
 //
-// `PendingSymbol` mirrors the shape Backend's loadPendingSymbols() returns (source of truth:
-// src/lib/server/queries/pendingSymbols.ts). It is a browser-side VIEW TYPE, not a re-import of
-// the server module (Frontend never imports `$lib/server/**`); PageData already carries the same
-// shape structurally — this named alias is for the child row prop. If Backend changes the load
-// shape, update this in lockstep.
+// `PendingSymbol` / `SymbolListItem` mirror the shapes Backend's loadSymbols() returns (source of
+// truth: src/lib/server/queries/pendingSymbols.ts — SymbolListItem/SymbolClassification). They
+// are browser-side VIEW TYPES, not a re-import of the server module (Frontend never imports
+// `$lib/server/**`); PageData already carries the same shape structurally — these named aliases
+// are for the child row prop. If Backend changes the load shape, update these in lockstep.
 
-/** One held-but-unclassified asset. `metadata` is the asset's raw jsonb blob (already-stored
- *  linked-provider/manual attributes — AC5: no external fetch); rendered as a NON-preselected hint. */
+/** One ever-transacted asset's shared hint fields. `metadata` is the asset's raw jsonb blob
+ *  (already-stored linked-provider/manual attributes — AC5: no external fetch); rendered as a
+ *  NON-preselected hint. Kept as its own type (rather than folded into SymbolListItem) because the
+ *  hint-formatting helpers below only need this subset. */
 export type PendingSymbol = {
 	asset_id: number;
 	symbol: string | null;
@@ -18,6 +20,21 @@ export type PendingSymbol = {
 	asset_type: string;
 	metadata: unknown;
 };
+
+/** SELF-235 AC1: the caller's CURRENT (Cat, Sub-Cat) for an asset — `null` = unclassified (the
+ *  pending state; AC5 badge trigger). Mirrors Backend's SymbolClassification. */
+export type SymbolClassification = { sub_cat_id: number; cat: string; sub_cat: string } | null;
+
+/** One row in the SELF-235 full symbols list — PendingSymbol's hint fields plus its current
+ *  classification (or `null` = pending). Mirrors Backend's SymbolListItem. */
+export type SymbolListItem = PendingSymbol & { classification: SymbolClassification };
+
+/** "Cat › Sub-Cat" chip text for an already-classified row; `null` when pending (the row renders
+ *  the neutral "Pending" chip instead — see SymbolClassifyRow). */
+export function classificationLabel(c: SymbolClassification): string | null {
+	if (!c) return null;
+	return c.cat ? `${c.cat} › ${c.sub_cat}` : c.sub_cat;
+}
 
 /** Coerce metadata to a plain-object record, or null (arrays / scalars / null are not records). */
 function asRecord(meta: unknown): Record<string, unknown> | null {
@@ -148,4 +165,39 @@ export function hintEntries(meta: unknown, cap = 6): { label: string; value: str
 		if (out.length >= cap) break;
 	}
 	return out;
+}
+
+// ── SELF-235 AC2 cascading Cat → Sub-Cat picker helpers ───────────────────────────────────────
+// The reassignment editor is two selects, not one grouped select (subCatGroupsOf in
+// transaction-util.ts, the flat-grouped shape SELF-200 used): pick a Cat first, then a Sub-Cat
+// filtered to it. `SubCatOption` (Backend's taxonomy.ts shape) carries no Cat id — Cat is a plain
+// label — so the Cat select's `value` IS the label; only the Sub-Cat select's `value` is a real id
+// (the one posted as `sub_cat_id`).
+
+type SubCatLike = { id: number; cat: string; sub_cat: string };
+type Opt = { value: string; label: string };
+
+/** Browser-side VIEW TYPE mirroring Backend's SubCatOption (src/lib/server/queries/taxonomy.ts) —
+ *  NOT a re-import (Frontend never imports `$lib/server/**`); PageData already carries this shape
+ *  structurally. Update in lockstep if Backend's shape changes. */
+export type SubCatOption = { id: number; cat: string; sub_cat: string; display_order: number | null };
+
+/** Distinct Cat labels for the Cat picker, deduped by first occurrence, server (display_order)
+ *  order preserved. */
+export function catOptionsOf(subCats: readonly Pick<SubCatLike, 'cat'>[]): Opt[] {
+	const seen = new Set<string>();
+	const out: Opt[] = [];
+	for (const s of subCats) {
+		if (seen.has(s.cat)) continue;
+		seen.add(s.cat);
+		out.push({ value: s.cat, label: s.cat });
+	}
+	return out;
+}
+
+/** Sub-Cat options for ONE chosen Cat — the second cascade step, id-valued (the value posted back
+ *  on Save). Empty Cat ⇒ empty list (the Sub-Cat select stays disabled until a Cat is chosen). */
+export function subCatOptionsForCat(subCats: readonly SubCatLike[], cat: string): Opt[] {
+	if (!cat) return [];
+	return subCats.filter((s) => s.cat === cat).map((s) => ({ value: String(s.id), label: s.sub_cat }));
 }

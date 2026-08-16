@@ -6,7 +6,7 @@
 // session. Both ids are required positive integers: pfin.user_asset_category.sub_cat_id is
 // NOT NULL (022), so — unlike account.sub_cat_id — there is NO nullable "Unsorted" option here;
 // classifying requires a real Sub-Cat. Matched-tenant (#8) + global-OR-owned (#9) are DB-enforced
-// (022 fn_user_asset_category_sub_cat / _asset triggers) regardless — this schema is UX + shape.
+// (022 fn_user_asset_category_matched_sub_cat / _asset triggers) regardless — this schema is UX + shape.
 
 import { z } from 'zod';
 

@@ -1,6 +1,7 @@
 // classify.server.test.ts — QA app-layer coverage for the SELF-200 (§2.4.1.e) classify action
-// error-surface mapping. Pure-TS server test (node env per vitest.config). No DB / no Plaid —
-// mocks the supabase-js upsert chain + the session, exactly the netWorth.test.ts pattern.
+// error-surface mapping, extended at SELF-235 (§2.2.1.b) for the ADR-013 H1 pre-validation gate.
+// Pure-TS server test (node env per vitest.config). No DB / no Plaid — mocks the supabase-js
+// upsert chain + the session, exactly the netWorth.test.ts pattern.
 //
 // SCOPE (distinct from the pgTAP battery + Backend's pure-logic test):
 //   - supabase/tests/rls/self200_pending_symbol_classification_rls.sql proves the DB fences
@@ -13,6 +14,11 @@
 //     leak). The mapping is a string→field coupling to Architect's migration raise prefixes;
 //     this is its regression fence. Teeth: cases 1/2 assert the OTHER field is absent, so a
 //     swapped/broken mapping flips the test RED.
+//   - ALSO locks the ADR-013 H1 pre-validation gate (isAssignableAssetSubCat): a sub_cat_id the
+//     pre-check can't confirm (domain-mismatched, cross-tenant, or an unverifiable read) is
+//     rejected 403 BEFORE the upsert is ever attempted — this is the ONLY app-side enforcement
+//     of domain='asset' (022's comment: "Matched-DOMAIN is app-layer in V1"; the DB fence #8
+//     checks tenant match only, not domain).
 
 import { describe, it, expect, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -21,17 +27,35 @@ import { actions } from './+page.server';
 const SESSION_A = '00000000-0000-0000-0000-00000000000a';
 
 type UpsertResult = { data: unknown; error: { message: string } | null };
+/** The ADR-013 H1 pre-validation read: .schema('pfin').from('user_taxonomy').select('id')
+ *  .eq('id',…).eq('domain','asset').eq('is_active',true).maybeSingle(). `found:true` means the
+ *  row resolved (assignable); `found:false` mimics RLS/domain exclusion (zero rows, no error). */
+type PreValidateResult = { found: boolean; error?: { message: string } };
 
-/** Minimal supabase-js stub: only the chain the classify action touches —
- *  .schema('pfin').from('user_asset_category').upsert(...).select('asset_id').maybeSingle(). */
-function makeSupabase(result: UpsertResult) {
-	const maybeSingle = vi.fn(async () => result);
+/** Minimal supabase-js stub covering BOTH chains the classify action touches: the
+ *  isAssignableAssetSubCat pre-check read (user_taxonomy) and the upsert write
+ *  (user_asset_category). `.from()` branches on the table name so one stub serves both. */
+function makeSupabase(upsertResult: UpsertResult, preValidate: PreValidateResult = { found: true }) {
+	const maybeSingle = vi.fn(async () => upsertResult);
 	const select = vi.fn(() => ({ maybeSingle }));
 	const upsert = vi.fn(() => ({ select }));
-	const from = vi.fn(() => ({ upsert }));
+
+	const preMaybeSingle = vi.fn(async () =>
+		preValidate.error
+			? { data: null, error: preValidate.error }
+			: { data: preValidate.found ? { id: 1 } : null, error: null }
+	);
+	const preEq3 = vi.fn(() => ({ maybeSingle: preMaybeSingle }));
+	const preEq2 = vi.fn(() => ({ eq: preEq3 }));
+	const preEq1 = vi.fn(() => ({ eq: preEq2 }));
+	const preSelect = vi.fn(() => ({ eq: preEq1 }));
+
+	const from = vi.fn((table: string) =>
+		table === 'user_taxonomy' ? { select: preSelect } : { upsert }
+	);
 	const schema = vi.fn(() => ({ from }));
 	const client = { schema } as unknown as SupabaseClient;
-	return { client, schema, from, upsert, select, maybeSingle };
+	return { client, schema, from, upsert, select, maybeSingle, preSelect, preMaybeSingle };
 }
 
 /** Build the RequestEvent slice the classify action reads: form body + session + supabase. */
@@ -39,11 +63,13 @@ function makeEvent(opts: {
 	form: Record<string, string>;
 	user?: { id: string } | null;
 	upsert?: UpsertResult;
+	preValidate?: PreValidateResult;
 }) {
 	const fd = new FormData();
 	for (const [k, v] of Object.entries(opts.form)) fd.set(k, v);
 	const { client, upsert, maybeSingle } = makeSupabase(
-		opts.upsert ?? { data: { asset_id: Number(opts.form.asset_id) }, error: null }
+		opts.upsert ?? { data: { asset_id: Number(opts.form.asset_id) }, error: null },
+		opts.preValidate
 	);
 	const event = {
 		request: { formData: async () => fd },
@@ -143,5 +169,39 @@ describe('classify action — error-surface mapping (SELF-200)', () => {
 		});
 		const res = await run(event);
 		expect(res.status).toBe(404);
+	});
+});
+
+describe('classify action — ADR-013 H1 pre-validation gate (SELF-235 AC6)', () => {
+	it('sub_cat_id the pre-check cannot confirm (cross-tenant / wrong-domain / nonexistent) → 403, no write attempted', async () => {
+		const { event, upsert } = makeEvent({
+			form: { asset_id: '10', sub_cat_id: '20' },
+			preValidate: { found: false }
+		});
+		const res = await run(event);
+		expect(res.status).toBe(403);
+		expect(res.data.errors.sub_cat_id).toBeDefined();
+		expect(upsert).not.toHaveBeenCalled();
+	});
+
+	it('pre-check read error → fails CLOSED (403, no write) — an unverifiable check is never "valid"', async () => {
+		const { event, upsert } = makeEvent({
+			form: { asset_id: '10', sub_cat_id: '20' },
+			preValidate: { found: false, error: { message: 'connection reset' } }
+		});
+		const res = await run(event);
+		expect(res.status).toBe(403);
+		expect(upsert).not.toHaveBeenCalled();
+	});
+
+	it('pre-check passes → falls through to the upsert as before', async () => {
+		const { event, upsert } = makeEvent({
+			form: { asset_id: '10', sub_cat_id: '20' },
+			preValidate: { found: true },
+			upsert: { data: { asset_id: 10 }, error: null }
+		});
+		const res = await run(event);
+		expect(res).toEqual({ success: true, asset_id: 10 });
+		expect(upsert).toHaveBeenCalled();
 	});
 });

@@ -41,7 +41,11 @@ const alias = {
 	// `$app/navigation` / `$app/state` — likewise unresolvable without `svelte-kit
 	// sync`. Same stub convention as the `$env/dynamic/*` aliases above.
 	'$app/navigation': fileURLToPath(new URL('./tests/stubs/app-navigation.ts', import.meta.url)),
-	'$app/state': fileURLToPath(new URL('./tests/stubs/app-state.ts', import.meta.url))
+	'$app/state': fileURLToPath(new URL('./tests/stubs/app-state.ts', import.meta.url)),
+	// SELF-235: SymbolClassifyRow.svelte is the first dom-tested component to import
+	// `use:enhance` from `$app/forms` — likewise unresolvable without `svelte-kit sync`. Same
+	// stub convention as the other `$app/*` aliases above.
+	'$app/forms': fileURLToPath(new URL('./tests/stubs/app-forms.ts', import.meta.url))
 };
 
 // Discovery excludes shared by both projects.
