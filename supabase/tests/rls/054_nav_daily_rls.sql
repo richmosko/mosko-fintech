@@ -844,6 +844,17 @@ select ok(
 --       hardened against in the first place. If this leg goes RED, check WHICH half via
 --       `select rolcanlogin, rolpassword is null from pg_authid where rolname = 'pfin_etl'`
 --       BEFORE concluding anything — do not assume it's the expected half.
+--       ⚠ VENUE — and it is NOT a scratch DB (QA finding, this PR). Roles are CLUSTER-level:
+--       `pg_authid` is a SHARED catalog, so `pfin_etl`'s retained password is identical in
+--       EVERY database of this cluster — a scratch database created here inherits it, and a
+--       RED on the password half there means nothing new. The scratch DB is the sanctioned
+--       local venue for the DATA-dependent batteries (053 / 062 / 063 / 064); it does NOT
+--       clear h14's password half. Only a FRESH CLUSTER does.
+--       ⚠ One already exists and runs on every PR: CI (.github/workflows/db-tests.yml) does
+--       `supabase start` on a clean runner, so `pfin_etl` is exactly as migration 055 ships
+--       it and BOTH halves of h14 are genuinely verified there, every time. h14 is therefore
+--       NOT unverifiable — it is VERIFIED IN CI and EXPECTED-DIFFERENT locally. Do not
+--       "simplify" this assertion on the belief that nothing checks it.
 select ok(
   pg_temp.qa_pfin_etl_inert(),
   '(h14) B8 fail-closed provisioning: as shipped by migration 055, `pfin_etl` is NOLOGIN **and** carries NO PASSWORD — inert by construction, flipped to a working credential only at deploy via a single ALTER ROLE from the Coolify secret. Both halves asserted: RED if the role shipped login-capable, and RED if any password (even a dormant one behind NOLOGIN) were committed to the repo'
