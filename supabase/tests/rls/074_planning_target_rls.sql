@@ -132,11 +132,12 @@
 --   the 001->075 reset stack (CI, db-tests.yml, clean-apply). Locally verified on a hand-built
 --   scratch DB (createdb + auth/extensions/vault schemas + pgtap restored from the live
 --   Supabase container, migrations 001-075 applied in order, per the #474 venue recipe — `supabase
---   db reset` is mechanically banned). plan(36): 3 structural (S1-S3) + 2 unset-semantics
+--   db reset` is mechanically banned). plan(37): 4 structural (S1-S2 + S3a-S3b, split per Sec
+--   F1 fold-in on the #476 joint-review — see the box at BLOCK S) + 2 unset-semantics
 --   (U1-U2) + 2 two-tenant read isolation (R1-R2) + 2 leg-1 (L1a-L1b) + 3 leg-2 (L2a-L2c) + 2
 --   leg-3 (L3-L3u) + 5 numeric mechanism (N1-N5) + 1 RESTRICT (FK1) + 11 aal2 backstop
 --   (M1-M11) + 1 UPSERT reassign (UP1a) + 1 corrupt-the-control (X1) + 1 anon zero-grant (G1) +
---   2 tenant-cascade (CASC1a-CASC1b) = 36.
+--   2 tenant-cascade (CASC1a-CASC1b) = 37.
 -- =====================================================================
 
 begin;
@@ -144,7 +145,7 @@ begin;
 -- shared verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(36);
+select plan(37);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb, _rls.tenant_c() as tc \gset
@@ -211,15 +212,36 @@ select ok(
   '(S2) STRUCTURAL: planning_target_update carries a WITH CHECK expression referencing users_id = auth.uid() (pg_policy catalog) — same proof as (S1) for the UPDATE path'
 );
 
--- (S3) ALL FOUR policies (select/insert/update/delete) carry the 025 aal2 backstop
---      clause in their USING and/or WITH CHECK expression.
+-- (S3a)/(S3b) — SPLIT by clause half (Sec F1 fold-in, #476 joint-review): an
+--   OR-combined single count (the original (S3)) goes GREEN if aal2 survives in
+--   EITHER half of a policy, so a WITH-CHECK-only aal2 regression on
+--   planning_target_update would pass silently — USING gates first for
+--   UPDATE, so no behavioural leg (M7/M8) would catch it either: whenever
+--   USING already required aal2 for a caller/session, WITH CHECK's own aal2
+--   clause is trivially satisfied by the same caller/session, so it is NEVER
+--   independently exercised. This is exactly the migration header's own
+--   point (074:188-190): "the same structural assertion is the right watcher
+--   for the UPDATE clause too, since the behavioural legs there prove the
+--   USING half rather than the WITH CHECK half" — TRUE with this split, false
+--   with the original single OR-count. Two independent catalog counts:
+--   (S3a) USING (polqual) carries aal2 — select/update/delete (the 3 policies
+--   with a USING clause; insert has none). (S3b) WITH CHECK (polwithcheck)
+--   carries aal2 — insert/update (the 2 policies with a WITH CHECK clause;
+--   select/delete have none). Either count dropping by one is a REAL clause
+--   loss, unmasked by the other half surviving.
 select is(
   (select count(*)::bigint from pg_policy
     where polrelid = 'pfin.planning_target'::regclass
-      and (coalesce(pg_get_expr(polqual, polrelid), '') ilike '%aal2%'
-        or coalesce(pg_get_expr(polwithcheck, polrelid), '') ilike '%aal2%')),
-  4::bigint,
-  '(S3) STRUCTURAL: all FOUR policies (select/insert/update/delete) carry the ADR-029/025 aal2 backstop clause verbatim (pg_policy catalog) — the migration''s own claim ("every policy") is a catalog fact, not a sampled behaviour'
+      and coalesce(pg_get_expr(polqual, polrelid), '') ilike '%aal2%'),
+  3::bigint,
+  '(S3a) STRUCTURAL — USING half: select/update/delete (the 3 policies carrying a USING clause) all carry the ADR-029/025 aal2 backstop in polqual (pg_policy catalog) — RED if any USING-side aal2 clause were dropped, independent of the WITH CHECK half'
+);
+select is(
+  (select count(*)::bigint from pg_policy
+    where polrelid = 'pfin.planning_target'::regclass
+      and coalesce(pg_get_expr(polwithcheck, polrelid), '') ilike '%aal2%'),
+  2::bigint,
+  '(S3b) STRUCTURAL — WITH CHECK half: insert/update (the 2 policies carrying a WITH CHECK clause) both carry the ADR-029/025 aal2 backstop in polwithcheck (pg_policy catalog) — RED if planning_target_update''s WITH CHECK lost its aal2 clause while USING kept it, a regression (S3a) alone and no behavioural leg would ever catch (USING gates UPDATE first, so WITH CHECK''s aal2 half is never independently reached — see the box above)'
 );
 
 -- =====================================================================
