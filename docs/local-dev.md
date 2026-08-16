@@ -58,6 +58,12 @@ GoTrue's `site_url` is `http://127.0.0.1:3000`, so **auth redirects — email co
 
 ---
 
+## DB snapshots (recovery point for destructive local-dev commands)
+
+`supabase db reset` is permission-guarded outright (see [`docs/records/2026-08-14-db-reset-incident.md`](records/2026-08-14-db-reset-incident.md)), but sibling destructive routes — `supabase stop --no-backup`, `docker compose down -v` / `docker volume rm`, a raw `psql ... drop schema` — are not, and can't be closed by enumerating more banned command strings. `scripts/db-snapshot.sh` sidesteps that by taking a full `pg_dump` (data + privileges, every schema) of the local stack automatically at every Claude Code session start, to `~/Projects/mosko-fintech-db-snapshots/` (outside the repo, newest 10 kept). Run it by hand with `--force` right before anything you know is destructive to close the gap between session-start and that moment. Restore is manual — see the script's header comment (⚠ restore as `supabase_admin`, not `postgres` — `postgres` is not the real superuser in this stack and a restore under it produces noisy but harmless ownership errors).
+
+---
+
 ## Provider-sync worker (Plaid / SimpleFIN)
 
 The provider sync is a **separate Node package** (`workers/provider-sync/`), not part of the web-app dev server. Three CLI entrypoints:
