@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cmd=$(jq -r '.tool_input.command // empty'); if printf '%s' \"$cmd\" | grep -qE '(^|[^A-Za-z0-9_])supabase[[:space:]]+db[[:space:]]+reset([^A-Za-z0-9_]|$)'; then jq -n --arg r \"BLOCKED: 'supabase db reset' is banned outright — any flags, any invocation form, permanent (2026-08-14 shared-DB wipe incident: docs/records/2026-08-14-db-reset-incident.md). Build a scratch DB by hand instead: createdb + psql -f per migration file.\" '{hookSpecificOutput:{hookEventName:\"PreToolUse\",permissionDecision:\"deny\",permissionDecisionReason:$r}}'; fi",
+            "command": "command -v jq >/dev/null 2>&1 || { echo \"BLOCKED: db-reset guard cannot run (jq unavailable) — failing closed rather than waving the call through. See docs/records/2026-08-14-db-reset-incident.md.\" >&2; exit 2; }; cmd=$(jq -r '.tool_input.command // empty' 2>/dev/null); if [ -z \"$cmd\" ]; then echo \"BLOCKED: db-reset guard could not read the Bash command (empty payload) — failing closed. See docs/records/2026-08-14-db-reset-incident.md.\" >&2; exit 2; fi; if printf '%s' \"$cmd\" | tr '\\n' ' ' | grep -qE '(^|[^A-Za-z0-9_])supabase([[:space:]]+[^[:space:]]+)*[[:space:]]+db[[:space:]]+reset([^A-Za-z0-9_]|$)'; then jq -n --arg r \"BLOCKED: 'supabase db reset' is banned outright — any flags, any invocation form, permanent (2026-08-14 shared-DB wipe incident: docs/records/2026-08-14-db-reset-incident.md). Build a scratch DB by hand instead: createdb + psql -f per migration file.\" '{hookSpecificOutput:{hookEventName:\"PreToolUse\",permissionDecision:\"deny\",permissionDecisionReason:$r}}'; fi",
             "statusMessage": "Checking for banned supabase db reset invocation"
           }
         ]
