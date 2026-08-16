@@ -1,0 +1,77 @@
+-- ============================================================================
+-- Migration: pfin.user_settings — comment-only correction of the superseded
+-- SELF-232 settings-home claim. Phase 6 Build Loop (SELF-324 / ADR-056).
+--
+-- WHAT THIS DOES: re-issues `comment on table pfin.user_settings` with ONE
+-- substituted span. It creates, alters and drops nothing. No DDL, no policy, no
+-- grant, no trigger, no function.
+--
+-- WHY A NEW MIGRATION RATHER THAN AN EDIT TO 024 (the vehicle follows WHERE THE
+--   TEXT LIVES — Sec ruling at 055): 024's catalog comment claimed this table is
+--   "SELF-232's future settings home (planning-target/display/preference columns
+--   land ADDITIVELY via ALTER ADD COLUMN — not a second table, not a rebuild)".
+--   ADR-056 supersedes that: the %Target is a per-Sub-Cat VECTOR and lands at 074
+--   as pfin.planning_target. A `comment on ...` has a DATABASE representation — it
+--   ships into pg_description and is read at \d+ by someone with NO repo in front
+--   of them — so it can only be corrected by issuing new SQL. 024's FILE-HEADER
+--   block carries the same claim, has no database representation, and is therefore
+--   corrected IN PLACE in this same PR (the other half of the same ruling). Two
+--   halves, two vehicles, one correction.
+--
+-- ----------------------------------------------------------------------------
+-- Numbering: 075 follows 074 (planning_target), taken at authoring time. Depends
+--   on 024 (the comment's target table). Order-dependent only on 024; it is
+--   placed after 074 because the text it installs refers to 074's table by name,
+--   and a comment naming an object that does not yet exist would be a forward
+--   reference in the catalog.
+--
+-- ----------------------------------------------------------------------------
+-- POSTURE RATIONALE — no function authored. This migration defines no SECURITY
+--   INVOKER and no SECURITY DEFINER function; `set search_path = ''` is N/A (a
+--   function-body guard). The SECURITY DEFINER allowlist is UNCHANGED (ADR-011
+--   Decision 9 — read the allowlist there).
+--
+-- ----------------------------------------------------------------------------
+-- §10 3-AXIS CROSS-CHECK (Path B — reference ADR-011 Decision 4, read verbatim
+-- and live before drafting; the catalogued list is NOT restated and no count is
+-- carried). This migration introduces ZERO catalogued §10 instances.
+--   (i)   Instance-numbering: unchanged — nothing added, reordered or renumbered.
+--   (ii)  Layer-attribution: unchanged — no catalogued instance's layer moves and
+--         no surface becomes "four-layer". No grant or ACL is touched at all.
+--   (iii) Verbatim-vs-paraphrase: Decision 4 is linked, not restated.
+--
+-- DECISION 3 (cross-tenant FK-bypass family) EVALUATION — +0. This migration adds
+--   no column of any kind, FK-shaped or otherwise. The family's growth in this PR
+--   is 074's #17; THIS FILE ADDS NO INSTANCE. (Stated at object scope AND at PR
+--   scope deliberately: an object-scoped claim phrased so it can be quoted as a
+--   PR-scoped one is a badly-written claim — the ADR-042 (e) lesson.)
+--
+-- ----------------------------------------------------------------------------
+-- HOW THE REPLACEMENT TEXT WAS PRODUCED (the 052 shape — regenerate and diff,
+-- never retype; a multi-KB literal retyped is how correct halves get silently
+-- altered alongside the wrong one):
+--   1. ONE anchored substitution, asserted to match EXACTLY ONCE against the
+--      live catalog string (measured: 1 occurrence).
+--   2. CONTAINMENT PROOF, preferred over counting diff regions because it makes a
+--      positive claim about everything that did NOT change: with the anchor at
+--      position p, the prefix left(old, p-1) and the suffix after the anchor were
+--      both verified BYTE-IDENTICAL between old and new, so exactly one
+--      contiguous span differs. (Measured: prefix_identical = true,
+--      suffix_identical = true; 1236 chars -> 1430 chars.)
+--   3. PARSE-IN-ROLLBACK: the literal was applied inside a transaction and rolled
+--      back, proving it parses before being committed to a file.
+--   4. RENDER-VERIFY: the comment was read back through obj_description — as the
+--      catalog renders it, not as the source reads — because a doubled '' leaking
+--      into rendered text is invisible in source.
+--
+-- CONTRACT
+--   pfin.user_settings — table comment only. The claim "this is also SELF-232's
+--     future settings home (... land ADDITIVELY via ALTER ADD COLUMN ...)" is
+--     replaced by a supersession pointer to ADR-056 / 074. EVERYTHING ELSE IN THE
+--     COMMENT IS BYTE-IDENTICAL, including the ISOLATION INVARIANT paragraph and
+--     the Auth-3b pointer. No security-load-bearing edge changes: this migration
+--     alters no behaviour of any kind.
+-- ============================================================================
+
+comment on table pfin.user_settings is
+'Per-user own-row settings substrate (SELF-286 / Auth-3, MFA substrate only; F/CTO-ratified 2026-07-21 Option B split). ONE row per user (PK = users_id, the tenant anchor itself). Carries the per-user mfa_policy MFA choice; the SELF-232 settings-home claim that stood here is SUPERSEDED 2026-08-16 (ADR-056): the %Target half of SELF-232 is a per-Sub-Cat VECTOR and lands at 074 as pfin.planning_target (one row per (users_id, sub_cat_id)), NOT as additive columns here — this table''s grain and every policy and grant created at 024 are unchanged by that supersession. This table also fulfills SELF-285 AC#5''s deferred profile row. LIVE write path (contrast 009 user_taxonomy write-dormant): authenticated holds SELECT+INSERT+UPDATE; the app lazily upserts the row under the user''s own JWT (insert ... on conflict (users_id) do nothing) — NO on-signup DEFINER trigger (ratified D3; DEFINER allowlist stays 3). No DELETE policy/grant (settings rows are not user-deletable; lifecycle tied to auth.users ON DELETE CASCADE). anon zero-grant (pfin schema-usage denial); service_role ungranted (no server-role writer — the app writes as the user). ISOLATION INVARIANT (AC#6): tenant isolation = universal RLS users_id = auth.uid(), independent of MFA; mfa_policy bounds only the user''s OWN step-up/impersonation risk and can never weaken another tenant''s fence. The real DB-enforced aal2 step-up backstop is Auth-3b (SELF-291), NOT here.';
