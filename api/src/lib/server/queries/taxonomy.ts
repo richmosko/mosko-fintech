@@ -145,6 +145,39 @@ export async function loadCashflowSubCats(supabase: SupabaseClient): Promise<Sub
 }
 
 /**
+ * ADR-013 H1 app-layer pre-validation for the SELF-235 classify/reassign write path: does
+ * `subCatId` exist, belong to the CALLER, and sit in the asset domain? RLS-scoped
+ * (user_taxonomy_select = auth.uid()), so a forged or cross-tenant id resolves to zero rows —
+ * existence and ownership collapse into one check, same shape H1 asks for the §2.2 `%Target`
+ * keyed-array write ("the Sub-Cat key must be validated against the seeded taxonomy — no
+ * forged/cross-tenant key"). is_active mirrors loadAssetSubCats so a submitted id is only ever
+ * one the picker itself could have offered.
+ *
+ * DEFENSE-IN-DEPTH ONLY: this is checked BEFORE the write, never instead of the 022 DB fences
+ * (fn_user_asset_category_matched_sub_cat / fn_user_asset_category_asset), which remain the
+ * authoritative tenant boundary. Fail-closed on an unverifiable read (returns false) — an error
+ * here must never be treated as "valid".
+ */
+export async function isAssignableAssetSubCat(
+	supabase: SupabaseClient,
+	subCatId: number
+): Promise<boolean> {
+	const { data, error } = await supabase
+		.schema('pfin')
+		.from('user_taxonomy')
+		.select('id')
+		.eq('id', subCatId)
+		.eq('domain', 'asset')
+		.eq('is_active', true)
+		.maybeSingle();
+	if (error) {
+		console.error('[taxonomy] isAssignableAssetSubCat read failed (fail-closed):', error.message);
+		return false;
+	}
+	return data !== null;
+}
+
+/**
  * Flatten an embedded `user_taxonomy ( cat, sub_cat )` join result to a label.
  * supabase-js may type the FK embed as a to-many array though this many-to-one FK
  * returns a single object at runtime — normalize both. NULL (untagged sub_cat_id) →
