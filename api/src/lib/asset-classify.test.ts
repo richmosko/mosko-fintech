@@ -8,6 +8,9 @@ import {
 	displayName,
 	labelForHintKey,
 	hintEntries,
+	classificationLabel,
+	catOptionsOf,
+	subCatOptionsForCat,
 	type PendingSymbol
 } from './asset-classify';
 
@@ -115,4 +118,53 @@ describe('hintEntries', () => {
 			expect(hintEntries(meta)).toEqual([]);
 		}
 	);
+});
+
+describe('classificationLabel', () => {
+	it('renders "Cat › Sub-Cat" when both are present', () => {
+		expect(classificationLabel({ sub_cat_id: 1, cat: 'Equities', sub_cat: 'US Large Cap' })).toBe(
+			'Equities › US Large Cap'
+		);
+	});
+	it('falls back to bare sub_cat when cat is empty (subCatLabel Unsorted convention)', () => {
+		expect(classificationLabel({ sub_cat_id: 1, cat: '', sub_cat: 'Unsorted' })).toBe('Unsorted');
+	});
+	it('returns null when unclassified', () => {
+		expect(classificationLabel(null)).toBeNull();
+	});
+});
+
+describe('catOptionsOf', () => {
+	it('dedupes to distinct Cats, first-occurrence order, value === label', () => {
+		expect(
+			catOptionsOf([{ cat: 'Equities' }, { cat: 'Bonds' }, { cat: 'Equities' }, { cat: 'Cash' }])
+		).toEqual([
+			{ value: 'Equities', label: 'Equities' },
+			{ value: 'Bonds', label: 'Bonds' },
+			{ value: 'Cash', label: 'Cash' }
+		]);
+	});
+	it('returns [] for an empty list', () => {
+		expect(catOptionsOf([])).toEqual([]);
+	});
+});
+
+describe('subCatOptionsForCat', () => {
+	const subCats = [
+		{ id: 1, cat: 'Equities', sub_cat: 'US Large Cap' },
+		{ id: 2, cat: 'Equities', sub_cat: 'Intl' },
+		{ id: 3, cat: 'Bonds', sub_cat: 'Treasuries' }
+	];
+	it('filters to the chosen Cat, id-valued options', () => {
+		expect(subCatOptionsForCat(subCats, 'Equities')).toEqual([
+			{ value: '1', label: 'US Large Cap' },
+			{ value: '2', label: 'Intl' }
+		]);
+	});
+	it('returns [] for an unmatched Cat', () => {
+		expect(subCatOptionsForCat(subCats, 'Real Estate')).toEqual([]);
+	});
+	it('returns [] for an empty Cat (nothing chosen yet)', () => {
+		expect(subCatOptionsForCat(subCats, '')).toEqual([]);
+	});
 });

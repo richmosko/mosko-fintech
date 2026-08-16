@@ -1,51 +1,61 @@
 <!--
-	portfolio/classify/+page.svelte — SELF-200 (§2.4.1.e) pending-symbol classification surface.
-	Frontend-owned browser surface. Consumes +page.server.ts's `data` ({ pending, subCats,
-	loadError }) and POSTs the classify action; authors NO server logic.
+	portfolio/classify/+page.svelte — SELF-235 (§2.2.1.b) full symbols list: every security the
+	caller has ever transacted, each carrying its current Cat/Sub-Cat or the classification-pending
+	state. Generalized from the SELF-200 (§2.4.1.e) pending-only queue this page used to be (that
+	surface's "Pending classification" framing is retired — this is now the full holding-to-bucket
+	assignment list, with pending as ONE state a row can be in, not the page's whole subject).
 
-	The header badge (root +layout.svelte) links here. Each held-but-unclassified security is a
-	PendingClassifyRow: click-into detail shows the linked-provider metadata as a NON-preselected
-	hint (AC3) + the Cat › Sub-Cat picker; Save POSTs ?/classify; on success the item drops from the
-	list off the re-run load (no manual mutation).
+	Frontend-owned browser surface. Consumes +page.server.ts's `data` ({ symbols, subCats,
+	loadError }) and POSTs the classify action via SymbolClassifyRow; authors NO server logic.
 
-	State precedence (loadError must WIN so a read failure never masquerades as "all caught up"):
+	The header badge (root +layout.svelte) still links here and still counts ONLY the pending
+	subset (countPendingSymbols, untouched by this generalization) — AC5: the notification-queue
+	entry point keeps working unchanged.
+
+	⚠ "Pending" here is the classification-pending concept (SELF-200/SELF-235) — NOT the SELF-208
+	staleness framework (stale re-auth data). No staleness props are read or rendered on this page;
+	--c-attn-* stays reserved for that surface (design-system fence).
+
+	State precedence (loadError must WIN so a read failure never masquerades as "nothing held"):
 	  1. loadError            → retriable error (gap 1). Backend's fail-soft [] is distinguished from
 	                            a genuine empty set by the `loadError` flag; retry re-runs the load.
-	  2. pending & no taxonomy → defensive no-taxonomy notice (gap 2); Classify disabled on every row.
-	                            Unreachable in single-user V1 (taxonomy is provisioned at setup) —
-	                            kept quiet, NO error styling, NO CTA.
-	  3. no pending           → "all caught up" empty state.
-	  4. otherwise            → the classify list.
+	  2. symbols & no taxonomy → defensive no-taxonomy notice (gap 2); Classify/Change disabled on
+	                            every row. Unreachable in single-user V1 (taxonomy is provisioned at
+	                            setup) — kept quiet, NO error styling, NO CTA.
+	  3. no symbols           → "nothing here yet" empty state (never transacted anything).
+	  4. otherwise            → the full list, each row classified or pending.
 
-	a11y (gap 3): a row unmounts on success, so the page owns a polite aria-live region
-	("Classified — N remaining.") and moves focus to the stable region wrapper after each classify.
+	a11y (gap 3): a row stays mounted after a (re)classify (AC4 — it updates in place, it does not
+	unmount), so the page owns a polite aria-live region ("Category saved — N pending.") that
+	announces the new pending count; SymbolClassifyRow itself returns focus to its own
+	Classify/Change button (the row is still there to receive it).
 
-	Sub-Cat options are grouped by `cat` into accessible <optgroup> (subCatGroupsOf — the SAME
-	flatten the SELF-236 reassign picker uses, so the two pickers never drift). Tokens ONLY.
+	The Cat → Sub-Cat cascade (catOptionsOf / subCatOptionsForCat) lives in asset-classify.ts and is
+	owned per-row (SymbolClassifyRow) so one row's in-progress edit can't bleed into another's.
+	Tokens ONLY.
 -->
 <script lang="ts">
 	import { tick } from 'svelte';
 	import { invalidateAll } from '$app/navigation';
 	import type { PageData } from './$types';
-	import PendingClassifyRow from '$lib/components/PendingClassifyRow.svelte';
+	import SymbolClassifyRow from '$lib/components/SymbolClassifyRow.svelte';
 	import Button from '$lib/components/Button.svelte';
-	import { subCatGroupsOf } from '$lib/transaction-util';
 
 	let { data }: { data: PageData } = $props();
 
-	const pending = $derived(data.pending);
-	const subCatGroups = $derived(subCatGroupsOf(data.subCats));
-	const hasTaxonomy = $derived(subCatGroups.length > 0);
+	const symbols = $derived(data.symbols);
+	const hasTaxonomy = $derived(data.subCats.length > 0);
+	const pendingCount = $derived(symbols.filter((s) => s.classification === null).length);
 
-	// Polite SR announcement + focus anchor for the post-classify moment (the row unmounts).
+	// Polite SR announcement anchor for the post-save moment.
 	let liveMsg = $state('');
 	let regionEl: HTMLElement | undefined = $state();
 
 	async function handleClassified() {
-		// Called after the row's load-invalidation resolves, so `pending` already reflects the drop.
-		const remaining = pending.length;
+		// Called after the row's load-invalidation resolves, so `symbols`/`pendingCount` already
+		// reflect the change.
 		liveMsg =
-			remaining === 0 ? 'Classified — none remaining.' : `Classified — ${remaining} remaining.`;
+			pendingCount === 0 ? 'Category saved — none pending.' : `Category saved — ${pendingCount} pending.`;
 		await tick();
 		regionEl?.focus();
 	}
@@ -60,51 +70,55 @@
 </script>
 
 <svelte:head>
-	<title>Pending classification — mosko-fintech</title>
+	<title>Securities & categories — mosko-fintech</title>
 </svelte:head>
 
 <p class="visually-hidden" aria-live="polite" aria-atomic="true">{liveMsg}</p>
 
 <main class="page">
 	<header class="head">
-		<h1>Pending classification</h1>
+		<h1>Securities &amp; categories</h1>
 		<p class="lede">
-			Assign a category to each security you hold. Until you do, it rolls up under Uncategorized ›
-			Unsorted in your allocation and net-worth views — visible, just not yet categorized.
+			Every security you've ever held, with its current category. Until a security is
+			categorized, it rolls up under Uncategorized › Unsorted in your allocation and net-worth
+			views — visible, just not yet categorized.
 		</p>
 	</header>
 
-	<section
-		class="region"
-		aria-label="Securities pending classification"
-		tabindex="-1"
-		bind:this={regionEl}
-	>
+	<section class="region" aria-label="Securities and categories" tabindex="-1" bind:this={regionEl}>
 		{#if data.loadError}
 			<div class="load-error" role="alert">
-				<p class="load-error-msg">Couldn't load your pending securities — retry.</p>
+				<p class="load-error-msg">Couldn't load your securities — retry.</p>
 				<Button variant="secondary" type="button" onclick={retry} loading={retrying}>Retry</Button>
 			</div>
-		{:else if pending.length > 0 && !hasTaxonomy}
+		{:else if symbols.length > 0 && !hasTaxonomy}
 			<div class="notice">
 				<p class="notice-msg">No asset categories are set up yet, so classification is unavailable.</p>
 				<p class="notice-sub">Your category taxonomy is provisioned during setup.</p>
 			</div>
 			<ul class="list">
-				{#each pending as p (p.asset_id)}
-					<PendingClassifyRow symbol={p} {subCatGroups} disabled />
+				{#each symbols as s (s.asset_id)}
+					<SymbolClassifyRow symbol={s} subCats={data.subCats} disabled />
 				{/each}
 			</ul>
-		{:else if pending.length === 0}
-			<p class="empty">You're all caught up — no securities are waiting for a category.</p>
+		{:else if symbols.length === 0}
+			<p class="empty">
+				Nothing here yet — once you record a security transaction, it'll show up here for
+				categorization.
+			</p>
 		{:else}
 			<p class="count">
-				{pending.length}
-				{pending.length === 1 ? 'security' : 'securities'} awaiting a category.
+				{symbols.length}
+				{symbols.length === 1 ? 'security' : 'securities'}
+				{#if pendingCount > 0}
+					· {pendingCount} pending a category
+				{:else}
+					· all categorized
+				{/if}
 			</p>
 			<ul class="list">
-				{#each pending as p (p.asset_id)}
-					<PendingClassifyRow symbol={p} {subCatGroups} onclassified={handleClassified} />
+				{#each symbols as s (s.asset_id)}
+					<SymbolClassifyRow symbol={s} subCats={data.subCats} onclassified={handleClassified} />
 				{/each}
 			</ul>
 		{/if}
