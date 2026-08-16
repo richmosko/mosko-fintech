@@ -39,5 +39,23 @@ requires rewriting them. At SELF-220 the one-line predicate change restored the 
 finding without opening a new stale-comment surface. Rewriting the comments to match the new behaviour
 would have ratified a fail-open as intended.
 
+**The third place the sentinel hides — the PROP DEFAULT (SELF-229).** A fail-closed rework fixed
+`loadStaleness()` to degrade to UNKNOWN, but every consumer still declared `staleness = EMPTY_STALENESS`
+/ `isStale = false` as its **prop default**, and the page did `data.staleness ?? EMPTY_STALENESS`. Every
+live mount passed the prop, so nothing was broken — but the framework's own ADR (013 D1) says its surface
+list is illustrative and more surfaces ramp later, so the default is a fail-open **armed for the next
+ramp site that forgets the prop**. When reviewing a fail-closed fix, check three layers, not one:
+the loader's error paths, the render predicate, and **the default that applies when the value never
+arrives at all**. Offer both shapes: default flips to the UNKNOWN constant (fails closed at runtime,
+costs a test re-run) or the prop becomes required (fails closed at typecheck, zero runtime change).
+
+**Also SELF-229 — the guard predicate vs the payload's arity.** `loadStaleness` guarded `error` and
+`!row` but normalized with `Boolean(row.is_stale)` and `Array.isArray(items) ? … : []`, so a malformed
+*field* (not a failed read) landed back on the confirmed-healthy value the rework existed to eliminate —
+while the module header claimed "malformed → UNKNOWN". Same lesson one level down: the contract was a
+two-field tuple and the guard tested existence only. Check reachability before severity — I proved it
+unreachable from the current DB fn (`is_stale = exists(…)` and the item list aggregate over the SAME
+CTE), which is what made it a flag rather than a veto.
+
 Related: [[measure-the-fence-regex-not-its-comment]] (the stale-comment half),
 [[catalog-comments-carry-live-state-tallies]].
