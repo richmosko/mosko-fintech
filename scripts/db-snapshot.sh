@@ -96,11 +96,11 @@
 #   PRE-incident ones over the next $KEEP runs. Ten sessions later, every
 #   recovery point is the wiped state.
 #
-#   Two independent guards, both measured against this repo's real dump sizes
-#   (a schema-only, zero-data dump of this DB's actual schema is ~911KB; a
-#   dump of a genuinely empty database — no pfin/auth objects at all — is
-#   ~900 BYTES; the full populated local dev dump used to build this script
-#   was ~1.4MB):
+#   Three guards, layered. The first two are measured against this repo's real
+#   dump sizes (a schema-only, zero-data dump of this DB's actual schema is
+#   ~911KB; a dump of a genuinely empty database — no pfin/auth objects at all
+#   — is ~900 BYTES; the full populated local dev dump used to build this
+#   script was ~1.4MB):
 #     1. PROMOTION FLOOR ($PROMOTION_FLOOR_BYTES, default 200000 = ~200KB —
 #        comfortably below the ~911KB "real schema, zero rows" floor and
 #        comfortably above the ~900B "no schema at all" case, so it only
@@ -114,6 +114,38 @@
 #        worth keeping — but SKIPS PRUNING ENTIRELY for this run, so older
 #        (possibly pre-incident, larger) snapshots are not rotated away in
 #        favour of a run of small ones. Logged loudly either way.
+#        ⚠ Real gap, found by Sec on re-review and NOT covered by (2): a
+#        POST-RESET database re-applies every migration, so its dump is still
+#        schema-dominated and lands at or above the ~911KB schema-at-zero-rows
+#        figure. 911KB x 2 = 1.82MB, which is ABOVE this repo's own largest
+#        retained snapshot (~1.4MB) at this data volume — so 0.5x never fires
+#        for a wipe-then-redump here. At this repo's current data volume, byte
+#        size alone cannot distinguish "every row gone" from routine
+#        variation. Guard 3 exists because of this, not instead of guards 1-2
+#        (those remain real, useful controls for corruption/wrong-target —
+#        just not for this scenario).
+#     3. NEVER PRUNE THE LARGEST RETAINED SNAPSHOT (Sec-ruled remediation for
+#        the gap above). Independent of recency or the other two guards: the
+#        single largest file on disk by byte size is always excluded from the
+#        prune list, even if its age would otherwise put it past $KEEP. This
+#        removes the "every recovery point is the wiped state" outcome by
+#        construction — a wipe-then-redump cycle can never rank as the
+#        largest, since the largest is (by definition) the most complete data
+#        this repo has ever had a snapshot of. Total retained count can
+#        therefore be $KEEP+1 when the largest isn't already inside the
+#        recency-KEEP window.
+#        Known worst case, accepted: if the database's real size permanently
+#        and legitimately shrinks (e.g. a deliberate switch to a smaller test
+#        dataset), the old large file is kept forever, using a bounded amount
+#        of extra disk — harmless, not silent (it's just a file sitting in
+#        the directory), and cheap to delete by hand once it's understood to
+#        be stale rather than a wipe.
+#        Guard 2's own unbounded-growth note: when it fires it promotes AND
+#        skips pruning, so a run of consecutive small dumps (a sustained
+#        anomaly, not a one-off) grows the directory without limit run over
+#        run. Not silently, though — every firing is a loud WARNING; the
+#        bound in practice is a human noticing the warning, not a size cap in
+#        this script.
 #
 # STALENESS WARNING (Sec F1)
 #   Every skip path (no docker, no container, connection not ready, pg_dump
@@ -291,9 +323,26 @@ else
 fi
 
 # Retention: keep the newest $KEEP, prune the rest — unless the shrink guard
-# fired above.
+# fired above (guard 2), or unless a given candidate IS the single largest
+# snapshot currently on disk (guard 3, Sec-ruled remediation — see the
+# RETENTION AND THE SHRINK GUARD header section for why guard 2 alone can't
+# catch a wipe-then-redump at this repo's data volume). Largest is
+# recomputed here, AFTER promotion, so the file just written is itself a
+# candidate to be "the largest" and therefore protected.
 if [ "$SKIP_PRUNE" -eq 0 ]; then
+  LARGEST_FILE=""
+  LARGEST_SIZE=-1
+  while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    sz=$(filesize "$f")
+    if [ "$sz" -gt "$LARGEST_SIZE" ]; then LARGEST_SIZE="$sz"; LARGEST_FILE="$f"; fi
+  done < <(ls "$SNAPSHOT_DIR"/db-snapshot-*.dump 2>/dev/null || true)
+
   ls -t "$SNAPSHOT_DIR"/db-snapshot-*.dump 2>/dev/null | tail -n "+$((KEEP + 1))" | while IFS= read -r old; do
+    if [ -n "$LARGEST_FILE" ] && [ "$old" = "$LARGEST_FILE" ]; then
+      log "retention: keeping $old — it is the single largest snapshot on disk (${LARGEST_SIZE}B), excluded from pruning regardless of age (guard 3)."
+      continue
+    fi
     rm -f -- "$old"
   done
 fi
