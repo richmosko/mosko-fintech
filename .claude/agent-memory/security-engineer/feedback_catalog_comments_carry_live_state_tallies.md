@@ -32,5 +32,13 @@ exactly this ASSERTS-vs-NAMES distinction). Ask for the guard, not just the dele
 struck text sits near the end, a longest-common-prefix/suffix measurement collapses everything between
 the two edits into one false "region" — use a real opcode diff and cluster the micro-regions.
 
+**Extends past `comment on` to any COMPOSITION MANIFEST in a test-file header.** A seam-only battery
+that composes sibling batteries lists them with their plan counts (`049 (plan 33) · 051 (plan 34) …`)
+alongside the §10 and DEFINER-allowlist tallies. Same class, same fix — and it is cheap to falsify:
+`grep -n "select plan(" <each cited file>` and compare. On `self228_v1_1_close_gate.sql` (PR #464) five
+of six matched and one read `plan 43+` against an actual `plan(40)`; the ledger tallies in the same
+comment block happened to be accurate, which is exactly how a tally-carrying surface reads safe right up
+until it isn't. Prefer dropping the counts (derive-by-looking) over correcting them.
+
 Related: [[measure-the-fence-regex-not-its-comment]] (a description claiming a property the artifact
 lacks) and [[sec-lock-cross-check-catches-my-own-misreads]].

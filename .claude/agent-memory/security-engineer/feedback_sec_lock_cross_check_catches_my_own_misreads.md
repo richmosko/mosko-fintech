@@ -1,6 +1,6 @@
 ---
 name: sec-lock-cross-check-catches-my-own-misreads
-description: A quotation can be false against the plausible source and exact against the CITED one — read the source the text names, not the one you expect, before forwarding a drift finding
+description: Read the source the text CITES before forwarding a drift finding — plus: a relay of my own prior words is still a relay, non-repo canonical homes exist (Linear/DESIGN flows), and quote an interior span of a bold-delimited line so no normalization is possible
 metadata:
   type: feedback
 ---
@@ -30,6 +30,46 @@ knew about returned zero hits — the tests were in a NEW file added by the same
 from reporting a missing deliverable that was present. **A zero-hit grep is a claim about the SEARCH
 SCOPE, not about the tree.** Before concluding "absent", re-run against the commit's own file list
 (`git show --stat`) or the whole tree, never against the file set you had in mind.
+
+**⚠ A relay of MY OWN prior words is still a relay, and it can be the thing with no tracked source.**
+Asked to supply commit-ready ADR-047 amendment text carrying a gate condition **I authored** in an
+earlier session, team-lead handed me the sentence to quote. `grep -rn` over `DECISIONS.md` /
+`BACKLOG.md` / `MILESTONES.md` / `CHANGELOG.md` / `docs/` found it in **no** tracked artifact — the only
+survivor was an *elided* quotation at `CHANGELOG.md` v1.177, in different case and hyphenation, of the
+`MILESTONES.md` block **as it read before that same entry corrected it**. Authorship does not make a
+sentence citable; the reason the amendment was requested at all was that the condition had no tracked
+home, so of course the wording could not be verified — **the request's own premise implied the quote
+would be unverifiable, and that is the tell to watch for.** Remedy: write it as an **attributed
+restatement**, say so *inside* the artifact ("faithful restatement, NOT a verbatim quotation, must not
+be re-quoted as one"), cite the elided quote as the only tracked one, and tell the pen-holder that the
+provenance sentence is load-bearing rather than tidy-up-able. A byte-exact quote of an unverifiable
+source passes every downstream verbatim check and becomes canonical — this is the sound-quote failure
+arriving through a friendly channel.
+
+**⚠ Sequel, same session — the relay was recoverable, and then I normalized a quote in the very
+paragraph warning against normalizing.** The 2026-08-07 wording WAS retrievable: my grep covered
+repo-tracked artifacts, and the routing record was a **Linear comment** — so "not in the tree" meant
+"not in the tree", never "does not exist". Check the non-repo canonical homes (Linear comments,
+`docs/DESIGN/flows/`) before concluding a source is unrecoverable. Then, drafting the ADR paragraph
+that quoted it, I rendered the comment's **first line** in italics without its stored `**` delimiters
+and introduced it with *"whose first line reads"* — three lines below my own instruction *"STORED
+SOURCE … do not normalize them."* **The rule and its example shared my frame; only asking the liaison
+for the first line RAW separated them.** Two durable pieces: (1) when quoting from a bold-delimited
+stored line, quote an **interior span** — it is delimiter-free, so an exact quotation needs no
+normalization and the trap cannot fire; (2) the drift in this relay chain was three-for-three a **lost
+delimiter or label** (capitalized `Before`, dropped `Condition: `, dropped line-level `**`), never a
+changed word. Substance-preserving drift is the dangerous kind because it always reads fine — so ask
+for delimiters and labels explicitly, as literal yes/no checks, not for "the text".
+
+**The transport fix that closed it, worth asking for by name.** Prompt relays drift; a **file the
+executor copies mechanically** does not. Team-lead wrote the block to a session scratchpad Architect
+copies verbatim (not a prompt relay) and briefed a **fourth independent liaison pull + byte-diff of the
+quoted sentence against the staged hunk, mismatch stops the commit**. That is the first actual *watcher*
+this quotation ever had. When text must land byte-exact, ask for both: mechanical transport, and a
+byte-diff gate at the commit boundary. ⚠ Residual to state out loud rather than leave implicit: once
+committed, the only thing guarding the quote is a **prose** guard ("STORED SOURCE … do not normalize")
+with no watcher against a future `DECISIONS.md` copy-edit — acceptable for one quotation, but say so
+rather than let the byte-diff gate read as permanent protection.
 
 **How to apply:** on every verbatim-vs-paraphrase axis check, flatten the cited file
 (`sed 's/^--*//' | tr '\n' ' ' | tr -s ' '`) so SQL-comment and string-concatenation line wrapping

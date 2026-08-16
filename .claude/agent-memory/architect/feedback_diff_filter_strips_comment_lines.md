@@ -32,4 +32,20 @@ the author's description — not because anything complained. Re-measured: 68 ad
   people until scoped. Both were right about different things — say what a count is
   over before treating a mismatch as an error.
 
-Related: [[structural-fence-must-cover-the-same-class]]
+**⚠ THE MIRROR FAILURE, and it bites the opposite claim (SELF-221 / `072`, 2026-08-14).**
+The inverse filter — `grep -vE '^[+-]\s*--'`, used to prove *"this change is
+comment-only"* — is blind in the other direction: **a `comment on …` catalog comment
+is a SQL string literal, so its lines start with `  '…'`, not `--`.** Verifying the
+072 freeze I ran exactly that check expecting 0 and got **4 added / 3 removed**. The
+lines were all comment TEXT, so a naive reading says the filter over-reported — but
+the honest finding is the reverse: **had the diff touched only the catalog comment,
+the filter would have reported 0 and I would have certified "comment-only" over text
+that ships into `pg_description` and is read at `\d+` by someone with no repo.**
+
+That distinction is exactly `apply-migration` Step 1.6's A/B split — text WITH a
+database representation versus text without — and the filter cannot see it. Assert
+the positive property instead: **zero executable lines changed** (`grep -icE
+'create|drop|grant|revoke|returns|select|…'` over the changed lines, want 0), which
+is a claim about what the diff *does* rather than about what it looks like.
+
+Related: [[structural-fence-must-cover-the-same-class]] · [[replacement-control-name-the-losing-side]]
