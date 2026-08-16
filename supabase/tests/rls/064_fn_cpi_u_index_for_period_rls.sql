@@ -2,6 +2,17 @@
 -- Per-Wave battery — pfin.fn_cpi_u_index_for_period(date)
 --   THE single CPI-U consumption helper (ADR-049 Decision 4 / migration 064)
 -- =====================================================================
+-- ⚠ EXPECTED-TO-FAIL AGAINST A LIVE LOCAL STACK carrying the real committed CPI reference
+--   data (the 2026-08-14 recovery; docs/records/2026-08-14-db-reset-incident.md) — this
+--   file shares 063's `2025-10-01` nonpublication fixture (the real-world ADR-049 period,
+--   used deliberately, not an arbitrary date) plus the same "table must be empty first"
+--   preconditions against pfin.cpi_u_index. Same disposition as 053/063
+--   (meta/battery-local-stack-disposition): not a bug, not fixed by picking different
+--   dates (CPI is an ever-advancing real time series; a fixture-side date pick expires).
+--   THE SANCTIONED LOCAL RUN is a hand-built scratch DB (`createdb` + `psql -f` per
+--   migration, never `supabase db reset` — mechanically banned). CI's clean-apply lane
+--   builds a fresh DB every run and is UNAFFECTED — it is the actual gating venue.
+-- =====================================================================
 -- BINDS TO MIGRATION: supabase/migrations/066_fn_cpi_u_index_for_period_due_and_coverage.sql
 --   (which DROPPED + RECREATED the function first authored at 064; 064 carries a supersession
 --    banner. The binding moved to 066 because the RETURN TYPE changed, and `create or replace`

@@ -820,6 +820,41 @@ select ok(
 --       pg_hba — which matters because the local stack's pg_hba grants `trust` on 127.0.0.1/32,
 --       and `trust` never consults a password at all. That is why LOGIN-with-no-password was
 --       rejected in favour of NOLOGIN-then-flip.
+--
+--       ⚠ HALF-SPECIFIC ANNOTATION (Sec-ruled, meta/battery-local-stack-disposition — the
+--       assertion/helper below are UNTOUCHED; this is documentation only, NOT a blanket
+--       file-level amnesty for a RED here). The local dev stack now carries the ADR-053-
+--       ratified post-recovery state (docs/records/2026-08-14-db-reset-incident.md,
+--       "Recovery completed" section): `pfin_etl` was armed LOGIN for the supervised recovery
+--       run and re-disarmed to NOLOGIN afterward, but the PASSWORD was DELIBERATELY RETAINED
+--       (F/CTO-ratified), not cleared. That makes THIS LEG'S TWO HALVES ASYMMETRIC on THIS
+--       stack, and they must be read separately, never as one verdict:
+--         · `rolpassword is null` going RED here = EXPECTED-DIFFERENT on this stack, cited
+--           to the ADR-053 reissue + the incident record above. NOT a regression.
+--         · `rolcanlogin = false` going RED here = NEVER excused, on any stack, for any
+--           reason. A RED on rolcanlogin is a genuine finding requiring investigation, not
+--           an environment difference — full stop. It matters MOST locally, specifically:
+--           the local stack's pg_hba grants `trust` on 127.0.0.1/32, and `trust` never
+--           consults a password at all — so on THIS stack, NOLOGIN is the ONLY thing
+--           standing between an inert role and a directly-usable one. A password alone
+--           (whatever its provenance) is not what protects this stack; rolcanlogin is.
+--       Sec's own words on why this is written per-half rather than as a file-level note:
+--       treating the WHOLE leg as "expected on the live stack" would be "the h14 defect
+--       reproduced in prose, one layer up" — the exact blind-disjunction shape this leg was
+--       hardened against in the first place. If this leg goes RED, check WHICH half via
+--       `select rolcanlogin, rolpassword is null from pg_authid where rolname = 'pfin_etl'`
+--       BEFORE concluding anything — do not assume it's the expected half.
+--       ⚠ VENUE — and it is NOT a scratch DB (QA finding, this PR). Roles are CLUSTER-level:
+--       `pg_authid` is a SHARED catalog, so `pfin_etl`'s retained password is identical in
+--       EVERY database of this cluster — a scratch database created here inherits it, and a
+--       RED on the password half there means nothing new. The scratch DB is the sanctioned
+--       local venue for the DATA-dependent batteries (053 / 062 / 063 / 064); it does NOT
+--       clear h14's password half. Only a FRESH CLUSTER does.
+--       ⚠ One already exists and runs on every PR: CI (.github/workflows/db-tests.yml) does
+--       `supabase start` on a clean runner, so `pfin_etl` is exactly as migration 055 ships
+--       it and BOTH halves of h14 are genuinely verified there, every time. h14 is therefore
+--       NOT unverifiable — it is VERIFIED IN CI and EXPECTED-DIFFERENT locally. Do not
+--       "simplify" this assertion on the belief that nothing checks it.
 select ok(
   pg_temp.qa_pfin_etl_inert(),
   '(h14) B8 fail-closed provisioning: as shipped by migration 055, `pfin_etl` is NOLOGIN **and** carries NO PASSWORD — inert by construction, flipped to a working credential only at deploy via a single ALTER ROLE from the Coolify secret. Both halves asserted: RED if the role shipped login-capable, and RED if any password (even a dormant one behind NOLOGIN) were committed to the repo'
