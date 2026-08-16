@@ -1,0 +1,39 @@
+---
+name: read-the-branch-from-the-ref-not-the-worktree
+description: A parked review worktree is often several merges behind origin/main — probe file existence with git ls-tree/git show against the named ref, or a valid citation reads as a fabricated one.
+metadata:
+  type: feedback
+---
+
+When reviewing a branch read-only from a parked worktree, **every existence probe must name the
+ref** — `git ls-tree --name-only origin/main <path>`, `git show <ref>:<path>`, `git grep <ref> --
+<path>` — never a bare `ls` or `grep` of the checkout.
+
+**Why:** measured on the `073_fn_nav_reference_dates` review (2026-08-14). The `sec` worktree was
+parked detached at `d0f66eb`, two merges behind `origin/main` at `4270495`. A bare
+`ls supabase/migrations/` topped out at `071`, which made the reviewed migration's repeated
+citations to *"072's v_base"* look like references to a migration that does not exist — i.e. a
+fabricated-citation finding, the most damaging class to raise wrongly. `git ls-tree origin/main`
+showed `072_fn_nav_delta_panel_real_percent.sql` present; every citation was correct. The wrong
+probe would have cost the author a defence against an invented defect.
+
+**How to apply:** at the start of any review, record the three refs explicitly — worktree HEAD,
+`origin/main`, review ref — and treat the worktree HEAD as **not** the baseline. Extract the
+branch's files with `git show <review-ref>:<path>` rather than checking the branch out (the
+authoring agent owns it). Any "file X does not exist" or "citation Y has no referent" claim is
+**ref-scoped** and must state which ref it was measured at, per
+[[which-ref-the-probe-was-aimed-at]] — a control string passes on the wrong ref too, and an
+absence proves even less than a presence.
+
+**Ask for a confirm request to be anchored to a HEAD SHA, not to a description of contents.** At the
+2026-08-15 db-reset-guard review I was asked to "confirm the reworked set"; measured
+(`gh pr view <n> --json headRefOid` + `git log origin/<branch>`), the head was the **same commit** I had
+already reviewed — the fix dispatch and my findings had crossed, so nothing had landed. Two lessons, and
+the second is the one I got wrong: (1) always re-read the head sha in the same turn as the verdict, and
+report the sha, not "unchanged since last time"; (2) **a dispatch in flight is authored-not-landed, a
+timing fact — NOT a false report.** I framed it as "the second time a report described changes the tree
+did not contain," which was unfair to the relayer and had to be retracted alongside their own retraction.
+Measure hard, infer gently: state what the sha is, and let the cause be theirs to explain.
+
+Related: [[measure-the-fence-regex-not-its-comment]] — same shape one level down (measure the real
+predicate at the real ref, not the description of it).
