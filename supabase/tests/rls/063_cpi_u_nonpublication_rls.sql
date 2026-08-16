@@ -2,6 +2,21 @@
 -- Per-Wave battery — pfin.cpi_u_nonpublication  GLOBAL, APPEND-ONLY, IMMUTABLE
 --   (CPI-U non-publication record; ADR-049 Decision 1 Option C / migration 063)
 -- =====================================================================
+-- ⚠ EXPECTED-TO-FAIL AGAINST A LIVE LOCAL STACK carrying the real committed CPI reference
+--   data (the 2026-08-14 recovery; docs/records/2026-08-14-db-reset-incident.md) — the
+--   fixture's `2025-10-01` row collides with the table's real, PERMANENT, IMMUTABLE
+--   nonpublication record for that same period. This file is a HARDER case than a bare
+--   date-pick collision: `2025-10-01` is used DELIBERATELY, because it is the actual
+--   real-world period ADR-049 was written around (see the fixture's own note below) — a
+--   substitute synthetic date would sacrifice that grounding, not just dodge a collision.
+--   THE SANCTIONED LOCAL RUN for this file is a hand-built scratch DB (`createdb` +
+--   `psql -f` per migration, never `supabase db reset` — mechanically banned). CI's
+--   clean-apply lane builds a fresh DB every run and is UNAFFECTED — it is the actual
+--   gating venue for this file. A deeper follow-up (splitting the real-event-anchored
+--   narrative leg from the mechanical CRUD/permission legs, so only the former needs the
+--   authentic date) is tracked separately, not built here (meta/battery-local-stack-
+--   disposition PR body).
+-- =====================================================================
 -- BINDS TO MIGRATION: supabase/migrations/063_cpi_u_nonpublication.sql
 --   - pfin.cpi_u_nonpublication              (NEW global reference table: cpi_period DATE PK
 --                                            (first-of-month) / source TEXT DEFAULT

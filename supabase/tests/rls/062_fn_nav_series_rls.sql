@@ -5,6 +5,19 @@
 --   Paired with the migration in the SAME PR (verify-paired-artifacts discipline — a
 --   migration merging without its battery makes CI green over an incomplete change).
 -- =====================================================================
+-- ⚠ CLASS FACT (Sec rec B, meta/battery-local-stack-disposition): any corrupt-the-control
+--   canary that asserts a SPECIFIC FOREIGN VALUE through a `limit-1`-style selector (here,
+--   fn_nav_series' own `order by nav_date desc limit 1` carry-forward) is subject to
+--   THIRD-PARTY DISPLACEMENT on any stack carrying real data — a real row sharing (or
+--   beating) the canary's date wins the internal tie/ordering before the canary's value
+--   ever reaches the function's output, regardless of what the caller filters afterward.
+--   V1/V1b/V2/V12b below are exactly this shape, and are DOCUMENTED-BLIND (not merely
+--   noisy) on a live local stack carrying the 2026-08-14 recovery's real committed
+--   nav_daily rows — see the note at V/S2 and at V12b. They retain FULL teeth in CI's
+--   clean-apply venue, where no real data exists to displace the canary. The SELF-228
+--   (C1d)/(C2d) legs share this same class of environment-dependence (also correct and
+--   full-teeth in CI; not reopened on this ground).
+-- =====================================================================
 -- BINDS TO MIGRATION: supabase/migrations/062_fn_nav_series.sql
 --   OPTION A (F/CTO-ratified 2026-08-07): all three granularities READ FROZEN CHECKPOINTS.
 --   Coarser views are SAMPLED FROM the daily grain; nothing is recomputed.
@@ -137,20 +150,27 @@ begin;
 -- shared cross-tenant verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
--- plan = 68 : 49 property assertions (I6 X3 M3 P6 G4 E3 B6 L6 N3 Z4 A5) + the 19-leg (V)
--- inversion block (V1 V1b V2 V3 V3b V4 V5 V6 V7 V8 V9 V10a V10b V10c V11 V12 V12b V13 V14).
--- Recorded as an arithmetic decomposition so a silent plan-edit shows up in review as a
--- changed sum. Grew 57 -> 65 at the Sec AMBER round (+(Z4) differential zone-invariance,
--- +(A5) the service_role EXECUTE negative, and six inversion controls), then 65 -> 67 against
--- Architect's 4e28deb clamp: +(B6) declarative inner-join + its (V13) control, because the
--- clamp made that property behaviourally unfalsifiable. Then 67 -> 68 at the Sec-GREEN
--- delta: +(V14), the teeth control for (E3) after re-anchoring it off an empty tenant.
--- ⚠ DO NOT "fix" this by lowering it to a reported figure: (V1)–(V14) run inside savepoints,
--- and a rolled-back savepoint REWINDS pgTAP's plan counter while the emitted numbering
--- marches on (rls/DESIGN.md §9 harness note). 68 reconciles here only because (V8)/(V9) sit
--- OUTSIDE any savepoint and re-set the counter to their own numbers — that is the structural
--- guard, not a coincidence, and moving (V9) off the end would silently re-break it.
-select plan(68);
+-- plan = 71 : 49 property assertions (I6 X3 M3 P6 G4 E3 B6 L6 N3 Z4 A5) + the 22-leg (V)
+-- inversion block (V1 V1b V2 V3 V3b V4 V5 V6 V7 V8 V9 V10a V10b V10c V11 V12 V12b V13 V14
+-- V-RAW-1a V-RAW-1b V-RAW-2). Recorded as an arithmetic decomposition so a silent plan-edit
+-- shows up in review as a changed sum. Grew 57 -> 65 at the Sec AMBER round (+(Z4)
+-- differential zone-invariance, +(A5) the service_role EXECUTE negative, and six inversion
+-- controls), then 65 -> 67 against Architect's 4e28deb clamp: +(B6) declarative inner-join
+-- + its (V13) control, because the clamp made that property behaviourally unfalsifiable.
+-- Then 67 -> 68 at the Sec-GREEN delta: +(V14), the teeth control for (E3) after
+-- re-anchoring it off an empty tenant. Then 68 -> 71 at the local-stack-disposition round
+-- (meta/battery-local-stack-disposition, Sec-approved): +(V-RAW-1a)/(V-RAW-1b)/(V-RAW-2), a
+-- COMPANION to V1/V1b/V2 proving the raw-table leak directly (immune to the real-data
+-- collapse documented at V/S2 and in this file's top-of-file CLASS FACT note) — V1/V1b/V2/
+-- V3/V3b/V4-V14 are UNCHANGED, this is a pure addition.
+-- ⚠ DO NOT "fix" this by lowering it to a reported figure: (V1)–(V14) plus the new (V-RAW-*)
+-- legs all run inside savepoints, and a rolled-back savepoint REWINDS pgTAP's plan counter
+-- while the emitted numbering marches on (rls/DESIGN.md §9 harness note). 71 reconciles
+-- here only because (V8)/(V9) sit OUTSIDE any savepoint and re-set the counter to their own
+-- numbers — that is the structural guard, not a coincidence, and moving (V9) off the end
+-- would silently re-break it. The new (V-RAW-*) legs are added BEFORE (V8)/(V9), inside
+-- their own savepoints, exactly like every other (V) leg — they do not disturb this.
+select plan(71);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb, _rls.tenant_c() as tc \gset
@@ -567,6 +587,22 @@ select ok(
 --   ⚠ CITATION ANCHOR. The (V…) tags below are self-describing BY DESIGN and are cited
 --   from 062's migration header as the instrument enforcing its no-local-users_id-
 --   predicate design. RENAMING ONE IS A CROSS-ARTIFACT CHANGE, not a cosmetic edit.
+--
+--   ⚠ V1/V1b/V2 ARE DOCUMENTED-BLIND ON A LIVE LOCAL STACK carrying the 2026-08-14
+--   recovery's real committed nav_daily rows (docs/records/2026-08-14-db-reset-incident.md;
+--   see this file's top-of-file CLASS FACT note). PRECISE MECHANISM: B's month-end canary
+--   (2026-03-31, value 5000) TIES the real recovered tenant's own month-end row at the SAME
+--   nav_date — under fn_nav_series' `order by nav_date desc limit 1`, an untied selector,
+--   the real row wins that tie on this stack (measured), so B's canary value never reaches
+--   the function's output at all. Same defect CLASS as Sec's SELF-228 F2 finding (a
+--   no-tiebreak `order by … limit 1` selector) — here IMPORTED FROM THE LIVE ENVIRONMENT'S
+--   real data rather than designed into this file's own two-tenant fixture. NOT fixable by
+--   scoping the caller's query: fn_nav_series returns no users_id, so nothing outside the
+--   function can recover which tenant a collapsed row came from. Full teeth in CI's
+--   clean-apply venue, where no such collision exists. The V/S2-RAW block below (after this
+--   savepoint rolls back) is a Sec-approved COMPANION proving the underlying table-level
+--   leak directly, immune to this collapse — it does NOT replace V1/V1b/V2, which stay
+--   unchanged.
 savepoint v_s2;
 alter policy nav_daily_select on pfin.nav_daily using (true);
 select _rls.set_tenant(:'ta'::uuid);
@@ -634,6 +670,58 @@ select is(
   '(V3b-REDUNDANT-PREDICATE-BLINDS-THE-COUNT-TOO) …and the blinding is not partial: the redundant variant matches the baseline on CARDINALITY as well as on values, so neither half of the (V1)/(V1b) pair would have caught the broken fence. Stated separately because "the value assertion would still have fired" is the natural objection to (V3), and this is the measurement that answers it');
 select set_config('role', 'postgres', true);
 rollback to savepoint v_s2;
+
+-- =====================================================================
+-- V/S2-RAW — Sec-approved COMPANION to V1/V1b/V2 (not a replacement; those stay UNCHANGED
+--   above and remain the only proof of the other three corrupt-the-control channels this
+--   file exercises: function-output propagation (V1), cardinality (V1b), and provenance
+--   (V2); V12/V12b below cover the fourth, the grant-based service_role path). This block
+--   adds a FIFTH channel — does the RAW TABLE READ leak, independent of what
+--   fn_nav_series' own `order by nav_date desc limit 1` collapse does with the rows once
+--   corrupted (see the CLASS FACT note at the top of this file and the note at V/S2's
+--   savepoint for why V1/V1b/V2 are currently blind on a live local stack).
+--
+--   ⚠ THE OBSERVER-VS-SURFACE DISTINCTION — read before "simplifying" this block. (V3)
+--   above already proves that a `users_id = auth.uid()` predicate baked INTO THE SURFACE
+--   under test (fn_nav_series itself, or its counterfactual twin) would BLIND this whole
+--   battery to a broken RLS policy — that IS 062's own central finding, and it is why 062
+--   carries no local predicate. This block's `where users_id = …` filters are NOT that:
+--   they live ONLY in the OBSERVER — this raw ad hoc SELECT, external to any function or
+--   policy, targeting ONE SPECIFIC KNOWN row for inspection — the same relationship
+--   `_rls._visible_owner_rows` (rls_verbs.psql) already has to the tables it inspects. A
+--   test-side `where users_id = B` sitting in the OBSERVER, aimed AT the corruption, is not
+--   the (V3) predicate, which sits INSIDE the surface under test and SUPPRESSES the leak
+--   before this file can see it. Confusing the two is exactly the "simplification" that
+--   would silently reopen (V3)'s own finding one layer over — this paragraph exists so it
+--   doesn't happen by accident.
+-- =====================================================================
+savepoint v_s2_raw_baseline;
+select _rls.set_tenant(:'ta'::uuid);
+select is(
+  (select count(*)::int from pfin.nav_daily where users_id = :'tb'),
+  0,
+  '(V-RAW-1a) CONDITION 1, healthy half: with nav_daily_select INTACT, A''s raw table read of B''s own users_id sees ZERO rows — the non-vacuous "healthy fence denies" half of this two-sided proof (a corrupted-only assertion alone would be meaningless, per rls/DESIGN.md §10)'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint v_s2_raw_baseline;
+
+savepoint v_s2_raw;
+alter policy nav_daily_select on pfin.nav_daily using (true);
+select _rls.set_tenant(:'ta'::uuid);
+select is(
+  (select count(*)::int from pfin.nav_daily where users_id = :'tb'),
+  6,
+  '(V-RAW-1b) CONDITION 1, corrupted half: the SAME query, SAME A auth, with nav_daily_select broken OPEN, now returns EXACTLY B''s 6 rows — the raw-table leak is visible and precisely counted REGARDLESS of what fn_nav_series'' own limit-1 collapse does with them. V1/V1b/V2''s documented blindness above is a property of that CONSUMER''s aggregation, not evidence the underlying table-level corruption is absent'
+);
+select set_config('role', 'postgres', true);
+select _rls.set_tenant(:'tb'::uuid);
+select is(
+  (select count(*)::int from pfin.nav_daily where users_id = :'tb'),
+  6,
+  '(V-RAW-2) CONDITION 2, positive control: the IDENTICAL query, run under B''s OWN auth, ALSO returns exactly 6 — proving (V-RAW-1a)''s zero was a real boundary denial and this query genuinely counts B''s rows correctly, not a filter that happens to return the right number by coincidence or a broken predicate that returns 0/the-wrong-count regardless of context'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint v_s2_raw;
 
 -- ---- V/S1: the policy DROPPED outright. The mode the NEGATIVE alone cannot see. ----
 savepoint v_s1;
@@ -762,6 +850,12 @@ select set_config('role', 'service_role', true);
 --   JWT subject's evidence. 2026-03-16..03-31 is the window where A has nothing at all
 --   ((X2) proves A gets 0 rows there) and B's 03-31 checkpoint is the unique global
 --   latest — so the leaked value is DETERMINISTIC rather than a tie-break coin-flip.
+--   ⚠ V12b IS DOCUMENTED-BLIND ON A LIVE LOCAL STACK for the SAME reason as V1/V1b/V2
+--   (see the note at V/S2's savepoint + this file's top-of-file CLASS FACT): the real
+--   recovered tenant ALSO carries a row dated 2026-03-31, inside this leg's probe window —
+--   "B's 03-31 checkpoint is the unique global latest" is no longer true on this stack, so
+--   the deterministic tie-break this leg's window was chosen to guarantee no longer holds.
+--   Full teeth in CI's clean-apply venue. Not fixed by scoping (same reason as V1/V1b/V2).
 select is(
   (select count(*)::int from pfin.fn_nav_series('daily','2026-03-16','2026-03-31')),
   16,
