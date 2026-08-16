@@ -72,10 +72,10 @@
 -- list is NOT restated here, and no count is carried, deliberately). Decision 4
 -- was read verbatim and live before drafting. This migration introduces ZERO
 -- catalogued §10 instances: it is a Lock 14 user-facing-direct-DB-write surface,
--- and CLASS MEMBERSHIP IS NOT A CATALOGUED INSTANCE (the ruling ADR-047 already
--- made for the 058 fences). It touches no infrastructure-credential-presence
--- surface, no service_role-key / code-layer allowlist surface, and no
--- network-exposure/config surface.
+-- and CLASS MEMBERSHIP IS NOT A CATALOGUED INSTANCE (the ruling ADR-042's own
+-- Consequences already made for the 058 fences). It touches no
+-- infrastructure-credential-presence surface, no service_role-key / code-layer
+-- allowlist surface, and no network-exposure/config surface.
 --   (i)   Instance-numbering: unchanged — no catalogued instance is added,
 --         reordered, or renumbered.
 --   (ii)  Layer-attribution: unchanged — no catalogued instance's layer is
