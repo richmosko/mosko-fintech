@@ -1,5 +1,6 @@
-// taxonomy.test.ts — unit coverage for provisionDefaultTaxonomy (SELF-311 / migration 041).
-// Pure-TS server test (node env per vitest.config). Mocks the supabase-js chain per table:
+// taxonomy.test.ts — unit coverage for provisionDefaultTaxonomy (SELF-311 / migration 041) AND
+// isAssignableAssetSubCat (SELF-235 / ADR-013 H1, QA-added). Pure-TS server test (node env per
+// vitest.config). Mocks the supabase-js chain per table:
 //   user_taxonomy: .select('id').limit(1).maybeSingle() → guard read; .upsert(rows, opts) → write
 //   taxonomy_default: .select(cols) (awaited) → the 63-row global default set read
 //
@@ -9,7 +10,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { provisionDefaultTaxonomy } from './taxonomy';
+import { provisionDefaultTaxonomy, isAssignableAssetSubCat } from './taxonomy';
 
 const USER_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 
@@ -124,6 +125,100 @@ describe('provisionDefaultTaxonomy', () => {
 			}
 		} as unknown as SupabaseClient;
 		await expect(provisionDefaultTaxonomy(client, USER_ID)).resolves.toBeUndefined();
+		expect(errSpy).toHaveBeenCalled();
+		errSpy.mockRestore();
+	});
+});
+
+// ============================================================================
+// isAssignableAssetSubCat — SELF-235 / ADR-013 H1 (QA-added). classify.server.test.ts already
+// proves the classify ACTION returns 403 when the pre-check returns false, via a canned
+// `preValidate: { found: false }` mock — but that never calls the REAL isAssignableAssetSubCat,
+// so it cannot catch a regression to the function's OWN query construction (e.g. someone drops
+// the `.eq('domain','asset')` filter). That filter is the ENTIRE domain fence: 022's own DOMAIN
+// NOTE states the DB trigger (#8, fn_user_asset_category_matched_sub_cat) checks matched-TENANT
+// only, not matched-DOMAIN — "a one-line `and domain = 'asset'` addition later if desired" is
+// explicitly NOT there yet. So a same-tenant cashflow-domain sub_cat_id would pass the DB fence
+// outright; isAssignableAssetSubCat is the ONLY thing standing between it and acceptance.
+//
+// The stub below is a small predicate-accumulating fake (not a canned true/false): each .eq()
+// call narrows a filter set, and .maybeSingle() evaluates the accumulated filters against ONE
+// fixed candidate row — so these tests exercise the REAL query chain's filtering semantics,
+// not a mock that already knows the answer.
+// ============================================================================
+
+type CandidateRow = { id: number; domain: string; is_active: boolean } | null;
+
+function makeSubCatQueryStub(row: CandidateRow) {
+	const filters: Record<string, unknown> = {};
+	const eqCalls: Array<[string, unknown]> = [];
+	const maybeSingle = vi.fn(async () => {
+		const matches =
+			row !== null && Object.entries(filters).every(([k, v]) => (row as Record<string, unknown>)[k] === v);
+		return { data: matches ? { id: row!.id } : null, error: null };
+	});
+	// eq() returns itself so the real chain shape (.eq().eq().eq().maybeSingle()) resolves
+	// regardless of call order/count — the ACCUMULATED filter set is what's evaluated.
+	const chain: { eq: ReturnType<typeof vi.fn>; maybeSingle: typeof maybeSingle } = {
+		eq: vi.fn((col: string, val: unknown) => {
+			filters[col] = val;
+			eqCalls.push([col, val]);
+			return chain;
+		}),
+		maybeSingle
+	};
+	const select = vi.fn(() => chain);
+	const from = vi.fn(() => ({ select }));
+	const schema = vi.fn(() => ({ from }));
+	const client = { schema } as unknown as SupabaseClient;
+	return { client, eqCalls, maybeSingle, from };
+}
+
+/** A read stub whose maybeSingle unconditionally errors — for the fail-closed leg. */
+function makeErroringSubCatQueryStub(message: string) {
+	const maybeSingle = vi.fn(async () => ({ data: null, error: { message } }));
+	const chain: { eq: ReturnType<typeof vi.fn>; maybeSingle: typeof maybeSingle } = {
+		eq: vi.fn(() => chain),
+		maybeSingle
+	};
+	const select = vi.fn(() => chain);
+	const from = vi.fn(() => ({ select }));
+	const schema = vi.fn(() => ({ from }));
+	const client = { schema } as unknown as SupabaseClient;
+	return { client };
+}
+
+describe('isAssignableAssetSubCat — ADR-013 H1 app-layer domain enforcement (SELF-235)', () => {
+	it('REJECTS a same-tenant sub_cat_id in the WRONG domain (cashflow) — the DB fence (#8) does NOT check domain, so this IS the only domain fence in the system', async () => {
+		const { client } = makeSubCatQueryStub({ id: 55, domain: 'cashflow', is_active: true });
+		await expect(isAssignableAssetSubCat(client, 55)).resolves.toBe(false);
+	});
+
+	it('accepts a same-tenant, asset-domain, active sub_cat_id (the true-positive companion to the rejection above)', async () => {
+		const { client } = makeSubCatQueryStub({ id: 55, domain: 'asset', is_active: true });
+		await expect(isAssignableAssetSubCat(client, 55)).resolves.toBe(true);
+	});
+
+	it('TEETH: the query chain actually filters on domain=asset — proves the domain fence is IN the query, not coincidentally passing because the fixture happens to be asset-domain', async () => {
+		const { client, eqCalls } = makeSubCatQueryStub({ id: 55, domain: 'asset', is_active: true });
+		await isAssignableAssetSubCat(client, 55);
+		expect(eqCalls).toContainEqual(['domain', 'asset']);
+	});
+
+	it('rejects a RETIRED (is_active=false) sub_cat_id even in the right domain', async () => {
+		const { client } = makeSubCatQueryStub({ id: 55, domain: 'asset', is_active: false });
+		await expect(isAssignableAssetSubCat(client, 55)).resolves.toBe(false);
+	});
+
+	it('rejects a nonexistent id (no row at all) — same shape a cross-tenant id resolves to under RLS', async () => {
+		const { client } = makeSubCatQueryStub(null);
+		await expect(isAssignableAssetSubCat(client, 999)).resolves.toBe(false);
+	});
+
+	it('fails CLOSED on a read error (an unverifiable check is never treated as "valid")', async () => {
+		const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const { client } = makeErroringSubCatQueryStub('connection reset');
+		await expect(isAssignableAssetSubCat(client, 55)).resolves.toBe(false);
 		expect(errSpy).toHaveBeenCalled();
 		errSpy.mockRestore();
 	});
