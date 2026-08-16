@@ -152,18 +152,46 @@
 --
 --   ⚠ THE WRITE-SIDE WITH CHECK IS NOT INDEPENDENTLY OBSERVABLE FROM AN
 --   `authenticated` SESSION, and a battery that does not know this will prove the
---   wrong control. Measured on a scratch apply: a BEFORE trigger fires before RLS
---   WITH CHECK is evaluated, and the #17 fence below reads pfin.user_taxonomy as
---   INVOKER — so under `authenticated`, ANY cross-tenant INSERT is refused by the
---   fence first. Naming another tenant's Sub-Cat trips leg 2; naming one's own
---   users_id-mismatched row trips leg 1, because the referenced taxonomy row is
---   RLS-invisible to the attacker and therefore "unresolvable". Both are correct
---   refusals and both come from the FENCE. A test asserting only "cross-tenant
---   write fails closed" therefore goes green while the policy's WITH CHECK is
---   never exercised. The battery should assert the WITH CHECK's PRESENCE
---   structurally (its expression in pg_policy) in addition to the behavioural
---   fail-closed legs — the two controls are layered, not redundant, and only the
---   outer one is reachable from the tier that matters.
+--   wrong control. A BEFORE trigger fires before RLS WITH CHECK is evaluated, and
+--   the #17 fence below reads pfin.user_taxonomy as INVOKER — so under
+--   `authenticated`, EVERY cross-tenant INSERT is refused by the FENCE first, by
+--   one of two routes:
+--     · OWNERSHIP FORGE — the caller supplies its OWN real sub_cat_id but a
+--       foreign users_id. The trigger resolves the row's TRUE owner (the caller)
+--       and compares it against the FORGED new.users_id → LEG 2. This is the
+--       mass-assignment shape Lock 14 mod #1 fences at the app layer; leg 2 is its
+--       DB backstop.
+--     · FOREIGN SUB-CAT — the caller names another tenant's sub_cat_id (users_id
+--       defaulting to auth.uid()). RLS makes that taxonomy row invisible inside
+--       the INVOKER trigger, so it is "unresolvable" → LEG 1.
+--   Both are correct refusals and BOTH come from the FENCE, never from the policy.
+--   RLS would also have rejected the forge, but the caller experiences the
+--   trigger's leg-2 message rather than a WITH CHECK violation.
+--
+--   ⚠⚠ AND FOR **INSERT**, THE aal2 HALF OF THE WITH CHECK IS UNREACHABLE
+--   BEHAVIOURALLY — not merely shadowed by an attack shape, but by EVERY caller on
+--   EVERY Sub-Cat. `025` aal2-clauses `user_taxonomy_select` as well as this
+--   table's policies, and this fence is SECURITY INVOKER, so a totp-declared
+--   caller below aal2 cannot resolve even their OWN Sub-Cat inside the trigger:
+--   LEG 1 fires before planning_target_insert's WITH CHECK is ever evaluated. The
+--   trigger's aal2-gated READ shadows the policy's aal2-gated WRITE.
+--   UPDATE and DELETE do NOT share this — their USING clause filters candidate
+--   rows before the trigger runs, so those clauses are behaviourally observable
+--   (a below-aal2 UPDATE/DELETE affects 0 rows, silently and correctly).
+--   THIS IS ACCEPTED BY DESIGN, NOT A DEFECT: the write is genuinely refused
+--   either way, and the clause must STAY — removing it would make this table's
+--   step-up posture depend on ANOTHER table's policy, and it becomes load-bearing
+--   the moment the fence goes DEFINER, the fence is dropped, or `user_taxonomy`'s
+--   own aal2 clause is reshaped. But an assertion with no behavioural observer
+--   needs a structural one: **the paired battery's pg_policy assertion on
+--   planning_target_insert's WITH CHECK is the SOLE proof that clause exists**,
+--   and it is therefore not optional coverage. The same structural assertion is
+--   the right watcher for the UPDATE clause too, since the behavioural legs there
+--   prove the USING half rather than the WITH CHECK half.
+--   (Both properties were established empirically against the live chain — the
+--   first corrects an inverted claim in this file's own first draft, which had the
+--   two fence routes the wrong way round and called leg 2 reachable only by an
+--   RLS-exempt writer.)
 --
 -- ----------------------------------------------------------------------------
 -- CONTRACT
@@ -206,6 +234,14 @@
 --     another tenant's Sub-Cat OR at a non-asset Sub-Cat; the two-sided CHECK
 --     rejects NaN / Infinity / out-of-range; ON DELETE CASCADE ties row lifecycle
 --     to the user; ON DELETE RESTRICT protects the referenced taxonomy row.
+--   ⚠ ORDER OF CONTROLS, because it decides what a test can prove: the BEFORE
+--     trigger runs before RLS WITH CHECK on INSERT, and the fence's own read is
+--     aal2-gated (INVOKER over an aal2-claused user_taxonomy_select). So
+--     planning_target_insert's WITH CHECK — the users_id half AND the aal2 half —
+--     has NO behavioural observer from the authenticated tier; its existence is
+--     provable only structurally, from pg_policy. The clause is correct and must
+--     stay (see the EXPOSURE block for why removing it would be the actual
+--     defect); it simply cannot be demonstrated by writing rows.
 -- ============================================================================
 
 create schema if not exists pfin;
@@ -369,15 +405,27 @@ create trigger planning_target_set_updated_at
 -- THREE DISTINCT FAILURE LEGS, deliberately not collapsed into one NOT EXISTS:
 -- the diagnostics differ, and so does WHO can reach them.
 --   (1) unresolvable — the taxonomy row does not exist, or RLS does not let this
---       caller see it. Under `authenticated`, a cross-tenant sub_cat_id lands
---       HERE, not on leg (2), because user_taxonomy_select filters it away first.
---   (2) cross-tenant — the row resolved and its users_id differs. Reachable only
---       by a writer that is RLS-EXEMPT (the migration role, a superuser, any
---       future service_role path). This is the ADR-042 Decision 5a rationale for
---       #16 restated: the fence earns its keep precisely against the writer no
---       policy catches. It is NOT dead code, and a battery that can only run as
---       `authenticated` cannot exercise it.
---   (3) wrong domain — the row is owned but is a cash-flow Sub-Cat.
+--       caller see it. Under `authenticated`, naming ANOTHER TENANT's sub_cat_id
+--       lands HERE, not on leg (2), because user_taxonomy_select filters it away
+--       before the trigger's own read can see it. A totp caller below aal2 also
+--       lands here on their OWN Sub-Cat — see the aal2 note in the EXPOSURE block.
+--   (2) cross-tenant — the row resolved and its users_id differs. Reachable by
+--       TWO distinct writers, and getting this wrong under-states the leg:
+--         (a) a PLAIN `authenticated` caller performing an OWNERSHIP FORGE —
+--             their OWN real sub_cat_id with a foreign users_id. The row resolves
+--             (they own it), the forged new.users_id does not match, leg 2 raises,
+--             and it does so BEFORE RLS's WITH CHECK is reached. This is the same
+--             shape `022`'s fence already exercises for canonical #8, this
+--             instance's declared structural twin.
+--         (b) a writer that is RLS-EXEMPT (the migration role, a superuser, any
+--             future service_role path) — the ADR-042 Decision 5a rationale for
+--             #16: the fence earns its keep against the writer no policy catches.
+--       ⚠ This file's first draft claimed (b) was the ONLY route. That was wrong,
+--       and wrong in the direction that matters — it would have led a battery to
+--       skip the authenticated forge, which is the route an actual attacker has.
+--       ADR-042 Amendment text records the SAME correction being made to #16; the
+--       overclaim was inherited along with the D5a rationale it cites.
+--   (3) wrong domain — the row is owned by the caller but is not an asset Sub-Cat.
 -- ----------------------------------------------------------------------------
 create or replace function pfin.fn_planning_target_matched_sub_cat()
 returns trigger
@@ -433,10 +481,16 @@ comment on function pfin.fn_planning_target_matched_sub_cat() is
   'otherwise be admitted. NULL-safe fail-closed: the referenced row is resolved '
   'into locals and tested, never compared inside a subquery expression that returns '
   'NULL on a miss. Three distinct raises (unresolvable / cross-tenant / wrong '
-  'domain) because the diagnostics differ AND because the cross-tenant leg is '
-  'reachable only by an RLS-EXEMPT writer — under authenticated, RLS filters a '
-  'cross-tenant Sub-Cat away before this fence sees it, so that leg guards the '
-  'writer no policy catches (the ADR-042 Decision 5a rationale). Covers UPDATE, not '
+  'domain) because the diagnostics differ AND because the legs have different '
+  'reachability. The cross-tenant leg is reachable BY A PLAIN authenticated CALLER '
+  'via an OWNERSHIP FORGE (their OWN real sub_cat_id submitted with a foreign '
+  'users_id: the row resolves, the forged users_id does not match, and this raises '
+  'BEFORE RLS''s WITH CHECK is reached — the shape 022''s fence already exercises '
+  'for canonical #8, this instance''s structural twin), AND ADDITIONALLY by an '
+  'RLS-EXEMPT writer (migration role, superuser, any future service_role path — the '
+  'ADR-042 Decision 5a rationale: the writer no policy catches). Naming ANOTHER '
+  'tenant''s Sub-Cat instead lands on the unresolvable leg, because RLS hides that '
+  'row from this INVOKER read. Covers UPDATE, not '
   'just INSERT, because the table is mutable and the repoint path is the one an '
   'INSERT-only fence would leave open. SECURITY INVOKER + set search_path = '''' — '
   'the read composes with RLS, and the explicit users_id equality is authoritative '
