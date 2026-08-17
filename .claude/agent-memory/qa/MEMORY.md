@@ -1,5 +1,6 @@
 # Memory index
 
+- [SELF-244 close-gate must cover the SELF-233 planning-target write path](project_self244_close_gate_write_path_inventory.md) — flagged 2026-08-17, no action until SELF-244 starts.
 - [Plain-text response is invisible to teammates in team mode](feedback_plain_text_response_invisible_to_teammates_in_team_mode.md) — even when a teammate's phrasing reads like "answer inline," the answer is a SendMessage call, never a bare text turn.
 - [Scratch-DB pgTAP harness gotchas](feedback_scratch_db_pgtap_harness_gotchas.md) — `docker exec -i`, pgtap must live in `public` schema, and the harness is permissive (not just incomplete) vs. real prod ACLs.
 - [Verify a causal mechanism before stating it](feedback_verify_causal_mechanism_before_stating.md) — a true result + an unverified "why" is still a defect; architect caught mine.

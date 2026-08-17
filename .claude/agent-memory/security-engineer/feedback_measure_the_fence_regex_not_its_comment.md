@@ -104,6 +104,31 @@ which for `RETURNS TABLE` includes output-column names, so it incidentally cover
 named `p_scope`; the slice drops that. Accidental coverage and a false-positive source — a good trade,
 but it goes on the record rather than being reported as a pure strengthening.
 
+**⚠ A TWO-STAGE fence (population filter → extraction → aggregate) has a hole BETWEEN the stages,
+and `count(distinct)` hides it. Check the two stages' matching semantics against each other.**
+SELF-328's kernel-identity fence: population = `prosrc ilike '%when ''manual_valuation'' then 1%'`
+(**case-INsensitive**), extraction = `substring(prosrc from '(?s)case ep\.source.*?limit 1\)')`
+(POSIX regex, **case-SENSITIVE** — `(?s)` is not `(?i)`). Measured: the `ilike` matches an uppercase
+body, the `substring` returns **NULL** on it, and `count(distinct)` over `('a','a',NULL)` = **1**.
+A copy rewritten in uppercase therefore stays in the population (`count(*)`=3, green) and drops out of
+the identity set (green) — **both legs green on an arbitrarily diverged copy.** Not hypothetical:
+uppercase `CASE ` already appears inside one of the three kernel function bodies, measured.
+
+**The remedy is a POSITIVE PIN, not another evasion patched.** Either
+`md5(regexp_replace(coalesce(kernel_block, p.prosrc), …))` — a failed extraction hashes the whole
+body, which cannot collide, so it reds regardless of WHY extraction failed — or an explicit
+`count(kernel_block) = 3` leg. **Adding `(?i)` is the wrong fix**: it closes the one vector I
+imagined and leaves whitespace, renames and restructures open. ⚠ And when the predicate appears in
+BOTH the fence and its golden fixture, both copies must change or the fixture stops testing the fence.
+
+**Two reusable generalisations:**
+- **NULL is the universal silent-pass in any aggregate that ignores it.** Anywhere an extraction can
+  return NULL and feeds `count(distinct)` / `bool_and` / `string_agg`, ask what happens when it does.
+- **The good version of this catch appeared one level down in the same file** — QA correctly refused
+  to anchor extraction on the text the mutation removes, for exactly this reason. **A team that
+  closes the vector it found has not closed the class.** When someone defends against a NULL-exclusion
+  hole, look immediately for a second path to the same hole.
+
 **How to apply:** whenever a review surface includes a grep/regex fence, a `prosrc` assertion, or a CI
 token gate — build the candidate list first (include the parenthesis-free special literals
 `'today'::date` / `date 'today'` / `'now'::date`, both spellings of the zone-aware type, and bare

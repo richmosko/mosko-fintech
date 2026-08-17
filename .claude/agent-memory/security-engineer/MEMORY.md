@@ -2,7 +2,7 @@
 
 ## Review method
 
-- [Measure the fence regex, not its comment](feedback_measure_the_fence_regex_not_its_comment.md) — grep the real predicate over an evasion list; empirical probe when the matcher is someone else's engine; prescribe a positive pin over a name-denylist.
+- [Measure the fence regex, not its comment](feedback_measure_the_fence_regex_not_its_comment.md) — grep the real predicate over an evasion list; empirical probe when the matcher is someone else's engine; prescribe a positive pin over a name-denylist; **a two-stage fence leaks between the stages and NULL is the silent pass**.
 - [Sec-Lock cross-check catches my own misreads](feedback_sec_lock_cross_check_catches_my_own_misreads.md) — read the source the text CITES; a relay of my OWN words is still a relay; "not in the tree" ≠ unrecoverable (Linear/DESIGN); quote an interior span.
 - [Catalog comments carry live-state tallies](feedback_catalog_comments_carry_live_state_tallies.md) — a count FANS OUT (TOC + hint + body); negative-grep the old string, derive the number from a sibling catalog's convention, never sweep scoped historical deltas.
 - [Zero-value sentinels flip meaning when a predicate changes](feedback_zero_value_sentinel_flips_meaning.md) — re-check EMPTY/`?? DEFAULT` **and prop defaults**; branch on the full state tuple, not one field.
@@ -25,4 +25,5 @@
 ## Standing constraints on future work
 
 - [CPI positivity CHECK must be additive](project_cpi_positivity_check_must_be_additive.md) — `NaN > 0` is TRUE in Postgres; replacing `cpi_u_index_value_finite` re-admits NaN into a financial figure.
+- [`z.coerce.number()` on FK-shaped ID fields is permissive](project_zod_coerce_number_on_fk_id_fields.md) — accepts `true`/`[5]`/`"0x10"`/`"5e2"`; pre-existing across several schema sites; one item, never a per-branch condition.
 - [Never tighten the CI-fenced-RT grep](project_ci_fenced_set_grep_must_not_be_tightened.md) — it returns comment-cited labels too, by design; when fenced and §10 job membership coincide, say so AND say it must not be reconciled.

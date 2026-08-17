@@ -63,9 +63,22 @@ like an understated one** — run the probe before writing either.
 `ERROR: permission denied to set role` after. Accept nothing weaker for a finding that was
 found by probe.
 
+**⚠ THE INVERSE FAILURE — springing a NEW condition after clearance was scoped. Do not ratchet.**
+At SELF-328 I offered two remediation options and wrote *"choose on legibility, not on strength —
+both close the hole completely."* QA chose B. B's leg then had no in-file golden proof that it
+bites, which by my own FENCE1b standard is a gap — **but I could have required it when I offered
+the option and did not.** Ruled it a FLAG with the exact fixture shape attached, not a condition,
+and said in the message why. **A review that keeps growing conditions teaches that satisfying them
+does not end it.** When an option I authorised turns out to need one more thing, the cost of that
+lands on me: state it as a recommendation, hand over the shape so adoption is free, and let the
+clearance stand. Conditions ratchet only when the new finding is a DEFECT, never when it is a
+standard I forgot to apply to my own menu.
+
 **How to apply:**
 - Before sending: re-read my own findings section and ask *"does the diff I just described
   as acceptable contain the changes I just asked for?"*
+- When offering 2–3 remediation options, **state the acceptance bar ONCE, for all of them** —
+  including any paired-fixture or watcher requirement. Anything I omit there, I own later.
 - Apply the cluster-vs-database scope check to **remediations and "either/or" rules**, not
   only to clearances. For each branch of a disjunction ask: *does this actually remove the
   thing?* Prefer prescribing the single effective action over relaying someone's menu.
