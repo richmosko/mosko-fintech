@@ -96,6 +96,10 @@
 --   later "simplify" away. If you are editing this statement, that is the
 --   property to preserve.
 --
+--   The GENERALISED rule — every future change to this table's content owes the
+--   same explicit reach decision — is recorded at ADR-057. This header carries
+--   the instance; that entry carries the rule and the rejected alternatives.
+--
 -- ----------------------------------------------------------------------------
 -- §10 3-AXIS CROSS-CHECK (Path B — ADR-011 Decision 4 referenced, NOT restated;
 -- no count is carried here, deliberately). Decision 4 was read verbatim and live
