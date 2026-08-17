@@ -81,6 +81,17 @@ export function computeUsEquityAllocation(
 	for (const t of taxonomyRows) {
 		if (US_EQUITY_SUB_CAT_SET.has(t.sub_cat)) idByLabel.set(t.sub_cat, t.id);
 	}
+	// LOAD-BEARING FOR TENANT ISOLATION, Sec-flagged: this map MUST key by sub_cat_id (074's
+	// per-caller RLS-scoped bigint id), never by `sub_cat` label text. `sub_cat_id` is the row's
+	// real tenant-scoped identity — the caller's OWN taxonomy read (`idByLabel` above) is what
+	// resolves a label to THIS caller's id, and only an id THAT read produced is ever looked up
+	// here. Labels ('US-06-Financials' etc.) are SHARED VOCABULARY across every tenant by design
+	// (041's seed), so a map keyed by label would silently match a foreign tenant's row of the
+	// same name — a leak with no test that would catch it by construction, since the two rows
+	// would be indistinguishable by the (wrong) key. Keying by id is what makes a cross-tenant
+	// value structurally unable to resolve: `marketValueRows` and `idByLabel` come from two
+	// SEPARATE RLS-scoped reads (076's rollup and this caller's own user_taxonomy), so a foreign
+	// value reaching this map would require BOTH reads to be broken simultaneously, not one.
 	const marketValueBySubCatId = new Map<number, number>();
 	for (const r of marketValueRows) {
 		if (r.sub_cat_id !== null) marketValueBySubCatId.set(r.sub_cat_id, Number(r.market_value));
