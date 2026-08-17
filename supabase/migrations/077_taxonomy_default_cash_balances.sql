@@ -47,9 +47,16 @@
 --   LEVEL SECURITY, so the owning/migrating role is not subject to the RLS
 --   policies on it, and the 025 aal2 backstop clause on user_taxonomy_insert is
 --   likewise not evaluated. That is precisely WHY a backfill can reach users the
---   app path cannot — and it is also why it is a privileged-context write in the
---   ADR-011 Decision 1 sense and belongs in front of Sec rather than inside a
---   convenience.
+--   app path cannot — and it is also why it belongs in front of Sec rather than
+--   inside a convenience. ⚠ CLASS, stated precisely because the loose form
+--   weakens D1: this is a MIGRATION-ROLE write — D1-ADJACENT, not a D1 instance.
+--   It meets D1 (a) and (c), and it meets NEITHER (b) — the writer is the schema
+--   owner, not service_role — NOR (d): no audit-log row is emitted. Its
+--   tenant-resolution record is the version-controlled, joint-reviewed migration
+--   file plus the applied-migrations ledger, which is a STRONGER forensic record
+--   than (d) provides for a runtime writer, not a waiver of it. Do not cite 077
+--   as precedent for a service_role surface shipping without (d). D1's four
+--   clauses bind unchanged at every runtime privileged context.
 --   The tenant binding is not asserted by this migration; it is INHERITED: every
 --   users_id written comes from a users_id already present in pfin.user_taxonomy.
 --   The statement cannot mint a users_id, cannot cross one tenant's row into
