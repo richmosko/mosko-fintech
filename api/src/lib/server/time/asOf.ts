@@ -43,15 +43,25 @@
 //      the guarantee, and today the only one; it is not the guarantee.
 //
 // ── WHEN A USER-SUPPLIED AS-OF ARRIVES ──────────────────────────────────────────────────────
-// Add a second production factory here — NOT a cast at the call site, and NOT a widening of the
-// parameter types. Something of the shape `userSuppliedAsOf(isoDate: string, zone: string)`,
-// whose body is where the zone question gets answered and where that answer is reviewable.
+// SELF-238 / SELF-240 (the §2.2.2 / §2.2.3 allocation backends) are the FIRST live path: their
+// ratified AC8/AC6 require Zod-typed validation of a client-supplied `as_of`. `userSuppliedAsOf`
+// below is that second factory. THE ZONE ANSWER IT GIVES: UTC, unconditionally — matching every
+// other as-of in the system today (the DB session TimeZone pin + `serverTodayAsOf`'s own UTC
+// derivation). This is a DELIBERATE, NARROW resolution, not a placeholder: V1 has no captured
+// user-timezone-preference anywhere (no client-supplied zone reaches the server on any surface),
+// so "the user's local day" is not a value this server can currently know — treating the
+// caller's ISO string as an already-UTC calendar date is the only answer available without
+// inventing zone-capture plumbing no AC asks for. If a genuine user-zone requirement lands later,
+// it is a NEW factory (or a widened signature here) — not a silent behavior change to this one.
+// Flagged for the mandatory Sec joint-review this surface already carries (076's own
+// JOINT-REVIEW-MANDATORY note): this is exactly the kind of exemption that must be reviewable,
+// which is the whole reason it lives in the one file that can produce this type.
 //
-// ⚠ THE CASTS IN THIS FILE ARE THE ONLY ONES ALLOWED TO PRODUCE THIS TYPE — currently TWO, both
-//   below, and they are enumerable on purpose. A cast anywhere else silently re-opens the hazard
-//   while still compiling, which is precisely the state the brand exists to make impossible.
-//   `grep -rn 'as ZoneResolvedAsOf' src/` should only ever return this file; that grep is the
-//   review check, and it is cheap enough to actually run.
+// ⚠ THE CASTS IN THIS FILE ARE THE ONLY ONES ALLOWED TO PRODUCE THIS TYPE — currently THREE
+//   (two production, one test-only), all below, and they are enumerable on purpose. A cast
+//   anywhere else silently re-opens the hazard while still compiling, which is precisely the
+//   state the brand exists to make impossible. `grep -rn 'as ZoneResolvedAsOf' src/` should only
+//   ever return this file; that grep is the review check, and it is cheap enough to actually run.
 
 // Not exported: an external module cannot name this symbol, so it cannot construct the branded
 // type. That unconstructibility IS the fence — the type is otherwise just a string.
@@ -82,6 +92,29 @@ export type ZoneResolvedAsOf = string & { readonly [zoneResolved]: true };
  */
 export function serverTodayAsOf(): ZoneResolvedAsOf {
 	return new Date().toISOString().slice(0, 10) as ZoneResolvedAsOf;
+}
+
+/**
+ * A CLIENT-SUPPLIED `YYYY-MM-DD` as-of, resolved to UTC — see the module header's WHEN A
+ * USER-SUPPLIED AS-OF ARRIVES section for why UTC is the answer this factory gives.
+ *
+ * Defense-in-depth, not the only line: callers MUST already have Zod-validated the input
+ * (real-calendar-date, no coercion — the Lock-14 fence lives at the schema boundary, e.g.
+ * `schemas/allocation.ts`'s `isoDate()`), but this factory re-checks the shape itself rather
+ * than trusting an upstream caller's validation to never be bypassed — the same layered
+ * discipline `sanitizeDecimal`'s DB-CHECK backstop and `fn_planning_target_matched_sub_cat`'s
+ * trigger apply to their own callers. Throws on a malformed date rather than minting the brand
+ * on unvalidated input; callers that already validated will never hit the throw.
+ */
+export function userSuppliedAsOf(isoDate: string): ZoneResolvedAsOf {
+	if (!/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) {
+		throw new Error(`userSuppliedAsOf: not a YYYY-MM-DD date: ${JSON.stringify(isoDate)}`);
+	}
+	const d = new Date(`${isoDate}T00:00:00Z`);
+	if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== isoDate) {
+		throw new Error(`userSuppliedAsOf: not a real calendar date: ${JSON.stringify(isoDate)}`);
+	}
+	return isoDate as ZoneResolvedAsOf;
 }
 
 /**
