@@ -80,4 +80,40 @@ aged and was wrong the instant it was copied.
   claim that goes stale; an enumeration of instances stays checkable; an indexical is
   worst, because it re-points without an edit.**
 
-Related: [[watcher-not-fence-for-by-construction-properties]] · [[diff-filter-strips-comment-lines]] · [[scope-the-invariant-before-writing-it]]
+## 4. ⚠ A QUOTED FIGURE IS ADOPTED, NOT MERELY TRANSMITTED
+
+Section 3 says verbatim carry is unsafe for indexicals. It is unsafe for **figures**
+too, and for a different reason: an indexical breaks when the *bytes* move; a figure
+breaks when the *world* was never as the source described it.
+
+**Why:** `078`, 2026-08-17 — mine, and it survived my own review. Sec's PR #480
+joint-review record measured the price-pick kernel across *"ALL SIX copies
+(019/049/050/056/059×2/076)"*. I quoted it **byte-exactly with correct attribution**,
+so every fidelity check I ran passed. Sec re-measured at the joint review and found
+their own figure wrong — `056` carries **two** kernel blocks, not one, so the truth is
+**eight blocks across six files**. My header carried a false number with a flawless
+citation.
+
+> **A verbatim check can only prove you copied the words. It cannot prove the words
+> were true.** Attribution transfers *provenance*, never *correctness* — the moment you
+> put someone's number in your artifact, it is asserted in your voice too.
+
+**The symmetric half, from the same review:** Sec's correction then said *"EIGHT blocks
+across SEVEN files"* against its own six-file enumeration. I measured before committing,
+held the edit, and it was re-issued. **Both directions of the discipline fired in one
+review**, which is the argument for it — the reviewer catching my inherited figure, and
+me catching the reviewer's derived one.
+
+**How to apply:**
+- **Any number you quote, measure.** Cheap here: extract each kernel block from
+  `(select ep.price` to `limit 1)` and count per file. One command settled all of it.
+- ⚠ **A count and its own enumeration must be checked against each other** — that alone
+  caught Sec's second error, since *"seven files (a/b/c/d/e/f)"* is self-refuting
+  without any knowledge of the domain.
+- **State what the figure is over.** Both errors were scope collapses: *copies* vs
+  *files*, and later *migration text* vs *live catalog definitions*. See
+  [[count-over-history-vs-live-definitions]] and [[state-what-the-count-is-over]].
+- Do **not** silently fix a reviewer's verbatim text. Measure, hold, report the one word
+  — then commit what they re-issue.
+
+Related: [[watcher-not-fence-for-by-construction-properties]] · [[diff-filter-strips-comment-lines]] · [[scope-the-invariant-before-writing-it]] · [[cited-precedent-transmits-its-retracted-half]] · [[count-over-history-vs-live-definitions]]
