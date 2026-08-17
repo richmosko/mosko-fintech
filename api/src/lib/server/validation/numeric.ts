@@ -1,4 +1,4 @@
-// numeric.ts — shared numeric-sanitization battery (Lock 14 V1-SHIP-BLOCK Sec mod #1).
+// numeric.ts — shared numeric-sanitization battery (Lock 14 V1-SHIP-BLOCK Sec mod #2).
 //
 // The security discipline is REJECT, not coerce-by-stripping: a value that is not
 // already a clean decimal is refused, never silently "cleaned" into one. This is the
@@ -93,6 +93,11 @@ function sanitizeDecimal(raw: unknown, shape: DecimalShape): SanitizeResult {
 	if (/[,]/.test(s)) return { ok: false, reason: 'Remove thousands separators (e.g. enter 1500.00).' };
 	if (/[^\d.\-]/.test(s))
 		return { ok: false, reason: 'Remove currency symbols and spaces (digits only, e.g. 1500.00).' };
+	// INTENTIONAL BACKSTOP, unreachable under the current check order (Sec-confirmed
+	// 2026-08-17): every spelling of "Infinity"/"NaN" (any case) contains a letter outside
+	// `[\d.\-]` and is therefore already caught by the character-class check one line above.
+	// Preserved rather than removed — unreachability is a property of today's composition,
+	// not a guaranteed invariant of this function's contract.
 	if (/Infinity|NaN/i.test(s)) return { ok: false, reason: 'Enter a finite number.' };
 
 	const strictDecimal = new RegExp(`^-?\\d{1,${shape.maxIntDigits}}(\\.\\d{1,${shape.maxDecimalPlaces}})?$`);
@@ -105,9 +110,21 @@ function sanitizeDecimal(raw: unknown, shape: DecimalShape): SanitizeResult {
 	}
 
 	// Digit-shape range fence: integer-digit count must fit the target typmod.
+	// INTENTIONAL BACKSTOP, unreachable under the current check order (Sec-confirmed
+	// 2026-08-17): `strictDecimal` above is anchored (`^...$`) and already bounds the
+	// integer-digit run to `{1,shape.maxIntDigits}`, so no string can pass that regex while
+	// exceeding this length. Shape-dependent (unlike the other two backstops in this
+	// function, this one's unreachability follows from `shape` at every call site, not from
+	// a fixed prior line) — preserved rather than removed for the same reason: it is a
+	// property of the current composition, not an invariant this function guarantees.
 	const intDigits = s.replace('-', '').split('.')[0];
 	if (intDigits.length > shape.maxIntDigits) return { ok: false, reason: 'Amount is out of range.' };
 
+	// INTENTIONAL BACKSTOP, unreachable under the current check order (Sec-confirmed
+	// 2026-08-17): `strictDecimal` above only matches an already-well-formed
+	// `-?digits(.digits)?` string, and `Number()` on such a string is always finite —
+	// there is no input shape that reaches this line as a non-finite value. Preserved
+	// rather than removed for the same reason as the two backstops above.
 	const value = Number(s);
 	if (!Number.isFinite(value)) return { ok: false, reason: 'Enter a finite number.' };
 

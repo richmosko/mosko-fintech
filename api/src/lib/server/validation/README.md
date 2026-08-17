@@ -16,10 +16,22 @@ copy of the adversarial rejection logic.
 6. any character outside `[\d.\-]` — this is what refuses currency symbols AND
    locale-formatted input (a non-en-US decimal comma, a grouped `1.234,56`, etc.): the rule
    is not "detect the locale and reject it," it is "the input is not already a plain
-   `-?digits(.digits)?` string," which subsumes every locale variant without enumerating them
-7. literal `NaN` / `Infinity` text
+   `-?digits(.digits)?` string," which subsumes every locale variant without enumerating them.
+   **This step is also what DELIVERS the literal-`NaN`/`Infinity`-text rejection** — every
+   spelling of `NaN`/`Infinity` (any case) contains a letter outside `[\d.\-]`, so step 7
+   below never actually fires against them; step 6 is the active check for that category
+7. literal `NaN` / `Infinity` text — an INTENTIONAL BACKSTOP (Sec-confirmed 2026-08-17), not
+   the delivering check: unreachable under the current step ordering, since step 6 already
+   catches every case. Kept because unreachability is a property of today's step order, not
+   an invariant the function guarantees — see the inline comment at the call site
 8. digit-shape (integer-digit count / decimal-place count) against the caller's `shape`
 9. — for shapes that supply one — a two-sided `min`/`max` value range, mirroring a DB CHECK
+
+Two further backstops exist past step 9 in the implementation (not in this numbered list
+because they aren't independent rejection categories): a digit-count re-check right after
+step 8's regex, and a `Number.isFinite` re-check after the numeric conversion. Both are also
+unreachable under the current composition — see their inline comments — and preserved for
+the same reason as step 7.
 
 Every exported function is a named, DDL-shaped call into that core — never call
 `sanitizeDecimal` directly from outside this file; add a new named export instead, so a call
