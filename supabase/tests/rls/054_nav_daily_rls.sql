@@ -428,9 +428,7 @@ begin;
 -- shared verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(75);   -- 63 + 11 for RT-31 leg (i) (the bypass-capable role-set fence), authored 2026-08-09
-                    -- + 1 for the §7.21 item 2 h14 split (h14 -> h14a/h14b, plan 1->2; semantics
-                    -- unchanged, reporting granularity only) = 75
+select plan(75);   -- 63 + 11 for RT-31 leg (i) (the bypass-capable role-set fence, 2026-08-09) + 1 for the h14a/h14b conjunction split (§7.21, 2026-08-17)
 
 -- ---------------------------------------------------------------------
 -- Local helpers (pg_temp — session-scoped, auto-dropped, rolled back with the txn).
