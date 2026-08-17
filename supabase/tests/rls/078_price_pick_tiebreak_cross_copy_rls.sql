@@ -48,24 +48,38 @@
 --   PRIVILEGED (role=postgres) with users_id set EXPLICITLY. Whole file in one
 --   rolled-back txn.
 --
+-- ----------------------------------------------------------------------------
+-- KERNEL-IDENTITY FENCE + GOLDEN FIXTURE + EXECUTE-ACL (SELF-328, added on
+--   feature/self328-kernel-fence — Sec ruling, F/CTO-funded at the SELF-237
+--   review; spec CORRECTED at PR #485 once 078 itself split the kernel into
+--   two generations, see FENCE1a/b/c below). Riding this same file per
+--   SELF-328's own scope: "a pgTAP catalog leg in the 078 battery, owned by
+--   QA." FENCE1c added at Sec''s AMBER verdict on this branch (below) —
+--   closes a NULL-hole Sec found in FENCE1b, their own spec gap ("they never
+--   specified assert the extraction matched").
+-- ----------------------------------------------------------------------------
+--
 -- ⟦WIRE-VALIDATE⟧ authored + fixture-verified GREEN via a transient apply of
---   001->078 against a scratch DB (NON-destructive). plan(7): 1 structural
+--   001->079 against a POSTGRES-OWNED scratch DB with ZERO cluster-level
+--   grants (evidence for SELF-327 — see the hand-off). plan(14): 1 structural
 --   (S1) + 3 cross-copy value (K1-K3) + 1 cross-copy identity (K4) + 1
---   repeatability (REPEAT1) + 1 isolation (I1) = 7. One fixture mistake caught
---   this way before landing: an EARLY DRAFT left a_inv/b_inv UNFUNDED (no
---   checkpoint) — fn_account_cash_as_of sums account_trans.amount back to
---   -infinity with no checkpoint to bound it, so the buy''s own -100.00/-60.00
---   cash debit exactly cancelled the security value in K1/K2/K4/I1 (all read
---   0.00, measured, not assumed), while K3 (fn_subcat_market_value) passed
---   regardless because its cash leg lands in a DIFFERENT, unclassified row.
---   Fixed the same way 076 was: fund each account to net exactly zero.
+--   repeatability (REPEAT1) + 1 isolation (I1) + 3 kernel-identity fence
+--   (FENCE1a-c) + 2 golden-fixture (GOLDEN1-2) + 2 EXECUTE-ACL (ACL1-2) = 14.
+--   One fixture mistake caught this way before landing: an EARLY DRAFT left
+--   a_inv/b_inv UNFUNDED (no checkpoint) — fn_account_cash_as_of sums
+--   account_trans.amount back to -infinity with no checkpoint to bound it, so
+--   the buy''s own -100.00/-60.00 cash debit exactly cancelled the security
+--   value in K1/K2/K4/I1 (all read 0.00, measured, not assumed), while K3
+--   (fn_subcat_market_value) passed regardless because its cash leg lands in a
+--   DIFFERENT, unclassified row. Fixed the same way 076 was: fund each account
+--   to net exactly zero.
 -- =====================================================================
 
 begin;
 
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(7);
+select plan(14);
 
 \set ta '00000000-0000-0000-0000-00000000a078'
 \set tb '00000000-0000-0000-0000-00000000b078'
@@ -206,6 +220,193 @@ select is(
   '(I1) isolation, non-vacuous: tenant B''s current_market_value = EXACTLY 60.00 (B''s OWN untied holding) — does not include A''s 100.00, and the tie-break fix does not perturb an unrelated tenant''s unrelated data'
 );
 select set_config('role', 'postgres', true);
+
+-- =====================================================================
+-- KERNEL-IDENTITY FENCE (SELF-328) — LIVE CATALOG ONLY (pg_proc.prosrc), NOT
+--   migration text. Sec''s ORIGINAL predicate ("every migration containing the
+--   manual_valuation rank clause -> one hash") was CORRECTED at PR #485: after
+--   078 itself, migration TEXT spans TWO kernel generations (8 pre-078 blocks
+--   in applied history + these 3 post-078 copies), so a text-grep predicate
+--   would go RED on CORRECT code. The catalog holds only LIVE definitions —
+--   "live" is free.
+--
+--   Over the set of pfin functions whose prosrc matches the price-pick rank
+--   clause: extract the kernel block from `case ep.source` through the
+--   price-pick subquery''s OWN closing `limit 1)` — deliberately NOT anchored
+--   on `ep.price_id desc`, because that text is EXACTLY what the golden
+--   fixture below removes; anchoring there would make a corrupted copy fail
+--   to match at all (substring -> NULL -> excluded by `count(distinct)`,
+--   which IGNORES nulls) and the fence would silently pass on its own target
+--   mutation. Anchoring on `limit 1)` instead means a corrupted block is still
+--   CAPTURED, just SHORTER — and hashes differently, which is what makes
+--   GOLDEN1 below a real RED rather than a false green.
+--
+--   Then normalize LEADING whitespace per line (`regexp_replace(..., '^[ \t]+',
+--   '', 'ng')`) — the three copies sit at genuinely different nesting depths.
+--   MEASURED, not assumed: fn_account_unrealized_gl''s raw block is 390 chars,
+--   the other two are 372 — byte-identical ONLY after normalization. Then
+--   assert ALL THREE:
+--     FENCE1a — count(*) = 3.        DISCOVERY half (ADR-057''s discriminator
+--       shape): a 4th kernel copy anywhere is a RED that FORCES A DECISION,
+--       the same deliberate-watcher shape as 041''s hardcoded counts.
+--     FENCE1b — count(distinct md5(normalized)) = 1.   IDENTITY half: every
+--       live copy reads byte-for-byte the same after normalization.
+--     FENCE1c — count(kernel_block) = 3.   EXTRACTION half (Sec AMBER
+--       condition, PR #485 review of this branch — closed here). MEASURED
+--       COMPOSITION GAP: the population filter (`ilike`) is case-INSENSITIVE
+--       but the extraction (`substring ... from '(?s)case ep\.source...'`) is
+--       case-SENSITIVE. An uppercase `CASE ep.source` rewrite stays IN the
+--       population (FENCE1a green) but extracts to NULL, and
+--       `count(distinct)` IGNORES nulls (FENCE1b green too) — an arbitrarily
+--       diverged copy passes BOTH existing legs. REPRODUCED before fixing:
+--       corrupting fn_compute_nav''s `case` to `CASE` (derived from its own
+--       live prosrc, not hand-typed) measured population=3 / distinct=1
+--       (both falsely green) / count(kernel_block)=2 — FENCE1c is what turns
+--       that 2 into the RED. GENERAL by construction, not per-vector: catches
+--       ANY reason extraction fails (case, a whitespace-tokenization miss, the
+--       anchor text itself moving) — Sec explicitly REJECTED an `(?i)` patch
+--       as "the evasion I happened to find," not a structural fix.
+--   ⚠ Sec STANDING CONSTRAINT, satisfied by construction: asserts the
+--   count-distinct PREDICATE, never equality against a PINNED digest — a hash
+--   is a property of the NORMALIZATION PIPELINE, not of the code; two
+--   independently-written correct pipelines measured DIFFERENT literal values
+--   over identical blocks (Sec, PR #485). No literal md5 string appears
+--   anywhere in this file.
+--   ⚠ MAINTENANCE NOTE (the meta-lesson under the AMBER condition): the
+--   `kernel_fns` extraction CTE is intentionally DUPLICATED across FENCE1b /
+--   FENCE1c / GOLDEN1 / GOLDEN2 (pgTAP''s `is()` needs a self-contained
+--   subquery per assertion — no shared view/function exists for it in this
+--   file). Any FUTURE change to the extraction pattern (the substring anchor
+--   or the `ilike` population filter) MUST be applied at all FOUR sites, or
+--   it silently reopens a hole of exactly this shape at whichever site was
+--   missed — this is the general form of the specific gap FENCE1c closes.
+-- =====================================================================
+select is(
+  (select count(*) from pg_proc p
+    where p.pronamespace = 'pfin'::regnamespace
+      and p.prosrc ilike '%when ''manual_valuation'' then 1%'),
+  3::bigint,
+  '(FENCE1a) kernel-identity DISCOVERY: exactly 3 live pfin functions carry the price-pick rank clause (fn_account_unrealized_gl, fn_compute_nav(date,boolean), fn_subcat_market_value) — a 4th copy anywhere is the intended RED, forcing a decision rather than silent drift (ADR-057''s discriminator shape)'
+);
+select is(
+  (with kernel_fns as (
+     select p.oid,
+            substring(p.prosrc from '(?s)case ep\.source.*?limit 1\)') as kernel_block
+       from pg_proc p
+      where p.pronamespace = 'pfin'::regnamespace
+        and p.prosrc ilike '%when ''manual_valuation'' then 1%'
+   )
+   select count(distinct md5(regexp_replace(kernel_block, '^[ \t]+', '', 'ng')))
+     from kernel_fns),
+  1::bigint,
+  '(FENCE1b) kernel-identity IDENTITY: all 3 live copies'' price-pick blocks are byte-identical after LEADING-WHITESPACE normalization (count(distinct md5)=1) — asserts the PREDICATE, never a pinned digest (Sec standing constraint: two correct pipelines measured different literal hash values over identical blocks)'
+);
+select is(
+  (with kernel_fns as (
+     select p.oid,
+            substring(p.prosrc from '(?s)case ep\.source.*?limit 1\)') as kernel_block
+       from pg_proc p
+      where p.pronamespace = 'pfin'::regnamespace
+        and p.prosrc ilike '%when ''manual_valuation'' then 1%'
+   )
+   select count(kernel_block) from kernel_fns),
+  3::bigint,
+  '(FENCE1c) ⭐ kernel-identity EXTRACTION (Sec AMBER condition, closed): all 3 population-matched functions ALSO extracted a non-null kernel block — closes the case-sensitivity hole where FENCE1a (case-INsensitive population filter) and FENCE1b (count(distinct) ignoring nulls) both stay green on a case-rewritten copy that silently fails the case-SENSITIVE extraction. RED means "extraction failed for at least one copy", a DIFFERENT diagnosis from FENCE1b RED ("copies diverged in content") — general by construction, not tied to any one rewrite vector'
+);
+
+-- =====================================================================
+-- GOLDEN FIXTURE (SELF-328 MANDATORY PAIR) — "a fence that does not fail
+--   closed is theater." SAVEPOINT-scoped so it is restored before any later
+--   assertion runs (076''s corrupt-the-control shape) and contained within
+--   this file''s own outer rolled-back transaction, per Sec''s "same rolled-
+--   back txn" requirement. CREATE OR REPLACEs fn_account_unrealized_gl with
+--   the `ep.price_id desc` tiebreak removed — DERIVED FROM THE LIVE prosrc
+--   via `pg_get_functiondef` + `regexp_replace`, never hand-copied (Architect
+--   memory: a hand-copied corrupted body is one future edit away from
+--   silently drifting from what''s actually live — this reads the catalog at
+--   the moment the test runs, so it cannot drift).
+--   ⚠ A non-savepoint assertion (ACL1/ACL2 below) MUST run after the
+--   `rollback to savepoint` — DESIGN.md''s harness note: a rolled-back
+--   savepoint rewinds pgTAP''s plan COUNTER (transactional) while the emitted
+--   TAP numbering (non-transactional) marches on, producing a false
+--   "planned N but ran N-2" abort alarm on an all-green file if the LAST
+--   assertion in the file sits inside the rolled-back savepoint. ACL1/ACL2
+--   are plain reads with no savepoint, and they are LAST in this file.
+-- =====================================================================
+savepoint sp_kernel_corrupt;
+do $$
+declare
+  v_def text;
+  v_corrupted text;
+begin
+  v_def := pg_get_functiondef('pfin.fn_account_unrealized_gl(date)'::regprocedure);
+  v_corrupted := regexp_replace(v_def, ',\s*ep\.price_id desc', '', 's');
+  if v_corrupted = v_def then
+    raise exception 'SELF-328 golden fixture: corruption pattern did not match the live body — the FIXTURE is broken, not the kernel; do not let this silently pass';
+  end if;
+  execute v_corrupted;
+end $$;
+
+-- (GOLDEN1) ⭐ IDENTITY leg goes RED: with the tiebreak removed, the
+--   corrupted copy''s normalized block no longer matches the other two ->
+--   distinct-hash count goes from 1 to 2. This is the EXACT predicate
+--   FENCE1b asserts, now proven false — the fence''s own RED, not a
+--   description of one.
+select is(
+  (with kernel_fns as (
+     select p.oid,
+            substring(p.prosrc from '(?s)case ep\.source.*?limit 1\)') as kernel_block
+       from pg_proc p
+      where p.pronamespace = 'pfin'::regnamespace
+        and p.prosrc ilike '%when ''manual_valuation'' then 1%'
+   )
+   select count(distinct md5(regexp_replace(kernel_block, '^[ \t]+', '', 'ng')))
+     from kernel_fns),
+  2::bigint,
+  '(GOLDEN1) ⭐ fence fails closed: with fn_account_unrealized_gl''s tiebreak REMOVED (live catalog, derived from its own prosrc — never hand-copied), the IDENTITY leg''s distinct-hash count goes from 1 to 2, exactly the shape that would flip FENCE1b RED. A fence that has only ever been observed green is unproven; this is the counter-example measured, not asserted'
+);
+-- (GOLDEN2) POPULATION leg stays green (=3) under this SAME mutation —
+--   proves FENCE1a and FENCE1b fence DIFFERENT mutation classes and neither
+--   subsumes the other: population catches a copy ADDED to or REMOVED from
+--   the set; identity catches a copy that DIVERGED without leaving it (the
+--   corrupted function still carries the `manual_valuation` CASE the
+--   population filter matches on — only its tiebreak diverged).
+select is(
+  (select count(*) from pg_proc p
+    where p.pronamespace = 'pfin'::regnamespace
+      and p.prosrc ilike '%when ''manual_valuation'' then 1%'),
+  3::bigint,
+  '(GOLDEN2) population leg is UNCHANGED (still 3) under the same corruption that reddens FENCE1b: the corrupted function still carries the CASE clause the population filter matches on, only its tiebreak diverged — proving FENCE1a (discovery) and FENCE1b (identity) fence DIFFERENT mutation classes, neither subsumes the other'
+);
+rollback to savepoint sp_kernel_corrupt;
+
+-- =====================================================================
+-- EXECUTE-ACL (SELF-328 FOLD-IN, per Sec at PR #485) — pre-existing gap: no
+--   battery watched these three functions'' EXECUTE grants. Reads what the
+--   migrations ESTABLISH (Sec #480 ruling: authenticated-only EXECUTE),
+--   asserted both directions per the hand-off ask — the grant PRESENT for the
+--   role that must hold it, and its ABSENCE for every role that must not.
+--   Live-measured before drafting (has_function_privilege), not assumed from
+--   the migration text alone.
+-- =====================================================================
+select ok(
+  has_function_privilege('authenticated', 'pfin.fn_account_unrealized_gl(date)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('authenticated', 'pfin.fn_compute_nav(date, boolean)'::regprocedure, 'EXECUTE')
+  and has_function_privilege('authenticated', 'pfin.fn_subcat_market_value(date, boolean)'::regprocedure, 'EXECUTE'),
+  '(ACL1) EXECUTE-ACL, the grant PRESENT: `authenticated` holds EXECUTE on all three kernel functions (fn_account_unrealized_gl, fn_compute_nav(date,boolean), fn_subcat_market_value) — the app''s own session can call them, per Sec''s #480 ruling'
+);
+select ok(
+  not has_function_privilege('anon', 'pfin.fn_account_unrealized_gl(date)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'pfin.fn_compute_nav(date, boolean)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon', 'pfin.fn_subcat_market_value(date, boolean)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('service_role', 'pfin.fn_account_unrealized_gl(date)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('service_role', 'pfin.fn_compute_nav(date, boolean)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('service_role', 'pfin.fn_subcat_market_value(date, boolean)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('public', 'pfin.fn_account_unrealized_gl(date)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('public', 'pfin.fn_compute_nav(date, boolean)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('public', 'pfin.fn_subcat_market_value(date, boolean)'::regprocedure, 'EXECUTE'),
+  '(ACL2) EXECUTE-ACL, the ABSENCE for roles that must lack it: NEITHER anon NOR service_role NOR PUBLIC holds EXECUTE on any of the three kernel functions — authenticated-only per Sec''s #480 ruling, not merely "not anon"'
+);
 
 select * from finish();
 rollback;

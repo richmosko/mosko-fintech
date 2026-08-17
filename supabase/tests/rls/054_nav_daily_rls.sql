@@ -7,7 +7,7 @@
 --   now reads RT-31. Amended 2026-08-02 for the F/CTO-ratified B1/B2/B7 dispositions.
 -- =====================================================================
 -- ALSO BINDS TO: supabase/migrations/055_pfin_etl_role.sql — the ETL's dedicated login role
---   `pfin_etl` (B8 option (B) / ADR-041). Assertions (h10)-(h14) read that role, so this battery
+--   `pfin_etl` (B8 option (B) / ADR-041). Assertions (h10)-(h14b) read that role, so this battery
 --   now has a CROSS-MIGRATION dependency: 055 must be applied. On the CI reset stack all
 --   migrations are applied before the battery runs, so ordering is a non-issue there; a local
 --   rolled-back verification must include 055 alongside 054. RED-until-055-applied is EXPECTED,
@@ -264,9 +264,11 @@
 --            would put the owner-only bypasses (DISABLE TRIGGER, session_replication_role) back
 --            within reach of the very process 054's fences exist to constrain, silently undoing
 --            what B8 was ratified to achieve.
---   (h14) -> a migration shipping a USABLE credential: a login-capable pfin_etl WITH a password
---            committed to the repo. Asserted as the invariant "cannot authenticate as shipped",
---            so a legitimate NOLOGIN-vs-no-password change does not produce a false RED.
+--   (h14a)/(h14b) -> a migration shipping a USABLE credential: a login-capable pfin_etl WITH a
+--            password committed to the repo. Asserted as two half-specific invariants (§7.21
+--            item 2 split) rather than one combined "cannot authenticate as shipped", so a RED
+--            self-identifies which half fired and a legitimate NOLOGIN-vs-no-password change
+--            does not produce a false RED on the wrong half.
 --   (o6)/(o7) -> the ratified non-owner write role losing its non-owner-ness: if `service_role`
 --            could set session_replication_role or DISABLE TRIGGER, it could suppress every fence
 --            in this file, and the B1 move off the owner identity would have bought nothing.
@@ -426,7 +428,7 @@ begin;
 -- shared verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(74);   -- 63 + 11 for RT-31 leg (i) (the bypass-capable role-set fence), authored 2026-08-09
+select plan(75);   -- 63 + 11 for RT-31 leg (i) (the bypass-capable role-set fence, 2026-08-09) + 1 for the h14a/h14b conjunction split (§7.21, 2026-08-17)
 
 -- ---------------------------------------------------------------------
 -- Local helpers (pg_temp — session-scoped, auto-dropped, rolled back with the txn).
@@ -436,11 +438,13 @@ select plan(74);   -- 63 + 11 for RT-31 leg (i) (the bypass-capable role-set fen
 --            cannot be captured inline. Keeping the statement text identical is the point (RT-31
 --            leg (h)) — a simplified equivalent is what let the original ON CONFLICT defect
 --            through four reviewers.
---   qa_pfin_etl_inert() guards the pg_authid read. On a stack where pg_authid is not readable it
---            returns NULL, which pgTAP treats as a FAILURE — deliberately RED rather than a
---            silent skip. A security assertion that quietly opts out when it cannot be evaluated
---            is the vacuous-green shape this whole battery exists to avoid; the guard is here to
---            prevent a HARD ABORT (the (h11) lesson), not to excuse an unevaluated assertion.
+--   qa_pfin_etl_rolcanlogin_false() / qa_pfin_etl_rolpassword_null() guard the pg_authid read,
+--            one per h14 half (§7.21 item 2 split — was one combined qa_pfin_etl_inert()). On a
+--            stack where pg_authid is not readable each returns NULL, which pgTAP treats as a
+--            FAILURE — deliberately RED rather than a silent skip. A security assertion that
+--            quietly opts out when it cannot be evaluated is the vacuous-green shape this whole
+--            battery exists to avoid; the guard is here to prevent a HARD ABORT (the (h11)
+--            lesson), not to excuse an unevaluated assertion.
 -- ---------------------------------------------------------------------
 create function pg_temp.qa_rc(p_uid uuid, p_date date, p_val numeric) returns int
 language plpgsql as $qa$
@@ -461,12 +465,27 @@ exception when others then
   return null;
 end $qa$;
 
-create function pg_temp.qa_pfin_etl_inert() returns boolean
+-- §7.21 item 2 (Sec-ruled 2026-08-17): SPLIT into two half-specific helpers —
+--   the single combined qa_pfin_etl_inert() (below, RETIRED but its shape is
+--   preserved here as the historical reference for the split) returned ONE
+--   boolean over BOTH halves, so a RED did not self-identify which half
+--   fired and the half-specific EXPECTED-DIFFERENT annotation at (h14) had
+--   to send the reader to a manual pg_authid query. Same guard pattern on
+--   both: insufficient_privilege -> NULL -> pgTAP FAILS. Never a silent skip.
+create function pg_temp.qa_pfin_etl_rolcanlogin_false() returns boolean
 language plpgsql as $qa$
 begin
-  return (select not rolcanlogin and rolpassword is null from pg_authid where rolname = 'pfin_etl');
+  return (select not rolcanlogin from pg_authid where rolname = 'pfin_etl');
 exception when insufficient_privilege then
-  return null;   -- NULL => pgTAP FAILS the assertion. Never a silent skip.
+  return null;
+end $qa$;
+
+create function pg_temp.qa_pfin_etl_rolpassword_null() returns boolean
+language plpgsql as $qa$
+begin
+  return (select rolpassword is null from pg_authid where rolname = 'pfin_etl');
+exception when insufficient_privilege then
+  return null;
 end $qa$;
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
@@ -733,7 +752,7 @@ select ok(
 --   which is exactly what made the stale assertion DANGEROUS: it stayed GREEN while asserting a
 --   true fact about the WRONG SUBJECT. A green test on the wrong subject is worse than a missing
 --   one, because it reads as coverage.) The subject is now `pfin_etl`.
---   CROSS-MIGRATION DEPENDENCY: these five assertions require **055** applied. On the CI reset
+--   CROSS-MIGRATION DEPENDENCY: these six assertions require **055** applied. On the CI reset
 --   stack every migration is applied before the battery runs, so ordering is a non-issue there;
 --   locally, 055 must be in the rolled-back setup alongside 054. RED-until-055-applied is
 --   EXPECTED, and RED if 055 were reverted or the role renamed.
@@ -746,7 +765,7 @@ select ok(
 --   below is written fail-CLOSED so a missing role can never pass vacuously either.
 select ok(
   (select count(*) = 1 from pg_roles where rolname = 'pfin_etl'),
-  '(h10a) DEPENDENCY: migration 055 is applied and the role `pfin_etl` exists. If this is the only RED in the file, 055 has not been applied to this stack — apply it rather than editing (h10)-(h14). All five credential-model assertions below read this role'
+  '(h10a) DEPENDENCY: migration 055 is applied and the role `pfin_etl` exists. If this is the only RED in the file, 055 has not been applied to this stack — apply it rather than editing (h10)-(h14b). All six credential-model assertions below read this role'
 );
 
 -- (h10) NOINHERIT — the flag the entire least-privilege model rests on.
@@ -773,6 +792,15 @@ select ok(
   '(h11) B8 NOINHERIT proven at the PRIVILEGE layer: `pfin_etl` reports NO ambient INSERT and NO ambient SELECT on pfin.nav_daily even though it is a member of service_role, which (h5) proves DOES hold INSERT — it does not even hold USAGE on the pfin SCHEMA — the login identity''s entire reach is via explicit SET ROLE. RED if NOINHERIT were lost, or if a direct table grant or schema-USAGE grant were made to pfin_etl'
 );
 -- (h12) exactly the two ratified memberships — no third role crept in.
+--   ⚠ NOT de-duplicated on PURPOSE (§7.21 item 1, Sec-ruled 2026-08-17):
+--   `string_agg` with no `distinct` is what CAUGHT the 2026-08-17 doubled-
+--   membership drift live (`authenticated,authenticated,service_role,
+--   service_role` — the SAME membership recorded twice under TWO GRANTORS).
+--   `distinct` is FORBIDDEN in this leg: it would make the assertion
+--   PERMANENTLY TOLERATE exactly the drift it just caught. Sec, verbatim:
+--   "The legs are correct; the environment is wrong." Fix a real
+--   duplicate-grantor drift with `REVOKE service_role FROM pfin_etl GRANTED
+--   BY <grantor>` (per grantor), never by loosening this query.
 select is(
   (select string_agg(g.rolname, ',' order by g.rolname)
      from pg_auth_members m
@@ -780,7 +808,7 @@ select is(
      join pg_roles u on u.oid = m.member
     where u.rolname = 'pfin_etl'),
   'authenticated,service_role',
-  '(h12) B8 membership set: `pfin_etl` holds EXACTLY the two ratified memberships — service_role (privileged writes) and authenticated (the W-1 session-impersonation read path under RLS). RED if a third membership were granted, which would widen the ETL''s reach without any migration to nav_daily itself'
+  '(h12) B8 membership set: `pfin_etl` holds EXACTLY the two ratified memberships — service_role (privileged writes) and authenticated (the W-1 session-impersonation read path under RLS). RED if a THIRD membership were granted (widening the ETL''s reach with no migration to nav_daily itself) OR if the SAME membership were granted TWICE under two grantors (the 2026-08-17 doubled-membership drift this exact query caught live — cause: duplicate grantor, not a third role; fix: `REVOKE ... GRANTED BY <grantor>` per grantor, never `string_agg(distinct ...)`, which would make this leg permanently tolerate the drift it just caught)'
 );
 -- (h13) NOT superuser / NOT bypassrls / NOT owner — this is what makes (o6)/(o7) true for the
 --       ETL's REAL login identity rather than only for service_role, and therefore what makes
@@ -790,7 +818,9 @@ select ok(
   and (select tableowner <> 'pfin_etl' from pg_tables where schemaname = 'pfin' and tablename = 'nav_daily'),
   '(h13) B8 un-bypassable-by-the-writer: `pfin_etl` is NOT superuser, NOT BYPASSRLS, and is NOT the owner of pfin.nav_daily — so it can reach NEITHER owner-only bypass (ALTER TABLE … DISABLE TRIGGER, session_replication_role). This is what extends (o6)/(o7) from service_role to the ETL''s actual login identity, and it is why 054''s immutability + B7 binding fences cannot be switched off by the process they constrain'
 );
--- (h14) FAIL-CLOSED AT MIGRATION TIME — pinned to 055's ratified "inert by construction" shape.
+-- (h14a)/(h14b) FAIL-CLOSED AT MIGRATION TIME — pinned to 055's ratified "inert by construction"
+--       shape. SPLIT into two assertions per §7.21 item 2 (Sec-ruled 2026-08-17) — was one
+--       leg named (h14); see the split note just above the assertions below for why.
 --       ⚠ RE-PINNED MID-SESSION. 055 changed under this battery while it was being written:
 --       Architect resolved the Sec passwordless-window NOTE by creating the role
 --       **NOLOGIN + NOINHERIT + NO PASSWORD** ("inert by construction"; flipped with a single
@@ -855,9 +885,17 @@ select ok(
 --       it and BOTH halves of h14 are genuinely verified there, every time. h14 is therefore
 --       NOT unverifiable — it is VERIFIED IN CI and EXPECTED-DIFFERENT locally. Do not
 --       "simplify" this assertion on the belief that nothing checks it.
+--       ⚠ §7.21 item 2 (Sec-ruled 2026-08-17): SPLIT into two assertions (plan 1->2) so a RED
+--       self-identifies which half fired without sending the reader to a manual query — the
+--       whole point of the per-half annotation directly above. Semantics UNCHANGED (still both
+--       halves of the same ratified contract); only the reporting granularity moves.
 select ok(
-  pg_temp.qa_pfin_etl_inert(),
-  '(h14) B8 fail-closed provisioning: as shipped by migration 055, `pfin_etl` is NOLOGIN **and** carries NO PASSWORD — inert by construction, flipped to a working credential only at deploy via a single ALTER ROLE from the Coolify secret. Both halves asserted: RED if the role shipped login-capable, and RED if any password (even a dormant one behind NOLOGIN) were committed to the repo'
+  pg_temp.qa_pfin_etl_rolcanlogin_false(),
+  '(h14a) B8 fail-closed provisioning, NEVER-EXCUSED half: as shipped by migration 055, `pfin_etl` is NOLOGIN (rolcanlogin = false) — cannot authenticate as shipped, flipped to a working credential only at deploy via a single ALTER ROLE from the Coolify secret. RED on ANY stack, for ANY reason — not an environment difference, a genuine finding. Most load-bearing locally: the local stack''s pg_hba grants `trust` on 127.0.0.1/32 (never consults a password), so NOLOGIN is the ONLY thing standing between an inert role and a directly-usable one here'
+);
+select ok(
+  pg_temp.qa_pfin_etl_rolpassword_null(),
+  '(h14b) B8 fail-closed provisioning, EXPECTED-DIFFERENT-LOCALLY half: as shipped by migration 055, `pfin_etl` carries NO PASSWORD (rolpassword is null) — no credential committed to the repo, not even a dormant one that would go live the instant someone flips LOGIN. RED in CI (fresh cluster, migration-055-shipped state) is a genuine finding. RED on THIS local stack is EXPECTED-DIFFERENT (meta/battery-local-stack-disposition, ADR-053 reissue + docs/records/2026-08-14-db-reset-incident.md "Recovery completed": the password was DELIBERATELY RETAINED, F/CTO-ratified) — verified in CI every PR (.github/workflows/db-tests.yml, clean-runner `supabase start`), not unverifiable'
 );
 
 -- (h18) `SET ROLE` MUST ACTUALLY WORK — the per-membership SET option.
@@ -887,6 +925,15 @@ select ok(
 --   exist", (h18) owns "can SET ROLE actually be used on the two that must". Verified by
 --   inversion — this is the same leg-coupling rule stated in the BATTERY-DESIGN LESSON block,
 --   applied to a leg added after it was written.
+--   ⚠ §7.21 item 1 addendum (Sec-ruled 2026-08-17): this scoping was designed against
+--   MEMBERSHIP-SET drift (a third role granted) — it does NOT model GRANTOR MULTIPLICITY. A
+--   duplicate-grantor defect (the SAME edge granted twice under two grantors) reddens BOTH this
+--   leg and (h12) exactly the way an unscoped query would for a third membership: `string_agg`
+--   with no `distinct` (required here for the same reason as h12 — see its note) reports
+--   `authenticated=true,authenticated=true,service_role=true,service_role=true` against the
+--   expected two-entry string, RED on both legs for one root cause. A fence''s independence
+--   argument is only as good as the drift dimensions it enumerated when written; grantor
+--   multiplicity was not one of them.
 select is(
   (select string_agg(g.rolname || '=' || m.set_option::text, ',' order by g.rolname)
      from pg_auth_members m
@@ -895,7 +942,7 @@ select is(
     where u.rolname = 'pfin_etl'
       and g.rolname in ('service_role', 'authenticated')),   -- scoped: see LEG INDEPENDENCE below
   'authenticated=true,service_role=true',
-  '(h18) SET ROLE is actually permitted: BOTH pfin_etl memberships carry set_option = true, so the worker can `set local role authenticated` (read) and `set local role service_role` (write). RED on a re-grant WITH SET FALSE — which flips set_option to f while pg_has_role(...,''MEMBER'') stays TRUE, so (h11)/(h12)/(h15)/(h16) would ALL stay green while the cron failed 42501 at SET ROLE on every run'
+  '(h18) SET ROLE is actually permitted: BOTH pfin_etl memberships carry set_option = true, so the worker can `set local role authenticated` (read) and `set local role service_role` (write). RED on a re-grant WITH SET FALSE (which flips set_option to f while pg_has_role(...,''MEMBER'') stays TRUE, so (h11)/(h12)/(h15)/(h16) would ALL stay green while the cron failed 42501 at SET ROLE on every run) OR on the SAME membership granted twice under two grantors (the duplicate-grantor drift class this file also caught at h12 — cause: duplicate grantor, not a third role; fix: `REVOKE ... GRANTED BY <grantor>` per grantor, never `distinct`)'
 );
 
 -- (h17) THE COLUMN GRANT AS A CATALOG FACT — complements the behavioural (w9)-(w11).
