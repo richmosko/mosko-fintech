@@ -64,6 +64,13 @@
 --       user who has not classified the USD currency-asset gets all cash in the
 --       unclassified row.** This is a product-visible limitation of the ratified
 --       model, not a defect in this function; it is routed, not solved here.
+--       ⚠ NARROWED AT `081` (2026-08-17). The claim being narrowed is "every USD
+--       cash balance in every account lands in whichever ONE the user picked":
+--       it held for EVERY account type when 076 shipped, and now holds for every
+--       account type EXCEPT `liability`, whose cash 081 routes mechanically to
+--       the seeded Liabilities / 'Liability Balances' row (080). The
+--       once-per-currency grammar above is itself unchanged — liability cash
+--       does not get a second classification, it never enters classification.
 --   L2. THE UNCLASSIFIED POPULATION IS NOT THE SAME SET AS pendingSymbols.
 --       api/src/lib/server/queries/pendingSymbols.ts computes EVER-TRANSACTED
 --       minus classified (no quantity filter; a sold-to-zero symbol still
