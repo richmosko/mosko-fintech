@@ -147,6 +147,11 @@
 --       pre-existing behaviour in every copy; changing it here would fork the
 --       kernel and silently disagree with fn_compute_nav. Flagged for the
 --       reviewer, not altered.
+--       ⚠ SUPERSEDED AT `078` (2026-08-17). The claim being replaced is "This is
+--       pre-existing behaviour in every copy" — true when 076 shipped, not true
+--       now: Sec's PR #480 joint-review ruling (1) appended a final
+--       `ep.price_id desc` to EVERY LIVE copy of the kernel in one migration, so
+--       the tie-break is total and this function's own copy carries it.
 --
 -- ----------------------------------------------------------------------------
 -- AC6 PERFORMANCE — MEASURED, AND THE VENUE IS PART OF THE MEASUREMENT.
