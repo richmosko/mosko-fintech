@@ -39,12 +39,19 @@
 --   the fix is atomic across copies or it is a regression.
 --
 --   ⚠ WHICH COPIES — and the distinction that matters. Sec's independent
---   measurement extracted and whitespace-normalized the kernel block from ALL SIX
---   copies (019 / 049 / 050 / 056 / 059×2 / 076) and got ONE hash. That count is
---   over MIGRATION TEXT — the history of the kernel. The count over LIVE CATALOG
---   DEFINITIONS is smaller, because 019 / 049 / 050 / 056 were each superseded by
---   a later CREATE OR REPLACE of the same signature. Only these carry the kernel
---   in the catalog today, and they are exactly the three recreated below:
+--   measurement extracted and whitespace-normalized the kernel block from EVERY
+--   occurrence in migration text — EIGHT blocks across SIX files (019 / 049 /
+--   050 / 056×2 / 059×2 / 076) — and got ONE hash. (Sec's PR #480 record states
+--   this as "ALL SIX copies"; that count and its enumeration were both wrong and
+--   are corrected here at Sec's own instruction — 056 carries two kernel blocks,
+--   not one, so SIX is the FILE count, not the COPY count. The ONE-hash result
+--   held over all eight, re-measured 2026-08-17 by Sec and independently by
+--   Architect.)
+--   That count is over MIGRATION TEXT — the history of the kernel.
+--   The count over LIVE CATALOG DEFINITIONS is smaller, because 019 / 049 / 050 /
+--   056 were each superseded by a later CREATE OR REPLACE of the same signature.
+--   Only these carry the kernel in the catalog today, and they are exactly the
+--   three recreated below:
 --     · pfin.fn_account_unrealized_gl(date)            — live definition from 059
 --     · pfin.fn_compute_nav(date, boolean)             — live definition from 059
 --     · pfin.fn_subcat_market_value(date, boolean)     — live definition from 076
