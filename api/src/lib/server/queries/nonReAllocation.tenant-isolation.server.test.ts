@@ -34,8 +34,8 @@
 //   (1) STRUCTURAL (by construction, not re-asserted per-test): this file's ONLY Supabase client
 //       constructor is `makeClientFor(tenantUuid)` below, which mints an `authenticated`-role JWT
 //       and nothing else — there is no service_role key anywhere in this file to leak. Combined
-//       with `nonReAllocation.ts` / `subcatMarketValue.ts` themselves containing no
-//       `SUPABASE_SERVICE_ROLE_KEY` reference (confirmed by inspection while drafting this file —
+//       with `nonReAllocation.ts` / `subcatMarketValue.ts` themselves containing no reference to
+//       the service-role key env var (confirmed by inspection while drafting this file —
 //       surfaced to Backend/Sec at hand-off, not re-derived here every run).
 //   (2) BEHAVIOURAL: every read below succeeds under an `authenticated`-role JWT alone — if the
 //       module secretly needed service_role for any of its three reads, an anon/authenticated-only
