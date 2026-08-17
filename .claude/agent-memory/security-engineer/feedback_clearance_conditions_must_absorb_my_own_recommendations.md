@@ -14,9 +14,25 @@ moment they leave my hands, and a coordinator has to spend a round trip discover
 stood at review time; the recommendations were written for the branch as it *would* stand.
 Both correct in isolation, jointly impossible. Team-lead caught it and had to ask A-or-B.
 
+**Second instance — a VENUE clearance, and it went stale the same way.** Ruling the `054` h14
+disposition I wrote *"scratch DB as the sanctioned venue: agreed, no objection"* while requiring a
+half-specific annotation telling readers to diagnose which conjunct went red. Both fine alone,
+jointly incomplete: **roles are CLUSTER-level (`pg_authid` is a SHARED catalog)**, so a scratch
+*database* in the same cluster inherits `pfin_etl`'s retained password and cannot clear h14's
+password half at all. My clearance named a venue that does not verify the thing my own annotation
+sent people to verify. **A venue clearance is a predicate too — check it against every assertion it
+is being applied to, not against the batteries that prompted it.** The tell I missed: h14 reads a
+*cluster* object while `053/062/063/064` read *database* objects, so one venue ruling could never
+cover both. ⚠ And the reassuring half is the load-bearing one — **CI is already a fresh cluster on
+every PR**, so h14 is verified there and merely expected-different locally. Say that explicitly:
+**an assertion believed to be unverifiable is an assertion someone eventually deletes.**
+
 **How to apply:**
 - Before sending: re-read my own findings section and ask *"does the diff I just described
   as acceptable contain the changes I just asked for?"*
+- For any **venue** clearance (scratch DB / local stack / CI), ask what SCOPE each assertion reads —
+  cluster-level (`pg_authid`, roles, tablespaces) vs database-level — and name the venue per scope.
+  Then name where the assertion IS verified, not only where it isn't.
 - Phrase conditions over the **file whose integrity actually matters** (here: "the migration
   blob is comment-only") rather than over the whole diff, which sweeps in the test-surface
   changes I requested.

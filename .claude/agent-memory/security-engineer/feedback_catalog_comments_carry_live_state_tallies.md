@@ -40,5 +40,25 @@ of six matched and one read `plan 43+` against an actual `plan(40)`; the ledger 
 comment block happened to be accurate, which is exactly how a tally-carrying surface reads safe right up
 until it isn't. Prefer dropping the counts (derive-by-looking) over correcting them.
 
+**⚠ A COUNT FANS OUT — fix the site you found and you have fixed one of three.** In `docs/SECURITY`
+the SD-matrix total lives in **three** places: the table-of-contents entry, the `section-hint`, and
+the body paragraph under it. I corrected the hint, reported done, and team-lead's grep found the other
+two. I had flagged fan-out as the copying-not-reasoning tell in a CHANGELOG bullet **in the same
+session**, then missed it in my own artifact. **Never fix a count at the site where you noticed it —
+sweep the file with a negative grep for the OLD string and confirm zero hits.**
+
+**Two supports that make a count fix defensible rather than a preference:**
+1. **Derive the number from the file's OWN convention, and say so.** §4.5's parallel hint reads
+   *"31 entries (RT-01 – RT-31; RT-07 reserved-vacant; 30 active)"* against a measured 31 rows — so
+   the convention is *total = full label range including vacant*, and active + vacant = total. That
+   makes SD 23 + 2 = 25, and shows the old "24 (22 active + 2 vacant)" against a 25-label range failed
+   the file's own arithmetic. A sibling catalog is the cheapest convention oracle available.
+2. **⚠ Do NOT sweep SCOPED HISTORICAL deltas with the totals.** *"+9 entries lock-added across the
+   drilling cycle 2026-05-25 → 2026-05-26"* describes what happened on a date; it is not stale and a
+   consistency sweep would destroy it. D4's CHANGELOG header records the forward version of this (*a
+   scoped count cannot characterize an unscoped collection*); the converse is the one that bites a
+   sweeper. Name these sites explicitly as **deliberately not touched**, and if one doesn't reconcile,
+   say you did not verify it rather than fixing it inside an unrelated correction.
+
 Related: [[measure-the-fence-regex-not-its-comment]] (a description claiming a property the artifact
 lacks) and [[sec-lock-cross-check-catches-my-own-misreads]].

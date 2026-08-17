@@ -56,6 +56,24 @@ tiebreak outcome cannot satisfy both sides. Tell: a function whose isolation leg
 `{A-exact, negative-probe, zero-owner}` with **no B-side positive** — every sibling function
 in that same file had one, which is what made the two exceptions visible.
 
+**5. THE CLASS FACT, and it bounds mode 4's remedy too.** Any corrupt-the-control canary asserting a
+**specific foreign value** through a `limit 1`-style selector is subject to **third-party displacement**
+on any stack carrying real data. Confirmed twice on the same mechanism: SELF-217 seeding (mode 1) and
+the 2026-08-14 recovery, where `062`'s (V1) canary — B's month-end `2026-03-31 = 5000` — collides with
+the recovered dataset's own month-end row and loses an arbitrary tiebreak, so the leg goes RED **for
+the wrong reason** and is blind to the leak it exists to detect. ⚠ **My own mode-4 remedy inherits
+this.** The two-sided positive legs I blocked SELF-228 on use synthetic dates inside the recovered
+span, so under a leak on a data-bearing stack a real month-end row is *strictly more recent* and
+displaces **both** sides — not a tie, a loss. The fix is still right (correct under a working fence on
+every stack; full teeth in CI) but **the counterfactual-catch property is venue-dependent, and I did
+not examine the venue when I demanded it** — I reasoned about the fixture, not the stack it runs on.
+**The leg shape that IS immune:** query the raw table filtered on `users_id = <other tenant>` and
+assert a **COUNT**, not a `limit 1` winner — unselected third-party rows cannot displace a count. Ship
+it as a **COMPANION, never a replacement**, and name the losing side: a table-level leg cannot prove
+function-output propagation, cardinality, provenance-column, or grant-path channels. ⚠ Distinguish it
+in writing from the redundant-predicate anti-pattern (`062`'s (V3)): a `users_id` filter in the
+**observer** targets the leak; the same filter in the **read path** suppresses it.
+
 **How to apply:** at any battery review, ask (a) can the canary's expected value be tied
 or displaced by rows outside the fixture, (b) does the canary invoke the surface or
 something beneath it, and (c) if the text was revised after a finding, does the revision

@@ -5,6 +5,29 @@ metadata:
   type: feedback
 ---
 
+**⚠ RETRACTING A CLAIM: quote the WHOLE sentence, because a locked sentence often carries a surviving
+obligation in its tail.** At the ADR-011 D18 family-size amendment, Architect declared a locked claim
+false and quoted it as *"NOT a new instance of §8 cross-tenant FK-bypass family at V1 — settings
+writes are user-session-bounded."* The locked sentence continues: *"…; chain becomes live only at V2+
+live-tax-API ingestion under `service_role` (**Sec re-consult mandatory** at that adoption with Lock
+12 mod #2-pattern fence becoming **V1-SHIP-BLOCK**)."* The tail is a **live standing Sec trigger about
+a different surface**, untouched by what falsified the first clause. A reader told "this claim is now
+false" voids it as collateral. **Require either the full quotation or an explicit "only clause 1 is
+falsified; the rest survives intact."** Same class as a dropped clause inside a "verbatim" quote — the
+truncation is invisible unless you open the source.
+
+**⚠ A FORWARD NOTE IS A PREDICTION, AND ON A ONE-WAY-DOOR LEDGER IT SEEDS THE THING IT PREDICTS.**
+The same amendment wrote that an unbuilt table *"is expected to be per-Sub-Cat keyed … so it is likely
+to take a family label when built,"* while carefully **not** assigning a number. Measured: no tracked
+source specified that table's key shape at all, and the only recorded structure (inherited from the
+surface it replaced) has **no FK-shaped reference column** — i.e. the opposite default. Withholding
+the *number* does not withhold the *expectation*, and the expectation is what produces a draft label
+that later has to be reasoned out of existence (this Decision's own #16/#17 collision history).
+**Ask for the evidenced default instead: "on the only recorded shape it is NOT a member; if the built
+shape introduces a reference column it takes the next label; evaluate at its migration."** Also worth
+saying: when two legs of one bundle describe the same unbuilt object, check them against each other —
+a contradiction between a doc row and an ADR ships as one PR and reads as two sources agreeing.
+
 When a surface documents a derived column, read every stated invariant about it against
 the file's OWN guard clauses. The recurring defect is an invariant written **stronger than
 the contract**: the contract is a one-way implication (`dollar NULL ⇒ percent NULL`) and
