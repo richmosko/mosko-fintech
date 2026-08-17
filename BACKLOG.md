@@ -1107,3 +1107,21 @@ Per ADR-009 Decision 7's feature-flow scheme, BACKLOG.md doubles as the overflow
   4. **Routing discharged, not just listed**: each (a) lands as a doc amendment by its owning agent; each (b) gets an ADR-flag with owner named; each (c) gets its pointer edit. The pass is complete when the amendment list is empty or every residual is owned.
   5. Amendment lists are tracked artifacts (not `temp/`), one per doc, carrying the baseline sha.
 - **Dependencies.** None blocking. **Standing trigger points:** (i) before each milestone-rotation promotion (the §7→Linear promotion inherits the sweep of the entries it promotes — AC 3 runs at minimum); (ii) before any PRD-anchored parity claim is asserted in a ratify or ship-gate. A full pass (AC 1+2) is F/CTO-scheduled; the trigger-point minimum (AC 3) is not optional at those boundaries.
+
+### §7.20 — L1 cash-granularity ruling: landing residuals (2026-08-17)
+
+*Source: F/CTO ruling 2026-08-17, verbatim: "Cash granularity = option (a), instrument-routed cash. Raw cash classifies once per currency into a bucket that must be labeled 'Cash' (or equivalent) — never FDIC/SPIC, because those names assert an insurance regime a catch-all doesn't honor. CD/T-Bill fill per-asset. Seed rows stay fillable, none pruned. (b) per-account classification stays V2." Ground truth: F/CTO inspected `Finance_Report_2026_04.pdf` p. 4 — the incumbent foots raw cash into ONE row, so the §3.3 impact is a label-mapping footnote, not a numeric carve-out. PRD §2.2.1/§2.2.2 body documentation landed with this entry; the §3.3 footnote gates on its own F/CTO ratify.*
+
+**1. Seed delta: a "Cash"-labeled raw-cash Sub-Cat in `taxonomy_default`.** [Architect authors the migration; PM spec below]
+
+- **Source.** The 041 seed's asset Cash Cat carries exactly four Sub-Cats (FDIC / SPIC / T-Bill / CD) — no "Cash"-labeled row — and 009/041 make V1 taxonomy SEED-ONLY (no CRUD UI; the 041 INSERT path's sole V1 caller is the existence-guarded provisioning bootstrap). So the ruling's required bucket cannot exist for any user with zero seed change; a seed delta is REQUIRED. (DDL verified against 009/022/041/076 at `origin/main` = `e8e434a`.)
+- **AC (what the delta must achieve — Architect owns the how).**
+  1. One new row in `pfin.taxonomy_default`: `domain='asset'`, `cat='Cash'`, `sub_cat` labeled `'Cash'` (or F/CTO-equivalent; PM default recommendation = `'Cash'`), tax-neutral like the other asset rows, `display_order` slotting it first among the Cash rows, `notes` stating it is the per-currency raw-cash catch-all and asserts no insurance regime.
+  2. The four existing Cash Sub-Cat rows are untouched (ruling: none pruned; §3.3 strict Sub-Cat-enumeration equality forbids pruning regardless).
+  3. Reach: new users receive the row via the unchanged 041 provisioning statement. Already-provisioned users are NOT reached by first-access provisioning (041 existence-guard / GROWTH NOTE) — per 041, set-growth that must reach existing users is its own data-migration/backfill decision. Architect decides backfill-vs-`db reset` for the dev-only greenfield population and states the choice in the migration header.
+  4. Vehicle: a data migration (041: `taxonomy_default` content is migration-authored; "changing the default set later is a data migration").
+- **Dependencies.** None upstream. Downstream: SELF-238/240 AC drafting (item 2) does not block on the seed delta but the §2.2.2 Cash-row rendering semantics assume it lands before parity is asserted.
+
+**2. SELF-238/240 AC-drafting note — what the cash / `Unsorted` rows mean under the ruling.** [PM, at AC drafting]
+
+- Raw cash (per 076 L1: one classification per user per currency via the currency-asset's single 022 junction row) foots into the "Cash"-labeled Sub-Cat row of the §2.2.2 Cash Cat group once classified; FDIC / SPIC / T-Bill / CD rows carry per-asset-assigned holdings only. Unclassified raw cash surfaces in the derived `Unsorted` row (076 R2 emits the NULL-taxonomy row; SELF-238 renders it, never blocking per PRD §2.4.1). §2.2.3 (SELF-240, US Equity drill) carries no cash rows; the ruling's effect there is only that AC drafting no longer waits on the granularity question. The §7.19 AC-3 copied-not-composed rule applies to both drafts at drafting time.
