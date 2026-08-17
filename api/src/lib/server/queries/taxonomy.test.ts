@@ -2,7 +2,7 @@
 // isAssignableAssetSubCat (SELF-235 / ADR-013 H1, QA-added). Pure-TS server test (node env per
 // vitest.config). Mocks the supabase-js chain per table:
 //   user_taxonomy: .select('id').limit(1).maybeSingle() → guard read; .upsert(rows, opts) → write
-//   taxonomy_default: .select(cols) (awaited) → the 63-row global default set read
+//   taxonomy_default: .select(cols) (awaited) → the global default set read
 //
 // Proves: the existence guard SKIPS the default-read + upsert when a row already exists; on an
 // empty guard it reads taxonomy_default and UPSERTs the mapped rows with a SESSION-derived

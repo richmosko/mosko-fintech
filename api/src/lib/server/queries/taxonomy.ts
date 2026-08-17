@@ -31,9 +31,9 @@ const TAXONOMY_DEFAULT_COLUMNS =
  * INSERT…SELECT (041 authors NO function, so the app runs it as authenticated SQL under the
  * user's OWN JWT via the per-request anon client — caller-RLS, no service_role, no DEFINER):
  *   1. Cheap EXISTENCE GUARD — `select id … limit 1`. If the caller already has ANY taxonomy
- *      row, skip (avoids a 63-row insert-attempt on every navigation). RLS scopes the read to
+ *      row, skip (avoids a full-set insert-attempt on every navigation). RLS scopes the read to
  *      auth.uid() (user_taxonomy_select), so no explicit users_id filter is needed.
- *   2. Read the 63-row global default set (pfin.taxonomy_default — authenticated `using(true)`).
+ *   2. Read the global default set (pfin.taxonomy_default — authenticated `using(true)`).
  *   3. UPSERT the mapped rows with `users_id` from the SESSION (mass-assignment safe — NEVER the
  *      client) and `ignoreDuplicates: true` → INSERT … ON CONFLICT (users_id, domain, cat,
  *      sub_cat) DO NOTHING. Idempotent regardless of the guard (race-safe); the guard just
