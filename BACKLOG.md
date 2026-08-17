@@ -1127,7 +1127,7 @@ Per ADR-009 Decision 7's feature-flow scheme, BACKLOG.md doubles as the overflow
 
 - Raw cash (per 076 L1: one classification per user per currency via the currency-asset's single 022 junction row) foots into the "Cash Balances"-labeled Sub-Cat row of the §2.2.2 Cash Cat group once classified; FDIC / SPIC / T-Bill / CD rows carry per-asset-assigned holdings only. Unclassified raw cash surfaces in the derived `Unsorted` row (076 R2 emits the NULL-taxonomy row; SELF-238 renders it, never blocking per PRD §2.4.1). §2.2.3 (SELF-240, US Equity drill) carries no cash rows; the ruling's effect there is only that AC drafting no longer waits on the granularity question. The §7.19 AC-3 copied-not-composed rule applies to both drafts at drafting time.
 
-### §7.21 — 054-battery refinements from the PR #485 Sec review (2026-08-17)
+### §7.21 — 054-battery refinements from the PR #485 Sec review (2026-08-17) — ✅ DISCHARGED at PR #488 (2026-08-17, rode the SELF-328 branch; Sec-verified)
 
 *Source: Sec joint-review of `feature/cash-seed-and-kernel-gates` (PR #485, merged `3d6b538`) — two non-blocking Sec findings on `supabase/tests/rls/054_nav_daily_rls.sql`, explicitly kept OUT of the C1 closure so they get an owner. Owner: QA; no joint review needed (test-file text only, no assertion semantics change permitted beyond the named split).*
 
@@ -1136,3 +1136,13 @@ Per ADR-009 Decision 7's feature-flow scheme, BACKLOG.md doubles as the overflow
 **2. h14 conjunction split.** The leg returns one boolean over `rolcanlogin = false AND rolpassword is null`, so a RED does not self-identify which half fired and the half-specific EXPECTED-DIFFERENT annotation (the `meta/battery-local-stack-disposition` ruling) has to send the reader to a manual query. AC: split into two assertions (plan 1→2) — `rolcanlogin = false` (never excused, any stack) and `rolpassword is null` (EXPECTED-DIFFERENT on a post-recovery cluster per the existing annotation, GREEN in CI). Assertion semantics unchanged; only the reporting granularity moves.
 
 - **Dependencies.** None. Ride the next branch that touches `054` or the next QA battery PR, whichever comes first. The SELF-326 NEG1/NEG2 leg-text rider (name the issue ID in `079`'s battery) is booked on SELF-326 itself, not here.
+
+### §7.22 — post-SELF-233/328 follow-ups (2026-08-17)
+
+*Source: the SELF-233 and SELF-328 Sec joint reviews (PRs #488/#489). Three items, each with a named owner; none blocking; each returns to Sec per its own trigger.*
+
+**1. `z.coerce.number()` on FK-shaped ID fields → strict typed parse.** [Backend] Sec-measured at the SELF-233 review: `z.coerce.number()` accepts `true`→1, `[5]`→5, `"0x10"`→16, `"5e2"`→500, `" 7 "`→7 — so in one `.strict()` schema `target_percent` rejects scientific notation by name while `sub_cat_id` accepts `"5e2"`. Pre-existing house pattern, SEVEN sites (schemas/planning-target.ts ×1, classification.ts ×2, transaction.ts ×4 — re-grep at fix time, don't trust this enumeration). No cross-tenant path (the 074 #17 trigger and RLS hold), but Lock-14 mod #1's literal text is "strict typed-input validation." Fix shape (Sec): `z.number().int().positive()` (no coerce), or an explicit string branch `z.string().regex(/^\d+$/).transform(Number)` where a form posts strings — a positive pin, not a widened coercion. One PR, all sites, Sec joint-review (Lock-14 surface).
+
+**2. GOLDEN3 — in-file proof that FENCE1c bites.** [QA, at the next `078`-battery touch] Sec flag from the SELF-328 review, deliberately NOT a condition ("satisfying my conditions ends a review"). Shape supplied: a second savepoint-scoped mutation deriving from live prosrc — `regexp_replace(v_def, 'case ep\.source', 'CASE ep.source', 'g')` — asserting count(kernel_block)=2 while FENCE1a stays 3 and FENCE1b stays 1; completes the per-leg mutation matrix GOLDEN2 started and guards the "simplify count(kernel_block) to count(*)" rot path.
+
+**3. RT-23 acceptance-text reconciliation to the post-ADR-056 shape.** [Sec — their doc] The RT-23 catalog entry's numeric-battery acceptance text still specifies a CURRENCY regex (`/^\$?[0-9]{1,12}(,[0-9]{3})*(\.[0-9]{1,2})?$/` — accepts `$` and thousands commas) for a surface that post-ADR-056 is `numeric(5,2)` percent with no currency field; the implementation is stricter and correct, but an auditor comparing build-vs-text reads a false gap. Sec drafts the replacement (offered at the SELF-233 review); lands as a SECURITY doc edit with its own diff-verify.
