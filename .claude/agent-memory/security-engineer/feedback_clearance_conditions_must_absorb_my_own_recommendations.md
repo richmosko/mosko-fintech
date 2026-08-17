@@ -27,9 +27,48 @@ cover both. ⚠ And the reassuring half is the load-bearing one — **CI is alre
 every PR**, so h14 is verified there and merely expected-different locally. Say that explicitly:
 **an assertion believed to be unverifiable is an assertion someone eventually deletes.**
 
+**Third instance — the same scope error inside a REMEDIATION, not a clearance (2026-08-17,
+`feature/cash-seed-and-kernel-gates`).** A venue rule reached me as *"revert the grant, **or
+retire the DB**"* for a `GRANT supabase_admin TO postgres` run "on scratch_077". The second
+branch is **ineffective by construction** — `pg_auth_members` is a shared catalog, so
+`drop database` leaves the grant fully live, and taking that branch would have **closed the
+item while the escalation persisted**. Measured: `set role supabase_admin` from `postgres`
+yielded `current_user=supabase_admin, rolsuper=t`, and `grep -rni "grant supabase_admin"`
+over the tree returned nothing — an unreviewed superuser path in no artifact. **A disjunctive
+remediation is two claims; a scope error in either branch is a way to mark the finding fixed
+while it is not.** Also: the REVOKE order is load-bearing — clean `... GRANTED BY
+supabase_admin` duplicates FIRST, then revoke the `supabase_admin` membership, or the role
+loses the rights needed to do the first.
+
+**⚠ My step 2 was NOT EXECUTABLE as written — a claim separate from the ordering being right.**
+I reasoned *"postgres needs the rights the membership confers to revoke a supabase_admin-granted
+membership"* (**true for step 1**, which is why it must run first) and carried it into step 2
+unchecked. Revoking a **SUPERUSER** role's membership requires the **SUPERUSER ATTRIBUTE**, not
+membership: `pg_authid.rolsuper` is an attribute and is **never inherited through
+`pg_auth_members`**. The only path was `SET ROLE supabase_admin` — the escalation used once, in
+one session, to close itself (ruled acceptable: privilege-equivalent to the `supabase_admin`
+login that also exists, and self-extinguishing). **When prescribing an ordered command sequence,
+ORDERING correctness and per-step EXECUTABILITY are two different claims — check both.** The
+attribute-vs-privilege discriminator is the same one I apply at `prosecdef`.
+
+**Fourth lesson, same close-out: PROBE the residual, do not hedge it.** I was about to write that
+the REVOKE only reduced *accidental* exposure, since `054`'s header records `pg_hba trust` on
+`127.0.0.1/32` and `supabase_admin` is `rolcanlogin=t`. **Measured instead: a `supabase_admin`
+connection on that path demands a password** (`fe_sendauth: no password supplied`). The
+remediation was stronger than my draft. **An overstated residual gets budgeted against exactly
+like an understated one** — run the probe before writing either.
+
+**Closure evidence for an empirically-established finding = the same instrument, inverted.**
+`set role supabase_admin` returned `supabase_admin | rolsuper=t` before and
+`ERROR: permission denied to set role` after. Accept nothing weaker for a finding that was
+found by probe.
+
 **How to apply:**
 - Before sending: re-read my own findings section and ask *"does the diff I just described
   as acceptable contain the changes I just asked for?"*
+- Apply the cluster-vs-database scope check to **remediations and "either/or" rules**, not
+  only to clearances. For each branch of a disjunction ask: *does this actually remove the
+  thing?* Prefer prescribing the single effective action over relaying someone's menu.
 - For any **venue** clearance (scratch DB / local stack / CI), ask what SCOPE each assertion reads —
   cluster-level (`pg_authid`, roles, tablespaces) vs database-level — and name the venue per scope.
   Then name where the assertion IS verified, not only where it isn't.

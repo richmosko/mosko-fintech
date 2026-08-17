@@ -23,8 +23,23 @@ claim from *true now*.
    it against the instruction I was mid-execution on. PM's framing was **accurate when
    PM wrote it** and stale by the time it arrived.
 
+3. **The inverted case — `feature/cash-seed-and-kernel-gates` (2026-08-17).** Team-lead
+   sent a *diagnostic re-poke* reporting `076` still modified-uncommitted and "no ADR
+   commit on the branch, still at `826e040`". Both claims were accurate for the moment
+   they were taken and false by arrival — two commits had landed in between. **Here the
+   right move was to hold**: re-executing a completed ruling against a stale observation
+   is how a duplicate ADR or a rewritten commit gets made. Same discipline, opposite
+   direction — I re-read the tree in the same turn and reported the shas, rather than
+   either believing the message *or* dismissing it.
+   ⚠ **The amplifier: the branch was never pushed.** Any origin-anchored check —
+   `origin/<branch>`, `gh`, anything that fetches — then returns **nothing at all**,
+   which reads identically to *the work was never done*. When you are HOLDER of an
+   unpushed branch, say so and name the local ref the other side should read.
+
 > **The common thread: the disproof was already in my own history, an incoming message
-> contradicted it, and I took the incoming message.**
+> contradicted it, and I took the incoming message.** Instance 3 is the same fault line
+> approached from the other side — the correct response to a stale contradiction is
+> *measure and report*, never *believe* and never *redo*.
 
 **Why it is seductive:** a newer message *usually* is newer state, so the heuristic is
 right most of the time. It fails precisely where documents are authored in parallel —
