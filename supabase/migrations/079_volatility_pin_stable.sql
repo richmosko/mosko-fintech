@@ -1,0 +1,139 @@
+-- ============================================================================
+-- Migration: pin the NAV read-composition functions STABLE, closing the
+-- DDL-vs-CONTRACT-text volatility divergence.
+-- Phase 6 Build Loop. Sec joint-review ruling (4) on PR #480 / SELF-237, quoted
+-- below. Closes no SD/RT; extends no lock.
+--
+-- ----------------------------------------------------------------------------
+-- THE DIVERGENCE, AS THE CANONICAL RECORD STATES IT.
+--   076's posture block recorded it while declaring its own `stable`:
+--   "Noting rather than copying a known divergence — 049 and 051 CLAIM 'STABLE'
+--   in their CONTRACT text while their DDL omits the modifier (leaving them
+--   VOLATILE). 056 and 062/071/073 declare it."
+--   Sec's joint-review ruling (4) widened it: "STABLE divergence WIDER than
+--   named: fn_account_unrealized_gl, fn_compute_nav, fn_nav_composition all
+--   default VOLATILE against STABLE contract text — and ADR-038's foot-to-NAV
+--   invariant compares two of them with no statement-snapshot guarantee;
+--   follow-up = one migration adding `stable` to all three + a structural
+--   provolatile='s' battery pin, own joint review."
+--   This migration is that follow-up's DDL half. Every function below reads
+--   tables and modifies nothing; each returns the same result for the same
+--   arguments within one statement. `stable` is the correct declaration and its
+--   absence was an omission, not a choice.
+--
+-- ----------------------------------------------------------------------------
+-- WHAT IS PINNED, AND WHY THE LIST IS FOUR WHEN THE RULING NAMED THREE.
+--   pfin.fn_compute_nav is TWO catalog objects, not one: the 2-arg form (the
+--   engine) and the 1-arg wrapper (050), which is pure delegation to it. Sec
+--   named the function; the catalog needs both signatures. Pinning only one
+--   would leave the surface most existing callers reach — 037's fn_gl_entries
+--   Unrealized memo takes the 1-arg wrapper — declared VOLATILE, which is
+--   exactly the divergence this migration exists to close. So:
+--     · pfin.fn_account_unrealized_gl(date)          [ruling, named]
+--     · pfin.fn_compute_nav(date, boolean)           [ruling, named]
+--     · pfin.fn_compute_nav(date)                    [same function, 2nd signature]
+--     · pfin.fn_nav_composition(date)                [ruling, named]
+--   This is a signature-granularity reading of the ruling, not a scope widening;
+--   it is called out here so Sec can disagree with one ALTER rather than with a
+--   silent inference.
+--
+-- ----------------------------------------------------------------------------
+-- ⚠ WHERE THE SUFFICIENCY COMES FROM — AND WHERE IT DOES NOT. Stated per the
+--   rule that a fence which is necessary-but-not-sufficient must say so rather
+--   than imply it is the whole answer.
+--   These four pins close the DDL-vs-CONTRACT-text divergence Sec named. They do
+--   NOT, on their own, deliver ADR-038's foot-to-NAV statement-snapshot
+--   guarantee, and this migration does not claim they do. The reason is the
+--   CALLEE CLOSURE:
+--     · pfin.fn_holdings_as_of(date)  — VOLATILE; called by fn_account_unrealized_gl,
+--       fn_compute_nav(date, boolean) and fn_subcat_market_value.
+--     · pfin.fn_gl_entries(date)      — VOLATILE; called by fn_account_unrealized_gl.
+--   In READ COMMITTED a VOLATILE function re-establishes a snapshot rather than
+--   inheriting the calling statement's, so a STABLE outer function calling a
+--   VOLATILE inner one still has an interior seam. Both callees are pure SQL
+--   reads and are behaviourally stable — the declaration is what is missing, not
+--   the property — but auditing and pinning them (fn_gl_entries in particular is
+--   the GL engine, 035 + 037) is a larger claim than this migration's review
+--   scope, and a PARTIAL closure would be worse than none: it would look complete
+--   while leaving the seam open somewhere less obvious. Recorded here as the
+--   named follow-up rather than absorbed silently.
+--   Note also that pfin.fn_subcat_market_value(date, boolean) has declared
+--   `stable` since 076 over the same VOLATILE fn_holdings_as_of — this seam
+--   predates the present migration and is not created by it.
+--
+-- ----------------------------------------------------------------------------
+-- ALTER, NOT DROP+RECREATE — decided per function, per the 072 lesson.
+--   `ALTER FUNCTION ... STABLE` changes the volatility class in place. It
+--   preserves the body, the signature, the ACL and the catalog comment. A
+--   DROP + CREATE would destroy the EXECUTE grants and the comment and land the
+--   function PUBLIC-executable by default (072's measured shape), which would
+--   have to be rebuilt explicitly and correctly. Nothing here changes a
+--   signature or a return type, so nothing here needs a DROP. Verdict for all
+--   four: ALTER suffices; DROP is not used.
+--   ⚠ Consequence worth stating because it is the thing that will silently undo
+--   this: CREATE OR REPLACE replaces the WHOLE definition including volatility.
+--   Any future CREATE OR REPLACE of these four MUST carry `stable` in its own
+--   body or re-ALTER afterwards. QA's structural provolatile pin is the watcher
+--   for that; this comment is not a watcher and is not offered as one.
+--
+-- ----------------------------------------------------------------------------
+-- Numbering: 079 follows 078 (price-pick tie-break cross-copy); taken at
+--   authoring time against the live listing, not reserved.
+--   ⚠ ORDER-DEPENDENT ON 078, NOT MERELY ORDERED AFTER IT. 078 issues CREATE OR
+--   REPLACE on fn_account_unrealized_gl and fn_compute_nav(date, boolean), which
+--   resets volatility to the default. If 079 ran first, 078 would erase both
+--   pins and the divergence would silently reopen with every test still green.
+--   Depends further on 050 (the 1-arg wrapper) and 059 (the live definitions of
+--   the other three).
+--
+-- ----------------------------------------------------------------------------
+-- POSTURE RATIONALE — SECURITY INVOKER, unchanged; NOT SECURITY DEFINER. No
+--   function is authored and no posture is altered: ALTER ... STABLE touches the
+--   volatility class only. `set search_path` on each function is untouched. The
+--   SECURITY DEFINER allowlist is UNCHANGED — read it live at ADR-011 Decision 9;
+--   this file states no count.
+--
+-- ----------------------------------------------------------------------------
+-- NO CATALOG COMMENT IS ISSUED OR AMENDED, deliberately. Volatility is a catalog
+--   attribute a reader can check from exactly where they are standing (`\df+`,
+--   or pg_proc.provolatile). Restating it inside a comment string would add a
+--   claim that must be maintained in lockstep with the attribute it duplicates,
+--   for no information a reader does not already have. The 049 / 051 header
+--   CONTRACT text that CLAIMED "STABLE" becomes TRUE when this migration
+--   applies — those files are applied history and are correctly left unedited;
+--   this migration is what reconciles them.
+--
+-- ----------------------------------------------------------------------------
+-- §10 3-AXIS CROSS-CHECK (Path B — ADR-011 Decision 4 referenced, NOT restated;
+-- no count carried, deliberately). Decision 4 read verbatim and live before
+-- drafting. This migration introduces ZERO catalogued §10 instances: four ALTER
+-- statements changing a planner-visibility attribute — no credential surface, no
+-- code-layer fence, no network/config surface.
+--   (i)   Instance-numbering: UNCHANGED — nothing added, removed, or reordered.
+--   (ii)  Layer-attribution: UNCHANGED — no catalogued instance's layer moves; no
+--         surface becomes "four-layer".
+--   (iii) Verbatim-vs-paraphrase: Decision 4 is LINKED, not restated.
+--   ⚠ The §10 CATALOGUED set and the CI-FENCED set are different sets; neither is
+--   changed here and they are not reconciled.
+--
+-- ----------------------------------------------------------------------------
+-- DECISION 3 (cross-tenant FK-bypass family) EVALUATION — family UNCHANGED (+0),
+--   in the honest form: no column exists to check. This migration creates,
+--   alters or drops no table, column, FK or INTEGER[] array. Read ADR-011
+--   Decision 3 live for the family; this file carries no tally.
+--
+-- ----------------------------------------------------------------------------
+-- CONTRACT — no signature, return type, body, posture, grant or comment changes.
+--   The single catalog change per function is pg_proc.provolatile 'v' -> 's'.
+--   ⚠ THIS IS VALUE-NEUTRAL ON EVERY EXISTING ASSERTION, WHICH IS WHY IT NEEDS A
+--   STRUCTURAL ASSERTION. No output of any of the four changes for any input, so
+--   a battery that only compares numbers will pass identically whether or not
+--   this migration applied — including after a future CREATE OR REPLACE silently
+--   reverts it. The leg that discriminates is the structural one Sec named:
+--   assert pg_proc.provolatile = 's' for each of the four signatures.
+-- ============================================================================
+
+alter function pfin.fn_account_unrealized_gl(date) stable;
+alter function pfin.fn_compute_nav(date, boolean) stable;
+alter function pfin.fn_compute_nav(date) stable;
+alter function pfin.fn_nav_composition(date) stable;
