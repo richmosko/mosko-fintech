@@ -117,18 +117,26 @@ select is(
 --   Confirms the matcher above isn''t vacuously true for every function in
 --   pfin, and documents the boundary this migration deliberately does not
 --   cross.
+--   ⚠ SELF-326 (F/CTO-ratified Option B, PR #485 sign-off) is the tracked
+--   follow-up that CLOSES this exact boundary: it pins BOTH fn_holdings_as_of
+--   and fn_gl_entries STABLE. When it lands, BOTH assertions below WILL go
+--   RED — and Sec''s condition on Option B is that this is read correctly:
+--   **a RED here reads "update me" (the boundary moved, expected, land the
+--   companion update), never "revert me" (something broke).** Whoever lands
+--   SELF-326 updates NEG1/NEG2''s expected value to ''s'' and this comment to
+--   say so, in the SAME PR as the pin — not as an unrelated later fix.
 -- =====================================================================
 select is(
   (select p.provolatile from pg_proc p
     where p.proname = 'fn_holdings_as_of' and p.pronamespace = 'pfin'::regnamespace),
   'v'::"char",
-  '(NEG1) scope boundary, non-vacuous: pfin.fn_holdings_as_of(date) is STILL VOLATILE — 079''s header names it explicit out-of-scope (a VOLATILE callee inside a STABLE outer function is an interior seam this migration does not claim to close); proves (V1)-(V5) are not matching every function in pfin as ''s'''
+  '(NEG1) scope boundary, non-vacuous: pfin.fn_holdings_as_of(date) is STILL VOLATILE — 079''s header names it explicit out-of-scope (a VOLATILE callee inside a STABLE outer function is an interior seam this migration does not claim to close); proves (V1)-(V5) are not matching every function in pfin as ''s''. ⚠ SELF-326 (tracked follow-up, F/CTO-ratified Option B) pins this STABLE — a RED here once SELF-326 ships means UPDATE THIS LEG to expect ''s'', not that something reverted'
 );
 select is(
   (select p.provolatile from pg_proc p
     where p.proname = 'fn_gl_entries' and p.pronamespace = 'pfin'::regnamespace),
   'v'::"char",
-  '(NEG2) scope boundary: pfin.fn_gl_entries(date) is STILL VOLATILE — the GL engine (035/037), also named explicit out-of-scope in 079''s header (auditing/pinning it is "a larger claim than this migration''s review scope")'
+  '(NEG2) scope boundary: pfin.fn_gl_entries(date) is STILL VOLATILE — the GL engine (035/037), also named explicit out-of-scope in 079''s header (auditing/pinning it is "a larger claim than this migration''s review scope"). ⚠ SELF-326 (tracked follow-up, F/CTO-ratified Option B, Sec joint-review mandatory — fn_gl_entries is the GL engine) pins this STABLE — a RED here once SELF-326 ships means UPDATE THIS LEG to expect ''s'', not that something reverted'
 );
 
 select * from finish();
