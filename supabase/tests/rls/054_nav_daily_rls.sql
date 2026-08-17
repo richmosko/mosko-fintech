@@ -797,8 +797,8 @@ select ok(
 --   membership drift live (`authenticated,authenticated,service_role,
 --   service_role` — the SAME membership recorded twice under TWO GRANTORS).
 --   `distinct` is FORBIDDEN in this leg: it would make the assertion
---   PERMANENTLY TOLERATE exactly the drift it just caught. Sec, verbatim
---   intent: "The legs are correct; the environment is wrong." Fix a real
+--   PERMANENTLY TOLERATE exactly the drift it just caught. Sec, verbatim:
+--   "The legs are correct; the environment is wrong." Fix a real
 --   duplicate-grantor drift with `REVOKE service_role FROM pfin_etl GRANTED
 --   BY <grantor>` (per grantor), never by loosening this query.
 select is(

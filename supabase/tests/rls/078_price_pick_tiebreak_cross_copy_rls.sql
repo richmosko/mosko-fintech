@@ -52,16 +52,19 @@
 -- KERNEL-IDENTITY FENCE + GOLDEN FIXTURE + EXECUTE-ACL (SELF-328, added on
 --   feature/self328-kernel-fence — Sec ruling, F/CTO-funded at the SELF-237
 --   review; spec CORRECTED at PR #485 once 078 itself split the kernel into
---   two generations, see FENCE1a/b below). Riding this same file per SELF-328's
---   own scope: "a pgTAP catalog leg in the 078 battery, owned by QA."
+--   two generations, see FENCE1a/b/c below). Riding this same file per
+--   SELF-328's own scope: "a pgTAP catalog leg in the 078 battery, owned by
+--   QA." FENCE1c added at Sec''s AMBER verdict on this branch (below) —
+--   closes a NULL-hole Sec found in FENCE1b, their own spec gap ("they never
+--   specified assert the extraction matched").
 -- ----------------------------------------------------------------------------
 --
 -- ⟦WIRE-VALIDATE⟧ authored + fixture-verified GREEN via a transient apply of
 --   001->079 against a POSTGRES-OWNED scratch DB with ZERO cluster-level
---   grants (evidence for SELF-327 — see the hand-off). plan(13): 1 structural
+--   grants (evidence for SELF-327 — see the hand-off). plan(14): 1 structural
 --   (S1) + 3 cross-copy value (K1-K3) + 1 cross-copy identity (K4) + 1
---   repeatability (REPEAT1) + 1 isolation (I1) + 2 kernel-identity fence
---   (FENCE1a-b) + 2 golden-fixture (GOLDEN1-2) + 2 EXECUTE-ACL (ACL1-2) = 13.
+--   repeatability (REPEAT1) + 1 isolation (I1) + 3 kernel-identity fence
+--   (FENCE1a-c) + 2 golden-fixture (GOLDEN1-2) + 2 EXECUTE-ACL (ACL1-2) = 14.
 --   One fixture mistake caught this way before landing: an EARLY DRAFT left
 --   a_inv/b_inv UNFUNDED (no checkpoint) — fn_account_cash_as_of sums
 --   account_trans.amount back to -infinity with no checkpoint to bound it, so
@@ -76,7 +79,7 @@ begin;
 
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(13);
+select plan(14);
 
 \set ta '00000000-0000-0000-0000-00000000a078'
 \set tb '00000000-0000-0000-0000-00000000b078'
@@ -242,18 +245,41 @@ select set_config('role', 'postgres', true);
 --   '', 'ng')`) — the three copies sit at genuinely different nesting depths.
 --   MEASURED, not assumed: fn_account_unrealized_gl''s raw block is 390 chars,
 --   the other two are 372 — byte-identical ONLY after normalization. Then
---   assert BOTH:
+--   assert ALL THREE:
 --     FENCE1a — count(*) = 3.        DISCOVERY half (ADR-057''s discriminator
 --       shape): a 4th kernel copy anywhere is a RED that FORCES A DECISION,
 --       the same deliberate-watcher shape as 041''s hardcoded counts.
 --     FENCE1b — count(distinct md5(normalized)) = 1.   IDENTITY half: every
 --       live copy reads byte-for-byte the same after normalization.
+--     FENCE1c — count(kernel_block) = 3.   EXTRACTION half (Sec AMBER
+--       condition, PR #485 review of this branch — closed here). MEASURED
+--       COMPOSITION GAP: the population filter (`ilike`) is case-INSENSITIVE
+--       but the extraction (`substring ... from '(?s)case ep\.source...'`) is
+--       case-SENSITIVE. An uppercase `CASE ep.source` rewrite stays IN the
+--       population (FENCE1a green) but extracts to NULL, and
+--       `count(distinct)` IGNORES nulls (FENCE1b green too) — an arbitrarily
+--       diverged copy passes BOTH existing legs. REPRODUCED before fixing:
+--       corrupting fn_compute_nav''s `case` to `CASE` (derived from its own
+--       live prosrc, not hand-typed) measured population=3 / distinct=1
+--       (both falsely green) / count(kernel_block)=2 — FENCE1c is what turns
+--       that 2 into the RED. GENERAL by construction, not per-vector: catches
+--       ANY reason extraction fails (case, a whitespace-tokenization miss, the
+--       anchor text itself moving) — Sec explicitly REJECTED an `(?i)` patch
+--       as "the evasion I happened to find," not a structural fix.
 --   ⚠ Sec STANDING CONSTRAINT, satisfied by construction: asserts the
 --   count-distinct PREDICATE, never equality against a PINNED digest — a hash
 --   is a property of the NORMALIZATION PIPELINE, not of the code; two
 --   independently-written correct pipelines measured DIFFERENT literal values
 --   over identical blocks (Sec, PR #485). No literal md5 string appears
 --   anywhere in this file.
+--   ⚠ MAINTENANCE NOTE (the meta-lesson under the AMBER condition): the
+--   `kernel_fns` extraction CTE is intentionally DUPLICATED across FENCE1b /
+--   FENCE1c / GOLDEN1 / GOLDEN2 (pgTAP''s `is()` needs a self-contained
+--   subquery per assertion — no shared view/function exists for it in this
+--   file). Any FUTURE change to the extraction pattern (the substring anchor
+--   or the `ilike` population filter) MUST be applied at all FOUR sites, or
+--   it silently reopens a hole of exactly this shape at whichever site was
+--   missed — this is the general form of the specific gap FENCE1c closes.
 -- =====================================================================
 select is(
   (select count(*) from pg_proc p
@@ -274,6 +300,18 @@ select is(
      from kernel_fns),
   1::bigint,
   '(FENCE1b) kernel-identity IDENTITY: all 3 live copies'' price-pick blocks are byte-identical after LEADING-WHITESPACE normalization (count(distinct md5)=1) — asserts the PREDICATE, never a pinned digest (Sec standing constraint: two correct pipelines measured different literal hash values over identical blocks)'
+);
+select is(
+  (with kernel_fns as (
+     select p.oid,
+            substring(p.prosrc from '(?s)case ep\.source.*?limit 1\)') as kernel_block
+       from pg_proc p
+      where p.pronamespace = 'pfin'::regnamespace
+        and p.prosrc ilike '%when ''manual_valuation'' then 1%'
+   )
+   select count(kernel_block) from kernel_fns),
+  3::bigint,
+  '(FENCE1c) ⭐ kernel-identity EXTRACTION (Sec AMBER condition, closed): all 3 population-matched functions ALSO extracted a non-null kernel block — closes the case-sensitivity hole where FENCE1a (case-INsensitive population filter) and FENCE1b (count(distinct) ignoring nulls) both stay green on a case-rewritten copy that silently fails the case-SENSITIVE extraction. RED means "extraction failed for at least one copy", a DIFFERENT diagnosis from FENCE1b RED ("copies diverged in content") — general by construction, not tied to any one rewrite vector'
 );
 
 -- =====================================================================
