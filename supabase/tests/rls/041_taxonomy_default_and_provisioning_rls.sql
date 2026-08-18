@@ -11,12 +11,16 @@
 --       CHECK, display_order, notes; UNIQUE(domain,cat,sub_cat); NO users_id / NO FK;
 --       RLS using(true) SELECT for authenticated; anon zero; service_role none; 63 rows
 --       = 36 asset + 27 cashflow, migration-seeded AT 041).
---   ⚠ AMENDED BY 077 (ADR-057, same branch): 077 adds ONE global row (asset/Cash/'Cash
---     Balances') — the seeded set is 64 rows (37 asset + 27 cashflow) on the 001->077+
---     stack this battery actually runs against. Every count below is updated for the
---     64-row world; this is the FIRST content change taxonomy_default has taken since
---     041 seeded it (ADR-057's own framing) — HARDCODED, not derived, deliberately (see
---     the note at each assertion below).
+--   ⚠ AMENDED BY 077 AND 080 (ADR-057, two instances of the same pattern): 077 adds ONE
+--     global row (asset/Cash/'Cash Balances'); 080 adds a SECOND (asset/Liabilities/
+--     'Liability Balances') — the seeded set is 65 rows (38 asset + 27 cashflow) on the
+--     001->080+ stack this battery actually runs against. Every count below is updated
+--     for the 65-row world; HARDCODED, not derived, deliberately (see the note at each
+--     assertion below). ⚠ THE WATCHER FIRED, OBSERVED BEFORE REPINNED: re-running this
+--     battery's then-current 64-hardcoded assertions against the post-080 catalog
+--     (before this fix landed) reproduced EXACTLY the 077 regression's shape — tests 2,
+--     5-7 red, "have: 65 / want: 64" — proving the hardcode is a real, firing watcher and
+--     not a decorative one. See the hand-off report for that run.
 --   - pfin.user_taxonomy gains user_taxonomy_insert (authenticated, INSERT, WITH CHECK
 --       (users_id = auth.uid()) AND (coalesce(user_settings.mfa_policy,'none') not in
 --       ('totp','passkey') OR auth.jwt()->>'aal' = 'aal2')) + an INSERT grant. NO
@@ -64,8 +68,8 @@
 -- POSTURE (SECURITY §4.5): SYNTHETIC ONLY — fixed-UUID tenants from _rls.tenant_a()/_b()/_c();
 --   NO PII / NO real account numbers / NO prod data. user_settings: B = 'totp' (the aal-gated
 --   user), C = 'none' (explicit fail-open), A = NO ROW (lazy/brand-new → coalesce fail-open).
---   taxonomy_default is migration-seeded (64 rows on the 001->077+ stack — see the AMENDED BY
---   077 note above) — read, never re-seeded by this battery. All in a rolled-back txn.
+--   taxonomy_default is migration-seeded (65 rows on the 001->080+ stack — see the AMENDED BY
+--   077 AND 080 note above) — read, never re-seeded by this battery. All in a rolled-back txn.
 --
 -- ROLE/SCHEMA DISCIPLINE (PR #121 root-cause): `_rls` grants no USAGE to authenticated; tenant
 --   UUIDs resolve to psql LITERALS via \gset at role=postgres; every _rls.set_tenant[_aal] is
@@ -73,22 +77,25 @@
 --
 -- ⟦WIRE-VALIDATE⟧ 041 (+ 009/010/024/025) on main → `supabase test db` (directory-mode pg_prove,
 --   db-tests.yml) reaches this against the 001→041 reset stack. plan(16). RE-VALIDATED green
---   against the 001→079 stack (feature/cash-seed-and-kernel-gates) after the 077 count fix below.
+--   against the 001→079 stack (feature/cash-seed-and-kernel-gates) after the 077 count fix, and
+--   again against the 001→081 stack (feature/self329-liability-cash-routing) after this 080
+--   count fix — SECOND firing of the same watcher, see below.
 --
--- ⚠ HARDCODE-VS-DYNAMIC (the 077 regression + fix, stated as a rule for the NEXT seed delta,
---   not just this one). The counts below are RE-HARDCODED at 64, not switched to a
---   `select count(*) from pfin.taxonomy_default` self-comparison. A self-referential count is
---   VACUOUS by construction (DESIGN.md §8 rule 5 — a false assertion is worse than a vacuous
---   one, and a dynamic total here is worse than false: it is a tautology that can never go RED,
---   since the value under test and the expected value would be the SAME query). The whole point
---   of (1b)/(3b)/(4a)/(4b) is to prove the FULL committed default set actually round-trips
---   through the WITH CHECK / RLS surfaces this battery exercises — a number pinned against the
---   MIGRATION-SEEDED TRUTH, not against the table's own current state. ADR-057 (this branch)
---   now names "a change to taxonomy_default's content" as a RECOGNIZED, RATIFIED event class —
---   not an accident — so a hardcoded count going RED on the next seed delta is the INTENDED
+-- ⚠ HARDCODE-VS-DYNAMIC (the 077 regression + fix, RE-CONFIRMED by 080's regression + fix —
+--   stated as a rule for the NEXT seed delta, not just these two). The counts below are
+--   RE-HARDCODED at 65, not switched to a `select count(*) from pfin.taxonomy_default`
+--   self-comparison. A self-referential count is VACUOUS by construction (DESIGN.md §8 rule 5 —
+--   a false assertion is worse than a vacuous one, and a dynamic total here is worse than false:
+--   it is a tautology that can never go RED, since the value under test and the expected value
+--   would be the SAME query). The whole point of (1b)/(3b)/(4a)/(4b) is to prove the FULL
+--   committed default set actually round-trips through the WITH CHECK / RLS surfaces this
+--   battery exercises — a number pinned against the MIGRATION-SEEDED TRUTH, not against the
+--   table's own current state. ADR-057 (this branch) names "a change to taxonomy_default's
+--   content" as a RECOGNIZED, RATIFIED event class — not an accident, and now demonstrated
+--   TWICE (077, 080) — so a hardcoded count going RED on the next seed delta is the INTENDED
 --   signal (a deliberate watcher whose owner is now named by this very comment), not a
 --   maintenance tax to engineer away. Whoever lands the next seed delta re-counts and updates
---   these four sites + the header, the same way this fix did for 077.
+--   these four sites + the header, the same way this fix did for 077 and again for 080.
 -- =====================================================================
 
 begin;
@@ -106,8 +113,9 @@ select _rls.tenant_a() as ta, _rls.tenant_b() as tb, _rls.tenant_c() as tc \gset
 --  - Three tenants in auth.users.
 --  - user_settings: B = 'totp' (aal-gated), C = 'none' (explicit fail-open); A = NO ROW
 --    (brand-new / lazy — the coalesce fail-open case).
---  - taxonomy_default is already populated (64 rows on this 001->077+ stack — 63 seeded at
---    041 + 077's 'Cash Balances' row) — the provisioning source.
+--  - taxonomy_default is already populated (65 rows on this 001->080+ stack — 63 seeded at
+--    041 + 077's 'Cash Balances' row + 080's 'Liability Balances' row) — the provisioning
+--    source.
 -- ---------------------------------------------------------------------
 insert into auth.users (id) values (:'ta'), (:'tb'), (:'tc');
 insert into pfin.user_settings (users_id, mfa_policy) values (:'tb', 'totp'), (:'tc', 'none');
@@ -128,13 +136,13 @@ select lives_ok(
   '(1a) owner provisions own rows PASS (+ fail-open): A with NO user_settings row provisions the full default set at aal1 (users_id = auth.uid()) — WITH CHECK accepts every row (coalesce→''none'' fail-open)'
 );
 
--- (1b) A now owns exactly 64 rows (the full committed default set copied through — 63 seeded
---      at 041 + 077's 'Cash Balances' row, this battery's stack runs 001->077+; ⚠ HARDCODED,
---      not derived — see the rule at the header).
+-- (1b) A now owns exactly 65 rows (the full committed default set copied through — 63 seeded
+--      at 041 + 077's 'Cash Balances' row + 080's 'Liability Balances' row, this battery's
+--      stack runs 001->080+; ⚠ HARDCODED, not derived — see the rule at the header).
 select is(
   (select count(*) from pfin.user_taxonomy where users_id = :'ta')::bigint,
-  64::bigint,
-  '(1b) owner provisioned all 64 default rows: A''s user_taxonomy count = 64 (every taxonomy_default row passed the INSERT WITH CHECK — 63 from 041 + 077''s Cash Balances row)'
+  65::bigint,
+  '(1b) owner provisioned all 65 default rows: A''s user_taxonomy count = 65 (every taxonomy_default row passed the INSERT WITH CHECK — 63 from 041 + 077''s Cash Balances row + 080''s Liability Balances row)'
 );
 select set_config('role', 'postgres', true);
 
@@ -158,7 +166,7 @@ select set_config('role', 'postgres', true);
 -- =====================================================================
 select _rls.set_tenant_aal(:'ta'::uuid, 'aal1');
 
--- (3a) A runs the SAME provision statement again → all 64 rows conflict → do nothing → no error.
+-- (3a) A runs the SAME provision statement again → all 65 rows conflict → do nothing → no error.
 select lives_ok(
   $$ insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat, tax_relevant, tax_character, display_order, notes)
      select auth.uid(), domain, cat, sub_cat, tax_relevant, tax_character, display_order, notes
@@ -168,33 +176,33 @@ select lives_ok(
 );
 select set_config('role', 'postgres', true);
 
--- (3b) A STILL owns exactly 64 rows — the second run inserted 0 (no duplicates).
+-- (3b) A STILL owns exactly 65 rows — the second run inserted 0 (no duplicates).
 select is(
   (select count(*) from pfin.user_taxonomy where users_id = :'ta')::bigint,
-  64::bigint,
-  '(3b) idempotent re-provision: A''s count is STILL 64 after the second run — ON CONFLICT DO NOTHING double-seeds nothing'
+  65::bigint,
+  '(3b) idempotent re-provision: A''s count is STILL 65 after the second run — ON CONFLICT DO NOTHING double-seeds nothing'
 );
 
 -- =====================================================================
 -- BLOCK 4 — taxonomy_default: global shared-read, no tenant scoping, both tenants identical.
 -- =====================================================================
--- (4a) authenticated A reads the whole default set (using(true) global shared-read) = 64.
+-- (4a) authenticated A reads the whole default set (using(true) global shared-read) = 65.
 select _rls.set_tenant_aal(:'ta'::uuid, 'aal1');
 select is(
   (select count(*) from pfin.taxonomy_default)::bigint,
-  64::bigint,
-  '(4a) taxonomy_default global shared-read: authenticated A SELECTs all 64 rows (using(true) — the provisioning source is readable to any authenticated user; 63 seeded at 041 + 077''s Cash Balances row)'
+  65::bigint,
+  '(4a) taxonomy_default global shared-read: authenticated A SELECTs all 65 rows (using(true) — the provisioning source is readable to any authenticated user; 63 seeded at 041 + 077''s Cash Balances row + 080''s Liability Balances row)'
 );
 select set_config('role', 'postgres', true);
 
--- (4b) authenticated B (mfa_policy='totp') at aal1 reads the SAME 64 rows — taxonomy_default is
+-- (4b) authenticated B (mfa_policy='totp') at aal1 reads the SAME 65 rows — taxonomy_default is
 --      EXCLUDED from the aal2 backstop (using(true), no clause), so it is NOT aal-gated and is
 --      identical across tenants (global reference data, not tenant-scoped).
 select _rls.set_tenant_aal(:'tb'::uuid, 'aal1');
 select is(
   (select count(*) from pfin.taxonomy_default)::bigint,
-  64::bigint,
-  '(4b) taxonomy_default readable identically across tenants + NOT aal-gated: B (totp) at aal1 reads the same 64 rows — global reference data, no tenant predicate, no step-up gate'
+  65::bigint,
+  '(4b) taxonomy_default readable identically across tenants + NOT aal-gated: B (totp) at aal1 reads the same 65 rows — global reference data, no tenant predicate, no step-up gate'
 );
 select set_config('role', 'postgres', true);
 
