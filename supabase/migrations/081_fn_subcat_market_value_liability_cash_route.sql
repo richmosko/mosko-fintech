@@ -250,10 +250,18 @@ as $$
     -- 048. At most one row can match — 009's unique (users_id, domain, cat,
     -- sub_cat) — so this cannot multiply rows. LEFT JOIN, never INNER: a caller
     -- missing the 080 row gets NULL keys and the value lands in the R2
-    -- unclassified row with its value intact. The users_id conjunct is REDUNDANT
-    -- under this function's INVOKER RLS and is stated anyway: it makes this
-    -- relation's tenancy explicit rather than inherited, which ADDS a gate rather
-    -- than removing one.
+    -- unclassified row with its value intact.
+    -- ⚠ THE users_id CONJUNCT IS LOAD-BEARING, NOT DECORATIVE — do not strike it
+    -- for consistency with the `ut` joins above. Those key on `ut.id =
+    -- uac.sub_cat_id`, a TENANT-BOUND surrogate: if RLS ever admitted a foreign
+    -- row, a foreign id cannot match the caller's own ids, so they fail CLOSED.
+    -- This join keys on `cat`/`sub_cat` STRING LABELS, which are SHARED
+    -- VOCABULARY — every tenant's row reads 'Liabilities'/'Liability Balances' —
+    -- so without `lut.users_id = acc.users_id` it fails OPEN: a leaked foreign
+    -- row would match by name and attach a foreign sub_cat_id to this caller's
+    -- liability cash. The conjunct is redundant against a CORRECTLY FUNCTIONING
+    -- RLS and is the SOLE tenant discriminator against an RLS regression. That
+    -- asymmetry is why this join carries one and its id-keyed siblings do not.
     left join pfin.user_taxonomy lut
       on lut.users_id = acc.users_id
      and lut.domain   = 'asset'
