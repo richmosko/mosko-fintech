@@ -1,5 +1,7 @@
 # Memory index
 
+- [RT-26 fence matches tokens not intent](feedback_rt26_fence_matches_tokens_not_intent.md) — never spell out a fenced key's literal token in prose, even in a comment asserting its absence; describe it instead.
+- [Real PostgREST two-tenant Vitest pattern for TS query-module merges](reference_postgrest_two_tenant_vitest_pattern.md) — SELF-238 AC9; will recur for SELF-240 (same subcatMarketValue.ts consumer). ⚠ scope the "contains none of" check to values, never taxonomy labels.
 - [SELF-244 close-gate must cover the SELF-233 planning-target write path](project_self244_close_gate_write_path_inventory.md) — flagged 2026-08-17, no action until SELF-244 starts.
 - [Plain-text response is invisible to teammates in team mode](feedback_plain_text_response_invisible_to_teammates_in_team_mode.md) — even when a teammate's phrasing reads like "answer inline," the answer is a SendMessage call, never a bare text turn.
 - [Scratch-DB pgTAP harness gotchas](feedback_scratch_db_pgtap_harness_gotchas.md) — `docker exec -i`, pgtap must live in `public` schema, and the harness is permissive (not just incomplete) vs. real prod ACLs.

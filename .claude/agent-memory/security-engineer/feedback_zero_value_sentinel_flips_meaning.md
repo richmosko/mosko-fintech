@@ -5,6 +5,26 @@ metadata:
   type: feedback
 ---
 
+**⚠ A `=== 0` DIVISION GUARD IS A NaN GUARD, NOT A DOMAIN GUARD — check the SIGN too.**
+`nonReAllocation.ts` guarded `totalNonRe === 0` and I cleared it at review, satisfied that NaN
+was prevented. **I never asked what happens when the denominator is NEGATIVE.** It can be:
+`fn_subcat_market_value` admits liability-account balances, which are *signed naturally negative*
+(`056`), so a tenant whose debts exceed their holdings gets `totalNonRe < 0` and a fully-rendered,
+**sign-inverted** allocation table — positive assets showing negative %Alloc, liabilities showing
+positive. No NaN, no throw, nothing red.
+
+**The reason it survived review is the reusable half: the invariant that still holds is exactly
+the one that hides it.** Σ %Alloc remains 100 under a negative denominator — algebraically it
+must — so the strongest existing assertion passes on an inverted table. **When proposing the
+paired watcher, name the fixture (`denominator < 0`) and explicitly rule OUT the sum-check**,
+or the fix ships with a test that would have passed before it.
+
+**How to apply:** at every `x / d`, ask three questions, not one — *can `d` be 0? can `d` be
+NEGATIVE? can `d` be NaN?* Guard the domain the figure actually requires (`d <= 0` for a
+share-of-whole percentage), not merely the arithmetic exception. Signed aggregates over mixed
+asset/liability sets are the recurring source. Related:
+[[two-functions-two-partitions-axis-mismatch]] — the same signed-liability fact drove both.
+
 A `EMPTY_*` / zero-value sentinel substituted for "the read failed" is **not** self-evidently safe. Its
 safety is a property of the predicate consuming it, so **any change to that predicate re-opens the
 question** — and the comment asserting "the safe default" will not have been updated.
