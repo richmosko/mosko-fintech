@@ -616,13 +616,13 @@
   <p><strong>Comparison fixture:</strong> the Asset Summary workbook's Asset Allocations sheet (six <code>$ Alloc</code> columns per ownership scope per ADR-004 Decision B) + <code>Finance_Report_2026_04.pdf</code> allocation panels.</p>
   <p><strong>Cells / panels compared:</strong></p>
   <ul>
-    <li>(i) the §2.2.1 two-level taxonomy aggregation (six Cat × ~35 Sub-Cat aggregated dollar values per the seeded ADR-004 Decision C taxonomy);</li>
+    <li>(i) the §2.2.1 two-level taxonomy aggregation (the fixture-enumerated Cats × ~35 Sub-Cat aggregated dollar values per the seeded ADR-004 Decision C taxonomy);</li>
     <li>(ii) the §2.2.2 target-vs-actual allocation with <code>$ ReAlloc</code> dollar deltas (per Cat and per Sub-Cat, per ownership scope);</li>
     <li>(iii) the per-position holdings table (every position assigned to its existing-system (Cat, Sub-Cat) tuple).</li>
   </ul>
   <p><strong>Tolerance class:</strong></p>
   <ul>
-    <li><strong>Strict equality</strong> for taxonomy structure (six Cat values, full Sub-Cat enumeration, every position's (Cat, Sub-Cat) assignment matches the existing system) and for ownership-scope labels;</li>
+    <li><strong>Strict equality</strong> for taxonomy structure (the Cat values the fixture enumerates, full Sub-Cat enumeration, every position's (Cat, Sub-Cat) assignment matches the existing system) and for ownership-scope labels;</li>
     <li><strong>Numeric tolerance</strong> (≤ $1 absolute OR ≤ 0.01% relative, whichever is greater) for every aggregated dollar value and <code>$ ReAlloc</code> cell.</li>
   </ul>
   <p><strong>Cash-row label-mapping footnote (F/CTO cash-granularity ruling, 2026-08-17; ratified for §3.3 on 2026-08-17).</strong> The incumbent fixture (<code>Finance_Report_2026_04.pdf</code> p. 4) foots raw cash into a <em>single</em> populated raw-cash row. The parity fixture maps that single populated raw-cash row ↔ the product's "Cash Balances"-labeled Sub-Cat row (§2.2.1). The mapped pair is treated as the same row for both the strict-equality Sub-Cat-enumeration comparison and the aggregated-dollar comparison, with the standard numeric tolerance (≤ $1 absolute OR ≤ 0.01% relative, whichever is greater) applying to its aggregated cell. The strict-equality structure clause is unaffected for the other three seeded Cash Sub-Cat rows — they remain required in the full Sub-Cat enumeration and carry per-asset-assigned holdings only. The product-side row bearing the incumbent's raw-cash label (left without a fixture counterpart by the mapping) is a permitted superset row. This footnote is a label mapping, not a numeric carve-out: no cell merge, no tolerance change.</p>
