@@ -46,3 +46,23 @@ reputation extends across an ad hoc detour taken mid-session for an unrelated
 purpose. [[feedback_scratch_db_pgtap_harness_gotchas]] covers the harness-setup
 gotchas; this is the adjacent lesson about what happens AFTER setup, once the
 database starts accumulating session-specific state.
+
+**RECURRED, second real instance (SELF-329, 2026-08-17), different failure
+shape — worth carrying forward as still-live, not a one-off.** Deliberately
+left a two-tenant fixture persisted in `scratch_self328` after a real-DB
+Vitest integration test (SELF-238 AC9 — needed the data to survive an
+out-of-process HTTP call, not just a same-session `\timing` read, so the
+`begin/rollback` escape hatch didn't even apply). Two tasks later, an
+UNRELATED battery's own idempotency re-run (077/080's `cross join (select
+distinct users_id from user_taxonomy)` backfill logic — itself correct)
+picked up the leftover tenants as "already provisioned" and inflated a
+no-leak-total assertion (expected 2, got 4). Caught the same way: traced the
+extra rows to my own leftover UUIDs before reporting it as a defect. Fixed by
+a full drop-and-rebuild rather than a targeted DELETE — worth noting why the
+targeted delete failed too: `account_balance_checkpoint` is
+immutability-triggered (append-only audit-class), so even table-owner DELETEs
+are blocked; a scratch DB with audit-class tables cannot be selectively
+cleaned, only rebuilt. **The generalized rule this confirms: ANY reason a
+scratch DB outlives one task — not just a perf detour, also a cross-process
+integration test — creates the same hazard, and the fix is the same rebuild,
+every time.**

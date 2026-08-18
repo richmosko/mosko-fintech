@@ -5,6 +5,20 @@ metadata:
   type: feedback
 ---
 
+**⚠ `grep -n` ON A PIPED STREAM NUMBERS THE STREAM, NOT THE FILE — and the result is a
+self-consistent wrong citation.** Reviewing `081` I read via
+`git show … | sed -n '/^create or replace function/,$p' | grep -n …` and reported "081:99-103".
+The real file location was **253**; my numbers were function-body-relative offsets presented as
+file citations. Caught twice in one review by the file's author. **This is worse than a typo
+because every number in the message is internally coherent** — it survives spot-checking and
+only fails when someone opens the file.
+
+**Convention, now explicit: QUOTE THE SENTENCE; treat the number as advisory.** The sentence
+anchor is the thing actually verified against and it held exactly both times. This is the same
+rule I already carry for ADR citations (*cite by name, never by line number*) — I had scoped it
+to `DECISIONS.md` and it applies to every file. If a number is wanted, take it from an
+**unfiltered read of the whole file**, never from a `sed`/`awk`/`head` slice.
+
 When reviewing a branch read-only from a parked worktree, **every existence probe must name the
 ref** — `git ls-tree --name-only origin/main <path>`, `git show <ref>:<path>`, `git grep <ref> --
 <path>` — never a bare `ls` or `grep` of the checkout.
