@@ -14,7 +14,9 @@
 // worth more than the rename itself per Decision 7's own framing.
 //
 // SCOPE NOTE — read before "fixing" a failure by editing the exclusion instead of investigating.
-// `taxonomy_default`'s domain='asset' Cat set is SIX values as seeded by migration 041 + amended
+// `taxonomy_default`'s asset-domain Cat set (the whole table, post-084 — ADR-058 Decision 1's
+// split moved every cashflow-domain row to `posting_prototype_default`, so no `domain` filter
+// applies or exists any more) is SIX values as seeded by migration 041 + amended
 // by 082: Cash, Bonds, Marketable Securities (post Decision-7 rename), Alternatives, Liabilities,
 // Real Estate. `CAT_GROUP_ORDER` is FIVE — Real Estate is excluded BY DESIGN (nonReAllocation.ts's
 // own header: 076 excludes it at p_include_real_estate=false, and computeNonReAllocation's
@@ -86,8 +88,7 @@ describe.skipIf(!VENUE_AVAILABLE)(
 			const { data, error } = await client
 				.schema('pfin')
 				.from('taxonomy_default')
-				.select('cat')
-				.eq('domain', 'asset');
+				.select('cat');
 			if (error) throw new Error(`venue problem: taxonomy_default read failed: ${error.message}`);
 			expect((data ?? []).length).toBeGreaterThan(0);
 		});
@@ -97,8 +98,7 @@ describe.skipIf(!VENUE_AVAILABLE)(
 			const { data, error } = await client
 				.schema('pfin')
 				.from('taxonomy_default')
-				.select('cat')
-				.eq('domain', 'asset');
+				.select('cat');
 			if (error) throw new Error(`venue problem: taxonomy_default read failed: ${error.message}`);
 			const dbCats = new Set((data ?? []).map((r) => (r as { cat: string }).cat));
 
@@ -115,8 +115,7 @@ describe.skipIf(!VENUE_AVAILABLE)(
 			const { data, error } = await client
 				.schema('pfin')
 				.from('taxonomy_default')
-				.select('cat')
-				.eq('domain', 'asset');
+				.select('cat');
 			if (error) throw new Error(`venue problem: taxonomy_default read failed: ${error.message}`);
 			const dbCats = [...new Set((data ?? []).map((r) => (r as { cat: string }).cat))];
 			const catGroupOrderSet = new Set<string>(CAT_GROUP_ORDER);

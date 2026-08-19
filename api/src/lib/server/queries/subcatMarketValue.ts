@@ -9,7 +9,10 @@
 //   (1) `pfin.fn_subcat_market_value(p_as_of, p_include_real_estate=false)` — Architect's `076`,
 //       SECURITY INVOKER + STABLE. Always called with p_include_real_estate=false: NEITHER V1
 //       consumer of this shared helper ever wants Real Estate included (§2.2.2 explicitly
-//       excludes it; §2.2.3 is a pure Equity drill-down). Not parameterized on that flag —
+//       excludes it; §2.2.3 is a pure Marketable-Securities drill-down — the twelve
+//       US-equity Sub-Cats, all under the Cat ADR-058 Decision 7 renamed 'Equity' →
+//       'Marketable Securities' (082), to remove the collision with the accounting
+//       element Equity and with 028's cashflow class Equity). Not parameterized on that flag —
 //       hardcoding it here removes a footgun (an accidental `true` call) rather than mirroring
 //       076's full signature for its own sake; if a THIRD consumer ever needs RE included, that
 //       is a new, explicit call, not a silently-widened default on this one.

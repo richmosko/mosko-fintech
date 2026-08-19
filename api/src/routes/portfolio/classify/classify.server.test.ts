@@ -28,8 +28,10 @@ const SESSION_A = '00000000-0000-0000-0000-00000000000a';
 
 type UpsertResult = { data: unknown; error: { message: string } | null };
 /** The ADR-013 H1 pre-validation read: .schema('pfin').from('user_taxonomy').select('id')
- *  .eq('id',…).eq('domain','asset').eq('is_active',true).maybeSingle(). `found:true` means the
- *  row resolved (assignable); `found:false` mimics RLS/domain exclusion (zero rows, no error). */
+ *  .eq('id',…).eq('is_active',true).maybeSingle(). POST-084 (ADR-058 Decision 1's split):
+ *  `user_taxonomy` has no `domain` column any more — table identity IS the domain fence now, so
+ *  the chain is two `.eq()` calls, not three. `found:true` means the row resolved (assignable);
+ *  `found:false` mimics RLS / cross-table exclusion (zero rows, no error). */
 type PreValidateResult = { found: boolean; error?: { message: string } };
 
 /** Minimal supabase-js stub covering BOTH chains the classify action touches: the
@@ -45,8 +47,7 @@ function makeSupabase(upsertResult: UpsertResult, preValidate: PreValidateResult
 			? { data: null, error: preValidate.error }
 			: { data: preValidate.found ? { id: 1 } : null, error: null }
 	);
-	const preEq3 = vi.fn(() => ({ maybeSingle: preMaybeSingle }));
-	const preEq2 = vi.fn(() => ({ eq: preEq3 }));
+	const preEq2 = vi.fn(() => ({ maybeSingle: preMaybeSingle }));
 	const preEq1 = vi.fn(() => ({ eq: preEq2 }));
 	const preSelect = vi.fn(() => ({ eq: preEq1 }));
 
