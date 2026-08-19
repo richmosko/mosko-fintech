@@ -16,9 +16,14 @@
 --   from the vocabulary every subsequent decision is written in, rather than
 --   forcing each of them to disambiguate as it goes.
 --
--- ⚠ NEVER A BLIND SWEEP — the file boundary is the ONLY thing that makes any
---   substitution safe here, and this is the hazard in its worst form: TWO
---   DIFFERENT LABELS SPELLED IDENTICALLY.
+-- ⚠ NEVER A BLIND SWEEP — for a REPO-WIDE TEXTUAL substitution the file boundary
+--   is the only thing that makes it safe, and this is the hazard in its worst
+--   form: TWO DIFFERENT LABELS SPELLED IDENTICALLY. ⚠ THAT CLAIM IS SCOPED TO
+--   THE TEXT SWEEP DELIBERATELY. An earlier draft of this header said the file
+--   boundary was the only thing making ANY substitution safe, which was
+--   overstated for this migration's own SQL predicate — see THE SECOND FENCE
+--   below, which QA's inversion leg measured and which is not the same for both
+--   statements.
 --   Measured (ADR-058 Decision 7, re-measured at authoring):
 --     `grep -rc "'Equity'" supabase/migrations/*.sql` -> 028 (3), 035 (4),
 --     037 (4), 041 (15). ALL 15 asset-domain occurrences are in 041; ALL 11
@@ -27,6 +32,33 @@
 --   `domain = 'asset'` predicate. It edits no function body, no CHECK, no policy
 --   and no cashflow row. A `s/'Equity'/.../g` over this repo would rewrite the
 --   GL's Equity class and corrupt contra routing; do not do it.
+--
+-- ----------------------------------------------------------------------------
+-- THE SECOND FENCE — and it covers ONE of the two statements, not both. Measured,
+--   because the asymmetry is the whole point and the reassuring half is the half
+--   that travels.
+--   QA's inversion leg (battery 082, INV1) replayed statement 2 with the
+--   `domain = 'asset'` conjunct DROPPED and found it does NOT silently corrupt:
+--   it ABORTS. `'Marketable Securities'` is not a member of 028's
+--   user_taxonomy_cashflow_class_chk (`Revenue/Expense/Transfer/Equity/Trade`), so
+--   the naive replay is rejected by a CHECK constraint. On pfin.user_taxonomy the
+--   domain conjunct therefore has a second, independent, schema-level fence
+--   behind it, and the failure direction there is LOUD.
+--   ⚠ pfin.taxonomy_default HAS NO SUCH FENCE, and this is the part a reader must
+--   not generalise away. Measured on a clean chain: its only CHECK constraints are
+--   taxonomy_default_domain_check and taxonomy_default_tax_character_check —
+--   there is NO cat-class CHECK on that table, because 028 was added to
+--   pfin.user_taxonomy only (028:160-164). Replaying statement 1 without the
+--   conjunct against a cashflow row spelled 'Equity' SUCCEEDS and mislabels it
+--   SILENTLY — demonstrated, not reasoned: insert such a row, run the naive
+--   update, and one cashflow row comes back reading 'Marketable Securities', no
+--   error raised.
+--   ⇒ Statement 1's apparent safety today rests on a DATA ACCIDENT — the shipped
+--   seed happens to contain no cashflow row with cat = 'Equity' (its cashflow Cats
+--   are Revenue / Expense / Transfer / Trade) — and 028's enum ADMITS 'Equity',
+--   so a future seed delta could add one at any time. **A by-current-data property
+--   is not a fence.** The conjunct on statement 1 is the only thing holding that
+--   line; do not read the user_taxonomy result as covering it.
 --
 -- ⚠ WHAT THIS DOES NOT DO. It does not touch the cashflow domain. It does not
 --   drop `domain` (that is the SPLIT migration, ADR-058 Decision 1). It adds no
@@ -220,9 +252,12 @@
 --   Security-load-bearing edges:
 --     · The `domain = 'asset'` conjunct is what keeps the cashflow accounting
 --       class out of scope. It is NOT redundant and must never be dropped as a
---       simplification: without it this statement rewrites 028's enum values in
---       user data and breaks fn_gl_entries' contra routing for every affected
---       row.
+--       simplification — and the CONSEQUENCE OF DROPPING IT DIFFERS BY STATEMENT,
+--       which is why both are stated rather than one generalised: on
+--       pfin.user_taxonomy the naive replay ABORTS on 028's CHECK (loud, verified
+--       by battery 082 leg INV1); on pfin.taxonomy_default it SUCCEEDS and
+--       mislabels a cashflow row SILENTLY, because that table carries no cat-class
+--       CHECK. See THE SECOND FENCE above.
 --     · No users_id is read or written; tenant ownership is untouched.
 --     · No id is read or written; every referent and every history snapshot
 --       continues to resolve to the same row.
