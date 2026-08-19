@@ -1,6 +1,6 @@
 // usEquityAllocation.test.ts — SELF-240 pure-core coverage for computeUsEquityAllocation (no
 // I/O; mirrors nonReAllocation.test.ts / pendingSymbols.ts's computePendingIds precedent).
-// Exercises AC1 (exactly twelve, canonical order, all cat='Equity', no cash/Unsorted possible by
+// Exercises AC1 (exactly twelve, canonical order, all cat='Marketable Securities', no cash/Unsorted possible by
 // construction), AC3 (total.dollar_alloc = Σ the twelve — the drill-down-identity anchor), AC4/β
 // (display-layer renormalization formulas), AC5 (both independent degenerate guards), AC7
 // (determinism).
@@ -15,11 +15,11 @@ import type { SubcatMarketValueRow } from './subcatMarketValue';
 const FULL_TAXONOMY = US_EQUITY_SUB_CATS.map((sub_cat, i) => ({ id: i + 1, sub_cat }));
 
 describe('computeUsEquityAllocation — AC1 row-set shape', () => {
-	it('always emits exactly twelve rows, in US_EQUITY_SUB_CATS canonical order, all cat=Equity', () => {
+	it('always emits exactly twelve rows, in US_EQUITY_SUB_CATS canonical order, all cat=Marketable Securities', () => {
 		const result = computeUsEquityAllocation(FULL_TAXONOMY, [], new Map());
 		expect(result.rows).toHaveLength(12);
 		expect(result.rows.map((r) => r.sub_cat)).toEqual(US_EQUITY_SUB_CATS);
-		expect(result.rows.every((r) => r.cat === 'Equity')).toBe(true);
+		expect(result.rows.every((r) => r.cat === 'Marketable Securities')).toBe(true);
 	});
 
 	it('a Sub-Cat missing from the caller\'s own taxonomy still renders (AC1 "regardless"), as zero-held/zero-target', () => {
@@ -34,9 +34,14 @@ describe('computeUsEquityAllocation — AC1 row-set shape', () => {
 
 describe('computeUsEquityAllocation — a populated, non-degenerate portfolio', () => {
 	const marketValueRows: SubcatMarketValueRow[] = [
-		{ sub_cat_id: 1, cat: 'Equity', sub_cat: 'US-01-Basic_Materials', market_value: 100 },
-		{ sub_cat_id: 6, cat: 'Equity', sub_cat: 'US-06-Financials', market_value: 300 },
-		{ sub_cat_id: 9, cat: 'Equity', sub_cat: 'US-09-Information_Technology', market_value: 600 }
+		{ sub_cat_id: 1, cat: 'Marketable Securities', sub_cat: 'US-01-Basic_Materials', market_value: 100 },
+		{ sub_cat_id: 6, cat: 'Marketable Securities', sub_cat: 'US-06-Financials', market_value: 300 },
+		{
+			sub_cat_id: 9,
+			cat: 'Marketable Securities',
+			sub_cat: 'US-09-Information_Technology',
+			market_value: 600
+		}
 		// remaining nine Sub-Cats zero-held
 	];
 	const targets = new Map<number, number>([
@@ -118,7 +123,7 @@ describe('computeUsEquityAllocation — AC5(i) zero US-equity holdings (Total US
 describe('computeUsEquityAllocation — AC5(ii) Σ(twelve target_percents) = 0', () => {
 	// Holdings ARE present (Total US Equity > 0) — proves independence the other direction.
 	const marketValueRows: SubcatMarketValueRow[] = [
-		{ sub_cat_id: 1, cat: 'Equity', sub_cat: 'US-01-Basic_Materials', market_value: 500 }
+		{ sub_cat_id: 1, cat: 'Marketable Securities', sub_cat: 'US-01-Basic_Materials', market_value: 500 }
 	];
 	const result = computeUsEquityAllocation(FULL_TAXONOMY, marketValueRows, new Map());
 

@@ -16,9 +16,9 @@ const TAXONOMY: TaxonomySubCatRow[] = [
 	{ id: 1, cat: 'Cash', sub_cat: 'FDIC', display_order: 10 },
 	{ id: 2, cat: 'Cash', sub_cat: 'Cash Balances', display_order: 5 },
 	{ id: 3, cat: 'Bonds', sub_cat: 'IGL', display_order: 50 },
-	{ id: 10, cat: 'Equity', sub_cat: 'US-01-Basic_Materials', display_order: 100 },
-	{ id: 11, cat: 'Equity', sub_cat: 'US-02-Telecom', display_order: 110 },
-	{ id: 20, cat: 'Equity', sub_cat: 'UNKNOWN', display_order: 90 },
+	{ id: 10, cat: 'Marketable Securities', sub_cat: 'US-01-Basic_Materials', display_order: 100 },
+	{ id: 11, cat: 'Marketable Securities', sub_cat: 'US-02-Telecom', display_order: 110 },
+	{ id: 20, cat: 'Marketable Securities', sub_cat: 'UNKNOWN', display_order: 90 },
 	{ id: 30, cat: 'Alternatives', sub_cat: 'REIT', display_order: 240 },
 	{ id: 40, cat: 'Liabilities', sub_cat: 'Credit-Balance', display_order: 290 },
 	{ id: 50, cat: 'Real Estate', sub_cat: 'Residential', display_order: 320 }
@@ -27,8 +27,8 @@ const TAXONOMY: TaxonomySubCatRow[] = [
 describe('computeNonReAllocation — a populated portfolio', () => {
 	const marketValueRows: SubcatMarketValueRow[] = [
 		{ sub_cat_id: 1, cat: 'Cash', sub_cat: 'FDIC', market_value: 1000 },
-		{ sub_cat_id: 10, cat: 'Equity', sub_cat: 'US-01-Basic_Materials', market_value: 500 },
-		{ sub_cat_id: 11, cat: 'Equity', sub_cat: 'US-02-Telecom', market_value: 300 },
+		{ sub_cat_id: 10, cat: 'Marketable Securities', sub_cat: 'US-01-Basic_Materials', market_value: 500 },
+		{ sub_cat_id: 11, cat: 'Marketable Securities', sub_cat: 'US-02-Telecom', market_value: 300 },
 		{ sub_cat_id: null, cat: null, sub_cat: null, market_value: 200 } // Unsorted
 	];
 	const targets = new Map<number, number>([
@@ -49,7 +49,7 @@ describe('computeNonReAllocation — a populated portfolio', () => {
 			(g) => g.cat === ('Real Estate' as unknown) || g.rows.some((r) => r.cat === 'Real Estate')
 		);
 		expect(anyRealEstate).toBe(false);
-		expect(result.groups.map((g) => g.cat)).toEqual(['Cash', 'Bonds', 'Equity', 'Alternatives', 'Liabilities']);
+		expect(result.groups.map((g) => g.cat)).toEqual(['Cash', 'Bonds', 'Marketable Securities', 'Alternatives', 'Liabilities']);
 	});
 
 	it('AC2: a zero-held row with a REAL target still renders — target ≠ 0 is a real fact even at zero alloc', () => {
@@ -90,12 +90,12 @@ describe('computeNonReAllocation — a populated portfolio', () => {
 	});
 
 	it('AC2a/AC5: the twelve US-equity rows collapse into ONE "US - Sector Diversified" row, no individual US-0x rows', () => {
-		const equity = result.groups.find((g) => g.cat === 'Equity')!;
+		const equity = result.groups.find((g) => g.cat === 'Marketable Securities')!;
 		const subCats = equity.rows.map((r) => r.sub_cat);
 		expect(subCats).not.toContain('US-01-Basic_Materials');
 		expect(subCats).not.toContain('US-02-Telecom');
 		expect(subCats).toContain('US - Sector Diversified');
-		expect(subCats).toContain('UNKNOWN'); // non-US-equity Equity Sub-Cat renders individually
+		expect(subCats).toContain('UNKNOWN'); // non-US-equity Marketable Securities Sub-Cat renders individually
 
 		const collapsed = equity.rows.find((r) => r.sub_cat === 'US - Sector Diversified')!;
 		expect(collapsed.sub_cat_id).toBeNull();
@@ -107,7 +107,7 @@ describe('computeNonReAllocation — a populated portfolio', () => {
 	});
 
 	it('the collapsed row sorts at position 100 (UNKNOWN=90 before it)', () => {
-		const equity = result.groups.find((g) => g.cat === 'Equity')!;
+		const equity = result.groups.find((g) => g.cat === 'Marketable Securities')!;
 		expect(equity.rows.map((r) => r.sub_cat)).toEqual(['UNKNOWN', 'US - Sector Diversified']);
 	});
 
@@ -141,17 +141,17 @@ describe('computeNonReAllocation — AC7 empty portfolio', () => {
 		}
 
 		// The collapsed row still renders (zeros), and Real Estate is still absent.
-		const equity = result.groups.find((g) => g.cat === 'Equity')!;
+		const equity = result.groups.find((g) => g.cat === 'Marketable Securities')!;
 		expect(equity.rows.map((r) => r.sub_cat)).toContain('US - Sector Diversified');
-		expect(result.groups.map((g) => g.cat)).toEqual(['Cash', 'Bonds', 'Equity', 'Alternatives', 'Liabilities']);
+		expect(result.groups.map((g) => g.cat)).toEqual(['Cash', 'Bonds', 'Marketable Securities', 'Alternatives', 'Liabilities']);
 	});
 });
 
 describe('computeNonReAllocation — no held value anywhere but a real taxonomy catalog with no US-equity rows', () => {
 	it('a caller with zero US-equity Sub-Cats in their taxonomy still gets a zero-valued collapsed row', () => {
-		const noEquityTaxonomy = TAXONOMY.filter((t) => t.cat !== 'Equity');
+		const noEquityTaxonomy = TAXONOMY.filter((t) => t.cat !== 'Marketable Securities');
 		const result = computeNonReAllocation(noEquityTaxonomy, [], new Map());
-		const equity = result.groups.find((g) => g.cat === 'Equity')!;
+		const equity = result.groups.find((g) => g.cat === 'Marketable Securities')!;
 		expect(equity.rows).toHaveLength(1);
 		expect(equity.rows[0]).toMatchObject({ sub_cat: 'US - Sector Diversified', dollar_alloc: 0, pct_target: 0 });
 	});

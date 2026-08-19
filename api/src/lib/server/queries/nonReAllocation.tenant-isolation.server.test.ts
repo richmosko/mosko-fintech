@@ -177,10 +177,10 @@ describe.skipIf(!VENUE_AVAILABLE)(
 
 		it('SHARPEST CASE — the TS-computed "US - Sector Diversified" row (no sub_cat_id, no DB row to audit against): B\'s collapsed row carries ZERO, not A\'s value, when B holds none of the twelve US-equity Sub-Cats', () => {
 			const collapsedA = renderA.groups
-				.find((g) => g.cat === 'Equity')
+				.find((g) => g.cat === 'Marketable Securities')
 				?.rows.find((r) => r.kind === 'us_sector_diversified');
 			const collapsedB = renderB.groups
-				.find((g) => g.cat === 'Equity')
+				.find((g) => g.cat === 'Marketable Securities')
 				?.rows.find((r) => r.kind === 'us_sector_diversified');
 			expect(collapsedA, 'fixture problem: tenant A must hold a US-equity Sub-Cat for this leg to be non-vacuous').toBeDefined();
 			expect(collapsedB).toBeDefined();
