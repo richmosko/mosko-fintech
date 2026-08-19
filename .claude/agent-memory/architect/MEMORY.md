@@ -10,6 +10,7 @@
 ## Postgres / RLS facts worth not re-deriving
 
 - **[Scratch-DB recipe for a full clean chain apply](reference_scratch_db_full_chain_recipe.md)** — container `pg_dump`, load as `supabase_admin`, dump-then-extensions, `supabase_vault` for `vault.decrypted_secrets`; never `--no-privileges`.
+- **[Catalog-comment staleness needs the CATALOG](feedback_catalog_comment_staleness_needs_the_catalog.md)** — a later migration may have re-emitted it; grepping the source over-reports staleness. Two checks via one instrument = one check.
 - **[`set local` outside a transaction is a silent no-op](feedback_set_local_outside_transaction_is_a_noop.md)** — the RLS smoke then runs as superuser and every leg passes; a vacuous harness looks PERMISSIVE, not empty. Control leg first.
 - **[`user_settings` can never carry the aal2 clause](reference_user_settings_excluded_from_aal2_backstop.md)** — `025` names it a NON-NEGOTIABLE exclusion (policy recursion); wrong home for step-up-fenced tenant data.
 - **[The TimeZone pin is a default, not a fence](reference_timezone_pin_is_a_default_not_a_fence.md)** — `061` pins the DB default; `PGTZ` moves a client's own session. Make timestamptz/date comparisons invariant BY MARGIN (>26h zone span).

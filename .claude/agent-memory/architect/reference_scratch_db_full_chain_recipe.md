@@ -28,6 +28,29 @@ Recipe, in the order that matters:
 4. **`vault.decrypted_secrets` is extension-owned**, so `--schema=vault` alone does NOT
    carry it — `007` fails without step 3's `supabase_vault`.
 
+⚠ **Step 2 is about the DUMP LOAD only. Before applying the MIGRATIONS, hand the database
+to `postgres`** — `alter database <scratch> owner to postgres`, then apply every migration
+`-U postgres`, and connect `pg_prove` as `postgres` too. In the real stack the `postgres`
+DATABASE is owned by `postgres` and every `pfin` table is `postgres`-owned; a scratch left
+owned by `supabase_admin` diverges, and the divergence is **not** a clean failure. Measured
+once: the full `rls` suite came back with mass *"Bad plan. You planned N but ran M"*
+truncations across a dozen files plus a `permission denied for table user_taxonomy` on an
+inversion leg that was actually correct. **It looks like the code is broken and it is the
+harness.** (`postgres` cannot even `create schema` in a `supabase_admin`-owned DB, so `001`
+dies immediately if you try to apply as `postgres` without the ownership transfer.)
+
+⚠ **Run the battery through `pg_prove`, never `psql`** — and the CI image is already local:
+`docker run --rm --network container:supabase_db_<project> -v "$PWD/supabase/tests:/tests"
+--entrypoint pg_prove public.ecr.aws/supabase/pg_prove:3.36 --ext .pg --ext .sql -r /tests
+-d "postgresql://postgres:postgres@127.0.0.1:5432/<scratch>"`. The `--entrypoint` override is
+required (the image's default entrypoint swallows the flags). Also `create extension pgtap`
+in the scratch — the migration chain does not.
+
+⚠ **A pre-existing failure is a CONTROL result, not a relayed claim.** Build a second scratch
+without the new migrations and re-run the failing file: identical failure set = pre-existing.
+And read the failing legs BY NAME — a file can document *some* of its local failures as
+expected while another leg on the same file is a live finding.
+
 Do NOT pass `--no-privileges`: it drops the bootstrap's REVOKEs as well as its grants and
 makes the harness **more permissive than production**, so denial assertions pass
 vacuously. Drop the scratch DB when done, and confirm the dev DB is untouched

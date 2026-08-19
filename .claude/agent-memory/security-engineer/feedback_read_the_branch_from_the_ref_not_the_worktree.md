@@ -49,5 +49,21 @@ timing fact — NOT a false report.** I framed it as "the second time a report d
 did not contain," which was unfair to the relayer and had to be retracted alongside their own retraction.
 Measure hard, infer gently: state what the sha is, and let the cause be theirs to explain.
 
+**⚠ TWO MECHANICAL HAZARDS IN THE EXTRACTION COMMAND ITSELF, both measured on the 2026-08-19 rename
+review, both of which produce plausible-looking wrong output rather than an error.**
+
+- **`git show "$B:path"` MISBEHAVES IN ZSH.** zsh applies history-style modifiers to *unbraced*
+  parameters (`$B:h`, `$B:s/…/…/`), so `"$B:supabase/…"` is not the ref-path expression you wrote.
+  It emitted `bad substitution` once and — worse — **twice returned a commit diff instead of the
+  file's contents**, which reads as real output and nearly became a finding about the wrong bytes.
+  **Always `git show "${B}:path"` with braces**, or a fully single-quoted literal `ref:path`.
+- **NEVER `git checkout <ref> -- .` TO READ A BRANCH.** I did this in the `sec` worktree and it is
+  a mutating command in a role whose Bash is read-only. It staged **99 paths** (an index anyone
+  committing there would take whole — `commit` is not scoped by `add`) and **destroyed an
+  unstaged edit** to a file in that worktree, unrecoverably. There was never a need: every
+  measurement in that review came from `git show <ref>:<path>` / `git grep <ref> -- <paths>`, which
+  read objects and touch nothing. **If a probe wants a checkout, the probe is wrong.** And having
+  taken it, do not take a second mutating command to "undo" it — report the state and ask.
+
 Related: [[measure-the-fence-regex-not-its-comment]] — same shape one level down (measure the real
 predicate at the real ref, not the description of it).

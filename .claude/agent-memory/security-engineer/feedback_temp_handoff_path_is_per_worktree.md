@@ -28,5 +28,21 @@ Corollary for the coordinator's obligation: a per-worktree overflow file is even
 Prefer putting the load-bearing criterion **inline in the message** and treating `temp/` as evidence
 backup only. Every criterion I expect someone to act on goes in the message text verbatim.
 
+**⚠ THE CORROLARY ABOVE IS RIGHT ABOUT CRITERIA AND WRONG ABOUT COMMIT-READY TEXT — put drop-in text
+in BOTH places.** Measured on the 2026-08-19 rename review. I supplied a verbatim commit-ready header
+block for Architect in my **message to team-lead**; the review **file** carried the finding in prose
+only. Team-lead's relay pointed Architect at the file. Architect measured that the file held no
+drop-in block, correctly refused to invent my voice, and authored the block themselves from my
+finding — quoting my load-bearing sentences with attribution and stating the provenance in-file.
+**The outcome was good, and it was good because Architect handled the gap well, not because the
+hand-off worked.** The route from my message to the executing agent runs through a relayer who may
+forward a *pointer* instead of the *text*; a message is addressed to the coordinator, not to the pen.
+
+**How to apply:** when a finding's remedy is text someone must commit **verbatim**, put the block in
+the `temp/` file under a heading that says so (`## COMMIT-READY TEXT — commit verbatim, do not
+paraphrase`) **and** in the message. The message carries the criterion so it survives a lost file;
+the file carries the block so it survives a pointer-only relay. Paraphrase drift is the failure class
+this role exists to catch — do not leave the anti-paraphrase artifact reachable by only one route.
+
 Related: [[read-the-branch-from-the-ref-not-the-worktree]] (the same worktree-vs-canonical-location
 confusion, one layer down).
