@@ -84,6 +84,22 @@
 --   By F2's letter no F/CTO disposition is triggered: that trigger is a NON-ZERO
 --   count.
 --
+--   >> THE DISCHARGE IS RE-ARMED, NOT CLOSED. <<
+--
+--   These four counts are a PRECONDITION ON THE FIRST POPULATED INSTANCE, and that
+--   instance is the incumbent-import path, not this migration. **Re-run all four
+--   there, before the import, with the same predicates and the same F/CTO
+--   disposition rule for any non-zero result.** A vacuous zero recorded as
+--   "checked" is precisely how the deferred abort-risk on counts 1-3 gets
+--   discovered in production instead of in a schedule. Booked to BACKLOG so it has
+--   a home outside this header, where nobody re-reads it.
+--
+--   COUNT 4, in one sentence so it is not softened by summary: **ADR-058 Decision
+--   2's invariant is ratified on the HAZARD'S STRUCTURE and remains empirically
+--   UNDEMONSTRATED** — supported by neither this zero-over-empty nor by anything
+--   else yet. Nothing about the mechanism below changes as a result; what changes
+--   is what may be claimed for it.
+--
 -- ----------------------------------------------------------------------------
 -- ID PRESERVATION IS A REQUIREMENT OF THIS MIGRATION, NOT A NOTE ON IT
 --
@@ -359,6 +375,57 @@
 --       unchanged; its `comment on function` and user_asset_category.sub_cat_id's
 --       `comment on column` both assert the app-layer matched-DOMAIN rule, which
 --       after this migration names a column that does not exist. Both re-emitted.
+--
+-- ----------------------------------------------------------------------------
+-- PRE-REPOINT FAILURE MODE, PER OBJECT — because a blanket characterization is
+-- wrong in one direction or the other, and one of these directions is silent.
+--
+-- Two reports of this work characterized the un-repointed readers differently:
+-- one said the taxonomy reads fail LOUD, the other said they fail SILENT-WRONG.
+-- **Both were right about different objects.** Stated per object, measured, since
+-- a silent failure described as loud is the dangerous direction to be wrong in.
+--
+--   fn_gl_entries (037) ....................................... SILENT-WRONG
+--     Its two taxonomy reads are LEFT JOINs. Un-repointed they simply MISS, so
+--     `ut.cat` is NULL, every branch of both CASE expressions falls through, and
+--     the `else` arms post the entry to **Suspense / 'suspense'**. Balanced by
+--     construction, no error, no NULL surfaced — every classified cash flow
+--     silently reclassified. THIS is the object the loud/quiet distinction
+--     matters for, and it is why the re-point rides the same file as the delete.
+--   fn_account_trans_annotation_trade_constraints (030) ............... LOUD
+--     Resolves the class with a plain SELECT then tests `v_has_tax is null` and
+--     RAISES. Un-repointed it rejects every annotation write carrying a
+--     sub_cat_id. Fail-closed, and it announces itself.
+--   fn_account_trans_annotation_matched_sub_cat (023) ................. LOUD
+--   fn_account_trans_split_matched_sub_cat (029) ...................... LOUD
+--     `if not exists (...) then raise` — same shape, same direction.
+--   fn_subcat_market_value (076/081) ................................. LOUD
+--     Not a miss at all: its predicates name a column that no longer exists, so
+--     the function errors at runtime on the §2.2.2 surface.
+--   fn_planning_target_matched_sub_cat (074) ................ NOT AFFECTED
+--     Its target never moved; it loses a predicate, it does not lose a table.
+--   the 023/029 FOREIGN KEYS ........................ LOUD, AT MIGRATION TIME
+--     `on delete restrict`, so an un-moved FK aborts the delete rather than
+--     orphaning anything (Sec F11's reasoning, and it holds).
+--
+-- ----------------------------------------------------------------------------
+-- WHICH FENCE RAISES FIRST, AND WITH WHAT SQLSTATE — measured on a scratch stack
+-- carrying the full 001..084 chain, not reasoned.
+--
+-- A BEFORE-row trigger fires before FK constraint checking, so on every one of
+-- these paths the FENCE raises first and the FK never gets to. **The observed
+-- SQLSTATE is `P0001` with the fence's own message — never a bare `23503`.**
+--   - annotation given a storage-side id -> P0001 from the 023 fence
+--   - split child given a storage-side id -> P0001 from the 029 fence
+--   - user_asset_category given a PROTOTYPE id -> P0001 from the 022 fence
+--     (its message reads "not a taxonomy row owned by users_id …", which stays
+--     literally true of a prototype id — the fence is correct, its diagnostic
+--     just names tenancy where the cause is vocabulary)
+--
+-- ⚠ On pfin.account_trans_annotation the BEFORE-row triggers fire in NAME order,
+-- so `..._matched_sub_cat` precedes `..._trade_constraints`: **030's fence never
+-- sees a storage-side id — 023's raises first.** Anything asserting 030's message
+-- on that path is asserting a leg that cannot fire.
 --
 -- ⚠ 022's and 029's `--` HEADER BLOCKS STAY AS AUTHORED. They are historically
 -- true of those migrations and a merged migration's header is not edited to
