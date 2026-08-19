@@ -1,22 +1,20 @@
 ---
 name: gl-taxonomy-split-ratified
-description: The 2026-08-18 F/CTO-ratified asymmetric split of user_taxonomy into a storage spine + posting_prototype — ratified but NOT landed; artifacts live only in gitignored temp/.
+description: The 2026-08-18 F/CTO-ratified asymmetric split of user_taxonomy into a storage spine + posting_prototype — ADR-058 landed as a doc-PR; NO DDL exists yet. Read ADR-058 live; this memory is the pointer plus the two non-bugs.
 metadata:
   type: project
 ---
 
-**F/CTO ratified the two-function split of `pfin.user_taxonomy` on 2026-08-18. As of that session close it is RATIFIED AND UNLANDED — no migration, no `DECISIONS.md` entry.**
+**ADR-058 authored into `DECISIONS.md` at PR #499 (2026-08-19, doc-only; check it merged before relying on it). Once merged, `DECISIONS.md` is authoritative — read the ADR live and do not reason from this file.** What is landed is the DECISION; **no migration exists**, so the whole split is still `ratified-name-is-not-a-built-table` territory.
 
-**The frame (F/CTO verbatim):** *"domain::asset -> defines a type of account a thing stores it's book value in; domain::cashflow -> defines a GL Journal Entry prototype... list of accounts to debit/credit which sum to 0."* The table conflates a **storage-classification vocabulary** with a **posting-rule vocabulary**.
+**One-line shape, only so you recognise the ADR when you find it:** `pfin.user_taxonomy` keeps its name / ids / asset rows and drops `domain`; cashflow rows move to a new `pfin.posting_prototype` with **original ids preserved**. Ratified order is **rename → split → `element`**, three separate PRs.
 
-**Ratified shape (asymmetric / "4a"):** cashflow rows move OUT to a new `pfin.posting_prototype`; `user_taxonomy` keeps its name, ids and asset rows and drops `domain`. Also ratified: original **id values preserved**, via **disjoint reserved ranges, both tables `generated always`**; `element` on the storage table only, `check (element in ('asset','liability'))` for V1; sequencing **rename → split → element** — the asset-domain Cat `'Equity'` → `'Marketable Securities'` rename ships **FIRST** (it removes an ambiguity every later decision is written in), then S1's split, then `element`, with a V1.2-landability flip to S2.
+**How to apply.** Read ADR-058 for every detail (the id mechanism, the `element` value set, the write posture, Sec F1–F11). The follow-ups have tracked homes now: **BACKLOG §7.24** (five items) + **§5.3** (GL-native P&L, V2) + **§7.13 / §5.7** closure annotations. ⚠ **Before authoring any DDL:** Sec F2's four row counts against production-shaped data, recorded in the migration header, non-zero disposed by F/CTO first — a precondition on AUTHORING, not on landing.
 
-**Why:** the four live FK-shaped referents of `user_taxonomy(id)` partition **cleanly 2/2** along that seam (`022`/`074` asset, `023`/`029` cashflow), so the split is a clean cut — and three of the four domain rules are **app-layer only** today, so the split converts them to structural.
+⚠ **ADR-011 Decision 3's `#10` / `#13` / `#17` amendments ride the DDL PR, not a doc-PR** — the Sec pin (transcribed verbatim inside ADR-058 Decision 5) says so. Landing them early or late both break the read-Decision-3-live discipline.
 
-**Why: (the reason this is a memory at all)** the design, the Sec touchpoint and the ADR draft live **only in gitignored `temp/`** — `architect-gl-brainstorm-opening.md`, `architect-gl-split-adr-draft.md`, `sec-gl-split-touchpoint.md`, `brainstorm-taxonomy-vs-gl.md`. **None of it is derivable from the repo until the doc-PR lands.**
+⚠ **Two things that will read as bugs and are not:** `Securities Sold Short` is ratified (ADR-031 Amendment 1 item 7) and appears **nowhere in the tree** — shorts route to Suspense; and after the split **two `element` vocabularies exist** (reporting bucket vs ledger account), **not required to agree** — a short is `asset` on one and `liability` on the other. Never "reconcile" them by joining.
 
-**How to apply:** ⚠ **First action in a follow-up session is to check whether the ADR landed** (`grep -n "posting_prototype" DECISIONS.md supabase/migrations/*.sql`). If it did, read it there and **delete this memory** — the repo becomes authoritative. If it did not, the `temp/` files may have been swept and the decisions must be reconstructed from the session record before any migration is authored.
-
-⚠ Two things that will read as bugs and are not: **`Securities Sold Short` is ratified (ADR-031 Amendment 1 item 7) and appears NOWHERE in the tree** — shorts route to Suspense; and after the split **two `element` vocabularies exist** (bucket vs ledger account) which are **not required to agree** — a short is `asset` on one and `liability` on the other. Never "reconcile" them by joining.
+⚠ **`api/src/lib/server/queries/taxonomy.ts` rides the split migration's PR** (Sec F3, a named exception to no-bundling): its `onConflict` names `domain` and every failure path is fail-soft, so the migration alone silently provisions new users with nothing.
 
 Related: [[ratified-name-is-not-a-built-table]] · [[no-concept-exists-check-deferred-decisions]] · [[join-key-decides-failure-direction]]
