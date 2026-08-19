@@ -24,14 +24,26 @@
 --   overstated for this migration's own SQL predicate — see THE SECOND FENCE
 --   below, which QA's inversion leg measured and which is not the same for both
 --   statements.
---   Measured (ADR-058 Decision 7, re-measured at authoring):
+--   Measured (ADR-058 Decision 7, re-measured at authoring — AS OF 081 AND
+--   EXCLUDING THIS FILE; see (W5) for why that scope is load-bearing):
 --     `grep -rc "'Equity'" supabase/migrations/*.sql` -> 028 (3), 035 (4),
---     037 (4), 041 (15). ALL 15 asset-domain occurrences are in 041; ALL 11
---     others are the cashflow accounting class, in 028 / 035 / 037.
+--     037 (4), 041 (15).
+--   ⚠ THOSE ARE LINE COUNTS, NOT OCCURRENCE COUNTS — `grep -c` counts lines (Sec
+--   finding B3, 2026-08-19). Per occurrence, via `grep -o "'Equity'" … | wc -l`:
+--   028 = 3, 035 = 6, 037 = 6, 041 = 15. So it is 15 asset-domain occurrences (all
+--   in 041) and 15 — NOT 11 — cashflow-class occurrences across 028 / 035 / 037.
+--   An earlier draft of this header said "ALL 11 others", inheriting the figure
+--   from ADR-058 Decision 7. ⚠ 041 is where that defect hides: there lines and
+--   occurrences coincide, so the one file a reader spot-checks agrees with itself.
+--   ⚠ THE SEPARATION CLAIM IS UNAFFECTED, and Sec verified it PER OCCURRENCE
+--   rather than assuming it: 035:220/228/247/255 and 037:310/318/334/342 are all
+--   the cashflow accounting class. Nothing asset-domain hides in the 11-vs-15 gap.
 --   This migration therefore touches DATA ONLY, in two tables, under an explicit
 --   `domain = 'asset'` predicate. It edits no function body, no CHECK, no policy
 --   and no cashflow row. A `s/'Equity'/.../g` over this repo would rewrite the
 --   GL's Equity class and corrupt contra routing; do not do it.
+--   ⚠ "Edits no function body" is TRUE and is NOT the same claim as "fn_gl_entries'
+--   output is invariant" — see ONE DERIVED OUTPUT DOES CHANGE below.
 --
 -- ----------------------------------------------------------------------------
 -- THE SECOND FENCE — and it covers ONE of the two statements, not both. Measured,
@@ -66,6 +78,55 @@
 --   Sub-Cat: the twelve `US-NN-*` sector Sub-Cats and `US-Index-Non_Sector` /
 --   `US-Growth-Non_Sector` / `ExUS-*` keep their labels and their display_order.
 --   The market term "US Equity" is NOT a rename target anywhere.
+--
+-- ----------------------------------------------------------------------------
+-- ⚠ ONE DERIVED OUTPUT DOES CHANGE — and the blocks above will mislead you about
+--   it if you read them alone. Sec joint-review finding B1, 2026-08-19 (AMBER;
+--   this text is the resolution). ⚠ Provenance stated so nothing is mis-attributed:
+--   this block is ARCHITECT'S authorship OF SEC'S finding, with Sec's load-bearing
+--   sentences quoted and attributed. The review document carried the finding, not
+--   a drop-in block.
+--
+--   "It edits no function body … and no cashflow row" and "it does not touch the
+--   cashflow domain" are both LITERALLY TRUE. A reader takes from them that
+--   fn_gl_entries' output is invariant under this migration. IT IS NOT.
+--
+--   Measured — re-verified at authoring against the tree, not relayed:
+--     · 037:220 `ut.cat as flow_class`, fed by 037:225
+--       `left join pfin.user_taxonomy ut on ut.id = ann.sub_cat_id` — NO DOMAIN
+--       PREDICATE. flow_class drives the P3 standard-cash contra (037:308-320).
+--     · 037:349 `left join pfin.user_taxonomy ut on ut.id = s.sub_cat_id`, the P4
+--       split-child contra — NO DOMAIN PREDICATE; branches on ut.cat directly.
+--     · 023:200-205 and 029:116-119 each record, in their OWN DOMAIN NOTE, that
+--       matched-DOMAIN (domain='cashflow') is NOT enforced in V1 — app-layer only.
+--       The matched-TENANT trigger fires; the domain does not.
+--
+--   ⇒ A same-tenant ASSET-domain user_taxonomy row is a permissible sub_cat_id
+--   target at the DB layer today. For any annotation or split pointing at one:
+--     BEFORE 082 — ut.cat = 'Equity' matched the Equity branch, so entry_account
+--                  = 'Equity' and entry_class = 'equity': an asset STORAGE class
+--                  posting as the GL ACCOUNTING class, bypassing 028's enum
+--                  entirely, because that enum constrains user_taxonomy rows at
+--                  WRITE time and not the routing join.
+--     AFTER 082  — 'Marketable Securities' matches no branch, so else →
+--                  entry_account = 'Suspense', entry_class = 'suspense'.
+--
+--   Sec's disposition, quoted: "Direction is FAIL-SAFE and the change is an
+--   improvement". Postings stay balanced (only the contra label moves), Suspense
+--   is the visible bucket, and the new routing is the CORRECT one — an asset
+--   storage class was never a valid posting class. The annotation UI offers
+--   cashflow-domain rows only, so this is not the normal path. ADR-058 Decision 1
+--   closes it structurally: once the cashflow rows live in pfin.posting_prototype
+--   and 023 / 029 re-target, an asset row cannot be pointed at at all.
+--
+--   ⚠⚠ THE REUSABLE HALF, AND WHY THIS BLOCK LIVES IN THIS FILE. Sec, quoted:
+--   "A future rename in the *other* direction — an asset Cat renamed *into* a
+--   cashflow-class name — would traverse the identical unfenced join and mis-post
+--   SILENTLY." This migration is fail-safe by DIRECTION, not by FENCE. If you are
+--   that future renamer, you are reading the right file: check the two joins above
+--   before assuming a label change cannot reach the GL.
+--   No battery leg is required for this in this PR (Sec): the leg belongs with the
+--   split PR, where the hazard is resolved by construction rather than narrowed.
 --
 -- ----------------------------------------------------------------------------
 -- Numbering: 082 follows 081, taken at authoring time against the live listing,
@@ -205,11 +266,17 @@
 --        tables move together — see the REACH DECISION block. 041's two seed
 --        INSERTs (`on conflict (domain, cat, sub_cat) do nothing`) precede this
 --        migration in the chain and do not re-run.
---   (W5) NO DDL-LEVEL CONSUMER KEYS ON THE OLD LABEL. Predicate: `'Equity'` does
---        not occur in 076 / 077 / 080 / 081 or in any other migration outside
---        028 / 035 / 037 / 041 — measured above. The asset-side label-keyed
---        consumers key on 'Cash' and 'Liabilities', which this migration does
---        not touch.
+--   (W5) NO DDL-LEVEL CONSUMER KEYS ON THE OLD LABEL. Predicate, SCOPED — and the
+--        scope is load-bearing rather than pedantry (Sec finding B2, 2026-08-19):
+--        AS OF 081, AND EXCLUDING THIS FILE, `'Equity'` does not occur in 076 /
+--        077 / 080 / 081, nor in any migration outside 028 / 035 / 037 / 041.
+--        ⚠ UNSCOPED, THE SENTENCE IS FALSIFIED BY THE FILE THAT CARRIES IT the
+--        moment it lands: re-running the cited command on this branch also returns
+--        082 (19 lines), so a reader following the instruction gets a result that
+--        contradicts the claim beneath it. The load-bearing half — which file
+--        holds which label — is unaffected by the scoping. The asset-side
+--        label-keyed consumers key on 'Cash' and 'Liabilities', which this
+--        migration does not touch.
 --   (W6) ALL FOUR Decision-3 REFERENTS ARE UNTOUCHED. Predicate: they reference
 --        pfin.user_taxonomy(id); ids are not written by this migration. A label
 --        change is not a re-point.
