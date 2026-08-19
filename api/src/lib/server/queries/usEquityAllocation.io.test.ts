@@ -43,7 +43,9 @@ function makeSupabase(opts: {
 describe('loadUsEquityAllocation — I/O wiring', () => {
 	it('a well-formed round trip reaches the compute core with matching values', async () => {
 		const { client } = makeSupabase({
-			rpcData: [{ sub_cat_id: 6, cat: 'Equity', sub_cat: 'US-06-Financials', market_value: 300 }],
+			rpcData: [
+				{ sub_cat_id: 6, cat: 'Marketable Securities', sub_cat: 'US-06-Financials', market_value: 300 }
+			],
 			targetData: [{ sub_cat_id: 6, target_percent: 10 }],
 			taxonomyData: [{ id: 6, sub_cat: 'US-06-Financials' }]
 		});

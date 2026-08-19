@@ -1,0 +1,126 @@
+-- ============================================================================
+-- Migration: pfin.user_taxonomy — comment-only correction of the superseded
+-- V1-WRITE-DORMANT / "authenticated holds SELECT ONLY" claim on 009's
+-- `comment on table`. Phase 6 Build Loop. ADR-058 follow-up inventory item 9,
+-- assigned to the first migration of the GL-split work; this PR is that work.
+--
+-- WHAT THIS DOES: re-issues `comment on table pfin.user_taxonomy` with TWO
+-- substituted spans. It creates, alters and drops nothing. No DDL, no policy, no
+-- grant, no trigger, no function, no data change.
+--
+-- WHY: 009's catalog comment asserts "V1-WRITE-DORMANT ... authenticated holds
+--   SELECT ONLY ... Write policies + write grants are DEFERRED to the V2
+--   taxonomy-CRUD-UI PR". That was TRUE WHEN 009 SHIPPED and was falsified on the
+--   INSERT half by 041, which added an authenticated INSERT grant and the
+--   user_taxonomy_insert policy. The claim UNDERSTATES the live write surface,
+--   which is the direction that matters: a reader at \d+ with no repo in front
+--   of them would conclude no authenticated caller can write this table.
+--
+-- WHY THE SECOND SPAN: the same comment described service_role's non-involvement
+--   by naming the mechanism: it said the seed runs at a full local database
+--   reset, under admin. ⚠ THE ORIGINAL PHRASE IS DESCRIBED HERE RATHER THAN
+--   QUOTED, deliberately -- quoting it verbatim trips the repo's own guard, and
+--   prose written ABOUT a grep-shaped fence is the densest concentration of the
+--   tokens that fence hunts. That subcommand has been BANNED outright for all
+--   agents since the 2026-08-14
+--   shared-DB wipe (docs/records/2026-08-14-db-reset-incident.md), so the live
+--   catalog was naming a forbidden procedure as the way this table gets seeded.
+--   ⚠ THE POINT THE ORIGINAL WAS MAKING IS PRESERVED, not dropped: service_role
+--   is not the seeder. Only the mechanism reference is replaced, because it is
+--   the half that is now wrong. It was found by the repo's own mechanical guard,
+--   which refused a commit carrying the phrase -- a guard doing exactly its job
+--   on text that had been carried verbatim without being re-read.
+--
+-- WHY A NEW MIGRATION RATHER THAN AN EDIT TO 009 (the vehicle follows WHERE THE
+--   TEXT LIVES — Sec ruling at 055): a `comment on ...` has a DATABASE
+--   representation. It ships into pg_description and can only change by issuing
+--   new SQL, so an edit to the merged 009 file would leave the false text in
+--   every deployed catalog. 075 is the precedent shape.
+--   ⚠ 009's FILE-HEADER `--` block carries the same dormancy language in about a
+--   dozen places and is DELIBERATELY LEFT ALONE. This is not half a correction,
+--   and the reasoning is the point: Sec's 055 in-place path exists for text that
+--   is WRONG ABOUT THE WORLD. A migration file header is a record of WHAT THAT
+--   MIGRATION DID, and 009's is accurate about 009 — it granted SELECT only and
+--   deferred the write grants. 041 later added INSERT, which does not falsify
+--   009's account of itself. The CATALOG comment is different in exactly the way
+--   Step 1.5(a) of the apply-migration discipline names: it ships into
+--   pg_description and is read at \d+ as a description of the table's CURRENT
+--   state, by a reader with no "as of 009" framing and no repo to check against.
+--   That asymmetry — not the wording, which is nearly identical — is why one
+--   half is corrected and the other is not.
+--
+-- ⚠ WHAT THIS DOES NOT CLAIM. It does not assert what the table WILL hold after
+--   the ADR-058 split: `domain` is still present, the two-domain sentence is
+--   still accurate, and this migration deliberately does not anticipate the split
+--   PR. A correctness claim must not forward-reference the mechanism that would
+--   make it true.
+--
+-- ----------------------------------------------------------------------------
+-- Numbering: 083 follows 082, taken at authoring time against the live listing,
+--   not reserved. Depends on 009 (the comment target). ORDER-INDEPENDENT of 082,
+--   which ships in the same PR: 082 changes rows, this file changes text, and
+--   neither reads the other.
+--
+-- ----------------------------------------------------------------------------
+-- POSTURE RATIONALE — no function authored. This migration defines no SECURITY
+--   INVOKER and no SECURITY DEFINER function; `set search_path = ''` is N/A (it
+--   is a function-body guard). The SECURITY DEFINER allowlist is UNCHANGED — read
+--   it live at ADR-011 Decision 9; this file states no count.
+--
+-- ----------------------------------------------------------------------------
+-- §10 3-AXIS CROSS-CHECK (Path B — ADR-011 Decision 4 REFERENCED, read verbatim
+--   and live before drafting; the catalogued list is NOT restated and no count is
+--   carried). This migration introduces ZERO catalogued §10 instances.
+--     (i)   Instance-numbering: UNCHANGED — nothing added, reordered, renumbered.
+--     (ii)  Layer-attribution: UNCHANGED — no catalogued instance's layer moves
+--           and no surface becomes "four-layer". No grant or ACL is touched.
+--     (iii) Verbatim-vs-paraphrase: Decision 4 is LINKED, not restated.
+--   ⚠ The §10 CATALOGUED set and the CI-FENCED set are DIFFERENT SETS; this
+--   migration changes neither and reconciles neither.
+--   LEDGER STATUS: FLAT.
+--
+-- ----------------------------------------------------------------------------
+-- DECISION 3 (cross-tenant FK-bypass family) EVALUATION — +0 AT OBJECT SCOPE AND
+--   AT PR SCOPE. This file adds no column of any kind, FK-shaped or otherwise,
+--   and neither does 082 (a data UPDATE). Read ADR-011 Decision 3 live for the
+--   family; this file carries no tally.
+--
+-- ----------------------------------------------------------------------------
+-- HOW THE REPLACEMENT TEXT WAS PRODUCED (the 052 shape — regenerate and diff,
+-- never retype):
+--   1. TWO anchored substitutions against the literal as it stands in 009, each
+--      asserted to match EXACTLY ONCE and asserted DISJOINT AND ORDERED.
+--      Measured: 1 occurrence each; span 1 ends before span 2 begins.
+--   2. CONTAINMENT PROOF, preferred to counting diff regions because it makes a
+--      positive claim about everything that did NOT change: the two replaced
+--      spans partition the literal into THREE unchanged regions -- the prefix,
+--      the text between the spans, and the suffix -- and all three were verified
+--      BYTE-IDENTICAL between old and new. Measured: region1_identical = true,
+--      region2_identical = true, region3_identical = true; 1083 chars -> 1621
+--      chars. ⚠ Two spans is a WEAKER structural claim than one, which is why
+--      the proof is stated per region rather than as "one contiguous span".
+--   3. PARSE-IN-ROLLBACK: applied inside a transaction and rolled back, proving
+--      the literal parses.
+--   4. RENDER-VERIFY via obj_description(), reading the comment back AS THE
+--      CATALOG RENDERS IT — a doubled '' leaking into rendered text is invisible
+--      in source.
+--   ⚠ The stronger claim available for a comment-only migration, and it is made
+--   here: this file contains NO non-comment SQL other than the single
+--   `comment on table` statement, so no behaviour changes at all.
+--
+-- ----------------------------------------------------------------------------
+-- CONTRACT
+--   One statement: comment on table pfin.user_taxonomy.
+--   Security-load-bearing edges: the corrected text states the LIVE grant surface
+--   (SELECT + INSERT to authenticated, UPDATE/DELETE default-denied at both the
+--   ACL and RLS layers). It names 041 as the event that added INSERT — a dated,
+--   durable past-tense event, not a present-tense repo-state claim — and it names
+--   the superseded wording so a reader who remembers the old text learns it
+--   changed rather than doubting their memory. The second span keeps
+--   service_role's non-involvement and stops the catalog naming a banned
+--   procedure.
+--   ⚠ NO fail-closed mechanism is removed or weakened by this migration.
+-- ============================================================================
+
+comment on table pfin.user_taxonomy is
+  'Per-user two-level Cat × Sub-Cat taxonomy (ADR-011 Decision 11 / Lock 7, Option A single-table; SELF-231). Covers asset (§2.2.1) + cash-flow (§2.3.1) domains via the domain CHECK. Carries the ADR-006 Axis 2 tax_relevant boolean + tax_character enum (5 V1 values). V1 is SEED-ONLY (no taxonomy-CRUD UI; V2+ expansion) and V1-MUTATE-DORMANT: authenticated holds SELECT + INSERT. 041 added the INSERT grant and the user_taxonomy_insert policy (with check users_id = auth.uid(), carrying the 025 aal2 backstop clause) so a user can provision their own default taxonomy on first access. UPDATE and DELETE carry no grant and no policy, so they are default-denied at BOTH the ACL layer and the RLS layer; un-deferring them is the V2 taxonomy-CRUD-UI PR decision and needs its own review. SUPERSESSION: this comment previously read "V1-WRITE-DORMANT ... authenticated holds SELECT ONLY ... Write policies + write grants are DEFERRED to the V2 taxonomy-CRUD-UI PR" -- true when 009 shipped, falsified by 041 on the INSERT half, corrected here. anon zero-grant; service_role ungranted (the default set is seeded by the migration chain under the schema-owning role, not by service_role; the CLI reset subcommand named by the original wording is BANNED for all agents -- see docs/records/2026-08-14-db-reset-incident.md). This is the sub_cat_id FK target that 004 deferred — that future FK is a separate Decision-3 evaluation (referencing row users_id must match user_taxonomy.users_id), added with the FK, not here. AC-vs-convention corrections: AC SERIAL→identity, AC INTEGER users_id→uuid (auth.users.id is uuid) — see 009 header.';

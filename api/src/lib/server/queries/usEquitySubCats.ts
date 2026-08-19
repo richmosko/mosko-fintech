@@ -1,7 +1,9 @@
 // usEquitySubCats.ts — the twelve US-equity Sub-Cat labels, DDL-copied verbatim from migration
-// 041 (pfin.taxonomy_default seed, cat = 'Equity'). Backend-owned server surface (ARCH §4.1
-// allowlist). Single source of truth for BOTH consumers so the list can never drift between
-// them:
+// 041 (pfin.taxonomy_default seed, cat = 'Marketable Securities' post-ADR-058 Decision 7 rename
+// — 'Equity' pre-rename; this file names none of these twelve as its own Cat literal, only the
+// SUB-Cat labels below, which are unaffected by the Cat rename). Backend-owned server surface
+// (ARCH §4.1 allowlist). Single source of truth for BOTH consumers so the list can never drift
+// between them:
 //   - SELF-238 (§2.2.2 Non-RE allocation): EXCLUDES these twelve from its per-Sub-Cat row set
 //     and folds their market_value + target_percent into the single computed "US - Sector
 //     Diversified" row (076/238 AC2a — no taxonomy row exists for that row; none is created).
@@ -10,7 +12,7 @@
 //
 // Verified against supabase/migrations/041_taxonomy_default_and_provisioning.sql (display_order
 // 100-210) at authoring time — read live if this ever needs re-verifying, never trust a copy of
-// a copy. All twelve are cat = 'Equity'.
+// a copy. All twelve are cat = 'Marketable Securities' (post-rename; 'Equity' pre-rename).
 
 /** Display order matches the 041 seed (100, 110, ..., 210) — the array order below IS the
  *  §2.2.3 row order (240 AC1 lists them in this exact sequence). */

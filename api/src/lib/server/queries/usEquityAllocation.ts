@@ -29,7 +29,7 @@ export type UsEquityRow = {
 	 *  regardless of held/target state" is honored literally even in that edge case: the row
 	 *  still renders, with market_value/target_percent both defaulting to 0 as if zero-held). */
 	sub_cat_id: number | null;
-	cat: 'Equity';
+	cat: 'Marketable Securities';
 	sub_cat: string;
 	/** null when Σ(twelve target_percents) = 0 (AC5 ii) — never NaN. A real 0 is a real target;
 	 *  null means "no target basis to renormalize against at all". */
@@ -118,7 +118,7 @@ export function computeUsEquityAllocation(
 		const dollar_target = targetRatio === null ? null : targetRatio * totalUsEquity;
 		return {
 			sub_cat_id: r.id,
-			cat: 'Equity',
+			cat: 'Marketable Securities',
 			sub_cat: r.label,
 			pct_target: targetRatio === null ? null : targetRatio * 100,
 			pct_alloc: allocRatio === null ? null : allocRatio * 100,

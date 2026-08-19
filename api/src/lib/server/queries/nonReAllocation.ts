@@ -28,10 +28,21 @@ import { US_EQUITY_SUB_CAT_SET, US_SECTOR_DIVERSIFIED_LABEL } from './usEquitySu
 /** The fixed §2.2.2 Cat-group header order (PRD §2.2.2 / AC2). Real Estate is never a member —
  *  076 excludes it entirely at p_include_real_estate=false, and this module's own taxonomy
  *  enumeration filters it out independently (see computeNonReAllocation) since 076's exclusion
- *  does not reach the SEPARATE full-catalog read this surface adds. */
-const CAT_GROUP_ORDER = ['Cash', 'Bonds', 'Equity', 'Alternatives', 'Liabilities'] as const;
+ *  does not reach the SEPARATE full-catalog read this surface adds.
+ *
+ *  EXPORTED (ADR-058 Decision 7) so the paired DB-Cat-set equality assertion imports THIS array
+ *  rather than a hand-maintained copy — a copy could itself drift from what this module actually
+ *  uses, which would make the assertion test its own duplicate instead of the real fail-open
+ *  surface. See nonReAllocation.catGroupOrderEquality.server.test.ts. */
+export const CAT_GROUP_ORDER = [
+	'Cash',
+	'Bonds',
+	'Marketable Securities',
+	'Alternatives',
+	'Liabilities'
+] as const;
 
-/** The collapsed row's sort position within the Equity group: 100 is 041's `display_order` for
+/** The collapsed row's sort position within the Marketable Securities group: 100 is 041's `display_order` for
  *  `US-01-Basic_Materials`, the first of the twelve it replaces — a defensible, deterministic
  *  choice tied to real seed data. No AC specifies collapsed-row placement; this is a rendering
  *  judgment call, not a ratified requirement. */
@@ -169,7 +180,7 @@ export function computeNonReAllocation(
 	const collapsedRow: AllocationRow = {
 		kind: 'us_sector_diversified',
 		sub_cat_id: null,
-		cat: 'Equity',
+		cat: 'Marketable Securities',
 		sub_cat: US_SECTOR_DIVERSIFIED_LABEL,
 		pct_target: collapsedTargetPercent,
 		pct_alloc: safeAllocFraction(collapsedMarketValue, total_non_re),
@@ -177,7 +188,10 @@ export function computeNonReAllocation(
 		dollar_alloc: collapsedMarketValue,
 		dollar_realloc: collapsedDollarTarget - collapsedMarketValue
 	};
-	(rowsByCat.get('Equity') ?? rowsByCat.set('Equity', []).get('Equity')!).push(collapsedRow);
+	(
+		rowsByCat.get('Marketable Securities') ??
+		rowsByCat.set('Marketable Securities', []).get('Marketable Securities')!
+	).push(collapsedRow);
 	displayOrderById.set(-1, US_SECTOR_DIVERSIFIED_DISPLAY_ORDER); // synthetic id for the sort below
 
 	const groups: AllocationCatGroup[] = CAT_GROUP_ORDER.map((cat) => {
