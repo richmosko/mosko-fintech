@@ -116,4 +116,16 @@ me catching the reviewer's derived one.
 - Do **not** silently fix a reviewer's verbatim text. Measure, hold, report the one word
   — then commit what they re-issue.
 
+⚠ **The third thing verbatim carry is unsafe for: text naming a PROCEDURE that has since
+been BANNED.** At `083` I re-emitted `009`'s catalog comment with one anchored span
+corrected; the untouched remainder described the seeding mechanism as the CLI reset
+subcommand, banned outright since the 2026-08-14 wipe. **The repo's own mechanical guard
+refused the commit** — and it was right: the live catalog was naming a forbidden
+procedure. A claim can stay true while the *action it names* becomes prohibited, so a
+fidelity check passes and the text is still wrong to ship. **Before re-emitting any
+carried span, re-read it for named procedures, not just for claims and figures.**
+⚠ And when you then explain the fix, **describe the banned phrase — do not quote it**:
+prose written *about* a grep-shaped fence is the densest concentration of the tokens that
+fence hunts, and quoting it trips the guard a second time.
+
 Related: [[watcher-not-fence-for-by-construction-properties]] · [[diff-filter-strips-comment-lines]] · [[scope-the-invariant-before-writing-it]] · [[cited-precedent-transmits-its-retracted-half]] · [[count-over-history-vs-live-definitions]]
