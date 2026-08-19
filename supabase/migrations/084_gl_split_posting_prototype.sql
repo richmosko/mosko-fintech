@@ -249,11 +249,27 @@
 --     that one. ⚠ Contrast the (P2) pattern, which exists precisely for a
 --     referenced table that is global for SOME rows and tenant-owned for others;
 --     pfin.tax_character has no such second case.
---   posting_prototype_default carries neither a users_id nor any FK at all.
+--   posting_prototype_default carries NO users_id, and ONE FK-shaped column:
+--     tax_character -> pfin.tax_character(code) on delete restrict. Same
+--     disposition as posting_prototype's copy above — a tenant-dimensionless
+--     global registry, so no tenant to match, so not a family member.
+--     ⚠ This is a STRENGTHENING, not a mirror. pfin.taxonomy_default constrains
+--     the same column with a CHECK rather than an FK (041), so the two default
+--     tables do NOT share a posture here. Stated so a later consistency pass
+--     does not demote the FK to make the two look alike.
 --
 -- >> The per-column form is deliberate. << "No new FK-shaped column" would have
 -- been FALSE as a bare sentence — tax_character is one — and a reviewer checking
 -- it against the DDL would have found the discrepancy and been right to.
+--
+-- ⚠ AND IT HAPPENED ANYWAY, one table over. This block's first version made the
+-- bare claim it disclaims — "posting_prototype_default carries neither a users_id
+-- nor any FK at all" — while that table's own DDL, twelve lines further down this
+-- file, declares tax_character as a reference. Sec caught it at the merge-gate
+-- joint-review by doing exactly what the paragraph above invites. Corrected here,
+-- and recorded rather than quietly fixed, because the lesson is that adopting a
+-- checkable form does not perform the check: SOMEONE still has to run it against
+-- the DDL, column by column, including the table that looks too simple to matter.
 --
 -- TWO EXISTING INSTANCES RE-TARGET. Sec's numbering pin (transcribed VERBATIM into
 -- ADR-058 Decision 5; that transcription is the only text this file may assert on
