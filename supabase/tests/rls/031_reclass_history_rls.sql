@@ -21,7 +21,8 @@
 --   - the migration's backfill INSERT...SELECT (birth v1 for history-less 023 rows).
 -- Prereqs on the reset stack: 001 (pfin), 003 (account + creator-grant rd=t/wr=t), 004
 --   (account_trans + immutability pattern), 006 (account_users rd_access), 009 (user_taxonomy),
---   023 (the overlay host + its #10/trade triggers), 030 (023.metadata — 031 versions it).
+--   023 (the overlay host + its #10/trade triggers), 030 (023.metadata — 031 versions it), 084
+--   (GL split — cashflow sub_cat_id fixtures now seed pfin.posting_prototype, the 023 retarget).
 --
 -- ┌─ ROLE MODEL ───────────────────────────────────────────────────────────────────────────┐
 -- │ Capture (AC3), immutability (AC1), DEFINER-priv checks (AC2a/b), snapshot (AC5), backfill │
@@ -71,7 +72,7 @@
 --   (4b) changed_by = A's uid (the DEFINER helper resolves auth.uid()) — RED if attribution lost.
 --   (4c) two-tenant read isolation: B reads 0 of A's history — RED if the parent-chain SELECT
 --        policy leaked.
---   (5a) snapshot truth: history.sub_cat_id survives deletion of the referenced user_taxonomy
+--   (5a) snapshot truth: history.sub_cat_id survives deletion of the referenced posting_prototype
 --        row (no FK) — RED if a FK/cascade made the audit lie about the past.
 --   (6a) backfill-birth: a pre-existing history-less 023 row gets a v1 op=insert row.
 --   (6b) backfill idempotent: a re-run adds no duplicate (NOT EXISTS).
@@ -124,9 +125,9 @@ insert into pfin.account_trans (account_id, transaction_date, amount, vendor, de
 insert into pfin.account_trans (account_id, transaction_date, amount, vendor, description)
   values (:accta, '2026-04-04', -50, 'vBF', 'backfill') returning trans_id as ct_bf \gset
 
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat) values (:'ta','cashflow','Expense','Groceries') returning id as a_exp \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat) values (:'ta','cashflow','Expense','Rent') returning id as a_exp2 \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat) values (:'ta','cashflow','Expense','SnapCat') returning id as a_snap \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat) values (:'ta','Expense','Groceries') returning id as a_exp \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat) values (:'ta','Expense','Rent') returning id as a_exp2 \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat) values (:'ta','Expense','SnapCat') returning id as a_snap \gset
 
 -- =====================================================================
 -- AC3 — CAPTURE CORRECTNESS (postgres; the DEFINER capture helper runs as owner regardless).
@@ -229,13 +230,14 @@ select ok(
 
 -- =====================================================================
 -- AC5 — SNAPSHOT TRUTH (postgres): history.sub_cat_id survives deletion of the referenced
---   user_taxonomy row (no FK). Set up ct_snap -> a_snap (history v1 snapshots a_snap), then
---   move the LIVE 023 row off a_snap so the taxonomy row is deletable (023 FK is ON DELETE
---   RESTRICT — only a live reference blocks it), then delete a_snap and assert the snapshot.
+--   posting_prototype row (no FK). Set up ct_snap -> a_snap (history v1 snapshots a_snap), then
+--   move the LIVE 023 row off a_snap so the posting_prototype row is deletable (023's retargeted
+--   FK is ON DELETE RESTRICT — only a live reference blocks it), then delete a_snap and assert
+--   the snapshot.
 -- =====================================================================
 insert into pfin.account_trans_annotation (trans_id, sub_cat_id) values (:ct_snap, :a_snap);
 update pfin.account_trans_annotation set sub_cat_id = :a_exp where trans_id = :ct_snap;  -- live row off a_snap
-delete from pfin.user_taxonomy where id = :a_snap;                                        -- now unreferenced-live -> deletable
+delete from pfin.posting_prototype where id = :a_snap;                                    -- now unreferenced-live -> deletable
 select is(
   (select sub_cat_id from pfin.account_trans_annotation_history where trans_id = :ct_snap and version_seq = 1),
   :a_snap::bigint,

@@ -102,11 +102,11 @@ select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 -- ---------------------------------------------------------------------
 insert into auth.users (id) values (:'ta'), (:'tb');
 
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat, tax_relevant, tax_character)
-  values (:'ta', 'asset', 'Brokerage', 'US Equity', true, 'qualified_dividend')
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, tax_relevant, tax_character)
+  values (:'ta', 'Brokerage', 'US Equity', true, 'qualified_dividend')
   returning id as a_row \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'tb', 'asset', 'Brokerage', 'US Equity');
+insert into pfin.user_taxonomy (users_id, cat, sub_cat)
+  values (:'tb', 'Brokerage', 'US Equity');
 
 -- =====================================================================
 -- BLOCK A — GLOBAL shared-read (the golden property; INVERSE of 009 isolation).
@@ -191,21 +191,21 @@ select set_config('role', 'postgres', true);
 -- =====================================================================
 -- (c1) BOGUS tax_character code fails closed with foreign_key_violation (23503).
 select throws_ok(
-  format($$ insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat, tax_character)
-              values (%L, 'asset', 'Brokerage', 'FK Bogus', 'not_a_real_code') $$, :'ta'),
+  format($$ insert into pfin.user_taxonomy (users_id, cat, sub_cat, tax_character)
+              values (%L, 'Brokerage', 'FK Bogus', 'not_a_real_code') $$, :'ta'),
   '23503', null,
   '(c1) FK integrity: a bogus tax_character code raises foreign_key_violation (23503) — fails closed (RED if the FK were dropped: with no CHECK either, a bad value would insert)'
 );
 -- (c2) VALID code ('ordinary') succeeds — non-vacuous positive (guards an over-strict/wrong-target FK).
 select lives_ok(
-  format($$ insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat, tax_character)
-              values (%L, 'asset', 'Brokerage', 'FK Valid', 'ordinary') $$, :'ta'),
+  format($$ insert into pfin.user_taxonomy (users_id, cat, sub_cat, tax_character)
+              values (%L, 'Brokerage', 'FK Valid', 'ordinary') $$, :'ta'),
   '(c2) FK integrity: a valid tax_character code (''ordinary'') INSERTs successfully (FK targets tax_character(code) correctly; not over-strict)'
 );
 -- (c3) NULL tax_character succeeds — the nullable contract is preserved (asset-domain dormant-NULL).
 select lives_ok(
-  format($$ insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat, tax_character)
-              values (%L, 'asset', 'Brokerage', 'FK Null', null) $$, :'ta'),
+  format($$ insert into pfin.user_taxonomy (users_id, cat, sub_cat, tax_character)
+              values (%L, 'Brokerage', 'FK Null', null) $$, :'ta'),
   '(c3) FK integrity: a NULL tax_character INSERTs successfully (nullable contract preserved; asset-domain dormant-NULL)'
 );
 

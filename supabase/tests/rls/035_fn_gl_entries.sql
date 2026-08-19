@@ -28,7 +28,9 @@
 --   Trade); 029 (account_trans_split — per-child cat, Σ=parent); 030 (transaction_type vocab
 --   {standard,acct_setup,basis_adjust,corp_action} + metadata jsonb); 033 (pfin.journal + the #12
 --   matched-tenant leg fence); 034 (basis_adjust metadata.reason ∈ {depreciation,return_of_capital,
---   wash_sale} + the reason trigger). auth.jwt() reads request.jwt.claims (PG 17 stack).
+--   wash_sale} + the reason trigger); 084 (GL split — cashflow taxonomy rows now live in
+--   pfin.posting_prototype, no domain column; fn_gl_entries re-issued to join it, alias ut→pp).
+--   auth.jwt() reads request.jwt.claims (PG 17 stack).
 --
 -- ┌─ WHY THE FIXTURE IS NON-VACUOUS (the isolation + Suspense teeth) ────────────────────────────┐
 -- │ ISOLATION: tenant A owns a RICH GL-producing ledger (3 accounts, 2 currencies, a BUY + a       │
@@ -124,19 +126,20 @@ insert into pfin.asset (users_id, asset_type, pricing_source, symbol, name)
   values (null, 'equity', 'market_feed', 'GLSEC1', 'Global Sec 1') returning asset_id as sec1 \gset
 
 -- ---------------------------------------------------------------------
--- Tenant A taxonomy (cashflow domain; cat ∈ the 028 5-class enum). A-owned (matched-tenant for the
--- #10 sub_cat fence + the 029 split fence — leg tenant chain-resolves to A == taxonomy.users_id).
+-- Tenant A taxonomy (cashflow vocabulary, post-084 split; cat ∈ the 028 5-class enum, now on
+-- pfin.posting_prototype). A-owned (matched-tenant for the #10 sub_cat fence + the 029 split
+-- fence — leg tenant chain-resolves to A == posting_prototype.users_id).
 -- ---------------------------------------------------------------------
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'ta', 'cashflow', 'Revenue',  'Salary')    returning id as tx_a_rev  \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'ta', 'cashflow', 'Expense',  'Groceries') returning id as tx_a_exp  \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'ta', 'cashflow', 'Transfer', 'Move')      returning id as tx_a_xfer \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat)
+  values (:'ta', 'Revenue',  'Salary')    returning id as tx_a_rev  \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat)
+  values (:'ta', 'Expense',  'Groceries') returning id as tx_a_exp  \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat)
+  values (:'ta', 'Transfer', 'Move')      returning id as tx_a_xfer \gset
 
 -- Tenant B taxonomy (the minimal control ledger).
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'tb', 'cashflow', 'Revenue', 'Salary') returning id as tx_b_rev \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat)
+  values (:'tb', 'Revenue', 'Salary') returning id as tx_b_rev \gset
 
 -- ---------------------------------------------------------------------
 -- Tenant A accounts: USD cash + USD investment + EUR cash (the per-currency axis).

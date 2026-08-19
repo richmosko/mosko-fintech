@@ -167,14 +167,14 @@ select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 -- ---------------------------------------------------------------------
 insert into auth.users (id) values (:'ta'), (:'tb');
 
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'ta', 'asset', 'Brokerage', 'US Equity')
+insert into pfin.user_taxonomy (users_id, cat, sub_cat)
+  values (:'ta', 'Brokerage', 'US Equity')
   returning id as a_sub \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'ta', 'asset', 'Real Estate', 'Primary Home')
+insert into pfin.user_taxonomy (users_id, cat, sub_cat)
+  values (:'ta', 'Real Estate', 'Primary Home')
   returning id as a_sub2 \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'tb', 'asset', 'Brokerage', 'US Equity')
+insert into pfin.user_taxonomy (users_id, cat, sub_cat)
+  values (:'tb', 'Brokerage', 'US Equity')
   returning id as b_sub \gset
 
 insert into pfin.asset (users_id, asset_type, pricing_source, name)
