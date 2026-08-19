@@ -46,3 +46,17 @@ falsifies it, (2) run that command, (3) if it holds, is anything watching it, (4
 fence now and hand over the normalization detail. Related:
 [[measure-the-fence-regex-not-its-comment]] and
 [[corrupt-the-control-canary-boundary-tie]].
+
+**Companion — a ONE-TIME mechanism offered as a PERMANENT invariant.** The GL-split ADR draft
+(2026-08-18) wrote: *"the new table's identity sequence is set past the maximum so no id is ever
+reused on either side"*, concluding *"every historical snapshot remains resolvable against exactly
+one table."* The mechanism delivers the conclusion **only at the migration instant** — two
+independent identity sequences both advanced past a shared max then run forward in parallel and
+collide on the very next insert each. **Ask of every stated mechanism: does it hold at t=0 only, or
+by construction forever?** The tell is a mechanism phrased as an ACTION ("is set past…") supporting a
+claim phrased as a STATE ("remains resolvable"). Remediation shape is always the same: replace the
+action with a construction (one shared sequence, or disjoint reserved ranges) and make the battery
+assert the **construction**, not a point-in-time count. ⚠ And the point-in-time battery leg the draft
+proposed was **vacuous on a fresh CI stack**, where the property holds by construction rather than by
+verification — the "fresh-stack CI is clean by construction" trap in
+[[a-red-whose-message-names-the-wrong-defect]].

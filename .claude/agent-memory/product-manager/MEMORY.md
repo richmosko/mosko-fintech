@@ -8,3 +8,4 @@
 - [V1.2 manual-bucket re-home](project_v12_manual_bucket_rehome.md) — §2.2.1 is per-ASSET (022-junction-compatible); post-048 nothing carries a manual account's bucket; F/CTO A-vs-B ruling pending.
 - [Cash-bucket granularity](project_cash_bucket_granularity.md) — LANDED 2026-08-17: (a), label = "Cash Balances" (F/CTO-fixed); §3.3 footnote ratified+landed; Architect still owes the §7.20 seed delta. Read before 238/240 ACs.
 - [Target-denominator β ruling](project_target_denominator_beta_ruling.md) — targets are hierarchical; §2.2.3 renormalizes at display; two-way door, p.5 check at parity time.
+- [GL-brainstorm PM positions](project_gl_brainstorm_pm_positions.md) — 08-18: grain=V2 gate, S1+flip trigger, rename 2 conditions, posting_template=V2; verify vs landed ADR.
