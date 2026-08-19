@@ -21,6 +21,7 @@
 - [The merge key is a tenant fence](feedback_merge_key_choice_is_a_tenant_fence.md) — joining two RLS'd reads on a global id fails CLOSED (leak → zero); joining on a label fails OPEN (labels are shared vocabulary). Comment the construction site, not the lookup.
 - [Two functions, two partitions — check the axis before the arithmetic](feedback_two_functions_two_partitions_axis_mismatch.md) — an `account_type` filter and a taxonomy-`cat` filter are not interchangeable; measure `prosrc`, diff both member sets, and separate "code wrong" from "AC unsatisfiable".
 - [Verify the stated correctness mechanism](feedback_verify_the_stated_correctness_mechanism.md) — "textual identity across N copies" / a declared `STABLE` is a testable claim; measure it, normalize leading whitespace, fence it WHILE it holds.
+- [A grep over comments measures intent, not data](feedback_a_grep_over_comments_measures_intent_not_data.md) — a partition claim proved by grepping migration COMMENTS; when the rule is app-layer the ROWS can violate it. Triage violations by failure DIRECTION — the FK-less audit snapshot is the silent one.
 
 - [Backup rotation prunes its own recovery points](feedback_backup_rotation_prunes_its_own_recovery_points.md) — run the DEFENDED event through the retention policy; check dump file mode + cloud sync; never-blocking ⇒ never-watched.
 

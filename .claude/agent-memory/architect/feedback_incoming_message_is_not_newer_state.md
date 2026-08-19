@@ -56,4 +56,22 @@ which is exactly when several agents are working one item, i.e. when it matters.
 - Corollary already learned elsewhere and the same family: never forward a sha, count or
   status a teammate reported — re-read it in the same turn you relay it.
 
+**Confirmed instance, 2026-08-18 (worked — repeat it).** Team-lead pinged that my
+addendum was absent from the shared `temp/` file. I MEASURED instead of re-writing:
+`ls -l` + `wc -l` + `grep -n` for the section heading + **`md5`**, all in one command,
+and replied with the figures rather than a reassurance. Team-lead re-ran and the md5
+matched. **The cause was ORDERING, not paths** — the idle notification fired ahead of
+the deliverable landing, and the ping crossed the delivery message in flight.
+- **Shipping an `md5` (or any single comparable scalar) is what ends this in ONE round.**
+  Line counts and greps prove the file is right; only a shared digest proves *both sides
+  are looking at the same bytes*. Without it the exchange degenerates into re-describing
+  contents at each other.
+- **Do not offer to re-deliver as the first move.** Offer it as the fallback, explicitly
+  ranked below "check the absolute path / compare this digest" — a pointer that resolves
+  is cheaper than a paste, and a re-write would have destroyed the evidence that the
+  original write was fine.
+- ⚠ **Resist the plausible-but-wrong diagnosis.** I reached first for the gitignored-
+  `temp/`-is-per-worktree explanation, which is real and is in my notes — and was not
+  what happened. Name a hypothesis as a hypothesis and let the measurement pick.
+
 Related: [[address-teammates-by-name-not-type]] · [[spot-check-the-contract-at-its-consumer]]

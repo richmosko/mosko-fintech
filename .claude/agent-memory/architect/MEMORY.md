@@ -4,6 +4,7 @@
 
 - [053 CPI positivity CHECK follow-up](project_053_cpi_positivity_check_followup.md) — pointer only; canonical home is **BACKLOG §7.14** with Sec's four binding conditions. ⚠ `> 0` alone re-admits NaN *and* Infinity.
 
+- **[GL taxonomy split RATIFIED but UNLANDED](project_gl_taxonomy_split_ratified.md)** — 2026-08-18 two-function split (`posting_prototype`); design + ADR draft live ONLY in gitignored `temp/`. Check whether it landed FIRST; delete this memory if so.
 - **[Schema-impossible ACs trace to the incumbent](reference_schema_impossible_ac_traces_to_incumbent.md)** — the folded ETL still names `pfin.asset_cat`; "wrong AC" vs "different system" changes the disposition, and the masked residual is the load-bearing part.
 
 ## Postgres / RLS facts worth not re-deriving
@@ -22,13 +23,15 @@
 
 - **[A self-authored label hardens into fact](feedback_self_authored_label_hardens_into_fact.md)** — I invented `C1` for symmetry and it reached a commit subject, which has NO supersession mechanism. Grep the dispatch, not your own earlier use.
 
+- **[A "clean sweep" is a claim about your FILTER](feedback_clean_sweep_claim_is_a_claim_about_the_filter.md)** — over-match bare + `-i`, then hand-filter; zero hits is more suspicious than explained hits. Survivors hide in adjacent-reads-as-fixed positions.
 - **[A count over history is not a count over live definitions](feedback_count_over_history_vs_live_definitions.md)** — 6 textual kernel copies vs 3 live; a CI fence specced from the historical count goes RED on correct code. Case-insensitive grep, or `059` reads as empty.
 
+- **["No concept exists today" needs an ADR grep, not a DDL sweep](feedback_no_concept_exists_check_deferred_decisions.md)** — a ratified-but-DEFERRED decision leaves zero DDL trace; a read helper's string literals ARE a schema surface. The inverse of the line below.
 - **[A ratified name is not a built table](feedback_ratified_name_is_not_a_built_table.md)** — the whole Lock-14 settings family was named in 6 artifacts with ZERO DDL; grep migrations first, and the shape you ratify templates every unbuilt sibling.
 - **[Scope the invariant before writing it](feedback_scope_the_invariant_before_writing_it.md)** — "always equal / NULL together" is usually falsified by the surface's own NULL-cause rows. One message in a draft; a migration after merge.
 - **[A diff of two outputs proves nothing until both are non-empty](feedback_diff_of_two_outputs_proves_nothing_until_nonempty.md)** — two empty captures diff as IDENTICAL; `wc -l` both in the same command as the diff.
 - **[Verify the bytes you commit](feedback_verify_the_bytes_you_commit.md)** — copy FIRST, then verify the copy. Verifying a teammate's source and copying later let a concurrent edit in; my commit message then described bytes I never checked.
-- **[An incoming message is not newer state](feedback_incoming_message_is_not_newer_state.md)** — a holder doc describes its own moment, not a status feed. ⚠ Also the inverse: a stale "you didn't do it" poke gets MEASURED, never redone — and an **unpushed** branch makes every origin-anchored check read as *never done*.
+- **[An incoming message is not newer state](feedback_incoming_message_is_not_newer_state.md)** — a holder doc describes its own moment, not a status feed. ⚠ Also the inverse: a stale "you didn't do it" poke gets MEASURED, never redone (ship an **md5** — it ends it in one round); an **unpushed** branch makes every origin-anchored check read as *never done*.
 - **[Address teammates by NAME, not agent type](feedback_address_teammates_by_name_not_type.md)** — `frontend` not `frontend-engineer`; ⚠ `ListAgents` cannot see in-process teammates, so its silence is not absence.
 
 - **[Watcher, not fence, for by-construction properties](feedback_watcher_not_fence_for_by_construction_properties.md)** — a constraint over a guaranteed property can't fire and turns a future regression into an outage. Test it instead.
