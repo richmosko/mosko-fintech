@@ -14,9 +14,13 @@
 --   asset-domain Sub-Cat the caller HOLDS VALUE IN, plus AT MOST ONE unclassified
 --   row (all three taxonomy columns NULL — R2, the silent-money-leak guard).
 --   market_value COALESCEs to 0 (R3). EMPTY PORTFOLIO = EMPTY SET. Closed accounts
---   excluded on the 059 three-conjunct dated predicate. domain='asset' enforced IN
---   THE JOIN, not the WHERE, so a cash-flow-classified holding degrades to the
---   unclassified row instead of vanishing. p_include_real_estate=false excludes
+--   excluded on the 059 three-conjunct dated predicate. PRE-084: domain='asset' was
+--   enforced IN THE JOIN, not the WHERE, so a cash-flow-classified holding degraded
+--   to the unclassified row instead of vanishing. POST-084 (ADR-058 Decision 1): the
+--   join carries no domain predicate at all — user_taxonomy is asset-only by
+--   construction, and a cross-vocabulary reference is rejected at WRITE time by
+--   022's own fence before it can ever reach this function's read (see (U1-REJECT)
+--   below) — true by table identity, not by a runtime conjunct. p_include_real_estate=false excludes
 --   cat='Real Estate' ENTIRELY (no row); Alternatives/REIT is a DIFFERENT cat and
 --   is NOT swept; the unclassified row is NEVER excluded by the flag.
 --   ⚠ L1 (cannot fix here): cash resolves to ONE Sub-Cat per user per currency via
@@ -62,15 +66,21 @@
 -- │ hold real value and the predicate is exercised on genuine money, not a phantom.  │
 -- └───────────────────────────────────────────────────────────────────────────────────┘
 --
--- ┌─ ITEM 2 — THE UNCLASSIFIED ROW IS THE HIGHEST-VALUE ASSERTION ──────────────────┐
+-- ┌─ ITEM 2 — THE UNCLASSIFIED ROW IS THE HIGHEST-VALUE ASSERTION, RE-DERIVED AT 084 ┐
 -- │ Two DIFFERENT ways to land unclassified, both value-preserving: secx has NO      │
--- │ user_asset_category row at all (200.00); secy HAS a junction row, but it points  │
--- │ at a CASH-FLOW-domain Sub-Cat (135.00) — the join condition `ut.domain='asset'`  │
--- │ (076:264) means this junction row's LEFT JOIN to user_taxonomy misses, so it     │
--- │ degrades to the NULL bucket exactly like the no-junction case, rather than       │
--- │ vanishing or leaking under a bogus key. (U1) asserts BOTH land in the SAME       │
--- │ NULL/NULL/NULL row, summing to EXACTLY 335.00 — a classified-totals-only battery │
--- │ would pass while this 335.00 silently vanished (an INNER JOIN regression).       │
+-- │ user_asset_category row at all (200.00); secy's junction row is now REJECTED     │
+-- │ AT WRITE TIME (135.00) — pre-084 it landed and degraded via a join-condition     │
+-- │ miss (`ut.domain='asset'`); post-084 there is no domain to miss on, because a    │
+-- │ cross-vocabulary reference is now STRUCTURALLY IMPOSSIBLE (Decision 5 Finding    │
+-- │ (b), independently confirmed by Architect from the migration side, same shape as │
+-- │ self200's (v1)): 022's own #8 fence rejects the INSERT outright (P0001), so secy │
+-- │ ends up with NO junction row at all — mechanically identical to secx's case, not │
+-- │ merely coincidentally the same total. (U1-REJECT) proves the write is refused;   │
+-- │ (U1) then asserts the SAME 335.00 total, via the SAME mechanism as secx (no      │
+-- │ junction row exists) rather than a join miss on one that does. This is a         │
+-- │ coverage STRENGTHENING: the R2 money-leak class this leg exists to catch is now  │
+-- │ prevented one layer earlier, at write time, not merely degraded safely at read   │
+-- │ time.                                                                            │
 -- └───────────────────────────────────────────────────────────────────────────────────┘
 --
 -- ┌─ ITEM 3 — POPULATION DIVERGENCE IS ENCODED, NOT RECONCILED ─────────────────────┐
@@ -173,7 +183,7 @@ begin;
 -- shared verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(22);
+select plan(23);
 
 \set ta '00000000-0000-0000-0000-000000000a76'
 \set tb '00000000-0000-0000-0000-000000000b76'
@@ -214,18 +224,18 @@ insert into pfin.eod_price (asset_id, price_date, source, price) values
 -- ---------------------------------------------------------------------
 -- Tenant A taxonomy — REAL seeded vocabulary (041), not invented text.
 -- ---------------------------------------------------------------------
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat) values
-  (:'ta','asset','Equity','US-06-Financials') returning id as a_eq \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat) values
-  (:'ta','asset','Real Estate','Residential') returning id as a_re \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat) values
-  (:'ta','asset','Alternatives','REIT') returning id as a_alt \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat) values
-  (:'ta','asset','Cash','CD') returning id as a_cd \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat) values
-  (:'ta','cashflow','Revenue','Dividend') returning id as a_cf \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat) values
-  (:'tb','asset','Equity','US-06-Financials') returning id as b_eq \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat) values
+  (:'ta','Marketable Securities','US-06-Financials') returning id as a_eq \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat) values
+  (:'ta','Real Estate','Residential') returning id as a_re \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat) values
+  (:'ta','Alternatives','REIT') returning id as a_alt \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat) values
+  (:'ta','Cash','CD') returning id as a_cd \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat) values
+  (:'ta','Revenue','Dividend') returning id as a_cf \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat) values
+  (:'tb','Marketable Securities','US-06-Financials') returning id as b_eq \gset
 
 -- ---------------------------------------------------------------------
 -- TENANT A — a_inv (investment; secx unclassified, secy cashflow-misclassified,
@@ -271,15 +281,29 @@ select set_config('pfin.actor', 'system:remediation', true);
 select set_config('pfin.reason_code', 'no_longer_used', true);
 update pfin.account set closed_at = '2026-07-15'::timestamptz where account_id = :a_close;
 
--- classify: secy -> cashflow Sub-Cat (misclass, degrades to NULL bucket); secq ->
---   Equity; secre -> Real Estate; secalt -> Alternatives/REIT; the GLOBAL USD
---   currency-asset (asset_id=1, seeded 016) -> Cash/CD. secx and secz: NO junction row.
+-- classify: secq -> Equity; secre -> Real Estate; secalt -> Alternatives/REIT; the
+--   GLOBAL USD currency-asset (asset_id=1, seeded 016) -> Cash/CD. secx and secz:
+--   NO junction row (secx deliberately; secz because it has zero position by the
+--   query date). secy: see (U1-REJECT) below, POST-084 -- the attempt to classify
+--   it against a_cf (now a posting_prototype id) is itself the assertion.
 insert into pfin.user_asset_category (users_id, asset_id, sub_cat_id) values
-  (:'ta', :secy, :a_cf),
   (:'ta', :secq, :a_eq),
   (:'ta', :secre, :a_re),
   (:'ta', :secalt, :a_alt),
   (:'ta', 1, :a_cd);
+
+-- (U1-REJECT) POST-084: the pre-split fixture classified secy against a_cf (then a
+--   cashflow-domain user_taxonomy row) to demonstrate a join-condition miss. Post-
+--   split a_cf lives in posting_prototype; user_asset_category.sub_cat_id's FK still
+--   targets user_taxonomy only (022, UNCHANGED by 084 — Decision 1). The attempt is
+--   REJECTED by 022's own #8 fence (P0001) before it ever reaches a table -- this IS
+--   the coverage strengthening ITEM 2's header box describes: the cross-vocabulary
+--   reference this leg used to construct can no longer be constructed at all.
+select throws_like(
+  format($$ insert into pfin.user_asset_category (users_id, asset_id, sub_cat_id) values (%L, %s, %s) $$, :'ta', :secy, :a_cf),
+  '%is not a taxonomy row owned by users_id%',
+  '(U1-REJECT) POST-084: classifying secy against a_cf (a posting_prototype id) is REJECTED by 022''s #8 fence -- the cross-vocabulary reference (U1) used to exercise via a join-miss is now structurally impossible to even construct'
+);
 
 -- ---------------------------------------------------------------------
 -- TENANT B — isolation control. b_inv funded to net exactly 60.00, holding
@@ -376,12 +400,14 @@ select set_config('role', 'postgres', true);
 -- UNCLASSIFIED (U1-U2) — item 2, the highest-value assertion.
 -- =====================================================================
 select _rls.set_tenant(:'ta'::uuid);
--- (U1) the unclassified row sums EXACTLY 335.00 = secx (200, no junction) + secy
---      (135, junction present but cashflow-domain -> degrades via the join miss).
+-- (U1) POST-084: the unclassified row sums EXACTLY 335.00 = secx (200, no junction)
+--      + secy (135, ALSO no junction now -- (U1-REJECT) proved the classification
+--      attempt itself is rejected, so secy lands here via the SAME mechanism as
+--      secx, not a join-condition miss on a row that exists).
 select is(
   (select market_value from pfin.fn_subcat_market_value('2026-07-25'::date, true) where sub_cat_id is null),
   335.00::numeric,
-  '(U1) ⭐ unclassified row = EXACTLY 335.00 = secx (200.00, NO junction row) + secy (135.00, junction row present but points at a CASH-FLOW-domain Sub-Cat, so the `ut.domain=''asset''` join condition misses and it degrades to NULL rather than vanishing). A classified-totals-only battery would pass while this 335.00 silently disappeared (the R2 money-leak this function exists to prevent)'
+  '(U1) ⭐ unclassified row = EXACTLY 335.00 = secx (200.00, NO junction row) + secy (135.00, NO junction row either -- (U1-REJECT) proved the write is refused, not merely that it degrades). A classified-totals-only battery would pass while this 335.00 silently disappeared (the R2 money-leak this function exists to prevent)'
 );
 -- (U2) the unclassified row''s cat and sub_cat are BOTH NULL (structural, not just
 --      sub_cat_id) — a real Sub-Cat could not accidentally alias into this bucket.
@@ -557,8 +583,8 @@ select array_agg(asset_id order by asset_id) as psecs
   from pfin.asset where symbol like 'SBP76-%' \gset
 insert into pfin.eod_price (asset_id, price_date, source, price)
   select unnest(:'psecs'::bigint[]), '2026-07-01', 'market_feed', 100.00;
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  select :'tp', 'asset', 'Equity', 'US-Perf-Sub-' || g from generate_series(1, 10) g;
+insert into pfin.user_taxonomy (users_id, cat, sub_cat)
+  select :'tp', 'Marketable Securities', 'US-Perf-Sub-' || g from generate_series(1, 10) g;
 select array_agg(id order by id) as psubs
   from pfin.user_taxonomy where users_id = :'tp' \gset
 insert into pfin.account (users_id, name, account_type, scope, tax_treatment)

@@ -136,7 +136,7 @@ begin;
 -- shared verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(14);  -- was 17; BLOCK 4 write-dormant assertions removed at the 038 un-dorm amendment
+select plan(15);  -- was 17 pre-038, 14 post-038 (BLOCK 4 write-dormant assertions removed), +1 (2e) conversion leg at 084
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
@@ -170,12 +170,17 @@ insert into pfin.account_trans (account_id, transaction_date, amount, vendor, de
 insert into pfin.account_trans (account_id, transaction_date, amount, vendor, description)
   values (:acctb, '2026-02-05', 70, 'vB1', 'B parent') returning trans_id as tb_p1 \gset
 
--- A + B each own a cashflow Sub-Cat (ratified enum). a_sub is the matched referent;
--- b_sub is the cross-tenant referent the #13 fence must reject.
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'ta', 'cashflow', 'Expense', 'Groceries') returning id as a_sub \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'tb', 'cashflow', 'Expense', 'Groceries') returning id as b_sub \gset
+-- A + B each own a posting prototype (ratified enum) — POST-084 these are
+-- pfin.posting_prototype rows, not pfin.user_taxonomy (ADR-058 Decision 1's split).
+-- a_sub is the matched referent; b_sub is the cross-tenant referent the #13 fence
+-- must reject. a_asset_sub is NEW: an asset-domain (storage-side) user_taxonomy
+-- row, for the (2e) conversion leg.
+insert into pfin.posting_prototype (users_id, cat, sub_cat)
+  values (:'ta', 'Expense', 'Groceries') returning id as a_sub \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat)
+  values (:'tb', 'Expense', 'Groceries') returning id as b_sub \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat)
+  values (:'ta', 'Brokerage', 'US Equity') returning id as a_asset_sub \gset
 
 -- =====================================================================
 -- BLOCK 1 — Σ=parent DEFERRABLE balance trigger (RUNS FIRST; owns all SET CONSTRAINTS
@@ -279,6 +284,16 @@ select throws_ok(
   format($$ update pfin.account_trans_split set sub_cat_id = %s where id = %s $$, :b_sub, :fence_child),
   'P0001', null,
   '(2d) #13 fence covers UPDATE: re-categorizing a split line to another tenant''s Sub-Cat RAISES (fence fires BEFORE UPDATE, not only INSERT)'
+);
+-- (2e) CONVERSION LEG (mirrors 023 F2b): A's OWN storage-side (asset) user_taxonomy
+--   id as a split child's sub_cat_id -> REJECTED. Pre-084 this succeeded (029's own
+--   DOMAIN NOTE: app-layer only); post-084 the fence's resolving read into
+--   posting_prototype finds nothing (a_asset_sub lives in user_taxonomy only).
+select throws_like(
+  format($$ insert into pfin.account_trans_split (account_trans_id, sub_cat_id, amount)
+              values (%s, %s, 30) $$, :ta_p3, :a_asset_sub),
+  '%is not a posting prototype owned by the tenant of account_trans_id%',
+  '(2e) CONVERSION: A references its OWN storage-side (asset) user_taxonomy id as a split child''s sub_cat_id -> REJECTED -- mirrors 023 F2b, same cross-vocabulary-reference-now-impossible property'
 );
 -- remove BLOCK-2 rows so the parent-chain read/view blocks see only ta_p1's 3 children.
 delete from pfin.account_trans_split where account_trans_id = :ta_p3;

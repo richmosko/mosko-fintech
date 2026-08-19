@@ -50,23 +50,24 @@
 -- │     row; cross-tenant reads fail closed in both directions.           │
 -- └─────────────────────────────────────────────────────────────────────┘
 --
--- ⚠ QA DECISION (Architect's flagged item, ADR-058 Decision 7 package,
---   `080_taxonomy_default_liability_balances_rls.sql:92` inserts a
---   user-authored `(ta,'asset','Equity','US-06-Financials')` fixture row):
---   NOT touching that file. Every "does the legacy label remain" leg
---   below is scoped to (i) `pfin.taxonomy_default`, the seeded/global
+-- ⚠ QA DECISION (Architect's flagged item, ADR-058 Decision 7 package —
+--   HISTORICAL, kept for record; `080_taxonomy_default_liability_balances_rls.sql:92`
+--   was the citation at authoring time and its own N2-sweep patch has since
+--   renamed that row to ''Marketable Securities'' too, same as this file's own
+--   fixture literals): NOT touching that file. Every "does the legacy label
+--   remain" leg below is scoped to (i) `pfin.taxonomy_default`, the seeded/global
 --   table with no runtime writer, or (ii) THIS FILE'S OWN fixture tenants
 --   (ta/tb), never to an unscoped `count(*) from pfin.user_taxonomy`. Two
 --   independent reasons, either alone sufficient: (1) each battery file
 --   runs in its own `begin…rollback` transaction (pg_prove: one file, one
---   connection), so 080's fixture row cannot be live when this file runs
---   regardless; (2) even if cross-file leakage were possible,
+--   connection), so another file's fixture row cannot be live when this file
+--   runs regardless; (2) even if cross-file leakage were possible,
 --   `pfin.user_taxonomy` is a tenant-WRITABLE table — a real user can
---   author a Cat value matching any string at all (080:92 is exactly that
---   precedent) — so a global unscoped "zero rows anywhere" assertion on it
---   is inherently the wrong shape, independent of transaction isolation.
---   A per-leg edit to 080's fixture would be a global edit to that file
---   (Architect's note) for a problem this scoping avoids without one.
+--   author a Cat value matching any string at all — so a global unscoped
+--   "zero rows anywhere" assertion on it is inherently the wrong shape,
+--   independent of transaction isolation. A per-leg edit to another file's
+--   fixture would be a global edit to that file for a problem this scoping
+--   avoids without one.
 --
 -- §10 / DECISION 3 (Path B — ADR-011 Decision 4 REFERENCED, not restated;
 --   read live before drafting, no count/enumeration carried here, matching
@@ -113,9 +114,13 @@
 -- ⟦WIRE-VALIDATE⟧ authored + fixture-verified via pg_prove (TAP-aware —
 --   never bare psql) against a postgres-owned scratch DB carrying the full
 --   001->083 migration chain (non-destructive; `supabase db reset` never
---   invoked). plan(16): 5 seeded-state (S1-S5) + 6 reach/control (R1-R6) +
+--   invoked). RE-VERIFIED against 001->084 (ADR-058's split — S1-S5/R1-R6/
+--   ISO1-3/INV1/CONFIRM all re-derived for the domain-column drop and the
+--   cashflow-control-row retarget to posting_prototype; amended in place per
+--   the batteries-are-freely-editable §7.16 precedent, not a fresh file).
+--   plan(16): 5 seeded-state (S1-S5) + 6 reach/control (R1-R6) +
 --   3 isolation (ISO1-ISO3) + 2 inversion (INV1 + CONFIRM) = 16. GREEN,
---   16/16, `pg_prove` exit 0.
+--   16/16, `pg_prove` exit 0 against BOTH the 001->083 and the 001->084 stack.
 -- =====================================================================
 
 begin;
@@ -135,44 +140,43 @@ insert into auth.users (id) values (:'ta'), (:'tb');
 --   rename already ran for real against this table's seeded rows.
 -- =====================================================================
 
--- (S1) zero asset-domain 'Equity' rows remain in the seeded template.
+-- (S1) MECH POST-084: domain predicate dropped — taxonomy_default is asset-only.
 select is(
-  (select count(*) from pfin.taxonomy_default where domain = 'asset' and cat = 'Equity')::bigint,
+  (select count(*) from pfin.taxonomy_default where cat = 'Equity')::bigint,
   0::bigint,
-  '(S1) taxonomy_default: zero asset-domain ''Equity'' rows remain after the rename'
+  '(S1) taxonomy_default: zero ''Equity'' rows remain after the rename'
 );
 
--- (S2) exactly 15 asset-domain 'Marketable Securities' rows exist (ADR-058
---      Decision 7's own re-measurement: 15 rows, all under `041`).
+-- (S2) MECH POST-084: domain predicate dropped.
 select is(
-  (select count(*) from pfin.taxonomy_default where domain = 'asset' and cat = 'Marketable Securities')::bigint,
+  (select count(*) from pfin.taxonomy_default where cat = 'Marketable Securities')::bigint,
   15::bigint,
-  '(S2) taxonomy_default: exactly 15 asset-domain ''Marketable Securities'' rows (the renamed 041 set) exist'
+  '(S2) taxonomy_default: exactly 15 ''Marketable Securities'' rows (the renamed 041 set) exist'
 );
 
--- (S3) total row count is STILL 65 — a rename creates and destroys no row
---      (63 seeded at 041 + 077's Cash Balances + 080's Liability Balances).
+-- (S3) RE-DERIVED POST-084: was "taxonomy_default total STILL 65" (pre-split, one
+--      table). Post-split that total no longer lives in one table — RETARGET to
+--      the split-total invariant: no row was lost crossing the split.
+select is(
+  (select (select count(*) from pfin.taxonomy_default) + (select count(*) from pfin.posting_prototype_default))::bigint,
+  65::bigint,
+  '(S3) SPLIT-TOTAL INVARIANT: taxonomy_default + posting_prototype_default together still total 65 — the split redistributes rows across two tables, it does not create or destroy any (was: "taxonomy_default total STILL 65", meaningless as a single-table claim post-084)'
+);
+
+-- (S4) MECH POST-084: the whole table is asset-domain by construction now.
 select is(
   (select count(*) from pfin.taxonomy_default)::bigint,
-  65::bigint,
-  '(S3) taxonomy_default: total row count is STILL 65 — the rename changes a value column, not row cardinality'
-);
-
--- (S4) asset-domain total is STILL 38 — the rename moves rows BETWEEN Cat
---      values within the same domain, it does not change domain membership.
-select is(
-  (select count(*) from pfin.taxonomy_default where domain = 'asset')::bigint,
   38::bigint,
-  '(S4) taxonomy_default: asset-domain row count is STILL 38 — the rename reassigns `cat` within domain=''asset'', it does not move rows across domains'
+  '(S4) taxonomy_default: total row count is 38 (asset-only post-split) — the rename reassigns `cat`, it does not change row cardinality'
 );
 
--- (S5) cashflow-domain total is STILL 27 and UNTOUCHED — the domain='asset'
---      predicate is what keeps 028's cashflow-class enum (which ALSO
---      contains the literal 'Equity') out of scope.
+-- (S5) RETARGET POST-084: table changes from taxonomy_default WHERE
+--      domain='cashflow' to posting_prototype_default with no predicate — proves
+--      the SAME coverage-identical claim via table identity instead of a WHERE.
 select is(
-  (select count(*) from pfin.taxonomy_default where domain = 'cashflow')::bigint,
+  (select count(*) from pfin.posting_prototype_default)::bigint,
   27::bigint,
-  '(S5) taxonomy_default: cashflow-domain row count is STILL 27, entirely untouched — the domain filter keeps 028''s cashflow-class ''Equity'' out of scope'
+  '(S5) posting_prototype_default: total row count is 27, entirely untouched by the rename — table identity now keeps 028''s cashflow-class ''Equity'' out of scope (was: a domain=''cashflow'' filter on the same table the rename touched)'
 );
 
 -- =====================================================================
@@ -193,71 +197,78 @@ select is(
 --   worst-case failure of a blind sweep). B carries ONE row: the rename
 --   target only, a second independent tenant proving reach is a property
 --   of the WHERE clause, not an accident of A's specific setup.
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'ta', 'asset', 'Equity', 'REPLAY-Sector') returning id as a_eq_id \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'ta', 'asset', 'Bonds', 'REPLAY-Control') returning id as a_bonds_id \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'ta', 'cashflow', 'Equity', 'REPLAY-CF-Control') returning id as a_cf_id \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'tb', 'asset', 'Equity', 'REPLAY-Sector-B') returning id as b_eq_id \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat)
+  values (:'ta', 'Equity', 'REPLAY-Sector') returning id as a_eq_id \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat)
+  values (:'ta', 'Bonds', 'REPLAY-Control') returning id as a_bonds_id \gset
+-- POST-084: the cashflow control now lives in pfin.posting_prototype (ADR-058
+--   Decision 1's split), not pfin.user_taxonomy — see (R5)'s reworked mechanism below.
+insert into pfin.posting_prototype (users_id, cat, sub_cat)
+  values (:'ta', 'Equity', 'REPLAY-CF-Control') returning id as a_cf_id \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat)
+  values (:'tb', 'Equity', 'REPLAY-Sector-B') returning id as b_eq_id \gset
 
--- (R1) PRECONDITION — before replay, exactly 2 asset-domain 'Equity' rows
---      exist across the fixture tenants (A's and B's rename targets).
+-- (R1) MECH POST-084: domain predicate dropped.
 select is(
   (select count(*) from pfin.user_taxonomy
-    where domain = 'asset' and cat = 'Equity' and users_id in (:'ta', :'tb'))::bigint,
+    where cat = 'Equity' and users_id in (:'ta', :'tb'))::bigint,
   2::bigint,
-  '(R1) precondition: exactly 2 asset-domain ''Equity'' fixture rows exist (A''s and B''s rename targets) before the replay'
+  '(R1) precondition: exactly 2 ''Equity'' fixture rows exist (A''s and B''s rename targets) before the replay'
 );
 
--- REPLAY — 082's own statement 2, VERBATIM, re-invoked (080's precedent:
---   the only way to exercise a REACH statement against non-empty state).
+-- REPLAY — 082's own statement 2, RE-DERIVED POST-084: the `domain` column is
+--   gone from user_taxonomy by the time this battery executes (001..084 apply in
+--   order; 084 drops it after 082's own historical DDL already ran). Table
+--   identity now does what the domain conjunct used to — the cashflow control
+--   (a_cf_id) simply isn't in this table to be reached, regardless of predicate.
 update pfin.user_taxonomy
    set cat = 'Marketable Securities'
- where domain = 'asset'
-   and cat    = 'Equity';
+ where cat    = 'Equity';
 
 -- (R2) A's rename target: renamed, id/domain/sub_cat UNCHANGED — "label
 --      change, not a re-key," proven rather than asserted.
 select ok(
-  (select id = :a_eq_id and domain = 'asset' and sub_cat = 'REPLAY-Sector' and cat = 'Marketable Securities'
+  (select id = :a_eq_id and sub_cat = 'REPLAY-Sector' and cat = 'Marketable Securities'
      from pfin.user_taxonomy where id = :a_eq_id),
-  '(R2) A''s rename-target row: cat -> ''Marketable Securities'', id/domain/sub_cat UNCHANGED — a label change, not a re-key'
+  '(R2) A''s rename-target row: cat -> ''Marketable Securities'', id/sub_cat UNCHANGED — a label change, not a re-key'
 );
 
 -- (R3) B's rename target: same shape, a SECOND independent tenant — reach
 --      is a property of the WHERE clause, not an accident of A's setup.
 select ok(
-  (select id = :b_eq_id and domain = 'asset' and sub_cat = 'REPLAY-Sector-B' and cat = 'Marketable Securities'
+  (select id = :b_eq_id and sub_cat = 'REPLAY-Sector-B' and cat = 'Marketable Securities'
      from pfin.user_taxonomy where id = :b_eq_id),
-  '(R3) B''s rename-target row: cat -> ''Marketable Securities'', id/domain/sub_cat UNCHANGED — reach holds for a second, independent tenant'
+  '(R3) B''s rename-target row: cat -> ''Marketable Securities'', id/sub_cat UNCHANGED — reach holds for a second, independent tenant'
 );
 
--- (R4) CONTROL — same-domain, DIFFERENT Cat ('Bonds'): UNTOUCHED. Proves
---      `cat='Equity'` is a real filter, not "any asset-domain row."
+-- (R4) CONTROL — DIFFERENT Cat ('Bonds'): UNTOUCHED. Proves `cat='Equity'` is a
+--      real filter, not "any row."
 select ok(
-  (select id = :a_bonds_id and domain = 'asset' and cat = 'Bonds' and sub_cat = 'REPLAY-Control'
+  (select id = :a_bonds_id and cat = 'Bonds' and sub_cat = 'REPLAY-Control'
      from pfin.user_taxonomy where id = :a_bonds_id),
-  '(R4) CONTROL: A''s asset-domain ''Bonds'' row is completely untouched — the `cat=''Equity''` conjunct is a real filter, not a blanket asset-domain rename'
+  '(R4) CONTROL: A''s ''Bonds'' row is completely untouched — the `cat=''Equity''` conjunct is a real filter, not a blanket rename'
 );
 
--- (R5) CONTROL — cashflow-domain, SAME literal 'Equity' (028's GL
---      accounting class): UNTOUCHED. THE load-bearing proof from 082's own
---      header: "two different labels spelled identically."
+-- (R5) CONTROL, RETARGETED POST-084 — cashflow-domain, SAME literal 'Equity'
+--      (028's GL accounting class): UNTOUCHED. Pre-084 this was proven by a
+--      `domain='asset'` conjunct in a SHARED table; post-084 the proof mechanism
+--      is TABLE IDENTITY — a_cf_id lives in pfin.posting_prototype, which the
+--      REPLAY statement (scoped to pfin.user_taxonomy) cannot reach at all,
+--      regardless of predicate. Same property (Decision 5 Finding (b)), stronger
+--      mechanism — THE load-bearing proof from 082's own header: "two different
+--      labels spelled identically."
 select ok(
-  (select id = :a_cf_id and domain = 'cashflow' and cat = 'Equity' and sub_cat = 'REPLAY-CF-Control'
-     from pfin.user_taxonomy where id = :a_cf_id),
-  '(R5) ⭐ CONTROL: A''s cashflow-domain ''Equity'' row (028''s GL accounting class, the SAME literal string) is completely untouched — the `domain=''asset''` conjunct is what prevents corrupting fn_gl_entries'' contra routing'
+  (select cat = 'Equity' and sub_cat = 'REPLAY-CF-Control'
+     from pfin.posting_prototype where id = :a_cf_id),
+  '(R5) ⭐ CONTROL: A''s cashflow ''Equity'' row (028''s GL accounting class, the SAME literal string) is completely untouched — post-084 it lives in a DIFFERENT TABLE from the rename target, so table identity alone prevents the corruption (was: proven by a `domain=''asset''` conjunct in a shared table)'
 );
 
--- (R6) NO-LEAK TOTAL — zero asset-domain 'Equity' rows remain among the
---      fixture tenants after the replay (full reach, no partial rename).
+-- (R6) MECH POST-084: domain predicate dropped.
 select is(
   (select count(*) from pfin.user_taxonomy
-    where domain = 'asset' and cat = 'Equity' and users_id in (:'ta', :'tb'))::bigint,
+    where cat = 'Equity' and users_id in (:'ta', :'tb'))::bigint,
   0::bigint,
-  '(R6) no-leak total: zero asset-domain ''Equity'' rows remain among the fixture tenants after the replay'
+  '(R6) no-leak total: zero ''Equity'' rows remain among the fixture tenants after the replay'
 );
 
 -- =====================================================================
@@ -266,13 +277,13 @@ select is(
 -- =====================================================================
 select _rls.set_tenant(:'ta'::uuid);
 select is(
-  (select count(*) from pfin.user_taxonomy where domain = 'asset' and cat = 'Marketable Securities'),
+  (select count(*) from pfin.user_taxonomy where cat = 'Marketable Securities'),
   1::bigint,
   '(ISO1) under RLS as tenant A: sees exactly its OWN renamed Marketable Securities row'
 );
 select ok(
   not exists (
-    select 1 from pfin.user_taxonomy where domain = 'asset' and cat = 'Marketable Securities' and users_id = :'tb'
+    select 1 from pfin.user_taxonomy where cat = 'Marketable Securities' and users_id = :'tb'
   ),
   '(ISO2) under RLS as tenant A: B''s renamed row is NOT visible — cross-tenant read fails closed'
 );
@@ -281,53 +292,46 @@ select set_config('role', 'postgres', true);
 select _rls.set_tenant(:'tb'::uuid);
 select ok(
   not exists (
-    select 1 from pfin.user_taxonomy where domain = 'asset' and cat = 'Marketable Securities' and users_id = :'ta'
+    select 1 from pfin.user_taxonomy where cat = 'Marketable Securities' and users_id = :'ta'
   ),
   '(ISO3) under RLS as tenant B (reverse direction): A''s renamed row is NOT visible'
 );
 select set_config('role', 'postgres', true);
 
 -- =====================================================================
--- SECTION C — INVERSION-PROVE (the fence has teeth, not just a pass).
---   Replay the statement WITHOUT the `domain='asset'` conjunct and show
---   (R5)'s pass is a real fence, not a vacuous one. `throws_like` wraps the
---   probe in pgTAP's OWN internal sub-transaction (041's precedent — (2a)/
---   (5b)/(5d) call it bare, no manual savepoint needed; DESIGN.md's
---   plan-counter harness note is about a MANUAL `rollback to savepoint`
---   wrapping a PASSED assertion, which this is not).
+-- SECTION C — INVERSION-PROVE, RE-DERIVED POST-084 (the fence has teeth, not
+--   just a pass). PRE-084 this replayed the rename statement without its
+--   `domain='asset'` conjunct, against a SHARED table, to show 028's CHECK was
+--   a real second fence. POST-084 that exact replay is no longer meaningful:
+--   the REPLAY step above already dropped the domain conjunct (084 removed the
+--   column, so there IS no conjunct to drop) and by this point in the file every
+--   remaining 'Equity' row in user_taxonomy has ALREADY been renamed — a second
+--   identical UPDATE would just silently touch 0 rows, not raise, which is a
+--   WEAKER and DIFFERENT finding than this leg exists to prove.
 --
---   ⚠ MEASURED RESULT, NOT THE ONE ORIGINALLY EXPECTED — recorded because
---   it is a genuine, previously-undocumented finding. The naive/broken
---   statement (no domain conjunct) does NOT silently corrupt A's cashflow-
---   domain 'Equity' control row: it is REJECTED, because 'Marketable
---   Securities' is not a member of 028's user_taxonomy_cashflow_class_chk
---   enum (Revenue/Expense/Transfer/Equity/Trade). That CHECK constraint is
---   a SECOND, INDEPENDENT, SCHEMA-LEVEL fence against this exact
---   corruption direction — narrower than 082's own header claim ("the file
---   boundary is the ONLY thing that makes any substitution safe here"),
---   which is TRUE for a blind repo-wide text sweep (untestable from a DB
---   battery) but OVERSTATED for the migration's own SQL predicate: THIS
---   specific narrowing (dropping `domain='asset'`) would abort loudly, not
---   corrupt silently. Bubbled up rather than silently reconciled into the
---   header's prose.
+--   RE-DESIGNED around the two-table world's analogous mistake: a migration
+--   author reaches for the WRONG TABLE (posting_prototype, thinking "that's
+--   where a cashflow-tagged 'Equity' row would live") and tries the same rename
+--   there. `throws_like` wraps the probe in pgTAP's OWN internal sub-transaction
+--   (041's precedent — no manual savepoint needed).
 -- =====================================================================
 
--- (INV1) the naive replay (cat='Equity' only, no domain conjunct) RAISES —
---        028's CHECK constraint rejects 'Marketable Securities' as a
---        cashflow-class value before any row can be corrupted.
+-- (INV1) RE-DERIVED: the analogous mistake in a two-table world — running the
+--        rename against posting_prototype instead of user_taxonomy — RAISES.
+--        posting_prototype's own unconditional CHECK rejects 'Marketable
+--        Securities' as a cat value (not a member of the accounting-class enum).
 select throws_like(
-  $$ update pfin.user_taxonomy set cat = 'Marketable Securities' where cat = 'Equity' $$,
+  $$ update pfin.posting_prototype set cat = 'Marketable Securities' where cat = 'Equity' $$,
   '%violates check constraint%',
-  '(INV1) INVERSION-PROVE: with the `domain=''asset''` conjunct dropped, the naive replay is REJECTED by 028''s user_taxonomy_cashflow_class_chk (''Marketable Securities'' is not a valid cashflow class) — a SECOND, schema-level fence against this exact corruption, independent of the migration''s own domain filter'
+  '(INV1) INVERSION-PROVE, POST-084: the analogous mistake in a two-table world — running the rename against posting_prototype instead of user_taxonomy — is REJECTED by posting_prototype''s own unconditional CHECK (''Marketable Securities'' is not a member of the cat enum). Table identity alone already prevents reaching a_cf_id from a user_taxonomy-scoped statement (R5); this leg proves the CHECK is a genuine SECOND fence on the corrected table, not a redundant one now that table identity exists'
 );
 
--- (CONFIRM) — LAST assertion in the file: the rejected statement left A's
---   cashflow-domain control row untouched (throws_like's internal
---   sub-transaction discards the failed attempt; nothing was committed).
+-- (CONFIRM) RETARGETED — LAST assertion in the file: the rejected statement
+--   left A's cashflow control row (now in posting_prototype) untouched.
 select is(
-  (select cat from pfin.user_taxonomy where id = :a_cf_id),
+  (select cat from pfin.posting_prototype where id = :a_cf_id),
   'Equity',
-  '(CONFIRM) after the rejected inversion probe, A''s cashflow-domain control row still reads ''Equity'' — the failed attempt touched nothing'
+  '(CONFIRM) after the rejected inversion probe, A''s cashflow control row still reads ''Equity'' — the failed attempt touched nothing'
 );
 
 select * from finish();

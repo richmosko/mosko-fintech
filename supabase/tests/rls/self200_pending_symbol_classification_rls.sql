@@ -143,20 +143,19 @@ insert into pfin.asset (users_id, asset_type, pricing_source, name)
 insert into pfin.asset (users_id, asset_type, pricing_source, name)
   values (:'tb', 'collectible', 'manual_valuation', 'B owned asset') returning asset_id as b_asset \gset
 
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'ta', 'asset', 'Brokerage', 'US Equity') returning id as a_sub \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'ta', 'asset', 'Brokerage', 'Index Funds') returning id as a_sub2 \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'tb', 'asset', 'Brokerage', 'US Equity') returning id as b_sub \gset
--- SELF-235 QA addition (Block V, below): A's OWN cashflow-domain Sub-Cat — the KNOWN-GAP target.
---   Same tenant as A, but domain='cashflow', not 'asset'. Exists to prove the DB fence (#8) does
---   NOT check domain (022's own DOMAIN NOTE), only tenant.
--- domain='cashflow' rows are CHECK-constrained to the ADR-031 D3 class enum for `cat`
--- (Revenue/Expense/Transfer/Equity/Trade) — 'Revenue' here, verified against the live
--- user_taxonomy_cashflow_class_chk constraint before authoring this insert.
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'ta', 'cashflow', 'Revenue', 'Salary') returning id as a_cf_sub \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat)
+  values (:'ta', 'Brokerage', 'US Equity') returning id as a_sub \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat)
+  values (:'ta', 'Brokerage', 'Index Funds') returning id as a_sub2 \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat)
+  values (:'tb', 'Brokerage', 'US Equity') returning id as b_sub \gset
+-- SELF-235 QA addition (Block V, below), RE-DERIVED POST-084: A's OWN posting-prototype
+--   row (was cashflow-domain user_taxonomy pre-split) — the (v1) KNOWN-GAP target, which
+--   the split closes as a side effect of the FK re-target rather than via the domain-
+--   enforcement mechanism this note originally anticipated (see (v1) below for the flip).
+--   'Revenue' is a legitimate posting_prototype cat (Decision 4's enum).
+insert into pfin.posting_prototype (users_id, cat, sub_cat)
+  values (:'ta', 'Revenue', 'Salary') returning id as a_cf_sub \gset
 
 -- account_trans security-legs (privileged; 017 #7 fence passes — all global securities).
 --  A: buys g_voo; buys g_spy THEN sells g_spy to net-zero (2 rows, same security → proves
@@ -358,32 +357,37 @@ select set_config('role', 'postgres', true);
 -- =====================================================================
 select _rls.set_tenant(:'ta'::uuid);
 
--- (v1) ⚠ KNOWN-GAP, NOT A REGRESSION TO FIX HERE: A classifies g_spy (a global asset, passes #9)
---   with a_cf_sub — A's OWN Sub-Cat, but domain='cashflow' not 'asset'. The #8 trigger
---   (fn_user_asset_category_matched_sub_cat) checks ONLY that sub_cat_id's users_id matches the
---   row's users_id — it does not read domain at all (022's DOMAIN NOTE: "a one-line `and domain =
---   'asset'` addition later if desired" — not present). So this SUCCEEDS today. If it starts
---   throwing, DB-level domain enforcement was added — update this leg's expectation (lives_ok ->
---   throws_like) and this comment together, in the SAME commit as whatever migration added it.
-select lives_ok(
+-- (v1) POST-084: was lives_ok (KNOWN-GAP, domain-blind), now throws_like. a_cf_sub no
+--   longer resolves in user_taxonomy at all — it moved to posting_prototype under the
+--   same id (ADR-058 Decision 1/2). The KNOWN-GAP this leg documented closes as a side
+--   effect of the FK re-target, not via the domain-enforcement mechanism the ORIGINAL
+--   comment anticipated ("if DB-level domain enforcement is ever added, update lives_ok
+--   -> throws") — same outcome, different cause: 022's own #8 fence
+--   (fn_user_asset_category_matched_sub_cat, UNCHANGED by 084) does its own NOT-EXISTS
+--   resolving read into user_taxonomy, finds nothing, and RAISES its existing message.
+select throws_like(
   format($$ insert into pfin.user_asset_category (users_id, asset_id, sub_cat_id)
               values (%L, %s, %s)
             on conflict (users_id, asset_id) do update set sub_cat_id = excluded.sub_cat_id $$,
           :'ta', :g_spy, :a_cf_sub),
-  '(v1) KNOWN-GAP: A classifies g_spy with its OWN cashflow-domain Sub-Cat (a_cf_sub) — the #8 fence checks matched-TENANT only, not matched-DOMAIN (022 DOMAIN NOTE), so this SUCCEEDS today. App-layer isAssignableAssetSubCat is the ONLY domain fence (taxonomy.test.ts). Update this leg, not delete it, if DB-level domain enforcement is ever added'
+  '%is not a taxonomy row owned by users_id%',
+  '(v1) POST-084: A''s posting-prototype row (a_cf_sub) no longer resolves in user_taxonomy at all -> REJECTED by #8''s own unchanged fence code. The KNOWN-GAP this leg documented closes as a side effect of the FK re-target, not via the domain-enforcement mechanism the original comment anticipated -- same outcome, different cause'
 );
--- (v1v) non-vacuous: the row genuinely landed carrying the cashflow Sub-Cat (not a silent no-op).
+-- (v1v) POST-084: was a value-check (row landed carrying a_cf_sub); now an atomicity
+--   check (the row never lands -- no orphan (asset_id, sub_cat_id) pair after the
+--   rejected insert). g_spy stays unclassified.
 select is(
-  (select sub_cat_id from pfin.user_asset_category where users_id = :'ta' and asset_id = :g_spy)::bigint,
-  :a_cf_sub::bigint,
-  '(v1v) non-vacuous companion: (A, g_spy) now carries a_cf_sub — (v1)''s lives_ok is a REAL acceptance, not merely "did not throw" over a no-op'
+  (select count(*) from pfin.user_asset_category where users_id = :'ta' and asset_id = :g_spy)::bigint,
+  0::bigint,
+  '(v1v) POST-084 atomicity: after (v1)''s rejected insert, g_spy has NO (users_id, sub_cat_id) row for A -- the failed attempt landed nothing'
 );
 
--- (v-embed-1) RLS coverage for the loadSymbols() read SHAPE: the user_asset_category ->
---   user_taxonomy embedded join (PostgREST compiles `select('asset_id, sub_cat_id,
---   user_taxonomy ( cat, sub_cat )')` to this JOIN shape). Under A, the joined set of
---   (asset_id, sub_cat_id) pairs is EXACTLY {g_voo/a_sub, a_asset/a_sub2, g_spy/a_cf_sub} — B's
---   (g_qqq, b_sub) pair is absent, proving the embed doesn't leak B's junction row OR B's
+-- (v-embed-1) RLS coverage for the loadSymbols() read SHAPE, RE-DERIVED POST-084: the
+--   user_asset_category -> user_taxonomy embedded join. Under A, the joined set of
+--   (asset_id, sub_cat_id) pairs is EXACTLY {g_voo/a_sub, a_asset/a_sub2} — the THIRD
+--   pair (g_spy/a_cf_sub) no longer exists: (v1) proved that insert is REJECTED post-084,
+--   so g_spy stays unclassified and never enters this joined set at all. B's (g_qqq,
+--   b_sub) pair is absent, proving the embed doesn't leak B's junction row OR B's
 --   taxonomy label through the join.
 -- (asset_id,sub_cat_id) pairs are encoded as "assetid:subcatid" TEXT (not a composite/record
 -- comparison — PostgreSQL anonymous record types have no default array equality/ordering
@@ -396,22 +400,21 @@ select is(
      from pfin.user_asset_category c join pfin.user_taxonomy t on t.id = c.sub_cat_id),
   (select array_agg(x order by x) from (
      values (:g_voo::text || ':' || :a_sub::text),
-            (:a_asset::text || ':' || :a_sub2::text),
-            (:g_spy::text || ':' || :a_cf_sub::text)
+            (:a_asset::text || ':' || :a_sub2::text)
    ) v(x)),
-  '(v-embed-1) loadSymbols() embed-join shape under A = EXACTLY {(g_voo,a_sub), (a_asset,a_sub2), (g_spy,a_cf_sub)} — B''s (g_qqq,b_sub) pair is NOT present; the join leaks neither B''s junction row nor B''s taxonomy label'
+  '(v-embed-1) loadSymbols() embed-join shape under A = EXACTLY {(g_voo,a_sub), (a_asset,a_sub2)} POST-084 — g_spy/a_cf_sub is GONE (that insert is rejected, see (v1)); B''s (g_qqq,b_sub) pair is NOT present; the join leaks neither B''s junction row nor B''s taxonomy label'
 );
 select set_config('role', 'postgres', true);
 
 -- (v-embed-2) non-vacuous companion, reverse direction: under B the SAME joined shape is
 --   EXACTLY {(g_qqq, b_sub)} — unaffected by every write A made in this block, and does not
---   include any of A''s three pairs.
+--   include either of A''s two remaining pairs.
 select _rls.set_tenant(:'tb'::uuid);
 select is(
   (select array_agg(c.asset_id::text || ':' || c.sub_cat_id::text order by c.asset_id)
      from pfin.user_asset_category c join pfin.user_taxonomy t on t.id = c.sub_cat_id),
   array[:g_qqq::text || ':' || :b_sub::text],
-  '(v-embed-2) loadSymbols() embed-join shape under B = EXACTLY {(g_qqq,b_sub)} — none of A''s three pairs (including the (v1) cashflow-domain one just written) leak through the B-side join'
+  '(v-embed-2) loadSymbols() embed-join shape under B = EXACTLY {(g_qqq,b_sub)} — neither of A''s two remaining pairs leak through the B-side join'
 );
 select set_config('role', 'postgres', true);
 
