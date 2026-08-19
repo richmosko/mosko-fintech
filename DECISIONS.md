@@ -41,6 +41,378 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-058 — `user_taxonomy` conflates two functions: split the posting vocabulary out to `pfin.posting_prototype`, keep the storage spine in place, preserve every id
+
+**Date:** 2026-08-18 · **Status:** **Proposed** — every decision below is F/CTO-ratified (2026-08-18: the asymmetric split / Architect option 4a; sequencing S1 with its flip trigger; the `element` value set; the F1 id mechanism) and the Sec touchpoint is **COMPLETE with no veto**. ⚠ **`Proposed` refers to this ADR AS A DOCUMENT, not to its content** — it moves to `Accepted` when it is ratified *as written* at its landing doc-PR. Nothing in it is awaiting a decision.
+**Phase:** 6 Build Loop · **Surface:** `pfin.user_taxonomy` + `pfin.taxonomy_default` and their referents; a new `pfin.posting_prototype` (+ `pfin.posting_prototype_default`). **Source:** the F/CTO-directed taxonomy-vs-GL structural brainstorm, 2026-08-18; supersedes the schema-direction question staged at [BACKLOG](BACKLOG.md) §7.13 and subsumes the Chart-of-Accounts candidate at §5.7.
+**Pattern:** Consolidation — one structural question spanning classification vocabulary, GL posting semantics, the cross-tenant FK-bypass family, and a data migration.
+
+---
+
+### Context — the two-function frame, and why the flattening is not a naming problem
+
+`pfin.user_taxonomy` (`009`) is a per-user, fixed-depth `(domain, cat, sub_cat)` table with `domain ∈ {'asset','cashflow'}` and no parentage. It has carried two unrelated jobs since it was built.
+
+**F/CTO stated the model, verbatim (2026-08-18):**
+
+> *"domain::asset -> defines a type of account a thing stores it's book value in; domain::cashflow -> defines a GL Journal Entry prototype... list of accounts to debit/credit which sum to 0."*
+
+**And, separately, on the incumbent's categories:**
+
+> *"The transaction categories in the incumbant are functionally working as GL Journal Entry primitives... templates for complete journal entries associated with a transaction... imported or otherwise. We should be explicit with this going forward."*
+
+Restated and F/CTO-confirmed: `user_taxonomy` conflates a **storage-classification vocabulary** (the asset domain — an element is *intrinsic* to a storage class) with a **posting-rule vocabulary** (the cashflow domain — a prototype has no intrinsic element; its *legs* touch element-bearing accounts, and any element on a prototype row would be a derived property of its distinguished contra leg).
+
+**Three as-built facts make the conflation concrete rather than aesthetic.**
+
+1. **The cashflow half is already an accounting-class enum; the asset half is unconstrained free text.** `028` adds `user_taxonomy_cashflow_class_chk` — `domain <> 'cashflow' or cat in ('Revenue','Expense','Transfer','Equity','Trade')` — per [ADR-031](#adr-031) Decision 3 as amended by Amendment 1 item 1: *the Category IS the enforced accounting class*, with no `flow_class` and no `normal_balance` column because both derive. Nothing constrains the asset side.
+2. **The asset half already carries a mis-filed balance-sheet element.** `041` seeds `('asset','Liabilities', …)` — Credit-Balance / EstTax-Pending / Loan-Balance — and `080` added `Liability Balances`. The Asset-vs-Liability distinction is encoded in a **Cat name**, while the discriminator that actually works lives elsewhere: `pfin.account.account_type = 'liability'` (`003:96–99`), which [ADR-031](#adr-031) Decision 2 already names *"the one accounting class already in the schema"* and which `081` routes on.
+3. **The GL already derives counter-accounts from the cashflow Cat — at Cat grain, in one branch.** `fn_gl_entries` (`035`, completed at `037`) is a SECURITY INVOKER read helper emitting balanced postings; its body is eleven posting branches plus a position-removal branch and two memo legs. Multi-leg is the norm — a clean securities BUY emits three postings, `acct_setup` three, `basis_adjust` return_of_capital three, a split parent one-plus-N. **Exactly one branch is single-contra** (`standard`, no `security_id`, no split, non-zero amount), and it is the only place the Cat decides anything. The posting *branch* is selected by `transaction_type`, the immutable fact.
+
+Fact 3 is why F/CTO's "categories are journal-entry prototypes" is accurate about the system's **output** and not yet true of its **selector** — and why the fix is structural rather than a rename.
+
+---
+
+### Decision 1 — The asymmetric split: the posting vocabulary moves out; the storage spine stays where it is
+
+`pfin.user_taxonomy` **keeps its name, keeps its ids, keeps its asset rows**, and **drops `domain`**. It becomes, unambiguously, the storage-classification spine. A new `pfin.posting_prototype` (with a global `pfin.posting_prototype_default` mirroring the `taxonomy_default` posture) receives the cashflow rows.
+
+**Why asymmetric rather than moving both sides to new tables.** The four live cross-tenant FK-shaped referents of `user_taxonomy(id)` partition **cleanly two-and-two along exactly this seam** (Decision 5's measurement). Under the asymmetric shape, the two asset-side referents — `user_asset_category.sub_cat_id` (`022`) and `planning_target.sub_cat_id` (`074`) — **need no change at all**, because their FK target is unchanged. Only the two cashflow-side referents (`account_trans_annotation.sub_cat_id` at `023`, `account_trans_split.sub_cat_id` at `029`) re-target. That halves the referent churn, the fence rework, and the paired-battery rework, in exchange for one naming debt: `user_taxonomy` now means *storage classification*, which is what its asset domain always was.
+
+**Shape.**
+- `pfin.user_taxonomy`: cashflow rows copied out then deleted; `drop column domain`; unique key becomes `(users_id, cat, sub_cat)`; `028`'s CHECK dropped here (Decision 4); `element` added here **and on `pfin.taxonomy_default` in the same migration** (Decision 3 / Sec **F4**).
+- `pfin.posting_prototype`: `id` (Decision 2), `users_id` (sole tenant anchor — **not** a Decision-3 column), `cat`, `sub_cat`, `tax_relevant`, `tax_character`, `display_order`, `is_active`, `notes`, `created_at`, `updated_at`; `unique (users_id, cat, sub_cat)`; own RLS policies, own grants, the `025` aal2 backstop clause, and its own `fn_refresh_updated_at` trigger.
+
+  ⚠ **The write posture is PRESERVING, and every item is one the migration could plausibly get wrong in the direction of "easier"** (Sec **F5**). `users_id uuid not null default auth.uid() references auth.users (id) on delete cascade` — the `009` shape. SELECT policy `users_id = auth.uid()`; INSERT policy carrying **`041`'s `user_taxonomy_insert` aal2 clause VERBATIM** (Shape A, `041:356–365`) — not paraphrased, not re-derived. **Grants: `select` + `insert` to `authenticated` ONLY — no UPDATE, no DELETE.** ⚠ **The split is a change of home, not an occasion to un-defer mutate-dormancy; Sec will VETO any UPDATE/DELETE grant arriving in the split PR**, because un-deferring is the V2 CRUD PR's decision and needs its own review. `anon` zero-grant; **no `service_role` grant** — and none is needed, since `008` grants explicitly per table with no `alter default privileges`, making both new tables `service_role`-ungranted **by construction**. **Structural battery legs on the `074` S1/S2/S3a/S3b model**, asserting the policies exist and carry the aal2 clause in `polqual` and `polwithcheck` respectively.
+
+  ⚠ **Why those structural legs are not optional here, and it is a fact about the repo rather than a preference:** `025`'s battery is per-table behavioural, not an enumerative sweep, and **there is no repo-wide watcher asserting RLS is enabled on `pfin` tables** — a new table shipped with a missing policy or a missing aal2 clause would be caught by review or not at all. (Sec routes the standing gap — a catalog sweep asserting `relrowsecurity` across `pfin` — to BACKLOG as **F8**, explicitly *not* a gate on this ADR.)
+- `pfin.posting_prototype_default`: global shared-read, **no `users_id`, no FK** — the `041`/`taxonomy_default` posture, Decision-3-neutral.
+
+**What this ADR does NOT do — scope RATIFIED, not merely proposed.** F/CTO confirmed the scope 2026-08-18, verbatim: *"split only: follow on for template construction"*. It does not build the posting-template construct (template header + legs + amount rules) sketched during the brainstorm. `posting_prototype` is the *home* that construct will attach to; the construct itself needs its own options round, because a template that computes amounts is a small rules engine in the money path and carries its own Sec surface. ⚠ **It also does not re-open [ADR-031](#adr-031) Decision 3's event-class-vs-flow-class partition.** Making the Cat the authoritative class source for *every* row — rather than only for `standard` cash rows — would amend a Sec-conditioned ratified decision (Amendment 1 item 2 carries Sec Condition A, binding on M1-evt). **That routes as its own F/CTO ratify plus Sec joint-review and is upstream of any template DDL.** Nothing here presumes its outcome.
+
+---
+
+### Decision 2 — Original `id` values are PRESERVED across the split. This is a hard migration requirement, not an implementation detail.
+
+Every row that moves to `pfin.posting_prototype` **carries its original `pfin.user_taxonomy.id`**.
+
+**The id-space mechanism: RATIFIED 2026-08-18 — Sec option (B), disjoint reserved ranges, both tables `generated always`.** `pfin.posting_prototype`'s identity **starts at a high reserved offset**; the migration's copy-INSERT uses `overriding system value` to carry the source ids. Neither table's `id` is client-suppliable. ⚠ **The `start with` offset must carry a comment stating it is a SECURITY INVARIANT, not a style choice** — an unexplained magic constant is the first thing a later simplification removes.
+
+**The binding invariant, in its ratified form: NO ID RESOLVES IN MORE THAN ONE TABLE.** A reader looks in both and gets exactly one hit. ⚠ **The stronger form — *"the id names its table without a lookup"* — is UNDELIVERABLE for pre-split ids** (they were all minted by one sequence before any partition existed) **and must not be designed against.** A reclass-history reader built on the stronger form is wrong for exactly the historical rows the audit trail exists to serve.
+
+**How this replaced the draft's original sentence.** Sec finding **F1** (VETO-if-shipped-as-written) established that the draft's stated mechanism — *"the new table's identity sequence is set past the maximum"* — **does not deliver its stated invariant**: two independent identity sequences set past the same union maximum then **advance in parallel from the same point**, so the very next insert on each side mints the same value, and from that instant a bare `bigint` resolves in both tables. The proposed battery leg could not have caught it either — an overlap count on a fresh CI stack holds **by construction, not by verification**. **The finding is correct and this draft does not defend the original mechanism.** Architect's reasoning — including why option (A) was disqualified rather than merely costed, and why two apparently-obvious alternatives cannot be built — is preserved in the Decision 2 addendum below, because the rejected paths are the ones a future reader will re-propose.
+
+**Why — and the rationale is a hazard with no constraint able to catch it.** `031`'s `pfin.account_trans_annotation_history.sub_cat_id` is a **plain `bigint` SNAPSHOT with no foreign key**, and that is deliberate: its own `comment on table` records the reason — *audit-truthful if the taxonomy row is later deleted*. Because there is no FK, **nothing follows the split and nothing objects to it.** If `posting_prototype` began its identity at 1, every historical snapshot id would silently resolve to a *different* row: no constraint fires, no test fails, and the audit trail quietly lies about what a transaction was once classified as.
+
+With ids preserved, the split is a **change of home, not a re-key**.
+
+⚠ **State the invariant precisely, because the loose form invites a design nobody can build.** What any workable mechanism delivers is: **no id resolves in more than one table**, so a reader looks in both and gets exactly one hit. It does **not** deliver *"the id tells you which table without a lookup"* — and **no mechanism can**, for pre-split ids, because they were all minted by one sequence before any partition existed. A future reclass-history reader must be designed against the first invariant; designing against the second produces a reader that is wrong for exactly the historical rows the audit trail exists to serve.
+
+⚠ **State it as a requirement in the migration header, not as a note.** A requirement that lives only in a reviewer's memory is discharged by whoever forgets it.
+
+**The paired battery asserts the CONSTRUCTION, not a point-in-time count** (Sec F1's condition). *"The two tables' id spaces do not overlap"* is the wrong leg: on a fresh stack it is true because nothing has been inserted, which is an assertion with nothing watching what falsifies it. The correct leg asserts whatever makes disjointness structural — the shared sequence exists and both tables use it, or the reserved ranges are disjoint by definition — plus the directly checkable half: **at least one moved row retains its pre-split id**.
+
+---
+
+### Decision 3 — The element vocabulary lands on the storage table ONLY; prototypes carry no element, not even a derived one
+
+**`pfin.user_taxonomy` gains `element`**, CHECK-constrained — **and so does `pfin.taxonomy_default`, in the same migration.** `pfin.posting_prototype` gains **no element column**.
+
+⚠ **`taxonomy_default` is not optional here, and omitting it fails in the direction that looks correct** (Sec **F4**). Provisioning is a **column-listed copy** from `taxonomy_default` — both `041`'s canonical statement and `080`'s cross-join backfill name their columns — so without `element` on the source, provisioned rows cannot carry one. Then either `not null` blocks provisioning (fail-closed, and **silently**, because the provisioning path is fail-soft — see Decision 6 / F3), or the column is nullable and a later `element = 'asset'` filter **silently drops those rows**. **That second branch is the same failure class Decision 7 identifies for the rename** — a row set and a denominator derived from different predicates, under-summing percentages on a financial surface, failing OPEN.
+
+**Conditions carried from F4:** (1) `element` lands on `taxonomy_default` in the same migration, with `TAXONOMY_DEFAULT_COLUMNS` and its row type updated; (2) backfill **and** `set not null` **and** the CHECK in one migration, with battery legs asserting zero NULL elements and that the CHECK rejects an unknown value; (3) **when §2.2.2 moves to `element = 'asset'`, the row set and the denominator must derive from the SAME predicate in the SAME query**, or a paired assertion proves Σ(rendered rows) equals the denominator.
+
+**The element vocabulary — and a distinction this ADR keeps deliberately sharp, because collapsing it is how a value set gets hardened by accident.**
+
+- **A claim about the world (not a project decision, and not up for ratify):** standard accounting recognises five elements — **Asset · Liability · Equity · Revenue · Expense** (A / L / E / R / X). That is the conceptual frame these decisions are written in.
+- **A decision about what we do (a project choice, and NOT YET RATIFIED):** *which of those values this specific column may hold.* The two are different questions, and naming the frame does not settle the column.
+
+✅ **RATIFIED 2026-08-18 (F/CTO) — the storage-table `element` value set is `check (element in ('asset','liability'))` for V1**, landing on **both** `pfin.user_taxonomy` and `pfin.taxonomy_default`. Ratified after the two-function clarification, the transaction-vs-storage walk-through, and the §8 GL-connection answer; Sec explicitly did not require it settled before the split.
+
+**The reasoning, retained because a ratified set with no recorded rationale is one somebody widens by accident.** A storage class is a place a thing holds book value. Every asset-domain Cat in the shipped seed is one of those — Cash, Bonds, Equity(-holdings), Alternatives, Liabilities, Real Estate — and **none of them represents owner capital**; owner capital appears in this system only as *derived* contras (Opening-Balance-Equity, retained earnings, the unrealized-gains overlay), which are not storage classes and are not rows in this table. A/R and A/P, which [ADR-031](#adr-031) Decision 2 homes as manual accounts, are asset and liability respectively. **So on the evidence there is no V1 storage class needing an `'equity'` value.**
+
+⚠ **The asymmetry that makes the narrow set the safer proposal: a CHECK is cheap to widen and expensive to narrow.** Adding `'equity'` later is one `alter … drop constraint / add constraint` against rows that cannot violate it. Removing it later means adjudicating whatever rows were written under it. **Propose narrow, widen on evidence** — and the widening path is named here precisely so choosing narrow does not read as foreclosing.
+
+**The widening path, named at ratify so choosing narrow forecloses nothing:** adding `'equity'` later is a one-line `alter … drop constraint / add constraint` against rows that cannot violate it. The trigger would be evidence that a user models owner capital as a *holding place* rather than as a derived contra — which nothing in the current seed does. ⚠ **Widening is a decision, not a repair:** whoever adds `'equity'` is asserting that a storage class can represent owner capital, and should say so rather than treating the CHECK as an oversight.
+
+⚠ **`Transfer` and `Trade` are NOT elements and never acquire one.** They are the two members of `028`'s cashflow class enum that are balance-sheet-*internal*: a Transfer moves value between real accounts and a Trade exchanges one asset for another. Any design that requires all five class values to carry an element is wrong at the vocabulary level, not at the column level. **This point is about the accounting frame and is independent of the value-set proposal above** — it holds whichever set F/CTO ratifies.
+
+**Why nothing derived is stored on the prototype side either.** A prototype's element is a property of its **distinguished contra leg**, which belongs in the template-leg construct, not on the prototype row. A denormalized copy would have **no reader and a drift surface**, and it would re-create in a single column precisely the conflation this ADR exists to remove. **Where a derived element genuinely helps is a read helper's output column — never a stored one.**
+
+**Q1 is VOID under this frame, not answered.** The brainstorm's opening question — *one five-element chart spanning both domains, or elements on the asset side only?* — presumed two domains to span. After the split there are not two domains; there are two tables with different jobs. The question dissolves, and it should be recorded as dissolved rather than answered, so nobody re-litigates it as an open A-or-B.
+
+**⚠ What dimension `element` lives on, and it is the answer to F/CTO's GL-connection question (2026-08-18).** `element` classifies a **management-reporting bucket**. It is *not* the GL's element and must not be read as one.
+
+**Consequences — the storage taxonomy is orthogonal to the GL, deliberately, and the seam has one binding contract.**
+1. **The storage taxonomy is a management-reporting dimension, orthogonal to the GL's ledger-account dimension. Neither derives from the other.** `fn_gl_entries` carries no bucket concept at all — its real side is the account name (`037:278`), its contra side a `CASE` over the cashflow `cat` (`037:302–326`). This is by design, not an omission.
+2. ⚠ **The two are NOT parallel valuation paths — they share one fair-value engine.** `037:456–471` posts the Market Value Adjustment memo as `fn_compute_nav(p_as_of) − book_nav`, so the GL's fair-value total **is** `fn_compute_nav`, reached by calling it; `076`'s valuation kernel is **character-for-character** the same `fn_compute_nav` securities-leg kernel (`076:141–147`). The GL's independent path is the **book-value** one, and the memo pair is precisely the book→fair-value bridge.
+3. **The binding contract at the seam is TOTALS, NOT SLICES:** `Σ fn_subcat_market_value(as_of, include_real_estate := true) = fn_compute_nav(as_of)` (`076:38–40`, owned by SELF-238 AC4). ⚠ **A GL balance sheet and an allocation table are two different partitions of one total and can never be reconciled row-by-row — nor should anyone try.** A future reader expecting a balance-sheet line to equal an allocation row has the wrong expectation, not bad data.
+4. ⚠ **That contract is ASSERTED and only HALF-WATCHED.** Valuation *method* parity is watched structurally (`078` leg (S1): the price-pick tiebreak present in `prosrc` of all three live kernel copies; `079` V1–V3: volatility pinned per signature). **The totals equality itself has no leg** — no battery compares a `fn_subcat_market_value` total to a `fn_compute_nav` scalar. So the seam is protected against drift in *how a price is picked*, not against drift in *which rows get picked up*. **The named failure class is COVERAGE DIVERGENCE, not method divergence** — the same class as Sec's F4 and Decision 7's `CAT_GROUP_ORDER` finding: a row set and a denominator from different predicates, under-summing on a financial surface, failing **OPEN**.
+5. ⇒ **RECOMMENDED: a totals-equality battery leg**, because the split, the `element` column and the rename each create a fresh coverage-divergence opportunity and this is the one seam all three land on.
+6. **Wrinkle, stated so it is not later reported as a defect:** since the assets-only ruling, the **rendered** §2.2.2 table deliberately does *not* foot to NAV (Liabilities are excluded from both row set and denominator; NAV includes them). The invariant belongs to `fn_subcat_market_value` **as a whole**, not to what §2.2.2 renders.
+
+⚠ **Two element vocabularies will exist, and their NON-IDENTITY is recorded here deliberately.** The follow-on template ADR gives **ledger accounts** an element too. **Neither derives from the other and they are not required to agree.** This is *unlike* the `Equity` collision Decision 7 removes — there one string carried two unrelated concepts, which is a defect; here it is **one concept applied to two object types**, which is normal. **The name stays `element` on both; what must never happen is a later PR "reconciling" them by joining.** The worked example is already live: once both exist, a short position is a **bucket whose element is `asset`** and a **ledger account whose element is `liability`** — the same position, two correct answers, two dimensions.
+
+**What `element` buys, stated plainly.** It makes F/CTO's binding constraint — *'Liabilities' does not belong in the asset domain* — enforceable rather than remembered. §2.2.2's assets-only row set becomes expressible as `element = 'asset'` instead of "exclude the Cat named `'Liabilities'`", which additionally makes the negative-denominator hazard structurally unreachable **by definition** rather than by list.
+
+---
+
+### Decision 4 — `028`'s CHECK moves to `posting_prototype` and LOSES its domain disjunct
+
+`user_taxonomy_cashflow_class_chk` — `domain <> 'cashflow' or cat in ('Revenue','Expense','Transfer','Equity','Trade')` — is dropped from `user_taxonomy` and re-created on `posting_prototype` as a plain `cat in ('Revenue','Expense','Transfer','Equity','Trade')`.
+
+**The disjunct disappears because the table IS the domain.** This is the split's simplification dividend and it is visible in one line: a domain-conditional constraint becomes an unconditional one. The constraint's *meaning* is unchanged — [ADR-031](#adr-031) Decision 3 as amended (the Category IS the enforced accounting class; no `flow_class`, no `normal_balance`) stands exactly as ratified.
+
+⚠ **Do not read the disjunct's removal as a relaxation.** Under `028` an asset-domain row was *exempt* from the class enum; after the split there are no asset-domain rows in that table to exempt. Coverage is identical and enforcement is stricter, because a row can no longer reach the table without being subject to the enum.
+
+---
+
+### Decision 5 — Decision-3 family: the two cashflow referents RE-TARGET. Label treatment is Sec's numbering pin and is NOT asserted here.
+
+**Measurement, with its command and predicate, because the whole cost case rests on it.**
+**Command:** per-file `grep -noE "Matched-DOMAIN[^.]*\.|domain = '[a-z]*'"` over `022` / `023` / `029` / `074`. **Predicate:** which `domain` does each live FK-shaped referent of `user_taxonomy(id)` point at, and is that rule enforced in DDL or left to the application? **Result:**
+
+| instance | column · migration | domain | enforced where |
+|---|---|---|---|
+| `022` | `user_asset_category.sub_cat_id` | `asset` | **app-layer only** — `022:335`: *"Matched-DOMAIN (domain='asset') is app-layer in V1"* |
+| `023` | `account_trans_annotation.sub_cat_id` | `cashflow` | **app-layer only** — `023:474`, same wording |
+| `029` | `account_trans_split.sub_cat_id` | `cashflow` | **app-layer only** — `029:115–121` DOMAIN NOTE: *"NOT enforced in the fence for V1"* |
+| `074` | `planning_target.sub_cat_id` | `asset` | **DDL-enforced** — the fence's second predicate |
+
+**Finding (a) — the partition is clean two-and-two along the cut seam. No referent spans both domains.** The split is therefore not a re-point across a tangle: every referent re-targets to exactly one successor and **no row's identity has to be adjudicated**. [BACKLOG](BACKLOG.md) §7.13 warned that re-pointing the referents was *"the costly thing to discover late"*; that warning was authored without this measurement and is **corrected here by data**, not by argument. What remains genuinely expensive is the surface tax, not the re-point — see Consequences.
+
+⚠ **But state what that measurement was OVER, because the unscoped form claims more than it measured** (Sec **F2**, VETO-if-skipped). The grep measured **migration TEXT — what the authors intended** — and the same table records three of the four rules as **app-layer only, not enforced**. *An unenforced rule is exactly the rule the data can violate.* The claim *"no row's identity has to be adjudicated"* is therefore **a claim about intent, not about rows**, and is rewritten here to say so.
+
+**Four row counts are REQUIRED before any DDL is authored** — read-only, one query each, against production-shaped data rather than a fresh stack, with commands and results recorded in the migration header:
+
+1. `account_trans_annotation` rows whose `sub_cat_id` resolves to an **asset**-domain row. Non-zero ⇒ the new FK to `posting_prototype` fails to validate.
+2. `account_trans_split` rows, same predicate, same consequence.
+3. `user_asset_category` rows whose `sub_cat_id` resolves to a **cashflow**-domain row. Non-zero ⇒ `delete from user_taxonomy where domain='cashflow'` is blocked by `on delete restrict` (`022:230`).
+4. `account_trans_annotation_history` snapshot ids that resolve to an **asset**-domain row.
+
+**The four do not fail the same way, and the difference is the point.** Counts 1–3 fail **CLOSED** — every live FK is `on delete restrict` (`022:230`, `023:276`, `029:201`, `074:259`), so a violation **aborts the migration** rather than corrupting anything; the exposure is a deploy-time abort found in production, which is a scheduling failure, not a security one. ⚠ **Count 4 fails SILENTLY** — nothing constrains it — **and a non-zero result there means Decision 2's invariant is doing real work rather than hypothetical work.** Any non-zero count gets an F/CTO disposition **before** authoring.
+
+**Finding (b) — the split is a SECURITY-POSTURE IMPROVEMENT, stated at the width the evidence actually supports.** Three of the four domain rules are **app-layer today**; only `074`'s is DDL-enforced.
+
+**What becomes structural: cross-vocabulary REFERENCE.** After the split a `023`/`029` row cannot reference a storage-classification row, and a `022`/`074` row cannot reference a prototype — the FK target enforces it. `074`'s second predicate becomes **redundant**, replaced by table identity. That is the real improvement, and it is the project's own stated preference (a property enforced by construction beats one enforced by review) applied to a rule that has been on the honour system in three places.
+
+⚠ **What does NOT become structural: vocabulary MEMBERSHIP on the storage side** (Sec **F6**, correcting this ADR's own first draft, which claimed the wider property). `028`'s CHECK **leaves with the cashflow rows**, so after the split the storage table has **no `cat` constraint at all**, while `authenticated` holds INSERT (`041:369`). A user can still create `('Revenue','Salary')` as a storage class and aim a `%Target` at it — exactly what `074`'s leg 3 rejects today.
+
+**This is not a regression** — the asset half was unconstrained free text before the split, and `074`'s leg 3 only ever caught rows *marked* cashflow. But the split makes enforcement **asymmetric**: the prototype side keeps a closed enum, the storage side has none. ⚠ **The correction is recorded rather than quietly fixed because of how the overclaim would have been used:** *"table identity enforces domain"* is precisely the sentence a later PR would cite as licence to drop a check. If membership is to be enforced on the storage side, the instruments are `element`'s CHECK plus a Cat-set assertion of Decision 7's `CAT_GROUP_ORDER`-equality shape — not an appeal to this finding.
+
+**Consequences that travel with the migration.**
+- `023` and `029`: re-point the `references` clause and the fence's resolving read at `posting_prototype`; **re-emit each fence's `comment on function` WITHOUT the matched-DOMAIN clause**, in the re-target migration.
+  ⚠ **Wording corrected from this draft's first version, which said "delete the app-layer matched-DOMAIN notes" — executable two ways, one of which is forbidden** (Sec routed item (iii)). The clause lives in **merged migration files** (`023:474`, inside the `comment on function` string; `029:115–121`, as a `--` DOMAIN NOTE header block) **and in the live catalog**. Merged migrations are never edited. **`029`'s `--` header block stays as authored** — it is historically true of `029`. Only the catalog text changes, and it changes by re-emission.
+- `074`: **drop the `domain = 'asset'` predicate**, leaving the two tenant legs. ⚠ Its `comment on function` enumerates **three** raise legs (unresolvable / cross-tenant / wrong-domain) and the paired battery exercises three. Both lose one. **Re-emit the comment and rework the battery in the same migration** — a `comment on function` left asserting a leg that can no longer fire is exactly the class of stale catalog text this project has already had to correct once.
+**Battery obligations settled by the Sec touchpoint** (routed items (ii) and (iii); these are rulings, not options).
+
+- **`074` — the dropped wrong-domain leg gets a re-target, not a deletion.** Removal-plus-comment is **not sufficient**, and the "assert the predicate is gone" shape this ADR first proposed is the *secondary* control. Leg 3's coverage does not disappear at the split — it **moves to leg 1 (unresolvable)**, because the prototype row is no longer in `user_taxonomy` and the fence's resolving read finds nothing. So: **re-target `(L3)` / `(L3u)`** — tenant A submits **A's own `posting_prototype` id** as `planning_target.sub_cat_id`, on INSERT and on UPDATE, both must RAISE, message assertion moving to the leg-1 text. ⚠ **Deleting these two legs is the tempting repair** — they stop compiling the moment `domain` leaves the fixture INSERTs — **and it is the repair that silently removes the watcher for the property this whole split is claimed to strengthen.**
+- **ONE structural leg, asserting code and comment TOGETHER:** `pg_proc.prosrc` for `fn_planning_target_matched_sub_cat` contains no `domain` reference **AND** its `obj_description` contains neither `domain` nor `three`. **One leg, not two** — split apart, the pair drifts and the surviving half reads as coverage. Its job is code/comment coherence, not proof of enforcement.
+- **Re-emit `074`'s `comment on function` as two raise legs** (unresolvable / cross-tenant), re-emit the battery header's enumeration to match, and **re-derive `plan()` — predicting the delta before running, bound to the property (which legs re-target, which are added), never to the instrument.** Remove the `v_domain` local and its `select` target entirely; an assigned-but-never-read local is a dropped output column in disguise.
+- **`023` / `029` — the FK carries the cross-vocabulary case; two OTHER legs per table do not follow from it.** Sec does **not** require a leg duplicating what the FK enforces. Required instead: **(1)** one leg per table proving the conversion happened — an annotation (`023`) and a split child (`029`) whose `sub_cat_id` is a **same-tenant storage-side `user_taxonomy` id**, both REJECTED; this is the direct successor of the deleted DOMAIN NOTE and it *demonstrates* the conversion rather than asserting it in prose. **(2)** the existing cross-tenant CR legs **re-run against the new target** — ⚠ **the FK is tenant-blind, which is the entire premise of Decision 3, so nothing about re-targeting carries the matched-tenant property forward.** Both fences resolve tenant via `trans_id → account_trans → account.users_id`; confirm each still raises on INSERT and on UPDATE.
+
+- **The family gains no new member from this split.** No new FK-shaped column crossing an isolation boundary is created: `posting_prototype.users_id` is that table's own tenant anchor, and `posting_prototype_default` carries neither `users_id` nor any FK.
+
+**`[[SLOT-SEC]]` — FILLED 2026-08-18. Transcribed VERBATIM from the Sec touchpoint §1; not paraphrased, not summarised, not abridged.** Sec's own framing of its scope: *"This is the only text any migration header, `comment on function`, `comment on column`, or battery comment may assert on label treatment."*
+
+> **`[[SLOT-SEC]]` — Sec numbering pin (2026-08-18).**
+>
+> **A RE-TARGET is not a status change.** Canonical instances **#10** (`account_trans_annotation.sub_cat_id`, `023`) and **#13** (`account_trans_split.sub_cat_id`, `029`) **keep their existing labels**, keep their status **DDL-realized**, and keep their fence pattern **CR (chain-resolved matched-tenant)**. No new label is allocated, no label is retired, and **no fourth status class is created** — the next genuine FK-bypass instance still takes **#18**.
+>
+> **The reasoning, so the rule generalizes rather than reading as a one-off.** The three existing status classes — DDL-realized, DDL-deferred, DROPPED — all answer a single question: *does the fenced column exist in the database?* A re-target does not change that answer. The column exists, the fence exists, the fence pattern is unchanged, and the tenant-matching predicate it enforces is unchanged; only the referenced table changes. `048` needed the DROPPED class because #5's answer changed from yes to no; #10 and #13's answer stays yes. **Stated for reuse: a status class tracks the EXISTENCE of the fenced column; the instance entry's body tracks its TARGET. A change of target is an amendment to the entry — never a change of class, never a change of label.**
+>
+> **What the pin obliges, and it is not optional.** The two instance entries in [ADR-011](DECISIONS.md#adr-011) Decision 3's numbered list must be **amended in the PR that ships the DDL**, not at a later reconciliation: each reads its new target (`pfin.posting_prototype`), names the re-targeting migration alongside its original one, and **drops the now-false `Matched-DOMAIN (domain='cashflow') is app-layer in V1` clause**. The amendment is additive — original migration and original provenance stay. **Instance #17's entry is amended in the same PR that drops `074`'s matched-domain predicate:** its "carries a SECOND predicate in the same fence" passage is **annotated as superseded, not deleted** — it explains why `012`/`022` differ from `074`, and that explanation stays true of the period it describes. **#8's entry is untouched.**
+>
+> **The obligation is Decision 3's own rule, not a new one.** Its `2026-08-04` fold-in resolution, consequence (c): *"the fold-in is due in the PR THAT DDL-REALIZES THE INSTANCE, not at the next reconciliation."* A migration or catalog comment asserting a target that Decision 3's live text does not carry reproduces the #15/#16 failure exactly — a reviewer obeying the read-Decision-3-live discipline finds the old target and correctly concludes the migration invented one.
+>
+> **Assertable scope.** Once this pin is transcribed, the only assertable statements are the four in the first paragraph: label retained, status retained, fence pattern retained, no new label allocated.
+
+**Obligation this ADR carries forward from the pin, because it is the half a migration author would otherwise miss.** [ADR-011](#adr-011) Decision 3's numbered-list entries for **#10**, **#13** and **#17** are **amended in the PR that ships the DDL** — not at a later reconciliation. #10 and #13 each read the new target (`pfin.posting_prototype`), name the re-targeting migration alongside the original, and **drop the now-false `Matched-DOMAIN (domain='cashflow') is app-layer in V1` clause**; the amendment is additive, so original migration and provenance stay. **#17's entry is amended in the same PR that drops `074`'s matched-domain predicate, and its "carries a SECOND predicate in the same fence" passage is annotated as SUPERSEDED, never deleted** — it explains why `012`/`022` differ from `074`, and that explanation stays true of the period it describes. **#8's entry is untouched.**
+
+⚠ **This is Decision 3's own rule, not a new one** — its `2026-08-04` fold-in resolution, consequence (c). A migration or catalog comment asserting a target that Decision 3's live text does not carry reproduces the #15/#16 failure exactly: a reviewer obeying the read-Decision-3-live discipline finds the old target and correctly concludes the migration invented one.
+
+---
+
+### Decision 6 — Sequencing is left OPEN between two named orders, and the deciding input is named rather than assumed
+
+- **S1 — split first, `element` second.** The split is the larger, riskier migration and is simpler against today's table than against a wider one; `element` then lands on a table whose only job is storage classification, where its CHECK is simplest because the table *is* its domain.
+- **S2 — `element` first, split later.** Delivers F/CTO's binding constraint sooner and **unblocks the HELD §2.2.2 AC rework immediately**, at the cost of effectively authoring the column twice.
+
+**RATIFIED — S1, with a named flip trigger.** Sequencing is **S1: split first, `element` second.** ⚠ **The flip trigger is ratified with it, not bolted on:** if Architect judges the split **not landable within the V1.2 window**, sequencing flips to **S2** (`element` first). Source: PM recommendation 2026-08-18; F/CTO disposed the same day.
+
+**Why a trigger rather than a re-decision.** The deciding input was never engineering cost — it was whether the held §2.2.2 AC rework can wait for the split. Naming the flip condition up front means the answer does not have to be re-litigated under schedule pressure, which is when a sequencing call is least reliably made. **The judgement the trigger delegates is narrow and mine: landability inside V1.2, nothing else.**
+
+**Reporting grain — the slot's other half, also ratified.** Sub-Cat-grain income/expense reporting is **V1-committed** by locked PRD §2.3.2 / §2.3.3 / §2.5.1, but **no story requires GL-native derivation**: the read-time join-back (recovering Sub-Cat by joining a posting's `source_trans_id` / `split_id` back to the `023` overlay and `029` split child) suffices for V1. **GL-native P&L is V2**, and books to [BACKLOG](BACKLOG.md) §5 at brainstorm close.
+
+⇒ **Consequence for this ADR, stated so it is not re-opened:** the `ledger_account` / posting-template stage is **V2-gated**, which is consistent with the scope ratify in Decision 1 and removes the last reason anyone might try to pull the template construct forward into this ADR.
+
+**No-bundling, and it is binding regardless of order. The ratified order is `rename → split → element`** — Decision 7's rename ships **first** (F/CTO 2026-08-18), then S1's split, then `element`. The **split**, the **`element` column**, and the **rename** are **three separate migrations in three separate PRs**. Two carry consumer-breaking changes and one carries a one-way door; sharing a PR would mean a rollback of any one drags the others. This applies the same line already held against bundling a Liabilities re-home with `element`.
+
+⚠ **NAMED EXCEPTION — `api/src/lib/server/queries/taxonomy.ts` rides the split migration's PR** (Sec **F3**, VETO-if-unpaired). **Sec's rationale, adopted rather than argued with: no-bundling governs the three MIGRATIONS; a consumer that breaks between two PRs is not bundling, it is a gap.** The exception is stated here so it is never read as drift from the line above.
+
+**Why the pairing is mandatory rather than tidy — the failure is invisible.** `taxonomy.ts` provisions the default taxonomy app-side under the caller's own JWT (ADR-036 B1). Its upsert names `onConflict: 'users_id,domain,cat,sub_cat'` — **and `domain` is being dropped**, so the conflict target becomes invalid; its column constant is a literal naming `domain`; and **every failure path is `console.error` + `return`**, because the module's own contract says a provisioning hiccup must never throw or block the page load. ⚠ **Fail-soft here means fail INVISIBLY: ship the migration without the app change and every new user is silently provisioned with nothing** — and worse, the existence guard (`select id from user_taxonomy limit 1`) marks a user who received storage rows but no prototypes as *already provisioned*, so they never get them. **Nothing in the repo watches this**; the errors go to a log, not a gate.
+
+**Conditions carried from F3:** (1) the app-side change rides the split PR; (2) **the existence guard splits per table** — a `user_taxonomy` row must not suppress `posting_prototype` provisioning; (3) **a QA fixture asserting a fresh user ends up with the expected non-zero row count on BOTH tables** — fail-soft with no assertion is an unwatched surface, and this one sits on the path every new user takes.
+
+---
+
+### Decision 7 — The asset-domain `Equity` rename is LOCKED and ships FIRST, and its paired equality assertion is worth more than the rename
+
+✅ **RATIFIED 2026-08-18 (F/CTO) — asset-domain Cat `'Equity'` → `'Marketable Securities'`, sequenced as the FIRST PR, before the split and `element` PRs.** It removes the collision with the accounting element **Equity** and with `028`'s cashflow class **Equity**.
+
+**Why first, and it is the reason rather than a scheduling convenience:** it is the only one of the three changes that **removes an active ambiguity from the vocabulary every subsequent decision is written in.** The split ADR, the `element` CHECK and the template ADR all reason about "Equity"; landing the rename first means none of them has to disambiguate as it goes.
+
+**Measured. Command:** `grep -rc "'Equity'" supabase/migrations/*.sql`, then `grep -rn "'Equity'" supabase/migrations/*.sql | grep -c "'asset', *'Equity'"` and its complement. **Result:** four files hold the literal — `028` (3), `035` (4), `037` (4), `041` (15). **All 15 asset-domain occurrences are in `041`; all 11 others are the cashflow accounting class**, in `028` / `035` / `037`.
+
+⇒ **The rename separates perfectly by file**, and that file boundary is the only thing that makes a sweep safe. ⚠ **A blind `s/'Equity'/…/g` would rewrite the GL's Equity class and corrupt contra routing.** This is the *text that NAMES a label must not be swept with text that USES it* hazard in its worst form: **two different labels spelled identically**.
+
+⚠ **The real cost is a silent failure mode, not the sweep.** `api/src/lib/server/queries/nonReAllocation.ts:183` builds the §2.2.2 groups as `CAT_GROUP_ORDER.map((cat) => rowsByCat.get(cat) ?? [])`. Rows whose `cat` is absent from that array are **dropped from the output entirely**, while `total_non_re` (from `076`) still counts them. **A DB-side rename shipped without the app-side rename makes every renamed holding vanish from the allocation table while remaining in the denominator — percentages under-sum, silently, on a financial surface.** It fails OPEN, which is the direction that looks correct.
+
+**Vehicle — the ratified package.** ONE PR carrying: the **DB seed delta**, the **api consumer** (`nonReAllocation.ts`'s `CAT_GROUP_ORDER`), **tests**, and — **worth more than the rename itself** — a **paired assertion that the database's asset-domain Cat set equals `CAT_GROUP_ORDER` exactly.** That assertion catches this class permanently rather than this instance once; without it the change trades a known naming collision for an **unwatched fail-open**, which is a worse position than the status quo.
+
+⚠ **NEVER a blind sweep — ratified as a condition of the package, not left to care.** The 11–12 `US Equity` market-term occurrences and the two judged occurrences (PRD lines 320 / 324) are **not** rename targets, and a global substitution would rewrite the GL's Equity class. See the measurement above: the file-level separation is the only thing that makes any sweep safe.
+
+**PM riders travelling to F/CTO with the package** (ratify-shaped, not editorial): the **§3.3 label-mapping footnote**, and the **§2.6.2 dual-property ruling** — §2.6.2's four fixed commentary sub-sections (`Cash / Bonds / Equity / Alternatives`) are parity-exact with the existing sheet, so whether the *report sub-section* renames with the *Cat* is a product judgement, not a mechanical consequence. ⚠ **Deciding it silently in either direction is the failure** — renaming both breaks stated parity; renaming neither leaves the report naming a Cat that no longer exists.
+
+**Shape and reach.** `update … set cat = <new> where domain = 'asset' and cat = 'Equity'` on `taxonomy_default` and on provisioned `user_taxonomy` rows; **ids preserved, so all four Decision-3 referents are untouched — a label change, not a re-point.** Consumer reach measured: `api/src` 38 occurrences across 8 files; `web/src` **0**; `workers` **0**; `docs/PRD/index.html` — **and this count needs its scope stated, because the unscoped form is misleading in the direction that overstates the work.**
+
+⚠ **`grep -c` counts LINES, not occurrences.** Measured at `c219dee`: **18 lines / 24 occurrences**. Of the 24, **12 are the market term "US Equity"** (lines 228 / 229×5 / 235 / 869 / 873 / 1025 / 1026×2, including one lower-case `US equity` at 229) and are **NOT rename targets**. *(PM's relayed figure was 11; the difference is the lower-case occurrence, which a case-sensitive filter drops — the same case-sensitivity trap this project has hit before. Recorded rather than silently substituted.)*
+
+⚠ **The residual is a JUDGED count, not a derivable one, and it is PM's to own.** At least two occurrences (lines 320 and 324, in the estimated-tax sections) cannot be classified as asset-Cat-`Equity` versus cashflow-class-`Equity` without reading their full context — **which is the very collision this rename exists to remove, reproduced inside the PRD.** This ADR therefore states the decomposition and **asserts no rename-target total**; PM classifies per-occurrence in the rename PR.
+
+**Timing — RATIFIED as PR #1 of three.** The full order is **rename → split → `element`** (the latter two per Decision 6's S1, with its V1.2-landability flip to S2). The rename is independent of both and the cheapest of the three, so it carries no sequencing risk into them.
+
+---
+
+### Decision 8 — Period-closing is designed AROUND, not designed FOR
+
+F/CTO noted that the incumbent zeroes Revenue and Expense at monthly intervals. **V1 derives at read time** — `fn_gl_entries` stores no postings — so there are no closing entries, and none are designed here.
+
+**Two things this ADR commits to not foreclosing, stated concretely so the constraint is checkable rather than aspirational:**
+1. **A prototype must be able to name accounts that are not permanent.** A closing prototype names Revenue/Expense accounts plus a retained-earnings target; the brainstorm's `remainder`-leg discipline already accommodates that shape without change. Any future template design that assumes prototypes name only permanent accounts violates this.
+2. **Nothing in the split may complicate `fn_gl_entries`' as-of parameterization.** Period-closing is precisely a family of as-of reads, so the parameter that makes closing possible later is one we already have and must keep clean.
+
+---
+
+### Decision 2, addendum — why (B), and why the alternatives cannot be re-proposed
+
+**RATIFIED 2026-08-18 (F/CTO), on Sec's recommendation and Architect's concurrence.** Retained in full because **the rejected paths are the ones a future reader will re-propose**, and each was killed on a checkable ground rather than a preference.
+
+**(1) (B) — disjoint reserved ranges, both tables `generated always`.** `posting_prototype`'s identity starts at a high reserved offset (Sec's illustration: `2^62`); the copy-INSERT uses `overriding system value` to carry the source ids. Disjointness is then permanent by construction and needs no maintenance: historical ids were minted by **one** sequence and are partitioned by which table they moved to; new ids come from two ranges that cannot meet. The cost Sec names is the whole cost — **cosmetically odd ids and one non-obvious `start with` that must carry a comment saying it is a security invariant, not a style choice.**
+
+**(2) ⚠ (A) is worse than "needs a compensating trigger" — it hands the user the tool that defeats the control.** Under (A) both `id` columns become `bigint not null default nextval(...)`, which means a client-supplied `id` is not merely *syntactically possible* but **accepted**: `041` grants `authenticated` INSERT on `user_taxonomy`, and `041`'s policy fences the **tenant**, not the column. A caller could then choose an id — including one that collides with a `posting_prototype` id — **making the id-space invariant user-controllable, which is the very invariant F1 exists to establish.** Under `generated always`, the same insert is rejected outright. **A control whose enforcement depends on the party it constrains is not a control**, and that is the disqualifying difference, not the ergonomics.
+
+**(3) The obvious future alternative is structurally impossible, and saying so now prevents it being re-proposed.** The natural instinct is *"why not add a discriminator column to `031`'s history — `sub_cat_source text check (… in ('user_taxonomy','posting_prototype'))` — and resolve by data instead of by id-space?"* **It cannot be built.** `pfin.account_trans_annotation_history` is an [ADR-011](#adr-011) Decision 2 audit-class table carrying the `004`-mirror immutability triple-fence — **UPDATE, DELETE and TRUNCATE blocked for all roles.** Adding the column is legal; **backfilling it on existing rows is an UPDATE and is refused by the table's own fence.** So the discriminator could only ever describe rows written *after* the split, leaving exactly the pre-split rows F2's count 4 identifies as the ambiguous ones — the population the whole invariant exists to serve. **Rejected on a checkable structural ground, not on preference.**
+
+**(4) Sign-based disjointness (negative ids for prototypes) rejected, and the reason generalises.** It is cheaper to read than `2^62` — but the carried-over ids stay positive, so *"negative means prototype"* would be **false for every moved row** while *looking* like a total rule. `2^62` is better precisely because **nobody mistakes a reserved range for a semantic rule**, whereas a sign reads as one. ⚠ **A legible-but-false rule is worse than an opaque-but-true one, because the legible one gets relied on.**
+
+**Battery obligation, per F1's condition:** the leg asserts the **construction** — that the reserved ranges are disjoint by definition and that both tables remain `generated always` — **never a point-in-time overlap count**, which holds vacuously on a fresh stack.
+
+---
+
+### Alternatives considered and rejected
+
+- **Leave the conflation and add an `element` column to the combined table.** Cheapest, no one-way door, and it was the standing recommendation before the two-function frame was locked. Rejected as the *primary* direction because it corrects the symptom (mis-filed liabilities) while leaving a single table serving two vocabularies — and because the measurement shows the split's marginal cost is far lower than assumed. **It survives as the `element` half of Decision 3 and as sequencing option S2.**
+- **A first-class Chart-of-Accounts table alongside `user_taxonomy`.** Rejected as framed: [ADR-031](#adr-031) Decision 2 already ratified the CoA-shaped hierarchy as `parent_account_id` on `pfin.account` (`M-hier`, gated on account count), and `fn_gl_entries` already synthesizes the derived accounts — so a CoA table alongside would be the **third** classification spine, not the second.
+- **Hierarchical accounts (`M-hier`) now.** Rejected for this ADR: [ADR-031](#adr-031)'s own build gate (*"only if the account count ever warrants it"*) is unmet and the count has never been stated. It would also spend a Decision-3 label **and** require an acyclicity control, which PostgreSQL cannot express declaratively — a novel fence for a question F/CTO did not ask.
+- **Symmetric split (both domains move to new tables).** Rejected on measured cost: it re-targets all four referents where the asymmetric shape re-targets two, and it buys only a naming symmetry.
+- **Re-homing the Liabilities rows as a patch, without the split.** Rejected as a one-way door with no compensating structure — it breaks the label-keyed consumers (`041`'s `on conflict`, `076`/`081`'s joins, the §2.2.2 renderer) while leaving `domain` doing two jobs.
+
+---
+
+### What this ADR subsumes
+
+- **[BACKLOG](BACKLOG.md) §7.13** — the Chart-of-Accounts / hierarchical-accounts schema-direction question (Architect-framed 2026-08-12, options A/B/C). **Answered by this ADR**, with §7.13's own one-way-door warning corrected by Decision 5's measurement. §7.13 gets a closure annotation in the landing PR.
+- **[BACKLOG](BACKLOG.md) §5.7** — the Chart-of-Accounts V2+ user-facing candidate. **Subsumed**: its motivating instance (the Cash / "Cash Balances" drill-down awkwardness, from the L1 cash-granularity ruling) is a symptom of the same conflation. §5.7 gets a closure annotation pointing here.
+- ⚠ **Both annotations land in the same PR as this ADR.** Two homes for one decision drift, and a subsumed entry left un-annotated reads as still-open work to the next reader.
+
+---
+
+### Sec surface — JOINT-REVIEW MANDATORY
+
+Four independent triggers, any one of which would suffice: a **Decision-3 family change** (Decision 5, including the numbering pin `[[SLOT-SEC]]`); a **new tenant-owned table with new RLS, `WITH CHECK`, and the `025` aal2 backstop clause**; a **data migration across already-fenced columns**; and a change to a surface **`fn_gl_entries`** reads. Sec's touchpoint at the brainstorm close is the entry point, and the joint-review is a **merge gate**, not optional review.
+
+**Touchpoint COMPLETE, 2026-08-18 — `temp/sec-gl-split-touchpoint.md` (`c6fa8ca1baf92f521eef1d96a1fb5c09`). No veto on the direction.** All three routed items are ruled and their rulings are integrated where they bind, not listed here: **(i)** the label treatment → Decision 5's transcribed pin; **(ii)** `074`'s dropped leg → re-target `(L3)`/`(L3u)` plus one combined structural leg (Decision 5's battery obligations); **(iii)** the `023`/`029` conversion → the FK carries the cross-vocabulary case, two other legs per table are required, and this ADR's *"delete the app-layer notes"* wording is corrected to *re-emit the `comment on function` without the clause*.
+
+⚠ **On (ii) my own proposal was the weaker half and is recorded as corrected:** I asked whether a structural "the predicate is gone" assertion was needed, reasoning from `074`'s `pg_policy` precedent. Sec ruled that precedent **inapplicable** — it exists for a clause **no behavioural test can reach**, whereas leg 3's coverage **still has a live behavioural observer after the split** (the same write lands on leg 1, unresolvable). So the structural leg is the *secondary* control and *"on its own it would be close to theater"*; the primary control is re-targeting the two legs I had implicitly written off. **A precedent cited without its enabling condition points the battery at the wrong property.**
+
+**Conditions binding this ADR's text, integrated above:** F1 (id mechanism — Decision 2 + its addendum; **ratified 2026-08-18 as Sec option (B)**) · F2 (four row counts before authoring — Decision 5) · F3 (`taxonomy.ts` rides the split PR, named exception — Decision 6) · F4 (`element` on `taxonomy_default` — Decisions 1 + 3) · F5 (`posting_prototype` write posture — Decision 1) · F6 (Finding (b) restated — Decision 5) · F7 (per-file battery accounting — Governance).
+
+**Notes recorded, not gates on this ADR:** **F8** — no repo-wide `relrowsecurity` watcher over `pfin`; routed to BACKLOG for DevOps + QA. **F9** — `031:175` and `031:185–186` describe `sub_cat_id` as a snapshot of *"the taxonomy row"*; post-split the resolution target is `posting_prototype`, and because `031` is a Decision-2 audit-class table a re-emitted comment is itself a joint-review surface, so both comments are re-emitted in the re-target migration naming the new table and the chosen id-space invariant. **F10** — `080:174`'s `select distinct ut.users_id from pfin.user_taxonomy` becomes the wrong user set for any future prototype-side seed backfill (fails closed: a user misses a category); it is the idiom the next seed PR will copy. **F11** — migration ordering is forced: drop-constraint → copy → delete → re-add against `posting_prototype`, because `023`/`029`'s FKs are `on delete restrict`; getting it wrong aborts, with no silent path.
+
+**Explicit non-objections, recorded so they are not re-litigated at the merge gate:** no SECURITY DEFINER change required (allowlist read live at `c219dee`); no §10 catalogued-instance-ledger change; no objection to the asymmetric split over the symmetric, to id preservation as a hard requirement, to S1 with PM's flip trigger, to Decision 4's CHECK move (**coverage verified identical by Sec**), or to the narrow `element` value-set proposal — Sec explicitly does **not** require the value set settled before the split. ⚠ **Open question 6 (`ledger_account` global-only) is OUT OF SCOPE of this ADR and Sec did not rule it**; its recorded short answer — commit global-only permanently — belongs in the template ADR, decided **before** that table ships.
+
+---
+
+### Governance / Ledgers
+
+**§10 catalogued-instance ledger — UNCHANGED.** [ADR-011](#adr-011) Decision 4 read **verbatim and live** before drafting, 2026-08-18 at `c219dee`. Three axes clean: no catalogued instance added, removed, reordered or renumbered; no layer re-attributed; no surface becomes "four-layer". **Path B** — Decision 4 is linked and not restated, and **no count is carried into this ADR**. ⚠ The **catalogued** set and the **CI-fenced** set are **different sets and are not reconciled here**.
+
+**SECURITY DEFINER allowlist — UNCHANGED.** This ADR authors no function and proposes none; the fences it re-points are and stay SECURITY INVOKER with `set search_path = ''`. Read [ADR-011](#adr-011) Decision 9 live if that changes.
+
+**[ADR-011](#adr-011) Decision 3 family — RE-TARGET, no new member; label treatment PINNED by Sec (Decision 5, transcribed verbatim): #10 and #13 keep label, status and fence pattern; no fourth status class; the next genuine instance still takes #18.** Read Decision 3's body live at migration-authoring time: the family grows, its labels are non-contiguous, and *labeled* versus *DDL-realized* diverge. **No count is carried here.**
+
+**RT catalog — unchanged.** No new threat surface is introduced; the split narrows an existing app-layer one.
+
+**⚠ Battery blast radius — measured, and the repair is where legs die** (Sec **F7**). `grep -rl "into pfin.user_taxonomy (users_id, domain" supabase/tests/rls/*.sql` → **18 files** (`009 011 022 023 029 030 031 035 037 038 041 074 076 077 078 080 081 self200`). **Every one stops compiling when `domain` is dropped.** The mechanical repair — delete the `domain` column from the INSERT — is correct in most files and **silently destroys coverage in at least `074`**, and possibly in `031`/`035`/`037`, where a fixture's domain is what makes the case the case. **Condition: the split PR states, PER FILE, which legs were re-targeted and which were deleted, with the `plan()` delta predicted before the run.** A file whose `plan()` count drops with no stated reason is a dropped watcher.
+
+**QA pairing — required, in the same PR as each migration.** Minimum legs: id-preservation and non-overlapping id spaces (Decision 2 — the failure is silent and nothing else would catch it); the re-targeted fences' cross-tenant legs on both `023` and `029`; the `074` comment/battery re-emission after its leg is dropped; and, for Decision 7's PR, the DB-Cat-set equals `CAT_GROUP_ORDER` assertion.
+
+⚠ **`create or replace function` resets volatility.** Every re-issued helper (`035`/`037`'s reads, the re-pointed fences, `076`/`081`) must re-state its posture explicitly rather than assume it survives.
+
+---
+
+### Cross-references
+
+`009_user_taxonomy.sql` (the spine; ⚠ its `comment on table` still asserts *"authenticated holds SELECT ONLY"*, falsified by `041:369`'s INSERT grant — correct it in this work's first migration, which must re-emit that comment anyway) · `010` (`notes`) · `028_user_taxonomy_cashflow_class.sql` (the CHECK that moves) · `031_reclass_history.sql` (the no-FK snapshot whose ids Decision 2 protects) · `022` / `023` / `029` / `074` (the four referents and their fences) · `035_fn_gl_entries.sql` + `037_gl_completion.sql` (the eleven posting branches; the Cat-driven contra) · `041_taxonomy_default_and_provisioning.sql` (the default set, the existence-guarded provisioning statement, the INSERT policy and grant) · `076` / `077` / `080` / `081` (the asset-side label-keyed consumers and the liability cash route) · `003_account_and_account_users.sql` (`account_type`, the working A/L discriminator) · [ADR-031](#adr-031) Decision 2 + Decision 3 + Amendment 1 items 1–2 (the account model, category-as-class, and the Sec-conditioned partition this ADR does not re-open) · [ADR-036](#adr-036) (provisioning mechanism and its reach limit) · [ADR-056](#adr-056) (`planning_target`, the `074` fence and its three legs) · [ADR-011](#adr-011) Decision 3 / Decision 4 / Decision 9 / Decision 18 + Lock 14 · [BACKLOG](BACKLOG.md) §5.7 + §7.13 (subsumed) + §7.19 (the PRD/ARCH recalibration this feeds) · `api/src/lib/server/queries/nonReAllocation.ts` + `usEquityAllocation.ts` + `usEquitySubCats.ts` + `taxonomy.ts` (the app-side consumers).
+
+---
+
+### Ratify trail — everything that was in doubt, and how it settled
+
+| Slot | Owner | Blocks |
+|---|---|---|
+| ~~`[[SLOT-PM]]`~~ | PM / F/CTO | **FILLED 2026-08-18** — S1 with a V1.2-landability flip trigger; reporting grain V1 via read-time join-back, GL-native P&L V2 |
+| ~~`element` value set~~ | Architect → F/CTO | ✅ **RATIFIED 2026-08-18** — `check (element in ('asset','liability'))` for V1, on both `user_taxonomy` and `taxonomy_default`; widening path to `'equity'` named |
+| ~~`[[SLOT-SEC]]`~~ | Sec | **FILLED 2026-08-18** — pin transcribed verbatim into Decision 5, with its D3-amendment obligation |
+| ~~Decision 2 id mechanism~~ | Sec → F/CTO | ✅ **RATIFIED 2026-08-18** — Sec option (B), disjoint reserved ranges, both tables `generated always`; binding invariant = *no id resolves in more than one table* |
+
+✅ **Both slots filled and both F/CTO dispositions ratified, all on 2026-08-18. Nothing in this draft is open, proposed-pending, or guessed.** The rows above are kept struck-through rather than deleted so the ratify trail stays legible — **a table showing only settled rows cannot tell you which of them were ever in doubt**, and the two that were are the two a later reader should check first.
+
+⚠ **One further gate that is not a disposition and cannot be discharged at a desk:** Sec **F2**'s four row counts must be run against production-shaped data and recorded in the migration header **before any DDL is authored**, with any non-zero count disposed by F/CTO first. **This is a precondition on authoring, not on landing** — it is listed here because a precondition recorded only in a decision body is the kind that gets discovered at deploy time.
+
+---
+
+### Follow-ups this ADR expects to be BOOKED at its landing PR
+
+⚠ **Booking these is part of landing, not a later tidy-up.** Each is a finding this work produced and does not itself discharge; an unbooked one survives only in a gitignored `temp/` file.
+
+**Closure annotations (same PR as the ADR):**
+1. [BACKLOG](BACKLOG.md) **§7.13** — Chart-of-Accounts / hierarchical-accounts schema-direction question: **answered**, closure annotation pointing here.
+2. [BACKLOG](BACKLOG.md) **§5.7** — Chart-of-Accounts V2+ candidate: **subsumed**, closure annotation pointing here.
+
+**New BACKLOG bookings:**
+3. **GL-native P&L** (Sub-Cat-grain income statement derived from the GL rather than by read-time join-back) → §5, **V2**, per PM's ratified reporting-grain answer.
+4. **The posting-template / `ledger_account` construct** — template header + legs + amount rules; carries the `ledger_account` global-only commitment, to be made **before** that table ships. Its own ADR, its own Sec surface.
+5. **[ADR-031](#adr-031) Decision 3's event-class-vs-flow-class partition amendment** — required before any template DDL if a category is to become the authoritative class source for *every* row. **F/CTO ratify + Sec joint-review; not a schema change.**
+6. **Totals-equality watcher** — a battery leg asserting `Σ fn_subcat_market_value(as_of, true) = fn_compute_nav(as_of)` (Decision 3 consequence 5). Currently asserted, unwatched.
+7. **Sec F8** — no repo-wide watcher asserting `relrowsecurity` on every `pfin` relation; DevOps + QA catalog sweep with an explicit allowlist. Sec routed this to BACKLOG, explicitly **not** a gate on this ADR.
+8. **Sec F10** — `080:174`'s `select distinct ut.users_id from pfin.user_taxonomy` becomes the wrong user set for any future prototype-side seed backfill (fails closed). It is the idiom the next seed PR will copy.
+9. **`pfin.user_taxonomy`'s stale `comment on table`** — `009` still asserts *"authenticated holds SELECT ONLY"*, falsified by `041:369`. Assigned to this work's first migration (which re-emits that comment anyway), so it is booked only as a check that it happened.
+
+**Travelling with the rename PR (Decision 7, ships FIRST):**
+10. **PM per-occurrence PRD adjudication** — the residual `Equity` occurrences are a **judged** count, not a derivable one; lines **320** and **324** cannot be classified without full context. PM classifies in the rename PR.
+11. **PM rider — §3.3 label-mapping footnote**, to F/CTO with the package.
+12. **PM rider — §2.6.2 dual-property ruling**: whether the four fixed commentary sub-sections rename with the Cat. ⚠ A product judgement; deciding it silently in either direction is the failure.
+
+**Build-spec open items (named so they are not decided by accident):**
+13. **Short-position classification rule** — does an STO position stay in its asset bucket at negative value, or classify into a liability-element bucket? ⚠ **Storage side has an implicit rule nobody chose** (`076` applies no quantity filter, so a short sits in its asset bucket at negative value); ⚠ **the GL side is RATIFIED BUT NOT BUILT** — `Securities Sold Short` is [ADR-031](#adr-031) Amendment 1 item 7 and appears **nowhere in the tree**; `037:393` routes an unmatched non-buy to Suspense. Settle **with** the template ADR, not before it.
+14. **Period-closing prototypes** (Decision 8's don't-foreclose constraints) — carried into the template ADR's design inputs, not built.
+
+**Sec merge-gate checklist** — the eight items in the touchpoint's §6 travel to the DDL PR's joint-review, so that review is a verification rather than a re-derivation.
+
+---
+
 ## ADR-057 — A default-taxonomy change is a data migration that must decide its REACH separately: first-access provisioning never delivers set growth (terse pattern)
 
 **Date:** 2026-08-17 · **Status:** **Proposed** — authored with the `077` seed delta; F/CTO ratifies at PR sign-off.
