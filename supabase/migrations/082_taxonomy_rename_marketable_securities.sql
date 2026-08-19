@@ -1,0 +1,254 @@
+-- ============================================================================
+-- Migration: pfin.taxonomy_default + pfin.user_taxonomy — asset-domain Cat
+-- 'Equity' is renamed to 'Marketable Securities'. A LABEL CHANGE, NOT A RE-KEY:
+-- no id moves, no row is created or destroyed, no column is added or dropped.
+-- Phase 6 Build Loop. ADR-058 Decision 7, F/CTO-ratified 2026-08-18 as the FIRST
+-- of the three GL-split PRs (rename -> split -> element). Closes no SD/RT;
+-- extends no Lock.
+--
+-- WHY: the string 'Equity' names TWO UNRELATED CONCEPTS in this schema. As an
+--   asset-domain Cat (041) it names a STORAGE CLASS — a place a thing holds book
+--   value. As a cashflow Cat it names an ACCOUNTING CLASS, enumerated by 028's
+--   user_taxonomy_cashflow_class_chk and consumed by fn_gl_entries' contra
+--   routing (035, completed at 037). It is also the name of a balance-sheet
+--   element. ADR-058 Decisions 1/3/4 are all written in a vocabulary where
+--   'Equity' is ambiguous, so the rename lands FIRST: it removes the ambiguity
+--   from the vocabulary every subsequent decision is written in, rather than
+--   forcing each of them to disambiguate as it goes.
+--
+-- ⚠ NEVER A BLIND SWEEP — the file boundary is the ONLY thing that makes any
+--   substitution safe here, and this is the hazard in its worst form: TWO
+--   DIFFERENT LABELS SPELLED IDENTICALLY.
+--   Measured (ADR-058 Decision 7, re-measured at authoring):
+--     `grep -rc "'Equity'" supabase/migrations/*.sql` -> 028 (3), 035 (4),
+--     037 (4), 041 (15). ALL 15 asset-domain occurrences are in 041; ALL 11
+--     others are the cashflow accounting class, in 028 / 035 / 037.
+--   This migration therefore touches DATA ONLY, in two tables, under an explicit
+--   `domain = 'asset'` predicate. It edits no function body, no CHECK, no policy
+--   and no cashflow row. A `s/'Equity'/.../g` over this repo would rewrite the
+--   GL's Equity class and corrupt contra routing; do not do it.
+--
+-- ⚠ WHAT THIS DOES NOT DO. It does not touch the cashflow domain. It does not
+--   drop `domain` (that is the SPLIT migration, ADR-058 Decision 1). It adds no
+--   `element` column (that is the THIRD PR, ADR-058 Decision 3). It renames no
+--   Sub-Cat: the twelve `US-NN-*` sector Sub-Cats and `US-Index-Non_Sector` /
+--   `US-Growth-Non_Sector` / `ExUS-*` keep their labels and their display_order.
+--   The market term "US Equity" is NOT a rename target anywhere.
+--
+-- ----------------------------------------------------------------------------
+-- Numbering: 082 follows 081, taken at authoring time against the live listing,
+--   not reserved. Order-dependent: MUST run AFTER 041 (which seeds the fifteen
+--   asset-domain 'Equity' rows into pfin.taxonomy_default and installs the
+--   provisioning path), AFTER 009 (pfin.user_taxonomy and its
+--   unique (users_id, domain, cat, sub_cat) — the key this rename is checked
+--   against), and after 077 / 080 (later asset-side seed deltas; neither seeds
+--   under Cat 'Equity' — verified — but stating the order means a future seed
+--   delta authored under the OLD label between 041 and here would be caught by
+--   the chain rather than silently survive the rename).
+--   ⚠ 083 (the 009 comment-on-table supersession) ships in the same PR and is
+--   ORDER-INDEPENDENT of this file.
+--
+-- ----------------------------------------------------------------------------
+-- POSTURE RATIONALE — NO function is authored, so neither SECURITY INVOKER nor
+--   SECURITY DEFINER applies and `set search_path = ''` is N/A. This migration is
+--   two UPDATE statements. The SECURITY DEFINER allowlist is UNCHANGED — read it
+--   live at ADR-011 Decision 9; this file states no count.
+--
+-- ----------------------------------------------------------------------------
+-- ⚠ PRIVILEGED-CONTEXT WRITE — Sec joint-review item. The class is stated
+--   precisely, because the loose form weakens D1. The second statement writes
+--   pfin.user_taxonomy, a TENANT-OWNED table, from the migration role. No pfin
+--   table carries FORCE ROW LEVEL SECURITY, so the owning role is not subject to
+--   the policies on it and the 025 aal2 backstop clause on user_taxonomy_insert
+--   is not evaluated — which is WHY a migration reaches users the app path
+--   cannot. This is a MIGRATION-ROLE write: D1-ADJACENT, NOT a D1 instance,
+--   following 080's precedent exactly. It meets D1 (a) and (c); it meets NEITHER
+--   (b) — the writer is the schema owner, not service_role — NOR (d): no
+--   audit-log row is emitted. Its tenant-resolution record is the
+--   version-controlled, joint-reviewed migration file plus the
+--   applied-migrations ledger. Do not cite this migration as precedent for a
+--   service_role surface shipping without (d); D1's four clauses bind unchanged
+--   at every runtime privileged context.
+--   ⚠ ONE WAY THIS IS WEAKER-SURFACED THAN 080, and it is stated rather than
+--   inherited: 080 INSERTED rows and therefore had to argue its tenant binding
+--   was inherited from an existing users_id. THIS MIGRATION WRITES NO users_id
+--   AT ALL — it sets a single non-key text column on rows that already exist.
+--   There is no tenant binding to get wrong, because no row changes owner and no
+--   row is created. That is a by-construction property of an UPDATE that names
+--   only `cat` in its SET list; preserve it if you edit these statements.
+--
+-- ----------------------------------------------------------------------------
+-- REACH DECISION — ADR-057, applied rather than re-derived, and the application
+--   DIFFERS from 080's in the one way that matters.
+--   The rule stands: a seed delta must REACH already-provisioned users, because
+--   041's first-access provisioning is EXISTENCE-GUARDED and therefore delivers
+--   nothing to a user who already holds taxonomy rows. So both tables are
+--   updated: pfin.taxonomy_default for every FUTURE provisioning, and
+--   pfin.user_taxonomy for every ALREADY-PROVISIONED user.
+--   ⚠ WHY NO `select distinct users_id` USER-SET DERIVATION HERE. 080 needed one
+--   because it INSERTED: inserting for a user with ZERO taxonomy rows would
+--   satisfy 041's existence guard and strand them without the rest of the
+--   default set, permanently. AN UPDATE CANNOT CREATE A ROW. A zero-row user has
+--   nothing matching the predicate and is therefore untouched BY CONSTRUCTION,
+--   not by a filter someone could later simplify away. The hazard 080's
+--   restriction exists to prevent is structurally absent here — which is the
+--   reason it is absent, and is why this file says so instead of copying the
+--   idiom without its justification.
+--   ⚠ BOTH HALVES ARE LOAD-BEARING, and renaming only ONE table fails in a way
+--   nothing would catch until a number was wrong on screen. Provisioning
+--   (041's canonical statement, and api/src/lib/server/queries/taxonomy.ts)
+--   copies from taxonomy_default into user_taxonomy with
+--   `on conflict (users_id, domain, cat, sub_cat) do nothing`. Rename
+--   taxonomy_default alone and that conflict target no longer matches an
+--   already-provisioned user's rows: the next provisioning run INSERTS a full
+--   second set of fifteen Sub-Cats under the NEW label ALONGSIDE the fifteen
+--   under the old one. The user's row count silently goes 65 -> 80 and the
+--   allocation surface double-counts. Rename user_taxonomy alone and every new
+--   user is provisioned under the retired label.
+--   A full local database reset is NOT a reach mechanism: the Supabase CLI's
+--   reset subcommand is BANNED for all agents under any flags (standing order,
+--   permanent, after the 2026-08-14 shared-DB wipe —
+--   docs/records/2026-08-14-db-reset-incident.md).
+--
+-- ----------------------------------------------------------------------------
+-- PRE-APPLY COUNTS — REQUIRED before this migration is applied to any
+--   environment holding real rows, read-only, results recorded in the PR body.
+--   This mirrors the ADR-058 Decision 5 / Sec F2 discipline: the migration TEXT
+--   states an intent, and only rows can falsify it.
+--     (R1) select count(*) from pfin.taxonomy_default
+--            where domain = 'asset' and cat = 'Marketable Securities';
+--          EXPECT 0. Non-zero means the new label already exists and statement 1
+--          may violate unique (domain, cat, sub_cat).
+--     (R2) select count(*) from pfin.user_taxonomy
+--            where domain = 'asset' and cat = 'Marketable Securities';
+--          EXPECT 0. Non-zero requires the precise collision query (R3) before
+--          applying.
+--     (R3) select count(*) from pfin.user_taxonomy old
+--            join pfin.user_taxonomy new
+--              on new.users_id = old.users_id
+--             and new.domain   = old.domain
+--             and new.sub_cat  = old.sub_cat
+--           where old.domain = 'asset' and old.cat = 'Equity'
+--             and new.cat = 'Marketable Securities';
+--          EXPECT 0. Any non-zero row is a genuine collision.
+--     (R4) select count(*) from pfin.taxonomy_default
+--            where domain = 'asset' and cat = 'Equity';                -- 15
+--          select count(*) from pfin.user_taxonomy
+--            where domain = 'asset' and cat = 'Equity';                -- the
+--          rename's blast radius; expect 15 x (provisioned users) plus any
+--          user-authored asset-'Equity' rows, which rename correctly — they are
+--          the same Cat.
+--   ⚠ HOW (R3) FAILS IF IT IS SKIPPED, and the direction is the good one.
+--   pfin.taxonomy_default has NO runtime writer (global shared-read: using(true)
+--   SELECT to authenticated, no INSERT grant, no INSERT policy), so its content
+--   is exactly what the migration chain put there and (R1) is 0 by construction.
+--   pfin.user_taxonomy is DIFFERENT: authenticated holds INSERT (041), so a user
+--   CAN have authored ('asset','Marketable Securities', <some sub_cat>) already.
+--   If one has, statement 2 raises unique_violation on
+--   unique (users_id, domain, cat, sub_cat) and THE MIGRATION ABORTS. That is
+--   FAIL-CLOSED and it is the correct outcome — a deploy-time abort is a
+--   scheduling failure, not a data one. ⚠ DO NOT "fix" this by adding
+--   `on conflict do nothing`-shaped tolerance or a `where not exists` guard: a
+--   skipped row leaves that user holding the RETIRED label, which the app's
+--   CAT_GROUP_ORDER will then drop from the allocation table while the
+--   denominator still counts it — under-summing percentages on a financial
+--   surface, silently, failing OPEN. Aborting loudly beats renaming partially.
+--
+-- ----------------------------------------------------------------------------
+-- WATCHER AND KEY-SURFACE VERIFICATION — what was checked, and the predicate.
+--   (W1) The 041 battery's SET-SIZE watcher (re-pinned at 65 rows:
+--        63 seeded at 041 + 077's Cash Balances + 080's Liability Balances;
+--        hardcoded, not derived, deliberately) SURVIVES UNCHANGED. Predicate: an
+--        UPDATE of a non-key text column changes no row count, in either table.
+--        The watcher counts rows; it asserts no `cat` value. 65 stays 65.
+--   (W2) unique (domain, cat, sub_cat) on pfin.taxonomy_default SURVIVES.
+--        Predicate: the rename maps ('asset','Equity',S) ->
+--        ('asset','Marketable Securities',S) injectively, and the target label
+--        does not occur in the table (R1, and no runtime writer exists).
+--   (W3) unique (users_id, domain, cat, sub_cat) on pfin.user_taxonomy is the
+--        one key that CAN be violated, by a user-authored row — see (R3) above.
+--        It is a real fence, it fails closed, and it is deliberately left to
+--        fire rather than pre-empted.
+--   (W4) The ON CONFLICT surfaces are CONSISTENT AFTER THE RENAME because both
+--        tables move together — see the REACH DECISION block. 041's two seed
+--        INSERTs (`on conflict (domain, cat, sub_cat) do nothing`) precede this
+--        migration in the chain and do not re-run.
+--   (W5) NO DDL-LEVEL CONSUMER KEYS ON THE OLD LABEL. Predicate: `'Equity'` does
+--        not occur in 076 / 077 / 080 / 081 or in any other migration outside
+--        028 / 035 / 037 / 041 — measured above. The asset-side label-keyed
+--        consumers key on 'Cash' and 'Liabilities', which this migration does
+--        not touch.
+--   (W6) ALL FOUR Decision-3 REFERENTS ARE UNTOUCHED. Predicate: they reference
+--        pfin.user_taxonomy(id); ids are not written by this migration. A label
+--        change is not a re-point.
+--   (W7) 031's pfin.account_trans_annotation_history.sub_cat_id — the plain
+--        bigint SNAPSHOT with no FK — is likewise untouched, for the same
+--        reason. ⚠ It DOES mean a historical snapshot now resolves to a row
+--        whose `cat` reads differently than it did when the snapshot was taken.
+--        That is correct and is what a rename means; it is recorded here because
+--        it is the kind of thing that gets reported later as an audit defect.
+--
+-- ----------------------------------------------------------------------------
+-- §10 3-AXIS CROSS-CHECK (Path B — ADR-011 Decision 4 REFERENCED, NOT restated;
+--   no count and no enumeration is carried here, deliberately). Decision 4 was
+--   read verbatim and live before drafting. This migration introduces ZERO
+--   catalogued §10 instances: it has no credential surface, no code-layer fence,
+--   and no network/config surface.
+--     (i)   Instance-numbering: UNCHANGED — nothing added, removed, reordered or
+--           renumbered.
+--     (ii)  Layer-attribution: UNCHANGED — no catalogued instance's layer moves
+--           and no surface becomes "four-layer".
+--     (iii) Verbatim-vs-paraphrase: Decision 4 is LINKED, not restated.
+--   ⚠ The §10 CATALOGUED set and the CI-FENCED set are DIFFERENT SETS; this
+--   migration changes neither and reconciles neither.
+--   LEDGER STATUS: FLAT.
+--
+-- ----------------------------------------------------------------------------
+-- DECISION 3 (cross-tenant FK-bypass family) EVALUATION — family UNCHANGED (+0),
+--   in the honest form: NO column is created, altered or dropped by this
+--   migration, so there is no FK-shaped column to evaluate. No id is written, so
+--   no reference moves. pfin.taxonomy_default remains global, users_id-free
+--   reference data. Read ADR-011 Decision 3 live for the family — including its
+--   labels and their status classes; this file carries no tally.
+--
+-- ----------------------------------------------------------------------------
+-- CONTRACT
+--   Two UPDATE statements, no function, no DDL.
+--     pfin.taxonomy_default : set cat = 'Marketable Securities'
+--                             where domain = 'asset' and cat = 'Equity'
+--     pfin.user_taxonomy    : same predicate, same assignment
+--   Security-load-bearing edges:
+--     · The `domain = 'asset'` conjunct is what keeps the cashflow accounting
+--       class out of scope. It is NOT redundant and must never be dropped as a
+--       simplification: without it this statement rewrites 028's enum values in
+--       user data and breaks fn_gl_entries' contra routing for every affected
+--       row.
+--     · No users_id is read or written; tenant ownership is untouched.
+--     · No id is read or written; every referent and every history snapshot
+--       continues to resolve to the same row.
+--     · pfin.user_taxonomy carries a BEFORE UPDATE trigger
+--       (user_taxonomy_set_updated_at -> pfin.fn_refresh_updated_at), so renamed
+--       rows get a fresh updated_at. That is intended: the row did change.
+--       pfin.taxonomy_default has no updated_at column and no trigger.
+--   ⚠ NO fail-closed mechanism is removed or weakened by this migration.
+-- ============================================================================
+
+-- ---------------------------------------------------------------------------
+-- (1) The global template. Every FUTURE provisioning reads this table, so this
+--     statement is what makes a new user arrive under the new label.
+-- ---------------------------------------------------------------------------
+update pfin.taxonomy_default
+   set cat = 'Marketable Securities'
+ where domain = 'asset'
+   and cat    = 'Equity';
+
+-- ---------------------------------------------------------------------------
+-- (2) The already-provisioned rows — the ADR-057 REACH half. Self-restricting:
+--     an UPDATE touches only rows that exist, so a zero-row user is untouched by
+--     construction and cannot be stranded. See the REACH DECISION block.
+--     ⚠ Fails CLOSED on a user-authored collision. Do not soften it.
+-- ---------------------------------------------------------------------------
+update pfin.user_taxonomy
+   set cat = 'Marketable Securities'
+ where domain = 'asset'
+   and cat    = 'Equity';
