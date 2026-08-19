@@ -12,8 +12,9 @@
 --       display_order, is_active, notes, created_at, updated_at; unique(users_id, cat, sub_cat);
 --       check (cat in ('Revenue','Expense','Transfer','Equity','Trade')) UNCONDITIONAL —
 --       Decision 4: the table IS the domain, so the disjunct that exempted asset-domain rows
---       under `028` has nothing left to exempt). SELECT policy users_id=auth.uid(); INSERT
---       policy carries 041's aal2 backstop clause VERBATIM (Shape A). Grants: select+insert to
+--       under `028` has nothing left to exempt). SELECT policy users_id=auth.uid() AND the 025
+--       aal2 backstop (both halves, on polqual); INSERT policy carries 041's aal2 backstop
+--       clause VERBATIM (Shape A). Grants: select+insert to
 --       authenticated ONLY — no update, no delete (Sec F5 VETO territory if either arrives).
 --       anon zero. No service_role grant (008's per-table-explicit-grant posture makes this true
 --       by construction, not by an explicit revoke).
@@ -42,9 +43,12 @@
 -- ⟦WIRE-VALIDATE⟧ authored against 084 as committed (3a5bdd8) and RE-VERIFIED against the
 --   001->084 stack on a hand-built scratch DB (createdb + auth/extensions/vault schemas + pgtap
 --   restored from the live Supabase container, per the #474 venue recipe — `supabase db reset`
---   is mechanically banned). 20/20 PASS. Corrupt-the-control confirmed non-vacuous: granting
---   `authenticated` an UPDATE on posting_prototype turned (S4) RED naming exactly that privilege;
---   reverted, re-ran clean.
+--   is mechanically banned). 21/21 PASS (Sec FLAG-2: (S1b) added, plan 20 -> 21). Corrupt-the-
+--   control confirmed non-vacuous TWICE: granting `authenticated` an UPDATE on posting_prototype
+--   turned (S4) RED naming exactly that privilege; ALTER POLICY-ing posting_prototype_select back
+--   to the bare users_id predicate (the exact 009-pre-025 historical shape) turned ONLY (S1b) RED,
+--   naming exactly the dropped aal2 clause, while (S1) stayed green — proving (S1b) watches
+--   something (S1) structurally cannot. Both reverted, re-ran clean.
 --
 -- ┌─ WHY THE STRUCTURAL LEGS ARE NOT OPTIONAL (Sec F5) ─────────────────────────────────────┐
 -- │ 025's battery is per-table behavioural, not an enumerative sweep, and there is no repo-  │
@@ -72,7 +76,7 @@ begin;
 
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(20);
+select plan(21);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 
@@ -90,6 +94,21 @@ select ok(
      from pg_policy where polrelid = 'pfin.posting_prototype'::regclass
        and polname = 'posting_prototype_select'),
   '(S1) STRUCTURAL: posting_prototype_select carries a USING expression referencing users_id = auth.uid() — proves the SELECT policy exists and is wired to the tenant column'
+);
+
+-- (S1b) Sec FLAG-2: posting_prototype_select's USING clause ALSO carries the 025/041 aal2
+--   backstop, VERBATIM, mirroring (S3)'s shape but against polqual (read side) rather than
+--   polwithcheck (insert side). (S1) alone only watches the users_id predicate — the aal2 half
+--   was present and correct in 084 as committed but had NOTHING WATCHING IT on the read policy.
+--   The documented threat: 009 shipped user_taxonomy_select WITHOUT this clause and 025 added it
+--   later via ALTER POLICY — a future ALTER POLICY of the same shape on posting_prototype_select
+--   would silently drop the aal2 backstop (an aal1 direct-PostgREST read gap on a tenant-owned
+--   financial table) while every other leg here stays green. RED if that ever happens.
+select ok(
+  (select coalesce(pg_get_expr(polqual, polrelid), '') ilike '%aal2%'
+     from pg_policy where polrelid = 'pfin.posting_prototype'::regclass
+       and polname = 'posting_prototype_select'),
+  '(S1b) STRUCTURAL: posting_prototype_select''s USING clause carries the ADR-029/025 aal2 backstop (pg_policy catalog, polqual) — RED if a future ALTER POLICY dropped the aal2 half while leaving the users_id predicate intact (the exact 009→025 historical shape)'
 );
 
 -- (S2) posting_prototype_insert carries a WITH CHECK clause wired to users_id = auth.uid().

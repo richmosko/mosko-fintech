@@ -19,8 +19,13 @@
 --     080's 'Liability Balances', all asset-domain pre-split).
 --   - pfin.posting_prototype_default: NEW at 084, the cashflow half of the split.
 --     27 rows on the 001->084 stack. Global shared-read (using(true)), SELECT to
---     authenticated only, NO users_id/NO FK — Decision-3-neutral, 025 aal2
---     EXCLUSION (i) (same posture as taxonomy_default).
+--     authenticated only, NO users_id. tax_character DOES carry an FK to the
+--     ADR-024 global pfin.tax_character(code) registry (a strengthening over
+--     taxonomy_default's inline CHECK) — Decision-3-NEUTRAL not because there is
+--     no FK, but because the referenced table has no tenant dimension: every
+--     tenant legitimately references every row, so there is no cross-tenant
+--     boundary for the FK to cross. 025 aal2 EXCLUSION (i) (same posture as
+--     taxonomy_default).
 --   - pfin.user_taxonomy gains user_taxonomy_insert (authenticated, INSERT, WITH CHECK
 --       (users_id = auth.uid()) AND (coalesce(user_settings.mfa_policy,'none') not in
 --       ('totp','passkey') OR auth.jwt()->>'aal' = 'aal2')) + an INSERT grant. NO
@@ -75,11 +80,17 @@
 --   (6a)/(6b) — if an UPDATE/DELETE grant leaked in, the mutate would not be ACL-denied → RED.
 --
 -- §10 / DECISION 3: §10 ledger UNCHANGED at 3 (RT-22 + RT-26 + RT-27). Decision-3 family
---   UNCHANGED (+0): taxonomy_default/posting_prototype_default have NO users_id / NO reference
---   column; user_taxonomy_insert/posting_prototype_insert introduce no new reference column
---   (users_id IS the tenant anchor, WITH CHECK is the C5 own-write shape, not a cross-tenant-FK
---   validation). No SECURITY DEFINER/INVOKER authored; DEFINER allowlist unchanged. This battery
---   proves the mechanisms, not a ledger move.
+--   UNCHANGED (+0): taxonomy_default/posting_prototype_default have NO users_id. Correction
+--   (FLAG-1): "NO reference column" is FALSE as a bare sentence against the DDL —
+--   posting_prototype_default.tax_character IS an FK to the ADR-024 global pfin.tax_character(code)
+--   registry (a strengthening over taxonomy_default's inline CHECK). It stays OFF the Decision-3
+--   ledger not because there is no FK, but because the referenced table carries no tenant
+--   dimension of any kind — every tenant legitimately references every row, so the FK crosses no
+--   isolation boundary. user_taxonomy_insert/posting_prototype_insert introduce no new reference
+--   column (users_id IS the tenant anchor, WITH CHECK is the C5 own-write shape, not a cross-
+--   tenant-FK validation). No SECURITY DEFINER/INVOKER authored; DEFINER allowlist unchanged. This
+--   battery proves the mechanisms, not a ledger move. Sec has signed the not-a-D3-member
+--   disposition; only the clause's wording was wrong, not the ruling.
 --
 -- POSTURE (SECURITY §4.5): SYNTHETIC ONLY — fixed-UUID tenants from _rls.tenant_a()/_b()/_c();
 --   NO PII / NO real account numbers / NO prod data. user_settings: B = 'totp' (the aal-gated
