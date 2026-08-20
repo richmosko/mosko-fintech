@@ -4,7 +4,7 @@
 
 - [053 CPI positivity CHECK follow-up](project_053_cpi_positivity_check_followup.md) — pointer only; canonical home is **BACKLOG §7.14** with Sec's four binding conditions. ⚠ `> 0` alone re-admits NaN *and* Infinity.
 
-- **[GL split: ADR-058 LANDED, no DDL yet](project_gl_taxonomy_split_ratified.md)** — doc-PR #499 (2026-08-19); read ADR-058 live. Follow-ups live at BACKLOG §7.24 / §5.3. D3 #10/#13/#17 amendments ride the DDL PR.
+- **[GL arc COMPLETE — rename + split + element ALL SHIPPED](project_gl_taxonomy_split_ratified.md)** — #502/#503 · #507/`084` · #510/`085`, Sec GREEN throughout. ⚠ That file has been silently reverted to "no DDL yet" TWICE; if you meet that claim, grep the migrations and re-correct.
 - **[Schema-impossible ACs trace to the incumbent](reference_schema_impossible_ac_traces_to_incumbent.md)** — the folded ETL still names `pfin.asset_cat`; "wrong AC" vs "different system" changes the disposition, and the masked residual is the load-bearing part.
 
 ## Postgres / RLS facts worth not re-deriving
