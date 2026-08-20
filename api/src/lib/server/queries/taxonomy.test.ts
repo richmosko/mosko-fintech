@@ -17,6 +17,13 @@
 // a row on one table must not suppress provisioning on the other); each branch is independently
 // FAIL-SOFT (logs, never throws, and never aborts its sibling); and each branch's upsert carries
 // the session-derived users_id with the post-084 (users_id, cat, sub_cat) conflict target.
+//
+// ADR-058 Decision 3 (element PR): `taxonomy_default`'s fixture (ASSET_DEFAULTS) carries `element`
+// — NOT NULL + CHECK-constrained on the real table, so the app never defaults it, only copies it
+// through. `posting_prototype_default`'s fixture (CASHFLOW_DEFAULTS) deliberately carries NO
+// `element` key — that table never gains the column. Two dedicated tests below assert the
+// asymmetry directly: the asset branch's upsert rows DO carry `element`, the cashflow branch's
+// upsert rows do NOT — the F3-class hazard a shared column-list constant would otherwise reopen.
 
 import { describe, it, expect, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -24,8 +31,21 @@ import { provisionDefaultTaxonomy, isAssignableAssetSubCat } from './taxonomy';
 
 const USER_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 
+// ADR-058 Decision 3 (element PR): `element` is NOT NULL + CHECK-constrained on
+// `taxonomy_default` — every row the real table returns already carries a valid value, so the
+// fixture mirrors that ('asset', never null/omitted). `posting_prototype_default`'s fixture
+// deliberately carries NO `element` key at all — the cashflow branch's column list never asks
+// for it (Decision 3: prototypes carry no element, not even a derived one).
 const ASSET_DEFAULTS = [
-	{ cat: 'Cash', sub_cat: 'FDIC', tax_relevant: false, tax_character: null, display_order: 1, notes: null }
+	{
+		cat: 'Cash',
+		sub_cat: 'FDIC',
+		tax_relevant: false,
+		tax_character: null,
+		display_order: 1,
+		notes: null,
+		element: 'asset'
+	}
 ];
 const CASHFLOW_DEFAULTS = [
 	{ cat: 'Income', sub_cat: 'Salary', tax_relevant: true, tax_character: 'ordinary', display_order: 2, notes: 'W-2' }
@@ -57,7 +77,11 @@ function makeSupabase(opts: { asset?: TableOpts; cashflow?: TableOpts } = {}) {
 		return { selectGuard, upsert };
 	}
 	function makeDefaultsSelect(o: TableOpts) {
-		return vi.fn(async () => ({ data: o.defaults ?? null, error: o.defaultsErr ?? null }));
+		// Typed with an explicit `_columns` param (even though the return value ignores it) so
+		// `.mock.calls[0]` carries a real tuple type — a bare `async () => ...` infers a zero-arg
+		// call signature and `.mock.calls` becomes `[]`, which would make the column-list
+		// assertions below a compile error rather than a real check on what was asked for.
+		return vi.fn(async (_columns: string) => ({ data: o.defaults ?? null, error: o.defaultsErr ?? null }));
 	}
 
 	const userTaxonomy = makeGuardAndUpsert(asset);
@@ -114,6 +138,39 @@ describe('provisionDefaultTaxonomy — post-084 two-independent-branches shape',
 		const [cashflowRows, cashflowOpts] = s.postingPrototypeUpsert.mock.calls[0];
 		expect(cashflowRows).toEqual([{ users_id: USER_ID, ...CASHFLOW_DEFAULTS[0] }]);
 		expect(cashflowOpts).toEqual({ onConflict: 'users_id,cat,sub_cat', ignoreDuplicates: true });
+	});
+
+	it('ADR-058 Decision 3 (element PR) — TEETH: the asset branch actually SELECTS `element` from taxonomy_default (not just a fixture that happens to carry it). Reverting `provisionAssetTaxonomy` to the old shared `DEFAULT_PROVISION_COLUMNS` string must fail this test even though the mock ignores its column-list argument for its RETURN value — the assertion is on the call args, not the data.', async () => {
+		const s = makeSupabase({
+			asset: { existing: null, defaults: ASSET_DEFAULTS },
+			cashflow: { existing: null, defaults: CASHFLOW_DEFAULTS }
+		});
+		await provisionDefaultTaxonomy(s.client, USER_ID);
+
+		expect(s.taxonomyDefaultSelect).toHaveBeenCalledTimes(1);
+		const [columnList] = s.taxonomyDefaultSelect.mock.calls[0];
+		expect(columnList).toContain('element');
+
+		// Row-shape half — a DIFFERENT thing than the select-call assertion above: proves the
+		// copied value actually flows through to the upsert row, not just that it was asked for.
+		const [assetRows] = s.userTaxonomyUpsert.mock.calls[0];
+		expect(assetRows).toEqual([{ users_id: USER_ID, ...ASSET_DEFAULTS[0] }]);
+	});
+
+	it('the posting_prototype branch NEVER selects `element` from posting_prototype_default — TEETH: asserted on the actual select-call column-list argument, not on the fixture shape (ADR-058 Decision 3: prototypes carry no element, not even a derived one)', async () => {
+		const s = makeSupabase({
+			asset: { existing: null, defaults: ASSET_DEFAULTS },
+			cashflow: { existing: null, defaults: CASHFLOW_DEFAULTS }
+		});
+		await provisionDefaultTaxonomy(s.client, USER_ID);
+
+		expect(s.postingPrototypeDefaultSelect).toHaveBeenCalledTimes(1);
+		const [columnList] = s.postingPrototypeDefaultSelect.mock.calls[0];
+		expect(columnList).not.toContain('element');
+
+		// Row-shape half — a DIFFERENT thing than the select-call assertion above.
+		const [cashflowRows] = s.postingPrototypeUpsert.mock.calls[0];
+		expect(cashflowRows).toEqual([{ users_id: USER_ID, ...CASHFLOW_DEFAULTS[0] }]);
 	});
 
 	it('THE KEY REGRESSION TEST (Sec F3 condition (b)): a user with EXISTING user_taxonomy rows but ZERO posting_prototype rows still gets posting_prototype provisioned — the guard does NOT short-circuit across tables', async () => {
