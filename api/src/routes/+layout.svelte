@@ -4,7 +4,8 @@
 	(LayoutData { userEmail: string | null }); authors NO server logic.
 
 	Renders an authed header ONLY when a user is signed in (data.userEmail present):
-	brand link → /, a Classify link carrying the SELF-200 pending-symbol count badge
+	brand link → /, primary nav (Net Worth / Accounts / Allocation — the latter added SELF-239),
+	a Classify link carrying the SELF-200 pending-symbol count badge
 	(zero footprint when the count is 0), the signed-in email, a Security link →
 	/settings/security (the MFA hub — makes TOTP enrollment/recovery discoverable at GA, not
 	URL-only), and the POST sign-out affordance. Sign-out is a plain
@@ -26,11 +27,14 @@
 	let { data, children }: { data: LayoutData; children: import('svelte').Snippet } = $props();
 
 	// Primary-nav active state. Net Worth is the root; Accounts owns the whole /accounts/* subtree.
-	// Only the surfaces that exist today are linked — the full locked app-sidebar (Allocation /
-	// Cash Flow / Est. Taxes / Monthly Report / Settings) lands as those V1.x surfaces are built.
+	// Allocation added at SELF-239 (the §2.2.2 table's own route, distinct from the
+	// /settings/allocation %Target editor). Only the surfaces that exist today are linked — the
+	// rest of the locked app-sidebar (Cash Flow / Est. Taxes / Monthly Report / Settings) lands as
+	// those V1.x surfaces are built.
 	const path = $derived(page.url.pathname);
 	const isNetWorth = $derived(path === '/');
 	const isAccounts = $derived(path === '/accounts' || path.startsWith('/accounts/'));
+	const isAllocation = $derived(path === '/allocation');
 
 	// SELF-207 P4 re-auth banner health summary — from +layout.server.ts (Backend-computed via the
 	// shared needsReauth/isInstitutionDown predicates, active-connections-only, fail-soft to {0,0}).
@@ -50,6 +54,9 @@
 				<a class="nav-link" href="/" aria-current={isNetWorth ? 'page' : undefined}>Net Worth</a>
 				<a class="nav-link" href="/accounts" aria-current={isAccounts ? 'page' : undefined}>
 					Accounts
+				</a>
+				<a class="nav-link" href="/allocation" aria-current={isAllocation ? 'page' : undefined}>
+					Allocation
 				</a>
 			</nav>
 		</div>
