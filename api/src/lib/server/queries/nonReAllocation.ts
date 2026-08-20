@@ -52,9 +52,17 @@
 //       module asserts about itself. `assetSubCatIds` now excludes Real Estate explicitly (`element
 //       = 'asset' AND cat != 'Real Estate'`), so this module's own row-set/denominator agreement no
 //       longer depends on 076's flag continuing to be called the way it is today — if that flag's
-//       default or call site ever changed, this module's own predicate still holds. The §2.1.5
-//       composition's Total Non-RE anchor also excludes Real Estate (Architect-verified), so the
-//       footing anchor this module targets is unaffected either way.
+//       default or call site ever changed, this module's own predicate still holds. ⚠ CORRECTION
+//       (Architect, 2026-08-20): an earlier draft of this note claimed "§2.1.5's Total Non-RE
+//       anchor also excludes Real Estate (Architect-verified)" — that attribution was wrong; it
+//       was never actually verified, and having now been measured, it does not hold as stated.
+//       051's total_non_re filters on `pfin.account.account_type not in ('real_estate',
+//       'liability')`; this module excludes by TAXONOMY CAT (`element` + `cat`). Two different
+//       columns, which coincide only where a holding classified under Cat 'Real Estate' also sits
+//       in an account typed `real_estate` — nothing constrains that pairing to always hold. This
+//       change's own justification needs nothing from §2.1.5 (row set and denominator agree at
+//       THIS consumer by construction, independent of any anchor), so the fix above stands
+//       unchanged; the anchor-agreement question itself is unasserted and routed to BACKLOG §7.24.
 //
 // Consumes the shared `subcatMarketValue.ts` helper (076 rollup + planning_target read) and adds
 // this surface's OWN row-set logic on top: a FULL enumeration of the caller's asset-ELEMENT
