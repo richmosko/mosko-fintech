@@ -19,8 +19,11 @@
 --       Pattern 1, local anchor, PLUS a second matched-DOMAIN predicate on the #14
 --       precedent; SECURITY INVOKER, set search_path = '', NULL-safe fail-closed;
 --       BEFORE INSERT OR UPDATE — the table is mutable settings data, so an
---       INSERT-only fence would leave the repoint path open). THREE distinct
---       raise legs: (1) unresolvable, (2) cross-tenant, (3) wrong domain.
+--       INSERT-only fence would leave the repoint path open). TWO distinct
+--       raise legs post-084: (1) unresolvable, (2) cross-tenant. (A third leg —
+--       wrong domain — existed pre-084; the split makes it structurally
+--       unreachable as its own predicate, and its coverage moved to leg 1. See
+--       BLOCK L3 below.)
 --   - trigger planning_target_set_updated_at (reuses the 001 DEFINER allowlist entry #1).
 -- Prereqs exercised (already on main / applied by Backend on the reset stack): 001 (pfin
 --   schema + fn_refresh_updated_at), 009 (pfin.user_taxonomy — the sub_cat_id FK target
@@ -132,10 +135,13 @@
 --   the 001->075 reset stack (CI, db-tests.yml, clean-apply). Locally verified on a hand-built
 --   scratch DB (createdb + auth/extensions/vault schemas + pgtap restored from the live
 --   Supabase container, migrations 001-075 applied in order, per the #474 venue recipe — `supabase
---   db reset` is mechanically banned). plan(37): 4 structural (S1-S2 + S3a-S3b, split per Sec
+--   db reset` is mechanically banned). RE-VERIFIED against the 001->084 stack (ADR-058's split;
+--   posture and messages confirmed live). plan(38): 4 structural (S1-S2 + S3a-S3b, split per Sec
 --   F1 fold-in on the #476 joint-review — see the box at BLOCK S) + 2 unset-semantics
 --   (U1-U2) + 2 two-tenant read isolation (R1-R2) + 2 leg-1 (L1a-L1b) + 3 leg-2 (L2a-L2c) + 2
---   leg-3 (L3-L3u) + 5 numeric mechanism (N1-N5) + 1 RESTRICT (FK1) + 11 aal2 backstop
+--   leg-1-via-cross-vocabulary (L3-L3u, retained names, retargeted assertion post-084 — see
+--   BLOCK L3) + 1 combined structural (L3s, new at 084) + 5 numeric mechanism (N1-N5) +
+--   1 RESTRICT (FK1) + 11 aal2 backstop
 --   (M1-M11) + 1 UPSERT reassign (UP1a) + 1 corrupt-the-control (X1) + 1 anon zero-grant (G1) +
 --   2 tenant-cascade (CASC1a-CASC1b) = 37.
 -- =====================================================================
@@ -145,7 +151,7 @@ begin;
 -- shared verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(37);
+select plan(38);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb, _rls.tenant_c() as tc \gset
@@ -170,26 +176,29 @@ insert into pfin.user_settings (users_id, mfa_policy) values
 -- tc: deliberately NO row (missing-row / lazy-provision coalesce case).
 -- te: deliberately NO row (cascade block does not touch RLS/aal at all).
 
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'ta', 'asset', 'Brokerage', 'US Equity') returning id as a_sub \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'ta', 'asset', 'Real Estate', 'Primary Home') returning id as a_sub2 \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'ta', 'asset', 'Brokerage', 'Intl Equity') returning id as a_sub3 \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'ta', 'cashflow', 'Revenue', 'Salary') returning id as a_cf_sub \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'tb', 'asset', 'Brokerage', 'US Equity') returning id as b_sub \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'tb', 'asset', 'Brokerage', 'Intl Equity') returning id as b_sub2 \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'tc', 'asset', 'Brokerage', 'US Equity') returning id as c_sub \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'td', 'asset', 'Brokerage', 'US Equity') returning id as d_sub \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'td', 'asset', 'Brokerage', 'Intl Equity') returning id as d_sub2 \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'te', 'asset', 'Brokerage', 'US Equity') returning id as te_sub \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat)
+  values (:'ta', 'Brokerage', 'US Equity') returning id as a_sub \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat)
+  values (:'ta', 'Real Estate', 'Primary Home') returning id as a_sub2 \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat)
+  values (:'ta', 'Brokerage', 'Intl Equity') returning id as a_sub3 \gset
+-- POST-084: a_cf_sub is now a pfin.posting_prototype row, not pfin.user_taxonomy — the
+-- cashflow half of the split (ADR-058 Decision 1). Still A's OWN valid posting prototype
+-- (cat='Revenue', legal per the unconditional CHECK). BLOCK L3 below re-targets accordingly.
+insert into pfin.posting_prototype (users_id, cat, sub_cat)
+  values (:'ta', 'Revenue', 'Salary') returning id as a_cf_sub \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat)
+  values (:'tb', 'Brokerage', 'US Equity') returning id as b_sub \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat)
+  values (:'tb', 'Brokerage', 'Intl Equity') returning id as b_sub2 \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat)
+  values (:'tc', 'Brokerage', 'US Equity') returning id as c_sub \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat)
+  values (:'td', 'Brokerage', 'US Equity') returning id as d_sub \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat)
+  values (:'td', 'Brokerage', 'Intl Equity') returning id as d_sub2 \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat)
+  values (:'te', 'Brokerage', 'US Equity') returning id as te_sub \gset
 
 -- =====================================================================
 -- BLOCK S (postgres — pg_policy catalog) — STRUCTURAL WITH CHECK / USING
@@ -362,31 +371,49 @@ rollback to savepoint sp_l2c;
 select set_config('role', 'postgres', true);
 
 -- =====================================================================
--- BLOCK L3 (authenticated A) — LEG 3, wrong domain. Uses A's OWN valid
---   cash-flow Sub-Cat (cat='Revenue', legal per 028's CHECK — 'Income' would
---   fail at the FIXTURE, not the fence; see the header box).
+-- BLOCK L3 (authenticated A) — was LEG 3 (wrong domain); POST-084 this targets LEG 1
+--   (unresolvable), because a_cf_sub no longer lives in pfin.user_taxonomy at all — it moved
+--   to pfin.posting_prototype under the same id (ADR-058 Decision 2). The split makes
+--   cross-vocabulary REFERENCE structurally impossible (Decision 5 Finding (b)): the fence's
+--   own resolving read into user_taxonomy simply finds nothing, exactly as (L1a)/(L1b) already
+--   assert for a nonexistent / RLS-invisible id. RE-TARGET, not deletion — Sec's routed-(ii)
+--   ruling: leg 3's coverage "does not disappear at the split — it moves to leg 1."
 -- =====================================================================
 select _rls.set_tenant(:'ta'::uuid);
 
--- (L3) INSERT: A targets its own cash-flow Sub-Cat -> leg 3 wrong-domain RAISE.
+-- (L3) INSERT: A targets its OWN cash-flow Sub-Cat (a_cf_sub, now a posting_prototype id) ->
+--      user_taxonomy's resolving read finds NOTHING -> leg 1 unresolvable, not leg 3.
 savepoint sp_l3;
 select throws_like(
   format($$ insert into pfin.planning_target (sub_cat_id, target_percent) values (%s, 10.00) $$, :a_cf_sub),
-  '%applies only to the asset taxonomy%leg 3 wrong domain%',
-  '(L3) LEG 3 wrong domain (INSERT): A references its OWN cash-flow Sub-Cat (cat=''Revenue'', a valid 028 row) -> fn_planning_target_matched_sub_cat RAISES leg 3 -- matched-tenant alone would have PASSED (A truly owns it), proving the SECOND predicate (domain=''asset'') is load-bearing'
+  '%does not resolve to a taxonomy row readable by users_id%leg 1 unresolvable%',
+  '(L3) POST-084 RETARGET (was LEG 3 wrong-domain, now LEG 1 unresolvable): A references its OWN cash-flow Sub-Cat (a_cf_sub) -> the row no longer exists in user_taxonomy (it moved to posting_prototype under the same id, Decision 2) -> fn_planning_target_matched_sub_cat RAISES leg 1, same message as (L1a)/(L1b) -- matched-tenant alone would have PASSED pre-084 (A truly owns the row, just in the other table), proving cross-vocabulary reference is now structurally impossible rather than merely domain-checked'
 );
 rollback to savepoint sp_l3;
 
--- (L3u) UPDATE: A re-points its EXISTING a_sub3 row to its own cash-flow
---       Sub-Cat -> leg 3 RAISES on UPDATE too (BEFORE INSERT OR UPDATE covers
---       the mutable repoint path, not just INSERT).
+-- (L3u) UPDATE: same re-target, on the mutable repoint path.
 savepoint sp_l3u;
 select throws_like(
   format($$ update pfin.planning_target set sub_cat_id = %s where sub_cat_id = %s $$, :a_cf_sub, :a_sub3),
-  '%applies only to the asset taxonomy%leg 3 wrong domain%',
-  '(L3u) LEG 3 wrong domain (UPDATE): A reassigns its EXISTING row to its own cash-flow Sub-Cat -> RAISES on UPDATE (BEFORE INSERT OR UPDATE) -- an INSERT-only fence would have left this repoint path open'
+  '%does not resolve to a taxonomy row readable by users_id%leg 1 unresolvable%',
+  '(L3u) POST-084 RETARGET (UPDATE): A reassigns its EXISTING row to its own cash-flow Sub-Cat -> RAISES leg 1 unresolvable on UPDATE too (BEFORE INSERT OR UPDATE covers the repoint path)'
 );
 rollback to savepoint sp_l3u;
+
+-- (L3s) STRUCTURAL, combined (Sec routed-(ii): "ONE structural leg, asserting code and comment
+--   TOGETHER... one leg, not two"): fn_planning_target_matched_sub_cat's prosrc is free of
+--   `domain`, AND its obj_description is free of both `domain` and `three` (the retired
+--   "THREE distinct raise legs" claim). Code/comment coherence, not proof of enforcement --
+--   that is BLOCK L3's job above.
+select ok(
+  (select p.prosrc !~* 'domain'
+     and coalesce(obj_description(p.oid, 'pg_proc'), '') !~* 'domain'
+     and coalesce(obj_description(p.oid, 'pg_proc'), '') !~* 'three'
+     from pg_proc p
+     join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'pfin' and p.proname = 'fn_planning_target_matched_sub_cat'),
+  '(L3s) STRUCTURAL: fn_planning_target_matched_sub_cat''s prosrc is free of `domain`, and its obj_description is free of both `domain` and `three` (the retired "THREE raise legs" claim) — code and comment coherence, not proof of enforcement'
+);
 select set_config('role', 'postgres', true);
 
 -- =====================================================================

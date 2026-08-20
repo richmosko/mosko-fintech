@@ -173,12 +173,21 @@ insert into pfin.account_trans (account_id, transaction_date, amount, vendor, de
 insert into pfin.account_trans (account_id, transaction_date, amount, vendor, description)
   values (:acctt, '2026-03-07', 90, 'vT', 'T split parent (C3 read fixture)') returning trans_id as tt \gset
 
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'ta', 'cashflow', 'Expense', 'Groceries') returning id as a_sub \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'ta', 'asset', 'Trade', 'BTO') returning id as a_trade \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'tb', 'cashflow', 'Expense', 'Groceries') returning id as b_sub \gset
+-- POST-084 (ADR-058 Decision 1): a_sub/b_sub are now pfin.posting_prototype rows.
+-- a_trade's domain FLIPS from 'asset' to (implicitly) posting_prototype too — pre-084
+-- it was deliberately asset-domain, cross-vocabulary with cashflow's 'Trade' class, to
+-- prove 030's Trade-consistency fence fires regardless of domain (a property the split
+-- makes structurally impossible to construct — Decision 5 Finding (b): a_trade as an
+-- ASSET-domain id can no longer even resolve via 023's re-targeted FK, so the RPC path
+-- below would hit 023's conversion rejection instead of ever reaching 030's fence,
+-- silently testing the WRONG mechanism). 'Trade' is a legitimate cashflow-class cat
+-- (Decision 4's enum) — this was always the semantically "real" shape.
+insert into pfin.posting_prototype (users_id, cat, sub_cat)
+  values (:'ta', 'Expense', 'Groceries') returning id as a_sub \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat)
+  values (:'ta', 'Trade', 'BTO') returning id as a_trade \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat)
+  values (:'tb', 'Expense', 'Groceries') returning id as b_sub \gset
 
 -- =====================================================================
 -- BLOCK 1 — Σ=parent DEFERRABLE constraint on the UN-DORMED authenticated write path.

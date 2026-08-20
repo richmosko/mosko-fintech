@@ -1,19 +1,31 @@
-// taxonomy.ts — shared server-side reads for the per-user Sub-Cat taxonomy (009).
-// Backend-owned server surface. Factored so the accounts/new create picker and the
-// accounts/[account_id] reassignment picker (SELF-236) use the SAME RLS-scoped query
-// + label-flatten — the two pickers can never drift on domain/ordering/shape.
+// taxonomy.ts — shared server-side reads for the per-user storage-classification taxonomy
+// (pfin.user_taxonomy, 009) and the per-user cashflow posting-prototype vocabulary
+// (pfin.posting_prototype, 084 / ADR-058 Decision 1's asymmetric split). Backend-owned server
+// surface. Factored so the accounts/new create picker and the accounts/[account_id]
+// reassignment picker (SELF-236) use the SAME RLS-scoped query + label-flatten — the two
+// pickers can never drift on ordering/shape.
+//
+// POST-084 SHAPE (ADR-058 Decision 1): `user_taxonomy` keeps its name/ids/asset rows and drops
+// `domain` — it IS the storage-classification table now, unique (users_id, cat, sub_cat). The
+// cashflow rows live in the new `posting_prototype`, same unique shape, own table entirely.
+// There is no more "asset domain" / "cashflow domain" read of ONE table — asset reads stay on
+// `user_taxonomy`, cashflow reads move to `posting_prototype`.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-// ── SELF-311 default-taxonomy first-access lazy provisioning (migration 041 / ADR-036 B1) ──
+// ── SELF-311 default-taxonomy first-access lazy provisioning (migration 041 / ADR-036 B1),
+//    reworked at 084 (ADR-058 Decision 1) to provision BOTH the storage-classification table
+//    (pfin.user_taxonomy, from pfin.taxonomy_default) and the posting-prototype table
+//    (pfin.posting_prototype, from pfin.posting_prototype_default) — Sec F3, VETO-if-unpaired,
+//    the named no-bundling exception riding the split migration's PR. ──
 
-/** The exact column set the canonical 041 provision statement selects from pfin.taxonomy_default
- *  (the migration-header source of truth): domain/cat/sub_cat/tax_relevant/tax_character/
- *  display_order/notes. `users_id` is NOT here — the global default table has no tenant column;
- *  it is stamped app-side from the SESSION. `is_active`/`created_at`/`updated_at`/`id` are all
- *  DB-defaulted on user_taxonomy (009), so they are deliberately omitted from the insert. */
-type TaxonomyDefaultRow = {
-	domain: string;
+/** The column set `084` leaves on `taxonomy_default` / `posting_prototype_default` — both
+ *  dropped `domain` in the same (symmetric) split (084 §4.4): cat/sub_cat/tax_relevant/
+ *  tax_character/display_order/notes. `users_id` is NOT here — neither global default table has
+ *  a tenant column; it is stamped app-side from the SESSION on both branches below.
+ *  `is_active`/`created_at`/`updated_at`/`id` are all DB-defaulted on both per-user tables, so
+ *  they are deliberately omitted from the insert, same as pre-084. */
+type DefaultProvisionRow = {
 	cat: string;
 	sub_cat: string;
 	tax_relevant: boolean;
@@ -22,32 +34,19 @@ type TaxonomyDefaultRow = {
 	notes: string | null;
 };
 
-const TAXONOMY_DEFAULT_COLUMNS =
-	'domain, cat, sub_cat, tax_relevant, tax_character, display_order, notes';
+const DEFAULT_PROVISION_COLUMNS =
+	'cat, sub_cat, tax_relevant, tax_character, display_order, notes';
 
 /**
- * Idempotently provision the caller's default user_taxonomy on first access (migration 041 /
- * ADR-036 B1 — both domains in ONE pass). App-side implementation of the canonical 041
- * INSERT…SELECT (041 authors NO function, so the app runs it as authenticated SQL under the
- * user's OWN JWT via the per-request anon client — caller-RLS, no service_role, no DEFINER):
- *   1. Cheap EXISTENCE GUARD — `select id … limit 1`. If the caller already has ANY taxonomy
- *      row, skip (avoids a full-set insert-attempt on every navigation). RLS scopes the read to
- *      auth.uid() (user_taxonomy_select), so no explicit users_id filter is needed.
- *   2. Read the global default set (pfin.taxonomy_default — authenticated `using(true)`).
- *   3. UPSERT the mapped rows with `users_id` from the SESSION (mass-assignment safe — NEVER the
- *      client) and `ignoreDuplicates: true` → INSERT … ON CONFLICT (users_id, domain, cat,
- *      sub_cat) DO NOTHING. Idempotent regardless of the guard (race-safe); the guard just
- *      avoids the per-nav insert-attempt cost.
- *
- * FAIL-SOFT by contract (like ensureUserSettings): a provisioning hiccup must NEVER throw or block
- * the page load. On any error the caller sees an empty taxonomy that session — the SELF-200
- * no-taxonomy guard renders that gracefully — and it self-heals on the next request. Errors are
- * logged, not raised. The aal2-claused 041 INSERT policy still fully fences the write server-side.
+ * Provision the caller's STORAGE-classification defaults: `pfin.user_taxonomy` from
+ * `pfin.taxonomy_default`. One of the two INDEPENDENT branches `provisionDefaultTaxonomy` runs —
+ * fail-soft entirely on its own, and its guard/read/upsert failing must never prevent the sibling
+ * `provisionCashflowPrototypes` branch from running (Sec F3 condition (b): the existence guard
+ * SPLITS PER TABLE, so a row on ONE table must never suppress provisioning on the OTHER — the
+ * pre-084 single-table guard would otherwise mark a user who has storage rows but zero prototypes
+ * as "already provisioned" and they would never get them).
  */
-export async function provisionDefaultTaxonomy(
-	supabase: SupabaseClient,
-	userId: string
-): Promise<void> {
+async function provisionAssetTaxonomy(supabase: SupabaseClient, userId: string): Promise<void> {
 	try {
 		// (1) Existence guard — RLS-scoped to the caller's own rows.
 		const { data: existing, error: exErr } = await supabase
@@ -57,38 +56,135 @@ export async function provisionDefaultTaxonomy(
 			.limit(1)
 			.maybeSingle();
 		if (exErr) {
-			console.error('[taxonomy] provisionDefaultTaxonomy guard read failed (fail-soft):', exErr.message);
+			console.error(
+				'[taxonomy] provisionAssetTaxonomy guard read failed (fail-soft):',
+				exErr.message
+			);
 			return;
 		}
 		if (existing) return; // already provisioned — nothing to do.
 
-		// (2) Read the global default set.
+		// (2) Read the global storage-side default set.
 		const { data: defaults, error: dErr } = await supabase
 			.schema('pfin')
 			.from('taxonomy_default')
-			.select(TAXONOMY_DEFAULT_COLUMNS);
+			.select(DEFAULT_PROVISION_COLUMNS);
 		if (dErr) {
-			console.error('[taxonomy] provisionDefaultTaxonomy default read failed (fail-soft):', dErr.message);
+			console.error(
+				'[taxonomy] provisionAssetTaxonomy default read failed (fail-soft):',
+				dErr.message
+			);
 			return;
 		}
 		if (!defaults || defaults.length === 0) return;
 
-		// (3) UPSERT (DO NOTHING) with a session-derived users_id.
-		const rows = (defaults as TaxonomyDefaultRow[]).map((d) => ({ users_id: userId, ...d }));
+		// (3) UPSERT (DO NOTHING) with a session-derived users_id. `domain` is gone from the
+		// unique key post-084 — the conflict target is (users_id, cat, sub_cat).
+		const rows = (defaults as DefaultProvisionRow[]).map((d) => ({ users_id: userId, ...d }));
 		const { error: insErr } = await supabase
 			.schema('pfin')
 			.from('user_taxonomy')
-			.upsert(rows, { onConflict: 'users_id,domain,cat,sub_cat', ignoreDuplicates: true });
+			.upsert(rows, { onConflict: 'users_id,cat,sub_cat', ignoreDuplicates: true });
 		if (insErr) {
-			console.error('[taxonomy] provisionDefaultTaxonomy upsert failed (fail-soft):', insErr.message);
+			console.error(
+				'[taxonomy] provisionAssetTaxonomy upsert failed (fail-soft):',
+				insErr.message
+			);
 		}
 	} catch (e) {
-		// Defensive: even a thrown transport/client error must not break the page load.
+		// Defensive: even a thrown transport/client error must not break the page load, and must
+		// not prevent the sibling branch from running (it isn't in this try/catch's scope).
 		console.error(
-			'[taxonomy] provisionDefaultTaxonomy threw (fail-soft):',
+			'[taxonomy] provisionAssetTaxonomy threw (fail-soft):',
 			e instanceof Error ? e.message : String(e)
 		);
 	}
+}
+
+/**
+ * Provision the caller's CASHFLOW posting-prototype defaults: `pfin.posting_prototype` from
+ * `pfin.posting_prototype_default`. Sibling of `provisionAssetTaxonomy` — see its header for the
+ * independence contract this mirrors verbatim (same guard/read/upsert shape, different table
+ * pair, same fail-soft-per-branch discipline).
+ */
+async function provisionCashflowPrototypes(supabase: SupabaseClient, userId: string): Promise<void> {
+	try {
+		// (1) Existence guard — RLS-scoped to the caller's own rows. Deliberately a SEPARATE guard
+		// read against `posting_prototype`, not a reuse of the asset-side guard's result — that is
+		// the whole point of Sec F3 condition (b).
+		const { data: existing, error: exErr } = await supabase
+			.schema('pfin')
+			.from('posting_prototype')
+			.select('id')
+			.limit(1)
+			.maybeSingle();
+		if (exErr) {
+			console.error(
+				'[taxonomy] provisionCashflowPrototypes guard read failed (fail-soft):',
+				exErr.message
+			);
+			return;
+		}
+		if (existing) return; // already provisioned — nothing to do.
+
+		// (2) Read the global cashflow-side default set.
+		const { data: defaults, error: dErr } = await supabase
+			.schema('pfin')
+			.from('posting_prototype_default')
+			.select(DEFAULT_PROVISION_COLUMNS);
+		if (dErr) {
+			console.error(
+				'[taxonomy] provisionCashflowPrototypes default read failed (fail-soft):',
+				dErr.message
+			);
+			return;
+		}
+		if (!defaults || defaults.length === 0) return;
+
+		// (3) UPSERT (DO NOTHING) with a session-derived users_id. Conflict target (users_id, cat,
+		// sub_cat) — `posting_prototype`'s unique shape per 084 §4.5.
+		const rows = (defaults as DefaultProvisionRow[]).map((d) => ({ users_id: userId, ...d }));
+		const { error: insErr } = await supabase
+			.schema('pfin')
+			.from('posting_prototype')
+			.upsert(rows, { onConflict: 'users_id,cat,sub_cat', ignoreDuplicates: true });
+		if (insErr) {
+			console.error(
+				'[taxonomy] provisionCashflowPrototypes upsert failed (fail-soft):',
+				insErr.message
+			);
+		}
+	} catch (e) {
+		console.error(
+			'[taxonomy] provisionCashflowPrototypes threw (fail-soft):',
+			e instanceof Error ? e.message : String(e)
+		);
+	}
+}
+
+/**
+ * Idempotently provision the caller's defaults on first access — BOTH the storage-classification
+ * table AND the posting-prototype table (084 / ADR-058 Decision 1's asymmetric split; Sec F3,
+ * VETO-if-unpaired, the named no-bundling exception). Runs the two independent branches above
+ * SEQUENTIALLY, each with its OWN try/catch scope: neither branch's guard, read, upsert, or thrown
+ * error can suppress or abort the other. This is the direct app-side answer to F3 condition (b) —
+ * the pre-084 function had exactly ONE existence guard against `user_taxonomy` alone, which after
+ * the split would silently stop a user who already has storage rows from ever receiving
+ * posting-prototype rows.
+ *
+ * FAIL-SOFT by contract (like ensureUserSettings): a provisioning hiccup on EITHER branch must
+ * NEVER throw or block the page load. On any error the caller sees an empty (or half-provisioned)
+ * taxonomy that session — the SELF-200 no-taxonomy guard renders that gracefully — and each branch
+ * self-heals independently on the next request (its own guard re-checks its own table). Errors are
+ * logged per branch, never raised. The aal2-claused 041-shape INSERT policies still fully fence
+ * both writes server-side.
+ */
+export async function provisionDefaultTaxonomy(
+	supabase: SupabaseClient,
+	userId: string
+): Promise<void> {
+	await provisionAssetTaxonomy(supabase, userId);
+	await provisionCashflowPrototypes(supabase, userId);
 }
 
 export type SubCatOption = {
@@ -99,16 +195,19 @@ export type SubCatOption = {
 };
 
 /**
- * Asset-domain (§2.2.1) Sub-Cat options for the caller, RLS-scoped via the
- * per-request anon client (user_taxonomy_select = auth.uid()). is_active hides
- * retired rows. Returns [] on error (logged) — the picker degrades, never throws.
+ * Asset-domain (§2.2.1) Sub-Cat options for the caller, RLS-scoped via the per-request anon
+ * client (user_taxonomy_select = auth.uid()). is_active hides retired rows. Returns [] on error
+ * (logged) — the picker degrades, never throws.
+ *
+ * POST-084: `user_taxonomy` IS the storage-classification table now (no more `domain` column to
+ * filter on) — every row here is asset-domain by construction, so the read is unconditional
+ * beyond `is_active`.
  */
 export async function loadAssetSubCats(supabase: SupabaseClient): Promise<SubCatOption[]> {
 	const { data, error } = await supabase
 		.schema('pfin')
 		.from('user_taxonomy')
 		.select('id, cat, sub_cat, display_order')
-		.eq('domain', 'asset')
 		.eq('is_active', true)
 		.order('display_order', { ascending: true, nullsFirst: false })
 		.order('cat', { ascending: true })
@@ -122,16 +221,20 @@ export async function loadAssetSubCats(supabase: SupabaseClient): Promise<SubCat
 }
 
 /**
- * Cashflow-domain (§2.4 / ADR-031 D3 class enum) Sub-Cat options for the caller, RLS-scoped.
- * The category picker for the manual cash-entry / edit / split surfaces (SELF-202). Same shape
- * + ordering as loadAssetSubCats; domain='cashflow' is the only difference. Returns [] on error.
+ * Cashflow (§2.4 / ADR-031 D3 class enum) Sub-Cat options for the caller, RLS-scoped. The
+ * category picker for the manual cash-entry / edit / split surfaces (SELF-202). Same shape +
+ * ordering as loadAssetSubCats.
+ *
+ * POST-084: reads `pfin.posting_prototype`, NOT `pfin.user_taxonomy` — the cashflow rows moved
+ * tables at the split (ADR-058 Decision 1), so this is a different table, not a different filter
+ * on the same one. `posting_prototype` carries its own `is_active` column (084 §4.5), so the
+ * shape stays identical to loadAssetSubCats beyond the table name.
  */
 export async function loadCashflowSubCats(supabase: SupabaseClient): Promise<SubCatOption[]> {
 	const { data, error } = await supabase
 		.schema('pfin')
-		.from('user_taxonomy')
+		.from('posting_prototype')
 		.select('id, cat, sub_cat, display_order')
-		.eq('domain', 'cashflow')
 		.eq('is_active', true)
 		.order('display_order', { ascending: true, nullsFirst: false })
 		.order('cat', { ascending: true })
@@ -146,12 +249,17 @@ export async function loadCashflowSubCats(supabase: SupabaseClient): Promise<Sub
 
 /**
  * ADR-013 H1 app-layer pre-validation for the SELF-235 classify/reassign write path: does
- * `subCatId` exist, belong to the CALLER, and sit in the asset domain? RLS-scoped
- * (user_taxonomy_select = auth.uid()), so a forged or cross-tenant id resolves to zero rows —
- * existence and ownership collapse into one check, same shape H1 asks for the §2.2 `%Target`
- * keyed-array write ("the Sub-Cat key must be validated against the seeded taxonomy — no
- * forged/cross-tenant key"). is_active mirrors loadAssetSubCats so a submitted id is only ever
- * one the picker itself could have offered.
+ * `subCatId` exist and belong to the CALLER? RLS-scoped (user_taxonomy_select = auth.uid()), so a
+ * forged or cross-tenant id resolves to zero rows — existence and ownership collapse into one
+ * check, same shape H1 asks for the §2.2 `%Target` keyed-array write ("the Sub-Cat key must be
+ * validated against the seeded taxonomy — no forged/cross-tenant key"). is_active mirrors
+ * loadAssetSubCats so a submitted id is only ever one the picker itself could have offered.
+ *
+ * POST-084: no `domain` filter — `user_taxonomy` is asset-only by construction now, so a
+ * `posting_prototype` id (a DIFFERENT table's id-space per Decision 2) simply cannot resolve a
+ * row here, which is a strictly STRONGER guarantee than the pre-084 `.eq('domain','asset')`
+ * filter (that filter policed a column value on a shared table; table identity now does the same
+ * job by construction and cannot be dropped by accident the way a `.eq()` clause can).
  *
  * DEFENSE-IN-DEPTH ONLY: this is checked BEFORE the write, never instead of the 022 DB fences
  * (fn_user_asset_category_matched_sub_cat / fn_user_asset_category_asset), which remain the
@@ -167,7 +275,6 @@ export async function isAssignableAssetSubCat(
 		.from('user_taxonomy')
 		.select('id')
 		.eq('id', subCatId)
-		.eq('domain', 'asset')
 		.eq('is_active', true)
 		.maybeSingle();
 	if (error) {
@@ -178,10 +285,13 @@ export async function isAssignableAssetSubCat(
 }
 
 /**
- * Flatten an embedded `user_taxonomy ( cat, sub_cat )` join result to a label.
- * supabase-js may type the FK embed as a to-many array though this many-to-one FK
- * returns a single object at runtime — normalize both. NULL (untagged sub_cat_id) →
- * { cat: null, sub_cat: 'Unsorted' } (mirrors the create dropdown's Unsorted option).
+ * Flatten an embedded `( cat, sub_cat )` join result to a label. Table-agnostic — used against
+ * BOTH the `user_taxonomy` embed (asset-side callers, e.g. pendingSymbols.ts / SELF-235 pickers)
+ * and the `posting_prototype` embed (cashflow-side callers, e.g. the account-detail transaction
+ * list post-084 — 023/029's `sub_cat_id` FK re-targets there). supabase-js may type the FK embed
+ * as a to-many array though this many-to-one FK returns a single object at runtime — normalize
+ * both. NULL (untagged sub_cat_id) → { cat: null, sub_cat: 'Unsorted' } (mirrors the create
+ * dropdown's Unsorted option).
  */
 export function subCatLabel(embedded: unknown): { cat: string | null; sub_cat: string } {
 	const one = Array.isArray(embedded) ? (embedded[0] ?? null) : (embedded ?? null);

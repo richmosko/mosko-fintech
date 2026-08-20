@@ -113,7 +113,7 @@ select ok(
 --   inserted FIRST (lower price_id), 'spot_feed' @100.00 inserted SECOND
 --   (higher price_id). Both source ranks = 2 (tied on price_date AND rank).
 --   Correct post-fix answer: 100.00 (highest price_id), NOT 150.00.
---   Classified to Equity for the fn_subcat_market_value leg. a_inv is FUNDED
+--   Classified to Marketable Securities for the fn_subcat_market_value leg. a_inv is FUNDED
 --   via a checkpoint dated BEFORE the trade, to EXACTLY offset the buy''s cash
 --   debit (076''s own convention: fn_account_cash_as_of sums account_trans
 --   amounts back to -infinity when NO checkpoint bounds them, so an unfunded
@@ -140,8 +140,8 @@ insert into pfin.eod_price (asset_id, price_date, source, price) values
 insert into pfin.eod_price (asset_id, price_date, source, price) values
   (:secb,'2026-08-01','market_feed',60.00);
 
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat) values
-  (:'ta','asset','Equity','US-06-Financials') returning id as a_eq \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat) values
+  (:'ta','Marketable Securities','US-06-Financials') returning id as a_eq \gset
 
 insert into pfin.account (users_id, name, account_type, scope, tax_treatment) values
   (:'ta','a-inv-78','investment','household','taxable') returning account_id as a_inv \gset
@@ -179,7 +179,7 @@ select is(
 select is(
   (select market_value from pfin.fn_subcat_market_value('2026-08-05'::date, true) where sub_cat_id = :a_eq),
   100.00::numeric,
-  '(K3) fn_subcat_market_value, the THIRD live kernel copy: the classified Equity Sub-Cat''s market_value = EXACTLY 100.00 (identical tie-break result to K1/K2)'
+  '(K3) fn_subcat_market_value, the THIRD live kernel copy: the classified Marketable Securities Sub-Cat''s market_value = EXACTLY 100.00 (identical tie-break result to K1/K2)'
 );
 
 -- =====================================================================

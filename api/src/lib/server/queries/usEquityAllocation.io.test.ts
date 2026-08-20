@@ -1,12 +1,16 @@
 // usEquityAllocation.io.test.ts — SELF-240 I/O-wiring coverage for loadUsEquityAllocation,
 // separate from the pure-core compute tests in usEquityAllocation.test.ts. Mocks the chain:
-//   .schema('pfin').rpc('fn_subcat_market_value', {...})              — via subcatMarketValue
-//   .schema('pfin').from('planning_target').select(...)               — via subcatMarketValue
-//   .schema('pfin').from('user_taxonomy').select(...).eq(...).in(...) — this module's own read
+//   .schema('pfin').rpc('fn_subcat_market_value', {...})       — via subcatMarketValue
+//   .schema('pfin').from('planning_target').select(...)        — via subcatMarketValue
+//   .schema('pfin').from('user_taxonomy').select(...).in(...)  — this module's own read
 //
-// Proves: the taxonomy read is scoped to domain=asset AND the twelve US-equity labels (AC1/AC2);
-// a successful round trip reaches the compute core with the right inputs; a failure at ANY of the
-// three reads degrades to ok:false.
+// Proves: the taxonomy read is scoped to the twelve US-equity labels (AC1/AC2); a successful
+// round trip reaches the compute core with the right inputs; a failure at ANY of the three reads
+// degrades to ok:false.
+//
+// POST-084 (ADR-058 Decision 1's split): `user_taxonomy` is the storage-classification table
+// only now — no `domain` column, no `.eq('domain', 'asset')` link in the chain. `.select(...)`
+// returns straight to `.in(...)`, which resolves the read.
 
 import { describe, it, expect, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -27,8 +31,7 @@ function makeSupabase(opts: {
 	const rpc = vi.fn(async () => ({ data: opts.rpcData ?? [], error: opts.rpcError ?? null }));
 	const targetSelect = vi.fn(async () => ({ data: opts.targetData ?? [], error: opts.targetError ?? null }));
 	const taxonomyIn = vi.fn(async () => ({ data: opts.taxonomyData ?? [], error: opts.taxonomyError ?? null }));
-	const taxonomyEq = vi.fn(() => ({ in: taxonomyIn }));
-	const taxonomySelect = vi.fn(() => ({ eq: taxonomyEq }));
+	const taxonomySelect = vi.fn(() => ({ in: taxonomyIn }));
 
 	const from = vi.fn((table: string) => {
 		if (table === 'planning_target') return { select: targetSelect };
@@ -37,7 +40,7 @@ function makeSupabase(opts: {
 	});
 	const schema = vi.fn(() => ({ rpc, from }));
 	const client = { schema } as unknown as SupabaseClient;
-	return { client, rpc, from, targetSelect, taxonomySelect, taxonomyEq, taxonomyIn };
+	return { client, rpc, from, targetSelect, taxonomySelect, taxonomyIn };
 }
 
 describe('loadUsEquityAllocation — I/O wiring', () => {
@@ -56,11 +59,10 @@ describe('loadUsEquityAllocation — I/O wiring', () => {
 		expect(us06).toMatchObject({ dollar_alloc: 300, pct_target: 100 }); // sole target → 100% renormalized
 	});
 
-	it('the user_taxonomy read is scoped to domain=asset AND the twelve US-equity labels (AC1/AC2)', async () => {
-		const { client, taxonomySelect, taxonomyEq, taxonomyIn } = makeSupabase({});
+	it('the user_taxonomy read is scoped to the twelve US-equity labels (AC1/AC2) — no domain column post-084', async () => {
+		const { client, taxonomySelect, taxonomyIn } = makeSupabase({});
 		await loadUsEquityAllocation(client, AS_OF);
 		expect(taxonomySelect).toHaveBeenCalledWith('id, sub_cat');
-		expect(taxonomyEq).toHaveBeenCalledWith('domain', 'asset');
 		expect(taxonomyIn).toHaveBeenCalledWith('sub_cat', US_EQUITY_SUB_CATS);
 	});
 

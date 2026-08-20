@@ -181,7 +181,7 @@ begin;
 -- shared verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(18);
+select plan(19);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
@@ -228,12 +228,17 @@ insert into pfin.account_trans (account_id, transaction_date, amount, vendor, de
 --   is tenant B (distinct users_id from a_sub). Assertions key off id/users_id, not
 --   the cat text, so the fence-test intent is unchanged. (NB: no inline comment on a
 --   `\gset` line — \gset consumes the rest of the line as variable-name args.)
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'ta', 'cashflow', 'Expense', 'Rent') returning id as a_sub \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'ta', 'cashflow', 'Expense', 'Groceries') returning id as a_sub2 \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'tb', 'cashflow', 'Expense', 'Rent') returning id as b_sub \gset
+-- POST-084 (ADR-058 Decision 1): these are now pfin.posting_prototype rows, not
+--   pfin.user_taxonomy — the cashflow half of the split. a_asset_sub is NEW: an
+--   asset-domain (storage-side) user_taxonomy row, for the (F3) conversion leg.
+insert into pfin.posting_prototype (users_id, cat, sub_cat)
+  values (:'ta', 'Expense', 'Rent') returning id as a_sub \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat)
+  values (:'ta', 'Expense', 'Groceries') returning id as a_sub2 \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat)
+  values (:'tb', 'Expense', 'Rent') returning id as b_sub \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat)
+  values (:'ta', 'Brokerage', 'US Equity') returning id as a_asset_sub \gset
 
 -- =====================================================================
 -- BLOCK 1 (authenticated A) — matched-tenant PASSes: annotate own txn (matched Sub-Cat),
@@ -383,13 +388,16 @@ select set_config('role', 'postgres', true);
 -- BLOCK 8 (postgres) — sub_cat_id ON DELETE RESTRICT (fail-loud referential integrity).
 --   A's ta1 annotation (from 1a) still references a_sub.
 -- =====================================================================
--- (8) deleting a user_taxonomy row still referenced by an annotation is blocked (23503) —
---     no orphaned Sub-Cat reference. (trans_id ON DELETE RESTRICT is moot — account_trans is
---     immutable, no DELETE path exists — so it is not exercised here.)
+-- (8) RE-TARGETED POST-084: deleting a posting_prototype row still referenced by an
+--     annotation is blocked (23503) — no orphaned Sub-Cat reference. sub_cat_id's FK
+--     re-targeted from user_taxonomy to posting_prototype at 084 (Decision 1/5); the
+--     RESTRICT posture itself is unchanged, just the table it protects. (trans_id ON
+--     DELETE RESTRICT is moot — account_trans is immutable, no DELETE path exists —
+--     so it is not exercised here.)
 select throws_ok(
-  format($$ delete from pfin.user_taxonomy where id = %s $$, :a_sub),
+  format($$ delete from pfin.posting_prototype where id = %s $$, :a_sub),
   '23503', null,
-  '(8) sub_cat_id ON DELETE RESTRICT: deleting a user_taxonomy row still referenced by an annotation is RESTRICTED (foreign_key_violation 23503) — no orphaned Sub-Cat reference'
+  '(8) POST-084 sub_cat_id ON DELETE RESTRICT: deleting a posting_prototype row still referenced by an annotation is RESTRICTED (foreign_key_violation 23503) — no orphaned Sub-Cat reference (was user_taxonomy pre-split, same RESTRICT posture, re-targeted table)'
 );
 
 -- =====================================================================
@@ -418,6 +426,21 @@ select throws_ok(
   'P0001', null,
   '(F2) #10 cross-tenant UPDATE under authenticated: A re-categorizes its OWN annotation to B''s Sub-Cat -> the fence RAISES (BEFORE INSERT OR UPDATE covers the mutable re-categorization path — a re-categorization cannot pivot to another tenant''s Sub-Cat). SQLSTATE-match (P0001, distinct from RLS 42501) so the SELF-298 #10 message softening cannot RED this.'
 );
+
+-- (F2b) CONVERSION LEG (Sec routed-(iii), successor of the deleted app-layer DOMAIN
+--   NOTE): A references its OWN storage-side (asset) user_taxonomy id as an
+--   annotation's sub_cat_id -> REJECTED. Pre-084 this SUCCEEDED (023's own DOMAIN
+--   NOTE: "Matched-DOMAIN is app-layer only in V1") because the fence only checked
+--   table membership, not domain. Post-084 the fence's own resolving read into
+--   posting_prototype finds nothing (a_asset_sub lives in user_taxonomy only) ->
+--   NOT EXISTS -> raise. This demonstrates the conversion the split is FOR. Named
+--   (F2b), not (F3) — (F3)/(F4) below are the file's PRE-EXISTING service_role
+--   load-bearing pair; this leg does not renumber them.
+select throws_like(
+  format($$ insert into pfin.account_trans_annotation (trans_id, sub_cat_id) values (%s, %s) $$, :ta5, :a_asset_sub),
+  '%is not a posting prototype owned by and visible to the tenant of trans_id%',
+  '(F2b) CONVERSION: A references its OWN storage-side (asset) user_taxonomy id as sub_cat_id -> REJECTED -- pre-084 this succeeded (023''s own DOMAIN NOTE: app-layer only); post-084 cross-vocabulary REFERENCE is structurally impossible (Decision 5 Finding (b))'
+);
 select set_config('role', 'postgres', true);
 
 -- F3/F4 — THE LOAD-BEARING LEG (service_role, RLS BYPASSED). Hold the ACLs the fence's
@@ -427,7 +450,7 @@ select set_config('role', 'postgres', true);
 --   rejects. auth.uid() is NULL under service_role, so there is no ambient tenant — the fence
 --   resolves the tenant purely via the trans_id -> account chain (exactly the (a) property).
 grant usage on schema pfin to service_role;
-grant select on pfin.user_taxonomy to service_role;
+grant select on pfin.posting_prototype to service_role;
 grant select on pfin.account_trans to service_role;
 grant select on pfin.account to service_role;
 grant insert on pfin.account_trans_annotation to service_role;

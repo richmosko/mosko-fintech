@@ -12,7 +12,8 @@
 // the caller HOLDS VALUE IN — a zero-held Sub-Cat is simply absent from its return (076's own
 // contract). AC2's "zero-held+zero-target seeded Sub-Cats still render with zeros" requires the
 // FULL catalog, not just the held subset, so this module reads the caller's OWN
-// `pfin.user_taxonomy` (direct-owner RLS, domain='asset') separately and LEFT-merges 076's
+// `pfin.user_taxonomy` (direct-owner RLS; asset-domain BY CONSTRUCTION post-084 — the table has
+// no other kind of row since ADR-058 Decision 1's split) separately and LEFT-merges 076's
 // market_value onto it (absent → 0) — the same "supabase-js has no cross-table server LEFT
 // JOIN across independently-RLS'd tables" shape pendingSymbols.ts / navComposition.ts already
 // established, applied to a THIRD table pair here.
@@ -237,11 +238,13 @@ export async function loadNonReAllocation(
 	const substrate = await loadSubcatMarketValueAndTargets(supabase, asOf);
 	if (!substrate.ok) return { data: null, ok: false };
 
+	// POST-084: no `.eq('domain', 'asset')` filter — `user_taxonomy` is the storage-classification
+	// table only (ADR-058 Decision 1's split moved every cashflow row out), so the unfiltered read
+	// already is the full asset-domain catalog AC2 needs.
 	const { data: taxonomyRows, error } = await supabase
 		.schema('pfin')
 		.from('user_taxonomy')
-		.select('id, cat, sub_cat, display_order')
-		.eq('domain', 'asset');
+		.select('id, cat, sub_cat, display_order');
 	if (error) {
 		console.error('[nonReAllocation] user_taxonomy read failed:', error.message);
 		return { data: null, ok: false };

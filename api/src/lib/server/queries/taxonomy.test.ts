@@ -1,12 +1,22 @@
-// taxonomy.test.ts — unit coverage for provisionDefaultTaxonomy (SELF-311 / migration 041) AND
-// isAssignableAssetSubCat (SELF-235 / ADR-013 H1, QA-added). Pure-TS server test (node env per
-// vitest.config). Mocks the supabase-js chain per table:
-//   user_taxonomy: .select('id').limit(1).maybeSingle() → guard read; .upsert(rows, opts) → write
-//   taxonomy_default: .select(cols) (awaited) → the global default set read
+// taxonomy.test.ts — unit coverage for provisionDefaultTaxonomy (SELF-311 / migration 041,
+// reworked at 084 / ADR-058 Decision 1's asymmetric split) AND isAssignableAssetSubCat
+// (SELF-235 / ADR-013 H1, QA-added). Pure-TS server test (node env per vitest.config).
 //
-// Proves: the existence guard SKIPS the default-read + upsert when a row already exists; on an
-// empty guard it reads taxonomy_default and UPSERTs the mapped rows with a SESSION-derived
-// users_id + ON CONFLICT DO NOTHING; and it is FAIL-SOFT (logs, never throws) on every error path.
+// POST-084 shape: provisionDefaultTaxonomy runs TWO INDEPENDENT branches — provisionAssetTaxonomy
+// (pfin.user_taxonomy from pfin.taxonomy_default) and provisionCashflowPrototypes
+// (pfin.posting_prototype from pfin.posting_prototype_default) — each with its OWN existence
+// guard and its OWN try/catch, per Sec F3 condition (b): a row on ONE table must never suppress
+// provisioning on the OTHER. The mock below dispatches on table name across all four tables:
+//   user_taxonomy:             .select('id').limit(1).maybeSingle() → guard; .upsert(rows, opts) → write
+//   taxonomy_default:          .select(cols) (awaited)               → the asset-side default read
+//   posting_prototype:         .select('id').limit(1).maybeSingle() → guard; .upsert(rows, opts) → write
+//   posting_prototype_default: .select(cols) (awaited)               → the cashflow-side default read
+//
+// Proves: EACH branch's existence guard independently SKIPS its own default-read + upsert when
+// the caller already has a row on THAT table (and only that table — Sec F3's central regression:
+// a row on one table must not suppress provisioning on the other); each branch is independently
+// FAIL-SOFT (logs, never throws, and never aborts its sibling); and each branch's upsert carries
+// the session-derived users_id with the post-084 (users_id, cat, sub_cat) conflict target.
 
 import { describe, it, expect, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -14,110 +24,199 @@ import { provisionDefaultTaxonomy, isAssignableAssetSubCat } from './taxonomy';
 
 const USER_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 
-const DEFAULTS = [
-	{ domain: 'asset', cat: 'Equities', sub_cat: 'US Large Cap', tax_relevant: false, tax_character: null, display_order: 1, notes: null },
-	{ domain: 'cashflow', cat: 'Income', sub_cat: 'Salary', tax_relevant: true, tax_character: 'ordinary', display_order: 2, notes: 'W-2' }
+const ASSET_DEFAULTS = [
+	{ cat: 'Cash', sub_cat: 'FDIC', tax_relevant: false, tax_character: null, display_order: 1, notes: null }
+];
+const CASHFLOW_DEFAULTS = [
+	{ cat: 'Income', sub_cat: 'Salary', tax_relevant: true, tax_character: 'ordinary', display_order: 2, notes: 'W-2' }
 ];
 
-/**
- * Table-dispatching supabase stub. `from(table)` returns the right sub-chain:
- *   user_taxonomy → { select: guard chain, upsert }
- *   taxonomy_default → { select: awaited default read }
- */
-function makeSupabase(opts: {
+type TableOpts = {
 	existing?: unknown;
 	existingErr?: { message: string } | null;
 	defaults?: unknown;
 	defaultsErr?: { message: string } | null;
 	upsertErr?: { message: string } | null;
-}) {
-	const maybeSingle = vi.fn(async () => ({ data: opts.existing ?? null, error: opts.existingErr ?? null }));
-	const limit = vi.fn(() => ({ maybeSingle }));
-	const selectGuard = vi.fn(() => ({ limit }));
-	const upsert = vi.fn(async (_rows: unknown, _opts: unknown) => ({ error: opts.upsertErr ?? null }));
-	const selectDefaults = vi.fn(async () => ({ data: opts.defaults ?? null, error: opts.defaultsErr ?? null }));
+};
+
+/**
+ * Table-dispatching supabase stub covering all four tables the two provisioning branches touch.
+ * `asset` configures `user_taxonomy` + `taxonomy_default`; `cashflow` configures
+ * `posting_prototype` + `posting_prototype_default`. Each table's guard/default-read/upsert is an
+ * INDEPENDENT mock so a test can prove one branch's failure never reaches the other's calls.
+ */
+function makeSupabase(opts: { asset?: TableOpts; cashflow?: TableOpts } = {}) {
+	const asset = opts.asset ?? {};
+	const cashflow = opts.cashflow ?? {};
+
+	function makeGuardAndUpsert(o: TableOpts) {
+		const maybeSingle = vi.fn(async () => ({ data: o.existing ?? null, error: o.existingErr ?? null }));
+		const limit = vi.fn(() => ({ maybeSingle }));
+		const selectGuard = vi.fn(() => ({ limit }));
+		const upsert = vi.fn(async (_rows: unknown, _upsertOpts: unknown) => ({ error: o.upsertErr ?? null }));
+		return { selectGuard, upsert };
+	}
+	function makeDefaultsSelect(o: TableOpts) {
+		return vi.fn(async () => ({ data: o.defaults ?? null, error: o.defaultsErr ?? null }));
+	}
+
+	const userTaxonomy = makeGuardAndUpsert(asset);
+	const taxonomyDefaultSelect = makeDefaultsSelect(asset);
+	const postingPrototype = makeGuardAndUpsert(cashflow);
+	const postingPrototypeDefaultSelect = makeDefaultsSelect(cashflow);
 
 	const from = vi.fn((table: string) => {
-		if (table === 'user_taxonomy') return { select: selectGuard, upsert };
-		if (table === 'taxonomy_default') return { select: selectDefaults };
+		if (table === 'user_taxonomy') return { select: userTaxonomy.selectGuard, upsert: userTaxonomy.upsert };
+		if (table === 'taxonomy_default') return { select: taxonomyDefaultSelect };
+		if (table === 'posting_prototype')
+			return { select: postingPrototype.selectGuard, upsert: postingPrototype.upsert };
+		if (table === 'posting_prototype_default') return { select: postingPrototypeDefaultSelect };
 		return {};
 	});
 	const schema = vi.fn(() => ({ from }));
 	const client = { schema } as unknown as SupabaseClient;
-	return { client, maybeSingle, limit, selectGuard, upsert, selectDefaults, from, schema };
+	return {
+		client,
+		from,
+		userTaxonomyUpsert: userTaxonomy.upsert,
+		taxonomyDefaultSelect,
+		postingPrototypeUpsert: postingPrototype.upsert,
+		postingPrototypeDefaultSelect
+	};
 }
 
-describe('provisionDefaultTaxonomy', () => {
-	it('SKIPS the default read + upsert when the caller already has taxonomy (guard hit)', async () => {
-		const { client, selectDefaults, upsert, from } = makeSupabase({ existing: { id: 42 } });
-		await provisionDefaultTaxonomy(client, USER_ID);
+describe('provisionDefaultTaxonomy — post-084 two-independent-branches shape', () => {
+	it('SKIPS both branches when the caller already has rows on BOTH tables', async () => {
+		const s = makeSupabase({ asset: { existing: { id: 1 } }, cashflow: { existing: { id: 37 } } });
+		await provisionDefaultTaxonomy(s.client, USER_ID);
 
-		expect(from).toHaveBeenCalledWith('user_taxonomy');
-		expect(from).not.toHaveBeenCalledWith('taxonomy_default');
-		expect(selectDefaults).not.toHaveBeenCalled();
-		expect(upsert).not.toHaveBeenCalled();
+		expect(s.from).toHaveBeenCalledWith('user_taxonomy');
+		expect(s.from).toHaveBeenCalledWith('posting_prototype');
+		expect(s.from).not.toHaveBeenCalledWith('taxonomy_default');
+		expect(s.from).not.toHaveBeenCalledWith('posting_prototype_default');
+		expect(s.userTaxonomyUpsert).not.toHaveBeenCalled();
+		expect(s.postingPrototypeUpsert).not.toHaveBeenCalled();
 	});
 
-	it('provisions on an empty guard: reads taxonomy_default + UPSERTs mapped rows with session users_id + DO NOTHING', async () => {
-		const { client, upsert, from } = makeSupabase({ existing: null, defaults: DEFAULTS });
-		await provisionDefaultTaxonomy(client, USER_ID);
-
-		expect(from).toHaveBeenCalledWith('taxonomy_default');
-		expect(upsert).toHaveBeenCalledTimes(1);
-		const [rows, opts] = upsert.mock.calls[0];
-		// Every row carries the SESSION users_id (never a client value) + the exact default fields.
-		expect(rows).toEqual([
-			{ users_id: USER_ID, ...DEFAULTS[0] },
-			{ users_id: USER_ID, ...DEFAULTS[1] }
-		]);
-		expect(opts).toEqual({ onConflict: 'users_id,domain,cat,sub_cat', ignoreDuplicates: true });
-	});
-
-	it('does not upsert when the default set is empty', async () => {
-		const { client, upsert } = makeSupabase({ existing: null, defaults: [] });
-		await provisionDefaultTaxonomy(client, USER_ID);
-		expect(upsert).not.toHaveBeenCalled();
-	});
-
-	it('is fail-soft on a guard read error (logs, no default read, no upsert)', async () => {
-		const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-		const { client, selectDefaults, upsert } = makeSupabase({ existingErr: { message: 'rls denied' } });
-		await expect(provisionDefaultTaxonomy(client, USER_ID)).resolves.toBeUndefined();
-		expect(selectDefaults).not.toHaveBeenCalled();
-		expect(upsert).not.toHaveBeenCalled();
-		expect(errSpy).toHaveBeenCalled();
-		errSpy.mockRestore();
-	});
-
-	it('is fail-soft on a default read error (logs, no upsert)', async () => {
-		const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-		const { client, upsert } = makeSupabase({ existing: null, defaultsErr: { message: 'boom' } });
-		await expect(provisionDefaultTaxonomy(client, USER_ID)).resolves.toBeUndefined();
-		expect(upsert).not.toHaveBeenCalled();
-		expect(errSpy).toHaveBeenCalled();
-		errSpy.mockRestore();
-	});
-
-	// Sec positive-verification (SELF-311): the RLS WITH-CHECK RAISE on the upsert itself must be
-	// caught → logged → graceful empty degrade, NOT a hard 500 on every nav. Scenario: a pre-041
-	// mfa_policy='totp' user at aal1 with NO taxonomy yet → the guard does NOT skip → the 041 INSERT
-	// policy's aal2 backstop rejects with 42501 (returned by supabase-js as { error }, not thrown).
-	// Asserts the upsert WAS reached (so the try/catch scope genuinely covers the provision write)
-	// and the raise is swallowed fail-soft. Self-heals via the layout call after step-up.
-	it('is fail-soft on an RLS WITH-CHECK raise from the upsert (aal2-at-aal1 42501) — logs, reaches upsert, never throws', async () => {
-		const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-		const { client, upsert } = makeSupabase({
-			existing: null,
-			defaults: DEFAULTS,
-			upsertErr: { message: 'new row violates row-level security policy for table "user_taxonomy" (42501)' }
+	it('provisions BOTH tables on a fresh user (no rows on either) — the direct fresh-user proof (Sec F3 condition (c))', async () => {
+		const s = makeSupabase({
+			asset: { existing: null, defaults: ASSET_DEFAULTS },
+			cashflow: { existing: null, defaults: CASHFLOW_DEFAULTS }
 		});
-		await expect(provisionDefaultTaxonomy(client, USER_ID)).resolves.toBeUndefined();
-		expect(upsert).toHaveBeenCalledTimes(1); // we genuinely hit the upsert; its error was caught
+		await provisionDefaultTaxonomy(s.client, USER_ID);
+
+		expect(s.userTaxonomyUpsert).toHaveBeenCalledTimes(1);
+		const [assetRows, assetOpts] = s.userTaxonomyUpsert.mock.calls[0];
+		expect(assetRows).toEqual([{ users_id: USER_ID, ...ASSET_DEFAULTS[0] }]);
+		expect(assetOpts).toEqual({ onConflict: 'users_id,cat,sub_cat', ignoreDuplicates: true });
+
+		expect(s.postingPrototypeUpsert).toHaveBeenCalledTimes(1);
+		const [cashflowRows, cashflowOpts] = s.postingPrototypeUpsert.mock.calls[0];
+		expect(cashflowRows).toEqual([{ users_id: USER_ID, ...CASHFLOW_DEFAULTS[0] }]);
+		expect(cashflowOpts).toEqual({ onConflict: 'users_id,cat,sub_cat', ignoreDuplicates: true });
+	});
+
+	it('THE KEY REGRESSION TEST (Sec F3 condition (b)): a user with EXISTING user_taxonomy rows but ZERO posting_prototype rows still gets posting_prototype provisioned — the guard does NOT short-circuit across tables', async () => {
+		const s = makeSupabase({
+			asset: { existing: { id: 1 } }, // already provisioned — this branch must skip
+			cashflow: { existing: null, defaults: CASHFLOW_DEFAULTS } // NOT provisioned — must still run
+		});
+		await provisionDefaultTaxonomy(s.client, USER_ID);
+
+		expect(s.userTaxonomyUpsert).not.toHaveBeenCalled(); // asset branch correctly skipped
+		expect(s.postingPrototypeUpsert).toHaveBeenCalledTimes(1); // cashflow branch reached anyway
+		const [cashflowRows] = s.postingPrototypeUpsert.mock.calls[0];
+		expect(cashflowRows).toEqual([{ users_id: USER_ID, ...CASHFLOW_DEFAULTS[0] }]);
+	});
+
+	it('the mirror of the key regression test: existing posting_prototype rows but ZERO user_taxonomy rows still provisions user_taxonomy', async () => {
+		const s = makeSupabase({
+			asset: { existing: null, defaults: ASSET_DEFAULTS },
+			cashflow: { existing: { id: 37 } }
+		});
+		await provisionDefaultTaxonomy(s.client, USER_ID);
+
+		expect(s.postingPrototypeUpsert).not.toHaveBeenCalled();
+		expect(s.userTaxonomyUpsert).toHaveBeenCalledTimes(1);
+		const [assetRows] = s.userTaxonomyUpsert.mock.calls[0];
+		expect(assetRows).toEqual([{ users_id: USER_ID, ...ASSET_DEFAULTS[0] }]);
+	});
+
+	it('BRANCH INDEPENDENCE: a hard failure (guard read error) on the posting_prototype branch does not prevent the user_taxonomy branch from completing', async () => {
+		const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const s = makeSupabase({
+			asset: { existing: null, defaults: ASSET_DEFAULTS },
+			cashflow: { existingErr: { message: 'rls denied' } }
+		});
+		await expect(provisionDefaultTaxonomy(s.client, USER_ID)).resolves.toBeUndefined();
+
+		expect(s.userTaxonomyUpsert).toHaveBeenCalledTimes(1); // unaffected sibling still ran
+		expect(s.postingPrototypeUpsert).not.toHaveBeenCalled(); // its own guard errored, fail-soft
 		expect(errSpy).toHaveBeenCalled();
 		errSpy.mockRestore();
 	});
 
-	it('is fail-soft when the chain itself throws (never blocks the load)', async () => {
+	it('BRANCH INDEPENDENCE, the mirror: a hard failure on the user_taxonomy branch does not prevent posting_prototype from completing', async () => {
+		const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const s = makeSupabase({
+			asset: { existingErr: { message: 'rls denied' } },
+			cashflow: { existing: null, defaults: CASHFLOW_DEFAULTS }
+		});
+		await expect(provisionDefaultTaxonomy(s.client, USER_ID)).resolves.toBeUndefined();
+
+		expect(s.userTaxonomyUpsert).not.toHaveBeenCalled();
+		expect(s.postingPrototypeUpsert).toHaveBeenCalledTimes(1);
+		expect(errSpy).toHaveBeenCalled();
+		errSpy.mockRestore();
+	});
+
+	it('does not upsert a branch whose default set is empty (independently per branch)', async () => {
+		const s = makeSupabase({
+			asset: { existing: null, defaults: [] },
+			cashflow: { existing: null, defaults: CASHFLOW_DEFAULTS }
+		});
+		await provisionDefaultTaxonomy(s.client, USER_ID);
+		expect(s.userTaxonomyUpsert).not.toHaveBeenCalled();
+		expect(s.postingPrototypeUpsert).toHaveBeenCalledTimes(1);
+	});
+
+	it('is fail-soft on a default-read error, per branch (logs, no upsert for that branch, sibling unaffected)', async () => {
+		const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const s = makeSupabase({
+			asset: { existing: null, defaultsErr: { message: 'boom' } },
+			cashflow: { existing: null, defaults: CASHFLOW_DEFAULTS }
+		});
+		await expect(provisionDefaultTaxonomy(s.client, USER_ID)).resolves.toBeUndefined();
+		expect(s.userTaxonomyUpsert).not.toHaveBeenCalled();
+		expect(s.postingPrototypeUpsert).toHaveBeenCalledTimes(1);
+		expect(errSpy).toHaveBeenCalled();
+		errSpy.mockRestore();
+	});
+
+	// Sec positive-verification (SELF-311, carried forward at 084): the RLS WITH-CHECK RAISE on
+	// EITHER upsert must be caught → logged → graceful degrade, NOT a hard 500 on every nav.
+	// Scenario: a pre-041-shape aal2 backstop rejects the write with 42501 (returned by
+	// supabase-js as { error }, not thrown). Asserts the upsert WAS reached (so the try/catch scope
+	// genuinely covers the provision write) and the raise is swallowed fail-soft, on EACH branch
+	// independently.
+	it('is fail-soft on an RLS WITH-CHECK raise from EITHER upsert (aal2-at-aal1 42501) — logs, reaches upsert, never throws, sibling unaffected', async () => {
+		const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const s = makeSupabase({
+			asset: {
+				existing: null,
+				defaults: ASSET_DEFAULTS,
+				upsertErr: { message: 'new row violates row-level security policy for table "user_taxonomy" (42501)' }
+			},
+			cashflow: { existing: null, defaults: CASHFLOW_DEFAULTS }
+		});
+		await expect(provisionDefaultTaxonomy(s.client, USER_ID)).resolves.toBeUndefined();
+		expect(s.userTaxonomyUpsert).toHaveBeenCalledTimes(1); // reached; its error was caught
+		expect(s.postingPrototypeUpsert).toHaveBeenCalledTimes(1); // sibling unaffected, succeeded
+		expect(errSpy).toHaveBeenCalled();
+		errSpy.mockRestore();
+	});
+
+	it('is fail-soft when the chain itself throws before either branch runs (never blocks the load)', async () => {
 		const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 		const client = {
 			schema: () => {
@@ -131,23 +230,25 @@ describe('provisionDefaultTaxonomy', () => {
 });
 
 // ============================================================================
-// isAssignableAssetSubCat — SELF-235 / ADR-013 H1 (QA-added). classify.server.test.ts already
-// proves the classify ACTION returns 403 when the pre-check returns false, via a canned
-// `preValidate: { found: false }` mock — but that never calls the REAL isAssignableAssetSubCat,
-// so it cannot catch a regression to the function's OWN query construction (e.g. someone drops
-// the `.eq('domain','asset')` filter). That filter is the ENTIRE domain fence: 022's own DOMAIN
-// NOTE states the DB trigger (#8, fn_user_asset_category_matched_sub_cat) checks matched-TENANT
-// only, not matched-DOMAIN — "a one-line `and domain = 'asset'` addition later if desired" is
-// explicitly NOT there yet. So a same-tenant cashflow-domain sub_cat_id would pass the DB fence
-// outright; isAssignableAssetSubCat is the ONLY thing standing between it and acceptance.
+// isAssignableAssetSubCat — SELF-235 / ADR-013 H1 (QA-added), reworked at 084. classify.server.
+// test.ts already proves the classify ACTION returns 403 when the pre-check returns false, via a
+// canned `preValidate: { found: false }` mock — but that never calls the REAL
+// isAssignableAssetSubCat, so it cannot catch a regression to the function's OWN query
+// construction.
 //
-// The stub below is a small predicate-accumulating fake (not a canned true/false): each .eq()
-// call narrows a filter set, and .maybeSingle() evaluates the accumulated filters against ONE
-// fixed candidate row — so these tests exercise the REAL query chain's filtering semantics,
+// POST-084: `user_taxonomy` has no `domain` column any more — it IS the storage-classification
+// (asset-only) table by construction (ADR-058 Decision 1's split). The pre-084 app-layer domain
+// fence (`.eq('domain','asset')`) is now REDUNDANT-BY-CONSTRUCTION rather than removed-and-
+// unreplaced: a `posting_prototype` id lives in a DISJOINT id-space (Decision 2's reserved-range
+// construction) and simply cannot resolve a row in `user_taxonomy`'s table at all, which is a
+// STRONGER guarantee than a column filter (a filter can be dropped by accident; table identity
+// cannot). The stub below is a small predicate-accumulating fake (not a canned true/false): each
+// .eq() call narrows a filter set, and .maybeSingle() evaluates the accumulated filters against
+// ONE fixed candidate row — so these tests exercise the REAL query chain's filtering semantics,
 // not a mock that already knows the answer.
 // ============================================================================
 
-type CandidateRow = { id: number; domain: string; is_active: boolean } | null;
+type CandidateRow = { id: number; is_active: boolean } | null;
 
 function makeSubCatQueryStub(row: CandidateRow) {
 	const filters: Record<string, unknown> = {};
@@ -157,8 +258,8 @@ function makeSubCatQueryStub(row: CandidateRow) {
 			row !== null && Object.entries(filters).every(([k, v]) => (row as Record<string, unknown>)[k] === v);
 		return { data: matches ? { id: row!.id } : null, error: null };
 	});
-	// eq() returns itself so the real chain shape (.eq().eq().eq().maybeSingle()) resolves
-	// regardless of call order/count — the ACCUMULATED filter set is what's evaluated.
+	// eq() returns itself so the real chain shape (.eq().eq().maybeSingle()) resolves regardless
+	// of call order/count — the ACCUMULATED filter set is what's evaluated.
 	const chain: { eq: ReturnType<typeof vi.fn>; maybeSingle: typeof maybeSingle } = {
 		eq: vi.fn((col: string, val: unknown) => {
 			filters[col] = val;
@@ -188,29 +289,31 @@ function makeErroringSubCatQueryStub(message: string) {
 	return { client };
 }
 
-describe('isAssignableAssetSubCat — ADR-013 H1 app-layer domain enforcement (SELF-235)', () => {
-	it('REJECTS a same-tenant sub_cat_id in the WRONG domain (cashflow) — the DB fence (#8) does NOT check domain, so this IS the only domain fence in the system', async () => {
-		const { client } = makeSubCatQueryStub({ id: 55, domain: 'cashflow', is_active: true });
-		await expect(isAssignableAssetSubCat(client, 55)).resolves.toBe(false);
-	});
-
-	it('accepts a same-tenant, asset-domain, active sub_cat_id (the true-positive companion to the rejection above)', async () => {
-		const { client } = makeSubCatQueryStub({ id: 55, domain: 'asset', is_active: true });
+describe('isAssignableAssetSubCat — post-084 app-layer check (SELF-235)', () => {
+	it('accepts a same-tenant, active sub_cat_id resolving in user_taxonomy', async () => {
+		const { client } = makeSubCatQueryStub({ id: 55, is_active: true });
 		await expect(isAssignableAssetSubCat(client, 55)).resolves.toBe(true);
 	});
 
-	it('TEETH: the query chain actually filters on domain=asset — proves the domain fence is IN the query, not coincidentally passing because the fixture happens to be asset-domain', async () => {
-		const { client, eqCalls } = makeSubCatQueryStub({ id: 55, domain: 'asset', is_active: true });
+	it('TEETH: the query chain filters on id AND is_active — proves both fences are IN the query, not coincidentally passing', async () => {
+		const { client, eqCalls } = makeSubCatQueryStub({ id: 55, is_active: true });
 		await isAssignableAssetSubCat(client, 55);
-		expect(eqCalls).toContainEqual(['domain', 'asset']);
+		expect(eqCalls).toContainEqual(['id', 55]);
+		expect(eqCalls).toContainEqual(['is_active', true]);
 	});
 
-	it('rejects a RETIRED (is_active=false) sub_cat_id even in the right domain', async () => {
-		const { client } = makeSubCatQueryStub({ id: 55, domain: 'asset', is_active: false });
+	it('NO domain filter is issued post-084 — the column no longer exists, and asserting one would break this test the day the split lands', async () => {
+		const { client, eqCalls } = makeSubCatQueryStub({ id: 55, is_active: true });
+		await isAssignableAssetSubCat(client, 55);
+		expect(eqCalls.some(([col]) => col === 'domain')).toBe(false);
+	});
+
+	it('rejects a RETIRED (is_active=false) sub_cat_id', async () => {
+		const { client } = makeSubCatQueryStub({ id: 55, is_active: false });
 		await expect(isAssignableAssetSubCat(client, 55)).resolves.toBe(false);
 	});
 
-	it('rejects a nonexistent id (no row at all) — same shape a cross-tenant id resolves to under RLS', async () => {
+	it('rejects a nonexistent id — the shape a cross-tenant OR a cross-table (posting_prototype, disjoint id-space per Decision 2) id resolves to under RLS/table-identity', async () => {
 		const { client } = makeSubCatQueryStub(null);
 		await expect(isAssignableAssetSubCat(client, 999)).resolves.toBe(false);
 	});

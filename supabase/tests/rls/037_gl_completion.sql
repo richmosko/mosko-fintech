@@ -30,7 +30,8 @@
 --   023 (account_trans_annotation overlay + #10 sub_cat fence + ata full-CRUD wr_access policies);
 --   028 (user_taxonomy.cat enum); 029/030 (split + transaction_type vocab); 032 (lot_match + #14
 --   fence + immutability); 033 (pfin.journal + status/reopen + #12 journal fence); 034 (basis_adjust
---   shape + reason trigger); 036 (lot_match INSERT grant + wr_access — the sell's match is now writable).
+--   shape + reason trigger); 036 (lot_match INSERT grant + wr_access — the sell's match is now writable);
+--   084 (GL split — cashflow taxonomy rows now live in pfin.posting_prototype, no domain column).
 --
 -- ┌─ THE RATIFIED WORKED EXAMPLE (§037.1; the realized-gain correctness anchor) ───────────────┐
 -- │ BUY 100@$10 (basis 1000) · return_of_capital basis_adjust (−$150 basis / +$150 cash) ·      │
@@ -150,10 +151,10 @@ insert into auth.users (id) values (:'ta'), (:'tb');
 -- Taxonomy (A) — Transfer (transfer-leg contra + a reclassify source) + Revenue (compound leg +
 -- the reclassify target). Matched-tenant for the #10 sub_cat fence.
 -- ---------------------------------------------------------------------
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'ta', 'cashflow', 'Transfer', 'Move')   returning id as tx_xfer \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat)
-  values (:'ta', 'cashflow', 'Revenue',  'Salary') returning id as tx_rev  \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat)
+  values (:'ta', 'Transfer', 'Move')   returning id as tx_xfer \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat)
+  values (:'ta', 'Revenue',  'Salary') returning id as tx_rev  \gset
 
 -- ---------------------------------------------------------------------
 -- Accounts. A: an investment (securities) + a cash (transfer/compound/freeze legs). B: minimal.

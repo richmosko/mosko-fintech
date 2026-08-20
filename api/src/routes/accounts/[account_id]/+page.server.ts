@@ -72,11 +72,20 @@ import type { PageServerLoad, Actions } from './$types';
 
 // Category label + note (023) and split children (029) embedded per transaction so the
 // detail UI can render the current state (category, is-split, breakdown). Both embeds are
-// RLS-scoped; the nested user_taxonomy carries the human label.
+// RLS-scoped; the nested posting_prototype carries the human label.
+//
+// POST-084 (ADR-058 Decision 1/5): both 023's `account_trans_annotation.sub_cat_id` and 029's
+// `account_trans_split.sub_cat_id` RE-TARGET from `user_taxonomy` to `posting_prototype` — the
+// cashflow-side referents the split moves. PostgREST embeds key on the FK's TARGET TABLE NAME,
+// so the embed key changes with the FK; this is the same "consumer breaks the instant the FK
+// re-targets" hazard Sec named F3 for taxonomy.ts's provisioning path, extended by team-lead to
+// this file (ruling: rides the split PR, pending Sec confirm-or-narrow at joint-review — this is
+// a READ path, so a missed re-target here breaks the account-detail transaction history for every
+// existing user on the very first post-migration page load, not just new signups).
 const TRANSACTION_COLUMNS = `
 	trans_id, transaction_date, amount, vendor, description, transaction_type, is_reverse, replaces_trans_id, created_at,
-	account_trans_annotation ( sub_cat_id, note, user_taxonomy ( cat, sub_cat ) ),
-	account_trans_split ( id, amount, sub_cat_id, note, display_order, user_taxonomy ( cat, sub_cat ) )
+	account_trans_annotation ( sub_cat_id, note, posting_prototype ( cat, sub_cat ) ),
+	account_trans_split ( id, amount, sub_cat_id, note, display_order, posting_prototype ( cat, sub_cat ) )
 `;
 
 /** Map a transactions.ts WriteResult to a SvelteKit action response. */
@@ -143,8 +152,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	// for the consuming component. supabase-js can't infer the embed shape → rows typed loose.
 	const transactions = ((transRows ?? []) as Array<Record<string, unknown>>).map((r) => {
 		const annRaw = r.account_trans_annotation as
-			| { note?: string | null; user_taxonomy?: unknown }
-			| Array<{ note?: string | null; user_taxonomy?: unknown }>
+			| { note?: string | null; posting_prototype?: unknown }
+			| Array<{ note?: string | null; posting_prototype?: unknown }>
 			| null;
 		const ann = Array.isArray(annRaw) ? (annRaw[0] ?? null) : annRaw;
 		const splits = ((r.account_trans_split as Array<Record<string, unknown>>) ?? [])
@@ -153,7 +162,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 				amount: s.amount as number,
 				note: (s.note as string | null) ?? null,
 				display_order: (s.display_order as number | null) ?? null,
-				...subCatLabel(s.user_taxonomy)
+				...subCatLabel(s.posting_prototype)
 			}))
 			.sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0));
 		return {
@@ -166,7 +175,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			is_reverse: r.is_reverse as boolean,
 			replaces_trans_id: (r.replaces_trans_id as number | null) ?? null,
 			created_at: r.created_at as string,
-			category: ann ? subCatLabel(ann.user_taxonomy) : null,
+			category: ann ? subCatLabel(ann.posting_prototype) : null,
 			note: (ann?.note as string | null) ?? null,
 			splits,
 			split_count: splits.length

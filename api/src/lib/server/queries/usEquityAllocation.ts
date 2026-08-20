@@ -155,11 +155,12 @@ export async function loadUsEquityAllocation(
 
 	// Scoped to exactly the twelve labels (AC1's row set) rather than the full asset-domain
 	// catalog nonReAllocation.ts reads — this surface never needs anything outside them.
+	// POST-084: no `.eq('domain', 'asset')` — `user_taxonomy` is asset-domain by construction now
+	// (ADR-058 Decision 1's split), so the `.in('sub_cat', ...)` clause alone is the full scope.
 	const { data: taxonomyRows, error } = await supabase
 		.schema('pfin')
 		.from('user_taxonomy')
 		.select('id, sub_cat')
-		.eq('domain', 'asset')
 		.in('sub_cat', US_EQUITY_SUB_CATS as string[]);
 	if (error) {
 		console.error('[usEquityAllocation] user_taxonomy read failed:', error.message);

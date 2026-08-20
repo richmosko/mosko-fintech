@@ -31,9 +31,20 @@
 -- │      at all receives NOTHING. LOAD-BEARING (080's header): reaching a   │
 -- │      zero-row user would satisfy 041's existence guard and strand that  │
 -- │      user with ONE Sub-Cat forever.                                     │
--- │  (c) DOMAIN-AGNOSTIC REACH — the user set carries no `domain=...`       │
--- │      filter. A user whose ONLY pre-existing row is CASHFLOW-domain is   │
--- │      still "already provisioned" and IS reached.                        │
+-- │  (c) STORAGE-SCOPED BY CONSTRUCTION, POST-084 (was DOMAIN-AGNOSTIC       │
+-- │      REACH pre-split — RETARGET-WITH-NARROWING, queued for Sec confirm  │
+-- │      at the merge-gate joint-review; not yet ratified as a pure         │
+-- │      strengthening; mirrors 077's identical finding, Sec F10).          │
+-- │      ⚠ LOSING SIDE, named per the replacement-control rule: pre-084 the │
+-- │      backfill's user set reached a user via EITHER domain, because the  │
+-- │      derivation carried no domain filter and the table held both. Post- │
+-- │      084 `user_taxonomy` is asset-only BY CONSTRUCTION, so the SAME     │
+-- │      derivation can only ever see storage-side users — a user whose ONLY│
+-- │      prior row was cashflow-domain (now living in posting_prototype) is │
+-- │      NO LONGER "already provisioned" by this check. What is LOST:       │
+-- │      recognizing a user provisioned via EITHER table. What replaces it: │
+-- │      a narrower, still-correct claim scoped to the storage side only.   │
+-- │      Tenant C below now demonstrates the NARROWING, not a reach.        │
 -- │  (d) TENANT BINDING + NO CROSS-TENANT LANDING — every users_id written  │
 -- │      is INHERITED from an existing row of the SAME table; proven under  │
 -- │      real RLS context, not just a postgres-role structural count.       │
@@ -59,11 +70,14 @@
 --
 -- ⟦WIRE-VALIDATE⟧ authored + fixture-verified GREEN via a transient apply of
 --   001->080 against a postgres-owned scratch DB (NON-destructive; zero
---   cluster-level grants; `supabase db reset` never invoked). plan(14): 1
---   precondition (P1) + 2 reach (BF1-BF2) + 1 unreachable (BF3) + 1 no-leak
---   total (BF4) + 1 tenant-binding structural (BF5) + 1 contract-fields
---   structural (BF6) + 3 isolation (ISO1-ISO3) + 4 idempotency
---   (IDEM1-IDEM4) = 14 — same count as 077, same shape.
+--   cluster-level grants; `supabase db reset` never invoked). RE-VERIFIED
+--   against 001->084 (ADR-058's split; tenant D added, BF2/BF4/IDEM2/ISO2-3
+--   re-derived per the STORAGE-SCOPING narrowing — see the ⚠ LOSING SIDE box
+--   above, same shape as 077's). plan(14): 1 precondition (P1) + 2
+--   reach/scoping (BF1-BF2) + 1 unreachable (BF3) + 1 no-leak total (BF4) + 1
+--   tenant-binding structural (BF5) + 1 contract-fields structural (BF6) + 3
+--   isolation (ISO1-ISO3) + 4 idempotency (IDEM1-IDEM4) = 14 — same count as
+--   077, same shape.
 -- =====================================================================
 
 begin;
@@ -75,8 +89,9 @@ select plan(14);
 \set ta '00000000-0000-0000-0000-00000000a080'
 \set tb '00000000-0000-0000-0000-00000000b080'
 \set tc '00000000-0000-0000-0000-00000000c080'
+\set td '00000000-0000-0000-0000-00000000d080'
 
-insert into auth.users (id) values (:'ta'), (:'tb'), (:'tc');
+insert into auth.users (id) values (:'ta'), (:'tb'), (:'tc'), (:'td');
 
 -- ---------------------------------------------------------------------
 -- FIXTURE. Tenant A: "already-provisioned before 080" — pre-existing
@@ -85,71 +100,81 @@ insert into auth.users (id) values (:'ta'), (:'tb'), (:'tc');
 --   scratch DB was built, so no tenant here already carries it).
 -- Tenant B: a brand-new, NEVER-provisioned user — ZERO user_taxonomy rows.
 --   The reach-unreachable control (b).
--- Tenant C: "already-provisioned" via a CASHFLOW-domain row ONLY — the
---   domain-agnostic-reach control (c).
+-- Tenant C, POST-084: "already-provisioned" via a row that now lives in
+--   pfin.posting_prototype ONLY (the cashflow half of the split) — the
+--   STORAGE-SCOPING control (c), see the ⚠ LOSING SIDE box above.
+-- Tenant D, NEW at 084: a second storage-side already-provisioned user,
+--   added so ISO1-ISO3's cross-tenant isolation proof still has a real
+--   second OWNER of a backfilled row to check against — C no longer
+--   receives one (same reasoning as 077's identical fixture change).
 -- ---------------------------------------------------------------------
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat) values
-  (:'ta','asset','Equity','US-06-Financials') returning id as a_eq \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat) values
-  (:'ta','asset','Cash','CD') returning id as a_cd \gset
-insert into pfin.user_taxonomy (users_id, domain, cat, sub_cat) values
-  (:'tc','cashflow','Revenue','Dividend') returning id as c_cf \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat) values
+  (:'ta','Marketable Securities','US-06-Financials') returning id as a_eq \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat) values
+  (:'ta','Cash','CD') returning id as a_cd \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat) values
+  (:'tc','Revenue','Dividend') returning id as c_cf \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat) values
+  (:'td','Cash','CD-D') returning id as d_cd \gset
 -- tenant B: deliberately NO rows.
 
 -- =====================================================================
--- (P1) PRECONDITION — before any backfill re-run, NEITHER A nor C carries a
+-- (P1) PRECONDITION — before any backfill re-run, NEITHER A nor D carries a
 --   Liability Balances row yet.
 -- =====================================================================
 select is(
   (select count(*) from pfin.user_taxonomy
-    where domain='asset' and cat='Liabilities' and sub_cat='Liability Balances'
-      and users_id in (:'ta', :'tc')),
+    where cat='Liabilities' and sub_cat='Liability Balances'
+      and users_id in (:'ta', :'td')),
   0::bigint,
-  '(P1) precondition: neither A nor C carries a Liability Balances row before the backfill re-run'
+  '(P1) precondition: neither A nor D carries a Liability Balances row before the backfill re-run'
 );
 
 -- =====================================================================
--- BACKFILL RE-RUN — 080's own two statements, verbatim, re-invoked. This is
--- the ONLY way to exercise the backfill against a non-empty user_taxonomy in
--- a scratch DB where 080 already ran once against zero users.
+-- BACKFILL RE-RUN — 080's own two statements, RE-DERIVED at 084 (the
+-- `domain` column and its predicate/conjunct are GONE from both tables by
+-- the time this battery executes — 001..084 apply in order, and 084 drops it
+-- after 080's own historical DDL already ran). This is the ONLY way to
+-- exercise the backfill against a non-empty user_taxonomy in a scratch DB
+-- where 080 already ran once against zero users.
 -- =====================================================================
 insert into pfin.taxonomy_default
-  (domain, cat, sub_cat, tax_relevant, tax_character, display_order, notes)
+  (cat, sub_cat, tax_relevant, tax_character, display_order, notes)
 values
-  ('asset', 'Liabilities', 'Liability Balances', false, null, 285,
+  ('Liabilities', 'Liability Balances', false, null, 285,
    'Raw balance of a liability-type account — the catch-all for account-level '
    'debt. Asserts NO instrument: where the instrument IS known, the balance '
    'belongs in Credit-Balance (revolving credit), Loan-Balance (a loan) or '
    'EstTax-Pending (taxes due) instead. Naturally signed, so a balance owed is '
    'negative and an overpayment is positive.')
-on conflict (domain, cat, sub_cat) do nothing;
+on conflict (cat, sub_cat) do nothing;
 
 insert into pfin.user_taxonomy
-  (users_id, domain, cat, sub_cat, tax_relevant, tax_character, display_order, notes)
+  (users_id, cat, sub_cat, tax_relevant, tax_character, display_order, notes)
 select
   provisioned.users_id,
-  d.domain, d.cat, d.sub_cat, d.tax_relevant, d.tax_character, d.display_order, d.notes
+  d.cat, d.sub_cat, d.tax_relevant, d.tax_character, d.display_order, d.notes
 from pfin.taxonomy_default d
 cross join (select distinct ut.users_id from pfin.user_taxonomy ut) provisioned
-where d.domain = 'asset' and d.cat = 'Liabilities' and d.sub_cat = 'Liability Balances'
-on conflict (users_id, domain, cat, sub_cat) do nothing;
+where d.cat = 'Liabilities' and d.sub_cat = 'Liability Balances'
+on conflict (users_id, cat, sub_cat) do nothing;
 
 -- =====================================================================
--- REACH (BF1-BF2) — (a)/(c): already-provisioned users, ONE via an asset-
---   domain row (A), ONE via a CASHFLOW-domain-only row (C, the domain-
---   agnostic-reach control).
+-- REACH (BF1) / STORAGE-SCOPING (BF2) — (a)/(c): A (asset-domain prior rows)
+--   is reached; C (posting_prototype-only prior row) is NOT — see the ⚠
+--   LOSING SIDE box above.
 -- =====================================================================
 select is(
   (select count(*) from pfin.user_taxonomy
-    where users_id = :'ta' and domain='asset' and cat='Liabilities' and sub_cat='Liability Balances'),
+    where users_id = :'ta' and cat='Liabilities' and sub_cat='Liability Balances'),
   1::bigint,
   '(BF1) already-provisioned tenant A (asset-domain prior rows) receives exactly ONE Liability Balances row from the backfill re-run'
 );
 select is(
   (select count(*) from pfin.user_taxonomy
-    where users_id = :'tc' and domain='asset' and cat='Liabilities' and sub_cat='Liability Balances'),
-  1::bigint,
-  '(BF2) DOMAIN-AGNOSTIC REACH: tenant C, whose ONLY pre-existing row is CASHFLOW-domain, is still "already provisioned" and receives exactly ONE Liability Balances row'
+    where users_id = :'tc' and cat='Liabilities' and sub_cat='Liability Balances'),
+  0::bigint,
+  '(BF2) POST-084 STORAGE-SCOPING (was DOMAIN-AGNOSTIC REACH): tenant C, whose ONLY pre-existing row now lives in posting_prototype, is NOT reached — the backfill''s user-set derivation reads user_taxonomy only, which is asset-only by construction. C receives ZERO Liability Balances rows (Sec F10) — a narrowing this file records rather than hides'
 );
 
 -- =====================================================================
@@ -163,15 +188,16 @@ select is(
 );
 
 -- =====================================================================
--- (BF4) NO-LEAK TOTAL (d) — exactly TWO Liability Balances rows exist
---   cluster-wide after the re-run (A + C), scoped at role=postgres,
---   structural.
+-- (BF4) NO-LEAK TOTAL (d), RE-DERIVED POST-084 — exactly TWO Liability
+--   Balances rows exist cluster-wide after the re-run: A (BF1) and D (both
+--   asset-domain already-provisioned before the backfill re-run fires) —
+--   NOT C (BF2), and NOT B (BF3, never provisioned).
 -- =====================================================================
 select is(
   (select count(*) from pfin.user_taxonomy
-    where domain='asset' and cat='Liabilities' and sub_cat='Liability Balances'),
+    where cat='Liabilities' and sub_cat='Liability Balances'),
   2::bigint,
-  '(BF4) no-leak total: exactly 2 Liability Balances rows exist (A + C) after the backfill re-run — no stray row for B or any other users_id'
+  '(BF4) no-leak total, POST-084: exactly 2 Liability Balances rows exist (A + D, both storage-side already-provisioned) after the backfill re-run — NOT C (see BF2), no stray row for B or any other users_id'
 );
 
 -- =====================================================================
@@ -180,7 +206,7 @@ select is(
 -- =====================================================================
 select is(
   (select users_id from pfin.user_taxonomy
-    where domain='asset' and cat='Liabilities' and sub_cat='Liability Balances' and users_id = :'ta'),
+    where cat='Liabilities' and sub_cat='Liability Balances' and users_id = :'ta'),
   :'ta'::uuid,
   '(BF5) tenant binding inherited correctly: A''s backfilled Liability Balances row carries users_id = A exactly'
 );
@@ -195,83 +221,89 @@ select is(
 select ok(
   (select tax_relevant = false and tax_character is null and display_order = 285
      from pfin.user_taxonomy
-    where users_id = :'ta' and domain='asset' and cat='Liabilities' and sub_cat='Liability Balances'),
+    where users_id = :'ta' and cat='Liabilities' and sub_cat='Liability Balances'),
   '(BF6) A''s backfilled row carries the taxonomy_default contract: tax_relevant=false, tax_character IS NULL, display_order=285'
 );
 
 -- =====================================================================
--- ISOLATION (ISO1-ISO3) — the two-tenant cross-tenant proof, under REAL RLS
---   context (SECURITY §4.5), not merely a postgres-role structural count.
+-- ISOLATION (ISO1-ISO3), RE-TARGETED to tenant D (was C pre-084 — C no
+--   longer receives a Liability Balances row at all post-split, per BF2, so
+--   asserting cross-tenant "not exists" against C's row would be vacuous:
+--   DESIGN.md's own rule, "absence assertions are vacuous whenever the
+--   subject never existed." D is a genuine second OWNER instead.) Under REAL
+--   RLS context (SECURITY §4.5), not merely a postgres-role structural count.
 -- =====================================================================
 select _rls.set_tenant(:'ta'::uuid);
 select is(
   (select count(*) from pfin.user_taxonomy
-    where domain='asset' and cat='Liabilities' and sub_cat='Liability Balances'),
+    where cat='Liabilities' and sub_cat='Liability Balances'),
   1::bigint,
   '(ISO1) under RLS as tenant A: sees exactly its OWN Liability Balances row'
 );
 select ok(
   not exists (
     select 1 from pfin.user_taxonomy
-     where domain='asset' and cat='Liabilities' and sub_cat='Liability Balances' and users_id = :'tc'
+     where cat='Liabilities' and sub_cat='Liability Balances' and users_id = :'td'
   ),
-  '(ISO2) under RLS as tenant A: C''s Liability Balances row is NOT visible — cross-tenant read fails closed'
+  '(ISO2) under RLS as tenant A: D''s Liability Balances row is NOT visible — cross-tenant read fails closed'
 );
 select set_config('role', 'postgres', true);
 
-select _rls.set_tenant(:'tc'::uuid);
+select _rls.set_tenant(:'td'::uuid);
 select ok(
   not exists (
     select 1 from pfin.user_taxonomy
-     where domain='asset' and cat='Liabilities' and sub_cat='Liability Balances' and users_id = :'ta'
+     where cat='Liabilities' and sub_cat='Liability Balances' and users_id = :'ta'
   ),
-  '(ISO3) under RLS as tenant C (reverse direction): A''s Liability Balances row is NOT visible'
+  '(ISO3) under RLS as tenant D (reverse direction): A''s Liability Balances row is NOT visible'
 );
 select set_config('role', 'postgres', true);
 
 -- =====================================================================
--- IDEMPOTENCY (IDEM1-IDEM4) — re-run BOTH statements a SECOND time. No
--- second row for A, none for C, none for the global seed row, and B stays
--- unreachable across repeated runs (not just a single one).
+-- IDEMPOTENCY (IDEM1-IDEM4), RE-DERIVED POST-084 — re-run BOTH statements a
+-- SECOND time (domain column/predicate gone, same as the first run above).
+-- No second row for A, C STAYS at zero (not "stays at one" — POST-084 C
+-- never had one to begin with, see BF2), none for the global seed row, and B
+-- stays unreachable across repeated runs (not just a single one).
 -- =====================================================================
 insert into pfin.taxonomy_default
-  (domain, cat, sub_cat, tax_relevant, tax_character, display_order, notes)
+  (cat, sub_cat, tax_relevant, tax_character, display_order, notes)
 values
-  ('asset', 'Liabilities', 'Liability Balances', false, null, 285,
+  ('Liabilities', 'Liability Balances', false, null, 285,
    'Raw balance of a liability-type account — the catch-all for account-level '
    'debt. Asserts NO instrument: where the instrument IS known, the balance '
    'belongs in Credit-Balance (revolving credit), Loan-Balance (a loan) or '
    'EstTax-Pending (taxes due) instead. Naturally signed, so a balance owed is '
    'negative and an overpayment is positive.')
-on conflict (domain, cat, sub_cat) do nothing;
+on conflict (cat, sub_cat) do nothing;
 
 insert into pfin.user_taxonomy
-  (users_id, domain, cat, sub_cat, tax_relevant, tax_character, display_order, notes)
+  (users_id, cat, sub_cat, tax_relevant, tax_character, display_order, notes)
 select
   provisioned.users_id,
-  d.domain, d.cat, d.sub_cat, d.tax_relevant, d.tax_character, d.display_order, d.notes
+  d.cat, d.sub_cat, d.tax_relevant, d.tax_character, d.display_order, d.notes
 from pfin.taxonomy_default d
 cross join (select distinct ut.users_id from pfin.user_taxonomy ut) provisioned
-where d.domain = 'asset' and d.cat = 'Liabilities' and d.sub_cat = 'Liability Balances'
-on conflict (users_id, domain, cat, sub_cat) do nothing;
+where d.cat = 'Liabilities' and d.sub_cat = 'Liability Balances'
+on conflict (users_id, cat, sub_cat) do nothing;
 
 select is(
   (select count(*) from pfin.user_taxonomy
-    where users_id = :'ta' and domain='asset' and cat='Liabilities' and sub_cat='Liability Balances'),
+    where users_id = :'ta' and cat='Liabilities' and sub_cat='Liability Balances'),
   1::bigint,
   '(IDEM1) idempotent on re-run: A''s Liability Balances row count stays exactly 1 after a second invocation'
 );
 select is(
   (select count(*) from pfin.user_taxonomy
-    where users_id = :'tc' and domain='asset' and cat='Liabilities' and sub_cat='Liability Balances'),
-  1::bigint,
-  '(IDEM2) idempotent on re-run: C''s Liability Balances row count stays exactly 1 after a second invocation'
+    where users_id = :'tc' and cat='Liabilities' and sub_cat='Liability Balances'),
+  0::bigint,
+  '(IDEM2) POST-084: C STAYS at zero across a second invocation too — C never qualifies (BF2), not "stays at one" as it did pre-084'
 );
 select is(
   (select count(*) from pfin.taxonomy_default
-    where domain='asset' and cat='Liabilities' and sub_cat='Liability Balances'),
+    where cat='Liabilities' and sub_cat='Liability Balances'),
   1::bigint,
-  '(IDEM3) idempotent on re-run: the GLOBAL taxonomy_default seed row stays exactly 1 (the `on conflict (domain, cat, sub_cat)` target) after a second invocation'
+  '(IDEM3) idempotent on re-run: the GLOBAL taxonomy_default seed row stays exactly 1 (the `on conflict (cat, sub_cat)` target) after a second invocation'
 );
 select is(
   (select count(*) from pfin.user_taxonomy where users_id = :'tb'),
