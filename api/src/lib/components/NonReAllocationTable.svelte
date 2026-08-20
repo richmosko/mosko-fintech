@@ -59,6 +59,12 @@
 	`/settings/allocation` (the SELF-242 editor's default default `editHref` prop) via a plain
 	navigation `<a>` — never a form/button that mutates anything on THIS page.
 
+	SELF-241 addition (2026-08-20) — the "US - Sector Diversified" row (`row.kind ===
+	'us_sector_diversified'`) is now the one V1 drill-down: its label renders as a plain
+	navigation `<a>` to `/allocation/us-equity` (the §2.2.3 US Equity sub-allocation table), with
+	a muted "drill ▸" chip beside it. Every other row is unchanged plain text. See
+	UsEquityAllocationTable.svelte for the destination.
+
 	AC11 — staleness per §2.4.4 / ADR-013 D1, TWO parts:
 	  (1) SECTION-level `StaleConstituentBadge` fed by the whole-tenant `staleness` prop (the SAME
 	      aggregate primitive root's dashboard + NavCompositionTable already consume — StaleConstituentBadge's
@@ -206,7 +212,24 @@
 						{@const rowStale = staleDisplayState(row.is_stale)}
 						<tr class:stale-row={rowStale === 'stale'}>
 							<td class="rowlabel">
-								{row.sub_cat}
+								<!-- SELF-241 AC6: the one V1 drill-down (design flow doc F-2.2.C) — the "US -
+								     Sector Diversified" row navigates to the §2.2.3 US Equity sub-allocation
+								     table; every other row is plain text, no drill. A plain navigation <a>,
+								     never a button/form — same no-inline-edit posture as the rest of this
+								     table (AC8). `aria-label` carries the destination context for screen
+								     readers; visible text stays exactly `row.sub_cat` so this doesn't disturb
+								     existing `getByText('US - Sector Diversified')` lookups. -->
+								{#if row.kind === 'us_sector_diversified'}
+									<a
+										class="drill-link"
+										href="/allocation/us-equity"
+										aria-label={`${row.sub_cat} — view US Equity sub-allocation breakdown`}
+										>{row.sub_cat}</a
+									>
+									<span class="drill-chip" aria-hidden="true">drill ▸</span>
+								{:else}
+									{row.sub_cat}
+								{/if}
 								<!-- AC11(2): per-row NORMALIZED tri-state marker (undefined treated as unknown,
 								     never as fresh — team-lead build instruction; see module header). Dormant
 								     until Backend wires a real is_stale producer. -->
@@ -422,6 +445,28 @@
 	   identical ink to a plain cell; no pos/neg, no comparative color, ever. */
 	.val-target {
 		color: var(--c-text-primary);
+	}
+
+	/* SELF-241 AC6 — the one V1 drill-down affordance (the "US - Sector Diversified" row only).
+	   Underlined link ink (no new color token — reuses --c-text-primary/--c-accent, same ramp
+	   `.edit-link` already uses) + a muted chevron chip, matching the wireframe's "drill ▸" shape
+	   (docs/DESIGN/wireframes/2.2-asset-allocation.html). */
+	.drill-link {
+		color: var(--c-accent);
+		text-decoration: underline;
+	}
+	.drill-link:hover {
+		color: var(--c-accent-hover);
+	}
+	.drill-link:focus-visible {
+		outline: none;
+		box-shadow: var(--focus-ring);
+	}
+	.drill-chip {
+		display: inline-block;
+		margin-left: var(--space-2);
+		font-size: var(--fs-micro);
+		color: var(--c-text-muted);
 	}
 
 	/* AC11(2) — screen.css's own D1 shape: inline tag + faint row tint (informational). Locally
