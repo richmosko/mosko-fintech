@@ -5,7 +5,9 @@
 // shape: unset is ROW ABSENT (never NULL, never a seeded zero); an explicit 0.00 is a
 // stored, different fact. This endpoint owns the write; SELF-242's editor UI is the sole
 // browser-side consumer of it (boundary ratified in the 238/240 AC sets — 242 does not
-// re-implement any of this).
+// re-implement any of this). SELF-242 does own the DELETE handler below, added HERE
+// (Sec-ruled — see the DELETE section further down this header) rather than as a separate
+// route, because it is the "unset" un-do of this same POST.
 //
 // Defense-in-depth, not duplication — three fences, three different owners:
 //   1. `.strict()` Zod schema (Lock 14 mod #1, planningTargetUpsertSchema) rejects any
@@ -34,11 +36,31 @@
 // remove the row, which an audit-class table's append-only discipline would forbid). This
 // endpoint therefore emits no audit-log row. Flagged for Sec to rule on the record rather
 // than silently reconciled against the CLAUDE.md convention.
+//
+// DELETE /api/settings/planning-target — "unset a target" (SELF-242; Sec-ruled at the
+// SELF-233 joint review, 2026-08-17, carried forward on SELF-242): ⚠ unset MUST be a DELETE,
+// never a POST of an explicit 0.00 — ADR-056 makes 0.00 a stored, DIFFERENT fact from
+// row-absent (074's header, UNSET SEMANTICS), and a UI emulating unset with zero would
+// silently destroy that distinction. Lands HERE, beside the POST it is the un-do of, per
+// Sec's ruling. Carries the SAME three Lock-14 fences as POST: (1) `.strict()` shape
+// validation (planningTargetDeleteSchema — sub_cat_id only), (2) session-derived users_id,
+// never from the request body, applied as an EXPLICIT `.eq('users_id', ...)` predicate on
+// the delete query (a DELETE has no row payload the way an INSERT/UPSERT does, so the fence
+// has to be a query predicate rather than a WITH-CHECK-observable field), (3) clean 4xx
+// mapping — except there is little TO map: 074's matched-tenant/domain trigger is BEFORE
+// INSERT OR UPDATE only, so it never fires on DELETE. The only DB-side gate on DELETE is the
+// `planning_target_delete` RLS policy's USING clause (owner + 025 aal2 clause), and per 074's
+// own header that clause "affects 0 rows, silently and correctly" when it does not match —
+// there is no distinguishable error for row-absent vs cross-tenant-hidden vs
+// below-aal2-filtered, by design (distinguishing them would leak cross-tenant existence /
+// step-up state to the caller). This endpoint therefore returns the SAME 200 success shape
+// in all three cases — DELETE is idempotent by REST convention, and "unset something already
+// unset" is correctly a no-op success, never a 404.
 
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import type { PostgrestError } from '@supabase/supabase-js';
-import { planningTargetUpsertSchema } from '$lib/server/schemas/planning-target';
+import { planningTargetUpsertSchema, planningTargetDeleteSchema } from '$lib/server/schemas/planning-target';
 import { fieldErrors } from '$lib/server/schemas/account';
 
 /**
@@ -110,4 +132,44 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	}
 
 	return json({ ok: true, sub_cat_id: parsed.data.sub_cat_id, target_percent: parsed.data.target_percent });
+};
+
+export const DELETE: RequestHandler = async ({ request, locals }) => {
+	const { user } = await locals.safeGetSession();
+	if (!user) return json({ error: 'unauthenticated' }, { status: 401 });
+
+	let raw: unknown;
+	try {
+		raw = await request.json();
+	} catch {
+		return json({ error: 'invalid_request' }, { status: 400 });
+	}
+
+	const parsed = planningTargetDeleteSchema.safeParse(raw);
+	if (!parsed.success) {
+		return json({ error: 'invalid_request', fieldErrors: fieldErrors(parsed.error) }, { status: 400 });
+	}
+
+	// users_id NEVER from the request — always the validated session (Lock 14 mod #1),
+	// applied here as an explicit query predicate (see file header for why a DELETE needs
+	// this where the UPSERT above does not). No BEFORE trigger runs on DELETE (074's fence
+	// is INSERT OR UPDATE only) — the planning_target_delete RLS policy's owner + aal2 USING
+	// clause is the only other gate, and it silently excludes non-matching rows rather than
+	// erroring. Genuinely unexpected DB errors (not a 074-trigger path — none exists here)
+	// stay a logged 500, same discipline as mapWriteError above.
+	const { error } = await locals.supabase
+		.schema('pfin')
+		.from('planning_target')
+		.delete()
+		.eq('users_id', user.id)
+		.eq('sub_cat_id', parsed.data.sub_cat_id);
+
+	if (error) {
+		console.error('[planning-target] unexpected delete error:', error.code, error.message);
+		return json({ error: 'internal_error' }, { status: 500 });
+	}
+
+	// Same success shape whether a row existed and was removed, was owned by another
+	// tenant (RLS-hidden), or was below-aal2-gated — see file header. Never a 404.
+	return json({ ok: true, sub_cat_id: parsed.data.sub_cat_id });
 };
