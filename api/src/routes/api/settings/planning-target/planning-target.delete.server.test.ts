@@ -3,19 +3,25 @@
 // joint review (2026-08-17), carried forward on SELF-242: unset MUST be a DELETE, never a
 // POST of an explicit 0.00 (ADR-056 — 0.00 is a stored, DIFFERENT fact from row-absent).
 // Mirrors the POST orchestration test's mocked-session / mocked-supabase-chain shape.
+//
+// Response shape (Sec C2, this PR): `{ ok: true, sub_cat_id, deleted: boolean }`, read from
+// `.delete({ count: 'exact' })`'s row count — `deleted` describes ONLY the caller's own
+// outcome (their own request either matched a row or it didn't); it can never describe
+// another tenant's row, because the query is `.eq('users_id', ...)`-scoped before it ever
+// reaches count.
 
 import { describe, it, expect } from 'vitest';
 import { DELETE } from './+server';
 
 const SESSION_UID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
-type DeleteResult = { error: { code: string; message: string } | null };
+type DeleteResult = { error: { code: string; message: string } | null; count?: number | null };
 
 /**
- * Mocks the `.schema('pfin').from('planning_target').delete().eq(...).eq(...)` chain.
- * Real supabase-js filter builders are PromiseLike at every step, so the mock stays
- * chainable through any number of `.eq()` calls and resolves to `result` when awaited —
- * matching the two `.eq()` calls (`users_id`, `sub_cat_id`) the DELETE handler issues.
+ * Mocks the `.schema('pfin').from('planning_target').delete({ count: 'exact' }).eq(...).eq(...)`
+ * chain. Real supabase-js filter builders are PromiseLike at every step, so the mock stays
+ * chainable through any number of `.eq()` calls and resolves to `result` (error + count) when
+ * awaited — matching the two `.eq()` calls (`users_id`, `sub_cat_id`) the DELETE handler issues.
  */
 function supabaseWithDeleteResult(result: DeleteResult, captured?: { calls: Array<[string, unknown]> }) {
 	function chain(): PromiseLike<DeleteResult> & { eq: (col: string, val: unknown) => ReturnType<typeof chain> } {
@@ -65,21 +71,27 @@ describe('DELETE /api/settings/planning-target — orchestration', () => {
 		expect(res.status).toBe(400);
 	});
 
-	it('valid body → 200, delete scoped by BOTH server-derived users_id AND sub_cat_id (never client-supplied users_id)', async () => {
+	it('valid body, row existed (count 1) → 200, deleted: true, delete scoped by BOTH server-derived users_id AND sub_cat_id (never client-supplied users_id)', async () => {
 		const captured = { calls: [] as Array<[string, unknown]> };
-		const res = await DELETE(makeEvent({ sub_cat_id: 7 }, { id: SESSION_UID }, { error: null }, captured));
+		const res = await DELETE(makeEvent({ sub_cat_id: 7 }, { id: SESSION_UID }, { error: null, count: 1 }, captured));
 		expect(res.status).toBe(200);
-		expect(await res.json()).toEqual({ ok: true, sub_cat_id: 7 });
+		expect(await res.json()).toEqual({ ok: true, sub_cat_id: 7, deleted: true });
 		expect(captured.calls).toEqual([
 			['users_id', SESSION_UID],
 			['sub_cat_id', 7]
 		]);
 	});
 
-	it('deleting an already-absent / cross-tenant-hidden / below-aal2-filtered row is still 200 — idempotent, never a 404 (no distinguishing signal leaked)', async () => {
-		const res = await DELETE(makeEvent({ sub_cat_id: 999 }, { id: SESSION_UID }, { error: null }));
+	it('deleting an already-absent row (count 0) is still 200 with deleted: false — idempotent, never a 404', async () => {
+		const res = await DELETE(makeEvent({ sub_cat_id: 999 }, { id: SESSION_UID }, { error: null, count: 0 }));
 		expect(res.status).toBe(200);
-		expect(await res.json()).toEqual({ ok: true, sub_cat_id: 999 });
+		expect(await res.json()).toEqual({ ok: true, sub_cat_id: 999, deleted: false });
+	});
+
+	it('a null/undefined count (defensive: an unexpected supabase-js response shape) is treated as deleted: false, never thrown', async () => {
+		const res = await DELETE(makeEvent({ sub_cat_id: 999 }, { id: SESSION_UID }, { error: null, count: null }));
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ ok: true, sub_cat_id: 999, deleted: false });
 	});
 
 	it('unexpected DB error → 500, not silently reclassified as a 4xx', async () => {

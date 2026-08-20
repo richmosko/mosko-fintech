@@ -18,11 +18,11 @@
 //      sibling, same six adversarial categories) rejects a malformed target_percent before
 //      the DB is touched.
 //   3. `sub_cat_id` is validated for SHAPE ONLY here (positive integer, mirrors
-//      classification.ts's classifySchema). Tenant + domain matching is NOT re-implemented
+//      classification.ts's classifySchema). Tenant matching is NOT re-implemented
 //      at this layer — it is the DB's Decision-3 canonical instance #17
 //      (`pfin.fn_planning_target_matched_sub_cat`, a BEFORE INSERT OR UPDATE trigger, 074).
 //      This endpoint's job for that fence is only to map its rejection to a clean 4xx — see
-//      mapWriteError below — never to re-derive tenant/domain matching itself.
+//      mapWriteError below — never to re-derive tenant matching itself.
 //
 // INVOKER + anon-key + RLS only: writes go through `locals.supabase`, the session-bound
 // client wired at the hooks.server.ts chokepoint. service_role is FORBIDDEN here — RT-26's
@@ -47,15 +47,37 @@
 // never from the request body, applied as an EXPLICIT `.eq('users_id', ...)` predicate on
 // the delete query (a DELETE has no row payload the way an INSERT/UPSERT does, so the fence
 // has to be a query predicate rather than a WITH-CHECK-observable field), (3) clean 4xx
-// mapping — except there is little TO map: 074's matched-tenant/domain trigger is BEFORE
-// INSERT OR UPDATE only, so it never fires on DELETE. The only DB-side gate on DELETE is the
-// `planning_target_delete` RLS policy's USING clause (owner + 025 aal2 clause), and per 074's
-// own header that clause "affects 0 rows, silently and correctly" when it does not match —
-// there is no distinguishable error for row-absent vs cross-tenant-hidden vs
-// below-aal2-filtered, by design (distinguishing them would leak cross-tenant existence /
-// step-up state to the caller). This endpoint therefore returns the SAME 200 success shape
-// in all three cases — DELETE is idempotent by REST convention, and "unset something already
-// unset" is correctly a no-op success, never a 404.
+// mapping — except there is little TO map: 074's matched-tenant trigger is BEFORE
+// INSERT OR UPDATE only, so it never fires on DELETE, and this endpoint has no equivalent of
+// mapWriteError's business-rule-rejection family (the trigger's tenant/existence check, the
+// DB CHECK) because DELETE has no analogous rule to violate.
+//
+// RESPONSE SHAPE — `200 { ok: true, sub_cat_id, deleted: boolean }`, always 200, never a 404.
+// `deleted` is read from `.delete({ count: 'exact' })`'s row count (`(count ?? 0) > 0`).
+// ⚠ CORRECTED RATIONALE (Sec C2, this PR — the endpoint's first-drafted reasoning was itself
+// wrong): the query is scoped by an EXPLICIT `.eq('users_id', user.id)` predicate, so it can
+// never match another tenant's row in the first place — there is no cross-tenant-existence
+// fact for a response shape to leak, and the earlier draft's "distinguishing would leak
+// cross-tenant existence" argument was moot from the moment that predicate was added, not a
+// live constraint on this shape. The TWO real reasons for always-200 are: (1) idempotent-DELETE
+// REST convention — removing an already-absent resource is a no-op success, not an error;
+// (2) the `deleted` flag discloses ONLY the caller's OWN state (their own request either
+// changed something or it didn't) — it can still leave the WHY ambiguous within that one
+// account (a below-aal2-filtered row and a never-existent row both read `deleted: false`, per
+// the `planning_target_delete` RLS policy's USING clause silently excluding non-matching rows
+// per 074's own header, "affects 0 rows, silently and correctly"), but that ambiguity is now
+// entirely the caller's own business, never another tenant's. The next Lock-14 settings table
+// should reason from THESE two premises, not from the retired cross-tenant-leak argument.
+//
+// POST/DELETE ASYMMETRY, STATED EXPLICITLY: POST's outcome space includes genuine 4xx
+// rejections (mapWriteError above) because 074's trigger and the target_percent CHECK can
+// reject a write on business-rule grounds (unresolvable/cross-tenant sub_cat_id, out-of-range
+// value) — a POST can be WRONG, not just absent-vs-present. DELETE has no such business rule
+// to violate (there is nothing to validate about REMOVING a row beyond who owns it, which the
+// query predicate already enforces), so its outcome space is binary — matched-and-removed or
+// not — with no 4xx family of its own. The two endpoints are not mirror images of each other
+// by accident; they differ because a value-carrying write and a row-removal have different
+// ways to fail.
 
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
@@ -69,9 +91,12 @@ import { fieldErrors } from '$lib/server/schemas/account';
  *   - '42501' — RLS WITH CHECK violation. In practice this is the 025 aal2 step-up backstop
  *     (mfa_policy is totp/passkey and the session is at aal1); users_id can't mismatch here
  *     since it is always server-derived, never client-supplied.
- *   - 'P0001' — the 074 matched-tenant/matched-domain trigger's three legs (unresolvable /
- *     cross-tenant / wrong-domain sub_cat_id). Deliberately collapsed to one generic 4xx
- *     reason rather than relaying the trigger's own message: the three legs' exact
+ *   - 'P0001' — the 074 matched-tenant trigger's TWO legs (unresolvable / cross-tenant
+ *     sub_cat_id). ⚠ SELF-233 authored this as three legs including a wrong-domain leg;
+ *     `084` (ADR-058 D1+D5) removed the `domain = 'asset'` predicate and leg 3's coverage
+ *     MOVED TO LEG 1 rather than disappearing — a posting prototype is not in
+ *     pfin.user_taxonomy at all, so it fails to resolve. Deliberately collapsed to one
+ *     generic 4xx reason rather than relaying the trigger's own message: the legs' exact
  *     diagnostics are a DB-internal distinction (useful in a migration/pgTAP context), not
  *     information this endpoint should hand an adversarial caller.
  *   - '23503' — FK violation. Defensive fallback only: the BEFORE trigger's leg-1 read
@@ -152,15 +177,17 @@ export const DELETE: RequestHandler = async ({ request, locals }) => {
 
 	// users_id NEVER from the request — always the validated session (Lock 14 mod #1),
 	// applied here as an explicit query predicate (see file header for why a DELETE needs
-	// this where the UPSERT above does not). No BEFORE trigger runs on DELETE (074's fence
-	// is INSERT OR UPDATE only) — the planning_target_delete RLS policy's owner + aal2 USING
-	// clause is the only other gate, and it silently excludes non-matching rows rather than
-	// erroring. Genuinely unexpected DB errors (not a 074-trigger path — none exists here)
-	// stay a logged 500, same discipline as mapWriteError above.
-	const { error } = await locals.supabase
+	// this where the UPSERT above does not) — and it is this predicate that makes the
+	// cross-tenant question moot: the query cannot match another tenant's row at all. No
+	// BEFORE trigger runs on DELETE (074's fence is INSERT OR UPDATE only) — the
+	// planning_target_delete RLS policy's owner + aal2 USING clause is the only other gate,
+	// and it silently excludes non-matching rows rather than erroring. `{ count: 'exact' }`
+	// gets the affected-row count back so the response can disclose the caller's OWN outcome
+	// (see file header, RESPONSE SHAPE). Genuinely unexpected DB errors stay a logged 500.
+	const { error, count } = await locals.supabase
 		.schema('pfin')
 		.from('planning_target')
-		.delete()
+		.delete({ count: 'exact' })
 		.eq('users_id', user.id)
 		.eq('sub_cat_id', parsed.data.sub_cat_id);
 
@@ -169,7 +196,7 @@ export const DELETE: RequestHandler = async ({ request, locals }) => {
 		return json({ error: 'internal_error' }, { status: 500 });
 	}
 
-	// Same success shape whether a row existed and was removed, was owned by another
-	// tenant (RLS-hidden), or was below-aal2-gated — see file header. Never a 404.
-	return json({ ok: true, sub_cat_id: parsed.data.sub_cat_id });
+	// Always 200, never a 404 (idempotent-DELETE convention) — see file header for why
+	// `deleted: false` is safe to disclose (it can only ever describe the caller's own row).
+	return json({ ok: true, sub_cat_id: parsed.data.sub_cat_id, deleted: (count ?? 0) > 0 });
 };

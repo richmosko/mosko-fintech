@@ -1,6 +1,8 @@
 // numeric.ts — CLIENT-SIDE mirror of the shared numeric-sanitization battery.
 //
-// MIRROR of src/lib/server/validation/numeric.ts (Lock 14 V1-SHIP-BLOCK Sec mod #1/#2).
+// MIRROR of src/lib/server/validation/numeric.ts (Lock 14 V1-SHIP-BLOCK Sec mod #2 — the
+// numeric-input sanitization battery; mod #1 is the Zod `.strict()` mass-assignment fence at
+// the endpoint, per SECURITY §4.5 RT-23).
 // This is browser-shipped code, so it CANNOT import from src/lib/server/** (that
 // surface never reaches the browser; Vite refuses the build). It is therefore a
 // hand-kept parallel copy — the client check is UX fast-feedback ONLY; the SERVER

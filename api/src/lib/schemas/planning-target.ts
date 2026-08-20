@@ -36,7 +36,7 @@ const percentValue = () =>
 
 /**
  * POST body for the planning-target UPSERT. `sub_cat_id` is a positive-int SHAPE check
- * only (pfin.user_taxonomy.id) — tenant/domain matching is the DB's Decision-3 canonical
+ * only (pfin.user_taxonomy.id) — tenant matching is the DB's Decision-3 canonical
  * instance #17 (074's `fn_planning_target_matched_sub_cat` BEFORE trigger), not this
  * schema's job. `.strict()` rejects any stray field the editor might accidentally attach.
  */

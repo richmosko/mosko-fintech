@@ -49,13 +49,13 @@ describe('ADR-056 unset-vs-explicit-zero: POST 0.00 and DELETE are mechanically 
 
 	it('DELETE the SAME sub_cat_id calls delete(), never upsert() — row-removal is a categorically different operation, not a POST of zero under the hood', async () => {
 		const calls: unknown[] = [];
-		function chain(): PromiseLike<{ error: null }> & { eq: (col: string, val: unknown) => ReturnType<typeof chain> } {
+		function chain(): PromiseLike<{ error: null; count: number }> & { eq: (col: string, val: unknown) => ReturnType<typeof chain> } {
 			return {
 				eq: (col: string, val: unknown) => {
 					calls.push({ op: 'delete.eq', col, val });
 					return chain();
 				},
-				then: (onFulfilled) => Promise.resolve({ error: null }).then(onFulfilled)
+				then: (onFulfilled) => Promise.resolve({ error: null, count: 1 }).then(onFulfilled)
 			};
 		}
 		const request = new Request('http://localhost/api/settings/planning-target', {
@@ -81,7 +81,7 @@ describe('ADR-056 unset-vs-explicit-zero: POST 0.00 and DELETE are mechanically 
 		};
 		const res = await DELETE({ request, locals } as unknown as Parameters<typeof DELETE>[0]);
 		expect(res.status).toBe(200);
-		expect(await res.json()).toEqual({ ok: true, sub_cat_id: 7 });
+		expect(await res.json()).toEqual({ ok: true, sub_cat_id: 7, deleted: true });
 		expect(calls).toEqual([
 			{ op: 'delete' },
 			{ op: 'delete.eq', col: 'users_id', val: SESSION_UID },
