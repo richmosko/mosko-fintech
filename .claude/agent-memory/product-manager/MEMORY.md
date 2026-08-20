@@ -9,3 +9,5 @@
 - [Cash-bucket granularity](project_cash_bucket_granularity.md) — LANDED 2026-08-17: (a), label = "Cash Balances" (F/CTO-fixed); §3.3 footnote ratified+landed; Architect still owes the §7.20 seed delta. Read before 238/240 ACs.
 - [Target-denominator β ruling](project_target_denominator_beta_ruling.md) — targets are hierarchical; §2.2.3 renormalizes at display; two-way door, p.5 check at parity time.
 - [GL-brainstorm PM positions](project_gl_brainstorm_pm_positions.md) — 08-18: grain=V2 gate, S1+flip trigger, rename 2 conditions, posting_template=V2; verify vs landed ADR.
+- [SELF-239 assets-only rework](project_239_assets_only_rework.md) — v2 AC set delivered 08-20 awaiting ratify; PRD §2.2.2 amendment OWED; $ReAlloc neutral per design fence 1.
+- [SELF-242 singular-endpoint ACs](project_242_singular_endpoint_acs.md) — AC3/AC7 replacement delivered 08-20 awaiting ratify; unset=DELETE never POST 0.00; DELETE on unmerged branch at drafting.
