@@ -227,6 +227,24 @@ select set_config('role', 'postgres', true);
 -- BLOCK 2 — WITH CHECK fail-closed (the security teeth). Cross-tenant users_id forge.
 --   user_taxonomy only — posting_prototype's identical WITH CHECK teeth are already
 --   proven in 084_posting_prototype_rls.sql (W1/W2); not duplicated here.
+--
+-- ⚠ 085's `element` ADDED TO EVERY INSERT BELOW, INCLUDING THE REJECTION LEGS — this is
+--   why, stated precisely rather than left implicit. Empirically probed (throwaway
+--   scratch DB, a synthetic table mirroring this one's shape, NOT assumed from source
+--   recall): **RLS `WITH CHECK` evaluates BEFORE the column's `NOT NULL` constraint.**
+--   A mismatched-tenant/backstop-failing insert raises the RLS violation even when
+--   `element` is omitted — the NOT NULL check is never reached, because RLS rejects the
+--   proposed row first. This means (2a) and BLOCK 5's (5b)/(5d) below would have kept
+--   passing, for the SAME reason as before 085, even with `element` left out. `element`
+--   is added to them anyway — defensively, not because the mechanism requires it — so
+--   none of these legs' correctness depends on an unstated assumption about constraint-
+--   evaluation order. The one leg where the ordering DOES matter is (5c): the SAME insert
+--   shape, but RLS PASSES there (aal2 lifts the gate) — so NOT NULL is the next gate
+--   reached, and (5c) would genuinely break without `element`. That contrast is why this
+--   probe was worth running rather than assuming: a NOT NULL-then-CHECK error text does
+--   not match `%violates row-level security policy%`, so a wrong assumption here would
+--   have either broken (5c) silently or made (2a)/(5b)/(5d) look like they needed
+--   `element` for a reason they don't.
 -- =====================================================================
 select _rls.set_tenant_aal(:'ta'::uuid, 'aal1');
 

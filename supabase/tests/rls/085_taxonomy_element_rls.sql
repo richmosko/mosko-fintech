@@ -66,7 +66,7 @@ begin;
 
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(18);
+select plan(19);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 insert into auth.users (id) values (:'ta'), (:'tb');
@@ -158,6 +158,28 @@ select is(
   (select count(*) from pfin.user_taxonomy where users_id = :'ta' and cat <> 'Liabilities' and element <> 'asset')::bigint,
   0::bigint,
   '(B4) backfill/propagation correctness, user_taxonomy, direction 2 (the complement): every OTHER cat A owns has element=''asset'''
+);
+
+-- (B5) the UNCONDITIONAL ELSE, on a Cat OUTSIDE the seeded six — the branch the V2
+--      taxonomy-CRUD PR inherits (085's own header: "the else-branch is a JUDGEMENT on
+--      pfin.user_taxonomy, not a tautology... today the else-branch can only ever see
+--      seeded Cats" — this leg is what proves it fires correctly the one time it's
+--      exercisable pre-V2, via REPLAY of 085's exact backfill statement, same idiom as
+--      077/080's own backfill re-runs). B gets a fresh row under 'Wine Cellar' — a real
+--      Cat outside the seeded {Alternatives, Bonds, Cash, Liabilities, Marketable
+--      Securities, Real Estate} — seeded with element DELIBERATELY WRONG ('liability'),
+--      so the replay is proven to CORRECT it, not merely leave an already-right value
+--      alone (the same corrupt-then-correct discipline BLOCK C uses for the CHECK).
+select set_config('role', 'postgres', true);
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element)
+  values (:'tb', 'Wine Cellar', 'Bordeaux', 'liability');
+update pfin.user_taxonomy
+   set element = case when cat = 'Liabilities' then 'liability' else 'asset' end
+ where users_id = :'tb' and cat = 'Wine Cellar' and sub_cat = 'Bordeaux';
+select is(
+  (select element from pfin.user_taxonomy where users_id = :'tb' and cat = 'Wine Cellar' and sub_cat = 'Bordeaux'),
+  'asset',
+  '(B5) the unconditional else, on a Cat OUTSIDE the seeded six (''Wine Cellar''): a REPLAY of 085''s exact backfill statement corrects a deliberately-wrong ''liability'' to ''asset'' — the case is total over EVERY cat value, seeded or not, not merely over the six the real seed happens to contain'
 );
 
 -- =====================================================================
