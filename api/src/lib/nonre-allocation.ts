@@ -58,8 +58,19 @@ export interface AllocationRow {
 	 *  staleness the way navComposition.ts does for §2.1.5 leaves — this field is forward-declared
 	 *  so the row-tint machinery in NonReAllocationTable.svelte is ready the moment that join
 	 *  lands (AC11's row-tint half; flagged to Backend/team-lead at hand-off).
-	 *  `undefined`/`false` render identically (nothing); `null` renders the quiet "unknown"
-	 *  treatment; `true` renders the tag + row tint. */
+	 *
+	 *  ⚠ HAZARD NOTE, why `undefined` is NORMALIZED to `null` at the render boundary
+	 *  (`staleDisplayState()` below), rather than left to render like `false`: an earlier revision
+	 *  of this field let `undefined`/`false` render IDENTICALLY (nothing). Since `undefined` is
+	 *  the ONLY value this field carries today (no per-row producer exists yet — every row gets
+	 *  it), that made the table indistinguishable from "every row confirmed fresh" — the exact
+	 *  SELF-220/229 silent-fresh hazard, measured and reported 2026-08-20, team-lead build
+	 *  instruction: `undefined` must render as UNKNOWN, never as fresh. The only way a row now
+	 *  renders with no marker at all is an EXPLICIT `false` from a real producer — never the
+	 *  absence of a value. This also makes the "a future producer must never emit `undefined` for
+	 *  an unresolved row" constraint (flagged to whoever builds the per-row join) defense-in-depth
+	 *  rather than a single point of failure: even if that constraint is violated, the render
+	 *  layer still shows "unknown," not "fresh." */
 	is_stale?: boolean | null;
 }
 
@@ -114,6 +125,19 @@ export function groupsToRender(groups: AllocationCatGroup[]): AllocationCatGroup
 	}
 
 	return [...canonical, ...unexpected];
+}
+
+export type StaleDisplayState = 'stale' | 'unknown' | 'fresh';
+
+/** AC11 render-boundary normalization (team-lead build instruction, 2026-08-20, implementing D1
+ *  "aggregations are never silently presented as fresh"): `undefined` is treated as UNKNOWN, the
+ *  SAME as `null` — never as `false`. The only way a row renders with no marker at all is an
+ *  EXPLICIT `false` from a real producer; the absence of a value is never silently "fresh." See
+ *  `AllocationRow.is_stale`'s own hazard-note for why this exists. */
+export function staleDisplayState(isStale: boolean | null | undefined): StaleDisplayState {
+	if (isStale === true) return 'stale';
+	if (isStale === false) return 'fresh';
+	return 'unknown';
 }
 
 /** AC6: ratio columns (%Target / %Alloc / $Target / $ReAlloc) render as UNSET whenever the

@@ -65,17 +65,51 @@
 	      own module header already lists §2.2.2 as a planned V1.1+ ramp target). WORKING TODAY.
 	  (2) PER-ROW inline `.stale-tag` + `tr.stale-row` tint (screen.css's own D1 shape — "tag + faint
 	      row tint (informational, on aggregation rows)", distinct from NavCompositionTable's
-	      leaf-level italic-text-only treatment) keyed on `AllocationRow.is_stale`. TRI-STATE,
-	      mirroring NavCompositionLeaf: `true` → tag + `tr.stale-row` tint; `null` → quiet
-	      "Staleness unknown" text, no tint; `undefined`/`false` → nothing. DORMANT until Backend
-	      adds the per-row join (nonReAllocation.ts has no such join yet — flagged at hand-off);
-	      the markup + CSS are real and tested now so wiring it later is a data-only change.
+	      leaf-level italic-text-only treatment) keyed on `AllocationRow.is_stale`, run through
+	      `staleDisplayState()` ($lib/nonre-allocation.ts) at the render boundary — NORMALIZED
+	      tri-state, team-lead build instruction 2026-08-20, implementing D1 "aggregations are
+	      never silently presented as fresh": `true` → `tr.stale-row` background tint + the
+	      `.stale-tag` chip. `null` OR `undefined` → NO row tint, but a visibly distinct muted
+	      "Staleness unknown" text label next to the Sub-Cat name (tested for both values —
+	      NonReAllocationTable.dom.test.ts). ONLY an EXPLICIT `false` renders nothing at all — the
+	      absence of a value is never silently "fresh."
+	      ⚠ WHY: measured 2026-08-20 (reported to team-lead on direct question) that an EARLIER
+	      revision let `undefined`/`false` render identically. Since `undefined` is the ONLY value
+	      this field carries today (no per-row producer exists yet — every row gets it), that
+	      collapsed the whole table into "every row confirmed fresh" — the exact SELF-220/229
+	      silent-fresh hazard, not dormant-and-harmless markup. The normalization closes that: even
+	      if a future producer ever emits `undefined` for an unresolved row (it shouldn't — see the
+	      constraint below), the render layer still shows "unknown," not "fresh," by construction.
+
+	      THREE CONSEQUENCES FOR WHOEVER BUILDS THE CONTRIBUTOR JOIN (relayed via team-lead from
+	      Architect, 2026-08-20 — noted here now per their request, not as a future review finding):
+	        (a) The Cash row's contributor set is the WIDEST on the table — every USD account feeds
+	            some Cash Sub-Cat — so one stale institution anywhere tints Cash, the
+	            LEAST-informative tint the table can show. Not a bug to fix here; a UX expectation
+	            to set (a stale Cash row will fire often and mean the least).
+	        (b) The Unsorted row keys on `sub_cat_id === null`. Any contributor-fold join MUST
+	            match Unsorted by IS-NULL, never by an equality/`=` comparison against a null
+	            column — an equality match against NULL is always false in SQL, so an `=`-based
+	            join would silently NEVER tint the Unsorted row regardless of its actual
+	            contributors.
+	        (c) The collapsed "US - Sector Diversified" row folds TWELVE Sub-Cats into one — its
+	            tint must OR-fold across all twelve contributor sets, and UNKNOWN must DOMINATE
+	            false in that fold (mirrors the tri-state discipline above: if even one of the
+	            twelve is unknown, the collapsed row must read unknown, never silently confirmed
+	            fresh because the other eleven resolved false).
+
+	      DORMANT today pending that join (nonReAllocation.ts has no per-row producer yet) — but
+	      DORMANT no longer means SILENT: every row shows "Staleness unknown" right now, honestly,
+	      until the contributor map lands. Whoever builds that join should STILL default an
+	      unresolved row to `null`, never `undefined` (the constraint is preserved here for them);
+	      the render-boundary normalization above makes that a defense-in-depth backstop rather
+	      than the single point of failure it was before this instruction.
 
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5).
 -->
 <script lang="ts">
 	import type { NonReAllocation } from '$lib/nonre-allocation';
-	import { groupsToRender, ratioColumnsUnset, groupTargetSubtotal, fmtRatioPct, fmtRatioUsd } from '$lib/nonre-allocation';
+	import { groupsToRender, ratioColumnsUnset, groupTargetSubtotal, fmtRatioPct, fmtRatioUsd, staleDisplayState } from '$lib/nonre-allocation';
 	import type { StalenessData } from '$lib/staleness/stale-constituent';
 	import StaleConstituentBadge from './StaleConstituentBadge.svelte';
 
@@ -169,16 +203,19 @@
 					{/if}
 
 					{#each g.rows as row (row.sub_cat_id ?? row.sub_cat)}
-						<tr class:stale-row={row.is_stale === true}>
+						{@const rowStale = staleDisplayState(row.is_stale)}
+						<tr class:stale-row={rowStale === 'stale'}>
 							<td class="rowlabel">
 								{row.sub_cat}
-								<!-- AC11(2): per-row TRI-STATE marker — dormant until Backend wires is_stale. -->
-								{#if row.is_stale === true}
+								<!-- AC11(2): per-row NORMALIZED tri-state marker (undefined treated as unknown,
+								     never as fresh — team-lead build instruction; see module header). Dormant
+								     until Backend wires a real is_stale producer. -->
+								{#if rowStale === 'stale'}
 									<span
 										class="stale-tag"
 										title="This Sub-Cat includes possibly-stale account data.">May be stale</span
 									>
-								{:else if row.is_stale === null}
+								{:else if rowStale === 'unknown'}
 									<span class="stale-unknown"
 										title="Couldn't confirm whether this Sub-Cat includes stale account data."
 										>Staleness unknown</span
@@ -210,18 +247,19 @@
 
 			{#if allocation.unsorted}
 				{@const u = allocation.unsorted}
+				{@const unsortedStale = staleDisplayState(u.is_stale)}
 				<tbody class="group unsorted">
 					<tr class="group-row">
 						<th scope="colgroup" colspan="6" class="grp-cell">Unsorted</th>
 					</tr>
-					<tr class:stale-row={u.is_stale === true}>
+					<tr class:stale-row={unsortedStale === 'stale'}>
 						<td class="rowlabel">
 							{u.sub_cat}
-							{#if u.is_stale === true}
+							{#if unsortedStale === 'stale'}
 								<span class="stale-tag" title="This Sub-Cat includes possibly-stale account data."
 									>May be stale</span
 								>
-							{:else if u.is_stale === null}
+							{:else if unsortedStale === 'unknown'}
 								<span
 									class="stale-unknown"
 									title="Couldn't confirm whether this Sub-Cat includes stale account data."

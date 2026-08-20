@@ -316,8 +316,24 @@ describe('NonReAllocationTable — AC11: section badge + per-row tri-state stale
 		expect(row.classList.contains('stale-row')).toBe(false);
 	});
 
-	it('a row with is_stale undefined (today\'s default — no per-row join yet) renders neither marker nor tint', () => {
+	it('a row with is_stale undefined (today\'s universal default — no per-row producer yet) is NORMALIZED to unknown, same as null — never renders as silently fresh (team-lead build instruction, 2026-08-20)', () => {
 		const { getByText } = render(NonReAllocationTable, { props: { allocation: FIXTURE, staleness: EMPTY_STALENESS } });
+		const row = getByText('FDIC').closest('tr')!;
+		expect(within(row).getByText('Staleness unknown')).toBeTruthy();
+		expect(within(row).queryByText('May be stale')).toBeNull();
+		expect(row.classList.contains('stale-row')).toBe(false);
+	});
+
+	it('an EXPLICIT is_stale === false is the only value that renders nothing at all', () => {
+		const freshFixture: NonReAllocation = {
+			...FIXTURE,
+			groups: FIXTURE.groups.map((g) =>
+				g.cat === 'Cash'
+					? { ...g, rows: g.rows.map((r) => (r.sub_cat === 'FDIC' ? { ...r, is_stale: false } : r)) }
+					: g
+			)
+		};
+		const { getByText } = render(NonReAllocationTable, { props: { allocation: freshFixture, staleness: EMPTY_STALENESS } });
 		const row = getByText('FDIC').closest('tr')!;
 		expect(within(row).queryByText('May be stale')).toBeNull();
 		expect(within(row).queryByText('Staleness unknown')).toBeNull();
