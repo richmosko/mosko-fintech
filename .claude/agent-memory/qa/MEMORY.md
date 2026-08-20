@@ -1,5 +1,7 @@
 # Memory index
 
+- [Late annotation → next-touch rider, not its own commit](feedback_late_annotation_next_touch_rider.md) — a REF/CONSUMER label added after the fact necessarily postdates the sha it names; say so, or don't force the commit — ride the next real edit instead.
+
 - [Test-only grants don't follow a FK retarget](feedback_test_only_grants_dont_follow_a_fk_retarget.md) — a service_role teeth-isolation grant block, distant from the fixture, still named the old table; pg_prove caught it, reading didn't. Grep the WHOLE file for the old table name, not just the INSERTs.
 - [Run before deliver once the migration is committed](feedback_run_before_deliver_when_migration_is_committed.md) — the scratch-DB recipe is ~15 fast commands; it caught 3 real bugs (type cast, `overriding system value` order, a verb's role-restore gap) that reading missed.
 - [Reconcile against a diff, not a worktree](feedback_reconcile_against_diff_not_worktree.md) — a "delivered, not committed" teammate fix can leave their own worktree file unchanged; read their .diff or you'll duplicate the fix.
@@ -30,4 +32,4 @@
 - [`svelte/server` render() for required-prop compile proofs](reference_svelte_server_render_for_required_prop_proofs.md) — `@testing-library/svelte`'s render() tolerates omitted required props (types gap); plus the `@ts-expect-error` literal-marker-must-appear-exactly-once gotcha.
 - [RLS battery files keyed to original migration, not amending one](reference_rls_battery_file_keyed_to_original_migration.md) — `071_..._rls.sql` extended in place for `072`'s amendment; don't conclude a battery gap from "no file at this migration's number." `plan()` counts drift — read live, never cite from memory.
 - [Snapshot NO-FK column still needs its source table retargeted](feedback_snapshot_no_fk_column_still_needs_source_table_retarget.md) — 031's history.sub_cat_id has no FK, but the LIVE row it snapshots from is fenced one hop upstream (023); "no FK on this column" ≠ "no FK in this data's lineage."
-- [pg_prove full-suite runs must scope to /tests, not /tests/rls](feedback_pg_prove_scope_full_tests_tree_not_rls_only.md) — /tests/rls excludes 00_rls_inversion_self_test.sql (the harness's own teeth check) + 2 others; also: actually `drop database` a scratch before reporting a round closed, don't just revert the worktree.
+- **[⚠ pg_prove full-suite runs must scope to /tests, not /tests/rls — RECURRED ONCE](feedback_pg_prove_scope_full_tests_tree_not_rls_only.md)** — excludes 00_rls_inversion_self_test.sql (the harness's own teeth check) + 2 others; type `/tests` from this file, don't recall it. Also: `CREATE DATABASE...TEMPLATE` doesn't copy `pg_db_role_setting` (false-alarms 01_session_timezone T2) — [[feedback_scratch_db_pgtap_harness_gotchas]].

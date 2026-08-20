@@ -1,11 +1,11 @@
 ---
 name: gl-taxonomy-split-ratified
-description: The 2026-08-18 F/CTO-ratified asymmetric split of user_taxonomy into a storage spine + posting_prototype — ADR-058 landed as a doc-PR; NO DDL exists yet. Read ADR-058 live; this memory is the pointer plus the two non-bugs.
+description: The 2026-08-18 F/CTO-ratified asymmetric split of user_taxonomy into a storage spine + posting_prototype — SHIPPED 2026-08-20 as migration 084 (PR #507, Sec GREEN): posting_prototype live, ids preserved, ADR-058 Accepted + Amendment 1. Read ADR-058 live; this memory is the pointer.
 metadata:
   type: project
 ---
 
-**ADR-058 authored into `DECISIONS.md` at PR #499 (2026-08-19, doc-only; check it merged before relying on it). Once merged, `DECISIONS.md` is authoritative — read the ADR live and do not reason from this file.** What is landed is the DECISION; **no migration exists**, so the whole split is still `ratified-name-is-not-a-built-table` territory.
+**ADR-058 authored into `DECISIONS.md` at PR #499 (2026-08-19) and the DDL SHIPPED at PR #507 (2026-08-20, migration `084`): `pfin.posting_prototype` + `posting_prototype_default` are LIVE on main, ids preserved via the offset+maxvalue pair, D3 #10/#13 re-targeted labels-kept, ADR-058 Status = Accepted with Amendment 1 (3 items). Read the ADR and the migration live — do not reason from this file.** [Supersession note 2026-08-20: this file's prior 'NO DDL exists yet' claim went stale at PR #507; the departing split-arc Architect corrected it pre-shutdown, team-lead's cleanup accidentally discarded that edit, and this is the reinstatement.]
 
 **One-line shape, only so you recognise the ADR when you find it:** `pfin.user_taxonomy` keeps its name / ids / asset rows and drops `domain`; cashflow rows move to a new `pfin.posting_prototype` with **original ids preserved**. Ratified order is **rename → split → `element`**, three separate PRs.
 

@@ -80,6 +80,19 @@ aged and was wrong the instant it was copied.
   claim that goes stale; an enumeration of instances stays checkable; an indexical is
   worst, because it re-points without an edit.**
 
+⚠ **A re-pointed indexical is INVISIBLE IN THE DIFF — that is the whole difficulty, and
+it means the diff is the wrong instrument for finding one.** Second live instance, `085`
+(2026-08-19): `084`'s `user_taxonomy` catalog comment ends *"…falsified by `041` on the
+INSERT half, corrected here."* The correction was made at **`083`** (the comment-only
+supersession migration); `084` carried the word forward verbatim and re-pointed it to
+`084`. I caught it only because I was about to harden it — my `085` re-emission had
+"corrected at `084`" in it, and I checked which migration actually made the correction
+before shipping. **The old→new diff showed that span as UNCHANGED both times.** So:
+**grep the carried span for indexicals as a separate pass; never expect the diff to
+surface one.** Fix visibly — `085` states the drift rather than repairing it quietly,
+because a silent repair of a re-pointed word is indistinguishable from having introduced
+one.
+
 ## 4. ⚠ A QUOTED FIGURE IS ADOPTED, NOT MERELY TRANSMITTED
 
 Section 3 says verbatim carry is unsafe for indexicals. It is unsafe for **figures**
@@ -127,5 +140,37 @@ carried span, re-read it for named procedures, not just for claims and figures.*
 ⚠ And when you then explain the fix, **describe the banned phrase — do not quote it**:
 prose written *about* a grep-shaped fence is the densest concentration of the tokens that
 fence hunts, and quoting it trips the guard a second time.
+
+## 5. ⚠ A PROVENANCE LABEL ADDED LATER IS ALWAYS ABOUT AN EARLIER REF
+
+Sections 3 and 4 cover text that becomes false when copied. This is text that is false
+**the moment it is written**, and it looks like diligence.
+
+**Why:** `085`'s battery, 2026-08-19. QA pasted a raw TAP tail into the file as evidence,
+unlabelled. A later commit corrected two sentences in that same file; QA then authored a
+`REF <sha> / CONSUMER <tool>` label for the tail — naming the **pre-correction** sha,
+because that is the run they had. Committing it would have put provenance for a run that
+never exercised those bytes **into** the corrected file: byte-accurate label, wrong
+subject. I caught it by re-md5'ing their file against the committed blob.
+
+**The deeper trap, and it is why the fix is not "just use the new sha":** a label naming
+the current sha must live in a commit **beyond** it. So it can only be made true by a
+caveat explaining its own provenance — a TAP tail carrying an epistemology footnote.
+**Evidence that has to argue for itself is weaker than evidence with no label at all.**
+Team-lead's ruling, and it moved me off my own lean.
+
+**How to apply.**
+- **Label evidence in the SAME commit that produces it**, or accept it unlabelled and put
+  the ref and consumer somewhere outside the tree (a PR body) where being *about* another
+  ref is the normal case.
+- If a late label is genuinely wanted, it needs three clauses, and the third is the one
+  that matters: **REF** (the sha the run exercised) · **CONSUMER** (the tool and image tag)
+  · **a note that the annotation postdates the run it describes.**
+- **Book it as a NEXT-TOUCH rider, never as its own commit.** Moving a reviewed ref for
+  redundant evidence prices wrong — the ADR-058 two-word rider is the precedent that
+  landed cleanly by this route.
+- ⚠ **Re-measure a delivered file at COMMIT time, not at copy time.** Two teammates
+  revised deliveries in place after I had verified them; only a re-`md5` at commit caught
+  it. See [[verify-the-bytes-you-commit]].
 
 Related: [[watcher-not-fence-for-by-construction-properties]] · [[diff-filter-strips-comment-lines]] · [[scope-the-invariant-before-writing-it]] · [[cited-precedent-transmits-its-retracted-half]] · [[count-over-history-vs-live-definitions]]

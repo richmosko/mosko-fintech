@@ -65,6 +65,20 @@ without the new migrations and re-run the failing file: identical failure set = 
 And read the failing legs BY NAME — a file can document *some* of its local failures as
 expected while another leg on the same file is a live finding.
 
+⚠ **`CREATE DATABASE … TEMPLATE <an already-migrated scratch>` is NOT a substitute for a
+sequential apply, and the way it differs is silent.** `pg_db_role_setting` is a
+**shared** catalog keyed by database OID — a templated copy gets a NEW oid and therefore
+**no row at all**, so every per-database `ALTER DATABASE … SET` the chain installed is
+missing. Measured 2026-08-19 (QA, `085`): a TEMPLATE clone lost `061`'s `TimeZone=UTC`
+pin and `01_session_timezone.sql` (T2) failed with *"have: configuration file, want:
+database"* — an artifact of the clone shortcut, not a gap in the tree. A sequential apply
+does not hit it, because `061` runs `alter database current_database() set timezone`
+against whatever database it is applied to. Confirmed on a sequential scratch:
+`select setconfig from pg_db_role_setting` returns `{TimeZone=UTC}`.
+**So: clone to save time only for claims that read no per-database setting; anything
+touching timezone, JWT settings, or any `ALTER DATABASE … SET` needs the real chain.**
+Related: [[timezone-pin-is-a-default-not-a-fence]].
+
 Do NOT pass `--no-privileges`: it drops the bootstrap's REVOKEs as well as its grants and
 makes the harness **more permissive than production**, so denial assertions pass
 vacuously. Drop the scratch DB when done, and confirm the dev DB is untouched
