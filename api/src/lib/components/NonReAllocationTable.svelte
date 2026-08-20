@@ -6,10 +6,10 @@
 	Ratified ACs realized here (2026-08-20):
 
 	AC1 — exactly four Cat-group headers, Cash → Bonds → Marketable Securities → Alternatives; no
-	Liabilities, no Real Estate. `groupsToRender()` filters + fixes the order — matches Backend's
-	own `CAT_GROUP_ORDER` (also four values as of SELF-239; see $lib/nonre-allocation.ts's header)
-	field-for-field. The filter-by-name in `groupsToRender()` is defensive robustness against a
-	malformed/legacy payload shape, not something the current contract actually produces.
+	Liabilities, no Real Estate. `groupsToRender()` fixes the order and defends against a malformed
+	payload (a missing Cat still renders its header, empty) — Backend's own `groups[]` (SELF-239's
+	assets-only rework, `feature/self239-nonre-allocation-table`) is already exactly these four
+	entries, Liabilities excluded from the payload itself, not merely unrendered.
 
 	AC2 — full enumeration (incl. zero-held rows), the collapsed "US - Sector Diversified" row
 	inside Marketable Securities, and the Unsorted row are all rendered exactly as Backend's
@@ -18,16 +18,18 @@
 	underweight — nonReAllocation.ts's own `dollar_target - market_value` sign).
 
 	AC4 — per-Cat-group subtotal rows (`tr.subtotal`, bold + top divider, reproducing the locked
-	screen.css `table.tbl` spec) computed via `groupSubtotal()`; a `tr.foot` "Total Non-RE" row
-	foots every group + Unsorted to `total_non_re`. The foot's $Alloc cell displays
-	`allocation.total_non_re` directly (the authoritative anchor), not a client-re-derived sum —
-	AC4's exact-footing invariant is Backend's to hold; this table never re-asserts it by
-	overriding the anchor with its own arithmetic. JUDGMENT CALL (flagged at hand-off): the foot's
-	$ReAlloc is `grandDollarTarget − total_non_re` — i.e. target vs. the FULL actual total
-	including Unsorted money, so an un-classified balance honestly widens the overall gap rather
-	than vanishing from the total the way it already vanishes from any per-Sub-Cat target. Not
-	spelled out in the ACs; a different aggregation (excluding Unsorted from the total gap too)
-	would also have been defensible.
+	screen.css `table.tbl` spec). $Alloc/%Alloc subtotals read `g.dollar_alloc_subtotal` /
+	`g.pct_alloc_subtotal` DIRECTLY off the server payload (SELF-239's own precomputed,
+	footing-authoritative fields — never re-derived client-side, so the displayed subtotal can't
+	diverge from the server's own arithmetic); %Target/$Target/$ReAlloc subtotals (columns the
+	server does not precompute) are summed client-side via `groupTargetSubtotal()`. A `tr.foot`
+	"Total Non-RE" row foots every group + Unsorted to `total_non_re`. The foot's $Alloc cell
+	displays `allocation.total_non_re` directly (the authoritative anchor), not a client-re-derived
+	sum. JUDGMENT CALL (flagged at hand-off): the foot's $ReAlloc is `grandDollarTarget −
+	total_non_re` — i.e. target vs. the FULL actual total including Unsorted money, so an
+	un-classified balance honestly widens the overall gap rather than vanishing from the total the
+	way it already vanishes from any per-Sub-Cat target. Not spelled out in the ACs; a different
+	aggregation (excluding Unsorted from the total gap too) would also have been defensible.
 
 	AC5 (reverses the pre-SELF-238 spec) — $ReAlloc / %Target / $Target render NEUTRAL via
 	`.val-target` (design-system-spec.md §5 fence 1, screen.css `.val-target`). No pos/neg color,
@@ -38,10 +40,10 @@
 
 	AC6 — when `total_non_re <= 0`, every ratio column (%Target/%Alloc/$Target/$ReAlloc) renders
 	"—" via `ratioColumnsUnset()` + `fmtRatio*()` — computed from `total_non_re` itself, never
-	trusting a raw per-cell value (see $lib/nonre-allocation.ts's file-header note: this render
-	layer enforces AC6 independently of whatever Backend's own contract sends, as a second,
-	redundant implementation of the same rule — belt-and-suspenders on a financial-correctness
-	surface, not a gap-filler as of SELF-239). $Alloc always renders. One explanatory line
+	trusting a raw per-cell value. Backend's SELF-239 contract already nulls these fields on this
+	same gate (verified against `feature/self239-nonre-allocation-table`, not assumed from a
+	report), so this is belt-and-suspenders on an already-correct payload, not a workaround for a
+	live gap — see $lib/nonre-allocation.ts's header. $Alloc always renders. One explanatory line
 	(`.ratio-unset-note`, cause-neutral, PM-adjacent — draft copy, not yet PM-reviewed) appears
 	directly under the header when this state is active.
 
@@ -69,7 +71,7 @@
 -->
 <script lang="ts">
 	import type { NonReAllocation } from '$lib/nonre-allocation';
-	import { groupsToRender, ratioColumnsUnset, groupSubtotal, fmtRatioPct, fmtRatioUsd } from '$lib/nonre-allocation';
+	import { groupsToRender, ratioColumnsUnset, groupTargetSubtotal, fmtRatioPct, fmtRatioUsd } from '$lib/nonre-allocation';
 	import type { StalenessData } from '$lib/staleness/stale-constituent';
 	import StaleConstituentBadge from './StaleConstituentBadge.svelte';
 
@@ -97,15 +99,21 @@
 	});
 
 	// AC4 grand totals — foot to `allocation.total_non_re` (the authoritative anchor for $Alloc;
-	// see the module header's JUDGMENT CALL note on $ReAlloc).
-	const groupSubtotals = $derived(groups.map((g) => groupSubtotal(g.rows)));
-	const grandPctTarget = $derived(groupSubtotals.reduce((s, gs) => s + gs.pct_target, 0));
-	const grandDollarTarget = $derived(groupSubtotals.reduce((s, gs) => s + gs.dollar_target, 0));
-	const grandDollarAlloc = $derived(
-		groupSubtotals.reduce((s, gs) => s + gs.dollar_alloc, 0) + (allocation.unsorted?.dollar_alloc ?? 0)
-	);
+	// see the module header's JUDGMENT CALL note on $ReAlloc). %Target/$Target/$ReAlloc are summed
+	// client-side (the server doesn't precompute these); %Alloc/$Alloc are NOT summed here at all
+	// for the foot row — the foot's $Alloc cell uses `allocation.total_non_re` directly, and its
+	// %Alloc cell derives from that same anchor, so neither depends on re-summing per-group
+	// server-authoritative subtotals.
+	const targetSubtotals = $derived(groups.map((g) => groupTargetSubtotal(g.rows)));
+	const grandPctTarget = $derived(targetSubtotals.reduce((s, gs) => s + gs.pct_target, 0));
+	const grandDollarTarget = $derived(targetSubtotals.reduce((s, gs) => s + gs.dollar_target, 0));
 	const grandPctAlloc = $derived(
-		allocation.total_non_re > 0 ? (grandDollarAlloc / allocation.total_non_re) * 100 : 0
+		allocation.total_non_re > 0
+			? (groups.reduce((s, g) => s + g.dollar_alloc_subtotal, 0) +
+					(allocation.unsorted?.dollar_alloc ?? 0)) /
+					allocation.total_non_re *
+					100
+			: 0
 	);
 	const grandDollarRealloc = $derived(grandDollarTarget - allocation.total_non_re);
 </script>
@@ -143,8 +151,8 @@
 				</tr>
 			</thead>
 
-			{#each groups as g, gi (g.cat)}
-				{@const sub = groupSubtotals[gi]}
+			{#each groups as g (g.cat)}
+				{@const targetSub = groupTargetSubtotal(g.rows)}
 				<tbody class="group">
 					<tr class="group-row">
 						<th scope="colgroup" colspan="6" class="grp-cell">{g.cat}</th>
@@ -185,11 +193,13 @@
 
 					<tr class="subtotal">
 						<th scope="row">{g.cat} subtotal</th>
-						<td class="num val-target">{fmtRatioPct(sub.pct_target, allocation.total_non_re)}</td>
-						<td class="num">{fmtRatioPct(sub.pct_alloc, allocation.total_non_re)}</td>
-						<td class="num val-target">{fmtRatioUsd(sub.dollar_target, allocation.total_non_re, usd)}</td>
-						<td class="num">{usd.format(sub.dollar_alloc)}</td>
-						<td class="num val-target">{fmtRatioUsd(sub.dollar_realloc, allocation.total_non_re, usd)}</td>
+						<td class="num val-target">{fmtRatioPct(targetSub.pct_target, allocation.total_non_re)}</td>
+						<!-- $Alloc/%Alloc subtotal cells read the server-authoritative group fields directly
+						     (AC4) — never re-derived from `g.rows` client-side. -->
+						<td class="num">{fmtRatioPct(g.pct_alloc_subtotal, allocation.total_non_re)}</td>
+						<td class="num val-target">{fmtRatioUsd(targetSub.dollar_target, allocation.total_non_re, usd)}</td>
+						<td class="num">{usd.format(g.dollar_alloc_subtotal)}</td>
+						<td class="num val-target">{fmtRatioUsd(targetSub.dollar_realloc, allocation.total_non_re, usd)}</td>
 					</tr>
 				</tbody>
 			{/each}

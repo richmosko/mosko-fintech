@@ -14,7 +14,9 @@ import { describe, it, expect } from 'vitest';
 import { render, within } from '@testing-library/svelte';
 import { EMPTY_STALENESS } from '$lib/staleness/stale-constituent';
 import NonReAllocationTable from './NonReAllocationTable.svelte';
-import type { NonReAllocation, AllocationRow } from '$lib/nonre-allocation';
+import type { NonReAllocation, AllocationRow, AllocationCatGroup } from '$lib/nonre-allocation';
+
+const FIXTURE_TOTAL = 10000;
 
 function row(over: Partial<AllocationRow> & { sub_cat: string }): AllocationRow {
 	return {
@@ -30,48 +32,50 @@ function row(over: Partial<AllocationRow> & { sub_cat: string }): AllocationRow 
 	};
 }
 
-// Mirrors the SHAPE nonReAllocation.ts's `computeNonReAllocation` actually returns as of SELF-239:
-// `groups[]` carries exactly the FOUR CAT_GROUP_ORDER entries — Backend never emits a Liabilities
-// entry at all any more (dropped from CAT_GROUP_ORDER itself, not merely rendered empty). The
-// FIXTURE below still includes a `{ cat: 'Liabilities', rows: [] }` entry anyway, on purpose: it
-// exercises the COMPONENT's own defensive robustness (`groupsToRender()` filtering by name) against
-// a malformed or legacy-shaped payload, not a shape the real contract produces today. Includes one
-// zero-held row (AC2), the collapsed US-equity row, and Unsorted.
+// Builds a group with server-authoritative dollar_alloc_subtotal/pct_alloc_subtotal computed the
+// SAME way nonReAllocation.ts's SELF-239 branch does (Σ dollar_alloc, ÷ total when total > 0,
+// else null) — verified against `feature/self239-nonre-allocation-table` (commits a9ebf8e +
+// dc033a1), not assumed from a report.
+function group(cat: string, rows: AllocationRow[], total = FIXTURE_TOTAL): AllocationCatGroup {
+	const dollar_alloc_subtotal = rows.reduce((s, r) => s + r.dollar_alloc, 0);
+	return {
+		cat,
+		rows,
+		dollar_alloc_subtotal,
+		pct_alloc_subtotal: total > 0 ? (dollar_alloc_subtotal / total) * 100 : null
+	};
+}
+
+// Mirrors the SHAPE nonReAllocation.ts's `computeNonReAllocation` actually returns on the SELF-239
+// branch: `groups[]` carries exactly the FOUR rendered Cat-groups (Liabilities is absent from the
+// payload itself, not merely unrendered — the assets-only rework via the `element` predicate).
+// Includes one zero-held row (AC2), the collapsed US-equity row, and Unsorted.
 const FIXTURE: NonReAllocation = {
 	groups: [
-		{
-			cat: 'Cash',
-			rows: [
-				row({ sub_cat_id: 1, cat: 'Cash', sub_cat: 'FDIC', pct_target: 10, pct_alloc: 8, dollar_target: 1000, dollar_alloc: 800, dollar_realloc: 200 }),
-				// zero-held, zero-target seeded row — AC2 says this still renders.
-				row({ sub_cat_id: 2, cat: 'Cash', sub_cat: 'Cash Balances', pct_target: 0, pct_alloc: 0, dollar_target: 0, dollar_alloc: 0, dollar_realloc: 0 })
-			]
-		},
-		{ cat: 'Bonds', rows: [row({ sub_cat_id: 3, cat: 'Bonds', sub_cat: 'Treasury', pct_target: 5, pct_alloc: 5, dollar_target: 500, dollar_alloc: 500, dollar_realloc: 0 })] },
-		{
-			cat: 'Marketable Securities',
-			rows: [
-				row({ sub_cat_id: 4, cat: 'Marketable Securities', sub_cat: 'UNKNOWN', pct_target: 5, pct_alloc: 5, dollar_target: 500, dollar_alloc: 500, dollar_realloc: 0 }),
-				row({
-					kind: 'us_sector_diversified',
-					sub_cat_id: null,
-					cat: 'Marketable Securities',
-					sub_cat: 'US - Sector Diversified',
-					pct_target: 60,
-					pct_alloc: 62,
-					dollar_target: 6000,
-					dollar_alloc: 6200,
-					dollar_realloc: -200
-				})
-			]
-		},
-		{ cat: 'Alternatives', rows: [row({ sub_cat_id: 5, cat: 'Alternatives', sub_cat: 'REIT', pct_target: 5, pct_alloc: 5, dollar_target: 500, dollar_alloc: 500, dollar_realloc: 0 })] },
-		// Defensive-robustness fixture entry only — see the FIXTURE comment above. Not a shape
-		// Backend's real payload produces as of SELF-239.
-		{ cat: 'Liabilities', rows: [] }
+		group('Cash', [
+			row({ sub_cat_id: 1, cat: 'Cash', sub_cat: 'FDIC', pct_target: 10, pct_alloc: 8, dollar_target: 1000, dollar_alloc: 800, dollar_realloc: 200 }),
+			// zero-held, zero-target seeded row — AC2 says this still renders.
+			row({ sub_cat_id: 2, cat: 'Cash', sub_cat: 'Cash Balances', pct_target: 0, pct_alloc: 0, dollar_target: 0, dollar_alloc: 0, dollar_realloc: 0 })
+		]),
+		group('Bonds', [row({ sub_cat_id: 3, cat: 'Bonds', sub_cat: 'Treasury', pct_target: 5, pct_alloc: 5, dollar_target: 500, dollar_alloc: 500, dollar_realloc: 0 })]),
+		group('Marketable Securities', [
+			row({ sub_cat_id: 4, cat: 'Marketable Securities', sub_cat: 'UNKNOWN', pct_target: 5, pct_alloc: 5, dollar_target: 500, dollar_alloc: 500, dollar_realloc: 0 }),
+			row({
+				kind: 'us_sector_diversified',
+				sub_cat_id: null,
+				cat: 'Marketable Securities',
+				sub_cat: 'US - Sector Diversified',
+				pct_target: 60,
+				pct_alloc: 62,
+				dollar_target: 6000,
+				dollar_alloc: 6200,
+				dollar_realloc: -200
+			})
+		]),
+		group('Alternatives', [row({ sub_cat_id: 5, cat: 'Alternatives', sub_cat: 'REIT', pct_target: 5, pct_alloc: 5, dollar_target: 500, dollar_alloc: 500, dollar_realloc: 0 })])
 	],
 	unsorted: row({ kind: 'unsorted', sub_cat_id: null, cat: null, sub_cat: 'Unsorted', pct_target: null, pct_alloc: 5, dollar_target: null, dollar_alloc: 500, dollar_realloc: null }),
-	total_non_re: 10000
+	total_non_re: FIXTURE_TOTAL
 };
 
 describe('NonReAllocationTable — AC1: exactly four Cat-group headers, fixed order, Liabilities/Real Estate never rendered', () => {
@@ -84,11 +88,26 @@ describe('NonReAllocationTable — AC1: exactly four Cat-group headers, fixed or
 		expect(labels).toEqual(['Cash', 'Bonds', 'Marketable Securities', 'Alternatives']);
 	});
 
-	it('a Liabilities entry present in the payload (even empty) never renders a Cat-group header', () => {
+	it('a malformed payload with an extra Liabilities entry still never renders it as a Cat-group header (defense-in-depth)', () => {
+		const withLiabilities: NonReAllocation = {
+			...FIXTURE,
+			groups: [...FIXTURE.groups, group('Liabilities', [])]
+		};
 		const { queryByRole } = render(NonReAllocationTable, {
-			props: { allocation: FIXTURE, staleness: EMPTY_STALENESS }
+			props: { allocation: withLiabilities, staleness: EMPTY_STALENESS }
 		});
 		expect(queryByRole('columnheader', { name: 'Liabilities' })).toBeNull();
+	});
+
+	it('a malformed payload MISSING a Cat entirely still renders its header (defensive fallback, empty)', () => {
+		const missingBonds: NonReAllocation = {
+			...FIXTURE,
+			groups: FIXTURE.groups.filter((g) => g.cat !== 'Bonds')
+		};
+		const { getByRole } = render(NonReAllocationTable, {
+			props: { allocation: missingBonds, staleness: EMPTY_STALENESS }
+		});
+		expect(getByRole('columnheader', { name: 'Bonds' })).toBeTruthy();
 	});
 });
 
@@ -174,10 +193,9 @@ describe('NonReAllocationTable — AC5 fence 1: no performance color anywhere; .
 
 describe('NonReAllocationTable — AC6: TotalNonRE <= 0 renders ratio columns as unset, never fake-zero; $Alloc always renders', () => {
 	const ZERO_TOTAL: NonReAllocation = {
-		groups: FIXTURE.groups.map((g) => ({
-			...g,
-			rows: g.rows.map((r) => ({ ...r, dollar_alloc: 0 }))
-		})),
+		groups: FIXTURE.groups.map((g) =>
+			group(g.cat, g.rows.map((r) => ({ ...r, dollar_alloc: 0 })), 0)
+		),
 		unsorted: null,
 		total_non_re: 0
 	};
