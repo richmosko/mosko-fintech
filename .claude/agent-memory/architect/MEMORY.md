@@ -9,7 +9,9 @@
 
 ## Postgres / RLS facts worth not re-deriving
 
-- **[Scratch-DB recipe for a full clean chain apply](reference_scratch_db_full_chain_recipe.md)** — container `pg_dump`, load as `supabase_admin`, dump-then-extensions, `supabase_vault` for `vault.decrypted_secrets`; never `--no-privileges`.
+- **["No FK on this column" is not "no FK in the lineage"](reference_no_fk_on_column_is_not_no_fk_in_lineage.md)** — an FK-less snapshot is still fenced one hop upstream; sweep upstream of every FK-less mirror column when a target moves.
+- **[A reserved id range needs a MAXVALUE on the lower sequence](reference_reserved_id_range_needs_a_maxvalue.md)** — an offset alone is disjoint by DISTANCE; assert the construction from `pg_sequence`, never an overlap count.
+- **[Scratch-DB recipe for a full clean chain apply](reference_scratch_db_full_chain_recipe.md)** — container `pg_dump`, load as `supabase_admin`, never `--no-privileges`. ⚠ Fresh DATABASE on a DIRTY CLUSTER: no control for role/membership/grantor claims.
 - **[Catalog-comment staleness needs the CATALOG](feedback_catalog_comment_staleness_needs_the_catalog.md)** — a later migration may have re-emitted it; grepping the source over-reports staleness. Two checks via one instrument = one check.
 - **[`set local` outside a transaction is a silent no-op](feedback_set_local_outside_transaction_is_a_noop.md)** — the RLS smoke then runs as superuser and every leg passes; a vacuous harness looks PERMISSIVE, not empty. Control leg first.
 - **[`user_settings` can never carry the aal2 clause](reference_user_settings_excluded_from_aal2_backstop.md)** — `025` names it a NON-NEGOTIABLE exclusion (policy recursion); wrong home for step-up-fenced tenant data.
@@ -22,6 +24,8 @@
 
 ## How to work
 
+- **[A consequence list inherits its author's instrument](feedback_consequence_list_inherits_its_authors_instrument.md)** — re-measure over the instruments the ADR did NOT use (the live catalog, not the tree); and record an obligation whose referent doesn't exist.
+
 - **[A self-authored label hardens into fact](feedback_self_authored_label_hardens_into_fact.md)** — I invented `C1` for symmetry and it reached a commit subject, which has NO supersession mechanism. Grep the dispatch, not your own earlier use.
 
 - **[A "clean sweep" is a claim about your FILTER](feedback_clean_sweep_claim_is_a_claim_about_the_filter.md)** — over-match bare + `-i`, then hand-filter; zero hits is more suspicious than explained hits. Survivors hide in adjacent-reads-as-fixed positions.
@@ -31,6 +35,7 @@
 - **[A ratified name is not a built table](feedback_ratified_name_is_not_a_built_table.md)** — the whole Lock-14 settings family was named in 6 artifacts with ZERO DDL; grep migrations first, and the shape you ratify templates every unbuilt sibling.
 - **[Scope the invariant before writing it](feedback_scope_the_invariant_before_writing_it.md)** — "always equal / NULL together" is usually falsified by the surface's own NULL-cause rows. One message in a draft; a migration after merge.
 - **[A diff of two outputs proves nothing until both are non-empty](feedback_diff_of_two_outputs_proves_nothing_until_nonempty.md)** — two empty captures diff as IDENTICAL; `wc -l` both in the same command as the diff.
+- **[A delivery preamble becomes repo bytes](feedback_delivery_preamble_becomes_repo_bytes.md)** — a teammate's header is addressed to YOU and ships as a status claim; diff it against a landed sibling, and mine it before stripping.
 - **[Verify the bytes you commit](feedback_verify_the_bytes_you_commit.md)** — copy FIRST, then verify the copy. Verifying a teammate's source and copying later let a concurrent edit in; my commit message then described bytes I never checked.
 - **[An incoming message is not newer state](feedback_incoming_message_is_not_newer_state.md)** — a holder doc describes its own moment, not a status feed. ⚠ Also the inverse: a stale "you didn't do it" poke gets MEASURED, never redone (ship an **md5** — it ends it in one round); an **unpushed** branch makes every origin-anchored check read as *never done*.
 - **[Address teammates by NAME, not agent type](feedback_address_teammates_by_name_not_type.md)** — `frontend` not `frontend-engineer`; ⚠ `ListAgents` cannot see in-process teammates, so its silence is not absence.

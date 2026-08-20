@@ -46,6 +46,20 @@ dies immediately if you try to apply as `postgres` without the ownership transfe
 required (the image's default entrypoint swallows the flags). Also `create extension pgtap`
 in the scratch — the migration chain does not.
 
+⚠⚠ **THE SCRATCH IS A FRESH *DATABASE* ON A DIRTY *CLUSTER*, AND THAT BOUNDS WHAT IT CAN
+CONTROL FOR.** The same-cluster placement above is stated as a setup instruction — *roles
+are cluster-level and do not travel in a dump* — and that is exactly the sentence I read
+as a convenience and not as a limit. `pg_auth_members`, `pg_roles` and grantor identity
+are **shared catalogs**: every scratch on the cluster inherits whatever drift the dev
+cluster carries. Measured case: `054`'s membership legs came back RED on a scratch, I
+reported it as falsifying a booked *"CI is unaffected (fresh cluster)"* claim, and the
+truth was the opposite — `pfin_etl` holds four membership rows (two ratified, duplicated
+across the `supabase_admin` and `postgres` grantors) **at cluster level**, so the scratch
+reproduced the very drift it was supposed to isolate. **A scratch is a control for
+schema-level and data-level claims ONLY. For anything reading roles, memberships or
+grantors, the control must be a fresh CLUSTER — which is what CI builds and what you
+cannot build this way.** Nearly landed the falsification in a tracked artifact.
+
 ⚠ **A pre-existing failure is a CONTROL result, not a relayed claim.** Build a second scratch
 without the new migrations and re-run the failing file: identical failure set = pre-existing.
 And read the failing legs BY NAME — a file can document *some* of its local failures as
