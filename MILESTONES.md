@@ -8,7 +8,7 @@ Compact state ledger for mosko-fintech. **The head — everything above the `AUT
 - Milestones tracked at two scales per [ADR-009](DECISIONS.md#adr-009) Decision 7: **meta-process** (M0 / M1 / M2 / M3 = R / P / I+V / Deploy) and **product** (V1.0 / V1.1 / V1.final / V2-X).
 - Sprint = Linear cycle (orthogonal pacing wrapper, not a hierarchy level).
 - Feature = Linear Issue = one PR = one I↔V loop.
-- Last updated: 2026-08-19. ⚠ **This line carries a DATE ONLY, deliberately.** It used to restate session state — `main` sha, PR counts, worktree list — which is derivable from one command and was measured false while sitting in the auto-loaded head: it named a `main` four merges stale and a CHANGELOG version that does not exist. **Do not put state back here.**
+- Last updated: 2026-08-20. ⚠ **This line carries a DATE ONLY, deliberately.** It used to restate session state — `main` sha, PR counts, worktree list — which is derivable from one command and was measured false while sitting in the auto-loaded head: it named a `main` four merges stale and a CHANGELOG version that does not exist. **Do not put state back here.**
 
 ## Project / Initiative
 
