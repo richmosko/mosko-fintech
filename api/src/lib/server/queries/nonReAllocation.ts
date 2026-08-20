@@ -25,6 +25,37 @@
 //       state, which reads as "a real zero allocation" instead of "this ratio is undefined."
 //       `$Alloc` (raw market value) is unaffected — it is never ratio-derived.
 //
+// SEC HARDENING ROUND 2 (2026-08-20, F/CTO-adopted, post-push review). Two further changes, both
+// on the SAME theme as the round-1 rework: a claim this module made about its own shape was true
+// CONDITIONALLY (true of the seed as it stands today) rather than STRUCTURALLY (true by
+// construction, regardless of what the taxonomy vocabulary ever grows to hold) — Sec's own framing
+// for the class.
+//   (a) UNKNOWN-CAT HANDLING, option (B) — UNION, never silent drop. Pre-round-2, `groups` was
+//       built as `CAT_GROUP_ORDER.map(...)` — a lookup over exactly the four canonical Cats. If the
+//       caller's taxonomy ever held an asset-element Sub-Cat under a Cat OUTSIDE those four (a new
+//       Cat added to the vocabulary, not yet one of the recognized four), that Sub-Cat's value was
+//       STILL counted in `total_non_re` (assetSubCatIds does not filter by Cat) but its ROW was
+//       silently absent from every group — never rendered, anywhere, not even as Unsorted (it has a
+//       real sub_cat_id; Unsorted is keyed on sub_cat_id IS NULL specifically). A footing total that
+//       counts a value with no rendered row backing it is the same failure class AC3's coverage-
+//       divergence guard exists to close, reached from the opposite direction. `groups` is now the
+//       UNION: the canonical four, in `CAT_GROUP_ORDER`'s fixed order, then any OTHER Cat actually
+//       present among the caller's asset-element Sub-Cats, appended (alphabetically — a rendering
+//       judgment call, not a ratified requirement, same footing as the collapsed row's display-order
+//       choice below). This is what makes NonReAllocationTable.svelte's own `groupsToRender()`
+//       "unexpected group" append-and-log path (SELF-239 frontend, 2026-08-20) REACHABLE: pre-round-2
+//       the server could never emit a group outside the four, so that client-side path was dead code
+//       from this module's own output, however correctly written.
+//   (b) REAL ESTATE, excluded EXPLICITLY at `assetSubCatIds`, not by riding 076's flag. Pre-round-2
+//       Real Estate never appeared in `marketValueRows` only because `subcatMarketValue.ts` calls 076
+//       with `p_include_real_estate: false` — a DIFFERENT module's parameter, not a predicate this
+//       module asserts about itself. `assetSubCatIds` now excludes Real Estate explicitly (`element
+//       = 'asset' AND cat != 'Real Estate'`), so this module's own row-set/denominator agreement no
+//       longer depends on 076's flag continuing to be called the way it is today — if that flag's
+//       default or call site ever changed, this module's own predicate still holds. The §2.1.5
+//       composition's Total Non-RE anchor also excludes Real Estate (Architect-verified), so the
+//       footing anchor this module targets is unaffected either way.
+//
 // Consumes the shared `subcatMarketValue.ts` helper (076 rollup + planning_target read) and adds
 // this surface's OWN row-set logic on top: a FULL enumeration of the caller's asset-ELEMENT
 // Sub-Cats (so a zero-held, zero-target seeded Sub-Cat still renders — AC2), the twelve US-equity
@@ -60,12 +91,16 @@ import type { ZoneResolvedAsOf } from '$lib/server/time/asOf';
 import { loadSubcatMarketValueAndTargets, type SubcatMarketValueRow } from './subcatMarketValue';
 import { US_EQUITY_SUB_CAT_SET, US_SECTOR_DIVERSIFIED_LABEL } from './usEquitySubCats';
 
-/** The fixed §2.2.2 Cat-group header order (PRD §2.2.2 / SELF-239 AC1). FOUR members as of
- *  SELF-239 — 'Liabilities' DROPPED (assets-only ruling: Liabilities is not §2.2.2 domain and
- *  must not render here, in the row set OR the denominator). Real Estate is never a member —
- *  076 excludes it entirely at p_include_real_estate=false, and this module's own taxonomy
- *  enumeration filters it out independently (see computeNonReAllocation) since 076's exclusion
- *  does not reach the SEPARATE full-catalog read this surface adds.
+/** The fixed §2.2.2 Cat-group header order (PRD §2.2.2 / SELF-239 AC1) — the CANONICAL four,
+ *  rendered first and in this order. FOUR members as of SELF-239 — 'Liabilities' DROPPED
+ *  (assets-only ruling: Liabilities is not §2.2.2 domain and must not render here, in the row set
+ *  OR the denominator). Real Estate is never a member — excluded explicitly at `assetSubCatIds`
+ *  (SEC HARDENING ROUND 2 above), so it never reaches this module's row-set enumeration at all.
+ *
+ *  ⚠ NOT THE FULL SET OF POSSIBLE `groups[]` KEYS as of SEC HARDENING ROUND 2 (a): if the caller's
+ *  taxonomy holds an asset-element Sub-Cat under a Cat OUTSIDE this list, `computeNonReAllocation`
+ *  still renders it — appended after these four, never dropped. This constant names the EXPECTED,
+ *  ratified four; it is not a filter on what can appear.
  *
  *  EXPORTED (ADR-058 Decision 7) so the paired DB-Cat-set equality assertion imports THIS array
  *  rather than a hand-maintained copy — a copy could itself drift from what this module actually
@@ -113,13 +148,21 @@ export type AllocationRow = {
 };
 
 export type AllocationCatGroup = {
-	cat: (typeof CAT_GROUP_ORDER)[number];
+	/** `string`, NOT `(typeof CAT_GROUP_ORDER)[number]` — widened at SEC HARDENING ROUND 2 (a).
+	 *  `groups[]` is a UNION (the canonical four plus any other Cat the caller's asset-element
+	 *  taxonomy actually holds), so a group's `cat` is not guaranteed to be one of the four literal
+	 *  values any more. Matches the client mirror's own type ($lib/nonre-allocation.ts), which was
+	 *  already `string` — the client side never assumed the narrower union. */
+	cat: string;
 	rows: AllocationRow[];
 	/** SELF-239 AC4: Σ this group's rows' dollar_alloc. Always present, mirroring dollar_alloc's
 	 *  own always-present contract — a raw sum, not a ratio, so TotalNonRE's sign/value never
-	 *  gates it. The four group subtotals plus `unsorted`'s dollar_alloc (if present) foot to
-	 *  `total_non_re` exactly, by construction: both are sums over the same element='asset'-or-
-	 *  Unsorted partition of the same 076 rows (see computeNonReAllocation's `assetSubCatIds`). */
+	 *  gates it. EVERY rendered group's subtotal (canonical four PLUS any appended Cat) plus
+	 *  `unsorted`'s dollar_alloc (if present) foot to `total_non_re` exactly, by construction: all
+	 *  are sums over the same element='asset'-minus-Real-Estate-or-Unsorted partition of the same
+	 *  076 rows (see computeNonReAllocation's `assetSubCatIds`) — this is now STRUCTURALLY true
+	 *  (every asset-element row lands in SOME group, canonical or appended; none can be silently
+	 *  dropped), not merely true of the seed vocabulary as it stands today (SEC HARDENING ROUND 2). */
 	dollar_alloc_subtotal: number;
 	/** SELF-239 AC4: this group's subtotal as a % of TotalNonRE — same AC6 null-when-nonpositive
 	 *  gating as every other ratio-derived column. */
@@ -127,18 +170,22 @@ export type AllocationCatGroup = {
 };
 
 export type NonReAllocation = {
-	/** Fixed order per CAT_GROUP_ORDER; every group present (never omitted for being empty — at
-	 *  V1 scale a provisioned caller's full taxonomy always populates every seeded Cat, and AC2
-	 *  does not ask for empty-group omission the way 051's composition groups do). */
+	/** The canonical four (`CAT_GROUP_ORDER`) always present first, in that fixed order — never
+	 *  omitted for being empty (at V1 scale a provisioned caller's full taxonomy always populates
+	 *  every seeded Cat, and AC2 does not ask for empty-group omission the way 051's composition
+	 *  groups do). MAY carry ADDITIONAL groups after those four, one per any OTHER Cat the caller's
+	 *  asset-element taxonomy holds (SEC HARDENING ROUND 2 (a)) — not expected against the current
+	 *  seed, but never silently dropped if the vocabulary grows. */
 	groups: AllocationCatGroup[];
 	/** Present iff 076 emitted its unclassified row (AC2c) — never a zero-valued placeholder. */
 	unsorted: AllocationRow | null;
 	/** SELF-239 AC3: Σ market_value over every 076 row that is EITHER the Unsorted row (no
 	 *  element to filter on — always included) OR classified by the caller's OWN taxonomy as
-	 *  element = 'asset'. NOT every 076 row unfiltered any more (that was the SELF-238 shape;
-	 *  076 returns BOTH elements by design — see this file's header — and unfiltered summation
-	 *  silently counted a liability-cash-route row (081) in the denominator). Equals the §2.1.5
-	 *  composition's Total Non-RE at the same p_as_of, exactly — the AC4 footing anchor. */
+	 *  element = 'asset' AND NOT Real Estate. NOT every 076 row unfiltered any more (that was the
+	 *  SELF-238 shape; 076 returns BOTH elements by design — see this file's header — and
+	 *  unfiltered summation silently counted a liability-cash-route row (081) in the denominator).
+	 *  Equals the §2.1.5 composition's Total Non-RE at the same p_as_of, exactly — the AC4 footing
+	 *  anchor. */
 	total_non_re: number;
 };
 
@@ -191,13 +238,16 @@ export function computeNonReAllocation(
 	targetBySubCatId: ReadonlyMap<number, number>
 ): NonReAllocation {
 	// AC2/AC3 — THE SINGLE PREDICATE SOURCE. Every id in this Set is a Sub-Cat the caller's OWN
-	// taxonomy classifies as element='asset'. Both the row set (via assetTaxonomyRows below) and
-	// TotalNonRE (via the reduce below) derive from THIS Set, built from this ONE taxonomy read —
-	// not two independently-filtered copies. That is the "same-query predicate" route AC3 offers
-	// (vs. a paired Σ assertion the caller would ship separately): coverage divergence between the
-	// row set and the denominator is structurally unreachable here, not merely tested for.
+	// taxonomy classifies as element='asset' AND NOT Real Estate (SEC HARDENING ROUND 2 (b) —
+	// excluded HERE, explicitly, rather than relying on 076 being called with
+	// p_include_real_estate:false in a different module). Both the row set (via assetTaxonomyRows
+	// below) and TotalNonRE (via the reduce below) derive from THIS Set, built from this ONE
+	// taxonomy read — not two independently-filtered copies. That is the "same-query predicate"
+	// route AC3 offers (vs. a paired Σ assertion the caller would ship separately): coverage
+	// divergence between the row set and the denominator is structurally unreachable here, not
+	// merely tested for.
 	const assetSubCatIds = new Set(
-		taxonomyRows.filter((t) => t.element === 'asset').map((t) => t.id)
+		taxonomyRows.filter((t) => t.element === 'asset' && t.cat !== 'Real Estate').map((t) => t.id)
 	);
 
 	// AC3: TotalNonRE sums every 076 row whose sub_cat_id is the Unsorted key (null — no element
@@ -205,7 +255,9 @@ export function computeNonReAllocation(
 	// itself returns BOTH elements (085's catalog comment on fn_subcat_market_value: the producer
 	// cannot filter on element without breaking the seam invariant Σ fn_subcat_market_value(as_of,
 	// true) = fn_compute_nav(as_of); that comment names THIS module as the intended consumer of
-	// the predicate). GUARD: the predicate lives here, never inside the RPC.
+	// the predicate). GUARD: the predicate lives here, never inside the RPC. In practice 076 never
+	// returns a Real Estate row anyway (called with p_include_real_estate:false elsewhere), but
+	// this reduce does not rely on that — assetSubCatIds already excludes Real Estate on its own.
 	const total_non_re = marketValueRows.reduce((sum, r) => {
 		if (r.sub_cat_id === null) return sum + Number(r.market_value);
 		return assetSubCatIds.has(r.sub_cat_id) ? sum + Number(r.market_value) : sum;
@@ -236,15 +288,13 @@ export function computeNonReAllocation(
 		};
 	}
 
-	// AC2: the row set is the caller's element='asset' Sub-Cats, MINUS Real Estate (independent
-	// exclusion — 076's own p_include_real_estate flag does not reach this separate full-catalog
-	// read) and MINUS the twelve US-equity Sub-Cats (folded into the collapsed row below, not
-	// individual rows). Liabilities-element rows never reach this point at all — they are outside
-	// assetSubCatIds, never inside it.
+	// AC2: the row set is the caller's element='asset'-minus-Real-Estate Sub-Cats (Real Estate is
+	// already excluded at assetSubCatIds — SEC HARDENING ROUND 2 (b); no second, separate Cat-name
+	// filter is applied here any more), MINUS the twelve US-equity Sub-Cats (folded into the
+	// collapsed row below, not individual rows). Liabilities-element rows never reach this point
+	// at all — they are outside assetSubCatIds, never inside it.
 	const assetTaxonomyRows = taxonomyRows.filter((t) => assetSubCatIds.has(t.id));
-	const regularTaxonomyRows = assetTaxonomyRows.filter(
-		(t) => t.cat !== 'Real Estate' && !US_EQUITY_SUB_CAT_SET.has(t.sub_cat)
-	);
+	const regularTaxonomyRows = assetTaxonomyRows.filter((t) => !US_EQUITY_SUB_CAT_SET.has(t.sub_cat));
 
 	const rowsByCat = new Map<string, AllocationRow[]>();
 	for (const t of regularTaxonomyRows) {
@@ -286,8 +336,9 @@ export function computeNonReAllocation(
 
 	// AC4: per-group subtotal is a raw Σ of dollar_alloc — never gated by TotalNonRE's sign,
 	// mirroring dollar_alloc's own always-present contract. pct_alloc_subtotal derives from the
-	// SAME ratioPercentOrNull gate as every row-level percent column.
-	const groups: AllocationCatGroup[] = CAT_GROUP_ORDER.map((cat) => {
+	// SAME ratioPercentOrNull gate as every row-level percent column. Shared by both the canonical
+	// and any appended group below, so the two paths cannot compute a subtotal differently.
+	function buildGroup(cat: string): AllocationCatGroup {
 		const rows = (rowsByCat.get(cat) ?? []).slice();
 		rows.sort((a, b) => {
 			const da = displayOrderById.get(a.sub_cat_id ?? -1) ?? 0;
@@ -301,7 +352,21 @@ export function computeNonReAllocation(
 			dollar_alloc_subtotal,
 			pct_alloc_subtotal: ratioPercentOrNull(dollar_alloc_subtotal, total_non_re)
 		};
-	});
+	}
+
+	// SEC HARDENING ROUND 2 (a): `groups` is the UNION of the canonical four (always present, in
+	// CAT_GROUP_ORDER's fixed order, even if empty) and any OTHER Cat actually present in
+	// `rowsByCat` — a Cat that reached regularTaxonomyRows (so it is genuinely asset-element,
+	// non-US-equity) but is not one of the four. `rowsByCat` is fully drained here: every key it
+	// holds ends up in EXACTLY ONE group, canonical or appended, so no asset-element row can be
+	// counted in `total_non_re` while having no rendered row anywhere — the failure this hardening
+	// closes. Appended Cats are sorted alphabetically — a rendering judgment call (their order is
+	// not ratified by any AC), not a claim about which is more "important."
+	const knownCats = new Set<string>(CAT_GROUP_ORDER);
+	const canonicalGroups: AllocationCatGroup[] = CAT_GROUP_ORDER.map((cat) => buildGroup(cat));
+	const unexpectedCats = [...rowsByCat.keys()].filter((cat) => !knownCats.has(cat)).sort();
+	const unexpectedGroups: AllocationCatGroup[] = unexpectedCats.map((cat) => buildGroup(cat));
+	const groups: AllocationCatGroup[] = [...canonicalGroups, ...unexpectedGroups];
 
 	// AC2c/AC3: Unsorted carries %Alloc/$Alloc only — target cells are structurally null, never
 	// 0 (0 would assert "a real zero target", which is impossible for a row with no sub_cat_id).

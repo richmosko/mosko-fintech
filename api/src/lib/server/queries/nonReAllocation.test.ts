@@ -9,6 +9,14 @@
 // null — not 0/NaN — when TotalNonRE <= 0; $Alloc always present regardless), plus the SEC
 // carry-forward guard (a stray liability-element planning_target row must not re-enter the row set
 // or the denominator).
+//
+// SEC HARDENING ROUND 2 (2026-08-20, F/CTO-adopted, post-push review) — two more describe blocks
+// near the bottom of this file: (a) an asset-element Sub-Cat under a Cat OUTSIDE the canonical
+// four renders as an APPENDED group (never silently dropped while still counted in the
+// denominator — the union fix), and (b) Real Estate carrying a REAL, nonzero market_value is
+// excluded from both the row set and TotalNonRE — the existing AC2b test above only ever gave
+// Real Estate a zero value, which cannot distinguish "excluded" from "excluded and also
+// coincidentally zero."
 
 import { describe, it, expect } from 'vitest';
 import { computeNonReAllocation, type TaxonomySubCatRow } from './nonReAllocation';
@@ -222,5 +230,63 @@ describe('computeNonReAllocation — no held value anywhere but a real taxonomy 
 		const equity = result.groups.find((g) => g.cat === 'Marketable Securities')!;
 		expect(equity.rows).toHaveLength(1);
 		expect(equity.rows[0]).toMatchObject({ sub_cat: 'US - Sector Diversified', dollar_alloc: 0, pct_target: null });
+	});
+});
+
+describe('computeNonReAllocation — SEC HARDENING ROUND 2 (a): an asset-element Cat outside the canonical four is APPENDED, never silently dropped', () => {
+	const taxonomyWithUnknownCat: TaxonomySubCatRow[] = [
+		...TAXONOMY,
+		{ id: 60, cat: 'Crypto', sub_cat: 'BTC-Direct', display_order: 400, element: 'asset' }
+	];
+	const marketValueRows: SubcatMarketValueRow[] = [
+		{ sub_cat_id: 1, cat: 'Cash', sub_cat: 'FDIC', market_value: 1000 },
+		{ sub_cat_id: 60, cat: 'Crypto', sub_cat: 'BTC-Direct', market_value: 500 }
+	];
+	const result = computeNonReAllocation(taxonomyWithUnknownCat, marketValueRows, new Map());
+
+	it('the unrecognized Cat is APPENDED after the canonical four — never dropped', () => {
+		expect(result.groups.map((g) => g.cat)).toEqual([
+			'Cash',
+			'Bonds',
+			'Marketable Securities',
+			'Alternatives',
+			'Crypto'
+		]);
+	});
+
+	it('the appended group\'s row and subtotal carry the real value, and it counts in TotalNonRE — no coverage divergence in this direction either', () => {
+		expect(result.total_non_re).toBe(1500); // 1000 + 500, the unrecognized Cat's value included
+		const crypto = result.groups.find((g) => g.cat === 'Crypto')!;
+		expect(crypto.rows).toHaveLength(1);
+		expect(crypto.rows[0]).toMatchObject({ sub_cat: 'BTC-Direct', dollar_alloc: 500 });
+		expect(crypto.dollar_alloc_subtotal).toBe(500);
+		expect(crypto.pct_alloc_subtotal).toBeCloseTo((500 / 1500) * 100);
+	});
+
+	it('every rendered group\'s subtotal (canonical four PLUS the appended one) feeds Unsorted foots to TotalNonRE exactly', () => {
+		const groupSum = result.groups.reduce((s, g) => s + g.dollar_alloc_subtotal, 0);
+		const footed = groupSum + (result.unsorted?.dollar_alloc ?? 0);
+		expect(footed).toBe(result.total_non_re);
+	});
+});
+
+describe('computeNonReAllocation — SEC HARDENING ROUND 2 (b): Real Estate with a REAL nonzero market_value is excluded from the row set AND TotalNonRE', () => {
+	const marketValueRows: SubcatMarketValueRow[] = [
+		{ sub_cat_id: 1, cat: 'Cash', sub_cat: 'FDIC', market_value: 1000 },
+		// Real Estate (id 50) carrying a real, large, nonzero value — 076 should never emit this
+		// (p_include_real_estate:false elsewhere), but this module's OWN predicate must not depend
+		// on that: if it ever did leak through, it must still be excluded here.
+		{ sub_cat_id: 50, cat: 'Real Estate', sub_cat: 'Residential', market_value: 250000 }
+	];
+	const result = computeNonReAllocation(TAXONOMY, marketValueRows, new Map());
+
+	it('TotalNonRE excludes the Real Estate value entirely — not 251000', () => {
+		expect(result.total_non_re).toBe(1000);
+	});
+
+	it('Real Estate renders in no group, at no grain — no row, no subtotal contribution, anywhere', () => {
+		expect(result.groups.map((g) => g.cat)).not.toContain('Real Estate');
+		const anyRealEstateRow = result.groups.some((g) => g.rows.some((r) => r.sub_cat_id === 50 || r.cat === 'Real Estate'));
+		expect(anyRealEstateRow).toBe(false);
 	});
 });
