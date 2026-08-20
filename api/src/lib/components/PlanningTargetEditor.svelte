@@ -5,10 +5,13 @@
 
 	CONTRACT (props):
 	  catalog        : { id, cat, sub_cat, display_order }[] — the caller's full asset-domain
-	                   Sub-Cat catalog (Real Estate excluded — defensively re-filtered here even
-	                   though the loader is expected to exclude it, mirroring nonReAllocation.ts's
-	                   own independent Real-Estate filter rather than trusting a single filter
-	                   point). Grouped/ordered per allocation-taxonomy.ts (CAT_GROUP_ORDER +
+	                   Sub-Cat catalog. Confirmed (+page.server.ts, commit 2e19dfd): the loader
+	                   INCLUDES Real Estate — it reuses taxonomy.ts's loadAssetSubCats() verbatim,
+	                   the same read the account pickers use, rather than a second, driftable
+	                   query — so this component filters Real Estate out independently, client-
+	                   side, exactly how SELF-238/240's own read surfaces exclude it independently
+	                   of their upstream source rather than relying on the query to have done it.
+	                   Grouped/ordered per allocation-taxonomy.ts (CAT_GROUP_ORDER +
 	                   US_EQUITY_SUB_CAT_SET — the SAME mirror Issue 5/6 (SELF-238) and Issue 7/8
 	                   (SELF-240) consume server-side, so this editor's Cat order and US-Equity
 	                   membership can never drift from what those read surfaces show).
