@@ -59,12 +59,29 @@
 	      nonReAllocation.ts has) — every row shows "Staleness unknown" honestly until Backend
 	      wires the contributor join, never silently "fresh" (the SELF-220/229 hazard).
 
+	Sec F-1 fix (PR #520 review, AMBER, resolved): the render-boundary gate on the degenerate US
+	Equity denominator (`allocation.total.dollar_alloc`) — REUSED `ratioColumnsUnset()` from
+	`$lib/nonre-allocation`, not a second predicate. Sec's finding: the landed server core
+	(`computeUsEquityAllocation`, SELF-240) nulls `pct_alloc` on `totalUsEquity === 0` and nulls
+	`pct_target`/`dollar_target`/`dollar_realloc` on a SEPARATE `sumTargets === 0` guard — the two
+	do not null together, and neither is `<= 0` (a negative total passes both `=== 0` checks
+	un-gated). That let the banner assert "No US Equity holdings" while a real %Target column
+	rendered (zero-holdings-with-configured-targets — the ordinary onboarding state), or assert it
+	falsely outright at a negative total while every ratio column rendered real figures. `isDegenerate`
+	and every `fmtPct`/`fmtUsd` call below now gate on the SAME single predicate
+	(`ratioColumnsUnset(allocation.total.dollar_alloc)`, `<= 0` — a domain guard, not the server's
+	`=== 0` NaN-guard), applied uniformly to all four ratio columns on both the data rows and the
+	Total row, regardless of what the (possibly non-null) server payload says underneath. $Alloc
+	stays exempt (the real figure, never gated). See us-equity-allocation.ts's own header for why
+	this render-boundary gate is LOAD-BEARING here, not redundant belt-and-suspenders the way
+	nonre-allocation.ts's equivalent gate is.
+
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5).
 -->
 <script lang="ts">
 	import type { UsEquityAllocation } from '$lib/us-equity-allocation';
 	import { isZeroAllocSubCat, fmtPct, fmtUsd } from '$lib/us-equity-allocation';
-	import { staleDisplayState } from '$lib/nonre-allocation';
+	import { staleDisplayState, ratioColumnsUnset } from '$lib/nonre-allocation';
 	import type { StalenessData } from '$lib/staleness/stale-constituent';
 	import StaleConstituentBadge from './StaleConstituentBadge.svelte';
 
@@ -88,7 +105,9 @@
 		maximumFractionDigits: 0
 	});
 
-	const isDegenerate = $derived(allocation.total.dollar_alloc <= 0);
+	// Sec F-1: the SINGLE degenerate-denominator predicate for this table — reused for the banner
+	// AND every ratio-column render below, so the two can never disagree with each other again.
+	const isDegenerate = $derived(ratioColumnsUnset(allocation.total.dollar_alloc));
 </script>
 
 <section class="alloc" aria-labelledby="us-equity-label">
@@ -101,8 +120,13 @@
 	<StaleConstituentBadge isStale={staleness.is_stale} staleItems={staleness.stale_items} />
 
 	{#if isDegenerate}
+		<!-- Sec F-1: sign-honest, cause-neutral — matches the shipped §2.2.2 wording shape
+		     (nonre-allocation.ts's own note). "currently total zero or less" is true whether the
+		     total is exactly zero OR negative; the earlier "No US Equity holdings" phrasing was
+		     false at a negative total, where real dollar figures are still on screen. -->
 		<p class="ratio-unset-note" role="status">
-			No US Equity holdings currently — percent and target comparisons aren't shown below.
+			Percent and target comparisons aren't shown below because your US Equity holdings
+			currently total zero or less — dollar values are still accurate.
 		</p>
 	{/if}
 
@@ -145,11 +169,11 @@
 								>
 							{/if}
 						</td>
-						<td class="num val-target">{fmtPct(row.pct_target)}</td>
-						<td class="num">{fmtPct(row.pct_alloc)}</td>
-						<td class="num val-target">{fmtUsd(row.dollar_target, usd)}</td>
+						<td class="num val-target">{fmtPct(row.pct_target, allocation.total.dollar_alloc)}</td>
+						<td class="num">{fmtPct(row.pct_alloc, allocation.total.dollar_alloc)}</td>
+						<td class="num val-target">{fmtUsd(row.dollar_target, allocation.total.dollar_alloc, usd)}</td>
 						<td class="num">{usd.format(row.dollar_alloc)}</td>
-						<td class="num val-target">{fmtUsd(row.dollar_realloc, usd)}</td>
+						<td class="num val-target">{fmtUsd(row.dollar_realloc, allocation.total.dollar_alloc, usd)}</td>
 					</tr>
 				{/each}
 			</tbody>
@@ -160,11 +184,11 @@
 					<th scope="row" title="Equals the §2.2.2 &quot;US - Sector Diversified&quot; row exactly.">
 						Total US Equity <span class="parent-ref">(= §2.2.2 parent row)</span>
 					</th>
-					<td class="num val-target">{fmtPct(allocation.total.pct_target)}</td>
-					<td class="num">{fmtPct(allocation.total.pct_alloc)}</td>
-					<td class="num val-target">{fmtUsd(allocation.total.dollar_target, usd)}</td>
+					<td class="num val-target">{fmtPct(allocation.total.pct_target, allocation.total.dollar_alloc)}</td>
+					<td class="num">{fmtPct(allocation.total.pct_alloc, allocation.total.dollar_alloc)}</td>
+					<td class="num val-target">{fmtUsd(allocation.total.dollar_target, allocation.total.dollar_alloc, usd)}</td>
 					<td class="num">{usd.format(allocation.total.dollar_alloc)}</td>
-					<td class="num val-target">{fmtUsd(allocation.total.dollar_realloc, usd)}</td>
+					<td class="num val-target">{fmtUsd(allocation.total.dollar_realloc, allocation.total.dollar_alloc, usd)}</td>
 				</tr>
 			</tbody>
 		</table>

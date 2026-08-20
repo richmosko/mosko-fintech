@@ -194,7 +194,7 @@ describe('UsEquityAllocationTable — AC7: section badge + per-row tri-state sta
 });
 
 describe('UsEquityAllocationTable — degenerate zero-holding state', () => {
-	it('total.dollar_alloc <= 0 renders the explanatory note; $Alloc still renders real figures', () => {
+	it('total.dollar_alloc <= 0 (all-null payload) renders the explanatory note; $Alloc still renders real figures', () => {
 		const ZERO: UsEquityAllocation = {
 			rows: US_EQUITY_SUB_CATS.map((sub_cat) => row({ sub_cat, pct_target: null, pct_alloc: null, dollar_target: null, dollar_realloc: null })),
 			total: { dollar_alloc: 0, pct_alloc: null, pct_target: null, dollar_target: null, dollar_realloc: null }
@@ -205,5 +205,81 @@ describe('UsEquityAllocationTable — degenerate zero-holding state', () => {
 		const cells = within(tr).getAllByRole('cell');
 		expect(cells[1].textContent).toBe('—');
 		expect(cells[4].textContent).toBe('$0');
+	});
+});
+
+describe('UsEquityAllocationTable — Sec F-1 (PR #520 AMBER, resolved): render-boundary gate on the US Equity denominator', () => {
+	// Sec's finding: the LANDED SERVER core (computeUsEquityAllocation) guards pct_alloc on
+	// `totalUsEquity === 0` alone and guards pct_target/dollar_target/dollar_realloc on a SEPARATE
+	// `sumTargets === 0` — they do not null together, and neither is `<= 0`. Both fixtures below are
+	// SERVER-REACHABLE shapes the all-null fixture above cannot exercise: non-null ratio values
+	// arriving at a degenerate/negative total. The render layer must still force '—' on all four
+	// ratio columns (never $Alloc) regardless of what the payload says underneath.
+
+	it('(a) totalUsEquity === 0 WITH configured targets (ordinary onboarding state) — server returns non-null pct_target, render layer still forces "—" on all four ratio columns', () => {
+		const ZERO_WITH_TARGETS: UsEquityAllocation = {
+			rows: US_EQUITY_SUB_CATS.map((sub_cat, i) =>
+				row({
+					sub_cat,
+					pct_target: i === 0 ? 33.33 : 0, // non-null — server's sumTargets > 0 branch
+					pct_alloc: null, // server's totalUsEquity === 0 branch
+					dollar_target: i === 0 ? 0 : 0,
+					dollar_realloc: i === 0 ? 0 : 0
+				})
+			),
+			// total.pct_target non-null (100) while total.dollar_alloc is exactly 0 — the split-guard
+			// state Sec's finding names explicitly.
+			total: { dollar_alloc: 0, pct_alloc: null, pct_target: 100, dollar_target: 0, dollar_realloc: 0 }
+		};
+		const { getByRole, getByText } = render(UsEquityAllocationTable, {
+			props: { allocation: ZERO_WITH_TARGETS, staleness: EMPTY_STALENESS }
+		});
+		expect(getByRole('status').textContent).toMatch(/currently total zero or less/);
+		const rowCells = within(getByText('US-01-Basic_Materials').closest('tr')!).getAllByRole('cell');
+		// [label, %Target, %Alloc, $Target, $Alloc, $ReAlloc]
+		expect(rowCells[1].textContent).toBe('—'); // NOT "33.33%" despite the non-null server value
+		expect(rowCells[3].textContent).toBe('—');
+		expect(rowCells[5].textContent).toBe('—');
+		expect(rowCells[4].textContent).toBe('$0'); // $Alloc stays exempt, still real
+
+		const footCells = within(getByRole('row', { name: /Total US Equity/ })).getAllByRole('cell');
+		expect(footCells[0].textContent).toBe('—'); // NOT "100.00%" despite total.pct_target = 100
+		expect(footCells[2].textContent).toBe('—');
+		expect(footCells[4].textContent).toBe('—');
+	});
+
+	it('(b) NEGATIVE totalUsEquity — every ratio column would compute real (non-null) values server-side; render layer forces "—" throughout, and the banner never claims "no holdings"', () => {
+		const NEGATIVE_TOTAL: UsEquityAllocation = {
+			rows: US_EQUITY_SUB_CATS.map((sub_cat, i) =>
+				row({
+					sub_cat,
+					pct_target: 8.33,
+					pct_alloc: i === 0 ? 200 : 0, // real, computable ratios against a negative denominator
+					dollar_target: -50,
+					dollar_realloc: -50
+				})
+			),
+			total: { dollar_alloc: -600, pct_alloc: 100, pct_target: 100, dollar_target: -600, dollar_realloc: 0 }
+		};
+		const { getByRole, getByText } = render(UsEquityAllocationTable, {
+			props: { allocation: NEGATIVE_TOTAL, staleness: EMPTY_STALENESS }
+		});
+		const banner = getByRole('status');
+		expect(banner.textContent).toMatch(/currently total zero or less/);
+		expect(banner.textContent).not.toMatch(/No US Equity holdings/i);
+
+		const rowCells = within(getByText('US-01-Basic_Materials').closest('tr')!).getAllByRole('cell');
+		expect(rowCells[1].textContent).toBe('—');
+		expect(rowCells[2].textContent).toBe('—'); // %Alloc — NOT "200.00%"
+		expect(rowCells[3].textContent).toBe('—');
+		expect(rowCells[5].textContent).toBe('—');
+
+		const footCells = within(getByRole('row', { name: /Total US Equity/ })).getAllByRole('cell');
+		expect(footCells[0].textContent).toBe('—');
+		expect(footCells[1].textContent).toBe('—'); // %Alloc — NOT "100.00%"
+		expect(footCells[2].textContent).toBe('—');
+		expect(footCells[4].textContent).toBe('—');
+		// $Alloc stays exempt — the real negative figure still renders.
+		expect(footCells[3].textContent).toBe('-$600');
 	});
 });
