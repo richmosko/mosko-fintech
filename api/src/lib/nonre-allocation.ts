@@ -4,11 +4,11 @@
 // stays purely presentational over the types + helpers here.
 //
 // MIRROR of Backend's `$lib/server/queries/nonReAllocation.ts` on `feature/self239-nonre-
-// allocation-table` (commits a9ebf8e + dc033a1 — the SELF-239 rework, NOT YET on main as of this
-// revision) — this file hand-copies that module's row/group/table SHAPE only, never its I/O;
-// browser code cannot import `$lib/server/**` (SvelteKit's build-time guard refuses it regardless
-// of `import type`). Same hand-kept-copy / drift-risk posture as `allocation-taxonomy.ts`:
-// flagged to Backend at hand-off, no automated cross-check exists client-side today.
+// allocation-table` (commits a9ebf8e + dc033a1 — the SELF-239 rework) — this file hand-copies
+// that module's row/group/table SHAPE only, never its I/O; browser code cannot import
+// `$lib/server/**` (SvelteKit's build-time guard refuses it regardless of `import type`). Same
+// hand-kept-copy / drift-risk posture as `allocation-taxonomy.ts`: flagged to Backend at hand-off,
+// no automated cross-check exists client-side today.
 //
 // REVISION NOTE: an earlier revision of this file, written against `main`'s pre-SELF-239
 // `nonReAllocation.ts`, carried a "deliberate divergence" section describing a fake-zero /
@@ -81,19 +81,39 @@ export interface NonReAllocation {
 	total_non_re: number;
 }
 
-/** AC1: filter the backend's `groups[]` down to the four rendered Cat-groups, in
- *  NONRE_TABLE_CAT_ORDER's fixed order — never the payload's own array order, so a future backend
- *  re-order can't silently reorder the table. A Cat absent from the payload (defensive —
- *  nonReAllocation.ts's contract says every group is always present) renders as an empty group
- *  rather than being dropped from the header sequence, preserving AC1's "exactly four headers"
- *  even against a malformed payload. The backend's own `groups[]` is already exactly these four
- *  entries as of the SELF-239 rework, so this is now defense-in-depth (order + malformed-payload
- *  safety), not a name-based exclusion working around a 5th entry. */
+/** AC1: fixes the render ORDER to NONRE_TABLE_CAT_ORDER's canonical four — never the payload's own
+ *  array order, so a future backend re-order can't silently reorder the table. Two behaviors,
+ *  deliberately asymmetric (team-lead directive, 2026-08-20, post-commit review):
+ *    - A canonical Cat ABSENT from the payload still renders its header, empty — defensive
+ *      completeness (nonReAllocation.ts's own contract says every group is always present, so
+ *      this path is not expected to fire against a well-formed payload).
+ *    - A Cat in the payload that is NOT one of the four (e.g. a 'Liabilities' entry reappearing —
+ *      an assets-only-contract regression) is NEVER silently dropped. Earlier revisions of this
+ *      function looked up only the four known Cat names, which meant an unexpected 5th group
+ *      would vanish from the table with no signal at all — masking exactly the kind of contract
+ *      break this table exists to prevent (the whole point of the SELF-239 rework is that
+ *      Liabilities must not leak into an assets-only surface; silently hiding a leak is not the
+ *      same as preventing one). An unexpected group is now APPENDED (visibly breaking AC1's "four
+ *      headers" in the anomalous case, which is the correct failure mode) and logged, mirroring
+ *      the codebase's "surface the mismatch, don't silently reconcile" convention. */
 export function groupsToRender(groups: AllocationCatGroup[]): AllocationCatGroup[] {
 	const byCat = new Map(groups.map((g) => [g.cat, g] as const));
-	return NONRE_TABLE_CAT_ORDER.map(
+	const orderIndex = new Map(NONRE_TABLE_CAT_ORDER.map((cat, i) => [cat as string, i]));
+
+	const canonical = NONRE_TABLE_CAT_ORDER.map(
 		(cat) => byCat.get(cat) ?? { cat, rows: [], dollar_alloc_subtotal: 0, pct_alloc_subtotal: null }
 	);
+
+	const unexpected = groups.filter((g) => !orderIndex.has(g.cat));
+	if (unexpected.length > 0) {
+		// eslint-disable-next-line no-console
+		console.error(
+			`[NonReAllocationTable] payload carries Cat-group(s) outside the AC1 four-group ` +
+				`contract (assets-only regression?): ${unexpected.map((g) => g.cat).join(', ')}`
+		);
+	}
+
+	return [...canonical, ...unexpected];
 }
 
 /** AC6: ratio columns (%Target / %Alloc / $Target / $ReAlloc) render as UNSET whenever the

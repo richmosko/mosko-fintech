@@ -10,7 +10,7 @@
 //
 // @vitest-environment jsdom
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, within } from '@testing-library/svelte';
 import { EMPTY_STALENESS } from '$lib/staleness/stale-constituent';
 import NonReAllocationTable from './NonReAllocationTable.svelte';
@@ -88,15 +88,21 @@ describe('NonReAllocationTable — AC1: exactly four Cat-group headers, fixed or
 		expect(labels).toEqual(['Cash', 'Bonds', 'Marketable Securities', 'Alternatives']);
 	});
 
-	it('a malformed payload with an extra Liabilities entry still never renders it as a Cat-group header (defense-in-depth)', () => {
+	it('a malformed payload with an unexpected Liabilities entry renders it VISIBLY (never silently dropped) and logs an error', () => {
+		const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 		const withLiabilities: NonReAllocation = {
 			...FIXTURE,
 			groups: [...FIXTURE.groups, group('Liabilities', [])]
 		};
-		const { queryByRole } = render(NonReAllocationTable, {
+		const { getByRole } = render(NonReAllocationTable, {
 			props: { allocation: withLiabilities, staleness: EMPTY_STALENESS }
 		});
-		expect(queryByRole('columnheader', { name: 'Liabilities' })).toBeNull();
+		// team-lead directive (2026-08-20): masking an AC1 contract regression is worse than a
+		// visibly-wrong table — an unexpected group is appended and surfaced, not hidden.
+		expect(getByRole('columnheader', { name: 'Liabilities' })).toBeTruthy();
+		expect(errorSpy).toHaveBeenCalledTimes(1);
+		expect(errorSpy.mock.calls[0][0]).toMatch(/Liabilities/);
+		errorSpy.mockRestore();
 	});
 
 	it('a malformed payload MISSING a Cat entirely still renders its header (defensive fallback, empty)', () => {

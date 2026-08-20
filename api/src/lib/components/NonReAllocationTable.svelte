@@ -6,10 +6,14 @@
 	Ratified ACs realized here (2026-08-20):
 
 	AC1 — exactly four Cat-group headers, Cash → Bonds → Marketable Securities → Alternatives; no
-	Liabilities, no Real Estate. `groupsToRender()` fixes the order and defends against a malformed
-	payload (a missing Cat still renders its header, empty) — Backend's own `groups[]` (SELF-239's
-	assets-only rework, `feature/self239-nonre-allocation-table`) is already exactly these four
-	entries, Liabilities excluded from the payload itself, not merely unrendered.
+	Liabilities, no Real Estate, ON A WELL-FORMED PAYLOAD. `groupsToRender()` fixes the render order
+	and fills in a missing canonical Cat (defensive completeness — Backend's own `groups[]`,
+	SELF-239's assets-only rework, is already exactly these four entries, so this path isn't
+	expected to fire). It deliberately does NOT silently drop an unexpected group (team-lead
+	directive, post-commit review, 2026-08-20): a payload Cat outside the four — e.g. Liabilities
+	regressing back in — is APPENDED and logged rather than masked, because silently hiding an
+	assets-only-contract break is worse than a visibly wrong table; see $lib/nonre-allocation.ts's
+	own comment on `groupsToRender` for the full reasoning.
 
 	AC2 — full enumeration (incl. zero-held rows), the collapsed "US - Sector Diversified" row
 	inside Marketable Securities, and the Unsorted row are all rendered exactly as Backend's
