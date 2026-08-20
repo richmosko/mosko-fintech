@@ -6,13 +6,16 @@
 
 	EXPECTED CONTRACT (proposed here for Backend to build against or correct — see the
 	SELF-242 hand-off note for the exact ask):
-	  data.catalog : { id: number; cat: string; sub_cat: string; display_order: number | null }[]
-	                 — the caller's full asset-domain Sub-Cat catalog, RLS-scoped via
-	                 locals.supabase (mirrors nonReAllocation.ts's own `user_taxonomy` read —
-	                 `select id, cat, sub_cat, display_order from pfin.user_taxonomy`, no
-	                 domain filter needed post-084). Real Estate rows may be included or
-	                 pre-filtered; PlanningTargetEditor filters them out independently either
-	                 way (see its own header comment).
+	  data.catalog : { id: number; cat: string; sub_cat: string; display_order: number | null;
+	                 element: 'asset' | 'liability' }[] — the caller's full asset-domain
+	                 Sub-Cat catalog, RLS-scoped via locals.supabase (mirrors
+	                 nonReAllocation.ts's own `user_taxonomy` read, plus `element`
+	                 (ADR-058 Decision 3 / migration 085) for F/CTO's N7-A ruling — Backend
+	                 is adding this field to the loader; not yet landed as of this file's
+	                 authoring). Real Estate rows may be included or pre-filtered;
+	                 PlanningTargetEditor filters them out independently either way (see its
+	                 own header comment), and now ALSO filters to element === 'asset'
+	                 independently (N7-A).
 	  data.targets  : Record<sub_cat_id, target_percent> — one entry per EXISTING
 	                 pfin.planning_target row for this user (074's own "row exists iff a
 	                 target is set" contract) — built from

@@ -4,17 +4,29 @@
 	values — this one edits §2.2.2 %Target). SELF-242. Frontend-owned browser surface.
 
 	CONTRACT (props):
-	  catalog        : { id, cat, sub_cat, display_order }[] — the caller's full asset-domain
-	                   Sub-Cat catalog. Confirmed (+page.server.ts, commit 2e19dfd): the loader
-	                   INCLUDES Real Estate — it reuses taxonomy.ts's loadAssetSubCats() verbatim,
-	                   the same read the account pickers use, rather than a second, driftable
-	                   query — so this component filters Real Estate out independently, client-
-	                   side, exactly how SELF-238/240's own read surfaces exclude it independently
-	                   of their upstream source rather than relying on the query to have done it.
-	                   Grouped/ordered per allocation-taxonomy.ts (CAT_GROUP_ORDER +
-	                   US_EQUITY_SUB_CAT_SET — the SAME mirror Issue 5/6 (SELF-238) and Issue 7/8
-	                   (SELF-240) consume server-side, so this editor's Cat order and US-Equity
-	                   membership can never drift from what those read surfaces show).
+	  catalog        : { id, cat, sub_cat, display_order, element }[] — the caller's full
+	                   asset-domain Sub-Cat catalog. `element: 'asset' | 'liability'`
+	                   (ADR-058 Decision 3, migration 085) — added to the loader's shape
+	                   for F/CTO's N7-A ruling (2026-08-20): this editor renders
+	                   element === 'asset' Sub-Cats only, no %Target fields for
+	                   Liabilities. Confirmed (+page.server.ts, commit 2e19dfd, catalog
+	                   field addition pending backend's N7-A shape update): the loader
+	                   INCLUDES Real Estate — it reuses taxonomy.ts's loadAssetSubCats()
+	                   verbatim, the same read the account pickers use, rather than a
+	                   second, driftable query — so this component filters Real Estate out
+	                   independently, client-side (BY NAME, unchanged by N7-A — Real
+	                   Estate is itself element = 'asset'), exactly how SELF-238/240's own
+	                   read surfaces exclude it independently of their upstream source
+	                   rather than relying on the query to have done it. Grouped/ordered
+	                   per allocation-taxonomy.ts (CAT_GROUP_ORDER + US_EQUITY_SUB_CAT_SET
+	                   — the SAME mirror Issue 5/6 (SELF-238) and Issue 7/8 (SELF-240)
+	                   consume server-side, so this editor's Cat order and US-Equity
+	                   membership can never drift from what those read surfaces show). A
+	                   Cat group with zero rows after the element filter (in practice:
+	                   Liabilities) is DROPPED entirely, not rendered empty — N7-A's
+	                   242-scoped half; the full single-constant CAT_GROUP_ORDER
+	                   unification with the element predicate across this editor AND the
+	                   §2.2.2 read surface lands at SELF-239, not here.
 	  initialTargets : Record<sub_cat_id, target_percent> — ONLY for Sub-Cats that already carry
 	                   a pfin.planning_target row (074). A Sub-Cat absent from this map renders
 	                   its field EMPTY (the `empty(bootstrap)` state) — NEVER a seeded 0, per
@@ -91,15 +103,38 @@
 		type NonReCat
 	} from '$lib/allocation-taxonomy';
 
-	type TaxonomyRow = { id: number; cat: string; sub_cat: string; display_order: number | null };
+	type TaxonomyRow = {
+		id: number;
+		cat: string;
+		sub_cat: string;
+		display_order: number | null;
+		element: 'asset' | 'liability';
+	};
 
 	let { catalog, initialTargets }: { catalog: TaxonomyRow[]; initialTargets: Record<number, number> } =
 		$props();
 
-	// Real Estate is excluded independently here, mirroring nonReAllocation.ts's own belt-and-
-	// suspenders filter, rather than trusting the loader alone to have excluded it.
-	const nonReCatalog = $derived(catalog.filter((r) => r.cat !== 'Real Estate'));
+	// F/CTO N7-A ruling (2026-08-20, 242-scoped half — the full CAT_GROUP_ORDER unification
+	// with the element predicate lands at SELF-239, not here): the editor renders
+	// element === 'asset' Sub-Cats only, DATA-DRIVEN off ADR-058 Decision 3's `element`
+	// column (085), never a hardcoded Cat-name exclusion — a Liabilities Cat disappears
+	// because its rows carry element = 'liability', not because this file names
+	// "Liabilities". Real Estate exclusion is UNCHANGED (still a name filter, per N7-A note)
+	// — Real Estate is itself element = 'asset' (085's own backfill: every Cat except
+	// Liabilities defaults to 'asset'), so the element predicate alone would not exclude it.
+	const nonReCatalog = $derived(catalog.filter((r) => r.element === 'asset' && r.cat !== 'Real Estate'));
 
+	const usEquityRows = $derived(
+		US_EQUITY_SUB_CATS.map((label) =>
+			nonReCatalog.find((r) => r.cat === US_EQUITY_PARENT_CAT && r.sub_cat === label)
+		).filter((r): r is TaxonomyRow => r !== undefined)
+	);
+
+	// A Cat group with zero rows after the element filter is DROPPED, not rendered empty
+	// (N7-A) — in practice this is what makes Liabilities disappear entirely. The Marketable
+	// Securities group is kept alive if its DIRECT rows are empty but the US Equity
+	// sub-section still has rows (not expected in practice — Marketable Securities is
+	// entirely element = 'asset' — but correct by construction rather than by luck).
 	const catGroups = $derived(
 		CAT_GROUP_ORDER.map((cat) => ({
 			cat,
@@ -107,13 +142,7 @@
 				.filter((r) => r.cat === cat && !US_EQUITY_SUB_CAT_SET.has(r.sub_cat))
 				.slice()
 				.sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0))
-		}))
-	);
-
-	const usEquityRows = $derived(
-		US_EQUITY_SUB_CATS.map((label) =>
-			nonReCatalog.find((r) => r.cat === US_EQUITY_PARENT_CAT && r.sub_cat === label)
-		).filter((r): r is TaxonomyRow => r !== undefined)
+		})).filter((g) => g.rows.length > 0 || (g.cat === US_EQUITY_PARENT_CAT && usEquityRows.length > 0))
 	);
 
 	function formatInitial(id: number): string {
