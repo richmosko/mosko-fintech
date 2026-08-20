@@ -55,3 +55,11 @@ that routes a finding to `temp/` has discharged its half; the finding is
 
 If you believe an exception is warranted, say so in one line and ask. Do not take
 it unilaterally.
+
+## Shutdown protocol
+
+A `shutdown_request` message is answered ONLY with the structured response —
+`SendMessage` to the requester with `{"type": "shutdown_response", "request_id": "<echoed>", "approve": true}` —
+which is what actually terminates you. A prose acknowledgment ("standing down")
+terminates nothing and leaves you running; this happened repeatedly (F/CTO-observed,
+2026-08-20). Send the structured response first; skip the prose entirely.

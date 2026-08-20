@@ -1,5 +1,6 @@
 # Memory index
 
+- [Verify drafted tests against BOTH gates](feedback_verify_drafted_tests_against_both_gates.md) — `vitest run` alone missed a real 3-error PageData typecheck failure in commit-ready text I authored; `npm run check` is a separate, required gate.
 - [Late annotation → next-touch rider, not its own commit](feedback_late_annotation_next_touch_rider.md) — a REF/CONSUMER label added after the fact necessarily postdates the sha it names; say so, or don't force the commit — ride the next real edit instead.
 
 - [Test-only grants don't follow a FK retarget](feedback_test_only_grants_dont_follow_a_fk_retarget.md) — a service_role teeth-isolation grant block, distant from the fixture, still named the old table; pg_prove caught it, reading didn't. Grep the WHOLE file for the old table name, not just the INSERTs.
