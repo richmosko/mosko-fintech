@@ -61,3 +61,38 @@ and does need USAGE. Verified by direct repro (same role, same session: `SET
 ROLE authenticated; SELECT auth.uid();` denied; querying a table whose RLS
 policy references `auth.uid()` succeeds) — not inferred from the error message
 alone. [[feedback_instrument_cannot_observe_the_property]]
+
+4. **`CREATE DATABASE new TEMPLATE old` does NOT copy `pg_db_role_setting`
+   (per-database `ALTER DATABASE ... SET param = value` GUC overrides).**
+   `CREATE DATABASE ... TEMPLATE` clones the physical data files, but a
+   database-level config override lives in `pg_db_role_setting`, keyed to the
+   template database's own `pg_database` OID — that row is NOT part of what
+   gets copied. Migration `061` pins `ALTER DATABASE current_database() SET
+   TimeZone = 'UTC'` — dynamic, not hardcoded, so it applies correctly
+   wherever it runs — but a scratch DB built by `CREATE DATABASE clone
+   TEMPLATE already-migrated-scratch` (chaining clones instead of a genuine
+   sequential `001..NNN` apply) inherits the DATA (a `pg_db_role_setting` row
+   would exist for the row's own data if it were table data, but this isn't
+   table data) with no `TimeZone=UTC` override, so `01_session_timezone.sql`'s
+   (T2) MECHANISM leg fails there (`have: configuration file, want:
+   database`) even though (T1) VALUE still reads UTC by coincidence (the
+   container image default happens to already be UTC). Confirmed by direct
+   query: `select datname, setconfig from pg_db_role_setting drs join
+   pg_database d on d.oid = drs.setdatabase` — the template row has
+   `{TimeZone=UTC}`, the clone has no row at all. This is a FALSE ALARM
+   specific to template-cloning as a verification shortcut, not a real
+   regression — a genuine fresh sequential migration apply (what a real CI
+   run and what a "clean 001..NNN apply" scratch build both do) does not hit
+   it. Only matters if `01_session_timezone.sql` or any other file asserting
+   a per-database GUC override is in scope for a template-cloned run; harmless
+   to every other file. [[feedback_pg_prove_scope_full_tests_tree_not_rls_only]]
+   ⚠ **The direction it fails in is the part worth carrying (Architect's framing,
+   confirmed jointly):** `pg_db_role_setting` is a shared catalog keyed by
+   database OID, so a template clone gets a NEW OID and therefore NO row at
+   all — a TEMPLATE clone is MORE PERMISSIVE than the real database on exactly
+   the axis a migration like `061` exists to PIN. A test that only compared
+   two timestamps would pass on the clone and tell you nothing; only a test
+   that asserts the setting's SOURCE (like 01's T2) catches the gap. Usable
+   rule: clone-to-save-time is fine for claims that read no per-database
+   setting; anything touching timezone, JWT settings, or any `ALTER DATABASE
+   ... SET` needs a real sequential chain apply, not a template clone.

@@ -28,3 +28,18 @@ scope-boundary lesson. Also: a leftover `qa_scratch_084` on the cluster after a
 down but wasn't, discovered by someone else's re-run rather than my own close-out
 check. Always actually `drop database` the scratch before reporting a round closed,
 not just revert the worktree.
+
+⚠ **RECURRED, 085/element PR (2026-08-19):** ran multiple "full suite" verification
+passes scoped to `-r /tests/rls` (75 files) throughout the element-PR battery work,
+reported "75 files, 1666 tests, everything green" as if it were the complete gate —
+Architect caught it again, same three missing files, same reasoning. Having the memory
+written down did not prevent the repeat: I never re-consulted it at the point of typing
+the `docker run ... pg_prove ... -r /tests/rls` command, because the command "looked
+right" from the previous session's own habit of scoping to `rls/` during iteration and
+I never re-elevated to the full-tree scope for what I was calling my "final" run. **The
+concrete fix, not just the reminder: when a run is being reported as THE verification
+(not a per-file iterate-and-fix loop), the pg_prove invocation's `-r` argument must
+literally read `/tests`, and that string should be typed from this memory file, not
+recalled.** Independently re-ran the full `/tests` scope after Architect's correction
+and confirmed `00_rls_inversion_self_test.sql` passes (2/2) — the harness was honest
+this whole time, but I had no direct evidence of that until the rescoped run.
