@@ -269,6 +269,20 @@ describe('NonReAllocationTable — AC8: no inline edit affordance anywhere', () 
 	});
 });
 
+describe('NonReAllocationTable — SELF-241 AC6: the "US - Sector Diversified" row drills to /allocation/us-equity', () => {
+	it('the collapsed row label is a navigation link to /allocation/us-equity; other rows are plain text', () => {
+		const { getByText } = render(NonReAllocationTable, {
+			props: { allocation: FIXTURE, staleness: EMPTY_STALENESS }
+		});
+		const drillLink = getByText('US - Sector Diversified');
+		expect(drillLink.tagName).toBe('A');
+		expect(drillLink.getAttribute('href')).toBe('/allocation/us-equity');
+
+		const plainRow = getByText('FDIC');
+		expect(plainRow.tagName).not.toBe('A');
+	});
+});
+
 describe('NonReAllocationTable — AC11: section badge + per-row tri-state staleness', () => {
 	it('section-level StaleConstituentBadge renders off the whole-tenant staleness prop', () => {
 		const { container } = render(NonReAllocationTable, {
