@@ -27,10 +27,14 @@
 //     through a fixture designed so a double-count would produce a DIFFERENT total than a
 //     correct one (21.00% correct vs. 31.00% if the US-equity twelve were summed twice).
 //
-// Also covers: a Liabilities-element row (N7-A's live, behaviorally-observable predicate —
-// 'Liabilities' IS a CAT_GROUP_ORDER member, unlike Real Estate) is excluded from both the
-// rendered groups and the grand total, and its whole Cat-group card is DROPPED rather than
-// rendered empty.
+// Also covers: a Liabilities-element row (N7-A's live, behaviorally-observable predicate) is
+// excluded from both the rendered groups and the grand total, and its whole Cat-group card is
+// DROPPED rather than rendered empty. STALENESS NOTE (SELF-239, 2026-08-20): at authoring time
+// 'Liabilities' WAS still a CAT_GROUP_ORDER member (a 5th entry, unlike Real Estate, which was
+// never a member) — the element filter alone did the excluding. SELF-239 unified CAT_GROUP_ORDER
+// to 4 values (Liabilities dropped from the constant itself), so this predicate is now
+// belt-and-suspenders like Real Estate's, not the sole guard — confirmed no test-behavior change
+// (this file's own battery passes unchanged against the updated allocation-taxonomy.ts).
 //
 // @vitest-environment jsdom
 

@@ -65,6 +65,24 @@
 // tenants (auth.users), each with distinct pfin.user_taxonomy / holdings / planning_target rows,
 // at least one tenant (`TENANT_A_ID`) holding a Sub-Cat inside `US_EQUITY_SUB_CAT_SET` (see
 // usEquitySubCats.ts) so the collapsed-row sharpest-case check below is non-vacuous.
+//
+// ⚠ SEED RISK, FLAGGED AT SELF-239 HAND-OFF (2026-08-20), NOT YET RE-VERIFIED AGAINST A LIVE
+// VENUE — this venue has not been stood up in any session that also carries the SELF-239 rework,
+// so the risk below is unconfirmed either way; check it the next time this fixture is actually
+// seeded. The REQUIRED FIXTURE above and the "non-vacuous: both tenants have REAL nonzero Non-RE
+// totals" test below were both written PRE-SELF-239, when `total_non_re` still summed every 076
+// row unfiltered (Liabilities-cat holdings included). SELF-239 moved `total_non_re` onto the
+// element='asset' predicate (nonReAllocation.ts's `assetSubCatIds`) — Liabilities-cat holdings no
+// longer contribute to it at all. If either tenant's privileged seed SQL relied on
+// Liabilities-cat holdings (e.g. `081`'s liability cash route) to make that tenant's total
+// genuinely nonzero, the non-vacuous precondition test can now read as VACUOUS (total_non_re
+// silently drops to 0, and the test's own `toBeGreaterThan(0)` assertion starts FAILING loudly —
+// not a silent pass, but a surprising one to debug without this note) or, if the asset-side
+// holdings alone still net positive, simply SMALLER than whoever wrote the seed expected.
+// ACTION: when this venue is next stood up, re-run the seed SQL, confirm both tenants' totals are
+// still genuinely positive from ASSET-element holdings alone, and adjust the seed (not this file)
+// if not — the fixture's job is to be non-vacuous, and asset-element holdings are now the only
+// thing that can make it so.
 
 import { describe, it, expect, beforeAll } from 'vitest';
 import { SignJWT } from 'jose';
@@ -111,7 +129,12 @@ function allValues(render: NonReAllocation): number[] {
 	const out: number[] = [render.total_non_re];
 	const pushRow = (r: NonReAllocation['groups'][number]['rows'][number] | null) => {
 		if (!r) return;
-		out.push(r.pct_alloc, r.dollar_alloc);
+		out.push(r.dollar_alloc);
+		// SELF-239: pct_alloc is `number | null` now (AC6 — null when TotalNonRE <= 0), not always
+		// a number. Mechanical type-compat fix only, at SELF-239 hand-off — QA owns this file and
+		// this fixture's total_non_re shape (which SELF-239 also changed: it now excludes any
+		// liability-element row 076 returns); flagged for QA review, not otherwise touched here.
+		if (r.pct_alloc !== null) out.push(r.pct_alloc);
 		if (r.pct_target !== null) out.push(r.pct_target);
 		if (r.dollar_target !== null) out.push(r.dollar_target);
 		if (r.dollar_realloc !== null) out.push(r.dollar_realloc);

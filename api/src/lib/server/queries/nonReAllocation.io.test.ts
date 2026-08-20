@@ -1,5 +1,8 @@
-// nonReAllocation.io.test.ts — SELF-238 I/O-wiring coverage for loadNonReAllocation, separate
-// from the pure-core compute tests in nonReAllocation.test.ts. Mocks the full chain:
+// nonReAllocation.io.test.ts — I/O-wiring coverage for loadNonReAllocation, separate from the
+// pure-core compute tests in nonReAllocation.test.ts. Originally SELF-238; the `element` column
+// in the taxonomy read/fixtures below is SELF-239 (085) — the read is still UNFILTERED (this
+// module's own compute core narrows to asset-only, not the read), so the wiring shape is
+// otherwise unchanged. Mocks the full chain:
 //   .schema('pfin').rpc('fn_subcat_market_value', {...})        — via subcatMarketValue
 //   .schema('pfin').from('planning_target').select(...)         — via subcatMarketValue
 //   .schema('pfin').from('user_taxonomy').select(...)           — this module's own read
@@ -50,7 +53,7 @@ describe('loadNonReAllocation — I/O wiring', () => {
 		const { client } = makeSupabase({
 			rpcData: [{ sub_cat_id: 1, cat: 'Cash', sub_cat: 'FDIC', market_value: 1000 }],
 			targetData: [{ sub_cat_id: 1, target_percent: 20 }],
-			taxonomyData: [{ id: 1, cat: 'Cash', sub_cat: 'FDIC', display_order: 10 }]
+			taxonomyData: [{ id: 1, cat: 'Cash', sub_cat: 'FDIC', display_order: 10, element: 'asset' }]
 		});
 		const result = await loadNonReAllocation(client, AS_OF);
 		expect(result.ok).toBe(true);
@@ -59,10 +62,35 @@ describe('loadNonReAllocation — I/O wiring', () => {
 		expect(cash?.rows[0]).toMatchObject({ sub_cat: 'FDIC', dollar_alloc: 1000, pct_target: 20 });
 	});
 
-	it('the user_taxonomy read is UNFILTERED (no domain column post-084 — table identity IS the scope)', async () => {
+	it('a liability-element taxonomy row is read (unfiltered query) but never enters the row set or TotalNonRE (SELF-239 AC2/AC3)', async () => {
+		const { client } = makeSupabase({
+			rpcData: [
+				{ sub_cat_id: 1, cat: 'Cash', sub_cat: 'FDIC', market_value: 1000 },
+				{ sub_cat_id: 2, cat: 'Liabilities', sub_cat: 'Credit-Balance', market_value: 5000 }
+			],
+			targetData: [],
+			taxonomyData: [
+				{ id: 1, cat: 'Cash', sub_cat: 'FDIC', display_order: 10, element: 'asset' },
+				{ id: 2, cat: 'Liabilities', sub_cat: 'Credit-Balance', display_order: 290, element: 'liability' }
+			]
+		});
+		const result = await loadNonReAllocation(client, AS_OF);
+		expect(result.ok).toBe(true);
+		expect(result.data?.total_non_re).toBe(1000); // NOT 6000
+		expect(result.data?.groups.map((g) => g.cat)).toEqual([
+			'Cash',
+			'Bonds',
+			'Marketable Securities',
+			'Alternatives'
+		]);
+		const anyLiability = result.data?.groups.some((g) => g.rows.some((r) => r.sub_cat_id === 2));
+		expect(anyLiability).toBe(false);
+	});
+
+	it('the user_taxonomy read is UNFILTERED and selects element (no domain column post-084 — table identity IS the scope; element is 085\'s consumer-side predicate, SELF-239)', async () => {
 		const { client, taxonomySelect } = makeSupabase({ rpcData: [], targetData: [], taxonomyData: [] });
 		await loadNonReAllocation(client, AS_OF);
-		expect(taxonomySelect).toHaveBeenCalledWith('id, cat, sub_cat, display_order');
+		expect(taxonomySelect).toHaveBeenCalledWith('id, cat, sub_cat, display_order, element');
 	});
 
 	it('degrades to ok:false when the shared substrate read fails (RPC error)', async () => {

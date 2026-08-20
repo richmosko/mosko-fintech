@@ -24,9 +24,14 @@
 	                   membership can never drift from what those read surfaces show). A
 	                   Cat group with zero rows after the element filter (in practice:
 	                   Liabilities) is DROPPED entirely, not rendered empty — N7-A's
-	                   242-scoped half; the full single-constant CAT_GROUP_ORDER
+	                   242-scoped half. The full single-constant CAT_GROUP_ORDER
 	                   unification with the element predicate across this editor AND the
-	                   §2.2.2 read surface lands at SELF-239, not here.
+	                   §2.2.2 read surface landed at SELF-239 (2026-08-20):
+		                   allocation-taxonomy.ts's CAT_GROUP_ORDER is now 4 values, matching
+		                   nonReAllocation.ts's own SELF-239 rework verbatim — Liabilities was
+		                   already unreachable here via the element filter below, so this was
+		                   a comment/constant sweep, not a behavior change (this file's own
+		                   N7-A battery passes unchanged).
 	  initialTargets : Record<sub_cat_id, target_percent> — ONLY for Sub-Cats that already carry
 	                   a pfin.planning_target row (074). A Sub-Cat absent from this map renders
 	                   its field EMPTY (the `empty(bootstrap)` state) — NEVER a seeded 0, per
@@ -115,7 +120,8 @@
 		$props();
 
 	// F/CTO N7-A ruling (2026-08-20, 242-scoped half — the full CAT_GROUP_ORDER unification
-	// with the element predicate lands at SELF-239, not here): the editor renders
+	// with the element predicate landed at SELF-239: allocation-taxonomy.ts's CAT_GROUP_ORDER
+	// is now 4 values): the editor renders
 	// element === 'asset' Sub-Cats only, DATA-DRIVEN off ADR-058 Decision 3's `element`
 	// column (085), never a hardcoded Cat-name exclusion — a Liabilities Cat disappears
 	// because its rows carry element = 'liability', not because this file names

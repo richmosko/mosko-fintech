@@ -4,6 +4,12 @@
 // computeUsEquityAllocation against the SAME synthetic fixture (same market-value rows, same
 // targets, same taxonomy) and asserts the two independently-computed numbers agree exactly — no
 // tolerance, per AC3/AC7's own "asserted exactly, no hedge" framing.
+//
+// `element: 'asset'` on every fixture row is SELF-239 (085) — TaxonomySubCatRow gained a required
+// `element` field when computeNonReAllocation's row-set/denominator predicate moved onto it; every
+// row here is asset-element on purpose (this file's whole point is exercising the two modules'
+// SHARED row set, which is asset-only by definition), mechanically updated at SELF-239 hand-off to
+// keep this SELF-240 fixture compiling and non-vacuous, not a SELF-240-scoped change.
 
 import { describe, it, expect } from 'vitest';
 import { computeNonReAllocation, type TaxonomySubCatRow } from './nonReAllocation';
@@ -14,13 +20,14 @@ import type { SubcatMarketValueRow } from './subcatMarketValue';
 describe('AC3 drill-down identity — 238 collapsed row vs 240 total row', () => {
 	it('exact equality against a mixed portfolio (US-equity holdings + non-US-equity Non-RE holdings)', () => {
 		const taxonomy: TaxonomySubCatRow[] = [
-			{ id: 1, cat: 'Cash', sub_cat: 'FDIC', display_order: 10 },
-			{ id: 2, cat: 'Bonds', sub_cat: 'IGL', display_order: 50 },
+			{ id: 1, cat: 'Cash', sub_cat: 'FDIC', display_order: 10, element: 'asset' },
+			{ id: 2, cat: 'Bonds', sub_cat: 'IGL', display_order: 50, element: 'asset' },
 			...US_EQUITY_SUB_CATS.map((sub_cat, i) => ({
 				id: 10 + i,
 				cat: 'Marketable Securities',
 				sub_cat,
-				display_order: 100 + i * 10
+				display_order: 100 + i * 10,
+				element: 'asset' as const
 			}))
 		];
 		const marketValueRows: SubcatMarketValueRow[] = [
@@ -54,7 +61,8 @@ describe('AC3 drill-down identity — 238 collapsed row vs 240 total row', () =>
 			id: i + 1,
 			cat: 'Marketable Securities',
 			sub_cat,
-			display_order: 100 + i * 10
+			display_order: 100 + i * 10,
+			element: 'asset' as const
 		}));
 		const allocation238 = computeNonReAllocation(taxonomy, [], new Map());
 		const equity238 = allocation238.groups.find((g) => g.cat === 'Marketable Securities')!;
