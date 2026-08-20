@@ -31,15 +31,21 @@
 	    "unset must be DELETE, never POST 0.00" — this editor never POSTs an empty field as
 	    0.00, by construction (an empty string never reaches the upsert branch below).
 	  - DELETE's response is 200 { ok: true, sub_cat_id, deleted: boolean } — ALWAYS 200
-	    (idempotent-success whether a row existed or not), so a 2xx status alone does NOT
-	    mean the row is gone. `deleted` is a fail-closed team-lead/Sec addition (rationale:
-	    a below-aal2 session can't reach this path TODAY only because the loader returns no
-	    targets for it — a fact that depends on another table's policy shape, not a fence of
-	    this endpoint's own, so the flag exists for when that stops being true). handleSave
-	    CONSUMES it: only an explicit `deleted === true` counts as removed; false/missing/
-	    unparsable is treated as NOT removed, surfaced per-row ("Not removed —
-	    re-verification may be required"), same serverErrors slot a failed POST uses — an
-	    added response field nothing reads is a control that decays into decoration.
+	    (idempotent-DELETE convention; confirmed final shape, backend commit 00b0362), so a
+	    2xx status alone does NOT mean the row is gone. `count` comes back 0 for TWO
+	    indistinguishable causes within the caller's own account — already-absent (benign
+	    no-op) and below-aal2-filtered (RLS silently excludes it, 074's own "affects 0 rows,
+	    silently and correctly") — cross-tenant existence is NOT among them (the query is
+	    `.eq('users_id', ...)`-scoped). handleSave CONSUMES the flag fail-closed regardless:
+	    only an explicit `deleted === true` counts as removed; false/missing/unparsable is
+	    surfaced per-row via the same serverErrors slot a failed POST uses, and BLOCKS that
+	    row's "saved" outcome + the overall redirect — team-lead's ruling (Option A), because
+	    the client cannot tell benign-already-absent from a refused delete, and a false
+	    "Changes saved" on a financial surface is the exact failure mode Option A exists to
+	    remove. The copy is deliberately CAUSE-NEUTRAL ("the target may already be cleared,
+	    or re-verification may be required") rather than presupposing the aal2 case, since
+	    already-absent is probably the more common real trigger. An added response field
+	    nothing reads is a control that decays into decoration.
 	  - A field cleared that had NO initial value is a no-op (nothing to delete) — dirty-tracking
 	    treats it as "back to baseline", not a pending change.
 	  - Per Sec's SELF-233 joint-review ruling (2026-08-17, carried onto SELF-242 by
@@ -248,14 +254,13 @@
 					serverErrors[id] = await extractError(res);
 					continue;
 				}
-				// HTTP 200 no longer means "the row is gone" — the DELETE response now carries its
-				// own outcome bit (`deleted`) because the endpoint is deliberately idempotent-success
-				// (200 whether a row existed or not) AND can genuinely fail to remove a row it can see
-				// (a fail-closed path whose exact trigger is DB-internal — see the PERSISTENCE note
-				// above). Fail-closed here too: only an EXPLICIT `deleted === true` counts as removed;
-				// anything else (false, missing, or an unparsable body) is treated as NOT removed
-				// rather than assumed successful, per Sec's ruling that an unconsumed response field
-				// is a control that decays into decoration.
+				// HTTP 200 no longer means "the row is gone" (idempotent-success either way — see
+				// the PERSISTENCE note above for the two indistinguishable causes of `deleted:false`,
+				// only one of which is benign). Fail-closed regardless: only an EXPLICIT
+				// `deleted === true` counts as removed; anything else (false, missing, or an
+				// unparsable body) is treated as NOT confirmed removed — team-lead's ruling, because
+				// the client can't tell benign-already-absent from a refused delete and a false
+				// "Changes saved" is the failure mode this exists to prevent.
 				let deleted = false;
 				try {
 					const body = await (res as PromiseFulfilledResult<Response>).value.json();
@@ -265,7 +270,8 @@
 				}
 				if (!deleted) {
 					anyFailed = true;
-					serverErrors[id] = 'Not removed — re-verification may be required.';
+					serverErrors[id] =
+						'Not removed — the target may already be cleared, or re-verification may be required. Refresh to confirm.';
 				}
 			}
 
