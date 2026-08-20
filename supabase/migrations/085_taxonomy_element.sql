@@ -74,6 +74,18 @@
 -- read Decision 3 live for which one that is.
 --
 -- ---------------------------------------------------------------------------
+-- PROVENANCE OF EVERY FIGURE AND SHAPE BELOW — stated once, so no reader has
+-- to wonder which of them were inherited. Each was measured at authoring time
+-- against the TREE (`origin/main` at the base of this migration's branch) or
+-- against the LIVE CATALOG on a clean `001..084` scratch database. None was
+-- carried from a working note, a prior summary, or a design document — ADR-058
+-- included. That is a method rule and not a courtesy: a design document
+-- describes the world at the moment it was written, and this migration is the
+-- third of three, so the two before it moved the world the ADR describes. The
+-- consequence-list measurement below is the demonstration — the catalog and the
+-- ADR return different sets, and the catalog is right.
+--
+-- ---------------------------------------------------------------------------
 -- THE BACKFILL MAP, AND WHY IT IS TOTAL.
 -- Derived from the live seed on a clean `001..084` scratch database, not from
 -- any prose description of it.
@@ -104,17 +116,28 @@
 -- a guard over a by-construction property is a control that cannot fire.
 --
 -- ---------------------------------------------------------------------------
--- WHY `not null` WITH NO DEFAULT — a decision, with its cost stated.
+-- WHY `not null` WITH NO DEFAULT — F/CTO-CONFIRMED, and stated at length here
+-- specifically so a later simplification pass does not helpfully add the
+-- default back.
 -- A `default 'asset'` would leave every existing writer compiling untouched.
--- That is precisely its defect: a row written without an element would be
--- silently classified as an asset, which is the fail-OPEN direction for the
--- §2.2.2 assets-only row set, and it re-creates the property `element` exists
--- to remove — a classification that is remembered rather than enforced.
--- The cost is real and is paid in this PR: every INSERT into either table that
--- does not name `element` now fails. The paired battery's fixtures are that
--- population and are updated in the same PR.
--- ⚠ REVERSIBLE. Adding a default later is a one-line ALTER against rows that
--- cannot violate it. This is not a one-way door and is not presented as one.
+-- That convenience IS the defect: a row written without an element would be
+-- silently classified as an asset — the fail-OPEN direction for the §2.2.2
+-- assets-only row set, and the exact failure this column exists to remove. A
+-- default would restore, in one word, the property that a bucket's class is
+-- REMEMBERED rather than DECLARED.
+-- No default is the fail-CLOSED direction, and the cost lands where it should:
+-- every INSERT into either table must now say what it means. That cost is real
+-- and is paid in this PR — the paired battery's fixtures are that population
+-- and are updated alongside this migration.
+-- ⚠ REVERSIBLE, AND THAT IS NOT AN INVITATION. Adding a default later is
+-- mechanically one ALTER against rows that cannot violate it, so this is not a
+-- one-way door and is not presented as one. But it is a DECISION on the same
+-- footing as widening the CHECK below: whoever adds a default is choosing that
+-- an unstated element should be filled in silently, on a financial
+-- classification surface, in the fail-OPEN direction — and should say so, here,
+-- in the header of the migration that does it. **A reviewer meeting a `default`
+-- on this column with no such statement should treat it as a defect, not as
+-- tidying.**
 --
 -- ---------------------------------------------------------------------------
 -- THE VALUE SET, AND THE WIDENING PATH — recorded as a DECISION a future
