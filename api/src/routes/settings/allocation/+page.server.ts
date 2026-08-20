@@ -5,14 +5,23 @@
 // (SELF-233/242), not through a form action here.
 //
 // SHAPE (matches PlanningTargetEditor's PageData contract exactly):
-//   catalog : SubCatOption[] ({ id, cat, sub_cat, display_order }) — reuses taxonomy.ts's
-//             `loadAssetSubCats()` VERBATIM, the SAME RLS-scoped read the accounts/new and
-//             accounts/[account_id] pickers already use, so there is exactly ONE
-//             server-side query for "what Sub-Cats does this user have", not a second,
-//             driftable copy. is_active-filtered (retired Sub-Cats get no %Target field).
-//             Real Estate is included here — PlanningTargetEditor / allocation-taxonomy.ts
-//             exclude it independently, client-side, same as SELF-238/240's own read
-//             surfaces exclude it independently of their own upstream sources.
+//   catalog : SubCatOption[] ({ id, cat, sub_cat, display_order, element }) — reuses
+//             taxonomy.ts's `loadAssetSubCats()` VERBATIM, the SAME RLS-scoped read the
+//             accounts/new and accounts/[account_id] pickers already use, so there is
+//             exactly ONE server-side query for "what Sub-Cats does this user have", not a
+//             second, driftable copy. is_active-filtered (retired Sub-Cats get no %Target
+//             field). `element` ('asset' | 'liability', migration 085) rides along per
+//             SELF-242/N7 (F/CTO ruling, option A): the editor renders asset-element
+//             Sub-Cats only, filtered client-side. ⚠ DELIBERATELY MINIMAL — this slice does
+//             NOT touch CAT_GROUP_ORDER or nonReAllocation.ts; amending that constant to be
+//             element-driven without the matching denominator rework would create the exact
+//             row-set/denominator divergence Sec's binding forbids. That pairing is
+//             SELF-239's scope; the single-constant unification happens there, not here.
+//             Real Estate is included here (it is asset-element, per 085's backfill) —
+//             PlanningTargetEditor / allocation-taxonomy.ts exclude it independently,
+//             client-side, same as SELF-238/240's own read surfaces exclude it independently
+//             of their own upstream sources; that exclusion is orthogonal to the new
+//             element filter and unaffected by it.
 //   targets : Record<sub_cat_id, target_percent> — a RAW `pfin.planning_target` read
 //             (sub_cat_id, target_percent), RLS-scoped to the caller. A Sub-Cat with NO
 //             row is simply absent from this object — 074's own "unset is row-absent"

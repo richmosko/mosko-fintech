@@ -211,6 +211,15 @@ export type SubCatOption = {
 	cat: string;
 	sub_cat: string;
 	display_order: number | null;
+	/** NOT NULL, CHECK-constrained ('asset' | 'liability') since migration 085 (ADR-058
+	 *  Decision 3) — every row genuinely carries one, so this is a plain widening of an
+	 *  already-shared read, not a per-consumer special case. Added for SELF-242/N7 (F/CTO
+	 *  ruling, option A): the allocation editor filters to asset-element Sub-Cats client-side
+	 *  (see PlanningTargetEditor.svelte) rather than this query gaining a second, driftable
+	 *  copy. The `portfolio/classify` picker (the other consumer) ignores the extra field —
+	 *  it spreads this array straight through to its own picker UI without exhaustive typing,
+	 *  so widening here is inert there, not risky. */
+	element: 'asset' | 'liability';
 };
 
 /**
@@ -220,13 +229,13 @@ export type SubCatOption = {
  *
  * POST-084: `user_taxonomy` IS the storage-classification table now (no more `domain` column to
  * filter on) — every row here is asset-domain by construction, so the read is unconditional
- * beyond `is_active`.
+ * beyond `is_active`. POST-085: also selects `element` — see SubCatOption's own comment for why.
  */
 export async function loadAssetSubCats(supabase: SupabaseClient): Promise<SubCatOption[]> {
 	const { data, error } = await supabase
 		.schema('pfin')
 		.from('user_taxonomy')
-		.select('id, cat, sub_cat, display_order')
+		.select('id, cat, sub_cat, display_order, element')
 		.eq('is_active', true)
 		.order('display_order', { ascending: true, nullsFirst: false })
 		.order('cat', { ascending: true })
