@@ -111,7 +111,12 @@ function allValues(render: NonReAllocation): number[] {
 	const out: number[] = [render.total_non_re];
 	const pushRow = (r: NonReAllocation['groups'][number]['rows'][number] | null) => {
 		if (!r) return;
-		out.push(r.pct_alloc, r.dollar_alloc);
+		out.push(r.dollar_alloc);
+		// SELF-239: pct_alloc is `number | null` now (AC6 — null when TotalNonRE <= 0), not always
+		// a number. Mechanical type-compat fix only, at SELF-239 hand-off — QA owns this file and
+		// this fixture's total_non_re shape (which SELF-239 also changed: it now excludes any
+		// liability-element row 076 returns); flagged for QA review, not otherwise touched here.
+		if (r.pct_alloc !== null) out.push(r.pct_alloc);
 		if (r.pct_target !== null) out.push(r.pct_target);
 		if (r.dollar_target !== null) out.push(r.dollar_target);
 		if (r.dollar_realloc !== null) out.push(r.dollar_realloc);

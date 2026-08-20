@@ -1,22 +1,56 @@
-// nonReAllocation.ts — the §2.2.2 Non-RE allocation table backend (SELF-238; PRD §2.2.2.b).
-// Backend-owned server surface (ARCH §4.1 allowlist).
+// nonReAllocation.ts — the §2.2.2 Non-RE allocation table backend. Originally SELF-238; REWORKED
+// WHOLESALE at SELF-239 (2026-08-20 ratified ACs) to close the assets-only gap 085's `element`
+// column exists to make enforceable. Backend-owned server surface (ARCH §4.1 allowlist).
 //
-// Consumes the shared `subcatMarketValue.ts` helper (076 rollup + planning_target read) and
-// adds this surface's OWN row-set logic on top: a FULL enumeration of the caller's asset-domain
-// Sub-Cats (so a zero-held, zero-target seeded Sub-Cat still renders — AC2), the twelve
-// US-equity Sub-Cats collapsed into one computed "US - Sector Diversified" row (AC2a/AC5), the
-// derived Unsorted row when 076 emits its unclassified row (AC2c), and the five %/$ columns per
-// AC3.
+// WHAT CHANGED AT SELF-239, AND WHY. `pfin.fn_subcat_market_value` (076) returns rows for BOTH
+// `element` values — deliberately, per its own catalog comment (085): the liability cash route
+// (081) contributes rows the seam invariant `Σ fn_subcat_market_value(as_of, true) =
+// fn_compute_nav(as_of)` counts, so the producer cannot filter on element without breaking that
+// footing. The assets-only exclusion is therefore a CONSUMER-side predicate, and this module is
+// the consumer 076's own comment names as owning it. Pre-085 this module could only express
+// "assets-only" as "exclude the Cat named Liabilities" — a NAME-based exclusion, silently wrong if
+// a Sub-Cat under a different Cat ever held a liability balance. Post-085 it is expressible as
+// `element = 'asset'`, a PREDICATE, and SELF-239 moves both the row set AND the denominator onto
+// it — in the SAME compute call, from the SAME taxonomy read, so the two cannot diverge (AC3's
+// "same-query predicate" route; see `assetSubCatIds` below). Three consumer-visible deltas fall
+// out of this rework, none of them producer changes:
+//   (1) CAT_GROUP_ORDER drops 'Liabilities' — it was never supposed to render here (assets-only),
+//       and rendering it was reachable pre-085 because nothing prevented a Liabilities Cat's rows
+//       from flowing through this module's own full-taxonomy read.
+//   (2) TotalNonRE no longer includes a liability-cash-route row's value — pre-085 it summed EVERY
+//       076 row unfiltered, which silently counted Liabilities/`Liability Balances` (081) in the
+//       denominator.
+//   (3) The five ratio-derived columns (%Alloc/%Target/$Target/$ReAlloc) render `null`, not `0`,
+//       when TotalNonRE <= 0 (AC6) — the shipped SELF-238 payload rendered `pct_alloc: 0` in that
+//       state, which reads as "a real zero allocation" instead of "this ratio is undefined."
+//       `$Alloc` (raw market value) is unaffected — it is never ratio-derived.
 //
-// WHY A SEPARATE `user_taxonomy` READ, ON TOP OF THE 076 RPC: 076 returns one row per Sub-Cat
-// the caller HOLDS VALUE IN — a zero-held Sub-Cat is simply absent from its return (076's own
+// Consumes the shared `subcatMarketValue.ts` helper (076 rollup + planning_target read) and adds
+// this surface's OWN row-set logic on top: a FULL enumeration of the caller's asset-ELEMENT
+// Sub-Cats (so a zero-held, zero-target seeded Sub-Cat still renders — AC2), the twelve US-equity
+// Sub-Cats collapsed into one computed "US - Sector Diversified" row (AC2a/AC5 — carried forward
+// from SELF-238, unchanged), the derived Unsorted row when 076 emits its unclassified row (AC2c —
+// also unchanged; that row has no `element` to filter on and is always included, both in the row
+// set and in TotalNonRE), and the four %/$ ratio columns per AC3/AC6 plus the always-present
+// $Alloc.
+//
+// WHY A SEPARATE `user_taxonomy` READ, ON TOP OF THE 076 RPC: 076 returns one row per Sub-Cat the
+// caller HOLDS VALUE IN — a zero-held Sub-Cat is simply absent from its return (076's own
 // contract). AC2's "zero-held+zero-target seeded Sub-Cats still render with zeros" requires the
 // FULL catalog, not just the held subset, so this module reads the caller's OWN
-// `pfin.user_taxonomy` (direct-owner RLS; asset-domain BY CONSTRUCTION post-084 — the table has
-// no other kind of row since ADR-058 Decision 1's split) separately and LEFT-merges 076's
-// market_value onto it (absent → 0) — the same "supabase-js has no cross-table server LEFT
-// JOIN across independently-RLS'd tables" shape pendingSymbols.ts / navComposition.ts already
-// established, applied to a THIRD table pair here.
+// `pfin.user_taxonomy` (direct-owner RLS) separately, NOW INCLUDING `element` (085), and
+// LEFT-merges 076's market_value onto it (absent → 0) — the same "supabase-js has no cross-table
+// server LEFT JOIN across independently-RLS'd tables" shape pendingSymbols.ts / navComposition.ts
+// already established.
+//
+// SEC CARRY-FORWARD (2026-08-20, binding): a stray liability-element `planning_target` row CAN
+// exist — SELF-242/N7-A is render-only enforcement on the editor; the write endpoint deliberately
+// has no element check. This module's %Target join cannot let such a row re-enter the row set or
+// the denominator BY CONSTRUCTION: `rowFor` is only ever invoked for ids drawn from
+// `assetTaxonomyRows` (element = 'asset'), so a liability Sub-Cat's id is never looked up in
+// `targetBySubCatId` here — its target simply has no row to attach to in this render. TotalNonRE
+// never reads `targetBySubCatId` at all (it is market-value-only), so a stray target row cannot
+// affect the denominator either, independent of the row-set guard.
 //
 // Fail-soft (mirrors subcatMarketValue.ts / navComposition.ts): any read error degrades to
 // `{ data: null, ok: false }` — logged, never thrown.
@@ -26,7 +60,9 @@ import type { ZoneResolvedAsOf } from '$lib/server/time/asOf';
 import { loadSubcatMarketValueAndTargets, type SubcatMarketValueRow } from './subcatMarketValue';
 import { US_EQUITY_SUB_CAT_SET, US_SECTOR_DIVERSIFIED_LABEL } from './usEquitySubCats';
 
-/** The fixed §2.2.2 Cat-group header order (PRD §2.2.2 / AC2). Real Estate is never a member —
+/** The fixed §2.2.2 Cat-group header order (PRD §2.2.2 / SELF-239 AC1). FOUR members as of
+ *  SELF-239 — 'Liabilities' DROPPED (assets-only ruling: Liabilities is not §2.2.2 domain and
+ *  must not render here, in the row set OR the denominator). Real Estate is never a member —
  *  076 excludes it entirely at p_include_real_estate=false, and this module's own taxonomy
  *  enumeration filters it out independently (see computeNonReAllocation) since 076's exclusion
  *  does not reach the SEPARATE full-catalog read this surface adds.
@@ -34,14 +70,10 @@ import { US_EQUITY_SUB_CAT_SET, US_SECTOR_DIVERSIFIED_LABEL } from './usEquitySu
  *  EXPORTED (ADR-058 Decision 7) so the paired DB-Cat-set equality assertion imports THIS array
  *  rather than a hand-maintained copy — a copy could itself drift from what this module actually
  *  uses, which would make the assertion test its own duplicate instead of the real fail-open
- *  surface. See nonReAllocation.catGroupOrderEquality.server.test.ts. */
-export const CAT_GROUP_ORDER = [
-	'Cash',
-	'Bonds',
-	'Marketable Securities',
-	'Alternatives',
-	'Liabilities'
-] as const;
+ *  surface. See nonReAllocation.catGroupOrderEquality.server.test.ts, which post-SELF-239 derives
+ *  its DB-side comparison set element-aware (`element = 'asset'`) rather than off the raw six-Cat
+ *  set. */
+export const CAT_GROUP_ORDER = ['Cash', 'Bonds', 'Marketable Securities', 'Alternatives'] as const;
 
 /** The collapsed row's sort position within the Marketable Securities group: 100 is 041's `display_order` for
  *  `US-01-Basic_Materials`, the first of the twelve it replaces — a defensible, deterministic
@@ -58,22 +90,40 @@ export type AllocationRow = {
 	sub_cat_id: number | null;
 	cat: string | null;
 	sub_cat: string;
-	/** null ONLY for the Unsorted row — "structurally empty" (AC3): 074's sub_cat_id bigint NOT
-	 *  NULL FK means no planning_target row can exist for a NULL-taxonomy key. Every other row,
-	 *  including a zero-target one, carries a real 0 here (0 IS an assertable target, per
-	 *  074/ADR-056 — distinct from null/absent). */
+	/** AC6: null when TotalNonRE <= 0 — a ratio-derived column, UNSET rather than a stale/
+	 *  misleading number when the denominator is degenerate. Also structurally null for the
+	 *  Unsorted row regardless of TotalNonRE ("structurally empty": 074's sub_cat_id bigint NOT
+	 *  NULL FK means no planning_target row can exist for a NULL-taxonomy key). Otherwise a real
+	 *  stored target — including 0, which IS an assertable target (074/ADR-056), distinct from
+	 *  null/unset. */
 	pct_target: number | null;
-	/** NEVER null — AC7 (empty portfolio) renders zeros, not an unset state; the division guard
-	 *  below returns 0 when total_non_re is 0 rather than NaN. */
-	pct_alloc: number;
+	/** AC6: null when TotalNonRE <= 0 — SUPERSEDES the SELF-238 AC7 convention (0 at total=0),
+	 *  which the shipped payload got wrong: a rendered 0 reads as "a real zero allocation,"
+	 *  indistinguishable from an actual zero-percent holding, when the true state is "this ratio
+	 *  is undefined; the denominator is non-positive." Never NaN/Infinity either state. */
+	pct_alloc: number | null;
+	/** AC6: null when TotalNonRE <= 0, same rationale as pct_alloc/pct_target. */
 	dollar_target: number | null;
+	/** NEVER null and NEVER gated by TotalNonRE — the raw market value this row holds, not a
+	 *  ratio. Always present, per AC6. */
 	dollar_alloc: number;
+	/** AC6: null when TotalNonRE <= 0. Also structurally null for the Unsorted row (see
+	 *  pct_target). */
 	dollar_realloc: number | null;
 };
 
 export type AllocationCatGroup = {
 	cat: (typeof CAT_GROUP_ORDER)[number];
 	rows: AllocationRow[];
+	/** SELF-239 AC4: Σ this group's rows' dollar_alloc. Always present, mirroring dollar_alloc's
+	 *  own always-present contract — a raw sum, not a ratio, so TotalNonRE's sign/value never
+	 *  gates it. The four group subtotals plus `unsorted`'s dollar_alloc (if present) foot to
+	 *  `total_non_re` exactly, by construction: both are sums over the same element='asset'-or-
+	 *  Unsorted partition of the same 076 rows (see computeNonReAllocation's `assetSubCatIds`). */
+	dollar_alloc_subtotal: number;
+	/** SELF-239 AC4: this group's subtotal as a % of TotalNonRE — same AC6 null-when-nonpositive
+	 *  gating as every other ratio-derived column. */
+	pct_alloc_subtotal: number | null;
 };
 
 export type NonReAllocation = {
@@ -83,43 +133,84 @@ export type NonReAllocation = {
 	groups: AllocationCatGroup[];
 	/** Present iff 076 emitted its unclassified row (AC2c) — never a zero-valued placeholder. */
 	unsorted: AllocationRow | null;
-	/** Σ market_value over EVERY row 076 returned, Unsorted included (AC3) — the AC4 footing
-	 *  anchor: must equal the §2.1.5 composition's Total Non-RE at the same p_as_of, exactly. */
+	/** SELF-239 AC3: Σ market_value over every 076 row that is EITHER the Unsorted row (no
+	 *  element to filter on — always included) OR classified by the caller's OWN taxonomy as
+	 *  element = 'asset'. NOT every 076 row unfiltered any more (that was the SELF-238 shape;
+	 *  076 returns BOTH elements by design — see this file's header — and unfiltered summation
+	 *  silently counted a liability-cash-route row (081) in the denominator). Equals the §2.1.5
+	 *  composition's Total Non-RE at the same p_as_of, exactly — the AC4 footing anchor. */
 	total_non_re: number;
 };
 
 export type NonReAllocationResult = { data: NonReAllocation | null; ok: boolean };
 
-/** One caller-owned asset-domain Sub-Cat, as read from `pfin.user_taxonomy` directly (NOT
- *  through 076) — the full-enumeration source AC2's zero-render requirement needs. */
+/** One caller-owned Sub-Cat, as read from `pfin.user_taxonomy` directly (NOT through 076) — the
+ *  full-enumeration source AC2's zero-render requirement needs. Carries BOTH elements (085) —
+ *  this module, not the read, is what narrows to asset-only (AC2/AC3). */
 export type TaxonomySubCatRow = {
 	id: number;
 	cat: string;
 	sub_cat: string;
 	display_order: number | null;
+	/** NOT NULL, CHECK-constrained ('asset' | 'liability') since migration 085 (ADR-058 Decision
+	 *  3). This is the predicate SELF-239's rework filters the row set AND the denominator on —
+	 *  see `assetSubCatIds` in computeNonReAllocation. */
+	element: 'asset' | 'liability';
 };
 
-/** AC7 / general Lock-14 numeric discipline: 0/0 renders as 0 here (076's own contract makes
- *  every market_value 0 when total_non_re is 0, so this is never a hidden divide-by-nonzero
- *  case) — NEVER NaN. Percent scale (×100) applied by the caller. */
-function safeAllocFraction(marketValue: number, totalNonRe: number): number {
-	return totalNonRe === 0 ? 0 : (marketValue / totalNonRe) * 100;
+/** AC6: a ratio-derived column is null, not 0 or NaN, whenever TotalNonRE <= 0 — the denominator
+ *  is degenerate and no percentage is DEFINED, let alone computable. Percent scale (×100) applied
+ *  by the caller of this helper via its own local total_non_re, matching every call site below. */
+function ratioPercentOrNull(marketValue: number, totalNonRe: number): number | null {
+	return totalNonRe > 0 ? (marketValue / totalNonRe) * 100 : null;
+}
+
+/** AC6: the three total-derived (non-percent) ratio columns share one gate — computed together so
+ *  a caller can't accidentally null one and not the others. `totalPositive` is passed in rather
+ *  than re-derived, so every call site in one compute() invocation reads the same boolean. */
+function targetDerivedColumns(
+	targetPercent: number,
+	marketValue: number,
+	totalNonRe: number,
+	totalPositive: boolean
+): Pick<AllocationRow, 'pct_target' | 'dollar_target' | 'dollar_realloc'> {
+	if (!totalPositive) return { pct_target: null, dollar_target: null, dollar_realloc: null };
+	const dollar_target = (targetPercent / 100) * totalNonRe;
+	return { pct_target: targetPercent, dollar_target, dollar_realloc: dollar_target - marketValue };
 }
 
 /**
  * Pure compute core — no I/O, deterministic, unit-testable without a DB (pendingSymbols.ts's
- * `computePendingIds` precedent). Takes the caller's full asset-domain taxonomy catalog, 076's
- * raw rows, and the planning_target map; returns the fully-shaped §2.2.2 table.
+ * `computePendingIds` precedent). Takes the caller's full taxonomy catalog (both elements), 076's
+ * raw rows (both elements), and the planning_target map; returns the fully-shaped, assets-only
+ * §2.2.2 table (SELF-239 AC1–AC4/AC6).
  */
 export function computeNonReAllocation(
 	taxonomyRows: ReadonlyArray<TaxonomySubCatRow>,
 	marketValueRows: ReadonlyArray<SubcatMarketValueRow>,
 	targetBySubCatId: ReadonlyMap<number, number>
 ): NonReAllocation {
-	// AC3: TotalNonRE is the UNFILTERED sum over every row 076 returned (Unsorted included) — the
-	// exact-footing anchor. Computed from the raw RPC rows, never re-derived from the merged
-	// taxonomy view below, so a merge bug can never silently change this number.
-	const total_non_re = marketValueRows.reduce((sum, r) => sum + Number(r.market_value), 0);
+	// AC2/AC3 — THE SINGLE PREDICATE SOURCE. Every id in this Set is a Sub-Cat the caller's OWN
+	// taxonomy classifies as element='asset'. Both the row set (via assetTaxonomyRows below) and
+	// TotalNonRE (via the reduce below) derive from THIS Set, built from this ONE taxonomy read —
+	// not two independently-filtered copies. That is the "same-query predicate" route AC3 offers
+	// (vs. a paired Σ assertion the caller would ship separately): coverage divergence between the
+	// row set and the denominator is structurally unreachable here, not merely tested for.
+	const assetSubCatIds = new Set(
+		taxonomyRows.filter((t) => t.element === 'asset').map((t) => t.id)
+	);
+
+	// AC3: TotalNonRE sums every 076 row whose sub_cat_id is the Unsorted key (null — no element
+	// to filter on, always included, per AC3's explicit instruction) OR is in assetSubCatIds. 076
+	// itself returns BOTH elements (085's catalog comment on fn_subcat_market_value: the producer
+	// cannot filter on element without breaking the seam invariant Σ fn_subcat_market_value(as_of,
+	// true) = fn_compute_nav(as_of); that comment names THIS module as the intended consumer of
+	// the predicate). GUARD: the predicate lives here, never inside the RPC.
+	const total_non_re = marketValueRows.reduce((sum, r) => {
+		if (r.sub_cat_id === null) return sum + Number(r.market_value);
+		return assetSubCatIds.has(r.sub_cat_id) ? sum + Number(r.market_value) : sum;
+	}, 0);
+	const totalPositive = total_non_re > 0;
 
 	const marketValueBySubCatId = new Map<number, number>();
 	let unsortedMarketValue: number | null = null;
@@ -134,24 +225,24 @@ export function computeNonReAllocation(
 	function rowFor(id: number, cat: string, sub_cat: string): AllocationRow {
 		const market_value = marketValueBySubCatId.get(id) ?? 0;
 		const target_percent = Number(targetBySubCatId.get(id) ?? 0);
-		const dollar_target = (target_percent / 100) * total_non_re;
 		return {
 			kind: 'sub_cat',
 			sub_cat_id: id,
 			cat,
 			sub_cat,
-			pct_target: target_percent,
-			pct_alloc: safeAllocFraction(market_value, total_non_re),
-			dollar_target,
+			pct_alloc: ratioPercentOrNull(market_value, total_non_re),
 			dollar_alloc: market_value,
-			dollar_realloc: dollar_target - market_value
+			...targetDerivedColumns(target_percent, market_value, total_non_re, totalPositive)
 		};
 	}
 
-	// Real Estate is excluded independently here (this read is NOT 076's own p_include_real_estate
-	// filter — it is a separate full-catalog read of user_taxonomy). The twelve US-equity Sub-Cats
-	// are excluded too — they fold into the collapsed row below, not individual rows.
-	const regularTaxonomyRows = taxonomyRows.filter(
+	// AC2: the row set is the caller's element='asset' Sub-Cats, MINUS Real Estate (independent
+	// exclusion — 076's own p_include_real_estate flag does not reach this separate full-catalog
+	// read) and MINUS the twelve US-equity Sub-Cats (folded into the collapsed row below, not
+	// individual rows). Liabilities-element rows never reach this point at all — they are outside
+	// assetSubCatIds, never inside it.
+	const assetTaxonomyRows = taxonomyRows.filter((t) => assetSubCatIds.has(t.id));
+	const regularTaxonomyRows = assetTaxonomyRows.filter(
 		(t) => t.cat !== 'Real Estate' && !US_EQUITY_SUB_CAT_SET.has(t.sub_cat)
 	);
 
@@ -167,8 +258,9 @@ export function computeNonReAllocation(
 	// AC5: the collapsed row. $Alloc = Σ the twelve's market_value; %Target = Σ their
 	// target_percent (074's uniform Non-RE denomination — summing shares of the SAME whole is
 	// valid, unlike SELF-240's own drill-down renormalization). $Target/$ReAlloc per AC3's
-	// formulas, using that summed target_percent exactly like any other row's.
-	const usEquityTaxonomyRows = taxonomyRows.filter((t) => US_EQUITY_SUB_CAT_SET.has(t.sub_cat));
+	// formulas, using that summed target_percent exactly like any other row's; all four ratio
+	// columns null together per AC6 when TotalNonRE <= 0 (targetDerivedColumns/ratioPercentOrNull).
+	const usEquityTaxonomyRows = assetTaxonomyRows.filter((t) => US_EQUITY_SUB_CAT_SET.has(t.sub_cat));
 	const collapsedMarketValue = usEquityTaxonomyRows.reduce(
 		(sum, t) => sum + (marketValueBySubCatId.get(t.id) ?? 0),
 		0
@@ -177,17 +269,14 @@ export function computeNonReAllocation(
 		(sum, t) => sum + Number(targetBySubCatId.get(t.id) ?? 0),
 		0
 	);
-	const collapsedDollarTarget = (collapsedTargetPercent / 100) * total_non_re;
 	const collapsedRow: AllocationRow = {
 		kind: 'us_sector_diversified',
 		sub_cat_id: null,
 		cat: 'Marketable Securities',
 		sub_cat: US_SECTOR_DIVERSIFIED_LABEL,
-		pct_target: collapsedTargetPercent,
-		pct_alloc: safeAllocFraction(collapsedMarketValue, total_non_re),
-		dollar_target: collapsedDollarTarget,
+		pct_alloc: ratioPercentOrNull(collapsedMarketValue, total_non_re),
 		dollar_alloc: collapsedMarketValue,
-		dollar_realloc: collapsedDollarTarget - collapsedMarketValue
+		...targetDerivedColumns(collapsedTargetPercent, collapsedMarketValue, total_non_re, totalPositive)
 	};
 	(
 		rowsByCat.get('Marketable Securities') ??
@@ -195,6 +284,9 @@ export function computeNonReAllocation(
 	).push(collapsedRow);
 	displayOrderById.set(-1, US_SECTOR_DIVERSIFIED_DISPLAY_ORDER); // synthetic id for the sort below
 
+	// AC4: per-group subtotal is a raw Σ of dollar_alloc — never gated by TotalNonRE's sign,
+	// mirroring dollar_alloc's own always-present contract. pct_alloc_subtotal derives from the
+	// SAME ratioPercentOrNull gate as every row-level percent column.
 	const groups: AllocationCatGroup[] = CAT_GROUP_ORDER.map((cat) => {
 		const rows = (rowsByCat.get(cat) ?? []).slice();
 		rows.sort((a, b) => {
@@ -202,11 +294,19 @@ export function computeNonReAllocation(
 			const db = displayOrderById.get(b.sub_cat_id ?? -1) ?? 0;
 			return da - db;
 		});
-		return { cat, rows };
+		const dollar_alloc_subtotal = rows.reduce((s, r) => s + r.dollar_alloc, 0);
+		return {
+			cat,
+			rows,
+			dollar_alloc_subtotal,
+			pct_alloc_subtotal: ratioPercentOrNull(dollar_alloc_subtotal, total_non_re)
+		};
 	});
 
-	// AC2c / AC3: Unsorted carries %Alloc/$Alloc only — target cells are structurally null, never
+	// AC2c/AC3: Unsorted carries %Alloc/$Alloc only — target cells are structurally null, never
 	// 0 (0 would assert "a real zero target", which is impossible for a row with no sub_cat_id).
+	// %Alloc itself now follows AC6 (null at TotalNonRE <= 0) via ratioPercentOrNull, same as every
+	// other row.
 	const unsorted: AllocationRow | null =
 		unsortedMarketValue === null
 			? null
@@ -216,7 +316,7 @@ export function computeNonReAllocation(
 					cat: null,
 					sub_cat: 'Unsorted',
 					pct_target: null,
-					pct_alloc: safeAllocFraction(unsortedMarketValue, total_non_re),
+					pct_alloc: ratioPercentOrNull(unsortedMarketValue, total_non_re),
 					dollar_target: null,
 					dollar_alloc: unsortedMarketValue,
 					dollar_realloc: null
@@ -240,11 +340,14 @@ export async function loadNonReAllocation(
 
 	// POST-084: no `.eq('domain', 'asset')` filter — `user_taxonomy` is the storage-classification
 	// table only (ADR-058 Decision 1's split moved every cashflow row out), so the unfiltered read
-	// already is the full asset-domain catalog AC2 needs.
+	// already is the full catalog AC2 needs. POST-085: `element` rides along — this module's own
+	// compute core (computeNonReAllocation), not this read, is what narrows to asset-only, so the
+	// read itself stays unconditional beyond the column list, same discipline as taxonomy.ts's
+	// loadAssetSubCats.
 	const { data: taxonomyRows, error } = await supabase
 		.schema('pfin')
 		.from('user_taxonomy')
-		.select('id, cat, sub_cat, display_order');
+		.select('id, cat, sub_cat, display_order, element');
 	if (error) {
 		console.error('[nonReAllocation] user_taxonomy read failed:', error.message);
 		return { data: null, ok: false };

@@ -5,8 +5,10 @@
 // facts travel together (a client that grouped by one and excluded by the other would
 // drift silently):
 //   - $lib/server/queries/nonReAllocation.ts's exported `CAT_GROUP_ORDER` — the fixed
-//     §2.2.2 Cat-group header order (Cash / Bonds / Marketable Securities / Alternatives
-//     / Liabilities; Real Estate is never a member — excluded independently below).
+//     §2.2.2 Cat-group header order. SELF-239 (2026-08-20 ratified ACs, assets-only ruling)
+//     DROPPED 'Liabilities' from this list — it is FOUR values now (Cash / Bonds /
+//     Marketable Securities / Alternatives), not five. Liabilities is not §2.2.2 domain;
+//     Real Estate is never a member either — excluded independently below, same as before.
 //   - $lib/server/queries/usEquitySubCats.ts's `US_EQUITY_SUB_CATS` / `US_EQUITY_SUB_CAT_SET`
 //     — the twelve Sub-Cat labels SELF-238 folds into one collapsed row and SELF-240
 //     renders as its own §2.2.3 US-Equity row set, IN THIS ORDER.
@@ -35,16 +37,17 @@
 // server side has one — nonReAllocation.catGroupOrderEquality.server.test.ts — but it
 // cannot reach into browser-only code to compare against this file).
 
-/** The fixed §2.2.2 Cat-group header order (PRD §2.2.2 / AC2). Real Estate is never a
- *  member — filtered out independently wherever this editor reads the caller's full
- *  taxonomy catalog. MIRROR of nonReAllocation.ts's `CAT_GROUP_ORDER` — keep verbatim. */
-export const CAT_GROUP_ORDER = [
-	'Cash',
-	'Bonds',
-	'Marketable Securities',
-	'Alternatives',
-	'Liabilities'
-] as const;
+/** The fixed §2.2.2 Cat-group header order (PRD §2.2.2 / AC2). FOUR values as of SELF-239
+ *  (2026-08-20 ratified ACs, assets-only ruling) — 'Liabilities' DROPPED. Real Estate is
+ *  never a member — filtered out independently wherever this editor reads the caller's
+ *  full taxonomy catalog. MIRROR of nonReAllocation.ts's `CAT_GROUP_ORDER` — keep verbatim.
+ *  ⚠ Removing 'Liabilities' here is a NO-OP for this editor's rendered output: N7-A already
+ *  drops any Cat group with zero rows after its own `element === 'asset'` filter, and every
+ *  Liabilities-cat Sub-Cat is element = 'liability' (085's backfill), so a 'Liabilities'
+ *  entry in this array never produced a rendered group before this change either — it was
+ *  filtered out at render time, not iterated away. This edit removes a dead list entry, it
+ *  does not change what a caller sees. */
+export const CAT_GROUP_ORDER = ['Cash', 'Bonds', 'Marketable Securities', 'Alternatives'] as const;
 
 export type NonReCat = (typeof CAT_GROUP_ORDER)[number];
 

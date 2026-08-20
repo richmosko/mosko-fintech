@@ -1,37 +1,41 @@
 // nonReAllocation.catGroupOrderEquality.server.test.ts — ADR-058 Decision 7's paired assertion:
-// "the database's asset-domain Cat set equals CAT_GROUP_ORDER exactly" — BOTH directions, and it
+// "the database's asset Cat set equals CAT_GROUP_ORDER exactly" — BOTH directions, and it
 // fails LOUDLY (a failing test), never silently (a skip is the only permitted non-pass, and it is
 // itself loud — see SKIP below).
 //
 // WHY THIS EXISTS. `CAT_GROUP_ORDER` (nonReAllocation.ts) is a hardcoded TS array duplicating the
-// DB's canonical asset-domain Cat vocabulary (`pfin.taxonomy_default`). Nothing today catches the
+// DB's canonical asset Cat vocabulary (`pfin.taxonomy_default`). Nothing today catches the
 // two arrays drifting apart. If they do, the failure is SILENT and financial: `computeNonReAllocation`
 // builds `groups` via `CAT_GROUP_ORDER.map((cat) => rowsByCat.get(cat) ?? [])` — a Cat present in
-// the DB but ABSENT from CAT_GROUP_ORDER (e.g. exactly what an unmirrored rename produces) drops
-// every one of its rows from the rendered table, while `total_non_re` — summed from the UNFILTERED
-// 076 rows — still counts their value. Percentages under-sum, silently, failing OPEN. This test is
-// the PERMANENT watch against that whole class, not a one-off check of this rename's instance —
-// worth more than the rename itself per Decision 7's own framing.
+// the DB's asset set but ABSENT from CAT_GROUP_ORDER (e.g. exactly what an unmirrored rename
+// produces) drops every one of its rows from the rendered table, while `total_non_re` still counts
+// their value (SELF-239: the denominator sums every element='asset'-or-Unsorted 076 row, the same
+// predicate this file now queries with). Percentages under-sum, silently, failing OPEN. This test
+// is the PERMANENT watch against that whole class, not a one-off check of any one rename — worth
+// more than any single instance per Decision 7's own framing.
 //
 // SCOPE NOTE — read before "fixing" a failure by editing the exclusion instead of investigating.
-// `taxonomy_default`'s asset-domain Cat set (the whole table, post-084 — ADR-058 Decision 1's
-// split moved every cashflow-domain row to `posting_prototype_default`, so no `domain` filter
-// applies or exists any more) is SIX values as seeded by migration 041 + amended
-// by 082: Cash, Bonds, Marketable Securities (post Decision-7 rename), Alternatives, Liabilities,
-// Real Estate. `CAT_GROUP_ORDER` is FIVE — Real Estate is excluded BY DESIGN (nonReAllocation.ts's
-// own header: 076 excludes it at p_include_real_estate=false, and computeNonReAllocation's
-// taxonomy read filters it out independently). An equality against the RAW DB set would therefore
-// fail permanently even on a fully-correct rename, which would make this watcher noise instead of
-// signal the first time anyone ran it — so the comparison below is DB-set MINUS 'Real Estate' vs
-// `CAT_GROUP_ORDER`, not the raw DB set. ✅ RATIFIED (F/CTO, 2026-08-19) — the amended predicate,
-// transcribed rather than paraphrased: "DB asset-Cat set MINUS 'Real Estate' equals
-// CAT_GROUP_ORDER, both directions, exclusion named and justified inside the assertion itself"
-// (a visible EXCLUDED_FROM_CAT_GROUP_ORDER constant, never a silent filter). ADR-058 Decision 7's
-// literal "equals exactly" was unsatisfiable as written; the decision to ship the assertion is
-// UNCHANGED, only its stated predicate was loose. Records as ADR-058 Amendment 1, riding the split
-// PR. If a future ADR adds or removes an
-// asset-domain Cat (Real Estate included), this file's `EXCLUDED_FROM_CAT_GROUP_ORDER` constant is
-// where that decision is recorded — not a silent widening of the filter.
+// SELF-239 (2026-08-20 ratified ACs) changed HOW this file derives the DB-side comparison set, not
+// just what CAT_GROUP_ORDER contains. Pre-SELF-239 the DB set was the RAW six-Cat
+// `taxonomy_default` read (Cash, Bonds, Marketable Securities, Alternatives, Liabilities, Real
+// Estate) minus a named 'Real Estate' exclusion, compared against a FIVE-member CAT_GROUP_ORDER
+// that still included Liabilities. SELF-239's assets-only ruling drops Liabilities from
+// CAT_GROUP_ORDER (it is not §2.2.2 domain — Backend's nonReAllocation.ts header has the full
+// rationale), and 085's `element` column now makes that exclusion EXPRESSIBLE AS A QUERY PREDICATE
+// rather than a second named exclusion: the read below filters `element = 'asset'` at the DB
+// (Cash, Bonds, Marketable Securities, Alternatives, Real Estate — FIVE, Liabilities excluded
+// STRUCTURALLY by the predicate, not by a name in EXCLUDED_FROM_CAT_GROUP_ORDER), then Real Estate
+// is still excluded BY NAME the same way it always was — element alone cannot distinguish Real
+// Estate from any other asset-element Cat (085's own backfill maps Real Estate to 'asset', same as
+// every non-Liabilities Cat). The comparison below is therefore DB-set(element='asset') MINUS
+// 'Real Estate' vs `CAT_GROUP_ORDER` (now four), both directions. ✅ Original amended predicate
+// (F/CTO, 2026-08-19, "DB asset-Cat set MINUS 'Real Estate' equals CAT_GROUP_ORDER... exclusion
+// named and justified inside the assertion itself") is preserved for the Real Estate half; the
+// Liabilities half moved from a named exclusion to a query predicate per SELF-239's 2026-08-20
+// ratified ACs, which this file implements — a formal ADR-058 amendment entry for this second
+// change is flagged to Architect/F/CTO at hand-off, not authored here. If a future ADR adds or
+// removes an asset-domain Cat (Real Estate included), this file's `EXCLUDED_FROM_CAT_GROUP_ORDER`
+// constant is where that decision is recorded — not a silent widening of the filter.
 //
 // VENUE (read before running). QA_SELF238_POSTGREST_URL / QA_SELF238_JWT_SECRET name A VENUE — a
 // throwaway Postgres+PostgREST pair with the full V1 migration chain applied — NOT a SELF-238-
@@ -42,8 +46,8 @@
 //
 // NO TENANT FIXTURE NEEDED, unlike the sibling file: `pfin.taxonomy_default` is GLOBAL
 // SHARED-READ (041's own header — `using (true)` SELECT policy for `authenticated`, no `users_id`
-// or tenant column at all), so ANY authenticated JWT reads the canonical Cat set. Needs only
-// migration 041 (+ 082's rename) applied — no privileged seeding step.
+// or tenant column at all), so ANY authenticated JWT reads the canonical Cat set. Needs migration
+// 041 (+ 082's rename + 085's `element` column) applied — no privileged seeding step.
 //
 // BOTH ENV VARS ABSENT -> the whole suite SKIPS (does not fail), mirroring the sibling file's
 // convention, and logs loudly so a silent-always-skip in CI stays visible.
@@ -57,9 +61,13 @@ const POSTGREST_URL = process.env.QA_SELF238_POSTGREST_URL;
 const JWT_SECRET = process.env.QA_SELF238_JWT_SECRET;
 const VENUE_AVAILABLE = Boolean(POSTGREST_URL && JWT_SECRET);
 
-/** Asset-domain Cats that exist in `taxonomy_default` but are DELIBERATELY excluded from
- *  `CAT_GROUP_ORDER` — see the SCOPE NOTE above (predicate RATIFIED by F/CTO 2026-08-19; THIS
- *  CONSTANT IS the ratified "named and justified" half, so do not inline it away).
+/** Cats that exist in `taxonomy_default`'s element='asset' set but are DELIBERATELY excluded
+ *  from `CAT_GROUP_ORDER` — see the SCOPE NOTE above (Real Estate half RATIFIED by F/CTO
+ *  2026-08-19; THIS CONSTANT IS the ratified "named and justified" half, so do not inline it
+ *  away). Liabilities is NOT in this set any more (SELF-239) — it is excluded from the DB-side
+ *  comparison STRUCTURALLY, by the `element = 'asset'` query predicate below, before this set is
+ *  ever consulted; it was never an asset-element Cat to begin with (085's backfill), so naming it
+ *  here would be redundant with the predicate, not a second layer of defense.
  *  Any Cat in this set is EXPECTED to be absent from CAT_GROUP_ORDER; any Cat NOT in
  *  this set and NOT in CAT_GROUP_ORDER is the fail-open Decision 7 names. */
 const EXCLUDED_FROM_CAT_GROUP_ORDER = new Set(['Real Estate']);
@@ -83,39 +91,42 @@ async function makeReaderClient() {
 describe.skipIf(!VENUE_AVAILABLE)(
 	'CAT_GROUP_ORDER vs pfin.taxonomy_default — ADR-058 Decision 7 paired equality assertion',
 	() => {
-		it('non-vacuous: the DB asset-domain Cat set is non-empty (the equality below is a real comparison, not two empty sets agreeing)', async () => {
+		it('non-vacuous: the DB element=\'asset\' Cat set is non-empty (the equality below is a real comparison, not two empty sets agreeing)', async () => {
 			const client = await makeReaderClient();
 			const { data, error } = await client
 				.schema('pfin')
 				.from('taxonomy_default')
-				.select('cat');
+				.select('cat')
+				.eq('element', 'asset');
 			if (error) throw new Error(`venue problem: taxonomy_default read failed: ${error.message}`);
 			expect((data ?? []).length).toBeGreaterThan(0);
 		});
 
-		it('(forward) every Cat in CAT_GROUP_ORDER exists in the DB asset-domain Cat set', async () => {
+		it('(forward) every Cat in CAT_GROUP_ORDER exists in the DB element=\'asset\' Cat set', async () => {
 			const client = await makeReaderClient();
 			const { data, error } = await client
 				.schema('pfin')
 				.from('taxonomy_default')
-				.select('cat');
+				.select('cat')
+				.eq('element', 'asset');
 			if (error) throw new Error(`venue problem: taxonomy_default read failed: ${error.message}`);
 			const dbCats = new Set((data ?? []).map((r) => (r as { cat: string }).cat));
 
 			const missingFromDb = CAT_GROUP_ORDER.filter((cat) => !dbCats.has(cat));
 			expect(
 				missingFromDb,
-				`CAT_GROUP_ORDER names a Cat the DB does not have — a rename landed in code without ` +
-					`the DB seed delta, or vice versa: ${JSON.stringify(missingFromDb)}`
+				`CAT_GROUP_ORDER names a Cat the DB's element='asset' set does not have — a rename ` +
+					`landed in code without the DB seed delta, or vice versa: ${JSON.stringify(missingFromDb)}`
 			).toEqual([]);
 		});
 
-		it('(reverse) every DB asset-domain Cat NOT in the excluded set exists in CAT_GROUP_ORDER — the fail-open direction', async () => {
+		it('(reverse) every DB element=\'asset\' Cat NOT in the excluded set exists in CAT_GROUP_ORDER — the fail-open direction', async () => {
 			const client = await makeReaderClient();
 			const { data, error } = await client
 				.schema('pfin')
 				.from('taxonomy_default')
-				.select('cat');
+				.select('cat')
+				.eq('element', 'asset');
 			if (error) throw new Error(`venue problem: taxonomy_default read failed: ${error.message}`);
 			const dbCats = [...new Set((data ?? []).map((r) => (r as { cat: string }).cat))];
 			const catGroupOrderSet = new Set<string>(CAT_GROUP_ORDER);
@@ -125,10 +136,26 @@ describe.skipIf(!VENUE_AVAILABLE)(
 			);
 			expect(
 				unwatched,
-				`the DB has an asset-domain Cat that CAT_GROUP_ORDER neither renders nor deliberately ` +
+				`the DB has an element='asset' Cat that CAT_GROUP_ORDER neither renders nor deliberately ` +
 					`excludes — every row under this Cat is SILENTLY DROPPED from the §2.2.2 table while ` +
 					`still counted in total_non_re (Decision 7's named fail-open): ${JSON.stringify(unwatched)}`
 			).toEqual([]);
+		});
+
+		it('(SELF-239 structural check) Liabilities is absent from the DB element=\'asset\' set entirely — excluded by the predicate, not by the named-exclusion list', async () => {
+			const client = await makeReaderClient();
+			const { data, error } = await client
+				.schema('pfin')
+				.from('taxonomy_default')
+				.select('cat')
+				.eq('element', 'asset');
+			if (error) throw new Error(`venue problem: taxonomy_default read failed: ${error.message}`);
+			const dbCats = new Set((data ?? []).map((r) => (r as { cat: string }).cat));
+			expect(
+				dbCats.has('Liabilities'),
+				'Liabilities appearing in the element=\'asset\' set means 085\'s backfill map or the ' +
+					'element CHECK has drifted — Liabilities must be entirely element=\'liability\''
+			).toBe(false);
 		});
 	}
 );
