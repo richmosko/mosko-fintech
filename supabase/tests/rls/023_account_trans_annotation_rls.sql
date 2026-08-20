@@ -237,8 +237,8 @@ insert into pfin.posting_prototype (users_id, cat, sub_cat)
   values (:'ta', 'Expense', 'Groceries') returning id as a_sub2 \gset
 insert into pfin.posting_prototype (users_id, cat, sub_cat)
   values (:'tb', 'Expense', 'Rent') returning id as b_sub \gset
-insert into pfin.user_taxonomy (users_id, cat, sub_cat)
-  values (:'ta', 'Brokerage', 'US Equity') returning id as a_asset_sub \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element)
+  values (:'ta', 'Brokerage', 'US Equity', 'asset') returning id as a_asset_sub \gset
 
 -- =====================================================================
 -- BLOCK 1 (authenticated A) — matched-tenant PASSes: annotate own txn (matched Sub-Cat),

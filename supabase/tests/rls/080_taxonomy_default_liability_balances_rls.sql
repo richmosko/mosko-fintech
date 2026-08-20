@@ -108,14 +108,14 @@ insert into auth.users (id) values (:'ta'), (:'tb'), (:'tc'), (:'td');
 --   second OWNER of a backfilled row to check against — C no longer
 --   receives one (same reasoning as 077's identical fixture change).
 -- ---------------------------------------------------------------------
-insert into pfin.user_taxonomy (users_id, cat, sub_cat) values
-  (:'ta','Marketable Securities','US-06-Financials') returning id as a_eq \gset
-insert into pfin.user_taxonomy (users_id, cat, sub_cat) values
-  (:'ta','Cash','CD') returning id as a_cd \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element) values
+  (:'ta','Marketable Securities','US-06-Financials','asset') returning id as a_eq \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element) values
+  (:'ta','Cash','CD','asset') returning id as a_cd \gset
 insert into pfin.posting_prototype (users_id, cat, sub_cat) values
   (:'tc','Revenue','Dividend') returning id as c_cf \gset
-insert into pfin.user_taxonomy (users_id, cat, sub_cat) values
-  (:'td','Cash','CD-D') returning id as d_cd \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element) values
+  (:'td','Cash','CD-D','asset') returning id as d_cd \gset
 -- tenant B: deliberately NO rows.
 
 -- =====================================================================
@@ -139,21 +139,21 @@ select is(
 -- where 080 already ran once against zero users.
 -- =====================================================================
 insert into pfin.taxonomy_default
-  (cat, sub_cat, tax_relevant, tax_character, display_order, notes)
+  (cat, sub_cat, tax_relevant, tax_character, display_order, notes, element)
 values
   ('Liabilities', 'Liability Balances', false, null, 285,
    'Raw balance of a liability-type account — the catch-all for account-level '
    'debt. Asserts NO instrument: where the instrument IS known, the balance '
    'belongs in Credit-Balance (revolving credit), Loan-Balance (a loan) or '
    'EstTax-Pending (taxes due) instead. Naturally signed, so a balance owed is '
-   'negative and an overpayment is positive.')
+   'negative and an overpayment is positive.', 'liability')
 on conflict (cat, sub_cat) do nothing;
 
 insert into pfin.user_taxonomy
-  (users_id, cat, sub_cat, tax_relevant, tax_character, display_order, notes)
+  (users_id, cat, sub_cat, tax_relevant, tax_character, display_order, notes, element)
 select
   provisioned.users_id,
-  d.cat, d.sub_cat, d.tax_relevant, d.tax_character, d.display_order, d.notes
+  d.cat, d.sub_cat, d.tax_relevant, d.tax_character, d.display_order, d.notes, d.element
 from pfin.taxonomy_default d
 cross join (select distinct ut.users_id from pfin.user_taxonomy ut) provisioned
 where d.cat = 'Liabilities' and d.sub_cat = 'Liability Balances'
@@ -267,21 +267,21 @@ select set_config('role', 'postgres', true);
 -- stays unreachable across repeated runs (not just a single one).
 -- =====================================================================
 insert into pfin.taxonomy_default
-  (cat, sub_cat, tax_relevant, tax_character, display_order, notes)
+  (cat, sub_cat, tax_relevant, tax_character, display_order, notes, element)
 values
   ('Liabilities', 'Liability Balances', false, null, 285,
    'Raw balance of a liability-type account — the catch-all for account-level '
    'debt. Asserts NO instrument: where the instrument IS known, the balance '
    'belongs in Credit-Balance (revolving credit), Loan-Balance (a loan) or '
    'EstTax-Pending (taxes due) instead. Naturally signed, so a balance owed is '
-   'negative and an overpayment is positive.')
+   'negative and an overpayment is positive.', 'liability')
 on conflict (cat, sub_cat) do nothing;
 
 insert into pfin.user_taxonomy
-  (users_id, cat, sub_cat, tax_relevant, tax_character, display_order, notes)
+  (users_id, cat, sub_cat, tax_relevant, tax_character, display_order, notes, element)
 select
   provisioned.users_id,
-  d.cat, d.sub_cat, d.tax_relevant, d.tax_character, d.display_order, d.notes
+  d.cat, d.sub_cat, d.tax_relevant, d.tax_character, d.display_order, d.notes, d.element
 from pfin.taxonomy_default d
 cross join (select distinct ut.users_id from pfin.user_taxonomy ut) provisioned
 where d.cat = 'Liabilities' and d.sub_cat = 'Liability Balances'

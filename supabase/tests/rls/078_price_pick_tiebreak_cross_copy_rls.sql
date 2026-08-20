@@ -140,8 +140,8 @@ insert into pfin.eod_price (asset_id, price_date, source, price) values
 insert into pfin.eod_price (asset_id, price_date, source, price) values
   (:secb,'2026-08-01','market_feed',60.00);
 
-insert into pfin.user_taxonomy (users_id, cat, sub_cat) values
-  (:'ta','Marketable Securities','US-06-Financials') returning id as a_eq \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element) values
+  (:'ta','Marketable Securities','US-06-Financials','asset') returning id as a_eq \gset
 
 insert into pfin.account (users_id, name, account_type, scope, tax_treatment) values
   (:'ta','a-inv-78','investment','household','taxable') returning account_id as a_inv \gset

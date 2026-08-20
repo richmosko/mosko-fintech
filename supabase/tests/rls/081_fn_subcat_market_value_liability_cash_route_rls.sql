@@ -107,10 +107,10 @@ insert into auth.users (id) values (:'ta'), (:'tb'), (:'tc');
 --   Balances, both non-liability accounts route to Cash Balances"; any
 --   other routing produces a DIFFERENT pair). Total = -250+280 = 30.00 (L3).
 -- ---------------------------------------------------------------------
-insert into pfin.user_taxonomy (users_id, cat, sub_cat) values
-  (:'ta','Cash','Cash Balances') returning id as a_cb \gset
-insert into pfin.user_taxonomy (users_id, cat, sub_cat) values
-  (:'ta','Liabilities','Liability Balances') returning id as a_lb \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element) values
+  (:'ta','Cash','Cash Balances','asset') returning id as a_cb \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element) values
+  (:'ta','Liabilities','Liability Balances','liability') returning id as a_lb \gset
 
 insert into pfin.user_asset_category (users_id, asset_id, sub_cat_id) values
   (:'ta', 1, :a_cb);
@@ -138,8 +138,8 @@ insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_o
 -- ---------------------------------------------------------------------
 -- TENANT B — isolation control. Own liability account, DISTINCT value.
 -- ---------------------------------------------------------------------
-insert into pfin.user_taxonomy (users_id, cat, sub_cat) values
-  (:'tb','Liabilities','Liability Balances') returning id as b_lb \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element) values
+  (:'tb','Liabilities','Liability Balances','liability') returning id as b_lb \gset
 insert into pfin.account (users_id, name, account_type, scope, tax_treatment) values
   (:'tb','b-cc-81','liability','household','taxable') returning account_id as b_cc \gset
 insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_of_date, source) values
@@ -151,8 +151,8 @@ insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_o
 --   default row — 080''s reach is unaffected). The LEFT JOIN degrades to
 --   NULL keys; the value must land in the R2 unclassified row, intact.
 -- ---------------------------------------------------------------------
-insert into pfin.user_taxonomy (users_id, cat, sub_cat) values
-  (:'tc','Liabilities','Liability Balances') returning id as c_lb \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element) values
+  (:'tc','Liabilities','Liability Balances','liability') returning id as c_lb \gset
 insert into pfin.account (users_id, name, account_type, scope, tax_treatment) values
   (:'tc','c-cc-81','liability','household','taxable') returning account_id as c_cc \gset
 insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_of_date, source) values
@@ -212,8 +212,8 @@ select set_config('role', 'postgres', true);
 -- =====================================================================
 \set td '00000000-0000-0000-0000-00000000d081'
 insert into auth.users (id) values (:'td');
-insert into pfin.user_taxonomy (users_id, cat, sub_cat) values
-  (:'td','Liabilities','Liability Balances') returning id as d_lb \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element) values
+  (:'td','Liabilities','Liability Balances','liability') returning id as d_lb \gset
 insert into pfin.account (users_id, name, account_type, scope, tax_treatment) values
   (:'td','d-cc-paid-81','liability','household','taxable') returning account_id as d_cc \gset
 -- no checkpoint at all -> fn_account_cash_as_of degrades to 0 by construction.

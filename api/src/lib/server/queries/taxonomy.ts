@@ -37,6 +37,20 @@ type DefaultProvisionRow = {
 const DEFAULT_PROVISION_COLUMNS =
 	'cat, sub_cat, tax_relevant, tax_character, display_order, notes';
 
+// ── ADR-058 Decision 3 (element PR) ── `element` lands on `pfin.user_taxonomy` AND
+// `pfin.taxonomy_default` ONLY — NOT NULL, CHECK (element in ('asset','liability')) — and
+// explicitly NEVER on `pfin.posting_prototype` / `pfin.posting_prototype_default` ("prototypes
+// carry no element, not even a derived one"). That asymmetry is exactly the F3-class hazard the
+// pre-existing shared `DefaultProvisionRow` / `DEFAULT_PROVISION_COLUMNS` would silently mis-cover
+// if reused for both branches after this migration: `provisionAssetTaxonomy`'s column-listed
+// INSERT would either omit the new NOT NULL column (blocks provisioning for every fresh signup —
+// Decision 3's F4 finding) or, if a shared constant were widened to include `element`, the
+// cashflow branch would ask `posting_prototype_default` for a column it does not have. The two
+// branches therefore get their OWN column set from here on — this one for the asset/storage side.
+type AssetDefaultProvisionRow = DefaultProvisionRow & { element: string };
+
+const ASSET_DEFAULT_PROVISION_COLUMNS = `${DEFAULT_PROVISION_COLUMNS}, element`;
+
 /**
  * Provision the caller's STORAGE-classification defaults: `pfin.user_taxonomy` from
  * `pfin.taxonomy_default`. One of the two INDEPENDENT branches `provisionDefaultTaxonomy` runs —
@@ -64,11 +78,14 @@ async function provisionAssetTaxonomy(supabase: SupabaseClient, userId: string):
 		}
 		if (existing) return; // already provisioned — nothing to do.
 
-		// (2) Read the global storage-side default set.
+		// (2) Read the global storage-side default set. ADR-058 Decision 3: `element` is selected
+		// here (and ONLY here — the cashflow branch's `posting_prototype_default` never gains this
+		// column) because it is now NOT NULL + CHECK-constrained on `taxonomy_default` itself, so
+		// every row this read returns already carries a valid value — the app does no defaulting.
 		const { data: defaults, error: dErr } = await supabase
 			.schema('pfin')
 			.from('taxonomy_default')
-			.select(DEFAULT_PROVISION_COLUMNS);
+			.select(ASSET_DEFAULT_PROVISION_COLUMNS);
 		if (dErr) {
 			console.error(
 				'[taxonomy] provisionAssetTaxonomy default read failed (fail-soft):',
@@ -79,8 +96,10 @@ async function provisionAssetTaxonomy(supabase: SupabaseClient, userId: string):
 		if (!defaults || defaults.length === 0) return;
 
 		// (3) UPSERT (DO NOTHING) with a session-derived users_id. `domain` is gone from the
-		// unique key post-084 — the conflict target is (users_id, cat, sub_cat).
-		const rows = (defaults as DefaultProvisionRow[]).map((d) => ({ users_id: userId, ...d }));
+		// unique key post-084 — the conflict target is (users_id, cat, sub_cat). `element` rides
+		// along as an ordinary copied column (ADR-058 Decision 3) — it is not part of the conflict
+		// target, which stays (users_id, cat, sub_cat) unchanged.
+		const rows = (defaults as AssetDefaultProvisionRow[]).map((d) => ({ users_id: userId, ...d }));
 		const { error: insErr } = await supabase
 			.schema('pfin')
 			.from('user_taxonomy')
