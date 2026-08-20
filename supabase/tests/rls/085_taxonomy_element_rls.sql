@@ -164,7 +164,11 @@ select is(
 --      taxonomy-CRUD PR inherits (085's own header: "the else-branch is a JUDGEMENT on
 --      pfin.user_taxonomy, not a tautology... today the else-branch can only ever see
 --      seeded Cats" — this leg is what proves it fires correctly the one time it's
---      exercisable pre-V2, via REPLAY of 085's exact backfill statement, same idiom as
+--      exercisable pre-V2. ⚠ NOT a replay of 085's backfill STATEMENT — that statement is
+--      `where element is null`, which could never touch a row that already carries
+--      'liability' (the whole point of this leg). What replays is 085's backfill CASE
+--      EXPRESSION, re-applied via `set element = case ... end where <key>`, against a row
+--      targeted BY KEY rather than by the original `is null` predicate — same idiom as
 --      077/080's own backfill re-runs). B gets a fresh row under 'Wine Cellar' — a real
 --      Cat outside the seeded {Alternatives, Bonds, Cash, Liabilities, Marketable
 --      Securities, Real Estate} — seeded with element DELIBERATELY WRONG ('liability'),
@@ -179,7 +183,7 @@ update pfin.user_taxonomy
 select is(
   (select element from pfin.user_taxonomy where users_id = :'tb' and cat = 'Wine Cellar' and sub_cat = 'Bordeaux'),
   'asset',
-  '(B5) the unconditional else, on a Cat OUTSIDE the seeded six (''Wine Cellar''): a REPLAY of 085''s exact backfill statement corrects a deliberately-wrong ''liability'' to ''asset'' — the case is total over EVERY cat value, seeded or not, not merely over the six the real seed happens to contain'
+  '(B5) the unconditional else, on a Cat OUTSIDE the seeded six (''Wine Cellar''): replays 085''s backfill CASE EXPRESSION against a row targeted by key, correcting a deliberately-wrong ''liability'' to ''asset'' — the case is total over EVERY cat value, seeded or not, not merely over the six the real seed happens to contain'
 );
 
 -- =====================================================================
@@ -192,20 +196,54 @@ select is(
 -- ⚠ SAVEPOINT SCOPE, deliberately asymmetric (verified empirically, not
 --   assumed): (C1)/(C3) carry NO outer savepoint — a `throws_ok`-caught
 --   rejection never commits its row regardless (confirmed by direct probe:
---   zero residue, and pgTAP's own internal `__tcache__` test counter is
---   untouched). (C2)/(C4) DO need one, because they mutate real catalog
---   state (`drop constraint`) that must not survive past this leg — but
---   that means their contribution to pgTAP's internal running-test-count is
---   itself rolled back along with the DDL (confirmed by direct probe:
---   `rollback to savepoint` after ANY pgTAP assertion call erases that
---   call's `__tcache__` increment even though its `ok N` line already
---   printed correctly). `finish()` may therefore emit a benign
---   "# Looks like you planned N tests but ran N-2" comment — a `#`-prefixed
+--   zero residue, no effect on pgTAP's own bookkeeping). (C2)/(C4) DO need
+--   one, because they mutate real catalog state (`drop constraint`) that
+--   must not survive past this leg. `finish()` may therefore emit a benign
+--   "# Looks like you planned N tests but ran N-1" comment — a `#`-prefixed
 --   TAP comment, not a result line; pg_prove (the TAP-aware consumer this
 --   house requires) parses the real `1..N` / `ok`/`not ok` stream and is
---   UNAFFECTED — confirmed live, `Result: PASS` with all N `ok` lines
---   present and none dropped. Documented here so a future reader of CI
---   output sees the comment and does not mistake it for a real gap.
+--   UNAFFECTED. Documented here, mechanism stated as MEASURED rather than
+--   inferred, so a future reader of CI output does not mistake the comment
+--   for a real gap and does not have to re-derive why it says N-1:
+--
+--   MECHANISM (read from pgTAP source, `public.ok()` / `public.add_result()`,
+--   cross-checked against three probes on a clean 001..085 scratch — not
+--   assumed from the comment text alone): the printed `ok N` number comes
+--   from `nextval('__tresults___numb_seq')` — a SEQUENCE, and Postgres
+--   sequences are BY DESIGN exempt from transactional rollback, which is why
+--   every `ok N` line above prints correctly and NONE of them repeat, even
+--   past a `rollback to savepoint`. Separately, `ok()` also calls
+--   `_set('curr_test', test_num)` — an ordinary table write (`__tcache__`),
+--   which IS transactional, and — the detail that makes the drift always
+--   1, never the count of rolled-back legs — `_set` WRITES test_num AS AN
+--   ABSOLUTE VALUE, it does not increment a running total. So a later
+--   assertion's `_set` call OVERWRITES whatever a rolled-back predecessor
+--   left behind; only a rolled-back leg with NO SUCCESSOR (here, (C4), the
+--   last assertion in the file) has nothing to overwrite it, and THAT is
+--   what `finish()` sees as missing. Probed directly: a rolled-back leg
+--   NOT at the tail produces ZERO drift; two or three rolled-back legs
+--   ending in a non-rolled-back one still drift by exactly 1 — never by the
+--   number of rolled-back legs, and the printed numbers never repeat, in
+--   every case tried.
+--
+--   RAW TAP TAIL, this file, fresh run against committed head `73962b4`
+--   (pasted per Sec's ask — an observation, not a description of one):
+--
+--     ok 15 - (B5) the unconditional else, on a Cat OUTSIDE the seeded six ('Wine Cellar'): ...
+--     ok 16 - (C1) pfin.user_taxonomy REJECTS element='equity' (check_violation 23514) ...
+--     postgres
+--     ok 17 - (C2) ⭐ INVERSION-PROVE: with user_taxonomy_element_chk DROPPED (this savepoint only) ...
+--     postgres
+--     ok 18 - (C3) pfin.taxonomy_default REJECTS element='equity' (check_violation 23514) ...
+--     ok 19 - (C4) ⭐ INVERSION-PROVE: with taxonomy_default_element_chk DROPPED (this savepoint only) ...
+--     # Looks like you planned 19 tests but ran 18
+--     ok
+--     All tests successful.
+--     Files=1, Tests=19,  0 wallclock secs
+--     Result: PASS
+--
+--   The three bare `postgres` lines are `select set_config('role','postgres',true)`'s own
+--   result row (the new value echoed back) — non-TAP output pg_prove ignores, not a symptom.
 -- =====================================================================
 select _rls.set_tenant_aal(:'ta'::uuid, 'aal1');
 
