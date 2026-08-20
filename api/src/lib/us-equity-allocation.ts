@@ -18,9 +18,12 @@
 // Architect/Backend): §2.2.2's and §2.2.3's SERVER compute cores carry DIFFERENT degenerate-state
 // contracts, and this file's render helpers are NOT interchangeable with nonre-allocation.ts's for
 // that reason:
-//   - `computeNonReAllocation` (§2.2.2, nonReAllocation.ts) guards on ONE denominator (`total_non_re
-//     > 0`, a domain guard — "covering the negative case too", its own words) and nulls all four
-//     ratio columns TOGETHER. Its client-side `fmtRatioPct`/`fmtRatioUsd` gate (`ratioColumnsUnset`)
+//   - `computeNonReAllocation` (§2.2.2, nonReAllocation.ts) guards on ONE denominator
+//     (`total_non_re > 0` — a domain guard, not a `=== 0` NaN guard) and nulls all four ratio
+//     columns TOGETHER. The phrase "covering the negative case too" is nonre-allocation.ts's
+//     (the CLIENT mirror, at its `ratioColumnsUnset` doc comment) describing that server gate —
+//     nonReAllocation.ts does not use those words itself. Its client-side
+//     `fmtRatioPct`/`fmtRatioUsd` gate (`ratioColumnsUnset`)
 //     is therefore belt-and-suspenders on an already-correct payload — redundant defense, not the
 //     only layer.
 //   - `computeUsEquityAllocation` (§2.2.3, usEquityAllocation.ts) guards on TWO INDEPENDENT
