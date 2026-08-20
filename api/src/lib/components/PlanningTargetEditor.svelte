@@ -27,10 +27,19 @@
 	    valid, storable, DIFFERENT fact from row-absent (ADR-056), so "0" is submitted as-is.
 	  - A field CLEARED back to empty, that had an initial value, calls
 	    DELETE /api/settings/planning-target with JSON body { sub_cat_id } (no query param —
-	    confirmed shape, not this file's earlier guess). Idempotent 200 on Backend's side
-	    either way. Sec's merge-gate binding constraint: "unset must be DELETE, never POST
-	    0.00" — this editor never POSTs an empty field as 0.00, by construction (an empty
-	    string never reaches the upsert branch below).
+	    confirmed shape, not this file's earlier guess). Sec's merge-gate binding constraint:
+	    "unset must be DELETE, never POST 0.00" — this editor never POSTs an empty field as
+	    0.00, by construction (an empty string never reaches the upsert branch below).
+	  - DELETE's response is 200 { ok: true, sub_cat_id, deleted: boolean } — ALWAYS 200
+	    (idempotent-success whether a row existed or not), so a 2xx status alone does NOT
+	    mean the row is gone. `deleted` is a fail-closed team-lead/Sec addition (rationale:
+	    a below-aal2 session can't reach this path TODAY only because the loader returns no
+	    targets for it — a fact that depends on another table's policy shape, not a fence of
+	    this endpoint's own, so the flag exists for when that stops being true). handleSave
+	    CONSUMES it: only an explicit `deleted === true` counts as removed; false/missing/
+	    unparsable is treated as NOT removed, surfaced per-row ("Not removed —
+	    re-verification may be required"), same serverErrors slot a failed POST uses — an
+	    added response field nothing reads is a control that decays into decoration.
 	  - A field cleared that had NO initial value is a no-op (nothing to delete) — dirty-tracking
 	    treats it as "back to baseline", not a pending change.
 	  - Per Sec's SELF-233 joint-review ruling (2026-08-17, carried onto SELF-242 by
@@ -232,15 +241,36 @@
 			}
 			for (let j = 0; j < toDelete.length; j++) {
 				const res = settled[toUpsert.length + j];
+				const id = toDelete[j];
 				const ok = res.status === 'fulfilled' && res.value.ok;
 				if (!ok) {
 					anyFailed = true;
-					serverErrors[toDelete[j]] = await extractError(res);
+					serverErrors[id] = await extractError(res);
+					continue;
+				}
+				// HTTP 200 no longer means "the row is gone" — the DELETE response now carries its
+				// own outcome bit (`deleted`) because the endpoint is deliberately idempotent-success
+				// (200 whether a row existed or not) AND can genuinely fail to remove a row it can see
+				// (a fail-closed path whose exact trigger is DB-internal — see the PERSISTENCE note
+				// above). Fail-closed here too: only an EXPLICIT `deleted === true` counts as removed;
+				// anything else (false, missing, or an unparsable body) is treated as NOT removed
+				// rather than assumed successful, per Sec's ruling that an unconsumed response field
+				// is a control that decays into decoration.
+				let deleted = false;
+				try {
+					const body = await (res as PromiseFulfilledResult<Response>).value.json();
+					deleted = body?.deleted === true;
+				} catch {
+					deleted = false;
+				}
+				if (!deleted) {
+					anyFailed = true;
+					serverErrors[id] = 'Not removed — re-verification may be required.';
 				}
 			}
 
 			if (anyFailed) {
-				formError = 'Some changes could not be saved — see the fields below.';
+				formError = 'Some changes could not be completed — see the fields below.';
 				saving = false;
 				return;
 			}

@@ -54,30 +54,30 @@
 //
 // RESPONSE SHAPE — `200 { ok: true, sub_cat_id, deleted: boolean }`, always 200, never a 404.
 // `deleted` is read from `.delete({ count: 'exact' })`'s row count (`(count ?? 0) > 0`).
-// ⚠ CORRECTED RATIONALE (Sec C2, this PR — the endpoint's first-drafted reasoning was itself
-// wrong): the query is scoped by an EXPLICIT `.eq('users_id', user.id)` predicate, so it can
-// never match another tenant's row in the first place — there is no cross-tenant-existence
-// fact for a response shape to leak, and the earlier draft's "distinguishing would leak
-// cross-tenant existence" argument was moot from the moment that predicate was added, not a
-// live constraint on this shape. The TWO real reasons for always-200 are: (1) idempotent-DELETE
-// REST convention — removing an already-absent resource is a no-op success, not an error;
-// (2) the `deleted` flag discloses ONLY the caller's OWN state (their own request either
-// changed something or it didn't) — it can still leave the WHY ambiguous within that one
-// account (a below-aal2-filtered row and a never-existent row both read `deleted: false`, per
-// the `planning_target_delete` RLS policy's USING clause silently excluding non-matching rows
-// per 074's own header, "affects 0 rows, silently and correctly"), but that ambiguity is now
-// entirely the caller's own business, never another tenant's. The next Lock-14 settings table
-// should reason from THESE two premises, not from the retired cross-tenant-leak argument.
 //
-// POST/DELETE ASYMMETRY, STATED EXPLICITLY: POST's outcome space includes genuine 4xx
-// rejections (mapWriteError above) because 074's trigger and the target_percent CHECK can
-// reject a write on business-rule grounds (unresolvable/cross-tenant sub_cat_id, out-of-range
-// value) — a POST can be WRONG, not just absent-vs-present. DELETE has no such business rule
-// to violate (there is nothing to validate about REMOVING a row beyond who owns it, which the
-// query predicate already enforces), so its outcome space is binary — matched-and-removed or
-// not — with no 4xx family of its own. The two endpoints are not mirror images of each other
-// by accident; they differ because a value-carrying write and a row-removal have different
-// ways to fail.
+// WHY `deleted` IS SAFE TO EXPOSE (Sec C2, this PR — refined at re-review; the endpoint's
+// first-drafted rationale argued this from the wrong premise and is superseded, not layered
+// on top of): the query's EXPLICIT `.eq('users_id', user.id)` predicate pins it to the
+// caller's own rows before the DB ever counts anything, so a cross-tenant row is UNOBSERVABLE
+// through this response BY CONSTRUCTION — `deleted` can only ever describe what happened to
+// the CALLER'S OWN account, never another tenant's. That does not make `deleted` unambiguous
+// even within that one account: `deleted: false` covers TWO distinct causes the flag does not
+// separate — (a) the row genuinely never existed (nothing to unset), and (b) the row exists
+// but the caller's own session is below aal2, so the `planning_target_delete` RLS policy's
+// USING clause hides it from this statement (074's own header: "affects 0 rows, silently and
+// correctly"). Both read identically as `deleted: false`. This is a deliberate, bounded
+// non-disclosure of WHY within one account, not a disclosure risk across accounts.
+//
+// POST/DELETE ASYMMETRY, STATED EXPLICITLY so the next Lock-14 table does not copy the wrong
+// half of this endpoint: POST's sibling aal2 case IS surfaced distinguishably — a below-aal2
+// POST trips the 025 aal2 WITH CHECK clause, and mapWriteError below maps that to a clean
+// `403 step_up_required` (see the '42501' case). DELETE folds the SAME underlying condition
+// into the ordinary `deleted: false` path, indistinguishable there from the row never having
+// existed at all — because DELETE (like UPDATE) gates candidate rows through a USING clause,
+// which silently excludes non-matching rows, never through a WITH CHECK, which raises a
+// catchable violation on a row Postgres is about to write. There is no error here for
+// mapWriteError's shape to catch and re-map; the asymmetry follows directly from that
+// USING/WITH CHECK distinction, not from an arbitrary design choice.
 
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
