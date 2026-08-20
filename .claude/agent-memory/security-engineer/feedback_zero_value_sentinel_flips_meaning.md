@@ -77,5 +77,25 @@ two-field tuple and the guard tested existence only. Check reachability before s
 unreachable from the current DB fn (`is_stale = exists(…)` and the item list aggregate over the SAME
 CTE), which is what made it a flag rather than a veto.
 
+**The fourth hiding place — a MIRROR LIB that drops the sibling's gate (SELF-241, PR #520).** §2.2.2's
+client mirror carries `ratioColumnsUnset(total) → total <= 0` and threads the denominator into BOTH
+render helpers, with a comment naming the bug class it exists for ("a fake-zero at a degenerate
+denominator … shipped once already"). §2.2.3's new mirror advertised itself as the same pattern but its
+`fmtPct`/`fmtUsd` **dropped the denominator parameter**, keeping only the `null` translation — and its
+server sibling guards `=== 0` on two *independent* denominators where §2.2.2 guards `> 0` on one and
+nulls all four ratio columns together. Neither layer of the two-layer defense survived the copy.
+**How to apply:** when a file's own header says "MIRROR of X" / "reuses the shipped pattern", diff the
+EXPORTED SIGNATURES against X, not the prose — a dropped parameter is a dropped control, and the claim
+of mirroring is what stops anyone from looking. Then ask what the banner/copy ASSERTS and whether the
+render path can contradict it: here the note said "percent and target comparisons aren't shown below"
+while the %Target column rendered real figures in the ordinary onboarding state (`total = 0`,
+targets configured).
+
+**And the paired tell: the test fixture was shaped to the claim.** The one degenerate-state test built
+an **all-null** row fixture — a payload the server does not produce in that state — so it asserted the
+banner's text against a world where the text was true. **Check a degenerate-state fixture against what
+the compute core actually RETURNS in that state**, not against what the assertion needs. Same family as
+[[a-red-whose-message-names-the-wrong-defect]] and the "assertion with no watcher" class.
+
 Related: [[measure-the-fence-regex-not-its-comment]] (the stale-comment half),
 [[catalog-comments-carry-live-state-tallies]].

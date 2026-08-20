@@ -40,6 +40,24 @@ artifact or a fence; assert `count(distinct md5(...)) = 1`. Two pipelines agreei
 invariant is a STRONGER result than either digest, and "reconciling" them would destroy the
 independence for no gain.
 
+**Third instance, and the fastest turnaround yet — SAME BRANCH, ~one hour (SELF-241 / PR #520).**
+Not a count this time: a **QUOTATION ATTRIBUTED TO THE WRONG FILE.** In my F-1 finding I wrote
+*"§2.2.2 also gates server-side on `> 0` ('covering the negative case too')"*. The phrase is real
+and exact — but it lives in `nonre-allocation.ts`, the CLIENT mirror, describing the server gate.
+The server file `nonReAllocation.ts` **never says it** (`grep` → no match, exit 1). Frontend
+committed my sentence into a durable header comment as *"its own words"*, pointing a future
+reader at a file that does not contain the words. **The substance was true; only the pointer was
+wrong** — the POINTER/CONTENT split of the ADR-011 D4 inherited-citation class, arriving inside a
+single review cycle instead of across months.
+
+**Two things make this the sharpest version of the rule.** First, the two files differ by
+CASE ALONE (`nonReAllocation.ts` vs `nonre-allocation.ts`) — a near-homograph pair where the eye
+supplies the match, and the whole point of the mirror pattern is that they say similar things.
+**Where a server module and its client mirror share a name modulo case, ALWAYS grep the phrase in
+BOTH before attributing it to either.** Second, I had already run the Sec-Lock cross-check on the
+ADRs — **and not on my own prose.** The cross-check is not a step reserved for other people's
+text; the finding message itself is a citing artifact.
+
 **How to apply:**
 - When publishing a measurement, state **the command** and let the number be derivable from it,
   or state the number and **re-derive it once before sending**. A hand-typed enumeration beside
