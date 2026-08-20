@@ -51,15 +51,11 @@ To find out what phase the project is in, what's locked, and what's next: read `
 
 PR A landed the scaffolding; **PR B landed the content migration** per [ADR-009](DECISIONS.md#adr-009) Decisions 3 + 4 + 5. `PRD.md` is archived; HTML artifacts are canonical.
 
-- `docs/PRD/index.html` — mosko §1 / §2 / §3 / §6 / §7 / appendices A/B/C (1090 lines). §4 / §5 / §8 stubs point to relocated homes per Decision 4.
-- `docs/SECURITY/index.html` — V1 Sec canonical reference per [ADR-008](DECISIONS.md#adr-008); received PRD §4 in PR B.
-- `docs/ARCH/index.html` — content drafted in Phase 3 by Architect.
-- `BACKLOG.md` — §5 V2+ deferred candidates (PRD §5 in PR B) + §7 V1 staging queue (going-forward per [ADR-017](DECISIONS.md#adr-017)).
-- `docs/MILESTONE-FRAMING.md` — V1 sub-version convention + drop-replace migration; received PRD §8 in PR B.
+The doc files themselves are described in the "Read first" list above (rows 5–8 and 10). Supporting assets:
+
 - `docs/_assets/style.css` — shared styling (incl. CSS class taxonomy per Decision 5).
 - `docs/_assets/mermaid.min.js` — vendored Mermaid runtime (no CDN; per Decision 5 sub-decision 3).
 - `docs/_assets/mermaid-init.js` — vendored-load initializer.
-- `docs/archive/PRD-pre-html-migration.md` — frozen Markdown snapshot at v1.30 (PR B archive target).
 
 ## When in doubt
 
