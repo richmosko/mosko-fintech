@@ -224,18 +224,18 @@ insert into pfin.eod_price (asset_id, price_date, source, price) values
 -- ---------------------------------------------------------------------
 -- Tenant A taxonomy — REAL seeded vocabulary (041), not invented text.
 -- ---------------------------------------------------------------------
-insert into pfin.user_taxonomy (users_id, cat, sub_cat) values
-  (:'ta','Marketable Securities','US-06-Financials') returning id as a_eq \gset
-insert into pfin.user_taxonomy (users_id, cat, sub_cat) values
-  (:'ta','Real Estate','Residential') returning id as a_re \gset
-insert into pfin.user_taxonomy (users_id, cat, sub_cat) values
-  (:'ta','Alternatives','REIT') returning id as a_alt \gset
-insert into pfin.user_taxonomy (users_id, cat, sub_cat) values
-  (:'ta','Cash','CD') returning id as a_cd \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element) values
+  (:'ta','Marketable Securities','US-06-Financials','asset') returning id as a_eq \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element) values
+  (:'ta','Real Estate','Residential','asset') returning id as a_re \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element) values
+  (:'ta','Alternatives','REIT','asset') returning id as a_alt \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element) values
+  (:'ta','Cash','CD','asset') returning id as a_cd \gset
 insert into pfin.posting_prototype (users_id, cat, sub_cat) values
   (:'ta','Revenue','Dividend') returning id as a_cf \gset
-insert into pfin.user_taxonomy (users_id, cat, sub_cat) values
-  (:'tb','Marketable Securities','US-06-Financials') returning id as b_eq \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element) values
+  (:'tb','Marketable Securities','US-06-Financials','asset') returning id as b_eq \gset
 
 -- ---------------------------------------------------------------------
 -- TENANT A — a_inv (investment; secx unclassified, secy cashflow-misclassified,
@@ -583,8 +583,8 @@ select array_agg(asset_id order by asset_id) as psecs
   from pfin.asset where symbol like 'SBP76-%' \gset
 insert into pfin.eod_price (asset_id, price_date, source, price)
   select unnest(:'psecs'::bigint[]), '2026-07-01', 'market_feed', 100.00;
-insert into pfin.user_taxonomy (users_id, cat, sub_cat)
-  select :'tp', 'Marketable Securities', 'US-Perf-Sub-' || g from generate_series(1, 10) g;
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element)
+  select :'tp', 'Marketable Securities', 'US-Perf-Sub-' || g, 'asset' from generate_series(1, 10) g;
 select array_agg(id order by id) as psubs
   from pfin.user_taxonomy where users_id = :'tp' \gset
 insert into pfin.account (users_id, name, account_type, scope, tax_treatment)

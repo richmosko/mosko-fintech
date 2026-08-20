@@ -116,14 +116,14 @@ insert into auth.users (id) values (:'ta'), (:'tb'), (:'tc'), (:'td');
 --   vacuous (DESIGN.md: "absence assertions are vacuous whenever the subject
 --   never existed").
 -- ---------------------------------------------------------------------
-insert into pfin.user_taxonomy (users_id, cat, sub_cat) values
-  (:'ta','Marketable Securities','US-06-Financials') returning id as a_eq \gset
-insert into pfin.user_taxonomy (users_id, cat, sub_cat) values
-  (:'ta','Real Estate','Residential') returning id as a_re \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element) values
+  (:'ta','Marketable Securities','US-06-Financials','asset') returning id as a_eq \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element) values
+  (:'ta','Real Estate','Residential','asset') returning id as a_re \gset
 insert into pfin.posting_prototype (users_id, cat, sub_cat) values
   (:'tc','Revenue','Dividend') returning id as c_cf \gset
-insert into pfin.user_taxonomy (users_id, cat, sub_cat) values
-  (:'td','Real Estate','Residential-D') returning id as d_re \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element) values
+  (:'td','Real Estate','Residential-D','asset') returning id as d_re \gset
 -- tenant B: deliberately NO rows.
 
 -- =====================================================================
@@ -148,20 +148,20 @@ select is(
 -- against zero users.
 -- =====================================================================
 insert into pfin.taxonomy_default
-  (cat, sub_cat, tax_relevant, tax_character, display_order, notes)
+  (cat, sub_cat, tax_relevant, tax_character, display_order, notes, element)
 values
   ('Cash', 'Cash Balances', false, null, 5,
    'Raw cash balance catch-all — one classification per user per currency. '
    'Asserts NO insurance regime and names no instrument: cash covered by a '
    'specific regime or held as a specific instrument belongs in FDIC / SPIC / '
-   'T-Bill / CD instead.')
+   'T-Bill / CD instead.', 'asset')
 on conflict (cat, sub_cat) do nothing;
 
 insert into pfin.user_taxonomy
-  (users_id, cat, sub_cat, tax_relevant, tax_character, display_order, notes)
+  (users_id, cat, sub_cat, tax_relevant, tax_character, display_order, notes, element)
 select
   provisioned.users_id,
-  d.cat, d.sub_cat, d.tax_relevant, d.tax_character, d.display_order, d.notes
+  d.cat, d.sub_cat, d.tax_relevant, d.tax_character, d.display_order, d.notes, d.element
 from pfin.taxonomy_default d
 cross join (select distinct ut.users_id from pfin.user_taxonomy ut) provisioned
 where d.cat = 'Cash' and d.sub_cat = 'Cash Balances'
@@ -275,20 +275,20 @@ select set_config('role', 'postgres', true);
 -- unreachable across repeated runs (not just a single one).
 -- =====================================================================
 insert into pfin.taxonomy_default
-  (cat, sub_cat, tax_relevant, tax_character, display_order, notes)
+  (cat, sub_cat, tax_relevant, tax_character, display_order, notes, element)
 values
   ('Cash', 'Cash Balances', false, null, 5,
    'Raw cash balance catch-all — one classification per user per currency. '
    'Asserts NO insurance regime and names no instrument: cash covered by a '
    'specific regime or held as a specific instrument belongs in FDIC / SPIC / '
-   'T-Bill / CD instead.')
+   'T-Bill / CD instead.', 'asset')
 on conflict (cat, sub_cat) do nothing;
 
 insert into pfin.user_taxonomy
-  (users_id, cat, sub_cat, tax_relevant, tax_character, display_order, notes)
+  (users_id, cat, sub_cat, tax_relevant, tax_character, display_order, notes, element)
 select
   provisioned.users_id,
-  d.cat, d.sub_cat, d.tax_relevant, d.tax_character, d.display_order, d.notes
+  d.cat, d.sub_cat, d.tax_relevant, d.tax_character, d.display_order, d.notes, d.element
 from pfin.taxonomy_default d
 cross join (select distinct ut.users_id from pfin.user_taxonomy ut) provisioned
 where d.cat = 'Cash' and d.sub_cat = 'Cash Balances'

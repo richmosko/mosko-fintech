@@ -197,16 +197,16 @@ select is(
 --   worst-case failure of a blind sweep). B carries ONE row: the rename
 --   target only, a second independent tenant proving reach is a property
 --   of the WHERE clause, not an accident of A's specific setup.
-insert into pfin.user_taxonomy (users_id, cat, sub_cat)
-  values (:'ta', 'Equity', 'REPLAY-Sector') returning id as a_eq_id \gset
-insert into pfin.user_taxonomy (users_id, cat, sub_cat)
-  values (:'ta', 'Bonds', 'REPLAY-Control') returning id as a_bonds_id \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element)
+  values (:'ta', 'Equity', 'REPLAY-Sector', 'asset') returning id as a_eq_id \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element)
+  values (:'ta', 'Bonds', 'REPLAY-Control', 'asset') returning id as a_bonds_id \gset
 -- POST-084: the cashflow control now lives in pfin.posting_prototype (ADR-058
 --   Decision 1's split), not pfin.user_taxonomy — see (R5)'s reworked mechanism below.
 insert into pfin.posting_prototype (users_id, cat, sub_cat)
   values (:'ta', 'Equity', 'REPLAY-CF-Control') returning id as a_cf_id \gset
-insert into pfin.user_taxonomy (users_id, cat, sub_cat)
-  values (:'tb', 'Equity', 'REPLAY-Sector-B') returning id as b_eq_id \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element)
+  values (:'tb', 'Equity', 'REPLAY-Sector-B', 'asset') returning id as b_eq_id \gset
 
 -- (R1) MECH POST-084: domain predicate dropped.
 select is(

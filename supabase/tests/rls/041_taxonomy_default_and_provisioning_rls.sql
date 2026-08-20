@@ -105,7 +105,8 @@
 -- ⟦WIRE-VALIDATE⟧ 041 (+ 009/010/024/025) on main → `supabase test db` (directory-mode pg_prove,
 --   db-tests.yml) reaches this against the 001→041 reset stack. RE-VALIDATED against 001->084
 --   (ADR-058's split — counts re-measured live, not carried forward from any prior stack's
---   figure, same discipline the 077/080 hardcode rule already required). plan(25).
+--   figure, same discipline the 077/080 hardcode rule already required). RE-VALIDATED again
+--   against 001->085 (`element` — every insert re-targeted, one leg added: (1b-element)). plan(26).
 --
 -- ⚠ HARDCODE-VS-DYNAMIC (the 077/080 regression + fix rule, applied again at 084's split — a
 --   NEW seed delta by this rule's own definition). The counts below are HARDCODED at 38 / 27,
@@ -121,7 +122,7 @@ begin;
 -- shared verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(25);
+select plan(26);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb, _rls.tenant_c() as tc \gset
@@ -176,8 +177,8 @@ select _rls.set_tenant_aal(:'ta'::uuid, 'aal1');
 -- (1a-storage) A (no user_settings row → coalesce→'none' → backstop TRUE at aal1) runs
 --      the storage-half provision statement → the whole asset default set lands.
 select lives_ok(
-  $$ insert into pfin.user_taxonomy (users_id, cat, sub_cat, tax_relevant, tax_character, display_order, notes)
-     select auth.uid(), cat, sub_cat, tax_relevant, tax_character, display_order, notes
+  $$ insert into pfin.user_taxonomy (users_id, cat, sub_cat, tax_relevant, tax_character, display_order, notes, element)
+     select auth.uid(), cat, sub_cat, tax_relevant, tax_character, display_order, notes, element
      from pfin.taxonomy_default
      on conflict (users_id, cat, sub_cat) do nothing $$,
   '(1a-storage) owner provisions own storage rows PASS (+ fail-open): A with NO user_settings row provisions the full asset default set at aal1 (users_id = auth.uid()) — WITH CHECK accepts every row (coalesce→''none'' fail-open)'
@@ -199,6 +200,21 @@ select is(
   38::bigint,
   '(1b-storage) owner provisioned all 38 asset default rows: A''s user_taxonomy count = 38'
 );
+-- (1b-element) NEW at 085 — the provisioning fixture extension (ADR-058 Decision 3 / Sec F4
+--      condition 2, provisioning half): A's 38 freshly-provisioned rows carry ZERO NULL
+--      `element` values. This is the pgTAP-ownable half of "a fresh user ends up with rows
+--      carrying no NULL element" (Architect's ask) — it is what catches Backend's
+--      `taxonomy.ts` column-list split adding `element` to the SHARED constant instead of the
+--      storage-only one: if that regressed, this statement's own `select ... select ... from
+--      taxonomy_default` column-listed copy (BLOCK 1 above, already re-targeted this PR) would
+--      either have failed outright (element omitted -> not-null violation, (1a-storage) itself
+--      would already be RED) or, if `taxonomy_default.element` were ever nullable, landed NULLs
+--      here silently — this leg is the one that would catch the silent case.
+select is(
+  (select count(*) from pfin.user_taxonomy where users_id = :'ta' and element is null)::bigint,
+  0::bigint,
+  '(1b-element) provisioning fixture extension: A''s 38 freshly-provisioned user_taxonomy rows carry ZERO NULL element values — the column-listed copy from taxonomy_default (BLOCK 1) propagates element correctly, not silently'
+);
 -- (1b-proto) A now owns exactly 27 posting_prototype rows.
 select is(
   (select count(*) from pfin.posting_prototype where users_id = :'ta')::bigint,
@@ -218,7 +234,7 @@ select _rls.set_tenant_aal(:'ta'::uuid, 'aal1');
 --      BY B → user_taxonomy_insert WITH CHECK (users_id = auth.uid()) rejects. INVERSION:
 --      drop that conjunct and the B-owned row COMMITS → this flips RED.
 select throws_like(
-  format($$ insert into pfin.user_taxonomy (users_id, cat, sub_cat) values (%L, 'Cash', 'FDIC') $$, :'tb'),
+  format($$ insert into pfin.user_taxonomy (users_id, cat, sub_cat, element) values (%L, 'Cash', 'FDIC', 'asset') $$, :'tb'),
   '%violates row-level security policy%',
   '(2a) WITH CHECK fail-closed: A inserting a row with users_id = B is RLS-rejected (users_id = auth.uid() fences the write to the owner) — a user cannot provision rows into another tenant''s taxonomy'
 );
@@ -232,8 +248,8 @@ select _rls.set_tenant_aal(:'ta'::uuid, 'aal1');
 
 -- (3a-storage) A runs the SAME storage-half statement again → all 38 rows conflict.
 select lives_ok(
-  $$ insert into pfin.user_taxonomy (users_id, cat, sub_cat, tax_relevant, tax_character, display_order, notes)
-     select auth.uid(), cat, sub_cat, tax_relevant, tax_character, display_order, notes
+  $$ insert into pfin.user_taxonomy (users_id, cat, sub_cat, tax_relevant, tax_character, display_order, notes, element)
+     select auth.uid(), cat, sub_cat, tax_relevant, tax_character, display_order, notes, element
      from pfin.taxonomy_default
      on conflict (users_id, cat, sub_cat) do nothing $$,
   '(3a-storage) idempotent re-provision: A runs the storage-half statement a SECOND time → every row conflicts on unique(users_id,cat,sub_cat) → DO NOTHING → no error'
@@ -330,8 +346,8 @@ select set_config('role', 'postgres', true);
 --      (distinct code path from A's missing-row: here the subselect RETURNS 'none').
 select _rls.set_tenant_aal(:'tc'::uuid, 'aal1');
 select lives_ok(
-  $$ insert into pfin.user_taxonomy (users_id, cat, sub_cat, tax_relevant, tax_character, display_order, notes)
-     select auth.uid(), cat, sub_cat, tax_relevant, tax_character, display_order, notes
+  $$ insert into pfin.user_taxonomy (users_id, cat, sub_cat, tax_relevant, tax_character, display_order, notes, element)
+     select auth.uid(), cat, sub_cat, tax_relevant, tax_character, display_order, notes, element
      from pfin.taxonomy_default
      on conflict (users_id, cat, sub_cat) do nothing $$,
   '(5a) fail-open (explicit ''none''): C with mfa_policy=''none'' provisions at aal1 → PASS (coalesce returns ''none'' → not in (totp,passkey) → backstop TRUE; the non-null ''none'' path, distinct from A''s missing-row path)'
@@ -343,7 +359,7 @@ select set_config('role', 'postgres', true);
 --      has teeth on net-new writes. INVERSION: drop the conjunct (Shape B) and this COMMITS → RED.
 select _rls.set_tenant_aal(:'tb'::uuid, 'aal1');
 select throws_like(
-  $$ insert into pfin.user_taxonomy (cat, sub_cat) values ('Cash', 'FDIC') $$,
+  $$ insert into pfin.user_taxonomy (cat, sub_cat, element) values ('Cash', 'FDIC', 'asset') $$,
   '%violates row-level security policy%',
   '(5b) aal2 backstop BLOCK: a totp user at aal1 inserting a NET-NEW row is RLS-rejected (backstop conjunct false) — Shape A gates step-up-declared users at aal1 on net-new provisioning'
 );
@@ -353,7 +369,7 @@ select set_config('role', 'postgres', true);
 --      → second disjunct TRUE). Proves 5b blocks on aal, not on B being write-incapable.
 select _rls.set_tenant_aal(:'tb'::uuid, 'aal2');
 select lives_ok(
-  $$ insert into pfin.user_taxonomy (cat, sub_cat) values ('Cash', 'FDIC') $$,
+  $$ insert into pfin.user_taxonomy (cat, sub_cat, element) values ('Cash', 'FDIC', 'asset') $$,
   '(5c) aal2 lifts the gate: the SAME totp user at aal2 inserts the SAME row → COMMITS (backstop satisfied by aal2) — 5b is an aal gate, not a blanket block'
 );
 select set_config('role', 'postgres', true);
@@ -370,7 +386,7 @@ select set_config('role', 'postgres', true);
 --      but on corrected grounds — see the QA finding relayed at hand-off).
 select _rls.set_tenant_aal(:'tb'::uuid, 'aal1');
 select throws_like(
-  $$ insert into pfin.user_taxonomy (cat, sub_cat) values ('Cash', 'FDIC')
+  $$ insert into pfin.user_taxonomy (cat, sub_cat, element) values ('Cash', 'FDIC', 'asset')
      on conflict (users_id, cat, sub_cat) do nothing $$,
   '%violates row-level security policy%',
   '(5d) ON CONFLICT DO NOTHING does NOT bypass the aal2 backstop: a totp user at aal1 re-inserting an EXISTING row STILL RAISES — Postgres evaluates INSERT WITH CHECK on the proposed row BEFORE conflict resolution (the migration''s "0 rows checked → passes" premise is FALSE). Runtime safety = Backend''s provisionDefaultTaxonomy existence-guard, not on-conflict semantics'

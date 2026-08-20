@@ -143,12 +143,12 @@ insert into pfin.asset (users_id, asset_type, pricing_source, name)
 insert into pfin.asset (users_id, asset_type, pricing_source, name)
   values (:'tb', 'collectible', 'manual_valuation', 'B owned asset') returning asset_id as b_asset \gset
 
-insert into pfin.user_taxonomy (users_id, cat, sub_cat)
-  values (:'ta', 'Brokerage', 'US Equity') returning id as a_sub \gset
-insert into pfin.user_taxonomy (users_id, cat, sub_cat)
-  values (:'ta', 'Brokerage', 'Index Funds') returning id as a_sub2 \gset
-insert into pfin.user_taxonomy (users_id, cat, sub_cat)
-  values (:'tb', 'Brokerage', 'US Equity') returning id as b_sub \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element)
+  values (:'ta', 'Brokerage', 'US Equity', 'asset') returning id as a_sub \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element)
+  values (:'ta', 'Brokerage', 'Index Funds', 'asset') returning id as a_sub2 \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element)
+  values (:'tb', 'Brokerage', 'US Equity', 'asset') returning id as b_sub \gset
 -- SELF-235 QA addition (Block V, below), RE-DERIVED POST-084: A's OWN posting-prototype
 --   row (was cashflow-domain user_taxonomy pre-split) — the (v1) KNOWN-GAP target, which
 --   the split closes as a side effect of the FK re-target rather than via the domain-

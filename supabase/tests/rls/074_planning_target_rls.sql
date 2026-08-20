@@ -176,29 +176,29 @@ insert into pfin.user_settings (users_id, mfa_policy) values
 -- tc: deliberately NO row (missing-row / lazy-provision coalesce case).
 -- te: deliberately NO row (cascade block does not touch RLS/aal at all).
 
-insert into pfin.user_taxonomy (users_id, cat, sub_cat)
-  values (:'ta', 'Brokerage', 'US Equity') returning id as a_sub \gset
-insert into pfin.user_taxonomy (users_id, cat, sub_cat)
-  values (:'ta', 'Real Estate', 'Primary Home') returning id as a_sub2 \gset
-insert into pfin.user_taxonomy (users_id, cat, sub_cat)
-  values (:'ta', 'Brokerage', 'Intl Equity') returning id as a_sub3 \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element)
+  values (:'ta', 'Brokerage', 'US Equity', 'asset') returning id as a_sub \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element)
+  values (:'ta', 'Real Estate', 'Primary Home', 'asset') returning id as a_sub2 \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element)
+  values (:'ta', 'Brokerage', 'Intl Equity', 'asset') returning id as a_sub3 \gset
 -- POST-084: a_cf_sub is now a pfin.posting_prototype row, not pfin.user_taxonomy — the
 -- cashflow half of the split (ADR-058 Decision 1). Still A's OWN valid posting prototype
 -- (cat='Revenue', legal per the unconditional CHECK). BLOCK L3 below re-targets accordingly.
 insert into pfin.posting_prototype (users_id, cat, sub_cat)
   values (:'ta', 'Revenue', 'Salary') returning id as a_cf_sub \gset
-insert into pfin.user_taxonomy (users_id, cat, sub_cat)
-  values (:'tb', 'Brokerage', 'US Equity') returning id as b_sub \gset
-insert into pfin.user_taxonomy (users_id, cat, sub_cat)
-  values (:'tb', 'Brokerage', 'Intl Equity') returning id as b_sub2 \gset
-insert into pfin.user_taxonomy (users_id, cat, sub_cat)
-  values (:'tc', 'Brokerage', 'US Equity') returning id as c_sub \gset
-insert into pfin.user_taxonomy (users_id, cat, sub_cat)
-  values (:'td', 'Brokerage', 'US Equity') returning id as d_sub \gset
-insert into pfin.user_taxonomy (users_id, cat, sub_cat)
-  values (:'td', 'Brokerage', 'Intl Equity') returning id as d_sub2 \gset
-insert into pfin.user_taxonomy (users_id, cat, sub_cat)
-  values (:'te', 'Brokerage', 'US Equity') returning id as te_sub \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element)
+  values (:'tb', 'Brokerage', 'US Equity', 'asset') returning id as b_sub \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element)
+  values (:'tb', 'Brokerage', 'Intl Equity', 'asset') returning id as b_sub2 \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element)
+  values (:'tc', 'Brokerage', 'US Equity', 'asset') returning id as c_sub \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element)
+  values (:'td', 'Brokerage', 'US Equity', 'asset') returning id as d_sub \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element)
+  values (:'td', 'Brokerage', 'Intl Equity', 'asset') returning id as d_sub2 \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element)
+  values (:'te', 'Brokerage', 'US Equity', 'asset') returning id as te_sub \gset
 
 -- =====================================================================
 -- BLOCK S (postgres — pg_policy catalog) — STRUCTURAL WITH CHECK / USING

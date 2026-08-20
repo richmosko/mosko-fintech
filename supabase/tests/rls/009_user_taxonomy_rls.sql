@@ -111,8 +111,8 @@ select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 -- ---------------------------------------------------------------------
 insert into auth.users (id) values (:'ta'), (:'tb');
 
-insert into pfin.user_taxonomy (users_id, cat, sub_cat, tax_relevant, tax_character)
-  values (:'ta', 'Brokerage', 'US Equity', true, 'qualified_dividend')
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, tax_relevant, tax_character, element)
+  values (:'ta', 'Brokerage', 'US Equity', true, 'qualified_dividend', 'asset')
   returning id as a_row \gset
 -- NOTE, RE-DERIVED at 084 (was: SELF-292 / M1 pre-028-CHECK story). This was A's SECOND
 --   fixture row, seeded purely to give A a two-row count for the BLOCK-1 isolation legs
@@ -123,10 +123,10 @@ insert into pfin.user_taxonomy (users_id, cat, sub_cat, tax_relevant, tax_charac
 --   (minimal diff) rather than renamed to avoid implying a semantic the row never carried
 --   beyond "a second row for A." Row COUNT unchanged (A still owns exactly 2 -> (1a) still
 --   asserts 2).
-insert into pfin.user_taxonomy (users_id, cat, sub_cat, tax_relevant)
-  values (:'ta', 'Revenue', 'Salary', true);
-insert into pfin.user_taxonomy (users_id, cat, sub_cat)
-  values (:'tb', 'Brokerage', 'US Equity');
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, tax_relevant, element)
+  values (:'ta', 'Revenue', 'Salary', true, 'asset');
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element)
+  values (:'tb', 'Brokerage', 'US Equity', 'asset');
 
 -- =====================================================================
 -- BLOCK 1 — RLS SELECT isolation (two-tenant core).
@@ -189,8 +189,8 @@ select ok(
 -- =====================================================================
 -- (4a) UNIQUE(users_id, cat, sub_cat): a duplicate of A's existing row raises 23505.
 select throws_ok(
-  format($$ insert into pfin.user_taxonomy (users_id, cat, sub_cat)
-              values (%L, 'Brokerage', 'US Equity') $$, :'ta'),
+  format($$ insert into pfin.user_taxonomy (users_id, cat, sub_cat, element)
+              values (%L, 'Brokerage', 'US Equity', 'asset') $$, :'ta'),
   '23505', null,
   '(4a) UNIQUE(users_id,cat,sub_cat): a duplicate (users_id,cat,sub_cat) raises unique_violation (23505) -- was (users_id,domain,cat,sub_cat) pre-084'
 );
@@ -269,8 +269,8 @@ select set_config('role', 'postgres', true);
 --   post-084 — an arbitrary cat inserts cleanly because there is nothing to reject it, not
 --   because a disjunct short-circuited. Distinct sub_cat keeps it UNIQUE vs A's BLOCK-1 row.
 select lives_ok(
-  format($$ insert into pfin.user_taxonomy (users_id, cat, sub_cat)
-              values (%L, 'US Equity', 'm1-asset-probe') $$, :'ta'),
+  format($$ insert into pfin.user_taxonomy (users_id, cat, sub_cat, element)
+              values (%L, 'US Equity', 'm1-asset-probe', 'asset') $$, :'ta'),
   '(6h) POST-084: asset-domain arbitrary cat ''US Equity'' inserts — this table carries NO cat CHECK at all (Sec Finding (b) / F6), not "the CHECK short-circuits on domain<>''cashflow''" (that whole constraint left with the cashflow rows)'
 );
 
