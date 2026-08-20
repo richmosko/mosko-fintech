@@ -64,13 +64,27 @@ const VENUE_AVAILABLE = Boolean(POSTGREST_URL && JWT_SECRET);
 /** Cats that exist in `taxonomy_default`'s element='asset' set but are DELIBERATELY excluded
  *  from `CAT_GROUP_ORDER` — see the SCOPE NOTE above (Real Estate half RATIFIED by F/CTO
  *  2026-08-19; THIS CONSTANT IS the ratified "named and justified" half, so do not inline it
- *  away). Liabilities is NOT in this set any more (SELF-239) — it is excluded from the DB-side
- *  comparison STRUCTURALLY, by the `element = 'asset'` query predicate below, before this set is
- *  ever consulted; it was never an asset-element Cat to begin with (085's backfill), so naming it
- *  here would be redundant with the predicate, not a second layer of defense.
+ *  away). Liabilities is NOT in this set — it never reaches the element='asset' comparison set to
+ *  begin with, so it cannot be "absent from CAT_GROUP_ORDER while present in the DB set" the way
+ *  this constant's members can. Its exclusion is named separately, in
+ *  STRUCTURALLY_EXCLUDED_BY_ELEMENT_PREDICATE below — see that constant for why a SEPARATE named
+ *  constant exists for a predicate-enforced exclusion rather than folding it in here.
  *  Any Cat in this set is EXPECTED to be absent from CAT_GROUP_ORDER; any Cat NOT in
  *  this set and NOT in CAT_GROUP_ORDER is the fail-open Decision 7 names. */
 const EXCLUDED_FROM_CAT_GROUP_ORDER = new Set(['Real Estate']);
+
+/** Cats excluded from the element='asset' comparison set by the QUERY PREDICATE itself
+ *  (`.eq('element', 'asset')` below), not by `EXCLUDED_FROM_CAT_GROUP_ORDER`'s named-list
+ *  mechanism. Named here anyway, in its OWN constant rather than folded into
+ *  EXCLUDED_FROM_CAT_GROUP_ORDER, because the two exclusion mechanisms answer different failure
+ *  modes and Decision 7's ratified predicate — "every excluded Cat named and justified inside the
+ *  assertion" — is read here as a requirement on VISIBILITY, not on which mechanism does the
+ *  excluding: a reader must be able to see, from this file's source, which Cat(s) never reach the
+ *  comparison and why, without having to trust that the live predicate currently does what this
+ *  comment claims. The dedicated structural-check test below is what makes that claim CHECKED
+ *  rather than merely stated — it fails if a future migration ever makes a Cat OTHER than
+ *  Liabilities element='liability', which a bare `.eq()` filter alone would silently absorb. */
+const STRUCTURALLY_EXCLUDED_BY_ELEMENT_PREDICATE = new Set(['Liabilities']);
 
 // Any fixed, syntactically-valid UUID works — taxonomy_default's RLS has no tenant clause to
 // satisfy, so this identity is never checked against anything. Not a real/reserved tenant id.
@@ -142,20 +156,36 @@ describe.skipIf(!VENUE_AVAILABLE)(
 			).toEqual([]);
 		});
 
-		it('(SELF-239 structural check) Liabilities is absent from the DB element=\'asset\' set entirely — excluded by the predicate, not by the named-exclusion list', async () => {
+		it('(SELF-239 structural check) the element=\'asset\' predicate excludes EXACTLY STRUCTURALLY_EXCLUDED_BY_ELEMENT_PREDICATE — no more, no less', async () => {
+			// Reads the RAW (unfiltered) Cat set and the element='asset'-FILTERED Cat set from the
+			// SAME live catalog, then asserts their difference is EXACTLY the named constant — both
+			// directions. This is what makes the predicate's exclusion CHECKED rather than merely
+			// documented: a bare `dbCats.has('Liabilities') === false` check (the pre-strengthening
+			// version of this test) would still pass if some OTHER Cat unexpectedly became
+			// element='liability' too — that Cat would silently join Liabilities in being dropped
+			// from the row set and the denominator, with nothing here to catch it. Comparing the
+			// full raw-minus-filtered difference against the named set catches that case.
 			const client = await makeReaderClient();
-			const { data, error } = await client
-				.schema('pfin')
-				.from('taxonomy_default')
-				.select('cat')
-				.eq('element', 'asset');
-			if (error) throw new Error(`venue problem: taxonomy_default read failed: ${error.message}`);
-			const dbCats = new Set((data ?? []).map((r) => (r as { cat: string }).cat));
+			const [{ data: rawData, error: rawError }, { data: assetData, error: assetError }] = await Promise.all([
+				client.schema('pfin').from('taxonomy_default').select('cat'),
+				client.schema('pfin').from('taxonomy_default').select('cat').eq('element', 'asset')
+			]);
+			if (rawError) throw new Error(`venue problem: taxonomy_default raw read failed: ${rawError.message}`);
+			if (assetError) throw new Error(`venue problem: taxonomy_default element='asset' read failed: ${assetError.message}`);
+
+			const rawCats = new Set((rawData ?? []).map((r) => (r as { cat: string }).cat));
+			const assetCats = new Set((assetData ?? []).map((r) => (r as { cat: string }).cat));
+			const excludedByPredicate = [...rawCats].filter((cat) => !assetCats.has(cat));
+
 			expect(
-				dbCats.has('Liabilities'),
-				'Liabilities appearing in the element=\'asset\' set means 085\'s backfill map or the ' +
-					'element CHECK has drifted — Liabilities must be entirely element=\'liability\''
-			).toBe(false);
+				new Set(excludedByPredicate),
+				`the element='asset' predicate excludes a different Cat set than ` +
+					`STRUCTURALLY_EXCLUDED_BY_ELEMENT_PREDICATE names — either a new liability-element ` +
+					`Cat appeared (085's backfill/CHECK drifted) or a previously-liability Cat became ` +
+					`asset-element (update the named constant to match, deliberately, if that's real): ` +
+					`raw-minus-asset=${JSON.stringify(excludedByPredicate)}, ` +
+					`named=${JSON.stringify([...STRUCTURALLY_EXCLUDED_BY_ELEMENT_PREDICATE])}`
+			).toEqual(STRUCTURALLY_EXCLUDED_BY_ELEMENT_PREDICATE);
 		});
 	}
 );
