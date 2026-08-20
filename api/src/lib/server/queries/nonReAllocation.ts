@@ -192,8 +192,14 @@ export type NonReAllocation = {
 	 *  element = 'asset' AND NOT Real Estate. NOT every 076 row unfiltered any more (that was the
 	 *  SELF-238 shape; 076 returns BOTH elements by design — see this file's header — and
 	 *  unfiltered summation silently counted a liability-cash-route row (081) in the denominator).
-	 *  Equals the §2.1.5 composition's Total Non-RE at the same p_as_of, exactly — the AC4 footing
-	 *  anchor. */
+	 *  ⚠ AC4 names §2.1.5's Total Non-RE as this figure's footing ANCHOR, and their agreement is
+	 *  INTENDED BUT UNASSERTED — do not read it as a guarantee. `051` partitions by
+	 *  `pfin.account.account_type not in ('real_estate','liability')`; this figure partitions by
+	 *  TAXONOMY (`element` + Cat). Two different columns, coinciding only where a Cat-'Real Estate'
+	 *  holding also sits in a `real_estate`-typed account, which nothing constrains. Measured and
+	 *  retracted at SEC HARDENING ROUND 2 (b) above; no watcher exists, booked at BACKLOG §7.24
+	 *  item 15. Nothing in THIS module depends on the anchor holding — its row set and denominator
+	 *  agree by construction, independently. */
 	total_non_re: number;
 };
 
