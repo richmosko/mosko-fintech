@@ -136,14 +136,18 @@
 --   scratch DB (createdb + auth/extensions/vault schemas + pgtap restored from the live
 --   Supabase container, migrations 001-075 applied in order, per the #474 venue recipe — `supabase
 --   db reset` is mechanically banned). RE-VERIFIED against the 001->084 stack (ADR-058's split;
---   posture and messages confirmed live). plan(38): 4 structural (S1-S2 + S3a-S3b, split per Sec
+--   posture and messages confirmed live). ⚠ QA FINDING at the SELF-242 review (2026-08-20): the
+--   file's own DELETE coverage (M9/M10) was same-tenant-only and (M11) cross-tenant-only-SELECT
+--   — no leg exercised a cross-tenant DELETE attempt against the planning_target_delete USING
+--   tenant predicate. (M12) closes that gap; plan bumped 38 -> 39 accordingly. plan(39): 4
+--   structural (S1-S2 + S3a-S3b, split per Sec
 --   F1 fold-in on the #476 joint-review — see the box at BLOCK S) + 2 unset-semantics
 --   (U1-U2) + 2 two-tenant read isolation (R1-R2) + 2 leg-1 (L1a-L1b) + 3 leg-2 (L2a-L2c) + 2
 --   leg-1-via-cross-vocabulary (L3-L3u, retained names, retargeted assertion post-084 — see
 --   BLOCK L3) + 1 combined structural (L3s, new at 084) + 5 numeric mechanism (N1-N5) +
---   1 RESTRICT (FK1) + 11 aal2 backstop
---   (M1-M11) + 1 UPSERT reassign (UP1a) + 1 corrupt-the-control (X1) + 1 anon zero-grant (G1) +
---   2 tenant-cascade (CASC1a-CASC1b) = 37.
+--   1 RESTRICT (FK1) + 12 aal2 backstop + cross-tenant-write
+--   (M1-M12, M12 new at SELF-242) + 1 UPSERT reassign (UP1a) + 1 corrupt-the-control (X1) + 1
+--   anon zero-grant (G1) + 2 tenant-cascade (CASC1a-CASC1b) = 39.
 -- =====================================================================
 
 begin;
@@ -151,7 +155,7 @@ begin;
 -- shared verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(38);
+select plan(39);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb, _rls.tenant_c() as tc \gset
@@ -596,6 +600,40 @@ select is(
 select is(_rls.count_as(:'tb'::uuid, 'aal2', format('select count(*) from pfin.planning_target where users_id = %L', :'ta')),
   0::bigint,
   '(M11) cross-tenant-at-aal2: intruder B, EVEN claiming aal2, STILL sees 0 of A''s rows -- the aal conjunct is ANDed with the tenant predicate, never replaces it; MFA strength never weakens another tenant''s fence');
+
+-- (M12) ⭐ QA FINDING leg (SELF-242 review): cross-tenant DELETE -- B (none-policy,
+--       claiming aal2) targets A's REAL sub_cat_id (a_sub, 25.00 from BLOCK 1,
+--       untouched until BLOCK UP below) with a DELETE, not a SELECT. (M9/M10)
+--       only exercise planning_target_delete's aal2 backstop on D's OWN row;
+--       (M11) only exercises a cross-tenant SELECT. Neither proves a
+--       cross-tenant DELETE path is fenced -- a battery asserting only
+--       same-tenant aal2-gating and cross-tenant READ isolation for this
+--       policy would go green while a cross-tenant DELETE stayed unexercised
+--       (the header box's own caution, applied to the fourth verb).
+--       ⭐ EMPIRICALLY VERIFIED MECHANISM (corrects this test's own first-draft
+--       assumption, in the L2a/M5 self-correcting tradition this file already
+--       keeps): a DELETE requires its target row to be visible per BOTH
+--       planning_target_delete's OWN USING clause AND planning_target_select's
+--       USING clause -- Postgres ANDs them, since a row must be "seen" (SELECT
+--       policy) to be removed (DELETE policy). Corrupt-the-control (manual,
+--       off-file, against a scratch DB) confirmed BOTH tenant predicates are
+--       INDEPENDENTLY sufficient: `alter policy planning_target_delete ...
+--       using (true)` ALONE still left this cross-tenant DELETE at 0 rows
+--       (blocked by SELECT's own clause); restoring DELETE's clause and
+--       instead opening ONLY planning_target_select to `using (true)` ALSO
+--       still blocked it. Only opening BOTH admits the cross-tenant DELETE.
+--       This assertion is therefore RED only if BOTH tenant predicates were
+--       dropped together -- it does not isolate DELETE's own clause the way
+--       (M9)/(M10) isolate its aal2 half, and that is stated rather than
+--       overclaimed.
+select _rls.set_tenant_aal(:'tb'::uuid, 'aal2');
+delete from pfin.planning_target where sub_cat_id = :a_sub;
+select set_config('role', 'postgres', true);
+select is(
+  (select target_percent from pfin.planning_target where users_id = :'ta' and sub_cat_id = :a_sub),
+  25.00::numeric(5,2),
+  '(M12) cross-tenant DELETE: intruder B (none-policy, claiming aal2) targets A''s REAL sub_cat_id (a_sub) with a DELETE -- BOTH planning_target_select''s AND planning_target_delete''s own tenant predicates independently block it (a DELETE requires SELECT-policy visibility of its target -- Postgres-verified, see comment above); A''s row SURVIVES UNCHANGED at 25.00 -- RED only if BOTH tenant predicates were dropped together, independent of (M9/M10)''s same-tenant aal2-backstop proof and (M11)''s cross-tenant SELECT proof'
+);
 
 -- =====================================================================
 -- BLOCK UP (authenticated A) — UPSERT reassign path on the (users_id, sub_cat_id)
