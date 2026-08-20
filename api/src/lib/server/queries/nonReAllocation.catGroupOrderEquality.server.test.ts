@@ -32,8 +32,9 @@
 // (F/CTO, 2026-08-19, "DB asset-Cat set MINUS 'Real Estate' equals CAT_GROUP_ORDER... exclusion
 // named and justified inside the assertion itself") is preserved for the Real Estate half; the
 // Liabilities half moved from a named exclusion to a query predicate per SELF-239's 2026-08-20
-// ratified ACs, which this file implements — a formal ADR-058 amendment entry for this second
-// change is flagged to Architect/F/CTO at hand-off, not authored here. If a future ADR adds or
+// ratified ACs, which this file implements — recorded formally as ADR-058 Amendment 2, landing in
+// the same commit round as this file's own STRUCTURALLY_EXCLUDED_BY_ELEMENT_PREDICATE constant
+// below. If a future ADR adds or
 // removes an asset-domain Cat (Real Estate included), this file's `EXCLUDED_FROM_CAT_GROUP_ORDER`
 // constant is where that decision is recorded — not a silent widening of the filter.
 //
