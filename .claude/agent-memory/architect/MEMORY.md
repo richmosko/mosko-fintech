@@ -20,11 +20,14 @@
 - **[A stale worktree listing misreads the tree](reference_stale_worktree_listing_misreads_the_tree.md)** — `ls` answers about the ref you're parked at; use `git ls-tree origin/main`. Twice in one session; Sec's instance nearly became a false accusation.
 - **[A join's key decides its failure DIRECTION](reference_join_key_decides_failure_direction.md)** — surrogate-id keys fail CLOSED under an RLS regression; shared-vocabulary string keys fail OPEN and need an explicit `users_id` conjunct. ⚠ A fence justified as "explicit not inherited" invites its own removal.
 - [RLS qual privilege semantics](reference_rls_qual_privilege_semantics.md) — policy quals call by stored OID, so schema USAGE is never re-checked; a harness missing the bootstrap's REVOKEs is more permissive than prod.
+- **[Named vs predicate exclusion: opposite visibility instruments](reference_named_vs_predicate_exclusion_visibility.md)** — listing a predicate-excluded value in the named-exclusion set turns a LOUD failure silent; two constants + a COMPLEMENT leg (raw minus filtered == named set) collapses the totality trade; a watcher that exists is not armed.
 - **[CREATE OR REPLACE resets volatility](reference_create_or_replace_resets_volatility.md)** — silently erases an `ALTER … STABLE` pin, invisible to every value assertion; pin per SIGNATURE, and a STABLE caller of a VOLATILE callee is an unbacked promise.
 
 ## How to work
 
 - **[A ref handed over is not yours to advance](feedback_a_ref_handed_over_is_not_yours_to_advance.md)** — after "ready at `<sha>`", unknown review state is BLOCKING; a hold in flight can't stop a push already moving. ⚠ Never force-push back to the reviewed sha.
+
+- **[`temp/` is per-worktree, not shared](feedback_temp_is_per_worktree_not_shared.md)** — a hand-off written to the shared read anchor is invisible from a teammate's worktree; hand over an ABSOLUTE path + md5, and never answer a missing-artifact challenge by blessing the inline message.
 
 - **[A consequence list inherits its author's instrument](feedback_consequence_list_inherits_its_authors_instrument.md)** — re-measure over the instruments the ADR did NOT use (the live catalog, not the tree); and record an obligation whose referent doesn't exist.
 

@@ -71,6 +71,17 @@ committed, the only thing guarding the quote is a **prose** guard ("STORED SOURC
 with no watcher against a future `DECISIONS.md` copy-edit — acceptable for one quotation, but say so
 rather than let the byte-diff gate read as permanent protection.
 
+**⚠ The DISPATCH BRIEF is a cited source too, and it is the one I am least likely to check.** The
+SELF-242 brief named the canonical anchors as *"Lock 14 … Sec mods #1 typed-input / #2
+mass-assignment"*. Measured against `docs/SECURITY/index.html` §4.5 RT-23 and ADR-011 D18 verbatim:
+**mod #1 is `.strict()` typed-input validation + mass-assignment prevention — ONE mod — and mod #2 is
+the numeric-input sanitization battery.** The branch's own code numbering was right and the brief's
+was wrong, so reviewing "branch against brief" would have produced a finding against correct code.
+**Read the brief's own citations against canon before using them as the yardstick**, and report brief
+drift back in the verdict — a mis-numbered mod in a dispatch is how a fence gets attributed to the
+wrong layer three artifacts downstream. Related:
+[[uniform-response-rationale-vs-built-predicate]].
+
 **How to apply:** on every verbatim-vs-paraphrase axis check, flatten the cited file
 (`sed 's/^--*//' | tr '\n' ' ' | tr -s ' '`) so SQL-comment and string-concatenation line wrapping
 doesn't produce false negatives, then grep the quoted fragment in **the cited artifact first**. A zero
