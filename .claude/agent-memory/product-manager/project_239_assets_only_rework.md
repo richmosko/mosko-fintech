@@ -1,0 +1,12 @@
+---
+name: self-239-assets-only-rework
+description: SELF-239 v2 AC set delivered 2026-08-20 (11 ACs, awaiting F/CTO ratify); PRD §2.2.2 amendment OWED (still shows Liabilities post assets-only ruling); $ReAlloc must render neutral per design fence 1
+metadata:
+  type: project
+---
+
+Delivered the SELF-239 replacement AC set (11 ACs) to team-lead 2026-08-20 for F/CTO ratify — encodes the 08-18 assets-only ruling (four Cat groups: Cash → Bonds → Marketable Securities → Alternatives; Liabilities out of BOTH row set and denominator), Ruling 2 option (A) (TotalNonRE <= 0 → ratio columns UNSET, $Alloc always, one line of copy, mandatory TotalNonRE<0 watcher fixture that is NOT Σ%=100), and ADR-058 D3 F4 cond. 3 (same `element='asset'` predicate for row set and denominator in the same query, or paired Σ(rendered)=denominator assertion; predicate lives in the CONSUMER, never inside fn_subcat_market_value).
+
+**Why:** old Linear AC set was stale on four counts — Equity→Marketable Securities rename (082/083), Liabilities in the render order, pre-ruling AC2/AC4 shape, PLUS a fourth I found: old AC4's green/red $ReAlloc coding violates locked design-system-spec §5 fence 1 (".val-target keeps target/$ReAlloc/%Target cells neutral; no over-under component or token exists").
+
+**How to apply:** (1) **PRD §2.2.2 amendment is OWED (PM doc PR, separate from 239):** live PRD still reads "plus Liabilities as a V1 extension for leverage management"; §2.2.1 still routes Liability Balances to "the Liabilities Cat group (§2.2.2)"; Appendix B flag (e) still carries leverage semantics; amendment must say where Liability Balances now surfaces. **PR scope also includes BACKLOG §7.20 item 2's sentence** (its §2.2.2 rendering target for the Liability Balances routing is superseded; the routing itself stands), and the PR body **cites §7.19 class (c)** and discharges this instance against it (confirmed with team-lead/Sec 2026-08-20: §7.19 covers the class, no per-instance §7 booking needed). (2) Open PM judgments riding the ratify: Unsorted (element-less) row included in both row set and denominator; %Target in the unset list per ruling verbatim; AC6's <=0 includes zero (supersedes SELF-238's render-zeros-at-zero). (3) Any future allocation-surface AC: check design fence 1 before mandating value colors. Related: [[cash-bucket-granularity]], [[target-denominator-beta-ruling]], [[ac-signatures-copied-not-composed]].
