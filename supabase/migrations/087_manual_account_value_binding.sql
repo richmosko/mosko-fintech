@@ -498,7 +498,13 @@ begin
     -- cost_basis 10.00). The predicate is <= 0 rather than = 0 defensively; with
     -- v_basis > 0 and v_qty > 0 established the quotient cannot be negative, so
     -- the reachable case is exactly the zero one.
-    if round(v_basis / v_qty, 4) <= 0 then
+    -- ⚠ TESTS v_price, THE LOCAL ASSIGNED ABOVE — not a second round(...) of the
+    -- same expression (Sec, SELF-325 delta review). An earlier draft recomputed
+    -- it, which is two copies of one rule and exactly the drift this file's own
+    -- single-authority discipline forbids elsewhere: the fence and the value
+    -- actually written must be the same number by construction, not by two
+    -- expressions agreeing.
+    if v_price <= 0 then
       raise exception
         'p_positions[%] derives a price of 0.0000 and would value at zero: cost_basis % over quantity % is below the numeric(20,4) price grain of pfin.eod_price (a per-unit price under 0.00005, i.e. quantity > 20000 x cost_basis). The position would be stored with a price row that exists but is worthless, so its value would vanish from NAV silently. Re-express the position with a smaller quantity or a larger cost_basis (SELF-325 / 087 F3).',
         v_idx, v_basis, v_qty;

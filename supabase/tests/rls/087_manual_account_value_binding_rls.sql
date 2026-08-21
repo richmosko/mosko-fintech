@@ -97,7 +97,7 @@
 --       ⚠ quantity=1e400 is NO LONGER in this category (see above) — only
 --       cost_basis=1e400 still reaches the column layer this way, since a
 --       huge cost_basis over a small quantity does not zero the ratio.
---     - quantity=1e20 / cost_basis=1e16 ((l5-q-column-overflow)) -> 017's
+--     - quantity=1e20 / cost_basis=9e15 ((l5-q-column-overflow)) -> 017's
 --       numeric(28,8) QUANTITY column coercion, SQLSTATE 22003. A DIFFERENT
 --       column from the cost_basis case above (20 vs 16 integer digits) — this
 --       is the leg that restores quantity-column observability after
@@ -625,9 +625,11 @@ select throws_like(
 --   this file (Architect, caught before commit). (l5-q-column-overflow)
 --   below restores it via the narrow fixture window where the fence does
 --   NOT win: quantity must clear numeric(28,8)'s ~1e20 ceiling while
---   cost_basis stays under the zero-price floor (cost_basis >= quantity x
---   0.00005) AND under its OWN numeric(20,4) ~1e16 ceiling — measured window
---   at quantity=1e20: cost_basis in [5e15, 1e16].
+--   cost_basis stays at or above the zero-price floor (cost_basis >= quantity
+--   x 0.00005) AND strictly below its OWN numeric(20,4) ~1e16 ceiling —
+--   SEC-VERIFIED via empirical probe (`select 1e16::numeric(20,4)` errors:
+--   numeric field overflow) that 1e16 itself is OUTSIDE this window, not the
+--   boundary — measured window at quantity=1e20: cost_basis in [5e15, 1e16).
 select throws_like(
   $$ select pfin.fn_create_manual_account('L5 rej qty overflow','depository','household','taxable',
        10, '2026-04-05', '[{"asset_type":"equity","name":"qty-overflow","quantity":1e400,"cost_basis":10}]'::jsonb) $$,
@@ -637,17 +639,28 @@ select throws_like(
 
 -- (l5-q-column-overflow) restores the quantity-column (numeric(28,8))
 --   observer the re-target above removed. quantity=1e20 clears the column's
---   ~1e20 integer-digit ceiling; cost_basis=1e16 sits inside the narrow
---   window that BOTH clears the zero-price floor (1e16 >= 1e20 x 0.00005 =
---   5e15) AND stays under cost_basis's OWN numeric(20,4) ~1e16 ceiling —
---   measured by Architect: 22003, the fence does NOT fire here. NOT
---   body-owned; assert rejection only, per the same discipline as every
---   other catalog-owned leg in this file.
+--   ~1e20 integer-digit ceiling; cost_basis=9e15 sits inside the narrow
+--   HALF-OPEN window [5e15, 1e16) that BOTH clears the zero-price floor
+--   (9e15 >= 1e20 x 0.00005 = 5e15, ratio 9e-5 rounds to 0.0001) AND stays
+--   STRICTLY BELOW cost_basis's OWN numeric(20,4) ~1e16 ceiling. ⚠
+--   SEC-CAUGHT, EMPIRICALLY VERIFIED (not just derived): the window's upper
+--   bound is EXCLUSIVE — `select 1e16::numeric(20,4)` itself throws numeric
+--   field overflow (needs 17 integer digits; the column allows 16), so 1e16
+--   was never a valid interior point, let alone a safe one to sit at. The
+--   original fixture (cost_basis=1e16) happened to still produce 22003 only
+--   because cost_basis's OWN overflow and quantity's overflow are evaluated
+--   in the same INSERT's target list — it was observing the quantity column
+--   BY ACCIDENT of evaluation order, not by construction. cost_basis=9e15 is
+--   the ONLY overflowing value in this call, so the 22003 below is
+--   unambiguously the quantity column. Measured: 22003, the fence does NOT
+--   fire here (9e15/1e20 clears the zero-price floor). NOT body-owned;
+--   assert rejection only, per the same discipline as every other
+--   catalog-owned leg in this file.
 select throws_ok(
   $$ select pfin.fn_create_manual_account('L5 rej qty column overflow','depository','household','taxable',
-       10, '2026-04-05', '[{"asset_type":"equity","name":"qty-col-overflow","quantity":1e20,"cost_basis":1e16}]'::jsonb) $$,
+       10, '2026-04-05', '[{"asset_type":"equity","name":"qty-col-overflow","quantity":1e20,"cost_basis":9e15}]'::jsonb) $$,
   '22003', null,
-  '(l5-q-column-overflow) quantity=1e20 (clears 017''s numeric(28,8) ceiling) with cost_basis=1e16 (inside the narrow window that also clears the zero-price floor) rejected at 22003 — restores independent observation of the quantity column, which (l5-q-overflow)''s re-target left uncovered'
+  '(l5-q-column-overflow) quantity=1e20 (clears 017''s numeric(28,8) ceiling) with cost_basis=9e15 (inside the narrow half-open window [5e15,1e16) that also clears the zero-price floor, and is the ONLY overflowing value in this call — unambiguously the quantity column) rejected at 22003 — restores independent observation of the quantity column, which (l5-q-overflow)''s re-target left uncovered'
 );
 
 -- cost_basis: mirror the same 9-variant matrix.
