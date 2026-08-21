@@ -49,15 +49,24 @@ export interface UsEquityRow {
 	dollar_target: number | null;
 	dollar_alloc: number;
 	dollar_realloc: number | null;
-	/** OPTIONAL, tri-state — forward-declared per nonre-allocation.ts's `AllocationRow.is_stale`
-	 *  precedent (ADR-013 D1 "illustrative, not exhaustive"). UNDEFINED today: Backend's
-	 *  usEquityAllocation.ts (SELF-240) has no per-row staleness join yet (same gap
-	 *  nonReAllocation.ts has for §2.2.2) — this field is forward-declared so the row-tint
-	 *  machinery in UsEquityAllocationTable.svelte is ready the moment that join lands (flagged
-	 *  to Backend/team-lead at hand-off, same as §2.2.2's own open item). Render boundary
-	 *  normalizes `undefined` to UNKNOWN via the SHARED `staleDisplayState()` helper
-	 *  (reused from nonre-allocation.ts, not reimplemented) — never silently "fresh." */
-	is_stale?: boolean | null;
+	/** REQUIRED, tri-state — mirrors `AllocationRow.is_stale`'s own SELF-330 tightening
+	 *  (nonre-allocation.ts). LIVE as of SELF-243 (2026-08-20, Backend delivery, verified against
+	 *  usEquityAllocation.ts in this same worktree — MD5 675b3ad3a91f068bef3f2a6ce1ddbf64):
+	 *  `computeUsEquityAllocation` now folds `subCatAccountIds` through `staleAccountIds` into an
+	 *  explicit `true | false | null` on every row, reusing `nonReAllocation.ts`'s
+	 *  `loadSubCatContributors` bridge (now exported) rather than forking it — never `undefined`.
+	 *  Tightened from optional to required to match: the compiler is the watcher for a future call
+	 *  site that forgets to supply it, same discipline as the §2.2.2 tightening.
+	 *
+	 *  ⚠ NOT YET WIRED end-to-end: `loadUsEquityAllocation`'s new `staleLinkedSourceIds` param
+	 *  still defaults to `null` at every call site — `allocation/us-equity/+page.server.ts` does
+	 *  not yet pass a real value (holding, per team-lead, on the open AC3/AC4 tooltip-account-name
+	 *  ruling). Until that route wire lands, every row's `is_stale` resolves to `null` (honest
+	 *  UNKNOWN), never a false "fresh" — same posture as the pre-tightening dormant state, just
+	 *  from the loader boundary instead of the type. Render boundary still normalizes a stray
+	 *  `undefined` to UNKNOWN via the SHARED `staleDisplayState()` helper (reused from
+	 *  nonre-allocation.ts, not reimplemented) as defense-in-depth. */
+	is_stale: boolean | null;
 }
 
 export interface UsEquityTotalRow {

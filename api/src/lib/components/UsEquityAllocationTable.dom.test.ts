@@ -25,6 +25,10 @@ function row(over: Partial<UsEquityRow> & { sub_cat: string }): UsEquityRow {
 		dollar_target: 0,
 		dollar_alloc: 0,
 		dollar_realloc: 0,
+		// SELF-243: is_stale is now REQUIRED on UsEquityRow (mirrors AllocationRow's own SELF-330
+		// tightening) — default UNKNOWN (null), matching every fixture row that doesn't explicitly
+		// exercise the stale/fresh branches.
+		is_stale: null,
 		...over
 	};
 }

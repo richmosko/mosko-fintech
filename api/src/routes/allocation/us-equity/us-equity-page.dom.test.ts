@@ -42,7 +42,10 @@ const POPULATED: UsEquityAllocation = {
 		pct_alloc: 8.33,
 		dollar_target: 500,
 		dollar_alloc: 833,
-		dollar_realloc: -333
+		dollar_realloc: -333,
+		// SELF-243: is_stale is now REQUIRED on UsEquityRow — this fixture doesn't exercise
+		// staleness (that's UsEquityAllocationTable.dom.test.ts's job), so UNKNOWN (null) is neutral.
+		is_stale: null
 	})),
 	total: { dollar_alloc: 9996, pct_alloc: 100, pct_target: 100, dollar_target: 6000, dollar_realloc: 0 }
 };
