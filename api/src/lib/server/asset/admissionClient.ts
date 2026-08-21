@@ -7,13 +7,12 @@
 // tenant + the shared-secret header. It lives in `src/lib/server/**` (ARCH §4.1 allowlist) —
 // never ships to the browser.
 //
-// STRUCTURAL NOTE (mirrors the shipped precedent — deliberately, per Architect's design temp/
-// architect-purchase-path-addendum.md §2.1: "App side is a third admissionClient.ts, alongside
-// api/src/lib/server/reauth/admissionClient.ts and api/src/lib/server/simplefin/admissionClient.ts
-// — same WORKER_ADMISSION_SHARED_SECRET / WORKER_ADMISSION_URL pattern"): this copies the
-// callWorker/admissionConfig transport shape rather than importing a shared module, same
-// deferred-cleanup rationale as the SimpleFIN leg (keep the shipped, Sec-reviewed modules
-// untouched; a shared-transport lift is a later follow-up).
+// STRUCTURAL NOTE (mirrors the shipped precedent, deliberately): this is a THIRD
+// admissionClient.ts, alongside api/src/lib/server/reauth/admissionClient.ts and
+// api/src/lib/server/simplefin/admissionClient.ts — same WORKER_ADMISSION_SHARED_SECRET /
+// WORKER_ADMISSION_URL pattern. It copies the callWorker/admissionConfig transport shape rather
+// than importing a shared module, same deferred-cleanup rationale as the SimpleFIN leg (keep the
+// shipped, Sec-reviewed modules untouched; a shared-transport lift is a later follow-up).
 //
 // SECURITY POSTURE
 //  • Holds NO elevated service_role key — only the WORKER_ADMISSION_SHARED_SECRET. This keeps
@@ -23,7 +22,9 @@
 //    validated session (auth.uid() via safeGetSession). It is NEVER read from a request body.
 //    `buildResolvePayload()` is the pure, deterministic seam that proves the value sent to the
 //    worker is the session's, not the body's. It also doubles as the audit subject + future
-//    rate-limit key per the addendum §2.4 clause-(c)/(d) — no rate-limit control exists today.
+//    rate-limit key — no rate-limit control exists today (routed to Sec at SELF-325 joint
+//    review; the mint path became browser-reachable at this module, so the exposure is
+//    user-driven now rather than server-to-server only).
 //  • C6-5 redaction: this module never logs the request/response body. Operational logs carry
 //    the route + upstream status ONLY.
 //  • Transport is the internal Docker network only (http://provider-sync:8081); the worker is

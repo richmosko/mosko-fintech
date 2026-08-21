@@ -3,13 +3,16 @@
 //
 // SOURCE OF TRUTH: Frontend mirrors this client-side (Lock 14) and must never ship a looser
 // schema. `.strict()` is the mass-assignment fence (Lock 14 mod #1). Pattern/length constraints
-// on symbol/cusip + the asset_type enum are the namespace-pollution boundary the Architect
-// design calls a DESIGN CONDITION, not polish (temp/architect-purchase-path-addendum.md §2.3 —
-// "a user-triggered write into the all-tenants-readable global namespace"). This is the SECOND
-// of the "two boundaries" the addendum names (§7): the worker's own /asset/resolve Zod schema
-// (workers/provider-sync/src/http/admissionServer.ts) is the first, structurally identical,
-// defense-in-depth at the internal-network hop — both independently enforce the same
-// DDL-adjacent shape rather than trusting the other boundary to have already done so.
+// on symbol/cusip + the asset_type enum are a DESIGN CONDITION, not polish: this route is a
+// user-triggered write into the all-tenants-readable global namespace, and a global asset with
+// `pricing_source='manual_valuation'` can be priced by nobody (019's eod_price_insert requires
+// ownership; a global row is owned by nobody) — so admitting a personal-asset type here would
+// mint a permanently unpriceable, unrepairable row.
+//
+// TWO BOUNDARIES enforce this same DDL-adjacent shape independently, neither trusting the other
+// to have already done so: this schema, and the worker's own /asset/resolve Zod schema
+// (workers/provider-sync/src/http/admissionServer.ts) — structurally identical, defense-in-depth
+// at the internal-network hop.
 //
 // ASSET_TYPE IS THE NARROW RESOLVABLE_ASSET_TYPES SET, NOT THE FULL 016 VOCAB (⚠ CORRECTED
 // 2026-08-21 — Architect ruling, team-lead-confirmed; an earlier version of this schema used the

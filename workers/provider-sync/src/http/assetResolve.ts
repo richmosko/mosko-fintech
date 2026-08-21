@@ -3,27 +3,26 @@
 // A NEW route on the EXISTING RT-27 admission surface (POST /asset/resolve) — NOT a new §10
 // instance, per the in-tree precedent admissionServer.ts already documents for the SimpleFIN
 // leg-S route: same private-bind listener, same CA-6 constant-time shared-secret gate, same
-// session-derived tenant convention. See the Architect design (temp/architect-purchase-path-
-// addendum.md §2.1-§2.4, §4) for the full D1/§10/DEFINER assessment — clean on all three axes
-// because this reuses the existing service_role identity + the existing 020 grant; no new
-// privileged surface is created.
+// session-derived tenant convention. Clean on the §10/DEFINER axes because this reuses the
+// existing service_role identity + the existing 020 grant; no new privileged surface is created.
+// The D1 assessment is its own section below (ADR-011 DECISION 1).
 //
 // THIN WRAPPER (load-bearing, not a style choice): this module does NOT re-implement asset
 // resolution. It opens a withServiceRole() transaction on a tenant-bound client and delegates
 // to the EXISTING resolveSecurityId (../ingest/resolution.ts) — a second copy of the cusip-
 // first/symbol-fallback/ON CONFLICT key order is a known drift surface (the repo has already
-// paid for one instance of this at 078; the addendum names it explicitly). pricingSourceForAssetType
+// paid for one instance of this at 078). pricingSourceForAssetType
 // is reused UNCHANGED so a user-minted asset and a Plaid-minted asset are indistinguishable
 // downstream — introducing a distinguishing value here would re-fork what global-first
 // resolution exists to unify.
 //
 // TENANT BINDING (C6-3 convention, mirrors every other leg on this server): `ownerUserId` is
 // accepted ONLY from the shared-secret-authed internal call's body; the worker exposes no
-// browser-reachable field. Per the addendum §2.4 clause-(c): a GLOBAL asset row (users_id IS
-// NULL) has no tenant to bind incorrectly — the strongest security property of this route — but
-// `ownerUserId` is still required and still forwarded, because it is the audit subject (clause
-// (d)) and the natural future rate-limit key (no rate-limit control exists today; flagged to Sec
-// per the addendum §2.3, not built here).
+// browser-reachable field. Per ADR-011 Decision 1 clause (c) (see the full assessment below): a
+// GLOBAL asset row (users_id IS NULL) has no tenant to bind incorrectly — the strongest security
+// property of this route — but `ownerUserId` is still required and still forwarded, because it is
+// the audit subject (clause (d)) and the natural future rate-limit key (no rate-limit control
+// exists today; flagged to Sec at SELF-325 joint review, not built here).
 //
 // ADR-011 DECISION 1 — THE FOUR CLAUSES, READ LIVE HERE (⚠ this is the surface the clauses
 // apply to — NOT `pfin.fn_create_manual_purchase` / 088, which is a JWT-bearing INVOKER call D1
@@ -44,9 +43,10 @@
 //       recommendation (i), A2-style, mirroring 088's own "AUDIT FORWARD-HOOK" shape): when that
 //       infra lands, the audit row belongs HERE — this resolve-or-mint call, keyed by
 //       `ownerUserId` as the tenant-resolution subject and `assetId` as the resulting row. Until
-//       then this deferral is NOT discharged by worker log lines (C6-5's route+status logging is
-//       operational diagnostics, not a forensic audit trail, and the addendum explicitly rules
-//       out presenting it as satisfying (d)). Sec accepts-or-overrides this at joint-review.
+//       then this deferral is NOT discharged by worker log lines: C6-5's route+status logging is
+//       operational diagnostics, not a forensic audit trail, and ADR-011 Decision 1 clause (d)
+//       requires an EXPLICIT audit log — a diagnostic log line is not that, whatever its content.
+//       Sec accepts-or-overrides this at joint-review.
 //
 // REDACTION (C6-5): request/response bodies are never logged; the route layer (admissionServer.ts)
 // logs route + coarse outcome only.

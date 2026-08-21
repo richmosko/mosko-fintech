@@ -146,12 +146,15 @@ const manualSyncBodySchema = z
 
 // ── SELF-325 asset-resolve leg — a NEW route on this SAME admission server (private-bind +
 //    shared-secret gate + session-derived tenant, identical to every other leg here). NOT a new
-//    §10 instance (Architect design temp/architect-purchase-path-addendum.md §2.1/§4): reuses the
-//    existing withServiceRole() identity + the existing 020 grant, no new privileged surface.
-//    NAMESPACE-POLLUTION boundary validation (addendum §2.3 — a design condition, not polish):
-//    symbol/cusip constrained by pattern+length, name length-bounded. At least one of symbol/cusip
-//    is required — a blank/blank resolve has no identity to bind a purchase to. `.strict()` —
-//    mass-assignment fence (Lock 14 mod #1).
+//    §10 instance per ADR-011 Decision 4 and the SAME in-file precedent the leg-S SimpleFIN claim
+//    route above already establishes for this server ("A new ROUTE on the RT-27 admission surface
+//    (NOT a new §10 instance)"): reuses the existing withServiceRole() identity + the existing 020
+//    grant, no new privileged surface.
+//    NAMESPACE-POLLUTION boundary validation — a design condition, not polish, because this route
+//    is a user-triggered write into the all-tenants-readable global namespace: symbol/cusip
+//    constrained by pattern+length, name length-bounded. At least one of symbol/cusip is required
+//    — a blank/blank resolve has no identity to bind a purchase to. `.strict()` — mass-assignment
+//    fence (Lock 14 mod #1).
 //
 //    ⚠ ASSET_TYPE IS THE NARROW 9-VALUE RESOLVABLE SET, NOT THE FULL 016 VOCAB — CORRECTED
 //    2026-08-21 (Architect ruling, team-lead-confirmed). An earlier version of this schema

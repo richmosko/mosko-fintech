@@ -1,6 +1,6 @@
 // assetResolve.test.ts — SELF-325 productionAssetResolveDeps wiring. Asserts the THIN-WRAPPER
 // property structurally: the module calls the EXISTING resolveSecurityId (never a re-implemented
-// copy of the key order — the addendum's named drift surface), opens a withServiceRole()
+// copy of the key order — the repo's named drift surface at 078), opens a withServiceRole()
 // transaction on a tenant-bound client, and always closes the client (even on failure).
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
