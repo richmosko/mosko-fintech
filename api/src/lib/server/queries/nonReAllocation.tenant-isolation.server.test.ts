@@ -88,6 +88,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { SignJWT } from 'jose';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { loadNonReAllocation, type NonReAllocation } from './nonReAllocation';
+import { EMPTY_STALE_LINKED_SOURCE_IDS } from './navComposition';
 import { unsafeAsOfForTest } from '$lib/server/time/asOf';
 
 const POSTGREST_URL = process.env.QA_SELF238_POSTGREST_URL;
@@ -153,8 +154,8 @@ describe.skipIf(!VENUE_AVAILABLE)(
 		beforeAll(async () => {
 			const clientA = await makeClientFor(TENANT_A_ID);
 			const clientB = await makeClientFor(TENANT_B_ID);
-			const resultA = await loadNonReAllocation(clientA, AS_OF);
-			const resultB = await loadNonReAllocation(clientB, AS_OF);
+			const resultA = await loadNonReAllocation(clientA, AS_OF, EMPTY_STALE_LINKED_SOURCE_IDS);
+			const resultB = await loadNonReAllocation(clientB, AS_OF, EMPTY_STALE_LINKED_SOURCE_IDS);
 			if (!resultA.ok || !resultA.data) {
 				throw new Error(
 					`fixture/venue problem: tenant A's load failed (ok=${resultA.ok}) — check the required fixture SQL ran and QA_SELF238_POSTGREST_URL points at the right DB, before doubting this test`
