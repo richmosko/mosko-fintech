@@ -38,7 +38,12 @@ function makeSupabase(opts: {
 	taxonomyData?: unknown;
 	taxonomyError?: { message: string } | null;
 }) {
-	const rpc = vi.fn(async () => ({ data: opts.rpcData ?? [], error: opts.rpcError ?? null }));
+	// Typed params (name, args) — not because the body reads them (it returns the same canned
+	// response regardless of which RPC name was called, unchanged behavior), but so `rpc.mock.calls`
+	// infers as `[string, unknown][]` rather than `[][]`; the SELF-244 null-arm test below indexes
+	// into a call's first element to distinguish `fn_subcat_market_value` from
+	// `fn_subcat_contributors`, which an untyped zero-arg mock can't express.
+	const rpc = vi.fn(async (_fnName: string, _args?: unknown) => ({ data: opts.rpcData ?? [], error: opts.rpcError ?? null }));
 	const targetSelect = vi.fn(async () => ({ data: opts.targetData ?? [], error: opts.targetError ?? null }));
 	const taxonomyIn = vi.fn(async () => ({ data: opts.taxonomyData ?? [], error: opts.taxonomyError ?? null }));
 	const taxonomySelect = vi.fn(() => ({ in: taxonomyIn }));
@@ -74,6 +79,39 @@ describe('loadUsEquityAllocation — I/O wiring', () => {
 		await loadUsEquityAllocation(client, AS_OF, EMPTY_STALE_LINKED_SOURCE_IDS);
 		expect(taxonomySelect).toHaveBeenCalledWith('id, sub_cat');
 		expect(taxonomyIn).toHaveBeenCalledWith('sub_cat', US_EQUITY_SUB_CATS);
+	});
+
+	// SELF-244 (Sec-flagged at SELF-243 hand-off, booked for the V1.2 close-gate battery):
+	// `staleLinkedSourceIds === null` (the caller's OWN root `046` read was itself unknown) must
+	// skip the contributor bridge ENTIRELY — `loadSubCatContributors` (hence the
+	// `fn_subcat_contributors` RPC, reused verbatim from nonReAllocation.ts) is never invoked.
+	// DISTINCT from every other test above passing `EMPTY_STALE_LINKED_SOURCE_IDS`: an
+	// empty-but-KNOWN Set still runs `loadSubCatContributors` (`staleLinkedSourceIds !== null` is
+	// true for an empty Set — see loadUsEquityAllocation's own `if` guard) — only the ABSENCE of a
+	// value (an unknown root) short-circuits before that call. `rpc` is the SAME mock both
+	// `fn_subcat_market_value` (substrate, via subcatMarketValue.ts) and `fn_subcat_contributors`
+	// (the bridge) call through, so asserting on the CALL NAME (not just a call count) is what
+	// proves the right one fired and the other didn't — mirrors nonReAllocation.io.test.ts's own
+	// SELF-244 case verbatim in structure.
+	it('staleLinkedSourceIds === null skips the contributor bridge entirely — fn_subcat_contributors is NEVER called', async () => {
+		const { client, rpc } = makeSupabase({
+			rpcData: [
+				{ sub_cat_id: 6, cat: 'Marketable Securities', sub_cat: 'US-06-Financials', market_value: 300 }
+			],
+			targetData: [],
+			taxonomyData: [{ id: 6, sub_cat: 'US-06-Financials' }]
+		});
+		const result = await loadUsEquityAllocation(client, AS_OF, null);
+		// the substrate read still succeeds — only the staleness bridge is skipped, never the
+		// table's actual $/% data.
+		expect(result.ok).toBe(true);
+		const contributorCalls = rpc.mock.calls.filter(([name]) => name === 'fn_subcat_contributors');
+		expect(contributorCalls).toEqual([]);
+		// every row's is_stale resolves to null (UNKNOWN) — never a silent false — proving the
+		// skip actually propagates through computeUsEquityAllocation's own short-circuit, not just
+		// that the RPC call was skipped in isolation.
+		const us06 = result.data?.rows.find((r) => r.sub_cat === 'US-06-Financials');
+		expect(us06?.is_stale).toBeNull();
 	});
 
 	it('degrades to ok:false when the shared substrate read fails (RPC error)', async () => {
