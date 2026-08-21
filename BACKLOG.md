@@ -11,7 +11,7 @@ Three-purpose backlog per [ADR-009](DECISIONS.md#adr-009) Decisions 4 + 7, [ADR-
 - STAGING promotion to Linear is verbatim, with the entry marked "Promoted to Linear at SELF-N" as durable historical reference.
 - **Exit rule (F/CTO, 2026-08-20 — the anti-breadcrumb ruling `## Pending` got, applied here):** an entry that becomes Done or decided-as-don't-do is reduced IN THE DISCHARGING PR to its header line (title + verdict + citation) plus any explicitly-live residual bullet. Bodies live in PR history. CHANGELOG.md is frozen and takes nothing.
 - §-numbers are FROZEN once assigned (ADRs, MILESTONES, and memories cite them by name); a discharged section keeps its number as a tombstone.
-- Last updated: 2026-08-20 (hygiene sweep: three-purpose header, §7 index, exit rule; "Linear overflow queue" section retired — its ADR-009 D7 flow scheme was superseded in practice by ADR-017 milestone-rotation; routing flags relocated to §5 tail).
+- Last updated: 2026-08-20 (V1.2/V1.3 promotion sweep, F/CTO-ordered: §7.25 item 1 promoted to Linear and reduced per the exit rule; §7.20 verified discharged — seed delta landed at `077`, drafting note consumed — and tombstoned; §7 index rows updated. Sweep result otherwise: zero V1.3 candidates in §7; earlier same-day hygiene sweep detail in the PR trail).
 
 ---
 
@@ -248,9 +248,10 @@ Three-purpose backlog per [ADR-009](DECISIONS.md#adr-009) Decisions 4 + 7, [ADR-
 | §7.7 | BOOKINGS | Close-gate joint-review findings (F-series) |
 | §7.8–§7.12 | BOOKINGS | Connection lifecycle · `is_active` landing · cron-liveness · 2026-08-11 findings · ex-`## Pending` carryover |
 | §7.13 | DISCHARGED | CoA design question — ✅ answered at ADR-058 (tombstone forwards) |
-| §7.14–§7.20 | BOOKINGS | Per-arc follow-ups 2026-08-12 → 2026-08-17 |
+| §7.14–§7.19 | BOOKINGS | Per-arc follow-ups 2026-08-12 → 2026-08-16 |
+| §7.20 | DISCHARGED | L1 cash-granularity landing residuals — ✅ seed delta at `077`; drafting note consumed (tombstone) |
 | §7.21 | DISCHARGED | 054-battery refinements — ✅ PR #488 (tombstone) |
-| §7.22–§7.25 | BOOKINGS | Per-arc follow-ups 2026-08-17 → 2026-08-20 |
+| §7.22–§7.25 | BOOKINGS | Per-arc follow-ups 2026-08-17 → 2026-08-20 (§7.25 item 1 promoted to Linear) |
 
 ### §7.1 — Architect substrate (Platform / Cross-cutting V1.x)
 
@@ -981,23 +982,9 @@ Three-purpose backlog per [ADR-009](DECISIONS.md#adr-009) Decisions 4 + 7, [ADR-
   5. Amendment lists are tracked artifacts (not `temp/`), one per doc, carrying the baseline sha.
 - **Dependencies.** None blocking. **Standing trigger points:** (i) before each milestone-rotation promotion (the §7→Linear promotion inherits the sweep of the entries it promotes — AC 3 runs at minimum); (ii) before any PRD-anchored parity claim is asserted in a ratify or ship-gate. A full pass (AC 1+2) is F/CTO-scheduled; the trigger-point minimum (AC 3) is not optional at those boundaries.
 
-### §7.20 — L1 cash-granularity ruling: landing residuals (2026-08-17)
+### §7.20 — L1 cash-granularity ruling: landing residuals (2026-08-17) — ✅ DISCHARGED (verified at the 2026-08-20 promotion sweep)
 
-*Source: F/CTO ruling 2026-08-17, verbatim: "Cash granularity = option (a), instrument-routed cash. Raw cash classifies once per currency into a bucket that must be labeled 'Cash' (or equivalent) — never FDIC/SPIC, because those names assert an insurance regime a catch-all doesn't honor. CD/T-Bill fill per-asset. Seed rows stay fillable, none pruned. (b) per-account classification stays V2." Ground truth: F/CTO inspected `Finance_Report_2026_04.pdf` p. 4 — the incumbent foots raw cash into ONE row, so the §3.3 impact is a label-mapping footnote, not a numeric carve-out. PRD §2.2.1/§2.2.2 body documentation landed with this entry; the §3.3 footnote was F/CTO-ratified and landed 2026-08-17. The ruling's "(or equivalent)" label was fixed as **"Cash Balances"** by F/CTO 2026-08-17 ("Cash Equivalents" was considered and rejected — the accounting term denotes exactly the instruments this bucket excludes).*
-
-**1. Seed delta: a "Cash Balances" raw-cash Sub-Cat in `taxonomy_default`.** [Architect authors the migration; PM spec below]
-
-- **Source.** The 041 seed's asset Cash Cat carries exactly four Sub-Cats (FDIC / SPIC / T-Bill / CD) — no raw-cash catch-all row ("Cash Balances" or otherwise) — and 009/041 make V1 taxonomy SEED-ONLY (no CRUD UI; the 041 INSERT path's sole V1 caller is the existence-guarded provisioning bootstrap). So the ruling's required bucket cannot exist for any user with zero seed change; a seed delta is REQUIRED. (DDL verified against 009/022/041/076 at `origin/main` = `e8e434a`.)
-- **AC (what the delta must achieve — Architect owns the how).**
-  1. One new row in `pfin.taxonomy_default`: `domain='asset'`, `cat='Cash'`, `sub_cat='Cash Balances'` (F/CTO-fixed 2026-08-17, superseding PM's `'Cash'` default), tax-neutral like the other asset rows, `display_order` slotting it first among the Cash rows, `notes` stating it is the per-currency raw-cash catch-all and asserts no insurance regime.
-  2. The four existing Cash Sub-Cat rows are untouched (ruling: none pruned; §3.3 strict Sub-Cat-enumeration equality forbids pruning regardless).
-  3. Reach: new users receive the row via the unchanged 041 provisioning statement. Already-provisioned users are NOT reached by first-access provisioning (041 existence-guard / GROWTH NOTE) — per 041, set-growth that must reach existing users is its own data-migration/backfill decision. Architect decides backfill-vs-`db reset` for the dev-only greenfield population and states the choice in the migration header.
-  4. Vehicle: a data migration (041: `taxonomy_default` content is migration-authored; "changing the default set later is a data migration").
-- **Dependencies.** None upstream. Downstream: SELF-238/240 AC drafting (item 2) does not block on the seed delta but the §2.2.2 Cash-row rendering semantics assume it lands before parity is asserted.
-
-**2. SELF-238/240 AC-drafting note — what the cash / `Unsorted` rows mean under the ruling.** [PM, at AC drafting]
-
-- Raw cash of non-liability account types (per 076 L1: one classification per user per currency via the currency-asset's single 022 junction row) foots into the "Cash Balances"-labeled Sub-Cat row of the §2.2.2 Cash Cat group once classified; FDIC / SPIC / T-Bill / CD rows carry per-asset-assigned holdings only. Liability-account cash is routed mechanically by `account_type` to the "Liability Balances" row of the Liabilities Cat group (F/CTO-ratified liability-routing package, 2026-08-17; realized at SELF-329) and never enters the per-currency classification. Unclassified non-liability raw cash surfaces in the derived `Unsorted` row (076 R2 emits the NULL-taxonomy row; SELF-238 renders it, never blocking per PRD §2.4.1). §2.2.3 (SELF-240, US Equity drill) carries no cash rows; the ruling's effect there is only that AC drafting no longer waits on the granularity question. The §7.19 AC-3 copied-not-composed rule applies to both drafts at drafting time.
+- *✅ **Item 1 (the "Cash Balances" seed delta) LANDED at migration `077_taxonomy_default_cash_balances.sql`** — its own header cites "BACKLOG §7.20 item 1" and it includes the already-provisioned-user backfill the AC left to Architect (the sibling `080` later added "Liability Balances"). **Item 2 (the SELF-238/240 AC-drafting note) was consumed** — SELF-238/240/241 ACs drafted and shipped. The ruling's canonical text and the fixed label live in PRD §2.2.1 / §2.2.2 and the §3.3 label-mapping footnote (all landed 2026-08-17). Bodies removed at the discharging PR per the exit rule; the PR trail is the record.*
 
 ### §7.21 — 054-battery refinements from the PR #485 Sec review (2026-08-17) — ✅ DISCHARGED at PR #488 (2026-08-17, rode the SELF-328 branch; Sec-verified)
 
@@ -1133,10 +1120,8 @@ Three-purpose backlog per [ADR-009](DECISIONS.md#adr-009) Decisions 4 + 7, [ADR-
 
 *Source: the PR #520 Sec joint-review (round-1 AMBER; F-2/F-3 dispositions finalized in the GREEN re-review) + Backend's F-3 reachability measurement (2026-08-20). F-1 (the degenerate-denominator render gate) was cleared IN-PR and is deliberately not booked here — its record is the fix itself plus the `us-equity-allocation.ts` header.*
 
-**1. §2.2.2 / §2.2.3 server degenerate-state contract reconciliation.** [decision item; Architect + Backend; Sec informed]
-- **Source.** Sec F-2 (PR #520): `computeNonReAllocation` guards on ONE domain denominator (`total_non_re > 0`) and nulls all four ratio columns TOGETHER; `computeUsEquityAllocation` uses TWO split `=== 0` NaN guards (`totalUsEquity` for `pct_alloc`; `sumTargets` for the three target columns) that do not null together and pass negatives through. The divergence is documented in `api/src/lib/us-equity-allocation.ts`'s header, which also states that file's render gate is **LOAD-BEARING, not belt-and-suspenders** — the asymmetry against `nonre-allocation.ts` a future mirror-lib author would otherwise flatten by copying whichever file they find first. Sec's options as recorded: (A) align the server core to `> 0` (touches landed SELF-240), (B) render-gate-only with the documented divergence (the shipped state), (C) tracked follow-up; Sec requires only durable recording and takes no position on which.
-- **AC.** An explicit ruling closing the divergence's OPEN status: either align the §2.2.3 core to the §2.2.2 contract (option A — a change to landed `computeUsEquityAllocation` + its fixtures), or ratify the divergence as permanent with the header comment as its canonical record (formalizing B). Either outcome discharges this entry; what does not is leaving it implicit.
-- **Dependencies.** None — decidable now. F/CTO at the #520 merge review preferred booking over touching landed code in-PR.
+**1. §2.2.2 / §2.2.3 server degenerate-state contract reconciliation.** [decision item; Architect + Backend; Sec informed] — **Promoted to Linear at SELF-332** (V1.2; 2026-08-20 F/CTO promotion sweep; Source / AC / Dependencies carried verbatim; AC identifiers verified in-tree at `cedbb95` per the §7.19 AC-3 promotion-time rule).
+- *Body removed at promotion per the exit rule; the Linear issue carries the verbatim spec and the PR trail is the record.*
 
 **2. Negative per-Sub-Cat `dollar_alloc`: honest-but-unmarked display + the untraced cash leg.** [product/data-quality; PM + Backend; books against the dormant per-row-staleness gap, NOT against the §2.2.3 table]
 - **Source.** Sec F-3 (narrowed in the GREEN re-review) + Backend's measurement: `pfin.account_trans.quantity` is SIGNED with no non-negative CHECK (verified across `017`/`034`/`005`); `fn_holdings_as_of` (`019`) filters only `quantity <> 0`, its own comment naming sync-lag/skew V-6 an accepted gap; `fn_subcat_market_value` (`076`) sums with no floor. An oversell or checkpoint/txn skew therefore lands a NEGATIVE Sub-Cat `market_value` straight into that row's `dollar_alloc`. With a POSITIVE total (the F-1 gate correctly silent), the row renders a negative `pct_alloc` arithmetically honestly but with NO signal distinguishing data artifact from intentional short — the schema cannot make that distinction (Sec: a product/UX + data-quality question, not a security control gap). The `<= 0` domain gate on the TOTAL already covers the total-denominator case for every contributing leg, including untraced ones — the payoff of a domain guard over an enumeration of causes.
