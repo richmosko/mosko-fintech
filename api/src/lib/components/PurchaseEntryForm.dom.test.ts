@@ -1,13 +1,19 @@
 // PurchaseEntryForm.dom.test.ts — SELF-325 manual-purchase entry surface.
 //
-// Scope: rendering + client-side behavior that does not require an actual network round
-// trip (Backend's `?/resolveAsset` / `?/createPurchase` actions were not yet authored as
-// of this writing — see the component's own EXPECTED CONTRACT header note). Covers:
+// Scope: rendering + client-side behavior, against the CONFIRMED contract (Backend,
+// SendMessage 2026-08-21; asset-type vocabulary split per F/CTO+Architect, same date).
+// Covers:
 //   - the F/CTO-required explicit fork ("market security" vs "personal asset")
+//   - the asset-type vocabulary split IS STRUCTURAL: the resolve picker never offers a
+//     personal type; the mint picker offers the full superset
 //   - the ticker-nudge (nudge, never block)
 //   - the live per-unit price preview
 //   - the BTO category readout (render-only, per the "Backend supplies it" brief)
-//   - the raw DOM form data set for each mode (hidden mode/security_id carriers present)
+//   - the resolve step's fetch call (mocked `fetch`) — success sets boundAssetId, a
+//     `{assetId: null}` 200 and a non-ok response both surface a visible error
+//   - the raw DOM form data set for the purchase form (hidden mode/security_id carriers
+//     present — the resolve step is a plain fetch, not a form action, so it has no
+//     equivalent raw-FormData assertion)
 //   - client-side validation blocking an invalid submit before any network call, using the
 //     SAME real-user-interaction + real-<form>-submit pattern SymbolClassifyRow.dom.test.ts
 //     established (no mocking of `$app/forms` needed — `use:enhance`'s synchronous callback
@@ -15,7 +21,7 @@
 //
 // @vitest-environment jsdom
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, fireEvent } from '@testing-library/svelte';
 import PurchaseEntryForm from './PurchaseEntryForm.svelte';
 import type { SelectableAssetOption } from '$lib/purchase-util';
@@ -89,6 +95,126 @@ describe('PurchaseEntryForm — fork toggle (F/CTO requirement: explicit market 
 		await fireEvent.click(getByRole('button', { name: "Don't see it? Look up a ticker or CUSIP" }));
 		expect(getByLabelText('Ticker symbol')).toBeTruthy();
 		expect(getByLabelText('CUSIP')).toBeTruthy();
+	});
+});
+
+describe('PurchaseEntryForm — asset-type vocabulary split is STRUCTURAL (F/CTO+Architect ruling, 2026-08-21)', () => {
+	it('the resolve step never offers a personal type (real_estate/vehicle/collectible/private) or currency as an <option>', async () => {
+		const { getByRole } = render(PurchaseEntryForm, { props: { selectableAssets: ASSETS } });
+		await fireEvent.click(getByRole('button', { name: "Don't see it? Look up a ticker or CUSIP" }));
+		const select = getByRole('combobox', { name: 'Asset type' }) as HTMLSelectElement;
+		const values = [...select.options].map((o) => o.value);
+		expect(values).toEqual(
+			expect.arrayContaining(['equity', 'etf', 'fund', 'money_market', 'bond', 'future', 'option', 'crypto', 'metal'])
+		);
+		for (const forbidden of ['real_estate', 'vehicle', 'collectible', 'private', 'currency']) {
+			expect(values).not.toContain(forbidden);
+		}
+	});
+
+	it('the personal-asset (mint) step DOES offer all 4 personal types (and the 9 resolvable ones), but never currency', async () => {
+		const { getByRole } = render(PurchaseEntryForm, { props: { selectableAssets: ASSETS } });
+		await fireEvent.click(getByRole('radio', { name: 'Personal asset' }));
+		const select = getByRole('combobox', { name: 'Asset type' }) as HTMLSelectElement;
+		const values = [...select.options].map((o) => o.value);
+		for (const t of ['real_estate', 'vehicle', 'collectible', 'private', 'equity', 'crypto']) {
+			expect(values).toContain(t);
+		}
+		expect(values).not.toContain('currency');
+	});
+});
+
+describe('PurchaseEntryForm — resolve step calls POST /api/asset/resolve (fetch+JSON, not a form action)', () => {
+	const originalFetch = globalThis.fetch;
+
+	beforeEach(() => {
+		globalThis.fetch = vi.fn();
+	});
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+		vi.restoreAllMocks();
+	});
+
+	it('a successful resolve POSTs the identified fields as JSON and binds the returned assetId', async () => {
+		(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+			ok: true,
+			json: async () => ({ assetId: 77 })
+		});
+		const { getByRole, getByLabelText, getByText, findByText } = render(PurchaseEntryForm, {
+			props: { selectableAssets: ASSETS }
+		});
+		await fireEvent.click(getByRole('button', { name: "Don't see it? Look up a ticker or CUSIP" }));
+		await fireEvent.input(getByLabelText('Ticker symbol'), { target: { value: 'MSFT' } });
+		await fireEvent.change(getByRole('combobox', { name: 'Asset type' }), { target: { value: 'equity' } });
+		await fireEvent.click(getByRole('button', { name: 'Look up' }));
+
+		expect(await findByText(/MSFT/)).toBeTruthy();
+		expect(globalThis.fetch).toHaveBeenCalledWith(
+			'/api/asset/resolve',
+			expect.objectContaining({
+				method: 'POST',
+				headers: expect.objectContaining({ 'content-type': 'application/json' })
+			})
+		);
+		const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+		const body = JSON.parse((call[1] as RequestInit).body as string);
+		expect(body).toEqual({ symbol: 'MSFT', cusip: null, asset_type: 'equity', name: null });
+		// Resolve succeeded -> the purchase form is now visible (identity settled).
+		expect(getByText(/Quantity/)).toBeTruthy();
+	});
+
+	it('a 200 with assetId: null shows a visible error instead of silently binding nothing', async () => {
+		(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+			ok: true,
+			json: async () => ({ assetId: null })
+		});
+		const { getByRole, getByLabelText, findByText } = render(PurchaseEntryForm, {
+			props: { selectableAssets: ASSETS }
+		});
+		await fireEvent.click(getByRole('button', { name: "Don't see it? Look up a ticker or CUSIP" }));
+		await fireEvent.input(getByLabelText('Ticker symbol'), { target: { value: 'ZZZZ' } });
+		await fireEvent.change(getByRole('combobox', { name: 'Asset type' }), { target: { value: 'equity' } });
+		await fireEvent.click(getByRole('button', { name: 'Look up' }));
+		expect(await findByText(/Couldn't find or create a match/)).toBeTruthy();
+	});
+
+	it('a non-ok response with a field error surfaces it on the asset_type field', async () => {
+		(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+			ok: false,
+			status: 400,
+			json: async () => ({ error: 'invalid_request', errors: { asset_type: ['Choose an asset type.'] } })
+		});
+		const { getByRole, getByLabelText, findByText } = render(PurchaseEntryForm, {
+			props: { selectableAssets: ASSETS }
+		});
+		await fireEvent.click(getByRole('button', { name: "Don't see it? Look up a ticker or CUSIP" }));
+		await fireEvent.input(getByLabelText('Ticker symbol'), { target: { value: 'MSFT' } });
+		await fireEvent.change(getByRole('combobox', { name: 'Asset type' }), { target: { value: 'equity' } });
+		await fireEvent.click(getByRole('button', { name: 'Look up' }));
+		expect(await findByText('Choose an asset type.')).toBeTruthy();
+	});
+
+	it('a network failure (fetch rejects) shows a visible error rather than throwing', async () => {
+		(globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('network down'));
+		const { getByRole, getByLabelText, findByText } = render(PurchaseEntryForm, {
+			props: { selectableAssets: ASSETS }
+		});
+		await fireEvent.click(getByRole('button', { name: "Don't see it? Look up a ticker or CUSIP" }));
+		await fireEvent.input(getByLabelText('Ticker symbol'), { target: { value: 'MSFT' } });
+		await fireEvent.change(getByRole('combobox', { name: 'Asset type' }), { target: { value: 'equity' } });
+		await fireEvent.click(getByRole('button', { name: 'Look up' }));
+		expect(await findByText(/Couldn't reach the server/)).toBeTruthy();
+	});
+
+	it('client-side validation (blank symbol AND cusip, valid asset_type) blocks the call before fetch is ever invoked', async () => {
+		const { getByRole, findByText } = render(PurchaseEntryForm, { props: { selectableAssets: ASSETS } });
+		await fireEvent.click(getByRole('button', { name: "Don't see it? Look up a ticker or CUSIP" }));
+		// Asset type set to a valid value so ONLY the symbol/cusip refine trips — isolates the
+		// assertion from the separate (also-real) empty-asset_type rejection.
+		await fireEvent.change(getByRole('combobox', { name: 'Asset type' }), { target: { value: 'equity' } });
+		await fireEvent.click(getByRole('button', { name: 'Look up' }));
+		expect(await findByText('Enter a ticker symbol or a CUSIP.')).toBeTruthy();
+		expect(globalThis.fetch).not.toHaveBeenCalled();
 	});
 });
 
@@ -206,7 +332,7 @@ describe('PurchaseEntryForm — client validation blocks an invalid submit befor
 		await fireEvent.input(getByLabelText('Quantity', { exact: false }), { target: { value: '10' } });
 		await fireEvent.input(getByLabelText('Total cost', { exact: false }), { target: { value: '1000' } });
 		await fireEvent.click(getByRole('button', { name: 'Record purchase' }));
-		expect(await findByText('Name this asset.')).toBeTruthy();
+		expect(await findByText('Name is required.')).toBeTruthy();
 	});
 
 	it('submitting with a quantity/cost ratio that derives to 0.0000 is refused client-side with an explanatory message', async () => {

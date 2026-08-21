@@ -12,23 +12,34 @@
 	TWO-STEP FLOW for the market-security fork, mirroring 088's own BIND/MINT split:
 	  (1) IDENTIFY the security — either pick one already in `selectableAssets` (own + global;
 	      no network round trip needed, the RPC's own asset read does the rest), OR — for a
-	      ticker/CUSIP not yet in that list — a SEPARATE `<form>` posts to `?/resolveAsset`,
-	      which forwards to the provider-sync worker's /asset/resolve route (Backend's shipped
-	      7bcba2c pieces) and resolves-or-mints a GLOBAL pfin.asset row. Its result sets
-	      `boundAssetId`.
+	      ticker/CUSIP not yet in that list — `doResolve()` POSTs JSON to `/api/asset/resolve`
+	      (a plain fetch endpoint, NOT a SvelteKit form action — Backend, SendMessage
+	      2026-08-21: "a security lookup step the purchase form calls BEFORE it can submit,
+	      the same shape as an autocomplete/picker read"), which forwards to the provider-sync
+	      worker's /asset/resolve route and resolves-or-mints a GLOBAL pfin.asset row. Its
+	      result sets `boundAssetId`.
 	  (2) Once an asset is bound (existing pick OR resolve success), the PURCHASE form itself
 	      appears: quantity / total cost (with a derived per-unit price preview) / trade date /
-	      description / note, POSTing `mode: 'bind'` + `security_id` to `?/createPurchase`.
+	      description / note, POSTing `mode: 'bind'` + `security_id` to the EXISTING
+	      `accounts/[account_id]` route's `?/createPurchase` action (no new route).
 	The personal-asset (MINT) fork skips step (1) entirely — asset_type + asset_name (+ optional
 	symbol) are inline fields on the SAME purchase form, `mode: 'mint'`.
 
-	⚠ EXPECTED CONTRACT (api/CLAUDE.md precedent — SELF-242/SELF-241 built the same way): the
-	`?/resolveAsset` / `?/createPurchase` action names, and the exact shape of `?/createPurchase`'s
-	success payload, are Backend's to confirm — their form action was not yet authored when this
-	was built (their own 7bcba2c commit message says so). This component's `use:enhance` handlers
-	read `result.data` defensively (optional chaining, `?? {}` fallbacks) and were flagged to
-	Backend via SendMessage for exact-shape confirmation before merge; adjust the two action names
-	and the success-payload key names in ONE place each (search this file for "?/") if they differ.
+	⚠ ASSET-TYPE VOCABULARY SPLIT (F/CTO + Architect ruling, 2026-08-21, relayed by team-lead —
+	held until landed, now CONFIRMED at commit a9ba25e): `resolveAssetTypeOptions` (the identify
+	step's picker) offers ONLY `RESOLVABLE_ASSET_TYPES` — the 9 feed-priceable types.
+	`mintAssetTypeOptions` (the MINT fork's picker) offers `MINT_ASSET_TYPES` — the full 13,
+	including the 4 personal types (real_estate/vehicle/collectible/private). This makes the
+	house/car boundary STRUCTURAL, not merely labeled: a personal type is not a selectable
+	<option> in the resolve dropdown at all, so it cannot reach the resolve call through this
+	UI — see schemas/purchase.ts's header for why (routing a house through resolve would mint a
+	permanently unpriceable, unrepairable global row).
+
+	CONTRACT CONFIRMED (Backend, SendMessage 2026-08-21, superseding this file's earlier
+	EXPECTED-CONTRACT draft): action name `?/createPurchase` (guessed correctly), field names
+	un-prefixed (also guessed correctly), success payload `{ success, transId, securityId,
+	priced, price }` (also guessed correctly) — the ONE real correction was the resolve step's
+	transport (fetch+JSON, not a form action) and the vocabulary narrowing above.
 
 	BTO CATEGORY DEFAULT: 088's header names this an APP-LAYER decision, not the RPC's — "this
 	function does NOT default the category... the RECOMMENDATION is that the manual-purchase form
@@ -54,11 +65,11 @@
 	import UnpricedMarker from '$lib/components/UnpricedMarker.svelte';
 	import {
 		assetResolveSchema,
-		manualPurchaseSchema,
+		createPurchaseSchema,
 		looksLikeTicker,
 		fieldErrors
 	} from '$lib/schemas/purchase';
-	import { ASSET_TYPES } from '$lib/schemas/asset-constants';
+	import { RESOLVABLE_ASSET_TYPES, MINT_ASSET_TYPES } from '$lib/schemas/asset-constants';
 	import {
 		selectableAssetLabel,
 		assetTypeLabel,
@@ -79,10 +90,16 @@
 		defaultSubCatLabel?: string | null;
 	} = $props();
 
-	// MINT never offers 'currency' — 088 raises on it explicitly (cash is amount-carried, not
-	// instrument-carried). Filtered here rather than trusting the SelectField placeholder alone,
-	// so the option is simply absent instead of present-but-rejected.
-	const mintAssetTypeOptions = ASSET_TYPES.filter((t) => t !== 'currency').map((t) => ({
+	// THE STRUCTURAL FORK (see file header): two DIFFERENT vocabularies, not one filtered two
+	// ways. `resolveAssetTypeOptions` drives the identify step's picker — a personal type is
+	// simply not an <option> there, so it cannot reach the resolve call through this UI.
+	// `mintAssetTypeOptions` drives the MINT fork's picker — the superset (13 = all 14 minus
+	// currency, which is structurally excluded from MINT_ASSET_TYPES itself, not filtered here).
+	const resolveAssetTypeOptions = RESOLVABLE_ASSET_TYPES.map((t) => ({
+		value: t,
+		label: assetTypeLabel(t)
+	}));
+	const mintAssetTypeOptions = MINT_ASSET_TYPES.map((t) => ({
 		value: t,
 		label: assetTypeLabel(t)
 	}));
@@ -131,7 +148,11 @@
 	let resolveErrors = $state<Record<string, string[]>>({});
 	let resolving = $state(false);
 
-	const resolveHandler: SubmitFunction = ({ formData, cancel }) => {
+	// `/api/asset/resolve` is a plain fetch+JSON endpoint, NOT a SvelteKit form action (Backend,
+	// confirmed) — so this is a bare async function, not a `SubmitFunction` for `use:enhance`.
+	// The surrounding markup stays a real `<form>` (native Enter-key submit, a11y) but its
+	// `onsubmit` calls this directly rather than posting anywhere.
+	async function doResolve() {
 		const parsed = assetResolveSchema.safeParse({
 			symbol: resolveSymbol,
 			cusip: resolveCusip,
@@ -140,30 +161,46 @@
 		});
 		if (!parsed.success) {
 			resolveErrors = fieldErrors(parsed.error);
-			cancel();
 			return;
 		}
 		resolveErrors = {};
-		formData.set('symbol', parsed.data.symbol ?? '');
-		formData.set('cusip', parsed.data.cusip ?? '');
-		formData.set('asset_type', parsed.data.asset_type);
-		formData.set('name', parsed.data.name ?? '');
 		resolving = true;
-		return async ({ result }) => {
-			resolving = false;
-			// EXPECTED CONTRACT — see file header: `{ success: true, assetId }` on the happy path.
-			if (result.type === 'success' && result.data && 'assetId' in result.data) {
-				const assetId = Number((result.data as { assetId: unknown }).assetId);
-				boundAssetId = assetId;
-				boundAssetLabel = resolveSymbol.trim() || resolveName.trim() || `Asset #${assetId}`;
-				showResolve = false;
-			} else if (result.type === 'failure') {
-				resolveErrors =
-					(result.data?.errors as Record<string, string[]> | undefined) ??
-					{ _form: ["Couldn't resolve that security. Please try again."] };
+		try {
+			const res = await fetch('/api/asset/resolve', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					symbol: parsed.data.symbol,
+					cusip: parsed.data.cusip,
+					asset_type: parsed.data.asset_type,
+					name: parsed.data.name
+				})
+			});
+			let json: unknown = null;
+			try {
+				json = await res.json();
+			} catch {
+				json = null;
 			}
-		};
-	};
+			const body = (json ?? {}) as { assetId?: number | null; errors?: Record<string, string[]> };
+			if (res.ok && typeof body.assetId === 'number') {
+				boundAssetId = body.assetId;
+				boundAssetLabel = resolveSymbol.trim() || resolveName.trim() || `Asset #${body.assetId}`;
+				showResolve = false;
+			} else if (res.ok) {
+				// 200 with assetId: null — the endpoint ran but found/created nothing to bind to.
+				resolveErrors = {
+					_form: ["Couldn't find or create a match for that symbol or CUSIP. Check the details and try again."]
+				};
+			} else {
+				resolveErrors = body.errors ?? { _form: ["Couldn't resolve that security. Please try again."] };
+			}
+		} catch {
+			resolveErrors = { _form: ["Couldn't reach the server. Please try again."] };
+		} finally {
+			resolving = false;
+		}
+	}
 
 	// ── Personal-asset (MINT) fork ────────────────────────────────────────────────────────────
 	let mintAssetType = $state('');
@@ -219,7 +256,7 @@
 						asset_name: mintAssetName,
 						symbol: mintSymbol
 					};
-		const parsed = manualPurchaseSchema.safeParse({
+		const parsed = createPurchaseSchema.safeParse({
 			...shape,
 			trade_date: tradeDate,
 			quantity,
@@ -347,10 +384,16 @@
 				{/if}
 
 				{#if showResolve}
+					<!-- NOT a SvelteKit form action — `/api/asset/resolve` is a plain fetch+JSON
+					     endpoint (Backend, confirmed). No `method`/`action`/`use:enhance`; `onsubmit`
+					     prevents the native (non-JS) navigation and calls `doResolve()` directly. Kept
+					     as a real `<form>` (not a bare `<div>`) so Enter-key submit + the existing
+					     field-grouping semantics stay free. -->
 					<form
-						method="POST"
-						action="?/resolveAsset"
-						use:enhance={resolveHandler}
+						onsubmit={(e) => {
+							e.preventDefault();
+							doResolve();
+						}}
 						class="resolve-form"
 						novalidate
 					>
@@ -373,13 +416,15 @@
 							hint="Optional — 9 characters, only needed if you don't have a ticker."
 							autocomplete="off"
 						/>
+						<!-- RESOLVABLE_ASSET_TYPES only (the 9 feed-priceable types) — see file header. A
+						     personal type is not a selectable option here at all. -->
 						<SelectField
 							label="Asset type"
 							name="asset_type"
 							bind:value={resolveAssetType}
 							required
 							placeholder={{ value: '', label: 'Select…' }}
-							options={mintAssetTypeOptions}
+							options={resolveAssetTypeOptions}
 							errors={resolveErrors.asset_type}
 						/>
 						<TextField
@@ -431,6 +476,8 @@
 			{/if}
 
 			{#if fork === 'personal'}
+				<!-- MINT_ASSET_TYPES (the 13-type superset, incl. the 4 personal types) — see file
+				     header. This is the ONLY picker in the component that offers them. -->
 				<SelectField
 					label="Asset type"
 					name="asset_type"

@@ -1,37 +1,51 @@
 // purchase.ts — CLIENT-SIDE Zod mirror of the SELF-325 manual-purchase surfaces
 // (the account-detail "Add a transaction" → Purchase fork). Two schemas:
 //
-//   assetResolveSchema  — mirrors Backend's SHIPPED src/lib/server/schemas/asset.ts
-//                          (commit 7bcba2c) field-for-field. This is the "market
-//                          security" two-step's FIRST step: identify a ticker/CUSIP
-//                          not yet in the caller's selectable-assets list and resolve
-//                          it against the global namespace via ?/resolveAsset, which
-//                          forwards to the provider-sync worker's /asset/resolve route.
+//   assetResolveSchema   — mirrors Backend's server-side src/lib/server/schemas/asset.ts
+//                          (confirmed via SendMessage 2026-08-21, latest at commit
+//                          a9ba25e) field-for-field. This is the "market security"
+//                          two-step's FIRST step: POST JSON to `/api/asset/resolve`
+//                          (a fetch endpoint, NOT a form action — see
+//                          PurchaseEntryForm.svelte's resolve handler) to identify a
+//                          ticker/CUSIP not yet in the caller's selectable-assets list.
 //
-//   manualPurchaseSchema — mirrors the pfin.fn_create_manual_purchase RPC contract
-//                          (migration 088, ad7f2a1) as an app-layer form-action schema.
+//   createPurchaseSchema — mirrors Backend's server-side
+//                          src/lib/server/schemas/purchase.ts (createPurchaseSchema,
+//                          same commit) field-for-field — itself the app-layer mirror of
+//                          the pfin.fn_create_manual_purchase RPC contract (migration
+//                          088). Posts to the EXISTING accounts/[account_id] route's
+//                          `?/createPurchase` action (not a new route).
 //
-// ⚠ EXPECTED CONTRACT, NOT YET CONFIRMED (api/CLAUDE.md "+page.svelte ahead of
-//   Backend's loader" precedent — SELF-242/SELF-241 same pattern). Backend's own
-//   server-side RPC-arg schema + `?/createPurchase` action were still being authored
-//   at the time this file was written (their 7bcba2c commit message: "Form action +
-//   RPC-arg schema deliberately NOT included ... gated on F/CTO's pricing call").
-//   This schema is built directly off 088's own CONTRACT block + its RAISES list, with
-//   field names chosen to match this codebase's un-prefixed convention (`transaction.ts`
-//   posts `transaction_date` for the RPC's `p_trade_date`-shaped concerns, not
-//   `p_transaction_date` — the server action, not the browser, adds the `p_` prefix at
-//   the `.rpc()` call site; see e.g. `transactions.ts`'s `createStockSplit`). Frontend
-//   flagged the exact field names + action name(s) to Backend for confirmation
-//   (SendMessage, 2026-08-21) and will reconcile this file the moment their schema
-//   lands — never ship this LOOSER than whatever they confirm.
+// CONFIRMED CONTRACT (Backend, SendMessage 2026-08-21, superseding this file's earlier
+// EXPECTED-CONTRACT draft built ahead of their schema): field names are UN-PREFIXED
+// (`trade_date`/`quantity`/`cost_basis`/... — the server action adds the RPC's `p_`
+// prefix at the `.rpc()` call site, this file never does). Two INDEPENDENTLY `.strict()`
+// discriminated-union branches (confirmed — Backend's own server schema uses the exact
+// same shape this file already chose, for the exact same reason: `.strict()` merged via
+// `.and()` silently strips an unknown key instead of rejecting it).
+//
+// ⚠ ASSET-TYPE VOCABULARY SPLIT (F/CTO + Architect ruling, 2026-08-21, relayed by
+//   team-lead — HOLD until this landed, now resolved): the RESOLVE step (this schema's
+//   `assetResolveSchema`) admits only `RESOLVABLE_ASSET_TYPES` — the 9 feed-priceable
+//   types. MINT mode (`createPurchaseSchema`'s mint branch) admits `MINT_ASSET_TYPES` —
+//   the full 13 (14 minus currency), INCLUDING the 4 personal types (real_estate/
+//   vehicle/collectible/private) that must NEVER reach resolve. Routing a personal asset
+//   through resolve would mint a permanently unpriceable, unrepairable GLOBAL row (019's
+//   eod_price_insert requires ownership; 020 grants no UPDATE) — see
+//   RESOLVABLE_ASSET_TYPES's own comment in asset-constants.ts for the full reasoning.
+//   This is a STRUCTURAL boundary, not a labeling one: the picker driving the resolve
+//   step's `asset_type` field must offer ONLY `RESOLVABLE_ASSET_TYPES` — see
+//   PurchaseEntryForm.svelte's `resolveAssetTypeOptions` vs `mintAssetTypeOptions`.
 //
 // Discipline (api/CLAUDE.md Frontend conv): client check is UX fast-feedback only; the
-// RPC's own raises (088) are the security boundary. Every numeric fence here mirrors a
-// named 088 raise so the user sees the same rejection before the round trip, worded in
-// this codebase's field-error idiom rather than a raw `RAISE EXCEPTION` string.
+// server's own Zod schema + the RPC's own raises (088) are the security boundary. The
+// zero-price-rounds-to-0.0000 ratio check below mirrors the RPC's own raise directly
+// (088's DB-level fence) — Backend's server Zod schema does NOT re-check it client-side
+// either (that check has no Zod-layer counterpart on either side; it is the DB's alone),
+// so this is genuinely EXTRA fast-feedback, not a mirror of a Zod rule.
 
 import { z } from 'zod';
-import { ASSET_TYPES } from '$lib/schemas/asset-constants';
+import { ASSET_TYPES, RESOLVABLE_ASSET_TYPES, MINT_ASSET_TYPES } from '$lib/schemas/asset-constants';
 import { sanitizeCurrencyAmount, sanitizeQuantity } from '$lib/validation/numeric';
 import { derivedPerUnitPrice } from '$lib/purchase-util';
 
@@ -76,9 +90,10 @@ const quantityAmount = () =>
 const positiveQuantity = () =>
 	quantityAmount().refine((n) => n > 0, 'Enter a quantity greater than zero.');
 
-/** 088 raise: "p_cost_basis must be a finite number greater than zero". */
+/** 088 raise: "p_cost_basis must be a finite number greater than zero". Message copied
+ *  VERBATIM from Backend's server schema (positiveCostBasis) — mirror discipline. */
 const positiveCostBasis = () =>
-	currencyAmount().refine((n) => n > 0, 'Enter a total cost greater than zero.');
+	currencyAmount().refine((n) => n > 0, 'Enter a value greater than zero.');
 
 const nullableTrimmed = (max: number) =>
 	z.preprocess(
@@ -95,7 +110,8 @@ const subCatIdField = () =>
 		)
 		.default(null);
 
-// ── Step 1 — resolve a market security (mirrors Backend's shipped asset.ts VERBATIM) ──
+// ── Step 1 — resolve a market security (mirrors Backend's server schemas/asset.ts VERBATIM,
+// including its 2026-08-21 narrowing correction) ────────────────────────────────────────
 
 const symbolField = () =>
 	z.preprocess(
@@ -119,17 +135,37 @@ const cusipField = () =>
 			.nullable()
 	);
 
+/** Copied VERBATIM from Backend's server schema — the two differentiated routing
+ *  messages for an asset_type that IS one of the full 14 016 types but is NOT one of
+ *  the 9 resolvable ones (personal types + currency). A picker offering only
+ *  `RESOLVABLE_ASSET_TYPES` makes these two messages structurally unreachable through
+ *  normal use — kept anyway as the same defense-in-depth reasoning Backend's own
+ *  schema states (the route is reachable from a stale tab / second window). */
+const PERSONAL_ASSET_ROUTING_MESSAGE =
+	'Personal assets (real estate, vehicles, collectibles, private holdings) are recorded directly on the purchase form, not looked up in the security registry.';
+const CURRENCY_ROUTING_MESSAGE =
+	'Cash is not purchasable through the security lookup — record it from the cash-entry form.';
+
 export const assetResolveSchema = z
 	.object({
 		symbol: symbolField(),
 		cusip: cusipField(),
-		asset_type: z.enum(ASSET_TYPES, { message: 'Choose an asset type.' }),
+		// z.enum(ASSET_TYPES) here (not RESOLVABLE_ASSET_TYPES) so a genuinely
+		// out-of-vocabulary value gets Zod's own "invalid enum value" — the superRefine
+		// below is what narrows to the resolvable 9 with a differentiated routing
+		// message for the other 5. Mirrors Backend's server schema exactly.
+		asset_type: z.enum(ASSET_TYPES),
 		name: nullableTrimmed(200)
 	})
 	.strict()
 	.refine((v) => v.symbol !== null || v.cusip !== null, {
 		message: 'Enter a ticker symbol or a CUSIP.',
 		path: ['symbol']
+	})
+	.superRefine((v, ctx) => {
+		if ((RESOLVABLE_ASSET_TYPES as readonly string[]).includes(v.asset_type)) return;
+		const message = v.asset_type === 'currency' ? CURRENCY_ROUTING_MESSAGE : PERSONAL_ASSET_ROUTING_MESSAGE;
+		ctx.addIssue({ code: z.ZodIssueCode.custom, message, path: ['asset_type'] });
 	});
 
 export type AssetResolveInput = z.infer<typeof assetResolveSchema>;
@@ -167,23 +203,21 @@ const bindSchema = z
 	})
 	.strict();
 
-/** 088 raises on asset_type='currency' and on an empty mint name — both mirrored here. */
+/** MINT's asset_type vocabulary is `MINT_ASSET_TYPES` (13 = 14 minus currency) — currency
+ *  is structurally EXCLUDED from the enum itself (matches Backend's server schema
+ *  exactly), not rejected by a separate `.refine()` after the fact. 088's own empty-name
+ *  raise is mirrored by the `.min(1, ...)` below. */
 const mintSchema = z
 	.object({
 		mode: z.literal('mint'),
-		asset_type: z
-			.enum(ASSET_TYPES, { message: 'Choose an asset type.' })
-			.refine((t) => t !== 'currency', {
-				message:
-					"Cash is not a purchasable asset here — use the Cash form above. A purchase can't be recorded as currency."
-			}),
-		asset_name: z.string().trim().min(1, 'Name this asset.').max(200, 'Name is too long.'),
+		asset_type: z.enum(MINT_ASSET_TYPES, { message: 'Choose an asset type.' }),
+		asset_name: z.string().trim().min(1, 'Name is required.').max(200, 'Name is too long.'),
 		symbol: nullableTrimmed(20),
 		...commonFields
 	})
 	.strict();
 
-export const manualPurchaseSchema = z
+export const createPurchaseSchema = z
 	.discriminatedUnion('mode', [bindSchema, mintSchema])
 	.superRefine((v, ctx) => {
 		// 088's UNCONDITIONAL zero-price fence: round(cost_basis / quantity, 4) <= 0 is
@@ -206,7 +240,7 @@ export const manualPurchaseSchema = z
 		}
 	});
 
-export type ManualPurchaseInput = z.infer<typeof manualPurchaseSchema>;
+export type CreatePurchaseInput = z.infer<typeof createPurchaseSchema>;
 
 // ── Ticker-nudge (F/CTO ruling, 2026-08-21) ────────────────────────────────────────────
 // "Validation should nudge a ticker-looking string typed into the personal-asset path
