@@ -3,14 +3,20 @@
 --   the manual instrument-PURCHASE write path; V1-SHIP-BLOCK)
 -- =====================================================================
 -- BINDS TO MIGRATION: supabase/migrations/088_manual_purchase_path.sql
---   (8fa6526fe8b592ac89944bf5f21297454f0b82bf, feature/manual-purchase-path;
---   blob md5 e5cafe1148ddd6e82663ceb2808b25de, verified against the committed
---   object, not the source text — re-pulled and re-diffed after 8fa6526
---   superseded ad7f2a1a2f9b9b680cec24ca55e71d7f06c77b2c; the diff is CONFIRMED,
---   independently, to touch only `--` header comments plus the `comment on
---   function` catalog string — the executable body, signature, and every
---   grant/revoke line are byte-identical, so every behavioural leg below still
---   holds unchanged against the new blob) —
+--   (8fa6526fe8b592ac89944bf5f21297454f0b82bf, feature/manual-purchase-path —
+--   this SHA is a BRANCH LOCATOR, updated once at freeze per Architect
+--   (a713c32); do not re-derive it per doc commit).
+--   blob md5 b343304f3dde40eeab84a85e21c615bb — the MIGRATION-IDENTITY pin,
+--   FINAL per Architect (a713c32): 088's body last changed at e29b00f (the #10
+--   FK-target correction) and nothing outstanding touches it again (any P-b
+--   read-side work lands as a NEW migration, not an edit to 088). Verified
+--   against the committed object, not the source text — re-pulled and
+--   re-diffed after 8fa6526 superseded ad7f2a1a2f9b9b680cec24ca55e71d7f06c77b2c
+--   (kept below as historical provenance, NOT updated by this pin); the diff is
+--   CONFIRMED, independently, to touch only `--` header comments plus the
+--   `comment on function` catalog string — the executable body, signature, and
+--   every grant/revoke line are byte-identical across every revision through
+--   b343304f, so every behavioural leg below still holds unchanged) —
 --   pfin.fn_create_manual_purchase(p_account_id bigint, p_trade_date date,
 --     p_quantity numeric, p_cost_basis numeric, p_security_id bigint default null,
 --     p_asset_type text default null, p_asset_name text default null,
