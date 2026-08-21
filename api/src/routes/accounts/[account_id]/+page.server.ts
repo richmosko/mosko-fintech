@@ -70,6 +70,7 @@ import { loadDupCandidates, loadSyncHistory } from '$lib/server/queries/reconcil
 import { computeImportHash } from '$lib/server/dedup/importHash';
 import { createPurchaseSchema } from '$lib/server/schemas/purchase';
 import { createManualPurchase } from '$lib/server/queries/purchases';
+import { loadSelectableAssets } from '$lib/server/queries/selectableAssets';
 import type { PageServerLoad, Actions } from './$types';
 
 // Category label + note (023) and split children (029) embedded per transaction so the
@@ -189,6 +190,24 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	// account-level Sub-Cat surface is removed.)
 	const cashflowSubCats = await loadCashflowSubCats(locals.supabase);
 
+	// SELF-325 purchase-path DISPLAY data (the createPurchase action re-reads both, independently
+	// and authoritatively, at submit time — this is for rendering the form, not the write path):
+	//   - selectableAssets: the caller's pickable universe (own + global pfin.asset, RLS-scoped)
+	//     for the BIND-mode "pick an existing asset" affordance, distinct from a fresh /asset/
+	//     resolve ticker lookup.
+	//   - defaultSubCat: derived from the ALREADY-LOADED cashflowSubCats (no extra round trip) —
+	//     the caller's 'Trade'/'BTO' row, so the form can show the category the purchase will
+	//     default to before the user ever touches the sub_cat_id field. Absent (not provisioned /
+	//     renamed / deactivated) → null; the form renders "Unsorted-pending", same fallback the
+	//     action itself uses via findDefaultBtoSubCatId.
+	// Fail-soft: mirrors heldSecurities/dupCandidates — a read error degrades to an empty picker
+	// (the resolve+RPC write path stays the authoritative check either way) rather than breaking
+	// the page load.
+	const { assets: selectableAssets } = await loadSelectableAssets(locals.supabase);
+	const defaultBto = cashflowSubCats.find((s) => s.cat === 'Trade' && s.sub_cat === 'BTO') ?? null;
+	const defaultSubCatId = defaultBto?.id ?? null;
+	const defaultSubCatLabel = defaultBto ? `${defaultBto.cat} — ${defaultBto.sub_cat}` : null;
+
 	// SELF-203 stock-split entry — the account's current live positions (quantity ≠ 0) for the
 	// security picker: fn_holdings_as_of(today) filtered to this account + pfin.asset labels.
 	// RLS-scoped, fail-soft ([] on error → cash-only accounts have nothing to split). The
@@ -230,7 +249,10 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		heldSecurities,
 		dupCandidates,
 		syncHistory,
-		connection
+		connection,
+		selectableAssets,
+		defaultSubCatId,
+		defaultSubCatLabel
 	};
 };
 
