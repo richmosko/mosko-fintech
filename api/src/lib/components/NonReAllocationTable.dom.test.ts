@@ -18,6 +18,11 @@ import type { NonReAllocation, AllocationRow, AllocationCatGroup } from '$lib/no
 
 const FIXTURE_TOTAL = 10000;
 
+// SELF-330: `is_stale` defaults to `null` here, not `undefined` — matches the real SELF-330
+// producer contract (every row gets an EXPLICIT boolean|null, never undefined; see
+// AllocationRow.is_stale's own hazard note in $lib/nonre-allocation.ts). A caller that needs to
+// exercise the defense-in-depth `undefined` path overrides it explicitly (see the SELF-330
+// gap-fill describe block below) — it is no longer this fixture's default.
 function row(over: Partial<AllocationRow> & { sub_cat: string }): AllocationRow {
 	return {
 		kind: 'sub_cat',
@@ -28,6 +33,7 @@ function row(over: Partial<AllocationRow> & { sub_cat: string }): AllocationRow 
 		dollar_target: 0,
 		dollar_alloc: 0,
 		dollar_realloc: 0,
+		is_stale: null,
 		...over
 	};
 }
@@ -330,8 +336,27 @@ describe('NonReAllocationTable — AC11: section badge + per-row tri-state stale
 		expect(row.classList.contains('stale-row')).toBe(false);
 	});
 
-	it('a row with is_stale undefined (today\'s universal default — no per-row producer yet) is NORMALIZED to unknown, same as null — never renders as silently fresh (team-lead build instruction, 2026-08-20)', () => {
-		const { getByText } = render(NonReAllocationTable, { props: { allocation: FIXTURE, staleness: EMPTY_STALENESS } });
+	it('a row with is_stale undefined (defense-in-depth — the SELF-330 producer never emits this; a value that reaches the render layer this way anyway must still be NORMALIZED to unknown, same as null, never silently fresh — team-lead build instruction, 2026-08-20)', () => {
+		// `AllocationRow.is_stale` is non-optional post-SELF-330 (real producers can no longer omit
+		// it) — the `as unknown as AllocationRow` cast deliberately constructs an off-contract value
+		// to prove the render-boundary normalization still catches it if one ever reaches the
+		// browser some other way (e.g. an un-typechecked JSON boundary).
+		const undefinedFixture: NonReAllocation = {
+			...FIXTURE,
+			groups: FIXTURE.groups.map((g) =>
+				g.cat === 'Cash'
+					? {
+							...g,
+							rows: g.rows.map((r) =>
+								r.sub_cat === 'FDIC'
+									? ({ ...r, is_stale: undefined } as unknown as AllocationRow)
+									: r
+							)
+						}
+					: g
+			)
+		};
+		const { getByText } = render(NonReAllocationTable, { props: { allocation: undefinedFixture, staleness: EMPTY_STALENESS } });
 		const row = getByText('FDIC').closest('tr')!;
 		expect(within(row).getByText('Staleness unknown')).toBeTruthy();
 		expect(within(row).queryByText('May be stale')).toBeNull();
@@ -351,6 +376,99 @@ describe('NonReAllocationTable — AC11: section badge + per-row tri-state stale
 		const row = getByText('FDIC').closest('tr')!;
 		expect(within(row).queryByText('May be stale')).toBeNull();
 		expect(within(row).queryByText('Staleness unknown')).toBeNull();
+		expect(row.classList.contains('stale-row')).toBe(false);
+	});
+});
+
+// SELF-330 gap-fill (2026-08-20): AC11's two special row shapes — Unsorted (keyed sub_cat_id IS
+// NULL) and the collapsed "US - Sector Diversified" row (a 12-Sub-Cat OR-fold landing on the wire
+// as ONE is_stale value) — share NonReAllocationTable's generic `staleDisplayState()` render path
+// with every plain sub_cat row, but were untested for tri-state rendering until now. Backend's
+// fn_subcat_contributors fold (SELF-330 binding conditions (b)/(c)) is a SERVER-side join/OR-fold
+// concern — this file cannot exercise that SQL — but the CLIENT contract these two rows must honor
+// once the fold lands is exactly "render whatever tri-state value arrives on `is_stale`, the same
+// as any other row," and that contract was unverified for these two row shapes specifically. Fixed
+// with fixtures shaped like the real payload (FIXTURE's existing Unsorted / us_sector_diversified
+// rows), not shaped to prove the claim (Sec's SELF-241 flag).
+describe('NonReAllocationTable — SELF-330: Unsorted + collapsed-row tri-state (untested render paths for AC11(2)(b)/(c))', () => {
+	it('Unsorted row with is_stale === true renders the tag AND the row-tint class, independent of every other row', () => {
+		const staleUnsorted: NonReAllocation = {
+			...FIXTURE,
+			unsorted: { ...FIXTURE.unsorted!, is_stale: true }
+		};
+		const { getAllByText } = render(NonReAllocationTable, {
+			props: { allocation: staleUnsorted, staleness: EMPTY_STALENESS }
+		});
+		// Index 1: the data row's own label cell (index 0 is the group-header th — see the AC2
+		// "renders as its own section" test above for the same two-occurrence shape).
+		const dataRow = getAllByText('Unsorted')[1].closest('tr')!;
+		expect(within(dataRow).getByText('May be stale')).toBeTruthy();
+		expect(dataRow.classList.contains('stale-row')).toBe(true);
+
+		// Independence: an ordinary Cash row (undefined → normalized unknown) must NOT pick up the
+		// tint or tag from Unsorted's own is_stale — each row renders off its OWN field, never a
+		// table-wide value.
+		const fdicRow = getAllByText('FDIC')[0].closest('tr')!;
+		expect(fdicRow.classList.contains('stale-row')).toBe(false);
+		expect(within(fdicRow).queryByText('May be stale')).toBeNull();
+	});
+
+	it('Unsorted row with is_stale === null renders "Staleness unknown", no row tint', () => {
+		const unknownUnsorted: NonReAllocation = {
+			...FIXTURE,
+			unsorted: { ...FIXTURE.unsorted!, is_stale: null }
+		};
+		const { getAllByText } = render(NonReAllocationTable, {
+			props: { allocation: unknownUnsorted, staleness: EMPTY_STALENESS }
+		});
+		const dataRow = getAllByText('Unsorted')[1].closest('tr')!;
+		expect(within(dataRow).getByText('Staleness unknown')).toBeTruthy();
+		expect(within(dataRow).queryByText('May be stale')).toBeNull();
+		expect(dataRow.classList.contains('stale-row')).toBe(false);
+	});
+
+	it('the collapsed "US - Sector Diversified" row with is_stale === true renders the tag AND the row-tint class (the 12-Sub-Cat OR-fold landing as one value)', () => {
+		const staleCollapsed: NonReAllocation = {
+			...FIXTURE,
+			groups: FIXTURE.groups.map((g) =>
+				g.cat === 'Marketable Securities'
+					? {
+							...g,
+							rows: g.rows.map((r) =>
+								r.kind === 'us_sector_diversified' ? { ...r, is_stale: true } : r
+							)
+						}
+					: g
+			)
+		};
+		const { getByText } = render(NonReAllocationTable, {
+			props: { allocation: staleCollapsed, staleness: EMPTY_STALENESS }
+		});
+		const row = getByText('US - Sector Diversified').closest('tr')!;
+		expect(within(row).getByText('May be stale')).toBeTruthy();
+		expect(row.classList.contains('stale-row')).toBe(true);
+	});
+
+	it('the collapsed "US - Sector Diversified" row with is_stale === null renders "Staleness unknown" (UNKNOWN dominates false in the server-side OR-fold — this row must never read confirmed-fresh on a partial fold)', () => {
+		const unknownCollapsed: NonReAllocation = {
+			...FIXTURE,
+			groups: FIXTURE.groups.map((g) =>
+				g.cat === 'Marketable Securities'
+					? {
+							...g,
+							rows: g.rows.map((r) =>
+								r.kind === 'us_sector_diversified' ? { ...r, is_stale: null } : r
+							)
+						}
+					: g
+			)
+		};
+		const { getByText } = render(NonReAllocationTable, {
+			props: { allocation: unknownCollapsed, staleness: EMPTY_STALENESS }
+		});
+		const row = getByText('US - Sector Diversified').closest('tr')!;
+		expect(within(row).getByText('Staleness unknown')).toBeTruthy();
+		expect(within(row).queryByText('May be stale')).toBeNull();
 		expect(row.classList.contains('stale-row')).toBe(false);
 	});
 });

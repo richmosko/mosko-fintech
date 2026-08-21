@@ -190,8 +190,14 @@ export async function loadNavComposition(
  * The rollup `data.staleness` badge (loaded independently, upstream of this call) remains the
  * surface of record that SOMETHING is stale even when this per-row detail is unknown — but
  * "something, we just don't know which row" is what must reach the render, not silence.
+ *
+ * EXPORTED (SELF-330): this is now THE bridge from a resolved `046` stale-`linked_source_id` set
+ * to `pfin.account.account_id`s — nonReAllocation.ts's per-Sub-Cat staleness fold (§2.2.2's row
+ * tint) reuses this function VERBATIM rather than re-deriving the same join a second time. Do not
+ * fork this logic — a second copy is exactly the drift risk the SELF-239/nonre-allocation.ts
+ * hand-copy note already flags for the row/group shape; the join itself must stay singular.
  */
-async function resolveStaleAccountIds(
+export async function resolveStaleAccountIds(
 	supabase: SupabaseClient,
 	staleLinkedSourceIds: ReadonlySet<string>
 ): Promise<ReadonlySet<string> | null> {

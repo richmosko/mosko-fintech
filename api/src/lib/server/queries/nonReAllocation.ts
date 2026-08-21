@@ -93,11 +93,57 @@
 //
 // Fail-soft (mirrors subcatMarketValue.ts / navComposition.ts): any read error degrades to
 // `{ data: null, ok: false }` — logged, never thrown.
+//
+// PER-ROW STALENESS (SELF-330, per §2.2.2's own per-row staleness tint AC — the PRD's own
+// per-Sub-Cat sibling of navComposition.ts's per-ACCOUNT `is_stale` join). Architect's
+// `pfin.fn_subcat_contributors(p_as_of, p_include_real_estate)` returns DISTINCT
+// (sub_cat_id, account_id) pairs — SECURITY INVOKER, RLS-scoped through the SAME per-request
+// client every other read in this module uses. `account_id -> linked_source_id -> the 046 stale
+// set` is resolved by calling navComposition.ts's `resolveStaleAccountIds` VERBATIM (exported for
+// this reuse at SELF-330) — the SAME bridge, not a second copy, so the two surfaces can never
+// disagree about which accounts are currently stale.
+//
+// FOLD SEMANTICS (binding, AC11 doc comment):
+//   - A Sub-Cat's is_stale is the Kleene-OR fold over its contributing accounts' is_stale: TRUE
+//     dominates (any one stale account taints the whole Sub-Cat — Cash's wide contributor set
+//     tinting on ONE stale institution is BY DESIGN, not a bug to "fix"); else UNKNOWN dominates
+//     FALSE (an account whose own staleness could not be resolved must not be silently treated as
+//     confirmed-fresh — the SELF-220/229 precedent this whole file's staleness.ts sibling exists
+//     to enforce); else FALSE only when every contributor resolved to confirmed-not-stale, or the
+//     Sub-Cat has NO contributors at all (vacuous OR — nothing to be stale about).
+//   - The WHOLE fold collapses to UNKNOWN uniformly, for every row, whenever the caller's root
+//     `046` read was itself unknown OR the contributor/account bridge read failed — mirrors
+//     navComposition.ts's "skip the join entirely" posture exactly; never a per-row mix of known
+//     and unknown in that case.
+//   - The "US - Sector Diversified" collapsed row (AC5) OR-folds the SAME way across its
+//     underlying real Sub-Cat ids' individual folds — up to twelve (US_EQUITY_SUB_CAT_SET's own
+//     size), but ONLY as many as the CALLER'S OWN taxonomy actually holds; it is not a separate
+//     contributor lookup, it is the Kleene-OR of however many real answers exist. ⚠ THIS INCLUDES
+//     ZERO (a caller whose taxonomy carries none of the twelve labels — reachable per ADR-057:
+//     first-access provisioning never delivers set growth to an already-provisioned tenant). Zero
+//     underlying ids is a DIFFERENT empty case from "a Sub-Cat with no contributor accounts"
+//     (bullet above) — that one is a real Sub-Cat correctly folding to FALSE over zero
+//     contributors; THIS one is zero Sub-Cats to fold over at all, and must still obey the
+//     root-unknown rule two bullets up: with staleAccountIds === null the fold over zero ids is
+//     UNKNOWN, never the vacuous-OR FALSE the empty-contributors case resolves to. Conflating the
+//     two is the exact fail-open Sec caught (SELF-330 review, `foldIsStale([])` — fixed by
+//     short-circuiting on `staleAccountIds === null` before the loop, the SAME guard
+//     `subCatIsStale` already carries).
+//   - The Unsorted row (076's NULL-taxonomy row) keys on `sub_cat_id IS NULL` — matched by a plain
+//     JS `Map` lookup on a literal `null` key (SameValueZero equality already implements
+//     IS-NULL-shaped matching; no separate sentinel or `=== undefined` fallback is used, which
+//     would silently miss the row instead of matching it).
+//
+// PRODUCER CONTRACT (binding, Frontend-measured — nonre-allocation.ts's own hazard note): every
+// row's `is_stale` is ALWAYS one of `true | false | null` — NEVER `undefined`. A Sub-Cat this
+// module has not (yet) resolved a fold for still gets an explicit `null`, computed by the SAME
+// fold function as every other row — there is no code path that leaves the field unset.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ZoneResolvedAsOf } from '$lib/server/time/asOf';
 import { loadSubcatMarketValueAndTargets, type SubcatMarketValueRow } from './subcatMarketValue';
 import { US_EQUITY_SUB_CAT_SET, US_SECTOR_DIVERSIFIED_LABEL } from './usEquitySubCats';
+import { resolveStaleAccountIds } from './navComposition';
 
 /** The fixed §2.2.2 Cat-group header order (PRD §2.2.2 / SELF-239 AC1) — the CANONICAL four,
  *  rendered first and in this order. FOUR members as of SELF-239 — 'Liabilities' DROPPED
@@ -153,6 +199,14 @@ export type AllocationRow = {
 	/** AC6: null when TotalNonRE <= 0. Also structurally null for the Unsorted row (see
 	 *  pct_target). */
 	dollar_realloc: number | null;
+	/** SELF-330: tri-state, mirroring NavCompositionAccount.is_stale's own contract — NEVER
+	 *  `undefined` (binding producer contract; see module header). `true` = at least one
+	 *  contributing account is in the caller's `046` stale set (Kleene-OR fold, TRUE dominates).
+	 *  `false` = every contributing account resolved to confirmed-not-stale, OR this Sub-Cat has no
+	 *  contributing accounts at all (vacuous fold). `null` = UNKNOWN — the root `046` read was
+	 *  itself unknown, or the contributor/account bridge read failed; propagates uniformly to every
+	 *  row in that case, never mixed with a resolved value in the same table. */
+	is_stale: boolean | null;
 };
 
 export type AllocationCatGroup = {
@@ -249,8 +303,62 @@ function targetDerivedColumns(
 export function computeNonReAllocation(
 	taxonomyRows: ReadonlyArray<TaxonomySubCatRow>,
 	marketValueRows: ReadonlyArray<SubcatMarketValueRow>,
-	targetBySubCatId: ReadonlyMap<number, number>
+	targetBySubCatId: ReadonlyMap<number, number>,
+	// SELF-330: `fn_subcat_contributors`'s DISTINCT (sub_cat_id, account_id) pairs, grouped by
+	// sub_cat_id — a literal `null` key holds the Unsorted row's contributors (076's NULL-taxonomy
+	// row has no sub_cat_id to key on; matched by IS-NULL, i.e. a real `null` Map key, never a
+	// sentinel or `=== undefined` fallback). `staleAccountIds` is the SAME tri-state
+	// `resolveStaleAccountIds` return navComposition.ts already establishes: a known (possibly
+	// empty) Set, or `null` when the root `046` read or the bridge join itself was unknown/failed —
+	// in which case every row's fold below returns `null` uniformly, never a partial result.
+	// Both default to the "unknown, nothing supplied" state — every existing call site (including
+	// every pre-SELF-330 test in this suite) that does not pass these two arguments gets `is_stale:
+	// null` on every row, never a silent `false`. This is a DEFAULT, not a different code path: it
+	// runs through the exact same short-circuit `staleAccountIds === null` branch a real "root read
+	// unknown" caller hits (see subCatIsStale below) — so a caller that forgets to thread staleness
+	// degrades the same way a caller that explicitly couldn't determine it does.
+	subCatAccountIds: ReadonlyMap<number | null, ReadonlySet<string>> = new Map(),
+	staleAccountIds: ReadonlySet<string> | null = null
 ): NonReAllocation {
+	// SELF-330 fold core. `subCatIsStale` answers for ONE Sub-Cat key (a real id, or `null` for
+	// Unsorted); `foldIsStale` Kleene-ORs across however many real Sub-Cat ids the caller's
+	// taxonomy actually holds from US_EQUITY_SUB_CAT_SET (the US-Sector-Diversified collapsed
+	// row's own arity — up to twelve, but caller-dependent, never assumed fixed). Both obey the
+	// SAME dominance order: true > unknown > false. Vacuous (no contributors on a REAL Sub-Cat
+	// key) resolves to `false` — nothing to be stale about — but this is DISTINCT from "the
+	// root/bridge itself is unknown," which must short-circuit to `null` BEFORE any per-key work,
+	// including when the key list itself is empty. `subCatIsStale`'s own first line is that
+	// short-circuit; `foldIsStale` MUST hit the identical short-circuit before its loop, not only
+	// inside it — an empty `subCatIds` never enters the loop, so a guard placed only inside the
+	// loop body (the SELF-330 review round-1 shape) silently returns the vacuous-`false` answer
+	// even when the root read was unknown. That was a real, Sec-caught fail-open (the caller's
+	// taxonomy holding NONE of the twelve US-equity labels — reachable per ADR-057, first-access
+	// provisioning never delivers set growth — rendered the collapsed row silently-fresh while
+	// every sibling row correctly rendered "unknown"), exactly the failure mode 086's own S3
+	// ratify-record rejection is written against, now fixed by mirroring the guard verbatim.
+	function subCatIsStale(subCatId: number | null): boolean | null {
+		if (staleAccountIds === null) return null;
+		const contributors = subCatAccountIds.get(subCatId);
+		if (!contributors || contributors.size === 0) return false;
+		for (const accountId of contributors) {
+			if (staleAccountIds.has(accountId)) return true;
+		}
+		return false;
+	}
+	function foldIsStale(subCatIds: ReadonlyArray<number>): boolean | null {
+		if (staleAccountIds === null) return null; // mirrors subCatIsStale's own guard — MUST run
+		// before the loop below, not only reachable from inside it: an empty subCatIds never
+		// enters the loop, and without this line that case would fall through to the vacuous
+		// `anyUnknown === false` path and return `false` even when the root read was unknown.
+		let anyUnknown = false;
+		for (const id of subCatIds) {
+			const s = subCatIsStale(id);
+			if (s === true) return true; // TRUE dominates — short-circuit
+			if (s === null) anyUnknown = true;
+		}
+		return anyUnknown ? null : false;
+	}
+
 	// AC2/AC3 — THE SINGLE PREDICATE SOURCE. Every id in this Set is a Sub-Cat the caller's OWN
 	// taxonomy classifies as element='asset' AND NOT Real Estate (SEC HARDENING ROUND 2 (b) —
 	// excluded HERE, explicitly, rather than relying on 076 being called with
@@ -298,7 +406,8 @@ export function computeNonReAllocation(
 			sub_cat,
 			pct_alloc: ratioPercentOrNull(market_value, total_non_re),
 			dollar_alloc: market_value,
-			...targetDerivedColumns(target_percent, market_value, total_non_re, totalPositive)
+			...targetDerivedColumns(target_percent, market_value, total_non_re, totalPositive),
+			is_stale: subCatIsStale(id)
 		};
 	}
 
@@ -340,7 +449,12 @@ export function computeNonReAllocation(
 		sub_cat: US_SECTOR_DIVERSIFIED_LABEL,
 		pct_alloc: ratioPercentOrNull(collapsedMarketValue, total_non_re),
 		dollar_alloc: collapsedMarketValue,
-		...targetDerivedColumns(collapsedTargetPercent, collapsedMarketValue, total_non_re, totalPositive)
+		...targetDerivedColumns(collapsedTargetPercent, collapsedMarketValue, total_non_re, totalPositive),
+		// AC11: the collapsed row is NOT a second contributor lookup (it has no sub_cat_id of its
+		// own to key on) — it Kleene-ORs `usEquityTaxonomyRows`' OWN per-id folds, whatever that
+		// caller-dependent count is (0 to twelve; see foldIsStale's own header for why 0 must still
+		// propagate UNKNOWN under an unknown root, not fold vacuously to `false`).
+		is_stale: foldIsStale(usEquityTaxonomyRows.map((t) => t.id))
 	};
 	(
 		rowsByCat.get('Marketable Securities') ??
@@ -398,7 +512,11 @@ export function computeNonReAllocation(
 					pct_alloc: ratioPercentOrNull(unsortedMarketValue, total_non_re),
 					dollar_target: null,
 					dollar_alloc: unsortedMarketValue,
-					dollar_realloc: null
+					dollar_realloc: null,
+					// AC11: keyed on sub_cat_id IS NULL — subCatIsStale(null) matches contributor
+					// pairs fn_subcat_contributors returned with a NULL sub_cat_id, never by coercing
+					// this row's own (structurally null) id into an equality lookup against a real id.
+					is_stale: subCatIsStale(null)
 				};
 
 	return { groups, unsorted, total_non_re };
@@ -409,10 +527,18 @@ export function computeNonReAllocation(
  * must already be a validated `ZoneResolvedAsOf` (see schemas/allocation.ts's
  * `resolveAllocationAsOf` — this function does no parsing of its own, mirroring
  * navComposition.ts's `loadNavComposition` signature).
+ *
+ * `staleLinkedSourceIds` (SELF-330 — mirrors `loadNavComposition`'s own parameter of the same
+ * name VERBATIM, including its tri-state contract): the CALLER's already-loaded `046`
+ * stale_items[], as a set of `linked_source_id` strings. `null` means the caller's own root `046`
+ * read was itself UNKNOWN — this function skips BOTH the contributor RPC and the account bridge
+ * entirely and every row's `is_stale` comes back `null` (see computeNonReAllocation's fold). A
+ * known (possibly empty) Set runs the join normally.
  */
 export async function loadNonReAllocation(
 	supabase: SupabaseClient,
-	asOf: ZoneResolvedAsOf
+	asOf: ZoneResolvedAsOf,
+	staleLinkedSourceIds: ReadonlySet<string> | null
 ): Promise<NonReAllocationResult> {
 	const substrate = await loadSubcatMarketValueAndTargets(supabase, asOf);
 	if (!substrate.ok) return { data: null, ok: false };
@@ -432,12 +558,71 @@ export async function loadNonReAllocation(
 		return { data: null, ok: false };
 	}
 
+	// SELF-330: a metadata-only (staleness) failure must NEVER take down this table's actual
+	// $/% data — mirrors loadStaleness()/loadNavComposition()'s own "fail-soft, but never to
+	// confirmed-fresh" posture. `subCatAccountIds` and `staleAccountIds` start at their UNKNOWN
+	// defaults (empty map / null) and are only upgraded to real values once BOTH the contributor
+	// RPC and the account bridge have succeeded — a failure in either one leaves `staleAccountIds`
+	// at `null`, which forces every row's fold to `null` via computeNonReAllocation's own
+	// short-circuit, never a partial or silently-fresh table.
+	let subCatAccountIds: ReadonlyMap<number | null, ReadonlySet<string>> = new Map();
+	let staleAccountIds: ReadonlySet<string> | null = null;
+	if (staleLinkedSourceIds !== null) {
+		const contributors = await loadSubCatContributors(supabase, asOf);
+		if (contributors !== null) {
+			subCatAccountIds = contributors;
+			staleAccountIds = await resolveStaleAccountIds(supabase, staleLinkedSourceIds);
+		}
+	}
+
 	return {
 		data: computeNonReAllocation(
 			(taxonomyRows ?? []) as TaxonomySubCatRow[],
 			substrate.rows,
-			substrate.targetBySubCatId
+			substrate.targetBySubCatId,
+			subCatAccountIds,
+			staleAccountIds
 		),
 		ok: true
 	};
+}
+
+/**
+ * SELF-330: load the caller's OWN (sub_cat_id, account_id) contributor pairs from Architect's
+ * `pfin.fn_subcat_contributors(p_as_of, p_include_real_estate)` — SECURITY INVOKER, DISTINCT
+ * pairs, RLS-scoped through the SAME per-request client every other read in this module uses.
+ * `p_include_real_estate: false` mirrors subcatMarketValue.ts's own `fn_subcat_market_value` call
+ * convention — this module is assets-only, non-RE throughout (SEC HARDENING ROUND 2 (b) above),
+ * and the contributor map must partition the SAME way the row set does, or a Sub-Cat's fold could
+ * draw on accounts outside its own domain.
+ *
+ * Returns `null` on any read failure (never partial data) — the caller degrades every row's
+ * `is_stale` to UNKNOWN in that case, the same posture staleness.ts / navComposition.ts already
+ * apply to their own primitives. A `null` sub_cat_id key holds the Unsorted row's contributors
+ * (076's own NULL-taxonomy row has no sub_cat_id to key on).
+ */
+async function loadSubCatContributors(
+	supabase: SupabaseClient,
+	asOf: ZoneResolvedAsOf
+): Promise<ReadonlyMap<number | null, ReadonlySet<string>> | null> {
+	const { data, error } = await supabase
+		.schema('pfin')
+		.rpc('fn_subcat_contributors', { p_as_of: asOf, p_include_real_estate: false });
+	if (error) {
+		console.error('[nonReAllocation] fn_subcat_contributors failed:', error.message);
+		return null;
+	}
+
+	const bySubCat = new Map<number | null, Set<string>>();
+	for (const row of (data ?? []) as Array<{
+		sub_cat_id: number | null;
+		account_id: number | string;
+	}>) {
+		const key = row.sub_cat_id ?? null;
+		const accountId = String(row.account_id); // SELF-199 bigint -> string convention
+		const set = bySubCat.get(key);
+		if (set) set.add(accountId);
+		else bySubCat.set(key, new Set([accountId]));
+	}
+	return bySubCat;
 }

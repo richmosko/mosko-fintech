@@ -18,6 +18,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { loadNonReAllocation } from './nonReAllocation';
+import { EMPTY_STALE_LINKED_SOURCE_IDS } from './navComposition';
 import { unsafeAsOfForTest } from '$lib/server/time/asOf';
 
 const AS_OF = unsafeAsOfForTest('2026-07-20');
@@ -55,7 +56,7 @@ describe('loadNonReAllocation — I/O wiring', () => {
 			targetData: [{ sub_cat_id: 1, target_percent: 20 }],
 			taxonomyData: [{ id: 1, cat: 'Cash', sub_cat: 'FDIC', display_order: 10, element: 'asset' }]
 		});
-		const result = await loadNonReAllocation(client, AS_OF);
+		const result = await loadNonReAllocation(client, AS_OF, EMPTY_STALE_LINKED_SOURCE_IDS);
 		expect(result.ok).toBe(true);
 		expect(result.data?.total_non_re).toBe(1000);
 		const cash = result.data?.groups.find((g) => g.cat === 'Cash');
@@ -74,7 +75,7 @@ describe('loadNonReAllocation — I/O wiring', () => {
 				{ id: 2, cat: 'Liabilities', sub_cat: 'Credit-Balance', display_order: 290, element: 'liability' }
 			]
 		});
-		const result = await loadNonReAllocation(client, AS_OF);
+		const result = await loadNonReAllocation(client, AS_OF, EMPTY_STALE_LINKED_SOURCE_IDS);
 		expect(result.ok).toBe(true);
 		expect(result.data?.total_non_re).toBe(1000); // NOT 6000
 		expect(result.data?.groups.map((g) => g.cat)).toEqual([
@@ -89,25 +90,25 @@ describe('loadNonReAllocation — I/O wiring', () => {
 
 	it('the user_taxonomy read is UNFILTERED and selects element (no domain column post-084 — table identity IS the scope; element is 085\'s consumer-side predicate, SELF-239)', async () => {
 		const { client, taxonomySelect } = makeSupabase({ rpcData: [], targetData: [], taxonomyData: [] });
-		await loadNonReAllocation(client, AS_OF);
+		await loadNonReAllocation(client, AS_OF, EMPTY_STALE_LINKED_SOURCE_IDS);
 		expect(taxonomySelect).toHaveBeenCalledWith('id, cat, sub_cat, display_order, element');
 	});
 
 	it('degrades to ok:false when the shared substrate read fails (RPC error)', async () => {
 		const { client } = makeSupabase({ rpcError: { message: 'boom' } });
-		const result = await loadNonReAllocation(client, AS_OF);
+		const result = await loadNonReAllocation(client, AS_OF, EMPTY_STALE_LINKED_SOURCE_IDS);
 		expect(result).toEqual({ data: null, ok: false });
 	});
 
 	it('degrades to ok:false when the shared substrate read fails (planning_target error)', async () => {
 		const { client } = makeSupabase({ rpcData: [], targetError: { message: 'boom' } });
-		const result = await loadNonReAllocation(client, AS_OF);
+		const result = await loadNonReAllocation(client, AS_OF, EMPTY_STALE_LINKED_SOURCE_IDS);
 		expect(result).toEqual({ data: null, ok: false });
 	});
 
 	it('degrades to ok:false when THIS module\'s own user_taxonomy read fails', async () => {
 		const { client } = makeSupabase({ rpcData: [], targetData: [], taxonomyError: { message: 'boom' } });
-		const result = await loadNonReAllocation(client, AS_OF);
+		const result = await loadNonReAllocation(client, AS_OF, EMPTY_STALE_LINKED_SOURCE_IDS);
 		expect(result).toEqual({ data: null, ok: false });
 	});
 });

@@ -1379,3 +1379,74 @@ battery says so.
 Worth stating because the reflex on reviewing a fence is to ask *does the WHERE clause catch
 everything it should* — the exclusion list is part of the predicate too, and nothing about a
 green run examines it.
+
+---
+
+## 16. From the SELF-330 `086` round (2026-08-20) — the suite's isolation is rollback-based, and `nextval` is not
+
+Architect's finding, recorded here because it is bigger than the file it was found in and bigger
+than this PR: **every id-order-sensitive assertion anywhere in this suite is silently coupled to
+every battery that runs before it, in `pg_prove`'s file-sort order.**
+
+### The mechanism
+
+Each battery file wraps its own fixture in `begin; ... rollback;` — real isolation for the ROWS a
+file inserts, nothing else. `nextval()` on a Postgres sequence (`pfin.asset`'s identity column,
+here) is explicitly **non-transactional**: a rollback undoes the INSERT but does **not** rewind
+the sequence counter. So a file that creates N assets permanently advances every LATER file's
+starting id by N, forever, for the life of the database — the suite's per-file rollback discipline
+was never a defence against this, because it was never designed to be.
+
+### Why it hid for months
+
+`self200_pending_symbol_classification_rls.sql`'s `(v-embed-1)` compares two encoded-text arrays
+of `"assetid:subcatid"` pairs — one side ordered by the underlying `asset_id` (bigint, numeric
+order), the other ordered by the encoded text itself (`order by x`, lexicographic order). These
+two orderings **agree** for any set of ids that all share the same digit count, and disagree the
+moment a comparison straddles a digit-count boundary (`'102:230' < '99:229'` lexicographically,
+because `'1' < '9'`, while `99 < 102` numerically). Every id in play, in every run, for as long as
+this assertion existed, had stayed below 100 — not because anything guaranteed it, but because
+nothing had yet advanced the sequence far enough before `self200` ran. `086`'s own battery
+(SELF-330; file-sort order places `086_...` before `self200_...`) was simply the first migration
+to push the sequence across that boundary before `self200`'s fixture ran.
+
+> **`086` did not break `self200`. It made `self200`'s pre-existing sort-key mismatch reachable
+> for the first time.** The defect was latent from the day that assertion was written; the
+> suite's own growth is what eventually reaches it — this will recur, on a different file, the
+> next time some battery happens to be the one that pushes a shared sequence across whatever
+> boundary that file's own comparison is secretly sensitive to.
+
+### The trap in verifying it
+
+**A REUSED scratch database hides this class of bug**, which is the opposite of what "verify
+against a real database" usually buys you. A database that has already been through one full
+suite pass has its sequences already advanced past most such boundaries — so the SAME defect that
+is 3-for-3 deterministic RED on a freshly rebuilt database can read as green, repeatedly, on a
+scratch DB that has simply been run against before. Re-verified directly this round: identical
+suite, identical files, RED on fresh / GREEN on reused, no other variable changed.
+
+> **"Verify against a real database" is not one instrument — a fresh one and a reused one measure
+> different things, and only one of them is what CI actually runs.** For anything whose
+> correctness could depend on absolute id values, row counts from prior runs, or any other
+> cross-session accumulated state, a reused scratch DB is the more convenient instrument and the
+> less trustworthy one. Rebuild fresh before trusting a green on this class of assertion.
+
+### The fix, and what does not generalize from it
+
+`self200`'s own fix — order the text-encoded side by its extracted numeric key
+(`split_part(x, ':', 1)::bigint`) rather than the text itself — is local to that one assertion.
+**What generalizes is the diagnostic, not the fix:** any assertion anywhere in this suite that
+sorts, compares, or otherwise depends on the ABSOLUTE VALUE (not just the relative ordering
+within one fixture) of an identity-column id is a candidate for the same latent coupling, and
+none of them are enumerated or fenced against it as a class. A future battery that seeds enough
+rows to cross a different threshold (three digits to four, for instance) could reach a different
+file's own version of this same mismatch, and it will look exactly like a data bug in that file,
+not like a suite-level property — because from inside any one file, there is no visible signal
+that the sequence did not start at 1.
+
+**No watcher exists for this today.** Recorded as a standing caution rather than fenced, because
+the fence would have to be a review discipline ("does this assertion depend on absolute id
+values, not just their relative order within this file's own fixture?") rather than a mechanical
+check — the same shape as §9's BEFORE-trigger unfalsifiability and §10's "count the predicates,
+then check each has a fixture": a property that has to be asked about, file by file, because
+nothing short of running the whole suite fresh will surface it on its own.

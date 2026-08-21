@@ -10,14 +10,21 @@
 //     matches netWorth.ts's own "null = the read failed; a genuine 0/negative total is a genuine
 //     0/negative total" discipline. loadNonReAllocation already fails soft internally to
 //     `{ ok: false }`; the try/catch below is the belt-and-suspenders boundary for an unexpected
-//     throw, same posture root takes around every one of its own reads.
+//     throw, same posture root takes around every one of its own reads. SELF-330: every row inside
+//     `allocation` now also carries its own `is_stale` tri-state — the per-Sub-Cat staleness tint
+//     — derived from `staleLinkedSourceIds` below and threaded into `loadNonReAllocation` as its
+//     third argument, mirroring `loadNavComposition`'s own per-row join exactly.
 //
 //   - `staleness` : StalenessData — the SAME whole-tenant `loadStaleness()` read every other V1.1
 //     NAV/composition surface already consumes (staleness.ts: `fn_aggregation_has_stale_constituent()`
 //     takes no per-surface argument — a whole-tenant read, not a scoped one), NOT a re-derived or
 //     table-scoped call. Degrades to UNKNOWN_STALENESS on failure, never EMPTY_STALENESS (SELF-229
 //     convention) — loadStaleness() already degrades an RPC error internally; this try/catch is the
-//     belt-and-suspenders boundary for an unexpected throw.
+//     belt-and-suspenders boundary for an unexpected throw. Loaded FIRST (ahead of `allocation`
+//     below, unlike the SELF-239 shape) because SELF-330's per-Sub-Cat row tint needs
+//     `staleLinkedSourceIds` derived from it BEFORE `loadNonReAllocation` can run its own
+//     contributor/account bridge — mirrors root `+page.server.ts`'s own staleness-before-
+//     composition ordering for the identical reason.
 //
 //   - `accountPresence` : 'some' | 'none' | 'unknown' — REUSED VERBATIM from loadNetWorthView
 //     (netWorth.ts), not a second, independently-authored open-account count. Two reasons:
@@ -63,9 +70,28 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
 	const asOf = serverTodayAsOf();
 
+	// Loaded FIRST — SELF-330's `staleLinkedSourceIds` derivation (below) must exist before
+	// `loadNonReAllocation` can run its own per-Sub-Cat contributor/account bridge.
+	let staleness = UNKNOWN_STALENESS;
+	try {
+		staleness = await loadStaleness(locals.supabase);
+	} catch (err) {
+		console.error('[allocation/+page.server] staleness load threw; degrading to unknown staleness:', err);
+		staleness = UNKNOWN_STALENESS;
+	}
+
+	// SELF-330: REUSED VERBATIM from root `+page.server.ts`'s own derivation (same field, same
+	// semantics) — `staleness.is_stale === null` means the ROOT read itself was unknown, passed
+	// through as `null` rather than an empty Set so loadNonReAllocation propagates UNKNOWN to every
+	// row instead of misreading "we don't know" as "we checked and it's empty."
+	const staleLinkedSourceIds =
+		staleness.is_stale === null
+			? null
+			: new Set(staleness.stale_items.map((item) => String(item.linked_source_id)));
+
 	let allocation: NonReAllocation | null = null;
 	try {
-		const result = await loadNonReAllocation(locals.supabase, asOf);
+		const result = await loadNonReAllocation(locals.supabase, asOf, staleLinkedSourceIds);
 		allocation = result.ok ? result.data : null;
 	} catch (err) {
 		console.error('[allocation/+page.server] allocation load threw; degrading to null:', err);
@@ -78,14 +104,6 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	} catch (err) {
 		console.error('[allocation/+page.server] accountPresence load threw; degrading to unknown:', err);
 		accountPresence = 'unknown';
-	}
-
-	let staleness = UNKNOWN_STALENESS;
-	try {
-		staleness = await loadStaleness(locals.supabase);
-	} catch (err) {
-		console.error('[allocation/+page.server] staleness load threw; degrading to unknown staleness:', err);
-		staleness = UNKNOWN_STALENESS;
 	}
 
 	return { allocation, staleness, accountPresence };

@@ -53,25 +53,44 @@ export interface AllocationRow {
 	dollar_alloc: number;
 	/** AC6: null when TotalNonRE <= 0. Also structurally null for the Unsorted row. */
 	dollar_realloc: number | null;
-	/** OPTIONAL, tri-state — mirrors NavCompositionLeaf.is_stale (SELF-229's own precedent).
-	 *  UNDEFINED today: Backend's nonReAllocation.ts (SELF-239 branch) does not yet join per-row
-	 *  staleness the way navComposition.ts does for §2.1.5 leaves — this field is forward-declared
-	 *  so the row-tint machinery in NonReAllocationTable.svelte is ready the moment that join
-	 *  lands (AC11's row-tint half; flagged to Backend/team-lead at hand-off).
+	/** Tri-state, REQUIRED (non-optional) — mirrors NavCompositionLeaf.is_stale (SELF-229's own
+	 *  precedent). LIVE as of SELF-330 (per Backend's own report, relayed via team-lead — quoted
+	 *  here, not independently verified against Backend's branch from this worktree). PRECISE
+	 *  SHAPE, verbatim from Backend: this value is "the OUTPUT of a server-side fold over
+	 *  contributor account-ids joined to the 046 stale set — not something fn_subcat_contributors
+	 *  hands back directly." `pfin.fn_subcat_contributors` (the SELF-330 DB function) only returns
+	 *  raw (sub_cat_id, account_id) pairs; `nonReAllocation.ts` is what folds those account-ids
+	 *  through `resolveStaleAccountIds` (the SELF-229 bridge from navComposition.ts, now exported
+	 *  and reused verbatim) into each row's own `true | false | null` — never `undefined`, which
+	 *  is why this field is typed non-optional (tightened 2026-08-20, dropping the pre-SELF-330
+	 *  forward-declaration). The Unsorted row's contributors are matched by "a literal null Map
+	 *  key, i.e. IS-NULL, never an equality fallback" (Backend, verbatim). The collapsed "US -
+	 *  Sector Diversified" row's `is_stale` is the OR of however many real underlying Sub-Cat ids
+	 *  the caller's own taxonomy actually holds from the twelve-member US-equity label set — 0 TO
+	 *  12, CALLER-DEPENDENT, NEVER ASSUMED FIXED (Sec round, 2026-08-20; "twelve" names the label
+	 *  SET's size, not the fold's guaranteed ARITY — stated here in prose rather than as a
+	 *  Backend quote, because Backend's own wording moved after their SELF-330 landing and a
+	 *  verbatim quote that is byte-perfect at time of writing still misrepresents once its source
+	 *  has been corrected). It is an OR over each of those real Sub-Cat ids' own already-resolved
+	 *  per-Sub-Cat tri-state, not a separate lookup or a fresh re-fold over a merged
+	 *  contributor-account set. See NonReAllocationTable.svelte's AC11 doc comment for the three
+	 *  join-shape consequences (Cash's wide contributor set / Unsorted's IS-NULL key / the
+	 *  collapsed row's variable-arity OR-fold).
 	 *
-	 *  ⚠ HAZARD NOTE, why `undefined` is NORMALIZED to `null` at the render boundary
-	 *  (`staleDisplayState()` below), rather than left to render like `false`: an earlier revision
-	 *  of this field let `undefined`/`false` render IDENTICALLY (nothing). Since `undefined` is
-	 *  the ONLY value this field carries today (no per-row producer exists yet — every row gets
-	 *  it), that made the table indistinguishable from "every row confirmed fresh" — the exact
-	 *  SELF-220/229 silent-fresh hazard, measured and reported 2026-08-20, team-lead build
-	 *  instruction: `undefined` must render as UNKNOWN, never as fresh. The only way a row now
+	 *  ⚠ HAZARD NOTE, why `undefined` is STILL NORMALIZED to `null` at the render boundary
+	 *  (`staleDisplayState()` below) even though the type no longer admits it: an earlier
+	 *  revision of this field let `undefined`/`false` render IDENTICALLY (nothing), and before
+	 *  SELF-330 landed, `undefined` was the ONLY value this field ever carried (no per-row
+	 *  producer existed yet), which made the table indistinguishable from "every row confirmed
+	 *  fresh" — the exact SELF-220/229 silent-fresh hazard, measured and reported 2026-08-20,
+	 *  team-lead build instruction: `undefined` must render as UNKNOWN, never as fresh. The type
+	 *  tightening turns a future `undefined` into a compile-time error at every call site that
+	 *  constructs this object; the runtime normalization stays as defense-in-depth against a
+	 *  value that reaches the browser some other way (e.g. an un-typechecked JSON boundary)
+	 *  rather than as the single point of failure it was pre-SELF-330. The only way a row now
 	 *  renders with no marker at all is an EXPLICIT `false` from a real producer — never the
-	 *  absence of a value. This also makes the "a future producer must never emit `undefined` for
-	 *  an unresolved row" constraint (flagged to whoever builds the per-row join) defense-in-depth
-	 *  rather than a single point of failure: even if that constraint is violated, the render
-	 *  layer still shows "unknown," not "fresh." */
-	is_stale?: boolean | null;
+	 *  absence of a value. */
+	is_stale: boolean | null;
 }
 
 export interface AllocationCatGroup {
