@@ -22,10 +22,18 @@
 --
 -- NON-VACUITY (this whole file goes RED on any pre-048 stack — that is the point):
 --   (1)-(3) hasnt_* -> RED if 048 had NOT run (column/trigger/function still present).
---   (4)     has_function 6-arg -> RED if 048 had NOT run (only the 7-arg overload existed).
---   (5)     hasnt_function 7-arg -> RED if 048 had NOT run (the 7-arg overload still existed).
---   (6)/(7) function_privs_is on the 6-arg -> RED if the recreated grant were wrong
---           (EXECUTE not granted to authenticated, or leaked to anon).
+--   (4)     has_function 7-arg (jsonb) -> RECONCILED AT 087: pre-087 this checked
+--           the 6-arg as proof 048's drop had run; 087 replaced the 6-arg with a
+--           7-arg (jsonb) overload, so (4) now checks THAT signature — still RED
+--           on a pre-048 stack (only the OLD 7-arg-with-bigint existed there) and
+--           RED again if 087 had not run.
+--   (5)     hasnt_function 7-arg (bigint, the pre-048 p_sub_cat_id signature) ->
+--           RED if 048 had NOT run (that overload still existed). UNCHANGED by
+--           087 — this is the OTHER 7-arg (bigint, not jsonb); see the GROUP B
+--           header for which is which.
+--   (6)/(7) has_function_privilege on the 7-arg (RECONCILED AT 087) -> RED if the
+--           recreated grant were wrong (EXECUTE not granted to authenticated, or
+--           leaked to anon).
 --   (8)     positive create -> RED if the 6-arg create path did not work under a real tenant.
 --   (9)-(12) de-conflation spot-asserts -> RED if 048 had ALSO dropped the transaction-level
 --           sub_cat surface (account_trans_annotation #10 + account_trans_split #13 + their
@@ -55,6 +63,23 @@
 --   001->048 reset stack. Verified locally 2026-08-01 against the already-migrated local DB
 --   (048 applied: sub_cat_id / trigger / fn absent, fn_create_manual_account is 6-arg).
 --   RED-until-048-applied is EXPECTED on any pre-048 stack — the drop assertions invert.
+--
+-- RECONCILED AT 087 (SELF-325) — fn_create_manual_account DROP + CREATE AGAIN,
+--   this time 6-arg -> 7-arg (adds p_positions jsonb default '[]'::jsonb).
+--   GROUP B (4)/(6)/(7) named the 6-arg signature by an EXACT regprocedure/
+--   argument-type list; (4) uses has_function (SOFT — a catalog lookup, not a
+--   cast, so it just goes RED rather than erroring the file); (6)/(7) use
+--   has_function_privilege's regprocedure CAST (HARD — errors the whole file
+--   with "function ... does not exist" once the 6-arg signature is gone from
+--   pg_proc, MEASURED against 087's live catalog). Re-targeted to the 7-arg
+--   signature below; substance UNCHANGED (still proving the recreated RPC's
+--   grant is correct + anon-denied). (5) is LEFT ALONE — it asserts a
+--   DIFFERENT, older 7-arg overload (...,bigint, the pre-048 p_sub_cat_id
+--   signature) does not exist, which stays true (087's 7th arg is jsonb, not
+--   bigint) and re-targeting it would assert the wrong thing. (8)'s 6-
+--   positional-arg CALL is unaffected (087's 7th param defaults). The NEW
+--   p_positions properties are proved by SELF-325's own battery,
+--   supabase/tests/rls/087_manual_account_value_binding_rls.sql.
 -- =====================================================================
 
 begin;
@@ -87,14 +112,18 @@ select hasnt_function(
 );
 
 -- =====================================================================
--- GROUP B — fn_create_manual_account is now the 6-arg signature (7-arg overload gone).
+-- GROUP B — fn_create_manual_account is now the 7-arg (jsonb) signature
+--   (RECONCILED AT 087). The 048-era 6-arg is gone (DROP+CREATE, not
+--   overloaded); the EARLIER 7-arg (bigint, pre-048 p_sub_cat_id) stays gone
+--   too — (5) still asserts that DIFFERENT signature's absence, untouched.
 -- =====================================================================
 
--- (4) the 6-arg signature EXISTS (the recreated INVOKER write-composition RPC).
+-- (4) the 7-arg signature EXISTS (RECONCILED AT 087 — the recreated INVOKER
+--     write-composition RPC, now with p_positions jsonb).
 select has_function(
   'pfin', 'fn_create_manual_account',
-  ARRAY['text','text','text','text','numeric','date'],
-  '(4) SIGNATURE: pfin.fn_create_manual_account(text,text,text,text,numeric,date) EXISTS — the recreated 6-arg INVOKER RPC (p_sub_cat_id param dropped at 048)'
+  ARRAY['text','text','text','text','numeric','date','jsonb'],
+  '(4) SIGNATURE: pfin.fn_create_manual_account(text,text,text,text,numeric,date,jsonb) EXISTS — the 7-arg INVOKER RPC (p_sub_cat_id param dropped at 048; p_positions jsonb added at 087)'
 );
 
 -- (5) the 7-arg overload is GONE (the DROP FUNCTION removed the p_sub_cat_id signature).
@@ -104,23 +133,25 @@ select hasnt_function(
   '(5) SIGNATURE: the 7-arg pfin.fn_create_manual_account(...,bigint) overload does NOT exist — the p_sub_cat_id signature was DROPped at 048 (no lingering overload)'
 );
 
--- (6) EXECUTE granted to authenticated on the 6-arg (the create path is authenticated-tier).
---     has_function_privilege is the proven idiom (see 013 (6a)) — role-independent catalog probe.
+-- (6) EXECUTE granted to authenticated on the 7-arg (RECONCILED AT 087). The
+--     create path is authenticated-tier. has_function_privilege is the proven
+--     idiom (see 013 (6a)) — role-independent catalog probe.
 select ok(
   has_function_privilege(
     'authenticated',
-    'pfin.fn_create_manual_account(text, text, text, text, numeric, date)',
+    'pfin.fn_create_manual_account(text, text, text, text, numeric, date, jsonb)',
     'EXECUTE'),
-  '(6) GRANT: authenticated holds EXECUTE on the 6-arg fn_create_manual_account (the recreated grant is correct — the write RPC is authenticated-callable)'
+  '(6) GRANT: authenticated holds EXECUTE on the 7-arg fn_create_manual_account (the recreated grant is correct — the write RPC is authenticated-callable)'
 );
 
--- (7) anon holds NO privilege on the 6-arg (EXECUTE revoked from PUBLIC, granted authenticated only).
+-- (7) anon holds NO privilege on the 7-arg (RECONCILED AT 087; EXECUTE revoked
+--     from PUBLIC, granted authenticated only).
 select ok(
   not has_function_privilege(
     'anon',
-    'pfin.fn_create_manual_account(text, text, text, text, numeric, date)',
+    'pfin.fn_create_manual_account(text, text, text, text, numeric, date, jsonb)',
     'EXECUTE'),
-  '(7) GRANT: anon holds NO EXECUTE on the 6-arg fn_create_manual_account (revoked from PUBLIC — the write RPC is not anon-callable)'
+  '(7) GRANT: anon holds NO EXECUTE on the 7-arg fn_create_manual_account (revoked from PUBLIC — the write RPC is not anon-callable)'
 );
 
 -- (8) the 6-arg create path WORKS under a real tenant: returns an account_id (NOT NULL).

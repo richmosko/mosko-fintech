@@ -20,6 +20,26 @@
 --             (3b) atomicity on the sub_cat-fence path | (5) NULL p_sub_cat_id allowed
 --     (1a)/(2a) lose their `sub_cat_id = …` predicate (the column is gone) — they now assert
 --     ownership only. No p_sub_cat_id is passed to any call (all calls are 6-arg).
+--
+-- RECONCILED AT 087 (SELF-325) — fn_create_manual_account DROP + CREATE again,
+--   this time 6-arg -> 7-arg (adds p_positions jsonb default '[]'::jsonb; the
+--   6-arg overload no longer exists in pg_proc — not a second overload). Every
+--   assertion in THIS file is UNCHANGED in substance — the composition
+--   properties 013 proves (caller-bound ownership, same-txn creator-grant,
+--   atomicity, NaN backstop, anon-denial) are unaffected by adding a
+--   default-valued trailing jsonb parameter. ONLY (6a) needs a text change:
+--   its has_function_privilege() call names the function by an EXACT
+--   regprocedure argument-type list, which does NOT accept an omitted
+--   default-bearing trailing type the way an actual RPC CALL does -- once the
+--   6-arg signature is gone from the catalog, the OLD 6-type string makes the
+--   cast itself raise ("function ... does not exist"), not merely fail the
+--   assertion. (6b)'s positional 6-arg CALL is UNCHANGED and still resolves
+--   (the 7th param's default absorbs it) -- only the CATALOG-STRING assertion
+--   needed the update. The NEW p_positions properties (F1/F2/F3, the RPC's
+--   own asset-creation composition, the Lock 14 adversarial-numeric matrix)
+--   are proved by SELF-325's own battery, supabase/tests/rls/
+--   087_manual_account_value_binding_rls.sql -- NOT added here, to keep this
+--   file's original scope (the 013/SELF-201 composition properties) intact.
 -- =====================================================================
 -- BINDS TO MIGRATION: supabase/migrations/048_drop_account_sub_cat.sql (recreated 6-arg fn);
 --   originally supabase/migrations/013_fn_create_manual_account.sql.
@@ -209,13 +229,16 @@ select set_config('role', 'postgres', true);
 -- BLOCK 4 (anon + catalog) — anon cannot execute the write RPC (EXECUTE revoked from PUBLIC,
 --   granted to authenticated only; internet-facing exposure fence per ADR-023).
 -- =====================================================================
--- (6a) grant-layer: anon holds NO EXECUTE on the 6-arg RPC (role-independent catalog assertion).
+-- (6a) grant-layer: anon holds NO EXECUTE on the 7-arg RPC (role-independent catalog
+--   assertion). RECONCILED AT 087 — the regprocedure string is a full argument-type
+--   list, so the 087 DROP+CREATE (6-arg -> 7-arg) requires updating it to the type it
+--   still resolves against, or this cast itself errors ("function ... does not exist").
 select ok(
   not has_function_privilege(
     'anon',
-    'pfin.fn_create_manual_account(text, text, text, text, numeric, date)',
+    'pfin.fn_create_manual_account(text, text, text, text, numeric, date, jsonb)',
     'EXECUTE'),
-  '(6a) anon holds NO EXECUTE on the 6-arg fn_create_manual_account (revoked from PUBLIC, granted to authenticated only — the write RPC is not anon-callable)'
+  '(6a) anon holds NO EXECUTE on the 7-arg fn_create_manual_account (revoked from PUBLIC, granted to authenticated only — the write RPC is not anon-callable)'
 );
 
 -- (6b) behavior: an actual anon call fails closed at 42501 (schema-USAGE / EXECUTE denial —
