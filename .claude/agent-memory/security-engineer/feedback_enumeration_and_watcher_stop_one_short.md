@@ -1,6 +1,6 @@
 ---
 name: enumeration-and-watcher-stop-one-short
-description: Both findings in the GL-split joint-review were "stops one item short" — a per-column D3 enumeration that skipped the SIBLING DEFAULT table's copy of the column, and a structural battery that asserted a required clause on polwithcheck but not polqual. Check the last item and the second side.
+description: The "stops one item short" family — a per-column D3 enumeration that skipped the SIBLING DEFAULT table's FK, a battery asserting a required clause on polwithcheck but never polqual, a diff-scoped sweep of a claim whose origin was the merged ADR body, and a count published from a `| head -N`-truncated diff. Never put a count and a truncating pipe in the same turn.
 metadata:
   type: feedback
 ---
@@ -13,6 +13,33 @@ metadata:
 - The `084` battery asserted the `025` aal2 backstop on `posting_prototype_insert`'s `polwithcheck` and never on `posting_prototype_select`'s `polqual` — while the migration's own header argued, correctly, that **the read side is the half an author skips** (`009` shipped `user_taxonomy_select` unclaused; `025` added it later by ALTER POLICY). The control was present; only the watcher was one-sided.
 
 **My own scope was one short too, and that is the third instance.** I swept only text *introduced by the PR* and reported "three false sites". Architect's wider sweep found **two more in the ADR's own merged body** — which is where the claim originated and where the future implementer actually reads it. **When a PR introduces a false statement, the claim usually came from somewhere; sweep the canonical body, not just the diff.** A diff-scoped sweep is a claim about the diff, not about the tree.
+
+**The fourth instance, and it is the cheapest to prevent: `| head -N` on a diff, then an enumeration
+published as complete (SELF-330).** I ran `git diff main...HEAD -- <two files> | head -120`, read
+what came back, and reported that a stale claim sat on **four** surfaces. It sat on five. The fifth
+was in the second of the two files I had asked for — **inside the diff I ran**, below the cut my own
+pipe made. Team-lead's report was generous ("Sec did not miss it — the fifth was not in what you were
+reading"); that was factually wrong and I said so, because accepting an exoneration for an error I
+did make would leave the habit in place.
+
+**The habit to change is mechanical, not attentional.** A truncating pipe (`head`, `sed -n '1,Np'`,
+`| head -20` on a grep) is a *filter*, and its output cannot support a *complete-enumeration* claim —
+but nothing in the output says so, which is precisely why the claim gets made. Either (a) drop the
+truncation when the next statement will be a count, (b) count first with a non-truncating instrument
+(`git grep -c <claim-string> <ref> -- <paths>`) and read the truncated diff only for context, or
+(c) publish the number with its scope attached ("four in the first 120 lines of that diff"), which
+makes it self-refuting and therefore harmless. ⚠ **A count and a truncating pipe must not appear in
+the same turn** unless (c) applies.
+
+**The corollary that made the miss consequential:** the fifth surface carried a hazard the other four
+did not — an **attributed verbatim quote whose source had since been reworded**. Byte-perfect,
+correctly attributed, and misrepresenting; it passes every verbatim check, and the attribution is
+what makes the stale version read as authoritative. **When reviewing comments that quote a teammate
+with attribution, re-read the SOURCE sentence as it stands now, not just the quotation's fidelity.**
+Prefer prose over an attributed quote in a comment for exactly this reason — a quote's correctness
+has an external dependency that nothing watches. Same family as
+[[sound-quote-false-gloss-drift]] (in the shared index) and
+[[my-review-measurements-become-quoted-sources]].
 
 **How to apply:**
 - On any new table, read the CREATE TABLE and list every `references` clause **including on the global/default sibling table**, then compare that list against the prose disposition. Do not accept "carries no FK" for a table whose column set is described as mirroring one that does.

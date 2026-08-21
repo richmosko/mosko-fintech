@@ -1,6 +1,6 @@
 ---
 name: corrupt-the-control-canary-boundary-tie
-description: Four ways a corrupt-the-control leak canary fails to bite — boundary-date ties, probing the table not the surface, revisions that fix framing not mechanism, and a same-date A/B fixture that defeats the positive leg AND the negative probe (fix = two-sided positive leg).
+description: Ways a corrupt-the-control leak canary fails to bite — boundary-date ties, probing the table not the surface, revisions that fix framing not mechanism, a same-date A/B fixture that defeats both legs, third-party displacement on a data-bearing stack, and corrupting the WRONG relation set so the flagged fence is never exercised.
 metadata:
   type: feedback
 ---
@@ -73,6 +73,29 @@ it as a **COMPANION, never a replacement**, and name the losing side: a table-le
 function-output propagation, cardinality, provenance-column, or grant-path channels. ⚠ Distinguish it
 in writing from the redundant-predicate anti-pattern (`062`'s (V3)): a `users_id` filter in the
 **observer** targets the leak; the same filter in the **read path** suppresses it.
+
+**6. THE CORRUPTION TARGETED THE WRONG RELATION SET — the canary exists, and the flagged fence is
+still unfalsifiable (SELF-330 / `086`).** A function had TWO legs: a securities leg fenced only by
+inherited RLS, and a cash/liability leg carrying an explicit conjunct (`lut.users_id = acc.users_id`)
+on a join keyed by **shared-vocabulary string labels**. The migration header, the `comment on
+function`, and the battery's own section title all named that conjunct as the joint-review-mandatory
+control. The battery had X1/X2 corrupt-the-control legs — and they corrupted `account_select` /
+`account_trans_select` / `account_balance_checkpoint_select`, the **securities** leg's relations.
+`pfin.user_taxonomy` was corrupted nowhere. **All four legs named after the fence passed with the
+conjunct struck out**, because under normal RLS the caller sees only their own taxonomy row and only
+their own accounts, so nothing in the file could tell the fence from its absence.
+
+**The tell is structural and cheap: a fence whose stated failure mode is "fails OPEN under an RLS
+regression on relation R" is only measured by a leg that corrupts R.** A battery that corrupts a
+*sibling* relation and asserts normal-condition isolation is asserting what RLS already gives you.
+Ask, per fence: which single policy, broken open, makes this conjunct the sole discriminator? Corrupt
+**that one**, then assert the **winner** (`array_agg(key order by key) = array[own_key]`), never a
+`count(*) = 1` — a count passes if the one surviving row carries the FOREIGN key, which is the leak.
+And require the leg be **demonstrated RED with the conjunct struck**, with the observed failing value
+reported; a leg added alongside the control it guards proves only self-consistency.
+**Why this is worth blocking on rather than booking:** the assertion that the control is load-bearing
+ships durably into `pg_description`, and the legs are *named after* the fence — post-merge, "covered"
+becomes the assumed state and the next reader must re-derive that the coverage was nominal.
 
 **How to apply:** at any battery review, ask (a) can the canary's expected value be tied
 or displaced by rows outside the fixture, (b) does the canary invoke the surface or

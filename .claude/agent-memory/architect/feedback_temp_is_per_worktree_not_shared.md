@@ -25,3 +25,20 @@ refuse to commit a canonical-record change off an unverifiable "byte-identical" 
 authoritative instead.** "The sender says nothing was reformatted in transit" is not a
 verification — there is no instrument behind it. Produce the file. A receiver who holds on a
 missing verification instrument is doing the job correctly and should be told so.
+
+⚠ **The SESSION-CLOSE SWEEP INHERITS THIS BLINDNESS, and it has been failing
+silently.** `.gitignore` ignores `temp/`, so **every worktree carries its own**.
+A coordinator sweeping *their* `temp/` sees an empty directory and reports
+"`temp/` swept" — while each agent's worktree keeps its own pile. Measured at
+SELF-330 close: my worktree held **29 files, oldest nine days old**, from `066`,
+ADR-047, ADR-052, ADR-055 and ADR-058 rounds — every one of those sessions
+presumably also closed with a "swept" line.
+
+**How to apply:** when the coordinator asks you to confirm a `temp/` discharge,
+**confirm and delete in your OWN worktree** — they cannot see or remove yours
+unless they reach in by absolute path. And when handing a finding to `temp/`,
+give the **absolute** path so the file is reachable at all. The obligation is
+discharged **per-worktree, never centrally**.
+
+This is the same shape as the two-controls-one-conclusion pattern: the check
+runs, passes, and was never looking at the thing it was meant to observe.

@@ -107,7 +107,7 @@ Counts, ledger sizes, phase state, and current shas are read from their canonica
 Three obligations converge here; none may cross the session boundary unmet:
 
 1. **Ledger debt cleared** — `MILESTONES.md`'s `## Active Feature` and `## Recent activity` reflect what landed this session. A stale ledger does not merely lag; it misdirects the next session, which orients off it before reading anything else.
-2. **`temp/` swept** — every finding an agent routed there is placed into a tracked artifact or explicitly discarded. Unplaced findings do not survive cleanup.
+2. **`temp/` swept — ALL NINE LOCATIONS, not one.** `temp/` is per-worktree: the shared checkout AND every `<repo>-worktrees/<agent>/temp/` each carry their own. Sweep with `for d in "$(git rev-parse --show-toplevel)"/temp "$(dirname "$(git rev-parse --show-toplevel)")/$(basename "$(git rev-parse --show-toplevel)")-worktrees"/*/temp; do ...` — a sweep that looks only at its own `temp/` reports clean while residue accumulates elsewhere (measured 2026-08-21: ~465 files across 9 dirs after nine sessions of "temp/ swept" close lines). Every finding routed there is placed into a tracked artifact or explicitly discarded; unplaced findings do not survive cleanup.
 3. **Housekeeping done** — merged branches deleted local and remote, worktrees parked clean, shared checkout on `main`.
 
 ## Escalate to F/CTO

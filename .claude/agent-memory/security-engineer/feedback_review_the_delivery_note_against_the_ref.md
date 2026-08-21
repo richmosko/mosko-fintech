@@ -24,9 +24,35 @@ green run transfer to the committed legs and keeps the finding a FLAG instead of
 disposition as land-v2 / declare-v1-ratified / merge-and-lose-it, and name the third option's cost
 out loud so it is a decision rather than an evaporation.
 
-**Second lesson from the same review:** a pgTAP `plan N ran N-1` diagnostic on a file ending in
-rolled-back `corrupt-the-control` legs is **not** "each rolled-back leg loses a count." The counter
-is a POSITION the next leg re-occupies, so only the **tail** rolled-back leg is unreplaced — drift
-is always 1, never the number of savepoints. I predicted N-2 from a sum model and was wrong; see
-[[feedback_a_red_whose_message_names_the_wrong_defect]] — a header predicting the wrong number on
-the exact diagnostic a reader uses to detect a missing leg will get that diagnostic dismissed.
+**Second lesson from the same review:** a pgTAP `plan N ran M` diagnostic on a file ending in
+rolled-back `corrupt-the-control` legs is **not** "each rolled-back leg loses a count." `ok()`
+writes `curr_test` as an ABSOLUTE value in an ordinary table, so a later leg's write simply
+re-occupies the position a rolled-back predecessor lost. **Drift = the number of CONSECUTIVE
+TRAILING rolled-back legs** — the ones with no subsequent `_set` to overwrite them. One tail leg ⇒
+drift 1. I predicted N-2 from a sum model and was wrong; see
+[[a-red-whose-message-names-the-wrong-defect]] — a header predicting the wrong number on the exact
+diagnostic a reader uses to detect a missing leg will get that diagnostic dismissed.
+
+⚠ **I first wrote that rule as "drift is ALWAYS 1, never the number of savepoints," and that
+absolute is WRONG.** SELF-244's close-gate ends in **three consecutive** savepoint-wrapped legs and
+drifts by **3** — each one's `_set` is undone by its own rollback before the next leg's `_set` runs.
+Both files are consistent with the same mechanism; my generalization was fitted to a sample of one.
+**Had I trusted it, I would have rejected a correct explanation as arithmetically impossible.** The
+correction is the reusable half: *"always 1"* was a claim about the shape of the file I happened to
+be reading, stated as a claim about the mechanism.
+
+**The free discriminator, and it settles the question static analysis usually cannot.** "Bookkeeping
+noise" and "three legs never ran" produce the identical `planned N but ran M` line — but `finish()`
+sits AFTER those legs, and it **cannot emit anything unless execution reached it in a non-aborted
+transaction.** So the diagnostic's own existence proves the legs executed; and `throws_like` /
+`lives_ok` / `ok` each emit exactly one TAP result unconditionally, pass or fail. **The residual is
+then NUMBERING, not execution** — if the printed `ok N` came from `curr_test` rather than a
+rollback-exempt sequence, the tail legs would print duplicate numbers. Only the stream settles that,
+and the cheapest decisive artifact is three values: `grep -c '^ok [0-9]'`, `grep -c '^not ok'`, and
+**pg_prove's exit code** — which fails on both a count mismatch and duplicate test numbers, where a
+bare `psql` exits 0 regardless. Ask for the exit code, not for a narrative.
+
+**Companion static check that has to come first:** count the assertion call sites yourself and
+compare to `plan(N)`. ⚠ Use the COMPLETE verb set — mine omitted `throws_like` and `set_eq` and came
+up five short, which would have manufactured a finding. Include helper verbs from the shared
+fixture, and read each helper's body to see how many TAP results it emits (one `select is(...)` = 1).
