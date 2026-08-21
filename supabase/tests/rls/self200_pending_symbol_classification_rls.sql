@@ -395,10 +395,23 @@ select is(
 -- by x) pattern). Pairing integrity is preserved because each element encodes BOTH fields
 -- together — an array of two SEPARATE sorted id-lists could accidentally validate a scrambled
 -- pairing if both lists independently happened to sort the same way.
+-- ⚠ CORRECTED (Architect, SELF-330 cross-battery finding, MEASURED): the LEFT side orders by
+-- `c.asset_id` — a BIGINT, numeric order. The RIGHT side used to order the encoded TEXT `x`
+-- lexicographically (`order by x`), which agrees with numeric order only while every asset_id in
+-- play has the SAME digit count — '99:229' < '102:230' numerically but '102:230' < '99:229'
+-- lexicographically ('1' < '9'). Both sides ALWAYS had single- or equal-digit ids in every prior
+-- run, so this was latent, not fixed: SELF-330's own battery (086, file-order before this one)
+-- advances pfin.asset's identity sequence — non-transactional, so a per-file rollback does NOT
+-- rewind it — and pushed THIS file's ids across the two-digit boundary for the first time,
+-- flipping (v-embed-1) RED on a fresh CI database (3-for-3 reproduced; a REUSED scratch DB masked
+-- it, because a prior suite pass had already advanced the sequence past the boundary and the
+-- comparison degenerated to "always sorted the same way twice"). Fixed by making the RIGHT side
+-- order by the SAME key as the left: the numeric asset_id, extracted back out of the encoded text
+-- via split_part rather than changing the left side's own (correct) ordering.
 select is(
   (select array_agg(c.asset_id::text || ':' || c.sub_cat_id::text order by c.asset_id)
      from pfin.user_asset_category c join pfin.user_taxonomy t on t.id = c.sub_cat_id),
-  (select array_agg(x order by x) from (
+  (select array_agg(x order by split_part(x, ':', 1)::bigint) from (
      values (:g_voo::text || ':' || :a_sub::text),
             (:a_asset::text || ':' || :a_sub2::text)
    ) v(x)),
@@ -409,6 +422,10 @@ select set_config('role', 'postgres', true);
 -- (v-embed-2) non-vacuous companion, reverse direction: under B the SAME joined shape is
 --   EXACTLY {(g_qqq, b_sub)} — unaffected by every write A made in this block, and does not
 --   include either of A''s two remaining pairs.
+-- ⚠ NOT a second instance of (v-embed-1)'s sort-key mismatch TODAY — the right side is a
+-- single-element array[...], so there is no ordering to disagree about. It WOULD become one the
+-- moment a second element is added here: match (v-embed-1)'s fix (order by the numeric key, not
+-- the encoded text) rather than reintroducing the lexicographic form.
 select _rls.set_tenant(:'tb'::uuid);
 select is(
   (select array_agg(c.asset_id::text || ':' || c.sub_cat_id::text order by c.asset_id)
