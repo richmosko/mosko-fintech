@@ -75,41 +75,49 @@
 	      `staleDisplayState()` ($lib/nonre-allocation.ts) at the render boundary — NORMALIZED
 	      tri-state, team-lead build instruction 2026-08-20, implementing D1 "aggregations are
 	      never silently presented as fresh": `true` → `tr.stale-row` background tint + the
-	      `.stale-tag` chip. `null` OR `undefined` → NO row tint, but a visibly distinct muted
-	      "Staleness unknown" text label next to the Sub-Cat name (tested for both values —
-	      NonReAllocationTable.dom.test.ts). ONLY an EXPLICIT `false` renders nothing at all — the
-	      absence of a value is never silently "fresh."
-	      ⚠ WHY: measured 2026-08-20 (reported to team-lead on direct question) that an EARLIER
-	      revision let `undefined`/`false` render identically. Since `undefined` is the ONLY value
-	      this field carries today (no per-row producer exists yet — every row gets it), that
-	      collapsed the whole table into "every row confirmed fresh" — the exact SELF-220/229
-	      silent-fresh hazard, not dormant-and-harmless markup. The normalization closes that: even
-	      if a future producer ever emits `undefined` for an unresolved row (it shouldn't — see the
-	      constraint below), the render layer still shows "unknown," not "fresh," by construction.
+	      `.stale-tag` chip. `null` (or a defense-in-depth `undefined`, which should no longer
+	      reach here — see below) → NO row tint, but a visibly distinct muted "Staleness unknown"
+	      text label next to the Sub-Cat name (tested for both values — NonReAllocationTable.dom.
+	      test.ts). ONLY an EXPLICIT `false` renders nothing at all — the absence of a value is
+	      never silently "fresh."
 
-	      THREE CONSEQUENCES FOR WHOEVER BUILDS THE CONTRIBUTOR JOIN (relayed via team-lead from
-	      Architect, 2026-08-20 — noted here now per their request, not as a future review finding):
+	      LIVE as of SELF-330 (2026-08-21, per Backend's own report relayed via team-lead — quoted
+	      verbatim where noted, not independently re-verified against Backend's branch from this
+	      worktree). PRECISE SHAPE, Backend verbatim: `is_stale` is "the OUTPUT of a server-side
+	      fold over contributor account-ids joined to the 046 stale set — not something
+	      fn_subcat_contributors hands back directly." `pfin.fn_subcat_contributors` (the SELF-330
+	      DB function) only returns raw (sub_cat_id, account_id) pairs; `nonReAllocation.ts` is
+	      what folds those account-ids through `resolveStaleAccountIds` (the SELF-229 bridge from
+	      `navComposition.ts`, now exported and reused verbatim) into each row's own tri-state.
+	      Every row — regular, the collapsed "US - Sector Diversified" row, and Unsorted — gets an
+	      EXPLICIT `true | false | null`, never `undefined` (Backend, verbatim), which is why
+	      `AllocationRow.is_stale` is now typed non-optional ($lib/nonre-allocation.ts, tightened
+	      2026-08-21). The render-boundary `undefined` normalization stays as defense-in-depth (an
+	      un-typechecked JSON boundary could still smuggle one through) rather than as the single
+	      point of failure it was pre-SELF-330 — see that field's own hazard note.
+
+	      THREE CONSEQUENCES OF THE CONTRIBUTOR JOIN (relayed via team-lead from Architect,
+	      2026-08-20; realized by the SELF-330 fold, kept here as the reference for what a correct
+	      render should look like against real data):
 	        (a) The Cash row's contributor set is the WIDEST on the table — every USD account feeds
 	            some Cash Sub-Cat — so one stale institution anywhere tints Cash, the
-	            LEAST-informative tint the table can show. Not a bug to fix here; a UX expectation
-	            to set (a stale Cash row will fire often and mean the least).
-	        (b) The Unsorted row keys on `sub_cat_id === null`. Any contributor-fold join MUST
-	            match Unsorted by IS-NULL, never by an equality/`=` comparison against a null
-	            column — an equality match against NULL is always false in SQL, so an `=`-based
-	            join would silently NEVER tint the Unsorted row regardless of its actual
-	            contributors.
-	        (c) The collapsed "US - Sector Diversified" row folds TWELVE Sub-Cats into one — its
-	            tint must OR-fold across all twelve contributor sets, and UNKNOWN must DOMINATE
-	            false in that fold (mirrors the tri-state discipline above: if even one of the
-	            twelve is unknown, the collapsed row must read unknown, never silently confirmed
-	            fresh because the other eleven resolved false).
+	            LEAST-informative tint the table can show. Not a bug; a UX expectation to set (a
+	            stale Cash row will fire often and mean the least).
+	        (b) The Unsorted row's contributors are matched by "a literal null Map key, i.e.
+	            IS-NULL, never an equality fallback" (Backend, verbatim) — an `=`-based join against
+	            a null column would silently never match (an equality match against NULL is always
+	            false in SQL).
+	        (c) The collapsed "US - Sector Diversified" row folds "across its twelve real underlying
+	            Sub-Cat ids' own per-Sub-Cat answers, not a separate lookup" (Backend, verbatim) —
+	            an OR over the twelve Sub-Cats' ALREADY-RESOLVED tri-states, not a fresh re-fold
+	            over a merged contributor-account set, with UNKNOWN DOMINATING false (mirrors the
+	            tri-state discipline above: if even one of the twelve is unknown, the collapsed row
+	            reads unknown, never silently confirmed fresh because the other eleven resolved
+	            false).
 
-	      DORMANT today pending that join (nonReAllocation.ts has no per-row producer yet) — but
-	      DORMANT no longer means SILENT: every row shows "Staleness unknown" right now, honestly,
-	      until the contributor map lands. Whoever builds that join should STILL default an
-	      unresolved row to `null`, never `undefined` (the constraint is preserved here for them);
-	      the render-boundary normalization above makes that a defense-in-depth backstop rather
-	      than the single point of failure it was before this instruction.
+	      Both special row shapes ((b) Unsorted, (c) the collapsed row), at both `true` and `null`,
+	      are covered in NonReAllocationTable.dom.test.ts's SELF-330 gap-fill block — the generic
+	      sub_cat-row case was already covered pre-SELF-330.
 
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5).
 -->
@@ -231,8 +239,9 @@
 									{row.sub_cat}
 								{/if}
 								<!-- AC11(2): per-row NORMALIZED tri-state marker (undefined treated as unknown,
-								     never as fresh — team-lead build instruction; see module header). Dormant
-								     until Backend wires a real is_stale producer. -->
+								     never as fresh — team-lead build instruction; see module header). LIVE as
+								     of SELF-330 — Backend's fn_subcat_contributors fold now supplies a real
+								     per-row is_stale; the undefined-normalization stays as defense-in-depth. -->
 								{#if rowStale === 'stale'}
 									<span
 										class="stale-tag"
@@ -470,7 +479,8 @@
 	}
 
 	/* AC11(2) — screen.css's own D1 shape: inline tag + faint row tint (informational). Locally
-	   reproduced verbatim (tokens only) — dormant until Backend wires per-row is_stale. */
+	   reproduced verbatim (tokens only) — LIVE as of SELF-330 (Backend's fn_subcat_contributors
+	   fold; see the module header). */
 	.stale-tag {
 		display: inline-block;
 		margin-left: var(--space-2);
