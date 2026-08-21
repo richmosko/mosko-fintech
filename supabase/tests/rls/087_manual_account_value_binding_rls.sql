@@ -651,8 +651,9 @@ select throws_like(
 --   because cost_basis's OWN overflow and quantity's overflow are evaluated
 --   in the same INSERT's target list — it was observing the quantity column
 --   BY ACCIDENT of evaluation order, not by construction. cost_basis=9e15 is
---   the ONLY overflowing value in this call, so the 22003 below is
---   unambiguously the quantity column. Measured: 22003, the fence does NOT
+--   REPRESENTABLE in numeric(20,4), so quantity=1e20 is the ONLY overflowing
+--   value in this call and the 22003 below is unambiguously the quantity
+--   column. Measured: 22003, the fence does NOT
 --   fire here (9e15/1e20 clears the zero-price floor). NOT body-owned;
 --   assert rejection only, per the same discipline as every other
 --   catalog-owned leg in this file.
@@ -660,7 +661,7 @@ select throws_ok(
   $$ select pfin.fn_create_manual_account('L5 rej qty column overflow','depository','household','taxable',
        10, '2026-04-05', '[{"asset_type":"equity","name":"qty-col-overflow","quantity":1e20,"cost_basis":9e15}]'::jsonb) $$,
   '22003', null,
-  '(l5-q-column-overflow) quantity=1e20 (clears 017''s numeric(28,8) ceiling) with cost_basis=9e15 (inside the narrow half-open window [5e15,1e16) that also clears the zero-price floor, and is the ONLY overflowing value in this call — unambiguously the quantity column) rejected at 22003 — restores independent observation of the quantity column, which (l5-q-overflow)''s re-target left uncovered'
+  '(l5-q-column-overflow) quantity=1e20 (clears 017''s numeric(28,8) ceiling) with cost_basis=9e15 (inside the narrow half-open window [5e15,1e16) — it clears the zero-price floor AND is representable in numeric(20,4), so quantity=1e20 is the ONLY overflowing value in this call and the 22003 is unambiguously the quantity column) rejected at 22003 — restores independent observation of the quantity column, which (l5-q-overflow)''s re-target left uncovered'
 );
 
 -- cost_basis: mirror the same 9-variant matrix.
