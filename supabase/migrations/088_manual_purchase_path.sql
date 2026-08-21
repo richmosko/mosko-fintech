@@ -174,11 +174,17 @@
 --   category must carry a TRADE one, and a BTO/BTC category is sign-consistent here
 --   by construction. A NULL p_sub_cat_id is legal and WHEN-skips the trigger.
 --   ⚠ THIS FUNCTION DOES NOT DEFAULT THE CATEGORY, deliberately. Selecting a
---   taxonomy row on the user's behalf would mean this body guessing at a per-user
+--   posting-prototype row on the user's behalf would mean this body guessing at a per-user
 --   vocabulary it does not own — the same single-authority rule that keeps 016's
 --   asset_type vocab out of 087's body. The RECOMMENDATION (F/CTO-ratified, for the
 --   app layer to implement) is that the manual-purchase form defaults the category
---   to the user's BTO row where one exists, and leaves it NULL where none does.
+--   to the user's BTO row where one exists, and leaves it NULL where none does. ⚠ That row
+--   lives in pfin.posting_prototype post-084, NOT in pfin.user_taxonomy, and the two id
+--   spaces are DISJOINT BY CONSTRUCTION (084 caps user_taxonomy's identity at 999999999
+--   and mints posting_prototype from 1000000000, with an abort guard proving no id
+--   resolves in both). So an id fetched from the wrong table cannot silently match the
+--   right row — it fails closed. The 030 Trade fence, re-issued at 084, reads
+--   pfin.posting_prototype for the same reason.
 --
 -- ----------------------------------------------------------------------------
 -- Numbering: 088 follows 087 (manual-account create-time value binding); taken at
@@ -309,8 +315,18 @@
 --     - account_trans.security_id -> pfin.asset (#7, 017, Pattern 2 novel
 --       global-OR-matched-tenant; BEFORE INSERT; tenant resolved via the account
 --       chain). Fires on every row this body inserts.
---     - account_trans_annotation.sub_cat_id -> pfin.user_taxonomy (the existing
---       chain-resolved matched-tenant fence, 023) fires when a category is supplied.
+--     - account_trans_annotation.sub_cat_id -> pfin.posting_prototype (instance #10;
+--       the chain-resolved matched-tenant fence authored at 023) fires when a category
+--       is supplied. ⚠ THE TARGET IS posting_prototype, NOT user_taxonomy, AND AN EARLIER
+--       DRAFT OF THIS LINE SAID user_taxonomy. 084 / ADR-058 RE-TARGETED #10 (and #13) to
+--       pfin.posting_prototype(id) when the GL split moved the posting rows out; the
+--       label and the fence CLASS are unchanged — a re-target amends an entry's body and
+--       never its label. ⚠ THE TRAP THAT PRODUCED THE ERROR, recorded because it is
+--       reusable: Decision 3's NUMBERED ENTRY for #10 still reads `-> pfin.user_taxonomy`,
+--       because that entry records original locking provenance and the re-target is a
+--       LATER AMENDMENT further down the Decision. Reading the entry alone gives the stale
+--       target. Read a Decision's AMENDMENTS in the same pass as its body — a retraction
+--       does not travel with citations of the thing it retracts.
 --   pfin.asset.users_id -> auth.users(id) is that table's TENANT ANCHOR, not a
 --   cross-tenant reference.
 --   ⚠ #7 IS NOT REACHABLE THROUGH THIS FUNCTION. AN EARLIER DRAFT OF THIS BLOCK SAID IT
