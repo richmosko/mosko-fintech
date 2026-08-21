@@ -15,10 +15,57 @@
 // unchanged (238 reads it that way too) — this module computes a SECOND, LOCAL percentage
 // (target_percent / Σ the twelve's target_percent) purely for THIS table's own %Target/$Target
 // columns. Nothing is written back; nothing about 074's stored value changes.
+//
+// PER-ROW STALENESS (SELF-243 — the §2.2.3 half of the SELF-208/229 staleness-ramp; producer
+// only, scoped to AC1/AC3's own text: per-row `is_stale`, no account-name resolution yet — that
+// half is a separate F/CTO-pending call, see team-lead routing). SELF-330-EQUIVALENT, not a
+// fork: reuses `nonReAllocation.ts`'s exported `loadSubCatContributors` (the fn_subcat_
+// contributors bridge) and `navComposition.ts`'s exported `resolveStaleAccountIds` (the
+// linked_source_id -> account_id bridge) VERBATIM, per both functions' own "do not fork this
+// logic" docstrings. This module's fold is SIMPLER than nonReAllocation.ts's own in one respect
+// and stricter in another:
+//   - SIMPLER: no collapsed/aggregate row exists here (all twelve rows are real, individually
+//     rendered Sub-Cats — unlike §2.2.2's synthetic "US - Sector Diversified" row), so there is
+//     no `foldIsStale`-style Kleene-OR-across-many-ids fold, only a single-id lookup per row.
+//   - STRICTER: a row whose `sub_cat_id` is `null` here means something DIFFERENT from
+//     nonReAllocation.ts's `null` key. There, `null` is the real Unsorted row and a LEGITIMATE
+//     lookup key into the contributor map (076's NULL-taxonomy bucket). HERE, `sub_cat_id ===
+//     null` means "this US-equity label is missing from the caller's own taxonomy" (AC1's
+//     documented edge case) — it has NO sub_cat_id for ANY position to be classified into, and
+//     must NEVER be used to look up the map's `null` key, which would misattribute the tenant's
+//     Unsorted-bucket staleness onto this unrelated row. `rowIsStale` below guards on this
+//     explicitly, before ever touching the map — see its own comment.
+//
+// Producer contract mirrors AllocationRow.is_stale exactly: `true | false | null`, NEVER
+// `undefined`. `computeUsEquityAllocation`'s two trailing params (`subCatAccountIds`,
+// `staleAccountIds`) keep their optional defaults — mirroring `computeNonReAllocation`'s own
+// pure-core signature exactly, including WHY: a pure compute function's whole job is to answer
+// for whatever it's handed, and every pre-SELF-243 call site in this suite (there is no analogous
+// "forgot to thread staleness" hazard at a pure-function call site the way there is at an I/O
+// boundary) degrades to `is_stale: null` on every row, never a silent `false`.
+//
+// ROUTE WIRED (`allocation/us-equity/+page.server.ts`, SELF-243): the route threads a real
+// `staleLinkedSourceIds` value into `loadUsEquityAllocation`, mirroring the parent `/allocation`
+// loader's SELF-330 pattern exactly (staleness loaded first, derived to a Set-or-null, passed
+// through).
+//
+// ⚠ SEC-FLAGGED (7084aca, non-blocking, ratified by team-lead): `loadUsEquityAllocation`'s
+// `staleLinkedSourceIds` param is now REQUIRED — no default — matching `loadNonReAllocation`'s own
+// SELF-330 shape exactly (nonReAllocation.ts:538-542). It ORIGINALLY carried a `= null` default so
+// this route's pre-existing two-arg call site would keep compiling before the route was wired;
+// once the route WAS wired (removing the only caller that needed the default), the default became
+// exactly the gap the 330 precedent was written to close: Sec's finding — "the sibling catches an
+// omitted thread at typecheck... a future ramp site is exactly where that gets forgotten" — a
+// default degrades safely (never silently-fresh, `null` still resolves every row to UNKNOWN) but
+// trades a compile-time catch for a runtime one at the NEXT surface that reuses this loader and
+// forgets to thread staleness. The compiler is the watcher now, same as every other required
+// staleness param in this codebase.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ZoneResolvedAsOf } from '$lib/server/time/asOf';
 import { loadSubcatMarketValueAndTargets, type SubcatMarketValueRow } from './subcatMarketValue';
+import { loadSubCatContributors } from './nonReAllocation';
+import { resolveStaleAccountIds } from './navComposition';
 import { US_EQUITY_SUB_CATS, US_EQUITY_SUB_CAT_SET } from './usEquitySubCats';
 
 /** One of the twelve rows (AC1's exact order — US_EQUITY_SUB_CATS is the single source of
@@ -42,6 +89,17 @@ export type UsEquityRow = {
 	dollar_alloc: number;
 	/** Cascades from dollar_target: null iff dollar_target is null. */
 	dollar_realloc: number | null;
+	/** SELF-243: tri-state, mirroring AllocationRow.is_stale's own contract — NEVER `undefined`
+	 *  (binding producer contract; see module header). `true` = at least one contributing account
+	 *  is in the caller's `046` stale set. `false` = every contributing account resolved to
+	 *  confirmed-not-stale, this Sub-Cat has no contributing accounts at all (vacuous fold), OR
+	 *  `sub_cat_id` is `null` (the label is missing from the caller's own taxonomy — structurally
+	 *  no position can be classified into it, so it is never "stale," never looked up against the
+	 *  contributor map's Unsorted-row `null` key — see module header). `null` = UNKNOWN — the
+	 *  root `046` read was itself unknown, or the contributor/account bridge read failed;
+	 *  propagates uniformly to every row in that case, never mixed with a resolved value in the
+	 *  same table. */
+	is_stale: boolean | null;
 };
 
 /** The table's total row (AC3's drill-down-identity anchor lives on `dollar_alloc` here — it
@@ -75,8 +133,43 @@ export type UsEquityAllocationResult = { data: UsEquityAllocation | null; ok: bo
 export function computeUsEquityAllocation(
 	taxonomyRows: ReadonlyArray<{ id: number; sub_cat: string }>,
 	marketValueRows: ReadonlyArray<SubcatMarketValueRow>,
-	targetBySubCatId: ReadonlyMap<number, number>
+	targetBySubCatId: ReadonlyMap<number, number>,
+	// SELF-243: mirrors computeNonReAllocation's own two trailing params VERBATIM in shape and
+	// default posture — see module header's PER-ROW STALENESS note for why this fold is simpler
+	// (no collapsed-row Kleene-OR) and stricter (the `sub_cat_id === null` guard) than that one.
+	// Both default to the "unknown, nothing supplied" state: every call site that omits them
+	// (every pre-SELF-243 test in this suite) gets `is_stale: null` on every row, never a silent
+	// `false` — the same non-distinct-default posture computeNonReAllocation already establishes.
+	subCatAccountIds: ReadonlyMap<number | null, ReadonlySet<string>> = new Map(),
+	staleAccountIds: ReadonlySet<string> | null = null
 ): UsEquityAllocation {
+	// SELF-243 fold core. Single-id lookup per row — no Kleene-OR-across-many-ids fold needed
+	// here (contrast nonReAllocation.ts's `foldIsStale`), because every row in this table already
+	// has its own real `sub_cat_id` (or `null` for "missing from taxonomy" — see below), never a
+	// synthetic collapsed row standing in for several.
+	//
+	// ⚠ THE `subCatId === null` GUARD IS LOAD-BEARING AND MUST RUN BEFORE THE MAP LOOKUP, NOT
+	// AFTER. `subCatAccountIds`'s `null` key (as `loadSubCatContributors` — reused verbatim from
+	// nonReAllocation.ts — populates it) holds the tenant's UNSORTED-row contributors (076's
+	// NULL-taxonomy bucket), a completely unrelated population to "this US-equity label has no
+	// sub_cat_id in the caller's own taxonomy." Looking up `subCatAccountIds.get(null)` for a
+	// missing-from-taxonomy row would misattribute the tenant's Unsorted-bucket staleness onto an
+	// unrelated US-equity row — a real, silent cross-row leak (same-tenant, not cross-tenant, but
+	// still a correctness bug) with no test that would catch it by construction if the guard were
+	// merely implicit. A `null` sub_cat_id here is treated as "vacuously not stale, once the root
+	// state is known" — the same "no contributors, no staleness" answer a real Sub-Cat id with an
+	// empty contributor set already gets — never as a key into the map.
+	function rowIsStale(subCatId: number | null): boolean | null {
+		if (staleAccountIds === null) return null;
+		if (subCatId === null) return false;
+		const contributors = subCatAccountIds.get(subCatId);
+		if (!contributors || contributors.size === 0) return false;
+		for (const accountId of contributors) {
+			if (staleAccountIds.has(accountId)) return true;
+		}
+		return false;
+	}
+
 	const idByLabel = new Map<string, number>();
 	for (const t of taxonomyRows) {
 		if (US_EQUITY_SUB_CAT_SET.has(t.sub_cat)) idByLabel.set(t.sub_cat, t.id);
@@ -124,6 +217,7 @@ export function computeUsEquityAllocation(
 			pct_alloc: allocRatio === null ? null : allocRatio * 100,
 			dollar_target,
 			dollar_alloc: r.market_value,
+			is_stale: rowIsStale(r.id),
 			dollar_realloc: dollar_target === null ? null : dollar_target - r.market_value
 		};
 	});
@@ -145,10 +239,29 @@ export function computeUsEquityAllocation(
  * `resolveAllocationAsOf` (the SAME schema SELF-238 uses; AC6). Fail-soft, mirrors
  * nonReAllocation.ts / subcatMarketValue.ts: any read error degrades to `{ data: null, ok: false
  * }`, logged, never thrown.
+ *
+ * `staleLinkedSourceIds` (SELF-243 — mirrors `loadNonReAllocation`'s own parameter of the same
+ * name VERBATIM, including its tri-state contract AND its REQUIRED-ness — no default, matching
+ * `loadNonReAllocation` exactly (nonReAllocation.ts:538-542; Sec-flagged 7084aca, ratified by
+ * team-lead: a default here would mask a caller genuinely forgetting to thread staleness — the
+ * compiler is the watcher, the same discipline the 330 sibling already established). The route
+ * (`allocation/us-equity/+page.server.ts`) threads a real value through, mirroring the parent
+ * `/allocation` loader's SELF-330 call exactly — passing `null` explicitly is still the correct
+ * choice for a caller whose OWN root `046` read was unknown; only the ABSENCE of an argument is
+ * now disallowed. This function runs the SAME contributor-bridge + account-bridge sequence
+ * `loadNonReAllocation` does, reusing both bridges verbatim (no forked RPC calls):
+ *   1. `loadSubCatContributors` (nonReAllocation.ts) — the caller's full (sub_cat_id, account_id)
+ *      contributor map. This module only ever looks up the twelve US-equity ids out of it.
+ *   2. `resolveStaleAccountIds` (navComposition.ts) — resolves the stale `linked_source_id`s to
+ *      `account_id`s.
+ * Either bridge failing leaves `staleAccountIds` at `null`, which forces every row's fold to
+ * `null` via `computeUsEquityAllocation`'s own short-circuit — never a partial or silently-fresh
+ * table, same posture `loadNonReAllocation` already establishes.
  */
 export async function loadUsEquityAllocation(
 	supabase: SupabaseClient,
-	asOf: ZoneResolvedAsOf
+	asOf: ZoneResolvedAsOf,
+	staleLinkedSourceIds: ReadonlySet<string> | null
 ): Promise<UsEquityAllocationResult> {
 	const substrate = await loadSubcatMarketValueAndTargets(supabase, asOf);
 	if (!substrate.ok) return { data: null, ok: false };
@@ -167,11 +280,27 @@ export async function loadUsEquityAllocation(
 		return { data: null, ok: false };
 	}
 
+	// SELF-243: a metadata-only (staleness) failure must NEVER take down this table's actual $/%
+	// data — mirrors loadNonReAllocation's own "fail-soft, but never to confirmed-fresh" posture.
+	// `subCatAccountIds` / `staleAccountIds` start at their UNKNOWN defaults (empty map / null)
+	// and are only upgraded once BOTH the contributor RPC and the account bridge have succeeded.
+	let subCatAccountIds: ReadonlyMap<number | null, ReadonlySet<string>> = new Map();
+	let staleAccountIds: ReadonlySet<string> | null = null;
+	if (staleLinkedSourceIds !== null) {
+		const contributors = await loadSubCatContributors(supabase, asOf);
+		if (contributors !== null) {
+			subCatAccountIds = contributors;
+			staleAccountIds = await resolveStaleAccountIds(supabase, staleLinkedSourceIds);
+		}
+	}
+
 	return {
 		data: computeUsEquityAllocation(
 			(taxonomyRows ?? []) as Array<{ id: number; sub_cat: string }>,
 			substrate.rows,
-			substrate.targetBySubCatId
+			substrate.targetBySubCatId,
+			subCatAccountIds,
+			staleAccountIds
 		),
 		ok: true
 	};

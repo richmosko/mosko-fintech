@@ -600,8 +600,20 @@ export async function loadNonReAllocation(
  * `is_stale` to UNKNOWN in that case, the same posture staleness.ts / navComposition.ts already
  * apply to their own primitives. A `null` sub_cat_id key holds the Unsorted row's contributors
  * (076's own NULL-taxonomy row has no sub_cat_id to key on).
+ *
+ * EXPORTED (SELF-243): usEquityAllocation.ts's own per-row staleness fold (§2.2.3's SELF-330-
+ * equivalent) reuses this function VERBATIM rather than re-issuing the same RPC a second time —
+ * same discipline `resolveStaleAccountIds`'s own docstring already states for the account-bridge
+ * half (navComposition.ts: "do not fork this logic"), applied here to the contributor-bridge half.
+ * usEquityAllocation.ts only ever looks up the twelve US-equity `sub_cat_id`s out of the map this
+ * returns — it does NOT re-scope the RPC call itself (no filter param exists on `fn_subcat_
+ * contributors` to do so), and it must NEVER look up the `null` key: that key holds THIS
+ * function's Unsorted-row contributors (076's NULL-taxonomy bucket), which has no correspondence
+ * to "a US-equity label missing from the caller's own taxonomy" — a real, distinct null in that
+ * caller's own row shape. Conflating the two would misattribute the Unsorted bucket's staleness
+ * onto an unrelated US-equity row. See usEquityAllocation.ts's own fold for the guard.
  */
-async function loadSubCatContributors(
+export async function loadSubCatContributors(
 	supabase: SupabaseClient,
 	asOf: ZoneResolvedAsOf
 ): Promise<ReadonlyMap<number | null, ReadonlySet<string>> | null> {

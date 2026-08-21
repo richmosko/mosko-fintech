@@ -50,14 +50,21 @@
 	the design flow doc's F-2.2.C). The §2.2.2→§2.2.3 entry link lives on NonReAllocationTable.svelte
 	(the "US - Sector Diversified" row); the back-link lives on this route's +page.svelte header.
 
+	SELF-243 AC6 annotation: §2.2.3 inherits per ADR-013 D1 illustrative-not-exhaustive — it is NOT
+	one of the surfaces PRD §2.4.4 names explicitly (that list is §2.1.2/§2.1.5/§2.2.2/§2.3.2/
+	§2.3.4/§2.6; see NonReAllocationTable.svelte's own AC6 annotation for the §2.2.2 half of this
+	same pair, which IS explicitly named there).
+
 	AC7 — staleness per §2.4.4 / ADR-013 D1, same two-part shape as §2.2.2:
 	  (1) SECTION-level `StaleConstituentBadge` fed by the whole-tenant `staleness` prop.
 	  (2) PER-ROW inline `.stale-tag` + `tr.stale-row` tint keyed on `UsEquityRow.is_stale`, run
 	      through the SAME `staleDisplayState()` helper §2.2.2 uses (reused from
 	      nonre-allocation.ts, not reimplemented — one tri-state normalization for the whole app).
-	      DORMANT today (usEquityAllocation.ts has no per-row producer yet, same gap
-	      nonReAllocation.ts has) — every row shows "Staleness unknown" honestly until Backend
-	      wires the contributor join, never silently "fresh" (the SELF-220/229 hazard).
+	      DORMANT today (usEquityAllocation.ts has no per-row producer yet — §2.2.2's own equivalent
+	      gap was closed by SELF-330's fn_subcat_contributors fold; this surface's producer is
+	      SELF-243 in-flight Backend work, same pattern) — every row shows "Staleness unknown"
+	      honestly until Backend wires the contributor join, never silently "fresh" (the
+	      SELF-220/229 hazard).
 
 	Sec F-1 fix (PR #520 review, AMBER, resolved): the render-boundary gate on the degenerate US
 	Equity denominator (`allocation.total.dollar_alloc`) — REUSED `ratioColumnsUnset()` from

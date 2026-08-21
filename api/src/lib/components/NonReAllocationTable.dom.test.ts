@@ -378,6 +378,46 @@ describe('NonReAllocationTable — AC11: section badge + per-row tri-state stale
 		expect(within(row).queryByText('Staleness unknown')).toBeNull();
 		expect(row.classList.contains('stale-row')).toBe(false);
 	});
+
+	// SELF-243 (frontend-2's own recommendation, QA-covered): every test above mounts a FRESH
+	// component instance per fixture, which proves each STATE renders correctly but proves nothing
+	// about the TRANSITION between them — a real user session re-fetches this table's data (e.g.
+	// after re-authenticating a stale-flagged institution) and the SAME mounted component instance
+	// updates its props, which is a DIFFERENT Svelte code path (a reactive DOM patch) from a fresh
+	// SSR/initial mount. Treating "renders correctly when fresh" as proof that "clears correctly
+	// when it WAS stale" would be exactly the untested-transition gap this test closes: it renders
+	// once stale, asserts the tint, then `rerender()`s the SAME instance to fresh and asserts the
+	// tint is actually GONE — not merely that a separately-mounted fresh instance never had it.
+	it('a row that WAS stale clears its tag and row-tint class on the next render once is_stale flips to false (the update path, not just the initial mount)', () => {
+		const staleFixture: NonReAllocation = {
+			...FIXTURE,
+			groups: FIXTURE.groups.map((g) =>
+				g.cat === 'Cash'
+					? { ...g, rows: g.rows.map((r) => (r.sub_cat === 'FDIC' ? { ...r, is_stale: true } : r)) }
+					: g
+			)
+		};
+		const freshFixture: NonReAllocation = {
+			...FIXTURE,
+			groups: FIXTURE.groups.map((g) =>
+				g.cat === 'Cash'
+					? { ...g, rows: g.rows.map((r) => (r.sub_cat === 'FDIC' ? { ...r, is_stale: false } : r)) }
+					: g
+			)
+		};
+		const { getByText, rerender } = render(NonReAllocationTable, {
+			props: { allocation: staleFixture, staleness: EMPTY_STALENESS }
+		});
+		const staleRow = getByText('FDIC').closest('tr')!;
+		expect(within(staleRow).getByText('May be stale')).toBeTruthy();
+		expect(staleRow.classList.contains('stale-row')).toBe(true);
+
+		rerender({ allocation: freshFixture, staleness: EMPTY_STALENESS });
+
+		const clearedRow = getByText('FDIC').closest('tr')!;
+		expect(within(clearedRow).queryByText('May be stale')).toBeNull();
+		expect(clearedRow.classList.contains('stale-row')).toBe(false);
+	});
 });
 
 // SELF-330 gap-fill (2026-08-20): AC11's two special row shapes — Unsorted (keyed sub_cat_id IS
