@@ -38,6 +38,7 @@ import { ADMISSION_SECRET_HEADER, verifySharedSecret } from './sharedSecret.js';
 import type { PublicJwk } from './webhookVerificationKey.js';
 import type { SyncSourceInput, SyncSourceResult } from './triggerSync.js';
 import type { ManualSyncInput, ManualSyncResult } from './manualSync.js';
+import type { AssetResolveInput, AssetResolveResult } from './assetResolve.js';
 
 /** Max inbound body. A link_token request / public_token handoff is tiny; anything larger is
  *  abuse → reject (fail-closed) rather than buffer. */
@@ -143,6 +144,73 @@ const manualSyncBodySchema = z
 	})
 	.strict();
 
+// ── SELF-325 asset-resolve leg — a NEW route on this SAME admission server (private-bind +
+//    shared-secret gate + session-derived tenant, identical to every other leg here). NOT a new
+//    §10 instance (Architect design temp/architect-purchase-path-addendum.md §2.1/§4): reuses the
+//    existing withServiceRole() identity + the existing 020 grant, no new privileged surface.
+//    NAMESPACE-POLLUTION boundary validation (addendum §2.3 — a design condition, not polish):
+//    symbol/cusip constrained by pattern+length, asset_type restricted to 016's CHECK vocabulary
+//    (the full 14-value enum — narrowing to a "market-priced" subset is a Frontend picker/UX
+//    call, not a server-validation one), name length-bounded. At least one of symbol/cusip is
+//    required — a blank/blank resolve has no identity to bind a purchase to. `.strict()` —
+//    mass-assignment fence (Lock 14 mod #1).
+const ASSET_TYPES = [
+	'equity',
+	'etf',
+	'fund',
+	'money_market',
+	'bond',
+	'future',
+	'option',
+	'crypto',
+	'real_estate',
+	'vehicle',
+	'metal',
+	'collectible',
+	'currency',
+	'private'
+] as const;
+
+const nullableTrimmed = (max: number) =>
+	z.preprocess(
+		(v) => (v === '' || v === undefined ? null : v),
+		z.string().trim().max(max).nullable()
+	);
+
+const assetResolveBodySchema = z
+	.object({
+		ownerUserId: z.string().uuid(),
+		symbol: z.preprocess(
+			(v) => (v === '' || v === undefined ? null : v),
+			z
+				.string()
+				.trim()
+				.max(20)
+				.regex(/^[A-Za-z0-9.\-]+$/, 'symbol must be alphanumeric (with . or -).')
+				.nullable()
+		),
+		cusip: z.preprocess(
+			(v) => (v === '' || v === undefined ? null : v),
+			z
+				.string()
+				.trim()
+				.length(9, 'cusip must be exactly 9 characters.')
+				.regex(/^[A-Za-z0-9]{9}$/, 'cusip must be alphanumeric.')
+				.nullable()
+		),
+		assetType: z.enum(ASSET_TYPES),
+		name: nullableTrimmed(200),
+		currency: z
+			.string()
+			.trim()
+			.regex(/^[A-Za-z]{3}$/, 'currency must be a 3-letter ISO code.')
+	})
+	.strict()
+	.refine((v) => v.symbol !== null || v.cusip !== null, {
+		message: 'At least one of symbol or cusip is required.',
+		path: ['symbol']
+	});
+
 export interface ReauthStartInput {
 	provider: 'plaid' | 'simplefin';
 	linkedSourceId: bigint;
@@ -191,6 +259,9 @@ export interface AdmissionServerDeps {
 	/** SELF-317: user-initiated "Sync now" — validates + debounces synchronously, returns per-source
 	 *  dispositions, and runs the actual sync(s) fire-and-forget (A2). Resolves fast (before the 202). */
 	manualSync(input: ManualSyncInput): Promise<ManualSyncResult>;
+	/** SELF-325: resolve-or-mint a GLOBAL pfin.asset row for the manual purchase-path (thin wrapper
+	 *  over resolveSecurityId — see assetResolve.ts). */
+	resolveAsset(input: AssetResolveInput): Promise<AssetResolveResult>;
 	/** Token-free diagnostic logger (never receives a body/secret/token). */
 	logger?: (message: string) => void;
 }
@@ -262,6 +333,7 @@ function toAdmissionAccounts(accounts: ProviderAccountRef[]): AdmissionAccountRe
  *   POST /admission/link-token       → { link_token, expiration } (leg-1, shared-secret authed)
  *   POST /admission/exchange         → { sourceId, accounts }     (leg-2, shared-secret authed)
  *   POST /admission/simplefin/claim  → { sourceId, accounts }     (leg-S, shared-secret authed)
+ *   POST /asset/resolve              → { assetId }                (SELF-325, shared-secret authed)
  * Every non-health route requires the constant-time shared-secret header; absent/mismatch → 401.
  */
 /** N-1 (Sec SELF-212): explicit inbound timeouts — do NOT rely on Node defaults for a
@@ -340,6 +412,10 @@ export function createAdmissionServer(deps: AdmissionServerDeps): Server {
 		if (path === '/admission/manual-sync') {
 			if (method !== 'POST') return sendError(res, METHOD_NOT_ALLOWED, 'method_not_allowed');
 			return handleManualSync(req, res);
+		}
+		if (path === '/asset/resolve') {
+			if (method !== 'POST') return sendError(res, METHOD_NOT_ALLOWED, 'method_not_allowed');
+			return handleAssetResolve(req, res);
 		}
 		return sendError(res, NOT_FOUND, 'not_found');
 	}
@@ -596,6 +672,42 @@ export function createAdmissionServer(deps: AdmissionServerDeps): Server {
 			// (A2 fire-and-forget is guarded worker-side). Envelope stays scrubbed (C6-5/C4).
 			log(`admission: 502 manual-sync failed (${err instanceof Error ? err.message : 'error'})`);
 			return sendError(res, BAD_GATEWAY, 'manual_sync_failed');
+		}
+	}
+
+	// SELF-325 — resolve-or-mint a GLOBAL pfin.asset row for the manual purchase-path (Case 3 /
+	// public tickers). A thin wrapper (deps.resolveAsset → resolveSecurityId; see assetResolve.ts
+	// module header) — this handler re-implements nothing. ownerUserId is session-derived (C6-3;
+	// never browser-sourced) and doubles as the audit subject + future rate-limit key (no
+	// rate-limit control exists yet — flagged to Sec, not built here). Every failure stays 5xx: a
+	// resolve/mint failure here is a DB/infra condition, never a client-correctable input (the
+	// Zod schema already rejected malformed identity inputs before this runs). C6-5: route+status
+	// only — never the body.
+	async function handleAssetResolve(req: IncomingMessage, res: ServerResponse): Promise<void> {
+		let body: unknown;
+		try {
+			body = await readJsonBody(req);
+		} catch (err) {
+			const reason = err instanceof Error ? err.message : '';
+			return sendError(res, reason === 'BODY_TOO_LARGE' ? PAYLOAD_TOO_LARGE : BAD_REQUEST, 'invalid_request');
+		}
+		const parsed = assetResolveBodySchema.safeParse(body);
+		if (!parsed.success) return sendError(res, BAD_REQUEST, 'invalid_request');
+
+		try {
+			const result = await deps.resolveAsset({
+				ownerUserId: parsed.data.ownerUserId,
+				symbol: parsed.data.symbol,
+				cusip: parsed.data.cusip,
+				assetType: parsed.data.assetType,
+				name: parsed.data.name,
+				currency: parsed.data.currency
+			});
+			log(`admission: 200 asset-resolve asset_id=${result.assetId ?? 'null'}`);
+			return sendJson(res, OK, { assetId: result.assetId });
+		} catch (err) {
+			log(`admission: 502 asset-resolve failed (${err instanceof Error ? err.message : 'error'})`);
+			return sendError(res, BAD_GATEWAY, 'asset_resolve_failed');
 		}
 	}
 }
