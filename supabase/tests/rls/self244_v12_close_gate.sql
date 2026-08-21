@@ -18,10 +18,12 @@
 --         here (not silently worked around):
 --         · SELF-236 retired at 048 (account.sub_cat_id column + its trigger + the
 --           7-arg fn_create_manual_account param all dropped) — N/A, nothing to test.
---         · SELF-325 (236's successor) is UNSHIPPED as of 2026-08-20 — Linear status
---           Backlog, no PR, no migration. F/CTO's multi-asset design ruling (2026-08-16)
---           fixed the SHAPE but nothing has landed. This gate does NOT invent coverage
---           for an unshipped surface. Re-check before V1.2 milestone-close.
+--         · SELF-325 (236's successor) is UNSHIPPED as of THIS BATTERY'S LANDING (2026-08-20).
+--           F/CTO ruled (2026-08-20, relayed by team-lead): 325 stays IN V1.2 and builds
+--           IMMEDIATELY AFTER this gate — this is SEQUENCING, not deferral; V1.2 rotation
+--           waits for BOTH. 325's coverage lands with its OWN arc, against its OWN migration,
+--           once that surface exists — this file does NOT invent coverage for a surface that
+--           isn't shipped yet, and does NOT certify SELF-325 by its own green run.
 --   AC2/AC3 — "the three allocation functions": resolved LIVE (catalog query, not a
 --         carried draft count) to fn_subcat_market_value + fn_subcat_contributors +
 --         fn_holdings_as_of (team-lead ruling: include fn_holdings_as_of as the third,
@@ -80,6 +82,19 @@
 --   per-file; team-lead overruled QA's initial claim on nonReAllocation.io.test.ts /
 --   usEquityAllocation.io.test.ts). Cited from this file's own coverage inventory (AC1
 --   note above), not duplicated here.
+--
+--   io-level null-arm coverage — DELIVERED, reviewed, and folded onto THIS branch:
+--   Backend-2's commit (originally pinned detached at 7226aa22a3c6e187d3f377bc6e625aef-
+--   90891259 off this branch's own base cedbb95, per its own commit message a deliberate
+--   cherry-pick pin for QA) now sits on feature/self-244-v12-close-gate as 0eabadc.
+--   `staleLinkedSourceIds = null` -> `fn_subcat_contributors` never called (asserted by RPC
+--   CALL NAME, not a raw count — the same mock serves both the substrate and bridge RPCs)
+--   AND every row's `is_stale` resolves to null (proves the skip propagates through the
+--   compute core's own short-circuit, not just that the call was skipped in isolation) — one
+--   case each in nonReAllocation.io.test.ts / usEquityAllocation.io.test.ts. QA independently
+--   re-ran both gates on the merged tree (not taken on the report alone): `vitest run` on the
+--   two files — 13/13 green; `npm run check` — 858 files, 0 errors. Cited here, not
+--   duplicated in this SQL battery (app-layer Vitest, no SQL surface).
 --
 -- ┌─ COMPOSE (verified green by the full suite; this file re-proves the cross-cutting seam) ─┐
 -- │ self200_pending_symbol_classification_rls.sql (SELF-235) · 076_fn_subcat_market_value_    │
