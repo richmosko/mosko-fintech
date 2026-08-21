@@ -86,3 +86,16 @@ vacuously. Drop the scratch DB when done, and confirm the dev DB is untouched
 
 Related: [[set-local-outside-a-transaction-is-a-noop]] — the harness can switch role and
 still prove nothing.
+
+⚠ **NAME THE SCRATCH DB IN ALL LOWERCASE.** `create database scratchF` creates
+`scratchf` (Postgres folds unquoted identifiers), but psql's `-d scratchF` is
+**case-sensitive** and fails with *"database scratchF does not exist"*. The
+symptom is catastrophic-looking and misleading: the chain silently never applies
+and **every** battery reports `(Wstat: 512 (exited 2) Tests: 0 Failed: 0)` — 79
+files "failing" with zero tests run, which reads as a total regression rather
+than as a connection error. Note `alter database scratchF owner to postgres`
+SUCCEEDS (it is SQL, so it folds), which makes the setup look healthy.
+⚠ Compounding trap measured at the same moment: `grep -c "^ERROR" || echo 0` on
+the load log printed **0 errors** for a load that never connected. A guard
+chained to its action reports success about a step that did not run — print the
+counts unconditionally and assert the connection separately.

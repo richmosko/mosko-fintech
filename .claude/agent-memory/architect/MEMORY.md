@@ -11,7 +11,8 @@
 
 - **["No FK on this column" is not "no FK in the lineage"](reference_no_fk_on_column_is_not_no_fk_in_lineage.md)** — an FK-less snapshot is still fenced one hop upstream; sweep upstream of every FK-less mirror column when a target moves.
 - **[A reserved id range needs a MAXVALUE on the lower sequence](reference_reserved_id_range_needs_a_maxvalue.md)** — an offset alone is disjoint by DISTANCE; assert the construction from `pg_sequence`, never an overlap count.
-- **[Scratch-DB recipe for a full clean chain apply](reference_scratch_db_full_chain_recipe.md)** — container `pg_dump`, load as `supabase_admin`, never `--no-privileges`. ⚠ Fresh DATABASE on a DIRTY CLUSTER: no control for role/membership/grantor claims.
+- **[`rollback` does NOT reset sequences](reference_rollback_does_not_reset_sequences.md)** — a new battery shifts every later battery's ids and can redden an unrelated file; ⚠ a RE-USED scratch DB hides the whole class. Rebuild before every full-suite claim.
+- **[Scratch-DB recipe for a full clean chain apply](reference_scratch_db_full_chain_recipe.md)** — container `pg_dump`, load as `supabase_admin`, never `--no-privileges`, **name it all-lowercase**. ⚠ Fresh DATABASE on a DIRTY CLUSTER: no control for role/membership/grantor claims.
 - **[Catalog-comment staleness needs the CATALOG](feedback_catalog_comment_staleness_needs_the_catalog.md)** — a later migration may have re-emitted it; grepping the source over-reports staleness. Two checks via one instrument = one check.
 - **[`set local` outside a transaction is a silent no-op](feedback_set_local_outside_transaction_is_a_noop.md)** — the RLS smoke then runs as superuser and every leg passes; a vacuous harness looks PERMISSIVE, not empty. Control leg first.
 - **[`user_settings` can never carry the aal2 clause](reference_user_settings_excluded_from_aal2_backstop.md)** — `025` names it a NON-NEGOTIABLE exclusion (policy recursion); wrong home for step-up-fenced tenant data.
@@ -21,13 +22,17 @@
 - **[A join's key decides its failure DIRECTION](reference_join_key_decides_failure_direction.md)** — surrogate-id keys fail CLOSED under an RLS regression; shared-vocabulary string keys fail OPEN and need an explicit `users_id` conjunct. ⚠ A fence justified as "explicit not inherited" invites its own removal.
 - [RLS qual privilege semantics](reference_rls_qual_privilege_semantics.md) — policy quals call by stored OID, so schema USAGE is never re-checked; a harness missing the bootstrap's REVOKEs is more permissive than prod.
 - **[Named vs predicate exclusion: opposite visibility instruments](reference_named_vs_predicate_exclusion_visibility.md)** — listing a predicate-excluded value in the named-exclusion set turns a LOUD failure silent; two constants + a COMPLEMENT leg (raw minus filtered == named set) collapses the totality trade; a watcher that exists is not armed.
+- **[Mirror a function from the CATALOG, not the file](feedback_mirror_a_function_from_the_catalog_not_the_file.md)** — a `CREATE OR REPLACE` chain leaves every superseded body greppable; the replacing migration is often named after something else. Measured: the copy did not parse.
 - **[CREATE OR REPLACE resets volatility](reference_create_or_replace_resets_volatility.md)** — silently erases an `ALTER … STABLE` pin, invisible to every value assertion; pin per SIGNATURE, and a STABLE caller of a VOLATILE callee is an unbacked promise.
 
 ## How to work
 
+- **[The repo runs on LOCAL time; agents read UTC](reference_repo_runs_on_local_time_agents_read_utc.md)** — evening datestamps come out a day ahead. ⚠ Treat a wrong date as SYSTEMATIC, not a typo; re-grep the branch, not the file.
+
+- **[A prose observation needs re-anchoring too](feedback_a_prose_observation_needs_reanchoring_too.md)** — I re-read every sha and md5 in-turn, then reported a wording finding measured on mid-edit bytes. Read the COMMITTED bytes; a mid-edit read is a draft note, not a finding.
 - **[A ref handed over is not yours to advance](feedback_a_ref_handed_over_is_not_yours_to_advance.md)** — after "ready at `<sha>`", unknown review state is BLOCKING; a hold in flight can't stop a push already moving. ⚠ Never force-push back to the reviewed sha.
 
-- **[`temp/` is per-worktree, not shared](feedback_temp_is_per_worktree_not_shared.md)** — a hand-off written to the shared read anchor is invisible from a teammate's worktree; hand over an ABSOLUTE path + md5, and never answer a missing-artifact challenge by blessing the inline message.
+- **[`temp/` is per-worktree, not shared](feedback_temp_is_per_worktree_not_shared.md)** — invisible from a teammate's worktree; hand over an ABSOLUTE path + md5. ⚠ The session-close SWEEP inherits the blindness and reports clean: 29 files, 9 days old, measured at SELF-330.
 
 - **[A consequence list inherits its author's instrument](feedback_consequence_list_inherits_its_authors_instrument.md)** — re-measure over the instruments the ADR did NOT use (the live catalog, not the tree); and record an obligation whose referent doesn't exist.
 

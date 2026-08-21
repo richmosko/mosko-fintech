@@ -6,6 +6,7 @@
 
 ## Verification discipline
 
+- [Issue-ID audit slash-shorthand blind spot](feedback_issue_id_audit_slash_shorthand_blind_spot.md) — a bare `self-[0-9]+` grep misses IDs inside "SELF-239/241/330"-style shorthand; use `self-[0-9]+(/[0-9]+)*` before reporting a pre-push ID audit complete.
 - [Verify a DB fn's signature against the applied migration](feedback_verify_db_fn_signature_against_migration.md) — a teammate's brief describing params/scope is a claim, not a fact.
 - [A component header can predate its migration and go stale](feedback_stale_component_header_vs_migration.md) — read the migration's own CONTRACT block over a sibling test's narrative prose.
 - [Mirrored render gate must match the server guard SHAPE](feedback_mirrored_render_gate_must_match_server_guard_shape.md) — Sec AMBER on SELF-241: dropped a sibling table's denominator-gate param assuming it was redundant; the two server cores guarded on genuinely different predicates (one `> 0` unified, one two independent `=== 0`s). Grep the actual guard before reusing/dropping a formatter's gate.
@@ -16,6 +17,7 @@
 
 - [temp/ handoff files need a shared path](feedback_temp_handoff_files_need_a_shared_path.md) — per-worktree `temp/` is gitignored and never syncs; check the main checkout or ask for inline paste.
 - [Mechanical boundary exception — flag, don't block](feedback_mechanical_boundary_exception_flag_dont_block.md) — a one-line pattern-matching fix to a Backend-owned file is fine unilaterally when my own committed work needs it; anything requiring real judgment still needs to ask first.
+- [Batch commit-ready deliveries](feedback_batch_commit_ready_deliveries.md) — send path+md5 for ALL changed files in ONE message once every file is final; a piecemeal per-file send lets the committer read a file mid-edit against a stale md5.
 
 ## Test-environment gotchas
 

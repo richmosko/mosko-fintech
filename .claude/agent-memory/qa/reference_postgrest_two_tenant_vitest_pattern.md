@@ -15,13 +15,27 @@ contains none of tenant A's values. Only a real end-to-end call through the
 actual function, against a real RLS-enforcing backend, with two real tenant
 sessions, can.
 
-**The recipe** (built and verified for SELF-238's `loadNonReAllocation`):
+**The recipe** (drafted for SELF-238's `loadNonReAllocation`; RUN END-TO-END FOR REAL for the
+first time at the SELF-330 merge gate, 2026-08-21 — 5/5 green. Everything below reflects what
+actually worked, not the original draft):
 
 1. A throwaway PostgREST container (`public.ecr.aws/supabase/postgrest:v14.12`
-   — same image the real stack uses) pointed at a postgres-owned scratch DB
-   (see [[reference_scratch_db_full_chain_recipe]] / SELF-327's corrected
-   recipe), env: `PGRST_DB_SCHEMAS=pfin,public`, `PGRST_DB_ANON_ROLE=anon`,
-   `PGRST_JWT_SECRET=<test-only secret, never reused>`.
+   — same image the real stack uses) pointed at a **dedicated** scratch DB —
+   fastest route: `create database scratch_xxx template scratch_yyy` from an
+   already-migrated scratch DB (seconds, no manual migration replay; the
+   auth-schema-ownership wall hit when trying to build a fresh DB from empty
+   — see `feedback_documenting_a_caution_is_not_applying_it`'s sibling
+   incident — doesn't apply to TEMPLATE cloning, only to hand-rolling `auth`
+   from a `pg_dump`). Env: `PGRST_DB_URI=postgresql://postgres:postgres@
+   <db-container-name>:5432/<db>` (same docker network as the DB container —
+   `docker inspect <db-container> --format '{{range $k,$v :=
+   .NetworkSettings.Networks}}{{$k}}{{end}}'` to find it), `PGRST_DB_SCHEMAS=
+   pfin,public`, `PGRST_DB_ANON_ROLE=anon`, `PGRST_JWT_SECRET=<test-only
+   secret, never reused>`. ⚠ The seed SQL for the venue's DB must be applied
+   **without** `begin;...rollback;` — unlike every pgTAP battery, this data
+   has to survive into a LATER, separate vitest process making real HTTP
+   calls. Stop the PostgREST container before dropping/rebuilding its backing
+   DB (it holds open connections that block `DROP DATABASE`).
 2. **`@supabase/supabase-js`'s high-level `createClient()` hardcodes a
    `/rest/v1` prefix** (the Supabase-gateway/Kong convention) that bare
    PostgREST doesn't understand — symptom: `PGRST125 "Invalid path specified
@@ -50,7 +64,25 @@ sessions, can.
    Temporarily overlay their new/changed source files into YOUR OWN worktree,
    verify there, then fully restore (`git status`/`git diff` clean) before
    handing off. `git -C <their-worktree> show <branch>:<path>` reads their
-   content without touching their tree at all.
+   content without touching their tree at all. Plain `cp` from their worktree
+   path works too and is simpler when several files need overlaying at once.
+8. **Two fixture-authoring gotchas, both measured for real building the
+   SELF-330 AC9 seed, neither obvious in advance:**
+   - An **investment account with securities but no offsetting cash
+     checkpoint** goes NEGATIVE by its own buy total, and that negative cash
+     is real — it gets classified into the Cash group same as any other
+     balance, silently corrupting that group's total (measured: Cash read
+     -1065.00 instead of +300.00). Fund every investment account's checkpoint
+     to net EXACTLY zero cash (checkpoint = sum of its own buys) unless the
+     fixture actually wants it to carry cash.
+   - The **"contains none of the other tenant's values" check catches
+     collisions in EVERY flattened field, not just the obvious dollar
+     amounts** — a `planning_target.target_percent` picked without checking
+     it against the OTHER tenant's percentages produced a real two-directional
+     leak report on an otherwise-correct fixture (`[15]` present in both). Pick
+     every number in a two-tenant fixture — dollars, percentages, anything the
+     test's flattening function collects — from two DISJOINT sets, checked
+     explicitly, not assumed distinct because the dollar amounts already are.
 
 **Why:** SELF-238's AC9 ("tenant B's render contains zero of tenant A's
 values… no service_role anywhere in the path") could not be discharged by

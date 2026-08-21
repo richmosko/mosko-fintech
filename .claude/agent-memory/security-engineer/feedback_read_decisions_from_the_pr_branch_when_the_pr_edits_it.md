@@ -70,6 +70,23 @@ retraction its own Amendment had attached**) and a *right-content/wrong-pointer*
 ruling attributed to ADR-047). Checking one is exactly the habit that lets the other through. So:
 locate the pointer by bracketing header, **and** read that decision's AMENDMENTS in the same pass.
 
+**⚠ THE CONCRETE CASE THAT LOOKS LIKE A WRONG POINTER AND IS NOT: ADR-011 Decision 9.** Its title is
+`Lock 5 / Flag E2: acct_number storage class`. Every brief that says "read the V1 SECURITY DEFINER
+allowlist at ADR-011 Decision 9" is **correct**, but the body is about `acct_number` masking — the
+allowlist lives entirely in D9's **three Amendments** (2026-06-25 `3→2`, dropping the pure transform
+`fn_mask_acct_number`; 2026-06-29 `2→3`, adding `fn_grant_creator_access`; 2026-07-24 `3→4`, adding
+`fn_reclass_history_insert`). Current shape: **committed 4, authored-in-migrations 3** — the reserved
+general-audit-log helper is unauthored — but read it live; it grows. A reviewer who checks the title
+and stops will report a citation defect that does not exist. **The reverse of the usual failure: here
+the body contradicts the pointer and the AMENDMENTS vindicate it.** Same instrument either way — read
+the amendments in the same pass, every time.
+
+⚠ Related but do **not** merge them: **Lock 11 is ADR-011 Decision 15** (`monthly_report` snapshot
+store), whose Sec mod reads *"V1-SHIP-BLOCK SECURITY INVOKER on read-time composition (no DEFINER
+bypass)"*. Lock N and Decision N do not correspond in ADR-011 — Decision 9 is Lock 5, Decision 15 is
+Lock 11, Decision 17 is Lock 13. Resolve a "Lock N" citation through the decision headings, never by
+treating N as the decision number.
+
 Related: [[sec-lock-cross-check-catches-my-own-misreads]] (read the source the text CITES),
 [[measure-the-fence-regex-not-its-comment]], and [[which-ref-the-probe-was-aimed-at]] in the project
 index.

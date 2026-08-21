@@ -97,5 +97,33 @@ banner's text against a world where the text was true. **Check a degenerate-stat
 the compute core actually RETURNS in that state**, not against what the assertion needs. Same family as
 [[a-red-whose-message-names-the-wrong-defect]] and the "assertion with no watcher" class.
 
+**The fifth hiding place — the EMPTY-ITERATION path of a FOLD (SELF-330, `nonReAllocation.ts`).**
+A tri-state Kleene-OR fold had a per-item helper that correctly short-circuits to `null` when the
+whole staleness root is UNKNOWN — and a wrapper `foldIsStale(ids)` that loops the helper and returns
+`anyUnknown ? null : false`. With an **empty** `ids` the loop never runs, so it returns the OR
+identity element `false` — *confirmed fresh* — **even when the root is UNKNOWN and every sibling row
+returns `null`.** The short-circuit lived in the helper; the empty path never reaches the helper.
+`false` and `null` are not cosmetically equivalent here: the render shows a "Staleness unknown" label
+for `null` and **nothing at all** for `false`, so the degenerate row renders silently fresh beside
+rows that admit ignorance.
+
+**Three things made it worth blocking on.** (a) The empty case is reachable by construction — the row
+was emitted unconditionally with no `length > 0` gate, and a per-tenant taxonomy can lack every label
+the fold ranges over. (b) It falsified a *binding stated invariant* repeated in three shipped files
+("collapses to UNKNOWN **uniformly, for every row**"; "never 'unknown folds to false'"). (c) The
+migration's own ratify record had **rejected an alternative design for this exact defect** ("no honest
+UNKNOWN in a boolean, so a not-yet-computed row becomes `false` … it fails OPEN") — rejecting a shape
+for a fail-open and then shipping the same fail-open one layer up is an internal inconsistency, not a
+missing nicety, and saying so is what makes the finding land.
+
+**How to apply:** for any fold / reduce / `every` / `some` over a collection, evaluate the
+**zero-element** input separately from the one-element input, and ask whether the identity element it
+returns is the same value the per-item path would return under the current global state. An
+"unknown dominates" rule stated over *items* says nothing about *no items*. Tell that it will be
+green: the fixture's collection is non-empty in every test — the degenerate arity is never built,
+same as the degenerate-value fixture above. And a comment naming the collection's size ("the twelve
+…") is the thing that stops anyone asking what happens at zero — see
+[[catalog-comments-carry-live-state-tallies]].
+
 Related: [[measure-the-fence-regex-not-its-comment]] (the stale-comment half),
 [[catalog-comments-carry-live-state-tallies]].

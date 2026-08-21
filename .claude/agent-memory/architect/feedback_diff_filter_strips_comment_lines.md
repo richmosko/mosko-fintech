@@ -49,3 +49,27 @@ the positive property instead: **zero executable lines changed** (`grep -icE
 is a claim about what the diff *does* rather than about what it looks like.
 
 Related: [[structural-fence-must-cover-the-same-class]] · [[replacement-control-name-the-losing-side]]
+
+⚠ **THREE more instances in one session (SELF-330), all the same shape: a filter
+tuned to ONE file's syntax, applied to another's.** Each returned a confident
+wrong answer that looked right.
+
+1. `grep '^-[^-]'` to list a diff's deletions — strips deleted `--` SQL comment
+   lines. The obvious repair, `grep -v '^---'`, fails for a subtler reason: a
+   deleted `-- comment` renders as `--- comment` and collides with the diff's own
+   file-header marker. **Neither grep works. Use a blob-to-blob `diff
+   <(git show HEAD:f) f` and read the `<` side.**
+2. A test count via `grep -oE "(it|test)\('[^']*"` silently missed one `it(`,
+   giving 7/8/8 where the truth was 8/9/9. I had already put the wrong absolutes
+   in a report. **Count all candidates with ONE instrument before comparing.**
+3. A "comment-only?" check that assumed comment bodies start with `*` or `//`
+   reported **17 added / 6 removed code lines** on a Svelte doc-comment change
+   that touched no code. Nearly shipped as a finding against a teammate.
+   **The working instrument: strip block / HTML / line comments from both
+   versions in a real parser-ish pass, then compare the remainder** — it returned
+   byte-identical code, 82 / 317 / 387 lines unchanged.
+
+**The rule: an ad-hoc filter is a claim about the filter.** Before reporting
+anything derived from one, either verify the filter on a case whose answer you
+already know, or switch to an instrument that cannot have the blind spot
+(blob diff, comment-stripper, catalog query).
