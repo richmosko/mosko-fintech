@@ -156,21 +156,28 @@
 --   at role=postgres; every _rls.set_tenant is called at role=postgres and each
 --   block restores role=postgres before the next.
 --
--- plan(40) BREAKDOWN — see the ⟦WIRE-VALIDATE⟧ note at the top of this file
+-- plan(41) BREAKDOWN — see the ⟦WIRE-VALIDATE⟧ note at the top of this file
 --   for the run history. 5 isolation (I1-I5) + 2 account-
 --   identity isolation (I6-I7) + 1 structural integrity (S1, account_id never
 --   null) + 1 fan-out non-degeneracy (F1) + 2 DISTINCT-collapse (D1-D2) +
 --   3 granularity (G1-G3) + 4 liability-route (LR1-LR3b) + 4 real-estate
 --   (R1-R4) + 2 closure-boundary (B1-B2) + 2 zero-cash/phantom (E1-E2) + 1
 --   sold-to-zero population (P1) + 7 parity (PAR1-PAR7, binding condition 1 +
---   the NULL-key corroboration) + 2 instrument self-test (N1-N2) + 2
---   corrupt-the-control (X1-X2) + 2 grant/negative (G1n-G2n) = 40. (I6-I7),
+--   the NULL-key corroboration) + 2 instrument self-test (N1-N2) + 3
+--   corrupt-the-control (X1-X2, X3) + 2 grant/negative (G1n-G2n) = 41. (I6-I7),
 --   (S1), (F1), (LR1-LR3b) and (PAR7) were added after Architect's committed
 --   migration (fb3e94e -> 086_fn_subcat_contributors.sql) surfaced two things
 --   this file's first draft had zero coverage of: the `lut.users_id =
 --   acc.users_id` liability-route fence (a joint-review-mandatory ground
 --   Architect named explicitly) and the account-identity disclosure surface
---   as a distinct isolation axis from 076's sub_cat_id-level checks.
+--   as a distinct isolation axis from 076's sub_cat_id-level checks. (X3) was
+--   added at Sec joint-review (2026-08-20, Blocking Condition 2): (LR1-LR3b)
+--   proved the liability route works under NORMAL user_taxonomy RLS but never
+--   corrupted the ONE relation Architect's own header names as the fence's
+--   sole discriminator — an assertion with no watcher on the one join flagged
+--   as failing OPEN. (X3) corrupts `user_taxonomy_select` specifically and
+--   was demonstrated RED before landing (see the hand-off report for the
+--   observed value with the conjunct struck).
 -- =====================================================================
 
 begin;
@@ -178,7 +185,7 @@ begin;
 -- shared verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(40);
+select plan(41);
 
 \set ta '00000000-0000-0000-0000-000000000a86'
 \set tb '00000000-0000-0000-0000-000000000b86'
@@ -816,6 +823,30 @@ select ok(
 );
 select set_config('role', 'postgres', true);
 rollback to savepoint sp_corrupt2;
+
+-- Sec joint-review, SELF-330 Blocking Condition 2 (2026-08-20): X1/X2 above corrupt the THREE
+-- relations the SECURITIES/CASH-VIA-CURRENCY-ASSET path depends on -- pfin.user_taxonomy is never
+-- corrupted anywhere in this file. Architect's own header names `lut.users_id = acc.users_id` (the
+-- liability route's join to user_taxonomy, matched by SHARED-VOCABULARY STRING LABELS, not by id)
+-- as "the SOLE tenant discriminator" on that join, and states it "fails OPEN under an RLS
+-- regression where the id-keyed sibling joins fail CLOSED" -- a claim (LR1-LR3b) cannot falsify,
+-- because none of them corrupt the ONE relation the claim is actually about. (X3) closes that gap.
+savepoint sp_corrupt3;
+-- (X3) ⭐ LIABILITY-ROUTE FENCE, measured. `lut` is keyed on SHARED-VOCABULARY STRING
+--      LABELS, so user_taxonomy RLS is the ONLY thing making (LR1-LR3b) pass -- all four
+--      pass with `lut.users_id = acc.users_id` struck. Corrupt that one policy and the
+--      conjunct becomes the sole discriminator, which is the regression it exists for.
+alter policy user_taxonomy_select on pfin.user_taxonomy using (true);
+select _rls.set_tenant(:'ta'::uuid);
+select is(
+  (select array_agg(sub_cat_id order by sub_cat_id)
+     from pfin.fn_subcat_contributors('2026-07-25'::date, true)
+    where account_id = :a_liab),
+  array[:a_lb]::bigint[],
+  '(X3) ⭐ LIABILITY-ROUTE FENCE, load-bearing: with `user_taxonomy_select` broken OPEN, a_liab still maps to A''s OWN Liability Balances id ALONE -- the `lut.users_id = acc.users_id` conjunct is the sole discriminator on a shared-vocabulary string-label join, and with it struck this returns {a_lb, b_lb}'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint sp_corrupt3;
 
 -- =====================================================================
 -- GRANTS (G1n-G2n) — named with an `n` suffix to avoid colliding with the G1-G3
