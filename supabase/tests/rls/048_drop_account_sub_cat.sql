@@ -22,10 +22,15 @@
 --
 -- NON-VACUITY (this whole file goes RED on any pre-048 stack — that is the point):
 --   (1)-(3) hasnt_* -> RED if 048 had NOT run (column/trigger/function still present).
---   (4)     has_function 6-arg -> RED if 048 had NOT run (only the 7-arg overload existed).
+--   (4)     has_function 7-arg (jsonb) -> RECONCILED AT 087: pre-087 this checked
+--           the 6-arg as proof 048's drop had run; 087 replaced the 6-arg with a
+--           7-arg (jsonb) overload, so (4) now checks THAT signature — still RED
+--           on a pre-048 stack (only the OLD 7-arg-with-bigint existed there) and
+--           RED again if 087 had not run.
 --   (5)     hasnt_function 7-arg -> RED if 048 had NOT run (the 7-arg overload still existed).
---   (6)/(7) function_privs_is on the 6-arg -> RED if the recreated grant were wrong
---           (EXECUTE not granted to authenticated, or leaked to anon).
+--   (6)/(7) has_function_privilege on the 7-arg (RECONCILED AT 087) -> RED if the
+--           recreated grant were wrong (EXECUTE not granted to authenticated, or
+--           leaked to anon).
 --   (8)     positive create -> RED if the 6-arg create path did not work under a real tenant.
 --   (9)-(12) de-conflation spot-asserts -> RED if 048 had ALSO dropped the transaction-level
 --           sub_cat surface (account_trans_annotation #10 + account_trans_split #13 + their
@@ -104,7 +109,10 @@ select hasnt_function(
 );
 
 -- =====================================================================
--- GROUP B — fn_create_manual_account is now the 6-arg signature (7-arg overload gone).
+-- GROUP B — fn_create_manual_account is now the 7-arg (jsonb) signature
+--   (RECONCILED AT 087). The 048-era 6-arg is gone (DROP+CREATE, not
+--   overloaded); the EARLIER 7-arg (bigint, pre-048 p_sub_cat_id) stays gone
+--   too — (5) still asserts that DIFFERENT signature's absence, untouched.
 -- =====================================================================
 
 -- (4) the 7-arg signature EXISTS (RECONCILED AT 087 — the recreated INVOKER
