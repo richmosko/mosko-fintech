@@ -81,7 +81,7 @@
 	      test.ts). ONLY an EXPLICIT `false` renders nothing at all — the absence of a value is
 	      never silently "fresh."
 
-	      LIVE as of SELF-330 (2026-08-21, per Backend's own report relayed via team-lead — quoted
+	      LIVE as of SELF-330 (2026-08-20, per Backend's own report relayed via team-lead — quoted
 	      verbatim where noted, not independently re-verified against Backend's branch from this
 	      worktree). PRECISE SHAPE, Backend verbatim: `is_stale` is "the OUTPUT of a server-side
 	      fold over contributor account-ids joined to the 046 stale set — not something
@@ -92,7 +92,7 @@
 	      Every row — regular, the collapsed "US - Sector Diversified" row, and Unsorted — gets an
 	      EXPLICIT `true | false | null`, never `undefined` (Backend, verbatim), which is why
 	      `AllocationRow.is_stale` is now typed non-optional ($lib/nonre-allocation.ts, tightened
-	      2026-08-21). The render-boundary `undefined` normalization stays as defense-in-depth (an
+	      2026-08-20). The render-boundary `undefined` normalization stays as defense-in-depth (an
 	      un-typechecked JSON boundary could still smuggle one through) rather than as the single
 	      point of failure it was pre-SELF-330 — see that field's own hazard note.
 
@@ -107,13 +107,27 @@
 	            IS-NULL, never an equality fallback" (Backend, verbatim) — an `=`-based join against
 	            a null column would silently never match (an equality match against NULL is always
 	            false in SQL).
-	        (c) The collapsed "US - Sector Diversified" row folds "across its twelve real underlying
-	            Sub-Cat ids' own per-Sub-Cat answers, not a separate lookup" (Backend, verbatim) —
-	            an OR over the twelve Sub-Cats' ALREADY-RESOLVED tri-states, not a fresh re-fold
-	            over a merged contributor-account set, with UNKNOWN DOMINATING false (mirrors the
-	            tri-state discipline above: if even one of the twelve is unknown, the collapsed row
-	            reads unknown, never silently confirmed fresh because the other eleven resolved
-	            false).
+	        (c) The collapsed "US - Sector Diversified" row's `is_stale` is an OR over however many
+	            real underlying Sub-Cat ids the caller's own taxonomy actually holds from the
+	            twelve-member US-equity label set, not a separate contributor lookup and not a
+	            fresh re-fold over a merged contributor-account set. ⚠ REWORDED 2026-08-20 (Sec
+	            round, relayed via team-lead — mirrors the wording now used across
+	            nonReAllocation.ts's three SELF-330 sites + its staleness test header; stated here
+	            in prose rather than as a Backend quote, because a verbatim quote goes stale and
+	            misleading the moment its source is corrected, which is exactly what happened to
+	            this passage's first draft): the fold's ARITY is 0 TO TWELVE, CALLER-DEPENDENT,
+	            NEVER ASSUMED FIXED — "twelve" names the LABEL SET's ceiling
+	            (US_EQUITY_SUB_CAT_SET's own size), not the fold's guaranteed arity. A caller whose
+	            taxonomy holds NONE of the twelve US-equity labels (reachable per ADR-057 —
+	            first-access provisioning never delivers set growth to an already-provisioned
+	            tenant) folds over ZERO real Sub-Cat ids. That zero-arity case is DIFFERENT from "a
+	            real Sub-Cat with zero contributing accounts," which correctly folds to FALSE
+	            (nothing to be stale about) — the collapsed row's zero-arity case must still
+	            propagate UNKNOWN whenever the underlying staleness read itself is unknown, never
+	            silently resolve to "fresh" just because there was nothing to iterate over.
+	            UNKNOWN otherwise dominates false the same way it does everywhere else in this
+	            table: if even one of however many real answers exist is unknown, the collapsed
+	            row reads unknown.
 
 	      Both special row shapes ((b) Unsorted, (c) the collapsed row), at both `true` and `null`,
 	      are covered in NonReAllocationTable.dom.test.ts's SELF-330 gap-fill block — the generic

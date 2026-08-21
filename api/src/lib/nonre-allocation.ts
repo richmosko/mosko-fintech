@@ -62,15 +62,20 @@ export interface AllocationRow {
 	 *  raw (sub_cat_id, account_id) pairs; `nonReAllocation.ts` is what folds those account-ids
 	 *  through `resolveStaleAccountIds` (the SELF-229 bridge from navComposition.ts, now exported
 	 *  and reused verbatim) into each row's own `true | false | null` — never `undefined`, which
-	 *  is why this field is typed non-optional (tightened 2026-08-21, dropping the pre-SELF-330
+	 *  is why this field is typed non-optional (tightened 2026-08-20, dropping the pre-SELF-330
 	 *  forward-declaration). The Unsorted row's contributors are matched by "a literal null Map
 	 *  key, i.e. IS-NULL, never an equality fallback" (Backend, verbatim). The collapsed "US -
-	 *  Sector Diversified" row's `is_stale` folds "across its twelve real underlying Sub-Cat ids'
-	 *  own per-Sub-Cat answers, not a separate lookup" (Backend, verbatim) — i.e. an OR over the
-	 *  twelve already-resolved per-Sub-Cat tri-states, not a fresh re-fold over a merged
+	 *  Sector Diversified" row's `is_stale` is the OR of however many real underlying Sub-Cat ids
+	 *  the caller's own taxonomy actually holds from the twelve-member US-equity label set — 0 TO
+	 *  12, CALLER-DEPENDENT, NEVER ASSUMED FIXED (Sec round, 2026-08-20; "twelve" names the label
+	 *  SET's size, not the fold's guaranteed ARITY — stated here in prose rather than as a
+	 *  Backend quote, because Backend's own wording moved after their SELF-330 landing and a
+	 *  verbatim quote that is byte-perfect at time of writing still misrepresents once its source
+	 *  has been corrected). It is an OR over each of those real Sub-Cat ids' own already-resolved
+	 *  per-Sub-Cat tri-state, not a separate lookup or a fresh re-fold over a merged
 	 *  contributor-account set. See NonReAllocationTable.svelte's AC11 doc comment for the three
 	 *  join-shape consequences (Cash's wide contributor set / Unsorted's IS-NULL key / the
-	 *  collapsed row's OR-fold).
+	 *  collapsed row's variable-arity OR-fold).
 	 *
 	 *  ⚠ HAZARD NOTE, why `undefined` is STILL NORMALIZED to `null` at the render boundary
 	 *  (`staleDisplayState()` below) even though the type no longer admits it: an earlier

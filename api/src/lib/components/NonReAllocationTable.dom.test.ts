@@ -380,7 +380,7 @@ describe('NonReAllocationTable — AC11: section badge + per-row tri-state stale
 	});
 });
 
-// SELF-330 gap-fill (2026-08-21): AC11's two special row shapes — Unsorted (keyed sub_cat_id IS
+// SELF-330 gap-fill (2026-08-20): AC11's two special row shapes — Unsorted (keyed sub_cat_id IS
 // NULL) and the collapsed "US - Sector Diversified" row (a 12-Sub-Cat OR-fold landing on the wire
 // as ONE is_stale value) — share NonReAllocationTable's generic `staleDisplayState()` render path
 // with every plain sub_cat row, but were untested for tri-state rendering until now. Backend's
