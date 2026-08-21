@@ -231,6 +231,25 @@
 --   RLS and fires on the INSERT below. Stated explicitly because a reader who
 --   mistook the branching read for the fence might later "optimize" it away and
 --   would believe they had removed a redundancy.
+--   ⚠ BOTH HALVES ARE TRUE AND THE SECOND IS EASY TO MISREAD. #7 is AUTHORITATIVE — it is
+--   the sole gate on the service_role path, where no guard in this body runs — but
+--   THROUGH THIS FUNCTION the asset guard at (5) is the OPERATIVE rejection, because #7
+--   never fires here. Removing the guard would NOT open a hole: security_id is always
+--   non-null on this path, so #7's WHEN clause fires and its coincident predicate
+--   rejects. It would degrade the ERROR, not the outcome.
+--
+--   ⚠ THE ACCOUNT READ IS DELIBERATELY NARROWER THAN THE WRITE POLICY IT COMPOSES UNDER,
+--   and this is the same structural fact as the #7 dormancy, seen from the other side.
+--   account_select is owner-only (users_id = auth.uid(), 003) while account_trans_insert
+--   keys on the wr_access-JOIN through pfin.account_users (006). So this function is
+--   STRICTLY MORE RESTRICTIVE than the write it performs — fail-closed, and the shape 039
+--   uses. TODAY the difference is invisible only because account_users is V1-dormant and
+--   the creator-grant makes owner and wr_access-holder the same person; that is a
+--   CURRENT-STATE fact, exactly the kind that goes stale silently. WHEN SHARING IS
+--   UN-DORMED this becomes a real behavioural split: a collaborator holding wr_access
+--   will be able to record a cash transaction (040, which reads no account row) but NOT a
+--   purchase. Whoever un-dorms it decides whether that split is intended; it is named
+--   here so the decision is made rather than discovered.
 --
 --   ⚠ ADR-011 DECISION 1 (privileged-context-write) DOES NOT APPLY TO THIS FUNCTION,
 --   and saying so is not a dismissal. D1 governs writes that ingress under NO JWT and
@@ -294,16 +313,36 @@
 --       chain-resolved matched-tenant fence, 023) fires when a category is supplied.
 --   pfin.asset.users_id -> auth.users(id) is that table's TENANT ANCHOR, not a
 --   cross-tenant reference.
---   ⚠ THE FINDING IS A REACHABILITY CHANGE, NOT A COUNT CHANGE, AND IT CHANGES WHAT
---   THE PAIRED BATTERY MUST DO. 087 MINTS its asset, so cross-tenant binding is
---   unreachable there by construction and #7 CANNOT FAIL — 087's battery therefore
---   asserts #7 STRUCTURALLY (pg_trigger). This function ACCEPTS a caller-supplied
---   p_security_id, so the cross-tenant route is LIVE: a caller may submit another
---   tenant's private asset_id, and #7 is what rejects it. THE PAIRED BATTERY LEG MUST
---   BE BEHAVIOURAL HERE — a two-tenant leg submitting B's private asset_id and
---   asserting the raise. Carrying 087's structural leg across by analogy would leave
---   the live route untested, which is precisely how a fence with no exercised path
---   quietly stops working.
+--   ⚠ #7 IS NOT REACHABLE THROUGH THIS FUNCTION. AN EARLIER DRAFT OF THIS BLOCK SAID IT
+--   WAS. The correction is recorded rather than quietly applied, because the wrong
+--   version reached a commit message, three teammates and a battery plan first.
+--     WHAT THE EARLIER DRAFT CLAIMED: that because 087 MINTS its asset (so #7 cannot
+--     fail there, and 087's battery asserts it STRUCTURALLY via pg_trigger) while this
+--     function ACCEPTS a caller-supplied p_security_id, the cross-tenant route is LIVE
+--     here and the paired battery leg must exercise it behaviourally.
+--     WHY IT IS FALSE — AND IT IS A PROPERTY OF THIS BODY, NOT OF #7: the account read
+--     at (2) runs under account_select, which is `users_id = auth.uid()` (003) —
+--     OWNER-SCOPED. Any caller who gets past (2) IS the account's tenant, so
+--     acc.users_id = auth.uid(). That makes #7's predicate (GLOBAL or owned by the
+--     ACCOUNT'S TENANT) coincide EXACTLY with 016's asset_select (GLOBAL or owned by the
+--     CALLER), which is what the asset guard at (5) reads under. Anything the guard
+--     admits, #7 admits; anything #7 would reject, the guard rejected first. No live
+--     path has one passing while the other rejects.
+--     MEASURED, NOT REASONED — by QA at the SELF-325 battery build, on a scratch DB with
+--     this migration applied: tenant A calling with tenant B's private asset_id raises
+--     the guard's message; statement (7) is never reached.
+--   ⚠ IT IS DORMANT, NOT DEAD, AND THE DORMANCY RESTS ON TWO THINGS THAT CAN EACH MOVE:
+--   (i) this body's OWNER-SCOPED account read, and (ii) pfin.account_users being
+--   V1-dormant (003, creator-grant only), so owner and wr_access-holder coincide. Widen
+--   EITHER — read the account by wr_access, or un-dorm sharing — and the caller is no
+--   longer necessarily the account's tenant, at which point #7 becomes LIVE again: a
+--   caller could own asset X while the account belongs to a different tenant, which #7
+--   rejects and the guard does not. WHOEVER DOES EITHER MUST RE-READ THIS PARAGRAPH.
+--   THE PAIRED BATTERY THEREFORE: asserts #7 STRUCTURALLY (bound + enabled, the 087
+--   shape); asserts the cross-tenant rejection BEHAVIOURALLY against the GUARD, labelled
+--   as the guard so it can never be mistaken for an #7 proof; and points at 017's own
+--   battery, where #7's behavioural proof already lives on the path #7 actually gates
+--   (raw INSERT / service_role, where no guard in this body runs at all).
 --   Read Decision 3's body live at authoring time: the family GROWS, its labels are
 --   NON-CONTIGUOUS, at least one is DROPPED, and *labeled* vs *DDL-realized* diverge.
 --   NO COUNT IS CARRIED IN THIS FILE.
@@ -387,7 +426,8 @@
 --     manual_valuation row at the trade date whose price is not positive.
 --
 --   Security-load-bearing edges: the Decision-3 #7 fence is the authoritative gate on
---     security_id and is BEHAVIOURALLY REACHABLE here; the wr_access-JOIN + aal2
+--     security_id but does NOT FIRE on this path — the asset guard at (5) rejects first
+--     and the two predicates coincide (see the Decision 3 block); the wr_access-JOIN + aal2
 --     backstop gate every write as the caller; the 030 Trade biconditional and
 --     sign-alignment fire when a category is supplied; the 058 closed-account fence
 --     fires on the account_trans INSERT; the 004 immutable ledger is untouched
@@ -668,7 +708,7 @@ comment on function pfin.fn_create_manual_purchase(bigint, date, numeric, numeri
   'The zero-price fence is UNCONDITIONAL — a deviation from 087, which fences only where it writes — because a per-unit price rounding to 0.0000 at the numeric(20,4) grain (reachable whenever quantity > 20000 x cost_basis, with no single variable extreme) is a mis-expressed TRADE that account_trans.price would record as fact, whoever owns the asset. It tests the assigned local, not a recomputation of the same expression. '
   'UNPRICED-BUT-LOUD: a global asset no provider has priced cannot be priced by this caller, so the position values at zero until one does. That state ships rather than blocking the purchase, on the condition that it is not silent — hence the composite return, which forces a caller wanting only the trans_id to project the flag away, a step visible in a diff (ADR-049 Decision 4, composite-return-over-documented-obligation). ⚠ `priced` is TRUE iff an eod_price row exists at the maximum price_date <= the trade date with price > 0; it carries no source-rank CASE, so it cannot drift from 078, and the price of that is one named imprecision when two sources tie at that date. It is an indicator for the rendering layer, NOT a valuation primitive — nothing downstream may compute money from it. '
   'A provider-linked account is REFUSED (the 039 source-of-truth guard): the provider will report the same buy and both would land. '
-  'Fences evaluate as the caller: account_trans_insert''s wr_access-JOIN (006), asset_insert''s WITH CHECK (016), eod_price_insert''s manual_valuation-on-owned (019) and ata_insert (023), all aal2-backstop-claused (025), so step-up is enforced through this RPC with no in-function aal check. The account and asset reads establish currency, source-of-truth and ownership-for-branching — THEY ARE NOT THE TENANT FENCE on security_id; that is the ADR-011 Decision 3 #7 BEFORE INSERT trigger (017), authoritative independently of RLS. ⚠ Unlike 087, which mints its asset so #7 cannot fail, this function accepts a caller-supplied asset_id, so the cross-tenant route is BEHAVIOURALLY REACHABLE and its paired battery leg must exercise it rather than assert the trigger structurally. '
+  'Fences evaluate as the caller: account_trans_insert''s wr_access-JOIN (006), asset_insert''s WITH CHECK (016), eod_price_insert''s manual_valuation-on-owned (019) and ata_insert (023), all aal2-backstop-claused (025), so step-up is enforced through this RPC with no in-function aal check. The account and asset reads establish currency, source-of-truth and ownership-for-branching — THEY ARE NOT THE TENANT FENCE on security_id; that is the ADR-011 Decision 3 #7 BEFORE INSERT trigger (017), authoritative independently of RLS. ⚠ #7 does NOT fire on this path, and an earlier version of this comment claimed the opposite. Because the account read is owner-scoped (account_select, 003), the caller IS the account''s tenant, so #7''s global-or-account-tenant predicate coincides exactly with the global-or-caller predicate of 016''s asset_select that the body guard reads under: the guard rejects first, always (MEASURED on a scratch DB, not reasoned). #7 is DORMANT here, not dead — it becomes live again if the account read is widened to wr_access or pfin.account_users is un-dormed, since the caller would then no longer necessarily be the account''s tenant. That owner-scoped read also makes this function strictly more restrictive than account_trans_insert''s wr_access-JOIN: fail-closed today, a real behavioural split once sharing is un-dormed. '
   'On this path the 030 Trade fence is load-bearing where it is inert on the cash path: a category, if supplied, must be a Trade one, and BTO/BTC sign-alignment is satisfied by construction. This body does not default the category — selecting a per-user taxonomy row is the app layer''s to do. '
   'Lock 14 numeric posture: quoted, locale-formatted and currency-formatted values are rejected at PARAMETER COERCION before this body runs (these are typed numeric parameters — unlike 087, where the same inputs arrive inside jsonb and a hand-written type check is their sole observer); a NaN or Infinity passed directly as numeric is rejected by named disjuncts, kept separate because ''NaN''::numeric > 0 is TRUE; zero and negatives by an explicit guard; finite-but-huge magnitudes by numeric column coercion (017) rather than by this body. The defect class that matters is the RATIO, where no single variable is extreme. '
   'ADR-011 Decision 1 does NOT apply here and this function neither satisfies nor is subject to its clause (d): D1 governs writes ingressing under no JWT and executing under service_role, and this is a JWT-bearing INVOKER call with no elevation. The same-transaction audit-log remains DEFERRED (A2; forward-hook in body; SELF-201 Task #7). '
