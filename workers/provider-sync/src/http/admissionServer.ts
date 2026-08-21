@@ -149,27 +149,29 @@ const manualSyncBodySchema = z
 //    §10 instance (Architect design temp/architect-purchase-path-addendum.md §2.1/§4): reuses the
 //    existing withServiceRole() identity + the existing 020 grant, no new privileged surface.
 //    NAMESPACE-POLLUTION boundary validation (addendum §2.3 — a design condition, not polish):
-//    symbol/cusip constrained by pattern+length, asset_type restricted to 016's CHECK vocabulary
-//    (the full 14-value enum — narrowing to a "market-priced" subset is a Frontend picker/UX
-//    call, not a server-validation one), name length-bounded. At least one of symbol/cusip is
-//    required — a blank/blank resolve has no identity to bind a purchase to. `.strict()` —
+//    symbol/cusip constrained by pattern+length, name length-bounded. At least one of symbol/cusip
+//    is required — a blank/blank resolve has no identity to bind a purchase to. `.strict()` —
 //    mass-assignment fence (Lock 14 mod #1).
-const ASSET_TYPES = [
-	'equity',
-	'etf',
-	'fund',
-	'money_market',
-	'bond',
-	'future',
-	'option',
-	'crypto',
-	'real_estate',
-	'vehicle',
-	'metal',
-	'collectible',
-	'currency',
-	'private'
-] as const;
+//
+//    ⚠ ASSET_TYPE IS THE NARROW 9-VALUE RESOLVABLE SET, NOT THE FULL 016 VOCAB — CORRECTED
+//    2026-08-21 (Architect ruling, team-lead-confirmed). An earlier version of this schema
+//    admitted the full 14-value enum on the theory that narrowing was "a Frontend picker/UX
+//    call, not a server-validation one." That was WRONG: this route MINTS a durable GLOBAL
+//    pfin.asset row on a miss (resolveSecurityId step 3), and a global row typed 'real_estate' /
+//    'vehicle' / 'collectible' / 'private' (pricingSourceForAssetType → 'manual_valuation') can
+//    NEVER be priced by anyone — 019's eod_price_insert admits manual_valuation only on an OWNED
+//    asset, a global row is owned by nobody, and 020 grants this worker no UPDATE to ever repair
+//    one. 'currency' is excluded separately: cash is amount-carried, not instrument-carried, and
+//    088's MINT mode already rejects it — admitting it here would put the two surfaces in
+//    disagreement. THE RIGHT HOME for all 5 excluded types is 088's MINT mode (caller-owned,
+//    therefore priceable — its companion price is written in the same RPC transaction). A
+//    UI-only narrowing would NOT be a control: this route is reachable from a stale tab, a
+//    second window, or anyone holding the shared secret (the same argument api/src's
+//    isClosedAccountWrite comment already makes for a different fence). Mirrors api/src's
+//    RESOLVABLE_ASSET_TYPES (asset-constants.ts) — hand-enumerated here too, deliberately NOT
+//    derived from pricingSourceForAssetType (that would couple this route's admission policy to
+//    a mapping owned by the ingest path).
+const ASSET_TYPES = ['equity', 'etf', 'fund', 'money_market', 'bond', 'future', 'option', 'crypto', 'metal'] as const;
 
 const nullableTrimmed = (max: number) =>
 	z.preprocess(

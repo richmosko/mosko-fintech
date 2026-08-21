@@ -643,6 +643,32 @@ describe('SELF-325 asset-resolve — resolve-or-mint a global asset (Case 3)', (
 		expect(resolveAsset).not.toHaveBeenCalled();
 	});
 
+	it("400 on a personal-asset type (real_estate/vehicle/collectible/private) — excluded 2026-08-21: would mint a permanently-unpriceable global row", async () => {
+		const resolveAsset = vi.fn();
+		const url = await start({ resolveAsset });
+		for (const assetType of ['real_estate', 'vehicle', 'collectible', 'private']) {
+			const res = await post(
+				`${url}/asset/resolve`,
+				{ ownerUserId: UUID, symbol: 'X', cusip: null, assetType, name: null, currency: 'USD' },
+				authed
+			);
+			expect(res.status).toBe(400);
+		}
+		expect(resolveAsset).not.toHaveBeenCalled();
+	});
+
+	it('400 on currency (088 MINT mode already rejects it; the two surfaces must not disagree)', async () => {
+		const resolveAsset = vi.fn();
+		const url = await start({ resolveAsset });
+		const res = await post(
+			`${url}/asset/resolve`,
+			{ ownerUserId: UUID, symbol: 'USD', cusip: null, assetType: 'currency', name: null, currency: 'USD' },
+			authed
+		);
+		expect(res.status).toBe(400);
+		expect(resolveAsset).not.toHaveBeenCalled();
+	});
+
 	it('400 on a bad uuid ownerUserId', async () => {
 		const resolveAsset = vi.fn();
 		const url = await start({ resolveAsset });

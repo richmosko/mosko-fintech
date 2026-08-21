@@ -11,6 +11,14 @@
 // defense-in-depth at the internal-network hop — both independently enforce the same
 // DDL-adjacent shape rather than trusting the other boundary to have already done so.
 //
+// ASSET_TYPE IS THE NARROW RESOLVABLE_ASSET_TYPES SET, NOT THE FULL 016 VOCAB (⚠ CORRECTED
+// 2026-08-21 — Architect ruling, team-lead-confirmed; an earlier version of this schema used the
+// full 14-value enum, which was WRONG: /asset/resolve MINTS a durable GLOBAL row, so admitting a
+// `manual_valuation`-priced type here produces a permanently unpriceable, unrepairable row — see
+// RESOLVABLE_ASSET_TYPES's own comment in asset-constants.ts for the full reasoning). Rejected
+// values get a routing message pointing at the correct path (088's MINT mode for personal assets,
+// the cash-entry form for currency) rather than a bare "invalid" — see the superRefine below.
+//
 // CURRENCY IS NOT A FORM FIELD (mirrors schemas/account.ts's manualAccountCreateSchema
 // precedent — "currency is NOT threaded — it defaults to 'USD'"). The purchase-path form does
 // not collect a currency; the action supplies the literal 'USD' when building the worker
@@ -18,8 +26,13 @@
 // instrument is ever needed (out of SELF-325's ratified scope).
 
 import { z } from 'zod';
-import { ASSET_TYPES } from '$lib/schemas/asset-constants';
+import { ASSET_TYPES, RESOLVABLE_ASSET_TYPES } from '$lib/schemas/asset-constants';
 export { fieldErrors } from '$lib/server/schemas/account'; // single shared ZodError flattener
+
+const PERSONAL_ASSET_ROUTING_MESSAGE =
+	'Personal assets (real estate, vehicles, collectibles, private holdings) are recorded directly on the purchase form, not looked up in the security registry.';
+const CURRENCY_ROUTING_MESSAGE =
+	'Cash is not purchasable through the security lookup — record it from the cash-entry form.';
 
 const nullableTrimmed = (max: number) =>
 	z.preprocess((v) => (v === '' || v === undefined ? null : v), z.string().trim().max(max).nullable());
@@ -59,6 +72,10 @@ export const assetResolveSchema = z
 	.object({
 		symbol: symbolField(),
 		cusip: cusipField(),
+		// z.enum(ASSET_TYPES) here (not RESOLVABLE_ASSET_TYPES) so an out-of-vocabulary value
+		// (garbage input, not one of the 14 016 types at all) still gets Zod's own "invalid enum
+		// value" — the superRefine below is what narrows to the resolvable 9 and supplies the
+		// differentiated routing message for the other 5.
 		asset_type: z.enum(ASSET_TYPES),
 		name: nullableTrimmed(200)
 	})
@@ -66,6 +83,11 @@ export const assetResolveSchema = z
 	.refine((v) => v.symbol !== null || v.cusip !== null, {
 		message: 'Enter a ticker symbol or a CUSIP.',
 		path: ['symbol']
+	})
+	.superRefine((v, ctx) => {
+		if ((RESOLVABLE_ASSET_TYPES as readonly string[]).includes(v.asset_type)) return;
+		const message = v.asset_type === 'currency' ? CURRENCY_ROUTING_MESSAGE : PERSONAL_ASSET_ROUTING_MESSAGE;
+		ctx.addIssue({ code: z.ZodIssueCode.custom, message, path: ['asset_type'] });
 	});
 
 export type AssetResolveInput = z.infer<typeof assetResolveSchema>;

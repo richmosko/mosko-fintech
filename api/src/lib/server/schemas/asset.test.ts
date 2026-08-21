@@ -57,31 +57,40 @@ describe('assetResolveSchema', () => {
 		}
 	});
 
-	it('rejects an asset_type outside 016\'s CHECK vocabulary', () => {
+	it('rejects an asset_type outside 016\'s CHECK vocabulary entirely (garbage input)', () => {
 		const r = assetResolveSchema.safeParse({ symbol: 'AAPL', cusip: null, asset_type: 'nonsense', name: null });
 		expect(r.success).toBe(false);
 	});
 
-	it('accepts every 016 asset_type value', () => {
-		const types = [
-			'equity',
-			'etf',
-			'fund',
-			'money_market',
-			'bond',
-			'future',
-			'option',
-			'crypto',
-			'real_estate',
-			'vehicle',
-			'metal',
-			'collectible',
-			'currency',
-			'private'
-		];
+	it('accepts every RESOLVABLE_ASSET_TYPES value (the 9 feed-priceable types)', () => {
+		const types = ['equity', 'etf', 'fund', 'money_market', 'bond', 'future', 'option', 'crypto', 'metal'];
 		for (const asset_type of types) {
 			const r = assetResolveSchema.safeParse({ symbol: 'X', cusip: null, asset_type, name: null });
 			expect(r.success).toBe(true);
+		}
+	});
+
+	it('rejects the 4 personal-asset types with a routing message pointing at 088 MINT mode (namespace-pollution boundary — Architect ruling 2026-08-21)', () => {
+		for (const asset_type of ['real_estate', 'vehicle', 'collectible', 'private']) {
+			const r = assetResolveSchema.safeParse({ symbol: 'X', cusip: null, asset_type, name: null });
+			expect(r.success).toBe(false);
+			if (!r.success) {
+				const errs = fieldErrors(r.error);
+				expect(errs.asset_type).toContain(
+					'Personal assets (real estate, vehicles, collectibles, private holdings) are recorded directly on the purchase form, not looked up in the security registry.'
+				);
+			}
+		}
+	});
+
+	it('rejects currency with a routing message pointing at the cash-entry form', () => {
+		const r = assetResolveSchema.safeParse({ symbol: 'USD', cusip: null, asset_type: 'currency', name: null });
+		expect(r.success).toBe(false);
+		if (!r.success) {
+			const errs = fieldErrors(r.error);
+			expect(errs.asset_type).toContain(
+				'Cash is not purchasable through the security lookup — record it from the cash-entry form.'
+			);
 		}
 	});
 
