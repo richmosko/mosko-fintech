@@ -127,3 +127,38 @@ same as the degenerate-value fixture above. And a comment naming the collection'
 
 Related: [[measure-the-fence-regex-not-its-comment]] (the stale-comment half),
 [[catalog-comments-carry-live-state-tallies]].
+
+**The sixth hiding place — POSITIVE INPUTS, a ZERO DERIVED VALUE (SELF-325, `087`).** The RPC guards
+`quantity > 0` and `cost_basis > 0` (both finite, both type-checked), then derives
+`price := round(cost_basis / quantity, 4)` into a `numeric(20,4)` column whose only CHECK is
+`price <> 'NaN'`. **Guarding both operands says nothing about the quotient after rounding**: at
+`quantity > 20000 × cost_basis` the price rounds to `0.0000`, and `049`/`050` value the position as
+`quantity × price × fx` = **$0**. The migration's own F3 block existed to prevent exactly that
+outcome in its *missing-row* spelling ("an unpriced asset yields a NULL term that SUM drops … ZERO to
+NAV — silently") and did not cover the *zero-valued-row* spelling. Reachable with an ordinary
+fixture: `quantity = 1000000, cost_basis = 10.00` (a token/points/miles holding — precisely what a
+manual-asset surface is for).
+
+**Two reusable tells, and the second is the one I nearly missed.**
+- **An EXISTENCE watcher cannot observe a VALUE.** The blanket all-tenants F3 leg tested
+  `not exists (select 1 from eod_price where asset_id = … and source = … and price_date <= …) = 0`.
+  A `0.0000` row satisfies it. When a control's stated purpose is "this figure is not silently zero",
+  the watcher must read the figure — `and ep.price > 0` — not count rows. Same family as
+  "assertion with no watcher".
+- **An adversarial matrix that varies ONE field at a time is blind to RATIO defects.** The 19-case
+  Lock 14 battery was thorough per-field (NaN/Inf/quoted/locale/zero/negative/overflow × quantity ×
+  cost_basis) and had no leg where BOTH are individually legal and their *quotient* is the defect.
+  **Ask which derived quantity the surface actually consumes, and adversarialize THAT**, not only the
+  inputs the schema names.
+
+**And the prose tell that pointed at it:** the header's ROUNDING ARTIFACT note said the divergence is
+*"sub-cent amounts"*. The real bound is `quantity × 0.00005` — $50 at `quantity = 1e6`, true only up
+to `quantity ≈ 200`. **A stated error bound is a testable claim; derive it rather than reading it.**
+The battery header had copied the phrase, so two artifacts asserted it and only one had measured it —
+[[my-review-measurements-become-quoted-sources]] in the inbound direction.
+
+**How to apply:** at any `round(a / b, N)` feeding money, ask *can the result round to zero, and does
+anything downstream distinguish a zero price from a missing one?* Prefer a body guard rejecting the
+un-representable input (fails closed, no DDL, legible message naming the grain) over a new positivity
+CHECK on a shared table — the CHECK is stronger but forecloses a genuinely worthless asset and is its
+own joint review. Related: [[verify-the-stated-correctness-mechanism]].

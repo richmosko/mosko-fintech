@@ -5,7 +5,7 @@
 - [Scope AC invariants](feedback_scope_ac_invariants.md) — enumerate contract failure cases; construction owner names the falsifying case, don't self-certify (SELF-223 AC6).
 - [Parity-fixture cell format](feedback_parity_fixture_cell_format.md) — fixture cells define required units; superset safe, missing cell = §3.3 gate failure (SELF-222 AC3).
 - [Component-history Option C ratify](project_component_history_option_c.md) — chain LANDED 2026-08-12 (ADR-054 Accepted, A9/§5.1/§7.13 placed); residuals: D5(2) rider is possibility-not-direction; never-list at D5; held-open-questions pattern.
-- [V1.2 manual-bucket re-home](project_v12_manual_bucket_rehome.md) — §2.2.1 is per-ASSET (022-junction-compatible); post-048 nothing carries a manual account's bucket; F/CTO A-vs-B ruling pending.
+- [V1.2 manual-bucket re-home](project_v12_manual_bucket_rehome.md) — RULED 2026-08-21: Option B classify-after-create; 3-instance PRD amendment drafted, gates on wording ratify.
 - [Cash-bucket granularity](project_cash_bucket_granularity.md) — LANDED 2026-08-17: (a), label = "Cash Balances"; §3.3 footnote landed; seed delta landed at `077` — §7.20 fully discharged, tombstone candidate.
 - [Target-denominator β ruling](project_target_denominator_beta_ruling.md) — targets are hierarchical; §2.2.3 renormalizes at display; two-way door, p.5 check at parity time.
 - [GL-brainstorm PM positions](project_gl_brainstorm_pm_positions.md) — 08-18: grain=V2 gate, S1+flip trigger, rename 2 conditions, posting_template=V2; verify vs landed ADR.

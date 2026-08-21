@@ -60,3 +60,34 @@ restore operability) — a narrower instance of the rejected pattern is still th
   cluster-state drift (duplicate memberships, ad-hoc role grants) — it is clean *by
   construction*, not by verification. Say so, and route the recurrence-prevention item
   separately, or closing the instance will read as closing the class.
+
+**The GREEN counterpart, and it is harder to see (SELF-325, `087`).** A leg's message can name an
+observer it is not exercising, while passing for a reason that is real but different. QA added
+`(l5-q-column-overflow)` — `quantity=1e20 / cost_basis=1e16` — to restore observation of `017`'s
+`numeric(28,8)` **quantity** column, whose old observer a new upstream fence had shadowed. But
+`numeric(20,4)` permits `p − s = 16` integer digits and `1e16` needs 17, so **`cost_basis` overflows
+too**: both columns fail coercion, and the leg reaches its named observer only because `quantity`
+precedes `cost_basis` in the INSERT's target list. `throws_ok('22003')` is satisfied either way, so
+nothing is ever red and nothing ever asks. **An evaluation-order dependency is not a property.**
+Fix shape: move the *other* operand well inside its own constraint (`cost_basis 9e15`) so the column
+under test is the ONLY one that can raise — then the leg observes what it names by construction.
+
+**The tell that found it: the leg's own comment stated a window, and the fixture sat on the excluded
+endpoint** — *"`cost_basis in [5e15, 1e16]` … stays under cost_basis's OWN `numeric(20,4)` ~1e16
+ceiling"*, a CLOSED interval whose upper bound is exactly the first excluded value. **When a comment
+states a window, recompute both endpoints and check which side the fixture is on** — a `~` in front
+of a bound ("~1e16 ceiling") is where the off-by-one hides, and Postgres's own overflow text gives
+the bound exactly (*"must round to an absolute value less than 10^16"*). Same family as the
+degenerate-state fixture shaped to the claim in [[zero-value-sentinel-flips-meaning]].
+
+**And the generalisable half, which QA and Architect got RIGHT and I want to repeat — LAYER-MOVE.**
+Adding a guard UPSTREAM of an existing layer **shadows that layer's observer**: `087`'s new
+zero-price fence (`P0001`) began catching `quantity=1e400` before `017`'s column coercion (`22003`)
+ever ran, so the leg that used to prove the column constraint silently began proving the new fence.
+They re-targeted the old leg, said so in its message, **and added a fresh leg in the narrow window
+where the new fence does NOT win** — restoring independent observation of the shadowed layer.
+**How to apply:** whenever a new validation lands in front of an existing one, enumerate every
+battery leg whose fixture the new guard now intercepts, and for each ask *does any leg still exercise
+the lower layer at all?* If the answer is no, the lower layer became unwatched on a commit that
+looked purely additive. Related: [[enumeration-and-watcher-stop-one-short]],
+[[shared-predicate-then-second-narrowing]].
