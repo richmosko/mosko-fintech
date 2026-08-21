@@ -1,18 +1,25 @@
-// load.server.test.ts — the account-detail load() watcher, specifically for the SELF-325
-// selectableAssets / defaultSubCatId / defaultSubCatLabel fields.
+// load.server.test.ts — the account-detail load() watcher, for the SELF-325 selectableAssets /
+// defaultSubCatId / defaultSubCatLabel fields (round 5), plus the pass-through of
+// heldSecurities[].priced (round 8 — the P-b read-side signal).
 //
-// WHY THIS FILE EXISTS: those three fields landed FOUR ROUNDS after actions.createPurchase did
+// WHY THIS FILE EXISTS: the round-5 fields landed FOUR ROUNDS after actions.createPurchase did
 // (Frontend caught the gap by hand-diffing) — load() had no test of its own, so nothing red when
 // the fields were simply absent from the return. This is the watcher that gap needed: it fails if
-// any of the three fields regresses, disappears, or stops fail-soft-degrading. It does NOT
+// any of the round-5 fields regresses, disappears, or stops fail-soft-degrading. It does NOT
 // re-verify the rest of load()'s long-standing behavior (account 404, transaction shaping,
-// heldSecurities/dupCandidates/syncHistory/connection) — those are unchanged by this round and
-// exercised by the existing action tests + QA's RLS battery.
+// dupCandidates/syncHistory/connection) — those are unchanged and exercised by the existing
+// action tests + QA's RLS battery.
+//
+// The `priced` PREDICATE ITSELF (no eod_price row / zero-valued row at the max date / a normal
+// price) is NOT re-tested here — that is transactions.priced.test.ts's job, inversion-tested
+// there against the actual query logic. This file only proves load() FORWARDS whatever
+// loadHeldSecurities returns without dropping or reshaping the field — a thinner claim, but the
+// one this file's own layer can make honestly (its loadHeldSecurities dependency is mocked).
 //
 // Query-module dependencies are mocked (not the raw supabase table chain) — each module already
-// has its own unit tests (selectableAssets.test.ts, taxonomy.test.ts, transactions.ts's own
-// suite, reconciliation/connectionState equivalents); re-deriving their internals here would test
-// the mock, not this file's wiring.
+// has its own unit tests (selectableAssets.test.ts, taxonomy.test.ts, transactions.priced.test.ts,
+// reconciliation/connectionState equivalents); re-deriving their internals here would test the
+// mock, not this file's wiring.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -28,7 +35,8 @@ vi.mock('$lib/server/queries/selectableAssets', () => ({
 	loadSelectableAssets: loadSelectableAssetsMock
 }));
 
-const loadHeldSecuritiesMock = vi.fn(async () => []);
+type HeldSecurityLike = { security_id: number; symbol: string | null; name: string | null; quantity: number; priced: boolean };
+const loadHeldSecuritiesMock = vi.fn(async (): Promise<HeldSecurityLike[]> => []);
 vi.mock('$lib/server/queries/transactions', async (importOriginal) => {
 	const actual = await importOriginal<typeof import('$lib/server/queries/transactions')>();
 	return { ...actual, loadHeldSecurities: loadHeldSecuritiesMock };
@@ -94,7 +102,12 @@ function makeEvent(supabase: SupabaseClient, user: { id: string } | null = { id:
  *  which TS can't rule out statically even though every test here supplies an authed session +
  *  a resolving account row. Narrow to the fields this file actually asserts on rather than
  *  fighting SvelteKit's PageServerLoad inference with a broader cast. */
-type LoadResult = { selectableAssets: unknown[]; defaultSubCatId: number | null; defaultSubCatLabel: string | null };
+type LoadResult = {
+	selectableAssets: unknown[];
+	defaultSubCatId: number | null;
+	defaultSubCatLabel: string | null;
+	heldSecurities: Array<{ security_id: number; priced: boolean }>;
+};
 async function loadData(event: Parameters<typeof load>[0]): Promise<LoadResult> {
 	return (await load(event)) as unknown as LoadResult;
 }
@@ -173,5 +186,26 @@ describe('load() — SELF-325 selectableAssets / defaultSubCat fields', () => {
 		// loadCashflowSubCats is called exactly once per load() — a second call would mean a
 		// redundant BTO-specific query was reintroduced.
 		expect(loadCashflowSubCatsMock).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe('load() — SELF-325 P-b: heldSecurities[].priced pass-through (round 8)', () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it('forwards priced VERBATIM from loadHeldSecurities — load() must not drop, default, or reshape it', async () => {
+		loadCashflowSubCatsMock.mockResolvedValueOnce([]);
+		loadSelectableAssetsMock.mockResolvedValueOnce({ assets: [], error: false });
+		loadHeldSecuritiesMock.mockResolvedValueOnce([
+			{ security_id: 501, symbol: 'AAPL', name: 'Apple Inc', quantity: 10, priced: true },
+			{ security_id: 502, symbol: null, name: 'Rental House', quantity: 1, priced: false }
+		]);
+		const supabase = makeSupabase({ account: ACCOUNT_ROW, transRows: [] });
+		const data = await loadData(makeEvent(supabase));
+		expect(data.heldSecurities).toEqual([
+			{ security_id: 501, symbol: 'AAPL', name: 'Apple Inc', quantity: 10, priced: true },
+			{ security_id: 502, symbol: null, name: 'Rental House', quantity: 1, priced: false }
+		]);
 	});
 });

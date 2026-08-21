@@ -391,23 +391,89 @@ export async function createStockSplit(
 	return { ok: true, transId: newId as number };
 }
 
-/** One held-security option for the stock-split picker. `security_id` is pfin.asset.asset_id
- *  — the value the form posts back as `security_id` (matches Frontend's SecurityOption +
- *  fn_create_stock_split's p_security_id). `quantity` is the current held share count (display). */
+/** One held-security option for the stock-split picker AND the SELF-325 P-b account-detail
+ *  read-side signal. `security_id` is pfin.asset.asset_id — the value the form posts back as
+ *  `security_id` (matches Frontend's SecurityOption + fn_create_stock_split's p_security_id).
+ *  `quantity` is the current held share count (display). */
 export type HeldSecurity = {
 	security_id: number;
 	symbol: string | null;
 	name: string | null;
 	quantity: number;
+	/**
+	 * SELF-325 P-b (F/CTO-ratified, Architect catch criterion): TRUE iff an eod_price row exists
+	 * for this asset at the maximum price_date <= `asOf` with price > 0. This is the EXACT SAME
+	 * predicate `pfin.fn_create_manual_purchase` (088) uses for its write-time `priced` composite
+	 * field — reused verbatim, not re-derived, so a purchase's confirmation and its later
+	 * account-detail rendering can never disagree about the same holding. It carries NO
+	 * source-rank CASE (unlike the D-FIRST pick inlined in 019/049/050/056/059/076/078), so it
+	 * cannot drift from 078 — an eighth copy of that CASE is the one drift nobody would be
+	 * watching.
+	 *
+	 * ⚠ AN INDICATOR, NOT A VALUATION PRIMITIVE. Nothing may compute money from this flag — the
+	 * rendered value still comes from the real valuation kernel (049/078/etc). It only says "this
+	 * holding has no usable price."
+	 *
+	 * ⚠ NAMED IMPRECISION (stated, not silently inherited): when two sources tie at the maximum
+	 * price_date and disagree about being zero, this predicate reports on the DATE BAND rather
+	 * than on the pick's actual winner. Not reachable through 088's own writes; reachable in
+	 * general.
+	 *
+	 * Fail-CLOSED on a read error: defaults to `false` (unpriced) rather than `true` — a read
+	 * failure must never present as "this holding is fine."
+	 */
+	priced: boolean;
 };
 
 /**
+ * Per-asset "has a usable current price" flag, keyed by asset_id — SELF-325 P-b. One round trip:
+ * fetch every eod_price row <= `asOf` for the given assets, ordered so the FIRST row seen per
+ * asset_id (asset_id asc, price_date desc) is that asset's max-price_date row; `priced` is
+ * `price > 0` on that row. An asset_id absent from the result (no eod_price row at all <= asOf)
+ * is absent from the returned Map — callers default such an asset to `priced: false`.
+ *
+ * RLS-scoped (eod_price_select: asset global-OR-owned, via the asset JOIN) — the SAME visibility
+ * `loadHeldSecurities`'s asset label read already relies on, so no asset here is visible for a
+ * price check that wasn't already visible for its label.
+ */
+async function loadPricedFlags(
+	supabase: SupabaseClient,
+	assetIds: number[],
+	asOf: ZoneResolvedAsOf
+): Promise<Map<number, boolean>> {
+	const out = new Map<number, boolean>();
+	const { data, error } = await supabase
+		.schema('pfin')
+		.from('eod_price')
+		.select('asset_id, price_date, price')
+		.in('asset_id', assetIds)
+		.lte('price_date', asOf)
+		.order('asset_id', { ascending: true })
+		.order('price_date', { ascending: false });
+	if (error) {
+		// Fail-CLOSED: an unverifiable read must never present as "priced" — return an empty map
+		// so every asset_id defaults to false at the call site, same as "no price row exists".
+		console.error('[transactions] loadPricedFlags read failed (fail-closed to unpriced):', error.message);
+		return out;
+	}
+	for (const row of (data ?? []) as Array<{ asset_id: number; price_date: string; price: number | string }>) {
+		if (out.has(row.asset_id)) continue; // already captured this asset's max-price_date row
+		out.set(row.asset_id, Number(row.price) > 0);
+	}
+	return out;
+}
+
+/**
  * Load the securities CURRENTLY held in an account as-of `asOf` — the option set for the
- * stock-split security picker (SELF-203). Two RLS-scoped reads, both fail-soft (logged, [] on
- * error — the picker degrades, never throws):
+ * stock-split security picker (SELF-203), now also carrying the SELF-325 P-b `priced` signal
+ * consumed by the account-detail holdings view. Three RLS-scoped reads, all fail-soft/fail-closed
+ * (logged; [] / false degrades — the picker/marker degrades, never throws):
  *   (1) fn_holdings_as_of (019 INVOKER roll-forward) → (account_id, asset_id, quantity) for
  *       every account; live positions only (qty <> 0). We keep this account's rows.
  *   (2) a pfin.asset label read (RLS: global OR owned) for the held asset_ids → symbol/name.
+ *   (3) loadPricedFlags, at the SAME `asOf` as (1) — never call the clock twice: a priced probe
+ *       at a different as_of than the holdings read could mark a position unpriced that the
+ *       holdings view values, or the reverse.
  * Cash is naturally absent (cash carries no security_id). Sorted by symbol, then name.
  */
 export async function loadHeldSecurities(
@@ -445,12 +511,15 @@ export async function loadHeldSecurities(
 		])
 	);
 
+	const pricedByAssetId = await loadPricedFlags(supabase, assetIds, asOf);
+
 	return positions
 		.map((p) => ({
 			security_id: p.asset_id,
 			symbol: labelById.get(p.asset_id)?.symbol ?? null,
 			name: labelById.get(p.asset_id)?.name ?? null,
-			quantity: Number(p.quantity)
+			quantity: Number(p.quantity),
+			priced: pricedByAssetId.get(p.asset_id) ?? false
 		}))
 		.sort((a, b) => (a.symbol ?? a.name ?? '').localeCompare(b.symbol ?? b.name ?? ''));
 }
