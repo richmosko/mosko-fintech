@@ -1,5 +1,18 @@
 // tests/stubs/app-forms.ts
 //
+// ⚠ BEHAVIOR CHANGED 2026-08-21 (SELF-325, Frontend): `enhance` used to be a pure no-op: it
+// never called the `SubmitFunction` a component passed it. It now DOES call it, synchronously,
+// on a real `submit` event — see the EXTENDED note below for exactly what it does and does not
+// drive. Every *.dom.test.ts using `use:enhance` behaves differently after this change (a test
+// that only ever inspected raw DOM/FormData without submitting is unaffected). Full dom-project
+// suite verified green both before and after BY FRONTEND, who made the change; QA then
+// enumerated the pre-existing dom tests and established that no test's MEANING shifted (only
+// SymbolClassifyRow renders a real `use:enhance` form, and it never clicks its submit button),
+// and Architect widened that check after finding the `$app/forms` alias is declared GLOBALLY in
+// vitest.config.ts rather than dom-scoped — three route files also import it, none dom-tested.
+// This line exists so a reader who only skims the top doesn't miss the change and reason from
+// the old no-op behavior.
+//
 // Test-only stand-in for SvelteKit's `$app/forms` virtual module (mirrors the existing
 // `$app/navigation` / `$app/state` / `$env/dynamic/*` stub convention in this directory).
 // Unresolvable under the standalone api/ vitest harness for the same reason as those —
