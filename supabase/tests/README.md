@@ -65,6 +65,38 @@ QA sign-off gates V1-SHIP-BLOCK merge.
 > canary encodes this; Phase-6 per-table cases follow the same model. (Root-caused on PR #106:
 > the canary's probe hit `permission denied` before RLS because the grant was missing.)
 
+## Sequence coupling across files — rollback isolates rows, not id values
+
+**Per-file `rollback` does not isolate the suite from itself for anything keyed on absolute id
+values.** Postgres `nextval()` is non-transactional: a rolled-back INSERT undoes the row but never
+rewinds the identity sequence it consumed. So every file that creates rows on a shared identity
+column (`pfin.asset`, for one) permanently advances the starting id every LATER file sees, for the
+life of the database — in whatever order `pg_prove` sorts the files.
+
+**Consequence: any assertion that depends on the absolute VALUE of an id — not just its ordering
+relative to other rows in that same file's own fixture — is silently coupled to every file that
+happens to sort before it.** Worked example (SELF-330, 2026-08-21): `self200`'s `(v-embed-1)`
+compared an array sorted by `asset_id` (numeric) against an array sorted by its own
+`"assetid:subcatid"` text encoding (lexicographic). The two orderings agree as long as every id in
+play shares the same digit count, and had agreed since the assertion was written — not because
+anything guaranteed it, but because nothing had yet pushed the shared sequence past a digit-count
+boundary before `self200` ran. Migration `086`'s battery (sorting before `self200` alphabetically)
+was simply the first to do so. It did not break `self200`; it made a pre-existing sort-key mismatch
+reachable for the first time. Fix: `order by split_part(x, ':', 1)::bigint` on the text-encoded
+side — order by the same numeric key the other side uses, never by the encoded text itself.
+
+**A REUSED scratch database hides this class of bug.** A database that has already been through a
+full suite pass has its sequences already advanced past most such boundaries, so the identical
+defect reads as green there and RED-3-for-3 on a freshly rebuilt one. Rebuild fresh before trusting
+a green on any assertion that could depend on this.
+
+**The rule for new batteries:** never assert on an id-derived value's ORDER, and never assert an
+exact id VALUE (rather than a value fetched via `\gset`/`returning`), without an explicit,
+comparison-consistent sort key on both sides. If a comparison sorts one side numerically, the other
+side must sort by the same numeric key — not by a text encoding that happens to agree with it today.
+
+Full mechanism + before/after measurement: [`rls/DESIGN.md` §16](rls/DESIGN.md).
+
 ## Access-control / fixture posture
 
 Synthetic-only — no production data, no PII, no real account numbers. Governed by the central
