@@ -115,9 +115,20 @@
 //     `046` read was itself unknown OR the contributor/account bridge read failed — mirrors
 //     navComposition.ts's "skip the join entirely" posture exactly; never a per-row mix of known
 //     and unknown in that case.
-//   - The "US - Sector Diversified" collapsed row (AC5) OR-folds the SAME way across its twelve
-//     underlying real Sub-Cat ids' individual folds — it is not a separate contributor lookup, it
-//     is the Kleene-OR of the twelve real answers.
+//   - The "US - Sector Diversified" collapsed row (AC5) OR-folds the SAME way across its
+//     underlying real Sub-Cat ids' individual folds — up to twelve (US_EQUITY_SUB_CAT_SET's own
+//     size), but ONLY as many as the CALLER'S OWN taxonomy actually holds; it is not a separate
+//     contributor lookup, it is the Kleene-OR of however many real answers exist. ⚠ THIS INCLUDES
+//     ZERO (a caller whose taxonomy carries none of the twelve labels — reachable per ADR-057:
+//     first-access provisioning never delivers set growth to an already-provisioned tenant). Zero
+//     underlying ids is a DIFFERENT empty case from "a Sub-Cat with no contributor accounts"
+//     (bullet above) — that one is a real Sub-Cat correctly folding to FALSE over zero
+//     contributors; THIS one is zero Sub-Cats to fold over at all, and must still obey the
+//     root-unknown rule two bullets up: with staleAccountIds === null the fold over zero ids is
+//     UNKNOWN, never the vacuous-OR FALSE the empty-contributors case resolves to. Conflating the
+//     two is the exact fail-open Sec caught (SELF-330 review, `foldIsStale([])` — fixed by
+//     short-circuiting on `staleAccountIds === null` before the loop, the SAME guard
+//     `subCatIsStale` already carries).
 //   - The Unsorted row (076's NULL-taxonomy row) keys on `sub_cat_id IS NULL` — matched by a plain
 //     JS `Map` lookup on a literal `null` key (SameValueZero equality already implements
 //     IS-NULL-shaped matching; no separate sentinel or `=== undefined` fallback is used, which
@@ -310,11 +321,21 @@ export function computeNonReAllocation(
 	staleAccountIds: ReadonlySet<string> | null = null
 ): NonReAllocation {
 	// SELF-330 fold core. `subCatIsStale` answers for ONE Sub-Cat key (a real id, or `null` for
-	// Unsorted); `foldIsStale` Kleene-ORs across several ids (the US-Sector-Diversified collapsed
-	// row's twelve). Both obey the SAME dominance order: true > unknown > false. Vacuous (no
-	// contributors, or an empty id list) resolves to `false` — nothing to be stale about — UNLESS
-	// the root/bridge itself is unknown, which short-circuits every key to `null` before any
-	// per-contributor lookup happens at all (mirrors navComposition.ts's "skip the join entirely").
+	// Unsorted); `foldIsStale` Kleene-ORs across however many real Sub-Cat ids the caller's
+	// taxonomy actually holds from US_EQUITY_SUB_CAT_SET (the US-Sector-Diversified collapsed
+	// row's own arity — up to twelve, but caller-dependent, never assumed fixed). Both obey the
+	// SAME dominance order: true > unknown > false. Vacuous (no contributors on a REAL Sub-Cat
+	// key) resolves to `false` — nothing to be stale about — but this is DISTINCT from "the
+	// root/bridge itself is unknown," which must short-circuit to `null` BEFORE any per-key work,
+	// including when the key list itself is empty. `subCatIsStale`'s own first line is that
+	// short-circuit; `foldIsStale` MUST hit the identical short-circuit before its loop, not only
+	// inside it — an empty `subCatIds` never enters the loop, so a guard placed only inside the
+	// loop body (the SELF-330 review round-1 shape) silently returns the vacuous-`false` answer
+	// even when the root read was unknown. That was a real, Sec-caught fail-open (the caller's
+	// taxonomy holding NONE of the twelve US-equity labels — reachable per ADR-057, first-access
+	// provisioning never delivers set growth — rendered the collapsed row silently-fresh while
+	// every sibling row correctly rendered "unknown"), exactly the failure mode 086's own S3
+	// ratify-record rejection is written against, now fixed by mirroring the guard verbatim.
 	function subCatIsStale(subCatId: number | null): boolean | null {
 		if (staleAccountIds === null) return null;
 		const contributors = subCatAccountIds.get(subCatId);
@@ -325,6 +346,10 @@ export function computeNonReAllocation(
 		return false;
 	}
 	function foldIsStale(subCatIds: ReadonlyArray<number>): boolean | null {
+		if (staleAccountIds === null) return null; // mirrors subCatIsStale's own guard — MUST run
+		// before the loop below, not only reachable from inside it: an empty subCatIds never
+		// enters the loop, and without this line that case would fall through to the vacuous
+		// `anyUnknown === false` path and return `false` even when the root read was unknown.
 		let anyUnknown = false;
 		for (const id of subCatIds) {
 			const s = subCatIsStale(id);
@@ -426,7 +451,9 @@ export function computeNonReAllocation(
 		dollar_alloc: collapsedMarketValue,
 		...targetDerivedColumns(collapsedTargetPercent, collapsedMarketValue, total_non_re, totalPositive),
 		// AC11: the collapsed row is NOT a second contributor lookup (it has no sub_cat_id of its
-		// own to key on) — it Kleene-ORs the twelve real underlying Sub-Cat ids' OWN folds.
+		// own to key on) — it Kleene-ORs `usEquityTaxonomyRows`' OWN per-id folds, whatever that
+		// caller-dependent count is (0 to twelve; see foldIsStale's own header for why 0 must still
+		// propagate UNKNOWN under an unknown root, not fold vacuously to `false`).
 		is_stale: foldIsStale(usEquityTaxonomyRows.map((t) => t.id))
 	};
 	(
