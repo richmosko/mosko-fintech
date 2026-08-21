@@ -85,9 +85,17 @@
 -- │   at the ledger INSERT's column overflow): zero orphan pfin.asset AND zero   │
 -- │   orphan pfin.eod_price rows survive it — a real cross-table proof, not two  │
 -- │   single-table checks that happen to agree. Plus the annotation overlay      │
--- │   composes (note-only; sub_cat_id composition is 023's own matched-tenant    │
--- │   fence to prove, not re-derived here after 084 re-targeted it to            │
--- │   posting_prototype — out of this file's scope).                            │
+-- │   composes (note-only compose/no-compose; p_sub_cat_id composition is L6's). │
+-- │ L6 instance #10 (023's matched-tenant fence, re-targeted to                  │
+-- │   pfin.posting_prototype at 084 — UNLIKE #7, genuinely reachable through 088 │
+-- │   because the body never reads posting_prototype itself, so no guard        │
+-- │   shadows it). #10's own rejection is 023's battery to prove; what composing │
+-- │   through 088 ADDS is the ROLLBACK 023's battery cannot exercise in          │
+-- │   isolation — the asset mint, the eod_price write and the ledger row all     │
+-- │   roll back when the LATER annotation INSERT is what fails. Three           │
+-- │   independently-checked tables, plus the message pinned so a firing-order   │
+-- │   change (trigger rename) would go RED rather than resting on Postgres's     │
+-- │   documented alphabetical same-timing rule.                                 │
 -- └───────────────────────────────────────────────────────────────────────────┘
 --
 -- MESSAGE-OWNERSHIP DISCIPLINE (every prefix below verified against the committed
@@ -166,17 +174,20 @@
 --   via `supabase migration up`, no db reset — F/CTO's local test data must
 --   survive). RED-until-088-applied is expected on the shared stack; CI
 --   (pg_prove directory-mode) after Backend's apply is the green gate. Verify
---   with pg_prove — bare psql exits 0 on a plan-count failure. plan(63)
+--   with pg_prove — bare psql exits 0 on a plan-count failure. plan(67)
 --   (raised from an initial 49 after the row(...)::record idiom failed against
 --   a live pg_prove run — "cannot compare dissimilar column types text and
---   unknown" — and was split into 63 per-column assertions instead; see L2/L3/L5).
+--   unknown" — split into 63 per-column assertions instead (see L2/L3/L5);
+--   raised again to 67 for L6, added per Architect's ruling on the
+--   p_sub_cat_id -> posting_prototype (#10) rollback proof — the fence is
+--   023's to prove, but composing through 088 needed its own atomicity leg).
 -- =====================================================================
 
 begin;
 
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(63);
+select plan(67);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 
@@ -749,9 +760,10 @@ select is(
 );
 
 -- (l5-3) the annotation overlay composes: p_note supplied writes exactly one
--- account_trans_annotation row, sub_cat_id NULL. (sub_cat_id composition against
--- the 023 matched-tenant fence — re-targeted to posting_prototype at 084 — is
--- that fence's own battery to prove, not re-derived here.)
+-- account_trans_annotation row, sub_cat_id NULL. (p_sub_cat_id composition
+-- against the 023 matched-tenant fence — #10, re-targeted to posting_prototype
+-- at 084 — is L6's, below: the fence's own rejection is 023's battery to prove,
+-- but composing through 088 needed its own rollback proof.)
 select trans_id as l5note_trans from pfin.fn_create_manual_purchase(
   :accta, '2026-04-10'::date, 1::numeric, 100::numeric, null, 'equity', 'L5 Note Position', null, null, 'a description', 'a note'
 ) \gset
@@ -780,6 +792,69 @@ select is(
   (select count(*) from pfin.account_trans_annotation where trans_id = :l5noann_trans)::bigint,
   0::bigint,
   '(l5-4) NON-VACUOUS: neither p_sub_cat_id nor p_note supplied writes ZERO account_trans_annotation rows'
+);
+
+-- =====================================================================
+-- L6 — item 2 (Architect's ruling): p_sub_cat_id -> pfin.posting_prototype is
+--   instance #10 (023's matched-tenant fence, chain-resolved; re-targeted to
+--   posting_prototype at 084/ADR-058 — the label is unchanged, only the FK
+--   target moved). UNLIKE #7, THIS FENCE IS GENUINELY REACHABLE THROUGH 088:
+--   the body never reads posting_prototype itself (p_sub_cat_id passes straight
+--   to the annotation INSERT), so there is no shadowing guard. #10's own
+--   rejection is 023's battery to prove — what's uncovered THERE is composing
+--   through 088: a rejected annotation must roll back the asset mint, the
+--   eod_price write and the ledger row, which 023's battery (which exercises
+--   the fence in isolation) cannot exercise. Same cross-table zero-orphan shape
+--   as L5, different trigger — the message assertion is what PINS the firing
+--   order empirically (account_trans_annotation_matched_sub_cat sorts before
+--   account_trans_annotation_trade_constraints alphabetically, so #10 fires
+--   first): if Postgres's same-timing alphabetical rule were ever violated by a
+--   rename, this leg goes red rather than resting on read-the-docs.
+-- =====================================================================
+select _rls.set_tenant(:'tb'::uuid);
+insert into pfin.posting_prototype (users_id, cat, sub_cat)
+values (:'tb', 'Trade', 'BTO')
+returning id as b_private_subcat \gset
+select set_config('role', 'postgres', true);
+
+select
+  (select count(*) from pfin.asset where users_id = :'ta') as l6_baseline_asset,
+  (select count(*) from pfin.eod_price e join pfin.asset a on a.asset_id = e.asset_id where a.users_id = :'ta') as l6_baseline_price,
+  (select count(*) from pfin.account_trans where account_id = :accta) as l6_baseline_trans
+\gset
+
+select _rls.set_tenant(:'ta'::uuid);
+
+-- (l6-1) #10 fires and PINS the message — a MINT-mode purchase (asset mint +
+-- eod_price write + ledger row, all real, THEN the annotation INSERT) with
+-- tenant B's PRIVATE posting_prototype id as p_sub_cat_id.
+select throws_like(
+  format($$ select pfin.fn_create_manual_purchase(%s, '2026-04-12'::date, 1, 100, null, 'equity', 'L6 Cross-Tenant SubCat Buy', null, %s) $$,
+    :accta, :b_private_subcat),
+  'Sub-Cat reference rejected: sub_cat_id % is not a posting prototype owned by and visible to the tenant of trans_id %',
+  '(l6-1) #10 fires on a cross-tenant p_sub_cat_id through 088 (genuinely reachable, unlike #7 — this body never reads posting_prototype itself) — message pinned so a firing-order change (trigger rename) would go RED here rather than resting on Postgres''s documented alphabetical rule'
+);
+select set_config('role', 'postgres', true);
+
+-- (l6-2)/(l6-3)/(l6-4) THE ROLLBACK PROOF — the part #10's OWN battery (023)
+-- cannot exercise, since it tests the fence in isolation: the asset mint, the
+-- branch-(a) eod_price write, and the ledger row must ALL roll back together
+-- when the LATER annotation INSERT is what fails. Three independent tables,
+-- each checked, not one check assumed to cover the others.
+select is(
+  (select count(*) from pfin.asset where users_id = :'ta')::bigint,
+  :l6_baseline_asset::bigint,
+  '(l6-2) ZERO orphan pfin.asset rows — the #10 rejection rolls back the MINT that happened earlier in the same call'
+);
+select is(
+  (select count(*) from pfin.eod_price e join pfin.asset a on a.asset_id = e.asset_id where a.users_id = :'ta')::bigint,
+  :l6_baseline_price::bigint,
+  '(l6-3) ZERO orphan pfin.eod_price rows — branch (a)''s price write also rolls back'
+);
+select is(
+  (select count(*) from pfin.account_trans where account_id = :accta)::bigint,
+  :l6_baseline_trans::bigint,
+  '(l6-4) ZERO orphan pfin.account_trans rows — the ledger row itself rolls back, not just its would-be annotation'
 );
 
 select * from finish();
