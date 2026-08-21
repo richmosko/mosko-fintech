@@ -25,6 +25,29 @@
 // (d)) and the natural future rate-limit key (no rate-limit control exists today; flagged to Sec
 // per the addendum §2.3, not built here).
 //
+// ADR-011 DECISION 1 — THE FOUR CLAUSES, READ LIVE HERE (⚠ this is the surface the clauses
+// apply to — NOT `pfin.fn_create_manual_purchase` / 088, which is a JWT-bearing INVOKER call D1
+// does not reach; Architect's correction, SELF-325 handoff 2026-08-21). This route IS a non-JWT
+// `service_role` write, so D1 governs it directly:
+//   (a) Ingress under no JWT — SATISFIED. The internal call is shared-secret authed (CA-6); the
+//       worker holds no user session, same as every other admission leg.
+//   (b) Writes under service_role — SATISFIED by the existing withServiceRole() + the existing
+//       020 grant. No new grant, no new privileged identity.
+//   (c) Tenant correctness derives from code, not RLS — VACUOUS BY CONSTRUCTION, and that is a
+//       property of this route, not a gap: a GLOBAL asset row (users_id IS NULL) has no tenant a
+//       code path could bind incorrectly, because it belongs to none. There is no tenant-binding
+//       claim for `ownerUserId` to get wrong here — its job is (d)/audit-subject and the future
+//       rate-limit key, stated above, never tenant correctness.
+//   (d) Explicit audit log capturing the tenant-resolution chain — ⚠ THE GAP, NOT FREE. The
+//       same-transaction audit-log infra this would write into does not exist yet (the A2
+//       deferral shared with 087/088 — SELF-201 Task #7). DOCUMENTED DEFERRAL (Architect's
+//       recommendation (i), A2-style, mirroring 088's own "AUDIT FORWARD-HOOK" shape): when that
+//       infra lands, the audit row belongs HERE — this resolve-or-mint call, keyed by
+//       `ownerUserId` as the tenant-resolution subject and `assetId` as the resulting row. Until
+//       then this deferral is NOT discharged by worker log lines (C6-5's route+status logging is
+//       operational diagnostics, not a forensic audit trail, and the addendum explicitly rules
+//       out presenting it as satisfying (d)). Sec accepts-or-overrides this at joint-review.
+//
 // REDACTION (C6-5): request/response bodies are never logged; the route layer (admissionServer.ts)
 // logs route + coarse outcome only.
 

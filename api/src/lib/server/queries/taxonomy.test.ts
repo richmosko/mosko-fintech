@@ -27,7 +27,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { provisionDefaultTaxonomy, isAssignableAssetSubCat } from './taxonomy';
+import { provisionDefaultTaxonomy, isAssignableAssetSubCat, findDefaultBtoSubCatId } from './taxonomy';
 
 const USER_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 
@@ -379,6 +379,72 @@ describe('isAssignableAssetSubCat — post-084 app-layer check (SELF-235)', () =
 		const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 		const { client } = makeErroringSubCatQueryStub('connection reset');
 		await expect(isAssignableAssetSubCat(client, 55)).resolves.toBe(false);
+		expect(errSpy).toHaveBeenCalled();
+		errSpy.mockRestore();
+	});
+});
+
+// ── findDefaultBtoSubCatId (SELF-325 / 088) — reuses the eq-accumulating chain shape from
+// makeSubCatQueryStub, against posting_prototype (cat='Trade', sub_cat='BTO', is_active=true). ──
+type BtoRow = { id: number; cat: string; sub_cat: string; is_active: boolean } | null;
+
+function makeBtoQueryStub(row: BtoRow) {
+	const filters: Record<string, unknown> = {};
+	const eqCalls: Array<[string, unknown]> = [];
+	const maybeSingle = vi.fn(async () => {
+		const matches =
+			row !== null && Object.entries(filters).every(([k, v]) => (row as Record<string, unknown>)[k] === v);
+		return { data: matches ? { id: row!.id } : null, error: null };
+	});
+	const chain: { eq: ReturnType<typeof vi.fn>; maybeSingle: typeof maybeSingle } = {
+		eq: vi.fn((col: string, val: unknown) => {
+			filters[col] = val;
+			eqCalls.push([col, val]);
+			return chain;
+		}),
+		maybeSingle
+	};
+	const select = vi.fn(() => chain);
+	const from = vi.fn((table: string) => (table === 'posting_prototype' ? { select } : {}));
+	const schema = vi.fn(() => ({ from }));
+	const client = { schema } as unknown as SupabaseClient;
+	return { client, from, eqCalls };
+}
+
+describe('findDefaultBtoSubCatId (SELF-325 / 088)', () => {
+	it("resolves the caller's active Trade/BTO posting_prototype id", async () => {
+		const { client } = makeBtoQueryStub({ id: 42, cat: 'Trade', sub_cat: 'BTO', is_active: true });
+		await expect(findDefaultBtoSubCatId(client)).resolves.toBe(42);
+	});
+
+	it('TEETH: filters on cat, sub_cat, AND is_active — not coincidentally passing', async () => {
+		const { client, eqCalls } = makeBtoQueryStub({ id: 42, cat: 'Trade', sub_cat: 'BTO', is_active: true });
+		await findDefaultBtoSubCatId(client);
+		expect(eqCalls).toContainEqual(['cat', 'Trade']);
+		expect(eqCalls).toContainEqual(['sub_cat', 'BTO']);
+		expect(eqCalls).toContainEqual(['is_active', true]);
+	});
+
+	it('reads from posting_prototype, not user_taxonomy (Trade/BTO is a cashflow-side row post-084)', async () => {
+		const { client, from } = makeBtoQueryStub({ id: 42, cat: 'Trade', sub_cat: 'BTO', is_active: true });
+		await findDefaultBtoSubCatId(client);
+		expect(from).toHaveBeenCalledWith('posting_prototype');
+	});
+
+	it('returns null when the row is retired (is_active=false) — falls back to Unsorted-pending, not an error', async () => {
+		const { client } = makeBtoQueryStub({ id: 42, cat: 'Trade', sub_cat: 'BTO', is_active: false });
+		await expect(findDefaultBtoSubCatId(client)).resolves.toBeNull();
+	});
+
+	it('returns null when no row exists yet (provisioning has not run)', async () => {
+		const { client } = makeBtoQueryStub(null);
+		await expect(findDefaultBtoSubCatId(client)).resolves.toBeNull();
+	});
+
+	it('returns null (fail-soft, logged) on a read error — never throws', async () => {
+		const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const { client } = makeErroringSubCatQueryStub('connection reset');
+		await expect(findDefaultBtoSubCatId(client)).resolves.toBeNull();
 		expect(errSpy).toHaveBeenCalled();
 		errSpy.mockRestore();
 	});

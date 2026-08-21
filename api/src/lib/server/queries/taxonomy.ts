@@ -313,6 +313,33 @@ export async function isAssignableAssetSubCat(
 }
 
 /**
+ * SELF-325 (088) — the caller's default 'Trade'/'BTO' posting_prototype id, for the manual
+ * purchase-path's `p_sub_cat_id`. 088 deliberately does NOT default this itself ("selecting a
+ * per-user taxonomy row is the app layer's to do" — single-authority rule, same reason 016's
+ * asset_type vocab stays out of 087's body). RLS-scoped (posting_prototype_select = auth.uid()),
+ * so a cross-tenant row can never resolve here. Every user gets a 'Trade'/'BTO' row at
+ * first-access provisioning (041 taxonomy_default seed, provisionCashflowPrototypes above) — but
+ * this is a best-effort DEFAULT, not a guarantee: a user who has renamed/deactivated it, or whose
+ * provisioning hasn't run yet, gets `null` back, and the caller passes that straight through as
+ * `p_sub_cat_id` (NULL/Unsorted-pending — 088's own fallback, not an error condition).
+ */
+export async function findDefaultBtoSubCatId(supabase: SupabaseClient): Promise<number | null> {
+	const { data, error } = await supabase
+		.schema('pfin')
+		.from('posting_prototype')
+		.select('id')
+		.eq('cat', 'Trade')
+		.eq('sub_cat', 'BTO')
+		.eq('is_active', true)
+		.maybeSingle();
+	if (error) {
+		console.error('[taxonomy] findDefaultBtoSubCatId read failed (falls back to Unsorted-pending):', error.message);
+		return null;
+	}
+	return (data?.id as number | undefined) ?? null;
+}
+
+/**
  * Flatten an embedded `( cat, sub_cat )` join result to a label. Table-agnostic — used against
  * BOTH the `user_taxonomy` embed (asset-side callers, e.g. pendingSymbols.ts / SELF-235 pickers)
  * and the `posting_prototype` embed (cashflow-side callers, e.g. the account-detail transaction

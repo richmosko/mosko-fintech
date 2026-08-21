@@ -31,3 +31,29 @@ export const ASSET_TYPES = [
 	'private'
 ] as const;
 export type AssetType = (typeof ASSET_TYPES)[number];
+
+/**
+ * MINT-mode asset_type vocabulary for `pfin.fn_create_manual_purchase` (SELF-325 / 088) —
+ * `ASSET_TYPES` minus `'currency'`, the RPC's one explicit rejection ("016's CHECK is the single
+ * authority for the asset_type vocabulary; the one explicit rejection is 'currency': cash is
+ * amount-carried, not instrument-carried, and its classification already routes through the
+ * global currency-asset" — 088's own `comment on`). Hand-listed (not filtered at runtime) so this
+ * stays a plain literal tuple for `z.enum`; asset-constants.test.ts asserts it never drifts from
+ * `ASSET_TYPES`.
+ */
+export const MINT_ASSET_TYPES = [
+	'equity',
+	'etf',
+	'fund',
+	'money_market',
+	'bond',
+	'future',
+	'option',
+	'crypto',
+	'real_estate',
+	'vehicle',
+	'metal',
+	'collectible',
+	'private'
+] as const;
+export type MintAssetType = (typeof MINT_ASSET_TYPES)[number];

@@ -65,9 +65,11 @@ import {
 	CLOSED_ACCOUNT_WRITE_MESSAGE,
 	type WriteResult
 } from '$lib/server/queries/transactions';
-import { loadCashflowSubCats, subCatLabel } from '$lib/server/queries/taxonomy';
+import { loadCashflowSubCats, subCatLabel, findDefaultBtoSubCatId } from '$lib/server/queries/taxonomy';
 import { loadDupCandidates, loadSyncHistory } from '$lib/server/queries/reconciliation';
 import { computeImportHash } from '$lib/server/dedup/importHash';
+import { createPurchaseSchema } from '$lib/server/schemas/purchase';
+import { createManualPurchase } from '$lib/server/queries/purchases';
 import type { PageServerLoad, Actions } from './$types';
 
 // Category label + note (023) and split children (029) embedded per transaction so the
@@ -632,5 +634,46 @@ export const actions: Actions = {
 		if (!parsed.success) return fail(400, { errors: fieldErrors(parsed.error), values: raw });
 
 		return toActionResult(await createStockSplit(locals.supabase, accountId, parsed.data));
+	},
+
+	// ── SELF-325 manual purchase-path (088 / fn_create_manual_purchase) ────────────────────
+	// Posted `mode` selects BIND (`security_id`, resolved beforehand via /asset/resolve or a
+	// selectableAssets.ts picker) or MINT (`asset_type`/`asset_name`[/`symbol`], a new
+	// caller-owned asset). account_id is the route param, not a form field. `priced`/`price`/
+	// `security_id` come back from the RPC's composite and are forwarded to the caller
+	// UNCHANGED — see purchases.ts's module header for why projecting them away is the failure
+	// ADR-049 Decision 4 exists to prevent. `priced` is a rendering indicator only.
+	createPurchase: async ({ request, locals, params }) => {
+		const { user } = await locals.safeGetSession();
+		if (!user) return fail(401, { errors: { _form: ['You must be signed in.'] } });
+		const accountId = parseAccountId(params.account_id);
+		if (accountId === null) return fail(400, { errors: { _form: ['Invalid account.'] } });
+
+		const raw = Object.fromEntries(await request.formData());
+		const parsed = createPurchaseSchema.safeParse(raw);
+		if (!parsed.success) return fail(400, { errors: fieldErrors(parsed.error), values: raw });
+		let v = parsed.data;
+
+		// 088 deliberately does NOT default p_sub_cat_id (single-authority rule: selecting a
+		// per-user taxonomy row is app-layer work). When the form omitted one, look up the
+		// caller's default 'Trade'/'BTO' row; a miss (not provisioned / renamed / deactivated)
+		// falls through as NULL — 088's own Unsorted-pending fallback, not an error.
+		if (v.sub_cat_id === null) {
+			const btoId = await findDefaultBtoSubCatId(locals.supabase);
+			v = { ...v, sub_cat_id: btoId };
+		}
+
+		const result = await createManualPurchase(locals.supabase, accountId, v);
+		if (!result.ok) {
+			const key = result.field ?? '_form';
+			return fail(result.status, { errors: { [key]: [result.message] }, values: raw });
+		}
+		return {
+			success: true,
+			transId: result.transId,
+			securityId: result.securityId,
+			priced: result.priced,
+			price: result.price
+		};
 	}
 };
