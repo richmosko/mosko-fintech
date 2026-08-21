@@ -108,6 +108,29 @@ describe('loadHeldSecurities — priced field (SELF-325 P-b)', () => {
 		expect(findBySecurityId(rows, 501)?.priced).toBe(true);
 	});
 
+	it('THE CLEARING CASE — a previously-unpriced asset that later gains a price reads priced:true (the signal is re-evaluated live, never a frozen snapshot of what a purchase confirmation once said)', async () => {
+		// Two calls, same asset, same account — the only thing that changed between them is what
+		// eod_price now contains. This is the "turn OFF, not just on" property the catch criterion
+		// requires ("at any later time"): a marker that can only ever turn on is a bug that
+		// outlives the condition it reports. loadHeldSecurities has no memory between calls — this
+		// test exists to make that property explicit and watched, not to exercise new code the
+		// "normal positive price" case above doesn't already run.
+		const holdings = [{ account_id: ACCOUNT_ID, asset_id: 501, quantity: 10 }];
+		const assets = [{ asset_id: 501, symbol: 'AAPL', name: 'Apple Inc' }];
+
+		const { supabase: beforeSupabase } = makeSupabase({ holdings, assets, priceRows: [] });
+		const before = await loadHeldSecurities(beforeSupabase, ACCOUNT_ID, AS_OF);
+		expect(findBySecurityId(before, 501)?.priced).toBe(false);
+
+		const { supabase: afterSupabase } = makeSupabase({
+			holdings,
+			assets,
+			priceRows: [{ asset_id: 501, price_date: '2026-08-15', price: 150.25 }]
+		});
+		const after = await loadHeldSecurities(afterSupabase, ACCOUNT_ID, AS_OF);
+		expect(findBySecurityId(after, 501)?.priced).toBe(true);
+	});
+
 	it('picks the MAXIMUM price_date row when multiple exist, ignoring an older positive price if the newest is zero', async () => {
 		const { supabase } = makeSupabase({
 			holdings: [{ account_id: ACCOUNT_ID, asset_id: 501, quantity: 10 }],
