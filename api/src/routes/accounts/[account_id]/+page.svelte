@@ -41,6 +41,8 @@
 	import SelectField from '$lib/components/SelectField.svelte';
 	import ConnectionStatusChip from '$lib/components/ConnectionStatusChip.svelte';
 	import TransactionEntryForm from '$lib/components/TransactionEntryForm.svelte';
+	import PurchaseEntryForm from '$lib/components/PurchaseEntryForm.svelte';
+	import type { SelectableAssetOption } from '$lib/purchase-util';
 	import StockSplitEntryForm from '$lib/components/StockSplitEntryForm.svelte';
 	import DuplicateCandidateList from '$lib/components/DuplicateCandidateList.svelte';
 	import SyncHistoryTable from '$lib/components/SyncHistoryTable.svelte';
@@ -51,7 +53,18 @@
 	import { updateAttributesSchema, closeAccountSchema, fieldErrors } from '$lib/schemas/account';
 	import { providerLabel } from '$lib/accounts/connection-display';
 
-	let { data, form }: { data: PageData; form: ActionData } = $props();
+	// SELF-325 EXPECTED CONTRACT (see the entryMode block below): `PageData` does not yet
+	// declare `selectableAssets` / `defaultSubCatId` / `defaultSubCatLabel` because Backend's
+	// load() extension hasn't landed as of this writing. Widened locally rather than editing
+	// the generated `./$types` (Backend-owned once real) — narrows back to the real shape the
+	// moment their load() change lands and this cast becomes redundant (delete it then).
+	type PageDataWithPurchase = PageData & {
+		selectableAssets?: SelectableAssetOption[];
+		defaultSubCatId?: number | null;
+		defaultSubCatLabel?: string | null;
+	};
+
+	let { data, form }: { data: PageDataWithPurchase; form: ActionData } = $props();
 
 	const account = $derived(data.account);
 	const transactions = $derived(data.transactions);
@@ -152,6 +165,23 @@
 	// Cashflow-domain Sub-Cat picker groups for the transaction entry/edit/split/categorize
 	// surfaces (per-transaction annotation category — the cashflow domain, not asset taxonomy).
 	const cashflowGroups = $derived(subCatGroupsOf(data.cashflowSubCats));
+
+	// SELF-325 purchase-path (088). ⚠ EXPECTED CONTRACT (api/CLAUDE.md "+page.svelte ahead of
+	// Backend's loader" precedent — same pattern as SELF-242/SELF-241): `selectableAssets` /
+	// `defaultSubCatId` / `defaultSubCatLabel` are not yet wired into this route's load() as of
+	// this writing (Backend's own commit 7bcba2c: "Form action + RPC-arg schema deliberately
+	// NOT included ... gated on F/CTO's pricing call"). Defaulted defensively so this page
+	// renders correctly (empty picker, no category readout) the moment before Backend's load()
+	// change lands, and picks up real data the moment after with no further edit here.
+	const selectableAssets = $derived(data.selectableAssets ?? []);
+	const defaultSubCatId = $derived(data.defaultSubCatId ?? null);
+	const defaultSubCatLabel = $derived(data.defaultSubCatLabel ?? null);
+
+	// Cash / Purchase fork on "Add a transaction" — the two manual-entry write paths
+	// (fn_create_manual_trans vs fn_create_manual_purchase, 040 vs 088). A segmented toggle,
+	// not a dropdown, mirroring TransactionFactFields' own Direction toggle visual idiom
+	// (consistency within this page rather than inventing a second toggle shape).
+	let entryMode = $state<'cash' | 'purchase'>('cash');
 
 	// The ledger table column count — shared with each row so its full-width editor rows
 	// (<td colspan>) span correctly: Date | Category | Vendor | Description | Amount | Actions.
@@ -614,7 +644,43 @@
 				Account status above, add the transaction, then close it again.
 			</p>
 		{:else}
-			<TransactionEntryForm subCatGroups={cashflowGroups} />
+			<!--
+				SELF-325: Cash (040) vs Purchase (088) are TWO DIFFERENT RPCs with different shapes —
+				not a variant of the same form — so the toggle switches components entirely rather
+				than branching fields within one. Each form keeps its own local state; switching away
+				and back discards an unsubmitted purchase in progress (mirrors TransactionRow's
+				activeMode reset — an abandoned entry is not persisted state).
+			-->
+			<fieldset class="entry-mode">
+				<legend>Entry type</legend>
+				<div class="seg" role="radiogroup" aria-label="Cash or purchase">
+					<label class="seg-opt" class:active={entryMode === 'cash'}>
+						<input
+							type="radio"
+							name="entry-mode"
+							value="cash"
+							checked={entryMode === 'cash'}
+							onchange={() => (entryMode = 'cash')}
+						/>
+						<span>Cash</span>
+					</label>
+					<label class="seg-opt" class:active={entryMode === 'purchase'}>
+						<input
+							type="radio"
+							name="entry-mode"
+							value="purchase"
+							checked={entryMode === 'purchase'}
+							onchange={() => (entryMode = 'purchase')}
+						/>
+						<span>Purchase</span>
+					</label>
+				</div>
+			</fieldset>
+			{#if entryMode === 'cash'}
+				<TransactionEntryForm subCatGroups={cashflowGroups} />
+			{:else}
+				<PurchaseEntryForm {selectableAssets} {defaultSubCatId} {defaultSubCatLabel} />
+			{/if}
 		{/if}
 	</section>
 
@@ -958,5 +1024,61 @@
 		font-size: var(--fs-small);
 		color: var(--c-text-secondary);
 		max-width: 44rem;
+	}
+	/* SELF-325 Cash/Purchase entry-mode toggle — same segmented-control visual idiom as
+	   TransactionFactFields' Direction toggle (component-scoped there, so reproduced here
+	   rather than shared, same as every other page-local .seg on this page family). */
+	.entry-mode {
+		border: 0;
+		margin: 0 0 var(--space-3);
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-1);
+	}
+	.entry-mode legend {
+		padding: 0;
+		font-size: var(--fs-small);
+		font-weight: var(--weight-semi);
+		color: var(--c-text-secondary);
+	}
+	.entry-mode .seg {
+		display: inline-flex;
+		gap: 0;
+		border: 1px solid var(--c-border-strong);
+		border-radius: var(--radius-md);
+		overflow: hidden;
+		width: fit-content;
+	}
+	.entry-mode .seg-opt {
+		display: inline-flex;
+		align-items: center;
+		padding: var(--space-2) var(--space-3);
+		font-size: var(--fs-small);
+		font-weight: var(--weight-med);
+		color: var(--c-text-secondary);
+		cursor: pointer;
+	}
+	.entry-mode .seg-opt + .seg-opt {
+		border-left: 1px solid var(--c-border-strong);
+	}
+	.entry-mode .seg-opt.active {
+		background: var(--c-accent-soft);
+		color: var(--c-text-primary);
+		font-weight: var(--weight-semi);
+	}
+	.entry-mode .seg-opt input {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		padding: 0;
+		margin: -1px;
+		overflow: hidden;
+		clip: rect(0 0 0 0);
+		white-space: nowrap;
+		border: 0;
+	}
+	.entry-mode .seg-opt:focus-within {
+		box-shadow: inset 0 0 0 2px var(--c-accent);
 	}
 </style>

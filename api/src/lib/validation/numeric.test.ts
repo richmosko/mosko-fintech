@@ -7,7 +7,7 @@
 // against BOTH wrappers, since both wrap the same core.
 
 import { describe, it, expect } from 'vitest';
-import { sanitizeCurrencyAmount, sanitizePercent } from './numeric';
+import { sanitizeCurrencyAmount, sanitizePercent, sanitizeQuantity } from './numeric';
 
 describe('sanitizeCurrencyAmount — SELF-201 regression baseline (numeric(20,4), no range)', () => {
 	it('accepts a clean decimal string', () => {
@@ -25,7 +25,8 @@ describe('sanitizeCurrencyAmount — SELF-201 regression baseline (numeric(20,4)
 
 describe.each([
 	['sanitizeCurrencyAmount', sanitizeCurrencyAmount],
-	['sanitizePercent', sanitizePercent]
+	['sanitizePercent', sanitizePercent],
+	['sanitizeQuantity', sanitizeQuantity]
 ] as const)('%s — six-category adversarial battery', (_name, sanitize) => {
 	it('rejects NaN (literal number)', () => {
 		expect(sanitize(NaN).ok).toBe(false);
@@ -103,5 +104,37 @@ describe('sanitizePercent — numeric(5,2) CHECK (0..100), 074 shape', () => {
 
 	it('rejects 4+ integer digits (numeric(5,2) precision, independent of the 0..100 range)', () => {
 		expect(sanitizePercent('1000.00').ok).toBe(false);
+	});
+});
+
+describe('sanitizeQuantity — numeric(28,8) shape (017 pfin.account_trans.quantity; SELF-325 / 088)', () => {
+	it('accepts a whole-share quantity', () => {
+		expect(sanitizeQuantity('100')).toEqual({ ok: true, value: 100 });
+	});
+
+	it('accepts up to 8 decimal places (fractional-share / crypto grain)', () => {
+		expect(sanitizeQuantity('0.12345678')).toEqual({ ok: true, value: 0.12345678 });
+	});
+
+	it('rejects 9+ decimal places — the property currency/percent do NOT share (their scale is 4/2)', () => {
+		expect(sanitizeQuantity('1.123456789')).toEqual({
+			ok: false,
+			reason: 'At most 8 decimal places.'
+		});
+	});
+
+	it('a value with 5 decimal places is ACCEPTED here but would be REJECTED by sanitizeCurrencyAmount — proves this is its own shape, not a re-skin', () => {
+		expect(sanitizeQuantity('1.12345').ok).toBe(true);
+		expect(sanitizeCurrencyAmount('1.12345').ok).toBe(false);
+	});
+
+	it('accepts up to 20 integer digits (numeric(28,8): 28-8=20) — beyond currency amount’s 16-digit bound', () => {
+		expect(sanitizeQuantity('1'.repeat(20)).ok).toBe(true);
+		expect(sanitizeQuantity('1'.repeat(21)).ok).toBe(false);
+	});
+
+	it('has no built-in positivity/range floor — 0 and negatives pass the SHAPE battery (088’s own > 0 refine is a separate layer, mirrored in schemas/purchase.ts)', () => {
+		expect(sanitizeQuantity('0')).toEqual({ ok: true, value: 0 });
+		expect(sanitizeQuantity('-5')).toEqual({ ok: true, value: -5 });
 	});
 });
