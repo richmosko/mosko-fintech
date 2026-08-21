@@ -47,7 +47,8 @@
 	import SyncHistoryTable from '$lib/components/SyncHistoryTable.svelte';
 	import SyncNowControl from '$lib/components/SyncNowControl.svelte';
 	import TransactionRow from '$lib/components/TransactionRow.svelte';
-	import { subCatGroupsOf } from '$lib/transaction-util';
+	import UnpricedMarker from '$lib/components/UnpricedMarker.svelte';
+	import { subCatGroupsOf, securityLabel } from '$lib/transaction-util';
 	import { ACCOUNT_TYPES, TAX_TREATMENTS } from '$lib/schemas/account-constants';
 	import { updateAttributesSchema, closeAccountSchema, fieldErrors } from '$lib/schemas/account';
 	import { providerLabel } from '$lib/accounts/connection-display';
@@ -335,6 +336,61 @@
 					<p class="attr-hint">How the account is taxed: taxable, tax-deferred, or tax-free. Feeds the estimated-tax view.</p>
 				</div>
 			</dl>
+		{/if}
+	</section>
+
+	<!--
+		Holdings (SELF-325 P-b, UX ruling 2026-08-21). Minimal — exists to make the LOUD unpriced
+		state observable at any later time, not only at the purchase confirmation that produced
+		it, and NEVER as a portfolio view. NO valuation/cost-basis/market-price column: no
+		per-holding valued read exists (Architect, measured) and building one is explicitly out
+		of scope — NAV/allocation aggregates are a separate follow-up (team-lead).
+
+		PLACEMENT (UX ruling): here, immediately after "Account details" and before "Account
+		linking & aggregation" — grouped with the page's other current-STATE sections, ahead of
+		the activity/action sections below. Deliberately NOT positioned beside "Record a stock
+		split": that section is source-of-truth-gated (hidden for provider-linked accounts via
+		`isSourceOfTruth`), but Holdings must render for EVERY account — coupling their position
+		would leave a provider-linked account with an orphaned gap where Holdings should be.
+
+		EMPTY STATE DOUBLES AS THE CLOSED-ACCOUNT STATE (UX ruling): `058`'s gate leg 1 refuses a
+		close while the account still holds positions, so `heldSecurities` is guaranteed empty
+		once `closed_at` is set — no separate "closed" branch needed here, unlike the sections
+		below that carry their own `isClosed` copy.
+
+		Status column ALWAYS renders (header included) — "empty cell, never a missing one", the
+		same rule the Transactions table's Actions column already follows when frozen. A priced
+		row's Status cell is genuinely BLANK (UnpricedMarker's own zero-footprint discipline) —
+		that blankness IS the "priced" signal; UX ruled explicitly against a redundant "priced"
+		chip for the all-priced case. Table shell reuses the page's `.table-scroll` / `.tbl`
+		classes and `<th scope="col">` pattern (same as the Transactions table below) — no new
+		table styling.
+	-->
+	<section class="region" aria-label="Holdings">
+		<h2 class="section-title">Holdings</h2>
+		{#if heldSecurities.length === 0}
+			<p class="empty">No holdings in this account.</p>
+		{:else}
+			<div class="table-scroll">
+				<table class="tbl">
+					<thead>
+						<tr>
+							<th scope="col">Security</th>
+							<th scope="col" class="num">Quantity</th>
+							<th scope="col">Status</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each heldSecurities as h (h.security_id)}
+							<tr>
+								<td>{securityLabel(h)}</td>
+								<td class="num num-cell">{h.quantity}</td>
+								<td><UnpricedMarker priced={h.priced} context="inline" /></td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
 		{/if}
 	</section>
 
