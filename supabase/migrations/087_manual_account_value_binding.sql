@@ -72,15 +72,42 @@
 --        round(cost_basis / quantity, 4), source='manual_valuation', price_date =
 --        p_as_of_date, which is reachable by the caller under 019's existing
 --        eod_price_insert policy (manual_valuation on an asset they own).
+--        ⚠ (F3) HAS TWO SPELLINGS AND THIS BULLET ORIGINALLY NAMED ONLY ONE.
+--        A MISSING price row is the obvious one. A price row that EXISTS but is
+--        ZERO produces the identical silent-zero-NAV outcome, and it defeats any
+--        watcher that checks for row PRESENCE rather than row VALUE. Sec found
+--        that second spelling at the SELF-325 joint review; see the ZERO-ROUNDED
+--        PRICE block below for the reachable input, the fence, and the bound.
 --
 -- ----------------------------------------------------------------------------
--- ROUNDING ARTIFACT, stated rather than hidden. eod_price.price and
---   account_trans.price are numeric(20,4), so round(cost_basis/quantity, 4) can be
---   inexact against the basis: cost_basis=100 over quantity=3 gives 33.3333, and
---   33.3333 x 3 = 99.9999. A position's opening MARKET value can therefore differ
---   from its COST BASIS by sub-cent amounts. This is inherent to the price grain
---   (019), not introduced here, and it is why the paired battery uses exactly
---   divisible fixture values rather than a tolerance.
+-- ROUNDING ARTIFACT, stated rather than hidden — AND ITS BOUND CORRECTED. Sec,
+--   at the SELF-325 joint review. eod_price.price and account_trans.price are
+--   numeric(20,4), so round(cost_basis/quantity, 4) can be inexact against the
+--   basis: cost_basis=100 over quantity=3 gives 33.3333, and 33.3333 x 3 =
+--   99.9999. A position's opening MARKET value can therefore differ from its
+--   COST BASIS.
+--   ⚠ AN EARLIER DRAFT OF THIS BLOCK CALLED THAT DIFFERENCE "sub-cent amounts".
+--   THAT IS WRONG AT SCALE and wrong in the direction that understates. The
+--   per-unit rounding error is up to 0.00005, so the position-level error is
+--   bounded by QUANTITY x 0.00005 — a cent only up to quantity ~= 200, and
+--   $50.00 at quantity 1,000,000. MEASURED. The artifact is inherent to the
+--   price grain (019), not introduced here, and it is why the paired battery
+--   uses exactly divisible fixture values rather than a tolerance.
+--
+-- ZERO-ROUNDED PRICE — Sec's BLOCKING finding at the SELF-325 joint review, and
+--   it is (F3) re-entering through a spelling (F3)'s own watcher could not see.
+--   When quantity > 20000 x cost_basis the quotient falls below 0.00005 and
+--   round(...,4) yields EXACTLY 0.0000 — a perfectly legal eod_price row, since
+--   019's only CHECK on price is the NaN fence. The position then values at
+--   quantity x 0 = ZERO: the account's bound value vanishes from NAV silently,
+--   which is precisely the failure (F3) exists to prevent. The (F3) watcher
+--   asserted a price row EXISTS, and one does — it is just worthless.
+--   REPRODUCED before fixing: quantity 1000000, cost_basis 10.00 passes every
+--   guard in this body, writes price 0.0000, and fn_account_unrealized_gl
+--   reports current_market_value 0.0000 for a position whose basis is $10.
+--   The body now REJECTS that input (see statement (3b)). Scope of the fix is
+--   the body only — no new column, CHECK, trigger, policy or grant, and no
+--   change to 017 or 019.
 --
 -- ----------------------------------------------------------------------------
 -- Numbering: 087 follows 086 (fn_subcat_contributors); taken at authoring time
@@ -452,13 +479,30 @@ begin
     returning asset_id into v_asset_id;
 
     -- (3b) The manual valuation. ⚠ THIS IS (F3) AND IT IS NOT OPTIONAL: 049 / 050
-    -- value a position as quantity x price x fx, and an unpriced asset yields a
-    -- NULL term that SUM drops — the account's whole bound value would vanish from
-    -- NAV silently. Written under 019's eod_price_insert policy, which admits only
+    -- value a position as quantity x price x fx, so the account's whole bound
+    -- value vanishes from NAV silently in EITHER of two ways — a MISSING price row
+    -- (NULL term, dropped by SUM) or a price row that EXISTS and is ZERO (fenced
+    -- immediately below; do not read this paragraph as naming the whole hazard).
+    -- Written under 019's eod_price_insert policy, which admits only
     -- source='manual_valuation' on an asset the caller owns. round(...,4) matches
     -- the numeric(20,4) grain so this value and (3c)'s price are the same number;
     -- see the ROUNDING ARTIFACT note. Division is safe: v_qty > 0 is established.
     v_price := round(v_basis / v_qty, 4);
+
+    -- ⚠ ZERO-ROUNDED PRICE FENCE (Sec, blocking, SELF-325 joint review). A price
+    -- that rounds to 0.0000 is a LEGAL eod_price row — 019's only CHECK on price
+    -- is the NaN fence — and it re-admits exactly the silent-zero-NAV failure
+    -- (F3) exists to prevent, by the one spelling (F3)'s watcher cannot see: the
+    -- row EXISTS, it is simply worthless, so the position values at quantity x 0.
+    -- Reachable by input that passes every guard above (quantity 1000000,
+    -- cost_basis 10.00). The predicate is <= 0 rather than = 0 defensively; with
+    -- v_basis > 0 and v_qty > 0 established the quotient cannot be negative, so
+    -- the reachable case is exactly the zero one.
+    if round(v_basis / v_qty, 4) <= 0 then
+      raise exception
+        'p_positions[%] derives a price of 0.0000 and would value at zero: cost_basis % over quantity % is below the numeric(20,4) price grain of pfin.eod_price (a per-unit price under 0.00005, i.e. quantity > 20000 x cost_basis). The position would be stored with a price row that exists but is worthless, so its value would vanish from NAV silently. Re-express the position with a smaller quantity or a larger cost_basis (SELF-325 / 087 F3).',
+        v_idx, v_basis, v_qty;
+    end if;
 
     insert into pfin.eod_price (asset_id, price_date, source, price)
     values (v_asset_id, p_as_of_date, 'manual_valuation', v_price);
@@ -500,4 +544,4 @@ revoke execute on function pfin.fn_create_manual_account(text, text, text, text,
 grant execute on function pfin.fn_create_manual_account(text, text, text, text, numeric, date, jsonb) to authenticated;
 
 comment on function pfin.fn_create_manual_account(text, text, text, text, numeric, date, jsonb) is
-  'SECURITY INVOKER write-composition RPC (SELF-201 §2.4.2; ADR-026; p_sub_cat_id dropped at 048 / SELF-319; p_positions added at 087 / SELF-325). Atomically creates a manual account, its AcctSetup opening-balance CASH account_trans row, and — for each entry in p_positions — a per-user pfin.asset row, its manual_valuation pfin.eod_price row, and an instrument-routed AcctSetup account_trans row, in ONE transaction under the caller''s RLS, RETURNING the new account_id. Three properties are load-bearing and each produces silently wrong money if dropped: the CASH row carries security_id NULL and asset_type ''currency'' is rejected, because cash is amount-carried (056 sums every amount) and its classification already routes through the global currency-asset (081), so binding it would change no figure and would put USD in the classify queue; every instrument-routed row carries amount=0, because 056 counts amount as cash while 019 fn_holdings_as_of counts quantity as a position and a nonzero amount would count the opening value twice (NO DDL enforces this — the observer is the paired QA battery leg); and every position also writes an eod_price row, because 049/050 value a position as quantity x price x fx and an unpriced asset yields a NULL term that SUM drops, zeroing the account''s bound value silently. Opening balance and purchase stay distinguishable: acct_setup with amount=0 books an Opening-Balance-Equity contra (084 P5), a purchase is transaction_type=''standard'' with amount=-cost. Instrument binding is OPTIONAL: p_positions omitted/[]/null executes exactly 048''s statements, so an acquisition may instead be recorded later as a real purchase. users_id is NOT a parameter (DEFAULT auth.uid() per 003 — un-forgeable); an auth.uid() IS NULL caller is REJECTED — a deviation from 048 that is DEFENSE IN DEPTH over an already-closed path, not a new fence: measured, such a call already failed at account.users_id NOT NULL (23502), so the guard changes the error, not the outcome, and removes no exercisable capability. It earns its place by failing early with a named cause and by pinning the caller-context requirement in the function that relies on it instead of borrowing it from another table''s constraint. It does not reach an RLS-exempt caller that sets a JWT claim (ADR-023 impersonate-then-write): auth.uid() is non-NULL there. Fences evaluate as the caller: account_insert WITH CHECK, account_trans_insert wr_access-JOIN (006, satisfied by the same-txn fn_grant_creator_access creator-grant row), asset_insert WITH CHECK (016), eod_price_insert manual_valuation-on-owned (019), and the Decision-3 #7 security_id fence (017), which passes by construction because the asset is minted in this same transaction for this same caller. NOT a DEFINER allowlist entry — needs no elevation; read ADR-011 Decision 9 live. Needs NO service_role (anon-key client + RLS + INVOKER). set search_path = '''' injection fence. EXECUTE revoked from PUBLIC, granted to authenticated only (anon denied). Lock 14 numeric posture: quoted values including "NaN" and "Infinity" are rejected by the JSON type check, zero and negative by an explicit guard, and finite-but-huge magnitudes by numeric column coercion (017) rather than by this body. Adds NO FK-shaped column — ADR-011 Decision 3 family unchanged, no label taken; read Decision 3 live. Same-transaction audit-log DEFERRED (A2; forward-hook in body; SELF-201 Task #7). Signature is an API contract (PostgREST /rpc; pfin is [api]-exposed) — the 6-arg signature is replaced by this 7-arg one, and because the added parameter carries a DEFAULT an existing 6-named-arg call site is unaffected (migration-first is the backward-compatible direction here, the OPPOSITE of 048).';
+  'SECURITY INVOKER write-composition RPC (SELF-201 §2.4.2; ADR-026; p_sub_cat_id dropped at 048 / SELF-319; p_positions added at 087 / SELF-325). Atomically creates a manual account, its AcctSetup opening-balance CASH account_trans row, and — for each entry in p_positions — a per-user pfin.asset row, its manual_valuation pfin.eod_price row, and an instrument-routed AcctSetup account_trans row, in ONE transaction under the caller''s RLS, RETURNING the new account_id. Three properties are load-bearing and each produces silently wrong money if dropped: the CASH row carries security_id NULL and asset_type ''currency'' is rejected, because cash is amount-carried (056 sums every amount) and its classification already routes through the global currency-asset (081), so binding it would change no figure and would put USD in the classify queue; every instrument-routed row carries amount=0, because 056 counts amount as cash while 019 fn_holdings_as_of counts quantity as a position and a nonzero amount would count the opening value twice (NO DDL enforces this — the observer is the paired QA battery leg); and every position also writes a USABLE eod_price row, because 049/050 value a position as quantity x price x fx. That hazard has TWO spellings and both zero the account''s bound value silently: a MISSING price row yields a NULL term that SUM drops, and a price row that EXISTS but rounds to 0.0000 (legal — 019 CHECKs only for NaN) values the position at quantity x 0. The second defeats any watcher that checks row PRESENCE rather than row VALUE, and is reachable whenever quantity > 20000 x cost_basis pushes the per-unit price below the numeric(20,4) grain; the body REJECTS that input (Sec, SELF-325 joint review). Opening balance and purchase stay distinguishable: acct_setup with amount=0 books an Opening-Balance-Equity contra (084 P5), a purchase is transaction_type=''standard'' with amount=-cost. Instrument binding is OPTIONAL: p_positions omitted/[]/null executes exactly 048''s statements, so an acquisition may instead be recorded later as a real purchase. users_id is NOT a parameter (DEFAULT auth.uid() per 003 — un-forgeable); an auth.uid() IS NULL caller is REJECTED — a deviation from 048 that is DEFENSE IN DEPTH over an already-closed path, not a new fence: measured, such a call already failed at account.users_id NOT NULL (23502), so the guard changes the error, not the outcome, and removes no exercisable capability. It earns its place by failing early with a named cause and by pinning the caller-context requirement in the function that relies on it instead of borrowing it from another table''s constraint. It does not reach an RLS-exempt caller that sets a JWT claim (ADR-023 impersonate-then-write): auth.uid() is non-NULL there. Fences evaluate as the caller: account_insert WITH CHECK, account_trans_insert wr_access-JOIN (006, satisfied by the same-txn fn_grant_creator_access creator-grant row), asset_insert WITH CHECK (016), eod_price_insert manual_valuation-on-owned (019), and the Decision-3 #7 security_id fence (017), which passes by construction because the asset is minted in this same transaction for this same caller. NOT a DEFINER allowlist entry — needs no elevation; read ADR-011 Decision 9 live. Needs NO service_role (anon-key client + RLS + INVOKER). set search_path = '''' injection fence. EXECUTE revoked from PUBLIC, granted to authenticated only (anon denied). Lock 14 numeric posture: quoted values including "NaN" and "Infinity" are rejected by the JSON type check, zero and negative by an explicit guard, and finite-but-huge magnitudes by numeric column coercion (017) rather than by this body. Adds NO FK-shaped column — ADR-011 Decision 3 family unchanged, no label taken; read Decision 3 live. Same-transaction audit-log DEFERRED (A2; forward-hook in body; SELF-201 Task #7). Signature is an API contract (PostgREST /rpc; pfin is [api]-exposed) — the 6-arg signature is replaced by this 7-arg one, and because the added parameter carries a DEFAULT an existing 6-named-arg call site is unaffected (migration-first is the backward-compatible direction here, the OPPOSITE of 048).';

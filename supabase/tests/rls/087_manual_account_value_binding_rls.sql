@@ -38,11 +38,11 @@
 -- │   dropped when 087 replaced the function), PLUS a watcher on the body's    │
 -- │   own auth.uid()-IS-NULL guard: an RLS-EXEMPT caller (role=postgres — a    │
 -- │   DIFFERENT threat from anon, which never reaches the body at all) with    │
--- │   no JWT claims is rejected. MEASURED (inversion-tested), the guard's      │
--- │   value is narrower than first claimed — it does NOT prevent a GLOBAL     │
--- │   asset (pfin.account.users_id NOT NULL already blocks that path earlier, │
--- │   guard or not); it fails EARLY and LEGIBLY instead of on an unrelated    │
--- │   table's constraint. See (l1-10)/(l1-11)'s block comment for the detail. │
+-- │   no JWT claims is rejected. MEASURED (inversion-tested): the account     │
+-- │   INSERT's own users_id NOT NULL constraint was ALREADY the backstop on   │
+-- │   this path, guard or not; the guard's real value is failing EARLY and    │
+-- │   LEGIBLY on a named error instead of an incidental constraint on an      │
+-- │   unrelated table. See (l1-10)/(l1-11)'s block comment for the detail.    │
 -- │ L2 the RPC-created position lands in the derived pending-classification    │
 -- │   set EXACTLY ONCE, and the global USD currency-asset never does (F1).     │
 -- │ L3 F2 (double-count): fn_account_cash_as_of proves the cash remainder is   │
@@ -81,10 +81,29 @@
 --     - p_positions non-array -> "…must be a JSON array of opening
 --       positions, got object.…"; a non-object array element -> "…must be a
 --       JSON object, got string."
+--     - SEC CLEARANCE (a/b/c): quantity/cost_basis whose ROUNDED RATIO
+--       (round(cost_basis/quantity,4)) is <= 0 -> the body's zero-price fence
+--       (P0001), inserted between price computation and the eod_price INSERT.
+--       Catches quantity=1000000/cost_basis=10.00 ((l5-price-floor)) AND,
+--       LAYER-MOVED, quantity=1e400/cost_basis=10 ((l5-q-overflow) — see that
+--       leg's block comment: no cost_basis choice keeps the 1e400-quantity
+--       case on the OLD column-coercion layer any more, this fence fires
+--       first for any representable cost_basis).
 --   NOT body-owned (assert REJECTION ONLY — SQLSTATE, not message text; a
 --     message-text leg here would test someone ELSE's error contract):
---     - 1e400 (scientific-notation overflow) -> 017's numeric(20,4)/(28,8)
---       column coercion, SQLSTATE 22003 (numeric_value_out_of_range).
+--     - cost_basis=1e400 (scientific-notation overflow, quantity held small
+--       enough the ratio does NOT round to zero) -> 017's numeric(20,4)
+--       COST_BASIS column coercion, SQLSTATE 22003 (numeric_value_out_of_range).
+--       ⚠ quantity=1e400 is NO LONGER in this category (see above) — only
+--       cost_basis=1e400 still reaches the column layer this way, since a
+--       huge cost_basis over a small quantity does not zero the ratio.
+--     - quantity=1e20 / cost_basis=1e16 ((l5-q-column-overflow)) -> 017's
+--       numeric(28,8) QUANTITY column coercion, SQLSTATE 22003. A DIFFERENT
+--       column from the cost_basis case above (20 vs 16 integer digits) — this
+--       is the leg that restores quantity-column observability after
+--       (l5-q-overflow)'s re-target, via the narrow window where quantity
+--       clears its own column ceiling while cost_basis clears the zero-price
+--       floor without overflowing ITS column (Architect, measured).
 --     - asset_type outside 016's vocab entirely -> 016's asset_asset_type_check,
 --       SQLSTATE 23514 (check_violation).
 --     - duplicate position name in one payload -> 016's asset_user_name_uniq,
@@ -107,9 +126,16 @@
 --   _rls.tenant_a()/_b(); NO PII / NO real account numbers / NO prod data. All
 --   fixture numerics chosen EXACTLY DIVISIBLE (e.g. 500/5=100.00 exact) to keep
 --   L3/L4 assertions exact rather than tolerance-based — 087's own header
---   documents a sub-cent rounding artifact on non-exact cost_basis/quantity
---   pairs (numeric(20,4) division), which is NOT a defect and NOT this
---   battery's concern. All in a rolled-back txn.
+--   documents a rounding artifact on non-exact cost_basis/quantity pairs
+--   (round(cost_basis/quantity,4), numeric(20,4)). ⚠ SEC-CORRECTED: this is
+--   NOT bounded to "sub-cent" — the per-unit rounding error is at most 0.00005,
+--   so the TOTAL artifact on a position's opening value is bounded by
+--   quantity × 0.00005, which is sub-cent only up to quantity ≈ 200 and grows
+--   unbounded with quantity (measured: quantity=1,000,000 / cost_basis=10.00
+--   rounds to price=0.0000 — a $0-priced position, not a rounding footnote).
+--   See L5's quantity/price-floor leg (Sec clearance (c)), which asserts the
+--   RPC RAISES on that ratio rather than silently accepting a zero-valued
+--   position. All in a rolled-back txn.
 --
 -- ROLE/SCHEMA DISCIPLINE (PR #121 root-cause): `_rls` grants no USAGE to
 --   authenticated; tenant UUIDs resolved to psql LITERALS via \gset at
@@ -122,14 +148,14 @@
 --   F/CTO's local test data must survive). RED-until-087-applied is expected
 --   locally; CI (pg_prove directory-mode) after Backend's apply is the green
 --   gate. Verify with pg_prove — bare psql exits 0 on a plan-count failure.
---   plan(54).
+--   plan(56).
 -- =====================================================================
 
 begin;
 
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(54);
+select plan(56);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 
@@ -258,15 +284,25 @@ select is(
 --   detective. The reason is upstream of the guard: pfin.account.users_id is
 --   NOT NULL, so an RLS-exempt call already fails at statement (1) (the
 --   account INSERT, 23502) before ever reaching the position-asset INSERT the
---   guard was originally believed to protect. So the guard's real, measured
---   value is narrower than "prevents a GLOBAL asset" — that outcome was never
---   reachable, guard or not (087's original header claim was wrong; corrected
---   there and retracted to Sec). What it actually buys: FAILING EARLY AND
---   LEGIBLY with a named, function-specific error instead of an incidental
---   NOT NULL violation on an unrelated table, and pinning the caller-context
+--   guard was originally believed to protect — the account INSERT's own
+--   NOT NULL constraint was ALREADY the backstop on this path, guard or not
+--   (087's original header claim was wrong; corrected there and retracted to
+--   Sec). What the guard actually buys: FAILING EARLY AND LEGIBLY with a
+--   named, function-specific error instead of an incidental NOT NULL
+--   violation on an unrelated table, and pinning the caller-context
 --   requirement inside the function that needs it rather than borrowing it
 --   from account's own constraint. (l1-11) is kept as a companion
 --   no-partial-write sanity check, NOT as a second detector of the guard.
+--
+--   PRECISION NOTE (Sec): (l1-10) is deliberately pinned to the GUARD'S OWN
+--   message text, not a bare throws_ok/SQLSTATE. A bare throws_ok would be
+--   VACUOUS here — the call throws EITHER WAY (23502 from account's NOT NULL
+--   if the guard were removed, the guard's own error if present) — so only a
+--   message-text match distinguishes "the guard fired" from "something else,
+--   downstream, fired instead." This is the same discipline every other
+--   body-owned leg in this file follows; it is stated explicitly here because
+--   this is the one leg where the alternative (no guard) ALSO throws, which
+--   makes the vacuity risk concrete rather than hypothetical.
 select set_config('request.jwt.claims', '', true);
 select throws_like(
   $$ select pfin.fn_create_manual_account('L1 unauth attempt','depository','household','taxable',
@@ -388,11 +424,26 @@ select ok(
 select set_config('role', 'postgres', true);
 
 -- =====================================================================
--- L4 — F3 unpriced-asset watcher.
+-- L4 — F3 watcher: a bound position's price row must EXIST and be USABLE
+--   (resolvable AND positive-valued — a price=0.0000 row exists but is worth
+--   nothing, and is F3's actual failure mode, not merely a missing row).
 -- =====================================================================
 -- (l4-1) BLANKET, privileged, ALL TENANTS: every acct_setup row with
---   security_id NOT NULL has a resolvable eod_price (source=manual_valuation,
---   price_date <= transaction_date). Covers L1(A)+L1(B)+L2(A)+L3(A) = 4 rows.
+--   security_id NOT NULL has a resolvable, POSITIVE-VALUED eod_price
+--   (source=manual_valuation, price_date <= transaction_date, price > 0).
+--   Covers L1(A)+L1(B)+L2(A)+L3(A) = 4 rows (+ whatever L5's price-floor leg
+--   below adds, once Architect's clearance-(a) guard makes that row
+--   unreachable rather than merely present-but-zero).
+--   SEC-CORRECTED (clearance (b)): the ORIGINAL query asserted only that a
+--   matching eod_price ROW existed — a row with price=0.0000 satisfies 019's
+--   NaN-only CHECK (no positivity constraint) and would have passed this
+--   watcher while still contributing $0 to NAV, which is the EXACT failure
+--   F3 exists to catch. `and ep.price > 0` makes this observe the VALUE, not
+--   merely the row's existence. The exactly-divisible L3/L4 fixtures can't
+--   surface this on their own (their ratios never round to zero) — this is
+--   why L5's new price-floor leg exists: it is what actually exercises the
+--   defect Sec found (quantity ~ 1,000,000 against a small cost_basis rounds
+--   round(cost_basis/quantity,4) to 0.0000).
 select is(
   (select count(*) from pfin.account_trans t
      where t.security_id is not null
@@ -402,9 +453,10 @@ select is(
          where ep.asset_id = t.security_id
            and ep.source = 'manual_valuation'
            and ep.price_date <= t.transaction_date
+           and ep.price > 0
        ))::bigint,
   0::bigint,
-  '(l4-1) BLANKET F3 watcher: every instrument-bound acct_setup row (all tenants) has a resolvable manual_valuation eod_price at or before its transaction_date — zero orphans'
+  '(l4-1) BLANKET F3 watcher: every instrument-bound acct_setup row (all tenants) has a resolvable manual_valuation eod_price at or before its transaction_date, AND that price is > 0 (SEC-CORRECTED — observes the VALUE, not just the row''s existence; a price=0.0000 row satisfies 019''s NaN-only CHECK and would otherwise pass this watcher while still zeroing the position''s NAV contribution) — zero orphans'
 );
 
 -- (l4-2) F3 DIRECT VALUE DETECTOR: L3's account current_market_value = cash(300)
@@ -548,12 +600,54 @@ select throws_like(
   'p_positions[1].quantity must be a finite number greater than zero, got%',
   '(l5-q-neg) quantity=-5 rejected by the explicit positivity guard'
 );
--- quantity: 1e400 overflow — NOT body-owned; assert rejection only (022003).
-select throws_ok(
+-- quantity: 1e400. LAYER MOVED (SEC clearance (a) — measured by Architect,
+--   confirmed here): this fixture (quantity=1e400, cost_basis=10) used to
+--   reach 017's numeric(28,8) column coercion (22003) FIRST, because nothing
+--   upstream rejected it. Now Architect's new zero-price fence (round(
+--   cost_basis/quantity,4) <= 0, inserted between price computation and the
+--   eod_price write) fires FIRST instead — 10/1e400 rounds to 0.0000 — and
+--   raises P0001 with the SAME message as (l5-price-floor) below, BEFORE the
+--   column is ever reached. This is NOT a fixture choice we can route around:
+--   ANY numeric cost_basis representable in a numeric(20,4) column divided by
+--   1e400 also rounds to 0 (the column's own ~10^16 ceiling is astronomically
+--   smaller than what would be needed to keep the ratio non-zero against a
+--   1e400 quantity), so 017's column-overflow layer is NOT independently
+--   observable at this magnitude any more — the body-owned fence is now the
+--   layer that actually catches it, and pinning "assert rejection only, not
+--   message text" here would be documenting a layer this case no longer
+--   exercises. Re-targeted to the SAME message-ownership treatment as every
+--   other body-owned guard in this file (exact prefix, not SQLSTATE-only).
+--   ⚠ (l5-c-overflow) immediately below proves 017's numeric(20,4)
+--   COST_BASIS column overflows at 1e400 — a DIFFERENT column with a
+--   DIFFERENT integer-digit ceiling (16 vs quantity's 20, numeric(28,8)) — it
+--   does NOT stand in for the quantity column. Moving THIS leg off that layer
+--   left 017's quantity-column overflow with NO observer at all anywhere in
+--   this file (Architect, caught before commit). (l5-q-column-overflow)
+--   below restores it via the narrow fixture window where the fence does
+--   NOT win: quantity must clear numeric(28,8)'s ~1e20 ceiling while
+--   cost_basis stays under the zero-price floor (cost_basis >= quantity x
+--   0.00005) AND under its OWN numeric(20,4) ~1e16 ceiling — measured window
+--   at quantity=1e20: cost_basis in [5e15, 1e16].
+select throws_like(
   $$ select pfin.fn_create_manual_account('L5 rej qty overflow','depository','household','taxable',
        10, '2026-04-05', '[{"asset_type":"equity","name":"qty-overflow","quantity":1e400,"cost_basis":10}]'::jsonb) $$,
+  'p_positions[1] derives a price of 0.0000 and would value at zero: cost_basis%',
+  '(l5-q-overflow) quantity=1e400 / cost_basis=10 (rounds to price=0.0000): LAYER MOVED — now caught by the body''s zero-price fence (P0001), NOT 017''s column coercion (22003) — no cost_basis choice keeps this case on the old layer, see block comment'
+);
+
+-- (l5-q-column-overflow) restores the quantity-column (numeric(28,8))
+--   observer the re-target above removed. quantity=1e20 clears the column's
+--   ~1e20 integer-digit ceiling; cost_basis=1e16 sits inside the narrow
+--   window that BOTH clears the zero-price floor (1e16 >= 1e20 x 0.00005 =
+--   5e15) AND stays under cost_basis's OWN numeric(20,4) ~1e16 ceiling —
+--   measured by Architect: 22003, the fence does NOT fire here. NOT
+--   body-owned; assert rejection only, per the same discipline as every
+--   other catalog-owned leg in this file.
+select throws_ok(
+  $$ select pfin.fn_create_manual_account('L5 rej qty column overflow','depository','household','taxable',
+       10, '2026-04-05', '[{"asset_type":"equity","name":"qty-col-overflow","quantity":1e20,"cost_basis":1e16}]'::jsonb) $$,
   '22003', null,
-  '(l5-q-overflow) quantity=1e400 rejected at 017''s numeric(28,8) column coercion (22003, numeric_value_out_of_range) — NOT the body; assert rejection only, not message text'
+  '(l5-q-column-overflow) quantity=1e20 (clears 017''s numeric(28,8) ceiling) with cost_basis=1e16 (inside the narrow window that also clears the zero-price floor) rejected at 22003 — restores independent observation of the quantity column, which (l5-q-overflow)''s re-target left uncovered'
 );
 
 -- cost_basis: mirror the same 9-variant matrix.
@@ -610,6 +704,27 @@ select throws_ok(
        10, '2026-04-05', '[{"asset_type":"equity","name":"cb-overflow","quantity":1,"cost_basis":1e400}]'::jsonb) $$,
   '22003', null,
   '(l5-c-overflow) cost_basis=1e400 rejected at 017''s numeric(20,4) column coercion (22003) — NOT the body; assert rejection only'
+);
+
+-- (l5-price-floor) SEC CLEARANCE (c): quantity=1,000,000 against cost_basis=
+--   10.00 rounds round(cost_basis/quantity,4) to 0.0000 — a $0-priced position
+--   the PRE-CLEARANCE body would have silently ACCEPTED. This is F3's actual
+--   defect, more precisely than L4's original framing: not a MISSING
+--   eod_price row, a ZERO-VALUED one that 019's NaN-only CHECK admits (no
+--   positivity constraint). Sec's ask, stated exactly: assert the RPC RAISES
+--   (not that it succeeds with a caveat). This leg is the F3-completeness
+--   counterpart to (l4-1)'s corrected `and ep.price > 0` clause — that clause
+--   detects a zero-priced row if one lands; THIS leg proves one can no longer
+--   land at all, once Architect's clearance-(a) guard
+--   (round(cost_basis/quantity,4) <= 0 rejected in the body) is committed.
+--   Message verified live by Architect against the fenced function (SQLSTATE
+--   P0001); pattern truncates before the %-interpolated cost_basis/quantity
+--   values so it can't break on numeric formatting.
+select throws_like(
+  $$ select pfin.fn_create_manual_account('L5 rej price floor','depository','household','taxable',
+       10, '2026-04-05', '[{"asset_type":"equity","name":"price-floor","quantity":1000000,"cost_basis":10.00}]'::jsonb) $$,
+  'p_positions[1] derives a price of 0.0000 and would value at zero: cost_basis%',
+  '(l5-price-floor) SEC CLEARANCE (c): quantity=1,000,000 / cost_basis=10.00 (rounds to price=0.0000) is REJECTED by the body — not silently accepted at a zero-valued price'
 );
 
 -- individual body-owned guards.

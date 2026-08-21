@@ -27,7 +27,10 @@
 --           7-arg (jsonb) overload, so (4) now checks THAT signature — still RED
 --           on a pre-048 stack (only the OLD 7-arg-with-bigint existed there) and
 --           RED again if 087 had not run.
---   (5)     hasnt_function 7-arg -> RED if 048 had NOT run (the 7-arg overload still existed).
+--   (5)     hasnt_function 7-arg (bigint, the pre-048 p_sub_cat_id signature) ->
+--           RED if 048 had NOT run (that overload still existed). UNCHANGED by
+--           087 — this is the OTHER 7-arg (bigint, not jsonb); see the GROUP B
+--           header for which is which.
 --   (6)/(7) has_function_privilege on the 7-arg (RECONCILED AT 087) -> RED if the
 --           recreated grant were wrong (EXECUTE not granted to authenticated, or
 --           leaked to anon).
