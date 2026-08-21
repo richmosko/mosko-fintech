@@ -148,14 +148,14 @@
 --   F/CTO's local test data must survive). RED-until-087-applied is expected
 --   locally; CI (pg_prove directory-mode) after Backend's apply is the green
 --   gate. Verify with pg_prove — bare psql exits 0 on a plan-count failure.
---   plan(56).
+--   plan(57).
 -- =====================================================================
 
 begin;
 
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(56);
+select plan(57);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 
@@ -802,6 +802,22 @@ select is(
   (select count(*) from pfin.asset where users_id = :'ta')::bigint,
   :l5_baseline_asset::bigint,
   '(l5-atomicity-asset) companion atomicity: ZERO orphan pfin.asset rows from any rejected L5 call'
+);
+
+-- (l5-q-column-overflow-control) non-vacuous companion for
+--   (l5-q-column-overflow), DELIBERATELY placed AFTER the atomicity checks —
+--   this is the ONE L5 call in this file that SUCCEEDS and persists real
+--   rows; running it before the atomicity baselines were captured/asserted
+--   would have falsified them (Architect flagged the risk this leg exists to
+--   avoid: a leg placed to suit convenience instead of the numbers it would
+--   perturb). Proves the window's QUANTITY side does real work, not "any
+--   sufficiently large number gets rejected": quantity=1e19 fits
+--   numeric(28,8) (one order of magnitude under (l5-q-column-overflow)'s
+--   1e20 ceiling) with the SAME cost_basis=9e15 — ACCEPTED, not rejected.
+select lives_ok(
+  $$ select pfin.fn_create_manual_account('L5 qty column ctrl','depository','household','taxable',
+       10, '2026-04-05', '[{"asset_type":"equity","name":"qty-col-ctrl","quantity":1e19,"cost_basis":9e15}]'::jsonb) $$,
+  '(l5-q-column-overflow-control) non-vacuous: quantity=1e19 (fits numeric(28,8), one order of magnitude under (l5-q-column-overflow)''s 1e20) with the SAME cost_basis=9e15 is ACCEPTED — proves the rejection above is about crossing quantity''s ceiling specifically, not about any sufficiently large number'
 );
 select set_config('role', 'postgres', true);
 
