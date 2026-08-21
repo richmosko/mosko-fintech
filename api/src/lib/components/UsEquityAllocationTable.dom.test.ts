@@ -195,6 +195,35 @@ describe('UsEquityAllocationTable — AC7: section badge + per-row tri-state sta
 		expect(within(tr).queryByText('Staleness unknown')).toBeNull();
 		expect(tr.classList.contains('stale-row')).toBe(false);
 	});
+
+	// SELF-243 (frontend-2's own recommendation, QA-covered — mirrors the identical leg added to
+	// NonReAllocationTable.dom.test.ts, same reasoning): every test above mounts a FRESH component
+	// instance per fixture, proving each STATE renders correctly but nothing about the TRANSITION —
+	// a real session re-fetches after re-auth and the SAME mounted instance updates its props, a
+	// different Svelte code path from an initial mount. This renders once stale, asserts the tint,
+	// `rerender()`s the SAME instance to fresh, and asserts the tint is actually gone.
+	it('a row that WAS stale clears its tag and row-tint class on the next render once is_stale flips to false (the update path, not just the initial mount)', () => {
+		const staleFixture: UsEquityAllocation = {
+			...FIXTURE,
+			rows: FIXTURE.rows.map((r) => (r.sub_cat === 'US-01-Basic_Materials' ? { ...r, is_stale: true } : r))
+		};
+		const freshFixture: UsEquityAllocation = {
+			...FIXTURE,
+			rows: FIXTURE.rows.map((r) => (r.sub_cat === 'US-01-Basic_Materials' ? { ...r, is_stale: false } : r))
+		};
+		const { getByText, rerender } = render(UsEquityAllocationTable, {
+			props: { allocation: staleFixture, staleness: EMPTY_STALENESS }
+		});
+		const staleRow = getByText('US-01-Basic_Materials').closest('tr')!;
+		expect(within(staleRow).getByText('May be stale')).toBeTruthy();
+		expect(staleRow.classList.contains('stale-row')).toBe(true);
+
+		rerender({ allocation: freshFixture, staleness: EMPTY_STALENESS });
+
+		const clearedRow = getByText('US-01-Basic_Materials').closest('tr')!;
+		expect(within(clearedRow).queryByText('May be stale')).toBeNull();
+		expect(clearedRow.classList.contains('stale-row')).toBe(false);
+	});
 });
 
 describe('UsEquityAllocationTable — degenerate zero-holding state', () => {
