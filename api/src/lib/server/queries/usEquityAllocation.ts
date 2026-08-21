@@ -39,15 +39,15 @@
 // Producer contract mirrors AllocationRow.is_stale exactly: `true | false | null`, NEVER
 // `undefined`. `subCatAccountIds` / `staleAccountIds` both default to the same "unknown, nothing
 // supplied" state nonReAllocation.ts's `computeNonReAllocation` uses — every pre-SELF-243 call
-// site in this suite (and `loadUsEquityAllocation`'s own existing route call, until the route is
-// wired) degrades to `is_stale: null` on every row, never a silent `false`.
+// site in this suite degrades to `is_stale: null` on every row, never a silent `false`.
 //
-// ⚠ ROUTE NOT YET WIRED (F/CTO-pending, see module header above): `loadUsEquityAllocation`'s new
-// `staleLinkedSourceIds` param defaults to `null` so `allocation/us-equity/+page.server.ts`'s
-// EXISTING two-arg call keeps compiling and keeps its current (correct, honest) behavior —
-// every row's `is_stale` resolves to `null` (UNKNOWN) until the route is updated to thread a real
-// value through, the same "default is a real code path, not a distinct one" posture
-// computeNonReAllocation's own optional params already establish.
+// ROUTE WIRED (`allocation/us-equity/+page.server.ts`, SELF-243): the route now threads a real
+// `staleLinkedSourceIds` value, mirroring the parent `/allocation` loader's SELF-330 pattern
+// exactly (staleness loaded first, derived to a Set-or-null, passed through). `staleLinkedSourceIds`
+// keeps its `= null` default here regardless — not a leftover, but the same "default is a real
+// code path, not a distinct one" posture `computeNonReAllocation`'s own optional params establish,
+// so a future caller that omits it (a test, or another route) degrades exactly like an explicit
+// UNKNOWN root read would, never silently.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ZoneResolvedAsOf } from '$lib/server/time/asOf';
@@ -229,15 +229,15 @@ export function computeUsEquityAllocation(
  * }`, logged, never thrown.
  *
  * `staleLinkedSourceIds` (SELF-243 — mirrors `loadNonReAllocation`'s own parameter of the same
- * name VERBATIM, including its tri-state contract). Defaults to `null` — UNLIKE
- * `loadNonReAllocation`'s own REQUIRED param, because the route
- * (`allocation/us-equity/+page.server.ts`) is NOT YET updated to pass one (F/CTO-pending AC3/AC4
- * account-name reconciliation, see module header) and this default keeps that existing two-arg
- * call site compiling with its current, honest behavior: `null` is the SAME value the root
- * `046` read being unknown produces, so every row's `is_stale` resolves to `null` (UNKNOWN)
- * either way — never a silent `false`. When a real Set (possibly empty) is threaded through by a
- * future route update, this function runs the SAME contributor-bridge + account-bridge sequence
- * `loadNonReAllocation` does, reusing both bridges verbatim (no forked RPC calls):
+ * name VERBATIM, including its tri-state contract). The route
+ * (`allocation/us-equity/+page.server.ts`) now threads a real value through, mirroring the parent
+ * `/allocation` loader's SELF-330 call exactly. Defaults to `null` here anyway — UNLIKE
+ * `loadNonReAllocation`'s own REQUIRED param — the same "default is a real code path" posture
+ * `computeUsEquityAllocation`'s own optional params establish, so a future caller (a test, or
+ * another route) that omits it degrades to `null` on every row's `is_stale`, never a silent
+ * `false`: `null` is the SAME value the root `046` read being unknown produces either way. This
+ * function runs the SAME contributor-bridge + account-bridge sequence `loadNonReAllocation` does,
+ * reusing both bridges verbatim (no forked RPC calls):
  *   1. `loadSubCatContributors` (nonReAllocation.ts) — the caller's full (sub_cat_id, account_id)
  *      contributor map. This module only ever looks up the twelve US-equity ids out of it.
  *   2. `resolveStaleAccountIds` (navComposition.ts) — resolves the stale `linked_source_id`s to
