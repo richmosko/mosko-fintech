@@ -122,24 +122,36 @@
 --   qualified. EXECUTE revoked from PUBLIC (which denies anon) and granted to
 --   authenticated only.
 --
---   ⚠ DEVIATION FROM 048, STATED FOR SEC RATHER THAN BURIED — a new
---   auth.uid() IS NULL guard, and it is a genuine TRADE, not a free strengthening.
---     WHY IT IS NEEDED HERE AND WAS NOT NEEDED AT 048: pfin.asset.users_id DEFAULTs
---     to auth.uid(), and a NULL users_id on that table does not mean "ownerless" —
---     it means GLOBAL (016's hybrid posture: readable by every tenant, and inside
---     the asset_global_symbol_uniq dedup namespace). An RLS-EXEMPT caller with no
---     JWT (migration role, superuser, any future service_role path) reaching this
---     body would therefore mint GLOBAL market-security rows out of user-supplied
---     names. 048's body wrote no asset row, so it had no such edge.
---     THE LOSING SIDE, named because a strengthening that hides one is not a
---     strengthening: the pre-087 function COULD be invoked by an RLS-exempt caller
---     (nothing in the repo does — EXECUTE is granted to authenticated only, and
---     service_role holds no grant on it), and after 087 it cannot. A future admin,
---     seed, or support path that wanted to create an account on a user's behalf
---     through this RPC now has to establish a caller context first. That is the
---     correct posture for a helper whose entire security model is "evaluate as the
---     caller", but it IS a capability removed, and Sec should accept it explicitly
---     rather than inherit it.
+--   ⚠ DEVIATION FROM 048 — a new auth.uid() IS NULL guard. It is DEFENSE IN
+--   DEPTH over an ALREADY-CLOSED path, and this paragraph is a CORRECTION of an
+--   earlier draft of this same file that claimed more.
+--     WHAT THE EARLIER DRAFT CLAIMED, AND WHY IT WAS WRONG: it said an RLS-EXEMPT
+--     caller with no JWT reaching this body "would mint GLOBAL market-security
+--     rows out of user-supplied names", on the ground that pfin.asset.users_id is
+--     NULLABLE and a NULL there means GLOBAL (016's hybrid posture: readable by
+--     every tenant, inside the asset_global_symbol_uniq dedup namespace). That
+--     premise about pfin.asset is TRUE. The conclusion is FALSE, because the
+--     caller never reaches the asset INSERT: pfin.account.users_id is NOT NULL,
+--     so statement (1) already fails with 23502 (null value in column "users_id"
+--     of relation "account"). MEASURED, not reasoned — by removing this guard
+--     from a copy of the function and calling it as an RLS-exempt role with no
+--     claims set. The path was closed before this guard existed.
+--     WHAT THE GUARD IS ACTUALLY WORTH, stated honestly because the overclaim
+--     above is exactly the kind of thing that gets a fence accepted for the wrong
+--     reason: (i) it fails EARLY and LEGIBLY — a named error naming the cause,
+--     instead of a NOT NULL violation three statements deep whose message points
+--     at a column rather than at the missing caller context; and (ii) it pins the
+--     requirement LOCALLY, in the function whose whole security model is
+--     "evaluate as the caller", rather than leaving it to depend on another
+--     table's column staying NOT NULL. An assertion that rests on a distant
+--     property is worth restating where it is relied upon.
+--     THE LOSING SIDE, corrected: NONE that was ever exercisable. The earlier
+--     draft told Sec that an RLS-exempt caller COULD invoke this RPC before 087
+--     and cannot after. Measured, such a caller — with no auth context — could
+--     not successfully invoke it before either. The guard changes the ERROR, not
+--     the OUTCOME. ⚠ And it does NOT reach an RLS-exempt caller that DOES set a
+--     JWT claim (the ADR-023 impersonate-then-write shape): auth.uid() is
+--     non-NULL there, so that path is unaffected in both directions.
 --
 -- ----------------------------------------------------------------------------
 -- LOCK 14 ADVERSARIAL-NUMERIC POSTURE — WHICH GUARD ACTUALLY OBSERVES WHICH INPUT.
@@ -307,16 +319,20 @@ declare
   v_price      numeric;
   v_asset_id   bigint;
 begin
-  -- (0) Caller-context guard. See the POSTURE RATIONALE deviation note: a NULL
-  -- auth.uid() does not mean "ownerless" on pfin.asset — it means GLOBAL (016's
-  -- hybrid posture), so an RLS-exempt caller reaching statement (3a) would mint
-  -- all-tenants-readable market-security rows from user-supplied names. Resolved
-  -- ONCE into a local and used explicitly below, so the asset's owner is stated
-  -- rather than inherited from a column default.
+  -- (0) Caller-context guard — DEFENSE IN DEPTH, not the sole fence, and the
+  -- distinction is measured (see the POSTURE RATIONALE deviation note). Without
+  -- it the call still fails, at statement (1), because pfin.account.users_id is
+  -- NOT NULL — but it fails with 23502 pointing at a column instead of at the
+  -- missing caller context. This guard fails early and names the real cause, and
+  -- it pins the requirement in the function that relies on it rather than
+  -- borrowing it from another table's constraint. v_uid is also used EXPLICITLY
+  -- at (3a) so the asset's owner is stated rather than inherited from a default,
+  -- which matters because pfin.asset.users_id is NULLABLE and a NULL there means
+  -- GLOBAL (016's hybrid posture), not ownerless.
   v_uid := auth.uid();
   if v_uid is null then
     raise exception
-      'fn_create_manual_account requires an authenticated caller: auth.uid() is NULL. This RPC is SECURITY INVOKER and every fence it relies on evaluates as the caller; with no caller context pfin.asset rows would be created GLOBAL (016 hybrid posture), not tenant-owned (SELF-325 / 087).';
+      'fn_create_manual_account requires an authenticated caller: auth.uid() is NULL. This RPC is SECURITY INVOKER and every fence it relies on evaluates as the caller (SELF-325 / 087). Defense in depth: without this guard the account INSERT below fails anyway at account.users_id NOT NULL, but with an error naming a column rather than the missing caller context.';
   end if;
 
   -- (1) Create the manual account. users_id is deliberately NOT a parameter — it
@@ -484,4 +500,4 @@ revoke execute on function pfin.fn_create_manual_account(text, text, text, text,
 grant execute on function pfin.fn_create_manual_account(text, text, text, text, numeric, date, jsonb) to authenticated;
 
 comment on function pfin.fn_create_manual_account(text, text, text, text, numeric, date, jsonb) is
-  'SECURITY INVOKER write-composition RPC (SELF-201 §2.4.2; ADR-026; p_sub_cat_id dropped at 048 / SELF-319; p_positions added at 087 / SELF-325). Atomically creates a manual account, its AcctSetup opening-balance CASH account_trans row, and — for each entry in p_positions — a per-user pfin.asset row, its manual_valuation pfin.eod_price row, and an instrument-routed AcctSetup account_trans row, in ONE transaction under the caller''s RLS, RETURNING the new account_id. Three properties are load-bearing and each produces silently wrong money if dropped: the CASH row carries security_id NULL and asset_type ''currency'' is rejected, because cash is amount-carried (056 sums every amount) and its classification already routes through the global currency-asset (081), so binding it would change no figure and would put USD in the classify queue; every instrument-routed row carries amount=0, because 056 counts amount as cash while 019 fn_holdings_as_of counts quantity as a position and a nonzero amount would count the opening value twice (NO DDL enforces this — the observer is the paired QA battery leg); and every position also writes an eod_price row, because 049/050 value a position as quantity x price x fx and an unpriced asset yields a NULL term that SUM drops, zeroing the account''s bound value silently. Opening balance and purchase stay distinguishable: acct_setup with amount=0 books an Opening-Balance-Equity contra (084 P5), a purchase is transaction_type=''standard'' with amount=-cost. Instrument binding is OPTIONAL: p_positions omitted/[]/null executes exactly 048''s statements, so an acquisition may instead be recorded later as a real purchase. users_id is NOT a parameter (DEFAULT auth.uid() per 003 — un-forgeable); an auth.uid() IS NULL caller is REJECTED, because a NULL users_id on pfin.asset means GLOBAL (016 hybrid posture), not ownerless — this is a deviation from 048 and removes the ability of an RLS-exempt caller to use this RPC. Fences evaluate as the caller: account_insert WITH CHECK, account_trans_insert wr_access-JOIN (006, satisfied by the same-txn fn_grant_creator_access creator-grant row), asset_insert WITH CHECK (016), eod_price_insert manual_valuation-on-owned (019), and the Decision-3 #7 security_id fence (017), which passes by construction because the asset is minted in this same transaction for this same caller. NOT a DEFINER allowlist entry — needs no elevation; read ADR-011 Decision 9 live. Needs NO service_role (anon-key client + RLS + INVOKER). set search_path = '''' injection fence. EXECUTE revoked from PUBLIC, granted to authenticated only (anon denied). Lock 14 numeric posture: quoted values including "NaN" and "Infinity" are rejected by the JSON type check, zero and negative by an explicit guard, and finite-but-huge magnitudes by numeric column coercion (017) rather than by this body. Adds NO FK-shaped column — ADR-011 Decision 3 family unchanged, no label taken; read Decision 3 live. Same-transaction audit-log DEFERRED (A2; forward-hook in body; SELF-201 Task #7). Signature is an API contract (PostgREST /rpc; pfin is [api]-exposed) — the 6-arg signature is replaced by this 7-arg one, and because the added parameter carries a DEFAULT an existing 6-named-arg call site is unaffected (migration-first is the backward-compatible direction here, the OPPOSITE of 048).';
+  'SECURITY INVOKER write-composition RPC (SELF-201 §2.4.2; ADR-026; p_sub_cat_id dropped at 048 / SELF-319; p_positions added at 087 / SELF-325). Atomically creates a manual account, its AcctSetup opening-balance CASH account_trans row, and — for each entry in p_positions — a per-user pfin.asset row, its manual_valuation pfin.eod_price row, and an instrument-routed AcctSetup account_trans row, in ONE transaction under the caller''s RLS, RETURNING the new account_id. Three properties are load-bearing and each produces silently wrong money if dropped: the CASH row carries security_id NULL and asset_type ''currency'' is rejected, because cash is amount-carried (056 sums every amount) and its classification already routes through the global currency-asset (081), so binding it would change no figure and would put USD in the classify queue; every instrument-routed row carries amount=0, because 056 counts amount as cash while 019 fn_holdings_as_of counts quantity as a position and a nonzero amount would count the opening value twice (NO DDL enforces this — the observer is the paired QA battery leg); and every position also writes an eod_price row, because 049/050 value a position as quantity x price x fx and an unpriced asset yields a NULL term that SUM drops, zeroing the account''s bound value silently. Opening balance and purchase stay distinguishable: acct_setup with amount=0 books an Opening-Balance-Equity contra (084 P5), a purchase is transaction_type=''standard'' with amount=-cost. Instrument binding is OPTIONAL: p_positions omitted/[]/null executes exactly 048''s statements, so an acquisition may instead be recorded later as a real purchase. users_id is NOT a parameter (DEFAULT auth.uid() per 003 — un-forgeable); an auth.uid() IS NULL caller is REJECTED — a deviation from 048 that is DEFENSE IN DEPTH over an already-closed path, not a new fence: measured, such a call already failed at account.users_id NOT NULL (23502), so the guard changes the error, not the outcome, and removes no exercisable capability. It earns its place by failing early with a named cause and by pinning the caller-context requirement in the function that relies on it instead of borrowing it from another table''s constraint. It does not reach an RLS-exempt caller that sets a JWT claim (ADR-023 impersonate-then-write): auth.uid() is non-NULL there. Fences evaluate as the caller: account_insert WITH CHECK, account_trans_insert wr_access-JOIN (006, satisfied by the same-txn fn_grant_creator_access creator-grant row), asset_insert WITH CHECK (016), eod_price_insert manual_valuation-on-owned (019), and the Decision-3 #7 security_id fence (017), which passes by construction because the asset is minted in this same transaction for this same caller. NOT a DEFINER allowlist entry — needs no elevation; read ADR-011 Decision 9 live. Needs NO service_role (anon-key client + RLS + INVOKER). set search_path = '''' injection fence. EXECUTE revoked from PUBLIC, granted to authenticated only (anon denied). Lock 14 numeric posture: quoted values including "NaN" and "Infinity" are rejected by the JSON type check, zero and negative by an explicit guard, and finite-but-huge magnitudes by numeric column coercion (017) rather than by this body. Adds NO FK-shaped column — ADR-011 Decision 3 family unchanged, no label taken; read Decision 3 live. Same-transaction audit-log DEFERRED (A2; forward-hook in body; SELF-201 Task #7). Signature is an API contract (PostgREST /rpc; pfin is [api]-exposed) — the 6-arg signature is replaced by this 7-arg one, and because the added parameter carries a DEFAULT an existing 6-named-arg call site is unaffected (migration-first is the backward-compatible direction here, the OPPOSITE of 048).';

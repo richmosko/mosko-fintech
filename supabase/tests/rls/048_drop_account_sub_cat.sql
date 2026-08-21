@@ -122,8 +122,9 @@ select hasnt_function(
   '(5) SIGNATURE: the 7-arg pfin.fn_create_manual_account(...,bigint) overload does NOT exist — the p_sub_cat_id signature was DROPped at 048 (no lingering overload)'
 );
 
--- (6) EXECUTE granted to authenticated on the 6-arg (the create path is authenticated-tier).
---     has_function_privilege is the proven idiom (see 013 (6a)) — role-independent catalog probe.
+-- (6) EXECUTE granted to authenticated on the 7-arg (RECONCILED AT 087). The
+--     create path is authenticated-tier. has_function_privilege is the proven
+--     idiom (see 013 (6a)) — role-independent catalog probe.
 select ok(
   has_function_privilege(
     'authenticated',
@@ -132,7 +133,8 @@ select ok(
   '(6) GRANT: authenticated holds EXECUTE on the 7-arg fn_create_manual_account (the recreated grant is correct — the write RPC is authenticated-callable)'
 );
 
--- (7) anon holds NO privilege on the 6-arg (EXECUTE revoked from PUBLIC, granted authenticated only).
+-- (7) anon holds NO privilege on the 7-arg (RECONCILED AT 087; EXECUTE revoked
+--     from PUBLIC, granted authenticated only).
 select ok(
   not has_function_privilege(
     'anon',

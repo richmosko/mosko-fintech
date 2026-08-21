@@ -35,7 +35,11 @@
 -- │   STRUCTURAL proof the #7 fence is still bound (unreachable THROUGH this    │
 -- │   RPC by construction — no asset_id in the jsonb payload — so a catalog     │
 -- │   check is the only observer that the fence itself was not silently        │
--- │   dropped when 087 replaced the function).                                 │
+-- │   dropped when 087 replaced the function), PLUS a watcher on the body's    │
+-- │   own auth.uid()-IS-NULL guard: an RLS-EXEMPT caller (role=postgres — a    │
+-- │   DIFFERENT threat from anon, which never reaches the body at all) with    │
+-- │   no JWT claims is rejected rather than silently minting a GLOBAL          │
+-- │   (ownerless) position asset reachable by every tenant.                    │
 -- │ L2 the RPC-created position lands in the derived pending-classification    │
 -- │   set EXACTLY ONCE, and the global USD currency-asset never does (F1).     │
 -- │ L3 F2 (double-count): fn_account_cash_as_of proves the cash remainder is   │
@@ -115,14 +119,14 @@
 --   F/CTO's local test data must survive). RED-until-087-applied is expected
 --   locally; CI (pg_prove directory-mode) after Backend's apply is the green
 --   gate. Verify with pg_prove — bare psql exits 0 on a plan-count failure.
---   plan(52).
+--   plan(54).
 -- =====================================================================
 
 begin;
 
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(52);
+select plan(54);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 
@@ -228,6 +232,32 @@ select is(
      where n.nspname = 'pfin' and p.proname = 'fn_create_manual_account'),
   false,
   '(l1-9) fn_create_manual_account is SECURITY INVOKER (prosecdef=false) — DEFINER allowlist stays unchanged'
+);
+
+-- (l1-10)/(l1-11) — architect-requested watcher: an RLS-EXEMPT caller (role=
+--   postgres — superuser bypasses the EXECUTE grant entirely, unlike anon
+--   which never reaches the body at all) with NO JWT claims set, so
+--   auth.uid() IS NULL, is REJECTED by the body's explicit auth-guard rather
+--   than silently minting a GLOBAL (ownerless, users_id IS NULL) position
+--   asset readable by every tenant. This is a DIFFERENT threat from anon
+--   (013's (6a)/(7)/048's (6)/(7) legs): those prove anon never reaches the
+--   body; this proves a role that DOES reach the body (any future service_role
+--   path, a migration console, a superuser session) still can't mint an
+--   ownerless asset through it. Explicitly clear request.jwt.claims first —
+--   role=postgres is already active from (l1-8)/(l1-9), but a STALE claim
+--   from an earlier _rls.set_tenant call in this transaction would otherwise
+--   leak a real tenant's auth.uid() into this probe and silently pass.
+select set_config('request.jwt.claims', '', true);
+select throws_like(
+  $$ select pfin.fn_create_manual_account('L1 unauth attempt','depository','household','taxable',
+       10, '2026-04-01', '[{"asset_type":"equity","name":"unauth-pos","quantity":1,"cost_basis":10}]'::jsonb) $$,
+  'fn_create_manual_account requires an authenticated caller: auth.uid() is NULL. This RPC is SECURITY%',
+  '(l1-10) RLS-EXEMPT caller (role=postgres, no JWT claims => auth.uid() IS NULL) is REJECTED by the body''s explicit auth-guard — without it, a NULL auth.uid() would create a GLOBAL (ownerless) position asset reachable by every tenant'
+);
+select is(
+  (select count(*) from pfin.asset where name = 'unauth-pos' and users_id is null)::bigint,
+  0::bigint,
+  '(l1-11) fail-closed, no partial write: no orphan GLOBAL (users_id IS NULL) pfin.asset row named ''unauth-pos'' was created by the rejected RLS-exempt call'
 );
 
 -- =====================================================================
