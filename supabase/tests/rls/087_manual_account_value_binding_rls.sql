@@ -38,8 +38,11 @@
 -- │   dropped when 087 replaced the function), PLUS a watcher on the body's    │
 -- │   own auth.uid()-IS-NULL guard: an RLS-EXEMPT caller (role=postgres — a    │
 -- │   DIFFERENT threat from anon, which never reaches the body at all) with    │
--- │   no JWT claims is rejected rather than silently minting a GLOBAL          │
--- │   (ownerless) position asset reachable by every tenant.                    │
+-- │   no JWT claims is rejected. MEASURED (inversion-tested), the guard's      │
+-- │   value is narrower than first claimed — it does NOT prevent a GLOBAL     │
+-- │   asset (pfin.account.users_id NOT NULL already blocks that path earlier, │
+-- │   guard or not); it fails EARLY and LEGIBLY instead of on an unrelated    │
+-- │   table's constraint. See (l1-10)/(l1-11)'s block comment for the detail. │
 -- │ L2 the RPC-created position lands in the derived pending-classification    │
 -- │   set EXACTLY ONCE, and the global USD currency-asset never does (F1).     │
 -- │ L3 F2 (double-count): fn_account_cash_as_of proves the cash remainder is   │
@@ -234,30 +237,47 @@ select is(
   '(l1-9) fn_create_manual_account is SECURITY INVOKER (prosecdef=false) — DEFINER allowlist stays unchanged'
 );
 
--- (l1-10)/(l1-11) — architect-requested watcher: an RLS-EXEMPT caller (role=
---   postgres — superuser bypasses the EXECUTE grant entirely, unlike anon
---   which never reaches the body at all) with NO JWT claims set, so
---   auth.uid() IS NULL, is REJECTED by the body's explicit auth-guard rather
---   than silently minting a GLOBAL (ownerless, users_id IS NULL) position
---   asset readable by every tenant. This is a DIFFERENT threat from anon
---   (013's (6a)/(7)/048's (6)/(7) legs): those prove anon never reaches the
---   body; this proves a role that DOES reach the body (any future service_role
---   path, a migration console, a superuser session) still can't mint an
---   ownerless asset through it. Explicitly clear request.jwt.claims first —
---   role=postgres is already active from (l1-8)/(l1-9), but a STALE claim
---   from an earlier _rls.set_tenant call in this transaction would otherwise
---   leak a real tenant's auth.uid() into this probe and silently pass.
+-- (l1-10)/(l1-11) — architect-requested watcher on the body's own
+--   auth.uid()-IS-NULL guard: an RLS-EXEMPT caller (role=postgres — superuser
+--   bypasses the EXECUTE grant entirely; a DIFFERENT threat class from anon,
+--   which never reaches the body at all — 013's (6a)/(7) and 048's (6)/(7)
+--   legs watch THAT, not this) with NO JWT claims set, so auth.uid() IS NULL.
+--   Explicitly clear request.jwt.claims first — role=postgres is already
+--   active from (l1-8)/(l1-9), but a STALE claim from an earlier
+--   _rls.set_tenant call in this transaction would otherwise leak a real
+--   tenant's auth.uid() into the probe and silently pass. ⚠ auth.uid() reads
+--   request.jwt.claim.sub FIRST, falling back to the plural request.jwt.claims
+--   — this probe is sound today because nothing in this file or
+--   _rls.set_tenant ever sets the singular form, but it would silently stop
+--   being sound if a future fixture did (Architect, measured — noted here so
+--   the next author of a fixture in this family sees it before hitting it).
+--
+--   MEASURED (Architect's inversion test — the guard removed from a copy of
+--   the function, battery re-run): (l1-10) goes RED without the guard — it IS
+--   the observer. (l1-11) stays GREEN either way — it is NOT independently
+--   detective. The reason is upstream of the guard: pfin.account.users_id is
+--   NOT NULL, so an RLS-exempt call already fails at statement (1) (the
+--   account INSERT, 23502) before ever reaching the position-asset INSERT the
+--   guard was originally believed to protect. So the guard's real, measured
+--   value is narrower than "prevents a GLOBAL asset" — that outcome was never
+--   reachable, guard or not (087's original header claim was wrong; corrected
+--   there and retracted to Sec). What it actually buys: FAILING EARLY AND
+--   LEGIBLY with a named, function-specific error instead of an incidental
+--   NOT NULL violation on an unrelated table, and pinning the caller-context
+--   requirement inside the function that needs it rather than borrowing it
+--   from account's own constraint. (l1-11) is kept as a companion
+--   no-partial-write sanity check, NOT as a second detector of the guard.
 select set_config('request.jwt.claims', '', true);
 select throws_like(
   $$ select pfin.fn_create_manual_account('L1 unauth attempt','depository','household','taxable',
        10, '2026-04-01', '[{"asset_type":"equity","name":"unauth-pos","quantity":1,"cost_basis":10}]'::jsonb) $$,
   'fn_create_manual_account requires an authenticated caller: auth.uid() is NULL. This RPC is SECURITY%',
-  '(l1-10) RLS-EXEMPT caller (role=postgres, no JWT claims => auth.uid() IS NULL) is REJECTED by the body''s explicit auth-guard — without it, a NULL auth.uid() would create a GLOBAL (ownerless) position asset reachable by every tenant'
+  '(l1-10) RLS-EXEMPT caller (role=postgres, no JWT claims => auth.uid() IS NULL) is REJECTED by the body''s explicit auth-guard — MEASURED as the actual observer (inversion-tested: removing the guard flips this RED; see the block comment for what the guard does NOT catch)'
 );
 select is(
   (select count(*) from pfin.asset where name = 'unauth-pos' and users_id is null)::bigint,
   0::bigint,
-  '(l1-11) fail-closed, no partial write: no orphan GLOBAL (users_id IS NULL) pfin.asset row named ''unauth-pos'' was created by the rejected RLS-exempt call'
+  '(l1-11) companion, NOT independently detective (measured): no orphan GLOBAL (users_id IS NULL) pfin.asset row named ''unauth-pos'' exists after the rejected call — but pfin.account.users_id NOT NULL already blocks this upstream of the guard; kept as a no-partial-write sanity check, not a second watcher on the guard'
 );
 
 -- =====================================================================
