@@ -42,7 +42,6 @@
 	import ConnectionStatusChip from '$lib/components/ConnectionStatusChip.svelte';
 	import TransactionEntryForm from '$lib/components/TransactionEntryForm.svelte';
 	import PurchaseEntryForm from '$lib/components/PurchaseEntryForm.svelte';
-	import type { SelectableAssetOption } from '$lib/purchase-util';
 	import StockSplitEntryForm from '$lib/components/StockSplitEntryForm.svelte';
 	import DuplicateCandidateList from '$lib/components/DuplicateCandidateList.svelte';
 	import SyncHistoryTable from '$lib/components/SyncHistoryTable.svelte';
@@ -53,18 +52,14 @@
 	import { updateAttributesSchema, closeAccountSchema, fieldErrors } from '$lib/schemas/account';
 	import { providerLabel } from '$lib/accounts/connection-display';
 
-	// SELF-325 EXPECTED CONTRACT (see the entryMode block below): `PageData` does not yet
-	// declare `selectableAssets` / `defaultSubCatId` / `defaultSubCatLabel` because Backend's
-	// load() extension hasn't landed as of this writing. Widened locally rather than editing
-	// the generated `./$types` (Backend-owned once real) — narrows back to the real shape the
-	// moment their load() change lands and this cast becomes redundant (delete it then).
-	type PageDataWithPurchase = PageData & {
-		selectableAssets?: SelectableAssetOption[];
-		defaultSubCatId?: number | null;
-		defaultSubCatLabel?: string | null;
-	};
-
-	let { data, form }: { data: PageDataWithPurchase; form: ActionData } = $props();
+	// SELF-325: Backend's load() extension (round 5, `8a7719b`) now returns `selectableAssets` /
+	// `defaultSubCatId` / `defaultSubCatLabel` directly — the generated `PageData` carries them
+	// with the right shapes, no widening needed (verified: regenerated types with `svelte-kit
+	// sync`, removed the temporary `PageDataWithPurchase` cast this line used to carry, `npm run
+	// check` clean). PurchaseEntryForm.svelte still declares its own `SelectableAssetOption`
+	// prop type (purchase-util.ts) — that one stays; it types the component's OWN prop
+	// contract, independent of whatever shape `PageData` happens to infer.
+	let { data, form }: { data: PageData; form: ActionData } = $props();
 
 	const account = $derived(data.account);
 	const transactions = $derived(data.transactions);
@@ -166,16 +161,14 @@
 	// surfaces (per-transaction annotation category — the cashflow domain, not asset taxonomy).
 	const cashflowGroups = $derived(subCatGroupsOf(data.cashflowSubCats));
 
-	// SELF-325 purchase-path (088). ⚠ EXPECTED CONTRACT (api/CLAUDE.md "+page.svelte ahead of
-	// Backend's loader" precedent — same pattern as SELF-242/SELF-241): `selectableAssets` /
-	// `defaultSubCatId` / `defaultSubCatLabel` are not yet wired into this route's load() as of
-	// this writing (Backend's own commit 7bcba2c: "Form action + RPC-arg schema deliberately
-	// NOT included ... gated on F/CTO's pricing call"). Defaulted defensively so this page
-	// renders correctly (empty picker, no category readout) the moment before Backend's load()
-	// change lands, and picks up real data the moment after with no further edit here.
-	const selectableAssets = $derived(data.selectableAssets ?? []);
-	const defaultSubCatId = $derived(data.defaultSubCatId ?? null);
-	const defaultSubCatLabel = $derived(data.defaultSubCatLabel ?? null);
+	// SELF-325 purchase-path (088): selectableAssets (own + global pfin.asset, the BIND-mode
+	// "pick an existing asset" affordance) + the BTO-default category readout, from Backend's
+	// load() extension (round 5, `8a7719b`). Local aliases only, matching this file's existing
+	// `const account = $derived(data.account)` convention — no fallback needed, load() always
+	// supplies these three (its own fail-soft-to-[] on a read error lives server-side).
+	const selectableAssets = $derived(data.selectableAssets);
+	const defaultSubCatId = $derived(data.defaultSubCatId);
+	const defaultSubCatLabel = $derived(data.defaultSubCatLabel);
 
 	// Cash / Purchase fork on "Add a transaction" — the two manual-entry write paths
 	// (fn_create_manual_trans vs fn_create_manual_purchase, 040 vs 088). A segmented toggle,
