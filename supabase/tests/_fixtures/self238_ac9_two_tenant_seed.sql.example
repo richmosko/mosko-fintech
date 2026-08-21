@@ -1,0 +1,194 @@
+-- =====================================================================
+-- self238_ac9_two_tenant_seed.sql.example — SELF-238 AC9 / SELF-330 merge-gate venue seed.
+-- =====================================================================
+-- WHAT THIS IS. The privileged (role=postgres), PERSISTENT two-tenant fixture
+-- `nonReAllocation.tenant-isolation.server.test.ts` (SELF-238 AC9, QA-owned) needs against a
+-- live Postgres+PostgREST venue. Previously "provided at hand-off, not duplicated [in the test
+-- file] to avoid drift" — which meant it was NEVER COMMITTED anywhere and was, in fact, lost: a
+-- full git-history search for the two tenant UUIDs below turned up nothing but the commit that
+-- introduced the test file itself (SELF-330 merge-gate investigation, 2026-08-20). This file is
+-- the fix for THAT, not just a re-seed: a tracked artifact, so "provided at hand-off" never has
+-- to mean "gone" again. Companion to `supabase/tests/rls/DESIGN.md` §16 / `supabase/tests/
+-- README.md`'s sequence-coupling caution — unrelated failure mode, same root lesson (a hand-off
+-- that lives only in a session is indistinguishable from one that never happened).
+--
+-- ⚠ `.sql.example` extension, DELIBERATELY — never `.sql`/`.pg`. `pg_prove -r` (the CI battery
+-- runner) collects only `.sql`/`.pg` files as tests; a planless seed script with either extension
+-- would either be silently skipped as a "test" with no plan() (erroring the run) or, worse,
+-- mistaken for a per-Wave case. Same convention as `_fixtures/rls_verbs.psql`'s own non-test
+-- extension, and DevOps's CI guard already fails closed on a stray `.sql`/`.pg` under `_fixtures/`
+-- — `.example` sits outside that check entirely, by design, since this file is NEVER meant to run
+-- inside the pgTAP suite. It is applied ONCE, by hand, against the target venue's DB before that
+-- venue's vitest suite runs — see the test file's own "REQUIRED FIXTURE" header section.
+--
+-- ⚠ NOT WRAPPED IN begin/rollback, UNLIKE EVERY OTHER FILE IN `supabase/tests/`. This is the one
+-- deliberate exception to that house convention: the pgTAP batteries roll back because they run
+-- IN-PROCESS against a throwaway transaction. This fixture must PERSIST — a separate vitest
+-- process makes real HTTP calls through PostgREST, in a LATER connection, and needs the rows
+-- still there. Apply against a DEDICATED scratch DB (never the shared local dev DB, never a DB
+-- anything else is mid-test against) — a persistent seed run against a shared/reused DB is
+-- exactly the contamination DESIGN.md §16 and `feedback_scratch_db_perf_seed_must_be_rolled_back`
+-- both warn about, one layer up (an HTTP fixture instead of a SQL one, same root cause).
+--
+-- PREREQ: the target DB must already have the full migration chain through at least `086`
+-- applied (fn_subcat_contributors) — this fixture exercises `is_stale` via
+-- `EMPTY_STALE_LINKED_SOURCE_IDS`, which short-circuits `resolveStaleAccountIds` before it ever
+-- queries `pfin.account.linked_source_id`, so NO `046`/linked_source state is required here.
+--
+-- FIXTURE DESIGN, why these choices:
+--   - Cash classifies through the GLOBAL currency-asset junction (022 model, asset_id=1) via a
+--     DEPOSITORY account — the standard route, NOT the `081` liability-cash route. The SEED RISK
+--     the test file's own header flags (a pre-SELF-239 seed relying on Liabilities-cat holdings
+--     to make a tenant's total non-vacuous) is avoided BY CONSTRUCTION: no account below is
+--     account_type='liability', and every `user_taxonomy` row is `element='asset'`, `cat` != both
+--     'Real Estate' and 'Liabilities'. Every dollar counted by `total_non_re` comes from an
+--     asset-element holding, genuinely, not by accident of the old unfiltered-sum shape.
+--   - Tenant A holds ONE of the twelve US-equity Sub-Cats (US-06-Financials, reused verbatim from
+--     076's own fixture rather than inventing a thirteenth label) with REAL priced value, so the
+--     collapsed "US - Sector Diversified" row is non-vacuous for A (SHARPEST CASE leg).
+--   - Tenant B holds ZERO of the twelve — real Cash/Bonds/Alternatives value only — so B's
+--     collapsed row is genuinely $0, not merely "different from A's" (a coincidental-collision
+--     risk the test file's own comment names).
+--   - Every VALUE `allValues` flattens is DISTINCT between A and B — not just dollar amounts, but
+--     `planning_target.target_percent` too, since `allValues` also collects `pct_target`/
+--     `dollar_target`/`dollar_realloc`. MEASURED, not assumed: the first pass of this fixture used
+--     B's Alternatives target (15.00) against A's Cash target (also 15.00) and the AC9 isolation
+--     legs went RED on a real collision (`[15]` leaked both directions) — a fixture bug, not a
+--     product one, and exactly the failure mode this bullet exists to name. A's percentages are
+--     {15,35,10,40}; B's are {50,32,18} — checked disjoint by construction, not by luck, after
+--     that first pass. Whoever edits either tenant's numbers must re-check the OTHER tenant's full
+--     set (dollars AND percents) for an accidental overlap before trusting a green run.
+--   - `planning_target` rows are seeded for every classified Sub-Cat (both tenants) so
+--     `$Target`/`%Target`/`$ReAlloc` render real, non-null values too — the third
+--     independently-RLS'd source `loadNonReAllocation` composes, exercised for real rather than
+--     left at its `??0` default.
+--
+-- Suffix '238' on every synthetic id, matching the pgTAP battery convention (076/081/etc.) reused
+-- here for the same reason: deterministic, obviously synthetic, diffable.
+-- =====================================================================
+
+\set ta '00000000-0000-0000-0000-00000000a238'
+\set tb '00000000-0000-0000-0000-00000000b238'
+
+insert into auth.users (id) values (:'ta'), (:'tb')
+  on conflict (id) do nothing;
+
+-- ---------------------------------------------------------------------
+-- TAXONOMY. Both tenants: Cash/CD, Bonds/IGL, Alternatives/REIT (element='asset' throughout,
+--   reused verbatim from 076/081's own seeded vocabulary rather than invented). Tenant A ALSO
+--   holds Marketable Securities/US-06-Financials (one of the twelve — 076's own fixture reuses
+--   the same label for the same reason: real seed data, not synthetic vocabulary). Tenant B
+--   deliberately holds NONE of the twelve.
+-- ---------------------------------------------------------------------
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element) values
+  (:'ta','Cash','CD','asset') returning id as a_cash \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element) values
+  (:'ta','Bonds','IGL','asset') returning id as a_bond \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element) values
+  (:'ta','Alternatives','REIT','asset') returning id as a_alt \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element) values
+  (:'ta','Marketable Securities','US-06-Financials','asset') returning id as a_eq \gset
+
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element) values
+  (:'tb','Cash','CD','asset') returning id as b_cash \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element) values
+  (:'tb','Bonds','IGL','asset') returning id as b_bond \gset
+insert into pfin.user_taxonomy (users_id, cat, sub_cat, element) values
+  (:'tb','Alternatives','REIT','asset') returning id as b_alt \gset
+
+-- ---------------------------------------------------------------------
+-- GLOBAL securities (users_id NULL -> 016/017 #7: readable by every tenant's INVOKER; the SAME
+--   global row model 076/081/086's own batteries reuse). Distinct symbols and prices per tenant
+--   so every dollar figure in this fixture is unique across A and B.
+-- ---------------------------------------------------------------------
+insert into pfin.asset (users_id, asset_type, pricing_source, symbol, name) values
+  (null,'bond','market_feed','SBND238A','Bond A238') returning asset_id as bnd_a \gset
+insert into pfin.asset (users_id, asset_type, pricing_source, symbol, name) values
+  (null,'equity','market_feed','SALT238A','Alt A238') returning asset_id as alt_a \gset
+insert into pfin.asset (users_id, asset_type, pricing_source, symbol, name) values
+  (null,'equity','market_feed','SEQ238A','Financials A238') returning asset_id as eq_a \gset
+insert into pfin.asset (users_id, asset_type, pricing_source, symbol, name) values
+  (null,'bond','market_feed','SBND238B','Bond B238') returning asset_id as bnd_b \gset
+insert into pfin.asset (users_id, asset_type, pricing_source, symbol, name) values
+  (null,'equity','market_feed','SALT238B','Alt B238') returning asset_id as alt_b \gset
+
+insert into pfin.eod_price (asset_id, price_date, source, price) values
+  (:bnd_a,'2026-08-05','market_feed',600.00),
+  (:alt_a,'2026-08-05','market_feed',225.00),
+  (:eq_a, '2026-08-05','market_feed',540.00),
+  (:bnd_b,'2026-08-05','market_feed',175.00),
+  (:alt_b,'2026-08-05','market_feed',95.00);
+
+-- ---------------------------------------------------------------------
+-- TENANT A — a_inv (investment: bnd_a, alt_a, eq_a) + a_dep (depository, pure cash). Every
+--   holding priced and classified so `total_non_re` is genuinely positive from asset-element
+--   value alone: 300 (a_cash) + 600 (a_bond) + 225 (a_alt) + 540 (a_eq) = 1665.00.
+--   ⚠ a_inv's checkpoint is funded to net EXACTLY ZERO cash (1365.00 = 600+225+540, MEASURED
+--   against a live run, not guessed) — an unfunded investment account's own cash sweep otherwise
+--   goes NEGATIVE by its buy total and bleeds into Cash/CD (measured: it did, on the first pass of
+--   this exact fixture — Cash/CD read -1065.00 instead of 300.00 until this was fixed).
+-- ---------------------------------------------------------------------
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment) values
+  (:'ta','a-inv-238','investment','household','taxable') returning account_id as a_inv \gset
+insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_of_date, source) values
+  (:a_inv, 1365.00, 'USD', '2026-08-01', 'seed');
+insert into pfin.account_trans (account_id, transaction_date, amount, quantity, security_id, cost_basis, transaction_type, vendor) values
+  (:a_inv,'2026-08-05',-600.00,1,:bnd_a,600.00,'standard','buy-bnd-a'),
+  (:a_inv,'2026-08-05',-225.00,1,:alt_a,225.00,'standard','buy-alt-a'),
+  (:a_inv,'2026-08-05',-540.00,1,:eq_a, 540.00,'standard','buy-eq-a');
+
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment) values
+  (:'ta','a-dep-238','depository','household','taxable') returning account_id as a_dep \gset
+insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_of_date, source) values
+  (:a_dep, 300.00, 'USD', '2026-08-01', 'seed');
+
+insert into pfin.user_asset_category (users_id, asset_id, sub_cat_id) values
+  (:'ta', :bnd_a, :a_bond),
+  (:'ta', :alt_a, :a_alt),
+  (:'ta', :eq_a,  :a_eq),
+  (:'ta', 1,      :a_cash);
+
+insert into pfin.planning_target (users_id, sub_cat_id, target_percent) values
+  (:'ta', :a_cash, 15.00),
+  (:'ta', :a_bond, 35.00),
+  (:'ta', :a_alt,  10.00),
+  (:'ta', :a_eq,   40.00);
+
+-- ---------------------------------------------------------------------
+-- TENANT B — b_inv (investment: bnd_b, alt_b) + b_dep (depository, pure cash). ZERO US-equity
+--   holdings, deliberately. total_non_re = 450 (b_cash) + 175 (b_bond) + 95 (b_alt) = 720.00 —
+--   distinct from A's 1665.00, and every individual dollar figure distinct from A's too.
+--   ⚠ b_inv's checkpoint funded to net EXACTLY ZERO cash (270.00 = 175+95), same reasoning as
+--   a_inv above — measured on the same first pass, same failure mode, same fix.
+-- ---------------------------------------------------------------------
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment) values
+  (:'tb','b-inv-238','investment','household','taxable') returning account_id as b_inv \gset
+insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_of_date, source) values
+  (:b_inv, 270.00, 'USD', '2026-08-01', 'seed');
+insert into pfin.account_trans (account_id, transaction_date, amount, quantity, security_id, cost_basis, transaction_type, vendor) values
+  (:b_inv,'2026-08-05',-175.00,1,:bnd_b,175.00,'standard','buy-bnd-b'),
+  (:b_inv,'2026-08-05',-95.00, 1,:alt_b,95.00, 'standard','buy-alt-b');
+
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment) values
+  (:'tb','b-dep-238','depository','household','taxable') returning account_id as b_dep \gset
+insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_of_date, source) values
+  (:b_dep, 450.00, 'USD', '2026-08-01', 'seed');
+
+insert into pfin.user_asset_category (users_id, asset_id, sub_cat_id) values
+  (:'tb', :bnd_b, :b_bond),
+  (:'tb', :alt_b, :b_alt),
+  (:'tb', 1,      :b_cash);
+
+insert into pfin.planning_target (users_id, sub_cat_id, target_percent) values
+  (:'tb', :b_cash, 50.00),
+  (:'tb', :b_bond, 32.00),
+  (:'tb', :b_alt,  18.00);
+
+-- =====================================================================
+-- Expected totals (as_of '2026-08-10', matching the test file's `unsafeAsOfForTest`):
+--   Tenant A: total_non_re = 1665.00 (300 cash + 600 bond + 225 alt + 540 eq/collapsed-row)
+--   Tenant B: total_non_re =  720.00 (450 cash + 175 bond +  95 alt); collapsed row = 0.00
+-- Re-derive these from a live query before trusting them at use — this comment is a record of
+-- what was measured at authoring time, not a standing guarantee (DESIGN.md's own "confidence has
+-- a timestamp" rule applies to fixture comments as much as to test assertions).
+-- =====================================================================

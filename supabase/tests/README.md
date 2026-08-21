@@ -75,7 +75,7 @@ life of the database — in whatever order `pg_prove` sorts the files.
 
 **Consequence: any assertion that depends on the absolute VALUE of an id — not just its ordering
 relative to other rows in that same file's own fixture — is silently coupled to every file that
-happens to sort before it.** Worked example (SELF-330, 2026-08-21): `self200`'s `(v-embed-1)`
+happens to sort before it.** Worked example (SELF-330, 2026-08-20): `self200`'s `(v-embed-1)`
 compared an array sorted by `asset_id` (numeric) against an array sorted by its own
 `"assetid:subcatid"` text encoding (lexicographic). The two orderings agree as long as every id in
 play shares the same digit count, and had agreed since the assertion was written — not because
