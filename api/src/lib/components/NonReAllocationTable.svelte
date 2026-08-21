@@ -66,6 +66,11 @@
 	UsEquityAllocationTable.svelte for the destination.
 
 	AC11 — staleness per §2.4.4 / ADR-013 D1, TWO parts:
+
+	  SELF-243 AC6 annotation: §2.2.2 explicitly named in PRD §2.4.4 staleness-ramp list; §2.2.3
+	  inherits per ADR-013 D1 illustrative-not-exhaustive (see UsEquityAllocationTable.svelte's own
+	  AC6 annotation for that surface's half of this same pair).
+
 	  (1) SECTION-level `StaleConstituentBadge` fed by the whole-tenant `staleness` prop (the SAME
 	      aggregate primitive root's dashboard + NavCompositionTable already consume — StaleConstituentBadge's
 	      own module header already lists §2.2.2 as a planned V1.1+ ramp target). WORKING TODAY.
