@@ -106,3 +106,20 @@ follow-ups — but say so explicitly rather than leaving the canary's teeth unex
 Related: [[which-ref-the-probe-was-aimed-at]] — a ref correction mid-review means
 re-measuring the delta from the tree yourself (blob SHA equality, hunk headers, a
 non-comment-lines filter in BOTH directions) before transferring prior findings forward.
+
+**A control that WORKED, recorded so I repeat it — the BOUNDARY PAIR (SELF-325, `087`).** To prove a
+`22003` rejection was about *crossing `numeric(28,8)`'s ceiling* rather than about magnitude in
+general, QA paired `quantity=1e20` (21 integer digits, rejected) with `quantity=1e19` (20 digits,
+`lives_ok`) and **held every other operand identical** (`cost_basis=9e15` on both sides). One
+representable step apart, one moving part. **A non-vacuity companion that merely picks "a smaller
+number" proves almost nothing; one that lands on the other side of the exact constraint boundary
+proves the attribution.** Ask: *what single value differs between my positive and negative case, and
+is it the value the constraint names?*
+
+**And the placement rule for a control that SUCCEEDS.** A `lives_ok` control **persists rows**, so it
+is the one fixture in a battery that can falsify its neighbours' counts. Here it was put last —
+after both atomicity watchers and immediately before `finish()` — so it could perturb nothing.
+**Verify placement by reading what runs AFTER it, not by accepting "it's placed late"**: the hazard
+is any later blanket/aggregate/baseline assertion, and a whole-file `rollback` does not protect
+in-transaction ones. A leg placed where it is convenient rather than where the numbers allow is a
+quiet way a battery goes wrong. Related: [[shared-predicate-then-second-narrowing]].
