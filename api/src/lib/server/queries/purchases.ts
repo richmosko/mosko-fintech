@@ -13,6 +13,13 @@
 // through to the caller UNCHANGED — projecting them away is the failure ADR-049 Decision 4's
 // composite-return shape exists to prevent (Architect, SELF-325 088 handoff). `priced` is a
 // RENDERING indicator only; nothing here (or downstream) may compute money from it.
+//
+// NOT AN A2 AUDIT-DEFERRAL SITE (Architect's refined ruling, SELF-325 round-3 handoff): this
+// module makes exactly ONE RPC call inside `createManualPurchase`, so there is no in-app
+// transaction for a same-transaction audit row to belong to or be deferred from — this file is
+// not on the A2 deferral list, and must not be added to it later. The audit row, when the A2
+// infra lands, belongs INSIDE `pfin.fn_create_manual_purchase` (088) itself, at its own named
+// "AUDIT FORWARD-HOOK" comment — not here.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { CreatePurchaseInput } from '$lib/server/schemas/purchase';
