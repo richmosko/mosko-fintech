@@ -37,17 +37,29 @@
 //     explicitly, before ever touching the map — see its own comment.
 //
 // Producer contract mirrors AllocationRow.is_stale exactly: `true | false | null`, NEVER
-// `undefined`. `subCatAccountIds` / `staleAccountIds` both default to the same "unknown, nothing
-// supplied" state nonReAllocation.ts's `computeNonReAllocation` uses — every pre-SELF-243 call
-// site in this suite degrades to `is_stale: null` on every row, never a silent `false`.
+// `undefined`. `computeUsEquityAllocation`'s two trailing params (`subCatAccountIds`,
+// `staleAccountIds`) keep their optional defaults — mirroring `computeNonReAllocation`'s own
+// pure-core signature exactly, including WHY: a pure compute function's whole job is to answer
+// for whatever it's handed, and every pre-SELF-243 call site in this suite (there is no analogous
+// "forgot to thread staleness" hazard at a pure-function call site the way there is at an I/O
+// boundary) degrades to `is_stale: null` on every row, never a silent `false`.
 //
-// ROUTE WIRED (`allocation/us-equity/+page.server.ts`, SELF-243): the route now threads a real
-// `staleLinkedSourceIds` value, mirroring the parent `/allocation` loader's SELF-330 pattern
-// exactly (staleness loaded first, derived to a Set-or-null, passed through). `staleLinkedSourceIds`
-// keeps its `= null` default here regardless — not a leftover, but the same "default is a real
-// code path, not a distinct one" posture `computeNonReAllocation`'s own optional params establish,
-// so a future caller that omits it (a test, or another route) degrades exactly like an explicit
-// UNKNOWN root read would, never silently.
+// ROUTE WIRED (`allocation/us-equity/+page.server.ts`, SELF-243): the route threads a real
+// `staleLinkedSourceIds` value into `loadUsEquityAllocation`, mirroring the parent `/allocation`
+// loader's SELF-330 pattern exactly (staleness loaded first, derived to a Set-or-null, passed
+// through).
+//
+// ⚠ SEC-FLAGGED (7084aca, non-blocking, ratified by team-lead): `loadUsEquityAllocation`'s
+// `staleLinkedSourceIds` param is now REQUIRED — no default — matching `loadNonReAllocation`'s own
+// SELF-330 shape exactly (nonReAllocation.ts:538-542). It ORIGINALLY carried a `= null` default so
+// this route's pre-existing two-arg call site would keep compiling before the route was wired;
+// once the route WAS wired (removing the only caller that needed the default), the default became
+// exactly the gap the 330 precedent was written to close: Sec's finding — "the sibling catches an
+// omitted thread at typecheck... a future ramp site is exactly where that gets forgotten" — a
+// default degrades safely (never silently-fresh, `null` still resolves every row to UNKNOWN) but
+// trades a compile-time catch for a runtime one at the NEXT surface that reuses this loader and
+// forgets to thread staleness. The compiler is the watcher now, same as every other required
+// staleness param in this codebase.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ZoneResolvedAsOf } from '$lib/server/time/asOf';
@@ -229,15 +241,15 @@ export function computeUsEquityAllocation(
  * }`, logged, never thrown.
  *
  * `staleLinkedSourceIds` (SELF-243 — mirrors `loadNonReAllocation`'s own parameter of the same
- * name VERBATIM, including its tri-state contract). The route
- * (`allocation/us-equity/+page.server.ts`) now threads a real value through, mirroring the parent
- * `/allocation` loader's SELF-330 call exactly. Defaults to `null` here anyway — UNLIKE
- * `loadNonReAllocation`'s own REQUIRED param — the same "default is a real code path" posture
- * `computeUsEquityAllocation`'s own optional params establish, so a future caller (a test, or
- * another route) that omits it degrades to `null` on every row's `is_stale`, never a silent
- * `false`: `null` is the SAME value the root `046` read being unknown produces either way. This
- * function runs the SAME contributor-bridge + account-bridge sequence `loadNonReAllocation` does,
- * reusing both bridges verbatim (no forked RPC calls):
+ * name VERBATIM, including its tri-state contract AND its REQUIRED-ness — no default, matching
+ * `loadNonReAllocation` exactly (nonReAllocation.ts:538-542; Sec-flagged 7084aca, ratified by
+ * team-lead: a default here would mask a caller genuinely forgetting to thread staleness — the
+ * compiler is the watcher, the same discipline the 330 sibling already established). The route
+ * (`allocation/us-equity/+page.server.ts`) threads a real value through, mirroring the parent
+ * `/allocation` loader's SELF-330 call exactly — passing `null` explicitly is still the correct
+ * choice for a caller whose OWN root `046` read was unknown; only the ABSENCE of an argument is
+ * now disallowed. This function runs the SAME contributor-bridge + account-bridge sequence
+ * `loadNonReAllocation` does, reusing both bridges verbatim (no forked RPC calls):
  *   1. `loadSubCatContributors` (nonReAllocation.ts) — the caller's full (sub_cat_id, account_id)
  *      contributor map. This module only ever looks up the twelve US-equity ids out of it.
  *   2. `resolveStaleAccountIds` (navComposition.ts) — resolves the stale `linked_source_id`s to
@@ -249,7 +261,7 @@ export function computeUsEquityAllocation(
 export async function loadUsEquityAllocation(
 	supabase: SupabaseClient,
 	asOf: ZoneResolvedAsOf,
-	staleLinkedSourceIds: ReadonlySet<string> | null = null
+	staleLinkedSourceIds: ReadonlySet<string> | null
 ): Promise<UsEquityAllocationResult> {
 	const substrate = await loadSubcatMarketValueAndTargets(supabase, asOf);
 	if (!substrate.ok) return { data: null, ok: false };
