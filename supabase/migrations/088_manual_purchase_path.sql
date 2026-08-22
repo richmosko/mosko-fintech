@@ -129,6 +129,17 @@
 --   case is not reachable through this function's own writes. The flag is an
 --   indicator for the rendering layer, NOT a valuation primitive; nothing downstream
 --   may compute money from it.
+--   ⚠ THE PREDICATE IS NOT DEFINED HERE. It lives in pfin.fn_asset_priced_flags
+--   (089) and this body CALLS it, as does the account-detail read path. That is
+--   deliberate and load-bearing: an earlier version computed it inline while the
+--   read path reimplemented it in TypeScript, both files claimed the predicate was
+--   "reused verbatim", and Sec found at the SELF-325 joint review that they had
+--   diverged — the read side picked the first row at the max date with no tiebreak,
+--   which at a same-date tie was NONDETERMINISTIC rather than merely different.
+--   ⚠ Verbatim reuse across a SQL/TypeScript boundary is impossible by construction;
+--   the claim could never have been true. 089 replaces an asserted agreement with a
+--   structural one. Read 089 for the predicate, its one named imprecision, and why
+--   inverting it to bool_and was explicitly not taken.
 --
 -- ROUNDING ARTIFACT, carried forward from 087 with its CORRECTED bound. eod_price
 --   .price and account_trans.price are numeric(20,4), so round(cost_basis/quantity,
@@ -205,6 +216,18 @@
 --   account_trans INSERT below) · 084 (the GL branch set this row shape is written
 --   for). Consumed by 049 / 050 / 076 / 084 at read time. No later migration depends
 --   on 088.
+--   ⚠ 088 CARRIES A FORWARD DEPENDENCY ON 089, DELIBERATE AND SAFE — read this
+--   before "fixing" it. The body calls pfin.fn_asset_priced_flags, created by 089,
+--   i.e. by a migration that applies AFTER this one. That is legal because a plpgsql
+--   body's SQL statements are resolved at EXECUTION, not at CREATE: this migration
+--   only creates the function, and nothing calls it until both have applied. It is
+--   stated because a backwards-looking dependency reads like an ordering bug to
+--   anyone meeting it cold.
+--   ⚠ THE ONE WAY IT BITES: invoking fn_create_manual_purchase on a database where
+--   088 has applied and 089 has not raises "function pfin.fn_asset_priced_flags does
+--   not exist" at RUNTIME rather than at apply time. Reachable only by applying a
+--   partial chain and then exercising the RPC — not by a clean apply, and not by the
+--   paired battery, which applies the whole chain before testing.
 --
 -- DEPLOY ORDERING. This migration CREATES a new function and REPLACES nothing, so
 --   there is no breaking direction: migration-first and app-first are both safe.
@@ -655,17 +678,26 @@ begin
     -- admits manual_valuation only on an asset the caller OWNS. The purchase is NOT
     -- blocked (F/CTO-ratified 2026-08-21); instead the unpriced state is REPORTED, so
     -- the rendering layer can say so rather than showing a silent zero.
-    -- ⚠ This predicate carries NO source-rank CASE and is NOT a copy of 078's price
-    -- pick — see the header for exactly what `priced` claims and what it does not.
-    select coalesce(bool_or(e.price > 0), false)
-      into priced
-      from pfin.eod_price e
-     where e.asset_id = security_id
-       and e.price_date = (
-             select max(e2.price_date)
-               from pfin.eod_price e2
-              where e2.asset_id = security_id
-                and e2.price_date <= p_trade_date);
+    -- ⚠ DELEGATED TO pfin.fn_asset_priced_flags (089) — this body no longer carries
+    -- its own copy of the predicate, and that is the entire point of 089 rather
+    -- than a tidy-up. This branch previously computed the flag inline while the
+    -- account-detail read path computed it independently in TypeScript; both
+    -- documented the predicate as "reused verbatim", and Sec found at the SELF-325
+    -- joint review that they had DIVERGED. Verbatim reuse across a SQL/TypeScript
+    -- boundary is impossible by construction — only reimplementation was ever
+    -- available — so the two were re-aligned by hand and the claim that they
+    -- matched survived as documentation until someone read both. 089 makes the
+    -- agreement structural instead of asserted. ⚠ IF THIS CALL IS EVER REPLACED BY
+    -- AN INLINE COPY, 089 STOPS DELIVERING ITS OWN PREMISE and the divergence
+    -- class returns silently.
+    -- The helper is STABLE and INVOKER, so it reads under the caller's RLS in this
+    -- same transaction and sees the eod_price row branch (1) may have just written.
+    -- coalesce guards the zero-row case defensively: 089 returns one row per
+    -- non-null id, and security_id is non-null here, so it cannot fire today.
+    priced := coalesce(
+      (select f.priced
+         from pfin.fn_asset_priced_flags(array[security_id], p_trade_date) f),
+      false);
 
     price := v_price;
   end if;
