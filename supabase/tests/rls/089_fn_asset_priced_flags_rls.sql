@@ -4,6 +4,13 @@
 --   price", called by both 088 and the account-detail read path; V1-SHIP-BLOCK)
 -- =====================================================================
 -- BINDS TO MIGRATION: supabase/migrations/089_fn_asset_priced_flags.sql
+--   (verified against d141fed9e043c8956f1a40a437e43922cb7fb409,
+--   feature/manual-purchase-path — the branch state this battery was verified
+--   against, NOT this file's own commit: a file cannot name the commit that
+--   contains it, so this locator is necessarily one commit behind whatever
+--   lands it. FROZEN per Architect; this is the re-point itself).
+--   blob md5 43de8c1b982a9bc72d315eb241390102 — the MIGRATION-IDENTITY pin,
+--   verified against the committed object, not the source text.
 --   pfin.fn_asset_priced_flags(p_asset_ids bigint[], p_as_of date)
 --     RETURNS TABLE (asset_id bigint, priced boolean)
 --     SECURITY INVOKER, STABLE, set search_path = ''.
@@ -75,6 +82,17 @@
 --   Every inversion claim below was independently measured in a rolled-back
 --   sabotage probe, not assumed. Verify with pg_prove — bare psql exits 0 on a
 --   plan-count failure. plan(20).
+--
+-- ⚠ A DIFFERENT KIND OF EVIDENCE, NOT DUPLICATED HERE: this predicate was also
+--   verified live, end to end, at d141fed — a real browser purchasing a
+--   freshly-minted global ticker via the actual admission worker, then
+--   reloading the account page and reading the rendered Holdings marker off
+--   the screen (not the aria-label). That proves the whole chain from a click
+--   to a painted pixel, through account-detail's `loadPricedFlags`, which now
+--   calls THIS function instead of the raw fetch it replaced — a plumbing
+--   change complete enough that "the output should still be identical" was
+--   worth checking rather than assuming. This battery proves the predicate;
+--   that walk proves the path around it. Neither substitutes for the other.
 -- =====================================================================
 
 begin;

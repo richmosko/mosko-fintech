@@ -3,22 +3,27 @@
 --   the manual instrument-PURCHASE write path; V1-SHIP-BLOCK)
 -- =====================================================================
 -- BINDS TO MIGRATION: supabase/migrations/088_manual_purchase_path.sql
---   (verified against bd5849414a4ff81717b4c00299fb8746b9ca8999,
+--   (verified against d141fed9e043c8956f1a40a437e43922cb7fb409,
 --   feature/manual-purchase-path — the branch state this battery was verified
 --   against, NOT this file's own commit: a file cannot name the commit that
 --   contains it, so this locator is necessarily one commit behind whatever
---   lands it. FROZEN per Architect; this is the re-point itself).
---   blob md5 b343304f3dde40eeab84a85e21c615bb — the MIGRATION-IDENTITY pin,
---   FINAL per Architect (a713c32): 088's body last changed at e29b00f (the #10
---   FK-target correction) and nothing outstanding touches it again (any P-b
---   read-side work lands as a NEW migration, not an edit to 088). Verified
---   against the committed object, not the source text — re-pulled and
---   re-diffed after 8fa6526 superseded ad7f2a1a2f9b9b680cec24ca55e71d7f06c77b2c
---   (kept below as historical provenance, NOT updated by this pin); the diff is
---   CONFIRMED, independently, to touch only `--` header comments plus the
---   `comment on function` catalog string — the executable body, signature, and
---   every grant/revoke line are byte-identical across every revision through
---   b343304f, so every behavioural leg below still holds unchanged) —
+--   lands it. RE-FROZEN per Architect; this is the re-point itself).
+--   blob md5 fea8cdc3862e6cb9b8b3231a1f82e3b4 — the MIGRATION-IDENTITY pin.
+--   ⚠ AN EARLIER REVISION OF THIS LINE CALLED b343304f3dde40eeab84a85e21c615bb
+--   "FINAL per Architect" (a713c32), reasoning that 088's body had last changed
+--   at e29b00f and nothing outstanding touched it again. THAT WAS WRONG, and
+--   the wrongness was structural, not a measurement error: "final" was true of
+--   088 read in isolation, and stopped being true the moment Sec's F1 fix
+--   (089, fn_asset_priced_flags) replaced 088's inline `priced` block with a
+--   call to it — a real body change, the first since ad7f2a1. A migration's
+--   identity is only "final" relative to a stated set of outstanding work, and
+--   that set can grow. Verified against the committed object, not the source
+--   text — re-pulled and re-diffed after 8fa6526 superseded
+--   ad7f2a1a2f9b9b680cec24ca55e71d7f06c77b2c (kept below as historical
+--   provenance, NOT updated by this pin), and again after the 089 extraction
+--   moved the blob to fea8cdc3. Every behavioural leg below was RE-RUN — not
+--   re-verified as comment-only — against this revision (see the L3/priced
+--   legs' own note) and held unchanged) —
 --   pfin.fn_create_manual_purchase(p_account_id bigint, p_trade_date date,
 --     p_quantity numeric, p_cost_basis numeric, p_security_id bigint default null,
 --     p_asset_type text default null, p_asset_name text default null,
@@ -433,6 +438,12 @@ select is(
 select _rls.set_tenant(:'ta'::uuid);
 
 -- BRANCH (a) — owned asset (MINT), first purchase at the trade date.
+-- ⚠ `priced` here now flows through 089 (fn_asset_priced_flags) — 088's own
+-- inline computation was replaced by a call to it (Sec F1/C3 remediation).
+-- (l3-1) and (l3-6) below were RE-RUN, not re-verified as comment-only, against
+-- that revision (blob fea8cdc3862e6cb9b8b3231a1f82e3b4, per the BINDS-TO block
+-- above) and held unchanged — this is the measurement Architect's "semantically
+-- identical" claim rests on, not merely a reading of both bodies.
 select trans_id as l3a_trans, security_id as l3a_asset, priced as l3a_priced, price as l3a_price
   from pfin.fn_create_manual_purchase(
     :accta, '2026-04-04'::date, 4::numeric, 400::numeric, null, 'equity', 'L3 Branch A Position', 'L3A'
