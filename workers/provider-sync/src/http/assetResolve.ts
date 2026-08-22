@@ -81,16 +81,26 @@ export interface AssetResolveResult {
 	 *
 	 * FIX: `productionAssetResolveDeps` below explicitly coerces with `Number()`, so this route's
 	 * wire contract is a JSON NUMBER — Sec's ruled option (A): fix the PRODUCER, leave the app
-	 * schema (a strict `z.number()`, no coercion) untouched. This is DELIBERATELY NOT the
-	 * "bigint→decimal-string" convention `sourceId` uses elsewhere on this same server
-	 * (admissionServer.ts) — Sec's call, not an inconsistency: `asset_id` is a small sequence
-	 * value consumed directly as a numeric RPC arg downstream, and Sec ruled a permissive
-	 * string-then-coerce parse on an FK-shaped id an unacceptable trust boundary regardless of
-	 * "it's our own worker" (a standing repo-wide position, not specific to this route).
+	 * schema (a strict `z.number()`, no coercion) untouched.
 	 *
-	 * ⚠ `Number()` on a bigint is LOSSY above `Number.MAX_SAFE_INTEGER` (2^53 − 1) — NOT
-	 * reachable at V1 scale (`pfin.asset.asset_id` is a small `generated always as identity`
-	 * sequence), but named here because this is an FK-shaped id, per Sec's requirement.
+	 * ⚠ CORRECTED DISCRIMINATOR (Sec, SELF-325 delta review, superseding this comment's earlier
+	 * framing): this is DELIBERATELY NOT the "bigint→decimal-string" convention `sourceId` uses
+	 * elsewhere on this server (admissionServer.ts) — but NOT because of precision or a permissive-
+	 * coercion trust argument. The two sites carry different IN-WORKER TYPES, which is the entire
+	 * discriminator: `sourceId` is a native JS `bigint` (see `admit()`/`admitSimplefin()` return
+	 * types) and `JSON.stringify` THROWS on a bigint, so `String(sourceId)` there is FORCED by the
+	 * language, not chosen for precision. `assetId` is declared `number` by `resolveSecurityId`'s
+	 * own signature (`../ingest/resolution.ts`: `Promise<number | null>`) — its former
+	 * string-on-the-wire form was the postgres driver leaking a bigint past a number-typed
+	 * boundary (a type lie), not a convention this route was breaking. See the full discriminator
+	 * note at `admissionServer.ts`'s `handleAssetResolve`.
+	 *
+	 * ⚠ NEITHER SITE MAKES A 2^53 PRECISION CLAIM, and neither is safer than the other on that
+	 * axis — `Number()` on a bigint IS lossy above `Number.MAX_SAFE_INTEGER`, not reachable at V1
+	 * scale (`pfin.asset.asset_id` is a small `generated always as identity` sequence), but that
+	 * fact does not discriminate this site from `sourceId`'s: if `assetId` ever needs bigint
+	 * precision the fix is to type it `bigint` in `resolution.ts`, at which point this site takes
+	 * `String()` for the same forced reason the `sourceId` sites do.
 	 */
 	assetId: number | null;
 }

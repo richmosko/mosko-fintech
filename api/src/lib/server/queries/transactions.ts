@@ -401,35 +401,25 @@ export type HeldSecurity = {
 	name: string | null;
 	quantity: number;
 	/**
-	 * SELF-325 P-b (F/CTO-ratified, Architect catch criterion): TRUE iff ANY eod_price row for
-	 * this asset AT the maximum price_date <= `asOf` has price > 0 — a `bool_or` over every row
-	 * sharing that max date, per asset. This MATCHES (not "is verbatim with" — see the ⚠ below)
-	 * `pfin.fn_create_manual_purchase`'s (088) write-time `priced` composite field:
-	 * `coalesce(bool_or(e.price > 0), false)` over all rows at the max `price_date`. Aligning the
-	 * two means a purchase's confirmation and its later account-detail rendering can never
-	 * disagree about the same holding. It carries NO source-rank CASE (unlike the D-FIRST pick
-	 * inlined in 019/049/050/056/059/076/078), so it cannot drift from 078 — an eighth copy of
-	 * that CASE is the one drift nobody would be watching.
+	 * SELF-325 P-b (F/CTO-ratified, Architect catch criterion): TRUE iff `pfin.fn_asset_priced_flags`
+	 * (089) reports this asset priced as of `asOf`. 089 IS the single definition of this predicate —
+	 * `pfin.fn_create_manual_purchase` (088) calls the SAME function for its write-time `priced`
+	 * composite field, so a purchase's confirmation and its later account-detail rendering can
+	 * never disagree about the same holding BY CONSTRUCTION, not by two implementations being kept
+	 * in step by hand.
 	 *
-	 * ⚠ CORRECTED (Sec C3, SELF-325 round 10): an earlier version of this predicate — and this
-	 * comment — claimed 088's SQL was reused "verbatim." That was never achievable (SQL and
-	 * TypeScript can only be reimplemented in step, not shared) and the claim went unchecked: the
-	 * TS took the FIRST row per asset (asset_id asc, price_date desc) with NO tiebreak among rows
-	 * sharing the max date, which is not `bool_or` — it's NONDETERMINISTIC at a same-date tie
-	 * (whichever row the planner returns first), so the SAME holding could report differently
-	 * between two page loads. Fixed to actually compute `bool_or` per asset — see
-	 * `loadPricedFlags`'s reduction below.
-	 *
-	 * ⚠ AN INDICATOR, NOT A VALUATION PRIMITIVE. Nothing may compute money from this flag — the
-	 * rendered value still comes from the real valuation kernel (049/078/etc). It only says "this
-	 * holding has no usable price."
-	 *
-	 * ⚠ NAMED IMPRECISION (stated, not silently inherited — do NOT "fix" by inverting to
-	 * `bool_and`, which would just move the disagreement to the opposite holding): when two
-	 * sources tie at the maximum price_date and disagree about being zero, `bool_or` reports
-	 * PRICED even if 078's actual pick would select the zero row. This predicate reports on the
-	 * DATE BAND, not the pick's winner — matching 088 beats being locally "safer." Not reachable
-	 * through 088's own writes; reachable in general.
+	 * ⚠ HISTORY (Sec C3 → Sec F1, SELF-325 round 10): this flag was previously computed by a
+	 * TypeScript reimplementation in this file that both this comment and 088's header claimed was
+	 * "reused verbatim" from 088's inline SQL. That was never achievable — verbatim reuse across a
+	 * SQL/TypeScript boundary is impossible by construction — and the claim went unchecked: the TS
+	 * took the FIRST row per asset with NO tiebreak among rows sharing the max price_date, which was
+	 * NONDETERMINISTIC at a same-date tie (Sec C3), and separately fetched the ENTIRE price history
+	 * <= asOf for every held asset with no bound, which could exceed PostgREST's row cap on as few
+	 * as two ordinarily-priced holdings and silently render the unpriced marker on a CORRECTLY-PRICED
+	 * one (Sec F1). Both defects were one root cause — two implementations required to agree with
+	 * nothing forcing agreement — and 089 removes the class rather than re-aligning the instance.
+	 * See `loadPricedFlags` and 089's own migration header for the full predicate + imprecision
+	 * this function still carries (bool_or over the max-price_date rows; not a valuation primitive).
 	 *
 	 * Fail-CLOSED on a read error: defaults to `false` (unpriced) rather than `true` — a read
 	 * failure must never present as "this holding is fine."
@@ -438,18 +428,23 @@ export type HeldSecurity = {
 };
 
 /**
- * Per-asset "has a usable current price" flag, keyed by asset_id — SELF-325 P-b, `bool_or`
- * semantics matching 088 (see HeldSecurity.priced's own comment for the corrected claim). One
- * round trip: fetch every eod_price row <= `asOf` for the given assets, ordered
- * (asset_id asc, price_date desc) so all rows for one asset arrive together with the max-date
- * rows first; for EACH asset, OR `price > 0` across every row sharing that asset's own maximum
- * price_date (never across an older date — those are ignored once a newer date has been seen for
- * that asset). An asset_id absent from the result (no eod_price row at all <= asOf) is absent
- * from the returned Map — callers default such an asset to `priced: false`.
+ * Per-asset "has a usable current price" flag, keyed by asset_id — SELF-325 P-b / F1, delegated
+ * entirely to `pfin.fn_asset_priced_flags` (089; see HeldSecurity.priced's own comment for the
+ * history). One RPC call, one row per DISTINCT requested asset_id — 089's contract guarantees a
+ * row for every id passed (never NULL, never absent: an id with no visible usable price returns
+ * `false`), so this function's job is purely marshaling the RPC result into a Map, not computing
+ * the predicate.
  *
- * RLS-scoped (eod_price_select: asset global-OR-owned, via the asset JOIN) — the SAME visibility
- * `loadHeldSecurities`'s asset label read already relies on, so no asset here is visible for a
- * price check that wasn't already visible for its label.
+ * ⚠ THIS IS WHAT CLOSES SEC'S F1 (Architect, SELF-325 round 10, verbatim): the result set is now
+ * bounded by the caller's HOLDING COUNT, not by price history, so PostgREST's row cap is
+ * unreachable BY CONSTRUCTION — never re-introduce a raw `eod_price` fetch here; that is exactly
+ * the shape that broke (an asset priced daily by one source for three years is ~750 rows, and two
+ * such holdings exceeded the 1000-row cap, silently truncating the highest asset_ids to
+ * priced:false).
+ *
+ * RLS-scoped (089 is SECURITY INVOKER; 019's eod_price_select admits a price row iff global-OR-
+ * owned) — the SAME visibility `loadHeldSecurities`'s asset label read already relies on, so no
+ * asset here is visible for a price check that wasn't already visible for its label.
  */
 async function loadPricedFlags(
 	supabase: SupabaseClient,
@@ -459,41 +454,19 @@ async function loadPricedFlags(
 	const out = new Map<number, boolean>();
 	const { data, error } = await supabase
 		.schema('pfin')
-		.from('eod_price')
-		.select('asset_id, price_date, price')
-		.in('asset_id', assetIds)
-		.lte('price_date', asOf)
-		.order('asset_id', { ascending: true })
-		.order('price_date', { ascending: false });
+		.rpc('fn_asset_priced_flags', { p_asset_ids: assetIds, p_as_of: asOf });
 	if (error) {
 		// Fail-CLOSED: an unverifiable read must never present as "priced" — return an empty map
 		// so every asset_id defaults to false at the call site, same as "no price row exists".
-		console.error('[transactions] loadPricedFlags read failed (fail-closed to unpriced):', error.message);
+		console.error('[transactions] loadPricedFlags RPC failed (fail-closed to unpriced):', error.message);
 		return out;
 	}
-
-	// bool_or per asset, over every row sharing that asset's OWN maximum price_date — matching
-	// 088's `coalesce(bool_or(e.price > 0), false)`. Rows arrive ordered (asset_id asc,
-	// price_date desc), so within one asset's run the FIRST price_date seen is its maximum; every
-	// subsequent row at that SAME date participates in the OR, and any row at an OLDER date (a
-	// new, lower price_date for the same asset) is ignored — it lost the max-date selection, not
-	// just the tiebreak.
-	let currentAssetId: number | null = null;
-	let currentMaxDate: string | null = null;
-	let anyPositiveAtMaxDate = false;
-	const finalizeCurrent = (): void => {
-		if (currentAssetId !== null) out.set(currentAssetId, anyPositiveAtMaxDate);
-	};
-	for (const row of (data ?? []) as Array<{ asset_id: number; price_date: string; price: number | string }>) {
-		if (row.asset_id !== currentAssetId) {
-			finalizeCurrent();
-			currentAssetId = row.asset_id;
-			currentMaxDate = row.price_date;
-			anyPositiveAtMaxDate = false;
-		}
-		if (row.price_date === currentMaxDate && Number(row.price) > 0) anyPositiveAtMaxDate = true;
+	// 089's asset_id is bigint; this file already trusts fn_holdings_as_of's bigint asset_id as a
+	// plain `number` over the SAME PostgREST/.rpc() transport two reads above (loadHeldSecurities'
+	// `positions` mapping) — mirrored here, not re-derived, for the same measured wire shape.
+	for (const row of (data ?? []) as Array<{ asset_id: number; priced: boolean }>) {
+		out.set(row.asset_id, row.priced);
 	}
-	finalizeCurrent();
 	return out;
 }
 

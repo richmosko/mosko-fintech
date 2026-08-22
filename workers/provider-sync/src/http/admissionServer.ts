@@ -469,6 +469,9 @@ export function createAdmissionServer(deps: AdmissionServerDeps): Server {
 			const { sourceId, accounts } = await deps.admit(input);
 			log(`admission: 200 admitted source_id=${sourceId} (accounts=${accounts.length})`);
 			// bigint → string (JSON has no bigint). Never echo the public_token (C6-5).
+			// ⚠ FORCED by sourceId's bigint type — NOT a precision convention. Do not cite this as a
+			// precedent for other id fields: /asset/resolve emits assetId as a NUMBER because
+			// resolveSecurityId declares it `number`. See the discriminator note at handleAssetResolve.
 			return sendJson(res, OK, { sourceId: String(sourceId), accounts: toAdmissionAccounts(accounts) });
 		} catch (err) {
 			// Item-2: ONLY a recognized public_token-invalidity at the exchange leg is client-
@@ -511,6 +514,9 @@ export function createAdmissionServer(deps: AdmissionServerDeps): Server {
 			const { sourceId, accounts } = await deps.admitSimplefin(input);
 			log(`admission: 200 simplefin admitted source_id=${sourceId} (accounts=${accounts.length})`);
 			// bigint → string (JSON has no bigint). Never echo the setup token / Access URL (C6-5).
+			// ⚠ FORCED by sourceId's bigint type — NOT a precision convention. Do not cite this as a
+			// precedent for other id fields: /asset/resolve emits assetId as a NUMBER because
+			// resolveSecurityId declares it `number`. See the discriminator note at handleAssetResolve.
 			return sendJson(res, OK, { sourceId: String(sourceId), accounts: toAdmissionAccounts(accounts) });
 		} catch (err) {
 			// ONLY a recognized setup-token-invalidity is client-correctable → worker-400
@@ -709,6 +715,18 @@ export function createAdmissionServer(deps: AdmissionServerDeps): Server {
 				currency: parsed.data.currency
 			});
 			log(`admission: 200 asset-resolve asset_id=${result.assetId ?? 'null'}`);
+			// assetId is a JSON NUMBER, and that is NOT a divergence from the sourceId sites above —
+			// the two carry different IN-WORKER TYPES, which is the entire discriminator. sourceId is a
+			// native JS bigint (see admit() / admitSimplefin() return types) and JSON.stringify THROWS
+			// on a bigint, so String(sourceId) there is FORCED by the language, not chosen for precision.
+			// assetId is declared `number` by resolveSecurityId's own signature (ingest/resolution.ts:
+			// Promise<number | null>); its former string-on-the-wire form was the postgres driver leaking
+			// a bigint past a number-typed boundary — a type lie, not a convention. Emitting a number here
+			// makes the wire match the declared type.
+			// ⚠ NEITHER SITE MAKES A 2^53 PRECISION CLAIM and neither is safer than the other on that axis.
+			// If assetId ever needs bigint precision the change is to type it bigint in resolution.ts, at
+			// which point this site takes String() for the same forced reason the sourceId sites do.
+			// (Sec, SELF-325 delta review.)
 			return sendJson(res, OK, { assetId: result.assetId });
 		} catch (err) {
 			log(`admission: 502 asset-resolve failed (${err instanceof Error ? err.message : 'error'})`);
