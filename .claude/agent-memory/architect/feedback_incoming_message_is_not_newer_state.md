@@ -107,3 +107,20 @@ an earlier commit, and the real question becomes *what landed since.*
 ⚠ **These crossings are not a discipline failure; they are the predictable cost of a fast
 branch plus messages naming intermediate shas. The fix is cheap and belongs to the SENDER,
 not the checker.**
+
+---
+
+**RATIFIED PROTOCOL (team-lead + Architect, 2026-08-22): lead every report with `lines + md5`
+on its own line.** Adopted after three crossings in one sitting where an encoding request
+arrived *after* the encoding shipped — each time the coordinator was working from a line count
+one edit stale, and each time the correct response was to MEASURE and reply, never redo.
+
+**Why:** a line count alone is ambiguous (two different edits can land on the same count); an
+md5 is decisive and costs one command. With the header present, the coordinator diffs against
+last-known state before re-requesting, which removes the whole crossing class rather than
+handling each instance.
+
+**How to apply:** first line of every hand-off report, before the Summary. On a stale poke,
+reply with the measurement and a one-line "already in at <md5>" — do NOT re-run the edit, and
+do NOT treat the poke as evidence the work is missing. The fix belongs to the sender; adopting
+it unprompted is cheaper than being asked.

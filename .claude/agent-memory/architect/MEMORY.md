@@ -5,6 +5,7 @@
 - [053 CPI positivity CHECK follow-up](project_053_cpi_positivity_check_followup.md) — pointer only; canonical home is **BACKLOG §7.14** with Sec's four binding conditions. ⚠ `> 0` alone re-admits NaN *and* Infinity.
 
 - **[GL arc COMPLETE — rename + split + element ALL SHIPPED](project_gl_taxonomy_split_ratified.md)** — #502/#503 · #507/`084` · #510/`085`, Sec GREEN throughout. ⚠ That file has been silently reverted to "no DDL yet" TWICE; if you meet that claim, grep the migrations and re-correct.
+- **[A Backlog issue's deliverable may already have shipped](feedback_backlog_issue_deliverable_may_already_have_shipped.md)** — all-identifiers-falsified is a signal to widen the search, not to conclude UNBUILT. Grep the seeded state, not the AC's names.
 - **[Schema-impossible ACs trace to the incumbent](reference_schema_impossible_ac_traces_to_incumbent.md)** — the folded ETL still names `pfin.asset_cat`; "wrong AC" vs "different system" changes the disposition, and the masked residual is the load-bearing part.
 
 ## Postgres / RLS facts worth not re-deriving
@@ -19,6 +20,7 @@
 - **[`set local` outside a transaction is a silent no-op](feedback_set_local_outside_transaction_is_a_noop.md)** — the RLS smoke then runs as superuser and every leg passes; a vacuous harness looks PERMISSIVE, not empty. Control leg first.
 - **[`user_settings` can never carry the aal2 clause](reference_user_settings_excluded_from_aal2_backstop.md)** — `025` names it a NON-NEGOTIABLE exclusion (policy recursion); wrong home for step-up-fenced tenant data.
 - **[manual_valuation OUTRANKS every feed in the price pick](reference_manual_valuation_outranks_feeds_in_price_pick.md)** — F4: an 087-style companion price on an ALREADY-HELD position restates every prior lot at cost. ⚠ **No `market_feed` writer exists in V1**; users cannot mint or price GLOBAL assets (OWD-E).
+- **[`timestamptz <= date` drops the as-of DAY](reference_timestamptz_vs_date_excludes_the_as_of_day.md)** — promotes to midnight; ⚠ **Lock 15/ADR-011 D19 states the filter in exactly this defective form**. Use `< (D+1)`; fix by amendment.
 - **[The TimeZone pin is a default, not a fence](reference_timezone_pin_is_a_default_not_a_fence.md)** — `061` pins the DB default; `PGTZ` moves a client's own session. Make timestamptz/date comparisons invariant BY MARGIN (>26h zone span).
 - **[pgTAP `isnt()` PASSES on NULL](reference_pgtap_isnt_passes_on_null.md)** — `IS DISTINCT FROM`, so a negative assertion over a subquery is fail-OPEN; `ok()` fails on NULL. Prove three states.
 - **[A stale worktree listing misreads the tree](reference_stale_worktree_listing_misreads_the_tree.md)** — `ls` answers about the ref you're parked at; use `git ls-tree origin/main`. Twice in one session; Sec's instance nearly became a false accusation.
@@ -41,6 +43,7 @@
 
 - **[A self-authored label hardens into fact](feedback_self_authored_label_hardens_into_fact.md)** — I invented `C1` for symmetry and it reached a commit subject, which has NO supersession mechanism. Grep the dispatch, not your own earlier use.
 
+- **[A grep hit in a COMMENT is not a call site](feedback_a_grep_hit_in_a_comment_is_not_a_call_site.md)** — the densest mention of a symbol is often the prose saying it is NOT wired; ⚠ *built but unreached* ≠ *live*. Query the CONSUMER.
 - **[A failed grep looks like a clean result](feedback_failed_grep_looks_like_a_clean_result.md)** — zsh eats a bare `--include=*.ts`; empty output reads as "no matches". Over-match + hand-filter. ⚠ Run the package script, not the bare tool (`svelte-check` w/o `sync` = false positives).
 - **[A "clean sweep" is a claim about your FILTER](feedback_clean_sweep_claim_is_a_claim_about_the_filter.md)** — over-match bare + `-i`, then hand-filter; zero hits is more suspicious than explained hits. Survivors hide in adjacent-reads-as-fixed positions.
 - **[A count over history is not a count over live definitions](feedback_count_over_history_vs_live_definitions.md)** — 6 textual kernel copies vs 3 live; a CI fence specced from the historical count goes RED on correct code. Case-insensitive grep, or `059` reads as empty.
@@ -59,6 +62,7 @@
 - **[Layers green, seam absent](feedback_layers_green_seam_absent.md)** — a stub-tested suite proves each piece works ALONE. Grep call sites of every new module; walk it in a browser. ⚠ A defensive default hides the gap.
 - **[Spot-check the contract at its consumer](feedback_spot_check_the_contract_at_its_consumer.md)** — authoring ≠ watching it land; a predicate sound in isolation can be unsound as a stand-in for a broader question. Test where implementations DIVERGE.
 - **[A structural fence must cover the same class](feedback_structural_fence_must_cover_the_same_class.md)** — swapping a deny-list for a structural property removes a watcher unless the sets match. Two classes → two legs.
+- **[A span-replace between two anchors swallows the middle](feedback_span_replace_between_anchors_swallows_the_middle.md)** — it deleted a whole ruled block; the tell was the line count moving the WRONG WAY. Predict the delta; `grep -c` the neighbours.
 - **[Diff filters strip `--` comment lines](feedback_diff_filter_strips_comment_lines.md)** — `grep '^[+-][^+-]'` blinds you to comment changes; use `--numstat`. Bit me twice in one session.
 - **[A cited precedent transmits its RETRACTED half](feedback_cited_precedent_transmits_its_retracted_half.md)** — ADR-042 already corrected the "RLS-exempt writer only" claim for #16; I cited its rationale and reproduced the retraction into 4 surfaces. Grep the ADR for later amendments before citing.
 - **[Prove derived text against its source](feedback_prove_derived_text_against_its_source.md)** — rebuild from source + named substitutions (fidelity by construction); a period inside quote marks claims the sentence ended; ⚠ **verbatim carry is safe for claims, UNSAFE for indexicals** ("here" re-points with no edit) **and for FIGURES** — a byte-exact quote of a wrong number passes every fidelity check, so measure what you quote and check a count against its own enumeration.

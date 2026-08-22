@@ -1,5 +1,7 @@
 # Memory index
 
+- [V1.3 preflight recalibration](project_v13_preflight_recalibration.md) — findings delivered 08-22 @0491830, gates on batch ratify; §7.19 generator 4th recurrence; §2.2.2 amendment drafted (§7.20 body gone).
+
 - [Grep context-window blindness](feedback_grep_context_window_blindness.md) — never sweep with `-o '.{N}X.{N}'`; boundary-adjacent hits are invisible. Bare pattern first, context second.
 - [AC signatures: copied, not composed](feedback_ac_signatures_copied_not_composed.md) — grep the migration or mark SIGNATURE-PROVISIONAL; a param list is a capability claim (3× recurrence; reconcile via app-query-layer + check the substrate).
 - [Scope AC invariants](feedback_scope_ac_invariants.md) — enumerate contract failure cases; construction owner names the falsifying case, don't self-certify (SELF-223 AC6).

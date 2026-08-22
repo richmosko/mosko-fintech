@@ -60,5 +60,23 @@ sweep the file with a negative grep for the OLD string and confirm zero hits.**
    sweeper. Name these sites explicitly as **deliberately not touched**, and if one doesn't reconcile,
    say you did not verify it rather than fixing it inside an unrelated correction.
 
+**⚠ FAN-OUT IS NOT ONLY FOR COUNTS — a CLASSIFICATION CLAIM fans out the same way, and the review
+brief will enumerate fewer files than the claim lives in.** At the SELF-332 / ADR-061 review the brief
+named two source files; the claim *"this render gate is LOAD-BEARING, not belt-and-suspenders"* lived in
+**three** — the mirror lib header, its two JSDoc blocks, **and the consuming component's header**
+(`UsEquityAllocationTable.svelte`), which was absent from the diffstat entirely. The commit that
+retired the classification was literally titled *"finish the … reclassification"* and had not. The
+stale copy still pointed the reader at the corrected file *"for why this gate is LOAD-BEARING"* — a
+cross-reference that now resolves to the opposite statement, which is strictly worse than the original
+divergence because it makes a safe removal look forbidden.
+
+**How to apply:** when a change RETIRES a stated property of a control (load-bearing → redundant,
+required → optional, fenced → unfenced), do not review the enumerated files — `git grep` the distinctive
+phrase across the whole tree **including files not in the diff**, then follow every inbound
+cross-reference *to* the corrected file and check what it says the reader will find there. Do not
+inherit the brief's file list; a brief's scope is a hypothesis about where the claim lives. Verify the
+claim was RETRACTED everywhere, not just RESTATED correctly once. This is the same shape as
+[[hazard-mechanism-vs-reachability]]'s "a retraction fans out past the corrected file."
+
 Related: [[measure-the-fence-regex-not-its-comment]] (a description claiming a property the artifact
 lacks) and [[sec-lock-cross-check-catches-my-own-misreads]].
