@@ -42,3 +42,33 @@ discharged **per-worktree, never centrally**.
 
 This is the same shape as the two-controls-one-conclusion pattern: the check
 runs, passes, and was never looking at the thing it was meant to observe.
+
+
+---
+
+**⚠ AND COMMITTED CODE CITES THESE FILES. THE OLD CITATIONS ALREADY POINT AT NOTHING.**
+
+Measured 2026-08-21 (SELF-325): **migrations `067`, `069`, `071`, `067`'s battery, and
+`nav-reference-dates.ts` on `main` cite `temp/architect-self218.md` /
+`temp/architect-self221-reconciliation.md` / `temp/architect-boundary-date-exposure.md`.
+None of those files exists** — the shared `temp/` holds only directories. One arc added **10
+more** such citations across 4 files before anyone noticed.
+
+⚠ **The failure is silent because the citation still READS fine.** *"Design note:
+temp/architect-self218.md §6"* looks exactly like live provenance; it resolves to nothing. **A
+dangling reference is indistinguishable from a good one until someone follows it — and whoever
+follows it is by construction the person who needed it.**
+
+**The rule, and note that half of it is easy to get right while the other half is missed:**
+*a design doc may describe its own moment* — that half is fine and is why `temp/` exists — but
+**a committed file must never point AT that moment as its explanation.** Cite a durable anchor:
+the migration header, an ADR, the Linear issue. If the reasoning is worth citing from committed
+code, it is worth *moving into* committed text.
+
+⚠ **This is self-inflicted, not a teammate pattern.** I authored several of those migrations
+while also telling the team "the migration is the authority; temp docs describe their own
+moment." Both halves of that instruction were mine and they were inconsistent.
+
+**Check before freezing any branch:**
+`grep -rn "temp/" <changed files>` — and for the repo-wide state,
+`git grep -l "temp/architect" -- supabase api workers`.

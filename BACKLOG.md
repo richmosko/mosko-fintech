@@ -206,6 +206,7 @@ Three-purpose backlog per [ADR-009](DECISIONS.md#adr-009) Decisions 4 + 7, [ADR-
   - **Multi-currency transactions.**
   - **FX conversion surfaces.**
   - **Per-tenant base-currency selection.**
+  - *[Annotation 2026-08-22 — **global-registry repair path, F/CTO-BOOKED V2 under [ADR-060](DECISIONS.md#adr-060)** (the ratified posture decision: V1 ships the global `pfin.asset` registry with NO repair path; the ADR carries Sec's verbatim posture statement and the C1/C2 compensating-controls reopen trigger). Consult order fixed by the ADR: Architect proposal → Sec joint-review → F/CTO ratify; a `service_role` UPDATE grant on `pfin.asset` is one candidate mechanism and is NOT pre-approved. This entry is a pointer — the decision lives in the ADR, never restated here.]*
   - *[Annotation 2026-08-21 — **per-account base-asset FK, F/CTO-DEFERRED until multi-currency is a live requirement** (Option C of the §7.26 base-asset/cash disposition; A and B shipped as SELF-333 / SELF-334 without it). Shape when taken up: `pfin.account.base_asset_id → pfin.asset` REPLACING (never alongside — two sources of truth is the `056` drift hazard) the `015` free-text `currency` column. Takes ADR-011 D3 **#18** (Pattern-2 global-OR-matched-tenant; fence BEFORE INSERT **OR UPDATE** per the `074`/#17 reasoning; first FK-shaped column re-added to `pfin.account` since #5 dropped at `048`); ⚠ one-way-door-adjacent (reversal is a data migration both directions); re-points ~6–7 live function definitions (count over live definitions, not file history). Full Architect design pass + Sec joint-review + backfill when a forcing function arrives.]*
 - **FMP API cost-saving levers** (per [ADR-011](DECISIONS.md#adr-011) Decision 20 / Lock 16 / Flag #11 cost-feasibility Outcome 1). V1 retains FMP starter plan per F/CTO ratification. Two V2+ cost-saving levers captured for future evaluation if V1 cost-shape pressures emerge:
   - **(b) FMP free tier downgrade** — $0/mo subscription IF the free tier's rate limits hold for V2+ needs. May degrade ingestion frequency or coverage; Phase 3 + V1.1+ verifies feasibility against query shape.
@@ -252,7 +253,7 @@ Three-purpose backlog per [ADR-009](DECISIONS.md#adr-009) Decisions 4 + 7, [ADR-
 | §7.14–§7.19 | BOOKINGS | Per-arc follow-ups 2026-08-12 → 2026-08-16 |
 | §7.20 | DISCHARGED | L1 cash-granularity landing residuals — ✅ seed delta at `077`; drafting note consumed (tombstone) |
 | §7.21 | DISCHARGED | 054-battery refinements — ✅ PR #488 (tombstone) |
-| §7.22–§7.26 | BOOKINGS | Per-arc follow-ups 2026-08-17 → 2026-08-21 (§7.25 item 1 promoted to Linear) |
+| §7.22–§7.27 | BOOKINGS | Per-arc follow-ups 2026-08-17 → 2026-08-22 (§7.25 item 1 promoted to Linear; §7.26 fully ruled same-day) |
 
 ### §7.1 — Architect substrate (Platform / Cross-cutting V1.x)
 
@@ -1140,4 +1141,23 @@ Three-purpose backlog per [ADR-009](DECISIONS.md#adr-009) Decisions 4 + 7, [ADR-
 
 **1. Base-asset / cash-classification disposition — the A/B/C set.** [✅ RULED by F/CTO 2026-08-21, same day as booking — Architect's rec adopted in full: **A now → SELF-333** (mechanical cash-route, Platform / Cross-cutting V1.x) · **B fast-follow → SELF-334** (`account.currency` constraint + the fx `coalesce(1.0)` fail-open, same lane) · **C DEFERRED → the §5.7 Multi-currency annotation** (base-asset FK, D3 #18 shape recorded there). Body reduced at ruling per the exit rule; the measured-defect analyses were carried verbatim into the two Linear issues, which are the durable specs.]
 
-**2. Post-create instrument-purchase write path.** [✅ RULED by F/CTO 2026-08-21: **rolled into SELF-325**, which stays open until it ships — ruling + remaining-scope spec recorded on the issue (038 hard-codes `security_id NULL`; the `084` P1/P2 shape supports the fix; provenance + Lock-14 + Sec joint-review requirements carried). Body reduced at ruling per the exit rule.]
+**2. Post-create instrument-purchase write path.** [✅ RULED by F/CTO 2026-08-21: **rolled into SELF-325**, which stays open until it ships — ruling + remaining-scope spec recorded on the issue (038 hard-codes `security_id NULL`; the `084` P1/P2 shape supports the fix; provenance + Lock-14 + Sec joint-review requirements carried). Body reduced at ruling per the exit rule. **✅ SHIPPED at PR #538 (2026-08-21/22); SELF-325 CLOSED.**]
+
+### §7.27 — SELF-325 purchase-path (PR #538) landing bookings (2026-08-22)
+
+*Source: the PR #538 build arc — Sec joint-review (AMBER→GREEN ×2), QA's live browser walks, and Architect's landing reviews. The purchase path itself SHIPPED at #538 (`088`+`089`, Sec GREEN at the frozen sha, clean-stack CI green, QA VALIDATE GREEN) and is not booked here; these are the findings that outlive it. The F3 posture decision is NOT here — it lives at [ADR-060](DECISIONS.md#adr-060) with the §5.7 pointer below. Per-issue follow-ups already in Linear: SELF-333/334/335 (Platform) and SELF-336 (five design constraints + the UnpricedMarker fail-open-prop CONSTRAINT, all recorded as issue comments).*
+
+**1. Unbounded-fetch-shape sweep.** [audit; Backend + Architect]
+- **Source.** Backend's find at the F1 fix (Architect concurred, deliberately not swept under the re-freeze deadline — "a sweep run under a deadline becomes a skim"): the shape *a query keyed to entity count but fetching rows proportional to HISTORY, with no explicit bound* predates the fixed instance (`loadPricedFlags`, reachable at TWO ordinary holdings against `config.toml`'s `max_rows = 1000`) and may exist elsewhere; the NAV and allocation aggregate loaders are the obvious neighbours.
+- **AC.** Enumerate `.from(...)` / RPC read sites in `api/src/lib/server/queries/**` whose result cardinality scales with row history rather than entity count; each hit gets a bound, a helper-RPC conversion (the `089` pattern), or a recorded why-safe. Over-match and filter; the sweep's filter is stated with its result.
+- **Dependencies.** None.
+
+**2. Pre-existing dangling `temp/` citations on `main`.** [doc-hygiene; Architect]
+- **Source.** Architect's measurement during the #538 arc: **5 files on `main` from earlier arcs — including migrations `067`, `069`, `071` and `067`'s battery — cite `temp/architect-*.md` design docs that no longer exist** (the shared `temp/` holds no files). A dangling citation reads identically to a live one until someone follows it. The branch's own 12 were fixed in-arc (delete-or-inline, never a false re-point); these 5 are other arcs' surfaces. Architect's rule, the Source line for the fix: "a doc may describe its moment, but a committed file must not point AT that moment as its explanation."
+- **AC.** Each citation deleted-with-content-inlined or re-pointed at a real canonical anchor; where the cited content is unrecoverable, the honest artifact is *"design rationale not preserved"*, never a link to nothing. Vehicle rules per `apply-migration`: these sit in `--` file headers (measured), so in-place correction is the likely route, subject to its three conditions.
+- **Dependencies.** None.
+
+**3. Numeric-grain constants duplicated without a drift guard.** [hardening; Backend + Frontend]
+- **Source.** Architect's find at the #538 seam review: `QUANTITY_MAX_INT_DIGITS = 20` / `QUANTITY_MAX_DECIMAL_PLACES = 8` (encoding `017`'s `quantity numeric(28,8)`) are declared independently in the client `lib/validation/numeric.ts` and server `lib/server/validation/numeric.ts` with no shared source and nothing watching agreement — the exact treatment the asset-type vocabulary got (shared module + drift guards) and the numeric grain didn't. Values agree today.
+- **AC.** One browser-safe shared source (the `asset-constants.ts` pattern) or an explicit test asserting the two sets are identical. Two functions stay (client/server import boundaries are real); the CONSTANTS unify.
+- **Dependencies.** None.

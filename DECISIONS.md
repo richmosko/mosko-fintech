@@ -41,6 +41,40 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-060 — The global asset registry ships with no repair path: a ratified posture resting on two named controls (terse pattern)
+
+**Date:** 2026-08-21 · **Status:** **Accepted** — F/CTO ruled 2026-08-21 (option (b)); ratify recorded on the issue.
+**Phase:** 6 Build Loop · **Surface:** `pfin.asset`'s global namespace (`users_id IS NULL`), reached from the manual purchase path's ticker-resolution route.
+
+**Context.** The manual purchase path needs a user to be able to buy a public security in an account no aggregator supports. Resolution is global-first — the same key order the provider-sync worker uses — so that a manually recorded purchase and a later provider sync of the same security land on **one** `asset_id`. That requires minting a global row on a resolution miss, and global rows have no owner.
+
+**Decision — Security-authored, carried VERBATIM. The bracketed date is the only edit.**
+
+> **V1 ships the global `pfin.asset` registry with no repair path, as a ratified posture decision (F/CTO, 2026-08-21).** Measured at `52d7e5a`: `020` grants `service_role` `select, insert` on `pfin.asset` and no `UPDATE`/`DELETE`; `016`'s RLS scopes `authenticated`'s `UPDATE`/`DELETE` to owned rows, and a global row (`users_id IS NULL`) is owned by nobody. No shipped code path can therefore correct or remove a global asset row once written. `resolveSecurityId`'s `on conflict … do nothing` prevents overwrite of an existing row; it does not prevent first-write claiming of an unclaimed symbol or CUSIP key.
+>
+> **The V1 controls this posture rests on are C1 and C2 from the SELF-325 Sec joint review:** the browser boundary supplies no mint content (`/api/asset/resolve` forwards `name: null`), and the route is rate-limited per user. **Weakening, descoping or refactoring away either control reopens this decision** — it does not carry forward on its own.
+>
+> **Deferred to V2:** a repair path for the global registry. Consult order is fixed: Architect proposal → Security joint-review → F/CTO ratify. **A `service_role` `UPDATE` grant on `pfin.asset` is one candidate mechanism and is not pre-approved** — it is a posture expansion in its own right and was explicitly not accepted at this ruling.
+
+**Verification of the quoted claims, because a posture statement that cites measurements should have them re-measured before it is carved into a decision record.** All four hold at the merged tree: `020` grants `select, insert` and there is **no** `UPDATE`/`DELETE` grant to `service_role` on `pfin.asset` anywhere in the migration set · `016`'s `asset_update` and `asset_delete` are both `using (users_id = auth.uid())`, and `NULL = auth.uid()` is not true, so a global row is invisible to both · the resolver carries two `on conflict … do nothing` arbiters, symbol and cusip · and the C1 parenthetical is exact rather than approximate — `+server.ts` hard-codes `name: null` **at the forward**, which is where the stripping happens; the request schema still *accepts* a name, and the route discards it.
+
+⚠ **That last check is the one worth naming as a method.** The sentence has a general half — *the browser boundary supplies no mint content* — and a specific half in parentheses naming the mechanism. **They can go stale independently:** had the control been satisfied at the schema instead of the forward, the general claim would have stayed true while the parenthetical became false, and a verbatim quote would have carried a false mechanism inside a true statement. **Quote a mechanism only after re-reading the mechanism.**
+
+**Consequences.**
+
+- **The two controls are load-bearing, not incidental hardening.** They are the reason the posture is acceptable rather than merely current. ⚠ **Any weakening, descoping or refactor of `/api/asset/resolve`'s boundary handling or its rate limiter reopens this decision and is a Sec joint-review trigger** — carried in the `spawn-sec-joint-review` trigger list, which fires the review, while this ADR is what makes waving it through visibly wrong. **A trigger with no recorded rationale gets discharged as boilerplate by whoever meets it in eighteen months.**
+- **Namespace pollution, not tenant isolation, is the residual threat.** A global row has no tenant, so there is no cross-tenant binding to get wrong — which is the strongest security property of the worker-mediated shape and the reason its D1 clause (c) is vacuous by construction rather than skipped. What remains is junk, typo'd or hostile keys entering an all-tenants-readable registry that nothing can clean.
+- ⚠ **The exposure widened after the controls were specified, and the record should say so.** The mint path was originally reachable only server-to-server through the shared-secret relay. It is now driven from the browser by any authenticated user, so the absent rate-limit control moved from *"our code could do this"* to *"any logged-in account can, at whatever rate it likes."* **The mechanism did not change; its reachability did** — which is why C2 exists at all.
+- **Personal assets never reach this surface.** The resolve boundary admits only the feed-priceable asset types; the four personal-asset types and `currency` are rejected with routing messages, and the purchase RPC mints those as **caller-owned** rows instead. A global row with an owner-only pricing source would be priceable by nobody — permanently zero-valued, holding a unique-symbol slot, unrepairable. **That fork is a correctness boundary, not a UX preference.**
+
+**Alternatives weighed.**
+
+- **(a) Exclude public tickers from the manual purchase path — REJECTED.** It removes the motivating case: an account no aggregator supports is precisely where a user must record purchases by hand.
+- **(b) Let users mint PER-USER rows for public tickers — REJECTED, DO NOT RE-PROPOSE.** The global symbol uniqueness index does not constrain per-user rows, so a per-user `AAPL` is legal and shadows the global one: holdings fork across two `asset_id`s, one manually priced and one feed priced, and NAV and allocation each double-partition one economic position. ⚠ **It is also self-inflicted rather than merely cross-tenant** — global-first resolution means the fork triggers the moment the user connects *any* institution holding that security, an action that looks entirely unrelated. Reversal would mean re-pointing `security_id` on an immutable append-only ledger.
+- **(c) Ship a repair path now — DEFERRED, not rejected.** It is a posture expansion in its own right, and the candidate mechanism named in the Decision is explicitly not pre-approved.
+
+**Cross-references.** The manual purchase path's two migrations and their batteries · the worker's resolution route and admission surface · [ADR-011](#adr-011) Decision 1 (privileged-context-write, whose clause (c) is vacuous here and clause (d) is discharged on the worker route, not on the INVOKER RPC) · [ADR-023](#adr-023) (the `[api]`-exposed schema) · [ADR-027](#adr-027) (the hybrid global/per-user registry this posture is about).
+
 ## ADR-059 — A derived map that carries no money is a SIBLING function, never a widened financial one; and the live body of a function is the catalog's, not the newest migration file naming it (terse pattern)
 
 **Date:** 2026-08-20 · **Status:** **Proposed** — authored with `086`; F/CTO ratifies at PR sign-off.

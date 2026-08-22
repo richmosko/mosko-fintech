@@ -9,6 +9,8 @@
 
 ## Postgres / RLS facts worth not re-deriving
 
+- **[D3 entries record ORIGINAL provenance](reference_decision3_entries_record_original_provenance.md)** — re-targets live in AMENDMENTS below the entry, which is never edited. #10/#13 now point at `posting_prototype`, not `user_taxonomy` (084).
+- **[Fence reachability is a property of the CALLER](reference_fence_reachability_is_a_property_of_the_caller.md)** — an upstream OWNER-SCOPED read collapses a downstream matched-tenant fence into a no-op. Say DORMANT + name the revival condition. ⚠ Grep the CLAIM; it had 4 sites, not 2.
 - **["No FK on this column" is not "no FK in the lineage"](reference_no_fk_on_column_is_not_no_fk_in_lineage.md)** — an FK-less snapshot is still fenced one hop upstream; sweep upstream of every FK-less mirror column when a target moves.
 - **[A reserved id range needs a MAXVALUE on the lower sequence](reference_reserved_id_range_needs_a_maxvalue.md)** — an offset alone is disjoint by DISTANCE; assert the construction from `pg_sequence`, never an overlap count.
 - **[`rollback` does NOT reset sequences](reference_rollback_does_not_reset_sequences.md)** — a new battery shifts every later battery's ids and can redden an unrelated file; ⚠ a RE-USED scratch DB hides the whole class. Rebuild before every full-suite claim.
@@ -16,6 +18,7 @@
 - **[Catalog-comment staleness needs the CATALOG](feedback_catalog_comment_staleness_needs_the_catalog.md)** — a later migration may have re-emitted it; grepping the source over-reports staleness. Two checks via one instrument = one check.
 - **[`set local` outside a transaction is a silent no-op](feedback_set_local_outside_transaction_is_a_noop.md)** — the RLS smoke then runs as superuser and every leg passes; a vacuous harness looks PERMISSIVE, not empty. Control leg first.
 - **[`user_settings` can never carry the aal2 clause](reference_user_settings_excluded_from_aal2_backstop.md)** — `025` names it a NON-NEGOTIABLE exclusion (policy recursion); wrong home for step-up-fenced tenant data.
+- **[manual_valuation OUTRANKS every feed in the price pick](reference_manual_valuation_outranks_feeds_in_price_pick.md)** — F4: an 087-style companion price on an ALREADY-HELD position restates every prior lot at cost. ⚠ **No `market_feed` writer exists in V1**; users cannot mint or price GLOBAL assets (OWD-E).
 - **[The TimeZone pin is a default, not a fence](reference_timezone_pin_is_a_default_not_a_fence.md)** — `061` pins the DB default; `PGTZ` moves a client's own session. Make timestamptz/date comparisons invariant BY MARGIN (>26h zone span).
 - **[pgTAP `isnt()` PASSES on NULL](reference_pgtap_isnt_passes_on_null.md)** — `IS DISTINCT FROM`, so a negative assertion over a subquery is fail-OPEN; `ok()` fails on NULL. Prove three states.
 - **[A stale worktree listing misreads the tree](reference_stale_worktree_listing_misreads_the_tree.md)** — `ls` answers about the ref you're parked at; use `git ls-tree origin/main`. Twice in one session; Sec's instance nearly became a false accusation.
@@ -32,12 +35,13 @@
 - **[A prose observation needs re-anchoring too](feedback_a_prose_observation_needs_reanchoring_too.md)** — I re-read every sha and md5 in-turn, then reported a wording finding measured on mid-edit bytes. Read the COMMITTED bytes; a mid-edit read is a draft note, not a finding.
 - **[A ref handed over is not yours to advance](feedback_a_ref_handed_over_is_not_yours_to_advance.md)** — after "ready at `<sha>`", unknown review state is BLOCKING; a hold in flight can't stop a push already moving. ⚠ Never force-push back to the reviewed sha.
 
-- **[`temp/` is per-worktree, not shared](feedback_temp_is_per_worktree_not_shared.md)** — invisible from a teammate's worktree; hand over an ABSOLUTE path + md5. ⚠ The session-close SWEEP inherits the blindness and reports clean: 29 files, 9 days old, measured at SELF-330.
+- **[`temp/` is per-worktree, not shared](feedback_temp_is_per_worktree_not_shared.md)** — invisible from a teammate's worktree; hand over an ABSOLUTE path + md5. ⚠ **Committed migrations already cite DELETED temp docs** — never point committed code at `temp/`. ⚠ The session-close SWEEP inherits the blindness and reports clean: 29 files, 9 days old, measured at SELF-330.
 
 - **[A consequence list inherits its author's instrument](feedback_consequence_list_inherits_its_authors_instrument.md)** — re-measure over the instruments the ADR did NOT use (the live catalog, not the tree); and record an obligation whose referent doesn't exist.
 
 - **[A self-authored label hardens into fact](feedback_self_authored_label_hardens_into_fact.md)** — I invented `C1` for symmetry and it reached a commit subject, which has NO supersession mechanism. Grep the dispatch, not your own earlier use.
 
+- **[A failed grep looks like a clean result](feedback_failed_grep_looks_like_a_clean_result.md)** — zsh eats a bare `--include=*.ts`; empty output reads as "no matches". Over-match + hand-filter. ⚠ Run the package script, not the bare tool (`svelte-check` w/o `sync` = false positives).
 - **[A "clean sweep" is a claim about your FILTER](feedback_clean_sweep_claim_is_a_claim_about_the_filter.md)** — over-match bare + `-i`, then hand-filter; zero hits is more suspicious than explained hits. Survivors hide in adjacent-reads-as-fixed positions.
 - **[A count over history is not a count over live definitions](feedback_count_over_history_vs_live_definitions.md)** — 6 textual kernel copies vs 3 live; a CI fence specced from the historical count goes RED on correct code. Case-insensitive grep, or `059` reads as empty.
 
@@ -51,6 +55,8 @@
 - **[Address teammates by NAME, not agent type](feedback_address_teammates_by_name_not_type.md)** — `frontend` not `frontend-engineer`; ⚠ `ListAgents` cannot see in-process teammates, so its silence is not absence.
 
 - **[Watcher, not fence, for by-construction properties](feedback_watcher_not_fence_for_by_construction_properties.md)** — a constraint over a guaranteed property can't fire and turns a future regression into an outage. Test it instead.
+- **[A bigint crosses a wire as a STRING](reference_bigint_crosses_a_wire_as_a_string.md)** — TS claims `number`, driver returns a string; both sides' unit tests pass because neither crosses the wire. ⚠ A silent failure branch hides the outage.
+- **[Layers green, seam absent](feedback_layers_green_seam_absent.md)** — a stub-tested suite proves each piece works ALONE. Grep call sites of every new module; walk it in a browser. ⚠ A defensive default hides the gap.
 - **[Spot-check the contract at its consumer](feedback_spot_check_the_contract_at_its_consumer.md)** — authoring ≠ watching it land; a predicate sound in isolation can be unsound as a stand-in for a broader question. Test where implementations DIVERGE.
 - **[A structural fence must cover the same class](feedback_structural_fence_must_cover_the_same_class.md)** — swapping a deny-list for a structural property removes a watcher unless the sets match. Two classes → two legs.
 - **[Diff filters strip `--` comment lines](feedback_diff_filter_strips_comment_lines.md)** — `grep '^[+-][^+-]'` blinds you to comment changes; use `--numstat`. Bit me twice in one session.

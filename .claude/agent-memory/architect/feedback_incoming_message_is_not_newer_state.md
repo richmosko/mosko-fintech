@@ -75,3 +75,35 @@ the deliverable landing, and the ping crossed the delivery message in flight.
   what happened. Name a hypothesis as a hypothesis and let the measurement pick.
 
 Related: [[address-teammates-by-name-not-type]] · [[spot-check-the-contract-at-its-consumer]]
+
+
+---
+
+**⚠ THE SAME TRUTH ABOUT SHAS: A SHA IN A MESSAGE IS A SNAPSHOT OF WHEN IT WAS TYPED, AND IT
+AGES. LEAD WITH THE TIP.**
+
+Measured 2026-08-21 (SELF-325) — **three round trips in one day, two different teammates,
+both directions:**
+
+- Frontend verified against a sha I had cited, concluded their fix had landed, and it had
+  not — my assembly had missed their commit entirely.
+- QA verified against a sha I had cited, found a superseded battery shape there, and sent a
+  STOP — but I had already reconciled it two commits later.
+
+**Neither was careless. Both were doing the right thing — verifying rather than trusting.
+The instrument was just aimed one commit behind.**
+
+**"Anchor a claim to a sha, never to a description of contents" is necessary and NOT
+sufficient on a fast branch. Both halves:**
+- **Anchor to a sha** — so the claim is checkable at all.
+- ⚠ **AND lead with the CURRENT TIP, first line, in every state claim** — so the reader's
+  check is `git rev-parse HEAD` against one visible value instead of archaeology across a
+  thread to work out which of several shas was latest.
+
+**When VERIFYING someone else's state claim: read the branch tip FIRST, then inspect that.**
+If the tip differs from the sha they named, their claim may still be true — it just describes
+an earlier commit, and the real question becomes *what landed since.*
+
+⚠ **These crossings are not a discipline failure; they are the predictable cost of a fast
+branch plus messages naming intermediate shas. The fix is cheap and belongs to the SENDER,
+not the checker.**
