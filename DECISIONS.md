@@ -41,6 +41,56 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-063 — Four process protocols ratified at the V1.3 cycle: pre-flight recalibration, seam inventory, default-and-notify, and walk-before-Sec (terse pattern)
+
+**Date:** 2026-08-22 · **Status:** **Accepted** — F/CTO-ratified across the V1.3 pre-flight batch-ratify sitting, 2026-08-22. · **Phase:** 6 Build Loop · **Surface:** the operating model — how a milestone's issues are validated before dispatch, how cross-issue design questions are surfaced, who may rule what, and where the live walk sits relative to Sec.
+
+**Provenance, recorded unflattened** because these four did not arrive with equal authority: Decisions 1–2 are **F/CTO rulings** made at the sitting. Decision 3 is the protocol **under which** several of that sitting's rulings were themselves made, F/CTO-ratified as a standing class. Decision 4 **records an existing standing gate** (`WORKFLOW.md`, the live walk-through gate) as a ratified ordering rather than establishing it — ⚠ **and this cycle produced no evidence for it**, because the cycle shipped documents and ADRs, not a user-facing feature PR. Its warrant is the SELF-325 purchase-path arc, where it was written.
+
+### Context
+
+[BACKLOG](BACKLOG.md) §7.19 records the generator: the PRD and ARCH were authored before the double-entry GL landed, so issue ACs drafted faithfully against doc text inherited schema premises the GL era had invalidated. The symptom was **repeated mid-arc discovery** — four schema-impossible drafted-AC instances, plus a five-issue signature family caught in a reconciliation pass — each found while building, each costing a dispatch.
+
+The V1.3 milestone was drafted at Wave 5, before the GL rework in its entirety: before the ratified five-class enum, before the split, before `element`, before the account-level Sub-Cat drop, before `is_active`'s retirement, before the first Lock-14 table. Rather than discover that again one issue at a time, the cycle ran the validation **before any build dispatch**.
+
+**Measured at that pass, and this figure is what makes the case rather than the argument:** of the 14 issues in the milestone, **zero were buildable as written** — nine required amended wording against the shipped schema, five required an F/CTO scope ruling. Not one issue survived the substrate it was written against.
+
+### Decision
+
+**1. A PRE-FLIGHT RECALIBRATION PASS runs before the first build dispatch of a milestone, not during it.** Every AC that names a schema identifier is verified against the tree at a **stated baseline sha**, and each issue is classified: buildable as written · amendable (schema wording corrected) · or requiring a scope ruling. This is [BACKLOG](BACKLOG.md) §7.19 AC 3 promoted from a trigger-point minimum to the cycle's opening move.
+
+⚠ **The rule that makes the pass work rather than merely run: an AC whose every identifier is falsified is a signal to WIDEN the search, not to conclude the work is unbuilt.** This cycle, one issue's entire deliverable was already on `main` under a different migration's name, and its ACs read as untouched precisely because every identifier in them had been retired. Query the state, not the AC's own vocabulary.
+
+**2. A SEAM INVENTORY runs as its own step, and its output is a batch of options memos rather than per-issue firefighting.** A seam is a question no single issue owns because it is answered the same way by several — a shared predicate, a rendering posture, a grain, a period grammar. This cycle inventoried five and every one was ruled at the sitting.
+
+⚠ **The load-bearing half is the EXTRACTION DISCIPLINE, not the inventory:** a seam's answer is stated **once**, and consuming issues **cite** it. Four restatements of one predicate drift independently and the drift is invisible, because each copy is locally plausible. The same discipline decided this cycle's read-substrate ruling — one extracted reader housing every shared rule, composed by three surfaces.
+
+**3. DEFAULT-AND-NOTIFY governs MIDDLE-WEIGHT rulings.** Not every decision warrants an F/CTO sitting, and not every decision may be taken silently by whoever noticed it.
+
+- **The class:** a decision that is (a) downstream of a ruling F/CTO already made, (b) reversible without a data migration, and (c) resolvable from measurement rather than product judgement. A decision failing any of the three is **not** in the class and routes to F/CTO.
+- **The obligation:** the ruling is **recorded with its reasoning at the moment it is made**, in the cycle's running log, **and notified** — never merely acted on. A default taken quietly is not this protocol; it is an unrecorded decision wearing its name.
+- **The reversal window:** open until **the amendment batch merges**. That is a **specific event, not a duration** — which is what makes the window checkable rather than a courtesy. For this cycle it closed at the ADR-062 merge.
+- **Provenance must never be flattened.** An F/CTO ruling and a default-and-notify ruling are two different strengths of authority, and any artifact carrying both records which is which. Writing *"F/CTO ratified"* over a default-and-notify item is a ratify against a description that overstates its own authority.
+
+⚠ **The proof that the window is real is a WITHDRAWAL, and it is recorded here because a protocol whose escape hatch is never used is indistinguishable from one that has none.** This cycle produced a default-and-notify ruling that a remediation AC must ship in a specific PR ahead of other work. Its premise — that a ratified ship-blocker was live and unmet on a merged surface — was **refuted by measurement** three items later: the surface's capability existed but no route reached it. **The ruling was withdrawn inside its own window**, the dependent sequencing returned to build-time discretion, and the withdrawn recommendation was **left visible in the record rather than deleted**, so whoever had acted on it could find out that it had changed.
+
+**4. THE LIVE WALK PRECEDES THE SEC JOINT-REVIEW SPAWN on any user-facing feature PR** — after combined-green, before Sec. Recorded here as a ratified ordering; the gate itself and its rationale live in [`WORKFLOW.md`](WORKFLOW.md) and are not restated. The ordering matters because a walk finding changes what Sec is reviewing: reviewing first and walking after spends a review on a shape that then moves.
+
+### Alternatives considered
+
+- **Per-issue AC validation at dispatch time**, the status quo the generator produced. **Rejected on this cycle's own measurement:** with zero of fourteen buildable, per-issue discovery would have paid the interrupt fourteen times, and the four seams that cut across issues would have been answered inconsistently by whichever issue met them first — which is the failure §7.19 booked in the first place.
+- **Routing every middle-weight decision to F/CTO.** Correct on authority and wrong on throughput: this cycle would have added a sitting item for each of six mechanical determinations, and the pacing guidance already on record warns that dense ratify gates degrade into rubber-stamping. Default-and-notify keeps the authority visible and the reversal cheap.
+- **Taking middle-weight decisions silently and reporting outcomes.** **Rejected** — it is the same act with the record removed, and the record is the entire difference. The withdrawal above would have been undetectable.
+
+### Consequences
+
+- The pre-flight pass produces a **landing-ready amendment set**, not a findings memo: replacement AC text per issue, each **self-carrying its baseline sha**, because a document header does not travel into the artifact each block lands in.
+- **Seam rulings land in issues other than the ones that generated them.** Two did this cycle. Each carries a one-line provenance pointer, or the receiving issue's builder meets a clause with no explanation and treats it as noise.
+- **Ledgers flat.** No catalogued §10 instance is added, reordered or renumbered; no layer-attribution moves; the catalogued list is linked, never restated, and no count appears in this ADR. [ADR-011](#adr-011) Decision 3 family unchanged — this ADR authors no schema. The SECURITY DEFINER allowlist is untouched.
+- ⚠ **The protocols are not self-enforcing.** Decision 1 has no trigger but the milestone-rotation boundary; Decision 3's notification obligation is discharged by a person, not a fence. Recorded plainly so a future reader does not mistake a written protocol for a mechanism — the same distinction this cycle drew about its own sequencing gates.
+
+**Cross-references.** [BACKLOG](BACKLOG.md) §7.19 (the generator, and Decision 1's origin) · [ADR-009](#adr-009) (the operating model these extend) · [ADR-017](#adr-017) (milestone rotation, the boundary Decision 1 attaches to) · [ADR-062](#adr-062) (the amendment-batch ADR whose merge closed this cycle's reversal window) · [`WORKFLOW.md`](WORKFLOW.md) (the live walk-through gate Decision 4 records).
+
 ## ADR-062 — `is_tax_payment` lives on the posting-prototype PAIR, fail-closed by absence of a DEFAULT — and a default-set change reaches provisioned users only by explicit backfill (terse pattern)
 
 **Date:** 2026-08-22 · **Phase:** 6 Build Loop · **Surface:** `pfin.posting_prototype` + `pfin.posting_prototype_default` (the `084` posting half), the V1.3 §2.3.4 discretionary-expenses filter, and `api/src/lib/server/queries/taxonomy.ts`'s cash-flow provisioning branch.
@@ -687,7 +737,7 @@ Decision 7's measurement paragraph reports the literal `'Equity'` across four mi
 
 ## ADR-057 — A default-taxonomy change is a data migration that must decide its REACH separately: first-access provisioning never delivers set growth (terse pattern)
 
-**Date:** 2026-08-17 · **Status:** **Proposed** — authored with the `077` seed delta; F/CTO ratifies at PR sign-off.
+**Date:** 2026-08-17 · **Status:** **Accepted** — the ratify condition was *"F/CTO ratifies at PR sign-off"*, and it was met when `077` merged to `main`. ⚠ **Status corrected 2026-08-22, and the cause is the point: the line was never updated at that merge**, so this ADR read as un-ratified for weeks while the migration it was authored with was live — and [ADR-062](#adr-062) had to cite its *rule* rather than its status to avoid inheriting a stale claim. **A ratify condition discharged by an event nobody edits afterwards is a status that goes stale silently.**
 **Phase:** 6 Build Loop · **Surface:** `supabase/migrations/077_taxonomy_default_cash_balances.sql` — the first change to `pfin.taxonomy_default`'s content since `041` seeded it. **Source:** BACKLOG §7.20 item 1 AC-3, which assigns the reach question to Architect; team-lead ruled the resulting pattern warranted its own entry rather than living only in `077`'s header.
 
 **Decision.** Every change to the `pfin.taxonomy_default` content set is a **data migration**, and it MUST make an **explicit reach decision for already-provisioned users, stated in the migration header**. The default vehicle is a **targeted backfill INSERT into `pfin.user_taxonomy`, in the same migration**, whose user set is derived from the table itself:
