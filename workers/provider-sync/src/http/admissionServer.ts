@@ -338,10 +338,7 @@ function toAdmissionAccounts(accounts: ProviderAccountRef[]): AdmissionAccountRe
  *   POST /admission/link-token       → { link_token, expiration } (leg-1, shared-secret authed)
  *   POST /admission/exchange         → { sourceId, accounts }     (leg-2, shared-secret authed)
  *   POST /admission/simplefin/claim  → { sourceId, accounts }     (leg-S, shared-secret authed)
- *   POST /asset/resolve              → { assetId }                (SELF-325, shared-secret authed;
- *                                                                    assetId is a bigint asset_id,
- *                                                                    serialized as a decimal STRING —
- *                                                                    see assetResolve.ts's AssetResolveResult)
+ *   POST /asset/resolve              → { assetId }                (SELF-325, shared-secret authed)
  * Every non-health route requires the constant-time shared-secret header; absent/mismatch → 401.
  */
 /** N-1 (Sec SELF-212): explicit inbound timeouts — do NOT rely on Node defaults for a

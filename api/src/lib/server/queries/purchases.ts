@@ -170,11 +170,31 @@ export async function createManualPurchase(
 		return { ok: false, status: 502, message: 'Could not record the purchase. Please try again.' };
 	}
 
+	// ⚠ SELF-325 round 10 (Architect, folded into the batch): trans_id/security_id are bigint
+	// (int8) — the SAME wire-serialization class that broke /asset/resolve (see assetResolve.ts's
+	// AssetResolveResult comment). They pass through UNCOERCED below while `price` (numeric)
+	// carries a defensive Number(). MEASURED, not reasoned: a local row_to_json probe against a
+	// composite matching 088's exact OUT-param shape (bigint trans_id/security_id, boolean priced,
+	// numeric price) — the same mechanism PostgREST uses to serialize an RPC's single-row
+	// composite response — returned ALL FOUR fields as bare, unquoted JSON numbers/booleans, e.g.
+	// `{"trans_id":123456789,"security_id":42,"priced":true,"price":150.25}`. No coercion was
+	// observed to be needed for trans_id/security_id in that measurement.
+	//
+	// THIS CONFLICTS with the standing caution documented elsewhere in this codebase (nav-series.ts
+	// / nav-delta-panel.ts / nav-reference-dates.ts: "PostgREST's numeric serialization is not
+	// guaranteed to be a JSON number for every value") — that claim is NOT re-derived here, and
+	// this measurement does not settle it either way (different query shape, and neither
+	// measurement pins down whether the discrepancy is environment/version-specific or was itself
+	// unverified folklore). Recorded rather than silently resolved: trans_id/security_id are left
+	// UNCOERCED (matching what was actually measured for THIS composite), and `price`'s existing
+	// Number() stays as cheap, harmless insurance either way — changing it was out of scope for
+	// this batch and not what the measurement task asked for.
 	return {
 		ok: true,
 		transId: row.trans_id,
 		securityId: row.security_id,
 		priced: row.priced,
-		price: Number(row.price) // numeric(20,4) may arrive as a string over PostgREST
+		price: Number(row.price) // numeric(20,4); Number() is a no-op if already a number, a safe
+		// coercion if a string — see the measurement note above for why this stays defensive.
 	};
 }

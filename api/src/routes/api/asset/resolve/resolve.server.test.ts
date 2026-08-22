@@ -4,6 +4,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { POST } from './+server';
 import { __resetConfigForTests } from '$lib/server/asset/admissionClient';
+import { __resetRateLimitForTests } from '$lib/server/auth/rateLimit';
 
 declare const process: { env: Record<string, string | undefined> };
 
@@ -31,6 +32,7 @@ beforeEach(() => {
 	process.env.WORKER_ADMISSION_SHARED_SECRET = 'test-secret';
 	process.env.WORKER_ADMISSION_URL = 'http://worker.test:8081';
 	__resetConfigForTests();
+	__resetRateLimitForTests(); // SELF-325 Sec C2 — isolate the sliding window between cases.
 });
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -67,12 +69,10 @@ describe('POST /api/asset/resolve', () => {
 	});
 
 	it('forwards the session ownerUserId + validated body (currency=USD, never a body value) to the worker', async () => {
-		// assetId is a decimal STRING on the wire (bigint asset_id — QA freeze-break fix); a
-		// number-literal mock here is exactly the defect class that shipped.
-		const fetchMock = stubWorker({ assetId: '501' });
+		const fetchMock = stubWorker({ assetId: 501 });
 		const res = await POST(makeEvent(VALID_BODY, { id: SESSION_UID }));
 		expect(res.status).toBe(200);
-		expect(await res.json()).toEqual({ assetId: '501' });
+		expect(await res.json()).toEqual({ assetId: 501 });
 
 		const [, init] = fetchMock.mock.calls[0] as unknown as [string, { body: string }];
 		const sent = JSON.parse(init.body);
@@ -93,5 +93,70 @@ describe('POST /api/asset/resolve', () => {
 		const res = await POST(makeEvent(VALID_BODY, { id: SESSION_UID }));
 		expect(res.status).toBe(500);
 		expect(await res.json()).toEqual({ error: 'resolve_failed' });
+	});
+
+	// ── Sec C1 (SELF-325 round 10, joint review) ─────────────────────────────────────────────
+	// Catch criterion verbatim: "a server test asserting the worker payload carries name === null
+	// regardless of the request body." A free-text `name` reaching the worker on a resolve MISS
+	// becomes a GLOBAL row's permanent display name (no UPDATE grant exists — 020) — unrepairable
+	// first-write squatting. `name` must never be threaded from the client.
+	it('Sec C1 — the worker payload carries name === null regardless of what the request body sent', async () => {
+		const fetchMock = stubWorker({ assetId: 501 });
+		const res = await POST(makeEvent({ ...VALID_BODY, name: 'Totally Legit Company Inc' }, { id: SESSION_UID }));
+		expect(res.status).toBe(200);
+
+		const [, init] = fetchMock.mock.calls[0] as unknown as [string, { body: string }];
+		const sent = JSON.parse(init.body);
+		expect(sent.name).toBeNull();
+	});
+
+	it('Sec C1 — still null even when the body omits name entirely', async () => {
+		const fetchMock = stubWorker({ assetId: 501 });
+		const { name: _name, ...bodyWithoutName } = VALID_BODY;
+		void _name;
+		const res = await POST(makeEvent(bodyWithoutName, { id: SESSION_UID }));
+		expect(res.status).toBe(200);
+
+		const [, init] = fetchMock.mock.calls[0] as unknown as [string, { body: string }];
+		expect(JSON.parse(init.body).name).toBeNull();
+	});
+
+	// ── Sec C2 (SELF-325 round 10, joint review) ─────────────────────────────────────────────
+	// Catch criterion verbatim: "N resolves per user per window → 429, with a golden test
+	// asserting the 429." RESOLVE_RULE in +server.ts is { max: 30, windowMs: 5 * 60 * 1000 }.
+	describe('Sec C2 — rate limit (30 / 5min / user.id)', () => {
+		it('the 31st resolve within the window 429s; the prior 30 succeed', async () => {
+			stubWorker({ assetId: 501 });
+			for (let i = 0; i < 30; i++) {
+				const res = await POST(makeEvent(VALID_BODY, { id: SESSION_UID }));
+				expect(res.status).toBe(200);
+			}
+			const limited = await POST(makeEvent(VALID_BODY, { id: SESSION_UID }));
+			expect(limited.status).toBe(429);
+			expect(await limited.json()).toEqual({ error: 'rate_limited' });
+			expect(limited.headers.get('retry-after')).not.toBeNull();
+		});
+
+		it('the worker is never called on the limited (31st) request', async () => {
+			const fetchMock = stubWorker({ assetId: 501 });
+			for (let i = 0; i < 30; i++) await POST(makeEvent(VALID_BODY, { id: SESSION_UID }));
+			fetchMock.mockClear();
+			await POST(makeEvent(VALID_BODY, { id: SESSION_UID }));
+			expect(fetchMock).not.toHaveBeenCalled();
+		});
+
+		it('the window is scoped per-user — a different user.id is unaffected by another user hitting the cap', async () => {
+			stubWorker({ assetId: 501 });
+			for (let i = 0; i < 30; i++) await POST(makeEvent(VALID_BODY, { id: SESSION_UID }));
+			const otherUser = await POST(makeEvent(VALID_BODY, { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' }));
+			expect(otherUser.status).toBe(200);
+		});
+
+		it('rate-limiting runs BEFORE body validation — a limited caller never reaches the Zod boundary', async () => {
+			for (let i = 0; i < 30; i++) await POST(makeEvent(VALID_BODY, { id: SESSION_UID }));
+			// A body that would otherwise 400 (extra field) — still 429, not 400, once limited.
+			const res = await POST(makeEvent({ ...VALID_BODY, extra: 1 }, { id: SESSION_UID }));
+			expect(res.status).toBe(429);
+		});
 	});
 });

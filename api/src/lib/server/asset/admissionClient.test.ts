@@ -97,15 +97,12 @@ describe('mapUpstreamStatus', () => {
 
 // ── Transport: header, body, mapping, redaction ────────────────────────────────────────────
 describe('resolveAsset transport', () => {
-	it('POSTs the shared-secret header + session ownerUserId to the resolve path, forwards assetId (a decimal STRING — the real worker wire format, QA freeze-break fix)', async () => {
-		// ⚠ assetId is '501', a STRING — never a number literal. The worker serializes a bigint
-		// asset_id as a decimal string (assetResolve.ts); a number-literal mock here is exactly
-		// the defect class that shipped: green against a shape the real worker never produces.
-		const fetchMock = vi.fn(async () => jsonResponse(200, { assetId: '501' }));
+	it('POSTs the shared-secret header + session ownerUserId to the resolve path, forwards assetId', async () => {
+		const fetchMock = vi.fn(async () => jsonResponse(200, { assetId: 501 }));
 		vi.stubGlobal('fetch', fetchMock);
 
 		const out = await resolveAsset(SESSION_UID, VALID_BODY);
-		expect(out).toEqual({ ok: true, data: { assetId: '501' } });
+		expect(out).toEqual({ ok: true, data: { assetId: 501 } });
 
 		const [url, init] = fetchMock.mock.calls[0] as unknown as [
 			string,
@@ -150,16 +147,21 @@ describe('resolveAsset transport', () => {
 		expect(await resolveAsset(SESSION_UID, VALID_BODY)).toEqual({ ok: false, status: 502 });
 	});
 
-	it('THE SHIPPED BUG, AS A REGRESSION GUARD — a bare-number assetId (the OLD, wrong wire shape) → 502, not accepted', async () => {
-		// This is what the worker's response looked like from the browser's perspective if
-		// something ever re-introduced a raw number on the wire (or if a stray `Number(assetId)`
-		// crept back into the worker's response-building path): the schema must REJECT it, not
-		// silently coerce it. Accepting it here is exactly how the freeze-break bug shipped —
-		// every real call 502'd because the schema rejected the worker's actual (string) output,
-		// which is the mirror image of this: if the schema ever goes back to accepting numbers
-		// instead of requiring strings, this is the test that catches the shape flipping back.
-		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(200, { assetId: 501 })));
+	// SELF-325 round 10 (Architect + Sec, independently flagged): this branch previously logged
+	// NOTHING — a 502 with no trace at all was how the freeze-break bug stayed invisible (every
+	// real resolve call hit exactly this path, silently). C6-5 still applies: route + a coarse
+	// reason only, never the body (which could carry a malformed-but-real asset identity).
+	it('a schema-validation failure on a 200 response now LOGS (route + coarse reason, never the body)', async () => {
+		const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(200, { assetId: '1683' }))); // wrong shape: quoted string
 		expect(await resolveAsset(SESSION_UID, VALID_BODY)).toEqual({ ok: false, status: 502 });
+
+		expect(errSpy).toHaveBeenCalled();
+		const logged = errSpy.mock.calls.flat().join(' ');
+		expect(logged).toContain('/asset/resolve');
+		expect(logged).toContain('failed schema validation');
+		// C6-5: the malformed body's actual content never appears in the log line.
+		expect(logged).not.toContain('1683');
 	});
 
 	it('fails loud when the shared secret is absent (misconfig, not a silent bypass)', async () => {

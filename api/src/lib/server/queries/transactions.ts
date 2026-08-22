@@ -401,23 +401,35 @@ export type HeldSecurity = {
 	name: string | null;
 	quantity: number;
 	/**
-	 * SELF-325 P-b (F/CTO-ratified, Architect catch criterion): TRUE iff an eod_price row exists
-	 * for this asset at the maximum price_date <= `asOf` with price > 0. This is the EXACT SAME
-	 * predicate `pfin.fn_create_manual_purchase` (088) uses for its write-time `priced` composite
-	 * field — reused verbatim, not re-derived, so a purchase's confirmation and its later
-	 * account-detail rendering can never disagree about the same holding. It carries NO
-	 * source-rank CASE (unlike the D-FIRST pick inlined in 019/049/050/056/059/076/078), so it
-	 * cannot drift from 078 — an eighth copy of that CASE is the one drift nobody would be
-	 * watching.
+	 * SELF-325 P-b (F/CTO-ratified, Architect catch criterion): TRUE iff ANY eod_price row for
+	 * this asset AT the maximum price_date <= `asOf` has price > 0 — a `bool_or` over every row
+	 * sharing that max date, per asset. This MATCHES (not "is verbatim with" — see the ⚠ below)
+	 * `pfin.fn_create_manual_purchase`'s (088) write-time `priced` composite field:
+	 * `coalesce(bool_or(e.price > 0), false)` over all rows at the max `price_date`. Aligning the
+	 * two means a purchase's confirmation and its later account-detail rendering can never
+	 * disagree about the same holding. It carries NO source-rank CASE (unlike the D-FIRST pick
+	 * inlined in 019/049/050/056/059/076/078), so it cannot drift from 078 — an eighth copy of
+	 * that CASE is the one drift nobody would be watching.
+	 *
+	 * ⚠ CORRECTED (Sec C3, SELF-325 round 10): an earlier version of this predicate — and this
+	 * comment — claimed 088's SQL was reused "verbatim." That was never achievable (SQL and
+	 * TypeScript can only be reimplemented in step, not shared) and the claim went unchecked: the
+	 * TS took the FIRST row per asset (asset_id asc, price_date desc) with NO tiebreak among rows
+	 * sharing the max date, which is not `bool_or` — it's NONDETERMINISTIC at a same-date tie
+	 * (whichever row the planner returns first), so the SAME holding could report differently
+	 * between two page loads. Fixed to actually compute `bool_or` per asset — see
+	 * `loadPricedFlags`'s reduction below.
 	 *
 	 * ⚠ AN INDICATOR, NOT A VALUATION PRIMITIVE. Nothing may compute money from this flag — the
 	 * rendered value still comes from the real valuation kernel (049/078/etc). It only says "this
 	 * holding has no usable price."
 	 *
-	 * ⚠ NAMED IMPRECISION (stated, not silently inherited): when two sources tie at the maximum
-	 * price_date and disagree about being zero, this predicate reports on the DATE BAND rather
-	 * than on the pick's actual winner. Not reachable through 088's own writes; reachable in
-	 * general.
+	 * ⚠ NAMED IMPRECISION (stated, not silently inherited — do NOT "fix" by inverting to
+	 * `bool_and`, which would just move the disagreement to the opposite holding): when two
+	 * sources tie at the maximum price_date and disagree about being zero, `bool_or` reports
+	 * PRICED even if 078's actual pick would select the zero row. This predicate reports on the
+	 * DATE BAND, not the pick's winner — matching 088 beats being locally "safer." Not reachable
+	 * through 088's own writes; reachable in general.
 	 *
 	 * Fail-CLOSED on a read error: defaults to `false` (unpriced) rather than `true` — a read
 	 * failure must never present as "this holding is fine."
@@ -426,11 +438,14 @@ export type HeldSecurity = {
 };
 
 /**
- * Per-asset "has a usable current price" flag, keyed by asset_id — SELF-325 P-b. One round trip:
- * fetch every eod_price row <= `asOf` for the given assets, ordered so the FIRST row seen per
- * asset_id (asset_id asc, price_date desc) is that asset's max-price_date row; `priced` is
- * `price > 0` on that row. An asset_id absent from the result (no eod_price row at all <= asOf)
- * is absent from the returned Map — callers default such an asset to `priced: false`.
+ * Per-asset "has a usable current price" flag, keyed by asset_id — SELF-325 P-b, `bool_or`
+ * semantics matching 088 (see HeldSecurity.priced's own comment for the corrected claim). One
+ * round trip: fetch every eod_price row <= `asOf` for the given assets, ordered
+ * (asset_id asc, price_date desc) so all rows for one asset arrive together with the max-date
+ * rows first; for EACH asset, OR `price > 0` across every row sharing that asset's own maximum
+ * price_date (never across an older date — those are ignored once a newer date has been seen for
+ * that asset). An asset_id absent from the result (no eod_price row at all <= asOf) is absent
+ * from the returned Map — callers default such an asset to `priced: false`.
  *
  * RLS-scoped (eod_price_select: asset global-OR-owned, via the asset JOIN) — the SAME visibility
  * `loadHeldSecurities`'s asset label read already relies on, so no asset here is visible for a
@@ -456,10 +471,29 @@ async function loadPricedFlags(
 		console.error('[transactions] loadPricedFlags read failed (fail-closed to unpriced):', error.message);
 		return out;
 	}
+
+	// bool_or per asset, over every row sharing that asset's OWN maximum price_date — matching
+	// 088's `coalesce(bool_or(e.price > 0), false)`. Rows arrive ordered (asset_id asc,
+	// price_date desc), so within one asset's run the FIRST price_date seen is its maximum; every
+	// subsequent row at that SAME date participates in the OR, and any row at an OLDER date (a
+	// new, lower price_date for the same asset) is ignored — it lost the max-date selection, not
+	// just the tiebreak.
+	let currentAssetId: number | null = null;
+	let currentMaxDate: string | null = null;
+	let anyPositiveAtMaxDate = false;
+	const finalizeCurrent = (): void => {
+		if (currentAssetId !== null) out.set(currentAssetId, anyPositiveAtMaxDate);
+	};
 	for (const row of (data ?? []) as Array<{ asset_id: number; price_date: string; price: number | string }>) {
-		if (out.has(row.asset_id)) continue; // already captured this asset's max-price_date row
-		out.set(row.asset_id, Number(row.price) > 0);
+		if (row.asset_id !== currentAssetId) {
+			finalizeCurrent();
+			currentAssetId = row.asset_id;
+			currentMaxDate = row.price_date;
+			anyPositiveAtMaxDate = false;
+		}
+		if (row.price_date === currentMaxDate && Number(row.price) > 0) anyPositiveAtMaxDate = true;
 	}
+	finalizeCurrent();
 	return out;
 }
 

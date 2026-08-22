@@ -67,23 +67,32 @@ export interface AssetResolveInput {
 
 export interface AssetResolveResult {
 	/**
-	 * pfin.asset.asset_id, serialized as a DECIMAL STRING — not a number — or null for a
-	 * blank/blank sweep (unreachable via the route's Zod schema, which requires at least one of
-	 * symbol/cusip — preserved for parity with resolveSecurityId's own contract).
+	 * pfin.asset.asset_id, or null for a blank/blank sweep (unreachable via the route's Zod
+	 * schema, which requires at least one of symbol/cusip — preserved for parity with
+	 * resolveSecurityId's own contract).
 	 *
-	 * ⚠ WIRE-FORMAT BUG, FIXED (freeze-break, found by QA): `resolveSecurityId` is typed
-	 * `Promise<number | null>`, but `asset_id` is `bigint` (016) and postgres.js returns bigint
-	 * columns as JS STRINGS at runtime by default (TenantBoundClient sets no `bigint` type
-	 * override) — the TS type was aspirational, not a runtime guarantee. Every OTHER bigint this
-	 * admission server puts on the wire already follows the established convention this one
-	 * should have from the start: `sourceId: String(sourceId)` at both the exchange and
-	 * simplefin-claim legs in admissionServer.ts, mirrored by `linkedSourceIdField()` in
-	 * api/CLAUDE.md's schemas/account.ts ("bigint... serialized by the connect relay as a
-	 * decimal STRING (JSON-safe)"). `productionAssetResolveDeps` below now `String()`-coerces
-	 * explicitly, so this type finally states what was already true of the OTHER ids and was
-	 * never true of this one.
+	 * ⚠ WIRE-FORMAT BUG, FIXED (freeze-break, found by QA, coercion point ruled by Sec —
+	 * SELF-325 round 10): `resolveSecurityId` is typed `Promise<number | null>`, but `asset_id`
+	 * is `bigint` (016) and postgres.js — the driver TenantBoundClient uses, with NO `bigint`
+	 * type override — returns bigint columns as JS STRINGS at runtime. The type was aspirational,
+	 * not a runtime guarantee, and this route forwarded that (accidentally string-shaped) value
+	 * unchanged, so the JSON wire carried `"assetId":"1683"` (quoted) while the app's schema
+	 * required a bare number — every /asset/resolve call 502'd.
+	 *
+	 * FIX: `productionAssetResolveDeps` below explicitly coerces with `Number()`, so this route's
+	 * wire contract is a JSON NUMBER — Sec's ruled option (A): fix the PRODUCER, leave the app
+	 * schema (a strict `z.number()`, no coercion) untouched. This is DELIBERATELY NOT the
+	 * "bigint→decimal-string" convention `sourceId` uses elsewhere on this same server
+	 * (admissionServer.ts) — Sec's call, not an inconsistency: `asset_id` is a small sequence
+	 * value consumed directly as a numeric RPC arg downstream, and Sec ruled a permissive
+	 * string-then-coerce parse on an FK-shaped id an unacceptable trust boundary regardless of
+	 * "it's our own worker" (a standing repo-wide position, not specific to this route).
+	 *
+	 * ⚠ `Number()` on a bigint is LOSSY above `Number.MAX_SAFE_INTEGER` (2^53 − 1) — NOT
+	 * reachable at V1 scale (`pfin.asset.asset_id` is a small `generated always as identity`
+	 * sequence), but named here because this is an FK-shaped id, per Sec's requirement.
 	 */
-	assetId: string | null;
+	assetId: number | null;
 }
 
 /** The seam admissionServer.ts depends on — injectable so the route unit-tests with no live DB. */
@@ -110,11 +119,11 @@ export function productionAssetResolveDeps(config: WorkerConfig): AssetResolveDe
 					currency: input.currency
 				};
 				const assetId = await client.withServiceRole((tx) => resolveSecurityId(tx, asset));
-				// String() is the fix, not a formatting nicety — see AssetResolveResult's own
+				// Number() is the fix, not a formatting nicety — see AssetResolveResult's own
 				// comment. Do NOT trust resolveSecurityId's `number` type; postgres.js hands back a
-				// bigint column as a string at runtime, and this coerces to a definite one either
-				// way (idempotent if a future postgres.js config ever changed the default).
-				return { assetId: assetId === null ? null : String(assetId) };
+				// bigint column as a STRING at runtime, and this coerces to a definite JS number
+				// either way (idempotent if a future postgres.js config ever changed the default).
+				return { assetId: assetId === null ? null : Number(assetId) };
 			} finally {
 				await client.end();
 			}

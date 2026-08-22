@@ -145,6 +145,39 @@ describe('loadHeldSecurities — priced field (SELF-325 P-b)', () => {
 		expect(findBySecurityId(rows, 501)?.priced).toBe(false);
 	});
 
+	it('SELF-325 Sec C3 — a SAME-DATE tie (one positive, one zero row at the identical max price_date) reads priced:true deterministically, in EITHER row order — bool_or, not first-row', async () => {
+		// This is the exact case the pre-fix "first row per asset wins" logic could not answer
+		// deterministically: with no tiebreak among rows sharing the max price_date, the result
+		// depended on planner-decided row order. 088's own predicate (bool_or(price > 0) over ALL
+		// rows at the max date) always answers TRUE here — this test pins the TS read-side to
+		// that same answer, in both possible arrival orders, so neither order can silently regress
+		// back to "whichever row happened to be first."
+		const holdings = [{ account_id: ACCOUNT_ID, asset_id: 501, quantity: 10 }];
+		const assets = [{ asset_id: 501, symbol: 'AAPL', name: 'Apple Inc' }];
+
+		const { supabase: zeroFirst } = makeSupabase({
+			holdings,
+			assets,
+			priceRows: [
+				{ asset_id: 501, price_date: '2026-08-15', price: 0 },
+				{ asset_id: 501, price_date: '2026-08-15', price: 150.25 }
+			]
+		});
+		const rowsZeroFirst = await loadHeldSecurities(zeroFirst, ACCOUNT_ID, AS_OF);
+		expect(findBySecurityId(rowsZeroFirst, 501)?.priced).toBe(true);
+
+		const { supabase: positiveFirst } = makeSupabase({
+			holdings,
+			assets,
+			priceRows: [
+				{ asset_id: 501, price_date: '2026-08-15', price: 150.25 },
+				{ asset_id: 501, price_date: '2026-08-15', price: 0 }
+			]
+		});
+		const rowsPositiveFirst = await loadHeldSecurities(positiveFirst, ACCOUNT_ID, AS_OF);
+		expect(findBySecurityId(rowsPositiveFirst, 501)?.priced).toBe(true);
+	});
+
 	it('multiple held assets get independent priced flags', async () => {
 		const { supabase } = makeSupabase({
 			holdings: [

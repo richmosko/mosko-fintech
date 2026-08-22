@@ -62,23 +62,18 @@ export function __resetConfigForTests(): void {
 
 // ── Upstream (worker) response schema — server owns its own source of truth ─────────────
 //
-// ⚠ WIRE-FORMAT BUG, FIXED (QA freeze-break): `assetId` is a bigint pfin.asset.asset_id,
-// serialized by the worker as a DECIMAL STRING (assetResolve.ts's AssetResolveResult — matching
-// the SAME convention every other bigint id on this wire already follows: `sourceId` at the
-// plaid/simplefin admission legs, `linked_source_id` in schemas/account.ts's
-// linkedSourceIdField()). The ORIGINAL schema here was `z.number().int().positive().nullable()`,
-// which rejected the worker's own (correct) string wire value — every /asset/resolve call 502'd.
-// Validate the digit-string here; the caller (schemas/purchase.ts's securityIdField, already
-// `z.coerce.number()`) coerces to a number only where it's actually consumed as the bigint RPC
-// param, same as every other bigint id crossing this boundary.
+// ⚠ Sec-ruled shape (SELF-325 round 10, joint review): STRICT `z.number()`, no coercion. This
+// schema is deliberately NOT `z.coerce.number()` / `z.union([z.number(), z.string()])` — Sec
+// rejected permissive coercion on an FK-shaped id that flows into `p_security_id` downstream
+// (a standing repo-wide position: "it's our own worker" is exactly the trust argument that
+// exists against). The producer (assetResolve.ts's `productionAssetResolveDeps`) now
+// deliberately serializes `assetId` as a JSON number — see that module's own comment for the
+// freeze-break bug this schema was rejecting (a string) and the Number()-lossy-above-2^53 note.
 const workerResolveResponseSchema = z.object({
-	assetId: z
-		.string()
-		.regex(/^\d+$/, 'assetId must be a decimal digit-string')
-		.nullable()
+	assetId: z.number().int().positive().nullable()
 });
 
-export type ResolveData = { assetId: string | null };
+export type ResolveData = { assetId: number | null };
 
 /** Discriminated outcome; on failure carries ONLY a browser-facing HTTP status (no leak). */
 export type LegOutcome<T> = { ok: true; data: T } | { ok: false; status: number };
@@ -179,7 +174,18 @@ export async function resolveAsset(
 	if (!call.transportOk) return { ok: false, status: 502 }; // worker unreachable → bad gateway
 	if (call.status === 200) {
 		const parsed = workerResolveResponseSchema.safeParse(call.json);
-		if (!parsed.success) return { ok: false, status: 502 }; // malformed upstream
+		if (!parsed.success) {
+			// ⚠ Sec flag, SELF-325 round 10: this branch previously logged NOTHING — a 502 with no
+			// trace was how the freeze-break bug stayed invisible (every real call hit exactly
+			// this path). C6-5 redaction still applies: route + a coarse reason only, never the
+			// body (which could carry a malformed-but-real asset identity).
+			// ⚠ Sec flag, SELF-325 round 10: this branch previously logged NOTHING — a 502 with no
+			// trace was how the freeze-break bug stayed invisible (every real call hit exactly
+			// this path). C6-5 redaction still applies: route + a coarse reason only, never the
+			// body (which could carry a malformed-but-real asset identity).
+			console.error(`[asset-admission] ${RESOLVE_PATH} 200 response failed schema validation`);
+			return { ok: false, status: 502 }; // malformed upstream
+		}
 		return { ok: true, data: { assetId: parsed.data.assetId } };
 	}
 	return { ok: false, status: mapUpstreamStatus(call.status) };
