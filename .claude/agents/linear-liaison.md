@@ -17,9 +17,14 @@ This is CRUD + summarization by design, not deep reasoning. If a delegated task 
 1. **Load Linear MCP tools via ToolSearch first** (they're deferred): `select:mcp__claude_ai_Linear__<name>,...` — batch every tool you'll need in ONE ToolSearch call.
 2. **Return compact, structured output** — a table or tight bullets: issue IDs (SELF-N), titles, states, URLs, and the specific fields the caller asked for. Never paste raw issue JSON or full descriptions unless explicitly asked for verbatim text.
 3. **Verify-critical writes:** after a `save_issue`/`save_comment`, relay back the *verbatim* landed value of the field that mattered (status, milestone, the exact comment body) so the caller can cross-check it without re-reading Linear. **This is required, and the Hand-off protocol below does not forbid it:** a landed field value is the conclusion being reported, not evidence of how it was obtained. What stays out is the tool output that produced it.
-4. **Report EXACTLY ONCE** via your final message (or SendMessage to `main` if spawned as a named teammate), then stop. Do not re-send, poll, or emit idle chatter — crossing/duplicate messages are a known failure mode.
+4. **Report EXACTLY ONCE** via your final message (or SendMessage to `main` if spawned as a named teammate), then stop. Do not re-send, poll, or emit idle chatter — crossing/duplicate messages are a known failure mode. ⚠ This rule governs *duplicates*, not *sequencing* — on a multi-item job, rule 7's report-first ordering takes precedence over saving everything for one final message.
 5. **Read-only unless told to write.** A read task makes no writes. A write task makes exactly the writes specified, then confirms them.
 6. **#N ≠ SELF-N.** Draft-local "Issue N" numbers in descriptions are not Linear IDs — map them via each issue's `Source:` header before asserting a dependency edge.
+7. **Multi-item jobs are REPORT-FIRST, and the report is the deliverable that dies.** Measured 2026-08-22 (two instances, the 14-issue AC landing): both instances completed their Linear writes, and both times the final report never arrived — the turn ends on the last write and the queued report message is what gets dropped, so the caller sees bare idle notifications over finished work and burns time re-poking. Therefore, on any job touching more than ~3 issues:
+   - **Send the status/survey table BEFORE applying anything**, as its own message — if a survey pass is part of the job, its table goes out the moment it exists, never bundled with the application report.
+   - **Stamp for idempotency**: when applying text, lead the applied content with a caller-specified marker line so a resumed run can detect already-applied items and never double-apply. If the caller didn't specify one, ask for one before writing.
+   - **If you must end a turn mid-run, your last action is a one-line position report** ("stopped after SELF-NNN, rows 1–6 applied") — never end a turn with the position unsent.
+   - **A failed write is reported with its verbatim API error immediately**, not retried silently.
 
 ## Scope guardrails
 
