@@ -3,9 +3,11 @@
 --   the manual instrument-PURCHASE write path; V1-SHIP-BLOCK)
 -- =====================================================================
 -- BINDS TO MIGRATION: supabase/migrations/088_manual_purchase_path.sql
---   (8fa6526fe8b592ac89944bf5f21297454f0b82bf, feature/manual-purchase-path —
---   this SHA is a BRANCH LOCATOR, updated once at freeze per Architect
---   (a713c32); do not re-derive it per doc commit).
+--   (verified against bd5849414a4ff81717b4c00299fb8746b9ca8999,
+--   feature/manual-purchase-path — the branch state this battery was verified
+--   against, NOT this file's own commit: a file cannot name the commit that
+--   contains it, so this locator is necessarily one commit behind whatever
+--   lands it. FROZEN per Architect; this is the re-point itself).
 --   blob md5 b343304f3dde40eeab84a85e21c615bb — the MIGRATION-IDENTITY pin,
 --   FINAL per Architect (a713c32): 088's body last changed at e29b00f (the #10
 --   FK-target correction) and nothing outstanding touches it again (any P-b
