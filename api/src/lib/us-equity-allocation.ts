@@ -89,24 +89,24 @@ export function isZeroAllocSubCat(row: UsEquityRow): boolean {
 	return row.dollar_alloc === 0 && row.pct_target === 0;
 }
 
-/** AC5-equivalent render helper for the %-scale ratio columns. Sec F-1 (PR #520 review): takes the
- *  US Equity denominator (`allocation.total.dollar_alloc`) and re-applies `ratioColumnsUnset()`
- *  (REUSED from nonre-allocation.ts, not a second predicate) on TOP OF the `null` check — see this
- *  file's own header (F-2 note) for why that second layer is load-bearing here rather than
- *  redundant: the server's two split `=== 0` guards can leave a ratio column non-null at a
- *  degenerate or negative total, and this is the ONLY place that gets closed. `value` is already
- *  on the 0–100 scale. */
+/** AC5-equivalent render helper for the %-scale ratio columns. Takes the US Equity denominator
+ *  (`allocation.total.dollar_alloc`) and re-applies `ratioColumnsUnset()` (REUSED from
+ *  nonre-allocation.ts, not a second predicate) on TOP OF the `null` check — per ADR-061 Decision 6
+ *  (this file's own header), this second layer is now belt-and-suspenders, not load-bearing: the
+ *  server already nulls every ratio column whenever `ratioColumnsUnset(totalUsEquity)` would be
+ *  true. RETAINED as redundant defense against a stale or mis-built server payload, not removed.
+ *  `value` is already on the 0–100 scale. */
 export function fmtPct(value: number | null, totalUsEquity: number): string {
 	if (value === null || ratioColumnsUnset(totalUsEquity)) return '—';
 	return `${value.toFixed(2)}%`;
 }
 
-/** AC5-equivalent render helper for the $-scale columns ($Target / $ReAlloc) — same Sec F-1
- *  denominator gate as `fmtPct` above, otherwise a plain currency format (neutral, no
- *  sign-coloring — matches nonre-allocation.ts's own `fmtRatioUsd`, and the ACTUAL shipped §2.2.2
- *  treatment: AC5 there reversed the pre-SELF-238 spec to neutral-only, no pos/neg color anywhere;
- *  see UsEquityAllocationTable.svelte's own header for the flagged discrepancy against this
- *  ticket's brief). */
+/** AC5-equivalent render helper for the $-scale columns ($Target / $ReAlloc) — same redundant-
+ *  defense denominator gate as `fmtPct` above (ADR-061 Decision 6), otherwise a plain currency
+ *  format (neutral, no sign-coloring — matches nonre-allocation.ts's own `fmtRatioUsd`, and the
+ *  ACTUAL shipped §2.2.2 treatment: AC5 there reversed the pre-SELF-238 spec to neutral-only, no
+ *  pos/neg color anywhere; see UsEquityAllocationTable.svelte's own header for the flagged
+ *  discrepancy against this ticket's brief). */
 export function fmtUsd(value: number | null, totalUsEquity: number, usd: Intl.NumberFormat): string {
 	if (value === null || ratioColumnsUnset(totalUsEquity)) return '—';
 	return usd.format(value);
