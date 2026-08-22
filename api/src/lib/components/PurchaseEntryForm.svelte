@@ -214,25 +214,42 @@
 			}
 			// Runtime-validated (resolveResponseSchema above), not a blind cast — see that
 			// const's own comment for why the distinction is the entire bug this block fixes.
+			//
+			// ⚠ Architect residual (2026-08-21, same landing): a SCHEMA-PARSE FAILURE and an
+			// explicit `assetId: null` are NOT the same fact and must not share a branch.
+			// `null` means the endpoint RAN and found/created nothing — "the answer was no", a
+			// true claim the "couldn't find a match" copy is entitled to make. A parse failure
+			// means we couldn't READ the reply — the endpoint may well have resolved it; saying
+			// "couldn't find a match" there is a false, specific-sounding claim the user would
+			// act on (re-typing an already-correct symbol). `parsedBody.success` is checked
+			// EXPLICITLY here rather than folding a failed parse into `body = {}` (which would
+			// make `body.assetId === undefined` indistinguishable from a genuine `null`) — that
+			// collapse is exactly the residual Architect flagged; kept apart on purpose.
 			const parsedBody = resolveResponseSchema.safeParse(json ?? {});
-			const body = parsedBody.success ? parsedBody.data : {};
-			if (res.ok && typeof body.assetId === 'string') {
+			if (res.ok && parsedBody.success && typeof parsedBody.data.assetId === 'string') {
 				// asset_id is a bigint on the wire; converting to a JS number here (rather than
 				// threading a string through boundAssetId/the rest of the component) matches
 				// every other DB bigint id already handled as a plain number client-side in this
 				// codebase (trans_id, security_id elsewhere) — safe in practice for an
 				// auto-incrementing id, nowhere near Number.MAX_SAFE_INTEGER.
-				const assetId = Number(body.assetId);
+				const assetId = Number(parsedBody.data.assetId);
 				boundAssetId = assetId;
 				boundAssetLabel = resolveSymbol.trim() || resolveName.trim() || `Asset #${assetId}`;
 				showResolve = false;
-			} else if (res.ok) {
-				// 200 with assetId: null — the endpoint ran but found/created nothing to bind to.
+			} else if (res.ok && parsedBody.success && parsedBody.data.assetId === null) {
+				// The endpoint RAN and found/created nothing to bind to — "the answer was no".
 				resolveErrors = {
 					_form: ["Couldn't find or create a match for that symbol or CUSIP. Check the details and try again."]
 				};
+			} else if (res.ok) {
+				// Either the parse failed, or `assetId` was present-but-neither-string-nor-null
+				// (a shape this endpoint has never sent, but the schema doesn't rule out by
+				// construction) — we could not read the answer. Asserts nothing about whether a
+				// match exists, unlike the branch above.
+				resolveErrors = { _form: ["Couldn't resolve that security. Please try again."] };
 			} else {
-				resolveErrors = body.errors ?? { _form: ["Couldn't resolve that security. Please try again."] };
+				const errors = parsedBody.success ? parsedBody.data.errors : undefined;
+				resolveErrors = errors ?? { _form: ["Couldn't resolve that security. Please try again."] };
 			}
 		} catch {
 			resolveErrors = { _form: ["Couldn't reach the server. Please try again."] };

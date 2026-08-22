@@ -168,12 +168,12 @@ describe('PurchaseEntryForm — resolve step calls POST /api/asset/resolve (fetc
 		expect(getByText(/Quantity/)).toBeTruthy();
 	});
 
-	it('a 200 with assetId: null shows a visible error instead of silently binding nothing', async () => {
+	it('a 200 with assetId: null shows the "couldn\'t find a match" error — NOT the generic message a schema-parse failure gets (Architect residual, see below)', async () => {
 		(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
 			ok: true,
 			json: async () => ({ assetId: null })
 		});
-		const { getByRole, getByLabelText, findByText } = render(PurchaseEntryForm, {
+		const { getByRole, getByLabelText, findByText, queryByText } = render(PurchaseEntryForm, {
 			props: { selectableAssets: ASSETS }
 		});
 		await fireEvent.click(getByRole('button', { name: "Don't see it? Look up a ticker or CUSIP" }));
@@ -181,6 +181,7 @@ describe('PurchaseEntryForm — resolve step calls POST /api/asset/resolve (fetc
 		await fireEvent.change(getByRole('combobox', { name: 'Asset type' }), { target: { value: 'equity' } });
 		await fireEvent.click(getByRole('button', { name: 'Look up' }));
 		expect(await findByText(/Couldn't find or create a match/)).toBeTruthy();
+		expect(queryByText("Couldn't resolve that security. Please try again.")).toBeNull();
 	});
 
 	it('a non-ok response with a field error surfaces it on the asset_type field', async () => {
@@ -228,7 +229,15 @@ describe('PurchaseEntryForm — resolve step calls POST /api/asset/resolve (fetc
 	// response; the runtime-validated `resolveResponseSchema` now rejects the shape mismatch
 	// and degrades to the SAME "couldn't find a match" branch a `null` assetId takes, rather
 	// than crashing or accidentally binding a wrong-shaped value.
-	it('a wrong-shaped response (assetId as a number, not the real decimal-string wire format) fails safe, not silently', async () => {
+	// Architect residual (2026-08-21, same landing as the string-vs-number fix): a schema-parse
+	// FAILURE and an explicit `assetId: null` are different facts and must render different
+	// copy. `null` means the endpoint ran and genuinely found nothing ("the answer was no") —
+	// the "couldn't find a match" copy is entitled to say that. A parse failure means we
+	// couldn't READ the reply; the endpoint may well have resolved it, so claiming "couldn't
+	// find a match" there is false and specific-sounding in a way a user would act on
+	// (re-typing an already-correct symbol). These two tests assert they render DIFFERENT
+	// messages — collapsing them back into one branch is the exact regression to catch.
+	it('a wrong-shaped response (assetId as a number, not the real decimal-string wire format) shows the GENERIC "couldn\'t resolve" message — NOT "couldn\'t find a match" (that would assert a false fact: we don\'t know whether it resolved)', async () => {
 		(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
 			ok: true,
 			json: async () => ({ assetId: 77 })
@@ -240,11 +249,13 @@ describe('PurchaseEntryForm — resolve step calls POST /api/asset/resolve (fetc
 		await fireEvent.input(getByLabelText('Ticker symbol'), { target: { value: 'MSFT' } });
 		await fireEvent.change(getByRole('combobox', { name: 'Asset type' }), { target: { value: 'equity' } });
 		await fireEvent.click(getByRole('button', { name: 'Look up' }));
-		expect(await findByText(/Couldn't find or create a match/)).toBeTruthy();
+		expect(await findByText("Couldn't resolve that security. Please try again.")).toBeTruthy();
+		expect(queryByText(/Couldn't find or create a match/)).toBeNull();
 		// Does NOT fall through to the bound-asset confirmation — the purchase form must not
 		// appear off a shape-mismatched response.
 		expect(queryByText(/Quantity/)).toBeNull();
 	});
+
 });
 
 describe('PurchaseEntryForm — ticker nudge (F/CTO ruling: nudge, never block)', () => {
