@@ -68,20 +68,26 @@
 
 	Sec F-1 fix (PR #520 review, AMBER, resolved): the render-boundary gate on the degenerate US
 	Equity denominator (`allocation.total.dollar_alloc`) — REUSED `ratioColumnsUnset()` from
-	`$lib/nonre-allocation`, not a second predicate. Sec's finding: the landed server core
-	(`computeUsEquityAllocation`, SELF-240) nulls `pct_alloc` on `totalUsEquity === 0` and nulls
-	`pct_target`/`dollar_target`/`dollar_realloc` on a SEPARATE `sumTargets === 0` guard — the two
-	do not null together, and neither is `<= 0` (a negative total passes both `=== 0` checks
-	un-gated). That let the banner assert "No US Equity holdings" while a real %Target column
+	`$lib/nonre-allocation`, not a second predicate. Sec's finding at the time: the then-landed
+	server core (`computeUsEquityAllocation`, SELF-240) nulled `pct_alloc` on `totalUsEquity === 0`
+	and nulled `pct_target`/`dollar_target`/`dollar_realloc` on a SEPARATE `sumTargets === 0` guard
+	— the two did not null together, and neither was `<= 0` (a negative total passed both `=== 0`
+	checks un-gated). That let the banner assert "No US Equity holdings" while a real %Target column
 	rendered (zero-holdings-with-configured-targets — the ordinary onboarding state), or assert it
-	falsely outright at a negative total while every ratio column rendered real figures. `isDegenerate`
-	and every `fmtPct`/`fmtUsd` call below now gate on the SAME single predicate
-	(`ratioColumnsUnset(allocation.total.dollar_alloc)`, `<= 0` — a domain guard, not the server's
-	`=== 0` NaN-guard), applied uniformly to all four ratio columns on both the data rows and the
-	Total row, regardless of what the (possibly non-null) server payload says underneath. $Alloc
-	stays exempt (the real figure, never gated). See us-equity-allocation.ts's own header for why
-	this render-boundary gate is LOAD-BEARING here, not redundant belt-and-suspenders the way
-	nonre-allocation.ts's equivalent gate is.
+	falsely outright at a negative total while every ratio column rendered real figures.
+	`isDegenerate` and every `fmtPct`/`fmtUsd` call below gate on the SAME single predicate
+	(`ratioColumnsUnset(allocation.total.dollar_alloc)`, `<= 0`), applied uniformly to all four
+	ratio columns on both the data rows and the Total row. $Alloc stays exempt (the real figure,
+	never gated).
+
+	RENDER-GATE STATUS SUPERSEDED (SELF-332 / ADR-061, 2026-08-21) — the server core described
+	above no longer behaves that way. `computeUsEquityAllocation` now carries §2.2.2's own
+	two-gate-group contract (`valuePositive = totalUsEquity > 0`; `targetsPositive = totalUsEquity
+	> 0 && sumTargets > 0`), so this render gate is BELT-AND-SUSPENDERS, NOT LOAD-BEARING — see
+	ADR-061 Decision 6, quoted verbatim in `us-equity-allocation.ts`'s own header, and read that
+	header rather than this paragraph for the current classification. It is RETAINED as redundant
+	defense against a stale or mis-built server payload, not removed. The F-1 fix above is
+	unchanged and still shipped; only its LOAD-BEARING classification is retired.
 
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5).
 -->

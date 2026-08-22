@@ -28,8 +28,8 @@
 // > total), because the server's `null` already satisfies the `value === null` half of the same
 // > expression. The client gate is therefore a strict subset of the server contract and can never
 // > again be the only layer forcing `'—'`. It is RETAINED as redundant defense against a stale or
-// > mis-built server payload, not removed. Neither helper changes signature or behaviour: the only
-// > client-side edit this ADR requires is the header prose.
+// > mis-built server payload, not removed. Neither helper changes signature or behaviour: **the only
+// > client-side edit this ADR requires is the header prose.**
 //
 // See ADR-061 for the full aligned degenerate-state contract and the reachable-states table.
 
