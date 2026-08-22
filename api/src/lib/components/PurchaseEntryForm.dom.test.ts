@@ -135,16 +135,28 @@ describe('PurchaseEntryForm — resolve step calls POST /api/asset/resolve (fetc
 		vi.restoreAllMocks();
 	});
 
+	// ⚠ Builds a fetch-mock resolved value whose `.json()` parses REAL JSON TEXT, not a JS object
+	// literal — so `assetId`'s type comes from the JSON syntax (quoted vs. unquoted), the exact
+	// distinction a hand-typed `{ assetId: 77 }` erases. This is the second time this file's own
+	// mock shape agreed with wrong code on this exact field (Architect, 2026-08-21: "a mock
+	// updated in the same commit as the code it mocks cannot detect that commit being wrong").
+	// It does not replace a real wire-crossing test (Backend's assetResolveWireFormat.test.ts
+	// reads raw response bytes, one layer down from here) — it only removes "typed the wrong JS
+	// type into my own mock" as a way THIS test could silently agree with a wrong assumption
+	// again.
+	function mockJsonResponse(ok: boolean, jsonText: string, extra: Record<string, unknown> = {}) {
+		return { ok, json: async () => JSON.parse(jsonText), ...extra };
+	}
+
 	it('a successful resolve POSTs the identified fields as JSON and binds the returned assetId (wire format: a JSON NUMBER — Sec-mandated producer-side fix, 2026-08-21 round 2, corrected from an earlier string-wire-format attempt Sec rejected)', async () => {
-		(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
-			ok: true,
-			// asset_id is a bigint; the worker now serializes it as a real JSON number
-			// end-to-end (Sec's joint review required fixing the PRODUCER — a Number() coercion
-			// at the worker's response boundary — rather than a permissive client-side coercion
-			// of a string; verified against admissionClient.ts's ResolveData type directly, not
-			// from a description).
-			json: async () => ({ assetId: 77 })
-		});
+		// asset_id is a bigint; the worker now serializes it as a real JSON number end-to-end
+		// (Sec's joint review required fixing the PRODUCER — a Number() coercion at the worker's
+		// response boundary — rather than a permissive client-side coercion of a string;
+		// verified against admissionClient.ts's ResolveData type directly, not from a
+		// description). Unquoted in the JSON text below — parsed, not typed.
+		(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+			mockJsonResponse(true, '{"assetId": 77}')
+		);
 		const { getByRole, getByLabelText, getByText, findByText } = render(PurchaseEntryForm, {
 			props: { selectableAssets: ASSETS }
 		});
@@ -169,10 +181,9 @@ describe('PurchaseEntryForm — resolve step calls POST /api/asset/resolve (fetc
 	});
 
 	it('a 200 with assetId: null shows the "couldn\'t find a match" error — NOT the generic message a schema-parse failure gets (Architect residual, see below)', async () => {
-		(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
-			ok: true,
-			json: async () => ({ assetId: null })
-		});
+		(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+			mockJsonResponse(true, '{"assetId": null}')
+		);
 		const { getByRole, getByLabelText, findByText, queryByText } = render(PurchaseEntryForm, {
 			props: { selectableAssets: ASSETS }
 		});
@@ -238,10 +249,11 @@ describe('PurchaseEntryForm — resolve step calls POST /api/asset/resolve (fetc
 	// These two tests assert they render DIFFERENT messages — collapsing them back into one
 	// branch is the exact regression to catch.
 	it('a wrong-shaped response (assetId as a STRING, the wire shape a prior fix attempt sent — Sec rejected it in favor of a producer-side number fix) shows the GENERIC "couldn\'t resolve" message — NOT "couldn\'t find a match" (that would assert a false fact: we don\'t know whether it resolved)', async () => {
-		(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
-			ok: true,
-			json: async () => ({ assetId: '77' })
-		});
+		// Quoted in the JSON text below — parsed as a STRING because that's what real JSON
+		// syntax with quotes produces, not because a JS object literal was typed that way.
+		(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+			mockJsonResponse(true, '{"assetId": "77"}')
+		);
 		const { getByRole, getByLabelText, findByText, queryByText } = render(PurchaseEntryForm, {
 			props: { selectableAssets: ASSETS }
 		});
