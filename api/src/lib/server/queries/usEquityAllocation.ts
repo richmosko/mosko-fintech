@@ -78,10 +78,12 @@ export type UsEquityRow = {
 	sub_cat_id: number | null;
 	cat: 'Marketable Securities';
 	sub_cat: string;
-	/** null when Σ(twelve target_percents) = 0 (AC5 ii) — never NaN. A real 0 is a real target;
-	 *  null means "no target basis to renormalize against at all". */
+	/** null when `!targetsPositive` (ADR-061 Decision 2: totalUsEquity <= 0 OR Σ(twelve
+	 *  target_percents) <= 0) — never NaN. A real 0 is a real target; null means "no target basis
+	 *  to renormalize against at all". */
 	pct_target: number | null;
-	/** null when Total US Equity = 0 (AC5 i) — never NaN. */
+	/** null when `!valuePositive` (ADR-061 Decision 2: Total US Equity <= 0, i.e. zero OR
+	 *  negative) — never NaN. */
 	pct_alloc: number | null;
 	/** Cascades from pct_target: null iff pct_target is null (AC5 ii: "$Target ... render unset"). */
 	dollar_target: number | null;
@@ -125,10 +127,49 @@ export type UsEquityAllocation = {
 
 export type UsEquityAllocationResult = { data: UsEquityAllocation | null; ok: boolean };
 
+/** ADR-061 Decision 2: `pct_alloc`'s own gate. Mirrors nonReAllocation.ts's `ratioPercentOrNull`,
+ *  except the row-set here needs the already-computed `valuePositive` boolean threaded in rather
+ *  than re-deriving `totalUsEquity > 0` per row — the same `totalPositive` discipline that module
+ *  already establishes, so every call site in one `computeUsEquityAllocation` invocation reads the
+ *  identical boolean. `> 0` (not `!== 0`) is deliberate: a negative totalUsEquity must also null,
+ *  because a share of a negative basis is not a share (ADR-061 Decision 4). */
+function pctAllocOrNull(
+	marketValue: number,
+	totalUsEquity: number,
+	valuePositive: boolean
+): number | null {
+	return valuePositive ? (marketValue / totalUsEquity) * 100 : null;
+}
+
+/** ADR-061 Decision 2: the three target-derived columns share ONE gate, `targetsPositive`, so a
+ *  caller cannot null one and not the others — mirrors nonReAllocation.ts's `targetDerivedColumns`.
+ *  `targetsPositive` is passed in (the ADR-061 Decision 2 conjunction: `totalUsEquity > 0 &&
+ *  sumTargets > 0`), not re-derived, so every call site reads the same boolean. The single-
+ *  `targetRatio` derivation is preserved verbatim (ADR-061 Decision 2): one ratio feeds both
+ *  `pct_target` and `dollar_target` to avoid compounding float rounding. */
+function targetDerivedColumns(
+	targetPercent: number,
+	marketValue: number,
+	totalUsEquity: number,
+	sumTargets: number,
+	targetsPositive: boolean
+): { pct_target: number | null; dollar_target: number | null; dollar_realloc: number | null } {
+	if (!targetsPositive) return { pct_target: null, dollar_target: null, dollar_realloc: null };
+	const targetRatio = targetPercent / sumTargets;
+	const dollar_target = targetRatio * totalUsEquity;
+	return { pct_target: targetRatio * 100, dollar_target, dollar_realloc: dollar_target - marketValue };
+}
+
 /**
  * Pure compute core — no I/O, deterministic (AC7), unit-testable without a DB. Mirrors
  * nonReAllocation.ts's `computeNonReAllocation` shape (pendingSymbols.ts's `computePendingIds`
  * precedent, applied a third time in this directory).
+ *
+ * ADR-061: the degenerate-state contract is §2.2.2's GATE STRUCTURE, transplanted rather than
+ * symmetrised. Two gate booleans (`valuePositive`, `targetsPositive`) are computed exactly ONCE
+ * per invocation, below, and threaded to every row and to the totals row — no site re-derives
+ * them (§2.2.2's own `totalPositive` discipline). See ADR-061 Decision 2/3 for the full contract
+ * and the reachable-states table.
  */
 export function computeUsEquityAllocation(
 	taxonomyRows: ReadonlyArray<{ id: number; sub_cat: string }>,
@@ -202,32 +243,32 @@ export function computeUsEquityAllocation(
 	// AC4 β's own denominator — Σ the twelve's RAW (074 share-of-Total-Non-RE) target_percent.
 	const sumTargets = raw.reduce((sum, r) => sum + r.target_percent, 0);
 
-	const rows: UsEquityRow[] = raw.map((r) => {
-		// AC5(i): guard on totalUsEquity, never NaN.
-		const allocRatio = totalUsEquity === 0 ? null : r.market_value / totalUsEquity;
-		// AC4/AC5(ii): guard on sumTargets, never NaN. One ratio feeds BOTH pct_target and
-		// dollar_target (not pct_target*totalUsEquity/100) to avoid compounding float rounding.
-		const targetRatio = sumTargets === 0 ? null : r.target_percent / sumTargets;
-		const dollar_target = targetRatio === null ? null : targetRatio * totalUsEquity;
-		return {
-			sub_cat_id: r.id,
-			cat: 'Marketable Securities',
-			sub_cat: r.label,
-			pct_target: targetRatio === null ? null : targetRatio * 100,
-			pct_alloc: allocRatio === null ? null : allocRatio * 100,
-			dollar_target,
-			dollar_alloc: r.market_value,
-			is_stale: rowIsStale(r.id),
-			dollar_realloc: dollar_target === null ? null : dollar_target - r.market_value
-		};
-	});
+	// ADR-061 Decision 2: the two gate booleans, computed ONCE and threaded to every row and the
+	// totals row below — never re-derived per site. `> 0` on both (not `!== 0`): a negative
+	// totalUsEquity must null (a share of a negative basis is not a share, Decision 4); sumTargets
+	// cannot currently go negative (074's `[0, 100]` CHECK) but is specified as `> 0` regardless so
+	// this module asserts its own domain requirement rather than inheriting a different artifact's
+	// CHECK (Decision 4).
+	const valuePositive = totalUsEquity > 0;
+	const targetsPositive = totalUsEquity > 0 && sumTargets > 0;
 
+	const rows: UsEquityRow[] = raw.map((r) => ({
+		sub_cat_id: r.id,
+		cat: 'Marketable Securities',
+		sub_cat: r.label,
+		pct_alloc: pctAllocOrNull(r.market_value, totalUsEquity, valuePositive),
+		dollar_alloc: r.market_value, // NEVER null, never gated — not ratio-derived (ADR-061 Decision 2).
+		is_stale: rowIsStale(r.id),
+		...targetDerivedColumns(r.target_percent, r.market_value, totalUsEquity, sumTargets, targetsPositive)
+	}));
+
+	// ADR-061 Decision 2: totals row, gated by the SAME two booleans as the per-row columns.
 	const total: UsEquityTotalRow = {
-		dollar_alloc: totalUsEquity,
-		pct_alloc: totalUsEquity === 0 ? null : 100,
-		pct_target: sumTargets === 0 ? null : 100,
-		dollar_target: sumTargets === 0 ? null : totalUsEquity,
-		dollar_realloc: sumTargets === 0 ? null : 0
+		dollar_alloc: totalUsEquity, // NEVER null, never gated.
+		pct_alloc: valuePositive ? 100 : null,
+		pct_target: targetsPositive ? 100 : null,
+		dollar_target: targetsPositive ? totalUsEquity : null,
+		dollar_realloc: targetsPositive ? 0 : null
 	};
 
 	return { rows, total };

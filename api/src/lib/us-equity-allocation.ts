@@ -14,29 +14,24 @@
 // already the single client-side source of truth for the twelve labels (SELF-242 uses it too);
 // this file only adds the numeric row/total SHAPE on top of that.
 //
-// Sec F-2 (PR #520 review, recorded per team-lead ruling — Option B for now, disposition open to
-// Architect/Backend): §2.2.2's and §2.2.3's SERVER compute cores carry DIFFERENT degenerate-state
-// contracts, and this file's render helpers are NOT interchangeable with nonre-allocation.ts's for
-// that reason:
-//   - `computeNonReAllocation` (§2.2.2, nonReAllocation.ts) guards on ONE denominator
-//     (`total_non_re > 0` — a domain guard, not a `=== 0` NaN guard) and nulls all four ratio
-//     columns TOGETHER. The phrase "covering the negative case too" is nonre-allocation.ts's
-//     (the CLIENT mirror, at its `ratioColumnsUnset` doc comment) describing that server gate —
-//     nonReAllocation.ts does not use those words itself. Its client-side
-//     `fmtRatioPct`/`fmtRatioUsd` gate (`ratioColumnsUnset`)
-//     is therefore belt-and-suspenders on an already-correct payload — redundant defense, not the
-//     only layer.
-//   - `computeUsEquityAllocation` (§2.2.3, usEquityAllocation.ts) guards on TWO INDEPENDENT
-//     denominators, each `=== 0` (a NaN guard, not a domain guard, and NOT `<= 0`): `pct_alloc`
-//     nulls on `totalUsEquity === 0` alone; `pct_target`/`dollar_target`/`dollar_realloc` null on a
-//     SEPARATE `sumTargets === 0`. They do not null together, and a NEGATIVE `totalUsEquity` passes
-//     both guards un-gated — the server payload can carry real (non-null) ratio values at a
-//     degenerate or negative total.
-// Consequence: `fmtPct`/`fmtUsd` below taking the denominator and re-applying `ratioColumnsUnset`
-// is LOAD-BEARING here — the ONLY thing forcing '—' at a degenerate total, not a second check on an
-// already-guarded payload. A future author who copies THIS file's shape rather than
-// nonre-allocation.ts's, or vice versa, needs to know the two source contracts differ; recorded
-// here so that isn't rediscovered as a live bug a second time.
+// RENDER-GATE STATUS (SELF-332 / ADR-061, 2026-08-21) — quoted VERBATIM from ADR-061 Decision 6
+// (DECISIONS.md), which supersedes the Sec F-2 divergence note this header used to carry. §2.2.2's
+// and §2.2.3's SERVER compute cores no longer diverge — `computeUsEquityAllocation`
+// (usEquityAllocation.ts) now carries §2.2.2's own two-gate-group contract (`valuePositive` /
+// `targetsPositive`, both `> 0`), and the client gate below is reclassified accordingly:
+//
+// > After this alignment, `fmtPct` and `fmtUsd` in `api/src/lib/us-equity-allocation.ts` are
+// > **belt-and-suspenders, not load-bearing** — the same standing `fmtRatioPct` / `fmtRatioUsd`
+// > already hold in `api/src/lib/nonre-allocation.ts`. `ratioColumnsUnset(total)` is `total <= 0`;
+// > the server now nulls every ratio column in exactly that state, and in one further state the
+// > client gate does not detect and does not need to (`sumTargets` non-positive at a positive
+// > total), because the server's `null` already satisfies the `value === null` half of the same
+// > expression. The client gate is therefore a strict subset of the server contract and can never
+// > again be the only layer forcing `'—'`. It is RETAINED as redundant defense against a stale or
+// > mis-built server payload, not removed. Neither helper changes signature or behaviour: the only
+// > client-side edit this ADR requires is the header prose.
+//
+// See ADR-061 for the full aligned degenerate-state contract and the reachable-states table.
 
 import { ratioColumnsUnset } from '$lib/nonre-allocation';
 
