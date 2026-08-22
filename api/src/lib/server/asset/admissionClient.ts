@@ -61,11 +61,24 @@ export function __resetConfigForTests(): void {
 }
 
 // ── Upstream (worker) response schema — server owns its own source of truth ─────────────
+//
+// ⚠ WIRE-FORMAT BUG, FIXED (QA freeze-break): `assetId` is a bigint pfin.asset.asset_id,
+// serialized by the worker as a DECIMAL STRING (assetResolve.ts's AssetResolveResult — matching
+// the SAME convention every other bigint id on this wire already follows: `sourceId` at the
+// plaid/simplefin admission legs, `linked_source_id` in schemas/account.ts's
+// linkedSourceIdField()). The ORIGINAL schema here was `z.number().int().positive().nullable()`,
+// which rejected the worker's own (correct) string wire value — every /asset/resolve call 502'd.
+// Validate the digit-string here; the caller (schemas/purchase.ts's securityIdField, already
+// `z.coerce.number()`) coerces to a number only where it's actually consumed as the bigint RPC
+// param, same as every other bigint id crossing this boundary.
 const workerResolveResponseSchema = z.object({
-	assetId: z.number().int().positive().nullable()
+	assetId: z
+		.string()
+		.regex(/^\d+$/, 'assetId must be a decimal digit-string')
+		.nullable()
 });
 
-export type ResolveData = { assetId: number | null };
+export type ResolveData = { assetId: string | null };
 
 /** Discriminated outcome; on failure carries ONLY a browser-facing HTTP status (no leak). */
 export type LegOutcome<T> = { ok: true; data: T } | { ok: false; status: number };

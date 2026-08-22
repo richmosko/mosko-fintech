@@ -67,10 +67,12 @@ describe('POST /api/asset/resolve', () => {
 	});
 
 	it('forwards the session ownerUserId + validated body (currency=USD, never a body value) to the worker', async () => {
-		const fetchMock = stubWorker({ assetId: 501 });
+		// assetId is a decimal STRING on the wire (bigint asset_id — QA freeze-break fix); a
+		// number-literal mock here is exactly the defect class that shipped.
+		const fetchMock = stubWorker({ assetId: '501' });
 		const res = await POST(makeEvent(VALID_BODY, { id: SESSION_UID }));
 		expect(res.status).toBe(200);
-		expect(await res.json()).toEqual({ assetId: 501 });
+		expect(await res.json()).toEqual({ assetId: '501' });
 
 		const [, init] = fetchMock.mock.calls[0] as unknown as [string, { body: string }];
 		const sent = JSON.parse(init.body);

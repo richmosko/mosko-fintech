@@ -50,7 +50,7 @@ async function start(deps: Partial<AdmissionServerDeps> = {}): Promise<string> {
 		})),
 		syncSource: vi.fn(async () => ({ sourceId: '42', inserted: 3, skipped: 1, unresolvedAccounts: 0 })),
 		manualSync: vi.fn(async () => ({ sources: [{ source_id: '42', disposition: 'triggered' as const }] })),
-		resolveAsset: vi.fn(async () => ({ assetId: 501 })),
+		resolveAsset: vi.fn(async () => ({ assetId: '501' })), // decimal STRING — see the SELF-325 describe block below
 		logger: vi.fn(),
 		...deps
 	};
@@ -548,8 +548,12 @@ describe('SELF-317 manual-sync — user-initiated "Sync now" (A2 return-fast 202
 });
 
 describe('SELF-325 asset-resolve — resolve-or-mint a global asset (Case 3)', () => {
-	it('happy path (symbol) returns { assetId } and forwards the input verbatim', async () => {
-		const resolveAsset = vi.fn(async () => ({ assetId: 501 }));
+	it('happy path (symbol) returns { assetId } (a decimal STRING — postgres.js bigint wire format, QA freeze-break fix) and forwards the input verbatim', async () => {
+		// ⚠ assetId is '501', a STRING — never a number literal. A number-literal mock here is
+		// exactly the defect class QA caught: it was green against every existing test while
+		// real postgres.js hands back a bigint column as a string, and the app's z.number()
+		// schema rejected it. Do not "clean this up" back to a number.
+		const resolveAsset = vi.fn(async () => ({ assetId: '501' }));
 		const url = await start({ resolveAsset });
 		const res = await post(
 			`${url}/asset/resolve`,
@@ -557,7 +561,7 @@ describe('SELF-325 asset-resolve — resolve-or-mint a global asset (Case 3)', (
 			authed
 		);
 		expect(res.status).toBe(200);
-		expect(await res.json()).toEqual({ assetId: 501 });
+		expect(await res.json()).toEqual({ assetId: '501' });
 		expect(resolveAsset).toHaveBeenCalledWith({
 			ownerUserId: UUID,
 			symbol: 'AAPL',
@@ -568,8 +572,8 @@ describe('SELF-325 asset-resolve — resolve-or-mint a global asset (Case 3)', (
 		});
 	});
 
-	it('happy path (cusip, no symbol) resolves too', async () => {
-		const resolveAsset = vi.fn(async () => ({ assetId: 502 }));
+	it('happy path (cusip, no symbol) resolves too — assetId still a decimal string', async () => {
+		const resolveAsset = vi.fn(async () => ({ assetId: '502' }));
 		const url = await start({ resolveAsset });
 		const res = await post(
 			`${url}/asset/resolve`,
@@ -577,7 +581,7 @@ describe('SELF-325 asset-resolve — resolve-or-mint a global asset (Case 3)', (
 			authed
 		);
 		expect(res.status).toBe(200);
-		expect(await res.json()).toEqual({ assetId: 502 });
+		expect(await res.json()).toEqual({ assetId: '502' });
 	});
 
 	it('401 without the shared secret — resolveAsset never invoked', async () => {

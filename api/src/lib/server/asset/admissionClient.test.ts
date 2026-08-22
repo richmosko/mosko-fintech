@@ -97,12 +97,15 @@ describe('mapUpstreamStatus', () => {
 
 // ── Transport: header, body, mapping, redaction ────────────────────────────────────────────
 describe('resolveAsset transport', () => {
-	it('POSTs the shared-secret header + session ownerUserId to the resolve path, forwards assetId', async () => {
-		const fetchMock = vi.fn(async () => jsonResponse(200, { assetId: 501 }));
+	it('POSTs the shared-secret header + session ownerUserId to the resolve path, forwards assetId (a decimal STRING — the real worker wire format, QA freeze-break fix)', async () => {
+		// ⚠ assetId is '501', a STRING — never a number literal. The worker serializes a bigint
+		// asset_id as a decimal string (assetResolve.ts); a number-literal mock here is exactly
+		// the defect class that shipped: green against a shape the real worker never produces.
+		const fetchMock = vi.fn(async () => jsonResponse(200, { assetId: '501' }));
 		vi.stubGlobal('fetch', fetchMock);
 
 		const out = await resolveAsset(SESSION_UID, VALID_BODY);
-		expect(out).toEqual({ ok: true, data: { assetId: 501 } });
+		expect(out).toEqual({ ok: true, data: { assetId: '501' } });
 
 		const [url, init] = fetchMock.mock.calls[0] as unknown as [
 			string,
@@ -144,6 +147,18 @@ describe('resolveAsset transport', () => {
 
 	it('a malformed 200 body (missing assetId) → 502 (fail-closed, no partial success to the browser)', async () => {
 		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(200, {})));
+		expect(await resolveAsset(SESSION_UID, VALID_BODY)).toEqual({ ok: false, status: 502 });
+	});
+
+	it('THE SHIPPED BUG, AS A REGRESSION GUARD — a bare-number assetId (the OLD, wrong wire shape) → 502, not accepted', async () => {
+		// This is what the worker's response looked like from the browser's perspective if
+		// something ever re-introduced a raw number on the wire (or if a stray `Number(assetId)`
+		// crept back into the worker's response-building path): the schema must REJECT it, not
+		// silently coerce it. Accepting it here is exactly how the freeze-break bug shipped —
+		// every real call 502'd because the schema rejected the worker's actual (string) output,
+		// which is the mirror image of this: if the schema ever goes back to accepting numbers
+		// instead of requiring strings, this is the test that catches the shape flipping back.
+		vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(200, { assetId: 501 })));
 		expect(await resolveAsset(SESSION_UID, VALID_BODY)).toEqual({ ok: false, status: 502 });
 	});
 

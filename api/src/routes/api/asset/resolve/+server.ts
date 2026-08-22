@@ -8,7 +8,11 @@
 //   2. Validates the body with assetResolveSchema (`.strict()`, RESOLVABLE_ASSET_TYPES-narrowed —
 //      the namespace-pollution boundary; see that schema's header for the full reasoning).
 //   3. Relays { ownerUserId=session, symbol, cusip, asset_type, name, currency='USD' } to the
-//      worker's internal /asset/resolve leg and returns { assetId }.
+//      worker's internal /asset/resolve leg and returns { assetId }. ⚠ assetId is a bigint
+//      pfin.asset.asset_id, serialized as a decimal STRING (admissionClient.ts's
+//      workerResolveResponseSchema — QA freeze-break fix), NOT a JS number. Frontend feeds it
+//      into the purchase form's security_id field as a string, same as every other bigint id
+//      crossing this boundary (linked_source_id, sourceId).
 //
 // Holds NO service_role key → stays OFF the RT-26 allowlist (mirrors every other admissionClient
 // consumer in this directory).
