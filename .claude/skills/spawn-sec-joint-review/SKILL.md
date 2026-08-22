@@ -36,6 +36,7 @@ Per `supabase/CLAUDE.md` convention 2 + Security Reviewer agent definition:
 - **Plaid integration surfaces** — webhook handler, `/item/public_token/exchange`, `/item/remove` (the three V1 allowlist entries per [ADR-016](../../../DECISIONS.md#adr-016)).
 - **Financial calculations** — NAV computation, tax-liability calculation, monthly report generation.
 - **Multi-tenant isolation** — any RLS policy, WITH CHECK constraint, or BEFORE INSERT/UPDATE trigger touching tenant-isolation logic.
+- **The `/api/asset/resolve` posture controls** — any change to that route's boundary handling (the forced `name: null` mint-content strip) or its per-user rate limiter. These are the compensating controls the [ADR-060](../../../DECISIONS.md#adr-060) posture decision RESTS on (V1 ships the global `pfin.asset` registry with no repair path); weakening, descoping or refactoring either does not merely change a route — it **reopens that ratified decision**, which is why the trigger fires here rather than being discovered at the next audit. The ADR carries the rationale; this line exists so the review fires.
 
 ## How to dispatch
 

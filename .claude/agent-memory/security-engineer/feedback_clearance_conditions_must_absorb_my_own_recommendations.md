@@ -74,9 +74,26 @@ lands on me: state it as a recommendation, hand over the shape so adoption is fr
 clearance stand. Conditions ratchet only when the new finding is a DEFECT, never when it is a
 standard I forgot to apply to my own menu.
 
+**⚠ A DISPOSITION CAN RE-PURPOSE MY CONDITIONS WITHOUT TOUCHING THEIR TEXT.** At SELF-325
+I raised the unrepairable global registry and routed the scope call to F/CTO, who ruled
+*accept the posture, with C1 + C2 as the V1 controls.* My C1/C2 were authored as the
+cheapest fixes for one finding; that ruling silently promoted them into **the compensating
+controls a ratified one-way door now rests on** — a heavier job than the one they were
+written for, and their text says nothing about it. Left unstated, the next person to
+refactor that endpoint deletes a "fix test" and takes the posture with it.
+**When a finding is dispositioned accept-with-compensating-controls, say three things in
+the same message:** (i) the named controls have changed job; (ii) weakening or descoping
+either **reopens the decision rather than carrying forward**; (iii) their paired tests are
+**posture watchers**, not fix tests, so nobody prunes them as redundant. Also ask where the
+posture DURABLY lives — a work-queue Source line is not where a future reader looks for
+*why we tolerate this*; recommend the decision record and let the queue entry link to it.
+
 **How to apply:**
 - Before sending: re-read my own findings section and ask *"does the diff I just described
   as acceptable contain the changes I just asked for?"*
+- After any ruling on one of my findings, re-read **my own conditions** and ask whether the
+  ruling changed what they are holding up. A condition whose text is unchanged can still
+  have acquired a new dependent.
 - When offering 2–3 remediation options, **state the acceptance bar ONCE, for all of them** —
   including any paired-fixture or watcher requirement. Anything I omit there, I own later.
 - Apply the cluster-vs-database scope check to **remediations and "either/or" rules**, not
