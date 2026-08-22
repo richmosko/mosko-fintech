@@ -38,9 +38,14 @@ assertion with no watcher.**
 2. Damage verified independently by team-lead (from the DB) and Architect
    (read-only), not from the report.
 3. **Recovery assets preserved and dual-verified** (sha256 by team-lead, then
-   independently by Architect) at `~/Projects/mosko-fintech-recovery/nav-history-20260814/`
-   — `nav_backfill_run.log` (complete per-row record incl. the 2026-08-10 cron
-   checkpoint) and `baseline_nav.csv`. **Corrected 2026-08-14, same day:** this
+   independently by Architect), originally at
+   `~/Projects/mosko-fintech-recovery/nav-history-20260814/` — **relocated
+   2026-08-22 into this repo at
+   [`nav-history-20260814/`](nav-history-20260814/) (F/CTO order; sha256
+   re-verified identical at the move: CSV `36eb6873…`, log `a684eea5…`; the
+   out-of-repo directory was then deleted)** — `nav_backfill_run.log`
+   (complete per-row record incl. the 2026-08-10 cron checkpoint) and
+   `baseline_nav.csv`. **Corrected 2026-08-14, same day:** this
    record originally described the CSV as "NOT the run's input — it ends
    2025-09-30". That was false against the file: `baseline_nav.csv` **is** the
    run's exact input, complete `2015-12-31..2026-07-31` (2025-09-30 is an
