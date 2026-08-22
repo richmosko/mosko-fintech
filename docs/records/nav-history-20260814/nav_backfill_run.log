@@ -1,0 +1,194 @@
+2026-08-13 15:31:22,561 [INFO] SELF-217 NAV backfill: csv='temp/nav-history/baseline_nav.csv' range=[2015-12-31, 2026-07-31] users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c commit=False
+2026-08-13 15:31:22,712 [INFO] TenantBoundConnection: engine created in SYSTEM mode (global market-reference writes; no per-tenant assertion).
+2026-08-13 15:31:22,750 [INFO] TenantBoundConnection: engine created in PER-TENANT mode (users_id bound; dormant assertion registered — V1.1+).
+2026-08-13 15:31:22,764 [INFO] Parsed 128 row(s) in the requested date range.
+2026-08-13 15:31:22,764 [INFO] Date range: 2015-12-31 .. 2026-07-31
+2026-08-13 15:31:22,764 [INFO] First row: 2015-12-31 = $4,114,000.00
+2026-08-13 15:31:22,764 [INFO] Last row:  2026-07-31 = $8,267,000.00
+2026-08-13 15:31:22,764 [INFO] Tenant's first recorded pfin.nav_daily checkpoint: 2026-08-10
+2026-08-13 15:31:22,764 [INFO] Admissible (would write): 128
+2026-08-13 15:31:22,764 [INFO] Refused (nav_date >= first checkpoint): 0
+2026-08-13 15:31:22,764 [INFO] === RUN RECORD (Sec AMBER clause (d)) ===
+2026-08-13 15:31:22,764 [INFO] RUN RECORD — resolved tenant (auth.uid(), DB-confirmed): b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c
+2026-08-13 15:31:22,764 [INFO] RUN RECORD — pre-import first_cron_checkpoint: 2026-08-10
+2026-08-13 15:31:22,764 [INFO] RUN RECORD — rows to import: 128
+2026-08-13 15:31:22,764 [INFO] RUN RECORD — import date range: 2015-12-31 .. 2026-07-31
+2026-08-13 15:31:22,764 [INFO] RUN RECORD — AC5 comparand figures printed separately below (imported boundary-month NAV / computed NAV today / delta).
+2026-08-13 15:31:22,764 [INFO] TenantBoundConnection: engine created in PER-TENANT mode (users_id bound; dormant assertion registered — V1.1+).
+2026-08-13 15:31:22,787 [INFO] AC5 comparand — imported boundary-month NAV (2026-07-31): $8,267,000.00
+2026-08-13 15:31:22,787 [INFO] AC5 comparand — this app's own computed NAV today: $49,345.63
+2026-08-13 15:31:22,787 [INFO] AC5 comparand — delta (computed today - imported boundary-month): $-8,217,654.37
+2026-08-13 15:31:22,787 [WARNING] AC5 comparand: |delta| = $8,217,654.37 >= $1,000.00 (the source's whole-$K quantization floor). --commit will refuse to run without --ack-delta.
+2026-08-13 15:31:22,787 [INFO] === TRACKED-SAFE SUMMARY (no dollar figures, no full UUID — safe to paste into a tracked artifact) ===
+2026-08-13 15:31:22,787 [INFO] Pre-import first_cron_checkpoint (the fact this import ERASES): 2026-08-10
+2026-08-13 15:31:22,787 [INFO] Run date (UTC): 2026-08-13
+2026-08-13 15:31:22,787 [INFO] Requested date range (inclusive): 2015-12-31 .. 2026-07-31
+2026-08-13 15:31:22,787 [INFO] Admissible rows: 128 | Refused rows: 0
+2026-08-13 15:31:22,787 [INFO] Tenant identity: CLI-supplied and DB-resolved uid AGREED (prefix b1aa21a2...)
+2026-08-13 15:31:22,787 [INFO] --commit requested: False
+2026-08-13 15:31:22,787 [INFO] --ack-delta passed: False (required for this run: True)
+2026-08-13 15:31:22,787 [INFO] AC5 delta as % of the boundary-month figure: -99.40%
+2026-08-13 15:31:22,787 [INFO] Full local record (dollar figures + full UUID): temp/nav-history/nav_backfill_run.log
+2026-08-13 15:31:22,788 [INFO] DRY RUN — no writes performed. Pass --commit to write for real.
+2026-08-13 15:37:24,572 [INFO] SELF-217 NAV backfill: csv='temp/nav-history/baseline_nav.csv' range=[2015-12-31, 2026-07-31] users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c commit=True
+2026-08-13 15:37:24,588 [INFO] TenantBoundConnection: engine created in SYSTEM mode (global market-reference writes; no per-tenant assertion).
+2026-08-13 15:37:24,622 [INFO] TenantBoundConnection: engine created in PER-TENANT mode (users_id bound; dormant assertion registered — V1.1+).
+2026-08-13 15:37:24,636 [INFO] Parsed 128 row(s) in the requested date range.
+2026-08-13 15:37:24,636 [INFO] Date range: 2015-12-31 .. 2026-07-31
+2026-08-13 15:37:24,636 [INFO] First row: 2015-12-31 = $4,114,000.00
+2026-08-13 15:37:24,636 [INFO] Last row:  2026-07-31 = $8,267,000.00
+2026-08-13 15:37:24,636 [INFO] Tenant's first recorded pfin.nav_daily checkpoint: 2026-08-10
+2026-08-13 15:37:24,637 [INFO] Admissible (would write): 128
+2026-08-13 15:37:24,637 [INFO] Refused (nav_date >= first checkpoint): 0
+2026-08-13 15:37:24,637 [INFO] === RUN RECORD (Sec AMBER clause (d)) ===
+2026-08-13 15:37:24,637 [INFO] RUN RECORD — resolved tenant (auth.uid(), DB-confirmed): b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c
+2026-08-13 15:37:24,637 [INFO] RUN RECORD — pre-import first_cron_checkpoint: 2026-08-10
+2026-08-13 15:37:24,637 [INFO] RUN RECORD — rows to import: 128
+2026-08-13 15:37:24,637 [INFO] RUN RECORD — import date range: 2015-12-31 .. 2026-07-31
+2026-08-13 15:37:24,637 [INFO] RUN RECORD — AC5 comparand figures printed separately below (imported boundary-month NAV / computed NAV today / delta).
+2026-08-13 15:37:24,637 [INFO] TenantBoundConnection: engine created in PER-TENANT mode (users_id bound; dormant assertion registered — V1.1+).
+2026-08-13 15:37:24,660 [INFO] AC5 comparand — imported boundary-month NAV (2026-07-31): $8,267,000.00
+2026-08-13 15:37:24,660 [INFO] AC5 comparand — this app's own computed NAV today: $49,345.63
+2026-08-13 15:37:24,660 [INFO] AC5 comparand — delta (computed today - imported boundary-month): $-8,217,654.37
+2026-08-13 15:37:24,660 [WARNING] AC5 comparand: |delta| = $8,217,654.37 >= $1,000.00 (the source's whole-$K quantization floor). --commit will refuse to run without --ack-delta.
+2026-08-13 15:37:24,660 [INFO] === TRACKED-SAFE SUMMARY (no dollar figures, no full UUID — safe to paste into a tracked artifact) ===
+2026-08-13 15:37:24,660 [INFO] Pre-import first_cron_checkpoint (the fact this import ERASES): 2026-08-10
+2026-08-13 15:37:24,660 [INFO] Run date (UTC): 2026-08-13
+2026-08-13 15:37:24,660 [INFO] Requested date range (inclusive): 2015-12-31 .. 2026-07-31
+2026-08-13 15:37:24,660 [INFO] Admissible rows: 128 | Refused rows: 0
+2026-08-13 15:37:24,660 [INFO] Tenant identity: CLI-supplied and DB-resolved uid AGREED (prefix b1aa21a2...)
+2026-08-13 15:37:24,661 [INFO] --commit requested: True
+2026-08-13 15:37:24,661 [INFO] --ack-delta passed: True (required for this run: True)
+2026-08-13 15:37:24,661 [INFO] AC5 delta as % of the boundary-month figure: -99.40%
+2026-08-13 15:37:24,661 [INFO] Full local record (dollar figures + full UUID): temp/nav-history/nav_backfill_run.log
+2026-08-13 15:37:24,661 [WARNING] COMMIT — writing 128 checkpoint(s) for users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c in ONE transaction (ADR-053 Decision 6: all rows or none).
+2026-08-13 15:37:24,661 [INFO] TenantBoundConnection: engine created in PER-TENANT mode (users_id bound; dormant assertion registered — V1.1+).
+2026-08-13 15:37:24,683 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2015-12-31 nav_value=4114000 inserted=True
+2026-08-13 15:37:24,683 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2016-01-31 nav_value=3821000 inserted=True
+2026-08-13 15:37:24,684 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2016-02-29 nav_value=3936000 inserted=True
+2026-08-13 15:37:24,685 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2016-03-31 nav_value=4109000 inserted=True
+2026-08-13 15:37:24,685 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2016-04-30 nav_value=4241000 inserted=True
+2026-08-13 15:37:24,686 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2016-05-31 nav_value=4403000 inserted=True
+2026-08-13 15:37:24,687 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2016-06-30 nav_value=4345000 inserted=True
+2026-08-13 15:37:24,687 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2016-07-31 nav_value=4345000 inserted=True
+2026-08-13 15:37:24,688 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2016-08-31 nav_value=4345000 inserted=True
+2026-08-13 15:37:24,688 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2016-09-30 nav_value=4584000 inserted=True
+2026-08-13 15:37:24,689 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2016-10-31 nav_value=4584000 inserted=True
+2026-08-13 15:37:24,690 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2016-11-30 nav_value=4451000 inserted=True
+2026-08-13 15:37:24,690 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2016-12-31 nav_value=4386000 inserted=True
+2026-08-13 15:37:24,691 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2017-01-31 nav_value=4522000 inserted=True
+2026-08-13 15:37:24,692 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2017-02-28 nav_value=4585000 inserted=True
+2026-08-13 15:37:24,692 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2017-03-31 nav_value=4619000 inserted=True
+2026-08-13 15:37:24,693 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2017-04-30 nav_value=4686000 inserted=True
+2026-08-13 15:37:24,693 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2017-05-31 nav_value=4640000 inserted=True
+2026-08-13 15:37:24,694 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2017-06-30 nav_value=4661000 inserted=True
+2026-08-13 15:37:24,694 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2017-07-31 nav_value=4864000 inserted=True
+2026-08-13 15:37:24,695 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2017-08-31 nav_value=4866000 inserted=True
+2026-08-13 15:37:24,695 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2017-09-30 nav_value=4897000 inserted=True
+2026-08-13 15:37:24,696 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2017-10-31 nav_value=4934000 inserted=True
+2026-08-13 15:37:24,696 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2017-11-30 nav_value=4971000 inserted=True
+2026-08-13 15:37:24,697 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2017-12-31 nav_value=5014000 inserted=True
+2026-08-13 15:37:24,697 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2018-01-31 nav_value=5096000 inserted=True
+2026-08-13 15:37:24,698 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2018-02-28 nav_value=5099000 inserted=True
+2026-08-13 15:37:24,698 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2018-03-31 nav_value=5091000 inserted=True
+2026-08-13 15:37:24,699 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2018-04-30 nav_value=5261000 inserted=True
+2026-08-13 15:37:24,699 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2018-05-31 nav_value=5290000 inserted=True
+2026-08-13 15:37:24,700 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2018-06-30 nav_value=5266000 inserted=True
+2026-08-13 15:37:24,700 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2018-07-31 nav_value=5261000 inserted=True
+2026-08-13 15:37:24,701 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2018-08-31 nav_value=5264000 inserted=True
+2026-08-13 15:37:24,701 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2018-09-30 nav_value=5231000 inserted=True
+2026-08-13 15:37:24,702 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2018-10-31 nav_value=5162000 inserted=True
+2026-08-13 15:37:24,702 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2018-11-30 nav_value=5151000 inserted=True
+2026-08-13 15:37:24,703 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2018-12-31 nav_value=5073000 inserted=True
+2026-08-13 15:37:24,703 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2019-01-31 nav_value=5171000 inserted=True
+2026-08-13 15:37:24,704 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2019-02-28 nav_value=5241000 inserted=True
+2026-08-13 15:37:24,704 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2019-03-31 nav_value=5273000 inserted=True
+2026-08-13 15:37:24,705 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2019-04-30 nav_value=5377000 inserted=True
+2026-08-13 15:37:24,705 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2019-05-31 nav_value=5258000 inserted=True
+2026-08-13 15:37:24,706 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2019-06-30 nav_value=5346000 inserted=True
+2026-08-13 15:37:24,706 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2019-07-31 nav_value=5324000 inserted=True
+2026-08-13 15:37:24,706 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2019-08-31 nav_value=5307000 inserted=True
+2026-08-13 15:37:24,707 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2019-09-30 nav_value=5304000 inserted=True
+2026-08-13 15:37:24,707 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2019-10-31 nav_value=5354000 inserted=True
+2026-08-13 15:37:24,707 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2019-11-30 nav_value=5405000 inserted=True
+2026-08-13 15:37:24,708 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2019-12-31 nav_value=5474000 inserted=True
+2026-08-13 15:37:24,708 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2020-01-31 nav_value=5465000 inserted=True
+2026-08-13 15:37:24,708 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2020-02-29 nav_value=5314000 inserted=True
+2026-08-13 15:37:24,709 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2020-03-31 nav_value=5170000 inserted=True
+2026-08-13 15:37:24,709 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2020-04-30 nav_value=5275000 inserted=True
+2026-08-13 15:37:24,709 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2020-05-31 nav_value=5300000 inserted=True
+2026-08-13 15:37:24,710 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2020-06-30 nav_value=5286000 inserted=True
+2026-08-13 15:37:24,710 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2020-07-31 nav_value=5359000 inserted=True
+2026-08-13 15:37:24,710 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2020-08-31 nav_value=5414000 inserted=True
+2026-08-13 15:37:24,711 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2020-09-30 nav_value=5323000 inserted=True
+2026-08-13 15:37:24,711 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2020-10-31 nav_value=5354000 inserted=True
+2026-08-13 15:37:24,712 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2020-11-30 nav_value=5519000 inserted=True
+2026-08-13 15:37:24,712 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2020-12-31 nav_value=5641000 inserted=True
+2026-08-13 15:37:24,712 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2021-01-31 nav_value=5652000 inserted=True
+2026-08-13 15:37:24,713 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2021-02-28 nav_value=5729000 inserted=True
+2026-08-13 15:37:24,713 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2021-03-31 nav_value=5766000 inserted=True
+2026-08-13 15:37:24,713 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2021-04-30 nav_value=5914000 inserted=True
+2026-08-13 15:37:24,714 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2021-05-31 nav_value=6009000 inserted=True
+2026-08-13 15:37:24,714 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2021-06-30 nav_value=6198000 inserted=True
+2026-08-13 15:37:24,715 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2021-07-31 nav_value=6357000 inserted=True
+2026-08-13 15:37:24,715 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2021-08-31 nav_value=6394000 inserted=True
+2026-08-13 15:37:24,715 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2021-09-30 nav_value=6312000 inserted=True
+2026-08-13 15:37:24,716 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2021-10-31 nav_value=6501000 inserted=True
+2026-08-13 15:37:24,716 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2021-11-30 nav_value=6461000 inserted=True
+2026-08-13 15:37:24,717 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2021-12-31 nav_value=6594000 inserted=True
+2026-08-13 15:37:24,717 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2022-01-31 nav_value=6610000 inserted=True
+2026-08-13 15:37:24,718 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2022-02-28 nav_value=6639000 inserted=True
+2026-08-13 15:37:24,718 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2022-03-31 nav_value=6811000 inserted=True
+2026-08-13 15:37:24,718 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2022-04-30 nav_value=6846000 inserted=True
+2026-08-13 15:37:24,719 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2022-05-31 nav_value=6893000 inserted=True
+2026-08-13 15:37:24,719 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2022-06-30 nav_value=6626000 inserted=True
+2026-08-13 15:37:24,719 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2022-07-31 nav_value=6587000 inserted=True
+2026-08-13 15:37:24,720 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2022-08-31 nav_value=6349000 inserted=True
+2026-08-13 15:37:24,720 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2022-09-30 nav_value=6089000 inserted=True
+2026-08-13 15:37:24,721 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2022-10-31 nav_value=6280000 inserted=True
+2026-08-13 15:37:24,721 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2022-11-30 nav_value=6431000 inserted=True
+2026-08-13 15:37:24,722 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2022-12-31 nav_value=6325000 inserted=True
+2026-08-13 15:37:24,722 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2023-01-31 nav_value=6609000 inserted=True
+2026-08-13 15:37:24,723 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2023-02-28 nav_value=6781000 inserted=True
+2026-08-13 15:37:24,723 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2023-03-31 nav_value=6780000 inserted=True
+2026-08-13 15:37:24,723 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2023-04-30 nav_value=6816000 inserted=True
+2026-08-13 15:37:24,724 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2023-05-31 nav_value=6757000 inserted=True
+2026-08-13 15:37:24,724 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2023-06-30 nav_value=6890000 inserted=True
+2026-08-13 15:37:24,725 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2023-07-31 nav_value=7005000 inserted=True
+2026-08-13 15:37:24,725 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2023-08-31 nav_value=6913000 inserted=True
+2026-08-13 15:37:24,726 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2023-09-30 nav_value=6826000 inserted=True
+2026-08-13 15:37:24,726 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2023-10-31 nav_value=6751000 inserted=True
+2026-08-13 15:37:24,727 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2023-11-30 nav_value=6961000 inserted=True
+2026-08-13 15:37:24,727 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2023-12-31 nav_value=7158000 inserted=True
+2026-08-13 15:37:24,728 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2024-01-31 nav_value=7115000 inserted=True
+2026-08-13 15:37:24,729 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2024-02-29 nav_value=7237000 inserted=True
+2026-08-13 15:37:24,729 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2024-03-31 nav_value=7330000 inserted=True
+2026-08-13 15:37:24,730 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2024-04-30 nav_value=7154000 inserted=True
+2026-08-13 15:37:24,730 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2024-05-31 nav_value=7282000 inserted=True
+2026-08-13 15:37:24,731 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2024-06-30 nav_value=7276000 inserted=True
+2026-08-13 15:37:24,731 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2024-07-31 nav_value=7377000 inserted=True
+2026-08-13 15:37:24,732 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2024-08-31 nav_value=7407000 inserted=True
+2026-08-13 15:37:24,732 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2024-09-30 nav_value=7434000 inserted=True
+2026-08-13 15:37:24,733 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2024-10-31 nav_value=7347000 inserted=True
+2026-08-13 15:37:24,733 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2024-11-30 nav_value=7523000 inserted=True
+2026-08-13 15:37:24,733 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2024-12-31 nav_value=7328000 inserted=True
+2026-08-13 15:37:24,734 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2025-01-31 nav_value=7412000 inserted=True
+2026-08-13 15:37:24,734 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2025-02-28 nav_value=7374000 inserted=True
+2026-08-13 15:37:24,735 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2025-03-31 nav_value=7276000 inserted=True
+2026-08-13 15:37:24,735 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2025-04-30 nav_value=7242000 inserted=True
+2026-08-13 15:37:24,736 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2025-05-31 nav_value=7153000 inserted=True
+2026-08-13 15:37:24,736 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2025-06-30 nav_value=7596000 inserted=True
+2026-08-13 15:37:24,737 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2025-07-31 nav_value=7596000 inserted=True
+2026-08-13 15:37:24,737 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2025-08-31 nav_value=7776000 inserted=True
+2026-08-13 15:37:24,738 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2025-09-30 nav_value=7918000 inserted=True
+2026-08-13 15:37:24,738 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2025-10-31 nav_value=7780000 inserted=True
+2026-08-13 15:37:24,739 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2025-11-30 nav_value=7873000 inserted=True
+2026-08-13 15:37:24,739 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2025-12-31 nav_value=7878000 inserted=True
+2026-08-13 15:37:24,740 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2026-01-31 nav_value=8073000 inserted=True
+2026-08-13 15:37:24,740 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2026-02-28 nav_value=8136000 inserted=True
+2026-08-13 15:37:24,741 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2026-03-31 nav_value=7831000 inserted=True
+2026-08-13 15:37:24,741 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2026-04-30 nav_value=8264000 inserted=True
+2026-08-13 15:37:24,742 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2026-05-31 nav_value=8566000 inserted=True
+2026-08-13 15:37:24,742 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2026-06-30 nav_value=8391000 inserted=True
+2026-08-13 15:37:24,743 [INFO] nav backfill users_id=b1aa21a2-dcfb-4fa3-907d-65d8e8f8cd2c nav_date=2026-07-31 nav_value=8267000 inserted=True
+2026-08-13 15:37:24,744 [INFO] Backfill complete (elapsed: 0:00:00.083190) — summary: {'total': 128, 'inserted': 128}
