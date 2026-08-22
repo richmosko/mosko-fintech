@@ -242,14 +242,19 @@ describe('UsEquityAllocationTable — degenerate zero-holding state', () => {
 });
 
 describe('UsEquityAllocationTable — Sec F-1 (PR #520 AMBER, resolved): render-boundary gate on the US Equity denominator', () => {
-	// Sec's finding: the LANDED SERVER core (computeUsEquityAllocation) guards pct_alloc on
-	// `totalUsEquity === 0` alone and guards pct_target/dollar_target/dollar_realloc on a SEPARATE
-	// `sumTargets === 0` — they do not null together, and neither is `<= 0`. Both fixtures below are
-	// SERVER-REACHABLE shapes the all-null fixture above cannot exercise: non-null ratio values
-	// arriving at a degenerate/negative total. The render layer must still force '—' on all four
-	// ratio columns (never $Alloc) regardless of what the payload says underneath.
+	// HISTORICAL — the payload shapes below are what the SHIPPED SELF-240 server core used to emit:
+	// it guarded pct_alloc on `totalUsEquity === 0` alone and guarded
+	// pct_target/dollar_target/dollar_realloc on a SEPARATE `sumTargets === 0`, so they did not null
+	// together and neither was `<= 0`. As of SELF-332 / ADR-061 the server no longer emits these
+	// shapes at all — Decision 3 nulls every ratio column whenever `totalUsEquity <= 0`.
+	// ⚠ THAT IS EXACTLY WHY THESE LEGS MUST NOT BE DELETED AS "UNREACHABLE". They are now the ONLY
+	// exercise of this render gate, which ADR-061 Decision 6 reclassifies as belt-and-suspenders
+	// RETAINED "as redundant defense against a stale or mis-built server payload". A correct payload
+	// can never reach this branch; these hand-built fixtures ARE the stale/mis-built payload, and the
+	// render layer must still force '—' on all four ratio columns (never $Alloc) regardless of what
+	// the payload says underneath.
 
-	it('(a) totalUsEquity === 0 WITH configured targets (ordinary onboarding state) — server returns non-null pct_target, render layer still forces "—" on all four ratio columns', () => {
+	it('(a) a stale/mis-built payload — totalUsEquity === 0 with a non-null pct_target (the pre-ADR-061 server shape) — render layer still forces "—" on all four ratio columns', () => {
 		const ZERO_WITH_TARGETS: UsEquityAllocation = {
 			rows: US_EQUITY_SUB_CATS.map((sub_cat, i) =>
 				row({
@@ -281,7 +286,7 @@ describe('UsEquityAllocationTable — Sec F-1 (PR #520 AMBER, resolved): render-
 		expect(footCells[4].textContent).toBe('—');
 	});
 
-	it('(b) NEGATIVE totalUsEquity — every ratio column would compute real (non-null) values server-side; render layer forces "—" throughout, and the banner never claims "no holdings"', () => {
+	it('(b) a stale/mis-built payload — NEGATIVE totalUsEquity with real (non-null) ratio values throughout (the pre-ADR-061 server shape); render layer forces "—" throughout, and the banner never claims "no holdings"', () => {
 		const NEGATIVE_TOTAL: UsEquityAllocation = {
 			rows: US_EQUITY_SUB_CATS.map((sub_cat, i) =>
 				row({

@@ -41,6 +41,72 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-061 — Two denominators, two gate groups: §2.2.3's degenerate-state contract is §2.2.2's, transplanted rather than symmetrised (terse pattern)
+
+**Date:** 2026-08-21 · **Status:** **Accepted** — F/CTO ruled option A on SELF-332, 2026-08-21. The ruling fixes the DIRECTION (align §2.2.3 to §2.2.2); the aligned contract below is Architect-authored under that ruling.
+**Phase:** 6 Build Loop · **Surface:** `api/src/lib/server/queries/usEquityAllocation.ts` (`computeUsEquityAllocation`, the §2.2.3 US Equity sub-allocation compute core, landed SELF-240) and the header prose of its browser-side mirror `api/src/lib/us-equity-allocation.ts`. **`api/src/lib/server/queries/nonReAllocation.ts` is NOT touched** — §2.2.2 is the target of the alignment, not a party to it.
+
+**Context.** Sec F-2 at PR #520 recorded that the two allocation-table compute cores carry different degenerate-state contracts. §2.2.2 guards on ONE denominator with a DOMAIN predicate (`total_non_re > 0`) and nulls its ratio columns through two shared gates. §2.2.3 guards on TWO denominators with NaN predicates (`totalUsEquity === 0` for `pct_alloc`; a separate `sumTargets === 0` for the three target columns), which null independently and let a NEGATIVE total pass through un-gated — a negative `totalUsEquity` yields sign-flipped percentages that still sum to 100. The mirror file's header states, correctly for the shipped state, that its `fmtPct`/`fmtUsd` denominator gate is LOAD-BEARING rather than redundant. Sec's stated hazard was not the divergence itself but its invisibility: a future author of a third mirror lib copies whichever of the two files they find first and flattens the asymmetry without knowing one exists.
+
+**Decision.**
+
+**1. The contract is §2.2.2's GATE STRUCTURE, not its gate COUNT.** §2.2.2's rule is not "all four ratio columns always null together" as a primitive — it is *each ratio column is null when its own denominator is not positive, and columns sharing a denominator are gated by ONE shared boolean so a caller cannot null one and not the others*. §2.2.2 realises that in exactly two gate groups (`ratioPercentOrNull` for `pct_alloc`; `targetDerivedColumns` for `pct_target` / `dollar_target` / `dollar_realloc`), which coincide only because that module has a single denominator. §2.2.3 gets the same two groups. The delta is that §2.2.3's target group carries a CONJUNCTION, because §2.2.3 renormalises its targets and §2.2.2 does not.
+
+**2. The aligned contract, stated as Backend must implement it.** Let `totalUsEquity = Σ row.market_value` and `sumTargets = Σ row.target_percent`, each summed once per `computeUsEquityAllocation` invocation. Compute exactly two gate booleans, ONCE, and pass them to every call site so no site re-derives them (§2.2.2's own `totalPositive` discipline):
+
+```
+valuePositive   = totalUsEquity > 0
+targetsPositive = totalUsEquity > 0 && sumTargets > 0
+```
+
+Per row:
+
+- `dollar_alloc` = `market_value`. **NEVER null, never gated** — it is not ratio-derived. Unchanged.
+- `pct_alloc` = `valuePositive ? (market_value / totalUsEquity) * 100 : null`.
+- The three target-derived columns are returned **together from one helper**, which returns `{ pct_target: null, dollar_target: null, dollar_realloc: null }` whenever `!targetsPositive`, and otherwise `targetRatio = target_percent / sumTargets`, `pct_target = targetRatio * 100`, `dollar_target = targetRatio * totalUsEquity`, `dollar_realloc = dollar_target - market_value`. **The single-`targetRatio` derivation is preserved verbatim** — SELF-240 feeds one ratio to both `pct_target` and `dollar_target` specifically to avoid compounding float rounding, and that is orthogonal to this ADR.
+
+Totals row, gated by the SAME two booleans:
+
+- `dollar_alloc` = `totalUsEquity`. **NEVER null, never gated.**
+- `pct_alloc` = `valuePositive ? 100 : null`
+- `pct_target` = `targetsPositive ? 100 : null`
+- `dollar_target` = `targetsPositive ? totalUsEquity : null`
+- `dollar_realloc` = `targetsPositive ? 0 : null`
+
+**3. Reachable states, exhaustively.**
+
+| `totalUsEquity` | `sumTargets` | `pct_alloc` | `pct_target` / `dollar_target` / `dollar_realloc` |
+|---|---|---|---|
+| `> 0` | `> 0` | value | values |
+| `> 0` | `= 0` | value | **null** |
+| `= 0` or `< 0` | any | **null** | **null** |
+
+Row 2 is the load-bearing reason this ADR does not simply null all four columns on either degeneracy: *holdings present, no planning targets set* is the DEFAULT state of a new tenant (`pfin.planning_target` is unset-is-row-absent per [ADR-056](#adr-056)), `%Alloc` is genuinely DEFINED there, and blanking it would delete the only thing the table can honestly show for that user. Row 3 is the behaviour change against shipped SELF-240: at a zero total the split `=== 0` guards already nulled `pct_alloc` but left `dollar_target` at a real-looking `0`; at a NEGATIVE total they left all four populated and wrong.
+
+**4. Negative denominators, and why the predicate is `> 0` on both.** `totalUsEquity` can genuinely go negative — nothing constrains a Sub-Cat's market value to be positive — so `> 0` is a live behaviour change there, and the right one: a share of a negative basis is not a share. `sumTargets` cannot currently go negative, because `074` constrains `target_percent` to `[0, 100]`, which makes `> 0` and `!== 0` equivalent for it **today**. It is specified as `> 0` regardless, so this module asserts its own domain requirement rather than inheriting a different artifact's CHECK — the same reasoning SELF-239's round-2 (b) used to move §2.2.2's Real Estate exclusion off `076`'s caller-supplied flag and onto a predicate the module states itself.
+
+**5. The NaN framing is retired, and one residual is recorded as SHARED rather than closed.** `> 0` subsumes the `=== 0` NaN guard it replaces: division by zero cannot occur, and a NaN denominator fails `> 0` and nulls. It does not close a numerator that is itself NaN, nor an infinite denominator. **Both residuals are identical in §2.2.2 and are deliberately left identical here** — hardening §2.2.3 alone (with, say, `Number.isFinite`) would manufacture a fresh asymmetry of exactly the kind this ADR exists to remove. Any future hardening of that residual hardens **both modules or neither**.
+
+**6. Render-gate reclassification — the canonical anchor for the mirror-header rewrite.**
+
+> After this alignment, `fmtPct` and `fmtUsd` in `api/src/lib/us-equity-allocation.ts` are **belt-and-suspenders, not load-bearing** — the same standing `fmtRatioPct` / `fmtRatioUsd` already hold in `api/src/lib/nonre-allocation.ts`. `ratioColumnsUnset(total)` is `total <= 0`; the server now nulls every ratio column in exactly that state, and in one further state the client gate does not detect and does not need to (`sumTargets` non-positive at a positive total), because the server's `null` already satisfies the `value === null` half of the same expression. The client gate is therefore a strict subset of the server contract and can never again be the only layer forcing `'—'`. It is RETAINED as redundant defense against a stale or mis-built server payload, not removed. Neither helper changes signature or behaviour: **the only client-side edit this ADR requires is the header prose.**
+
+**Alternatives considered.**
+
+*At the ruling level (Sec's A/B/C on SELF-332; F/CTO ruled A on 2026-08-21):* **(A) align the §2.2.3 core — CHOSEN**, at the cost of touching landed SELF-240 code and its fixtures. **(B) render-gate-only, document the divergence as permanent — rejected**; it ratifies a state whose safety depends on a prose comment being read, and leaves a real negative-total defect in the payload that only the browser happens to hide. **(C) tracked follow-up — rejected**; the AC's own words are that what does not discharge the entry is leaving it implicit.
+
+*At the mapping level (Architect-authored under the ruling):* **(i) one unified gate — null all four columns whenever EITHER denominator is degenerate — rejected.** It is the most literal reading of "nulls all four together" and the easiest to verify, but it blanks `%Alloc` for every tenant holding US equity with no targets set, which is the default new-tenant state; it suppresses a defined, correct number to preserve a symmetry that was never §2.2.2's actual rule. **(ii) strict dependency-graph mapping — `pct_alloc` on `totalUsEquity`, `pct_target` on `sumTargets` alone, the two dollar columns on the conjunction — rejected.** It is the mathematically minimal gating, but it leaves `pct_target` non-null at a degenerate total, which the client gate would then still have to blank — i.e. it does NOT discharge the reclassification in Decision 6, and would leave the mirror's render gate load-bearing for one column. It also renders a renormalised target share beside two em-dashes, asserting a plan whose dollar consequences are undefined — the precise failure §2.2.2's AC6 named. **(iii) the two-group transplant — CHOSEN.** §2.2.2 already nulls `pct_target` with the total-derived block even though `pct_target` is not mathematically total-derived there; carrying that grouping over is following §2.2.2's own precedent, not imposing symmetry on it.
+
+**Consequences.**
+
+- **Backend implements from Decision 2; it is the normative text.** Fixtures for the §2.2.3 compute core must cover all three rows of Decision 3's table, and the negative-total case explicitly — the shipped suite could not have caught the negative-total defect because no fixture supplied one. A green suite before the change is not evidence the change is unnecessary.
+- ⚠ **This is a financial-calculation surface: Sec joint-review is a merge gate on the implementing PR**, not optional review. Sec raised F-2; Sec closes it.
+- **The mirror-header rewrite is prose-only and must quote Decision 6, not paraphrase it.** The header currently asserts the opposite of what will be true, so leaving it unedited is worse than the original divergence: it would tell the next author the gate is load-bearing on a payload where it no longer is, and a removal that is actually safe would look forbidden.
+- **After this lands, flattening the two contracts is CORRECT.** Sec's stated hazard — a third mirror lib copied from whichever file its author found first — is discharged by making the two shapes the same, not by warning about the difference. The warning in the header is what gets deleted; the reason it existed is what this ADR keeps.
+- **No schema, RLS, SECURITY DEFINER, or §10 catalogued-instance surface is touched.** No migration accompanies this ADR and no [ADR-011](#adr-011) Decision 3 or Decision 4 obligation arises from it.
+
+**Cross-references.** [ADR-056](#adr-056) (`pfin.planning_target`, unset-is-row-absent — the reason the no-targets state is common rather than exotic) · [ADR-058](#adr-058) Decision 3 (the `element` predicate SELF-239's §2.2.2 rework is built on) · `074` (the `target_percent` `[0, 100]` CHECK cited in Decision 4) · SELF-238 / SELF-239 (§2.2.2 and its AC6 degenerate-state rework) · SELF-240 / SELF-241 (§2.2.3's core and its browser mirror) · SELF-332 (this reconciliation; Sec F-2 booked from PR #520).
+
 ## ADR-060 — The global asset registry ships with no repair path: a ratified posture resting on two named controls (terse pattern)
 
 **Date:** 2026-08-21 · **Status:** **Accepted** — F/CTO ruled 2026-08-21 (option (b)); ratify recorded on the issue.

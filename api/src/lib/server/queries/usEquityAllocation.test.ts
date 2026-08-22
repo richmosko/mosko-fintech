@@ -2,8 +2,12 @@
 // I/O; mirrors nonReAllocation.test.ts / pendingSymbols.ts's computePendingIds precedent).
 // Exercises AC1 (exactly twelve, canonical order, all cat='Marketable Securities', no cash/Unsorted possible by
 // construction), AC3 (total.dollar_alloc = Σ the twelve — the drill-down-identity anchor), AC4/β
-// (display-layer renormalization formulas), AC5 (both independent degenerate guards), AC7
-// (determinism).
+// (display-layer renormalization formulas), AC7 (determinism), and — per SELF-332 / ADR-061 —
+// ALL THREE rows of ADR-061 Decision 3's reachable-states table (`valuePositive` /
+// `targetsPositive`, the latter a CONJUNCTION on `totalUsEquity > 0 && sumTargets > 0`, not an
+// independent guard). The dedicated negative-total watcher lives in the separately-named
+// `usEquityAllocation.negativeDenominatorWatcher.server.test.ts`, mirroring
+// `nonReAllocation.negativeDenominatorWatcher.server.test.ts`'s own split.
 
 import { describe, it, expect } from 'vitest';
 import { computeUsEquityAllocation } from './usEquityAllocation';
@@ -94,34 +98,40 @@ describe('computeUsEquityAllocation — a populated, non-degenerate portfolio', 
 	});
 });
 
-describe('computeUsEquityAllocation — AC5(i) zero US-equity holdings (Total US Equity = 0)', () => {
-	// Targets ARE present (Σtargets > 0) — proves the two AC5 guards are INDEPENDENT: a
-	// division-by-zero on Total US Equity must not also blank out the target columns.
+describe('computeUsEquityAllocation — ADR-061 Decision 3 row 3: Total US Equity = 0, targets present', () => {
+	// Targets ARE present (Σtargets > 0), but `targetsPositive` is a CONJUNCTION on
+	// `totalUsEquity > 0 && sumTargets > 0` (ADR-061 Decision 2) — a zero Total US Equity nulls the
+	// target-derived group TOO, not just pct_alloc. This replaces the pre-ADR-061 "independent
+	// guards" expectation, which was the shipped SELF-240 defect Sec F-2 flagged.
 	const targets = new Map<number, number>([[1, 5], [6, 10]]);
 	const result = computeUsEquityAllocation(FULL_TAXONOMY, [], targets);
 
-	it('every row: dollar_alloc=0, pct_alloc=null (never NaN); pct_target/dollar_target UNAFFECTED', () => {
+	it('every row: dollar_alloc=0 (never null/gated), pct_alloc=null, AND pct_target/dollar_target/dollar_realloc=null (never NaN)', () => {
 		for (const row of result.rows) {
 			expect(row.dollar_alloc).toBe(0);
 			expect(row.pct_alloc).toBeNull();
-			expect(Number.isNaN(row.pct_alloc)).toBe(false);
+			expect(row.pct_target).toBeNull();
+			expect(row.dollar_target).toBeNull();
+			expect(row.dollar_realloc).toBeNull();
 		}
-		const us01 = result.rows.find((r) => r.sub_cat === 'US-01-Basic_Materials')!;
-		expect(us01.pct_target).toBeCloseTo(33.333, 2); // 5/15*100
-		expect(us01.dollar_target).toBe(0); // ratio * totalUsEquity(0) = 0, not null — the guard is on the ratio, not the multiply
 	});
 
-	it('total row: dollar_alloc=0, pct_alloc=null, but pct_target/dollar_target still computed (100/0 respectively)', () => {
+	it('total row: dollar_alloc=0, every ratio-derived column null', () => {
 		expect(result.total.dollar_alloc).toBe(0);
 		expect(result.total.pct_alloc).toBeNull();
-		expect(result.total.pct_target).toBe(100);
-		expect(result.total.dollar_target).toBe(0); // 100% of a zero total
-		expect(result.total.dollar_realloc).toBe(0);
+		expect(result.total.pct_target).toBeNull();
+		expect(result.total.dollar_target).toBeNull();
+		expect(result.total.dollar_realloc).toBeNull();
 	});
 });
 
-describe('computeUsEquityAllocation — AC5(ii) Σ(twelve target_percents) = 0', () => {
-	// Holdings ARE present (Total US Equity > 0) — proves independence the other direction.
+describe('computeUsEquityAllocation — ADR-061 Decision 3 row 2: holdings present, Σtargets = 0', () => {
+	// Holdings ARE present (Total US Equity > 0) and sumTargets = 0 — the ONE state where the two
+	// gate groups genuinely diverge: `valuePositive` is true (pct_alloc/dollar_alloc real) while
+	// `targetsPositive` is false (target group null), because the conjunction's first half is
+	// satisfied and its second half is not. This is the "holdings present, no planning targets set"
+	// default-new-tenant state ADR-061 Decision 3 names as the load-bearing reason for NOT nulling
+	// pct_alloc whenever either denominator is degenerate.
 	const marketValueRows: SubcatMarketValueRow[] = [
 		{ sub_cat_id: 1, cat: 'Marketable Securities', sub_cat: 'US-01-Basic_Materials', market_value: 500 }
 	];
@@ -147,7 +157,7 @@ describe('computeUsEquityAllocation — AC5(ii) Σ(twelve target_percents) = 0',
 	});
 });
 
-describe('computeUsEquityAllocation — both AC5 guards simultaneously (fully empty)', () => {
+describe('computeUsEquityAllocation — ADR-061 Decision 3 row 3: fully empty (both denominators zero)', () => {
 	it('every numeric field is 0 or null, never NaN/Infinity, no error', () => {
 		const result = computeUsEquityAllocation(FULL_TAXONOMY, [], new Map());
 		for (const row of result.rows) {
