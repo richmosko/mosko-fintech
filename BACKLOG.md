@@ -1162,3 +1162,27 @@ Three-purpose backlog per [ADR-009](DECISIONS.md#adr-009) Decisions 4 + 7, [ADR-
 - **Source.** Architect's find at the #538 seam review: `QUANTITY_MAX_INT_DIGITS = 20` / `QUANTITY_MAX_DECIMAL_PLACES = 8` (encoding `017`'s `quantity numeric(28,8)`) are declared independently in the client `lib/validation/numeric.ts` and server `lib/server/validation/numeric.ts` with no shared source and nothing watching agreement — the exact treatment the asset-type vocabulary got (shared module + drift guards) and the numeric grain didn't. Values agree today.
 - **AC.** One browser-safe shared source (the `asset-constants.ts` pattern) or an explicit test asserting the two sets are identical. Two functions stay (client/server import boundaries are real); the CONSTANTS unify.
 - **Dependencies.** None.
+
+### §7.28 — V1.3 pre-flight recalibration close-out bookings (2026-08-22)
+
+*Source: the V1.3 pre-flight recalibration sitting (F/CTO batch-ratify, 21 items; the full record — sitting log, both audit files, Sec's bounded consult, the re-derived AC sets — is committed at [`docs/records/v13-preflight/`](docs/records/v13-preflight/)). The sitting's build-side outputs are already landed: PRs #544/#545/#546, ADR-062, ADR-063, and all 14 V1.3 issue AC sets re-derived in Linear at baseline `0491830`. These are the findings that outlive the sitting and have no issue to ride.*
+
+**1. §2.3-vs-GL reversal-netting disagreement — both correct, not equal.** [seam-record; Architect + Sec-visible]
+- **Source.** E1 (a)'s measured consequence (sitting items 8/8a; evidence at `docs/records/v13-preflight/architect-findings.md`): §2.3 nets a reversal inside its original's Sub-Cat via the `replaces_trans_id` join; the GL posts the same reversal's contra to Suspense (no annotation → the `084` ordered-CASE `else`). The two totals differ by exactly the reversed amounts with an offsetting Suspense balance. Companion fact: a leg of an already-CLOSED balanced journal can be reversed today with neither `037` guard firing (conservation is close-time-only; the freeze guards annotation writes, which a reversal never makes).
+- **AC.** The §7.24 item 3 totals-equality watcher, when built, is scoped to KNOW this disagreement (assert the reconciliation identity — §2.3 total + Suspense-offset = GL total — never bare equality); the §5.3 GL-native P&L design consumes this record. Until then this entry IS the record.
+- **Dependencies.** Downstream consumers only (§7.24 item 3; §5.3).
+
+**2. Split-child classification audit-coverage asymmetry.** [audit-class; Architect + Sec]
+- **Source.** Measured at the E1 rider (sitting item 10a): `031` audits the 1:1 annotation's reclassifications (immutable history table); `029` split children have NO history — `unsplitTrans` and `writeSplitSet`'s REPLACE path both bare-DELETE the child set, discarding N user-authored `sub_cat_id` values unrecoverably and silently. Judged under ADR-011 Decision 2's audit-class discipline: two halves of one classification feature with opposite audit postures. V1.3 makes the classifications valuable (§2.3 sums read them); the in-issue mitigation (the split-parent reversal refusal states the cost) ships with SELF-248/249, but the asymmetry itself is unaddressed.
+- **AC.** A ruling: either a `029`-side history table (the `031` pattern) or a recorded accept-with-rationale. Sec joint-review mandatory (audit-class surface).
+- **Dependencies.** None blocking; naturally follows V1.3's classify surfaces landing.
+
+**3. V1.4 tax-value inventory session (F/CTO).** [scope-record; PM]
+- **Source.** Sitting item 19(1): SELF-245's original AC4 struck as discharged — `041` populated `tax_relevant`/`tax_character` per the existing-system mapping — but nobody has inventoried those values against what §2.5.1's ζ-2 consumer actually needs, and the Equity/Contribution row enters as flag-for-review (`tax_relevant = true`, notes rider per ADR-062). PM's recommendation, F/CTO-adopted: a mid-milestone F/CTO inventory session in V1.4.
+- **AC.** The session happens before §2.5.1 implementation ships: every `posting_prototype_default` row's `tax_relevant`/`tax_character` confirmed or corrected against the V1.4 tax model; the Contribution flag resolved per account type; outcomes recorded on the V1.4 issue that consumes them.
+- **Dependencies.** V1.4 entry.
+
+**4. Conditional-status ADR sweep.** [doc-hygiene; Architect]
+- **Source.** ADR-057's Status read "Proposed — F/CTO ratifies at PR sign-off" for weeks after `077` merged (corrected at ADR-063's leg-1 commit, cause named). Architect's generalization: any ADR whose Status names a discharging event nobody edits afterwards goes stale silently — ADR-062 had to cite ADR-057's rule rather than its status to avoid inheriting the stale claim.
+- **AC.** One sweep of DECISIONS.md Status lines for undischarged-conditional wording ("ratifies at", "pending", "gates on"); each hit either updated against the event's actual state or confirmed genuinely pending; result recorded with the sweep's filter stated.
+- **Dependencies.** None.
