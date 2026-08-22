@@ -70,3 +70,16 @@ authored under the overclaim keeps passing and stops meaning what it says.
 file for `23502|not null|non-detect|defense in depth|changes the error|legib` found nothing
 expressing it. Surface that as a discrepancy against the ref rather than absorbing it — see
 [[review-the-delivery-note-against-the-ref]].
+
+**The same rule, applied EARLY, is what turns a would-be fence-exceeded finding into a clarifying
+amendment — and the load-bearing word was in a code comment.** V1.3 pre-flight D-7: Architect routed
+me a possible ADR-011-Decision-19 breach on the strength of `asOf.ts`'s own header calling
+SELF-238/240 "the FIRST **live** path" for a client-supplied `as_of`. MECHANISM was real (a validated
+`as_of` factory + `.strict()` schema ship in `main`). REACHABILITY was not: `grep -rn
+"userSuppliedAsOf" api/src` returns the factory, the schema module and two test files — **zero
+routes** — and all four route loaders call `serverTodayAsOf()`. A shipped **capability** is not a
+live path. ⚠ **When the finding hinges on one adjective, grep that adjective's referent before
+anything else** — here "live" was the entire difference between "amend for clarity" and "a merged
+milestone exceeded a ratified fence." And note where the false word lived: **in the source comment**,
+which is where the next reader will find it, so the correction routes to the code owner, not only to
+the ADR.

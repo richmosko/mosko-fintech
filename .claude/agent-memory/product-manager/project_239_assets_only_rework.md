@@ -1,6 +1,6 @@
 ---
 name: self-239-assets-only-rework
-description: SELF-239 v2 AC set delivered 2026-08-20 (11 ACs, awaiting F/CTO ratify); PRD §2.2.2 amendment OWED (still shows Liabilities post assets-only ruling); $ReAlloc must render neutral per design fence 1
+description: SELF-239 AC1 RATIFIED 2026-08-20 + shipped in V1.2; PRD §2.2.2 amendment DRAFTED 2026-08-22 in v13-preflight findings (5 live passages; §7.20 body gone) — gates on batch ratify; $ReAlloc neutral per design fence 1
 metadata:
   type: project
 ---
