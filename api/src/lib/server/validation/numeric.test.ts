@@ -7,7 +7,7 @@
 // against BOTH, since both wrap the same core.
 
 import { describe, it, expect } from 'vitest';
-import { sanitizeCurrencyAmount, sanitizePercent } from './numeric';
+import { sanitizeCurrencyAmount, sanitizePercent, sanitizeQuantity } from './numeric';
 
 describe('sanitizeCurrencyAmount — SELF-201 regression baseline (numeric(20,4), no range)', () => {
 	it('accepts a clean decimal string', () => {
@@ -59,7 +59,8 @@ describe('sanitizeCurrencyAmount — SELF-201 regression baseline (numeric(20,4)
  *  boundary itself (not just the category) matters. */
 describe.each([
 	['sanitizeCurrencyAmount', sanitizeCurrencyAmount],
-	['sanitizePercent', sanitizePercent]
+	['sanitizePercent', sanitizePercent],
+	['sanitizeQuantity', sanitizeQuantity]
 ] as const)('%s — six-category adversarial battery', (_name, sanitize) => {
 	it('rejects NaN (literal number)', () => {
 		expect(sanitize(NaN).ok).toBe(false);
@@ -142,5 +143,38 @@ describe('sanitizePercent — numeric(5,2) CHECK (0..100), 074 shape', () => {
 	it('rejects 4+ integer digits (numeric(5,2) precision, independent of the 0..100 range)', () => {
 		const r = sanitizePercent('1000.00');
 		expect(r.ok).toBe(false);
+	});
+});
+
+describe('sanitizeQuantity — numeric(28,8), no CHECK range, 017 shape (SELF-325 / 088)', () => {
+	it('accepts a whole-share quantity', () => {
+		expect(sanitizeQuantity('100')).toEqual({ ok: true, value: 100 });
+	});
+
+	it('accepts up to 8 decimal places (fractional/crypto quantities)', () => {
+		expect(sanitizeQuantity('0.12345678')).toEqual({ ok: true, value: 0.12345678 });
+	});
+
+	it('accepts a negative value at the sanitizer level — strict positivity is the Zod adapter\'s job, not this shape\'s', () => {
+		// sanitizeDecimal has no min/max configured for this shape (see numeric.ts's comment on
+		// why); a purchase quantity's ">0" requirement is enforced by schemas/purchase.ts's
+		// `.refine()`, one layer up — this sanitizer only enforces the numeric(28,8) DIGIT SHAPE.
+		expect(sanitizeQuantity('-5')).toEqual({ ok: true, value: -5 });
+	});
+
+	it('rejects 9+ decimal places (numeric(28,8) scale)', () => {
+		const r = sanitizeQuantity('1.123456789');
+		expect(r.ok).toBe(false);
+		expect(r).toEqual({ ok: false, reason: 'At most 8 decimal places.' });
+	});
+
+	it('rejects 21+ integer digits (numeric(28,8) precision: 28 - 8 = 20 max)', () => {
+		const r = sanitizeQuantity('1'.repeat(21));
+		expect(r.ok).toBe(false);
+	});
+
+	it('accepts the 20-integer-digit boundary', () => {
+		const r = sanitizeQuantity('1'.repeat(20));
+		expect(r.ok).toBe(true);
 	});
 });

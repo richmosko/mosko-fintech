@@ -41,16 +41,25 @@
 	import SelectField from '$lib/components/SelectField.svelte';
 	import ConnectionStatusChip from '$lib/components/ConnectionStatusChip.svelte';
 	import TransactionEntryForm from '$lib/components/TransactionEntryForm.svelte';
+	import PurchaseEntryForm from '$lib/components/PurchaseEntryForm.svelte';
 	import StockSplitEntryForm from '$lib/components/StockSplitEntryForm.svelte';
 	import DuplicateCandidateList from '$lib/components/DuplicateCandidateList.svelte';
 	import SyncHistoryTable from '$lib/components/SyncHistoryTable.svelte';
 	import SyncNowControl from '$lib/components/SyncNowControl.svelte';
 	import TransactionRow from '$lib/components/TransactionRow.svelte';
-	import { subCatGroupsOf } from '$lib/transaction-util';
+	import UnpricedMarker from '$lib/components/UnpricedMarker.svelte';
+	import { subCatGroupsOf, securityLabel } from '$lib/transaction-util';
 	import { ACCOUNT_TYPES, TAX_TREATMENTS } from '$lib/schemas/account-constants';
 	import { updateAttributesSchema, closeAccountSchema, fieldErrors } from '$lib/schemas/account';
 	import { providerLabel } from '$lib/accounts/connection-display';
 
+	// SELF-325: Backend's load() extension (round 5, `8a7719b`) now returns `selectableAssets` /
+	// `defaultSubCatId` / `defaultSubCatLabel` directly — the generated `PageData` carries them
+	// with the right shapes, no widening needed (verified: regenerated types with `svelte-kit
+	// sync`, removed the temporary `PageDataWithPurchase` cast this line used to carry, `npm run
+	// check` clean). PurchaseEntryForm.svelte still declares its own `SelectableAssetOption`
+	// prop type (purchase-util.ts) — that one stays; it types the component's OWN prop
+	// contract, independent of whatever shape `PageData` happens to infer.
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
 	const account = $derived(data.account);
@@ -152,6 +161,21 @@
 	// Cashflow-domain Sub-Cat picker groups for the transaction entry/edit/split/categorize
 	// surfaces (per-transaction annotation category — the cashflow domain, not asset taxonomy).
 	const cashflowGroups = $derived(subCatGroupsOf(data.cashflowSubCats));
+
+	// SELF-325 purchase-path (088): selectableAssets (own + global pfin.asset, the BIND-mode
+	// "pick an existing asset" affordance) + the BTO-default category readout, from Backend's
+	// load() extension (round 5, `8a7719b`). Local aliases only, matching this file's existing
+	// `const account = $derived(data.account)` convention — no fallback needed, load() always
+	// supplies these three (its own fail-soft-to-[] on a read error lives server-side).
+	const selectableAssets = $derived(data.selectableAssets);
+	const defaultSubCatId = $derived(data.defaultSubCatId);
+	const defaultSubCatLabel = $derived(data.defaultSubCatLabel);
+
+	// Cash / Purchase fork on "Add a transaction" — the two manual-entry write paths
+	// (fn_create_manual_trans vs fn_create_manual_purchase, 040 vs 088). A segmented toggle,
+	// not a dropdown, mirroring TransactionFactFields' own Direction toggle visual idiom
+	// (consistency within this page rather than inventing a second toggle shape).
+	let entryMode = $state<'cash' | 'purchase'>('cash');
 
 	// The ledger table column count — shared with each row so its full-width editor rows
 	// (<td colspan>) span correctly: Date | Category | Vendor | Description | Amount | Actions.
@@ -312,6 +336,61 @@
 					<p class="attr-hint">How the account is taxed: taxable, tax-deferred, or tax-free. Feeds the estimated-tax view.</p>
 				</div>
 			</dl>
+		{/if}
+	</section>
+
+	<!--
+		Holdings (SELF-325 P-b, UX ruling 2026-08-21). Minimal — exists to make the LOUD unpriced
+		state observable at any later time, not only at the purchase confirmation that produced
+		it, and NEVER as a portfolio view. NO valuation/cost-basis/market-price column: no
+		per-holding valued read exists (Architect, measured) and building one is explicitly out
+		of scope — NAV/allocation aggregates are a separate follow-up (team-lead).
+
+		PLACEMENT (UX ruling): here, immediately after "Account details" and before "Account
+		linking & aggregation" — grouped with the page's other current-STATE sections, ahead of
+		the activity/action sections below. Deliberately NOT positioned beside "Record a stock
+		split": that section is source-of-truth-gated (hidden for provider-linked accounts via
+		`isSourceOfTruth`), but Holdings must render for EVERY account — coupling their position
+		would leave a provider-linked account with an orphaned gap where Holdings should be.
+
+		EMPTY STATE DOUBLES AS THE CLOSED-ACCOUNT STATE (UX ruling): `058`'s gate leg 1 refuses a
+		close while the account still holds positions, so `heldSecurities` is guaranteed empty
+		once `closed_at` is set — no separate "closed" branch needed here, unlike the sections
+		below that carry their own `isClosed` copy.
+
+		Status column ALWAYS renders (header included) — "empty cell, never a missing one", the
+		same rule the Transactions table's Actions column already follows when frozen. A priced
+		row's Status cell is genuinely BLANK (UnpricedMarker's own zero-footprint discipline) —
+		that blankness IS the "priced" signal; UX ruled explicitly against a redundant "priced"
+		chip for the all-priced case. Table shell reuses the page's `.table-scroll` / `.tbl`
+		classes and `<th scope="col">` pattern (same as the Transactions table below) — no new
+		table styling.
+	-->
+	<section class="region" aria-label="Holdings">
+		<h2 class="section-title">Holdings</h2>
+		{#if heldSecurities.length === 0}
+			<p class="empty">No holdings in this account.</p>
+		{:else}
+			<div class="table-scroll">
+				<table class="tbl">
+					<thead>
+						<tr>
+							<th scope="col">Security</th>
+							<th scope="col" class="num">Quantity</th>
+							<th scope="col">Status</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each heldSecurities as h (h.security_id)}
+							<tr>
+								<td>{securityLabel(h)}</td>
+								<td class="num num-cell">{h.quantity}</td>
+								<td><UnpricedMarker priced={h.priced} context="inline" /></td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
 		{/if}
 	</section>
 
@@ -614,7 +693,43 @@
 				Account status above, add the transaction, then close it again.
 			</p>
 		{:else}
-			<TransactionEntryForm subCatGroups={cashflowGroups} />
+			<!--
+				SELF-325: Cash (040) vs Purchase (088) are TWO DIFFERENT RPCs with different shapes —
+				not a variant of the same form — so the toggle switches components entirely rather
+				than branching fields within one. Each form keeps its own local state; switching away
+				and back discards an unsubmitted purchase in progress (mirrors TransactionRow's
+				activeMode reset — an abandoned entry is not persisted state).
+			-->
+			<fieldset class="entry-mode">
+				<legend>Entry type</legend>
+				<div class="seg" role="radiogroup" aria-label="Cash or purchase">
+					<label class="seg-opt" class:active={entryMode === 'cash'}>
+						<input
+							type="radio"
+							name="entry-mode"
+							value="cash"
+							checked={entryMode === 'cash'}
+							onchange={() => (entryMode = 'cash')}
+						/>
+						<span>Cash</span>
+					</label>
+					<label class="seg-opt" class:active={entryMode === 'purchase'}>
+						<input
+							type="radio"
+							name="entry-mode"
+							value="purchase"
+							checked={entryMode === 'purchase'}
+							onchange={() => (entryMode = 'purchase')}
+						/>
+						<span>Purchase</span>
+					</label>
+				</div>
+			</fieldset>
+			{#if entryMode === 'cash'}
+				<TransactionEntryForm subCatGroups={cashflowGroups} />
+			{:else}
+				<PurchaseEntryForm {selectableAssets} {defaultSubCatId} {defaultSubCatLabel} />
+			{/if}
 		{/if}
 	</section>
 
@@ -958,5 +1073,61 @@
 		font-size: var(--fs-small);
 		color: var(--c-text-secondary);
 		max-width: 44rem;
+	}
+	/* SELF-325 Cash/Purchase entry-mode toggle — same segmented-control visual idiom as
+	   TransactionFactFields' Direction toggle (component-scoped there, so reproduced here
+	   rather than shared, same as every other page-local .seg on this page family). */
+	.entry-mode {
+		border: 0;
+		margin: 0 0 var(--space-3);
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-1);
+	}
+	.entry-mode legend {
+		padding: 0;
+		font-size: var(--fs-small);
+		font-weight: var(--weight-semi);
+		color: var(--c-text-secondary);
+	}
+	.entry-mode .seg {
+		display: inline-flex;
+		gap: 0;
+		border: 1px solid var(--c-border-strong);
+		border-radius: var(--radius-md);
+		overflow: hidden;
+		width: fit-content;
+	}
+	.entry-mode .seg-opt {
+		display: inline-flex;
+		align-items: center;
+		padding: var(--space-2) var(--space-3);
+		font-size: var(--fs-small);
+		font-weight: var(--weight-med);
+		color: var(--c-text-secondary);
+		cursor: pointer;
+	}
+	.entry-mode .seg-opt + .seg-opt {
+		border-left: 1px solid var(--c-border-strong);
+	}
+	.entry-mode .seg-opt.active {
+		background: var(--c-accent-soft);
+		color: var(--c-text-primary);
+		font-weight: var(--weight-semi);
+	}
+	.entry-mode .seg-opt input {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		padding: 0;
+		margin: -1px;
+		overflow: hidden;
+		clip: rect(0 0 0 0);
+		white-space: nowrap;
+		border: 0;
+	}
+	.entry-mode .seg-opt:focus-within {
+		box-shadow: inset 0 0 0 2px var(--c-accent);
 	}
 </style>

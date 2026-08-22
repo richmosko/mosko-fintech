@@ -38,6 +38,7 @@ import { ADMISSION_SECRET_HEADER, verifySharedSecret } from './sharedSecret.js';
 import type { PublicJwk } from './webhookVerificationKey.js';
 import type { SyncSourceInput, SyncSourceResult } from './triggerSync.js';
 import type { ManualSyncInput, ManualSyncResult } from './manualSync.js';
+import type { AssetResolveInput, AssetResolveResult } from './assetResolve.js';
 
 /** Max inbound body. A link_token request / public_token handoff is tiny; anything larger is
  *  abuse → reject (fail-closed) rather than buffer. */
@@ -143,6 +144,78 @@ const manualSyncBodySchema = z
 	})
 	.strict();
 
+// ── SELF-325 asset-resolve leg — a NEW route on this SAME admission server (private-bind +
+//    shared-secret gate + session-derived tenant, identical to every other leg here). NOT a new
+//    §10 instance per ADR-011 Decision 4 and the SAME in-file precedent the leg-S SimpleFIN claim
+//    route above already establishes for this server ("A new ROUTE on the RT-27 admission surface
+//    (NOT a new §10 instance)"): reuses the existing withServiceRole() identity + the existing 020
+//    grant, no new privileged surface.
+//    NAMESPACE-POLLUTION boundary validation — a design condition, not polish, because this route
+//    is a user-triggered write into the all-tenants-readable global namespace: symbol/cusip
+//    constrained by pattern+length, name length-bounded. At least one of symbol/cusip is required
+//    — a blank/blank resolve has no identity to bind a purchase to. `.strict()` — mass-assignment
+//    fence (Lock 14 mod #1).
+//
+//    ⚠ ASSET_TYPE IS THE NARROW 9-VALUE RESOLVABLE SET, NOT THE FULL 016 VOCAB — CORRECTED
+//    2026-08-21 (Architect ruling, team-lead-confirmed). An earlier version of this schema
+//    admitted the full 14-value enum on the theory that narrowing was "a Frontend picker/UX
+//    call, not a server-validation one." That was WRONG: this route MINTS a durable GLOBAL
+//    pfin.asset row on a miss (resolveSecurityId step 3), and a global row typed 'real_estate' /
+//    'vehicle' / 'collectible' / 'private' (pricingSourceForAssetType → 'manual_valuation') can
+//    NEVER be priced by anyone — 019's eod_price_insert admits manual_valuation only on an OWNED
+//    asset, a global row is owned by nobody, and 020 grants this worker no UPDATE to ever repair
+//    one. 'currency' is excluded separately: cash is amount-carried, not instrument-carried, and
+//    088's MINT mode already rejects it — admitting it here would put the two surfaces in
+//    disagreement. THE RIGHT HOME for all 5 excluded types is 088's MINT mode (caller-owned,
+//    therefore priceable — its companion price is written in the same RPC transaction). A
+//    UI-only narrowing would NOT be a control: this route is reachable from a stale tab, a
+//    second window, or anyone holding the shared secret (the same argument api/src's
+//    isClosedAccountWrite comment already makes for a different fence). Mirrors api/src's
+//    RESOLVABLE_ASSET_TYPES (asset-constants.ts) — hand-enumerated here too, deliberately NOT
+//    derived from pricingSourceForAssetType (that would couple this route's admission policy to
+//    a mapping owned by the ingest path).
+const ASSET_TYPES = ['equity', 'etf', 'fund', 'money_market', 'bond', 'future', 'option', 'crypto', 'metal'] as const;
+
+const nullableTrimmed = (max: number) =>
+	z.preprocess(
+		(v) => (v === '' || v === undefined ? null : v),
+		z.string().trim().max(max).nullable()
+	);
+
+const assetResolveBodySchema = z
+	.object({
+		ownerUserId: z.string().uuid(),
+		symbol: z.preprocess(
+			(v) => (v === '' || v === undefined ? null : v),
+			z
+				.string()
+				.trim()
+				.max(20)
+				.regex(/^[A-Za-z0-9.\-]+$/, 'symbol must be alphanumeric (with . or -).')
+				.nullable()
+		),
+		cusip: z.preprocess(
+			(v) => (v === '' || v === undefined ? null : v),
+			z
+				.string()
+				.trim()
+				.length(9, 'cusip must be exactly 9 characters.')
+				.regex(/^[A-Za-z0-9]{9}$/, 'cusip must be alphanumeric.')
+				.nullable()
+		),
+		assetType: z.enum(ASSET_TYPES),
+		name: nullableTrimmed(200),
+		currency: z
+			.string()
+			.trim()
+			.regex(/^[A-Za-z]{3}$/, 'currency must be a 3-letter ISO code.')
+	})
+	.strict()
+	.refine((v) => v.symbol !== null || v.cusip !== null, {
+		message: 'At least one of symbol or cusip is required.',
+		path: ['symbol']
+	});
+
 export interface ReauthStartInput {
 	provider: 'plaid' | 'simplefin';
 	linkedSourceId: bigint;
@@ -191,6 +264,9 @@ export interface AdmissionServerDeps {
 	/** SELF-317: user-initiated "Sync now" — validates + debounces synchronously, returns per-source
 	 *  dispositions, and runs the actual sync(s) fire-and-forget (A2). Resolves fast (before the 202). */
 	manualSync(input: ManualSyncInput): Promise<ManualSyncResult>;
+	/** SELF-325: resolve-or-mint a GLOBAL pfin.asset row for the manual purchase-path (thin wrapper
+	 *  over resolveSecurityId — see assetResolve.ts). */
+	resolveAsset(input: AssetResolveInput): Promise<AssetResolveResult>;
 	/** Token-free diagnostic logger (never receives a body/secret/token). */
 	logger?: (message: string) => void;
 }
@@ -262,6 +338,7 @@ function toAdmissionAccounts(accounts: ProviderAccountRef[]): AdmissionAccountRe
  *   POST /admission/link-token       → { link_token, expiration } (leg-1, shared-secret authed)
  *   POST /admission/exchange         → { sourceId, accounts }     (leg-2, shared-secret authed)
  *   POST /admission/simplefin/claim  → { sourceId, accounts }     (leg-S, shared-secret authed)
+ *   POST /asset/resolve              → { assetId }                (SELF-325, shared-secret authed)
  * Every non-health route requires the constant-time shared-secret header; absent/mismatch → 401.
  */
 /** N-1 (Sec SELF-212): explicit inbound timeouts — do NOT rely on Node defaults for a
@@ -341,6 +418,10 @@ export function createAdmissionServer(deps: AdmissionServerDeps): Server {
 			if (method !== 'POST') return sendError(res, METHOD_NOT_ALLOWED, 'method_not_allowed');
 			return handleManualSync(req, res);
 		}
+		if (path === '/asset/resolve') {
+			if (method !== 'POST') return sendError(res, METHOD_NOT_ALLOWED, 'method_not_allowed');
+			return handleAssetResolve(req, res);
+		}
 		return sendError(res, NOT_FOUND, 'not_found');
 	}
 
@@ -388,6 +469,9 @@ export function createAdmissionServer(deps: AdmissionServerDeps): Server {
 			const { sourceId, accounts } = await deps.admit(input);
 			log(`admission: 200 admitted source_id=${sourceId} (accounts=${accounts.length})`);
 			// bigint → string (JSON has no bigint). Never echo the public_token (C6-5).
+			// ⚠ FORCED by sourceId's bigint type — NOT a precision convention. Do not cite this as a
+			// precedent for other id fields: /asset/resolve emits assetId as a NUMBER because
+			// resolveSecurityId declares it `number`. See the discriminator note at handleAssetResolve.
 			return sendJson(res, OK, { sourceId: String(sourceId), accounts: toAdmissionAccounts(accounts) });
 		} catch (err) {
 			// Item-2: ONLY a recognized public_token-invalidity at the exchange leg is client-
@@ -430,6 +514,9 @@ export function createAdmissionServer(deps: AdmissionServerDeps): Server {
 			const { sourceId, accounts } = await deps.admitSimplefin(input);
 			log(`admission: 200 simplefin admitted source_id=${sourceId} (accounts=${accounts.length})`);
 			// bigint → string (JSON has no bigint). Never echo the setup token / Access URL (C6-5).
+			// ⚠ FORCED by sourceId's bigint type — NOT a precision convention. Do not cite this as a
+			// precedent for other id fields: /asset/resolve emits assetId as a NUMBER because
+			// resolveSecurityId declares it `number`. See the discriminator note at handleAssetResolve.
 			return sendJson(res, OK, { sourceId: String(sourceId), accounts: toAdmissionAccounts(accounts) });
 		} catch (err) {
 			// ONLY a recognized setup-token-invalidity is client-correctable → worker-400
@@ -596,6 +683,54 @@ export function createAdmissionServer(deps: AdmissionServerDeps): Server {
 			// (A2 fire-and-forget is guarded worker-side). Envelope stays scrubbed (C6-5/C4).
 			log(`admission: 502 manual-sync failed (${err instanceof Error ? err.message : 'error'})`);
 			return sendError(res, BAD_GATEWAY, 'manual_sync_failed');
+		}
+	}
+
+	// SELF-325 — resolve-or-mint a GLOBAL pfin.asset row for the manual purchase-path (Case 3 /
+	// public tickers). A thin wrapper (deps.resolveAsset → resolveSecurityId; see assetResolve.ts
+	// module header) — this handler re-implements nothing. ownerUserId is session-derived (C6-3;
+	// never browser-sourced) and doubles as the audit subject + future rate-limit key (no
+	// rate-limit control exists yet — flagged to Sec, not built here). Every failure stays 5xx: a
+	// resolve/mint failure here is a DB/infra condition, never a client-correctable input (the
+	// Zod schema already rejected malformed identity inputs before this runs). C6-5: route+status
+	// only — never the body.
+	async function handleAssetResolve(req: IncomingMessage, res: ServerResponse): Promise<void> {
+		let body: unknown;
+		try {
+			body = await readJsonBody(req);
+		} catch (err) {
+			const reason = err instanceof Error ? err.message : '';
+			return sendError(res, reason === 'BODY_TOO_LARGE' ? PAYLOAD_TOO_LARGE : BAD_REQUEST, 'invalid_request');
+		}
+		const parsed = assetResolveBodySchema.safeParse(body);
+		if (!parsed.success) return sendError(res, BAD_REQUEST, 'invalid_request');
+
+		try {
+			const result = await deps.resolveAsset({
+				ownerUserId: parsed.data.ownerUserId,
+				symbol: parsed.data.symbol,
+				cusip: parsed.data.cusip,
+				assetType: parsed.data.assetType,
+				name: parsed.data.name,
+				currency: parsed.data.currency
+			});
+			log(`admission: 200 asset-resolve asset_id=${result.assetId ?? 'null'}`);
+			// assetId is a JSON NUMBER, and that is NOT a divergence from the sourceId sites above —
+			// the two carry different IN-WORKER TYPES, which is the entire discriminator. sourceId is a
+			// native JS bigint (see admit() / admitSimplefin() return types) and JSON.stringify THROWS
+			// on a bigint, so String(sourceId) there is FORCED by the language, not chosen for precision.
+			// assetId is declared `number` by resolveSecurityId's own signature (ingest/resolution.ts:
+			// Promise<number | null>); its former string-on-the-wire form was the postgres driver leaking
+			// a bigint past a number-typed boundary — a type lie, not a convention. Emitting a number here
+			// makes the wire match the declared type.
+			// ⚠ NEITHER SITE MAKES A 2^53 PRECISION CLAIM and neither is safer than the other on that axis.
+			// If assetId ever needs bigint precision the change is to type it bigint in resolution.ts, at
+			// which point this site takes String() for the same forced reason the sourceId sites do.
+			// (Sec, SELF-325 delta review.)
+			return sendJson(res, OK, { assetId: result.assetId });
+		} catch (err) {
+			log(`admission: 502 asset-resolve failed (${err instanceof Error ? err.message : 'error'})`);
+			return sendError(res, BAD_GATEWAY, 'asset_resolve_failed');
 		}
 	}
 }

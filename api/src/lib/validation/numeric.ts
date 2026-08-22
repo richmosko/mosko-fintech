@@ -35,6 +35,19 @@ const PERCENT_MAX_DECIMAL_PLACES = 2;
 const PERCENT_MIN = 0;
 const PERCENT_MAX = 100;
 
+/** Max integer digits for a Postgres numeric(28,8): 28 precision − 8 scale = 20. Mirrors
+ *  `017`'s `pfin.account_trans.quantity numeric(28,8)` — the SELF-325 purchase-path
+ *  `p_quantity` argument (088) is written straight into this column. SHARE-COUNT SHAPE,
+ *  not money: 8 decimal places (fractional-share / crypto grain) vs money's 4, and 20
+ *  integer digits vs money's 16. Kept as its OWN wrapper rather than reusing
+ *  `sanitizeCurrencyAmount` — collapsing the two would silently truncate a legitimate
+ *  8-decimal quantity to 4 decimal places client-side while the server/DB accept it,
+ *  producing a false "too many decimal places" rejection the server would not raise.
+ *  ⚠ PROVISIONAL pending Backend's SELF-325 RPC-arg schema confirming the server-side
+ *  shape — see purchase.ts EXPECTED CONTRACT note. */
+const QUANTITY_MAX_INT_DIGITS = 20;
+const QUANTITY_MAX_DECIMAL_PLACES = 8;
+
 /**
  * Generous, shared, EXPLICIT input-length bound — well above any legitimate numeric
  * literal either wrapper accepts (numeric(20,4) tops out at a 22-character string: sign
@@ -135,5 +148,24 @@ export function sanitizePercent(raw: unknown): SanitizeResult {
 		maxDecimalPlaces: PERCENT_MAX_DECIMAL_PLACES,
 		min: PERCENT_MIN,
 		max: PERCENT_MAX
+	});
+}
+
+/**
+ * Validate a user-supplied share-quantity input, shaped to
+ * `pfin.account_trans.quantity`'s own DDL (`017`): numeric(28,8). SELF-325 / 088
+ * third consumer — the manual-purchase form's `quantity` field. Same adversarial
+ * categories as the other two wrappers (NaN, Infinity, currency-string, regex-overflow,
+ * scientific-notation, locale-formatted); 088 additionally requires quantity > 0 (a
+ * purchase adds a positive quantity) — that positivity + the "derives to a 0.0000
+ * per-unit price" ratio check are NOT part of this shape-only battery and are enforced
+ * by the purchase schema's own `.refine()`s (purchase.ts), mirroring how
+ * `positiveRatioComponent` layers a `> 0` refine on top of `currencyAmount()` in
+ * schemas/transaction.ts.
+ */
+export function sanitizeQuantity(raw: unknown): SanitizeResult {
+	return sanitizeDecimal(raw, {
+		maxIntDigits: QUANTITY_MAX_INT_DIGITS,
+		maxDecimalPlaces: QUANTITY_MAX_DECIMAL_PLACES
 	});
 }

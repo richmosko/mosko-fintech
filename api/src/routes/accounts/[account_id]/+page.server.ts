@@ -65,9 +65,12 @@ import {
 	CLOSED_ACCOUNT_WRITE_MESSAGE,
 	type WriteResult
 } from '$lib/server/queries/transactions';
-import { loadCashflowSubCats, subCatLabel } from '$lib/server/queries/taxonomy';
+import { loadCashflowSubCats, subCatLabel, findDefaultBtoSubCatId } from '$lib/server/queries/taxonomy';
 import { loadDupCandidates, loadSyncHistory } from '$lib/server/queries/reconciliation';
 import { computeImportHash } from '$lib/server/dedup/importHash';
+import { createPurchaseSchema } from '$lib/server/schemas/purchase';
+import { createManualPurchase } from '$lib/server/queries/purchases';
+import { loadSelectableAssets } from '$lib/server/queries/selectableAssets';
 import type { PageServerLoad, Actions } from './$types';
 
 // Category label + note (023) and split children (029) embedded per transaction so the
@@ -187,6 +190,24 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	// account-level Sub-Cat surface is removed.)
 	const cashflowSubCats = await loadCashflowSubCats(locals.supabase);
 
+	// SELF-325 purchase-path DISPLAY data (the createPurchase action re-reads both, independently
+	// and authoritatively, at submit time — this is for rendering the form, not the write path):
+	//   - selectableAssets: the caller's pickable universe (own + global pfin.asset, RLS-scoped)
+	//     for the BIND-mode "pick an existing asset" affordance, distinct from a fresh /asset/
+	//     resolve ticker lookup.
+	//   - defaultSubCat: derived from the ALREADY-LOADED cashflowSubCats (no extra round trip) —
+	//     the caller's 'Trade'/'BTO' row, so the form can show the category the purchase will
+	//     default to before the user ever touches the sub_cat_id field. Absent (not provisioned /
+	//     renamed / deactivated) → null; the form renders "Unsorted-pending", same fallback the
+	//     action itself uses via findDefaultBtoSubCatId.
+	// Fail-soft: mirrors heldSecurities/dupCandidates — a read error degrades to an empty picker
+	// (the resolve+RPC write path stays the authoritative check either way) rather than breaking
+	// the page load.
+	const { assets: selectableAssets } = await loadSelectableAssets(locals.supabase);
+	const defaultBto = cashflowSubCats.find((s) => s.cat === 'Trade' && s.sub_cat === 'BTO') ?? null;
+	const defaultSubCatId = defaultBto?.id ?? null;
+	const defaultSubCatLabel = defaultBto ? `${defaultBto.cat} — ${defaultBto.sub_cat}` : null;
+
 	// SELF-203 stock-split entry — the account's current live positions (quantity ≠ 0) for the
 	// security picker: fn_holdings_as_of(today) filtered to this account + pfin.asset labels.
 	// RLS-scoped, fail-soft ([] on error → cash-only accounts have nothing to split). The
@@ -228,7 +249,10 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		heldSecurities,
 		dupCandidates,
 		syncHistory,
-		connection
+		connection,
+		selectableAssets,
+		defaultSubCatId,
+		defaultSubCatLabel
 	};
 };
 
@@ -632,5 +656,46 @@ export const actions: Actions = {
 		if (!parsed.success) return fail(400, { errors: fieldErrors(parsed.error), values: raw });
 
 		return toActionResult(await createStockSplit(locals.supabase, accountId, parsed.data));
+	},
+
+	// ── SELF-325 manual purchase-path (088 / fn_create_manual_purchase) ────────────────────
+	// Posted `mode` selects BIND (`security_id`, resolved beforehand via /asset/resolve or a
+	// selectableAssets.ts picker) or MINT (`asset_type`/`asset_name`[/`symbol`], a new
+	// caller-owned asset). account_id is the route param, not a form field. `priced`/`price`/
+	// `security_id` come back from the RPC's composite and are forwarded to the caller
+	// UNCHANGED — see purchases.ts's module header for why projecting them away is the failure
+	// ADR-049 Decision 4 exists to prevent. `priced` is a rendering indicator only.
+	createPurchase: async ({ request, locals, params }) => {
+		const { user } = await locals.safeGetSession();
+		if (!user) return fail(401, { errors: { _form: ['You must be signed in.'] } });
+		const accountId = parseAccountId(params.account_id);
+		if (accountId === null) return fail(400, { errors: { _form: ['Invalid account.'] } });
+
+		const raw = Object.fromEntries(await request.formData());
+		const parsed = createPurchaseSchema.safeParse(raw);
+		if (!parsed.success) return fail(400, { errors: fieldErrors(parsed.error), values: raw });
+		let v = parsed.data;
+
+		// 088 deliberately does NOT default p_sub_cat_id (single-authority rule: selecting a
+		// per-user taxonomy row is app-layer work). When the form omitted one, look up the
+		// caller's default 'Trade'/'BTO' row; a miss (not provisioned / renamed / deactivated)
+		// falls through as NULL — 088's own Unsorted-pending fallback, not an error.
+		if (v.sub_cat_id === null) {
+			const btoId = await findDefaultBtoSubCatId(locals.supabase);
+			v = { ...v, sub_cat_id: btoId };
+		}
+
+		const result = await createManualPurchase(locals.supabase, accountId, v);
+		if (!result.ok) {
+			const key = result.field ?? '_form';
+			return fail(result.status, { errors: { [key]: [result.message] }, values: raw });
+		}
+		return {
+			success: true,
+			transId: result.transId,
+			securityId: result.securityId,
+			priced: result.priced,
+			price: result.price
+		};
 	}
 };

@@ -391,23 +391,96 @@ export async function createStockSplit(
 	return { ok: true, transId: newId as number };
 }
 
-/** One held-security option for the stock-split picker. `security_id` is pfin.asset.asset_id
- *  — the value the form posts back as `security_id` (matches Frontend's SecurityOption +
- *  fn_create_stock_split's p_security_id). `quantity` is the current held share count (display). */
+/** One held-security option for the stock-split picker AND the SELF-325 P-b account-detail
+ *  read-side signal. `security_id` is pfin.asset.asset_id — the value the form posts back as
+ *  `security_id` (matches Frontend's SecurityOption + fn_create_stock_split's p_security_id).
+ *  `quantity` is the current held share count (display). */
 export type HeldSecurity = {
 	security_id: number;
 	symbol: string | null;
 	name: string | null;
 	quantity: number;
+	/**
+	 * SELF-325 P-b (F/CTO-ratified, Architect catch criterion): TRUE iff `pfin.fn_asset_priced_flags`
+	 * (089) reports this asset priced as of `asOf`. 089 IS the single definition of this predicate —
+	 * `pfin.fn_create_manual_purchase` (088) calls the SAME function for its write-time `priced`
+	 * composite field, so a purchase's confirmation and its later account-detail rendering can
+	 * never disagree about the same holding BY CONSTRUCTION, not by two implementations being kept
+	 * in step by hand.
+	 *
+	 * ⚠ HISTORY (Sec C3 → Sec F1, SELF-325 round 10): this flag was previously computed by a
+	 * TypeScript reimplementation in this file that both this comment and 088's header claimed was
+	 * "reused verbatim" from 088's inline SQL. That was never achievable — verbatim reuse across a
+	 * SQL/TypeScript boundary is impossible by construction — and the claim went unchecked: the TS
+	 * took the FIRST row per asset with NO tiebreak among rows sharing the max price_date, which was
+	 * NONDETERMINISTIC at a same-date tie (Sec C3), and separately fetched the ENTIRE price history
+	 * <= asOf for every held asset with no bound, which could exceed PostgREST's row cap on as few
+	 * as two ordinarily-priced holdings and silently render the unpriced marker on a CORRECTLY-PRICED
+	 * one (Sec F1). Both defects were one root cause — two implementations required to agree with
+	 * nothing forcing agreement — and 089 removes the class rather than re-aligning the instance.
+	 * See `loadPricedFlags` and 089's own migration header for the full predicate + imprecision
+	 * this function still carries (bool_or over the max-price_date rows; not a valuation primitive).
+	 *
+	 * Fail-CLOSED on a read error: defaults to `false` (unpriced) rather than `true` — a read
+	 * failure must never present as "this holding is fine."
+	 */
+	priced: boolean;
 };
 
 /**
+ * Per-asset "has a usable current price" flag, keyed by asset_id — SELF-325 P-b / F1, delegated
+ * entirely to `pfin.fn_asset_priced_flags` (089; see HeldSecurity.priced's own comment for the
+ * history). One RPC call, one row per DISTINCT requested asset_id — 089's contract guarantees a
+ * row for every id passed (never NULL, never absent: an id with no visible usable price returns
+ * `false`), so this function's job is purely marshaling the RPC result into a Map, not computing
+ * the predicate.
+ *
+ * ⚠ THIS IS WHAT CLOSES SEC'S F1 (Architect, SELF-325 round 10, verbatim): the result set is now
+ * bounded by the caller's HOLDING COUNT, not by price history, so PostgREST's row cap is
+ * unreachable BY CONSTRUCTION — never re-introduce a raw `eod_price` fetch here; that is exactly
+ * the shape that broke (an asset priced daily by one source for three years is ~750 rows, and two
+ * such holdings exceeded the 1000-row cap, silently truncating the highest asset_ids to
+ * priced:false).
+ *
+ * RLS-scoped (089 is SECURITY INVOKER; 019's eod_price_select admits a price row iff global-OR-
+ * owned) — the SAME visibility `loadHeldSecurities`'s asset label read already relies on, so no
+ * asset here is visible for a price check that wasn't already visible for its label.
+ */
+async function loadPricedFlags(
+	supabase: SupabaseClient,
+	assetIds: number[],
+	asOf: ZoneResolvedAsOf
+): Promise<Map<number, boolean>> {
+	const out = new Map<number, boolean>();
+	const { data, error } = await supabase
+		.schema('pfin')
+		.rpc('fn_asset_priced_flags', { p_asset_ids: assetIds, p_as_of: asOf });
+	if (error) {
+		// Fail-CLOSED: an unverifiable read must never present as "priced" — return an empty map
+		// so every asset_id defaults to false at the call site, same as "no price row exists".
+		console.error('[transactions] loadPricedFlags RPC failed (fail-closed to unpriced):', error.message);
+		return out;
+	}
+	// 089's asset_id is bigint; this file already trusts fn_holdings_as_of's bigint asset_id as a
+	// plain `number` over the SAME PostgREST/.rpc() transport two reads above (loadHeldSecurities'
+	// `positions` mapping) — mirrored here, not re-derived, for the same measured wire shape.
+	for (const row of (data ?? []) as Array<{ asset_id: number; priced: boolean }>) {
+		out.set(row.asset_id, row.priced);
+	}
+	return out;
+}
+
+/**
  * Load the securities CURRENTLY held in an account as-of `asOf` — the option set for the
- * stock-split security picker (SELF-203). Two RLS-scoped reads, both fail-soft (logged, [] on
- * error — the picker degrades, never throws):
+ * stock-split security picker (SELF-203), now also carrying the SELF-325 P-b `priced` signal
+ * consumed by the account-detail holdings view. Three RLS-scoped reads, all fail-soft/fail-closed
+ * (logged; [] / false degrades — the picker/marker degrades, never throws):
  *   (1) fn_holdings_as_of (019 INVOKER roll-forward) → (account_id, asset_id, quantity) for
  *       every account; live positions only (qty <> 0). We keep this account's rows.
  *   (2) a pfin.asset label read (RLS: global OR owned) for the held asset_ids → symbol/name.
+ *   (3) loadPricedFlags, at the SAME `asOf` as (1) — never call the clock twice: a priced probe
+ *       at a different as_of than the holdings read could mark a position unpriced that the
+ *       holdings view values, or the reverse.
  * Cash is naturally absent (cash carries no security_id). Sorted by symbol, then name.
  */
 export async function loadHeldSecurities(
@@ -445,12 +518,15 @@ export async function loadHeldSecurities(
 		])
 	);
 
+	const pricedByAssetId = await loadPricedFlags(supabase, assetIds, asOf);
+
 	return positions
 		.map((p) => ({
 			security_id: p.asset_id,
 			symbol: labelById.get(p.asset_id)?.symbol ?? null,
 			name: labelById.get(p.asset_id)?.name ?? null,
-			quantity: Number(p.quantity)
+			quantity: Number(p.quantity),
+			priced: pricedByAssetId.get(p.asset_id) ?? false
 		}))
 		.sort((a, b) => (a.symbol ?? a.name ?? '').localeCompare(b.symbol ?? b.name ?? ''));
 }

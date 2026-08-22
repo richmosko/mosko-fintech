@@ -21,6 +21,7 @@ import { loadAdmissionConfig } from '../http/admissionConfig.js';
 import { fetchWebhookVerificationKey, type WebhookKeyClient } from '../http/webhookVerificationKey.js';
 import { syncLinkedSource, productionSyncSourceDeps } from '../http/triggerSync.js';
 import { manualSync, productionManualSyncDeps, createSyncDebounce } from '../http/manualSync.js';
+import { productionAssetResolveDeps } from '../http/assetResolve.js';
 import { todayIso } from './poll.js';
 import {
 	createAdmissionServer,
@@ -41,6 +42,11 @@ export async function main(): Promise<void> {
 	// process). Shared across every manual-sync call so the 60s/source window + in-flight flag
 	// persist between requests (in-memory; resets on restart — acceptable per design §5).
 	const syncDebounce = createSyncDebounce();
+
+	// SELF-325: production wiring for the asset-resolve leg (thin wrapper over resolveSecurityId;
+	// see assetResolve.ts module header). Constructed once at boot — resolve() opens its own
+	// per-call tenant-bound client (mirrors the other production dep factories on this server).
+	const assetResolveDeps = productionAssetResolveDeps(config);
 
 	// The dbFor FACTORY (not this file, not the adapter) constructs the raw Postgres client via
 	// TenantBoundClient.forTenant → the fence-tbc-node LEG-1 anchor stays the sole construction
@@ -96,6 +102,8 @@ export async function main(): Promise<void> {
 		// frozen at boot); the debounce store is the SHARED process-lifetime instance (R1).
 		manualSync: (input) =>
 			manualSync(productionManualSyncDeps(config, todayIso(new Date()), syncDebounce), input),
+		// SELF-325: resolve-or-mint a GLOBAL pfin.asset row for the manual purchase-path.
+		resolveAsset: (input) => assetResolveDeps.resolve(input),
 		logger: (m) => console.log(`[admission] ${m}`)
 	});
 

@@ -50,6 +50,7 @@ async function start(deps: Partial<AdmissionServerDeps> = {}): Promise<string> {
 		})),
 		syncSource: vi.fn(async () => ({ sourceId: '42', inserted: 3, skipped: 1, unresolvedAccounts: 0 })),
 		manualSync: vi.fn(async () => ({ sources: [{ source_id: '42', disposition: 'triggered' as const }] })),
+		resolveAsset: vi.fn(async () => ({ assetId: 501 })),
 		logger: vi.fn(),
 		...deps
 	};
@@ -543,5 +544,180 @@ describe('SELF-317 manual-sync — user-initiated "Sync now" (A2 return-fast 202
 		const res = await post(`${url}/admission/manual-sync`, { ownerUserId: UUID }, authed);
 		expect(res.status).toBe(502);
 		expect(await res.json()).toEqual({ error: 'manual_sync_failed' });
+	});
+});
+
+describe('SELF-325 asset-resolve — resolve-or-mint a global asset (Case 3)', () => {
+	it('happy path (symbol) returns { assetId } and forwards the input verbatim', async () => {
+		const resolveAsset = vi.fn(async () => ({ assetId: 501 }));
+		const url = await start({ resolveAsset });
+		const res = await post(
+			`${url}/asset/resolve`,
+			{ ownerUserId: UUID, symbol: 'AAPL', cusip: null, assetType: 'equity', name: 'Apple Inc', currency: 'USD' },
+			authed
+		);
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ assetId: 501 });
+		expect(resolveAsset).toHaveBeenCalledWith({
+			ownerUserId: UUID,
+			symbol: 'AAPL',
+			cusip: null,
+			assetType: 'equity',
+			name: 'Apple Inc',
+			currency: 'USD'
+		});
+	});
+
+	it('happy path (cusip, no symbol) resolves too', async () => {
+		const resolveAsset = vi.fn(async () => ({ assetId: 502 }));
+		const url = await start({ resolveAsset });
+		const res = await post(
+			`${url}/asset/resolve`,
+			{ ownerUserId: UUID, symbol: null, cusip: '037833100', assetType: 'bond', name: null, currency: 'USD' },
+			authed
+		);
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ assetId: 502 });
+	});
+
+	it('401 without the shared secret — resolveAsset never invoked', async () => {
+		const resolveAsset = vi.fn();
+		const url = await start({ resolveAsset });
+		const res = await post(`${url}/asset/resolve`, {
+			ownerUserId: UUID,
+			symbol: 'AAPL',
+			cusip: null,
+			assetType: 'equity',
+			name: null,
+			currency: 'USD'
+		});
+		expect(res.status).toBe(401);
+		expect(resolveAsset).not.toHaveBeenCalled();
+	});
+
+	it('400 when both symbol and cusip are absent — no identity to resolve', async () => {
+		const resolveAsset = vi.fn();
+		const url = await start({ resolveAsset });
+		const res = await post(
+			`${url}/asset/resolve`,
+			{ ownerUserId: UUID, symbol: null, cusip: null, assetType: 'equity', name: null, currency: 'USD' },
+			authed
+		);
+		expect(res.status).toBe(400);
+		expect(resolveAsset).not.toHaveBeenCalled();
+	});
+
+	it('400 on a malformed symbol (namespace-pollution boundary — pattern/length)', async () => {
+		const resolveAsset = vi.fn();
+		const url = await start({ resolveAsset });
+		const res = await post(
+			`${url}/asset/resolve`,
+			{ ownerUserId: UUID, symbol: 'AAPL; DROP TABLE', cusip: null, assetType: 'equity', name: null, currency: 'USD' },
+			authed
+		);
+		expect(res.status).toBe(400);
+		expect(resolveAsset).not.toHaveBeenCalled();
+	});
+
+	it('400 on a cusip that is not exactly 9 characters', async () => {
+		const resolveAsset = vi.fn();
+		const url = await start({ resolveAsset });
+		const res = await post(
+			`${url}/asset/resolve`,
+			{ ownerUserId: UUID, symbol: null, cusip: 'TOOSHORT', assetType: 'equity', name: null, currency: 'USD' },
+			authed
+		);
+		expect(res.status).toBe(400);
+		expect(resolveAsset).not.toHaveBeenCalled();
+	});
+
+	it('400 on an asset_type outside 016\'s CHECK vocabulary', async () => {
+		const resolveAsset = vi.fn();
+		const url = await start({ resolveAsset });
+		const res = await post(
+			`${url}/asset/resolve`,
+			{ ownerUserId: UUID, symbol: 'AAPL', cusip: null, assetType: 'nonsense', name: null, currency: 'USD' },
+			authed
+		);
+		expect(res.status).toBe(400);
+		expect(resolveAsset).not.toHaveBeenCalled();
+	});
+
+	it("400 on a personal-asset type (real_estate/vehicle/collectible/private) — excluded 2026-08-21: would mint a permanently-unpriceable global row", async () => {
+		const resolveAsset = vi.fn();
+		const url = await start({ resolveAsset });
+		for (const assetType of ['real_estate', 'vehicle', 'collectible', 'private']) {
+			const res = await post(
+				`${url}/asset/resolve`,
+				{ ownerUserId: UUID, symbol: 'X', cusip: null, assetType, name: null, currency: 'USD' },
+				authed
+			);
+			expect(res.status).toBe(400);
+		}
+		expect(resolveAsset).not.toHaveBeenCalled();
+	});
+
+	it('400 on currency (088 MINT mode already rejects it; the two surfaces must not disagree)', async () => {
+		const resolveAsset = vi.fn();
+		const url = await start({ resolveAsset });
+		const res = await post(
+			`${url}/asset/resolve`,
+			{ ownerUserId: UUID, symbol: 'USD', cusip: null, assetType: 'currency', name: null, currency: 'USD' },
+			authed
+		);
+		expect(res.status).toBe(400);
+		expect(resolveAsset).not.toHaveBeenCalled();
+	});
+
+	it('400 on a bad uuid ownerUserId', async () => {
+		const resolveAsset = vi.fn();
+		const url = await start({ resolveAsset });
+		const res = await post(
+			`${url}/asset/resolve`,
+			{ ownerUserId: 'not-a-uuid', symbol: 'AAPL', cusip: null, assetType: 'equity', name: null, currency: 'USD' },
+			authed
+		);
+		expect(res.status).toBe(400);
+		expect(resolveAsset).not.toHaveBeenCalled();
+	});
+
+	it('400 on an extra field (Lock 14 mass-assignment fence, .strict)', async () => {
+		const resolveAsset = vi.fn();
+		const url = await start({ resolveAsset });
+		const res = await post(
+			`${url}/asset/resolve`,
+			{
+				ownerUserId: UUID,
+				symbol: 'AAPL',
+				cusip: null,
+				assetType: 'equity',
+				name: null,
+				currency: 'USD',
+				users_id: 'other-tenant'
+			},
+			authed
+		);
+		expect(res.status).toBe(400);
+		expect(resolveAsset).not.toHaveBeenCalled();
+	});
+
+	it('C6-5: any resolve failure returns a generic 502 with no detail leak', async () => {
+		const resolveAsset = vi.fn(async () => {
+			throw new Error('db blew up unexpectedly');
+		});
+		const url = await start({ resolveAsset });
+		const res = await post(
+			`${url}/asset/resolve`,
+			{ ownerUserId: UUID, symbol: 'AAPL', cusip: null, assetType: 'equity', name: null, currency: 'USD' },
+			authed
+		);
+		expect(res.status).toBe(502);
+		expect(await res.json()).toEqual({ error: 'asset_resolve_failed' });
+	});
+
+	it('405 on a wrong method for the resolve route', async () => {
+		const url = await start();
+		const res = await fetch(`${url}/asset/resolve`, { headers: authed });
+		expect(res.status).toBe(405);
 	});
 });

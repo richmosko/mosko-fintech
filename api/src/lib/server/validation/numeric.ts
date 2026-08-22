@@ -44,6 +44,16 @@ const PERCENT_MAX_DECIMAL_PLACES = 2;
 const PERCENT_MIN = 0;
 const PERCENT_MAX = 100;
 
+/** Max integer digits for a Postgres numeric(28,8): 28 precision − 8 scale = 20. Shapes
+ *  `pfin.account_trans.quantity` (017). No `min`/`max` here — the column itself carries no DB
+ *  CHECK range, so there is no inclusive bound to mirror (unlike `sanitizePercent`'s 074 CHECK).
+ *  The strict positivity `fn_create_manual_purchase` (088) requires is layered on top by the Zod
+ *  adapter's own `.refine((n) => n > 0, ...)` — the same shape as `transaction.ts`'s
+ *  `positiveRatioComponent()` — never folded into this shape's `min`, because `sanitizeDecimal`'s
+ *  `min` is inclusive (`value < min` rejects) and would wrongly admit exactly `0`. */
+const QUANTITY_MAX_INT_DIGITS = 20;
+const QUANTITY_MAX_DECIMAL_PLACES = 8;
+
 /**
  * Generous, shared, EXPLICIT input-length bound — well above any legitimate numeric
  * literal this module accepts (numeric(20,4) tops out at a 22-character string: sign +
@@ -167,4 +177,16 @@ export function sanitizePercent(raw: unknown): SanitizeResult {
 		min: PERCENT_MIN,
 		max: PERCENT_MAX
 	});
+}
+
+/**
+ * Validate a user-supplied share/unit-quantity input against the battery, shaped to
+ * `pfin.account_trans.quantity`'s own DDL (017): `numeric(28,8)`, no CHECK range. SELF-325
+ * (`fn_create_manual_purchase`, 088) first consumer. Same six adversarial categories as the other
+ * exports; strict positivity is NOT enforced here (see the shape constants' comment) — the Zod
+ * adapter in `schemas/purchase.ts` layers a `.refine((n) => n > 0, ...)` on top, mirroring
+ * `transaction.ts`'s `positiveRatioComponent()`.
+ */
+export function sanitizeQuantity(raw: unknown): SanitizeResult {
+	return sanitizeDecimal(raw, { maxIntDigits: QUANTITY_MAX_INT_DIGITS, maxDecimalPlaces: QUANTITY_MAX_DECIMAL_PLACES });
 }
