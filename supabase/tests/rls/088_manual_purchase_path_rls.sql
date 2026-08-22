@@ -104,6 +104,24 @@
 -- │   independently-checked tables, plus the message pinned so a firing-order   │
 -- │   change (trigger rename) would go RED rather than resting on Postgres's     │
 -- │   documented alphabetical same-timing rule.                                 │
+-- │ L7 pfin.fn_asset_priced_flags (089) DIRECT — the single definition of        │
+-- │   "does this asset have a usable price", called by BOTH 088 and the         │
+-- │   account-detail read path (Sec C3: the two had diverged and were           │
+-- │   NONDETERMINISTIC at a same-date tie; Sec F1: the old read fetched          │
+-- │   unbounded price history through PostgREST with no row-cap guard). Four    │
+-- │   properties, tested nowhere else once Backend's F1 fix correctly deleted   │
+-- │   the app-layer tests for them: a same-date tie resolves to TRUE regardless │
+-- │   of INSERTION ORDER (inversion-tested — a first-row-wins sabotage flips    │
+-- │   exactly one of the two orderings, which is why both are asserted          │
+-- │   separately); a zero-valued row alone is FALSE; an older positive row does │
+-- │   NOT rescue a newer zero row (the leg a naive "any positive exists"        │
+-- │   implementation would uniquely fail); and a no-rows asset returns FALSE as │
+-- │   a PRESENT row, never NULL, never absent.                                  │
+-- │ L8 invisible-vs-unpriced INDISTINGUISHABILITY — 089 must not become a       │
+-- │   cross-tenant existence oracle. B probing A's PRIVATE asset_id (seeded     │
+-- │   with a REAL price, so the control is non-vacuous — A reads TRUE on their  │
+-- │   own asset) reads the SAME FALSE as B's own genuinely-unpriced asset. A    │
+-- │   future "helpful" fix that distinguished the two cases would go red here.  │
 -- └───────────────────────────────────────────────────────────────────────────┘
 --
 -- MESSAGE-OWNERSHIP DISCIPLINE (every prefix below verified against the committed
@@ -182,20 +200,28 @@
 --   via `supabase migration up`, no db reset — F/CTO's local test data must
 --   survive). RED-until-088-applied is expected on the shared stack; CI
 --   (pg_prove directory-mode) after Backend's apply is the green gate. Verify
---   with pg_prove — bare psql exits 0 on a plan-count failure. plan(67)
+--   with pg_prove — bare psql exits 0 on a plan-count failure. plan(79)
 --   (raised from an initial 49 after the row(...)::record idiom failed against
 --   a live pg_prove run — "cannot compare dissimilar column types text and
 --   unknown" — split into 63 per-column assertions instead (see L2/L3/L5);
---   raised again to 67 for L6, added per Architect's ruling on the
---   p_sub_cat_id -> posting_prototype (#10) rollback proof — the fence is
---   023's to prove, but composing through 088 needed its own atomicity leg).
+--   raised to 67 for L6, added per Architect's ruling on the p_sub_cat_id ->
+--   posting_prototype (#10) rollback proof — the fence is 023's to prove, but
+--   composing through 088 needed its own atomicity leg; raised again to 79 for
+--   L7/L8, added as a BLOCKING pre-freeze item per Architect: 089
+--   (fn_asset_priced_flags) landed with its own four properties — same-date-tie
+--   order-independence (Sec C3), a zero-row-alone, max-date-picking, and the
+--   no-rows-returns-false-not-absent contract — tested NOWHERE once Backend's F1
+--   fix correctly deleted the app-layer tests for them, plus the
+--   invisible-vs-unpriced indistinguishability property (L8) that keeps 089 from
+--   becoming a cross-tenant existence oracle. L7's tie legs are
+--   inversion-tested — see L7's own header comment).
 -- =====================================================================
 
 begin;
 
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(67);
+select plan(79);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 
@@ -864,6 +890,196 @@ select is(
   :l6_baseline_trans::bigint,
   '(l6-4) ZERO orphan pfin.account_trans rows — the ledger row itself rolls back, not just its would-be annotation'
 );
+
+-- =====================================================================
+-- L7 — pfin.fn_asset_priced_flags (089) DIRECT: the four properties Sec's C3/F1
+--   fix depends on, tested nowhere else as of this commit. 089 replaces 088's own
+--   inline `priced` computation (semantically identical, Architect-verified) AND
+--   the account-detail TypeScript read that DIVERGED from it at a same-date tie
+--   (Sec C3 — nondeterministic, not merely different) and that fetched unbounded
+--   price history through PostgREST with no row-cap guard (Sec F1). These legs
+--   test the HELPER DIRECTLY — no purchase, no account, no transaction needed,
+--   since it takes only an asset_id array and a date.
+--   INVERSION-TESTED (not part of this file — a rolled-back sabotage probe):
+--   striking bool_or back to a bare `order by price_id limit 1` (088's
+--   pre-089 "first row, no tiebreak" shape) left (l7-5)'s order GREEN (its first
+--   inserted row happened to be the positive one) but flipped (l7-6)'s order RED
+--   (false where true is required) — MEASURED, not assumed. That asymmetry is
+--   exactly why both insertion orders are asserted as separate legs: a battery
+--   testing only one order would have missed the defect Sec's C3 finding was
+--   about, the same way the pre-fix code did.
+-- =====================================================================
+select set_config('role', 'postgres', true);
+
+-- (l7-1) catalog: exactly ONE fn_asset_priced_flags overload.
+select is(
+  (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'pfin' and p.proname = 'fn_asset_priced_flags')::bigint,
+  1::bigint,
+  '(l7-1) exactly ONE fn_asset_priced_flags overload exists in pg_proc'
+);
+
+-- (l7-2) INVOKER (prosecdef=false) and STABLE (provolatile='s', not IMMUTABLE —
+--   it reads a table) — both pinned on the signature per 089's own header.
+select ok(
+  (select p.prosecdef = false and p.provolatile = 's'
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'pfin' and p.proname = 'fn_asset_priced_flags'),
+  '(l7-2) fn_asset_priced_flags is SECURITY INVOKER (prosecdef=false) and STABLE (provolatile=s)'
+);
+
+-- (l7-3) EXECUTE granted to authenticated only; anon/public/service_role denied
+--   (service_role deliberately ungranted per 089's header — no worker path uses it).
+select ok(
+  has_function_privilege('authenticated',
+    'pfin.fn_asset_priced_flags(bigint[],date)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('anon',
+    'pfin.fn_asset_priced_flags(bigint[],date)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('public',
+    'pfin.fn_asset_priced_flags(bigint[],date)'::regprocedure, 'EXECUTE')
+  and not has_function_privilege('service_role',
+    'pfin.fn_asset_priced_flags(bigint[],date)'::regprocedure, 'EXECUTE'),
+  '(l7-3) EXECUTE granted to authenticated ONLY — anon, public and service_role all denied'
+);
+
+select _rls.set_tenant(:'ta'::uuid);
+
+-- Two same-date ties, DELIBERATELY seeded in OPPOSITE insertion orders — the
+-- variable under test IS insertion order, since C3 was about order-dependence,
+-- not about the predicate.
+insert into pfin.asset (asset_type, pricing_source, name, currency)
+values ('equity', 'manual_valuation', 'L7 Tie A (pos-then-zero)', 'USD')
+returning asset_id as l7_tie_a \gset
+insert into pfin.eod_price (asset_id, price_date, source, price) values (:l7_tie_a, '2026-04-15', 'manual_valuation', 10.00);
+select set_config('role', 'postgres', true);
+insert into pfin.eod_price (asset_id, price_date, source, price) values (:l7_tie_a, '2026-04-15', 'fx_feed', 0);
+select _rls.set_tenant(:'ta'::uuid);
+
+insert into pfin.asset (asset_type, pricing_source, name, currency)
+values ('equity', 'manual_valuation', 'L7 Tie B (zero-then-pos)', 'USD')
+returning asset_id as l7_tie_b \gset
+select set_config('role', 'postgres', true);
+insert into pfin.eod_price (asset_id, price_date, source, price) values (:l7_tie_b, '2026-04-15', 'fx_feed', 0);
+select _rls.set_tenant(:'ta'::uuid);
+insert into pfin.eod_price (asset_id, price_date, source, price) values (:l7_tie_b, '2026-04-15', 'manual_valuation', 10.00);
+
+-- Zero-valued row alone at the max date — the F3-b spelling a presence check
+-- cannot see.
+insert into pfin.asset (asset_type, pricing_source, name, currency)
+values ('equity', 'manual_valuation', 'L7 Zero Alone', 'USD')
+returning asset_id as l7_zero_alone \gset
+insert into pfin.eod_price (asset_id, price_date, source, price) values (:l7_zero_alone, '2026-04-15', 'manual_valuation', 0);
+
+-- Max-date-picking: an OLDER positive row and a NEWER zero row. A naive "any
+-- positive row exists" implementation passes every OTHER leg in this section and
+-- fails only here.
+insert into pfin.asset (asset_type, pricing_source, name, currency)
+values ('equity', 'manual_valuation', 'L7 Older Positive Newer Zero', 'USD')
+returning asset_id as l7_stale_positive \gset
+insert into pfin.eod_price (asset_id, price_date, source, price) values (:l7_stale_positive, '2026-03-15', 'manual_valuation', 10.00);
+select set_config('role', 'postgres', true);
+insert into pfin.eod_price (asset_id, price_date, source, price) values (:l7_stale_positive, '2026-04-15', 'fx_feed', 0);
+select _rls.set_tenant(:'ta'::uuid);
+
+-- No rows at all.
+insert into pfin.asset (asset_type, pricing_source, name, currency)
+values ('equity', 'manual_valuation', 'L7 No Rows', 'USD')
+returning asset_id as l7_no_rows \gset
+
+select set_config('role', 'postgres', true);
+
+-- (l7-4) tie, order A (positive inserted first): priced=true.
+select is(
+  (select priced from pfin.fn_asset_priced_flags(array[:l7_tie_a]::bigint[], '2026-04-15'::date)),
+  true,
+  '(l7-4) same-date tie, positive-then-zero insertion order: priced=TRUE'
+);
+
+-- (l7-5) tie, order B (zero inserted first): priced=true — THE leg that would
+-- have caught C3. A naive first-row-wins implementation flips THIS one false
+-- while (l7-4) stays green (measured in the inversion probe above).
+select is(
+  (select priced from pfin.fn_asset_priced_flags(array[:l7_tie_b]::bigint[], '2026-04-15'::date)),
+  true,
+  '(l7-5) same-date tie, ZERO-then-positive insertion order: priced=TRUE — order-independence, the C3 catch'
+);
+
+-- (l7-6) zero-valued row alone at the max date: priced=false.
+select is(
+  (select priced from pfin.fn_asset_priced_flags(array[:l7_zero_alone]::bigint[], '2026-04-15'::date)),
+  false,
+  '(l7-6) a zero-valued row alone at the max date: priced=FALSE'
+);
+
+-- (l7-7) max-date-picking: an older positive row does NOT rescue a newer zero
+-- row. priced=false.
+select is(
+  (select priced from pfin.fn_asset_priced_flags(array[:l7_stale_positive]::bigint[], '2026-04-15'::date)),
+  false,
+  '(l7-7) MAX-DATE PICKING: an older positive row does not override a newer zero row — priced=FALSE, not rescued by history'
+);
+
+-- (l7-8) no rows at all: priced=false.
+select is(
+  (select priced from pfin.fn_asset_priced_flags(array[:l7_no_rows]::bigint[], '2026-04-15'::date)),
+  false,
+  '(l7-8) an asset with NO eod_price rows at all: priced=FALSE'
+);
+
+-- (l7-9) non-vacuous companion to (l7-8): the row is PRESENT (count=1), never
+-- absent and never NULL — the contract 089's header states explicitly.
+select is(
+  (select count(*) from pfin.fn_asset_priced_flags(array[:l7_no_rows]::bigint[], '2026-04-15'::date))::bigint,
+  1::bigint,
+  '(l7-9) NON-VACUOUS: the no-rows asset still gets exactly ONE returned row (present, not absent) — proves (l7-8) is a real FALSE, not a missing row read as false'
+);
+
+-- =====================================================================
+-- L8 — invisible-vs-unpriced INDISTINGUISHABILITY: 089 must not become an
+--   existence oracle for another tenant's private asset_ids.
+-- =====================================================================
+select _rls.set_tenant(:'ta'::uuid);
+
+-- A's PRIVATE asset, given a REAL, USABLE price — load-bearing: if visibility
+-- ever leaked, B would see priced=TRUE and learn A holds a priced asset.
+insert into pfin.asset (asset_type, pricing_source, name, currency)
+values ('equity', 'manual_valuation', 'L8 A Private Priced', 'USD')
+returning asset_id as l8_a_private \gset
+insert into pfin.eod_price (asset_id, price_date, source, price) values (:l8_a_private, '2026-04-16', 'manual_valuation', 42.00);
+
+-- (l8-1) non-vacuous control: A, calling on their OWN asset, sees priced=TRUE —
+-- proves the asset genuinely IS priced, so (l8-2) below is about invisibility,
+-- not about the asset being unpriced.
+select is(
+  (select priced from pfin.fn_asset_priced_flags(array[:l8_a_private]::bigint[], '2026-04-16'::date)),
+  true,
+  '(l8-1) NON-VACUOUS CONTROL: A reads priced=TRUE on their own private asset'
+);
+select set_config('role', 'postgres', true);
+
+-- B's OWN visible-but-genuinely-unpriced asset.
+select _rls.set_tenant(:'tb'::uuid);
+insert into pfin.asset (asset_type, pricing_source, name, currency)
+values ('equity', 'manual_valuation', 'L8 B Visible Unpriced', 'USD')
+returning asset_id as l8_b_unpriced \gset
+
+-- (l8-2) B probes A's PRIVATE (and actually-priced) asset_id: priced=FALSE —
+-- invisible, not merely "this asset happens to have no price".
+select is(
+  (select priced from pfin.fn_asset_priced_flags(array[:l8_a_private]::bigint[], '2026-04-16'::date)),
+  false,
+  '(l8-2) B probing A''s PRIVATE, ACTUALLY-PRICED asset_id gets priced=FALSE — invisibility, not a real unpriced answer'
+);
+
+-- (l8-3) B''s own visible-but-unpriced asset ALSO reads priced=FALSE — the SAME
+-- answer as (l8-2), which is the indistinguishability property itself: a caller
+-- cannot tell "invisible" from "visible and unpriced" from the output alone.
+select is(
+  (select priced from pfin.fn_asset_priced_flags(array[:l8_b_unpriced]::bigint[], '2026-04-16'::date)),
+  false,
+  '(l8-3) B''s own visible-but-unpriced asset ALSO reads priced=FALSE — indistinguishable from (l8-2), by design (089''s header)'
+);
+select set_config('role', 'postgres', true);
 
 select * from finish();
 rollback;
