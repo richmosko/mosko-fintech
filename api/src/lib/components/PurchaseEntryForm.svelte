@@ -153,28 +153,29 @@
 	// confirmed) — so this is a bare async function, not a `SubmitFunction` for `use:enhance`.
 	// The surrounding markup stays a real `<form>` (native Enter-key submit, a11y) but its
 	// `onsubmit` calls this directly rather than posting anywhere.
-	// ⚠ FIX (QA freeze-break, traced by Backend/Architect, 2026-08-21): `assetId` crosses the
-	// wire as a DECIMAL STRING — pfin.asset.asset_id is a bigint, and postgres.js returns int8
-	// as a string by its documented precision-safety default. An earlier version of this
-	// function `as`-cast the parsed JSON to `{ assetId?: number | null }`, a compile-time
-	// annotation with no runtime observer; `typeof body.assetId === 'number'` was therefore
-	// ALWAYS false, and every successful resolve fell through to "couldn't find or create a
-	// match" — a false claim about the data (the worker HAD resolved it) that reads as more
-	// specific, and more actionable, than the 502 it silently replaced.
+	// ⚠ WIRE FORMAT, CORRECTED TWICE (2026-08-21) — read this before touching the `number` below.
+	// Round 1 (QA freeze-break): `assetId` crossed the wire as a decimal STRING (postgres.js's
+	// int8-as-string default, uncoerced at the worker), which an EARLIER version of this
+	// function's `as`-cast to `{ assetId?: number | null }` silently missed — `typeof ===
+	// 'number'` was always false, and every successful resolve fell through to a false
+	// "couldn't find a match" claim. Round 2 (Backend, this fix): Sec's joint review REJECTED
+	// fixing it client-side (a permissive coercion) and required the PRODUCER fixed instead —
+	// the worker now serializes `assetId` as a real JSON NUMBER end-to-end
+	// (admissionClient.ts's `ResolveData = { assetId: number | null }`, verified directly
+	// against commit 6598cd1, not from a description). So the check below is `number` again —
+	// NOT because the string-bug analysis was wrong, but because the fix landed at a different
+	// layer than my first attempt reached for. Do not "fix" this back to `string` without
+	// re-reading admissionClient.ts's current contract first.
 	//
-	// A CAST IS NOT A CHECK — the same shape of mistake caused the bug in the first place
-	// (resolveSecurityId's own `Promise<number | null>` declaration over a runtime string).
-	// This schema is a real runtime check: a future wire-shape change fails SAFE (falls
-	// through to the same "couldn't find a match" branch below, not a crash, not a silent
-	// misread) instead of silently passing a `typeof` guard that was never actually observing
-	// the wire.
+	// A CAST IS NOT A CHECK — the same shape of mistake caused the original bug
+	// (resolveSecurityId's own `Promise<number | null>` declaration over what was then a
+	// runtime string). This schema is a real runtime check, independent of which primitive
+	// type the wire actually uses this week: a future wire-shape change fails SAFE (the
+	// `else if (res.ok)` branch below, not a crash, not a silent misread) instead of silently
+	// passing a `typeof` guard that was never actually observing the wire.
 	const resolveResponseSchema = z
 		.object({
-			assetId: z
-				.string()
-				.regex(/^\d+$/, 'assetId must be a decimal digit-string')
-				.nullable()
-				.optional(),
+			assetId: z.number().int().positive().nullable().optional(),
 			error: z.string().optional(),
 			// Zod v4's `z.record` takes an explicit key schema (z.record(keySchema, valueSchema))
 			// — the single-argument v3 form used elsewhere is a type error here.
@@ -226,13 +227,8 @@
 			// make `body.assetId === undefined` indistinguishable from a genuine `null`) — that
 			// collapse is exactly the residual Architect flagged; kept apart on purpose.
 			const parsedBody = resolveResponseSchema.safeParse(json ?? {});
-			if (res.ok && parsedBody.success && typeof parsedBody.data.assetId === 'string') {
-				// asset_id is a bigint on the wire; converting to a JS number here (rather than
-				// threading a string through boundAssetId/the rest of the component) matches
-				// every other DB bigint id already handled as a plain number client-side in this
-				// codebase (trans_id, security_id elsewhere) — safe in practice for an
-				// auto-incrementing id, nowhere near Number.MAX_SAFE_INTEGER.
-				const assetId = Number(parsedBody.data.assetId);
+			if (res.ok && parsedBody.success && typeof parsedBody.data.assetId === 'number') {
+				const assetId = parsedBody.data.assetId;
 				boundAssetId = assetId;
 				boundAssetLabel = resolveSymbol.trim() || resolveName.trim() || `Asset #${assetId}`;
 				showResolve = false;
@@ -242,7 +238,7 @@
 					_form: ["Couldn't find or create a match for that symbol or CUSIP. Check the details and try again."]
 				};
 			} else if (res.ok) {
-				// Either the parse failed, or `assetId` was present-but-neither-string-nor-null
+				// Either the parse failed, or `assetId` was present-but-neither-number-nor-null
 				// (a shape this endpoint has never sent, but the schema doesn't rule out by
 				// construction) — we could not read the answer. Asserts nothing about whether a
 				// match exists, unlike the branch above.

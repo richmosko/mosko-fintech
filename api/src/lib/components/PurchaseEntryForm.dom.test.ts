@@ -135,15 +135,15 @@ describe('PurchaseEntryForm — resolve step calls POST /api/asset/resolve (fetc
 		vi.restoreAllMocks();
 	});
 
-	it('a successful resolve POSTs the identified fields as JSON and binds the returned assetId (wire format: a decimal STRING, not a number — QA freeze-break, 2026-08-21)', async () => {
+	it('a successful resolve POSTs the identified fields as JSON and binds the returned assetId (wire format: a JSON NUMBER — Sec-mandated producer-side fix, 2026-08-21 round 2, corrected from an earlier string-wire-format attempt Sec rejected)', async () => {
 		(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
 			ok: true,
-			// asset_id is a bigint; the real endpoint returns it as a decimal digit-string
-			// (postgres.js's precision-safety default). A mock returning a NUMBER here would
-			// pass even against the pre-fix code that only ever matched `typeof === 'number'`
-			// and was silently always-false against the real endpoint — the exact bug this
-			// fixed. Keep this a string.
-			json: async () => ({ assetId: '77' })
+			// asset_id is a bigint; the worker now serializes it as a real JSON number
+			// end-to-end (Sec's joint review required fixing the PRODUCER — a Number() coercion
+			// at the worker's response boundary — rather than a permissive client-side coercion
+			// of a string; verified against admissionClient.ts's ResolveData type directly, not
+			// from a description).
+			json: async () => ({ assetId: 77 })
 		});
 		const { getByRole, getByLabelText, getByText, findByText } = render(PurchaseEntryForm, {
 			props: { selectableAssets: ASSETS }
@@ -223,24 +223,24 @@ describe('PurchaseEntryForm — resolve step calls POST /api/asset/resolve (fetc
 		expect(globalThis.fetch).not.toHaveBeenCalled();
 	});
 
-	// Regression coverage for the QA freeze-break itself (2026-08-21): `assetId` returned as a
-	// NUMBER instead of the real decimal-string wire shape must NOT be silently treated as a
-	// successful bind — the pre-fix code's `as`-cast would have let this look like a real
-	// response; the runtime-validated `resolveResponseSchema` now rejects the shape mismatch
-	// and degrades to the SAME "couldn't find a match" branch a `null` assetId takes, rather
-	// than crashing or accidentally binding a wrong-shaped value.
-	// Architect residual (2026-08-21, same landing as the string-vs-number fix): a schema-parse
-	// FAILURE and an explicit `assetId: null` are different facts and must render different
-	// copy. `null` means the endpoint ran and genuinely found nothing ("the answer was no") —
-	// the "couldn't find a match" copy is entitled to say that. A parse failure means we
-	// couldn't READ the reply; the endpoint may well have resolved it, so claiming "couldn't
-	// find a match" there is false and specific-sounding in a way a user would act on
-	// (re-typing an already-correct symbol). These two tests assert they render DIFFERENT
-	// messages — collapsing them back into one branch is the exact regression to catch.
-	it('a wrong-shaped response (assetId as a number, not the real decimal-string wire format) shows the GENERIC "couldn\'t resolve" message — NOT "couldn\'t find a match" (that would assert a false fact: we don\'t know whether it resolved)', async () => {
+	// Regression coverage: an `assetId` that is NOT a number (the wire shape a prior — now
+	// superseded — fix attempt sent, and a shape a future regression could reintroduce) must
+	// NOT be silently treated as a successful bind. The runtime-validated `resolveResponseSchema`
+	// rejects the shape mismatch and degrades gracefully rather than crashing or binding a
+	// wrong-shaped value.
+	//
+	// A schema-parse FAILURE and an explicit `assetId: null` are different facts and must
+	// render different copy (Architect residual, 2026-08-21). `null` means the endpoint ran and
+	// genuinely found nothing ("the answer was no") — the "couldn't find a match" copy is
+	// entitled to say that. A parse failure means we couldn't READ the reply; the endpoint may
+	// well have resolved it, so claiming "couldn't find a match" there is false and
+	// specific-sounding in a way a user would act on (re-typing an already-correct symbol).
+	// These two tests assert they render DIFFERENT messages — collapsing them back into one
+	// branch is the exact regression to catch.
+	it('a wrong-shaped response (assetId as a STRING, the wire shape a prior fix attempt sent — Sec rejected it in favor of a producer-side number fix) shows the GENERIC "couldn\'t resolve" message — NOT "couldn\'t find a match" (that would assert a false fact: we don\'t know whether it resolved)', async () => {
 		(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
 			ok: true,
-			json: async () => ({ assetId: 77 })
+			json: async () => ({ assetId: '77' })
 		});
 		const { getByRole, getByLabelText, findByText, queryByText } = render(PurchaseEntryForm, {
 			props: { selectableAssets: ASSETS }
@@ -255,7 +255,6 @@ describe('PurchaseEntryForm — resolve step calls POST /api/asset/resolve (fetc
 		// appear off a shape-mismatched response.
 		expect(queryByText(/Quantity/)).toBeNull();
 	});
-
 });
 
 describe('PurchaseEntryForm — ticker nudge (F/CTO ruling: nudge, never block)', () => {
