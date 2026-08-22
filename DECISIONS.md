@@ -41,6 +41,63 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-062 — `is_tax_payment` lives on the posting-prototype PAIR, fail-closed by absence of a DEFAULT — and a default-set change reaches provisioned users only by explicit backfill (terse pattern)
+
+**Date:** 2026-08-22 · **Phase:** 6 Build Loop · **Surface:** `pfin.posting_prototype` + `pfin.posting_prototype_default` (the `084` posting half), the V1.3 §2.3.4 discretionary-expenses filter, and `api/src/lib/server/queries/taxonomy.ts`'s cash-flow provisioning branch.
+
+**Status.** Accepted, and the authorities are **not uniform — recorded at the strength each actually has** rather than flattened:
+- **F/CTO rulings** (V1.3 pre-flight batch-ratify sitting, 2026-08-22): the placement (item 2), the Equity seed pair (item 16), and `Equity / Contribution`'s `tax_relevant` value with its notes rider (item 20).
+- **Team-lead rulings under the ratified default-and-notify protocol, F/CTO reversal window open until the amendment batch lands** (item 2a): the column's **shape** (Decision 2) and the **marking-precondition sequencing** (Decision 3). ⚠ **This ADR is part of that batch, so its merge is the window's closure event** — the closure is what this Status line dates, not the drafting.
+
+**Why this ADR exists at all.** The original Option-A ratify existed **only in a Linear issue description**. That is not a durable record: it is not greppable from the tree, it does not travel with the migration, and it was re-litigated at the V1.3 pre-flight because nobody could find it. Recording it here is the point, not a formality.
+
+### Context
+
+`is_tax_payment` marks the cash-flow buckets that PRD §2.3.4 excludes from *"discretionary monthly expenses."* It was drafted (SELF-245) as a column on `pfin.user_taxonomy` with `NOT NULL DEFAULT FALSE`. Both halves of that are now wrong. [ADR-058](#adr-058)'s split moved the posting vocabulary to `pfin.posting_prototype` / `pfin.posting_prototype_default` and dropped `domain`, so `user_taxonomy` is the **storage-classification spine** and carries no cash-flow rows to mark. And a `DEFAULT FALSE` is **fail-open** on exactly the axis that matters: an unmarked tax-payment Sub-Cat silently enters the discretionary-expenses chart, with no error and no marker.
+
+### Decision
+
+**1. The column lands on BOTH `pfin.posting_prototype` and `pfin.posting_prototype_default`.** The pair discipline is [ADR-058](#adr-058) Decision 3's, realized at `085` for `element`: the per-user table and its provisioning source get the same column, or provisioning copies a row that cannot satisfy the target's constraint. Tax-payment-ness is a property of a **posting prototype**, and prototypes left `user_taxonomy` at `084`.
+
+**2. Shape: `is_tax_payment boolean not null` — NO DEFAULT, NO CHECK.** The absence of a DEFAULT is what delivers fail-closed: every INSERT must state the value, so a user-authored prototype (the V2 taxonomy-CRUD path; `084` already grants `authenticated` INSERT) **errors rather than landing silently discretionary**. ⚠ *"`085`-shaped"* means the **discipline** — NOT NULL, no DEFAULT, total backfill before the NOT NULL, mirrored pair, `comment on column` on each — **not a literal instruction to emit a CHECK.** `085`'s `element` is `text`, and its CHECK is what bounds a text column to two values; **on a boolean a named CHECK cannot fire**, because `not null` already makes the domain exactly `{true, false}`. A constraint over a by-construction property is a leg that reads to a later reviewer as a live guarantee and is not one.
+
+⚠ The `comment on column` **scopes the flag's meaning to Expense-class prototypes**. The only V1 consumer filters `cat = 'Expense'` before reading the flag, so its value on any other class is unreachable there; without the scoping sentence, a later unscoped reader would take `false` on a non-Expense row as evidence the question had been asked and answered for that class.
+
+**3. The F/CTO marking enumeration is a HARD PRECONDITION on the §2.3.4 surface shipping — not a follow-up.** Until it completes, every row reads `false`, and the discretionary-expenses chart silently includes every tax payment. ⚠ **The gate is a sequencing commitment, not a mechanism**: nothing in the schema prevents the surface being built against an unmarked column, so the gate must live in the consuming issue's acceptance criteria and not only here. The enumeration covers **Expense-class prototypes only**.
+
+**4. The Equity seed pair ships in the same migration**, closing the gap where §2.3.3's ruled `Transfer ∪ Equity` section had no seeded Equity rows at all (`041` seeded 12 Expense / 7 Revenue / 4 Trade / 4 Transfer / **0 Equity**), against [ADR-031](#adr-031)'s ratified map, which records `Equity` as Contribution/Distribution:
+
+| `cat` | `sub_cat` | `tax_relevant` | `tax_character` | `is_tax_payment` |
+|---|---|---|---|---|
+| `Equity` | `Contribution` | `true` | NULL | `false` |
+| `Equity` | `Distribution` | `false` | NULL | `false` |
+
+`tax_relevant = true` on Contribution is the **safe direction under uncertainty**, not a determination: a retirement contribution may be deductible or not (Roth / non-deductible), and one seeded value covers both cases. `true` makes the row **surface for review** in the V1.4 tax computation rather than disappear from it — **a false negative there is silent; a false positive is merely examined.** ⚠ The **notes rider is part of the row, not a comment on it** — `notes = 'potentially deductible; resolve per account type at the V1.4 tax inventory'` — so the flag reads *flag-for-review*, never *always-deductible*. Both Equity rows enter pre-marked `is_tax_payment = false`: an owner capital movement is not a tax payment, so the value is **true rather than merely inert**, and it is additionally unreachable by the only consumer.
+
+**5. REACH: this change reaches already-provisioned users by EXPLICIT BACKFILL, because first-access provisioning cannot deliver it.** One ruling covering the column and the seed together, stated in the migration header per [ADR-057](#adr-057).
+
+⚠ **This is ADR-057's rule applied to a pair it does not name.** ADR-057 was authored with `077`, **before the `084` split**, and its text scopes to `pfin.taxonomy_default` → `pfin.user_taxonomy` — the **storage** side. The split created a second default/per-user pair on the **posting** side, and the rule generalizes to it unchanged. This ADR records that generalization, and the mechanism is measured rather than assumed: `provisionCashflowPrototypes` (`api/src/lib/server/queries/taxonomy.ts`) is **existence-guarded** — `if (existing) return;` — so **a user holding even one `posting_prototype` row never receives a later default-set addition.** `077` is the precedent for shipping the delta *with* its backfill.
+
+**6. A PAIRED APP-SOURCE CHANGE SHIPS IN THE SAME PR: the cash-flow provisioning column list gains `is_tax_payment`.** ⚠ This is not housekeeping. `taxonomy.ts` builds its INSERT from an explicit column list; the column is NOT NULL with no DEFAULT; and the branch is **fail-soft** (`console.error(...); return`). Omit the pairing and **a fresh signup receives zero cash-flow prototypes**, with nothing but a server log line to say so. **The identical hazard was caught once already** when `085` added `element` on the asset side — that file's own comment records it — which is why the two provisioning branches now hold separate column sets. A migration author reading only `supabase/migrations/` will not find this; it is recorded here because that is the reader who breaks it.
+
+### Alternatives considered
+
+- **A two-valued `text` vocabulary** (`check (… in ('tax_payment','discretionary'))`) instead of a boolean. Literally `085`-shaped — all three of the original clauses would apply — and **extensible**: a later withholding-vs-estimated-payment split would be a CHECK edit rather than a type change. **Rejected** because it renames the concept across every consumer for a fact that is binary today. ⚠ **If a third class ever becomes a requirement, this is the migration path** — a `boolean → text` widening, not an in-place CHECK edit. Recorded so that author knows the option was weighed, not missed.
+- **Boolean plus a named CHECK anyway**, to satisfy the letter of *"`085`-shaped."* **Rejected** — see Decision 2; it ships a leg that cannot fail.
+- **A third "undecided" state**, so the §2.3.4 surface could render UNAVAILABLE-with-a-reason (the [ADR-049](#adr-049) non-silence discipline) while the marking pass is outstanding. The more defensive design, and it argued for the text vocabulary. **Rejected** because it puts an *undecided* value into a vocabulary every consumer must branch on **forever**, to express a condition that is **temporary by construction**. The honest statement is that the data is not ready, not that the type is wrong — hence Decision 3's sequencing gate instead.
+- **Seeding the default set only, without the backfill.** **Rejected** — it reaches new signups exclusively, which under the existence guard means it silently does not reach the user the milestone is being built for.
+
+### Consequences
+
+- **ADR-011 Decision 3 family: +0.** Neither column is FK-shaped — no FK, no reference to any relation, no array of ids — and `posting_prototype_default` carries no `users_id` at all. There is no referenced row and therefore no tenant to match; no matched-tenant validation is owed and none is authored. ⚠ Stated **per column**, per `085`'s rule, because `084`'s Amendment 1 records the check not actually having been run on the second table of a pair.
+- **No new RLS policy, grant or function.** `posting_prototype` already carries the `025` aal2 backstop conjunct on its policies (`084`); `posting_prototype_default` is `025`-excluded under exclusion (i) as global shared-read. Adding a column changes neither, so no aal2 obligation is triggered. The SECURITY DEFINER allowlist is untouched — read [ADR-011](#adr-011) Decision 9 live.
+- **§10:** no catalogued instance is added, reordered or renumbered; no layer-attribution moves; the catalogued list is **linked, not restated** (Path B), and no count appears anywhere in this ADR. **No ledger change.** The 3-axis cross-check was run against Decision 4 read verbatim and live before drafting.
+- **Sec joint-review is mandatory at the implementing PR** — a new column on the posting vocabulary that a money-path filter reads, plus a provisioning-reach decision.
+- **QA legs the shape demands, because two of them fail silently otherwise:** a user provisioned **before** the migration has both Equity rows after it; and **a fresh signup receives the full cash-flow set including `is_tax_payment`, asserted by ROW COUNT** — the provisioning branch fails soft, so a broken path returns cleanly with **zero rows and no error**, which an error-absence assertion reads as success.
+- **A dormant surface mismatch, with its revival condition named.** The Decision-4 notes rider is internal-process language in a field whose siblings are user-facing descriptions, and `notes` **is** copied to every provisioned user's row. Measured 2026-08-22: **no component or settings route renders `notes`**, so the mismatch is dormant. **The first surface to render prototype notes** — a description or tooltip on the §2.3.1 Cat × Sub-Cat picker is the plausible first candidate — **makes this string user-visible**, and at that PR it is re-phrased for a user audience or the review-flag moves off a user-facing field.
+
+**Cross-references.** [ADR-058](#adr-058) (the split that created the pair; Decision 3's `element` precedent, realized at `085`) · [ADR-057](#adr-057) (the reach rule this generalizes to the posting side) · [ADR-031](#adr-031) (the ratified class map naming Equity as Contribution/Distribution) · [ADR-036](#adr-036) (the provisioning mechanism) · [ADR-011](#adr-011) Decision 3 / Decision 4 / Decision 9 / Decision 18 · [ADR-049](#adr-049) Decision 4 (the non-silence discipline the rejected third state would have served) · migrations `041` `077` `084` `085` · `api/src/lib/server/queries/taxonomy.ts` · PRD §2.3.4 · BACKLOG §7.19.
+
 ## ADR-061 — Two denominators, two gate groups: §2.2.3's degenerate-state contract is §2.2.2's, transplanted rather than symmetrised (terse pattern)
 
 **Date:** 2026-08-21 · **Status:** **Accepted** — F/CTO ruled option A on SELF-332, 2026-08-21. The ruling fixes the DIRECTION (align §2.2.3 to §2.2.2); the aligned contract below is Architect-authored under that ruling.
