@@ -119,6 +119,23 @@
 --   WHILE THE FUNCTION STAYS INVOKER AND READ-ONLY. Making it DEFINER, or adding
 --   any write, removes the fence that stands in for the family's discipline —
 --   whoever does either must revisit this paragraph and route to Sec.
+--   No label is taken and the next unallocated instance remains #18.
+--
+-- ----------------------------------------------------------------------------
+-- THIS IS AN INSTANCE OF AN ESTABLISHED PATTERN, NOT A NEW ONE — pointer recorded
+--   because rediscovering a precedent costs more than citing it (Sec, SELF-325).
+--   ADR-049 Decision 4 already ruled that a CONSUMPTION POLICY lives in ONE
+--   SECURITY INVOKER composition helper and is never re-derived per consumer, and
+--   it reached that ruling from a structurally identical problem: pfin.eod_price is
+--   SPARSE, its last-observation-carried-forward policy is implemented once inside
+--   fn_compute_nav rather than per reader, and with two readers there would have
+--   been two answers. THIS FUNCTION IS THAT RULING APPLIED TO A SECOND POLICY over
+--   the same table — and the SELF-325 divergence is the empirical confirmation of
+--   its rationale, since here there WERE two readers and they DID give two answers.
+--   ⚠ IT DOES NOT RISE TO AN ADR OF ITS OWN, and that is a deliberate call rather
+--   than an omission: ADR-049 Decision 4 already holds the decision, so a new ADR
+--   would restate a ratified ruling and create a second place to keep in step. An
+--   instance earns a pointer; it does not earn a label.
 --
 -- ----------------------------------------------------------------------------
 -- §10 3-AXIS CROSS-CHECK (ADR-011 Decision 4 read VERBATIM and LIVE before
