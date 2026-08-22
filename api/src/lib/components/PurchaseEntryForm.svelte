@@ -59,6 +59,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import type { SubmitFunction } from '@sveltejs/kit';
+	import { z } from 'zod';
 	import TextField from '$lib/components/TextField.svelte';
 	import SelectField from '$lib/components/SelectField.svelte';
 	import Button from '$lib/components/Button.svelte';
@@ -152,6 +153,35 @@
 	// confirmed) — so this is a bare async function, not a `SubmitFunction` for `use:enhance`.
 	// The surrounding markup stays a real `<form>` (native Enter-key submit, a11y) but its
 	// `onsubmit` calls this directly rather than posting anywhere.
+	// ⚠ FIX (QA freeze-break, traced by Backend/Architect, 2026-08-21): `assetId` crosses the
+	// wire as a DECIMAL STRING — pfin.asset.asset_id is a bigint, and postgres.js returns int8
+	// as a string by its documented precision-safety default. An earlier version of this
+	// function `as`-cast the parsed JSON to `{ assetId?: number | null }`, a compile-time
+	// annotation with no runtime observer; `typeof body.assetId === 'number'` was therefore
+	// ALWAYS false, and every successful resolve fell through to "couldn't find or create a
+	// match" — a false claim about the data (the worker HAD resolved it) that reads as more
+	// specific, and more actionable, than the 502 it silently replaced.
+	//
+	// A CAST IS NOT A CHECK — the same shape of mistake caused the bug in the first place
+	// (resolveSecurityId's own `Promise<number | null>` declaration over a runtime string).
+	// This schema is a real runtime check: a future wire-shape change fails SAFE (falls
+	// through to the same "couldn't find a match" branch below, not a crash, not a silent
+	// misread) instead of silently passing a `typeof` guard that was never actually observing
+	// the wire.
+	const resolveResponseSchema = z
+		.object({
+			assetId: z
+				.string()
+				.regex(/^\d+$/, 'assetId must be a decimal digit-string')
+				.nullable()
+				.optional(),
+			error: z.string().optional(),
+			// Zod v4's `z.record` takes an explicit key schema (z.record(keySchema, valueSchema))
+			// — the single-argument v3 form used elsewhere is a type error here.
+			errors: z.record(z.string(), z.array(z.string())).optional()
+		})
+		.passthrough();
+
 	async function doResolve() {
 		const parsed = assetResolveSchema.safeParse({
 			symbol: resolveSymbol,
@@ -182,10 +212,19 @@
 			} catch {
 				json = null;
 			}
-			const body = (json ?? {}) as { assetId?: number | null; errors?: Record<string, string[]> };
-			if (res.ok && typeof body.assetId === 'number') {
-				boundAssetId = body.assetId;
-				boundAssetLabel = resolveSymbol.trim() || resolveName.trim() || `Asset #${body.assetId}`;
+			// Runtime-validated (resolveResponseSchema above), not a blind cast — see that
+			// const's own comment for why the distinction is the entire bug this block fixes.
+			const parsedBody = resolveResponseSchema.safeParse(json ?? {});
+			const body = parsedBody.success ? parsedBody.data : {};
+			if (res.ok && typeof body.assetId === 'string') {
+				// asset_id is a bigint on the wire; converting to a JS number here (rather than
+				// threading a string through boundAssetId/the rest of the component) matches
+				// every other DB bigint id already handled as a plain number client-side in this
+				// codebase (trans_id, security_id elsewhere) — safe in practice for an
+				// auto-incrementing id, nowhere near Number.MAX_SAFE_INTEGER.
+				const assetId = Number(body.assetId);
+				boundAssetId = assetId;
+				boundAssetLabel = resolveSymbol.trim() || resolveName.trim() || `Asset #${assetId}`;
 				showResolve = false;
 			} else if (res.ok) {
 				// 200 with assetId: null — the endpoint ran but found/created nothing to bind to.

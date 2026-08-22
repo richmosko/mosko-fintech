@@ -135,10 +135,15 @@ describe('PurchaseEntryForm — resolve step calls POST /api/asset/resolve (fetc
 		vi.restoreAllMocks();
 	});
 
-	it('a successful resolve POSTs the identified fields as JSON and binds the returned assetId', async () => {
+	it('a successful resolve POSTs the identified fields as JSON and binds the returned assetId (wire format: a decimal STRING, not a number — QA freeze-break, 2026-08-21)', async () => {
 		(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
 			ok: true,
-			json: async () => ({ assetId: 77 })
+			// asset_id is a bigint; the real endpoint returns it as a decimal digit-string
+			// (postgres.js's precision-safety default). A mock returning a NUMBER here would
+			// pass even against the pre-fix code that only ever matched `typeof === 'number'`
+			// and was silently always-false against the real endpoint — the exact bug this
+			// fixed. Keep this a string.
+			json: async () => ({ assetId: '77' })
 		});
 		const { getByRole, getByLabelText, getByText, findByText } = render(PurchaseEntryForm, {
 			props: { selectableAssets: ASSETS }
@@ -215,6 +220,30 @@ describe('PurchaseEntryForm — resolve step calls POST /api/asset/resolve (fetc
 		await fireEvent.click(getByRole('button', { name: 'Look up' }));
 		expect(await findByText('Enter a ticker symbol or a CUSIP.')).toBeTruthy();
 		expect(globalThis.fetch).not.toHaveBeenCalled();
+	});
+
+	// Regression coverage for the QA freeze-break itself (2026-08-21): `assetId` returned as a
+	// NUMBER instead of the real decimal-string wire shape must NOT be silently treated as a
+	// successful bind — the pre-fix code's `as`-cast would have let this look like a real
+	// response; the runtime-validated `resolveResponseSchema` now rejects the shape mismatch
+	// and degrades to the SAME "couldn't find a match" branch a `null` assetId takes, rather
+	// than crashing or accidentally binding a wrong-shaped value.
+	it('a wrong-shaped response (assetId as a number, not the real decimal-string wire format) fails safe, not silently', async () => {
+		(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+			ok: true,
+			json: async () => ({ assetId: 77 })
+		});
+		const { getByRole, getByLabelText, findByText, queryByText } = render(PurchaseEntryForm, {
+			props: { selectableAssets: ASSETS }
+		});
+		await fireEvent.click(getByRole('button', { name: "Don't see it? Look up a ticker or CUSIP" }));
+		await fireEvent.input(getByLabelText('Ticker symbol'), { target: { value: 'MSFT' } });
+		await fireEvent.change(getByRole('combobox', { name: 'Asset type' }), { target: { value: 'equity' } });
+		await fireEvent.click(getByRole('button', { name: 'Look up' }));
+		expect(await findByText(/Couldn't find or create a match/)).toBeTruthy();
+		// Does NOT fall through to the bound-asset confirmation — the purchase form must not
+		// appear off a shape-mismatched response.
+		expect(queryByText(/Quantity/)).toBeNull();
 	});
 });
 
