@@ -81,7 +81,7 @@ describe('accounts/[account_id] — Holdings section (SELF-325 P-b)', () => {
 		expect(w.getByText('AAPL — Apple Inc.')).toBeTruthy();
 		expect(w.getByText('MSFT — Microsoft')).toBeTruthy();
 		// Zero-footprint: UnpricedMarker renders nothing for a priced holding.
-		expect(w.queryByText('No price available')).toBeNull();
+		expect(w.queryByText('No price available — excluded from net worth')).toBeNull();
 	});
 
 	it('mixed: the marker renders ONLY on the unpriced row', () => {
@@ -91,7 +91,7 @@ describe('accounts/[account_id] — Holdings section (SELF-325 P-b)', () => {
 		]);
 		expect(w.getByText('AAPL — Apple Inc.')).toBeTruthy();
 		expect(w.getByText('My Rental')).toBeTruthy();
-		expect(w.getAllByText('No price available')).toHaveLength(1);
+		expect(w.getAllByText('No price available — excluded from net worth')).toHaveLength(1);
 	});
 
 	it('the Status column header renders even when every row is priced (empty cell, never a missing one)', () => {
@@ -122,6 +122,6 @@ describe('accounts/[account_id] — Holdings section (SELF-325 P-b)', () => {
 		const section = view.getByRole('region', { name: 'Holdings' });
 		const w = within(section);
 		expect(w.getByText('AAPL — Apple Inc.')).toBeTruthy();
-		expect(w.getByText('No price available')).toBeTruthy();
+		expect(w.getByText('No price available — excluded from net worth')).toBeTruthy();
 	});
 });

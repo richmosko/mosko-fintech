@@ -48,6 +48,17 @@ describe('UnpricedMarker — priced: false, context="inline" (default; for a val
 
 	it('"inline" is the default context (no context prop passed)', () => {
 		const { getByText } = render(UnpricedMarker, { props: { priced: false } });
-		expect(getByText('No price available')).toBeTruthy();
+		expect(getByText('No price available — excluded from net worth')).toBeTruthy();
+	});
+
+	// UX amendment (2026-08-21, confirmed gap on the Holdings section review): the VISIBLE
+	// text used to be the short "No price available" while the consequence clause lived only
+	// in aria-label — sighted users never saw it. Fixed at the component: one string for both.
+	it('the VISIBLE tag text carries the consequence clause verbatim, matching aria-label — not just aria-label alone', () => {
+		const { getByRole } = render(UnpricedMarker, { props: { priced: false } });
+		const el = getByRole('status');
+		const visibleText = el.textContent?.trim();
+		expect(visibleText).toBe('No price available — excluded from net worth');
+		expect(el.getAttribute('aria-label')).toBe(visibleText);
 	});
 });

@@ -33,11 +33,23 @@
 	  - `<UnpricedMarker context="confirmation" />` — the full sentence, used right after a
 	    purchase RPC call returns `priced: false` (PurchaseEntryForm's confirmation state).
 	  - `<UnpricedMarker context="inline" />` — a compact tag for beside a rendered value.
-	    NOT YET WIRED to any holding-value render surface (account-detail ledger, NAV
-	    composition, allocation) — see the bubble-up note in the SELF-325 handoff: none of
-	    those read-time queries currently expose a per-holding `priced` signal, so there is
-	    no data to drive this mode yet. The component ships ready for that wiring the
-	    moment Backend extends those loaders.
+	    WIRED as of accounts/[account_id]'s Holdings section (SELF-325 P-b) — its first real
+	    consumer. NAV composition / allocation surfaces remain unwired (their own read-time
+	    queries don't yet expose a per-holding `priced` signal); the component is ready for
+	    that wiring the moment those loaders extend.
+
+	⚠ UX AMENDMENT (2026-08-21, confirmed gap on the Holdings section review): the inline
+	tag's VISIBLE text used to be the short "No price available" while the consequence
+	clause ("— excluded from net worth") lived ONLY in `aria-label` — sighted users never
+	saw it, which is exactly the hazard this whole posture exists to prevent, and it's
+	sharper in Holdings than a value-adjacent surface would be: there is no value column
+	here to make the exclusion self-evident by proximity. Fixed AT THE COMPONENT (not a
+	per-consumer override) since this is the first real inline consumer and there is no
+	prior ruling to preserve — `INLINE_TEXT` below is the ONE string used for both the
+	visible span and `aria-label`, so they cannot drift apart the way they just did. A
+	future inline consumer that sits directly beside a visibly-zeroed value and wants the
+	shorter form is a separate, explicit call for whoever wires it — not a silent
+	divergence introduced here.
 -->
 <script lang="ts">
 	let {
@@ -52,6 +64,10 @@
 	} = $props();
 
 	const show = $derived(priced === false);
+
+	// UX amendment: ONE string for both the visible tag text and the aria-label, so sighted
+	// and assistive-tech users read the same consequence — see the header note above.
+	const INLINE_TEXT = 'No price available — excluded from net worth';
 </script>
 
 {#if show}
@@ -67,9 +83,9 @@
 			</span>
 		</p>
 	{:else}
-		<span class="unpriced-tag" role="status" aria-label="No price available — excluded from net worth">
+		<span class="unpriced-tag" role="status" aria-label={INLINE_TEXT}>
 			<span class="unpriced-dot" aria-hidden="true"></span>
-			<span class="unpriced-tag-text">No price available</span>
+			<span class="unpriced-tag-text">{INLINE_TEXT}</span>
 		</span>
 	{/if}
 {/if}
