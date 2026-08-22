@@ -1206,8 +1206,13 @@ Phase 4 ran 2026-06-02 → 2026-06-04 (3 calendar days; intensive parallel PM/Ar
 
 - All execution agents, per task assignment
 - Security Reviewer on every PR touching sensitive surfaces
+- QA on every user-facing feature PR: the **live walk-through gate** (see Gates below)
 - team-lead on phase-level retrospectives between milestones
 - Founder/CTO on review and merge
+
+**Gates (per-PR, F/CTO-ratified 2026-08-22):**
+
+- **The live walk-through gate — STANDING on every user-facing feature PR** (any PR whose diff touches UI or a user-reachable flow). After the branch is combined-green and BEFORE the Sec joint-review spawn, QA drives the feature end-to-end with the real services and a real browser — exercising the specific ratified conditions and the newly-built paths, never only the happy path — and reports what was SEEN (screenshots/DB checks), not what should happen. Findings block the freeze. **Why a standing gate rather than a judgment call:** on the SELF-325 purchase-path arc, every user-visible defect was found by a person driving the real thing and none by the suite, while the suite confirmed the errors in three distinct ways (an untested wire between two individually-green packages; mocks updated alongside the code they mock; a regression test asserting the defect) — the full record is in PR #538's body. The walk is the one-time check; the boundary-crossing watcher a walk-finding produces is the durable half — build both.
 
 **Exit criteria:**
 
