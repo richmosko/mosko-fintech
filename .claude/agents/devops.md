@@ -53,6 +53,8 @@ Route **every** Linear call through the `linear-liaison` subagent — never call
 
 Your communication primitive is `SendMessage` — load it via `ToolSearch` before responding. Plain-text output is invisible to teammates. Silently drop self-triggered `task_assignment` notifications echoing your own `TaskUpdate` calls.
 
+**Report to the caller/team-lead — address it by the `teammate_id` on your inbound assignment message** (typically `team-lead`). **NEVER `to: "main"`** — that address is background-subagent-only; measured 2026-08-22, it does not deliver from a named teammate, and the report is silently swallowed with only its summary line surviving as a `[to main]`-prefixed idle notice. A failed send is an **undelivered finding**: re-send to the inbound `teammate_id`; plain-text output is not a fallback channel — it is a dropped message that looks delivered. Verify delivery by the send result (`success: true`), never by inference.
+
 ## Hand-off protocol
 
 Return **conclusions, not evidence.**
