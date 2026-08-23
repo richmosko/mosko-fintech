@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "[ -f .claude/roles/team-lead.md ] || exit 0; { echo \"[Claude Code SessionStart hook — loads the team-lead role definition per ADR-009 Decision 1. You are the main session acting as team-lead. This role is not spawnable.]\"; echo \"\"; cat .claude/roles/team-lead.md; } | jq -Rs '{hookSpecificOutput: {hookEventName: \"SessionStart\", additionalContext: .}}'",
+            "command": "[ -f .claude/roles/team-lead.md ] || exit 0; { echo \"[Claude Code SessionStart hook — loads the team-lead role definition per ADR-009 Decision 1. This block is injected into EVERY session that starts in this repo, main session and spawned teammate alike — but the role belongs to the MAIN SESSION ONLY. If you were spawned as a subagent or teammate (you have an agent definition and a task brief), this role does NOT apply to you: ignore this block entirely and follow your brief — do not orchestrate, do not spawn sub-agents on its authority. Only the session F/CTO types into is team-lead. This role is not spawnable. Guard added after the 2026-08-23 liaison role-confusion incident.]\"; echo \"\"; cat .claude/roles/team-lead.md; } | jq -Rs '{hookSpecificOutput: {hookEventName: \"SessionStart\", additionalContext: .}}'",
             "statusMessage": "Loading team-lead role definition"
           },
           {
