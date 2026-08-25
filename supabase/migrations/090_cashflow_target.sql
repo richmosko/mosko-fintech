@@ -95,14 +95,25 @@
 --   UNCHANGED by this migration — read ADR-011 Decision 9 live for its contents.
 --
 -- ADR-011 DECISION 3 — FAMILY +0, NO LABEL CLAIMED. This table carries no
---   FK-shaped reference column. `users_id -> auth.users(id)` IS the tenant
---   anchor, not a cross-tenant reference, and Decision 3 does not apply to it
---   (the same ground on which 053 / 063 sit outside the family). Decision 18's
---   forward note on this table anticipated exactly this outcome for the
---   recorded shape and barred any label being drafted in advance; the built
---   shape introduces no such column either, so no canonical instance is added,
---   and no label is reserved. Read Decision 3's body live for the family's
---   current shape — this file deliberately carries no tally.
+-- FK-shaped reference column. `users_id -> auth.users(id)` IS the tenant
+--   anchor, not a cross-tenant reference, and Decision 3 does not apply to it —
+--   the disposition Decision 3's own body records for the same column shape
+--   ("`pfin.posting_prototype.users_id` is that table's own tenant anchor"),
+--   and the one Decision 9's 2026-07-24 amendment records for the
+--   reclassification-history table ("the history table's `trans_id` is the sole
+--   anchor / NOT-D3").
+--   ⚠ `053` / `063` ARE NOT THE PRECEDENT FOR THIS CLAUSE, and the citation is
+--   corrected here rather than inherited. Both carry NO `users_id` at all and no
+--   FK-shaped column (their own table comments say so), so they sit outside the
+--   family on the NO-TENANT-DIMENSION ground — not on the anchor ground this
+--   table stands on. The 053/063 citation comes from Decision 18's forward note,
+--   where it attached to the recorded TALL shape's absence of an FK-shaped
+--   REFERENCE column; narrowed onto the anchor itself it no longer holds.
+--   Decision 18's forward note on this table anticipated exactly this outcome
+--   for the recorded shape and barred any label being drafted in advance; the
+--   built shape introduces no such column either, so no canonical instance is
+--   added, and no label is reserved. Read Decision 3's body live for the
+--   family's current shape — this file deliberately carries no tally.
 --
 -- aal2 STEP-UP BACKSTOP (ADR-029 / 025; C3 standing obligation). This is a new
 --   sensitive tenant-owned pfin table, so it inherits the per-user-conditional
