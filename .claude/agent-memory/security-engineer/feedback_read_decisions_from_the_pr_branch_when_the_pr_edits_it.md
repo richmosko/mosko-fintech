@@ -1,6 +1,6 @@
 ---
 name: read-decisions-from-the-pr-branch-when-the-pr-edits-it
-description: A citation has THREE independently-falsifiable axes — POINTER (bracketing ## ADR- header; DECISIONS.md is not in ADR-number order), CONTENT (read the decision's AMENDMENTS, not only its body), and EXTENT (a verbatim quote can license a false inference about what it omits); plus run the D4 hook against the PR BRANCH and enumerate defects with the bare label, not a filtered grep
+description: A citation has FOUR independently-falsifiable axes — POINTER (bracketing ## ADR- header; DECISIONS.md is not in ADR-number order), CONTENT (read the decision's AMENDMENTS, not only its body), EXTENT (a verbatim quote can license a false inference about what it omits), and ATTACHMENT (an inherited citation re-hung on a narrower proposition supports nothing); plus run the D4 hook against the PR BRANCH and enumerate defects with the bare label, not a filtered grep
 metadata:
   type: feedback
 ---
@@ -86,6 +86,33 @@ store), whose Sec mod reads *"V1-SHIP-BLOCK SECURITY INVOKER on read-time compos
 bypass)"*. Lock N and Decision N do not correspond in ADR-011 — Decision 9 is Lock 5, Decision 15 is
 Lock 11, Decision 17 is Lock 13. Resolve a "Lock N" citation through the decision headings, never by
 treating N as the decision number.
+
+**⚠ A FOURTH VARIANT — ATTACHMENT: pointer right, content right, extent right, and the citation still
+false because THE PROPOSITION IT HANGS ON NARROWED IN TRANSIT.** Caught at SELF-246 / `090`
+(`pfin.cashflow_target`). The migration argued Decision-3 **family +0** and supported it with
+*"`users_id -> auth.users(id)` IS the tenant anchor ... (the same ground on which `053` / `063` sit
+outside the family)."* Both migrations are real, both genuinely sit outside the family, and the
+sentence quoting them was inherited **verbatim** from ADR-011 **Decision 18's own forward note** on
+this very table. Every axis above passes. It is still wrong: `053` / `063` say in their own table
+comments *"NO users_id, NO FK-shaped column"* — they sit outside on the **no-tenant-dimension**
+ground and cannot support a claim about a **tenant anchor**, having none. In D18 the citation hung on
+the recorded TALL shape's *absence of an FK-shaped reference column*, where it was at least the same
+predicate; the build moved to the WIDE row and the author re-hung the same parenthetical on the
+narrower *anchor* claim, where it supports nothing.
+
+**The instrument: go read the cited artifact's own words about ITSELF, not the citing text's gloss of
+it.** One `grep` of `053`/`063`'s table comments settled it in a single command. The precedent that
+actually holds was two greps away and inside the document the hook already requires reading live —
+**D3's own body** (*"`pfin.posting_prototype.users_id` is that table's own tenant anchor"*) and **D9's
+2026-07-24 amendment** (*"the history table's `trans_id` is the sole anchor / NOT-D3"*).
+
+**Why it earned a block rather than a note, when the CONCLUSION it supported was CORRECT and
+independently verified:** migration headers in this repo demonstrably become the model for the next
+table in the family (`090`'s own header is `074`'s, reshaped), and this one is the template for the
+three unbuilt Lock-14 members. A bad precedent propagates as a *good* one — the next author inherits
+it exactly as this one did, which is the whole mechanism. **Grade the citation on its own axis, not
+on the truth of what it was offered to prove.** And when the drift is inherited, say where from and
+route the correction to the SOURCE too — otherwise the fix is one copy deep and the well is still bad.
 
 Related: [[sec-lock-cross-check-catches-my-own-misreads]] (read the source the text CITES),
 [[measure-the-fence-regex-not-its-comment]], and [[which-ref-the-probe-was-aimed-at]] in the project
