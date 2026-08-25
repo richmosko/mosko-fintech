@@ -4,6 +4,7 @@
 
 - [053 CPI positivity CHECK follow-up](project_053_cpi_positivity_check_followup.md) — pointer only; canonical home is **BACKLOG §7.14** with Sec's four binding conditions. ⚠ `> 0` alone re-admits NaN *and* Infinity.
 
+- **[`cashflow_target` shape supersedes D18 + SD-22](project_cashflow_target_shape_supersession.md)** — `090` built the WIDE row; both artifacts still record the inherited `(users_id, target_kind)` 2-row shape. Owner-routed; RT still owed.
 - **[GL arc COMPLETE — rename + split + element ALL SHIPPED](project_gl_taxonomy_split_ratified.md)** — #502/#503 · #507/`084` · #510/`085`, Sec GREEN throughout. ⚠ That file has been silently reverted to "no DDL yet" TWICE; if you meet that claim, grep the migrations and re-correct.
 - **[A Backlog issue's deliverable may already have shipped](feedback_backlog_issue_deliverable_may_already_have_shipped.md)** — all-identifiers-falsified is a signal to widen the search, not to conclude UNBUILT. Grep the seeded state, not the AC's names.
 - **[Schema-impossible ACs trace to the incumbent](reference_schema_impossible_ac_traces_to_incumbent.md)** — the folded ETL still names `pfin.asset_cat`; "wrong AC" vs "different system" changes the disposition, and the masked residual is the load-bearing part.
