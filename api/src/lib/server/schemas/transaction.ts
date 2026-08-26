@@ -143,6 +143,18 @@ export type SplitSet = z.infer<typeof splitSetSchema>;
 export const unsplitSchema = z.object({ trans_id: transIdField() }).strict();
 export type Unsplit = z.infer<typeof unsplitSchema>;
 
+// ── (2c) Classify — POST /api/transactions/:id/classify body (SELF-248 AC2). trans_id is the
+// ROUTE param, not a body field. sub_cat_id is REQUIRED (unlike (2b) recategorizeSchema's
+// nullable field, which also allows clearing to Unsorted) — classify always assigns a real
+// category; `posting_prototype.id` is bigint, not UUID, and crosses the wire as a STRING —
+// z.coerce.number() is the documented server-side coercion (classification.ts precedent).
+export const classifyTransSchema = z
+	.object({
+		sub_cat_id: z.coerce.number().int().positive()
+	})
+	.strict();
+export type ClassifyTrans = z.infer<typeof classifyTransSchema>;
+
 // ── (4) Stock split — POSITION-LEVEL book-neutral corp_action (SELF-203; migration 039 /
 // fn_create_stock_split; ADR-033). account_id is the route param, NOT a form field. There is
 // NO `amount` here — a split is book-neutral; the RPC resolves the held position as-of ex_date

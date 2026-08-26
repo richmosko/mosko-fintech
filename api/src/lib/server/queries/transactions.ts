@@ -16,11 +16,26 @@ import type { ZoneResolvedAsOf } from '$lib/server/time/asOf';
 
 export type WriteResult =
 	| { ok: true; transId?: number }
-	| { ok: false; status: number; field?: string; message: string };
+	| { ok: false; status: number; field?: string; code?: string; message: string };
 
 /** DB raise-message → cross-tenant Sub-Cat classification (the #10 / #13 matched-tenant fences). */
 function isCrossTenantSubCat(message: string): boolean {
 	return /sub_cat|Decision 3|matched-tenant/i.test(message);
+}
+
+/**
+ * DB raise-message → migration 092's NEW `fn_..._journaled_cat_fence` trigger (D-8 / SELF-248
+ * AC10; V1.3 pre-flight sitting items 6a + 15). Distinct from `isCrossTenantSubCat` above — the
+ * EXISTING #10 fence (023, `fn_account_trans_annotation_matched_sub_cat`) never mentions "journal"
+ * in its raise text, so matching on that one word alone cannot collide with it. Kept as its own
+ * named classifier (rather than folded into `isCrossTenantSubCat`) because the two must map to
+ * DISTINCT response codes — D-8 condition 6's binding requirement that the app-level `journaled`
+ * pre-check refusal and this DB-level defense-in-depth raise stay DISTINGUISHABLE to the caller,
+ * even though both concern the same underlying invariant (journal_id + Revenue/Expense/Equity
+ * cannot coexist on one annotation row).
+ */
+function isJournaledCatFenceRejection(message: string): boolean {
+	return /journal/i.test(message);
 }
 /**
  * DB raise-message → 058 §(4)'s CLOSED-ACCOUNT TRANSFER-IN FENCE.
@@ -117,6 +132,168 @@ export async function upsertAnnotation(
 			return { ok: false, status: 422, field: 'sub_cat_id', message: 'That category is not available.' };
 		return { ok: false, status: 422, field: 'sub_cat_id', message: 'Could not save the category.' };
 	}
+	return { ok: true, transId };
+}
+
+// ── SELF-248 §2.3.1.a classify backend (V1.3 pre-flight re-derived ACs; docs/records/
+// v13-preflight/rederived-acs.md) ─────────────────────────────────────────────────────────
+
+/** Which S-1/S-4 classifiability rule refused the write (AC4 — a typed error naming the rule),
+ *  or `not_found` for a row invisible/absent under the caller's own RLS (rd_access). */
+export type ClassifiableRefusalReason =
+	| 'not_found'
+	| 'not_standard' // M1 (030:153) — transaction_type <> 'standard'
+	| 'has_security' // M2 (084:1233 biconditional) — security_id IS NOT NULL
+	| 'split_parent' // M4 — split_count > 0 (the parent; children carry the categories)
+	| 'is_reversal' // E1 (a) — is_reverse = true
+	| 'journaled'; // M3 (033:403) — annotation.journal_id IS NOT NULL
+
+const CLASSIFIABLE_REFUSAL_MESSAGE: Record<ClassifiableRefusalReason, string> = {
+	not_found: 'Transaction not found.',
+	not_standard: 'This is a trade or transfer row — it is categorized structurally, not through this picker.',
+	has_security: 'A securities transaction is categorized by its trade shape, not a Sub-Cat.',
+	split_parent: 'This transaction is split — classify its individual line items instead.',
+	is_reversal: 'A reversal row cannot be classified. Classify the original transaction it replaces.',
+	journaled:
+		'This transaction is posted to a journal. Detach it from the journal before reclassifying, then re-attach.'
+};
+
+type ClassifiabilityResult =
+	| { status: 'classifiable'; annotationExists: boolean }
+	| { status: 'refused'; reason: ClassifiableRefusalReason }
+	| { status: 'error' };
+
+/**
+ * The S-1 classifiability predicate (V1.3 pre-flight sitting item 3a; generalized to a write-time
+ * refusal by the S-4 ruling, sitting item 6a): `classifiable(row) := transaction_type='standard'
+ * AND security_id IS NULL AND split_count=0 AND is_reverse=false AND (annotation IS NULL OR
+ * annotation.journal_id IS NULL)`.
+ *
+ * ⚠ THIS CHECK IS THE ONLY ENFORCEMENT for four of its five legs — M1/M2/M4/E1 carry NO DB fence
+ * (SELF-248 AC10 condition 5: the app guard "stays app-layer" for exactly this reason, and the
+ * function COMMENT on migration 092's new trigger says so). Only the fifth leg (M3/journaled) is
+ * ALSO DB-fenced (092's `fn_..._journaled_cat_fence`, defense-in-depth against a race between this
+ * read and the write below). Read-only; runs under the caller's own RLS (rd_access-JOIN via the
+ * account chain) — a cross-tenant / not-visible trans_id reads as `not_found`, never a distinct
+ * "exists but not yours" signal (no existence leak, the codebase-wide convention).
+ */
+export async function checkClassifiable(
+	supabase: SupabaseClient,
+	transId: number
+): Promise<ClassifiabilityResult> {
+	const { data: trans, error: transErr } = await supabase
+		.schema('pfin')
+		.from('account_trans')
+		.select('trans_id, transaction_type, security_id, is_reverse')
+		.eq('trans_id', transId)
+		.maybeSingle();
+	if (transErr) {
+		console.error('[transactions] classifiability trans read failed:', transErr.message);
+		return { status: 'error' };
+	}
+	if (!trans) return { status: 'refused', reason: 'not_found' };
+	if (trans.transaction_type !== 'standard') return { status: 'refused', reason: 'not_standard' };
+	if (trans.security_id !== null) return { status: 'refused', reason: 'has_security' };
+	if (trans.is_reverse) return { status: 'refused', reason: 'is_reversal' };
+
+	// split_count is DERIVED (029/035 precedent — never a stored column): count the child set.
+	const { count: splitCount, error: splitErr } = await supabase
+		.schema('pfin')
+		.from('account_trans_split')
+		.select('id', { count: 'exact', head: true })
+		.eq('account_trans_id', transId);
+	if (splitErr) {
+		console.error('[transactions] classifiability split-count read failed:', splitErr.message);
+		return { status: 'error' };
+	}
+	if ((splitCount ?? 0) > 0) return { status: 'refused', reason: 'split_parent' };
+
+	const { data: ann, error: annErr } = await supabase
+		.schema('pfin')
+		.from('account_trans_annotation')
+		.select('trans_id, journal_id')
+		.eq('trans_id', transId)
+		.maybeSingle();
+	if (annErr) {
+		console.error('[transactions] classifiability annotation read failed:', annErr.message);
+		return { status: 'error' };
+	}
+	if (ann?.journal_id != null) return { status: 'refused', reason: 'journaled' };
+
+	return { status: 'classifiable', annotationExists: ann != null };
+}
+
+/**
+ * POST /api/transactions/:id/classify write path (SELF-248 AC1/AC2/AC4/AC6/AC9). UPSERTs
+ * pfin.account_trans_annotation on trans_id — INSERT when absent, UPDATE of sub_cat_id ONLY when
+ * present. The immutable 004 ledger is NEVER written (AC3/Lock 10 — this function never touches
+ * pfin.account_trans).
+ *
+ * ⚠ DELIBERATELY NOT `upsertAnnotation` ABOVE. That helper's upsert payload always includes
+ *   `note` (even when the caller passes null), so reusing it here would NULL OUT an existing
+ *   note on every classify — AC1 requires touching ONLY sub_cat_id. Omitting `note`/`metadata`/
+ *   `journal_id` from THIS payload entirely means PostgREST's generated `ON CONFLICT DO UPDATE
+ *   SET` touches ONLY sub_cat_id (it sets exactly the columns present in the insert payload) —
+ *   the other columns on an existing row are untouched. Same table, same trans_id PK, same #10
+ *   matched-tenant fence + FK as `upsertAnnotation` / `fn_create_manual_trans` (038) — AC9's "no
+ *   second write path" holds: this is a second CALL SITE into the ONE annotation row, not a
+ *   second write path.
+ *
+ * AC6: cross-tenant/cross-vocabulary Sub-Cat rejection is already DB-enforced (the FK to
+ * pfin.posting_prototype + the #10 fence, 023/084) — not re-implemented; only mapped to a 400.
+ * D-8 condition 6: the app-level `journaled` pre-check refusal (above, in checkClassifiable) and
+ * migration 092's new journaled-cat-fence trigger raise are DISTINCT codes (`journaled` vs
+ * `journaled_cat_conflict`) even though the fence's raise is normally unreachable through this
+ * function (checkClassifiable already refuses `journaled` rows before any write is attempted) —
+ * it is defense-in-depth against a race between the read above and this write, not the primary
+ * gate.
+ */
+export async function classifyTrans(
+	supabase: SupabaseClient,
+	transId: number,
+	subCatId: number
+): Promise<WriteResult> {
+	const check = await checkClassifiable(supabase, transId);
+	if (check.status === 'error')
+		return { ok: false, status: 500, message: 'Could not verify this transaction. Please try again.' };
+	if (check.status === 'refused') {
+		if (check.reason === 'not_found') return { ok: false, status: 404, message: CLASSIFIABLE_REFUSAL_MESSAGE.not_found };
+		return {
+			ok: false,
+			status: 409,
+			field: 'sub_cat_id',
+			code: check.reason,
+			message: CLASSIFIABLE_REFUSAL_MESSAGE[check.reason]
+		};
+	}
+
+	const { error } = await supabase
+		.schema('pfin')
+		.from('account_trans_annotation')
+		.upsert({ trans_id: transId, sub_cat_id: subCatId }, { onConflict: 'trans_id' });
+
+	if (error) {
+		console.error('[transactions] classify write failed:', error.code, error.message);
+		if (isJournaledCatFenceRejection(error.message))
+			return {
+				ok: false,
+				status: 409,
+				field: 'sub_cat_id',
+				code: 'journaled_cat_conflict',
+				message:
+					'This leg is now posted to a journal as Revenue, Expense, or Equity — reclassifying it that way is blocked to protect the journal. Detach it, then classify.'
+			};
+		if (isCrossTenantSubCat(error.message) || error.code === '23503')
+			return {
+				ok: false,
+				status: 400,
+				field: 'sub_cat_id',
+				code: 'invalid_sub_cat_id',
+				message: 'That category is not available.'
+			};
+		return { ok: false, status: 500, message: 'Could not save the category. Please try again.' };
+	}
+
 	return { ok: true, transId };
 }
 
