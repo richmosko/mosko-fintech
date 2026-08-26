@@ -115,10 +115,38 @@ function moneyEq(a: number | string, b: number | string): boolean {
 	return Math.abs(Number(a) - Number(b)) < 5e-5;
 }
 
+/** The single user-facing rendering of the E1 refusal below — same reason vocabulary as
+ *  `classifyTrans`'s `is_reversal` message (CLASSIFIABLE_REFUSAL_MESSAGE below), adapted to the
+ *  recategorize verb per the binding comment's "same reason vocabulary where sensible". */
+export const REVERSAL_RECATEGORIZE_MESSAGE =
+	'A reversal row cannot be recategorized. Recategorize the original transaction it replaces.';
+
 /**
  * Upsert (or clear) the 023 category/note annotation for a transaction. Both null → delete
  * the annotation (revert to Unsorted-pending). Fenced by the #10 chain-resolved matched-tenant
  * trigger (a cross-tenant Sub-Cat fails closed) + ata_* wr_access RLS.
+ *
+ * SELF-249 binding option-B item 1 (E1 write-side refusal — F/CTO-ruled at the PR #561 Sec joint
+ * review, 2026-08-25; Linear SELF-249 comment): the OLD recategorize path (this function, the
+ * `recategorize` action's only write) must refuse `is_reverse` rows BEFORE either the clear or the
+ * set branch runs. Measured gap: 084's P3 CASE + its txn CTE carry no `is_reverse` term, and
+ * TransactionRow.svelte:224 gates row actions on `!frozen` only — so the shipped UI rendered
+ * "Categorize" on reversal rows, and a classified reversal's contra would post as real income or
+ * spending.
+ *
+ * This is the ONLY live leg of `classifyTrans`'s classifiable() set reachable through THIS path —
+ * M1 (not_standard) / M4 (split_parent) are inert here (084's P3 CASE / txn CTE never surface
+ * those rows to this action to begin with), M2 (has_security) is fenced by 084:1233's
+ * biconditional, M3 (journaled) is fenced path-independently by 092's DB trigger (the FLAG-2 fix
+ * below). Deliberately NARROW — NOT the full classifiable() gate: Sec's option-A analysis scoped
+ * the full gate as needing its own vitest coverage of its own; the ruled scope here is the E1 leg
+ * alone. Do not expand this to the other four legs without surfacing that as a scope change.
+ *
+ * A not-found / not-visible-under-RLS `transId` falls through to the existing write below rather
+ * than a separate refusal here — no existence leak, and the write's own fences (FK + RLS) already
+ * produce the correct outcome for that case, unchanged by this check. `reverseAndReplaceTrans`
+ * (below) also calls this function for its freshly-inserted corrected row, which is by
+ * construction never `is_reverse` — the extra read there is a harmless no-op, not a new fence.
  */
 export async function upsertAnnotation(
 	supabase: SupabaseClient,
@@ -126,6 +154,20 @@ export async function upsertAnnotation(
 	subCatId: number | null,
 	note: string | null
 ): Promise<WriteResult> {
+	const { data: trans, error: transErr } = await supabase
+		.schema('pfin')
+		.from('account_trans')
+		.select('trans_id, is_reverse')
+		.eq('trans_id', transId)
+		.maybeSingle();
+	if (transErr) {
+		console.error('[transactions] upsertAnnotation E1 reversal check failed:', transErr.message);
+		return { ok: false, status: 500, message: 'Could not verify this transaction. Please try again.' };
+	}
+	if (trans?.is_reverse) {
+		return { ok: false, status: 409, field: 'sub_cat_id', code: 'is_reversal', message: REVERSAL_RECATEGORIZE_MESSAGE };
+	}
+
 	if (subCatId === null && note === null) {
 		const { error } = await supabase
 			.schema('pfin')
@@ -161,52 +203,6 @@ export async function upsertAnnotation(
 	}
 	return { ok: true, transId };
 }
-
-/**
- * E1 write-side refusal (SELF-249 binding option-B item 1 — F/CTO-ruled at the PR #561 Sec joint
- * review, 2026-08-25; Linear SELF-249 comment). The OLD recategorize path
- * (`accounts/[account_id]/+page.server.ts`'s `recategorize` action) must refuse `is_reverse` rows.
- * Measured gap: 084's P3 CASE + its txn CTE carry no `is_reverse` term, and
- * TransactionRow.svelte:224 gates row actions on `!frozen` only — so the shipped UI rendered
- * "Categorize" on reversal rows, and a classified reversal's contra would post as real income or
- * spending.
- *
- * This is the ONLY live leg of `classifyTrans`'s classifiable() set reachable through THIS path —
- * M1 (not_standard) / M4 (split_parent) are inert here (084's P3 CASE / txn CTE never surface
- * those rows to this action to begin with), M2 (has_security) is fenced by 084:1233's
- * biconditional, M3 (journaled) is fenced path-independently by 092's DB trigger (via
- * `isJournaledCatFenceRejection` above, now also reachable through `upsertAnnotation`'s FLAG-2
- * fix). Deliberately NARROW — NOT the full classifiable() gate: Sec's option-A analysis scoped the
- * full gate as needing its own vitest coverage of its own; the ruled scope here is the E1 leg
- * alone. Do not expand this to the other four legs without surfacing that as a scope change.
- *
- * A not-found / not-visible-under-RLS row returns `ok` here rather than a separate refusal — no
- * existence leak, and the write path's own fences (FK + RLS) already produce the correct outcome
- * for that case unchanged by this check.
- */
-export async function checkNotReversalForRecategorize(
-	supabase: SupabaseClient,
-	transId: number
-): Promise<'ok' | 'refused' | 'error'> {
-	const { data, error } = await supabase
-		.schema('pfin')
-		.from('account_trans')
-		.select('trans_id, is_reverse')
-		.eq('trans_id', transId)
-		.maybeSingle();
-	if (error) {
-		console.error('[transactions] recategorize E1 reversal check failed:', error.message);
-		return 'error';
-	}
-	if (data?.is_reverse) return 'refused';
-	return 'ok';
-}
-
-/** The single user-facing rendering of the E1 refusal above — same reason vocabulary as
- *  `classifyTrans`'s `is_reversal` message (CLASSIFIABLE_REFUSAL_MESSAGE below), adapted to the
- *  recategorize verb per the binding comment's "same reason vocabulary where sensible". */
-export const REVERSAL_RECATEGORIZE_MESSAGE =
-	'A reversal row cannot be recategorized. Recategorize the original transaction it replaces.';
 
 // ── SELF-248 §2.3.1.a classify backend (V1.3 pre-flight re-derived ACs; docs/records/
 // v13-preflight/rederived-acs.md) ─────────────────────────────────────────────────────────

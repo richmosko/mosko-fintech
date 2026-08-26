@@ -63,8 +63,6 @@ import {
 	loadHeldSecurities,
 	isClosedAccountWrite,
 	CLOSED_ACCOUNT_WRITE_MESSAGE,
-	checkNotReversalForRecategorize,
-	REVERSAL_RECATEGORIZE_MESSAGE,
 	type WriteResult
 } from '$lib/server/queries/transactions';
 import { loadCashflowSubCats, subCatLabel, findDefaultBtoSubCatId } from '$lib/server/queries/taxonomy';
@@ -596,9 +594,8 @@ export const actions: Actions = {
 	// (2b) Category/note edit = a 023 annotation upsert (mutable overlay; NOT a ledger touch).
 	//
 	// SELF-249 binding option-B item 1 (F/CTO-ruled at PR #561 Sec joint review, 2026-08-25): a
-	// reversal row (is_reverse=true) refuses this write. See checkNotReversalForRecategorize's own
-	// header for the measured gap and why this is the ONLY live classifiable() leg reachable
-	// through this path — deliberately NOT the full classifiable() gate.
+	// reversal row (is_reverse=true) refuses this write. The E1 check lives in `upsertAnnotation`
+	// itself (see its own header) — this action's only write, so no separate call is needed here.
 	recategorize: async ({ request, locals, params }) => {
 		const { user } = await locals.safeGetSession();
 		if (!user) return fail(401, { errors: { _form: ['You must be signed in.'] } });
@@ -608,12 +605,6 @@ export const actions: Actions = {
 		const parsed = recategorizeSchema.safeParse(Object.fromEntries(await request.formData()));
 		if (!parsed.success) return fail(400, { errors: fieldErrors(parsed.error) });
 		const v = parsed.data;
-
-		const reversalCheck = await checkNotReversalForRecategorize(locals.supabase, v.trans_id);
-		if (reversalCheck === 'error')
-			return fail(500, { errors: { _form: ['Could not verify this transaction. Please try again.'] } });
-		if (reversalCheck === 'refused')
-			return fail(409, { errors: { sub_cat_id: [REVERSAL_RECATEGORIZE_MESSAGE] } });
 
 		return toActionResult(await upsertAnnotation(locals.supabase, v.trans_id, v.sub_cat_id, v.note));
 	},
