@@ -153,10 +153,10 @@ select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 insert into auth.users (id) values (:'ta'), (:'tb');
 
 -- ---------------------------------------------------------------------
--- Taxonomy (A) — Transfer (transfer-leg contra + the compound-leg classification, tx_xfer) +
--- Revenue (the (5d) freeze-reclassify TARGET only, tx_rev — SELF-248/092: no longer used to
--- classify a journaled leg in the fixture itself, see comp1's note). Matched-tenant for the #10
--- sub_cat fence.
+-- Taxonomy (A) — Transfer (tx_xfer: the compound-leg classification AND, since Sec FLAG-1, both
+-- (5d)/(5e)'s reclassify targets) + Revenue (tx_rev — SELF-248/092 + Sec FLAG-1: defined but no
+-- longer referenced by any assertion in this file; kept rather than deleted to keep this fix a
+-- minimal two-token retarget, not a fixture prune). Matched-tenant for the #10 sub_cat fence.
 -- ---------------------------------------------------------------------
 -- is_tax_payment added (SELF-245/091, boolean not null no default) — false throughout.
 insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment)
@@ -465,26 +465,37 @@ select throws_like(
   '%reopen it first%',
   '(5c) freeze DELETE: deleting a CLOSED-journal leg''s annotation (OLD.journal_id = jFreeze) is REJECTED. RED if the freeze missed the DELETE op');
 
--- (5d) RECLASSIFY (sub_cat edit; journal_id unchanged) a closed-journal leg → REJECTED (the stronger guard).
+-- (5d) RECLASSIFY (sub_cat edit; journal_id unchanged) a closed-journal leg → REJECTED (the stronger
+--   guard). ⚠ Sec FLAG-1 (2026-08-25, PR #561 AMBER): retargeted from tx_rev to tx_xfer. Pre-fix
+--   this leg passed only because _freeze_closed happens to sort before _journaled_cat_fence in
+--   Postgres's BEFORE-trigger NAME order — a coincidence 092's own header states is explicitly NOT
+--   load-bearing. tx_xfer (Transfer) is NOT in the new fence's forbidden set, so the freeze is now
+--   the ONLY possible rejection regardless of trigger order — the assertion no longer depends on an
+--   ordering fact its own migration disclaims. Frozen + Transfer still raises (freeze is
+--   classification-blind: it keys on journal status, not the classification value), and (5d)/(5e)
+--   return to differing in exactly one variable (open vs closed) rather than also differing in
+--   classification target.
 select throws_like(
-  format($$ update pfin.account_trans_annotation set sub_cat_id = %s where trans_id = %s $$, :tx_rev, :fz1),
+  format($$ update pfin.account_trans_annotation set sub_cat_id = %s where trans_id = %s $$, :tx_xfer, :fz1),
   '%reopen it first%',
-  '(5d) freeze RECLASSIFY (the STRONGER ratified form): re-categorizing a CLOSED-journal leg (sub_cat edit, journal_id unchanged; OLD.journal_id = jFreeze) is REJECTED — a re-derived close Σ depends on classification too. RED if the guard froze only membership (journal_id), not classification');
+  '(5d) freeze RECLASSIFY (the STRONGER ratified form): re-categorizing a CLOSED-journal leg (sub_cat edit, journal_id unchanged; OLD.journal_id = jFreeze) is REJECTED — a re-derived close Σ depends on classification too. RED if the guard froze only membership (journal_id), not classification. Uses tx_xfer (not tx_rev) so the rejection is freeze-driven regardless of trigger name order (Sec FLAG-1)');
 
 -- Reopen jFreeze (status→open) — nulls the snapshot AND lifts the freeze.
 update pfin.journal set status = 'open' where journal_id = :jfreeze;
 
 -- (5e) after REOPEN: reclassify now ALLOWED (freeze no-op → #10 fires + PASSES, sub_cat is A's
 --   taxonomy). ⚠ SELF-248/092 CORRECTION (2026-08-25): the ORIGINAL target here was tx_rev
---   (Revenue), matching (5d)'s exact write to isolate open-vs-closed as the only variable. That
+--   (Revenue), matching (5d)'s then-target to isolate open-vs-closed as the only variable. That
 --   is no longer reachable: fz1's journal_id is STILL jFreeze (now merely REOPENED, not
 --   detached), so a Revenue reclassify while journal_id remains non-null is the M3 defect state
 --   092's fn_account_trans_annotation_journaled_cat_fence refuses UNCONDITIONALLY — open or
 --   closed makes no difference to that fence. Retargeted to tx_xfer (Transfer, not in the
 --   fence's forbidden set) to preserve this leg's actual intent: proving 5d's rejection was
---   close-status-driven (the freeze), not a blanket reclassify block. (5d) itself is UNCHANGED
---   and still uses tx_rev — freeze_closed fires ahead of the new fence (see the ORDERING box
---   above), so (5d)'s rejection is still the freeze message, unaffected by 092.
+--   close-status-driven (the freeze), not a blanket reclassify block. ⚠ Sec FLAG-1 (2026-08-25,
+--   PR #561): (5d) is now ALSO tx_xfer (was tx_rev until this AMBER round — freeze_closed fired
+--   ahead of the new fence either way, but the assertion silently depended on that trigger-name-
+--   order fact, which 092's own header disclaims as non-load-bearing). (5d)/(5e) once again
+--   differ in exactly one variable — open vs closed — nothing else.
 select lives_ok(
   format($$ update pfin.account_trans_annotation set sub_cat_id = %s where trans_id = %s $$, :tx_xfer, :fz1),
   '(5e) unfreeze RECLASSIFY: after REOPEN, re-categorizing the same leg (to Transfer) is ALLOWED (freeze lifted; #10 matched-tenant passes; 092''s journaled-cat fence passes since Transfer is not in its forbidden set). Proves 5d is close-status-driven, not a blanket block');

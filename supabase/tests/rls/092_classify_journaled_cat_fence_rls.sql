@@ -4,10 +4,15 @@
 --   AC3 Lock-10 legs + the AC10-condition-(3) existing-fence-through-new-write-path
 --   leg + fn_suggest_subcat_for_vendor (AC7/AC8).
 -- FINALIZED against the committed 092 migration blob. sha
---   c70f56dcf1f6559060be37b0f27b80ba1b4fe36f, file
+--   ba5aed43bd5d0e02bca210d6ee7fd328edffef28, file
 --   supabase/migrations/092_classify_journaled_cat_fence_and_vendor_suggest.sql,
---   md5 903a3cb14b68c8c1b6f9e77d13f56acb (independently re-hashed by QA against
---   the committed blob at reconciliation, not taken from a report).
+--   md5 d1479c489eda240a17a1bb8f0f612559 (independently re-hashed by QA against the
+--   committed blob at reconciliation, not taken from a report). PAIRED RE-PIN (Sec
+--   B1, PR #561 AMBER, 2026-08-25): supersedes the prior pin at sha c70f56d / md5
+--   903a3cb1... — Architect's follow-up commit (ba5aed4) is a HEADER-ONLY addition
+--   (the condition-4 existing-violation query's durable home; `git diff c70f56d
+--   ba5aed4` confirmed no function/trigger body changed), so no leg needed
+--   re-authoring; re-verified green regardless.
 -- =====================================================================
 -- BINDS TO MIGRATION:
 --   supabase/migrations/092_classify_journaled_cat_fence_and_vendor_suggest.sql
@@ -159,10 +164,11 @@
 --
 -- ⟦WIRE-VALIDATE⟧ authored against the re-derived ACs (Linear SELF-248) + Sec's D-8 verbatim
 --   conditions (docs/records/v13-preflight/sec-v13-d7-d8.md), then FINALIZED against the
---   committed 092 blob (sha c70f56d, md5 903a3cb14b68c8c1b6f9e77d13f56acb, independently
---   re-hashed). The authoritative run is the 001->092 reset stack on a scratch DB (Backend
---   clean-apply shape; `supabase db reset` remains banned). CI (pg_prove directory-mode,
---   db-tests.yml) is the green gate. plan(23).
+--   committed 092 blob (sha ba5aed4, md5 d1479c489eda240a17a1bb8f0f612559, independently
+--   re-hashed; re-pinned from the prior c70f56d/903a3cb1... pin after Architect's Sec-B1
+--   header-only follow-up, PR #561 AMBER). The authoritative run is the 001->092 reset stack on
+--   a scratch DB (Backend clean-apply shape; `supabase db reset` remains banned). CI (pg_prove
+--   directory-mode, db-tests.yml) is the green gate. plan(23).
 -- =====================================================================
 
 begin;
