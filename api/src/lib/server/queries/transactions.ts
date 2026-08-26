@@ -59,9 +59,14 @@ const JOURNALED_CAT_CONFLICT_MESSAGE =
  *   - "Trade sign-alignment (...)" — a Trade sub_cat's BTO/BTC/STC/STO direction vs quantity sign
  *     (s2b).
  * Deliberately EXCLUDES 084's third raise on this trigger ("Trade constraint: cannot resolve
- * fact/class ... fail-closed") — that one is an unresolvable-row integrity break (mirrors the
- * generic 500 other unresolvable-read raises fall to elsewhere in this file), not a user category
- * choice, so it is NOT reclassified here.
+ * fact/class ... fail-closed") — that one is an unresolvable-row integrity break, not a user
+ * category choice, so it is NOT reclassified here. ⚠ Where it DOES land, measured: its text
+ * carries "(sub_cat_id %)", so `isCrossTenantSubCat` claims it — NOT the generic fallback. That
+ * is the right destination for its live cause (an unresolvable PROTOTYPE is exactly a bad
+ * sub_cat_id), and its other cause (an unresolvable TRANSACTION) is unreachable through both call
+ * sites: `checkClassifiable` refuses `not_found` before `classifyTrans` writes, and
+ * `upsertAnnotation` 404s on a null `trans` (Sec FLAG-C). The paired collision-guard tests already
+ * state this destination correctly; this header previously did not.
  *
  * ⚠ ORDER: the sign-alignment raise's text contains the literal substring "sub_cat" ("sub_cat %
  * requires quantity..."), which `isCrossTenantSubCat`'s `/sub_cat/i` test also matches — so this
@@ -168,12 +173,18 @@ export const REVERSAL_RECATEGORIZE_MESSAGE =
  * spending.
  *
  * This is the ONLY live leg of `classifyTrans`'s classifiable() set reachable through THIS path —
- * M1 (not_standard) / M4 (split_parent) are inert here (084's P3 CASE / txn CTE never surface
- * those rows to this action to begin with), M2 (has_security) is fenced by 084:1233's
- * biconditional, M3 (journaled) is fenced path-independently by 092's DB trigger (the FLAG-2 fix
- * below). Deliberately NARROW — NOT the full classifiable() gate: Sec's option-A analysis scoped
- * the full gate as needing its own vitest coverage of its own; the ruled scope here is the E1 leg
- * alone. Do not expand this to the other four legs without surfacing that as a scope change.
+ * M1 (not_standard) / M4 (split_parent) are inert here — excluded by 084's P3 `WHERE`
+ * (`t.transaction_type = 'standard' and t.security_id is null and t.split_count = 0 and
+ * t.amount <> 0`), which is the binding Linear comment's own wording ("M1/M4 inert by P3's
+ * where"). ⚠ NOT by P3's `CASE`: a `CASE` maps values and cannot exclude a row — its `else` arm is
+ * the catch-all `Suspense`. The `CASE`/txn-CTE phrasing belongs to the is_reverse GAP sentence
+ * above (both genuinely carry no `is_reverse` term); it is not the mechanism that keeps M1/M4 off
+ * this path. If P3's `WHERE` is ever widened, that clause — not the `CASE` — is what stops
+ * holding. M2 (has_security) is fenced by 084:1233's biconditional, M3 (journaled) is fenced
+ * path-independently by 092's DB trigger (the FLAG-2 fix below). Deliberately NARROW — NOT the
+ * full classifiable() gate: Sec's option-A analysis scoped the full gate as needing its own
+ * vitest coverage of its own; the ruled scope here is the E1 leg alone. Do not expand this to the
+ * other four legs without surfacing that as a scope change.
  *
  * A not-found / not-visible-under-RLS `transId` refuses with a plain 404 (Sec PR #564 FLAG-C) —
  * the codebase-wide "not found" convention (checkClassifiable's own `not_found` leg, mirrored),
