@@ -63,10 +63,10 @@
 -- │     This leg is therefore a NECESSARY-not-sufficient companion to that change, not a          │
 -- │     workaround for its absence: it proves the DB-layer copy semantics `taxonomy.ts` depends    │
 -- │     on are sound; whether `provisionCashflowPrototypes` itself calls them correctly is         │
--- │     Backend's surface, exercised at the Vitest layer. Measured (informational, not a QA        │
--- │     finding I can act on — `api/` is read-only to me): `api/src/lib/server/queries/            │
--- │     taxonomy.test.ts` on this branch has ZERO references to `is_tax_payment` as of `7d8516f`   │
--- │     — flagged in the hand-off, not fixed here.                                                 │
+-- │     Backend's surface, exercised at the Vitest layer. Measured at `7d8516f` (informational,    │
+-- │     not a QA finding I can act on — `api/` is read-only to me): `api/src/lib/server/queries/   │
+-- │     taxonomy.test.ts` had ZERO references to `is_tax_payment` at that sha — flagged in the      │
+-- │     hand-off, CLOSED at `e2c60e9` (re-verify live before trusting this line past that sha).      │
 -- └───────────────────────────────────────────────────────────────────────────────────────┘
 --
 -- §10 / DECISION 3: §10 ledger UNCHANGED (read ADR-011 Decision 4 live before trusting this
@@ -316,23 +316,36 @@ select _rls.expect_cross_tenant_write_blocked(
 --   api/src/lib/server/queries/taxonomy.ts — see the file header for the exact scope of what
 --   this leg does and does not observe.
 -- =====================================================================
+-- Sec-flagged (PR #555 review): (ISO3)'s expect_cross_tenant_write_blocked leaves the session
+-- as the INTRUDER tenant (rls_verbs.psql:91-97 — the helper does not self-restore) — the
+-- restore MUST sit here, above (FS0), not after it (084's own battery is the correct pattern:
+-- restore immediately after the write-blocked call). Without this, (FS0) runs under tenant B's
+-- RLS context and its count of A's rows reads 0 unconditionally, regardless of table contents —
+-- unfalsifiable. RED-then-GREEN inversion confirmed locally before finalizing this fix.
+select set_config('role', 'postgres', true);
+
 select is(
   (select count(*)::bigint from pfin.posting_prototype where users_id = :'ta'),
   0::bigint,
   '(FS0) precondition: tenant A carries zero posting_prototype rows before the fresh-signup copy'
 );
 
-select set_config('role', 'postgres', true);
 insert into pfin.posting_prototype
   (users_id, cat, sub_cat, tax_relevant, tax_character, display_order, notes, is_tax_payment)
 select :'ta', d.cat, d.sub_cat, d.tax_relevant, d.tax_character, d.display_order, d.notes, d.is_tax_payment
 from pfin.posting_prototype_default d
 on conflict (users_id, cat, sub_cat) do nothing;
 
+-- (FS1) expected side HARDCODED at 29 (041's own hardcode-is-an-asset discipline, header
+-- note there) — NOT a live `select count(*) from posting_prototype_default` comparison.
+-- Sec-noted (PR #555): comparing against a live count of the same table this file's own
+-- unfiltered insert-select just copied from is a near-self-comparison that would pass with 2
+-- rows on both sides just as readily as with the real 29 — it does not pin the actual expected
+-- cardinality the way a hardcoded value does.
 select is(
   (select count(*)::bigint from pfin.posting_prototype where users_id = :'ta'),
-  (select count(*)::bigint from pfin.posting_prototype_default),
-  '(FS1) fresh-signup receives the FULL cash-flow set, asserted by ROW COUNT (not error-absence — the app branch is fail-soft and a broken path returns cleanly with zero rows): A''s row count equals posting_prototype_default''s total row count'
+  29::bigint,
+  '(FS1) fresh-signup receives the FULL cash-flow set, asserted by ROW COUNT (not error-absence — the app branch is fail-soft and a broken path returns cleanly with zero rows): A''s row count is 29, matching posting_prototype_default''s known total (041''s own hardcoded figure, re-pinned here rather than read live)'
 );
 select is(
   (select count(*)::bigint from pfin.posting_prototype pp
