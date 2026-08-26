@@ -65,5 +65,30 @@ review, both of which produce plausible-looking wrong output rather than an erro
   read objects and touch nothing. **If a probe wants a checkout, the probe is wrong.** And having
   taken it, do not take a second mutating command to "undo" it — report the state and ask.
 
+**⚠ I HIT BOTH HAZARDS ABOVE AGAIN, IN ONE REVIEW, WITH THIS MEMORY LOADED (SELF-250 / PR #572,
+2026-08-26).** The zsh one produced two different wrong md5s for a blob that had never changed —
+which briefly read as *"the migration moved after the frozen sha,"* the single most alarming thing
+a Sec reviewer can conclude. The parked-worktree one was worse: I prefixed each command with
+`cd <worktree>` and then used **bare paths** (`grep … DECISIONS.md`, `sed -n … supabase/migrations/084_…`),
+so every read looked ref-scoped and none was. The `sec` worktree sat at `aab0911`, far behind
+`main`, and **ADR-064 — the ADR one of the two joint-review triggers rests on — did not exist there
+at all.** I re-measured everything from blobs before writing, and no finding changed; but a first
+pass that is not evidence costs a whole review's worth of trust if it ships.
+
+**The fence that actually holds, because the previous wording did not: NO BARE PATH IN A REVIEW,
+EVER.** Not `cat`, not `grep`, not `sed`, not `ls`. Every read is `git cat-file blob <ref>:<path>`
+or `git show "${REF}:<path>"`. `cd`-ing into a worktree does not scope a read to anything —
+it only makes an unscoped read look deliberate.
+
+**Two free tells, both one command:**
+- **Grep the newest thing you know exists.** `grep -c 'ADR-0NN' <file>` for the most recent ADR, or
+  `git log --oneline -1` in the worktree. A zero, or a HEAD you do not recognise, is a stale ref
+  before you have built anything on it.
+- **A brief's FROZEN sha can be behind the PR head.** `gh pr view <n> --json headRefOid` in the same
+  turn as the verdict. On SELF-250 the brief froze `f4b5eac`; the head was `52094f8`, one commit
+  further. Bound the delta before reacting: it was battery-only and additive (`plan(31)`→`plan(34)`,
+  migration blob byte-identical), so the right move was **review at head, state the delta, reopen
+  nothing** — see [[review-the-delivery-note-against-the-ref]].
+
 Related: [[measure-the-fence-regex-not-its-comment]] — same shape one level down (measure the real
 predicate at the real ref, not the description of it).

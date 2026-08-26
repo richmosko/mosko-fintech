@@ -89,5 +89,33 @@ where the new fence does NOT win** — restoring independent observation of the 
 **How to apply:** whenever a new validation lands in front of an existing one, enumerate every
 battery leg whose fixture the new guard now intercepts, and for each ask *does any leg still exercise
 the lower layer at all?* If the answer is no, the lower layer became unwatched on a commit that
-looked purely additive. Related: [[enumeration-and-watcher-stop-one-short]],
+looked purely additive.
+
+**⚠ THE BLUNTEST VARIANT, AND IT SHIPS GREEN: A TEST TITLE THAT STATES THE INVERSE OF ITS OWN
+ASSERTION.** SELF-250 / PR #572, `transactions.reverseAndReplace.test.ts:306` — title: *"a 23505
+with no code at all … but the index name present **still matches on message alone**"*; assertion:
+`status: 422`, i.e. it does **not** match. The body comment two lines above the assertion was
+correct and explicit, and the assertion was correct for the code as written. Only the name lied.
+Nothing is red, so nothing asks — **until the day someone drops the guarded conjunct, when this leg
+goes red and its failure message reads as though the test WANTED the behaviour the change
+introduced, pointing the repair at re-breaking the discriminator.** A test name is the instruction a
+future reader follows under time pressure, and it is the only part of a passing test anyone reads.
+
+**How to apply — on any leg I review, read the title and the assertion as two independent claims and
+check they agree.** They are written minutes apart by the same hand and drift silently; a body
+comment agreeing with the assertion is not a defence, because the comment is not what a failing run
+prints. Grade it a flag, not a note, when the leg guards a money path — but say plainly it changes
+no behaviour and does not gate the merge, or a one-line rename gets argued about like a redesign.
+
+**⚠ AND WHEN A FLAG I RAISED COMES BACK DISCHARGED, VERIFY PLACEMENT, NOT JUST PRESENCE.** The
+invariant leg I supplied (`count(*) where sub_cat_id is not null and cat is null = 0`) is
+green-by-construction by design — so the only thing that can go wrong is it landing where the query
+returns nothing at all. Placed after a tenant switch it would pass vacuously forever. I checked it
+sat inside the tenant-A block, upstream of the role change, where a sibling leg already proves the
+reader returns ≥10 rows. **For any `= 0` / `is empty` leg, the arming question is "what makes the
+denominator non-empty here, and does a leg prove it?"** — see [[shared-predicate-then-second-narrowing]]
+on unarmed watchers and [[corrupt-the-control-canary-boundary-tie]] on what runs before a
+`0`-expecting leg.
+
+Related: [[enumeration-and-watcher-stop-one-short]],
 [[shared-predicate-then-second-narrowing]].
