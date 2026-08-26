@@ -43,8 +43,12 @@
 //      the guarantee, and today the only one; it is not the guarantee.
 //
 // ── WHEN A USER-SUPPLIED AS-OF ARRIVES ──────────────────────────────────────────────────────
-// SELF-238 / SELF-240 (the §2.2.2 / §2.2.3 allocation backends) are the FIRST live path: their
-// ratified AC8/AC6 require Zod-typed validation of a client-supplied `as_of`. `userSuppliedAsOf`
+// SELF-238 / SELF-240 (the §2.2.2 / §2.2.3 allocation backends) are the FIRST VALIDATED
+// CAPABILITY, NOT a live path — CORRECTED (V1.3 pre-flight sitting D-7, Sec bounded consult,
+// HIGH confidence, 2026-08-22): no route wires a client-supplied `as_of` anywhere in the tree;
+// both allocation route loaders call `serverTodayAsOf()` unconditionally, and `userSuppliedAsOf`
+// has no caller outside its own schema module (`schemas/asOf.ts`) and its tests. Their ratified
+// AC8/AC6 require the Zod-typed validation to EXIST for a client-supplied `as_of`. `userSuppliedAsOf`
 // below is that second factory. THE ZONE ANSWER IT GIVES: UTC, unconditionally — matching every
 // other as-of in the system today (the DB session TimeZone pin + `serverTodayAsOf`'s own UTC
 // derivation). This is a DELIBERATE, NARROW resolution, not a placeholder: V1 has no captured
@@ -100,7 +104,8 @@ export function serverTodayAsOf(): ZoneResolvedAsOf {
  *
  * Defense-in-depth, not the only line: callers MUST already have Zod-validated the input
  * (real-calendar-date, no coercion — the Lock-14 fence lives at the schema boundary, e.g.
- * `schemas/allocation.ts`'s `isoDate()`), but this factory re-checks the shape itself rather
+ * `schemas/asOf.ts`'s `isoDate()` — moved there from `schemas/allocation.ts` at SELF-247/D-6),
+ * but this factory re-checks the shape itself rather
  * than trusting an upstream caller's validation to never be bypassed — the same layered
  * discipline `sanitizeDecimal`'s DB-CHECK backstop and `fn_planning_target_matched_sub_cat`'s
  * trigger apply to their own callers. Throws on a malformed date rather than minting the brand

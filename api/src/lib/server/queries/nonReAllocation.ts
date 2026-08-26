@@ -524,9 +524,9 @@ export function computeNonReAllocation(
 
 /**
  * Load the caller's §2.2.2 Non-RE allocation table, RLS-scoped via the per-request client. `asOf`
- * must already be a validated `ZoneResolvedAsOf` (see schemas/allocation.ts's
- * `resolveAllocationAsOf` — this function does no parsing of its own, mirroring
- * navComposition.ts's `loadNavComposition` signature).
+ * must already be a validated `ZoneResolvedAsOf` (see schemas/asOf.ts's `resolveAllocationAsOf`
+ * — this function does no parsing of its own, mirroring navComposition.ts's `loadNavComposition`
+ * signature).
  *
  * `staleLinkedSourceIds` (SELF-330 — mirrors `loadNavComposition`'s own parameter of the same
  * name VERBATIM, including its tri-state contract): the CALLER's already-loaded `046`

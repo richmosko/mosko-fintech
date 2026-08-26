@@ -66,3 +66,37 @@ Kept framework-agnostic so it is unit-testable in isolation (`numeric.test.ts`) 
 SvelteKit/Zod harness. The Zod adapter is a few lines per surface in `schemas/` — see
 `sanitizeCurrencyAmount`'s adapter (`schemas/account.ts`'s `currencyAmount()`) or
 `sanitizePercent`'s (`schemas/planning-target.ts`'s `percentValue()`) for the pattern to copy.
+
+## `../schemas/asOf.ts` — the shared as-of range/shape battery (Lock 15 / ADR-011 Decision 19)
+
+Lives in `schemas/`, not here, because it IS a Zod schema factory (`asOfSchema(maxAsOf)`) rather
+than a framework-agnostic core with a thin Zod adapter — it doesn't carry the "why this file has
+no Zod import" constraint above. Documented in this README anyway because it is this
+directory's sibling convention applied to a second boundary class: ONE constant (`AS_OF_FLOOR`)
++ ONE range-bound schema factory serves every V1 as-of surface — §2.2 today (SELF-238/240), §2.3
+threading next (SELF-250/253) — never a second copy of the range fence, the same one-battery-
+many-adapters shape `numeric.ts` uses above.
+
+**Server-derived-only convention for §2.6 paths.** [ADR-011](../../../../../DECISIONS.md#adr-011)
+Decision 19 (Lock 15) states the fence VERBATIM (quoted, not paraphrased — re-read it live before
+citing, per this project's standing discipline):
+
+> "server-derived-only fence for §2.6 paths (NO client-asserted `data_as_of` for cron + on-demand
+> monthly_report; §2.3.3 drill-down is the ONLY surface where client toggle is legitimate)"
+
+**Scope of the "ONLY surface" clause**, per Decision 19's 2026-08-22 amendment (Sec-reviewed at
+the V1.3 pre-flight sitting, no behavior change): that clause is a statement about the PRD's V1
+as-of-**toggle** inventory specifically — §2.3.3 is still the only V1 story carrying a
+user-facing historical as-of control (`story-2-3-3`) — and does NOT speak to other, non-toggle
+client-supplied dates that are already live elsewhere (a chart window; a manual account's
+opening-balance date). Read the amendment in full at DECISIONS.md before relying on either
+clause for a new surface — do not paraphrase from this README, and do not treat this quote as a
+substitute for reading the live amendment.
+
+**What this means for `§2.6` paths (cron + on-demand `monthly_report`):** neither may EVER accept
+a client-supplied as-of / `data_as_of` value, full stop — the DB clock (`pfin.fn_server_today()`,
+ADR-044 Decision 2) is the only legitimate source, resolved once per request and threaded
+through, never re-derived per consumer. `asOfSchema`'s `as_of` field exists for §2.2/§2.3
+read-path surfaces where a client-supplied as-of IS legitimate (or, for §2.2 today, validated but
+not yet wired to any route) — importing this schema into a §2.6 endpoint to accept a client value
+would be a NEW instance of exactly the hole this fence exists to close, not a reuse of it.

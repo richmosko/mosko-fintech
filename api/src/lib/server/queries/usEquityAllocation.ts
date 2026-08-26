@@ -7,8 +7,9 @@
 //     planning_target read, same p_include_real_estate=false hardcoding.
 //   - `usEquitySubCats.ts`'s `US_EQUITY_SUB_CATS` — the SAME twelve DDL-copied labels 238 uses
 //     to EXCLUDE+collapse; here they are the entire row set (AC1).
-//   - `schemas/allocation.ts`'s `allocationAsOfSchema` / `resolveAllocationAsOf` — the SAME
-//     as_of Lock-14 fence (AC6: "Identical clauses to SELF-238 AC8").
+//   - `schemas/asOf.ts`'s `asOfSchema` / `resolveAllocationAsOf` — the SAME as_of Lock-14 fence
+//     (AC6: "Identical clauses to SELF-238 AC8"). Moved from `schemas/allocation.ts` at
+//     SELF-247/D-6 (surface-neutral rename; same fence, same behavior for this caller).
 //
 // AC4 (β, F/CTO-ruled 2026-08-17): a DISPLAY-LAYER renormalization, not a second stored
 // semantics. `pfin.planning_target.target_percent` keeps its 074 share-of-Total-Non-RE meaning
@@ -276,7 +277,7 @@ export function computeUsEquityAllocation(
 
 /**
  * Load the caller's §2.2.3 US Equity sub-allocation table, RLS-scoped via the per-request
- * client. `asOf` must already be a validated `ZoneResolvedAsOf` — see `schemas/allocation.ts`'s
+ * client. `asOf` must already be a validated `ZoneResolvedAsOf` — see `schemas/asOf.ts`'s
  * `resolveAllocationAsOf` (the SAME schema SELF-238 uses; AC6). Fail-soft, mirrors
  * nonReAllocation.ts / subcatMarketValue.ts: any read error degrades to `{ data: null, ok: false
  * }`, logged, never thrown.

@@ -32,8 +32,9 @@
 // page-level empty-account branch to feed).
 //
 // Same `serverTodayAsOf()` default as the parent loader, for the same reason: no as-of
-// query-param support wired here yet (schemas/allocation.ts's `resolveAllocationAsOf` exists but
-// the route reads no query string today — revisit when a historical-as-of control lands).
+// query-param support wired here yet (schemas/asOf.ts's `resolveAllocationAsOf` — moved from
+// schemas/allocation.ts at SELF-247/D-6 — exists but the route reads no query string today —
+// revisit when a historical-as-of control lands).
 //
 // ⚠ AC3/AC4 ACCOUNT-NAME THREADING NOT WIRED HERE (F/CTO-pending, see usEquityAllocation.ts's own
 // module header): this loader delivers the per-row `is_stale` BOOLEAN signal only — the same
