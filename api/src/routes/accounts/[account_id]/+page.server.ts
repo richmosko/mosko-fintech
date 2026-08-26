@@ -197,9 +197,10 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		// (below) is keyed on the SAME raw field, not on `category`.
 		const category = ann ? subCatLabel(ann.posting_prototype) : null;
 		const subCatId = (ann?.sub_cat_id as number | null | undefined) ?? null;
+		const securityId = (r.security_id as number | null) ?? null;
 		const check = classifiabilityOf({
 			transaction_type: r.transaction_type as string,
-			security_id: (r.security_id as number | null) ?? null,
+			security_id: securityId,
 			is_reverse: r.is_reverse as boolean,
 			split_count: splits.length,
 			journal_id: (ann?.journal_id as number | null) ?? null
@@ -216,6 +217,12 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			created_at: r.created_at as string,
 			category,
 			sub_cat_id: subCatId,
+			// SELF-340 (ADR-064 D1 UI mirror, TransactionView's EXPECTED-CONTRACT `security_id`
+			// field — Frontend's default fails CLOSED, hiding Edit on every row, until this lands):
+			// was already computed above for `classifiabilityOf` but dropped before the return —
+			// surfaced here so Frontend's row-level Edit-hiding mirror has real data instead of the
+			// unwired-default fail-closed state (which hides Edit on cash rows too, safe but wrong).
+			security_id: securityId,
 			note: (ann?.note as string | null) ?? null,
 			splits,
 			split_count: splits.length,
