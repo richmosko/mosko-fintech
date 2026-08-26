@@ -63,6 +63,9 @@ import {
 	loadHeldSecurities,
 	isClosedAccountWrite,
 	CLOSED_ACCOUNT_WRITE_MESSAGE,
+	classifiabilityOf,
+	loadVendorSuggestions,
+	vendorKey,
 	type WriteResult
 } from '$lib/server/queries/transactions';
 import { loadCashflowSubCats, subCatLabel, findDefaultBtoSubCatId } from '$lib/server/queries/taxonomy';
@@ -85,9 +88,16 @@ import type { PageServerLoad, Actions } from './$types';
 // this file (ruling: rides the split PR, pending Sec confirm-or-narrow at joint-review — this is
 // a READ path, so a missed re-target here breaks the account-detail transaction history for every
 // existing user on the very first post-migration page load, not just new signups).
+//
+// SELF-249 loader extension (TransactionView's EXPECTED-CONTRACT fields — transaction-util.ts):
+// `security_id` and `provider_category` are added at top level; `journal_id` is added to the
+// EXISTING annotation embed (no new join — E3's LEFT-JOIN-not-inner rule is satisfied by
+// construction here, same as the pre-existing `sub_cat_id`/`note`: this embed carries no filter,
+// so PostgREST returns it as null rather than excluding the row when no annotation exists). All
+// three feed `classifiabilityOf` (transactions.ts) + the `provider_category` display hint below.
 const TRANSACTION_COLUMNS = `
-	trans_id, transaction_date, amount, vendor, description, transaction_type, is_reverse, replaces_trans_id, created_at,
-	account_trans_annotation ( sub_cat_id, note, posting_prototype ( cat, sub_cat ) ),
+	trans_id, transaction_date, amount, vendor, description, transaction_type, security_id, is_reverse, replaces_trans_id, created_at, provider_category,
+	account_trans_annotation ( sub_cat_id, note, journal_id, posting_prototype ( cat, sub_cat ) ),
 	account_trans_split ( id, amount, sub_cat_id, note, display_order, posting_prototype ( cat, sub_cat ) )
 `;
 
@@ -153,10 +163,17 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	// rule: split_count>0 → the children are the truth; else the parent). No stored flags.
 	// Fields are picked explicitly (not `...rest`) so the ledger columns stay concretely typed
 	// for the consuming component. supabase-js can't infer the embed shape → rows typed loose.
+	//
+	// SELF-249 AC6: `classifiable`/`classifiableReason` are computed HERE, in-process, by feeding
+	// this SAME query's already-loaded fields (transaction_type, security_id, is_reverse,
+	// split_count, journal_id) to `classifiabilityOf` — the identical pure predicate
+	// `checkClassifiable` (transactions.ts) uses at write time. No second implementation of the
+	// five rules, and no extra per-row round trip: everything the predicate needs is already in
+	// this one bulk query.
 	const transactions = ((transRows ?? []) as Array<Record<string, unknown>>).map((r) => {
 		const annRaw = r.account_trans_annotation as
-			| { note?: string | null; posting_prototype?: unknown }
-			| Array<{ note?: string | null; posting_prototype?: unknown }>
+			| { sub_cat_id?: number | null; note?: string | null; journal_id?: number | null; posting_prototype?: unknown }
+			| Array<{ sub_cat_id?: number | null; note?: string | null; journal_id?: number | null; posting_prototype?: unknown }>
 			| null;
 		const ann = Array.isArray(annRaw) ? (annRaw[0] ?? null) : annRaw;
 		const splits = ((r.account_trans_split as Array<Record<string, unknown>>) ?? [])
@@ -168,6 +185,25 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 				...subCatLabel(s.posting_prototype)
 			}))
 			.sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0));
+		// Sec FLAG-D (PR #564 AMBER, backend half): `subCatLabel` NEVER returns null (its miss case
+		// is the {cat:null, sub_cat:'Unsorted'} OBJECT, a truthy value), so `category` alone cannot
+		// distinguish "no annotation" from "a NOTE-ONLY annotation" (sub_cat_id null, reachable via
+		// recategorize's nullable subCatIdField) — both read as a non-null `category`. `category`'s
+		// own computation is UNCHANGED here (Frontend's parallel FLAG-D fix does not key off it
+		// either way, and other category consumers keep their existing behavior). Instead, the raw
+		// `sub_cat_id` is surfaced as its OWN field below (Frontend's SubCatPicker now keys
+		// `classified` on `transaction.sub_cat_id != null` directly — transaction-util.ts's
+		// EXPECTED-CONTRACT note), and this loader's own unclassified-vendor-suggestion filter
+		// (below) is keyed on the SAME raw field, not on `category`.
+		const category = ann ? subCatLabel(ann.posting_prototype) : null;
+		const subCatId = (ann?.sub_cat_id as number | null | undefined) ?? null;
+		const check = classifiabilityOf({
+			transaction_type: r.transaction_type as string,
+			security_id: (r.security_id as number | null) ?? null,
+			is_reverse: r.is_reverse as boolean,
+			split_count: splits.length,
+			journal_id: (ann?.journal_id as number | null) ?? null
+		});
 		return {
 			trans_id: r.trans_id as number,
 			transaction_date: r.transaction_date as string,
@@ -178,11 +214,31 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			is_reverse: r.is_reverse as boolean,
 			replaces_trans_id: (r.replaces_trans_id as number | null) ?? null,
 			created_at: r.created_at as string,
-			category: ann ? subCatLabel(ann.posting_prototype) : null,
+			category,
+			sub_cat_id: subCatId,
 			note: (ann?.note as string | null) ?? null,
 			splits,
-			split_count: splits.length
+			split_count: splits.length,
+			provider_category: (r.provider_category as string | null) ?? null,
+			classifiable: check.classifiable,
+			classifiableReason: check.classifiable ? null : check.reason
 		};
+	});
+
+	// SELF-249 AC7/AC8: vendor suggestions, ONLY for unclassified rows (an existing override
+	// always wins — transaction-util.ts's own contract note) and batched by DISTINCT vendor
+	// (loadVendorSuggestions) rather than one `fn_suggest_subcat_for_vendor` RPC call per row —
+	// see that function's header for why a per-row call doesn't scale with page size.
+	//
+	// Sec FLAG-D: keyed on `sub_cat_id == null`, NOT `category === null` — a note-only annotation
+	// (sub_cat_id null) has a non-null `category` (subCatLabel's Unsorted-label object) but is
+	// still unclassified and should still get a suggestion/hint.
+	const unclassifiedVendors = transactions.filter((t) => t.sub_cat_id == null).map((t) => t.vendor);
+	const vendorSuggestions = await loadVendorSuggestions(locals.supabase, unclassifiedVendors);
+	const transactionsWithSuggestions = transactions.map((t) => {
+		if (t.sub_cat_id != null) return { ...t, suggested_sub_cat_id: null };
+		const key = vendorKey(t.vendor);
+		return { ...t, suggested_sub_cat_id: key !== null ? (vendorSuggestions.get(key) ?? null) : null };
 	});
 
 	// Cashflow-domain Sub-Cat options for the per-transaction category pickers
@@ -244,7 +300,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 
 	return {
 		account,
-		transactions,
+		transactions: transactionsWithSuggestions,
 		cashflowSubCats,
 		heldSecurities,
 		dupCandidates,
@@ -592,6 +648,10 @@ export const actions: Actions = {
 	},
 
 	// (2b) Category/note edit = a 023 annotation upsert (mutable overlay; NOT a ledger touch).
+	//
+	// SELF-249 binding option-B item 1 (F/CTO-ruled at PR #561 Sec joint review, 2026-08-25): a
+	// reversal row (is_reverse=true) refuses this write. The E1 check lives in `upsertAnnotation`
+	// itself (see its own header) — this action's only write, so no separate call is needed here.
 	recategorize: async ({ request, locals, params }) => {
 		const { user } = await locals.safeGetSession();
 		if (!user) return fail(401, { errors: { _form: ['You must be signed in.'] } });

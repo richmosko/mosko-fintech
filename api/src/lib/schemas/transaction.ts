@@ -98,6 +98,20 @@ export const recategorizeSchema = z
 	.strict();
 export type Recategorize = z.infer<typeof recategorizeSchema>;
 
+// ── (2c) Classify (SELF-249 / SELF-248 §2.3.1.a) — CLIENT mirror of the server
+// `classifyTransSchema` in api/src/lib/server/schemas/transaction.ts. Same shape, same
+// `.strict()` posture: `sub_cat_id` is REQUIRED and non-nullable here (unlike (2b)'s
+// `subCatIdField()`, which is nullable to support clearing back to "Unsorted") — the classify
+// endpoint (SELF-248) always assigns a concrete category; there is no "clear via classify".
+// This mirror is fast client-side feedback only; the server's `.strict()` schema + RLS + the
+// FK/matched-tenant/journaled-cat fences (023/084/092) are the security boundary.
+export const classifyTransSchema = z
+	.object({
+		sub_cat_id: z.coerce.number().int().positive()
+	})
+	.strict();
+export type ClassifyTrans = z.infer<typeof classifyTransSchema>;
+
 // ── (3) Split — a balanced child set. `amount` is the SIGNED child amount; Σ(children) MUST
 // equal parent.amount (the 029 deferred trigger is the authoritative backstop — the editor
 // pre-checks the running sum for UX). ───────────────────────────────────────────────────

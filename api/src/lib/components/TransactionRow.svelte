@@ -15,12 +15,26 @@
 	Values are neutral (ledger amounts) — NEVER --c-pos/--c-neg (design §5 fence 1). INV-1:
 	vendor/description/note render as plain text. Per-row action gating (e.g. hiding actions
 	on is_reverse audit rows) is a UX Designer flow decision — kept uniform here.
+
+	SELF-249: the Category cell now hosts SubCatPicker, a per-row quick-classify control
+	(fetch+JSON to the SELF-248 classify endpoint — NOT this file's form-action editors, which
+	stay for the combined category+note "Categorize" flow). Three cases share this cell:
+	  · split parent (split_count>0)  → no picker at all (AC7); children carry the real
+	    Sub-Cats, read-only, below.
+	  · frozen                        → plain label, same as every other control on this row.
+	  · otherwise                     → <SubCatPicker>, which renders itself DISABLED with
+	    affordance copy when `transaction.classifiable` is false (AC6) — including reversal
+	    rows: is_reverse is one of classifiable()'s five enumerated legs, so it gets the SAME
+	    uniform disabled-render treatment as the other four rather than a special-cased hide.
+	    (Team-lead's dispatch leaned toward hiding the picker on a reversal row; this ships the
+	    AC's own general rule instead — see the PR report for the full reasoning.)
 -->
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import type { SubmitFunction } from '@sveltejs/kit';
 	import TransactionFactFields from '$lib/components/TransactionFactFields.svelte';
 	import SplitEditor from '$lib/components/SplitEditor.svelte';
+	import SubCatPicker from '$lib/components/SubCatPicker.svelte';
 	import TextField from '$lib/components/TextField.svelte';
 	import SelectField from '$lib/components/SelectField.svelte';
 	import Button from '$lib/components/Button.svelte';
@@ -197,11 +211,17 @@
 
 <tr class="trans" class:is-reverse={transaction.is_reverse}>
 	<td class="num-cell">{transaction.transaction_date}</td>
-	<td>
+	<td class="subcat-cell">
 		{#if transaction.split_count > 0}
+			<!-- AC7: a split parent's row offers NO parent-level picker — its children carry the
+			     real Sub-Cats (rendered read-only below) and any correction routes through Split. -->
 			<span class="split-tag">Split · {transaction.split_count}</span>
-		{:else}
+		{:else if frozen}
+			<!-- Frozen mirrors every other per-row control on this page (row-actions below) —
+			     hidden, not disabled-with-affordance; `058` refuses the write regardless. -->
 			<span class="cat">{catLabel}</span>
+		{:else}
+			<SubCatPicker {transaction} {subCatGroups} />
 		{/if}
 	</td>
 	<td>{transaction.vendor ?? '—'}</td>

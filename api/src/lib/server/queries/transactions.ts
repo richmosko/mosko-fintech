@@ -41,6 +41,52 @@ function isCrossTenantSubCat(message: string): boolean {
 function isJournaledCatFenceRejection(message: string): boolean {
 	return /^journaled-leg classification/i.test(message);
 }
+
+/**
+ * The single user-facing rendering of 092's journaled-cat-fence rejection, shared by
+ * `classifyTrans` (below) and `upsertAnnotation` (SELF-249 Sec FLAG-2) so the two call sites
+ * cannot drift onto two different guidance strings for the same DB raise.
+ */
+const JOURNALED_CAT_CONFLICT_MESSAGE =
+	'This leg is now posted to a journal as Revenue, Expense, or Equity — reclassifying it that way is blocked to protect the journal. Detach it, then classify.';
+
+/**
+ * DB raise-message → 084's `fn_account_trans_annotation_trade_constraints` trigger (ADR-031
+ * Amendment 1 s2a/s2b), on `pfin.account_trans_annotation`. Two DISTINCT raise prefixes, both
+ * ^-anchored per this file's convention (mirrors `isJournaledCatFenceRejection` above, verified
+ * live against 084's authored text before anchoring):
+ *   - "Trade consistency violation (...)" — security_id present ⟺ cat='Trade' biconditional (s2a).
+ *   - "Trade sign-alignment (...)" — a Trade sub_cat's BTO/BTC/STC/STO direction vs quantity sign
+ *     (s2b).
+ * Deliberately EXCLUDES 084's third raise on this trigger ("Trade constraint: cannot resolve
+ * fact/class ... fail-closed") — that one is an unresolvable-row integrity break, not a user
+ * category choice, so it is NOT reclassified here. ⚠ Where it DOES land, measured: its text
+ * carries "(sub_cat_id %)", so `isCrossTenantSubCat` claims it — NOT the generic fallback. That
+ * is the right destination for its live cause (an unresolvable PROTOTYPE is exactly a bad
+ * sub_cat_id), and its other cause (an unresolvable TRANSACTION) is unreachable through both call
+ * sites: `checkClassifiable` refuses `not_found` before `classifyTrans` writes, and
+ * `upsertAnnotation` 404s on a null `trans` (Sec FLAG-C). The paired collision-guard tests already
+ * state this destination correctly; this header previously did not.
+ *
+ * ⚠ ORDER: the sign-alignment raise's text contains the literal substring "sub_cat" ("sub_cat %
+ * requires quantity..."), which `isCrossTenantSubCat`'s `/sub_cat/i` test also matches — so this
+ * classifier MUST be checked BEFORE `isCrossTenantSubCat` at every call site (Sec PR #564 FLAG-B),
+ * the same collision shape D-8 condition 6 already forced for `isJournaledCatFenceRejection`.
+ * Before this fix, sign-alignment raises were miscoded as "That category is not available"
+ * (a plausible-but-wrong message: the category IS valid, it's the wrong DOMAIN for this
+ * transaction) and consistency-violation raises (no "sub_cat" substring) fell all the way through
+ * to the generic 500 "Please try again" — retry advice for a user-input choice that can never
+ * succeed by retrying.
+ */
+function isTradeConstraintViolation(message: string): boolean {
+	return /^Trade (consistency violation|sign-alignment)/i.test(message);
+}
+
+/** The single user-facing rendering of the trade-constraint raise above, shared by `classifyTrans`
+ *  and `upsertAnnotation` for the same one-classifier-one-message reason as
+ *  `JOURNALED_CAT_CONFLICT_MESSAGE`. */
+const TRADE_CONSTRAINT_MESSAGE =
+	'A Trade category is for security transactions. Pick a cash-flow category instead.';
 /**
  * DB raise-message → 058 §(4)'s CLOSED-ACCOUNT TRANSFER-IN FENCE.
  *
@@ -107,10 +153,49 @@ function moneyEq(a: number | string, b: number | string): boolean {
 	return Math.abs(Number(a) - Number(b)) < 5e-5;
 }
 
+/** The single user-facing rendering of the E1 refusal below — same reason vocabulary as
+ *  `classifyTrans`'s `is_reversal` message (CLASSIFIABLE_REFUSAL_MESSAGE below), adapted to the
+ *  recategorize verb per the binding comment's "same reason vocabulary where sensible". */
+export const REVERSAL_RECATEGORIZE_MESSAGE =
+	'A reversal row cannot be recategorized. Recategorize the original transaction it replaces.';
+
 /**
  * Upsert (or clear) the 023 category/note annotation for a transaction. Both null → delete
  * the annotation (revert to Unsorted-pending). Fenced by the #10 chain-resolved matched-tenant
  * trigger (a cross-tenant Sub-Cat fails closed) + ata_* wr_access RLS.
+ *
+ * SELF-249 binding option-B item 1 (E1 write-side refusal — F/CTO-ruled at the PR #561 Sec joint
+ * review, 2026-08-25; Linear SELF-249 comment): the OLD recategorize path (this function, the
+ * `recategorize` action's only write) must refuse `is_reverse` rows BEFORE either the clear or the
+ * set branch runs. Measured gap: 084's P3 CASE + its txn CTE carry no `is_reverse` term, and
+ * TransactionRow.svelte:224 gates row actions on `!frozen` only — so the shipped UI rendered
+ * "Categorize" on reversal rows, and a classified reversal's contra would post as real income or
+ * spending.
+ *
+ * This is the ONLY live leg of `classifyTrans`'s classifiable() set reachable through THIS path —
+ * M1 (not_standard) / M4 (split_parent) are inert here — excluded by 084's P3 `WHERE`
+ * (`t.transaction_type = 'standard' and t.security_id is null and t.split_count = 0 and
+ * t.amount <> 0`), which is the binding Linear comment's own wording ("M1/M4 inert by P3's
+ * where"). ⚠ NOT by P3's `CASE`: a `CASE` maps values and cannot exclude a row — its `else` arm is
+ * the catch-all `Suspense`. The `CASE`/txn-CTE phrasing belongs to the is_reverse GAP sentence
+ * above (both genuinely carry no `is_reverse` term); it is not the mechanism that keeps M1/M4 off
+ * this path. If P3's `WHERE` is ever widened, that clause — not the `CASE` — is what stops
+ * holding. M2 (has_security) is fenced by 084:1233's biconditional, M3 (journaled) is fenced
+ * path-independently by 092's DB trigger (the FLAG-2 fix below). Deliberately NARROW — NOT the
+ * full classifiable() gate: Sec's option-A analysis scoped the full gate as needing its own
+ * vitest coverage of its own; the ruled scope here is the E1 leg alone. Do not expand this to the
+ * other four legs without surfacing that as a scope change.
+ *
+ * A not-found / not-visible-under-RLS `transId` refuses with a plain 404 (Sec PR #564 FLAG-C) —
+ * the codebase-wide "not found" convention (checkClassifiable's own `not_found` leg, mirrored),
+ * chosen specifically because `trans?.is_reverse` on a null `trans` is `undefined` — FALSY, the
+ * same as a genuine non-reversal row — so an unguarded null here would fail OPEN: a row this
+ * caller cannot see under RLS would fall through to the write below instead of being refused.
+ * Unreachable in V1 today (every V1 grant pairs rd_access with wr_access), but live the instant a
+ * wr-without-rd grant shape ships (flagged for the B5 grant-sharing work) — fixed now rather than
+ * left as a latent fail-open. `reverseAndReplaceTrans` (below) also calls this function for its
+ * freshly-inserted corrected row, which by construction is always found and never `is_reverse` —
+ * unaffected by either check.
  */
 export async function upsertAnnotation(
 	supabase: SupabaseClient,
@@ -118,6 +203,21 @@ export async function upsertAnnotation(
 	subCatId: number | null,
 	note: string | null
 ): Promise<WriteResult> {
+	const { data: trans, error: transErr } = await supabase
+		.schema('pfin')
+		.from('account_trans')
+		.select('trans_id, is_reverse')
+		.eq('trans_id', transId)
+		.maybeSingle();
+	if (transErr) {
+		console.error('[transactions] upsertAnnotation E1 reversal check failed:', transErr.message);
+		return { ok: false, status: 500, message: 'Could not verify this transaction. Please try again.' };
+	}
+	if (!trans) return { ok: false, status: 404, message: 'Transaction not found.' };
+	if (trans.is_reverse) {
+		return { ok: false, status: 409, field: 'sub_cat_id', code: 'is_reversal', message: REVERSAL_RECATEGORIZE_MESSAGE };
+	}
+
 	if (subCatId === null && note === null) {
 		const { error } = await supabase
 			.schema('pfin')
@@ -132,6 +232,26 @@ export async function upsertAnnotation(
 		.from('account_trans_annotation')
 		.upsert({ trans_id: transId, sub_cat_id: subCatId, note }, { onConflict: 'trans_id' });
 	if (error) {
+		// SELF-249 Sec FLAG-2: 092's journaled-cat-fence raise must be classified BEFORE
+		// isCrossTenantSubCat. Its defect-state leg's raise text contains "(sub_cat_id %)", which
+		// isCrossTenantSubCat's /sub_cat/i test also matches — so without this ORDERING, a user
+		// recategorizing a journaled leg saw "That category is not available" (names the wrong
+		// problem: the category IS valid, it's the leg's journal attachment that blocks the write)
+		// instead of the actionable reclassify-then-attach guidance `classifyTrans` (below) already
+		// gives on the same DB raise. Checked first here for the identical reason.
+		if (isJournaledCatFenceRejection(error.message))
+			return {
+				ok: false,
+				status: 409,
+				field: 'sub_cat_id',
+				code: 'journaled_cat_conflict',
+				message: JOURNALED_CAT_CONFLICT_MESSAGE
+			};
+		// SELF-249 Sec FLAG-B (PR #564, option C): 084's trade-constraint raises must ALSO be
+		// classified before isCrossTenantSubCat — the sign-alignment raise's "sub_cat %" text
+		// matches isCrossTenantSubCat's regex too (see isTradeConstraintViolation's own header).
+		if (isTradeConstraintViolation(error.message))
+			return { ok: false, status: 409, field: 'sub_cat_id', code: 'trade_constraint', message: TRADE_CONSTRAINT_MESSAGE };
 		if (isCrossTenantSubCat(error.message))
 			return { ok: false, status: 422, field: 'sub_cat_id', message: 'That category is not available.' };
 		return { ok: false, status: 422, field: 'sub_cat_id', message: 'Could not save the category.' };
@@ -167,19 +287,58 @@ type ClassifiabilityResult =
 	| { status: 'refused'; reason: ClassifiableRefusalReason }
 	| { status: 'error' };
 
+/** The five `classifiable()` fields `classifiabilityOf` below needs — everything EXCEPT the
+ *  `not_found` leg, which only exists at the DB-read call site (a row absent/RLS-invisible never
+ *  reaches this predicate at all). */
+export type ClassifiabilityInputs = {
+	transaction_type: string;
+	security_id: number | null;
+	is_reverse: boolean;
+	split_count: number;
+	journal_id: number | null;
+};
+
+export type ClassifiabilityCheck =
+	| { classifiable: true }
+	| { classifiable: false; reason: Exclude<ClassifiableRefusalReason, 'not_found'> };
+
 /**
  * The S-1 classifiability predicate (V1.3 pre-flight sitting item 3a; generalized to a write-time
  * refusal by the S-4 ruling, sitting item 6a): `classifiable(row) := transaction_type='standard'
  * AND security_id IS NULL AND split_count=0 AND is_reverse=false AND (annotation IS NULL OR
  * annotation.journal_id IS NULL)`.
  *
+ * PURE — no DB access. Extracted (SELF-249) so `checkClassifiable` (the write-time single-row
+ * check, below) and the account-detail loader's per-row `classifiable`/`classifiableReason`
+ * projection (accounts/[account_id]/+page.server.ts, SELF-249 AC6) share ONE implementation of
+ * the five rules instead of two independently-hand-copied ones — the drift shape this project
+ * keeps catching (see e.g. the duplicated `isCrossTenantSubCat` note above). Order matches the
+ * original inline checks exactly (not_standard → has_security → is_reversal → split_parent →
+ * journaled); callers that already have the row's fields in hand from a bulk read never need a
+ * second round-trip to get this answer.
+ *
  * ⚠ THIS CHECK IS THE ONLY ENFORCEMENT for four of its five legs — M1/M2/M4/E1 carry NO DB fence
  * (SELF-248 AC10 condition 5: the app guard "stays app-layer" for exactly this reason, and the
  * function COMMENT on migration 092's new trigger says so). Only the fifth leg (M3/journaled) is
- * ALSO DB-fenced (092's `fn_..._journaled_cat_fence`, defense-in-depth against a race between this
- * read and the write below). Read-only; runs under the caller's own RLS (rd_access-JOIN via the
+ * ALSO DB-fenced (092's `fn_..._journaled_cat_fence`, defense-in-depth against a race between a
+ * caller's read and its write).
+ */
+export function classifiabilityOf(row: ClassifiabilityInputs): ClassifiabilityCheck {
+	if (row.transaction_type !== 'standard') return { classifiable: false, reason: 'not_standard' };
+	if (row.security_id !== null) return { classifiable: false, reason: 'has_security' };
+	if (row.is_reverse) return { classifiable: false, reason: 'is_reversal' };
+	if (row.split_count > 0) return { classifiable: false, reason: 'split_parent' };
+	if (row.journal_id != null) return { classifiable: false, reason: 'journaled' };
+	return { classifiable: true };
+}
+
+/**
+ * The write-time single-row classifiability check — three RLS-scoped reads feeding
+ * `classifiabilityOf` above. Read-only; runs under the caller's own RLS (rd_access-JOIN via the
  * account chain) — a cross-tenant / not-visible trans_id reads as `not_found`, never a distinct
- * "exists but not yours" signal (no existence leak, the codebase-wide convention).
+ * "exists but not yours" signal (no existence leak, the codebase-wide convention). `not_found` is
+ * this function's own leg (not `classifiabilityOf`'s) precisely because it depends on the read,
+ * not on the row's field values.
  */
 export async function checkClassifiable(
 	supabase: SupabaseClient,
@@ -196,9 +355,6 @@ export async function checkClassifiable(
 		return { status: 'error' };
 	}
 	if (!trans) return { status: 'refused', reason: 'not_found' };
-	if (trans.transaction_type !== 'standard') return { status: 'refused', reason: 'not_standard' };
-	if (trans.security_id !== null) return { status: 'refused', reason: 'has_security' };
-	if (trans.is_reverse) return { status: 'refused', reason: 'is_reversal' };
 
 	// split_count is DERIVED (029/035 precedent — never a stored column): count the child set.
 	const { count: splitCount, error: splitErr } = await supabase
@@ -210,7 +366,6 @@ export async function checkClassifiable(
 		console.error('[transactions] classifiability split-count read failed:', splitErr.message);
 		return { status: 'error' };
 	}
-	if ((splitCount ?? 0) > 0) return { status: 'refused', reason: 'split_parent' };
 
 	const { data: ann, error: annErr } = await supabase
 		.schema('pfin')
@@ -222,7 +377,15 @@ export async function checkClassifiable(
 		console.error('[transactions] classifiability annotation read failed:', annErr.message);
 		return { status: 'error' };
 	}
-	if (ann?.journal_id != null) return { status: 'refused', reason: 'journaled' };
+
+	const check = classifiabilityOf({
+		transaction_type: trans.transaction_type,
+		security_id: trans.security_id,
+		is_reverse: trans.is_reverse,
+		split_count: splitCount ?? 0,
+		journal_id: ann?.journal_id ?? null
+	});
+	if (!check.classifiable) return { status: 'refused', reason: check.reason };
 
 	return { status: 'classifiable', annotationExists: ann != null };
 }
@@ -284,9 +447,16 @@ export async function classifyTrans(
 				status: 409,
 				field: 'sub_cat_id',
 				code: 'journaled_cat_conflict',
-				message:
-					'This leg is now posted to a journal as Revenue, Expense, or Equity — reclassifying it that way is blocked to protect the journal. Detach it, then classify.'
+				message: JOURNALED_CAT_CONFLICT_MESSAGE
 			};
+		// SELF-249 Sec FLAG-B (PR #564, option C): 084's trade-constraint raises must ALSO be
+		// classified before isCrossTenantSubCat — the sign-alignment raise's "sub_cat %" text
+		// matches isCrossTenantSubCat's regex too (see isTradeConstraintViolation's own header).
+		// Before this fix, this raise fell through to the generic 500 below (or, for the
+		// sign-alignment variant, was miscoded as invalid_sub_cat_id) — a user-input category
+		// mismatch reported as either a server error or the wrong 4xx reason.
+		if (isTradeConstraintViolation(error.message))
+			return { ok: false, status: 409, field: 'sub_cat_id', code: 'trade_constraint', message: TRADE_CONSTRAINT_MESSAGE };
 		if (isCrossTenantSubCat(error.message) || error.code === '23503')
 			return {
 				ok: false,
@@ -299,6 +469,65 @@ export async function classifyTrans(
 	}
 
 	return { ok: true, transId };
+}
+
+/** Case/whitespace-normalized vendor key, matching `fn_suggest_subcat_for_vendor`'s own
+ *  `lower(btrim(...))` join predicate (092) — so two rows whose vendor strings differ only by
+ *  case or padding share ONE RPC call, not two. Blank/null → no key (no suggestion is looked up).
+ *  Exported so a caller of `loadVendorSuggestions` can look its own rows back up by the SAME key
+ *  the batch was grouped by, without re-deriving (and risking drift from) the normalization rule. */
+export function vendorKey(vendor: string | null): string | null {
+	if (vendor == null) return null;
+	const t = vendor.trim();
+	return t === '' ? null : t.toLowerCase();
+}
+
+/**
+ * SELF-249 AC7/AC8 vendor-suggestion batch loader for the account-detail loader's per-row
+ * `suggested_sub_cat_id` projection. `fn_suggest_subcat_for_vendor` (092) is a single-vendor
+ * scalar RPC with no batch variant — calling it once per UNCLASSIFIED row would be one round trip
+ * per row on every page load. Instead this batches by DISTINCT normalized vendor across the
+ * caller-supplied vendor list (the loader passes only unclassified rows' vendors — AC7: an
+ * existing override always wins over a suggestion, so a classified row's vendor is never looked
+ * up) and maps the result back by that same normalized key. A page with many repeat-vendor rows
+ * (the common case — "STARBUCKS" recurs) collapses to one RPC call per distinct vendor, not one
+ * per row.
+ *
+ * Fail-soft per vendor (mirrors loadHeldSecurities/loadPricedFlags's convention): an RPC error for
+ * one vendor logs and maps to `null` (no suggestion) rather than failing the whole page load —
+ * this is a suggestion, not a security boundary, so degrading to "no hint" is the correct failure
+ * mode, not throwing.
+ */
+export async function loadVendorSuggestions(
+	supabase: SupabaseClient,
+	vendors: Array<string | null>
+): Promise<Map<string, number | null>> {
+	const originalByKey = new Map<string, string>();
+	for (const v of vendors) {
+		const key = vendorKey(v);
+		if (key !== null && !originalByKey.has(key)) originalByKey.set(key, v as string);
+	}
+	const out = new Map<string, number | null>();
+	if (originalByKey.size === 0) return out;
+
+	const entries = [...originalByKey.entries()];
+	const results = await Promise.all(
+		entries.map(async ([key, original]) => {
+			const { data, error } = await supabase
+				.schema('pfin')
+				.rpc('fn_suggest_subcat_for_vendor', { p_vendor: original });
+			if (error) {
+				console.error(
+					'[transactions] loadVendorSuggestions RPC failed for a vendor (fail-soft to no suggestion):',
+					error.message
+				);
+				return [key, null] as const;
+			}
+			return [key, (data as number | null) ?? null] as const;
+		})
+	);
+	for (const [key, subCatId] of results) out.set(key, subCatId);
+	return out;
 }
 
 /**

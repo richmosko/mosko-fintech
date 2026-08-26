@@ -310,4 +310,55 @@ describe('classifyTrans — write path', () => {
 		const result = await classifyTrans(supabase, 1, 7);
 		expect(result).toEqual({ ok: false, status: 500, message: 'Could not save the category. Please try again.' });
 	});
+
+	// SELF-249 Sec FLAG-B (PR #564, option C): 084's trade-constraint raises. Same fix, same
+	// collision reason, as upsertAnnotation's mirror coverage in transactions.upsertAnnotation.test.ts.
+	it('FLAG-B — the consistency-violation raise (s2a) → 409 trade_constraint, not the generic 500', async () => {
+		const supabase = makeSupabase({
+			trans: { data: CLASSIFIABLE_TRANS, error: null },
+			upsertError: {
+				code: 'P0001',
+				message:
+					"Trade consistency violation (ADR-031 Amendment 1 s2a): security_id 42 and cat=Income must satisfy (security_id present <=> cat='Trade') (M1-evt / SELF-293)"
+			}
+		});
+		const result = await classifyTrans(supabase, 1, 7);
+		expect(result).toEqual({
+			ok: false,
+			status: 409,
+			field: 'sub_cat_id',
+			code: 'trade_constraint',
+			message: 'A Trade category is for security transactions. Pick a cash-flow category instead.'
+		});
+	});
+
+	it('FLAG-B — the sign-alignment raise (s2b, contains the literal "sub_cat" substring) → also 409 trade_constraint, NOT invalid_sub_cat_id', async () => {
+		const supabase = makeSupabase({
+			trans: { data: CLASSIFIABLE_TRANS, error: null },
+			upsertError: {
+				code: 'P0001',
+				message: 'Trade sign-alignment (ADR-031 Amendment 1 s2b): sub_cat BTO requires quantity > 0 (buy), got -3 (M1-evt / SELF-293)'
+			}
+		});
+		const result = await classifyTrans(supabase, 1, 7);
+		if (result.ok) throw new Error('expected a refusal');
+		expect(result.code).toBe('trade_constraint');
+		expect(result.status).toBe(409);
+	});
+
+	it('FLAG-B COLLISION GUARD — the fail-closed unresolvable-row raise on the SAME trigger is NOT reclassified as trade_constraint (falls to invalid_sub_cat_id via isCrossTenantSubCat, pre-existing behavior unchanged)', async () => {
+		const supabase = makeSupabase({
+			trans: { data: CLASSIFIABLE_TRANS, error: null },
+			upsertError: {
+				code: 'P0001',
+				message:
+					'Trade constraint: cannot resolve fact (trans_id 1) or class (sub_cat_id 7) — not found or not visible under current AAL; fail-closed (M1-evt / SELF-293)'
+			}
+		});
+		const result = await classifyTrans(supabase, 1, 7);
+		if (result.ok) throw new Error('expected a refusal');
+		expect(result.code).not.toBe('trade_constraint');
+		expect(result.code).toBe('invalid_sub_cat_id');
+		expect(result.status).toBe(400);
+	});
 });
