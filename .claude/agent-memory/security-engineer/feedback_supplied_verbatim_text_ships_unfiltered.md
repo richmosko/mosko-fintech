@@ -32,6 +32,26 @@ said "there is no second reader." Corollary for the receiving end — **do not s
 verbatim unless something looks off."** A pen-holder who silently corrects my formatting is one who
 might silently correct my wording, and I would rather ship a bad space than lose the guarantee.
 
+**⚠ THE SHARPER CASE: MY SUPPLIED TEXT CAN CARRY A FACTUAL CLAIM ABOUT THE TREE — AND ONCE
+COMMITTED IT READS AS THE RECEIVING FILE'S OWN ASSERTION.** At SELF-250 / PR #572 the classifier
+comment I handed Backend said `pfin.account_trans` *"carries other unique indexes (017's provider
+dedup) whose violation means something entirely different."* That is not style — it is a claim, and
+the whole reason the guard matches by index NAME instead of by bare `23505` rests on it. If it were
+false, the extra conjunct would look like paranoia and the next reader would simplify it away.
+It happened to be true (`account_trans_provider_dedup_idx` is `create unique index` at `017`; `040`
+relaxes only `account_trans_hash_dedup_idx`) — **but I verified that at the RE-CONFIRM pass, after
+it had already shipped, not before I handed it over.** Lucky is not a method.
+
+**Rule: run Sec-Lock on my OWN supplied prose BEFORE handing it over, at the same standard I apply
+to a teammate's citations** ([[my-review-measurements-become-quoted-sources]]). Every factual
+sentence in a commit-ready block is a claim with an owner, and after commit the owner *looks like*
+the file's author. Grep the referent of any noun the justification hinges on.
+
+**And re-read my own landed text at the re-confirm pass, not just the receiver's adaptation of it.**
+The natural instinct on a discharge check is to diff *their* changes against *my* text and stop when
+they match. Matching proves transcription, not correctness — the block was never reviewed by anyone
+but me.
+
 Related: [[clearance-conditions-must-absorb-my-own-recommendations]],
 [[read-decisions-from-the-pr-branch-when-the-pr-edits-it]],
 [[temp-handoff-path-is-per-worktree]].

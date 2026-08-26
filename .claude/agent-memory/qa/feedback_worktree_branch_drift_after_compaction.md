@@ -46,3 +46,24 @@ Mid-session, my qa worktree silently detached from the shared feature branch ont
 **Why:** A resumed conversation (post-compaction) inherits a summary of what *should* be true, not a live re-read of git state. The worktree's uncommitted local edits survive a branch checkout silently (no conflict, no warning), so a detached-to-main worktree with WIP files layered on top looks completely normal from `git status` alone — nothing flags the branch mismatch unless you check `git log -1` / `git worktree list` against what the OTHER agents' worktrees are actually on.
 
 **How to apply:** At the start of any resumed session (especially post-compaction) and before delivering anything as "verified," check `git log --oneline -1` in the working worktree AND cross-check it against a sibling worktree's branch/sha (`git worktree list` from the repo root, or `git log -1 <shared-branch-name>`). If they don't match, diff the working tree's non-owned files against the real branch tip file-by-file before assuming any local reconstruction is needed — it may already be redundant. This generalizes [[feedback_which_ref_the_probe_was_aimed_at]] and [[feedback_rediff_source_before_reverify]]: the ref that needs checking isn't just "what am I about to verify against" but "what branch is my own worktree even standing on."
+
+**RECURRED a fourth time (SELF-250, 2026-08-26) — a NEW trigger, and a NEW mechanism entirely: not
+a branch-tip mismatch, but a tool-path default.** The qa worktree branch was correctly checked out
+and correctly current (`git log -1` matched the shared branch tip) — this was not the earlier
+failure. The Write tool call for a brand-new test file was given the absolute path
+`/Users/mosko/Projects/mosko-fintech/supabase/tests/rls/093_....sql` (the MAIN repo checkout,
+currently on `main`) out of habit, despite every Bash command in the same turn correctly operating
+inside `~/Projects/mosko-fintech-worktrees/qa`. **Write/Edit's `file_path` is independent of
+whatever directory Bash's `cd` state is tracking — the two tools do not share an implicit "current
+worktree."** Caught this time not by checking a sha up front, but by the file being SILENTLY ABSENT
+from a `pg_prove` directory-mode run (`Files=86`, one short, no error) — a instance of the general
+"success exit code from the wrong side of a boundary" class ([[feedback_scratch_db_pgtap_harness_gotchas]]
+gotcha #5), applied to a worktree/main-repo boundary instead of a docker mount boundain. Fixed by
+`cp`-ing the file into the correct worktree path and deleting the stray copy from `main` before
+committing, rather than re-authoring.
+
+**Standing habit this ADDS (on top of the sha-check habit above):** for every Write/Edit call that
+creates a NEW file (not editing one already read from the correct path), spell out the absolute
+path starting from the worktree root explicitly in the call, and if in doubt, `ls` the target
+directory via Bash immediately beforehand to confirm it's the worktree's copy, not main's — do not
+rely on "I've been `cd`-ing to the worktree in Bash" to carry over to Write/Edit.

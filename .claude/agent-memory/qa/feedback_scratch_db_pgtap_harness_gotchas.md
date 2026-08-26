@@ -1,6 +1,6 @@
 ---
 name: feedback-scratch-db-pgtap-harness-gotchas
-description: Mechanical gotchas building a from-scratch pgTAP verification DB (docker exec -i, pgtap schema placement, permissive-direction privilege gap, pg_prove -v mount path, \'-escaping) — hit all three authoring the SELF-218 battery verification, 2026-08-12; #5 added SELF-245, 2026-08-25; #6 added SELF-248, 2026-08-25.
+description: Mechanical gotchas building a from-scratch pgTAP verification DB (docker exec -i, pgtap schema placement, permissive-direction privilege gap, pg_prove -v mount path, \'-escaping, psql :'var' inside do $$ $$) — hit all three authoring the SELF-218 battery verification, 2026-08-12; #5 added SELF-245, 2026-08-25; #6 added SELF-248, 2026-08-25; #7 added SELF-250, 2026-08-26.
 metadata:
   type: feedback
 ---
@@ -136,3 +136,23 @@ alone. [[feedback_instrument_cannot_observe_the_property]]
    alone). Fix: never backslash-escape a quote in a plain string literal — double it,
    or (safer for a stylistic mark like a prime symbol) just spell it out in words
    ("C double-prime") and skip the quote entirely.
+
+7. **psql does NOT interpolate `:'var'` / `:var` inside a `do $$ ... $$` body.**
+   Wrote `do $$ declare v_idx text := :'indexname'; begin execute format('drop
+   index pfin.%I', v_idx); end $$;` to invert a dynamically-discovered index
+   (SELF-250, 2026-08-26) — reproducible in isolation with a two-line repro
+   (`\gset` the var, `select :'var'` substitutes fine, the identical `:'var'`
+   inside a `do $$ $$` two lines later throws `syntax error at or near ":"`,
+   proving the variable WAS set correctly and the failure is specific to
+   dollar-quoted bodies). Root cause: psql's colon-substitution is a dumb text
+   scan that treats dollar-quoted content as opaque (the same reason it
+   doesn't mangle a `::` cast or an array slice inside one) — it never fires
+   inside `$$...$$` at all, isn't merely fooled by the dollar-quote delimiter.
+   Fix: never reference a psql variable inside a `do $$ $$` body. Build the
+   target statement as a plain SQL fragment via `format(...)` in an ordinary
+   `select`, capture it with `\gset`, then execute it as a BARE (unquoted)
+   psql variable — `select format('drop index pfin.%I', :'name') as dropsql
+   \gset` then `:dropsql;` on its own line. The unquoted form substitutes the
+   captured text as raw SQL outside any dollar-quoting, so it composes
+   correctly with a following `savepoint` / `rollback to savepoint` pair for
+   an index-drop inversion leg.
