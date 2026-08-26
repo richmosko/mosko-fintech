@@ -129,6 +129,21 @@ BOTH the fence and its golden fixture, both copies must change or the fixture st
   closes the vector it found has not closed the class.** When someone defends against a NULL-exclusion
   hole, look immediately for a second path to the same hole.
 
+**⚠ The INVERSE failure: a set of raise-message classifiers with a GAP, where the fall-through is a
+500.** At PR #564 the classify path's error branch tested `isJournaledCatFenceRejection` then
+`isCrossTenantSubCat` then `error.code === '23503'`, else a generic 500 "Please try again." But
+`084`'s `fn_account_trans_annotation_trade_constraints` raises `'Trade consistency violation …'` on
+that same write — P0001, and its text carries no `sub_cat` / `Decision 3` / `matched-tenant`, so it
+matches **nothing** and lands on the 500. A user-input error, reported as a server error, with retry
+advice that can never work. **Reachability came from a UI change, not a DB change:** the new picker
+sourced `pfin.posting_prototype` with no `cat` filter, and `041` seeds `Trade/BTO` + `Trade/STC` into
+every provisioned user — so a trigger that had been endpoint-only became one click from every row.
+**Two reusable moves:** (1) when reviewing a classifier CHAIN, enumerate every trigger and constraint
+on the WRITTEN table and check each raise against the chain — the residual is what the fall-through
+message will claim; (2) when a PR adds a picker/dropdown over a vocabulary table, ask which rows the
+query does NOT filter out and what fires when one of them is chosen. A read-side change can move a
+DB fence from unreachable to everyday without touching a migration.
+
 **How to apply:** whenever a review surface includes a grep/regex fence, a `prosrc` assertion, or a CI
 token gate — build the candidate list first (include the parenthesis-free special literals
 `'today'::date` / `date 'today'` / `'now'::date`, both spellings of the zone-aware type, and bare

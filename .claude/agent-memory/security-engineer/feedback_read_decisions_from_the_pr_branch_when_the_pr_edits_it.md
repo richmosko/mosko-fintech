@@ -117,3 +117,29 @@ route the correction to the SOURCE too — otherwise the fix is one copy deep an
 Related: [[sec-lock-cross-check-catches-my-own-misreads]] (read the source the text CITES),
 [[measure-the-fence-regex-not-its-comment]], and [[which-ref-the-probe-was-aimed-at]] in the project
 index.
+
+**⚠ ATTACHMENT axis, fifth instance — CLAUSE-NAME BLEED FROM THE ADJACENT SENTENCE.** At PR #564
+the code comment paraphrasing my own binding text wrote *"M1/M4 are inert here (084's **P3 CASE /
+txn CTE** never surface those rows)"*. My source said *"M1/M4 inert by **P3's where**"*. Measured at
+`084:864–888`: P3 carries BOTH a `CASE` and a `WHERE`, and the exclusion is entirely the `WHERE`
+(`transaction_type='standard' and security_id is null and split_count=0 and amount<>0`). **A `CASE`
+cannot exclude a row — it maps values, and its `else` arm here is the catch-all `Suspense`.** The
+mechanism is visible in the diff: the *preceding* sentence correctly borrows the source's
+*"P3 CASE + its txn CTE carry no `is_reverse` term"* — true, and about the **gap** — and the *next*
+sentence reused those clause names for a **different proposition** (what makes M1/M4 inert). Every
+word was real and sourced; only the attachment moved one sentence over.
+
+**Two durable pieces.** (1) When a paraphrase names a *mechanism* (`WHERE` / `CASE` / CTE / trigger
+/ policy), the clause type is falsifiable on its own — go read which clause actually does the work,
+because a wrong one tells a future reader to protect the wrong line. (2) **Adjacent sentences in the
+source that share vocabulary are the drift vector**: if two neighbouring claims use overlapping
+clause names for different propositions, expect the paraphrase to collapse them. Check the
+neighbours of any sentence I am asked to verify, not just the sentence.
+
+**Corollary that arrived the same session: the paired TEST can be the correct statement while the
+HEADER is wrong, in the same commit.** `isTradeConstraintViolation`'s header claimed the excluded
+raise *"mirrors the generic 500"*; measured, its `(sub_cat_id %)` text is claimed by
+`isCrossTenantSubCat` first — and the collision-guard test's own title said so correctly. **When a
+comment and its test disagree about a fact, the test is usually right** (it was executed) and the
+comment is the artifact to fix — but say which one you measured, because "the test says X" is not
+itself a measurement of X.

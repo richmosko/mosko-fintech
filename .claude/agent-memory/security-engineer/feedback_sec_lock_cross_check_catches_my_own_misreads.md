@@ -1,6 +1,6 @@
 ---
 name: sec-lock-cross-check-catches-my-own-misreads
-description: Read the source the text CITES before forwarding a drift finding — plus: a relay of my own prior words is still a relay, non-repo canonical homes exist (Linear/DESIGN flows), and quote an interior span of a bold-delimited line so no normalization is possible
+description: Read the source the text CITES before forwarding a drift finding — plus: a relay of my own prior words is still a relay, non-repo canonical homes exist (Linear/DESIGN flows), quote an interior span of a bold-delimited line so no normalization is possible, and MY OWN ROLE BRIEF's gloss of a Lock can be narrower than the live ADR and scope a surface OUT
 metadata:
   type: feedback
 ---
@@ -81,6 +81,21 @@ was wrong, so reviewing "branch against brief" would have produced a finding aga
 drift back in the verdict — a mis-numbered mod in a dispatch is how a fence gets attributed to the
 wrong layer three artifacts downstream. Related:
 [[uniform-response-rationale-vs-built-predicate]].
+
+**⚠ One level further in: MY OWN ROLE BRIEF is a cited source, and its gloss can be NARROWER than
+canon — narrow in the direction that scopes a surface OUT.** My role brief lists the joint-review
+surface as *"Lock 14 — user-facing settings write-paths"*. ADR-011 Decision 4's live text reads
+**"User-facing direct DB write surfaces (Lock 14)"**. On the brief's gloss, `POST
+/api/transactions/:id/classify` — user input landing a direct DML upsert on
+`pfin.account_trans_annotation` — reads as out of scope because it is not a *settings* path; on the
+live text it is squarely a class member (caught at the SELF-249 / PR #564 review, where the brief
+asked me to state in/out and why). **A dispatch brief drifting is someone else's error I catch; my
+own role brief drifting is an error I will reproduce every session until I read past it.** The role
+brief itself says to read the live ADR *"never from this file and never from recall"* — that
+instruction is scoped to D3/D4/allowlists by name, and the Lock-14 gloss sits outside that scope
+while reading exactly as authoritative. Treat every Lock/ADR name in my own brief as a **pointer with
+a lossy label**: resolve the label against the ADR body before using it to decide scope, and report
+the gloss drift in the verdict alongside the branch findings.
 
 **How to apply:** on every verbatim-vs-paraphrase axis check, flatten the cited file
 (`sed 's/^--*//' | tr '\n' ' ' | tr -s ' '`) so SQL-comment and string-concatenation line wrapping
