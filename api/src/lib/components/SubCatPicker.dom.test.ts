@@ -134,6 +134,29 @@ describe('SubCatPicker — Sec FLAG-B: Trade is never offered', () => {
 });
 
 describe('SubCatPicker — disabled gate (AC6)', () => {
+	it('QA walk regression (tip 691f7cb, trans 5556/5557): an already-classified Trade row (has_security) renders its label, not blank', () => {
+		// The FLAG-B Trade filter must NOT apply here: this row's own value IS a Trade sub_cat
+		// (legitimate per 084's biconditional — security_id present <=> cat='Trade' — which is
+		// exactly why has_security makes it non-classifiable). Filtering unconditionally removed
+		// the option the bound value needed, so the disabled select rendered blank.
+		const tradeGroups: SubCatGroup[] = [...GROUPS, { label: 'Trade', options: [{ value: '470', label: 'BTO' }] }];
+		const { getByRole } = render(SubCatPicker, {
+			props: {
+				transaction: trans({
+					category: { cat: 'Trade', sub_cat: 'BTO' },
+					sub_cat_id: 470,
+					classifiable: false,
+					classifiableReason: 'has_security'
+				}),
+				subCatGroups: tradeGroups
+			}
+		});
+		const select = getByRole('combobox') as HTMLSelectElement;
+		expect(select.value).toBe('470');
+		expect(select.disabled).toBe(true);
+		expect(within(select).getByText('BTO')).toBeTruthy();
+	});
+
 	it('classifiable:false disables the select, hides the submit control, and shows the mapped affordance text', () => {
 		const { getByRole, queryByRole, getByText } = render(SubCatPicker, {
 			props: {

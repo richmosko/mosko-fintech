@@ -95,7 +95,19 @@
 	// (shared with entry/edit/split, where narrowing would reach flows this issue doesn't own).
 	// Backend's raise-time classifier is the real defense; this is the UI-side narrowing of what's
 	// offered so the invalid choice isn't reachable in the first place.
-	const pickerGroups = $derived(subCatGroups.filter((g) => g.label !== 'Trade'));
+	//
+	// QA walk finding (tip 691f7cb): filtering UNCONDITIONALLY blanked the label on an
+	// already-classified `has_security` Trade row (trans 5556/5557 — a real BTO annotation) — the
+	// disabled select's bound value matched no <option> once its own group was removed, so a
+	// correctly-classified row LOOKED unclassified. Fix: only filter while the control is actually
+	// WRITABLE (`classifiable`). This is sound, not a special case, by the SAME 084 biconditional
+	// FLAG-B leans on (security_id present <=> cat='Trade'): `classifiable` true ⇒ security_id is
+	// null ⇒ this row's OWN sub_cat_id, if any, can never legitimately be Trade — so filtering is
+	// always safe there. `classifiable` false is exactly the state a Trade value CAN legitimately
+	// be bound in, so the full (unfiltered) list is what's needed to render it — and a disabled
+	// select can carry the full list with zero write-path exposure (the user cannot select
+	// anything from it regardless of what's offered).
+	const pickerGroups = $derived(classifiable ? subCatGroups.filter((g) => g.label !== 'Trade') : subCatGroups);
 
 	function seedValue(): string {
 		if (classified) return String(transaction.sub_cat_id);

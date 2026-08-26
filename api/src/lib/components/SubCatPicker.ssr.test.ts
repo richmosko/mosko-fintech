@@ -111,6 +111,26 @@ describe('SubCatPicker SSR — hint state', () => {
 });
 
 describe('SubCatPicker SSR — disabled gate (AC6)', () => {
+	it('QA walk regression (tip 691f7cb, trans 5556/5557): an already-classified Trade row (has_security) renders its label, not blank', () => {
+		// See the DOM test's twin for the full reasoning — the Trade filter must NOT apply when
+		// !classifiable, or the disabled select's own legitimately-Trade value matches no <option>.
+		const tradeGroups: SubCatGroup[] = [...GROUPS, { label: 'Trade', options: [{ value: '470', label: 'BTO' }] }];
+		const { body } = render(SubCatPicker, {
+			props: {
+				transaction: trans({
+					category: { cat: 'Trade', sub_cat: 'BTO' },
+					sub_cat_id: 470,
+					classifiable: false,
+					classifiableReason: 'has_security'
+				}),
+				subCatGroups: tradeGroups
+			}
+		});
+		expect(body).toContain('optgroup label="Trade"');
+		expect(body).toContain('<option value="470" selected="">BTO</option>');
+		expect(selectTag(body)).toContain('disabled');
+	});
+
 	it('classifiable:false renders a disabled select and the mapped affordance note, no submit button', () => {
 		const { body } = render(SubCatPicker, {
 			props: {
