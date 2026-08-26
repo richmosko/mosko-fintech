@@ -107,6 +107,14 @@ export function isClosedAccountWrite(message: string): boolean {
 	return /write blocked:.*is closed/i.test(message);
 }
 
+/** 093 `account_trans_reversal_unique_idx` (SELF-250 / V1.3 pre-flight sitting item 8a): at most
+ *  one is_reverse row may point at any given original. Matched by index NAME, not by bare 23505 —
+ *  `pfin.account_trans` carries other unique indexes (017's provider dedup) whose violation means
+ *  something entirely different. */
+export function isDuplicateReversal(message: string, details?: string | null): boolean {
+	return /account_trans_reversal_unique_idx/.test(`${message} ${details ?? ''}`);
+}
+
 /**
  * The single user-facing rendering of that fence.
  *
@@ -754,6 +762,13 @@ export async function reverseAndReplaceTrans(
 		// refusal).
 		if (insErr && isClosedAccountWrite(insErr.message))
 			return { ok: false, status: 409, message: CLOSED_ACCOUNT_WRITE_MESSAGE };
+		// The double-edit guard above is TOCTOU-narrow by its own comment; 093 promoted it to a
+		// database refusal, so when two edits race the guard the DB refuses this INSERT with 23505.
+		// That is the SAME state the guard reports — report it the same way, with the same message.
+		// 409 not 422: the request is well-formed and the row's STATE is the conflict, and "try
+		// again" is advice that can never work (a second reversal is refused permanently).
+		if (insErr && insErr.code === '23505' && isDuplicateReversal(insErr.message, insErr.details))
+			return { ok: false, status: 409, message: 'This transaction has already been edited.' };
 		return { ok: false, status: 422, message: 'Could not save the edit. Please try again.' };
 	}
 
