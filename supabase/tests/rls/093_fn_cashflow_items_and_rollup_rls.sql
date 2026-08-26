@@ -32,10 +32,17 @@
 --         hand-counted, since this fixture''s incidental unclassified-item
 --         count (E3a + the L15a created-on-D row) is easy to miscount by
 --         inspection.
---   NOT YET RUN under pg_prove (scratch-DB run pending — see the hand-off
---   report); this header will be corrected with the actual pg_prove summary
---   once that run completes. Never trust a bare `psql` run of this file —
---   pgTAP's plan-count enforcement only works through a TAP-aware consumer.
+--   FIRST PASS (31 legs) ran GREEN — 31/31, `pg_prove` (directory-mode, never
+--   bare `psql`) against a hand-built scratch DB (`scratch250`, migrations
+--   001-093 applied fresh; the banned reset command never used); full-suite
+--   sweep alongside it found no other battery regressed. THREE MORE LEGS
+--   (N5, RU-YEAR-A, RU-YEAR-B — team-lead relay of architect-250 findings)
+--   were added AFTER that pass, per the AC's own emphasis: rule 6 (the
+--   as-of filter) binds the NETTING term too, not just the base scan, and
+--   the reader/rollup grain difference on out-of-year items is deliberate
+--   and needed its own leg rather than being inferred from S3. plan(34)
+--   below reflects the extended count; RE-RUN before trusting it — see the
+--   hand-off report for the actual result of that run.
 --
 -- BINDS TO (the committed 093_cashflow_reader_and_rollup.sql, verbatim):
 --   - pfin.fn_cashflow_items(p_as_of date) RETURNS TABLE(
@@ -78,10 +85,13 @@
 --   (1) S-1 predicate            -> R1/R2/R3a/R5 (5 legs incl. R4's is_reverse
 --                                    exclusion, per-rule below)
 --   (2) split XOR                -> R3a/R3b/R3c
---   (3) E1 netting               -> N1/R4/N3/N4
+--   (3) E1 netting               -> N1/R4/N3/N4/N5 (N5 = rule 6 binding the
+--                                    netting term, not just the base scan)
 --   (4) E3 LEFT JOIN             -> E3a
---   (5) S-3 period grammar       -> S3a/S3b/S3c
---   (6) Lock 15 dual-column half-open as-of -> L15a/L15b/L15c
+--   (5) S-3 period grammar       -> S3a/S3b/S3c/RU-YEAR-A/RU-YEAR-B (the
+--                                    reader/rollup grain difference on
+--                                    out-of-year items)
+--   (6) Lock 15 dual-column half-open as-of -> L15a/L15b/L15c/N5
 --
 -- ┌─ WHY THE INDEX INVERSION USES SAVEPOINT ROLLBACK, NOT DDL RECONSTRUCTION ─┐
 -- │ The dispatch's "drop the index on scratch -> the duplicate lands ->       │
@@ -123,8 +133,10 @@
 --   is THE money-path for §2.3). This file is QA's half of that review's
 --   evidence; it does not substitute for it.
 --
--- plan(31) — see the per-rule map above; RU6 (the unclassified-banner
---   identity, AC8) was added at reconciliation against the committed blob.
+-- plan(34) — see the per-rule map above; RU6 (the unclassified-banner
+--   identity, AC8) was added at reconciliation against the committed blob;
+--   N5/RU-YEAR-A/RU-YEAR-B were added after the first pg_prove pass, per
+--   team-lead's relay of architect-250's findings.
 -- =====================================================================
 
 begin;
@@ -132,7 +144,7 @@ begin;
 -- shared verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(31);
+select plan(34);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb, _rls.tenant_c() as tc \gset
@@ -182,6 +194,10 @@ insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment)
   values (:'ta', 'Trade', 'BTO93', false) returning id as a_trade \gset
 insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment)
   values (:'ta', 'Equity', 'OwnerContribution93', false) returning id as a_equity \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment)
+  values (:'ta', 'Expense', 'AfterD93', false) returning id as a_afterd \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment)
+  values (:'ta', 'Expense', 'OutYear93', false) returning id as a_outyear \gset
 
 -- journal (A) — the journaled-exclusion referent (R5).
 insert into pfin.journal (users_id, group_type, status, description)
@@ -253,6 +269,31 @@ insert into pfin.account_trans (account_id, transaction_date, amount, vendor, de
   returning trans_id as p2 \gset
 insert into pfin.account_trans_annotation (trans_id, sub_cat_id)
   values (:p2, :a_utilities);
+
+-- N5 — RULE 6 APPLIES TO THE NETTING ROWS TOO (team-lead relay, architect-250):
+-- a reversal back-dates its transaction_date to the original's date (<=D), but
+-- is CREATED after D — created_at is the ONLY column separating "reversed by
+-- D" from "reversed afterwards". A correction made after D must NOT restate
+-- the history read AT D: reading at D, o3 must show its GROSS (unreversed)
+-- amount, not netted to 0.
+insert into pfin.account_trans (account_id, transaction_date, amount, vendor, description)
+  values (:accta, '2026-04-01', -25, 'vAfterD', '093 N5 original, reversed only AFTER D')
+  returning trans_id as o3 \gset
+insert into pfin.account_trans_annotation (trans_id, sub_cat_id)
+  values (:o3, :a_afterd);
+insert into pfin.account_trans (account_id, transaction_date, amount, vendor, description, is_reverse, replaces_trans_id, created_at)
+  values (:accta, '2026-04-01', 25, 'vAfterDRev', '093 N5 reversal of o3, back-dated but created AFTER D', true, :o3, '2026-10-20 00:00:00+00')
+  returning trans_id as r3 \gset
+
+-- RU-YEAR — the reader/rollup GRAIN DIFFERENCE (team-lead relay, architect-250):
+-- an item dated OUTSIDE the rendered year (2025, vs D's year 2026) is still
+-- EMITTED by the reader (every period flag false) but is ABSENT from the
+-- rollup's sections (sub_cat_raw scopes to in_ytd) — deliberately two
+-- different grains.
+insert into pfin.account_trans (account_id, transaction_date, amount, vendor, description)
+  values (:accta, '2025-01-01', -999, 'vOutYear', '093 RU-YEAR item outside D''s rendered year')
+  returning trans_id as t_outyear \gset
+insert into pfin.account_trans_annotation (trans_id, sub_cat_id) values (:t_outyear, :a_outyear);
 
 -- S3a/S3b/S3c — S-3 period grammar. 4 Groceries rows spanning all 4 quarters
 -- of 2026, truncated at D=2026-10-15 (Q4 itself only partially elapsed).
@@ -399,6 +440,23 @@ select is(
   (select sum(amount_net) from pfin.fn_cashflow_items(:'d_asof'::date) where sub_cat_id = :a_utilities),
   -20::numeric,
   '093 N4: a partially-reversed Sub-Cat group nets to the unreversed survivor''s amount, not 0 and not the raw sum'
+);
+
+-- N5 — rule 6 (the as-of filter) applies to the NETTING rows too: a reversal
+-- back-dated to <=D but CREATED after D+1 does not net the original when
+-- reading AT D — o3 must read GROSS (its own -25), not 0.
+select is(
+  (select amount_net from pfin.fn_cashflow_items(:'d_asof'::date) where trans_id = :o3),
+  -25::numeric,
+  '093 N5: a reversal created AFTER D does not retroactively net the original when reading AT D (rule 6 binds the netting term, not just the base scan)'
+);
+
+-- RU-YEAR-A — the reader/rollup grain difference, reader half: an item dated
+-- outside D''s rendered year is still EMITTED, with every period flag false.
+select results_eq(
+  format($$ select in_month, in_q1, in_q2, in_q3, in_q4, in_ytd from pfin.fn_cashflow_items(%L::date) where trans_id = %s $$, :'d_asof', :t_outyear),
+  $$ values (false, false, false, false, false, false) $$,
+  '093 RU-YEAR-A: an out-of-year item is emitted by the reader with every period flag false, not omitted'
 );
 
 -- E3a — the un-annotated row: LEFT JOIN means it appears with a NULL cat, not
@@ -604,6 +662,19 @@ select is(
   (select -1 * sum(amount_net) from pfin.fn_cashflow_items(:'d_asof'::date)
     where cat = 'Expense' and sub_cat_id is not null and in_ytd),
   '093 RU3: the Expense Total sums its Sub-Cat rows'' real signed values (independently recomputed from the shared reader), never their absolute values'
+);
+
+-- RU-YEAR-B — the reader/rollup grain difference, rollup half: the SAME
+-- out-of-year item (confirmed emitted at RU-YEAR-A) has NO row in either
+-- rollup section — sub_cat_raw scopes to in_ytd, deliberately a narrower
+-- grain than the reader's own row set.
+select is(
+  (select count(*)
+     from jsonb_array_elements(pfin.fn_cashflow_cross_account_rollup(:'d_asof'::date) -> 'sections') s,
+          jsonb_array_elements(s -> 'rows') row
+    where row ->> 'sub_cat' = 'OutYear93'),
+  0::bigint,
+  '093 RU-YEAR-B: an item outside D''s rendered year is absent from both rollup sections even though the reader emits it (RU-YEAR-A) — the two grains differ deliberately'
 );
 
 -- RU-EQ — the Equity-classified, non-journaled, non-security item never
