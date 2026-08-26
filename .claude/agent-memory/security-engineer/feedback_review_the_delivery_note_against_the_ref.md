@@ -56,3 +56,31 @@ bare `psql` exits 0 regardless. Ask for the exit code, not for a narrative.
 compare to `plan(N)`. ⚠ Use the COMPLETE verb set — mine omitted `throws_like` and `set_eq` and came
 up five short, which would have manufactured a finding. Include helper verbs from the shared
 fixture, and read each helper's body to see how many TAP results it emits (one `select is(...)` = 1).
+
+**⚠ A teammate's suite figure and the FENCED CI LANE are different instruments — and `BLOCKED`
+means "the fences have not reported," not "a fence failed."** Re-confirming PR #564 at `cf56a14`,
+team-lead reported *"Suites 1536/1536 at tip"* (true, and a **local** run) while
+`gh pr view --json mergeStateStatus` read **BLOCKED**, against `98ca0e3`'s **CLEAN** one round
+earlier. Two measurements settled it and neither is inferable from the other:
+- **Check-runs PER SHA**, not per branch: `gh api repos/<o>/<r>/commits/<sha>/check-runs -q .total_count`
+  across every commit in the delta gave `20 / 1 / 14 / 16 / **0**` — the tip had **zero runs
+  dispatched at all**. Re-poll in a *second* turn before concluding; "not yet" and "never" look
+  identical in one sample.
+- **Branch protection**: `gh api .../branches/main/protection` → 17 required contexts, **0**
+  required approving reviews. That converts a vague BLOCKED into a specific, nameable gate — and
+  six of those contexts were fences in my own remit (RT-22/26/27, TBC, TBC-node,
+  secrets-manifest non-overlap). **A fence that has not run has not passed, and a code-review GREEN
+  cannot substitute for it.** Say that explicitly rather than letting the verdict imply clearance.
+
+**⚠ And a run whose top-level `conclusion` is `failure` may have had every job CANCELLED.** Three
+runs on that branch read `failure` in `gh run list` and looked like real red. `gh run view <id>
+--json jobs` showed every job `cancelled` — concurrency supersession from a rapid push sequence.
+**Never report a run as failing from the list view; open the jobs.** Reporting "three failing runs"
+would have manufactured a blocker and sent the team chasing a green suite. State the disarming
+result as loudly as the alarming one — "these are cancellations, there is no red test here" is the
+half that stops the wild-goose chase.
+
+**How to apply:** whenever a re-confirm rides on someone else's green, measure three things before
+the verdict — check-runs at the **exact sha under review**, the required-context list from branch
+protection, and the **job-level** conclusion of anything non-green. Related:
+[[which-ref-the-probe-was-aimed-at]], [[instrument-cannot-observe-the-property]].
