@@ -175,10 +175,11 @@ insert into pfin.account_trans (account_id, transaction_date, amount, vendor, de
 -- a_sub is the matched referent; b_sub is the cross-tenant referent the #13 fence
 -- must reject. a_asset_sub is NEW: an asset-domain (storage-side) user_taxonomy
 -- row, for the (2e) conversion leg.
-insert into pfin.posting_prototype (users_id, cat, sub_cat)
-  values (:'ta', 'Expense', 'Groceries') returning id as a_sub \gset
-insert into pfin.posting_prototype (users_id, cat, sub_cat)
-  values (:'tb', 'Expense', 'Groceries') returning id as b_sub \gset
+-- is_tax_payment added (SELF-245/091, boolean not null no default) — false, not tax semantics here.
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment)
+  values (:'ta', 'Expense', 'Groceries', false) returning id as a_sub \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment)
+  values (:'tb', 'Expense', 'Groceries', false) returning id as b_sub \gset
 insert into pfin.user_taxonomy (users_id, cat, sub_cat, element)
   values (:'ta', 'Brokerage', 'US Equity', 'asset') returning id as a_asset_sub \gset
 

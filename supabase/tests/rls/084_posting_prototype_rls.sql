@@ -179,10 +179,12 @@ select ok(
 --   unchanged. This is a synthetic proof that the operation 084's own copy step performs is
 --   mechanically sound — NOT a claim to have observed a real historical migration event (a
 --   fresh CI stack has zero pre-existing provisioned users, so there is nothing real to move).
+-- is_tax_payment added throughout this file (SELF-245/091, boolean not null no default) — false,
+-- not tax semantics here.
 select _rls.set_tenant(:'ta'::uuid);
-insert into pfin.posting_prototype (id, users_id, cat, sub_cat)
+insert into pfin.posting_prototype (id, users_id, cat, sub_cat, is_tax_payment)
   overriding system value
-  values (42, :'ta', 'Revenue', 'ID2-probe');
+  values (42, :'ta', 'Revenue', 'ID2-probe', false);
 select ok(
   (select id = 42 and id < (select seqmin from pg_sequence ps join pg_class c on c.oid = ps.seqrelid
                               where c.relname = 'posting_prototype_id_seq')
@@ -198,32 +200,32 @@ select set_config('role', 'postgres', true);
 select _rls.set_tenant(:'ta'::uuid);
 
 select lives_ok(
-  format($$ insert into pfin.posting_prototype (users_id, cat, sub_cat) values (%L, 'Revenue', 'chk-probe-1') $$, :'ta'),
+  format($$ insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment) values (%L, 'Revenue', 'chk-probe-1', false) $$, :'ta'),
   '(CHK1) cat=''Revenue'' accepted by the unconditional CHECK'
 );
 select lives_ok(
-  format($$ insert into pfin.posting_prototype (users_id, cat, sub_cat) values (%L, 'Expense', 'chk-probe-2') $$, :'ta'),
+  format($$ insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment) values (%L, 'Expense', 'chk-probe-2', false) $$, :'ta'),
   '(CHK2) cat=''Expense'' accepted'
 );
 select lives_ok(
-  format($$ insert into pfin.posting_prototype (users_id, cat, sub_cat) values (%L, 'Transfer', 'chk-probe-3') $$, :'ta'),
+  format($$ insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment) values (%L, 'Transfer', 'chk-probe-3', false) $$, :'ta'),
   '(CHK3) cat=''Transfer'' accepted'
 );
 select lives_ok(
-  format($$ insert into pfin.posting_prototype (users_id, cat, sub_cat) values (%L, 'Equity', 'chk-probe-4') $$, :'ta'),
+  format($$ insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment) values (%L, 'Equity', 'chk-probe-4', false) $$, :'ta'),
   '(CHK4) cat=''Equity'' accepted (028''s GL accounting class — distinct vocabulary from the renamed asset-domain Cat, Decision 7''s (R5) control)'
 );
 select lives_ok(
-  format($$ insert into pfin.posting_prototype (users_id, cat, sub_cat) values (%L, 'Trade', 'chk-probe-5') $$, :'ta'),
+  format($$ insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment) values (%L, 'Trade', 'chk-probe-5', false) $$, :'ta'),
   '(CHK5) cat=''Trade'' accepted'
 );
 select throws_ok(
-  format($$ insert into pfin.posting_prototype (users_id, cat, sub_cat) values (%L, 'Income', 'chk-probe-6') $$, :'ta'),
+  format($$ insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment) values (%L, 'Income', 'chk-probe-6', false) $$, :'ta'),
   '23514', null,
   '(CHK6) cat=''Income'' (not an enum member) REJECTED — check_violation, fails closed'
 );
 select throws_ok(
-  format($$ insert into pfin.posting_prototype (users_id, cat, sub_cat) values (%L, 'Groceries', 'chk-probe-7') $$, :'ta'),
+  format($$ insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment) values (%L, 'Groceries', 'chk-probe-7', false) $$, :'ta'),
   '23514', null,
   '(CHK7) cat=''Groceries'' (not an enum member — this used to be legal on the OLD combined table under the asset-domain disjunct; here there is no disjunct to exempt it) REJECTED'
 );
@@ -233,7 +235,7 @@ select set_config('role', 'postgres', true);
 -- BLOCK R/W — two-tenant isolation, both directions.
 -- =====================================================================
 select _rls.set_tenant(:'tb'::uuid);
-insert into pfin.posting_prototype (users_id, cat, sub_cat) values (:'tb', 'Revenue', 'b-row');
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment) values (:'tb', 'Revenue', 'b-row', false);
 select set_config('role', 'postgres', true);
 
 -- (R1) owner (A) reads exactly its own rows (5 CHK accepts + 1 ID2 probe = 6).
@@ -245,7 +247,7 @@ select _rls.expect_cross_tenant_read_empty('pfin.posting_prototype'::regclass, :
 -- (W1) B cannot forge users_id=A on an INSERT (WITH CHECK rejects; RLS 42501).
 select _rls.expect_cross_tenant_write_blocked(
   :'tb'::uuid,
-  format($$ insert into pfin.posting_prototype (users_id, cat, sub_cat) values (%L, 'Revenue', 'forge-probe') $$, :'ta'),
+  format($$ insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment) values (%L, 'Revenue', 'forge-probe', false) $$, :'ta'),
   '(W1) cross-tenant write fails closed: B cannot INSERT a row with users_id=A (WITH CHECK rejects the forge)'
 );
 
@@ -257,7 +259,7 @@ select _rls.expect_cross_tenant_write_blocked(
 select set_config('role', 'postgres', true);
 select _rls.set_tenant(:'tb'::uuid);
 select lives_ok(
-  format($$ insert into pfin.posting_prototype (users_id, cat, sub_cat) values (%L, 'Expense', 'w2-control') $$, :'tb'),
+  format($$ insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment) values (%L, 'Expense', 'w2-control', false) $$, :'tb'),
   '(W2) non-vacuous control: B inserting its OWN row (own tenant) succeeds — (W1)''s rejection is mismatch-driven, not a blanket block'
 );
 select set_config('role', 'postgres', true);

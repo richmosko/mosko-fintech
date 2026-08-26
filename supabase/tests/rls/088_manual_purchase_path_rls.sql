@@ -831,8 +831,9 @@ select is(
 --   rename, this leg goes red rather than resting on read-the-docs.
 -- =====================================================================
 select _rls.set_tenant(:'tb'::uuid);
-insert into pfin.posting_prototype (users_id, cat, sub_cat)
-values (:'tb', 'Trade', 'BTO')
+-- is_tax_payment added (SELF-245/091, boolean not null no default) — false, not tax semantics here.
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment)
+values (:'tb', 'Trade', 'BTO', false)
 returning id as b_private_subcat \gset
 select set_config('role', 'postgres', true);
 

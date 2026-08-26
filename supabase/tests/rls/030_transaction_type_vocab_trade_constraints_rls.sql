@@ -162,13 +162,14 @@ insert into pfin.account_trans (account_id, transaction_date, amount, vendor, de
   values (:accta, '2026-03-15', -50, 'vX7A', 'cross-tenant #10') returning trans_id as ct_x7a \gset
 
 -- Taxonomy (ratified cat='Trade' for the four Trade sub-cats; Expense for non-Trade).
-insert into pfin.posting_prototype (users_id, cat, sub_cat) values (:'ta','Trade','BTO') returning id as a_bto \gset
-insert into pfin.posting_prototype (users_id, cat, sub_cat) values (:'ta','Trade','BTC') returning id as a_btc \gset
-insert into pfin.posting_prototype (users_id, cat, sub_cat) values (:'ta','Trade','STC') returning id as a_stc \gset
-insert into pfin.posting_prototype (users_id, cat, sub_cat) values (:'ta','Trade','STO') returning id as a_sto \gset
-insert into pfin.posting_prototype (users_id, cat, sub_cat) values (:'ta','Expense','Groceries') returning id as a_exp \gset
-insert into pfin.posting_prototype (users_id, cat, sub_cat) values (:'ta','Expense','Rent') returning id as a_exp2 \gset
-insert into pfin.posting_prototype (users_id, cat, sub_cat) values (:'tb','Trade','BTO') returning id as b_bto \gset
+-- is_tax_payment added (SELF-245/091, boolean not null no default) — false throughout.
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment) values (:'ta','Trade','BTO', false) returning id as a_bto \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment) values (:'ta','Trade','BTC', false) returning id as a_btc \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment) values (:'ta','Trade','STC', false) returning id as a_stc \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment) values (:'ta','Trade','STO', false) returning id as a_sto \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment) values (:'ta','Expense','Groceries', false) returning id as a_exp \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment) values (:'ta','Expense','Rent', false) returning id as a_exp2 \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment) values (:'tb','Trade','BTO', false) returning id as b_bto \gset
 
 -- =====================================================================
 -- PHASE 1 (role=postgres) — vocab CHECK (AC1) + the isolated trade fail-closed (AC7b).

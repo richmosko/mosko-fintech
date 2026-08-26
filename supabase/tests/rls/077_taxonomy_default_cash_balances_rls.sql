@@ -120,8 +120,9 @@ insert into pfin.user_taxonomy (users_id, cat, sub_cat, element) values
   (:'ta','Marketable Securities','US-06-Financials','asset') returning id as a_eq \gset
 insert into pfin.user_taxonomy (users_id, cat, sub_cat, element) values
   (:'ta','Real Estate','Residential','asset') returning id as a_re \gset
-insert into pfin.posting_prototype (users_id, cat, sub_cat) values
-  (:'tc','Revenue','Dividend') returning id as c_cf \gset
+-- is_tax_payment added (SELF-245/091, boolean not null no default) — false, not tax semantics here.
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment) values
+  (:'tc','Revenue','Dividend', false) returning id as c_cf \gset
 insert into pfin.user_taxonomy (users_id, cat, sub_cat, element) values
   (:'td','Real Estate','Residential-D','asset') returning id as d_re \gset
 -- tenant B: deliberately NO rows.

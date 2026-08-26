@@ -159,8 +159,8 @@ select is(
 --      the split-total invariant: no row was lost crossing the split.
 select is(
   (select (select count(*) from pfin.taxonomy_default) + (select count(*) from pfin.posting_prototype_default))::bigint,
-  65::bigint,
-  '(S3) SPLIT-TOTAL INVARIANT: taxonomy_default + posting_prototype_default together still total 65 — the split redistributes rows across two tables, it does not create or destroy any (was: "taxonomy_default total STILL 65", meaningless as a single-table claim post-084)'
+  67::bigint,
+  '(S3) SPLIT-TOTAL INVARIANT: taxonomy_default + posting_prototype_default together still total 67 (38 + 29 — was 65/27 pre-091; 091/ADR-062 added the 2-row Equity seed pair to posting_prototype_default) — the split redistributes rows across two tables, it does not create or destroy any (was: "taxonomy_default total STILL 65", meaningless as a single-table claim post-084)'
 );
 
 -- (S4) MECH POST-084: the whole table is asset-domain by construction now.
@@ -175,8 +175,8 @@ select is(
 --      the SAME coverage-identical claim via table identity instead of a WHERE.
 select is(
   (select count(*) from pfin.posting_prototype_default)::bigint,
-  27::bigint,
-  '(S5) posting_prototype_default: total row count is 27, entirely untouched by the rename — table identity now keeps 028''s cashflow-class ''Equity'' out of scope (was: a domain=''cashflow'' filter on the same table the rename touched)'
+  29::bigint,
+  '(S5) posting_prototype_default: total row count is 29 (was 27 pre-091; 091/ADR-062 added the 2-row Equity seed pair), entirely untouched by the RENAME itself — table identity now keeps 028''s cashflow-class ''Equity'' out of scope (was: a domain=''cashflow'' filter on the same table the rename touched)'
 );
 
 -- =====================================================================
@@ -203,8 +203,9 @@ insert into pfin.user_taxonomy (users_id, cat, sub_cat, element)
   values (:'ta', 'Bonds', 'REPLAY-Control', 'asset') returning id as a_bonds_id \gset
 -- POST-084: the cashflow control now lives in pfin.posting_prototype (ADR-058
 --   Decision 1's split), not pfin.user_taxonomy — see (R5)'s reworked mechanism below.
-insert into pfin.posting_prototype (users_id, cat, sub_cat)
-  values (:'ta', 'Equity', 'REPLAY-CF-Control') returning id as a_cf_id \gset
+-- is_tax_payment added (SELF-245/091, boolean not null no default) — false, not tax semantics here.
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment)
+  values (:'ta', 'Equity', 'REPLAY-CF-Control', false) returning id as a_cf_id \gset
 insert into pfin.user_taxonomy (users_id, cat, sub_cat, element)
   values (:'tb', 'Equity', 'REPLAY-Sector-B', 'asset') returning id as b_eq_id \gset
 
