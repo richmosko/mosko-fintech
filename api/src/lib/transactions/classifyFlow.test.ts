@@ -51,6 +51,7 @@ describe('classifyTrans', () => {
 			['is_reversal', 409],
 			['journaled', 409],
 			['journaled_cat_conflict', 409],
+			['trade_constraint', 409], // Sec PR #564 FLAG-B follow-up
 			['invalid_sub_cat_id', 400]
 		];
 		for (const [code, status] of cases) {

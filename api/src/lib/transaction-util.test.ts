@@ -21,6 +21,7 @@ const ALL_CODES: ClassifyFailureCode[] = [
 	'journaled',
 	'journaled_cat_conflict',
 	'invalid_sub_cat_id',
+	'trade_constraint', // Sec PR #564 FLAG-B follow-up
 	'not_found',
 	'invalid_request',
 	'unauthenticated',
@@ -35,6 +36,12 @@ describe('classifyRefusalCopy', () => {
 			expect(classifyRefusalCopy(code)).not.toBe(GENERIC_FALLBACK);
 			expect(classifyRefusalCopy(code).length).toBeGreaterThan(0);
 		}
+	});
+
+	it('Sec PR #564 FLAG-B follow-up: trade_constraint matches Backend TRADE_CONSTRAINT_MESSAGE verbatim', () => {
+		expect(classifyRefusalCopy('trade_constraint')).toBe(
+			'A Trade category is for security transactions. Pick a cash-flow category instead.'
+		);
 	});
 
 	it('Sec NOTE-1: unauthenticated never says "try again" — retrying without re-auth fails identically', () => {

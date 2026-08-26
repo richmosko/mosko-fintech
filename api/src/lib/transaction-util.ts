@@ -189,6 +189,9 @@ const CLASSIFY_REFUSAL_COPY: Record<ClassifyFailureCode | ClassifiableRefusalRea
 	journaled_cat_conflict:
 		'This leg is now posted to a journal and can’t take this category. Detach it from the journal, then classify.',
 	invalid_sub_cat_id: 'That category is not available. Pick another.',
+	// Matches Backend's own TRADE_CONSTRAINT_MESSAGE (transactions.ts) verbatim — one user-facing
+	// string for this refusal, not an independently-drifting client paraphrase.
+	trade_constraint: 'A Trade category is for security transactions. Pick a cash-flow category instead.',
 	not_found: 'This transaction could not be found. Refresh the page and try again.',
 	invalid_request: 'That didn’t go through. Refresh the page and pick the category again.',
 	unauthenticated: 'Your session has expired. Please sign in again, then reclassify.',

@@ -28,6 +28,16 @@ export type ClassifyFailureCode =
 	| 'journaled'
 	| 'journaled_cat_conflict'
 	| 'invalid_sub_cat_id'
+	// Sec PR #564 FLAG-B follow-up: 084's trade-constraint trigger raise (a Trade sub_cat picked
+	// for a non-security row, or a Trade sub_cat's BTO/BTC/STC/STO sign misaligned with the
+	// quantity) — classifyTrans's own write-time code (transactions.ts's isTradeConstraintViolation
+	// classifier). CLASSIFY-ONLY, deliberately not added to `ClassifiableRefusalReason`: it is not
+	// one of checkClassifiable()'s five read-time legs (a row reaching this refusal already PASSED
+	// classifiable — its security_id is null by construction), and SubCatPicker's own `pickerGroups`
+	// filter (FLAG-B UI-side narrowing) means this is defense-in-depth, not a state a normal picker
+	// interaction can currently reach — same shape as `journaled_cat_conflict`/`invalid_sub_cat_id`
+	// above, both also write-time-only and absent from `ClassifiableRefusalReason`.
+	| 'trade_constraint'
 	| 'not_found'
 	| 'invalid_request'
 	| 'unauthenticated'
@@ -42,7 +52,8 @@ const KNOWN_REFUSAL_CODES: ReadonlySet<string> = new Set([
 	'is_reversal',
 	'journaled',
 	'journaled_cat_conflict',
-	'invalid_sub_cat_id'
+	'invalid_sub_cat_id',
+	'trade_constraint'
 ]);
 
 export class ClassifyError extends Error {
