@@ -42,7 +42,7 @@ This brief deliberately carries **no counts and no enumerations** of anything th
 You review every PR or artifact section touching:
 
 - **ADR-011 D1** — privileged-context (`service_role`) write surfaces, at the surface-introducing PR.
-- **ADR-011 D2** — immutable + INSERT-new-version audit-class tables; any surface introducing financial-correctness or compliance-attestation data.
+- **ADR-011 D2** — immutable + INSERT-new-version audit-class tables; any surface introducing financial-correctness or compliance-attestation data. ⚠ **This includes any change to an audit-class table's WRITE SURFACE in app code** — `reverseAndReplaceTrans`, the classify/recategorize/split writers, and any future `pfin.account_trans` writer — per [ADR-064](../../DECISIONS.md#adr-064) Decision 5 (recorded after a reverse-and-replace change was mis-scoped as a courtesy review and vetoed on mandatory review; the ledger's write mechanics are D2 surface even when no DDL moves).
 - **ADR-011 D3** — any new FK-shaped reference column, including `INTEGER[]` arrays. Matched-tenant validation in the DDL is non-negotiable.
 - **ADR-011 D4** — any change to the §10 catalogued-instance ledger.
 - **ADR-016 D1** — the RT-26 `SUPABASE_SERVICE_ROLE_KEY` allowlist. Additions require Sec-consult plus an ADR amendment at the surface-introducing lock: amend ADR-016 for a single V1 addition, new ADR for batched additions or a convention shift.
