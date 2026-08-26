@@ -89,7 +89,30 @@ export type SplitChild = {
 	display_order: number | null;
 };
 
-/** A transaction row as shaped by the account-detail load(). */
+/**
+ * Which classifiable() leg refused a row (SELF-249/SELF-248). CLIENT MIRROR of the server's
+ * `ClassifiableRefusalReason` (api/src/lib/server/queries/transactions.ts) minus `not_found`
+ * (a row that made it into this view exists by construction). Same five strings, so
+ * `classifyRefusalCopy` below can serve BOTH a disabled-render reason (this type) and a submit
+ * failure `code` (classifyFlow.ts's `ClassifyFailureCode`, a strict superset) from one table.
+ */
+export type ClassifiableRefusalReason =
+	| 'not_standard' // M1 — transaction_type <> 'standard'
+	| 'has_security' // M2 — security_id IS NOT NULL
+	| 'split_parent' // M4 — split_count > 0. SubCatPicker never actually surfaces this reason
+	// (AC7: a split row gets no picker at all, not a disabled one) — kept in the union for
+	// parity with the server's reason set, not because a caller is expected to read it.
+	| 'is_reversal' // E1 — is_reverse = true
+	| 'journaled'; // M3 — annotation.journal_id IS NOT NULL
+
+/**
+ * A transaction row as shaped by the account-detail load(). The last four fields are SELF-249
+ * additions and are OPTIONAL: Backend's load() extension for them lands on its own half of this
+ * issue and may not have landed yet in a given tree. Absent/undefined reads as "no picker
+ * enhancement data yet" — SubCatPicker treats that the same as an explicit `classifiable: true`
+ * with no hint/suggestion, never as a silent failure. Once Backend wires the loader, no type
+ * change is needed here — the fields already exist on this contract.
+ */
 export type TransactionView = {
 	trans_id: number;
 	transaction_date: string;
@@ -104,7 +127,54 @@ export type TransactionView = {
 	note: string | null;
 	splits: SplitChild[];
 	split_count: number;
+	/** SELF-249 AC6 — mirrors the server's `checkClassifiable()` predicate (transactions.ts),
+	 *  excluding its `not_found` leg. Drives SubCatPicker's disabled-render gate. EXPECTED
+	 *  CONTRACT — see the type-level note above; undefined reads as classifiable. */
+	classifiable?: boolean;
+	/** Populated when `classifiable` is false; null/undefined otherwise. Feeds the disabled-row
+	 *  affordance text via `classifyRefusalCopy`. EXPECTED CONTRACT — see the note above. */
+	classifiableReason?: ClassifiableRefusalReason | null;
+	/** 017:234's provider-category IMMUTABLE display hint. Rendered ghost/muted ONLY when there
+	 *  is no override (`category` is null) and no vendor suggestion (`suggested_sub_cat_id` is
+	 *  null) — 017's constraint carried verbatim: display-only, NEVER a write, NEVER auto-mapped
+	 *  to sub_cat_id. EXPECTED CONTRACT — see the note above. */
+	provider_category?: string | null;
+	/** `pfin.fn_suggest_subcat_for_vendor()` result (migration 092) — a posting_prototype id, or
+	 *  null when there's no vendor-history match. Meaningful only when `category` is null (an
+	 *  existing override always wins over a suggestion). EXPECTED CONTRACT — see the note above. */
+	suggested_sub_cat_id?: number | null;
 };
+
+/**
+ * SELF-249 AC4/AC6 — ONE copy table for BOTH the disabled-row affordance text
+ * (`ClassifiableRefusalReason`) and a classify submit failure (`ClassifyFailureCode`,
+ * classifyFlow.ts — a strict superset carrying two write-time-only codes this table also
+ * covers). Client-authored copy (not a relay of the server's raw message): the server's
+ * `CLASSIFIABLE_REFUSAL_MESSAGE` strings are written for a write-time refusal banner; these are
+ * written to read equally well as a standing disabled-control note. ⚠ Copy constraint (PM,
+ * SELF-249 AC6, verbatim): never say a classified transfer "cancels out" — a journal-less
+ * Transfer falls to Suspense, not a clean offset. None of these strings make that claim.
+ */
+const CLASSIFY_REFUSAL_COPY: Record<string, string> = {
+	not_standard:
+		'This is a trade or transfer row — it’s categorized structurally, not through this picker. Use Edit above for a correction.',
+	has_security:
+		'A securities transaction is categorized by its trade shape, not a Sub-Cat. Use Edit above for a correction.',
+	split_parent: 'This transaction is split — classify its individual line items via Split below.',
+	is_reversal: 'A reversal row can’t be classified here. Classify the original transaction it replaces.',
+	journaled: 'This transaction is posted to a journal. Detach it from the journal, then reclassify.',
+	journaled_cat_conflict:
+		'This leg is now posted to a journal and can’t take this category. Detach it from the journal, then classify.',
+	invalid_sub_cat_id: 'That category is not available. Pick another.',
+	not_found: 'This transaction could not be found. Refresh the page and try again.'
+};
+
+/** code/reason → user-meaningful copy, with a safe generic fallback for an unrecognized or
+ *  absent code (never surfaces a raw server string or a blank error). */
+export function classifyRefusalCopy(code: string | null | undefined): string {
+	if (!code) return 'Could not save the category. Please try again.';
+	return CLASSIFY_REFUSAL_COPY[code] ?? 'Could not save the category. Please try again.';
+}
 
 /**
  * (direction, positive-magnitude string) → SIGNED decimal string for the POST + client

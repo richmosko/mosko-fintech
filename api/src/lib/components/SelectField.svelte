@@ -41,7 +41,9 @@
 		placeholder,
 		options = [],
 		groups = [],
-		id
+		id,
+		labelHidden = false,
+		muted = false
 	}: {
 		label: string;
 		name: string;
@@ -58,6 +60,17 @@
 		 *  (e.g. a per-row classify select) so ids/label-associations stay unique. Defaults to
 		 *  `f-${name}` for the common single-instance case. */
 		id?: string;
+		/** SELF-249 — visually hides the `<label>` while keeping a real `<label for>` in the DOM
+		 *  (never `aria-label`), so the control stays fully labelled for assistive tech. For a
+		 *  compact repeated control (one per table row) where the column header already names the
+		 *  field and a visible per-row label would be redundant noise. Off by default — every
+		 *  existing call site is unaffected. First consumer: SubCatPicker.svelte. */
+		labelHidden?: boolean;
+		/** SELF-249 — an unconfirmed-value cue (e.g. a vendor-history suggestion pre-filled but
+		 *  not yet saved): dashed border + muted text, reusing the SAME visual vocabulary the
+		 *  account-detail "Closed" status pill already uses for "a real state, toned down" rather
+		 *  than inventing a new token. Off by default. */
+		muted?: boolean;
 	} = $props();
 
 	const fieldId = $derived(id ?? `f-${name}`);
@@ -71,13 +84,13 @@
 </script>
 
 <div class="field">
-	<label for={fieldId}>
+	<label for={fieldId} class:sr-only={labelHidden}>
 		{label}{#if required}<span class="req" aria-hidden="true">*</span>{/if}
 	</label>
 	{#if hint}
 		<span id={hintId} class="hint">{hint}</span>
 	{/if}
-	<div class="select-wrap" class:is-error={hasError}>
+	<div class="select-wrap" class:is-error={hasError} class:is-muted={muted}>
 		<select
 			id={fieldId}
 			{name}
@@ -127,6 +140,21 @@
 		font-size: var(--fs-small);
 		color: var(--c-text-muted);
 	}
+	/* SELF-249 `labelHidden` — same clip-to-1px idiom already used elsewhere in this codebase
+	   (accounts/[account_id] entry-mode toggle's hidden radio inputs) for "in the accessibility
+	   tree, out of the visual layout" — never `display:none`/`aria-label`, which would drop or
+	   bypass the real <label for> association. */
+	.sr-only {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		padding: 0;
+		margin: -1px;
+		overflow: hidden;
+		clip: rect(0 0 0 0);
+		white-space: nowrap;
+		border: 0;
+	}
 	.select-wrap {
 		position: relative;
 		display: flex;
@@ -159,6 +187,13 @@
 	.select-wrap.is-error .select-input {
 		border-color: var(--c-neg);
 		box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-neg) 18%, transparent);
+	}
+	/* SELF-249 `muted` — dashed border + muted text, the SAME pairing accounts/[account_id]'s
+	   `.status.closed` pill uses for "a real state, toned down" (that file's own comment: tone is
+	   carried by weight + border style, deliberately not a color reserved for error/negative). */
+	.select-wrap.is-muted .select-input:not(:disabled) {
+		border-style: dashed;
+		color: var(--c-text-muted);
 	}
 	.field-error-msg {
 		display: block;
