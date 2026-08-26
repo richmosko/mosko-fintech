@@ -58,6 +58,17 @@ BOTH before attributing it to either.** Second, I had already run the Sec-Lock c
 ADRs — **and not on my own prose.** The cross-check is not a step reserved for other people's
 text; the finding message itself is a citing artifact.
 
+**Fourth instance — SELF-247 / PR #558: my un-scoped count got RE-HUNG on a narrower noun, and
+the tempting repair destroys the claim.** My D-7 consult text read *"→ four loaders, all
+`serverTodayAsOf()`"* — four was over **every** route loader under `api/src/routes`. Backend's
+new module header quoted it as *"all four **§2.2** route loaders"*. §2.2 has **two**. The number
+was right about the tree and wrong about §2.2, and a reader who "fixes" `four → two` silently
+shrinks a tree-wide sweep into a §2.2-only one — the load-bearing half. **Repair by restoring the
+scope, never by adjusting the integer.** Same file also cited a bare `` `nav-boundary.ts` `` while
+**two** files carry that basename in different directories (`lib/` and `lib/server/queries/`);
+both cited claims live in the `lib/` one. The case-twin lesson generalises: **PATH twins count
+too — grep the basename repo-wide before attributing.**
+
 **How to apply:**
 - When publishing a measurement, state **the command** and let the number be derivable from it,
   or state the number and **re-derive it once before sending**. A hand-typed enumeration beside
