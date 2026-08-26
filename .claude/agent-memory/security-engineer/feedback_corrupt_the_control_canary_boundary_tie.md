@@ -1,6 +1,6 @@
 ---
 name: corrupt-the-control-canary-boundary-tie
-description: Ways a corrupt-the-control leak canary fails to bite — boundary-date ties, probing the table not the surface, revisions that fix framing not mechanism, a same-date A/B fixture that defeats both legs, third-party displacement on a data-bearing stack, and corrupting the WRONG relation set so the flagged fence is never exercised.
+description: Ways a corrupt-the-control leak canary fails to bite — boundary-date ties, probing the table not the surface, revisions that fix framing not mechanism, a same-date A/B fixture that defeats both legs, third-party displacement on a data-bearing stack, corrupting the WRONG relation set so the flagged fence is never exercised, and a helper that LEAKS the RLS role context so the next leg is vacuous.
 metadata:
   type: feedback
 ---
@@ -123,3 +123,23 @@ after both atomicity watchers and immediately before `finish()` — so it could 
 is any later blanket/aggregate/baseline assertion, and a whole-file `rollback` does not protect
 in-transaction ones. A leg placed where it is convenient rather than where the numbers allow is a
 quiet way a battery goes wrong. Related: [[shared-predicate-then-second-narrowing]].
+
+**7. THE INVERSE OF THE PLACEMENT RULE — read what runs BEFORE a leg, because a helper can LEAK the
+RLS role context and make the next leg vacuous (SELF-245 / `091`).** `_rls.expect_cross_tenant_write_blocked`
+does `perform _rls.set_tenant(p_intruder)` and returns `throws_ok` **without restoring the role** —
+unlike its sibling `_rls._visible_owner_rows`, which restores to `postgres` on its way out. Two verbs
+in the same fixture file, opposite cleanup contracts, neither documented at the call site. `091`'s
+next statement was a precondition leg counting *tenant A's* rows and expecting 0 — evaluated while
+still `role = authenticated` as tenant **B**, so RLS returns 0 for A's rows **whatever the table
+holds**. The `set_config('role','postgres',true)` restore sat one statement too late. `084` called the
+same helper and restored immediately; the divergence is invisible without diffing the two call sites.
+
+**The tell:** a leg whose expected value is `0` / empty, sitting immediately after any helper that
+sets a tenant context. Ask *what role is current here*, not *what does this leg assert*. **Grep the
+fixture for which verbs restore and which do not** rather than assuming a uniform contract — the
+per-verb cleanup asymmetry is the actual defect generator, and the leg is only where it surfaces.
+
+**Severity:** this is a watcher defect, not a control weakening — the leaked context makes a leg
+unfalsifiable, it does not let anything through. **Flag, do not veto**, and say so explicitly so the
+GREEN is not read as having missed it. But recommend it ride the PR: a one-line statement move in a
+test file is free pre-merge and costs a whole PR cycle after — see [[block-when-the-vehicle-cost-inverts]].

@@ -1,6 +1,6 @@
 ---
 name: feedback-scratch-db-pgtap-harness-gotchas
-description: Mechanical gotchas building a from-scratch pgTAP verification DB (docker exec -i, pgtap schema placement, permissive-direction privilege gap) — hit all three authoring the SELF-218 battery verification, 2026-08-12.
+description: Mechanical gotchas building a from-scratch pgTAP verification DB (docker exec -i, pgtap schema placement, permissive-direction privilege gap, pg_prove -v mount path) — hit all three authoring the SELF-218 battery verification, 2026-08-12; #5 added SELF-245, 2026-08-25.
 metadata:
   type: feedback
 ---
@@ -96,3 +96,27 @@ alone. [[feedback_instrument_cannot_observe_the_property]]
    rule: clone-to-save-time is fine for claims that read no per-database
    setting; anything touching timezone, JWT settings, or any `ALTER DATABASE
    ... SET` needs a real sequential chain apply, not a template clone.
+
+5. **The `pg_prove` verification container is a SEPARATE `docker run`, not the same
+   filesystem as the `supabase_db_*` container — a `-v` mount must name a real HOST
+   path, not a path that only exists inside the OTHER container.** SELF-245, 2026-08-25:
+   ran `docker cp <tests-dir> supabase_db_mosko-fintech:/tmp/self245_tests` (copying
+   host files INTO the db container), then tried `docker run ... -v
+   /tmp/self245_tests:/tests ... pg_prove` — mounting the HOST's (nonexistent)
+   `/tmp/self245_tests`. `--network container:X` shares only the network namespace,
+   not the mount namespace, so `pg_prove`'s own `docker run` never goes through
+   `supabase_db`'s filesystem at all. Symptom was misleading: `pg_prove` errored
+   `Cannot detect source of '<path>'!` — reads like the ALREADY-DOCUMENTED
+   explicit-files-vs-directory-mode gotcha (see `rls_verbs.psql`'s own header), not a
+   missing-mount one, and cost a wasted retry in that wrong direction first. Diagnosed
+   by `docker run --entrypoint sh ... -v <path>:/tests -- ls /tests/...` — empty/
+   absent, confirming the mount itself was the problem. Fix: point `-v` at the actual
+   host path (`$HOME/Projects/.../supabase/tests:/tests`) directly — no `docker cp`
+   into `supabase_db` needed for this step at all.
+   ⚠ Recurred alongside gotcha #1 in the SAME session: `docker exec ... psql ...
+   <<'EOF'` without `-i` silently no-op'd on `create extension` — confirmed via
+   `pg_extension` showing only `plpgsql` after a "successful" (exit 0) run; re-ran with
+   `-i` and it worked. Both are the same root lesson: never trust a "success" exit code
+   from a container/mount boundary — independently verify the thing on the far side
+   actually exists (`ls` the mount, `select extname from pg_extension` the load)
+   before building on top of it.
