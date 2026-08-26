@@ -14,13 +14,15 @@
 // single-source-of-truth shape `usEquitySubCats.ts` already established for the §2.2.3 Sub-Cat
 // list, applied here to the §2.3 class/section vocabulary instead.
 //
-// THE MAPPING, cited from the V1.3 pre-flight sitting's ratified A-10 footnote (item 11, D-2
-// option B — "Income → Revenue, Expenses → Expense, Other Cash Flows → Transfer∪Equity"):
+// THE MAPPING, cited from the V1.3 pre-flight sitting's ratified A-10 footnote (item 11, D-2 option
+// B — "Income→Revenue · Expenses→Expense · Other Cash Flows→Transfer∪Equity"):
 //   Income          <- Revenue
 //   Expenses        <- Expense
 //   Other Cash Flows <- Transfer, Equity
-// `Trade` is EXCLUDED from every §2.3 surface (D-2 ruling, "Trade stays excluded across §2.3 —
-// mechanical") — it has no section and is deliberately absent from CASHFLOW_CLASS_TO_SECTION.
+// `Trade` is EXCLUDED from every §2.3 surface — item 11's D-2 (B) ruling names no Trade section,
+// and PM's Rec-B paragraph at `docs/records/v13-preflight/pm-findings.md` states it outright
+// ("Trade stays excluded across §2.3 (mechanical)"). It has no section and is deliberately absent
+// from CASHFLOW_CLASS_TO_SECTION.
 //
 // TWO CONSUMERS, ONE TABLE — SELF-250 (§2.3.2, this migration wave) renders ONLY the Income and
 // Expenses sections (093's own `sections` CTE is hard-restricted to `('Revenue','Expense')`);

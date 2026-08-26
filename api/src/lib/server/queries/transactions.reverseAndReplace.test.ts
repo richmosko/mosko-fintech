@@ -43,7 +43,7 @@
 
 import { describe, it, expect } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { reverseAndReplaceTrans } from './transactions';
+import { reverseAndReplaceTrans, isDuplicateReversal } from './transactions';
 import type { ManualTransEdit } from '$lib/server/schemas/transaction';
 
 type OrigRow = {
@@ -99,7 +99,7 @@ function makeSupabase(opts: {
 	splitCount?: { count: number | null; error?: { message: string } | null };
 	insertResult?: {
 		data: Array<{ trans_id: number; is_reverse: boolean }> | null;
-		error: { message: string; code?: string } | null;
+		error: { message: string; code?: string; details?: string | null } | null;
 	};
 	captured?: { insertedRows: unknown[] | null };
 }) {
@@ -198,6 +198,125 @@ describe('reverseAndReplaceTrans — SELF-340 batch-insert key-set regression', 
 		const supabase = makeSupabase({});
 		const result = await reverseAndReplaceTrans(supabase, 7, EDIT);
 		expect(result).toEqual({ ok: true, transId: 3 });
+	});
+});
+
+// ── Duplicate-reversal DB refusal (Sec AMBER FLAG-1, PR #572) ───────────────────────────────────
+//
+// 093 promoted the double-edit guard above from TOCTOU-narrow app-layer hygiene into a database
+// refusal (`account_trans_reversal_unique_idx`, a partial unique index on `replaces_trans_id where
+// is_reverse`). When two edits race the read-then-write guard, the guard itself misses (it read
+// zero already-reversed rows a moment before the second insert lands), and the INSERT this file's
+// step (3) issues is what the DB refuses instead — with a bare 23505, which fell through to this
+// function's generic 422 "Could not save the edit. Please try again." before this fix. "Try again"
+// is advice that can never work here: a second reversal of the same original is refused
+// PERMANENTLY, not transiently — so the collision must report the SAME 409 message the guard
+// itself already uses, not a retry-shaped 422.
+//
+// isDuplicateReversal matches by INDEX NAME, never by bare 23505 — `pfin.account_trans` carries
+// OTHER unique indexes (017's `account_trans_provider_dedup_idx`) whose violation means something
+// entirely unrelated (a duplicate provider import, not a duplicate reversal), and collapsing every
+// 23505 to this one message would misreport that case. Both legs below are the discriminator: the
+// index-name leg proves the NEW 409 path fires; the OTHER-23505 leg proves it does NOT fire for an
+// unrelated unique-constraint violation on the same table, which still falls through to the
+// existing generic 422 unchanged.
+describe('isDuplicateReversal — the classifier itself, matched by INDEX NAME (inversion check)', () => {
+	it('matches when the index name is in `message`', () => {
+		expect(
+			isDuplicateReversal(
+				'duplicate key value violates unique constraint "account_trans_reversal_unique_idx"'
+			)
+		).toBe(true);
+	});
+
+	it('matches when the index name is only in `details`', () => {
+		expect(
+			isDuplicateReversal(
+				'duplicate key value violates unique constraint',
+				'Key (replaces_trans_id)=(1) already exists. (account_trans_reversal_unique_idx)'
+			)
+		).toBe(true);
+	});
+
+	it('does NOT match a DIFFERENT unique-index name (017 provider dedup) — the same 23505 code, an unrelated collision (inversion check: a classifier matching on bare 23505 alone would wrongly flip this true)', () => {
+		expect(
+			isDuplicateReversal(
+				'duplicate key value violates unique constraint "account_trans_provider_dedup_idx"'
+			)
+		).toBe(false);
+	});
+
+	it('does NOT match a bare "duplicate key" message with no index name anywhere', () => {
+		expect(isDuplicateReversal('duplicate key value violates unique constraint')).toBe(false);
+	});
+
+	it('handles a missing/undefined `details` without throwing', () => {
+		expect(() => isDuplicateReversal('some message', undefined)).not.toThrow();
+		expect(isDuplicateReversal('some message', undefined)).toBe(false);
+		expect(isDuplicateReversal('some message', null)).toBe(false);
+	});
+});
+
+describe('reverseAndReplaceTrans — duplicate-reversal DB refusal (Sec AMBER FLAG-1, PR #572)', () => {
+	it('23505 carrying the reversal-uniqueness index name -> 409, the SAME message the app-layer guard reports (never 422)', async () => {
+		const supabase = makeSupabase({
+			insertResult: {
+				data: null,
+				error: {
+					message:
+						'duplicate key value violates unique constraint "account_trans_reversal_unique_idx"',
+					code: '23505'
+				}
+			}
+		});
+		const result = await reverseAndReplaceTrans(supabase, 7, EDIT);
+		expect(result).toEqual({ ok: false, status: 409, message: 'This transaction has already been edited.' });
+	});
+
+	it('the index name arriving in `details` (not `message`) still matches — the classifier checks both', async () => {
+		const supabase = makeSupabase({
+			insertResult: {
+				data: null,
+				error: {
+					message: 'duplicate key value violates unique constraint',
+					code: '23505',
+					details: 'Key (replaces_trans_id)=(1) already exists. (account_trans_reversal_unique_idx)'
+				}
+			}
+		});
+		const result = await reverseAndReplaceTrans(supabase, 7, EDIT);
+		expect(result).toEqual({ ok: false, status: 409, message: 'This transaction has already been edited.' });
+	});
+
+	it('a DIFFERENT 23505 (017\'s provider-dedup index) does NOT match — falls through to the existing generic 422, unchanged (the collision-guard discriminator)', async () => {
+		const supabase = makeSupabase({
+			insertResult: {
+				data: null,
+				error: {
+					message:
+						'duplicate key value violates unique constraint "account_trans_provider_dedup_idx"',
+					code: '23505'
+				}
+			}
+		});
+		const result = await reverseAndReplaceTrans(supabase, 7, EDIT);
+		expect(result).toEqual({ ok: false, status: 422, message: 'Could not save the edit. Please try again.' });
+	});
+
+	it('a 23505 with no code at all (defensive: some drivers may omit it) but the index name present still matches on message alone', async () => {
+		const supabase = makeSupabase({
+			insertResult: {
+				data: null,
+				error: {
+					message: 'account_trans_reversal_unique_idx'
+					// code intentionally omitted — proves the `code === '23505'` guard, not this leg,
+					// is what would gate a match; this leg documents that omission SKIPS the 409 path
+					// entirely (falls to 422), since the classifier is only consulted when code matches.
+				}
+			}
+		});
+		const result = await reverseAndReplaceTrans(supabase, 7, EDIT);
+		expect(result).toEqual({ ok: false, status: 422, message: 'Could not save the edit. Please try again.' });
 	});
 });
 
