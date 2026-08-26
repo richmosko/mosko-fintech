@@ -187,22 +187,11 @@ describe('reverseAndReplaceTrans — SELF-340 batch-insert key-set regression', 
 		expect('quantity' in corrected).toBe(true);
 	});
 
-	it('a security-linked original (non-zero quantity) still reverses correctly, and the corrected row is still cash-flow-shaped (manualTransEditSchema carries no quantity/security_id fields to edit a trade by)', async () => {
-		const captured: { insertedRows: unknown[] | null } = { insertedRows: null };
+	it('a security-linked original (non-zero quantity) is REFUSED, not silently reversed — see the security-row-refusal describe block below for the full battery. (Sec veto: an earlier draft of this test asserted `ok: true` here, reasoning from a "documented/existing behavior" premise the SELF-340 joint options brief later measured false — that comment and premise are gone.)', async () => {
 		const securityOrig: OrigRow = { ...CASH_ORIG, security_id: 42, quantity: 10 };
-		const supabase = makeSupabase({ orig: { data: securityOrig }, captured });
+		const supabase = makeSupabase({ orig: { data: securityOrig } });
 		const result = await reverseAndReplaceTrans(supabase, 7, EDIT);
-		expect(result.ok).toBe(true);
-		const [reversal, corrected] = captured.insertedRows as [Record<string, unknown>, Record<string, unknown>];
-		// The reversal mirrors the original's security_id/quantity, negated.
-		expect(reversal.security_id).toBe(42);
-		expect(reversal.quantity).toBe(-10);
-		// The corrected row is a fresh MANUAL cash-flow fact (manualTransEditSchema has no
-		// security_id/quantity fields) — always security_id null, quantity 0, regardless of what
-		// the original was. This is documented/existing behavior, not new to this fix — asserted
-		// here so the SELF-340 fix does not silently change it.
-		expect(corrected.security_id).toBeNull();
-		expect(corrected.quantity).toBe(0);
+		expect(result.ok).toBe(false);
 	});
 
 	it('both rows land — the insert succeeds instead of a NOT NULL violation (the end-to-end symptom QA repro\'d)', async () => {
@@ -259,5 +248,82 @@ describe('reverseAndReplaceTrans — split-parent refusal (SELF-248 AC5, item 9a
 		const supabase = makeSupabase({ reversedCount: { count: 1 }, splitCount: { count: 5, error: null } });
 		const result = await reverseAndReplaceTrans(supabase, 7, EDIT);
 		expect(result).toEqual({ ok: false, status: 409, message: 'This transaction has already been edited.' });
+	});
+});
+
+// ── Security-row refusal (SELF-340 F/CTO ruling 2026-08-26 — Option A+C-deferred, PR #567) ─────
+//
+// A security-linked row carries four coupled numbers (quantity/cost_basis/amount/security_id)
+// read by two different consumers (holdings vs GL); this cash-only edit path can only touch
+// `amount`, so reversing one silently diverges holdings from the GL with no watcher. Refused
+// across THREE fact-kinds by ONE predicate (`security_id IS NOT NULL OR transaction_type ===
+// 'corp_action'`) — each gets its OWN fixture below per the ruled battery shape ("a single
+// standard fixture leaves the others unproven").
+const SECURITY_REFUSAL_MESSAGE = "A recorded security transaction can't be edited or removed in V1. A correction surface is planned.";
+
+describe('reverseAndReplaceTrans — security-row refusal (SELF-340 F/CTO ruling, one leg per fact-kind)', () => {
+	it('standard + security_id (088 manual purchase / provider ingest) → refused, zero rows inserted', async () => {
+		const captured: { insertedRows: unknown[] | null } = { insertedRows: null };
+		const orig: OrigRow = { ...CASH_ORIG, transaction_type: 'standard', security_id: 42, quantity: 10 };
+		const supabase = makeSupabase({ orig: { data: orig }, captured });
+		const result = await reverseAndReplaceTrans(supabase, 7, EDIT);
+		expect(result).toEqual({ ok: false, status: 409, message: SECURITY_REFUSAL_MESSAGE });
+		expect(captured.insertedRows).toBeNull();
+	});
+
+	it('acct_setup + security_id (087 opening position) → refused, zero rows inserted', async () => {
+		const captured: { insertedRows: unknown[] | null } = { insertedRows: null };
+		const orig: OrigRow = { ...CASH_ORIG, transaction_type: 'acct_setup', security_id: 99, quantity: 5, amount: 0 };
+		const supabase = makeSupabase({ orig: { data: orig }, captured });
+		const result = await reverseAndReplaceTrans(supabase, 7, EDIT);
+		expect(result).toEqual({ ok: false, status: 409, message: SECURITY_REFUSAL_MESSAGE });
+		expect(captured.insertedRows).toBeNull();
+	});
+
+	it('corp_action (039 stock split, security_id present — the realistic shape 039 always produces) → refused, zero rows inserted', async () => {
+		const captured: { insertedRows: unknown[] | null } = { insertedRows: null };
+		const orig: OrigRow = { ...CASH_ORIG, transaction_type: 'corp_action', security_id: 7, quantity: 50, amount: 0 };
+		const supabase = makeSupabase({ orig: { data: orig }, captured });
+		const result = await reverseAndReplaceTrans(supabase, 7, EDIT);
+		expect(result).toEqual({ ok: false, status: 409, message: SECURITY_REFUSAL_MESSAGE });
+		expect(captured.insertedRows).toBeNull();
+	});
+
+	it('corp_action with security_id NULL (the hypothetical/defensive leg — no V1 writer produces this, but the predicate must not rely on security_id alone for this fact-kind) → STILL refused', async () => {
+		const captured: { insertedRows: unknown[] | null } = { insertedRows: null };
+		const orig: OrigRow = { ...CASH_ORIG, transaction_type: 'corp_action', security_id: null, quantity: 0, amount: 0 };
+		const supabase = makeSupabase({ orig: { data: orig }, captured });
+		const result = await reverseAndReplaceTrans(supabase, 7, EDIT);
+		expect(result).toEqual({ ok: false, status: 409, message: SECURITY_REFUSAL_MESSAGE });
+		expect(captured.insertedRows).toBeNull();
+	});
+
+	it('the cash path (standard, security_id NULL) is UNAFFECTED — still succeeds', async () => {
+		const supabase = makeSupabase({});
+		const result = await reverseAndReplaceTrans(supabase, 7, EDIT);
+		expect(result).toEqual({ ok: true, transId: 3 });
+	});
+
+	it('GUARD PRECEDENCE: the is_reverse guard still wins first (a reversal row is refused for BEING a reversal, before its security_id is even relevant)', async () => {
+		const orig: OrigRow = { ...CASH_ORIG, security_id: 42, quantity: 10, is_reverse: true };
+		const supabase = makeSupabase({ orig: { data: orig } });
+		const result = await reverseAndReplaceTrans(supabase, 7, EDIT);
+		expect(result).toEqual({ ok: false, status: 409, message: 'A reversal row cannot be edited.' });
+	});
+
+	it('GUARD PRECEDENCE: the double-edit guard still wins BEFORE the security-row check fires, when both would refuse', async () => {
+		const orig: OrigRow = { ...CASH_ORIG, security_id: 42, quantity: 10 };
+		const supabase = makeSupabase({ orig: { data: orig }, reversedCount: { count: 1 } });
+		const result = await reverseAndReplaceTrans(supabase, 7, EDIT);
+		expect(result).toEqual({ ok: false, status: 409, message: 'This transaction has already been edited.' });
+	});
+
+	it('GUARD PRECEDENCE: the security-row refusal wins BEFORE the split-parent read, when both would refuse — a row that is BOTH security-linked AND has split children gets the security message, not the split message (proves order, not just outcome: if split ran first, the message would differ)', async () => {
+		const captured: { insertedRows: unknown[] | null } = { insertedRows: null };
+		const orig: OrigRow = { ...CASH_ORIG, security_id: 42, quantity: 10 };
+		const supabase = makeSupabase({ orig: { data: orig }, splitCount: { count: 5, error: null }, captured });
+		const result = await reverseAndReplaceTrans(supabase, 7, EDIT);
+		expect(result).toEqual({ ok: false, status: 409, message: SECURITY_REFUSAL_MESSAGE });
+		expect(captured.insertedRows).toBeNull();
 	});
 });

@@ -598,6 +598,58 @@ export async function reverseAndReplaceTrans(
 	if ((reversedCount ?? 0) > 0)
 		return { ok: false, status: 409, message: 'This transaction has already been edited.' };
 
+	// (2a) Security-row refusal (SELF-340 F/CTO ruling, 2026-08-26 — Option A+C-deferred; PR #567;
+	// see the joint options brief for the full mechanism/product analysis). A security-linked row
+	// carries FOUR coupled numbers (quantity, cost_basis, amount, security_id) read by TWO
+	// different consumers (fn_holdings_as_of for shares held; fn_gl_entries for book value) —
+	// `manualTransEditSchema` reaches only `amount`, so this path's reversal is cash-shaped
+	// (security_id/cost_basis omitted, i.e. NULL) while the ORIGINAL carried real share/book
+	// values. The result is not a visible error: the trial balance still sums to zero (a Suspense
+	// contra absorbs the discrepancy), but `fn_holdings_as_of` reports zero shares while
+	// `trade_position` keeps the book value FOREVER — holdings and the GL diverge silently,
+	// permanently, in opposite directions, with no watcher. On the immutable 004 ledger there is
+	// NO delete, NO skip, NO sell path, NO basis_adjust writer, and lot-matching is write-dormant —
+	// so this is refused rather than left reachable, because the blast radius is unrecoverable and
+	// no compensating writer exists (the same reasoning item 9a already applied to a strictly
+	// SMALLER hazard: orphaned split children are recoverable by re-splitting; a destroyed
+	// position is not).
+	//
+	// PREDICATE, measured rather than assumed (per the ruling's own instruction): `security_id IS
+	// NOT NULL` covers `standard`+security (088/provider ingest) and `acct_setup`+security (087)
+	// directly. For `corp_action` (039's `fn_create_stock_split`, the only V1 corp_action writer):
+	// measured its INSERT shape (039's own header) — every corp_action row it creates sets
+	// `security_id = p_security_id` (a required, non-defaulted RPC parameter) explicitly, so
+	// `security_id IS NOT NULL` already catches every corp_action row this writer can produce.
+	// Measured further, at the SCHEMA level (017's `account_trans_quantity_finite`-adjacent CHECK,
+	// `quantity = 0 or security_id is not null`): a corp_action row's `quantity` is the split
+	// DELTA, which 039 refuses to be zero (a 1:1/no-op ratio is rejected before the INSERT) — so
+	// this CHECK independently forces `security_id IS NOT NULL` on any corp_action row with a real
+	// share effect, regardless of writer. The ONLY way a corp_action row could have `security_id
+	// NULL` is a hypothetical zero-quantity (no-op) row the schema does not itself forbid but which
+	// no V1 writer produces. `transaction_type === 'corp_action'` is included in the predicate
+	// ANYWAY, defensively: a future corp_action writer is not obligated to preserve 039's contract,
+	// and this fact-kind is categorically structural (never user-editable via this cash-only edit
+	// form) independent of whether a given row happens to carry a security_id today. `basis_adjust`
+	// needs no guard here — it stays fenced by `034`'s `account_trans_basis_adjust_shape` CHECK,
+	// which no V1 writer can even reach.
+	//
+	// Ordered BEFORE the split-parent refusal (fact-KIND checks precede lifecycle-STATE checks,
+	// mirroring `classifiabilityOf`'s own M1/M2-before-M3/M4 ordering) — a security-linked row is
+	// refused on what it IS, not on what has happened to it.
+	//
+	// Honest copy only (F/CTO ruling; PM framing): claims ONLY what is true. No false remedy — no
+	// "re-categorize to fix it", no "contact support", no implied delete/skip (ADR-032 retired that
+	// primitive; it never shipped). A UI mirror (hiding the Edit affordance on these rows) is
+	// Frontend's half of this same ruling, defense-in-depth only — this server refusal is the
+	// control.
+	if (orig.security_id !== null || orig.transaction_type === 'corp_action') {
+		return {
+			ok: false,
+			status: 409,
+			message: "A recorded security transaction can't be edited or removed in V1. A correction surface is planned."
+		};
+	}
+
 	// (2b) Split-parent refusal (SELF-248 AC5; V1.3 pre-flight sitting item 9a — F/CTO-ratified
 	// default-and-notify — + item 10a's companion obligation). REVERSING A SPLIT PARENT IS
 	// REFUSED at the write path: the alternatives (apportioning the edit across children, or
@@ -615,9 +667,8 @@ export async function reverseAndReplaceTrans(
 	// Item 10a's companion obligation: `unsplitTrans` is a bare DELETE with no split-child history
 	// table (031 audits only the 1:1 annotation) — the remedy this refusal points to is ITSELF
 	// LOSSY AND UNRECOVERABLE, so the message states the real cost, not just "this is split."
-	// AC5's ruled message shape, quoted verbatim with the real count substituted for N: "this
-	// transaction is split; removing the split will discard its N line categories, which cannot be
-	// recovered."
+	// AC5's ruled message, quoted verbatim with the real count substituted for N, followed by item
+	// 9a's ratified remedy ("unsplit first, then reverse") as its own appended sentence.
 	const { count: splitCount, error: splitErr } = await supabase
 		.schema('pfin')
 		.from('account_trans_split')
