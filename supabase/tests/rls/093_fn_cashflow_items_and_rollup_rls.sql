@@ -32,17 +32,18 @@
 --         hand-counted, since this fixture''s incidental unclassified-item
 --         count (E3a + the L15a created-on-D row) is easy to miscount by
 --         inspection.
---   FIRST PASS (31 legs) ran GREEN — 31/31, `pg_prove` (directory-mode, never
---   bare `psql`) against a hand-built scratch DB (`scratch250`, migrations
---   001-093 applied fresh; the banned reset command never used); full-suite
---   sweep alongside it found no other battery regressed. THREE MORE LEGS
---   (N5, RU-YEAR-A, RU-YEAR-B — team-lead relay of architect-250 findings)
---   were added AFTER that pass, per the AC's own emphasis: rule 6 (the
---   as-of filter) binds the NETTING term too, not just the base scan, and
---   the reader/rollup grain difference on out-of-year items is deliberate
---   and needed its own leg rather than being inferred from S3. plan(34)
---   below reflects the extended count; RE-RUN before trusting it — see the
---   hand-off report for the actual result of that run.
+--   THE PGTAP LANE IS GREEN AT THE TIP (35/35) — `pg_prove` (directory-mode,
+--   never bare `psql`) against a hand-built scratch DB (`scratch250`,
+--   migrations 001-093 applied fresh; the banned reset command never used);
+--   full-suite sweep alongside it found no other battery regressed. History:
+--   31 legs first pass; +3 (N5, RU-YEAR-A, RU-YEAR-B — team-lead relay of
+--   architect-250 findings: rule 6 binds the NETTING term too, not just the
+--   base scan; the reader/rollup grain difference on out-of-year items is
+--   deliberate and needed its own leg rather than being inferred from S3);
+--   +1 (INV1 — Sec FLAG-3 on PR #572, verbatim leg: no emitted item carries
+--   a sub_cat_id resolving to a NULL cat, the third bucket in neither the
+--   §2.3 sums nor the unclassified banner; unreachable today, the leg that
+--   reds the day account_users sharing activates). plan(35).
 --
 -- BINDS TO (the committed 093_cashflow_reader_and_rollup.sql, verbatim):
 --   - pfin.fn_cashflow_items(p_as_of date) RETURNS TABLE(
@@ -65,9 +66,9 @@
 --   - pfin.account_trans_reversal_unique_idx — unique index on
 --     pfin.account_trans(replaces_trans_id) WHERE is_reverse (verbatim
 --     predicate, no `and replaces_trans_id is not null` conjunct — NULLs
---     are distinct in a unique index already). Discovered DYNAMICALLY below
---     rather than hardcoded, since the discovery logic is correct either
---     way and costs nothing.
+--     are distinct in a unique index already). Looked up below PINNED BY
+--     THIS NAME (Sec NOTE-2 on PR #572), with shape predicates kept as
+--     belt-and-suspenders.
 --
 -- Prereqs exercised (on the 001->092 stack): 003/006 (account + rd/wr_access
 --   JOIN RLS), 004 (account_trans immutable ledger + the matched-account
@@ -87,7 +88,9 @@
 --   (2) split XOR                -> R3a/R3b/R3c
 --   (3) E1 netting               -> N1/R4/N3/N4/N5 (N5 = rule 6 binding the
 --                                    netting term, not just the base scan)
---   (4) E3 LEFT JOIN             -> E3a
+--   (4) E3 LEFT JOIN             -> E3a/INV1 (INV1 = Sec FLAG-3 — the
+--                                    sub_cat_id/cat partition invariant the
+--                                    LEFT JOIN's two figures rest on)
 --   (5) S-3 period grammar       -> S3a/S3b/S3c/RU-YEAR-A/RU-YEAR-B (the
 --                                    reader/rollup grain difference on
 --                                    out-of-year items)
@@ -133,10 +136,11 @@
 --   is THE money-path for §2.3). This file is QA's half of that review's
 --   evidence; it does not substitute for it.
 --
--- plan(34) — see the per-rule map above; RU6 (the unclassified-banner
+-- plan(35) — see the per-rule map above; RU6 (the unclassified-banner
 --   identity, AC8) was added at reconciliation against the committed blob;
 --   N5/RU-YEAR-A/RU-YEAR-B were added after the first pg_prove pass, per
---   team-lead's relay of architect-250's findings.
+--   team-lead's relay of architect-250's findings; INV1 (the sub_cat_id/cat
+--   partition invariant) is Sec FLAG-3 on PR #572, added verbatim.
 -- =====================================================================
 
 begin;
@@ -144,7 +148,7 @@ begin;
 -- shared verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(34);
+select plan(35);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb, _rls.tenant_c() as tc \gset
@@ -467,6 +471,20 @@ select results_eq(
   '093 E3a: a standard cash row with NO annotation row appears with NULL sub_cat_id/cat (the inner-join trap this rule catches)'
 );
 
+-- INV1 — the partition invariant the rollup's two figures REST ON: every emitted item with a
+-- sub_cat_id resolves to a non-NULL cat. A row with sub_cat_id NOT NULL and cat NULL is in
+-- NEITHER figure — the sections join drops it (NULL matches no section) and count_ytd counts
+-- only sub_cat_id IS NULL — so money would leave §2.3 with no banner signal. Unreachable today
+-- (084's class CHECK + the D3 #10/#13 matched-tenant fences + posting_prototype's owner-scoped
+-- RLS); reachable the day account_users sharing activates, when a reader can see another
+-- tenant's transactions but not their prototypes. This leg is what reds on that day.
+select is(
+  (select count(*) from pfin.fn_cashflow_items(:'d_asof'::date)
+    where sub_cat_id is not null and cat is null),
+  0::bigint,
+  '093 INV1: no emitted item carries a sub_cat_id that resolves to a NULL cat (the third bucket, in neither the sums nor the banner)'
+);
+
 -- L15a — a row created WITHIN D (created_at < D+1) is included.
 select is(
   (select count(*) from pfin.fn_cashflow_items(:'d_asof'::date) where trans_id = :t_created_ok),
@@ -551,17 +569,21 @@ select (pfin.fn_cashflow_cross_account_rollup(:'d_asof'::date) -> 'targets') as 
 select set_config('role', 'postgres', true);
 
 -- =====================================================================
--- PARTIAL-UNIQUE REVERSAL-DEDUP INDEX (8a promotion) — discovered
--- DYNAMICALLY by shape, never hardcoded by name (Architect's naming is
--- unknown at draft time).
+-- PARTIAL-UNIQUE REVERSAL-DEDUP INDEX (8a promotion). Pinned by the actual
+-- committed name (account_trans_reversal_unique_idx, Sec NOTE-2 on PR #572
+-- — the original shape-only discovery would silently retarget onto a future
+-- alphabetically-earlier sibling index covering the same column). The shape
+-- predicates are KEPT as belt-and-suspenders: if the named index ever
+-- changes shape unexpectedly, this still fails loudly rather than silently
+-- matching whatever else exists.
 -- =====================================================================
 select indexname, indexdef
   from pg_indexes
  where schemaname = 'pfin' and tablename = 'account_trans'
+   and indexname = 'account_trans_reversal_unique_idx'
    and indexdef ilike 'create unique index%'
    and indexdef ilike '%replaces_trans_id%'
    and indexdef ilike '%where%'
- order by indexname
  limit 1 \gset
 
 select ok(
