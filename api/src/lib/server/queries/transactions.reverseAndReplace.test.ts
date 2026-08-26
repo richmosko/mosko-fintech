@@ -87,14 +87,16 @@ const EDIT: ManualTransEdit = {
 /**
  * A supabase-js test double dispatched by table + call shape (mirrors the house pattern in
  * transactions.classify.test.ts / transactions.upsertAnnotation.test.ts). `account_trans` is
- * touched three ways by `reverseAndReplaceTrans`: the (1) orig read (`select(...).eq().eq()
- * .maybeSingle()`), (2) the already-reversed count (`select(...,{count}).eq().eq()`), and (3) the
- * batch insert (`insert([...]).select(...)`) — differentiated below by whether `select()` receives
- * a `{count}` opts object, and by which method (`insert` vs `select`) is called first off `from()`.
+ * touched four ways by `reverseAndReplaceTrans`: the (1) orig read (`select(...).eq().eq()
+ * .maybeSingle()`), (2) the already-reversed count (`select(...,{count}).eq().eq()`), (2b) the
+ * split-parent-refusal count on `account_trans_split` (`select(...,{count}).eq()`, ONE `.eq()`,
+ * distinguishing it from (2)'s two), and (3) the batch insert (`insert([...]).select(...)`) —
+ * differentiated below by table name + whether `select()` receives a `{count}` opts object.
  */
 function makeSupabase(opts: {
 	orig?: { data: OrigRow | null };
 	reversedCount?: { count: number | null };
+	splitCount?: { count: number | null; error?: { message: string } | null };
 	insertResult?: {
 		data: Array<{ trans_id: number; is_reverse: boolean }> | null;
 		error: { message: string; code?: string } | null;
@@ -103,6 +105,7 @@ function makeSupabase(opts: {
 }) {
 	const orig = opts.orig ?? { data: CASH_ORIG };
 	const reversedCount = opts.reversedCount ?? { count: 0 };
+	const splitCount = opts.splitCount ?? { count: 0, error: null };
 	const insertResult =
 		opts.insertResult ??
 		({
@@ -116,6 +119,14 @@ function makeSupabase(opts: {
 	return {
 		schema: (_schemaName: string) => ({
 			from: (table: string) => {
+				if (table === 'account_trans_split') {
+					// (2b) the split-parent-refusal count — a single `.eq('account_trans_id', ...)`.
+					return {
+						select: (_cols: string, _selOpts?: { count?: string; head?: boolean }) => ({
+							eq: (_c1: string, _v1: unknown) => Promise.resolve(splitCount)
+						})
+					};
+				}
 				if (table !== 'account_trans') throw new Error(`unexpected table in test double: ${table}`);
 				return {
 					select: (_cols: string, selOpts?: { count?: string; head?: boolean }) => {
@@ -198,5 +209,55 @@ describe('reverseAndReplaceTrans — SELF-340 batch-insert key-set regression', 
 		const supabase = makeSupabase({});
 		const result = await reverseAndReplaceTrans(supabase, 7, EDIT);
 		expect(result).toEqual({ ok: true, transId: 3 });
+	});
+});
+
+// ── Split-parent refusal (SELF-248 AC5 / V1.3 pre-flight sitting item 9a + 10a) ────────────────
+//
+// QA's SELF-340 walk on THIS fix measured the ruling as missing: editing a split parent silently
+// ORPHANED its children (the dead original kept rendering "Split · N"; the live corrected row
+// rendered as a plain single line) — reverseAndReplaceTrans selected `orig` WITHOUT split_count
+// and carried no split guard at all. AC5's ruled message, quoted verbatim with N substituted: "this
+// transaction is split; removing the split will discard its N line categories, which cannot be
+// recovered."
+describe('reverseAndReplaceTrans — split-parent refusal (SELF-248 AC5, item 9a/10a)', () => {
+	it('a split parent (split_count > 0) refuses BEFORE any write, states the REAL count, and never touches account_trans', async () => {
+		const captured: { insertedRows: unknown[] | null } = { insertedRows: null };
+		const supabase = makeSupabase({ splitCount: { count: 3, error: null }, captured });
+		const result = await reverseAndReplaceTrans(supabase, 7, EDIT);
+		expect(result).toEqual({
+			ok: false,
+			status: 409,
+			message:
+				'This transaction is split; removing the split will discard its 3 line categories, which cannot be recovered. Unsplit it first, then edit.'
+		});
+		expect(captured.insertedRows).toBeNull();
+	});
+
+	it('a DIFFERENT split parent (split_count = 1) states ITS real count, not a hardcoded number — proves the count is read, not templated', async () => {
+		const supabase = makeSupabase({ splitCount: { count: 1, error: null } });
+		const result = await reverseAndReplaceTrans(supabase, 7, EDIT);
+		if (result.ok) throw new Error('expected a refusal');
+		expect(result.message).toContain('discard its 1 line categories');
+	});
+
+	it('split_count = 0 (not a split parent) is UNAFFECTED — the existing edit flow still succeeds', async () => {
+		const supabase = makeSupabase({ splitCount: { count: 0, error: null } });
+		const result = await reverseAndReplaceTrans(supabase, 7, EDIT);
+		expect(result).toEqual({ ok: true, transId: 3 });
+	});
+
+	it('a split-count read error fails CLOSED (500), never silently proceeding to a write that could orphan children', async () => {
+		const captured: { insertedRows: unknown[] | null } = { insertedRows: null };
+		const supabase = makeSupabase({ splitCount: { count: null, error: { message: 'connection reset' } }, captured });
+		const result = await reverseAndReplaceTrans(supabase, 7, EDIT);
+		expect(result).toEqual({ ok: false, status: 500, message: 'Could not verify this transaction. Please try again.' });
+		expect(captured.insertedRows).toBeNull();
+	});
+
+	it('the double-edit guard (already-reversed) still wins BEFORE the split-count read fires, when both would refuse — order is preserved', async () => {
+		const supabase = makeSupabase({ reversedCount: { count: 1 }, splitCount: { count: 5, error: null } });
+		const result = await reverseAndReplaceTrans(supabase, 7, EDIT);
+		expect(result).toEqual({ ok: false, status: 409, message: 'This transaction has already been edited.' });
 	});
 });

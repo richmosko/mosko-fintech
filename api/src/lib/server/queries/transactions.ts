@@ -598,6 +598,43 @@ export async function reverseAndReplaceTrans(
 	if ((reversedCount ?? 0) > 0)
 		return { ok: false, status: 409, message: 'This transaction has already been edited.' };
 
+	// (2b) Split-parent refusal (SELF-248 AC5; V1.3 pre-flight sitting item 9a — F/CTO-ratified
+	// default-and-notify — + item 10a's companion obligation). REVERSING A SPLIT PARENT IS
+	// REFUSED at the write path: the alternatives (apportioning the edit across children, or
+	// silently editing the parent underneath them) invent apportionment or re-introduce
+	// double-counting. Measured (QA, SELF-340 walk against this fix): before this guard existed,
+	// editing a split parent silently ORPHANED its children — the dead original kept rendering
+	// "Split · N" while the live corrected row rendered as a plain single line, because this
+	// function selected `orig` WITHOUT split_count and carried no split guard at all.
+	//
+	// split_count is DERIVED, never stored (029/035/checkClassifiable precedent — see this file's
+	// own `checkClassifiable` for the identical read shape): count the child set for this trans_id.
+	// A read error fails CLOSED (500), never silently proceeding to a write that might orphan
+	// children on a read hiccup.
+	//
+	// Item 10a's companion obligation: `unsplitTrans` is a bare DELETE with no split-child history
+	// table (031 audits only the 1:1 annotation) — the remedy this refusal points to is ITSELF
+	// LOSSY AND UNRECOVERABLE, so the message states the real cost, not just "this is split."
+	// AC5's ruled message shape, quoted verbatim with the real count substituted for N: "this
+	// transaction is split; removing the split will discard its N line categories, which cannot be
+	// recovered."
+	const { count: splitCount, error: splitErr } = await supabase
+		.schema('pfin')
+		.from('account_trans_split')
+		.select('id', { count: 'exact', head: true })
+		.eq('account_trans_id', v.orig_trans_id);
+	if (splitErr) {
+		console.error('[transactions] reverse-and-replace split-count read failed:', splitErr.message);
+		return { ok: false, status: 500, message: 'Could not verify this transaction. Please try again.' };
+	}
+	if ((splitCount ?? 0) > 0) {
+		return {
+			ok: false,
+			status: 409,
+			message: `This transaction is split; removing the split will discard its ${splitCount} line categories, which cannot be recovered. Unsplit it first, then edit.`
+		};
+	}
+
 	// (3) Atomic bulk INSERT of {reversal, corrected}. One statement — both rows pass the
 	// account_trans_insert wr_access RLS (same account) + the reversal passes the 004
 	// matched-account fence (same account_id as its replaces_trans_id target).
