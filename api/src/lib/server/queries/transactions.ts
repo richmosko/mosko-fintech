@@ -232,19 +232,58 @@ type ClassifiabilityResult =
 	| { status: 'refused'; reason: ClassifiableRefusalReason }
 	| { status: 'error' };
 
+/** The five `classifiable()` fields `classifiabilityOf` below needs — everything EXCEPT the
+ *  `not_found` leg, which only exists at the DB-read call site (a row absent/RLS-invisible never
+ *  reaches this predicate at all). */
+export type ClassifiabilityInputs = {
+	transaction_type: string;
+	security_id: number | null;
+	is_reverse: boolean;
+	split_count: number;
+	journal_id: number | null;
+};
+
+export type ClassifiabilityCheck =
+	| { classifiable: true }
+	| { classifiable: false; reason: Exclude<ClassifiableRefusalReason, 'not_found'> };
+
 /**
  * The S-1 classifiability predicate (V1.3 pre-flight sitting item 3a; generalized to a write-time
  * refusal by the S-4 ruling, sitting item 6a): `classifiable(row) := transaction_type='standard'
  * AND security_id IS NULL AND split_count=0 AND is_reverse=false AND (annotation IS NULL OR
  * annotation.journal_id IS NULL)`.
  *
+ * PURE — no DB access. Extracted (SELF-249) so `checkClassifiable` (the write-time single-row
+ * check, below) and the account-detail loader's per-row `classifiable`/`classifiableReason`
+ * projection (accounts/[account_id]/+page.server.ts, SELF-249 AC6) share ONE implementation of
+ * the five rules instead of two independently-hand-copied ones — the drift shape this project
+ * keeps catching (see e.g. the duplicated `isCrossTenantSubCat` note above). Order matches the
+ * original inline checks exactly (not_standard → has_security → is_reversal → split_parent →
+ * journaled); callers that already have the row's fields in hand from a bulk read never need a
+ * second round-trip to get this answer.
+ *
  * ⚠ THIS CHECK IS THE ONLY ENFORCEMENT for four of its five legs — M1/M2/M4/E1 carry NO DB fence
  * (SELF-248 AC10 condition 5: the app guard "stays app-layer" for exactly this reason, and the
  * function COMMENT on migration 092's new trigger says so). Only the fifth leg (M3/journaled) is
- * ALSO DB-fenced (092's `fn_..._journaled_cat_fence`, defense-in-depth against a race between this
- * read and the write below). Read-only; runs under the caller's own RLS (rd_access-JOIN via the
+ * ALSO DB-fenced (092's `fn_..._journaled_cat_fence`, defense-in-depth against a race between a
+ * caller's read and its write).
+ */
+export function classifiabilityOf(row: ClassifiabilityInputs): ClassifiabilityCheck {
+	if (row.transaction_type !== 'standard') return { classifiable: false, reason: 'not_standard' };
+	if (row.security_id !== null) return { classifiable: false, reason: 'has_security' };
+	if (row.is_reverse) return { classifiable: false, reason: 'is_reversal' };
+	if (row.split_count > 0) return { classifiable: false, reason: 'split_parent' };
+	if (row.journal_id != null) return { classifiable: false, reason: 'journaled' };
+	return { classifiable: true };
+}
+
+/**
+ * The write-time single-row classifiability check — three RLS-scoped reads feeding
+ * `classifiabilityOf` above. Read-only; runs under the caller's own RLS (rd_access-JOIN via the
  * account chain) — a cross-tenant / not-visible trans_id reads as `not_found`, never a distinct
- * "exists but not yours" signal (no existence leak, the codebase-wide convention).
+ * "exists but not yours" signal (no existence leak, the codebase-wide convention). `not_found` is
+ * this function's own leg (not `classifiabilityOf`'s) precisely because it depends on the read,
+ * not on the row's field values.
  */
 export async function checkClassifiable(
 	supabase: SupabaseClient,
@@ -261,9 +300,6 @@ export async function checkClassifiable(
 		return { status: 'error' };
 	}
 	if (!trans) return { status: 'refused', reason: 'not_found' };
-	if (trans.transaction_type !== 'standard') return { status: 'refused', reason: 'not_standard' };
-	if (trans.security_id !== null) return { status: 'refused', reason: 'has_security' };
-	if (trans.is_reverse) return { status: 'refused', reason: 'is_reversal' };
 
 	// split_count is DERIVED (029/035 precedent — never a stored column): count the child set.
 	const { count: splitCount, error: splitErr } = await supabase
@@ -275,7 +311,6 @@ export async function checkClassifiable(
 		console.error('[transactions] classifiability split-count read failed:', splitErr.message);
 		return { status: 'error' };
 	}
-	if ((splitCount ?? 0) > 0) return { status: 'refused', reason: 'split_parent' };
 
 	const { data: ann, error: annErr } = await supabase
 		.schema('pfin')
@@ -287,7 +322,15 @@ export async function checkClassifiable(
 		console.error('[transactions] classifiability annotation read failed:', annErr.message);
 		return { status: 'error' };
 	}
-	if (ann?.journal_id != null) return { status: 'refused', reason: 'journaled' };
+
+	const check = classifiabilityOf({
+		transaction_type: trans.transaction_type,
+		security_id: trans.security_id,
+		is_reverse: trans.is_reverse,
+		split_count: splitCount ?? 0,
+		journal_id: ann?.journal_id ?? null
+	});
+	if (!check.classifiable) return { status: 'refused', reason: check.reason };
 
 	return { status: 'classifiable', annotationExists: ann != null };
 }
@@ -363,6 +406,65 @@ export async function classifyTrans(
 	}
 
 	return { ok: true, transId };
+}
+
+/** Case/whitespace-normalized vendor key, matching `fn_suggest_subcat_for_vendor`'s own
+ *  `lower(btrim(...))` join predicate (092) — so two rows whose vendor strings differ only by
+ *  case or padding share ONE RPC call, not two. Blank/null → no key (no suggestion is looked up).
+ *  Exported so a caller of `loadVendorSuggestions` can look its own rows back up by the SAME key
+ *  the batch was grouped by, without re-deriving (and risking drift from) the normalization rule. */
+export function vendorKey(vendor: string | null): string | null {
+	if (vendor == null) return null;
+	const t = vendor.trim();
+	return t === '' ? null : t.toLowerCase();
+}
+
+/**
+ * SELF-249 AC7/AC8 vendor-suggestion batch loader for the account-detail loader's per-row
+ * `suggested_sub_cat_id` projection. `fn_suggest_subcat_for_vendor` (092) is a single-vendor
+ * scalar RPC with no batch variant — calling it once per UNCLASSIFIED row would be one round trip
+ * per row on every page load. Instead this batches by DISTINCT normalized vendor across the
+ * caller-supplied vendor list (the loader passes only unclassified rows' vendors — AC7: an
+ * existing override always wins over a suggestion, so a classified row's vendor is never looked
+ * up) and maps the result back by that same normalized key. A page with many repeat-vendor rows
+ * (the common case — "STARBUCKS" recurs) collapses to one RPC call per distinct vendor, not one
+ * per row.
+ *
+ * Fail-soft per vendor (mirrors loadHeldSecurities/loadPricedFlags's convention): an RPC error for
+ * one vendor logs and maps to `null` (no suggestion) rather than failing the whole page load —
+ * this is a suggestion, not a security boundary, so degrading to "no hint" is the correct failure
+ * mode, not throwing.
+ */
+export async function loadVendorSuggestions(
+	supabase: SupabaseClient,
+	vendors: Array<string | null>
+): Promise<Map<string, number | null>> {
+	const originalByKey = new Map<string, string>();
+	for (const v of vendors) {
+		const key = vendorKey(v);
+		if (key !== null && !originalByKey.has(key)) originalByKey.set(key, v as string);
+	}
+	const out = new Map<string, number | null>();
+	if (originalByKey.size === 0) return out;
+
+	const entries = [...originalByKey.entries()];
+	const results = await Promise.all(
+		entries.map(async ([key, original]) => {
+			const { data, error } = await supabase
+				.schema('pfin')
+				.rpc('fn_suggest_subcat_for_vendor', { p_vendor: original });
+			if (error) {
+				console.error(
+					'[transactions] loadVendorSuggestions RPC failed for a vendor (fail-soft to no suggestion):',
+					error.message
+				);
+				return [key, null] as const;
+			}
+			return [key, (data as number | null) ?? null] as const;
+		})
+	);
+	for (const [key, subCatId] of results) out.set(key, subCatId);
+	return out;
 }
 
 /**
