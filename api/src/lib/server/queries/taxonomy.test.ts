@@ -51,6 +51,30 @@ const CASHFLOW_DEFAULTS = [
 	{ cat: 'Income', sub_cat: 'Salary', tax_relevant: true, tax_character: 'ordinary', display_order: 2, notes: 'W-2' }
 ];
 
+// 091 / ADR-062 Decision 6 (is_tax_payment PR): carries BOTH true and false so a hardcoded-value
+// (or hardcoded-false) implementation fails the verbatim-carry assertion below, not just an
+// "is present" check the column-list-blind mock could pass by coincidence.
+const CASHFLOW_DEFAULTS_WITH_TAX_PAYMENT = [
+	{
+		cat: 'Income',
+		sub_cat: 'Salary',
+		tax_relevant: true,
+		tax_character: 'ordinary',
+		display_order: 2,
+		notes: 'W-2',
+		is_tax_payment: false
+	},
+	{
+		cat: 'Expense',
+		sub_cat: 'Estimated Tax',
+		tax_relevant: true,
+		tax_character: 'ordinary',
+		display_order: 3,
+		notes: null,
+		is_tax_payment: true
+	}
+];
+
 type TableOpts = {
 	existing?: unknown;
 	existingErr?: { message: string } | null;
@@ -171,6 +195,35 @@ describe('provisionDefaultTaxonomy — post-084 two-independent-branches shape',
 		// Row-shape half — a DIFFERENT thing than the select-call assertion above.
 		const [cashflowRows] = s.postingPrototypeUpsert.mock.calls[0];
 		expect(cashflowRows).toEqual([{ users_id: USER_ID, ...CASHFLOW_DEFAULTS[0] }]);
+	});
+
+	it('091 / ADR-062 Decision 6 — TEETH: the cashflow branch actually SELECTS `is_tax_payment` from posting_prototype_default (not just a fixture that happens to carry it), and carries the value VERBATIM per row (both true and false) into the upsert payload — a hardcoded value would fail this', async () => {
+		const s = makeSupabase({
+			asset: { existing: null, defaults: ASSET_DEFAULTS },
+			cashflow: { existing: null, defaults: CASHFLOW_DEFAULTS_WITH_TAX_PAYMENT }
+		});
+		await provisionDefaultTaxonomy(s.client, USER_ID);
+
+		expect(s.postingPrototypeDefaultSelect).toHaveBeenCalledTimes(1);
+		const [columnList] = s.postingPrototypeDefaultSelect.mock.calls[0];
+		expect(columnList).toContain('is_tax_payment');
+
+		const [cashflowRows] = s.postingPrototypeUpsert.mock.calls[0];
+		expect(cashflowRows).toEqual(
+			CASHFLOW_DEFAULTS_WITH_TAX_PAYMENT.map((d) => ({ users_id: USER_ID, ...d }))
+		);
+	});
+
+	it('the asset branch NEVER selects `is_tax_payment` from taxonomy_default — the mirror-image asymmetry (ADR-062 Decision 6: tax-payment-ness is a posting-prototype property; storage carries no cash-flow rows to mark)', async () => {
+		const s = makeSupabase({
+			asset: { existing: null, defaults: ASSET_DEFAULTS },
+			cashflow: { existing: null, defaults: CASHFLOW_DEFAULTS_WITH_TAX_PAYMENT }
+		});
+		await provisionDefaultTaxonomy(s.client, USER_ID);
+
+		expect(s.taxonomyDefaultSelect).toHaveBeenCalledTimes(1);
+		const [columnList] = s.taxonomyDefaultSelect.mock.calls[0];
+		expect(columnList).not.toContain('is_tax_payment');
 	});
 
 	it('THE KEY REGRESSION TEST (Sec F3 condition (b)): a user with EXISTING user_taxonomy rows but ZERO posting_prototype rows still gets posting_prototype provisioned — the guard does NOT short-circuit across tables', async () => {
