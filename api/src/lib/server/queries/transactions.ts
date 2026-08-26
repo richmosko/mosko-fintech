@@ -49,6 +49,39 @@ function isJournaledCatFenceRejection(message: string): boolean {
  */
 const JOURNALED_CAT_CONFLICT_MESSAGE =
 	'This leg is now posted to a journal as Revenue, Expense, or Equity — reclassifying it that way is blocked to protect the journal. Detach it, then classify.';
+
+/**
+ * DB raise-message → 084's `fn_account_trans_annotation_trade_constraints` trigger (ADR-031
+ * Amendment 1 s2a/s2b), on `pfin.account_trans_annotation`. Two DISTINCT raise prefixes, both
+ * ^-anchored per this file's convention (mirrors `isJournaledCatFenceRejection` above, verified
+ * live against 084's authored text before anchoring):
+ *   - "Trade consistency violation (...)" — security_id present ⟺ cat='Trade' biconditional (s2a).
+ *   - "Trade sign-alignment (...)" — a Trade sub_cat's BTO/BTC/STC/STO direction vs quantity sign
+ *     (s2b).
+ * Deliberately EXCLUDES 084's third raise on this trigger ("Trade constraint: cannot resolve
+ * fact/class ... fail-closed") — that one is an unresolvable-row integrity break (mirrors the
+ * generic 500 other unresolvable-read raises fall to elsewhere in this file), not a user category
+ * choice, so it is NOT reclassified here.
+ *
+ * ⚠ ORDER: the sign-alignment raise's text contains the literal substring "sub_cat" ("sub_cat %
+ * requires quantity..."), which `isCrossTenantSubCat`'s `/sub_cat/i` test also matches — so this
+ * classifier MUST be checked BEFORE `isCrossTenantSubCat` at every call site (Sec PR #564 FLAG-B),
+ * the same collision shape D-8 condition 6 already forced for `isJournaledCatFenceRejection`.
+ * Before this fix, sign-alignment raises were miscoded as "That category is not available"
+ * (a plausible-but-wrong message: the category IS valid, it's the wrong DOMAIN for this
+ * transaction) and consistency-violation raises (no "sub_cat" substring) fell all the way through
+ * to the generic 500 "Please try again" — retry advice for a user-input choice that can never
+ * succeed by retrying.
+ */
+function isTradeConstraintViolation(message: string): boolean {
+	return /^Trade (consistency violation|sign-alignment)/i.test(message);
+}
+
+/** The single user-facing rendering of the trade-constraint raise above, shared by `classifyTrans`
+ *  and `upsertAnnotation` for the same one-classifier-one-message reason as
+ *  `JOURNALED_CAT_CONFLICT_MESSAGE`. */
+const TRADE_CONSTRAINT_MESSAGE =
+	'A Trade category is for security transactions. Pick a cash-flow category instead.';
 /**
  * DB raise-message → 058 §(4)'s CLOSED-ACCOUNT TRANSFER-IN FENCE.
  *
@@ -142,11 +175,16 @@ export const REVERSAL_RECATEGORIZE_MESSAGE =
  * the full gate as needing its own vitest coverage of its own; the ruled scope here is the E1 leg
  * alone. Do not expand this to the other four legs without surfacing that as a scope change.
  *
- * A not-found / not-visible-under-RLS `transId` falls through to the existing write below rather
- * than a separate refusal here — no existence leak, and the write's own fences (FK + RLS) already
- * produce the correct outcome for that case, unchanged by this check. `reverseAndReplaceTrans`
- * (below) also calls this function for its freshly-inserted corrected row, which is by
- * construction never `is_reverse` — the extra read there is a harmless no-op, not a new fence.
+ * A not-found / not-visible-under-RLS `transId` refuses with a plain 404 (Sec PR #564 FLAG-C) —
+ * the codebase-wide "not found" convention (checkClassifiable's own `not_found` leg, mirrored),
+ * chosen specifically because `trans?.is_reverse` on a null `trans` is `undefined` — FALSY, the
+ * same as a genuine non-reversal row — so an unguarded null here would fail OPEN: a row this
+ * caller cannot see under RLS would fall through to the write below instead of being refused.
+ * Unreachable in V1 today (every V1 grant pairs rd_access with wr_access), but live the instant a
+ * wr-without-rd grant shape ships (flagged for the B5 grant-sharing work) — fixed now rather than
+ * left as a latent fail-open. `reverseAndReplaceTrans` (below) also calls this function for its
+ * freshly-inserted corrected row, which by construction is always found and never `is_reverse` —
+ * unaffected by either check.
  */
 export async function upsertAnnotation(
 	supabase: SupabaseClient,
@@ -164,7 +202,8 @@ export async function upsertAnnotation(
 		console.error('[transactions] upsertAnnotation E1 reversal check failed:', transErr.message);
 		return { ok: false, status: 500, message: 'Could not verify this transaction. Please try again.' };
 	}
-	if (trans?.is_reverse) {
+	if (!trans) return { ok: false, status: 404, message: 'Transaction not found.' };
+	if (trans.is_reverse) {
 		return { ok: false, status: 409, field: 'sub_cat_id', code: 'is_reversal', message: REVERSAL_RECATEGORIZE_MESSAGE };
 	}
 
@@ -197,6 +236,11 @@ export async function upsertAnnotation(
 				code: 'journaled_cat_conflict',
 				message: JOURNALED_CAT_CONFLICT_MESSAGE
 			};
+		// SELF-249 Sec FLAG-B (PR #564, option C): 084's trade-constraint raises must ALSO be
+		// classified before isCrossTenantSubCat — the sign-alignment raise's "sub_cat %" text
+		// matches isCrossTenantSubCat's regex too (see isTradeConstraintViolation's own header).
+		if (isTradeConstraintViolation(error.message))
+			return { ok: false, status: 409, field: 'sub_cat_id', code: 'trade_constraint', message: TRADE_CONSTRAINT_MESSAGE };
 		if (isCrossTenantSubCat(error.message))
 			return { ok: false, status: 422, field: 'sub_cat_id', message: 'That category is not available.' };
 		return { ok: false, status: 422, field: 'sub_cat_id', message: 'Could not save the category.' };
@@ -394,6 +438,14 @@ export async function classifyTrans(
 				code: 'journaled_cat_conflict',
 				message: JOURNALED_CAT_CONFLICT_MESSAGE
 			};
+		// SELF-249 Sec FLAG-B (PR #564, option C): 084's trade-constraint raises must ALSO be
+		// classified before isCrossTenantSubCat — the sign-alignment raise's "sub_cat %" text
+		// matches isCrossTenantSubCat's regex too (see isTradeConstraintViolation's own header).
+		// Before this fix, this raise fell through to the generic 500 below (or, for the
+		// sign-alignment variant, was miscoded as invalid_sub_cat_id) — a user-input category
+		// mismatch reported as either a server error or the wrong 4xx reason.
+		if (isTradeConstraintViolation(error.message))
+			return { ok: false, status: 409, field: 'sub_cat_id', code: 'trade_constraint', message: TRADE_CONSTRAINT_MESSAGE };
 		if (isCrossTenantSubCat(error.message) || error.code === '23503')
 			return {
 				ok: false,

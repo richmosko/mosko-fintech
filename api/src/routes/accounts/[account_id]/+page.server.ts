@@ -172,8 +172,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	// this one bulk query.
 	const transactions = ((transRows ?? []) as Array<Record<string, unknown>>).map((r) => {
 		const annRaw = r.account_trans_annotation as
-			| { note?: string | null; journal_id?: number | null; posting_prototype?: unknown }
-			| Array<{ note?: string | null; journal_id?: number | null; posting_prototype?: unknown }>
+			| { sub_cat_id?: number | null; note?: string | null; journal_id?: number | null; posting_prototype?: unknown }
+			| Array<{ sub_cat_id?: number | null; note?: string | null; journal_id?: number | null; posting_prototype?: unknown }>
 			| null;
 		const ann = Array.isArray(annRaw) ? (annRaw[0] ?? null) : annRaw;
 		const splits = ((r.account_trans_split as Array<Record<string, unknown>>) ?? [])
@@ -185,7 +185,18 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 				...subCatLabel(s.posting_prototype)
 			}))
 			.sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0));
+		// Sec FLAG-D (PR #564 AMBER, backend half): `subCatLabel` NEVER returns null (its miss case
+		// is the {cat:null, sub_cat:'Unsorted'} OBJECT, a truthy value), so `category` alone cannot
+		// distinguish "no annotation" from "a NOTE-ONLY annotation" (sub_cat_id null, reachable via
+		// recategorize's nullable subCatIdField) — both read as a non-null `category`. `category`'s
+		// own computation is UNCHANGED here (Frontend's parallel FLAG-D fix does not key off it
+		// either way, and other category consumers keep their existing behavior). Instead, the raw
+		// `sub_cat_id` is surfaced as its OWN field below (Frontend's SubCatPicker now keys
+		// `classified` on `transaction.sub_cat_id != null` directly — transaction-util.ts's
+		// EXPECTED-CONTRACT note), and this loader's own unclassified-vendor-suggestion filter
+		// (below) is keyed on the SAME raw field, not on `category`.
 		const category = ann ? subCatLabel(ann.posting_prototype) : null;
+		const subCatId = (ann?.sub_cat_id as number | null | undefined) ?? null;
 		const check = classifiabilityOf({
 			transaction_type: r.transaction_type as string,
 			security_id: (r.security_id as number | null) ?? null,
@@ -204,6 +215,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			replaces_trans_id: (r.replaces_trans_id as number | null) ?? null,
 			created_at: r.created_at as string,
 			category,
+			sub_cat_id: subCatId,
 			note: (ann?.note as string | null) ?? null,
 			splits,
 			split_count: splits.length,
@@ -217,10 +229,14 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	// always wins — transaction-util.ts's own contract note) and batched by DISTINCT vendor
 	// (loadVendorSuggestions) rather than one `fn_suggest_subcat_for_vendor` RPC call per row —
 	// see that function's header for why a per-row call doesn't scale with page size.
-	const unclassifiedVendors = transactions.filter((t) => t.category === null).map((t) => t.vendor);
+	//
+	// Sec FLAG-D: keyed on `sub_cat_id == null`, NOT `category === null` — a note-only annotation
+	// (sub_cat_id null) has a non-null `category` (subCatLabel's Unsorted-label object) but is
+	// still unclassified and should still get a suggestion/hint.
+	const unclassifiedVendors = transactions.filter((t) => t.sub_cat_id == null).map((t) => t.vendor);
 	const vendorSuggestions = await loadVendorSuggestions(locals.supabase, unclassifiedVendors);
 	const transactionsWithSuggestions = transactions.map((t) => {
-		if (t.category !== null) return { ...t, suggested_sub_cat_id: null };
+		if (t.sub_cat_id != null) return { ...t, suggested_sub_cat_id: null };
 		const key = vendorKey(t.vendor);
 		return { ...t, suggested_sub_cat_id: key !== null ? (vendorSuggestions.get(key) ?? null) : null };
 	});

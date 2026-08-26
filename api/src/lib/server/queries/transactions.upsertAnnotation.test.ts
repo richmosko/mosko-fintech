@@ -98,12 +98,12 @@ describe('upsertAnnotation — SELF-249 E1 write-side refusal', () => {
 		]);
 	});
 
-	it('not found (RLS-invisible or absent) → falls through to the normal write, no existence leak', async () => {
+	it('not found (RLS-invisible or absent) → 404, upsert never called (Sec PR #564 FLAG-C: was fail-OPEN — trans?.is_reverse on a null trans is undefined/falsy, so this used to fall through to the write)', async () => {
 		const captured = { upsertCalls: [] as unknown[], deleteCalls: [] as unknown[] };
 		const supabase = makeSupabase({ trans: { data: null, error: null }, captured });
 		const result = await upsertAnnotation(supabase, 1, 7, null);
-		expect(result).toEqual({ ok: true, transId: 1 });
-		expect(captured.upsertCalls).toHaveLength(1);
+		expect(result).toEqual({ ok: false, status: 404, message: 'Transaction not found.' });
+		expect(captured.upsertCalls).toHaveLength(0);
 	});
 
 	it('an unexpected reversal-check read error → 500, upsert/delete never called (fail closed)', async () => {
@@ -205,5 +205,69 @@ describe('upsertAnnotation — clear path (both null) unaffected by the FLAG-2 f
 		const supabase = makeSupabase({ deleteResult: { error: { message: 'timeout' } } });
 		const result = await upsertAnnotation(supabase, 1, null, null);
 		expect(result).toEqual({ ok: false, status: 422, message: 'Could not clear the category.' });
+	});
+});
+
+// ── SELF-249 Sec FLAG-B (PR #564, option C) ────────────────────────────────────────────────
+//
+// 084's fn_account_trans_annotation_trade_constraints trigger raises two DISTINCT prefixes on
+// pfin.account_trans_annotation; neither was classified before this fix. The sign-alignment
+// raise's text contains "sub_cat %", which collides with isCrossTenantSubCat's regex — the same
+// collision shape FLAG-2 already forced for isJournaledCatFenceRejection.
+describe('upsertAnnotation — SELF-249 Sec FLAG-B (084 trade-constraint raises classify ahead of cross-tenant)', () => {
+	it('the consistency-violation raise (s2a, no "sub_cat" substring — previously fell through to the generic 422) → 409 trade_constraint', async () => {
+		const supabase = makeSupabase({
+			upsertResult: {
+				error: {
+					code: 'P0001',
+					message:
+						"Trade consistency violation (ADR-031 Amendment 1 s2a): security_id 42 and cat=Income must satisfy (security_id present <=> cat='Trade') (M1-evt / SELF-293)"
+				}
+			}
+		});
+		const result = await upsertAnnotation(supabase, 1, 7, null);
+		expect(result).toEqual({
+			ok: false,
+			status: 409,
+			field: 'sub_cat_id',
+			code: 'trade_constraint',
+			message: 'A Trade category is for security transactions. Pick a cash-flow category instead.'
+		});
+	});
+
+	it('the sign-alignment raise (s2b — contains the literal "sub_cat" substring, previously miscoded via isCrossTenantSubCat) → also 409 trade_constraint, NOT "That category is not available"', async () => {
+		const supabase = makeSupabase({
+			upsertResult: {
+				error: {
+					code: 'P0001',
+					message: 'Trade sign-alignment (ADR-031 Amendment 1 s2b): sub_cat BTO requires quantity > 0 (buy), got -3 (M1-evt / SELF-293)'
+				}
+			}
+		});
+		const result = await upsertAnnotation(supabase, 1, 7, null);
+		expect(result).toEqual({
+			ok: false,
+			status: 409,
+			field: 'sub_cat_id',
+			code: 'trade_constraint',
+			message: 'A Trade category is for security transactions. Pick a cash-flow category instead.'
+		});
+	});
+
+	it('COLLISION GUARD — the fail-closed unresolvable-row raise on the SAME trigger ("Trade constraint: cannot resolve...") is NOT reclassified as trade_constraint — it is an integrity break, not a user category choice; it falls to isCrossTenantSubCat instead (its "sub_cat_id" substring matches that regex too, pre-existing behavior unchanged by this fix)', async () => {
+		const supabase = makeSupabase({
+			upsertResult: {
+				error: {
+					code: 'P0001',
+					message:
+						'Trade constraint: cannot resolve fact (trans_id 1) or class (sub_cat_id 7) — not found or not visible under current AAL; fail-closed (M1-evt / SELF-293)'
+				}
+			}
+		});
+		const result = await upsertAnnotation(supabase, 1, 7, null);
+		if (result.ok) throw new Error('expected a refusal');
+		expect(result.code).not.toBe('trade_constraint');
+		expect(result.status).toBe(422);
+		expect(result.message).toBe('That category is not available.');
 	});
 });

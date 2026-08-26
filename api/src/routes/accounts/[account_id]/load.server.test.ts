@@ -112,6 +112,7 @@ type TransactionViewLike = {
 	trans_id: number;
 	vendor: string | null;
 	category: { cat: string | null; sub_cat: string } | null;
+	sub_cat_id?: number | null;
 	provider_category?: string | null;
 	classifiable?: boolean;
 	classifiableReason?: string | null;
@@ -338,6 +339,58 @@ describe('load() — SELF-249 classifiable/classifiableReason (one leg per test)
 		const data = await loadData(makeEvent(supabase));
 		expect(data.transactions[0].classifiable).toBe(true);
 		expect(data.transactions[0].classifiableReason).toBeNull();
+	});
+});
+
+describe('load() — SELF-249 Sec FLAG-D (PR #564): a note-only annotation is UNCLASSIFIED via sub_cat_id, not via category', () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		loadCashflowSubCatsMock.mockResolvedValue([]);
+		loadSelectableAssetsMock.mockResolvedValue({ assets: [], error: false });
+	});
+
+	// Frontend's own parallel FLAG-D fix (commit e21c9fe) settled the contract shape: `category`'s
+	// computation is UNCHANGED (subCatLabel's Unsorted-label object still surfaces for a note-only
+	// row — other consumers may still want "does ANY annotation exist"), and a NEW raw `sub_cat_id`
+	// field is what SubCatPicker's `classified` state and this loader's own vendor-suggestion
+	// filter both key on instead.
+	it('an annotation row with sub_cat_id NULL (note-only — reachable via recategorize\'s nullable subCatIdField) → sub_cat_id is null even though category is still the non-null Unsorted-label object', async () => {
+		const supabase = makeSupabase({
+			account: ACCOUNT_ROW,
+			transRows: [transRow({ trans_id: 1, annotation: { sub_cat_id: undefined, note: 'ask about this later', journal_id: null, posting_prototype: null } })]
+		});
+		const data = await loadData(makeEvent(supabase));
+		expect(data.transactions[0].sub_cat_id).toBeNull();
+		expect(data.transactions[0].category).toEqual({ cat: null, sub_cat: 'Unsorted' });
+	});
+
+	it('a note-only row is therefore treated as UNCLASSIFIED by the vendor-suggestion batch (keyed on sub_cat_id, the same field Frontend\'s SubCatPicker binds on)', async () => {
+		loadVendorSuggestionsMock.mockResolvedValueOnce(new Map());
+		const supabase = makeSupabase({
+			account: ACCOUNT_ROW,
+			transRows: [transRow({ trans_id: 1, vendor: 'Starbucks', annotation: { sub_cat_id: undefined, note: 'ask about this later', journal_id: null, posting_prototype: null } })]
+		});
+		await loadData(makeEvent(supabase));
+		// Before the fix, keying on `category !== null` (the Unsorted-label object) meant this
+		// vendor was never sent for a suggestion at all.
+		expect(loadVendorSuggestionsMock).toHaveBeenCalledWith(expect.anything(), ['Starbucks']);
+	});
+
+	it('a real category (sub_cat_id set) still reads as classified via BOTH fields — this fix narrows the null case, it does not widen it', async () => {
+		const supabase = makeSupabase({
+			account: ACCOUNT_ROW,
+			transRows: [transRow({ trans_id: 1, annotation: { sub_cat_id: 9, note: null, journal_id: null, posting_prototype: { cat: 'Food', sub_cat: 'Dining' } } })]
+		});
+		const data = await loadData(makeEvent(supabase));
+		expect(data.transactions[0].sub_cat_id).toBe(9);
+		expect(data.transactions[0].category).toEqual({ cat: 'Food', sub_cat: 'Dining' });
+	});
+
+	it('no annotation row at all → sub_cat_id is null (same as note-only, from the caller\'s perspective)', async () => {
+		const supabase = makeSupabase({ account: ACCOUNT_ROW, transRows: [transRow({ trans_id: 1 })] });
+		const data = await loadData(makeEvent(supabase));
+		expect(data.transactions[0].sub_cat_id).toBeNull();
+		expect(data.transactions[0].category).toBeNull();
 	});
 });
 
