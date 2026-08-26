@@ -544,6 +544,30 @@ export async function loadVendorSuggestions(
  * is a follow-up
  * 023 annotation upsert (benign if it fails — the row is then Unsorted-pending, a valid state;
  * the money-critical {reversal, replacement} pair already committed atomically).
+ *
+ * ⚠ SELF-340 (fixed here, live on `main` since d6b41cd5/SELF-204, ~1 month, found by SELF-249's
+ *   walk gate): a supabase-js/PostgREST batch `.insert([a, b])` builds ONE statement whose column
+ *   list is the UNION of every key across the array — a key present on one object but OMITTED on
+ *   its sibling sends that sibling an EXPLICIT NULL, never the column's DB DEFAULT. `reversal`
+ *   below always carried `quantity`; `corrected` omitted it entirely (a stale comment claimed "0
+ *   default" — the column default, which a batch insert never reaches). Every edit failed with a
+ *   NOT NULL violation, unconditionally.
+ *
+ *   FIX: both objects below now declare the FULL union of columns EXPLICITLY — `reversal` and
+ *   `corrected` carry the SAME key set (`account_id`, `transaction_date`, `amount`, `vendor`,
+ *   `description`, `transaction_type`, `security_id`, `quantity`, `is_reverse`,
+ *   `replaces_trans_id`, `import_hash`), each with its own correct value or an explicit `null`
+ *   (`corrected` adds `quantity: 0` + `security_id: null` + `replaces_trans_id: null`; `reversal`
+ *   adds `import_hash: null`). A point-patch of `quantity` alone would leave the SAME defect class
+ *   live for the next column either row's author adds without remembering the other — this closes
+ *   the CLASS, not the instance, for this call site (SELF-340's own "standing lesson" framing), and
+ *   the identical-key-set shape is itself the regression invariant the paired vitest coverage
+ *   checks. Chose explicit-full-key-set over splitting into two single-row inserts: this INSERT is
+ *   the money-critical {reversal, replacement} pair's ONLY atomicity boundary (one PostgREST
+ *   statement = one txn) — two inserts would let a reversal land with no replacement on a partial
+ *   failure, which is worse than today's uniform failure, not better. See the SWEEP note on other
+ *   `.insert([`/`.upsert([` array-literal call sites in this codebase (SELF-340 dispatch) for where
+ *   else this class was checked.
  */
 export async function reverseAndReplaceTrans(
 	supabase: SupabaseClient,
@@ -587,7 +611,10 @@ export async function reverseAndReplaceTrans(
 		security_id: orig.security_id,
 		quantity: -Number(orig.quantity ?? 0),
 		is_reverse: true,
-		replaces_trans_id: orig.trans_id
+		replaces_trans_id: orig.trans_id,
+		// SELF-340: explicit, matching `corrected`'s full key set (see the function header) — a
+		// reversal never carries provider identity or a fresh content hash; always NULL.
+		import_hash: null as string | null
 	};
 	// SELF-204 (ADR-034 D4 + Consequences b): the corrected row is a fresh MANUAL fact — give it a
 	// fresh content hash (via the SAME shared module the provider mapper uses) so an edited manual
@@ -613,9 +640,17 @@ export async function reverseAndReplaceTrans(
 		vendor: v.vendor,
 		description: v.description,
 		transaction_type: orig.transaction_type, // preserve the fact-kind (cash = 'standard')
+		// SELF-340: explicit, matching `reversal`'s full key set (see the function header). This
+		// batch INSERT's column list is the UNION of both objects' keys — an omitted key here would
+		// send NULL (the DB default is never consulted), so every value that must be NULL is
+		// written as NULL rather than left to omission-plus-default.
+		security_id: null as number | null, // manualTransEditSchema is cash-flow-only (no security_id/quantity fields) — never inherited from `orig`.
+		quantity: 0, // 017's cash CHECK requires 0; this is the field that broke pre-fix (0 !== NULL).
 		is_reverse: false,
+		replaces_trans_id: null as number | null, // a corrected row is a fresh fact, never a reversal pointer.
 		import_hash: correctedImportHash
-		// security_id NULL + quantity 0 default (017 cash CHECK); provider cols NULL (manual origin)
+		// provider cols (source_provider/provider_txn_id) stay omitted on BOTH rows equally — that
+		// pairing was never heterogeneous, so omission there was never the defect.
 	};
 
 	const { data: inserted, error: insErr } = await supabase
