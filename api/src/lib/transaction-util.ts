@@ -108,12 +108,13 @@ export type ClassifiableRefusalReason =
 	| 'journaled'; // M3 — annotation.journal_id IS NOT NULL
 
 /**
- * A transaction row as shaped by the account-detail load(). The last four fields are SELF-249
- * additions and are OPTIONAL: Backend's load() extension for them lands on its own half of this
- * issue and may not have landed yet in a given tree. Absent/undefined reads as "no picker
- * enhancement data yet" — SubCatPicker treats that the same as an explicit `classifiable: true`
- * with no hint/suggestion, never as a silent failure. Once Backend wires the loader, no type
- * change is needed here — the fields already exist on this contract.
+ * A transaction row as shaped by the account-detail load(). Several fields below (marked EXPECTED
+ * CONTRACT) are OPTIONAL: they're additions from issues that ran frontend/backend concurrently
+ * (SELF-249's picker-enhancement fields; SELF-340's `security_id`), and Backend's load()
+ * extension for a given one may not have landed yet in a given tree. Absent/undefined always
+ * reads toward the SAFER default for that field (see each field's own note), never toward
+ * silently treating "missing" as "verified." Once Backend wires the loader, no type change is
+ * needed here — the fields already exist on this contract.
  */
 export type TransactionView = {
 	trans_id: number;
@@ -122,6 +123,28 @@ export type TransactionView = {
 	vendor: string | null;
 	description: string | null;
 	transaction_type: string;
+	/**
+	 * SELF-340 — `pfin.account_trans.security_id`, non-null iff this row is a trade/security leg
+	 * (084's biconditional: security_id present ⟺ its annotation's cat='Trade', when classified).
+	 * Drives TransactionRow's Edit-button gate: reverseAndReplaceTrans's corrected-row insert
+	 * hardcodes `security_id: null` on the replacement (SELF-340 fix) — there is no security-aware
+	 * §2.4.3 edit form in V1 (F/CTO ruling, A+C-deferred) — so editing a security-linked row via
+	 * the cash-only reverse-and-replace form silently drops the security link.
+	 *
+	 * ⚠ DEFAULT DIRECTION, deliberately the OPPOSITE of every other EXPECTED-CONTRACT field on
+	 * this type: undefined (unwired) reads as "cannot confirm this is cash-only" and HIDES Edit —
+	 * fail-closed, not fail-open. Every other field here mirrors a boundary that's already fully
+	 * enforced server-side (SELF-248's checkClassifiable shipped and merged before SELF-249 ever
+	 * ran), so a permissive client default costs a UX inconsistency at worst. This one does not
+	 * have that safety net YET on every tip: as of this field's introduction, Backend's server-side
+	 * refusal for a security-linked edit is landing CONCURRENTLY on this same branch, not already
+	 * merged — reverseAndReplaceTrans's own corrected-row insert has ALWAYS silently nulled
+	 * security_id (nothing currently refuses it), so a permissive default here would leave a real,
+	 * live data-corruption window open on any tip where my field lands before Backend's guard does.
+	 * Once Backend's field + refusal are both wired, this distinction stops mattering — but until
+	 * then, hiding Edit on an unwired row is the safe direction. See TransactionRow's own note.
+	 */
+	security_id?: number | null;
 	is_reverse: boolean;
 	replaces_trans_id: number | null;
 	created_at: string;

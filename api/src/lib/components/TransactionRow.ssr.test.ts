@@ -79,3 +79,37 @@ describe('TransactionRow — Category cell routing (SELF-249)', () => {
 		expect(body).toContain('A reversal row can’t be classified here.');
 	});
 });
+
+describe('TransactionRow — Edit-button UI mirror (SELF-340, F/CTO ruled A+C-deferred)', () => {
+	it('a cash row (security_id: null) renders both Edit and Categorize', () => {
+		const { body } = render(TransactionRow, {
+			props: { transaction: trans({ security_id: null }), subCatGroups: GROUPS, columns: 6, frozen: false }
+		});
+		expect(body).toContain('>Edit<');
+		expect(body).toContain('>Categorize<');
+	});
+
+	it('a security-linked row (security_id set) renders Categorize but NOT Edit — defense-in-depth, the server refusal is the boundary', () => {
+		const { body } = render(TransactionRow, {
+			props: { transaction: trans({ security_id: 42 }), subCatGroups: GROUPS, columns: 6, frozen: false }
+		});
+		expect(body).not.toContain('>Edit<');
+		expect(body).toContain('>Categorize<');
+	});
+
+	it('an unwired row (security_id undefined) fails CLOSED — no Edit, mirroring a confirmed security row', () => {
+		const { body } = render(TransactionRow, {
+			props: { transaction: trans(), subCatGroups: GROUPS, columns: 6, frozen: false }
+		});
+		expect(body).not.toContain('>Edit<');
+		expect(body).toContain('>Categorize<');
+	});
+
+	it('frozen gate is unchanged: neither Edit nor Categorize renders on a frozen cash row', () => {
+		const { body } = render(TransactionRow, {
+			props: { transaction: trans({ security_id: null }), subCatGroups: GROUPS, columns: 6, frozen: true }
+		});
+		expect(body).not.toContain('>Edit<');
+		expect(body).not.toContain('>Categorize<');
+	});
+});
