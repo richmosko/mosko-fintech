@@ -51,6 +51,21 @@ type AssetDefaultProvisionRow = DefaultProvisionRow & { element: string };
 
 const ASSET_DEFAULT_PROVISION_COLUMNS = `${DEFAULT_PROVISION_COLUMNS}, element`;
 
+// ── 091 / ADR-062 Decision 6 (is_tax_payment PR) ── `is_tax_payment` lands on
+// `pfin.posting_prototype` AND `pfin.posting_prototype_default` ONLY — `boolean not null`, NO
+// DEFAULT — and explicitly NEVER on `pfin.user_taxonomy` / `pfin.taxonomy_default` (tax-payment-
+// ness is a posting-prototype property; the storage side carries no cash-flow rows to mark).
+// Same F3-class hazard as `element` above, mirrored: the shared `DefaultProvisionRow` /
+// `DEFAULT_PROVISION_COLUMNS` must NOT be widened in place, because `is_tax_payment` is NOT NULL
+// with no DEFAULT — an unwidened cashflow column list means the INSERT below is missing a
+// required column and the fail-soft branch silently returns zero cash-flow prototypes for every
+// fresh signup (ADR-062 Decision 6's named hazard, the same shape as the 085 `element` incident).
+// The cashflow branch therefore gets its OWN column set from here on, mirroring the asset branch's
+// pattern exactly; the asset branch's column set above is untouched.
+type CashflowDefaultProvisionRow = DefaultProvisionRow & { is_tax_payment: boolean };
+
+const CASHFLOW_DEFAULT_PROVISION_COLUMNS = `${DEFAULT_PROVISION_COLUMNS}, is_tax_payment`;
+
 /**
  * Provision the caller's STORAGE-classification defaults: `pfin.user_taxonomy` from
  * `pfin.taxonomy_default`. One of the two INDEPENDENT branches `provisionDefaultTaxonomy` runs —
@@ -146,11 +161,14 @@ async function provisionCashflowPrototypes(supabase: SupabaseClient, userId: str
 		}
 		if (existing) return; // already provisioned — nothing to do.
 
-		// (2) Read the global cashflow-side default set.
+		// (2) Read the global cashflow-side default set. 091 / ADR-062 Decision 6: `is_tax_payment`
+		// is selected here (and ONLY here — the asset branch's `taxonomy_default` never gains this
+		// column) because it is NOT NULL on `posting_prototype_default` itself with every row
+		// carrying a valid value already — the app carries it verbatim, it does not synthesize it.
 		const { data: defaults, error: dErr } = await supabase
 			.schema('pfin')
 			.from('posting_prototype_default')
-			.select(DEFAULT_PROVISION_COLUMNS);
+			.select(CASHFLOW_DEFAULT_PROVISION_COLUMNS);
 		if (dErr) {
 			console.error(
 				'[taxonomy] provisionCashflowPrototypes default read failed (fail-soft):',
@@ -161,8 +179,9 @@ async function provisionCashflowPrototypes(supabase: SupabaseClient, userId: str
 		if (!defaults || defaults.length === 0) return;
 
 		// (3) UPSERT (DO NOTHING) with a session-derived users_id. Conflict target (users_id, cat,
-		// sub_cat) — `posting_prototype`'s unique shape per 084 §4.5.
-		const rows = (defaults as DefaultProvisionRow[]).map((d) => ({ users_id: userId, ...d }));
+		// sub_cat) — `posting_prototype`'s unique shape per 084 §4.5. `is_tax_payment` rides along
+		// as an ordinary copied column (ADR-062 Decision 6) — not part of the conflict target.
+		const rows = (defaults as CashflowDefaultProvisionRow[]).map((d) => ({ users_id: userId, ...d }));
 		const { error: insErr } = await supabase
 			.schema('pfin')
 			.from('posting_prototype')
