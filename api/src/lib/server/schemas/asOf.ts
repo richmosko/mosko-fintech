@@ -12,9 +12,13 @@
 // WHY THE MOVE WAS NEEDED, NOT COSMETIC (D-6, sitting item 12): the shipped schema had NO range
 // bound. ADR-011 Decision 19 / Lock 15's V1-SHIP-BLOCK app-layer DATE range battery
 // (`2015-12-01 <= as_of_date <= CURRENT_DATE`, no future dates) was never applied to it — LATENT
-// rather than live, because no route wires `as_of` yet (all four §2.2 route loaders call
-// `serverTodayAsOf()` unconditionally; Sec's D-7 bounded consult, HIGH confidence, confirmed no
-// live client-supplied as-of exists anywhere in the tree as of the sitting). This module ships
+// rather than live, because no route wires `as_of` yet (all FOUR route loaders under
+// `api/src/routes` that take an as-of call `serverTodayAsOf()` unconditionally — root
+// `+page.server.ts`, `accounts/[account_id]`, `allocation`, `allocation/us-equity`; the two §2.2
+// allocation loaders are among them. The count is over ALL routes, not over §2.2 — measured at
+// this sha, and it is the tree-wide claim that matters here; Sec's D-7 bounded consult, HIGH
+// confidence, confirmed no live client-supplied as-of exists anywhere in the tree as of the
+// sitting). This module ships
 // the remediation. It does NOT wire any route — that is SELF-253/D-1's ticket.
 //
 // Lock-14 / Lock-15 fences on the one client-supplied `as_of` field:
@@ -32,8 +36,19 @@
 //       (`asOfBrand.invariant.test.ts`) stays true.
 //
 // ⚠ THE CEILING IS INJECTED, NEVER EMBEDDED (sitting item 12a). `asOfSchema(maxAsOf)` is a
-// FACTORY, not a constant — it takes the request's already-resolved `D` as an argument, and nothing
-// in this file derives "today" itself. The caller resolves `D` ONCE per request, from
+// FACTORY, not a constant — it takes the request's already-resolved `D` as an argument, and the
+// VALIDATOR derives no "today" of its own.
+//
+// ⚠ THE DEFAULT BRANCH IS THE EXCEPTION, AND IT IS A SECOND CLOCK. `resolveAllocationAsOf` below
+// returns `serverTodayAsOf()` when `as_of` is ABSENT — the NODE clock (`new Date()`), not
+// `pfin.fn_server_today()`. So a wired request that threads a DB-derived `D` into `asOfSchema` and
+// omits `as_of` is VALIDATED against the DB clock and SERVED against the Node clock. They agree
+// today only by the two independent facts `time/asOf.ts`'s header names (the DB TimeZone pin +
+// Node's unconditional UTC), and they can disagree by a day across a boundary. WHOEVER WIRES THE
+// QUERY PARAM (SELF-253/D-1) MUST settle this explicitly: either thread the same resolved `D` into
+// the absent-`as_of` branch, or record why the Node default is acceptable on that surface.
+//
+// The caller resolves `D` ONCE per request, from
 // `pfin.fn_server_today()` (migration `070`, ADR-044 Decision 2 — the DATABASE clock, not the
 // Node clock) and threads it to every consumer that needs it (ADR-044's "resolve once, thread
 // everywhere" discipline — the same discipline the S-3 sitting ruling applies to the §2.3 reader).
@@ -56,8 +71,9 @@
 // routing-layer choice this ticket does not build (out of scope — SELF-253/D-1).
 //
 // SCOPE FENCE (this ticket, SELF-247): this module ships the BOUND schema + its resolution
-// helper only. It does NOT wire any route to accept a client `as_of` — the four shipped §2.2
-// route loaders keep calling `serverTodayAsOf()` unconditionally, unchanged by this PR.
+// helper only. It does NOT wire any route to accept a client `as_of` — the TWO shipped §2.2
+// route loaders (`/allocation`, `/allocation/us-equity`) keep calling `serverTodayAsOf()`
+// unconditionally, unchanged by this PR.
 
 import { z } from 'zod';
 import { serverTodayAsOf, userSuppliedAsOf, type ZoneResolvedAsOf } from '$lib/server/time/asOf';
@@ -85,10 +101,11 @@ const isoDate = () =>
  * this ticket, not recalled): ADR-011 Decision 19 states the range as `2015-12-01 <= as_of_date`
  * ("per NAV anchor floor", DECISIONS.md ADR-011 Decision 19's Locked option); PRD Appendix B flag
  * (c) locks the underlying fact — "V1 imports the existing Google Sheet's monthly NAV history
- * (Dec-2015 forward) so the 5-Year horizon in §2.1.3 is meaningful at launch"; `nav-boundary.ts`'s
- * header names the same anchor for the cron/imported chart boundary ("the imported
- * Dec-2015-forward history landed at calendar month-end by construction"). All three still hold
- * as of this ticket.
+ * (Dec-2015 forward) so the 5-Year horizon in §2.1.3 is meaningful at launch"; the browser-safe
+ * `api/src/lib/nav-boundary.ts`'s header (NOT its `server/queries/nav-boundary.ts` twin — same
+ * base name, different module) names the same anchor for the cron/imported chart boundary ("the
+ * imported Dec-2015-forward history landed at calendar month-end by construction"). All three
+ * still hold as of this ticket.
  *
  * ⚠ A UNIFORM BOUND, NOT A DERIVED FACT ABOUT TRANSACTIONS — stated so it is never mistaken for
  * one. This constant is a NAV-history floor, applied here to a CASH-FLOW as-of (§2.3 reads
@@ -111,7 +128,7 @@ export const AS_OF_FLOOR = '2015-12-01';
  * already-shape-validated ISO string. Plain string comparison is correct and sufficient here
  * because every operand is already a real, zero-padded `YYYY-MM-DD` string by the time the
  * `.superRefine` below runs (`isoDate()` has already validated it) — lexical and chronological
- * order coincide for that shape, the same idiom `nav-boundary.ts`'s `isPreBoundaryPoint` uses
+ * order coincide for that shape, the same idiom `api/src/lib/nav-boundary.ts`'s `isPreBoundaryPoint` uses
  * (`pointDate < boundary.first_cron_checkpoint`). Out-of-range issues attach to the `as_of` path
  * so a caller's `fieldErrors(parsed.error)` (`schemas/account.ts` — the SELF-233 structured-error
  * shape already shipped for `/api/settings/planning-target`) surfaces them as a field-level 400
@@ -146,9 +163,14 @@ export type AllocationAsOfParams = z.infer<ReturnType<typeof asOfSchema>>;
  * The one function that turns a VALIDATED `AllocationAsOfParams` into the `ZoneResolvedAsOf`
  * both §2.2 allocation query modules require (SELF-238/240). Absent `as_of` → `serverTodayAsOf()`
  * (today, from the server clock — the V1 default every other read surface uses); present →
- * `userSuppliedAsOf` (UTC-resolved — see that factory's own doc for why). Never called on
- * unvalidated input: the type parameter is `AllocationAsOfParams`, produced only by
- * `asOfSchema(...).parse` / `.safeParse`, so a caller cannot skip validation and still compile.
+ * `userSuppliedAsOf` (UTC-resolved — see that factory's own doc for why).
+ *
+ * ⚠ THE TYPE DOES NOT ENFORCE THIS. `AllocationAsOfParams` is `z.infer`'d and therefore
+ * STRUCTURAL (`{ as_of?: string }`), so `resolveAllocationAsOf({ as_of: '1900-01-01' })` COMPILES,
+ * and `userSuppliedAsOf`'s backstop re-checks the SHAPE only — never the range. The floor/ceiling
+ * fence exists at exactly ONE layer, `asOfSchema`'s parse, and a caller that skips it skips both
+ * bounds. Call this ONLY on the output of `asOfSchema(...).safeParse` / `.parse`: that is a
+ * convention with a review check (`grep -rn 'resolveAllocationAsOf' api/src`), not a compile error.
  *
  * ⚠ NAME UNCHANGED ON THE MOVE (sitting item 12/AC1 — deliberate, not an oversight). This stays
  * `resolveAllocationAsOf` even though the schema it resolves from is now surface-neutral: it is
