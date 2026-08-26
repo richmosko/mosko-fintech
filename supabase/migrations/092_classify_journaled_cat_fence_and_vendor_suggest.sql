@@ -178,8 +178,19 @@
 --     annotations with journal_id IS NOT NULL (any classification)         = 0
 --     annotations with journal_id IS NOT NULL and an UNRESOLVABLE prototype = 0
 --     annotation rows total                                                = 6
---   Zero violations, so the fence lands without a data remediation. The exact
---   query is in the SELF-248 PR body.
+--   Zero violations, so the fence lands without a data remediation.
+--   The query, recorded here rather than in the PR body because a PR body is not
+--   where a future reader looks and a re-measurement must be reproducible:
+--     select count(*)
+--       from pfin.account_trans_annotation ann
+--       join pfin.posting_prototype pp on pp.id = ann.sub_cat_id
+--      where ann.journal_id is not null
+--        and pp.cat in ('Revenue', 'Expense', 'Equity');
+--   ⚠ Read with its companion figures above, which are what make the 0 ROBUST: the
+--   violating set is a SUBSET of `journal_id is not null`, and that count is also 0
+--   over a 6-row table — so the primary number does not depend on the join half of
+--   this query being written correctly. Re-measure both together, never the first
+--   alone.
 --
 -- ============================================================================
 
