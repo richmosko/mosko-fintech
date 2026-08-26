@@ -154,8 +154,9 @@ insert into pfin.user_taxonomy (users_id, cat, sub_cat, element)
 --   the split closes as a side effect of the FK re-target rather than via the domain-
 --   enforcement mechanism this note originally anticipated (see (v1) below for the flip).
 --   'Revenue' is a legitimate posting_prototype cat (Decision 4's enum).
-insert into pfin.posting_prototype (users_id, cat, sub_cat)
-  values (:'ta', 'Revenue', 'Salary') returning id as a_cf_sub \gset
+-- is_tax_payment added (SELF-245/091, boolean not null no default) — false, not tax semantics here.
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment)
+  values (:'ta', 'Revenue', 'Salary', false) returning id as a_cf_sub \gset
 
 -- account_trans security-legs (privileged; 017 #7 fence passes — all global securities).
 --  A: buys g_voo; buys g_spy THEN sells g_spy to net-zero (2 rows, same security → proves

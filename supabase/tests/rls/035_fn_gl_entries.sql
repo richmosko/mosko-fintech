@@ -130,16 +130,17 @@ insert into pfin.asset (users_id, asset_type, pricing_source, symbol, name)
 -- pfin.posting_prototype). A-owned (matched-tenant for the #10 sub_cat fence + the 029 split
 -- fence — leg tenant chain-resolves to A == posting_prototype.users_id).
 -- ---------------------------------------------------------------------
-insert into pfin.posting_prototype (users_id, cat, sub_cat)
-  values (:'ta', 'Revenue',  'Salary')    returning id as tx_a_rev  \gset
-insert into pfin.posting_prototype (users_id, cat, sub_cat)
-  values (:'ta', 'Expense',  'Groceries') returning id as tx_a_exp  \gset
-insert into pfin.posting_prototype (users_id, cat, sub_cat)
-  values (:'ta', 'Transfer', 'Move')      returning id as tx_a_xfer \gset
+-- is_tax_payment added (SELF-245/091, boolean not null no default) — false throughout.
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment)
+  values (:'ta', 'Revenue',  'Salary', false)    returning id as tx_a_rev  \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment)
+  values (:'ta', 'Expense',  'Groceries', false) returning id as tx_a_exp  \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment)
+  values (:'ta', 'Transfer', 'Move', false)      returning id as tx_a_xfer \gset
 
 -- Tenant B taxonomy (the minimal control ledger).
-insert into pfin.posting_prototype (users_id, cat, sub_cat)
-  values (:'tb', 'Revenue', 'Salary') returning id as tx_b_rev \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment)
+  values (:'tb', 'Revenue', 'Salary', false) returning id as tx_b_rev \gset
 
 -- ---------------------------------------------------------------------
 -- Tenant A accounts: USD cash + USD investment + EUR cash (the per-currency axis).

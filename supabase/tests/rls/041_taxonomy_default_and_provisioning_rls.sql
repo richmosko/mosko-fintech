@@ -18,7 +18,8 @@
 --     38 rows on the 001->084 stack (36 seeded at 041 + 077's 'Cash Balances' +
 --     080's 'Liability Balances', all asset-domain pre-split).
 --   - pfin.posting_prototype_default: NEW at 084, the cashflow half of the split.
---     27 rows on the 001->084 stack. Global shared-read (using(true)), SELECT to
+--     29 rows on the 001->091 stack (27 at 084; +2 Equity seed pair at 091/ADR-062).
+--     Global shared-read (using(true)), SELECT to
 --     authenticated only, NO users_id. tax_character DOES carry an FK to the
 --     ADR-024 global pfin.tax_character(code) registry (a strengthening over
 --     taxonomy_default's inline CHECK) — Decision-3-NEUTRAL not because there is
@@ -95,8 +96,9 @@
 -- POSTURE (SECURITY §4.5): SYNTHETIC ONLY — fixed-UUID tenants from _rls.tenant_a()/_b()/_c();
 --   NO PII / NO real account numbers / NO prod data. user_settings: B = 'totp' (the aal-gated
 --   user), C = 'none' (explicit fail-open), A = NO ROW (lazy/brand-new → coalesce fail-open).
---   taxonomy_default / posting_prototype_default are migration-seeded (38 / 27 rows on the
---   001->084 stack) — read, never re-seeded by this battery. All in a rolled-back txn.
+--   taxonomy_default / posting_prototype_default are migration-seeded (38 / 29 rows on the
+--   001->091 stack; was 38/27 pre-091) — read, never re-seeded by this battery. All in a
+--   rolled-back txn.
 --
 -- ROLE/SCHEMA DISCIPLINE (PR #121 root-cause): `_rls` grants no USAGE to authenticated; tenant
 --   UUIDs resolve to psql LITERALS via \gset at role=postgres; every _rls.set_tenant[_aal] is
@@ -106,11 +108,16 @@
 --   db-tests.yml) reaches this against the 001→041 reset stack. RE-VALIDATED against 001->084
 --   (ADR-058's split — counts re-measured live, not carried forward from any prior stack's
 --   figure, same discipline the 077/080 hardcode rule already required). RE-VALIDATED again
---   against 001->085 (`element` — every insert re-targeted, one leg added: (1b-element)). plan(26).
+--   against 001->085 (`element` — every insert re-targeted, one leg added: (1b-element)).
+--   RE-VALIDATED again against 001->091 (`is_tax_payment`/ADR-062 — both column-listed
+--   posting_prototype copy statements widened, DEFAULT2/(1b-proto)/(3b-proto)/(4a-proto)/
+--   (4b-proto) re-counted 27→29 live against the applied migration, no leg added — this is a
+--   sweep-fix, not a new mechanism). plan(26).
 --
--- ⚠ HARDCODE-VS-DYNAMIC (the 077/080 regression + fix rule, applied again at 084's split — a
---   NEW seed delta by this rule's own definition). The counts below are HARDCODED at 38 / 27,
---   not switched to a `select count(*)` self-comparison. A self-referential count is VACUOUS by
+-- ⚠ HARDCODE-VS-DYNAMIC (the 077/080 regression + fix rule, applied again at 084's split, and
+--   again at 091's Equity seed pair — each a NEW seed delta by this rule's own definition). The
+--   counts below are HARDCODED at 38 / 29 (was 38 / 27 pre-091), not switched to a
+--   `select count(*)` self-comparison. A self-referential count is VACUOUS by
 --   construction (DESIGN.md §8 rule 5 — a false assertion is worse than a vacuous one, and a
 --   dynamic total here is worse than false: it is a tautology that can never go RED, since the
 --   value under test and the expected value would be the SAME query). Whoever lands the next
@@ -132,8 +139,8 @@ select _rls.tenant_a() as ta, _rls.tenant_b() as tb, _rls.tenant_c() as tc \gset
 --  - Three tenants in auth.users.
 --  - user_settings: B = 'totp' (aal-gated), C = 'none' (explicit fail-open); A = NO ROW
 --    (brand-new / lazy — the coalesce fail-open case).
---  - taxonomy_default / posting_prototype_default are already populated (38 / 27 rows
---    on this 001->084+ stack) — the provisioning sources.
+--  - taxonomy_default / posting_prototype_default are already populated (38 / 29 rows
+--    on this 001->091 stack; was 38/27 pre-091) — the provisioning sources.
 -- ---------------------------------------------------------------------
 insert into auth.users (id) values (:'ta'), (:'tb'), (:'tc');
 insert into pfin.user_settings (users_id, mfa_policy) values (:'tb', 'totp'), (:'tc', 'none');
@@ -148,10 +155,11 @@ select is(
   (select count(*) from pfin.taxonomy_default)::bigint, 38::bigint,
   '(DEFAULT1) taxonomy_default: 38 rows post-split (asset-only provisioning source)'
 );
--- (DEFAULT2) posting_prototype_default is non-empty post-split.
+-- (DEFAULT2) posting_prototype_default is non-empty post-split. 29 (was 27 pre-091;
+--   091/ADR-062 added the 2-row Equity seed pair — ⚠ HARDCODE-VS-DYNAMIC rule, header note).
 select is(
-  (select count(*) from pfin.posting_prototype_default)::bigint, 27::bigint,
-  '(DEFAULT2) posting_prototype_default: 27 rows post-split (cashflow-only provisioning source)'
+  (select count(*) from pfin.posting_prototype_default)::bigint, 29::bigint,
+  '(DEFAULT2) posting_prototype_default: 29 rows post-091 (cashflow-only provisioning source)'
 );
 -- (DEFAULT3) the two provisioning sources are DISJOINT on (cat, sub_cat) — the
 --   precondition the app's two-upsert provisioning code assumes but never checks,
@@ -184,10 +192,13 @@ select lives_ok(
   '(1a-storage) owner provisions own storage rows PASS (+ fail-open): A with NO user_settings row provisions the full asset default set at aal1 (users_id = auth.uid()) — WITH CHECK accepts every row (coalesce→''none'' fail-open)'
 );
 -- (1a-proto) A runs the prototype-half provision statement → the whole cashflow
---      default set lands, mirroring (1a-storage) on the second table.
+--      default set lands, mirroring (1a-storage) on the second table. is_tax_payment added
+--      to the column-listed copy (SELF-245/091 — boolean not null no default on both tables;
+--      an unwidened list would not-null-violate here exactly as (1b-element)'s own header
+--      predicts for a silently-omitted column).
 select lives_ok(
-  $$ insert into pfin.posting_prototype (users_id, cat, sub_cat, tax_relevant, tax_character, display_order, notes)
-     select auth.uid(), cat, sub_cat, tax_relevant, tax_character, display_order, notes
+  $$ insert into pfin.posting_prototype (users_id, cat, sub_cat, tax_relevant, tax_character, display_order, notes, is_tax_payment)
+     select auth.uid(), cat, sub_cat, tax_relevant, tax_character, display_order, notes, is_tax_payment
      from pfin.posting_prototype_default
      on conflict (users_id, cat, sub_cat) do nothing $$,
   '(1a-proto) owner provisions own prototype rows PASS: same tenant, second table, mirrors (1a-storage)'
@@ -215,11 +226,11 @@ select is(
   0::bigint,
   '(1b-element) provisioning fixture extension: A''s 38 freshly-provisioned user_taxonomy rows carry ZERO NULL element values — the column-listed copy from taxonomy_default (BLOCK 1) propagates element correctly, not silently'
 );
--- (1b-proto) A now owns exactly 27 posting_prototype rows.
+-- (1b-proto) A now owns exactly 29 posting_prototype rows (was 27 pre-091).
 select is(
   (select count(*) from pfin.posting_prototype where users_id = :'ta')::bigint,
-  27::bigint,
-  '(1b-proto) owner provisioned all 27 cashflow default rows: A''s posting_prototype count = 27'
+  29::bigint,
+  '(1b-proto) owner provisioned all 29 cashflow default rows: A''s posting_prototype count = 29'
 );
 select set_config('role', 'postgres', true);
 
@@ -272,10 +283,11 @@ select lives_ok(
      on conflict (users_id, cat, sub_cat) do nothing $$,
   '(3a-storage) idempotent re-provision: A runs the storage-half statement a SECOND time → every row conflicts on unique(users_id,cat,sub_cat) → DO NOTHING → no error'
 );
--- (3a-proto) A runs the SAME prototype-half statement again.
+-- (3a-proto) A runs the SAME prototype-half statement again. is_tax_payment added to the
+--   column-listed copy (SELF-245/091), matching (1a-proto)'s widened column set.
 select lives_ok(
-  $$ insert into pfin.posting_prototype (users_id, cat, sub_cat, tax_relevant, tax_character, display_order, notes)
-     select auth.uid(), cat, sub_cat, tax_relevant, tax_character, display_order, notes
+  $$ insert into pfin.posting_prototype (users_id, cat, sub_cat, tax_relevant, tax_character, display_order, notes, is_tax_payment)
+     select auth.uid(), cat, sub_cat, tax_relevant, tax_character, display_order, notes, is_tax_payment
      from pfin.posting_prototype_default
      on conflict (users_id, cat, sub_cat) do nothing $$,
   '(3a-proto) idempotent re-provision: A runs the prototype-half statement a SECOND time → no error'
@@ -288,11 +300,11 @@ select is(
   38::bigint,
   '(3b-storage) idempotent re-provision: A''s user_taxonomy count is STILL 38 after the second run'
 );
--- (3b-proto) A STILL owns exactly 27 posting_prototype rows.
+-- (3b-proto) A STILL owns exactly 29 posting_prototype rows (was 27 pre-091).
 select is(
   (select count(*) from pfin.posting_prototype where users_id = :'ta')::bigint,
-  27::bigint,
-  '(3b-proto) idempotent re-provision: A''s posting_prototype count is STILL 27 after the second run'
+  29::bigint,
+  '(3b-proto) idempotent re-provision: A''s posting_prototype count is STILL 29 after the second run'
 );
 
 -- =====================================================================
@@ -308,12 +320,12 @@ select is(
 );
 select set_config('role', 'postgres', true);
 
--- (4a-proto) authenticated A reads the whole cashflow default set = 27.
+-- (4a-proto) authenticated A reads the whole cashflow default set = 29 (was 27 pre-091).
 select _rls.set_tenant_aal(:'ta'::uuid, 'aal1');
 select is(
   (select count(*) from pfin.posting_prototype_default)::bigint,
-  27::bigint,
-  '(4a-proto) posting_prototype_default global shared-read: authenticated A SELECTs all 27 rows (using(true), same posture as taxonomy_default)'
+  29::bigint,
+  '(4a-proto) posting_prototype_default global shared-read: authenticated A SELECTs all 29 rows (using(true), same posture as taxonomy_default)'
 );
 select set_config('role', 'postgres', true);
 
@@ -328,12 +340,13 @@ select is(
 );
 select set_config('role', 'postgres', true);
 
--- (4b-proto) same proof, posting_prototype_default: B (totp) at aal1 reads the same 27 rows.
+-- (4b-proto) same proof, posting_prototype_default: B (totp) at aal1 reads the same 29 rows
+--   (was 27 pre-091).
 select _rls.set_tenant_aal(:'tb'::uuid, 'aal1');
 select is(
   (select count(*) from pfin.posting_prototype_default)::bigint,
-  27::bigint,
-  '(4b-proto) posting_prototype_default readable identically across tenants + NOT aal-gated: B (totp) at aal1 reads the same 27 rows'
+  29::bigint,
+  '(4b-proto) posting_prototype_default readable identically across tenants + NOT aal-gated: B (totp) at aal1 reads the same 29 rows'
 );
 select set_config('role', 'postgres', true);
 

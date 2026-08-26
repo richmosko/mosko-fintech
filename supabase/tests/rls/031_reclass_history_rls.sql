@@ -125,9 +125,10 @@ insert into pfin.account_trans (account_id, transaction_date, amount, vendor, de
 insert into pfin.account_trans (account_id, transaction_date, amount, vendor, description)
   values (:accta, '2026-04-04', -50, 'vBF', 'backfill') returning trans_id as ct_bf \gset
 
-insert into pfin.posting_prototype (users_id, cat, sub_cat) values (:'ta','Expense','Groceries') returning id as a_exp \gset
-insert into pfin.posting_prototype (users_id, cat, sub_cat) values (:'ta','Expense','Rent') returning id as a_exp2 \gset
-insert into pfin.posting_prototype (users_id, cat, sub_cat) values (:'ta','Expense','SnapCat') returning id as a_snap \gset
+-- is_tax_payment added (SELF-245/091, boolean not null no default) — false throughout.
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment) values (:'ta','Expense','Groceries', false) returning id as a_exp \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment) values (:'ta','Expense','Rent', false) returning id as a_exp2 \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment) values (:'ta','Expense','SnapCat', false) returning id as a_snap \gset
 
 -- =====================================================================
 -- AC3 — CAPTURE CORRECTNESS (postgres; the DEFINER capture helper runs as owner regardless).

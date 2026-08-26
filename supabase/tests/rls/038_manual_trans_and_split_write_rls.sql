@@ -182,12 +182,13 @@ insert into pfin.account_trans (account_id, transaction_date, amount, vendor, de
 -- below would hit 023's conversion rejection instead of ever reaching 030's fence,
 -- silently testing the WRONG mechanism). 'Trade' is a legitimate cashflow-class cat
 -- (Decision 4's enum) — this was always the semantically "real" shape.
-insert into pfin.posting_prototype (users_id, cat, sub_cat)
-  values (:'ta', 'Expense', 'Groceries') returning id as a_sub \gset
-insert into pfin.posting_prototype (users_id, cat, sub_cat)
-  values (:'ta', 'Trade', 'BTO') returning id as a_trade \gset
-insert into pfin.posting_prototype (users_id, cat, sub_cat)
-  values (:'tb', 'Expense', 'Groceries') returning id as b_sub \gset
+-- is_tax_payment added (SELF-245/091, boolean not null no default) — false throughout.
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment)
+  values (:'ta', 'Expense', 'Groceries', false) returning id as a_sub \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment)
+  values (:'ta', 'Trade', 'BTO', false) returning id as a_trade \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment)
+  values (:'tb', 'Expense', 'Groceries', false) returning id as b_sub \gset
 
 -- =====================================================================
 -- BLOCK 1 — Σ=parent DEFERRABLE constraint on the UN-DORMED authenticated write path.

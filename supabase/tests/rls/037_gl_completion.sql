@@ -151,10 +151,11 @@ insert into auth.users (id) values (:'ta'), (:'tb');
 -- Taxonomy (A) — Transfer (transfer-leg contra + a reclassify source) + Revenue (compound leg +
 -- the reclassify target). Matched-tenant for the #10 sub_cat fence.
 -- ---------------------------------------------------------------------
-insert into pfin.posting_prototype (users_id, cat, sub_cat)
-  values (:'ta', 'Transfer', 'Move')   returning id as tx_xfer \gset
-insert into pfin.posting_prototype (users_id, cat, sub_cat)
-  values (:'ta', 'Revenue',  'Salary') returning id as tx_rev  \gset
+-- is_tax_payment added (SELF-245/091, boolean not null no default) — false throughout.
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment)
+  values (:'ta', 'Transfer', 'Move', false)   returning id as tx_xfer \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment)
+  values (:'ta', 'Revenue',  'Salary', false) returning id as tx_rev  \gset
 
 -- ---------------------------------------------------------------------
 -- Accounts. A: an investment (securities) + a cash (transfer/compound/freeze legs). B: minimal.

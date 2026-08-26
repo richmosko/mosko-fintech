@@ -231,12 +231,14 @@ insert into pfin.account_trans (account_id, transaction_date, amount, vendor, de
 -- POST-084 (ADR-058 Decision 1): these are now pfin.posting_prototype rows, not
 --   pfin.user_taxonomy — the cashflow half of the split. a_asset_sub is NEW: an
 --   asset-domain (storage-side) user_taxonomy row, for the (F3) conversion leg.
-insert into pfin.posting_prototype (users_id, cat, sub_cat)
-  values (:'ta', 'Expense', 'Rent') returning id as a_sub \gset
-insert into pfin.posting_prototype (users_id, cat, sub_cat)
-  values (:'ta', 'Expense', 'Groceries') returning id as a_sub2 \gset
-insert into pfin.posting_prototype (users_id, cat, sub_cat)
-  values (:'tb', 'Expense', 'Rent') returning id as b_sub \gset
+-- is_tax_payment added (SELF-245/091, boolean not null no default) — false throughout, none of
+-- this file's fixtures are about tax-payment semantics.
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment)
+  values (:'ta', 'Expense', 'Rent', false) returning id as a_sub \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment)
+  values (:'ta', 'Expense', 'Groceries', false) returning id as a_sub2 \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment)
+  values (:'tb', 'Expense', 'Rent', false) returning id as b_sub \gset
 insert into pfin.user_taxonomy (users_id, cat, sub_cat, element)
   values (:'ta', 'Brokerage', 'US Equity', 'asset') returning id as a_asset_sub \gset
 

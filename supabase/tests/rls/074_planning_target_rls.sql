@@ -189,8 +189,9 @@ insert into pfin.user_taxonomy (users_id, cat, sub_cat, element)
 -- POST-084: a_cf_sub is now a pfin.posting_prototype row, not pfin.user_taxonomy — the
 -- cashflow half of the split (ADR-058 Decision 1). Still A's OWN valid posting prototype
 -- (cat='Revenue', legal per the unconditional CHECK). BLOCK L3 below re-targets accordingly.
-insert into pfin.posting_prototype (users_id, cat, sub_cat)
-  values (:'ta', 'Revenue', 'Salary') returning id as a_cf_sub \gset
+-- is_tax_payment added (SELF-245/091, boolean not null no default) — false, not tax semantics here.
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment)
+  values (:'ta', 'Revenue', 'Salary', false) returning id as a_cf_sub \gset
 insert into pfin.user_taxonomy (users_id, cat, sub_cat, element)
   values (:'tb', 'Brokerage', 'US Equity', 'asset') returning id as b_sub \gset
 insert into pfin.user_taxonomy (users_id, cat, sub_cat, element)

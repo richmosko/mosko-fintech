@@ -232,8 +232,9 @@ insert into pfin.user_taxonomy (users_id, cat, sub_cat, element) values
   (:'ta','Alternatives','REIT','asset') returning id as a_alt \gset
 insert into pfin.user_taxonomy (users_id, cat, sub_cat, element) values
   (:'ta','Cash','CD','asset') returning id as a_cd \gset
-insert into pfin.posting_prototype (users_id, cat, sub_cat) values
-  (:'ta','Revenue','Dividend') returning id as a_cf \gset
+-- is_tax_payment added (SELF-245/091, boolean not null no default) — false, not tax semantics here.
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment) values
+  (:'ta','Revenue','Dividend', false) returning id as a_cf \gset
 insert into pfin.user_taxonomy (users_id, cat, sub_cat, element) values
   (:'tb','Marketable Securities','US-06-Financials','asset') returning id as b_eq \gset
 
