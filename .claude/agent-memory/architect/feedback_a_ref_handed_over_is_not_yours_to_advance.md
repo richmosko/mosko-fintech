@@ -47,3 +47,17 @@ same command as the claim.**
 
 Related: [[reread-the-ref-before-dispatching]] · [[anchor-confirm-requests-to-a-sha]] ·
 [[incoming-message-is-not-newer-state]] · [[verify-the-bytes-you-commit]]
+
+**⚠ It is not only shas — a DOC md5 is a ref too, and both directions bit in one session (SELF-340).**
+- **Inbound:** a teammate sent a file's md5, and by the time I read the file it had moved twice
+  (39 → 58 lines, a genuine restructure). Their stated hash was stale on arrival. **Measure the
+  file yourself in the turn you consume it, and measure it TWICE in the same command to prove it
+  is not mid-write** — then say which bytes you actually folded.
+- **Outbound:** I handed a combined doc's md5 to the teammate for read-back and then edited one
+  header line, so their read-back would have failed against a dead hash. **After you publish a
+  hash for someone else's verification, the artifact is frozen** — if you must change it, send the
+  correction before they read, and say what moved.
+
+The general form: **a hash quoted from a message is a claim about the past; a hash you measured
+is a claim about now.** Every artifact you hand over for checking acquires the sha discipline,
+not just git refs.

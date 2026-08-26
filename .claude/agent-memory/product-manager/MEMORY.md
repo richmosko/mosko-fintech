@@ -1,9 +1,10 @@
 # Memory index
 
 - [V1.3 preflight recalibration](project_v13_preflight_recalibration.md) — findings delivered 08-22 @0491830, gates on batch ratify; §7.19 generator 4th recurrence; §2.2.2 amendment drafted (§7.20 body gone).
+- [SELF-340 securities-edit ruling](project_340_securities_edit_ruling.md) — brief delivered 08-26 awaiting F/CTO; lean A+C-deferred; PM owes §2.4.3 amendment + C §7 staging entry post-ratify; skip_flag never shipped.
 
 - [Grep context-window blindness](feedback_grep_context_window_blindness.md) — never sweep with `-o '.{N}X.{N}'`; boundary-adjacent hits are invisible. Bare pattern first, context second.
-- [AC signatures: copied, not composed](feedback_ac_signatures_copied_not_composed.md) — grep the migration or mark SIGNATURE-PROVISIONAL; a param list is a capability claim (3× recurrence; reconcile via app-query-layer + check the substrate).
+- [AC signatures: copied, not composed](feedback_ac_signatures_copied_not_composed.md) — grep the migration or mark SIGNATURE-PROVISIONAL; a param list is a capability claim (4× recurrence; extends to PRD-quoted primitives — grep before load-bearing).
 - [Scope AC invariants](feedback_scope_ac_invariants.md) — enumerate contract failure cases; construction owner names the falsifying case, don't self-certify (SELF-223 AC6).
 - [Parity-fixture cell format](feedback_parity_fixture_cell_format.md) — fixture cells define required units; superset safe, missing cell = §3.3 gate failure (SELF-222 AC3).
 - [Component-history Option C ratify](project_component_history_option_c.md) — chain LANDED 2026-08-12 (ADR-054 Accepted, A9/§5.1/§7.13 placed); residuals: D5(2) rider is possibility-not-direction; never-list at D5; held-open-questions pattern.
