@@ -6,6 +6,8 @@
 // SIGNED ledger amount (+inflow / −outflow); the entry UX presents a positive magnitude
 // + an Inflow/Outflow toggle and derives the sign here (F/CTO-ratified).
 
+import type { ClassifyFailureCode } from '$lib/transactions/classifyFlow';
+
 /** Inflow ('in') = positive; Outflow ('out') = negative. */
 export type Direction = 'in' | 'out';
 
@@ -124,6 +126,17 @@ export type TransactionView = {
 	replaces_trans_id: number | null;
 	created_at: string;
 	category: { cat: string | null; sub_cat: string } | null;
+	/**
+	 * SELF-249 Sec FLAG-D fix — the annotation's RAW sub_cat_id, or null when no override exists
+	 * OR the existing annotation is note-only (sub_cat_id itself null). Load-bearing distinction
+	 * from `category`: `subCatLabel` (taxonomy.ts) never returns null — a note-only annotation
+	 * still produces a non-null `{ cat: null, sub_cat: 'Unsorted' }` — so `category !== null`
+	 * conflates "has ANY annotation row" with "has a chosen Sub-Cat". SubCatPicker's `classified`
+	 * state keys on THIS field, not on `category`, so a note-only row correctly falls through to
+	 * the suggested/hint states instead of rendering a false "solid, nothing to suggest" read.
+	 * EXPECTED CONTRACT — see the note above.
+	 */
+	sub_cat_id?: number | null;
 	note: string | null;
 	splits: SplitChild[];
 	split_count: number;
@@ -136,8 +149,10 @@ export type TransactionView = {
 	classifiableReason?: ClassifiableRefusalReason | null;
 	/** 017:234's provider-category IMMUTABLE display hint. Rendered ghost/muted ONLY when there
 	 *  is no override (`category` is null) and no vendor suggestion (`suggested_sub_cat_id` is
-	 *  null) — 017's constraint carried verbatim: display-only, NEVER a write, NEVER auto-mapped
-	 *  to sub_cat_id. EXPECTED CONTRACT — see the note above. */
+	 *  null) — 017's constraint, verbatim: "IMMUTABLE display hint only (R-18). All txns land
+	 *  Unsorted; NO auto-map / NO provider_category→sub_cat routing in V1." Applied here:
+	 *  display-only, NEVER a write, NEVER auto-mapped to sub_cat_id. EXPECTED CONTRACT — see the
+	 *  note above. */
 	provider_category?: string | null;
 	/** `pfin.fn_suggest_subcat_for_vendor()` result (migration 092) — a posting_prototype id, or
 	 *  null when there's no vendor-history match. Meaningful only when `category` is null (an
@@ -154,8 +169,16 @@ export type TransactionView = {
  * written to read equally well as a standing disabled-control note. ⚠ Copy constraint (PM,
  * SELF-249 AC6, verbatim): never say a classified transfer "cancels out" — a journal-less
  * Transfer falls to Suspense, not a clean offset. None of these strings make that claim.
+ *
+ * Sec NOTE-1: typed as a FULL `Record` over BOTH source unions (not `Record<string, string>`) —
+ * the compiler refuses to build this file if a code is ever added to either union without a
+ * matching entry here. That caught the five transport-level `ClassifyFailureCode` members
+ * (invalid_request/unauthenticated/server_error/network/malformed) this table previously left to
+ * the generic fallback. `unauthenticated` deliberately does NOT say "try again" — retrying
+ * without re-authenticating fails the identical way, so the copy sends the user to sign in
+ * instead of implying a retry will help.
  */
-const CLASSIFY_REFUSAL_COPY: Record<string, string> = {
+const CLASSIFY_REFUSAL_COPY: Record<ClassifyFailureCode | ClassifiableRefusalReason, string> = {
 	not_standard:
 		'This is a trade or transfer row — it’s categorized structurally, not through this picker. Use Edit above for a correction.',
 	has_security:
@@ -166,14 +189,24 @@ const CLASSIFY_REFUSAL_COPY: Record<string, string> = {
 	journaled_cat_conflict:
 		'This leg is now posted to a journal and can’t take this category. Detach it from the journal, then classify.',
 	invalid_sub_cat_id: 'That category is not available. Pick another.',
-	not_found: 'This transaction could not be found. Refresh the page and try again.'
+	not_found: 'This transaction could not be found. Refresh the page and try again.',
+	invalid_request: 'That didn’t go through. Refresh the page and pick the category again.',
+	unauthenticated: 'Your session has expired. Please sign in again, then reclassify.',
+	server_error: 'Something went wrong on our end. Please try again in a moment.',
+	network: 'Couldn’t reach the server — check your connection and try again.',
+	malformed: 'Something went wrong reading the response. Please refresh the page and try again.'
 };
 
-/** code/reason → user-meaningful copy, with a safe generic fallback for an unrecognized or
- *  absent code (never surfaces a raw server string or a blank error). */
+/** code/reason → user-meaningful copy, with a safe generic fallback for a code outside BOTH
+ *  known unions (never surfaces a raw server string or a blank error). The table above is
+ *  exhaustively typed over every KNOWN code (Sec NOTE-1) — this guard is defense for a genuinely
+ *  unrecognized value (a future server code this client hasn't been updated for yet), not a
+ *  substitute for keeping the table complete. */
 export function classifyRefusalCopy(code: string | null | undefined): string {
-	if (!code) return 'Could not save the category. Please try again.';
-	return CLASSIFY_REFUSAL_COPY[code] ?? 'Could not save the category. Please try again.';
+	if (code && Object.prototype.hasOwnProperty.call(CLASSIFY_REFUSAL_COPY, code)) {
+		return CLASSIFY_REFUSAL_COPY[code as ClassifyFailureCode | ClassifiableRefusalReason];
+	}
+	return 'Could not save the category. Please try again.';
 }
 
 /**

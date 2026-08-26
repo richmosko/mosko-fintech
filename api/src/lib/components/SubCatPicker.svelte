@@ -7,10 +7,13 @@
 	read-only, same as every other per-row control on that page).
 
 	THREE RENDER STATES (AC2), independent of the DISABLED gate below:
-	  · solid    — `transaction.category` is set (already classified). Value = the current
-	                sub_cat_id, recovered by label via `matchSubCatId` (load() embeds labels, not
-	                ids, on transactions — same recovery TransactionRow's openEdit/openRecat and
-	                SplitEditor's seed() already use; not a new pattern here).
+	  · solid    — `transaction.sub_cat_id` is non-null (a real Sub-Cat has been chosen). Value =
+	                that id directly. ⚠ Sec FLAG-D: keyed on `sub_cat_id`, NOT on `category` —
+	                `subCatLabel` (taxonomy.ts) never returns null, so a note-only annotation (an
+	                annotation row exists, but sub_cat_id itself is null) still produces a non-null
+	                `category`. Keying on `category` misread that case as "classified" and
+	                suppressed the hint/suggestion this row should still show — see
+	                TransactionView's `sub_cat_id` note (transaction-util.ts).
 	  · suggested — no override, but `fn_suggest_subcat_for_vendor()` (092) returned a match. The
 	                select PRE-FILLS to that suggestion (SelectField `muted` = dashed border +
 	                muted text) — a real, selectable value, just not yet confirmed. A "Confirm"
@@ -19,10 +22,12 @@
 	                fires on a value the user didn't alter).
 	  · hint      — no override, no suggestion. Value stays '' (Unsorted) — 017's provider_category
 	                hint renders through SelectField's own `hint` slot (already an accessible,
-	                aria-describedby-wired, muted-styled slot — reused, not duplicated). ⚠ IMMUTABLE
-	                DISPLAY ONLY (017's constraint, carried verbatim): the hint text is NEVER the
-	                select's value and NEVER auto-submitted. The only way this state produces a
-	                write is the user actively picking a Sub-Cat and pressing Save.
+	                aria-describedby-wired, muted-styled slot — reused, not duplicated). ⚠ 017's
+	                constraint, verbatim: "IMMUTABLE display hint only (R-18). All txns land
+	                Unsorted; NO auto-map / NO provider_category→sub_cat routing in V1." Applied
+	                here: the hint text is NEVER the select's value and NEVER auto-submitted. The
+	                only way this state produces a write is the user actively picking a Sub-Cat and
+	                pressing Save.
 
 	DISABLED GATE (AC6): `transaction.classifiable === false` disables the select AND replaces the
 	submit control with affordance text (`classifyRefusalCopy`) routing the correction to Edit
@@ -30,10 +35,11 @@
 	none of the copy table's strings make that claim — see transaction-util.ts).
 
 	⚠ EXPECTED CONTRACT: `classifiable` / `classifiableReason` / `provider_category` /
-	`suggested_sub_cat_id` are Backend load()-extension fields that may not be wired in every tree
-	yet (SELF-249 runs frontend/backend concurrently — see TransactionView's own note,
-	transaction-util.ts). Absent reads as `classifiable: true` with no hint/suggestion — this
-	component never treats "missing" as "refused."
+	`suggested_sub_cat_id` / `sub_cat_id` are Backend load()-extension fields that may not be wired
+	in every tree yet (SELF-249 runs frontend/backend concurrently — see TransactionView's own
+	note, transaction-util.ts). Absent reads as `classifiable: true` with no hint/suggestion, and
+	`sub_cat_id` absent reads as unclassified (falls through to suggested/hint, never a false
+	solid) — this component never treats "missing" as "refused" or as "confirmed."
 
 	SUBMIT is a `fetch`+JSON relay (classifyFlow.ts), NOT a form action — the classify endpoint
 	(SELF-248) is a `+server.ts` JSON API route, not a form action (api/CLAUDE.md forms rule: fetch
@@ -47,7 +53,6 @@
 	import SelectField from '$lib/components/SelectField.svelte';
 	import Button from '$lib/components/Button.svelte';
 	import {
-		matchSubCatId,
 		classifyRefusalCopy,
 		type SubCatGroup,
 		type TransactionView
@@ -77,14 +82,23 @@
 		fetchFn?: FetchLike;
 	} = $props();
 
-	const classified = $derived(transaction.category !== null);
+	// Sec FLAG-D: keyed on the raw id, not the label pair — see the header note above.
+	const classified = $derived(transaction.sub_cat_id != null);
 	const suggestion = $derived(transaction.suggested_sub_cat_id ?? null);
 	const providerCategory = $derived(transaction.provider_category ?? null);
 	// EXPECTED CONTRACT default: undefined (unwired loader) reads as classifiable — see header note.
 	const classifiable = $derived(transaction.classifiable ?? true);
 
+	// Sec FLAG-B (option C): a classifiable row's security_id is NULL by definition
+	// (classifiabilityOf's own M2 leg, transactions.ts), so 'Trade' can never be a legal pick from
+	// THIS picker — filtered here, at the point of use, rather than in loadCashflowSubCats
+	// (shared with entry/edit/split, where narrowing would reach flows this issue doesn't own).
+	// Backend's raise-time classifier is the real defense; this is the UI-side narrowing of what's
+	// offered so the invalid choice isn't reachable in the first place.
+	const pickerGroups = $derived(subCatGroups.filter((g) => g.label !== 'Trade'));
+
 	function seedValue(): string {
-		if (classified) return matchSubCatId(subCatGroups, transaction.category!.cat, transaction.category!.sub_cat);
+		if (classified) return String(transaction.sub_cat_id);
 		if (suggestion != null) return String(suggestion);
 		return '';
 	}
@@ -108,7 +122,7 @@
 	// invalidated the loader, or this row's own submit just succeeded) — but never while a submit
 	// is in flight, so a landed re-render can't clobber a click the user is still mid-way through.
 	$effect(() => {
-		void transaction.category;
+		void transaction.sub_cat_id;
 		void suggestion;
 		if (!saving) value = seedValue();
 	});
@@ -145,7 +159,7 @@
 		muted={style !== 'solid'}
 		hint={pickerHint}
 		placeholder={{ value: '', label: 'Unsorted' }}
-		groups={subCatGroups}
+		groups={pickerGroups}
 		errors={error ? [error] : []}
 	/>
 	{#if !classifiable}

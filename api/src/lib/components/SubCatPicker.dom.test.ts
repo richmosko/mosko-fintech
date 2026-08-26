@@ -46,12 +46,46 @@ function trans(overrides: Partial<TransactionView> = {}): TransactionView {
 describe('SubCatPicker — three render states (AC2)', () => {
 	it('solid: an already-classified row preselects the current value, not muted, no hint text', () => {
 		const { getByRole, queryByText } = render(SubCatPicker, {
-			props: { transaction: trans({ category: { cat: 'Expense', sub_cat: 'Groceries' } }), subCatGroups: GROUPS }
+			props: {
+				transaction: trans({ category: { cat: 'Expense', sub_cat: 'Groceries' }, sub_cat_id: 10 }),
+				subCatGroups: GROUPS
+			}
 		});
 		const select = getByRole('combobox') as HTMLSelectElement;
 		expect(select.value).toBe('10');
 		expect(queryByText(/Suggested from your vendor history/)).toBeNull();
 		expect(queryByText(/Provider category:/)).toBeNull();
+	});
+
+	it('Sec FLAG-D: a note-only annotation (category non-null, sub_cat_id null) is NOT solid — falls through to suggested/hint', () => {
+		// subCatLabel (taxonomy.ts) never returns null, so a note-only annotation still produces a
+		// non-null `category: { cat: null, sub_cat: 'Unsorted' }`. `classified` must key on
+		// `sub_cat_id`, not `category`, or this row wrongly renders solid with no hint/suggestion.
+		const { getByRole, getByText } = render(SubCatPicker, {
+			props: {
+				transaction: trans({ category: { cat: null, sub_cat: 'Unsorted' }, sub_cat_id: null, suggested_sub_cat_id: 11 }),
+				subCatGroups: GROUPS
+			}
+		});
+		const select = getByRole('combobox') as HTMLSelectElement;
+		expect(select.value).toBe('11');
+		expect(getByText(/Suggested from your vendor history — not saved until confirmed\./)).toBeTruthy();
+	});
+
+	it('Sec FLAG-D: same note-only annotation, no suggestion either → falls through to the hint state, not solid', () => {
+		const { getByRole, getByText } = render(SubCatPicker, {
+			props: {
+				transaction: trans({
+					category: { cat: null, sub_cat: 'Unsorted' },
+					sub_cat_id: null,
+					provider_category: 'Groceries'
+				}),
+				subCatGroups: GROUPS
+			}
+		});
+		const select = getByRole('combobox') as HTMLSelectElement;
+		expect(select.value).toBe('');
+		expect(getByText('Provider category: Groceries')).toBeTruthy();
 	});
 
 	it('suggested: no override but a vendor suggestion pre-fills the value with an unconfirmed hint', () => {
@@ -79,6 +113,23 @@ describe('SubCatPicker — three render states (AC2)', () => {
 		expect((getByRole('combobox') as HTMLSelectElement).value).toBe('');
 		expect(queryByText(/Provider category:/)).toBeNull();
 		expect(queryByText(/Suggested from/)).toBeNull();
+	});
+});
+
+describe('SubCatPicker — Sec FLAG-B: Trade is never offered', () => {
+	it('filters a Trade group out of the rendered options even when subCatGroups carries one', () => {
+		const groupsWithTrade: SubCatGroup[] = [
+			...GROUPS,
+			{ label: 'Trade', options: [{ value: '99', label: 'Buy' }] }
+		];
+		const { getByRole, queryByText } = render(SubCatPicker, {
+			props: { transaction: trans(), subCatGroups: groupsWithTrade }
+		});
+		const select = getByRole('combobox') as HTMLSelectElement;
+		expect(within(select).queryByText('Buy')).toBeNull();
+		expect(queryByText('Trade')).toBeNull();
+		// The sibling group is untouched — this is a targeted exclusion, not an empty picker.
+		expect(within(select).getByText('Groceries')).toBeTruthy();
 	});
 });
 
@@ -163,7 +214,11 @@ describe('SubCatPicker — inversion checks', () => {
 		// The SAME fixture, only `classifiable: true` — proves the branch above can also PASS,
 		// so the guard is a live predicate rather than one that can never fire either way.
 		const { getByRole } = render(SubCatPicker, {
-			props: { transaction: trans({ category: { cat: 'Expense', sub_cat: 'Groceries' } }), subCatGroups: GROUPS, classifyFn }
+			props: {
+				transaction: trans({ category: { cat: 'Expense', sub_cat: 'Groceries' }, sub_cat_id: 10 }),
+				subCatGroups: GROUPS,
+				classifyFn
+			}
 		});
 		await fireEvent.click(getByRole('button'));
 		expect(classifyFn).toHaveBeenCalledTimes(1);

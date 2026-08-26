@@ -48,12 +48,41 @@ function trans(overrides: Partial<TransactionView> = {}): TransactionView {
 describe('SubCatPicker SSR — solid state', () => {
 	it('an already-classified row selects the matching option and is not muted', () => {
 		const { body } = render(SubCatPicker, {
-			props: { transaction: trans({ category: { cat: 'Expense', sub_cat: 'Groceries' } }), subCatGroups: GROUPS }
+			props: {
+				transaction: trans({ category: { cat: 'Expense', sub_cat: 'Groceries' }, sub_cat_id: 10 }),
+				subCatGroups: GROUPS
+			}
 		});
 		expect(body).toContain('<option value="10" selected="">');
 		expect(body).not.toContain('is-muted');
 		expect(body).not.toContain('Suggested from');
 		expect(body).not.toContain('Provider category:');
+	});
+
+	it('Sec FLAG-D: a note-only annotation (category non-null, sub_cat_id null) renders the hint state, not solid', () => {
+		const { body } = render(SubCatPicker, {
+			props: {
+				transaction: trans({
+					category: { cat: null, sub_cat: 'Unsorted' },
+					sub_cat_id: null,
+					provider_category: 'Groceries'
+				}),
+				subCatGroups: GROUPS
+			}
+		});
+		expect(body).toContain('is-muted');
+		expect(body).toContain('Provider category: Groceries');
+		expect(body).not.toContain('<option value="10" selected="">');
+	});
+});
+
+describe('SubCatPicker SSR — Sec FLAG-B: Trade is never offered', () => {
+	it('a Trade group in subCatGroups is filtered out of the rendered <optgroup> set', () => {
+		const groupsWithTrade: SubCatGroup[] = [...GROUPS, { label: 'Trade', options: [{ value: '99', label: 'Buy' }] }];
+		const { body } = render(SubCatPicker, { props: { transaction: trans(), subCatGroups: groupsWithTrade } });
+		expect(body).not.toContain('optgroup label="Trade"');
+		expect(body).not.toContain('<option value="99"');
+		expect(body).toContain('optgroup label="Expense"');
 	});
 });
 
