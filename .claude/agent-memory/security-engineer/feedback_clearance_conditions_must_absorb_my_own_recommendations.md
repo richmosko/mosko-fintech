@@ -88,9 +88,26 @@ either **reopens the decision rather than carrying forward**; (iii) their paired
 posture DURABLY lives — a work-queue Source line is not where a future reader looks for
 *why we tolerate this*; recommend the decision record and let the queue entry link to it.
 
+**⚠ A CONDITION CAN INVALIDATE A PIN THAT LIVES IN A FILE I AM NOT ASKING ANYONE TO TOUCH.**
+At SELF-248 / `092` I required the existing-violation query be inlined into the migration
+header — a `--` block, zero executable lines, nothing reaching `pg_description`. But QA's
+paired battery header pins the migration blob by **md5**, so my comment-only edit
+invalidates a hash in a *different file owned by a different agent*. Caught it while
+drafting and shipped the condition as an explicit **pair** (Architect edits the header, QA
+re-hashes and updates the FINALIZED-against line, same PR) plus an escape hatch (put the
+query in the PR body instead, no file change, no pin break). **"Comment-only" bounds the
+BEHAVIOUR of a change, never its BLAST RADIUS** — before requiring any edit, grep for
+what binds to that file's bytes (`md5`, `sha`, `git show HEAD:<path>` hashes, exact-string
+catalog assertions). See [[my-review-measurements-become-quoted-sources]] and
+[[verify-the-stated-correctness-mechanism]]: the pin is a real control and breaking it
+silently is worse than the reproducibility gap I was closing.
+
 **How to apply:**
 - Before sending: re-read my own findings section and ask *"does the diff I just described
   as acceptable contain the changes I just asked for?"*
+- For every edit I require, ask **what binds to that file's BYTES** — an md5/sha pin, a
+  hashed-blob assertion, an exact-string catalog leg. If something does, ship the condition
+  as a pair with its owner named, or offer a venue that avoids the byte change entirely.
 - After any ruling on one of my findings, re-read **my own conditions** and ask whether the
   ruling changed what they are holding up. A condition whose text is unchanged can still
   have acquired a new dependent.

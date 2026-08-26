@@ -143,3 +143,69 @@ per-verb cleanup asymmetry is the actual defect generator, and the leg is only w
 unfalsifiable, it does not let anything through. **Flag, do not veto**, and say so explicitly so the
 GREEN is not read as having missed it. But recommend it ride the PR: a one-line statement move in a
 test file is free pre-merge and costs a whole PR cycle after — see [[block-when-the-vehicle-cost-inverts]].
+
+**8. A `lives_ok` CONTROL THAT WRITES A VALUE THE ROW ALREADY HOLDS CANNOT FAIL — and a new fence can
+collapse the fixture's legal value-space to one, making every retarget same-value (SELF-248 / `092`
+/ `037`).** `037`'s `(5e)` is the non-vacuous control for `(5d)`: *reclassify after reopen is
+ALLOWED, proving `(5d)`'s rejection was close-status-driven and not a blanket reclassify block.* A
+new fence forced its target to be retargeted to `tx_xfer` — which is **exactly what the fixture had
+already seeded on that row**. The leg became `set sub_cat_id = <current value>`. A `BEFORE UPDATE`
+trigger still fires, so it stays GREEN; but a **transition-scoped** guard
+(`WHEN new.sub_cat_id IS DISTINCT FROM old.sub_cat_id`) would block every real reclassify and
+`(5e)` would *still* pass — the exact state-predicate-vs-transition-predicate blindness the fence's
+own ruling exists to rule out, reintroduced into the control.
+
+**Why it is not avoidable by care alone, which is what makes it a class:** post-fence, a journaled
+non-security leg had **one** legal class (`Revenue`/`Expense`/`Equity` forbidden; `Trade` needs
+`security_id`), and the fixture seeded exactly one `Transfer` prototype. **"Reclassify" had no legal
+destination other than the one the row held.** No retarget could have been non-vacuous without
+*adding* a prototype. So: when a new fence narrows a column's legal domain, ask whether any
+retargeted leg's destination set still has **more than one member** — if not, the fixture must grow,
+and a two-token retarget is structurally insufficient no matter how carefully it is reasoned.
+
+**The rule, and it is the half I got wrong: VERIFYING INTENT-PRESERVATION IS NOT VERIFYING
+NON-VACUITY.** I cleared this retarget once by checking that the leg's stated purpose survived — and
+never checked whether the retargeted write still *changes anything*. The seed line was one `grep`
+away (`grep -n "<row>" <battery> | grep -v '^\s*[0-9]*:--'` shows both the seed and every write).
+**For any retargeted assertion, diff the new target against the row's SEEDED value before clearing
+it.** Same family as [[instrument-cannot-observe-the-property]] and
+[[inversion-test-the-rationale-not-the-presence]] in the project index.
+
+**⚠ AND MY OWN REMEDIATION MADE IT WORSE.** My FLAG-1 retargeted the *paired* leg `(5d)` to the same
+value, to remove its hidden dependency on trigger name order — a correct fix that also turned `(5d)`
+into a same-value write. `(5d)` still discriminates, so no defect; but I specified a change without
+checking its effect on the fixture's value-space, which is [[clearance-conditions-must-absorb-my-own-recommendations]]
+missed on the recommendation itself. **When recommending a retarget, name the destination value and
+check it against the seed in the same breath.**
+
+**Severity and the ratchet question.** A control that cannot fail is a **defect**, not a standard I
+forgot to put on a menu — so it earns a condition even after clearance was scoped, which my
+anti-ratchet rule otherwise forbids. But say all three things in the same message: that it is
+partly my own miss, that the fix is two lines in a file already open, and that **booking it instead
+is acceptable if the coordinator prefers** — the defect is in a test's sensitivity, not in a
+security boundary. Offering the out is what keeps the ratchet honest.
+
+**9. FEWER FAILURES THAN PREDICTED USUALLY MEANS THE PROBE WAS SURGICAL, NOT LOOSE — read the
+guard's BRANCH STRUCTURE before doubting the result (SELF-248 / `037` (5e)/(5f)).** QA inverted a
+freeze guard ("corrupted the status check; a reopened journal still reads frozen") and reported
+**exactly one** failure. I predicted two: `(5f)` detaches a leg attached to the *same* journal, so a
+blanket corruption should have caught it too. Read the function: it has **two independent branches
+with two separate `select status into v_status` reads**, and the NEW-side branch is self-gated on
+`new.journal_id is not null`. `(5e)` writes `sub_cat_id` with `journal_id` still non-null → fires.
+`(5f)` writes `journal_id = null` → **the branch skips itself**. Corrupting the NEW-side read alone
+yields exactly one failure. The one-line summary understated the probe's precision.
+
+**The rule:** before challenging an inversion that moved fewer legs than expected, **count the
+guard's raise sites and their own gating predicates.** "The status check" was two checks. Resolve it
+by reading the function rather than sending the author back with a question — a question I can
+answer myself costs a round trip and reads as doubt about their work.
+
+**⚠ Third instance in one review of the same underlying error: treating a COMPOSITE as a UNIT.** The
+other two were reading a citation's title without its amendments, and accepting a four-leg bypass
+enumeration as four equivalent legs ([[triage-a-multileg-bypass-leg-by-leg]]). **Whenever a noun in
+a report is singular — "the check", "the allowlist", "the bypass", "the fence" — ask how many things
+it actually names.** That question would have caught all three.
+
+**Also worth keeping: a leg covered by TWO branches cannot attribute which one regressed.** `(5e)`
+trips either branch, so it is a sensitivity leg, not a branch-attributing one; `(5f)` is the OLD-side
+observer. Say so, or someone later reads a green `(5e)` as covering both.

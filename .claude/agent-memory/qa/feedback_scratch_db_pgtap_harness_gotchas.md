@@ -1,6 +1,6 @@
 ---
 name: feedback-scratch-db-pgtap-harness-gotchas
-description: Mechanical gotchas building a from-scratch pgTAP verification DB (docker exec -i, pgtap schema placement, permissive-direction privilege gap, pg_prove -v mount path) — hit all three authoring the SELF-218 battery verification, 2026-08-12; #5 added SELF-245, 2026-08-25.
+description: Mechanical gotchas building a from-scratch pgTAP verification DB (docker exec -i, pgtap schema placement, permissive-direction privilege gap, pg_prove -v mount path, \'-escaping) — hit all three authoring the SELF-218 battery verification, 2026-08-12; #5 added SELF-245, 2026-08-25; #6 added SELF-248, 2026-08-25.
 metadata:
   type: feedback
 ---
@@ -120,3 +120,19 @@ alone. [[feedback_instrument_cannot_observe_the_property]]
    from a container/mount boundary — independently verify the thing on the far side
    actually exists (`ls` the mount, `select extname from pg_extension` the load)
    before building on top of it.
+
+6. **A backslash-escaped quote (`\'`) inside a plain (non-`E`-prefixed) SQL string
+   literal is NOT a valid escape and breaks the statement, not just the string.**
+   Wrote a pgTAP description literal containing `(Sec (C\'\'))` — meant as
+   `(Sec (C''))`, the double-prime label from a Sec doc. Standard SQL escapes an
+   embedded quote by DOUBLING it (`''`), not backslash-escaping; `\'` is only special
+   inside an `E'...'`-prefixed string. psql saw the backslash as a literal character,
+   the FIRST unescaped `'` ended the string early, and the leftover `''))'` was parsed
+   as a stray command — `pg_prove` reported `error: invalid command \'))'` at the
+   line, which reads like a mount/file problem (matches gotcha #5's symptom class)
+   but is a plain SQL-quoting bug in the test file itself, caught only by actually
+   running it through pg_prove (never `psql` — SELF-298's own lesson generalizes:
+   both a plan-count check and a raw-SQL-syntax check need the real consumer, not eyes
+   alone). Fix: never backslash-escape a quote in a plain string literal — double it,
+   or (safer for a stylistic mark like a prime symbol) just spell it out in words
+   ("C double-prime") and skip the quote entirely.
