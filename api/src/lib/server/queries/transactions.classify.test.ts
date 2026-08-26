@@ -235,10 +235,17 @@ describe('classifyTrans — write path', () => {
 		expect((result as { code?: string }).code).toBe('invalid_sub_cat_id');
 	});
 
-	it('D-8 condition 6 — DB raise: the NEW journaled-cat-fence (092) → 409 journaled_cat_conflict, DISTINCT from the app-level `journaled` code', async () => {
+	it('D-8 condition 6 — DB raise: 092s "rejected" leg (verbatim prefix) → 409 journaled_cat_conflict, DISTINCT from the app-level `journaled` code', async () => {
 		const supabase = makeSupabase({
 			trans: { data: CLASSIFIABLE_TRANS, error: null },
-			upsertError: { code: 'P0001', message: 'journaled leg cannot be classified as Revenue/Expense/Equity: ...' }
+			// Verbatim prefix from 092 (fn_account_trans_annotation_journaled_cat_fence): "journaled-leg
+			// classification rejected: trans_id % is attached to journal % and so cannot carry a %
+			// classification (sub_cat_id %) — a journaled leg must post to Journal Clearing, ..."
+			upsertError: {
+				code: 'P0001',
+				message:
+					'journaled-leg classification rejected: trans_id 1 is attached to journal 55 and so cannot carry a Revenue classification (sub_cat_id 7) — a journaled leg must post to Journal Clearing, and this class would post it as income or spending instead. Reclassify the leg (Transfer or Trade), or detach it from the journal first (SELF-248 AC10 / ADR-058 084 P3)'
+			}
 		});
 		const result = await classifyTrans(supabase, 1, 7);
 		expect(result).toEqual({
@@ -252,6 +259,47 @@ describe('classifyTrans — write path', () => {
 		// The two codes must never collide — this is the whole point of D-8 condition 6.
 		if (result.ok) throw new Error('expected a refusal');
 		expect(result.code).not.toBe('journaled');
+	});
+
+	it('D-8 condition 6 — DB raise: 092s "fence" leg (unresolvable prototype, verbatim prefix) → also 409 journaled_cat_conflict', async () => {
+		const supabase = makeSupabase({
+			trans: { data: CLASSIFIABLE_TRANS, error: null },
+			// Verbatim prefix from 092: "journaled-leg classification fence: cannot resolve class
+			// (sub_cat_id %) for trans_id % attached to journal % — not found or not visible under
+			// current AAL; fail-closed (SELF-248 AC10)"
+			upsertError: {
+				code: 'P0001',
+				message:
+					'journaled-leg classification fence: cannot resolve class (sub_cat_id 999) for trans_id 1 attached to journal 55 — not found or not visible under current AAL; fail-closed (SELF-248 AC10)'
+			}
+		});
+		const result = await classifyTrans(supabase, 1, 999);
+		if (result.ok) throw new Error('expected a refusal');
+		expect(result.code).toBe('journaled_cat_conflict');
+		expect(result.status).toBe(409);
+	});
+
+	it('COLLISION GUARD — the #12 journal-ATTACH fence (033, "journal attach rejected: ... matched-tenant ...") is NOT miscoded as journaled_cat_conflict; a loose /journal/i test would have collided here', async () => {
+		const supabase = makeSupabase({
+			trans: { data: CLASSIFIABLE_TRANS, error: null },
+			// Verbatim from 033 (fn_account_trans_annotation_matched_journal) — a DIFFERENT write
+			// (attaching journal_id) this endpoint never performs, but the raise text contains the
+			// word "journal" just like 092's fence does, so the classifier MUST key off the prefix.
+			upsertError: {
+				code: 'P0001',
+				message:
+					'journal attach rejected: journal_id 3 is not a journal owned by and visible to the tenant of trans_id 1 — not found, not visible under current AAL, or cross-tenant (ADR-011 Decision 3 canonical instance #12 / matched-tenant leg fence, hybrid-resolved; M2 / SELF-295)'
+			}
+		});
+		const result = await classifyTrans(supabase, 1, 7);
+		if (result.ok) throw new Error('expected a refusal');
+		expect(result.code).not.toBe('journaled_cat_conflict');
+		// Falls through to the matched-tenant classifier (it says "matched-tenant") — a generic,
+		// still-safe 400, not a security hole; this write path never sets journal_id so the raise is
+		// unreachable through THIS endpoint in practice. Recorded so the classification is INTENTIONAL,
+		// not accidental.
+		expect(result.code).toBe('invalid_sub_cat_id');
+		expect(result.status).toBe(400);
 	});
 
 	it('an unexpected DB error code → 500, not silently reclassified as a 4xx', async () => {

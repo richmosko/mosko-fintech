@@ -24,18 +24,22 @@ function isCrossTenantSubCat(message: string): boolean {
 }
 
 /**
- * DB raise-message → migration 092's NEW `fn_..._journaled_cat_fence` trigger (D-8 / SELF-248
- * AC10; V1.3 pre-flight sitting items 6a + 15). Distinct from `isCrossTenantSubCat` above — the
- * EXISTING #10 fence (023, `fn_account_trans_annotation_matched_sub_cat`) never mentions "journal"
- * in its raise text, so matching on that one word alone cannot collide with it. Kept as its own
- * named classifier (rather than folded into `isCrossTenantSubCat`) because the two must map to
- * DISTINCT response codes — D-8 condition 6's binding requirement that the app-level `journaled`
- * pre-check refusal and this DB-level defense-in-depth raise stay DISTINGUISHABLE to the caller,
- * even though both concern the same underlying invariant (journal_id + Revenue/Expense/Equity
- * cannot coexist on one annotation row).
+ * DB raise-message → migration 092's NEW `fn_account_trans_annotation_journaled_cat_fence`
+ * trigger (D-8 / SELF-248 AC10; V1.3 pre-flight sitting items 6a + 15). Keys off the message
+ * PREFIX (team-lead, confirmed live against 092's authored text), NOT a bare `/journal/i`
+ * substring test: `pfin.fn_account_trans_annotation_matched_journal` (033, the #12 matched-tenant
+ * JOURNAL ATTACH fence — a completely different write, this endpoint never sets journal_id) also
+ * raises "journal attach rejected: ... (... matched-tenant leg fence ...)" — a real collision a
+ * loose "journal" substring test would have folded into this code, mislabeling a cross-tenant
+ * journal-attach rejection as this endpoint's own defense-in-depth. 092's two raises both start
+ * "journaled-leg classification ..." (the "fence:" unresolvable-prototype leg and the "rejected:"
+ * defect-state leg) — a prefix neither of 033's or 023's raises share. Kept as its own named
+ * classifier (not folded into `isCrossTenantSubCat`) because the two must map to DISTINCT response
+ * codes — D-8 condition 6's binding requirement that the app-level `journaled` pre-check refusal
+ * and this DB-level defense-in-depth raise stay DISTINGUISHABLE to the caller.
  */
 function isJournaledCatFenceRejection(message: string): boolean {
-	return /journal/i.test(message);
+	return /^journaled-leg classification/i.test(message);
 }
 /**
  * DB raise-message → 058 §(4)'s CLOSED-ACCOUNT TRANSFER-IN FENCE.

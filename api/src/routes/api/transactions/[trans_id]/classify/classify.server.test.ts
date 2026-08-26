@@ -168,16 +168,37 @@ describe('POST /api/transactions/:trans_id/classify — orchestration', () => {
 		expect((await res.json()).code).toBe('invalid_sub_cat_id');
 	});
 
-	it('D-8 condition 6 — the DB journaled-cat-fence raise maps to a code DISTINCT from the app-level journaled refusal', async () => {
+	it('D-8 condition 6 — the DB journaled-cat-fence raise (verbatim 092 prefix) maps to a code DISTINCT from the app-level journaled refusal', async () => {
 		const res = await POST(
 			makeEvent('1', { sub_cat_id: 7 }, { id: SESSION_UID }, {
 				trans: { data: CLASSIFIABLE, error: null },
-				upsertError: { code: 'P0001', message: 'journaled leg cannot be classified as Revenue/Expense/Equity' }
+				upsertError: {
+					code: 'P0001',
+					message:
+						'journaled-leg classification rejected: trans_id 1 is attached to journal 55 and so cannot carry a Revenue classification (sub_cat_id 7) — a journaled leg must post to Journal Clearing, and this class would post it as income or spending instead. Reclassify the leg (Transfer or Trade), or detach it from the journal first (SELF-248 AC10 / ADR-058 084 P3)'
+				}
 			})
 		);
 		expect(res.status).toBe(409);
 		const body = await res.json();
 		expect(body.code).toBe('journaled_cat_conflict');
 		expect(body.code).not.toBe('journaled');
+	});
+
+	it('COLLISION GUARD — the #12 journal-ATTACH fence (033) raise is NOT miscoded as journaled_cat_conflict (a loose /journal/i test would have collided)', async () => {
+		const res = await POST(
+			makeEvent('1', { sub_cat_id: 7 }, { id: SESSION_UID }, {
+				trans: { data: CLASSIFIABLE, error: null },
+				upsertError: {
+					code: 'P0001',
+					message:
+						'journal attach rejected: journal_id 3 is not a journal owned by and visible to the tenant of trans_id 1 — not found, not visible under current AAL, or cross-tenant (ADR-011 Decision 3 canonical instance #12 / matched-tenant leg fence, hybrid-resolved; M2 / SELF-295)'
+				}
+			})
+		);
+		const body = await res.json();
+		expect(body.code).not.toBe('journaled_cat_conflict');
+		expect(body.code).toBe('invalid_sub_cat_id');
+		expect(res.status).toBe(400);
 	});
 });
