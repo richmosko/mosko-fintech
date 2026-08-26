@@ -303,7 +303,7 @@ describe('reverseAndReplaceTrans — duplicate-reversal DB refusal (Sec AMBER FL
 		expect(result).toEqual({ ok: false, status: 422, message: 'Could not save the edit. Please try again.' });
 	});
 
-	it('a 23505 with no code at all (defensive: some drivers may omit it) but the index name present still matches on message alone', async () => {
+	it('a 23505 with the index name but NO `code` field does NOT match — the `code === \'23505\'` conjunct gates the classifier, so this falls through to the generic 422 (documents the conjunct, does not work around it)', async () => {
 		const supabase = makeSupabase({
 			insertResult: {
 				data: null,
