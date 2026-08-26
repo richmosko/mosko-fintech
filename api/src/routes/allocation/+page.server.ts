@@ -46,9 +46,10 @@
 //     belt-and-suspenders posture as the other two reads; degrades to 'unknown' on an unexpected
 //     throw (loadNetWorthView already fails its own count read soft to 'unknown' internally).
 //
-// NO `as_of` QUERY-PARAM SUPPORT YET. `schemas/allocation.ts`'s `allocationAsOfSchema` /
-// `resolveAllocationAsOf` exist for exactly this (SELF-238 AC8 / SELF-240 AC6's shared clause),
-// but that file's own header explicitly defers wiring to "whoever builds the route" and requires
+// NO `as_of` QUERY-PARAM SUPPORT YET. `schemas/asOf.ts`'s `asOfSchema` / `resolveAllocationAsOf`
+// exist for exactly this (SELF-238 AC8 / SELF-240 AC6's shared clause; moved from
+// `schemas/allocation.ts` at SELF-247/D-6 — surface-neutral rename, same deferred-wiring
+// posture), but that file's own header explicitly defers wiring to "whoever builds the route" and requires
 // either a namespace prefix or confirmation the route carries no other params (root's own
 // `chart_`-prefix precedent, for the identical reason). Frontend's delivered `+page.svelte` reads
 // no query string at all today — no as-of picker exists to exercise it — so wiring an unused
