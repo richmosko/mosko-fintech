@@ -544,6 +544,30 @@ export async function loadVendorSuggestions(
  * is a follow-up
  * 023 annotation upsert (benign if it fails — the row is then Unsorted-pending, a valid state;
  * the money-critical {reversal, replacement} pair already committed atomically).
+ *
+ * ⚠ SELF-340 (fixed here, live on `main` since d6b41cd5/SELF-204, ~1 month, found by SELF-249's
+ *   walk gate): a supabase-js/PostgREST batch `.insert([a, b])` builds ONE statement whose column
+ *   list is the UNION of every key across the array — a key present on one object but OMITTED on
+ *   its sibling sends that sibling an EXPLICIT NULL, never the column's DB DEFAULT. `reversal`
+ *   below always carried `quantity`; `corrected` omitted it entirely (a stale comment claimed "0
+ *   default" — the column default, which a batch insert never reaches). Every edit failed with a
+ *   NOT NULL violation, unconditionally.
+ *
+ *   FIX: both objects below now declare the FULL union of columns EXPLICITLY — `reversal` and
+ *   `corrected` carry the SAME key set (`account_id`, `transaction_date`, `amount`, `vendor`,
+ *   `description`, `transaction_type`, `security_id`, `quantity`, `is_reverse`,
+ *   `replaces_trans_id`, `import_hash`), each with its own correct value or an explicit `null`
+ *   (`corrected` adds `quantity: 0` + `security_id: null` + `replaces_trans_id: null`; `reversal`
+ *   adds `import_hash: null`). A point-patch of `quantity` alone would leave the SAME defect class
+ *   live for the next column either row's author adds without remembering the other — this closes
+ *   the CLASS, not the instance, for this call site (SELF-340's own "standing lesson" framing), and
+ *   the identical-key-set shape is itself the regression invariant the paired vitest coverage
+ *   checks. Chose explicit-full-key-set over splitting into two single-row inserts: this INSERT is
+ *   the money-critical {reversal, replacement} pair's ONLY atomicity boundary (one PostgREST
+ *   statement = one txn) — two inserts would let a reversal land with no replacement on a partial
+ *   failure, which is worse than today's uniform failure, not better. See the SWEEP note on other
+ *   `.insert([`/`.upsert([` array-literal call sites in this codebase (SELF-340 dispatch) for where
+ *   else this class was checked.
  */
 export async function reverseAndReplaceTrans(
 	supabase: SupabaseClient,
@@ -574,6 +598,94 @@ export async function reverseAndReplaceTrans(
 	if ((reversedCount ?? 0) > 0)
 		return { ok: false, status: 409, message: 'This transaction has already been edited.' };
 
+	// (2a) Security-row refusal (SELF-340 F/CTO ruling, 2026-08-26 — Option A+C-deferred; PR #567;
+	// see the joint options brief for the full mechanism/product analysis). A security-linked row
+	// carries FOUR coupled numbers (quantity, cost_basis, amount, security_id) read by TWO
+	// different consumers (fn_holdings_as_of for shares held; fn_gl_entries for book value) —
+	// `manualTransEditSchema` reaches only `amount`, so this path's reversal is cash-shaped
+	// (security_id/cost_basis omitted, i.e. NULL) while the ORIGINAL carried real share/book
+	// values. The result is not a visible error: the trial balance still sums to zero (a Suspense
+	// contra absorbs the discrepancy), but `fn_holdings_as_of` reports zero shares while
+	// `trade_position` keeps the book value FOREVER — holdings and the GL diverge silently,
+	// permanently, in opposite directions, with no watcher. On the immutable 004 ledger there is
+	// NO delete, NO skip, NO sell path, NO basis_adjust writer, and lot-matching is write-dormant —
+	// so this is refused rather than left reachable, because the blast radius is unrecoverable and
+	// no compensating writer exists (the same reasoning item 9a already applied to a strictly
+	// SMALLER hazard: orphaned split children are recoverable by re-splitting; a destroyed
+	// position is not).
+	//
+	// PREDICATE, measured rather than assumed (per the ruling's own instruction): `security_id IS
+	// NOT NULL` covers `standard`+security (088/provider ingest) and `acct_setup`+security (087)
+	// directly. For `corp_action` (039's `fn_create_stock_split`, the only V1 corp_action writer):
+	// measured its INSERT shape (039's own header) — every corp_action row it creates sets
+	// `security_id = p_security_id` (a required, non-defaulted RPC parameter) explicitly, so
+	// `security_id IS NOT NULL` already catches every corp_action row this writer can produce.
+	// Measured further, at the SCHEMA level (017's `account_trans_quantity_finite`-adjacent CHECK,
+	// `quantity = 0 or security_id is not null`): a corp_action row's `quantity` is the split
+	// DELTA, which 039 refuses to be zero (a 1:1/no-op ratio is rejected before the INSERT) — so
+	// this CHECK independently forces `security_id IS NOT NULL` on any corp_action row with a real
+	// share effect, regardless of writer. The ONLY way a corp_action row could have `security_id
+	// NULL` is a hypothetical zero-quantity (no-op) row the schema does not itself forbid but which
+	// no V1 writer produces. `transaction_type === 'corp_action'` is included in the predicate
+	// ANYWAY, defensively: a future corp_action writer is not obligated to preserve 039's contract,
+	// and this fact-kind is categorically structural (never user-editable via this cash-only edit
+	// form) independent of whether a given row happens to carry a security_id today. `basis_adjust`
+	// needs no guard here — it stays fenced by `034`'s `account_trans_basis_adjust_shape` CHECK,
+	// which no V1 writer can even reach.
+	//
+	// Ordered BEFORE the split-parent refusal (fact-KIND checks precede lifecycle-STATE checks,
+	// mirroring `classifiabilityOf`'s own M1/M2-before-M3/M4 ordering) — a security-linked row is
+	// refused on what it IS, not on what has happened to it.
+	//
+	// Honest copy only (F/CTO ruling; PM framing): claims ONLY what is true. No false remedy — no
+	// "re-categorize to fix it", no "contact support", no implied delete/skip (ADR-032 retired that
+	// primitive; it never shipped). A UI mirror (hiding the Edit affordance on these rows) is
+	// Frontend's half of this same ruling, defense-in-depth only — this server refusal is the
+	// control.
+	if (orig.security_id !== null || orig.transaction_type === 'corp_action') {
+		return {
+			ok: false,
+			status: 409,
+			message: "A recorded security transaction can't be edited or removed in V1. A correction surface is planned."
+		};
+	}
+
+	// (2b) Split-parent refusal (SELF-248 AC5; V1.3 pre-flight sitting item 9a — F/CTO-ratified
+	// default-and-notify — + item 10a's companion obligation). REVERSING A SPLIT PARENT IS
+	// REFUSED at the write path: the alternatives (apportioning the edit across children, or
+	// silently editing the parent underneath them) invent apportionment or re-introduce
+	// double-counting. Measured (QA, SELF-340 walk against this fix): before this guard existed,
+	// editing a split parent silently ORPHANED its children — the dead original kept rendering
+	// "Split · N" while the live corrected row rendered as a plain single line, because this
+	// function selected `orig` WITHOUT split_count and carried no split guard at all.
+	//
+	// split_count is DERIVED, never stored (029/035/checkClassifiable precedent — see this file's
+	// own `checkClassifiable` for the identical read shape): count the child set for this trans_id.
+	// A read error fails CLOSED (500), never silently proceeding to a write that might orphan
+	// children on a read hiccup.
+	//
+	// Item 10a's companion obligation: `unsplitTrans` is a bare DELETE with no split-child history
+	// table (031 audits only the 1:1 annotation) — the remedy this refusal points to is ITSELF
+	// LOSSY AND UNRECOVERABLE, so the message states the real cost, not just "this is split."
+	// AC5's ruled message, quoted verbatim with the real count substituted for N, followed by item
+	// 9a's ratified remedy ("unsplit first, then reverse") as its own appended sentence.
+	const { count: splitCount, error: splitErr } = await supabase
+		.schema('pfin')
+		.from('account_trans_split')
+		.select('id', { count: 'exact', head: true })
+		.eq('account_trans_id', v.orig_trans_id);
+	if (splitErr) {
+		console.error('[transactions] reverse-and-replace split-count read failed:', splitErr.message);
+		return { ok: false, status: 500, message: 'Could not verify this transaction. Please try again.' };
+	}
+	if ((splitCount ?? 0) > 0) {
+		return {
+			ok: false,
+			status: 409,
+			message: `This transaction is split; removing the split will discard its ${splitCount} line categories, which cannot be recovered. Unsplit it first, then edit.`
+		};
+	}
+
 	// (3) Atomic bulk INSERT of {reversal, corrected}. One statement — both rows pass the
 	// account_trans_insert wr_access RLS (same account) + the reversal passes the 004
 	// matched-account fence (same account_id as its replaces_trans_id target).
@@ -587,7 +699,10 @@ export async function reverseAndReplaceTrans(
 		security_id: orig.security_id,
 		quantity: -Number(orig.quantity ?? 0),
 		is_reverse: true,
-		replaces_trans_id: orig.trans_id
+		replaces_trans_id: orig.trans_id,
+		// SELF-340: explicit, matching `corrected`'s full key set (see the function header) — a
+		// reversal never carries provider identity or a fresh content hash; always NULL.
+		import_hash: null as string | null
 	};
 	// SELF-204 (ADR-034 D4 + Consequences b): the corrected row is a fresh MANUAL fact — give it a
 	// fresh content hash (via the SAME shared module the provider mapper uses) so an edited manual
@@ -613,9 +728,17 @@ export async function reverseAndReplaceTrans(
 		vendor: v.vendor,
 		description: v.description,
 		transaction_type: orig.transaction_type, // preserve the fact-kind (cash = 'standard')
+		// SELF-340: explicit, matching `reversal`'s full key set (see the function header). This
+		// batch INSERT's column list is the UNION of both objects' keys — an omitted key here would
+		// send NULL (the DB default is never consulted), so every value that must be NULL is
+		// written as NULL rather than left to omission-plus-default.
+		security_id: null as number | null, // manualTransEditSchema is cash-flow-only (no security_id/quantity fields) — never inherited from `orig`.
+		quantity: 0, // 017's cash CHECK requires 0; this is the field that broke pre-fix (0 !== NULL).
 		is_reverse: false,
+		replaces_trans_id: null as number | null, // a corrected row is a fresh fact, never a reversal pointer.
 		import_hash: correctedImportHash
-		// security_id NULL + quantity 0 default (017 cash CHECK); provider cols NULL (manual origin)
+		// provider cols (source_provider/provider_txn_id) stay omitted on BOTH rows equally — that
+		// pairing was never heterogeneous, so omission there was never the defect.
 	};
 
 	const { data: inserted, error: insErr } = await supabase

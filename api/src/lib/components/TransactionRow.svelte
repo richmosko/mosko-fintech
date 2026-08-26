@@ -28,6 +28,21 @@
 	    uniform disabled-render treatment as the other four rather than a special-cased hide.
 	    (Team-lead's dispatch leaned toward hiding the picker on a reversal row; this ships the
 	    AC's own general rule instead — see the PR report for the full reasoning.)
+
+	SELF-340 (F/CTO ruled, A+C-deferred): Edit is UI-mirror-gated OFF a security-linked row
+	(`transaction.security_id != null`) — reverseAndReplaceTrans's corrected-row insert hardcodes
+	`security_id: null` on the replacement, and there is no security-aware §2.4.3 edit form in V1,
+	so editing a trade/security row via this cash-only form would silently drop the security link.
+	⚠ THIS IS DEFENSE-IN-DEPTH, NOT THE BOUNDARY: Backend's server-side refusal is what actually
+	stops the write; this only stops OFFERING a control that would just be refused (an absent
+	button reads as a rule; a rendered-then-refused one reads as a bug — same "not a fence" framing
+	as `frozen`/`058` elsewhere on this page). Categorize STAYS visible on a security row — the row
+	isn't fully inert, since the 023 annotation overlay legitimately allows Trade-cat-consistent
+	corrections (that path is unaffected by this issue). `security_id` undefined (an unwired loader
+	— see TransactionView's own EXPECTED-CONTRACT note) is treated as "possibly security-linked" and
+	ALSO hides Edit — the opposite default direction from every other EXPECTED-CONTRACT field on
+	this row, because unlike those, nothing else currently refuses a security-row edit on every tip
+	(see transaction-util.ts's note for why fail-open would be a live corruption window here).
 -->
 <script lang="ts">
 	import { enhance } from '$app/forms';
@@ -81,6 +96,12 @@
 	// left on screen posting into `058`'s fence. Derived ONCE rather than guarding each editor
 	// block, so a fourth editor added later inherits the guard instead of needing to remember it.
 	const activeMode = $derived(frozen ? null : mode);
+
+	// SELF-340 — fail-closed: `undefined` (unwired loader) reads as "possibly security-linked",
+	// same as an explicit non-null id. See this field's own note (transaction-util.ts) and the
+	// header comment above for why this direction is deliberate, unlike every other
+	// EXPECTED-CONTRACT field on this row.
+	const isSecurityLinked = $derived(transaction.security_id !== null);
 
 	const catLabel = $derived(
 		transaction.category
@@ -243,7 +264,9 @@
 	<td class="actions-cell">
 		{#if !frozen}
 			<div class="row-actions">
-				<Button variant="link" type="button" onclick={openEdit}>Edit</Button>
+				{#if !isSecurityLinked}
+					<Button variant="link" type="button" onclick={openEdit}>Edit</Button>
+				{/if}
 				<Button variant="link" type="button" onclick={openRecat}>Categorize</Button>
 				{#if transaction.split_count > 0}
 					<form method="POST" action="?/unsplitTrans" use:enhance={unsplitHandler} class="inline-form">

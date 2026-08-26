@@ -113,6 +113,7 @@ type TransactionViewLike = {
 	vendor: string | null;
 	category: { cat: string | null; sub_cat: string } | null;
 	sub_cat_id?: number | null;
+	security_id?: number | null;
 	provider_category?: string | null;
 	classifiable?: boolean;
 	classifiableReason?: string | null;
@@ -339,6 +340,30 @@ describe('load() — SELF-249 classifiable/classifiableReason (one leg per test)
 		const data = await loadData(makeEvent(supabase));
 		expect(data.transactions[0].classifiable).toBe(true);
 		expect(data.transactions[0].classifiableReason).toBeNull();
+	});
+});
+
+// SELF-340 (ADR-064 D1): `security_id` is TransactionView's EXPECTED-CONTRACT field driving
+// Frontend's Edit-hiding UI mirror. It was already read for `classifiabilityOf` but dropped
+// before the return — Frontend's unwired default fails CLOSED (hides Edit on every row) until
+// this is wired, so a cash row wrongly loses Edit until this leg (and the server field) exist.
+describe('load() — SELF-340 security_id pass-through (ADR-064 D1 UI-mirror wire contract)', () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		loadCashflowSubCatsMock.mockResolvedValue([]);
+		loadSelectableAssetsMock.mockResolvedValue({ assets: [], error: false });
+	});
+
+	it('a cash row (security_id NULL) surfaces security_id: null', async () => {
+		const supabase = makeSupabase({ account: ACCOUNT_ROW, transRows: [transRow({ trans_id: 1 })] });
+		const data = await loadData(makeEvent(supabase));
+		expect(data.transactions[0].security_id).toBeNull();
+	});
+
+	it('a security-linked row surfaces the REAL security_id, not null or dropped', async () => {
+		const supabase = makeSupabase({ account: ACCOUNT_ROW, transRows: [transRow({ trans_id: 1, security_id: 42 })] });
+		const data = await loadData(makeEvent(supabase));
+		expect(data.transactions[0].security_id).toBe(42);
 	});
 });
 
