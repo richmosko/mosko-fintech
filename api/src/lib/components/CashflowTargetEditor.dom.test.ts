@@ -99,6 +99,49 @@ describe('CashflowTargetEditor — three-state-per-field POST body (AC3/AC6 UI) 
 		await waitFor(() => expect(goto).toHaveBeenCalledWith('/cash-flow'));
 	});
 
+	it('an ALREADY-BLANK field left untouched is OMITTED, never sent as `null` — untouched-blank ≡ omitted, not a synonym for explicit-clear', async () => {
+		(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+			new Response(JSON.stringify({ ok: true, expense_monthly: 3200 }), { status: 200 })
+		);
+		// income_target_annual starts NULL (renders blank, baseline === ''); the user never
+		// touches that field at all — only expense_monthly is edited. A predicate that
+		// special-cased "current value is empty string" (rather than comparing against the
+		// FROZEN baseline) would wrongly fold this untouched-blank field into the same
+		// `null` bucket as an explicit Clear.
+		const { getByLabelText, getByRole } = render(CashflowTargetEditor, {
+			props: { initialTargets: { income_target_annual: null, expense_target_monthly: 3000 } }
+		});
+
+		await fireEvent.input(getByLabelText('Monthly expense target'), { target: { value: '3200' } });
+		await fireEvent.click(getByRole('button', { name: 'Save changes' }));
+
+		await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
+		const body = JSON.parse((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body);
+		expect(body).toEqual({ expense_monthly: 3200 });
+		expect(body).not.toHaveProperty('income_annual');
+	});
+
+	it('clicking the disabled Clear control on an already-blank field is a no-op (defense-in-depth behind the `disabled` attribute)', async () => {
+		(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+			new Response(JSON.stringify({ ok: true, expense_monthly: 3000 }), { status: 200 })
+		);
+		const { getByLabelText, getByRole } = render(CashflowTargetEditor, {
+			props: { initialTargets: { income_target_annual: null, expense_target_monthly: 3000 } }
+		});
+
+		// Same setup as the leg above, but additionally fires a click at the disabled Clear
+		// button for the already-blank field before saving — proves the click has no effect
+		// on dirty state even if something upstream ever fired it programmatically.
+		await fireEvent.click(getByRole('button', { name: 'Clear Annual income target' }));
+		await fireEvent.input(getByLabelText('Monthly expense target'), { target: { value: '3500' } });
+		await fireEvent.click(getByRole('button', { name: 'Save changes' }));
+
+		await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
+		const body = JSON.parse((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body);
+		expect(body).toEqual({ expense_monthly: 3500 });
+		expect(body).not.toHaveProperty('income_annual');
+	});
+
 	it('explicitly clearing a set field sends `null`, not omission or a number', async () => {
 		(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
 			new Response(JSON.stringify({ ok: true }), { status: 200 })
