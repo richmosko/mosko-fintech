@@ -47,8 +47,11 @@
 // for the ceiling check — rather than independently reading `serverTodayAsOf()` (the Node clock).
 // A wired request that omits `as_of` is therefore VALIDATED and SERVED against the identical
 // value, in the identical call, because there is only one value in scope to use — not because two
-// independently-read clocks happen to agree today. Option (a) named below was taken; option (b)
-// does not apply. `serverTodayAsOf()` remains the right call for a surface with NO client-supplied
+// independently-read clocks happen to agree today. Of the two remediations the removed warning
+// named — thread the same resolved `D` into the absent-`as_of` branch, or record why the Node
+// default is acceptable — the FIRST was taken and the second does not apply. ⚠ This is NOT a
+// reference to the (a)–(d) fence list above: all four of those fences remain in force, `.strict()`
+// included. `serverTodayAsOf()` remains the right call for a surface with NO client-supplied
 // `as_of` at all (`cash-flow/+page.server.ts`'s SELF-251 loader, the two §2.2 allocation loaders
 // today) — this settlement is about the factory that sits BETWEEN a validated client value and its
 // absent-value default, and does not change how an as-of-less surface resolves "today".
