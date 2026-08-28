@@ -267,13 +267,26 @@ describe('CashflowTargetEditor — Save-disabled guard against the fail-open sil
 		globalThis.fetch = originalFetch;
 	});
 
-	it('Save stays disabled while a dirty field holds an invalid value', async () => {
+	it('Save stays disabled while a dirty field holds a negative value, and an attempted click fires no fetch', async () => {
 		const { getByLabelText, getByRole } = render(CashflowTargetEditor, {
 			props: { initialTargets: UNSET }
 		});
 		const saveBtn = getByRole('button', { name: 'Save changes' }) as HTMLButtonElement;
-		await fireEvent.input(getByLabelText('Annual income target'), { target: { value: '-5' } });
+		await fireEvent.input(getByLabelText('Annual income target'), { target: { value: '-500' } });
 		expect(saveBtn.disabled).toBe(true);
+		await fireEvent.click(saveBtn);
+		expect(globalThis.fetch).not.toHaveBeenCalled();
+	});
+
+	it('Save stays disabled while a dirty field holds a non-numeric value, and an attempted click fires no fetch', async () => {
+		const { getByLabelText, getByRole } = render(CashflowTargetEditor, {
+			props: { initialTargets: UNSET }
+		});
+		const saveBtn = getByRole('button', { name: 'Save changes' }) as HTMLButtonElement;
+		await fireEvent.input(getByLabelText('Annual income target'), { target: { value: 'abc' } });
+		expect(saveBtn.disabled).toBe(true);
+		await fireEvent.click(saveBtn);
+		expect(globalThis.fetch).not.toHaveBeenCalled();
 	});
 
 	it('a direct form submit (bypassing the disabled button entirely) is STILL a no-op while a dirty field is invalid — the saveDisabled check inside handleSave itself, not just the DOM disabled attribute, is what actually prevents the silent-drop', async () => {
