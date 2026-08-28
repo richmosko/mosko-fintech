@@ -34,8 +34,13 @@
 //      CHECK are the backstop, mapped to a clean 4xx below rather than a raw DB error.
 //
 // INVOKER + anon-key + RLS only: writes go through `locals.supabase`, the session-bound client
-// wired at the hooks.server.ts chokepoint. service_role is FORBIDDEN here — RT-26's 3-surface
-// allowlist (webhook / exchange / remove) is untouched by this endpoint (AC9).
+// wired at the hooks.server.ts chokepoint. service_role is FORBIDDEN here — this endpoint
+// references no SUPABASE_SERVICE_ROLE_KEY and adds no entry to the RT-26 allowlist registry
+// (`scripts/ci/rt26-allowlist.txt`), which is therefore untouched (AC9). Read that registry live
+// for its contents and carry no description of its shape here: ADR-016 Decision 4 pruned it to the
+// single `supabase-admin.ts` factory precisely because a stale entry is a standing
+// pre-authorization, and any future service_role need reuses that factory rather than adding an
+// entry.
 //
 // AUDIT-LOG: not applicable, per the SAME ADR-011 Decision 18 settings-not-audit-class ruling
 // planning-target.ts's header records and flags to Sec at joint review rather than resolving
