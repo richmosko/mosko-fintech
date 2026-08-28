@@ -28,13 +28,15 @@
 
 	// Primary-nav active state. Net Worth is the root; Accounts owns the whole /accounts/* subtree.
 	// Allocation added at SELF-239 (the §2.2.2 table's own route, distinct from the
-	// /settings/allocation %Target editor). Only the surfaces that exist today are linked — the
-	// rest of the locked app-sidebar (Cash Flow / Est. Taxes / Monthly Report / Settings) lands as
-	// those V1.x surfaces are built.
+	// /settings/allocation %Target editor). Cash Flow added at SELF-251 (the §2.3.2.b
+	// cross-account rollup's own route, `/cash-flow` per SELF-252 AC8). Only the surfaces that
+	// exist today are linked — the rest of the locked app-sidebar (Est. Taxes / Monthly Report /
+	// Settings) lands as those V1.x surfaces are built.
 	const path = $derived(page.url.pathname);
 	const isNetWorth = $derived(path === '/');
 	const isAccounts = $derived(path === '/accounts' || path.startsWith('/accounts/'));
 	const isAllocation = $derived(path === '/allocation');
+	const isCashFlow = $derived(path === '/cash-flow');
 
 	// SELF-207 P4 re-auth banner health summary — from +layout.server.ts (Backend-computed via the
 	// shared needsReauth/isInstitutionDown predicates, active-connections-only, fail-soft to {0,0}).
@@ -57,6 +59,9 @@
 				</a>
 				<a class="nav-link" href="/allocation" aria-current={isAllocation ? 'page' : undefined}>
 					Allocation
+				</a>
+				<a class="nav-link" href="/cash-flow" aria-current={isCashFlow ? 'page' : undefined}>
+					Cash Flow
 				</a>
 			</nav>
 		</div>
