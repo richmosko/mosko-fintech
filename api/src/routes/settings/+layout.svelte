@@ -5,13 +5,14 @@
 	Left-rail navigation over the Settings sections. V1.2 shipped two ENABLED sections —
 	Security (pre-existing, SELF-291) and Allocation (SELF-242) — and SELF-252 (this issue)
 	enables a third, Cash-flow Targets (§2.3.2), the Settings shell's SECOND V1.3 occupant per
-	its own AC1. Two placeholder sections remain — Tax Brackets
+	its own AC1. Two placeholder SECTIONS remain — Tax Brackets
 	(pfin.tax_bracket_schedule/tax_bracket_row) and Owner Identification
-	(pfin.owner_identification) — the last two Lock 14 settings-store members without an
-	editor yet, rendered disabled/non-navigable with a "Coming in V1.x" affordance. Security
-	sits outside the V1.2/V1.3 versioning scheme named in the AC (it's an existing MFA
-	surface, not one of the four planning-value settings) but belongs in this shell as a
-	real, live section.
+	(pfin.owner_identification) — covering the Lock 14 settings-store MEMBERS that have no
+	editor yet; sections and members do not count one-to-one (Tax Brackets is one section over
+	two tables), so no tally is carried here — read ADR-011 Decision 18 live for the family's
+	amended size. Security sits outside the V1.2/V1.3 versioning scheme named in the AC (it's
+	an existing MFA surface, not one of the planning-value settings) but belongs in this shell
+	as a real, live section.
 
 	LEFT-RAIL vs TOP-TAB (AC1 offers either shape): left-rail chosen here — a Just-Decide
 	call, not routed to Visual Designer, since the design system does not lock either shape
