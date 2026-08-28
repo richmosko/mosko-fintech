@@ -143,6 +143,13 @@ describe('AC4 numeric-input adversarial battery — expense_monthly (same batter
 		expect(captured.calls).toBe(0);
 	});
 
+	it('rejects the string "Infinity" / "-Infinity"', async () => {
+		const captured = { calls: 0 };
+		expect((await POST(makeEvent({ expense_monthly: 'Infinity' }, captured))).status).toBe(400);
+		expect((await POST(makeEvent({ expense_monthly: '-Infinity' }, captured))).status).toBe(400);
+		expect(captured.calls).toBe(0);
+	});
+
 	it('rejects currency-string input', async () => {
 		const captured = { calls: 0 };
 		const res = await POST(makeEvent({ expense_monthly: '$4,000' }, captured));
