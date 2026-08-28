@@ -102,12 +102,13 @@
 --   per-database `ALTER DATABASE ... SET` rows silently), verified via `pg_prove`
 --   (never bare `psql` — a plan under-run exits 0 there). `supabase db reset` is
 --   mechanically banned and was not used; F/CTO's local dev DB was not touched.
---   plan(36): 7 structural (S1-S5 + S6a-S6b) + 1 unique-per-user (UQ1) + 6 numeric
---   mechanism, both columns (N1-N6) + 5 UPSERT/unset/zero-vs-null (U1a-U1c,
---   U2a-U2b) + 2 two-tenant read isolation (R1-R2) + 2 cross-tenant write blocked
---   (W1-W2) + 3 DELETE-policy isolation + corrupt-the-control pair (DEL1-DEL3) +
---   1 corrupt-SELECT exact-value leak (X1) + 8 aal2 backstop, all four verbs
---   (M1-M8) + 1 anon zero-grant (G1) = 36.
+--   plan(39): 7 structural (S1-S5 + S6a-S6b) + 3 fresh-row single-column INSERT,
+--   row-absent (F1a-F1c) + 1 unique-per-user (UQ1) + 6 numeric mechanism, both
+--   columns (N1-N6) + 5 UPSERT/unset/zero-vs-null (U1a-U1c, U2a-U2b) + 2
+--   two-tenant read isolation (R1-R2) + 2 cross-tenant write blocked (W1-W2) +
+--   3 DELETE-policy isolation + corrupt-the-control pair (DEL1-DEL3) + 1
+--   corrupt-SELECT exact-value leak (X1) + 8 aal2 backstop, all four verbs
+--   (M1-M8) + 1 anon zero-grant (G1) = 39.
 -- =====================================================================
 
 begin;
@@ -115,7 +116,7 @@ begin;
 -- shared verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(36);
+select plan(39);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
@@ -188,6 +189,39 @@ select is(
   2::bigint,
   '(S6b) STRUCTURAL — WITH CHECK half: insert/update both carry the ADR-029/025 aal2 backstop in polwithcheck — RED if cashflow_target_update''s WITH CHECK lost its aal2 clause while USING kept it'
 );
+
+-- =====================================================================
+-- BLOCK F (authenticated A, ROW ABSENT — genuinely A's FIRST row, unlike
+--   BLOCK U's (U1)/(U2) which UPSERT-clobber an ALREADY-EXISTING row via an
+--   explicit `on conflict do update set <one column>`). SELF-252's write path
+--   (POST /api/settings/cashflow-target) builds its upsert row object from
+--   ONLY the dirty keys (+server.ts), so a user's very FIRST save touching
+--   just one field sends a single-column row to an ABSENT row. The mechanism
+--   that makes the sibling column land NULL here is plain Postgres INSERT
+--   column-list omission -> column DEFAULT (NULL, no default specified) — NOT
+--   the DO-UPDATE-SET narrowing BLOCK U proves. Wrapped in a savepoint/
+--   rollback so BLOCK 1 below still seeds A's row from a clean, row-absent
+--   state.
+-- =====================================================================
+select _rls.set_tenant(:'ta'::uuid);
+savepoint sp_f1;
+insert into pfin.cashflow_target (income_target_annual) values (1234.56);
+select is(
+  (select count(*) from pfin.cashflow_target where users_id = auth.uid())::bigint,
+  1::bigint,
+  '(F1a) fresh single-column INSERT (row was ABSENT for A): the row now exists — one column named, one row created'
+);
+select is(
+  (select income_target_annual from pfin.cashflow_target where users_id = auth.uid()),
+  1234.56::numeric(20,4),
+  '(F1b) fresh single-column INSERT: the NAMED column (income_target_annual) round-trips as given'
+);
+select ok(
+  (select expense_target_monthly is null from pfin.cashflow_target where users_id = auth.uid()),
+  '(F1c) fresh single-column INSERT: the OMITTED column (expense_target_monthly) lands NULL via plain column-DEFAULT on a row that did not exist a moment ago — NOT via BLOCK U''s DO-UPDATE-SET narrowing (this is a different mechanism from (U1)/(U2), exercised on a row-absent INSERT rather than an existing row''s UPSERT) — RED if the app-layer write object ever grew an implicit default value for an omitted key instead of leaving the column to Postgres'
+);
+rollback to savepoint sp_f1;
+select set_config('role', 'postgres', true);
 
 -- =====================================================================
 -- BLOCK 1 (authenticated A) — seed A's real committed row. Both columns SET
