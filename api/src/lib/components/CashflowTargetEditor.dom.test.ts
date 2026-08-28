@@ -245,3 +245,45 @@ describe('CashflowTargetEditor — error handling', () => {
 		expect(banner.textContent).toBe('Something went wrong saving your changes. Please try again.');
 	});
 });
+
+describe('CashflowTargetEditor — Save-disabled guard against the fail-open silent-drop shape (Sec-flagged)', () => {
+	// handleSave's payload-build loop only ADDS a dirty field's key when it is either empty
+	// (→ null) or a value sanitizeCurrencyAmount accepts (→ number) — a dirty field holding
+	// an INVALID value (fails validation, non-empty) is silently OMITTED from that loop with
+	// no error path of its own. Omitted-from-payload is indistinguishable from
+	// untouched-from-payload to the server (+server.ts reads a missing key as "leave alone"),
+	// so if this branch were ever reached with a 2xx response, the UI would report "Changes
+	// saved." while the user's invalid edit was silently discarded rather than either saved
+	// or rejected. TODAY this branch is unreachable — `saveDisabled` (`!hasDirty ||
+	// anyClientError || saving`) keeps Save disabled whenever any dirty field fails client
+	// validation, and `handleSave`'s own `if (saveDisabled) return;` is a SECOND, independent
+	// check of the same predicate, not just a mirror of the disabled DOM attribute. Both legs
+	// below pin a piece of that guard so a regression in either can't reopen the silent-drop.
+	const originalFetch = globalThis.fetch;
+	beforeEach(() => {
+		globalThis.fetch = vi.fn();
+	});
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+	});
+
+	it('Save stays disabled while a dirty field holds an invalid value', async () => {
+		const { getByLabelText, getByRole } = render(CashflowTargetEditor, {
+			props: { initialTargets: UNSET }
+		});
+		const saveBtn = getByRole('button', { name: 'Save changes' }) as HTMLButtonElement;
+		await fireEvent.input(getByLabelText('Annual income target'), { target: { value: '-5' } });
+		expect(saveBtn.disabled).toBe(true);
+	});
+
+	it('a direct form submit (bypassing the disabled button entirely) is STILL a no-op while a dirty field is invalid — the saveDisabled check inside handleSave itself, not just the DOM disabled attribute, is what actually prevents the silent-drop', async () => {
+		const { getByLabelText, container } = render(CashflowTargetEditor, {
+			props: { initialTargets: UNSET }
+		});
+		await fireEvent.input(getByLabelText('Annual income target'), { target: { value: '-5' } });
+		const form = container.querySelector('form');
+		expect(form).toBeTruthy();
+		await fireEvent.submit(form as HTMLFormElement);
+		expect(globalThis.fetch).not.toHaveBeenCalled();
+	});
+});
