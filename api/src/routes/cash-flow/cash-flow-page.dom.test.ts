@@ -95,4 +95,25 @@ describe('cash-flow/+page.svelte — a real positive rollup always renders the t
 		expect(getAllByRole('table')).toHaveLength(2);
 		expect(queryByText(/Add transactions via Onboarding/)).toBeNull();
 	});
+
+	// QA boundary leg: rows present AND count_ytd > 0 — `noRows` is false here so BOTH
+	// `zeroTransaction`/`zeroClassified` are false regardless of count_ytd (the page's own
+	// $derived gate checks rows first), but nothing at the PAGE integration level had proven this
+	// combination lands on the table branch rather than on the zero-classified empty state — the
+	// two prior legs only vary ONE of {rows, count_ytd} at a time. The banner text is
+	// CashflowRollupTable's own AC9 render (verified in its own dom test); asserting it here only
+	// confirms the page didn't intercept this case into an empty state above the table.
+	it('rows present AND count_ytd > 0: renders the table (not an empty state), and the table carries the unclassified banner', () => {
+		const rowsAndUnclassified: CashflowCrossAccountRollup = {
+			...POPULATED_ROLLUP,
+			unclassified: { count_ytd: 4 }
+		};
+		const { getAllByRole, getByText, queryByText } = render(CashFlowPage, {
+			props: { data: { ...LAYOUT_DEFAULTS, rollup: rowsAndUnclassified } }
+		});
+		expect(getAllByRole('table')).toHaveLength(2);
+		expect(queryByText(/Add transactions via Onboarding/)).toBeNull();
+		expect(queryByText(/Classify your transactions to see your cash flow/)).toBeNull();
+		expect(getByText('4 items unclassified')).toBeTruthy();
+	});
 });

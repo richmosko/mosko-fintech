@@ -126,6 +126,36 @@ describe('CashflowRollupTable — AC5: Total row sums DOWN each column only (ren
 		expect(cells[0].textContent).toContain('$5,010');
 		expect(cells[5].textContent).toContain('$30,060');
 	});
+
+	// QA INVERSION WATCHER: FIXTURE's total happens to equal the arithmetic sum of its own rows
+	// (5000+10=5010, 30000+60=30060), so the assertion above cannot distinguish "renders
+	// section.total as-is" from "silently re-sums section.rows" — a client-resum regression
+	// (`section.rows.reduce((a,r) => a + r.month, 0)` swapped in for `section.total.month`) still
+	// passes it. Confirmed live: mutating the component to resum month/ytd from `rows` left the
+	// test above green. This fixture's total is DELIBERATELY MISMATCHED from its row sum (rows
+	// sum to 100, `total.month` is a distinct 999) so a resum regression renders the wrong figure
+	// and reds here.
+	it('a section total that does NOT equal the sum of its own rows still renders VERBATIM — proves no client re-sum path exists', () => {
+		const mismatched: CashflowCrossAccountRollup = {
+			...FIXTURE,
+			sections: [
+				section({
+					cat: 'Revenue',
+					sectionKey: 'income',
+					rows: [{ sub_cat: 'Salary', month: 100, q1: 100, q2: 100, q3: null, q4: null, ytd: 100 }],
+					// Deliberately NOT the sum of the single row above (100) — a real server payload
+					// never disagrees with its own rows this way; the mismatch exists only to make a
+					// re-sum regression observable.
+					total: { month: 999, q1: 999, q2: 999, q3: null, q4: null, ytd: 999 }
+				})
+			]
+		};
+		const { getAllByRole } = render(CashflowRollupTable, { props: { rollup: mismatched } });
+		const totalRow = getAllByRole('row', { name: /Total/ })[0];
+		const cells = within(totalRow).getAllByRole('cell');
+		expect(cells[0].textContent).toContain('$999');
+		expect(cells[5].textContent).toContain('$999');
+	});
 });
 
 describe('CashflowRollupTable — AC6: no delta/color-coding, static rendering only', () => {
