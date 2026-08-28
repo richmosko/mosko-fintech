@@ -39,14 +39,19 @@
 // FACTORY, not a constant — it takes the request's already-resolved `D` as an argument, and the
 // VALIDATOR derives no "today" of its own.
 //
-// ⚠ THE DEFAULT BRANCH IS THE EXCEPTION, AND IT IS A SECOND CLOCK. `resolveAllocationAsOf` below
-// returns `serverTodayAsOf()` when `as_of` is ABSENT — the NODE clock (`new Date()`), not
-// `pfin.fn_server_today()`. So a wired request that threads a DB-derived `D` into `asOfSchema` and
-// omits `as_of` is VALIDATED against the DB clock and SERVED against the Node clock. They agree
-// today only by the two independent facts `time/asOf.ts`'s header names (the DB TimeZone pin +
-// Node's unconditional UTC), and they can disagree by a day across a boundary. WHOEVER WIRES THE
-// QUERY PARAM (SELF-253/D-1) MUST settle this explicitly: either thread the same resolved `D` into
-// the absent-`as_of` branch, or record why the Node default is acceptable on that surface.
+// ⚠ SETTLED AT SELF-253 (§2.3.3, the first surface to actually wire this factory into a
+// request): the two-clock hazard this paragraph used to warn about is now closed BY
+// CONSTRUCTION, not left to a future author. `resolveAllocationAsOf` takes `maxAsOf` as a SECOND,
+// REQUIRED argument and its absent-`as_of` branch returns `maxAsOf` itself — the SAME
+// already-resolved `pfin.fn_server_today()` value the caller threads into `asOfSchema(maxAsOf)`
+// for the ceiling check — rather than independently reading `serverTodayAsOf()` (the Node clock).
+// A wired request that omits `as_of` is therefore VALIDATED and SERVED against the identical
+// value, in the identical call, because there is only one value in scope to use — not because two
+// independently-read clocks happen to agree today. Option (a) named below was taken; option (b)
+// does not apply. `serverTodayAsOf()` remains the right call for a surface with NO client-supplied
+// `as_of` at all (`cash-flow/+page.server.ts`'s SELF-251 loader, the two §2.2 allocation loaders
+// today) — this settlement is about the factory that sits BETWEEN a validated client value and its
+// absent-value default, and does not change how an as-of-less surface resolves "today".
 //
 // The caller resolves `D` ONCE per request, from
 // `pfin.fn_server_today()` (migration `070`, ADR-044 Decision 2 — the DATABASE clock, not the
@@ -76,7 +81,7 @@
 // unconditionally, unchanged by this PR.
 
 import { z } from 'zod';
-import { serverTodayAsOf, userSuppliedAsOf, type ZoneResolvedAsOf } from '$lib/server/time/asOf';
+import { userSuppliedAsOf, type ZoneResolvedAsOf } from '$lib/server/time/asOf';
 
 /** Real-calendar-date guard (rejects e.g. 2026-02-31) — same idiom as account.ts's `isoDate()`
  *  and nav-series-params.ts's own local copy. */
@@ -161,24 +166,31 @@ export type AllocationAsOfParams = z.infer<ReturnType<typeof asOfSchema>>;
 
 /**
  * The one function that turns a VALIDATED `AllocationAsOfParams` into the `ZoneResolvedAsOf`
- * both §2.2 allocation query modules require (SELF-238/240). Absent `as_of` → `serverTodayAsOf()`
- * (today, from the server clock — the V1 default every other read surface uses); present →
- * `userSuppliedAsOf` (UTC-resolved — see that factory's own doc for why).
+ * every consumer of this schema requires — §2.2 allocation (SELF-238/240) and, as of SELF-253,
+ * §2.3.3's per-account drill-down, the first LIVE caller. Absent `as_of` → `maxAsOf` (the SAME
+ * already-resolved `pfin.fn_server_today()` value the caller passed to `asOfSchema(maxAsOf)` for
+ * the ceiling check — see the module header's SETTLED note); present → `userSuppliedAsOf`
+ * (UTC-resolved — see that factory's own doc for why).
  *
  * ⚠ THE TYPE DOES NOT ENFORCE THIS. `AllocationAsOfParams` is `z.infer`'d and therefore
- * STRUCTURAL (`{ as_of?: string }`), so `resolveAllocationAsOf({ as_of: '1900-01-01' })` COMPILES,
- * and `userSuppliedAsOf`'s backstop re-checks the SHAPE only — never the range. The floor/ceiling
- * fence exists at exactly ONE layer, `asOfSchema`'s parse, and a caller that skips it skips both
- * bounds. Call this ONLY on the output of `asOfSchema(...).safeParse` / `.parse`: that is a
- * convention with a review check (`grep -rn 'resolveAllocationAsOf' api/src`), not a compile error.
+ * STRUCTURAL (`{ as_of?: string }`), so `resolveAllocationAsOf({ as_of: '1900-01-01' }, maxAsOf)`
+ * COMPILES, and `userSuppliedAsOf`'s backstop re-checks the SHAPE only — never the range. The
+ * floor/ceiling fence exists at exactly ONE layer, `asOfSchema`'s parse, and a caller that skips
+ * it skips both bounds. Call this ONLY on the output of `asOfSchema(...).safeParse` / `.parse`:
+ * that is a convention with a review check (`grep -rn 'resolveAllocationAsOf' api/src`), not a
+ * compile error. ⚠ Pass the SAME `maxAsOf` value used to build `asOfSchema(maxAsOf)` for this
+ * request — a mismatched second argument reopens the two-clock hazard this function exists to
+ * close, silently, because nothing at the call site can tell the two apart.
  *
  * ⚠ NAME UNCHANGED ON THE MOVE (sitting item 12/AC1 — deliberate, not an oversight). This stays
- * `resolveAllocationAsOf` even though the schema it resolves from is now surface-neutral: it is
- * still the §2.2 allocation surfaces' own resolution step (the RANGE bound already ran inside
- * `asOfSchema`'s `.superRefine` — this function's own job is only "present vs. absent," same as
- * before the move), and renaming it was not part of the sitting's ruling. A §2.3 consumer of this
- * schema gets its own resolution step when it lands, at SELF-250/253.
+ * `resolveAllocationAsOf` even though the schema it resolves from is now surface-neutral and its
+ * first live caller is a §2.3 surface: renaming it was not part of the sitting's ruling, and
+ * `AllocationAsOfParams` (the type this function consumes) carries the same legacy name for the
+ * same reason.
  */
-export function resolveAllocationAsOf(params: AllocationAsOfParams): ZoneResolvedAsOf {
-	return params.as_of ? userSuppliedAsOf(params.as_of) : serverTodayAsOf();
+export function resolveAllocationAsOf(
+	params: AllocationAsOfParams,
+	maxAsOf: ZoneResolvedAsOf
+): ZoneResolvedAsOf {
+	return params.as_of ? userSuppliedAsOf(params.as_of) : maxAsOf;
 }

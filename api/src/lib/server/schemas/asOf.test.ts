@@ -82,13 +82,19 @@ describe('asOfSchema', () => {
 });
 
 describe('resolveAllocationAsOf', () => {
-	it('resolves an absent as_of to today', () => {
-		const resolved = resolveAllocationAsOf({});
-		// serverTodayAsOf() is UTC-today; just prove it's a well-formed YYYY-MM-DD, not a fixed date.
-		expect(resolved).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+	it('resolves an absent as_of to the INJECTED maxAsOf — never an independently-read clock (SELF-253 two-clock settlement)', () => {
+		const maxAsOf = unsafeAsOfForTest('2026-08-25');
+		expect(resolveAllocationAsOf({}, maxAsOf)).toBe(maxAsOf);
 	});
 
-	it('resolves a present as_of via userSuppliedAsOf (UTC), unchanged', () => {
-		expect(resolveAllocationAsOf({ as_of: '2020-01-01' })).toBe('2020-01-01');
+	it('resolves a present as_of via userSuppliedAsOf (UTC), unchanged, ignoring maxAsOf', () => {
+		const maxAsOf = unsafeAsOfForTest('2026-08-25');
+		expect(resolveAllocationAsOf({ as_of: '2020-01-01' }, maxAsOf)).toBe('2020-01-01');
+	});
+
+	it('a DIFFERENT maxAsOf changes the absent-as_of result — proves the value is threaded, not a fixed default', () => {
+		const a = resolveAllocationAsOf({}, unsafeAsOfForTest('2026-08-25'));
+		const b = resolveAllocationAsOf({}, unsafeAsOfForTest('2020-01-01'));
+		expect(a).not.toBe(b);
 	});
 });

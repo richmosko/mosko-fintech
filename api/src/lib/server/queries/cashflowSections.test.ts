@@ -7,6 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import {
 	CASHFLOW_CLASS_TO_SECTION,
+	CASHFLOW_OTHER_CASH_FLOWS_NOTE,
 	cashflowSectionKey,
 	cashflowSectionLabel
 } from './cashflowSections';
@@ -52,6 +53,17 @@ describe('cashflowSections — values outside the ratified vocabulary degrade to
 		expect(() => cashflowSectionKey('SomeFutureClass')).not.toThrow();
 		expect(cashflowSectionKey('SomeFutureClass')).toBeUndefined();
 		expect(cashflowSectionLabel('SomeFutureClass')).toBeUndefined();
+	});
+});
+
+describe('cashflowSections — SELF-253 AC8 honest-transfer-note', () => {
+	it('is a non-empty string and never claims a transfer cancels out on its own', () => {
+		expect(typeof CASHFLOW_OTHER_CASH_FLOWS_NOTE).toBe('string');
+		expect(CASHFLOW_OTHER_CASH_FLOWS_NOTE.length).toBeGreaterThan(0);
+		// The one thing this copy must never say, stated as an inversion check: a future edit that
+		// drops the caveat and leaves only "cancels out" flips this red.
+		expect(CASHFLOW_OTHER_CASH_FLOWS_NOTE).toMatch(/does not.*cancel out/i);
+		expect(CASHFLOW_OTHER_CASH_FLOWS_NOTE).toMatch(/suspense/i);
 	});
 });
 

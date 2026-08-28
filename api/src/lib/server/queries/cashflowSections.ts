@@ -54,6 +54,16 @@ export const CASHFLOW_SECTION_LABELS: Record<CashflowSectionKey, string> = {
 	other_cash_flows: 'Other Cash Flows'
 };
 
+/** SELF-253 AC8 — the honest-transfer-note copy for the `other_cash_flows` section, the ONE home
+ *  SELF-254 (§2.3.3 UI) renders it from. Also cited verbatim by SELF-249 AC6 as a copy constraint
+ *  on the classification picker. Classifying a transfer does NOT by itself make it cancel out — a
+ *  journal-less `Transfer` resolves to Suspense in the GL (093/094's own header: "on reversals
+ *  [the reader and the GL] disagree ON PURPOSE"), not to a clean offset. This string is the only
+ *  place that sentence is spelled; a consumer renders it, never paraphrases it. */
+export const CASHFLOW_OTHER_CASH_FLOWS_NOTE =
+	'Classifying a transfer does not by itself make it cancel out. A transfer with no matching ' +
+	'journal entry resolves to Suspense, not a clean offset.';
+
 /** `cat` -> section key. `Trade` has NO entry — it is excluded from every §2.3 surface by the D-2
  *  ruling, not merely unmapped by omission; a lookup miss on `Trade` and a lookup miss on a truly
  *  unrecognized value are the SAME "not part of §2.3" answer, which is why both degrade the same
