@@ -52,6 +52,17 @@
 </svelte:head>
 
 <main class="page">
+	<!-- SELF-254 entry point (drill-from, kept minimal per hand-off judgment call): this page's
+	     own `rollup` payload is account-AGGREGATE (093's reader) and carries no per-account id, so
+	     there is no single account to link straight to `/cash-flow/[account_id]` from here without
+	     new data on THIS loader (out of this issue's scope, flagged onward). `/accounts` — the
+	     same target the empty-state / AC9 classify CTAs already use — is the best available
+	     "choose an account" entry; the account-detail page (accounts/[account_id]/+page.svelte)
+	     carries the actual `?from=cross-account-rollup`-marked link into SELF-254's drill-down. -->
+	<div class="page-actions">
+		<a class="by-account-link" href="/accounts">By account →</a>
+	</div>
+
 	{#if data.rollup === null}
 		<section class="unavailable" aria-labelledby="unavail-title">
 			<h1 id="unavail-title" class="page-title">Cash Flow</h1>
@@ -94,6 +105,24 @@
 		margin: 0;
 		font: var(--weight-bold) var(--fs-h1) / var(--lh-tight) var(--font-ui);
 		color: var(--c-text-primary);
+	}
+	.page-actions {
+		display: flex;
+		justify-content: flex-end;
+	}
+	.by-account-link {
+		font: var(--weight-med) var(--fs-small) / 1 var(--font-ui);
+		color: var(--c-accent);
+		text-decoration: none;
+	}
+	.by-account-link:hover {
+		color: var(--c-accent-hover);
+		text-decoration: underline;
+	}
+	.by-account-link:focus-visible {
+		outline: none;
+		box-shadow: var(--focus-ring);
+		border-radius: var(--radius-sm);
 	}
 
 	.unavailable {
