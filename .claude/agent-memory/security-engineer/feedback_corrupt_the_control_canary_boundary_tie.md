@@ -209,3 +209,22 @@ it actually names.** That question would have caught all three.
 **Also worth keeping: a leg covered by TWO branches cannot attribute which one regressed.** `(5e)`
 trips either branch, so it is a sensitivity leg, not a branch-attributing one; `(5f)` is the OLD-side
 observer. Say so, or someone later reads a green `(5e)` as covering both.
+
+**⚠ A BOUNDARY PAIR AUTHORED FROM THE CORRECTED SPEC IS A LIVE WATCHER OVER THE STALE ONE — say so,
+because it changes the SEVERITY of the doc drift.** At SELF-253 I flagged that `docs/SECURITY`'s
+RT-25 acceptance row still printed the pre-amendment as-of predicate (`created_at <= $1`) that
+ADR-011 D19 Edit 1 had retracted in favour of the half-open `created_at < ($1 + 1)`. QA then shipped
+a pair one step across the boundary — same account, same `transaction_date`, same Sub-Cat, differing
+only `created_at` `D 23:59:59` (must be INCLUDED) vs `D+1 00:00:00` (must be EXCLUDED). **Under the
+stale catalog's predicate the first leg goes RED**, because the date→timestamptz midnight promotion
+drops the 23:59:59 row. The test is therefore not merely consistent with the corrected spec — it
+**falsifies the stale one**, and it will keep doing so.
+
+**How to apply:** when reporting drift between a ratified spec and a catalog/acceptance row, check
+whether any shipped leg discriminates the two forms. If one does, report the drift as *documented-
+but-watched* (the tree cannot silently regress to the stale form) rather than as an open exposure —
+and name the leg, so whoever fixes the doc knows what already guards it. If NO leg discriminates
+them, the drift is unwatched and the severity is higher, because the next author to write a battery
+from the stale row produces a green test over the defect. Same shape as ADR-011 D4's PR #476 bullet:
+the battery can be where the correction CAME FROM, and must not be filed as one of the corrected
+sites. Related: [[a-red-whose-message-names-the-wrong-defect]].

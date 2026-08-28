@@ -55,3 +55,25 @@ but me.
 Related: [[clearance-conditions-must-absorb-my-own-recommendations]],
 [[read-decisions-from-the-pr-branch-when-the-pr-edits-it]],
 [[temp-handoff-path-is-per-worktree]].
+
+**⚠ THE WORST INSTANCE: my supplied text TRIPPED THE CI FENCE IT WAS DESCRIBING.** At SELF-252 I gave
+Backend a commit-ready comment reading *"this endpoint references no SUPABASE_SERVICE_ROLE_KEY and adds
+no entry to the RT-26 allowlist registry."* The RT-26 fence is
+`grep -rEln 'SUPABASE_SERVICE_ROLE_KEY'` over `api/src/` with **no comment awareness**, so naming the
+literal *in order to deny holding it* is a violation at a non-allowlisted path. Backend committed it
+byte-identical as instructed, the required check went RED and the PR went `BLOCKED`. I had read that
+fence's registry and its workflow job in the same review and still never ran its predicate over my own
+words. The wording I replaced did not contain the literal — **I introduced the failure while fixing a
+different defect in the same sentence.**
+
+**How to apply — a fence's TRIGGER STRING is unsafe to quote anywhere the fence scans, including in
+prose that denies it.** Before handing over any text: (1) identify every fence whose scope includes the
+target file; (2) run each fence's actual predicate over the proposed text (`grep -Eln '<literal>'` on a
+scratch file), not over the file it will land in; (3) prefer the target tree's existing fence-surviving
+phrasing — `exchange/+server.ts` already said *"holds NO Plaid secret and NO service_role key"*, which is
+what the convention looks like when it has already paid this cost. **And when the fence catches you,
+the fix is the prose, never the fence** — allowlisting the file or teaching the grep to skip comments are
+both veto-grade, and both look like reasonable cleanups in the moment.
+
+Related: [[measure-the-fence-regex-not-its-comment]] — same lesson from the other side: I measured the
+fence's registry and its comment, never its regex against my own artifact.
