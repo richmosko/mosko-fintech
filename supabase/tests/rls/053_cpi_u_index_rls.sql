@@ -145,8 +145,28 @@
 --   001->053 reset stack (CI, pg_prove directory-mode, after Backend applies 053). RED-until-053-
 --   applied is EXPECTED on any pre-053 stack (the table would not exist). Locally verified NON-
 --   DESTRUCTIVELY by QA: 053 + this file applied inside a single psql txn that was ROLLED BACK
---   (no supabase db reset — the F/CTO's local data was untouched). plan(19) (f2/f3/f4 added at
---   SELF-230 N1 — the ±Infinity CHECK extension + finite control).
+--   (no supabase db reset — the F/CTO's local data was untouched). plan(29) (f2/f3/f4 added at
+--   SELF-230 N1 — the ±Infinity CHECK extension + finite control; p1-p6/q1-q3/r1 added at SELF-343/095
+--   — the cpi_u_index_value_positive_finite CHECK, per BACKLOG §7.14's first entry, condition (1)).
+--
+-- ┌─ LEG (p)/(q)/(r) — 095's cpi_u_index_value_positive_finite CHECK (SELF-343) ──────────────────┐
+-- │ (p1)/(p2) 0 and -1 REJECTED under the INTACT stack, constraint-name-precise on the NEW          │
+-- │   constraint — UNAMBIGUOUS because cpi_u_index_value_finite's predicate (<> NaN/Infinity/       │
+-- │   -Infinity) does not evaluate 0 or -1 at all, so only the new constraint can fire.              │
+-- │ (p3) 300.000 ACCEPTED — the non-optional accept control (095 header ⚠: "a constraint that        │
+-- │   rejects everything passes every rejection assertion").                                         │
+-- │ (p4)-(p6) NaN / Infinity / -Infinity, inside a SAVEPOINT that drops ONLY                          │
+-- │   cpi_u_index_value_finite — MEASURED (095 header): with BOTH constraints present, these three    │
+-- │   values are rejected by cpi_u_index_value_finite FIRST (it is evaluated first), so a name-       │
+-- │   precise assertion against the NEW constraint on the intact stack would FAIL on correct DDL.     │
+-- │   Dropping only the finiteness CHECK attributes the rejection to cpi_u_index_value_positive_finite│
+-- │   specifically — -Infinity is caught via its `> 0` clause, needing no clause of its own.          │
+-- │ (q1)-(q3) ADDITIVITY WATCHERS (095 condition 2, made mechanical): both constraints EXIST BY NAME  │
+-- │   on the table, and BOTH target cpi_value — a future replacement of either reds this leg rather   │
+-- │   than silently losing coverage.                                                                  │
+-- │ (r1) COMMENT RE-ISSUE WATCHER: col_description(cpi_value) names the NEW constraint and the CHECK- │
+-- │   fenced/cumulative framing 095 STEP 3 re-issues — catalog-read, not a file-text check.            │
+-- └────────────────────────────────────────────────────────────────────────────────────────────────┘
 -- =====================================================================
 
 begin;
@@ -154,7 +174,7 @@ begin;
 -- shared verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(19);
+select plan(29);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
@@ -251,6 +271,101 @@ select lives_ok(
   '(f4) finite control: a normal finite cpi_value (317.250) INSERTs successfully under service_role — proves the finiteness CHECK rejects ONLY NaN/±Infinity, not legitimate CPI prints (guards an over-broad CHECK)'
 );
 select set_config('role', 'postgres', true);
+
+-- =====================================================================
+-- LEG (p) POSITIVITY FENCE (SELF-343/095) — cpi_u_index_value_positive_finite, ADDITIVE to
+--   cpi_u_index_value_finite. Under service_role (bypasses RLS but NOT a table CHECK), same
+--   idiom as LEG (f).
+-- =====================================================================
+select set_config('role', 'service_role', true);
+-- (p1) cpi_value = 0 REJECTED, constraint-name-precise on the NEW constraint. cpi_u_index_value_finite's
+--      predicate never evaluates 0, so this attribution is unambiguous under the intact stack.
+select throws_like(
+  $$ insert into pfin.cpi_u_index (cpi_period, cpi_value) values ('2025-11-01', 0) $$,
+  '%cpi_u_index_value_positive_finite%',
+  '(p1) zero fence (SELF-343): cpi_value = 0 is REJECTED by cpi_u_index_value_positive_finite (constraint-name-precise) — a zero print would raise inside every downstream deflator division'
+);
+-- (p2) cpi_value = -1 REJECTED, same attribution reasoning.
+select throws_like(
+  $$ insert into pfin.cpi_u_index (cpi_period, cpi_value) values ('2025-12-01', -1) $$,
+  '%cpi_u_index_value_positive_finite%',
+  '(p2) negative fence (SELF-343): cpi_value = -1 is REJECTED by cpi_u_index_value_positive_finite (constraint-name-precise) — a negative print would flip the sign of every downstream inflation-adjusted figure silently'
+);
+-- (p3) non-vacuous accept control — the CHECK rejects ONLY the poisoned states, not legitimate prints.
+select lives_ok(
+  $$ insert into pfin.cpi_u_index (cpi_period, cpi_value) values ('2026-01-01', 300.000) $$,
+  '(p3) accept control (SELF-343): a normal finite positive cpi_value (300.000) INSERTs successfully — the accepting leg is not optional (095 header ⚠: a constraint that rejects everything passes every rejection assertion)'
+);
+select set_config('role', 'postgres', true);
+
+-- (p4)-(p6): MEASURED (095 header) — with BOTH constraints present, NaN/±Infinity are rejected by
+-- cpi_u_index_value_finite FIRST, so a name-precise assertion on the NEW constraint would fail on
+-- correct DDL. Drop ONLY cpi_u_index_value_finite inside a savepoint to attribute the rejection to
+-- cpi_u_index_value_positive_finite specifically, then restore. postgres owns pfin.cpi_u_index
+-- (measured directly against this scratch build; postgres is already the active role here).
+savepoint drop_finiteness_only;
+alter table pfin.cpi_u_index drop constraint cpi_u_index_value_finite;
+select set_config('role', 'service_role', true);
+-- (p4) NaN, now attributable to cpi_u_index_value_positive_finite alone.
+select throws_like(
+  $$ insert into pfin.cpi_u_index (cpi_period, cpi_value) values ('2026-02-01', 'NaN'::numeric) $$,
+  '%cpi_u_index_value_positive_finite%',
+  '(p4) NaN, finiteness CHECK dropped (SELF-343): cpi_u_index_value_positive_finite alone REJECTS NaN — proves the new constraint carries its own finiteness coverage rather than leaning entirely on the sibling'
+);
+-- (p5) +Infinity, same attribution.
+select throws_like(
+  $$ insert into pfin.cpi_u_index (cpi_period, cpi_value) values ('2026-03-01', 'Infinity'::numeric) $$,
+  '%cpi_u_index_value_positive_finite%',
+  '(p5) +Infinity, finiteness CHECK dropped (SELF-343): cpi_u_index_value_positive_finite alone REJECTS +Infinity — PostgreSQL numeric places it ABOVE every finite value, so this is the explicit clause, not the `> 0` fallthrough'
+);
+-- (p6) -Infinity, caught via `> 0` alone — no explicit clause needed (095 header: a clause that
+--      cannot fire is a fence that cannot be tested).
+select throws_like(
+  $$ insert into pfin.cpi_u_index (cpi_period, cpi_value) values ('2026-04-01', '-Infinity'::numeric) $$,
+  '%cpi_u_index_value_positive_finite%',
+  '(p6) -Infinity, finiteness CHECK dropped (SELF-343): cpi_u_index_value_positive_finite alone REJECTS -Infinity via its `> 0` clause — -Infinity sorts below every finite value, so no dedicated clause was needed or written'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint drop_finiteness_only;
+
+-- =====================================================================
+-- LEG (q) ADDITIVITY WATCHERS (SELF-343 condition 2, made mechanical) — both constraints EXIST BY
+--   NAME on the table and BOTH target cpi_value. RED if either were dropped, renamed, or folded into
+--   the other; RED if either landed on the wrong column. Catalog-read, role-agnostic.
+-- =====================================================================
+select ok(
+  (select count(*) from pg_constraint c join pg_class t on t.oid = c.conrelid
+     join pg_namespace n on n.oid = t.relnamespace
+    where n.nspname = 'pfin' and t.relname = 'cpi_u_index' and c.conname = 'cpi_u_index_value_finite') = 1,
+  '(q1) cpi_u_index_value_finite EXISTS BY NAME on pfin.cpi_u_index — 095 is ADDITIVE, never a replacement; RED if a future edit drops or renames the finiteness CHECK'
+);
+select ok(
+  (select count(*) from pg_constraint c join pg_class t on t.oid = c.conrelid
+     join pg_namespace n on n.oid = t.relnamespace
+    where n.nspname = 'pfin' and t.relname = 'cpi_u_index' and c.conname = 'cpi_u_index_value_positive_finite') = 1,
+  '(q2) cpi_u_index_value_positive_finite EXISTS BY NAME on pfin.cpi_u_index (SELF-343/095)'
+);
+select ok(
+  (select bool_and(c.conkey = array[(select attnum from pg_attribute
+                                        where attrelid = 'pfin.cpi_u_index'::regclass and attname = 'cpi_value')])
+     from pg_constraint c join pg_class t on t.oid = c.conrelid
+     join pg_namespace n on n.oid = t.relnamespace
+    where n.nspname = 'pfin' and t.relname = 'cpi_u_index'
+      and c.conname in ('cpi_u_index_value_finite', 'cpi_u_index_value_positive_finite')),
+  '(q3) BOTH constraints target cpi_value (conkey resolves to the same single column on both) — RED if either landed on the wrong column'
+);
+
+-- =====================================================================
+-- LEG (r) COMMENT RE-ISSUE WATCHER (SELF-343 condition 3 discharged on the COLUMN half) — a
+--   catalog read, not a file-text check: 095 STEP 3 re-issues col_description so \d+ does not tell a
+--   reader the column is finiteness-fenced only.
+-- =====================================================================
+select ok(
+  col_description('pfin.cpi_u_index'::regclass,
+    (select attnum from pg_attribute where attrelid = 'pfin.cpi_u_index'::regclass and attname = 'cpi_value')
+  ) ~ 'cpi_u_index_value_positive_finite, added at 095',
+  '(r1) col_description(cpi_value) names cpi_u_index_value_positive_finite and its 095 landing point — the finiteness-only framing was retired, not left describing a CHECK the column no longer only has'
+);
 
 -- =====================================================================
 -- LEG (g) SERVICE_ROLE WRITER — the ETL upsert path (INSERT new month + UPDATE revised print).
