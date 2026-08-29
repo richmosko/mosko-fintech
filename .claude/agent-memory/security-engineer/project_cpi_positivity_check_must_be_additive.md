@@ -19,6 +19,15 @@ renders as `nav_inflation_adjusted = NaN` — a financial figure, not a NULL. Th
 parallel instruction (keep the zero-CPI QA leg after the CHECK lands rather than retiring it as
 unreachable) is the same shape of hazard.
 
+✅ **Condition (2) IS NOW WATCHED — stop carrying it by hand.** `supabase/tests/rls/053_cpi_u_index_rls.sql`
+gained `(q1)` at the SELF-343 ship: *"cpi_u_index_value_finite EXISTS BY NAME on pfin.cpi_u_index — 095 is
+ADDITIVE, never a replacement; RED if a future edit drops or renames the finiteness CHECK"*, plus `(q2)`
+on the new constraint, `(q3)` on both targeting `cpi_value`, and `(p4)/(p5)/(p6)` proving the NEW
+constraint rejects NaN/±Infinity standalone with the finiteness CHECK dropped. From an unwatched
+review-time assertion (2026-08-12) to a mechanical fence. Verify `(q1)` still exists before relying on
+this — but the review posture on this column is now "confirm the watcher fires", not "re-derive the
+hazard". `054`'s `nav_daily_value_finite` has NO equivalent watcher; that half is still hand-carried.
+
 **How to apply:** if a migration touching `pfin.cpi_u_index` constraints reaches review, check the
 finiteness constraint survives by name. Four conditions given to team-lead 2026-08-12 for whatever
 vehicle carries the fix: (1) the guard predicate must be **finite AND strictly positive** on both CPI
@@ -35,6 +44,18 @@ the constraint inside a savepoint (the corrupt-the-control idiom the 067 battery
 of it. So at least two fences — `cpi_u_index_value_finite` on `053` and `nav_daily_value_finite` on
 `054` — stand behind a `> 0` comparison elsewhere in the tree. **Any migration replacing either with a
 positivity CHECK re-admits NaN.** `071` is also the second dependent of the `053` fence (after `067`).
+
+**Status 2026-08-29 — DISCHARGED on `feature/self-343` by migration `095` (Sec verdict AMBER, one
+blocking condition on the batteries, not on the file).** All four conditions verified: additive (one
+executable `drop constraint`, naming the NEW constraint), predicate `> 0 AND <> 'NaN' AND <> 'Infinity'`,
+`067` guard + `comment on function` re-issued in the same file, QA leg not authored by Architect. The
+durable home for the conditions is **BACKLOG §7.14 first entry** — read it there, not here.
+
+⚠ **My wording and the artifact's diverge on condition (1), and the artifact is narrower.** This file says
+*"on both CPI legs"* (the GUARD); §7.14's transcription says *"on the column"* (the CHECK). That gap made
+`095`'s +Infinity clause on the guard look like a widening past the brief when under the original wording
+it was already mandatory. Ruled ACCEPT either way. **When a condition of mine gets transcribed into an
+artifact, the artifact governs — surface the narrowing, do not silently apply my broader version.**
 
 Sec position on sequencing: the hardening is **no-later-than-mandatory**, not same-PR-mandatory — it
 is independently correct today and better landing earlier. More generally on this codebase: a

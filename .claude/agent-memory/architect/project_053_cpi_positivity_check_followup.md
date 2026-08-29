@@ -1,36 +1,42 @@
 ---
 name: 053-cpi-positivity-check-followup
-description: The cpi_value positivity CHECK now has a tracked home in BACKLOG §7.14 with Sec's four binding conditions — read it there, not here
+description: SHIPPED at 095 (SELF-343) — cpi_u_index_value_positive_finite is additive to cpi_u_index_value_finite; the residual open item is two catalog comments 095 falsified, owned by team-lead
 metadata:
   type: project
 ---
 
-**`pfin.cpi_u_index.cpi_value` (migration `053`) is fenced finiteness-only**, so a
-poisoned `0` / negative print reaches the deflator. `067` guards internally (both CPI
-legs strictly positive, else NULL); the base table holds no fence of its own.
+**STATUS 2026-08-29: SHIPPED.** Migration `095_cpi_u_index_positivity_and_deflator_guard.sql`
+(SELF-343, branch `feature/self-343`) discharged BACKLOG §7.14's first entry — Sec's four
+binding conditions, all four. Sec review returned AMBER; both AMBER items landed in the
+same file. ⚠ **Grep the migrations before believing any later note that says this is
+unbuilt** — the §7.14 entry itself is not self-updating.
 
-**⚠ CANONICAL HOME: `BACKLOG.md` §7.14** — "SELF-217 / SELF-218 build-day follow-ups",
-landed in PR #446, carrying Sec's **four binding conditions**. **Read it there.** This
-note is a pointer, not a copy: two homes drift and hand the reader two versions.
+What shipped, in the shape that matters if you touch this family again:
 
-**Why the pointer exists at all** — two things a future reader will otherwise get wrong,
-and one is a correction to what I originally recorded:
+- **`cpi_u_index_value_positive_finite`** on `pfin.cpi_u_index.cpi_value`:
+  `> 0 AND <> 'NaN' AND <> 'Infinity'`. **A bare `> 0` re-admits NaN and +Infinity** —
+  numeric ordering puts both ABOVE every finite value. `-Infinity` needs no clause; it
+  sorts below and `> 0` rejects it.
+- **ADDITIVE.** `cpi_u_index_value_finite` survives by name. The overlap is deliberate:
+  three read surfaces (`067` / `071` / `073`) justify their own `> 0` guards by naming the
+  FINITENESS constraint, so dropping it as redundant would silently unsound all three.
+  ⚠ And the older name sorts first, so it is the one that REPORTS —
+  see [[check-violation-reported-in-constraint-name-order]].
+- **`067`'s deflator guard** gained explicit NaN and +Infinity clauses on both CPI legs,
+  and its `comment on function` was re-issued in the same migration. **create-or-replace
+  preserves BOTH the ACL and the comment** — the first is why no grant is re-issued, the
+  second is why the comment MUST be.
 
-- **⚠ `> 0` ALONE IS NOT ENOUGH, and my first framing of this was too narrow.** I flagged
-  only NaN; Sec established the predicate must be **finite AND strictly positive**,
-  because in Postgres numeric ordering **both `NaN > 0` AND `Infinity > 0` are TRUE.**
-  A positivity CHECK written as a replacement would re-admit *both*.
-- **The CHECK must be ADDITIVE** to `cpi_u_index_value_finite`, which survives by name.
-  Never a replacement.
+**⚠ RESIDUAL, OWNED BY TEAM-LEAD (do not re-raise as new):** `095` falsifies the stated
+premise of two live catalog comments — on `pfin.fn_nav_delta_panel` (live text issued by
+**`072`**, which drop-and-recreates it, NOT `071`) and on `pfin.fn_nav_reference_dates`
+(`073`). Both still say *"053 bars NaN and the infinities but NOT zero or negative
+values."* Their conclusions stay true; only the premise moved. Ruled **book-not-fold**;
+team-lead writes the BACKLOG §7 entry, with Sec's F2 addition folding `064`/`066` file-header
+prose into the same booking. Recorded in `095`'s own header as the tracked-bytes half.
 
-**Also worth carrying, because it is the inverse of a fact easy to file as reassurance:**
-Sec's condition 3 requires the same PR to `create or replace` `067`'s guard with an
-explicit NaN clause **and re-issue its `comment on`** — precisely *because* create-or-
-replace **preserves** comments, so `067`'s DIVISION SAFETY paragraph would otherwise
-describe a guard the function no longer has. **The same property that makes
-create-or-replace safe for ACLs makes it a staleness hazard for comments** — see
-[[prove-derived-text-against-its-source]] and the safety-proof-is-a-hazard-notice shape.
-
-**How to apply:** if this comes up, go to §7.14 first and treat its four conditions as
-binding; joint-review is mandatory when it lands (a financial-correctness constraint on
-the divisor of an inflation-adjusted figure).
+**How to apply:** any future change to EITHER finiteness CHECK in this family inherits
+condition (2) verbatim — additive, survives by name, never a replacement. That widening
+names `054`'s `nav_daily_value_finite` too, which is what makes `071`'s `v_a_nav > 0`
+complete. Joint-review is mandatory: it is a financial-correctness constraint on the
+divisor of an inflation-adjusted figure.
