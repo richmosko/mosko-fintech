@@ -169,10 +169,11 @@
 --   _rls.set_tenant / _rls.count_as call runs at role=postgres and restores role=postgres
 --   before the next assertion.
 --
--- ⚠ NOT YET RE-RUN AGAINST A LIVE DATABASE since this ZN fix. The prior version (f03caa2,
---   39 assertions) verified GREEN via pg_prove on a scratch database. Verify THIS version
---   the same way before trusting the new plan(40) — scratch database only (067 creates no
---   table and drops nothing existing), pg_prove, never bare psql (plan-count enforcement).
+-- ⚠ RE-VERIFY AFTER ANY FURTHER LEG CHANGE. Last verified GREEN by QA (2026-08-29) via
+--   pg_prove on a hand-built 001->095 scratch database (ownership transferred to postgres
+--   before the migration chain — the shape that matches `supabase start`), against the
+--   executable plan() call below, as part of a full supabase/tests-tree run (88 files, 2071
+--   tests) rather than this file in isolation. Never bare psql (plan-count enforcement).
 -- =====================================================================
 
 begin;
