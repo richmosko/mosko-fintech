@@ -54,7 +54,7 @@
 --   (3) SAME MIGRATION: the 067 guard gains its explicit NaN clause AND its
 --       `comment on function` is RE-ISSUED. create-or-replace preserves BOTH
 --       the ACL and the comment. The first is desirable and is why no grant is
---       re-issued here. The second is a HAZARD: without STEP 4 the catalog
+--       re-issued here. The second is a HAZARD: without STEP 5 the catalog
 --       would keep a DIVISION SAFETY paragraph describing a guard the function
 --       no longer has, and naming a "separate vehicle" that is this file.
 --   (4) QA owns the corrupt-the-control leg (drop-in-savepoint / seed poison /
@@ -76,7 +76,8 @@
 --   ⚠ FINDING THIS MIGRATION CREATES, RECORDED HERE BECAUSE IT IS NOT FIXED
 --     HERE. Three catalog comments state their guards' soundness with the
 --     clause "053 bars NaN and the infinities but NOT zero or negative values."
---     One of them (067's) is corrected in STEP 4. The other two are on
+--     One of them (067's) is corrected in STEP 5, and its matching in-body
+--     `--` note in STEP 4. The other two are on
 --     pfin.fn_nav_delta_panel (live text issued by 072, not 071 — 072
 --     drop-and-recreates that function) and on pfin.fn_nav_reference_dates
 --     (073). Their CONCLUSIONS stay true; the PREMISE goes stale the moment
@@ -143,6 +144,42 @@
 --   4. The 067 battery's (ZN1)/(ZN2)/(ZN3) prosrc legs run against the REPLACED
 --      body. They were checked against this file's new body text before commit
 --      and pass; they are re-asserted by the battery, not by this file.
+--   5. ⚠ THREE MERGED BATTERIES BREAK ON THIS MIGRATION, AND THE TEMPTING
+--      REPAIR IS THE ONE 067'S OWN HEADER FORBIDS. Each seeds a non-positive
+--      CPI print with BARE DML inside a savepoint, so each now raises 23514 and
+--      aborts the enclosing transaction through to its `rollback to savepoint`,
+--      taking every leg in between with it:
+--        · 067's battery — insert ('2026-01-01', 0)  -> (ZC0)/(ZC1)/(ZC2)
+--        · 071's battery — cpi_value = 0, then = -50 -> (CPIG1)/(CPIG2)
+--        · 073's battery — cpi_value = 0, then = -50, then = -50 on the SHARED
+--          BASIS -> (CPIG1)/(CPIG1b)/(CPIG1c)/(CPIG2)/(CPIG3)
+--      DO NOT DELETE THESE LEGS AS UNREACHABLE. They are the ONLY watchers on
+--      the `<= 0` clauses in three live financial read surfaces, and 067's
+--      header already rules on this exact case: unreachable-by-construction is
+--      a reason to KEEP a leg, not to retire it.
+--      REPAIR SHAPE — item 2's idiom applied to all three: drop
+--      cpi_u_index_value_positive_finite inside the EXISTING savepoint, before
+--      the poison write. For 0 and negative poison that ONE drop suffices —
+--      cpi_u_index_value_finite does not block those values; drop BOTH only
+--      where the poison is NaN or an infinity (item 2). Rolling back the
+--      savepoint restores both.
+--      ⚠ Do NOT convert these legs to throws_ok on the write. That asserts the
+--      CHECK, which item 1 already covers, and retires the GUARD assertion this
+--      migration exists to keep standing.
+--      ⚠ Item 2's table-ownership caveat applies to all three files, and all
+--      six existing poison writes currently run under
+--      set_config('role','postgres') — resolve the role before assuming the
+--      drop-in-savepoint shape executes at all.
+--      ⚠ The BLAST RADIUS bullets above clear 071 and 073 as FUNCTIONS. That is
+--      not a clearance for their BATTERIES.
+--   6. THE ATTRIBUTION IN ITEM 1 RESTS ON CONSTRAINT-NAME ORDER, which is why
+--      the finiteness CHECK reports first: PostgreSQL evaluates a table's CHECK
+--      constraints in constraint-NAME order, and cpi_u_index_value_finite sorts
+--      ahead of cpi_u_index_value_positive_finite. A future rename of either
+--      constraint to a name sorting ahead of the finiteness one silently flips
+--      that attribution and reds 053's battery legs (f1)/(f2)/(f3), which name
+--      that constraint explicitly. Rename either one and re-measure BOTH
+--      batteries.
 -- ============================================================================
 
 create schema if not exists pfin;
