@@ -175,16 +175,16 @@
 --      ⚠ Do NOT convert these legs to throws_ok on the write. That asserts the
 --      CHECK, which item 1 already covers, and retires the GUARD assertion this
 --      migration exists to keep standing.
---      ⚠ NO ROLE CHANGE IS NEEDED — this is settled, not open. Item 2's
---      ownership note applies to every battery named above and is ALREADY
---      SATISFIED: `supabase start` builds the local stack and CI alike with
---      pfin.cpi_u_index owned by `postgres`, which is the role every existing
---      poison write above already runs under. 085's (C2)/(C4) legs are the
---      in-tree precedent — same role, same savepoint shape, green in the same
---      lane. The repair adds NO pgTAP leg and rolls back no additional one:
---      each savepoint already exists and already rolls back today, so the
---      drop is DDL added inside an existing rollback scope and plan(N) is
---      UNCHANGED in every file named above.
+--      ⚠ NO ROLE CHANGE IS NEEDED — this is settled, not open. The
+--      TABLE-OWNERSHIP ⚠ in item 1 applies to every battery named above and
+--      is ALREADY SATISFIED: `supabase start` builds the local stack and CI
+--      alike with pfin.cpi_u_index owned by `postgres`, which is the role
+--      every existing poison write above already runs under. 085's (C2)/(C4)
+--      legs are the in-tree precedent — same role, same savepoint shape,
+--      green in the same lane. The repair adds NO pgTAP leg and rolls back no
+--      additional one: each savepoint already exists and already rolls back
+--      today, so the drop is DDL added inside an existing rollback scope and
+--      plan(N) is UNCHANGED in every file named above.
 --      ⚠ The BLAST RADIUS bullets above clear 071 and 073 as FUNCTIONS. That is
 --      not a clearance for their BATTERIES.
 --   6. THE ATTRIBUTION IN ITEM 1 RESTS ON CONSTRAINT-NAME ORDER, which is why
