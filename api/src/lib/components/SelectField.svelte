@@ -43,7 +43,8 @@
 		groups = [],
 		id,
 		labelHidden = false,
-		muted = false
+		muted = false,
+		onchange
 	}: {
 		label: string;
 		name: string;
@@ -71,6 +72,10 @@
 		 *  account-detail "Closed" status pill already uses for "a real state, toned down" rather
 		 *  than inventing a new token. Off by default. */
 		muted?: boolean;
+		/** Optional native `change` passthrough — SELF-254's account picker re-navigates on
+		 *  selection rather than on form submit. Undefined ⇒ no listener attached, so every
+		 *  existing form-field call site is unaffected. */
+		onchange?: (event: Event) => void;
 	} = $props();
 
 	const fieldId = $derived(id ?? `f-${name}`);
@@ -97,6 +102,7 @@
 			bind:value
 			class="select-input"
 			{disabled}
+			{onchange}
 			aria-required={required}
 			aria-invalid={hasError}
 			aria-describedby={describedby}

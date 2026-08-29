@@ -12,9 +12,14 @@
 // mid-test can reassign `page.url` directly before triggering a re-render; this stub
 // does not attempt to reproduce SvelteKit's actual mid-navigation reactivity.
 //
+// `params` added for SELF-254 (cash-flow/[account_id]/+page.svelte, the first dom-tested
+// component to read `page.params`) — empty by default, same "reassign before triggering a
+// re-render" convention as `url` above.
+//
 // Never used in the real build — the SvelteKit plugin supplies the genuine virtual
 // module there.
 
 export const page = {
-	url: new URL('http://localhost/')
+	url: new URL('http://localhost/'),
+	params: {} as Record<string, string>
 };

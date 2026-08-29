@@ -23,7 +23,10 @@
 		autocomplete,
 		maxlength,
 		minlength,
-		pattern
+		pattern,
+		min,
+		max,
+		onchange
 	}: {
 		label: string;
 		name: string;
@@ -42,6 +45,16 @@
 		maxlength?: number;
 		minlength?: number;
 		pattern?: string;
+		/** `type="date"` range bounds (ISO `YYYY-MM-DD`) — SELF-254's as-of toggle passes the
+		 *  request's already-resolved `[floor, maxAsOf]`, never a client-derived default. Native
+		 *  browser fast-feedback only; the same bound is re-checked by the caller's own Zod
+		 *  mirror on `onchange` and, authoritatively, server-side. */
+		min?: string;
+		max?: string;
+		/** Optional native `change` passthrough — SELF-254's as-of toggle re-navigates on commit
+		 *  rather than on submit, which `bind:value` alone cannot trigger. Undefined ⇒ no
+		 *  listener attached, so every existing form-field call site is unaffected. */
+		onchange?: (event: Event) => void;
 	} = $props();
 
 	const fieldId = $derived(`f-${name}`);
@@ -71,6 +84,9 @@
 		{maxlength}
 		{minlength}
 		{pattern}
+		{min}
+		{max}
+		{onchange}
 		bind:value
 		class="field-input"
 		class:num-input={numeric}

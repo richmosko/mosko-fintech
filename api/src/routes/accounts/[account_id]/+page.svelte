@@ -261,6 +261,14 @@
 				{isClosed ? 'Closed' : 'Open'}
 			</span>
 		</div>
+		<!-- SELF-254 entry point: this account's own §2.3.3 drill-down. `from=cross-account-rollup`
+		     is carried unconditionally — SELF-251's cross-account rollup is this feature's one
+		     logical "parent" cash-flow surface regardless of the literal click path that landed
+		     here, so the drill-down page's back-link always has a real target (judgment call,
+		     flagged at hand-off). -->
+		<a class="cashflow-link" href="/cash-flow/{account.account_id}?from=cross-account-rollup">
+			View cash flow →
+		</a>
 	</header>
 
 	<section class="region" aria-label="Account details">
@@ -878,6 +886,21 @@
 		align-items: center;
 		gap: var(--space-3);
 		flex-wrap: wrap;
+	}
+	.cashflow-link {
+		align-self: flex-start;
+		font: var(--weight-med) var(--fs-small) / 1 var(--font-ui);
+		color: var(--c-accent);
+		text-decoration: none;
+	}
+	.cashflow-link:hover {
+		color: var(--c-accent-hover);
+		text-decoration: underline;
+	}
+	.cashflow-link:focus-visible {
+		outline: none;
+		box-shadow: var(--focus-ring);
+		border-radius: var(--radius-sm);
 	}
 	h1 {
 		margin: 0;
