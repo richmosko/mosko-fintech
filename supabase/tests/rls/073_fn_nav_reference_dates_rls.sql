@@ -679,6 +679,11 @@ rollback to savepoint cpi_carry_basis;
 --   work.
 -- =====================================================================
 savepoint cpi_zero;
+-- SELF-343/095: cpi_u_index_value_positive_finite now blocks a plain UPDATE to 0/negative —
+-- drop BOTH CHECKs (corrupt-the-control idiom) before poisoning, restored on rollback.
+alter table pfin.cpi_u_index
+  drop constraint cpi_u_index_value_positive_finite,
+  drop constraint cpi_u_index_value_finite;
 update pfin.cpi_u_index set cpi_value = 0 where cpi_period = date_trunc('month', :'today'::date::timestamp)::date;
 select _rls.set_tenant(:'ta'::uuid);
 select ok(
@@ -735,6 +740,10 @@ select set_config('role', 'postgres', true);
 rollback to savepoint cpi_zero;
 
 savepoint cpi_negative;
+-- SELF-343/095: same fix as cpi_zero above.
+alter table pfin.cpi_u_index
+  drop constraint cpi_u_index_value_positive_finite,
+  drop constraint cpi_u_index_value_finite;
 update pfin.cpi_u_index set cpi_value = -50 where cpi_period = date_trunc('month', :'today'::date::timestamp)::date;
 select _rls.set_tenant(:'ta'::uuid);
 select ok(
@@ -758,6 +767,10 @@ rollback to savepoint cpi_negative;
 --   mechanism (CAUSE2) already proves for a deleted basis print) — asserted
 --   on the FULL row, all three references, in one leg.
 savepoint cpi_basis_negative;
+-- SELF-343/095: same fix as cpi_zero above.
+alter table pfin.cpi_u_index
+  drop constraint cpi_u_index_value_positive_finite,
+  drop constraint cpi_u_index_value_finite;
 update pfin.cpi_u_index set cpi_value = -50 where cpi_period = :'yeperiod'::date;
 select _rls.set_tenant(:'ta'::uuid);
 select results_eq(

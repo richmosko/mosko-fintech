@@ -44,6 +44,18 @@
 --   structural leg was never a superset of the token leg — it tests a different
 --   property). (ZN3) ADDED as a separate leg, restoring the token deny-list.
 --
+--   ⚠ AMENDED AT SELF-343 / migration 095 (BACKLOG §7.14 first entry, condition 4 — QA-owned):
+--   095 hardens this function's guard (explicit NaN and +Infinity clauses on both CPI legs,
+--   create-or-replace, re-issued comment) and adds pfin.cpi_u_index.cpi_value's
+--   cpi_u_index_value_positive_finite CHECK. Extended IN PLACE per the RLS-battery-keyed-to-
+--   original-migration convention (the 071/072 precedent), not a new file. (ZC) rebuilt as a
+--   5-poison-class corrupt-the-control family (095 makes 0/-1/NaN/±Infinity all un-seedable
+--   through a plain INSERT once the CHECK holds); (ZCB) added for the basis-leg NaN/+Infinity
+--   cases item 4 calls out; (CMT) added for the re-issued function comment; (V3) added as the
+--   inversion proof that the hardened clauses are load-bearing. 053's own battery
+--   (053_cpi_u_index_rls.sql) owns the CHECK's own reject/accept legs and the column-comment
+--   watcher — this file owns everything reached THROUGH this function.
+--
 --   ⚠ ZN3 WENT THROUGH THREE DRAFTS BEFORE LANDING, RECORDED SO THE NEXT REBUILD
 --   HAS A SOURCE TO DIFF AGAINST INSTEAD OF SOMEONE'S RECOLLECTION (architect's
 --   root-cause diagnosis: "the list is being rebuilt from memory each round
@@ -89,8 +101,10 @@
 -- │ (6)  Z   empty CPI store -> every row NULL adjusted, no raise. The leg invisible    │
 -- │          without the fixture (066's helper raises on NULL coverage_through          │
 -- │          unguarded).                                                               │
--- │ (7)  ZC  zero AND negative CPI on the denominator -> NULL, never division-by-zero.  │
--- │          053 has only a finiteness CHECK; positivity is a recorded follow-up.       │
+-- │ (7)  ZC  zero/negative/NaN/±Infinity on the POINT-leg denominator -> NULL, never a   │
+-- │          raise, never a poisoned leak (SELF-343/095 corrupt-the-control family; both │
+-- │          table CHECKs dropped per savepoint since 095 makes these un-seedable        │
+-- │          otherwise). ZCB companions the NaN/+Infinity cases onto the BASIS leg.      │
 -- │ (8)  C   carried CPI is SURFACED (cpi_is_carried/cpi_carried_from), not silently    │
 -- │          applied — same leg as (4)'s carried anchor.                                │
 -- │ (9)  P   nav_nominal + checkpoint_date byte-identical to 062's own output over the  │
@@ -166,13 +180,16 @@ begin;
 -- shared cross-tenant verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
--- plan = 40 : 3 fixture pins (z) + 2 two-tenant (T) + 1 formula anchor (F) + 1 carried-CPI
+-- plan = 51 : 3 fixture pins (z) + 2 two-tenant (T) + 1 formula anchor (F) + 1 carried-CPI
 -- anchor (C) + 4 before-coverage NULL (N) + 1 nonpublication passthrough (NP) + 4 empty-store
--- (Z) + 6 zero/negative-CPI (ZC) + 3 cross-tenant (X) + 1 062-parity passthrough (P) +
+-- (Z) + 10 point-leg corrupt-the-control (ZC: zero/negative/NaN/+Infinity/-Infinity, 2 legs each
+-- — SELF-343/095) + 4 basis-leg corrupt-the-control (ZCB: NaN/+Infinity, 2 legs each — SELF-343
+-- item 4, the widened +Infinity guard) + 3 cross-tenant (X) + 1 062-parity passthrough (P) +
 -- 2 aal2 backstop (M) + 2 fail-loud (L) + 3 zone fence (ZN: ZN1 timestamptz + ZN2 structural
 -- + ZN3 token, restored per Sec AMBER) + 3 ACL (A) + 2 ADR-040 assembled-statement (ADR) +
--- 2 inversion (V).
-select plan(40);
+-- 2 comment re-issue watchers (CMT — SELF-343 condition 3) + 3 inversion (V: V1/V2 original +
+-- V3 SELF-343, the pre-095 guard leaking NaN).
+select plan(51);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
@@ -413,51 +430,171 @@ select set_config('role', 'postgres', true);
 rollback to savepoint empty_cpi;
 
 -- =====================================================================
--- (ZC) ZERO / NEGATIVE CPI ON THE DENOMINATOR -> NULL, never a division-by-zero throw.
---   053's CHECK bars NaN/Infinity but not zero or negative — 067 must guard this itself.
---   (V2) below proves the hazard is real at the SQL level.
+-- (ZC) ZERO / NEGATIVE / NaN / ±Infinity ON THE POINT-LEG DENOMINATOR -> NULL, never a raise,
+--   never 0, never a sign-flip, never a poisoned NaN/Infinity leak. SELF-343/095 condition (4):
+--   these are CORRUPT-THE-CONTROL legs — 095's cpi_u_index_value_positive_finite CHECK now makes
+--   every one of these five values un-seedable through a plain INSERT, so each savepoint below
+--   drops BOTH constraints first (dropping only the new one would leave cpi_u_index_value_finite
+--   blocking NaN/±Infinity and prove nothing about 067's own guard for those three — 095 header ⚠).
+--   Once the CHECK holds in production this is unreachable-by-construction — 067's own header rule
+--   that unreachable-by-construction is a reason to KEEP a leg, not skip it.
+--   Each class: a no-raise control (lives_ok) plus ONE results_eq asserting the FULL row —
+--   point_date, nav_nominal, nav_inflation_adjusted, cpi_value — in a single non-vacuous shot.
+--   ⚠ NOT a bare `is(nav_inflation_adjusted, null)`: a scalar subquery over a DROPPED row also
+--   returns NULL, so that shape would pass vacuously against an implementation that dropped the
+--   row entirely (095 QA TEST-PAIRING item 3) — results_eq fails outright if the row is missing.
+--   postgres owns pfin.cpi_u_index (measured directly against this file's scratch harness); role
+--   is already postgres entering each savepoint below, so no role switch precedes the ALTER.
 -- =====================================================================
 savepoint zero_cpi;
+alter table pfin.cpi_u_index
+  drop constraint cpi_u_index_value_positive_finite,
+  drop constraint cpi_u_index_value_finite;
 delete from pfin.cpi_u_index;
 insert into pfin.cpi_u_index (cpi_period, cpi_value) values ('2026-01-01', 0), ('2026-02-01', 325.000);
 select _rls.set_tenant(:'ta'::uuid);
 select lives_ok(
   $$ select * from pfin.fn_nav_series_inflation_adjusted('daily','2026-01-05','2026-01-05') $$,
-  '(ZC0) a ZERO CPI print at the denominator (053 permits this today; positivity is a recorded follow-up, not yet a CHECK) does NOT raise division-by-zero'
+  '(ZC0) corrupt-the-control (SELF-343): a ZERO CPI print at the point-leg denominator, with BOTH CHECKs dropped, does NOT raise division-by-zero — 067''s own guard, not the table CHECK, is what holds here'
 );
-select is(
-  (select nav_inflation_adjusted from pfin.fn_nav_series_inflation_adjusted('daily','2026-01-05','2026-01-05')),
-  null::numeric,
-  '(ZC1) …and nav_inflation_adjusted is NULL rather than a raise or a fabricated value'
-);
-select ok(
-  (select cpi_value = 0 and nav_nominal = 100
-     from pfin.fn_nav_series_inflation_adjusted('daily','2026-01-05','2026-01-05')),
-  '(ZC2) …with cpi_value=0 still SURFACED on the row (the consumer can see WHY it is unusable) and nav_nominal=100 intact'
+select results_eq(
+  $$ select point_date, nav_nominal, nav_inflation_adjusted, cpi_value
+       from pfin.fn_nav_series_inflation_adjusted('daily','2026-01-05','2026-01-05') $$,
+  $$ values ('2026-01-05'::date, 100::numeric, null::numeric, 0::numeric) $$,
+  '(ZC1) ⭐ THE ROW EXISTS (results_eq, not a scalar is()-on-NULL that would pass vacuously against a dropped row): nav_inflation_adjusted NULL, nav_nominal 100 intact, cpi_value=0 still surfaced — never a raise, never a fabricated 0, never a sign-flip'
 );
 select set_config('role', 'postgres', true);
 rollback to savepoint zero_cpi;
 
 savepoint negative_cpi;
+alter table pfin.cpi_u_index
+  drop constraint cpi_u_index_value_positive_finite,
+  drop constraint cpi_u_index_value_finite;
 delete from pfin.cpi_u_index;
 insert into pfin.cpi_u_index (cpi_period, cpi_value) values ('2026-01-01', -5.000), ('2026-02-01', 325.000);
 select _rls.set_tenant(:'ta'::uuid);
 select lives_ok(
   $$ select * from pfin.fn_nav_series_inflation_adjusted('daily','2026-01-05','2026-01-05') $$,
-  '(ZCn0) a NEGATIVE CPI print (also permitted by 053''s finiteness-only CHECK) does not raise'
+  '(ZCn0) corrupt-the-control (SELF-343): a NEGATIVE CPI print at the point-leg denominator, both CHECKs dropped, does not raise'
 );
-select is(
-  (select nav_inflation_adjusted from pfin.fn_nav_series_inflation_adjusted('daily','2026-01-05','2026-01-05')),
-  null::numeric,
-  '(ZCn1) …and nav_inflation_adjusted is NULL, not a negative-multiplied nonsense figure'
-);
-select ok(
-  (select cpi_value = -5.000 and nav_nominal = 100
-     from pfin.fn_nav_series_inflation_adjusted('daily','2026-01-05','2026-01-05')),
-  '(ZCn2) …with the poisoned -5.000 still surfaced and nav_nominal intact, same shape as the zero leg'
+select results_eq(
+  $$ select point_date, nav_nominal, nav_inflation_adjusted, cpi_value
+       from pfin.fn_nav_series_inflation_adjusted('daily','2026-01-05','2026-01-05') $$,
+  $$ values ('2026-01-05'::date, 100::numeric, null::numeric, -5.000::numeric) $$,
+  '(ZCn1) ⭐ THE ROW EXISTS: nav_inflation_adjusted NULL, not a negative-multiplied nonsense figure; nav_nominal 100 intact; the poisoned -5.000 still surfaced'
 );
 select set_config('role', 'postgres', true);
 rollback to savepoint negative_cpi;
+
+savepoint nan_point_cpi;
+alter table pfin.cpi_u_index
+  drop constraint cpi_u_index_value_positive_finite,
+  drop constraint cpi_u_index_value_finite;
+delete from pfin.cpi_u_index;
+insert into pfin.cpi_u_index (cpi_period, cpi_value) values ('2026-01-01', 'NaN'::numeric), ('2026-02-01', 325.000);
+select _rls.set_tenant(:'ta'::uuid);
+select lives_ok(
+  $$ select * from pfin.fn_nav_series_inflation_adjusted('daily','2026-01-05','2026-01-05') $$,
+  '(ZCnan0) corrupt-the-control (SELF-343): a NaN CPI print at the point-leg denominator, both CHECKs dropped, does not raise — 067''s explicit NaN clause (095 STEP 4), not the table CHECK, guards this'
+);
+select results_eq(
+  $$ select point_date, nav_nominal, nav_inflation_adjusted, cpi_value
+       from pfin.fn_nav_series_inflation_adjusted('daily','2026-01-05','2026-01-05') $$,
+  $$ values ('2026-01-05'::date, 100::numeric, null::numeric, 'NaN'::numeric) $$,
+  '(ZCnan1) ⭐ THE ROW EXISTS: nav_inflation_adjusted NULL — never the poisoned NaN itself, which is what the PRE-095 guard would have returned (bare `<= 0` never catches NaN; see (V3) below). nav_nominal 100 intact, cpi_value surfaces the NaN print'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint nan_point_cpi;
+
+savepoint inf_point_cpi;
+alter table pfin.cpi_u_index
+  drop constraint cpi_u_index_value_positive_finite,
+  drop constraint cpi_u_index_value_finite;
+delete from pfin.cpi_u_index;
+insert into pfin.cpi_u_index (cpi_period, cpi_value) values ('2026-01-01', 'Infinity'::numeric), ('2026-02-01', 325.000);
+select _rls.set_tenant(:'ta'::uuid);
+select lives_ok(
+  $$ select * from pfin.fn_nav_series_inflation_adjusted('daily','2026-01-05','2026-01-05') $$,
+  '(ZCinf0) corrupt-the-control (SELF-343): a +Infinity CPI print at the point-leg denominator, both CHECKs dropped, does not raise'
+);
+select results_eq(
+  $$ select point_date, nav_nominal, nav_inflation_adjusted, cpi_value
+       from pfin.fn_nav_series_inflation_adjusted('daily','2026-01-05','2026-01-05') $$,
+  $$ values ('2026-01-05'::date, 100::numeric, null::numeric, 'Infinity'::numeric) $$,
+  '(ZCinf1) ⭐ THE ROW EXISTS: nav_inflation_adjusted NULL — never the FLAT-ZERO collapse the migration header names (point-leg +Infinity: basis/+Infinity -> 0, the pre-095 guard''s actual failure mode on this class; see (V3)). nav_nominal 100 intact, cpi_value surfaces the +Infinity print'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint inf_point_cpi;
+
+savepoint neg_inf_point_cpi;
+alter table pfin.cpi_u_index
+  drop constraint cpi_u_index_value_positive_finite,
+  drop constraint cpi_u_index_value_finite;
+delete from pfin.cpi_u_index;
+insert into pfin.cpi_u_index (cpi_period, cpi_value) values ('2026-01-01', '-Infinity'::numeric), ('2026-02-01', 325.000);
+select _rls.set_tenant(:'ta'::uuid);
+select lives_ok(
+  $$ select * from pfin.fn_nav_series_inflation_adjusted('daily','2026-01-05','2026-01-05') $$,
+  '(ZCninf0) corrupt-the-control (SELF-343): a -Infinity CPI print at the point-leg denominator, both CHECKs dropped, does not raise — caught by the pre-existing `<= 0` clause; no new clause was needed for this class'
+);
+select results_eq(
+  $$ select point_date, nav_nominal, nav_inflation_adjusted, cpi_value
+       from pfin.fn_nav_series_inflation_adjusted('daily','2026-01-05','2026-01-05') $$,
+  $$ values ('2026-01-05'::date, 100::numeric, null::numeric, '-Infinity'::numeric) $$,
+  '(ZCninf1) ⭐ THE ROW EXISTS: nav_inflation_adjusted NULL, nav_nominal 100 intact, cpi_value surfaces the -Infinity print — same shape as every other poison class, completing all five'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint neg_inf_point_cpi;
+
+-- =====================================================================
+-- (ZCB) NaN / +Infinity ON THE BASIS LEG (the store's trailing coverage print, not the at-point
+--   print) — SELF-343 item 4: the WIDENED guard bars +Infinity on BOTH legs. The two legs fail in
+--   DIFFERENT ways when poisoned: point-leg +Infinity collapses the figure to a FLAT ZERO
+--   (basis/+Infinity -> 0, indistinguishable from "real value is zero" — see ZCinf1 above and
+--   (V3) below); basis-leg +Infinity does the opposite, yielding an INFINITE figure
+--   (+Infinity/finite -> +Infinity, multiplied through nav_nominal). Same corrupt-the-control
+--   shape: both CHECKs dropped in a savepoint. The coverage/basis print is the table's MAX
+--   cpi_period (067's z1 fixture pin above already establishes coverage_through = max(cpi_period)).
+-- =====================================================================
+savepoint nan_basis_cpi;
+alter table pfin.cpi_u_index
+  drop constraint cpi_u_index_value_positive_finite,
+  drop constraint cpi_u_index_value_finite;
+delete from pfin.cpi_u_index;
+insert into pfin.cpi_u_index (cpi_period, cpi_value) values ('2026-01-01', 100), ('2026-02-01', 'NaN'::numeric);
+select _rls.set_tenant(:'ta'::uuid);
+select lives_ok(
+  $$ select * from pfin.fn_nav_series_inflation_adjusted('daily','2026-01-05','2026-01-05') $$,
+  '(ZCBnan0) corrupt-the-control (SELF-343): a NaN print at the BASIS (coverage_through, 2026-02-01 = max cpi_period) leg, both CHECKs dropped, does not raise'
+);
+select results_eq(
+  $$ select point_date, nav_nominal, nav_inflation_adjusted, cpi_value
+       from pfin.fn_nav_series_inflation_adjusted('daily','2026-01-05','2026-01-05') $$,
+  $$ values ('2026-01-05'::date, 100::numeric, null::numeric, 100::numeric) $$,
+  '(ZCBnan1) ⭐ THE ROW EXISTS: nav_inflation_adjusted NULL even though the AT-POINT leg (cpi_value, surfaced here as 100) is perfectly finite — the poison is on the BASIS leg alone, so only the guard''s own basis-leg clause can be catching this'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint nan_basis_cpi;
+
+savepoint inf_basis_cpi;
+alter table pfin.cpi_u_index
+  drop constraint cpi_u_index_value_positive_finite,
+  drop constraint cpi_u_index_value_finite;
+delete from pfin.cpi_u_index;
+insert into pfin.cpi_u_index (cpi_period, cpi_value) values ('2026-01-01', 100), ('2026-02-01', 'Infinity'::numeric);
+select _rls.set_tenant(:'ta'::uuid);
+select lives_ok(
+  $$ select * from pfin.fn_nav_series_inflation_adjusted('daily','2026-01-05','2026-01-05') $$,
+  '(ZCBinf0) corrupt-the-control (SELF-343): a +Infinity print at the BASIS (coverage_through) leg, both CHECKs dropped, does not raise — without the guard this leg would multiply nav_nominal by an infinite ratio, the OPPOSITE failure mode from the point-leg case'
+);
+select results_eq(
+  $$ select point_date, nav_nominal, nav_inflation_adjusted, cpi_value
+       from pfin.fn_nav_series_inflation_adjusted('daily','2026-01-05','2026-01-05') $$,
+  $$ values ('2026-01-05'::date, 100::numeric, null::numeric, 100::numeric) $$,
+  '(ZCBinf1) ⭐ THE ROW EXISTS: nav_inflation_adjusted NULL, never an infinite figure — the AT-POINT leg (cpi_value=100) is finite and correctly surfaced; the poison and the guard that catches it are both on the basis leg alone'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint inf_basis_cpi;
 
 -- =====================================================================
 -- (X) CROSS-TENANT FAILS CLOSED AS ZERO ROWS, NOT AN ERROR. Probed at B's 2025-10-01
@@ -610,6 +747,23 @@ select is(
 );
 
 -- =====================================================================
+-- (CMT) COMMENT RE-ISSUE WATCHERS (SELF-343 condition 3, function half) — catalog reads, not
+--   file-text checks. 095 STEP 5 re-issues this function's comment because create-or-replace
+--   preserves the OLD one otherwise, which would keep describing a guard the function no longer
+--   has. 053's own battery owns the matching column-comment watcher (095 STEP 3).
+-- =====================================================================
+select ok(
+  obj_description('pfin.fn_nav_series_inflation_adjusted(text,date,date)'::regprocedure, 'pg_proc')
+    ~* 'landed at 095',
+  '(CMT1) obj_description names the 095 landing point for cpi_u_index_value_positive_finite — the comment was actually RE-ISSUED, not left stale by create-or-replace''s comment-preserving behaviour'
+);
+select ok(
+  obj_description('pfin.fn_nav_series_inflation_adjusted(text,date,date)'::regprocedure, 'pg_proc')
+    !~* 'bars NaN and the infinities but NOT zero or negative values',
+  '(CMT2) obj_description no longer states the stale premise ("053''s finiteness CHECK bars NaN/±Infinity but NOT zero or negative values") — that premise went false the moment 095 applied, and the pre-095 wording named a "separate vehicle" that this function''s own catalog comment must not still describe as pending'
+);
+
+-- =====================================================================
 -- (V) ⭐ INVERSION — proving (X) and (ZC) are not vacuous.
 -- =====================================================================
 savepoint v1_corrupt_rls;
@@ -628,5 +782,95 @@ select throws_like(
   '%division by zero%',
   '(V2) the hazard (ZC) guards against is REAL at the SQL level: a bare numeric division by the literal 0 raises division_by_zero. So (ZC0)''s green is evidence the guard fired, not evidence there was never anything to guard against'
 );
+
+-- =====================================================================
+-- (V3) ⭐ INVERSION (SELF-343) — proving the 095-HARDENED guard is load-bearing, not decorative.
+--   Restores the PRE-095 CASE (bare `<= 0` on each leg, no NaN/+Infinity clause) via create-or-
+--   replace inside a nested savepoint, corrupts cpi_u_index with the SAME NaN point-leg fixture
+--   (ZCnan1) uses (both table CHECKs also dropped), and asserts the OLD body LEAKS the poison
+--   rather than nulling it — measured, not merely asserted: `NaN <= 0` is FALSE (PostgreSQL
+--   numeric places NaN above every finite value), so the old guard's two `when` clauses never
+--   fire and the `else` branch computes nav_nominal * (finite / NaN) = NaN. This is exactly what
+--   (ZCnan1) would have missed had the 095 clauses never landed. Rolled back at the end, which
+--   restores BOTH table CHECKs and the REAL (095-hardened) function body — DDL inside a savepoint
+--   is fully transactional, function bodies included.
+-- =====================================================================
+select set_config('role', 'postgres', true);
+savepoint v3_uncorrupt_guard;
+alter table pfin.cpi_u_index
+  drop constraint cpi_u_index_value_positive_finite,
+  drop constraint cpi_u_index_value_finite;
+
+create or replace function pfin.fn_nav_series_inflation_adjusted(
+  p_granularity text,
+  p_start_date  date,
+  p_end_date    date
+)
+returns table (
+  point_date                    date,
+  nav_nominal                   numeric,
+  checkpoint_date               date,
+  nav_inflation_adjusted        numeric,
+  cpi_period                    date,
+  cpi_value                     numeric,
+  cpi_is_carried                boolean,
+  cpi_carried_from              date,
+  cpi_period_was_due            boolean,
+  cpi_nonpublication_on_record  boolean,
+  cpi_coverage_through          date
+)
+language plpgsql
+stable
+security invoker
+set search_path = ''
+as $inv$
+#variable_conflict use_column
+declare
+  v_coverage  date;
+  v_cpi_basis numeric;
+begin
+  select h.coverage_through into v_coverage
+  from pfin.fn_cpi_u_index_for_period(date '1913-01-01') h;
+
+  if v_coverage is not null then
+    select h.cpi_value into v_cpi_basis
+    from pfin.fn_cpi_u_index_for_period(v_coverage) h;
+  end if;
+
+  return query
+  select
+    s.point_date,
+    s.nav_value,
+    s.checkpoint_date,
+    -- PRE-095 GUARD, DELIBERATELY RESTORED FOR THIS INVERSION LEG ONLY: bare `<= 0`, no NaN/
+    -- +Infinity clause. `NaN <= 0` and `Infinity <= 0` are both FALSE, so neither `when` fires.
+    case
+      when v_cpi_basis is null or v_cpi_basis <= 0 then null::numeric
+      when c.cpi_value  is null or c.cpi_value  <= 0 then null::numeric
+      else s.nav_value * (v_cpi_basis / c.cpi_value)
+    end,
+    c.cpi_period,
+    c.cpi_value,
+    c.is_carried,
+    c.carried_from,
+    c.period_was_due,
+    c.nonpublication_on_record,
+    c.coverage_through
+  from pfin.fn_nav_series(p_granularity, p_start_date, p_end_date) s
+  cross join lateral pfin.fn_cpi_u_index_for_period(s.point_date) c
+  order by s.point_date;
+end;
+$inv$;
+
+delete from pfin.cpi_u_index;
+insert into pfin.cpi_u_index (cpi_period, cpi_value) values ('2026-01-01', 'NaN'::numeric), ('2026-02-01', 325.000);
+select _rls.set_tenant(:'ta'::uuid);
+select is(
+  (select nav_inflation_adjusted from pfin.fn_nav_series_inflation_adjusted('daily','2026-01-05','2026-01-05')),
+  'NaN'::numeric,
+  '(V3) ⭐ THE HARDENED CLAUSE IS LOAD-BEARING, MEASURED: with the PRE-095 guard body restored, the SAME NaN-point-leg fixture that (ZCnan1) asserts NULL for now LEAKS the poison as nav_inflation_adjusted = NaN — `NaN <= 0` is FALSE in PostgreSQL numeric ordering, so the old guard''s when-clauses never fire and the else branch computes nav_nominal * (finite / NaN). This is exactly what (ZCnan1) would have missed had the 095 clauses never been added'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint v3_uncorrupt_guard;
 
 rollback;

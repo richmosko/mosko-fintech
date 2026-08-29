@@ -738,6 +738,12 @@ select set_config('role', 'postgres', true);
 -- (6) CPIG — zero AND negative CPI guard.
 -- =====================================================================
 savepoint cpi_zero;
+-- SELF-343/095: cpi_u_index_value_positive_finite now blocks a plain UPDATE to 0/negative —
+-- drop BOTH CHECKs (corrupt-the-control idiom; dropping only the new one leaves the finiteness
+-- CHECK irrelevant here but keeps the intent explicit) before poisoning, restored on rollback.
+alter table pfin.cpi_u_index
+  drop constraint cpi_u_index_value_positive_finite,
+  drop constraint cpi_u_index_value_finite;
 update pfin.cpi_u_index set cpi_value = 0 where cpi_period = :'a5ymonth'::date;
 select _rls.set_tenant(:'ta'::uuid);
 select ok(
@@ -749,12 +755,16 @@ select set_config('role', 'postgres', true);
 rollback to savepoint cpi_zero;
 
 savepoint cpi_negative;
+-- SELF-343/095: same fix as cpi_zero above.
+alter table pfin.cpi_u_index
+  drop constraint cpi_u_index_value_positive_finite,
+  drop constraint cpi_u_index_value_finite;
 update pfin.cpi_u_index set cpi_value = -50 where cpi_period = :'a5ymonth'::date;
 select _rls.set_tenant(:'ta'::uuid);
 select ok(
   (select cpi_unavailable and delta_inflation_adjusted is null
      from pfin.fn_nav_delta_panel() where horizon = '5y'),
-  '(CPIG2) ⭐ NEGATIVE CPI on the denominator: cpi_unavailable TRUE, delta_inflation_adjusted NULL — never a silently sign-flipped net-worth figure. 053 bars NaN/Infinity but not zero/negative, so this guard is the only thing standing between a poisoned print and a wrong answer'
+  '(CPIG2) ⭐ NEGATIVE CPI on the denominator: cpi_unavailable TRUE, delta_inflation_adjusted NULL — never a silently sign-flipped net-worth figure. This leg now runs INSIDE a corrupt-the-control savepoint (SELF-343/095 dropped both cpi_u_index CHECKs) since the CHECK itself would otherwise reject the poisoned UPDATE outright — this function''s own `> 0` guard is defense-in-depth behind it, same relationship as 067''s'
 );
 select set_config('role', 'postgres', true);
 rollback to savepoint cpi_negative;
