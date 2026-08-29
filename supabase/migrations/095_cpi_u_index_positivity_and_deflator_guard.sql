@@ -126,9 +126,18 @@
 --      values to the NEW constraint, drop cpi_u_index_value_finite inside a
 --      savepoint first; measured then, all three are rejected by
 --      cpi_u_index_value_positive_finite (-Infinity via `> 0`).
---      ⚠ Dropping a constraint on this table requires TABLE OWNERSHIP, which
---      the `postgres` role does not hold here — the owner is supabase_admin.
---      Any corrupt-the-control leg must run under a role that owns the table.
+--      ⚠ Dropping a constraint requires TABLE OWNERSHIP. In the local stack
+--      and in CI — both built by `supabase start` — `pfin.cpi_u_index` is
+--      owned by `postgres`, so the batteries' existing
+--      `set_config('role','postgres')` already satisfies this and needs no
+--      change. A scratch DB whose chain was applied as `supabase_admin`
+--      without transferring database ownership to `postgres` diverges from
+--      that and will report `must be owner of table cpi_u_index` — that is a
+--      harness fault, not a finding.
+--      The in-tree precedent is 085's battery: its (C2)/(C4) inversion legs
+--      drop a CHECK inside a savepoint under exactly this role and are green
+--      in the same CI lane — that is the shape to copy, and it is re-verified
+--      on every run rather than measured once.
 --   2. THE CORRUPT-THE-CONTROL LEG on 067, per condition (4) and 067's own
 --      header rule that unreachable-by-construction is a reason to KEEP a leg.
 --      ⚠ THE DETAIL THAT SILENTLY DEGRADES IT: drop BOTH
@@ -166,10 +175,16 @@
 --      ⚠ Do NOT convert these legs to throws_ok on the write. That asserts the
 --      CHECK, which item 1 already covers, and retires the GUARD assertion this
 --      migration exists to keep standing.
---      ⚠ Item 2's table-ownership caveat applies to all three files, and all
---      six existing poison writes currently run under
---      set_config('role','postgres') — resolve the role before assuming the
---      drop-in-savepoint shape executes at all.
+--      ⚠ NO ROLE CHANGE IS NEEDED — this is settled, not open. Item 2's
+--      ownership note applies to every battery named above and is ALREADY
+--      SATISFIED: `supabase start` builds the local stack and CI alike with
+--      pfin.cpi_u_index owned by `postgres`, which is the role every existing
+--      poison write above already runs under. 085's (C2)/(C4) legs are the
+--      in-tree precedent — same role, same savepoint shape, green in the same
+--      lane. The repair adds NO pgTAP leg and rolls back no additional one:
+--      each savepoint already exists and already rolls back today, so the
+--      drop is DDL added inside an existing rollback scope and plan(N) is
+--      UNCHANGED in every file named above.
 --      ⚠ The BLAST RADIUS bullets above clear 071 and 073 as FUNCTIONS. That is
 --      not a clearance for their BATTERIES.
 --   6. THE ATTRIBUTION IN ITEM 1 RESTS ON CONSTRAINT-NAME ORDER, which is why
