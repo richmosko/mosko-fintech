@@ -1,6 +1,24 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "permissions": {
+    "allow": [
+      "Bash(md5)",
+      "Bash(md5 *)",
+      "Bash(md5sum)",
+      "Bash(md5sum *)",
+      "Bash(shasum)",
+      "Bash(shasum *)",
+      "mcp__claude_ai_Linear__get_issue",
+      "mcp__claude_ai_Linear__get_issue_status",
+      "mcp__claude_ai_Linear__list_issues",
+      "mcp__claude_ai_Linear__list_comments",
+      "mcp__claude_ai_Linear__list_milestones",
+      "mcp__claude_ai_Linear__get_milestone",
+      "mcp__claude_ai_Linear__get_project",
+      "mcp__claude_ai_Linear__list_projects",
+      "mcp__claude_ai_Linear__save_issue",
+      "mcp__claude_ai_Linear__save_comment"
+    ],
     "deny": [
       "Bash(supabase db reset)",
       "Bash(supabase db reset *)",

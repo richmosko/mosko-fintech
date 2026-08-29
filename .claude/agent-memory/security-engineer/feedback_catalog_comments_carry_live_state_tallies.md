@@ -80,3 +80,37 @@ claim was RETRACTED everywhere, not just RESTATED correctly once. This is the sa
 
 Related: [[measure-the-fence-regex-not-its-comment]] (a description claiming a property the artifact
 lacks) and [[sec-lock-cross-check-catches-my-own-misreads]].
+
+**⚠ A CORRECTION'S OWN SWEEP CLAIM IS A CLAIM ABOUT THE GREP'S ENCODING, NOT ABOUT THE TREE — and the
+HTML doc artifacts are where that bites.** ADR-011 D19 Amendment Edit 1 corrected the as-of predicate to
+a half-open bound and closed with a Sweep asserting the defective form *"appears in no migration, no
+application source and no other document."* The sweep pattern was `grep -rn 'created_at <= \$1'`, which
+**cannot match `created_at &lt;= $1`** — so three ratified sites survived it: `docs/SECURITY/index.html`
+(the RT-25 catalog row's own acceptance text, plus the SD-00 storage row) and `docs/ARCH/index.html`'s
+Lock-15 trade-off entry. Found at the SELF-253 review, ~6 days later, on the surface that is the
+predicate's FIRST LIVE INSTANCE. The confirming negative: `git grep 'created_at &lt; ('` over `docs/`
+returned **nothing** — no doc anywhere carried the corrected form.
+
+**Why it matters more than ordinary doc drift:** the stale copy sat in the RT catalog's *acceptance
+criteria*, which is what QA authors a battery FROM. D19 Edit 1 itself records that no value assertion
+catches this defect — so a battery written from the catalog would have asserted the wrong bound and gone
+green over the bug. A stale predicate in an RT row is a stale TEST SPEC, not a stale comment.
+
+**How to apply:** any sweep over `docs/**` must run the pattern in BOTH encodings — raw and
+HTML-entity (`<` / `&lt;`, `>` / `&gt;`, `&` / `&amp;`) — because `docs/PRD`, `docs/ARCH` and
+`docs/SECURITY` are HTML and every comparison operator in them is escaped. Then run the **positive**
+grep for the CORRECTED form and confirm it appears where you expect; a sweep that only greps the old
+string cannot distinguish "fixed everywhere" from "never present in a form I could see." Same family as
+[[my-review-measurements-become-quoted-sources]]'s case-twin lesson: grep both spellings, not one.
+
+**⚠ A NEW ENDPOINT COPIES THE PREVIOUS ENDPOINT'S HEADER, so a superseded ledger description travels
+into files that have nothing to do with the ledger.** At the SELF-252 review, `+server.ts`'s header read
+*"RT-26's 3-surface allowlist (webhook / exchange / remove) is untouched by this endpoint"* — inherited
+byte-identical from `planning-target/+server.ts`. Measured: `scripts/ci/rt26-allowlist.txt` holds ONE
+non-comment entry (`api/src/lib/server/supabase-admin.ts`); ADR-016 Decision 4 pruned entries 1–3 as
+fail-open standing pre-authorizations. **The operative clause was TRUE and only the parenthetical
+description was false**, which is why it reads safe: the sentence's own claim verifies, so a reviewer
+checking the claim never checks the noun phrase it hangs on. **How to apply:** on any endpoint whose
+header cites a fence, registry, or allowlist by SHAPE, `grep -v '^\s*#'` the registry file itself in the
+same turn — and expect the sibling endpoint on `main` to carry the identical sentence (fix the branch
+instance as a condition; route the landed one separately, never sweep it inside a feature PR).
