@@ -49,6 +49,28 @@ scope-limited measurement offered in its support is the thing most likely to be 
 one. Same family as [[a-stated-invariant-stronger-than-the-contract]] and
 `assertion-with-no-watcher` in the project index.
 
+**⚠ THE SAME SHAPE ARRIVES AS A CITATION FLAG, AND THERE THE INFLATED SCOPE PICKS THE WRONG FIX.**
+SELF-343 / `095`: a relayed flag read *"items 5/6 and the EDIT-3 replacement all cite item 2's
+ownership note"* and offered two remediations — (a) MOVE the paragraph so every citation becomes
+true, or (b) amend the citations. I enumerated instead of accepting:
+`git show <sha>:<file> | grep -n -i 'item [0-9]'` returned five sites, of which **exactly one was
+wrong**. Item 6 cited item 1 and cited it correctly; "item 5" and "the EDIT-3 replacement" were the
+same occurrence counted twice. **At the reported scope of three, option (a) looks proportionate; at
+the measured scope of one, (a) is a structural edit to fix a one-word defect** — and (a) was also
+wrong on the merits, because the note being cited is the executability rider on an instruction that
+lives in item 1, so relocating it would have left item 1's own instruction uncaveated. *Never
+relocate a control to make prose about it true* — same family as the "never demote a control to make
+its prose true" line at [[enumeration-and-watcher-stop-one-short]]. **Fix by CONTENT-name, not by
+ordinal**, when the list has recently grown; a bare ordinal is true today and re-stales on the next
+insertion.
+
+**⚠ AND: do not read a precise distinction as a slip.** In the same exchange I offered Architect an
+"optional" note that their paragraph said TABLE ownership in one clause and DATABASE ownership in
+another. Both were deliberate and correct — the DDL tests table ownership; the missing harness step
+transfers database ownership. Two distinct objects. **Before flagging an apparent inconsistency in
+someone's text, ask whether they are holding a finer distinction than I am**, and say "I do not
+require the change" only after that check rather than as a hedge that lets a wrong note ship anyway.
+
 **How to apply:**
 - For each enumerated leg, find the consumer and ask: is the bad value **read**? If the
   consumer's `where` excludes the row, the leg is inert — say so explicitly, because

@@ -2,7 +2,7 @@
 
 ## Open work / findings
 
-- [053 CPI positivity CHECK follow-up](project_053_cpi_positivity_check_followup.md) — pointer only; canonical home is **BACKLOG §7.14** with Sec's four binding conditions. ⚠ `> 0` alone re-admits NaN *and* Infinity.
+- **[053 CPI positivity CHECK — SHIPPED at `095`](project_053_cpi_positivity_check_followup.md)** — additive to `cpi_u_index_value_finite`; residual = two catalog comments `095` falsified (`072`/`073`), team-lead-owned.
 
 - **[`is_tax_payment` is Expense-scoped; the real tax rows are Transfer-class](project_is_tax_payment_expense_scope_gap.md)** — ADR-062 `091`; the flag cannot reach `Tax - US Federal` / `Tax - California`. Unresolved at 2026-08-25.
 - **[`cashflow_target` shape supersedes D18 + SD-22](project_cashflow_target_shape_supersession.md)** — `090` built the WIDE row; both artifacts still record the inherited `(users_id, target_kind)` 2-row shape. Owner-routed; RT still owed.
@@ -35,10 +35,13 @@
 - **[A return SHAPE can discharge an equivalence obligation](reference_return_shape_can_discharge_an_equivalence_obligation.md)** — two states that must mean one thing belong in the TYPE, not in consumer discipline; "a handler anticipating only one diverges" is the tell.
 - **[Mirror a function from the CATALOG, not the file](feedback_mirror_a_function_from_the_catalog_not_the_file.md)** — a `CREATE OR REPLACE` chain leaves every superseded body greppable; the replacing migration is often named after something else. Measured: the copy did not parse.
 - **[CREATE OR REPLACE resets volatility](reference_create_or_replace_resets_volatility.md)** — silently erases an `ALTER … STABLE` pin, invisible to every value assertion; pin per SIGNATURE, and a STABLE caller of a VOLATILE callee is an unbacked promise.
+- **[A CHECK violation is reported in constraint-NAME order](reference_check_violation_reported_in_constraint_name_order.md)** — not creation order; an overlapping new constraint is MASKED by an alphabetically-earlier sibling, and a rename silently reds every name-anchored leg.
 
 ## How to work
 
 - **[The repo runs on LOCAL time; agents read UTC](reference_repo_runs_on_local_time_agents_read_utc.md)** — evening datestamps come out a day ahead. ⚠ Treat a wrong date as SYSTEMATIC, not a typo; re-grep the branch, not the file.
+
+- **[A harness divergence arrives as a FINDING](feedback_harness_divergence_arrives_as_a_finding.md)** — a scratch applied as the wrong role produced a specific, plausible role claim I shipped into committed bytes *and* into Sec's review text. Re-measure every role/ownership/ACL claim against the live stack + the CI workflow.
 
 - **[A prose observation needs re-anchoring too](feedback_a_prose_observation_needs_reanchoring_too.md)** — I re-read every sha and md5 in-turn, then reported a wording finding measured on mid-edit bytes. Read the COMMITTED bytes; a mid-edit read is a draft note, not a finding.
 - **[A ref handed over is not yours to advance](feedback_a_ref_handed_over_is_not_yours_to_advance.md)** — after "ready at `<sha>`", unknown review state is BLOCKING; a hold in flight can't stop a push already moving. ⚠ Never force-push back to the reviewed sha.
@@ -46,6 +49,8 @@
 - **[`temp/` is per-worktree, not shared](feedback_temp_is_per_worktree_not_shared.md)** — invisible from a teammate's worktree; hand over an ABSOLUTE path + md5. ⚠ **Committed migrations already cite DELETED temp docs** — never point committed code at `temp/`. ⚠ The session-close SWEEP inherits the blindness and reports clean: 29 files, 9 days old, measured at SELF-330.
 
 - **[A consequence list inherits its author's instrument](feedback_consequence_list_inherits_its_authors_instrument.md)** — re-measure over the instruments the ADR did NOT use (the live catalog, not the tree); and record an obligation whose referent doesn't exist.
+
+- **[Fix the CITATION, not the referent](feedback_fix_the_citation_not_the_referent.md)** — relocating a mis-cited paragraph moves a control out from under what needed it; cite by CONTENT, not ordinal. ⚠ Scope a citation finding by what you GREPPED, not what you noticed.
 
 - **[A self-authored label hardens into fact](feedback_self_authored_label_hardens_into_fact.md)** — I invented `C1` for symmetry and it reached a commit subject, which has NO supersession mechanism. Grep the dispatch, not your own earlier use.
 
