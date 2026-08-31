@@ -546,11 +546,12 @@ rollback to savepoint poison_cpi;
 -- =====================================================================
 -- (POSTURE)/(ACL) SECURITY INVOKER pin + EXECUTE grants.
 -- =====================================================================
-select ok(
-  (select not p.prosecdef
+select is(
+  (select array[p.prosecdef::text, p.provolatile::text, array_to_string(p.proconfig, ',')]
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'pfin' and p.proname = 'fn_historical_expenditures'),
-  '(POSTURE) SECURITY INVOKER, not DEFINER — the migration''s own posture rationale: DEFINER here would sever the posting_prototype join from the RLS that makes it safe'
+  array['false','s','search_path=""'],
+  '(POSTURE) ⭐ read DECLARATIVELY from the catalog, the 067 (ADR2) three-element form: SECURITY INVOKER (prosecdef false — the migration''s own posture rationale, DEFINER here would sever the posting_prototype join from the RLS that makes it safe), STABLE (provolatile s), search_path pinned empty. Behaviour alone cannot distinguish INVOKER from a DEFINER owned by a non-privileged role — only the catalog can'
 );
 select ok(
   has_function_privilege('authenticated', 'pfin.fn_historical_expenditures(date)', 'execute'),
