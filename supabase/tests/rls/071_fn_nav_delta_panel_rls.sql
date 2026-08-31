@@ -157,8 +157,16 @@ begin;
 -- place (same leg, one more column in an existing predicate) — not counted
 -- as new. (LEAK1) is REWRITTEN in place (Sec finding: assert the negative,
 -- `<> 690000`, not the specific value `= 6900000` — see its own header) —
--- also not a count change.
-select plan(44);
+-- also not a count change. + 6 new at SELF-344/097 (the month anchor
+-- STRICTLY BEFORE today fix): ANCHOR-P0 (the crux leg, independent
+-- re-derivation of the month anchor), CAUSE-NEWANCHOR (item 5, insufficient
+-- history over the new anchor), DEGEN1/DEGEN2/DEGEN3 (items 2+3, clock-
+-- forced to a month-end — the positive degenerate-day proof and the
+-- wrong-fix discriminator), JAN1 (item 6, clock-forced to January,
+-- month/ytd anchor equality for the whole month). ANCHOR-P2/ANCHOR-P5 are
+-- CORRECTED in place (P2 rebased off :base instead of the panel's own
+-- 'month' row; P5's off-by-one bound widened to <=31) — not counted as new.
+select plan(50);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb, _rls.tenant_c() as tc \gset
 \set td '00000000-0000-0000-0000-000000000d71'
@@ -173,10 +181,27 @@ insert into pfin.user_settings (users_id, mfa_policy) values
 -- =====================================================================
 -- ANCHOR-DATE SCAFFOLDING — mirrors the migration body's OWN date expressions
 -- exactly (070's answer, then base/ytd/ye_period/1y/3y/5y). This is not the
--- thing under test (the migration's anchor-date FORMULA is a documented
--- product default, not a correctness crux); it is how this file knows which
--- calendar dates to seed checkpoints and CPI prints at, regardless of which
--- real day this battery happens to run on.
+-- thing under test for the 1y/3y/5y grain (the migration's anchor-date
+-- FORMULA there is unchanged and a documented default, not a correctness
+-- crux); it is how this file knows which calendar dates to seed checkpoints
+-- and CPI prints at, regardless of which real day this battery happens to
+-- run on. :base is STILL legitimate scaffolding for 1y/3y/5y ONLY (097 left
+-- v_base's CASE untouched for that purpose).
+--
+-- ⚠ SELF-344 / 097 — :monthanchor is NOT :base, and MUST be derived by a
+-- ROUTE INDEPENDENT of the body's month-end CASE (071's own header rule (c),
+-- the rule this defect violated for 18 days by copying the body's expression
+-- into its own oracle — see 097's header, "A DEFECT COPIED INTO ITS OWN
+-- ORACLE IS NOT UNDER TEST"). The route used here is INTEGER DAY-OF-MONTH
+-- SUBTRACTION, not date_trunc/interval arithmetic at all: `today minus
+-- extract(day from today)` lands on the last day of the PRIOR calendar
+-- month for ANY date, by a pure arithmetic identity (day N of month M,
+-- minus N days, is day 0 of month M — the day before month M started, i.e.
+-- the last day of month M-1) — sharing no machinery with the body's
+-- `date_trunc('month', today) - 1 day` expression, which happens to compute
+-- the SAME date but by truncation+interval rather than by counting. THIS is
+-- the independent :base re-derivation SELF-344's migration names as QA's,
+-- separate and larger than the migration itself.
 -- =====================================================================
 select pfin.fn_server_today() as today \gset
 select (case
@@ -185,6 +210,7 @@ select (case
           then :'today'::date
           else (date_trunc('month', :'today'::date::timestamp) - '1 day'::interval)::date
         end) as base \gset
+select (:'today'::date - extract(day from :'today'::date)::int) as monthanchor \gset
 select (date_trunc('year', :'today'::date::timestamp) - '1 day'::interval)::date as ytdanchor \gset
 select (date_trunc('year', :'today'::date::timestamp) - '1 year'::interval + '11 mon'::interval)::date as yeperiod \gset
 select (:'base'::date::timestamp - '12 mon'::interval)::date as a1y \gset
@@ -234,13 +260,20 @@ select is(
 -- =====================================================================
 -- FIXTURE — Tenant A: full-depth, every anchor case in one tenant.
 --   current (:today)        = 700,000  (exact — latest checkpoint <= today)
---   month anchor (:base)    = 690,000  — served by CARRY from (:base - 2), NOT
---     an exact hit. ⚠ Deliberately offset from B's exact-hit date below (Sec's
---     leak-canary note, see (LEAK1)): if A and B both sat exactly on :base, a
---     `using(true)` sabotage would find TWO rows tied on the same nav_date and
---     tie-break nondeterministically, making a corrupt-the-control leg flaky.
---     delta_nominal for the month horizon is UNCHANGED by this (still
---     700000-690000=10000 — only WHICH DATE serves it moves, not the value).
+--   month anchor (:monthanchor) = 690,000  — served by CARRY from
+--     (:monthanchor - 2), NOT an exact hit. ⚠ Deliberately offset from B's
+--     exact-hit date below (Sec's leak-canary note, see (LEAK1)): if A and B
+--     both sat exactly on :monthanchor, a `using(true)` sabotage would find
+--     TWO rows tied on the same nav_date and tie-break nondeterministically,
+--     making a corrupt-the-control leg flaky. delta_nominal for the month
+--     horizon is UNCHANGED by this (still 700000-690000=10000 — only WHICH
+--     DATE serves it moves, not the value). ⚠ SELF-344/097: this row USED TO
+--     sit at (:base - 2) — under the superseded body :base collided with
+--     :today on a month-end day, and the fixed body no longer reads :base
+--     for the month anchor at all, so :monthanchor (independently derived
+--     above, always in the PRIOR calendar month, never equal to :today by
+--     construction) is what the fixed 'month' horizon actually resolves
+--     against.
 --   ytd anchor               = 600,000  (EXACT HIT)
 --   1y anchor (:a1y)         = 580,000  (EXACT HIT)
 --   3y anchor: NO checkpoint AT :a3y — seeded 5 days EARLIER at 400,000, so
@@ -250,7 +283,7 @@ select is(
 select set_config('app.nav_computed_for', :'ta', true);
 insert into pfin.nav_daily (users_id, nav_date, nav_value) values
   (:'ta', :'today'::date, 700000),
-  (:'ta', (:'base'::date - 2), 690000),
+  (:'ta', (:'monthanchor'::date - 2), 690000),
   (:'ta', :'ytdanchor'::date, 600000),
   (:'ta', :'a1y'::date, 580000),
   (:'ta', (:'a3y'::date - 5), 400000),
@@ -260,12 +293,12 @@ select set_config('role', 'postgres', true);
 
 -- Tenant B: SAME dates as A for ytd/1y/3y/5y, 10x values — the two-tenant
 -- non-vacuity pair. Month anchor is the ONE exception: B sits EXACTLY on
--- :base (A does not, see above) — this is Sec's leak-canary date, the single
--- checkpoint only B holds at that exact date, used by (LEAK1) below.
+-- :monthanchor (A does not, see above) — this is Sec's leak-canary date, the
+-- single checkpoint only B holds at that exact date, used by (LEAK1) below.
 select set_config('app.nav_computed_for', :'tb', true);
 insert into pfin.nav_daily (users_id, nav_date, nav_value) values
   (:'tb', :'today'::date, 7000000),
-  (:'tb', :'base'::date, 6900000),
+  (:'tb', :'monthanchor'::date, 6900000),
   (:'tb', :'ytdanchor'::date, 6000000),
   (:'tb', :'a1y'::date, 5800000),
   (:'tb', (:'a3y'::date - 5), 4000000),
@@ -277,12 +310,21 @@ select set_config('role', 'postgres', true);
 
 -- Tenant G: current-side CARRY (cron-outage shape) — the LATEST checkpoint is
 -- 10 days before :today, not fresh, so current_checkpoint_date must be that
--- older date on ALL FIVE rows, not today itself. Mirrors A's other anchors
--- so all five horizons still resolve cleanly.
+-- older date on ALL FIVE rows, not today itself. ⚠ SELF-344/097 FIXTURE FIX:
+-- the scaffolding row USED TO sit at (:base - 2), which is safely older than
+-- (:today - 10) only when :base sits comfortably before :today — but :base's
+-- CASE makes :base = :today on a month-end day, so (:base - 2) = (:today -
+-- 2), MORE RECENT than (:today - 10), inverting the intended ordering and
+-- making G's TRUE "current" resolve to the wrong (more recent) checkpoint —
+-- measured directly (root-cause of the original CARRY3 failure, independent
+-- of the month-anchor collapse). Fixed to a FIXED OFFSET, (:today - 20),
+-- which is > 10 days before :today on EVERY calendar day regardless of
+-- where :today sits in its own month — no floating reference to :base at
+-- all, so this ordering can never invert again.
 select set_config('app.nav_computed_for', :'tg', true);
 insert into pfin.nav_daily (users_id, nav_date, nav_value) values
   (:'tg', (:'today'::date - 10), 750000),
-  (:'tg', (:'base'::date - 2), 740000),
+  (:'tg', (:'today'::date - 20), 740000),
   (:'tg', :'ytdanchor'::date, 650000),
   (:'tg', :'a1y'::date, 630000),
   (:'tg', (:'a3y'::date - 5), 450000),
@@ -294,7 +336,7 @@ select set_config('role', 'postgres', true);
 select set_config('app.nav_computed_for', :'td', true);
 insert into pfin.nav_daily (users_id, nav_date, nav_value) values
   (:'td', :'today'::date, 111000),
-  (:'td', :'base'::date, 110000),
+  (:'td', :'monthanchor'::date, 110000),
   (:'td', :'ytdanchor'::date, 100000),
   (:'td', :'a1y'::date, 95000),
   (:'td', :'a3y'::date, 80000),
@@ -324,12 +366,41 @@ select set_config('role', 'postgres', true);
 -- percent by the SAME "never 0" principle as delta_percent, while
 -- delta_nominal and delta_inflation_adjusted (500000*(300/320) - 0 = 468750)
 -- both still stand. Additive only — does not touch the month/1y rows above.
+-- ⚠ SELF-344/097 FIXTURE FIX (root cause of the original PCT0 failure): this
+-- month-anchor row USED TO sit at (:today, 500000) AND (:base, 0) in the SAME
+-- multi-row INSERT — on a month-end day :base = :today, so the two rows
+-- targeted the IDENTICAL (tf, nav_date) key, and `on conflict do nothing`
+-- silently dropped the second (the intended zero-anchor row), verified
+-- directly: `INSERT 0 3`, not 4. :monthanchor is ALWAYS in the calendar month
+-- strictly before :today (independently derived above), so it can never
+-- again collide with :today — the collision is eliminated by construction,
+-- not papered over.
 select set_config('app.nav_computed_for', :'tf', true);
 insert into pfin.nav_daily (users_id, nav_date, nav_value) values
   (:'tf', :'today'::date, 500000),
-  (:'tf', :'base'::date, 0),
+  (:'tf', :'monthanchor'::date, 0),
   (:'tf', :'a1y'::date, -50000),
   (:'tf', :'a3y'::date, 0)
+on conflict (users_id, nav_date) do nothing;
+select set_config('role', 'postgres', true);
+
+-- Tenant H: SELF-344/097 item 5 — INSUFFICIENT HISTORY OVER THE NEW ANCHOR.
+-- Exactly ONE checkpoint, AT :today, and NOTHING earlier. Under the
+-- SUPERSEDED body, on a month-end day this tenant's month anchor (=:today,
+-- via v_base's true-branch) would have found this SAME checkpoint and
+-- reported a confident delta_nominal=0 — "no change" — when the true state
+-- is "no prior observation exists at all". Under the FIXED body the month
+-- anchor is ALWAYS strictly before :today, so this tenant has NOTHING
+-- at-or-before it: anchor_checkpoint_date must be NULL and both deltas NULL
+-- — the INSUFFICIENT-HISTORY cause the defect was silently overwriting with
+-- a number. Holds on every run day, not just a month-end — no clock forcing
+-- needed.
+\set th '00000000-0000-0000-0000-00000000ff71'
+insert into auth.users (id) values (:'th');
+insert into pfin.user_settings (users_id, mfa_policy) values (:'th', 'none');
+select set_config('app.nav_computed_for', :'th', true);
+insert into pfin.nav_daily (users_id, nav_date, nav_value) values
+  (:'th', :'today'::date, 900000)
 on conflict (users_id, nav_date) do nothing;
 select set_config('role', 'postgres', true);
 
@@ -463,21 +534,35 @@ select is(
 
 -- =====================================================================
 -- (ANCHOR) — anchor-date DERIVATION, verified by INDEPENDENT arithmetic
---   (Architect, d97f444 header (c); five properties confirmed by name in
---   round-2 review). This file's own fixture-scaffolding section above DOES
---   reuse the body's date_trunc/interval expressions (to know where to seed
---   checkpoints) — legitimate for THAT purpose, but insufficient on its own:
---   a shared mistake in month-end derivation would place the fixture at the
---   SAME wrong date the function looks for, and every arithmetic leg above
---   would still pass. These five legs are what actually close that gap, each
---   checking the function's OWN reported value against a DIFFERENT route
---   than the body's:
+--   (Architect, d97f444 header (c); properties confirmed by name in round-2
+--   review). This file's own fixture-scaffolding section above DOES reuse
+--   the body's date_trunc/interval expressions for :base (to know where to
+--   seed 1y/3y/5y checkpoints, still legitimate — 097 left that expression
+--   unchanged) — but :monthanchor is deliberately NOT built that way (see
+--   the scaffolding block's own SELF-344/097 note). These legs are what
+--   actually close the independence gap, each checking the function's OWN
+--   reported value against a DIFFERENT route than the body's:
+--     (P0) ⭐⭐ SELF-344/097 — THE CRUX LEG. month.anchor_date =
+--          :monthanchor EXACTLY, where :monthanchor was derived by INTEGER
+--          DAY-OF-MONTH SUBTRACTION (scaffolding block above), sharing NO
+--          machinery with the body's date_trunc/interval expression. This is
+--          the leg 071's original battery did NOT have: the old pin copied
+--          the body's CASE verbatim into its own oracle, so a shared mistake
+--          in month-end derivation was invisible for 18 days. This one
+--          cannot make that mistake, because it does not compute the
+--          expected date the same way the body does.
 --     (P1) every anchor_date is the last day of its OWN month — a
 --          self-consistency check on the returned value, never a
 --          recomputation from `today`.
---     (P2) 1y/3y/5y sit exactly 12/36/60 months before the month anchor —
---          purely relational between returned rows, no date arithmetic on
---          `today` at all.
+--     (P2) ⚠ REBASED (SELF-344/097): 1y/3y/5y sit exactly 12/36/60 months
+--          before :base (fixture scaffolding), NOT before month.anchor_date
+--          any more — the two coincide only on non-degenerate days now, since
+--          v_base and the month anchor are DIFFERENT expressions post-097
+--          (v_base's CASE still governs 1y/3y/5y only). Relating 1y/3y/5y to
+--          the panel's OWN 'month' row would silently break on every future
+--          month-end run; relating them to the independently-scaffolded
+--          :base holds on EVERY day, which is what makes this a property of
+--          the function rather than of today's date.
 --     (P3) ⭐ ytd.anchor_date = make_date(year(today)-1, 12, 31) — make_date
 --          RECONSTRUCTS a date from components; the body reaches this via
 --          date_trunc('year', today) - 1 day, which shares NO machinery
@@ -487,10 +572,23 @@ select is(
 --          (date_trunc('year') - 1 year + 11 mon) is the most convoluted
 --          line in the function and the one Architect flagged as least
 --          likely to be right by luck; make_date shares nothing with it.
---     (P5) month.anchor_date is not in the future and sits within one
---          month of today (a loose bound — catches a base landing a whole
---          month too far back, not a precise recomputation).
+--     (P5) ⚠ CORRECTED BOUND (SELF-344/097): month.anchor_date is not in the
+--          future and sits WITHIN 31 DAYS of today (was "< 31", an off-by-
+--          one that the new anchor can hit EXACTLY: today = the 31st of a
+--          31-day month -> anchor = the 31st of the PRIOR month -> gap is
+--          31 days exactly, e.g. 31 January -> 31 December, the maximum
+--          possible gap under `today - extract(day from today)`). A loose
+--          bound, catches an anchor landing a whole month too far back, not
+--          a precise recomputation.
 -- =====================================================================
+select _rls.set_tenant(:'ta'::uuid);
+select is(
+  (select anchor_date from pfin.fn_nav_delta_panel() where horizon = 'month'),
+  :'monthanchor'::date,
+  '(ANCHOR-P0) ⭐⭐ SELF-344/097 THE CRUX LEG: month.anchor_date EQUALS :monthanchor, independently re-derived by integer day-of-month subtraction — the route the original battery skipped, which is why the defect was latent for 18 days (071''s own header rule (c): do not compute the expected anchor with the body''s own expression)'
+);
+select set_config('role', 'postgres', true);
+
 select _rls.set_tenant(:'ta'::uuid);
 select ok(
   (select bool_and(anchor_date = (date_trunc('month', anchor_date::timestamp) + interval '1 month' - interval '1 day')::date)
@@ -501,17 +599,15 @@ select set_config('role', 'postgres', true);
 
 select _rls.set_tenant(:'ta'::uuid);
 select ok(
-  (with panel as (select * from pfin.fn_nav_delta_panel()),
-        m as (select anchor_date as month_anchor from panel where horizon = 'month')
+  (with panel as (select * from pfin.fn_nav_delta_panel())
    select bool_and(
-     (12 * (extract(year from m.month_anchor) - extract(year from p.anchor_date))
-          + (extract(month from m.month_anchor) - extract(month from p.anchor_date)))
+     (12 * (extract(year from :'base'::date) - extract(year from p.anchor_date))
+          + (extract(month from :'base'::date) - extract(month from p.anchor_date)))
        = n.months_back
    )
    from panel p
-   join (values ('1y',12), ('3y',36), ('5y',60)) as n(horizon, months_back) on n.horizon = p.horizon
-   cross join m),
-  '(ANCHOR-P2) 1y/3y/5y anchors sit EXACTLY 12/36/60 calendar months before the month anchor — purely relational between returned rows (one call to the function, via a CTE), no arithmetic on `today` at all'
+   join (values ('1y',12), ('3y',36), ('5y',60)) as n(horizon, months_back) on n.horizon = p.horizon),
+  '(ANCHOR-P2) ⚠ SELF-344/097 REBASED: 1y/3y/5y anchors sit EXACTLY 12/36/60 calendar months before :base (independently-scaffolded fixture date, NOT the panel''s own ''month'' row) — purely relational, no arithmetic on `today` beyond the fixture pin already computed above. Holds on every day; the OLD form (relative to month.anchor_date) does not, post-097, on a month-end'
 );
 select set_config('role', 'postgres', true);
 
@@ -533,9 +629,9 @@ select set_config('role', 'postgres', true);
 
 select _rls.set_tenant(:'ta'::uuid);
 select ok(
-  (select anchor_date <= :'today'::date and :'today'::date - anchor_date < 31
+  (select anchor_date <= :'today'::date and :'today'::date - anchor_date <= 31
      from pfin.fn_nav_delta_panel() where horizon = 'month'),
-  '(ANCHOR-P5) month anchor is not in the future and sits within one month of today — a loose bound, catches a base landing a whole month too far back'
+  '(ANCHOR-P5) ⚠ SELF-344/097 CORRECTED BOUND (<=31, was <31 — an off-by-one the new anchor can hit exactly on the 31st of a 31-day month): month anchor is not in the future and sits within 31 days of today — a loose bound, catches an anchor landing a whole month too far back'
 );
 select set_config('role', 'postgres', true);
 
@@ -577,6 +673,23 @@ select results_eq(
        from pfin.fn_nav_delta_panel() where horizon = '1y' $$,
   $$ values (true, true, true, true, true, true) $$,
   '(CAUSE1c) ⭐ 072 item 15: INSUFFICIENT HISTORY on an ADJ-ELIGIBLE horizon — tenant E''s 1y anchor also predates its earliest checkpoint (unlike (CAUSE1)''s ytd row, 1y DOES carry real-terms columns when resolvable), so BOTH real-terms columns (delta_inflation_adjusted, and 072''s delta_inflation_adjusted_percent) go NULL via the insufficient-history path specifically, not the not-applicable or CPI-unresolvable one — the third distinct NULL cause, now proven on a row where the percent column could otherwise have existed'
+);
+select set_config('role', 'postgres', true);
+
+-- (d, SELF-344/097 item 5) INSUFFICIENT HISTORY OVER THE NEW MONTH ANCHOR —
+--   tenant H holds exactly ONE checkpoint, AT :today, nothing earlier. THIS
+--   IS THE CASE THE DEFECT WAS SILENTLY ANSWERING WITH A NUMBER: under the
+--   superseded body, on a month-end day this checkpoint would ALSO have
+--   served as the (degenerate) month anchor, reporting delta_nominal=0 as if
+--   "nothing changed" — a confident wrong number in the register reserved for
+--   a true one. Under the fixed body the month anchor is ALWAYS strictly
+--   before :today, so H has nothing at-or-before it on ANY run day.
+select _rls.set_tenant(:'th'::uuid);
+select results_eq(
+  $$ select anchor_date is not null, anchor_checkpoint_date is null, delta_nominal is null, delta_percent is null
+       from pfin.fn_nav_delta_panel() where horizon = 'month' $$,
+  $$ values (true, true, true, true) $$,
+  '(CAUSE-NEWANCHOR) ⭐ SELF-344/097 item 5: tenant H''s ONLY checkpoint is AT :today, strictly after the (now always strictly-before-today) month anchor — anchor_date is KNOWN, anchor_checkpoint_date and both deltas are NULL. NOT the 0 the superseded body would have reported on a month-end day for this exact fixture shape'
 );
 select set_config('role', 'postgres', true);
 
@@ -810,6 +923,10 @@ select set_config('role', 'postgres', true);
 --   of the two once both are visible, so the A-vs-B leak is deterministic —
 --   see below for what that guarantee does NOT extend to.
 --   Savepoint-scoped; the real policy is restored immediately after.
+--   ⚠ SELF-344/097: the probe below queries at-or-before :monthanchor, not
+--   :base — this is the SAME expression change as the fixture (A/B's month
+--   row moved from :base to :monthanchor above), so the canary continues to
+--   probe exactly what the FIXED function's 'month' horizon actually reads.
 -- =====================================================================
 -- ⚠ (LEAK1) ASSERTS A NEGATIVE — the predicate is `nav_value is not null
 --   and nav_value <> 690000` (Sec's required shape, 2026-08-14), NOT a bare
@@ -834,23 +951,23 @@ select set_config('role', 'postgres', true);
 --   DB. The trade was necessary, not cosmetic: the exact-match form's
 --   determinism claim was already false outside a pristine fixture, and not
 --   for the reason an earlier draft of THIS comment gave ("a more recent
---   row" — impossible, B's canary sits EXACTLY at :base, the maximum date
---   `nav_date <= :base` admits). The real failure mode was a TIE at :base,
---   not lateness: SELF-217 laid month-end checkpoints
---   (docs/records/self217-nav-seeding-run.md, tenant b1aa21a2), and :base is
---   itself a month-end, so a seeded tenant can land on B's exact date;
---   `order by nav_date desc limit 1` has no secondary sort key, so a tie's
---   winner is not guaranteed. Confirmed empirically on a scratch clone of
---   the seeded shared dev DB: the broken-open query returned 8267000 — a
---   THIRD tenant's value, neither A's own (690000) nor B's canary
---   (6900000) — proving a genuine leak of some other tenant's row, not a
---   more benign same-tenant artifact.
+--   row" — impossible, B's canary sits EXACTLY at :monthanchor, the maximum
+--   date `nav_date <= :monthanchor` admits). The real failure mode was a TIE
+--   at that date, not lateness: SELF-217 laid month-end checkpoints
+--   (docs/records/self217-nav-seeding-run.md, tenant b1aa21a2), and
+--   :monthanchor is itself a month-end by construction, so a seeded tenant
+--   can land on B's exact date; `order by nav_date desc limit 1` has no
+--   secondary sort key, so a tie's winner is not guaranteed. Confirmed
+--   empirically on a scratch clone of the seeded shared dev DB: the
+--   broken-open query returned 8267000 — a THIRD tenant's value, neither A's
+--   own (690000) nor B's canary (6900000) — proving a genuine leak of some
+--   other tenant's row, not a more benign same-tenant artifact.
 savepoint leak_canary;
 alter policy nav_daily_select on pfin.nav_daily using (true);
 select _rls.set_tenant(:'ta'::uuid);
 select ok(
   (select nav_value is not null and nav_value <> 690000
-     from pfin.nav_daily where nav_date <= :'base'::date order by nav_date desc limit 1),
+     from pfin.nav_daily where nav_date <= :'monthanchor'::date order by nav_date desc limit 1),
   '(LEAK1) ⭐ CORRUPT-THE-CONTROL: with nav_daily_select broken OPEN, A''s month-anchor query returns a NON-NULL value OTHER than A''s own (690000) — proving RLS, not application logic, is what confines tenant A to its own rows. Fails CLOSED on an empty result rather than passing vacuously, and is robust to whichever other tenant''s row wins the read: RED here is the proof the fence is real; green here would mean this battery is blind to a broken policy'
 );
 select set_config('role', 'postgres', true);
@@ -872,6 +989,114 @@ select is(
   ), 1::bigint,
   '(M2) ⭐ the POSITIVE leg that makes (M1) a test: the SAME tenant at aal2 sees their REAL month delta (111000-110000=1000). Without this, (M1) could pass vacuously against a policy that blinds every caller'
 );
+
+-- =====================================================================
+-- (DEGEN) ⭐⭐ SELF-344/097 items 2+3 — THE MONTH-END DEGENERATE DAY, DIRECTLY
+--   WATCHED. CLOCK-FORCED: pfin.fn_server_today() is overridden inside this
+--   savepoint to a FIXED, arbitrary month-end date (2030-04-30 — a 30-day-
+--   month end, a different flavor from the container's own 2026-08-31, and
+--   far enough in the future to collide with nothing else this file seeds)
+--   so this block is DETERMINISTIC REGARDLESS OF WHICH REAL CALENDAR DAY THE
+--   SUITE RUNS ON — it does not rely on the wall-clock coincidence that
+--   exposed the original defect (per team-lead's instruction: the container
+--   clock sits on 2026-08-31 today, but these legs must also hold on
+--   non-month-end days, so the fixture date is PINNED, not read off the
+--   wall clock). A dedicated tenant I is seeded RELATIVE TO THE FORCED DATE,
+--   not :today, since every other tenant's fixture above is anchored to the
+--   REAL clock and would not line up under an overridden one. Both the
+--   function override AND tenant I's fixture are restored on rollback.
+--   ⚠ THIS IS THE ONE BLOCK IN THIS FILE THAT IS CLOCK-SENSITIVE BY DESIGN —
+--   every other leg uses the REAL :today/:base/:monthanchor pins and is
+--   already robust to whichever day it runs on (the pin computation adapts;
+--   only the OLD, now-replaced pin was wrong specifically on a month-end
+--   day). This block is the exception because the PROPERTY under test here
+--   (the old/new rules DIVERGING) is only observable on a month-end day at
+--   all — forcing the clock is how it stays exercised on every run.
+--
+--   Proves, in one forced scenario:
+--     (DEGEN1) the month anchor is the PRIOR month-end (2030-03-31), not
+--       today's own month-end — the direct, positive re-statement of (P0)
+--       on a day where the old and new rules actually diverge.
+--     (DEGEN2) delta_nominal is NOT 0 for a fixture whose two endpoints
+--       genuinely differ — THE leg that would have RED under the superseded
+--       body (which forced 0 on this exact day, for every tenant, every
+--       month-end). A fixture whose month-ago and current values coincided
+--       could not distinguish the fix from the defect (072's own equal-CPI
+--       trap, restated for values).
+--     (DEGEN3) ⭐⭐ 1y/3y/5y anchors equal TODAY minus 12/36/60 months
+--       EXACTLY (2029-04-30 / 2027-04-30 / 2025-04-30) — THE LEG THAT CATCHES
+--       THE PLAUSIBLE WRONG FIX: making v_base itself unconditionally
+--       strictly-before-today (rather than leaving its CASE alone for
+--       1y/3y/5y) would move this same day's 1-Year anchor to 2029-03-31 —
+--       THIRTEEN months back on a row labelled "1-Year" — which this leg
+--       REDs and (P0)/(DEGEN1) alone would not catch, since they say nothing
+--       about the 1y/3y/5y rows at all.
+-- =====================================================================
+savepoint force_month_end;
+create or replace function pfin.fn_server_today() returns date
+  language sql stable security invoker set search_path = ''
+  as $$ select date '2030-04-30' $$;
+\set ti '00000000-0000-0000-0000-000000009e71'
+insert into auth.users (id) values (:'ti');
+insert into pfin.user_settings (users_id, mfa_policy) values (:'ti', 'none');
+select set_config('app.nav_computed_for', :'ti', true);
+insert into pfin.nav_daily (users_id, nav_date, nav_value) values
+  (:'ti', '2030-04-30'::date, 800000),
+  (:'ti', '2030-03-31'::date, 750000)
+on conflict (users_id, nav_date) do nothing;
+select set_config('role', 'postgres', true);
+
+select _rls.set_tenant(:'ti'::uuid);
+select is(
+  (select anchor_date from pfin.fn_nav_delta_panel() where horizon = 'month'),
+  '2030-03-31'::date,
+  '(DEGEN1) ⭐⭐ CLOCK-FORCED to 2030-04-30 (a month-end): month.anchor_date is 2030-03-31, the PRIOR month-end, strictly before the forced today — not today''s own month-end'
+);
+select set_config('role', 'postgres', true);
+select _rls.set_tenant(:'ti'::uuid);
+select is(
+  (select delta_nominal from pfin.fn_nav_delta_panel() where horizon = 'month'),
+  50000::numeric,
+  '(DEGEN2) ⭐⭐ THE LEG THAT WOULD HAVE RED UNDER THE SUPERSEDED BODY: delta_nominal is 50000 (800000-750000), NOT 0 — on this exact forced day, the old defect would have anchored ''month'' on today''s own checkpoint (800000) and reported 800000-800000=0. A fixture whose two endpoints coincided could not tell the fix from the defect; this one''s endpoints genuinely differ'
+);
+select set_config('role', 'postgres', true);
+select _rls.set_tenant(:'ti'::uuid);
+select ok(
+  (with panel as (select * from pfin.fn_nav_delta_panel())
+   select bool_and(anchor_date = (('2030-04-30'::date)::timestamp - make_interval(months => n.months_back))::date)
+   from panel p
+   join (values ('1y',12), ('3y',36), ('5y',60)) as n(horizon, months_back) on n.horizon = p.horizon),
+  '(DEGEN3) ⭐⭐ THE LEG THAT CATCHES THE PLAUSIBLE WRONG FIX: 1y/3y/5y anchors equal the FORCED today (2030-04-30) minus 12/36/60 months EXACTLY — a global fix making v_base itself unconditionally strictly-before-today would move the 1-Year anchor to 2029-03-31 (THIRTEEN months back), which this leg REDs and no other leg in this file would catch'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint force_month_end;
+
+-- =====================================================================
+-- (JAN) SELF-344/097 item 6 — JANUARY UNIFORMITY. CLOCK-FORCED to an
+--   ORDINARY January day (2031-01-15, deliberately NOT itself a month-end —
+--   the point is that the coincidence now holds for the WHOLE month, not
+--   just the 31st). On any January day, the month-end strictly before today
+--   is 31 December of the prior year — the SAME date as the ytd anchor.
+--   Previously true 1-30 January only; FALSE on 31 January under the
+--   superseded body (that day's own CASE made the month anchor collapse
+--   onto TODAY instead of 31 December). No tenant-specific fixture needed —
+--   anchor_date is a calendar label independent of whether any checkpoint
+--   resolves it, so tenant C (zero checkpoints) is reused rather than
+--   seeding a new one.
+-- =====================================================================
+savepoint force_january;
+create or replace function pfin.fn_server_today() returns date
+  language sql stable security invoker set search_path = ''
+  as $$ select date '2031-01-15' $$;
+select _rls.set_tenant(:'tc'::uuid);
+select ok(
+  (with panel as (select * from pfin.fn_nav_delta_panel())
+   select (select anchor_date from panel where horizon = 'month')
+        = (select anchor_date from panel where horizon = 'ytd')),
+  '(JAN1) ⭐ SELF-344/097 item 6, CLOCK-FORCED to 2031-01-15 (an ordinary January day): month.anchor_date EQUALS ytd.anchor_date (both 2030-12-31) — true for the WHOLE of January now, not just 1-30 January as under the superseded body'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint force_january;
 
 -- =====================================================================
 -- (10) PST1 — CATALOG POSTURE. ⭐ 072 item 16: content UNCHANGED from 071 (072
