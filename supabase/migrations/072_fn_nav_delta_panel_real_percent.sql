@@ -182,6 +182,26 @@
 --      RULING. If PM/F-CTO want the other reading, it is a body change with no
 --      contract impact. <<
 --
+--   ⚠⚠ SUPERSEDED BY `097` — THE PARAGRAPH ABOVE NO LONGER DESCRIBES THIS
+--   OBJECT, and it is kept rather than rewritten so a reader who remembers it
+--   learns it changed instead of doubting their memory. Two claims fell:
+--     · "Month = base" is WRONG. The month anchor is now the month-end
+--       STRICTLY BEFORE today. `base` survives, unchanged, for 1y/3y/5y only.
+--     · "A PRODUCT CALL ... NOT AN ARCHITECTURAL RULING" is no longer true of
+--       it. The rule is ratified and has a DECISIONS.md home: ADR-065.
+--   WHY: `Month = base` was DEGENERATE on a month-end. Both endpoints resolve
+--   through the same at-or-before LOCF predicate over nav_daily, so base = today
+--   made the anchor and the current endpoint the SAME predicate and forced
+--   delta_nominal AND delta_percent to 0 — not NULL — for every tenant on each
+--   of the twelve month-end days a year. Latent from authoring; fired
+--   2026-08-31. F/CTO-ratified 2026-08-30 (SELF-344 sitting), amending the
+--   2026-08-14 ruling: 'completed' means completed BEFORE today.
+--   ⚠ THE REJECTION ABOVE STANDS. "month-end at-or-before (today - 1 month)"
+--   is still rejected for landing up to six weeks back; it coincides with the
+--   ruled reading ONLY on month-end days, which is why `097` does not reopen it.
+--   ⚠ AND DO NOT "SIMPLIFY" BY MAKING `base` ITSELF STRICTLY-BEFORE: that moves
+--   the 1-Year anchor to THIRTEEN months back on those same days.
+--
 -- ----------------------------------------------------------------------------
 -- Numbering: 072 is the next free number, taken at authoring time and verified
 --   against the tree at d0f66eb — both `supabase/migrations/` on main and the
