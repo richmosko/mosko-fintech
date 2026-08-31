@@ -127,8 +127,17 @@ begin;
 -- unexercised, table-wide cascade) + 2 two-tenant (T) + 1 cross-tenant (X)
 -- + 1 corrupt-the-control leak canary (LEAK — Sec finding: now probes
 -- fn_nav_reference_dates() itself, not pfin.nav_daily directly) + 2 aal2
--- (M) + 1 catalog posture (PST1) + 4 ACL (A, incl. anon).
-select plan(38);
+-- (M) + 1 catalog posture (PST1) + 4 ACL (A, incl. anon). + 4 new at
+-- SELF-344/097 (the month anchor STRICTLY BEFORE today fix, mirroring
+-- 071): REF-P0 (the crux leg, independent re-derivation of prior_month's
+-- reference date), RECON4/RECON5 (item 4, clock-forced cross-function
+-- reconciliation on a month-end, against 072's fn_nav_delta_panel() in the
+-- SAME transaction), JAN1 (item 6, 073's half — prior_month/prior_year_end
+-- equality for the whole of January, clock-forced). CAUSE1-prior_month and
+-- CPIG1c are SIMPLIFIED in place (the month-end CASE branch they guarded
+-- against is now dead code, eliminated by 097 — see their own headers) —
+-- not counted as new.
+select plan(42);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb, _rls.tenant_c() as tc \gset
 \set td '00000000-0000-0000-0000-000000000d73'
@@ -141,28 +150,36 @@ insert into pfin.user_settings (users_id, mfa_policy) values
 
 -- =====================================================================
 -- REFERENCE-DATE SCAFFOLDING — mirrors the migration body's OWN date
--- expressions exactly (070's answer, then base/ye_period/ye_date). Not the
--- thing under test (the migration's reference-date FORMULA is a documented
--- product default carried over from 071/072, not a correctness crux here);
--- it is how this file knows which calendar dates to seed checkpoints and CPI
--- prints at, regardless of which real day this battery happens to run on.
+-- expressions exactly (070's answer, then ye_period/ye_date). Not the thing
+-- under test for ye_period/ye_date (unchanged, documented calendar
+-- arithmetic); it is how this file knows which calendar dates to seed
+-- checkpoints and CPI prints at, regardless of which real day this battery
+-- happens to run on.
+--
+-- ⚠ SELF-344/097 — :priormonth is NOT the old :base, and MUST be derived by
+-- a ROUTE INDEPENDENT of the body's expression (same rule 071's own header
+-- states in (c), and the SAME defect: 073's old `:base` pin copied the
+-- superseded CASE verbatim — see 097's header, "073 CARRIED THE SAME CASE
+-- AND THE SAME DEFECT"). Derived here by INTEGER DAY-OF-MONTH SUBTRACTION
+-- (071's own independent route, reused): `today minus extract(day from
+-- today)` lands on the last day of the PRIOR calendar month for ANY date,
+-- by a pure arithmetic identity, sharing no machinery with the body's
+-- `date_trunc('month', today) - 1 day`. Post-097 the body's `v_prior_mth`
+-- has NO CASE at all any more (073 has no 1y/3y/5y row that would need the
+-- at-or-before reading 071's v_base still carries) — the old :base variable
+-- is RETIRED from this file entirely; every use below moves to :priormonth.
 -- =====================================================================
 select pfin.fn_server_today() as today \gset
-select (case
-          when :'today'::date = (date_trunc('month', :'today'::date::timestamp)
-                                  + '1 mon'::interval - '1 day'::interval)::date
-          then :'today'::date
-          else (date_trunc('month', :'today'::date::timestamp) - '1 day'::interval)::date
-        end) as base \gset
+select (:'today'::date - extract(day from :'today'::date)::int) as priormonth \gset
 select (date_trunc('year', :'today'::date::timestamp) - '1 day'::interval)::date as yedate \gset
 select (date_trunc('year', :'today'::date::timestamp) - '1 year'::interval + '11 mon'::interval)::date as yeperiod \gset
-select date_trunc('month', :'base'::date::timestamp)::date as basemonth \gset
+select date_trunc('month', :'priormonth'::date::timestamp)::date as basemonth \gset
 
 -- =====================================================================
 -- FIXTURE — CPI-U (global; shared across every tenant below).
 --   cpi_ye (basis, Dec of prior year)                    = 300.000
 --   cpi_this_month (coverage_through — the LATEST seeded) = 320.000
---   cpi_prior_month (first-of-month of :base)             = 250.000, IF that
+--   cpi_prior_month (first-of-month of :priormonth)       = 250.000, IF that
 --     period differs from :yeperiod — see the collision note below.
 -- Chosen so cpi_ye/cpi_this_month (0.9375) and cpi_ye/cpi_prior_month (1.2)
 -- both reduce to TERMINATING decimals where they apply — a wrong formula
@@ -170,33 +187,41 @@ select date_trunc('month', :'base'::date::timestamp)::date as basemonth \gset
 -- CPI period IS :yeperiod (the basis itself, structural — not a fourth value
 -- to seed).
 --
--- ⚠ COLLISION, MEASURED (Architect, 2026-08-14): date_trunc('month', :base)
--- (prior_month's own CPI period) EQUALS :yeperiod (the basis period) FOR ANY
--- RUN DAY IN JANUARY — because the most recent completed month-end in
--- January IS 31 December of the prior year, the SAME December the basis
--- names. There is then only ONE real distinct period to seed, not two, and
--- `on conflict (cpi_period) do nothing` on the second insert lets the basis
--- value (300) silently govern it — which is CORRECT (there is genuinely one
--- CPI print for that shared period), not a workaround. (ARITH2) below reads
--- whichever value actually landed rather than assuming 250, so it stays
--- correct on both sides of the collision. IN THAT SAME MONTH, prior_month's
--- deflator becomes v/v = 1 too — prior_year_end is not the ONLY exact row
--- every month; it is the row whose CPI period is ALWAYS the basis period,
--- and prior_month joins it for the one month a year the two coincide.
--- Nothing below claims prior_year_end is uniquely exact.
+-- ⚠ COLLISION, MEASURED (Architect, 2026-08-14), STILL LIVE POST-SELF-344:
+-- date_trunc('month', :priormonth) (prior_month's own CPI period) EQUALS
+-- :yeperiod (the basis period) FOR ANY RUN DAY IN JANUARY — because the
+-- month-end strictly before today in January IS 31 December of the prior
+-- year, the SAME December the basis names. This is a PERMANENT calendar fact
+-- (prior_month is one full calendar month before today's, and in January
+-- that prior month IS the basis year's December), unaffected by 097 — 097
+-- only changed WHICH month-end counts as "the most recent completed" one,
+-- not the January-specific coincidence that that month-end and the basis
+-- month are the same in January regardless. There is then only ONE real
+-- distinct period to seed, not two, and `on conflict (cpi_period) do
+-- nothing` on the second insert lets the basis value (300) silently govern
+-- it — which is CORRECT (there is genuinely one CPI print for that shared
+-- period), not a workaround. (ARITH2) below reads whichever value actually
+-- landed rather than assuming 250, so it stays correct on both sides of the
+-- collision. IN THAT SAME MONTH, prior_month's deflator becomes v/v = 1 too
+-- — prior_year_end is not the ONLY exact row every month; it is the row
+-- whose CPI period is ALWAYS the basis period, and prior_month joins it for
+-- the one month a year the two coincide. Nothing below claims prior_year_end
+-- is uniquely exact.
 --
--- ⚠ A SECOND COLLISION, MEASURED SEPARATELY (any run day where :today is
--- ITSELF a month-end, e.g. 31 December — not January-specific): :basemonth
--- (date_trunc('month', :base)) EQUALS date_trunc('month', :today) when
--- :base = :today, because prior_month's period and this_month's period are
--- the SAME expression on that one day. INSERT ORDER is what resolves it:
--- yeperiod, then this_month's period, THEN basemonth — each later insert
--- `on conflict do nothing`, so basemonth ALWAYS defers to whichever of the
--- other two it might collide with, never the reverse (a plain insert with
--- no guard crashed on this exact day when it ran last — measured). (ARITH2)
--- already reads the governing value dynamically, so this resolution order
--- does not need to be threaded through any assertion, only through the
--- insert sequence itself.
+-- ⚠ A SECOND COLLISION, MEASURED SEPARATELY UNDER THE SUPERSEDED BODY, NOW
+-- ELIMINATED BY SELF-344/097 (recorded so a reader does not go looking for
+-- it): under the OLD `v_base` CASE, on any run day where :today was ITSELF a
+-- month-end, :basemonth (prior_month's CPI period) EQUALED
+-- date_trunc('month', :today) (this_month's CPI period), because prior_
+-- month's reference date collapsed onto today's own month-end that day —
+-- the SAME defect (CAUSE1-prior_month) documents at the reference-date
+-- layer, one level up. Post-097, prior_month's reference date is ALWAYS in
+-- the calendar month STRICTLY BEFORE today's, so its CPI period can never
+-- again equal this_month's coverage-through period, on ANY day. The
+-- defensive `on conflict do nothing` insert order below is UNCHANGED and
+-- harmless (it simply never fires on this axis any more) — left in place
+-- rather than restructured, since removing it buys nothing and risks a
+-- fresh mistake in its place.
 -- =====================================================================
 delete from pfin.cpi_u_index;
 insert into pfin.cpi_u_index (cpi_period, cpi_value) values (:'yeperiod'::date, 300.000);
@@ -244,21 +269,24 @@ select isnt(
 --     predicate at (LEAK1) for the wrong reason. Reference_date (the
 --     CALENDAR reference) is unaffected either way — it is always :today
 --     regardless of which checkpoint serves it (REF-P1).
---   prior_month (:base)        = 690,000  — served by CARRY from (:base - 2),
---     NOT an exact hit, and deliberately a DIFFERENT checkpoint from
---     this_month's (item 3's own trap: if the latest checkpoint IS the
---     month-end, the two rows coincide and the reconciliation leg passes
---     without exercising anything).
+--   prior_month (:priormonth)  = 690,000  — served by CARRY from
+--     (:priormonth - 2), NOT an exact hit, and deliberately a DIFFERENT
+--     checkpoint from this_month's (item 3's own trap: if the latest
+--     checkpoint IS the month-end, the two rows coincide and the
+--     reconciliation leg passes without exercising anything).
 --   prior_year_end (:yedate)   = 600,000  (EXACT HIT)
 --   These are the SAME numbers 072's own Tenant A fixture uses for
 --   current/month-anchor/ytd-anchor — deliberately, so the two-panel
 --   reconciliation at (3) is checking a real cross-surface agreement, not a
---   coincidence engineered independently in each file.
+--   coincidence engineered independently in each file. ⚠ SELF-344/097: this
+--   row USED TO sit at (:base - 2); :base was the SAME defective CASE 071's
+--   v_base carried, and :priormonth (independently derived above) is what
+--   the fixed body actually resolves the 'prior_month' reference against.
 -- =====================================================================
 select set_config('app.nav_computed_for', :'ta', true);
 insert into pfin.nav_daily (users_id, nav_date, nav_value) values
   (:'ta', (:'today'::date - 1), 700000),
-  (:'ta', (:'base'::date - 2), 690000),
+  (:'ta', (:'priormonth'::date - 2), 690000),
   (:'ta', :'yedate'::date, 600000)
 on conflict (users_id, nav_date) do nothing;
 select set_config('role', 'postgres', true);
@@ -270,7 +298,7 @@ select set_config('role', 'postgres', true);
 select set_config('app.nav_computed_for', :'tb', true);
 insert into pfin.nav_daily (users_id, nav_date, nav_value) values
   (:'tb', :'today'::date, 7000000),
-  (:'tb', (:'base'::date - 2), 6900000),
+  (:'tb', (:'priormonth'::date - 2), 6900000),
   (:'tb', :'yedate'::date, 6000000)
 on conflict (users_id, nav_date) do nothing;
 select set_config('role', 'postgres', true);
@@ -281,7 +309,7 @@ select set_config('role', 'postgres', true);
 select set_config('app.nav_computed_for', :'td', true);
 insert into pfin.nav_daily (users_id, nav_date, nav_value) values
   (:'td', :'today'::date, 111000),
-  (:'td', :'base'::date, 110000),
+  (:'td', :'priormonth'::date, 110000),
   (:'td', :'yedate'::date, 100000)
 on conflict (users_id, nav_date) do nothing;
 select set_config('role', 'postgres', true);
@@ -292,25 +320,30 @@ select set_config('role', 'postgres', true);
 -- days January through May, where that offset lands AT-OR-BEFORE :yedate
 -- and prior_year_end resolves when the leg needs it not to (the leg would
 -- have REDS for five months of the year). Worse, in January specifically
--- :base EQUALS :yedate (the most recent completed month-end IS 31 December
--- of the prior year), so prior_month and prior_year_end are the SAME
--- reference_date that month — no fixture can split "prior_month resolves,
--- prior_year_end does not" between them in January; it is structurally
--- unprovable, not a fixture defect.
+-- :priormonth EQUALS :yedate (the most recent completed month-end IS 31
+-- December of the prior year), so prior_month and prior_year_end are the
+-- SAME reference_date that month — no fixture can split "prior_month
+-- resolves, prior_year_end does not" between them in January; it is
+-- structurally unprovable, not a fixture defect. This January coincidence is
+-- PERMANENT and unaffected by SELF-344/097 (see the CPI collision note
+-- above).
 --   Pinning the divergence on this_month against the OTHER TWO sidesteps
 -- both problems: a checkpoint AT :today satisfies "at-or-before :today"
--- (this_month resolves) but is STRICTLY AFTER :base and :yedate on every
--- ordinary day (:base is always <= :today by construction, :yedate always
--- further back still), so prior_month AND prior_year_end both correctly
--- find nothing — insufficient history on BOTH, proven every month of the
--- year, matching the migration header's own framing verbatim ("a tenant can
--- have enough history for this_month and not for prior_year_end").
---   ⚠ RESIDUAL: on the one day a year :today IS ITSELF a month-end
--- (:base = :today), this same checkpoint would ALSO satisfy prior_month's
--- query, collapsing (CAUSE1b)'s claim for that single day. This is the same
--- class of single-day residual (3)'s own trap already documents for the
--- reconciliation fixture — not eliminated, because eliminating it needs a
--- p_as_of this migration deliberately does not have.
+-- (this_month resolves) but is STRICTLY AFTER :priormonth and :yedate on
+-- EVERY run day now, with no exception (:priormonth is ALWAYS strictly
+-- before :today post-097, :yedate always further back still), so
+-- prior_month AND prior_year_end both correctly find nothing — insufficient
+-- history on BOTH, proven every month of the year, matching the migration
+-- header's own framing verbatim ("a tenant can have enough history for
+-- this_month and not for prior_year_end").
+--   ⚠ SELF-344/097: THE RESIDUAL THIS NOTE USED TO DOCUMENT IS ELIMINATED.
+-- Under the superseded body, on the one day a year :today was itself a
+-- month-end (:base = :today), this same checkpoint would ALSO have
+-- satisfied prior_month's query (prior_month's reference date collapsed
+-- onto :today that day), collapsing (CAUSE1b)'s claim for that single day.
+-- Post-097, prior_month's reference date is ALWAYS strictly before :today,
+-- so E's single :today checkpoint can never again satisfy it, on ANY day —
+-- (CAUSE1b) below is now asserted unconditionally rather than guarded.
 select set_config('app.nav_computed_for', :'te', true);
 insert into pfin.nav_daily (users_id, nav_date, nav_value) values
   (:'te', :'today'::date, 45000)
@@ -319,23 +352,23 @@ select set_config('role', 'postgres', true);
 
 -- Tenant F: NAV-SIDE CARRY, isolated. ⚠ ADDED (Architect finding, 2026-08-14
 -- second round, measured on a simulated January run): tenant A's OWN
--- prior_month carry source (:base - 2) is NOT safe for this proof, because
--- in January prior_month's reference_date collapses onto :yedate (the
--- fixture-CPI-collision note above), and A ALSO holds an EXACT-HIT
--- checkpoint AT :yedate for prior_year_end — once prior_month's query is
--- ALSO asking "at-or-before :yedate", that later, more-recent exact-hit row
--- wins over the intended :base-2 carry source, and prior_month silently
--- becomes an exact hit too (measured: nav read 600000, A's prior_year_end
--- value, not A's own intended 690000). NAV-side carry and prior_year_end
--- exactness cannot be demonstrated on the SAME tenant in January — they are
--- mutually exclusive that month by the same structural fact as (CAUSE1)'s
--- own collision, one level down (checkpoints, not CPI periods). Tenant F
--- holds EXACTLY ONE checkpoint and nothing else, so there is never a
--- competing row for "at-or-before :base" to prefer — the carry holds on
--- every run day, unconditionally.
+-- prior_month carry source (:priormonth - 2) is NOT safe for this proof,
+-- because in January prior_month's reference_date collapses onto :yedate
+-- (the fixture-CPI-collision note above — PERMANENT, unaffected by 097), and
+-- A ALSO holds an EXACT-HIT checkpoint AT :yedate for prior_year_end — once
+-- prior_month's query is ALSO asking "at-or-before :yedate", that later,
+-- more-recent exact-hit row wins over the intended :priormonth-2 carry
+-- source, and prior_month silently becomes an exact hit too (measured: nav
+-- read 600000, A's prior_year_end value, not A's own intended 690000).
+-- NAV-side carry and prior_year_end exactness cannot be demonstrated on the
+-- SAME tenant in January — they are mutually exclusive that month by the
+-- same structural fact as (CAUSE1)'s own collision, one level down
+-- (checkpoints, not CPI periods). Tenant F holds EXACTLY ONE checkpoint and
+-- nothing else, so there is never a competing row for "at-or-before
+-- :priormonth" to prefer — the carry holds on every run day, unconditionally.
 select set_config('app.nav_computed_for', :'tf', true);
 insert into pfin.nav_daily (users_id, nav_date, nav_value) values
-  (:'tf', (:'base'::date - 2), 690000)
+  (:'tf', (:'priormonth'::date - 2), 690000)
 on conflict (users_id, nav_date) do nothing;
 select set_config('role', 'postgres', true);
 
@@ -462,6 +495,63 @@ select is(
 select set_config('role', 'postgres', true);
 
 -- =====================================================================
+-- (RECON4/5) ⭐ SELF-344/097 item 4 — CROSS-FUNCTION RECONCILIATION ON A
+--   MONTH-END, CLOCK-FORCED (mirrors 071's own (DEGEN) block; same forced
+--   date, 2030-04-30, and the same values, so a reader can correlate 071's
+--   DEGEN2 leg — delta_nominal=50000 — directly against this one). Both
+--   fn_nav_reference_dates() (this function) and pfin.fn_nav_delta_panel()
+--   (072) are called in the SAME transaction under the SAME forced clock, so
+--   neither can disagree about "now" — proving the reconciliation 097's own
+--   header names as the reason BOTH functions were fixed in the SAME PR
+--   ("fixing one function alone would have satisfied the bug report and
+--   broken the reconciliation"). Savepoint-scoped; restored after.
+-- =====================================================================
+-- ⚠ N2 (Sec, SELF-344 GREEN verdict): THIS OUTER TRANSACTION MUST NEVER BE
+-- COMMITTED. A committed run leaves pfin.fn_server_today() PERMANENTLY
+-- returning 2030-04-30, WITH CORRECT POSTURE (STABLE, INVOKER, search_path
+-- pinned) — so a broken deploy here does NOT look like a test artifact on a
+-- dev DB; it presents as "the NAV panel shows 2030 data," a silent,
+-- catalog-level clock freeze indistinguishable from a real product bug.
+-- This file's stakes differ from every sibling battery in this family for
+-- exactly this reason: most CoR sites replace a READ function; this one
+-- replaces the CLOCK every read function in the family depends on (070's
+-- own header: "the ONLY clock read"). `rollback to savepoint
+-- force_month_end_recon` below is what makes this safe — never remove it,
+-- never convert this block to a plain top-level `rollback`, never run this
+-- file's body outside begin…rollback.
+savepoint force_month_end_recon;
+create or replace function pfin.fn_server_today() returns date
+  language sql stable security invoker set search_path = ''
+  as $$ select date '2030-04-30' $$;
+\set tj '00000000-0000-0000-0000-000000009e73'
+insert into auth.users (id) values (:'tj');
+insert into pfin.user_settings (users_id, mfa_policy) values (:'tj', 'none');
+select set_config('app.nav_computed_for', :'tj', true);
+insert into pfin.nav_daily (users_id, nav_date, nav_value) values
+  (:'tj', '2030-04-30'::date, 800000),
+  (:'tj', '2030-03-31'::date, 750000)
+on conflict (users_id, nav_date) do nothing;
+select set_config('role', 'postgres', true);
+
+select _rls.set_tenant(:'tj'::uuid);
+select is(
+  (select r.nav - m.nav
+     from pfin.fn_nav_reference_dates() r, pfin.fn_nav_reference_dates() m
+    where r.reference = 'this_month' and m.reference = 'prior_month'),
+  (select delta_nominal from pfin.fn_nav_delta_panel() where horizon = 'month'),
+  '(RECON4) ⭐ SELF-344/097 item 4, CLOCK-FORCED to 2030-04-30 (a month-end): this_month - prior_month (50000, matching 071''s own DEGEN2 leg on the same forced date) EQUALS 072''s ''month'' delta_nominal on the SAME tenant — the reconciliation holds THROUGH the degenerate day, not just around it'
+);
+select set_config('role', 'postgres', true);
+select _rls.set_tenant(:'tj'::uuid);
+select is(
+  (select reference_date from pfin.fn_nav_reference_dates() where reference = 'prior_month'),
+  (select anchor_date from pfin.fn_nav_delta_panel() where horizon = 'month'),
+  '(RECON5) …and prior_month''s reference_date EQUALS 072''s month.anchor_date on the SAME forced month-end (both 2030-03-31) — the two panels name the same calendar anchor, not just the same delta'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint force_month_end_recon;
+
+-- =====================================================================
 -- (4) THREE — three rows, fixed order, on tenant A.
 -- =====================================================================
 select _rls.set_tenant(:'ta'::uuid);
@@ -478,7 +568,22 @@ select set_config('role', 'postgres', true);
 --   against a DIFFERENT route than the body's date_trunc/interval
 --   expression, so a shared mistake between this file's fixture scaffolding
 --   and the body cannot hide.
+--   (P0) ⭐⭐ SELF-344/097 — THE CRUX LEG, mirroring 071's ANCHOR-P0:
+--        prior_month.reference_date = :priormonth EXACTLY, independently
+--        derived by integer day-of-month subtraction (scaffolding block
+--        above), sharing no machinery with the body's date_trunc/interval
+--        expression. 073's own original battery had the SAME gap 071's did
+--        — its old :base pin copied the (then-shared) defective CASE
+--        verbatim — and this is the leg that closes it here too.
 -- =====================================================================
+select _rls.set_tenant(:'ta'::uuid);
+select is(
+  (select reference_date from pfin.fn_nav_reference_dates() where reference = 'prior_month'),
+  :'priormonth'::date,
+  '(REF-P0) ⭐⭐ SELF-344/097 THE CRUX LEG: prior_month.reference_date EQUALS :priormonth, independently re-derived by integer day-of-month subtraction — the route the original battery skipped'
+);
+select set_config('role', 'postgres', true);
+
 select _rls.set_tenant(:'ta'::uuid);
 select is(
   (select reference_date from pfin.fn_nav_reference_dates() where reference = 'this_month'),
@@ -518,47 +623,31 @@ select set_config('role', 'postgres', true);
 --     proven together with prior_month (both fail identically; see the
 --     fixture note above for why this pair, not prior_month vs
 --     prior_year_end, is the divergence this leg can prove year-round).
---     ⚠ SECOND MEASURED RESIDUAL: on a run day where :today IS ITSELF a
---     month-end (:base = :today, ~12 days a year), E''s checkpoint AT :today
---     ALSO satisfies "at-or-before :base" — this_month and prior_month
---     become the SAME query on that one day, so prior_month resolves too
---     (measured: swept every month-end day in a year, all 12 reproduce it).
---     No fixture can avoid this: it is the empty-interval case "> base and
---     <= today" degenerating when base = today, the same shape as the
---     January impossibility one level down. Guarded rather than reworked
---     again — prior_year_end''s own insufficient-history proof (the row
---     this leg exists for) still holds unconditionally; only prior_month''s
---     half of the pairing is inapplicable that one day, and the CASE below
---     says so rather than silently passing or falsely redding.
+--     ⚠ SELF-344/097: the RESIDUAL this note used to document (a month-end
+--     run day making prior_month collapse onto this_month, per the fixture
+--     note above) is ELIMINATED — prior_month''s reference date is now
+--     ALWAYS strictly before :today, so E''s single :today checkpoint can
+--     never satisfy it, on ANY day. Both legs below are now UNCONDITIONAL.
 select _rls.set_tenant(:'te'::uuid);
 select ok(
   (select (reference_checkpoint_date is null and nav is null and nav_prior_yr_dollars is null)
      from pfin.fn_nav_reference_dates() where reference = 'prior_year_end'),
-  '(CAUSE1) ⭐ INSUFFICIENT HISTORY, proven on prior_year_end SPECIFICALLY: E''s only checkpoint is AT :today, strictly after :yedate on every run day (:yedate <= :base <= :today, always), so "at-or-before :yedate" finds nothing — reference_checkpoint_date and both value columns are NULL. This is the row the UI renders as "Insufficient history"'
+  '(CAUSE1) ⭐ INSUFFICIENT HISTORY, proven on prior_year_end SPECIFICALLY: E''s only checkpoint is AT :today, strictly after :yedate on every run day (:yedate <= :priormonth <= :today, always), so "at-or-before :yedate" finds nothing — reference_checkpoint_date and both value columns are NULL. This is the row the UI renders as "Insufficient history"'
 );
 select set_config('role', 'postgres', true);
--- ⚠ STRENGTHENED (Architect's second finding, 2026-08-14): an earlier draft
--- guarded the month-end branch with a bare `else true` — vacuous on exactly
--- the ~12 days a year the coincidence is LIVE, and a 24-day calendar sweep
--- cannot catch a vacuous branch passing on every day it fires. Rewritten to
--- assert what SHOULD be true that day instead of skipping it: prior_month
--- and this_month share the identical reference_date, checkpoint and nav
--- (measured directly on run day 2026-09-30: both rows read reference_date
--- 2026-09-30, reference_checkpoint_date 2026-09-30, nav 45000).
+-- ⚠ SELF-344/097 SIMPLIFIED FROM A GUARDED CASE: the superseded version of
+-- this leg branched on `:base = :today` (~12 days a year) and asserted the
+-- OLD DEFECTIVE COLLAPSE (prior_month == this_month) as the expected state
+-- on those days — that branch is now DEAD CODE for a fixed function (it
+-- would have to be re-added, and asserted as a REGRESSION, if the collapse
+-- ever came back) and has been removed rather than left to assert a
+-- superseded shape. prior_month now fails the SAME way as prior_year_end on
+-- EVERY run day, unconditionally.
 select _rls.set_tenant(:'te'::uuid);
 select ok(
-  (with p as (select reference_date, reference_checkpoint_date, nav
-                from pfin.fn_nav_reference_dates() where reference = 'prior_month'),
-        m as (select reference_date, reference_checkpoint_date, nav
-                from pfin.fn_nav_reference_dates() where reference = 'this_month')
-   select case when :'base'::date < :'today'::date
-            then p.reference_checkpoint_date is null and p.nav is null
-            else p.reference_date = m.reference_date
-                 and p.reference_checkpoint_date = m.reference_checkpoint_date
-                 and p.nav = m.nav
-          end
-     from p cross join m),
-  '(CAUSE1-prior_month) …and prior_month fails the SAME way on every ordinary run day; on the ~12 days a year :today is itself a month-end (:base = :today), prior_month and this_month become the SAME query BY CONSTRUCTION — asserted as identical reference_date/checkpoint/nav that day, not skipped'
+  (select reference_checkpoint_date is null and nav is null and nav_prior_yr_dollars is null
+     from pfin.fn_nav_reference_dates() where reference = 'prior_month'),
+  '(CAUSE1-prior_month) ⭐ SELF-344/097: …and prior_month fails the SAME way, UNCONDITIONALLY on every run day — E''s only checkpoint (AT :today) is strictly after prior_month''s reference date too, since that reference date is now always strictly before :today. No month-end residual to guard against any more'
 );
 select set_config('role', 'postgres', true);
 -- Same tenant''s this_month resolves fine (exact hit at :today) — proving
@@ -601,14 +690,15 @@ rollback to savepoint cpi_unresolvable;
 -- the row 2 days earlier. ⚠ TENANT F, NOT A — see F''s own fixture note
 -- above: on tenant A, this exact proof (checkpoint < reference_date) is
 -- FALSE in January, because A''s prior_year_end exact-hit checkpoint (at
--- :yedate) outranks A''s intended :base-2 carry source once prior_month''s
--- own reference_date collapses onto :yedate that month — measured, not
--- predicted. F holds nothing else, so nothing can outrank its one
--- checkpoint, on any run day.
+-- :yedate) outranks A''s intended :priormonth-2 carry source once
+-- prior_month''s own reference_date collapses onto :yedate that month —
+-- measured, not predicted, and PERMANENT (unaffected by SELF-344/097). F
+-- holds nothing else, so nothing can outrank its one checkpoint, on any run
+-- day.
 select _rls.set_tenant(:'tf'::uuid);
 select ok(
   (select reference_checkpoint_date < reference_date
-          and reference_checkpoint_date = (:'base'::date - 2)
+          and reference_checkpoint_date = (:'priormonth'::date - 2)
           and nav = 690000
      from pfin.fn_nav_reference_dates() where reference = 'prior_month'),
   '(CARRY1) ⭐ NAV-SIDE CARRY (tenant F): prior_month reference_checkpoint_date is EARLIER than reference_date (served by the row 2 days prior), and nav (690000) reflects the CARRIED value, not a fabricated exact-reference figure'
@@ -694,47 +784,25 @@ select ok(
 select set_config('role', 'postgres', true);
 -- prior_year_end is unaffected UNCONDITIONALLY: this_month's coverage_through
 -- period can never equal the basis period (established at z2 — different
--- years, always). prior_month's isolation is conditional: on a month-end run
--- day (:base = :today, measured — see (CAUSE1)'s sibling note above),
--- prior_month's own CPI period equals date_trunc('month', :today) too, the
--- SAME period this savepoint just corrupted — guarded rather than silently
--- passed or falsely redding.
+-- years, always).
 select _rls.set_tenant(:'ta'::uuid);
 select ok(
   (select not cpi_unavailable from pfin.fn_nav_reference_dates() where reference = 'prior_year_end'),
   '(CPIG1b) …and prior_year_end is unaffected on every run day — its CPI period is the basis period, which coverage_through can never equal'
 );
 select set_config('role', 'postgres', true);
--- ⚠ STRENGTHENED (Architect's second finding, 2026-08-14): the same vacuous-
--- branch issue as (CAUSE1-prior_month) above — rewritten to assert the
--- month-end day's expected state instead of skipping it.
---   ⚠ ON THE RATIONALE ITSELF (Architect's first finding, re-verified rather
---   than accepted): re-measured directly on a fresh scratch DB, run day
---   2026-09-30, reproducing this file's OWN fixture sequence exactly —
---   `select cpi_period from pfin.cpi_u_index` showed only TWO rows,
---   2025-12-01 (basis) and 2026-09-01, because the fixture's own insert
---   order (this_month before basemonth, both `on conflict do nothing`)
---   makes basemonth's insert DEFER to the identical period this_month
---   already claimed. `select reference, cpi_period from
---   pfin.fn_nav_reference_dates()` confirmed this_month AND prior_month both
---   report cpi_period = 2026-09-01 — the SAME period, not merely close ones
---   — and corrupting it flips cpi_unavailable TRUE on BOTH rows. The
---   original rationale stands for THIS fixture; a differently-built fixture
---   (coverage_through genuinely lagging, as it would in an unmanipulated
---   table under normal CPI-publication arrears) could show the two periods
---   differing, but that is not the state this savepoint or the battery's own
---   insert sequence ever produces.
+-- ⚠ SELF-344/097 SIMPLIFIED FROM A GUARDED CASE: the superseded version
+-- branched on `:basemonth <> date_trunc('month', :today)` (~12 days a year
+-- the two coincided, per the now-eliminated SECOND COLLISION — see the
+-- fixture scaffolding note above) and asserted the OLD DEFECTIVE COLLAPSE as
+-- the expected state on those days. Post-097, prior_month's CPI period is
+-- ALWAYS exactly one calendar month before this_month's coverage-through
+-- period, so it can never again equal it — the branch is dead code for a
+-- fixed function and has been removed, asserted unconditionally instead.
 select _rls.set_tenant(:'ta'::uuid);
 select ok(
-  (select case when :'basemonth'::date <> date_trunc('month', :'today'::date::timestamp)::date
-            then not cpi_unavailable
-            else cpi_unavailable  -- :base = :today: prior_month's own CPI
-                                  -- period IS this_month's (re-verified
-                                  -- above, not assumed) — corrupting the
-                                  -- shared period MUST flip this row too.
-          end
-     from pfin.fn_nav_reference_dates() where reference = 'prior_month'),
-  '(CPIG1c) …and prior_month is unaffected on every ORDINARY run day; on the ~12 days a year its own CPI period coincides with this_month''s (:base = :today), it is asserted AFFECTED — the shared period was just corrupted, so cpi_unavailable must be true, not silently skipped'
+  (select not cpi_unavailable from pfin.fn_nav_reference_dates() where reference = 'prior_month'),
+  '(CPIG1c) ⭐ SELF-344/097: …and prior_month is unaffected UNCONDITIONALLY, on every run day — its own CPI period can never again coincide with this_month''s coverage-through period, so corrupting the latter never touches the former. No month-end residual to guard against any more'
 );
 select set_config('role', 'postgres', true);
 rollback to savepoint cpi_zero;
@@ -862,6 +930,37 @@ select is(
   ), 1::bigint,
   '(M2) ⭐ the POSITIVE leg that makes (M1) a test: the SAME tenant at aal2 sees their REAL this_month nav (111000). Without this, (M1) could pass vacuously against a policy that blinds every caller'
 );
+
+-- =====================================================================
+-- (JAN) SELF-344/097 item 6 — JANUARY UNIFORMITY, 073's half. CLOCK-FORCED
+--   to an ORDINARY January day (2031-01-15, deliberately NOT itself a
+--   month-end — the coincidence now holds for the WHOLE month). On any
+--   January day, prior_month's reference date is 31 December of the prior
+--   year — the SAME date as prior_year_end. This is 073's own catalog
+--   comment made true where it was not: the comment already asserts this
+--   unconditionally of the day, which the superseded body made FALSE on 31
+--   January specifically (see 097's header). No tenant-specific fixture
+--   needed — reference_date is a calendar label independent of whether any
+--   checkpoint resolves it; tenant C (zero checkpoints) is reused.
+-- =====================================================================
+-- ⚠ N2 (Sec, SELF-344 GREEN verdict): THIS OUTER TRANSACTION MUST NEVER BE
+-- COMMITTED — see the identical warning at the (RECON4/5) block above; the
+-- same hazard applies here with 2031-01-15 in place of 2030-04-30.
+-- `rollback to savepoint force_january` below is the safety, not a
+-- formality.
+savepoint force_january;
+create or replace function pfin.fn_server_today() returns date
+  language sql stable security invoker set search_path = ''
+  as $$ select date '2031-01-15' $$;
+select _rls.set_tenant(:'tc'::uuid);
+select ok(
+  (with panel as (select * from pfin.fn_nav_reference_dates())
+   select (select reference_date from panel where reference = 'prior_month')
+        = (select reference_date from panel where reference = 'prior_year_end')),
+  '(JAN1) ⭐ SELF-344/097 item 6, CLOCK-FORCED to 2031-01-15 (an ordinary January day): prior_month.reference_date EQUALS prior_year_end.reference_date (both 2030-12-31) — 073''s own catalog comment made true for the WHOLE of January now, not just 1-30 January as under the superseded body'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint force_january;
 
 -- =====================================================================
 -- (12) PST1 — CATALOG POSTURE.

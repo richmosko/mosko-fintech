@@ -103,27 +103,28 @@ select set_config('role', 'postgres', true);
 --   not an authored literal). Scaffolding mirrors the 071/073 migrations' OWN date
 --   expressions exactly — not the thing under test, just how this file knows which
 --   calendar dates to seed regardless of which real day the battery runs on.
+--   ⚠ SELF-344/097: :monthanchor (NOT the old :base) is the month/prior_month anchor
+--   both 072 and 073 now use — derived by the SAME independent route (integer
+--   day-of-month subtraction) 071's and 073's own batteries use, not by copying the
+--   body's date_trunc CASE (071's header rule (c), the rule the original defect
+--   violated). :monthanchor is ALWAYS in the calendar month strictly before :today,
+--   so it can never collide with :today the way the old :base did on a month-end day.
 -- =====================================================================
 select pfin.fn_server_today() as today \gset
-select (case
-          when :'today'::date = (date_trunc('month', :'today'::date::timestamp)
-                                  + '1 mon'::interval - '1 day'::interval)::date
-          then :'today'::date
-          else (date_trunc('month', :'today'::date::timestamp) - '1 day'::interval)::date
-        end) as base \gset
+select (:'today'::date - extract(day from :'today'::date)::int) as monthanchor \gset
 select (date_trunc('year', :'today'::date::timestamp) - '1 day'::interval)::date as ytdanchor \gset
 
 select set_config('app.nav_computed_for', :'ta', true);
 insert into pfin.nav_daily (users_id, nav_date, nav_value) values
   (:'ta', :'today'::date, 500000),
-  (:'ta', (:'base'::date - 2), 490000),
+  (:'ta', (:'monthanchor'::date - 2), 490000),
   (:'ta', :'ytdanchor'::date, 400000)
 on conflict (users_id, nav_date) do nothing;
 select set_config('role', 'postgres', true);
 select set_config('app.nav_computed_for', :'tb', true);
 insert into pfin.nav_daily (users_id, nav_date, nav_value) values
   (:'tb', :'today'::date, 5000000),
-  (:'tb', (:'base'::date - 2), 4900000),
+  (:'tb', (:'monthanchor'::date - 2), 4900000),
   (:'tb', :'ytdanchor'::date, 4000000)
 on conflict (users_id, nav_date) do nothing;
 select set_config('role', 'postgres', true);
