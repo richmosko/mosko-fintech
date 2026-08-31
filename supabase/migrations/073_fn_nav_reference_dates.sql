@@ -32,6 +32,21 @@
 --   the reconciliation above; 071's header records the same ambiguity being
 --   resolved the same way for the delta panel. F/CTO-ratified 2026-08-14.
 --
+--   ⚠⚠ AMENDED BY `097` ON ONE BOUNDARY, 2026-08-30 — the paragraph above is
+--   kept, not rewritten, so the change is visible to a reader who remembers it.
+--   The ruling STANDS: prior_month is the most recent COMPLETED month-end, and
+--   the competing at-or-before-(today - 1 month) reading stays REJECTED. What
+--   was wrong is what "COMPLETED" admitted: the superseded code treated the
+--   CURRENT day's month-end as already completed, so on a month-end day
+--   prior_month WAS today — collapsing it onto this_month and returning two
+--   identical rows, on each of the twelve such days a year. COMPLETED now means
+--   completed BEFORE today. F/CTO-ratified 2026-08-30 (SELF-344 sitting),
+--   amending the 2026-08-14 ruling on this boundary and nothing else.
+--   Canonical home: ADR-065. ⚠ The reconciliation identity above is what makes
+--   this NON-OPTIONAL rather than cosmetic — `097` moves the delta panel's month
+--   anchor by the same rule in the same migration, and a lone fix on either side
+--   would put the two panels into visible disagreement.
+--
 -- ----------------------------------------------------------------------------
 -- Numbering: 073 is next-free, taken at authoring time and verified against
 --   origin/main at 4270495 (git ls-tree, not a local listing — main had moved
