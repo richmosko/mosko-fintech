@@ -506,6 +506,19 @@ select set_config('role', 'postgres', true);
 --   ("fixing one function alone would have satisfied the bug report and
 --   broken the reconciliation"). Savepoint-scoped; restored after.
 -- =====================================================================
+-- ⚠ N2 (Sec, SELF-344 GREEN verdict): THIS OUTER TRANSACTION MUST NEVER BE
+-- COMMITTED. A committed run leaves pfin.fn_server_today() PERMANENTLY
+-- returning 2030-04-30, WITH CORRECT POSTURE (STABLE, INVOKER, search_path
+-- pinned) — so a broken deploy here does NOT look like a test artifact on a
+-- dev DB; it presents as "the NAV panel shows 2030 data," a silent,
+-- catalog-level clock freeze indistinguishable from a real product bug.
+-- This file's stakes differ from every sibling battery in this family for
+-- exactly this reason: most CoR sites replace a READ function; this one
+-- replaces the CLOCK every read function in the family depends on (070's
+-- own header: "the ONLY clock read"). `rollback to savepoint
+-- force_month_end_recon` below is what makes this safe — never remove it,
+-- never convert this block to a plain top-level `rollback`, never run this
+-- file's body outside begin…rollback.
 savepoint force_month_end_recon;
 create or replace function pfin.fn_server_today() returns date
   language sql stable security invoker set search_path = ''
@@ -930,6 +943,11 @@ select is(
 --   needed — reference_date is a calendar label independent of whether any
 --   checkpoint resolves it; tenant C (zero checkpoints) is reused.
 -- =====================================================================
+-- ⚠ N2 (Sec, SELF-344 GREEN verdict): THIS OUTER TRANSACTION MUST NEVER BE
+-- COMMITTED — see the identical warning at the (RECON4/5) block above; the
+-- same hazard applies here with 2031-01-15 in place of 2030-04-30.
+-- `rollback to savepoint force_january` below is the safety, not a
+-- formality.
 savepoint force_january;
 create or replace function pfin.fn_server_today() returns date
   language sql stable security invoker set search_path = ''

@@ -923,52 +923,61 @@ select set_config('role', 'postgres', true);
 --   of the two once both are visible, so the A-vs-B leak is deterministic —
 --   see below for what that guarantee does NOT extend to.
 --   Savepoint-scoped; the real policy is restored immediately after.
---   ⚠ SELF-344/097: the probe below queries at-or-before :monthanchor, not
---   :base — this is the SAME expression change as the fixture (A/B's month
---   row moved from :base to :monthanchor above), so the canary continues to
---   probe exactly what the FIXED function's 'month' horizon actually reads.
+--   ⚠ SELF-344/097 Sec FLAG 3 (§7.16 booking, discharged by this PR):
+--   RETARGETED from a pfin.nav_daily table probe to pfin.fn_nav_delta_panel()
+--   ITSELF — the earlier form queried the table directly (at-or-before
+--   :monthanchor, mirroring the function's own resolution) and could never
+--   catch the hazard 097 re-issues into the catalog comment: fn_nav_delta_panel
+--   MUST NOT gain a local `users_id = auth.uid()` predicate of its own
+--   (071's own header, "TENANT FENCE — INHERITED, NOT RESTATED"). A future
+--   redundant local predicate would keep a TABLE probe green forever
+--   (nav_daily's own policy is still broken open beneath it, so the raw-table
+--   query still leaks) even though the function itself had grown a second,
+--   masking fence — QA measured exactly this failure mode on 062 (071's own
+--   header cites it). Probing pfin.fn_nav_delta_panel() directly closes that
+--   gap: this leg now exercises the SAME code path every other leg in this
+--   file does, the same fix 073's LEAK1 already had (that file's canary was
+--   already function-targeted and is untouched by this PR).
+--   The predicate moves from the raw anchor NAV value (690000) to the
+--   'month' horizon's delta_nominal, since fn_nav_delta_panel() has no
+--   column exposing a bare anchor or current NAV — A's GENUINE delta_nominal
+--   is 10000 (700000-690000); under the sabotage below it reads -6200000
+--   (measured directly on a scratch DB, not assumed), some OTHER tenant's
+--   current/anchor mix, unambiguously different from A's own 10000.
 -- =====================================================================
--- ⚠ (LEAK1) ASSERTS A NEGATIVE — the predicate is `nav_value is not null
---   and nav_value <> 690000` (Sec's required shape, 2026-08-14), NOT a bare
---   `<> 690000` or `isnt(..., 690000)`: on an empty result the subquery
---   yields NULL, and NULL compared either way is NULL/passes — the exact
---   vacuous-green path this leg exists to close. Fails closed on no rows,
---   written rather than relied on.
+-- ⚠ (LEAK1) ASSERTS A NEGATIVE — the predicate is `delta_nominal is not
+--   null and delta_nominal <> 10000`, NOT a bare `<> 10000` or
+--   `isnt(..., 10000)`: on an empty result the subquery yields NULL, and
+--   NULL compared either way is NULL/passes (IS DISTINCT FROM's own escape
+--   hatch) — the exact vacuous-green path this leg exists to close. Fails
+--   closed on no rows, written rather than relied on. This is the SAME
+--   fail-closed shape Sec required for the table-probing predecessor
+--   (2026-08-14) — the retargeting changes WHAT is probed, not the shape of
+--   how the probe fails.
 --
---   ⚠ TYPO-TRAP: `690000` (A's own value, Tenant A fixture above) and
---   `6900000` (B's canary, Tenant B fixture above) are BOTH live in this
---   file and differ by ONE DIGIT. `<> 690000` is deliberate — do NOT
---   "restore" it to `6900000` thinking a digit was dropped; that would
+--   ⚠ TYPO-TRAP, CARRIED FORWARD: `10000` (A''s own genuine month delta) and
+--   `100000` (B''s own genuine month delta, T2''s value) are BOTH live in
+--   this file and differ by ONE DIGIT. `<> 10000` is deliberate — do NOT
+--   "restore" it to `100000` thinking a digit was dropped; that would
 --   silently defeat the leg (it would stop checking that A sees something
 --   other than its OWN value and start checking something else entirely).
 --
---   WHAT CHANGED, AND THE LOSING SIDE OF THE TRADE: an earlier draft
---   asserted `= 6900000` and additionally proved B SPECIFICALLY was the
---   deterministic winner once the fence opened. The negative form proves
---   only that SOME foreign row wins, not WHICH one — that determinism is
---   exactly what a non-pristine database destroys, so trading it away is
---   what makes the leg hold everywhere rather than only on a fixture-only
---   DB. The trade was necessary, not cosmetic: the exact-match form's
---   determinism claim was already false outside a pristine fixture, and not
---   for the reason an earlier draft of THIS comment gave ("a more recent
---   row" — impossible, B's canary sits EXACTLY at :monthanchor, the maximum
---   date `nav_date <= :monthanchor` admits). The real failure mode was a TIE
---   at that date, not lateness: SELF-217 laid month-end checkpoints
---   (docs/records/self217-nav-seeding-run.md, tenant b1aa21a2), and
---   :monthanchor is itself a month-end by construction, so a seeded tenant
---   can land on B's exact date; `order by nav_date desc limit 1` has no
---   secondary sort key, so a tie's winner is not guaranteed. Confirmed
---   empirically on a scratch clone of the seeded shared dev DB: the
---   broken-open query returned 8267000 — a THIRD tenant's value, neither A's
---   own (690000) nor B's canary (6900000) — proving a genuine leak of some
---   other tenant's row, not a more benign same-tenant artifact.
+--   WHY NO EXACT-MATCH FORM (unchanged reasoning from the table-probe era):
+--   asserting a SPECIFIC foreign value (e.g. B''s) would additionally claim
+--   determinism about WHICH tenant''s data wins the corrupted resolution —
+--   a claim that is false outside a pristine fixture (SELF-217 seeded real
+--   month-end checkpoints on the shared dev DB; a corrupted broken-open read
+--   there resolves to WHOEVER''s checkpoint sorts latest, not necessarily
+--   B''s). The negative form proves only that SOME foreign state leaks
+--   through, which is what makes the leg hold everywhere, not just on a
+--   fixture-only scratch DB.
 savepoint leak_canary;
 alter policy nav_daily_select on pfin.nav_daily using (true);
 select _rls.set_tenant(:'ta'::uuid);
 select ok(
-  (select nav_value is not null and nav_value <> 690000
-     from pfin.nav_daily where nav_date <= :'monthanchor'::date order by nav_date desc limit 1),
-  '(LEAK1) ⭐ CORRUPT-THE-CONTROL: with nav_daily_select broken OPEN, A''s month-anchor query returns a NON-NULL value OTHER than A''s own (690000) — proving RLS, not application logic, is what confines tenant A to its own rows. Fails CLOSED on an empty result rather than passing vacuously, and is robust to whichever other tenant''s row wins the read: RED here is the proof the fence is real; green here would mean this battery is blind to a broken policy'
+  (select delta_nominal is not null and delta_nominal <> 10000
+     from pfin.fn_nav_delta_panel() where horizon = 'month'),
+  '(LEAK1) ⭐ SELF-344/097 Sec FLAG 3, CORRUPT-THE-CONTROL RETARGETED TO THE FUNCTION: with nav_daily_select broken OPEN, A''s month delta_nominal (via pfin.fn_nav_delta_panel() itself, not a table probe) is NON-NULL and OTHER than A''s own genuine 10000 — proving RLS, not a redundant local predicate, is what confines tenant A to its own rows, on the SAME code path every real caller uses. Fails CLOSED on an empty result rather than passing vacuously; RED here is the proof the fence is real; green here would mean this battery is blind to a broken policy'
 );
 select set_config('role', 'postgres', true);
 rollback to savepoint leak_canary;
@@ -1032,6 +1041,19 @@ select is(
 --       REDs and (P0)/(DEGEN1) alone would not catch, since they say nothing
 --       about the 1y/3y/5y rows at all.
 -- =====================================================================
+-- ⚠ N2 (Sec, SELF-344 GREEN verdict): THIS OUTER TRANSACTION MUST NEVER BE
+-- COMMITTED. A committed run leaves pfin.fn_server_today() PERMANENTLY
+-- returning 2030-04-30, WITH CORRECT POSTURE (STABLE, INVOKER, search_path
+-- pinned) — so a broken deploy here does NOT look like a test artifact on a
+-- dev DB; it presents as "the NAV panel shows 2030 data," a silent,
+-- catalog-level clock freeze indistinguishable from a real product bug.
+-- This file's stakes differ from every sibling battery in this family for
+-- exactly this reason: most CoR sites replace a READ function; this one
+-- replaces the CLOCK every read function in the family depends on (070's
+-- own header: "the ONLY clock read"). `rollback to savepoint force_month_end`
+-- below is what makes this safe — never remove it, never convert this block
+-- to a plain top-level `rollback`, never run this file's body outside
+-- begin…rollback.
 savepoint force_month_end;
 create or replace function pfin.fn_server_today() returns date
   language sql stable security invoker set search_path = ''
@@ -1084,6 +1106,10 @@ rollback to savepoint force_month_end;
 --   resolves it, so tenant C (zero checkpoints) is reused rather than
 --   seeding a new one.
 -- =====================================================================
+-- ⚠ N2 (Sec, SELF-344 GREEN verdict): THIS OUTER TRANSACTION MUST NEVER BE
+-- COMMITTED — see the identical warning at the (DEGEN) block above; the same
+-- hazard applies here with 2031-01-15 in place of 2030-04-30. `rollback to
+-- savepoint force_january` below is the safety, not a formality.
 savepoint force_january;
 create or replace function pfin.fn_server_today() returns date
   language sql stable security invoker set search_path = ''
