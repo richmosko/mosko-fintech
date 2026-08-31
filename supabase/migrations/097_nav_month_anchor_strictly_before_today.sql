@@ -229,10 +229,11 @@
 --   VERBATIM at the canonical anchor before drafting, 2026-08-30, at 65e0a33.)
 --   (i)   Instance-numbering: nothing appended, reordered, or renumbered.
 --   (ii)  Layer-attribution: two INVOKER read helpers reached by `authenticated`
---         over PostgREST. NOT the PDF-worker container credential audit, NOT the
---         code-layer SUPABASE_SERVICE_ROLE_KEY allowlist fence, NOT the
---         app->worker credential-admission network surface. No catalogued
---         instance's layer attribution moves; no surface becomes "four-layer".
+--         over PostgREST. No catalogued instance's layer attribution moves; no
+--         surface becomes "four-layer". ⚠ The catalogued instances are NOT
+--         walked here, not even to negate them: a scoped enumeration goes stale
+--         the day the ledger grows, and negating each one is still restating the
+--         list. Path B — the Decision 4 link carries it.
 --   (iii) Verbatim-vs-paraphrase: Decision 4 is REFERENCED, not restated.
 --   ⚠ The §10 CATALOGUED set and the CI-FENCED set are DIFFERENT SETS and are
 --   NOT reconciled here.
@@ -658,8 +659,11 @@ begin
   v_today := pfin.fn_server_today();
 
   -- The most recent COMPLETED month-end, where COMPLETED means completed
-  -- BEFORE today — the SAME expression 072 uses for its `month` anchor, which
-  -- is the property that keeps the two panels reconcilable on screen.
+  -- BEFORE today — the SAME expression THIS MIGRATION gives
+  -- pfin.fn_nav_delta_panel's `month` anchor, which is the property that keeps
+  -- the two panels reconcilable on screen. (Pointing at this migration rather
+  -- than at a file number is deliberate: the sentence below names 072 as an
+  -- AUTHORING HOME, and one notation must not carry both meanings here.)
   -- `::timestamp` is zone-free (WITHOUT time zone), the 062 idiom.
   -- ⚠ THE CASE THAT USED TO STAND HERE IS GONE, NOT SIMPLIFIED AWAY. Its
   -- true-branch made today its own base on a month-end, which collapsed
