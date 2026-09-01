@@ -13,12 +13,20 @@ import CashFlowPage from './+page.svelte';
 import type { CashflowCrossAccountRollup } from '$lib/cashflow-rollup';
 
 // Same merged-PageData discipline as us-equity-page.dom.test.ts: the root +layout.server.ts
-// contributes fields this page's own +page.server.ts (which only adds `rollup`) doesn't itself
-// produce, but svelte-check enforces the FULL merged PageData type at the component boundary.
+// contributes fields this page's own +page.server.ts doesn't itself produce, but svelte-check
+// enforces the FULL merged PageData type at the component boundary. `historicalExpenditures` /
+// `historicalExpendituresUnclassifiedCount` (SELF-256's loader leg, 475efeb) are this PAGE's own
+// fields, not the layout's — parked here anyway (both `null`, HistoricalExpendituresChart's own
+// null-tolerant contract) purely so every fixture below only has to spread ONE object to satisfy
+// PageData, rather than repeating both fields at each of the five call sites individually. This
+// suite asserts nothing about the chart itself — that coverage lives in
+// HistoricalExpendituresChart.dom.test.ts.
 const LAYOUT_DEFAULTS = {
 	userEmail: null,
 	pendingClassificationCount: 0,
-	connectionHealth: { reauthCount: 0, institutionDownCount: 0 }
+	connectionHealth: { reauthCount: 0, institutionDownCount: 0 },
+	historicalExpenditures: null,
+	historicalExpendituresUnclassifiedCount: null
 };
 
 const EMPTY_ROLLUP: CashflowCrossAccountRollup = {
@@ -47,7 +55,12 @@ describe('cash-flow/+page.svelte — unavailable state', () => {
 		const { getByText, queryByRole } = render(CashFlowPage, {
 			props: { data: { ...LAYOUT_DEFAULTS, rollup: null } }
 		});
-		expect(getByText(/temporarily unavailable/i)).toBeTruthy();
+		// Exact string, not the former /temporarily unavailable/i regex: SELF-256 mounts
+		// HistoricalExpendituresChart unconditionally on this page (VD ruling — the chart owns its
+		// OWN independent fail-soft gating), and its own historicalExpenditures prop is undefined
+		// in every fixture here (no loader for it yet), so it ALSO renders a "temporarily
+		// unavailable" notice — a loose regex now matches two elements on this exact fixture.
+		expect(getByText('Cash flow is temporarily unavailable. Please try again shortly.')).toBeTruthy();
 		expect(queryByRole('table')).toBeNull();
 	});
 });
