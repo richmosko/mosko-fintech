@@ -1,36 +1,38 @@
 <!--
 	HistoricalExpendituresChart.svelte — the §2.3.4 Historical Expenditures chart UI (SELF-256).
-	Frontend-owned browser surface. Consumes `points` (Backend's future +page.server.ts loader
-	over `pfin.fn_historical_expenditures`, migration 096, merged PR #586) and `unclassifiedCount`
-	(AC9's window-scoped N — SEE THE MODULE HEADER BELOW: this field has NO source yet). Authors
-	NO server logic and performs NO re-derivation of any 096 rule — every number rendered here is
-	exactly what the server computed; historical-expenditures.ts owns the presentation-only
-	derivations this component reads.
+	Frontend-owned browser surface. Consumes `points` and `unclassifiedCount` — both from Backend's
+	`loadHistoricalExpendituresPanel` (`$lib/server/queries/historicalExpendituresPanel.ts`),
+	wired into cash-flow/+page.server.ts (475efeb) and threaded through as
+	`data.historicalExpenditures` / `data.historicalExpendituresUnclassifiedCount` on
+	cash-flow/+page.svelte. Authors NO server logic and performs NO re-derivation of any server-side
+	rule — every number rendered here is exactly what the server computed; historical-
+	expenditures.ts owns the presentation-only derivations this component reads.
 
-	PLACEMENT: NOT DECIDED. Team-lead is obtaining Visual Designer's ruling (dedicated route vs a
-	panel adjacent to §2.3.2) in parallel with this build — per the SELF-256 brief, this component
-	is deliberately NOT mounted into any route yet. It is a self-contained, prop-driven component
-	(no `$app/state`/`$app/navigation` reads, unlike NavHistoryChart — this surface has no
-	query-param-driven state at all, AC7) so it can be dropped into either placement, and is
-	exercised directly by HistoricalExpendituresChart.dom.test.ts with fixture props rather than
-	through a route.
+	PLACEMENT: DECIDED (AC1, Visual Designer's ruling, relayed by team-lead) — a panel on the
+	existing `/cash-flow` route, stacked below `CashflowRollupTable`, no dedicated route. See
+	cash-flow/+page.svelte's own header for the mount-order rationale (mounted unconditionally,
+	outside the rollup's own read-failed/empty/populated branching — this chart owns independent
+	fail-soft gating in both directions). This component itself stays prop-driven (no
+	`$app/state`/`$app/navigation` reads — this surface has no query-param-driven state, AC7), so
+	it is exercised directly by HistoricalExpendituresChart.dom.test.ts with fixture props rather
+	than through the route.
 
-	EXPECTED LOADER CONTRACT (for whoever wires the eventual +page.server.ts):
-	  - `points: HistoricalExpenditurePoint[] | null` — `null` = the RPC read failed (fail-soft,
-	    logged, never thrown, matching loadNavSeries's own posture); `[]` = the read succeeded and
-	    the caller has no qualifying expense in the trailing 5-year window (096's own dense-
-	    interior contract: ZERO rows is a real, distinguishable state, not an error).
-	  - `unclassifiedCount: number | null` — NOT YET BUILT ANYWHERE server-side. 096 does not
-	    project it (11 columns, no twelfth "unclassified" column) and no sibling RPC computes it
-	    WINDOW-SCOPED (093's own `unclassified.count_ytd`, consumed by CashflowRollupTable, is
-	    YTD-scoped — a DIFFERENT window than this surface's trailing 5 years). AC9 requires N be
-	    "computed in the SAME query as the series" from "the in_queue predicate" (093's `sub_cat_id
-	    IS NULL` item-grain rule, unscoped to `cat = 'Expense'` — "any of these may be expenses").
-	    BLOCKING GAP, reported at hand-off: Backend needs a new migration (096 is already merged;
-	    this is an ADD, not an edit) either extending 096 with a twelfth scalar column or a paired
-	    RPC over the same window. Until that lands, this component accepts `null` and renders NO
-	    banner/caption (never guesses a count, never treats null as 0 — matching this repo's
-	    fail-soft-never-silently-healthy convention elsewhere, e.g. UNKNOWN_STALENESS).
+	LIVE LOADER CONTRACT (`historicalExpendituresPanel.ts`'s own header is canonical — read it live
+	before touching this one, it is not restated in full here):
+	  - `points: HistoricalExpenditurePoint[] | null` — one call to `pfin.fn_historical_expenditures`
+	    (096). `null` = the RPC read failed (fail-soft, logged, never thrown); `[]` = the read
+	    succeeded and the caller has no qualifying expense in the trailing 5-year window (096's own
+	    dense-interior contract: ZERO rows is a real, distinguishable state, not an error).
+	  - `unclassifiedCount: number | null` — AC9's window-scoped N. Sourced from migration 098's
+	    `pfin.fn_expenditures_unclassified_count(p_as_of)`, a CoR'd pair with 096 (ONE `asOf`, ONE
+	    JS call site — `loadHistoricalExpendituresPanel` invokes both RPCs together so the caller
+	    can never thread two different `p_as_of` values by accident). `null` = the RPC read failed,
+	    OR `p_as_of` could not be resolved (098's own NULL-on-NULL-argument contract); `0` = a real,
+	    distinguishable answer — nothing unclassified in the window. NEVER coalesced to 0 anywhere
+	    in the loader or here — this component's own N-gate (below) still treats `null` and `0` as
+	    two different renders (no banner either way, but `0` is a real computed absence, not a gap).
+	  - The two RPCs fail independently — one leg's failure never blocks the other (matches this
+	    component's own per-prop null-tolerance).
 
 	AC11 / SELF-258 SEAM: staleness markers are NOT wired here — SELF-258 (which consumes them)
 	has not landed. The `<!-- SELF-258 seam -->` comment below marks the mount point, mirroring
@@ -58,8 +60,11 @@
 		classifyHref = '/accounts'
 	}: {
 		points: HistoricalExpenditurePoint[] | null;
-		/** AC9's window-scoped N — see the module header's EXPECTED LOADER CONTRACT. `null` = not
-		 * yet computed anywhere (renders no banner/caption); `0` is a real, distinguishable value. */
+		/** AC9's window-scoped N — see the module header's LIVE LOADER CONTRACT (098's
+		 * fn_expenditures_unclassified_count). `null` = the RPC failed or `p_as_of` couldn't be
+		 * resolved (renders no banner/caption); `0` is a real, distinguishable computed value
+		 * (also no banner/caption — N=0 has nothing to report — but it is NOT the same claim as
+		 * `null`). */
 		unclassifiedCount?: number | null;
 		/** AC9 CTA target — CashflowRollupTable.svelte's own `classifyHref` precedent: SELF-249
 		 * built classification INLINE on per-account transaction lists, not as a dedicated queue
@@ -118,8 +123,9 @@
 	</header>
 
 	<!-- AC9 — the S-2 unclassified banner (window-scoped, S-2-ruled copy: MUST NOT claim the
-	     items ARE expenses). Absent entirely when unclassifiedCount is null (not yet computed) or
-	     0 — mirrors CashflowRollupTable.svelte's identical N>0 gate + canary register. -->
+	     items ARE expenses). Absent entirely when unclassifiedCount is null (the RPC failed) or
+	     0 (a real, distinguishable computed absence) — mirrors CashflowRollupTable.svelte's
+	     identical N>0 gate + canary register. -->
 	{#if showUnclassifiedNotice}
 		<div class="unclassified-banner" role="status">
 			<span class="unclassified-tag">
