@@ -23,13 +23,26 @@
 // SELF-258 (staleness ramp) is a SOFT dependency and is NOT wired here — see
 // CashflowRollupTable.svelte's own module header for the marked seam. This loader does not call
 // `loadStaleness()` at all; wiring it is SELF-258's job, not this issue's.
+//
+// §2.3.4 HISTORICAL EXPENDITURES PANEL (SELF-256, loader leg): `historicalExpenditures` /
+// `historicalExpendituresUnclassifiedCount` come from ONE `loadHistoricalExpendituresPanel` call,
+// on the SAME `asOf` this loader already resolved for the rollup above — see that module's own
+// header for why one function/one parameter is what stands in for 098's "invoke both in one
+// statement" contract on a PostgREST client. Independent try/catch, mirroring the rollup's own
+// belt-and-suspenders boundary: a chart-panel read failure must never take down the rollup above
+// it, and a rollup failure must never suppress the chart — HistoricalExpendituresChart.svelte
+// does its own internal read-failed/empty/populated gating on these two props (VD's ruling, per
+// +page.svelte's own module header). NULL-vs-0 on the count is passed through verbatim; never
+// coalesced here (see historicalExpendituresPanel.ts's own header).
 
 import { redirect } from '@sveltejs/kit';
 import {
 	loadCashflowCrossAccountRollup,
 	type CashflowCrossAccountRollup
 } from '$lib/server/queries/cashflowCrossAccountRollup';
+import { loadHistoricalExpendituresPanel } from '$lib/server/queries/historicalExpendituresPanel';
 import { serverTodayAsOf } from '$lib/server/time/asOf';
+import type { HistoricalExpenditurePoint } from '$lib/historical-expenditures';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -46,5 +59,17 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		rollup = null;
 	}
 
-	return { rollup };
+	let historicalExpenditures: HistoricalExpenditurePoint[] | null = null;
+	let historicalExpendituresUnclassifiedCount: number | null = null;
+	try {
+		const panel = await loadHistoricalExpendituresPanel(locals.supabase, asOf);
+		historicalExpenditures = panel.points;
+		historicalExpendituresUnclassifiedCount = panel.unclassifiedCount;
+	} catch (err) {
+		console.error('[cash-flow/+page.server] historical-expenditures panel load threw; degrading to null:', err);
+		historicalExpenditures = null;
+		historicalExpendituresUnclassifiedCount = null;
+	}
+
+	return { rollup, historicalExpenditures, historicalExpendituresUnclassifiedCount };
 };
