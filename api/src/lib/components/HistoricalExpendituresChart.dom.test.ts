@@ -142,3 +142,33 @@ describe('HistoricalExpendituresChart — AC8 tooltip content', () => {
 		expect(hit.getAttribute('aria-label')).toContain('Unavailable');
 	});
 });
+
+describe('HistoricalExpendituresChart — no leaked doc-comment text (regression watcher)', () => {
+	// A shipped defect (caught live by QA, not by any prior test — the walk was the one-time
+	// check; THIS is the durable boundary watcher that keeps it caught): the module's own header
+	// doc comment quoted a literal `<!-- SELF-258 seam -->` example INSIDE itself. HTML comments
+	// don't nest — the browser (and Svelte's own template parser, which this render() path
+	// exercises for real, not a string-level check) closes the OUTER comment at the example's
+	// own `-->`, and everything after it up to the file's real closing `-->` stops being a
+	// comment at all and renders as literal visible page text. A generic "no stray `-->` reaches
+	// the DOM" check, rather than one pinned to today's exact leaked wording, is what catches the
+	// NEXT nested-example edit too, not just this one.
+	it('no "-->" token and no doc-comment prose reach rendered text, across every render state', () => {
+		const fixtures: (HistoricalExpenditurePoint[] | null)[] = [
+			null, // read-failed
+			[], // empty
+			POPULATED // normal
+		];
+		for (const fixture of fixtures) {
+			const { container, unmount } = render(HistoricalExpendituresChart, {
+				props: { points: fixture, unclassifiedCount: 3 }
+			});
+			expect(container.textContent).not.toContain('-->');
+			// Distinctive phrases from the module's own doc comment — would only appear in
+			// rendered text if SOME comment in this file leaked, regardless of which one.
+			expect(container.textContent).not.toContain('ADR-013 P5');
+			expect(container.textContent).not.toContain('mount point');
+			unmount();
+		}
+	});
+});

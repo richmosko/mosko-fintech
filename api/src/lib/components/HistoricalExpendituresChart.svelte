@@ -35,8 +35,11 @@
 	    component's own per-prop null-tolerance).
 
 	AC11 / SELF-258 SEAM: staleness markers are NOT wired here — SELF-258 (which consumes them)
-	has not landed. The `<!-- SELF-258 seam -->` comment below marks the mount point, mirroring
-	CashflowRollupTable.svelte's own seam convention for the identical reason.
+	has not landed. A "SELF-258 seam" marker comment below marks the mount point, mirroring
+	CashflowRollupTable.svelte's own seam convention for the identical reason. (Written without a
+	literal HTML-comment close token in THIS sentence on purpose — HTML comments don't nest, and an
+	inline example containing one would close this outer doc comment early, leaking everything
+	after it as visible page text — the exact defect this file shipped and QA caught live.)
 
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5).
 -->
