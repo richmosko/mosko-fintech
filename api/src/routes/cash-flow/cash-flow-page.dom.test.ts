@@ -47,7 +47,12 @@ describe('cash-flow/+page.svelte — unavailable state', () => {
 		const { getByText, queryByRole } = render(CashFlowPage, {
 			props: { data: { ...LAYOUT_DEFAULTS, rollup: null } }
 		});
-		expect(getByText(/temporarily unavailable/i)).toBeTruthy();
+		// Exact string, not the former /temporarily unavailable/i regex: SELF-256 mounts
+		// HistoricalExpendituresChart unconditionally on this page (VD ruling — the chart owns its
+		// OWN independent fail-soft gating), and its own historicalExpenditures prop is undefined
+		// in every fixture here (no loader for it yet), so it ALSO renders a "temporarily
+		// unavailable" notice — a loose regex now matches two elements on this exact fixture.
+		expect(getByText('Cash flow is temporarily unavailable. Please try again shortly.')).toBeTruthy();
 		expect(queryByRole('table')).toBeNull();
 	});
 });

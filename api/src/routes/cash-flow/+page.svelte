@@ -33,10 +33,39 @@
 	number/rows first" discipline as allocation/+page.svelte's own AC10 gate (a real table
 	outranks an empty-state heuristic).
 
+	§2.3.4 HISTORICAL EXPENDITURES PANEL (SELF-256; AC1 placement RULED by Visual Designer —
+	relayed by team-lead, not re-derived here): panel on THIS route, stacked below
+	CashflowRollupTable, no dedicated route. Mounted OUTSIDE the `{#if data.rollup === null}...`
+	chain above (deliberately) — VD's ruling: "Chart must own its own fail-soft/empty/error gating
+	independent of the rollup table — a chart-data failure must never take down the rollup above
+	it" (mirrors NavHistoryChart vs. the §2.1.1 NAV headline on the net-worth page). The inverse
+	holds too: a rollup failure/empty-state must not suppress the chart either, so it always
+	mounts, with `HistoricalExpendituresChart` doing its OWN internal read-failed/empty/populated
+	gating on `data.historicalExpenditures`. The `.page` flex-column's existing `--space-4` gap
+	already satisfies VD's "stacked with --space-4 gap, no extra wrapping chrome from the page
+	itself" — no new wrapper/CSS added here.
+
+	EXPECTED LOADER CONTRACT (Backend's +page.server.ts, NOT YET LANDED as of this file's
+	authoring — the underlying query layer, pfin.fn_historical_expenditures/096, IS merged —
+	PR #586 — so this is sequencing, not a missing read path; SELF-242/241/325 precedent):
+	  - `data.historicalExpenditures: HistoricalExpenditurePoint[] | null` — `null` on read
+	    failure (fail-soft, logged, never thrown, matching `loadNavSeries`'s posture); `[]` = read
+	    succeeded, zero qualifying expense in the trailing 5-year window (096's own contract — a
+	    real, distinguishable state, not an error).
+	  - `data.historicalExpendituresUnclassifiedCount: number | null` — BLOCKING GAP, reported at
+	    SELF-256 hand-off: no server-side source exists yet (096 has no 12th column; 093's
+	    `unclassified.count_ytd` is YTD-scoped, a DIFFERENT window than this surface's trailing 5
+	    years). `null` until a new migration adds it — `HistoricalExpendituresChart` already
+	    degrades this to "no banner, no caption" (verified in its own dom test).
+	`npm run check` surfaces real `Property does not exist on PageData` errors against both of the
+	above until Backend lands the loader — the correct, visible signal per established precedent;
+	not worked around with `any` or a parallel type.
+
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5).
 -->
 <script lang="ts">
 	import CashflowRollupTable from '$lib/components/CashflowRollupTable.svelte';
+	import HistoricalExpendituresChart from '$lib/components/HistoricalExpendituresChart.svelte';
 	import { rollupHasNoRows } from '$lib/cashflow-rollup';
 	import type { PageData } from './$types';
 
@@ -93,6 +122,13 @@
 		<h1 class="page-title">Cash Flow</h1>
 		<CashflowRollupTable rollup={data.rollup} />
 	{/if}
+
+	<!-- §2.3.4 (SELF-256) — VD-ruled placement (see module header): always mounted, independent
+	     of the rollup's own state above. -->
+	<HistoricalExpendituresChart
+		points={data.historicalExpenditures ?? null}
+		unclassifiedCount={data.historicalExpendituresUnclassifiedCount ?? null}
+	/>
 </main>
 
 <style>
