@@ -5,6 +5,7 @@
 - **[053 CPI positivity CHECK — SHIPPED at `095`](project_053_cpi_positivity_check_followup.md)** — additive to `cpi_u_index_value_finite`; residual = two catalog comments `095` falsified (`072`/`073`), team-lead-owned.
 
 - **[The 071/072 month-anchor degeneracy — FIXED by 097](project_nav_month_anchor_degeneracy.md)** — Option C ratified 2026-08-30; ADR-065 is the canonical home; 071's weak copy still misleads.
+- **[`in_queue` is a ratified NAME with zero DDL](project_in_queue_is_a_ratified_name_not_ddl.md)** — but the semantics ARE built inside `fn_cashflow_items`; equivalence proof + the four-hand-copies drift risk.
 - **[`is_tax_payment` is Expense-scoped; the real tax rows are Transfer-class](project_is_tax_payment_expense_scope_gap.md)** — ADR-062 `091`; the flag cannot reach `Tax - US Federal` / `Tax - California`. Unresolved at 2026-08-25.
 - **[`cashflow_target` shape supersedes D18 + SD-22](project_cashflow_target_shape_supersession.md)** — `090` built the WIDE row; both artifacts still record the inherited `(users_id, target_kind)` 2-row shape. Owner-routed; RT still owed.
 - **[The AC10 fence does not reach the split-child grain](project_p4_split_child_journaled_cat_residual.md)** — `084`'s P4 branch reruns the same ordered CASE over the CHILD's cat with the PARENT's `journal_id`; `092` structurally cannot see it.
