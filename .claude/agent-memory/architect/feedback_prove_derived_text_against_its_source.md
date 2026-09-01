@@ -128,6 +128,19 @@ me catching the reviewer's derived one.
   [[count-over-history-vs-live-definitions]] and [[state-what-the-count-is-over]].
 - Do **not** silently fix a reviewer's verbatim text. Measure, hold, report the one word
   — then commit what they re-issue.
+- ⚠ **The same rule covers a reviewer's REMEDIATION, and the routing is the part that is
+  easy to get wrong.** Confirmed 2026-08-30 (SELF-344): Sec's fix for a wrong file-pointer
+  was a literal token swap; I saw that it would leave two referents for the same notation
+  in adjacent sentences and proposed a better wording. Raising it was right — **but the
+  variant goes to SEC for concurrence, not to team-lead, and not into the commit.** The
+  reviewer owns their finding's remediation end to end (the SELF-252 lesson: nobody
+  'helpfully' rewords a reviewer's remediation). Surface the concern, name the variant,
+  execute whichever the reviewer answers.
+- Corollary that makes it worth raising at all: a reviewer triages findings
+  **independently**, so a neighbour they correctly cleared can still be made ambiguous by
+  the fix landing beside it. That interaction is invisible from the reviewer's seat and
+  visible from the author's — which is why holding it is a real contribution and
+  silently acting on it is not.
 
 ⚠ **The third thing verbatim carry is unsafe for: text naming a PROCEDURE that has since
 been BANNED.** At `083` I re-emitted `009`'s catalog comment with one anchored span

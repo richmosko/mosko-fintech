@@ -143,3 +143,17 @@ raise *"mirrors the generic 500"*; measured, its `(sub_cat_id %)` text is claime
 comment and its test disagree about a fact, the test is usually right** (it was executed) and the
 comment is the artifact to fix — but say which one you measured, because "the test says X" is not
 itself a measurement of X.
+
+⚠ **AND THE FIX HAS THE SAME FOUR AXES — a token swap can create a worse defect than the stale pointer
+it repairs.** SELF-344: I flagged `097`'s body comment citing `072` for an expression that after the
+migration lived in `097`, and prescribed the literal `072`→`097` swap. Architect caught that the
+adjacent sentence one line down ("072 keeps an equivalent CASE (its `v_base`)…") uses the SAME notation
+for the **authoring home**, so post-swap the two numbers one line apart would mean two different things
+— in exactly the sentence pair a reader uses to decide whether two functions still agree. **An ambiguous
+notation is harder to catch than a stale one, because both readings are individually defensible.** The
+better fix names the OBJECT and anchors to *"this migration"* — stale-proof under any later re-issue,
+and it leaves the neighbouring sentence untouched. **How to apply: before prescribing a citation
+repair, grep the neighbouring uses of the same notation and ask what the swap makes THEM mean.** Same
+family as the CLAUSE-NAME BLEED note above — the neighbours are load-bearing on both the finding side
+and the remediation side. Concurring with a better variant costs nothing; shipping my own is not the
+goal. Related: [[supplied-verbatim-text-ships-unfiltered]].

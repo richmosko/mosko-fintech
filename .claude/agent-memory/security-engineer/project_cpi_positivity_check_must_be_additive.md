@@ -57,6 +57,23 @@ durable home for the conditions is **BACKLOG §7.14 first entry** — read it th
 it was already mandatory. Ruled ACCEPT either way. **When a condition of mine gets transcribed into an
 artifact, the artifact governs — surface the narrowing, do not silently apply my broader version.**
 
+⚠ **GUARD-SHAPE CENSUS, measured 2026-08-30 at the `096` review — take it before grading any sibling as a
+regression.** Two guard shapes coexist over the same divisor. **Four-clause** (`is null` · `= 'NaN'` ·
+`= 'Infinity'` · `<= 0`): **`067` ONLY**, and only since `095`. **Two-clause** (`is null` · `> 0` / `<= 0`,
+with an in-body comment naming the split — *"053 bars NaN/±Infinity but not zero"*): `071`, `072`, `073`,
+`096`. **So `067` is the OUTLIER, not the standard**, and I nearly drafted an AMBER blocking `096` for
+matching the majority. Re-measure the census (`grep -n "NaN\|Infinity\|<= 0\|> 0"` over the family
+migrations) before calling a two-clause guard weak. **The two-clause shape is sanctioned by MY OWN
+standing condition** — §7.14's *Widened* sub-bullet: `> 0` guards in this family "are sound only because a
+finiteness CHECK stands behind each." Both CHECKs stand and `066` returns only stored values or NULL, so
+NaN/+Infinity are unreachable through the helper. **The general lesson: a hardening applied to one family
+member makes that member the outlier; and check whether a prior binding condition of mine already blesses
+the shape I am about to flag.** Operative consequence for QA: against a two-clause body a NaN/+Infinity
+corrupt-the-control leg **REDs** — full 5-class test parity is not a test-only change, it requires the
+code change too. Whether `067`'s shape should become the family standard (touching `071`/`072`/`073`/`096`)
+is an open, unrecorded question. Dependent count on `053`'s `cpi_u_index_value_finite` is now **four**
+(`067`/`071`/`073`/`096`); §7.14's *Dependent list extended* sub-bullet still says three.
+
 Sec position on sequencing: the hardening is **no-later-than-mandatory**, not same-PR-mandatory — it
 is independently correct today and better landing earlier. More generally on this codebase: a
 numeric-comparison guard is never a NaN guard — see [[measure-the-fence-regex-not-its-comment]] for
