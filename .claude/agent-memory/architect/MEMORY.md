@@ -4,6 +4,7 @@
 
 - **[053 CPI positivity CHECK — SHIPPED at `095`](project_053_cpi_positivity_check_followup.md)** — additive to `cpi_u_index_value_finite`; residual = two catalog comments `095` falsified (`072`/`073`), team-lead-owned.
 
+- **[The 071/072 month-anchor degeneracy — FIXED by 097](project_nav_month_anchor_degeneracy.md)** — Option C ratified 2026-08-30; ADR-065 is the canonical home; 071's weak copy still misleads.
 - **[`is_tax_payment` is Expense-scoped; the real tax rows are Transfer-class](project_is_tax_payment_expense_scope_gap.md)** — ADR-062 `091`; the flag cannot reach `Tax - US Federal` / `Tax - California`. Unresolved at 2026-08-25.
 - **[`cashflow_target` shape supersedes D18 + SD-22](project_cashflow_target_shape_supersession.md)** — `090` built the WIDE row; both artifacts still record the inherited `(users_id, target_kind)` 2-row shape. Owner-routed; RT still owed.
 - **[The AC10 fence does not reach the split-child grain](project_p4_split_child_journaled_cat_residual.md)** — `084`'s P4 branch reruns the same ordered CASE over the CHILD's cat with the PARENT's `journal_id`; `092` structurally cannot see it.
@@ -35,7 +36,10 @@
 - **[A return SHAPE can discharge an equivalence obligation](reference_return_shape_can_discharge_an_equivalence_obligation.md)** — two states that must mean one thing belong in the TYPE, not in consumer discipline; "a handler anticipating only one diverges" is the tell.
 - **[Mirror a function from the CATALOG, not the file](feedback_mirror_a_function_from_the_catalog_not_the_file.md)** — a `CREATE OR REPLACE` chain leaves every superseded body greppable; the replacing migration is often named after something else. Measured: the copy did not parse.
 - **[CREATE OR REPLACE resets volatility](reference_create_or_replace_resets_volatility.md)** — silently erases an `ALTER … STABLE` pin, invisible to every value assertion; pin per SIGNATURE, and a STABLE caller of a VOLATILE callee is an unbacked promise.
+- **[A ROWS window frame satisfies a 12-period guard across a gap](reference_rows_frame_satisfies_the_count_across_a_gap.md)** — it counts ROWS, not periods; measured 12-vs-1 against RANGE over an integer month ordinal. Interval offsets clamp at month end.
 - **[A CHECK violation is reported in constraint-NAME order](reference_check_violation_reported_in_constraint_name_order.md)** — not creation order; an overlapping new constraint is MASKED by an alphabetically-earlier sibling, and a rename silently reds every name-anchored leg.
+
+- [Scratch DB for migration clean-apply](reference_scratch_db_for_migration_verify.md) — createdb on :54322 + **container-side** pg_dump of `auth` (local pg_dump is v14, refuses 17.6); nav_daily needs `app.nav_computed_for`.
 
 ## How to work
 

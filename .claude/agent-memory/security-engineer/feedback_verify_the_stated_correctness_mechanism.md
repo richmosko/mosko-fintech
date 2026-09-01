@@ -47,6 +47,18 @@ fence now and hand over the normalization detail. Related:
 [[measure-the-fence-regex-not-its-comment]] and
 [[corrupt-the-control-canary-boundary-tie]].
 
+⚠ **The posture TRIPLE is the family convention, and a battery can pin one third of it.** `096`'s
+battery pinned `prosecdef` alone; `062`/`064`/`067`/`069`/`070`/`071`/`073`/`079`/`089` pin all three in
+ONE leg — `is((select array[p.prosecdef::text, p.provolatile::text, array_to_string(p.proconfig, ',')]
+… ), array['false','s','search_path=""'], …)`. `093`/`094` pin none, so **check which sibling convention a
+new battery inherited before calling it a regression** (`grep -l "proconfig" supabase/tests/rls/*.sql`).
+Converting `ok()` → `is()` is one leg out, one leg in, so `plan(N)` and the header's leg breakdown both
+stay valid — a free fix, which is the argument for asking at review rather than booking it. **Why it
+bites:** it fails closed on BOTH removal paths — dropping `set search_path = ''` makes `proconfig` NULL,
+and Postgres array equality uses btree semantics (a NULL element opposite a non-NULL one is NOT-equal,
+not NULL), so the leg REDs instead of passing on a NULL comparison. Verify that property before
+accepting an array-shaped assertion as a watcher; the SQL-three-valued intuition predicts the opposite.
+
 **Companion — a ONE-TIME mechanism offered as a PERMANENT invariant.** The GL-split ADR draft
 (2026-08-18) wrote: *"the new table's identity sequence is set past the maximum so no id is ever
 reused on either side"*, concluding *"every historical snapshot remains resolvable against exactly

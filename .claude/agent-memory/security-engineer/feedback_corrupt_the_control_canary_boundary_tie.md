@@ -228,3 +228,24 @@ them, the drift is unwatched and the severity is higher, because the next author
 from the stale row produces a green test over the defect. Same shape as ADR-011 D4's PR #476 bullet:
 the battery can be where the correction CAME FROM, and must not be filed as one of the corrected
 sites. Related: [[a-red-whose-message-names-the-wrong-defect]].
+
+**RULED ACCEPTABLE (SELF-344, 2026-08-30) — savepoint-scoped `create or replace` of a SHARED function
+to force a synthetic clock, and the four reasons, because the ruling generalizes to any test-scoped
+substitution of a global object.** QA overrode `pfin.fn_server_today()` inside savepoints in the `071`
+and `073` batteries to pin a month-end and a mid-January date. **(1) Restoration is BY CONSTRUCTION:**
+`create or replace function` is transactional DDL and `rollback to savepoint` reverts the `pg_proc` row
+by MVCC — strictly stronger than re-issuing the original definition afterwards, which could DRIFT from
+the canonical text and leave a subtly different function behind. **(2) Doubly contained:** measure that
+the file has `begin;` … `rollback;` and **no `commit;` anywhere** — then even a removed savepoint
+rollback still restores. **(3) Self-watching:** the legs inside assert values obtainable only under the
+forced value, so a CoR that failed or did not take effect REDs them; no separate watcher is needed and
+one would be the leg-that-cannot-fail shape (it would assert a property of Postgres, not of the file).
+**(4) The substitute preserved the full posture triple**, so even a hypothetical leak leaves posture
+intact. ⚠ **The residual worth NAMING rather than hedging:** this is the first battery family whose
+rollback-only discipline protects a SCHEMA OBJECT rather than rows — flip the trailing `rollback;` to
+`commit;` while debugging and other files merely strand fixture rows, while these leave a *production
+function* hardcoded to a future date, silently, with correct posture, presenting as a data bug rather
+than a test artifact. One `--` line at each CoR site is the whole fix. ⚠ **And a parallelization
+precondition:** the CoR takes a lock on a globally shared object, so `pg_prove -j N` against one
+database would make concurrent batteries BLOCK (a hang/flake risk, not a wrong-value risk). Measure the
+CI invocation before asserting either way — `supabase test db` runs serial, with no `-j`.

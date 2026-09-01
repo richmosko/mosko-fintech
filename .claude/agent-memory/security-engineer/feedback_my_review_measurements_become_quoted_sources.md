@@ -89,3 +89,19 @@ too — grep the basename repo-wide before attributing.**
   implementation delivered *"all LIVE copies"*. That reinterpretation was correct (applied
   migrations cannot be edited). **Say explicitly that I accept it**, or a future reader finds a
   gap between my words and the code and cannot tell which is authoritative.
+
+⚠ **I MEASURED FOUR AND WROTE THREE — the degradation happened between my own grep and my own prose.**
+SELF-344: I located all four `fn_server_today` clock-forcing sites (`071` ×2, `073` ×2) mid-review, then
+reported "one `--` line at each of the **three** CoR sites." QA caught it and warned all four; had they
+taken my number at face value, one site would have shipped unwarned. **This is the class I flag in other
+people's artifacts, arriving by the shortest possible route: measurement → my own sentence, no relay, no
+staleness, no third party.** A count I derive is not safe just because I derived it. **How to apply:
+before a count leaves my report, re-run the command in the SAME turn as writing the number — not earlier
+in the review.** Same discipline as [[relay-from-the-tree-not-the-report]], applied to myself.
+
+⚠ **And check the STRENGTH of a secondary rationale before attaching it.** In the same report I argued a
+literal should be removed partly because it was "a hostage to a future fence widening" — then measured
+66 files under `supabase/` already carrying it, which makes that widening implausible and the argument
+near-weightless. The primary reason (a §10 Path-B enumeration) stood alone and should have led alone.
+**A weak supporting argument does not add weight; it invites the whole finding to be answered on its
+weakest leg.**

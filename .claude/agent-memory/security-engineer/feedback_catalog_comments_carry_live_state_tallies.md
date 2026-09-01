@@ -114,3 +114,14 @@ checking the claim never checks the noun phrase it hangs on. **How to apply:** o
 header cites a fence, registry, or allowlist by SHAPE, `grep -v '^\s*#'` the registry file itself in the
 same turn — and expect the sibling endpoint on `main` to carry the identical sentence (fix the branch
 instance as a condition; route the landed one separately, never sweep it inside a feature PR).
+
+⚠ **AUTHORED ≠ SERVED: a `DROP FUNCTION` destroys the earlier `comment on`, so "N migrations carry the
+text" and "N live catalog comments" are DIFFERENT POPULATIONS.** SELF-344/ADR-065: three migrations
+(`071`/`072`/`073`) carry `comment on function` text stating the NAV month-anchor rule, but `072` does
+`drop function if exists` + `create function` — and `DROP` takes the comment with it — so `071`'s text
+never reaches the catalog a reader queries. **Two live, three authored, both true, and reconciling them
+would delete a real distinction.** Second instance of the two-scoped-figures shape after §10-catalogued
+vs CI-fenced. **How to apply: when counting where a rule "lives," ask whether any migration in the chain
+DROPPED the object — `create or replace` PRESERVES comments, `DROP`+`CREATE` does not.** State both
+figures with their scopes rather than picking one; a point-in-time figure scoped "before this migration"
+belongs in an ADR and needs no watcher.
