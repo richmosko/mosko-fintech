@@ -22,6 +22,31 @@
 // second call site where a different value could be threaded by mistake. Flagged at hand-off as a
 // default-and-notify judgment call (the literal SQL shape vs. the property it exists to buy).
 //
+// ⚠ THE QUOTED SENTENCE'S OWN PREMISE DOES NOT HOLD HERE, AND THAT IS WORTH STATING RATHER THAN
+// LEAVING IMPLICIT (Sec-flagged 2026-09-01, joint-review, resolved GREEN — see the ruling below).
+// "They would still agree in two statements IN THE SAME TRANSACTION" is 098's premise; this file's
+// two RPCs are two SEPARATE PostgREST requests, hence two SEPARATE transactions/snapshots — not
+// one. What that changes, split by the two things "agree" could mean:
+//   (1) THE WINDOW BOUNDS agree UNCONDITIONALLY regardless of transaction boundary. Both RPCs
+//       derive ms_floor/ms_last from pfin.fn_expenditure_window(asOf) — pure calendar arithmetic on
+//       the one `asOf` value this file passes to both — so nothing a concurrent write does can move
+//       one call's window relative to the other's.
+//   (2) THE ROW SNAPSHOTS may not. Each RPC reads pfin.fn_cashflow_items(asOf) in its OWN
+//       transaction, so a write landing between the two calls is visible to whichever call runs
+//       second and invisible to the one that already ran.
+//   ⚠ THE ASYMMETRY, NAMED: if the SERIES call resolves first and a same-tenant classification of a
+//   previously-unclassified item lands before the COUNT call, that item is now counted as
+//   classified — dropped from N — but the bar it belongs to was already rendered without it. Result:
+//   an INCOMPLETE chart under a "nothing outstanding" banner, the false-reassurance direction. The
+//   REVERSE order (count first, series second) is harmless: the count can only OVER-count relative
+//   to what the bars end up showing, which is the fail-safe direction — an over-disclosure, never a
+//   silently-incomplete chart.
+//   RULED ACCEPTABLE for this surface (Sec joint-review, option A): N is an advisory disclosure
+//   signal, not a computed money value — no dollar figure on this page derives from N. The window is
+//   transient (one request), self-healing on the next page load, and both a wrapping RPC (closed
+//   above — return-shape change / DROP+CREATE) and forcing the harmless call order sequentially
+//   (adds latency for a rare, self-correcting drift) were considered and declined.
+//
 // FAIL-SOFT, INDEPENDENTLY PER LEG — mirrors the brief's binding constraint at the +page.server.ts
 // boundary (a chart-query failure must never break the rollup, and vice versa) one level down:
 // `points` and `unclassifiedCount` are two independent RPCs and degrade independently, matching
