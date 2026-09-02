@@ -25,8 +25,18 @@
 	re-navigation this page performs (the as-of toggle, the account picker) builds off
 	`new URL(page.url)` and therefore preserves it automatically.
 
-	AC9 / SELF-258: no staleness marker wired — CashflowPerAccountTable.svelte's own seam comment
-	is the one home for that note.
+	AC9 / SELF-258 (LIVE): the `StaleConstituentBadge` mount + its USER-WIDE ruling live entirely
+	inside CashflowPerAccountTable.svelte — this page threads the SAME whole-tenant `staleness`
+	prop down, no re-derivation, no second read.
+
+	EXPECTED LOADER CONTRACT (SELF-258, NOT YET LANDED as of this file's authoring — the
+	underlying read primitive + wrapper (`046` / `loadStaleness()`) are already live on other V1.1+
+	surfaces; this route's own loader leg is what SELF-258 dispatches to Backend next —
+	SELF-242/241/325 precedent): `data.staleness: StalenessData`, one `loadStaleness()` call
+	threaded through unchanged. Defaults to `UNKNOWN_STALENESS` here (never `EMPTY_STALENESS`)
+	until Backend wires it, so this page stays null-tolerant rather than crashing on the missing
+	field. `npm run check` surfaces a real `Property 'staleness' does not exist on PageData` error
+	until then — the correct, visible signal; not worked around with `any` or a parallel type.
 
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5).
 -->
@@ -37,9 +47,13 @@
 	import CashflowAccountPicker from '$lib/components/CashflowAccountPicker.svelte';
 	import { closedAtLabel } from '$lib/account-display';
 	import { perAccountHasNoRows, renderedYear } from '$lib/cashflow-per-account';
+	import { UNKNOWN_STALENESS } from '$lib/staleness/stale-constituent';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
+
+	// SELF-258: see the module header's EXPECTED LOADER CONTRACT.
+	const staleness = $derived(data.staleness ?? UNKNOWN_STALENESS);
 
 	const accountIdParam = $derived(page.params.account_id);
 	const currentAccountId = $derived(Number(accountIdParam));
@@ -116,6 +130,7 @@
 	{:else}
 		<CashflowPerAccountTable
 			drilldown={data.drilldown}
+			{staleness}
 			classifyHref={`/accounts/${data.drilldown.account_id}`}
 			otherCashFlowsNote={data.otherCashFlowsNote}
 		/>

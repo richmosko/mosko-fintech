@@ -10,6 +10,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { render, within } from '@testing-library/svelte';
+import { EMPTY_STALENESS } from '$lib/staleness/stale-constituent';
 import CashflowPerAccountTable from './CashflowPerAccountTable.svelte';
 import type { CashflowPerAccount, CashflowPerAccountSection } from '$lib/cashflow-per-account';
 
@@ -60,7 +61,7 @@ const FIXTURE: CashflowPerAccount = {
 	unclassified: { count_ytd: 0 }
 };
 
-const BASE_PROPS = { classifyHref: '/accounts/42', otherCashFlowsNote: NOTE };
+const BASE_PROPS = { staleness: EMPTY_STALENESS, classifyHref: '/accounts/42', otherCashFlowsNote: NOTE };
 
 describe('CashflowPerAccountTable — AC1: three sections rendered Income, Other Cash Flows, Expenses in order', () => {
 	it('renders all three captions in the ruled order', () => {
@@ -221,5 +222,48 @@ describe('CashflowPerAccountTable — an unexpected section is rendered visibly,
 		};
 		const { getByText } = render(CashflowPerAccountTable, { props: { drilldown: withExtra, ...BASE_PROPS } });
 		expect(getByText('Mystery')).toBeTruthy();
+	});
+});
+
+// SELF-258 AC3: section-level StaleConstituentBadge wiring, USER-WIDE per the team-lead ruling
+// (see this component's own module header). The badge's OWN behavior is StaleConstituentBadge's
+// own test suite's job — this suite only proves CashflowPerAccountTable threads its `staleness`
+// prop to the badge correctly, once per section (Income, Other Cash Flows, Expenses).
+describe('CashflowPerAccountTable — AC3/SELF-258: section-level StaleConstituentBadge wiring', () => {
+	it('staleness: EMPTY_STALENESS renders no badge in any of the three sections', () => {
+		const { container, queryByText } = render(CashflowPerAccountTable, {
+			props: { drilldown: FIXTURE, ...BASE_PROPS }
+		});
+		expect(container.querySelectorAll('.stale-connection-marker')).toHaveLength(0);
+		expect(queryByText('May be stale')).toBeNull();
+	});
+
+	it('a stale whole-tenant staleness prop renders the badge in ALL THREE section headers — same value, one read, USER-WIDE (not account-scoped)', () => {
+		const stale = {
+			is_stale: true,
+			stale_items: [
+				{
+					linked_source_id: '9',
+					institution_name: 'Some Other Bank',
+					provider: 'plaid',
+					connection_status: 'revoked',
+					status_class: null
+				}
+			]
+		};
+		const { container, getAllByRole } = render(CashflowPerAccountTable, {
+			props: { drilldown: FIXTURE, ...BASE_PROPS, staleness: stale }
+		});
+		expect(container.querySelectorAll('.stale-connection-marker')).toHaveLength(3);
+		expect(getAllByRole('table')).toHaveLength(3);
+	});
+
+	it('is_stale === null (unknown) renders the quieter "Staleness unknown" note, never the confirmed-stale tag, in all three sections', () => {
+		const unknown = { is_stale: null, stale_items: [] };
+		const { getAllByText, queryByText } = render(CashflowPerAccountTable, {
+			props: { drilldown: FIXTURE, ...BASE_PROPS, staleness: unknown }
+		});
+		expect(getAllByText('Staleness unknown')).toHaveLength(3);
+		expect(queryByText('May be stale')).toBeNull();
 	});
 });

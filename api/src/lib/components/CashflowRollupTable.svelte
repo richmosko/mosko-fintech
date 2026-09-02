@@ -31,14 +31,35 @@
 	surface" URL to deep-link to yet; `/accounts` is the best-available entry point pending a real
 	§2.3.1 queue surface — flagged at hand-off, not a silent guess).
 
-	AC11 / SELF-258 SEAM: the section-level `StaleConstituentBadge` this surface will eventually
-	carry (`docs/records/v13-preflight/rederived-acs.md`'s SELF-258 AC1 — dispatched AFTER this
-	issue) is NOT wired here. Each section header below carries an explicit HTML-comment seam
-	marking exactly where that badge mounts once SELF-258 lands — see the two
-	`SELF-258 seam` comments in the markup. Nothing renders at that seam today (a real
-	`StaleConstituentBadge` mount, per its own Sec F3(B) ruling, requires REQUIRED non-default
-	`isStale`/`staleItems` props this component has no source for yet — wiring a fake/undefined
-	value here would be worse than leaving the seam visibly marked).
+	AC11 / SELF-258 (LIVE): section-level `StaleConstituentBadge`, one per section table (Income,
+	Expenses), fed by the SAME whole-tenant `staleness` prop the §2.1/§2.2 surfaces already
+	consume off `loadStaleness()` — this component issues NO second read. §2.3.2 + §2.3.4
+	explicitly named in PRD §2.4.4's staleness-ramp list; §2.3.3 inherits per ADR-013 D1
+	illustrative-not-exhaustive.
+
+	PLACEMENT (HTML-validity note): the badge mounts as a sibling BEFORE `.table-scroll`, not
+	inside `<caption>` or between `<caption>` and `<thead>` (where the pre-SELF-258 seam comment
+	sat) — `<table>`'s content model permits only `<caption>`, `<colgroup>`, then the row-group
+	elements directly inside it, so a bare marker element there would be foster-parented out of
+	the table by the HTML parser. Nesting it INSIDE `<caption>` instead is technically legal
+	(`<caption>`'s content model is flow content) but was avoided on purpose: `<caption>` supplies
+	the table's accessible NAME, and folding the badge's own interactive `<button>` into the
+	element computing that name is the same anti-pattern NonReAllocationTable / UsEquityAllocationTable
+	/ NavCompositionTable already avoid by mounting their badge as a sibling of a `<header>`, never
+	inside their table's naming element. `.cf-section` wraps badge + `.table-scroll` per section so
+	the badge still reads as visually adjacent to "this section's own caption," per the AC.
+
+	AC4 GAP (bubble-up, not implemented in this PR): per-row (Sub-Cat) staleness marking — the
+	`.stale-tag` + `tr.stale-row` tint pattern NonReAllocationTable/UsEquityAllocationTable's
+	`AllocationRow.is_stale` / `UsEquityRow.is_stale` already ship (fed by Backend's SELF-330
+	`fn_subcat_contributors` contributor-account fold) — has NO analogous data source on this
+	payload. `CashflowSectionRow` (cashflow-rollup.ts) carries only
+	`{ sub_cat, month, q1..q4, ytd }` — no `sub_cat_id`, no contributor-account linkage of any
+	kind. Reported to team-lead rather than invented: a per-row indicator here needs a NEW
+	Backend contributor-join (cash-flow's Sub-Cat → account mapping folded through the `046`
+	stale set, analogous to SELF-330's `fn_subcat_contributors`), out of this issue's scope per
+	the dispatch brief's own instruction not to re-derive staleness client-side or invent a data
+	source.
 
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5).
 -->
@@ -49,13 +70,21 @@
 		fmtPeriodCell,
 		type CashflowCrossAccountRollup
 	} from '$lib/cashflow-rollup';
+	import type { StalenessData } from '$lib/staleness/stale-constituent';
+	import StaleConstituentBadge from './StaleConstituentBadge.svelte';
 
+	// Sec F3(B)-style discipline (mirrors StaleConstituentBadge / NonReAllocationTable /
+	// UsEquityAllocationTable / NavCompositionTable): `staleness` is REQUIRED, no default — a
+	// caller that forgets to thread real data fails at TYPECHECK, not as a silent "confirmed
+	// healthy" fallback.
 	let {
 		rollup,
+		staleness,
 		classifyHref = '/accounts',
 		editTargetsHref = '/settings/cash-flow-targets'
 	}: {
 		rollup: CashflowCrossAccountRollup;
+		staleness: StalenessData;
 		/** AC9 CTA target — see the module header for why this defaults to `/accounts`. */
 		classifyHref?: string;
 		/** AC7 — routes to the SELF-252 editor, which does not exist yet; a 404 there is expected
@@ -98,18 +127,19 @@
 
 	{#each sections as section (section.cat)}
 		{@const caption = sectionTargetCaption(section, rollup.targets, usd)}
-		<div class="table-scroll">
-			<table class="cf-tbl">
-				<caption class="section-caption">
-					<span class="caption-label">{section.label}</span>
-					{#if caption}
-						<span class="caption-target">{caption}</span>
-					{/if}
-				</caption>
-				<!-- SELF-258 seam: <StaleConstituentBadge> mounts here, adjacent to this section's
-				     own caption, once the §2.3.x staleness ramp (SELF-258 AC1) lands. Renders
-				     nothing today — see this file's own module header. -->
-				<thead>
+		<div class="cf-section">
+			<!-- AC11(1)/SELF-258: section-level D1 marker, adjacent to this section's own caption
+			     — see the module header for placement rationale + the ADR-013 D1 annotation. -->
+			<StaleConstituentBadge isStale={staleness.is_stale} staleItems={staleness.stale_items} />
+			<div class="table-scroll">
+				<table class="cf-tbl">
+					<caption class="section-caption">
+						<span class="caption-label">{section.label}</span>
+						{#if caption}
+							<span class="caption-target">{caption}</span>
+						{/if}
+					</caption>
+					<thead>
 					<tr>
 						<th scope="col">Sub-Cat</th>
 						<th scope="col" class="num month">Month</th>
@@ -157,7 +187,8 @@
 						<td class="num">{fmtPeriodCell(section.total.ytd, usd)}</td>
 					</tr>
 				</tfoot>
-			</table>
+				</table>
+			</div>
 		</div>
 	{/each}
 </section>
@@ -242,6 +273,15 @@
 		outline: none;
 		box-shadow: var(--focus-ring);
 		border-radius: var(--radius-sm);
+	}
+
+	/* AC11(1)/SELF-258 — wraps the section-level badge + its table so the badge reads as visually
+	   adjacent to "this section's own caption" while staying a DOM sibling of `.table-scroll`,
+	   never a descendant of `<table>` (see the module header's PLACEMENT note). */
+	.cf-section {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-2);
 	}
 
 	.table-scroll {

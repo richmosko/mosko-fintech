@@ -34,21 +34,48 @@
 	unreachable from this browser component) — this component renders whatever string arrives,
 	never a second hand-copy of the sentence.
 
-	AC9 / SELF-258 SEAM: no live `StaleConstituentBadge` mount — see the `SELF-258 seam` comment
-	below, mirroring CashflowRollupTable's own seam marker verbatim.
+	AC9 / SELF-258 (LIVE): section-level `StaleConstituentBadge`, one per section table (Income,
+	Other Cash Flows, Expenses), fed by the SAME whole-tenant `staleness` prop — mirrors
+	CashflowRollupTable's own placement + wiring (see that file's module header for the
+	HTML-validity rationale on why the badge mounts as a sibling of `.table-scroll`, not between
+	`<caption>` and `<thead>`). §2.3.2 + §2.3.4 explicitly named in PRD §2.4.4's staleness-ramp
+	list; §2.3.3 inherits per ADR-013 D1 illustrative-not-exhaustive.
+
+	⚠ USER-WIDE, NOT ACCOUNT-SCOPED (F/CTO-ruled via team-lead, 2026-09-02 — SELF-258 dispatch):
+	this is a single-account drill-down surface, but `pfin.fn_aggregation_has_stale_constituent()`
+	(046) takes ZERO arguments — there is no `p_users_id`/`p_scope` parameter to narrow the read to
+	the one account this page is showing (046's own header states those params are G4 artifacts
+	that DO NOT EXIST). The badge below reads the SAME whole-tenant `staleness` prop every other
+	V1.1+ surface consumes, so it may report "possibly stale" for accounts unrelated to the one
+	currently displayed. This is a RECORDED, DELIBERATE over-broad-marker decision, not an
+	oversight — D1 always errs toward marking rather than toward a narrower-but-possibly-wrong
+	client-side re-derivation. A future account-scoped primitive would need a new Backend/Architect
+	migration; out of this issue's scope.
+
+	AC4 GAP (bubble-up, not implemented in this PR): per-row (Sub-Cat) staleness marking has no
+	data source on this payload — see CashflowRollupTable.svelte's own AC4 GAP note (identical
+	shape: `CashflowPerAccountRow` carries no `sub_cat_id`/contributor-account linkage either).
+	Reported to team-lead, not invented.
 
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5).
 -->
 <script lang="ts">
 	import { sectionsToRender, type CashflowPerAccount } from '$lib/cashflow-per-account';
 	import { fmtPeriodCell } from '$lib/cashflow-rollup';
+	import type { StalenessData } from '$lib/staleness/stale-constituent';
+	import StaleConstituentBadge from './StaleConstituentBadge.svelte';
 
+	// Sec F3(B)-style discipline (mirrors CashflowRollupTable / NonReAllocationTable / etc.):
+	// `staleness` is REQUIRED, no default — a caller that forgets to thread real data fails at
+	// TYPECHECK, not as a silent "confirmed healthy" fallback.
 	let {
 		drilldown,
+		staleness,
 		classifyHref,
 		otherCashFlowsNote
 	}: {
 		drilldown: CashflowPerAccount;
+		staleness: StalenessData;
 		/** AC7 CTA target — this account's own transaction list (SELF-249 inline classify UI). */
 		classifyHref: string;
 		/** AC8 of cashflowSections.ts — the one home for this copy; rendered, never paraphrased. */
@@ -85,15 +112,16 @@
 	{/if}
 
 	{#each sections as section (section.sectionKey)}
-		<div class="table-scroll">
-			<table class="cf-tbl">
-				<caption class="section-caption">
-					<span class="caption-label">{section.label}</span>
-				</caption>
-				<!-- SELF-258 seam: <StaleConstituentBadge> mounts here, adjacent to this section's
-				     own caption, once the §2.3.x staleness ramp (SELF-258 AC1) lands. Renders
-				     nothing today — mirrors CashflowRollupTable.svelte's own seam verbatim. -->
-				<thead>
+		<div class="cf-section">
+			<!-- AC9/SELF-258: section-level D1 marker, adjacent to this section's own caption — see
+			     the module header for the ADR-013 D1 annotation + the USER-WIDE ruling. -->
+			<StaleConstituentBadge isStale={staleness.is_stale} staleItems={staleness.stale_items} />
+			<div class="table-scroll">
+				<table class="cf-tbl">
+					<caption class="section-caption">
+						<span class="caption-label">{section.label}</span>
+					</caption>
+					<thead>
 					{#if section.sectionKey === 'other_cash_flows'}
 						<!-- AC8 of cashflowSections.ts — the honest-transfer note, this file's ONE
 						     render site. Not a caption (it's prose, not a target value) — a note row
@@ -149,7 +177,8 @@
 						<td class="num">{fmtPeriodCell(section.total.ytd, usd)}</td>
 					</tr>
 				</tfoot>
-			</table>
+				</table>
+			</div>
 		</div>
 	{/each}
 </section>
@@ -199,6 +228,14 @@
 		outline: none;
 		box-shadow: var(--focus-ring);
 		border-radius: var(--radius-sm);
+	}
+
+	/* AC9/SELF-258 — wraps the section-level badge + its table, mirrors CashflowRollupTable's own
+	   `.cf-section` verbatim (see that file's module header for the placement rationale). */
+	.cf-section {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-2);
 	}
 
 	.table-scroll {

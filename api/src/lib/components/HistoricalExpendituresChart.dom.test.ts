@@ -14,6 +14,7 @@ import { describe, it, expect } from 'vitest';
 import { render } from '@testing-library/svelte';
 import HistoricalExpendituresChart from './HistoricalExpendituresChart.svelte';
 import type { HistoricalExpenditurePoint } from '$lib/historical-expenditures';
+import { EMPTY_STALENESS } from '$lib/staleness/stale-constituent';
 
 // jsdom has no ResizeObserver — same no-op stub as NavHistoryChart.dom.test.ts; LayerCake needs
 // it present to mount without throwing, and this suite doesn't assert on real pixel layout.
@@ -56,7 +57,7 @@ const POPULATED = Array.from({ length: 13 }, (_, i) =>
 describe('HistoricalExpendituresChart — placeholder-state gating never collapses distinct states', () => {
 	it('points === null (read failed): renders the unavailable notice, never the empty-classify copy', () => {
 		const { getByText, queryByText } = render(HistoricalExpendituresChart, {
-			props: { points: null }
+			props: { staleness: EMPTY_STALENESS, points: null }
 		});
 		expect(getByText(/temporarily unavailable/)).toBeTruthy();
 		expect(queryByText(/Classify your expense transactions/)).toBeNull();
@@ -64,7 +65,7 @@ describe('HistoricalExpendituresChart — placeholder-state gating never collaps
 
 	it('points === [] (genuinely empty): renders the AC10 classify-CTA copy, never the unavailable notice', () => {
 		const { getByText, queryByText } = render(HistoricalExpendituresChart, {
-			props: { points: [] }
+			props: { staleness: EMPTY_STALENESS, points: [] }
 		});
 		expect(getByText(/Classify your expense transactions to see your historical expenditures/)).toBeTruthy();
 		expect(getByText('Classify transactions')).toBeTruthy();
@@ -75,7 +76,7 @@ describe('HistoricalExpendituresChart — placeholder-state gating never collaps
 describe('HistoricalExpendituresChart — AC9 unclassified banner: three distinguishable N states', () => {
 	it('unclassifiedCount === null (not yet computed): renders NO banner and NO caption', () => {
 		const { queryByText, queryByRole } = render(HistoricalExpendituresChart, {
-			props: { points: POPULATED, unclassifiedCount: null }
+			props: { staleness: EMPTY_STALENESS, points: POPULATED, unclassifiedCount: null }
 		});
 		expect(queryByRole('status', { name: /unclassified/i })).toBeNull();
 		expect(queryByText(/bars partial/i)).toBeNull();
@@ -83,14 +84,14 @@ describe('HistoricalExpendituresChart — AC9 unclassified banner: three disting
 
 	it('unclassifiedCount === 0: renders NO banner and NO caption (a real, distinguishable zero)', () => {
 		const { queryByText } = render(HistoricalExpendituresChart, {
-			props: { points: POPULATED, unclassifiedCount: 0 }
+			props: { staleness: EMPTY_STALENESS, points: POPULATED, unclassifiedCount: 0 }
 		});
 		expect(queryByText(/unclassified/i)).toBeNull();
 	});
 
 	it('unclassifiedCount > 0: renders the banner (S-2 copy, never claims the items ARE expenses) + caption', () => {
 		const { getByText } = render(HistoricalExpendituresChart, {
-			props: { points: POPULATED, unclassifiedCount: 4 }
+			props: { staleness: EMPTY_STALENESS, points: POPULATED, unclassifiedCount: 4 }
 		});
 		expect(getByText('4 items unclassified — any of these may be expenses')).toBeTruthy();
 		expect(getByText('classify')).toBeTruthy();
@@ -104,7 +105,7 @@ describe('HistoricalExpendituresChart — AC6 whole-series CPI-unavailable fallb
 			point({ ...p, expense_monthly_inflation_adjusted: null, rolling_12mo_avg_inflation_adjusted: null, cpi_coverage_through: null })
 		);
 		const { getByText, queryByText } = render(HistoricalExpendituresChart, {
-			props: { points: allUnavailable }
+			props: { staleness: EMPTY_STALENESS, points: allUnavailable }
 		});
 		expect(getByText('Monthly Expenses (Nominal)')).toBeTruthy();
 		expect(getByText(/Inflation-adjusted figures are unavailable — no CPI-U data on record\. Showing nominal figures\./)).toBeTruthy();
@@ -113,7 +114,7 @@ describe('HistoricalExpendituresChart — AC6 whole-series CPI-unavailable fallb
 
 	it('a normal series renders the adjusted legend + CPI-U basis line, not the fallback note', () => {
 		const { getByText, queryByText } = render(HistoricalExpendituresChart, {
-			props: { points: POPULATED }
+			props: { staleness: EMPTY_STALENESS, points: POPULATED }
 		});
 		expect(getByText('Monthly Expenses (Inflation-Adjusted)')).toBeTruthy();
 		expect(getByText('12-Month Rolling Average')).toBeTruthy();
@@ -126,7 +127,7 @@ describe('HistoricalExpendituresChart — AC8 tooltip content', () => {
 	it('a per-bar hit target carries the full tooltip text as its accessible name', () => {
 		const single = [point({ month_end: '2026-01-31', expense_monthly_nominal: 1234, expense_monthly_inflation_adjusted: 1100 })];
 		const { getByRole } = render(HistoricalExpendituresChart, {
-			props: { points: single }
+			props: { staleness: EMPTY_STALENESS, points: single }
 		});
 		const hit = getByRole('button', { name: /Jan 26/ });
 		expect(hit.getAttribute('aria-label')).toContain('$1,234.00');
@@ -136,7 +137,7 @@ describe('HistoricalExpendituresChart — AC8 tooltip content', () => {
 	it('AC6: an unavailable month\'s hit target names the reason instead of a dollar figure', () => {
 		const single = [point({ month_end: '2026-01-31', cpi_value: null, expense_monthly_inflation_adjusted: null })];
 		const { getByRole } = render(HistoricalExpendituresChart, {
-			props: { points: single }
+			props: { staleness: EMPTY_STALENESS, points: single }
 		});
 		const hit = getByRole('button', { name: /Jan 26/ });
 		expect(hit.getAttribute('aria-label')).toContain('Unavailable');
@@ -161,7 +162,7 @@ describe('HistoricalExpendituresChart — no leaked doc-comment text (regression
 		];
 		for (const fixture of fixtures) {
 			const { container, unmount } = render(HistoricalExpendituresChart, {
-				props: { points: fixture, unclassifiedCount: 3 }
+				props: { staleness: EMPTY_STALENESS, points: fixture, unclassifiedCount: 3 }
 			});
 			expect(container.textContent).not.toContain('-->');
 			// Distinctive phrases from the module's own doc comment — would only appear in
@@ -170,5 +171,43 @@ describe('HistoricalExpendituresChart — no leaked doc-comment text (regression
 			expect(container.textContent).not.toContain('mount point');
 			unmount();
 		}
+	});
+});
+
+// SELF-258 AC2: chart-title-adjacent StaleConstituentBadge wiring. The badge's OWN behavior is
+// StaleConstituentBadge's own test suite's job (StaleConstituentBadge.dom.test.ts) — this suite
+// only proves HistoricalExpendituresChart threads its `staleness` prop to the badge correctly,
+// independent of the chart's own read-failed/empty/populated state.
+describe('HistoricalExpendituresChart — AC2/SELF-258: chart-title-adjacent StaleConstituentBadge wiring', () => {
+	it('staleness: EMPTY_STALENESS renders no badge, in every chart state', () => {
+		for (const points of [null, [], POPULATED]) {
+			const { container, unmount } = render(HistoricalExpendituresChart, {
+				props: { staleness: EMPTY_STALENESS, points }
+			});
+			expect(container.querySelector('.stale-connection-marker')).toBeNull();
+			unmount();
+		}
+	});
+
+	it('a stale whole-tenant staleness prop renders the badge adjacent to the chart title, independent of the chart\'s own read-failed state', () => {
+		const stale = {
+			is_stale: true,
+			stale_items: [
+				{
+					linked_source_id: '3',
+					institution_name: 'Third Bank',
+					provider: 'plaid',
+					connection_status: 'institution_down',
+					status_class: null
+				}
+			]
+		};
+		// Even points === null (read-failed) still mounts the badge — the two fail independently
+		// (this component's own module header: the chart's read failure never blocks the badge).
+		const { container, getByText } = render(HistoricalExpendituresChart, {
+			props: { staleness: stale, points: null }
+		});
+		expect(container.querySelector('.stale-connection-marker')).not.toBeNull();
+		expect(getByText(/temporarily unavailable/)).toBeTruthy();
 	});
 });

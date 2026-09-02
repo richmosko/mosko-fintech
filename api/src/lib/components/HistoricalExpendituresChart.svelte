@@ -34,12 +34,14 @@
 	  - The two RPCs fail independently — one leg's failure never blocks the other (matches this
 	    component's own per-prop null-tolerance).
 
-	AC11 / SELF-258 SEAM: staleness markers are NOT wired here — SELF-258 (which consumes them)
-	has not landed. A "SELF-258 seam" marker comment below marks the mount point, mirroring
-	CashflowRollupTable.svelte's own seam convention for the identical reason. (Written without a
-	literal HTML-comment close token in THIS sentence on purpose — HTML comments don't nest, and an
-	inline example containing one would close this outer doc comment early, leaking everything
-	after it as visible page text — the exact defect this file shipped and QA caught live.)
+	AC11 / SELF-258 (LIVE): a `StaleConstituentBadge`, adjacent to this chart's own title
+	(`.head`, next to the `<h2>`), fed by the SAME whole-tenant `staleness` prop the §2.1/§2.2/
+	§2.3.2 surfaces already consume off `loadStaleness()` — this component issues NO second read.
+	§2.3.2 + §2.3.4 explicitly named in PRD §2.4.4's staleness-ramp list; §2.3.3 inherits per
+	ADR-013 D1 illustrative-not-exhaustive. (Written without a literal HTML-comment close token in
+	THIS sentence on purpose — HTML comments don't nest, and an inline example containing one
+	would close this outer doc comment early, leaking everything after it as visible page text —
+	the exact defect this file shipped and QA caught live.)
 
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5).
 -->
@@ -56,13 +58,20 @@
 	} from '$lib/historical-expenditures';
 	import InformationalMarkerBadge from './InformationalMarkerBadge.svelte';
 	import HistoricalExpendituresBars from './HistoricalExpendituresBars.svelte';
+	import type { StalenessData } from '$lib/staleness/stale-constituent';
+	import StaleConstituentBadge from './StaleConstituentBadge.svelte';
 
+	// Sec F3(B)-style discipline (mirrors CashflowRollupTable / NonReAllocationTable / etc.):
+	// `staleness` is REQUIRED, no default — a caller that forgets to thread real data fails at
+	// TYPECHECK, not as a silent "confirmed healthy" fallback.
 	let {
 		points,
+		staleness,
 		unclassifiedCount = null,
 		classifyHref = '/accounts'
 	}: {
 		points: HistoricalExpenditurePoint[] | null;
+		staleness: StalenessData;
 		/** AC9's window-scoped N — see the module header's LIVE LOADER CONTRACT (098's
 		 * fn_expenditures_unclassified_count). `null` = the RPC failed or `p_as_of` couldn't be
 		 * resolved (renders no banner/caption); `0` is a real, distinguishable computed value
@@ -121,8 +130,9 @@
 <section class="hist-expenditures" aria-labelledby="hist-expenditures-label">
 	<header class="head">
 		<h2 id="hist-expenditures-label" class="section-label">Historical Expenditures</h2>
-		<!-- SELF-258 seam: a series-adjacent StaleConstituentBadge mounts here once SELF-258 lands.
-		     Nothing renders at this seam today — see the module header. -->
+		<!-- AC11/SELF-258: series-adjacent D1 marker — see the module header for the ADR-013 D1
+		     annotation. -->
+		<StaleConstituentBadge isStale={staleness.is_stale} staleItems={staleness.stale_items} />
 	</header>
 
 	<!-- AC9 — the S-2 unclassified banner (window-scoped, S-2-ruled copy: MUST NOT claim the
