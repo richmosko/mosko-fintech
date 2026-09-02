@@ -11,6 +11,7 @@ import { describe, it, expect } from 'vitest';
 import { render } from '@testing-library/svelte';
 import CashFlowPage from './+page.svelte';
 import type { CashflowCrossAccountRollup } from '$lib/cashflow-rollup';
+import { UNKNOWN_STALENESS } from '$lib/staleness/stale-constituent';
 
 // Same merged-PageData discipline as us-equity-page.dom.test.ts: the root +layout.server.ts
 // contributes fields this page's own +page.server.ts doesn't itself produce, but svelte-check
@@ -21,12 +22,18 @@ import type { CashflowCrossAccountRollup } from '$lib/cashflow-rollup';
 // PageData, rather than repeating both fields at each of the five call sites individually. This
 // suite asserts nothing about the chart itself — that coverage lives in
 // HistoricalExpendituresChart.dom.test.ts.
+//
+// SELF-258: `staleness` is likewise this PAGE's own loader field (not the layout's) — parked here
+// as UNKNOWN_STALENESS for the identical reason. This suite asserts nothing about staleness
+// rendering itself; that coverage is the loader-level SELF-258 describe block in
+// cash-flow-loader.server.test.ts plus CashflowRollupTable's own dom test.
 const LAYOUT_DEFAULTS = {
 	userEmail: null,
 	pendingClassificationCount: 0,
 	connectionHealth: { reauthCount: 0, institutionDownCount: 0 },
 	historicalExpenditures: null,
-	historicalExpendituresUnclassifiedCount: null
+	historicalExpendituresUnclassifiedCount: null,
+	staleness: UNKNOWN_STALENESS
 };
 
 const EMPTY_ROLLUP: CashflowCrossAccountRollup = {

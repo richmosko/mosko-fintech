@@ -42,6 +42,15 @@
 // unreachable from `+page.svelte` / `$lib/components/**` by the compiler's own server-boundary
 // guard, so threading through the ONE loader that CAN import it is the only way to keep this a
 // true single source (a hand-copy client-side would open a second home for the sentence).
+//
+// SELF-258 (staleness ramp): `staleness: StalenessData` is wired via the SAME whole-tenant
+// `loadStaleness()` call every other V1.1 surface already uses — one call, independent
+// try/catch, degrades to UNKNOWN_STALENESS (never EMPTY_STALENESS — SELF-229 convention) on
+// either an internal RPC failure or an unexpected throw. Unlike the account-list read above,
+// this is NOT gated on the 400 split — both the happy path and the as_of-inline-error path
+// return the SAME staleness value, since a bad as_of on the drilldown says nothing about whether
+// the tenant's underlying data is stale. Threaded straight through, whole-tenant, matching
+// cash-flow/+page.server.ts's own SELF-258 leg (no per-row join on this surface either).
 
 import { error, redirect } from '@sveltejs/kit';
 import {
@@ -49,6 +58,8 @@ import {
 	type CashflowPerAccount
 } from '$lib/server/queries/cashflowPerAccount';
 import { CASHFLOW_OTHER_CASH_FLOWS_NOTE } from '$lib/server/queries/cashflowSections';
+import { loadStaleness } from '$lib/server/queries/staleness';
+import { UNKNOWN_STALENESS } from '$lib/staleness/stale-constituent';
 import { serverTodayAsOf } from '$lib/server/time/asOf';
 import { AS_OF_FLOOR } from '$lib/server/schemas/asOf';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -91,6 +102,14 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 
 	const accounts = await loadAccountOptions(locals.supabase);
 
+	let staleness = UNKNOWN_STALENESS;
+	try {
+		staleness = await loadStaleness(locals.supabase);
+	} catch (err) {
+		console.error('[cash-flow/[account_id]] staleness load threw; degrading to unknown staleness:', err);
+		staleness = UNKNOWN_STALENESS;
+	}
+
 	if (result.status === 400) {
 		if (result.fieldErrors.account_id) throw error(404, 'Account not found');
 		return {
@@ -99,7 +118,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			accounts,
 			maxAsOf,
 			asOfFloor: AS_OF_FLOOR,
-			otherCashFlowsNote: CASHFLOW_OTHER_CASH_FLOWS_NOTE
+			otherCashFlowsNote: CASHFLOW_OTHER_CASH_FLOWS_NOTE,
+			staleness
 		};
 	}
 
@@ -109,6 +129,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		accounts,
 		maxAsOf,
 		asOfFloor: AS_OF_FLOOR,
-		otherCashFlowsNote: CASHFLOW_OTHER_CASH_FLOWS_NOTE
+		otherCashFlowsNote: CASHFLOW_OTHER_CASH_FLOWS_NOTE,
+		staleness
 	};
 };

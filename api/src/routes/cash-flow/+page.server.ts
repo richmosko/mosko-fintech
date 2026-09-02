@@ -20,9 +20,14 @@
 // unexpected throw, matching every other §2.1/§2.2 loader's posture (netWorth.ts /
 // nonReAllocation.ts / navComposition.ts). NEVER a fabricated zero-valued rollup.
 //
-// SELF-258 (staleness ramp) is a SOFT dependency and is NOT wired here — see
-// CashflowRollupTable.svelte's own module header for the marked seam. This loader does not call
-// `loadStaleness()` at all; wiring it is SELF-258's job, not this issue's.
+// SELF-258 (staleness ramp): `staleness: StalenessData` is now wired via the SAME whole-tenant
+// `loadStaleness()` call every other V1.1 surface already uses (root `+page.server.ts` /
+// `allocation/+page.server.ts`) — one call, independent try/catch, degrades to UNKNOWN_STALENESS
+// (never EMPTY_STALENESS — SELF-229 convention) on either an internal RPC failure or an
+// unexpected throw. CashflowRollupTable.svelte's own module header names this as the marked seam
+// this closes. Not threaded into any per-row join here (unlike root's composition table) — this
+// route's rollup/panel have no per-Sub-Cat staleness leaf yet, so the whole-tenant value is
+// passed straight through to `data.staleness` for Frontend's banner/footnote to render.
 //
 // §2.3.4 HISTORICAL EXPENDITURES PANEL (SELF-256, loader leg): `historicalExpenditures` /
 // `historicalExpendituresUnclassifiedCount` come from ONE `loadHistoricalExpendituresPanel` call,
@@ -41,6 +46,8 @@ import {
 	type CashflowCrossAccountRollup
 } from '$lib/server/queries/cashflowCrossAccountRollup';
 import { loadHistoricalExpendituresPanel } from '$lib/server/queries/historicalExpendituresPanel';
+import { loadStaleness } from '$lib/server/queries/staleness';
+import { UNKNOWN_STALENESS } from '$lib/staleness/stale-constituent';
 import { serverTodayAsOf } from '$lib/server/time/asOf';
 import type { HistoricalExpenditurePoint } from '$lib/historical-expenditures';
 import type { PageServerLoad } from './$types';
@@ -71,5 +78,20 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		historicalExpendituresUnclassifiedCount = null;
 	}
 
-	return { rollup, historicalExpenditures, historicalExpendituresUnclassifiedCount };
+	// SELF-258: the SAME whole-tenant `loadStaleness()` read every other V1.1 surface consumes —
+	// NOT a second, route-scoped invocation of the 046 primitive. Independent try/catch,
+	// mirroring the rollup/panel legs above: a staleness-read failure must never take down the
+	// rollup or the historical-expenditures panel, and vice versa. Degrades to UNKNOWN_STALENESS
+	// (never EMPTY_STALENESS) on either loadStaleness()'s own internal fail-soft or an unexpected
+	// throw — see staleness.ts's own SELF-229 REWORK note for why "unknown" and "confirmed
+	// healthy" must never collapse into each other.
+	let staleness = UNKNOWN_STALENESS;
+	try {
+		staleness = await loadStaleness(locals.supabase);
+	} catch (err) {
+		console.error('[cash-flow/+page.server] staleness load threw; degrading to unknown staleness:', err);
+		staleness = UNKNOWN_STALENESS;
+	}
+
+	return { rollup, historicalExpenditures, historicalExpendituresUnclassifiedCount, staleness };
 };
