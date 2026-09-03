@@ -11,10 +11,14 @@ ADR-066 · PRD `story-2-5-1` … `story-2-5-5` · `docs/SECURITY/index.html` SD-
 SD-22 / SD-23 and RT-23 / RT-24 / RT-25 · migrations `041` `051` `061` `070` `084` `085` `090` `091`
 `032` · `supabase/tests/rls/090_cashflow_target_rls.sql`.
 
-**⚠ INPUT GAP.** The issue dump at `/Users/mosko/Projects/mosko-fintech/temp/v14-preflight/issue-dump.md`
-was **absent** at drafting (directory exists, empty; checked three times). §1's map is therefore
-built from the surface anchors that ARE in the tree and is marked **PROVISIONAL** where the issue's
-scope is not derivable. §2–§5 do not depend on the dump and are final.
+**⚠ TWO PASSES, and the second one moved things.** Pass 1 was drafted with the issue dump **absent**
+(directory empty; checked three times) and marked four map rows PROVISIONAL. Pass 2 read the dump at
+`/Users/mosko/Projects/mosko-fintech/temp/v14-preflight/issue-dump.md`
+(md5 `9d128f6d8d78c9a24620116da5912d69`, verified in-turn; `origin/main` re-read and still `2cd94ae`).
+
+**§1 is rewritten by pass 2 and is current. §8 holds the pass-2 findings.** Two pass-1 findings are
+annotated in place rather than deleted, per this repo's supersede-don't-rewrite convention: **M-6 is
+RETRACTED** and **F-1 is RESOLVED-WITH-A-CAVEAT**. Everything else in §2–§6 stands as written.
 
 **Ledger statements, read live and stated so they are not inferred from silence:**
 
@@ -36,36 +40,34 @@ scope is not derivable. §2–§5 do not depend on the dump and are final.
 
 ---
 
-## §1 — Sec map, per issue
+## §1 — Sec map, per issue — CLOSED at pass 2
 
-**Anchors measured from the tree** (the dump was absent; these are what the repo itself says):
+**All nine are MANDATORY. No V1.4 issue is ADVISORY, none is NOT-REQUIRED, and none qualifies for
+the ADR-066 light loop.** That is not a defensive default: each row below names the specific
+triggering surface, and every one of the nine either authors DDL, changes a figure a user reads as
+money, or is the isolation battery itself.
 
-- `MILESTONES.md:44` enumerates V1.4 as **8 issues** — SELF-263 / 265 / 266 / 267 / 268 / 269 +
-  SELF-302 / 303. **SELF-264 is not in that list.**
-- `BACKLOG.md:348` (§7 P9 AC) names three surfaces by issue: *"3-col tax decomposition table at
-  SELF-264; quarterly tax tables at SELF-266; NAV composition Tax Liab rows at SELF-268."*
-- `BACKLOG.md:338` (§7 A8 AC) places **SELF-265 in the Settings-area ramp** — *"SELF-242 V1.2 +
-  SELF-252 V1.3 + SELF-265 V1.4."*
-- `MILESTONES.md:46` — **SELF-269** is the §2.5.5 RLS battery and the milestone close-gate.
+⚠ **SELF-264's milestone membership is resolved:** the dump's own closing section records it as
+*currently in* the V1.4 milestone, `updatedAt` 2026-09-03T05:09:51Z. `MILESTONES.md:44` (which
+enumerates eight and omits it) is the **stale** side. F-7 stands as a doc-reconciliation, and the
+map treats V1.4 as **nine**.
 
-⚠ **The brief lists nine issues (incl. SELF-264); `MILESTONES.md:44` lists eight and omits it.**
-One of the two is stale. That is a team-lead/PM reconciliation, not mine — flagged, not resolved.
-
-| Issue | Surface (as anchored) | Sec verdict | Triggering surface |
+| Issue | Surface (from the AC text) | Sec verdict | Triggering surface |
 |---|---|---|---|
-| **SELF-263** | not derivable from the tree — **PROVISIONAL** | see the decision rule below | — |
-| **SELF-264** | §2.5.1 three-column tax decomposition table (`BACKLOG.md:348`) | **MANDATORY** | ADR-011 D4 — financial calculation; the read composes `posting_prototype.tax_relevant` / `tax_character` into a money figure. Also ADR-066 D1(b): a rendering-only change to a money figure is still a money-path change. |
-| **SELF-265** | §2.5.2 tax-bracket + standard-deduction settings UI (`BACKLOG.md:338`) | **MANDATORY** | **Lock 14** user-facing settings write-path (typed-input validation + mass-assignment prevention) + **SD-04 HIGH** + **RT-24**. If it lands `pfin.tax_bracket_schedule` / `pfin.tax_bracket_row`, additionally **ADR-011 D3** (new FK-shaped reference column: `tax_bracket_row.schedule_id`) and **ADR-011 D4** (a new multi-layer settings surface). |
-| **SELF-266** | §2.5.3 quarterly tax tables + YTD-Paid overlay (`BACKLOG.md:348`) | **MANDATORY** | ADR-011 D4 — financial calculation over money the user pays a government; the YTD-Paid overlay reads an account ledger and the IRS/FTB account-identification mechanism is unspecified (see F-1). |
-| **SELF-267** | not derivable from the tree — **PROVISIONAL**; on the BACKLOG A3 AC (`BACKLOG.md:276`) the computation engine is a `fn_compute_tax_liability(p_data_as_of)`-shaped helper | **MANDATORY if it authors a DB function** | Lock 11 SECURITY INVOKER read-composition default + ADR-011 D4 financial calculation. Any `SECURITY DEFINER` proposal here is a **gate**, not a preference. |
-| **SELF-268** | §2.5.4 → `fn_nav_composition` Realized / Unrealized Tax Liab rows (`BACKLOG.md:348`) | **MANDATORY** | ADR-011 D4 — a NAV composition flip. `051:221-222` currently hard-code both to `0::numeric` marked *"V1.4 ramp"*; flipping them changes the single top-line money figure in the product. |
-| **SELF-269** | §2.5.5 RLS verification battery; milestone close-gate | **MANDATORY** | Multi-tenant isolation; ADR-011 D3 + D4. I review the battery's **catch criteria**, not only its green. |
-| **SELF-302** | "GL follow-up" (`MILESTONES.md:44`) — scope not derivable | **PROVISIONAL** | — |
-| **SELF-303** | "GL follow-up" (`MILESTONES.md:44`) — scope not derivable | **PROVISIONAL** | — |
+| **SELF-263** | `tax_relevant` / `tax_character` attribute migration + F/CTO bootstrap seed | **MANDATORY** | Migration authoring a new **type** and columns on the taxonomy spine, feeding the §2.5.1 money gate. ⚠ Its ACs are substantially falsified by the tree — see **D-1**. |
+| **SELF-264** | §2.5.1 three-column decomposition table UI at `/taxes/decomposition` | **MANDATORY** | ADR-011 D4 financial calculation. Labelled `role:frontend`, but ADR-066 D1(b) is explicit: a **rendering-only** change to a money figure is still a money-path change. |
+| **SELF-265** | §2.5.2 tax-bracket settings editor at `/settings/tax-brackets` | **MANDATORY** | **Lock 14** settings write-path + **SD-04 HIGH** + **RT-24**. Its own labels already carry `sec-joint-review` + `surface:rls`. ⚠ Both its hard upstreams are unscheduled — see **D-3**. |
+| **SELF-266** | §2.5.3 two parallel quarterly tables UI at `/taxes/quarterly` | **MANDATORY** | ADR-011 D4 — money the user pays a government, plus the (ν-1) sign rendering M-3 turns on. |
+| **SELF-267** | §2.5.3.c IRS/FTB YTD-Paid overlay: new enum + new column on `pfin.account` + `fn_ytd_paid_per_jurisdiction()` | **MANDATORY** | New DDL on a **central tenant-anchored table**, a new SQL function, and a money aggregate. ⚠ Its stated signature carries a **forgeable tenant parameter** — see **D-2**, the sharpest finding of pass 2. |
+| **SELF-268** | §2.5.4 NAV composition flip — placeholder → real Realized + Unrealized Tax Liab | **MANDATORY** | ADR-011 D4 — the single top-line money figure. `051:221-222` hard-code both to `0::numeric` marked *"V1.4 ramp"*. ⚠ AC4 asks for a write `pfin.nav_daily` **refuses** — see **D-4**. |
+| **SELF-269** | §2.5.5 RLS verification battery; V1.4 close-gate | **MANDATORY** | Multi-tenant isolation; ADR-011 D3 + D4. I review its **catch criteria**, not its green. ⚠ Three of its ACs are unbuildable as written — see **D-5**. |
+| **SELF-302** | GL follow-up — `basis_adjust` `wash_sale` P&L posting (disallowed loss → replacement-lot basis) | **MANDATORY** | **Self-declared** in the issue: *"Own migration, joint-review-mandatory (money-flow)."* Independently: it writes the GL and adjusts **cost basis**, which feeds `fn_account_unrealized_gl` → §2.5.4 Unrealized. It is a §2.5 money path, not a housekeeping item. |
+| **SELF-303** | GL follow-up — substantive `corp_action` GL (spin-off basis allocation, cash-in-lieu) | **MANDATORY** | **Self-declared** in the issue: *"Own migration, joint-review-mandatory."* Same basis-feeds-§2.5.4 path. ⚠ It also carries a **prior Sec NOTE** as a rider — see **D-6**; confirm it is not dropped in scoping. |
 
-**Decision rule for the four PROVISIONAL rows — apply it live, do not ask me to re-map by title.**
-An issue is **MANDATORY** if ANY of these is true; otherwise **ADVISORY**; **NOT-REQUIRED** only if
-none is true AND ADR-066 D1 (a) and (b) both hold:
+**The decision rule below is retained** — not because a row still needs it, but because ADR-066
+clause (c) points at the ratified map and a mid-arc scope change re-evaluates against it. An issue
+is **MANDATORY** if ANY of these is true; otherwise **ADVISORY**; **NOT-REQUIRED** only if none is
+true AND ADR-066 D1 (a) and (b) both hold:
 
 1. It authors or alters a migration touching schema / RLS policy / grant / trigger / function.
 2. It changes a figure a user reads as money, **including rendering-only** (ADR-066 D1(b)).
@@ -76,11 +78,13 @@ none is true AND ADR-066 D1 (a) and (b) both hold:
    pgsodium-encrypted BYTEA column, or changes a CI fence / `TenantBoundConnection`.
 5. It is a Lock 14 user-facing settings write-path.
 
-**On the light-loop tier (ADR-066).** On the anchored map, **no V1.4 issue qualifies for the light
-loop** — every anchored issue fails (b), (c), or both. SELF-302 / 303 may qualify if they are truly
-GL-internal and touch no money figure; that is team-lead's call at dispatch, and **it re-evaluates
-the moment a migration appears** (ADR-066 D2 — the tier lapses over the WHOLE arc, not the
-increment).
+**On the light-loop tier (ADR-066) — CLOSED at pass 2.** **No V1.4 issue qualifies.** Every one of
+the nine fails at least two of (a) / (b) / (c), and the conjunction admits no discretion. Pass 1 left
+SELF-302 / 303 open on the possibility they were GL-internal; the dump closes that — both state
+*"Own migration"* (falsifying (a)) and *"money-flow"* / *"joint-review-mandatory"* (falsifying (b)
+and (c)). **The tier still re-evaluates** if any issue's scope moves, and on trigger it lapses over
+the **whole arc**, not the increment (ADR-066 D2) — but there is no light-tier entry to lapse from
+on this milestone.
 
 ---
 
@@ -186,6 +190,35 @@ breaks every fixture seeding the barred value. I am asking that the **V1.4 consu
 `false` as an answered question**, and that the ADR-062 `comment on column` scoping precedent be
 followed. **F/CTO ruling** — see F-5.
 
+### M-6 — ⚠ **RETRACTED AT PASS 2. The measurement was right and the conclusion was wrong.**
+
+**The retraction, first, so nobody acts on the body below.** SELF-245 is **Done** (2026-08-26,
+migration `091`, PR #555) and its Comment 2 records the discharge verbatim: *"AC6 marking pass
+COMPLETE (F/CTO ruling, 2026-08-25): **zero** Expense-class prototypes marked `is_tax_payment =
+true`."* The ruled enumeration principle is stated there too — the tax buckets
+(`Tax - US Federal` / `Tax - California`) are **Transfer-class** by `041`'s founding categorization
+and *"never enter the §2.3.4 expense series — the class filter excludes them by construction, not
+the marker"*; property-tax transactions were explicitly ruled to stay in their Expense buckets.
+Its conclusion is the exact inverse of mine: *"every row carries a **deliberate** false, not an
+unmarked default."*
+
+**The generalizable failure, which is the only reason this is worth keeping.** My measurement —
+zero rows set `true` — was correct and remains correct. **A tree cannot distinguish "nobody ran the
+enumeration" from "the enumeration ran and its ruled outcome was zero."** The two states are
+byte-identical in the database and in every migration. The record of which one obtained lived in a
+Linear comment, off-tree. **An absence is evidence of an omission only if the discharge would have
+left a trace, and a ruling whose outcome is "change nothing" leaves none.** I asserted the omission
+without asking that question.
+
+⚠ **What survives, and it is NOT this flag:** SELF-245's own AC-strike block defers a *different*
+inventory to V1.4 — original AC4 (`tax_relevant` / `tax_character` for every cash-flow Sub-Cat) is
+*"**struck and deferred to V1.4** (§2.5.1 fuel; PM's mid-milestone tax inventory session is booked at
+close-out)."* That is `BACKLOG.md:1190` and it is **still unowned**, so **M-5 and F-6b stand
+unchanged**. Do not read this retraction as clearing them: `is_tax_payment` is discharged;
+`tax_relevant` / `tax_character` are not, and they are the two attributes §2.5.1 actually gates on.
+
+<details><summary>Pass-1 body, retained unedited as the record of what was claimed</summary>
+
 ### M-6 (flag) — ADR-062 Decision 3's HARD PRECONDITION is undischarged, and it is a V1.4 dependency
 
 ADR-062 Decision 3, verbatim: *"The F/CTO marking enumeration is a HARD PRECONDITION on the §2.3.4
@@ -208,6 +241,14 @@ discovered mid-arc.
 `('cashflow','Transfer','Tax - US Federal')` and `('cashflow','Transfer','Tax - California')`
 (`041:341-342`) are **Transfer** class and are therefore outside that flag's scope. The names collide;
 the mechanisms do not.
+
+</details>
+
+⚠ **The one paragraph above that pass 2 CONFIRMED rather than retracted** is the last one — the
+`is_tax_payment` / YTD-Paid non-conflation. SELF-245's F/CTO ruling reaches the same conclusion by
+the same route (Transfer-class, excluded by the class filter rather than by the marker), which is
+why it is worth stating that this half was right for the right reason and is now independently
+ratified.
 
 ### M-7 (flag) — bracket-boundary arithmetic: no lower floor, no upper bound, no unit
 
@@ -476,7 +517,41 @@ require its watcher to red.
 
 ## §5 — Needs an F/CTO ruling (not mine to take)
 
-**F-1 — How does the system identify the IRS and the FTB account?** PRD `story-2-5-3` says they are
+**F-1 — ⚠ RESOLVED AT PASS 2, three months ago, in a place nothing can grep. The caveat is live.**
+SELF-267's description records: ***"F/CTO Gate B Option A locked 2026-06-03:** `tax_jurisdiction
+pfin.tax_jurisdiction_enum NULL` column on `pfin.account`; F/CTO marks IRS + FTB accounts at
+creation."* That is **option (C) below**, already ratified. My pass-1 statement — that the PRD
+specifies no mechanism — was true of the PRD and true of the tree, and false of the project.
+
+**The finding is now about the record, not the decision, and it is the second instance of a named
+failure class.** Measured: `tax_jurisdiction` and *"Gate B Option A"* appear **nowhere** in
+`DECISIONS.md`, `supabase/`, `api/`, `docs/`, `BACKLOG.md` or `MILESTONES.md` — the ruling exists
+only in a Linear issue description. ADR-062 opens by naming exactly this: *"The original Option-A
+ratify existed **only in a Linear issue description**. That is not a durable record: it is not
+greppable from the tree, it does not travel with the migration, and it was re-litigated at the V1.3
+pre-flight because nobody could find it."* **It happened again, and it was again found at a
+pre-flight.** The V1.4 milestone should land this ruling in an ADR at the migration that realizes
+it, not carry it in Linear for a fourth month.
+
+⚠ **My option-(C) caveat is now a live build requirement, not a tradeoff:** nothing in an
+`account.tax_jurisdiction NULL` column prevents **two accounts carrying `'irs'`**, and
+`fn_ytd_paid_per_jurisdiction` sums over *all* matching accounts — so a duplicate mark silently
+**double-counts YTD Paid**, which **understates Estimated Funds Due**, which **understates Realized
+Tax Liability**, which **overstates NAV**. One partial unique index closes it:
+`unique (users_id, tax_jurisdiction) where tax_jurisdiction is not null`. **State whether more than
+one account per jurisdiction is legal** — if it is, the index is wrong and the double-count is a
+feature; if it is not, the index is owed. It cannot be left unanswered.
+
+✅ **And it is NOT an ADR-011 Decision 3 instance.** `tax_jurisdiction` is an **enum-typed value
+column**, not FK-shaped: no FK, no reference to any relation, no array of ids. There is no referenced
+row and therefore no tenant to match; no matched-tenant validation is owed and **no label is taken**.
+My pass-1 warning that this would become canonical **#18** was conditional on option (A), which is
+not what was ratified — **the family stays flat and `#18` remains unallocated.** Stated per column,
+per `085`'s rule.
+
+<details><summary>Pass-1 options, retained — (C) is the ratified one</summary>
+
+PRD `story-2-5-3` says they are
 *"standard §2.4.2 manual accounts with tax-domain semantic interpretation overlaid by §2.5.3's read
 path"* and specifies **no identification mechanism at all**. Nothing in the schema marks an account
 as the IRS account. Without a ruling this gets invented at build time.
@@ -490,6 +565,8 @@ as the IRS account. Without a ruling this gets invented at build time.
 - **(C) An `account.tax_authority` enum column.** One column, no junction, no new table. **Cost:**
   widens an already-central table for a §2.5-only concern, and it is still a value a user could set
   on more than one account unless a partial unique index prevents it.
+
+</details>
 
 **F-2 — What does a realized sale with no resolvable holding period do?** (M-1.)
 - **(A) Route to ST / ordinary** — fail-closed on tax, overstates rather than understates. **My
@@ -578,3 +655,214 @@ a table that is fine; the corrected one points at a state the tree explicitly sa
 booking. `BACKLOG.md:1190-1193` already books it. The finding stands, but its correct shape is
 "**recorded and unowned**", not "**missing**" — a distinction I have been bitten by before, and the
 one that decides whether this needs a new issue or a dependency edge on an existing one.
+
+**E-3 (pass 2, and the one that actually cost something).** M-6 was **wrong**, and E-2 was the near
+miss that should have caught it: I grepped the *repo* for a booking, found one, and downgraded
+"missing" to "unowned" — but I never asked whether the discharge had happened somewhere the repo
+cannot see. It had, a week earlier, with an F/CTO ruling attached. **I searched one more layer and
+stopped one layer short of the answer**, which is the same shape as the finding itself.
+
+The reusable rule: **before calling an absence an omission, ask what the discharge would have
+LOOKED like.** A ruling whose outcome is "change nothing" writes no row, no migration, and no diff —
+so its absence from the tree is not evidence of anything. Where the discharge is a *decision* rather
+than a *change*, the tree is the wrong instrument and the issue tracker is the right one.
+
+Two secondary costs, recorded because they are how a wrong finding propagates: M-6 shipped in my
+interim message and again in my pass-1 report before this retraction existed, and F-1 was raised as
+an **open ruling** when it had been ratified on 2026-06-03 — I framed a three-month-old decision as
+undecided, which invites re-litigation of a settled call. Both would have been avoided by reading
+the issue text first; neither was avoidable from the tree alone, which is the honest half.
+
+---
+
+## §8 — Pass-2 findings, from the issue text measured against the tree
+
+Six findings the AC text produced that the tree alone could not. Every claim below was re-measured
+against `2cd94ae` in the same turn it was written; none is relayed from the dump.
+
+### D-1 (flag) — SELF-263 would FORK the `tax_character` vocabulary into a third representation
+
+AC1 asks for *"`pfin.tax_character_enum` PostgreSQL enum created with 5 V1 values."* **That
+vocabulary already exists twice and neither is an enum type.** `009` shipped it as an inline
+`text CHECK (tax_character in (…))`; `011_tax_character_registry.sql` then *"promotes the `009`
+inline `text CHECK (5 values)`"* to a **registry table** `pfin.tax_character (code, label, notes,
+display_order)` with `user_taxonomy.tax_character` converted to
+`FOREIGN KEY … REFERENCES pfin.tax_character(code) ON DELETE RESTRICT` (`011:158`, `011:254-258`) —
+the ADR-024 global registry. Creating a PG enum now makes a **third** spelling of one vocabulary,
+and the three drift independently the moment a value is added.
+
+Two further AC-vs-tree falsifications on the same issue, stated because they change who owns the fix
+rather than because they are mine to fix:
+
+- **AC2 targets the wrong table for the cash-flow half.** It adds the columns to
+  `pfin.user_taxonomy`, but ADR-058's `084` moved the **posting vocabulary** to
+  `pfin.posting_prototype`, which is where the cash-flow `tax_relevant` / `tax_character` now live
+  (`084:500`, `084:550`). `user_taxonomy` is the **storage-classification spine** and carries no
+  cash-flow rows to mark — `084`'s own table comment says so.
+- **AC2's columns already exist on the table it names.** `009` added both; `011` re-typed one. So
+  the AC as written is partly a no-op and partly a fork.
+- **AC7 (*"read-only via migration in V1"*) is false of the shipped grants.** `084` grants
+  `authenticated` **SELECT + INSERT** on `posting_prototype`, and `041` added the
+  `user_taxonomy_insert` policy. Rows are user-insertable today; only UPDATE and DELETE are
+  deferred. **This matters to me specifically:** an AC that believes a table is read-only will not
+  specify a write-path fence for it, and `tax_relevant` is a money gate.
+
+**Sec position:** I do not object to any *particular* resolution — that is Architect's and PM's. I
+object to AC1 shipping as written, because a third vocabulary spelling is a defect that cannot be
+fixed later without a data migration. **AC4's substance is a live money decision, not a
+transcription:** it asks for asset-side Sub-Cats to be set `tax_relevant = TRUE` /
+`tax_character = long_term_capital_gain_eligible`, and `041` currently seeds **all 36 asset rows**
+`false` / `null` (`041:275-310`). That flip is the F-6b inventory session's business, not a
+migration author's.
+
+### D-2 (⚠ the sharpest pass-2 finding) — SELF-267's stated signature carries a FORGEABLE TENANT PARAMETER
+
+AC3 specifies
+`pfin.fn_ytd_paid_per_jurisdiction(p_users_id UUID, p_year INT, p_jurisdiction TEXT, p_through_quarter INT) RETURNS NUMERIC`,
+while AC6 specifies *"RLS enforced under SECURITY INVOKER composition."* **Those two ACs are in
+tension and the project has already ruled on it once.** SELF-211's own reconciliation comment states
+the rule verbatim: *"INVOKER means tenancy is `auth.uid()` via RLS, so there is **no**
+`user_id`/`scope` param"* — and the shipped substrate obeys it: `fn_compute_nav(p_as_of date)`,
+`fn_nav_composition(p_as_of date)` (`051:143`), `fn_server_today()` — **not one takes a tenant
+parameter.**
+
+**Why this is not a style objection.** A `p_users_id` parameter on an INVOKER function is *merely
+redundant today* — RLS ignores it and the caller cannot read another tenant's rows regardless. But
+it is a **latent cross-tenant read that arms itself on any future posture change**: the day someone
+makes this function `SECURITY DEFINER` for a performance or composition reason, the parameter
+becomes the tenant selector and there is no fence behind it. The function would then read exactly
+what its caller asked for. **A parameter that is inert under one posture and authoritative under
+another is a fence that depends on nobody ever changing the posture** — and posture changes are
+precisely what my DEFINER gate exists to catch, which means the gate would fire on the DEFINER
+change and the reviewer would have to notice the parameter *at that moment* to catch it.
+
+**Requirement: drop `p_users_id` from the signature.** Tenancy comes from `auth.uid()` via RLS on
+`pfin.account` and `pfin.account_trans`. If a future privileged caller genuinely needs a tenant
+parameter, that is an ADR-011 Decision 1 privileged-context surface with its own four-clause
+discipline, not a default argument on a read helper.
+
+**Second defect in the same signature: `p_jurisdiction TEXT` against an enum-typed column.** Make
+the parameter `pfin.tax_jurisdiction_enum`, so an unknown jurisdiction is a **type error at the
+boundary** rather than a silent zero-row sum that renders as `$0 YTD Paid` — which **overstates
+Estimated Funds Due** and is indistinguishable from "you have paid nothing." A `text` parameter here
+is also the RT-25 parameter-bypass shape on a new surface.
+
+**Third: AC3 says "sums payments" and never says what a payment IS.** The predicate is
+`account_trans` rows on accounts where `tax_jurisdiction = p_jurisdiction` — which will also match a
+**refund received**, an **inbound transfer**, and any correction row. Sign convention and row
+selection both need stating in the function's `comment on function`, per M-3.
+
+### D-3 (flag) — SELF-265's two hard upstreams are not in the milestone, and one of them carries all the security
+
+SELF-265's Dependencies name **SELF-259** (*"tax_bracket_schedule / tax_bracket_row migration +
+SERIALIZABLE replace-all endpoint"*) and **SELF-260** (the seed) as upstream. **Neither is among the
+nine V1.4 issues.** The same is true of **SELF-262** (`fn_compute_tax_liability()`), which SELF-264
+AC1, SELF-266 AC1, SELF-267 AC4 and SELF-268 AC1 **all** invoke.
+
+This is PM/team-lead's scheduling problem, not mine, and I flag it only because of where the security
+sits: **SELF-259 is the issue that would carry the RLS policies, the aal2 backstop conjunct, the
+Decision-3 evaluation, the monotonicity fence and the two-sided NaN CHECKs** — everything in §3 and
+most of §4's SELF-265 block. If SELF-259 is unscheduled and SELF-265 (labelled `role:frontend`,
+though it also carries `role:backend` + `surface:rls`) absorbs the DDL, then **a frontend-shaped
+issue silently becomes the milestone's principal schema surface.** That is survivable if it is
+*decided*; it is not survivable if it happens by default, because the DDL review would arrive
+attached to a UI PR.
+
+**Minor, but fix it before the migration is written:** SELF-265 AC2 names the columns
+**`bracket_floor` + `bracket_rate`**, while the ratified SD-04 cell names **`lower_bound` +
+`marginal_rate`**. Pick one and make SD-04 and the DDL agree; a settings editor and a security
+matrix naming the same column two ways is how M-7's unit ambiguity survives review.
+
+### D-4 (⚠ veto-shaped if taken literally) — SELF-268 AC4 asks for a write `pfin.nav_daily` REFUSES
+
+AC4 reads: *"SELF-226 NAV trajectory consumes flipped Tax Liab values; **historical NAV recompute
+back-fills correctly**."*
+
+**`pfin.nav_daily` is append-only ADR-011 Decision 2 audit-class.** `054` describes it as the
+*"append-only per-user daily NAV checkpoint"* and authors
+`pfin.fn_nav_daily_block_mutation()` — *"SECURITY INVOKER; **BEFORE UPDATE OR DELETE**"*
+(`054:235`, `054:257`). `055`'s role comment records the fences as deliberately
+*"un-bypassable by the writer."* **A back-fill of that series is an UPDATE, and it is trigger-blocked
+for every role including `service_role`.**
+
+There are two readings and they have opposite dispositions, which is why this needs stating rather
+than assuming:
+
+- **If AC4 means the stored checkpoint series:** it is asking to rewrite immutable financial history
+  with today's tax state, which D2 forbids by construction and which would be **wrong even if it
+  were permitted** — §2.5.2 holds exactly ONE current-tax-year bracket set, so applying today's
+  brackets to a 2024 checkpoint produces a number that was never true on that date. **I would veto
+  this at the PR.**
+- **If AC4 means the read-time trajectory composition** — that the chart recomputes from live inputs
+  and therefore "back-fills" visually — it is fine, and the AC is merely worded in a way that names
+  a forbidden operation.
+
+**Resolve the wording before dispatch.** An AC that names a blocked write will either be built as a
+blocked write and fail late, or be silently reinterpreted by whoever builds it, and the
+reinterpretation will not be reviewed. ⚠ Note the direction if the first reading were somehow
+enabled: it would make NAV history a function of *current* settings, so a bracket edit today would
+retroactively change last year's reported net worth.
+
+Related and smaller: **SELF-268 is labelled `role:frontend` only**, but AC1 says *"SELF-211 NAV
+backend updated"* and the flip lands in `fn_nav_composition` (`051`). It is a backend + migration
+issue wearing a frontend label; the label should not be what decides its review depth, and on this
+map it does not.
+
+### D-5 (flag) — three of SELF-269's ACs are unbuildable as written, and one states a false guarantee
+
+The close-gate battery is the issue I care most about being right, so:
+
+- **AC8 targets a relation that does not exist.** *"tenant A cannot create / update / read tenant
+  B's `pfin.transaction_annotation` row."* Measured: `grep -rn "pfin.transaction_annotation"
+  supabase/migrations` → **zero hits**. The built table is **`pfin.account_trans_annotation`**
+  (`023`, with `031` adding its history child). A battery leg written against the AC's name would
+  fail to compile; one written against a *guessed* name is unreviewable. ⚠ **And the wash-sale flag
+  the AC is reaching for may not live there at all** — SELF-302 is the issue that posts wash-sale,
+  and it is a `basis_adjust` reason, not an annotation column. Confirm the surface before writing
+  the leg.
+- **AC1 enumerates surfaces from outside the milestone** — SELF-259 / 260 / 261 / 262. Per D-3 these
+  are unscheduled. A close-gate whose coverage list names unbuilt surfaces either blocks forever or
+  gets quietly trimmed, and **the trim is the dangerous half**: this is the milestone's only
+  isolation gate.
+- **AC6 states a guarantee that is not one.** *"Bracket-row monotonicity invariant verified across
+  replay scenarios (**SERIALIZABLE replace-all guarantees integrity**)."* SERIALIZABLE guarantees
+  that concurrent transactions are equivalent to *some* serial order. **It guarantees nothing about
+  whether a single transaction leaves the rows monotone** — that is the trigger's job, and per §3
+  trap 1 a BEFORE-ROW trigger cannot see rows inserted later in the same statement. The parenthetical
+  would let a reviewer accept SERIALIZABLE *in place of* the monotonicity check. Strike it.
+
+**What AC9 gets right and should be kept verbatim:** *"NO `service_role` reach in any of
+SELF-259-266 Wave 5 surfaces; all execute under `authenticated` tier per ARCH §4.1."* That is the
+correct posture, it matches ADR-016's allowlist staying flat, and it is a leg that can fail.
+
+**One literal to get right in AC4:** the PRD writes the three-way tag as `tax-deferred` / `tax-free`
+with hyphens; the shipped CHECK at `003:101-102` is
+`tax_treatment in ('taxable', 'tax_deferred', 'tax_free')` — **underscores**. A battery fixture
+seeding the PRD's spelling is rejected by the CHECK, which reads as a passing fence rather than a
+broken fixture.
+
+### D-6 (note) — SELF-303 carries a prior Sec NOTE as a rider; do not let scoping drop it
+
+SELF-303's description ends: *"Also carry the non-gating test-durability nit: add a co-located aal2
+pass/block assertion to the `037` battery (currently relies on `033`'s battery for the re-created
+`journal_insert` policy — Sec NOTE, non-blocking)."*
+
+Recording it here for one reason: **a non-blocking finding attached to an issue's tail is the thing
+scoping removes first**, and this one is a watcher for an aal2 conjunct that a *different*
+migration's battery currently covers by coincidence of ordering. It is genuinely non-blocking and I
+am not raising its severity. I am asking that it survive to the PR, and that if it is dropped, it is
+dropped **explicitly** rather than by omission — a rider that vanishes silently reads at the next
+review as never having existed.
+
+### Where §4's catch criteria change
+
+Three additions, all from the above. Everything else in §4 stands:
+
+- **SELF-267:** `p_users_id` is **gone** from the signature; `p_jurisdiction` is enum-typed; the
+  partial unique index on `(users_id, tax_jurisdiction)` is present **or** multi-account-per-
+  jurisdiction is explicitly declared legal; the payment-row predicate and its sign are in the
+  `comment on function`; the 2026-06-03 Gate B ruling lands in an ADR in this PR.
+- **SELF-268:** AC4's meaning is resolved in writing before build, and if it means the checkpoint
+  series it does not ship.
+- **SELF-269:** AC8's relation name corrected to the built one; AC6's SERIALIZABLE parenthetical
+  struck; AC1's coverage list reconciled against what V1.4 actually builds.
