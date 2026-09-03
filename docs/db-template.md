@@ -69,22 +69,30 @@ run `db-template-build.sh` and retry.
   `--no-privileges`/`--no-owner`, which would drop REVOKEs and make the
   result more permissive than the real bootstrap) and leaves the result as a
   Postgres template database, `pfin_tmpl`. It stamps a marker
-  (`public._template_meta`: head migration filename + sha256 of the full
-  migrations tree + build timestamp) before promoting the build — a failed
-  or partial build is dropped, never promoted.
-- `db-template-clone.sh <name>` reads that marker, recomputes the same two
-  values from your CURRENT `supabase/migrations/` tree, and compares. Any
-  mismatch — including editing an already-numbered migration file in place,
-  which a filename-only check would miss — refuses to clone. On a match, it
-  clones via `createdb --template=pfin_tmpl` (seconds, not a full apply),
-  then replays every database-level (`pg_db_role_setting`, `setrole = 0`)
-  setting `pfin_tmpl` carries onto the clone — `CREATE DATABASE ... TEMPLATE`
-  does NOT copy that catalog (it's keyed by database OID; a clone gets a new
-  one), which is exactly the gap QA measured 2026-08-19 (085) losing
-  migration 061's `TimeZone=UTC` pin. The replay is generic — it reads
-  whatever `pfin_tmpl` actually carries, not a hardcoded TimeZone-only fix —
-  so a future migration adding another `ALTER DATABASE ... SET` is covered
-  with no edit needed here.
+  (`public._template_meta`: head migration filename, sha256 of the full
+  migrations tree, the running container's image id, and the build
+  timestamp) before promoting the build — a failed or partial build is
+  dropped, never promoted.
+- `db-template-clone.sh <name>` reads that marker, recomputes the same
+  values from your CURRENT tree/container, and compares all three. Any
+  mismatch — editing an already-numbered migration file in place (a
+  filename-only check would miss it), or a Supabase CLI / Postgres image
+  upgrade that changes the auth schema with zero change to the migrations
+  tree (which neither migration-tree leg can see) — refuses to clone. On a
+  match, it clones via `createdb --template=pfin_tmpl` (seconds, not a full
+  apply), then replays every `pg_db_role_setting` row keyed to `pfin_tmpl`'s
+  own database OID onto the clone — `CREATE DATABASE ... TEMPLATE` does NOT
+  copy that catalog at all (new OID, no row), which is exactly the gap QA
+  measured 2026-08-19 (085) losing migration 061's `TimeZone=UTC` pin. Two
+  shapes are keyed to a specific database this way — `ALTER DATABASE d SET`
+  (`setrole = 0`) and `ALTER ROLE r IN DATABASE d SET` (`setrole <> 0`,
+  `setdatabase = d`) — and the replay covers both generically (Sec caught an
+  earlier version of this doc/script claiming the second shape was
+  cluster-level and already-shared, which is false: `setdatabase` pins it to
+  one database exactly like the first shape; zero such rows exist today, but
+  the replay no longer assumes that stays true). A plain `ALTER ROLE r SET`
+  with no `IN DATABASE` (`setdatabase = 0`) IS genuinely cluster-wide and
+  correctly excluded — nothing to replay there.
 
 ## Verified end-to-end (2026-09-02, devops)
 
@@ -111,12 +119,37 @@ run `db-template-build.sh` and retry.
   the same file: **3/3 pass**, identical result.
 - Diffed the full `GRANT`/`REVOKE` posture (`pg_dump --schema-only`,
   `pfin`+`public`) between the template-clone and the sequential-build
-  control: **byte-identical, 177/177 lines** — the `--no-privileges` trap
-  (dropping REVOKEs, making a harness more permissive than production) does
-  not apply here.
+  control: **byte-identical, 177/177 lines** — applying (not just deciding)
+  the no-`--no-privileges` posture, verified.
 - `has_schema_privilege('anon','pfin','USAGE')` reads `false` on both —
   the outer fence (anon holds zero grants on every pfin relation, per
   `supabase/config.toml`'s own comment) survives the clone identically.
+- **The `--no-privileges` hazard itself, inverted (Sec-booked, 2026-09-02):
+  demonstrated, not merely reasoned.** Built a throwaway candidate the same
+  way `db-template-build.sh` does, except WITH `--no-privileges --no-owner`
+  on the auth/extensions/vault dump step, and diffed its ACL census against
+  the real `pfin_tmpl`: **181 GRANT/REVOKE lines on the inverted probe vs.
+  266 on the real template — 85 lines of privilege posture dropped**,
+  entirely inside `auth`/`extensions` (the schemas the dump step touches).
+  Losses include `GRANT USAGE ON SCHEMA auth TO anon/authenticated/
+  service_role` and two `REVOKE ALL ... FROM supabase_admin` statements —
+  the fence itself, not just a grant. Full census + diff + provenance:
+  `scripts/fixtures/README.md`. This is the applied-and-demonstrated half of
+  BACKLOG §7.14's "Scratch-harness ACL parity (permissive-direction hazard)"
+  booking — the byte-identical diff above shows the FIX holds; this inverted
+  probe shows the FLAW it fixes is real for this specific recipe, not just
+  inferred from QA's differently-shaped 2026-08-12 measurement.
+- **Bound on what "parity" means here:** `pfin_tmpl` (built via the
+  sequential recipe, same as any hand-built scratch DB) carries only ONE of
+  the real local-stack `postgres` database's three `pg_db_role_setting`
+  entries — `TimeZone=UTC` (migration-driven, `061`). The
+  `app.settings.jwt_secret` / `app.settings.jwt_exp` pair is a local-stack BOOTSTRAP
+  artifact the Supabase CLI applies only to the literal `postgres` database
+  on `supabase start` — it is absent on every scratch DB regardless of how
+  it was built, sequential apply included, not a gap this tooling
+  introduces. "Parity" throughout this doc means parity with what a
+  sequential migration apply itself produces, not full parity with the
+  `postgres` database's own bootstrap state.
 
 ## Refresh trigger
 
@@ -129,11 +162,34 @@ the right tree, or even exists in your checkout. If you're not in the shared
 main checkout, or the hook didn't run for any reason, just run
 `db-template-build.sh` by hand before cloning.
 
+## Safety guards (Sec-required, 2026-09-02 advisory)
+
+Both scripts run a DROP DATABASE somewhere on their path — `db-template-build.sh`
+drops the old `pfin_tmpl` at swap time, `db-template-clone.sh` drops
+whatever's at the scratch name before cloning — and `.husky/post-merge`
+calls the build script automatically, unattended, on every local merge that
+touches migrations. Two structural guards, checked before either script
+touches a database:
+
+- **Host guard.** Refuses to run unless `DB_TEMPLATE_HOST` resolves to
+  `127.0.0.1`/`localhost`. Set `DB_TEMPLATE_ALLOW_REMOTE=1` to override, for
+  anyone who genuinely means to point this at a non-local Postgres.
+- **Name guard.** `db-template-build.sh` refuses to build/swap into a
+  `DB_TEMPLATE_NAME` of `postgres`/`template0`/`template1`.
+  `db-template-clone.sh` refuses a scratch name equal to
+  `postgres`/`template0`/`template1`/`pfin_tmpl` (dropping the template
+  itself to make room for its own clone would be self-defeating as well as
+  destructive).
+
 ## What this does not cover
 
 - Local/CI throwaway tooling only — no opinion on Coolify or production.
-- Role-level GUC overrides (`ALTER ROLE ... SET`) are cluster-level, already
-  shared by every database including a clone — nothing to replay for those.
+- Role-level GUC overrides with no `IN DATABASE` clause (`ALTER ROLE r SET
+  k=v`, `setdatabase = 0`) are genuinely cluster-level, already shared by
+  every database including a clone — nothing to replay for those. (Overrides
+  that DO carry `IN DATABASE` are per-database and ARE replayed — see "What's
+  actually happening" above; an earlier version of this line conflated the
+  two, which Sec caught.)
 - A clone is disposable per **session**, not per query — QA's existing
   discipline
   (`.claude/agent-memory/qa/feedback_scratch_db_perf_seed_must_be_rolled_back.md`)

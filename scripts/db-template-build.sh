@@ -55,8 +55,12 @@
 #      file switches role.
 #   7. Stamp a marker table (public._template_meta) with the head migration
 #      filename, a sha256 of the full migrations tree, the migration count,
-#      and the build timestamp — this is the staleness fence
-#      db-template-clone.sh checks before ever cloning.
+#      the running container's image id, and the build timestamp — this is
+#      the staleness fence db-template-clone.sh checks before ever cloning.
+#      The image id matters because the auth/extensions/vault schema this
+#      template bakes in comes from the CONTAINER (step 1), not from
+#      supabase/migrations/ — a CLI/image upgrade can change it with zero
+#      change to the migrations tree, invisible to the other two fields.
 #   8. Atomically swap: terminate any sessions on the OLD `pfin_tmpl` (if a
 #      prior template exists), drop it, rename the verified candidate into
 #      its place. Never rename before the candidate is verified — a partial
@@ -99,6 +103,27 @@ export PGPASSWORD="${DB_TEMPLATE_PASSWORD:-postgres}"
 log() { echo "[db-template-build] $*" >&2; }
 die() { log "ERROR: $*"; exit 1; }
 
+# --- Sec-required structural safety guard (2026-09-02 advisory) ---
+# This script DROPs/renames databases on $DB_HOST, and the .husky/post-merge
+# hook calls it automatically on every local merge touching migrations — so
+# a misconfigured DB_TEMPLATE_HOST or DB_TEMPLATE_NAME turns an automated,
+# unattended local hook into a destructive action against the wrong target.
+# Refuse anything but a local host unless the operator explicitly opts out,
+# and refuse to ever build/swap into a name that collides with a real
+# Postgres database.
+case "$DB_HOST" in
+  127.0.0.1|localhost) ;;
+  *)
+    [ "${DB_TEMPLATE_ALLOW_REMOTE:-}" = "1" ] || die "DB_TEMPLATE_HOST='$DB_HOST' is not 127.0.0.1/localhost — refusing to run a destructive DROP/CREATE DATABASE path against it. Set DB_TEMPLATE_ALLOW_REMOTE=1 if this is deliberate."
+    log "WARNING: DB_TEMPLATE_ALLOW_REMOTE=1 — proceeding against non-local host '$DB_HOST'."
+    ;;
+esac
+case "$TEMPLATE_NAME" in
+  postgres|template0|template1)
+    die "DB_TEMPLATE_NAME='$TEMPLATE_NAME' collides with a protected database name — refusing to build/swap into it."
+    ;;
+esac
+
 [ -d "$MIGRATIONS_DIR" ] || die "no $MIGRATIONS_DIR found — run from the repo root (or a worktree of it)."
 
 # --- resolve the running container, same convention as scripts/db-snapshot.sh ---
@@ -113,6 +138,15 @@ else
 fi
 [ -n "${CONTAINER:-}" ] || die "no supabase_db_* container found — is the local stack up?"
 [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null)" = "true" ] || die "$CONTAINER is not running."
+
+# Image id of the running container, stamped into the marker alongside the
+# migration-tree fingerprint (Sec advisory, 2026-09-02). The migrations tree
+# is not the only thing that can change the auth/extensions/vault schema
+# this template dumps — a Supabase CLI / postgres image upgrade can too,
+# with zero change to supabase/migrations/, which the existing fence
+# structurally cannot see. Stamping the image id lets db-template-clone.sh
+# catch that case too.
+CONTAINER_IMAGE_ID=$(docker inspect -f '{{.Image}}' "$CONTAINER" 2>/dev/null || echo "unknown")
 
 command -v psql >/dev/null 2>&1 || die "host psql not found (createdb/dropdb/psql from the Postgres client tools are required on the host)."
 
@@ -214,16 +248,23 @@ psql -X -h "$DB_HOST" -p "$DB_PORT" -U "$SUPERUSER" -d "$CANDIDATE" -v ON_ERROR_
   -c "create extension if not exists pgtap schema public;"
 
 # --- 7. marker table: the staleness fence db-template-clone.sh reads ---
+# container_image_id (Sec advisory 2026-09-02): the auth/extensions/vault
+# schema this template bakes in comes from the CONTAINER, not from
+# supabase/migrations/ — a CLI/image upgrade can change it with zero change
+# to the migrations tree, which head_migration/content_sha256 alone cannot
+# see. Stamped alongside them so db-template-clone.sh can catch that case
+# too.
 psql -X -h "$DB_HOST" -p "$DB_PORT" -U "$SUPERUSER" -d "$CANDIDATE" -v ON_ERROR_STOP=1 <<SQL
 create table if not exists public._template_meta (
-  head_migration   text        not null,
-  content_sha256   text        not null,
-  migration_count  integer     not null,
-  built_at         timestamptz not null default now()
+  head_migration       text        not null,
+  content_sha256       text        not null,
+  migration_count      integer     not null,
+  container_image_id   text        not null,
+  built_at             timestamptz not null default now()
 );
 truncate public._template_meta;
-insert into public._template_meta (head_migration, content_sha256, migration_count)
-values ('$HEAD_MIGRATION', '$CONTENT_SHA', $MIGRATION_COUNT);
+insert into public._template_meta (head_migration, content_sha256, migration_count, container_image_id)
+values ('$HEAD_MIGRATION', '$CONTENT_SHA', $MIGRATION_COUNT, '$CONTAINER_IMAGE_ID');
 SQL
 
 log "candidate built and stamped. Verifying before swap..."
@@ -237,4 +278,4 @@ dropdb_admin --if-exists "$TEMPLATE_NAME"
 psql_admin -c "alter database \"$CANDIDATE\" rename to \"$TEMPLATE_NAME\";"
 SWAPPED=1
 
-log "done. $TEMPLATE_NAME is head_migration=$HEAD_MIGRATION content_sha256=$CONTENT_SHA ($MIGRATION_COUNT migrations)."
+log "done. $TEMPLATE_NAME is head_migration=$HEAD_MIGRATION content_sha256=$CONTENT_SHA container_image_id=$CONTAINER_IMAGE_ID ($MIGRATION_COUNT migrations)."
