@@ -163,7 +163,7 @@ begin;
 
 \ir ../_fixtures/rls_verbs.psql
 
--- plan = 33: ISO 12 (3 functions x 4 legs: own-value / non-vacuity / cross-
+-- plan = 34: ISO 12 (3 functions x 4 legs: own-value / non-vacuity / cross-
 --   tenant-probe / empty-tenant-closed) + RT25/AC3/AC2-adversarial 6
 --   (RT25-1 ancient, RT25-2/3 far-future both tenants, RT25-4a/4b mismatched
 --   as_of the AC3 proper leg, RT25-5 the AC2 adversarial foreign-account+
@@ -173,12 +173,13 @@ begin;
 --   created-ON-D legs on 098/099, team-lead ruling 2026-09-03) + AC7 2
 --   (forgery rejection + non-vacuous control) + AC8 2 (direct read-isolation
 --   pin) + AC10 1 (direct enabled-trigger pin) + AC12 2 (service_role sweep
---   + non-vacuous function-count companion) = 33. Recorded so a silent
+--   + non-vacuous function-count companion) + REPLICA-ACL 1 (Sec's routed
+--   pg_parameter_acl watcher) = 34. Recorded so a silent
 --   plan-edit shows as an arithmetic change. (AC2's PRIMARY leg is ISO-094b,
 --   already counted in ISO's 12 — RT25-5 is its adversarial VARIANT, not a
 --   second primary leg,
 --   which is why AC2 has no separate line item here.)
-select plan(33);
+select plan(34);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb, _rls.tenant_c() as tc \gset
 
@@ -694,6 +695,32 @@ select ok(
                          'fn_expenditure_window', 'fn_expenditures_unclassified_count',
                          'fn_cashflow_contributors', 'fn_suggest_subcat_for_vendor')),
   '(AC12-2) forward fence: NONE of the 8 live §2.3 functions grant EXECUTE to service_role — every one is reachable ONLY under authenticated, per ARCH §4.1'
+);
+
+-- =====================================================================
+-- BLOCK REPLICA-ACL — Sec's routed finding (from Architect's own probe,
+--   2026-09-03): under session_replication_role='replica', neither the #10
+--   fence nor the FK fires on a forged sub_cat_id (a superuser-only GUC;
+--   confirmed both authenticated and service_role are DENIED it, per 054's
+--   own (o6)/(o7) — this file's own citation for why: "permanently and
+--   honestly RED against something triggers cannot provide" — no leg is
+--   authored asserting REPLICA-mode inertness itself). Sec's counter-offer,
+--   landed here instead: the CATALOG-LEVEL watcher nothing else has. The
+--   entire "not tenant-reachable" bound rests on ZERO rows existing in
+--   pg_parameter_acl for this parameter — no GRANT SET ON PARAMETER
+--   session_replication_role has ever been issued to ANY role. That state
+--   is MEASURED, not assumed (verified directly against the catalog before
+--   drafting), and nothing else in the tree watches it: a single PG15
+--   GRANT SET ON PARAMETER session_replication_role TO <any role> would
+--   land with no other fence catching it. ⚠ This leg reds on ANY row
+--   appearing for this parname (grant OR revoke) — deliberately stricter
+--   than "no grant specifically": any ACL entry at all on a parameter this
+--   security-load-bearing is worth a human relooking, not a silent pass.
+-- =====================================================================
+select is(
+  (select count(*)::int from pg_parameter_acl where parname = 'session_replication_role'),
+  0,
+  '(REPLICA-ACL) forward fence: pg_parameter_acl carries ZERO rows for session_replication_role — no GRANT (or REVOKE) ON PARAMETER has EVER been issued to any role; a single future GRANT SET ON PARAMETER session_replication_role would land with no other watcher (the entire "replica-role bypass is not tenant-reachable" bound rests on this staying empty)'
 );
 
 select * from finish();
