@@ -8,6 +8,31 @@ sitting). Replaces, for QA/Architect verification work, the sequential
 truth for WHAT a correct scratch DB looks like; this doc is HOW to get one in
 seconds instead of a full sequential apply.
 
+## Why this exists (measured, not the ratification's original framing)
+
+The loop-mechanics ratification named the sequential migration apply as the
+biggest per-issue time sink across four recent arcs. **Measured step-by-step
+(2026-09-02, two independent runs, reproducible ±0.1s), that framing doesn't
+hold at the level of raw command wall-clock:** prep (auth/extensions/vault
+dump + supabase_admin load + ownership transfer) is ~0.6s; the 99-file
+sequential apply is ~4.0–4.1s; the whole sequential build is ~4.8s end to
+end. None of that is actually slow in absolute terms — a scripted, one-shot
+run of the full recipe takes under 5 seconds.
+
+**So the real win here isn't raw execution time — it's collapsing the
+recipe's ~15 discrete steps (each individually documented as a gotcha in
+QA's and Architect's own memory: `docker exec -i`, load-order,
+supabase_admin-vs-postgres ownership, pgtap schema placement, the
+`--no-privileges` trap, database-name case-folding) into one fenced command
+that cannot be gotten wrong, instead of re-derived by hand each time by
+whichever agent needs a scratch DB.** The clone being under a second instead
+of ~4.8s is real and worth having, but it's the bonus, not the headline —
+uniformity and gotcha-elimination is the actual case for this tooling. See
+the design report for the full step timings and the reasoning that ruled out
+a two-layer (rarely-refreshed prep base + fresh apply per use) split: since
+apply is the dominant slice of an already-cheap total, splitting would only
+shave the ~0.6s prep portion and leave the ~4s apply cost paid on every use.
+
 ## The short version
 
 ```bash
@@ -48,6 +73,21 @@ run `db-template-build.sh` and retry.
   with no edit needed here.
 
 ## Verified end-to-end (2026-09-02, devops)
+
+**Step timings** (fresh candidate DB, dropped after; reproduced twice):
+
+| Step | Time |
+|---|---|
+| `docker exec pg_dump` (auth/extensions/vault/graphql/net/storage/supabase_functions) | 0.13s |
+| `createdb` candidate (owner supabase_admin) | 0.05s |
+| load auth dump as supabase_admin | 0.35s |
+| create extensions | 0.04s |
+| ownership transfer to postgres | 0.03s |
+| **prep subtotal** | **~0.6s** |
+| apply 99 migrations sequentially | **~4.0–4.1s** |
+| create extension pgtap | 0.07s |
+| **sequential build total** | **~4.8s** |
+| **template clone (`db-template-clone.sh`)** | **<1s** |
 
 - Cloned `pfin_tmpl` and ran `supabase/tests/01_session_timezone.sql`
   (T1 value / T2 mechanism / T3 cluster) via `pg_prove` against the clone:
