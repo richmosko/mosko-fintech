@@ -2,6 +2,8 @@
 
 ## Review method
 
+- [Run the measurements a ruling needs](feedback_run_the_measurements_a_ruling_needs.md) — read-only measurement is REVIEW work, not the builder's (team-lead-confirmed standing preference); route back only builds/fixes and expensive reproductions someone else can run cheaper.
+
 - [Measure the fence regex, not its comment](feedback_measure_the_fence_regex_not_its_comment.md) — grep the real predicate over an evasion list; empirical probe when the matcher is someone else's engine; prescribe a positive pin over a name-denylist; **a two-stage fence leaks between the stages and NULL is the silent pass**; **inverse: a raise-classifier CHAIN with a gap falls through to a 500 — enumerate every trigger on the WRITTEN table, and ask what an unfiltered picker lets a user choose**.
 - [Sec-Lock cross-check catches my own misreads](feedback_sec_lock_cross_check_catches_my_own_misreads.md) — read the source the text CITES; a relay of my OWN words is still a relay; "not in the tree" ≠ unrecoverable (Linear/DESIGN); quote an interior span; **my own ROLE BRIEF's Lock gloss can be narrower than canon and scope a surface OUT**.
 - [Catalog comments carry live-state tallies](feedback_catalog_comments_carry_live_state_tallies.md) — a count FANS OUT (TOC + hint + body); negative-grep the old string, derive the number from a sibling catalog's convention, never sweep scoped historical deltas. ⚠ **AUTHORED ≠ SERVED: `DROP`+`CREATE` destroys the earlier `comment on` (CoR preserves it), so "N migrations carry the text" and "N live comments" are different populations — scope both, never reconcile.** **So does a CLASSIFICATION claim — grep past the brief's file list and follow inbound cross-refs.** ⚠ **A correction's own SWEEP claim is a claim about the grep's ENCODING — `docs/**` is HTML, so `<` is `&lt;`; grep both spellings AND positively grep the corrected form.**
@@ -38,6 +40,7 @@
 
 - [A shared-namespace write has three axes](feedback_shared_namespace_write_has_three_axes.md) — overwrite · first-write squatting · **repairability**; `on conflict do nothing` clears only the first, and a "rate-limit gap" framing covers none. Measure the table's GRANTS for the repair path; no repair path ⇒ the finding blocks.
 
+- [APPLIED ≠ DEMONSTRATED when discharging a booking](feedback_applied_vs_demonstrated_discharge.md) — a same-recipe diff proves no-drift, never parity (name what produced each side); and grep for a live instance of the hazard's precondition — a flag with nothing to catch is PROSPECTIVE, and saying so stops it being cleaned up later.
 - [Backup rotation prunes its own recovery points](feedback_backup_rotation_prunes_its_own_recovery_points.md) — run the DEFENDED event through the retention policy; check dump file mode + cloud sync; never-blocking ⇒ never-watched.
 
 ## Standing constraints on future work
