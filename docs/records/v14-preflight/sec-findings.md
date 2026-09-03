@@ -866,3 +866,245 @@ Three additions, all from the above. Everything else in §4 stands:
   series it does not ship.
 - **SELF-269:** AC8's relation name corrected to the built one; AC6's SERIALIZABLE parenthetical
   struck; AC1's coverage list reconciled against what V1.4 actually builds.
+
+---
+
+## §9 — Round 2: review of PM's A-9 / F-5 and Architect's Seam A + Seam E
+
+Read from the refs, not from a worktree: PM `origin/meta/v14-preflight-pm` @ `b462816`,
+Architect `origin/meta/v14-preflight-arch` @ `b98f2f5`. **Baseline stays `2cd94ae`** — `origin/main`
+has moved to `7818504` by agent-def-only merges and is deliberately not re-baselined here.
+
+⚠ **Recording a convergence, because it is a cross-check signal rather than a courtesy.** Architect's
+Seam B (line 115) corrects my F-1 — *"Sec had the tree and not the dump"* — and reaches the same
+conclusion my pass 2 reached independently from the dump, **including the consequence that matters
+most to me**: Gate B Option A is an enum column, not FK-shaped, so it adds no Decision-3 member and
+retires my pass-1 `#18` warning. Two agents, two routes, same answer, neither having read the other.
+That is worth more than either finding alone.
+
+### 9.1 — PM's A-9 (tax-authority ledgers double-count payments in NAV): **CONFIRMED, and yes, I own it**
+
+**This is a money-correctness flag on my side of the line**, not merely a PRD-wording seam: it changes
+the top-line figure by a real amount in a predictable direction, and the direction is the silent one.
+
+**Arithmetic verified independently against the tree**, not accepted from the memo. `051:131` defines
+`nav = gross_total − debt − realized_tax_liab − unrealized_tax_liab`, and `051:157`/`051:167` group
+every account by `account_type` with **`manual_other` as category 5 — inside the asset half of the
+buildup.** So for a payment P:
+
+- checking `−P` → `gross_total −P`; the IRS ledger `+P` → `gross_total +P`. **Net zero, correctly** —
+  money moved between two of the user's own accounts.
+- YTD Paid `+P` → Realized Liability `−P` → NAV `−(realized −P)` = **NAV `+P`**.
+
+**NAV rises by exactly the amount the user just paid the government.** PM's reading is right, and
+PM's corroboration is the strongest part of it: `041:304` seeds `Liabilities / EstTax-Pending`
+(*"Estimated Taxes Due but not yet paid"*), so the **incumbent books the net obligation and treats
+paid money as gone** — which is §2.5.4's net-of-payments form only if the ledgers sit outside the
+composition. **I concur with option (A).** Option (C) overstates NAV by YTD Paid and is not a
+candidate.
+
+**Now the question I was actually asked — does the exclusion itself open a fail direction? Yes, three,
+and they are not symmetric.** Naming the losing side is required of any replacement control:
+
+1. **⚠ The exclusion is gated on a nullable, user-set attribute, so its DEFAULT state is the BUG.**
+   An unmarked IRS account is not excluded, and the double-count returns **silently, with no error and
+   no marker** — NAV overstated by YTD Paid. This is structurally identical to M-5's
+   `tax_relevant DEFAULT false`: absence of a mark produces the wrong answer rather than no answer.
+   ⚠ **And the two halves fail in OPPOSITE directions from the same omission**, which is what makes it
+   worse than either: an unmarked ledger is simultaneously excluded from YTD Paid (Funds Due
+   **overstated**) and included in the buildup (NAV **overstated**). The user sees a bigger net worth
+   *and* a bigger tax bill, and neither number contradicts the other visibly.
+2. **The inverse: a mis-designated ordinary account VANISHES from NAV.** Marking a real checking
+   account `irs` silently removes its balance from the buildup — NAV understated. Conservative in
+   direction, but it defeats the one property §2.1.5 is specified to have: PRD §2.1.5 commits that the
+   table makes NAV *"visually traceable from its parts"* and *"the single headline number doesn't hide
+   its structure."* **An excluded account appears nowhere, so the foot cannot be reconciled by hand.**
+   Under the ADR-049 non-silence discipline the exclusion must be **rendered, not merely applied** — an
+   excluded-ledger row or a footnote naming the designated accounts and their balances. I do not
+   require a particular presentation; I require that the exclusion is visible somewhere on the surface
+   whose selling point is traceability.
+3. **The exclusion predicate and the YTD-Paid predicate MUST be one extracted predicate, not two.**
+   They live in different objects (`fn_nav_composition` vs the YTD-Paid reader) and are gated on the
+   same attribute. If they drift — one written `= 'irs'`, the other `is not null`, or a third
+   jurisdiction added to one — the result is a **partial** exclusion, and the partial cases are exactly
+   the two failures above. This is ADR-063 Decision 2's extraction discipline verbatim: *"a seam's
+   answer is stated once, and consuming issues cite it… four restatements of one predicate drift
+   independently and the drift is invisible, because each copy is locally plausible."*
+
+**⚠ A-9 and Seam E COMPOSE, and the composed gap is not what either seam's copy will say.** Under
+Seam E Option A the headline (`fn_compute_nav`) and the §2.1.5 foot already differ by the two tax
+lines. Add A-9 and they differ by **the tax lines PLUS the designated ledgers' balances** — unless the
+A-9 exclusion also lands in `fn_compute_nav`, which Seam E Option A is specifically designed not to
+touch. So either (i) the exclusion lands in both and Seam E's no-touch property is broken, or (ii) it
+lands in §2.1.5 only and the "gross NAV vs tax-adjusted NAV" copy is **wrong as written**, because the
+difference is no longer only tax. **Neither seam's memo states this and it is not derivable from
+either alone.** Route to Architect: the two rulings must be taken together, and the copy drafted
+against the composed gap.
+
+**One consequence for the trajectory, recorded so it is not read later as a defect.** Whenever the
+A-9 exclusion lands, every `pfin.nav_daily` row already written was computed with the ledgers
+**included**. The series will carry a step at the changeover that is a **definitional** change, not a
+portfolio movement, and it cannot be corrected — `054`'s `fn_nav_daily_block_mutation` is BEFORE
+UPDATE OR DELETE. Same class as Seam E's mixture problem, same append-only cause, and it lands on the
+same table; whatever Seam E rules about discriminating definitions should absorb this too rather than
+be decided twice.
+
+### 9.2 — PM's F-5 lean (keep `tax_relevant`'s DEFAULT; A+C): **AGREEMENT, with a residual that agreement does not discharge**
+
+**No daylight on the ruling.** My §5 F-5 named **(A)** as my lean and described **(C)** as *"the cheap
+half of (B)"*; PM's A+C is precisely that union. I do **not** ask for the DEFAULT to be dropped: it is
+load-bearing for the provisioning INSERT, and a narrowing change breaks every fixture seeding the
+barred value. **Recommend F/CTO rule A+C.**
+
+⚠ **Stating the residual explicitly, because "Sec agrees with F-5" is exactly the sentence that would
+otherwise be read as clearing M-5, and it does not.** My M-5 objection was never to the DEFAULT — it
+was, verbatim, *"that the V1.4 consumer not treat `false` as an answered question."* A+C rules on the
+**column**; it does not constrain the **reader**. Both halves are still owed and neither is implied by
+the ruling:
+
+- The §2.5.1 consumer must not read `false` as *"this bucket was examined and found non-tax-relevant."*
+  Measured in `041`'s seed: **all 36 asset rows** carry `false` / `null` (`041:275-310`), and of the
+  **27** cash-flow rows **9 are `true` and 18 are `false`** (`041:321-347`). For those 54 rows `false`
+  is the seeded default and nothing more. ⚠ `091` then adds two Equity rows to the **posting** side
+  (`Contribution` `true`, `Distribution` `false`), so a reader counting against
+  `posting_prototype_default` rather than `taxonomy_default` gets different figures — state which
+  table any count is over.
+- **F-6b still stands and is the thing that actually fixes this**: the tax-value inventory session
+  (`BACKLOG.md:1190`, SELF-245's struck AC4 deferred to V1.4) is **still unowned**. Ruling A+C without
+  scheduling that session leaves the values unexamined behind a column that now has an explicit
+  comment saying they were not examined — which is honest, and still wrong in §2.5.1's output.
+
+### 9.3 — Architect's Seam A Decision-3 sub-part: **CONFIRMED as the only candidate; the membership claim CONTESTED as unconditional**
+
+**Confirmed, without reservation:** ✅ `tax_bracket_row`'s parent reference is **the milestone's only
+Decision-3 candidate**, now that Gate B Option A is settled as an enum column. ✅ Decision 18's locked
+*"NOT a new instance… settings writes are user-session-bounded"* clause **argues from the write path
+and Decision 3 turns on column shape** — Architect quotes D18's own amendment on this and is right;
+my §3 reached the same conclusion by the same route. ✅ **No label is drafted in advance**, and `#18`
+stays unallocated until the migration allocates it. ✅ The **tail** of D18's sentence — the V2+
+live-tax-API trigger, the mandatory Sec re-consult, the Lock 12 mod #2 fence going V1-SHIP-BLOCK —
+is untouched and live. Architect protecting that tail unprompted is the correct handling.
+
+**Contested — and the contest is narrow, mechanical, and moot under the option we both prefer.**
+Seam A's framing line states the membership **unconditionally**: *"the unbuilt `pfin.tax_bracket_row`
+carries an FK-shaped reference column crossing a tenant boundary, so it takes the next canonical
+label."* **That is true under Option C and false under Option A**, and Seam A's own option table
+already half-concedes it by listing the family extension as a *cost of A* while listing "no
+Decision-3 family extension" as a *buy of B*.
+
+**The mechanism, stated so it can be checked rather than weighed.** Decision 3's predicate is an
+FK-shaped column *"that crosses an isolation boundary."* A crossing requires **two** tenant facts that
+can disagree:
+
+- **Option C** (child carries its own `users_id` **and** `schedule_id`): two anchors, they can
+  disagree, a fence can detect the disagreement. **Genuine family member, P1 local-anchor fence, and
+  the fence has a real failure mode.** Every canonical instance has this shape — #2's
+  `replaces_trans_id` is a *second* reference beside the tenant-bearing `account_id`; #14's `lot_match`
+  compares the two legs' resolved tenants against each other.
+- **Option A** (child carries **only** `schedule_id`): `schedule_id` **is** the tenant anchor. There
+  is no second fact, so there is nothing to mismatch — a row pointing at another tenant's schedule
+  does not become *inconsistent*, it becomes *that tenant's row*, and whether the writer was allowed
+  to do that is an **RLS** question (a chain-resolved `EXISTS` on the parent), not a matched-tenant
+  question. This is the disposition ADR-011 Decision 9's 2026-07-24 amendment already records for
+  `account_trans_annotation_history.trans_id` — *"the sole anchor / NOT-D3"* — and the same ground on
+  which `posting_prototype_default` sits outside the family.
+
+⚠ **Why I care enough to contest a point that changes no recommendation: under Option A a
+matched-tenant fence would be a leg that CANNOT FAIL.** With one tenant fact there is no second value
+to compare it against, so the trigger would resolve the parent's `users_id` and compare it to…
+itself. That is precisely the anti-pattern ADR-062 Decision 2 rejected in writing — *"a constraint
+over a by-construction property is a leg that reads to a later reviewer as a live guarantee and is not
+one"* — and it would enter the canonical enumeration as instance `#18`, where a future reviewer
+auditing the family finds a fence with no adversarial test and no way to write one.
+
+**Disposition: I concur with Architect's Option C lean, which makes this disagreement moot**, and I
+concur for a reason worth adding to Architect's: **C is the only grain whose fence is falsifiable.**
+Architect's stated ground — *"the redundancy it introduces is exactly the thing the fence checks"* —
+is the same observation from the other side. **Requirement, whichever way F/CTO rules:** the migration
+states which grain it built and, **if it built Option A, it does NOT author a matched-tenant fence and
+does NOT take a canonical label** — it carries chain-resolved RLS on all four verbs and says in its
+header why no label was taken. An unnecessary label is as damaging to the enumeration as a missing one.
+
+**Also confirmed from Seam A, and I want it in my own file so it is not carried only in Architect's:**
+the `025` aal2 backstop is owed on both new tables' `authenticated` policies, and `025`'s
+`pfin.user_settings` exclusion is **non-negotiable-for-`user_settings`** and **does not generalize** to
+siblings. `090`'s header records the same reasoning for `cashflow_target`. The bracket tables get the
+clause.
+
+### 9.4 — Architect's Seam E (four-part flip, one-way door): **CONFIRMED and EXTENDED. Option C is VETOED.**
+
+**VETO — Seam E Option C (backfill `pfin.nav_daily` history to the new definition).** F/CTO sign-off
+required to override. Two independent grounds, either sufficient:
+
+1. **It is a write to an ADR-011 Decision 2 append-only audit-class surface.** `054` authors
+   `pfin.fn_nav_daily_block_mutation()` as **BEFORE UPDATE OR DELETE** (`054:257`), and `055`'s role
+   comment records the fences as deliberately *"un-bypassable by the writer"* — the ETL identity can
+   neither `DISABLE TRIGGER` nor set `session_replication_role`. Executing this option therefore
+   requires either weakening a D2 fence or running as an RLS-exempt owner outside every layer, and
+   **both of those are separately veto-grade under my standing list.**
+2. **The values would be fabricated.** Architect's phrasing is exact and I adopt it rather than
+   restate it: *"a fabrication with the shape of a measurement."* §2.5.2 holds one current-tax-year
+   bracket set, so there is no recoverable tax state for a past date. A backfilled series would be a
+   *current* opinion about the past, indistinguishable in the table from a contemporaneous measurement.
+
+This is the same finding as my §8 **D-4**, which I raised as *"veto-shaped if taken literally"*.
+**Three agents reached it independently** — my D-4 from `054`'s triggers, Architect's Seam E from the
+`fn_compute_nav` identity, PM's SELF-268 note (*"Seam E Option C, rejected on the record"* — strike
+AC4). I am now stating it as a veto rather than a flag because the flag-first step has been taken and
+the answer did not move.
+
+**On Options A and B — I do NOT object to either, and I state that explicitly.**
+
+- **Option A (Architect's lean, and mine):** it is the only option that never mixes definitions in an
+  append-only table. **I have no Sec objection.** Its cost is copy, not schema — but see 9.1's
+  composition warning: the copy must describe the **composed** gap if A-9 also lands.
+- **Option B (`nav_definition` discriminator) is ACCEPTABLE, not preferred, on three conditions.**
+  Adding a column to an append-only table is **not** an immutability violation — the trigger blocks
+  row UPDATE/DELETE, not `ALTER TABLE … ADD COLUMN` — so the D2 objection does not apply, and I say so
+  rather than let a D2 reflex kill a legitimate option. The conditions:
+  (i) **`085`-shape discipline** — add nullable, **total** backfill, then `set not null`, **no
+  DEFAULT**, so a future INSERT must state the definition rather than inherit one. NULL must not be
+  representable, or a reader coalescing NULL to the current definition **relabels the entire history**;
+  (ii) the backfill value is a **claim about history** — it asserts every existing row is pre-tax,
+  which is true here and must be stated in the `comment on column` as an assertion, not implied;
+  (iii) **every trajectory reader is enumerated and each branches** — `062` `fn_nav_series`, `067`,
+  `071`, `073`. ⚠ That enumeration is the part that goes stale: a reader added later inherits no
+  branch and silently averages two definitions. If B is taken, the enumeration needs a watcher, not a
+  comment.
+
+**Extended — the catch Architect made that I did not, and it changes my §4.** Seam E part 3:
+`api/src/lib/components/NavCompositionTable.svelte` renders
+`{row.isTaxPlaceholder ? usd.format(0) : usd.format(row.displayValue)}` — **it ignores `displayValue`
+entirely for those two rows.** So correct values can land at the DB layer and the surface still
+renders `$0`, with no error at any layer. **This is the fail-open shape a green suite cannot see**, and
+it is exactly why the live walk gate exists. My §4 SELF-268 criteria gain a fifth item:
+
+> **(5) All four layers are demonstrated on one walk, in one session:** `051`'s emitted value ≠ 0 ·
+> `nav-composition.ts` no longer flags `isTaxPlaceholder` · `NavCompositionTable.svelte` renders
+> `displayValue` rather than a literal zero · and the **rendered figure in the browser** matches the
+> DB value. A test at any single layer passes while the layer above it discards the result.
+
+⚠ **And one Sec-relevant item from Seam E's volatility note, which I confirm:** `051` and `049` are
+`language sql` with **no volatility keyword**, so both default to `VOLATILE`. A replacing body that
+adds `stable` is a planner-contract change no value assertion can see, and any out-of-band
+`ALTER FUNCTION … STABLE` is **silently erased** by a later `create or replace`. State the intended
+volatility explicitly in the replacing migration and pin it in the paired battery — a declared
+volatility is a testable claim, and an unpinned one is an assertion with no watcher.
+
+### 9.5 — What round 2 did NOT change
+
+- **§10 catalogued-instance ledger:** unchanged. Nothing in A-9, F-5, Seam A or Seam E adds, reorders
+  or renumbers a catalogued instance; no layer-attribution moves; no surface becomes "four-layer".
+  ⚠ Seam E's *"four-part change"* and *"four layers"* are **not** the §10 four-layer framing and must
+  not be read as it — this Decision explicitly disclaims a per-surface four-layer composition. Path B;
+  no count carried. **Recording the near-collision deliberately**, because the PR #368 catch in
+  Decision 4's own CHANGELOG is precisely a *"four"* vocabulary collision inherited from a
+  mislabelled source.
+- **SECURITY DEFINER allowlist:** untouched. Nothing proposed in round 2 authors a DEFINER function;
+  `fn_nav_composition` stays INVOKER (`051:146`).
+- **RT-26 allowlist:** no addition, no ADR-016 amendment. Seam E and A-9 are `authenticated`-tier
+  read paths.
+- **Decision 3 family:** flat, and `#18` unallocated. The only candidate is Seam A's, conditional on
+  the grain ruling per 9.3.
+- **The §1 map:** unchanged — all nine still MANDATORY, none light-loop eligible. Architect reaches
+  the same conclusion for SELF-268 by ADR-066 D1(b), independently.
