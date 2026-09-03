@@ -60,16 +60,6 @@
 //   (never fresh) — default the lookup the SAME way `staleness ?? UNKNOWN_STALENESS` already
 //   defaults the section badge (e.g. `?? { is_stale: null, staleAccountNames: [] }`). AC5's tooltip
 //   names `staleAccountNames` verbatim; it is only ever non-empty when `is_stale === true`.
-//
-// ⚠ EXPECTED `npm run check` GAP (mirrors +page.svelte's OWN "EXPECTED LOADER CONTRACT" precedent
-// for `staleness`, run in the opposite direction): this loader now lands AHEAD of its consumer.
-// `cash-flow-page.dom.test.ts`'s `LAYOUT_DEFAULTS` fixture spreads directly into the `PageData`-
-// typed `data` prop and does not yet carry `cashflowRowStaleness`, so `npm run check` surfaces
-// FIVE `Property 'cashflowRowStaleness' is missing in type ...` errors there (one per render()
-// call site in that file) until Frontend's own per-row consumer PR threads the field through —
-// the correct, visible signal per established precedent, not worked around with `any` or a
-// parallel type. `CashflowRollupTable.svelte`'s own AC4-GAP bubble-up note (this route's OTHER
-// per-row seam) is the reverse-direction sibling of this same convention.
 
 import { redirect } from '@sveltejs/kit';
 import {
