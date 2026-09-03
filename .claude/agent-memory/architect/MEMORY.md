@@ -8,6 +8,7 @@
 - **[`in_queue` is a ratified NAME with zero DDL](project_in_queue_is_a_ratified_name_not_ddl.md)** — but the semantics ARE built inside `fn_cashflow_items`; equivalence proof + the four-hand-copies drift risk.
 - **[`is_tax_payment` is Expense-scoped; the real tax rows are Transfer-class](project_is_tax_payment_expense_scope_gap.md)** — ADR-062 `091`; the flag cannot reach `Tax - US Federal` / `Tax - California`. Unresolved at 2026-08-25.
 - **[`cashflow_target` shape supersedes D18 + SD-22](project_cashflow_target_shape_supersession.md)** — `090` built the WIDE row; both artifacts still record the inherited `(users_id, target_kind)` 2-row shape. Owner-routed; RT still owed.
+- **[099 cash-flow contributor map — no verdict in the DB](project_self258_cashflow_contributor_map.md)** — single-sourced by ZERO copies; ⚠ the §2.3.3 per-row badge is structurally DEGENERATE (one account per row).
 - **[The AC10 fence does not reach the split-child grain](project_p4_split_child_journaled_cat_residual.md)** — `084`'s P4 branch reruns the same ordered CASE over the CHILD's cat with the PARENT's `journal_id`; `092` structurally cannot see it.
 - **[GL arc COMPLETE — rename + split + element ALL SHIPPED](project_gl_taxonomy_split_ratified.md)** — #502/#503 · #507/`084` · #510/`085`, Sec GREEN throughout. ⚠ That file has been silently reverted to "no DDL yet" TWICE; if you meet that claim, grep the migrations and re-correct.
 - **[A Backlog issue's deliverable may already have shipped](feedback_backlog_issue_deliverable_may_already_have_shipped.md)** — all-identifiers-falsified is a signal to widen the search, not to conclude UNBUILT. Grep the seeded state, not the AC's names.
@@ -16,6 +17,7 @@
 ## Postgres / RLS facts worth not re-deriving
 
 - **[D3 entries record ORIGINAL provenance](reference_decision3_entries_record_original_provenance.md)** — re-targets live in AMENDMENTS below the entry, which is never edited. #10/#13 now point at `posting_prototype`, not `user_taxonomy` (084).
+- **[account_trans and account are fenced DIFFERENTLY](reference_account_trans_and_account_are_fenced_differently.md)** — ACL-JOIN vs users_id: an INNER join between them fails OPEN, and `sub_cat_id`/`cat`/`sub_cat` are NOT NULL-together.
 - **[Fence reachability is a property of the CALLER](reference_fence_reachability_is_a_property_of_the_caller.md)** — an upstream OWNER-SCOPED read collapses a downstream matched-tenant fence into a no-op. Say DORMANT + name the revival condition. ⚠ Grep the CLAIM; it had 4 sites, not 2.
 - **["No FK on this column" is not "no FK in the lineage"](reference_no_fk_on_column_is_not_no_fk_in_lineage.md)** — an FK-less snapshot is still fenced one hop upstream; sweep upstream of every FK-less mirror column when a target moves.
 - **[A reserved id range needs a MAXVALUE on the lower sequence](reference_reserved_id_range_needs_a_maxvalue.md)** — an offset alone is disjoint by DISTANCE; assert the construction from `pg_sequence`, never an overlap count.
