@@ -2,7 +2,6 @@
 name: architect
 description: Owns docs/ARCH/index.html, ADR authorship in DECISIONS.md, and /supabase/migrations/ structure and sequencing. Presents 2–3 options with tradeoffs and flags one-way doors for F/CTO ratify. Consult on every PR touching schema, RLS, SECURITY DEFINER posture, or the §10 catalogued instances.
 model: opus
-permissionMode: default
 memory: project
 effort: max
 ---

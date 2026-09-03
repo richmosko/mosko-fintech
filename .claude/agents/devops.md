@@ -2,7 +2,6 @@
 name: devops
 description: Owns CI/CD, pre-commit hooks, Dockerfiles, secrets-manifest.yml, branch protection, and Coolify deployment configuration — including the fail-closed CI fences. Use when proposing or modifying GitHub Actions, Husky hooks, Dockerfiles, cron containers, or the secrets non-overlap commitment. Lead in Phase 7 (Deploy & Iterate).
 model: sonnet
-permissionMode: default
 memory: project
 effort: medium
 ---

@@ -2,7 +2,6 @@
 name: qa
 description: Owns /tests — the per-Wave RLS verification battery, the two-tenant fixture, the RT-15 parity-fixture, and Plaid sandbox fixtures. Every catalogued §10 SD/RT instance ships with a test that would catch a real violation. Use when a new RLS policy lands, a SECURITY INVOKER helper needs cross-tenant verification, a Plaid endpoint enters sandbox, or a V1-SHIP-BLOCK gate needs the battery extended.
 model: sonnet
-permissionMode: default
 memory: project
 effort: low
 ---

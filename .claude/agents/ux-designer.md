@@ -2,7 +2,6 @@
 name: ux-designer
 description: Translates PRD user stories into user flows, wireframes, and interaction/error states. Flows first, wireframes second. Hands a screen list and component inventory to Visual Designer; does NOT design visual polish or pick color/typography. Use for flow questions, unspecified interaction states, and navigation decisions.
 model: sonnet
-permissionMode: default
 memory: project
 effort: high
 ---
