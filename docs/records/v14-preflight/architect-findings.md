@@ -34,6 +34,17 @@
 
 **Light-loop column:** the failing bullet is named — (a) no new DB surface · (b) no money-path change · (c) Sec-not-mandatory. None of the nine qualifies.
 
+**Round-2 addendum — the four Platform / Cross-cutting V1.x dependency issues, audited at §7.**
+
+| Issue | Surface | Verdict | Light-loop |
+|---|---|---|---|
+| SELF-259 | `tax_bracket_schedule` + `tax_bracket_row` migration | **AMENDABLE (severe)** — `SERIAL` off-convention; a stale D3 ordinal; and a monotonicity trigger **written in a form that cannot observe the property it names** | no — (a)(b)(c) |
+| SELF-260 | bracket + standard-deduction seed | **AMENDABLE (minor)** — plus one routing disagreement: its own AC says Sec-advisory, and bracket rates are financial-calculation inputs | no — (a)(b) |
+| SELF-261 | `transaction_annotation` wash-sale table | **IMPOSSIBLE** — the pattern is already shipped at `023`, the identifiers are false, and both live Seam-W options retire the issue | no — (a)(c) |
+| SELF-262 | `fn_compute_tax_liability` unified helper | **AMENDABLE (severe)** — signature adopted as drafted; two names struck from its RLS composition list; ACL, `search_path` and volatility all absent | no — (a)(b)(c) |
+
+**0 of 4 buildable as written — and with Part A, 0 of 13 across the milestone's real critical path.** ⚠ The two halves fail *differently*, which is worth stating because it changes who fixes them: the §2.5 seven are largely **product-correct with falsified identifiers**; these four are largely **identifier-correct with falsified conventions and stale ledger tallies** — Architect-authored text whose conventions moved underneath it.
+
 ---
 
 ## 2. Seam inventory
@@ -529,6 +540,25 @@ Both issue texts are short, accurate about the tree, and correctly self-identify
 
 ---
 
+### 5a. Round-2 addendum — the promotion recommendation, per issue
+
+Now that the four have been audited (§7), the *"not scheduled here"* paragraph above can be replaced with a recommendation. **The precedent is the V1.3 245/246/247 promotion**, where Platform-lane substrate that every milestone issue blocked on was moved into the milestone rather than coordinated across two lanes.
+
+| Issue | Recommendation | Reasoning |
+|---|---|---|
+| **SELF-259** | **PROMOTE into V1.4** | It carries a **milestone ruling** (Seam A's grain) and a **Decision-3 family extension**, and seven downstream ACs cannot be written until its column names are fixed. Substrate whose *shape* is decided at this milestone's sitting belongs in this milestone; leaving it in Platform means the ruling is made in one lane and executed in another. |
+| **SELF-260** | **PROMOTE into V1.4** | Data-only against 259, dispatched immediately behind it, and it is the **first exercise of 259's monotonicity trigger** — the leg that would catch the BEFORE-ROW defect. Splitting it across lanes separates a fence from its first test. |
+| **SELF-262** | **PROMOTE into V1.4** | The keystone. Five of the seven §2.5 issues call it in their first AC, and Seams B / C / E / F / I all converge in its body. It is also the ADR home for two undocumented Gate ratifies. Nothing about it is cross-cutting except its V1.5 reuse, which is forward-compat, not shared ownership. |
+| **SELF-261** | **KEEP in Platform — and expect to close it, not build it** | The only one that should **not** move. It gates on Seam W, both live W options retire it, its pattern is already shipped at `023`, and its identifiers are false. Promoting an issue whose likely outcome is closure would put a phantom on the milestone's critical path. |
+
+⚠ **The promotion is a scope change and therefore F/CTO's**, not team-lead's and not mine — [ADR-017](../../../DECISIONS.md#adr-017) Decision 2 governs what sits in Linear per milestone, and re-labelling three issues moves work between two live lanes.
+
+⚠ **One consequence to weigh AGAINST promoting, stated because a recommendation with no losing side is describing something else.** Under ADR-017 D2 the Platform / Cross-cutting lane is **always in Linear**, so these three are already visible and dispatchable where they sit — the promotion buys **ownership clarity and a single close-gate**, not access. The argument for it is that if V1.4's close-gate (SELF-269) is to mean *"the tax feature is done"*, the three must be inside it: a close-gate that cannot see its own substrate certifies less than it appears to. That is the whole argument; there is no throughput gain, and the cost is churn on three issues' labels mid-milestone.
+
+**Revised order with the four named explicitly** — steps 2, 4 and 6 of the table above are **SELF-259**, **SELF-260** and **SELF-262**; **SELF-261 leaves the order entirely**, pending Seam W. The order is otherwise unchanged.
+
+---
+
 ## 6. Answers to PM's §7 routing (round 2)
 
 PM routed seven items to Architect. Answered here so they do not each become a sitting item; the two that are genuinely F/CTO's are marked as such.
@@ -546,3 +576,78 @@ PM routed seven items to Architect. Answered here so they do not each become a s
 6. **Tax Balance Prior Year's home — PM's (iv) recommendation is sound and I confirm the placement.** A nullable scalar on the **schedule** row (per jurisdiction, per `tax_year`), user-entered at rollover on the same cadence as the brackets, rendered `—` when unset. It belongs on the schedule rather than in a fifth settings table because it is a per-jurisdiction-per-year fact with exactly the same lifecycle as the brackets beside it, and Lock 14's *"no JSONB blobs"* fence plus Decision 18's `tax_year SMALLINT` make the schedule row the natural carrier. ⚠ It is **informational only** per the μ-2 lock and **must not** enter the computation — a nullable numeric sitting next to the standard deduction is one `coalesce` away from being summed, so the `comment on column` says so.
 
 7. **The CG-section UNAVAILABLE predicate — answered at Seam J**, and the answer is that PM's two candidate facts are not interchangeable: render on the **structural** fact (no sale writer exists), never on the row-count fact (`lot_match` empty for the year), because the row-count predicate silently becomes *"you had no gains"* the day the writer lands.
+
+---
+
+## 7. Part B — the four Platform / Cross-cutting V1.x dependency issues
+
+**Source.** `temp/v14-preflight/issue-dump-deps.md`, md5 `c35fe5ef96caa6b647655cb39a0bfea1`, verified in-turn. SELF-259 / 260 / 261 / 262. Baseline unchanged: `2cd94ae`.
+
+**Standing observation before the per-issue blocks, because it explains all four at once.** These were drafted in the same Wave-5 window as the seven §2.5 issues and carry the same generation of premises — but they fail differently. The §2.5 seven are mostly **product-correct with falsified identifiers**. These four are mostly **identifier-correct with falsified conventions and stale ledger tallies** — they were written by the Architect role against the schema conventions of Wave 5, and the conventions moved.
+
+**Result: 0 of 4 buildable as written.** With Part A that is **0 of 13** across the milestone's real critical path.
+
+---
+
+### SELF-259 — `tax_bracket_schedule` + `tax_bracket_row` migration · **AMENDABLE (severe)** · **carries Seam A's grain ruling AND the D3 sub-part**
+
+**This is the issue Seam A was written for.** Its AC 1 / AC 2 are **Seam A Option A** — two tables, the child referencing the parent by `schedule_id`, the child carrying **no `users_id` of its own**. So the drafted issue has already picked a grain, and the sitting's job is to ratify or change it rather than to choose in a vacuum. ⚠ My round-1 lean was **Option C** (child carries its own `users_id` alongside `schedule_id`), on the ground that it converts the fence to the cheapest and most-precedented class — the 012-shape **P1 local-anchor** pattern — rather than a lookup through the parent. That trade is the ruling.
+
+| AC | As written | State / verdict at `2cd94ae` |
+|---|---|---|
+| 1, 2 | `id SERIAL PRIMARY KEY`, `schedule_id INT` | ⚠ **Off-convention on every pfin table.** The repo's idiom is `bigint generated always as identity primary key` (`003` `004` `074` `090` and every other). `SERIAL` also leaves an owned sequence with different `ALTER` semantics, and `INT` caps the surface at 2^31 for no reason. **Correct to `bigint … identity`.** |
+| 1 | `standard_deduction NUMERIC NOT NULL` | **Keep NOT NULL — and say why, because it looks like it conflicts with PM's M-11 rider and does not.** Under replace-all, a schedule and its rows are written as one unit, so **the unset state is the ABSENCE of the schedule row**, not a NULL inside it. That is a cleaner unset signal than a nullable column, and it is what makes PM's *"never coalesce to 0"* enforceable at the reader. Record the reasoning in the migration header or a later reader will "fix" the NOT NULL. |
+| 1 | `UNIQUE(users_id, tax_year, schedule_type)` | ✓ Correct, and it is what makes `tax_year` load-bearing rather than decorative (Decision 18's day-one `tax_year SMALLINT`). |
+| 2 | `bracket_rate NUMERIC NOT NULL` | ⚠ **Needs a unit and bounds** (Sec **M-7**) and a NaN exclusion (Sec **M-10** — a one-sided `>= 0` CHECK **admits** `NaN`). The shipped idiom is `090`'s: `check (… >= 0 and … <> 'NaN'::numeric)`. **Whether the rate is a percent (24) or a fraction (0.24) must be stated in the column comment**, not inferred from a seed. |
+| 3 | RLS: `users_id = auth.uid()` on schedule; **via JOIN to schedule** on row | ✓ Correct in shape, and it is the direct consequence of the Option-A grain: under Option C the row's own policy would be a direct equality instead. |
+| 4 | *"matched-tenant trigger … (**4th instance**)"* | ⚠ **The requirement is right and the tally is STALE.** Read ADR-011 Decision 3 live: the canonical family is a **non-contiguous labeled set** whose operational running tallies (*"7 → 8"*, *"5 → 10"*, *"10"*, *"11"*) are explicitly **superseded** by the SELF-284 fold-in. *"4th instance"* is that pre-reconciliation grain. **The new instance takes the next canonical label, allocated AT THE MIGRATION** — Decision 18's amendment is explicit that *"none may be drafted in advance"*, having already paid for a pre-drafted label once. **Strike the ordinal; keep the obligation.** |
+| 5 | monotonicity trigger, *"each successive `bracket_floor` > previous"* | ⚠ **STRUCTURALLY UNABLE TO FIRE AS DESCRIBED, and this is the sharpest finding in Part B.** A **BEFORE ROW** trigger cannot see rows inserted *later in the same statement* (Sec §3 trap 1). Replace-all writes the whole row set in one multi-row `INSERT`, so a per-row trigger validates each row against a set that is not yet complete and **passes a non-monotone batch**. It needs a **deferred `CONSTRAINT TRIGGER … AFTER INSERT OR UPDATE … DEFERRABLE INITIALLY DEFERRED FOR EACH ROW`** (or a statement-level AFTER check) so it evaluates once the set exists. ⚠ This is the inverse of the usual watcher-vs-fence problem: not a fence over a by-construction property, but a fence **written in a form that cannot observe the property it names.** |
+| 6 | replace-all endpoint enforcing SERIALIZABLE | ✓ as a requirement, ⚠ but Sec **D-5** struck the companion claim that SERIALIZABLE *guarantees* monotonicity: it guarantees only equivalence to *some* serial order and says nothing about whether one transaction leaves the rows monotone. The two controls are independent and neither substitutes for the other. Also, an endpoint is app surface in a `role:migration` issue — split it or label it. |
+| 7 | `fn_refresh_updated_at()` reuse | ✓ Shipped and correct. |
+| 8 | Sec joint-review | ✓ Correct and non-optional. |
+
+**Owed and absent from every AC:**
+- ⚠ **The `025` aal2 step-up backstop clause on both tables' `authenticated` policies.** New sensitive tenant-owned `pfin` tables; **no documented `025` exclusion applies** — `user_settings` is `025`'s NON-NEGOTIABLE exclusion for policy-recursion reasons that do not generalize to siblings. Invisible once omitted, which is exactly why it must be an AC.
+- **`set search_path = ''` on every function the migration creates**, per the standing migration shape.
+- **The Tax Balance Prior Year scalar** — a nullable numeric on the **schedule** row, per §6 answer 6. Informational only under the μ-2 lock, with a `comment on column` saying so, because a nullable numeric beside the standard deduction is one `coalesce` away from being summed.
+- **QA pairing:** the two-tenant pgTAP battery in the same PR, including a leg that a **non-monotone multi-row batch is rejected** — the leg that would have caught the AC-5 defect.
+
+---
+
+### SELF-260 — Federal + California bracket seed · **AMENDABLE (minor), with one routing disagreement**
+
+- **AC 1** — three schedules, with `federal_lt_cg` carrying a standard deduction of `0`. ✓ Correct against PRD §2.5.3's *"no standard deduction applied to this schedule"*. ⚠ Worth a column comment: a literal `0` here means *"this schedule takes no deduction"*, **not** *"the deduction has not been entered"* — the same distinction PM's M-11 rider protects on the other two schedules, and the one place where `0` is the right answer.
+- **AC 2 / AC 3** — per-schedule rows and monotonicity verified on seed insert. ✓ ⚠ The seed is the **first** exercise of the AC-5 trigger and would have surfaced its BEFORE-ROW defect immediately, since a seed inserts a whole schedule's rows in one statement.
+- **AC 4** — smoke test. ✓
+- ⚠ **AC 5 is wrong about its own routing, and I disagree with it explicitly.** It reads *"Sec advisory review on seed values (no Sec joint-review required — data-only against Issue 1 schema)."* **Bracket rates and standard deductions are financial-calculation inputs** — every dollar §2.5.3 and §2.5.4 render is a function of them — and *financial calculations* is on the ratified joint-review-mandatory map. *"Data-only"* describes the **change shape**, not the **surface**, and the standing rule is that the trigger is the surface, not the author's assessment of risk. **Route to Sec joint-review.**
+- ⚠ **The framing sentence needs PM's A-6 correction:** *"No filing-status discriminator per (ι) lock — V1 is fixed-at-seed-time per F/CTO's filing status"* is founding-user framing that does not survive general multi-user software. The seeded set is a **template that states its filing-status assumption in its label**, which the user revises.
+
+---
+
+### SELF-261 — `transaction_annotation` table for the wash-sale flag · **IMPOSSIBLE (the pattern is already shipped; the identifiers are false; and Seam W may retire it entirely)**
+
+**Three independent problems, any one of which blocks it.**
+
+1. ⚠ **The design rationale was already implemented at `023`, before this issue was drafted.** SELF-261's stated Architect design call is *"separate annotation table (NOT column on `account_trans`) per Lock 10 immutability semantics."* That is **`pfin.account_trans_annotation`** (`023`) — a separate table, keyed 1:1 by `trans_id`, carrying mutable meta-information (`sub_cat_id`, `note`, `updated_at`) beside the immutable ledger, for exactly that reason. Building `transaction_annotation` alongside it creates **two annotation tables on one immutable ledger**, which is the outcome Lock 10's discipline exists to prevent. This is the ADR-063 D1 widen-the-search case a third time in one milestone.
+2. ⚠ **The identifiers are false.** `account_trans_id INT NOT NULL REFERENCES pfin.account_trans(id)` — `account_trans`'s primary key is **`trans_id bigint`**, not `id`, verified at `004`. And AC 2's *"RLS WITH CHECK `users_id = auth.uid()` on annotation row"* does not describe how the shipped annotation table works: **`account_trans_annotation` carries no `users_id` at all**, inheriting tenancy through its `trans_id` FK. AC 3's *"5th instance"* is the same stale D3 tally as SELF-259's.
+3. ⚠ **Seam W may delete the issue.** Under PM's (A) there is no wash-sale flag in V1 at all; under (B) the mechanism is a `basis_adjust` reason, not an annotation column. **Only PM's (C) needs this issue, and both PM and I reject (C)** — it would be built against nothing, since Seam J establishes there is no sale row to annotate.
+
+**Disposition: do not amend this issue; hold it pending Seam W, and if W rules (A) or (B), close it with its rationale recorded** — the "separate table beside the immutable ledger" reasoning is correct and is worth preserving as the record of why `023` has the shape it has. If some future need does want a wash-sale mark, the amendment is **columns on `account_trans_annotation`**, not a second table.
+
+---
+
+### SELF-262 — `fn_compute_tax_liability` unified helper · **AMENDABLE (severe)** · **the milestone's keystone**
+
+The signature is **right** and should be adopted as authored: `pfin.fn_compute_tax_liability(p_data_as_of date default current_date) returns jsonb`, SECURITY INVOKER. It matches `051`'s shape exactly (scalar JSONB, `default current_date`), which is what makes it composable, and the Lock 15 `p_data_as_of` parameter is the correct forward-compat for the V1.5 monthly-report cron. **264 / 266 / 268 may resolve their provisional citations against it.**
+
+- **AC 1** ✓ SECURITY INVOKER composition. ⚠ **Two names in its composition list are wrong.** `transaction_annotation` does not exist (SELF-261 above). And **`nav_daily` does not belong there**: §2.5.4's Unrealized reads current market value and cost basis through `049`, not the checkpointed series — and under Seam E, pointing a live tax figure at the append-only NAV history is precisely the coupling to avoid. **Strike both from the list.**
+- **AC 2** ✓ in shape. ⚠ Its ST/LT and §1256 clauses have **no rows to run on** (Seam J), and its wash-sale clause gates on Seam W. The AC survives; its coverage does not.
+- **AC 3** ✓ — the §2.5.2 routing table, PRD-verbatim, and correct against `011`'s five seeded codes.
+- **AC 4** ✓ — ⚠ carries Sec **M-8** (÷4 does not reconcile to the annual liability: name the quarter that carries the remainder and the precision) and **M-9** (the standard deduction can drive taxable income negative with nothing flooring it).
+- **AC 5** ✓ — and it is where Seam B's YTD-Paid figure enters, so it consumes SELF-267's corrected balance-as-of primitive, not a quarter-ordinal one.
+- **AC 6** ✓ — and its *"(π) … filtered at query-layer"* **is Seam F Option B**, which is my recommendation. Add the **extract-on-second-consumer** rule to the AC so the predicate does not get copied the first time a second surface wants it.
+- **AC 7** ✓ Lock 15 signature extension.
+- **AC 8** ✓ Sec joint-review mandatory.
+- **AC 9** ⚠ *"validated against F/CTO's existing-system Est Taxes sheet (parity verification)"* — **the standing rule is that parity evidence keeps structure and percentages and REDACTS concrete dollar figures.** A fixture carrying the founding user's real tax numbers is a committed artifact.
+- **AC 10** ✓ and it is the right home for two ADR debts at once: Gate A Option B (this helper's unified shape) **and** Gate B Option A (`tax_jurisdiction`), both of which currently live only in `CHANGELOG.md`.
+- ⚠ **Owed and absent:** the **EXECUTE ACL pair** — `revoke execute … from public; grant execute … to authenticated` — which every shipped reader carries and which is the entire perimeter if the posture ever changes; **`set search_path = ''`**; an explicit **volatility declaration** (`051` and `049` carry none and default VOLATILE while `093` is `stable` — pick deliberately, and note that a `stable` caller of a `volatile` callee is an unbacked promise); and **its role in Seam E** — whether this helper's two scalars are composed into `051`'s foot at read time (PM's A′) is ruled at Seam E and belongs in this AC once ruled.
