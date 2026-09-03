@@ -102,3 +102,56 @@ assert the **construction**, not a point-in-time count. ⚠ And the point-in-tim
 proposed was **vacuous on a fresh CI stack**, where the property holds by construction rather than by
 verification — the "fresh-stack CI is clean by construction" trap in
 [[a-red-whose-message-names-the-wrong-defect]].
+
+⚠ **A WARRANT is a stated mechanism too — and a verified universal can be verified over the WRONG
+OBJECT CLASS.** I refused to sign *"every Decision 3 fence is a BEFORE ROW trigger"* unmeasured.
+Architect came back having measured it twice (catching their own name-based-vs-body-based miss) and
+**added a warrant** to make it true of future instances: *"a matched-tenant test must read the
+referenced row, and a CHECK constraint cannot subquery."* The enumeration was fine. **The warrant
+forecloses the wrong object.** Decision 3's own opening sentence sanctions *"DB-level **WITH CHECK**
+constraint (single columns) or BEFORE INSERT/UPDATE trigger (array elements PostgreSQL can't express
+declaratively)"* — and a `WITH CHECK` is an RLS **policy** clause, not a table CHECK constraint: it
+subqueries freely and **survives `session_replication_role = replica`**, which is the exact property
+the universal was carrying. Measured: 20+ `pfin` policies use subquerying `WITH CHECK`.
+**Three transferable pieces:**
+- **Two names one word apart can be different objects.** `CHECK constraint` / `WITH CHECK`;
+  `session_user` / `current_user`; `setrole=0` / `setdatabase=0`. When a warrant turns on a
+  near-homonym, read the source's own sentence rather than the warrant's paraphrase.
+- **The warrant's supporting quote had lost its scope limiter** — rendered *"where PG cannot express
+  the constraint declaratively"*, source *"array elements PostgreSQL can't express declaratively"*.
+  Dropping **"array elements"** converted a narrow carve-out into a general licence. Dropped-clause-
+  inside-a-quote is how a false universal acquires a true-looking citation.
+- **A warrant added to future-proof a claim fails hardest where it was meant to help.** Ask
+  specifically: *what does this warrant say about the NEXT instance?* — that is the case it was
+  written for and the case nobody tests.
+**Remediation shape that beat both options:** don't soften the universal and don't keep it — make
+the artifact carry the **discriminator** (*"inert iff trigger-realized; check which form this
+instance uses"*) plus the **dated** empirical inventory. Stronger than the universal, and it cannot
+rot. ⚠ Also note whose method could see what: their enumeration searched trigger *functions*, so a
+policy-realized instance was invisible to **both** passes — not a claim one exists, a statement
+about the instrument. Related: [[applied-vs-demonstrated-discharge]].
+
+⚠ **CORRECTION TO THE ENTRY ABOVE, and it is the more useful record.** I diagnosed Architect's
+warrant quote as a *mangling* of Decision 3's sentence with "array elements" dropped. Wrong
+mechanism. **The string was verbatim — from a DIFFERENT ADR.** It lives in ADR-025's `012`
+component discussion: *"A single-row CHECK cannot subquery the referenced row; Decision 3 permits a
+trigger where PG cannot express the constraint declaratively."* So it was **right content, wrong
+pointer** — the false-composite form — not a dropped clause. **Why that is worse:** a mis-attributed
+verbatim string passes every verbatim check and fails only an attribution check. My own two-halves
+rule (verify the POINTER and the CONTENT, every time) exists for exactly this, and I still checked
+only the content half — concluded "mangled" and never asked whether the string was verbatim
+*somewhere else*. **Substance-first reading caught it only because the substance happened to be
+wrong too; had ADR-025's claim been sound, I would have waved through a mis-attributed quote.**
+When a quote looks subtly off, grep the string across the whole corpus before calling it a mangling.
+**And the upstream source was itself unowned** — the same conflation sits on `main` in ADR-025 and
+had just propagated into a draft amendment to a higher-authority document. **A defective sentence
+that has demonstrably transmitted once is a source to correct, not a curiosity.**
+
+⚠ **Diff SHAPE can be a reviewable property — and it can outrank folding a fix in.** I had required
+"do not touch the Catalogued-§10 bullet or the numbered list." Architect delivered the amendment as
+a **pure insertion (26 insertions, 0 deletions** — the diff's only `^-` line being the `---` file
+header), which makes that constraint checkable in one command instead of by reading. So when the
+follow-on ADR-025 correction came up, I **booked it rather than folding it into the same PR**: the
+edit would introduce deletions and destroy the one PR where the pure-insertion property was the
+proof. **Ask for a diff shape that makes your constraint mechanically checkable, then protect it** —
+and say explicitly that this is a tradeoff (more PRs, better verifiability), not caution.

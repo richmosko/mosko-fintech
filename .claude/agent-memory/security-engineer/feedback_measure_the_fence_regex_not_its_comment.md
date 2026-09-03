@@ -150,3 +150,32 @@ token gate — build the candidate list first (include the parenthesis-free spec
 `date ± integer` arithmetic), then `grep -E` the real predicate over it. Also ask whether the new form
 **replaced** rather than **extended** an older fence: replacement is where coverage silently
 disappears while the diff reads like a strengthening. Related: [[sec-lock-cross-check-catches-my-own-misreads]].
+
+⚠ **MY OWN PROBE IS THE FENCE TOO — two self-inflicted misreads in one review (SELF-257).**
+(1) **I graded a coverage inventory against a label format I assumed from a sibling file.** The
+`099` battery labels legs `'(X1a) …'`, so I grepped `093`'s for `(R1)`/`(S3a` and got zeros —
+and nearly reported a fabricated defect. `093` labels its legs `'093 R1: …'`. **All 17 cited
+labels existed.** Enumerate the target's ACTUAL label form (`grep -oE "'[0-9]{3} [A-Za-z0-9-]+:"`)
+before testing membership; never carry a sibling's convention into a probe.
+(2) **I counted 34 pgTAP legs as 33** because my verb alternation omitted `throws_like`. A leg
+count that disagrees with `plan(N)` by one is far more likely to be my regex than their
+arithmetic — **re-run with the full verb list before reporting a plan mismatch.**
+Both errors fail in the direction of a FALSE FINDING, which is the expensive direction: name them
+in the same message as the real findings.
+
+⚠ **A FAILED GREP AND A CLEAN RESULT ARE THE SAME OUTPUT — and the cost can land on someone else.**
+Architect went to confirm a measurement was in a commit message; their pattern spanned a line break
+that the message wraps across, so the grep returned nothing. For a few seconds the correct-looking
+conclusion was *"it didn't make it in — amend the commit"* — which would have **rewritten a sha I had
+just signed and verified**, over a regex artifact. They re-checked looser instead.
+**Three transferable pieces:**
+- **A negative grep is a claim about the PATTERN, never about the tree.** Before acting on an
+  absence, re-run looser (drop the anchors, shorten to a distinctive fragment, `grep -c` a word you
+  know is present as a positive control). This is the same shape as my own two SELF-257 probe errors
+  above — assumed label format, omitted `throws_like` verb — all three fail toward a FALSE FINDING.
+- **Line-spanning is the specific trap in commit messages, wrapped prose and HTML.** Corpora that
+  reflow defeat single-line patterns; `grep -z`, `tr -d '\n'`, or a Python read is the fix.
+- **Grade the blast radius of acting on the negative.** Here it was `--amend` on a signed,
+  countersigned sha — a destructive, cross-agent action justified by a null result. **When the
+  remedy for an absence is destructive or touches another agent's verified artifact, the bar for
+  the measurement is higher, not the same.**

@@ -36,3 +36,24 @@ convincing false POSITIVE.** Run the package script, not the underlying tool.
 
 Related: [[feedback_clean_sweep_claim_is_a_claim_about_the_filter]] ·
 [[feedback_diff_of_two_outputs_proves_nothing_until_nonempty]]
+
+## Grade the BLAST RADIUS of acting on the negative (Sec, 2026-09-03)
+
+The half neither of us had written down. **A negative grep is a claim about the PATTERN, never about
+the tree** — so before acting on an absence, ask what the remedy costs if the absence is false:
+
+- **Cheap remedy** (add a line, re-run a check): act, then verify.
+- **Destructive remedy, or one touching another agent's verified artifact: raise the bar.**
+  Re-run looser first, with a **positive control** on a word you know is present.
+
+Measured instance: confirming a sentence was in a commit message, my grep returned nothing because
+the phrase **wrapped across a newline**. The correct-looking remedy was `git commit --amend` — on a
+sha Sec had just signed and verified. A looser re-grep found it immediately. **The cost of the false
+negative would have landed on the reviewer, not on me.**
+
+⚠ **Line-spanning is the specific trap** — commit messages, wrapped prose, HTML. Sec notes the same
+reflow problem hid a retracted predicate from ADR-011 D19's own sweep in a different corpus. Match
+on a short distinctive token, never a phrase that can wrap.
+
+**All three of this arc's probe errors — my two and Sec's — failed toward a FALSE FINDING**, which
+is the expensive direction: a false finding gets acted on, a missed one gets caught later.
