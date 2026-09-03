@@ -111,5 +111,30 @@ composing a ruling on it.
   data, and does not break a conservation law — even when it falsifies a ruling. Say that the
   PR under review **improves** the situation if it does; that is load-bearing for the scope call.
 
+---
+
+⚠ **THE NEXT ITERATION, and it cost a wrong finding shipped twice. Before calling an absence an
+OMISSION, ask what the DISCHARGE would have LOOKED like.** At the V1.4 pre-flight I measured that
+no row anywhere set `is_tax_payment = true`, grepped the repo for a booking, found one in
+`BACKLOG.md`, downgraded my finding from "missing" to "recorded and unowned" — and shipped it. It
+was **already discharged**: F/CTO had ruled the enumeration's outcome to be **ZERO**, a week
+earlier, recorded in a Linear comment.
+
+- **The measurement was correct and the inference was wrong.** A tree cannot distinguish *"nobody
+  ran the enumeration"* from *"the enumeration ran and its ruled outcome was change-nothing."* The
+  two states are byte-identical in the database, in the migrations, and in every diff.
+- **The rule: a ruling whose outcome is "change nothing" leaves NO trace in a tree.** Where the
+  discharge of an obligation is a **decision** rather than a **change**, the repo is the wrong
+  instrument and the issue tracker is the right one. Grepping harder cannot fix this — I applied
+  the grep-first rule above, correctly, and it still let the error through.
+- **The tell to look for:** an obligation phrased as *"F/CTO enumerates / rules / confirms X"*
+  rather than *"add column / write function / seed rows"*. The first kind can be fully discharged
+  with an empty diff.
+- **Also caught in the same pass, same root:** I raised an *open F/CTO ruling* on a mechanism that
+  had been ratified three months earlier, because the ratify lived only in a Linear issue
+  description and appears nowhere in the repo. **Framing a settled decision as open invites its
+  re-litigation** — as bad an outcome as missing it. See [[off-tree-fcto-rulings-live-in-linear]].
+
 Related: [[hazard-mechanism-vs-reachability]] (both halves falsifiable, separately),
-[[a-grep-over-comments-measures-intent-not-data]], [[shared-predicate-then-second-narrowing]].
+[[a-grep-over-comments-measures-intent-not-data]], [[shared-predicate-then-second-narrowing]],
+[[off-tree-fcto-rulings-live-in-linear]].
