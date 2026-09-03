@@ -120,7 +120,6 @@
 	   NonReAllocationTable's `.stale-tag` already uses for its own (non-disclosure) row marker. */
 	.row-stale-marker {
 		display: inline-flex;
-		position: relative;
 		flex-direction: column;
 		align-items: flex-start;
 		margin-left: var(--space-2);
@@ -150,15 +149,22 @@
 		background: var(--c-attn-solid);
 	}
 
+	/* SELF-258 (QA live-walk finding, 2026-09-03): NORMAL FLOW, deliberately — the SAME shape
+	   StaleConstituentBadge's own `.stale-panel` already uses (no `position` override). This panel
+	   used to be `position: absolute`, which CSS overflow clipping bound to CashflowRollupTable's
+	   `.table-scroll` ancestor (`overflow-x: auto` also computes `overflow-y: auto` — the "one axis
+	   non-visible forces both" rule) regardless of z-index: the account name + Re-authenticate link
+	   were in the DOM/a11y tree but never visible to a sighted mouse user. A normal-flow element
+	   cannot escape its ancestor's box the way an absolutely-positioned one can, so it cannot be
+	   invisibly clipped this way — opening it grows the row's own height inside the ALREADY
+	   `overflow: auto` `.table-scroll`, which is exactly what that wrapper is for. See this file's
+	   own CashflowRowStaleTag.no-absolute-position.test.ts for the durable regression watcher — a
+	   `.dom.test.ts` cannot see this defect at all (jsdom applies zero CSS in this repo's harness),
+	   so the watcher is SOURCE-LEVEL by necessity, not a gap in coverage. */
 	.row-stale-panel {
-		position: absolute;
-		top: 100%;
-		left: 0;
-		z-index: 1;
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-2);
-		width: max-content;
 		max-width: 18rem;
 		margin-top: var(--space-1);
 		padding: var(--space-3);
