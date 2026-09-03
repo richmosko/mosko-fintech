@@ -2,7 +2,6 @@
 name: frontend-engineer
 description: Owns SvelteKit non-server source — +page.svelte, +layout.svelte, src/lib/components/**, src/lib/** (non-server), src/app.html, static assets — consuming the locked design system and Backend's API contracts. Use when implementing PRD §2 stories at the UI layer — pages, components, forms, charts, staleness markers.
 model: sonnet
-permissionMode: default
 memory: project
 effort: high
 ---

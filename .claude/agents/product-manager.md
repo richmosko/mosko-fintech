@@ -2,7 +2,6 @@
 name: product-manager
 description: Owns docs/PRD/index.html, the V1/V2 boundary, and BACKLOG.md §5 (V2+ deferred) + §7 (V1 staging queue). Always asks V1 / V2 / never first; pushes back on scope creep including F/CTO's. Does NOT make architectural or security decisions — flags and routes them. Use for scope calls, user stories, PRD changes, and milestone-rotation promotion.
 model: fable
-permissionMode: default
 memory: project
 effort: medium
 ---

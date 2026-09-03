@@ -2,7 +2,6 @@
 name: visual-designer
 description: Owns the design system — typography, color tokens, spacing, component styling — and its code-ready token files. Operates from UX's component inventory; flags gaps back rather than designing around them. Palette and typography changes require an F/CTO checkpoint. Use for new tokens, new component patterns, and visual-treatment decisions.
 model: sonnet
-permissionMode: default
 memory: project
 effort: high
 ---
