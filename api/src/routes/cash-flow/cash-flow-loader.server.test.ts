@@ -26,6 +26,15 @@
 // staleness.error-degrade.test.ts; this file's added coverage is again pure WIRING: exactly one
 // call, the result threaded straight through to `data.staleness`, degrading to UNKNOWN_STALENESS
 // (never EMPTY_STALENESS) on a throw, independent of the rollup/panel legs in both directions.
+//
+// SELF-258 EXTENSION (per-row Sub-Cat staleness, contributor-map loader leg): `loadCashflowContributors`
+// (the `099` RPC read) and `resolveStaleAccountIds` (navComposition.ts's SELF-330 bridge) are
+// mocked as the I/O boundary; `computeCashflowRowStaleness` — the pure fold — is the REAL
+// implementation, imported via `importOriginal`, so this file's added coverage proves actual
+// end-to-end WIRING (contributors + resolved stale ids -> a real `data.cashflowRowStaleness`
+// shape), not just call counts. `computeCashflowRowStaleness`'s own fold semantics (dominance
+// order, account_name-null UNKNOWN branch, key exclusions) are separately unit-tested in
+// cashflowContributors.test.ts and are NOT re-proven here.
 
 import { describe, it, expect, vi } from 'vitest';
 import { isRedirect } from '@sveltejs/kit';
@@ -43,6 +52,21 @@ vi.mock('$lib/server/queries/historicalExpendituresPanel', () => ({
 const loadStalenessMock = vi.fn();
 vi.mock('$lib/server/queries/staleness', () => ({
 	loadStaleness: loadStalenessMock
+}));
+
+const loadCashflowContributorsMock = vi.fn();
+vi.mock('$lib/server/queries/cashflowContributors', async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import('$lib/server/queries/cashflowContributors')>();
+	return {
+		...actual,
+		loadCashflowContributors: loadCashflowContributorsMock
+	};
+});
+
+const resolveStaleAccountIdsMock = vi.fn();
+vi.mock('$lib/server/queries/navComposition', () => ({
+	resolveStaleAccountIds: resolveStaleAccountIdsMock
 }));
 
 const { load } = await import('./+page.server');
@@ -67,6 +91,15 @@ function stubHappyPanel() {
 function stubHappyStaleness() {
 	loadStalenessMock.mockReset();
 	loadStalenessMock.mockResolvedValue(HAPPY_STALENESS);
+	// HAPPY_STALENESS.is_stale is false (KNOWN, not null), so staleLinkedSourceIds resolves to a
+	// known (empty) Set, not null — every test using this helper therefore DOES enter the
+	// contributor-map leg's `staleLinkedSourceIds !== null` branch. Stub its two I/O calls to a
+	// quiet, deterministic happy path so tests that aren't exercising THIS leg specifically don't
+	// incidentally depend on the unstubbed-mock throw/catch fail-soft path.
+	loadCashflowContributorsMock.mockReset();
+	loadCashflowContributorsMock.mockResolvedValue([]);
+	resolveStaleAccountIdsMock.mockReset();
+	resolveStaleAccountIdsMock.mockResolvedValue(new Set());
 }
 
 function makeEvent(user: { id: string } | null = SESSION_USER) {
@@ -86,16 +119,19 @@ type LoadResult = {
 	historicalExpenditures: unknown;
 	historicalExpendituresUnclassifiedCount: unknown;
 	staleness: unknown;
+	cashflowRowStaleness: unknown;
 };
 async function loadData(event: Parameters<typeof load>[0]): Promise<LoadResult> {
 	return (await load(event)) as unknown as LoadResult;
 }
 
 describe('load() — SELF-251 unauthenticated redirect', () => {
-	it('redirects to /login with a redirectTo, and attempts NO rollup, panel, or staleness read', async () => {
+	it('redirects to /login with a redirectTo, and attempts NO rollup, panel, staleness, or contributor-map read', async () => {
 		loadCashflowCrossAccountRollupMock.mockClear();
 		loadHistoricalExpendituresPanelMock.mockClear();
 		loadStalenessMock.mockClear();
+		loadCashflowContributorsMock.mockClear();
+		resolveStaleAccountIdsMock.mockClear();
 		let caught: unknown;
 		try {
 			await load(makeEvent(null));
@@ -108,6 +144,8 @@ describe('load() — SELF-251 unauthenticated redirect', () => {
 		expect(loadCashflowCrossAccountRollupMock).not.toHaveBeenCalled();
 		expect(loadHistoricalExpendituresPanelMock).not.toHaveBeenCalled();
 		expect(loadStalenessMock).not.toHaveBeenCalled();
+		expect(loadCashflowContributorsMock).not.toHaveBeenCalled();
+		expect(resolveStaleAccountIdsMock).not.toHaveBeenCalled();
 	});
 });
 
@@ -293,11 +331,150 @@ describe('load() — SELF-258 staleness ramp: one whole-tenant read, independent
 		loadCashflowCrossAccountRollupMock.mockReset();
 		loadCashflowCrossAccountRollupMock.mockRejectedValueOnce(new Error('network blip'));
 		stubHappyPanel();
-		loadStalenessMock.mockReset();
-		loadStalenessMock.mockResolvedValueOnce(HAPPY_STALENESS);
+		stubHappyStaleness(); // arms loadStalenessMock AND the contributor-map mocks quietly —
+		// HAPPY_STALENESS.is_stale is false (known), so the contributor-map leg below DOES run.
 		const data = await loadData(makeEvent());
 
 		expect(data.staleness).toBe(HAPPY_STALENESS);
 		expect(data.rollup).toBeNull();
+	});
+});
+
+describe('load() — SELF-258 §2.3.2 per-row Sub-Cat staleness: contributor-map leg', () => {
+	it('skips BOTH loadCashflowContributors and resolveStaleAccountIds when the root staleness read is unknown, degrading to the empty map', async () => {
+		loadCashflowCrossAccountRollupMock.mockReset();
+		loadCashflowCrossAccountRollupMock.mockResolvedValueOnce(HAPPY_ROLLUP);
+		stubHappyPanel();
+		loadStalenessMock.mockReset();
+		loadStalenessMock.mockResolvedValueOnce(UNKNOWN_STALENESS);
+		loadCashflowContributorsMock.mockReset();
+		resolveStaleAccountIdsMock.mockReset();
+		const data = await loadData(makeEvent());
+
+		expect(loadCashflowContributorsMock).not.toHaveBeenCalled();
+		expect(resolveStaleAccountIdsMock).not.toHaveBeenCalled();
+		expect(data.cashflowRowStaleness).toEqual({});
+	});
+
+	it('calls loadCashflowContributors with the SAME asOf as the rollup, and resolveStaleAccountIds with the derived stale linked-source-id set', async () => {
+		loadCashflowCrossAccountRollupMock.mockReset();
+		loadCashflowCrossAccountRollupMock.mockResolvedValueOnce(HAPPY_ROLLUP);
+		stubHappyPanel();
+		loadStalenessMock.mockReset();
+		loadStalenessMock.mockResolvedValueOnce({
+			is_stale: true,
+			stale_items: [
+				{
+					linked_source_id: '7',
+					institution_name: 'Test Bank',
+					provider: 'plaid',
+					connection_status: 'error',
+					status_class: 'error'
+				}
+			]
+		});
+		loadCashflowContributorsMock.mockReset();
+		loadCashflowContributorsMock.mockResolvedValueOnce([]);
+		resolveStaleAccountIdsMock.mockReset();
+		resolveStaleAccountIdsMock.mockResolvedValueOnce(new Set());
+		await load(makeEvent());
+
+		expect(loadCashflowContributorsMock).toHaveBeenCalledTimes(1);
+		const [, rollupAsOf] = loadCashflowCrossAccountRollupMock.mock.calls[0];
+		const [, contributorsAsOf] = loadCashflowContributorsMock.mock.calls[0];
+		expect(contributorsAsOf).toBe(rollupAsOf);
+
+		expect(resolveStaleAccountIdsMock).toHaveBeenCalledTimes(1);
+		const [, staleLinkedSourceIdsArg] = resolveStaleAccountIdsMock.mock.calls[0];
+		expect(staleLinkedSourceIdsArg).toEqual(new Set(['7']));
+	});
+
+	it('a real contributor set with a confirmed-stale account threads through to data.cashflowRowStaleness, naming it', async () => {
+		loadCashflowCrossAccountRollupMock.mockReset();
+		loadCashflowCrossAccountRollupMock.mockResolvedValueOnce(HAPPY_ROLLUP);
+		stubHappyPanel();
+		loadStalenessMock.mockReset();
+		loadStalenessMock.mockResolvedValueOnce({ is_stale: false, stale_items: [] });
+		loadCashflowContributorsMock.mockReset();
+		loadCashflowContributorsMock.mockResolvedValueOnce([
+			{ cat: 'Revenue', sub_cat: 'Salary', sub_cat_id: 1, account_id: 100, account_name: 'Checking' }
+		]);
+		resolveStaleAccountIdsMock.mockReset();
+		resolveStaleAccountIdsMock.mockResolvedValueOnce(new Set(['100']));
+		const data = await loadData(makeEvent());
+
+		expect(data.cashflowRowStaleness).toEqual({
+			Revenue: { Salary: { is_stale: true, staleAccountNames: ['Checking'] } }
+		});
+	});
+
+	it('an unexpected throw from loadCashflowContributors degrades data.cashflowRowStaleness to {} WITHOUT touching rollup/panel/staleness', async () => {
+		loadCashflowCrossAccountRollupMock.mockReset();
+		loadCashflowCrossAccountRollupMock.mockResolvedValueOnce(HAPPY_ROLLUP);
+		stubHappyPanel();
+		loadStalenessMock.mockReset();
+		loadStalenessMock.mockResolvedValueOnce(HAPPY_STALENESS);
+		loadCashflowContributorsMock.mockReset();
+		loadCashflowContributorsMock.mockRejectedValueOnce(new Error('network blip'));
+		resolveStaleAccountIdsMock.mockReset();
+		const data = await loadData(makeEvent());
+
+		expect(data.cashflowRowStaleness).toEqual({});
+		expect(data.rollup).toBe(HAPPY_ROLLUP);
+		expect(data.historicalExpenditures).toEqual(HAPPY_PANEL.points);
+		expect(data.staleness).toBe(HAPPY_STALENESS);
+	});
+
+	it('a resolved null from loadCashflowContributors (its own internal fail-soft) also degrades to {} without calling resolveStaleAccountIds', async () => {
+		loadCashflowCrossAccountRollupMock.mockReset();
+		loadCashflowCrossAccountRollupMock.mockResolvedValueOnce(HAPPY_ROLLUP);
+		stubHappyPanel();
+		loadStalenessMock.mockReset();
+		loadStalenessMock.mockResolvedValueOnce(HAPPY_STALENESS);
+		loadCashflowContributorsMock.mockReset();
+		loadCashflowContributorsMock.mockResolvedValueOnce(null);
+		resolveStaleAccountIdsMock.mockReset();
+		const data = await loadData(makeEvent());
+
+		expect(resolveStaleAccountIdsMock).not.toHaveBeenCalled();
+		expect(data.cashflowRowStaleness).toEqual({});
+	});
+
+	it('an unexpected throw from resolveStaleAccountIds degrades data.cashflowRowStaleness to {} WITHOUT touching data.staleness', async () => {
+		loadCashflowCrossAccountRollupMock.mockReset();
+		loadCashflowCrossAccountRollupMock.mockResolvedValueOnce(HAPPY_ROLLUP);
+		stubHappyPanel();
+		loadStalenessMock.mockReset();
+		loadStalenessMock.mockResolvedValueOnce(HAPPY_STALENESS);
+		loadCashflowContributorsMock.mockReset();
+		loadCashflowContributorsMock.mockResolvedValueOnce([
+			{ cat: 'Revenue', sub_cat: 'Salary', sub_cat_id: 1, account_id: 100, account_name: 'Checking' }
+		]);
+		resolveStaleAccountIdsMock.mockReset();
+		resolveStaleAccountIdsMock.mockRejectedValueOnce(new Error('network blip'));
+		const data = await loadData(makeEvent());
+
+		expect(data.cashflowRowStaleness).toEqual({});
+		expect(data.staleness).toBe(HAPPY_STALENESS);
+	});
+
+	it('a rollup-read throw does NOT prevent the contributor-map leg from resolving normally', async () => {
+		loadCashflowCrossAccountRollupMock.mockReset();
+		loadCashflowCrossAccountRollupMock.mockRejectedValueOnce(new Error('network blip'));
+		stubHappyPanel();
+		loadStalenessMock.mockReset();
+		loadStalenessMock.mockResolvedValueOnce(HAPPY_STALENESS);
+		loadCashflowContributorsMock.mockReset();
+		loadCashflowContributorsMock.mockResolvedValueOnce([
+			{ cat: 'Expense', sub_cat: 'Rent', sub_cat_id: 2, account_id: 200, account_name: 'Savings' }
+		]);
+		resolveStaleAccountIdsMock.mockReset();
+		resolveStaleAccountIdsMock.mockResolvedValueOnce(new Set());
+		const data = await loadData(makeEvent());
+
+		expect(data.rollup).toBeNull();
+		expect(data.cashflowRowStaleness).toEqual({
+			Expense: { Rent: { is_stale: false, staleAccountNames: [] } }
+		});
 	});
 });

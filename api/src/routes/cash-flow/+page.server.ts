@@ -39,6 +39,37 @@
 // does its own internal read-failed/empty/populated gating on these two props (VD's ruling, per
 // +page.svelte's own module header). NULL-vs-0 on the count is passed through verbatim; never
 // coalesced here (see historicalExpendituresPanel.ts's own header).
+//
+// SELF-258 PER-ROW (Sub-Cat) STALENESS — §2.3.2 ONLY (099's own R3 ruling; the §2.3.3 drill-down
+// keeps its account-level badge, see cashflowContributors.ts's own header). `cashflowRowStaleness`
+// is `CashflowRowStalenessMap` (cashflowContributors.ts) — computed from the SAME `staleness`
+// leg's `staleLinkedSourceIds` already resolved below (NOT a second `046` read), Architect's `099`
+// contributor-map RPC at the SAME `asOf`, and `resolveStaleAccountIds` (navComposition.ts,
+// SELF-330's own bridge, reused VERBATIM — never forked). Independent try/catch: a contributor-
+// map/fold failure degrades `cashflowRowStaleness` to the EMPTY map (every row reads UNKNOWN by
+// its own documented missing-key convention) WITHOUT touching `rollup`, the panel fields, or the
+// whole-tenant `staleness` badge above, and vice versa. Skipped entirely (never even calls the RPC)
+// when `staleLinkedSourceIds` is already `null` — the root `046` read was itself unknown, so every
+// row's fold would resolve to `null` regardless; mirrors `loadNonReAllocation`'s own conditional-
+// fetch discipline exactly (no point spending a read whose result is already determined).
+//
+// PROP CONTRACT FOR FRONTEND (documented here — Frontend renders next, per the dispatch brief):
+//   `data.cashflowRowStaleness: CashflowRowStalenessMap` — `Record<cat, Record<sub_cat,
+//   { is_stale: boolean | null; staleAccountNames: string[] }>>`. Look up a rendered row by
+//   `cashflowRowStaleness[section.cat]?.[row.sub_cat]`; a MISSING key at EITHER level means UNKNOWN
+//   (never fresh) — default the lookup the SAME way `staleness ?? UNKNOWN_STALENESS` already
+//   defaults the section badge (e.g. `?? { is_stale: null, staleAccountNames: [] }`). AC5's tooltip
+//   names `staleAccountNames` verbatim; it is only ever non-empty when `is_stale === true`.
+//
+// ⚠ EXPECTED `npm run check` GAP (mirrors +page.svelte's OWN "EXPECTED LOADER CONTRACT" precedent
+// for `staleness`, run in the opposite direction): this loader now lands AHEAD of its consumer.
+// `cash-flow-page.dom.test.ts`'s `LAYOUT_DEFAULTS` fixture spreads directly into the `PageData`-
+// typed `data` prop and does not yet carry `cashflowRowStaleness`, so `npm run check` surfaces
+// FIVE `Property 'cashflowRowStaleness' is missing in type ...` errors there (one per render()
+// call site in that file) until Frontend's own per-row consumer PR threads the field through —
+// the correct, visible signal per established precedent, not worked around with `any` or a
+// parallel type. `CashflowRollupTable.svelte`'s own AC4-GAP bubble-up note (this route's OTHER
+// per-row seam) is the reverse-direction sibling of this same convention.
 
 import { redirect } from '@sveltejs/kit';
 import {
@@ -48,6 +79,13 @@ import {
 import { loadHistoricalExpendituresPanel } from '$lib/server/queries/historicalExpendituresPanel';
 import { loadStaleness } from '$lib/server/queries/staleness';
 import { UNKNOWN_STALENESS } from '$lib/staleness/stale-constituent';
+import {
+	loadCashflowContributors,
+	computeCashflowRowStaleness,
+	EMPTY_CASHFLOW_ROW_STALENESS,
+	type CashflowRowStalenessMap
+} from '$lib/server/queries/cashflowContributors';
+import { resolveStaleAccountIds } from '$lib/server/queries/navComposition';
 import { serverTodayAsOf } from '$lib/server/time/asOf';
 import type { HistoricalExpenditurePoint } from '$lib/historical-expenditures';
 import type { PageServerLoad } from './$types';
@@ -93,5 +131,41 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		staleness = UNKNOWN_STALENESS;
 	}
 
-	return { rollup, historicalExpenditures, historicalExpendituresUnclassifiedCount, staleness };
+	// SELF-330 convention, reused VERBATIM (root `+page.server.ts` / `allocation/+page.server.ts`):
+	// `staleness.is_stale === null` means the ROOT `046` read itself was unknown — passed through as
+	// `null` rather than an empty Set so the fold below propagates UNKNOWN to every row instead of
+	// misreading "we don't know" as "we checked and it's empty."
+	const staleLinkedSourceIds =
+		staleness.is_stale === null
+			? null
+			: new Set(staleness.stale_items.map((item) => String(item.linked_source_id)));
+
+	// SELF-258 §2.3.2 per-row (Sub-Cat) staleness — see the module header's PROP CONTRACT note.
+	// Independent try/catch: a contributor-map/fold failure degrades to the EMPTY map (every row
+	// reads UNKNOWN by its own documented missing-key convention) without touching `rollup`, the
+	// panel fields, or the whole-tenant `staleness` badge above.
+	let cashflowRowStaleness: CashflowRowStalenessMap = EMPTY_CASHFLOW_ROW_STALENESS;
+	try {
+		if (staleLinkedSourceIds !== null) {
+			const contributors = await loadCashflowContributors(locals.supabase, asOf);
+			if (contributors !== null) {
+				const staleAccountIds = await resolveStaleAccountIds(locals.supabase, staleLinkedSourceIds);
+				cashflowRowStaleness = computeCashflowRowStaleness(contributors, staleAccountIds);
+			}
+		}
+	} catch (err) {
+		console.error(
+			'[cash-flow/+page.server] contributor-map/row-staleness load threw; degrading to empty (unknown per row):',
+			err
+		);
+		cashflowRowStaleness = EMPTY_CASHFLOW_ROW_STALENESS;
+	}
+
+	return {
+		rollup,
+		historicalExpenditures,
+		historicalExpendituresUnclassifiedCount,
+		staleness,
+		cashflowRowStaleness
+	};
 };
