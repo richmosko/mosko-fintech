@@ -163,20 +163,22 @@ begin;
 
 \ir ../_fixtures/rls_verbs.psql
 
--- plan = 31: ISO 12 (3 functions x 4 legs: own-value / non-vacuity / cross-
+-- plan = 33: ISO 12 (3 functions x 4 legs: own-value / non-vacuity / cross-
 --   tenant-probe / empty-tenant-closed) + RT25/AC3/AC2-adversarial 6
 --   (RT25-1 ancient, RT25-2/3 far-future both tenants, RT25-4a/4b mismatched
 --   as_of the AC3 proper leg, RT25-5 the AC2 adversarial foreign-account+
 --   extreme-as_of combination) + AC4 2 (exactly-floor inclusion + non-
 --   vacuity companion) + AC5 4 (two-scope sum on 093's rollup + 096, each
---   with a single-scope companion) + AC7 2 (forgery rejection + non-
---   vacuous control) + AC8 2 (direct read-isolation pin) + AC10 1 (direct
---   enabled-trigger pin) + AC12 2 (service_role sweep + non-vacuous
---   function-count companion) = 31. Recorded so a silent plan-edit shows as
---   an arithmetic change. (AC2's PRIMARY leg is ISO-094b, already counted in
---   ISO's 12 — RT25-5 is its adversarial VARIANT, not a second primary leg,
+--   with a single-scope companion) + D19-DISTRIBUTIVE 2 (the missing
+--   created-ON-D legs on 098/099, team-lead ruling 2026-09-03) + AC7 2
+--   (forgery rejection + non-vacuous control) + AC8 2 (direct read-isolation
+--   pin) + AC10 1 (direct enabled-trigger pin) + AC12 2 (service_role sweep
+--   + non-vacuous function-count companion) = 33. Recorded so a silent
+--   plan-edit shows as an arithmetic change. (AC2's PRIMARY leg is ISO-094b,
+--   already counted in ISO's 12 — RT25-5 is its adversarial VARIANT, not a
+--   second primary leg,
 --   which is why AC2 has no separate line item here.)
-select plan(31);
+select plan(33);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb, _rls.tenant_c() as tc \gset
 
@@ -241,6 +243,44 @@ insert into pfin.account_trans (account_id, transaction_date, amount, vendor, de
   (:b_acc, '2026-06-01', -25, 'vB', '257 tenant-B own classified item', '2026-06-01T00:00:00Z')
   returning trans_id as t_b \gset
 insert into pfin.account_trans_annotation (trans_id, sub_cat_id) values (:t_b, :b_exp);
+
+-- ---------------------------------------------------------------------
+-- D19-DISTRIBUTIVE LEGS (team-lead ruling, 2026-09-03): every function
+--   composing on the shared reader owes its OWN created-ON-D leg, because
+--   each composer's own shaping could break inclusion independently — 094's
+--   own header states exactly that reason. 093/094/096 already carry theirs
+--   (COMPOSED below in BLOCK AC9). fn_expenditures_unclassified_count (098)
+--   and fn_cashflow_contributors (099) did not; Architect's own omission on
+--   099, named as such. Both fixture rows below are dated the SAME calendar
+--   day as their leg's own as_of but created LATE in that day (18:00Z/noon),
+--   the exact shape the PRE-amendment `created_at <= $1` defect would have
+--   excluded (date-to-midnight promotion) and the amended half-open bound
+--   `created_at < ($1+1)` correctly includes.
+-- ---------------------------------------------------------------------
+
+-- 098 leg fixture: an UNCLASSIFIED item dated in June 2026 (a COMPLETE prior
+--   month relative to d_asof_096=2026-07-15 — 098 shares 096's OWN window
+--   exclusion of the current incomplete month, so this item must NOT be
+--   dated in July or it would be excluded by ms_last regardless of
+--   created_at, testing nothing), created_at exactly ON d_asof_096.
+insert into pfin.account_trans (account_id, transaction_date, amount, vendor, description, created_at) values
+  (:a_pers, '2026-06-20', -15, 'vCreatedOnD098', '257 D19-distributive: unclassified, created ON d_asof_096, dated in a COMPLETE prior month', '2026-07-15T12:00:00Z')
+  returning trans_id as t_createdond_098 \gset
+
+-- 099 leg fixture: a CLASSIFIED item, dated within d_asof's own year (in_ytd
+--   true — 099 has no month-window exclusion, unlike 098/096), created_at
+--   exactly ON d_asof. ⚠ Dated in JANUARY, deliberately NOT June: 096
+--   aggregates every cat='Expense'/is_tax_payment=false item by month
+--   regardless of sub_cat, so a June-dated item here would silently inflate
+--   ISO-096a/AC5-3's June total (measured — caught by the sweep, not by
+--   inspection). January keeps it inside d_asof's year (099's own in_ytd
+--   window) while landing in a DIFFERENT month bucket than 096's June legs.
+insert into pfin.posting_prototype (users_id, cat, sub_cat, is_tax_payment) values
+  (:'ta', 'Expense', 'CreatedOnD257', false) returning id as a_createdond \gset
+insert into pfin.account_trans (account_id, transaction_date, amount, vendor, description, created_at) values
+  (:a_pers, '2026-01-15', -20, 'vCreatedOnD099', '257 D19-distributive: classified, created ON d_asof, dated OUTSIDE June to avoid inflating 096''s June total', '2026-06-15T18:00:00Z')
+  returning trans_id as t_createdond_099 \gset
+insert into pfin.account_trans_annotation (trans_id, sub_cat_id) values (:t_createdond_099, :a_createdond);
 
 \set d_asof '2026-06-15'
 -- ⚠ fn_historical_expenditures (096) excludes the CURRENT INCOMPLETE month
@@ -504,6 +544,56 @@ select is(
   (select -1 * sum(t.amount) from pfin.account_trans t where t.trans_id = :t_trust),
   30.00::numeric,
   '(AC5-4) companion: the trust-scope leg ALONE is 30.00 — (AC5-3)''s 80.00 genuinely sums two distinct scopes'
+);
+select set_config('role', 'postgres', true);
+
+-- =====================================================================
+-- BLOCK AC9 — shared-reader rule coverage inventory (collapse ACCEPTED,
+--   team-lead + Architect, 2026-09-03): 093_fn_cashflow_items_and_rollup_
+--   rls.sql already carries every rule leg named in AC9 — R1-R5/N1/N3/N4/R4
+--   (mechanical exclusion + E1 netting), R3a-c (split XOR both grains), E3a
+--   (deliberately un-annotated fixture), S3a-c (ΣQ1..Q4=YTD partition
+--   identity), L15a-c (the half-open as-of bound, incl. created-within-D).
+--   094/096 compose on the reader with ZERO rule restatement (verified
+--   against Architect: 094's own header rules reader rules "093's exclusive
+--   territory... NOT re-proven here"); each carries exactly ONE leg of its
+--   own proving the rule SURVIVES composition (094's CREATED-ON-D-1/2, 096's
+--   BOUND/F1) — a DIFFERENT assertion from proving the rule ONCE, and
+--   correctly not collapsed with it. All ran green in the full-suite sweep
+--   (see hand-off report for counts). NO new SQL for AC9 itself.
+--
+--   D19-DISTRIBUTIVE LEGS (team-lead ruling: ADR-011 Decision 19's "required
+--   of the §2.3 verification battery" is DISTRIBUTIVE — every composer on
+--   the shared reader owes its OWN created-ON-D leg, because each composer's
+--   own shaping could independently break inclusion, matching 094/096's own
+--   stated reason for carrying theirs). 093/094/096 already have theirs.
+--   TWO were missing tree-wide: fn_expenditures_unclassified_count (098) and
+--   fn_cashflow_contributors (099, Architect's own named omission on 099's
+--   original test-pairing block). Both below.
+-- =====================================================================
+select _rls.set_tenant(:'ta'::uuid);
+-- (D19-098) a row created ON d_asof_096 (2026-07-15, LATE in the day —
+--   18:00Z would also work; used noon here), transaction_date in a COMPLETE
+--   prior month (June, not July's current-incomplete month which 098 shares
+--   096's own window exclusion for), unclassified: MUST be counted. RED if
+--   a future edit reintroduced the pre-amendment `created_at <= $1` form,
+--   which would exclude this row via midnight-promotion despite it being
+--   created hours into d_asof_096, not after it.
+select is(
+  (select unclassified_count from pfin.fn_expenditures_unclassified_count(:'d_asof_096'::date)),
+  1::bigint,
+  '(D19-098) fn_expenditures_unclassified_count: an unclassified item dated in a complete prior month (June) but CREATED ON d_asof_096 (July 15, mid-day) IS counted — the half-open created_at bound, proven through this composer specifically'
+);
+-- (D19-099) a row created ON d_asof (2026-06-15, 18:00Z — late in the day),
+--   transaction_date within d_asof's own year (099 has no month-window
+--   exclusion, unlike 098/096), classified: MUST appear in the contributor
+--   map. RED under the pre-amendment predicate for the identical reason.
+select ok(
+  exists (
+    select 1 from pfin.fn_cashflow_contributors(:'d_asof'::date)
+     where sub_cat_id = :a_createdond and account_id = :a_pers
+  ),
+  '(D19-099) fn_cashflow_contributors: a contributor whose ONLY qualifying item was CREATED ON d_asof (2026-06-15, 18:00Z, late in the day) DOES appear in the map — the half-open created_at bound, proven through this composer (Architect''s own named omission on 099''s original test-pairing block, closed here)'
 );
 select set_config('role', 'postgres', true);
 
