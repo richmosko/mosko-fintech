@@ -1,9 +1,43 @@
 ---
 name: pg-prove-aggregate-run-tap-artifact-unconfirmed
-description: "Looks like you planned N tests but ran M" can appear in a full `/tests`-tree pg_prove run for a file that is 100% green in isolation (immediately followed by "ok", absent from the run's own Failed-tests summary) — a real but unroot-caused TAP::Parser artifact specific to the multi-file aggregate run, not a plan-count defect. Don't chase it further without saying so.
+description: "Looks like you planned N tests but ran M" is now CONFIRMED (not just a discriminated-but-unrootcaused artifact) — root cause found pre-documented in 085/self244's own battery headers, missed on first read. drift = count of TRAILING savepoint-wrapped/rolled-back legs at the file's tail with nothing after them.
 metadata:
   type: feedback
 ---
+
+**⚠ SUPERSEDES the "mechanism unconfirmed" framing this file originally carried — the mechanism
+IS confirmed, and I should have found it before reporting it as unknown.** Drafting SELF-257 I
+re-read `self244_v12_close_gate.sql`'s own header (its BLOCK E comment), which quotes `085_
+taxonomy_element_rls.sql`'s own measured mechanism verbatim: `ok()` prints its `ok N` from a
+SEQUENCE (exempt from rollback), but separately calls `_set('curr_test', N)` — an ordinary TABLE
+write that a `savepoint ... rollback to savepoint` pair around a trailing leg DOES undo, and
+writes an ABSOLUTE value (not an increment), so a later `ok()` normally overwrites a rolled-back
+predecessor's loss with its own new absolute value — EXCEPT for legs at the very TAIL of the file,
+after which nothing else runs to overwrite it. **drift = the count of consecutive
+savepoint-wrapped-and-rolled-back legs sitting at the file's own tail, immediately before
+`finish()`.** Confirmed by exact arithmetic across three independent files: 085 has ONE such
+trailing leg → "planned 19 ran 18" (drift 1); self244 has THREE (E2/E3/E4) → "planned 35 ran 32"
+(drift 3); 099 has TWO (CC0/CC1, the corrupt-the-control pair) → "planned 37 ran 35" (drift 2).
+`finish()`'s own `1..N` / `ok`/`not ok` stream is completely correct regardless — this is a
+`#`-prefixed TAP COMMENT from `finish()`'s own plan-vs-sequence sanity check, not a real gap, and
+pg_prove (the TAP-aware consumer) is unaffected: every `ok N` prints once, in order, and the file
+is absent from the run's own Failed-tests list.
+
+**What went wrong the first time:** I discriminated "artifact vs real failure" correctly (exit
+status / Failed-list / isolated-rerun) but reported the CAUSE as unconfirmed rather than reading
+the two files that already document it — a case of not checking whether a colleague's own battery
+header already contains the answer before telling team-lead "I didn't chase it further." The
+lesson isn't "don't say unconfirmed" — it's **grep the two files already showing the same symptom
+for their own explanation before reporting a mechanism as unknown.**
+
+**How to apply:** a file ending in one or more savepoint-wrapped corrupt-the-control /
+inversion legs (SAVEPOINT ... rollback to savepoint, nothing non-rolled-back after) will show this
+comment in an aggregate `/tests` run in proportion to how many such legs sit at its tail. It is
+NOT a defect and needs no fix — but if it's ever surprising, `grep -c 'savepoint' <file>` near the
+tail plus the arithmetic above resolves it in one step, no fresh investigation needed.
+[[feedback_pg_prove_scope_full_tests_tree_not_rls_only]] — related but different: that one is
+about scope (which directory to point pg_prove at), this one is about this specific counting
+comment within a correctly-scoped run.
 
 099's own battery: standalone `pg_prove -r /tests/rls/099_..._rls.sql` → clean `ok / All tests
 successful`, zero warnings, 37/37. The SAME file inside a full-tree `pg_prove -r /tests` run

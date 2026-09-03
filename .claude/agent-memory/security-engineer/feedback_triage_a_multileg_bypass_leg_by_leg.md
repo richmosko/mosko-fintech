@@ -71,7 +71,32 @@ transfers database ownership. Two distinct objects. **Before flagging an apparen
 someone's text, ask whether they are holding a finer distinction than I am**, and say "I do not
 require the change" only after that check rather than as a hedge that lets a wrong note ship anyway.
 
+**⚠ AND THE OLDEST VARIANT: a routed finding may already be RECORDED — grep the tree before ruling it
+novel, because the provenance decides the remediation.** SELF-257 routed *"neither the D3
+matched-tenant fences nor the FKs fire under `session_replication_role = replica`"*, reproduced live
+with a control. Real, correctly bounded — and **already reproduced and ruled on a month earlier**:
+`054_nav_daily.sql`'s header records the same live reproduction; `054_nav_daily_rls.sql`'s
+KNOWN-LIMIT box generalizes it (*"INHERENT to trigger-based immutability under an owner identity …
+applies identically to 004/account_trans and every Lock 10 mod #8 table"*) **and already answered the
+battery question** (*"a test claiming 'the fence holds under `session_replication_role=replica`'
+would be permanently and honestly RED against something triggers cannot provide"*); `057`'s trigger
+comment uses it as live rationale (*"a policy survives … `session_replication_role = replica`; a
+trigger does not"*); `055` shapes `pfin_etl` around it. The genuinely new part was narrow — **FKs**
+and the D3 fences specifically (measured: on `pfin`, all 70 user triggers AND all 144 internal RI
+triggers are `tgenabled='O'`, so FK enforcement is in scope too).
+**Two consequences, both of which change the answer:**
+(i) **The gap is not the mechanism, it is the LAYER where the general claim lives** — four migrations
+carry it, the ADR that claims defense-in-depth does not. That makes the fix a *consolidation into the
+ADR*, not a new finding, and drafting it as news would record a discovery date a month late.
+(ii) **A question the tree has already ruled on should be answered by citing that ruling, not
+re-derived** — I nearly re-derived the "no battery leg" answer from scratch when QA had written it
+verbatim. Grep `supabase/migrations/` and `supabase/tests/` for the mechanism's name **before**
+composing a ruling on it.
+
 **How to apply:**
+- Before ruling a routed finding novel, `grep -rn "<mechanism>" supabase/ DECISIONS.md docs/` — and
+  when it is already recorded, say so plainly, credit the genuinely new extension, and re-home the
+  remediation at whatever layer is actually missing it.
 - For each enumerated leg, find the consumer and ask: is the bad value **read**? If the
   consumer's `where` excludes the row, the leg is inert — say so explicitly, because
   "uncovered" and "exploitable" are different claims and the difference is the whole
