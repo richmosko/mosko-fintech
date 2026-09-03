@@ -73,8 +73,9 @@
 --         to pfin.posting_prototype. ⚠ The AC's literal text claims the
 --         re-target's consequence is that a sub_cat_id naming a storage-side
 --         pfin.user_taxonomy id "now fails at the FOREIGN KEY (23503), never
---         reaching the trigger" — MEASURED FALSE (routed to Architect
---         2026-09-03, pending confirmation): BEFORE ROW triggers fire before
+--         reaching the trigger" — MEASURED FALSE, independently reproduced
+--         by Architect and confirmed by Sec at joint-review (2026-09-03):
+--         BEFORE ROW triggers fire before
 --         Postgres checks FK constraints, so the #10 matched-tenant trigger's
 --         own EXISTS/JOIN check (false for ANY sub_cat_id with no matching
 --         posting_prototype row — wrong table entirely or cross-tenant, it
@@ -163,23 +164,26 @@ begin;
 
 \ir ../_fixtures/rls_verbs.psql
 
--- plan = 34: ISO 12 (3 functions x 4 legs: own-value / non-vacuity / cross-
---   tenant-probe / empty-tenant-closed) + RT25/AC3/AC2-adversarial 6
---   (RT25-1 ancient, RT25-2/3 far-future both tenants, RT25-4a/4b mismatched
---   as_of the AC3 proper leg, RT25-5 the AC2 adversarial foreign-account+
---   extreme-as_of combination) + AC4 2 (exactly-floor inclusion + non-
---   vacuity companion) + AC5 4 (two-scope sum on 093's rollup + 096, each
---   with a single-scope companion) + D19-DISTRIBUTIVE 2 (the missing
---   created-ON-D legs on 098/099, team-lead ruling 2026-09-03) + AC7 2
---   (forgery rejection + non-vacuous control) + AC8 2 (direct read-isolation
---   pin) + AC10 1 (direct enabled-trigger pin) + AC12 2 (service_role sweep
---   + non-vacuous function-count companion) + REPLICA-ACL 1 (Sec's routed
---   pg_parameter_acl watcher) = 34. Recorded so a silent
---   plan-edit shows as an arithmetic change. (AC2's PRIMARY leg is ISO-094b,
---   already counted in ISO's 12 — RT25-5 is its adversarial VARIANT, not a
---   second primary leg,
---   which is why AC2 has no separate line item here.)
-select plan(34);
+-- plan = 35: ISO 12 (3 functions x 4 legs: own-value / non-vacuity / cross-
+--   tenant-probe / empty-tenant-closed) + RT25/AC3/AC2-adversarial 6 (RT25-1
+--   ancient + RT25-2/3 far-future — three EXTREME-INPUT ROBUSTNESS legs,
+--   window-vacuous, NOT isolation proofs, Sec-reframed 2026-09-03 — plus
+--   RT25-4a/4b + RT25-5, the REAL same-year isolation/AC2/AC3 discriminators,
+--   4b/5 corrected from a window-vacuous 2030/9999 value to 2026-12-31 per
+--   Sec) + AC4 2 (exactly-floor inclusion + non-vacuity companion) + AC5 4
+--   (two-scope sum on 093's rollup + 096, each with a single-scope
+--   companion) + D19-DISTRIBUTIVE 2 (the missing created-ON-D legs on
+--   098/099, team-lead ruling 2026-09-03) + AC7 3 (forgery rejection by the
+--   #10 trigger + non-vacuous control + the FK's OTHER live direction via
+--   ON DELETE RESTRICT, Sec-corrected mechanism throughout) + AC8 2 (direct
+--   read-isolation pin) + AC10 1 (direct enabled-trigger pin) + AC12 2
+--   (service_role sweep + non-vacuous function-count companion) +
+--   REPLICA-ACL 1 (Sec's routed pg_parameter_acl watcher) = 35. Recorded so
+--   a silent plan-edit shows as an arithmetic change. (AC2's PRIMARY leg is
+--   ISO-094b, already counted in ISO's 12 — RT25-5 is its adversarial
+--   VARIANT, not a second primary leg, which is why AC2 has no separate
+--   line item here.)
+select plan(35);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb, _rls.tenant_c() as tc \gset
 
@@ -409,76 +413,96 @@ select is(
 select set_config('role', 'postgres', true);
 
 -- =====================================================================
--- BLOCK RT25/AC3 — as-of VARIED ACROSS the tenant boundary, incl. ADVERSARIAL
---   extremes, at the DB layer (RT-25: the direct RPC bypasses the app-layer
---   Zod boundary by ruling, D19 Option A — the DB has NO date-range CHECK of
---   its own, so isolation must hold for ANY value, not just the app-validated
---   range). Uses fn_cashflow_cross_account_rollup as the reader-composed
---   surface; the mechanism is identical across every §2.3 reader-composed
---   function (isolation is entirely account_trans_select-inherited, never
---   as_of-conditioned).
+-- BLOCK RT25/AC3 — TWO DIFFERENT PROOFS, kept in one block because they
+--   share a fixture, but NOT the same claim (Sec correction, 2026-09-03):
+--
+--   RT25-1/2/3 are EXTREME-INPUT ROBUSTNESS legs, NOT isolation legs. The
+--   reader scopes every result to p_as_of's OWN calendar year (rule 5), so
+--   an as_of centuries away from any seeded data returns the empty set BY
+--   WINDOW CONSTRUCTION — these three would pass identically with RLS
+--   removed entirely. Their claim is narrower and still worth having: the
+--   DB layer (D19 Option A — no date-range CHECK of its own, since RT-25's
+--   direct-RPC bypasses the app-layer Zod boundary by ruling) does not
+--   ERROR or behave strangely on a wildly out-of-range as_of; it degrades
+--   to the ordinary empty answer, same as any other as_of with no matching
+--   data.
+--
+--   RT25-4a/4b and RT25-5 are the REAL isolation/AC3/AC2-adversarial legs —
+--   as_of values chosen so the QUERIED TENANT'S OWN data would be IN
+--   WINDOW at that as_of (year 2026, matching every seeded row's own
+--   year), so a broken tenant fence COULD leak the other tenant's row if
+--   isolation actually failed. A mismatched-but-SAME-year as_of is the
+--   only shape that discriminates; the original draft used a still-empty-
+--   by-window value (2030-01-01 / 9999-12-31) for the READING tenant here
+--   too and was corrected to 2026-12-31 for exactly that reason.
 -- =====================================================================
 select _rls.set_tenant(:'ta'::uuid);
 -- (RT25-1) ancient as_of (before every seeded row, in ANY tenant's data):
 --   the ordinary EMPTY answer, never an error, never a foreign row.
+--   ROBUSTNESS leg — window-vacuous, not an isolation discriminator.
 select is(
   (select count(*) from jsonb_array_elements(pfin.fn_cashflow_cross_account_rollup('0001-01-01'::date) -> 'sections') s,
                         jsonb_array_elements(s -> 'rows') row),
   0::bigint,
-  '(RT25-1) adversarial as_of (year 1, centuries before any data): A''s rollup returns the ordinary EMPTY set, no error'
+  '(RT25-1) EXTREME-INPUT ROBUSTNESS: as_of year 1 (centuries before any data) returns the ordinary EMPTY set, no error — window-vacuous, not an isolation proof'
 );
 -- (RT25-2) far-future as_of (year 9999): the reader scopes to the SAME
 --   calendar year as p_as_of (rule 5), so NEITHER tenant's real 2026 data
---   can appear at this as_of BY CONSTRUCTION — the meaningful adversarial
---   proof is that this does not error and does not admit ANYTHING (not "A
---   sees only its own", which is impossible here since even A's own 2026
---   data is out of THIS year's window): the ordinary EMPTY SET, same shape
---   as RT25-1, from the opposite extreme.
+--   can appear at this as_of BY CONSTRUCTION. ROBUSTNESS leg only: this
+--   would pass identically with RLS removed entirely, since the window
+--   itself (not the tenant fence) is what empties it.
 select is(
   (select count(*) from jsonb_array_elements(pfin.fn_cashflow_cross_account_rollup('9999-12-31'::date) -> 'sections') s,
                         jsonb_array_elements(s -> 'rows') row),
   0::bigint,
-  '(RT25-2) adversarial as_of (far future, year 9999): A''s rollup is the ordinary EMPTY set (2026 data is out of year 9999''s window by construction) — no error, no unexpected inclusion of ANY data'
+  '(RT25-2) EXTREME-INPUT ROBUSTNESS: as_of year 9999 returns the ordinary EMPTY set (2026 data is out of year 9999''s window by construction) — no error; window-vacuous, not an isolation proof'
 );
 select set_config('role', 'postgres', true);
 -- (RT25-3) the IDENTICAL extreme as_of under tenant B: ALSO the ordinary
---   empty set — a shared wide as_of between two sessions does not admit
---   either tenant's data, let alone create a union-like cross-tenant leak.
+--   empty set. Same caveat as RT25-2 — window-vacuous for B too.
 select _rls.set_tenant(:'tb'::uuid);
 select is(
   (select count(*) from jsonb_array_elements(pfin.fn_cashflow_cross_account_rollup('9999-12-31'::date) -> 'sections') s,
                         jsonb_array_elements(s -> 'rows') row),
   0::bigint,
-  '(RT25-3) the IDENTICAL extreme as_of (9999-12-31) under tenant B: ALSO the ordinary EMPTY set — the shared adversarial value admits neither tenant''s data'
+  '(RT25-3) EXTREME-INPUT ROBUSTNESS: the IDENTICAL as_of year 9999 under tenant B is ALSO the ordinary EMPTY set — no error for either tenant at this extreme; window-vacuous, not an isolation proof'
 );
 select set_config('role', 'postgres', true);
--- (RT25-4/AC3) MISMATCHED as_of across the boundary: A queried at its OWN
---   real as_of (D) while B is queried at a COMPLETELY DIFFERENT, unrelated
---   as_of — neither sees the other's data under either date.
+-- (RT25-4a) AC3, the REAL isolation discriminator: A at its OWN real as_of
+--   (D=2026-06-15, where A's OWN Groceries257 IS in window) sees no trace
+--   of B's BStuff257 — a broken fence COULD have leaked it here, since D is
+--   B's own data's year too.
 select _rls.set_tenant(:'ta'::uuid);
 select ok(
   not exists (select 1 from jsonb_array_elements(pfin.fn_cashflow_cross_account_rollup(:'d_asof'::date) -> 'sections') s,
                           jsonb_array_elements(s -> 'rows') row
                where row ->> 'sub_cat' = 'BStuff257'),
-  '(RT25-4a) AC3: A at its OWN as_of (D=2026-06-15) sees no trace of B''s BStuff257, regardless of what as_of B itself might use'
+  '(RT25-4a) AC3 REAL isolation leg: A at its OWN as_of (D=2026-06-15 — B''s own 2026 data IS in window at this date) sees no trace of B''s BStuff257'
 );
 select set_config('role', 'postgres', true);
+-- (RT25-4b) AC3, the mismatched-as_of companion: B at a DIFFERENT as_of
+--   (2026-12-31 — deliberately still YEAR 2026, so A's Groceries257 IS in
+--   window at THIS as_of too, unlike the original 2030-01-01 draft, which
+--   was window-vacuous for A's data and therefore proved nothing) sees no
+--   trace of A's Groceries257.
 select _rls.set_tenant(:'tb'::uuid);
 select ok(
-  not exists (select 1 from jsonb_array_elements(pfin.fn_cashflow_cross_account_rollup('2030-01-01'::date) -> 'sections') s,
+  not exists (select 1 from jsonb_array_elements(pfin.fn_cashflow_cross_account_rollup('2026-12-31'::date) -> 'sections') s,
                           jsonb_array_elements(s -> 'rows') row
                where row ->> 'sub_cat' = 'Groceries257'),
-  '(RT25-4b) AC3: B at a DIFFERENT as_of (2030-01-01, unrelated to A''s D) sees no trace of A''s Groceries257 — mismatched as_of values across tenants do not cross-contaminate'
+  '(RT25-4b) AC3 REAL isolation leg: B at a DIFFERENT as_of (2026-12-31 — SAME year as A''s real data, so A''s Groceries257 IS in window at this as_of and a broken fence could leak it) sees no trace of A''s Groceries257 — mismatched as_of values across tenants do not cross-contaminate'
 );
 select set_config('role', 'postgres', true);
--- (RT25-5) AC2 adversarial variant: A's foreign-account probe (094, b_acc)
---   under the SAME far-future adversarial as_of used in RT25-2 — still empty.
+-- (RT25-5) AC2 adversarial variant, the REAL discriminator: A's foreign-
+--   account probe (094, b_acc) at 2026-12-31 — SAME year as B's real data
+--   (unlike the original 9999-12-31 draft, window-vacuous for B's data and
+--   therefore proving nothing) — still the ordinary empty document.
 select _rls.set_tenant(:'ta'::uuid);
 select is(
-  (select count(*) from jsonb_array_elements(pfin.fn_cashflow_per_account(:b_acc, '9999-12-31'::date) -> 'sections') s,
+  (select count(*) from jsonb_array_elements(pfin.fn_cashflow_per_account(:b_acc, '2026-12-31'::date) -> 'sections') s,
                         jsonb_array_elements(s -> 'rows') row),
   0::bigint,
-  '(RT25-5/AC2) adversarial: A passing B''s account_id (b_acc) AND an extreme as_of (9999-12-31) together — still the ordinary empty document, not an error and not a leak'
+  '(RT25-5/AC2) REAL adversarial discriminator: A passing B''s account_id (b_acc) AND as_of=2026-12-31 (SAME year as B''s real 2026-06-01 activity, so a broken fence could leak it here) together — still the ordinary empty document, not an error and not a leak'
 );
 select set_config('role', 'postgres', true);
 
@@ -600,39 +624,70 @@ select set_config('role', 'postgres', true);
 
 -- =====================================================================
 -- BLOCK AC7 — Sub-Cat forgery against pfin.posting_prototype: a sub_cat_id
---   naming a REAL, storage-side pfin.user_taxonomy id now fails at the FK
---   (23503), never reaching the #10 trigger — the re-target's own
---   consequence (084). posting_prototype's id-space starts at 1000000000;
---   user_taxonomy's starts at 1 — the two spaces cannot collide, so this is
---   a genuine FK-shape failure, not an accidental valid reference.
+--   naming a REAL, storage-side pfin.user_taxonomy id (wrong table entirely,
+--   post-084's #10/#13 re-target) IS REJECTED. ⚠ MEASURED, CORRECTED from
+--   the AC's literal wording (Architect independently reproduced,
+--   2026-09-03): the rejecting mechanism is the #10 MATCHED-TENANT TRIGGER,
+--   never the FK (23503) — the AC's "fails at the FK, not the trigger"
+--   claim is false as stated, and every sentence in this block asserts the
+--   TRIGGER, never the FK, for that reason.
+--
+--   WHY the FK cannot be the raiser here, structurally (Architect's subset
+--   argument, not merely "usually fires second"): the #10 trigger's test is
+--   `pp.id = new.sub_cat_id AND pp.users_id = acc.users_id`; the FK's test
+--   is existence of `pp.id` alone. The trigger's condition is a STRICT
+--   SUBSET of the FK's — fence passes implies a posting_prototype row with
+--   that id exists implies the FK is already satisfied — so no non-NULL
+--   value can pass the fence and fail the FK. On INSERT/UPDATE the FK can
+--   NEVER be the raising mechanism; BEFORE ROW triggers fire before
+--   Postgres checks FK constraints regardless. It is also a STACK, not one
+--   trigger: disabling #10 alone still hits `..._trade_constraints`
+--   (Architect measured this independently).
+--
+--   ⚠ The FK is NOT dead or removable. It is a genuine backstop on a
+--   TRIGGER-LESS path (all user triggers disabled — superuser-only,
+--   confirmed unreachable by authenticated/service_role, not this battery's
+--   concern) and is independently LIVE via `ON DELETE RESTRICT` (deleting a
+--   referenced posting_prototype row is blocked regardless of any trigger).
+--   Recorded per Architect/team-lead's ruling: no triggers-disabled leg is
+--   added here (tests a path no application code takes); the RESTRICT
+--   direction is asserted as (AC7-3) below since it is cheap and genuinely
+--   independent of the trigger stack.
 -- =====================================================================
--- ⚠ MEASURED, corrected from the AC's literal wording (routed to Architect
--- 2026-09-03, pending confirmation): "fails at the FK, not the trigger" does
--- NOT hold as literally stated. BEFORE ROW triggers fire before Postgres
--- checks FK constraints, so the #10 matched-tenant trigger's own EXISTS/JOIN
--- check — which returns false (and raises ITS OWN message) for ANY
--- sub_cat_id with no matching posting_prototype row, whether that id doesn't
--- exist at all, lives in a different table's id-space, or is cross-tenant —
--- always intercepts first. The FK is never reached for this failure mode.
--- This leg asserts the MEASURED mechanism (the #10 trigger's own rejection),
--- not the AC's literal FK claim, pending Architect's confirmation.
 select _rls.set_tenant(:'ta'::uuid);
 savepoint sp_ac7;
 select throws_like(
   format($$ insert into pfin.account_trans_annotation (trans_id, sub_cat_id) values (%s, %s) $$, :t_fkprobe, :a_usertax),
   '%is not a posting prototype owned by and visible to the tenant of trans_id%',
-  '(AC7-1) Sub-Cat forgery against the RE-TARGETED reference: a sub_cat_id naming a REAL storage-side pfin.user_taxonomy id (a_usertax, wrong table entirely post-084''s re-target) is REJECTED — MEASURED mechanism is the #10 matched-tenant trigger''s own rejection (BEFORE ROW fires before the FK constraint is ever checked), not a bare 23503 as the AC''s literal text describes; either way the write fails closed'
+  '(AC7-1) Sub-Cat forgery against the RE-TARGETED reference: a sub_cat_id naming a REAL storage-side pfin.user_taxonomy id (a_usertax, wrong table entirely post-084''s re-target) is REJECTED by the #10 matched-tenant TRIGGER (P0001) — never a bare 23503 as the AC''s literal text describes; the write fails closed either way'
 );
 rollback to savepoint sp_ac7;
 -- (AC7-2) non-vacuous control: the SAME trans_id classified with a REAL
---   posting_prototype id (own tenant) COMMITS — proving (AC7-1) is the
---   FK's own discriminator, not a blanket write-block on t_fkprobe.
+--   posting_prototype id (own tenant) COMMITS — proving (AC7-1)'s rejection
+--   is the #10 TRIGGER's own discriminator, not a blanket write-block on
+--   t_fkprobe.
 savepoint sp_ac7b;
 select lives_ok(
   format($$ insert into pfin.account_trans_annotation (trans_id, sub_cat_id) values (%s, %s) $$, :t_fkprobe, :a_groceries),
-  '(AC7-2) non-vacuous control: the SAME trans_id (t_fkprobe) classified with a REAL posting_prototype id (a_groceries, own tenant) COMMITS — (AC7-1)''s rejection is FK-shape-driven, not a block on the row itself'
+  '(AC7-2) non-vacuous control: the SAME trans_id (t_fkprobe) classified with a REAL posting_prototype id (a_groceries, own tenant) COMMITS — (AC7-1)''s rejection is TRIGGER-discriminator-driven, not a block on the row itself'
 );
 rollback to savepoint sp_ac7b;
+-- (AC7-3) the FK's OTHER live direction, independent of the trigger stack:
+--   ON DELETE RESTRICT blocks deleting a referenced posting_prototype row.
+--   Cheap, genuinely separate proof that the FK is not dead or removable —
+--   it simply never gets to be the RAISER on the insert/update path AC7-1/2
+--   exercise, per the subset argument above. ⚠ Run as role=postgres:
+--   posting_prototype carries no DELETE grant to authenticated at all (a
+--   42501 there would mask the FK entirely), and this leg is a schema-level
+--   constraint property, not an RLS/grant behavior.
+select set_config('role', 'postgres', true);
+savepoint sp_ac7c;
+select throws_ok(
+  format($$ delete from pfin.posting_prototype where id = %s $$, :a_groceries),
+  '23503', null,
+  '(AC7-3) the FK''s OTHER live direction: ON DELETE RESTRICT blocks deleting a_groceries (still referenced by t_pers''s annotation) — 23503 foreign_key_violation. Independent of the #10 trigger stack; proves the FK is a genuine constraint, not a removable vestige, just never the raiser on the forgery path above'
+);
+rollback to savepoint sp_ac7c;
 select set_config('role', 'postgres', true);
 
 -- =====================================================================
