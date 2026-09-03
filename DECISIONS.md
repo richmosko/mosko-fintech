@@ -41,6 +41,82 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-066 — The light-loop tier: a scoped per-issue loop for issues that touch no DB surface, no money path and no Sec-mandatory surface — and the mid-arc re-evaluation that is the whole of its safety
+
+**Date:** 2026-09-03 · **Status:** **Accepted** — F/CTO ratified 2026-09-02 at the loop-mechanics sitting (held during SELF-258's QA leg), **option B** of three, sequenced to execute after SELF-258 merged. **Process ratification — F/CTO-gated at PR.** · **Phase:** 6 Build Loop · **Surface:** the per-issue build loop; the operational spec lives in [`WORKFLOW.md`](WORKFLOW.md) Phase 6 *Gates*. · **Source:** the 2026-09-02 loop-mechanics sitting.
+
+**Context — two facts about the same process, and keeping them apart is the whole design.** The per-issue loop's **gates are measured-positive** and its **mechanics are expensive**. The sitting's question was whether anything could get cheaper **without changing what any gate checks**.
+
+The gate evidence is specific, not general enthusiasm. On the SELF-325 purchase-path arc, **every user-visible defect was found by a person driving the real thing and none by the suite**, while the suite confirmed the errors in three distinct ways — an untested wire between two individually-green packages, mocks updated alongside the code they mock, and a regression test asserting the defect (the record is in PR #538's body, and the standing gate it produced is the *live walk-through gate* bullet in [`WORKFLOW.md`](WORKFLOW.md) Phase 6). Separately, a Sec pre-ruling on the §2.2.2 staleness surface caught an **UNKNOWN-collapsing-to-FRESH** fold — a fail-open that no value assertion can see. **Neither instrument is a formality, and neither is what costs the time.**
+
+What costs the time is the mechanics: scratch-database rebuilds, walk setup, and sequential worktree hand-offs, which the sitting measured as consuming most of a 1–2 hour per-issue QA leg. Two changes were ratified against that. **Option A** — snapshot tooling and parallelised battery drafting — is DevOps' and is not this ADR. **Option B is this ADR.**
+
+**Decisions.**
+
+### Decision 1 — The light-loop tier, its qualification predicate, and the explicit list of what it does NOT scope down
+
+An issue runs the **light loop** when **all three** of the following hold:
+
+- **(a) No new DB surface.** No migration; no schema, RLS policy, grant, trigger, or function change. A migration appearing at any point falsifies (a) — see Decision 2.
+- **(b) No money-path change.** Nothing that alters a financial calculation or any figure a user reads as money. A rendering-only change to a money figure still counts as a money-path change, because a mis-rendered figure is indistinguishable from a mis-computed one at the point where it does harm.
+- **(c) Sec-not-mandatory per the ratified map** — the joint-review-mandatory surface list ([ADR-011](#adr-011) Decisions 1–4, a new `SECURITY DEFINER` function, a Decision 3 family extension, auth, secrets, Plaid, multi-tenant isolation, financial calculations). **The map is read live, not recalled**; it is the authority, and this bullet is a pointer to it rather than a copy of it.
+
+The predicate is a **conjunction, evaluated live, with no discretion** — "mostly light" is not a state. Failing any one bullet means the full loop, not a negotiation.
+
+**What the light loop scopes DOWN:**
+
+- **The walk covers the changed arc only**, not the feature's full surface — the specific paths the diff can reach, driven for real.
+- **No fresh full-suite scratch chain run where CI already covers it.** CI's coverage is the warrant; where CI does not cover it, the run is not optional.
+- **Delta-depth review** — the diff reviewed at its own depth, without the surrounding-module sweep a DB or money surface earns.
+
+**What the light loop does NOT scope down — enumerated, because a tier that quietly drops a gate is precisely the failure mode this ADR must not create:**
+
+- **The walk still happens.** It is narrowed in scope, never skipped. Option C below is the version that skips it, and it is rejected.
+- **Combined-tree green before PR**, unchanged.
+- **QA test-pairing** for anything extending a verification surface, unchanged.
+- **F/CTO ratify at PR**, unchanged.
+- **Walk-before-Sec ordering** ([ADR-063](#adr-063) Decision item 4), unchanged wherever Sec is in play at all.
+
+**Who calls it:** **team-lead, at dispatch** — and the call is revisited at any scope change, which is Decision 2.
+
+**Name the losing side, per the replacement-control discipline.** A light-tier arc gets **less walk coverage of surface the diff did not change**. The defect class it can miss is one in *unchanged-but-adjacent* surface that the changed arc perturbs without touching — the seam class. That cost is accepted knowingly; it is not zero, and an ADR claiming a strengthening with no losing side would be describing something else.
+
+### Decision 2 — The tier RE-EVALUATES the moment scope moves, and this clause is the entire safety of the scheme
+
+**The tier is a property of the issue's CURRENT scope, not a label applied once at dispatch.** This is the crux, and it is stated as its own decision because the tier is unsafe without it and safe with it.
+
+**The trigger is any scope change, and specifically: a migration appears · a money-path figure changes · any surface on the ratified map is touched · an F/CTO ruling adds a deliverable.**
+
+**On trigger, the tier LAPSES IMMEDIATELY and the full loop applies to the WHOLE ARC — not only to the part that was added.** ⚠ That last clause carries the weight. The natural move on a mid-arc addition is to run the full loop over the increment and leave the already-light-reviewed remainder as reviewed. That is wrong: the addition is usually what makes the earlier work reachable in a new way, and the earlier work was reviewed under an assumption the addition just falsified.
+
+**Who:** whoever notices — any agent, at any point. team-lead confirms the lapse. Where the call is middle-weight, [ADR-063](#adr-063)'s **default-and-notify** protocol (Decision item 3) is available to team-lead on its own three conditions, which must be checked rather than assumed.
+
+**Why re-evaluation rather than a stricter up-front predicate.** No predicate can be evaluated against scope that does not exist yet. A stricter gate at dispatch would either reject work that legitimately qualifies, or give a false assurance that survives the scope change that invalidates it. **The tier is cheap to enter and mandatory to re-check** — that asymmetry is the design.
+
+**SELF-258 is the worked example, and it worked.** The arc was dispatched light and qualified honestly: a frontend staleness ramp plus loader wiring, no migration, no money path, Sec not mandatory. Mid-arc, F/CTO ruled the per-row staleness indicator builds in-arc, which required a new DB primitive — **migration `099` appeared, falsifying (a), and independently falsifying (c)**, since the function is an account-identity disclosure surface whose tenant fence is wholly inherited and which feeds a fail-open pipeline. The tier lapsed and Sec became mandatory.
+
+**And the lapse was load-bearing rather than ceremonial**, which is the part worth recording: the full loop on that arc then surfaced a fail-open in a join that read as a lookup (an INNER join to `pfin.account` would have dropped a contributor whose item remained in the rendered figures, because `pfin.account_trans` and `pfin.account` are fenced by different predicates), and a **falsified invariant in the migration's own draft CONTRACT** — an assertion that three taxonomy columns are always NULL together, refuted by measurement before it reached `pg_description`, where correcting it would have cost a migration. **Both are exactly the class the lapsed gates exist to catch, and neither is visible to a green suite.** A scheme whose safety clause has never fired is untested; this one fired on its first arc and paid for itself.
+
+### Options considered
+
+- **(A) Status quo — every issue runs the full loop. REJECTED.** It is the safest option and it is the one being changed, so its cost is the case against it: the sitting measured the mechanics consuming most of a 1–2 hour QA leg on issues where the loop's discriminating power was near zero — a frontend-only change cannot fail the checks that make the full loop expensive. Rejected on cost, with the gates' value explicitly not in dispute.
+
+- **(B) A light tier with mandatory mid-arc re-evaluation. ACCEPTED.** It scopes application rather than content: no gate checks less than it did, and the tier is bounded by a trigger that has a worked example. Its weakness is that it depends on the trigger being honoured, which is why Decision 2 is a decision and not a note.
+
+- **(C) Keep the full loop's content but run the WALK once per milestone rather than per PR. REJECTED, and this is the rejection worth reading.** It is superficially the bigger saving and it attacks the wrong thing. **The walk is the only instrument that has ever caught our user-visible defects** — on SELF-325 it caught all of them and the suite caught none, while confirming the defects three separate ways. Walking per milestone blinds that instrument across the whole span in which a defect is cheapest to fix, and concentrates the finding at the point where the arc is longest and the fix most entangled. **The measured value of an instrument is an argument for keeping it per-PR, not for amortising it.** C also fails the SELF-258 test: a mid-arc scope change would have had no walk between it and the milestone boundary.
+
+### Consequences
+
+- **[`WORKFLOW.md`](WORKFLOW.md) Phase 6 *Gates* gains the operational spec** — the qualification predicate, what scopes down, the re-evaluation trigger, and who calls it — beside the standing walk-gate spec. This ADR holds the **why and the alternatives**; `WORKFLOW.md` holds the **operative rule**. That split is the established pattern ([ADR-063](#adr-063), [ADR-009](#adr-009) Decision 9, [ADR-017](#adr-017)) and it exists because **nobody consults an ADR at the instant they are about to dispatch an issue.**
+- **No gate's content changes.** Anything that reads this ADR as relaxing a check is misreading it: it relaxes **scope of application** on a bounded class, and enumerates what it does not touch precisely so that the difference is checkable.
+- **Not a one-way door.** A process default with no data, no schema and no migration; reversible by ratifying its removal. F/CTO decided at normal pace on that basis.
+- **Ledgers untouched — stated because "doc-only" is not itself an argument.** This ADR authors no DDL, no function, no column and no policy. §10 catalogued-instance ledger **unchanged** ([ADR-011](#adr-011) Decision 4 read verbatim and live before drafting, 2026-09-03; three axes clean — nothing appended, reordered or renumbered, no layer re-attributed, no surface becomes "four-layer"; Path B, no count carried). ⚠ The §10 **catalogued** set and the **CI-fenced** set remain different sets and are not reconciled here. SECURITY DEFINER allowlist **unchanged** ([ADR-011](#adr-011) Decision 9 — read live). [ADR-011](#adr-011) Decision 3 cross-tenant FK-bypass family **flat**.
+- **⚠ A scoped measurement that should be checked before option A's tooling is sized, recorded here because it bears on this ADR's own premise.** A raw `psql` apply of the full migration chain onto an already-prepared scratch database was measured at **3 seconds** (2026-09-03, local stack, 99 files), against **under a second** for a `CREATE DATABASE … TEMPLATE` clone of the same state. That measurement is **narrow** — it excludes the local-stack reset path, container restarts, `auth`/`vault` preparation, CI, and fixture construction, any of which may be where the sitting's observed cost actually sits. It is **not** a refutation of option A's premise; it is a reason to **measure which step is the sink before building tooling for it**, since the step named in the ratification is cheap in at least one common configuration. Routed to DevOps rather than acted on here.
+
+**Cross-references.** [`WORKFLOW.md`](WORKFLOW.md) Phase 6 *Gates* (the operative spec, incl. the standing live walk-through gate this tier scopes) · [ADR-063](#adr-063) (the four V1.3 process protocols — **Decision item 3** default-and-notify and **Decision item 4** walk-before-Sec; ⚠ ADR-063 numbers its protocols as items **inside a single `### Decision` block**, so *"ADR-063 Decision 3"* is not a well-formed pointer to it) · [ADR-009](#adr-009) Decision 9 + [ADR-017](#adr-017) (the DECISIONS-holds-the-why / WORKFLOW-holds-the-rule split this follows) · [ADR-011](#adr-011) Decisions 1–4 + Decision 9 (the ratified joint-review map that clause (c) points at — read live, never copied) · PR #538 (the SELF-325 walk catch record, the evidence base for rejecting option C) · SELF-258 and migration `099` (the worked example of Decision 2 firing) · SELF-325 (the purchase-path arc).
+
+---
+
 ## ADR-065 — The month anchor is the month-end STRICTLY BEFORE today: a self-comparison forced a $0 delta on every month-end day, and this is the anchor rule's first canonical home (terse pattern)
 
 **Date:** 2026-08-30 · **Status:** **Accepted** — F/CTO ratified 2026-08-30 (SELF-344 sitting), **Option C** of three. **Sec joint-review is the merge gate** (financial calculation on a multi-tenant read path). · **Phase:** 6 Build Loop · **Surface:** `pfin.fn_nav_delta_panel` (live text issued by `072`) and `pfin.fn_nav_reference_dates` (`073`) — the PRD [§2.1.3](docs/PRD/index.html#story-2-1-3) delta panel and the [§2.1.4](docs/PRD/index.html#story-2-1-4) levels table. **Source:** Linear SELF-344, opened on a QA reproduction; migration `097`.
