@@ -2,6 +2,10 @@
 
 **Baseline.** `origin/main` at `2cd94aebd034fbad43ef2401821a860679e72d6b` (detached read in the architect worktree). Migrations `001`–`099` on the tree. Every schema identifier below was grepped or read in-file at this sha; no count or identifier is carried from recall.
 
+⚠ **`origin/main` has since moved to `7818504` and the baseline is deliberately NOT advanced.** Measured rather than assumed: `git diff --numstat 2cd94ae origin/main` touches **ten files, all `.claude/agents/*.md`, one deleted line each** (PRs #599 / #600 — a liaison md5 recipe and a `permissionMode` un-pin). No migration, no `api/` source, no doc artifact. Every finding below is therefore as true at `7818504` as at `2cd94ae`. **Round 2 (2026-09-03) keeps `2cd94ae`** so that round-1 and round-2 blocks carry one baseline rather than two — a two-baseline record is how a reader ends up checking half the claims against the wrong tree.
+
+**Round 2 inputs.** PM's findings at `origin/meta/v14-preflight-pm` @ `b462816` (`docs/records/v14-preflight/pm-findings.md`) · Sec pass 2 at `origin/meta/v14-preflight-sec` @ `3eb0554`. PM and Sec items are cited by their own ids (`A-n`, `M-n`, `D-n`, `F-n`) and **never restated** — a paraphrase is a second copy that drifts independently.
+
 **Standing.** This pass is the [ADR-063](../../../DECISIONS.md#adr-063) Decision 1 discharge for the V1.4 milestone — the pre-flight recalibration pass run before the first build dispatch, not during it. It is also the second application of BACKLOG §7.19 AC 3 at a milestone-rotation boundary.
 
 **§10 3-axis cross-check** — performed against [ADR-011](../../../DECISIONS.md#adr-011) Decision 4 read verbatim and live before drafting. This memo introduces no catalogued instance, reorders none, changes no layer-attribution, and restates the catalogued list nowhere (Path B — referenced, not copied). No ledger change; not a §10 Sec trigger. ⚠ The §10 CATALOGUED set and the CI-FENCED set (`grep -rhoE 'RT-[0-9]{2}' .github/workflows/`) are different sets and are **not** reconciled anywhere below; the CI set is strictly larger and that difference is deliberate.
@@ -211,7 +215,34 @@ Both reference `pfin.tax_character (code)` `on delete restrict` — the global s
 
 **Consuming issues:** the §2.5.4 NAV-component issue · the §2.5.3 issue (Realized is a sum of its two gaps) · any issue touching 211/225/226 as-shipped · the QA battery.
 
-**Routing:** Sec joint-review **mandatory** · F/CTO — one-way door · QA — the battery extends · Frontend — part 3 is theirs and it is the silent one.
+**Routing:** Sec joint-review **mandatory** · F/CTO — one-way door · QA — the battery extends · Frontend — part 3 is theirs and it is the silent one. ⚠ Sec's **D-4** reaches the same conclusion about AC 4 from the write-refusal side and is *"veto-shaped if taken literally."* Two independent routes to one ruling.
+
+---
+
+#### Seam E-2 — the tax-authority ledgers double-count each payment in NAV (PM's **A-9**, arithmetic verified) — **folded into E rather than standing alone, and the fold is the finding**
+
+**Credit and verification.** PM found this (`pm-findings.md` A-9) and routed the arithmetic to me. **Verified against `051` at `2cd94ae`, and it holds.**
+
+`051`'s `sums` CTE runs over *"the FULL active-account leaf set"* — three `filter`ed sums over every active account's `049` row, with **no exclusion hook of any kind**. So a manual IRS or FTB account lands in `total_non_re` like any other depository account. Trace one payment **P**:
+
+| | Gross | Realized Tax Liab | NAV |
+|---|---|---|---|
+| before | *G* | *R* | *G − R − U* |
+| cash leaves checking | *G − P* | *R* | |
+| cash lands in the IRS ledger (an active account, so it counts) | *G* | *R* | |
+| the payment reduces the obligation net-of-payments (§2.5.4) | *G* | *R − P* | *G − R + P − U* |
+
+**NAV moves by +P for money that is gone.** The economically correct answer is *unchanged* — paying tax converts an asset into the extinction of a liability — and PM's **Option (A)** (exclude tax-authority-designated accounts from the buildup) delivers exactly that: Gross falls by *P*, the liability falls by *P*, NAV is flat.
+
+**⚠ Why this is folded into Seam E instead of being ruled on its own — this is the load-bearing half.** The exclusion cannot be applied to `051` alone. `051`'s own comment states the identity it maintains: `nav = … = Σ 049(active) = fn_compute_nav(p_as_of, true)`. Dropping accounts from `051`'s leaf set **breaks that identity**, which diverges §2.1.5's NAV from `fn_compute_nav` and therefore from the append-only `nav_daily` series — **which is Seam E's one-way door, reached from a second direction.** A-9 and Seam E are one structural question: *does §2.1.5's NAV diverge from the checkpointed NAV, and if so, permanently and by construction, or reconciled?* Ruling them separately is how one gets an exclusion in `051`, no exclusion in `050`, and a silent divergence nobody decided on.
+
+⚠ **It is also NOT a live defect today, and saying so precisely matters**: while both tax literals are `0::numeric`, the payment merely moves between two counted accounts and NAV is flat. **The double-count is created by SELF-268**, not revealed by it. So it cannot be deferred past SELF-268 as pre-existing.
+
+**PM's Option (B)** (keep the ledgers in the buildup, make Realized a **gross** obligation) is the one branch that preserves `051`'s identity with `fn_compute_nav` untouched — a real architectural advantage PM does not claim for it — but it amends the §2.5.4 (ρ) lock and re-reads (ν-1)'s overpayment rendering. **Option (C)** (accept it) overstates NAV by exactly YTD Paid and is rejected on its face by PM and by me.
+
+**Architect's position:** PM's **(A)**, ruled **together with Seam E** in one decision, with the exclusion predicate written **once** — `tax_jurisdiction is not null` — and applied wherever the leaf set is composed. ⚠ Under (A), the `account_type` chosen for a tax-authority ledger stops mattering to NAV, which removes the only reason to care that `003`'s vocabulary has no tax member.
+
+**Consuming issues:** SELF-268 · SELF-267 (the designation is the exclusion hook) · SELF-266 · the QA battery.
 
 ---
 
@@ -249,7 +280,11 @@ Stated once because §2.5.1 and §2.5.3 both consume all three, and ARCH §9 lea
 - **§1256 60/40 — buildable, the seed row exists.** `041` seeds `('asset','Alternatives','Volatility-60/40', …, 'IRS Section 1256 contract on Index/ForEx/Commodity')`. The mechanism is PRD's user-classification-at-the-Sub-Cat-level, and it is present. ⚠ **Identifier drift in the PRD, not in the tree:** §2.5.1's worked example writes *"US-Index_Non_Sector"* while `041` seeds `US-Index-Non_Sector` (hyphen, not underscore, after `Index`), and §2.5.1 names the parent Cat *"Marketable Securities"*, which is correct **only post-`082`** — `041` seeds it as `Equity` and `082` renames it. An AC copying the PRD's spelling will not match a row.
 - ⚠ **Wash sale — SCHEMA-IMPOSSIBLE AS WRITTEN, and the search was widened before concluding so.** PRD §2.5.1 requires a *"user-marked wash-sale flag **on the underlying sale transaction**"* whose disallowed-loss amount is excluded from the ST/LT column. There is **no such flag**. `git grep -n -i 'wash_sale\|wash-sale' 2cd94ae -- supabase/migrations/ api/src` returns hits only as a **`basis_adjust` metadata `reason`** value — a member of `{depreciation, return_of_capital, wash_sale}` on a *separate transaction type* (`030`, `034`), and `035`'s P7 routes it to **Suspense** with the comment *"P&L deferral not yet specified."* Per ADR-063 Decision 1's widen-the-search rule, this is the widened result and it is **not** the AC's mechanism under a different name: it is a different transaction, at a different grain, whose P&L treatment is explicitly unspecified. This is a PRD-vs-tree conflict, and it routes to PM and F/CTO — it is a product question about which mechanism V1 ships, not an implementation detail.
 
-**Consuming issues:** the §2.5.1 decomposition issue · the §2.5.3 computation issue · the §2.5.1 QA legs.
+**⚠ Round-2 update — PM has drafted the option set as its "seam W", and Seam J changes which option is cheap.** PM's `pm-findings.md` §5 states three options and I do not restate them; the architectural reading is that **Seam J makes PM's (A) nearly free**: there is no sale to mark a wash-sale flag on, so *"V1.4 ships no wash-sale adjustment"* costs the milestone nothing it could otherwise have had. PM's (B) — adopt the `basis_adjust` route as V1's mechanism — is the coherent V1.x path and is the one that makes **SELF-302** §2.5-relevant rather than pure GL-completion work; it is also the one ADR-031 Decision 4 supports, since an economic adjustment is a new dated transaction. PM's (C) is rejected by both of us on the same ground: it would be built against nothing.
+
+⚠ **One consequence that belongs to me rather than to PM: whichever way W is ruled, SELF-269's AC 8 retargets.** Under (A) the leg is struck; under (B) it points at the `034` / `035` `basis_adjust` surfaces, **not** at an annotation column. Sec's **D-5** independently reaches the same conclusion and adds the detail that a leg written against a *guessed* table name is unreviewable.
+
+**Consuming issues:** the §2.5.1 decomposition issue · the §2.5.3 computation issue · the §2.5.1 QA legs · SELF-269 AC 8 · SELF-302's placement (Seam I).
 
 **Routing:** PM + F/CTO on the wash-sale conflict · Sec joint-review on the §2.5.1 reader (financial calculation + multi-tenant read composition).
 
@@ -286,6 +321,37 @@ The brief asked whether 302/303 move any §2.5 figure. **Both do, by different r
 **Consuming issues:** SELF-302 · SELF-303 · SELF-262 (out-of-milestone) · the §2.5.1 and §2.5.4 issues.
 
 **Routing:** F/CTO — sequencing · Sec joint-review — both are money-flow migrations and both issues already say so.
+
+---
+
+### Seam J — §2.5.1's TWO capital-gain columns have no V1 input path at all (PM's §6 item 1, measured and sharpened)
+
+**⚠ This is the largest finding of either round, and it is PM's.** Verified independently against the tree at `2cd94ae`, with one correction to PM's wording that makes the state worse rather than better.
+
+**Measured, three commands, three zeros:**
+- **No sale writer.** `088`'s `fn_create_manual_purchase` rejects `p_quantity <= 0` (line 566) and its own `comment on function` states the row shape is *"forced by the GL"* with `quantity > 0`. `api/src/lib/server/queries/transactions.ts` line 619 says it in its own words: *"NO delete, NO skip, NO sell path, NO basis_adjust writer."*
+- **No `lot_match` writer anywhere.** `git grep -n 'insert into pfin.lot_match' 2cd94ae` over `supabase/migrations/` → **zero**; the same search over `api/src` → **zero**. Not one row can be created by any route.
+- Consequently **no pairing, no holding period, and no realized capital gain** exists or can exist in V1 as the tree stands.
+
+⚠ **The correction to PM's wording, and it is not pedantry.** PM writes that `lot_match` is *"write-dormant until M4-GL."* It is **not dormant — `036` write-ENABLED it**, and refreshed the table comment from `WRITE-DORMANT` to `WRITE-ENABLED` precisely to say so. What `036` deliberately did **not** ship is named in its own header: *"NOT deferred to 037: the FIFO/specific-lot matching INFERENCE + selection UI."* So the table's grants and policies advertise a live write surface **that nothing can reach.** *Write-dormant* describes a surface deliberately closed; *write-enabled and unreachable* describes one that looks open and is not — and it is the second that misleads a reader checking whether the capability exists.
+
+**What this does to the milestone, stated as consequences rather than alarm:**
+
+1. **SELF-264's ST CG and LT CG columns render `0.00` for every Sub-Cat, in every tax year, with no error** — indistinguishable from *"you realized no gains."* That is the silent-zero failure this project has booked before.
+2. **Seam G's holding-period determination is correct and has no rows to run on.** It stays as authored, unexercised.
+3. ⚠ **Sec's M-1 and F-2 have no V1 instance.** F-2 asks what an *unmatched sell* does; there are no sells, matched or unmatched. **F-2 is a V1.x question, not a V1.4 blocker** — worth stating at the sitting so a ruling is not spent on an empty set. It must still be ruled *before the sale writer ships*, and that is a different milestone's gate.
+4. **§2.5.3's Federal LT-CG bracket walk is not dead code**, and PM's note on this is right: step 4 sums the LT CG column **plus `qualified_dividend`-tagged Ordinary contributions**, and `041` seeds `Revenue / Dividend` as `qualified_dividend`. The LT schedule runs on dividends alone.
+
+**Options — F/CTO, and this is a milestone-shape question, not an AC fix.** PM states them at §6 item 1 and I do not restate the set; my architectural read of the two live ones:
+
+- **PM's (A) — ship §2.5.1 with the CG section rendering UNAVAILABLE-with-a-reason.** ⚠ The predicate needs care and it is mine to specify: *"no `lot_match` rows for the tax year"* and *"no sale rows exist at all"* are **two different facts**, and only the second is true-by-construction today. Render on the **structural** fact (no sale writer exists), because the row-count predicate will read as *"you had no gains"* the day the writer lands and the first user has a quiet quarter. One banner, keyed to the capability, not to the data.
+- **PM's (B) — pull the manual-sale writer plus `lot_match` activation into V1.4.** It imports an M4-GL substrate project — FIFO-vs-specific-lot is a **ratified one-way door** — into a tax milestone. My position matches PM's: **(A)**, with (B)'s milestone named so the window has a closing date.
+
+**Architect's position:** **(A)**, and I would go further on one point — the UNAVAILABLE reason should name the capability that is missing, not the milestone that will add it, because milestone names move and capabilities do not.
+
+**Consuming issues:** SELF-264 (the CG section) · SELF-266 (LT-CG walk basis) · SELF-269 (a battery leg over an empty set is vacuous — see §4) · Seam G · Sec F-2.
+
+**Routing:** F/CTO + PM — milestone shape.
 
 ---
 
@@ -460,3 +526,23 @@ Both issue texts are short, accurate about the tree, and correctly self-identify
 **The one ordering choice that is not forced, stated as such.** Placing SELF-268 *after* the read surfaces (step 9, not step 7) is a judgment call, not a dependency. The argument for it: SELF-268 changes the value of NAV on surfaces that have shipped and been walked for three milestones, and doing that **after** a human has driven the tax numbers themselves means a wrong figure is caught where it is legible rather than where it is one row in a buildup ladder. The argument against: it puts the milestone's most delicate change last-but-one, next to the close-gate. **F/CTO may reasonably invert it**; recorded so the choice is visible rather than inherited.
 
 **Not scheduled here, and deliberately.** The four Platform V1.x issues appear in this order because V1.4 cannot ship without them, **not** because this pass has authority over another milestone's sequencing. If they are dispatched from Platform on a different cadence, steps 6–10 stall and the stall will look like a V1.4 problem.
+
+---
+
+## 6. Answers to PM's §7 routing (round 2)
+
+PM routed seven items to Architect. Answered here so they do not each become a sitting item; the two that are genuinely F/CTO's are marked as such.
+
+1. **A-9 arithmetic vs `051` — VERIFIED, and it folds into Seam E.** Worked at Seam E-2 above with the per-step table. The fold is not a filing convenience: applying the exclusion to `051` alone breaks the `nav = Σ 049(active) = fn_compute_nav` identity that `051` asserts in its own comment, which *is* Seam E's door.
+
+2. **The designation column's shape — and a NAME CONFLICT that must not survive the sitting.** ⚠ PM writes `tax_authority`; SELF-267's AC and the Gate B ratify at `CHANGELOG.md`:1550 both write **`tax_jurisdiction`**. Two names for one column across two pre-flight artifacts is exactly how a migration and its consumer diverge. **Schema wording governs: the column is `tax_jurisdiction`**, the type `pfin.tax_jurisdiction_enum` with values `irs` / `ftb`. *"Tax authority"* is good **product** vocabulary and PM's user-facing copy should keep it — the two need not match, but the schema name must be single. Shape: nullable, no DEFAULT, with `comment on column` stating that NULL means *"not a tax-authority ledger"* and not *"unknown"*; plus PM's and Sec's partial unique index, `unique (users_id, tax_jurisdiction) where tax_jurisdiction is not null`. **Not FK-shaped → no Decision 3 obligation** (stated per column per `085`'s rule).
+
+3. **`fn_create_manual_account`'s parameter list — a change is owed, and PM's framing under-states which function.** ⚠ The live body is **`087`**, not `013` — the function has been replaced twice (`013` → `048` → `087`) and `013` still names the `sub_cat_id` that `048` dropped. `087`'s INSERT list is `(name, account_type, scope, tax_treatment)`. If the designation is set on the §2.4.2 creation form (PM's A-8), `087` gains a parameter and its column list gains `tax_jurisdiction`. ⚠ **A parameter addition is a signature change**, which breaks other files' `regprocedure` assertions — the same hazard weighed at Seam F. **Recommendation: do not add the parameter.** Set the designation by a **subsequent UPDATE** on the created account, under the ordinary `authenticated` RLS policy, exactly as every other editable account attribute is set. The creation form can still present the field; the write is one extra statement, not a signature change on a function five other surfaces assert against.
+
+4. **Seam E "A′" feasibility — YES, and this is the answer that makes Option A cheap.** PM asks whether the §2.1.5 foot can read one composed value **without touching `fn_compute_nav`'s body**. It can, and nothing new is needed: `fn_compute_nav` stays the **gross** definition and keeps writing `nav_daily`; `051` composes `fn_compute_nav`'s value with `fn_compute_tax_liability`'s two scalars **at read time** and emits the tax-adjusted foot. That is Lock 11 read-composition doing exactly what it is for. ⚠ **Two riders.** (i) The tax-authority exclusion (Seam E-2) still has to land somewhere, and under this shape it lands in **`051`'s leaf set only**, which means `051`'s Gross and `fn_compute_nav` deliberately differ — **that divergence must be stated in `051`'s `comment on function`, because the current comment asserts the identity that this breaks.** (ii) The two functions must be called with **the same as-of date in the same request**, or the foot reconciles to nothing; thread one `fn_server_today()` value (Seam C).
+
+5. **`fn_compute_tax_liability`'s signature (SELF-262) — Part B.** Drafted with the 259–262 blocks. It is the milestone's keystone and 264 / 266 / 268 all cite it provisionally; a signature guessed here and drafted differently there is the drift this pass exists to prevent, so it is authored **once**, in SELF-262's block, and cited everywhere else.
+
+6. **Tax Balance Prior Year's home — PM's (iv) recommendation is sound and I confirm the placement.** A nullable scalar on the **schedule** row (per jurisdiction, per `tax_year`), user-entered at rollover on the same cadence as the brackets, rendered `—` when unset. It belongs on the schedule rather than in a fifth settings table because it is a per-jurisdiction-per-year fact with exactly the same lifecycle as the brackets beside it, and Lock 14's *"no JSONB blobs"* fence plus Decision 18's `tax_year SMALLINT` make the schedule row the natural carrier. ⚠ It is **informational only** per the μ-2 lock and **must not** enter the computation — a nullable numeric sitting next to the standard deduction is one `coalesce` away from being summed, so the `comment on column` says so.
+
+7. **The CG-section UNAVAILABLE predicate — answered at Seam J**, and the answer is that PM's two candidate facts are not interchangeable: render on the **structural** fact (no sale writer exists), never on the row-count fact (`lot_match` empty for the year), because the row-count predicate silently becomes *"you had no gains"* the day the writer lands.
