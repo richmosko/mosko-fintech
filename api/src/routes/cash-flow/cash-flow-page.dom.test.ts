@@ -12,6 +12,7 @@ import { render } from '@testing-library/svelte';
 import CashFlowPage from './+page.svelte';
 import type { CashflowCrossAccountRollup } from '$lib/cashflow-rollup';
 import { UNKNOWN_STALENESS } from '$lib/staleness/stale-constituent';
+import { EMPTY_CASHFLOW_ROW_STALENESS_MAP } from '$lib/cashflow-row-staleness';
 
 // Same merged-PageData discipline as us-equity-page.dom.test.ts: the root +layout.server.ts
 // contributes fields this page's own +page.server.ts doesn't itself produce, but svelte-check
@@ -23,17 +24,19 @@ import { UNKNOWN_STALENESS } from '$lib/staleness/stale-constituent';
 // suite asserts nothing about the chart itself — that coverage lives in
 // HistoricalExpendituresChart.dom.test.ts.
 //
-// SELF-258: `staleness` is likewise this PAGE's own loader field (not the layout's) — parked here
-// as UNKNOWN_STALENESS for the identical reason. This suite asserts nothing about staleness
-// rendering itself; that coverage is the loader-level SELF-258 describe block in
-// cash-flow-loader.server.test.ts plus CashflowRollupTable's own dom test.
+// SELF-258: `staleness` / `cashflowRowStaleness` are likewise this PAGE's own loader fields (not
+// the layout's) — parked here as UNKNOWN_STALENESS / the empty map for the identical reason. This
+// suite asserts nothing about staleness rendering itself; that coverage is the loader-level
+// SELF-258 describe block in cash-flow-loader.server.test.ts plus CashflowRollupTable's own dom
+// test (which also pins the per-row AC4/AC5 marker states).
 const LAYOUT_DEFAULTS = {
 	userEmail: null,
 	pendingClassificationCount: 0,
 	connectionHealth: { reauthCount: 0, institutionDownCount: 0 },
 	historicalExpenditures: null,
 	historicalExpendituresUnclassifiedCount: null,
-	staleness: UNKNOWN_STALENESS
+	staleness: UNKNOWN_STALENESS,
+	cashflowRowStaleness: EMPTY_CASHFLOW_ROW_STALENESS_MAP
 };
 
 const EMPTY_ROLLUP: CashflowCrossAccountRollup = {

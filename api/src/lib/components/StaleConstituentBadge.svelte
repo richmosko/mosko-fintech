@@ -93,6 +93,16 @@
 	const count = $derived(staleItems.length);
 	const anyReauth = $derived(hasReauthActionable(staleItems));
 
+	// SELF-258: this component is now mounted MULTIPLE TIMES on one page (one per section on
+	// CashflowRollupTable.svelte, up to three on CashflowPerAccountTable.svelte) — a hardcoded
+	// `id="stale-constituent-list"` would collide across instances (duplicate DOM ids; an
+	// `aria-controls` pointing at whichever duplicate the browser resolves first, not necessarily
+	// THIS instance's own panel). `$props.id()` is Svelte 5's own SSR-stable per-instance id
+	// generator — the well-understood pattern for exactly this "id needed by a repeated component"
+	// case, not a hand-rolled counter/uuid.
+	const uid = $props.id();
+	const panelId = `stale-constituent-list-${uid}`;
+
 	// Accessible standing-condition summary (named on the control, per the CountBadge pattern).
 	const summary = $derived(
 		count === 1
@@ -117,7 +127,7 @@
 			type="button"
 			class="stale-tag"
 			aria-expanded={open}
-			aria-controls="stale-constituent-list"
+			aria-controls={panelId}
 			onclick={() => (open = !open)}
 		>
 			<span class="stale-dot" aria-hidden="true"></span>
@@ -125,7 +135,7 @@
 		</button>
 
 		{#if open}
-			<div id="stale-constituent-list" class="stale-panel">
+			<div id={panelId} class="stale-panel">
 				<p class="stale-panel-lead">{summary}</p>
 				<ul class="stale-list">
 					{#each staleItems as item (item.linked_source_id)}

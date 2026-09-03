@@ -49,17 +49,18 @@
 	inside their table's naming element. `.cf-section` wraps badge + `.table-scroll` per section so
 	the badge still reads as visually adjacent to "this section's own caption," per the AC.
 
-	AC4 GAP (bubble-up, not implemented in this PR): per-row (Sub-Cat) staleness marking — the
-	`.stale-tag` + `tr.stale-row` tint pattern NonReAllocationTable/UsEquityAllocationTable's
-	`AllocationRow.is_stale` / `UsEquityRow.is_stale` already ship (fed by Backend's SELF-330
-	`fn_subcat_contributors` contributor-account fold) — has NO analogous data source on this
-	payload. `CashflowSectionRow` (cashflow-rollup.ts) carries only
-	`{ sub_cat, month, q1..q4, ytd }` — no `sub_cat_id`, no contributor-account linkage of any
-	kind. Reported to team-lead rather than invented: a per-row indicator here needs a NEW
-	Backend contributor-join (cash-flow's Sub-Cat → account mapping folded through the `046`
-	stale set, analogous to SELF-330's `fn_subcat_contributors`), out of this issue's scope per
-	the dispatch brief's own instruction not to re-derive staleness client-side or invent a data
-	source.
+	AC4/AC5 (LIVE): per-row (Sub-Cat) staleness marking, via `CashflowRowStaleTag.svelte` — fed by
+	`cashflowRowStaleness: CashflowRowStalenessMap` (cash-flow-row-staleness.ts, a browser-safe
+	mirror of Backend's SELF-258 `cashflowContributors.ts` fold over Architect's `099`
+	`fn_cashflow_contributors`). Looked up per row via `lookupCashflowRowStaleness(cashflowRowStaleness,
+	section.cat, row.sub_cat)` — NEVER a bare `cashflowRowStaleness[cat]?.[sub_cat]` at the render
+	site, so the missing-key-means-UNKNOWN convention (never fresh) cannot be silently dropped here.
+	§2.3.3 does NOT get this marker — 099's own R3 ruling (team-lead default-and-notify, 2026-09-03,
+	F/CTO-reversible at PR review): every drill-down row folds from ONE account, so a per-row
+	indicator there would be provably CONSTANT and carries no information; that surface keeps its
+	existing section badge. See CashflowRowStaleTag.svelte's own module header for the render-state
+	shape (stale/unknown/fresh) and why AC5's "Re-authenticate" link is ONE combined link rather than
+	per-name (this map carries plain account names, no per-account `connection_status`).
 
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5).
 -->
@@ -71,20 +72,27 @@
 		type CashflowCrossAccountRollup
 	} from '$lib/cashflow-rollup';
 	import type { StalenessData } from '$lib/staleness/stale-constituent';
+	import {
+		lookupCashflowRowStaleness,
+		type CashflowRowStalenessMap
+	} from '$lib/cashflow-row-staleness';
 	import StaleConstituentBadge from './StaleConstituentBadge.svelte';
+	import CashflowRowStaleTag from './CashflowRowStaleTag.svelte';
 
 	// Sec F3(B)-style discipline (mirrors StaleConstituentBadge / NonReAllocationTable /
-	// UsEquityAllocationTable / NavCompositionTable): `staleness` is REQUIRED, no default — a
-	// caller that forgets to thread real data fails at TYPECHECK, not as a silent "confirmed
-	// healthy" fallback.
+	// UsEquityAllocationTable / NavCompositionTable): `staleness` / `cashflowRowStaleness` are
+	// REQUIRED, no default — a caller that forgets to thread real data fails at TYPECHECK, not as a
+	// silent "confirmed healthy" fallback.
 	let {
 		rollup,
 		staleness,
+		cashflowRowStaleness,
 		classifyHref = '/accounts',
 		editTargetsHref = '/settings/cash-flow-targets'
 	}: {
 		rollup: CashflowCrossAccountRollup;
 		staleness: StalenessData;
+		cashflowRowStaleness: CashflowRowStalenessMap;
 		/** AC9 CTA target — see the module header for why this defaults to `/accounts`. */
 		classifyHref?: string;
 		/** AC7 — routes to the SELF-252 editor, which does not exist yet; a 404 there is expected
@@ -158,8 +166,13 @@
 						</tr>
 					{/if}
 					{#each section.rows as row (row.sub_cat)}
+						{@const rowStaleness = lookupCashflowRowStaleness(cashflowRowStaleness, section.cat, row.sub_cat)}
 						<tr>
-							<td class="rowlabel">{row.sub_cat}</td>
+							<td class="rowlabel">
+								{row.sub_cat}
+								<!-- AC4/AC5: per-row D1 marker — see the module header. -->
+								<CashflowRowStaleTag {rowStaleness} />
+							</td>
 							<td class="num month">{fmtPeriodCell(row.month, usd)}</td>
 							<td class="num">{fmtPeriodCell(row.q1, usd)}</td>
 							<td class="num">{fmtPeriodCell(row.q2, usd)}</td>
