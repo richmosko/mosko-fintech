@@ -11,27 +11,41 @@ seconds instead of a full sequential apply.
 ## Why this exists (measured, not the ratification's original framing)
 
 The loop-mechanics ratification named the sequential migration apply as the
-biggest per-issue time sink across four recent arcs. **Measured step-by-step
-(2026-09-02, two independent runs, reproducible ±0.1s), that framing doesn't
-hold at the level of raw command wall-clock:** prep (auth/extensions/vault
-dump + supabase_admin load + ownership transfer) is ~0.6s; the 99-file
-sequential apply is ~4.0–4.1s; the whole sequential build is ~4.8s end to
-end. None of that is actually slow in absolute terms — a scripted, one-shot
-run of the full recipe takes under 5 seconds.
+biggest per-issue time sink across four recent arcs. That framing doesn't
+survive contact with a direct measurement, and the honest rationale has
+three parts:
 
-**So the real win here isn't raw execution time — it's collapsing the
-recipe's ~15 discrete steps (each individually documented as a gotcha in
-QA's and Architect's own memory: `docker exec -i`, load-order,
-supabase_admin-vs-postgres ownership, pgtap schema placement, the
-`--no-privileges` trap, database-name case-folding) into one fenced command
-that cannot be gotten wrong, instead of re-derived by hand each time by
-whichever agent needs a scratch DB.** The clone being under a second instead
-of ~4.8s is real and worth having, but it's the bonus, not the headline —
-uniformity and gotcha-elimination is the actual case for this tooling. See
-the design report for the full step timings and the reasoning that ruled out
-a two-layer (rarely-refreshed prep base + fresh apply per use) split: since
-apply is the dominant slice of an already-cheap total, splitting would only
-shave the ~0.6s prep portion and leave the ~4s apply cost paid on every use.
+1. **Raw migration apply is ~4s, measured.** 99 files, sequential, two
+   independent runs on 2026-09-02: 4.119s and 4.018s. Not free, but not the
+   multi-minute drag the "biggest sink" framing implies either.
+2. **Prep (auth/extensions/vault dump + supabase_admin load + ownership
+   transfer) is ~0.6s, measured** — dump 0.13s, createdb 0.05s, load 0.35s,
+   extensions 0.04s, ownership transfer 0.03s. This was the alternative
+   hypothesis (Architect's premise-check: maybe prep, not apply, was the
+   real sink) — it measured smaller than apply, not larger, so it isn't
+   either.
+3. **The dominant historical cost was neither of those — it was per-agent
+   recipe re-derivation and gotcha retries.** QA's and Architect's own
+   memory catalogs the individual traps hand-executing this recipe hits
+   (`docker exec -i` swallowing stdin silently, load-before-vs-after
+   extension-creation ordering, supabase_admin-vs-postgres ownership at the
+   wrong step, pgtap needing `public` not `extensions`, the
+   `--no-privileges` posture trap, database-name case-folding) — each one
+   independently documented as having "cost real time on first use" or "a
+   wasted retry." A scripted run of the whole recipe takes under 5 seconds
+   of computer time; an agent hand-deriving ~15 discrete steps and hitting
+   even one of those traps costs far more than that in retries and
+   round-trips.
+
+**All three are what a one-shot fenced command removes** —
+`db-template-clone.sh` has no discrete steps left to mis-order or retry, so
+gotcha cost (3) drops to zero regardless of how small (1) and (2) turned out
+to be; the sub-second clone (vs. the ~4.8s full sequential build) is then a
+real but secondary bonus, not the headline. See the design report for the
+reasoning that ruled out a two-layer (rarely-refreshed prep base + fresh
+apply per use) split: since apply (1) is the larger of the two measured
+command costs, splitting would only remove the smaller one (2) and still pay
+(1) on every use.
 
 ## The short version
 
