@@ -49,4 +49,31 @@ has an external dependency that nothing watches. Same family as
 - For any clause required on both sides of RLS, grep the battery for the **policy name** and count the legs: one hit means one side is unwatched. State the catch criterion as "RED if `<policy>`'s USING does not carry X", and remember the `plan()` bump.
 - A false statement whose *disposition* is still correct is a FLAG, not a veto — but it must be fixed **in the PR that introduces it**, because it lands in ADR text that later reviewers are instructed to read live.
 
-Related: [[a-grep-over-comments-measures-intent-not-data]] · [[verify-the-stated-correctness-mechanism]] · [[measure-the-fence-regex-not-its-comment]] · [[replacement-control-name-the-losing-side]]
+---
+
+⚠ **UPSTREAM VARIANT — grep DRAFTED ACs for bare instance NUMBERS, because that is where a retired
+label re-enters the tree.** At the V1.4 pre-flight, two drafted ACs instructed a matched-tenant
+fence *"per ADR-011 Decision 3 … (4th instance)"* and *"(5th instance)"*. Both were the retired
+Wave-5 operational grain, and the family had long since been reconciled past them.
+
+- **Reusing a DROPPED label is worse than inventing one.** `#5` was DDL-realized and then removed,
+  and the DROP resolution says in terms that it is *"retired-in-place, NOT renumbered or reused."*
+  A migration built from that AC stamps `#5` into a live `comment on function`, so the next
+  reviewer obeying the read-the-decision-live discipline finds a canonical label attached to a
+  column the canon records as deleted — the enumeration's own integrity check reports a
+  **resurrection**. An invented label reads as a mistake; a resurrected one reads as canon.
+- **Where to look:** the number is almost never in the migration at authoring time — it is
+  transcribed from an issue, a backlog entry, or a seam memo drafted against an older grain.
+  Review the AC, not just the DDL, and require the AC to say *"the next canonical label, allocated
+  at the migration"* and **name no number**. Do not name one myself either.
+- **The fold-in rule is the other half:** the label is allocated and folded into the canonical
+  enumeration **in the PR that DDL-realizes it**, never at a later reconciliation — a migration
+  asserting a label whose canon does not yet contain it is a forward reference to a document it
+  does not control.
+- **A drafted fence can also be UNFALSIFIABLE.** In the same pass one AC instructed a
+  matched-tenant trigger on a child table whose FK **is** its only tenant anchor — nothing to
+  compare, so the fence cannot fail. Check that a proposed fence has two facts that can disagree
+  before agreeing it is owed; a leg that cannot fail entering a canonical enumeration is worse
+  than no leg.
+
+Related: [[a-grep-over-comments-measures-intent-not-data]] · [[verify-the-stated-correctness-mechanism]] · [[measure-the-fence-regex-not-its-comment]] · [[replacement-control-name-the-losing-side]] · [[pm-draft-ac-vs-schema]]

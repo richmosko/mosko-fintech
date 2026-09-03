@@ -1,6 +1,6 @@
 ---
 name: two-functions-two-partitions-axis-mismatch
-description: When an AC or invariant equates figures from two functions, check that both partition the portfolio on the SAME axis — an account_type filter and a taxonomy-cat filter look interchangeable and are not; measure prosrc, don't read the header.
+description: When an AC or invariant equates figures from two functions, check that both partition the portfolio on the SAME axis — an account_type filter and a taxonomy-cat filter look interchangeable and are not; measure prosrc, don't read the header. Also: before flagging a NULL enum as a routing gap, find which field the CONSUMER actually branches on.
 metadata:
   type: feedback
 ---
@@ -38,3 +38,23 @@ two partitions of the same portfolio, not an edge case.**
 - **"Not live-verified" can be the correct call.** Backend declined to build a footing fixture; a
   fixture for an unprovable identity yields either a green on a hand-picked tenant or a red nobody
   can interpret. Do not treat a missing test as a gap until the claim it would test is known true.
+
+---
+
+⚠ **VARIANT — the ROUTING axis. A NULL in a lookup column is only a gap if the consumer branches
+on that column. Read the consumer's steps before calling it one.** At the V1.4 pre-flight I flagged
+`tax_character = NULL` on the two `tax_relevant = true` Trade seed rows as an undefined
+bracket-routing gap, reasoning from the PRD's *enum → schedule* routing TABLE, which has no NULL
+row. Wrong: the consuming computation's own numbered steps sum **by column** (Ordinary / ST CG /
+LT CG) and consult the enum only *within* the Ordinary column — so a NULL on a Trade row is
+coherent by design, and the seed row's own note said so. **The routing table looked like the
+discriminator and was one only for a subset of rows.**
+
+- **The tell:** a lookup table and a step-by-step procedure describing the same routing. The table
+  reads as total; the procedure is where the actual branch lives. **Read the procedure.**
+- **The corrected finding was elsewhere and sharper:** the column placement depended on a
+  **holding period** that an explicitly-sanctioned state (an unmatched sell) does not have. The
+  first framing pointed at a table that was fine; the second at a state the tree itself blesses.
+  **A refuted flag often has a real sibling one layer down — look before dropping it.**
+- **Cost of getting this wrong in an interim message:** it ships as a finding before the retraction
+  does. Name it in §-form in the same document as the findings, per the standing rule.
