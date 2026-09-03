@@ -25,8 +25,16 @@
 	re-navigation this page performs (the as-of toggle, the account picker) builds off
 	`new URL(page.url)` and therefore preserves it automatically.
 
-	AC9 / SELF-258: no staleness marker wired — CashflowPerAccountTable.svelte's own seam comment
-	is the one home for that note.
+	AC9 / SELF-258 (LIVE): the `StaleConstituentBadge` mount + its USER-WIDE ruling live entirely
+	inside CashflowPerAccountTable.svelte — this page threads the SAME whole-tenant `staleness`
+	prop down, no re-derivation, no second read.
+
+	LOADER CONTRACT (SELF-258, LANDED at 8440a24 — superseding this header's earlier "not yet
+	landed" note): `data.staleness: StalenessData`, one `loadStaleness()` call threaded through
+	unchanged (+page.server.ts's own module header). `?? UNKNOWN_STALENESS` below stays as a
+	defensive fallback (never `EMPTY_STALENESS` — D1 never silently-fresh), matching the same
+	null-tolerant discipline every other prop-driven consumer in this tree applies at its own
+	boundary, not because the loader can omit the field.
 
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5).
 -->
@@ -37,9 +45,13 @@
 	import CashflowAccountPicker from '$lib/components/CashflowAccountPicker.svelte';
 	import { closedAtLabel } from '$lib/account-display';
 	import { perAccountHasNoRows, renderedYear } from '$lib/cashflow-per-account';
+	import { UNKNOWN_STALENESS } from '$lib/staleness/stale-constituent';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
+
+	// SELF-258: see the module header's LOADER CONTRACT note.
+	const staleness = $derived(data.staleness ?? UNKNOWN_STALENESS);
 
 	const accountIdParam = $derived(page.params.account_id);
 	const currentAccountId = $derived(Number(accountIdParam));
@@ -116,6 +128,7 @@
 	{:else}
 		<CashflowPerAccountTable
 			drilldown={data.drilldown}
+			{staleness}
 			classifyHref={`/accounts/${data.drilldown.account_id}`}
 			otherCashFlowsNote={data.otherCashFlowsNote}
 		/>

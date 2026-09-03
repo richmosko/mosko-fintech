@@ -9,7 +9,9 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect } from 'vitest';
-import { render, within } from '@testing-library/svelte';
+import { render, within, fireEvent } from '@testing-library/svelte';
+import { EMPTY_STALENESS } from '$lib/staleness/stale-constituent';
+import { EMPTY_CASHFLOW_ROW_STALENESS_MAP } from '$lib/cashflow-row-staleness';
 import CashflowRollupTable from './CashflowRollupTable.svelte';
 import type { CashflowCrossAccountRollup, CashflowSection } from '$lib/cashflow-rollup';
 
@@ -49,7 +51,7 @@ const FIXTURE: CashflowCrossAccountRollup = {
 
 describe('CashflowRollupTable — AC1: two sections rendered Income then Expenses', () => {
 	it('renders Income before Expenses as table captions, nothing else', () => {
-		const { getAllByRole } = render(CashflowRollupTable, { props: { rollup: FIXTURE } });
+		const { getAllByRole } = render(CashflowRollupTable, { props: { rollup: FIXTURE, staleness: EMPTY_STALENESS, cashflowRowStaleness: EMPTY_CASHFLOW_ROW_STALENESS_MAP } });
 		const tables = getAllByRole('table');
 		expect(tables).toHaveLength(2);
 		expect(within(tables[0]).getByText('Income')).toBeTruthy();
@@ -59,7 +61,7 @@ describe('CashflowRollupTable — AC1: two sections rendered Income then Expense
 
 describe('CashflowRollupTable — AC2: section header caption + NULL-target suppression', () => {
 	it('renders the target caption when a target is set', () => {
-		const { getByText } = render(CashflowRollupTable, { props: { rollup: FIXTURE } });
+		const { getByText } = render(CashflowRollupTable, { props: { rollup: FIXTURE, staleness: EMPTY_STALENESS, cashflowRowStaleness: EMPTY_CASHFLOW_ROW_STALENESS_MAP } });
 		expect(getByText('Target $60,000/yr')).toBeTruthy();
 		expect(getByText('Target $2,200/mo')).toBeTruthy();
 	});
@@ -69,7 +71,7 @@ describe('CashflowRollupTable — AC2: section header caption + NULL-target supp
 			...FIXTURE,
 			targets: { income_target_annual: null, expense_target_monthly: null }
 		};
-		const { queryByText } = render(CashflowRollupTable, { props: { rollup: nullTargets } });
+		const { queryByText } = render(CashflowRollupTable, { props: { rollup: nullTargets, staleness: EMPTY_STALENESS, cashflowRowStaleness: EMPTY_CASHFLOW_ROW_STALENESS_MAP } });
 		expect(queryByText(/Target/)).toBeNull();
 	});
 
@@ -78,7 +80,7 @@ describe('CashflowRollupTable — AC2: section header caption + NULL-target supp
 			...FIXTURE,
 			targets: { income_target_annual: 0, expense_target_monthly: null }
 		};
-		const { getByText, queryByText } = render(CashflowRollupTable, { props: { rollup: zeroTarget } });
+		const { getByText, queryByText } = render(CashflowRollupTable, { props: { rollup: zeroTarget, staleness: EMPTY_STALENESS, cashflowRowStaleness: EMPTY_CASHFLOW_ROW_STALENESS_MAP } });
 		expect(getByText('Target $0/yr')).toBeTruthy();
 		expect(queryByText(/\/mo/)).toBeNull();
 	});
@@ -86,13 +88,13 @@ describe('CashflowRollupTable — AC2: section header caption + NULL-target supp
 
 describe('CashflowRollupTable — AC3: flat Sub-Cat rows, no Cat-group headers/subtotals', () => {
 	it('renders exactly one header row (columnheader group) per section — no colgroup/group-header row', () => {
-		const { getAllByRole } = render(CashflowRollupTable, { props: { rollup: FIXTURE } });
+		const { getAllByRole } = render(CashflowRollupTable, { props: { rollup: FIXTURE, staleness: EMPTY_STALENESS, cashflowRowStaleness: EMPTY_CASHFLOW_ROW_STALENESS_MAP } });
 		// 7 columns × 2 sections = 14 columnheaders; no extra colspanned group-header row exists.
 		expect(getAllByRole('columnheader')).toHaveLength(14);
 	});
 
 	it('Sub-Cat rows render directly, no wrapping group row', () => {
-		const { getByText } = render(CashflowRollupTable, { props: { rollup: FIXTURE } });
+		const { getByText } = render(CashflowRollupTable, { props: { rollup: FIXTURE, staleness: EMPTY_STALENESS, cashflowRowStaleness: EMPTY_CASHFLOW_ROW_STALENESS_MAP } });
 		expect(getByText('Salary')).toBeTruthy();
 		expect(getByText('Rent')).toBeTruthy();
 	});
@@ -100,14 +102,14 @@ describe('CashflowRollupTable — AC3: flat Sub-Cat rows, no Cat-group headers/s
 
 describe('CashflowRollupTable — AC4: six period columns, Month visually emphasized', () => {
 	it('renders Month, Q1, Q2, Q3, Q4, YTD column headers in order', () => {
-		const { getAllByRole } = render(CashflowRollupTable, { props: { rollup: FIXTURE } });
+		const { getAllByRole } = render(CashflowRollupTable, { props: { rollup: FIXTURE, staleness: EMPTY_STALENESS, cashflowRowStaleness: EMPTY_CASHFLOW_ROW_STALENESS_MAP } });
 		const table = getAllByRole('table')[0];
 		const headers = within(table).getAllByRole('columnheader').map((h) => h.textContent?.trim());
 		expect(headers).toEqual(['Sub-Cat', 'Month', 'Q1', 'Q2', 'Q3', 'Q4', 'YTD']);
 	});
 
 	it('the Month header and Month data cells carry the `.month` emphasis class', () => {
-		const { getAllByRole, getByText } = render(CashflowRollupTable, { props: { rollup: FIXTURE } });
+		const { getAllByRole, getByText } = render(CashflowRollupTable, { props: { rollup: FIXTURE, staleness: EMPTY_STALENESS, cashflowRowStaleness: EMPTY_CASHFLOW_ROW_STALENESS_MAP } });
 		const monthHeader = getAllByRole('columnheader', { name: 'Month' })[0];
 		expect(monthHeader.classList.contains('month')).toBe(true);
 
@@ -119,7 +121,7 @@ describe('CashflowRollupTable — AC4: six period columns, Month visually emphas
 
 describe('CashflowRollupTable — AC5: Total row sums DOWN each column only (rendered as-is, never re-summed)', () => {
 	it('the Total row for Income renders the server-supplied total, not a client re-sum', () => {
-		const { getAllByRole } = render(CashflowRollupTable, { props: { rollup: FIXTURE } });
+		const { getAllByRole } = render(CashflowRollupTable, { props: { rollup: FIXTURE, staleness: EMPTY_STALENESS, cashflowRowStaleness: EMPTY_CASHFLOW_ROW_STALENESS_MAP } });
 		const totalRow = getAllByRole('row', { name: /Total/ })[0];
 		const cells = within(totalRow).getAllByRole('cell');
 		// [Month, Q1, Q2, Q3, Q4, YTD]
@@ -150,7 +152,7 @@ describe('CashflowRollupTable — AC5: Total row sums DOWN each column only (ren
 				})
 			]
 		};
-		const { getAllByRole } = render(CashflowRollupTable, { props: { rollup: mismatched } });
+		const { getAllByRole } = render(CashflowRollupTable, { props: { rollup: mismatched, staleness: EMPTY_STALENESS, cashflowRowStaleness: EMPTY_CASHFLOW_ROW_STALENESS_MAP } });
 		const totalRow = getAllByRole('row', { name: /Total/ })[0];
 		const cells = within(totalRow).getAllByRole('cell');
 		expect(cells[0].textContent).toContain('$999');
@@ -160,7 +162,7 @@ describe('CashflowRollupTable — AC5: Total row sums DOWN each column only (ren
 
 describe('CashflowRollupTable — AC6: no delta/color-coding, static rendering only', () => {
 	it('no cell anywhere carries a .pos or .neg class', () => {
-		const { container } = render(CashflowRollupTable, { props: { rollup: FIXTURE } });
+		const { container } = render(CashflowRollupTable, { props: { rollup: FIXTURE, staleness: EMPTY_STALENESS, cashflowRowStaleness: EMPTY_CASHFLOW_ROW_STALENESS_MAP } });
 		expect(container.querySelectorAll('.pos').length).toBe(0);
 		expect(container.querySelectorAll('.neg').length).toBe(0);
 	});
@@ -168,7 +170,7 @@ describe('CashflowRollupTable — AC6: no delta/color-coding, static rendering o
 
 describe('CashflowRollupTable — AC7: Edit cash-flow targets routes to /settings/cash-flow-targets', () => {
 	it('is a plain navigation link, not a form/button', () => {
-		const { getByRole } = render(CashflowRollupTable, { props: { rollup: FIXTURE } });
+		const { getByRole } = render(CashflowRollupTable, { props: { rollup: FIXTURE, staleness: EMPTY_STALENESS, cashflowRowStaleness: EMPTY_CASHFLOW_ROW_STALENESS_MAP } });
 		const link = getByRole('link', { name: 'Edit cash-flow targets' });
 		expect(link.tagName).toBe('A');
 		expect(link.getAttribute('href')).toBe('/settings/cash-flow-targets');
@@ -177,7 +179,7 @@ describe('CashflowRollupTable — AC7: Edit cash-flow targets routes to /setting
 
 describe('CashflowRollupTable — AC8: degenerate cell rendering', () => {
 	it('a null quarter cell renders an em-dash, never "0"/"NaN"', () => {
-		const { getByText } = render(CashflowRollupTable, { props: { rollup: FIXTURE } });
+		const { getByText } = render(CashflowRollupTable, { props: { rollup: FIXTURE, staleness: EMPTY_STALENESS, cashflowRowStaleness: EMPTY_CASHFLOW_ROW_STALENESS_MAP } });
 		const salaryRow = getByText('Salary').closest('tr')!;
 		// A data row's label is a plain <td> (also role "cell"), so the array is
 		// [label, Month, Q1, Q2, Q3, Q4, YTD] — mirrors NonReAllocationTable.dom.test.ts's own
@@ -190,7 +192,7 @@ describe('CashflowRollupTable — AC8: degenerate cell rendering', () => {
 
 describe('CashflowRollupTable — AC9: one-source unclassified banner + per-section footnote', () => {
 	it('N = 0: neither the banner nor any footnote renders', () => {
-		const { queryByRole, queryByText } = render(CashflowRollupTable, { props: { rollup: FIXTURE } });
+		const { queryByRole, queryByText } = render(CashflowRollupTable, { props: { rollup: FIXTURE, staleness: EMPTY_STALENESS, cashflowRowStaleness: EMPTY_CASHFLOW_ROW_STALENESS_MAP } });
 		expect(queryByRole('status')).toBeNull();
 		expect(queryByText(/unclassified/)).toBeNull();
 	});
@@ -201,7 +203,7 @@ describe('CashflowRollupTable — AC9: one-source unclassified banner + per-sect
 			unclassified: { count_ytd: 7 }
 		};
 		const { getByRole, getAllByText } = render(CashflowRollupTable, {
-			props: { rollup: withUnclassified }
+			props: { rollup: withUnclassified, staleness: EMPTY_STALENESS, cashflowRowStaleness: EMPTY_CASHFLOW_ROW_STALENESS_MAP }
 		});
 		const banner = getByRole('status');
 		expect(within(banner).getByText('7 items unclassified')).toBeTruthy();
@@ -218,7 +220,7 @@ describe('CashflowRollupTable — AC9: one-source unclassified banner + per-sect
 			unclassified: { count_ytd: 1 }
 		};
 		const { getByRole } = render(CashflowRollupTable, {
-			props: { rollup: withUnclassified, classifyHref: '/some-queue' }
+			props: { rollup: withUnclassified, staleness: EMPTY_STALENESS, cashflowRowStaleness: EMPTY_CASHFLOW_ROW_STALENESS_MAP, classifyHref: '/some-queue' }
 		});
 		expect(getByRole('link', { name: 'classify' }).getAttribute('href')).toBe('/some-queue');
 	});
@@ -226,7 +228,7 @@ describe('CashflowRollupTable — AC9: one-source unclassified banner + per-sect
 
 describe('CashflowRollupTable — AC10: negative totals render with their real sign', () => {
 	it('a negative section total renders with a leading minus, never abs()d or hidden', () => {
-		const { getAllByRole } = render(CashflowRollupTable, { props: { rollup: FIXTURE } });
+		const { getAllByRole } = render(CashflowRollupTable, { props: { rollup: FIXTURE, staleness: EMPTY_STALENESS, cashflowRowStaleness: EMPTY_CASHFLOW_ROW_STALENESS_MAP } });
 		const expensesTotalRow = getAllByRole('row', { name: /Total/ })[1];
 		const cells = within(expensesTotalRow).getAllByRole('cell');
 		expect(cells[0].textContent).toContain('-$2,000');
@@ -234,7 +236,7 @@ describe('CashflowRollupTable — AC10: negative totals render with their real s
 	});
 
 	it('a negative Sub-Cat row cell also renders signed', () => {
-		const { getByText } = render(CashflowRollupTable, { props: { rollup: FIXTURE } });
+		const { getByText } = render(CashflowRollupTable, { props: { rollup: FIXTURE, staleness: EMPTY_STALENESS, cashflowRowStaleness: EMPTY_CASHFLOW_ROW_STALENESS_MAP } });
 		const rentRow = getByText('Rent').closest('tr')!;
 		// [label, Month, Q1, ...] — same label-is-a-<td> shift as the AC8 test above.
 		const cells = within(rentRow).getAllByRole('cell');
@@ -257,7 +259,147 @@ describe('CashflowRollupTable — AC1 defensive completeness: an unexpected sect
 				}
 			]
 		};
-		const { getByText } = render(CashflowRollupTable, { props: { rollup: withExtra } });
+		const { getByText } = render(CashflowRollupTable, { props: { rollup: withExtra, staleness: EMPTY_STALENESS, cashflowRowStaleness: EMPTY_CASHFLOW_ROW_STALENESS_MAP } });
 		expect(getByText('Other Cash Flows')).toBeTruthy();
+	});
+});
+
+// SELF-258 AC1: section-level StaleConstituentBadge wiring. The badge's OWN behavior (disclosure,
+// tri-state, tooltip content, Re-authenticate link) is StaleConstituentBadge's own test suite's
+// job (StaleConstituentBadge.dom.test.ts) — this suite only proves CashflowRollupTable threads its
+// `staleness` prop to the badge correctly, once per section, and nowhere re-derives it.
+describe('CashflowRollupTable — AC1/SELF-258: section-level StaleConstituentBadge wiring', () => {
+	it('staleness: EMPTY_STALENESS renders no badge in either section', () => {
+		const { container, queryByText } = render(CashflowRollupTable, {
+			props: { rollup: FIXTURE, staleness: EMPTY_STALENESS, cashflowRowStaleness: EMPTY_CASHFLOW_ROW_STALENESS_MAP }
+		});
+		expect(container.querySelectorAll('.stale-connection-marker')).toHaveLength(0);
+		expect(queryByText('May be stale')).toBeNull();
+	});
+
+	it('a stale whole-tenant staleness prop renders the badge in BOTH section headers (Income and Expenses) — same value, one read', () => {
+		const stale = {
+			is_stale: true,
+			stale_items: [
+				{
+					linked_source_id: '1',
+					institution_name: 'Bank 1',
+					provider: 'plaid',
+					connection_status: 'login_required',
+					status_class: null
+				}
+			]
+		};
+		const { container, getAllByRole } = render(CashflowRollupTable, {
+			props: { rollup: FIXTURE, staleness: stale, cashflowRowStaleness: EMPTY_CASHFLOW_ROW_STALENESS_MAP }
+		});
+		// One marker per section table (Income, Expenses) — both fed by the SAME `stale` value.
+		expect(container.querySelectorAll('.stale-connection-marker')).toHaveLength(2);
+		expect(getAllByRole('table')).toHaveLength(2);
+	});
+
+	it('is_stale === null (unknown) renders the quieter "Staleness unknown" note, never the confirmed-stale tag, in both sections', () => {
+		const unknown = { is_stale: null, stale_items: [] };
+		// `cashflowRowStaleness: EMPTY_CASHFLOW_ROW_STALENESS_MAP` ALSO renders a per-row "Staleness
+		// unknown" note on every one of FIXTURE's 3 rows (the AC4/AC5 missing-key convention) — this
+		// leg is scoped to `.staleness-unknown` (StaleConstituentBadge's OWN class) to isolate the
+		// SECTION-level assertion from the per-row `.row-stale-unknown` count, which
+		// CashflowRowStaleTag's own describe block below covers.
+		const { container, queryByText } = render(CashflowRollupTable, {
+			props: { rollup: FIXTURE, staleness: unknown, cashflowRowStaleness: EMPTY_CASHFLOW_ROW_STALENESS_MAP }
+		});
+		expect(container.querySelectorAll('.staleness-unknown')).toHaveLength(2);
+		expect(queryByText('May be stale')).toBeNull();
+	});
+});
+
+// SELF-258 AC4/AC5: per-row (Sub-Cat) StaleConstituentBadge wiring, pinning all FOUR reachable
+// states per the dispatch brief's explicit requirement: a row with is_stale true + names, a row
+// with null, a row with false, and a MISSING key (never in the map at all) — the last two must
+// both render identically to their EXPLICIT counterparts (false → nothing; missing → unknown,
+// mirroring null), never collapsing a missing key to "fresh".
+describe('CashflowRollupTable — AC4/AC5: per-row StaleConstituentBadge (CashflowRowStaleTag) wiring', () => {
+	it('a row explicitly true, with names, renders the per-row tag; the disclosure lists the names + a Re-authenticate link (AC5, verified not rebuilt)', async () => {
+		const rowStaleness = {
+			Revenue: {
+				Salary: { is_stale: true, staleAccountNames: ['Checking ****1234'] }
+			}
+		};
+		const { getByText, getByRole } = render(CashflowRollupTable, {
+			props: { rollup: FIXTURE, staleness: EMPTY_STALENESS, cashflowRowStaleness: rowStaleness }
+		});
+		const salaryRow = getByText('Salary').closest('tr')!;
+		const tag = within(salaryRow).getByRole('button', { name: 'May be stale' });
+		expect(tag.getAttribute('aria-expanded')).toBe('false');
+
+		await fireEvent.click(tag);
+		expect(tag.getAttribute('aria-expanded')).toBe('true');
+		expect(within(salaryRow).getByText('Checking ****1234')).toBeTruthy();
+		const reauth = within(salaryRow).getByRole('link', { name: 'Re-authenticate' });
+		expect(reauth.getAttribute('href')).toBe('/accounts/connections');
+	});
+
+	it('a row explicitly null renders the muted "Staleness unknown" note, never the confirmed-stale tag', () => {
+		const rowStaleness = {
+			Revenue: {
+				Salary: { is_stale: null, staleAccountNames: [] }
+			}
+		};
+		const { getByText } = render(CashflowRollupTable, {
+			props: { rollup: FIXTURE, staleness: EMPTY_STALENESS, cashflowRowStaleness: rowStaleness }
+		});
+		const salaryRow = getByText('Salary').closest('tr')!;
+		expect(within(salaryRow).getByText('Staleness unknown')).toBeTruthy();
+		expect(within(salaryRow).queryByRole('button', { name: 'May be stale' })).toBeNull();
+	});
+
+	it('a row explicitly false renders nothing (zero-footprint)', () => {
+		const rowStaleness = {
+			Revenue: {
+				Salary: { is_stale: false, staleAccountNames: [] }
+			}
+		};
+		const { getByText } = render(CashflowRollupTable, {
+			props: { rollup: FIXTURE, staleness: EMPTY_STALENESS, cashflowRowStaleness: rowStaleness }
+		});
+		const salaryRow = getByText('Salary').closest('tr')!;
+		expect(within(salaryRow).queryByText('Staleness unknown')).toBeNull();
+		expect(within(salaryRow).queryByRole('button', { name: 'May be stale' })).toBeNull();
+	});
+
+	it('a row with a MISSING key (absent from the map at either level) renders as UNKNOWN — never fresh', () => {
+		// FIXTURE's "Interest" row has no entry anywhere in this map (neither its cat nor its
+		// sub_cat key exists) — the exact missing-key case the dispatch brief calls out by name.
+		const rowStaleness = {};
+		const { getByText } = render(CashflowRollupTable, {
+			props: { rollup: FIXTURE, staleness: EMPTY_STALENESS, cashflowRowStaleness: rowStaleness }
+		});
+		const interestRow = getByText('Interest').closest('tr')!;
+		expect(within(interestRow).getByText('Staleness unknown')).toBeTruthy();
+		expect(within(interestRow).queryByRole('button', { name: 'May be stale' })).toBeNull();
+	});
+
+	it('rows in DIFFERENT states on the SAME render stay visibly distinct — the UNKNOWN-collapses-to-fresh defect this shape exists to prevent', () => {
+		// Salary: true; Interest: missing key (→ unknown); Rent (Expense section): false.
+		const rowStaleness = {
+			Revenue: {
+				Salary: { is_stale: true, staleAccountNames: ['Checking ****1234'] }
+			},
+			Expense: {
+				Rent: { is_stale: false, staleAccountNames: [] }
+			}
+		};
+		const { getByText } = render(CashflowRollupTable, {
+			props: { rollup: FIXTURE, staleness: EMPTY_STALENESS, cashflowRowStaleness: rowStaleness }
+		});
+		const salaryRow = getByText('Salary').closest('tr')!;
+		const interestRow = getByText('Interest').closest('tr')!;
+		const rentRow = getByText('Rent').closest('tr')!;
+
+		expect(within(salaryRow).getByRole('button', { name: 'May be stale' })).toBeTruthy();
+		expect(within(interestRow).getByText('Staleness unknown')).toBeTruthy();
+		expect(within(interestRow).queryByRole('button', { name: 'May be stale' })).toBeNull();
+		expect(within(rentRow).queryByText('Staleness unknown')).toBeNull();
+		expect(within(rentRow).queryByRole('button', { name: 'May be stale' })).toBeNull();
 	});
 });

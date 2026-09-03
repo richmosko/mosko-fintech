@@ -45,21 +45,31 @@
 	already satisfies VD's "stacked with --space-4 gap, no extra wrapping chrome from the page
 	itself" — no new wrapper/CSS added here.
 
-	EXPECTED LOADER CONTRACT (Backend's +page.server.ts, NOT YET LANDED as of this file's
-	authoring — the underlying query layer, pfin.fn_historical_expenditures/096, IS merged —
-	PR #586 — so this is sequencing, not a missing read path; SELF-242/241/325 precedent):
+	LOADER CONTRACT (Backend's +page.server.ts — `historicalExpenditures` /
+	`historicalExpendituresUnclassifiedCount` LANDED per SELF-256, PR #589/590; superseding this
+	header's earlier "not yet landed" note):
 	  - `data.historicalExpenditures: HistoricalExpenditurePoint[] | null` — `null` on read
 	    failure (fail-soft, logged, never thrown, matching `loadNavSeries`'s posture); `[]` = read
 	    succeeded, zero qualifying expense in the trailing 5-year window (096's own contract — a
 	    real, distinguishable state, not an error).
-	  - `data.historicalExpendituresUnclassifiedCount: number | null` — BLOCKING GAP, reported at
-	    SELF-256 hand-off: no server-side source exists yet (096 has no 12th column; 093's
-	    `unclassified.count_ytd` is YTD-scoped, a DIFFERENT window than this surface's trailing 5
-	    years). `null` until a new migration adds it — `HistoricalExpendituresChart` already
-	    degrades this to "no banner, no caption" (verified in its own dom test).
-	`npm run check` surfaces real `Property does not exist on PageData` errors against both of the
-	above until Backend lands the loader — the correct, visible signal per established precedent;
-	not worked around with `any` or a parallel type.
+	  - `data.historicalExpendituresUnclassifiedCount: number | null` — window-scoped N (098's
+	    `fn_expenditures_unclassified_count`), `null` on read failure, never coalesced to 0.
+
+	LOADER CONTRACT (SELF-258, LANDED — both legs live on `data`; superseding this header's earlier
+	"not yet landed" note):
+	  - `data.staleness: StalenessData` — the SAME whole-tenant `loadStaleness()` read every other
+	    V1.1+ surface consumes (one call per request; never re-invoked per-surface). Threaded to
+	    BOTH `CashflowRollupTable` and `HistoricalExpendituresChart` below, unchanged — this page
+	    performs no second read and no re-derivation. `?? UNKNOWN_STALENESS` stays as a defensive
+	    fallback (never `EMPTY_STALENESS` — D1 never silently-fresh), matching the same null-
+	    tolerant discipline every other prop-driven consumer in this tree applies at its own
+	    boundary, not because the loader can omit the field.
+	  - `data.cashflowRowStaleness: CashflowRowStalenessMap` (cash-flow-row-staleness.ts) — the
+	    §2.3.2-only per-row (Sub-Cat) fold (AC4/AC5). Threaded to `CashflowRollupTable` ONLY — the
+	    §2.3.3 drill-down never consumes this map (099's own R3 ruling; see
+	    CashflowRollupTable.svelte's own module header). `?? EMPTY_CASHFLOW_ROW_STALENESS_MAP` is
+	    the same defensive-fallback discipline as `staleness` above — every lookup against `{}`
+	    resolves to UNKNOWN via `lookupCashflowRowStaleness`'s own missing-key handling, never fresh.
 
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5).
 -->
@@ -67,9 +77,16 @@
 	import CashflowRollupTable from '$lib/components/CashflowRollupTable.svelte';
 	import HistoricalExpendituresChart from '$lib/components/HistoricalExpendituresChart.svelte';
 	import { rollupHasNoRows } from '$lib/cashflow-rollup';
+	import { UNKNOWN_STALENESS } from '$lib/staleness/stale-constituent';
+	import { EMPTY_CASHFLOW_ROW_STALENESS_MAP } from '$lib/cashflow-row-staleness';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
+
+	// SELF-258: defensive fallbacks (never a silent "confirmed fresh" default) — see the module
+	// header's LOADER CONTRACT note.
+	const staleness = $derived(data.staleness ?? UNKNOWN_STALENESS);
+	const cashflowRowStaleness = $derived(data.cashflowRowStaleness ?? EMPTY_CASHFLOW_ROW_STALENESS_MAP);
 
 	const noRows = $derived(data.rollup !== null && rollupHasNoRows(data.rollup));
 	const zeroTransaction = $derived(noRows && data.rollup!.unclassified.count_ytd === 0);
@@ -120,7 +137,7 @@
 		</section>
 	{:else}
 		<h1 class="page-title">Cash Flow</h1>
-		<CashflowRollupTable rollup={data.rollup} />
+		<CashflowRollupTable rollup={data.rollup} {staleness} {cashflowRowStaleness} />
 	{/if}
 
 	<!-- §2.3.4 (SELF-256) — VD-ruled placement (see module header): always mounted, independent
@@ -128,6 +145,7 @@
 	<HistoricalExpendituresChart
 		points={data.historicalExpenditures ?? null}
 		unclassifiedCount={data.historicalExpendituresUnclassifiedCount ?? null}
+		{staleness}
 	/>
 </main>
 

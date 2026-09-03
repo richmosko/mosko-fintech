@@ -120,12 +120,37 @@ describe('StaleConstituentBadge — keyboard disclosure a11y + re-collapse', () 
 		expect(queryByText('Bank 1')).toBeNull();
 	});
 
-	it('the toggle is a native <button> with aria-controls pointing at the disclosed region', () => {
-		const { getByRole } = render(StaleConstituentBadge, {
+	it('the toggle is a native <button> with aria-controls pointing at the disclosed region', async () => {
+		const { getByRole, container } = render(StaleConstituentBadge, {
 			props: { isStale: true, staleItems: [item({ linked_source_id: 1 })] }
 		});
 		const toggle = getByRole('button', { name: /May be stale/ });
 		expect(toggle.tagName).toBe('BUTTON');
-		expect(toggle.getAttribute('aria-controls')).toBe('stale-constituent-list');
+		const controlsId = toggle.getAttribute('aria-controls');
+		expect(controlsId).toMatch(/^stale-constituent-list-/);
+		// Relational, not a fixed string (SELF-258): `$props.id()` makes this id unique PER
+		// INSTANCE — this asserts aria-controls resolves to THIS render's own panel once opened,
+		// which is the actual a11y requirement (a fixed string can't hold across the multiple
+		// simultaneous mounts CashflowRollupTable/CashflowPerAccountTable now render).
+		await fireEvent.click(toggle);
+		expect(container.querySelector(`#${CSS.escape(controlsId!)}`)).not.toBeNull();
+	});
+
+	it('two simultaneous instances never collide on id (SELF-258 multi-mount regression watcher)', () => {
+		// Scoped to each render's OWN `container`, not the bare `getAllByRole` query functions —
+		// those are bound to `baseElement` (defaults to the SHARED `document.body`) across every
+		// `render()` call in a test, so an unscoped query on the SECOND render's own return value
+		// still finds the FIRST render's button at index 0 and would make this assertion pass
+		// vacuously (both "finds" resolving to the same element) regardless of whether the two
+		// instances' own ids actually differ. `within(container)` is the real per-instance scope.
+		const first = render(StaleConstituentBadge, {
+			props: { isStale: true, staleItems: [item({ linked_source_id: 1 })] }
+		});
+		const second = render(StaleConstituentBadge, {
+			props: { isStale: true, staleItems: [item({ linked_source_id: 2, institution_name: 'Bank 2' })] }
+		});
+		const firstToggle = within(first.container).getByRole('button', { name: /May be stale/ });
+		const secondToggle = within(second.container).getByRole('button', { name: /May be stale/ });
+		expect(firstToggle.getAttribute('aria-controls')).not.toBe(secondToggle.getAttribute('aria-controls'));
 	});
 });
