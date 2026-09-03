@@ -251,17 +251,27 @@ select ok(
   and pg_get_functiondef('pfin.fn_cashflow_contributors(date)'::regprocedure) !~* 'has_stale',
   '(X1a) the function body contains NEITHER ''connection_status'' NOR ''linked_source'' NOR ''has_stale'' — no future author has "helpfully" inlined the staleness rule'
 );
-select ok(
-  not exists (
-    select 1 from pg_depend d
-    where d.classid = 'pg_proc'::regclass
-      and d.objid = 'pfin.fn_cashflow_contributors(date)'::regprocedure
-      and (
-        (d.refclassid = 'pg_proc'::regclass and d.refobjid = 'pfin.fn_aggregation_has_stale_constituent()'::regprocedure)
-        or (d.refclassid = 'pg_class'::regclass and d.refobjid = 'pfin.linked_source_connection_state'::regclass)
-      )
-  ),
-  '(X1b) pg_depend shows NO reference from fn_cashflow_contributors to fn_aggregation_has_stale_constituent (046) or linked_source_connection_state (043) — the catalog-level proof, not merely a text-absence proof'
+-- (X1b) POSITIVE PIN — Sec FLAG 1 fix (2026-09-03): the ORIGINAL v1 of this leg asserted
+-- `not exists (select 1 from pg_depend ...)`, claimed as "the catalog-level proof, not merely a
+-- text-absence proof". Sec measured on a scratch chain-apply that this is FALSE for a
+-- language-sql function: its body is stored as opaque TEXT, and PostgreSQL records NO pg_depend
+-- edges for objects a SQL-language body references — fn_cashflow_items ITSELF shows ZERO
+-- pg_depend rows despite reading four relations. The predicate was therefore true for EVERY
+-- possible body, not merely the honest one — a leg that cannot fail, which understated (X1a)'s
+-- own strength by implying a stronger belt-and-suspenders check stood behind it. There is NO
+-- catalog-dependency route available for a string-bodied SQL function's callees; do not re-add
+-- a pg_depend leg for this reason. This positive pin reads the body's OWN text instead (same
+-- surface X1a reads, a different predicate): the set of every `fn_*` identifier appearing
+-- anywhere in prosrc must be EXACTLY {fn_cashflow_items} — strictly stronger than X1a's three
+-- denylisted tokens, because it also catches an inlined staleness rule routed through ANY OTHER
+-- pfin.fn_* helper (e.g. a future author calling a differently-named staleness shim), not just
+-- the three literal substrings X1a checks for.
+select is(
+  (select array_agg(distinct m[1] order by m[1])
+     from pg_proc p, regexp_matches(p.prosrc, 'fn_[A-Za-z0-9_]+', 'g') as m
+    where p.oid = 'pfin.fn_cashflow_contributors(date)'::regprocedure),
+  array['fn_cashflow_items'],
+  '(X1b) POSITIVE PIN: every fn_* identifier appearing anywhere in the function body is EXACTLY {fn_cashflow_items} — no second pfin.fn_* callee of any name, staleness-related or not'
 );
 
 -- =====================================================================
