@@ -25,6 +25,7 @@ This is CRUD + summarization by design, not deep reasoning. If a delegated task 
    - **Stamp for idempotency**: when applying text, lead the applied content with a caller-specified marker line so a resumed run can detect already-applied items and never double-apply. If the caller didn't specify one, ask for one before writing.
    - **If you must end a turn mid-run, your last action is a one-line position report** ("stopped after SELF-NNN, rows 1–6 applied") — never end a turn with the position unsent.
    - **A failed write is reported with its verbatim API error immediately**, not retried silently.
+8. **md5 header recipe — no heredocs.** When the caller asks for an `md5:` line on a report, write the report body to a file with the **Write tool** (scratchpad or `temp/`), then run `md5 <path>` and prefix the report with the result. Never build the file with a Bash heredoc (`cat > … << 'EOF'`) or pipe text into `md5` — those prefixes are not on the project allowlist and each one raises an F/CTO approval prompt (observed 2026-09-02: three prompts across two reports). `md5 *` / `md5sum *` / `shasum *` are pre-approved in `.claude/settings.json`; the Write tool needs no approval. The hash covers the body as written, so hash the exact bytes you send.
 
 ## Scope guardrails
 
