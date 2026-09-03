@@ -477,4 +477,36 @@ describe('load() — SELF-258 §2.3.2 per-row Sub-Cat staleness: contributor-map
 			Expense: { Rent: { is_stale: false, staleAccountNames: [] } }
 		});
 	});
+
+	// Sec mid-flight condition on this leg (verbatim binding, relayed by team-lead): the SELF-330
+	// fold this module is pointed at resolves an unrecognised account_id to FALSE
+	// (nonReAllocation.ts's own subCatIsStale/resolveStaleAccountIds), which is correct THERE only
+	// because resolveStaleAccountIds's RLS-scoped read means an invisible account can never be a
+	// Set member in the first place — copied by analogy onto 099's account_name-null signal, that
+	// same "not a member" absence would turn UNKNOWN back into FRESH one layer down, the exact
+	// three-into-two collapse 099's SHAPE 3 ruling exists to prevent. This is the loader-level,
+	// end-to-end version of that requirement (the pure-core version lives in
+	// cashflowContributors.test.ts, "an otherwise ALL-FRESH row with ONE unresolvable contributor").
+	it("SEC CONDITION: a NULL-account_name contributor on an otherwise all-fresh Sub-Cat row yields UNKNOWN, never FALSE", async () => {
+		loadCashflowCrossAccountRollupMock.mockReset();
+		loadCashflowCrossAccountRollupMock.mockResolvedValueOnce(HAPPY_ROLLUP);
+		stubHappyPanel();
+		loadStalenessMock.mockReset();
+		loadStalenessMock.mockResolvedValueOnce(HAPPY_STALENESS);
+		loadCashflowContributorsMock.mockReset();
+		loadCashflowContributorsMock.mockResolvedValueOnce([
+			{ cat: 'Revenue', sub_cat: 'Salary', sub_cat_id: 1, account_id: 100, account_name: 'Checking' },
+			{ cat: 'Revenue', sub_cat: 'Salary', sub_cat_id: 1, account_id: 999, account_name: null }
+		]);
+		resolveStaleAccountIdsMock.mockReset();
+		// Empty: 100 is confirmed NOT stale (a known, visible member-check miss); 999 is absent for a
+		// DIFFERENT reason — the RLS-scoped bridge's own read cannot see it either, mirroring exactly
+		// what resolveStaleAccountIds would really return for an account invisible to the caller.
+		resolveStaleAccountIdsMock.mockResolvedValueOnce(new Set<string>());
+		const data = await loadData(makeEvent());
+
+		expect(data.cashflowRowStaleness).toEqual({
+			Revenue: { Salary: { is_stale: null, staleAccountNames: [] } }
+		});
+	});
 });

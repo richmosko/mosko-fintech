@@ -104,6 +104,30 @@ describe('computeCashflowRowStaleness — account_name IS NULL folds to UNKNOWN,
 		const result = computeCashflowRowStaleness(contributors, staleAccountIds);
 		expect(result['Revenue']['Salary']).toEqual({ is_stale: true, staleAccountNames: ['Checking'] });
 	});
+
+	// Sec mid-flight condition (verbatim binding on this fold): an unresolvable account_id must
+	// NEVER silently resolve to FALSE via `staleAccountIds.has()` missing it. `resolveStaleAccountIds`
+	// builds its Set from an RLS-scoped read (navComposition.ts), so an account this caller cannot
+	// see can NEVER be a member of that Set — copied by analogy from nonReAllocation.ts's own fold
+	// (which has no account_name signal to test), a row with an otherwise-all-fresh contributor set
+	// PLUS one unresolvable one would silently read as confirmed-FALSE, the exact three-into-two
+	// collapse 099's own SHAPE 3 ruling exists to prevent one layer up. `foldRow`'s account_name
+	// check runs PER CONTRIBUTOR, before `staleAccountIds.has()` is ever consulted for that
+	// contributor (see its own doc comment) — this is the multi-contributor case proving it, on top
+	// of the single-contributor case above.
+	it('an otherwise ALL-FRESH row with ONE unresolvable contributor still yields UNKNOWN, never FALSE', () => {
+		const contributors = [
+			row({ account_id: 100, account_name: 'Checking' }), // confirmed fresh
+			row({ account_id: 200, account_name: 'Savings' }), // confirmed fresh
+			row({ account_id: 999, account_name: null }) // unresolvable — NOT a member of staleAccountIds,
+			// but that absence is NOT evidence of freshness (see the comment above)
+		];
+		const staleAccountIds = new Set<string>(); // known root, empty — 100/200 confirmed not stale;
+		// 999 cannot appear here regardless of its true staleness, because resolveStaleAccountIds's
+		// own read could not see it either.
+		const result = computeCashflowRowStaleness(contributors, staleAccountIds);
+		expect(result['Revenue']['Salary']).toEqual({ is_stale: null, staleAccountNames: [] });
+	});
 });
 
 describe('computeCashflowRowStaleness — key restriction: unclassified + dormant third-taxonomy-state excluded', () => {
