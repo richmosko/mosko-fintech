@@ -52,10 +52,17 @@
 	client-side re-derivation. A future account-scoped primitive would need a new Backend/Architect
 	migration; out of this issue's scope.
 
-	AC4 GAP (bubble-up, not implemented in this PR): per-row (Sub-Cat) staleness marking has no
-	data source on this payload — see CashflowRollupTable.svelte's own AC4 GAP note (identical
-	shape: `CashflowPerAccountRow` carries no `sub_cat_id`/contributor-account linkage either).
-	Reported to team-lead, not invented.
+	§2.3.3 PER-ROW INDICATOR — DELIBERATELY OFF, per `099`'s own R3 ruling (SELF-258 team-lead
+	default-and-notify, 2026-09-03, F/CTO-reversible at PR review). NOT a missing data source:
+	`099` pfin.fn_cashflow_contributors DOES emit this surface's contributors — it is a deliberate
+	SUPERSET emitting every account's contributor tuples, cash-flow-row-staleness.ts's own SCOPE
+	note included (see cashflowContributors.ts's own module header). The real reason is structural:
+	every §2.3.3 row is folded from items of exactly ONE account (split children carry the split
+	PARENT's account_id — `093` rule 2), so a per-row marker HERE would be provably CONSTANT across
+	every row and carry no per-row information. This surface keeps its existing section-level badge
+	above instead. A future author adding `CashflowRowStaleTag` to this table is REVERSING that
+	ruling, not completing unfinished wiring — see CashflowRowStaleTag.svelte's own module header
+	for the identical note from the other side of this scope boundary.
 
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5).
 -->

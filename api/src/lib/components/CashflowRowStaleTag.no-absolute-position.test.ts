@@ -59,7 +59,13 @@ describe('CashflowRowStaleTag — the disclosure panel is never absolutely posit
 		expect(styleBlock).toContain('.row-stale-panel');
 	});
 
-	it('neither .row-stale-marker nor .row-stale-panel declares `position: absolute` anywhere in the component', () => {
-		expect(styleBlock).not.toMatch(/position:\s*absolute/);
+	it('neither .row-stale-marker nor .row-stale-panel declares `position: absolute` (or `fixed`) anywhere in the component', () => {
+		// Widened past the literal defect (Sec, SELF-258 AMBER round): `fixed` escapes an ancestor's
+		// overflow clip the SAME way `absolute` does (both are taken out of normal flow relative to
+		// a positioned/viewport context rather than participating in the ancestor's own content
+		// box) — a future author "fixing" a different symptom by reaching for `position: fixed`
+		// would reintroduce the SAME class of invisible-content defect this file exists to catch,
+		// not a new one.
+		expect(styleBlock).not.toMatch(/position:\s*(absolute|fixed)/i);
 	});
 });

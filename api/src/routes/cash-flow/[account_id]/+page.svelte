@@ -29,14 +29,12 @@
 	inside CashflowPerAccountTable.svelte — this page threads the SAME whole-tenant `staleness`
 	prop down, no re-derivation, no second read.
 
-	EXPECTED LOADER CONTRACT (SELF-258, NOT YET LANDED as of this file's authoring — the
-	underlying read primitive + wrapper (`046` / `loadStaleness()`) are already live on other V1.1+
-	surfaces; this route's own loader leg is what SELF-258 dispatches to Backend next —
-	SELF-242/241/325 precedent): `data.staleness: StalenessData`, one `loadStaleness()` call
-	threaded through unchanged. Defaults to `UNKNOWN_STALENESS` here (never `EMPTY_STALENESS`)
-	until Backend wires it, so this page stays null-tolerant rather than crashing on the missing
-	field. `npm run check` surfaces a real `Property 'staleness' does not exist on PageData` error
-	until then — the correct, visible signal; not worked around with `any` or a parallel type.
+	LOADER CONTRACT (SELF-258, LANDED at 8440a24 — superseding this header's earlier "not yet
+	landed" note): `data.staleness: StalenessData`, one `loadStaleness()` call threaded through
+	unchanged (+page.server.ts's own module header). `?? UNKNOWN_STALENESS` below stays as a
+	defensive fallback (never `EMPTY_STALENESS` — D1 never silently-fresh), matching the same
+	null-tolerant discipline every other prop-driven consumer in this tree applies at its own
+	boundary, not because the loader can omit the field.
 
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5).
 -->
@@ -52,7 +50,7 @@
 
 	let { data }: { data: PageData } = $props();
 
-	// SELF-258: see the module header's EXPECTED LOADER CONTRACT.
+	// SELF-258: see the module header's LOADER CONTRACT note.
 	const staleness = $derived(data.staleness ?? UNKNOWN_STALENESS);
 
 	const accountIdParam = $derived(page.params.account_id);
