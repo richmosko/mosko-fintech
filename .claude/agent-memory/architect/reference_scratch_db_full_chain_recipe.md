@@ -99,3 +99,18 @@ SUCCEEDS (it is SQL, so it folds), which makes the setup look healthy.
 the load log printed **0 errors** for a load that never connected. A guard
 chained to its action reports success about a step that did not run — print the
 counts unconditionally and assert the connection separately.
+
+## The chain apply is NOT the time sink — measured
+
+**3 seconds** for a raw `psql -f` of all 99 migration files onto an already-prepared scratch DB
+(2026-09-03, local stack). A `create database <new> template <prepared>` clone of the same state:
+**under a second**. So if you need many scratch DBs in one session, prepare one and CLONE it —
+but note the apply itself was never expensive.
+
+⚠ **Scope this claim precisely when you cite it.** It measures *only* the psql apply onto a DB
+that already has auth/vault/extensions loaded. It EXCLUDES the local-stack reset path, container
+restarts, the auth/vault dump-and-load prep, CI, and fixture construction. The loop-mechanics
+ratification named full `001→0NN` rebuilds as the biggest measured time sink; my measurement does
+not refute that, it says the sink is probably a different step and someone should measure which.
+In my own `099` leg the real cost was **fixture authoring and verification reasoning**, not the
+rebuild — plus one whole detour caused by the container crossing midnight UTC mid-fixture.
