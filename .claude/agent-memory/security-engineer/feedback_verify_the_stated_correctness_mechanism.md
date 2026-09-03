@@ -59,6 +59,36 @@ and Postgres array equality uses btree semantics (a NULL element opposite a non-
 not NULL), so the leg REDs instead of passing on a NULL comparison. Verify that property before
 accepting an array-shaped assertion as a watcher; the SQL-three-valued intuition predicts the opposite.
 
+⚠ **`pg_depend` records NOTHING for a string-bodied `language sql` function — a "catalog-level"
+dependency leg over one is VACUOUS.** SELF-258's `099` battery paired a text-absence pin (X1a,
+`pg_get_functiondef !~* 'connection_status|linked_source|has_stale'` — real, discriminating) with
+X1b, a `not exists (select 1 from pg_depend … refobjid = fn_aggregation_has_stale_constituent …)`
+whose own description called it *"the catalog-level proof, not merely a text-absence proof."*
+**Measured on the scratch DB: `pfin.fn_cashflow_contributors(date)` has exactly ONE `pg_depend` row
+— `pg_namespace | n` — and zero `pg_proc`/`pg_class` refs, despite its body calling
+`pfin.fn_cashflow_items(date)` and reading `pfin.account`;** `fn_cashflow_items` likewise has zero.
+A `$$…$$` body is stored as TEXT and never parsed into the dependency graph, so the predicate is
+true for every possible body, including one that inlines the very rule the leg exists to forbid.
+Only a **SQL-standard body** (`BEGIN ATOMIC`, PG14+) records those edges. **The strength claim was
+exactly inverted, and that is the harm** — a vacuous leg labelled as the stronger proof makes the
+one real leg look like a redundant belt someone later drops. Free tell: run
+`select count(*) from pg_depend where classid='pg_proc'::regclass and objid=<fn>::regprocedure
+and refclassid in ('pg_proc'::regclass,'pg_class'::regclass)` against a function you KNOW calls
+something. Remediation to prefer: a **positive** pin over the denylist — assert the set of
+`pfin.fn_*` identifiers in `prosrc` is exactly `{fn_cashflow_items}` (catches an inlined rule that
+dodges all three tokens), or drop the leg and re-plan.
+
+⚠ **The FIX reproduced the defect one iteration later — check the replacement's OWN strength claim.**
+QA landed the positive pin correctly (measured: it returns `{fn_cashflow_items}`, and a doctored
+body redded it), but its note called it *"strictly stronger than X1a's three denylisted tokens."*
+False: `regexp_matches(prosrc,'fn_[A-Za-z0-9_]+')` cannot see a body that inlines the rule by
+reading the **view** directly — `linked_source_connection_state` contains no `fn_` (measured) —
+which is exactly the route X1a catches. They are **complementary, not nested.** A false strength
+claim in one leg's note is what makes the neighbouring leg look droppable; that is the whole harm
+of the original defect, so the remediation must be re-read for the same sentence pattern. **When a
+finding is "this control's self-description overstates it," re-audit the fix's self-description
+before signing.** Related: [[replacement-control-name-the-losing-side]].
+
 **Companion — a ONE-TIME mechanism offered as a PERMANENT invariant.** The GL-split ADR draft
 (2026-08-18) wrote: *"the new table's identity sequence is set past the maximum so no id is ever
 reused on either side"*, concluding *"every historical snapshot remains resolvable against exactly
