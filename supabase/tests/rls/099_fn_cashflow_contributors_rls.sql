@@ -262,10 +262,13 @@ select ok(
 -- catalog-dependency route available for a string-bodied SQL function's callees; do not re-add
 -- a pg_depend leg for this reason. This positive pin reads the body's OWN text instead (same
 -- surface X1a reads, a different predicate): the set of every `fn_*` identifier appearing
--- anywhere in prosrc must be EXACTLY {fn_cashflow_items} — strictly stronger than X1a's three
--- denylisted tokens, because it also catches an inlined staleness rule routed through ANY OTHER
--- pfin.fn_* helper (e.g. a future author calling a differently-named staleness shim), not just
--- the three literal substrings X1a checks for.
+-- anywhere in prosrc must be EXACTLY {fn_cashflow_items} — catching an inlined staleness rule
+-- routed through ANY OTHER pfin.fn_* helper (e.g. a future author calling a differently-named
+-- staleness shim), not just the three literal substrings X1a checks for. ⚠ Sec NOTE 1 (PR #591
+-- follow-up): this leg is complementary to X1a, not stronger than it — a body that inlines the
+-- staleness rule by reading pfin.linked_source_connection_state (043) DIRECTLY, with no `fn_*`
+-- call at all, passes X1b untouched; only X1a's substring check on 'linked_source' catches that
+-- route. Each leg catches an inlining path the other does not; neither subsumes the other.
 select is(
   (select array_agg(distinct m[1] order by m[1])
      from pg_proc p, regexp_matches(p.prosrc, 'fn_[A-Za-z0-9_]+', 'g') as m
