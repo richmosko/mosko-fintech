@@ -1,0 +1,34 @@
+# .husky/post-merge — mosko-fintech scratch-DB template refresh trigger
+# (DevOps-owned; loop-mechanics option A, F/CTO-ratified 2026-09-02).
+#
+# Husky v9 convention: no shebang, no `_/husky.sh` sourcing line (see
+# .husky/pre-commit's header for the same note). Husky runs this with `sh`.
+#
+# THIS IS THE TRIGGER, NOT THE FENCE. scripts/db-template-clone.sh
+# independently re-verifies pfin_tmpl against the CURRENT migrations tree
+# (head filename + full-tree sha256) before ever cloning it, and refuses —
+# loudly — rather than serve a stale schema. So this hook never firing, or
+# firing against the wrong tree, or failing partway through, degrades to "a
+# missed convenience refresh" (the clone script then tells you to run
+# scripts/db-template-build.sh by hand) — never a silent staleness bug. That
+# is why this hook is allowed to be simple and best-effort rather than a
+# correctness boundary in its own right; see the CI-artifact alternative
+# considered and NOT adopted, in the report this shipped with.
+#
+# Scope: only refresh when supabase/migrations/ actually changed in the
+# merge just completed, and only best-effort — a refresh failure WARNS and
+# never blocks (the merge already happened by the time this hook runs; there
+# is nothing to abort). Mirrors the pre-commit hook's own graceful-
+# degradation contract for non-blocking checks.
+CHANGED=$(git diff --name-only ORIG_HEAD HEAD -- supabase/migrations 2>/dev/null || true)
+if [ -n "$CHANGED" ]; then
+  echo "post-merge: supabase/migrations changed — refreshing the pfin_tmpl scratch-DB template..."
+  if ! ./scripts/db-template-build.sh >/tmp/db-template-build-hook.log 2>&1; then
+    echo "post-merge: WARN — pfin_tmpl refresh failed (see /tmp/db-template-build-hook.log)."
+    echo "post-merge:        scripts/db-template-clone.sh will refuse to clone until you run scripts/db-template-build.sh by hand."
+  else
+    echo "post-merge: pfin_tmpl refreshed."
+  fi
+fi
+
+exit 0
