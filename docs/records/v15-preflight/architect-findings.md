@@ -465,3 +465,49 @@ Sec **R2.7** states its **3** was over *the original drafted AC text in the issu
 ### 10.7 Ledger — unchanged
 
 No §10 catalogued instance is added, removed, reordered or renumbered by this pass. ⚠ **Sec N-4's RT-27 wiring is explicitly an INTRA-instance coverage expansion with no ledger effect**, and both files now say so with the RT-30 precedent cited rather than re-argued — recorded because catalogueing it *"would look like diligence."* No Decision 3 label drafted or reallocated. Path B throughout.
+
+---
+
+## 11. Round 2d — Sec's round 2b (2026-09-04). Sec concedes R-1; the register closes to two.
+
+**Ref read.** `origin/meta/v15-preflight-sec` @ `fe757d1`, md5 `888f637f820bb4139413535a5ec0e591`, §**R2.9** — fetched and hashed from `origin` before reading. `origin/main` still `b90b846`.
+
+### 11.1 Sec R-1 — CONCEDED to Architect's Option B, and Sec's self-correction is sharper than my objection
+
+Sec withdraws lean A *"not softened, not conditioned"*, and finds a defect **worse than the one I raised**. My §8.3 said the locked partial index **forbids** A. Sec's own text is **internally incoherent**: it read *"the locked partial-UNIQUE already makes 'the current final' unambiguous; `superseded` becomes a presentation label computed from `(target_month, generated_at)` ordering"* — but the index makes it unambiguous **by permitting exactly one such row**, so there is never a set of `final` rows to order and never anything to label `superseded`. Sec: *"I asserted the constraint as A's support while proposing a mechanism the constraint's own semantics exclude."*
+
+Sec also confirms my claim (ii) and adopts the reframing: *"the question is not how to avoid an UPDATE, it is where the mutability window closes and what fences it."* And it names the second escape route as worse than an amendment — inserting every row as `draft` and deriving `final` leaves **the locked partial index never firing on any row**, *"a constraint that cannot fail … strictly worse than a recorded amendment because a dead index looks identical to a working one."*
+
+**Four conditions folded into A1's block** (Sec: additions to a sound shape, not objections; with them **A1 moves AMBER → GREEN**): **(a)** DELETE blocked on any non-`draft` row — Decision 2 is a two-verb rule and B's clauses covered one verb; **(b)** the trigger is not role-conditional, proven under `authenticated` **and** `service_role`, because the cron does the `final → superseded` UPDATE and the realistic defect is a later `service_role` early-return; **(c)** legal INSERT **states** constrained, not only transitions, or a row POSTed straight in as `final` takes the month's slot without passing the authoring gate; **(d)** `superseded` is terminal, plus the runbook line that this trigger is an RLS-exempt writer's only layer and goes inert under `session_replication_role = replica`.
+
+⚠ **(a) is the one I would have missed.** I restated a two-verb rule with one verb and did not notice; the whole shape was about UPDATE because the *question* was about UPDATE.
+
+### 11.2 The standing-disagreement register — now TWO
+
+1. **Sec R-1 — CLOSED, converged on B.** §8.6 item 1 and §10.4 item 5 recorded it live; **they are now stale and are superseded here rather than edited**, since each is the account of what was true when written.
+2. **S-5 — CLOSED, converged on (a)**, recorded at §10.4 item 1; Sec's **R2.9(4)** adds its condition: the paired QA leg is **labelled construction-only in its own text**, which is the answer to the fence-cannot-fire objection I had recorded against my own lean. Folded into A1 item 2.
+3. **Sec F-6 / A4 sequencing — CLOSED, and Sec WITHDREW the disagreement** (*"holding a disagreement past a concession would be bad faith"*), replacing it with a better mechanism — see §11.3.
+4. **A8's milestone — LIVE.** Architect A1–A7 · PM A1–A8. Unchanged; Sec takes no position; my §9.4 note stands that PM's product-trace argument is the stronger one.
+5. **`⟨RULING D-4⟩` (agenda R11), the commentary identifier — LIVE.** Architect rename · PM identifier stands · Sec neutral. Marked in both blocks, not picked.
+
+**Two live items into the sitting, and neither is a security question.**
+
+### 11.3 A4/A6 — a fence SHAPE replaces the sequencing constraint
+
+Sec **R2.9(3)** withdrew its F-6 disagreement and asked for something better than what I had written: *"a sequencing constraint stated in an AC is a convention with no mechanism, and conventions with no mechanism rot silently."* **The re-scoped RT-22 fence audits `workers/pdf-render/package.json` if it exists and passes if it does not** — so it can land at any time, no-ops until A4 creates the file, and bites on A4's first commit. **The ordering requirement disappears rather than being remembered.** ⚠ Deliberately unlike the shipped Dockerfile fence, which exits 2 on a missing target — correct there because its target exists, and *"copying it here would red CI from the day it lands."* Fallback if the shape is not adopted: a **blocking Linear dependency edge**, never an AC sentence. Two further conditions folded: the catch criterion and its golden fixture go to Sec **before merge**, and the successor AC **cites the shipped fence's own header**, which names manifest inspection as a deliberate non-catch — *"or a future reader finds a fence that already says it does not do this and concludes the successor is redundant."*
+
+**This is the better disposition and it is Sec's, not mine.** My AC sentence was the convention; Sec's fence shape is the mechanism.
+
+### 11.4 A10 — Sec backs it, on the attachment point
+
+Sec **R2.9(2)** backs opening A10 with `sec-joint-review`, citing ADR-064 Decision 5 **as a precedent for the reasoning and expressly not as jurisdiction** over `monthly_report` (D5 is scoped to `pfin.account_trans`; conflating them would be the false-composite class). D5 verbatim: *"The trigger is the surface, not the layer, and not the author's assessment of risk."*
+
+⚠ **Sec's fallback is stated so this is not binary, and it concedes my own losing side:** if F/CTO prefers PM's fold-all-five, the fold is acceptable **provided P5 carries `joint-review:sec` and its AC names the Decision 2 and RT-25 obligations explicitly** — *"I would rather have the label on P5 than a nineteenth issue that gets dropped at promotion."* That is the exact risk I named at §8.5. **Both roles now back A10 with the same fallback; PM leans fold. F/CTO's call, and the fallback makes either outcome safe.**
+
+### 11.5 N-3 — ref-skew, one last time
+
+Sec **R2.9(5)** records N-3 as *"open, no action taken … pending Architect's 2b statement of intent."* ⚠ **That statement landed at `b26b1c8`** (§10.3 and the A3/A7 blocks), which post-dates the `d87c9dc` tip Sec answered against and names its own skew. **Not an open item from this side.** Sec's one substantive rider is adopted and already recorded: whichever reading is ratified, **ARCH `:208` ends up unambiguous on the tree rather than resolved in a records file** — owed on the §9 consolidated ADR's doc PR.
+
+### 11.6 Ledger — unchanged
+
+No §10 catalogued instance added, removed, reordered or renumbered; no layer attribution moves; no Decision 3 label drafted or reallocated — S-5's closure **realizes** an already-allocated label and allocates none. Path B throughout.
