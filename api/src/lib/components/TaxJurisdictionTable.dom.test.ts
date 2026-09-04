@@ -268,8 +268,8 @@ describe('TaxJurisdictionTable — empty states', () => {
 	});
 });
 
-describe('TaxJurisdictionTable — prior-year Q4 window (AC2a/R8/E39)', () => {
-	it('renders the prior-year Q4 outstanding notice with its own due date when the window is open', () => {
+describe('TaxJurisdictionTable — prior-year Q4 window (AC2a/R8/E39, team-lead ruling)', () => {
+	it('renders the prior-year Q4 outstanding notice with the pay-by copy naming the current tax year', () => {
 		render(TaxJurisdictionTable, {
 			jurisdiction: federalFixture(),
 			jurisdictionKey: 'federal',
@@ -277,10 +277,12 @@ describe('TaxJurisdictionTable — prior-year Q4 window (AC2a/R8/E39)', () => {
 			priorYearQ4: PRIOR_YEAR_Q4
 		});
 		expect(screen.getByText('2025 Q4 still outstanding')).toBeTruthy();
-		expect(screen.getByText('Due Jan 15, 2026')).toBeTruthy();
+		expect(
+			screen.getByText("Pay by Jan 15, 2026. Payments made this January appear in 2026's YTD Paid.")
+		).toBeTruthy();
 	});
 
-	it('renders the obligation from the E39 Dec-31 payload — the PRIOR year\'s own Q4 amount, never a current-year figure', () => {
+	it('renders the obligation from the E39 Dec-31 payload — the PRIOR year\'s own Q4 amount, never a current-year figure — with the prior annual as a secondary figure', () => {
 		render(TaxJurisdictionTable, {
 			jurisdiction: federalFixture(),
 			jurisdictionKey: 'federal',
@@ -289,37 +291,42 @@ describe('TaxJurisdictionTable — prior-year Q4 window (AC2a/R8/E39)', () => {
 		});
 		const obligationRow = screen.getByRole('row', { name: /Q4 2025 Payment/ });
 		expect(within(obligationRow).getByText('$1,200')).toBeTruthy();
+		expect(within(obligationRow).getByText(/2025 annual: \$4,800/)).toBeTruthy();
 	});
 
-	it("repeats THIS jurisdiction's own current-year YTD Paid figure on the prior-year block (R8's rider — YTD Paid is since-inception, not year-scoped)", () => {
+	it('renders NO YTD Paid cell in the prior-year block (team-lead ruling — R8 keeps YTD Paid ledger-scoped, never invented per-prior-year)', () => {
 		render(TaxJurisdictionTable, {
 			jurisdiction: federalFixture({ ytd_paid: { status: 'designated', amount: 3000 } }),
 			jurisdictionKey: 'federal',
 			taxYear: 2026,
 			priorYearQ4: PRIOR_YEAR_Q4
 		});
-		// Two "YTD Paid" rows now exist (current-year table + prior-year block) — both show $3,000,
-		// the SAME current-year figure, never a second prior-year-scoped derivation.
-		const ytdRows = screen.getAllByRole('row', { name: /YTD Paid/ });
-		expect(ytdRows).toHaveLength(2);
-		for (const row of ytdRows) {
-			expect(within(row).getByText('$3,000')).toBeTruthy();
-		}
+		// Exactly ONE "YTD Paid" row exists — the current-year table's own — even with the prior-year
+		// block rendered alongside it.
+		expect(screen.getAllByRole('row', { name: /YTD Paid/ })).toHaveLength(1);
 	});
 
-	it("renders the PRIOR year's own Funds Due envelope, unavailable-with-reason when that envelope says so, never $0", () => {
+	it("renders the PRIOR year's own Funds Due envelope labelled \"as of Dec 31\", unavailable-with-reason when that envelope says so, never $0", () => {
 		render(TaxJurisdictionTable, {
 			jurisdiction: californiaFixture(),
 			jurisdictionKey: 'california',
 			taxYear: 2026,
 			priorYearQ4: PRIOR_YEAR_Q4
 		});
-		// PRIOR_YEAR_Q4.california.funds_due_envelope is unavailable (no_ledger_designated) — distinct
-		// from californiaFixture()'s own CURRENT-year funds_due, which is also unavailable here but
-		// must not be confused with the prior-year block's own separate envelope.
-		const fundsDueRows = screen.getAllByRole('row', { name: /Funds Due/ });
-		expect(fundsDueRows.length).toBeGreaterThanOrEqual(1);
+		const fundsDueRow = screen.getByRole('row', { name: /Funds Due \(as of Dec 31, 2025\)/ });
+		expect(within(fundsDueRow).getByText(/No ledger designated/)).toBeTruthy();
 		expect(screen.queryByText('$0')).toBeNull();
+	});
+
+	it('renders the PRIOR year Funds Due as a real computed figure when the envelope says so', () => {
+		render(TaxJurisdictionTable, {
+			jurisdiction: federalFixture(),
+			jurisdictionKey: 'federal',
+			taxYear: 2026,
+			priorYearQ4: PRIOR_YEAR_Q4
+		});
+		const fundsDueRow = screen.getByRole('row', { name: /Funds Due \(as of Dec 31, 2025\)/ });
+		expect(within(fundsDueRow).getByText('$1,200')).toBeTruthy();
 	});
 
 	it('renders nothing prior-year-Q4-shaped when priorYearQ4 is null (window closed)', () => {
@@ -331,5 +338,20 @@ describe('TaxJurisdictionTable — prior-year Q4 window (AC2a/R8/E39)', () => {
 		});
 		expect(screen.queryByText(/still outstanding/)).toBeNull();
 		expect(screen.getAllByRole('row', { name: /YTD Paid/ })).toHaveLength(1);
+	});
+
+	it('renders "Unavailable" (never $0) when the Dec-31 payload itself had no installments', () => {
+		render(TaxJurisdictionTable, {
+			jurisdiction: federalFixture(),
+			jurisdictionKey: 'federal',
+			taxYear: 2026,
+			priorYearQ4: {
+				...PRIOR_YEAR_Q4,
+				federal: { q4_installment: null, annual_liability: null, funds_due_envelope: { status: 'unavailable', reason: 'no_schedule_any_year' } }
+			}
+		});
+		const obligationRow = screen.getByRole('row', { name: /Q4 2025 Payment/ });
+		expect(within(obligationRow).getByText('Unavailable')).toBeTruthy();
+		expect(within(obligationRow).queryByText('$0')).toBeNull();
 	});
 });

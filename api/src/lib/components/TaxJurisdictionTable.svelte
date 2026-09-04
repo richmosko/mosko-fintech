@@ -36,14 +36,15 @@
 	AC 2a / R8 — the prior tax year's outstanding Q4 row, shown while `priorYearQ4` is non-null
 	(the page's own `+page.server.ts` gates the SECOND `fn_compute_tax_liability` call — E39,
 	`loadPriorYearQ4` — on `liability.prior_year_q4_window.open`, so a non-null prop here already
-	means the window is open; this component re-checks nothing). Three figures, per jurisdiction:
-	obligation (`priorYearQ4.{key}.q4_installment` — the Dec-31 payload's own last installment, the
-	prior year's true Q4 amount, never derived from the CURRENT year's rows), Funds Due
-	(`priorYearQ4.{key}.funds_due_envelope`, verbatim), and YTD Paid — which is deliberately NOT on
-	`priorYearQ4` at all: R8's own rider (ADR-067 Decision 5(f)) states YTD Paid is the designated
-	ledger's balance SINCE INCEPTION, not year-scoped, so the figure already rendered on THIS
-	jurisdiction's own current-year YTD Paid row (`jurisdiction.ytd_paid`) is the correct one to
-	repeat here — never a second, prior-year-scoped derivation that Seam B Option A has no basis for.
+	means the window is open; this component re-checks nothing). Team-lead ruling (relayed after
+	Backend's real loader landed): obligation (`priorYearQ4.{key}.q4_installment` — the Dec-31
+	read's own last installment, never derived from the CURRENT year's rows) with the prior year's
+	`annual_liability` as a secondary figure, and Funds Due (`priorYearQ4.{key}.funds_due_envelope`,
+	verbatim) LABELLED "as of Dec 31, {prior year}" so it is never mistaken for a live number. NO
+	YTD Paid cell in this block — R8's own rider (ADR-067 Decision 5(f)) states YTD Paid is the
+	designated ledger's balance SINCE INCEPTION, not year-scoped, and the ruling is explicit that
+	this block must not invent a prior-year-scoped one; a copy line instead tells the user where a
+	January payment lands ("appears in {current tax year}'s YTD Paid").
 
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5). No inline edit anywhere in this
 	table (AC 8a) — every cell is plain text; the only interactive elements are the two CTA links.
@@ -148,16 +149,23 @@
 		{/if}
 
 		{#if priorYearQ4 && priorYearDetail}
-			<!-- AC 2a / R8 — prior tax year's outstanding Q4: obligation + Funds Due from the E39
-			     Dec-31 payload, YTD Paid REPEATED from this table's own current-year row (see module
-			     header — Seam B Option A has no prior-year-scoped YTD figure to derive). -->
+			<!-- AC 2a / R8 — prior tax year's outstanding Q4 (team-lead ruling, E39, relayed after
+			     Backend's real loader landed): obligation (`q4_installment`, with the prior year's
+			     `annual_liability` as a secondary figure) + the Dec-31 read's OWN Funds Due envelope,
+			     labelled "as of Dec 31, {year}" so it is never mistaken for a live figure. NO YTD Paid
+			     cell here — R8's rider keeps YTD Paid as the ledger balance as-of; this block does not
+			     invent a prior-year-scoped one. The copy line states explicitly where a January
+			     payment lands, since this table renders nothing for it otherwise. -->
 			<div class="prior-q4" role="status">
 				<div class="prior-q4-head">
 					<span class="prior-q4-tag">
 						<span class="prior-q4-dot" aria-hidden="true"></span>
 						<span class="prior-q4-tag-text">{priorYearQ4.tax_year} Q4 still outstanding</span>
 					</span>
-					<span class="prior-q4-detail">Due {fmtDueDate(priorYearQ4.due_date)}</span>
+					<span class="prior-q4-detail">
+						Pay by {fmtDueDate(priorYearQ4.due_date)}. Payments made this January appear in {taxYear}'s
+						YTD Paid.
+					</span>
 				</div>
 				<table class="jur-tbl prior-q4-tbl">
 					<caption class="sr-only">
@@ -167,23 +175,22 @@
 						<tr>
 							<th scope="row">Q4 {priorYearQ4.tax_year} Payment</th>
 							<td class="num">
-								{priorYearDetail.q4_installment === null
-									? 'Unavailable'
-									: usd.format(priorYearDetail.q4_installment)}
-							</td>
-						</tr>
-						<tr>
-							<th scope="row">YTD Paid</th>
-							<td class="num">
-								{#if jurisdiction.ytd_paid.status === 'designated'}
-									{usd.format(jurisdiction.ytd_paid.amount)}
+								{#if priorYearDetail.q4_installment === null}
+									<span class="unavailable-cell">Unavailable</span>
 								{:else}
-									<span class="unavailable-cell">{reasonCopy(jurisdiction.ytd_paid.reason)}</span>
+									{usd.format(priorYearDetail.q4_installment)}
+									{#if priorYearDetail.annual_liability !== null}
+										<span
+											class="prior-q4-annual"
+											title="{priorYearQ4.tax_year} annual liability">
+											({priorYearQ4.tax_year} annual: {usd.format(priorYearDetail.annual_liability)})
+										</span>
+									{/if}
 								{/if}
 							</td>
 						</tr>
 						<tr class="foot">
-							<th scope="row">Funds Due</th>
+							<th scope="row">Funds Due (as of Dec 31, {priorYearQ4.tax_year})</th>
 							<td class="num">
 								{#if priorYearDetail.funds_due_envelope.status === 'computed'}
 									{usd.format(priorYearDetail.funds_due_envelope.amount)}
@@ -386,6 +393,13 @@
 		font-size: var(--fs-small);
 		font-weight: var(--weight-med);
 		color: var(--c-attn-text);
+	}
+	.prior-q4-annual {
+		margin-left: var(--space-2);
+		font-size: var(--fs-small);
+		font-weight: var(--weight-reg);
+		font-style: italic;
+		color: var(--c-text-muted);
 	}
 	.prior-q4-tbl {
 		background: var(--c-surface);
