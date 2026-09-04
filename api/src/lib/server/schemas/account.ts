@@ -11,8 +11,13 @@ import { sanitizeCurrencyAmount } from '$lib/server/validation/numeric';
 // Shared value-sets live in a browser-safe module so Frontend's client mirror
 // imports the SAME canonical enums (anti-drift). Re-exported here for server-side
 // consumers that already reference them via this module.
-import { ACCOUNT_TYPES, TAX_TREATMENTS, CLOSURE_REASONS } from '$lib/schemas/account-constants';
-export { ACCOUNT_TYPES, TAX_TREATMENTS };
+import {
+	ACCOUNT_TYPES,
+	TAX_TREATMENTS,
+	TAX_JURISDICTIONS,
+	CLOSURE_REASONS
+} from '$lib/schemas/account-constants';
+export { ACCOUNT_TYPES, TAX_TREATMENTS, TAX_JURISDICTIONS };
 
 /** Zod adapter over the shared numeric-sanitization battery → a validated `number`. */
 const currencyAmount = () =>
@@ -37,10 +42,52 @@ const isoDate = () =>
 		}, 'Enter a real calendar date.');
 
 /**
- * Manual-account create (AC #1/#2). Six user attributes. The account-level asset
- * Sub-Cat field is removed — accounts aren't classified per-account (allocation
- * classifies per-asset / per-transaction). The column + its param were physically
- * dropped at migration 048 (Decision-3 #5 DROPPED); the create action calls the
+ * tax_jurisdiction (SELF-267 AC 2) — the §2.4.2 form's tax-authority control. Both variants
+ * below accept '' (explicit clear) or one of TAX_JURISDICTIONS; an unrecognised non-empty
+ * string (a typo'd value, a stale client) is REJECTED by the `.union`, never silently
+ * coerced to a clear. They differ ONLY on what an ABSENT key means, because the two forms
+ * that post through them have opposite defaults:
+ *
+ *   - CREATE (`taxJurisdictionCreateField`): absent → null. A brand-new account has no
+ *     prior designation to preserve, so "the control wasn't touched" and "the control was
+ *     touched and cleared" are the same outcome — null either way.
+ *   - EDIT (`taxJurisdictionEditField`): absent → `undefined`, meaning "do not touch the
+ *     column" — NOT "clear it". Frontend's account-edit control is HIDDEN (key absent from
+ *     the post) for a provider-linked account, and hiding a control must not silently wipe
+ *     whatever the column already holds (it's always null for a linked account today, but
+ *     the contract is "no change", not "assume null"). Only an EXPLICIT `''` clears an
+ *     existing designation on edit — the control must be rendered, pre-filled from the
+ *     loaded row, for a user to reach that state deliberately.
+ *
+ * `updateAttributes` reads `undefined` vs `null` vs a value to decide whether to include
+ * `tax_jurisdiction` in the UPDATE payload at all — see that action's own comment.
+ */
+const taxJurisdictionUnion = () =>
+	z.union([z.enum(TAX_JURISDICTIONS), z.literal('')], {
+		message: 'Choose a tax authority, or leave it unset.'
+	});
+
+const taxJurisdictionCreateField = () =>
+	taxJurisdictionUnion()
+		.optional()
+		.transform((v) => (v ? v : null));
+
+const taxJurisdictionEditField = () =>
+	taxJurisdictionUnion()
+		.optional()
+		.transform((v) => (v === undefined ? undefined : v === '' ? null : v));
+
+/**
+ * Manual-account create (AC #1/#2). Six user attributes, plus SELF-267 AC 2's optional
+ * tax-authority designation — the §2.4.2 form MAY present the field at creation, but it
+ * is NOT a parameter of `fn_create_manual_account` (087's signature is unchanged; the
+ * check that the RPC's INSERT column list still succeeds unchanged with this column
+ * NULLABLE-and-unset was run and recorded at 102's header). The create action realizes a
+ * non-null value as a follow-up UPDATE under `account_update` — see that action's own
+ * comment for the create-then-update sequencing and the 23505-after-create branch. The
+ * account-level asset Sub-Cat field is removed — accounts aren't classified per-account
+ * (allocation classifies per-asset / per-transaction). The column + its param were
+ * physically dropped at migration 048 (Decision-3 #5 DROPPED); the create action calls the
  * 6-arg fn_create_manual_account. `.strict()` rejects any stray posted `sub_cat_id`.
  */
 export const manualAccountCreateSchema = z
@@ -50,7 +97,8 @@ export const manualAccountCreateSchema = z
 		scope: z.string().trim().min(1, 'Scope is required.').max(200, 'Scope is too long.'),
 		tax_treatment: z.enum(TAX_TREATMENTS),
 		initial_value: currencyAmount(),
-		as_of_date: isoDate()
+		as_of_date: isoDate(),
+		tax_jurisdiction: taxJurisdictionCreateField()
 	})
 	.strict();
 
@@ -142,19 +190,26 @@ export type ReopenAccount = z.infer<typeof reopenAccountSchema>;
 
 /**
  * Account-detail attribute edit (`accounts/[account_id]` updateAttributes action). The four
- * user-editable account attributes — name / account_type / scope / tax_treatment. Mirrors the
- * manual-create field rules VERBATIM (name/scope free-text 1..200; enums from the shared
- * account-constants, anti-drift with the DB CHECK). Deliberately does NOT include the aggregator
- * / connection binding (deferred) nor `closed_at` (that's the close/reopen path, and 058 fences
- * it at the DB regardless) — `.strict()` rejects any of those if posted (Lock 14 mass-assignment
- * fence).
+ * user-editable account attributes — name / account_type / scope / tax_treatment — plus
+ * SELF-267 AC 2's `tax_jurisdiction` designation. Mirrors the manual-create field rules
+ * VERBATIM (name/scope free-text 1..200; enums from the shared account-constants,
+ * anti-drift with the DB CHECK). Deliberately does NOT include the aggregator / connection
+ * binding (deferred) nor `closed_at` (that's the close/reopen path, and 058 fences it at
+ * the DB regardless) — `.strict()` rejects any of those if posted (Lock 14 mass-assignment
+ * fence). ⚠ `tax_jurisdiction` is OPTIONAL IN SHAPE and ABSENCE MEANS "DO NOT TOUCH THE
+ * COLUMN" — NOT a clear. See `taxJurisdictionEditField`'s header: Frontend's control is
+ * HIDDEN (key absent) for a provider-linked account, and hiding it must never wipe
+ * whatever the column already holds. Only an explicit `''` clears an existing designation.
+ * `parsed.data.tax_jurisdiction` is therefore `'irs' | 'ftb' | null | undefined`, and the
+ * action includes the key in its UPDATE payload only when it is NOT `undefined`.
  */
 export const updateAttributesSchema = z
 	.object({
 		name: z.string().trim().min(1, 'Name is required.').max(200, 'Name is too long.'),
 		account_type: z.enum(ACCOUNT_TYPES),
 		scope: z.string().trim().min(1, 'Scope is required.').max(200, 'Scope is too long.'),
-		tax_treatment: z.enum(TAX_TREATMENTS)
+		tax_treatment: z.enum(TAX_TREATMENTS),
+		tax_jurisdiction: taxJurisdictionEditField()
 	})
 	.strict();
 
