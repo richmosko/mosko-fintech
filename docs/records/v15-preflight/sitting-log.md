@@ -252,3 +252,17 @@ See R13 — the one copy.
 2. **PRD PR (PM):** the R10 batch + SELF-364.
 3. **Close-out PR (team-lead):** `BACKLOG.md` §7.1 A6 text + §5.6 names + §7.32 item 6 conditional + a §7.34 for agenda §6's bookings; `MILESTONES.md` Active Feature (set named, count dropped) + Next deliverable (A8 → P7) + Recent activity; this log's final revision.
 4. **First dispatch:** A8 → P7 (R13).
+
+---
+
+## Amendment batch — EXECUTED 2026-09-04
+
+- **Linear (liaison, two passes — the first filled its context after 19 descriptions):** descriptions on SELF-345 … SELF-362 and SELF-365 replaced with the resolved `rederived-acs.md` blocks (PR #626 `0c5bd25`, markers 49 → 0), one comment each citing this log; **SELF-350 re-titled** to the RT-22 dependency-manifest fence (R6); **the Platform / Cross-cutting project got its own native milestone** "V1.5 — Monthly report full (§2.6)" (id `fe065957-…`) — milestones are per-project objects (`docs/linear-setup.md`), so R8's "A1–A8 into V1.5" is realized by a Platform-project milestone of the same name, projects untouched; **A10 created as SELF-366** (Platform / Cross-cutting, V1.5, Backlog; no `sec-joint-review` label exists in the workspace — none applied, none created). SELF-353 unmilestoned (R8). **Read-back:** five descriptions dumped and diffed locally against the paste files — identical after Linear's markdown normalization (issue mentions become embeds, `-` bullets become `*`, bare `V1.final` autolinks; raw lengths therefore differ and are not a check).
+- **PRD PR #625** (PM, `5d7f7c5`): the R10 batch + SELF-364's §2.5.3 fold, 43 anchored edits; awaits F/CTO's read before merge (a locked story moves).
+- **Close-out PR #624** (`1417337`): ledger, BACKLOG §7.1 A6 / §7.2 P3 / §7.32 item 6 / §7.34.
+
+**DEFAULT-AND-NOTIFY (Architect, at the AC resolution; reversal window open until A1's PR):**
+1. **R1's `rendered_payload JSONB NOT NULL` is realized as NULLable + a status CHECK** — `draft` permits NULL (the cron and A10 write a draft before any payload exists, R9 rider 1 / R4 (c)); `final` and `superseded` require payload and `payload_schema_version` NOT NULL. Same guarantee, buildable shape; carried into the R14 ADR so the ruling's parenthetical and the DDL do not read as divergent.
+2. **The R7 general audit helper rides SELF-345 (A1)** as its own AC block (`AH`), since A1's PR is the design unit's vehicle (R14); a separate issue is a create-and-relabel if F/CTO prefers.
+3. Three `⟨OPEN⟩` residuals named in `rederived-acs.md`, routed to the reviews that can settle them: the snapshot child's parent-FK disposition (Architect at the migration, Sec at the unit's review); the reserved DEFINER slot's fate if the helper lands INVOKER (Sec + D9 amendment at that PR); whether the app→worker token keeps its `users_id` claim under R2 (C) (Sec at A5's build, with RT-21 (g)). Two ARCH defects booked for the R14 doc PR (§3.2's overview still names the dropped `plaid_sync_audit`; §4's RT-21 citation lists six letters against seven). BACKLOG §7.6 item S7 (the W-1 NAV worker's D1(d) deferral) becomes dischargeable by the R7 helper — retrofit not ruled, not this wave's.
+
