@@ -39,10 +39,43 @@ check whether the existing fence for that class actually covers the new instance
 private-bind fence was written over a *different* worker's compose manifest and located its target by
 an in-file sentinel, so the new channel would have come up unfenced.
 
+⚠ **SHARPER VARIANT — I cited a locked constraint AS SUPPORT for an option that the same constraint
+FORBIDS, in one sentence.** Recommending "derive supersession instead of storing it", I wrote: *"the
+locked partial-UNIQUE already makes 'the current final' unambiguous; `superseded` becomes a
+presentation label computed from `(target_month, generated_at)` ordering."* `UNIQUE (users_id,
+target_month) WHERE generation_status = 'final'` makes it unambiguous **by permitting exactly one such
+row** — so there is never a set to order and never anything to label. Architect caught it. This is
+worse than the "artifact I did not read" case above: **I had read the constraint, quoted it, and
+leaned on it — I just never evaluated my proposal AGAINST it.**
+
+- **The mechanical check: whenever I cite a constraint as SUPPORT, run my own proposal through it as
+  if it were someone else's.** Citing and testing are different acts and the citation feels like the
+  test. A constraint quoted in favour of an option is the one place nobody re-checks, because it
+  reads as already-checked.
+- **Both escape hatches were disqualifying, and one was invisible.** Retiring the index = the
+  amendment I claimed the option avoided. Inserting every row in the non-final state = the index
+  **never fires on any row** — a locked uniqueness constraint reduced to a dead one, which is the
+  *constraint that cannot fail* shape I flag in others, reached by my own proposal. ⚠ **A dead
+  constraint looks identical to a working one**, so this route is strictly worse than a recorded
+  amendment. When an option preserves a constraint's TEXT, ask whether it preserves the constraint's
+  ability to REJECT anything.
+- **The reframe worth keeping, because it dissolved the problem:** I was defending a blanket phrasing
+  (*"UPDATE/DELETE blocked"*) that the lock's own vocabulary (`draft → final → superseded`) already
+  contradicted — a stored state machine needs an UPDATE to move. **When a lock's blanket rule and its
+  own mechanism disagree, the mechanism is the binding fact.** The question was never how to avoid an
+  UPDATE; it was *where the mutability window closes and what fences it*.
+- **Concede straight when the objection is mechanical.** Hedging a wrong lean costs more than the
+  lean did — and having conceded, look HARDER at the winning shape, not less: a restatement of a
+  two-verb rule (`UPDATE/DELETE`) had quietly become one-verb, which is the enumeration-stops-one-short
+  class landing inside the option I had just agreed to.
+
 **How to apply:**
 - Before a where-does-the-control-live requirement: grep ARCH for the endpoint/route name and read
   the flow section, not only the ADR that locks the component. `grep -n 'PW->>\|-->>' docs/ARCH/*.html`
   finds direction in seconds.
+- Before recommending a mechanism on a table, enumerate the table's locked constraints and walk the
+  mechanism's SECOND invocation through each — the first invocation almost always passes, and
+  regeneration/retry is where a uniqueness constraint bites.
 - When retracting, **say "retracted" and say which artifact voided it**, in the same message as the
   new findings — a requirement quietly dropped between rounds is indistinguishable from one still
   live, and a teammate may already be building against it.
