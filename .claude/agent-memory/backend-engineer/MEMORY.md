@@ -9,3 +9,4 @@
 - [Verify against the commit, not HEAD, when disputing history](feedback_verify_against_commit_not_head_when_disputing_history.md) — `git show <sha>:path`, never diff-against-worktree, when a teammate claims an earlier commit "already had" a later fix.
 - [Outer fence masks inner fence](feedback_outer_fence_masks_inner_fence.md) — a denial error only proves the FIRST fence fired (schema USAGE before EXECUTE); check the specific privilege directly.
 - [Never pad an abbreviated sha](feedback_never_pad_an_abbreviated_sha.md) — `git commit`'s 7-char output isn't the full sha; run `git rev-parse HEAD` before quoting one in a handoff.
+- [Session attribution overrides dispatch brief](feedback_session_attribution_overrides_dispatch_brief.md) — the live system-reminder's commit trailers win over a brief's named ones; flag the mismatch, don't silently pick either.

@@ -155,3 +155,34 @@ follow-on ADR-025 correction came up, I **booked it rather than folding it into 
 edit would introduce deletions and destroy the one PR where the pure-insertion property was the
 proof. **Ask for a diff shape that makes your constraint mechanically checkable, then protect it** —
 and say explicitly that this is a tradeoff (more PRs, better verifiability), not caution.
+
+⚠ **A claim about an EXTERNAL SERVICE'S state is the cheapest one to falsify and the one nobody
+checks.** A CI fix comment (npm-audit pin, PR #608) recorded its measured cause as: *"today
+(2026-09-04) it is fully retired and returns a blanket 400 'Invalid package tree' to ANY request it
+receives — including a well-formed one."* One `curl -X POST` at the named endpoint returned **HTTP
+200** with a valid result. The remediation was still correct and its *conclusion* ("our lockfiles
+aren't stale") was still correct — I proved that separately by running the fixed client against the
+failing tree — but the **mechanism on the record was false**, and a fix comment is precisely what the
+next engineer cites instead of re-measuring. **Teammates measure their own repo carefully and take
+the third party's state from an error string.** Probe the endpoint, the registry metadata, the
+upstream PR — these are one command each: `curl` the API, read `dist-tags`/`engines` from the
+registry packument, `api.github.com/repos/<o>/<r>/pulls/<n>` for a cited PR title and merge date.
+Here that pass confirmed four claims verbatim (the PR title, its merge date, both `engines.node`
+ranges) and falsified two (the endpoint's state; "this is the version-line HEAD" — the dist-tag said
+otherwise by one patch). **Report the confirmations too** — a table of claim / command / result makes
+the two failures land as findings rather than as an attack on the author's diligence.
+
+⚠ **A `stable` declaration is a claim about the TRANSITIVE reach set; the header will enumerate the
+DIRECT callees, and the two are different sets.** `104`'s header argued *"a `stable` caller of a
+`volatile` callee is an unbacked promise, and all five callees were measured `provolatile = 's'`."*
+All five were — I re-measured. But the reach set is what makes the property true, and the hazard sat
+one level down: `fn_compute_tax_liability (s) → fn_account_unrealized_gl (s) → fn_gl_entries (v)` and
+`→ fn_holdings_as_of (v)`. **Postgres never checks this**, so no green suite can say so. Two extra
+tells in the same enumeration: it **included two non-callees** (one the header itself said elsewhere
+is *"reached only THROUGH 102"*, one it said is *not called at all*), so a list labelled "callees"
+was neither the direct set nor the reach set. **Measure the reach set, not the list:**
+`regexp_matches(prosrc, 'pfin\.(fn_[a-z_]+)\(', 'g')` over the named functions, then
+`provolatile <> 's'` across the closure. Then split MECHANISM from DEFECT — here both unpinned
+functions were `language sql` with no write statement in `prosrc`, so the *behaviour* was stable and
+"it writes nothing" held; only the **argument** failed. Report it as a note with the reword, not as a
+defect.

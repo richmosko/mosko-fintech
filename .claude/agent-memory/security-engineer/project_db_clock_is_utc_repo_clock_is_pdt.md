@@ -27,4 +27,18 @@ edges — **run `date; date -u` before grading a date claim, and ask WHICH CLOCK
 Never grade a date assertion against `git log` timestamps alone; those are local. The good artifacts on
 this repo name the clock (`071`'s battery says *"the container's own 2026-08-31"*) and the weaker ones
 say *"the wall clock"* — naming it is the cheap fix worth requesting, not a correction to the date.
-Related: [[a-preference-reads-as-a-ruling-and-a-caveat-sets-the-axis]] (a true fact on the wrong axis).
+⚠ **THE TRAP THIS MEMORY ITSELF SETS, disarmed here: `date default current_date` on a reader is NOT a
+divergence from `fn_server_today()`.** At the SELF-262 review I was asked to check `104`'s
+`p_data_as_of date default current_date` against "Lock 15 as-of discipline vs `fn_server_today()`", and
+the shape of *this* memory primed me to find two clocks. There is one: **`fn_server_today()` IS
+`select current_date`** (the first line above), evaluated in the caller's own session, so the default
+and the threaded value are the **same expression**, not two. It is also the sibling convention —
+`049` `051` `056` `076` `078` `081` `084` `086` `102` all carry `date default current_date`. Measured
+2026-09-04. The real residual is different and smaller: a caller that invokes `fn_compute_tax_liability()`
+and `fn_compute_nav(fn_server_today())` as **two statements** can straddle midnight, which is why the
+Seam-C obligation is *one value threaded to both*, not *a particular default*. **A memory naming a
+clock hazard makes every clock expression look like an instance; re-read what the named function
+actually evaluates before grading a default.**
+
+Related: [[a-preference-reads-as-a-ruling-and-a-caveat-sets-the-axis]] (a true fact on the wrong axis) ·
+[[verify-the-stated-correctness-mechanism]].

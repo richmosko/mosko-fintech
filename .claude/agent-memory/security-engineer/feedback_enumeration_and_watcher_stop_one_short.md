@@ -76,4 +76,20 @@ Wave-5 operational grain, and the family had long since been reconciled past the
   before agreeing it is owed; a leg that cannot fail entering a canonical enumeration is worse
   than no leg.
 
-Related: [[a-grep-over-comments-measures-intent-not-data]] · [[verify-the-stated-correctness-mechanism]] · [[measure-the-fence-regex-not-its-comment]] · [[replacement-control-name-the-losing-side]] · [[pm-draft-ac-vs-schema]]
+⚠ **ASYMMETRIC-LEG variant: a LATE CORRECTIVE TERM lands on the leg the author was exercising, and
+only that one.** At SELF-262 the payload had two structurally parallel legs (an "ordinary" schedule
+and an "LT CG" schedule) assembled through one LEFT-JOIN code path. A control the migration header
+spent eight lines on — *"the payload says so"* when a present-but-empty schedule suppresses a
+fallback — needed an extra `_empty_no_fallback` disjunct to cover the no-fallback case, because the
+primary flag could only be set when a fallback was found. **The disjunct existed for the ordinary leg
+and had no counterpart on the other**, so the second leg silently reported the negation of the truth.
+Nothing in the header, the ADR or the design memo distinguished the legs — the code did.
+**Tells:** a `coalesce(x, false)` on one leg and `coalesce(x, false) or y` on its twin; a header
+paragraph whose subject is "per schedule type" over a payload assembled leg-by-leg; a "one code path,
+no second branch" claim (`104` made one) sitting above two separately-written `jsonb_build_object`
+blocks. **Prove it as a BOUNDARY PAIR one step apart, never by argument** — I put the two legs in the
+identical state (delete every bracket row, no prior year) and got `true` / `false`. That is a finding
+a reader cannot dispute and it doubles as the QA leg's fixture. Same family as the one-short shape
+above: the enumeration was complete, the CORRECTION was not.
+
+Related: [[a-grep-over-comments-measures-intent-not-data]] · [[verify-the-stated-correctness-mechanism]] · [[measure-the-fence-regex-not-its-comment]] · [[replacement-control-name-the-losing-side]] · [[pm-draft-ac-vs-schema]] · [[corrupt-the-control-canary-boundary-tie]] · [[zero-value-sentinel-flips-meaning]]

@@ -92,3 +92,27 @@ it only makes an unscoped read look deliberate.
 
 Related: [[measure-the-fence-regex-not-its-comment]] — same shape one level down (measure the real
 predicate at the real ref, not the description of it).
+
+**A DIFF AGAINST A STALE BASE RETURNS A FALSE NEGATIVE ON "did it land?" (SELF-268 re-look).**
+Checking whether supplied verbatim text had reached `DECISIONS.md`, I ran
+`git diff <old-freeze-sha> <ref> -- DECISIONS.md | grep '<my sentence>'` and got **nothing** — and
+was one step from reporting the obligation undischarged. The sentence was there, byte-exact. The
+base sha predated `main` moving, so the ADR edit had arrived on the branch **through a merge of
+main** rather than as a diff hunk against that base. **A grep over a DIFF asks "did this change
+between these two refs"; a grep over `git show <ref>:<path>` asks "is this true at the ref".** For a
+*did-it-land* question only the second is the right instrument, and the first fails in the
+reassuring-to-me direction: it reports absence.
+
+**How to apply:** for presence claims — a sentence, a fence, a leg, a grant — read the FILE AT THE
+REF (`git show <ref>:<path>`). Reserve diffs for *what-changed* questions. If a diff must be used,
+its base has to be an ancestor you chose deliberately, and say which.
+
+**And the companion method, for an IN-PLACE edit to a body produced by anchored substitution:** a
+diff of the edit cannot show a span it perturbed by accident, because the perturbation would look
+like part of the intended change. Do **both** — read the body fresh from the ref for correctness,
+and separately enumerate every **non-comment** line the edit touched
+(`git diff A B -- <file> | grep -E '^[+-]' | grep -vE '^[+-][[:space:]]*--'`) as the perturbation
+check. At SELF-268 that returned exactly two executable changes, which is what let every
+body-dependent conclusion from the prior review carry forward instead of being re-derived. State the
+result as a count of executable changes, never as "the edit looks small" — see
+[[diff-filter-swallows-removed-comments]] for why the comment filter has to be explicit.
