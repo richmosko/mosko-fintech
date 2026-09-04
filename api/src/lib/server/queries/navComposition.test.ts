@@ -22,6 +22,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import {
 	fetchNavComposition,
 	loadNavComposition,
+	loadExcludedTaxLedgers,
 	EMPTY_STALE_LINKED_SOURCE_IDS,
 	type NavComposition
 } from './navComposition';
@@ -282,5 +283,86 @@ describe('loadNavComposition', () => {
 			expect(tree).not.toBeNull();
 			expect(rpc).toHaveBeenCalledWith('fn_nav_composition', { p_as_of: AS_OF });
 		});
+	});
+});
+
+// ── loadExcludedTaxLedgers (SELF-268 AC 10a / R3 rider 6) ──────────────────────────────────────
+describe('loadExcludedTaxLedgers', () => {
+	type LedgersMockOpts = {
+		ledgers?: unknown;
+		ledgersError?: { message: string } | null;
+		accounts?: unknown;
+		accountsError?: { message: string } | null;
+	};
+
+	/**
+	 * Minimal supabase-js stub covering the TWO chains this loader touches:
+	 *   .schema('pfin').rpc('fn_tax_authority_ledgers')                — 102's designation reader
+	 *   .schema('pfin').from('account').select(...).in(...)            — the account-name join
+	 * Deliberately SEPARATE from the composition suite's `makeSupabase` above — this loader never
+	 * touches `fn_nav_composition`, and entangling the two mocks would obscure that.
+	 */
+	function makeSupabase(opts: LedgersMockOpts) {
+		const rpc = vi.fn(async () => ({
+			data: opts.ledgers ?? null,
+			error: opts.ledgersError ?? null
+		}));
+		const inFn = vi.fn(async () => ({
+			data: opts.accounts ?? [],
+			error: opts.accountsError ?? null
+		}));
+		const select = vi.fn(() => ({ in: inFn }));
+		const from = vi.fn(() => ({ select }));
+		const schema = vi.fn(() => ({ rpc, from }));
+		const client = { schema } as unknown as SupabaseClient;
+		return { client, rpc, from, select, in: inFn };
+	}
+
+	it('happy path: joins the designation rows to account names, VERBATIM jurisdiction values', async () => {
+		const { client, rpc, from, in: inFn } = makeSupabase({
+			ledgers: [
+				{ account_id: 7, tax_jurisdiction: 'irs' },
+				{ account_id: 9, tax_jurisdiction: 'ftb' }
+			],
+			accounts: [
+				{ account_id: 7, name: 'IRS Payments' },
+				{ account_id: 9, name: 'FTB Payments' }
+			]
+		});
+
+		const result = await loadExcludedTaxLedgers(client);
+
+		expect(result).toEqual([
+			{ account_id: 7, account_name: 'IRS Payments', jurisdiction: 'irs' },
+			{ account_id: 9, account_name: 'FTB Payments', jurisdiction: 'ftb' }
+		]);
+		expect(rpc).toHaveBeenCalledWith('fn_tax_authority_ledgers');
+		expect(from).toHaveBeenCalledWith('account');
+		expect(inFn).toHaveBeenCalledWith('account_id', [7, 9]);
+	});
+
+	it('no designations: a KNOWN empty result ([]), not null — the common bootstrap-default state', async () => {
+		const { client, from } = makeSupabase({ ledgers: [] });
+		const result = await loadExcludedTaxLedgers(client);
+
+		expect(result).toEqual([]);
+		// Nothing to join against — the account-name lookup is skipped entirely, same discipline
+		// as resolveStaleAccountIds' own empty-set short-circuit above.
+		expect(from).not.toHaveBeenCalled();
+	});
+
+	it('fn_tax_authority_ledgers RPC error → null (fail-soft; the §2.1.1/§2.1.5 surfaces must survive)', async () => {
+		const { client } = makeSupabase({ ledgersError: { message: 'permission denied' } });
+		const result = await loadExcludedTaxLedgers(client);
+		expect(result).toBeNull();
+	});
+
+	it('account-name join error → null (KNOWN which accounts, unknown what to call them — degrade the whole result rather than guess a label)', async () => {
+		const { client } = makeSupabase({
+			ledgers: [{ account_id: 7, tax_jurisdiction: 'irs' }],
+			accountsError: { message: 'connection reset' }
+		});
+		const result = await loadExcludedTaxLedgers(client);
+		expect(result).toBeNull();
 	});
 });

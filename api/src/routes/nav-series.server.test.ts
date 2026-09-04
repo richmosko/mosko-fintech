@@ -213,9 +213,24 @@ function makeLocals(
 				return { data: [{ is_stale: false, stale_items: [] }], error: null };
 			case 'fn_nav_composition':
 				return {
-					data: { groups: [], buildups: { total_non_re: 0, gross_total: 0, debt: 0, realized_tax_liab: 0, unrealized_tax_liab: 0 }, nav: 0 },
+					data: {
+						groups: [],
+						// SELF-268 / E41-E42: envelopes, not plain numbers.
+						buildups: {
+							total_non_re: 0,
+							gross_total: 0,
+							debt: 0,
+							realized_tax_liab: { status: 'unavailable', reason: 'no_schedule_any_year' },
+							unrealized_tax_liab: { status: 'unavailable', reason: 'no_schedule_any_year' }
+						},
+						nav: 0
+					},
 					error: null
 				};
+			case 'fn_tax_authority_ledgers':
+				// SELF-268 AC 10a: trivial empty default — this file's own scope is chart-scoping,
+				// not the exclusion list (see nav-composition-flip.server.test.ts for that).
+				return { data: [], error: null };
 			case 'fn_nav_series_inflation_adjusted':
 				return { data: navSeriesRpc.data ?? null, error: navSeriesRpc.error ?? null };
 			case 'fn_first_cron_checkpoint':
