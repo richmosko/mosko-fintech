@@ -385,3 +385,172 @@ obligation on that issue now, while the connection is visible.
 **Nothing else.** Posture, ACL, `search_path`, INVOKER discipline, the DEFINER allowlist, the
 #18 fence, idempotency, the deferred set fence's first multi-row exercise, the concurrency
 argument, the app wiring, and the D1 / D3 / D4 / D18 classifications are all clean.
+
+---
+
+# Re-review — 2026-09-04, tip `393c7af`
+
+**Verdict: RED.** Two new vetoes, three flags, two notes. **Every round-1 finding is
+discharged** — V-1, V-2, F-1, F-2 and F-3 all landed, and V-1 landed better than I asked. The
+new RED is entirely on the **unpropagated half of the signature change that V-2's fix required**:
+`fn_tax_bracket_schedule_replace_all` gained a seventh parameter and nothing outside the
+migration moved with it.
+
+Reviewed `7e8026c..393c7af` (4 files: `101`, `103`, the battery, and my own round-1 record
+merged in). `origin/feature/self-259` is at `b073641` and is contained in this tip, so the `101`
+label column and the signature change are in the tree I am verdicting — the app half is not
+"in flight elsewhere", it is stale here.
+
+## VETO 3 — the `p_schedule_label` signature change is unpropagated, and the stale overload is undefended
+
+- `101:1324-1331` declares `pfin.fn_tax_bracket_schedule_replace_all` with **seven** parameters,
+  `p_schedule_label text` fourth, **no DEFAULT**.
+- `api/src/routes/api/settings/tax-brackets/[schedule_id]/+server.ts:260-265` — read from the
+  committed blob at `393c7af`, not the worktree — calls
+  `rpc('fn_tax_bracket_schedule_replace_all', {…})` with **six** named arguments and no
+  `p_schedule_label`. Its last touch is `d5cb00c`, which predates `ae9ff35`. PostgREST resolves
+  RPC by named-argument set, so no function matches: **`PGRST202`, every §2.5.2 settings save
+  fails.**
+- `git show 393c7af:api/src/lib/server/schemas/tax-bracket-schedule.ts | grep -c schedule_label`
+  → **0**. `grep -rn schedule_label api/src/` → nothing tree-wide.
+
+**The security half, which is the part that is not merely broken-loud.**
+`grep -n "drop function" supabase/migrations/101_tax_bracket_tables.sql` → **NONE**.
+`create or replace function` with a **changed argument list creates an OVERLOAD; it does not
+replace.** On a clean apply only the 7-arg form is ever created, so this is inert in CI and in
+production — I want that stated plainly. But in any environment where `101` was applied at its
+6-arg revision and the amended file is then applied, **both overloads exist and both carry
+`EXECUTE` to `authenticated`** — and the 6-arg form satisfies the endpoint's existing call
+exactly. It performs a full DELETE-and-reinsert of the bracket set while **never touching
+`schedule_label`**, leaving the label stating the old filing status and old basis year for
+numbers that changed underneath it. That is precisely the state V-2 was opened to prevent,
+reachable by a plain authenticated caller, silently, with no error. The file offers no defense
+against it and does not mention the possibility.
+
+**Fix criterion:**
+1. **Architect** — `drop function if exists pfin.fn_tax_bracket_schedule_replace_all(bigint,
+   smallint, pfin.tax_schedule_type_enum, numeric, numeric, jsonb);` immediately before the
+   `create or replace`, so the old signature cannot survive any apply order.
+2. **Backend** — the endpoint passes `p_schedule_label`; see VETO 4 for what it may pass.
+3. **QA** — a catalog leg pinning that `pfin` holds **exactly one** proc named
+   `fn_tax_bracket_schedule_replace_all` with `pronargs = 7`. That is the watcher which makes the
+   *next* signature change fail loudly instead of overloading; without it this class recurs
+   silently.
+
+## VETO 4 — `schedule_label` is the first user-controlled free-text field on a Lock 14 write path, and it ships with the DB half only
+
+This is a joint-review-mandatory surface (Lock 14 — typed-input validation + mass-assignment
+prevention) and the app-layer control is **absent**, not weak. The only validation in the tree is
+the DDL's `length(schedule_label) between 1 and 500`. Owed before the field is reachable:
+
+- **Backend** — `schedule_label: z.string().min(1).max(500)` on
+  `taxBracketScheduleReplaceSchema` (`api/src/lib/server/schemas/tax-bracket-schedule.ts:165-173`),
+  keeping `.strict()`. Refuse control characters (`.regex(/^[^\p{Cc}]*$/u)`, or an explicit
+  newline/tab policy if multi-line captions are intended). Refuse whitespace-only — `.trim()`
+  then `.min(1)`, or `.refine(s => s.trim().length > 0)`. **State whether the trimmed or the
+  untrimmed value is written**; the DB stores exactly what it is handed.
+- **Frontend** — the label must render **escaped**. Svelte's `{label}` is safe; `{@html label}`
+  is not. I require that `schedule_label` never reaches `{@html}`, and that any client-side 500
+  bound in the §2.5.2 editor is a **mirror** of the server control, never the control itself.
+- **⚠ Unresolved, and I am saying so rather than either ignoring it or asserting it.** The column
+  comment states the label is *"passed through to the tax-liability payload."* I have **not**
+  established whether that payload reaches the Lock 13 PDF worker's template. If it does, 500
+  characters of user-controlled text enter a renderer inside a zero-DB-isolation container, and
+  escaping there is a **separate control** from escaping in Svelte — it must be shown, not
+  assumed. The answer is owed before the §2.5.3 render lands. Owner: Architect to answer,
+  DevOps/Backend to realize if the answer is yes.
+- **QA** — the RT-24 adversarial battery
+  (`api/src/routes/api/settings/tax-brackets/[schedule_id]/tax-brackets.rt24-adversarial.server.test.ts`)
+  covers numeric inputs only; it gains a **string arm**: over-length (501), empty,
+  whitespace-only, control characters, and a `<script>` payload asserted **stored and escaped at
+  render** rather than rejected — the label is prose, and rejecting angle brackets would be the
+  wrong control.
+
+## FLAG 4 — the DDL admits the blank its own comment says it refuses
+
+`101:547-549` is `check (length(schedule_label) between 1 and 500)`. The column comment says *"a
+schedule whose assumptions go unstated is the condition this column exists to prevent, so the
+empty string is refused rather than admitted as a blank."* A single space has length 1 and
+passes. `check (length(btrim(schedule_label)) between 1 and 500)` enforces what the comment
+claims. **Owner: Architect.** This is the second-line control; the Zod `.trim()` in VETO 4 is the
+first, and neither substitutes for the other.
+
+## FLAG 5 — the battery's `BINDS TO MIGRATION` line is stale, on the very file whose F-3 fix is a hash pin
+
+`supabase/tests/rls/103_tax_bracket_seed.sql:8` still names `07871f6`; `103` has moved twice
+since (`817c44e`, `8247778`). **Answering the question directly: yes, this must move before
+GREEN.** F-3's remediation was to pin the transcribed statement's md5 — a binding claim that is
+itself wrong, sitting a few lines above that pin, defeats what the pin is for. **Owner: QA**, and
+re-derive it from the committed blob (`git show <sha>:supabase/migrations/103_tax_bracket_seed.sql`),
+never from the worktree file.
+
+## FLAG 6 — "`Mental Health` count 0" is true of the migrations and false of the battery
+
+`grep -c "Mental Health"`: `103` → **0**, `101` → **0**,
+`supabase/tests/rls/103_tax_bracket_seed.sql` → **2** (line 31, the header; line 159, the `(T6)`
+assertion message). F-1 is discharged in the DDL and not in the assertions that describe it.
+**Owner: QA.** Two test-message strings do not matter much on their own; I am naming it because
+the report and the tree disagreed, and that is the thing worth catching.
+
+## NOTE 4 — the CA label has 27 characters of headroom
+
+Measured by extracting the three label literals from `103` and counting: **180 / 190 / 473**
+characters against the 500 bound (E29 widened 200→500 after the label gained its citations). One
+more source line breaks the apply. It breaks **loudly** — the CHECK, plus `(L4)` and the `(L5)`
+exact-473 pin — so this is a bound to know about, not a defect.
+
+## NOTE 5 — the seeded label is OUR claim until the user edits it
+
+Option A makes the disclosure user-editable, which is right for settings, and the column comment
+is honest that the label is user-authored and *"NOT constrained to agree"* with the rows — I do
+**not** require a fence that would make them agree. But a **never-edited** seeded label is ours,
+not the user's, and that disclaimer lives in a DB comment no user reads. Not a blocker, and I am
+not requiring a fix. Route to SELF-262/265 as a rendering question: does the §2.5.3 payload
+distinguish a never-edited label from a user-edited one?
+
+## Round-1 findings — all discharged
+
+- **V-1 — discharged, and better than I asked.** The flat/un-indexed statement now cites **both**
+  §17043(c)(2) and (c)(3) at every site, and it adds what I did not think to require: it names
+  what the SINGLE assumption *does* govern on that schedule — the standard deduction from the
+  Form 540 chart at status 1. `grep '\$500,000'` over `101` / `103` / the battery → no hits.
+  `(L2)` is a durable watcher asserting the stored CA label states the threshold is FLAT, so the
+  regression cannot return silently.
+- **V-2 — discharged.** Both writers persist the label. ⚠ **`select distinct` now carries
+  `schedule_label`, which RESTORES the self-policing property the round-1 version had lost by
+  excluding it** — a label that disagreed across one schedule's rows now yields two parent rows
+  for one unique key and aborts, rather than diverging quietly. BLOCK L reads the **stored**
+  column throughout, and `(L6)` exercises the signup-path writer independently of the backfill
+  writer, so a regression in one is attributed correctly.
+- **F-1 — discharged in the DDL** (subject to FLAG 6 in the battery).
+- **F-2 — discharged, in the right shape.** `(U2)` asserts the identical call **succeeds** once a
+  tenant is set, so `(U1)` cannot be a stub that always throws.
+- **F-3 — discharged in substance** (transcription annotation with the statement's md5 pinned),
+  subject to FLAG 5.
+
+## Verify-hook, re-run live at `393c7af`
+
+- **D3** — read live again. `schedule_label` is correctly ruled **outside** the Decision 3 family:
+  it is text, references no row, holds no id, and is not an `INTEGER[]` of ids. `101`'s new header
+  paragraph states this rather than leaving it to inference, which is the right call — the
+  per-column sweep it sits under predates the column, and a column added after a sweep is exactly
+  the one that escapes it. **Family unchanged.**
+- **D4 (§10)** — catalogued list read live again: RT-22 / RT-26 / RT-27. No instance added,
+  removed, reordered or renumbered; no layer attribution moves; no surface becomes "four-layer".
+  Neither file carries a count. **Three axes clean.** The CATALOGUED and CI-FENCED sets remain
+  different sets and nothing here touches either.
+- **D18** — the label column is a new column on a Lock 14 settings-store table, which is why VETO
+  4 exists. It stores **text, not JSONB**, so Decision 18's forward-compat no-JSONB-blobs fence is
+  intact. The family is still five tables; no table was added.
+- `DECISIONS.md` is **unchanged** in this range — the D18 40P01 bullet I cleared in round 1 has
+  not moved.
+
+## Non-objections carried forward and re-checked at this tip
+
+Everything in round 1's non-objection list still holds and I re-checked the two that the diff
+could have moved: `fn_provision_tax_brackets` and `fn_tax_bracket_seed_template` are **still both
+SECURITY INVOKER** with `set search_path = ''`, and the **SECURITY DEFINER allowlist is
+untouched** — `(P3)` still pins `pfin`'s `prosecdef = true` set to the same three names. The
+tenant binding in both writers is still taken from the same CTE row, so #18 leg 2 still holds by
+construction with the label column added. `secrets-manifest.yml`, RT-26 and every CI fence remain
+untouched by this branch.
