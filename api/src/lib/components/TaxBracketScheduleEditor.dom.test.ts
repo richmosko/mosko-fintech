@@ -9,7 +9,9 @@
 //     untestable through this component's UI and is covered instead in
 //     $lib/validation/taxBracketRows.test.ts, against the shared validation module directly.
 //   - the rate-monotonicity courtesy message (Leg B) — reachable through normal editing.
-//   - the federal_lt_cg "takes no deduction" stated-fact caption (AC2).
+//   - federal_lt_cg's standard deduction being STRUCTURALLY fixed at 0 (disabled, posts via a
+//     separate hidden field, PRD §2.5.3 note visible), in both edit and create mode, overriding
+//     even a caller-supplied non-zero initial value.
 //   - the schedule-label textarea holding the seeded 473-character California label (E29).
 //   - hidden identity fields: tax_year/schedule_type always present; schedule_id present in
 //     'edit' mode, ABSENT in 'create' mode (no such identity exists yet).
@@ -120,21 +122,58 @@ describe('TaxBracketScheduleEditor — Leg B rate-monotonicity courtesy message'
 	});
 });
 
-describe('TaxBracketScheduleEditor — federal_lt_cg "takes no deduction" stated fact (AC2)', () => {
-	it('renders the no-deduction caption for federal_lt_cg regardless of the entered value', () => {
-		const { getByText } = render(TaxBracketScheduleEditor, {
+describe('TaxBracketScheduleEditor — federal_lt_cg standard deduction is STRUCTURALLY fixed at 0 (Sec review, feature/self-262)', () => {
+	it('renders the deduction field disabled, fixed at "0", with the PRD §2.5.3 note', () => {
+		const { getByLabelText, getByText } = render(TaxBracketScheduleEditor, {
 			props: { ...editProps, scheduleType: 'federal_lt_cg' as ScheduleType, initialStandardDeduction: 0 }
 		});
-		expect(
-			getByText(
-				'Federal long-term capital gains takes no separate standard deduction — 0 is a stated fact for this schedule, not a blank.'
-			)
-		).toBeTruthy();
+		const deduction = getByLabelText('Standard deduction') as HTMLInputElement;
+		expect(deduction.value).toBe('0');
+		expect(deduction.disabled).toBe(true);
+		expect(getByText('No standard deduction applies to the Federal LT CG schedule (PRD §2.5.3).')).toBeTruthy();
 	});
 
-	it('does NOT render the caption for a different schedule type', () => {
-		const { queryByText } = render(TaxBracketScheduleEditor, { props: editProps });
-		expect(queryByText(/takes no separate standard deduction/)).toBeNull();
+	it('overrides a caller-supplied non-zero initial value to 0 — never trusts the prop for this type', () => {
+		const { getByLabelText, container } = render(TaxBracketScheduleEditor, {
+			props: { ...editProps, scheduleType: 'federal_lt_cg' as ScheduleType, initialStandardDeduction: 15000 }
+		});
+		expect((getByLabelText('Standard deduction') as HTMLInputElement).value).toBe('0');
+		const form = container.querySelector('form') as HTMLFormElement;
+		expect(new FormData(form).get('standard_deduction')).toBe('0');
+	});
+
+	it('a disabled visible input would NOT post — the hidden field is what actually carries "0"', () => {
+		const { container } = render(TaxBracketScheduleEditor, {
+			props: { ...editProps, scheduleType: 'federal_lt_cg' as ScheduleType }
+		});
+		const form = container.querySelector('form') as HTMLFormElement;
+		// Exactly one `standard_deduction` control in the DOM — the hidden field — never both a
+		// disabled visible input AND a hidden one sharing the name (FormData would still work
+		// either way, but two controls of the same name is a latent footgun this proves absent).
+		expect(form.querySelectorAll('[name="standard_deduction"]')).toHaveLength(1);
+		expect(new FormData(form).get('standard_deduction')).toBe('0');
+	});
+
+	it('locks the field in CREATE mode too, and the note still renders', () => {
+		const { getByLabelText, getByText } = render(TaxBracketScheduleEditor, {
+			props: {
+				mode: 'create' as const,
+				scheduleType: 'federal_lt_cg' as ScheduleType,
+				taxYear: 2026,
+				initialLabel: '',
+				initialStandardDeduction: 0,
+				initialPriorYearBalance: null,
+				initialRows: [{ bracket_floor: 0, bracket_rate: 0 }]
+			}
+		});
+		expect((getByLabelText('Standard deduction') as HTMLInputElement).disabled).toBe(true);
+		expect(getByText('No standard deduction applies to the Federal LT CG schedule (PRD §2.5.3).')).toBeTruthy();
+	});
+
+	it('does NOT lock or show the note for a different schedule type', () => {
+		const { getByLabelText, queryByText } = render(TaxBracketScheduleEditor, { props: editProps });
+		expect((getByLabelText('Standard deduction') as HTMLInputElement).disabled).toBe(false);
+		expect(queryByText(/No standard deduction applies/)).toBeNull();
 	});
 });
 

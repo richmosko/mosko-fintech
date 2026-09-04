@@ -58,9 +58,20 @@
 
 	PERCENT <-> FRACTION BOUNDARY (E1 / migration 101's ruling) and the numeric/label/row-ordering
 	client mirrors are UNCHANGED from this file's earlier fetch+JSON revision -- see
-	$lib/validation/numeric.ts, scheduleLabel.ts, taxBracketRows.ts. STANDARD DEDUCTION ZERO
-	("this schedule takes no deduction", AC2) and the FIRST-ROW-FLOOR-STRUCTURALLY-FIXED-AT-0
-	judgment call are likewise unchanged -- see their own inline comments below.
+	$lib/validation/numeric.ts, scheduleLabel.ts, taxBracketRows.ts. The
+	FIRST-ROW-FLOOR-STRUCTURALLY-FIXED-AT-0 judgment call is likewise unchanged -- see its own
+	inline comment below.
+
+	STANDARD DEDUCTION IS STRUCTURALLY FIXED AT 0 FOR `federal_lt_cg` (Sec review on
+	feature/self-262, relayed by team-lead): PRD §2.5.3 states this schedule takes no standard
+	deduction, and migration 104's reader now IGNORES any stored value for this schedule_type and
+	flags it -- so a non-zero value here is not merely wrong, it is a value nothing downstream
+	will honor. Mirrors the bracket-row zero-floor pattern one field up: the field renders
+	disabled and fixed at "0" (a separate hidden `standard_deduction` input carries the value a
+	disabled input would NOT submit) rather than merely defaulting to 0 and hoping the user
+	doesn't change it. Applies uniformly to 'edit' AND 'create' mode, and to the create-from-
+	template prefill (TaxBracketSchedulesList.svelte forces 0 for this type regardless of the
+	basis schedule's own value — see that component's own header).
 
 	SUBMIT-RESULT HANDLING: this component reads the `result` its OWN `use:enhance` SubmitFunction
 	callback receives, never the page's shared `form` prop -- with several forms on one page,
@@ -136,8 +147,17 @@
 		}));
 	}
 
+	/** federal_lt_cg takes NO standard deduction — migration 104's reader now IGNORES any stored
+	 *  value for this schedule_type and flags it (Sec review, feature/self-262). STRUCTURAL, not
+	 *  merely validated, mirroring the bracket-row zero-floor pattern: the field is unenterable
+	 *  rather than merely defaulted, so the wrong value can never be typed in the first place. A
+	 *  caller-supplied `initialStandardDeduction` other than 0 for this type is overridden here,
+	 *  never trusted — same "structural picker over validation-only rejection" reasoning the
+	 *  fixed bracket-1-floor already uses. */
+	const deductionLocked = scheduleType === 'federal_lt_cg';
+
 	let label = $state(initialLabel);
-	let standardDeduction = $state(String(initialStandardDeduction));
+	let standardDeduction = $state(deductionLocked ? '0' : String(initialStandardDeduction));
 	let priorYearBalance = $state(initialPriorYearBalance === null ? '' : String(initialPriorYearBalance));
 	let rows = $state<RowDraft[]>(toDraftRows(initialRows.length > 0 ? initialRows : [{ bracket_floor: 0, bracket_rate: 0 }]));
 
@@ -325,22 +345,38 @@
 	/>
 
 	<div class="scalar-row">
-		<TextField
-			label="Standard deduction"
-			name="standard_deduction"
-			id={`f-std-deduction-${instanceKey}`}
-			bind:value={standardDeduction}
-			inputmode="decimal"
-			numeric
-			placeholder="0.00"
-			hint={scheduleType === 'federal_lt_cg'
-				? 'Federal long-term capital gains takes no separate standard deduction — 0 is a stated fact for this schedule, not a blank.'
-				: undefined}
-			errors={[
-				...(serverFieldErrors.standard_deduction ?? []),
-				...(standardDeductionError() ? [standardDeductionError() as string] : [])
-			]}
-		/>
+		{#if deductionLocked}
+			<div class="fixed-floor-field">
+				<span class="fixed-floor-label" id={`fixed-deduction-label-${instanceKey}`}>Standard deduction</span>
+				<input
+					class="field-input num-input fixed-floor"
+					type="text"
+					inputmode="decimal"
+					value="0"
+					disabled
+					aria-labelledby={`fixed-deduction-label-${instanceKey}`}
+				/>
+				<p class="fixed-note">No standard deduction applies to the Federal LT CG schedule (PRD §2.5.3).</p>
+				{#if serverFieldErrors.standard_deduction}
+					<p class="fixed-note error">{serverFieldErrors.standard_deduction.join(' ')}</p>
+				{/if}
+			</div>
+			<input type="hidden" name="standard_deduction" value="0" />
+		{:else}
+			<TextField
+				label="Standard deduction"
+				name="standard_deduction"
+				id={`f-std-deduction-${instanceKey}`}
+				bind:value={standardDeduction}
+				inputmode="decimal"
+				numeric
+				placeholder="0.00"
+				errors={[
+					...(serverFieldErrors.standard_deduction ?? []),
+					...(standardDeductionError() ? [standardDeductionError() as string] : [])
+				]}
+			/>
+		{/if}
 		<TextField
 			label="Prior-year tax balance"
 			name="tax_balance_prior_year"
@@ -486,6 +522,17 @@
 	}
 	.scalar-row :global(.field) {
 		flex: 1 1 14rem;
+	}
+	.scalar-row .fixed-floor-field {
+		flex: 1 1 14rem;
+	}
+	.fixed-note {
+		margin: 0;
+		font-size: var(--fs-small);
+		color: var(--c-text-secondary);
+	}
+	.fixed-note.error {
+		color: var(--c-neg);
 	}
 	.rows-section {
 		display: flex;

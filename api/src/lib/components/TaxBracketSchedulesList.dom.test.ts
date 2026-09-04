@@ -24,7 +24,7 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect } from 'vitest';
-import { render, fireEvent } from '@testing-library/svelte';
+import { render, fireEvent, within } from '@testing-library/svelte';
 import TaxBracketSchedulesList from './TaxBracketSchedulesList.svelte';
 
 type ScheduleType = 'federal_ordinary' | 'federal_lt_cg' | 'california_ordinary';
@@ -235,5 +235,46 @@ describe('TaxBracketSchedulesList — auto-open default RE-DERIVES from a live j
 		// any reload, matching how `update()` already refreshes every form on the page at once.
 		await rerender({ jurisdictions: [...withBasisButNotCurrent], currentTaxYear: CURRENT_TAX_YEAR });
 		expect(queryByRole('button', { name: 'Create schedule' })).toBeNull();
+	});
+});
+
+describe('TaxBracketSchedulesList — federal_lt_cg create-from-template prefill forces 0 (Sec review, feature/self-262)', () => {
+	it('prefills the create panel’s standard deduction at 0 even when the basis schedule stores a non-zero value (a legacy/anomalous row)', async () => {
+		const jurisdictions: Jurisdiction[] = [
+			...threeCurrentJurisdictions().slice(0, 1),
+			{
+				schedule_type: 'federal_lt_cg',
+				schedules: [
+					makeSchedule({
+						id: 2,
+						schedule_type: 'federal_lt_cg',
+						tax_year: 2025,
+						standard_deduction: 5000 // anomalous — should never reach the create prefill
+					})
+				],
+				current_year_present: false,
+				basis_year: 2025
+			},
+			...threeCurrentJurisdictions().slice(2)
+		];
+		const { getByRole } = render(TaxBracketSchedulesList, {
+			props: { jurisdictions, currentTaxYear: CURRENT_TAX_YEAR }
+		});
+		await fireEvent.click(getByRole('button', { name: 'Add 2026 schedule' }));
+
+		// Scope to the federal_lt_cg <section> (an implicit ARIA "region", since it carries an
+		// accessible name via aria-labelledby) — the OTHER two jurisdictions' own "Standard
+		// deduction" fields are ordinary editable ones and must not be swept into this assertion.
+		const ltCgSection = getByRole('region', { name: 'Federal — Long-Term Capital Gains' });
+		// Two "Standard deduction" fields now render inside it: the 2025 basis editor's own
+		// (locked at 0 per its own stored value being ignored downstream) and the new create
+		// panel's (must ALSO be 0, proving the override, not just a coincidence of the basis
+		// already being 0).
+		const deductionFields = within(ltCgSection).getAllByLabelText('Standard deduction') as HTMLInputElement[];
+		expect(deductionFields).toHaveLength(2);
+		for (const field of deductionFields) {
+			expect(field.value).toBe('0');
+			expect(field.disabled).toBe(true);
+		}
 	});
 });
