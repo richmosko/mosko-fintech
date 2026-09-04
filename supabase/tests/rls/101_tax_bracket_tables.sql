@@ -149,13 +149,16 @@
 --   against a2498ea (origin/feature/self-259) after Architect's two follow-on
 --   commits (fcd8e98 tax_year CHECK + Decision 3 fold-in; a2498ea
 --   fn_tax_bracket_schedule_replace_all) landed mid-authoring — BLOCK RA was
---   added to cover the new function (see its own header note; not part of
---   the original 10-item dispatch). Verified against a scratch DB cloned via
+--   added to cover the new function, then EXTENDED per team-lead's own
+--   follow-up briefing (its 5-item list, 11-15 — the paired control on 11,
+--   updated_at on 13, the tax_year=1900 leg on 14, the FOR UPDATE catalog pin
+--   + recorded-not-asserted race modes on 15, and the prior-row-set-intact
+--   proof on 12). Verified against a scratch DB cloned via
 --   scripts/db-template-clone.sh from `pfin_tmpl` (rebuilt through 101 at
 --   a2498ea) via `pg_prove` (never bare `psql` — a plan under-run exits 0
 --   there). `supabase db reset` is mechanically banned and was not used;
 --   F/CTO's local dev DB was not touched.
---   plan(84): 8 structural policy (S1-S8, tenant/aal2 split per table,
+--   plan(91): 8 structural policy (S1-S8, tenant/aal2 split per table,
 --   USING/WITH CHECK halves per 090's S6a/b masking lesson) + 5 grants
 --   (GR1-GR5: anon zero both tables, service_role zero both tables,
 --   authenticated full CRUD per table x2, anon behavioral throw) + 1
@@ -170,12 +173,14 @@
 --   schedule (AAL-S, mirrors 090 M1-M8) + 8 aal2 backstop on row (AAL-R,
 --   incl. the investigated INSERT shadow) + 1 cross-tenant-at-aal2 (AAL-X,
 --   the aal conjunct never replaces the tenant predicate) + 1 corrupt-the-
---   control leak proof (X1) + 15 replace-all coverage (BLOCK RA, ADDED IN
---   THIS PASS — RA1-RA2 the lock-is-the-fence, RA3-RA6 p_rows shape
---   validation, RA7+RA7a-RA7c the call itself plus its atomic-replace effects,
---   RA8+RA8b the call itself plus its empty-clears effect, RA9 grant
---   structural, RA11a-RA11b the deferred fence surviving a function
---   boundary) = 84.
+--   control leak proof (X1) + 22 replace-all coverage (BLOCK RA — RA1/RA1b/
+--   RA1c/RA2 the lock-is-the-fence plus its paired control, RA3-RA6 p_rows
+--   shape validation, RA7+RA7a-RA7d the call itself plus its atomic-replace
+--   effects incl. updated_at, RA8+RA8b the call itself plus its
+--   empty-clears effect, RA9 grant structural, RA10 the FOR UPDATE catalog
+--   pin, RA-TY1 the tax_year>=1913 CHECK by name, RA11a-RA11d the deferred
+--   fence surviving a function boundary plus the prior-row-set-intact proof)
+--   = 91.
 -- =====================================================================
 
 begin;
@@ -183,7 +188,7 @@ begin;
 -- shared verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(84);
+select plan(91);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
@@ -864,12 +869,15 @@ select is(_rls.count_as(:'tb'::uuid, 'aal2', format('select count(*) from pfin.t
 --   granted-to-authenticated SECURITY INVOKER function is exactly the
 --   surface this role's mandate requires cross-tenant verification for, in
 --   the SAME PR, so coverage is added here rather than left as a gap.
---   Bubble this up: team-lead did not ask for it, and it materially grew
---   the plan count (69 -> 82).
+--   Team-lead's follow-up briefing (its own 5-item list, 11-15) is folded in
+--   here under this file's own RA-numbering; correspondence noted per leg.
 -- =====================================================================
--- (RA1)/(RA2) THE LOCK IS THE TENANT FENCE — one message for BOTH cases
---   (another tenant's schedule, or none at all), deliberately, so the error
---   cannot be used as an existence oracle.
+-- (RA1)/(RA1b)/(RA1c) — team-lead item 11. THE LOCK IS THE TENANT FENCE —
+--   one message for BOTH cases (another tenant's schedule, or none at all),
+--   deliberately, so the error cannot be used as an existence oracle.
+--   (RA1c) is the REQUIRED PAIRED CONTROL: without it, (RA1) alone would
+--   pass even if the function raised UNCONDITIONALLY for every caller, not
+--   just cross-tenant ones.
 select _rls.set_tenant(:'tb'::uuid);
 savepoint sp_ra1;
 select throws_like(
@@ -877,7 +885,22 @@ select throws_like(
   '%is not a schedule this caller owns%',
   '(RA1) B calls replace-all naming A''s REAL schedule_id -> the FOR UPDATE lock runs under B''s own RLS, resolves ZERO ROWS, and RAISES -- the lock IS the tenant fence'
 );
+select set_config('role', 'postgres', true);
+select is(
+  (select count(*) from pfin.tax_bracket_row where schedule_id = :sched_b)::bigint,
+  1::bigint,
+  '(RA1b) B''S OWN rows are UNCHANGED (still the 1 fixture row) after the raise -- the function raises at the lock/fence, its FIRST statement, before touching any row'
+);
 rollback to savepoint sp_ra1;
+select set_config('role', 'postgres', true);
+
+select _rls.set_tenant(:'tb'::uuid);
+savepoint sp_ra1c;
+select lives_ok(
+  format($$ select pfin.fn_tax_bracket_schedule_replace_all(%s::bigint, 2026::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, 6000.00::numeric, null::numeric, '[]'::jsonb) $$, :sched_b),
+  '(RA1c) CONTROL (team-lead item 11''s required pairing): B calls replace-all on B''S OWN schedule -- SUCCEEDS -- proves (RA1)''s raise is owner-mismatch-driven, not a blanket refusal'
+);
+rollback to savepoint sp_ra1c;
 select set_config('role', 'postgres', true);
 
 select _rls.set_tenant(:'ta'::uuid);
@@ -924,9 +947,13 @@ select throws_like(
 rollback to savepoint sp_ra6;
 select set_config('role', 'postgres', true);
 
--- (RA7) SUCCESSFUL ATOMIC REPLACE -- A's own schedule (sched_a), a REAL
---   effect (not savepoint-rolled-back): delete-then-insert the row set AND
---   update the three scalars in one call.
+-- (RA7) team-lead item 13 — SUCCESSFUL ATOMIC REPLACE. A's own schedule
+--   (sched_a), a REAL effect (not savepoint-rolled-back): delete-then-insert
+--   the row set AND update the three scalars, INCLUDING updated_at, in one
+--   call. updated_at sentinel technique per (UPD1) above: `now()` is
+--   transaction-constant across this whole file, so forcing an old sentinel
+--   directly (privileged) first is what makes "moved" observable.
+update pfin.tax_bracket_schedule set updated_at = '2000-01-01'::timestamptz where id = :sched_a;
 select _rls.set_tenant(:'ta'::uuid);
 select lives_ok(
   format($$ select pfin.fn_tax_bracket_schedule_replace_all(%s::bigint, 2026::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, 15000.00::numeric, 250.00::numeric, '[{"bracket_floor":0,"bracket_rate":0.12},{"bracket_floor":45000,"bracket_rate":0.22}]'::jsonb) $$, :sched_a),
@@ -947,6 +974,10 @@ select ok(
   (select standard_deduction = 15000.00 and tax_balance_prior_year = 250.00
      from pfin.tax_bracket_schedule where id = :sched_a),
   '(RA7c) the schedule''s scalars (standard_deduction, tax_balance_prior_year) were updated by the SAME call -- the update half landed correctly'
+);
+select ok(
+  (select updated_at > '2000-01-01'::timestamptz from pfin.tax_bracket_schedule where id = :sched_a),
+  '(RA7d) updated_at MOVED away from the forced 2000-01-01 sentinel -- the function''s own UPDATE step fires tax_bracket_schedule_set_updated_at just like a direct authenticated UPDATE does'
 );
 
 -- (RA8) EMPTY ARRAY CLEARS THE SCHEDULE -- legal, per the migration's own
@@ -975,22 +1006,91 @@ select ok(
   '(RA9) fn_tax_bracket_schedule_replace_all: authenticated holds EXECUTE (a direct call is its only use); anon, service_role and PUBLIC do not -- the OPPOSITE grant shape from the two trigger fences, deliberately (a direct call IS how this one is used)'
 );
 
--- (RA11) the DEFERRED set fence still fires at COMMIT even when the write
---   goes through the function -- a caller with no exception from the CALL
---   has not yet been told the write is valid (the function's own comment).
+-- (RA10) team-lead item 15 (the concurrency half). CATALOG PIN, not a
+--   behavioral concurrency leg: pgTAP cannot hold two concurrent sessions,
+--   so the FOR UPDATE lock that serializes the replace-all (execution-log
+--   E8) is verified by pinning that the function's body CONTAINS a `for
+--   update` clause, via pg_get_functiondef (a real catalog read, not a
+--   textual grep for the words "security invoker" or similar prose, which
+--   would prove nothing about the actual attribute).
+--   ⚠ THE TWO RACE MODES E8 MEASURED ARE RECORDED HERE AS A COMMENT, NOT
+--   ASSERTED — team-lead's explicit instruction, because no single-session
+--   pgTAP probe can observe either: (i) both callers send a non-empty set ->
+--   the SECOND aborts on a duplicate-key violation
+--   (tax_bracket_row_schedule_id_bracket_floor_key), because leg A forces
+--   bracket_floor 0 into every non-empty schedule and any two non-empty sets
+--   therefore collide there; (ii) the second caller sends an EMPTY set to
+--   clear the schedule -> NO ERROR AT ALL, and the schedule silently keeps
+--   the first caller's rows (a silent lost CLEAR). A ∪ B is NOT reachable on
+--   this pair and is deliberately not what this pin, or any leg in this
+--   file, claims to prove.
+select ok(
+  (select pg_get_functiondef(p.oid) ~* 'for update'
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'pfin' and p.proname = 'fn_tax_bracket_schedule_replace_all'),
+  '(RA10) CATALOG PIN: fn_tax_bracket_schedule_replace_all''s body contains a FOR UPDATE lock (pg_get_functiondef, a real catalog read) -- this pin stands in for the concurrency proof no single-session pgTAP probe can give; the two measured race modes are recorded in this leg''s own comment above, not asserted'
+);
+
+-- (RA-TY1) team-lead item 14 — tax_year = 1900 rejected BY NAME (the new
+--   `tax_bracket_schedule_tax_year_check`, fcd8e98). Exercised via the
+--   replace-all function itself (this surface's actual write path), not a
+--   bare UPDATE, since that CHECK applies regardless of write path.
+select _rls.set_tenant(:'ta'::uuid);
+savepoint sp_ra_ty1;
+select throws_like(
+  format($$ select pfin.fn_tax_bracket_schedule_replace_all(%s::bigint, 1900::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, 15000.00::numeric, null::numeric, '[]'::jsonb) $$, :sched_a),
+  '%tax_bracket_schedule_tax_year_check%',
+  '(RA-TY1) tax_year = 1900 (before the first US federal income-tax year, 1913) REJECTED BY NAME -- the CHECK constraint tax_bracket_schedule_tax_year_check fires, not merely SOME 23514'
+);
+rollback to savepoint sp_ra_ty1;
+select set_config('role', 'postgres', true);
+
+-- (RA11) team-lead item 12 — the DEFERRED set fence still fires even when
+--   the write goes through the function, AND (its explicit ask) "after the
+--   failure the prior row set is intact". Chosen instrument: `set
+--   constraints all immediate` issued RIGHT AFTER the call (stated
+--   explicitly, per team-lead's either/or). A KNOWN prior valid row set is
+--   established FIRST (sched_a is empty at this point, from (RA8) — an empty
+--   "prior" would make the intact-proof vacuous), the whole probe runs
+--   inside ONE outer savepoint, and that savepoint is rolled back AFTER both
+--   assertions — simulating what a REAL caller's aborted transaction does
+--   (PostgREST wraps each RPC call in its own transaction; an uncaught
+--   exception aborts the whole thing, so the function's own DELETE+INSERT
+--   never actually commits) — then the prior state is asserted to survive.
+--   pgTAP's own throws_like catches the raise via an implicit savepoint
+--   scoped to ONLY the failing `set constraints all immediate` statement, so
+--   without this file's OWN outer rollback the bad (non-monotone) row set
+--   would be left sitting in the table, not the prior one.
+select _rls.set_tenant(:'ta'::uuid);
+select pfin.fn_tax_bracket_schedule_replace_all(:sched_a::bigint, 2026::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, 15000.00::numeric, 250.00::numeric, '[{"bracket_floor":0,"bracket_rate":0.05}]'::jsonb);
+select set_config('role', 'postgres', true);
+
+savepoint sp_ra11;
 select _rls.set_tenant(:'ta'::uuid);
 set constraints all deferred;
 select lives_ok(
   format($$ select pfin.fn_tax_bracket_schedule_replace_all(%s::bigint, 2026::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, 15000.00::numeric, 250.00::numeric, '[{"bracket_floor":0,"bracket_rate":0.30},{"bracket_floor":40000,"bracket_rate":0.10}]'::jsonb) $$, :sched_a),
-  '(RA11a) the CALL ITSELF succeeds even though the batch is non-monotone (0.30 then 0.10) -- the set fence is DEFERRED and has not fired yet'
+  '(RA11a) the CALL ITSELF succeeds even though the batch is non-monotone (0.30 then 0.10) -- the set fence is DEFERRED and has not fired yet, so the function RETURNS CLEANLY'
 );
 select throws_like(
   'set constraints all immediate',
   '%leg B rate monotonicity%',
-  '(RA11b) SET CONSTRAINTS ALL IMMEDIATE, issued AFTER the function already returned successfully, RAISES leg B -- proving a caller with no exception from fn_tax_bracket_schedule_replace_all has NOT yet been told the write is valid'
+  '(RA11b) SET CONSTRAINTS ALL IMMEDIATE, issued RIGHT AFTER the function already returned successfully, RAISES leg B -- proving a caller with no exception from fn_tax_bracket_schedule_replace_all has NOT yet been told the write is valid'
 );
-set constraints all deferred;
 select set_config('role', 'postgres', true);
+rollback to savepoint sp_ra11;
+set constraints all deferred;
+
+select is(
+  (select count(*) from pfin.tax_bracket_row where schedule_id = :sched_a)::bigint,
+  1::bigint,
+  '(RA11c) team-lead item 12''s "after the failure the prior row set is intact": rolling back the failed call (as a real caller''s aborted transaction would) restores the PRIOR set (1 row) -- the non-monotone batch never actually replaced it'
+);
+select is(
+  (select bracket_rate from pfin.tax_bracket_row where schedule_id = :sched_a and bracket_floor = 0),
+  0.05::numeric(12,8),
+  '(RA11d) the PRIOR row''s exact value (rate=0.05, set up before (RA11) ran) survives -- not merely a row count coincidence'
+);
 
 select * from finish();
 rollback;
