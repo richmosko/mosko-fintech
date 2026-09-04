@@ -103,3 +103,33 @@ Stated because an unstated non-objection reads as an unexamined surface.
 ## Reviewer's own error, recorded in the same pass
 
 I began this review treating the brief's item-7 statement (*"104 ignores + flags it (`standard_deduction_ignored`)"*) as a premise to confirm rather than a claim to measure, and drafted a note around whether the *visibility* was sufficient. The grep that would have caught it — `grep -rn "standard_deduction_ignored"` over the tree — is the first thing I should have run against that sentence, and it returns nothing. Measuring it is what surfaced F-1; had I accepted the premise, the stale-`104` merge hazard would have gone unreported entirely. **A brief's factual assertion about the tree is a claim, not a given** — including, and especially, when it is stated as background to a different question.
+
+---
+
+## Clearance annotation — 2026-09-04, appended not rewritten
+
+**The findings above are the dated record of the review at `ba8938c` and are not edited.** This block records what changed afterwards and what the verdict is now.
+
+**Ref re-read:** `origin/feature/self-265` @ **`6c550397c8e5eac8f77686d2964f0a850acbe031`**. ⚠ Team-lead's notification named `2b8de9d`; the branch had already moved twice more by the time I measured — `0b3e898` (merge of `origin/feature/self-262`) and `6c55039` (merge of `origin/feature/self-265-sec`, which is how the findings file above landed on the branch it reports on). `origin/main` is `957b6fc`.
+
+### F-1 — **CLEARED.** Path (a) was taken: SELF-262's second pass merged into this branch.
+
+- `git diff --stat origin/feature/self-265 origin/feature/self-262 -- supabase/migrations/104_fn_compute_tax_liability.sql DECISIONS.md` → **empty**. The two carried blobs are now byte-identical to their owning branch, which is the verification F-1 required (`git diff`, not inspection).
+- `git grep -c "standard_deduction_ignored" origin/feature/self-265` → `DECISIONS.md:2`, `104:3` — was zero at `ba8938c`.
+- The F-2 fix itself is present in the merged body: `104:591` reads `then 0 else pk.standard_deduction end), 0) as taxable`, so `federal_lt_cg` subtracts nothing.
+
+### F-2 — **CLEARED with F-1**, exactly as stated above. No SELF-265 code change was needed and none was made.
+
+### F-3 — **STILL OPEN.** `DeleteScheduleControl.svelte` at the tip still handles only `result.type === 'success'` (line 36); there is no `failure` branch, so the 409 seed-template refusal and both 500s continue to render nothing. Unchanged by the merge. Disposition is team-lead's: fix (Frontend, one branch in the existing `SubmitFunction` callback + a paired test that reds when it is struck) or accept explicitly.
+
+### Nothing else in scope moved.
+
+- `git diff --stat ba8938c origin/feature/self-265 -- api/` → **empty**. The entire SELF-265-authored surface — loader, three actions, shared write helper, Zod schema, client mirrors, all three components — is unchanged from what the findings above reviewed.
+- `supabase/` delta is `104` plus its new pgTAP battery only; **`101` and `103` are untouched** (`git diff --stat … -- 101… 103…` → empty), so every fence the review turned on is the one it read.
+- The `DECISIONS.md` delta is entirely ADR-067 Decision 5; **zero** added or removed lines mention ADR-011 Decision 3, 4 or 18. The verify-hook discharge above therefore stands without re-running.
+
+### **VERDICT AT `6c55039`: GREEN**, with **F-3 open as a flag** — a should-fix whose disposition team-lead owns, not a merge blocker.
+
+### ⚠ Correcting the notification that prompted this block, because the error direction matters
+
+The message said *"no file under review changed."* Measured, that is **false as stated and true only of `api/`**: `DECISIONS.md` moved 16 lines and `104` moved 278 between `ba8938c` and the tip — and those are precisely the two files F-1 was about. The framing would have had me leave a **cleared blocker standing** against the branch. That is the exact inverse of the error recorded at the foot of the review above, from the same brief, in the same review: there I nearly accepted a premise that a control existed when it did not; here I was invited to accept a premise that nothing had moved when the thing that moved was the finding's whole subject. **Both directions are the same failure — taking a claim about the tree from a message instead of from the tree — and a "not a scope change, FYI" framing is what makes the second one easy to wave through.**
