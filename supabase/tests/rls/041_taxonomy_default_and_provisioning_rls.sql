@@ -155,11 +155,11 @@ select is(
   (select count(*) from pfin.taxonomy_default)::bigint, 38::bigint,
   '(DEFAULT1) taxonomy_default: 38 rows post-split (asset-only provisioning source)'
 );
--- (DEFAULT2) posting_prototype_default is non-empty post-split. 29 (was 27 pre-091;
---   091/ADR-062 added the 2-row Equity seed pair — ⚠ HARDCODE-VS-DYNAMIC rule, header note).
+-- (DEFAULT2) posting_prototype_default is non-empty post-split. 30 (was 29 pre-100;
+--   100/SELF-263 added the Revenue / Dividend - Qualified row — ⚠ HARDCODE-VS-DYNAMIC rule, header note).
 select is(
-  (select count(*) from pfin.posting_prototype_default)::bigint, 29::bigint,
-  '(DEFAULT2) posting_prototype_default: 29 rows post-091 (cashflow-only provisioning source)'
+  (select count(*) from pfin.posting_prototype_default)::bigint, 30::bigint,
+  '(DEFAULT2) posting_prototype_default rows after 100 = 30 (29 at 091 + Dividend - Qualified; cashflow-only provisioning source)'
 );
 -- (DEFAULT3) the two provisioning sources are DISJOINT on (cat, sub_cat) — the
 --   precondition the app's two-upsert provisioning code assumes but never checks,
@@ -226,11 +226,12 @@ select is(
   0::bigint,
   '(1b-element) provisioning fixture extension: A''s 38 freshly-provisioned user_taxonomy rows carry ZERO NULL element values — the column-listed copy from taxonomy_default (BLOCK 1) propagates element correctly, not silently'
 );
--- (1b-proto) A now owns exactly 29 posting_prototype rows (was 27 pre-091).
+-- (1b-proto) A now owns exactly 30 posting_prototype rows (was 29 pre-100;
+--   100/SELF-263 added the Revenue / Dividend - Qualified row).
 select is(
   (select count(*) from pfin.posting_prototype where users_id = :'ta')::bigint,
-  29::bigint,
-  '(1b-proto) owner provisioned all 29 cashflow default rows: A''s posting_prototype count = 29'
+  30::bigint,
+  '(1b-proto) A''s posting_prototype rows after 100 = 30 (29 at 091 + Dividend - Qualified): owner provisioned all cashflow default rows'
 );
 select set_config('role', 'postgres', true);
 
@@ -300,11 +301,12 @@ select is(
   38::bigint,
   '(3b-storage) idempotent re-provision: A''s user_taxonomy count is STILL 38 after the second run'
 );
--- (3b-proto) A STILL owns exactly 29 posting_prototype rows (was 27 pre-091).
+-- (3b-proto) A STILL owns exactly 30 posting_prototype rows (was 29 pre-100;
+--   100/SELF-263 added the Revenue / Dividend - Qualified row).
 select is(
   (select count(*) from pfin.posting_prototype where users_id = :'ta')::bigint,
-  29::bigint,
-  '(3b-proto) idempotent re-provision: A''s posting_prototype count is STILL 29 after the second run'
+  30::bigint,
+  '(3b-proto) A''s posting_prototype rows after 100 = 30 (29 at 091 + Dividend - Qualified): idempotent re-provision, count STILL 30 after the second run'
 );
 
 -- =====================================================================
@@ -320,12 +322,13 @@ select is(
 );
 select set_config('role', 'postgres', true);
 
--- (4a-proto) authenticated A reads the whole cashflow default set = 29 (was 27 pre-091).
+-- (4a-proto) authenticated A reads the whole cashflow default set = 30 (was 29 pre-100;
+--   100/SELF-263 added the Revenue / Dividend - Qualified row).
 select _rls.set_tenant_aal(:'ta'::uuid, 'aal1');
 select is(
   (select count(*) from pfin.posting_prototype_default)::bigint,
-  29::bigint,
-  '(4a-proto) posting_prototype_default global shared-read: authenticated A SELECTs all 29 rows (using(true), same posture as taxonomy_default)'
+  30::bigint,
+  '(4a-proto) posting_prototype_default rows after 100 = 30 (29 at 091 + Dividend - Qualified): authenticated A SELECTs all 30 rows (using(true), same posture as taxonomy_default)'
 );
 select set_config('role', 'postgres', true);
 
@@ -340,13 +343,13 @@ select is(
 );
 select set_config('role', 'postgres', true);
 
--- (4b-proto) same proof, posting_prototype_default: B (totp) at aal1 reads the same 29 rows
---   (was 27 pre-091).
+-- (4b-proto) same proof, posting_prototype_default: B (totp) at aal1 reads the same 30 rows
+--   (was 29 pre-100; 100/SELF-263 added the Revenue / Dividend - Qualified row).
 select _rls.set_tenant_aal(:'tb'::uuid, 'aal1');
 select is(
   (select count(*) from pfin.posting_prototype_default)::bigint,
-  29::bigint,
-  '(4b-proto) posting_prototype_default readable identically across tenants + NOT aal-gated: B (totp) at aal1 reads the same 29 rows'
+  30::bigint,
+  '(4b-proto) posting_prototype_default rows after 100 = 30 (29 at 091 + Dividend - Qualified): readable identically across tenants + NOT aal-gated'
 );
 select set_config('role', 'postgres', true);
 
