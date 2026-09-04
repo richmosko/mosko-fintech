@@ -275,7 +275,11 @@
 
 <form class="editor" method="POST" action={actionPath} use:enhance={handleSubmit}>
 	<div class="editor-head">
-		<h3 class="schedule-title">{SCHEDULE_TYPE_LABELS[scheduleType]}</h3>
+		<!-- Not a heading: the enclosing jurisdiction <section> (TaxBracketSchedulesList.svelte)
+		     already carries an <h2> naming this schedule type via aria-labelledby -- a second
+		     heading repeating the identical text here would be a duplicate `role="heading"`
+		     match for the same accessible name, not extra structure. -->
+		<span class="schedule-type-tag">{SCHEDULE_TYPE_LABELS[scheduleType]}</span>
 		<span class="tax-year">Tax year {taxYear}</span>
 	</div>
 
@@ -450,8 +454,7 @@
 		justify-content: space-between;
 		gap: var(--space-3);
 	}
-	.schedule-title {
-		margin: 0;
+	.schedule-type-tag {
 		font: var(--weight-semi) var(--fs-h3) / 1.2 var(--font-ui);
 		color: var(--c-text-primary);
 	}
