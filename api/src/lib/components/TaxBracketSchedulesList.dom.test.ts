@@ -1,13 +1,16 @@
 // TaxBracketSchedulesList.dom.test.ts — SELF-265 verification battery, reconciled against
-// Backend's LANDED `jurisdictions[]` / `current_year_present` / `basis_year` contract
-// (feature/self-265-backend @ caebbec). Covers:
-//   - AC1 three-jurisdiction rendering when every type has a current-year schedule.
-//   - the AC7a/E22 informational note + "Add {currentTaxYear} schedule" toggle when a
-//     jurisdiction's current_year_present is false, in BOTH its sub-cases (a prior-year basis
-//     exists vs. no schedule at all for that type).
+// team-lead ruling E35 (under F/CTO delegation): prior-year schedules stay fully editable
+// (collapsed under "Prior years on file", not delete-only), and delete renders only when a
+// jurisdiction holds more than one schedule (never on the sole schedule of a type). Covers:
+//   - AC1 three-jurisdiction rendering when every type has a current-year schedule, and no
+//     delete control anywhere (each type holds exactly one schedule).
+//   - the AC7a/E22 informational note + "Add {currentTaxYear} schedule" toggle, in both
+//     sub-cases (a prior-year basis exists vs. no schedule at all for that type), with the
+//     exact wording E35 specifies.
 //   - the create panel prefilling from the basis schedule as a starting template.
-//   - "Other years on file" rendering (with a delete control) for a schedule superseded by a
-//     newer one, and NOT rendering that section when there is nothing to show.
+//   - "Prior years on file" rendering a collapsed, fully-editable disclosure per superseded
+//     schedule, with delete now available on BOTH the basis and prior editors once a
+//     jurisdiction holds more than one schedule.
 //
 // @vitest-environment jsdom
 
@@ -49,54 +52,47 @@ function makeSchedule(overrides: Partial<ScheduleRecord>): ScheduleRecord {
 
 const CURRENT_TAX_YEAR = 2026;
 
-describe('TaxBracketSchedulesList — AC1 three-jurisdiction grouping (all current)', () => {
-	it('renders all three jurisdiction editors, no missing-schedule note, when every type is current', () => {
-		const jurisdictions: Jurisdiction[] = [
-			{
-				schedule_type: 'federal_ordinary',
-				schedules: [makeSchedule({ id: 1, schedule_type: 'federal_ordinary' })],
-				current_year_present: true,
-				basis_year: 2026
-			},
-			{
-				schedule_type: 'federal_lt_cg',
-				schedules: [makeSchedule({ id: 2, schedule_type: 'federal_lt_cg', standard_deduction: 0 })],
-				current_year_present: true,
-				basis_year: 2026
-			},
-			{
-				schedule_type: 'california_ordinary',
-				schedules: [makeSchedule({ id: 3, schedule_type: 'california_ordinary' })],
-				current_year_present: true,
-				basis_year: 2026
-			}
-		];
+function threeCurrentJurisdictions(): Jurisdiction[] {
+	return [
+		{
+			schedule_type: 'federal_ordinary',
+			schedules: [makeSchedule({ id: 1, schedule_type: 'federal_ordinary' })],
+			current_year_present: true,
+			basis_year: 2026
+		},
+		{
+			schedule_type: 'federal_lt_cg',
+			schedules: [makeSchedule({ id: 2, schedule_type: 'federal_lt_cg', standard_deduction: 0 })],
+			current_year_present: true,
+			basis_year: 2026
+		},
+		{
+			schedule_type: 'california_ordinary',
+			schedules: [makeSchedule({ id: 3, schedule_type: 'california_ordinary' })],
+			current_year_present: true,
+			basis_year: 2026
+		}
+	];
+}
+
+describe('TaxBracketSchedulesList — AC1 three-jurisdiction grouping (all current, one schedule each)', () => {
+	it('renders all three jurisdiction editors, no missing-schedule note, and no delete control anywhere (E35(b): sole schedule per type)', () => {
 		const { getByRole, queryByRole } = render(TaxBracketSchedulesList, {
-			props: { jurisdictions, currentTaxYear: CURRENT_TAX_YEAR }
+			props: { jurisdictions: threeCurrentJurisdictions(), currentTaxYear: CURRENT_TAX_YEAR }
 		});
 		expect(getByRole('heading', { name: 'Federal — Ordinary Income' })).toBeTruthy();
 		expect(getByRole('heading', { name: 'Federal — Long-Term Capital Gains' })).toBeTruthy();
 		expect(getByRole('heading', { name: 'California (FTB) — Ordinary Income' })).toBeTruthy();
 		expect(queryByRole('status')).toBeNull(); // no missing-schedule note
 		expect(queryByRole('button', { name: /Add 2026 schedule/ })).toBeNull();
+		expect(queryByRole('button', { name: /^Delete /i })).toBeNull();
 	});
 });
 
-describe('TaxBracketSchedulesList — AC7a/E22 prior-year-basis fallback note', () => {
-	it('shows the "hasn’t been entered yet ... runs on the prior schedule" note and an Add-schedule toggle, while still rendering the basis-year editor', async () => {
+describe('TaxBracketSchedulesList — AC7a/E22 prior-year-basis fallback note (E35 wording)', () => {
+	it('shows "No {type} schedule entered for {year} — using {basis}." and an Add-schedule toggle, while still rendering the basis-year editor', async () => {
 		const jurisdictions: Jurisdiction[] = [
-			{
-				schedule_type: 'federal_ordinary',
-				schedules: [makeSchedule({ id: 1, schedule_type: 'federal_ordinary', tax_year: 2026 })],
-				current_year_present: true,
-				basis_year: 2026
-			},
-			{
-				schedule_type: 'federal_lt_cg',
-				schedules: [makeSchedule({ id: 2, schedule_type: 'federal_lt_cg', tax_year: 2026, standard_deduction: 0 })],
-				current_year_present: true,
-				basis_year: 2026
-			},
+			...threeCurrentJurisdictions().slice(0, 2),
 			{
 				schedule_type: 'california_ordinary',
 				schedules: [makeSchedule({ id: 3, schedule_type: 'california_ordinary', tax_year: 2025 })],
@@ -108,9 +104,7 @@ describe('TaxBracketSchedulesList — AC7a/E22 prior-year-basis fallback note', 
 			props: { jurisdictions, currentTaxYear: CURRENT_TAX_YEAR }
 		});
 		expect(
-			getByText(
-				"California (FTB) — Ordinary Income for 2026 hasn't been entered yet — figures currently run on the 2025 schedule."
-			)
+			getByText('No California (FTB) — Ordinary Income schedule entered for 2026 — using 2025.')
 		).toBeTruthy();
 		// the 2025 basis schedule's own editor still renders (tax year visible)
 		expect(getByText('Tax year 2025')).toBeTruthy();
@@ -121,36 +115,25 @@ describe('TaxBracketSchedulesList — AC7a/E22 prior-year-basis fallback note', 
 	});
 });
 
-describe('TaxBracketSchedulesList — AC8(i)-equivalent: no schedule at all for a jurisdiction', () => {
-	it('shows the "no schedule on file yet" note and an auto-open, blank create panel (no basis editor)', () => {
+describe('TaxBracketSchedulesList — no schedule at all for a jurisdiction', () => {
+	it('shows "No {type} schedule entered." and an auto-open, blank create panel (no basis editor)', () => {
 		const jurisdictions: Jurisdiction[] = [
-			{
-				schedule_type: 'federal_ordinary',
-				schedules: [makeSchedule({ id: 1, schedule_type: 'federal_ordinary' })],
-				current_year_present: true,
-				basis_year: 2026
-			},
-			{
-				schedule_type: 'federal_lt_cg',
-				schedules: [makeSchedule({ id: 2, schedule_type: 'federal_lt_cg', standard_deduction: 0 })],
-				current_year_present: true,
-				basis_year: 2026
-			},
+			...threeCurrentJurisdictions().slice(0, 2),
 			{ schedule_type: 'california_ordinary', schedules: [], current_year_present: false, basis_year: null }
 		];
 		const { getByText, getByRole, queryByRole } = render(TaxBracketSchedulesList, {
 			props: { jurisdictions, currentTaxYear: CURRENT_TAX_YEAR }
 		});
-		expect(getByText('No California (FTB) — Ordinary Income schedule on file yet.')).toBeTruthy();
+		expect(getByText('No California (FTB) — Ordinary Income schedule entered.')).toBeTruthy();
 		// no basis editor to show — but the create panel auto-opens since there's nothing else
 		expect(getByRole('button', { name: 'Create schedule' })).toBeTruthy();
 		expect(queryByRole('button', { name: /Add 2026 schedule/ })).toBeNull(); // already open, no toggle shown
 	});
 });
 
-describe('TaxBracketSchedulesList — "Other years on file"', () => {
-	it('lists a superseded schedule with a delete control, separate from the primary basis editor', () => {
-		const jurisdictions: Jurisdiction[] = [
+describe('TaxBracketSchedulesList — "Prior years on file" (E35(a): fully editable, not delete-only)', () => {
+	function jurisdictionsWithPriorYear(): Jurisdiction[] {
+		return [
 			{
 				schedule_type: 'federal_ordinary',
 				schedules: [
@@ -160,51 +143,32 @@ describe('TaxBracketSchedulesList — "Other years on file"', () => {
 				current_year_present: true,
 				basis_year: 2026
 			},
-			{
-				schedule_type: 'federal_lt_cg',
-				schedules: [makeSchedule({ id: 2, schedule_type: 'federal_lt_cg', standard_deduction: 0 })],
-				current_year_present: true,
-				basis_year: 2026
-			},
-			{
-				schedule_type: 'california_ordinary',
-				schedules: [makeSchedule({ id: 3, schedule_type: 'california_ordinary' })],
-				current_year_present: true,
-				basis_year: 2026
-			}
+			...threeCurrentJurisdictions().slice(1)
 		];
-		const { getByText, getByRole } = render(TaxBracketSchedulesList, {
-			props: { jurisdictions, currentTaxYear: CURRENT_TAX_YEAR }
+	}
+
+	it('lists the superseded schedule collapsed under a disclosure, as its own full editor', () => {
+		const { getByText } = render(TaxBracketSchedulesList, {
+			props: { jurisdictions: jurisdictionsWithPriorYear(), currentTaxYear: CURRENT_TAX_YEAR }
 		});
-		expect(getByText('Other years on file')).toBeTruthy();
+		expect(getByText('Prior years on file')).toBeTruthy();
 		expect(getByText('2024 — Old 2024')).toBeTruthy();
-		expect(getByRole('button', { name: /Delete Federal — Ordinary Income \(tax year 2024\)/ })).toBeTruthy();
+		// the prior schedule's OWN editor renders (its own "Tax year 2024" tag), not just a label
+		expect(getByText('Tax year 2024')).toBeTruthy();
 	});
 
-	it('renders no "Other years on file" section when only the basis schedule exists', () => {
-		const jurisdictions: Jurisdiction[] = [
-			{
-				schedule_type: 'federal_ordinary',
-				schedules: [makeSchedule({ id: 1, schedule_type: 'federal_ordinary' })],
-				current_year_present: true,
-				basis_year: 2026
-			},
-			{
-				schedule_type: 'federal_lt_cg',
-				schedules: [makeSchedule({ id: 2, schedule_type: 'federal_lt_cg', standard_deduction: 0 })],
-				current_year_present: true,
-				basis_year: 2026
-			},
-			{
-				schedule_type: 'california_ordinary',
-				schedules: [makeSchedule({ id: 3, schedule_type: 'california_ordinary' })],
-				current_year_present: true,
-				basis_year: 2026
-			}
-		];
-		const { queryByText } = render(TaxBracketSchedulesList, {
-			props: { jurisdictions, currentTaxYear: CURRENT_TAX_YEAR }
+	it('E35(b): delete is now available on BOTH the basis and the prior-year editor, since the jurisdiction holds two schedules', () => {
+		const { getAllByRole } = render(TaxBracketSchedulesList, {
+			props: { jurisdictions: jurisdictionsWithPriorYear(), currentTaxYear: CURRENT_TAX_YEAR }
 		});
-		expect(queryByText('Other years on file')).toBeNull();
+		const deleteButtons = getAllByRole('button', { name: /^Delete Federal — Ordinary Income/i });
+		expect(deleteButtons).toHaveLength(2); // one for the 2026 basis, one for the 2024 prior
+	});
+
+	it('renders no "Prior years on file" section when only the basis schedule exists', () => {
+		const { queryByText } = render(TaxBracketSchedulesList, {
+			props: { jurisdictions: threeCurrentJurisdictions(), currentTaxYear: CURRENT_TAX_YEAR }
+		});
+		expect(queryByText('Prior years on file')).toBeNull();
 	});
 });

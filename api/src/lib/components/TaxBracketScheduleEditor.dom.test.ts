@@ -14,6 +14,11 @@
 //   - hidden identity fields: tax_year/schedule_type always present; schedule_id present in
 //     'edit' mode, ABSENT in 'create' mode (no such identity exists yet).
 //   - the create-mode action path and submit-button copy.
+//   - canDelete gating (E35(b)): no delete control unless the caller explicitly says more than
+//     one schedule exists for this type, and never in create mode. NOT covered here: the
+//     `tax_year`-keyed duplicate-schedule error (E35 team-lead note) renders only after a real
+//     createSchedule 409, which is server-error-rendering-after-submit — out of this harness's
+//     reach for the same documented reason below.
 //   - Save disabled (and no crash on a forced submit) while a courtesy check fails — this file
 //     does NOT assert on server-error rendering after a real submit: `tests/stubs/app-forms.ts`'s
 //     `enhance` stub deliberately never invokes a SubmitFunction's returned async callback (no
@@ -130,6 +135,39 @@ describe('TaxBracketScheduleEditor — federal_lt_cg "takes no deduction" stated
 	it('does NOT render the caption for a different schedule type', () => {
 		const { queryByText } = render(TaxBracketScheduleEditor, { props: editProps });
 		expect(queryByText(/takes no separate standard deduction/)).toBeNull();
+	});
+});
+
+describe('TaxBracketScheduleEditor — canDelete gating (E35(b): never on the sole schedule of a type)', () => {
+	it('renders no delete control by default (canDelete not passed)', () => {
+		const { queryByRole } = render(TaxBracketScheduleEditor, { props: editProps });
+		expect(queryByRole('button', { name: /^Delete /i })).toBeNull();
+	});
+
+	it('renders no delete control even in edit mode when canDelete is explicitly false', () => {
+		const { queryByRole } = render(TaxBracketScheduleEditor, { props: { ...editProps, canDelete: false } });
+		expect(queryByRole('button', { name: /^Delete /i })).toBeNull();
+	});
+
+	it('renders the delete control when canDelete is true (the list has already confirmed more than one schedule exists)', () => {
+		const { getByRole } = render(TaxBracketScheduleEditor, { props: { ...editProps, canDelete: true } });
+		expect(getByRole('button', { name: 'Delete Federal — Ordinary Income (tax year 2026)' })).toBeTruthy();
+	});
+
+	it('never renders a delete control in create mode, even if canDelete were somehow true', () => {
+		const { queryByRole } = render(TaxBracketScheduleEditor, {
+			props: {
+				mode: 'create' as const,
+				scheduleType: 'california_ordinary' as ScheduleType,
+				taxYear: 2026,
+				initialLabel: '',
+				initialStandardDeduction: 0,
+				initialPriorYearBalance: null,
+				initialRows: [{ bracket_floor: 0, bracket_rate: 0 }],
+				canDelete: true
+			}
+		});
+		expect(queryByRole('button', { name: /^Delete /i })).toBeNull();
 	});
 });
 

@@ -2,40 +2,39 @@
 	TaxBracketSchedulesList.svelte -- top-level list for the §2.5.2 /settings/tax-brackets
 	editor (SELF-265 AC1/AC7/AC7a). Frontend-owned browser surface. Consumes the loader's
 	`jurisdictions` array VERBATIM (queries/taxBracketSchedules.ts, Backend-owned,
-	feature/self-265-backend @ caebbec) -- always exactly three entries, in
+	feature/self-265-backend @ e1c1845) -- always exactly three entries, in
 	federal_ordinary / federal_lt_cg / california_ordinary order, each carrying every schedule
 	of that type plus `current_year_present` + `basis_year` computed server-side.
 
-	RECONCILIATION NOTE, KEPT FOR THE RECORD (this component's second full contract): an earlier
-	revision of this file was built against a provisional, guessed contract before Backend's
-	actions landed, then reconciled here against the REAL, landed shape once
-	`feature/self-265-backend @ caebbec` existed (`jurisdictions[]` with `current_year_present` /
-	`basis_year`, not the earlier `schedules[]` + `basis` guess; real `?/saveSchedule` /
-	`?/createSchedule` / `?/deleteSchedule` form actions, which now DO exist, superseding the
-	prior "no create/delete affordance" scoping this component carried before those actions
-	shipped).
+	RECONCILIATION HISTORY, kept for the record (this component's THIRD contract pass):
+	  (1) built against a provisional, guessed contract before any Backend branch existed;
+	  (2) reconciled against the real `jurisdictions[]` shape once
+	      `feature/self-265-backend @ caebbec`/`e1c1845` landed, but scoped prior-year schedules
+	      to delete-only (no edit) and gated delete with no "last schedule" guard;
+	  (3) THIS PASS -- team-lead ruling E35 (under F/CTO delegation), three corrections: (a) a
+	      prior-year schedule is the E22 fallback basis and MUST stay fully editable, not
+	      delete-only -- it renders here as a collapsed `<details>` holding a full editor; (b)
+	      delete renders ONLY when a jurisdiction holds more than one schedule (never on the sole
+	      schedule of a type) -- computed here as `canDelete`, passed down, never re-derived by
+	      the editor; (c) the create panel prefills from the NEWEST prior-year schedule as a
+	      TEMPLATE (unchanged in substance from pass 2, restated because E35 confirms it as the
+	      intended AC7a/E22 mechanism, not merely this component's own guess).
 
-	PER-JURISDICTION LAYOUT (a judgment call, flagged at hand-off -- the ACs fix the three
-	groups and the AC7a CTA, not this exact composition):
-	  - The BASIS schedule (the one at `basis_year` -- current year if present, else the latest
-	    prior year on file, per E22) renders as the primary, always-visible editor when one
-	    exists.
-	  - When `current_year_present` is false, an AC7a/E22-styled informational note renders
-	    ABOVE the basis editor (or in its place, when no basis exists at all), naming the exact
-	    gap honestly, plus an "Add {currentTaxYear} schedule" toggle that reveals a `mode="create"`
-	    editor prefilled from the basis schedule as a starting TEMPLATE (or blank, one zero-floor
-	    row, when no basis exists) -- this is what actually answers the CTA now that
-	    `?/createSchedule` exists, unlike this component's prior revision.
-	  - Any OTHER schedule on file for the type (an old year superseded by a newer one) renders
-	    in a compact "Other years on file" list with its own inline-confirm delete control,
-	    never a full second editor -- keeps the common case (one schedule per type) visually
-	    dominant while still exposing the real delete capability for a stray old year.
+	PER-JURISDICTION LAYOUT:
+	  - The BASIS schedule (current year if present, else the latest prior year on file, per
+	    E22 -- `basis_year`) renders as the primary, always-open editor when one exists.
+	  - When `current_year_present` is false, an honest E22-styled note renders above it ("No
+	    {type} schedule entered for {currentTaxYear} — using {basis_year}" when a prior year
+	    exists; "No {type} schedule entered" when none), plus an "Add {currentTaxYear} schedule"
+	    toggle that reveals a `mode="create"` editor prefilled from the basis schedule.
+	  - Every OTHER schedule on file for the type renders collapsed under "Prior years on file",
+	    each its own full `mode="edit"` editor inside a native `<details>` -- editable, not a
+	    read-only or delete-only row, per E35(a).
 
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5).
 -->
 <script lang="ts">
 	import TaxBracketScheduleEditor from '$lib/components/TaxBracketScheduleEditor.svelte';
-	import DeleteScheduleControl from '$lib/components/DeleteScheduleControl.svelte';
 	import Button from '$lib/components/Button.svelte';
 
 	type ScheduleType = 'federal_ordinary' | 'federal_lt_cg' | 'california_ordinary';
@@ -71,17 +70,27 @@
 		return j.schedules.find((s) => s.tax_year === j.basis_year) ?? null;
 	}
 
-	function otherSchedules(j: Jurisdiction): ScheduleRecord[] {
+	/** Every schedule of the type OTHER than the basis one — already tax_year DESCENDING (the
+	 *  loader's own order), so "newest prior year first" falls out of this filter for free. */
+	function priorSchedules(j: Jurisdiction): ScheduleRecord[] {
 		const basis = basisSchedule(j);
 		return j.schedules.filter((s) => s.id !== basis?.id);
+	}
+
+	/** E35(b): delete renders ONLY when this jurisdiction holds more than one schedule — never
+	 *  on the sole schedule of a type, current-year or not. Computed here (the LIST is the only
+	 *  place that knows a jurisdiction's full schedule count) and passed down; the editor never
+	 *  re-derives it. */
+	function canDelete(j: Jurisdiction): boolean {
+		return j.schedules.length > 1;
 	}
 
 	// Auto-open the create panel only when there's truly nothing else to show for this
 	// jurisdiction (no basis at all); otherwise it opens on click. One-time capture from the
 	// loader's own initial props -- same deliberate `state_referenced_locally` shape
 	// Planning/CashflowTargetEditor's own baselines document (a fresh load() after a save
-	// re-derives this from the NEW `jurisdictions` prop via a full component remount at the
-	// page level, which is what SvelteKit's `invalidateAll`-on-`update()` produces here).
+	// re-derives this from the NEW `jurisdictions` prop via SvelteKit's `update()`-driven
+	// reload, which remounts this component with fresh initial props).
 	let openCreate = $state<Record<ScheduleType, boolean>>(
 		Object.fromEntries(jurisdictions.map((j) => [j.schedule_type, j.basis_year === null])) as Record<
 			ScheduleType,
@@ -93,7 +102,8 @@
 <div class="list">
 	{#each jurisdictions as j (j.schedule_type)}
 		{@const basis = basisSchedule(j)}
-		{@const others = otherSchedules(j)}
+		{@const priors = priorSchedules(j)}
+		{@const deletable = canDelete(j)}
 		<section class="jurisdiction" aria-labelledby={`jur-${j.schedule_type}`}>
 			<h2 id={`jur-${j.schedule_type}`} class="jurisdiction-title">{TYPE_LABELS[j.schedule_type]}</h2>
 
@@ -103,15 +113,10 @@
 					<div class="missing-text">
 						{#if basis}
 							<p class="missing-title">
-								{TYPE_LABELS[j.schedule_type]} for {currentTaxYear} hasn't been entered yet — figures
-								currently run on the {basis.tax_year} schedule.
+								No {TYPE_LABELS[j.schedule_type]} schedule entered for {currentTaxYear} — using {basis.tax_year}.
 							</p>
 						{:else}
-							<p class="missing-title">No {TYPE_LABELS[j.schedule_type]} schedule on file yet.</p>
-							<p class="missing-detail">
-								Estimated-tax figures for this jurisdiction render as unavailable until one is
-								entered.
-							</p>
+							<p class="missing-title">No {TYPE_LABELS[j.schedule_type]} schedule entered.</p>
 						{/if}
 						{#if !openCreate[j.schedule_type]}
 							<Button variant="secondary" type="button" onclick={() => (openCreate[j.schedule_type] = true)}>
@@ -145,23 +150,29 @@
 					initialStandardDeduction={basis.standard_deduction}
 					initialPriorYearBalance={basis.tax_balance_prior_year}
 					initialRows={basis.rows}
+					canDelete={deletable}
 				/>
 			{/if}
 
-			{#if others.length > 0}
-				<div class="other-schedules">
-					<h3 class="other-title">Other years on file</h3>
-					<ul class="other-list">
-						{#each others as s (s.id)}
-							<li class="other-row">
-								<span class="other-label">{s.tax_year} — {s.schedule_label}</span>
-								<DeleteScheduleControl
-									scheduleId={s.id}
-									itemLabel={`${TYPE_LABELS[j.schedule_type]} (tax year ${s.tax_year})`}
-								/>
-							</li>
-						{/each}
-					</ul>
+			{#if priors.length > 0}
+				<div class="prior-schedules">
+					<h3 class="prior-title">Prior years on file</h3>
+					{#each priors as s (s.id)}
+						<details class="prior-details">
+							<summary class="prior-summary">{s.tax_year} — {s.schedule_label}</summary>
+							<TaxBracketScheduleEditor
+								mode="edit"
+								scheduleType={j.schedule_type}
+								taxYear={s.tax_year}
+								scheduleId={s.id}
+								initialLabel={s.schedule_label}
+								initialStandardDeduction={s.standard_deduction}
+								initialPriorYearBalance={s.tax_balance_prior_year}
+								initialRows={s.rows}
+								canDelete={deletable}
+							/>
+						</details>
+					{/each}
 				</div>
 			{/if}
 		</section>
@@ -215,42 +226,36 @@
 		font: var(--weight-semi) var(--fs-body) / var(--lh-tight) var(--font-ui);
 		color: var(--c-attn-text);
 	}
-	.missing-detail {
-		margin: 0;
-		font: var(--weight-reg) var(--fs-small) / var(--lh-body) var(--font-ui);
-		color: var(--c-attn-text);
-	}
-	.other-schedules {
+	.prior-schedules {
 		display: flex;
 		flex-direction: column;
-		gap: var(--space-1);
+		gap: var(--space-2);
 	}
-	.other-title {
+	.prior-title {
 		margin: 0;
 		font: var(--weight-semi) var(--fs-small) / 1.2 var(--font-ui);
 		color: var(--c-text-secondary);
 		text-transform: uppercase;
 		letter-spacing: 0.02em;
 	}
-	.other-list {
-		list-style: none;
-		margin: 0;
-		padding: 0;
-		display: flex;
-		flex-direction: column;
-		gap: var(--space-1);
-	}
-	.other-row {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: var(--space-3);
-		padding: var(--space-2) var(--space-3);
-		background: var(--c-surface-alt);
+	.prior-details {
+		border: 1px solid var(--c-border);
 		border-radius: var(--radius-md);
+		background: var(--c-surface-alt);
 	}
-	.other-label {
-		font: var(--weight-reg) var(--fs-small) / var(--lh-body) var(--font-ui);
+	.prior-summary {
+		cursor: pointer;
+		padding: var(--space-2) var(--space-3);
+		font: var(--weight-med) var(--fs-small) / 1.2 var(--font-ui);
 		color: var(--c-text-secondary);
+	}
+	.prior-summary:focus-visible {
+		outline: none;
+		box-shadow: var(--focus-ring);
+	}
+	/* The full editor renders inside the <details>, already carrying its own surface/border/
+	   shadow — a small breathing margin keeps it from touching the disclosure's own edge. */
+	.prior-details > :global(form) {
+		margin: var(--space-2);
 	}
 </style>
