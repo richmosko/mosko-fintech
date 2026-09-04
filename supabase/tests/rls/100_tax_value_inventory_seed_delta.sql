@@ -8,10 +8,15 @@
 --   the backfill's reach discipline, not a new RLS mechanism.
 -- =====================================================================
 -- BINDS TO MIGRATION: supabase/migrations/100_tax_value_inventory_seed_delta.sql
---   (committed 4a54d2b, blob md5 deadfe7a9c1c00afe8853195969ba809 — re-hash
+--   (committed a94d50d, blob md5 47acfcb1c3d5d629d4e07c47682d7a81 — re-hash
 --   before trusting this line). Every UPDATE/INSERT statement copied or
 --   re-derived below is checked against that committed blob directly, not
---   reconstructed from memory of the AC text alone.
+--   reconstructed from memory of the AC text alone. a94d50d is a text-only
+--   fix (Sec F-1/F-2/F-4-subnote: header attribution + a CLASS-SCOPE column
+--   comment addition on posting_prototype_default.tax_relevant) over 4ee2a10
+--   — no statement/guard/value/grant/policy/trigger/function changed; D1-D5
+--   below (added for Sec A-1) were authored and inversion-proved against
+--   this same committed blob.
 --
 -- ┌─ WHAT THIS BATTERY PROVES ───────────────────────────────────────────────┐
 -- │ (BF) BACKFILL REACH (AC 8 i) — a tenant already-provisioned BEFORE 100    │
@@ -39,6 +44,14 @@
 -- │     read/write isolation holds unchanged on both tables post-100.        │
 -- │ (VOC) NO NEW VOCABULARY (AC 7) — pfin.tax_character still carries exactly │
 -- │     5 codes; pfin.tax_character_enum does not exist.                     │
+-- │ (D) REAL DEFAULT-TABLE POST-STATE (Sec A-1, SELF-263 joint-review AMBER   │
+-- │     condition) — pfin.posting_prototype_default / pfin.taxonomy_default   │
+-- │     read DIRECTLY, no fixture, no replay: BF2/BF4/BF5/BF6/BF7/BF8         │
+-- │     re-aimed at the real tables every future signup inherits. BF1-8       │
+-- │     watch this battery's own fixture+replay; IDEM1-3 watch the real       │
+-- │     tables but only via zero-rows-affected, which a never-matching guard  │
+-- │     also satisfies. D1-D5 are the watcher the migration's header          │
+-- │     promises and IDEM cannot provide.                                    │
 -- └────────────────────────────────────────────────────────────────────────┘
 --
 -- §10 / DECISION 3: §10 ledger UNCHANGED (read ADR-011 Decision 4 live before
@@ -71,7 +84,7 @@ begin;
 
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(29);  -- BF-PRE1 + BF1-8 (9) + FS1-2 (2) + IDEM1-6 (6) + COM1-4 (4) + ISO-PRE + ISO1-5 (6) + VOC1-2 (2)
+select plan(34);  -- BF-PRE1 + BF1-8 (9) + D1-5 (5) + FS1-2 (2) + IDEM1-6 (6) + COM1-4 (4) + ISO-PRE + ISO1-5 (6) + VOC1-2 (2)
 
 \set tPre   '00000000-0000-0000-0000-00000000a100'
 \set tOther '00000000-0000-0000-0000-00000000b100'
@@ -310,6 +323,73 @@ select is(
     where users_id = :'tPre' and cat = 'Real Estate' and tax_relevant = true),
   0::bigint,
   '(BF8) tPre Real Estate rows remain tax_relevant=false POST-100 — absent from the corrected VALUES list, untouched by design'
+);
+
+-- =====================================================================
+-- BLOCK D — REAL DEFAULT-TABLE POST-STATE (Sec A-1, SELF-263 joint-review
+--   AMBER blocking condition). pfin.posting_prototype_default and
+--   pfin.taxonomy_default are the provisioning source EVERY FUTURE SIGNUP
+--   inherits (api/src/lib/server/queries/taxonomy.ts:37,
+--   DEFAULT_PROVISION_COLUMNS already carries tax_relevant/tax_character).
+--   BF1-BF8 above observe this battery's OWN fixture, corrected by this
+--   battery's OWN replayed copies of statements (2)/(4)/(6) — they cannot
+--   catch a miss on the real default tables. IDEM1/IDEM2/IDEM3 below DO hit
+--   the real default tables but assert zero-rows-affected only, which a
+--   guard that never matched anything satisfies exactly as well as a guard
+--   that corrected everything — vacuous on cost (c), "A MISS IS SILENT",
+--   the migration header's own named failure mode. These five legs read
+--   the real default tables DIRECTLY, no fixture, no replay: BF2/BF4/BF5/
+--   BF6/BF7/BF8 re-aimed at the tables that matter. Inversion-proved
+--   against statement (3) (D3/D4/D5 red, BF5-BF8 stay green) and
+--   statement (1) (D1 red, BF2 green) — see the commit hand-off.
+-- =====================================================================
+
+-- (D1) REAL pfin.posting_prototype_default Revenue/Dividend: the fail-closed
+--   ORDINARY bucket, and notes carries the corrected wording — statement
+--   (1) landed on the real default table, not only this battery's fixture.
+select ok(
+  (select tax_character = 'ordinary'
+      and notes = 'Dividend from a Stock or ETF — ORDINARY (non-qualified): REIT, bond-fund and money-market distributions. A dividend that meets the qualified payer and holding-period tests belongs in Dividend - Qualified.'
+     from pfin.posting_prototype_default
+    where cat = 'Revenue' and sub_cat = 'Dividend'),
+  '(D1) REAL pfin.posting_prototype_default Revenue/Dividend: tax_character=ordinary (E4 D-ii fail-closed bucket) and notes carries the corrected wording — statement (1) on the real default table'
+);
+
+-- (D2) REAL pfin.posting_prototype_default Revenue/Bond Premium: value
+--   CONFIRMED ordinary, notes off the mark-to-market wording — statement
+--   (1) landed on the real default table.
+select ok(
+  (select tax_character = 'ordinary'
+      and notes not like '%Mark-to-Market%'
+     from pfin.posting_prototype_default
+    where cat = 'Revenue' and sub_cat = 'Bond Premium'),
+  '(D2) REAL pfin.posting_prototype_default Revenue/Bond Premium: tax_character CONFIRMED ordinary and notes corrected off the mark-to-market wording — statement (1) on the real default table'
+);
+
+-- (D3) REAL pfin.taxonomy_default: exactly 25 tax_relevant=true rows — BF5
+--   re-aimed at the real default table.
+select is(
+  (select count(*)::bigint from pfin.taxonomy_default where tax_relevant = true),
+  25::bigint,
+  '(D3) REAL pfin.taxonomy_default: exactly 25 tax_relevant=true rows — statement (3) on the real default table, not only this battery''s fixture'
+);
+
+-- (D4) REAL pfin.taxonomy_default: exactly 24 long_term_capital_gain_eligible
+--   rows, AND exactly 1 short_term_only row which IS Cash/T-Bill (identity,
+--   not merely a count — BF6/BF7 re-aimed at the real default table).
+select ok(
+  (select count(*) from pfin.taxonomy_default where tax_character = 'long_term_capital_gain_eligible') = 24
+  and (select array_agg(cat || '/' || sub_cat) from pfin.taxonomy_default where tax_character = 'short_term_only') = array['Cash/T-Bill'],
+  '(D4) REAL pfin.taxonomy_default: exactly 24 long_term_capital_gain_eligible rows, and exactly 1 short_term_only row which IS Cash/T-Bill (discount gain is legally interest, never long-term) — statement (3) on the real default table'
+);
+
+-- (D5) REAL pfin.taxonomy_default: Real Estate rows remain tax_relevant=false
+--   — absent from statement (3)'s VALUES list, untouched — BF8's control,
+--   re-aimed at the real default table.
+select is(
+  (select count(*)::bigint from pfin.taxonomy_default where cat = 'Real Estate' and tax_relevant = true),
+  0::bigint,
+  '(D5) REAL pfin.taxonomy_default: Real Estate rows remain tax_relevant=false POST-100 — absent from statement (3)''s corrected VALUES list, untouched by design'
 );
 
 -- =====================================================================
