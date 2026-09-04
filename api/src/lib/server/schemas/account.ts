@@ -11,8 +11,13 @@ import { sanitizeCurrencyAmount } from '$lib/server/validation/numeric';
 // Shared value-sets live in a browser-safe module so Frontend's client mirror
 // imports the SAME canonical enums (anti-drift). Re-exported here for server-side
 // consumers that already reference them via this module.
-import { ACCOUNT_TYPES, TAX_TREATMENTS, CLOSURE_REASONS } from '$lib/schemas/account-constants';
-export { ACCOUNT_TYPES, TAX_TREATMENTS };
+import {
+	ACCOUNT_TYPES,
+	TAX_TREATMENTS,
+	TAX_JURISDICTIONS,
+	CLOSURE_REASONS
+} from '$lib/schemas/account-constants';
+export { ACCOUNT_TYPES, TAX_TREATMENTS, TAX_JURISDICTIONS };
 
 /** Zod adapter over the shared numeric-sanitization battery → a validated `number`. */
 const currencyAmount = () =>
@@ -37,10 +42,43 @@ const isoDate = () =>
 		}, 'Enter a real calendar date.');
 
 /**
- * Manual-account create (AC #1/#2). Six user attributes. The account-level asset
- * Sub-Cat field is removed — accounts aren't classified per-account (allocation
- * classifies per-asset / per-transaction). The column + its param were physically
- * dropped at migration 048 (Decision-3 #5 DROPPED); the create action calls the
+ * tax_jurisdiction (SELF-267 AC 2) — the §2.4.2 form's tax-authority control, posted as
+ * '' (no selection / cleared) or one of TAX_JURISDICTIONS. Absent from the form entirely
+ * also transforms to null: FormData carries no way to distinguish "field not rendered"
+ * from "field rendered and cleared", so this schema does not try to. `.union` + `.optional`
+ * rather than `.enum(...).nullable()` because the wire value is always a string (or
+ * missing) — never a JS `null` — and an unrecognised non-empty string (a typo'd value,
+ * a stale client) is REJECTED by the union rather than silently coerced to null, which
+ * would read as "cleared" for what was actually a bad request.
+ *
+ * ⚠ CALLER'S RESPONSIBILITY, NOT THIS SCHEMA'S: any surface that submits the account-edit
+ * form WITHOUT rendering this control will clear an existing designation on every save,
+ * because "absent → null" is this field's contract. That is correct for the §2.4.2 form
+ * (which always renders the control, pre-filled from the loaded row) and a hazard for any
+ * OTHER caller of the `updateAttributes` / create actions that omits the field — flagged
+ * for Frontend at the SELF-267 hand-off rather than guarded here, because guarding it here
+ * (e.g. treating absent as "no change") would silently defeat the control's own clear
+ * affordance for the form that DOES render it.
+ */
+const taxJurisdictionField = () =>
+	z
+		.union([z.enum(TAX_JURISDICTIONS), z.literal('')], {
+			message: 'Choose a tax authority, or leave it unset.'
+		})
+		.optional()
+		.transform((v) => (v ? v : null));
+
+/**
+ * Manual-account create (AC #1/#2). Six user attributes, plus SELF-267 AC 2's optional
+ * tax-authority designation — the §2.4.2 form MAY present the field at creation, but it
+ * is NOT a parameter of `fn_create_manual_account` (087's signature is unchanged; the
+ * check that the RPC's INSERT column list still succeeds unchanged with this column
+ * NULLABLE-and-unset was run and recorded at 102's header). The create action realizes a
+ * non-null value as a follow-up UPDATE under `account_update` — see that action's own
+ * comment for the create-then-update sequencing and the 23505-after-create branch. The
+ * account-level asset Sub-Cat field is removed — accounts aren't classified per-account
+ * (allocation classifies per-asset / per-transaction). The column + its param were
+ * physically dropped at migration 048 (Decision-3 #5 DROPPED); the create action calls the
  * 6-arg fn_create_manual_account. `.strict()` rejects any stray posted `sub_cat_id`.
  */
 export const manualAccountCreateSchema = z
@@ -50,7 +88,8 @@ export const manualAccountCreateSchema = z
 		scope: z.string().trim().min(1, 'Scope is required.').max(200, 'Scope is too long.'),
 		tax_treatment: z.enum(TAX_TREATMENTS),
 		initial_value: currencyAmount(),
-		as_of_date: isoDate()
+		as_of_date: isoDate(),
+		tax_jurisdiction: taxJurisdictionField()
 	})
 	.strict();
 
@@ -142,19 +181,23 @@ export type ReopenAccount = z.infer<typeof reopenAccountSchema>;
 
 /**
  * Account-detail attribute edit (`accounts/[account_id]` updateAttributes action). The four
- * user-editable account attributes — name / account_type / scope / tax_treatment. Mirrors the
- * manual-create field rules VERBATIM (name/scope free-text 1..200; enums from the shared
- * account-constants, anti-drift with the DB CHECK). Deliberately does NOT include the aggregator
- * / connection binding (deferred) nor `closed_at` (that's the close/reopen path, and 058 fences
- * it at the DB regardless) — `.strict()` rejects any of those if posted (Lock 14 mass-assignment
- * fence).
+ * user-editable account attributes — name / account_type / scope / tax_treatment — plus
+ * SELF-267 AC 2's `tax_jurisdiction` designation. Mirrors the manual-create field rules
+ * VERBATIM (name/scope free-text 1..200; enums from the shared account-constants,
+ * anti-drift with the DB CHECK). Deliberately does NOT include the aggregator / connection
+ * binding (deferred) nor `closed_at` (that's the close/reopen path, and 058 fences it at
+ * the DB regardless) — `.strict()` rejects any of those if posted (Lock 14 mass-assignment
+ * fence). ⚠ `tax_jurisdiction` is OPTIONAL IN SHAPE but its absence still writes `null` —
+ * see `taxJurisdictionField`'s header for why, and for the caller obligation that follows
+ * from it.
  */
 export const updateAttributesSchema = z
 	.object({
 		name: z.string().trim().min(1, 'Name is required.').max(200, 'Name is too long.'),
 		account_type: z.enum(ACCOUNT_TYPES),
 		scope: z.string().trim().min(1, 'Scope is required.').max(200, 'Scope is too long.'),
-		tax_treatment: z.enum(TAX_TREATMENTS)
+		tax_treatment: z.enum(TAX_TREATMENTS),
+		tax_jurisdiction: taxJurisdictionField()
 	})
 	.strict();
 

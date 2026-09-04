@@ -9,7 +9,12 @@
 // source of truth; when the server schema changes, this mirror updates in lockstep.
 
 import { z } from 'zod';
-import { ACCOUNT_TYPES, TAX_TREATMENTS, CLOSURE_REASONS } from '$lib/schemas/account-constants';
+import {
+	ACCOUNT_TYPES,
+	TAX_TREATMENTS,
+	TAX_JURISDICTIONS,
+	CLOSURE_REASONS
+} from '$lib/schemas/account-constants';
 import { sanitizeCurrencyAmount } from '$lib/validation/numeric';
 
 /** Zod adapter over the client numeric-sanitization battery → a validated `number`. */
@@ -35,6 +40,23 @@ const isoDate = () =>
 		}, 'Enter a real calendar date.');
 
 /**
+ * tax_jurisdiction (SELF-267 AC 2) — CLIENT mirror of the server's `taxJurisdictionField`.
+ * Posted as '' (no selection / cleared) or a TAX_JURISDICTIONS value; absent transforms to
+ * null exactly as the server does. ⚠ Mirrors the server's caller obligation too: any form
+ * built against `updateAttributesSchema` / `manualAccountCreateSchema` that does not render
+ * this control will clear an existing designation on submit (FormData cannot distinguish
+ * "not rendered" from "rendered and cleared") — render the control pre-filled from the
+ * loaded account whenever the form posts to `updateAttributes` or the create action.
+ */
+const taxJurisdictionField = () =>
+	z
+		.union([z.enum(TAX_JURISDICTIONS), z.literal('')], {
+			message: 'Choose a tax authority, or leave it unset.'
+		})
+		.optional()
+		.transform((v) => (v ? v : null));
+
+/**
  * Manual-account create (AC #1/#2) — mirrors manualAccountCreateSchema server-side.
  * Enum messages are friendlier than the server's raw enum error — a UX nicety, NOT a
  * loosening (same value-set, same .strict()). Matched-tenant is a DB-enforced boundary,
@@ -51,7 +73,8 @@ export const manualAccountCreateSchema = z
 		scope: z.string().trim().min(1, 'Scope is required.').max(200, 'Scope is too long.'),
 		tax_treatment: z.enum(TAX_TREATMENTS, { message: 'Choose a tax treatment.' }),
 		initial_value: currencyAmount(),
-		as_of_date: isoDate()
+		as_of_date: isoDate(),
+		tax_jurisdiction: taxJurisdictionField()
 	})
 	.strict();
 
@@ -119,7 +142,8 @@ export const updateAttributesSchema = z
 		name: z.string().trim().min(1, 'Name is required.').max(200, 'Name is too long.'),
 		account_type: z.enum(ACCOUNT_TYPES, { message: 'Choose an account type.' }),
 		scope: z.string().trim().min(1, 'Scope is required.').max(200, 'Scope is too long.'),
-		tax_treatment: z.enum(TAX_TREATMENTS, { message: 'Choose a tax treatment.' })
+		tax_treatment: z.enum(TAX_TREATMENTS, { message: 'Choose a tax treatment.' }),
+		tax_jurisdiction: taxJurisdictionField()
 	})
 	.strict();
 

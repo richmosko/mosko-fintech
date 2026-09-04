@@ -128,6 +128,30 @@ function isCrossTenantSubCat(message: string): boolean {
 	return /sub_cat|Decision 3|matched-tenant/i.test(message);
 }
 
+/**
+ * 102's account_tax_jurisdiction_uniq partial unique index (SELF-267 AC 3) →
+ * postgres 23505 (unique_violation). Checked on `code` first (the stable, locale-
+ * independent signal) and the constraint name second, so a 23505 from some OTHER
+ * constraint on this table — none exists today, but this stays precise rather than
+ * mapping every conflict on pfin.account to this one field — is not misclassified.
+ */
+function isTaxJurisdictionConflict(err: { code?: string; message?: string | null }): boolean {
+	return err.code === '23505' && /account_tax_jurisdiction_uniq/i.test(err.message ?? '');
+}
+
+/**
+ * `Record<string, string[]>` (an INDEX SIGNATURE), not a narrow `{ tax_jurisdiction: string[] }`
+ * literal — so this field-error object stays structurally compatible with `fieldErrors()`'s
+ * return type, the shape every OTHER action in this file's error union already carries. The
+ * `+page.svelte` top-of-page banner reads `form.errors?._form` across the union of every
+ * action's error shape; a bare narrow literal has no `_form` key at all (not even optional) and
+ * fails that access under strict mode, where `fieldErrors()`'s index signature makes `._form`
+ * type as `string[] | undefined` on every branch.
+ */
+function taxJurisdictionError(message: string): Record<string, string[]> {
+	return { tax_jurisdiction: [message] };
+}
+
 export const load: PageServerLoad = async ({ locals, params, url }) => {
 	const { user } = await locals.safeGetSession();
 	// Preserve where the user was headed so /login can bounce them back (SELF-285).
@@ -546,11 +570,26 @@ export const actions: Actions = {
 		return { success: true, closed_at: null };
 	},
 
-	// Edit the account's user attributes: name / account_type / scope / tax_treatment. RLS-scoped
-	// single-row UPDATE (account_update = users_id = auth.uid()). Deliberately does NOT touch the
-	// aggregator / connection binding (deferred) nor closed_at (that's the close/reopen pair, and
-	// 058 fences it at the DB regardless). `.strict()` +
-	// the shared enums are the mass-assignment + type-confusion fences (Lock 14 mods #1/#2).
+	// Edit the account's user attributes: name / account_type / scope / tax_treatment /
+	// tax_jurisdiction (SELF-267 AC 2). RLS-scoped single-row UPDATE (account_update =
+	// users_id = auth.uid()). Deliberately does NOT touch the aggregator / connection
+	// binding (deferred) nor closed_at (that's the close/reopen pair, and 058 fences it at
+	// the DB regardless). `.strict()` + the shared enums are the mass-assignment +
+	// type-confusion fences (Lock 14 mods #1/#2).
+	//
+	// TAX_JURISDICTION IS AN ORDINARY UPDATE, NOT A NEW RPC (SELF-267 AC 2's write-path
+	// ruling) — the same statement that writes the other four attributes writes this one;
+	// 102's column carries no trigger of its own, only account_update's existing RLS +
+	// aal2 conjunct (inherited from the table) and the partial unique index below.
+	//
+	// MANUAL-ONLY IS APP-LAYER, NOT A DB FENCE (team-lead ruling E12, delegated V1.4): 102
+	// adds no CHECK tying tax_jurisdiction to a provider-linked account, because "IRS and
+	// FTB accounts are V1 instances of §2.4.2 manual non-Plaid accounts" (PRD) is a product
+	// rule about which accounts a user WOULD designate, not a DB-enforced invariant Sec was
+	// asked to fence. So a non-null designation on a linked_source_id-carrying account is
+	// refused HERE, with one extra RLS-scoped read gated behind "is a designation actually
+	// being set" — clearing (null) never needs the check, and the four other attributes
+	// never trigger it either.
 	updateAttributes: async ({ request, locals, params }) => {
 		const { user } = await locals.safeGetSession();
 		if (!user) return fail(401, { errors: { _form: ['You must be signed in.'] } });
@@ -562,6 +601,28 @@ export const actions: Actions = {
 		const parsed = updateAttributesSchema.safeParse(raw);
 		if (!parsed.success) return fail(400, { errors: fieldErrors(parsed.error), values: raw });
 
+		if (parsed.data.tax_jurisdiction !== null) {
+			// RLS-scoped: a cross-tenant/absent account_id returns no row here (no existence
+			// leak), and this check simply no-ops in that case — the UPDATE below is what
+			// decides the outcome, exactly as it always has for this action (RLS silently
+			// scopes an UPDATE to zero rows rather than erroring; this action has never
+			// distinguished that from "nothing to change" and does not start here).
+			const { data: linkCheck } = await locals.supabase
+				.schema('pfin')
+				.from('account')
+				.select('linked_source_id')
+				.eq('account_id', accountId)
+				.maybeSingle();
+			if (linkCheck && linkCheck.linked_source_id != null) {
+				return fail(422, {
+					errors: taxJurisdictionError(
+						'Only manually added accounts can be designated as a tax authority.'
+					),
+					values: raw
+				});
+			}
+		}
+
 		const { error: updErr } = await locals.supabase
 			.schema('pfin')
 			.from('account')
@@ -569,11 +630,24 @@ export const actions: Actions = {
 				name: parsed.data.name,
 				account_type: parsed.data.account_type,
 				scope: parsed.data.scope,
-				tax_treatment: parsed.data.tax_treatment
+				tax_treatment: parsed.data.tax_treatment,
+				tax_jurisdiction: parsed.data.tax_jurisdiction
 			})
 			.eq('account_id', accountId);
 
 		if (updErr) {
+			// 102's account_tax_jurisdiction_uniq partial index (SELF-267 AC 3): a second
+			// account already carries this jurisdiction for this user. Field-scoped, checked
+			// FIRST so a conflict never falls through to the generic envelope below — product
+			// copy says "tax authority", never the enum value, per the SELF-267 dispatch.
+			if (isTaxJurisdictionConflict(updErr)) {
+				return fail(409, {
+					errors: taxJurisdictionError(
+						'Another account is already designated as your tax authority ledger.'
+					),
+					values: raw
+				});
+			}
 			console.error('[accounts/[account_id]] updateAttributes failed:', updErr.message);
 			return fail(422, { errors: { _form: ['Could not update the account.'] }, values: raw });
 		}
