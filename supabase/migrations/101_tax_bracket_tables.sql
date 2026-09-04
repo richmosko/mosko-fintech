@@ -421,6 +421,43 @@
 --   and SELF-262's fn_compute_tax_liability both depend on this landing first.
 --
 -- ----------------------------------------------------------------------------
+-- FRESH-APPLY-ONLY (V1.4 execution log E31, F/CTO ruling). THIS MIGRATION HAS
+--   NEVER SHIPPED. It is written to be applied to a database that does not yet
+--   hold pfin.tax_bracket_schedule, and it is NOT written to upgrade one that
+--   already holds an earlier form of it. Stated here rather than left to
+--   inference, because the file went through a mid-arc revision and the
+--   inference a reader would otherwise make is the wrong one.
+--
+--   WHAT THAT MEANS MECHANICALLY: schedule_label is declared INLINE in the
+--   `create table if not exists` below. On a database that already held this
+--   table WITHOUT that column, `if not exists` makes the whole statement a
+--   no-op — the column would NOT be added, its constraint would NOT be
+--   created, and the apply would report success. There is NO
+--   `add column if not exists` / `alter table ... add constraint` pair in this
+--   file, ON PURPOSE.
+--
+--   WHY OPTION (A) WAS NOT TAKEN. The repo's own convention for exactly that
+--   situation is `add column if not exists` — 13 migrations use it (010, 012,
+--   015, 017, 019, 030, 033, 037, 044, 045, 058, 085, 091). Taking it here
+--   would oblige a backfill story for a NOT NULL column: what label an
+--   already-existing schedule row gets, and on whose authority. That story
+--   would be fiction. The only databases that ever held the pre-E27 form (no
+--   schedule_label, six-argument replace-all) were scratch and dev databases
+--   built during this arc, and every one of them has since been rebuilt from
+--   empty. A backfill for a state no environment is in is a code path nobody
+--   can exercise against a real row and a default nobody chose.
+--
+--   THE ONE CONCESSION TO A DEV DATABASE THAT DID HOLD IT is the
+--   `drop function if exists ...(bigint, smallint, pfin.tax_schedule_type_enum,
+--   numeric, numeric, jsonb)` standing immediately ahead of the replace-all
+--   `create or replace`. That drop is BELT-AND-BRACES, not an upgrade path: it
+--   costs one inert statement on a fresh apply and it removes, by
+--   construction, the one hazard of this class whose damage is SILENT rather
+--   than loud — a surviving overload that rewrites the brackets and leaves the
+--   label behind (see its own ⚠ block). It does NOT make this file
+--   re-appliable, and no other statement here is trying to be.
+--
+-- ----------------------------------------------------------------------------
 -- CONTRACT
 --   pfin.tax_schedule_type_enum — 'federal_ordinary' | 'federal_lt_cg' |
 --     'california_ordinary'. The FIRST enum type in this schema; every prior
@@ -432,7 +469,8 @@
 --       tax_bracket_schedule_tax_year_check. 1913 is the first US federal
 --       income-tax year, so the bound refuses a transposed or zero year while
 --       refusing no real one; the smallint's own ceiling carries the upper end.
---     schedule_label text NOT NULL, CHECK (length(btrim(schedule_label))
+--     schedule_label text NOT NULL, CHECK (schedule_label =
+--       btrim(schedule_label, E' \t\n\r\f\v') and length(schedule_label)
 --       between 1 and 500) — named
 --       tax_bracket_schedule_schedule_label_check. The schedule's OWN
 --       statement of the assumptions its numbers rest on: the filing status
@@ -440,10 +478,11 @@
 --       second statute the top bracket composes (SELF-260 AC 6; E22 / E23).
 --       USER-OWNED, USER-EDITABLE data written by the same replace-all call
 --       that writes the brackets, edited beside them in the PRD §2.5.2 editor,
---       and passed through to the tax-liability payload. The empty string is
---       refused rather than admitted as a blank, and so is a whitespace-only
---       label — the CHECK btrims before measuring. The STORED value is NOT
---       trimmed: the app trims, the database refuses the blank.
+--       and passed through to the tax-liability payload. A CANONICAL-FORM
+--       INVARIANT, not a trimming rule (E31): the stored value IS the canonical
+--       form, so ' x ' is REFUSED rather than silently normalized to 'x'. The
+--       empty string and a whitespace-only label are refused as the degenerate
+--       cases of the same invariant.
 --     standard_deduction     numeric(20,4) NOT NULL, >= 0, non-NaN.
 --     tax_balance_prior_year numeric(20,4) NULL — INFORMATIONAL ONLY; MUST NOT
 --       enter the computation. NULL renders as an em dash.
@@ -549,7 +588,8 @@ create table if not exists pfin.tax_bracket_schedule (
   schedule_type           pfin.tax_schedule_type_enum not null,
   schedule_label          text not null
                             constraint tax_bracket_schedule_schedule_label_check
-                            check (length(btrim(schedule_label)) between 1 and 500),
+                            check (schedule_label = btrim(schedule_label, E' \t\n\r\f\v')
+                                   and length(schedule_label) between 1 and 500),
   standard_deduction      numeric(20, 4) not null
                             check (standard_deduction >= 0
                                    and standard_deduction <> 'NaN'::numeric),
@@ -637,18 +677,36 @@ comment on column pfin.tax_bracket_schedule.schedule_label is
   'tax-liability payload — so a user re-entering a schedule under a different '
   'filing status states that in the same edit that changes the numbers. Any '
   'writer that creates a schedule MUST supply one; a user MAY then overwrite '
-  'it. NOT NULL with CHECK (length(btrim(schedule_label)) between 1 and 500), '
-  'named tax_bracket_schedule_schedule_label_check: a schedule whose '
-  'assumptions go unstated is the condition this column exists to prevent, so '
-  'the empty string is refused rather than admitted as a blank — and so is a '
-  'whitespace-only label, which the btrim inside the CHECK makes '
-  'indistinguishable from empty. ⚠ THE CONSTRAINT DOES NOT TRIM THE STORED '
-  'VALUE: btrim appears only inside the CHECK, so what a writer hands the '
-  'column is stored byte-for-byte, leading and trailing whitespace included. '
-  'Trimming is the APP''s job, before the write; the database''s job is to '
-  'refuse a blank, and it refuses rather than silently normalizing a value the '
-  'user typed. The 500-character upper bound is likewise measured on the '
-  'trimmed value — a caption WITH ITS SOURCING, not a paragraph. ⚠ THE LABEL AND THE ROWS ARE NOT CONSTRAINED '
+  'it. NOT NULL with CHECK (schedule_label = btrim(schedule_label, E'' '
+  '\t\n\r\f\v'') and length(schedule_label) between 1 and 500), named '
+  'tax_bracket_schedule_schedule_label_check. ⚠ THIS IS A CANONICAL-FORM '
+  'INVARIANT, NOT A LENGTH RULE WITH A TRIM IN IT: THE STORED VALUE IS THE '
+  'CANONICAL FORM. A stored label carries no leading or trailing ASCII '
+  'whitespace of the six kinds btrim is given here (space, tab, newline, '
+  'carriage return, form feed, vertical tab), and is between 1 and 500 '
+  'characters long. The database does not normalize — it REFUSES a '
+  'non-canonical value. '' x '' is rejected outright rather than silently '
+  'stored as ''x'', so what the user reads back is byte-for-byte what was '
+  'accepted, and the 500-character bound is measured on the same bytes that '
+  'are stored. A schedule whose assumptions go unstated is the condition this '
+  'column exists to prevent, so the empty string is refused — and so is a '
+  'whitespace-only label, which is the degenerate case of the same invariant '
+  'rather than a second rule. ⚠ HOW THE LAYERS AGREE, AND WHERE THEY DO NOT. '
+  'The app trims before calling (JS String.prototype.trim()), and the RPC '
+  'stores what it receives without altering it, so an app-originated write is '
+  'canonical by construction and the CHECK never fires on it; the CHECK is '
+  'what still holds for a caller reaching PostgREST directly. THE RESIDUAL, '
+  'STATED HONESTLY: the two layers are NOT at parity and no parity claim is '
+  'made here. JS trim() strips Unicode whitespace; this CHECK strips only the '
+  'six ASCII kinds named above. A label consisting solely of exotic Unicode '
+  'whitespace — NBSP U+00A0, U+2028, and their kin — is therefore DB-LEGAL and '
+  'APP-ILLEGAL: the app would reduce it to the empty string and reject it, '
+  'while the database sees a one-character value equal to its own btrim and '
+  'accepts it. That row is visually blank and structurally valid. Widening the '
+  'CHECK to a Unicode whitespace class was NOT done, because it would put a '
+  'character-class definition in the constraint that the app''s definition '
+  'could still drift from, trading a stated residual for an unstated one. '
+  '⚠ THE LABEL AND THE ROWS ARE NOT CONSTRAINED '
   'TO AGREE, and no fence is owed that would make them: the label is a '
   'user-authored statement about the rows, and a reader MUST NOT take it as a '
   'system-verified description of them.';
@@ -1350,6 +1408,14 @@ create trigger tax_bracket_schedule_set_updated_at
 --   battery, not in this file: a catalog leg pins that pfin holds EXACTLY ONE
 --   proc named fn_tax_bracket_schedule_replace_all, with pronargs = 7, so the
 --   NEXT signature change fails loudly instead of overloading silently.
+--
+-- ⚠ THE DROP'S POSITION IS LOAD-BEARING and must not be reordered: its
+--   argument list NAMES pfin.tax_schedule_type_enum, so the type must already
+--   exist when the statement is parsed. It therefore sits AFTER the `do $$ ...
+--   create type pfin.tax_schedule_type_enum ... $$` block above and
+--   IMMEDIATELY BEFORE the `create or replace` it guards. Moved ahead of the
+--   enum it would fail on a fresh database — where it is otherwise inert —
+--   turning a belt-and-braces statement into the thing that breaks the apply.
 -- ============================================================================
 drop function if exists pfin.fn_tax_bracket_schedule_replace_all(
   bigint, smallint, pfin.tax_schedule_type_enum, numeric, numeric, jsonb);
