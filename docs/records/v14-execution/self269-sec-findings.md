@@ -302,3 +302,138 @@ with a plain loop returned the two real results in §1 F-4 and §2 N-1. Recorded
 failure mode is *"report everything as failing"* is as dangerous as one that reports everything as
 passing, and this one had no control leg of its own — the fix was to make the sweep print only
 misses, so a broken sweep prints nothing rather than everything.
+
+---
+
+## Re-verdict at `c92bc8a`
+
+**Verdict: GREEN.** F-1, F-2, F-3, F-4 and N-2, N-3, N-4 all closed — each verified at the
+mechanism, not accepted from the report. No veto, no open blocking finding. **One item is
+DERIVED-BUT-UNCONFIRMED** (the clamp-inversion leg label, §4 below) and **one is my own error**
+(§5).
+
+**Reviewed at** `origin/feature/self-269` **`c92bc8a`**, `origin/main` **`c8b02d5`** verified an
+**ancestor**. Battery blob md5 **`73ed99d5aaee62bfcead88c89b85a49c`** (measured; matches the
+dispatch), **960 lines**, **`plan(34)`**. Delta vs `main` is still exactly one new file.
+
+⚠ **This was a WHOLE-FILE sweep, not a delta review, and that was the right instrument.** Between
+the reviewed `d1bb098` battery and this one the file went 643 → 960 lines with lines **deleted** as
+well as added, and the plan went 20 → 34. A delta cannot show whether every cited label still
+resolves, whether `CONTROL0` is still *first*, or whether the plan still foots — all three are
+properties of the file as a whole, and all three were re-derived below from scratch.
+
+### 1. The structural predicates, re-run
+
+| Predicate | Result |
+|---|---|
+| `^\s*select isnt\(` (call-shaped) | **0** — F-1 closed |
+| `to_regclass` | **0** — AC 8's forbidden silently-skipping form still absent |
+| deferral statement (`sale.writer`) | **3 hits** — F-2 landed |
+| `102 L3a` citation | **gone**; the 5 remaining `L3a` strings are 4 correction *notes* and one legitimate `104 L3a` (which exists) — F-4 closed |
+| AC 9 count | *"the **7** swept"* vs *"resolves to EXACTLY **7** live"* — **agree**; F-3 closed |
+| `CONTROL0` first | **yes** — lines 451 / 460, before every other assertion in file order |
+| plan arithmetic | the header's 14 terms sum to **34**, matching `plan(34)` — re-added, not read |
+
+**Dangling-citation sweep, whole file.** Built the known-label set from all six cited batteries plus
+this file (340 labels), extracted every label-shaped token from this file's comments (44), and
+printed only the unresolved ones. **Three tokens surfaced and all three are instrument artifacts,
+not dangling citations:**
+
+- **`D19`** — *"ADR-011 **Decision 19**"*, an ADR reference my `D[0-9]+` pattern over-matched.
+- **`L16a-h`** — range notation; both endpoints `(L16a)` and `(L16h)` exist in `104`.
+- **`AAL-S`** — a family prefix; all eight `AAL-S-{SEL,INS,UPD,DEL}{1,2}` exist in `101` (the N-1
+  case, unchanged and still not a defect).
+
+**Zero real dangling citations.** The composition-by-citation method holds on this tree.
+
+### 2. The findings, each verified at the mechanism
+
+- **F-1 — closed correctly.** `(AC4C-1)` is now `ok(...)` asserting *"BOTH … are NOT NULL, AND they
+  are NOT EQUAL"* — the three-state form AC 11 asks for, not merely a verb swap. QA's re-inversion
+  (forcing `fn_compute_nav` NULL → `(AC4C-1)` red, where the `isnt` form would have passed) is the
+  right shape of proof: it demonstrates the leg can now fail on the specific input that used to slip
+  through.
+- **F-2 — closed verbatim.** The paragraph is present in the AC 8a header entry, marked as
+  commit-ready text taken verbatim, and it states both halves: what is *not* proven and *when* it
+  becomes provable.
+- **F-3 — closed.** `8` → `7`; the message and its companion count now agree.
+- **F-4 — closed at BOTH sites**, including the one QA's own second pass introduced by copying the
+  bad label forward. That second instance is worth naming rather than glossing: it is the same
+  failure I flagged, reproduced *by the fix pass*, which is exactly why the criterion for this class
+  has to be a **sweep**, never "fix the site Sec cited."
+
+### 3. The notes, each closed
+
+- **N-2 — closed, and the substitution IS the intended control.** Checked the helper body rather
+  than the name: `_rls.expect_owner_can_read(t, owner, expected)` → `_visible_owner_rows(t, owner,
+  **owner**)`, i.e. it sets the tenant to the owner and asserts the owner reads exactly its own
+  rows. Called at line 460 with `expected = 1`. **That is precisely the discriminator N-2 asked
+  for:** under deny-all policies the owner reads 0 and this leg reds; under working RLS it reads 1.
+  Paired with the cross-tenant-empty leg at 451, `CONTROL0` now proves both directions and can no
+  longer pass vacuously.
+- **N-3 — closed.** `(AC4C-3b)` pins tenant C's gross headline to a real `0`, and its own message
+  names the hazard it closes (*"not a NULL that `(AC4C-3)`'s `IS NOT DISTINCT FROM` equality would
+  have let pass silently"*).
+- **N-4 — closed, and closed the way I asked.** The mitigation citation moved from `105 DES-pin`
+  (which shares the helper and is therefore not independent) to **`102 (L2b)`**, with an in-place
+  annotation explaining that a regression in the shared helper reds `L2b` even where it would not
+  red the `(AC4C-2)` reconstruction. That is the accurate statement of what watches what.
+
+### 4. DERIVED BUT UNCONFIRMED — the clamp-inversion leg label
+
+QA reports *"1/34 red on the struck clamp"* without naming the leg. **I set the acceptance criterion
+before seeing the result and it is unchanged:** a bare count cannot distinguish the good outcome from
+the two bad ones — **0 red** means the clamp has no watcher, and **a different leg red** means the
+message names the wrong defect, whose tempting repair disables the real watcher.
+
+**From the file I can now derive what the answer should be**, which narrows the question to a
+confirmation rather than an investigation. The clamp legs are:
+
+- `(AC4B-1)` — non-vacuity: the pre-clamp figure, computed **independently of `104`**, is genuinely
+  negative (`−6825.00 = 0.15 × −45500`) on this gate's own fixture.
+- `(AC4B-2)` — the clamp itself: `unrealized_tax_liab = {computed, 0}`, **not** `(AC4B-1)`'s negative
+  figure.
+
+With the clamp struck, `104` would emit `{computed, −6825.00}`; `(AC4B-2)` reds and `(AC4B-1)` — which
+never calls `104` — stays green. **So the predicted result is exactly 1 red, and it must be
+`(AC4B-2)`.** That matches the reported count. **It remains UNCONFIRMED until QA names the label**,
+because a matching count over an unnamed leg is precisely the evidence that cannot distinguish the
+good case from the bad one. AC 4b's second half (*"`051`'s NAV does not rise"*) is carried by
+composition at `105`'s own `(R9)` leg, which asserts it at the composer.
+
+### 5. My own error in the first pass, named
+
+**N-2's commit-ready call named `_rls.expect_owner_reads`, which does not exist.** I wrote the name
+from the shape of `expect_cross_tenant_read_empty` — I had read that helper's body but never
+enumerated the fixture's full helper list — and shipped it as commit-ready text. **A recommendation
+that names a function is a claim that the function exists, and I did not check this one.** QA caught
+it, found the real helper (`_rls.expect_owner_can_read`), verified it has the semantics my finding
+described, and recorded the correction in the file. That is the right handling and the catch is
+theirs.
+
+### 6. On the extra direct pins for AC 4a / 4b / 4d — NOT scope creep, and I do not object
+
+My ruling (1) said composition is *sufficient* where the shape is already pinned exhaustively; it did
+not say a fresh pin is *forbidden*. The distinction matters: ruling (1) answered *"must QA add six
+more forgery pins?"* with no — it was about not manufacturing assertions that add no discriminator.
+These pins are different in kind. They put the R9 clamp, the designated-ledger exclusion and its
+default state on **this gate's own fixture**, so the close gate can fail on its own data rather than
+only by reference. For a V1-SHIP-BLOCK gate that is rigor, and `(AC4B-1)`'s independently-computed
+`−6825.00` is the specific thing that makes `(AC4B-2)` non-vacuous here rather than inheriting
+non-vacuity from another file's fixture. **I read it as strengthening, not as contradiction.**
+
+### 7. Non-objections at the re-verdict
+
+- The AC 4 gap QA closed on its own initiative — **`tax_free` was untested tree-wide** — is a real
+  finding I did not make. AC 4's *"assert all three states"* was explicit and my first pass checked
+  the composition's *citations* without checking that the cited legs covered all three values. Good
+  catch, and it is the kind my own D-5 spelling note was circling without landing on.
+- I do **NOT** object to `plan` moving 20 → 34, to the `BLOCK ND` `nav_daily` fixture (unchanged in
+  character: INSERT-only, tenant-binding GUC set per row, inside `begin … rollback`), or to any part
+  of the `7174f2a` delta.
+- No §10 ledger change, no Decision 3 extension, no SECURITY DEFINER addition, no CI-fence or
+  `secrets-manifest` change. The battery still authors no schema.
+- **Carried, still not held, still not a blocker:** no leg pins that an empty *stored* jurisdiction
+  set must not fall through to `{status:'computed', amount: null}`. `104`'s `jur_def` is a literal
+  two-row `VALUES` list today, which is what prevents it; this gate is its natural home whenever
+  that shape stops being a literal.
