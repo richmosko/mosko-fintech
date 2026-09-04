@@ -1,0 +1,175 @@
+# SELF-265 — Security joint review (Lock 14 settings write path: `/settings/tax-brackets`)
+
+**Reviewer:** security-engineer · **Date:** 2026-09-04
+**Ref reviewed:** `origin/feature/self-265` @ `ba8938c` (read from the ref, not the worktree; worktree `feature/self-265-sec` branched from it)
+**Baselines named:** `origin/main` @ `6008d7b` · `origin/feature/self-262` (the in-flight owner of `104` / ADR-067)
+
+**VERDICT: AMBER.**
+
+**Blocking condition:** F-1. **Clears:** team-lead (merge ordering / rebase), with Backend re-confirming the resulting tree. F-2 clears automatically with F-1. F-3 is a flag: fix before merge, Frontend, cheap.
+
+The SELF-265-authored surface — loader, three form actions, the shared replace-all helper, the Zod schema and the client mirrors — is **clean on every axis I was asked to evaluate**. The blocking finding is not in that code; it is that the branch carries a **superseded copy of another in-flight branch's financial-calculation migration and its ADR**, and merging it as-is lands known, already-Sec-found, already-ruled defects on `main`.
+
+---
+
+## Verify-hook discharge
+
+Read verbatim from `DECISIONS.md` on the reviewed ref, located by bracketing `## ADR-` header (never by line number):
+
+- **ADR-011 Decision 3** — read live. Family and instance **#18** (`pfin.tax_bracket_row.schedule_id → pfin.tax_bracket_schedule(id)`, `101`, **P1** matched-tenant local anchor, `fn_tax_bracket_row_matched_schedule`, BEFORE INSERT **OR UPDATE**, one predicate, two raise legs) is **UNCHANGED by this branch**. No new FK-shaped reference column is introduced anywhere in the diff (`git diff --stat origin/main HEAD -- supabase/migrations/` = `104` only, and `104` creates no table, no column, no FK). No label allocated, none retired, none renumbered. I carry **no tally** here; read D3's body live.
+- **ADR-011 Decision 4 (§10)** — read verbatim, live, including the numbered catalogued-instance list, the Privileged-context-surfaces bullet and the three-layer class-composition definitions, plus the `session_replication_role` amendment. **Ledger unchanged by this branch.** Three-axis cross-check on the ADR-067 text this branch carries:
+  - **(i) instance-numbering** — ADR-067 Decision 4 strikes the pre-sitting `"(4th instance)"` ordinal and carries **no tally**, directing the reader to D3 live. Correct against D3's live list. Clean.
+  - **(ii) layer-attribution** — ADR-067's Consequences state the ledger flat and reproduce D4's own disclaimer (*"no surface becomes 'four-layer'"*) in D4's vocabulary, not the PR #74 mislabel. No layer is re-attributed. Clean.
+  - **(iii) verbatim-vs-paraphrase** — ADR-067 Decision 4 quotes D18's locked clause elliptically (*"NOT a new instance… settings writes are user-session-bounded"*) **and immediately preserves the tail** (V2+ live-tax-API ingestion trigger, mandatory Sec re-consult, Lock 12 mod #2-pattern fence going V1-SHIP-BLOCK). That is exactly the clause-scoping D18's own amendment demands; a truncated quotation here would have retired a live Sec obligation as collateral damage. Clean.
+- **ADR-011 Decision 18 + its two amendments** — read verbatim, including the 2026-09-03 SELF-259 amendment realizing *"replace-all under SERIALIZABLE"* as one INVOKER function serialized by a `FOR UPDATE` row lock, the two-locks bullet, and the 2026-09-04 SELF-260 / `103` amendment retiring the *"no V1 writer touches two schedules in one transaction"* premise. Nothing on this surface weakens any of it — see §6 below.
+- **SECURITY DEFINER allowlist (ADR-011 Decision 9)** — **unchanged.** `git diff origin/main HEAD -- supabase/` yields no `security definer` object; both `security definer` string hits in the diff are prose in comments asserting the object is INVOKER.
+- **CI-fenced RT set** — `grep -rhoE 'RT-[0-9]{2}' .github/workflows/` = **RT-05, RT-22, RT-26, RT-27**. `git diff --stat origin/main HEAD -- .github/ secrets-manifest.yml` is **empty**: no fence, no `TenantBoundConnection` scope and no secrets-manifest entry moves on this branch. ⚠ The **CI-fenced** set and the **§10 catalogued** set are **different sets** and are deliberately not reconciled here.
+
+**No drift found at any of the three axes.**
+
+---
+
+## Findings
+
+### F-1 — **FLAG · BLOCKING.** The branch carries a SUPERSEDED copy of `104` and of ADR-067; merging it first lands already-found, already-ruled financial defects on `main`.
+
+`supabase/migrations/104_fn_compute_tax_liability.sql` is **not on `main`** (`git cat-file -e origin/main:supabase/migrations/104_...` → fatal: not in `origin/main`). It is added by this branch as a 725-line new file (`git diff --stat origin/main HEAD -- supabase/migrations/`), and it is **behind** its owning branch:
+
+- `git diff --stat origin/feature/self-265 origin/feature/self-262 -- supabase/migrations/104_fn_compute_tax_liability.sql` → **235 insertions, 43 deletions**.
+- `git diff --stat origin/feature/self-265 origin/feature/self-262 -- DECISIONS.md` → **12 insertions, 4 deletions** — the ADR-067 Decision 5 delta: `(h)` [Sec F-2] and `(i)` [Sec F-3] are **absent** on this branch, and `(d)` lacks its E37 N-2 / N-5 amendment.
+- `grep -rn "standard_deduction_ignored"` over this worktree (excluding `node_modules`, `.git`) returns **zero matches**. Over refs: **3 matches** in `origin/feature/self-262:supabase/migrations/104_...` and in `origin/feature/self-262-arch2`.
+- `104` **on this branch** applies the standard deduction to every schedule type including `federal_lt_cg` (`104:436–442`: `greatest(<input> - pk.standard_deduction, 0) as taxable`, with no schedule-type case). `104` **on `origin/feature/self-262`** carries the F-2 fix (`- (case when pk.schedule_type = 'federal_lt_cg' then 0 else pk.standard_deduction end)`) plus the `standard_deduction_ignored` payload key.
+- Corroborating symptom in the same file: this branch's `comment on function` reads *"all five callees were measured stable"* — the count E37 **N-1** corrected to **three**, and corrected in `origin/feature/self-262`'s copy.
+
+**Risk.** If PR SELF-265 merges to `main` before SELF-262, `main` receives the pre-E37 `104` and the pre-E37 ADR-067. The defects that lands are not hypothetical — they are the exact findings E37 ruled: the LT CG standard-deduction subtraction (**under-reserving direction on the keystone figure**), the missing `ltcg_empty_no_fallback` counterpart (F-1), the un-truncated Q4 residual (N-2), the un-NULLed `basis_year` on an unavailable jurisdiction (N-4), the unrounded annual (N-5). A subsequent SELF-262 merge then has to *re-apply* fixes against a `main` that already contradicts them, and any conflict resolution favouring "what is already on `main`" silently reverts them. That is the class where a correct fix is lost to a merge, not to a decision.
+
+**What clears it — team-lead picks one, all three are acceptable to me:**
+- **(a)** Merge SELF-262 first, then rebase/merge SELF-265 onto it so this branch's `104` and ADR-067 are the post-E37 text. Cleanest; no resolution judgement needed.
+- **(b)** Update this branch's `104` and `DECISIONS.md` to `origin/feature/self-262`'s exact blobs before merging SELF-265, and state in the PR that those two files are carried-not-authored.
+- **(c)** Drop `104` and the ADR-067 hunk from SELF-265 entirely (SELF-265's own code does not read `104`; the loader reads the tables directly). SELF-262 then lands them as their sole author.
+
+I do **not** rank these; the merge-ordering call is team-lead's. What I require is that **whichever is taken, the resulting tree's `104` is byte-identical to SELF-262's reviewed blob**, verified by `git diff` and not by inspection.
+
+### F-2 — **FLAG · clears with F-1.** The brief's item-7 premise is false of this tree: a non-zero `standard_deduction` on a `federal_lt_cg` schedule is **applied, not ignored, and not flagged**.
+
+The brief states 104 *"ignores + flags it (`standard_deduction_ignored`)"* and asks me to confirm the state is visible. **Measured on the reviewed ref: it is neither.** `standard_deduction_ignored` does not exist anywhere in the tree, and `104:436–442` subtracts the stored deduction for `federal_lt_cg` like any other type. The payload's `inputs.standard_deduction` is `wo.standard_deduction` (`104:511`) — the **ordinary** schedule's value only — so the LT CG schedule's stored deduction is neither surfaced nor echoed anywhere.
+
+Reachability, stated at both halves so this is not inflated: `103` seeds `federal_lt_cg` with `standard_deduction = 0.0000` and the editor fixes the field at `0` client-side (disabled visible input + `<input type="hidden" name="standard_deduction" value="0">`, `TaxBracketScheduleEditor.svelte:392`, with dom-test coverage including an override of a caller-supplied non-zero prop). So the value only becomes non-zero via a **crafted POST or a direct RPC call under the user's own JWT** — both of which that user holds (`authenticated` has EXECUTE on `fn_tax_bracket_schedule_replace_all` and full DML on both tables, by Decision 18's design). Effect is confined to that user's own estimated-tax figures — **no cross-tenant reach, no privilege boundary crossed**. It is a self-inflicted, silent, under-reserving distortion of a financial-calculation output.
+
+**Disposition, and it is not a new decision:** E37 already ruled this — option B, *"the reader applies the standard deduction only to `federal_ordinary` / `california_ordinary`; `federal_lt_cg` never subtracts it and the payload carries `schedules.federal_lt_cg.standard_deduction_ignored` when a non-zero value is stored; the editor renders that field fixed at 0 (structural courtesy)."* The reader half is implemented **on `origin/feature/self-262` and not here**. So F-2 is not a SELF-265 defect and needs no SELF-265 code change — it is entirely the F-1 stale-copy symptom, and it clears when F-1 clears.
+
+**I do NOT require a server-side refusal of a non-zero `standard_deduction` on `federal_lt_cg`, and I do NOT require a CHECK on `101`.** E37 named both as losing sides for reasons I agree with: a CHECK rejects a value the PRD merely calls meaningless and re-opens SELF-259's review; a server 400 makes the editor refuse what the reader is happy to ignore-and-report. **Report-don't-refuse is the right shape here** — the condition is that the report must actually exist, which is F-1.
+
+### F-3 — **FLAG.** `deleteSchedule`'s server-side fence refuses **invisibly**: the 409 and both 500s render nothing to the user.
+
+`DeleteScheduleControl.svelte:33–41` handles exactly one outcome — `result.type === 'success'` with `deleted === false` — and otherwise calls `await update()`. On a `fail()` result SvelteKit sets `page.form`, and **nothing renders it**: neither `settings/tax-brackets/+page.svelte` (56 lines, no `form` prop) nor `TaxBracketSchedulesList.svelte` reads it. The editor forms are fine — `TaxBracketScheduleEditor.svelte` reads its own `enhance` result and surfaces `formError` / `serverFieldErrors` — the delete control is the one that does not.
+
+This is reachable on a **non-adversarial path**, which is why it is a flag rather than a note. The UI gate is `canDelete = j.schedules.length > 1 && !schedule.is_seed_template` (`TaxBracketSchedulesList.svelte:121`), and `is_seed_template` is **fail-open** in the loader (`taxBracketSchedules.ts:192–194`: `seedKeysResult ?? new Set()`). So a transient `fn_tax_bracket_seed_template()` read failure renders a Delete control on a seed template; the user confirms; `deleteSchedule` fails **closed** with 409 (`+page.server.ts:308–314`) or 500 (`:303–307`); and **nothing at all appears**. The row silently persists and the user has no signal distinguishing "refused" from "the button is broken".
+
+**Fix (Frontend):** extend `DeleteScheduleControl`'s `SubmitFunction` callback to handle `result.type === 'failure'` and render `result.data.errors._form` in the existing `resultMessage` slot. Catch criterion for the paired test: a `fail(409, {errors:{_form:[...]}} )` result must produce visible text in the control; strike the branch and the test reds.
+
+**The fail-open loader / fail-closed fence asymmetry is CORRECT and I do NOT object to it** — informational marking failing open costs a UI affordance, enforcement failing open would pass a protected row. The asymmetry is documented at both ends (`taxBracketSchedules.ts:50–53`, `+page.server.ts:259–263`). F-3 is about the refusal being unobservable, not about which way each side fails.
+
+---
+
+## Notes
+
+- **N-1 — `.strict()` is not the operative mass-assignment fence on the form-action path; the explicit field projection is.** `parseReplaceFormData` (`+page.server.ts:113–133`) hand-constructs an object with exactly the schema's six keys, so the outer `.strict()` can never fire on this path — an allowlist by construction, which is *stronger*, not weaker. `.strict()` remains live and load-bearing on (a) each `rows[]` element, which comes from attacker-controlled `JSON.parse`, and (b) the sibling JSON endpoint. The file header's *".strict() … is the mass-assignment fence"* is therefore imprecise about which layer holds on which path. No change required; recorded so a future refactor to `Object.fromEntries(form)` is recognised as **moving** the fence rather than as a simplification.
+- **N-2 — `rows` JSON smuggling: I could not construct a bypass, and the reasons are structural.** `JSON.parse` output is walked by `z.array(bracketRowSchema).min(1).max(50)` with `bracketRowSchema.strict()`. A `__proto__` key survives `JSON.parse` as an **own enumerable** property, so Zod's `Object.keys`-based unknown-key detection sees it and `.strict()` rejects it (and `JSON.parse` does not pollute `Object.prototype` in the first place). A non-array parses and `z.array` rejects. Zod's output object is rebuilt from shape keys only, so `input.rows` reaching `.rpc()` carries exactly `{bracket_floor, bracket_rate}` as numbers. `FormDataEntryValue` may be a `File` on any field — every consumer rejects it (`sanitizeDecimal`/`sanitizeInteger` on `typeof`, `z.string()` on the label, `z.enum` on the type, `z.array` on `rows`, and `priorYearBalance`'s union). Duplicate FormData keys resolve to the first via `form.get()`, with RLS behind it regardless. `101`'s RPC re-validates the document shape server-side (exactly two keys, both JSON numbers, quoted numerics refused) as the layer that holds for a caller reaching PostgREST directly.
+- **N-3 — the non-atomic `createSchedule` pair leaves an HONEST state, and it is recoverable.** INSERT-then-RPC (`+page.server.ts:185–226`) can leave a schedule row with zero bracket rows if the RPC leg fails. `104` treats a zero-row schedule as **absent for selection** and says so via `current_year_schedule_empty`, falling back to the prior year rather than computing $0 — verified in `104`'s own contract text. The user recovers by editing the empty schedule (the loader returns it; the editor seeds one default row). A retry of *create* correctly gets 409 on the unique key. **I do NOT require this pair be made atomic** — the RPC deliberately never creates a schedule (E8), and the failure state is neither silent nor money-affecting.
+- **N-4 — `createSchedule` is bounded, not rate-limited, and the bound is adequate.** `unique (users_id, tax_year, schedule_type)` × `sanitizeYear`'s `[1913, 2100]` × 3 types caps a user at **564 schedules** and, at `MAX_ROWS = 50`, ~28,200 rows — all under their own tenancy. **I do NOT require rate limiting on this action.** `tax_year` **is** bounded (`numeric.ts:83–85`), which was the open half of the brief's question.
+- **N-5 — the identity guard's blind spot needs nothing on the server.** It compares the posted `(tax_year, schedule_type)` against the resolved row and cannot compare row *provenance* — by construction, since a replace-all's whole contract is "this is the new set". *"You may replace your own schedule's rows with any valid set"* **is the operation**, and the failure QA found (a stale draft posting 2025's rows under 2026's `schedule_id`) is a client-state bug with no cross-tenant or cross-user reach, fixed at `4e0bf8a` via `{#key basis.id}`. **I explicitly do NOT require a server-side row-provenance token, nonce or ETag.** The watcher exists: `TaxBracketSchedulesList.dom.test.ts:283+` reds if the `{#key}` is struck. I would object only if that test were removed without a replacement.
+- **N-6 — a new settings-family write path was added outside the brief's file list, and it is acceptable.** `provisionDefaultTaxonomy` now calls `fn_provision_tax_brackets()` (`taxonomy.ts`, new third branch), reached from the root `+layout.server.ts` on every authenticated request. INVOKER, no tenant parameter (`auth.uid()` inside), `on conflict do nothing`, `025` aal2 backstop applies, fail-soft per branch, no app-side guard duplicating the DB's. Under D18's SELF-260 amendment its lock ordering is deterministic and today it takes no locks at all for an already-provisioned caller. **No objection.** Recorded because it is a Lock 14 write surface introduced by this PR and an unstated one reads as unexamined.
+- **N-7 — `precheckRowOrdering` (server) dereferences `rows[0]` with no length guard** (`taxBracketScheduleWrite.ts:73`). Unreachable today — Zod's `.min(1)` bounds the only caller — but the function is **exported**, and the client mirror (`validation/taxBracketRows.ts:33`) *does* carry the `rows.length === 0` guard. Suggest adding the same guard for symmetry, in the same explicit-backstop style `numeric.ts` already uses for its three unreachable-today checks. Defensive only.
+- **N-8 — a client-side false rejection at the bottom of the rate range.** `sanitizeBracketRatePercent` round-trips through `Number(x.toFixed(8))`; a percent below `0.0001` yields a fraction that `String()` renders in exponential form (`1e-8`) and `sanitizeFractionRate`'s own scientific-notation fence then rejects. Fails **closed**, affects no realistic bracket rate, and is UX rather than security. Recorded, not asked for.
+
+---
+
+## Explicit non-objections
+
+Stated because an unstated non-objection reads as an unexamined surface.
+
+- **The `createSchedule` header INSERT as the one direct table write.** Acceptable under Decision 18: `authenticated` holds full DML on both tables precisely because the RPC is SECURITY INVOKER, the amendment says so in its own words, and the INSERT touches no `tax_bracket_row` and so cannot evade the deferred set fence or the #18 matched-tenant fence. **Rows reach the tables only through the RPC on both callers.** I do not require the header insert to move inside the function.
+- **`users_id` is never a client-supplied field on any path.** Not in the Zod schema (deliberately absent, at both levels), not in the INSERT payload (`+page.server.ts:188–194` omits it, relying on `101`'s `DEFAULT auth.uid()`), not an RPC parameter (there is no tenant parameter to forge). Verified per call site, not assumed.
+- **Cross-tenant semantics on all three actions.** `saveSchedule` → RLS-scoped ownership read → `404 not_found`, RPC never called. `deleteSchedule` → RLS-scoped pre-read returns `null` for both "absent" and "another tenant's", falls through **unchanged** to a delete pinned by an explicit `.eq('users_id', user.id)` beside `.eq('id')`, returning the same `deleted: false` a nonexistent id gets. A foreign id **never** reaches the seed-template branch, so it can never be told "seed template" — the ordering is load-bearing and it is correct. No existence oracle on any path; no write on any path. Test-covered (`tax-brackets.server.test.ts:215, 359, 375`).
+- **The numeric adversarial battery (AC 4).** Reject-not-coerce throughout; `tax_year` routed through `sanitizeYear` (the SELF-259 F-4 fix, still in place); rate is a FRACTION `[0,1]` with the percent conversion re-validated through the shared fraction check so the client can never mint a fraction the server would refuse; `schedule_label` trims first, bounds 1–500, and rejects U+0000–U+001F / U+007F–U+009F. `<script>` payloads round-trip as inert prose — **no `@html` on this surface** (`grep -rn "@html"` over both components, the delete control and the route → no matches), so escaping is SvelteKit's default interpolation everywhere the label is rendered, including the `aria-label` on the delete control.
+- **The client mirrors are not looser than the server** on any field I checked (currency, fraction rate, label). `sanitizeYear` has no client mirror — absence is not looseness, and the server rejects regardless.
+- **The `[schedule_id]` endpoint refactor (E33) is contract-preserving.** The endpoint is now auth gate → param shape guard → JSON parse → schema → delegate → serialize; `ReplaceErrorCode` is the pre-refactor vocabulary verbatim; the ownership-read-before-RPC ordering and the P0001-ambiguity reasoning moved intact into the shared module. One home for the fence, as ruled.
+- **CI fences, `TenantBoundConnection` scope, `secrets-manifest.yml`, and the SECURITY DEFINER allowlist are untouched by this branch** — measured, not assumed. No new pgsodium-encrypted BYTEA column. No new SECURITY DEFINER function. No privileged-context (`service_role`) write surface: every call on this surface goes through `locals.supabase`.
+- **This surface is correctly NOT audit-class.** ADR-011 Decision 18 classifies the whole Lock 14 settings family that way; no same-transaction audit-log row is owed here, and none is emitted.
+
+---
+
+## Reviewer's own error, recorded in the same pass
+
+I began this review treating the brief's item-7 statement (*"104 ignores + flags it (`standard_deduction_ignored`)"*) as a premise to confirm rather than a claim to measure, and drafted a note around whether the *visibility* was sufficient. The grep that would have caught it — `grep -rn "standard_deduction_ignored"` over the tree — is the first thing I should have run against that sentence, and it returns nothing. Measuring it is what surfaced F-1; had I accepted the premise, the stale-`104` merge hazard would have gone unreported entirely. **A brief's factual assertion about the tree is a claim, not a given** — including, and especially, when it is stated as background to a different question.
+
+---
+
+## Clearance annotation — 2026-09-04, appended not rewritten
+
+**The findings above are the dated record of the review at `ba8938c` and are not edited.** This block records what changed afterwards and what the verdict is now.
+
+**Ref re-read:** `origin/feature/self-265` @ **`6c550397c8e5eac8f77686d2964f0a850acbe031`**. ⚠ Team-lead's notification named `2b8de9d`; the branch had already moved twice more by the time I measured — `0b3e898` (merge of `origin/feature/self-262`) and `6c55039` (merge of `origin/feature/self-265-sec`, which is how the findings file above landed on the branch it reports on). `origin/main` is `957b6fc`.
+
+### F-1 — **CLEARED.** Path (a) was taken: SELF-262's second pass merged into this branch.
+
+- `git diff --stat origin/feature/self-265 origin/feature/self-262 -- supabase/migrations/104_fn_compute_tax_liability.sql DECISIONS.md` → **empty**. The two carried blobs are now byte-identical to their owning branch, which is the verification F-1 required (`git diff`, not inspection).
+- `git grep -c "standard_deduction_ignored" origin/feature/self-265` → `DECISIONS.md:2`, `104:3` — was zero at `ba8938c`.
+- The F-2 fix itself is present in the merged body: `104:591` reads `then 0 else pk.standard_deduction end), 0) as taxable`, so `federal_lt_cg` subtracts nothing.
+
+### F-2 — **CLEARED with F-1**, exactly as stated above. No SELF-265 code change was needed and none was made.
+
+### F-3 — **STILL OPEN.** `DeleteScheduleControl.svelte` at the tip still handles only `result.type === 'success'` (line 36); there is no `failure` branch, so the 409 seed-template refusal and both 500s continue to render nothing. Unchanged by the merge. Disposition is team-lead's: fix (Frontend, one branch in the existing `SubmitFunction` callback + a paired test that reds when it is struck) or accept explicitly.
+
+### Nothing else in scope moved.
+
+- `git diff --stat ba8938c origin/feature/self-265 -- api/` → **empty**. The entire SELF-265-authored surface — loader, three actions, shared write helper, Zod schema, client mirrors, all three components — is unchanged from what the findings above reviewed.
+- `supabase/` delta is `104` plus its new pgTAP battery only; **`101` and `103` are untouched** (`git diff --stat … -- 101… 103…` → empty), so every fence the review turned on is the one it read.
+- The `DECISIONS.md` delta is entirely ADR-067 Decision 5; **zero** added or removed lines mention ADR-011 Decision 3, 4 or 18. The verify-hook discharge above therefore stands without re-running.
+
+### **VERDICT AT `6c55039`: GREEN**, with **F-3 open as a flag** — a should-fix whose disposition team-lead owns, not a merge blocker.
+
+### ⚠ Correcting the notification that prompted this block, because the error direction matters
+
+The message said *"no file under review changed."* Measured, that is **false as stated and true only of `api/`**: `DECISIONS.md` moved 16 lines and `104` moved 278 between `ba8938c` and the tip — and those are precisely the two files F-1 was about. The framing would have had me leave a **cleared blocker standing** against the branch. That is the exact inverse of the error recorded at the foot of the review above, from the same brief, in the same review: there I nearly accepted a premise that a control existed when it did not; here I was invited to accept a premise that nothing had moved when the thing that moved was the finding's whole subject. **Both directions are the same failure — taking a claim about the tree from a message instead of from the tree — and a "not a scope change, FYI" framing is what makes the second one easy to wave through.**
+
+---
+
+## Re-look — requested at `9c9bda8`, MEASURED at `b2fbe38`. Appended, not rewritten.
+
+⚠ **The ref moved between the request and the measurement, and the anchor is the sha I measured.** Team-lead asked for a re-look at `origin/feature/self-265` @ `9c9bda8`; by the time I read it the branch was **`b2fbe38be35767c3ea26b4dbcaf20fffb0cdca5f`**. `git diff --stat 9c9bda8 origin/feature/self-265` → **one file, 30 insertions: this findings file** — `b2fbe38` merges `feature/self-265-sec` @ `4445597`, i.e. the clearance block above. **No code, migration or doc other than this file differs between the two shas**, so everything verified below holds identically at `9c9bda8`. It is anchored to `b2fbe38` regardless, because a verdict names the ref it was taken against.
+
+`origin/main` @ `346d204`.
+
+### F-1 — **CONFIRMED CLEARED**, re-measured against `main` rather than against the sibling branch.
+
+`git diff --stat origin/main origin/feature/self-265 -- supabase/migrations/104_fn_compute_tax_liability.sql DECISIONS.md supabase/tests/rls/104_fn_compute_tax_liability.sql` → **empty**. This is the corrected predicate: `104` is on `main` now (PR #612), so byte-identity against `main` is the check that keeps meaning something once `feature/self-262` is deleted. **F-2 cleared with it**, as ruled.
+
+### F-3 — **CLOSED.** Fix and watcher both verified by reading, and the inversion claim checked leg by leg.
+
+**The fix** (`DeleteScheduleControl.svelte:41–57`): `result.type === 'failure'` flattens `Object.values(data?.errors ?? {})` and joins every message, falling back to a generic string when the envelope is empty or absent; `result.type === 'error'` renders its own generic; `update({ reset: false })` on every path. The 409 seed-template refusal, the 400 invalid-schedule case and both 500s now all reach the user. Optional chaining plus the `?? {}` default means a malformed or missing `data` degrades to the generic message rather than throwing inside the callback — which matters, because a throw there would restore the silence this finding is about.
+
+**The watcher** (`DeleteScheduleControl.dom.test.ts`, 5 legs). Frontend reported *"3 of 5 legs red pre-fix"*. **I checked which two did not red, because an unexplained non-failing leg is the tell for a vacuous test, and both are legitimately non-failing:**
+
+| Leg | Pre-fix | Correct? |
+|---|---|---|
+| 409 `_form` renders + `update({reset:false})` | RED | ✔ the finding itself — and it also pins the `update` argument, which the pre-fix bare `update()` fails independently of the message |
+| multiple field errors joined when `_form` absent | RED | ✔ |
+| generic message on `result.type === 'error'` | RED | ✔ |
+| pre-existing `deleted:false` message still renders | GREEN | ✔ **regression guard on behaviour that already worked** — it must pass before and after; red here would mean the fix broke the one branch that was fine |
+| clean success renders **no** message | GREEN | ✔ **negative control** — it reds if a future edit makes the failure branch fire on success, or introduces a default message |
+
+**3 red + 1 regression guard + 1 negative control is the right composition, not a shortfall.** The isolation technique is sound: a file-scoped `vi.mock('$app/forms')` that actually invokes the returned result-callback (the shared `tests/stubs/app-forms.ts` deliberately does not), so it cannot leak into sibling files.
+
+### Nothing else moved.
+
+`git diff --stat ba8938c origin/feature/self-265 -- api/` → **`DeleteScheduleControl.svelte` (+20/−1) and its new dom test only**. Every other file on the SELF-265-authored surface — loader, three form actions, shared replace-all helper, Zod schema, client mirrors, the two other components — is byte-unchanged from the original review. `101` and `103` untouched. Zero added or removed `DECISIONS.md` lines mention ADR-011 Decision 3, 4 or 18. **The verify-hook discharge at the head of this file stands without re-running.**
+
+---
+
+## **FINAL VERDICT AT `b2fbe38`: GREEN. No open findings.**
+
+F-1 cleared, F-2 cleared with it, F-3 closed with a non-vacuous watcher. No blocking condition, no flag, nothing routed onward. **No further Sec commit is owed on this issue** — one last merge of `feature/self-265-sec` puts this section on the branch and the artifact is final.
+
+**One note, explicitly NOT a Sec finding.** The refusal renders into `<p class="delete-note" role="status">` (line 79) — a *polite* live region. For a refusal an *assertive* `role="alert"` is the conventional choice, and it is what the editor's own error banner already uses. Accessibility, Frontend's call, no security consequence either way; recorded so the inconsistency is a decision rather than an oversight.
