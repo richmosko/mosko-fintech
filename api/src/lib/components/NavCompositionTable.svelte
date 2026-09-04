@@ -48,14 +48,15 @@
 	    instruction). PRD §2.4.4 / ADR-013 is the citation for "state visibly" here — never ADR-049
 	    (Sec D-1: a retracted attribution, E36).
 	  • SELF-268 AC 10a / R3 riders 0b + 6 — the `excludedTaxLedgers` PROP (a SIBLING to
-	    `composition`, not nested in it — team-lead 2026-09-04, post-105-landing correction of an
-	    earlier provisional `composition.excluded_tax_ledgers` guess), when present, names the
-	    accounts AC 3a excluded from the buildup as tax-authority ledgers. Rendering it (even when
-	    the list is empty) is what makes an UNMARKED designated account visible as "not excluded"
-	    (PRD §2.4.4 / ADR-013, never ADR-049). Backend's root loader field for this
-	    (`excludedTaxLedgers`) is not yet on the tree as of this build — absent (`undefined`) →
-	    nothing renders here (a real payload gap to close with Backend, not invented via a second
-	    component-level query).
+	    `composition`, not nested in it — Backend's confirmed root-loader shape), names the accounts
+	    AC 3a excluded from the buildup as tax-authority ledgers. THREE states, rendered distinctly,
+	    never collapsed: `undefined` (this component's own defensive default — the caller didn't
+	    pass the prop) → nothing renders; `null` (the loader's reads FAILED — RPC error or the
+	    account-name join failed) → an explicit "couldn't confirm" notice, NEVER silently treated as
+	    "none excluded"; `[]` (a KNOWN, confirmed "no ledgers designated" — the common
+	    bootstrap-default state) → an explicit "none excluded" line. Rendering the `[]` case (not
+	    hiding it) is what makes an UNMARKED designated account visible as "not excluded" (PRD
+	    §2.4.4 / ADR-013, never ADR-049) — rider 0b's whole point.
 
 	D1 stale-data-marker (SELF-229 ramp): the AGGREGATION-level badge is wired below off the SAME
 	whole-user `046` fn_aggregation_has_stale_constituent() payload the §2.1.1 headline already
@@ -86,17 +87,16 @@
 <script lang="ts">
 	import type { NavComposition, ExcludedTaxLedger } from '$lib/nav-composition';
 	import { buildupRows, navFootLabel, unavailableReasonCopy } from '$lib/nav-composition';
-	import { accountTypeLabel } from '$lib/account-display';
+	import { accountTypeLabel, taxJurisdictionLabel } from '$lib/account-display';
 	import type { StalenessData } from '$lib/staleness/stale-constituent';
 	import StaleConstituentBadge from './StaleConstituentBadge.svelte';
 
 	// Sec F3(B) (F/CTO-ruled): `staleness` is REQUIRED, no default — a caller that forgets to
 	// thread real staleness data now fails at TYPECHECK, not as a silent "confirmed healthy"
 	// fallback. The live mount (+page.svelte) already passes the real loader value unconditionally.
-	// `excludedTaxLedgers` (AC 10a) DEFAULTS to `undefined` — a genuinely optional prop, not a
-	// fail-open fallback for a required signal: absent means "Backend's root loader doesn't carry
-	// this field yet," which is a real, reportable payload gap (see module header), not a state
-	// this component can determine on its own.
+	// `excludedTaxLedgers` (AC 10a) DEFAULTS to `undefined` — this component's OWN defensive
+	// default for a caller that omits the prop entirely, DISTINCT from Backend's `null` (the
+	// loader's reads failed) — see the module header's three-state note.
 	let {
 		composition,
 		staleness,
@@ -113,13 +113,12 @@
 	// never a caption beside the table, never a boolean. See $lib/nav-composition.ts.
 	const footLabel = $derived(navFootLabel(composition.buildups));
 
-	// SELF-268 AC 10a / R3 riders 0b + 6 — `excludedTaxLedgers` is now a SIBLING prop (Backend's
-	// root loader field, per team-lead 2026-09-04), not nested in `composition`. `undefined`/`null`
-	// → render nothing (a real payload gap, not a "no exclusions" claim this component would have
-	// to invent). An empty ARRAY is a genuine, renderable fact — it means zero accounts are
-	// currently designated, which is exactly the unmarked-ledger state rider 0b needs made visible,
-	// so it is NOT treated the same as "field absent."
-	const excludedLedgers = $derived(excludedTaxLedgers ?? undefined);
+	// SELF-268 AC 10a / R3 riders 0b + 6 — `excludedTaxLedgers` is a SIBLING prop (Backend's root
+	// loader field), not nested in `composition`. Passed through UNCHANGED (no `??` coalescing):
+	// `undefined`, `null` and `[]` are THREE DISTINCT, meaningfully different states (module header)
+	// and collapsing any two of them together is exactly the silent-failure shape this AC exists to
+	// prevent.
+	const excludedLedgers = $derived(excludedTaxLedgers);
 
 	// Whole-dollar USD — matches the §2.1.1 headline so the NAV foot reads identical to it
 	// (foot-to-NAV visual consistency; the exactness is a backend invariant on the raw numbers).
@@ -257,27 +256,35 @@
 </div>
 
 <!-- AC 10a / R3 riders 0b + 6 — `excludedTaxLedgers` PROP (see $lib/nav-composition.ts header).
-     Rendered even when the list is EMPTY: an unmarked tax-authority account becomes visible as
-     "not excluded" only because this note names what IS excluded — hiding an empty state here
-     would hide the exact default-state failure rider 0b names. Absent the prop entirely (Backend's
-     root loader doesn't emit `excludedTaxLedgers` yet) → nothing renders; that gap is reported
-     upstream, never papered over with a second component-level query. -->
+     THREE states, each rendered distinctly (never collapsed): `undefined` (prop omitted) → nothing
+     renders; `null` (the loader's reads failed) → an explicit "couldn't confirm" notice, never
+     silently read as "none excluded"; `[]` (confirmed none designated) → an explicit "none
+     excluded" line — hiding this empty state would hide the exact default-state failure rider 0b
+     names. -->
 {#if excludedLedgers !== undefined}
 	<div class="exclusion-note">
-		{#if excludedLedgers.length > 0}
+		{#if excludedLedgers === null}
+			<p class="exclusion-line">
+				We couldn't confirm which accounts, if any, are excluded as tax-authority ledgers just
+				now. Please try again shortly.
+			</p>
+		{:else if excludedLedgers.length > 0}
 			<p class="exclusion-line">
 				Excluded from Net Worth above as tax-authority ledgers (their balance moves NAV only
 				through the Realized Tax Liability line):
 			</p>
 			<ul class="exclusion-list">
 				{#each excludedLedgers as ledger (ledger.account_id)}
-					<li><a class="leaf-link" href={`/accounts/${ledger.account_id}`}>{ledger.account_name}</a></li>
+					<li>
+						<a class="leaf-link" href={`/accounts/${ledger.account_id}`}>{ledger.account_name}</a>
+						— {taxJurisdictionLabel(ledger.jurisdiction)}
+					</li>
 				{/each}
 			</ul>
 		{:else}
 			<p class="exclusion-line">
-				No accounts are currently designated as tax-authority ledgers — none are excluded from
-				Net Worth above.
+				No accounts are designated as tax-authority ledgers — none excluded from Net Worth
+				above.
 			</p>
 		{/if}
 	</div>
