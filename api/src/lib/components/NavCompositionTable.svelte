@@ -21,28 +21,35 @@
 	    Debt subtraction, a negative NAV) render in NEUTRAL ink (design-system-spec §5 fence 1).
 	  • Debt sign (D5): Debt row = −magnitude (subtraction). SELF-268 (R3 rider 5 / AC 2-3-7):
 	    the V1.1 tax-placeholder shape (`isTaxPlaceholder`, `$0` + a "V1.4 ramp" caption) is REMOVED
-	    — the two tax rows now render their real `displayValue`, UNFLIPPED (debt stays the ladder's
-	    only negation; see $lib/nav-composition.ts). ⚠ THIS WAS THE SILENT LAYER (R3 rider 5 part
-	    3): fixing 105 + nav-composition.ts and missing this file would still render `$0` here
-	    against correct upstream data, with a green suite. Empty categories are omitted upstream →
-	    simply absent (D3).
-	  • Whole-dollar, tabular-nums (D9): the NAV foot reads identical to the §2.1.1 headline and
-	    subtotals never appear off-by-rounding.
+	    — the two tax rows now render their real `displayValue` when computed, UNFLIPPED (debt
+	    stays the ladder's only negation; see $lib/nav-composition.ts). ⚠ THIS WAS THE SILENT LAYER
+	    (R3 rider 5 part 3): fixing 105 + nav-composition.ts and missing this file would still
+	    render `$0` here against correct upstream data, with a green suite. Empty categories are
+	    omitted upstream → simply absent (D3).
+	  • Whole-dollar, tabular-nums (D9): the NAV foot's VALUE reads identical to the §2.1.1
+	    headline and subtotals never appear off-by-rounding; the foot's LABEL is dynamic — see
+	    the three-state basis bullet below.
 	  • SELF-268 AC 9a — the §2.5.4 disclaimer (PRD verbatim) renders as a VISIBLE footnote under
 	    the Unrealized Tax Liability row (never hover-only — survives print/PDF/AT, same posture
 	    §2.4.4 requires of its informational marker).
-	  • SELF-268 AC 6 (EXPECTED CONTRACT, provisional pending migration 105 / Architect's A-vs-B
-	    ruling) — when `composition.tax_components` marks a tax scalar unavailable, its cell
-	    renders an "unavailable" notice instead of the dollar figure: `buildups.*_tax_liab` is 0 in
-	    that state per 105's own arithmetic constraint (can't subtract a JSON null), and rendering
-	    that 0 as a determination would be exactly the silent-zero defect this ruling exists to
-	    avoid. Absent `tax_components` → no notice (the field simply hasn't landed on 105 yet).
+	  • SELF-268 AC 6 — E41 RULED SHAPE (team-lead): `buildups.realized_tax_liab` /
+	    `unrealized_tax_liab` are ENVELOPES, not plain numbers. `buildupRows()` ($lib/nav-composition)
+	    already routes an unavailable envelope to a row variant with NO `displayValue` field — this
+	    template renders that row's `reason` as an "Unavailable" notice instead, so there is no `$0`
+	    left to accidentally render as a determination (a type-level guard, not just a runtime check).
+	  • SELF-268 NAV-FOOT THREE-STATE BASIS (Sec P-5 / option (C)) — the two envelopes are
+	    INDEPENDENT and can disagree: 'tax-adjusted' (both computed) / 'partial' (one unavailable —
+	    NAV reads pre-tax for THAT line only) / 'unadjusted' (both unavailable — NAV reads fully
+	    pre-tax). This is NEVER a single boolean, and the state is carried by the FOOT'S OWN LABEL
+	    (`navFootLabel()`, $lib/nav-composition) — not a caption beside the table (Sec's explicit
+	    instruction). PRD §2.4.4 / ADR-013 is the citation for "state visibly" here — never ADR-049
+	    (Sec D-1: a retracted attribution, E36).
 	  • SELF-268 AC 10a / R3 riders 0b + 6 (EXPECTED CONTRACT, provisional) — `composition
 	    .excluded_tax_ledgers`, when present, names the accounts AC 3a excluded from the buildup as
 	    tax-authority ledgers. Rendering it (even when the list is empty) is what makes an UNMARKED
-	    designated account visible as "not excluded" — rider 0b's whole point. Absent the field →
-	    nothing renders here (a real payload gap to close with Architect/Backend, not invented via a
-	    second component-level query).
+	    designated account visible as "not excluded" (PRD §2.4.4 / ADR-013, never ADR-049). Absent
+	    the field → nothing renders here (a real payload gap to close with Architect/Backend, not
+	    invented via a second component-level query).
 
 	D1 stale-data-marker (SELF-229 ramp): the AGGREGATION-level badge is wired below off the SAME
 	whole-user `046` fn_aggregation_has_stale_constituent() payload the §2.1.1 headline already
@@ -71,8 +78,8 @@
 	Tokens only (var(--c-*)); no hardcoded hex/px-spacing/font (ADR-013 P5).
 -->
 <script lang="ts">
-	import type { NavComposition, TaxComponentStatus } from '$lib/nav-composition';
-	import { buildupRows } from '$lib/nav-composition';
+	import type { NavComposition } from '$lib/nav-composition';
+	import { buildupRows, navFootLabel, unavailableActionCopy } from '$lib/nav-composition';
 	import { accountTypeLabel } from '$lib/account-display';
 	import type { StalenessData } from '$lib/staleness/stale-constituent';
 	import StaleConstituentBadge from './StaleConstituentBadge.svelte';
@@ -85,30 +92,9 @@
 
 	const groups = $derived(composition.groups);
 	const ladder = $derived(buildupRows(composition.buildups));
-
-	// SELF-268 AC 6 EXPECTED CONTRACT (provisional — see $lib/nav-composition.ts header).
-	// `??` here is safe (unlike the ADR-013 staleness fallbacks elsewhere in this codebase): an
-	// ABSENT `tax_components` means "105 doesn't emit this yet," not "confirmed available" — and
-	// `null` renders NO notice either way, never a fabricated availability claim.
-	const taxComponents = $derived(composition.tax_components ?? null);
-	function taxStatusFor(key: string): TaxComponentStatus | null {
-		if (!taxComponents) return null;
-		if (key === 'realized_tax_liab') return taxComponents.realized_tax_liab;
-		if (key === 'unrealized_tax_liab') return taxComponents.unrealized_tax_liab;
-		return null;
-	}
-	// Stable machine `reason` codes (104's vocabulary) → user-facing copy. Minimal V1.4 wording;
-	// UX/PM own the final phrasing (bubble-up) — this exists so an unavailable scalar never
-	// silently renders as its 0-for-arithmetic value (AC 6).
-	const UNAVAILABLE_REASON_COPY: Record<string, string> = {
-		no_schedule_any_year: 'no tax bracket schedule on file',
-		ytd_paid_unavailable: 'no tax-authority ledger designated',
-		no_ledger_designated: 'no tax-authority ledger designated'
-	};
-	function unavailableCopy(status: TaxComponentStatus): string {
-		if (status.status !== 'unavailable') return '';
-		return UNAVAILABLE_REASON_COPY[status.reason] ?? 'currently unavailable';
-	}
+	// Sec P-5 / option (C): the foot's OWN label carries the three-state tax-adjustment basis —
+	// never a caption beside the table, never a boolean. See $lib/nav-composition.ts.
+	const footLabel = $derived(navFootLabel(composition.buildups));
 
 	// SELF-268 AC 10a / R3 riders 0b + 6 EXPECTED CONTRACT (provisional — see $lib/nav-composition.ts
 	// header). `undefined`/`null` → render nothing (a real payload gap, not a "no exclusions" claim
@@ -215,7 +201,6 @@
 
 		<tbody class="ladder">
 			{#each ladder as row (row.key)}
-				{@const taxStatus = taxStatusFor(row.key)}
 				<tr class="subtotal">
 					<th scope="row">
 						{row.label}
@@ -228,14 +213,13 @@
 							</span>
 						{/if}
 					</th>
-					{#if taxStatus?.status === 'unavailable'}
-						<!-- AC 6 (EXPECTED CONTRACT, provisional — see $lib/nav-composition.ts header): the
-						     underlying buildups value is 0 here purely for 105's arithmetic (it cannot
-						     subtract a JSON null); rendering that 0 as though it were a determination is the
-						     exact silent-zero defect this branch exists to prevent. -->
+					{#if 'status' in row && row.status === 'unavailable'}
+						<!-- AC 6 (E41 envelope shape): buildupRows() routes an unavailable envelope to a row
+						     variant with NO `displayValue` field at all — there is nothing numeric here to
+						     accidentally render as `$0`. `row.reason` is 104's stable machine code. -->
 						<td class="num tax-unavailable">
 							Unavailable
-							<span class="tax-unavailable-reason">— {unavailableCopy(taxStatus)}</span>
+							<span class="tax-unavailable-reason">— {unavailableActionCopy(row.reason)}</span>
 						</td>
 					{:else}
 						<td class="num">{usd.format(row.displayValue)}</td>
@@ -244,7 +228,8 @@
 				</tr>
 			{/each}
 			<tr class="foot">
-				<th scope="row">Net Assets Value (NAV)</th>
+				<!-- Sec P-5 / option (C): the label ITSELF carries the three-state basis. -->
+				<th scope="row">{footLabel}</th>
 				<td class="num">{usd.format(composition.nav)}</td>
 				<td class="num"></td>
 			</tr>

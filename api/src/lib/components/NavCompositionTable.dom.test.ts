@@ -36,7 +36,7 @@ const fixture: NavComposition = {
 			]
 		}
 	],
-	buildups: { total_non_re: 500_000, gross_total: 500_000, debt: 150_000, realized_tax_liab: 0, unrealized_tax_liab: 0 },
+	buildups: { total_non_re: 500_000, gross_total: 500_000, debt: 150_000, realized_tax_liab: { status: 'computed', amount: 0 }, unrealized_tax_liab: { status: 'computed', amount: 0 } },
 	nav: 350_000
 };
 
@@ -142,7 +142,7 @@ describe('NavCompositionTable — SELF-229 AC#2 per-leaf staleness (TRI-STATE, n
 					]
 				}
 			],
-			buildups: { total_non_re: 500_000, gross_total: 500_000, debt: 0, realized_tax_liab: 0, unrealized_tax_liab: 0 },
+			buildups: { total_non_re: 500_000, gross_total: 500_000, debt: 0, realized_tax_liab: { status: 'computed', amount: 0 }, unrealized_tax_liab: { status: 'computed', amount: 0 } },
 			nav: 500_000
 		};
 	}
@@ -200,7 +200,7 @@ describe('NavCompositionTable — SELF-229 AC4: per-row marker AND aggregation b
 				]
 			}
 		],
-		buildups: { total_non_re: 590_000, gross_total: 590_000, debt: 0, realized_tax_liab: 0, unrealized_tax_liab: 0 },
+		buildups: { total_non_re: 590_000, gross_total: 590_000, debt: 0, realized_tax_liab: { status: 'computed', amount: 0 }, unrealized_tax_liab: { status: 'computed', amount: 0 } },
 		nav: 590_000
 	};
 
