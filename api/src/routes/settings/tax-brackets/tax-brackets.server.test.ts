@@ -12,6 +12,9 @@
 
 import { describe, it, expect } from 'vitest';
 import { load, actions } from './+page.server';
+import type { TaxBracketJurisdiction } from '$lib/server/queries/taxBracketSchedules';
+
+type LoadResult = { jurisdictions: TaxBracketJurisdiction[]; currentTaxYear: number };
 
 const SESSION_UID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
@@ -105,8 +108,11 @@ function validFields(overrides: Record<string, string> = {}): Record<string, str
 	};
 }
 
+// All three actions on this route share the same `RequestEvent` shape (only their return types
+// differ), so one event type serves every call site — no need to derive it per-action.
+type TaxBracketsActionEvent = Parameters<typeof actions.saveSchedule>[0];
+
 function makeEvent(
-	action: (event: unknown) => unknown,
 	fields: Record<string, string>,
 	user: { id: string } | null,
 	supabaseOpts: Parameters<typeof makeSupabase>[0] = {}
@@ -120,7 +126,7 @@ function makeEvent(
 		safeGetSession: async () => ({ session: user ? {} : null, user }),
 		supabase: makeSupabase(supabaseOpts, captured)
 	};
-	return { event: { request, locals } as unknown as Parameters<typeof action>[0], captured };
+	return { event: { request, locals } as unknown as TaxBracketsActionEvent, captured };
 }
 
 describe('load', () => {
@@ -152,7 +158,7 @@ describe('load', () => {
 			supabase: makeSupabase({ scheduleList, rowList: { data: [], error: null } }, captured)
 		};
 		const url = new URL('http://localhost/settings/tax-brackets');
-		const result = await load({ locals, url } as unknown as Parameters<typeof load>[0]);
+		const result = (await load({ locals, url } as unknown as Parameters<typeof load>[0])) as unknown as LoadResult;
 		expect(result.jurisdictions).toHaveLength(3);
 		expect(typeof result.currentTaxYear).toBe('number');
 		const federal = result.jurisdictions.find((j) => j.schedule_type === 'federal_ordinary')!;
@@ -162,14 +168,14 @@ describe('load', () => {
 
 describe('actions.saveSchedule', () => {
 	it('unauthenticated → 401, no DB reached', async () => {
-		const { event, captured } = makeEvent(actions.saveSchedule, validFields(), null);
+		const { event, captured } = makeEvent(validFields(), null);
 		const res = (await actions.saveSchedule(event)) as { status: number };
 		expect(res.status).toBe(401);
 		expect(captured.ownershipReadCalls).toHaveLength(0);
 	});
 
 	it('invalid schedule_id field → 400, no DB reached', async () => {
-		const { event, captured } = makeEvent(actions.saveSchedule, validFields({ schedule_id: 'not-a-number' }), {
+		const { event, captured } = makeEvent(validFields({ schedule_id: 'not-a-number' }), {
 			id: SESSION_UID
 		});
 		const res = (await actions.saveSchedule(event)) as { status: number };
@@ -178,7 +184,7 @@ describe('actions.saveSchedule', () => {
 	});
 
 	it('malformed rows JSON → 400 with a rows field error (schema rejects the raw string), no DB reached', async () => {
-		const { event, captured } = makeEvent(actions.saveSchedule, validFields({ rows: '{not json' }), {
+		const { event, captured } = makeEvent(validFields({ rows: '{not json' }), {
 			id: SESSION_UID
 		});
 		const res = (await actions.saveSchedule(event)) as { status: number; data: { errors: Record<string, string[]> } };
@@ -188,7 +194,7 @@ describe('actions.saveSchedule', () => {
 	});
 
 	it("empty tax_balance_prior_year field → treated as null, not a validation failure", async () => {
-		const { event } = makeEvent(actions.saveSchedule, validFields({ tax_balance_prior_year: '' }), { id: SESSION_UID }, {
+		const { event } = makeEvent(validFields({ tax_balance_prior_year: '' }), { id: SESSION_UID }, {
 			ownershipRead: { data: { id: 42, tax_year: 2026, schedule_type: 'federal_ordinary' }, error: null },
 			rpcResult: { data: null, error: null }
 		});
@@ -197,7 +203,7 @@ describe('actions.saveSchedule', () => {
 	});
 
 	it('mass-assignment: a stray users_id-shaped extra field never reaches the RPC params', async () => {
-		const { event, captured } = makeEvent(actions.saveSchedule, validFields(), { id: SESSION_UID }, {
+		const { event, captured } = makeEvent(validFields(), { id: SESSION_UID }, {
 			ownershipRead: { data: { id: 42, tax_year: 2026, schedule_type: 'federal_ordinary' }, error: null },
 			rpcResult: { data: null, error: null }
 		});
@@ -207,7 +213,7 @@ describe('actions.saveSchedule', () => {
 	});
 
 	it('cross-tenant schedule_id: ownership read resolves no row → 404, RPC never called', async () => {
-		const { event, captured } = makeEvent(actions.saveSchedule, validFields(), { id: SESSION_UID }, {
+		const { event, captured } = makeEvent(validFields(), { id: SESSION_UID }, {
 			ownershipRead: { data: null, error: null }
 		});
 		const res = (await actions.saveSchedule(event)) as { status: number };
@@ -216,7 +222,7 @@ describe('actions.saveSchedule', () => {
 	});
 
 	it("identity guard: body tax_year disagrees with the resolved row → 409, RPC never called", async () => {
-		const { event, captured } = makeEvent(actions.saveSchedule, validFields({ tax_year: '2025' }), { id: SESSION_UID }, {
+		const { event, captured } = makeEvent(validFields({ tax_year: '2025' }), { id: SESSION_UID }, {
 			ownershipRead: { data: { id: 42, tax_year: 2026, schedule_type: 'federal_ordinary' }, error: null }
 		});
 		const res = (await actions.saveSchedule(event)) as { status: number };
@@ -226,7 +232,6 @@ describe('actions.saveSchedule', () => {
 
 	it('a fraction of 22 (not 0.22) is rejected by the shared schema → 400, no DB reached', async () => {
 		const { event, captured } = makeEvent(
-			actions.saveSchedule,
 			validFields({ rows: JSON.stringify([{ bracket_floor: 0, bracket_rate: 22 }]) }),
 			{ id: SESSION_UID }
 		);
@@ -237,14 +242,14 @@ describe('actions.saveSchedule', () => {
 	});
 
 	it('empty schedule_label rejected by the shared schema (label rules) → 400', async () => {
-		const { event } = makeEvent(actions.saveSchedule, validFields({ schedule_label: '' }), { id: SESSION_UID });
+		const { event } = makeEvent(validFields({ schedule_label: '' }), { id: SESSION_UID });
 		const res = (await actions.saveSchedule(event)) as { status: number; data: { errors: Record<string, string[]> } };
 		expect(res.status).toBe(400);
 		expect(res.data.errors).toHaveProperty('schedule_label');
 	});
 
 	it("aal1 → step-up branch: RPC 42501 → 403", async () => {
-		const { event } = makeEvent(actions.saveSchedule, validFields(), { id: SESSION_UID }, {
+		const { event } = makeEvent(validFields(), { id: SESSION_UID }, {
 			ownershipRead: { data: { id: 42, tax_year: 2026, schedule_type: 'federal_ordinary' }, error: null },
 			rpcResult: { data: null, error: { code: '42501', message: 'permission denied' } }
 		});
@@ -253,7 +258,7 @@ describe('actions.saveSchedule', () => {
 	});
 
 	it('happy path → 200-equivalent (plain object), RPC called once with the exact contract', async () => {
-		const { event, captured } = makeEvent(actions.saveSchedule, validFields(), { id: SESSION_UID }, {
+		const { event, captured } = makeEvent(validFields(), { id: SESSION_UID }, {
 			ownershipRead: { data: { id: 42, tax_year: 2026, schedule_type: 'federal_ordinary' }, error: null },
 			rpcResult: { data: null, error: null }
 		});
@@ -277,14 +282,14 @@ describe('actions.saveSchedule', () => {
 
 describe('actions.createSchedule', () => {
 	it('unauthenticated → 401, no DB reached', async () => {
-		const { event, captured } = makeEvent(actions.createSchedule, validFields(), null);
+		const { event, captured } = makeEvent(validFields(), null);
 		const res = (await actions.createSchedule(event)) as { status: number };
 		expect(res.status).toBe(401);
 		expect(captured.insertCalls).toHaveLength(0);
 	});
 
 	it('INSERT unique-key conflict (23505) → 409 field error on tax_year, replace-all never called', async () => {
-		const { event, captured } = makeEvent(actions.createSchedule, validFields(), { id: SESSION_UID }, {
+		const { event, captured } = makeEvent(validFields(), { id: SESSION_UID }, {
 			insertResult: { data: null, error: { code: '23505', message: 'unique violation' } }
 		});
 		const res = (await actions.createSchedule(event)) as { status: number; data: { errors: Record<string, string[]> } };
@@ -294,7 +299,7 @@ describe('actions.createSchedule', () => {
 	});
 
 	it('INSERT 42501 (aal1 step-up) → 403', async () => {
-		const { event } = makeEvent(actions.createSchedule, validFields(), { id: SESSION_UID }, {
+		const { event } = makeEvent(validFields(), { id: SESSION_UID }, {
 			insertResult: { data: null, error: { code: '42501', message: 'permission denied' } }
 		});
 		const res = (await actions.createSchedule(event)) as { status: number };
@@ -302,7 +307,7 @@ describe('actions.createSchedule', () => {
 	});
 
 	it('happy path → INSERT then replace-all RPC on the freshly-minted id, in order', async () => {
-		const { event, captured } = makeEvent(actions.createSchedule, validFields(), { id: SESSION_UID }, {
+		const { event, captured } = makeEvent(validFields(), { id: SESSION_UID }, {
 			insertResult: { data: { id: 99 }, error: null },
 			ownershipRead: { data: { id: 99, tax_year: 2026, schedule_type: 'federal_ordinary' }, error: null },
 			rpcResult: { data: null, error: null }
@@ -323,7 +328,6 @@ describe('actions.createSchedule', () => {
 
 	it('replace-all step fails after a successful INSERT (e.g. courtesy precheck) → surfaces that failure, not a false success', async () => {
 		const { event } = makeEvent(
-			actions.createSchedule,
 			validFields({ rows: JSON.stringify([{ bracket_floor: 500, bracket_rate: 0.1 }]) }),
 			{ id: SESSION_UID },
 			{
@@ -339,21 +343,21 @@ describe('actions.createSchedule', () => {
 
 describe('actions.deleteSchedule', () => {
 	it('unauthenticated → 401, no DB reached', async () => {
-		const { event, captured } = makeEvent(actions.deleteSchedule, { schedule_id: '1' }, null);
+		const { event, captured } = makeEvent({ schedule_id: '1' }, null);
 		const res = (await actions.deleteSchedule(event)) as { status: number };
 		expect(res.status).toBe(401);
 		expect(captured.deleteCalls).toHaveLength(0);
 	});
 
 	it('invalid schedule_id → 400, no DB reached', async () => {
-		const { event, captured } = makeEvent(actions.deleteSchedule, { schedule_id: 'nope' }, { id: SESSION_UID });
+		const { event, captured } = makeEvent({ schedule_id: 'nope' }, { id: SESSION_UID });
 		const res = (await actions.deleteSchedule(event)) as { status: number };
 		expect(res.status).toBe(400);
 		expect(captured.deleteCalls).toHaveLength(0);
 	});
 
 	it('DELETE scoped to id AND users_id (defense-in-depth predicate)', async () => {
-		const { event, captured } = makeEvent(actions.deleteSchedule, { schedule_id: '7' }, { id: SESSION_UID }, {
+		const { event, captured } = makeEvent({ schedule_id: '7' }, { id: SESSION_UID }, {
 			deleteResult: { error: null, count: 1 }
 		});
 		await actions.deleteSchedule(event);
@@ -361,7 +365,7 @@ describe('actions.deleteSchedule', () => {
 	});
 
 	it('successful delete → deleted: true', async () => {
-		const { event } = makeEvent(actions.deleteSchedule, { schedule_id: '7' }, { id: SESSION_UID }, {
+		const { event } = makeEvent({ schedule_id: '7' }, { id: SESSION_UID }, {
 			deleteResult: { error: null, count: 1 }
 		});
 		const res = await actions.deleteSchedule(event);
@@ -369,7 +373,7 @@ describe('actions.deleteSchedule', () => {
 	});
 
 	it('cross-tenant / absent id → idempotent 200-equivalent, deleted: false (never a 404)', async () => {
-		const { event } = makeEvent(actions.deleteSchedule, { schedule_id: '7' }, { id: SESSION_UID }, {
+		const { event } = makeEvent({ schedule_id: '7' }, { id: SESSION_UID }, {
 			deleteResult: { error: null, count: 0 }
 		});
 		const res = await actions.deleteSchedule(event);
@@ -377,7 +381,7 @@ describe('actions.deleteSchedule', () => {
 	});
 
 	it('unexpected DB error → 500', async () => {
-		const { event } = makeEvent(actions.deleteSchedule, { schedule_id: '7' }, { id: SESSION_UID }, {
+		const { event } = makeEvent({ schedule_id: '7' }, { id: SESSION_UID }, {
 			deleteResult: { error: { code: 'XXYYY', message: 'boom' }, count: null }
 		});
 		const res = (await actions.deleteSchedule(event)) as { status: number };

@@ -21,10 +21,12 @@
 //
 // WRITES (AC3/AC4): three actions, ONE schedule per request (execution-log E20) — never a
 // multi-schedule batch. All three go through `queries/taxBracketScheduleWrite.ts`'s
-// `replaceTaxBracketSchedule`, which REUSES the SELF-259 AC6 RPC contract
-// (`pfin.fn_tax_bracket_schedule_replace_all`) name-for-name and the sibling endpoint's
-// ownership-read-before-RPC / schedule-identity-guard / courtesy-precheck design — see that
-// module's own header for why it is a separate implementation rather than a shared import.
+// `replaceTaxBracketSchedule` — the SAME implementation POST
+// /api/settings/tax-brackets/[schedule_id]/+server.ts delegates to (team-lead ruling E33,
+// 2026-09-04: "one home for the replace-all fence"), not a second copy of it. That module returns
+// a canonical `ReplaceOutcome` keyed by the endpoint's OWN error-code vocabulary; this file's
+// `errorCodeToFieldErrors` (below) is this surface's own translation of that code into a
+// human-facing field error — the endpoint instead serializes the code directly.
 //
 // TRANSPORT: SvelteKit form actions (api/CLAUDE.md: "forms go through SvelteKit form actions"),
 // so `rows` (a dynamic-length array the editor builds client-side) travels as a JSON-stringified
@@ -50,11 +52,42 @@
 
 import { fail, redirect } from '@sveltejs/kit';
 import { loadTaxBracketSchedules } from '$lib/server/queries/taxBracketSchedules';
-import { replaceTaxBracketSchedule } from '$lib/server/queries/taxBracketScheduleWrite';
+import { replaceTaxBracketSchedule, type ReplaceOutcome } from '$lib/server/queries/taxBracketScheduleWrite';
 import { taxBracketScheduleReplaceSchema } from '$lib/server/schemas/tax-bracket-schedule';
 import { fieldErrors } from '$lib/server/schemas/account';
 import { serverTodayAsOf } from '$lib/server/time/asOf';
 import type { PageServerLoad, Actions } from './$types';
+
+/**
+ * Translate `replaceTaxBracketSchedule`'s canonical `ReplaceErrorCode` (the sibling endpoint's
+ * OWN error-code vocabulary — E33) into this surface's field-error envelope. The HELPER owns the
+ * mechanism and the code; each caller owns PRESENTATION — the endpoint serializes the code
+ * directly into `json({error: code})`, this page action turns it into a human-readable message
+ * keyed to the field a user would actually fix.
+ */
+function errorCodeToFieldErrors(outcome: Extract<ReplaceOutcome, { ok: false }>): Record<string, string[]> {
+	switch (outcome.error) {
+		case 'not_found':
+			return { _form: ['This schedule could not be found.'] };
+		case 'schedule_identity_mismatch':
+			return { _form: ["This schedule's year or type has changed since it was loaded. Please refresh and try again."] };
+		case 'invalid_row_order':
+			return { rows: [outcome.reason ?? 'Bracket rows are not in a valid order.'] };
+		case 'invalid_schedule':
+			return { _form: ['This schedule could not be saved. Please refresh and try again.'] };
+		case 'invalid_value':
+			return { _form: ['One of the entered values is out of range.'] };
+		case 'schedule_conflict':
+			return { _form: ['This write conflicts with an existing schedule.'] };
+		case 'concurrent_update_retry':
+			return { _form: ['Another update is in progress. Please retry.'] };
+		case 'step_up_required':
+			return { _form: ['This action requires a freshly verified session. Please step up and try again.'] };
+		case 'internal_error':
+		default:
+			return { _form: ['Something went wrong. Please try again.'] };
+	}
+}
 
 /** Shape-only guard on a posted `schedule_id` field — RLS (via `replaceTaxBracketSchedule`'s own
  *  ownership read, or the DELETE's own RLS-scoped predicate) is the actual tenant/visibility
@@ -128,7 +161,7 @@ export const actions: Actions = {
 
 		const result = await replaceTaxBracketSchedule(locals.supabase, scheduleId, parsed.data);
 		if (!result.ok) {
-			return fail(result.status, { action: 'saveSchedule', scheduleId, errors: result.errors });
+			return fail(result.status, { action: 'saveSchedule', scheduleId, errors: errorCodeToFieldErrors(result) });
 		}
 
 		return { action: 'saveSchedule' as const, ok: true, scheduleId };
@@ -189,7 +222,7 @@ export const actions: Actions = {
 		// passes trivially since tax_year/schedule_type were just written from this same input.
 		const result = await replaceTaxBracketSchedule(locals.supabase, scheduleId, parsed.data);
 		if (!result.ok) {
-			return fail(result.status, { action: 'createSchedule', scheduleId, errors: result.errors });
+			return fail(result.status, { action: 'createSchedule', scheduleId, errors: errorCodeToFieldErrors(result) });
 		}
 
 		return { action: 'createSchedule' as const, ok: true, scheduleId };

@@ -97,7 +97,7 @@ describe('replaceTaxBracketSchedule', () => {
 		const captured: Captured = { readCalls: [], rpcCalls: [] };
 		const client = supabaseMock({ data: null, error: null }, { data: null, error: null }, captured);
 		const result = await replaceTaxBracketSchedule(client, 1, validInput());
-		expect(result).toEqual({ ok: false, status: 404, errors: { _form: ['This schedule could not be found.'] } });
+		expect(result).toEqual({ ok: false, status: 404, error: 'not_found' });
 		expect(captured.rpcCalls).toHaveLength(0);
 	});
 
@@ -109,8 +109,7 @@ describe('replaceTaxBracketSchedule', () => {
 			captured
 		);
 		const result = await replaceTaxBracketSchedule(client, 1, validInput());
-		expect(result.ok).toBe(false);
-		if (!result.ok) expect(result.status).toBe(500);
+		expect(result).toEqual({ ok: false, status: 500, error: 'internal_error' });
 		expect(captured.rpcCalls).toHaveLength(0);
 	});
 
@@ -122,8 +121,7 @@ describe('replaceTaxBracketSchedule', () => {
 			captured
 		);
 		const result = await replaceTaxBracketSchedule(client, 1, validInput({ tax_year: 2026 }));
-		expect(result.ok).toBe(false);
-		if (!result.ok) expect(result.status).toBe(409);
+		expect(result).toEqual({ ok: false, status: 409, error: 'schedule_identity_mismatch' });
 		expect(captured.rpcCalls).toHaveLength(0);
 	});
 
@@ -135,12 +133,11 @@ describe('replaceTaxBracketSchedule', () => {
 			captured
 		);
 		const result = await replaceTaxBracketSchedule(client, 1, validInput({ schedule_type: 'federal_lt_cg' }));
-		expect(result.ok).toBe(false);
-		if (!result.ok) expect(result.status).toBe(409);
+		expect(result).toEqual({ ok: false, status: 409, error: 'schedule_identity_mismatch' });
 		expect(captured.rpcCalls).toHaveLength(0);
 	});
 
-	it('courtesy precheck failure (bad row order) → 400 with a `rows` field error, RPC never called', async () => {
+	it('courtesy precheck failure (bad row order) → 400 invalid_row_order with the reason, RPC never called', async () => {
 		const captured: Captured = { readCalls: [], rpcCalls: [] };
 		const client = supabaseMock(
 			{ data: { id: 1, tax_year: 2026, schedule_type: 'federal_ordinary' }, error: null },
@@ -152,11 +149,12 @@ describe('replaceTaxBracketSchedule', () => {
 			1,
 			validInput({ rows: [{ bracket_floor: 500, bracket_rate: 0.1 }] })
 		);
-		expect(result.ok).toBe(false);
-		if (!result.ok) {
-			expect(result.status).toBe(400);
-			expect(result.errors).toHaveProperty('rows');
-		}
+		expect(result).toEqual({
+			ok: false,
+			status: 400,
+			error: 'invalid_row_order',
+			reason: 'The lowest bracket must start at 0.'
+		});
 		expect(captured.rpcCalls).toHaveLength(0);
 	});
 
@@ -187,18 +185,18 @@ describe('replaceTaxBracketSchedule', () => {
 		});
 	});
 
-	describe('RPC error mapping', () => {
-		const cases: Array<[string, number]> = [
-			['42501', 403],
-			['P0001', 400],
-			['23514', 400],
-			['23505', 409],
-			['40001', 409],
-			['55000', 500]
+	describe('RPC error mapping — endpoint-identical vocabulary (E33)', () => {
+		const cases: Array<[string, number, ReturnType<typeof String>]> = [
+			['42501', 403, 'step_up_required'],
+			['P0001', 400, 'invalid_schedule'],
+			['23514', 400, 'invalid_value'],
+			['23505', 409, 'schedule_conflict'],
+			['40001', 409, 'concurrent_update_retry'],
+			['55000', 500, 'internal_error']
 		];
 
-		for (const [code, status] of cases) {
-			it(`'${code}' → ${status}`, async () => {
+		for (const [code, status, errorCode] of cases) {
+			it(`'${code}' → ${status} ${errorCode}`, async () => {
 				const captured: Captured = { readCalls: [], rpcCalls: [] };
 				const client = supabaseMock(
 					{ data: { id: 1, tax_year: 2026, schedule_type: 'federal_ordinary' }, error: null },
@@ -206,8 +204,7 @@ describe('replaceTaxBracketSchedule', () => {
 					captured
 				);
 				const result = await replaceTaxBracketSchedule(client, 1, validInput());
-				expect(result.ok).toBe(false);
-				if (!result.ok) expect(result.status).toBe(status);
+				expect(result).toEqual({ ok: false, status, error: errorCode });
 			});
 		}
 	});
