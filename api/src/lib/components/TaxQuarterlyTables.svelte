@@ -27,6 +27,15 @@
 	404s until that branch lands — expected, same posture CashflowRollupTable's `editTargetsHref`
 	documents for its own not-yet-built sibling route.
 
+	QA-walk DEFECT fix (relayed by team-lead): "Edit tax brackets" (AC 7) is a STANDING affordance
+	per ADR-013 P5 — the no-inline-edit escape hatch must always be reachable, not only from the
+	AC-7a unavailable state. It previously lived ONLY inside TaxJurisdictionTable's `unavailable`
+	branch, so a tenant with resolved brackets (the ordinary case) had no way back to the editor
+	from this page. Rendered HERE, page-level, beside the heading, UNCONDITIONALLY — alongside the
+	decomposition cross-link. TaxJurisdictionTable's own AC-7a CTA is UNCHANGED and stays (a second,
+	narrower entry point that's also the ONLY affordance visible when a jurisdiction table has
+	collapsed to its empty state and this page-level header is still the fallback either way).
+
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5).
 -->
 <script lang="ts">
@@ -58,7 +67,11 @@
 <section class="quarterly" aria-labelledby="quarterly-label">
 	<header class="page-head">
 		<h2 id="quarterly-label" class="page-label">Estimated Quarterly Taxes</h2>
-		<a class="decomposition-link" href={decompositionHref}>Income decomposition →</a>
+		<div class="page-actions">
+			<a class="decomposition-link" href={decompositionHref}>Income decomposition →</a>
+			<!-- AC 7 — standing affordance, unconditional (QA-walk defect fix). -->
+			<a class="page-edit-brackets-link" href={editBracketsHref}>Edit tax brackets</a>
+		</div>
 	</header>
 
 	{#if noTaxAuthorityDesignated}
@@ -106,6 +119,12 @@
 		font: var(--weight-semi) var(--fs-h2) / var(--lh-tight) var(--font-ui);
 		color: var(--c-text-primary);
 	}
+	.page-actions {
+		display: flex;
+		align-items: center;
+		gap: var(--space-4);
+		flex-wrap: wrap;
+	}
 	.decomposition-link {
 		font: var(--weight-med) var(--fs-small) / 1 var(--font-ui);
 		color: var(--c-accent);
@@ -120,6 +139,27 @@
 		outline: none;
 		box-shadow: var(--focus-ring);
 		border-radius: var(--radius-sm);
+	}
+	/* Reproduces the locked screen.css `.btn.secondary` look — same convention NonReAllocationTable /
+	   CashflowRollupTable's own `.edit-link` uses. AC 7's standing affordance, unconditional. */
+	.page-edit-brackets-link {
+		display: inline-flex;
+		align-items: center;
+		border: 1px solid var(--c-border-strong);
+		background: var(--c-surface);
+		color: var(--c-text-primary);
+		border-radius: var(--radius-md);
+		padding: var(--space-2) var(--space-3);
+		font: var(--weight-med) var(--fs-small) / 1 var(--font-ui);
+		text-decoration: none;
+		white-space: nowrap;
+	}
+	.page-edit-brackets-link:hover {
+		background: var(--c-surface-alt);
+	}
+	.page-edit-brackets-link:focus-visible {
+		outline: none;
+		box-shadow: var(--focus-ring);
 	}
 
 	/* AC 6(ii) — same informational (non-canary) register as TaxJurisdictionTable's AC 7a block:
