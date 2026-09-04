@@ -5,7 +5,16 @@
 --   migration's own AC 5 — bracket rates and standard deductions are
 --   financial-calculation inputs)
 -- =====================================================================
--- BINDS TO MIGRATION: supabase/migrations/103_tax_bracket_seed.sql (07871f6)
+-- BINDS TO MIGRATION: supabase/migrations/103_tax_bracket_seed.sql —
+--   RE-DERIVED (Sec F-5): the `07871f6` sha this line previously named was
+--   stale — the file moved twice since (`817c44e`, `8247778`). Re-pinned at
+--   branch tip `393c7af`: the committed blob at that tip hashes to md5
+--   ce07e944123f521d1ba79ae584e7497a, via `git show
+--   393c7af:supabase/migrations/103_tax_bracket_seed.sql | md5` (`md5sum` on
+--   Linux) — read from the COMMITTED blob, never the worktree file. The
+--   migration's own last touch is `8247778` (unchanged at this tip);
+--   recompute and compare before trusting this binding still matches a
+--   later edit.
 --   - pfin.fn_tax_bracket_seed_template() — SQL, IMMUTABLE, SECURITY
 --       INVOKER, set search_path = '', reads NO TABLE (a constant VALUES
 --       list with a name). THE SINGLE HOME of every seeded figure: three
@@ -28,7 +37,7 @@
 --       deduction", not "unset"), california_ordinary (2025 — the FTB had
 --       not published 2026 at authoring time — 10 rows, std ded 5706, a
 --       10th bracket at floor 1000000 / rate 0.133 = the 12.3% FTB Schedule
---       X top rate plus the 1% R&TC 17043 Mental Health Services Tax, cited
+--       X top rate plus the 1% R&TC 17043 Behavioral Health Services Tax, cited
 --       separately in the migration header — E23). Every label states filing
 --       status SINGLE (AC 6 / PM's A-6) and its own tax_year.
 --
@@ -156,7 +165,7 @@ select results_eq(
   $$ select bracket_floor, bracket_rate from pfin.fn_tax_bracket_seed_template()
       where schedule_type = 'california_ordinary' order by bracket_floor desc limit 1 $$,
   $$ values (1000000.0000::numeric, 0.13300000::numeric) $$,
-  '(T6) the california_ordinary TOP bracket is floor 1,000,000 / rate 0.133 — FTB Schedule X''s 12.3% top rate plus the 1% R&TC 17043 Mental Health Services Tax (E23), the one row this file does not trace to Schedule X alone'
+  '(T6) the california_ordinary TOP bracket is floor 1,000,000 / rate 0.133 — FTB Schedule X''s 12.3% top rate plus the 1% R&TC 17043 Behavioral Health Services Tax (E23), the one row this file does not trace to Schedule X alone'
 );
 
 select results_eq(
