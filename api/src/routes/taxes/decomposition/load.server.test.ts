@@ -9,11 +9,13 @@ import { describe, it, expect, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 const loadTaxLiabilityMock = vi.fn();
+const INVENTORY_SEED_DELTA_MIGRATION = '100_tax_value_inventory_seed_delta.sql';
 vi.mock('$lib/server/queries/taxLiability', () => ({
-	loadTaxLiability: loadTaxLiabilityMock
+	loadTaxLiability: loadTaxLiabilityMock,
+	INVENTORY_SEED_DELTA_MIGRATION
 }));
 
-const { load, INVENTORY_SEED_DELTA_MIGRATION } = await import('./+page.server');
+const { load } = await import('./+page.server');
 
 const SESSION_UID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
