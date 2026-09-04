@@ -31,6 +31,14 @@
 	    each its own full `mode="edit"` editor inside a native `<details>` -- editable, not a
 	    read-only or delete-only row, per E35(a).
 
+	FEDERAL LT CG STANDARD DEDUCTION (Sec review, feature/self-262, relayed by team-lead): the
+	create-from-template prefill forces `initialStandardDeduction` to 0 for `federal_lt_cg`
+	regardless of the basis schedule's own stored value -- belt-and-suspenders alongside
+	TaxBracketScheduleEditor's own internal override (that component locks the field
+	unconditionally for this type; this line exists so a reader of THIS file sees the same fact
+	without having to open the editor's source to confirm it isn't silently passing through a
+	stale/wrong basis value first).
+
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5).
 -->
 <script lang="ts">
@@ -156,7 +164,9 @@
 					scheduleType={j.schedule_type}
 					taxYear={currentTaxYear}
 					initialLabel={basis?.schedule_label ?? ''}
-					initialStandardDeduction={basis?.standard_deduction ?? 0}
+					initialStandardDeduction={j.schedule_type === 'federal_lt_cg'
+						? 0
+						: (basis?.standard_deduction ?? 0)}
 					initialPriorYearBalance={null}
 					initialRows={basis?.rows ?? [{ bracket_floor: 0, bracket_rate: 0 }]}
 					onSaved={() => (userToggled[j.schedule_type] = false)}
