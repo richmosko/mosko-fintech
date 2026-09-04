@@ -72,7 +72,7 @@ describe('buildupRows — Debt sign flip (D5)', () => {
 		expect(displayValueOf(rows, 'gross_total')).toBe(1_000_000);
 	});
 
-	it('a zero-debt household flips to a neutral zero (−0 arithmetic; rendered $0)', () => {
+	it('a zero-debt household flips to a NEGATIVE ZERO displayValue (−0 arithmetic) — this leg checks the RAW VALUE only; the "$0" RENDER (not "-$0") is the formatter\'s job and is asserted as a rendering leg in NavCompositionTable.ssr.test.ts, never here', () => {
 		expect(displayValueOf(buildupRows({ ...b, debt: 0 }), 'debt')).toBe(-0);
 	});
 });

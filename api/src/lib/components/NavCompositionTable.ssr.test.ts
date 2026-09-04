@@ -16,6 +16,9 @@
 //     amount) renders NEGATIVE (reduces NAV) and an overpaid one (negative raw amount, a receivable)
 //     renders POSITIVE with an explicit "+" (adds back) — the V1.1 `isTaxPlaceholder` `$0` +
 //     "V1.4 ramp" caption shape is GONE.
+//   • SEC FINDING (E44 follow-up, measured): a negated zero is IEEE-754 −0, which the RENDER must
+//     read "$0", never "-$0" — proven for a zero-debt household and for a {computed, amount: 0}
+//     unrealized row (the R9 clamp's ordinary output for any net unrealized loss).
 //   • SELF-268 AC 9a: the §2.5.4 disclaimer renders as a visible footnote (no hover-only).
 //   • SELF-268 AC 6: an unavailable envelope renders "Unavailable — <copy>" text (the FINAL copy
 //     per team-lead 2026-09-04), never the $0 the buildups value would otherwise arithmetically be.
@@ -141,6 +144,25 @@ describe('NavCompositionTable — buildup ladder (AC#4) + signs (D5) + SELF-268 
 		const { body } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: fixture } });
 		expect(body).toContain('Net Assets Value (tax-adjusted)');
 		expect(body).toContain('$350,000');
+	});
+});
+
+describe('NavCompositionTable — SEC FINDING (E44 follow-up, measured): negating a zero yields IEEE-754 −0, which must render "$0", never "-$0"', () => {
+	it('a zero-debt household renders Debt as "$0" (buildupRows() negates 0 to -0; the `usd` formatter\'s signDisplay: \'negative\' suppresses the sign on that -0)', () => {
+		const zeroDebt: NavComposition = { ...fixture, buildups: { ...fixture.buildups, debt: 0 } };
+		const { body } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: zeroDebt } });
+		expect(body).toContain('$0');
+		expect(body).not.toContain('-$0');
+	});
+
+	it('a {computed, amount: 0} unrealized row (R9 clamp\'s ORDINARY output for any net unrealized loss — a common household state) renders "$0", never "-$0"', () => {
+		const zeroUnrealized: NavComposition = {
+			...fixture,
+			buildups: { ...fixture.buildups, unrealized_tax_liab: { status: 'computed', amount: 0 } }
+		};
+		const { body } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: zeroUnrealized } });
+		expect(body).toContain('$0');
+		expect(body).not.toContain('-$0');
 	});
 });
 

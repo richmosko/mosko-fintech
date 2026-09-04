@@ -134,11 +134,21 @@
 
 	// Whole-dollar USD — matches the §2.1.1 headline so the NAV foot reads identical to it
 	// (foot-to-NAV visual consistency; the exactness is a backend invariant on the raw numbers).
+	// SEC FINDING (E44 follow-up): `signDisplay: 'negative'` is REQUIRED, not the 'auto' default —
+	// buildupRows()'s single flip site (nav-composition.ts) produces displayValue = −0 for a
+	// zero-debt household (0 negated is -0 in IEEE-754), and 'auto' renders "-$0" for that JS -0
+	// (measured). 'negative' is the ONLY signDisplay value that suppresses the sign on a negative
+	// zero while still showing "-" for every genuine negative — a zero-debt household must read
+	// "$0", never "-$0". This formatter also renders the Total Non-RE / Gross Total / NAV-foot /
+	// leaf current-value cells, none of which can be negative zero today, so this is a no-op change
+	// for them (measured: 'negative' and 'auto' agree on every non-zero and on +0). See
+	// NavCompositionTable.ssr.test.ts's zero-debt rendering leg.
 	const usd = new Intl.NumberFormat('en-US', {
 		style: 'currency',
 		currency: 'USD',
 		minimumFractionDigits: 0,
-		maximumFractionDigits: 0
+		maximumFractionDigits: 0,
+		signDisplay: 'negative'
 	});
 	// Unrealized G/L is ACTUAL performance → signed (+/−); the value-color fence applies to it.
 	const usdSigned = new Intl.NumberFormat('en-US', {
