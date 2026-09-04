@@ -70,11 +70,14 @@ export type TaxJurisdictionPayload = {
 	next_due_date: string;
 	ytd_paid: YtdPaidEnvelope;
 	funds_due: FundsDueEnvelope;
-	/** OMITTED ENTIRELY (not null, not 0) when status === 'unavailable' (E26 ruling 5). */
+	/** OMITTED ENTIRELY (not null, not 0) when status === 'unavailable' (E26 ruling 5). Each figure
+	 *  is typed defensively-nullable (Sec N-1/N-2): `104` wraps the object in `jsonb_strip_nulls`
+	 *  today, so a null figure is not currently reachable, but the mirror is closed against both
+	 *  shapes independently of that other-layer, other-repo guarantee. */
 	applied_marginal_rate?: {
-		ordinary: number;
+		ordinary: number | null;
 		/** Absent on california (no LT CG schedule there); may be a genuine 0 on federal. */
-		lt_cg?: number;
+		lt_cg?: number | null;
 	};
 };
 
@@ -184,19 +187,23 @@ const pctFmt = new Intl.NumberFormat('en-US', {
  *  and 'unavailable' when `applied_marginal_rate` is omitted (an unavailable jurisdiction, or a
  *  defensive gap on a computed one — the two are not distinguished in copy, since neither may
  *  render an invented number). A genuine 0% LT CG (`lt_cg === 0`) is rendered as "0%", not as
- *  unavailable — only an ABSENT key means unavailable. */
+ *  unavailable — only an ABSENT/NULL key means unavailable (Sec N-1: `== null` catches both,
+ *  since `Intl.NumberFormat.format(null)` renders a fabricated "0%" if a null ever reached it).
+ *  `rate.ordinary` is guarded the same way (Sec N-2) — an unguarded format would render "NaN%",
+ *  not a fabricated number, but "unavailable" is still the correct copy for a missing rate. */
 export function federalRateCaption(jurisdiction: TaxJurisdictionPayload): string {
 	const rate = jurisdiction.applied_marginal_rate;
 	if (!rate) return 'Federal rates unavailable';
-	const ltCg = rate.lt_cg === undefined ? 'unavailable' : pctFmt.format(rate.lt_cg);
-	return `Federal ordinary: ${pctFmt.format(rate.ordinary)} / Federal LT CG: ${ltCg}`;
+	const ordinary = rate.ordinary == null ? 'unavailable' : pctFmt.format(rate.ordinary);
+	const ltCg = rate.lt_cg == null ? 'unavailable' : pctFmt.format(rate.lt_cg);
+	return `Federal ordinary: ${ordinary} / Federal LT CG: ${ltCg}`;
 }
 
 /** AC4 — California's one-figure caption (no LT CG schedule on this jurisdiction, ever). */
 export function californiaRateCaption(jurisdiction: TaxJurisdictionPayload): string {
 	const rate = jurisdiction.applied_marginal_rate;
 	if (!rate) return 'California rate unavailable';
-	return `California: ${pctFmt.format(rate.ordinary)}`;
+	return `California: ${rate.ordinary == null ? 'unavailable' : pctFmt.format(rate.ordinary)}`;
 }
 
 export type BasisYearNote = { scheduleType: string; label: string; text: string };

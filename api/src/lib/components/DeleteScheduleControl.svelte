@@ -76,7 +76,7 @@
 	</Button>
 {/if}
 {#if resultMessage}
-	<p class="delete-note" role="status">{resultMessage}</p>
+	<p class="delete-note" role="alert">{resultMessage}</p>
 {/if}
 
 <style>
