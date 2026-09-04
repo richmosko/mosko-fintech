@@ -455,3 +455,130 @@ Specifically confirmed unaffected:
   `Co-Authored-By: Claude Fable 5.1` and a different `Claude-Session` URL than the one this session was
   subsequently instructed to use. I followed the later session-level instruction, which stated it replaces
   earlier attribution guidance. Flagging rather than silently choosing.
+
+---
+
+## 9. Re-review — 2026-09-04, diff `7d2be57` → `94a13c3`
+
+**Verdict on the diff: GREEN, conditional on CI green.** One file, `94 insertions / 15 deletions`
+(`git diff --stat 7d2be57 origin/meta/npm-audit-fence-fix`). All three blocking items discharged. One
+new non-blocking flag (F-10) on the *added probe*, not on the fence.
+
+### Discharged
+
+| Item | Verification | Result |
+|---|---|---|
+| **F-3** mechanism text | extracted the block from `git show 94a13c3:.github/workflows/security-scan.yml` and from §F-3 of this record; both **14 lines, md5 `f849d2419e3b84eba2c2c1148ac6fe2f`**; `diff` empty | **DISCHARGED — byte-identical.** Committed verbatim, no paraphrase, no re-flow |
+| **F-8** all three trees named | the landed text reads *"root and api and workers/provider-sync are all lockfileVersion 3"* | **DISCHARGED** (carried by the F-3 block) |
+| **F-4** version-line head | parenthetical now reads *"11.19.0; the 11-line head at authoring time was 11.19.1 — either is past #7911"*; **no bump**, as required | **DISCHARGED** |
+| **F-5** version assertion | new `Assert pinned npm version` step: `ACTUAL="$(npm --version)"`, exact string compare against `11.19.0`, `exit 1` otherwise, under `set -euo pipefail` | **DISCHARGED — option B minimum met.** Doubly covered: the runner's default `bash -e` already fails the pin step on a failed install, and this catches the wrong-version case it cannot |
+| **F-7** the leg itself | audit step's empty-enumeration branch now `exit 1` with the supplied FATAL text, read verbatim from `94a13c3` | **DISCHARGED — verbatim** |
+| **F-7** paired fixture | see F-10 | **NOT DISCHARGED** |
+
+### F-10 — FLAG (non-blocking) — the added inversion probe is vacuous. It cannot red on the regression it names. Owner: **DevOps**. **This is my own requirement returning defective, and I own the correction**
+
+The `Inversion probe (empty enumeration must FAIL closed)` step **re-implements the leg inside itself**
+rather than exercising the real one. It `git init`s a throwaway repo, then runs its **own inlined copy**
+of `if [ -z "$PKG_FILES" ]; then echo FATAL...; exit 1; fi` and asserts that copy exits non-zero. That
+proves shell `exit 1` works. It has no coupling to the leg in the audit step.
+
+**Measured by corrupt-the-control, not reasoned:**
+
+1. Extracted the probe step's `run:` block from `94a13c3` and ran it standalone →
+   `OK: empty-enumeration leg exited 1 with the expected FATAL message.`, rc 0.
+2. Produced a mutant workflow with **the real leg reverted to `exit 0`** — the exact defect F-7 exists to
+   prevent, fully reintroduced — re-extracted the probe **from the mutant**, and ran it →
+   `OK: empty-enumeration leg exited 1 with the expected FATAL message.`, **rc 0. Still green.**
+
+**The drift guard is aimed at the wrong object too, and this is the part that would mislead.** The step's
+third check greps `$PROBE_OUT` — the output of its *own* inlined copy — and its failure text claims to
+catch *"the message text drifted from the leg it is meant to prove."* It cannot: the real leg's message
+is never read. So the probe asserts a property about itself while describing that property as being
+about the fence. That is a **false strength claim in a control's self-description**, and its
+characteristic harm is that the one real control next to it starts looking like a redundant belt.
+
+**Why this is a flag and not a veto, stated plainly:** the security-load-bearing change — the leg now
+failing closed — is landed and correct, and the probe does not weaken it. The probe is decorative. But a
+decorative probe is worse than no probe, because it reads as a watcher, and it was *my* requested fixture,
+so it must not be recorded as discharging F-7's second half.
+
+**Remediation — replace the probe with a static watcher over the real artifact. I built and tested this;
+it is a verified control, not a proposal.** The leg lives inside a `run:` block and cannot be invoked in
+isolation, so the honest options are (A) extract the leg to `scripts/ci/` and have both callers use it —
+correct but a real refactor of a live fence, or (B) scan the workflow itself. **B is the cheap honest one
+and I recommend it.** Delete the `Inversion probe` step (its inlined copy is also a second, confusing
+occurrence of the leg) and substitute:
+
+```yaml
+      # STATIC WATCHER for the empty-enumeration fail-closed leg (Sec review F-7 / F-10).
+      # The leg lives inside the audit step's `run:` block and cannot be invoked in
+      # isolation, so a probe that re-implements it proves only that shell `exit 1`
+      # works — measured 2026-09-04 by Sec corrupt-the-control: with the real leg
+      # reverted to `exit 0`, the re-implementing probe stayed GREEN. This scans the
+      # REAL artifact instead, and fails closed if it loses its target.
+      - name: Assert empty-enumeration leg still fails closed
+        run: |
+          set -euo pipefail
+          WF=.github/workflows/security-scan.yml
+          LEG=$(awk '/- name: npm audit \(fails on high or critical\)/{f=1} f && /if \[ -z "\$PKG_FILES" \]; then/{p=1} p{print} p && /^          fi$/{exit}' "$WF")
+          if [ -z "$LEG" ]; then
+            echo "FATAL: could not locate the empty-enumeration leg in $WF — the watcher lost"
+            echo "       its target, which is indistinguishable from the leg being gone."
+            echo "       Failing closed (Sec review F-10)."
+            exit 1
+          fi
+          if ! printf '%s\n' "$LEG" | grep -q 'exit 1'; then
+            echo "FATAL: the empty-enumeration leg no longer exits non-zero. A broken enumerator"
+            echo "       would pass through to a false-green audit. Failing closed (Sec F-7)."
+            exit 1
+          fi
+          if ! printf '%s\n' "$LEG" | grep -q 'no tracked package.json found'; then
+            echo "FATAL: the empty-enumeration leg's FATAL message drifted from what this watcher"
+            echo "       asserts. Failing closed so the drift is caught, not silently accepted."
+            exit 1
+          fi
+          echo "OK: empty-enumeration leg still exits non-zero with its FATAL message."
+```
+
+**Measured behaviour of that watcher (four cases):** clean `94a13c3` → `OK`, rc 0 · real leg mutated to
+`exit 0` → `FATAL: … no longer exits non-zero`, rc 1 · FATAL message mutated → `FATAL: … message drifted`,
+rc 1 · leg deleted entirely → `FATAL: … watcher lost its target`, rc 1. **It reds on every mutation the
+vacuous probe sleeps through.**
+
+⚠ Note for whoever lands it: this is a fence that scans the prose of its own workflow file. That is the
+right shape here, but it means the `awk` anchors (`- name: npm audit (fails on high or critical)` and the
+ten-space `fi`) are load-bearing — the empty-`LEG` branch exists precisely so a renamed step or a
+re-indent reds instead of silently matching nothing.
+
+### Merge condition 4 — still UNMET, and the "outage" premise is now evidenced rather than assumed
+
+DevOps reports four failing runs across two tips (08:11–08:44Z) all reading
+`npm warn audit 503 Service Unavailable - POST …/-/npm/v1/security/advisories/bulk` at the `api/` audit,
+with the three new steps passing every run. **I relay that, I did not read those logs.**
+
+What I can add from my own probes: at ~08:00Z I measured the bulk endpoint returning **HTTP 200**; at
+~08:35Z the same probe failed three consecutive times at the connection level (`HTTP 000`).
+That is **consistent with** DevOps's measurement in direction and timing, but it is connection-level
+failure from my host, not an observed 503 — I am corroborating intermittency, not confirming the status
+code. `status.npmjs.org` reporting operational does not contradict either observation; endpoint-level
+degradation routinely does not reach a status page.
+
+**The disposition I set at condition 4 is satisfied on the branch that matters:** the failure is the
+honest, un-masked bulk-endpoint error the pin exists to surface, the three new steps pass, and the same
+tree audits clean locally minutes apart. **Re-run until green and merge on green.** If the failure ever
+changes shape — anything other than a bulk-endpoint 5xx/timeout at the `api/` audit — bring it back;
+that would mean the diagnosis is incomplete.
+
+### Standing items unchanged by this diff
+
+F-1 (`scheduled-dep-audit.yml` unpinned, and its inversion probe vacuous under this same failure —
+**note the shared root with F-10: two probes in this repo assert "the command failed" rather than
+"the defect was detected"**), F-2 (`web-tests.yml` unpinned), F-6 (dep-scan posture uncatalogued in
+`docs/SECURITY/index.html`), F-9 (stale header enumerations). None blocks this PR.
+
+### Verify-hook, re-run against `94a13c3`
+
+`grep -rhoE 'RT-[0-9]{2}' .github/workflows/` → **RT-05, RT-22, RT-26, RT-27** — identical to `origin/main`
+and to `7d2be57`. No fence-boundary change. ADR-011 D4 ledger untouched (no §10 claim added; the diff
+asserts no instance numbering and moves no layer attribution). ADR-016 D1 still not engaged. **No ADR
+amendment owed.** Three axes clean.
