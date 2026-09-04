@@ -153,3 +153,37 @@ on first. I had grepped `RT-24` and read that row; I never grepped the **column 
 identifiers across the whole artifact and report the site list, not the site. And when a brief hands
 me one row to fix, the fix is the claim, not the row — widen it, then surface the widening to the
 caller as a scope change rather than shipping it quietly.
+
+---
+
+⚠ **DEFERRED-LABEL VARIANT — a label ALREADY ALLOCATED for an UNREALIZED surface gets a fresh
+ordinal when that surface finally builds. Before agreeing a new label is owed, grep the family for
+the COLUMN, not for the ordinal.** At the V1.5 pre-flight both `monthly_report` A-items drafted
+*"Decision 3 family — 6th instance"* / *"7th instance"*. ADR-011 D3 already holds two labels for
+exactly those two columns, carrying status **UNREALIZED — V1.3+** — canonically locked, DDL-deferred.
+The surfaces **realize** existing labels; they add none.
+
+- **The three variants now on record are three directions on one axis.** UPSTREAM = a RETIRED label
+  re-enters. DOWNSTREAM = an ALLOCATED label is re-used one allocation later. DEFERRED = an
+  ALLOCATED-BUT-UNBUILT label is DUPLICATED at build. All three produce two labels for one column;
+  only the third is invisible to a grep of the ordinal, because the draft's number is not the
+  canonical one and so matches nothing anywhere.
+- **The mechanical check is the same in every direction and it is not a grep of the number:** read
+  D3's entries for the **target column name**. The entries name their columns, so the column is the
+  key. An ordinal is a claim; a column name is a fact.
+- **A deferred label carries a SECOND failure mode the other two do not: the surface can build
+  WITHOUT the column and nothing notices.** The same draft omitted the INTEGER[] column its
+  allocated label fences, with no disposition recorded. That converts a *DDL-deferred* instance into
+  a permanently invisible one — the table then exists, so nothing downstream ever surfaces the gap
+  again. **When a wave realizes a table holding deferred instances, enumerate those instances
+  against the drafted column list and require an explicit disposition for each absence (build /
+  retire-by-amendment / re-defer).** Before calling the absence an omission, ask what a discharge
+  would have looked like — here, one AC sentence citing the superseding ADR. There was none, which
+  is what made it a finding rather than a judgement call.
+- **Watch for the fence named on the TENANT ANCHOR.** The same draft put its matched-tenant trigger
+  on `users_id` — the table's own anchor, nothing to compare against. That is the unfalsifiable-fence
+  tell from the UPSTREAM bullet, arriving by a different route: the author knew a D3 fence was owed,
+  could not find the FK-shaped column (because it had been dropped from the schema), and attached
+  the fence to the nearest id-shaped column.
+
+Related: [[triage-a-multileg-bypass-leg-by-leg]] · [[read-decisions-from-the-pr-branch-when-the-pr-edits-it]]
