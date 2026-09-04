@@ -36,6 +36,16 @@ export class TaxLiabilityPayloadError extends Error {
 // §2.5.1 decomposition (ADR-067 Decision 5; 104's `decomposition` key).
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * AC 11 hard gate — the SELF-263 seed-delta migration taxes/decomposition/+page.server.ts's
+ * tax-value reading was built against. Lives here (a plain module) rather than in the
+ * +page.server.ts route file itself: SvelteKit validates every export of a `+page.server.ts`
+ * module against its route-module allowlist (load / actions / prerender / csr / ssr /
+ * trailingSlash / config / entries / `_`-prefixed) and 500s the route at request time on any
+ * other export — this constant is a plain value export the loader cites, not a route export.
+ */
+export const INVENTORY_SEED_DELTA_MIGRATION = '100_tax_value_inventory_seed_delta.sql';
+
 /** One Sub-Cat row in the Ordinary Income decomposition (104's `inc` CTE, Revenue-class-scoped). */
 export type OrdinaryIncomeRow = {
 	sub_cat_id: number;
