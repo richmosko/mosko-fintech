@@ -91,14 +91,16 @@ describe('DeleteScheduleControl — Sec F-3: a fail() response renders its messa
 				errors: { _form: ['This schedule is part of the provisioned template and cannot be deleted. Edit it instead.'] }
 			}
 		};
-		const { getByRole, findByText } = render(DeleteScheduleControl, {
+		const { getByRole, findByRole } = render(DeleteScheduleControl, {
 			props: { scheduleId: 1, itemLabel: 'California (FTB) — Ordinary Income (tax year 2025)' }
 		});
 		await confirmAndSubmit(getByRole);
 
-		expect(
-			await findByText('This schedule is part of the provisioned template and cannot be deleted. Edit it instead.')
-		).toBeTruthy();
+		// 265 a11y note: this refusal is an error the user must see, so it renders into role="alert"
+		// (assertive) — not role="status" (polite), which the editor's own error banner already uses.
+		expect((await findByRole('alert')).textContent).toBe(
+			'This schedule is part of the provisioned template and cannot be deleted. Edit it instead.'
+		);
 		expect(updateCalls).toHaveLength(1);
 		expect(updateCalls[0]).toEqual({ reset: false });
 	});
