@@ -418,9 +418,9 @@ jobs:
         run: |
           set -euo pipefail
           # Enumerate package.json files under V1 scope (V1 web-app + PDF worker;
-          # both Node). Fail closed if none land — see the Inversion probe step
-          # above, and F-7 in the Sec review: an empty enumeration means the
-          # enumerator broke, not that there is nothing to audit.
+          # both Node). Fail closed if none land — see the "Assert empty-enumeration
+          # leg still fails closed" step above, and F-7 in the Sec review: an empty
+          # enumeration means the enumerator broke, not that there is nothing to audit.
           #
           # ENUMERATOR RATIONALE — `git ls-files`, not `find`:
           #   The previous `find . -name 'package.json' -not -path './node_modules/*'`
