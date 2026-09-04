@@ -225,3 +225,102 @@ Stated individually, because an unstated non-objection reads as an unexamined su
 Non-blocking, tracked: **F-4** (Backend — `sanitizeYear` + RT-24 legs), **F-5** (me — RT-24 doc PR, landing no later than the SELF-259 merge), **F-6** (Backend — comment-only).
 
 **Nothing else.** The controls this migration builds are sound and I have no further finding against them.
+
+---
+
+## Re-review verdict — 2026-09-04, `3a599de`
+
+**GREEN.** All three blocking conditions discharged; diffs reviewed since `7ccc908` only.
+
+**F-1 (option B) — cleared, and the two shape departures are ACCEPTED as ruled at E20.**
+The set fence's first statement after resolving the schedule takes `FOR UPDATE` on the parent
+row, before the set read. I verified the ordering is what carries the property, not merely the
+lock's presence.
+
+- **Departure (i) — lock, read, RETURN on `count = 0`, and only then raise — is correct and
+  necessary, not a weakening.** `on delete cascade` removes the child rows when the parent goes,
+  so at COMMIT the parent is already gone and the lock resolves to zero rows; a lock-then-RAISE
+  would make deleting a schedule impossible. **The deleting transaction is still serialized** —
+  its own `DELETE` holds the lock on the very parent tuple the fence's statement tried to take.
+  I walked the other zero-row paths rather than assuming: a caller that deletes all rows but
+  keeps the parent took the lock at step (0); a caller to whom the parent is invisible also has
+  the child rows invisible (that is what #18 buys), so `count = 0` and nothing was written. No
+  unserialized path that matters.
+- **Departure (ii) — KEEP THE OBSERVER LEG. Asked directly, my answer is that I prefer the
+  observer to no leg, and the distinction is not the one ADR-062 D2 forbids.** A *rejected* leg is
+  one that can never fire for **any** writer — the floor-ordering leg, which the unique constraint
+  makes impossible even for a superuser. This leg fires for an RLS-exempt writer and under
+  `session_replication_role = replica`; its unreachability is **conditional on another control**,
+  which is exactly the shape ADR-011 Decision 4's own amendment describes (*"multiplicity of
+  layers is … a property of a surface AND the writer"*). The alternative is worse in a specific
+  way: **delete the leg and a non-empty set with an unresolved parent falls through to legs A and
+  B, which then read a partial set under a caller whose RLS hides the rest — the silent narrowing
+  this fence's own header names.** The leg converts that into a loud failure. It is the watcher
+  for #18's absence, and a control whose watcher is removed because it "cannot fire today" is the
+  regression this repo has already paid for. Message family and non-distinguishability match the
+  replace-all's refusal, so it is not an existence oracle either.
+
+**F-2 — cleared, and the correction is more complete than my finding was.** I named three sites;
+classifying every occurrence of the literal found **six**. I have verified the six myself against
+the live text: the `[[SLOT-SEC]]` pin and the `#17` entry (both dated records, **annotated in
+place**), ADR-058's pointer, the `#10` entry, consequence (a) (**re-pointed**), and ADR-042
+Decision 5 (**de-numbered**, the shape I recommended). ⚠ **The site I missed is the `#17` entry's
+`"The next instance takes #18."`, and it was in my own grep output — I read the hits and
+enumerated three.** My failure was in reading, not in grepping, which is the harder half to fix.
+Consequence (b) now states the **predicate** rather than a count, and records that the review
+which caught the completeness failure committed the same one. That is the right correction and I
+endorse it as written; I do **NOT** ask for the wording to be softened on my account.
+
+**F-3 — cleared.** Every `SERIALIZABLE` occurrence in `101` is now either the shipped mechanism or
+an explicitly-marked historical note. Both `comment on table` `WRITE SEMANTICS` clauses are off
+the false claim.
+
+**F-4 — cleared, and better than asked.** `sanitizeYear` over a dedicated `sanitizeInteger` core,
+with the real reason recorded (`maxDecimalPlaces: 0` would build `\d{1,0}`, an invalid
+quantifier). All four measured inputs — `"2e3"`, `"0x7d0"`, `" 2000 "`, `[2000]` — have their own
+rejecting legs, **plus two positive controls** (`2000` as number and as string), so the battery is
+not vacuous.
+
+**F-6 — cleared.** The stale caveats are replaced with the confirmation rather than deleted.
+
+### Flags carried forward (neither blocks this merge)
+
+- **R-1 — flag / QA. The battery is UNTOUCHED while the fence gained a statement and a leg.**
+  `git diff --stat 7ccc908..HEAD -- supabase/tests/` is empty; `grep -c "set fence refused"` on the
+  battery is `0`; `plan(91)` is unchanged. So **this round's entire deliverable — the second lock —
+  ships with less watching than the first lock has**: `(RA10)` pins `for update` in the
+  replace-all's body via `pg_get_functiondef`, and nothing pins it in the set fence. A future
+  reader comparing the two reasonably concludes the fence has no lock. **Catch criterion, two legs,
+  `plan(91) → plan(93)`:** (1) a `pg_get_functiondef` pin that
+  `fn_tax_bracket_row_schedule_invariants`'s body contains `for update`, carrying RA10's own honest
+  caveat that a text pin evidences **presence, never effect**; (2) the load-bearing one — an
+  **ordering** pin that `for update` appears **before** the `count(*)` set read, because the
+  header's own claim is *"this must be the FIRST statement after the schedule is resolved"* and a
+  later edit moving the lock after the read would kill the control with every existing leg still
+  green. The new raise leg is genuinely untestable in pgTAP (it needs the FK inert, i.e. a
+  superuser-context GUC that `054`'s battery already declines to assert) — that is a fair
+  no-watcher-possible, but it should be **stated in the battery header** rather than left silent.
+  ⚠ **I considered AMBER on this and landed on GREEN deliberately:** the control was measured
+  working two-session by Architect, so the gap is regression-detection rather than a live hole, and
+  the leg I am asking for is itself only a text pin. Recorded so F/CTO can overrule me cheaply.
+- **R-2 — flag / Architect, due at SELF-260's landing, not now. The 40P01 "RECORDED, NOT TESTED"
+  ruling is right; one of its premises is not.** The ADR justifies not testing partly on *"no V1
+  writer touches two schedules in one transaction"*, and enumerates two writers —
+  `fn_tax_bracket_schedule_replace_all` (per-schedule ✓) and the SELF-265 editor (one schedule per
+  save ✓). **SELF-260's seed is a third writer and it touches three:** its AC1 is *"3 rows inserted
+  into `pfin.tax_bracket_schedule`"* (PM pre-flight findings). **The conclusion survives — a lone
+  migration transaction cannot deadlock against itself, and per-user provisioning writes in a
+  deterministic order — but the premise does not**, and the premise is what a future reader will
+  rely on. One clause fixes it. Recorded because a correct conclusion resting on a false premise is
+  the failure that outlives the review.
+
+### Non-objections on this round
+
+I do **NOT** object to: the observer leg (see above); the `RETURN` before the raise; the
+re-entrancy claim (N deferred firings take one acquisition; the RPC's lock and the fence's compose
+on the same row rather than deadlocking); the 40P01 disposition itself; or the decision to leave
+`084` and `089` untouched. I do **NOT** require any further ADR wording change — consequence (b)'s
+self-correction and the D18 amendment's two-lock bullet are both accurate as written, and the
+amendment now states plainly that **neither** lock covers cross-schedule write skew.
+
+**Nothing else.**
