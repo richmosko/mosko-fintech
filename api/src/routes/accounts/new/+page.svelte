@@ -19,6 +19,7 @@
 	import { manualAccountCreateSchema, fieldErrors } from '$lib/schemas/account';
 	import TextField from '$lib/components/TextField.svelte';
 	import SelectField from '$lib/components/SelectField.svelte';
+	import TaxJurisdictionField from '$lib/components/TaxJurisdictionField.svelte';
 	import Button from '$lib/components/Button.svelte';
 
 	let { form }: { form: ActionData } = $props();
@@ -32,6 +33,9 @@
 	let account_type = $state(v0.account_type ?? '');
 	let scope = $state(v0.scope ?? '');
 	let tax_treatment = $state(v0.tax_treatment ?? '');
+	// SELF-267 AC 2 — '' = not designated (TAX_JURISDICTION_UNSET_LABEL), always the sticky
+	// default: this flow creates manual accounts only, so the control is never hidden here.
+	let tax_jurisdiction = $state(v0.tax_jurisdiction ?? '');
 	let initial_value = $state(v0.initial_value ?? '');
 	let as_of_date = $state(v0.as_of_date ?? '');
 
@@ -55,6 +59,7 @@
 			account_type,
 			scope,
 			tax_treatment,
+			tax_jurisdiction,
 			initial_value,
 			as_of_date
 		});
@@ -140,6 +145,8 @@
 			placeholder={{ value: '', label: 'Select…' }}
 			options={taxOptions}
 		/>
+
+		<TaxJurisdictionField bind:value={tax_jurisdiction} errors={errors.tax_jurisdiction} />
 
 		<TextField
 			label="Opening balance"

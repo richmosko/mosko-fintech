@@ -28,6 +28,17 @@ export const TAX_TREATMENTS = ['taxable', 'tax_deferred', 'tax_free'] as const;
 export type TaxTreatment = (typeof TAX_TREATMENTS)[number];
 
 /**
+ * tax_jurisdiction — VERBATIM from 102's `pfin.tax_jurisdiction_enum` (SELF-267 AC 1/2).
+ * The DB TYPE's own two members. `pfin.account.tax_jurisdiction` is a NULLABLE column of this
+ * type, not a three-value enum — the third, "unset" state is represented client-side as `''`
+ * (see TaxJurisdictionField.svelte), never added here. Product copy calls this a "tax
+ * authority"; `tax_jurisdiction` is the schema identifier and the two are deliberately allowed
+ * to differ (102's `comment on type`).
+ */
+export const TAX_JURISDICTIONS = ['irs', 'ftb'] as const;
+export type TaxJurisdiction = (typeof TAX_JURISDICTIONS)[number];
+
+/**
  * closure reason_code — VERBATIM from 057 pfin.account_event CHECK.
  *
  * MANDATORY on the into-closed transition (058's audit writer refuses without it and

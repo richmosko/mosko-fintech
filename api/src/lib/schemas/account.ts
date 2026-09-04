@@ -9,8 +9,26 @@
 // source of truth; when the server schema changes, this mirror updates in lockstep.
 
 import { z } from 'zod';
-import { ACCOUNT_TYPES, TAX_TREATMENTS, CLOSURE_REASONS } from '$lib/schemas/account-constants';
+import {
+	ACCOUNT_TYPES,
+	TAX_TREATMENTS,
+	TAX_JURISDICTIONS,
+	CLOSURE_REASONS
+} from '$lib/schemas/account-constants';
 import { sanitizeCurrencyAmount } from '$lib/validation/numeric';
+
+/**
+ * tax_jurisdiction (SELF-267 AC 2) — PROVISIONAL, ahead of Backend's server schema (this branch's
+ * `$lib/server/schemas/account.ts` does not yet accept this field; Backend's `feature/self-267-
+ * backend` lands it in parallel — reconcile on relay). `''` is the client's own convention for
+ * "unset", NOT a third DB enum member (TAX_JURISDICTIONS is the DB type's two values only —
+ * account-constants.ts). Never LOOSER than the server: same two enum values, same nullable-as-
+ * empty-string posture the contract states Backend's schema will share.
+ */
+const taxJurisdictionField = () =>
+	z.enum(['', ...TAX_JURISDICTIONS] as const, {
+		message: 'Choose IRS, FTB, or leave this account unset.'
+	});
 
 /** Zod adapter over the client numeric-sanitization battery → a validated `number`. */
 const currencyAmount = () =>
@@ -50,6 +68,9 @@ export const manualAccountCreateSchema = z
 		account_type: z.enum(ACCOUNT_TYPES, { message: 'Choose an account type.' }),
 		scope: z.string().trim().min(1, 'Scope is required.').max(200, 'Scope is too long.'),
 		tax_treatment: z.enum(TAX_TREATMENTS, { message: 'Choose a tax treatment.' }),
+		// SELF-267 AC 2 — always present on this form (manual-only; every account this flow
+		// creates is a valid tax-authority-designation candidate). '' = not designated.
+		tax_jurisdiction: taxJurisdictionField(),
 		initial_value: currencyAmount(),
 		as_of_date: isoDate()
 	})
@@ -119,7 +140,12 @@ export const updateAttributesSchema = z
 		name: z.string().trim().min(1, 'Name is required.').max(200, 'Name is too long.'),
 		account_type: z.enum(ACCOUNT_TYPES, { message: 'Choose an account type.' }),
 		scope: z.string().trim().min(1, 'Scope is required.').max(200, 'Scope is too long.'),
-		tax_treatment: z.enum(TAX_TREATMENTS, { message: 'Choose a tax treatment.' })
+		tax_treatment: z.enum(TAX_TREATMENTS, { message: 'Choose a tax treatment.' }),
+		// SELF-267 AC 2 — OPTIONAL here, unlike the create mirror: the edit form hides this
+		// control entirely for a provider-linked account (TaxJurisdictionField `hidden`), so a
+		// linked account's submit carries no `tax_jurisdiction` key at all. `.strict()` still
+		// rejects any OTHER stray key; only this one may be absent.
+		tax_jurisdiction: taxJurisdictionField().optional()
 	})
 	.strict();
 
