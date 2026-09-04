@@ -43,6 +43,11 @@
 	NavCompositionTable's current-value column.
 
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5).
+
+	SELF-268 AC 4a — POINTER, not a restatement: `nav` / `nav_prior_yr_dollars` come off the
+	checkpointed GROSS NAV series, which stays pre-tax and pre-exclusion permanently (R3 rider 0).
+	The composed-gap explanation lives ONCE, on NavHistoryChart.svelte (§2.1.2) — this panel points
+	to it rather than repeating it (one copy of the fact).
 -->
 <script lang="ts">
 	import {
@@ -87,6 +92,14 @@
 	{#if readFailed}
 		<p class="panel-notice">Reference NAV is temporarily unavailable. Please try again shortly.</p>
 	{:else}
+		<!-- SELF-268 AC 4a POINTER — see the module header; full explanation on the trend chart
+		     below, not restated here. -->
+		<div class="panel-basis-stack">
+			<p class="panel-basis-line">
+				Tracks the checkpointed gross Net Worth — see the trend chart below for basis.
+			</p>
+		</div>
+
 		<div class="table-scroll">
 			<table class="reference">
 				<caption class="sr-only">
@@ -191,6 +204,22 @@
 		margin: 0;
 		font: var(--weight-reg) var(--fs-body) / var(--lh-body) var(--font-ui);
 		color: var(--c-text-secondary);
+	}
+
+	/* ── basis-line family — reproduces NavHistoryChart's / NavDeltaPanel's .chart-basis-line /
+	   .panel-basis-line vocabulary verbatim (same tokens, same shape) so all three surfaces read
+	   as one system (SELF-268 AC 4a pointer). ── */
+	.panel-basis-stack {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		margin-bottom: var(--space-3);
+	}
+	.panel-basis-line {
+		margin: 0;
+		font-size: var(--fs-small);
+		color: var(--c-text-secondary);
+		line-height: var(--lh-body);
 	}
 
 	.table-scroll {
