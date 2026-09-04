@@ -11,8 +11,9 @@
 --   and it composes; it writes nothing.
 --
 -- Numbering: 104, taken against the live listing at authoring time and NOT
---   reserved ahead. Order-dependent — every one of its five callees must exist
---   first: 093 (fn_cashflow_items), 049 as re-issued at 056 and pinned at 079
+--   reserved ahead. Order-dependent — every DEPENDENCY IT READS must exist
+--   first (three of them are its direct callees; the rest are tables and types):
+--   093 (fn_cashflow_items), 049 as re-issued at 056 and pinned at 079
 --   (fn_account_unrealized_gl), 084 (posting_prototype), 003 (account),
 --   101 (tax_bracket_schedule / tax_bracket_row + tax_schedule_type_enum),
 --   102 (fn_ytd_paid_per_jurisdiction + tax_jurisdiction_enum), 103 (the seeded
@@ -36,11 +37,26 @@
 --   fails closed into a shape that says so rather than into zeros.
 --
 --   Carries `set search_path = ''`; EXECUTE revoked from PUBLIC and granted to
---   `authenticated`. ⚠ For an INVOKER function the EXECUTE grant is the WEAKEST
---   of the fences — RLS on every underlying table still applies to the caller
---   regardless of it. It is stated because every shipped reader carries the pair
---   and a missing one is a silent divergence, not because it is what makes this
---   safe.
+--   `authenticated`.
+--   ⚠ THE STRENGTH OF THE EXECUTE GRANT IS A PROPERTY OF THE CALLER, AND NAMING
+--   ONLY THE SURFACE HIDES THAT. (This is the shape ADR-011 Decision 4's
+--   2026-09-03 amendment names: multiplicity of layers is a property of a surface
+--   AND the writer; reading the inventory without naming the writer is what makes
+--   that invisible.)
+--     • Caller WITHOUT `rolbypassrls` — `authenticated`, the only role granted
+--       today: the EXECUTE grant is the WEAKEST of the fences. RLS on every
+--       underlying table still applies regardless of it, and the revoke/grant pair
+--       is stated only because every shipped reader carries it and a missing one
+--       is a silent divergence.
+--     • Caller WITH `rolbypassrls` — `service_role` holds the attribute AND `pfin`
+--       USAGE (both measured in the catalog): RLS applies to NOTHING, so the
+--       EXECUTE grant is the ENTIRE perimeter. `service_role` has NO EXECUTE on
+--       this function, and that ABSENCE is what makes the surface correct for that
+--       caller — not the RLS argument in the bullet above, which is false for it.
+--   ⚠ STANDING CONDITION (Sec N-3, SELF-262): ANY grant of EXECUTE on this
+--   function to a `rolbypassrls` role is Sec-JOINT-REVIEW-MANDATORY. A future PR
+--   making that grant would be argued harmless by the first bullet alone, and
+--   would not be.
 --
 -- ----------------------------------------------------------------------------
 -- VOLATILITY — `stable`, DECLARED IN THE BODY, PER SIGNATURE.
@@ -58,12 +74,46 @@
 --   here; only the stated reason is stale, and it is corrected by amendment
 --   rather than by dropping the instruction.
 --
---   `stable` is HONEST here rather than asserted: a `stable` caller of a
---   `volatile` callee is an unbacked promise, and all five callees were measured
---   `provolatile = 's'` in the catalog on a clean 001..103 apply —
---   fn_cashflow_items(date), fn_account_unrealized_gl(date),
---   fn_ytd_paid_per_jurisdiction(date, pfin.tax_jurisdiction_enum),
---   fn_tax_authority_ledgers() and fn_server_today(). A battery leg pins all six.
+--   `stable` is HONEST here rather than asserted — and the argument is stated
+--   over the set it actually covers.
+--   ⚠ AN EARLIER DRAFT OF THIS BLOCK ENUMERATED "all five callees" AND INCLUDED
+--   fn_tax_authority_ledgers() AND fn_server_today(). That list was NEITHER the
+--   callee set NOR the reach set (Sec N-1; QA measured the same). It is CORRECTED
+--   here rather than trimmed, because the corrected set is what the argument
+--   depends on.
+--
+--   DIRECT CALLEES — THREE, read off THIS body rather than from memory:
+--     fn_cashflow_items(date) · fn_ytd_paid_per_jurisdiction(date,
+--     pfin.tax_jurisdiction_enum) · fn_account_unrealized_gl(date).
+--     All three measured `provolatile = 's'`, `prosecdef = f`.
+--     fn_tax_authority_ledgers() is reached only THROUGH 102, and fn_server_today()
+--     is NOT CALLED AT ALL — neither name appears in the body.
+--
+--   TRANSITIVE READ SET, measured in the catalog on a clean 001..103 apply:
+--     fn_account_unrealized_gl(date)      → fn_holdings_as_of(date)      ['v']
+--                                         → fn_gl_entries(date)          ['v']
+--                                         → fn_account_cash_as_of(date)  ['s']
+--     fn_gl_entries(date)                 → fn_compute_nav(date)         ['s']
+--     fn_compute_nav(date)                → fn_compute_nav(date,boolean) ['s']
+--                                         → fn_holdings_as_of / fn_account_cash_as_of
+--     fn_ytd_paid_per_jurisdiction(...)   → fn_account_cash_as_of(date)  ['s']
+--                                         → fn_tax_authority_ledgers()   ['s']
+--
+--   ⚠ TWO FUNCTIONS IN THAT SET ARE `provolatile = 'v'` — fn_gl_entries(date) and
+--   fn_holdings_as_of(date). THERE IS NO LIVE DEFECT: both are `language sql` with
+--   no INSERT / UPDATE / DELETE / TRUNCATE in `prosrc`, i.e. pure reads that were
+--   simply never pinned (VOLATILE is the `language sql` default). But the claim
+--   that makes `stable` honest is therefore NOT "every callee measured 's'". It is
+--   this: EVERY FUNCTION IN THE TRANSITIVE READ SET IS READ-ONLY, this function
+--   writes nothing, and nothing in the set is nondeterministic WITHIN A STATEMENT.
+--   The two unpinned functions are NAMED so the gap is visible rather than assumed
+--   away; extending 079's pin to them is a SEPARATE migration and is NOT done here.
+--   ⚠ Postgres does not check any of this, so no green suite will ever say so.
+--   ⚠ The "NOT READ, DELIBERATELY" list below is about what THIS function reads and
+--   composes — no nav_daily read, no fn_compute_nav output in the payload.
+--   fn_compute_nav nonetheless APPEARS IN THE REACH SET above, one hop under 049
+--   inside fn_gl_entries' book-vs-market divergence row. Both statements are true;
+--   they are about different things, and neither licenses the other.
 --
 -- ----------------------------------------------------------------------------
 -- LEDGERS — nothing moves.
@@ -234,20 +284,89 @@
 --   schedule type so the suppression is visible rather than inferred from a
 --   basis_year that moved.
 --
+--   ⚠ THE FLAG IS COMPOSED FROM TWO TERMS PER SCHEDULE TYPE, AND BOTH ARE
+--   REQUIRED (Sec F-1). The `walked` row carries the flag when a FALLBACK WAS
+--   FOUND. When NO usable schedule exists in ANY year there is no `pick` row and
+--   therefore no `walked` row to carry it, so a second term —
+--   `{ord,ltcg}_empty_no_fallback`, computed in `jur` straight off
+--   `empty_current` — supplies it. An earlier draft carried that second term on
+--   the ORDINARY leg only, so an emptied current-year federal_lt_cg schedule with
+--   no prior year reported `current_year_schedule_empty = false`: the identical
+--   situation one schedule type over, answered the opposite way, and the wrong
+--   answer was the silent one. The money was never wrong (the jurisdiction reads
+--   `unavailable`), but the one field that says WHY said the opposite.
+--   ⚠ Reachable by an ordinary `authenticated` caller: 101's replace-all RPC
+--   accepts an empty array and clears the schedule, and it is granted directly to
+--   `authenticated`, so the app-layer `rows.min(1)` is NOT the fence.
+--
 --   `no_schedule_any_year` means: NO schedule of that type WITH BRACKET ROWS
 --   exists for the tax year or any prior year. A jurisdiction in that state is
 --   `unavailable` — never zeros (Sec M-11).
+--
+-- ----------------------------------------------------------------------------
+-- THE STANDARD DEDUCTION APPLIES TO THE TWO ORDINARY SCHEDULES ONLY, AND WHEN A
+-- STORED VALUE IS IGNORED THE PAYLOAD SAYS SO (Sec F-2; ruled option B).
+--   PRD §2.5.3 Federal step (5), VERBATIM: "walk Federal LT CG bracket schedule
+--   progressively (no standard deduction applied to this schedule)".
+--   So `federal_ordinary` and `california_ordinary` subtract the resolved
+--   schedule's `standard_deduction`; `federal_lt_cg` NEVER does.
+--
+--   WHY THE READER IS THE LAYER: the rule is a property of THE COMPUTATION, not
+--   of the data. The stored number is a legal value of the column; what is fixed
+--   is what the walk does with it.
+--
+--   ⚠ IT WAS PREVIOUSLY REALIZED BY A SEED VALUE, NOT BY CONSTRUCTION. 103 seeds
+--   `federal_lt_cg` with `standard_deduction = 0.0000` and nothing refused a
+--   non-zero one: `fn_tax_bracket_schedule_replace_all` takes
+--   `p_standard_deduction`, is granted directly to `authenticated`, and the
+--   settings schema requires every scalar on every POST — so the value travels
+--   through that surface on ANY bracket edit. A non-zero LT CG standard deduction
+--   REDUCES Federal LT CG taxable income and therefore UNDERSTATES the liability:
+--   the under-reserving direction, on the keystone.
+--
+--   THE STORED VALUE IS NOT ALTERED AND IT IS NOT SILENTLY DISCARDED. The payload
+--   carries `schedules.federal_lt_cg.standard_deduction_ignored` — `true` when the
+--   RESOLVED LT CG schedule's stored `standard_deduction` is non-zero, `false`
+--   otherwise — so a surface can SAY it ignored the number the user typed instead
+--   of quietly disagreeing with it. SELF-265's editor renders the field fixed at 0
+--   for LT CG as a structural courtesy; that is a softer second layer and NOT the
+--   fence.
+--
+--   TWO LOSING SIDES, NAMED:
+--     • A CHECK at 101 (`schedule_type <> 'federal_lt_cg' or standard_deduction
+--       = 0`) would bind every writer including future ones. Rejected twice over:
+--       101 is in a PR IN FLIGHT, and a CHECK makes the editor REJECT a value the
+--       PRD calls meaningless rather than IGNORE it — the worse outcome for a rule
+--       that is about arithmetic, not about data validity.
+--     • ACCEPT-AND-RECORD (leave the seed as the enforcement) leaves an unfenced
+--       under-reserving path with no watcher, which is the state that produced the
+--       finding.
+--
+--   ⚠ `inputs.standard_deduction` is and stays the ORDINARY schedule's stored
+--   value — the one actually subtracted. It is never the LT CG schedule's.
 --
 -- ----------------------------------------------------------------------------
 -- INSTALLMENTS AND FLOORS — E25.
 --   Taxable income FLOORS AT ZERO per jurisdiction, applied BEFORE the bracket
 --   walk (Sec M-9). A standard deduction exceeding income yields zero tax, never
 --   a negative one.
---   The annual liability is computed at the schedules' full numeric precision.
---   Each installment is rounded to CENTS; Q1..Q3 are equal; Q4 carries the
---   rounding residual, so the four sum EXACTLY to round(annual, 2) (Sec M-8).
---   Losing side: an equal-cents split with the residual on Q1 — Q1 is the
---   installment already due before most of the year's income exists.
+--   The annual liability is computed at the schedules' full numeric precision and
+--   EMITTED ALREADY ROUNDED to 2 dp (Sec N-5) — §2.5.3 renders the annual and the
+--   four quarters on ONE table and it must foot without the consumer rounding.
+--   There is deliberately NO unrounded annual key: two spellings of one figure is
+--   how consumers diverge.
+--   Q1..Q3 are TRUNCATED to cents and equal; Q4 carries the residual, so the four
+--   sum EXACTLY to round(annual, 2) (Sec M-8).
+--   ⚠ TRUNC, NOT ROUND, AND THAT IS THE FIX FOR A SHIPPED DEFECT (Sec N-2).
+--   With `round(annual/4, 2)` the three equal installments can exceed the annual —
+--   at annual = $0.02 the split was [0.01, 0.01, 0.01, -0.01] and Q4 rendered a
+--   NEGATIVE dollar amount on an estimated-payment row. `trunc` makes
+--   3 x Q1 <= annual BY CONSTRUCTION, so Q4 is non-negative AND still exact.
+--   Its cost, stated: Q4 can run up to 3c ABOVE Q1..Q3 instead of +/-1.5c either
+--   way. Reachability of the old defect was narrow (taxable income ~20c over the
+--   deduction) but real, and it is a money figure.
+--   Losing side of the split itself: an equal-cents split with the residual on Q1 —
+--   Q1 is the installment already due before most of the year's income exists.
 --   ÷4 is V1's SOLE installment-sizing approach (μ-2). No safe-harbor floor is
 --   computed; tax_balance_prior_year is emitted as INFORMATIONAL REFERENCE ONLY
 --   and drives nothing.
@@ -258,13 +377,38 @@
 --   naming the difference; a due date invented here would be a date rule with no
 --   source, and PM books the PRD sentence for correction.
 --
---   ESTIMATED FUNDS DUE, PRD §2.5.3 verbatim: (installment × quarters_elapsed)
---   − YTD Paid. `quarters_elapsed` is read here as THE NUMBER OF DUE DATES ON OR
---   BEFORE p_data_as_of — the PRD does not define it more precisely, and the
---   reading is stated rather than left to be inferred. Because Q4's due date
---   falls in the FOLLOWING calendar year, quarters_elapsed is at most 3 inside
---   the tax year itself. Overpayment surfaces as a NEGATIVE funds_due on the
---   same line (ν-1); it is not clamped.
+--   ESTIMATED FUNDS DUE = (installment × installments_due_through_next) − YTD
+--   Paid. PRD §2.5.3 gives the FORM verbatim and no numeric definition of the
+--   multiplier, so the multiplier is fixed by the section's own PURPOSE sentence:
+--   "so the user reads at a glance HOW MUCH THEY OWE EACH JURISDICTION BY THE NEXT
+--   DUE DATE" (Sec F-3, ruled).
+--
+--   `installments_due_through_next` IS THE ORDINAL OF THE UPCOMING INSTALLMENT:
+--   the count of due dates STRICTLY BEFORE p_data_as_of, PLUS ONE, capped at 4.
+--   Worked, tax_year 2026 (due 04-15 / 06-15 / 09-15 of 2026, 01-15 of 2027):
+--     2026-04-14 → 1   (Q1 is the upcoming one; you owe it tomorrow)
+--     2026-04-15 → 1   (DUE TODAY still counts as the upcoming one)
+--     2026-04-16 → 2
+--     2026-12-31 → 4
+--     2027-01-10 → 1   (tax_year is 2027; its Q1 is due 2027-04-15)
+--   `next_due_date` travels beside it so the surface never re-derives the date.
+--   The cap is a guard, not a live branch: all four due dates of tax year Y can
+--   never be strictly before an as-of date that still yields tax_year Y.
+--
+--   ⚠ THE KEY IS RENAMED, NOT REDEFINED. `quarters_elapsed` is GONE from the
+--   payload. It previously meant THE NUMBER OF DUE DATES ON OR BEFORE the as-of
+--   date, which is ALWAYS THE SMALLER of the two readings — zero for the whole of
+--   Jan 1 .. Apr 14, i.e. the UNDER-RESERVING direction — and on 2026-04-14 it
+--   answered "zero installments owed" one day before the Q1 payment was due. A key
+--   kept under a new meaning is inherited silently by every consumer; a key that
+--   disappears is a compile error. That is the whole reason for the rename, and
+--   the losing reading is named here so it is not restored as a simplification.
+--
+--   ⚠ AT A COUNT OF 4 THE OBLIGATION IS THE ROUNDED ANNUAL, not 4 × the
+--   installment: Q4 carries the rounding residual, so 4 × Q1 would drop it and
+--   the §2.5.3 table would not foot against its own installment rows.
+--   Overpayment surfaces as a NEGATIVE funds_due on the same line (ν-1); it is
+--   not clamped.
 --
 -- ----------------------------------------------------------------------------
 -- THE R8 RENDER-WINDOW BOUNDARY IS COMPUTED HERE AND NOWHERE ELSE.
@@ -434,12 +578,17 @@ with
          when 'federal_lt_cg'       then i.fed_ltcg_input
          when 'california_ordinary' then i.ca_input
        end)                                                          as gross_input,
+      -- F-2 / PRD §2.5.3 Federal step (5): "no standard deduction applied to
+      -- this schedule". The LT CG walk subtracts NOTHING; the stored value is
+      -- left untouched and its non-zero-ness is REPORTED, not applied.
       greatest(
         (case pk.schedule_type
            when 'federal_ordinary'    then i.fed_ord_input
            when 'federal_lt_cg'       then i.fed_ltcg_input
            when 'california_ordinary' then i.ca_input
-         end) - pk.standard_deduction, 0)                            as taxable
+         end)
+        - (case when pk.schedule_type = 'federal_lt_cg'
+                then 0 else pk.standard_deduction end), 0)           as taxable
     from pick pk
     cross join inputs i
   ),
@@ -511,6 +660,8 @@ with
       wo.standard_deduction     as standard_deduction,
       wo.tax_balance_prior_year as tax_balance_prior_year,
       coalesce(wo.current_year_empty, false) as ord_current_year_empty,
+      wl.schedule_id            as ltcg_schedule_id,
+      wl.standard_deduction     as ltcg_standard_deduction,
       wl.basis_year             as ltcg_basis_year,
       wl.gross_input            as ltcg_input,
       wl.taxable                as ltcg_taxable,
@@ -525,31 +676,55 @@ with
         and (j.ltcg_type is null or wl.schedule_id is not null))     as computed,
       pfin.fn_ytd_paid_per_jurisdiction(p_data_as_of, j.authority)   as ytd_paid,
       -- Whether a current-year schedule exists at all but was skipped as empty
+      -- AND no prior year rescued it — in which case there is no `walked` row to
+      -- carry `current_year_empty`, so this term is the only thing that can say
+      -- so. ⚠ BOTH SCHEDULE TYPES NEED IT (Sec F-1): one leg alone reports the
+      -- identical situation on the other type as `false`, silently.
       (exists (select 1 from empty_current ec where ec.schedule_type = j.ord_type)
-        and wo.schedule_id is null)                                  as ord_empty_no_fallback
+        and wo.schedule_id is null)                                  as ord_empty_no_fallback,
+      (exists (select 1 from empty_current ec where ec.schedule_type = j.ltcg_type)
+        and wl.schedule_id is null)                                  as ltcg_empty_no_fallback
     from jur_def j
     left join walked wo on wo.schedule_type = j.ord_type
     left join walked wl on wl.schedule_type = j.ltcg_type
   ),
 
-  -- Annual liability, the cent-rounded installment split, and the elapsed-quarter
-  -- count that drives Estimated Funds Due.
+  -- Annual liability, the installment split, and the upcoming-installment ordinal
+  -- that drives Estimated Funds Due.
   jur_calc as (
     select
       jr.*,
       p.tax_year,
-      (jr.ord_tax + coalesce(jr.ltcg_tax, 0))                         as annual_raw,
+      -- N-5: the ONLY annual emitted is the rounded one. The four installments
+      -- sum to exactly this figure, so the §2.5.3 table foots without the
+      -- consumer rounding, and no second spelling of the annual exists.
       round(jr.ord_tax + coalesce(jr.ltcg_tax, 0), 2)                 as annual,
-      round(round(jr.ord_tax + coalesce(jr.ltcg_tax, 0), 2) / 4, 2)   as q123,
-      least(jr.ord_basis_year, coalesce(jr.ltcg_basis_year, jr.ord_basis_year)) as basis_year,
+      -- N-2: TRUNC, not round. round() can push 3 x Q1 above the annual and
+      -- drive Q4 NEGATIVE (measured at annual = 0.02); trunc makes
+      -- 3 x Q1 <= annual by construction while keeping the sum exact.
+      trunc(round(jr.ord_tax + coalesce(jr.ltcg_tax, 0), 2) / 4, 2)   as q123,
+      -- N-4: SQL LEAST IGNORES NULLS, so an ungated basis_year renders a
+      -- confident year beside an `unavailable` status. Gated on `computed`, the
+      -- same shape as annual_liability. The per-schedule basis_year below is
+      -- unaffected and stays the field a consumer should read.
+      (case when jr.computed
+            then least(jr.ord_basis_year,
+                       coalesce(jr.ltcg_basis_year, jr.ord_basis_year))
+       end)                                                           as basis_year,
       make_date(p.tax_year::int,     4, 15)                           as due_q1,
       make_date(p.tax_year::int,     6, 15)                           as due_q2,
       make_date(p.tax_year::int,     9, 15)                           as due_q3,
       make_date(p.tax_year::int + 1, 1, 15)                           as due_q4,
-      (  (make_date(p.tax_year::int,     4, 15) <= p.d)::int
-       + (make_date(p.tax_year::int,     6, 15) <= p.d)::int
-       + (make_date(p.tax_year::int,     9, 15) <= p.d)::int
-       + (make_date(p.tax_year::int + 1, 1, 15) <= p.d)::int )        as quarters_elapsed
+      -- F-3: the ORDINAL OF THE UPCOMING INSTALLMENT — due dates STRICTLY BEFORE
+      -- the as-of date, plus one, capped at 4. `<` not `<=`: a payment due TODAY
+      -- is the one the user is about to make. The cap cannot fire on any input
+      -- (tax_year is derived from the same date), and is a guard, not a branch.
+      least(
+        (  (make_date(p.tax_year::int,     4, 15) < p.d)::int
+         + (make_date(p.tax_year::int,     6, 15) < p.d)::int
+         + (make_date(p.tax_year::int,     9, 15) < p.d)::int
+         + (make_date(p.tax_year::int + 1, 1, 15) < p.d)::int
+         + 1), 4)                                        as installments_due_through_next
     from jur jr
     cross join params p
   ),
@@ -558,8 +733,17 @@ with
     select
       jc.*,
       (jc.annual - 3 * jc.q123)                                       as q4_amount,
-      (case when jc.quarters_elapsed >= 4 then jc.annual
-            else jc.quarters_elapsed * jc.q123 end)                   as obligation_to_date
+      (case jc.installments_due_through_next
+         when 1 then jc.due_q1
+         when 2 then jc.due_q2
+         when 3 then jc.due_q3
+         else        jc.due_q4 end)                                   as next_due_date,
+      -- At a count of 4 the obligation is the ROUNDED ANNUAL rather than
+      -- 4 x q123: Q4 carries the rounding residual, so the multiplication form
+      -- would drop it and Funds Due would not foot against the installment rows
+      -- the same payload emits.
+      (case when jc.installments_due_through_next >= 4 then jc.annual
+            else jc.installments_due_through_next * jc.q123 end)      as obligation_to_date
     from jur_calc jc
   ),
 
@@ -587,9 +771,16 @@ with
           || (case when jf.ltcg_type is null then '{}'::jsonb
                    else jsonb_build_object(
                      jf.ltcg_type::text, jsonb_build_object(
-                       'present',                     (jf.ltcg_basis_year is not null),
+                       'present',                     (jf.ltcg_schedule_id is not null),
                        'basis_year',                  jf.ltcg_basis_year,
-                       'current_year_schedule_empty', jf.ltcg_current_year_empty))
+                       -- F-1: the SAME two-term composition as the ordinary leg.
+                       'current_year_schedule_empty', jf.ltcg_current_year_empty
+                                                        or jf.ltcg_empty_no_fallback,
+                       -- F-2: the LT CG walk subtracts no standard deduction; if
+                       -- the resolved schedule stores a non-zero one, the payload
+                       -- SAYS it was ignored rather than disagreeing in silence.
+                       'standard_deduction_ignored',
+                         coalesce(jf.ltcg_standard_deduction, 0) <> 0))
               end),
         'inputs', jsonb_build_object(
           'ordinary_input',     jf.ord_input,
@@ -598,7 +789,7 @@ with
         'taxable_income', jsonb_build_object(
           'ordinary', jf.ord_taxable,
           'lt_cg',    jf.ltcg_taxable),
-        'annual_liability',       case when jf.computed then jf.annual_raw end,
+        'annual_liability',       case when jf.computed then jf.annual end,
         'tax_balance_prior_year', jf.tax_balance_prior_year,
         'installments',
           case when jf.computed then jsonb_build_array(
@@ -607,7 +798,8 @@ with
             jsonb_build_object('quarter', 3, 'due_date', jf.due_q3, 'amount', jf.q123),
             jsonb_build_object('quarter', 4, 'due_date', jf.due_q4, 'amount', jf.q4_amount)
           ) end,
-        'quarters_elapsed',  jf.quarters_elapsed,
+        'installments_due_through_next', jf.installments_due_through_next,
+        'next_due_date',                 jf.next_due_date,
         'ytd_paid',
           case when jf.ytd_paid is null
                then jsonb_build_object('status', 'unavailable', 'reason', 'no_ledger_designated')
@@ -722,4 +914,4 @@ revoke execute on function pfin.fn_compute_tax_liability(date) from public;
 grant execute on function pfin.fn_compute_tax_liability(date) to authenticated;
 
 comment on function pfin.fn_compute_tax_liability(date) is
-  'SECURITY INVOKER §2.5 estimated-tax read helper — the single composed source for PRD §2.5.1 decomposition, §2.5.2 routing, §2.5.3 quarterly computation and §2.5.4''s two NAV-component scalars (SELF-262; Lock 11 read-composition; ADR-067 Decision 1 ratifies the ONE-unified-helper shape over per-surface readers). Returns ONE jsonb payload with top-level keys as_of, tax_year, decomposition, jurisdictions, nav_components, prior_year_q4_window; ADR-067 Decision 5 is the canonical home of that contract and SELF-264 / SELF-266 / SELF-268 read it there. AS-OF (Lock 15): p_data_as_of is threaded UNCHANGED into every callee — fn_cashflow_items (093), fn_account_unrealized_gl (049 as re-issued at 056), fn_ytd_paid_per_jurisdiction (102) — and NOTHING here derives its own date; the caller''s fn_server_today() value is the clock and must be the SAME value passed to fn_compute_nav on the same request, or the §2.1.5 foot reconciles to nothing. The payload echoes as_of back so a consumer can PROVE the threading rather than assume it. The Lock 15 dual-column filter (transaction_date <= D and created_at < D+1) is applied ONCE inside 093; no second as-of predicate is added here. WHAT THE TAX YEAR IS: extract(year from p_data_as_of) — calendar year, Federal default, CA FTB aligned; and note that YTD Paid, which it composes, is NOT year-scoped — 102''s figure is the designated ledger''s balance SINCE INCEPTION, so from the second tax year onward it carries prior years'' payments forward unless the user rolls the ledger over (CLOSE the old ledger, CLEAR its designation, DESIGNATE a fresh one — 102 states the precondition that closing requires draining first). That overstates YTD Paid and therefore UNDERSTATES Funds Due, the under-reserving direction. ENVELOPES, AND WHY THEY ARE THE TYPE AND NOT A CONVENTION: every genuinely-unknowable figure is a {status, ...} OBJECT — both nav_components scalars, both jurisdictions'' ytd_paid and funds_due, and capital_gains — so a consumer writing `... ?? 0` receives an object and fails at the first arithmetic instead of rendering "not set up" as "nothing paid". reason is a STABLE MACHINE CODE, never prose: no_sale_recording_capability, no_schedule_any_year, no_ledger_designated, ytd_paid_unavailable. CAPITAL GAINS IS UNAVAILABLE ON A STRUCTURAL FACT, NOT A COUNT: no sale writer and no lot_match writer exist, so the CG columns cannot be populated; the status keys on the missing CAPABILITY, never on a row count for the tax year, because a count reads as "you had no gains" the day the writer lands. There is no rows key under capital_gains at all. ORDINARY INCOME SCOPE: rows are posting_prototype rows with tax_relevant = true AND cat = ''Revenue'' — BOTH conjuncts, because Trade/STC and Trade/BTC are also tax_relevant with a NULL character and are sale PROCEEDS; a reader filtering on the flag alone sums proceeds into income. The join is on the SURROGATE ID (pp.id = sub_cat_id), never on (cat, sub_cat) text: a surrogate-id join fails CLOSED under an RLS regression, a shared-vocabulary string join fails OPEN. NOTHING IS INFERRED FROM tax_relevant = false: for rows the SELF-263 inventory reached it is a determination, for rows inserted afterwards it is the fail-open DEFAULT, and this reader selects on true and never reports an exclusion as an examined determination. is_tax_payment is NOT a source here — ADR-062 Decision 2 scopes it to Expense-class prototypes while the seeded tax buckets are Transfer-class, so it cannot reach them. SCHEDULE SELECTION AND ITS BASIS FIELD: a schedule_type resolves to the CURRENT-YEAR schedule when one is present, ELSE to the LATEST PRIOR-YEAR schedule of the same type, and the resolved year travels in the payload as basis_year (per jurisdiction, and per schedule under `schedules`) so every consumer RENDERS the basis — "California on the 2025 schedule" — rather than presenting a stale figure as current. Never $0, never silent. A SCHEDULE HOLDING ZERO BRACKET ROWS IS TREATED AS ABSENT FOR SELECTION and the payload says so via current_year_schedule_empty, because an empty current-year schedule would otherwise consume the current-year key, SUPPRESS THE FALLBACK SILENTLY and compute $0 off a schedule with no brackets. no_schedule_any_year therefore means: no schedule of that type WITH BRACKET ROWS exists for the tax year or any prior year — and such a jurisdiction is UNAVAILABLE, never zeros. A jurisdiction is COMPUTED only when EVERY schedule it needs resolved (federal needs both the ordinary and the LT CG schedule), so a missing half never reports as the whole. COMPUTATION: taxable income FLOORS AT ZERO per jurisdiction, applied after the standard deduction and BEFORE the bracket walk — a deduction exceeding income yields zero tax, never a negative one. The annual liability is computed at full numeric precision; installments are rounded to CENTS with Q1..Q3 equal and Q4 carrying the residual, so the four sum EXACTLY to round(annual, 2). Annual divided by four is V1''s SOLE installment-sizing approach; no safe-harbor floor is computed and tax_balance_prior_year is INFORMATIONAL REFERENCE ONLY, driving nothing. THE FOUR DUE DATES ARE THE SAME FOR BOTH JURISDICTIONS (Apr 15 / Jun 15 / Sep 15 of the tax year, Jan 15 of the next) — the PRD says California differs on Q3 without naming the difference, and a due date invented here would be a date rule with no source. ESTIMATED FUNDS DUE = (installment x quarters_elapsed) - YTD Paid, where quarters_elapsed is READ AS the number of due dates on or before p_data_as_of; the PRD does not define it more precisely and the reading is stated rather than inferred. Because Q4 falls in the following calendar year, quarters_elapsed is at most 3 inside the tax year. Overpayment surfaces as a NEGATIVE funds_due on the same line and is NOT clamped. applied_marginal_rate is OMITTED ENTIRELY on an unavailable jurisdiction — not null, not zero — so an absent caption is not read as a 0% bracket. THE PRIOR-YEAR Q4 RENDER WINDOW IS COMPUTED HERE AND NOWHERE ELSE: open between Jan 1 and Jan 15 INCLUSIVE, keyed on the DATE ALONE with NO paid-ness field, because YTD Paid is a since-inception balance and cannot answer "is it paid?" in V1; SELF-266 and SELF-267 CITE this boundary rather than copying it, since two copies of a date rule is how they diverge. Sec M-4''s UTC year-boundary flag is broader than §2.5 and is NOT discharged here. UNREALIZED TAX LIABILITY = (Federal LT CG top-bracket rate + CA ordinary top-bracket rate) x aggregate unrealized G/L over TAXABLE accounts only ((π), applied inline at the query layer over 049''s rows; tax_treatment is NOT NULL with a three-value CHECK so there is no unmarked state), CLAMPED AT ZERO. ⚠ THE CLAMP''S RATIONALE IS RECORDED HERE SO A LATER READER DOES NOT RESTORE SYMMETRY BY REMOVING IT: §2.5.4 defines the figure as "the estimated tax that would be owed", and a tax that would be REFUNDED is not that; an unclamped negative would make 051 ADD to NAV, inflating the headline by an unrealized, capital-loss-capped, possibly-never-realized benefit. It is DELIBERATELY ASYMMETRIC with 102''s fn_ytd_paid_per_jurisdiction, which is NOT clamped, and the two must not be reconciled. NAMED RESIDUAL — recorded so a reader does not conclude the case is handled: while wash_sale basis_adjust and substantive corp_action remain Suspense-parked at 035/037, cost_basis is UNDERSTATED, so 049''s unrealized_gl is OVERSTATED and the §2.5.4 Unrealized figure emitted here is OVERSTATED; on the §2.5.1 side the disallowed loss is unrecognized. That §2.5.1 half is currently VACUOUS on the tree (no sale writer, no basis_adjust writer), and the residual is recorded precisely so it does not become INVISIBLE when those writers land. NOT READ, DELIBERATELY: nav_daily, fn_compute_nav and fn_nav_composition. 051 calls THIS function, never the reverse, and §2.5.4''s Unrealized reads market value and cost basis through 049 rather than the checkpointed series — a nav_daily read here would be a SELF-262 AC 1 change routed back to Sec, and would move the nav_daily SELECT-policy obligation off the §2.1.5 read-time path at 051 where it belongs. INVOKER: a cross-tenant caller sees no rows, no ledgers and no schedules, so it returns the empty/unavailable shape and FAILS CLOSED. set search_path = ''''; NOT a SECURITY DEFINER allowlist entry (read ADR-011 Decision 9 live; no count is stated here). §10 catalogued ledger UNCHANGED BY THIS OBJECT and NO COUNT IS STATED — a ledger-impact claim is authoring-time provenance and belongs in a migration header, which is dated, not in a catalog comment, which reads as live state; read ADR-011 Decision 4 live. Decision 3 unchanged (no table, no column, no FK-shaped reference). Volatility STABLE, declared in the body per signature because CREATE OR REPLACE resets it; all five callees were measured stable. Sec joint-review MANDATORY (financial calculation + money figures + multi-tenant); two-tenant pgTAP pairing ships same-PR (SELF-269).';
+  'SECURITY INVOKER §2.5 estimated-tax read helper — the single composed source for PRD §2.5.1 decomposition, §2.5.2 routing, §2.5.3 quarterly computation and §2.5.4''s two NAV-component scalars (SELF-262; Lock 11 read-composition; ADR-067 Decision 1 ratifies the ONE-unified-helper shape over per-surface readers). Returns ONE jsonb payload with top-level keys as_of, tax_year, decomposition, jurisdictions, nav_components, prior_year_q4_window; ADR-067 Decision 5 is the canonical home of that contract and SELF-264 / SELF-266 / SELF-268 read it there. AS-OF (Lock 15): p_data_as_of is threaded UNCHANGED into every callee — fn_cashflow_items (093), fn_account_unrealized_gl (049 as re-issued at 056), fn_ytd_paid_per_jurisdiction (102) — and NOTHING here derives its own date; the caller''s fn_server_today() value is the clock and must be the SAME value passed to fn_compute_nav on the same request, or the §2.1.5 foot reconciles to nothing. The payload echoes as_of back so a consumer can PROVE the threading rather than assume it. The Lock 15 dual-column filter (transaction_date <= D and created_at < D+1) is applied ONCE inside 093; no second as-of predicate is added here. WHAT THE TAX YEAR IS: extract(year from p_data_as_of) — calendar year, Federal default, CA FTB aligned; and note that YTD Paid, which it composes, is NOT year-scoped — 102''s figure is the designated ledger''s balance SINCE INCEPTION, so from the second tax year onward it carries prior years'' payments forward unless the user rolls the ledger over (CLOSE the old ledger, CLEAR its designation, DESIGNATE a fresh one — 102 states the precondition that closing requires draining first). That overstates YTD Paid and therefore UNDERSTATES Funds Due, the under-reserving direction. ENVELOPES, AND WHY THEY ARE THE TYPE AND NOT A CONVENTION: every genuinely-unknowable figure is a {status, ...} OBJECT — both nav_components scalars, both jurisdictions'' ytd_paid and funds_due, and capital_gains — so a consumer writing `... ?? 0` receives an object and fails at the first arithmetic instead of rendering "not set up" as "nothing paid". reason is a STABLE MACHINE CODE, never prose: no_sale_recording_capability, no_schedule_any_year, no_ledger_designated, ytd_paid_unavailable. CAPITAL GAINS IS UNAVAILABLE ON A STRUCTURAL FACT, NOT A COUNT: no sale writer and no lot_match writer exist, so the CG columns cannot be populated; the status keys on the missing CAPABILITY, never on a row count for the tax year, because a count reads as "you had no gains" the day the writer lands. There is no rows key under capital_gains at all. ORDINARY INCOME SCOPE: rows are posting_prototype rows with tax_relevant = true AND cat = ''Revenue'' — BOTH conjuncts, because Trade/STC and Trade/BTC are also tax_relevant with a NULL character and are sale PROCEEDS; a reader filtering on the flag alone sums proceeds into income. The join is on the SURROGATE ID (pp.id = sub_cat_id), never on (cat, sub_cat) text: a surrogate-id join fails CLOSED under an RLS regression, a shared-vocabulary string join fails OPEN. NOTHING IS INFERRED FROM tax_relevant = false: for rows the SELF-263 inventory reached it is a determination, for rows inserted afterwards it is the fail-open DEFAULT, and this reader selects on true and never reports an exclusion as an examined determination. is_tax_payment is NOT a source here — ADR-062 Decision 2 scopes it to Expense-class prototypes while the seeded tax buckets are Transfer-class, so it cannot reach them. SCHEDULE SELECTION AND ITS BASIS FIELD: a schedule_type resolves to the CURRENT-YEAR schedule when one is present, ELSE to the LATEST PRIOR-YEAR schedule of the same type, and the resolved year travels in the payload as basis_year (per jurisdiction, and per schedule under `schedules`) so every consumer RENDERS the basis — "California on the 2025 schedule" — rather than presenting a stale figure as current. Never $0, never silent. THE JURISDICTION-LEVEL basis_year IS NULL WHEN THE JURISDICTION IS UNAVAILABLE (SQL LEAST ignores NULLs, so an ungated one rendered a confident year beside an unavailable status); the per-schedule schedules.{type}.basis_year is the field a consumer should read, gated on status. A SCHEDULE HOLDING ZERO BRACKET ROWS IS TREATED AS ABSENT FOR SELECTION and the payload says so via current_year_schedule_empty ON EVERY SCHEDULE TYPE — including the case where no prior year rescues it, in which case no walked row exists to carry the flag and a separate empty-current-year term supplies it (both terms are required; one leg alone answers the identical situation on the other schedule type as false, silently) — because an empty current-year schedule would otherwise consume the current-year key, SUPPRESS THE FALLBACK SILENTLY and compute $0 off a schedule with no brackets. no_schedule_any_year therefore means: no schedule of that type WITH BRACKET ROWS exists for the tax year or any prior year — and such a jurisdiction is UNAVAILABLE, never zeros. A jurisdiction is COMPUTED only when EVERY schedule it needs resolved (federal needs both the ordinary and the LT CG schedule), so a missing half never reports as the whole. COMPUTATION: taxable income FLOORS AT ZERO per jurisdiction, applied after the standard deduction and BEFORE the bracket walk — a deduction exceeding income yields zero tax, never a negative one. THE STANDARD DEDUCTION IS SUBTRACTED FROM THE TWO ORDINARY SCHEDULES ONLY: PRD §2.5.3 Federal step 5 says "no standard deduction applied to this schedule" for Federal LT CG, so federal_lt_cg NEVER subtracts it. That rule is a property of the COMPUTATION and therefore lives in this reader rather than in a CHECK on 101, which would make an editor REJECT a value the PRD merely calls meaningless; the stored value is left untouched and the payload REPORTS the divergence as schedules.federal_lt_cg.standard_deduction_ignored (true when the resolved LT CG schedule stores a non-zero deduction) rather than discarding it in silence. inputs.standard_deduction is the ORDINARY schedule''s stored value — the one actually subtracted — and never the LT CG schedule''s. The annual liability is computed at full numeric precision and EMITTED ALREADY ROUNDED to 2 dp, with no unrounded annual key at all, so the annual and the four quarters foot on one §2.5.3 table without the consumer rounding. Q1..Q3 are TRUNCATED to cents (trunc, not round) and equal, and Q4 carries the residual, so the four sum EXACTLY to round(annual, 2) AND Q4 is never negative — rounding Q1..Q3 pushed 3 x Q1 above the annual and rendered a negative Q4 at annual liabilities of a few cents. Its cost, stated: Q4 can run up to 3c above Q1..Q3 rather than +/-1.5c either way. Annual divided by four is V1''s SOLE installment-sizing approach; no safe-harbor floor is computed and tax_balance_prior_year is INFORMATIONAL REFERENCE ONLY, driving nothing. THE FOUR DUE DATES ARE THE SAME FOR BOTH JURISDICTIONS (Apr 15 / Jun 15 / Sep 15 of the tax year, Jan 15 of the next) — the PRD says California differs on Q3 without naming the difference, and a due date invented here would be a date rule with no source. ESTIMATED FUNDS DUE = (installment x installments_due_through_next) - YTD Paid. The PRD gives the FORM and no numeric definition of the multiplier, so the multiplier is fixed by §2.5.3''s own PURPOSE sentence — "how much they owe each jurisdiction by the NEXT due date": installments_due_through_next IS THE ORDINAL OF THE UPCOMING INSTALLMENT, i.e. the count of due dates STRICTLY BEFORE p_data_as_of, plus one, capped at 4. For tax year 2026: Apr 14 and Apr 15 both read 1 (a payment DUE TODAY is the upcoming one), Apr 16 reads 2, Dec 31 reads 4, and 2027-01-10 reads 1 because its tax year is 2027. next_due_date travels beside it so no surface re-derives the date. AT A COUNT OF 4 THE OBLIGATION IS THE ROUNDED ANNUAL rather than 4 x the installment, because Q4 carries the rounding residual and the multiplication form would not foot against the installment rows in the same payload. ⚠ THE KEY quarters_elapsed IS GONE, RENAMED RATHER THAN REDEFINED, so no consumer inherits the old meaning silently — a key kept under a new meaning is inherited invisibly, a key that disappears is a compile error. The losing reading is named so it is not restored as a simplification: due dates ON OR BEFORE the as-of date, which is ALWAYS THE SMALLER of the two, zero for all of Jan 1..Apr 14, i.e. the under-reserving direction. Overpayment surfaces as a NEGATIVE funds_due on the same line and is NOT clamped. applied_marginal_rate is OMITTED ENTIRELY on an unavailable jurisdiction — not null, not zero — so an absent caption is not read as a 0% bracket. THE PRIOR-YEAR Q4 RENDER WINDOW IS COMPUTED HERE AND NOWHERE ELSE: open between Jan 1 and Jan 15 INCLUSIVE, keyed on the DATE ALONE with NO paid-ness field, because YTD Paid is a since-inception balance and cannot answer "is it paid?" in V1; SELF-266 and SELF-267 CITE this boundary rather than copying it, since two copies of a date rule is how they diverge. Sec M-4''s UTC year-boundary flag is broader than §2.5 and is NOT discharged here. UNREALIZED TAX LIABILITY = (Federal LT CG top-bracket rate + CA ordinary top-bracket rate) x aggregate unrealized G/L over TAXABLE accounts only ((π), applied inline at the query layer over 049''s rows; tax_treatment is NOT NULL with a three-value CHECK so there is no unmarked state), CLAMPED AT ZERO. ⚠ THE CLAMP''S RATIONALE IS RECORDED HERE SO A LATER READER DOES NOT RESTORE SYMMETRY BY REMOVING IT: §2.5.4 defines the figure as "the estimated tax that would be owed", and a tax that would be REFUNDED is not that; an unclamped negative would make 051 ADD to NAV, inflating the headline by an unrealized, capital-loss-capped, possibly-never-realized benefit. It is DELIBERATELY ASYMMETRIC with 102''s fn_ytd_paid_per_jurisdiction, which is NOT clamped, and the two must not be reconciled. NAMED RESIDUAL — recorded so a reader does not conclude the case is handled: while wash_sale basis_adjust and substantive corp_action remain Suspense-parked at 035/037, cost_basis is UNDERSTATED, so 049''s unrealized_gl is OVERSTATED and the §2.5.4 Unrealized figure emitted here is OVERSTATED; on the §2.5.1 side the disallowed loss is unrecognized. That §2.5.1 half is currently VACUOUS on the tree (no sale writer, no basis_adjust writer), and the residual is recorded precisely so it does not become INVISIBLE when those writers land. NOT READ, DELIBERATELY: nav_daily, fn_compute_nav and fn_nav_composition — meaning this function reads no nav_daily row and composes no fn_compute_nav output into its payload. ⚠ That is NOT the same as absence from the reach set: fn_compute_nav(date) IS reached transitively, one hop under 049 inside fn_gl_entries'' book-vs-market divergence row. Both statements are true, about different things, and neither licenses the other. 051 calls THIS function, never the reverse, and §2.5.4''s Unrealized reads market value and cost basis through 049 rather than the checkpointed series — a nav_daily read here would be a SELF-262 AC 1 change routed back to Sec, and would move the nav_daily SELECT-policy obligation off the §2.1.5 read-time path at 051 where it belongs. INVOKER: a cross-tenant caller sees no rows, no ledgers and no schedules, so it returns the empty/unavailable shape and FAILS CLOSED. ⚠ THAT ARGUMENT COVERS ONLY CALLERS SUBJECT TO RLS. For a rolbypassrls caller — service_role holds the attribute AND pfin USAGE — RLS applies to nothing and the EXECUTE grant is the ENTIRE perimeter rather than the weakest fence; service_role has no EXECUTE here, and that absence is what makes the surface correct for it. STANDING CONDITION: any grant of EXECUTE on this function to a rolbypassrls role is Sec-JOINT-REVIEW-MANDATORY. set search_path = ''''; NOT a SECURITY DEFINER allowlist entry (read ADR-011 Decision 9 live; no count is stated here). §10 catalogued ledger UNCHANGED BY THIS OBJECT and NO COUNT IS STATED — a ledger-impact claim is authoring-time provenance and belongs in a migration header, which is dated, not in a catalog comment, which reads as live state; read ADR-011 Decision 4 live. Decision 3 unchanged (no table, no column, no FK-shaped reference). Volatility STABLE, declared in the body per signature because CREATE OR REPLACE resets it. The honest claim is over the TRANSITIVE READ SET, not over a callee count: the THREE direct callees (fn_cashflow_items, fn_ytd_paid_per_jurisdiction, fn_account_unrealized_gl) are all provolatile = s, but two functions the set REACHES — fn_gl_entries(date) and fn_holdings_as_of(date) — are provolatile = v: unpinned language-sql reads, not writers (VOLATILE is that language''s default). EVERY function in the set is read-only, this one writes nothing, and nothing in the set is nondeterministic within a statement — that is what makes stable honest here, and the two unpinned ones are NAMED rather than assumed away. Pinning them is a separate migration. Sec joint-review MANDATORY (financial calculation + money figures + multi-tenant); two-tenant pgTAP pairing ships same-PR (SELF-269).';
