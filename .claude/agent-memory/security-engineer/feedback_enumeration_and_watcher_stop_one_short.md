@@ -77,3 +77,62 @@ Wave-5 operational grain, and the family had long since been reconciled past the
   than no leg.
 
 Related: [[a-grep-over-comments-measures-intent-not-data]] · [[verify-the-stated-correctness-mechanism]] · [[measure-the-fence-regex-not-its-comment]] · [[replacement-control-name-the-losing-side]] · [[pm-draft-ac-vs-schema]]
+
+---
+
+⚠ **DOWNSTREAM VARIANT — when a label is FINALLY allocated, grep the bare label across the whole
+canon before believing the fold-in's own completeness claim.** At SELF-259 the D3 fold-in allocated
+`#18` and its consequence bullet asserted *"**Both forward pointers are re-pointed to #19 in the
+same edit**, because a pointer that survives its own allocation is the next instance's version of
+the #16 slip."* `grep -n -- "#18" DECISIONS.md` returned **three** live sites, not two: the third
+was in **ADR-042 Decision 5**, phrased differently (*"…and add a Decision-3 instance (`account_id →
+account` a second time, **as #18**)"*) and therefore invisible to a grep for the *"next … still
+takes"* sentence shape.
+
+- **The tell is the self-congratulating bullet.** A fold-in that explains at length how it avoided a
+  named past failure is asserting a countable fact about the tree. Count it. The bullet that
+  celebrates closing the #16 slip was itself the instance of it.
+- **A forward pointer does not have one canonical phrasing.** Grep the **bare label**, never the
+  sentence template. The site that gets missed is always the one worded differently.
+- **The fix shape is DROP THE NUMERAL, not re-point it.** Re-pointing `#18 → #19` recreates the same
+  trap one allocation later; dropping it (Path B, D4's own PR #368 discharge — *"numeral dropped so
+  it cannot re-stale"*) ends the class. Recommend the drop.
+- **Landed migrations carrying the stale label are NOT in scope.** They are dated records, the same
+  treatment the `[[SLOT-SEC]]` pin gets. Say the non-objection out loud, or the next sweep edits
+  history.
+- **Why this one bites hardest:** reusing an allocated label is the duplicate-label form of the
+  resurrection hazard above — a future author obeying read-the-decision-live lands on the stale
+  pointer and takes a number that is already taken. The discipline that exists to catch stale
+  labels is what delivers them.
+
+---
+
+⚠ **SECURITY-DOC VARIANT — the SD matrix and the RT catalog are TWO registers describing the SAME
+surface inside one file. A drift correction in one is not a correction.** At SELF-259 I reported
+RT-24's acceptance text superseded on four counts and scoped the finding to that row. `SD-04`'s
+exposure cell carried the same pre-build schema, and it is the cell a **schema-side** reader lands
+on first. I had grepped `RT-24` and read that row; I never grepped the **column names**.
+
+- **The grep that would have caught it is over the SUBJECT, not the label.** `grep -n RT-24` finds
+  the row I already knew about. `grep -n lower_bound` / `tax_bracket_row` / `marginal_rate` finds
+  every register asserting the same design. **When correcting drift, sweep the identifiers the
+  drift is ABOUT, never the id of the artifact you were sent to fix.**
+- **The SD cell was the more dangerous of the two, and the reason generalizes: its defect was an
+  OMISSION.** Its child-column list left out the child's own `users_id` — the grain-(C) ruling that
+  is the sole reason D3 instance `#18` exists. A wrong name is caught by the first person who runs
+  the DDL; a **missing column in a prose column-list looks complete**, and building from it would
+  have silently deleted a canonical family member. Diff a documented column list against
+  `CREATE TABLE` **in both directions** — present-but-wrong *and* absent-but-required.
+- **It also carried a false composite** (`BEFORE INSERT/UPDATE trigger enforcing strictly-increasing
+  <column>`): a BEFORE INSERT OR UPDATE trigger genuinely is on that table, but it is the
+  matched-tenant fence, not the set check. Two real things wrongly paired — which is exactly why it
+  passed every spot-check. **On any table with more than one trigger, bind each stated trigger to
+  its OWN job before accepting the sentence.**
+- **After correcting, expect the old terms to still grep-hit** — they live inside the dated
+  provenance comment that quotes the superseded wording. Classify those hits **naming, not
+  asserting**, and say so in the comment, or the next consistency sweep deletes the annotation.
+
+**How to apply:** before reporting a doc-drift finding as scoped, run one grep over the *subject's*
+identifiers across the whole artifact and report the site list, not the site. And when a brief hands
+me one row to fix, the fix is the claim, not the row — widen it, then surface the widening to the
+caller as a scope change rather than shipping it quietly.
