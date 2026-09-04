@@ -35,10 +35,16 @@
 	import type { SubmitFunction } from '@sveltejs/kit';
 	import type { PageData, ActionData } from './$types';
 	import { CLOSURE_REASONS, CLOSURE_REASON_LABELS } from '$lib/schemas/account-constants';
-	import { accountTypeLabel, taxTreatmentLabel, closedAtLabel } from '$lib/account-display';
+	import {
+		accountTypeLabel,
+		taxTreatmentLabel,
+		taxJurisdictionLabel,
+		closedAtLabel
+	} from '$lib/account-display';
 	import Button from '$lib/components/Button.svelte';
 	import TextField from '$lib/components/TextField.svelte';
 	import SelectField from '$lib/components/SelectField.svelte';
+	import TaxJurisdictionField from '$lib/components/TaxJurisdictionField.svelte';
 	import ConnectionStatusChip from '$lib/components/ConnectionStatusChip.svelte';
 	import TransactionEntryForm from '$lib/components/TransactionEntryForm.svelte';
 	import PurchaseEntryForm from '$lib/components/PurchaseEntryForm.svelte';
@@ -78,6 +84,16 @@
 	// being asked for, and it is verifiable by looking at the screen.
 	const isClosed = $derived(account.closed_at !== null);
 
+	// SELF-267 AC 2 — DEFENSIVE, ahead of Backend's loader: `ACCOUNT_COLUMNS` in this route's
+	// +page.server.ts (Backend-owned, `feature/self-267-backend` lands it in parallel) does not
+	// yet select `tax_jurisdiction`, so it is absent from the generated `PageData` on this
+	// branch. Narrow-cast rather than hand-widen the type — a bubble-up gap for team-lead, not a
+	// type lie. Once the loader selects the column this becomes a no-op read and the cast can
+	// come out.
+	const taxJurisdiction = $derived(
+		(account as { tax_jurisdiction?: string | null }).tax_jurisdiction ?? null
+	);
+
 	// Connections-redesign Aggregation section: THIS account's connection state (provider + health +
 	// last-sync), resolved server-side from its linked_source_id. null = manual / non-linked account.
 	const connection = $derived(data.connection);
@@ -107,12 +123,16 @@
 	let editType = $state('');
 	let editScope = $state('');
 	let editTax = $state('');
+	// SELF-267 AC 2 — '' = not designated. Hidden entirely for a provider-linked account
+	// (isLinked), so its seed value is never submitted there either.
+	let editTaxJurisdiction = $state('');
 
 	function openEditor() {
 		editName = account.name;
 		editType = account.account_type;
 		editScope = account.scope;
 		editTax = account.tax_treatment;
+		editTaxJurisdiction = taxJurisdiction ?? '';
 		editErrors = {};
 		editing = true;
 	}
@@ -321,6 +341,14 @@
 					hint="How the account is taxed: taxable, tax-deferred, or tax-free. Feeds the estimated-tax view."
 					errors={editErrors.tax_treatment ?? []}
 				/>
+				<!-- SELF-267 AC 2 — hidden for a provider-linked account: PRD §2.5.3 scopes the
+				     IRS/FTB designation to §2.4.2 manual accounts; hiding (not merely defaulting
+				     empty) keeps a linked account's submit from carrying the key at all. -->
+				<TaxJurisdictionField
+					bind:value={editTaxJurisdiction}
+					errors={editErrors.tax_jurisdiction ?? []}
+					hidden={isLinked}
+				/>
 				<div class="edit-actions">
 					<Button type="submit" variant="primary" loading={saving}>Save changes</Button>
 					<Button type="button" variant="secondary" onclick={cancelEditor}>Cancel</Button>
@@ -343,6 +371,14 @@
 					<dd>{taxTreatmentLabel(account.tax_treatment)}</dd>
 					<p class="attr-hint">How the account is taxed: taxable, tax-deferred, or tax-free. Feeds the estimated-tax view.</p>
 				</div>
+				{#if !isLinked}
+					<!-- SELF-267 AC 2 — hidden for a provider-linked account, matching the editor above. -->
+					<div class="attr">
+						<dt>Tax authority</dt>
+						<dd>{taxJurisdictionLabel(taxJurisdiction)}</dd>
+						<p class="attr-hint">Marks this as your IRS or FTB ledger — its balance feeds the §2.5.3 YTD Paid column and is excluded from net worth.</p>
+					</div>
+				{/if}
 			</dl>
 		{/if}
 	</section>

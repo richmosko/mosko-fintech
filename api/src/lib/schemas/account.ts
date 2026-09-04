@@ -9,7 +9,12 @@
 // source of truth; when the server schema changes, this mirror updates in lockstep.
 
 import { z } from 'zod';
-import { ACCOUNT_TYPES, TAX_TREATMENTS, CLOSURE_REASONS } from '$lib/schemas/account-constants';
+import {
+	ACCOUNT_TYPES,
+	TAX_TREATMENTS,
+	TAX_JURISDICTIONS,
+	CLOSURE_REASONS
+} from '$lib/schemas/account-constants';
 import { sanitizeCurrencyAmount } from '$lib/validation/numeric';
 
 /** Zod adapter over the client numeric-sanitization battery → a validated `number`. */
@@ -35,6 +40,33 @@ const isoDate = () =>
 		}, 'Enter a real calendar date.');
 
 /**
+ * tax_jurisdiction (SELF-267 AC 2) — CLIENT mirror of the server's two field variants.
+ * Both accept '' (explicit clear) or a TAX_JURISDICTIONS value; they differ only on what
+ * an ABSENT key means, because the two forms have opposite defaults:
+ *
+ *   - CREATE (`taxJurisdictionCreateField`): absent → null (a new account has nothing to
+ *     preserve, so "not touched" and "cleared" are the same outcome).
+ *   - EDIT (`taxJurisdictionEditField`): absent → `undefined`, meaning "do not touch the
+ *     column". Frontend's account-edit control is HIDDEN (key absent) for a provider-linked
+ *     account, and that must never wipe an existing designation — only an explicit `''`
+ *     clears. Render the control, pre-filled from the loaded account, whenever it IS shown.
+ */
+const taxJurisdictionUnion = () =>
+	z.union([z.enum(TAX_JURISDICTIONS), z.literal('')], {
+		message: 'Choose a tax authority, or leave it unset.'
+	});
+
+const taxJurisdictionCreateField = () =>
+	taxJurisdictionUnion()
+		.optional()
+		.transform((v) => (v ? v : null));
+
+const taxJurisdictionEditField = () =>
+	taxJurisdictionUnion()
+		.optional()
+		.transform((v) => (v === undefined ? undefined : v === '' ? null : v));
+
+/**
  * Manual-account create (AC #1/#2) — mirrors manualAccountCreateSchema server-side.
  * Enum messages are friendlier than the server's raw enum error — a UX nicety, NOT a
  * loosening (same value-set, same .strict()). Matched-tenant is a DB-enforced boundary,
@@ -51,7 +83,8 @@ export const manualAccountCreateSchema = z
 		scope: z.string().trim().min(1, 'Scope is required.').max(200, 'Scope is too long.'),
 		tax_treatment: z.enum(TAX_TREATMENTS, { message: 'Choose a tax treatment.' }),
 		initial_value: currencyAmount(),
-		as_of_date: isoDate()
+		as_of_date: isoDate(),
+		tax_jurisdiction: taxJurisdictionCreateField()
 	})
 	.strict();
 
@@ -108,18 +141,22 @@ export type ReopenAccount = z.infer<typeof reopenAccountSchema>;
 /**
  * Account-detail attribute edit — CLIENT mirror of the server `updateAttributesSchema`
  * (`accounts/[account_id]` `?/updateAttributes`). The four user-editable attributes:
- * name / account_type / scope / tax_treatment. Field rules copied VERBATIM from the manual-create
- * mirror (name/scope free-text 1..200; enums from the shared account-constants, anti-drift with the
- * DB CHECK). Deliberately excludes the aggregator/connection binding (deferred) and `closed_at`
- * (that is the close/reopen pair above, and `058` fences it at the DB regardless) — `.strict()`
- * rejects any stray posted field, matching the server mass-assignment fence.
+ * name / account_type / scope / tax_treatment, plus `tax_jurisdiction` (SELF-267 AC 2).
+ * Field rules copied VERBATIM from the manual-create mirror (name/scope free-text 1..200;
+ * enums from the shared account-constants, anti-drift with the DB CHECK). Deliberately
+ * excludes the aggregator/connection binding (deferred) and `closed_at` (that is the
+ * close/reopen pair above, and `058` fences it at the DB regardless) — `.strict()` rejects
+ * any stray posted field, matching the server mass-assignment fence. ⚠ `tax_jurisdiction`
+ * uses the EDIT variant (`taxJurisdictionEditField`): an absent key means "do not touch",
+ * not "clear" — see that field's header.
  */
 export const updateAttributesSchema = z
 	.object({
 		name: z.string().trim().min(1, 'Name is required.').max(200, 'Name is too long.'),
 		account_type: z.enum(ACCOUNT_TYPES, { message: 'Choose an account type.' }),
 		scope: z.string().trim().min(1, 'Scope is required.').max(200, 'Scope is too long.'),
-		tax_treatment: z.enum(TAX_TREATMENTS, { message: 'Choose a tax treatment.' })
+		tax_treatment: z.enum(TAX_TREATMENTS, { message: 'Choose a tax treatment.' }),
+		tax_jurisdiction: taxJurisdictionEditField()
 	})
 	.strict();
 
