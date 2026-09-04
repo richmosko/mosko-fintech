@@ -1,5 +1,6 @@
 # Memory index
 
+- [V1.5 preflight recalibration](project_v15_preflight_recalibration.md) — round 1 delivered 09-04 @b90b846; 2/18 buildable; A-5 φ-1 vs Lock 11 one-way door; A6 already on tree; A5/P6 invert Lock 13; 5 uncovered V1 surfaces.
 - [V1.4 preflight recalibration](project_v14_preflight_recalibration.md) — findings @25c5685 (baseline 2cd94ae), gates on sitting; 259/260/262 promote rec; CG-input-path gap, A-9 NAV double-count, Seam E A′, 264 ledger fix, 263 carries §7.28(3).
 - [V1.3 preflight recalibration](project_v13_preflight_recalibration.md) — findings delivered 08-22 @0491830, gates on batch ratify; §7.19 generator 4th recurrence; §2.2.2 amendment drafted (§7.20 body gone).
 - [SELF-340 securities-edit ruling](project_340_securities_edit_ruling.md) — brief delivered 08-26 awaiting F/CTO; lean A+C-deferred; PM owes §2.4.3 amendment + C §7 staging entry post-ratify; skip_flag never shipped.

@@ -1,0 +1,12 @@
+---
+name: v15-preflight-recalibration
+description: V1.5 (§2.6 Monthly report) pre-flight PM findings round 1 delivered 2026-09-04 (baseline b90b846); what gates on the sitting and what PM owes after ratify.
+metadata:
+  type: project
+---
+
+V1.5 pre-flight PM findings round 1 pushed 2026-09-04 on `meta/v15-preflight-pm` (`docs/records/v15-preflight/pm-findings.md`, baseline `b90b846`). Round 2 (cross-citing Architect seams / Sec ids) follows once all three roles report. Gates on the F/CTO batch-ratify sitting.
+
+**Why:** ADR-063 D1 pass; 2 of 18 buildable as drafted (A8, P7, both with riders) — the §2.6 domain lane held the 0-of-N precedent. The findings that outlive the file: (1) **A-5 φ-1 vs Lock 11 read-time composition** — settings-derived inputs (planning/cashflow targets `074` "no edit-history rows", bracket schedules, owner string) have no history, so a historical report re-derives them against today's settings; PM lean (B) freeze only the history-less inputs into the Lock 12 child; one-way door; sitting item 1. (2) **SELF-350 / A6 is already on the tree** (`scripts/ci/fence-rt22-pdf-worker-dockerfile.sh` + `security-scan.yml` RT-22 job, Phase 5 W1) — close as discharged; and A4's placeholder Dockerfile exists (not greenfield; cax21 is NOT the deploy target per `.env.example`). (3) **A5/P6 invert Lock 13's direction** (worker calls the app's `/internal/pdf-render`, not browser→app→worker with a payload). (4) Five V1 surfaces no issue carries: listing surface, on-demand generation write path, in-app pending notification, copy-from-prior + $ReAlloc side-by-side in the editor, report-level staleness banner. (5) P4 contradicts the PRD twice (cron never skips; user may explicitly skip commentary). (6) Gates A/B/F have no ADR home — one consolidated ADR riding A1's PR. (7) Commentary heading is **Marketable Securities** (PRD, ADR-058 D7 rename) while the column stays `commentary_equity`. (8) P11 "month of operation" definition + ⟨RULING⟩ whether a skipped-commentary month counts (lean no).
+
+**How to apply:** post-ratify, PM owes the PRD amendment PR (A-1..A-14 per rulings; A-5 wording waits on the ruling), the SELF-355 / BACKLOG §5.6 label fix, SELF-364's PRD PR sequenced before P9, and the round-2 reconciliation section (§12) once sibling files land. Verify every ruling against `docs/records/v15-preflight/sitting-log.md` (if it exists) before drafting — never from this memory. Precedent file for shape: [[v14-preflight-recalibration]].
