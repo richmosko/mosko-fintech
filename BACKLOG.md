@@ -297,7 +297,7 @@ Three-purpose backlog per [ADR-009](DECISIONS.md#adr-009) Decisions 4 + 7, [ADR-
 
 **A6. RT-22 Dockerfile audit CI fence script (closes catalogued §10 instance #1; deferred from Wave 1).** [V1-SHIP-BLOCK] **[Promoted to Linear at SELF-350, rotation 2026-09-03]**
 - **Source.** [ADR-011 Decision 17 / Decision 4](DECISIONS.md#adr-011) verbatim; RT-22 catalogued §10 instance #1 per Decision 4 catalogued numbered list.
-- **AC.** CI script greps A4 PDF worker Dockerfile for forbidden patterns: `SUPABASE_*` env vars (other than `SUPABASE_URL`); Postgres client packages (`postgresql-client`, `libpq-dev`, etc.); explicit Postgres binary `RUN` statements. CI fails build if violation found. Closes RT-22 catalogued §10 instance #1 (Wave 1 E1 closed RT-26 #2 instance; both catalogued instances now have V1 CI automation). Sec joint-review on grep pattern coverage.
+- **AC — RE-SCOPED at the V1.5 pre-flight sitting 2026-09-04 (R6).** The Dockerfile fence is ALREADY BUILT (`scripts/ci/fence-rt22-pdf-worker-dockerfile.sh` + `security-scan.yml` production + inversion modes, landed `eada4b2`) and rejects ALL `SUPABASE_*` env vars — the earlier draft's `SUPABASE_URL` carve-out is STRUCK (Sec veto: it would loosen a live fail-closed fence; Lock 13 mod #2 has no exception), and the earlier instance-count parenthetical is struck by citation to ADR-011 Decision 4 read live (no figure is carried here). SELF-350 now carries the **RT-22 dependency-manifest fence**: audit `workers/pdf-render/package.json` + lockfile for Postgres-client packages, if present / pass if absent, paired with a golden violation fixture and an inversion-mode step; the AC's first sentence cites the shipped fence's own header (manifest inspection is its documented non-catch). DevOps + QA; Sec joint-review on the catch criterion + fixture before merge. Ledger effect: none.
 - **Dependencies.** Upstream: A4. Downstream: V1 deployability gate.
 
 **A7. monthly_report cron worker on `pfin_back_etl` (Native Coolify cron container per Gate F α; absorbs PM Issue 6 per Gate A).** [V1-SHIP-BLOCK] **[Promoted to Linear at SELF-351, rotation 2026-09-03]**
@@ -324,7 +324,7 @@ Three-purpose backlog per [ADR-009](DECISIONS.md#adr-009) Decisions 4 + 7, [ADR-
 
 **P3. §2.6.2.b Commentary editor UI (4 named text areas per Gate B Option C).** [V1-SHIP-BLOCK] **[Promoted to Linear at SELF-355, rotation 2026-09-03]**
 - **Source.** [PRD §2.6.2](docs/PRD/index.html#story-2-6-2) verbatim 4-sub-section Rebalancing Targets free-text; ADR-013 INV-1 plain-text-only commentary is security-load-bearing (NO markdown sanitization at V1).
-- **AC.** 4 plain text areas (Cash / Bonds / Equity / Alternatives) at `/reports/monthly/{target_month}/commentary`; reads A1 commentary cols; saves via REPLACE-all SERIALIZABLE write semantics (parallel to Lock 14 settings write pattern). Lock 14 V1-SHIP-BLOCK Sec mods applied: Zod `.strict()` + numeric-input adversarial battery (TEXT-input variant: control-char/length/encoding); mass-assignment prevention (users_id from auth.uid()). NO markdown rendering; plain-text-only per INV-1.
+- **AC.** 4 plain text areas (Cash / Bonds / Marketable Securities / Alternatives — PRD §2.6.2 per ADR-058 D7; corrected at the V1.5 pre-flight sitting R11, column `commentary_marketable_securities`) at `/reports/monthly/{target_month}/commentary`; reads A1 commentary cols; saves via REPLACE-all SERIALIZABLE write semantics (parallel to Lock 14 settings write pattern). Lock 14 V1-SHIP-BLOCK Sec mods applied: Zod `.strict()` + numeric-input adversarial battery (TEXT-input variant: control-char/length/encoding); mass-assignment prevention (users_id from auth.uid()). NO markdown rendering; plain-text-only per INV-1.
 - **Dependencies.** Upstream: A1 (commentary cols). Downstream: P4 trigger integration.
 
 **P4. §2.6.2.c Author-before-generate trigger integration.** [V1-SHIP-BLOCK] **[Promoted to Linear at SELF-356, rotation 2026-09-03]**
@@ -1281,7 +1281,7 @@ Three-purpose backlog per [ADR-009](DECISIONS.md#adr-009) Decisions 4 + 7, [ADR-
 - **AC.** At dispatch of the V1.x path: SELF-302 returns to the tax milestone; the `basis_adjust` writer and GL design are drafted with Sec; the §2.5.1 wash-sale sentence lifts to the mechanism. Until then nothing is owed.
 - **Dependencies.** Item 1 (a sale must exist before a wash sale can).
 
-**6. `schedule_label` in the Lock 13 PDF worker — a SEPARATE escaping control at V1.5.** [V1.5 A-item; DevOps/Backend; Sec-raised]
+**6. `schedule_label` in the Lock 13 PDF worker — a SEPARATE escaping control at V1.5.** [V1.5 A-item; DevOps/Backend; Sec-raised] **[CONDITIONAL after the V1.5 pre-flight sitting R2 (2026-09-04): under the ruled direction the worker composes no HTML, so the control is discharged structurally by Svelte; the PROOF leg — a stored `<script>` in commentary / owner string / `schedule_label` rendered inert in the PDF (INV-2) — is owed under every outcome and is homed in P6 / SELF-358. This entry reduces to header + citation when P6 lands.]**
 - **Source.** SELF-260 Sec joint-review V-4 open question; execution-log E30. `pfin.tax_bracket_schedule.schedule_label` (`101`) is up to 500 characters of user-controlled prose, forwarded unmodified to the tax-liability payload (SELF-262); V1.4's §2.5 surfaces are web-only and SvelteKit escapes on render.
 - **AC.** Before any monthly-report template (V1.5, Lock 13 worker — a zero-DB-isolation renderer) renders a tax-liability payload field, the label and every other free-text field in that payload are escaped by the worker's own control, asserted by a test that stores `<script>` and proves the rendered PDF/HTML carries it inert. Escaping in Svelte does not transfer to the worker.
 - **Dependencies.** SELF-262 (payload contract); the V1.5 monthly-report issues (SELF-345–362).
@@ -1294,3 +1294,38 @@ Three-purpose backlog per [ADR-009](DECISIONS.md#adr-009) Decisions 4 + 7, [ADR-
 - **Source.** `041:275–310` seeds `taxonomy_default` asset rows whose `notes` carry *Grate* (IGI), *Manufaaturing* (US-08-Industrials), *Investemnt* (REIT), *Commoditiy* (Commodities-Other), *investent* (Volatility-Hedges), *assesed* (Remodel-Equity); the cash-flow rows since moved to `posting_prototype_default` at `084` carry *withdrawls* (Cash & ATM) and *Witholding* (both `Transfer / Tax - …` rows). `notes` is copied to every provisioned user's row ([ADR-062](DECISIONS.md#adr-062) Decision 4's own observation), so the fix is a seed delta **with backfill** on both tables of each pair, not a `041` edit. Deliberately excluded from SELF-263's migration so a value change and a copy change do not share a diff a reviewer must read as one.
 - **AC.** One data migration in the `077`/`091` shape: UPDATE the default row and the per-user rows **equality-guarded on the misspelled string** (no V1 notes edit path exists, so equality is safe and a user-edited value is left alone); a `comment on` claim no stronger than *copy-only, no value change*. Rides whichever migration next touches the pair, or the first surface that renders prototype `notes` (ADR-062's revival condition), whichever comes first.
 - **Dependencies.** None. Not on any milestone's critical path.
+
+### §7.34 — V1.5 pre-flight recalibration close-out bookings (2026-09-04)
+
+*Source: [`docs/records/v15-preflight/sitting-agenda.md`](docs/records/v15-preflight/sitting-agenda.md) §6 and the three findings files; rulings in [`sitting-log.md`](docs/records/v15-preflight/sitting-log.md). Items that outlive the sitting and have no issue yet.*
+
+**1. Latency probe on the A3 composition BEFORE its shape is fixed.** [Architect + DevOps; Platform V1.x]
+- **Source.** PM §10; MILESTONES "latency probe on `fn_compute_tax_liability`" item; Architect N-1 measurement (evaluated 1× per composition call after `105`'s `materialized`; absolute cost unmeasured).
+- **AC.** Measure one A3 call (`fn_nav_composition` + every §2.1–§2.3 reader + `104`) on a production-shaped tenant; A3's AC states a render budget the two interactive paths (in-app view, on-demand generation) meet, or names the async shape. Runs before A1+A2+A3's design unit is dispatched.
+- **Dependencies.** Upstream: none. Downstream: A3 / SELF-347 AC.
+
+**2. Pre-finalize prompt when no tax-authority ledger is designated.** [PM copy + Frontend; lands in P4 / P5]
+- **Source.** PM §10 — under R1 a report generated before designation freezes the high NAV with its reason forever; the authoring step is the one moment to catch it.
+- **AC.** The pending-report view surfaces *"No IRS/FTB ledger designated — NAV on this report will exclude tax liabilities"* with the Settings/accounts link before finalize; a prompt, not a block (α′-1 spirit).
+- **Dependencies.** Upstream: A1. Downstream: P4 / SELF-356, P5 / SELF-357.
+
+**3. The M-4 UTC-pin year/month boundary — second consumer.** [owner still unnamed]
+- **Source.** §7.32 item 3; PM §10 — A7's `data_as_of` = last day of the prior month on the UTC-pinned clock (`061`/`070`) is ~7 h early for a Pacific user.
+- **AC.** Whoever owns the UTC-pin boundary names A7 as a consumer; A7's AC states which clock derives `data_as_of` and why.
+- **Dependencies.** Upstream: the §7.32 item 3 owner. Downstream: A7 / SELF-351.
+
+**4. Dated `comment on` texts in `054` and `059` state superseded Decision-3 tallies.** [Architect; rider on the next migration touching either object — never a comment-only migration]
+- **Source.** Architect F-14 — both were true when written and are falsified by ADR-011 D3 read live; `104`/`105` already state the corrected convention.
+- **AC.** The next migration that touches `fn_aggregation_has_stale_constituent` or `nav_daily`'s trigger replaces the tally with the read-live convention.
+- **Dependencies.** None; not on any milestone's critical path.
+
+**5. Sec M-6 standing condition — PDF bytes at rest.** [Sec; standing]
+- **Source.** PRD §2.6.4 "no PDF caching V1"; Sec M-6 non-objection.
+- **AC.** The first AC that persists a rendered PDF creates a storage-class surface and is Sec joint-review-mandatory at that PR.
+- **Dependencies.** None until triggered.
+
+**6. Off-tree F/CTO rulings living only in CHANGELOG / Linear — third pass in a row.** [team-lead; process]
+- **Source.** PM §9 (Gates A/B/F homed at R14); §7.32 item 4's rule applied.
+- **AC.** At every milestone rotation, the promotion sweep lists each Wave-gate ruling the promoted issues rely on and names its ADR home or books one; a gate ruling that changes a locked enumeration amends the ADR that holds it (ADR-011 D18's own rule).
+- **Dependencies.** Upstream: `/milestone-rotation` skill text (DevOps to add the step).
+
