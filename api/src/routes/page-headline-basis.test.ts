@@ -12,13 +12,13 @@ import { describe, it, expect } from 'vitest';
 import { render } from 'svelte/server';
 import Page from './+page.svelte';
 import { EMPTY_STALENESS } from '$lib/staleness/stale-constituent';
-import type { NavComposition, TaxLineEnvelope } from '$lib/nav-composition';
+import type { NavComposition, TaxLiabilityEnvelope } from '$lib/nav-composition';
 import { unsafeAsOfForTest } from '$lib/server/time/asOf';
 
-const computed = (amount: number): TaxLineEnvelope => ({ status: 'computed', amount });
-const unavailable = (reason: string): TaxLineEnvelope => ({ status: 'unavailable', reason });
+const computed = (amount: number): TaxLiabilityEnvelope => ({ status: 'computed', amount });
+const unavailable = (reason: string): TaxLiabilityEnvelope => ({ status: 'unavailable', reason });
 
-function composition(realized: TaxLineEnvelope, unrealized: TaxLineEnvelope): NavComposition {
+function composition(realized: TaxLiabilityEnvelope, unrealized: TaxLiabilityEnvelope): NavComposition {
 	return {
 		groups: [],
 		buildups: {
@@ -77,7 +77,7 @@ describe('+page.svelte — SELF-268 headline basis note: present when compositio
 			props: {
 				data: pageData({
 					composition: composition(
-						unavailable('no_ledger_designated'),
+						unavailable('ytd_paid_unavailable'),
 						unavailable('no_schedule_any_year')
 					)
 				})
@@ -90,7 +90,7 @@ describe('+page.svelte — SELF-268 headline basis note: present when compositio
 		const { body } = render(Page, {
 			props: {
 				data: pageData({
-					composition: composition(unavailable('no_ledger_designated'), computed(1_800))
+					composition: composition(unavailable('ytd_paid_unavailable'), computed(1_800))
 				})
 			}
 		});
