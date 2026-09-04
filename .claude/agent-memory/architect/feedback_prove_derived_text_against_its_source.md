@@ -187,3 +187,11 @@ Team-lead's ruling, and it moved me off my own lean.
   it. See [[verify-the-bytes-you-commit]].
 
 Related: [[watcher-not-fence-for-by-construction-properties]] · [[diff-filter-strips-comment-lines]] · [[scope-the-invariant-before-writing-it]] · [[cited-precedent-transmits-its-retracted-half]] · [[count-over-history-vs-live-definitions]]
+
+⚠ **A supplied verbatim REPLACEMENT string carries its own punctuation, and the seam is
+where it collides.** Measured 2026-09-04 (`102` C1/B1): Sec's replacement clause ended in a
+comma and the text it replaced was itself followed by one — applying the replacement
+literally would have produced `…the old one,, so from the SECOND…`. Fix: extend the MATCH to
+consume the original punctuation so the supplied string stays byte-verbatim, and say in the
+hand-off that you did — a fidelity check that greps the string *plus its surroundings* will
+otherwise read the seam as an edit.

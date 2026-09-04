@@ -144,14 +144,23 @@ select is(
 -- =====================================================================
 -- BLOCK E — the Equity seed pair, posting_prototype_default (Decision 4's exact contract).
 -- =====================================================================
+-- (E1) INVERTED at 100 (SELF-263) — was: Equity/Contribution tax_relevant=true
+--   (flag-for-review) carrying the ADR-062 Decision 4 rider VERBATIM. 100's E4 D-i
+--   ruling retargets this exact row: a contribution of capital is not income, so
+--   tax_relevant flips to FALSE and the rider is REMOVED (replaced with a
+--   user-facing description) — see 100_tax_value_inventory_seed_delta_rls.sql's
+--   own (BF1)/(IDEM1) legs for the paired proof against a replayed pre-100
+--   fixture. This leg watches the transition directly against the REAL,
+--   already-migrated default row (100 applies before this file's txn opens on
+--   the 001->100 stack), not a replay.
 select ok(
-  (select tax_relevant = true
+  (select tax_relevant = false
       and tax_character is null
       and is_tax_payment = false
-      and notes = 'potentially deductible; resolve per account type at the V1.4 tax inventory'
+      and notes not like '%resolve per account type at the V1.4 tax inventory%'
      from pfin.posting_prototype_default
     where cat = 'Equity' and sub_cat = 'Contribution'),
-  '(E1) Equity/Contribution: tax_relevant=true, tax_character IS NULL, is_tax_payment=false, notes carries the review-flag rider VERBATIM (ADR-062 Decision 4 — flag-for-review, never always-deductible)'
+  '(E1) Equity/Contribution POST-100 (SELF-263 E4 D-i, INVERTS this leg''s pre-100 assertion): tax_relevant=FALSE, tax_character IS NULL, is_tax_payment=false, notes NO LONGER carries the ADR-062 Decision 4 review-flag rider — a contribution of capital is not income'
 );
 select ok(
   (select tax_relevant = false
@@ -336,16 +345,17 @@ select :'ta', d.cat, d.sub_cat, d.tax_relevant, d.tax_character, d.display_order
 from pfin.posting_prototype_default d
 on conflict (users_id, cat, sub_cat) do nothing;
 
--- (FS1) expected side HARDCODED at 29 (041's own hardcode-is-an-asset discipline, header
+-- (FS1) expected side HARDCODED at 30 (041's own hardcode-is-an-asset discipline, header
 -- note there) — NOT a live `select count(*) from posting_prototype_default` comparison.
 -- Sec-noted (PR #555): comparing against a live count of the same table this file's own
 -- unfiltered insert-select just copied from is a near-self-comparison that would pass with 2
--- rows on both sides just as readily as with the real 29 — it does not pin the actual expected
--- cardinality the way a hardcoded value does.
+-- rows on both sides just as readily as with the real 30 — it does not pin the actual expected
+-- cardinality the way a hardcoded value does. Re-pinned 29 -> 30 (100/SELF-263 added the
+-- Revenue / Dividend - Qualified row to posting_prototype_default).
 select is(
   (select count(*)::bigint from pfin.posting_prototype where users_id = :'ta'),
-  29::bigint,
-  '(FS1) fresh-signup receives the FULL cash-flow set, asserted by ROW COUNT (not error-absence — the app branch is fail-soft and a broken path returns cleanly with zero rows): A''s row count is 29, matching posting_prototype_default''s known total (041''s own hardcoded figure, re-pinned here rather than read live)'
+  30::bigint,
+  '(FS1) posting_prototype_default rows after 100 = 30 (29 at 091 + Dividend - Qualified): fresh-signup receives the FULL cash-flow set, asserted by ROW COUNT (not error-absence — the app branch is fail-soft and a broken path returns cleanly with zero rows)'
 );
 select is(
   (select count(*)::bigint from pfin.posting_prototype pp
