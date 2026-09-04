@@ -10,14 +10,26 @@
 //
 // fn_nav_composition RETURNS jsonb (a SCALAR jsonb, NOT set-returning) — supabase-js hands the
 // parsed object straight back (contrast staleness.ts, whose RPC is set-returning → array[0]).
-// The returned tree foots EXACT to fn_compute_nav(p_as_of, true) BY CONSTRUCTION (051 header
-// FOOT-TO-NAV EXACT), so we pass the SAME asOf the §2.1.1 headline passes (see call site) to keep
-// the composition and the headline number reconciled.
+//
+// ⚠ THE `nav` KEY HERE IS NOW THE §2.1.1 HEADLINE'S OWN READ SOURCE (SELF-268 / ADR-067 Decision
+//   3 / R3 rider 0 — "one composed value, one reader; no surface composes its own"). netWorth.ts
+//   no longer calls `fn_compute_nav` for the headline; it reads THIS function's `nav`, via
+//   `fetchNavComposition` below. This function's return NO LONGER foots to
+//   `fn_compute_nav(p_as_of, true)` — that identity was DELIBERATELY BROKEN at `102` (the E-2
+//   tax-authority-ledger exclusion lands in `051`'s leaf set only; `fn_compute_nav` is untouched
+//   and keeps its gross, pre-exclusion definition) and MUST NOT be "restored" by a future edit —
+//   see `102`'s own `comment on function` for the identical warning at the DB layer. We still pass
+//   the SAME asOf the §2.1.1 headline passes (see call site; R3 rider 4) so both surfaces describe
+//   the same day, but "same day" is no longer "same value via two definitions" — it is now the
+//   SAME single value, period. `fn_compute_nav` is retained ONLY for `nav_daily` writes (the
+//   permanently-gross checkpoint series) and is read by no live surface.
 //
 // Fail-soft is load-bearing (mirrors netWorth.ts / staleness.ts): any error degrades to `null`
 // (logged server-side, never thrown). `null` = "composition unavailable" (the table simply
 // doesn't render) — it must NEVER take down the §2.1.1 headline NAV. A genuine zero-account
 // tenant still gets a well-formed tree ({ groups: [], buildups: {…0…}, nav: 0 }), not null.
+// ⚠ Because the headline now depends on THIS SAME read, a `null` composition also degrades the
+// headline to `null` (netWorth.ts's own "compute failed" state) — see that module's header.
 //
 // PER-ROW STALENESS (SELF-229 · per ADR-013 D1, staleness-marking surface scope is illustrative,
 // not exhaustive — further surfaces ramp later; Sec F4 (AMBER round): read D1 live, this is a
@@ -105,25 +117,41 @@ export type NavComposition = {
 };
 
 /**
- * Load the caller's §2.1.5 NAV-composition tree, RLS-scoped via the per-request anon client.
- * `asOf` is an ISO date string (YYYY-MM-DD) — passed explicitly (not left to the fn default) so
- * the composition foots to the §2.1.1 headline's fn_compute_nav(asOf, true) by construction.
- * Fail-soft: any error (read failure, unexpected null) degrades to `null` — logged, never thrown.
- *
- * `staleLinkedSourceIds` (SELF-229) — the CALLER's already-loaded `046` stale_items[], as a set of
- * `linked_source_id` strings (mirrors the SELF-199 bigint→string convention `staleness.ts` already
- * applies). THREE distinct inputs, all meaningful:
- *   `EMPTY_STALE_LINKED_SOURCE_IDS` (or any empty, non-null Set) — a KNOWN root read: nothing is
- *     stale tenant-wide. The join is skipped (nothing to look up), every leaf becomes `false`.
- *   a non-empty Set — a KNOWN root read with real stale sources. The join runs.
- *   `null` — the caller's OWN `046` read was itself UNKNOWN (staleness.is_stale === null). The
- *     join is skipped (there is nothing meaningful to check against), every leaf becomes `null`.
+ * The DIRECT `fn_nav_composition` jsonb return — before this module's own per-row `is_stale` join
+ * is attached. `051` emits no `is_stale` key at all (staleness is a server-side enrichment, not a
+ * DB column on the leaf; see the module header), so a value fresh off the RPC structurally cannot
+ * satisfy `NavCompositionAccount` (which requires it). Kept as a DISTINCT type rather than an
+ * `Omit<..., 'is_stale'>` cast-of-convenience at each call site, so a caller reading `.is_stale` on
+ * a raw value is a compile error, not a `undefined` surprise at runtime.
  */
-export async function loadNavComposition(
+export type RawNavCompositionAccount = Omit<NavCompositionAccount, 'is_stale'>;
+export type RawNavCompositionGroup = Omit<NavCompositionGroup, 'accounts'> & {
+	accounts: RawNavCompositionAccount[];
+};
+export type RawNavComposition = Omit<NavComposition, 'groups'> & {
+	groups: RawNavCompositionGroup[];
+};
+
+/**
+ * Fetch the caller's §2.1.5 composition tree DIRECTLY off `pfin.fn_nav_composition`, RLS-scoped
+ * via the per-request anon client — no per-row staleness join. Fail-soft: any error (RPC failure,
+ * unexpected null payload) degrades to `null`, logged, never thrown.
+ *
+ * ⚠ THE SINGLE RPC CALL SITE (SELF-268 / R3 rider 0). `pfin.fn_nav_composition`'s `nav` key is now
+ * the ONE composed value the §2.1.1 headline and the §2.1.5 foot both read (netWorth.ts / R3 rider
+ * 0 — the §2.1.1 headline no longer calls `fn_compute_nav`, which is retained ONLY for `nav_daily`
+ * writes and reads by no live surface). Both surfaces reading this same underlying value must NOT
+ * mean two RPC round-trips for one page load: a caller serving BOTH surfaces (root
+ * `+page.server.ts`) calls this ONCE and threads the SAME `RawNavComposition` into both
+ * `loadNetWorthView` and `loadNavComposition` below (their `precomputed` parameter). A caller
+ * needing only one surface (e.g. `allocation/+page.server.ts`'s `accountPresence`-only use of
+ * `loadNetWorthView`) may omit `precomputed` and let that function fetch for itself — that is a
+ * SEPARATE request context, not a second call within one.
+ */
+export async function fetchNavComposition(
 	supabase: SupabaseClient,
-	asOf: ZoneResolvedAsOf,
-	staleLinkedSourceIds: ReadonlySet<string> | null
-): Promise<NavComposition | null> {
+	asOf: ZoneResolvedAsOf
+): Promise<RawNavComposition | null> {
 	const { data, error } = await supabase
 		.schema('pfin')
 		.rpc('fn_nav_composition', { p_as_of: asOf });
@@ -140,7 +168,44 @@ export async function loadNavComposition(
 		return null;
 	}
 
-	const composition = data as NavComposition;
+	return data as RawNavComposition;
+}
+
+/**
+ * Load the caller's §2.1.5 NAV-composition tree, RLS-scoped via the per-request anon client.
+ * `asOf` is an ISO date string (YYYY-MM-DD) — passed explicitly (not left to the fn default) so
+ * the composition foots to the §2.1.1 headline's composed NAV by construction (R3 rider 0: both
+ * now read the SAME `fn_nav_composition(asOf)` value).
+ * Fail-soft: any error (read failure, unexpected null) degrades to `null` — logged, never thrown.
+ *
+ * `staleLinkedSourceIds` (SELF-229) — the CALLER's already-loaded `046` stale_items[], as a set of
+ * `linked_source_id` strings (mirrors the SELF-199 bigint→string convention `staleness.ts` already
+ * applies). THREE distinct inputs, all meaningful:
+ *   `EMPTY_STALE_LINKED_SOURCE_IDS` (or any empty, non-null Set) — a KNOWN root read: nothing is
+ *     stale tenant-wide. The join is skipped (nothing to look up), every leaf becomes `false`.
+ *   a non-empty Set — a KNOWN root read with real stale sources. The join runs.
+ *   `null` — the caller's OWN `046` read was itself UNKNOWN (staleness.is_stale === null). The
+ *     join is skipped (there is nothing meaningful to check against), every leaf becomes `null`.
+ *
+ * `precomputed` (SELF-268 / R3 rider 0) — an ALREADY-FETCHED `RawNavComposition`, typically the
+ * SAME value `loadNetWorthView` derived `netWorth` from on this same request. Pass it to avoid a
+ * second `fn_nav_composition` RPC round-trip for one page load. `undefined` (the default) means
+ * "fetch it yourself" — this function still works standalone. An explicit `null` means the caller
+ * already tried and the RPC failed; this function returns `null` in turn rather than retrying.
+ */
+export async function loadNavComposition(
+	supabase: SupabaseClient,
+	asOf: ZoneResolvedAsOf,
+	staleLinkedSourceIds: ReadonlySet<string> | null,
+	precomputed?: RawNavComposition | null
+): Promise<NavComposition | null> {
+	const composition = precomputed !== undefined ? precomputed : await fetchNavComposition(supabase, asOf);
+
+	// `fetchNavComposition` (or the caller's own precomputed attempt) already logged the specific
+	// failure — RPC error vs. null payload — at its own call site; nothing further to log here.
+	if (composition === null) {
+		return null;
+	}
 
 	// staleLinkedSourceIds === null means the CALLER's own root staleness read was unknown — skip
 	// the join entirely (there's nothing meaningful to check against) and propagate UNKNOWN

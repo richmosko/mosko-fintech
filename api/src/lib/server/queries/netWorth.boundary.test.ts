@@ -120,11 +120,25 @@ function applyOr(filter: string, rows: Row[]): Row[] {
 	return rows.filter((r) => clauses.some((c) => c.test(r)));
 }
 
-/** Supabase stub that RECORDS the filter and answers with the population it actually selects. */
-function makeSupabase(rows: Row[], navData: unknown = 0) {
+/**
+ * Supabase stub that RECORDS the filter and answers with the population it actually selects.
+ *
+ * ⚠ MECHANICAL UPDATE FOR SELF-268 / R3 rider 0 (the read-source flip, Backend-owned; this file's
+ *   own assertions are UNCHANGED — only the RPC MOCK SHAPE moved). `navValue` used to be handed
+ *   straight to `rpc()` as `data` because `loadNetWorthView` called the scalar
+ *   `fn_compute_nav` RPC directly. It now reads `pfin.fn_nav_composition`'s `nav` KEY inside a
+ *   jsonb tree, so `navValue` is wrapped into a minimal well-formed tree below — the boundary
+ *   behaviour this file exists to prove (the `.or()` filter, evaluated against `ROWS`) is entirely
+ *   independent of which function supplies the NAV number, so nothing else here changes.
+ */
+function makeSupabase(rows: Row[], navValue: unknown = 0) {
 	let captured: string | null = null;
 	const rpc = vi.fn(async (_fn: string, _args: Record<string, unknown>) => ({
-		data: navData,
+		data: {
+			groups: [],
+			buildups: { total_non_re: 0, gross_total: 0, debt: 0, realized_tax_liab: 0, unrealized_tax_liab: 0 },
+			nav: navValue
+		},
 		error: null
 	}));
 	const or = vi.fn(async (filter: string) => {

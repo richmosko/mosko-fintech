@@ -4,17 +4,23 @@
 //   .schema('pfin').from('account').select(...).in(...)    → { data, error }  (SELF-229 join)
 //
 // Proves: the scalar-jsonb tree passes through unchanged (raw shape = Frontend's contract),
-// asOf is threaded explicitly (so it foots to the headline), the fail-soft degrade-to-null
-// on both an RPC error and a null payload — the composition read must never take down the
-// §2.1.1 headline netWorth — and the SELF-229 per-row staleness join, including its REWORKED
-// tri-state degrade. TWO independent causes of is_stale=null are both covered here: the caller's
-// root staleness read being unknown (staleLinkedSourceIds === null, passed straight through
-// without querying), and the per-row join itself failing — neither may ever collapse to `false`
+// asOf is threaded explicitly (so it foots to the §2.1.1 headline, which now reads this SAME
+// composed value — SELF-268 / R3 rider 0), the fail-soft degrade-to-null on both an RPC error
+// and a null payload, and the SELF-229 per-row staleness join, including its REWORKED tri-state
+// degrade. TWO independent causes of is_stale=null are both covered here: the caller's root
+// staleness read being unknown (staleLinkedSourceIds === null, passed straight through without
+// querying), and the per-row join itself failing — neither may ever collapse to `false`
 // (team-lead catch, mirrors the SELF-220 Sec round 2 silent-fresh-on-failure rejection).
+//
+// ALSO covers `fetchNavComposition` (SELF-268) and `loadNavComposition`'s `precomputed` 4th
+// parameter, extracted so a caller serving BOTH the headline and this foot on one page load
+// (root `+page.server.ts`) makes exactly ONE `fn_nav_composition` RPC call, not two — see
+// `nav-composition-flip.server.test.ts` for the page-level "one call, one shared value" proof.
 
 import { describe, it, expect, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
+	fetchNavComposition,
 	loadNavComposition,
 	EMPTY_STALE_LINKED_SOURCE_IDS,
 	type NavComposition
@@ -105,8 +111,8 @@ describe('loadNavComposition', () => {
 			}))
 		});
 		expect(schema).toHaveBeenCalledWith('pfin');
-		// asOf passed explicitly (not left to the fn's current_date default) so the composition
-		// foots to the headline's fn_compute_nav(asOf, true) by construction (051 FOOT-TO-NAV).
+		// asOf passed explicitly (not left to the fn's current_date default) so this reads the
+		// SAME day the §2.1.1 headline's netWorth.ts call passes (R3 rider 4).
 		expect(rpc).toHaveBeenCalledWith('fn_nav_composition', { p_as_of: AS_OF });
 	});
 
@@ -209,6 +215,66 @@ describe('loadNavComposition', () => {
 			expect(allLeaves.some((a) => a.is_stale === false)).toBe(false);
 			// No point querying pfin.account when we don't even know what to look up.
 			expect(from).not.toHaveBeenCalled();
+		});
+	});
+
+	// ── fetchNavComposition (SELF-268) — the extracted low-level RPC-only fetch ───────────────
+	describe('fetchNavComposition', () => {
+		it('returns the raw tree unchanged on success', async () => {
+			const { client, rpc } = makeSupabase({ data: SAMPLE_TREE_RAW });
+			const raw = await fetchNavComposition(client, AS_OF);
+			expect(raw).toEqual(SAMPLE_TREE_RAW);
+			expect(rpc).toHaveBeenCalledWith('fn_nav_composition', { p_as_of: AS_OF });
+		});
+
+		it('RPC error → null, logged, never thrown', async () => {
+			const { client } = makeSupabase({ error: { message: 'permission denied' } });
+			const raw = await fetchNavComposition(client, AS_OF);
+			expect(raw).toBeNull();
+		});
+
+		it('null payload (unexpected) → null', async () => {
+			const { client } = makeSupabase({ data: null });
+			const raw = await fetchNavComposition(client, AS_OF);
+			expect(raw).toBeNull();
+		});
+	});
+
+	// ── `precomputed` 4th param (SELF-268 / R3 rider 0) — the shared-single-RPC-call path ─────
+	describe('loadNavComposition with a precomputed raw composition', () => {
+		it('an already-fetched value is used DIRECTLY — fn_nav_composition is NEVER called again', async () => {
+			const { client, rpc } = makeSupabase({ data: null }); // would fail if the RPC ran
+			const tree = await loadNavComposition(
+				client,
+				AS_OF,
+				EMPTY_STALE_LINKED_SOURCE_IDS,
+				SAMPLE_TREE_RAW
+			);
+
+			expect(tree).toEqual({
+				...SAMPLE_TREE_RAW,
+				groups: SAMPLE_TREE_RAW.groups.map((g) => ({
+					...g,
+					accounts: g.accounts.map((a) => ({ ...a, is_stale: false }))
+				}))
+			});
+			expect(rpc).not.toHaveBeenCalled();
+		});
+
+		it('an explicit `null` precomputed value (caller already tried and failed) degrades to null — no retry RPC', async () => {
+			const { client, rpc } = makeSupabase({ data: SAMPLE_TREE_RAW }); // would succeed if retried
+			const tree = await loadNavComposition(client, AS_OF, EMPTY_STALE_LINKED_SOURCE_IDS, null);
+
+			expect(tree).toBeNull();
+			expect(rpc).not.toHaveBeenCalled();
+		});
+
+		it('omitting the 4th argument entirely still self-fetches (back-compat default)', async () => {
+			const { client, rpc } = makeSupabase({ data: SAMPLE_TREE_RAW });
+			const tree = await loadNavComposition(client, AS_OF, EMPTY_STALE_LINKED_SOURCE_IDS);
+
+			expect(tree).not.toBeNull();
+			expect(rpc).toHaveBeenCalledWith('fn_nav_composition', { p_as_of: AS_OF });
 		});
 	});
 });
