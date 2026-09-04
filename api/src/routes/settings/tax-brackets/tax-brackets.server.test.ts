@@ -372,12 +372,17 @@ describe('actions.deleteSchedule', () => {
 		expect(res).toEqual({ action: 'deleteSchedule', scheduleId: 7, deleted: true });
 	});
 
-	it('cross-tenant / absent id → idempotent 200-equivalent, deleted: false (never a 404)', async () => {
-		const { event } = makeEvent({ schedule_id: '7' }, { id: SESSION_UID }, {
+	it('cross-tenant / absent id → idempotent 200-equivalent, deleted: false (never a 404), no seed-check RPC', async () => {
+		// Default `ownershipRead` (unset here) resolves { data: null, error: null } — the pre-read
+		// finds nothing, indistinguishable from "doesn't exist" by construction (RLS), and falls
+		// through to the delete attempt UNCHANGED from pre-E38 behavior.
+		const { event, captured } = makeEvent({ schedule_id: '7' }, { id: SESSION_UID }, {
 			deleteResult: { error: null, count: 0 }
 		});
 		const res = await actions.deleteSchedule(event);
 		expect(res).toEqual({ action: 'deleteSchedule', scheduleId: 7, deleted: false });
+		// No row resolved → no seed-template check ever runs; the RPC is never even reached.
+		expect(captured.rpcCalls).toHaveLength(0);
 	});
 
 	it('unexpected DB error → 500', async () => {
@@ -386,5 +391,58 @@ describe('actions.deleteSchedule', () => {
 		});
 		const res = (await actions.deleteSchedule(event)) as { status: number };
 		expect(res.status).toBe(500);
+	});
+
+	// ── SEED-TEMPLATE FLOOR (SELF-265 second pass, E38) ─────────────────────────────────────────
+
+	it('ownership pre-read failure → 500, no delete attempted', async () => {
+		const { event, captured } = makeEvent({ schedule_id: '7' }, { id: SESSION_UID }, {
+			ownershipRead: { data: null, error: { code: 'XXYYY', message: 'boom' } }
+		});
+		const res = (await actions.deleteSchedule(event)) as { status: number };
+		expect(res.status).toBe(500);
+		expect(captured.deleteCalls).toHaveLength(0);
+	});
+
+	it('a schedule matching the live seed template → 409, NO delete call performed', async () => {
+		const { event, captured } = makeEvent({ schedule_id: '1' }, { id: SESSION_UID }, {
+			ownershipRead: { data: { id: 1, tax_year: 2026, schedule_type: 'federal_ordinary' }, error: null },
+			rpcResult: {
+				data: [
+					{ schedule_type: 'federal_ordinary', tax_year: 2026, standard_deduction: 16100, schedule_label: 'x', bracket_floor: 0, bracket_rate: 0.1 }
+				],
+				error: null
+			}
+		});
+		const res = (await actions.deleteSchedule(event)) as { status: number; data: { errors: Record<string, string[]> } };
+		expect(res.status).toBe(409);
+		expect(res.data.errors._form[0]).toMatch(/provisioned template/i);
+		expect(captured.deleteCalls).toHaveLength(0);
+	});
+
+	it('a schedule NOT matching the live seed template still deletes normally', async () => {
+		const { event, captured } = makeEvent({ schedule_id: '7' }, { id: SESSION_UID }, {
+			ownershipRead: { data: { id: 7, tax_year: 2030, schedule_type: 'federal_ordinary' }, error: null },
+			rpcResult: {
+				data: [
+					{ schedule_type: 'federal_ordinary', tax_year: 2026, standard_deduction: 16100, schedule_label: 'x', bracket_floor: 0, bracket_rate: 0.1 }
+				],
+				error: null
+			},
+			deleteResult: { error: null, count: 1 }
+		});
+		const res = await actions.deleteSchedule(event);
+		expect(res).toEqual({ action: 'deleteSchedule', scheduleId: 7, deleted: true });
+		expect(captured.deleteCalls).toHaveLength(1);
+	});
+
+	it('seed-template RPC failure on an owned row → fails CLOSED (500), no delete attempted', async () => {
+		const { event, captured } = makeEvent({ schedule_id: '7' }, { id: SESSION_UID }, {
+			ownershipRead: { data: { id: 7, tax_year: 2026, schedule_type: 'federal_ordinary' }, error: null },
+			rpcResult: { data: null, error: { code: 'XXYYY', message: 'boom' } }
+		});
+		const res = (await actions.deleteSchedule(event)) as { status: number };
+		expect(res.status).toBe(500);
+		expect(captured.deleteCalls).toHaveLength(0);
 	});
 });

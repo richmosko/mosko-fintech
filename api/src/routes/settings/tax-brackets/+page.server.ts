@@ -51,7 +51,7 @@
 // session-bound client wired at the hooks.server.ts chokepoint. service_role is FORBIDDEN here.
 
 import { fail, redirect } from '@sveltejs/kit';
-import { loadTaxBracketSchedules } from '$lib/server/queries/taxBracketSchedules';
+import { loadTaxBracketSchedules, loadSeedTemplateKeys, isSeedTemplateKey } from '$lib/server/queries/taxBracketSchedules';
 import { replaceTaxBracketSchedule, type ReplaceOutcome } from '$lib/server/queries/taxBracketScheduleWrite';
 import { taxBracketScheduleReplaceSchema } from '$lib/server/schemas/tax-bracket-schedule';
 import { fieldErrors } from '$lib/server/schemas/account';
@@ -229,20 +229,48 @@ export const actions: Actions = {
 	},
 
 	// ── AC3: delete a schedule (cascade removes its rows) ────────────────────────────────────────
-	// Deliberately UNGUARDED against deleting the only schedule of a type for the current year —
-	// there is no "last one" special case. A jurisdiction with no current-or-prior schedule left
-	// renders AC8(i)'s UNAVAILABLE state on the reader surfaces; that is the reader's job to
-	// render, not this action's to prevent by refusing an otherwise-valid delete.
+	// SEED-TEMPLATE FLOOR (SELF-265 second pass, E38 — team-lead ruling under F/CTO delegation):
+	// the three provisioned template rows (`pfin.fn_provision_tax_brackets()` / migration 103's
+	// backfill) are a FLOOR the user REVISES, never DELETES — deleting one and having it reappear
+	// on the next navigation (provisionDefaultTaxonomy in +layout.server.ts re-runs the provision
+	// call every request, which is `on conflict do nothing`, not overwrite) is a delete that undoes
+	// itself, which is worse than refusing it. THE SERVER IS THE FENCE HERE, not a courtesy: before
+	// every delete this action re-reads the target row's (tax_year, schedule_type) UNDER THE
+	// CALLER'S OWN RLS and refuses the delete with 409 when that pair matches the live template
+	// (`loadSeedTemplateKeys` / `isSeedTemplateKey`, queries/taxBracketSchedules.ts — the SAME
+	// derivation the loader's `is_seed_template` marking uses, never a second copy of the key
+	// format). The UI disabling a delete button on `is_seed_template` is a courtesy on top of this,
+	// not a substitute for it — that field travelled through the loader's response and is never
+	// trusted as the enforcement point.
 	//
-	// Idempotent-DELETE convention (planning-target.ts's precedent on this same Lock-14 family):
-	// always succeeds at the HTTP level, `deleted` discloses the caller's OWN outcome. The
-	// explicit `.eq('users_id', ...)` predicate (beside `.eq('id', ...)`) is what makes `deleted`
-	// safe to disclose — it pins the query to the caller's own rows BY CONSTRUCTION, so a
-	// cross-tenant row is unobservable through this response rather than merely RLS-filtered.
-	// `deleted: false` covers two causes this flag does not separate (the row never existed, or it
-	// exists but the caller is below aal2 so the DELETE policy's USING clause hides it) — both
-	// read identically, a deliberate bounded non-disclosure WITHIN one account, same as
-	// planning-target.ts's own DELETE.
+	// A jurisdiction with no current-or-prior schedule left still renders AC8(i)'s UNAVAILABLE
+	// state on the reader surfaces (unaffected by this change) — but that state is now reachable
+	// only via a NON-template schedule's delete, or a jurisdiction the user never had a template
+	// for in the first place.
+	//
+	// ORDERING, load-bearing: the RLS-scoped pre-read happens BEFORE the seed-template check, and
+	// the seed-template check happens ONLY when that pre-read resolves a row. `owned === null`
+	// (the row doesn't exist, or exists but belongs to another tenant — RLS makes the two cases
+	// indistinguishable BY CONSTRUCTION, same non-disclosure `replaceTaxBracketSchedule`'s own
+	// ownership read relies on) falls through UNCHANGED to the delete attempt below, exactly as
+	// before this pass — a cross-tenant id is never told "seed template", only ever the same
+	// idempotent `deleted: false` a nonexistent id already gets.
+	//
+	// FAIL-CLOSED on a seed-template-read failure, DELIBERATELY DIFFERENT from the loader's
+	// fail-open marking: the loader's `is_seed_template` is informational and a false negative
+	// there just skips a UI affordance, but here a false negative would let a protected row through
+	// undetected. A read failure that happens only after `owned` resolves therefore refuses the
+	// delete (500) rather than falling through to a normal delete attempt.
+	//
+	// Idempotent-DELETE convention (planning-target.ts's precedent on this same Lock-14 family)
+	// otherwise UNCHANGED for the non-template path: always succeeds at the HTTP level, `deleted`
+	// discloses the caller's OWN outcome. The explicit `.eq('users_id', ...)` predicate (beside
+	// `.eq('id', ...)`) is what makes `deleted` safe to disclose — it pins the query to the
+	// caller's own rows BY CONSTRUCTION, so a cross-tenant row is unobservable through this
+	// response rather than merely RLS-filtered. `deleted: false` covers two causes this flag does
+	// not separate (the row never existed, or it exists but the caller is below aal2 so the DELETE
+	// policy's USING clause hides it) — both read identically, a deliberate bounded non-disclosure
+	// WITHIN one account, same as planning-target.ts's own DELETE.
 	deleteSchedule: async ({ request, locals }) => {
 		const { user } = await locals.safeGetSession();
 		if (!user) return fail(401, { action: 'deleteSchedule', errors: { _form: ['You must be signed in.'] } });
@@ -251,6 +279,39 @@ export const actions: Actions = {
 		const scheduleId = parseScheduleId(form.get('schedule_id'));
 		if (scheduleId === null) {
 			return fail(400, { action: 'deleteSchedule', errors: { _form: ['Invalid schedule.'] } });
+		}
+
+		// RLS-scoped read (no explicit `.eq('users_id', ...)` — RLS is what makes a cross-tenant id
+		// resolve to `null` rather than someone else's row, same idiom as
+		// taxBracketScheduleWrite.ts's ownership read). This is BOTH the seed-template check's own
+		// input and, for `owned === null`, indistinguishable from "doesn't exist" — never revealing
+		// cross-tenant existence.
+		const { data: owned, error: readError } = await locals.supabase
+			.schema('pfin')
+			.from('tax_bracket_schedule')
+			.select('id, tax_year, schedule_type')
+			.eq('id', scheduleId)
+			.maybeSingle();
+
+		if (readError) {
+			console.error('[tax-brackets] deleteSchedule ownership read failed:', readError.code, readError.message);
+			return fail(500, { action: 'deleteSchedule', errors: { _form: ['Could not delete the schedule. Please try again.'] } });
+		}
+
+		if (owned) {
+			const seedKeys = await loadSeedTemplateKeys(locals.supabase);
+			if (seedKeys === null) {
+				// Fail CLOSED here (unlike the loader's fail-open marking) — this IS the fence.
+				console.error('[tax-brackets] deleteSchedule: seed-template check unavailable, refusing delete');
+				return fail(500, { action: 'deleteSchedule', errors: { _form: ['Could not delete the schedule. Please try again.'] } });
+			}
+			if (isSeedTemplateKey(seedKeys, owned.tax_year, owned.schedule_type)) {
+				return fail(409, {
+					action: 'deleteSchedule',
+					scheduleId,
+					errors: { _form: ['This schedule is part of the provisioned template and cannot be deleted. Edit it instead.'] }
+				});
+			}
 		}
 
 		const { error, count } = await locals.supabase

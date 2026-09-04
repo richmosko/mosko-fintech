@@ -37,6 +37,20 @@
 // groups (mirrors cashflowTarget.ts's UNSET degradation); a row-read error degrades only the
 // per-schedule `rows` arrays to empty (the schedules themselves still render, just with no
 // brackets shown) rather than failing the whole loader over a narrower fault.
+//
+// is_seed_template (SELF-265 second pass, E38): each schedule carries whether its
+// (tax_year, schedule_type) matches a row `pfin.fn_tax_bracket_seed_template()` (migration 103)
+// currently returns — the SAME template `pfin.fn_provision_tax_brackets()` writes at signup and
+// 103's backfill wrote for existing users. NEVER hard-coded here: the template lives in the DB,
+// so a future migration that seeds e.g. California 2026 changes this marking with no code edit.
+// The RPC has EXECUTE granted to `authenticated` (103, confirmed against the migration before
+// this was built — no grant was added to reach it). This marking is INFORMATIONAL — the UI's
+// cue to render the template affordance — never the fence: `deleteSchedule` in +page.server.ts
+// re-derives the same check independently under the caller's own RLS before every delete, rather
+// than trusting a value that travelled through form data. A seed-template read failure here
+// degrades every schedule's `is_seed_template` to `false` (fail-open, matching this file's
+// existing per-concern fail-soft posture) — the enforcement point fails closed instead, see
+// +page.server.ts.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -55,6 +69,10 @@ export type TaxBracketScheduleRecord = {
 	schedule_label: string;
 	standard_deduction: number;
 	tax_balance_prior_year: number | null;
+	/** True iff (tax_year, schedule_type) matches a row `pfin.fn_tax_bracket_seed_template()`
+	 *  currently returns — see file header. Informational only; never trust this field as the
+	 *  delete fence — `deleteSchedule` re-checks server-side. */
+	is_seed_template: boolean;
 	rows: TaxBracketRowRecord[];
 };
 
@@ -111,6 +129,41 @@ type RawBracketRow = {
 	bracket_rate: number | string;
 };
 
+type SeedTemplateRow = {
+	schedule_type: TaxScheduleType;
+	tax_year: number;
+};
+
+/** The set of (tax_year, schedule_type) keys `pfin.fn_tax_bracket_seed_template()` currently
+ *  returns, `null` on a read failure — deliberately NOT an empty Set on failure, so a caller can
+ *  tell "confirmed nothing is a template" from "couldn't ask" and choose its own fail-open (this
+ *  loader) or fail-closed (`deleteSchedule`) posture on that distinction. Exported so
+ *  +page.server.ts's `deleteSchedule` uses this SAME derivation rather than a second, driftable
+ *  copy of the key format. */
+export async function loadSeedTemplateKeys(supabase: SupabaseClient): Promise<Set<string> | null> {
+	const { data, error } = await supabase.schema('pfin').rpc('fn_tax_bracket_seed_template');
+	if (error) {
+		console.error('[taxBracketSchedules] seed-template read failed:', error.message);
+		return null;
+	}
+	const keys = new Set<string>();
+	for (const row of (data ?? []) as SeedTemplateRow[]) {
+		keys.add(`${row.tax_year}:${row.schedule_type}`);
+	}
+	return keys;
+}
+
+/** True iff (taxYear, scheduleType) is a key `keys` holds — the ONE place the key format
+ *  (`${tax_year}:${schedule_type}`) is written, so `loadTaxBracketSchedules` below and
+ *  `deleteSchedule` compare identically. */
+export function isSeedTemplateKey(
+	keys: Set<string>,
+	taxYear: number,
+	scheduleType: TaxScheduleType
+): boolean {
+	return keys.has(`${taxYear}:${scheduleType}`);
+}
+
 /**
  * Load the caller's own tax bracket schedules, grouped into the three jurisdictions, each
  * carrying its own current-year-present flag and fallback basis year (see file header).
@@ -120,7 +173,7 @@ export async function loadTaxBracketSchedules(
 	currentTaxYear: number
 ): Promise<TaxBracketJurisdiction[]> {
 	try {
-		const [scheduleResult, rowResult] = await Promise.all([
+		const [scheduleResult, rowResult, seedKeysResult] = await Promise.all([
 			supabase
 				.schema('pfin')
 				.from('tax_bracket_schedule')
@@ -132,8 +185,13 @@ export async function loadTaxBracketSchedules(
 				.from('tax_bracket_row')
 				.select('schedule_id, bracket_floor, bracket_rate')
 				.order('schedule_id', { ascending: true })
-				.order('bracket_floor', { ascending: true })
+				.order('bracket_floor', { ascending: true }),
+			loadSeedTemplateKeys(supabase)
 		]);
+
+		// Informational-only: fail OPEN to "nothing is a template" on a read failure, logged. The
+		// enforcement point (deleteSchedule) fails CLOSED on the same `null` — see its own comment.
+		const seedKeys = seedKeysResult ?? new Set<string>();
 
 		if (scheduleResult.error) {
 			console.error('[taxBracketSchedules] schedule read failed → degrading to empty:', scheduleResult.error.message);
@@ -162,6 +220,7 @@ export async function loadTaxBracketSchedules(
 			schedule_label: s.schedule_label,
 			standard_deduction: toNumber(s.standard_deduction, 'standard_deduction'),
 			tax_balance_prior_year: toNumberOrNull(s.tax_balance_prior_year),
+			is_seed_template: isSeedTemplateKey(seedKeys, s.tax_year, s.schedule_type),
 			rows: rowsBySchedule.get(s.id) ?? []
 		}));
 
