@@ -10,14 +10,26 @@
 //
 // fn_nav_composition RETURNS jsonb (a SCALAR jsonb, NOT set-returning) — supabase-js hands the
 // parsed object straight back (contrast staleness.ts, whose RPC is set-returning → array[0]).
-// The returned tree foots EXACT to fn_compute_nav(p_as_of, true) BY CONSTRUCTION (051 header
-// FOOT-TO-NAV EXACT), so we pass the SAME asOf the §2.1.1 headline passes (see call site) to keep
-// the composition and the headline number reconciled.
+//
+// ⚠ THE `nav` KEY HERE IS NOW THE §2.1.1 HEADLINE'S OWN READ SOURCE (SELF-268 / ADR-067 Decision
+//   3 / R3 rider 0 — "one composed value, one reader; no surface composes its own"). netWorth.ts
+//   no longer calls `fn_compute_nav` for the headline; it reads THIS function's `nav`, via
+//   `fetchNavComposition` below. This function's return NO LONGER foots to
+//   `fn_compute_nav(p_as_of, true)` — that identity was DELIBERATELY BROKEN at `102` (the E-2
+//   tax-authority-ledger exclusion lands in `051`'s leaf set only; `fn_compute_nav` is untouched
+//   and keeps its gross, pre-exclusion definition) and MUST NOT be "restored" by a future edit —
+//   see `102`'s own `comment on function` for the identical warning at the DB layer. We still pass
+//   the SAME asOf the §2.1.1 headline passes (see call site; R3 rider 4) so both surfaces describe
+//   the same day, but "same day" is no longer "same value via two definitions" — it is now the
+//   SAME single value, period. `fn_compute_nav` is retained ONLY for `nav_daily` writes (the
+//   permanently-gross checkpoint series) and is read by no live surface.
 //
 // Fail-soft is load-bearing (mirrors netWorth.ts / staleness.ts): any error degrades to `null`
 // (logged server-side, never thrown). `null` = "composition unavailable" (the table simply
 // doesn't render) — it must NEVER take down the §2.1.1 headline NAV. A genuine zero-account
 // tenant still gets a well-formed tree ({ groups: [], buildups: {…0…}, nav: 0 }), not null.
+// ⚠ Because the headline now depends on THIS SAME read, a `null` composition also degrades the
+// headline to `null` (netWorth.ts's own "compute failed" state) — see that module's header.
 //
 // PER-ROW STALENESS (SELF-229 · per ADR-013 D1, staleness-marking surface scope is illustrative,
 // not exhaustive — further surfaces ramp later; Sec F4 (AMBER round): read D1 live, this is a
@@ -85,16 +97,58 @@ export type NavCompositionGroup = {
 	subtotal: number;
 };
 
-/** Buildup subtotals over the FULL active-account set (051 A3 / FOOT-TO-NAV EXACT). */
+/**
+ * One `nav_components` tax-liability scalar's availability (SELF-268 / ADR-067 Decision 3;
+ * execution-log E41/E42 addendum, Q2 option (2)). Carried VERBATIM off `pfin.fn_compute_tax_liability`
+ * (`104`)'s own `nav_components.{realized_tax_liab,unrealized_tax_liab}` envelope shape into `051`'s
+ * (as amended at migration 105) `buildups.{realized_tax_liab,unrealized_tax_liab}` keys — NOT a
+ * separate `tax_components` side-channel, and NOT a plain `number` with an availability flag beside
+ * it (that shape was this repo's own FIRST DRAFT of this contract and was superseded by the ruling
+ * before it landed on any branch's migration).
+ *
+ * ⚠ A DISCRIMINATED UNION, DELIBERATELY, NOT `{status, amount?, reason?}` (Sec P-18) — the SHIPPED
+ *   precedent is `tax-quarterly.ts`'s `FundsDueEnvelope` (SELF-264/266, landed `7c81dda`); this type
+ *   follows it key-for-key rather than inventing a second spelling of "envelope." A
+ *   required-`status`-field-with-optional-siblings shape lets `amount` be read while `status ===
+ *   'unavailable'` and silently be `undefined` — `env.amount` type-checks and IS `undefined` at
+ *   runtime, a `NaN` waiting to happen the moment a consumer does arithmetic on it. Under this
+ *   union, `amount` and `reason` are each UNREACHABLE without narrowing on `status` first — reading
+ *   `env.amount` without narrowing is a COMPILE ERROR, so `usd.format(env)` (passing the whole
+ *   envelope to a number formatter, the exact regression this exists to make impossible) is also a
+ *   compile error rather than a silently-rendered `$NaN` or `$0`.
+ *
+ * `nav` (on `NavComposition` below) is ALREADY net of `coalesce((env->>'amount')::numeric, 0)` for
+ * BOTH scalars, computed ONCE inside `051`'s own SQL (P-17) — this type is a DISPLAY/AVAILABILITY
+ * signal only; no server-side code in this module (or netWorth.ts) does arithmetic on `.amount`, and
+ * none should — `nav` already carries the arithmetic effect of an `unavailable` scalar (subtract 0).
+ *
+ * ⚠ COORDINATION NOTE, not yet resolved (Sec P-18 / team-lead 2026-09-04): `api/src/lib/nav-
+ *   composition.ts` (Frontend-owned) is the canonical home for this type per P-18's instruction —
+ *   "export it from nav-composition.ts and import it server-side," so the two modules declare it
+ *   once. Frontend's `c6c62c5` landed a DIFFERENT, now-superseded shape (`TaxComponentStatus =
+ *   {status:'computed'} | {status:'unavailable',reason}` behind a separate optional
+ *   `tax_components` block, with `buildups.*_tax_liab` staying `number`) — that predates the E41/Q2
+ *   ruling this type implements. Defined LOCALLY here for now (rather than importing Frontend's
+ *   current, pre-ruling shape, which would encode the wrong contract) so this module's own type
+ *   change is not blocked on Frontend's rework landing first. TODO once Frontend updates
+ *   `nav-composition.ts` to the ruled shape: delete this local definition and import theirs instead,
+ *   per P-18 — do not let both definitions stand once that lands.
+ */
+export type TaxLiabilityEnvelope =
+	| { status: 'unavailable'; reason: string }
+	| { status: 'computed'; amount: number };
+
+/** Buildup subtotals over the FULL active-account set (051 A3). ⚠ NO LONGER foots to
+ * `fn_compute_nav` — see the module header (identity deliberately broken at `102`, E-2). */
 export type NavCompositionBuildups = {
 	total_non_re: number;
 	gross_total: number;
 	/** −(liability subtotal) = a positive magnitude, so nav = gross_total − debt reads literally. */
 	debt: number;
-	/** Option A V1.1 placeholder = 0; V1.4 ramp (051 A5). */
-	realized_tax_liab: number;
-	/** Option A V1.1 placeholder = 0; V1.4 ramp (051 A5). */
-	unrealized_tax_liab: number;
+	/** `104`'s `nav_components.realized_tax_liab` envelope, carried verbatim (SELF-268 / E41-E42). */
+	realized_tax_liab: TaxLiabilityEnvelope;
+	/** `104`'s `nav_components.unrealized_tax_liab` envelope, carried verbatim (SELF-268 / E41-E42). */
+	unrealized_tax_liab: TaxLiabilityEnvelope;
 };
 
 /** The full §2.1.5 composition tree — the raw shape of the 051 jsonb return. */
@@ -105,25 +159,41 @@ export type NavComposition = {
 };
 
 /**
- * Load the caller's §2.1.5 NAV-composition tree, RLS-scoped via the per-request anon client.
- * `asOf` is an ISO date string (YYYY-MM-DD) — passed explicitly (not left to the fn default) so
- * the composition foots to the §2.1.1 headline's fn_compute_nav(asOf, true) by construction.
- * Fail-soft: any error (read failure, unexpected null) degrades to `null` — logged, never thrown.
- *
- * `staleLinkedSourceIds` (SELF-229) — the CALLER's already-loaded `046` stale_items[], as a set of
- * `linked_source_id` strings (mirrors the SELF-199 bigint→string convention `staleness.ts` already
- * applies). THREE distinct inputs, all meaningful:
- *   `EMPTY_STALE_LINKED_SOURCE_IDS` (or any empty, non-null Set) — a KNOWN root read: nothing is
- *     stale tenant-wide. The join is skipped (nothing to look up), every leaf becomes `false`.
- *   a non-empty Set — a KNOWN root read with real stale sources. The join runs.
- *   `null` — the caller's OWN `046` read was itself UNKNOWN (staleness.is_stale === null). The
- *     join is skipped (there is nothing meaningful to check against), every leaf becomes `null`.
+ * The DIRECT `fn_nav_composition` jsonb return — before this module's own per-row `is_stale` join
+ * is attached. `051` emits no `is_stale` key at all (staleness is a server-side enrichment, not a
+ * DB column on the leaf; see the module header), so a value fresh off the RPC structurally cannot
+ * satisfy `NavCompositionAccount` (which requires it). Kept as a DISTINCT type rather than an
+ * `Omit<..., 'is_stale'>` cast-of-convenience at each call site, so a caller reading `.is_stale` on
+ * a raw value is a compile error, not a `undefined` surprise at runtime.
  */
-export async function loadNavComposition(
+export type RawNavCompositionAccount = Omit<NavCompositionAccount, 'is_stale'>;
+export type RawNavCompositionGroup = Omit<NavCompositionGroup, 'accounts'> & {
+	accounts: RawNavCompositionAccount[];
+};
+export type RawNavComposition = Omit<NavComposition, 'groups'> & {
+	groups: RawNavCompositionGroup[];
+};
+
+/**
+ * Fetch the caller's §2.1.5 composition tree DIRECTLY off `pfin.fn_nav_composition`, RLS-scoped
+ * via the per-request anon client — no per-row staleness join. Fail-soft: any error (RPC failure,
+ * unexpected null payload) degrades to `null`, logged, never thrown.
+ *
+ * ⚠ THE SINGLE RPC CALL SITE (SELF-268 / R3 rider 0). `pfin.fn_nav_composition`'s `nav` key is now
+ * the ONE composed value the §2.1.1 headline and the §2.1.5 foot both read (netWorth.ts / R3 rider
+ * 0 — the §2.1.1 headline no longer calls `fn_compute_nav`, which is retained ONLY for `nav_daily`
+ * writes and reads by no live surface). Both surfaces reading this same underlying value must NOT
+ * mean two RPC round-trips for one page load: a caller serving BOTH surfaces (root
+ * `+page.server.ts`) calls this ONCE and threads the SAME `RawNavComposition` into both
+ * `loadNetWorthView` and `loadNavComposition` below (their `precomputed` parameter). A caller
+ * needing only one surface (e.g. `allocation/+page.server.ts`'s `accountPresence`-only use of
+ * `loadNetWorthView`) may omit `precomputed` and let that function fetch for itself — that is a
+ * SEPARATE request context, not a second call within one.
+ */
+export async function fetchNavComposition(
 	supabase: SupabaseClient,
-	asOf: ZoneResolvedAsOf,
-	staleLinkedSourceIds: ReadonlySet<string> | null
-): Promise<NavComposition | null> {
+	asOf: ZoneResolvedAsOf
+): Promise<RawNavComposition | null> {
 	const { data, error } = await supabase
 		.schema('pfin')
 		.rpc('fn_nav_composition', { p_as_of: asOf });
@@ -140,7 +210,44 @@ export async function loadNavComposition(
 		return null;
 	}
 
-	const composition = data as NavComposition;
+	return data as RawNavComposition;
+}
+
+/**
+ * Load the caller's §2.1.5 NAV-composition tree, RLS-scoped via the per-request anon client.
+ * `asOf` is an ISO date string (YYYY-MM-DD) — passed explicitly (not left to the fn default) so
+ * the composition foots to the §2.1.1 headline's composed NAV by construction (R3 rider 0: both
+ * now read the SAME `fn_nav_composition(asOf)` value).
+ * Fail-soft: any error (read failure, unexpected null) degrades to `null` — logged, never thrown.
+ *
+ * `staleLinkedSourceIds` (SELF-229) — the CALLER's already-loaded `046` stale_items[], as a set of
+ * `linked_source_id` strings (mirrors the SELF-199 bigint→string convention `staleness.ts` already
+ * applies). THREE distinct inputs, all meaningful:
+ *   `EMPTY_STALE_LINKED_SOURCE_IDS` (or any empty, non-null Set) — a KNOWN root read: nothing is
+ *     stale tenant-wide. The join is skipped (nothing to look up), every leaf becomes `false`.
+ *   a non-empty Set — a KNOWN root read with real stale sources. The join runs.
+ *   `null` — the caller's OWN `046` read was itself UNKNOWN (staleness.is_stale === null). The
+ *     join is skipped (there is nothing meaningful to check against), every leaf becomes `null`.
+ *
+ * `precomputed` (SELF-268 / R3 rider 0) — an ALREADY-FETCHED `RawNavComposition`, typically the
+ * SAME value `loadNetWorthView` derived `netWorth` from on this same request. Pass it to avoid a
+ * second `fn_nav_composition` RPC round-trip for one page load. `undefined` (the default) means
+ * "fetch it yourself" — this function still works standalone. An explicit `null` means the caller
+ * already tried and the RPC failed; this function returns `null` in turn rather than retrying.
+ */
+export async function loadNavComposition(
+	supabase: SupabaseClient,
+	asOf: ZoneResolvedAsOf,
+	staleLinkedSourceIds: ReadonlySet<string> | null,
+	precomputed?: RawNavComposition | null
+): Promise<NavComposition | null> {
+	const composition = precomputed !== undefined ? precomputed : await fetchNavComposition(supabase, asOf);
+
+	// `fetchNavComposition` (or the caller's own precomputed attempt) already logged the specific
+	// failure — RPC error vs. null payload — at its own call site; nothing further to log here.
+	if (composition === null) {
+		return null;
+	}
 
 	// staleLinkedSourceIds === null means the CALLER's own root staleness read was unknown — skip
 	// the join entirely (there's nothing meaningful to check against) and propagate UNKNOWN

@@ -1,10 +1,18 @@
 // netWorth.test.ts — unit coverage for the §2.1.1 headline read (SELF-211).
 // Pure-TS server test (node env per vitest.config). Mocks the supabase-js chain:
-//   .schema('pfin').rpc('fn_compute_nav', { p_as_of, p_active_only }) → { data, error }
+//   .schema('pfin').rpc('fn_nav_composition', { p_as_of }) → { data, error }  (SELF-268 flip)
 //   .schema('pfin').from('account').select(...).or(...)    → { count, error }
 //
-// Proves: numeric coercion (number + Postgres-numeric-as-string), the $0-with-accounts
-// vs zero-account-empty-state disambiguation, and fail-soft degrade on either read.
+// ⚠ THE READ SOURCE FLIPPED AT SELF-268 (ADR-067 Decision 3 / R3 rider 0) — this file used to mock
+//   `.rpc('fn_compute_nav', { p_as_of, p_active_only })` returning a SCALAR numeric. `netWorth` is
+//   now derived from `pfin.fn_nav_composition(asOf)`'s `nav` key (via navComposition.ts's
+//   `fetchNavComposition` / the `precomputedComposition` 3rd param), the SAME composed value the
+//   §2.1.5 foot reads. `loadNetWorthView` no longer calls `fn_compute_nav` at all.
+//
+// Proves: numeric coercion, the $0-with-accounts vs zero-account-empty-state disambiguation,
+// fail-soft degrade on either read, AND the two `precomputedComposition` modes — `undefined`
+// (self-fetch) vs an already-resolved value (SHARED single RPC call; see
+// `nav-composition-flip.server.test.ts` for the page-level "one call, one value" proof).
 //
 // ⚠ THIS FILE IS §7.9 AC 4's INSTANCE, and it is worth knowing how it hid. Before 059 it
 // stubbed `.eq()` and asserted NOTHING about the predicate — so it named no column, was
@@ -16,9 +24,30 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { loadNetWorthView } from './netWorth';
+import type { RawNavComposition } from './navComposition';
 import { unsafeAsOfForTest } from '$lib/server/time/asOf';
 
 const AS_OF = unsafeAsOfForTest('2026-07-20');
+
+/** Minimal well-formed RawNavComposition carrying only the `nav` value a test cares about. */
+function rawComposition(nav: unknown): RawNavComposition {
+	return {
+		groups: [],
+		buildups: {
+			total_non_re: 0,
+			gross_total: 0,
+			debt: 0,
+			// SELF-268 / E41-E42: envelopes, not plain numbers — this file only ever reads
+			// `.nav`, never these two, so the specific status/reason is arbitrary but must
+			// type-check as a genuine TaxLiabilityEnvelope.
+			realized_tax_liab: { status: 'unavailable', reason: 'no_schedule_any_year' },
+			unrealized_tax_liab: { status: 'unavailable', reason: 'no_schedule_any_year' }
+		},
+		// `nav` is typed `number` on RawNavComposition, but this helper is also used to exercise
+		// coercion/NaN edge cases a real jsonb payload should never produce — hence the cast.
+		nav: nav as number
+	};
+}
 
 type MockOpts = {
 	navData?: unknown;
@@ -33,7 +62,7 @@ function makeSupabase(opts: MockOpts) {
 	// predicate assertion below cannot index it — which is how a chain-shape-only mock stays
 	// green through a predicate change in the first place.
 	const rpc = vi.fn(async (_fn: string, _args: Record<string, unknown>) => ({
-		data: opts.navData ?? null,
+		data: opts.navData === undefined ? rawComposition(0) : opts.navData,
 		error: opts.navError ?? null
 	}));
 	const or = vi.fn(async (_filter: string) => ({
@@ -49,15 +78,14 @@ function makeSupabase(opts: MockOpts) {
 
 describe('loadNetWorthView', () => {
 	it('happy path: numeric NAV + open accounts → number + presence some', async () => {
-		const { client, rpc, schema } = makeSupabase({ navData: 123456.78, count: 3 });
+		const { client, rpc, schema } = makeSupabase({ navData: rawComposition(123456.78), count: 3 });
 		const view = await loadNetWorthView(client, AS_OF);
 
 		expect(view).toEqual({ netWorth: 123456.78, accountPresence: 'some' });
-		// Called the INVOKER helper in the pfin schema with the as-of date + the current-state
-		// active-only scope (SELF-322 / ADR-039 — the 2-arg fn_compute_nav; p_active_only:true
-		// excludes soft-deleted accounts so the headline reconciles with §2.1.5 composition).
+		// Called the INVOKER composed-read helper in the pfin schema with the as-of date (SELF-268 /
+		// R3 rider 0 — no fn_compute_nav call at all).
 		expect(schema).toHaveBeenCalledWith('pfin');
-		expect(rpc).toHaveBeenCalledWith('fn_compute_nav', { p_as_of: AS_OF, p_active_only: true });
+		expect(rpc).toHaveBeenCalledWith('fn_nav_composition', { p_as_of: AS_OF });
 	});
 
 	// THE PREDICATE, PINNED — the assertion whose absence let this file survive a dropped column.
@@ -71,8 +99,8 @@ describe('loadNetWorthView', () => {
 	//   The cases below therefore test the DERIVATION — that the bound is the day AFTER asOf —
 	//   with expected values written out by hand. A test that recomputes the bound with the same
 	//   helper the production code uses would agree with it while both were wrong.
-	it('the count bound is the DAY AFTER asOf, at the SAME asOf as the NAV', async () => {
-		const { client, or, rpc } = makeSupabase({ navData: 1, count: 1 });
+	it('the count bound is the DAY AFTER asOf, at the SAME asOf as the composed NAV read', async () => {
+		const { client, or, rpc } = makeSupabase({ navData: rawComposition(1), count: 1 });
 		await loadNetWorthView(client, AS_OF); // 2026-07-20
 
 		// PostgREST cannot express `closed_at::date > p_as_of`, so the equivalent 059 rules
@@ -85,8 +113,8 @@ describe('loadNetWorthView', () => {
 		expect(orArg).not.toContain(`gt.${AS_OF}`);
 
 		// The NAV and the count must read ONE population: same date, and post-059 the same
-		// GRANULARITY. The count's bound is derived FROM the NAV's date, so read it back out of
-		// the recorded call rather than from a shared constant.
+		// GRANULARITY. The count's bound is derived FROM the composed-read's date, so read it back
+		// out of the recorded call rather than from a shared constant.
 		const navArgs = rpc.mock.calls[0][1];
 		expect(String(navArgs.p_as_of)).toBe(AS_OF);
 	});
@@ -101,51 +129,45 @@ describe('loadNetWorthView', () => {
 	];
 	for (const [asOf, expected] of boundaries) {
 		it(`count bound rolls ${asOf} -> ${expected}`, async () => {
-			const { client, or } = makeSupabase({ navData: 1, count: 1 });
+			const { client, or } = makeSupabase({ navData: rawComposition(1), count: 1 });
 			await loadNetWorthView(client, unsafeAsOfForTest(asOf));
 			expect(or).toHaveBeenCalledWith(`closed_at.is.null,closed_at.gte.${expected}`);
 		});
 	}
 
-	it('coerces a Postgres numeric returned as a string', async () => {
-		const { client } = makeSupabase({ navData: '987654.3210', count: 1 });
+	it('coerces a Postgres numeric returned as a string inside the jsonb payload', async () => {
+		const { client } = makeSupabase({ navData: rawComposition('987654.3210'), count: 1 });
 		const view = await loadNetWorthView(client, AS_OF);
 		expect(view.netWorth).toBe(987654.321);
 		expect(view.accountPresence).toBe('some');
 	});
 
 	it('$0 WITH accounts is a real zero, not the empty-state', async () => {
-		const { client } = makeSupabase({ navData: 0, count: 2 });
+		const { client } = makeSupabase({ navData: rawComposition(0), count: 2 });
 		const view = await loadNetWorthView(client, AS_OF);
 		expect(view).toEqual({ netWorth: 0, accountPresence: 'some' });
 	});
 
 	it('zero accounts → presence none (empty-state), even though NAV computes 0', async () => {
-		const { client } = makeSupabase({ navData: 0, count: 0 });
+		const { client } = makeSupabase({ navData: rawComposition(0), count: 0 });
 		const view = await loadNetWorthView(client, AS_OF);
 		expect(view).toEqual({ netWorth: 0, accountPresence: 'none' });
 	});
 
 	it('negative net worth passes through (liabilities > assets)', async () => {
-		const { client } = makeSupabase({ navData: -5000, count: 1 });
+		const { client } = makeSupabase({ navData: rawComposition(-5000), count: 1 });
 		const view = await loadNetWorthView(client, AS_OF);
 		expect(view.netWorth).toBe(-5000);
 	});
 
-	it('NULL NAV (no priced positions) → 0, not null', async () => {
-		const { client } = makeSupabase({ navData: null, count: 1 });
-		const view = await loadNetWorthView(client, AS_OF);
-		expect(view.netWorth).toBe(0);
-	});
-
-	it('compute error → netWorth null (degrade), account presence still read', async () => {
+	it('compute error (fn_nav_composition RPC failure) → netWorth null (degrade), account presence still read', async () => {
 		const { client } = makeSupabase({ navError: { message: 'permission denied' }, count: 2 });
 		const view = await loadNetWorthView(client, AS_OF);
 		expect(view).toEqual({ netWorth: null, accountPresence: 'some' });
 	});
 
 	it('non-finite coercion (NaN) → null, never a poisoned render', async () => {
-		const { client } = makeSupabase({ navData: 'not-a-number', count: 1 });
+		const { client } = makeSupabase({ navData: rawComposition('not-a-number'), count: 1 });
 		const view = await loadNetWorthView(client, AS_OF);
 		expect(view.netWorth).toBeNull();
 	});
@@ -170,7 +192,7 @@ describe('loadNetWorthView', () => {
 	// The expectation is not flipped, it is REPLACED: the third state did not exist before, so
 	// there is no old assertion that could have been "corrected" into this one.
 	it('count error → presence UNKNOWN, never none — and the NAV survives it', async () => {
-		const { client } = makeSupabase({ navData: 100, countError: { message: 'boom' } });
+		const { client } = makeSupabase({ navData: rawComposition(100), countError: { message: 'boom' } });
 		const view = await loadNetWorthView(client, AS_OF);
 
 		expect(view.accountPresence).toBe('unknown');
@@ -179,7 +201,7 @@ describe('loadNetWorthView', () => {
 	});
 
 	it("'unknown' is not falsy-equivalent to 'none' — the property the boolean could not hold", async () => {
-		const { client } = makeSupabase({ navData: 0, countError: { message: 'boom' } });
+		const { client } = makeSupabase({ navData: rawComposition(0), countError: { message: 'boom' } });
 		const view = await loadNetWorthView(client, AS_OF);
 
 		// The regression this file exists to prevent: a failed count reading as "no accounts" and
@@ -193,8 +215,37 @@ describe('loadNetWorthView', () => {
 	it('a zero count is still none, not unknown — the error branch must not over-claim', async () => {
 		// The mirror-image failure: resolving the error case first is right, but it must not
 		// swallow a legitimate zero. 'none' is a MEASUREMENT and must survive.
-		const { client } = makeSupabase({ navData: 0, count: 0 });
+		const { client } = makeSupabase({ navData: rawComposition(0), count: 0 });
 		const view = await loadNetWorthView(client, AS_OF);
 		expect(view.accountPresence).toBe('none');
+	});
+
+	// ── `precomputedComposition` 3rd param (SELF-268 / R3 rider 0) ────────────────────────────
+	describe('precomputedComposition — the shared-single-RPC-call path', () => {
+		it('an already-fetched composition is used DIRECTLY — fn_nav_composition is NEVER called', async () => {
+			const { client, rpc } = makeSupabase({ navError: { message: 'would fail if called' }, count: 1 });
+			const view = await loadNetWorthView(client, AS_OF, rawComposition(42_000));
+
+			expect(view.netWorth).toBe(42_000);
+			expect(rpc).not.toHaveBeenCalled();
+		});
+
+		it('an explicit `null` (caller already tried fetchNavComposition and it failed) degrades to null — no retry RPC', async () => {
+			const { client, rpc } = makeSupabase({ navData: rawComposition(999), count: 1 }); // would succeed if retried
+			const view = await loadNetWorthView(client, AS_OF, null);
+
+			expect(view.netWorth).toBeNull();
+			expect(rpc).not.toHaveBeenCalled();
+			// accountPresence is unaffected — it is an independent read, not sourced from composition.
+			expect(view.accountPresence).toBe('some');
+		});
+
+		it('omitting the 3rd argument entirely still self-fetches (back-compat default; e.g. allocation/+page.server.ts)', async () => {
+			const { client, rpc } = makeSupabase({ navData: rawComposition(7_500), count: 1 });
+			const view = await loadNetWorthView(client, AS_OF);
+
+			expect(view.netWorth).toBe(7_500);
+			expect(rpc).toHaveBeenCalledWith('fn_nav_composition', { p_as_of: AS_OF });
+		});
 	});
 });
