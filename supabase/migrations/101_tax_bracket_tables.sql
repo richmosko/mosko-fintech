@@ -432,7 +432,7 @@
 --       tax_bracket_schedule_tax_year_check. 1913 is the first US federal
 --       income-tax year, so the bound refuses a transposed or zero year while
 --       refusing no real one; the smallint's own ceiling carries the upper end.
---     schedule_label text NOT NULL, CHECK (length between 1 and 200) — named
+--     schedule_label text NOT NULL, CHECK (length between 1 and 500) — named
 --       tax_bracket_schedule_schedule_label_check. The schedule's OWN
 --       statement of the assumptions its numbers rest on: the filing status
 --       they were entered for, the basis year of the published figures, and any
@@ -546,7 +546,7 @@ create table if not exists pfin.tax_bracket_schedule (
   schedule_type           pfin.tax_schedule_type_enum not null,
   schedule_label          text not null
                             constraint tax_bracket_schedule_schedule_label_check
-                            check (length(schedule_label) between 1 and 200),
+                            check (length(schedule_label) between 1 and 500),
   standard_deduction      numeric(20, 4) not null
                             check (standard_deduction >= 0
                                    and standard_deduction <> 'NaN'::numeric),
@@ -634,11 +634,11 @@ comment on column pfin.tax_bracket_schedule.schedule_label is
   'tax-liability payload — so a user re-entering a schedule under a different '
   'filing status states that in the same edit that changes the numbers. Any '
   'writer that creates a schedule MUST supply one; a user MAY then overwrite '
-  'it. NOT NULL with CHECK (length(schedule_label) between 1 and 200), named '
+  'it. NOT NULL with CHECK (length(schedule_label) between 1 and 500), named '
   'tax_bracket_schedule_schedule_label_check: a schedule whose assumptions go '
   'unstated is the condition this column exists to prevent, so the empty string '
-  'is refused rather than admitted as a blank, and the upper bound keeps this a '
-  'caption rather than a document. ⚠ THE LABEL AND THE ROWS ARE NOT CONSTRAINED '
+  'is refused rather than admitted as a blank; the upper bound admits up to 500 '
+  'characters — a caption WITH ITS SOURCING, not a paragraph. ⚠ THE LABEL AND THE ROWS ARE NOT CONSTRAINED '
   'TO AGREE, and no fence is owed that would make them: the label is a '
   'user-authored statement about the rows, and a reader MUST NOT take it as a '
   'system-verified description of them.';
