@@ -437,3 +437,88 @@ coverage of anything present.
 **To team-lead** — F-3 and F-4 are carry-forward conditions on **SELF-262**, not on this branch.
 They must land as acceptance criteria on that issue before its Income reader is built, or they will
 be discovered on a tax table.
+
+---
+
+## Re-review — **GREEN** at `71012ff` (2026-09-04)
+
+**The AMBER condition A-1 is DISCHARGED.** Diffs only since 4ee2a10; four files moved
+(`DECISIONS.md`, `100`'s migration, `100`'s battery, and this record merged in unchanged —
+md5 `27339b51d09161fa5b66bb158b40caa2` byte-identical as merged).
+
+**A-1 — cleared.** BLOCK D (D1–D5) reads `pfin.posting_prototype_default` and
+`pfin.taxonomy_default` directly, no fixture and no replay. `plan()` arithmetic re-derived:
+BF-PRE1 (1) + BF1–8 (8) + D1–5 (5) + FS1–2 (2) + IDEM1–6 (6) + COM1–4 (4) + ISO-PRE (1) + ISO1–5 (5)
++ VOC1–2 (2) = **34**, matching `select plan(34)`. The property BF/IDEM lacked is now present and I
+verified it holds by construction: **D1, D2 and D4 fail CLOSED on an absent row** — a scalar
+subquery over a missing key returns NULL and pgTAP's `ok(NULL)` fails, and `array_agg` over an empty
+set returns NULL which cannot equal `array['Cash/T-Bill']`. A `(cat, sub_cat)` that resolves to
+nothing now reds instead of passing silently, which was the whole finding.
+
+**D3's expected `25` re-derived independently rather than taken from the leg.** `041:275–312` seeds
+36 asset rows and **zero** of them carry `true` or any `tax_character` (measured, both directions);
+`077:171` and `080:149` each seed `false, null`. So the pre-`100` count of `tax_relevant = true` on
+`pfin.taxonomy_default` is 0, `100` statement (3) corrects 25, and the table-wide count is **25** —
+not a figure that happens to match a fixture.
+
+**D5 is a CONTROL leg, not A-1 coverage, and QA's framing of it is exactly right.** It could not red
+under inversion #1 because `Real Estate` was never in statement (3)'s VALUES list, so striking that
+statement cannot move it. It is not a leg that *cannot* fail — a future delta wrongly marking a Real
+Estate row reds it — it is a standing guard of the same class as `(VOC2)` (F-9). A-1 is discharged
+by **D1–D4**; D5 is additional.
+
+**The migration↔battery binding line is accurate.** The battery pins blob md5
+`47acfcb1c3d5d629d4e07c47682d7a81` at `a94d50d`; I re-hashed the **committed blob** at `a94d50d`
+**and** at the tip `71012ff` — both match, and the migration is unchanged across that range. D1's
+asserted `notes` literal is byte-identical to the migration's own statement (1) / (2) value.
+
+**F-1 — applied, and the FOUR-location scope is the correct one. Do NOT narrow it to two.**
+Answering the question directly: the two additional sites carried the same false attribution and
+would have been left live. The file-summary line read *"Discharges ADR-062 Decision 3's hard
+precondition"*; the AC-5 body read *"The V1.4 inventory session is that enumeration"* — each asserts
+the delegated session as the discharging actor, which is the exact claim F-1 exists to correct.
+Architect's expansion is a correct application of the finding, not scope creep.
+
+**F-2 — applied.** M-6 recorded as RETRACTED and not discharged; F-6b re-filed as discharged in
+full **on a different axis** from AC-5's, with the retraction's own line quoted byte-exact
+(*"is_tax_payment is discharged; tax_relevant / tax_character are not."*).
+
+**F-4 sub-note — applied.** The ⚠ CLASS-SCOPE THE READ paragraph is now on both
+`posting_prototype.tax_relevant` and `posting_prototype_default.tax_relevant`, and I identity-
+compared the two: **byte-identical, one distinct string**. The sentence is true of the default table
+— `Trade / STC` (`041:345`) and `Trade / BTC` (`041:347`) are seeded `tax_relevant = true,
+tax_character = null` and live on the posting pair post-`084`. `(COM4)` still holds over the
+lengthened comment: it contains `NOT MARKED` and does not contain `found not tax-relevant`
+(measured against the assembled comment body, not the source lines).
+
+**Only executable change since 4ee2a10** is the six-line CLASS-SCOPE string addition inside an
+existing `comment on column`. No statement, guard, value, grant, policy, trigger or function moved
+— enumerated, not assumed, by filtering the diff to non-`--` lines. The battery header's
+characterization of `a94d50d` as a text-only fix is accurate and names the comment addition rather
+than hiding it under "comment-only".
+
+**Ledgers re-checked over the delta.** §10 catalogued-instance ledger **UNCHANGED** — ADR-011
+Decision 4 re-read verbatim and live at `71012ff`; three axes clean (nothing added, removed,
+reordered or renumbered; no layer re-attributed; Path B preserved, no count introduced). The
+`DECISIONS.md` change is confined to ADR-062 Amendment 1 and touches no §10 text. **ADR-011
+Decision 3 family +0** — `a94d50d` adds, alters and drops no column; **#18 still unallocated**.
+SECURITY DEFINER allowlist untouched. No CI fence, `secrets-manifest.yml`, `TenantBoundConnection`,
+pgsodium or PDF-worker change. The §10 catalogued set and the CI-fenced set remain **different
+sets** and are still not reconciled.
+
+### One note, non-blocking — and it is my own text that caused it
+
+**N-1 (note, owner Architect, one-line move).** My F-1 replacement text was spliced in verbatim, and
+the splice left the original trailing parenthetical attached to the wrong sentence. ADR-062
+Amendment 1 now ends: *"…the F/CTO ruling exists only in Linear and is not recoverable from the tree
+(see `100`'s header for the named residual: the two Sub-Cats that genuinely are tax payments are
+`Transfer`-class…)."* That parenthetical documents the **`is_tax_payment` scope residual**, not the
+Linear-recoverability point it now hangs off. **The defect is in the text I supplied** — I wrote a
+replacement clause without stating where the surviving parenthetical should reattach, which is the
+predictable failure of handing over verbatim text that ends mid-sentence. Fix: move the parenthetical
+to directly follow *"so `100` changes no `is_tax_payment` value"*. No factual claim is wrong; a
+reader can misparse which residual is named. Not a merge blocker.
+
+**Verdict: GREEN at `71012ff`.** No veto, no flag, no blocking condition. F-3 and F-4 (main body)
+remain carry-forward acceptance criteria on **SELF-262** — unchanged by this branch and not
+dischargeable on it.
