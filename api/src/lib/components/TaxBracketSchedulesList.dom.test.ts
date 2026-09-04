@@ -37,6 +37,7 @@ type ScheduleRecord = {
 	standard_deduction: number;
 	tax_balance_prior_year: number | null;
 	rows: { bracket_floor: number; bracket_rate: number }[];
+	is_seed_template?: boolean;
 };
 
 type Jurisdiction = {
@@ -358,5 +359,64 @@ describe('TaxBracketSchedulesList — basis editor remounts on a schedule change
 			{ bracket_floor: 0, bracket_rate: 0.11 },
 			{ bracket_floor: 10412, bracket_rate: 0.13 }
 		]);
+	});
+});
+
+describe('TaxBracketSchedulesList — E38 (QA live-walk DEFECT 2): seed-template schedules never offer delete', () => {
+	it('renders the "cannot be deleted" note (not a delete control) on the seed-template schedule, while the OTHER schedule of the same type still offers delete', () => {
+		const jurisdictions: Jurisdiction[] = [
+			{
+				schedule_type: 'federal_ordinary',
+				schedules: [
+					makeSchedule({ id: 1, schedule_type: 'federal_ordinary', tax_year: 2026, is_seed_template: true }),
+					makeSchedule({
+						id: 9,
+						schedule_type: 'federal_ordinary',
+						tax_year: 2024,
+						schedule_label: 'Old 2024',
+						is_seed_template: false
+					})
+				],
+				current_year_present: true,
+				basis_year: 2026
+			},
+			...threeCurrentJurisdictions().slice(1)
+		];
+		const { getByRole, getByText, queryByRole } = render(TaxBracketSchedulesList, {
+			props: { jurisdictions, currentTaxYear: CURRENT_TAX_YEAR }
+		});
+		const section = getByRole('region', { name: 'Federal — Ordinary Income' });
+
+		// The 2026 basis IS the seed template — note, no delete.
+		expect(
+			within(section).getByText('Provisioned template schedule — edit it; it cannot be deleted.')
+		).toBeTruthy();
+		expect(within(section).queryByRole('button', { name: /^Delete .*2026/ })).toBeNull();
+
+		// The 2024 prior schedule is NOT a seed template, and the jurisdiction holds 2 schedules
+		// — E35(b)'s count check passes, so delete is offered on THIS one.
+		expect(getByRole('button', { name: /^Delete .*2024/ })).toBeTruthy();
+	});
+
+	it('a jurisdiction holding ONLY a seed-template schedule shows the note and no delete control at all', () => {
+		const jurisdictions: Jurisdiction[] = [
+			{
+				schedule_type: 'federal_ordinary',
+				schedules: [
+					makeSchedule({ id: 1, schedule_type: 'federal_ordinary', tax_year: 2026, is_seed_template: true })
+				],
+				current_year_present: true,
+				basis_year: 2026
+			},
+			...threeCurrentJurisdictions().slice(1)
+		];
+		const { getByRole, getByText } = render(TaxBracketSchedulesList, {
+			props: { jurisdictions, currentTaxYear: CURRENT_TAX_YEAR }
+		});
+		const section = getByRole('region', { name: 'Federal — Ordinary Income' });
+		expect(
+			within(section).getByText('Provisioned template schedule — edit it; it cannot be deleted.')
+		).toBeTruthy();
+		expect(within(section).queryByRole('button', { name: /^Delete /i })).toBeNull();
 	});
 });
