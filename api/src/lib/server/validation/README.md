@@ -44,6 +44,7 @@ site can't invent a shape inline that drifts from the table it's validating agai
 | `sanitizeCurrencyAmount`  | `numeric(20,4)`, no range check              | SELF-201 — `pfin.account` / `pfin.account_trans`   |
 | `sanitizePercent`         | `numeric(5,2)`, `CHECK (0 <= x <= 100)`      | SELF-233 — `pfin.planning_target.target_percent`   |
 | `sanitizeQuantity`        | `numeric(28,8)`, no range check              | SELF-325 — `pfin.account_trans.quantity` (088)     |
+| `sanitizeFractionRate`    | `numeric(12,8)`, `CHECK (0 <= x <= 1)` (fraction)  | SELF-259 — `pfin.tax_bracket_row.bracket_rate` (101) |
 
 **Adding a numeric consumer (e.g. V1.4 tax-bracket amounts, RT-24):**
 
