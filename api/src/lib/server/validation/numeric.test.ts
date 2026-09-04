@@ -147,37 +147,41 @@ describe('sanitizePercent — numeric(5,2) CHECK (0..100), 074 shape', () => {
 	});
 });
 
-describe('sanitizeFractionRate — PROPOSED numeric(?,4) CHECK (0..1), SELF-259 tax_bracket_row.bracket_rate shape (unconfirmed against migration 101)', () => {
+describe('sanitizeFractionRate — numeric(12,8) CHECK (0..1), SELF-259 tax_bracket_row.bracket_rate shape (migration 101 @ 5f69249)', () => {
 	it('accepts an in-range fraction', () => {
 		expect(sanitizeFractionRate('0.22')).toEqual({ ok: true, value: 0.22 });
 	});
 
 	it('accepts the boundaries', () => {
 		expect(sanitizeFractionRate('0')).toEqual({ ok: true, value: 0 });
-		expect(sanitizeFractionRate('0.0000')).toEqual({ ok: true, value: 0 });
+		expect(sanitizeFractionRate('0.00000000')).toEqual({ ok: true, value: 0 });
 		expect(sanitizeFractionRate('1')).toEqual({ ok: true, value: 1 });
-		expect(sanitizeFractionRate('1.0000')).toEqual({ ok: true, value: 1 });
+		expect(sanitizeFractionRate('1.00000000')).toEqual({ ok: true, value: 1 });
+	});
+
+	it('accepts up to 8 decimal places (the typmod scale)', () => {
+		expect(sanitizeFractionRate('0.12345678')).toEqual({ ok: true, value: 0.12345678 });
 	});
 
 	it('rejects a negative rate (digit-shape valid, range invalid)', () => {
 		expect(sanitizeFractionRate('-0.1')).toEqual({ ok: false, reason: 'Enter a value of at least 0.' });
 	});
 
-	it('rejects > 1 even when digit-shape-valid (single-int-digit values above 1)', () => {
+	it('rejects > 1 even when digit-shape-valid (the typmod is deliberately looser than the [0,1] domain, migration 101\'s own reason: so an out-of-range value falls through to THIS check\'s clear message rather than a numeric-overflow error)', () => {
 		expect(sanitizeFractionRate('9')).toEqual({ ok: false, reason: 'Enter a value of at most 1.' });
 		expect(sanitizeFractionRate('1.01')).toEqual({ ok: false, reason: 'Enter a value of at most 1.' });
 	});
 
-	it('rejects a percent-unit value ("22" instead of "0.22") — the shape itself is the unit fence here: nothing in [0,1] needs 2+ integer digits, so a percent-scale input fails outright rather than merely out-of-range', () => {
-		expect(sanitizeFractionRate('22').ok).toBe(false);
+	it('rejects a percent-unit value ("22" instead of "0.22") via the RANGE check, not the shape check — mirrors the DB\'s own design: the typmod (4 int digits) lets "22" coerce, and the >1 CHECK is what explains the rejection', () => {
+		expect(sanitizeFractionRate('22')).toEqual({ ok: false, reason: 'Enter a value of at most 1.' });
 	});
 
-	it('rejects 5+ decimal places (proposed scale)', () => {
-		expect(sanitizeFractionRate('0.22222')).toEqual({ ok: false, reason: 'At most 4 decimal places.' });
+	it('rejects 9+ decimal places (numeric(12,8) scale)', () => {
+		expect(sanitizeFractionRate('0.123456789')).toEqual({ ok: false, reason: 'At most 8 decimal places.' });
 	});
 
-	it('rejects 2+ integer digits (proposed precision, independent of the 0..1 range)', () => {
-		const r = sanitizeFractionRate('10.0000');
+	it('rejects 5+ integer digits (numeric(12,8) precision: 12 - 8 = 4 max)', () => {
+		const r = sanitizeFractionRate('10000.00000000');
 		expect(r.ok).toBe(false);
 	});
 });

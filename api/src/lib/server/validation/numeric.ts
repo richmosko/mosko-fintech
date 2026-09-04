@@ -44,14 +44,20 @@ const PERCENT_MAX_DECIMAL_PLACES = 2;
 const PERCENT_MIN = 0;
 const PERCENT_MAX = 100;
 
-/** Max integer digits/decimal places for the PROPOSED `pfin.tax_bracket_row.bracket_rate`
- *  shape (SELF-259 / R4 rider 4 / Sec M-7) — a FRACTION unit (0.22, never 22), two-sided
- *  CHECK [0, 1] per R4 rider 8 item (ii). ⚠ `102`/migration-101's DDL has not landed as of this
- *  file's authorship (Architect owns it in parallel, feature/self-259) — this shape is a
- *  Backend PROPOSAL to reconcile against the pushed precision/scale once known, not a
- *  transcription of ratified DDL. Re-read the migration before trusting these constants. */
-const FRACTION_RATE_MAX_INT_DIGITS = 1;
-const FRACTION_RATE_MAX_DECIMAL_PLACES = 4;
+/** `pfin.tax_bracket_row.bracket_rate` shape — CONFIRMED against migration 101
+ *  (`supabase/migrations/101_tax_bracket_tables.sql`, landed at `5f69249`, SELF-259): a FRACTION
+ *  unit (0.22, never 22), `numeric(12,8)` with `CHECK (bracket_rate >= 0 and bracket_rate <= 1
+ *  and bracket_rate <> 'NaN'::numeric)`. Mirrors `PERCENT_MAX_INT_DIGITS` above: the typmod's 4
+ *  integer digits are DELIBERATELY looser than the [0,1] domain needs (101's own column comment
+ *  — "a typmod deliberately looser than the domain needs so that a mis-typed 22 coerces and is
+ *  refused by the domain CHECK, which can explain itself, rather than by a numeric-overflow
+ *  error, which cannot") — this sanitizer mirrors that split the same way `sanitizePercent`
+ *  mirrors 074's typmod-vs-CHECK split: the shape bound (maxIntDigits) is the TYPMOD's capacity,
+ *  the min/max bound is the CHECK's domain, and a shape-valid-but-out-of-range input (e.g. "22")
+ *  falls through to the range check for the clearer "at most 1" message rather than a generic
+ *  shape-rejection. */
+const FRACTION_RATE_MAX_INT_DIGITS = 4;
+const FRACTION_RATE_MAX_DECIMAL_PLACES = 8;
 const FRACTION_RATE_MIN = 0;
 const FRACTION_RATE_MAX = 1;
 
@@ -203,10 +209,12 @@ export function sanitizeQuantity(raw: unknown): SanitizeResult {
 }
 
 /**
- * Validate a user-supplied tax-bracket marginal-rate input against the battery, PROPOSED shape
- * for `pfin.tax_bracket_row.bracket_rate` (SELF-259; not yet DDL-confirmed — see the shape
- * constants' comment above). FRACTION unit per team-lead ruling / Sec M-7 (0.22, never 22):
- * two-sided [0, 1] range, same six adversarial categories as the other exports.
+ * Validate a user-supplied tax-bracket marginal-rate input against the battery, shaped to
+ * `pfin.tax_bracket_row.bracket_rate`'s own DDL (SELF-259, migration 101 @ `5f69249`):
+ * `numeric(12,8)`, `CHECK (0 <= rate <= 1 and rate <> 'NaN')`. FRACTION unit (0.22, never 22),
+ * ruled at the migration for the estimated-tax arithmetic's own reason (a fraction multiplies
+ * directly; a percent needs a /100 at every call site). Same six adversarial categories as the
+ * other exports.
  */
 export function sanitizeFractionRate(raw: unknown): SanitizeResult {
 	return sanitizeDecimal(raw, {
