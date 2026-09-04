@@ -46,7 +46,16 @@
 --       a distinct, hence totally ordered, set; a floor-ordering leg could
 --       never fire — E6, team-lead ruling under delegation, 2026-09-03).
 --       SECURITY INVOKER, set search_path = ''. Its sufficiency rests on
---       #18: strike the tenant fence and this one narrows silently.
+--       #18: strike the tenant fence and this one narrows silently. Gained a
+--       `for update` lock on the parent schedule row as its FIRST statement
+--       after the schedule resolves (Sec F-1 option B, GREEN re-review
+--       2026-09-04, 6b3aa61) — pinned below at (SF-L1)/(SF-L2), the second
+--       load-bearing on ORDER, not merely presence. Its THIRD raise (the
+--       unresolved-parent path, the observer for #18's absence) is
+--       UNTESTABLE in pgTAP: reaching it needs the matched-tenant FK inert
+--       (session_replication_role = replica, a superuser-only GUC) or the FK
+--       itself struck, and 054's own battery already declines to assert
+--       under that GUC — recorded here rather than left silent (Sec R-1).
 --   - trigger tax_bracket_schedule_set_updated_at -> fn_refresh_updated_at
 --       (001 DEFINER allowlist entry), PARENT ONLY.
 --   - pfin.fn_tax_bracket_schedule_replace_all(...) — ADDED at fcd8e98/
@@ -153,12 +162,17 @@
 --   follow-up briefing (its 5-item list, 11-15 — the paired control on 11,
 --   updated_at on 13, the tax_year=1900 leg on 14, the FOR UPDATE catalog pin
 --   + recorded-not-asserted race modes on 15, and the prior-row-set-intact
---   proof on 12). Verified against a scratch DB cloned via
+--   proof on 12). FURTHER EXTENDED at Sec's GREEN re-review flag R-1
+--   (feature/self-259-sec, 6b3aa61) to pin the set fence's OWN parent-row
+--   lock — both its presence (SF-L1) and, the load-bearing half, its ORDER
+--   ahead of the set read (SF-L2) — since (RA10) pinned the FOR UPDATE lock
+--   only on the replace-all function and left the set fence's own lock
+--   unwatched. Verified against a scratch DB cloned via
 --   scripts/db-template-clone.sh from `pfin_tmpl` (rebuilt through 101 at
 --   a2498ea) via `pg_prove` (never bare `psql` — a plan under-run exits 0
 --   there). `supabase db reset` is mechanically banned and was not used;
 --   F/CTO's local dev DB was not touched.
---   plan(91): 8 structural policy (S1-S8, tenant/aal2 split per table,
+--   plan(93): 8 structural policy (S1-S8, tenant/aal2 split per table,
 --   USING/WITH CHECK halves per 090's S6a/b masking lesson) + 5 grants
 --   (GR1-GR5: anon zero both tables, service_role zero both tables,
 --   authenticated full CRUD per table x2, anon behavioral throw) + 1
@@ -166,9 +180,11 @@
 --   (CAT1-CAT5: both triggers' deferrable flags, the enum's 3 labels, both
 --   unique keys) + 1 updated_at refresh (UPD1) + 4 two-tenant read
 --   isolation (R1-R4) + 6 cross-tenant write (W1-W6) + 3 D3 #18 adversarial
---   (D0-D2, RLS-exempt writer via service_role) + 10 deferred set-fence
+--   (D0-D2, RLS-exempt writer via service_role) + 12 deferred set-fence
 --   (SF-M1/M2/M3a/M3b rate monotonicity, SF-Z1/Z2/Z3/Z4 zero-floor,
---   SF-E1/E2 empty-schedule) + 8 CHECK constraint (CHK1-CHK8: NaN x3,
+--   SF-E1/E2 empty-schedule, SF-L1/L2 the row-fence's own parent-row lock
+--   presence + ordering-before-the-set-read, Sec R-1) + 8 CHECK constraint
+--   (CHK1-CHK8: NaN x3,
 --   Infinity x3, rate=22 rejected, rate=0.22 control) + 8 aal2 backstop on
 --   schedule (AAL-S, mirrors 090 M1-M8) + 8 aal2 backstop on row (AAL-R,
 --   incl. the investigated INSERT shadow) + 1 cross-tenant-at-aal2 (AAL-X,
@@ -180,7 +196,7 @@
 --   empty-clears effect, RA9 grant structural, RA10 the FOR UPDATE catalog
 --   pin, RA-TY1 the tax_year>=1913 CHECK by name, RA11a-RA11d the deferred
 --   fence surviving a function boundary plus the prior-row-set-intact proof)
---   = 91.
+--   = 93.
 -- =====================================================================
 
 begin;
@@ -188,7 +204,7 @@ begin;
 -- shared verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(91);
+select plan(93);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
@@ -617,6 +633,36 @@ select lives_ok(
 );
 set constraints all deferred;
 select set_config('role', 'postgres', true);
+
+-- --- SF-L: THE SET FENCE'S OWN PARENT-ROW LOCK (Sec R-1, GREEN re-review
+--   2026-09-04) — fn_tax_bracket_row_schedule_invariants gained a `for
+--   update` lock on the parent schedule row as its FIRST statement, but
+--   until now this battery pinned `for update` only on the replace-all
+--   function (RA10); a reader comparing the two would reasonably conclude
+--   the set fence carries no lock at all. Both legs are CATALOG PINS, not
+--   behavioral (pgTAP cannot hold two concurrent sessions) — same posture
+--   as (RA10): presence and effect are different claims, and only presence
+--   is checkable here.
+select ok(
+  (select lower(pg_get_functiondef(p.oid)) ~ 'for update'
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'pfin' and p.proname = 'fn_tax_bracket_row_schedule_invariants'),
+  '(SF-L1) CATALOG PIN: fn_tax_bracket_row_schedule_invariants''s body contains a FOR UPDATE lock (pg_get_functiondef, a real catalog read) — like RA10, this pin evidences PRESENCE, never EFFECT'
+);
+select ok(
+  (
+    with body as (
+      select lower(pg_get_functiondef(p.oid)) as src
+        from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'pfin' and p.proname = 'fn_tax_bracket_row_schedule_invariants'
+    )
+    select position('for update' in src) > 0
+       and position('count(*)' in src) > 0
+       and position('for update' in src) < position('count(*)' in src)
+      from body
+  ),
+  '(SF-L2) LOAD-BEARING, NOT MERE PRESENCE: the FOR UPDATE lock''s position in the function body PRECEDES the position of the set read it must precede (`count(*)`, the schedule''s row-count read) — the function''s own header states this lock "must be the FIRST statement after the schedule is resolved", and an edit that moved the lock AFTER the read would kill this control while every existing leg in this file (SF-M/SF-Z/SF-E, all behavioral, none of which can observe statement ORDER) stayed green'
+);
 
 -- =====================================================================
 -- BLOCK CHK (CHECK constraints) — against sched_a's real fixture row/schedule
