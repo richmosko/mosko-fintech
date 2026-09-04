@@ -299,6 +299,50 @@ jobs:
         with:
           node-version: '20'
 
+      # PIN npm PAST THE RETIRED QUICK-AUDIT-ENDPOINT FALLBACK.
+      #
+      # MEASURED (run 33847804219, PR #606, "npm audit (fails on high or
+      # critical)"): the ROOT tree (package.json/package-lock.json — husky-only,
+      # devDependencies scope) failed with:
+      #   npm notice This endpoint is being retired. Use the bulk advisory
+      #     endpoint instead.
+      #   npm warn audit 400 Bad Request - POST .../-/npm/v1/security/audits/quick
+      #     {message: 'Invalid package tree, run npm install to rebuild your
+      #     package-lock.json'}
+      #   npm error audit endpoint returned an error
+      # in the SAME job step where api/'s audit (7 runtime + 7 dev deps) passed
+      # cleanly moments earlier. That ordering — a bulk-endpoint attempt that
+      # falls back to /audits/quick, which then 400s — is the exact shape of
+      # npm/cli's now-removed legacy-audit fallback path (npm/cli#7911, "fix!:
+      # remove old audit fallback request"), which is a BREAKING change first
+      # shipped in npm 11. `actions/setup-node@v4` with `node-version: '20'`
+      # installs the npm BUNDLED with Node 20 (npm 10.x per Node 20 LTS release
+      # notes) — i.e. the last major line that still falls back to
+      # `/audits/quick` when a bulk-advisory call errors. registry.npmjs.org
+      # scheduled that endpoint for full retirement after 2026-07-15; today
+      # (2026-09-04) it is fully retired and returns a blanket 400 "Invalid
+      # package tree" to ANY request it receives — including a well-formed one
+      # — rather than genuinely reporting this repo's lockfiles as malformed
+      # (root's and api's package-lock.json are both lockfileVersion 3 and both
+      # match their package.json; neither is stale).
+      #
+      # Pinning npm to a version past #7911 removes the dead fallback branch
+      # entirely: a bulk-advisory error is reported as a bulk-advisory error
+      # (still fail-closed — a genuine registry outage still fails this job),
+      # instead of being masked behind a fixed "run npm install" message from
+      # an endpoint that will reject that too. This does NOT touch
+      # `--audit-level=high`, the enumerator, or any per-directory scope — the
+      # fence catches exactly what it caught before, on a client that can
+      # still reach the registry's current API surface.
+      #
+      # ⚠ A 5xx (or a hang) from either audit endpoint after this pin is a
+      # REGISTRY-SIDE TRANSIENT (npm.js reported 503s on this same endpoint
+      # earlier the same day this was diagnosed) — re-run the job. It is not a
+      # dependency finding and not evidence this pin needs revisiting; treat it
+      # as a retry, not a signal.
+      - name: Pin npm past the retired quick-audit-endpoint fallback (npm/cli#7911)
+        run: npm install -g npm@12.0.2
+
       - name: npm audit (fails on high or critical)
         run: |
           set -euo pipefail
