@@ -12,7 +12,8 @@
 -- balance) and the child table pfin.tax_bracket_row (one row per bracket,
 -- carrying a lower-bound threshold and a marginal rate). Owner-only RLS on all
 -- four verbs on BOTH tables, each policy carrying the 025 aal2 step-up clause.
--- Authors TWO functions, both trigger fences, both SECURITY INVOKER.
+-- Authors THREE functions, all SECURITY INVOKER: two trigger fences and the
+-- replace-all write body fn_tax_bracket_schedule_replace_all.
 --
 -- ----------------------------------------------------------------------------
 -- THE GRAIN — R4 (Seam A: bracket-table storage grain + the Decision-3
@@ -231,23 +232,42 @@
 --   NULL is its unset. Here the row and its brackets are one replace-all unit.
 --
 -- ----------------------------------------------------------------------------
--- POSTURE RATIONALE — SECURITY INVOKER (default per ADR-011 Lock 11); NOT
---   SECURITY DEFINER. Both functions authored here are trigger fences that read
---   tenant-scoped pfin tables and need NO elevated privilege: the explicit
---   users_id equality in the #18 fence is authoritative regardless of what RLS
---   lets the caller see, and the set fence is deliberately RLS-composed (see
---   its sufficiency note above). The SECURITY DEFINER allowlist is UNCHANGED by
---   this migration — read ADR-011 Decision 9 live for its contents. Any DEFINER
---   proposal on this surface would route to Sec joint-review; none is made.
---   Both carry `set search_path = ''`, explicit VOLATILE, an explicit
+-- POSTURE RATIONALE — SECURITY INVOKER on ALL THREE functions (default per
+--   ADR-011 Lock 11); NOT SECURITY DEFINER, and the third one is the interesting
+--   case. The two TRIGGER FENCES read tenant-scoped pfin tables and need no
+--   elevated privilege: the explicit users_id equality in the #18 fence is
+--   authoritative regardless of what RLS lets the caller see, and the set fence
+--   is deliberately RLS-composed (see its sufficiency note above).
+--   ⚠ fn_tax_bracket_schedule_replace_all IS INVOKER TOO, AND THAT IS THE WHOLE
+--     DESIGN, NOT A DEFAULT LEFT UNEXAMINED. It is a directly-callable write
+--     body reached from the app, which is exactly the shape that usually
+--     acquires DEFINER. It must NOT: under INVOKER its very first statement —
+--     the FOR UPDATE lock — runs under the caller's own RLS, so another tenant's
+--     schedule_id resolves to ZERO ROWS and the function refuses. That refusal
+--     IS the tenant fence. Under DEFINER the same SELECT would find every
+--     tenant's row and the function would have to re-implement ownership
+--     checking by hand, replacing a fence the database applies with one a
+--     reviewer has to verify. The function also takes NO TENANT PARAMETER (R4
+--     rider 4; Sec D-2): users_id comes from auth.uid(), never from an argument,
+--     so there is nothing for a caller to forge.
+--   The SECURITY DEFINER allowlist is UNCHANGED by this migration — read
+--   ADR-011 Decision 9 live for its contents. Any DEFINER proposal on this
+--   surface would route to Sec joint-review; none is made.
+--   All three carry `set search_path = ''`, explicit VOLATILE, an explicit
 --   `revoke execute ... from public`, and a `comment on function`.
---   ⚠ NO `grant execute ... to authenticated` ON EITHER FUNCTION, and that is
---     deliberate, not an omission. PostgreSQL does not check EXECUTE privilege
---     on a trigger function when firing a trigger — it checks it only on a
---     direct call — so a grant would buy the fences nothing and would hand
---     `authenticated` a callable entry point that can only ever error outside
---     trigger context. AC 9 requires `revoke execute ... from public` BEFORE
---     ANY GRANT; there is no grant, and 074's fence sets the same precedent.
+--   ⚠ EXECUTE IS GRANTED TO `authenticated` ON THE REPLACE-ALL FUNCTION ONLY,
+--     and withheld from BOTH TRIGGER FENCES. The split is not stylistic.
+--     PostgreSQL does not check EXECUTE privilege on a trigger function when
+--     firing a trigger — only on a direct call — so a grant on a fence would buy
+--     it nothing and would hand `authenticated` a callable entry point that can
+--     only ever error outside trigger context (074's fence sets that precedent).
+--     The replace-all function is the opposite: a direct call IS its only use,
+--     so without the grant the surface does not work at all. AC 9's requirement
+--     is `revoke execute ... from public` BEFORE any grant, and that ordering is
+--     what the file does in all three cases.
+--     ⚠ For an INVOKER function EXECUTE is the weakest of the fences and RLS
+--     still stands behind it; this is NOT the DEFINER case where the ACL would
+--     be the entire perimeter.
 --
 -- ----------------------------------------------------------------------------
 -- aal2 STEP-UP BACKSTOP (ADR-029 / 025; C3 standing obligation; R4 rider 3).
@@ -273,6 +293,75 @@
 --   that at 074 on 2026-08-20; the reasoning is confirmed false, not merely
 --   unproven. ⚠ DELETE is load-bearing here rather than incidental — the
 --   replace-all path deletes the schedule's rows before re-inserting them.
+--
+-- ----------------------------------------------------------------------------
+-- THE REPLACE-ALL IS ONE FUNCTION, SERIALIZED BY A ROW LOCK — AND THE REASON IS
+--   A TRANSPORT LIMIT, NOT A PREFERENCE (execution-log E8, 2026-09-03).
+--   ADR-011 Decision 18 locks the schedule + its rows as a REPLACE-ALL UNDER
+--   SERIALIZABLE. That phrase names a guarantee, and on this transport the
+--   client cannot deliver it:
+--     - PostgREST runs EACH .from() / .rpc() call as its OWN transaction and
+--       cannot hold a client-side `BEGIN SERIALIZABLE` across several — the
+--       limit `045`'s header already records for the webhook-apply pair, which
+--       is why that surface also moved its atomic body into one function.
+--     - `SET TRANSACTION ISOLATION LEVEL` CANNOT be issued inside a function
+--       body: the calling statement has already taken its snapshot.
+--   So the atomic body is ONE plpgsql function whose body is one transaction,
+--   and the serialization comes from an explicit `FOR UPDATE` lock on the
+--   caller's own schedule row rather than from the isolation level.
+--
+--   ⚠ WHAT THE LOCK IS FOR — MEASURED AT AUTHORING, AND IT IS NOT THE FAILURE
+--     THE RULING ANTICIPATED. Execution-log E8 (2026-09-03) states the unlocked
+--     hazard as the schedule ending as **A ∪ B**, T2's DELETE having missed T1's
+--     freshly-inserted rows. That is the correct general account of a
+--     delete-then-insert race under READ COMMITTED, and on THIS pair it does not
+--     occur. The lock-struck body was run against a live two-session race at
+--     authoring and produced two DIFFERENT failures:
+--       (i) BOTH SETS NON-EMPTY -> T2 aborts with a DUPLICATE KEY violation on
+--           `tax_bracket_row_schedule_id_bracket_floor_key`. A ∪ B is
+--           UNREACHABLE here: leg A forces bracket_floor 0 into every non-empty
+--           schedule, so any two non-empty sets collide at 0, and the unique key
+--           turns the union into an error instead. T2's write is lost, and the
+--           error names a constraint that has nothing to do with the real cause.
+--      (ii) T2 SENDS AN EMPTY SET (clearing the schedule) -> no error at all,
+--           and the schedule is left holding T1's rows. A SILENT LOST UPDATE:
+--           the caller is told the clear succeeded and it did not. This is the
+--           worse of the two, because nothing surfaces.
+--     The FOR UPDATE removes both: T2 blocks until T1 commits, then its DELETE
+--     sees T1's rows and removes them, and its own set lands whole.
+--     ⚠ RECORDED THIS WAY DELIBERATELY. The lock is load-bearing either way and
+--     E8's ruling stands unchanged — but a header asserting a failure mode this
+--     schema cannot produce would send the paired battery hunting a union that
+--     never appears, and neither real failure would be covered. The two
+--     mechanisms are not interchangeable just because both argue for the lock.
+--   ⚠ THE LOCK IS ALSO THE TENANT FENCE, which is why it is the FIRST statement.
+--     It runs under the caller's own RLS (INVOKER), so another tenant's or an
+--     absent schedule_id resolves to ZERO ROWS and the function RAISES. It never
+--     creates a schedule: creation is an ordinary INSERT under RLS, and an empty
+--     schedule is legal here (see the set fence's empty-set note).
+--   ⚠ LOSING SIDE, named rather than omitted. True SERIALIZABLE would ALSO catch
+--     write skew across DIFFERENT schedules of one user. Nothing on this surface
+--     reads across schedules, so the lock's narrower guarantee covers every
+--     hazard the surface actually has — but it is narrower, and a future reader
+--     composing two schedules in one decision must re-open this. The rejected
+--     alternative was setting `default_transaction_isolation` on the PostgREST
+--     role: global, and untestable per surface.
+--   ⚠ THIS DOES NOT RETIRE THE SET FENCE. SERIALIZABLE never guaranteed
+--     monotonicity and neither does the lock (Sec D-5 / R4 rider 2): the lock
+--     orders the writers, the set fence judges what they wrote. Independent
+--     controls, and the deferred fence still fires at commit inside this body.
+--
+--   ⚠ `p_rows jsonb` IS A TRANSPORT PARAMETER AND IS NOT A BREACH OF DECISION
+--     18's FORWARD-COMPAT FENCE. That fence bars *"no JSONB blobs in the
+--     settings store"* — it governs STORAGE, and every value here lands in a
+--     typed column (`bracket_floor numeric`, `bracket_rate numeric`) with its
+--     own CHECKs. No JSONB is stored, no JSONB column exists on either table,
+--     and nothing reads settings back out of a document. Stated explicitly
+--     because a reader meeting `jsonb` in a Lock 14 surface should be able to
+--     resolve the apparent conflict here rather than having to relitigate it.
+--     The function validates the document's SHAPE precisely so that it cannot
+--     become a de-facto blob: exactly two numeric keys per element, nothing
+--     else admitted.
 --
 -- ----------------------------------------------------------------------------
 -- §10 3-AXIS CROSS-CHECK (Path B — reference ADR-011 Decision 4; the catalogued
@@ -352,6 +441,23 @@
 --     superseded. Grants: authenticated only; anon zero-grant; service_role
 --     ungranted (008 grants per table and establishes no default privileges, so
 --     this records that rather than effecting it).
+--
+--   pfin.fn_tax_bracket_schedule_replace_all(p_schedule_id bigint,
+--     p_tax_year smallint, p_schedule_type pfin.tax_schedule_type_enum,
+--     p_standard_deduction numeric, p_tax_balance_prior_year numeric,
+--     p_rows jsonb) returns void — the atomic replace-all write body.
+--     SECURITY INVOKER, set search_path = '', VOLATILE, EXECUTE revoked from
+--     PUBLIC and granted to authenticated. NO TENANT PARAMETER: users_id comes
+--     from auth.uid() (R4 rider 4; Sec D-2).
+--     Order is load-bearing: (1) FOR UPDATE lock on the caller's own schedule
+--     row — zero rows RAISES, and that refusal is the tenant fence; (2) validate
+--     p_rows' shape; (3) DELETE the schedule's rows; (4) INSERT the new set;
+--     (5) UPDATE the three scalars, which fires the updated_at trigger. The
+--     deferred set fence and the #18 matched-tenant fence fire at COMMIT, after
+--     the function returns.
+--     p_rows: a JSON ARRAY of OBJECTS each carrying EXACTLY the keys
+--     bracket_floor and bracket_rate, both JSON numbers. An empty array is
+--     legal and clears the schedule. Anything else RAISES.
 -- ============================================================================
 
 create schema if not exists pfin;
@@ -1018,3 +1124,179 @@ grant select, insert, update, delete on pfin.tax_bracket_row      to authenticat
 create trigger tax_bracket_schedule_set_updated_at
   before update on pfin.tax_bracket_schedule
   for each row execute function pfin.fn_refresh_updated_at();
+
+-- ============================================================================
+-- REPLACE-ALL WRITE BODY — pfin.fn_tax_bracket_schedule_replace_all
+--
+-- ADR-011 Decision 18 locks the schedule + its rows as a replace-all "under
+-- SERIALIZABLE". On this transport the client cannot deliver that isolation
+-- level (PostgREST runs each call as its own transaction; SET TRANSACTION
+-- cannot run inside a function body), so the guarantee is realized as THIS
+-- function — one plpgsql body, therefore one transaction — serialized by an
+-- explicit FOR UPDATE lock on the caller's own schedule row. See the header's
+-- transport-and-lock section for the failure the lock prevents (A ∪ B under
+-- READ COMMITTED), the losing side, and why this does not retire the set fence.
+--
+-- ⚠ THE FIRST STATEMENT IS BOTH THE LOCK AND THE TENANT FENCE. Under SECURITY
+--   INVOKER the SELECT ... FOR UPDATE runs with the caller's RLS, so another
+--   tenant's schedule_id — or an absent one — yields ZERO ROWS and raises. The
+--   function NEVER creates a schedule: creation is an ordinary INSERT under RLS.
+--   The two cases are deliberately NOT distinguished in the raise message: a
+--   caller must not be able to tell "someone else's schedule" from "no such
+--   schedule", or the error becomes an existence oracle over other tenants' ids.
+--
+-- ⚠ THE APP PRE-VALIDATES p_rows; THIS FUNCTION IS THE FENCE. The shape check
+--   below is not a duplicate of the app's Zod layer — it is the layer that still
+--   holds when a caller reaches PostgREST directly with their own JWT, which is
+--   the whole premise of the Lock 14 direct-DB-write surface. Exactly two keys,
+--   both JSON numbers, nothing else admitted.
+-- ============================================================================
+create or replace function pfin.fn_tax_bracket_schedule_replace_all(
+  p_schedule_id            bigint,
+  p_tax_year               smallint,
+  p_schedule_type          pfin.tax_schedule_type_enum,
+  p_standard_deduction     numeric,
+  p_tax_balance_prior_year numeric,
+  p_rows                   jsonb
+)
+returns void
+language plpgsql
+volatile
+security invoker
+set search_path = ''
+as $$
+declare
+  v_locked_id bigint;
+  v_elem      jsonb;
+  v_keys      text[];
+begin
+  -- (1) LOCK + TENANT FENCE. Under the caller's own RLS: another tenant's
+  -- schedule, or none, is zero rows. Deliberately one message for both cases.
+  select s.id
+    into v_locked_id
+    from pfin.tax_bracket_schedule s
+   where s.id = p_schedule_id
+     for update;
+
+  if not found then
+    raise exception
+      'tax bracket replace-all refused: schedule_id % is not a schedule this caller owns (SELF-259 replace-all; the caller''s own RLS is what resolves it, and this function never creates a schedule)',
+      p_schedule_id;
+  end if;
+
+  -- (2) SHAPE VALIDATION. The app pre-validates; this is the layer that holds
+  -- for a caller reaching PostgREST directly with their own JWT.
+  if p_rows is null or pg_catalog.jsonb_typeof(p_rows) <> 'array' then
+    raise exception
+      'tax bracket replace-all refused: p_rows must be a JSON array of bracket objects, got % (SELF-259 replace-all, p_rows shape)',
+      pg_catalog.coalesce(pg_catalog.jsonb_typeof(p_rows), 'null');
+  end if;
+
+  for v_elem in select value from pg_catalog.jsonb_array_elements(p_rows) loop
+    if pg_catalog.jsonb_typeof(v_elem) <> 'object' then
+      raise exception
+        'tax bracket replace-all refused: every p_rows element must be an object, got % (SELF-259 replace-all, p_rows shape)',
+        pg_catalog.jsonb_typeof(v_elem);
+    end if;
+
+    select pg_catalog.array_agg(k order by k)
+      into v_keys
+      from pg_catalog.jsonb_object_keys(v_elem) as k;
+
+    if v_keys is distinct from array['bracket_floor', 'bracket_rate']::text[] then
+      raise exception
+        'tax bracket replace-all refused: every p_rows element must carry EXACTLY the keys bracket_floor and bracket_rate, got % (SELF-259 replace-all, p_rows shape)',
+        v_keys;
+    end if;
+
+    if pg_catalog.jsonb_typeof(v_elem -> 'bracket_floor') <> 'number'
+       or pg_catalog.jsonb_typeof(v_elem -> 'bracket_rate') <> 'number' then
+      raise exception
+        'tax bracket replace-all refused: bracket_floor and bracket_rate must both be JSON numbers (a quoted numeric string is refused deliberately) (SELF-259 replace-all, p_rows shape)';
+    end if;
+  end loop;
+
+  -- (3) DELETE the schedule's existing rows. Safe to delete before inserting
+  -- because the lock above guarantees no concurrent writer is mid-replace.
+  delete from pfin.tax_bracket_row r
+   where r.schedule_id = p_schedule_id;
+
+  -- (4) INSERT the new set. users_id from auth.uid(), NEVER from a parameter —
+  -- there is no tenant parameter to forge (R4 rider 4). The #18 matched-tenant
+  -- fence still checks each row against the schedule's owner.
+  insert into pfin.tax_bracket_row (users_id, schedule_id, bracket_floor, bracket_rate)
+  select auth.uid(),
+         p_schedule_id,
+         (e.value ->> 'bracket_floor')::numeric,
+         (e.value ->> 'bracket_rate')::numeric
+    from pg_catalog.jsonb_array_elements(p_rows) as e;
+
+  -- (5) UPDATE the scalars. Fires tax_bracket_schedule_set_updated_at.
+  update pfin.tax_bracket_schedule s
+     set tax_year               = p_tax_year,
+         schedule_type          = p_schedule_type,
+         standard_deduction     = p_standard_deduction,
+         tax_balance_prior_year = p_tax_balance_prior_year
+   where s.id = p_schedule_id;
+
+  -- The deferred set fence (zero-floor + rate monotonicity) and the #18
+  -- matched-tenant fence fire at COMMIT, after this function returns. A caller
+  -- that gets no exception here has NOT yet been told the write is valid.
+  return;
+end;
+$$;
+
+revoke execute on function pfin.fn_tax_bracket_schedule_replace_all(
+  bigint, smallint, pfin.tax_schedule_type_enum, numeric, numeric, jsonb) from public;
+
+grant execute on function pfin.fn_tax_bracket_schedule_replace_all(
+  bigint, smallint, pfin.tax_schedule_type_enum, numeric, numeric, jsonb) to authenticated;
+
+comment on function pfin.fn_tax_bracket_schedule_replace_all(
+  bigint, smallint, pfin.tax_schedule_type_enum, numeric, numeric, jsonb) is
+  'Atomic replace-all write body for one pfin.tax_bracket_schedule and its '
+  'pfin.tax_bracket_row set (PRD §2.5.2; ADR-011 Decision 18 / Lock 14; '
+  'SELF-259). Decision 18 locks this write as replace-all UNDER SERIALIZABLE; '
+  'that isolation level is not reachable from this transport — PostgREST runs '
+  'each call as its own transaction and cannot hold a client-side BEGIN, and '
+  'SET TRANSACTION cannot be issued inside a function body because the calling '
+  'statement has already taken its snapshot — so the guarantee is realized as '
+  'this function (one plpgsql body, therefore one transaction) serialized by an '
+  'explicit FOR UPDATE lock on the caller''s own schedule row. WHAT THE LOCK '
+  'PREVENTS, MEASURED against a live two-session race with the lock struck at '
+  'this migration''s authoring: (i) when both callers send a non-empty set, the '
+  'second aborts with a duplicate-key violation on '
+  'tax_bracket_row_schedule_id_bracket_floor_key — the zero-floor set fence '
+  'forces bracket_floor 0 into every non-empty schedule, so two sets always '
+  'collide there and the second caller''s write is lost behind an error naming '
+  'a constraint unrelated to the real cause; and (ii) when the second caller '
+  'sends an EMPTY set to clear the schedule, there is no error at all and the '
+  'schedule is left holding the first caller''s rows — a silent lost update, '
+  'the worse case because nothing surfaces. A union of the two sets is NOT '
+  'reachable on this pair, and a reader expecting one will look for the wrong '
+  'symptom. ⚠ THE LOCK IS ALSO THE TENANT FENCE and is therefore the '
+  'FIRST statement: SECURITY INVOKER means the SELECT ... FOR UPDATE runs under '
+  'the caller''s own RLS, so another tenant''s schedule_id — or an absent one — '
+  'resolves to zero rows and raises. The two cases share one message '
+  'deliberately, so the error cannot be used as an existence oracle over other '
+  'tenants'' ids. This function NEVER creates a schedule; creation is an '
+  'ordinary INSERT under RLS, and an empty schedule is legal. TAKES NO TENANT '
+  'PARAMETER: users_id comes from auth.uid(), never from an argument, so there '
+  'is nothing for a caller to forge. p_rows is a JSON array of objects carrying '
+  'EXACTLY the keys bracket_floor and bracket_rate, both JSON numbers; an empty '
+  'array is legal and clears the schedule; anything else raises. ⚠ p_rows is a '
+  'TRANSPORT parameter and is NOT a breach of Decision 18''s no-JSONB-blobs '
+  'forward-compat fence, which governs STORAGE: every value lands in a typed '
+  'numeric column with its own CHECKs and no JSONB is stored anywhere on this '
+  'pair. ⚠ THE LOCK DOES NOT RETIRE THE SET FENCE and never could: it orders '
+  'the writers, while fn_tax_bracket_row_schedule_invariants judges what they '
+  'wrote (Sec D-5) — that deferred fence and the ADR-011 Decision 3 #18 '
+  'matched-tenant fence both fire at COMMIT, after this function returns, so a '
+  'caller that gets no exception from it has not yet been told the write is '
+  'valid. SECURITY INVOKER deliberately, not by default: under DEFINER the '
+  'first SELECT would see every tenant''s row and ownership would have to be '
+  're-implemented by hand, replacing a fence the database applies with one a '
+  'reviewer must verify. Adds no SECURITY DEFINER allowlist entry. '
+  'set search_path = ''''. EXECUTE revoked from PUBLIC, granted to '
+  'authenticated — a direct call is this function''s only use, unlike the two '
+  'trigger fences on this pair, which are granted to nobody.';
