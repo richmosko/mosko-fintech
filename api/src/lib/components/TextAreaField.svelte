@@ -17,6 +17,7 @@
 	let {
 		label,
 		name,
+		id,
 		value = $bindable(''),
 		required = false,
 		errors = [],
@@ -27,6 +28,10 @@
 	}: {
 		label: string;
 		name: string;
+		/** Overrides the derived `f-${name}` DOM id — see TextField.svelte's own note (SELF-265:
+		 *  several TaxBracketScheduleEditor instances on one page share a server-required
+		 *  `name` across different <form>s). */
+		id?: string;
 		value?: string;
 		required?: boolean;
 		errors?: string[];
@@ -36,7 +41,7 @@
 		rows?: number;
 	} = $props();
 
-	const fieldId = $derived(`f-${name}`);
+	const fieldId = $derived(id ?? `f-${name}`);
 	const errId = $derived(`${fieldId}-err`);
 	const hintId = $derived(`${fieldId}-hint`);
 

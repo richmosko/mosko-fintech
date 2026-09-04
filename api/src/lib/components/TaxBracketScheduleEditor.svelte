@@ -1,79 +1,83 @@
 <!--
 	TaxBracketScheduleEditor.svelte -- the per-schedule §2.5.2 tax-bracket editor (SELF-265).
-	Frontend-owned browser surface. Renders and replace-all-saves ONE
-	pfin.tax_bracket_schedule row plus its FULL pfin.tax_bracket_row set, against Backend's
-	landed write path (SELF-259, migration 101, feature/self-262 base -- read live, not the
-	dispatch brief's provisional `?/saveSchedule` form-action shape, which does not exist on the
-	tree: see the file-header note on the parent list component for the full reconciliation).
+	Frontend-owned browser surface. In `mode="edit"` replace-alls ONE EXISTING
+	pfin.tax_bracket_schedule row plus its FULL pfin.tax_bracket_row set; in `mode="create"` it
+	INSERTs a new schedule row (a jurisdiction's first schedule, or a new tax_year for one that
+	already has schedules) and then runs the same replace-all for its rows. Both modes post
+	against Backend's landed contract: `?/saveSchedule` / `?/createSchedule` form actions
+	(api/src/routes/settings/tax-brackets/+page.server.ts, feature/self-265-backend @ caebbec) —
+	real SvelteKit form actions, per api/CLAUDE.md's Frontend convention, not the fetch+JSON
+	carve-out an earlier revision of this file used before Backend's actions landed.
 
 	CONTRACT (props):
-	  schedule : {
-	    id: number; tax_year: number;
-	    schedule_type: 'federal_ordinary' | 'federal_lt_cg' | 'california_ordinary';
-	    schedule_label: string; standard_deduction: number;
-	    tax_balance_prior_year: number | null;
-	    rows: { bracket_floor: number; bracket_rate: number }[]; -- pre-sorted ascending by
-	      bracket_floor (the loader's job, not this component's).
-	  }
-	  READ VERBATIM from the settings/tax-brackets loader, which reads
-	  pfin.tax_bracket_schedule / pfin.tax_bracket_row directly (migration 101; SELF-259's
-	  own +server.ts ownership-read pattern) -- no Backend query module exists yet for this
-	  list shape (EXPECTED CONTRACT gap, flagged at hand-off), so the loader is this branch's
-	  own thin read, following the SELF-242/241/325 "+page.svelte ahead of Backend's loader"
-	  precedent one level up (a +page.server.ts loader ahead of a query module, not a
-	  component ahead of a loader -- the underlying tables + RLS + write endpoint are
-	  landed and confirmed against 101 and self259-sec-review.md).
+	  mode                     : 'edit' | 'create'
+	  scheduleType             : 'federal_ordinary' | 'federal_lt_cg' | 'california_ordinary'
+	  taxYear                  : the schedule's tax_year -- for 'edit' the existing row's own
+	                             year (read-only, posted as a hidden identity field the action's
+	                             own guard enforces); for 'create' the caller's chosen year
+	                             (TaxBracketSchedulesList.svelte fixes this to `currentTaxYear`
+	                             -- there is no UI to create an arbitrary past/future year).
+	  scheduleId               : required when mode === 'edit' -- the existing row's id.
+	  initialLabel / initialStandardDeduction / initialPriorYearBalance / initialRows :
+	                             the form's starting values. For 'edit' these are the existing
+	                             row's own values (READ VERBATIM from the loader). For 'create'
+	                             the CALLER decides what to prefill (TaxBracketSchedulesList.svelte
+	                             prefills from the jurisdiction's own basis-year schedule as a
+	                             starting TEMPLATE when one exists, per AC7's "seed is a template,
+	                             not a determination" posture generalized to a year-rollover
+	                             template).
+	  onSaved                  : optional callback fired after a successful submit (either mode)
+	                             -- TaxBracketSchedulesList.svelte uses this to collapse a
+	                             just-completed create panel.
 
-	WRITE PATH -- REAL, LANDED CONTRACT (not the dispatch brief's guess): POST
-	/api/settings/tax-brackets/{schedule_id}, replace-all, every scalar field REQUIRED on every
-	POST (101: "the schedule and its rows are replaced as ONE unit" -- there is no partial
-	UPSERT and therefore no dirty-diff-omit-untouched-fields shape the Planning/Cashflow editors
-	use; every Save sends the FULL current form state). `tax_year` / `schedule_type` are sent
-	back UNCHANGED as an identity guard the endpoint enforces (409 schedule_identity_mismatch on
-	a mismatch) -- this component never offers to edit them. WHY FETCH, NOT A FORM ACTION: same
-	carve-out PlanningTargetEditor / CashflowTargetEditor state -- the endpoint is a raw JSON
-	REST route (+server.ts), not a page form action, and there IS no `?/saveSchedule` action on
-	this tree to bind to.
+	FORM SHAPE -- HIDDEN IDENTITY FIELDS, VISIBLE DATA FIELDS NAMED TO MATCH THE ACTION'S OWN
+	FormData READ (parseReplaceFormData in +page.server.ts): `tax_year` / `schedule_type` are
+	hidden (never user-editable -- the action's schedule-identity guard refuses a mismatch rather
+	than silently repointing a schedule); `schedule_id` is hidden and edit-mode-only;
+	`schedule_label` / `standard_deduction` / `tax_balance_prior_year` are the VISIBLE fields'
+	own `name` attributes (the browser's native FormData collects them directly -- no manual
+	`formData.set()` needed for these, matching PurchaseEntryForm.svelte's own "declarative
+	hidden/named fields over imperative FormData mutation" idiom); `rows` is a hidden field
+	carrying the current row set as a JSON string (the same "no JSON-array-in-FormData
+	precedent existed, so this is the chosen shape" judgment call +page.server.ts's own header
+	names) -- ALWAYS the FRACTION-unit shape the shared schema expects, built by
+	`parsedRowsOrNull()` from the percent strings the row table actually edits.
 
-	PERCENT <-> FRACTION BOUNDARY (E1 / migration 101's ruling): `bracket_rate` is a FRACTION in
-	the DB (0.22, checked 0<=x<=1) -- this editor shows and edits PERCENT (22) because that is
-	how the IRS/FTB publish these tables and how a human types them, per 101's own recorded
-	rationale. The conversion happens at `sanitizeBracketRatePercent` / `fractionRateToPercentDisplay`
-	($lib/validation/numeric.ts) -- the ONLY place the boundary is crossed; every other function
-	in this file (courtesy row-ordering, the payload builder) operates on the FRACTION value.
+	Each visible <input>'s DOM `id` is namespaced per instance (`id={... }` override, added to
+	TextField.svelte / TextAreaField.svelte for this issue) because several editor instances on
+	one page share the SAME server-required `name` (e.g. every editor's deduction field is named
+	"standard_deduction") across DIFFERENT <form>s -- `name` uniqueness is scoped per-form, `id`
+	uniqueness is scoped to the whole document, and TextField previously derived one from the
+	other.
 
-	VALIDATION (Lock 14 mod #2, client mirror -- $lib/validation/numeric.ts +
-	$lib/validation/scheduleLabel.ts + $lib/validation/taxBracketRows.ts): the SAME shared
-	numeric battery the server enforces, shaped per-field to 101's own typmods, plus a courtesy
-	mirror of the write endpoint's own `precheckRowOrdering` (zero-floor + rate-monotonicity,
-	AC5 / R4 rider 8 item 5). ⚠ STATED PER Lock 14 mod #2's own posture: the DB's deferred
-	CONSTRAINT TRIGGER is the control; this is UX fast-feedback that can reject BEFORE a round
-	trip, never a claim that passing it guarantees the DB will accept the write.
+	PERCENT <-> FRACTION BOUNDARY (E1 / migration 101's ruling) and the numeric/label/row-ordering
+	client mirrors are UNCHANGED from this file's earlier fetch+JSON revision -- see
+	$lib/validation/numeric.ts, scheduleLabel.ts, taxBracketRows.ts. STANDARD DEDUCTION ZERO
+	("this schedule takes no deduction", AC2) and the FIRST-ROW-FLOOR-STRUCTURALLY-FIXED-AT-0
+	judgment call are likewise unchanged -- see their own inline comments below.
 
-	STANDARD DEDUCTION ZERO ("this schedule takes no deduction", AC2): `federal_lt_cg` is seeded
-	with `standard_deduction = 0` meaning "this schedule takes no deduction" (SELF-260 AC1), a
-	stated fact rather than an unset value -- the column is NOT NULL, so there is no separate
-	"blank" representation to render here at all. This editor renders an explanatory caption on
-	that field WHENEVER `schedule_type === 'federal_lt_cg'`, regardless of the current entered
-	value, framing a `0` there as the schedule's known nature rather than an accidental omission.
-
-	FIRST-ROW FLOOR IS STRUCTURALLY FIXED AT 0, NOT MERELY VALIDATED (judgment call, flagged at
-	hand-off): 101's own zero-floor leg makes any non-zero first floor a guaranteed rejection --
-	rather than only catching that after a courtesy-check message or a round trip, the first
-	row's floor field renders disabled at "0" and is excluded from user editing entirely. Every
-	OTHER row's floor is a free currency field. This makes the wrong choice unreachable for the
-	one row where "wrong" is unconditional, the same "structural picker over validation-only
-	rejection" pattern SELF-325's account-type field used (Architect-praised precedent).
+	SUBMIT-RESULT HANDLING: this component reads the `result` its OWN `use:enhance` SubmitFunction
+	callback receives, never the page's shared `form` prop -- with several forms on one page,
+	SvelteKit's page-level `form` prop is ambiguous about which form's result it holds, but each
+	form's own enhance callback is guaranteed to fire only for that form's own submission
+	(PurchaseEntryForm.svelte's own pattern). ⚠ TEST-HARNESS LIMIT, stated rather than silently
+	worked around: `tests/stubs/app-forms.ts`'s `enhance` stub deliberately does NOT invoke this
+	returned callback (no fetch/network pipeline in that stub) -- so this file's own dom test
+	cannot exercise server-error rendering after a real submit, only the pre-submit
+	client-validation gate and the raw FormData a submit would carry. Same scope boundary
+	PurchaseEntryForm.dom.test.ts already accepts for the same reason.
 
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5). No staleness-marker here --
 	a tax-bracket schedule is user-authored settings data, not a derived aggregation over account
 	balances (same ADR-013 D1 exemption Planning/CashflowTargetEditor's own headers state).
 -->
 <script lang="ts">
-	import { invalidateAll } from '$app/navigation';
+	import { enhance } from '$app/forms';
+	import type { SubmitFunction } from '@sveltejs/kit';
 	import TextField from '$lib/components/TextField.svelte';
 	import TextAreaField from '$lib/components/TextAreaField.svelte';
 	import Button from '$lib/components/Button.svelte';
+	import DeleteScheduleControl from '$lib/components/DeleteScheduleControl.svelte';
 	import {
 		sanitizeCurrencyAmount,
 		sanitizeBracketRatePercent,
@@ -83,20 +87,35 @@
 	import { precheckRowOrdering, type BracketRowInput } from '$lib/validation/taxBracketRows';
 
 	type ScheduleType = 'federal_ordinary' | 'federal_lt_cg' | 'california_ordinary';
-
 	type BracketRow = { bracket_floor: number; bracket_rate: number };
 
-	type Schedule = {
-		id: number;
-		tax_year: number;
-		schedule_type: ScheduleType;
-		schedule_label: string;
-		standard_deduction: number;
-		tax_balance_prior_year: number | null;
-		rows: BracketRow[];
-	};
+	let {
+		mode,
+		scheduleType,
+		taxYear,
+		scheduleId,
+		initialLabel,
+		initialStandardDeduction,
+		initialPriorYearBalance,
+		initialRows,
+		onSaved
+	}: {
+		mode: 'edit' | 'create';
+		scheduleType: ScheduleType;
+		taxYear: number;
+		scheduleId?: number;
+		initialLabel: string;
+		initialStandardDeduction: number;
+		initialPriorYearBalance: number | null;
+		initialRows: BracketRow[];
+		onSaved?: () => void;
+	} = $props();
 
-	let { schedule }: { schedule: Schedule } = $props();
+	// Namespaces every DOM id on this instance -- see file header's id-collision note. A
+	// one-time capture from props is deliberate (same `state_referenced_locally` shape
+	// Planning/CashflowTargetEditor's own baselines already document): an instance's identity
+	// (which schedule/year/mode it edits) does not change over its lifetime.
+	const instanceKey = `${scheduleType}-${mode}-${taxYear}`;
 
 	// Working row shape: STRING fields, one per input, the rate held as the PERCENT string the
 	// field displays (never the fraction) -- see file header's percent/fraction boundary note.
@@ -109,12 +128,10 @@
 		}));
 	}
 
-	let label = $state(schedule.schedule_label);
-	let standardDeduction = $state(String(schedule.standard_deduction));
-	let priorYearBalance = $state(
-		schedule.tax_balance_prior_year === null ? '' : String(schedule.tax_balance_prior_year)
-	);
-	let rows = $state<RowDraft[]>(toDraftRows(schedule.rows));
+	let label = $state(initialLabel);
+	let standardDeduction = $state(String(initialStandardDeduction));
+	let priorYearBalance = $state(initialPriorYearBalance === null ? '' : String(initialPriorYearBalance));
+	let rows = $state<RowDraft[]>(toDraftRows(initialRows.length > 0 ? initialRows : [{ bracket_floor: 0, bracket_rate: 0 }]));
 
 	let serverFieldErrors = $state<Record<string, string[]>>({});
 	let formError = $state('');
@@ -126,7 +143,7 @@
 	}
 
 	function removeRow(index: number) {
-		if (rows.length <= 1) return; // the endpoint requires at least one row (AC2/101)
+		if (rows.length <= 1) return; // the action requires at least one row (AC2/101)
 		rows.splice(index, 1);
 	}
 
@@ -144,7 +161,8 @@
 
 	/** `tax_balance_prior_year` is nullable and carries no sign bound (101: "a prior-year
 	 *  balance can be an overpayment and is then legitimately negative") -- an empty field is
-	 *  the unset representation, never an error. */
+	 *  the unset representation, never an error. The action's own FormData parsing already
+	 *  translates an empty string to `null` server-side, so this field's `name` posts as-is. */
 	function priorYearBalanceError(): string | null {
 		if (priorYearBalance === '') return null;
 		const r = sanitizeCurrencyAmount(priorYearBalance);
@@ -152,7 +170,7 @@
 	}
 
 	function rowFloorError(index: number): string | null {
-		if (index === 0) return null; // structurally fixed at 0 -- see file header
+		if (index === 0) return null; // structurally fixed at 0 -- see below
 		const r = sanitizeCurrencyAmount(rows[index].floor);
 		if (!r.ok) return r.reason;
 		if (r.value < 0) return 'Enter a non-negative amount.';
@@ -164,9 +182,10 @@
 		return r.ok ? null : r.reason;
 	}
 
-	/** Parses every row into the FRACTION-unit shape the endpoint expects, or null if any cell
+	/** Parses every row into the FRACTION-unit shape the action expects, or null if any cell
 	 *  fails its own per-field check (caller shows those per-field messages; this is only the
-	 *  gate for whether the courtesy row-ordering check and the submit payload can run at all). */
+	 *  gate for whether the courtesy row-ordering check and the hidden `rows` field can build a
+	 *  real payload at all). */
 	function parsedRowsOrNull(): BracketRowInput[] | null {
 		const out: BracketRowInput[] = [];
 		for (let i = 0; i < rows.length; i++) {
@@ -186,6 +205,10 @@
 		return result.ok ? null : result.reason;
 	});
 
+	// Hidden `rows` field -- always the FRACTION shape, '[]' when the draft can't parse (Save is
+	// disabled in that case; this is a defensive fallback, never the guard itself).
+	const rowsJson = $derived(JSON.stringify(parsedRowsOrNull() ?? []));
+
 	const anyFieldError = $derived(
 		labelError() !== null ||
 			standardDeductionError() !== null ||
@@ -201,96 +224,59 @@
 		california_ordinary: 'California (FTB) — Ordinary Income'
 	};
 
-	async function extractError(res: Response): Promise<{ formError: string; fieldErrors?: Record<string, string[]> }> {
-		let body: unknown = null;
-		try {
-			body = await res.json();
-		} catch {
-			/* fall through to generic message */
-		}
-		const b = body as { error?: string; fieldErrors?: Record<string, string[]>; reason?: string } | null;
-		if (res.status === 401) return { formError: 'Please sign in again.' };
-		if (res.status === 403 && b?.error === 'step_up_required') {
-			return { formError: "Verify it's you and try again." };
-		}
-		if (res.status === 404) return { formError: 'This schedule could not be found. Refresh and try again.' };
-		if (res.status === 409 && b?.error === 'schedule_identity_mismatch') {
-			return { formError: 'This schedule’s year or type changed elsewhere. Refresh and try again.' };
-		}
-		if (res.status === 409 && b?.error === 'schedule_conflict') {
-			return { formError: 'A schedule for this year and type already exists.' };
-		}
-		if (res.status === 409 && b?.error === 'concurrent_update_retry') {
-			return { formError: 'Someone else is editing this schedule right now. Try saving again.' };
-		}
-		if (res.status === 400 && b?.error === 'invalid_row_order') {
-			return { formError: b.reason ?? 'The bracket rows are not in a valid order.' };
-		}
-		if (res.status === 400 && b?.fieldErrors) {
-			return { formError: 'Some changes could not be saved — see the fields below.', fieldErrors: b.fieldErrors };
-		}
-		if (b?.error === 'invalid_schedule') return { formError: 'This schedule could not be saved.' };
-		return { formError: 'Something went wrong saving your changes. Please try again.' };
-	}
+	const actionPath = mode === 'edit' ? '?/saveSchedule' : '?/createSchedule';
+	const submitButtonLabel = mode === 'edit' ? 'Save changes' : 'Create schedule';
 
-	async function handleSave(event: SubmitEvent) {
-		event.preventDefault();
-		if (saveDisabled) return;
+	type ActionSuccess = { action: 'saveSchedule' | 'createSchedule'; ok: true; scheduleId: number };
+	type ActionFailure = {
+		action: 'saveSchedule' | 'createSchedule';
+		scheduleId?: number;
+		errors: Record<string, string[]>;
+	};
 
-		const parsedRows = parsedRowsOrNull();
-		const labelResult = sanitizeScheduleLabel(label);
-		const deductionResult = sanitizeCurrencyAmount(standardDeduction);
-		const priorYearResult = priorYearBalance === '' ? null : sanitizeCurrencyAmount(priorYearBalance);
-		if (
-			parsedRows === null ||
-			!labelResult.ok ||
-			!deductionResult.ok ||
-			(priorYearResult !== null && !priorYearResult.ok)
-		) {
-			return; // saveDisabled already guards this; defensive no-op
+	// This component reads its OWN enhance callback's `result`, never the page's shared `form`
+	// prop -- see file header for why. Not invoked under the test stub (see file header) — a
+	// documented, accepted gap this file shares with PurchaseEntryForm.dom.test.ts.
+	const handleSubmit: SubmitFunction = ({ cancel }) => {
+		if (saveDisabled) {
+			cancel();
+			return;
 		}
-
 		formError = '';
 		serverFieldErrors = {};
 		statusMessage = '';
 		saving = true;
 
-		try {
-			const res = await fetch(`/api/settings/tax-brackets/${schedule.id}`, {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({
-					tax_year: schedule.tax_year,
-					schedule_type: schedule.schedule_type,
-					schedule_label: labelResult.value,
-					standard_deduction: deductionResult.value,
-					tax_balance_prior_year: priorYearResult === null ? null : priorYearResult.value,
-					rows: parsedRows
-				})
-			});
-
-			if (!res.ok) {
-				const { formError: fe, fieldErrors } = await extractError(res);
-				formError = fe;
-				if (fieldErrors) serverFieldErrors = fieldErrors;
-				saving = false;
+		return async ({ result, update }) => {
+			saving = false;
+			if (result.type === 'success') {
+				const data = result.data as ActionSuccess | undefined;
+				if (data?.ok) {
+					statusMessage = mode === 'edit' ? 'Changes saved.' : 'Schedule created.';
+					await update();
+					onSaved?.();
+					return;
+				}
+			}
+			if (result.type === 'failure') {
+				const data = result.data as ActionFailure | undefined;
+				serverFieldErrors = data?.errors ?? {};
+				formError =
+					serverFieldErrors._form?.join(' ') ?? 'Some changes could not be saved — see the fields below.';
+				await update({ reset: false });
 				return;
 			}
-
-			statusMessage = 'Changes saved.';
-			saving = false;
-			await invalidateAll();
-		} catch {
+			// result.type === 'error' (thrown exception) or an unrecognized shape.
 			formError = 'Something went wrong saving your changes. Please try again.';
-			saving = false;
-		}
-	}
+			await update({ reset: false });
+		};
+	};
 </script>
 
-<form class="editor" onsubmit={handleSave}>
+<form class="editor" method="POST" action={actionPath} use:enhance={handleSubmit}>
 	<div class="editor-head">
-		<h3 class="schedule-title">{SCHEDULE_TYPE_LABELS[schedule.schedule_type]}</h3>
-		<span class="tax-year">Tax year {schedule.tax_year}</span>
+		<h3 class="schedule-title">{SCHEDULE_TYPE_LABELS[scheduleType]}</h3>
+		<span class="tax-year">Tax year {taxYear}</span>
 	</div>
 
 	{#if formError}
@@ -300,9 +286,17 @@
 		<p class="sr-only" role="status">{statusMessage}</p>
 	{/if}
 
+	<input type="hidden" name="tax_year" value={taxYear} />
+	<input type="hidden" name="schedule_type" value={scheduleType} />
+	{#if mode === 'edit'}
+		<input type="hidden" name="schedule_id" value={scheduleId} />
+	{/if}
+	<input type="hidden" name="rows" value={rowsJson} />
+
 	<TextAreaField
 		label="Schedule label"
-		name={`schedule-label-${schedule.id}`}
+		name="schedule_label"
+		id={`f-schedule-label-${instanceKey}`}
 		bind:value={label}
 		required
 		rows={3}
@@ -314,12 +308,13 @@
 	<div class="scalar-row">
 		<TextField
 			label="Standard deduction"
-			name={`std-deduction-${schedule.id}`}
+			name="standard_deduction"
+			id={`f-std-deduction-${instanceKey}`}
 			bind:value={standardDeduction}
 			inputmode="decimal"
 			numeric
 			placeholder="0.00"
-			hint={schedule.schedule_type === 'federal_lt_cg'
+			hint={scheduleType === 'federal_lt_cg'
 				? 'Federal long-term capital gains takes no separate standard deduction — 0 is a stated fact for this schedule, not a blank.'
 				: undefined}
 			errors={[
@@ -329,7 +324,8 @@
 		/>
 		<TextField
 			label="Prior-year tax balance"
-			name={`prior-balance-${schedule.id}`}
+			name="tax_balance_prior_year"
+			id={`f-prior-balance-${instanceKey}`}
 			bind:value={priorYearBalance}
 			inputmode="decimal"
 			numeric
@@ -370,7 +366,7 @@
 							<td>
 								{#if i === 0}
 									<div class="fixed-floor-field">
-										<span class="fixed-floor-label" id={`fixed-floor-label-${schedule.id}`}
+										<span class="fixed-floor-label" id={`fixed-floor-label-${instanceKey}`}
 											>Bracket 1 floor</span
 										>
 										<input
@@ -379,13 +375,13 @@
 											inputmode="decimal"
 											value="0"
 											disabled
-											aria-labelledby={`fixed-floor-label-${schedule.id}`}
+											aria-labelledby={`fixed-floor-label-${instanceKey}`}
 										/>
 									</div>
 								{:else}
 									<TextField
 										label={`Bracket ${i + 1} floor`}
-										name={`row-floor-${schedule.id}-${i}`}
+										name={`row-floor-${instanceKey}-${i}`}
 										bind:value={row.floor}
 										inputmode="decimal"
 										numeric
@@ -397,7 +393,7 @@
 							<td>
 								<TextField
 									label={`Bracket ${i + 1} rate`}
-									name={`row-rate-${schedule.id}-${i}`}
+									name={`row-rate-${instanceKey}-${i}`}
 									bind:value={row.ratePercent}
 									inputmode="decimal"
 									numeric
@@ -424,8 +420,14 @@
 	</div>
 
 	<div class="actions">
+		{#if mode === 'edit' && scheduleId !== undefined}
+			<DeleteScheduleControl
+				{scheduleId}
+				itemLabel={`${SCHEDULE_TYPE_LABELS[scheduleType]} (tax year ${taxYear})`}
+			/>
+		{/if}
 		<Button variant="primary" type="submit" loading={saving} disabled={saveDisabled}>
-			Save changes
+			{submitButtonLabel}
 		</Button>
 	</div>
 </form>
@@ -528,7 +530,9 @@
 	}
 	.actions {
 		display: flex;
-		justify-content: flex-end;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--space-3);
 	}
 	.banner {
 		margin: 0;

@@ -1,9 +1,10 @@
 <!--
 	settings/tax-brackets/+page.svelte -- the §2.5.2 tax-bracket schedules editor page
 	(SELF-265 AC1/AC6/AC7). Frontend-owned browser surface. Consumes
-	settings/tax-brackets/+page.server.ts's `data` (PageData); authors NO server logic. This is
-	the stable route SELF-266's "Edit tax brackets" affordance targets (AC6) — no inline edit on
-	the §2.5.3 tables themselves (ADR-013 P5).
+	settings/tax-brackets/+page.server.ts's `data` (PageData) -- Backend's `jurisdictions` +
+	`currentTaxYear` (feature/self-265-backend @ caebbec), read verbatim; authors NO server
+	logic. This is the stable route SELF-266's "Edit tax brackets" affordance targets (AC6) — no
+	inline edit on the §2.5.3 tables themselves (ADR-013 P5).
 
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5).
 -->
@@ -27,7 +28,7 @@
 		</p>
 	</header>
 
-	<TaxBracketSchedulesList schedules={data.schedules} />
+	<TaxBracketSchedulesList jurisdictions={data.jurisdictions} currentTaxYear={data.currentTaxYear} />
 </main>
 
 <style>

@@ -1,51 +1,47 @@
 <!--
 	TaxBracketSchedulesList.svelte -- top-level list for the §2.5.2 /settings/tax-brackets
-	editor (SELF-265 AC1). Frontend-owned browser surface. Groups the loader's flat `schedules`
-	array into the three named jurisdictions/types (PRD §2.5.2 (λ) Federal ordinary + Federal LT
-	CG, (κ) CA FTB ordinary), in that fixed order, and renders one TaxBracketScheduleEditor per
-	present schedule.
+	editor (SELF-265 AC1/AC7/AC7a). Frontend-owned browser surface. Consumes the loader's
+	`jurisdictions` array VERBATIM (queries/taxBracketSchedules.ts, Backend-owned,
+	feature/self-265-backend @ caebbec) -- always exactly three entries, in
+	federal_ordinary / federal_lt_cg / california_ordinary order, each carrying every schedule
+	of that type plus `current_year_present` + `basis_year` computed server-side.
 
-	RECONCILIATION NOTE (read before trusting the dispatch brief's provisional contract): the
-	brief handed to this issue described SvelteKit form actions (`?/saveSchedule`,
-	`?/createSchedule`, `?/deleteSchedule`) as Backend's in-flight shape. Neither exists on the
-	tree this branch is built from (`feature/self-262`, which already carries SELF-259's LANDED
-	work) -- confirmed by reading migration 101 and
-	api/src/routes/api/settings/tax-brackets/[schedule_id]/+server.ts directly, not by trusting
-	the brief. The REAL, landed contract is a single REST endpoint,
-	POST /api/settings/tax-brackets/{schedule_id}, replace-all, on an EXISTING schedule row only
-	-- its own file header states plainly that the RPC "NEVER creates a schedule... a first-time
-	INSERT is a separate, out-of-scope write path" (SELF-260's seed/backfill function is the only
-	current first-row writer). There is therefore NO create or delete affordance in this
-	component or its editor: every schedule this page can show already exists (seeded at signup
-	by `fn_provision_tax_brackets`, backfilled for existing users at migration 103), and the write
-	surface this milestone shipped only supports editing one.
+	RECONCILIATION NOTE, KEPT FOR THE RECORD (this component's second full contract): an earlier
+	revision of this file was built against a provisional, guessed contract before Backend's
+	actions landed, then reconciled here against the REAL, landed shape once
+	`feature/self-265-backend @ caebbec` existed (`jurisdictions[]` with `current_year_present` /
+	`basis_year`, not the earlier `schedules[]` + `basis` guess; real `?/saveSchedule` /
+	`?/createSchedule` / `?/deleteSchedule` form actions, which now DO exist, superseding the
+	prior "no create/delete affordance" scoping this component carried before those actions
+	shipped).
 
-	MISSING-SCHEDULE RENDERING (AC7a's "never coalesced, never silent" posture, applied to the
-	one case this component can actually observe: a TYPE absent from the loader's array
-	entirely -- not a null field inside an existing row, which the editor itself handles).
-	Per the V1.4 execution log's E22 ruling, the READ surfaces (§2.5.3, SELF-262/266) already
-	define the current-year-else-latest-prior-year fallback and render the basis year rather
-	than ever going silent or `$0`; that logic and its "add the next year's schedule" CTA belong
-	to SELF-266's read surface, which routes its "Edit tax brackets" affordance HERE (AC6). This
-	editor has no create endpoint to offer, so an absent type renders an INFORMATIONAL note
-	stating the gap honestly rather than a non-functional "Add schedule" button -- never a
-	silently-skipped jurisdiction and never a fabricated affordance this milestone's backend
-	cannot honor.
-
-	CONTRACT (props): `schedules` -- the loader's already-deduplicated array (at most one row per
-	`schedule_type`, the latest `tax_year` on file for that type -- the loader's job, per its own
-	header, not re-derived here).
+	PER-JURISDICTION LAYOUT (a judgment call, flagged at hand-off -- the ACs fix the three
+	groups and the AC7a CTA, not this exact composition):
+	  - The BASIS schedule (the one at `basis_year` -- current year if present, else the latest
+	    prior year on file, per E22) renders as the primary, always-visible editor when one
+	    exists.
+	  - When `current_year_present` is false, an AC7a/E22-styled informational note renders
+	    ABOVE the basis editor (or in its place, when no basis exists at all), naming the exact
+	    gap honestly, plus an "Add {currentTaxYear} schedule" toggle that reveals a `mode="create"`
+	    editor prefilled from the basis schedule as a starting TEMPLATE (or blank, one zero-floor
+	    row, when no basis exists) -- this is what actually answers the CTA now that
+	    `?/createSchedule` exists, unlike this component's prior revision.
+	  - Any OTHER schedule on file for the type (an old year superseded by a newer one) renders
+	    in a compact "Other years on file" list with its own inline-confirm delete control,
+	    never a full second editor -- keeps the common case (one schedule per type) visually
+	    dominant while still exposing the real delete capability for a stray old year.
 
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5).
 -->
 <script lang="ts">
 	import TaxBracketScheduleEditor from '$lib/components/TaxBracketScheduleEditor.svelte';
+	import DeleteScheduleControl from '$lib/components/DeleteScheduleControl.svelte';
+	import Button from '$lib/components/Button.svelte';
 
 	type ScheduleType = 'federal_ordinary' | 'federal_lt_cg' | 'california_ordinary';
-
 	type BracketRow = { bracket_floor: number; bracket_rate: number };
 
-	type Schedule = {
+	type ScheduleRecord = {
 		id: number;
 		tax_year: number;
 		schedule_type: ScheduleType;
@@ -55,10 +51,14 @@
 		rows: BracketRow[];
 	};
 
-	let { schedules }: { schedules: Schedule[] } = $props();
+	type Jurisdiction = {
+		schedule_type: ScheduleType;
+		schedules: ScheduleRecord[];
+		current_year_present: boolean;
+		basis_year: number | null;
+	};
 
-	// PRD §2.5.2 order (λ) Federal ordinary, Federal LT CG, then (κ) CA FTB ordinary (AC1).
-	const TYPE_ORDER: ScheduleType[] = ['federal_ordinary', 'federal_lt_cg', 'california_ordinary'];
+	let { jurisdictions, currentTaxYear }: { jurisdictions: Jurisdiction[]; currentTaxYear: number } = $props();
 
 	const TYPE_LABELS: Record<ScheduleType, string> = {
 		federal_ordinary: 'Federal — Ordinary Income',
@@ -66,32 +66,105 @@
 		california_ordinary: 'California (FTB) — Ordinary Income'
 	};
 
-	const groups = $derived(
-		TYPE_ORDER.map((type) => ({
-			type,
-			label: TYPE_LABELS[type],
-			schedule: schedules.find((s) => s.schedule_type === type) ?? null
-		}))
+	function basisSchedule(j: Jurisdiction): ScheduleRecord | null {
+		if (j.basis_year === null) return null;
+		return j.schedules.find((s) => s.tax_year === j.basis_year) ?? null;
+	}
+
+	function otherSchedules(j: Jurisdiction): ScheduleRecord[] {
+		const basis = basisSchedule(j);
+		return j.schedules.filter((s) => s.id !== basis?.id);
+	}
+
+	// Auto-open the create panel only when there's truly nothing else to show for this
+	// jurisdiction (no basis at all); otherwise it opens on click. One-time capture from the
+	// loader's own initial props -- same deliberate `state_referenced_locally` shape
+	// Planning/CashflowTargetEditor's own baselines document (a fresh load() after a save
+	// re-derives this from the NEW `jurisdictions` prop via a full component remount at the
+	// page level, which is what SvelteKit's `invalidateAll`-on-`update()` produces here).
+	let openCreate = $state<Record<ScheduleType, boolean>>(
+		Object.fromEntries(jurisdictions.map((j) => [j.schedule_type, j.basis_year === null])) as Record<
+			ScheduleType,
+			boolean
+		>
 	);
 </script>
 
 <div class="list">
-	{#each groups as group (group.type)}
-		{#if group.schedule}
-			<TaxBracketScheduleEditor schedule={group.schedule} />
-		{:else}
-			<div class="missing-note" role="status">
-				<span class="missing-dot" aria-hidden="true"></span>
-				<div class="missing-text">
-					<p class="missing-title">No {group.label} schedule on file yet.</p>
-					<p class="missing-detail">
-						Estimated-tax figures for this jurisdiction will read as unavailable until a schedule
-						is entered. New schedules are provisioned by the tax-year rollover process — none is
-						editable here until it exists.
-					</p>
+	{#each jurisdictions as j (j.schedule_type)}
+		{@const basis = basisSchedule(j)}
+		{@const others = otherSchedules(j)}
+		<section class="jurisdiction" aria-labelledby={`jur-${j.schedule_type}`}>
+			<h2 id={`jur-${j.schedule_type}`} class="jurisdiction-title">{TYPE_LABELS[j.schedule_type]}</h2>
+
+			{#if !j.current_year_present}
+				<div class="missing-note" role="status">
+					<span class="missing-dot" aria-hidden="true"></span>
+					<div class="missing-text">
+						{#if basis}
+							<p class="missing-title">
+								{TYPE_LABELS[j.schedule_type]} for {currentTaxYear} hasn't been entered yet — figures
+								currently run on the {basis.tax_year} schedule.
+							</p>
+						{:else}
+							<p class="missing-title">No {TYPE_LABELS[j.schedule_type]} schedule on file yet.</p>
+							<p class="missing-detail">
+								Estimated-tax figures for this jurisdiction render as unavailable until one is
+								entered.
+							</p>
+						{/if}
+						{#if !openCreate[j.schedule_type]}
+							<Button variant="secondary" type="button" onclick={() => (openCreate[j.schedule_type] = true)}>
+								Add {currentTaxYear} schedule
+							</Button>
+						{/if}
+					</div>
 				</div>
-			</div>
-		{/if}
+			{/if}
+
+			{#if openCreate[j.schedule_type]}
+				<TaxBracketScheduleEditor
+					mode="create"
+					scheduleType={j.schedule_type}
+					taxYear={currentTaxYear}
+					initialLabel={basis?.schedule_label ?? ''}
+					initialStandardDeduction={basis?.standard_deduction ?? 0}
+					initialPriorYearBalance={null}
+					initialRows={basis?.rows ?? [{ bracket_floor: 0, bracket_rate: 0 }]}
+					onSaved={() => (openCreate[j.schedule_type] = false)}
+				/>
+			{/if}
+
+			{#if basis}
+				<TaxBracketScheduleEditor
+					mode="edit"
+					scheduleType={j.schedule_type}
+					taxYear={basis.tax_year}
+					scheduleId={basis.id}
+					initialLabel={basis.schedule_label}
+					initialStandardDeduction={basis.standard_deduction}
+					initialPriorYearBalance={basis.tax_balance_prior_year}
+					initialRows={basis.rows}
+				/>
+			{/if}
+
+			{#if others.length > 0}
+				<div class="other-schedules">
+					<h3 class="other-title">Other years on file</h3>
+					<ul class="other-list">
+						{#each others as s (s.id)}
+							<li class="other-row">
+								<span class="other-label">{s.tax_year} — {s.schedule_label}</span>
+								<DeleteScheduleControl
+									scheduleId={s.id}
+									itemLabel={`${TYPE_LABELS[j.schedule_type]} (tax year ${s.tax_year})`}
+								/>
+							</li>
+						{/each}
+					</ul>
+				</div>
+			{/if}
+		</section>
 	{/each}
 </div>
 
@@ -99,7 +172,17 @@
 	.list {
 		display: flex;
 		flex-direction: column;
-		gap: var(--space-5);
+		gap: var(--space-6);
+	}
+	.jurisdiction {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-3);
+	}
+	.jurisdiction-title {
+		margin: 0;
+		font: var(--weight-semi) var(--fs-h2) / var(--lh-tight) var(--font-ui);
+		color: var(--c-text-primary);
 	}
 	/* Same --c-attn-* "confirmed, actionable-adjacent" register UnpricedMarker.svelte /
 	   StaleConstituentBadge use for a definite, financially material gap in this render. */
@@ -124,7 +207,8 @@
 	.missing-text {
 		display: flex;
 		flex-direction: column;
-		gap: var(--space-1);
+		align-items: flex-start;
+		gap: var(--space-2);
 	}
 	.missing-title {
 		margin: 0;
@@ -135,5 +219,38 @@
 		margin: 0;
 		font: var(--weight-reg) var(--fs-small) / var(--lh-body) var(--font-ui);
 		color: var(--c-attn-text);
+	}
+	.other-schedules {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-1);
+	}
+	.other-title {
+		margin: 0;
+		font: var(--weight-semi) var(--fs-small) / 1.2 var(--font-ui);
+		color: var(--c-text-secondary);
+		text-transform: uppercase;
+		letter-spacing: 0.02em;
+	}
+	.other-list {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-1);
+	}
+	.other-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--space-3);
+		padding: var(--space-2) var(--space-3);
+		background: var(--c-surface-alt);
+		border-radius: var(--radius-md);
+	}
+	.other-label {
+		font: var(--weight-reg) var(--fs-small) / var(--lh-body) var(--font-ui);
+		color: var(--c-text-secondary);
 	}
 </style>
