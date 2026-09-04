@@ -31,5 +31,19 @@ discriminates is structural: assert `pg_proc.provolatile = 's'` **per signature*
   closure is worse than none; it looks complete and moves the seam somewhere
   less obvious.
 
+**⚠ And it does not replace at all when the PARAMETER LIST changes — it ADDS AN
+OVERLOAD.** A function's identity is its signature, so `create or replace` with a
+new argument creates a second function beside the first. On a clean chain apply
+only the new one exists and every check is green; on a database where the earlier
+version of the same *file* was already applied, both exist, and a name-only
+`.rpc()` / PostgREST call then resolves ambiguously. Measured at `101` (SELF-260
+V-2, adding `p_schedule_label`): one overload after a fresh 001→101 apply, which
+is exactly the state that hides the problem. When an unmerged migration's function
+gains or loses a parameter, say so in the apply brief and name the old signature
+to drop — a clean-apply verification cannot observe this.
+
+⚠ `returns table` is the mirror image: `create or replace` **cannot** change the
+returned column list at all and errors instead, so that one fails loudly.
+
 Related: [[feedback-watcher-not-fence-for-by-construction-properties]],
 [[feedback-assertion-with-no-watcher]].

@@ -158,6 +158,29 @@ family as the CLAUSE-NAME BLEED note above — the neighbours are load-bearing o
 and the remediation side. Concurring with a better variant costs nothing; shipping my own is not the
 goal. Related: [[supplied-verbatim-text-ships-unfiltered]].
 
+**REVIEWING A BATTERY THAT COMPOSES BY CITATION: label-resolution is only the POINTER axis
+(SELF-269).** A close-gate battery proved most of its ACs by citing already-green legs in sibling
+batteries rather than re-deriving them. I swept every cited label mechanically and found one
+dangling (`102 L3a`, content really carried by `L3b` + `L3h`) — good, and the sweep is the right
+instrument for that axis. **But QA then found a gap I had walked straight past:** AC 4 required
+*"assert all three `tax_treatment` states"*, the cited legs existed and said what they were cited
+for, and **`tax_free` was untested tree-wide**. The citation resolved; its **EXTENT** did not match
+the AC's quantifier.
+
+**The rule: when an AC carries a quantifier — *all three states*, *each of the three CHECKs*, *both
+halves*, *every surface* — resolving the citation is not enough. Open the cited leg and count
+against the quantifier.** A label sweep answers "does this pointer land"; only reading the leg
+answers "does it carry what it was cited for." On a composition-by-citation gate the citations ARE
+the evidence, so both axes have to be run, and the pointer axis is the one that feels like diligence
+while being the cheaper half.
+
+**And a companion, from my own error in the same review: SUPPLIED COMMIT-READY TEXT THAT NAMES AN
+IDENTIFIER IS A CLAIM THAT THE IDENTIFIER EXISTS.** I handed over a fix calling
+`_rls.expect_owner_reads`, invented from the shape of a sibling helper (`expect_cross_tenant_read_
+empty`) whose body I *had* read. The real name was `expect_owner_can_read`. I had never enumerated
+the fixture file's helper list. **Grep the DEFINITION file before naming a function in commit-ready
+text**, not just the call sites you happened to read — see [[supplied-verbatim-text-ships-unfiltered]]
+for why a supplied block gets committed without a second filter.
 **⚠ A FIFTH failure the four axes assume away: the pointer may name something that EXISTS NOWHERE.**
 Pointer / content / extent / attachment all presuppose a target to read. At SELF-267 the dispatch
 brief cited ruling **E14** twice, including for the load-bearing "interim divergence accepted at E14"

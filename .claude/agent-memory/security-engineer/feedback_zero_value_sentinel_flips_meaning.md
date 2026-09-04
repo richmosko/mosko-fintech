@@ -161,4 +161,88 @@ The battery header had copied the phrase, so two artifacts asserted it and only 
 anything downstream distinguish a zero price from a missing one?* Prefer a body guard rejecting the
 un-representable input (fails closed, no DDL, legible message naming the grain) over a new positivity
 CHECK on a shared table — the CHECK is stronger but forecloses a genuinely worthless asset and is its
-own joint review. Related: [[verify-the-stated-correctness-mechanism]].
+own joint review.
+
+⚠ **`GREATEST` / `LEAST` IGNORE NULLs — they are not NULL-propagating like arithmetic, and both
+failure directions are silent.** Returns NULL only if *every* argument is NULL. At SELF-262 this bit
+twice in one function: (1) `least(ord_basis_year, coalesce(ltcg_basis_year, ord_basis_year))` on a
+jurisdiction whose ordinary schedule was ABSENT returned the LT CG year, so the payload shipped
+`status:"unavailable"` beside a confident `basis_year: 2026` — a stale-basis caption on a figure that
+does not exist, read by three UI surfaces; (2) `greatest(<case with no ELSE> - deduction, 0)` returns
+**`0`, not NULL**, when the `case` falls through — so adding an enum member without a branch yields a
+confident **$0 tax** instead of `unavailable`. **The zero-value sentinel here is manufactured by the
+NULL guard itself.** How to apply: grep `greatest(` / `least(` on any money or status path and ask
+*what does this return when an argument is NULL, and is that the same as the un-set answer?* A
+`case` with no `ELSE` inside a `greatest(…, 0)` is the fail-open shape — say so as a prospective note
+if no enum member is currently unbranched.
+
+**The seventh hiding place — the FORMATTER itself mints the zero (SELF-266, `tax-quarterly.ts`).**
+`Intl.NumberFormat.format(null)` returns **`"0"`** (`ToNumber(null) === 0`); `format(undefined)`
+returns `"NaN"`. So a payload key guarded on `=== undefined` — *"absent means unavailable, a genuine
+0 renders as 0%"* — renders a **fabricated 0%** the moment the producer emits `null` instead of
+omitting the key. The caption's whole purpose was holding absent-vs-genuine-zero apart, and the
+guard's nullish half is what holds it. Not reachable at review time (`104` wraps the object in
+`jsonb_strip_nulls`), which is the point: **the client mirror's correctness rested on a
+`jsonb_strip_nulls` in another layer, in another directory, with nothing on the TS side watching it.**
+And the sibling shape: `!rate` guards the object but not `rate.ordinary`, so a stripped-to-`{}`
+object is **truthy** and formats `undefined` → `"NaN%"` — one guard, two keys, only one covered.
+
+**How to apply:** any `fmt.format(x)` / `Number(x)` / `parseFloat(x)` on a money-or-rate path, ask
+what it returns for `null`, `undefined`, `''` and `{}` — they differ, and `null → 0` is the
+dangerous one. Prefer `== null` (nullish) over `=== undefined` whenever the value's absence is
+produced by a DIFFERENT layer than the one doing the guarding; state the mechanism and the
+reachability separately, per [[hazard-mechanism-vs-reachability]].
+
+Related: [[verify-the-stated-correctness-mechanism]] · [[enumeration-and-watcher-stop-one-short]] ·
+[[hazard-mechanism-vs-reachability]].
+
+**The eighth hiding place — an UNAVAILABLE envelope that resolves to 0 makes existing equality legs
+go VACUOUS, not RED (SELF-268).** A ruling deliberately broke the invariant
+`fn_nav_composition->>'nav' == fn_compute_nav(...)`, and the chosen shape for an un-computable tax
+scalar was *"subtract 0 and render the row unavailable-with-reason."* **Five landed pgTAP legs across
+three batteries assert that broken identity — and they all stay GREEN**, because none of their
+fixtures seeds a bracket schedule, so both scalars come back `unavailable`, so `051` subtracts 0, so
+the equality holds **for the wrong reason**. Nothing goes red; nothing signals that a control now
+proves an invariant the project has abandoned.
+
+**The general shape: when a change introduces a new UNKNOWN state whose arithmetic identity element
+is the OLD behaviour, every pre-existing assertion silently becomes a test of the unknown path.**
+The fixtures that never seed the new inputs are exactly the ones that keep the retired invariant
+green. Contrast the alternative that was rejected (NULL instead of 0): a NULL would have turned all
+five legs RED — loud, and the one genuine advantage of the fail-closed option, worth stating on the
+record even when recommending against it.
+
+**How to apply:** when reviewing a change that breaks a stated invariant, `grep` the batteries for
+the invariant's SHAPE (both function names in one assertion), then for each hit ask *what does this
+fixture seed for the NEW input, and does the leg still discriminate?* Require each hit be re-aimed
+at the new invariant with the new state STATED in the fixture, or retired explicitly in the
+migration header. **A leg left green by an absence is not a passing control** —
+[[a-red-whose-message-names-the-wrong-defect]]'s sibling, and the reason
+[[a-ruling-makes-claims-about-the-tree]] treats "the watcher stays in the battery" as a claim.
+
+**The ninth hiding place — a UNARY NEGATION mints `-0`, and `Intl` renders it (SELF-268 F-2).**
+Ruling a display convention as *"negate every subtractive row at the single flip site"* is correct
+for legibility and introduces `-0` on every row whose value is exactly zero. Measured on the shipped
+formatter options (`style:'currency', minimumFractionDigits:0`): **`format(-0)` → `"-$0"`**, while
+`format(0)` → `"$0"`. `signDisplay:'auto'` behaves identically; **only `signDisplay:'negative'`
+suppresses the sign for negative zero** (`-0 → "$0"`, `-5 → "-$5"`) — one word, and it fixes every
+row at once rather than each call site.
+
+**Why it mattered here rather than being cosmetic trivia: the zero was the CLAMP'S ORDINARY
+OUTPUT.** `greatest(x, 0)` returns exactly `0` for every tenant with a net unrealized loss — the
+common state, and the exact fixture the clamp's own required battery leg pins. So the negation would
+have rendered `-$0` in the state the control exists to protect. **Ask what value the row takes in
+the state the nearest control produces, not in the generic case.**
+
+**The paired tell, and it is the reusable half: the existing regression asserted `displayValue`, not
+the RENDER.** Its title read *"…(−0 arithmetic; rendered $0)"* and its body was
+`expect(displayValueOf(rows,'debt')).toBe(-0)`. **A rendering claim in the title, an arithmetic
+assertion in the body, and no SSR leg anywhere asserting the string** — so the title was already
+false on `main` and nothing could say so. Grep for a rendering assertion before believing a test
+title that mentions rendering. Also: `Object.is(-0, 0) === false`, so a normalize-to-`0` fix turns
+that leg RED while a formatter fix leaves it green — meaning **the watcher for this class must be a
+rendered-string assertion; a `displayValue` assertion cannot observe it.**
+
+Related: [[a-ruling-makes-claims-about-the-tree]] (the migration comment asserting consumer
+behaviour, found in the same review) · [[enumeration-and-watcher-stop-one-short]] (the `-0` guard
+existed for `debt` and for no other row).

@@ -25,3 +25,19 @@ the check: a citation carrying the words *only*, *never*, or *always* about reac
 coverage. Related: [[replacement-control-name-the-losing-side]] and
 [[verifying-a-measurement-is-not-verifying-a-claim]] — and the fix here is the same shape,
 ask what the procedure could not see.
+
+**Second instance, 2026-09-04 (SELF-262 / `104` + ADR-067) — the same rule, but the
+citation was not to a retracted claim; it was to the WRONG HOME.** Two team-lead records
+(V1.4 execution log E22 and sitting-log R3 rider 6) both gloss the principle as *"ADR-049
+rendered-not-silent."* ADR-049 Decision 5 **disowns that attribution in its own text**: the
+non-silent-staleness framework is **PRD §2.4.4 per ADR-013**, and that Decision carries an
+explicit ⚠ *"Citation accuracy, recorded because the mis-citation nearly landed"* note on
+this exact principle. I wrote the gloss into a migration header and an ADR first, caught it
+only because I opened ADR-049 to check the pointer, and corrected both before committing.
+
+**What generalizes:** a gloss repeated across the project's own records reads as settled
+vocabulary and invites zero checking — **repetition is not corroboration when every copy
+has one source.** And the check that catches it is cheap and specific: open the cited ADR
+and look for whether it names a DIFFERENT artifact as the principle's home. An ADR that
+*routes to* a framework is not that framework's home, and consuming it as one silently
+reassigns authorship.
