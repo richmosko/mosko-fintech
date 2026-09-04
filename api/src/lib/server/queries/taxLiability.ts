@@ -23,6 +23,8 @@
 // rendering a page that looks live off dead data.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { AS_OF_FLOOR } from '$lib/server/schemas/asOf';
+import { serverTodayAsOf } from '$lib/server/time/asOf';
 
 /** Thrown by loadTaxLiability on an RPC error or a payload failing the top-level shape guard. */
 export class TaxLiabilityPayloadError extends Error {
@@ -295,12 +297,33 @@ function toPriorYearQ4Detail(jurisdiction: TaxJurisdictionPayload): PriorYearQ4D
  * value, never a second derivation, and no client input reaches it (AC 8a holds). Fail-loud, same
  * as loadTaxLiability — this row is still primary content on the page it renders on, not a
  * degradable extra.
+ *
+ * Sec N-4 (SELF-264/266 review) — the function's OWN boundary, independent of the single call
+ * site's discipline: Lock 15 / ADR-011 Decision 19 names `2015-12-01 <= as_of_date <= today` (no
+ * future dates) as the app-layer fence for every as-of input. That fence held here only because
+ * `quarterly/+page.server.ts` is the sole caller and always passes an already-computed window; a
+ * second, client-influenced call site would type-check and reach the RPC unchecked. The guard
+ * below closes that at the function boundary rather than trusting future call-site discipline —
+ * `AS_OF_FLOOR` is the same constant `schemas/asOf.ts`'s Zod fence uses (no second hardcoded
+ * copy), and `serverTodayAsOf()` is the same server-derived-today helper the query-module loaders
+ * use elsewhere (`nav-series.ts`, `taxBracketSchedules.ts`) — never a second `new Date()`.
  */
 export async function loadPriorYearQ4(
 	supabase: SupabaseClient,
 	window: PriorYearQ4Window
 ): Promise<PriorYearQ4> {
+	if (!Number.isInteger(window.tax_year)) {
+		throw new TaxLiabilityPayloadError(
+			`[taxLiability] loadPriorYearQ4: window.tax_year is not an integer: ${JSON.stringify(window.tax_year)}`
+		);
+	}
 	const asOf = `${window.tax_year}-12-31`;
+	const today = serverTodayAsOf();
+	if (asOf < AS_OF_FLOOR || asOf > today) {
+		throw new TaxLiabilityPayloadError(
+			`[taxLiability] loadPriorYearQ4: derived p_data_as_of ${asOf} is out of range [${AS_OF_FLOOR}, ${today}] (Lock 15 / ADR-011 Decision 19)`
+		);
+	}
 	const payload = await fetchTaxLiability(supabase, asOf);
 	return {
 		tax_year: window.tax_year,

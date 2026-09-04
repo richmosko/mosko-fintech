@@ -228,3 +228,78 @@ describe('loadPriorYearQ4 (E39 / R8 (B))', () => {
 		await expect(loadPriorYearQ4(client, WINDOW)).rejects.toBeInstanceOf(TaxLiabilityPayloadError);
 	});
 });
+
+describe('loadPriorYearQ4 — N-4: the function\'s own range fence (Lock 15 / ADR-011 Decision 19)', () => {
+	// serverTodayAsOf() is not mockable without touching production code (house convention —
+	// see nav-series.test.ts), so these legs derive an offset from the WALL CLOCK's own current
+	// year rather than hardcoding "today" — each leg still asserts a fixed, unambiguous relation
+	// to today (always-past / always-future / floor-year) that holds on any day the suite runs.
+	const CURRENT_YEAR = new Date().getUTCFullYear();
+
+	it('an in-range tax_year passes through to the RPC call', async () => {
+		const { client, rpc } = makeSupabase({
+			data: {
+				...WELL_FORMED,
+				jurisdictions: { federal: computedJurisdiction(), california: computedJurisdiction() }
+			},
+			error: null
+		});
+		const result = await loadPriorYearQ4(client, { open: true, tax_year: 2020, due_date: '2021-01-15' });
+		expect(rpc).toHaveBeenCalledWith('fn_compute_tax_liability', { p_data_as_of: '2020-12-31' });
+		expect(result.as_of).toBe('2020-12-31');
+	});
+
+	it('a pre-2015 tax_year throws TaxLiabilityPayloadError naming the out-of-range date, never reaching the RPC', async () => {
+		const { client, rpc } = makeSupabase({ data: WELL_FORMED, error: null });
+		await expect(
+			loadPriorYearQ4(client, { open: true, tax_year: 2014, due_date: '2015-01-15' })
+		).rejects.toThrow(/2014-12-31 is out of range/);
+		expect(rpc).not.toHaveBeenCalled();
+	});
+
+	it('a future tax_year (CURRENT_YEAR + 1, always after today) throws, never reaching the RPC', async () => {
+		const { client, rpc } = makeSupabase({ data: WELL_FORMED, error: null });
+		await expect(
+			loadPriorYearQ4(client, { open: true, tax_year: CURRENT_YEAR + 1, due_date: `${CURRENT_YEAR + 2}-01-15` })
+		).rejects.toBeInstanceOf(TaxLiabilityPayloadError);
+		expect(rpc).not.toHaveBeenCalled();
+	});
+
+	it('boundary: tax_year 2015 (2015-12-31, the earliest value >= AS_OF_FLOOR 2015-12-01) passes — the floor is inclusive, not off-by-one', async () => {
+		const { client, rpc } = makeSupabase({
+			data: {
+				...WELL_FORMED,
+				jurisdictions: { federal: computedJurisdiction(), california: computedJurisdiction() }
+			},
+			error: null
+		});
+		await loadPriorYearQ4(client, { open: true, tax_year: 2015, due_date: '2016-01-15' });
+		expect(rpc).toHaveBeenCalledWith('fn_compute_tax_liability', { p_data_as_of: '2015-12-31' });
+	});
+
+	it('boundary: tax_year CURRENT_YEAR - 1 (last calendar year\'s Dec 31, always <= today) passes — the ceiling is inclusive, not off-by-one', async () => {
+		const { client, rpc } = makeSupabase({
+			data: {
+				...WELL_FORMED,
+				jurisdictions: { federal: computedJurisdiction(), california: computedJurisdiction() }
+			},
+			error: null
+		});
+		await loadPriorYearQ4(client, {
+			open: true,
+			tax_year: CURRENT_YEAR - 1,
+			due_date: `${CURRENT_YEAR}-01-15`
+		});
+		expect(rpc).toHaveBeenCalledWith('fn_compute_tax_liability', {
+			p_data_as_of: `${CURRENT_YEAR - 1}-12-31`
+		});
+	});
+
+	it('a non-integer window.tax_year throws before ever building an as-of string, never reaching the RPC', async () => {
+		const { client, rpc } = makeSupabase({ data: WELL_FORMED, error: null });
+		await expect(
+			loadPriorYearQ4(client, { open: true, tax_year: 2020.5, due_date: '2021-01-15' })
+		).rejects.toThrow(/not an integer/);
+		expect(rpc).not.toHaveBeenCalled();
+	});
+});
