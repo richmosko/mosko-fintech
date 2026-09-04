@@ -437,3 +437,56 @@ non-vacuity from another file's fixture. **I read it as strengthening, not as co
   set must not fall through to `{status:'computed', amount: null}`. `104`'s `jur_def` is a literal
   two-row `VALUES` list today, which is what prevents it; this gate is its natural home whenever
   that shape stops being a literal.
+
+---
+
+## Closing addendum at `c92bc8a` — the clamp item CONFIRMED, and the label-keyed disclosure checked
+
+**§4's DERIVED-BUT-UNCONFIRMED item is now CONFIRMED, and it met all three acceptance criteria.**
+QA re-ran the inversion fresh on `87e866f`: striking `104`'s `greatest(…, 0)` reds **exactly one**
+leg — **test 18, `(AC4B-2)`** — with `have {"amount": -6825.00}` / `want {"amount": 0}`, 1/34,
+restored after. Against the criteria I set **before** seeing the result: ≥1 red ✅; the red leg **is**
+the AC 4b clamp leg ✅; its message **names the clamp** ✅ (*"the R9 clamp gets ITS OWN leg with a
+NEGATIVE-AGGREGATE-G/L fixture"*). The `−6825.00` is `(AC4B-1)`'s independently-computed pre-clamp
+figure, so the inversion is non-vacuous by construction. **This matches the derivation in §4 exactly
+— including the leg identity, which is the half a bare count could not have supplied.**
+
+**The label-keyed disclosure — independently checked at VERB level, and the disclosure holds.** I
+asked that any leg re-authored under an unchanged label be declared, because such a change is
+invisible to the label sweep this gate's method leans on. QA declared one: `(AC4C-1)` keeps its label
+and changed its verb (`isnt` → `ok`, F-1). Verified by extracting every assertion statement and its
+label from the pre-fix (`189687a`) and post-fix (`c92bc8a`) files and diffing:
+
+- **30 labels present in both passes, ZERO dropped.**
+- **Exactly one verb change under an existing label: `(AC4C-1)` `isnt` → `ok`** — the declared one,
+  and no other.
+
+⚠ **The scope of that check, stated so it is not read as more than it is: it verifies the ASSERTION
+VERB, not the full operand text.** I attempted an operand-level comparison and it produced at least
+one provable artifact — `(AC1/AC5a-1)` bound to `CONTROL0`'s helper call rather than to its own
+`throws_like`, because the label-capture window bled across adjacent statements. **An unreliable
+measurement is not a weaker result; it is not a result**, so the operand half of the disclosure is
+**not independently verified by me** and rests on QA's statement. Given the verb-level check is clean
+and the two files are otherwise reconciled leg-for-leg, I do not require more.
+
+**Verdict unchanged: GREEN.**
+
+### My third instrument failure of this review, and the one that would have been worst
+
+The first version of the disclosure check reported **"no verb changed under any label"** — a clean
+result — and it was **an artifact**. My label-capture bound each label to the first `select …(`
+within its window, which for every assertion preceded by `select _rls.set_tenant(…)` was the
+*set_tenant call*, not the assertion. It would have reported clean no matter what changed.
+
+**The earlier two instrument failures in this review produced FALSE POSITIVES** (a broken sweep
+printing every citation as dangling; an over-matching regex reporting `CONTROL0` as not-first), and
+both were caught because a false positive is loud and implausible. **This one produced a FALSE
+GREEN on a verification I was about to forward** — and the rule that catches it is a different one:
+
+> **A verification needs a POSITIVE CONTROL — an instance known to have changed, which the
+> instrument must detect before its "nothing changed" is believable.**
+
+One was available and I had not used it: `(AC4C-1)`'s declared `isnt` → `ok`. The corrected run
+asserts that control first and reports `WORKS` before reporting the sweep, which is why the result
+above can be relied on. **A clean result from an unvalidated instrument is indistinguishable from a
+clean tree, and on a close gate that is the failure mode that ships.**
