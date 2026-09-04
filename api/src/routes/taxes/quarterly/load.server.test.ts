@@ -1,24 +1,39 @@
-// +page.server.test.ts — the SELF-266 §2.5.3 quarterly loader watcher. Proves: (a) the
+// load.server.test.ts — the SELF-266 §2.5.3 quarterly loader watcher. Proves: (a) the
 // unauthenticated redirect to /login with a redirectTo pointing back at this page; (b) liability
 // is loadTaxLiability's return VERBATIM (loadTaxLiability itself is mocked — taxLiability.test.ts
 // owns its own contract); (c) AC 8(ii)'s noTaxAuthorityDesignated flag reads BOTH ways off
 // pfin.fn_tax_authority_ledgers()'s result — true on an empty result (nothing designated for
 // either jurisdiction), false the moment at least one ledger is designated for EITHER authority;
-// (d) a fn_tax_authority_ledgers() read failure throws rather than guessing the flag either way.
+// (d) a fn_tax_authority_ledgers() read failure throws rather than guessing the flag either way;
+// (e) E39's priorYearQ4 wiring — loadPriorYearQ4 (also mocked; its own contract is
+// taxLiability.test.ts's job) is called ONLY when `liability.prior_year_q4_window.open` is true,
+// and its resolved value passes through as `priorYearQ4` verbatim; `null` when the window is shut.
 
 import { describe, it, expect, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 const loadTaxLiabilityMock = vi.fn();
+const loadPriorYearQ4Mock = vi.fn();
 vi.mock('$lib/server/queries/taxLiability', () => ({
-	loadTaxLiability: loadTaxLiabilityMock
+	loadTaxLiability: loadTaxLiabilityMock,
+	loadPriorYearQ4: loadPriorYearQ4Mock
 }));
 
 const { load } = await import('./+page.server');
 
 const SESSION_UID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
-const LIABILITY_STUB = { as_of: '2026-09-04', tax_year: 2026, jurisdictions: {}, prior_year_q4_window: {} };
+const LIABILITY_STUB = {
+	as_of: '2026-09-04',
+	tax_year: 2026,
+	jurisdictions: {},
+	prior_year_q4_window: { open: false, tax_year: 2025, due_date: '2026-01-15' }
+};
+
+const LIABILITY_STUB_WINDOW_OPEN = {
+	...LIABILITY_STUB,
+	prior_year_q4_window: { open: true, tax_year: 2025, due_date: '2026-01-15' }
+};
 
 function makeSupabase(opts: { ledgers?: unknown[]; ledgersError?: { message: string } | null }) {
 	const rpc = vi.fn(async (fn: string) => {
@@ -106,5 +121,54 @@ describe('load() — SELF-266 fail-loud fn_tax_authority_ledgers read', () => {
 		loadTaxLiabilityMock.mockResolvedValueOnce(LIABILITY_STUB);
 		const { client } = makeSupabase({ ledgersError: { message: 'timeout' } });
 		await expect(load(makeEvent(client))).rejects.toThrow(/fn_tax_authority_ledgers read failed/);
+	});
+});
+
+const PRIOR_YEAR_Q4_STUB = {
+	tax_year: 2025,
+	due_date: '2026-01-15',
+	as_of: '2025-12-31',
+	federal: { q4_installment: 100, annual_liability: 400, funds_due_envelope: { status: 'computed', amount: 100 } },
+	california: { q4_installment: 50, annual_liability: 200, funds_due_envelope: { status: 'computed', amount: 50 } }
+};
+
+describe('load() — SELF-266 / E39 priorYearQ4 wiring', () => {
+	it('does NOT call loadPriorYearQ4 when prior_year_q4_window.open is false — priorYearQ4 is null', async () => {
+		loadTaxLiabilityMock.mockResolvedValueOnce(LIABILITY_STUB);
+		loadPriorYearQ4Mock.mockClear();
+		const { client } = makeSupabase({ ledgers: [] });
+		const result = await load(makeEvent(client));
+		expect(loadPriorYearQ4Mock).not.toHaveBeenCalled();
+		expect(result).toMatchObject({ priorYearQ4: null });
+	});
+
+	it('calls loadPriorYearQ4 EXACTLY once, with the current payload\'s own prior_year_q4_window, when open is true', async () => {
+		loadTaxLiabilityMock.mockResolvedValueOnce(LIABILITY_STUB_WINDOW_OPEN);
+		loadPriorYearQ4Mock.mockClear();
+		loadPriorYearQ4Mock.mockResolvedValueOnce(PRIOR_YEAR_Q4_STUB);
+		const { client } = makeSupabase({ ledgers: [] });
+		await load(makeEvent(client));
+		expect(loadPriorYearQ4Mock).toHaveBeenCalledTimes(1);
+		expect(loadPriorYearQ4Mock).toHaveBeenCalledWith(
+			client,
+			LIABILITY_STUB_WINDOW_OPEN.prior_year_q4_window
+		);
+	});
+
+	it('forwards loadPriorYearQ4\'s resolved value as `priorYearQ4` VERBATIM when open is true', async () => {
+		loadTaxLiabilityMock.mockResolvedValueOnce(LIABILITY_STUB_WINDOW_OPEN);
+		loadPriorYearQ4Mock.mockClear();
+		loadPriorYearQ4Mock.mockResolvedValueOnce(PRIOR_YEAR_Q4_STUB);
+		const { client } = makeSupabase({ ledgers: [] });
+		const result = await load(makeEvent(client));
+		expect(result).toMatchObject({ priorYearQ4: PRIOR_YEAR_Q4_STUB });
+	});
+
+	it('propagates a loadPriorYearQ4 failure rather than degrading to null', async () => {
+		loadTaxLiabilityMock.mockResolvedValueOnce(LIABILITY_STUB_WINDOW_OPEN);
+		loadPriorYearQ4Mock.mockClear();
+		loadPriorYearQ4Mock.mockRejectedValueOnce(new Error('second call failed'));
+		const { client } = makeSupabase({ ledgers: [] });
+		await expect(load(makeEvent(client))).rejects.toThrow(/second call failed/);
 	});
 });

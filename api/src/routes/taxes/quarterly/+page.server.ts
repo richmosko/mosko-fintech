@@ -25,14 +25,25 @@
 //                                 empty means for this caller, per that function's own contract.
 //                                 The CTA target (the §2.4.2 account form's tax-authority field)
 //                                 is the page's concern, not this loader's.
+//   priorYearQ4                 : E39 (R8 (B)) — the prior tax year's Q4 row WITH AMOUNTS, or
+//                                 `null` when `liability.prior_year_q4_window.open` is false. 104's
+//                                 own payload computes that window for the CURRENT as-of only (open
+//                                 / tax_year / due_date, no amounts); the amounts need a SECOND
+//                                 fn_compute_tax_liability call, as-of Dec 31 of the prior tax year
+//                                 (loadPriorYearQ4 — taxLiability.ts). Called ONLY when the window
+//                                 is open, and the as-of it builds CITES the current payload's own
+//                                 `prior_year_q4_window.tax_year` rather than deriving a second one
+//                                 — no client input reaches it, so AC 8a still holds. Kept as its
+//                                 OWN typed value, never merged into `liability` (ruled at E39).
 //
 // Fail loud, no coercion — matches loadTaxLiability's posture (taxLiability.ts module header).
 // A failed fn_tax_authority_ledgers() call means AC 8(ii)'s empty-state flag cannot be trusted
 // either way (true would wrongly show the CTA-suppressed table, false would wrongly hide the
-// CTA), so this loader throws rather than guessing.
+// CTA), so this loader throws rather than guessing. Same posture for loadPriorYearQ4 — the prior-
+// year Q4 row is still primary content while its window is open, not a degradable extra.
 
 import { redirect } from '@sveltejs/kit';
-import { loadTaxLiability } from '$lib/server/queries/taxLiability';
+import { loadTaxLiability, loadPriorYearQ4 } from '$lib/server/queries/taxLiability';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -51,8 +62,13 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		);
 	}
 
+	const priorYearQ4 = liability.prior_year_q4_window.open
+		? await loadPriorYearQ4(locals.supabase, liability.prior_year_q4_window)
+		: null;
+
 	return {
 		liability,
-		noTaxAuthorityDesignated: (designatedLedgers ?? []).length === 0
+		noTaxAuthorityDesignated: (designatedLedgers ?? []).length === 0,
+		priorYearQ4
 	};
 };

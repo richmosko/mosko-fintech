@@ -1,4 +1,4 @@
-// +page.server.test.ts — the SELF-264 §2.5.1 decomposition loader watcher. Proves: (a) the
+// load.server.test.ts — the SELF-264 §2.5.1 decomposition loader watcher. Proves: (a) the
 // unauthenticated redirect to /login with a redirectTo pointing back at this page; (b) liability
 // is loadTaxLiability's return VERBATIM (loadTaxLiability itself is mocked — its own contract is
 // taxLiability.test.ts's job, this file only proves the wiring); (c) pfin.tax_character rows pass
@@ -47,6 +47,19 @@ function makeEvent(supabase: SupabaseClient, user: { id: string } | null = { id:
 	} as unknown as Parameters<typeof load>[0];
 }
 
+/** load()'s inferred return type unions in `void` (the redirect() early-throw path), which TS
+ *  can't rule out statically even though every test here supplies an authed session. Narrow to
+ *  the fields this file actually asserts on, mirroring accounts/[account_id]/load.server.test.ts's
+ *  own loadData() helper. */
+type LoadResult = {
+	liability: unknown;
+	taxCharacters: Array<{ code: string; label: string; display_order: number | null }>;
+	inventorySeedDeltaMigration: string;
+};
+async function loadData(event: Parameters<typeof load>[0]): Promise<LoadResult> {
+	return (await load(event)) as unknown as LoadResult;
+}
+
 describe('load() — SELF-264 auth', () => {
 	it('redirects unauthenticated callers to /login with redirectTo pointing back at this page', async () => {
 		const { client } = makeSupabase({ taxCharacters: [] });
@@ -69,7 +82,7 @@ describe('load() — SELF-264 payload passthrough', () => {
 	it('forwards loadTaxLiability\'s return VERBATIM as `liability` — no reshaping', async () => {
 		loadTaxLiabilityMock.mockResolvedValueOnce(LIABILITY_STUB);
 		const { client } = makeSupabase({ taxCharacters: TAX_CHARACTER_ROWS });
-		const result = await load(makeEvent(client));
+		const result = await loadData(makeEvent(client));
 		expect(result).toMatchObject({ liability: LIABILITY_STUB });
 	});
 
@@ -84,7 +97,7 @@ describe('load() — SELF-264 payload passthrough', () => {
 	it('forwards the tax_character rows ordered by display_order, and the AC 11 seed-delta migration name', async () => {
 		loadTaxLiabilityMock.mockResolvedValueOnce(LIABILITY_STUB);
 		const { client, order } = makeSupabase({ taxCharacters: TAX_CHARACTER_ROWS });
-		const result = await load(makeEvent(client));
+		const result = await loadData(makeEvent(client));
 		expect(result).toMatchObject({
 			taxCharacters: TAX_CHARACTER_ROWS,
 			inventorySeedDeltaMigration: '100_tax_value_inventory_seed_delta.sql'
@@ -96,7 +109,7 @@ describe('load() — SELF-264 payload passthrough', () => {
 	it('degrades an absent tax_character result (data null, no error) to an empty array rather than throwing', async () => {
 		loadTaxLiabilityMock.mockResolvedValueOnce(LIABILITY_STUB);
 		const { client } = makeSupabase({ taxCharacters: undefined });
-		const result = await load(makeEvent(client));
+		const result = await loadData(makeEvent(client));
 		expect(result).toMatchObject({ taxCharacters: [] });
 	});
 });

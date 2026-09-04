@@ -195,14 +195,15 @@ const REQUIRED_TOP_LEVEL_KEYS = [
 ] as const;
 
 /**
- * Load the caller's §2.5 tax-liability payload via pfin.fn_compute_tax_liability, RLS-scoped
- * through the per-request client. NO p_data_as_of — server-derived today (AC 8a on both SELF-264
- * and SELF-266). Throws TaxLiabilityPayloadError on an RPC error or a payload failing the
- * top-level shape guard — see the module header for why this diverges from this directory's
- * dominant fail-soft convention.
+ * Shared fetch + guard. `asOf`, when given, is passed as `p_data_as_of` — used ONLY by
+ * loadPriorYearQ4 below (E39), which cites an already-computed window rather than accepting
+ * client input; loadTaxLiability itself never supplies one (AC 8a).
  */
-export async function loadTaxLiability(supabase: SupabaseClient): Promise<TaxLiabilityPayload> {
-	const { data, error } = await supabase.schema('pfin').rpc('fn_compute_tax_liability');
+async function fetchTaxLiability(supabase: SupabaseClient, asOf?: string): Promise<TaxLiabilityPayload> {
+	const { data, error } =
+		asOf === undefined
+			? await supabase.schema('pfin').rpc('fn_compute_tax_liability')
+			: await supabase.schema('pfin').rpc('fn_compute_tax_liability', { p_data_as_of: asOf });
 
 	if (error) {
 		throw new TaxLiabilityPayloadError(
@@ -228,4 +229,74 @@ export async function loadTaxLiability(supabase: SupabaseClient): Promise<TaxLia
 	// Passthrough, no reshaping — ADR-067 Decision 5 is the contract's canonical home; this
 	// function's job is the guard above, not a second copy of the shape.
 	return data as TaxLiabilityPayload;
+}
+
+/**
+ * Load the caller's §2.5 tax-liability payload via pfin.fn_compute_tax_liability, RLS-scoped
+ * through the per-request client. NO p_data_as_of — server-derived today (AC 8a on both SELF-264
+ * and SELF-266). Throws TaxLiabilityPayloadError on an RPC error or a payload failing the
+ * top-level shape guard — see the module header for why this diverges from this directory's
+ * dominant fail-soft convention.
+ */
+export async function loadTaxLiability(supabase: SupabaseClient): Promise<TaxLiabilityPayload> {
+	return fetchTaxLiability(supabase);
+}
+
+// ---------------------------------------------------------------------------------------------
+// E39 (R8 (B)) — the prior tax year's Q4 row, WITH AMOUNTS, for the render window SELF-266 AC 2a
+// already carries as `prior_year_q4_window`. 104's own payload computes that window for the
+// CURRENT as-of only (open / tax_year / due_date, no amounts); the amounts require a SECOND call
+// to the same function, as-of Dec 31 of the prior tax year. Ruled: two typed values, never merged.
+// ---------------------------------------------------------------------------------------------
+
+export type PriorYearQ4Detail = {
+	/** The last element of `installments[]` from the second (Dec-31) payload — null if unavailable. */
+	q4_installment: number | null;
+	annual_liability: number | null;
+	/** Verbatim `funds_due` envelope from the second payload — unavailable stays unavailable, never 0. */
+	funds_due_envelope: FundsDueEnvelope;
+};
+
+export type PriorYearQ4 = {
+	tax_year: number;
+	due_date: string;
+	/** 'YYYY-12-31' — Dec 31 of `tax_year`, the exact p_data_as_of the second RPC call was made with. */
+	as_of: string;
+	federal: PriorYearQ4Detail;
+	california: PriorYearQ4Detail;
+};
+
+function toPriorYearQ4Detail(jurisdiction: TaxJurisdictionPayload): PriorYearQ4Detail {
+	const installments = jurisdiction.installments;
+	return {
+		q4_installment:
+			installments && installments.length > 0 ? installments[installments.length - 1].amount : null,
+		annual_liability: jurisdiction.annual_liability,
+		funds_due_envelope: jurisdiction.funds_due
+	};
+}
+
+/**
+ * E39 — load the prior tax year's Q4 detail via a SECOND fn_compute_tax_liability call, as-of
+ * Dec 31 of `window.tax_year`. Call ONLY when the caller's own `prior_year_q4_window.open` is
+ * true (SELF-266's +page.server.ts owns that gate). `window` is the CURRENT payload's own
+ * `prior_year_q4_window` — `window.tax_year` is already the prior tax year (104's
+ * `p.tax_year - 1`), so the as-of this function builds is a CITATION of an already-computed
+ * value, never a second derivation, and no client input reaches it (AC 8a holds). Fail-loud, same
+ * as loadTaxLiability — this row is still primary content on the page it renders on, not a
+ * degradable extra.
+ */
+export async function loadPriorYearQ4(
+	supabase: SupabaseClient,
+	window: PriorYearQ4Window
+): Promise<PriorYearQ4> {
+	const asOf = `${window.tax_year}-12-31`;
+	const payload = await fetchTaxLiability(supabase, asOf);
+	return {
+		tax_year: window.tax_year,
+		due_date: window.due_date,
+		as_of: asOf,
+		federal: toPriorYearQ4Detail(payload.jurisdictions.federal),
+		california: toPriorYearQ4Detail(payload.jurisdictions.california)
+	};
 }
