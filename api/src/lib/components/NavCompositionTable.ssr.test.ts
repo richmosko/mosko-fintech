@@ -8,12 +8,14 @@
 //     /accounts/[id] link + G/L cells are not in the initial output; the caret is the ▸ (closed)
 //     glyph; every group toggle is a <button aria-expanded="false"> (keyboard-native disclosure).
 //   • Buildup ladder EXACT order + labels (AC#4) + the Debt SUBTRACTION render (D5: −magnitude).
-//   • SELF-268 V1.4 flip, E41-E42 envelope shape (Sec P-18): `buildups.realized_tax_liab` /
+//   • SELF-268 V1.4 flip, E41-E42 envelope shape (Sec P-18), RULING UPDATE E44 (Sec freeze F-2
+//     option (A), team-lead under F/CTO delegation, which also closes F-1): `buildups.realized_tax_liab` /
 //     `unrealized_tax_liab` are ENVELOPES ({status:'computed',amount}|{status:'unavailable',reason},
-//     reusing tax-quarterly.ts's shipped `FundsDueEnvelope`); a computed envelope renders its REAL,
-//     UNFLIPPED amount (AC 7 / M-3 / AC 10) — including a NEGATIVE realized amount (overpayment
-//     receivable, 105's sign convention) — the V1.1 `isTaxPlaceholder` `$0` + "V1.4 ramp" caption
-//     shape is GONE.
+//     reusing tax-quarterly.ts's shipped `FundsDueEnvelope`); a computed envelope renders its real
+//     amount FLIPPED — the same single flip site as Debt — so an underpaid liability (positive raw
+//     amount) renders NEGATIVE (reduces NAV) and an overpaid one (negative raw amount, a receivable)
+//     renders POSITIVE with an explicit "+" (adds back) — the V1.1 `isTaxPlaceholder` `$0` +
+//     "V1.4 ramp" caption shape is GONE.
 //   • SELF-268 AC 9a: the §2.5.4 disclaimer renders as a visible footnote (no hover-only).
 //   • SELF-268 AC 6: an unavailable envelope renders "Unavailable — <copy>" text (the FINAL copy
 //     per team-lead 2026-09-04), never the $0 the buildups value would otherwise arithmetically be.
@@ -124,10 +126,10 @@ describe('NavCompositionTable — buildup ladder (AC#4) + signs (D5) + SELF-268 
 		expect(body).toContain('$1,800');
 	});
 
-	it('AC 7 / M-3 — the tax rows render UNFLIPPED (no leading minus sign; debt stays the only negation)', () => {
+	it('RULING UPDATE (E44) — the tax rows render FLIPPED, same as Debt: a positive (underpaid) raw amount renders with a leading minus', () => {
 		const { body } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: fixture } });
-		expect(body).not.toContain('-$4,200');
-		expect(body).not.toContain('-$1,800');
+		expect(body).toContain('-$4,200');
+		expect(body).toContain('-$1,800');
 	});
 
 	it('the V1.1 tax-placeholder shape is GONE: no "$0" tax rows, no V1.4-ramp caption text', () => {
@@ -171,14 +173,15 @@ describe('NavCompositionTable — SELF-268 AC 6 (E41 envelope shape): unavailabl
 		expect(body).toContain('a tax-authority ledger is not designated for every jurisdiction — designate the missing one in Accounts');
 	});
 
-	it('a negative realized amount (overpayment/receivable) renders as a real negative figure, never $0/unavailable', () => {
+	it('a negative raw realized amount (overpayment/receivable) renders as a real POSITIVE figure with an explicit "+" (adds back), never $0/unavailable', () => {
 		const overpayment: NavComposition = {
 			...fixture,
 			buildups: { ...fixture.buildups, realized_tax_liab: { status: 'computed', amount: -500 } }
 		};
 		const { body } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: overpayment } });
 		expect(body).not.toContain('Unavailable');
-		expect(body).toContain('-$500');
+		expect(body).toContain('+$500');
+		expect(body).not.toContain('-$500');
 	});
 
 	it('a computed envelope renders the real dollar figure, no "Unavailable" text', () => {

@@ -23,7 +23,8 @@
 //   • `buildups.debt` is a POSITIVE MAGNITUDE; the liability leaf `current_market_value` + the
 //     liability group `subtotal` carry 049's NATURAL-NEGATIVE sign. The Debt ladder row therefore
 //     renders the magnitude as a SUBTRACTION (−debt) so `nav = gross_total − debt` reads literally
-//     (ratified D5). buildupRows() below owns that single sign flip.
+//     (ratified D5). buildupRows() below owns this sign flip — SELF-268 (E44) extends the SAME
+//     flip site to the two tax rows too; see buildupRows()'s own comment.
 //   • `unrealized_gl` is NULL for non-investment accounts → rendered as `—` (AC#3).
 //   • `nav` foots EXACT to the §2.1.1 headline (051 FOOT-TO-NAV) — rendered whole-dollar to match
 //     the headline so the foot reads identical to it (ratified D9).
@@ -40,23 +41,30 @@
 // carries its own local copy as a stopgap with a TODO to import this one instead; not done here
 // (outside this role's write boundary).
 //
-// ⚠ SIGN (AC 7 / M-3, 105's own SIGN CONVENTION comment, verbatim in substance): a computed
-// `amount` carries 104's sign UNCHANGED and is rendered UNFLIPPED — `debt` stays the ladder's ONLY
-// negation. `unrealized_tax_liab.amount` is clamped at zero by 104 (R9 / Sec M-2), always ≥ 0.
-// `realized_tax_liab.amount` is SIGNED and NOT clamped: an overpayment is a genuine receivable, so
-// `amount` goes NEGATIVE and NAV RISES by the excess (R3 / E-2 option (A)) — NEVER abs() or clamp
-// it in the UI. The instinct to mirror Debt's `−magnitude` treatment (or to abs() a negative
-// realized amount "for tidiness") is exactly the double-negation / signal-loss defect Sec's M-3 and
-// 105's header both name: 105's own `nav` expression already subtracts the envelope's `amount` with
-// its sign intact (0 for an unavailable envelope — 105 cannot subtract a JSON null), so any further
-// transformation here would render a correct value with the wrong sign or silently discard the
-// receivable signal. See buildupRows()'s own comment + its regression tests. NEVER read an
-// unavailable envelope's implicit 0-for-arithmetic as a determination — the envelope's `status` is
-// the ONLY place "genuinely zero" and "unavailable, arithmetic-only 0" are told apart, and
-// buildupRows() below routes an unavailable envelope to a `displayValue: null` row variant (Sec
-// P-18: `status` REQUIRED, not optional — an optional status is a prop default away from fail-open)
-// so there is no numeric value to accidentally render as `$0` (a type-level guard, not merely a
-// runtime check).
+// ⚠ SIGN — SELF-268 RULING UPDATE (team-lead under F/CTO delegation, E44 — Sec freeze F-2 option
+// (A), which also closes F-1; supersedes the "rendered UNFLIPPED" convention this comment
+// originally described): a computed envelope's raw `amount` STILL carries 104's sign UNCHANGED at
+// the `NavCompositionBuildups` / `TaxLiabilityEnvelope` level — nothing at THIS type layer mutates
+// it. The negation now happens ONE step later, in the RENDERED ladder row, at the single flip site
+// inside taxRow() (~:218–227) — the SAME site that already flips `debt` in buildupRows()
+// (~:246–254). That site now negates ALL THREE subtractive rows, not Debt alone: a computed row's
+// `displayValue = −amount`. An underpaid realized liability (a POSITIVE `amount`) therefore renders
+// as a NEGATIVE displayValue — reduces NAV, reading the same direction as Debt. An OVERPAID one (a
+// NEGATIVE `amount`, a genuine receivable) renders as a POSITIVE displayValue — adds back.
+// `unrealized_tax_liab.amount` is clamped at zero by 104 (R9 / Sec M-2), always ≥ 0, so its
+// displayValue is always ≤ 0. `realized_tax_liab.amount` remains SIGNED and NOT clamped — see
+// NavCompositionBuildups's own comment; NEVER abs() or clamp the raw `amount`, here or in taxRow().
+// The sign convention stays "exactly one negation in exactly one place" (D5's original invariant,
+// 105's header, verbatim in substance) — that ONE place now negates three rows instead of one; a
+// SECOND flip site anywhere else in this file or NavCompositionTable.svelte is still the exact
+// double-negation / signal-loss defect Sec's M-3 names. See taxRow() / buildupRows()'s own comments
+// + nav-composition.test.ts's regressions (including the footing identity) for the arithmetic.
+// NEVER read an unavailable envelope's implicit 0-for-arithmetic as a determination — the
+// envelope's `status` is the ONLY place "genuinely zero" and "unavailable, arithmetic-only 0" are
+// told apart, and buildupRows() below routes an unavailable envelope to a `displayValue: null` row
+// variant (Sec P-18: `status` REQUIRED, not optional — an optional status is a prop default away
+// from fail-open) so there is no numeric value to accidentally render as `$0` (a type-level guard,
+// not merely a runtime check).
 //
 // SELF-268 NAV-FOOT THREE-STATE BASIS (Sec P-5 / option (C)) — the two envelopes are INDEPENDENT
 // and can disagree, so the composed NAV has THREE possible bases, never a single
@@ -168,11 +176,14 @@ export type TaxLiabilityEnvelope = FundsDueEnvelope;
 
 /** The buildup ladder magnitudes — mirrors 051/105 buildups (E41-E42 shape). `debt` is a POSITIVE
  * magnitude (AC 7 / M-3, unchanged). `realized_tax_liab` / `unrealized_tax_liab` are ENVELOPES, not
- * plain numbers. ⚠ SIGN (105's own comment, verbatim in substance): a computed envelope's `amount`
- * carries 104's sign UNCHANGED — `unrealized_tax_liab` is clamped at zero by 104 (R9 / Sec M-2) and
- * so is always ≥ 0, but `realized_tax_liab` is SIGNED and NOT clamped: an overpayment is a genuine
- * receivable, so `amount` goes NEGATIVE and NAV RISES by the excess (R3 / E-2 option (A)). Never
- * abs() or clamp either amount here — see buildupRows()'s own comment + its regression test. */
+ * plain numbers. ⚠ SIGN (105's own comment, verbatim in substance): a computed envelope's raw
+ * `amount` carries 104's sign UNCHANGED AT THIS TYPE LEVEL — `unrealized_tax_liab` is clamped at
+ * zero by 104 (R9 / Sec M-2) and so is always ≥ 0, but `realized_tax_liab` is SIGNED and NOT
+ * clamped: an overpayment is a genuine receivable, so `amount` goes NEGATIVE (R3 / E-2 option (A)).
+ * Never abs() or clamp the raw `amount` here — the ladder's presentational negation (SELF-268
+ * ruling, E44: all three subtractive rows flip at buildupRows()'s single site) happens ONLY in the
+ * rendered `BuildupRow.displayValue`, never on this raw field. See taxRow() / buildupRows()'s own
+ * comments + their regression tests. */
 export interface NavCompositionBuildups {
 	total_non_re: number;
 	gross_total: number;
@@ -216,12 +227,21 @@ export type BuildupRow =
 	| { key: 'realized_tax_liab' | 'unrealized_tax_liab'; label: string; status: 'unavailable'; displayValue: null; reason: string };
 
 function taxRow(key: 'realized_tax_liab' | 'unrealized_tax_liab', label: string, envelope: TaxLiabilityEnvelope): BuildupRow {
-	// SELF-268 AC 7 / M-3 / 105's SIGN CONVENTION: a computed envelope's `amount` carries 104's sign
-	// UNCHANGED, rendered here with NO further transformation — no negation, no abs(), no clamp.
-	// Debt is the ladder's only negation; a second flip (or an abs()) here renders a correct value
-	// with the wrong sign or drops the overpayment-receivable signal entirely.
+	// SELF-268 RULING UPDATE (team-lead under F/CTO delegation, E44 — Sec freeze F-2 option (A),
+	// which also closes F-1): the ladder's ONE flip site now negates all three subtractive rows, not
+	// Debt alone — a computed envelope's raw `amount` (104's sign, unchanged at the buildups/type
+	// level; see NavCompositionBuildups's own comment) is negated HERE, once, the same as Debt's
+	// magnitude below in buildupRows(). An underpaid liability (a positive `amount`) becomes a
+	// NEGATIVE displayValue (reduces NAV, reading the same direction as Debt); an overpaid one (a
+	// negative `amount`, a genuine receivable) becomes a POSITIVE displayValue (adds back). This is
+	// NOT the double-negation defect the pre-SELF-268-ruling revision of this comment warned
+	// against — that warning described a DIFFERENT (now-superseded) UI convention where the raw,
+	// signed amount was rendered unflipped and any further negation here would have doubled the
+	// sign against 105's own nav arithmetic. The ruling changes the LADDER's presentational
+	// convention, not 105's underlying nav arithmetic (unchanged) or this envelope's raw `amount`
+	// (unchanged) — see buildupRows()'s own comment for the full footing identity.
 	if (envelope.status === 'computed') {
-		return { key, label, status: 'computed', displayValue: envelope.amount };
+		return { key, label, status: 'computed', displayValue: -envelope.amount };
 	}
 	return { key, label, status: 'unavailable', displayValue: null, reason: envelope.reason };
 }
@@ -231,15 +251,31 @@ function taxRow(key: 'realized_tax_liab' | 'unrealized_tax_liab', label: string,
  *   Total Non-RE → Gross Total → Debt → Realized Tax Liab → Unrealized Tax Liab.
  * (NAV is the foot row, rendered separately by the component.)
  *
- * Debt is the ladder's ONLY sign flip (D5 / SELF-268 AC 7 / M-3): `buildups.debt` arrives as a
- * positive magnitude and the ladder subtracts it, so displayValue = −debt. A computed tax
- * envelope's `amount` carries 104's sign through UNCHANGED — 105's own `nav` arithmetic already
- * subtracts it, so negating (or abs()-ing) it here a second time would render a correct value with
- * the wrong sign, or silently discard the overpayment-receivable signal (the double-negation
- * defect Sec's M-3 names; the sign is otherwise how a NEGATIVE realized amount is told apart from
- * a POSITIVE one owed). See nav-composition.test.ts's "exactly one flip" + "signed realized,
- * unflipped" regressions. An unavailable envelope routes to the `displayValue: null` row variant
- * (see BuildupRow) — the component renders its `reason`, never a fabricated `$0`.
+ * SELF-268 RULING (team-lead under F/CTO delegation, E44 — Sec freeze F-2 option (A), which also
+ * closes F-1): this ONE site negates ALL THREE subtractive rows — Debt, Realized Tax Liab,
+ * Unrealized Tax Liab — not Debt alone (supersedes the earlier "Debt is the ladder's ONLY sign
+ * flip" convention this comment used to state). `buildups.debt` arrives as a positive magnitude and
+ * is subtracted (displayValue = −debt, D5's original convention, unchanged). A computed tax
+ * envelope's raw `amount` carries 104's sign UNCHANGED at the buildups level (see
+ * NavCompositionBuildups's own comment) and is ALSO negated here, once, by taxRow(): an underpaid
+ * liability (a positive `amount`) renders as a negative displayValue (reduces NAV, same reading as
+ * Debt); an overpaid one (a negative `amount`, a genuine receivable) renders as a positive
+ * displayValue (adds back). An unavailable envelope routes to the `displayValue: null` row variant
+ * (see BuildupRow) — the component renders its `reason`, never a fabricated `$0`, and contributes
+ * nothing to the footing below.
+ *
+ * FOOTING IDENTITY: the rendered ladder foots to the composed NAV —
+ *   gross_total + debt.displayValue + realized_tax_liab.displayValue + unrealized_tax_liab.displayValue === nav
+ * i.e. gross_total − |debt| − realized_amount − unrealized_amount, using 0 for any unavailable
+ * envelope — the SAME arithmetic 105's own `nav` expression performs (this ruling changes only the
+ * ladder's PRESENTATIONAL convention, never 105's underlying nav arithmetic). `total_non_re` is NOT
+ * a term in this footing — it's an informational sub-total row, not part of the NAV sum. See
+ * nav-composition.test.ts's footing regression (both an underpaid and an overpaid fixture).
+ *
+ * The sign convention stays "exactly one negation in exactly one place" (D5's original invariant);
+ * that one place now negates three rows instead of one — there is still never a second flip site
+ * anywhere else in this file or NavCompositionTable.svelte. See nav-composition.test.ts's "exactly
+ * one flip site" + "signed realized, flipped" regressions.
  */
 export function buildupRows(b: NavCompositionBuildups): BuildupRow[] {
 	return [
