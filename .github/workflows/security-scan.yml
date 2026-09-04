@@ -335,13 +335,26 @@ jobs:
       # fence catches exactly what it caught before, on a client that can
       # still reach the registry's current API surface.
       #
+      # VERSION PIN — 11.19.0, NOT the latest 12.x. npm 12.0.2 declares
+      # engines.node "^22.22.2 || ^24.15.0 || >=26.0.0" and fails this job
+      # closed with EBADENGINE against the Node 20.20.2 this step installs
+      # (measured on this branch's first CI attempt, run 33850031059) — a
+      # DIFFERENT failure than the one being fixed, and one npm refuses to
+      # even attempt. npm 11.x declares engines.node "^20.17.0 || >=22.9.0"
+      # (registry-verified), which the runner's Node 20.20.2 satisfies, and
+      # 11.0.0 (2024-12-16) already ships past #7911 (merged Nov 2024). Pin
+      # the exact patch (11.19.0, matching npm's current 11-line HEAD at
+      # authoring time) rather than a floating major, per this repo's
+      # pin-exact-version convention — an unpinned `npm@11` would silently
+      # pick up 12.x the moment npm deprecates the 11 dist-tag range.
+      #
       # ⚠ A 5xx (or a hang) from either audit endpoint after this pin is a
       # REGISTRY-SIDE TRANSIENT (npm.js reported 503s on this same endpoint
       # earlier the same day this was diagnosed) — re-run the job. It is not a
       # dependency finding and not evidence this pin needs revisiting; treat it
       # as a retry, not a signal.
       - name: Pin npm past the retired quick-audit-endpoint fallback (npm/cli#7911)
-        run: npm install -g npm@12.0.2
+        run: npm install -g npm@11.19.0
 
       - name: npm audit (fails on high or critical)
         run: |
