@@ -26,7 +26,7 @@ import { POST } from './+server';
 
 const SESSION_UID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
-function makeEvent(body: unknown, captured: { writeCalls: number }) {
+function makeEvent(body: unknown, captured: { writeCalls: number; rpcParams?: Record<string, unknown> }) {
 	const request = new Request('http://localhost/api/settings/tax-brackets/1', {
 		method: 'POST',
 		headers: { 'content-type': 'application/json' },
@@ -44,8 +44,9 @@ function makeEvent(body: unknown, captured: { writeCalls: number }) {
 						})
 					})
 				}),
-				rpc: (_fn: string, _params: Record<string, unknown>) => {
+				rpc: (_fn: string, params: Record<string, unknown>) => {
 					captured.writeCalls++;
+					captured.rpcParams = params;
 					return Promise.resolve({ data: null, error: null });
 				}
 			})
@@ -158,6 +159,51 @@ describe('RT-24 schedule_label battery (migration 101 CHECK, length 1..500 — E
 		const res = await POST(makeEvent(validBody({ schedule_label: 'x'.repeat(500) }), captured));
 		expect(res.status).toBe(200);
 		expect(captured.writeCalls).toBe(1);
+	});
+});
+
+// RT-24 STRING arm (Sec's SELF-260 V-4, second joint-review pass on this surface —
+// schedule_label is the first user-controlled free-text field on a Lock 14 write path). The
+// length/empty/whitespace-only/max-length legs above are this arm's shape boundary; this block
+// adds the two legs V-4 required and neither prior battery covered: control-character rejection,
+// and the deliberate NON-rejection of markup — this field is prose, not markup, and escaping is
+// a render-side control (Svelte's default `{label}` interpolation, never `{@html}`), owned by
+// SELF-265, not by this schema. Rejecting angle brackets here would be the wrong fence.
+describe('RT-24 string arm (Sec 260 V-4) — schedule_label control characters and markup', () => {
+	it('rejects a schedule_label containing a control character (a literal tab, mid-string)', async () => {
+		const captured = { writeCalls: 0 };
+		const res = await POST(makeEvent(validBody({ schedule_label: 'federal ordinary\t2026' }), captured));
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { fieldErrors?: Record<string, string[]> };
+		expect(body.fieldErrors?.schedule_label?.length).toBeGreaterThan(0);
+		expect(captured.writeCalls).toBe(0);
+	});
+
+	it('rejects a schedule_label containing a C0 control character (U+0001)', async () => {
+		const captured = { writeCalls: 0 };
+		const res = await POST(makeEvent(validBody({ schedule_label: 'federal\u0001ordinary' }), captured));
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { fieldErrors?: Record<string, string[]> };
+		expect(body.fieldErrors?.schedule_label?.length).toBeGreaterThan(0);
+		expect(captured.writeCalls).toBe(0);
+	});
+
+	it('rejects a schedule_label containing a C1 control character (U+0085, NEL)', async () => {
+		const captured = { writeCalls: 0 };
+		const res = await POST(makeEvent(validBody({ schedule_label: 'federal\u0085ordinary' }), captured));
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { fieldErrors?: Record<string, string[]> };
+		expect(body.fieldErrors?.schedule_label?.length).toBeGreaterThan(0);
+		expect(captured.writeCalls).toBe(0);
+	});
+
+	it('accepts a `<script>alert(1)</script>` schedule_label — it is prose, not markup, and is forwarded to the RPC UNCHANGED; rejecting angle brackets would be the wrong control at this layer. Escaping happens at render (SvelteKit default `{label}` interpolation; `{@html}` must never be used on this field) — that render-side leg belongs to SELF-265, not to this test', async () => {
+		const captured: { writeCalls: number; rpcParams?: Record<string, unknown> } = { writeCalls: 0 };
+		const payload = '<script>alert(1)</script>';
+		const res = await POST(makeEvent(validBody({ schedule_label: payload }), captured));
+		expect(res.status).toBe(200);
+		expect(captured.writeCalls).toBe(1);
+		expect(captured.rpcParams?.p_schedule_label).toBe(payload);
 	});
 });
 
