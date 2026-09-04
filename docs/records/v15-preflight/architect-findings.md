@@ -28,7 +28,8 @@ Read-time recomposition **cannot reproduce four of the six §2.6.1 sections** fo
 
 1. **Asset Allocation (§2.2.2).** Its `% Target / $ Target / $ ReAlloc` columns derive from `pfin.planning_target` (`074`). ADR-011 Decision 18 / Lock 14 locks the settings store as *"UPSERT-in-place + `updated_at`; **no edit-history rows** (settings NOT audit-class)"* — reaffirmed unchanged by the 2026-08-16 family-size amendment. **A `%Target` edited today silently rewrites every historical report's Asset Allocation section.** There is no as-of read of a settings row because there is no history to read.
 2. **Estimated Taxes (§2.5.1/§2.5.3).** `fn_compute_tax_liability` (`104`) resolves a schedule to *the current-year schedule if present, else the latest prior-year one*, off `tax_bracket_schedule` / `tax_bracket_row` (`101`) — also Lock 14 UPSERT-in-place, also no history. Same failure, plus `basis_year` shifts underneath the reader.
-3. **Account Holdings (§2.1.5), tax lines.** `fn_nav_composition` (`105`) subtracts two tax envelopes carried verbatim from `fn_compute_tax_liability(p_as_of)`. ADR-067 Decision 3 rules, on `nav_daily`: *"the tax state for a past date is not recoverable, so a back-fill would be a fabrication with the shape of a measurement (Sec veto)."* Recomposing a past month's §2.1.5 tax lines from today's ledger designations and today's schedules **produces exactly the artifact that ruling vetoes**, arrived at by a different route.
+3. **Account Holdings (§2.1.5), tax lines.** `fn_nav_composition` (`105`) subtracts two tax envelopes carried verbatim from `fn_compute_tax_liability(p_as_of)`. **The ruling:** [ADR-067](DECISIONS.md#adr-067) Decision 3, verbatim — *"**Option C** (backfill the series) carries a recorded **Sec VETO**, reached independently by Architect, Sec and PM."* **The rationale, in its own home:** migration `105`'s `comment on function` — *"the tax state for a past date is not recoverable, so a back-fill would be a fabrication with the shape of a measurement (Sec veto, recorded at ruling R3)."* Recomposing a past month's §2.1.5 tax lines from today's ledger designations and today's schedules **produces exactly the artifact that veto covers**, arrived at by a different route.
+   - ⚠ **Citation-form correction, and the error was mine** (Sec **N-1**; verified independently here — `grep -c 'fabrication with the shape of a measurement' DECISIONS.md` returns **0** at `b90b846`, and the string lives in `105` plus `docs/records/v14-*`). Round 1 presented that sentence as **ADR-067 Decision 3's own words**. It is not: the *ruling* is the ADR's and was correctly attributed; the *rationale wording* is `105`'s comment and the V1.4 records, which are not canon. **Right ruling, wrong pointer** — the ADR-011 Decision 4 PR #476 class, committed by me. Corrected above and in the Architect memory entry that had inherited it. ⚠ **This sentence must not enter a V1.5 migration header or the §9 consolidated ADR as a quotation *of ADR-067*.** If the wording is wanted in canon, promote it into the ADR deliberately.
 4. **Category labels across every section.** Migration `082` renamed the asset-domain Cat `Equity` → `Marketable Securities` (ADR-058 Decision 7, F/CTO 2026-08-18). A pre-`082` month recomposed today renders the new label on a report the user archived under the old one. That is benign this once and is the general shape of the problem.
 
 Lock 15's dual-column filter (`transaction_date <= D and created_at < (D+1)`) genuinely reproduces `account_trans` as-of, so **Cash Flow and the gross half of Account Holdings do recompose faithfully**. The failure is not total — which is precisely why it will not announce itself.
@@ -52,7 +53,15 @@ Lock 15's dual-column filter (`transaction_date <= D and created_at < (D+1)`) ge
 >
 > **PM's half of the losing side, which is not mine and is worth the sitting's attention:** *"a frozen payload freezes its defects"* — a report generated against a bad target, or against an undesignated tax-authority ledger, is **wrong forever**, and the only remedy is the PRD's regeneration affordance, which the user must know to use. That is why PM §8's "Regenerate" copy and the pre-finalize *"No IRS/FTB ledger designated"* prompt (P4 item 4) are load-bearing under Option A rather than nice-to-have. ⚠ **Option A converts a class of silent drift into a class of permanent, visible error.** That is the better trade, and it is a trade.
 >
-> **All three roles now lean or concur on Option A.** Sec's stake (F-2 / the SD-12 derivative class) is unchanged by the concession and the joint review still governs.
+> **⟳ Round-2b — Sec backs Option A and VETOES Option B** (`sec-findings.md` @ `04bec6e` **R2.1**). Sec's ground for A is one this role does not supply: under A there is **one stored artifact and one read path**, so the P10 tenant-isolation battery's job is finite; under the hybrid the battery must prove tenancy on two render paths forever, *"including for every §2.x surface added later."*
+>
+> ⚠ **Sec scopes the veto's ground precisely, and the scoping is the load-bearing part.** ADR-067 D3's recorded Sec VETO on backfill has two grounds, and **only one transfers**: ground **(i)** (a backfill rewrites an append-only audit surface) does **NOT** transfer — Option B writes nothing, so there is no rewrite. Ground **(ii)** (the past state is not recoverable, so the values are fabricated) **does** transfer intact: *"Stored or not stored is immaterial to ground (ii); presented as a measurement is the whole of it."* **The veto rests on (ii) alone and Sec says so rather than leaning on both.**
+>
+> ⚠ **What is NOT vetoed:** PM's round-1 A-5 option (A) — *amend φ-1 to name the exceptions, loudly labelled* — is a **different proposal from S-1 Option B**, because *"it changes the promise instead of breaking it."* Sec's only requirement there is that the label render **on the historical report**, not merely in the PRD. PM has since withdrawn it in favour of Option A, so nothing turns on it; it is recorded so a later reader does not treat the veto as covering more than it does.
+>
+> **Sec's conditional acceptance of the hybrid,** if F/CTO weights payload-compat above render-path unity: Sec will not block it, but would then **require the per-section frozen/recomposed classification to live in the SCHEMA** (a marker column on the child), not in prose — *"so a misclassification is a visible column value rather than an absence."* ⚠ That condition is worth carrying whichever way this rules; it is the mitigation my Option C lacked.
+>
+> **All three roles now back Option A.** Sec's stake (F-2 / the SD-12 derivative class) is unchanged and the joint review still governs.
 
 **`⟨RULING⟩` S-1.** Sec joint-review mandatory either way (Lock 11/12 surfaces, ADR-011 D2 + D3, financial values).
 
@@ -74,6 +83,18 @@ Likely provenance, offered so the drafts are not read as careless: the **provide
 - **Option C — app pushes *rendered HTML* (not JSON) to the worker.** The app composes and escapes under the user's live session, hands the worker finished HTML, worker returns PDF bytes. *Buys:* one template; escaping in Svelte; no impersonation (S-3 dissolves); worker stays zero-DB and zero-logic. *Costs:* still inverts the direction versus ARCH §3.2/RT-21, so it still needs the Lock 13 amendment; the JWT's purpose changes from "prove who is asking" to "prove the caller is our app," which is an RT-21 rewrite.
 
 **Lean: Option C.** It keeps every property Option A buys (one template, structural escaping) while removing the hardest unsolved problem in the arc (S-3), and it makes the worker as close to a pure function as this design can get. **The losing side, named:** C requires amending a ratified ADR-011 Lock and rewriting RT-21's battery, which A costs nothing. If F/CTO prefers not to reopen Lock 13, Option A is correct and S-3 must then be ruled. **Option B is dominated by C** — it pays A's costs *and* C's costs and buys nothing C does not.
+
+> **⟳ Round-2b — Sec backs Option C, and names a losing side I did not** (`sec-findings.md` @ `04bec6e` **R2.2**). Sec re-measured ARCH §3.2 itself (`:325`, `:330`, `:332`) and confirms the inversion. Sec's ground for C is the same as mine stated more sharply: *"Trading a silent tenant-confusion class for a loud network class is the right trade on a fintech surface."*
+>
+> ⚠ **The losing side of C that my §1 missed, and it is concrete.** C makes the HTML body an **inbound network input to a browser engine**. Under Option A the worker only ever loads what it fetched from a known app URL; under C anyone reaching the worker's port hands arbitrary HTML to Puppeteer, and `<iframe src="file:///proc/self/environ">` rendered into a PDF returned to the caller **exfiltrates `PDF_WORKER_SIGNING_KEY` — that container's only secret and therefore its entire compromise.** **C is not safe without both of Sec's conditions:**
+> 1. **All outbound and local resource loading denied at render:** `page.setContent()` plus request interception aborting every request whose scheme is not `data:` — no `file:`, no `http`, no `https`. ⚠ Lock 13 mod #7's shipped hardening list does **not** contain this, so it is an **addition, not an inheritance**. **Catch criterion:** POST HTML containing `<iframe src="file:///proc/self/environ">` and `<img src="http://169.254.169.254/">`; assert the PDF contains neither the key nor any fetched content **and that the interception handler recorded two aborts** — *"a failed fetch and a blocked fetch render identically"*, so asserting only that the PDF looks fine is vacuous.
+> 2. **Sec N-4 — C creates a second inbound admission channel and the RT-27 fence does not reach it.** `scripts/ci/fence-admission-private-bind.sh` locates its target by an in-file sentinel in a **Coolify Compose manifest**, and `workers/pdf-render/` has **no compose manifest at all**, so the admission endpoint would come up unfenced. **Requirement (DevOps):** pdf-render ships a manifest carrying the sentinel and the RT-27 job invokes the script against it — *"a wiring change, not a new fence"*, since the script is already generic over its target.
+>    - ⚠ **INTRA-instance coverage expansion of RT-27; NOTHING changes on the §10 catalogued ledger.** Sec cites the direct precedent rather than re-arguing it: SECURITY §4.5's RT-30 entry records an *"INTRA-instance allowlist expansion (RT-26 3→4)"* with *"§10 ledger UNCHANGED"*. **No new catalogued instance may be drafted for this channel and no ledger edit is owed** — Sec states this because the opposite failure, catalogueing it, *"would look like diligence."*
+>    - ⚠ It **is** a CI **fence-boundary** change, which is a standing escalation trigger and joint-review-mandatory; it ships with a golden fixture that fails closed.
+>
+> **Sec on the alternatives:** Option **A** *"remains correct and I will not block it"* — its network posture is strictly better because the worker holds no listener at all — but choosing A makes **S-3 live and it must then be ruled.** Option **B** is not supported; Sec agrees it is dominated.
+>
+> ⚠ **Sec also retracts its own round-1 position on §7.32 item 6** (R2.2 close): under A or C the worker composes no HTML, so *"both of those are wrong under the ratified direction."* That converges with PM's §12.3 R-5 point and with §9.5 below — **the control's home tracks S-2, but the proof leg is owed under every outcome.**
 
 **`⟨RULING⟩` S-2.** Sec joint-review mandatory (RT-21 HIGH, SD-20, Lock 13).
 
@@ -380,3 +401,67 @@ PM **§12.3 F-3**: PM does not object to renaming `commentary_equity` → `comme
 ### 9.6 Ledger — unchanged
 
 No §10 catalogued instance added, removed, reordered or renumbered by this pass; no layer attribution moves; no Decision 3 label drafted or reallocated. PM **§12.6** records the same for PM's round 2. Path B throughout.
+
+---
+
+## 10. Round 2b — Sec's round 2 (2026-09-04)
+
+**Ref read.** `origin/meta/v15-preflight-sec` @ `04bec6e`, `docs/records/v15-preflight/sec-findings.md`, md5 `e3cdafb95f7ae2fcd8d73ab8ba5851fd` — fetched and hashed from `origin` in this session before any content was read. `origin/main` re-checked: still `b90b846`.
+
+⚠ **Sec's R2.6 pre-verdicts grade Architect's ROUND-1 blocks (`66288e0`)**, which Sec names. Of the five AMBER, **three were already fixed in round 2** (A2's RT-21→RT-20, A8's review classification, P10's unconditional tri-axis) — **ref-skew, not disagreement**, marked as such in their blocks. **Two AMBER and the one RED are genuinely new and are applied.** Sec's own verdict summary against the round-1 blocks: **GREEN 12 · AMBER 5 · RED 1.**
+
+### 10.1 Applied from Sec's round 2
+
+| Sec item | Grade | Disposition |
+|---|---|---|
+| **R2.6 A7 item 5** | **RED** | **Applied, and it becomes a ruling.** Sec **N-2** measured past PM's D-8: the successor `pfin.linked_source_sync_audit` (`015:441`) **exists and rejects a report-generation row on two CHECKs** (`source in ('webhook','scheduled_poll')`; a provider list with no internal/report member), and the general helper is unauthored. So the AC could only be built by silently dropping D1(d) or by widening CHECKs on a shipped append-only table. **New `⟨RULING⟩` A7-AUDIT** with three options; **Architect lean (b), author the reserved general helper**; losing side named. ⚠ Sec **withdrew its own round-1 catch criterion** here — it is untestable until the home exists. |
+| **R2.6 A1 item 6** | **AMBER** | **Applied.** Round 1 *asserted* final-row immutability and named no mechanism, and **nothing addressed `service_role` on A1 at all** while A2 carries a bypass trigger. Decision 2 requires append-only across **both** roles. A1 now specifies a whole-row-on-final trigger plus the `service_role` fence, with the note that `rolbypassrls` leaves the trigger as that writer's **only** applicable layer. |
+| **R2.6 A4 item 3** | **AMBER** | **Applied as two new AC items.** The resource-loading fence (`setContent` + scheme interception, two-abort catch criterion) is an **addition to Lock 13 mod #7, not an inheritance**; and Sec **N-4**'s compose-manifest wiring so RT-27's private-bind fence has a target under `workers/pdf-render/`. Both scoped to S-2 B or C. |
+| **N-5** | flag | **Applied.** CHECK-enforced length bounds on the four commentary columns, mirrored in Zod, with the two-layer catch criterion. Without them P3's *"length bounds"* battery is a single-layer app control on a Lock 14 write path. `⟨PM⟩` owns the figure, not the mechanism. |
+| **N-3** | note | **Applied as a stated reading.** See §10.3. |
+| **N-1** | note | **Applied, and it was my error.** See §1 item 3 and §10.2. |
+| **D-4 / N-6** | conflict | **Applied as `⟨RULING D-4⟩`** on both affected blocks; not decided. See §10.4. |
+| **R2.5 item 3** | new trigger | **Applied to the A10 sketch:** the on-demand generation write path is a new user-reachable write onto a Decision 2 audit-class table, so **D2 is the governing trigger** — a second, independent reason it is not a fold into P5. |
+| **R2.5 (A3 EXECUTE leg)** | — | **Applied to P10:** the no-`rolbypassrls`-EXECUTE assertion is restated as **standing**, with Sec's verification of the mechanism (`104:913-914`, `105:434-435`, and no function-level grant in `008`) and the reason — the failure mode is a future migration adding a grant to make something work. |
+
+### 10.2 N-1 — a false-composite citation of my own
+
+Sec found that my S-1 presented *"a fabrication with the shape of a measurement"* as **ADR-067 Decision 3's own words**. **Verified independently here rather than taken on report:** `grep -c 'fabrication with the shape of a measurement' DECISIONS.md` returns **0** at `b90b846`; the string lives in migration `105`'s `comment on function` and in `docs/records/v14-*`. **The ruling was correctly attributed; the rationale wording was not.** Right ruling, wrong pointer — the ADR-011 Decision 4 PR #476 class, and I committed it while citing that class elsewhere in the same file.
+
+Corrected in §1 and **in the Architect memory entry that had already inherited it**, which is the part that would have propagated. ⚠ **The sentence must not enter a V1.5 migration header or the §9 consolidated ADR as a quotation of ADR-067.** If the wording is wanted in canon, promote it deliberately.
+
+**The reusable half:** a quotable sentence in a migration comment reads exactly like an ADR quotation once it has been repeated twice. `105`'s comment is unusually well-written, which is precisely why its sentences travel.
+
+### 10.3 N-3 — ARCH `:208` and the cron, with the intended reading stated
+
+Sec found a third ratified artifact bearing on S-3 and raised it *"as a genuine ambiguity, not as a confirmed defect"*. Re-measured here: ARCH `:208` reads *"All **reads** flow through a single `SECURITY INVOKER` read-composition helper (**user-session only — never invoked from a worker**) …"*, and A7 has the cron invoking A3.
+
+**Architect's intended reading, stated in full in the A3 block and summarized here: the clause constrains the SESSION CONTEXT, not the process identity, and it is PDF-scoped.** The cron satisfies it by impersonating — at the database layer that caller *is* a user session, with RLS applying and `auth.uid()` resolving. What the sentence forbids is its own second clause's subject: a worker reaching the database **directly**, outside any user session.
+
+**Why the general reading cannot be right: under it A7 could not exist**, and ADR-011 Decision 15 / Lock 11 **mod #4 locks a V1-SHIP-BLOCK cron tenant-binding discipline** — meaningless if the cron may never invoke the helper it binds a tenant for. A reading that voids a ratified V1-SHIP-BLOCK mod is the wrong reading.
+
+⚠ **This makes Sec F-4 sharper, not softer.** If *"user-session only"* is a session-context constraint, **claims-without-role does not satisfy it** — `rolbypassrls` remains in force and it is not a user session in the sense that matters. ARCH `:208` and Sec's α are the **same requirement stated twice**. **Owed:** ARCH `:208` is narrowed on the §9 ADR's doc PR so the next reader does not hit this.
+
+### 10.4 Standing disagreements — the register after Sec's round 2
+
+**Two close, one opens, two remain.**
+
+1. **S-5, the array column — CLOSED in Architect's favour.** Sec **R2.8 retracts its round-1 lean B** and backs Architect's **(a)**, ship the dormant fence, *"reason given"*. PM abstains. ⚠ §8.6 item 2 and §9.4 item 5 recorded this as live; **it is no longer**, and I record the change rather than editing the earlier entries, because they are the account of what was true when written.
+2. **Sec F-6 vs A6's residual — CLOSED, ref-skew.** Sec's named disagreement is with round 1's *"human-PR-review second line"* disposition for the manifest. **Round 2 already re-scoped A6 to the manifest extension and added the A4 sequencing constraint**, which is Sec's requirement. What remains under human PR-review is the **base-image transitive** residual only, which Sec does not contest. **We agree.**
+3. **`⟨RULING D-4⟩`, the commentary IDENTIFIER — OPENS as a live cross-sibling conflict.** Sec **N-6** records it as needing a decision *"and neither sibling's file records that the other disagrees"* — a fair catch: my round 2 folded PM's *vehicle* constraint and read PM as not objecting, while PM's §3/D-3 says the identifier `commentary_equity` **stands**. **Not reconciled.** Both blocks now carry `⟨RULING D-4⟩`. **Settled under every outcome:** the heading is `Marketable Securities`, and the decision is stated in the §9 consolidated ADR rather than arriving by migration.
+4. **A8's milestone — STILL LIVE** (Architect A1–A7 · PM A1–A8). Unchanged; Sec takes no position. My §9.4 note stands: PM's product-trace argument is the stronger one.
+5. **Sec R-1 supersession — STILL LIVE** (Sec A derive · Architect B narrow exemption). Sec's round 2 does not revisit it; my §8.3 mechanical objection stands unanswered and should be put to the sitting.
+
+### 10.5 Where Sec's round 2 changed my own conclusions
+
+- **S-2's losing side was incomplete and Sec completed it.** My §1 named C's cost as *"a Lock 13 amendment plus an RT-21 rewrite"*. **Sec named the one that matters: C turns the HTML body into an inbound network input to a browser engine**, and `<iframe src="file:///proc/self/environ">` returned inside the PDF exfiltrates the container's only secret. **C is not safe without both of Sec's conditions**, and I had proposed it without either. My lean is unchanged; the option is now correctly costed.
+- **Sec independently reached my §9.5 conclusion on §7.32 item 6 and retracted its round-1 position** (M-2 / R-5): under S-2 A or C the worker composes no HTML, so asking for the control *in the worker* is wrong under the ratified direction. Three roles now agree the control's home tracks S-2 while the **proof leg is owed under every outcome**.
+- **Sec confirms it missed S-1's cause in round 1** (*"I found the two symptoms and did not find the cause"*) and confirms it did not read ARCH §3.2 in round 1. Recorded because the corresponding fact about my own pass — that I verified the RT-22 fence existed without asking what it could not observe (§8.7) — is the same failure shape, and neither is a reason to weight either file's round-1 measurements differently now.
+
+### 10.6 Counts — a fourth number exists and must not be merged
+
+Sec **R2.7** states its **3** was over *the original drafted AC text in the issue dump*, and adds that **against Architect's re-derived blocks the same predicate gives 12 GREEN / 5 AMBER / 1 RED at `66288e0`.** ⚠ **That is a fourth number over a fourth object** (re-derived blocks, not drafted ACs) and it is not comparable to the three at §8.2. **A9 and P9 are in all three drafted-text counts.** Sec's framing is the one to carry to the sitting: *"Stated this way so nobody reconciles three correct numbers into one wrong one."*
+
+### 10.7 Ledger — unchanged
+
+No §10 catalogued instance is added, removed, reordered or renumbered by this pass. ⚠ **Sec N-4's RT-27 wiring is explicitly an INTRA-instance coverage expansion with no ledger effect**, and both files now say so with the RT-30 precedent cited rather than re-argued — recorded because catalogueing it *"would look like diligence."* No Decision 3 label drafted or reallocated. Path B throughout.
