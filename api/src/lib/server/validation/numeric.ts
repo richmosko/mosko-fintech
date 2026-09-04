@@ -44,6 +44,23 @@ const PERCENT_MAX_DECIMAL_PLACES = 2;
 const PERCENT_MIN = 0;
 const PERCENT_MAX = 100;
 
+/** `pfin.tax_bracket_row.bracket_rate` shape — CONFIRMED against migration 101
+ *  (`supabase/migrations/101_tax_bracket_tables.sql`, landed at `5f69249`, SELF-259): a FRACTION
+ *  unit (0.22, never 22), `numeric(12,8)` with `CHECK (bracket_rate >= 0 and bracket_rate <= 1
+ *  and bracket_rate <> 'NaN'::numeric)`. Mirrors `PERCENT_MAX_INT_DIGITS` above: the typmod's 4
+ *  integer digits are DELIBERATELY looser than the [0,1] domain needs (101's own column comment
+ *  — "a typmod deliberately looser than the domain needs so that a mis-typed 22 coerces and is
+ *  refused by the domain CHECK, which can explain itself, rather than by a numeric-overflow
+ *  error, which cannot") — this sanitizer mirrors that split the same way `sanitizePercent`
+ *  mirrors 074's typmod-vs-CHECK split: the shape bound (maxIntDigits) is the TYPMOD's capacity,
+ *  the min/max bound is the CHECK's domain, and a shape-valid-but-out-of-range input (e.g. "22")
+ *  falls through to the range check for the clearer "at most 1" message rather than a generic
+ *  shape-rejection. */
+const FRACTION_RATE_MAX_INT_DIGITS = 4;
+const FRACTION_RATE_MAX_DECIMAL_PLACES = 8;
+const FRACTION_RATE_MIN = 0;
+const FRACTION_RATE_MAX = 1;
+
 /** Max integer digits for a Postgres numeric(28,8): 28 precision − 8 scale = 20. Shapes
  *  `pfin.account_trans.quantity` (017). No `min`/`max` here — the column itself carries no DB
  *  CHECK range, so there is no inclusive bound to mirror (unlike `sanitizePercent`'s 074 CHECK).
@@ -189,4 +206,21 @@ export function sanitizePercent(raw: unknown): SanitizeResult {
  */
 export function sanitizeQuantity(raw: unknown): SanitizeResult {
 	return sanitizeDecimal(raw, { maxIntDigits: QUANTITY_MAX_INT_DIGITS, maxDecimalPlaces: QUANTITY_MAX_DECIMAL_PLACES });
+}
+
+/**
+ * Validate a user-supplied tax-bracket marginal-rate input against the battery, shaped to
+ * `pfin.tax_bracket_row.bracket_rate`'s own DDL (SELF-259, migration 101 @ `5f69249`):
+ * `numeric(12,8)`, `CHECK (0 <= rate <= 1 and rate <> 'NaN')`. FRACTION unit (0.22, never 22),
+ * ruled at the migration for the estimated-tax arithmetic's own reason (a fraction multiplies
+ * directly; a percent needs a /100 at every call site). Same six adversarial categories as the
+ * other exports.
+ */
+export function sanitizeFractionRate(raw: unknown): SanitizeResult {
+	return sanitizeDecimal(raw, {
+		maxIntDigits: FRACTION_RATE_MAX_INT_DIGITS,
+		maxDecimalPlaces: FRACTION_RATE_MAX_DECIMAL_PLACES,
+		min: FRACTION_RATE_MIN,
+		max: FRACTION_RATE_MAX
+	});
 }
