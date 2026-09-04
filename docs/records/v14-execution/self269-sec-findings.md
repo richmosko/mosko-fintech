@@ -14,7 +14,17 @@ composition-by-citation gate is where the evidence actually lives. **Four notes.
 rulings team-lead asked for are given in §3.
 
 **Reviewed at** `origin/feature/self-269` **`e20906b`**, with `feature/self-268` **`0a26bed`**
-verified an **ancestor**. Delta = **one new file**, `supabase/tests/rls/self269_v1_4_close_gate.sql`,
+verified an **ancestor**.
+
+⚠ **RE-ANCHORED to `29f9a83` (2026-09-04), and it costs nothing to re-derive because the trees
+are IDENTICAL.** `origin/feature/self-269` moved to **`29f9a83`** when PR #618 (SELF-268) merged
+to `main` at **`c8b02d5`**. Measured rather than assumed: `git rev-parse e20906b^{tree}` and
+`git rev-parse 29f9a83^{tree}` are **the same object** (`2f9b54ff…`), and
+`git diff --name-only e20906b 29f9a83` is **empty**. `origin/main` `c8b02d5` is an ancestor of
+`29f9a83`. **Every finding, every cited leg label and every measurement below therefore describes
+`29f9a83` byte-for-byte**, with no re-derivation — which is a stronger statement than moving the
+sha would have been, and it is why the anchor moves for free. The battery blob md5 is likewise
+unchanged at `a1e6ff19ed126838d949d835aa4be092`. Delta = **one new file**, `supabase/tests/rls/self269_v1_4_close_gate.sql`,
 643 lines, blob md5 **`a1e6ff19ed126838d949d835aa4be092`** (measured; matches the dispatch). Nothing
 else changed — no migration, no source, no workflow, no ADR.
 
