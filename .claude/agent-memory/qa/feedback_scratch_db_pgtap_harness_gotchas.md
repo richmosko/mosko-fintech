@@ -1,6 +1,6 @@
 ---
 name: feedback-scratch-db-pgtap-harness-gotchas
-description: Mechanical gotchas building a from-scratch pgTAP verification DB (docker exec -i, pgtap schema placement, permissive-direction privilege gap, pg_prove -v mount path, \'-escaping, psql :'var' inside do $$ $$) — hit all three authoring the SELF-218 battery verification, 2026-08-12; #5 added SELF-245, 2026-08-25; #6 added SELF-248, 2026-08-25; #7 added SELF-250, 2026-08-26.
+description: Mechanical gotchas building a from-scratch pgTAP verification DB (docker exec -i, pgtap schema placement, permissive-direction privilege gap, pg_prove -v mount path, \'-escaping, psql :'var' inside do $$ $$, pg_catalog.coalesce, multi-unknown-literal UDF calls) — hit all three authoring the SELF-218 battery verification, 2026-08-12; #5 added SELF-245, 2026-08-25; #6 added SELF-248, 2026-08-25; #7 added SELF-250, 2026-08-26; #8/#9 added SELF-259, 2026-09-03.
 metadata:
   type: feedback
 ---
@@ -156,3 +156,42 @@ alone. [[feedback_instrument_cannot_observe_the_property]]
    captured text as raw SQL outside any dollar-quoting, so it composes
    correctly with a following `savepoint` / `rollback to savepoint` pair for
    an index-drop inversion leg.
+
+8. **`pg_catalog.coalesce(...)` (schema-qualified) does NOT exist and errors —
+   `coalesce` is a special parser form, not a callable pg_catalog function.**
+   Found this while testing `fn_tax_bracket_schedule_replace_all` (SELF-259,
+   101): the migration's own p_rows-shape RAISE calls
+   `pg_catalog.coalesce(pg_catalog.jsonb_typeof(p_rows), 'null')`. Every other
+   `pg_catalog.*` call beside it (`jsonb_typeof`, `jsonb_array_elements`,
+   `array_agg`, `jsonb_object_keys`) is a REAL function and schema-qualifies
+   fine — only `coalesce` breaks, with `function pg_catalog.coalesce(text,
+   unknown) does not exist`. Reproduced standalone: `select
+   pg_catalog.coalesce('x'::text, 'y');` fails; `select coalesce('x'::text,
+   'y');` works. `coalesce`/`case`/`nullif`/`greatest`/`least` are SQL
+   special forms the parser recognizes by bare name only — explicit schema
+   qualification routes them into ordinary function-call resolution, where no
+   such catalog entry exists. This was a genuine BUG IN THE MIGRATION CODE
+   (Architect's file, not mine to fix) that my battery caught and correctly
+   left red rather than routing the assertion around it — never
+   schema-qualify these five names, and treat a battery leg that surfaces one
+   as a real finding, not something to weaken the assertion to match.
+
+9. **A UDF call with several "unknown"-typed literal arguments AND a custom
+   enum parameter can fail to resolve even with exactly one candidate
+   function — cast every literal explicitly.** `select
+   pfin.fn_tax_bracket_schedule_replace_all(999999999, 2026,
+   'federal_ordinary', 10000.00, null, '[]'::jsonb)` against a function typed
+   `(bigint, smallint, pfin.tax_schedule_type_enum, numeric, numeric, jsonb)`
+   errored `function ... (integer, integer, unknown, numeric, unknown,
+   jsonb) does not exist`, even though only one function of that name
+   exists. Adding an explicit cast to EVERY literal argument
+   (`999999999::bigint, 2026::smallint,
+   'federal_ordinary'::pfin.tax_schedule_type_enum, 10000.00::numeric,
+   null::numeric, '[]'::jsonb`) fixed it immediately — confirmed by isolated
+   repro before touching the battery file. Root cause not fully chased (looks
+   like Postgres's overload-resolution algorithm giving up when it can't
+   simultaneously narrow several unknown literals across mixed type
+   categories including a non-preferred custom enum), but the fix is cheap
+   and mechanical: when calling a multi-arg pgTAP-tested function that mixes
+   plain numerics, a custom enum, and jsonb, cast every literal, don't rely
+   on implicit resolution — even for a signature with a single candidate.
