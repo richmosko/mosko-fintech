@@ -480,3 +480,83 @@ so** rather than pretending to bound it.
 Non-blocking: the dropped `accountId` on the create page (Frontend); the later-becomes-linked
 booking (Architect); (L9a)'s missing namespace filter (QA); the create-path 23505 branch unwalked
 (none — test-covered).
+
+---
+
+## Verdict line — 2026-09-04 · **GREEN at `6b973bf`**
+
+Two re-reviews since the AMBER above, diffs only. All conditions discharged; no blocking finding
+remains. Every measurement below was taken in the same turn it is written.
+
+**`2c158e4` → `2dc8e53`.** B1 landed **byte-verbatim**. B2 discharged — PR **#605** opened and
+`pgTAP RLS battery (supabase test db)` reported **SUCCESS**, which settles the two legs I could not
+verify by inspection ((L10)'s hard-coded md5, (L9c)'s `indexdef` regex). The Lock 14 layer list and
+the equality-leg enumeration landed verbatim. Architect's rewording of the shared-predicate heading
+to **ZERO READ-PATH COPIES** — one executable home plus the index predicate named as structurally
+non-routable, with the narrowing residual stated — is **better than the note I filed** and is
+endorsed. The Frontend `accountId` note is discharged and its implementation names a hazard I had
+not: a stranded user re-submitting would create a SECOND account.
+
+**New blocking finding raised at `2dc8e53` (C1), now closed.** The rollover clause added beside my
+B1 text told the user to *clear and re-designate* and did not say what that does to NAV. Clearing
+returns the ledger to `fn_nav_composition`'s leaf set — the exclusion is a live read, not a one-way
+latch, which this migration's own battery proves at **(L3i)/(L3j)** — so NAV would rise by every
+payment ever made to that authority: the §9.1 / PM A-9 double-count re-entered through the sanctioned
+path, silently, in the NAV-overstating direction. **The addition, not the verbatim text, was where
+the falsifiable content lived.**
+
+**`2dc8e53` → `6b973bf`. GREEN.**
+
+- **Diff is one comment string.** `git diff -U0 2dc8e53 origin/feature/self-267 -- <migration> |
+  grep -E "^[+-]" | grep -vE "^(\+\+\+|---)" | grep -vE "^[+-]--"` returns **exactly two lines** —
+  the old and new `comment on function pfin.fn_ytd_paid_per_jurisdiction` literal. Zero function-body
+  lines, zero DDL, zero ACL, zero index. Independent corroboration of the reported body md5 by an
+  instrument that does not depend on locating the `$$` delimiters.
+- **C1 landed byte-verbatim**, confirmed by fixed-string (`grep -F`) match of the full paragraph
+  against the file at `origin/feature/self-267`.
+- **Architect's two added factual claims were measured against the tree, not accepted.** Both hold,
+  and one holds more strongly than claimed:
+  - *"the `058` close gate REFUSES an account holding a non-zero cash balance (leg 2 of 3)"* —
+    `058` raises `'account closure blocked: account % holds a non-zero cash balance (% native) as of
+    % (leg 2 of 3: cash)'`. The leg count is **byte-accurate to the raise message**, not a
+    recollection.
+  - *"`049`'s as-of predicate drops a closed account from the §2.1.5 leaf set whatever its
+    designation"* — `where (acc.closed_at is null or acc.closed_at::date > p_as_of)` sits inside
+    `pfin.fn_account_unrealized_gl` (`059`, the live re-issue of `049`) and is **ungated**. It is
+    additionally true of `fn_compute_nav` under `p_active_only`, so **closing moves the headline and
+    the foot together and opens no new divergence** — a strengthening the clause does not claim.
+- **CI at `6b973bf`:** `pgTAP RLS battery (supabase test db)` **SUCCESS**; RT-22 / RT-26 / RT-27 /
+  TBC / TBC-node / gitleaks / secrets-manifest CI-production non-overlap all SUCCESS. The web-app,
+  live-DB and two npm-audit lanes had not reported — the npm-audit fence is a repo-wide block being
+  fixed separately and its change comes to Sec on its own.
+
+### Open, non-blocking — recorded so none reads as discharged
+
+1. **The drain METHOD decides whether the rollover preserves the invariant, and the comment does not
+   say so.** Step 1 now instructs the user to drain the ledger before closing it. Only an
+   Expense-class drain preserves the invariant; a transfer-drain lands the cash on an in-set leaf and
+   NAV rises by the full amount. **I do NOT require this in `102`'s comment**, for two reasons
+   stated so the non-requirement is not mistaken for an oversight: the mechanism is already carried
+   by the clause immediately below it (*NAV rises by the whole of the cleared ledger's balance*), one
+   inferential step away; and unlike C1 — which fired when the user followed the recommended
+   procedure **correctly** — this fires only when the user records a transfer that did not happen,
+   which the model is faithfully reflecting rather than causing. Owner: SELF-266 §2.5.3 copy plus the
+   booked V2 settle/drain affordance.
+2. **⚠ `E19b` exists on no pushed ref.** The residual in (1) was reported to me as *"ruled a product
+   question (E19b)."* Measured on `origin/meta/v14-execution-log` @ `edfca6a`: the log's headings run
+   `E1 … E20` with **no `E19b`**, and `grep -n "E19b"` over the file returns nothing. E14–E20 are now
+   pushed and **E19 is present, accurate, and correctly records its own C1 correction** — the earlier
+   E14 finding at §8 is fully discharged. But the ruling that disposes of (1) is **not recorded**,
+   and "routed to E19b" reads as discharged while nothing holds it. `102` cites neither `E19` nor
+   `E19b`, so no artifact ships a dangling pointer.
+3. **My own error, prose only.** My B1 tightening was spliced with the original trailing comma
+   consumed, which is correct — but my replacement introduced its own `so`, so the sentence now reads
+   *"… cannot simply be added alongside the old one, **so** from the SECOND tax year onward …"* after
+   an earlier *"…at a time, **so**…"*. Meaning is intact; it is a run-on I caused. Not worth a commit
+   on its own; fold into any later touch of this comment if one occurs.
+4. Carried from the AMBER above and unchanged: B3's never-render-NULL-as-`$0` watchers are owed at
+   SELF-262 / SELF-266 and I have **not** verified them; the manual→linked designation drift is
+   booked to Architect; `(L9a)`'s missing `pg_namespace` filter is booked to QA.
+
+**Verdict: GREEN at `6b973bf`.** No veto, no blocking finding, no ADR amendment owed, no §10 ledger
+movement, no Decision 3 instance, no `SECURITY DEFINER` allowlist change, no CI fence change.
