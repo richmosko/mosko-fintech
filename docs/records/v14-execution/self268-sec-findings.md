@@ -767,3 +767,155 @@ against the outcome rather than assumed to follow it.
   both the header and the catalog comment.
 - **F-2 is a judgment call, not a requirement.** Options (B) and (C) are both acceptable to me; only
   F-1 is blocking, and it is closable under any of the three.
+
+---
+
+## Re-look at `b4cd2c2`
+
+**Verdict: GREEN.** F-1 closed, F-2 implemented as ruled option (A), N-1 and N-2 closed, N-3
+reworded. **One new note (N-R1)**, a precision point in copy, not a defect. Nothing blocks.
+
+**Reviewed at** `origin/feature/self-268` **`b4cd2c2`**, with `origin/main` **`2c7c8a5`** verified an
+**ancestor**. `105` was re-measured **from scratch** — the SIGN CONVENTION block, the
+`comment on function`, and the `tax` / `tax_scalars` CTEs read fresh from the ref, not from the
+edit's diff.
+
+---
+
+### The perturbation check I said I would run — CLEAN
+
+`105` was edited **in place** on a body produced by anchored substitution, so a diff of the edit
+could not have shown me a span it perturbed by accident. I therefore did both: read the body fresh,
+and separately enumerated every **non-comment** line the edit touched
+(`git diff d7b68e9 origin/feature/self-268 -- supabase/migrations/105… | grep -vE '^[+-][[:space:]]*--'`).
+
+**Exactly two executable changes:**
+
+1. `tax as (` → `tax as materialized (`
+2. the `comment on function` string
+
+The `leaf` CTE (and its `102` anti-join), `cat_order`, `grp`, `groups_json`, `sums`, `tax_scalars`'s
+four projections, the `nav` expression, the final `from sums s cross join tax_scalars t`, the
+`revoke`/`grant` pair and the `stable` declaration are all **byte-unchanged**. Nothing moved outside
+the intended spans.
+
+### F-1 — CLOSED, and closed by making the code true rather than the comment weaker
+
+Both artifacts now say the same thing, and both say it unambiguously. The header:
+
+> *"The CONSUMER's ladder NEGATES ALL THREE at its SINGLE flip site (displayValue = −value, applied
+> to debt, realized and unrealized alike). That is ONE NEGATION SITE APPLIED TO THREE ROWS — not one
+> row flipped and two passed through."*
+
+The catalog comment carries the same construction (*"ONE SITE APPLIED TO THREE ROWS and not one row
+flipped with two passed through"*). **The phrase that made the old wording readable two ways —
+*"renders all three as subtractions"* — is gone**, replaced by one that cannot be read as the
+unflipped convention. The header also records that *"the code is being changed to match this
+comment, not this comment weakened to match the code"*, which is the right provenance to leave
+behind.
+
+`nav-composition.ts`'s `taxRow()` now returns `displayValue: -envelope.amount`, and its comment
+explains why the superseded warning it replaced is not being contradicted. The two regressions are
+**inverted, not deleted** — *"renders the tax rows FLIPPED"* and *"exactly ONE flip SITE … debt,
+realized_tax_liab, and unrealized_tax_liab are ALL the negation"* — and two new **footing-identity**
+legs (underpaid and overpaid) assert `gross_total + the three subtractive displayValues === nav`,
+which is the property option (A) was chosen for.
+
+### F-2 / the `-0` hazard — CLOSED on BOTH rows, by two different mechanisms, and I measured both
+
+I recommended `signDisplay: 'negative'`. What shipped uses **two** formatters, and I checked the one
+I had not specified:
+
+| Row | Formatter | `-0` renders |
+|---|---|---|
+| `debt`, foot, group subtotals | `usd` — `signDisplay: 'negative'` | **`"$0"`** ✅ |
+| the two tax rows | `usdSigned` — `signDisplay: 'exceptZero'` | **`"$0"`** ✅ |
+
+Measured directly against the shipped options (`minimumFractionDigits: 0, maximumFractionDigits: 0`)
+rather than assumed: `'negative'` → `-0` ⇒ `"$0"`; `'exceptZero'` → `-0` ⇒ `"$0"`, `-3000` ⇒
+`"-$3,000"`, `4741` ⇒ `"+$4,741"`. For comparison, the default and `'auto'` both give `"-$0"`, and
+`'always'` gives `"-$0"` — so **`'exceptZero'` was a correct independent choice for the tax rows**,
+not a coincidence, and it buys the explicit `+` an add-back wants.
+
+**The R9-clamp row is the one that mattered** — `greatest(…, 0)` returns exactly `0` for any tenant
+with a net unrealized loss, so `-envelope.amount` is `-0` in a *common* state, not an exotic one. It
+renders `"$0"`.
+
+**And the watcher moved to the right layer.** The old `:72` leg asserted `displayValue` while its
+title claimed a rendering; the title now reads *"flips to a NEGATIVE ZERO displayValue (−0
+arithmetic) — this leg checks the RAW VALUE"*, and the rendering claim moved to SSR legs that assert
+the **string**: a zero-debt household rendering `"$0"`, and a `{computed, amount: 0}` unrealized row
+(named as the R9 clamp) rendering `"$0"`. That is the correction I asked for, placed at the layer
+that can observe the property.
+
+**I reproduced Frontend's hand-verified strings independently** from the formatter options plus the
+negation, rather than accepting them: underpaid Realized (`amount +3000` → `displayValue −3000`) ⇒
+`"-$3,000"`; overpaid Realized (`amount −4741` → `+4741`) ⇒ `"+$4,741"`; clamped Unrealized ⇒ `"$0"`;
+Debt ⇒ `"-$150,000"`. All four match. The two reported feet also foot against the identity
+(`1,000,000 − 150,000 − 3,000 − 500 = 846,500`; `1,000,000 − 150,000 + 4,741 − 0 = 854,741`).
+
+### N-1 — CLOSED, with the measurement I could not take myself
+
+`tax as materialized ( … )`, and the header states the number and the method: *"MEASURED four
+evaluations of the 104 callee per ONE call of this function without the keyword, and ONE with it
+(`pg_stat_user_functions.calls` under `track_functions = 'all'`, `pfin_tmpl` clone, 2026-09-04)."*
+
+That is the right instrument for the question — a function-call counter, not an inference from the
+plan — and it confirms the mechanism I flagged (4×) was real rather than theoretical. **My freeze
+note stated a mechanism I explicitly could not measure; the build measured it and the mechanism
+held.**
+
+The `(ONE)` battery leg is unmoved by the keyword: it counts `fn_compute_tax_liability\s*\(` — a
+**call-shaped** match — of which there is exactly one in `prosrc` (the body carries two bare
+name occurrences, the second inside a comment, which is why the leg is regex-shaped rather than a
+substring count; the battery header says so). The migration's new comment deliberately avoids
+naming the callee for the same reason.
+
+### N-2 — CLOSED, byte-exact
+
+ADR-067 Decision 5 carries my supplied sentence verbatim, opening *"⚠ **`104`'s own payload is
+UNCHANGED by this.**"* and closing on the two-surfaces consequence. Verified by reading
+`DECISIONS.md` **at the ref** — my first attempt diffed against a stale base and returned a false
+negative, which is the reason the ref read is the one that counts.
+
+### N-3 — reworded, as agreed
+
+The Decision 5 sign bullet now reads in the "one site, three rows" vocabulary, so it no longer
+depends on a reader resolving the ambiguity in its favour.
+
+---
+
+### N-R1 (note, new) — *"the column FOOTS"* is true from **Gross Total** down, not over all five rendered rows
+
+The ladder renders **five** rows, and the first two are not independent: `gross_total = total_non_re
++ real_estate`, so `Total Non-RE` is a component of the row beneath it. Summing the whole visible
+column double-counts. The footing identity holds from `Gross Total` downward.
+
+**The precise form is already written and is correct** — the catalog comment's parenthetical
+`(gross_total + Σ displayed = nav)`, and the two new unit legs, both name `gross_total` as the
+starting term. The imprecision is only in the **bare phrase** *"the column FOOTS"*, which appears
+without that parenthetical in the header block.
+
+**Why raise it at all:** footing is the property option (A) was chosen *for*, so the claim carrying
+that choice should be exact where a reader will meet it. This is **pre-existing** — both rows
+rendered before SELF-268 — and it is a copy nit, not a defect. Suggested wording if the header is
+touched for any other reason: *"the column foots from Gross Total down."* **Not worth a migration on
+its own**, and I am explicitly not asking for one.
+
+---
+
+### Non-objections at the re-look
+
+- I do **NOT** object to the two-formatter split (`usd` / `usdSigned`) on one ladder. The `+` on an
+  add-back is information the reader needs and the asset rows are never subtractive, so no ambiguity
+  arises from their lack of a sign.
+- I do **NOT** require anything further on F-1, F-2, N-1, N-2 or N-3. All five are closed at the
+  mechanism.
+- I do **NOT** require re-verification of P-1 … P-19 from the freeze pass. The perturbation check
+  above establishes that `105`'s body is unchanged apart from `materialized`, so every
+  body-dependent conclusion in the freeze section still holds at `b4cd2c2`.
+- **What I have NOT verified myself, stated so it is not read as covered:** QA-268b's DB re-confirm
+  on the shared database and its browser render strings had not reached me when this section was
+  written. My render conclusions are derived from the shipped formatter options and the negation —
+  **a derivation, not an observation of a browser.** If QA's measured strings differ from the four
+  above, that difference is the finding and this section is what it should be checked against.
