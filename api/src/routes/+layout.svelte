@@ -12,6 +12,13 @@
 	<form method="POST" action="/auth/signout"> — state-changing, so never a GET link; matches
 	Backend's POST-only /auth/signout handler.
 
+	"Est. Taxes" added at SELF-266 → /taxes/quarterly (the first §2.5 surface to land), active-
+	matched on the whole /taxes/* subtree (mirrors the Accounts link's own prefix-match convention)
+	so it stays highlighted once SELF-264's /taxes/decomposition lands alongside it — no second nav
+	edit needed per §2.5 sibling. Judgment call, flagged at hand-off: no dedicated "Est. Taxes" hub
+	page exists in V1, so this link's own href is the first §2.5 surface with a route, per this
+	issue's own dispatch instruction ("Navigation as for the other §2.5 pages").
+
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5). The count badge uses the
 	ACCENT ramp — NOT `--c-attn-*` (canary is reserved for staleness/re-auth; §5 fence).
 -->
@@ -37,6 +44,7 @@
 	const isAccounts = $derived(path === '/accounts' || path.startsWith('/accounts/'));
 	const isAllocation = $derived(path === '/allocation');
 	const isCashFlow = $derived(path === '/cash-flow');
+	const isTaxes = $derived(path.startsWith('/taxes'));
 
 	// SELF-207 P4 re-auth banner health summary — from +layout.server.ts (Backend-computed via the
 	// shared needsReauth/isInstitutionDown predicates, active-connections-only, fail-soft to {0,0}).
@@ -62,6 +70,9 @@
 				</a>
 				<a class="nav-link" href="/cash-flow" aria-current={isCashFlow ? 'page' : undefined}>
 					Cash Flow
+				</a>
+				<a class="nav-link" href="/taxes/quarterly" aria-current={isTaxes ? 'page' : undefined}>
+					Est. Taxes
 				</a>
 			</nav>
 		</div>
