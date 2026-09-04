@@ -6,7 +6,7 @@
 // (flagged at authoring). Kept exhaustive-by-type so a value-set change is a compile
 // error here (Record<AccountType,…> / Record<TaxTreatment,…>), not a silent gap.
 
-import type { AccountType, TaxTreatment } from '$lib/schemas/account-constants';
+import type { AccountType, TaxTreatment, TaxJurisdiction } from '$lib/schemas/account-constants';
 
 export const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = {
 	depository: 'Depository',
@@ -24,12 +24,29 @@ export const TAX_TREATMENT_LABELS: Record<TaxTreatment, string> = {
 	tax_free: 'Tax-free'
 };
 
+/**
+ * tax_jurisdiction display labels (SELF-267 AC 2) — "tax authority" is the product phrase; the
+ * enum values `irs` / `ftb` never appear in user-facing copy. `taxJurisdictionLabel` also covers
+ * the NULLABLE column's unset state (`null` or `''`, the client's `''` convention) — 102's
+ * `comment on column`: NULL means "not a tax-authority ledger", never "unknown".
+ */
+export const TAX_JURISDICTION_LABELS: Record<TaxJurisdiction, string> = {
+	irs: 'IRS (Federal)',
+	ftb: 'FTB (California)'
+};
+export const TAX_JURISDICTION_UNSET_LABEL = 'Not a tax authority ledger';
+
 /** Safe lookup that falls back to the raw value if an unknown value ever appears. */
 export function accountTypeLabel(v: string): string {
 	return (ACCOUNT_TYPE_LABELS as Record<string, string>)[v] ?? v;
 }
 export function taxTreatmentLabel(v: string): string {
 	return (TAX_TREATMENT_LABELS as Record<string, string>)[v] ?? v;
+}
+/** `null` | `''` → the explicit "not a tax-authority ledger" copy (never "unknown"). */
+export function taxJurisdictionLabel(v: string | null | undefined): string {
+	if (!v) return TAX_JURISDICTION_UNSET_LABEL;
+	return (TAX_JURISDICTION_LABELS as Record<string, string>)[v] ?? v;
 }
 
 /**

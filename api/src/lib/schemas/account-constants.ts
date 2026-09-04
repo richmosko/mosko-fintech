@@ -28,6 +28,17 @@ export const TAX_TREATMENTS = ['taxable', 'tax_deferred', 'tax_free'] as const;
 export type TaxTreatment = (typeof TAX_TREATMENTS)[number];
 
 /**
+ * tax_jurisdiction — VERBATIM from 102 pfin.tax_jurisdiction_enum ('irs', 'ftb').
+ * SELF-267 AC 1/2. Marks an account as a tax authority's ledger; NULL (absent from this
+ * set at the app layer — see account.ts's taxJurisdictionField) means "not a tax-authority
+ * ledger", never "unknown". One account per value per user (102's partial unique index
+ * account_tax_jurisdiction_uniq) — the app-layer schemas do not re-enforce that count; the
+ * DB constraint is the fence and the write path maps its 23505 to a field error.
+ */
+export const TAX_JURISDICTIONS = ['irs', 'ftb'] as const;
+export type TaxJurisdiction = (typeof TAX_JURISDICTIONS)[number];
+
+/**
  * closure reason_code — VERBATIM from 057 pfin.account_event CHECK.
  *
  * MANDATORY on the into-closed transition (058's audit writer refuses without it and
