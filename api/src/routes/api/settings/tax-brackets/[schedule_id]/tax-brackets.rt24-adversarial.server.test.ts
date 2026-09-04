@@ -188,6 +188,15 @@ describe('RT-24 string arm (Sec 260 V-4) — schedule_label control characters a
 		expect(captured.writeCalls).toBe(0);
 	});
 
+	it("rejects a schedule_label containing U+0000 (NUL) with a 400 field error, NOT a 500 — Sec's SELF-260 re-look (D-4): z.string() alone lets NUL through (a TYPE check, not a content check), and Postgres text cannot hold a NUL byte, so an unguarded NUL would fall through to mapWriteError's default 500 internal_error instead of a clean 400. The control-character regex is [^\\u0000-\\u001F\\u007F-\\u009F], which already excludes U+0000 — this is the watcher that would catch a future edit narrowing that range to \\u0001-\\u001F and reopening the hole", async () => {
+		const captured = { writeCalls: 0 };
+		const res = await POST(makeEvent(validBody({ schedule_label: 'federal\u0000ordinary' }), captured));
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { fieldErrors?: Record<string, string[]> };
+		expect(body.fieldErrors?.schedule_label?.length).toBeGreaterThan(0);
+		expect(captured.writeCalls).toBe(0);
+	});
+
 	it('rejects a schedule_label containing a C1 control character (U+0085, NEL)', async () => {
 		const captured = { writeCalls: 0 };
 		const res = await POST(makeEvent(validBody({ schedule_label: 'federal\u0085ordinary' }), captured));
