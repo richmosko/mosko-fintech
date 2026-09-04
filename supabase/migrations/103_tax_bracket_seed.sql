@@ -442,7 +442,7 @@ as $$
   -- (c)(3) disapplies §17045, so NO row on this schedule has a floor that moves
   -- with filing status. See this file's header (E23; Sec SELF-260 V-1).
   select 'california_ordinary'::pfin.tax_schedule_type_enum, 2025::smallint, 5706.0000::numeric,
-         'California FTB — ordinary income — 2025 basis (FTB 2026 unpublished) — SINGLE filer TEMPLATE. Top bracket composes R&TC §17043 (1%) with Schedule X; its floor is FLAT across filing statuses.'::text,
+         'California FTB — ordinary income — 2025 basis (FTB 2026 unpublished) — SINGLE filer TEMPLATE. Top bracket composes R&TC §17043 (1%) with Schedule X (12.3%) = 13.3% above $1,000,000; that floor is FLAT across filing statuses and un-indexed, so it does NOT move if you change status. Sources: FTB 2025 California Tax Rate Schedules, Schedule X (Single or Married/RDP filing separately); standard deduction from the 2025 Form 540 booklet chart, status 1 - Single; R&TC §17043.'::text,
          f, r
     from (values (      0.0000::numeric, 0.01000000::numeric),
                  (  11079.0000,          0.02000000),
