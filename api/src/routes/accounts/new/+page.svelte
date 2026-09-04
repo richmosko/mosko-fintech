@@ -9,6 +9,13 @@
 	submit we cancel() the POST and render client errors; server-side fail() returns
 	{ errors, values } which render through the SAME code path. On success the server
 	303-redirects to /accounts/{id} — no client handling needed.
+
+	SELF-267 Sec note (non-blocking, this PR): the create RPC can commit and the SUBSEQUENT
+	tax_jurisdiction UPDATE can still fail (409 conflict on the uniq index, or another 422) —
+	see +page.server.ts's create-then-update comment. Those two fail() branches echo `accountId`
+	so the user isn't stranded on a form whose submit would create a SECOND account: the field
+	error still renders inline via TaxJurisdictionField, and this page ALSO surfaces a one-line
+	notice + link to the account that already exists so the designation can be fixed there.
 -->
 <script lang="ts">
 	import { enhance } from '$app/forms';
@@ -23,6 +30,14 @@
 	import Button from '$lib/components/Button.svelte';
 
 	let { form }: { form: ActionData } = $props();
+
+	// SELF-267 Sec note: only the two create-then-update failure branches in +page.server.ts
+	// echo `accountId` (the account was created; only the tax_jurisdiction UPDATE failed). Narrow
+	// via `in` (same idiom as accounts/[account_id]/+page.svelte's `'errors' in form`) rather than
+	// a direct `form.accountId` read — ActionData is a union and most branches lack the field.
+	const createdAccountId = $derived(
+		form && 'accountId' in form && typeof form.accountId === 'number' ? form.accountId : null
+	);
 
 	// Sticky field values. Seeded from the server echo (`form.values`) so a no-JS POST
 	// still repopulates; with JS the bound state is the live source across a failed submit.
@@ -100,10 +115,21 @@
 		use:enhance={enhanceHandler}
 		class="region form"
 		novalidate
-		aria-describedby={errors._form ? 'form-error' : undefined}
+		aria-describedby={
+			[errors._form ? 'form-error' : null, createdAccountId !== null ? 'created-account-notice' : null]
+				.filter(Boolean)
+				.join(' ') || undefined
+		}
 	>
 		{#if errors._form}
 			<p id="form-error" class="form-error" role="alert">{errors._form.join(' ')}</p>
+		{/if}
+
+		{#if createdAccountId !== null}
+			<p id="created-account-notice" class="created-account-notice" role="alert">
+				The account was created, but the tax authority designation could not be saved.
+				<a href="/accounts/{createdAccountId}">Go to the account</a> to fix it there.
+			</p>
 		{/if}
 
 		<TextField
@@ -238,6 +264,22 @@
 		background: color-mix(in srgb, var(--c-neg) 8%, var(--c-surface));
 		color: var(--c-neg);
 		font-size: var(--fs-small);
+	}
+	.created-account-notice {
+		margin: 0;
+		padding: var(--space-2) var(--space-3);
+		border: 1px solid var(--c-neg);
+		border-radius: var(--radius-md);
+		background: color-mix(in srgb, var(--c-neg) 8%, var(--c-surface));
+		color: var(--c-text-primary);
+		font-size: var(--fs-small);
+	}
+	.created-account-notice a {
+		color: var(--c-link);
+		font-weight: var(--weight-semi);
+	}
+	.created-account-notice a:hover {
+		text-decoration: underline;
 	}
 	.actions {
 		display: flex;
