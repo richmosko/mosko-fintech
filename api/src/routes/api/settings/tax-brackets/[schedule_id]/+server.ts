@@ -3,12 +3,15 @@
 // ruling, 2026-09-03, on Backend's flagged atomicity gap)).
 //
 // Replace-all write path for ONE pfin.tax_bracket_schedule row plus its FULL
-// pfin.tax_bracket_row set, via the SECURITY INVOKER RPC E8 ruled and Architect is landing on
-// migration 101 (supabase/migrations/101_tax_bracket_tables.sql, feature/self-259) — READ THAT
-// FILE LIVE, once pushed, before merging this endpoint; the signature below is E8's ruled
-// contract, relayed by team-lead, not yet independently confirmed against a landed sha as of
-// this file's authorship. This repo's own standing lesson applies here without irony
-// (DECISIONS.md, ADR-011 Decision 18 context): "a ratified name is not a built object."
+// pfin.tax_bracket_row set, via the SECURITY INVOKER RPC E8 ruled and Architect landed on
+// migration 101 (supabase/migrations/101_tax_bracket_tables.sql, feature/self-259). CONFIRMED
+// against the landed sha: Sec's SELF-259 joint review
+// (docs/records/v14-execution/self259-sec-review.md @ b53f766, F-6) verified the landed
+// `pfin.fn_tax_bracket_schedule_replace_all` signature matches this endpoint's `.rpc()` call
+// name-for-name and type-for-type. This repo's own standing lesson
+// (DECISIONS.md, ADR-011 Decision 18 context — "a ratified name is not a built object") is
+// satisfied here, not merely invoked: the ratified name WAS independently verified against the
+// built object.
 //
 // ============================================================================================
 // WHY AN RPC NOW, WHEN THE PRIOR REVISION OF THIS FILE DELIBERATELY DID NOT USE ONE — the
@@ -38,20 +41,24 @@
 // lock failure, its per-row matched-tenant trigger fence (#18), and its deferred zero-floor /
 // rate-monotonicity trigger fence are DISTINCT failures that may ALL surface as SQLSTATE
 // P0001 (plpgsql's default code for an un-coded `raise exception`) — there is no SQLSTATE-level
-// way to tell them apart, and the function's actual message text is not yet available to this
-// file (the migration has not landed as of this file's authorship). This endpoint therefore
-// does NOT attempt message-string classification of the RPC's own P0001 — see mapWriteError's
-// own comment for why that would be fragile, security-relevant guesswork rather than a
-// mechanical distinction. Instead, the PRIMARY 404 path is a separate, RLS-scoped ownership
-// read BEFORE the RPC call (see below) — reliable, SQLSTATE-independent, and consistent with
-// this endpoint's existing "never trust {schedule_id} alone" discipline. The RPC's own internal
-// not-found path is then a narrow, race-window backstop (the schedule vanishing between this
-// endpoint's read and its RPC call) that — until the function's real message text is confirmed
-// against the landed migration — collapses into the same generic 400 as the two trigger fences.
-// This is a named, accepted residual, not a silent gap: flagged again in this PR's hand-off,
-// with a recommendation that Architect consider a DISTINCT SQLSTATE (not P0001) for the
-// function's own lock-failure raise, which would let this endpoint discriminate mechanically
-// instead of by prose.
+// way to tell them apart. CONFIRMED against the landed migration (101): none of its `raise
+// exception` sites carry an explicit `errcode`, so all three conditions genuinely do collapse to
+// P0001 — this is a real ambiguity, not a gap in what this file could confirm. This endpoint
+// therefore does NOT attempt message-string classification of the RPC's own P0001 —
+// see mapWriteError's own comment for why that would be fragile, security-relevant guesswork
+// rather than a mechanical distinction. Instead, the PRIMARY 404 path is a separate, RLS-scoped
+// ownership read BEFORE the RPC call (see below) — reliable, SQLSTATE-independent, and
+// consistent with this endpoint's existing "never trust {schedule_id} alone" discipline. The
+// RPC's own internal not-found path is then a narrow, race-window backstop (the schedule
+// vanishing between this endpoint's read and its RPC call) that collapses into the same generic
+// 400 as the two trigger fences — a named, accepted residual, not a silent gap. Sec's SELF-259
+// joint review (docs/records/v14-execution/self259-sec-review.md @ b53f766, F-6) reviewed this
+// design and endorsed it as written: message-string classification of a security-relevant error
+// is exactly the fragile guesswork it declines to do, and the pre-RPC ownership read already
+// gives a reliable 404 for the one case that actually needs distinguishing. Sec's own suggested
+// improvement — a distinct SQLSTATE (not P0001) on the function's lock-failure raise, e.g.
+// `errcode = 'PT404'` — remains a sound future improvement, not a condition of any review to
+// date; not implemented here.
 //
 // {schedule_id} IS A CLIENT-SUPPLIED OBJECT REFERENCE (R4 rider 4 / rederived-acs.md AC6): read
 // under RLS with the caller's own session client BEFORE calling the RPC — never trusted alone.
