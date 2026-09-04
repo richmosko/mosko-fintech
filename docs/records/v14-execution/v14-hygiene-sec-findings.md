@@ -92,7 +92,7 @@ not merely that a throw occurred.
 
 **I verified the three copied allowlists against the installed upstream** rather than taking the
 "copied verbatim" claim — read from `@sveltejs/kit` **2.70.1**,
-`src/utils/exports.js:62–87`:
+`src/utils/exports.js:63–87`:
 
 | Local constant | Upstream | Match |
 |---|---|---|
