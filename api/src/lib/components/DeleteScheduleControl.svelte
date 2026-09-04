@@ -27,16 +27,34 @@
 	let deleting = $state(false);
 	let resultMessage = $state('');
 
+	type DeleteFailure = { action: 'deleteSchedule'; errors: Record<string, string[]> };
+
 	const handleDelete: SubmitFunction = () => {
 		deleting = true;
 		resultMessage = '';
 		return async ({ result, update }) => {
 			deleting = false;
 			confirming = false;
+
 			if (result.type === 'success' && result.data && (result.data as { deleted?: boolean }).deleted === false) {
 				resultMessage = 'Not removed — refresh to confirm its current state.';
+			} else if (result.type === 'failure') {
+				// Sec F-3: the action's own 409 refusal (e.g. E38's seed-template guard, reachable
+				// even when this control's OWN fail-open `is_seed_template` gate is stale from a
+				// transient loader failure — the server is the actual boundary either way) was
+				// previously swallowed here: neither this component nor +page.svelte/List reads
+				// the page's shared `form` prop, so nothing ever rendered `errors._form`. Every
+				// message across every field, joined, since this control has no per-field UI of
+				// its own to attach them to individually.
+				const data = result.data as DeleteFailure | undefined;
+				const messages = Object.values(data?.errors ?? {}).flat();
+				resultMessage =
+					messages.length > 0 ? messages.join(' ') : 'Could not delete this schedule. Please try again.';
+			} else if (result.type === 'error') {
+				resultMessage = 'Something went wrong. Please try again.';
 			}
-			await update();
+
+			await update({ reset: false });
 		};
 	};
 </script>
