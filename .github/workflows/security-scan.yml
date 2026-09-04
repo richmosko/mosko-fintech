@@ -385,50 +385,34 @@ jobs:
           fi
           echo "OK: npm pinned to exactly 11.19.0."
 
-      # INVERSION PROBE for the empty-enumeration fail-closed leg below (Sec
-      # review F-7). Proves that leg actually fires: an empty `git ls-files`
-      # enumeration must exit non-zero with its FATAL message, not silently
-      # pass. A fence that does not fail closed on its target class is theatre.
-      #
-      # Runs against a throwaway git repo with zero tracked package.json files
-      # so it cannot perturb the real audit and does not depend on this repo's
-      # own manifests ever going away. Mirrors scheduled-dep-audit.yml's
-      # inversion-probe shape: isolated tmp dir, assert on the real logic,
-      # cleanup before the real step runs.
-      - name: Inversion probe (empty enumeration must FAIL closed)
+      # STATIC WATCHER for the empty-enumeration fail-closed leg (Sec review F-7 / F-10).
+      # The leg lives inside the audit step's `run:` block and cannot be invoked in
+      # isolation, so a probe that re-implements it proves only that shell `exit 1`
+      # works — measured 2026-09-04 by Sec corrupt-the-control: with the real leg
+      # reverted to `exit 0`, the re-implementing probe stayed GREEN. This scans the
+      # REAL artifact instead, and fails closed if it loses its target.
+      - name: Assert empty-enumeration leg still fails closed
         run: |
           set -euo pipefail
-          PROBE_DIR="$(mktemp -d)"
-          git init -q "$PROBE_DIR"
-          set +e
-          PROBE_OUT=$(
-            cd "$PROBE_DIR"
-            PKG_FILES=$(git ls-files '*package.json' 'package.json' | grep -v '^tests/' || true)
-            if [ -z "$PKG_FILES" ]; then
-              echo "FATAL: no tracked package.json found. This job audits a known-nonempty set"
-              echo "       (root + api/ + workers/provider-sync/ as of 2026-09-04); an empty"
-              echo "       enumeration means the enumerator broke, not that there is nothing to"
-              echo "       audit. The W1 pre-SvelteKit-init no-op posture this leg used to carry"
-              echo "       is obsolete. Failing closed — same posture as scheduled-dep-audit.yml."
-              exit 1
-            fi
-          )
-          rc=$?
-          set -e
-          rm -rf "$PROBE_DIR"
-          if [ "$rc" -eq 0 ]; then
-            echo "FATAL: the empty-enumeration leg exited 0 on a tree with zero tracked"
-            echo "       package.json files — that leg is vacuous and would silently pass a"
-            echo "       broken enumerator through to a false-green audit. Failing closed."
+          WF=.github/workflows/security-scan.yml
+          LEG=$(awk '/- name: npm audit \(fails on high or critical\)/{f=1} f && /if \[ -z "\$PKG_FILES" \]; then/{p=1} p{print} p && /^          fi$/{exit}' "$WF")
+          if [ -z "$LEG" ]; then
+            echo "FATAL: could not locate the empty-enumeration leg in $WF — the watcher lost"
+            echo "       its target, which is indistinguishable from the leg being gone."
+            echo "       Failing closed (Sec review F-10)."
             exit 1
           fi
-          if ! printf '%s\n' "$PROBE_OUT" | grep -q 'no tracked package.json found'; then
-            echo "FATAL: the empty-enumeration leg exited non-zero but without its expected"
-            echo "       FATAL message — the message text drifted from the leg it is meant to"
-            echo "       prove; failing closed so the drift is caught, not silently accepted."
+          if ! printf '%s\n' "$LEG" | grep -q 'exit 1'; then
+            echo "FATAL: the empty-enumeration leg no longer exits non-zero. A broken enumerator"
+            echo "       would pass through to a false-green audit. Failing closed (Sec F-7)."
             exit 1
           fi
-          echo "OK: empty-enumeration leg exited $rc with the expected FATAL message."
+          if ! printf '%s\n' "$LEG" | grep -q 'no tracked package.json found'; then
+            echo "FATAL: the empty-enumeration leg's FATAL message drifted from what this watcher"
+            echo "       asserts. Failing closed so the drift is caught, not silently accepted."
+            exit 1
+          fi
+          echo "OK: empty-enumeration leg still exits non-zero with its FATAL message."
 
       - name: npm audit (fails on high or critical)
         run: |
