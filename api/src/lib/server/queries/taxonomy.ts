@@ -201,21 +201,65 @@ async function provisionCashflowPrototypes(supabase: SupabaseClient, userId: str
 }
 
 /**
- * Idempotently provision the caller's defaults on first access — BOTH the storage-classification
- * table AND the posting-prototype table (084 / ADR-058 Decision 1's asymmetric split; Sec F3,
- * VETO-if-unpaired, the named no-bundling exception). Runs the two independent branches above
- * SEQUENTIALLY, each with its OWN try/catch scope: neither branch's guard, read, upsert, or thrown
- * error can suppress or abort the other. This is the direct app-side answer to F3 condition (b) —
- * the pre-084 function had exactly ONE existence guard against `user_taxonomy` alone, which after
- * the split would silently stop a user who already has storage rows from ever receiving
- * posting-prototype rows.
+ * Provision the caller's SELF-260 tax bracket schedules via `pfin.fn_provision_tax_brackets()`
+ * (migration 103) — a THIRD, independent sibling of `provisionAssetTaxonomy` /
+ * `provisionCashflowPrototypes`, called after both from `provisionDefaultTaxonomy` below (same
+ * fail-soft-per-branch discipline: this branch's failure must never suppress, retry, or be
+ * suppressed by, either taxonomy branch).
  *
- * FAIL-SOFT by contract (like ensureUserSettings): a provisioning hiccup on EITHER branch must
- * NEVER throw or block the page load. On any error the caller sees an empty (or half-provisioned)
- * taxonomy that session — the SELF-200 no-taxonomy guard renders that gracefully — and each branch
- * self-heals independently on the next request (its own guard re-checks its own table). Errors are
- * logged per branch, never raised. The aal2-claused 041-shape INSERT policies still fully fence
- * both writes server-side.
+ * UNLIKE the two siblings, there is NO app-side existence guard and NO default-read/upsert pair
+ * here — `fn_provision_tax_brackets()` IS the guard (existence-guarded per schedule KEY inside the
+ * function, `on conflict do nothing`, migration 103 comment). Adding an app-side pre-check here
+ * would just be a second, driftable copy of that guard for no gain — the function is SECURITY
+ * INVOKER, takes NO tenant parameter (users_id comes from `auth.uid()` inside the function, same
+ * as the RLS this call already runs under), so a single RPC call is the whole operation.
+ *
+ * The function returns the number of SCHEDULES it created (3 on a fresh caller, 0 if all three
+ * already existed) — logged at debug level (not error) so a support reader can tell "provisioned
+ * just now" from "already had them" without a second read, while a genuine RPC error still logs at
+ * error level and the branch degrades exactly like its siblings (never throws, never blocks the
+ * page load; the caller retries next request via the function's own guard).
+ */
+async function provisionTaxBrackets(supabase: SupabaseClient): Promise<void> {
+	try {
+		const { data, error } = await supabase.schema('pfin').rpc('fn_provision_tax_brackets');
+		if (error) {
+			console.error('[taxonomy] provisionTaxBrackets rpc failed (fail-soft):', error.message);
+			return;
+		}
+		if (data === 0) {
+			console.debug('[taxonomy] provisionTaxBrackets: caller already had all schedules');
+		} else {
+			console.debug(`[taxonomy] provisionTaxBrackets: provisioned ${data} schedule(s) now`);
+		}
+	} catch (e) {
+		console.error(
+			'[taxonomy] provisionTaxBrackets threw (fail-soft):',
+			e instanceof Error ? e.message : String(e)
+		);
+	}
+}
+
+/**
+ * Idempotently provision the caller's defaults on first access — the storage-classification
+ * table, the posting-prototype table (084 / ADR-058 Decision 1's asymmetric split; Sec F3,
+ * VETO-if-unpaired, the named no-bundling exception), AND the SELF-260 tax bracket schedules
+ * (migration 103). Runs the three independent branches above SEQUENTIALLY, in that order —
+ * taxonomy → cashflow prototypes → tax brackets — each with its OWN try/catch scope: no branch's
+ * guard, read, write, or thrown error can suppress or abort another. This is the direct app-side
+ * answer to F3 condition (b) — the pre-084 function had exactly ONE existence guard against
+ * `user_taxonomy` alone, which after the split would silently stop a user who already has storage
+ * rows from ever receiving posting-prototype rows; the same independence now extends to the tax
+ * bracket branch, which has no guard of its own to share in the first place.
+ *
+ * FAIL-SOFT by contract (like ensureUserSettings): a provisioning hiccup on ANY branch must
+ * NEVER throw or block the page load. On any error the caller sees an empty (or partially
+ * provisioned) taxonomy/schedule set that session — the SELF-200 no-taxonomy guard renders that
+ * gracefully — and each branch self-heals independently on the next request (its own guard
+ * re-checks its own table, or — for tax brackets — the DB function's own per-schedule
+ * existence guard re-runs). Errors are logged per branch, never raised. The aal2-claused
+ * 041-shape INSERT policies still fully fence both taxonomy writes server-side, and the 025
+ * aal2 backstop fences the tax-bracket writes the same way, INSIDE the SECURITY INVOKER function.
  */
 export async function provisionDefaultTaxonomy(
 	supabase: SupabaseClient,
@@ -223,6 +267,7 @@ export async function provisionDefaultTaxonomy(
 ): Promise<void> {
 	await provisionAssetTaxonomy(supabase, userId);
 	await provisionCashflowPrototypes(supabase, userId);
+	await provisionTaxBrackets(supabase);
 }
 
 export type SubCatOption = {
