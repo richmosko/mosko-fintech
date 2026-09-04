@@ -7,8 +7,9 @@
 // mass-assignment prevention, mod #2 numeric adversarial battery) plus the DB-layer monotonicity
 // trigger and the SERIALIZABLE replace-all wrapper (mods #3/#4, both DB-side — asserted via
 // mapWriteError's DB-error-mapping tests in the orchestration file, not here). Write path is E8's
-// single RPC call (pfin.fn_tax_bracket_schedule_replace_all); this file mocks the RPC call as a
-// single count, since these adversarial cases are all expected to be rejected BEFORE reaching it.
+// single RPC call (pfin.fn_tax_bracket_schedule_replace_all — 7-arg form amended by E27/E29 for
+// `schedule_label`, landed migration 101 @ b073641); this file mocks the RPC call as a single
+// count, since these adversarial cases are all expected to be rejected BEFORE reaching it.
 //
 // ⚠ FLAGGED, NOT FIXED HERE (Sec/Architect territory — docs/SECURITY/index.html is Sec-owned):
 // RT-24's OWN row text, read live for this file, says the monotonicity fence is a "BEFORE
@@ -57,6 +58,7 @@ function validBody(overrides: Record<string, unknown> = {}) {
 	return {
 		tax_year: 2026,
 		schedule_type: 'federal_ordinary',
+		schedule_label: '2026 federal ordinary — married filing jointly',
 		standard_deduction: '14600.00',
 		tax_balance_prior_year: null,
 		rows: [
@@ -110,6 +112,52 @@ describe('RT-24 mass-assignment battery (Lock 14 mod #1)', () => {
 		const res = await POST(makeEvent(validBody({ rows: [] }), captured));
 		expect(res.status).toBe(400);
 		expect(captured.writeCalls).toBe(0);
+	});
+});
+
+describe('RT-24 schedule_label battery (migration 101 CHECK, length 1..500 — E27/E29)', () => {
+	it('rejects a missing schedule_label', async () => {
+		const captured = { writeCalls: 0 };
+		const body = validBody() as Record<string, unknown>;
+		delete body.schedule_label;
+		const res = await POST(makeEvent(body, captured));
+		expect(res.status).toBe(400);
+		expect(captured.writeCalls).toBe(0);
+	});
+
+	it('rejects an empty-string schedule_label', async () => {
+		const captured = { writeCalls: 0 };
+		const res = await POST(makeEvent(validBody({ schedule_label: '' }), captured));
+		expect(res.status).toBe(400);
+		expect(captured.writeCalls).toBe(0);
+	});
+
+	it('rejects a whitespace-only schedule_label — trimmed to empty before the min(1) check, same as an explicit empty string (101\'s own comment: "the empty string is refused rather than admitted as a blank")', async () => {
+		const captured = { writeCalls: 0 };
+		const res = await POST(makeEvent(validBody({ schedule_label: '   ' }), captured));
+		expect(res.status).toBe(400);
+		expect(captured.writeCalls).toBe(0);
+	});
+
+	it('rejects a 501-character schedule_label — one over the DB CHECK\'s 500 max', async () => {
+		const captured = { writeCalls: 0 };
+		const res = await POST(makeEvent(validBody({ schedule_label: 'x'.repeat(501) }), captured));
+		expect(res.status).toBe(400);
+		expect(captured.writeCalls).toBe(0);
+	});
+
+	it('rejects a non-string schedule_label', async () => {
+		const captured = { writeCalls: 0 };
+		const res = await POST(makeEvent(validBody({ schedule_label: 12345 }), captured));
+		expect(res.status).toBe(400);
+		expect(captured.writeCalls).toBe(0);
+	});
+
+	it('accepts a 500-character schedule_label — exactly the DB CHECK\'s max (positive control)', async () => {
+		const captured = { writeCalls: 0 };
+		const res = await POST(makeEvent(validBody({ schedule_label: 'x'.repeat(500) }), captured));
+		expect(res.status).toBe(200);
+		expect(captured.writeCalls).toBe(1);
 	});
 });
 

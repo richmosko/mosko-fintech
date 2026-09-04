@@ -32,7 +32,10 @@
 // state). `tax_year` / `schedule_type` ARE required body fields per the original dispatch brief
 // (the editor displays which tax_year/type a schedule is for) but the route file treats them as
 // READ-ONLY identity once resolved from `{schedule_id}` — see that file for why (a body value
-// that disagrees with the resolved row is refused, never silently repointed).
+// that disagrees with the resolved row is refused, never silently repointed). `schedule_label`
+// (added at Sec's SELF-260 V-2, rulings E27/E29) is likewise required and fully replaced on every
+// POST — it is user-owned, user-editable data written by the same call, not an identity field,
+// so it carries no schedule-identity-guard equivalent in the route file.
 //
 // NUMERIC FIELDS run through the shared numeric-sanitization battery (Lock 14 mod #2 — see
 // $lib/server/validation/numeric.ts), each shaped to 101's own DDL:
@@ -84,6 +87,22 @@ const nonNegativeCurrencyAmount = () => currencyAmount().refine((n) => n >= 0, '
  *  non-negative refine. Required (present, number-or-null), never omittable — see file header
  *  REPLACE-ALL SEMANTICS. */
 const priorYearBalance = () => z.union([z.null(), currencyAmount()]);
+
+/** `schedule_label` (migration 101, added at Sec's SELF-260 V-2, rulings E27/E29):
+ *  `pfin.tax_bracket_schedule.schedule_label text not null`, CHECK
+ *  `length(schedule_label) between 1 and 500` — named
+ *  `tax_bracket_schedule_schedule_label_check`. Required on every POST (REPLACE-ALL SEMANTICS
+ *  above), trimmed, non-empty after trim (a whitespace-only label is refused the same as an
+ *  empty one — 101's own comment: "the empty string is refused rather than admitted as a
+ *  blank"), max 500 mirroring the DB CHECK exactly. A non-string is rejected by `z.string()`
+ *  itself, same as every other typed field on this schema — no `z.any()` transform needed since
+ *  this is a shape/length check, not a numeric-parse. */
+const scheduleLabel = () =>
+	z
+		.string()
+		.trim()
+		.min(1, 'A schedule label is required.')
+		.max(500, 'Schedule label is too long (500 characters max).');
 
 /** Zod adapter over the fraction-rate battery → a validated `number` in [0, 1]. */
 const fractionRate = () =>
@@ -166,6 +185,7 @@ export const taxBracketScheduleReplaceSchema = z
 	.object({
 		tax_year: taxYear(),
 		schedule_type: taxBracketScheduleTypeSchema,
+		schedule_label: scheduleLabel(),
 		standard_deduction: nonNegativeCurrencyAmount(),
 		tax_balance_prior_year: priorYearBalance(),
 		rows: z.array(bracketRowSchema).min(1).max(MAX_ROWS)
