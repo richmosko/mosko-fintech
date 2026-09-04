@@ -44,6 +44,17 @@ const PERCENT_MAX_DECIMAL_PLACES = 2;
 const PERCENT_MIN = 0;
 const PERCENT_MAX = 100;
 
+/** Max integer digits/decimal places for the PROPOSED `pfin.tax_bracket_row.bracket_rate`
+ *  shape (SELF-259 / R4 rider 4 / Sec M-7) — a FRACTION unit (0.22, never 22), two-sided
+ *  CHECK [0, 1] per R4 rider 8 item (ii). ⚠ `102`/migration-101's DDL has not landed as of this
+ *  file's authorship (Architect owns it in parallel, feature/self-259) — this shape is a
+ *  Backend PROPOSAL to reconcile against the pushed precision/scale once known, not a
+ *  transcription of ratified DDL. Re-read the migration before trusting these constants. */
+const FRACTION_RATE_MAX_INT_DIGITS = 1;
+const FRACTION_RATE_MAX_DECIMAL_PLACES = 4;
+const FRACTION_RATE_MIN = 0;
+const FRACTION_RATE_MAX = 1;
+
 /** Max integer digits for a Postgres numeric(28,8): 28 precision − 8 scale = 20. Shapes
  *  `pfin.account_trans.quantity` (017). No `min`/`max` here — the column itself carries no DB
  *  CHECK range, so there is no inclusive bound to mirror (unlike `sanitizePercent`'s 074 CHECK).
@@ -189,4 +200,19 @@ export function sanitizePercent(raw: unknown): SanitizeResult {
  */
 export function sanitizeQuantity(raw: unknown): SanitizeResult {
 	return sanitizeDecimal(raw, { maxIntDigits: QUANTITY_MAX_INT_DIGITS, maxDecimalPlaces: QUANTITY_MAX_DECIMAL_PLACES });
+}
+
+/**
+ * Validate a user-supplied tax-bracket marginal-rate input against the battery, PROPOSED shape
+ * for `pfin.tax_bracket_row.bracket_rate` (SELF-259; not yet DDL-confirmed — see the shape
+ * constants' comment above). FRACTION unit per team-lead ruling / Sec M-7 (0.22, never 22):
+ * two-sided [0, 1] range, same six adversarial categories as the other exports.
+ */
+export function sanitizeFractionRate(raw: unknown): SanitizeResult {
+	return sanitizeDecimal(raw, {
+		maxIntDigits: FRACTION_RATE_MAX_INT_DIGITS,
+		maxDecimalPlaces: FRACTION_RATE_MAX_DECIMAL_PLACES,
+		min: FRACTION_RATE_MIN,
+		max: FRACTION_RATE_MAX
+	});
 }

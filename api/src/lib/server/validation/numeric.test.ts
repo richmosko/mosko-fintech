@@ -7,7 +7,7 @@
 // against BOTH, since both wrap the same core.
 
 import { describe, it, expect } from 'vitest';
-import { sanitizeCurrencyAmount, sanitizePercent, sanitizeQuantity } from './numeric';
+import { sanitizeCurrencyAmount, sanitizePercent, sanitizeQuantity, sanitizeFractionRate } from './numeric';
 
 describe('sanitizeCurrencyAmount — SELF-201 regression baseline (numeric(20,4), no range)', () => {
 	it('accepts a clean decimal string', () => {
@@ -60,7 +60,8 @@ describe('sanitizeCurrencyAmount — SELF-201 regression baseline (numeric(20,4)
 describe.each([
 	['sanitizeCurrencyAmount', sanitizeCurrencyAmount],
 	['sanitizePercent', sanitizePercent],
-	['sanitizeQuantity', sanitizeQuantity]
+	['sanitizeQuantity', sanitizeQuantity],
+	['sanitizeFractionRate', sanitizeFractionRate]
 ] as const)('%s — six-category adversarial battery', (_name, sanitize) => {
 	it('rejects NaN (literal number)', () => {
 		expect(sanitize(NaN).ok).toBe(false);
@@ -142,6 +143,41 @@ describe('sanitizePercent — numeric(5,2) CHECK (0..100), 074 shape', () => {
 
 	it('rejects 4+ integer digits (numeric(5,2) precision, independent of the 0..100 range)', () => {
 		const r = sanitizePercent('1000.00');
+		expect(r.ok).toBe(false);
+	});
+});
+
+describe('sanitizeFractionRate — PROPOSED numeric(?,4) CHECK (0..1), SELF-259 tax_bracket_row.bracket_rate shape (unconfirmed against migration 101)', () => {
+	it('accepts an in-range fraction', () => {
+		expect(sanitizeFractionRate('0.22')).toEqual({ ok: true, value: 0.22 });
+	});
+
+	it('accepts the boundaries', () => {
+		expect(sanitizeFractionRate('0')).toEqual({ ok: true, value: 0 });
+		expect(sanitizeFractionRate('0.0000')).toEqual({ ok: true, value: 0 });
+		expect(sanitizeFractionRate('1')).toEqual({ ok: true, value: 1 });
+		expect(sanitizeFractionRate('1.0000')).toEqual({ ok: true, value: 1 });
+	});
+
+	it('rejects a negative rate (digit-shape valid, range invalid)', () => {
+		expect(sanitizeFractionRate('-0.1')).toEqual({ ok: false, reason: 'Enter a value of at least 0.' });
+	});
+
+	it('rejects > 1 even when digit-shape-valid (single-int-digit values above 1)', () => {
+		expect(sanitizeFractionRate('9')).toEqual({ ok: false, reason: 'Enter a value of at most 1.' });
+		expect(sanitizeFractionRate('1.01')).toEqual({ ok: false, reason: 'Enter a value of at most 1.' });
+	});
+
+	it('rejects a percent-unit value ("22" instead of "0.22") — the shape itself is the unit fence here: nothing in [0,1] needs 2+ integer digits, so a percent-scale input fails outright rather than merely out-of-range', () => {
+		expect(sanitizeFractionRate('22').ok).toBe(false);
+	});
+
+	it('rejects 5+ decimal places (proposed scale)', () => {
+		expect(sanitizeFractionRate('0.22222')).toEqual({ ok: false, reason: 'At most 4 decimal places.' });
+	});
+
+	it('rejects 2+ integer digits (proposed precision, independent of the 0..1 range)', () => {
+		const r = sanitizeFractionRate('10.0000');
 		expect(r.ok).toBe(false);
 	});
 });
