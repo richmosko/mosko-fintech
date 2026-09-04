@@ -66,23 +66,31 @@
 --   101, 103 (100/102 skipped — sibling-branch migrations touching neither
 --   table). `supabase db reset` is mechanically banned and was not used.
 --
---   plan(36): 8 template pins (T1-T8: AC 1/2, E1, E23 — total row count,
+--   plan(42): 8 template pins (T1-T8: AC 1/2, E1, E23 — total row count,
 --   per-schedule (type, tax_year, std_ded, row_count) bag, universal
 --   zero-floor, universal fraction bound, universal rate-monotonicity, the
 --   CA top bracket, the three federal_lt_cg pairs, the federal_ordinary top
 --   bracket) + 7 backfill reach (R1-R7: AC 7 — A/B each hold 3 schedules/20
 --   rows, A cannot read B's schedules or rows, every B-owned row carries
 --   users_id=B) + 4 new-user provisioning (N1-N2 the call and its no-op
---   repeat, plus the RLS-scoped read-back of both counts) + 9 the deferred
+--   repeat, plus the RLS-scoped read-back of both counts) + 2 unauthenticated
+--   refusal (U1-U2: Sec F-2 — fn_provision_tax_brackets()'s fail-closed
+--   `auth.uid() is null` guard RAISES, paired with a non-vacuous control that
+--   the identical call succeeds once a tenant claim is set) + 9 the deferred
 --   set fence's first real multi-row exercise (F1a-c pins on the SEEDED
 --   California set itself; F2a-b non-monotone rate rejection; F3a-b nonzero
 --   lowest-floor rejection; F4a-b the non-vacuous control) + 2 idempotency
 --   (I1-I2: a second statement-(3) apply creates zero new schedules/rows) +
 --   3 posture (P1-P2 both functions' full posture+ACL, P3 the pfin DEFINER
---   allowlist unchanged at exactly 3 names) + 2 labels (L1 every label
---   states SINGLE, L2 the CA label states 2025) + 1 forward-looking absence
---   proof for SELF-262 (E1: no california_ordinary schedule at the CURRENT
---   calendar year) = 36.
+--   allowlist unchanged at exactly 3 names) + 6 labels (Sec V-2 — L1-L6 read
+--   the STORED pfin.tax_bracket_schedule.schedule_label column, not the
+--   template's discarded return value: L1 every stored label states SINGLE,
+--   L2 the CA label states 2025/§17043/FLAT, L3 both federal labels cite
+--   Rev. Proc. 2025-32, L4 every label is within its own 1..500 DDL bound,
+--   L5 an exact-length anti-drift pin on A's CA label, L6 a dedicated leg on
+--   C's signup-path provisioning) + 1 forward-looking absence proof for
+--   SELF-262 (E1: no california_ordinary schedule at the CURRENT calendar
+--   year) = 42.
 -- =====================================================================
 
 begin;
@@ -90,7 +98,7 @@ begin;
 -- shared verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(36);
+select plan(42);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb, _rls.tenant_c() as tc \gset
@@ -172,6 +180,20 @@ select results_eq(
 --   A and B are inserted into auth.users, then a BYTE-IDENTICAL copy of
 --   statement (3) is applied once — the only way to observe "reaches an
 --   already-existing user" deterministically inside this file's own txn.
+--
+--   ⚠ TRANSCRIBED COPY, NOT THE SHIPPED STATEMENT (Sec SELF-260 F-3). The
+--   SQL below is retyped from the migration's own statement (3), not
+--   executed FROM the migration file — a future edit to that statement
+--   does NOT move this copy, and (R7) below (plus (I1)/(I2) at BLOCK I,
+--   the same copy again) would keep asserting a shape that no longer
+--   ships. PIN: statement (3) as authored in
+--   supabase/migrations/103_tax_bracket_seed.sql at `8247778` (lines
+--   609-634) hashes to md5 2cfb9421cb479908f76598abfd9149d4 — recompute
+--   with `git show 8247778:supabase/migrations/103_tax_bracket_seed.sql
+--   | sed -n '609,634p' | md5sum` (or `md5 -q` on macOS) before trusting
+--   this copy still matches a later migration edit. No rewrite is
+--   required by this pin alone — it is a tripwire for a human to notice,
+--   not a mechanical fence pgTAP can run against a one-shot DDL statement.
 -- =====================================================================
 insert into auth.users (id) values (:'ta'), (:'tb');
 
@@ -179,14 +201,15 @@ with tpl as (
   select * from pfin.fn_tax_bracket_seed_template()
 ),
 parent_src as (
-  select distinct u.id as users_id, t.schedule_type, t.tax_year, t.standard_deduction
+  select distinct u.id as users_id, t.schedule_type, t.tax_year, t.standard_deduction,
+                  t.schedule_label
     from auth.users u
    cross join tpl t
 ),
 sched as (
   insert into pfin.tax_bracket_schedule
-    (users_id, tax_year, schedule_type, standard_deduction)
-  select p.users_id, p.tax_year, p.schedule_type, p.standard_deduction
+    (users_id, tax_year, schedule_type, schedule_label, standard_deduction)
+  select p.users_id, p.tax_year, p.schedule_type, p.schedule_label, p.standard_deduction
     from parent_src p
    order by p.users_id, p.schedule_type
   on conflict (users_id, tax_year, schedule_type) do nothing
@@ -240,6 +263,31 @@ select _rls.expect_owner_can_read('pfin.tax_bracket_schedule'::regclass, :'tc'::
 select _rls.expect_owner_can_read('pfin.tax_bracket_row'::regclass, :'tc'::uuid, 20::bigint);
 
 -- =====================================================================
+-- BLOCK U (Sec F-2) — fn_provision_tax_brackets() FAIL-CLOSED REFUSAL.
+--   The function's own explicit guard (`auth.uid() is null`) had NO
+--   watcher before this leg: (P2) below pins the EXECUTE ACL, a DIFFERENT
+--   control that would still pass even if a future grant widened EXECUTE
+--   to a broader role — the guard is what holds THEN.
+-- =====================================================================
+select set_config('role', 'postgres', true);
+select set_config('request.jwt.claims', '', true);
+savepoint sp_u1;
+select throws_like(
+  'select pfin.fn_provision_tax_brackets()',
+  '%no authenticated caller%',
+  '(U1) fn_provision_tax_brackets() with NO authenticated caller (auth.uid() is null) RAISES the function''s own fail-closed guard rather than falling through to a bare NOT NULL violation on users_id'
+);
+rollback to savepoint sp_u1;
+
+select _rls.set_tenant(:'ta'::uuid);
+select is(
+  pfin.fn_provision_tax_brackets(),
+  0,
+  '(U2) CONTROL: the IDENTICAL call succeeds (returns 0, not an error) once request.jwt.claims carries a tenant — proves (U1) is a non-vacuous refusal, not a stub that always throws. A already holds all 3 schedules from BLOCK R''s backfill, so 0 is the correct per-key idempotent return'
+);
+select set_config('role', 'postgres', true);
+
+-- =====================================================================
 -- BLOCK F (AC 3 — 101's deferred set fence, FIRST exercise on a real
 --   multi-row batch). F1a-c pin the SEEDED california_ordinary set A
 --   received from BLOCK R's backfill. F2/F3 stage synthetic multi-row
@@ -269,8 +317,10 @@ select is(
 );
 
 select _rls.set_tenant(:'ta'::uuid);
-insert into pfin.tax_bracket_schedule (tax_year, schedule_type, standard_deduction)
-  values (2027, 'federal_ordinary', 16100.00) returning id as sched_fence \gset
+insert into pfin.tax_bracket_schedule (tax_year, schedule_type, schedule_label, standard_deduction)
+  values (2027, 'federal_ordinary',
+          'QA synthetic fence-test schedule (BLOCK F) — not a seeded template row; excluded from BLOCK L''s label legs by tax_year',
+          16100.00) returning id as sched_fence \gset
 
 set constraints all deferred;
 select lives_ok(
@@ -315,6 +365,12 @@ select set_config('role', 'postgres', true);
 --   of statement (3) — every user reachable by it (A, B, C, and any real
 --   pre-existing user from the scratch DB build) already holds all three
 --   schedules by this point, so it must create nothing.
+--
+--   ⚠ TRANSCRIBED COPY (Sec SELF-260 F-3) — same statement, same pin, as
+--   BLOCK R above: md5 2cfb9421cb479908f76598abfd9149d4 of
+--   supabase/migrations/103_tax_bracket_seed.sql lines 609-634 at
+--   `8247778`. Not re-derived here; see BLOCK R's comment for the
+--   recompute command.
 -- =====================================================================
 select (select count(*) from pfin.tax_bracket_schedule)::bigint as sched_before,
        (select count(*) from pfin.tax_bracket_row)::bigint as rows_before \gset
@@ -323,14 +379,15 @@ with tpl as (
   select * from pfin.fn_tax_bracket_seed_template()
 ),
 parent_src as (
-  select distinct u.id as users_id, t.schedule_type, t.tax_year, t.standard_deduction
+  select distinct u.id as users_id, t.schedule_type, t.tax_year, t.standard_deduction,
+                  t.schedule_label
     from auth.users u
    cross join tpl t
 ),
 sched as (
   insert into pfin.tax_bracket_schedule
-    (users_id, tax_year, schedule_type, standard_deduction)
-  select p.users_id, p.tax_year, p.schedule_type, p.standard_deduction
+    (users_id, tax_year, schedule_type, schedule_label, standard_deduction)
+  select p.users_id, p.tax_year, p.schedule_type, p.schedule_label, p.standard_deduction
     from parent_src p
    order by p.users_id, p.schedule_type
   on conflict (users_id, tax_year, schedule_type) do nothing
@@ -396,18 +453,61 @@ select is(
 );
 
 -- =====================================================================
--- BLOCK L (labels state the filing status — AC 6 / PM's A-6).
+-- BLOCK L (labels state the filing status — AC 6 / PM's A-6; Sec V-2).
+--   Reads the STORED column pfin.tax_bracket_schedule.schedule_label
+--   directly — NOT pfin.fn_tax_bracket_seed_template()'s return value,
+--   which nothing downstream consumes. Covers A/B (BLOCK R's backfill)
+--   AND C (BLOCK N's signup-path fn_provision_tax_brackets()), scoped to
+--   tax_year in (2025, 2026) so BLOCK F's synthetic 2027 fence-test
+--   schedule (which carries its own non-template label) is out of scope
+--   by construction rather than by an extra predicate per leg.
 -- =====================================================================
 select is(
-  (select count(*) from pfin.fn_tax_bracket_seed_template() where schedule_label not ilike '%single%'),
+  (select count(*) from pfin.tax_bracket_schedule
+     where users_id in (:'ta', :'tb', :'tc')
+       and tax_year in (2025, 2026)
+       and schedule_label not ilike '%single%'),
   0::bigint,
-  '(L1) every seeded schedule_label states the filing status SINGLE, case-insensitive — RED if any schedule''s label dropped that assumption'
+  '(L1) every STORED schedule_label (A/B''s backfill and C''s signup-path provisioning alike) states filing status SINGLE, case-insensitive — RED if any schedule''s PERSISTED label dropped that assumption, not just the template''s'
 );
 select is(
-  (select count(*) from pfin.fn_tax_bracket_seed_template()
-    where schedule_type = 'california_ordinary' and schedule_label not ilike '%2025%'),
+  (select count(*) from pfin.tax_bracket_schedule
+     where users_id in (:'ta', :'tb', :'tc')
+       and schedule_type = 'california_ordinary'
+       and not (schedule_label like '%2025%'
+            and schedule_label like '%§17043%'
+            and schedule_label like '%FLAT%')),
   0::bigint,
-  '(L2) every california_ordinary row''s label states its OWN year, 2025 — not silently read as the current year (E23)'
+  '(L2) every STORED california_ordinary label states its own year 2025, cites R&TC §17043, and states the threshold is FLAT — RED if a future edit regressed to Sec V-1''s false filing-status-moves claim or dropped the §17043 citation'
+);
+select is(
+  (select count(*) from pfin.tax_bracket_schedule
+     where users_id in (:'ta', :'tb', :'tc')
+       and tax_year in (2025, 2026)
+       and schedule_type in ('federal_ordinary', 'federal_lt_cg')
+       and schedule_label not like '%Rev. Proc. 2025-32%'),
+  0::bigint,
+  '(L3) every STORED federal label (ordinary and long-term-capital-gains alike) cites Rev. Proc. 2025-32 — scoped to tax_year 2025/2026 so BLOCK F''s synthetic 2027 fence-test schedule is out of scope, same as (L1)/(L4)'
+);
+select is(
+  (select count(*) from pfin.tax_bracket_schedule
+     where users_id in (:'ta', :'tb', :'tc')
+       and tax_year in (2025, 2026)
+       and (length(schedule_label) < 1 or length(schedule_label) > 500)),
+  0::bigint,
+  '(L4) every STORED schedule_label falls within its own DDL bound, length 1..500 (tax_bracket_schedule_schedule_label_check) — RED if a future edit widened a label past the column''s own CHECK'
+);
+select is(
+  (select length(schedule_label) from pfin.tax_bracket_schedule
+     where users_id = :'ta' and schedule_type = 'california_ordinary' and tax_year = 2025),
+  473,
+  '(L5) A''s STORED california_ordinary label is EXACTLY 473 characters — an anti-drift pin on the composed V-1/E29 text (Architect measured 473 at `8247778`), RED on silent truncation or unnoticed expansion'
+);
+select is(
+  (select count(*) from pfin.tax_bracket_schedule
+     where users_id = :'tc' and schedule_label not ilike '%single%'),
+  0::bigint,
+  '(L6) C''s SIGNUP-PATH provisioning (fn_provision_tax_brackets, BLOCK N) independently stores the SINGLE-filer label on all 3 schedules too — a dedicated leg on the NEW-USER path, not folded into (L1), so a future regression that breaks only the provisioning writer (while the backfill writer still works) is attributed correctly'
 );
 
 -- =====================================================================
