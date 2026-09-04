@@ -7,7 +7,8 @@ sitting-log **R3 (A′)**.
 
 ## Pre-ruling re-read of R3 at `524d273`
 
-**Verdict: PROCEED, with 15 pre-conditions (P-1 … P-15). No veto.** No tenant-isolation defect, no
+**Verdict: PROCEED, with 19 pre-conditions (P-1 … P-19). No veto.** *(P-1 … P-15 at the original
+pass; P-16 … P-19 added in §2a below after the E41 / E42 dispositions.)* No tenant-isolation defect, no
 privilege-boundary defect, no `SECURITY DEFINER` addition, no §10 ledger movement, no
 [ADR-011](../../../DECISIONS.md#adr-011) Decision 3 obligation. **Five drifts found (D-1 … D-5)** —
 three in the verbatim-vs-paraphrase axis, two premise drifts — all in the AC block rather than in
@@ -105,6 +106,8 @@ two in `buildups` (`realized_tax_liab`, `unrealized_tax_liab`, each tagged `-- O
 ---
 
 ### 2. Pre-conditions for the build (P-1 … P-15)
+
+*(P-16 … P-19 follow in §2a.)*
 
 Ordered by what fails worst if missed, not by AC order.
 
@@ -296,6 +299,122 @@ aggregates every tenant. `059:753–768` is the correct shape (call, catch, rais
 
 ---
 
+### 2a. Addendum — E41 / E42 dispositions folded in (2026-09-04)
+
+**Anchor note, because the base moved under this document.** §0 – §2 above were measured at
+`origin/main` **`524d273`**. `origin/main` is now **`7c81dda`** (PR #615, SELF-264 ∥ SELF-266).
+Re-measured this turn: `git diff --stat 524d273 origin/main` is **21 files, 4046 insertions, 3
+deletions**, and it touches **none** of the sites §1 measures — no `supabase/migrations/*`, no
+`supabase/tests/*`, and none of `nav-composition.ts` / `netWorth.ts` / `navComposition.ts` /
+`NavCompositionTable.svelte` / the root `+page.server.ts` / `+page.svelte`. The only pre-existing
+file it edits is `api/src/routes/+layout.svelte`. **Every measurement in §0 – §2 therefore still
+holds at `7c81dda`**, and it is stated here rather than assumed.
+
+**What E41 / E42 settled, recorded so this document is not read against the superseded question.**
+Q1 is **not re-opened** — E26 (1) and ADR-067 Decision 5 stand (subtract 0; the row renders
+unavailable-with-reason), which closes §6 escalation 1 as raised. Q2 ruled **option (2)**: the two
+`buildups` tax keys become `104`'s envelopes **verbatim**, and `nav` subtracts
+`coalesce(amount, 0)` **once, in the DB**. AC 3a confirmed already on `main` via `102` — matching
+§1's own E3 verification. P-5 taken as option **(C)**. D-1 … D-5 taken. P-11 built inside this
+issue; P-2's five legs re-aimed by QA.
+
+**Q2 is the right call, and it extends ADR-067 Decision 5(a)'s enforcement property to `051`** — a
+consumer writing `… ?? 0` now meets an object at the §2.1.5 boundary as well as at `104`'s. Four
+conditions follow from it.
+
+**P-16 — ONE call to `104` per `051` invocation, into a CTE; `nav` and `buildups` read the same CTE
+row.**
+If `105` calls `fn_compute_tax_liability(p_as_of)` once for the `buildups` keys and again inside the
+`nav` expression, the coalesced figure and the rendered envelopes are **two evaluations** and can
+disagree — the foot stops footing, and a suite that stubs `104` cannot observe it. `104` is
+`stable`, so the planner *may* fold two identical calls; **"may" is not a control.** Require it by
+construction: one CTE, both readers.
+
+**P-17 — the `coalesce` reads a key that does not exist on the unavailable branch. That is correct;
+say so in the header.**
+Measured at `104:805–813`: an `unavailable` envelope is
+`jsonb_build_object('status','unavailable','reason', …)` with **no `amount` key at all**, so
+`(env->>'amount')::numeric` is SQL NULL and `coalesce(…, 0)` resolves correctly. Two conditions:
+
+- **(i)** the coalesce is written against `->>'amount'`, **never** against a `status` string test, so
+  a future third status is handled by absence rather than by an unbranched `case` — the fail-open
+  shape recorded against `greatest(<case with no ELSE>, 0)` elsewhere in `104`'s own history.
+- **(ii)** `105`'s header states in one sentence that this `coalesce` is the **only** place a zero is
+  minted for an absent scalar, and that it is why P-4's label is load-bearing. Otherwise the next
+  reader meets a bare `coalesce(…, 0)` on a money path and either removes it or trusts it.
+
+**P-18 — the envelope change breaks `nav-composition.ts`'s types, and P-3's sign fix must land in
+the same edit. Follow the SHIPPED discriminated-union precedent.**
+Measured: `api/src/lib/nav-composition.ts:82–84` declares `realized_tax_liab: number` /
+`unrealized_tax_liab: number`, and `:119–120` build `displayValue: b.realized_tax_liab`. Once those
+keys are objects, P-3's negation `-b.realized_tax_liab` yields **`NaN`**, not a wrong sign — louder,
+and better. So **P-3 and P-4 collapse into one edit**: `displayValue` becomes
+`status === 'computed' ? -amount : null`, and the row carries `status` + `reason`.
+
+⚠ **Do not invent a second spelling of "envelope".** SELF-264 / SELF-266 landed the convention at
+`7c81dda` — `api/src/lib/tax-quarterly.ts:39–46`:
+
+```ts
+export type FundsDueEnvelope =
+	| { status: 'unavailable'; reason: string }
+	| { status: 'computed'; amount: number };
+```
+
+A **discriminated union** is materially stronger than the required-`status`-field shape I asked for
+in the message that preceded this addendum: it makes `amount` **unreachable without narrowing**, so
+`-b.realized_tax_liab` fails to compile rather than producing `NaN` at runtime. `051`'s two keys
+take that same shape. `tax-quarterly.ts:112` is also the shipped instance of P-4's discipline —
+*"Verbatim `funds_due` envelope … unavailable stays unavailable, never 0."*
+
+**P-19 (Architect's pen) — the ADR-067 Decision 5 amendment must state that `104`'s payload is
+UNCHANGED.**
+Decision 5 is the canonical home SELF-264 and SELF-266 resolve their citations against, and both are
+now merged consumers of it. What Q2 adds is **`051`'s re-emission contract**, not a change to
+`104`'s. A reader who concludes their contract moved goes looking for a change that is not there;
+the likelier failure is the reverse — a 264/266 reviewer skips the amendment as *"not mine"* and
+misses that the envelope shape is now load-bearing in a **second** place. One sentence naming which
+payload moved and which did not.
+
+---
+
+**P-11 refinement — the built shape needs a CALL-SHAPE half, not only a value half.**
+E42 describes *"a loader-level leg with mocked RPCs holding different values; inversion proven."*
+That gives a leg that **can** fail, which was my objection — but **mocked RPCs holding different
+values cannot observe what rider 0 is about**: whether the two surfaces read *one* value. If both
+RPCs are mocked and the leg asserts the two rendered figures are equal, a future author who re-adds
+a `fn_compute_nav` call that **happens to agree in the fixture** passes it.
+
+The discriminating assertion is **call shape**, and the precedent is already in the file —
+`api/src/lib/server/queries/netWorth.test.ts:60`:
+`expect(rpc).toHaveBeenCalledWith('fn_compute_nav', { p_as_of: AS_OF, p_active_only: true })`.
+
+So the leg needs both halves:
+
+1. `fn_nav_composition` called **exactly once**, and `fn_compute_nav` called **never** on the §2.1.1
+   path. **This leg goes red the moment the headline is re-pointed** — which is precisely what rider
+   0 names, and it is the half that survives a fixture that coincidentally agrees.
+2. Both rendered figures derive from that one payload, with the differing-value mock as the
+   **inversion** fixture proving (2) can fail.
+
+⚠ `netWorth.test.ts:60` is itself an assertion this issue must **delete or invert**: it currently
+pins the call rider 0 removes, so it will go red, and **that red is correct rather than a
+regression.** Recorded here so nobody repairs it by restoring the call.
+
+---
+
+**Note on P-2's disposition — not an objection.** The five legs live in **three** batteries, and two
+of them are other issues' shipped controls: `051_fn_nav_composition_rls.sql` (F1 / F2) and
+`self227_investment_mv_verification.sql` (leg 12). Re-aiming a leg in `self227` changes a control
+SELF-227 shipped. Fine to do — `105`'s header should record **which foreign batteries it re-aimed
+and why**, so the next reader of `self227` finds the reason in the tree rather than in a thread.
+
+**Unchanged by this addendum.** P-1 (the `nav_daily` veto trigger), P-6, P-7, P-9, P-10, P-12, P-13,
+P-14 and P-15 stand exactly as written above. I do **NOT** require anything further on Q1, on
+AC 3a, or on the §10 ledger: the Q2 ruling touches no privileged-context surface, no CI fence, no
+FK-shaped column and no catalogued instance, and `7c81dda` moved none of those either.
+
+---
+
 ### 3. Pre-ruling on the UNAVAILABLE-scalar case: (A) vs (B)
 
 **Recommendation: (A) — and it is not an open question.**
@@ -408,3 +527,11 @@ into a merged migration header if carried forward.
    that is a formatting assertion on a fixture. This is the finding I would most want F/CTO to see.
 3. **The AC block carries five drifts (D-1 … D-5) and is the artifact the builder reads.** It needs
    a correction pass before dispatch, not after.
+
+---
+
+**Escalation status at 2026-09-04, post-E41 / E42.** Item 1 (the re-opened ruling) is **closed** —
+E41 confirms Q1 is not re-opened. Item 2 (P-11's absent watcher) is **being built inside this
+issue**, subject to the call-shape refinement in §2a. Item 3 (the AC block's five drifts) is **in
+progress** via Linear. P-16 … P-19 are forwarded as **blocking at the freeze** to Architect,
+Backend and Frontend.
