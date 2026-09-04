@@ -3,7 +3,8 @@
 //
 // Reconciled to E8 (team-lead ruling, 2026-09-03): the write path is a single RPC call —
 // `pfin.fn_tax_bracket_schedule_replace_all(p_schedule_id, p_tax_year, p_schedule_type,
-// p_standard_deduction, p_tax_balance_prior_year, p_rows)` — that Architect is landing on
+// p_schedule_label, p_standard_deduction, p_tax_balance_prior_year, p_rows)` (7-arg form amended
+// by E27/E29 for `schedule_label`, landed migration 101 @ b073641) — that Architect is landing on
 // migration 101. This endpoint STILL does its own RLS-scoped ownership read before calling the
 // RPC (for a reliable, message-independent 404 — see the route file's header for why), so every
 // test captures both the read call and the RPC call, and asserts the RPC is never reached when
@@ -81,6 +82,7 @@ function validBody(overrides: Record<string, unknown> = {}) {
 	return {
 		tax_year: 2026,
 		schedule_type: 'federal_ordinary',
+		schedule_label: '2026 federal ordinary — married filing jointly',
 		standard_deduction: '14600.00',
 		tax_balance_prior_year: null,
 		rows: [
@@ -254,6 +256,7 @@ describe('POST /api/settings/tax-brackets/:schedule_id — orchestration', () =>
 			schedule_id: 42,
 			tax_year: 2026,
 			schedule_type: 'federal_ordinary',
+			schedule_label: '2026 federal ordinary — married filing jointly',
 			standard_deduction: 14600,
 			tax_balance_prior_year: null,
 			row_count: 2
@@ -269,6 +272,7 @@ describe('POST /api/settings/tax-brackets/:schedule_id — orchestration', () =>
 			p_schedule_id: 42,
 			p_tax_year: 2026,
 			p_schedule_type: 'federal_ordinary',
+			p_schedule_label: '2026 federal ordinary — married filing jointly',
 			p_standard_deduction: 14600,
 			p_tax_balance_prior_year: null,
 			p_rows: [

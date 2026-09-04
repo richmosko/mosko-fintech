@@ -22,11 +22,23 @@
 // flagged in the hand-off rather than silently shipped. E8 rules the fix: Architect is adding
 // `pfin.fn_tax_bracket_schedule_replace_all` to 101 — ONE SECURITY INVOKER call that performs
 // the schedule lock, the scalar update, and the row replace-all inside ONE Postgres transaction,
-// closing the gap this file previously accepted. RPC CONTRACT (E8, relayed 2026-09-03):
+// closing the gap this file previously accepted. RPC CONTRACT (E8, relayed 2026-09-03; amended
+// by E27/E29 for `schedule_label`, landed migration 101 @ b073641):
 //   pfin.fn_tax_bracket_schedule_replace_all(
 //     p_schedule_id bigint, p_tax_year smallint, p_schedule_type pfin.tax_schedule_type_enum,
-//     p_standard_deduction numeric, p_tax_balance_prior_year numeric, p_rows jsonb
+//     p_schedule_label text, p_standard_deduction numeric, p_tax_balance_prior_year numeric,
+//     p_rows jsonb
 //   ) returns void
+// PostgREST's `.rpc()` matches parameters BY NAME, not position, so the payload below lists
+// `p_schedule_label` alongside the other named args and their order in the call is immaterial —
+// only the SIGNATURE'S positions (as landed in 101) matter, and are quoted verbatim above.
+// ⚠ `create or replace function` with a CHANGED parameter list ADDS AN OVERLOAD rather than
+// replacing the prior form in place: a local/dev DB that still holds the pre-E27/E29 6-arg
+// signature from an earlier apply of this migration file will end up with BOTH the 6-arg and
+// 7-arg forms resolvable, which breaks PostgREST's function-resolution-by-name for this RPC.
+// Local/dev DBs must be rebuilt from a clean migration chain (`supabase db reset` — CAUTION,
+// wipes local test data) or have the stale 6-arg signature dropped explicitly before this
+// endpoint will resolve correctly.
 // `p_rows` is a JSON array of `{bracket_floor, bracket_rate}` — exactly the shape
 // `bracketRowSchema` already validates, so `parsed.data.rows` is passed through unmodified; no
 // `schedule_id` or `users_id` per row (the function stamps both server-side, uniformly, the
@@ -260,6 +272,7 @@ export const POST: RequestHandler = async ({ request, locals, params }) => {
 		p_schedule_id: scheduleId,
 		p_tax_year: parsed.data.tax_year,
 		p_schedule_type: parsed.data.schedule_type,
+		p_schedule_label: parsed.data.schedule_label,
 		p_standard_deduction: parsed.data.standard_deduction,
 		p_tax_balance_prior_year: parsed.data.tax_balance_prior_year,
 		p_rows: parsed.data.rows
@@ -275,6 +288,7 @@ export const POST: RequestHandler = async ({ request, locals, params }) => {
 		schedule_id: scheduleId,
 		tax_year: parsed.data.tax_year,
 		schedule_type: parsed.data.schedule_type,
+		schedule_label: parsed.data.schedule_label,
 		standard_deduction: parsed.data.standard_deduction,
 		tax_balance_prior_year: parsed.data.tax_balance_prior_year,
 		row_count: parsed.data.rows.length
