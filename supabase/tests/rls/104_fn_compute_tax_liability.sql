@@ -134,10 +134,18 @@
 -- │       red for the wrong reason) — a shape change, not a bigger number.    │
 -- │ L19 NO nav_daily REFERENCE in the catalog body (not a header-comment      │
 -- │       grep — AC 1's structural exclusion, measured).                     │
--- │ L20 fn_compute_nav(date) / fn_compute_nav(date,boolean) /                 │
--- │       fn_nav_composition(date) BYTE-UNCHANGED: md5(pg_get_functiondef)    │
--- │       pinned against a clean 001->103 control build (this branch,        │
--- │       2026-09-04 — see the header note below for the measured values).   │
+-- │ L20 fn_compute_nav(date) / fn_compute_nav(date,boolean) BYTE-UNCHANGED:   │
+-- │       md5(pg_get_functiondef) pinned against a clean 001->103 control     │
+-- │       build (this branch, 2026-09-04 — see the header note below for the │
+-- │       measured values). L20c RE-ANCHORED (SELF-268/105, Architect's       │
+-- │       catch, FOURTH PASS): NOT a byte-pin on fn_nav_composition's own     │
+-- │       functiondef — 105 is EXPECTED to change that function's body (it   │
+-- │       is the whole of SELF-268), so a hard md5 pin on it living in THIS   │
+-- │       file would misattribute every future 051 edit to 104 and go red    │
+-- │       the moment 105 lands, for a reason that has nothing to do with     │
+-- │       104. Re-anchored on the NEGATIVE property 104 actually owns: its    │
+-- │       own prosrc contains no reference to fn_nav_composition at all —    │
+-- │       051 calls 104, never the reverse.                                  │
 -- └──────────────────────────────────────────────────────────────────────────┘
 --
 -- ⚠ FIXTURE HAZARD (Architect, carried into the dispatch): a Trade-class
@@ -892,13 +900,27 @@ select ok(
 );
 
 -- =====================================================================
--- L20 — fn_compute_nav / fn_nav_composition BYTE-UNCHANGED. md5 pinned
--- against a clean sequential 001->103 control build (this branch,
--- 2026-09-04): fn_compute_nav(date) = c207483f5e786fb5e90a03212b2de5e0,
--- fn_compute_nav(date,boolean) = 9917963f130498c3614eb6d550f53f51 (matches
--- 102's OWN L10 pin -- 104 is a second migration confirming the same
--- value, since 104 does not touch this function either), fn_nav_composition
--- (date) = 2cc5453c8a258ec27969efc96773c78f.
+-- L20 — fn_compute_nav BYTE-UNCHANGED. md5 pinned against a clean sequential
+-- 001->103 control build (this branch, 2026-09-04): fn_compute_nav(date) =
+-- c207483f5e786fb5e90a03212b2de5e0, fn_compute_nav(date,boolean) =
+-- 9917963f130498c3614eb6d550f53f51 (matches 102's OWN L10 pin -- 104 is a
+-- second migration confirming the same value, since 104 does not touch this
+-- function either).
+--
+-- L20c RE-ANCHORED (SELF-268/105, Architect's catch): the FIRST TWO passes of
+-- this file also byte-pinned fn_nav_composition(date) here
+-- (2cc5453c8a258ec27969efc96773c78f, the value BEFORE 105) -- WRONG HOME for
+-- that pin. 105 is EXPECTED to change fn_nav_composition's body (measured on
+-- this branch: its md5 is now ee1502b78f1d28bdb9b00649b64f66cf, DIFFERENT --
+-- that is 105 working as designed, not a regression), so a hard pin on IT
+-- living in 104's OWN battery would misattribute every future 051 edit to
+-- THIS file and go red for a reason that has nothing to do with 104. What
+-- 104 actually owns is a NEGATIVE property about ITSELF, stated in its own
+-- header's "NOT READ, DELIBERATELY" list: 104 does not read or compose
+-- fn_nav_composition's output anywhere in its own body -- the callee
+-- direction is 051 -> 104, never the reverse. Assert THAT, on 104's own
+-- prosrc, which is stable regardless of what 051/105 does to fn_nav_
+-- composition's body.
 -- =====================================================================
 select is(
   (select md5(pg_get_functiondef(p.oid))
@@ -916,12 +938,11 @@ select is(
   '9917963f130498c3614eb6d550f53f51',
   '(L20b) fn_compute_nav(date,boolean) is BYTE-UNCHANGED by 104 -- matches 102''s own L10 pin, a second migration confirming the value'
 );
-select is(
-  (select md5(pg_get_functiondef(p.oid))
+select ok(
+  (select position('fn_nav_composition' in prosrc) = 0
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-    where n.nspname = 'pfin' and p.proname = 'fn_nav_composition'),
-  '2cc5453c8a258ec27969efc96773c78f',
-  '(L20c) fn_nav_composition(date) is BYTE-UNCHANGED by 104 -- 051 calls THIS function''s output at read time (SELF-268), but 104 itself does not touch 051''s body'
+    where n.nspname = 'pfin' and p.proname = 'fn_compute_tax_liability'),
+  '(L20c) fn_compute_tax_liability''s OWN catalog body (pg_proc.prosrc) contains NO reference to fn_nav_composition -- 051/105 calls 104, never the reverse; RE-ANCHORED (SELF-268/105) off a hard md5 pin on fn_nav_composition''s functiondef, which 105 changes BY DESIGN and would have misattributed the change to this file'
 );
 
 select * from finish();

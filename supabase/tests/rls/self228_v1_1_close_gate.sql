@@ -370,8 +370,8 @@ select set_config('role', 'postgres', true);
 select _rls.set_tenant(:'tc'::uuid);
 select is(
   (select pfin.fn_nav_composition('2026-06-01')),
-  '{"nav": 0, "groups": [], "buildups": {"debt": 0, "gross_total": 0, "total_non_re": 0, "realized_tax_liab": 0, "unrealized_tax_liab": 0}}'::jsonb,
-  '(C5c) fn_nav_composition: tenant C (zero accounts) — nav 0, empty groups[], fails closed, never an error'
+  '{"nav": 0, "groups": [], "buildups": {"debt": 0, "gross_total": 0, "total_non_re": 0, "realized_tax_liab": {"status":"unavailable","reason":"no_schedule_any_year"}, "unrealized_tax_liab": {"status":"unavailable","reason":"no_schedule_any_year"}}}'::jsonb,
+  '(C5c) fn_nav_composition: tenant C (zero accounts, zero schedules) — nav 0, empty groups[], BOTH tax keys the ENVELOPE OBJECT {unavailable, no_schedule_any_year} (RE-CUT SELF-268/105: the two tax keys are now envelope objects, not 0::numeric literals — the invariant "nav 0, groups empty, fails closed" is unchanged, only the expected literal needed the envelopes), fails closed, never an error'
 );
 select set_config('role', 'postgres', true);
 
