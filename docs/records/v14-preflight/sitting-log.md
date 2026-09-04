@@ -57,7 +57,7 @@ Agenda: [`sitting-agenda.md`](sitting-agenda.md). Rulings are numbered as there 
 3. **`051`'s `comment on function` is rewritten** in the same migration: it currently asserts `nav = … = fn_compute_nav(p_as_of, true)`, an identity this ruling deliberately breaks (Architect round-2 rider i). The `V1.4 ramp` literal comments go with it (Sec catch 4).
 4. **Same as-of date, one request**: both functions take the one `fn_server_today()` value threaded through (Seam C; Architect rider ii).
 5. **All four layers demonstrated on one walk, one session** (Sec §9.4 item 5): `051` emits ≠ 0 · `nav-composition.ts` drops `isTaxPlaceholder` · `NavCompositionTable.svelte` renders `displayValue` not a literal zero · the browser figure matches the DB value. Part 3 is Frontend's and is the silent one.
-6. **Rendered, not just applied** ([ADR-049](../../../DECISIONS.md#adr-049)): the exclusion is visible on the §2.1.5 surface, and the §2.1.2 chart names its gross basis.
+6. **Rendered, not just applied** (non-silent staleness per PRD §2.4.4 / [ADR-013](../../../DECISIONS.md#adr-013); an earlier draft cited ADR-049 here — corrected per execution-log E36): the exclusion is visible on the §2.1.5 surface, and the §2.1.2 chart names its gross basis.
 7. **Volatility declared explicitly** in the replacing `051` migration, per signature (`051`/`049` default VOLATILE today; a `stable` caller of a `volatile` callee is an unbacked promise).
 
 **Consequences recorded:**
