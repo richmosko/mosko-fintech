@@ -23,7 +23,7 @@ Agenda: [`sitting-agenda.md`](sitting-agenda.md). Rulings are numbered as there 
 - §2.5.3's Federal LT-CG bracket walk stays live over `qualified_dividend`-tagged Ordinary contributions (step 4); not dead code.
 - SELF-262's §2.5.1 payload carries an explicit `capital_gains: unavailable` shape, never zeros (PM / Sec M-11).
 - SELF-269: any battery leg over the CG columns is vacuous under (A); the battery pins the UNAVAILABLE shape instead.
-- **The window's closing item is not yet homed.** BACKLOG §7.3 G3 names the manual-sale writer as a dependency and its Wave-5 note says *"GL-substrate milestone scoping should confirm the manual-sale writer's home."* No milestone is named here because none is assigned; booking carried to §6 of the agenda (Seam J `lot_match` write-enabled-and-unreachable) for the close-out PR.
+- **The window's closing item is not yet homed.** BACKLOG §7.3 G3 names the manual-sale writer only in its Dependencies; the sentence *"GL-substrate milestone scoping should confirm the manual-sale writer's home (it is a named dependency of §7.3 G3)"* lives in **§7.19's known-pre-sweep-finding note (2026-08-26 securities-edit sitting)**, not in G3. *(Attribution corrected 2026-09-03 after PM's read-back; the quote was right, the location was wrong.)* No milestone is named here because none is assigned; booking carried to §6 of the agenda (Seam J `lot_match` write-enabled-and-unreachable) for the close-out PR.
 
 **Consuming issues:** SELF-264 (CG section) · SELF-266 (LT-CG walk basis) · SELF-269 · SELF-262 AC2.
 
