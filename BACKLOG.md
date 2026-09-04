@@ -1281,6 +1281,11 @@ Three-purpose backlog per [ADR-009](DECISIONS.md#adr-009) Decisions 4 + 7, [ADR-
 - **AC.** At dispatch of the V1.x path: SELF-302 returns to the tax milestone; the `basis_adjust` writer and GL design are drafted with Sec; the §2.5.1 wash-sale sentence lifts to the mechanism. Until then nothing is owed.
 - **Dependencies.** Item 1 (a sale must exist before a wash sale can).
 
+**6. `schedule_label` in the Lock 13 PDF worker — a SEPARATE escaping control at V1.5.** [V1.5 A-item; DevOps/Backend; Sec-raised]
+- **Source.** SELF-260 Sec joint-review V-4 open question; execution-log E30. `pfin.tax_bracket_schedule.schedule_label` (`101`) is up to 500 characters of user-controlled prose, forwarded unmodified to the tax-liability payload (SELF-262); V1.4's §2.5 surfaces are web-only and SvelteKit escapes on render.
+- **AC.** Before any monthly-report template (V1.5, Lock 13 worker — a zero-DB-isolation renderer) renders a tax-liability payload field, the label and every other free-text field in that payload are escaped by the worker's own control, asserted by a test that stores `<script>` and proves the rendered PDF/HTML carries it inert. Escaping in Svelte does not transfer to the worker.
+- **Dependencies.** SELF-262 (payload contract); the V1.5 monthly-report issues (SELF-345–362).
+
 ### §7.33 — SELF-263 inventory hygiene (2026-09-03)
 
 *Source: the SELF-263 tax-value inventory ([`self263-inventory.md`](docs/records/v14-execution/self263-inventory.md) §4, "not proposed, noted") and the team-lead ruling at execution log E4 that spelling stays out of the seed-delta migration. BOOKINGS: no counts.*
