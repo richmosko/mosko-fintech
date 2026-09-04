@@ -1,9 +1,12 @@
 // nav-composition.test.ts — unit battery for the §2.1.5 buildup-ladder logic (SELF-226 · V1.1;
-// SELF-268 V1.4 flip, E41-E42 envelope shape, Sec P-18). Browser-safe, dep-free (node env).
+// SELF-268 V1.4 flip, E41-E42 envelope shape, Sec P-18; RULING UPDATE E44 — Sec freeze F-2 option
+// (A), team-lead under F/CTO delegation, which also closes F-1). Browser-safe, dep-free (node env).
 // NavCompositionTable.svelte is a thin presentational shell over buildupRows() / navFootLabel();
-// exercising them here proves the AC#4 EXACT order + the D5 debt sign flip + SELF-268 AC 7 / M-3's
-// "exactly one flip in the ladder" invariant + the SIGNED-realized/unflipped regression + Sec's
-// three-state NAV-foot basis, deterministically WITHOUT a DOM env.
+// exercising them here proves the AC#4 EXACT order + the "exactly one flip SITE in the ladder"
+// invariant (E44: that one site now negates THREE rows — debt, realized_tax_liab,
+// unrealized_tax_liab — not debt alone) + the SIGNED-realized/flipped regression + the footing
+// identity (gross_total + the three subtractive displayValues === nav) + Sec's three-state
+// NAV-foot basis, deterministically WITHOUT a DOM env.
 
 import { describe, it, expect } from 'vitest';
 import {
@@ -69,30 +72,30 @@ describe('buildupRows — Debt sign flip (D5)', () => {
 		expect(displayValueOf(rows, 'gross_total')).toBe(1_000_000);
 	});
 
-	it('a zero-debt household flips to a neutral zero (−0 arithmetic; rendered $0)', () => {
+	it('a zero-debt household flips to a NEGATIVE ZERO displayValue (−0 arithmetic) — this leg checks the RAW VALUE only; the "$0" RENDER (not "-$0") is the formatter\'s job and is asserted as a rendering leg in NavCompositionTable.ssr.test.ts, never here', () => {
 		expect(displayValueOf(buildupRows({ ...b, debt: 0 }), 'debt')).toBe(-0);
 	});
 });
 
-describe('buildupRows — SELF-268 E41-E42 tax envelopes, computed: real values, NO second sign flip (AC 7 / M-3)', () => {
-	it('a NON-ZERO helper value reaches the rendered cell (AC 10 — not merely "$0 is absent")', () => {
+describe('buildupRows — SELF-268 RULING UPDATE (E44): tax envelopes negate at the SAME single flip site as debt', () => {
+	it('a NON-ZERO helper value reaches the rendered cell, negated (AC 10 — not merely "$0 is absent")', () => {
 		const rows = buildupRows(b);
-		expect(displayValueOf(rows, 'realized_tax_liab')).toBe(5_000);
-		expect(displayValueOf(rows, 'unrealized_tax_liab')).toBe(2_500);
+		expect(displayValueOf(rows, 'realized_tax_liab')).toBe(-5_000);
+		expect(displayValueOf(rows, 'unrealized_tax_liab')).toBe(-2_500);
 	});
 
-	it('renders the tax rows UNFLIPPED — positive amount in, positive displayValue out', () => {
+	it('renders the tax rows FLIPPED — positive amount in (underpaid), NEGATIVE displayValue out (reduces NAV, same reading as Debt)', () => {
 		const rows = buildupRows({ ...b, realized_tax_liab: computed(12_345), unrealized_tax_liab: computed(999) });
-		expect(displayValueOf(rows, 'realized_tax_liab')).toBe(12_345);
-		expect(displayValueOf(rows, 'unrealized_tax_liab')).toBe(999);
+		expect(displayValueOf(rows, 'realized_tax_liab')).toBe(-12_345);
+		expect(displayValueOf(rows, 'unrealized_tax_liab')).toBe(-999);
 	});
 
-	it('105 SIGN CONVENTION: a NEGATIVE realized amount (overpayment/receivable) renders AS NEGATIVE — never abs()ed or clamped', () => {
+	it('E44: a NEGATIVE realized amount (overpayment/receivable) renders as POSITIVE displayValue — adds back, never abs()ed or clamped', () => {
 		const rows = buildupRows({ ...b, realized_tax_liab: computed(-500) });
-		expect(displayValueOf(rows, 'realized_tax_liab')).toBe(-500);
+		expect(displayValueOf(rows, 'realized_tax_liab')).toBe(500);
 	});
 
-	it('exactly ONE flip in the whole ladder: only debt.displayValue is the negation of its raw magnitude', () => {
+	it('exactly ONE flip SITE in the whole ladder: debt, realized_tax_liab, and unrealized_tax_liab are ALL the negation of their raw magnitude/amount — never a second site', () => {
 		const rawByKey: Record<string, number> = {
 			total_non_re: b.total_non_re,
 			gross_total: b.gross_total,
@@ -107,7 +110,43 @@ describe('buildupRows — SELF-268 E41-E42 tax envelopes, computed: real values,
 				return r.displayValue === -raw && raw !== 0;
 			})
 			.map((r) => r.key);
-		expect(flippedKeys).toEqual(['debt']);
+		expect(flippedKeys).toEqual(['debt', 'realized_tax_liab', 'unrealized_tax_liab']);
+	});
+
+	it('FOOTING IDENTITY: gross_total + the three subtractive displayValues === nav, for an UNDERPAID realized fixture', () => {
+		const underpaid: NavCompositionBuildups = {
+			total_non_re: 800_000,
+			gross_total: 1_000_000,
+			debt: 150_000,
+			realized_tax_liab: computed(5_000), // underpaid — reduces NAV
+			unrealized_tax_liab: computed(2_500)
+		};
+		const nav = underpaid.gross_total - underpaid.debt - 5_000 - 2_500; // 105's own nav arithmetic
+		const rows = buildupRows(underpaid);
+		const footed =
+			(displayValueOf(rows, 'gross_total') as number) +
+			(displayValueOf(rows, 'debt') as number) +
+			(displayValueOf(rows, 'realized_tax_liab') as number) +
+			(displayValueOf(rows, 'unrealized_tax_liab') as number);
+		expect(footed).toBe(nav);
+	});
+
+	it('FOOTING IDENTITY: gross_total + the three subtractive displayValues === nav, for an OVERPAID realized fixture (receivable adds back)', () => {
+		const overpaid: NavCompositionBuildups = {
+			total_non_re: 800_000,
+			gross_total: 1_000_000,
+			debt: 150_000,
+			realized_tax_liab: computed(-500), // overpaid — a receivable, adds back
+			unrealized_tax_liab: computed(2_500)
+		};
+		const nav = overpaid.gross_total - overpaid.debt - -500 - 2_500; // 105's own nav arithmetic
+		const rows = buildupRows(overpaid);
+		const footed =
+			(displayValueOf(rows, 'gross_total') as number) +
+			(displayValueOf(rows, 'debt') as number) +
+			(displayValueOf(rows, 'realized_tax_liab') as number) +
+			(displayValueOf(rows, 'unrealized_tax_liab') as number);
+		expect(footed).toBe(nav);
 	});
 });
 

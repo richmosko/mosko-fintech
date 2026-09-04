@@ -7,7 +7,9 @@
 	The "composition foot" of the single-canvas §2.1 surface (P2 dense number-first): it sits
 	below the SELF-211 NAV headline on the root dashboard.
 
-	RATIFIED SHAPE (F/CTO 2026-08-02; SELF-268 V1.4 flip amends the tax-row treatment below):
+	RATIFIED SHAPE (F/CTO 2026-08-02; SELF-268 V1.4 flip amends the tax-row treatment below; RULING
+	UPDATE E44 — Sec freeze F-2 option (A), team-lead under F/CTO delegation, which also closes F-1
+	— amends it AGAIN, see the Debt-sign bullet below):
 	  • 3 visual tiers (AC#4 · VD Item A, F/CTO-ratified): category group-header (normal row band,
 	    BOLD label + caret disclosure, row-hover) < buildup .subtotal (border-top-strong delimiter)
 	    < NAV .foot (2px border, bold, surface-alt) — tokens only (screen.css not loaded app-side).
@@ -21,11 +23,16 @@
 	    Debt subtraction, a negative NAV) render in NEUTRAL ink (design-system-spec §5 fence 1).
 	  • Debt sign (D5): Debt row = −magnitude (subtraction). SELF-268 (R3 rider 5 / AC 2-3-7):
 	    the V1.1 tax-placeholder shape (`isTaxPlaceholder`, `$0` + a "V1.4 ramp" caption) is REMOVED
-	    — the two tax rows now render their real `displayValue` when computed, UNFLIPPED (debt
-	    stays the ladder's only negation; see $lib/nav-composition.ts). ⚠ THIS WAS THE SILENT LAYER
-	    (R3 rider 5 part 3): fixing 105 + nav-composition.ts and missing this file would still
-	    render `$0` here against correct upstream data, with a green suite. Empty categories are
-	    omitted upstream → simply absent (D3).
+	    — the two tax rows now render their real `displayValue` when computed. RULING UPDATE (E44,
+	    Sec freeze F-2 option (A), which also closes F-1): that `displayValue` is now FLIPPED, same
+	    as Debt — the single flip site in $lib/nav-composition.ts's buildupRows()/taxRow() negates
+	    all THREE subtractive rows (debt, realized_tax_liab, unrealized_tax_liab), not debt alone;
+	    an underpaid liability renders NEGATIVE (reduces NAV, same reading as Debt), an overpaid one
+	    (a receivable) renders POSITIVE (adds back) — see $lib/nav-composition.ts's own comment for
+	    the full sign rationale + the footing identity. ⚠ THIS WAS THE SILENT LAYER (R3 rider 5 part
+	    3, still true under the new convention): fixing 105 + nav-composition.ts and missing this
+	    file would still render the WRONG sign here against correct upstream data, with a green
+	    suite. Empty categories are omitted upstream → simply absent (D3).
 	  • Whole-dollar, tabular-nums (D9): the NAV foot's VALUE reads identical to the §2.1.1
 	    headline and subtotals never appear off-by-rounding; the foot's LABEL is dynamic — see
 	    the three-state basis bullet below.
@@ -37,9 +44,14 @@
 	    shipped `FundsDueEnvelope` shape), not plain numbers. `buildupRows()` ($lib/nav-composition)
 	    already routes an unavailable envelope to a row with `displayValue: null` + a `reason` — this
 	    template renders that as an "Unavailable" notice instead, so a `$0` never stands in for a
-	    determination that was never made. ⚠ SIGN: `realized_tax_liab`'s amount may be NEGATIVE (an
-	    overpayment is a genuine receivable) and is rendered UNFLIPPED, never abs()'d or clamped —
-	    see $lib/nav-composition.ts's own comment; `unrealized_tax_liab` is always ≥ 0 (104's clamp).
+	    determination that was never made. ⚠ SIGN (RULING UPDATE E44): `realized_tax_liab`'s raw
+	    `amount` may be NEGATIVE (an overpayment is a genuine receivable) — never abs()'d or clamped
+	    anywhere, raw or rendered — but the RENDERED `displayValue` this template shows is now
+	    FLIPPED from that raw amount (buildupRows()'s single flip site, same as Debt): a computed
+	    row renders `usdSigned.format(displayValue)` with an EXPLICIT sign (+/−, `signDisplay:
+	    'exceptZero'`) so an underpaid row reading negative (reduces NAV) is never confused with an
+	    overpaid row reading positive (adds back) — see $lib/nav-composition.ts's own comment;
+	    `unrealized_tax_liab` is always ≥ 0 raw (104's clamp), so its displayValue is always ≤ 0.
 	  • SELF-268 NAV-FOOT THREE-STATE BASIS (Sec P-5 / option (C)) — the two envelopes are
 	    INDEPENDENT and can disagree: 'tax-adjusted' (both computed) / 'partial' (one unavailable —
 	    NAV reads pre-tax for THAT line only) / 'unadjusted' (both unavailable — NAV reads fully
@@ -122,11 +134,21 @@
 
 	// Whole-dollar USD — matches the §2.1.1 headline so the NAV foot reads identical to it
 	// (foot-to-NAV visual consistency; the exactness is a backend invariant on the raw numbers).
+	// SEC FINDING (E44 follow-up): `signDisplay: 'negative'` is REQUIRED, not the 'auto' default —
+	// buildupRows()'s single flip site (nav-composition.ts) produces displayValue = −0 for a
+	// zero-debt household (0 negated is -0 in IEEE-754), and 'auto' renders "-$0" for that JS -0
+	// (measured). 'negative' is the ONLY signDisplay value that suppresses the sign on a negative
+	// zero while still showing "-" for every genuine negative — a zero-debt household must read
+	// "$0", never "-$0". This formatter also renders the Total Non-RE / Gross Total / NAV-foot /
+	// leaf current-value cells, none of which can be negative zero today, so this is a no-op change
+	// for them (measured: 'negative' and 'auto' agree on every non-zero and on +0). See
+	// NavCompositionTable.ssr.test.ts's zero-debt rendering leg.
 	const usd = new Intl.NumberFormat('en-US', {
 		style: 'currency',
 		currency: 'USD',
 		minimumFractionDigits: 0,
-		maximumFractionDigits: 0
+		maximumFractionDigits: 0,
+		signDisplay: 'negative'
 	});
 	// Unrealized G/L is ACTUAL performance → signed (+/−); the value-color fence applies to it.
 	const usdSigned = new Intl.NumberFormat('en-US', {
@@ -239,6 +261,14 @@
 							Unavailable
 							<span class="tax-unavailable-reason">— {unavailableReasonCopy(row.reason)}</span>
 						</td>
+					{:else if row.key === 'realized_tax_liab' || row.key === 'unrealized_tax_liab'}
+						<!-- RULING UPDATE (E44): a computed tax row's displayValue can be EITHER sign (an
+						     underpaid liability reduces NAV, negative; an overpaid one is a receivable that
+						     adds back, positive) — usdSigned's explicit +/− (signDisplay: 'exceptZero') keeps
+						     the two unambiguous, unlike Debt below which is always ≤ 0 and needs no explicit
+						     "+". Neutral ink still (VALUE-COLOR FENCE §5 fence 1) — no pos/neg class here;
+						     that fence is reserved for the Unrealized G/L column. -->
+						<td class="num">{usdSigned.format(row.displayValue)}</td>
 					{:else}
 						<td class="num">{usd.format(row.displayValue)}</td>
 					{/if}
