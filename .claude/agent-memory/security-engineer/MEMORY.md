@@ -27,6 +27,7 @@
 - [temp/ hand-off paths are per-worktree](feedback_temp_handoff_path_is_per_worktree.md) — give the absolute path; commit-ready text goes in the FILE *and* the message.
 - [Review the delivery note against the ref](feedback_review_the_delivery_note_against_the_ref.md) — a `temp/` v2 over a v1 branch means the green run named another tree; a teammate's local suite figure ≠ the fenced CI lane.
 - [Diff filter swallows removed comments](feedback_diff_filter_swallows_removed_comments.md) — a deleted `--` line reads as `---`; assert "zero executable lines changed", not "comment-only".
+- [Auditing a consolidation against my own file](feedback_consolidation_drift_catch_method.md) — a quote attributed to me may be LAUNDERED from a teammate's file; a re-aimed axis deletes the gap; enumerate my ids first or omissions stay invisible.
 
 - [The merge key is a tenant fence](feedback_merge_key_choice_is_a_tenant_fence.md) — joining RLS'd reads on a global id fails CLOSED; joining on a label fails OPEN.
 - [Two functions, two partitions — check the axis](feedback_two_functions_two_partitions_axis_mismatch.md) — diff both member sets before the arithmetic. ⚠ ROUTING variant: a NULL enum is a gap only if the CONSUMER branches on it — the numbered PROCEDURE holds the branch, not the lookup TABLE.

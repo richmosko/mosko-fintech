@@ -125,6 +125,7 @@ Three-purpose backlog per [ADR-009](DECISIONS.md#adr-009) Decisions 4 + 7, [ADR-
   - **Safe-harbor floor computation** (Federal 100%/110%-of-prior-year + CA FTB safe-harbor rules).
   - **Alternative quarterly-installment-sizing** — μ-1 max-of bracket-derived-and-safe-harbor; μ-3 two-column rendering.
   - **Annualized-income installment method** (IRS Form 2210 method 2).
+  - **CA FTB 30/40/0/30 installment weighting** (no September installment) — V1 ships ÷ 4 for both jurisdictions per μ-2; a ratified V1 simplification, not drift (booked at the V1.4 pre-flight, pm-findings A-11). Due dates themselves are data the §2.5.3 surface renders.
 - **Withholding tracking.** §2.5.3 V1/V2. V1 simplification treats all incoming-tax-payments as "estimated payments" in the IRS / FTB ledgers; withholding (W-2 / 1099) tracked distinct from estimated payments is V2+.
 - **Pre-emptive quarterly-payment-due-date reminders.** §2.5.3 V1/V2 (ξ-2 / ξ-3 V2+). V1 ships reactive in-table due-date surfacing with current-quarter visual emphasis. V2+:
   - **Pre-emptive in-app notifications** of quarterly due dates.
@@ -258,6 +259,8 @@ Three-purpose backlog per [ADR-009](DECISIONS.md#adr-009) Decisions 4 + 7, [ADR-
 | §7.28 | BOOKINGS | V1.3 pre-flight recalibration close-out bookings (row added at the securities-edit close-out; section landed 2026-08-22 without an index row) |
 | §7.29 | STAGING | Manual-entry correction primitives (void) — placement (a) V1.x here vs (b) V2+ §5.4, ratified at the securities-edit close-out PR |
 | §7.30 | BOOKINGS | Falsified-premise doc comments left by `095` (SELF-343 close, 2026-08-29; §7.16-precedent vehicles) |
+| §7.31 | BOOKINGS | SELF-258 arc landing bookings (2026-09-03) |
+| §7.32 | BOOKINGS | V1.4 pre-flight recalibration close-out bookings (2026-09-03) — incl. the SELF-302/303 Platform relocation record + the SELF-261 close record and wash-sale V1.x path |
 
 ### §7.1 — Architect substrate (Platform / Cross-cutting V1.x)
 
@@ -360,7 +363,7 @@ Three-purpose backlog per [ADR-009](DECISIONS.md#adr-009) Decisions 4 + 7, [ADR-
 
 ### §7.3 — GL-substrate stream (later V1.x; 3 items)
 
-*Later-V1.x GL-substrate work decomposed out of the V1.0 §2.4 manual-entry track per [ADR-033](DECISIONS.md#adr-033) — GL-engine edits (net-new `fn_gl_entries` contra branches) that are a distinct work-class from the manual-entry INSERT-path slices. Milestone target (M4-GL-adjacent later V1.x) confirmed by F/CTO 2026-07-26; the exact product-V1.x label is pending roadmap sequencing with Architect. Promotes to Linear at milestone-rotation when the GL-substrate milestone becomes current + next.*
+*Later-V1.x GL-substrate work decomposed out of the V1.0 §2.4 manual-entry track per [ADR-033](DECISIONS.md#adr-033) — GL-engine edits (net-new `fn_gl_entries` contra branches) that are a distinct work-class from the manual-entry INSERT-path slices. Milestone target (M4-GL-adjacent later V1.x) confirmed by F/CTO 2026-07-26; the exact product-V1.x label is pending roadmap sequencing with Architect. Promotes to Linear at milestone-rotation when the GL-substrate milestone becomes current + next. **The manual-sale writer** — G3's named blocker, and the capability §2.5.1's capital-gains columns and wash-sale treatment wait on (V1.4 sitting R1 / R2) — **has no assigned milestone**; the booking lives at §7.32 item 1 and this stream's scoping owes it a home.*
 
 **G1. Manual in-kind transfer entry (`group_type='transfer_in_kind'` + net-new in-kind clearing contra).** [V1-SHIP-BLOCK]
 - **Source.** [PRD §2.4.3.b](docs/PRD/index.html#story-2-4-3) (AcctSetup non-cash event entry — transfer-in-kind subtype) + [ADR-033 Decision 4](DECISIONS.md#adr-033) (transfer-in-kind deferral to its own SELF issue).
@@ -1187,10 +1190,10 @@ Three-purpose backlog per [ADR-009](DECISIONS.md#adr-009) Decisions 4 + 7, [ADR-
 - **AC.** A ruling: either a `029`-side history table (the `031` pattern) or a recorded accept-with-rationale. Sec joint-review mandatory (audit-class surface).
 - **Dependencies.** None blocking; naturally follows V1.3's classify surfaces landing.
 
-**3. V1.4 tax-value inventory session (F/CTO).** [scope-record; PM]
-- **Source.** Sitting item 19(1): SELF-245's original AC4 struck as discharged — `041` populated `tax_relevant`/`tax_character` per the existing-system mapping — but nobody has inventoried those values against what §2.5.1's ζ-2 consumer actually needs, and the Equity/Contribution row enters as flag-for-review (`tax_relevant = true`, notes rider per ADR-062). PM's recommendation, F/CTO-adopted: a mid-milestone F/CTO inventory session in V1.4.
-- **AC.** The session happens before §2.5.1 implementation ships: every `posting_prototype_default` row's `tax_relevant`/`tax_character` confirmed or corrected against the V1.4 tax model; the Contribution flag resolved per account type; outcomes recorded on the V1.4 issue that consumes them.
-- **Dependencies.** V1.4 entry.
+**3. V1.4 tax-value inventory session (F/CTO).** [scope-record; PM] — **carrier: SELF-263, re-scoped at the V1.4 sitting (R5)**
+- **Source.** Sitting item 19(1): SELF-245's original AC4 struck as discharged — `041` populated `tax_relevant`/`tax_character` per the existing-system mapping — but nobody has inventoried those values against what §2.5.1's ζ-2 consumer actually needs, and the Equity/Contribution row enters as flag-for-review (`tax_relevant = true`, notes rider per ADR-062). PM's recommendation, F/CTO-adopted: a mid-milestone F/CTO inventory session in V1.4. **Widened at the V1.4 pre-flight sitting** ([R5](docs/records/v14-preflight/sitting-log.md), PM §4 AC1): the asset-side `pfin.taxonomy_default` rows — all `false`/NULL at `041` — gate §2.5.1's capital-gains half and were outside the original booking.
+- **AC.** The session happens before §2.5.1 implementation ships and its outcomes are recorded on SELF-263 (the carrier; its seed-delta migration records them — R5). Row set is **both default tables**: every `pfin.posting_prototype_default` row's `tax_relevant`/`tax_character` (cash-flow side) **and** every `pfin.taxonomy_default` row's (asset side). Decisions the session must produce, each with its reason (R5): (i) `Equity / Contribution` per account type; (ii) `Revenue / Bond Premium` = `ordinary` and `Revenue / Dividend` = `qualified_dividend` confirmed or corrected; (iii) the asset-side marking principle stated once; (iv) `long_term_capital_gain_eligible` / `short_term_only` assignments on the asset side. ⚠ **Under R1 (A) the asset-side outcome has no V1.4 consumer** (the capital-gains half renders UNAVAILABLE); it is decided in the same session because it is one F/CTO act and the seed delta is cheap, and it is **not on V1.4's critical path**. SELF-264 carries the hard-gate AC citing SELF-263 (R5).
+- **Dependencies.** V1.4 entry — step 1 of the ruled dispatch order; F/CTO time (a sitting, not a dispatch).
 
 **4. Conditional-status ADR sweep.** [doc-hygiene; Architect]
 - **Source.** ADR-057's Status read "Proposed — F/CTO ratifies at PR sign-off" for weeks after `077` merged (corrected at ADR-063's leg-1 commit, cause named). Architect's generalization: any ADR whose Status names a discharging event nobody edits afterwards goes stale silently — ADR-062 had to cite ADR-057's rule rather than its status to avoid inheriting the stale claim.
@@ -1236,3 +1239,38 @@ Three-purpose backlog per [ADR-009](DECISIONS.md#adr-009) Decisions 4 + 7, [ADR-
 - **Source.** Architect self-report at the ADR-066 arc (2026-09-03): ADR-063's four protocols are items inside ONE `### Decision` block; "ADR-063 Decision 3" (in `099`'s merged `--` header, line ~203) is a malformed pointer to real content. The form was used in team-lead/Architect messages, so siblings likely exist in other artifacts.
 - **AC.** Repo-wide grep for `ADR-063 Decision`; correct each per its vehicle rule (file-header `--` in place at next touch per apply-migration Step 1.6(B); any `comment on` instance needs a comment-only migration). Bare `[ADR-063]` links are the safe replacement form.
 - **Dependencies.** None. Not urgent by the misleads-someone-tomorrow test.
+
+### §7.32 — V1.4 pre-flight recalibration close-out bookings (2026-09-03)
+
+*Source: the V1.4 pre-flight sitting — F/CTO rulings R1–R12 and the default-and-notify block at [`docs/records/v14-preflight/sitting-log.md`](docs/records/v14-preflight/sitting-log.md) (commit `5d59a4a`; findings files alongside it). The build-side outputs ride the V1.4 issues. These are the items the log names as outliving the sitting with no issue to ride, plus the placement record for the three issues that left V1.4. BOOKINGS: no counts. Rulings are cited by R-number, not restated.*
+
+**1. The manual-sale writer has no assigned milestone.** [scope-record; PM → GL-substrate scoping]
+- **Source.** R1 (A): §2.5.1's ST CG / LT CG columns render UNAVAILABLE-with-reason because no sale writer exists on the tree; the window's closing item is the manual-sale writer, which §7.3 G3 carries as a Blocked-by and which nobody has homed (§7.19's known pre-sweep finding: *"V1 has no way to record a sale of anything"*). R2 attaches wash-sale treatment to the same item. ⚠ The log's R1 text attributes to G3 a *"Wave-5 note"* reading *"GL-substrate milestone scoping should confirm the manual-sale writer's home"*; at `5d59a4a` no such sentence exists in this file — G3 names the writer only in its Dependencies line. Recorded, not corrected.
+- **AC.** GL-substrate milestone scoping (§7.3's own framing: *"exact product-V1.x label pending roadmap sequencing"*) names the writer's milestone. At that milestone: the §2.5.1 UNAVAILABLE state lifts; wash-sale treatment lands via item 5's path; R11's unmatched-sell ruling (ST / ordinary, fail-closed, footnoted) is cited, not re-derived; Sec F-2 gets its first instance.
+- **Dependencies.** Upstream: none. Downstream: §7.3 G3 (matched-sell refusal), §2.5.1's capital-gains half, item 5.
+
+**2. `pfin.lot_match` is write-ENABLED at `036` with zero writers.** [Architect; Sec-visible]
+- **Source.** Architect Seam J, carried at the agenda §6 and R1: the grants advertise a live surface nothing reaches. R11: `lot_match` carries no `users_id` — tenancy inherits through its two `account_trans` FKs; any future §2.5.1 reader honors that rather than assumes a column.
+- **AC.** Whichever comes first: the writer lands (item 1) and the grants have a reachable surface, or the grants are narrowed to what is reachable with a ruled reason. Either way the FK-inherited tenancy is stated where the first reader is written.
+- **Dependencies.** Item 1.
+
+**3. UTC-pin tax-year boundary — a Pacific user flips year ~7 hours early.** [unowned; broader than §2.5]
+- **Source.** Sec M-4(a) ([`sec-findings.md`](docs/records/v14-preflight/sec-findings.md)): `061` pins the database TimeZone to UTC and `070` `fn_server_today()`'s own comment states it is session-TimeZone-evaluated; from ~16:00/17:00 Pacific on Dec 31 every *"current calendar year"* surface flips to the new year while the user's day is still Dec 31. R8 ruled the Q4-straddle half (M-4b) and left this half **unowned by name**. The §5.7 *"Per-user timezone for date rendering"* booking (UTC date-rendering ruling, 2026-08-04) is the same seam seen from the rendering side.
+- **AC.** An owner and a ruling: accept-with-rationale for V1, or a per-user zone applied to the tax-year derivation in the one place R8 put the date boundary (`fn_compute_tax_liability`, cited by its consumers). Not §2.5-only — any *"current calendar year"* surface shares it.
+- **Dependencies.** None upstream; §5.7's per-user-timezone item is the natural vehicle if it moves to V1.
+
+**4. Off-tree F/CTO rulings living only in Linear / CHANGELOG, and Sec's proposed rule.** [process; team-lead + Sec]
+- **Source.** Agenda §6: second and third instances found this pass — Gate B Option A (CHANGELOG Wave-5 line only; pm-findings D-3) and the SELF-245 marking outcome. Sec's proposed rule, verbatim: *"before calling an absence an omission, ask what the discharge would have looked like."*
+- **AC.** (a) The rule is adopted into the brief-drift / pre-flight procedure or recorded as declined — team-lead's call, booked here so the proposal is not lost. (b) The two Gate ADR fold-ins already have homes and are **not** re-booked here: Gate B rides SELF-267's implementing PR; Gate A rides SELF-262 (its AC already asks for the ADR — pm-findings D-16).
+- **Dependencies.** None.
+
+**5. Wash-sale V1.x path · SELF-261 close record · SELF-302 / SELF-303 relocation.** [placement-record + design-rationale; PM; Sec rider attached]
+- **Source.** R2 (A) with (B) recorded as the V1.x path; R6 (A); Sec placement rider at sec-findings §10.4; pm-findings §9.2 SELF-261.
+- **Record.**
+  - **SELF-302** (`basis_adjust` `wash_sale` P&L) and **SELF-303** (substantive `corp_action` GL) moved to **Platform / Cross-cutting V1.x** per R6; neither traces to a §2.5 story. SELF-302's return trigger: *"returns to the tax milestone if the V1.x wash-sale `basis_adjust` path is dispatched."* SELF-303's Sec D-6 test-durability rider (co-located aal2 pass/block assertion on the `037` battery) survives the move verbatim; if ever dropped, dropped explicitly. Both remain joint-review-mandatory money-flow migrations wherever they run.
+  - **The V1.x path (R2's (B)):** the user records a dated `basis_adjust` (`reason = 'wash_sale'`, the disallowed loss as `cost_basis`) against the replacement lot; SELF-302 posts its P&L and becomes §2.5.1 fuel at that milestone. Coherent with [ADR-031](DECISIONS.md#adr-031) Decision 4. Owed at that milestone, not before: a `basis_adjust` writer (none exists) and the GL design Sec calls *"its own tax-complex mini-design."*
+  - **Sec's placement rider (survives any option):** if a wash-sale mark is ever built it goes on `pfin.account_trans_annotation` (`023`) as additive columns, not on a new table — the `031` `fn_reclass_history_insert` capture is scoped to that one table, so a second overlay would hold income-changing marks mutable and untracked; a separate table owes the `031`-equivalent DEFINER capture and a Sec gate in the same migration. Sec's draft-shape catches on SELF-261 stand for whoever builds it: parent column is `trans_id`, not `id`; a genuine ADR-011 D3 hybrid member carrying its own `users_id` beside `account_trans_id`; `DEFAULT false` semantics owed a `comment on column`.
+  - **SELF-261 closes unbuilt** (R2; not promoted at R7). Design rationale preserved as the account of why `023` has its shape: a wash-sale flag is year-end review activity on a sale, which is why a mutable annotation overlay (the `023` shape) rather than a new table was the right instinct. The [ADR-013](DECISIONS.md#adr-013) Decision 7 A4 handoff (user-marked flag + disallowed-loss field on the sale transaction) is superseded by the `basis_adjust` path above — closed as superseded-with-pointer to this entry.
+  - **Seam I residual (R6), cited so the writers' landing sees it:** SELF-262 carries, in its migration header and AC, that while `wash_sale` `basis_adjust` and substantive `corp_action` remain Suspense-parked at `035`/`037`, `cost_basis` is understated → `049` `unrealized_gl` overstated → §2.5.4 Unrealized overstated, and the disallowed loss is unrecognized on §2.5.1. Vacuous on the tree today (the Suspense parking's domain is empty); it becomes live the day either writer lands.
+- **AC.** At dispatch of the V1.x path: SELF-302 returns to the tax milestone; the `basis_adjust` writer and GL design are drafted with Sec; the §2.5.1 wash-sale sentence lifts to the mechanism. Until then nothing is owed.
+- **Dependencies.** Item 1 (a sale must exist before a wash sale can).
