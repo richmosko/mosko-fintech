@@ -90,11 +90,14 @@ const priorYearBalance = () => z.union([z.null(), currencyAmount()]);
 
 /** `schedule_label` (migration 101, added at Sec's SELF-260 V-2, rulings E27/E29):
  *  `pfin.tax_bracket_schedule.schedule_label text not null`, CHECK
- *  `length(schedule_label) between 1 and 500` — named
- *  `tax_bracket_schedule_schedule_label_check`. Required on every POST (REPLACE-ALL SEMANTICS
- *  above), trimmed, non-empty after trim (a whitespace-only label is refused the same as an
- *  empty one — 101's own comment: "the empty string is refused rather than admitted as a
- *  blank"), max 500 mirroring the DB CHECK exactly. A non-string is rejected by `z.string()`
+ *  `schedule_label = btrim(schedule_label, E' \t\n\r\f\v') and length(schedule_label) between 1 and 500`
+ *  — a CANONICAL-FORM invariant named `tax_bracket_schedule_schedule_label_check` (E31): the DB
+ *  REFUSES a non-canonical value rather than trimming it. Required on every POST (REPLACE-ALL
+ *  SEMANTICS above), trimmed here so the value the RPC forwards is canonical by construction,
+ *  non-empty after trim, max 500. ⚠ NOT a mirror of the DB CHECK and no parity is claimed —
+ *  101's column comment states the residual (exotic Unicode whitespace, interior control
+ *  characters): JS trim() and the C0/C1/DEL fence are STRICTER than the CHECK at the ends and
+ *  the only control in the interior. A non-string is rejected by `z.string()`
  *  itself, same as every other typed field on this schema — no `z.any()` transform needed since
  *  this is a shape/length check, not a numeric-parse.
  *

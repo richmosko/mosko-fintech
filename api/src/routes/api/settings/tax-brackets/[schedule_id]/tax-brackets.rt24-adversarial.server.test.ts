@@ -116,7 +116,7 @@ describe('RT-24 mass-assignment battery (Lock 14 mod #1)', () => {
 	});
 });
 
-describe('RT-24 schedule_label battery (migration 101 CHECK, length 1..500 — E27/E29)', () => {
+describe('RT-24 schedule_label battery (migration 101 canonical-form CHECK: btrim-stable, length 1..500 — E27/E29/E31)', () => {
 	it('rejects a missing schedule_label', async () => {
 		const captured = { writeCalls: 0 };
 		const body = validBody() as Record<string, unknown>;
@@ -133,7 +133,7 @@ describe('RT-24 schedule_label battery (migration 101 CHECK, length 1..500 — E
 		expect(captured.writeCalls).toBe(0);
 	});
 
-	it('rejects a whitespace-only schedule_label — trimmed to empty before the min(1) check, same as an explicit empty string (101\'s own comment: "the empty string is refused rather than admitted as a blank")', async () => {
+	it('rejects a whitespace-only schedule_label — trimmed to empty before the min(1) check, same as an explicit empty string (101\'s CHECK is a canonical-form invariant: blank-only is impossible there too)', async () => {
 		const captured = { writeCalls: 0 };
 		const res = await POST(makeEvent(validBody({ schedule_label: '   ' }), captured));
 		expect(res.status).toBe(400);

@@ -494,3 +494,121 @@ re-review of the surfaces the prior GREEN cleared; this section is scoped to the
 nothing about them.
 
 **Nothing else.**
+
+---
+
+## Superseding verdict — 2026-09-04, `f540cbb` (E31 remediation)
+
+**GREEN.** This section **supersedes the AMBER at `e9772e5` above**, which is left unedited as the
+account of that moment per this file's supersede-don't-rewrite convention. **Scope:
+`git diff e9772e5..f540cbb`** — five files, with `e9772e5` confirmed an ancestor of `f540cbb`, so
+the three sections of this record now cover `7ccc908 → f540cbb` with no gap between them. Two items
+are carried below; neither blocks, and **the first is my own error**.
+
+**D-1 is discharged, by option (B) as ruled at E31.** The `drop function if exists
+…(bigint, smallint, pfin.tax_schedule_type_enum, numeric, numeric, jsonb)` is present, and its
+placement is correct and now load-bearing by statement: the `create type
+pfin.tax_schedule_type_enum` sits at line 557, the drop at 1420, the `create or replace` at 1423 —
+so the type exists when the drop is parsed, which is the failure mode I asked to be guarded against.
+`101`'s new FRESH-APPLY-ONLY header does the thing I asked and does it better than I asked it:
+it names the two guards (`create table if not exists`, the enum `do $$` block) as the constructs
+that make the file **runnable twice but not correct twice**, states that the absence of an
+`add column if not exists` pair is deliberate, and gives the reason option (A) was refused — that a
+`NOT NULL` backfill would be a code path exercisable against no real row, choosing a default nobody
+chose. **I accept (B) and I want the reasoning recorded, not just the outcome:** I named the
+*half-state* as the veto, never option (B) itself, and (B) with the belt-and-braces drop is the
+disposition that leaves nothing looking safer than it is.
+
+**D-2 is discharged.** The battery header now reads *six*-argument and records the correction
+rather than silently overwriting it.
+
+**D-5(i) is discharged, and the fix is the right shape.** `SF-L2` moved from
+`position('for update' in src) > 0` to `regexp_count(src, 'for update') = 1`. That closes the
+fail-open direction exactly: a future comment mentioning the phrase can no longer coexist with the
+real clause — it collides with it and reds. The leg's own message now states the mechanism
+(`pg_get_functiondef` returns prosrc **with comments**) rather than asserting the property.
+
+**The canonical-form CHECK landed verbatim in the shape I supplied, and the residual is stated
+without a parity claim.** `check (schedule_label = btrim(schedule_label, E' \t\n\r\f\v') and
+length(schedule_label) between 1 and 500)` — the stored-length bound is intact, so the padding
+bypass I flagged against `length(btrim(x))` is closed. The column comment states the NBSP / U+2028
+residual plainly (*"DB-LEGAL and APP-ILLEGAL … visually blank and structurally valid"*) and gives
+the reason a Unicode whitespace class was **not** adopted: it would trade a stated residual for an
+unstated one. **That is the right call and I want it on the record as a call, not a gap.**
+⚠ **I do NOT require the NBSP residual fixed.** It is self-inflicted, reachable only by a caller
+bypassing the endpoint, confined to that caller's own row, and it now has a written home.
+
+**The two-fact watcher is what I asked for.** `(RA-SIG1a)` counts by `proname` **alone** — no
+`pronargs` filter, so a stale overload is counted rather than excluded — and `(RA-SIG1b)` then
+asserts that one proc's `pronargs = 7`, keyed `order by p.oid limit 1` so it cannot itself error
+into ambiguity. Two facts that can disagree. `plan(100) → plan(110)` is `+6` canonical-form legs
+(including `(LBL-CHECK1b)`, the TAB case, which is the member one-argument `btrim` would have
+missed and is the reason the explicit character set was needed) `+2` RPC-path legs `+2` signature
+legs, and the header's own leg enumeration sums to 110.
+
+**Backend's arm is correct at the layer it sits in.** Control characters are refused across
+U+0000–U+001F and U+007F–U+009F **after** the trim, so the bounded value and the forwarded value are
+the same value; `(D-4)` is closed with a 400 and a field error and zero RPC calls, and its test
+message names the future edit it exists to catch — a later narrowing of the range's lower
+end so that U+0000 falls outside it and the hole silently reopens. The
+`<script>` arm asserts the payload reaches `p_schedule_label` **byte-for-byte**, and the schema
+comment says plainly that rejecting angle brackets would be the wrong fence at this layer.
+**That is the correct disposition — sanitize on render, never on store** — and the render-side leg
+is correctly assigned to SELF-265 rather than smuggled in here.
+
+**Verify-hook re-run on this diff, not assumed.** ADR-011 Decision 3 and Decision 4 were re-read
+because the DDL moved. A CHECK-constraint change introduces no FK-shaped reference column, so no
+Decision 3 obligation arises and the family is unchanged; `101`'s Decision-3 ⚠ paragraph is
+untouched by this diff (zero hunks against it). **§10 three axes clean:** no catalogued instance
+added, removed, reordered or renumbered; no layer attribution moves; no enumeration restated. The
+catalogued set and the CI-fenced set remain different sets and are not reconciled here. Nothing in
+this range touches `.github/workflows/`, `secrets-manifest.yml`, the RT-26 allowlist, or the
+SECURITY DEFINER allowlist. My own prior section merged into this branch unedited — 170 insertions,
+zero deletions.
+
+### Carried, neither blocking
+
+- **E-1 — flag / Architect. Comment-only, and it is MY error: the measurement I supplied for the
+  FRESH-APPLY-ONLY header now defeats its own re-verification.** The header reads *"13 migrations
+  use it (010, 012, 015, 017, 019, 030, 033, 037, 044, 045, 058, 085, 091)."* **The enumeration is
+  correct — thirteen entries, and `101` is rightly not among them.** But the header itself now
+  contains the literal string `add column if not exists`, twice, in the course of saying the file
+  does **not** use it. So the obvious re-verification —
+  `git grep -l "add column if not exists" -- supabase/migrations/ | wc -l` — returns **14** at
+  `f540cbb`, and the fourteenth is `101` matching on its own prose. A future reader running that
+  command finds a number one higher than the header's, "corrects" the header to 14, and thereby
+  asserts that `101` follows the convention it explicitly declines. **The drift is not in the
+  claim; it is in the claim's testability, and I introduced it by handing over a count.** This
+  repo's own test applies and resolves it — Decision 4's *"can a reader derive it by looking?"*:
+  the count is derivable from the list, so stating it adds nothing and can only ever be wrong.
+  **Drop the numeral, keep the enumeration** — or keep the numeral and add the one clause that
+  makes it re-verifiable (thirteen *use* it; a fourteenth file *names* it, this one). Either is a
+  single edit; I have no preference between them.
+
+- **E-2 — note / Architect. The column comment's "WHERE THEY DO NOT [agree]" block enumerates one
+  of two divergences.** It names the exotic-Unicode-whitespace residual and stops there. There is a
+  second, in the same direction: **control characters are app-illegal and DB-legal.** The CHECK's
+  `btrim` reaches only the *ends* of the value, so `E'federal\tordinary'` — a tab in the middle —
+  satisfies `schedule_label = btrim(schedule_label, E' \t\n\r\f\v')` and is accepted by the
+  database, while the endpoint refuses it 400 (and `(LBL-CHECK1b)` only pins the tab-**only** case,
+  where btrim does reach it). Same shape as the NBSP residual: self-inflicted, own row, no
+  cross-tenant reach, no leak — **a note, not a hole.** I raise it because the block is explicitly
+  framed as the honest statement of where the layers part, and an enumeration that stops one short
+  in exactly that block is the thing a later reader will trust as complete. One clause.
+
+### Non-objections on this diff
+
+I do **NOT** object to option (B), to the absence of an `add column if not exists` pair, or to the
+`NOT NULL` column shipping without a backfill path. I do **NOT** require the NBSP residual, the
+control-character residual (E-2), or the file's fresh-apply-only property to be given a mechanical
+watcher — I said in advance that no battery leg can observe file shape and that a CI grep for this
+would not earn a fence-boundary change, and I have not changed my mind now that the header exists.
+I do **NOT** object to `<script>` being stored unmodified; write-layer sanitization would have been
+the wrong fix and I would have flagged it. I do **NOT** object to the C1 range being refused, to
+`.trim()` preceding the length and regex checks, or to the RPC declining to trim on the caller's
+behalf. I do **NOT** require any ADR amendment, §10 ledger change, Decision 3 fold-in, RT-26
+allowlist change, or SECURITY DEFINER allowlist change — none is touched. I did **not** run the api
+suite or the pgTAP battery myself; team-lead reports 1962 green and `check` clean, and I am
+recording that as a relayed figure rather than as my own measurement.
+
+**Nothing else.**
