@@ -130,10 +130,7 @@
 		canDelete?: boolean;
 	} = $props();
 
-	// Namespaces every DOM id on this instance -- see file header's id-collision note. A
-	// one-time capture from props is deliberate (same `state_referenced_locally` shape
-	// Planning/CashflowTargetEditor's own baselines already document): an instance's identity
-	// (which schedule/year/mode it edits) does not change over its lifetime.
+	// Namespaces every DOM id on this instance -- see file header's id-collision note.
 	const instanceKey = `${scheduleType}-${mode}-${taxYear}`;
 
 	// Working row shape: STRING fields, one per input, the rate held as the PERCENT string the
@@ -156,6 +153,18 @@
 	 *  fixed bracket-1-floor already uses. */
 	const deductionLocked = scheduleType === 'federal_lt_cg';
 
+	// ONE-TIME capture of every `initial*` prop into draft $state — CORRECT BY CONSTRUCTION, not
+	// merely deliberate: TaxBracketSchedulesList.svelte wraps every instance of this component in
+	// `{#key basis.id}` (the edit-mode basis editor), the each-block's own `(s.id)` key (each
+	// prior-year editor), or `{#key `${type}-${year}`}` (the create panel) — team-lead correction,
+	// post-E35: a schedule CHANGING (a new basis year replacing the old one after a
+	// create-from-template) therefore always remounts a FRESH instance rather than reusing this
+	// one with stale draft state under new hidden tax_year/schedule_id fields, which would have
+	// been a SILENT wrong-year overwrite (the hidden identity fields read props directly and
+	// would update correctly while the draft below stayed stale — the exact split that made the
+	// bug invisible: the identity guard would pass, and the RPC would happily replace the NEW
+	// year's rows with the OLD year's draft). svelte-check's `state_referenced_locally` warnings
+	// on this block are therefore EXPECTED and safe, not a residual smell to silence.
 	let label = $state(initialLabel);
 	let standardDeduction = $state(deductionLocked ? '0' : String(initialStandardDeduction));
 	let priorYearBalance = $state(initialPriorYearBalance === null ? '' : String(initialPriorYearBalance));
@@ -252,6 +261,8 @@
 		california_ordinary: 'California (FTB) — Ordinary Income'
 	};
 
+	// `mode` never changes on a mounted instance either -- every call site passes it as a fixed
+	// literal ('edit' or 'create'), never a variable that could flip after mount.
 	const actionPath = mode === 'edit' ? '?/saveSchedule' : '?/createSchedule';
 	const submitButtonLabel = mode === 'edit' ? 'Save changes' : 'Create schedule';
 

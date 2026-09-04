@@ -278,3 +278,85 @@ describe('TaxBracketSchedulesList — federal_lt_cg create-from-template prefill
 		}
 	});
 });
+
+describe('TaxBracketSchedulesList — basis editor remounts on a schedule change (team-lead correction, same class as the auto-open fix)', () => {
+	it('a fresh load reporting a NEW basis schedule (a different id/year) replaces the editor draft entirely — no stale rows, no stale schedule_id', async () => {
+		const with2025Basis: Jurisdiction[] = [
+			...threeCurrentJurisdictions().slice(0, 2),
+			{
+				schedule_type: 'california_ordinary',
+				schedules: [
+					makeSchedule({
+						id: 3,
+						schedule_type: 'california_ordinary',
+						tax_year: 2025,
+						schedule_label: '2025 label',
+						rows: [{ bracket_floor: 0, bracket_rate: 0.1 }]
+					})
+				],
+				current_year_present: false,
+				basis_year: 2025
+			}
+		];
+		const { getByRole, rerender } = render(TaxBracketSchedulesList, {
+			props: { jurisdictions: with2025Basis, currentTaxYear: CURRENT_TAX_YEAR }
+		});
+		// Scoped to the CA <section> — the OTHER two jurisdictions render their own "Schedule
+		// label" / "Bracket … rate" fields and forms too.
+		let caSection = getByRole('region', { name: 'California (FTB) — Ordinary Income' });
+		expect(within(caSection).getByLabelText('Schedule label', { exact: false })).toHaveProperty(
+			'value',
+			'2025 label'
+		);
+
+		// Simulate exactly the sequence team-lead traced: the user creates a 2026 schedule from
+		// the template (a NEW row, id=4), invalidateAll() reloads, and the list now passes THAT
+		// row as the basis for the SAME jurisdiction/type.
+		const with2026Basis: Jurisdiction[] = [
+			...threeCurrentJurisdictions().slice(0, 2),
+			{
+				schedule_type: 'california_ordinary',
+				schedules: [
+					makeSchedule({
+						id: 4,
+						schedule_type: 'california_ordinary',
+						tax_year: 2026,
+						schedule_label: '2026 label',
+						standard_deduction: 5363,
+						rows: [
+							{ bracket_floor: 0, bracket_rate: 0.11 },
+							{ bracket_floor: 10412, bracket_rate: 0.13 }
+						]
+					})
+				],
+				current_year_present: true,
+				basis_year: 2026
+			}
+		];
+		await rerender({ jurisdictions: with2026Basis, currentTaxYear: CURRENT_TAX_YEAR });
+
+		// Re-query the section — `rerender` keeps the same root, but re-fetch defensively since
+		// `{#key}` just replaced the section's inner editor with a fresh instance.
+		caSection = getByRole('region', { name: 'California (FTB) — Ordinary Income' });
+
+		// The draft is ENTIRELY fresh — label, rows, and the hidden identity fields all agree on
+		// 2026. Without the {#key basis.id} fix, the label/rows below would still read "2025
+		// label" / the 2025 rate while `schedule_id`/`tax_year` (bound directly to props, not
+		// $state) would already have flipped to 2026 — the exact silent-wrong-year-overwrite
+		// split this test exists to catch.
+		expect(within(caSection).getByLabelText('Schedule label', { exact: false })).toHaveProperty(
+			'value',
+			'2026 label'
+		);
+		expect(within(caSection).getByLabelText('Bracket 2 rate')).toHaveProperty('value', '13');
+
+		const form = caSection.querySelector('form') as HTMLFormElement;
+		const posted = new FormData(form);
+		expect(posted.get('schedule_id')).toBe('4');
+		expect(posted.get('tax_year')).toBe('2026');
+		expect(JSON.parse(posted.get('rows') as string)).toEqual([
+			{ bracket_floor: 0, bracket_rate: 0.11 },
+			{ bracket_floor: 10412, bracket_rate: 0.13 }
+		]);
+	});
+});
