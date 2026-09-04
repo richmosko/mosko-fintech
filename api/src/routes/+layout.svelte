@@ -4,7 +4,10 @@
 	(LayoutData { userEmail: string | null }); authors NO server logic.
 
 	Renders an authed header ONLY when a user is signed in (data.userEmail present):
-	brand link → /, primary nav (Net Worth / Accounts / Allocation — the latter added SELF-239),
+	brand link → /, primary nav (Net Worth / Accounts / Allocation — the latter added SELF-239 —
+	/ Cash Flow / Taxes — the latter added SELF-264, §2.5.1's own route; a primary-nav entry, not
+	a /settings rail entry, since §2.5 is a read surface like Allocation/Cash Flow, not a
+	planning-value editor — see settings/+layout.svelte's own header for that shell's scope),
 	a Classify link carrying the SELF-200 pending-symbol count badge
 	(zero footprint when the count is 0), the signed-in email, a Security link →
 	/settings/security (the MFA hub — makes TOTP enrollment/recovery discoverable at GA, not
@@ -29,14 +32,21 @@
 	// Primary-nav active state. Net Worth is the root; Accounts owns the whole /accounts/* subtree.
 	// Allocation added at SELF-239 (the §2.2.2 table's own route, distinct from the
 	// /settings/allocation %Target editor). Cash Flow added at SELF-251 (the §2.3.2.b
-	// cross-account rollup's own route, `/cash-flow` per SELF-252 AC8). Only the surfaces that
-	// exist today are linked — the rest of the locked app-sidebar (Est. Taxes / Monthly Report /
-	// Settings) lands as those V1.x surfaces are built.
+	// cross-account rollup's own route, `/cash-flow` per SELF-252 AC8). Taxes added at SELF-264
+	// (the §2.5.1 decomposition table's own route, `/taxes/decomposition`) — owns the whole
+	// /taxes/* subtree so later §2.5.2/§2.5.3/§2.5.4 sibling routes stay under this one nav entry.
+	// Only the surfaces that exist today are linked — the rest of the locked app-sidebar (Monthly
+	// Report / Settings) lands as those V1.x surfaces are built.
 	const path = $derived(page.url.pathname);
 	const isNetWorth = $derived(path === '/');
 	const isAccounts = $derived(path === '/accounts' || path.startsWith('/accounts/'));
 	const isAllocation = $derived(path === '/allocation');
 	const isCashFlow = $derived(path === '/cash-flow');
+	// No bare `/taxes` index route exists (only `/taxes/decomposition` / `/taxes/quarterly`), so
+	// `path === '/taxes'` is unreachable per SvelteKit's own generated route-id union — that
+	// comparison was a svelte-check ERROR (no type overlap), not a lint nit. `startsWith` alone
+	// covers every real /taxes/* route.
+	const isTaxes = $derived(path.startsWith('/taxes/'));
 
 	// SELF-207 P4 re-auth banner health summary — from +layout.server.ts (Backend-computed via the
 	// shared needsReauth/isInstitutionDown predicates, active-connections-only, fail-soft to {0,0}).
@@ -62,6 +72,13 @@
 				</a>
 				<a class="nav-link" href="/cash-flow" aria-current={isCashFlow ? 'page' : undefined}>
 					Cash Flow
+				</a>
+				<a
+					class="nav-link"
+					href="/taxes/decomposition"
+					aria-current={isTaxes ? 'page' : undefined}
+				>
+					Taxes
 				</a>
 			</nav>
 		</div>
