@@ -86,6 +86,26 @@ describe('TaxQuarterlyTables', () => {
 		expect(screen.getByRole('link', { name: /Designate an FTB \(California\) account/ })).toBeTruthy();
 	});
 
+	it('QA-walk regression: "Edit tax brackets" is a page-level STANDING affordance (AC 7) — present even when both jurisdictions are the ordinary `computed` case, not only from the AC-7a unavailable state', () => {
+		render(TaxQuarterlyTables, {
+			liability: fixture(), // both jurisdictions computed — the default fixture shape
+			noTaxAuthorityDesignated: false,
+			priorYearQ4: null
+		});
+		expect(screen.getByRole('link', { name: 'Edit tax brackets' })).toBeTruthy();
+	});
+
+	it('routes the page-level "Edit tax brackets" link to the given editBracketsHref', () => {
+		render(TaxQuarterlyTables, {
+			liability: fixture(),
+			noTaxAuthorityDesignated: false,
+			priorYearQ4: null,
+			editBracketsHref: '/settings/tax-brackets'
+		});
+		const link = screen.getByRole('link', { name: 'Edit tax brackets' }) as HTMLAnchorElement;
+		expect(link.getAttribute('href')).toBe('/settings/tax-brackets');
+	});
+
 	it('threads priorYearQ4 through to both jurisdiction tables (E39)', () => {
 		render(TaxQuarterlyTables, {
 			liability: fixture(),
