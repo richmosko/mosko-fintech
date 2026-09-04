@@ -50,6 +50,15 @@
 -- │       V1.4 branches, so 099 is the correct "before 102" anchor).          │
 -- └──────────────────────────────────────────────────────────────────────────┘
 --
+-- ⚠ RE-AIMED (SELF-268/105, Sec P-2): L3c and L3i asserted the RAW identity
+--   nav == fn_compute_nav(as_of,true), which the §2.5.4 tax flip breaks in
+--   general. It would stay green here ONLY BY FIXTURE ACCIDENT (no bracket
+--   schedule seeded for A, so both tax scalars coalesce to 0 regardless of
+--   L3's designation state) -- Sec's "leg that cannot fail" class. Both legs
+--   are re-aimed to the FULL post-102/105 invariant, with the designated-
+--   ledger term and both tax scalars computed independently rather than
+--   assumed 0. Non-degenerate legs live in 105_nav_composition_tax_flip.sql.
+--
 -- ⚠ L6 DOES NOT USE A DUAL-COLUMN (transaction_date + created_at) AS-OF FORM.
 --   fn_account_cash_as_of (056), which fn_ytd_paid_per_jurisdiction composes
 --   on UNCHANGED, filters on transaction_date <= p_as_of ONLY — verified
@@ -225,10 +234,23 @@ select ok(
           jsonb_array_elements(g->'accounts') acc),
   '(L3b) STATE 1: a_walk (undesignated) is PRESENT in fn_nav_composition''s leaf set -- not yet excluded'
 );
+-- RE-AIMED (SELF-268/105, Sec P-2): the RAW equality below would stay GREEN
+--   against 105 ONLY BY FIXTURE ACCIDENT -- this file seeds no bracket
+--   schedule for tenant A, so both tax scalars read {unavailable,
+--   no_schedule_any_year} and coalesce to 0 regardless of what STATE a_walk
+--   is in (Sec's "leg that cannot fail" class -- it would pass identically
+--   whether or not 105 had landed). Re-aimed to the FULL post-102/105
+--   invariant, with the designated-ledger term and both tax scalars computed
+--   INDEPENDENTLY rather than assumed 0, so the formula itself is exercised.
 select is(
   (select (pfin.fn_nav_composition('2026-02-28'::date)->>'nav')::numeric),
-  (select pfin.fn_compute_nav('2026-02-28'::date, true)),
-  '(L3c) STATE 1: fn_nav_composition''s nav EQUALS fn_compute_nav(as_of,true) -- no divergence while a_walk is undesignated (matches the existing self227/self228 equality legs, which stay green on their own fixtures precisely because nothing is designated there)'
+  (select pfin.fn_compute_nav('2026-02-28'::date, true))
+    - coalesce((select sum(g.current_market_value)
+                  from pfin.fn_tax_authority_ledgers() tal
+                  join pfin.fn_account_unrealized_gl('2026-02-28'::date) g on g.account_id = tal.account_id), 0)
+    - coalesce((pfin.fn_nav_composition('2026-02-28'::date) -> 'buildups' -> 'realized_tax_liab' ->> 'amount')::numeric, 0)
+    - coalesce((pfin.fn_nav_composition('2026-02-28'::date) -> 'buildups' -> 'unrealized_tax_liab' ->> 'amount')::numeric, 0),
+  '(L3c) STATE 1: fn_nav_composition''s nav EQUALS fn_compute_nav(as_of,true) minus designated-ledger CMVs (a_idx2 is designated but carries a ZERO balance here -- L4b -- so this leg does NOT depend on that term being structurally zero, it is COMPUTED) minus the two coalesced tax scalars -- no divergence while a_walk is undesignated and no bracket schedule exists for A. Non-degenerate legs (real non-zero tax scalars, a real designated-ledger exclusion) live in 105_nav_composition_tax_flip.sql'
 );
 select pfin.fn_compute_nav('2026-02-28'::date, true) as nav_state1 \gset
 
@@ -264,10 +286,16 @@ select is(
   null::numeric,
   '(L3h) STATE 3 (reverted to NULL): YTD Paid is NULL again -- the designation, not some cached state, drives the figure'
 );
+-- RE-AIMED (SELF-268/105, Sec P-2, same reasoning as L3c above).
 select is(
   (select (pfin.fn_nav_composition('2026-02-28'::date)->>'nav')::numeric),
-  (select pfin.fn_compute_nav('2026-02-28'::date, true)),
-  '(L3i) STATE 3: fn_nav_composition''s nav EQUALS fn_compute_nav again -- the identity is RESTORED, not merely re-approximated'
+  (select pfin.fn_compute_nav('2026-02-28'::date, true))
+    - coalesce((select sum(g.current_market_value)
+                  from pfin.fn_tax_authority_ledgers() tal
+                  join pfin.fn_account_unrealized_gl('2026-02-28'::date) g on g.account_id = tal.account_id), 0)
+    - coalesce((pfin.fn_nav_composition('2026-02-28'::date) -> 'buildups' -> 'realized_tax_liab' ->> 'amount')::numeric, 0)
+    - coalesce((pfin.fn_nav_composition('2026-02-28'::date) -> 'buildups' -> 'unrealized_tax_liab' ->> 'amount')::numeric, 0),
+  '(L3i) STATE 3: fn_nav_composition''s nav EQUALS fn_compute_nav again (RE-AIMED formula, same correction terms as L3c) -- the identity is RESTORED, not merely re-approximated'
 );
 select ok(
   (select bool_or(acc->>'account_id' = :a_walk::text)
