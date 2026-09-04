@@ -283,9 +283,15 @@ export function navFootBasis(b: NavCompositionBuildups): NavFootBasis {
 // and `ytd_paid_unavailable` (realized only — depends on YTD Paid, which unrealized never reads).
 // EXACT COPY per team-lead 2026-09-04, forwarding Architect's 105-landing note — no longer
 // placeholder V1.4 wording for these two codes.
+// ⚠ `ytd_paid_unavailable`'s copy was CORRECTED post-walk (team-lead, same day): the realized line
+// is the COMBINED Federal + California figure, so this reason also fires in the PARTIAL case —
+// one jurisdiction's ledger designated, the other's not — not only the "neither designated" case
+// the earlier wording implied. "designate one" reads as though a single ledger suffices; the
+// corrected copy covers both the none-designated and the one-missing sub-cases without claiming
+// which one it is.
 const UNAVAILABLE_REASON_COPY: Record<string, string> = {
 	no_schedule_any_year: 'no tax bracket schedule on file — enter it in Settings',
-	ytd_paid_unavailable: 'no tax-authority ledger designated — designate one in Accounts'
+	ytd_paid_unavailable: 'a tax-authority ledger is not designated for every jurisdiction — designate the missing one in Accounts'
 };
 /** Exported so NavCompositionTable.svelte's per-row "Unavailable" cell uses the SAME copy as the
  * foot's label, rather than rendering 104's raw machine code directly — one mapping, two render

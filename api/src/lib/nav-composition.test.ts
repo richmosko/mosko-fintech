@@ -143,7 +143,7 @@ describe('navFootBasis / navFootLabel — Sec P-5 / option (C): THREE states, ne
 			reason: 'ytd_paid_unavailable'
 		});
 		expect(navFootLabel(partial)).toBe(
-			'Net Assets Value (realized tax not yet deducted — no tax-authority ledger designated — designate one in Accounts)'
+			'Net Assets Value (realized tax not yet deducted — a tax-authority ledger is not designated for every jurisdiction — designate the missing one in Accounts)'
 		);
 	});
 

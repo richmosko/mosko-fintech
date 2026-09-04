@@ -168,7 +168,7 @@ describe('NavCompositionTable — SELF-268 AC 6 (E41 envelope shape): unavailabl
 		};
 		const { body } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: unavailable } });
 		expect(body).toContain('Unavailable');
-		expect(body).toContain('no tax-authority ledger designated — designate one in Accounts');
+		expect(body).toContain('a tax-authority ledger is not designated for every jurisdiction — designate the missing one in Accounts');
 	});
 
 	it('a negative realized amount (overpayment/receivable) renders as a real negative figure, never $0/unavailable', () => {
@@ -214,7 +214,7 @@ describe('NavCompositionTable — Sec P-5 / option (C): the NAV-foot LABEL carri
 		};
 		const { body } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: partial } });
 		expect(body).toContain(
-			'Net Assets Value (realized tax not yet deducted — no tax-authority ledger designated — designate one in Accounts)'
+			'Net Assets Value (realized tax not yet deducted — a tax-authority ledger is not designated for every jurisdiction — designate the missing one in Accounts)'
 		);
 	});
 
