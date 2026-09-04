@@ -192,11 +192,13 @@
 --   (001→099 + 101 at b073641, NOT a `pfin_tmpl` clone — a `create or
 --   replace` that changes a function's parameter list ADDS an overload
 --   rather than replacing it on a DB that already had the old
---   7-argument-without-label signature, so a stale template could silently
---   carry both) via `pg_prove` (never bare `psql` — a plan under-run exits 0
+--   6-argument-without-label signature (Sec D-2: the OLD form is SIX args —
+--   before p_schedule_label was added as the fourth positional parameter —
+--   this line previously misnamed it "7-argument"), so a stale template
+--   could silently carry both) via `pg_prove` (never bare `psql` — a plan under-run exits 0
 --   there). `supabase db reset` is mechanically banned and was not used;
 --   F/CTO's local dev DB was not touched.
---   plan(100): 8 structural policy (S1-S8, tenant/aal2 split per table,
+--   plan(110): 8 structural policy (S1-S8, tenant/aal2 split per table,
 --   USING/WITH CHECK halves per 090's S6a/b masking lesson) + 5 grants
 --   (GR1-GR5: anon zero both tables, service_role zero both tables,
 --   authenticated full CRUD per table x2, anon behavioral throw) + 1
@@ -227,7 +229,17 @@
 --   empty-clears effect, RA9 grant structural, RA10 the FOR UPDATE catalog
 --   pin, RA-TY1 the tax_year>=1913 CHECK by name, RA11a-RA11d the deferred
 --   fence surviving a function boundary plus the prior-row-set-intact proof)
---   = 100.
+--   = 100, PLUS (Sec SELF-260 second-pass / E31, this pass) + 6 canonical-
+--   form schedule_label CHECK legs (LBL-CHECK1 whitespace-only rejected,
+--   LBL-CHECK1b tab-only rejected, LBL-CHECK2 a padded-but-real value
+--   rejected — E31's correction, the CHECK is canonical-form not merely
+--   non-blank — LBL-CHECK3 a bare canonical char accepted as control,
+--   LBL-CHECK4/LBL-CHECK5 the 500/501-char length bound) + 2 signature-
+--   overload watchers (RA-SIG1a exactly one proc BY NAME, RA-SIG1b THAT
+--   proc's pronargs = 7 — split per Sec E31 rather than one combined leg)
+--   + 2 trim-reaches-the-DB-untrimmed legs via the RPC path (RA-LBL1 a
+--   non-canonical label refused by the SAME named CHECK, RA-LBL2 the
+--   canonical control) = 110.
 -- =====================================================================
 
 begin;
@@ -235,7 +247,7 @@ begin;
 -- shared verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(100);
+select plan(110);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
@@ -442,6 +454,82 @@ select has_column('pfin', 'tax_bracket_schedule', 'schedule_label',
 select col_not_null('pfin', 'tax_bracket_schedule', 'schedule_label',
   '(CAT7) pfin.tax_bracket_schedule.schedule_label is NOT NULL'
 );
+
+-- =====================================================================
+-- BLOCK LBL-CHECK (Sec FLAG 4 / E31) — tax_bracket_schedule_schedule_label_check
+--   is a CANONICAL-FORM invariant, not a plain length bound:
+--   `schedule_label = btrim(schedule_label, E' \t\n\r\f\v') and length(...)
+--   between 1 and 500`. The stored value must ALREADY be its own btrim
+--   result across all six whitespace kinds — a label carrying ANY leading
+--   or trailing whitespace is refused BY THE DB, not merely by an all-
+--   whitespace value. Six legs: two REJECTED forms that are all-whitespace
+--   (empty-in-disguise, the FLAG 4 case), one REJECTED form that has real
+--   content but is NOT canonical (leading/trailing space around it — the
+--   E31 correction: this is refused, not accepted), one ACCEPTED single
+--   canonical character (the non-vacuous control proving the CHECK is
+--   surface-driven, not a blanket rejection of anything that once touched
+--   whitespace), and the two length-bound legs (500 accepted, 501
+--   rejected) exercised in this same canonical form so neither leg
+--   conflates the two conjuncts. Every leg rolls back to its own savepoint
+--   so no row (nor a failed one's partial effects) reaches FIXTURE below.
+-- =====================================================================
+savepoint sp_lbl_check1;
+select _rls.set_tenant(:'ta'::uuid);
+select throws_like(
+  format($$ insert into pfin.tax_bracket_schedule (tax_year, schedule_type, schedule_label, standard_deduction) values (2026, 'federal_ordinary', %L, 14600.00) $$, '   '),
+  '%tax_bracket_schedule_schedule_label_check%',
+  '(LBL-CHECK1) a whitespace-only schedule_label (three ASCII spaces) is REJECTED BY NAME by tax_bracket_schedule_schedule_label_check -- length() alone would pass a length-3 value; the canonical-form conjunct (schedule_label = btrim(schedule_label, ...)) catches an all-whitespace label because btrim of it is the empty string, never equal to the un-trimmed original'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint sp_lbl_check1;
+
+savepoint sp_lbl_check1b;
+select _rls.set_tenant(:'ta'::uuid);
+select throws_like(
+  format($$ insert into pfin.tax_bracket_schedule (tax_year, schedule_type, schedule_label, standard_deduction) values (2026, 'federal_ordinary', %L, 14600.00) $$, E'\t'),
+  '%tax_bracket_schedule_schedule_label_check%',
+  '(LBL-CHECK1b) a TAB-only schedule_label is REJECTED BY NAME -- proves the canonical-form conjunct catches all SIX whitespace kinds btrim is given here (space/tab/newline/CR/formfeed/vertical-tab), not merely the ASCII-space case (LBL-CHECK1)'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint sp_lbl_check1b;
+
+savepoint sp_lbl_check2;
+select _rls.set_tenant(:'ta'::uuid);
+select throws_like(
+  format($$ insert into pfin.tax_bracket_schedule (tax_year, schedule_type, schedule_label, standard_deduction) values (2026, 'federal_ordinary', %L, 14600.00) $$, ' x '),
+  '%tax_bracket_schedule_schedule_label_check%',
+  '(LBL-CHECK2) E31 CORRECTION: a label with real (non-whitespace) content PADDED by surrounding spaces (" x ") is REJECTED, not accepted -- this is a CANONICAL-FORM invariant, so a label need not be all-whitespace to fail it; only a value that is ALREADY its own btrim passes'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint sp_lbl_check2;
+
+savepoint sp_lbl_check3;
+select _rls.set_tenant(:'ta'::uuid);
+select lives_ok(
+  format($$ insert into pfin.tax_bracket_schedule (tax_year, schedule_type, schedule_label, standard_deduction) values (2026, 'federal_ordinary', %L, 14600.00) $$, 'x'),
+  '(LBL-CHECK3) non-vacuous control: a single canonical character with NO surrounding whitespace ("x") is ACCEPTED -- proves (LBL-CHECK1/1b/2) are canonical-form-driven, not a blanket rejection of every short or whitespace-adjacent label'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint sp_lbl_check3;
+
+savepoint sp_lbl_check4;
+select _rls.set_tenant(:'ta'::uuid);
+select lives_ok(
+  format($$ insert into pfin.tax_bracket_schedule (tax_year, schedule_type, schedule_label, standard_deduction) values (2026, 'federal_ordinary', %L, 14600.00) $$, repeat('x', 500)),
+  '(LBL-CHECK4) a 500-character canonical label (the upper length bound, exactly) is ACCEPTED'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint sp_lbl_check4;
+
+savepoint sp_lbl_check5;
+select _rls.set_tenant(:'ta'::uuid);
+select throws_like(
+  format($$ insert into pfin.tax_bracket_schedule (tax_year, schedule_type, schedule_label, standard_deduction) values (2026, 'federal_ordinary', %L, 14600.00) $$, repeat('x', 501)),
+  '%tax_bracket_schedule_schedule_label_check%',
+  '(LBL-CHECK5) a 501-character canonical label (one past the upper bound) is REJECTED BY NAME -- (LBL-CHECK4) is the non-vacuous control proving this is the LENGTH conjunct, not the canonical-form one (a 501-char run of "x" carries no whitespace at all)'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint sp_lbl_check5;
 
 -- =====================================================================
 -- FIXTURE — real committed schedules + one valid bracket row each, via
@@ -703,12 +791,12 @@ select ok(
         from pg_proc p join pg_namespace n on n.oid = p.pronamespace
        where n.nspname = 'pfin' and p.proname = 'fn_tax_bracket_row_schedule_invariants'
     )
-    select position('for update' in src) > 0
+    select regexp_count(src, 'for update') = 1
        and position('count(*)' in src) > 0
        and position('for update' in src) < position('count(*)' in src)
       from body
   ),
-  '(SF-L2) LOAD-BEARING, NOT MERE PRESENCE: the FOR UPDATE lock''s position in the function body PRECEDES the position of the set read it must precede (`count(*)`, the schedule''s row-count read) — the function''s own header states this lock "must be the FIRST statement after the schedule is resolved", and an edit that moved the lock AFTER the read would kill this control while every existing leg in this file (SF-M/SF-Z/SF-E, all behavioral, none of which can observe statement ORDER) stayed green'
+  '(SF-L2) LOAD-BEARING, NOT MERE PRESENCE, AND NOT A COMMENT (Sec D-5i): the FOR UPDATE lock''s position in the function body PRECEDES the position of the set read it must precede (`count(*)`, the schedule''s row-count read) — the function''s own header states this lock "must be the FIRST statement after the schedule is resolved", and an edit that moved the lock AFTER the read would kill this control while every existing leg in this file (SF-M/SF-Z/SF-E, all behavioral, none of which can observe statement ORDER) stayed green. `pg_get_functiondef`''s output for a plpgsql body is the literal prosrc text, comments included — a bare `position(...) > 0` presence check is satisfiable by a FUTURE COMMENT that merely mentions "for update" sitting above the real lock (or in place of a real lock that got removed), passing vacuously. `regexp_count(src, ''for update'') = 1` closes that: exactly one occurrence in the whole body, so a stray comment containing the phrase collides with (and fails against) the real clause rather than silently coexisting with it'
 );
 
 -- =====================================================================
@@ -1102,6 +1190,40 @@ select is(
   '(RA7e) E27/E29: fn_tax_bracket_schedule_replace_all writes p_schedule_label -- read back matches the exact value ("RA7 replaced label") passed at (RA7), not merely a non-null placeholder'
 );
 
+-- (RA-LBL1)/(RA-LBL2) Sec D-5(ii)/E31 -- TRIM IS THE APP'S JOB, THE DB
+--   REFUSES. A caller reaching PostgREST directly (bypassing the app's own
+--   Zod layer, which trims before it ever issues the RPC) sends
+--   p_schedule_label AS-IS; this function does not trim it. At the DB
+--   layer, the canonical-form CHECK (tax_bracket_schedule_
+--   schedule_label_check -- the SAME constraint (LBL-CHECK1-5) pin by
+--   name on the direct-INSERT path) is the actual enforcement, and it
+--   REFUSES a non-canonical value outright rather than silently trimming
+--   or accepting it. Both legs savepoint/rollback so sched_a's REAL state
+--   (as RA7 left it) reaches (RA8) unchanged.
+--   ⚠ Documented so a future change is legible either way: if a DB-side
+--   trim were ever added to this function (normalizing p_schedule_label
+--   before the UPDATE), (RA-LBL1) would flip from throws_like to
+--   lives_ok -- that flip would be the INTENDED tripwire marking a
+--   deliberate design change, not a silent regression to chase.
+savepoint sp_ra_lbl1;
+select _rls.set_tenant(:'ta'::uuid);
+select throws_like(
+  format($$ select pfin.fn_tax_bracket_schedule_replace_all(%s::bigint, 2026::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, %L::text, 15000.00::numeric, 250.00::numeric, '[]'::jsonb) $$, :sched_a, ' x '),
+  '%tax_bracket_schedule_schedule_label_check%',
+  '(RA-LBL1) fn_tax_bracket_schedule_replace_all called with a NON-CANONICAL p_schedule_label (" x ", leading/trailing space around real content) is REFUSED by tax_bracket_schedule_schedule_label_check -- the function does not trim on the caller''s behalf; the DB refuses instead'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint sp_ra_lbl1;
+
+savepoint sp_ra_lbl2;
+select _rls.set_tenant(:'ta'::uuid);
+select lives_ok(
+  format($$ select pfin.fn_tax_bracket_schedule_replace_all(%s::bigint, 2026::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, %L::text, 15000.00::numeric, 250.00::numeric, '[]'::jsonb) $$, :sched_a, 'x'),
+  '(RA-LBL2) non-vacuous control: the IDENTICAL call with a CANONICAL p_schedule_label ("x", no surrounding whitespace) SUCCEEDS -- proves (RA-LBL1) is canonical-form-driven, not a blanket refusal of the RPC write path'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint sp_ra_lbl2;
+
 -- (RA8) EMPTY ARRAY CLEARS THE SCHEDULE -- legal, per the migration's own
 --   absence-is-unset posture.
 select _rls.set_tenant(:'ta'::uuid);
@@ -1151,6 +1273,43 @@ select ok(
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'pfin' and p.proname = 'fn_tax_bracket_schedule_replace_all'),
   '(RA10) CATALOG PIN: fn_tax_bracket_schedule_replace_all''s body contains a FOR UPDATE lock (pg_get_functiondef, a real catalog read) -- this pin stands in for the concurrency proof no single-session pgTAP probe can give; the two measured race modes are recorded in this leg''s own comment above, not asserted'
+);
+
+-- (RA-SIG1) Sec VETO 3 fix criterion (iii) — the watcher that makes the
+--   NEXT signature change fail loudly instead of silently overloading.
+--   `create or replace function` with a CHANGED argument list creates an
+--   OVERLOAD, it does not replace; on a fresh sequential apply only ONE
+--   revision of this file's DDL is ever applied, so this leg is vacuous
+--   TODAY only in the sense that there is nothing yet to catch it against —
+--   its job is to go RED the day a future edit adds/drops a parameter
+--   without a preceding `drop function`, or the day this migration is
+--   applied on top of an environment still holding the STALE 6-arg form
+--   (Sec VETO 3's reachable-footgun scenario: PostgREST resolves an RPC
+--   call by its named-argument set, so a stale 6-arg overload silently
+--   satisfies a caller that never sends p_schedule_label, and the write
+--   goes through without ever touching the label).
+--   SPLIT INTO TWO ASSERTIONS (Sec E31): (a) count BY NAME ALONE — no
+--   `pronargs = 7` filter anywhere in this leg's WHERE clause, because a
+--   filter on the very column under test would silently EXCLUDE a stale
+--   6-arg row from the count and read green with the overload present —
+--   then (b) THAT row's pronargs = 7. (b) guards its own scalar subquery
+--   with `limit 1` so a multi-row scenario (a) already caught fails
+--   CLEANLY as a named (RA-SIG1a) red, rather than aborting the whole file
+--   on a Postgres "more than one row returned by a subquery expression"
+--   error the way the pre-existing (RA9)/(RA10) bare scalar-subquery legs
+--   do (measured during this leg's own inversion test).
+select is(
+  (select count(*)::bigint from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'pfin' and p.proname = 'fn_tax_bracket_schedule_replace_all'),
+  1::bigint,
+  '(RA-SIG1a) pfin holds EXACTLY ONE proc named fn_tax_bracket_schedule_replace_all -- counted BY NAME ALONE, no pronargs filter -- a stale 6-arg overload sitting alongside the 7-arg form is COUNTED, not excluded'
+);
+select is(
+  (select p.pronargs::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'pfin' and p.proname = 'fn_tax_bracket_schedule_replace_all'
+    order by p.oid limit 1),
+  7,
+  '(RA-SIG1b) THEN (given (RA-SIG1a) already proved uniqueness): that one proc''s pronargs = 7 (schedule_id, tax_year, schedule_type, schedule_label, standard_deduction, tax_balance_prior_year, rows) -- a second overload (stale 6-arg or any other arity) is caught by (RA-SIG1a) above, not here'
 );
 
 -- (RA-TY1) team-lead item 14 — tax_year = 1900 rejected BY NAME (the new
