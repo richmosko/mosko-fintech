@@ -147,7 +147,7 @@ describe('TaxJurisdictionTable — computed rendering', () => {
 			priorYearQ4: NO_PRIOR_YEAR_Q4
 		});
 		const subtotalRow = screen.getByRole('row', { name: /Sub-Total/ });
-		expect(within(subtotalRow).getByText('$12,000')).toBeTruthy();
+		expect(within(subtotalRow).getByText('$12,000.02')).toBeTruthy();
 	});
 
 	it('renders Estimated Funds Due as a NEGATIVE value on overpayment, sign-flipped, no separate refund row (ν-1/AC5)', () => {
@@ -158,8 +158,38 @@ describe('TaxJurisdictionTable — computed rendering', () => {
 			priorYearQ4: NO_PRIOR_YEAR_Q4
 		});
 		const dueRow = screen.getByRole('row', { name: /Estimated Funds Due/ });
-		expect(within(dueRow).getByText('-$450')).toBeTruthy();
+		expect(within(dueRow).getByText('-$450.00')).toBeTruthy();
 		expect(screen.queryByText(/refund/i)).toBeNull();
+	});
+
+	it('E40 (Sec M-8/AC 8b) — renders every money cell to the CENT: the four installments and the Sub-Total foot exactly as displayed, never rounded to whole dollars', () => {
+		// Q1-Q3 truncated equal cents, Q4 carries the residual (Decision 5(d)) — a whole-dollar
+		// render would show all four as "$3,000" and the Sub-Total as "$12,000", silently hiding
+		// the 2-cent residual AC 8b requires to be visible.
+		render(TaxJurisdictionTable, {
+			jurisdiction: federalFixture({
+				installments: installments([3000.01, 3000.01, 3000.01, 2999.97]),
+				installments_due_through_next: 4,
+				annual_liability: 12000
+			}),
+			jurisdictionKey: 'federal',
+			taxYear: 2026,
+			priorYearQ4: NO_PRIOR_YEAR_Q4
+		});
+		const displayed = [
+			within(screen.getByRole('row', { name: /Q1 Estimated Payment/ })).getByText(/^\$/).textContent,
+			within(screen.getByRole('row', { name: /Q2 Estimated Payment/ })).getByText(/^\$/).textContent,
+			within(screen.getByRole('row', { name: /Q3 Estimated Payment/ })).getByText(/^\$/).textContent,
+			within(screen.getByRole('row', { name: /Q4 Estimated Payment/ })).getByText(/^\$/).textContent
+		];
+		expect(displayed).toEqual(['$3,000.01', '$3,000.01', '$3,000.01', '$2,999.97']);
+		const subtotalRow = screen.getByRole('row', { name: /Sub-Total/ });
+		const displayedSubtotal = within(subtotalRow).getByText(/^\$/).textContent;
+		expect(displayedSubtotal).toBe('$12,000.00');
+		// The displayed cents actually foot: parse every rendered installment string back to a
+		// number and sum it — this is the property a whole-dollar render would silently violate.
+		const parsedSum = displayed.reduce((sum, s) => sum + Number(s!.replace(/[$,]/g, '')), 0);
+		expect(parsedSum).toBeCloseTo(Number(displayedSubtotal!.replace(/[$,]/g, '')), 2);
 	});
 
 	it('renders YTD Paid unavailable with a CTA when the reason is no_ledger_designated, never as $0 (AC6(iii)/B3)', () => {
@@ -290,8 +320,8 @@ describe('TaxJurisdictionTable — prior-year Q4 window (AC2a/R8/E39, team-lead 
 			priorYearQ4: PRIOR_YEAR_Q4
 		});
 		const obligationRow = screen.getByRole('row', { name: /Q4 2025 Payment/ });
-		expect(within(obligationRow).getByText('$1,200')).toBeTruthy();
-		expect(within(obligationRow).getByText(/2025 annual: \$4,800/)).toBeTruthy();
+		expect(within(obligationRow).getByText('$1,200.00')).toBeTruthy();
+		expect(within(obligationRow).getByText(/2025 annual: \$4,800\.00/)).toBeTruthy();
 	});
 
 	it('renders NO YTD Paid cell in the prior-year block (team-lead ruling — R8 keeps YTD Paid ledger-scoped, never invented per-prior-year)', () => {
@@ -326,7 +356,7 @@ describe('TaxJurisdictionTable — prior-year Q4 window (AC2a/R8/E39, team-lead 
 			priorYearQ4: PRIOR_YEAR_Q4
 		});
 		const fundsDueRow = screen.getByRole('row', { name: /Funds Due \(as of Dec 31, 2025\)/ });
-		expect(within(fundsDueRow).getByText('$1,200')).toBeTruthy();
+		expect(within(fundsDueRow).getByText('$1,200.00')).toBeTruthy();
 	});
 
 	it('renders nothing prior-year-Q4-shaped when priorYearQ4 is null (window closed)', () => {

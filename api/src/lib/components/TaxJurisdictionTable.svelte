@@ -106,15 +106,21 @@
 	const showDeductionNote = $derived(standardDeductionIgnored(jurisdiction));
 	const subTotal = $derived(subTotalThroughNext(jurisdiction));
 
-	// Whole-dollar USD — matches this app's house convention (NavCompositionTable / CashflowRollupTable
-	// / NonReAllocationTable all format money whole-dollar; no 2dp departure invented here). Intl's
-	// own default rendering already produces a leading minus for a negative (ν-1 overpayment; AC5) —
-	// no signDisplay override, no Math.abs anywhere below.
+	// E40 (team-lead ruling, Sec M-8/AC 8b) — CENT precision, a deliberate departure from this app's
+	// dominant whole-dollar convention (NavCompositionTable / CashflowRollupTable / NonReAllocationTable).
+	// AC 8b specifies precision explicitly rather than leaving it to the renderer: Decision 5(d)'s
+	// installments are TRUNCATED to the cent with Q4 carrying the exact residual so the four sum to
+	// `annual_liability` exactly — whole-dollar rounding on this one surface would visibly make the
+	// quarters fail to foot to the displayed annual/sub-total, which is exactly the defect AC 8b
+	// exists to prevent. Every money cell on both tables and the prior-year Q4 block uses this ONE
+	// formatter, so nothing on this surface can drift to a different precision. Intl's own default
+	// rendering already produces a leading minus for a negative (ν-1 overpayment; AC5) — no
+	// signDisplay override, no Math.abs anywhere below.
 	const usd = new Intl.NumberFormat('en-US', {
 		style: 'currency',
 		currency: 'USD',
-		minimumFractionDigits: 0,
-		maximumFractionDigits: 0
+		minimumFractionDigits: 2,
+		maximumFractionDigits: 2
 	});
 </script>
 

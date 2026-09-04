@@ -12,12 +12,12 @@
 	<form method="POST" action="/auth/signout"> — state-changing, so never a GET link; matches
 	Backend's POST-only /auth/signout handler.
 
-	"Est. Taxes" added at SELF-266 → /taxes/quarterly (the first §2.5 surface to land), active-
-	matched on the whole /taxes/* subtree (mirrors the Accounts link's own prefix-match convention)
-	so it stays highlighted once SELF-264's /taxes/decomposition lands alongside it — no second nav
-	edit needed per §2.5 sibling. Judgment call, flagged at hand-off: no dedicated "Est. Taxes" hub
-	page exists in V1, so this link's own href is the first §2.5 surface with a route, per this
-	issue's own dispatch instruction ("Navigation as for the other §2.5 pages").
+	"Taxes" added at SELF-266 → /taxes/quarterly (the first §2.5 surface to land; team-lead ruling —
+	renamed from the original "Est. Taxes" draft), active-matched on the /taxes/ subtree via
+	`path.startsWith('/taxes/')` (WITH the trailing slash — `path === '/taxes'` is a svelte-check
+	type error, since no bare /taxes route exists; frontend-264 found this on its own now-reverted
+	nav hunk) so it stays highlighted once SELF-264's /taxes/decomposition lands alongside it. This
+	is now the ONE nav edit for both §2.5 surfaces — frontend-264 reverted its own.
 
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5). The count badge uses the
 	ACCENT ramp — NOT `--c-attn-*` (canary is reserved for staleness/re-auth; §5 fence).
@@ -36,15 +36,16 @@
 	// Primary-nav active state. Net Worth is the root; Accounts owns the whole /accounts/* subtree.
 	// Allocation added at SELF-239 (the §2.2.2 table's own route, distinct from the
 	// /settings/allocation %Target editor). Cash Flow added at SELF-251 (the §2.3.2.b
-	// cross-account rollup's own route, `/cash-flow` per SELF-252 AC8). Only the surfaces that
-	// exist today are linked — the rest of the locked app-sidebar (Est. Taxes / Monthly Report /
-	// Settings) lands as those V1.x surfaces are built.
+	// cross-account rollup's own route, `/cash-flow` per SELF-252 AC8). Taxes added at SELF-266
+	// (owns the whole /taxes/* subtree — see the module header). Only the surfaces that exist today
+	// are linked — the rest of the locked app-sidebar (Monthly Report / Settings) lands as those
+	// V1.x surfaces are built.
 	const path = $derived(page.url.pathname);
 	const isNetWorth = $derived(path === '/');
 	const isAccounts = $derived(path === '/accounts' || path.startsWith('/accounts/'));
 	const isAllocation = $derived(path === '/allocation');
 	const isCashFlow = $derived(path === '/cash-flow');
-	const isTaxes = $derived(path.startsWith('/taxes'));
+	const isTaxes = $derived(path.startsWith('/taxes/'));
 
 	// SELF-207 P4 re-auth banner health summary — from +layout.server.ts (Backend-computed via the
 	// shared needsReauth/isInstitutionDown predicates, active-connections-only, fail-soft to {0,0}).
@@ -72,7 +73,7 @@
 					Cash Flow
 				</a>
 				<a class="nav-link" href="/taxes/quarterly" aria-current={isTaxes ? 'page' : undefined}>
-					Est. Taxes
+					Taxes
 				</a>
 			</nav>
 		</div>

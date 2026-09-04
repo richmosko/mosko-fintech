@@ -21,6 +21,12 @@
 	AC 8a — no as-of toggle anywhere on this page (every §2.5 surface reads server-derived today,
 	Seam C) — this component takes no as-of prop and has nothing that could grow one.
 
+	Team-lead ruling — an in-page cross-link to /taxes/decomposition ("Income decomposition →")
+	beside the heading, the §2.5.1 sibling surface (SELF-264). A plain navigation link, never a
+	form/action. SELF-264's own +page.svelte has not merged into this branch yet, so the target
+	404s until that branch lands — expected, same posture CashflowRollupTable's `editTargetsHref`
+	documents for its own not-yet-built sibling route.
+
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5).
 -->
 <script lang="ts">
@@ -36,18 +42,24 @@
 		noTaxAuthorityDesignated,
 		priorYearQ4,
 		editBracketsHref = '/settings/tax-brackets',
-		designateAccountHref = '/accounts'
+		designateAccountHref = '/accounts',
+		decompositionHref = '/taxes/decomposition'
 	}: {
 		liability: TaxQuarterlyLiability;
 		noTaxAuthorityDesignated: boolean;
 		priorYearQ4: PriorYearQ4 | null;
 		editBracketsHref?: string;
 		designateAccountHref?: string;
+		/** Team-lead ruling — cross-link to the §2.5.1 sibling (SELF-264). */
+		decompositionHref?: string;
 	} = $props();
 </script>
 
 <section class="quarterly" aria-labelledby="quarterly-label">
-	<h2 id="quarterly-label" class="page-label">Estimated Quarterly Taxes</h2>
+	<header class="page-head">
+		<h2 id="quarterly-label" class="page-label">Estimated Quarterly Taxes</h2>
+		<a class="decomposition-link" href={decompositionHref}>Income decomposition →</a>
+	</header>
 
 	{#if noTaxAuthorityDesignated}
 		<!-- AC 6(ii) — page-level: no account at all carries a tax_jurisdiction value. -->
@@ -83,10 +95,31 @@
 		flex-direction: column;
 		gap: var(--space-4);
 	}
+	.page-head {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: var(--space-3);
+	}
 	.page-label {
 		margin: 0;
 		font: var(--weight-semi) var(--fs-h2) / var(--lh-tight) var(--font-ui);
 		color: var(--c-text-primary);
+	}
+	.decomposition-link {
+		font: var(--weight-med) var(--fs-small) / 1 var(--font-ui);
+		color: var(--c-accent);
+		text-decoration: none;
+		white-space: nowrap;
+	}
+	.decomposition-link:hover {
+		color: var(--c-accent-hover);
+		text-decoration: underline;
+	}
+	.decomposition-link:focus-visible {
+		outline: none;
+		box-shadow: var(--focus-ring);
+		border-radius: var(--radius-sm);
 	}
 
 	/* AC 6(ii) — same informational (non-canary) register as TaxJurisdictionTable's AC 7a block:
