@@ -150,11 +150,13 @@
 --     schedule types are progressive. A regressive schedule would be refused
 --     and would need this leg amended.
 --
---   ⚠ SERIALIZABLE IS NOT A SUBSTITUTE FOR EITHER LEG, AND NEITHER IS A
+--   ⚠ THE ROW LOCK IS NOT A SUBSTITUTE FOR EITHER LEG, AND NEITHER IS A
 --     SUBSTITUTE FOR IT (Sec D-5, confirmed at R4 rider 2, which struck
---     SELF-259's companion claim). SERIALIZABLE guarantees equivalence to SOME
---     serial order; it says nothing whatever about whether one transaction
---     leaves the rows monotone. Two independent controls.
+--     SELF-259's companion claim; the rider's wording named SERIALIZABLE because
+--     Decision 18 locked that word — realized here as a FOR UPDATE lock on the
+--     parent schedule row, the isolation level not being reachable on this
+--     transport). A lock ORDERS the writers; it says nothing whatever about
+--     whether one of them leaves the rows monotone. Two independent controls.
 --
 --   ⚠ WHERE THIS FENCE'S SUFFICIENCY COMES FROM. It is SECURITY INVOKER, so its
 --     read of the schedule's row set composes with RLS. Its claim to see "the
@@ -339,10 +341,20 @@
 --     absent schedule_id resolves to ZERO ROWS and the function RAISES. It never
 --     creates a schedule: creation is an ordinary INSERT under RLS, and an empty
 --     schedule is legal here (see the set fence's empty-set note).
+--   ⚠ WHAT THIS LOCK COVERS — AND WHAT IT DOES NOT, WHICH A SECOND LOCK DOES.
+--     THIS lock binds CALLERS OF THIS FUNCTION: it makes the delete-then-insert
+--     pair atomic against another replace-all. It does NOT bind a caller writing
+--     the tables directly, and `authenticated` holds full CRUD on both because
+--     this function is INVOKER and needs those grants. That gap is closed by a
+--     SECOND FOR UPDATE on the same row, taken as the FIRST statement of the
+--     DEFERRED SET FENCE, which EVERY commit touching a schedule's rows passes
+--     through (Sec F-1 option B, ruled at execution-log E17 — see that
+--     function's header for the interleave it closes). The two locks are
+--     re-entrant on the same row and compose within one transaction.
 --   ⚠ LOSING SIDE, named rather than omitted. True SERIALIZABLE would ALSO catch
---     write skew across DIFFERENT schedules of one user. Nothing on this surface
---     reads across schedules, so the lock's narrower guarantee covers every
---     hazard the surface actually has — but it is narrower, and a future reader
+--     write skew across DIFFERENT schedules of one user. NEITHER lock covers
+--     that: both are per-schedule. Nothing on this surface reads across
+--     schedules, so no control here needs to today — but a future reader
 --     composing two schedules in one decision must re-open this. The rejected
 --     alternative was setting `default_transaction_isolation` on the PostgREST
 --     role: global, and untestable per surface.
@@ -529,8 +541,17 @@ comment on table pfin.tax_bracket_schedule is
   'sitting R4: two tables, with the CHILD carrying its own users_id beside '
   'schedule_id, so the two tenant facts CAN disagree and the matched-tenant '
   'fence on the child is a fence that can fail. WRITE SEMANTICS: the schedule '
-  'and its rows are replaced as ONE unit under SERIALIZABLE isolation, so the '
-  'unset state of a schedule is the ABSENCE OF THIS ROW, never a NULL inside '
+  'and its rows are replaced as ONE unit by ONE SECURITY INVOKER function, '
+  'pfin.fn_tax_bracket_schedule_replace_all — one plpgsql body, therefore one '
+  'transaction — and the writers are serialized by an explicit FOR UPDATE lock '
+  'on THIS row, taken both by that function and, as its FIRST statement, by the '
+  'deferred set fence on the child, so a caller writing the tables directly is '
+  'serialized too. NOT by SERIALIZABLE isolation: ADR-011 Decision 18 locked '
+  'that phrase, the isolation level is not reachable from the PostgREST '
+  'transport (each call is its own transaction and SET TRANSACTION cannot run '
+  'inside a function body), and Decision 18''s 2026-09-03 amendment records the '
+  'row lock as the realization. Replacing as one unit is what makes the '
+  'unset state of a schedule the ABSENCE OF THIS ROW, never a NULL inside '
   'it — which is what lets a reader refuse to coalesce a missing standard '
   'deduction to zero. Settings are not audit-class (Decision 18): '
   'UPSERT-in-place with updated_at, no edit-history rows. No JSONB, per '
@@ -642,10 +663,19 @@ comment on table pfin.tax_bracket_row is
   'ORDERING is not among them: unique (schedule_id, bracket_floor) already makes '
   'the floors pairwise distinct and any distinct numeric set is totally ordered, '
   'so a floor-ordering leg could never fire and is deliberately not written. '
-  'WRITE SEMANTICS: replace-all under SERIALIZABLE — the schedule''s rows are '
+  'WRITE SEMANTICS: replace-all inside ONE SECURITY INVOKER function '
+  '(pfin.fn_tax_bracket_schedule_replace_all) — the schedule''s rows are '
   'deleted and re-inserted as one unit, which is why DELETE is granted and '
-  'fenced. SERIALIZABLE and the set fence are INDEPENDENT controls and neither '
-  'substitutes for the other. Settings are not audit-class (Decision 18). '
+  'fenced. The writers are serialized by an explicit FOR UPDATE lock on the '
+  'parent pfin.tax_bracket_schedule row, taken both by that function and, as '
+  'its FIRST statement, by the deferred set fence above — so a caller writing '
+  'this table directly is serialized too. NOT by SERIALIZABLE isolation: '
+  'ADR-011 Decision 18 locked that phrase, the isolation level is not reachable '
+  'from the PostgREST transport, and Decision 18''s 2026-09-03 amendment '
+  'records the row lock as the realization. THE LOCK AND THE SET FENCE ARE '
+  'INDEPENDENT CONTROLS and neither substitutes for the other — the lock ORDERS '
+  'the writers, the set fence JUDGES what they wrote. Settings are not '
+  'audit-class (Decision 18). '
   'MUTABLE, full authenticated CRUD, RLS direct-owner with the ADR-029 / 025 '
   'aal2 step-up clause on every policy, the DELETE policy included and never '
   'trimmed (SECURITY §4.6). anon zero-grant; service_role ungranted.';
@@ -882,10 +912,43 @@ create trigger tax_bracket_row_matched_schedule
 --   to see "the whole set" therefore rests on every row of one schedule
 --   belonging to one tenant — which is what fence 1 (#18) enforces. The two
 --   fences are NOT independent: strike #18 and this one silently narrows.
--- ⚠ SERIALIZABLE is NOT a substitute for this fence and this fence is not a
---   substitute for SERIALIZABLE (Sec D-5 / R4 rider 2): SERIALIZABLE guarantees
---   equivalence to SOME serial order and says nothing about whether one
---   transaction leaves the rows monotone.
+-- ⚠ THE FIRST STATEMENT LOCKS THE PARENT SCHEDULE ROW, AND THAT LOCK IS THIS
+--   SURFACE'S SERIALIZATION POINT FOR EVERY WRITER — direct table DML as well as
+--   fn_tax_bracket_schedule_replace_all (Sec F-1 option B, ruled at
+--   execution-log E17). WHY IT IS NEEDED HERE AND NOT ONLY IN THE RPC: the RPC's
+--   own FOR UPDATE binds only its callers, and `authenticated` holds full
+--   SELECT/INSERT/UPDATE/DELETE on both tables because that function is SECURITY
+--   INVOKER and NEEDS those grants — a caller reaching PostgREST directly with
+--   their own JWT takes no such lock, which is the whole premise of the Lock 14
+--   direct-DB-write surface. Two direct writers touching DIFFERENT rows of one
+--   schedule therefore never conflict, and each deferred firing reads a set that
+--   is monotone IN ITS OWN VIEW:
+--     start (0, 0.10) and (11000, 0.40); T1 raises row@0 to 0.30 and T2 lowers
+--     row@11000 to 0.20 — different rows, no row-lock conflict. T1's firing sees
+--     (0,0.30),(11000,0.40) and passes; T2's sees (0,0.10),(11000,0.20) and also
+--     passes. Committed result: (0,0.30),(11000,0.20) — NON-MONOTONE, and no
+--     control saw it.
+--   With the lock, the second firing WAITS on the first committer's parent-row
+--   lock and then re-reads the set in a fresh READ COMMITTED statement snapshot,
+--   so it sees the first writer's COMMITTED row and raises leg B.
+--   ⚠ RE-ENTRANT, so the cost is not what the FOR EACH ROW shape suggests. The
+--     trigger is FOR EACH ROW (create constraint trigger admits no statement
+--     form), so an N-row statement fires N times — but all N take the SAME row
+--     lock in the SAME transaction, so it is one acquisition and N-1 no-ops. It
+--     also composes with the RPC's own lock on that row rather than deadlocking
+--     against it.
+--   ⚠ LOCK ORDERING — a NEW failure mode, recorded rather than discovered. A
+--     transaction touching rows of TWO OR MORE schedules now takes two
+--     parent-row locks, in row-queue order; two such transactions taking them in
+--     opposite orders deadlock. Postgres detects that and aborts one with 40P01
+--     — an error, never a corrupt set — but it is a rejection a caller can now
+--     see that it could not before.
+-- ⚠ THE LOCK IS NOT A SUBSTITUTE FOR EITHER LEG AND NEITHER LEG IS A SUBSTITUTE
+--   FOR IT (Sec D-5 / R4 rider 2; the rider's wording named SERIALIZABLE because
+--   Decision 18 locked that word, and the isolation level is not reachable on
+--   this transport — the row lock is how that guarantee is realized). A lock
+--   ORDERS the writers; it says nothing whatever about whether one of them
+--   leaves the rows monotone. Two independent controls.
 -- ============================================================================
 create or replace function pfin.fn_tax_bracket_row_schedule_invariants()
 returns trigger
@@ -896,6 +959,7 @@ set search_path = ''
 as $$
 declare
   v_schedule_id  bigint;
+  v_locked_id    bigint;
   v_row_count    bigint;
   v_min_floor    numeric;
   v_bad_floor    numeric;
@@ -910,14 +974,48 @@ begin
     v_schedule_id := new.schedule_id;
   end if;
 
+  -- (0) SERIALIZATION POINT — LOCK THE PARENT SCHEDULE ROW BEFORE READING THE
+  -- SET. This must be the FIRST statement after the schedule is resolved, and it
+  -- is what makes the set read below observe a CONCURRENTLY COMMITTED writer's
+  -- rows rather than only this transaction's own snapshot. Under SECURITY
+  -- INVOKER it resolves through the caller's own RLS. See this function's header
+  -- for the interleave it closes and for the lock-ordering note.
+  select s.id
+    into v_locked_id
+    from pfin.tax_bracket_schedule s
+   where s.id = v_schedule_id
+     for update;
+
   select count(*), min(r.bracket_floor)
     into v_row_count, v_min_floor
     from pfin.tax_bracket_row r
    where r.schedule_id = v_schedule_id;
 
   -- An empty schedule is the ABSENCE of brackets, not a malformed set.
+  -- ⚠ THIS RETURN ALSO CARRIES THE SCHEDULE-DELETE PATH, and the order of these
+  --   two statements is what makes that work. `on delete cascade` removes the
+  --   rows when the parent goes, so at COMMIT the parent row is already gone and
+  --   the lock above resolved to ZERO ROWS. That transaction is still serialized
+  --   — its own DELETE holds an exclusive lock on the very row the statement
+  --   above tried to take. Raising on the empty lock instead of returning here
+  --   would make deleting a schedule impossible.
   if v_row_count = 0 then
     return null;
+  end if;
+
+  -- The set is NON-EMPTY but the parent schedule did not resolve. While #18
+  -- holds, that pairing is unreachable for an RLS-bound caller — a visible row
+  -- implies a matched-tenant, therefore visible, schedule — so this leg is the
+  -- OBSERVER FOR #18'S ABSENCE rather than a fence against a caller: strike the
+  -- matched-tenant fence, or run with the FK inert (session_replication_role =
+  -- replica), and the set read below would SILENTLY NARROW. It fails loudly
+  -- instead. Same message family as the replace-all's refusal, and equally
+  -- undistinguished between "absent" and "another tenant's", so it is not an
+  -- existence oracle either.
+  if v_locked_id is null then
+    raise exception
+      'tax bracket set fence refused: schedule_id % is not a schedule this caller owns (SELF-259 set fence; the caller''s own RLS is what resolves it, and this fence never creates a schedule)',
+      v_schedule_id;
   end if;
 
   -- LEG A — the lowest floor of a non-empty schedule must be exactly zero.
@@ -974,10 +1072,31 @@ comment on function pfin.fn_tax_bracket_row_schedule_invariants() is
   'PASSES a collectively-invalid multi-row INSERT — which is exactly the shape '
   'the replace-all path sends. Evaluating at COMMIT is what makes the set '
   'visible. FOR EACH ROW is forced: create constraint trigger admits no '
-  'statement-level form, so the whole set is re-read per firing. ⚠ SERIALIZABLE '
-  'is NOT a substitute for this and this is not a substitute for SERIALIZABLE — '
-  'SERIALIZABLE guarantees equivalence to some serial order and says nothing '
-  'about whether a transaction leaves the rows monotone. ⚠ SECURITY INVOKER, so '
+  'statement-level form, so the whole set is re-read per firing. ⚠ THE FIRST '
+  'STATEMENT TAKES A FOR UPDATE LOCK ON THE PARENT tax_bracket_schedule ROW, '
+  'and that lock is this surface''s serialization point for EVERY writer — '
+  'direct table DML as well as fn_tax_bracket_schedule_replace_all, whose own '
+  'lock binds only its callers while authenticated holds full CRUD on both '
+  'tables. Without it, two writers touching DIFFERENT rows of one schedule '
+  'never conflict and each firing reads a set that is monotone in its own view, '
+  'so a collectively non-monotone schedule commits unobserved; with it, the '
+  'second firing waits and then re-reads the set in a fresh READ COMMITTED '
+  'statement snapshot and raises leg B. The lock is re-entrant, so an N-row '
+  'statement pays for ONE acquisition and composes with the replace-all''s lock '
+  'rather than deadlocking against it. ⚠ A transaction touching rows of TWO OR '
+  'MORE schedules takes two such locks and can deadlock against one taking them '
+  'in the other order; Postgres aborts one with 40P01 — an error, never a '
+  'corrupt set. ⚠ An empty set returns BEFORE the lock result is judged, which '
+  'is what keeps DELETING A SCHEDULE possible: on delete cascade removes the '
+  'rows, so the parent is already gone at COMMIT and that transaction is '
+  'serialized by its own DELETE lock on the same row. A NON-EMPTY set whose '
+  'parent did not resolve raises, and that leg is the OBSERVER for #18''s '
+  'absence rather than a fence against a caller. ⚠ THE LOCK IS NOT A SUBSTITUTE '
+  'FOR EITHER LEG and neither leg substitutes for it (Sec D-5 / R4 rider 2, '
+  'whose wording named SERIALIZABLE because Decision 18 locked that word; that '
+  'isolation level is not reachable on this transport and the row lock is how '
+  'the guarantee is realized): a lock ORDERS the writers and says nothing about '
+  'whether one of them leaves the rows monotone. ⚠ SECURITY INVOKER, so '
   'the set read composes with RLS: this function''s claim to see the whole set '
   'rests on every row of one schedule belonging to one tenant, which is what '
   'fn_tax_bracket_row_matched_schedule (ADR-011 Decision 3 #18) enforces — the '
