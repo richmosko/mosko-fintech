@@ -5,7 +5,8 @@
 -- Dividend - Qualified` row add, and a `comment on column` on every table
 -- carrying `tax_relevant`.
 -- Phase 6 Build Loop. SELF-263. Realizes the V1.4 execution-log rulings E4 and
--- E5. Discharges ADR-062 Decision 3's hard precondition (see AC 5 below) and
+-- E5. Confirms ADR-062 Decision 3's hard precondition — discharged by F/CTO on
+-- 2026-08-25, see AC 5 below — and discharges
 -- ADR-062 Decision 4's `notes` rider. Closes no SD/RT; extends no lock; authors
 -- no function, policy, grant or trigger.
 --
@@ -240,17 +241,21 @@
 --   A new default ROW therefore propagates to new signups with no app edit.
 --
 -- ----------------------------------------------------------------------------
--- AC 5 — ADR-062 DECISION 3's HARD PRECONDITION IS DISCHARGED BY THIS ISSUE,
---   and the discharge is narrower than the sentence sounds, so it is stated
---   precisely.
+-- AC 5 — ADR-062 DECISION 3's HARD PRECONDITION WAS DISCHARGED BY F/CTO ON
+--   2026-08-25 AND IS CONFIRMED BY THIS ISSUE, and the discharge is narrower
+--   than the sentence sounds, so it is stated precisely.
 --
 --   Decision 3 commits that the F/CTO marking enumeration runs BEFORE the §2.3.4
 --   discretionary-expenses surface ships, and warns that the gate is a SEQUENCING
 --   COMMITMENT WITH NO MECHANISM — nothing in the schema prevents the surface
---   being built against an unmarked column. The V1.4 inventory session is that
---   enumeration. It ran over EVERY row of both default tables, which is WIDER
---   than Decision 3's Expense-class scope, because tax_relevant / tax_character
---   are read on Revenue rows too.
+--   being built against an unmarked column. F/CTO RAN THAT ENUMERATION ON
+--   2026-08-25 (SELF-245 Comment 2, quoted verbatim in the M-6 retraction at
+--   docs/records/v14-preflight/sec-findings.md). The V1.4 inventory session
+--   RE-RAN it under team-lead delegation and reached the SAME outcome; a
+--   delegated re-run cannot discharge an F/CTO-scoped precondition, it can only
+--   agree with it. The re-run ran over EVERY row of both default tables, which
+--   is WIDER than Decision 3's Expense-class scope, because tax_relevant /
+--   tax_character are read on Revenue rows too.
 --
 --   ITS OUTCOME ON THE is_tax_payment AXIS IS ZERO MARKS. All twelve Expense-class
 --   prototypes were examined and every one stays is_tax_payment = false: an
@@ -263,8 +268,16 @@
 --   Expense-class prototypes. The flag therefore cannot reach the rows it would
 --   most obviously describe. This is a pre-existing scope gap, it is unchanged
 --   here, and §2.5.3's YTD Paid reads the tax-authority ACCOUNT LEDGER
---   (SELF-267's tax_jurisdiction route), never this flag. Sec's M-6 and F-6(b)
---   are the same obligation as Decision 3's and are discharged with it.
+--   (SELF-267's tax_jurisdiction route), never this flag.
+--
+--   Sec's M-6 IS RETRACTED (docs/records/v14-preflight/sec-findings.md) and is
+--   not discharged here because it is not live. Sec's F-6b IS DISCHARGED BY
+--   THIS ISSUE IN FULL, ON A DIFFERENT AXIS from AC 5's: F-6b is the
+--   tax_relevant / tax_character inventory session (BACKLOG.md §7 item 3;
+--   SELF-245's struck AC4), which is what statements (1)–(6) above ARE — not
+--   the is_tax_payment marking enumeration this AC covers. M-6's own retraction
+--   draws exactly that line: "is_tax_payment is discharged; tax_relevant /
+--   tax_character are not."
 --
 -- ----------------------------------------------------------------------------
 -- §10 3-AXIS CROSS-CHECK (Path B — ADR-011 Decision 4 REFERENCED, not restated;
@@ -598,6 +611,12 @@ comment on column pfin.posting_prototype_default.tax_relevant is
   'explicitly rather than assume provisioning delivers it. '
   'Mirrored on pfin.posting_prototype, for which this table is the provisioning '
   'source (ADR-058 Decision 3 pair discipline). '
+  '⚠ CLASS-SCOPE THE READ. PRD §2.5.1 sources Ordinary Income from the Income '
+  'side of §2.3.1. Trade-class prototypes (STC / BTC) also carry '
+  'tax_relevant = true — they are disposition events whose character comes from '
+  'the holding period, not from tax_character, which is NULL on them by design. '
+  'A reader that filters on this flag ALONE, without also scoping to '
+  'cat = ''Revenue'', will sum sale proceeds into Ordinary Income. '
   'Not FK-shaped — boolean, no relation reference — and this table carries no '
   'users_id at all, so no tenant anchor exists to match against; read ADR-011 '
   'Decision 3 live for the family.';
