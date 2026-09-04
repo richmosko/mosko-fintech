@@ -37,11 +37,8 @@
 // an incomplete or silently-empty vocabulary.
 
 import { redirect } from '@sveltejs/kit';
-import { loadTaxLiability } from '$lib/server/queries/taxLiability';
+import { loadTaxLiability, INVENTORY_SEED_DELTA_MIGRATION } from '$lib/server/queries/taxLiability';
 import type { PageServerLoad } from './$types';
-
-/** AC 11 hard gate — the SELF-263 seed-delta migration this page's tax-value reading was built against. */
-export const INVENTORY_SEED_DELTA_MIGRATION = '100_tax_value_inventory_seed_delta.sql';
 
 export type TaxCharacterRow = {
 	code: string;
