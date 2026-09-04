@@ -46,6 +46,14 @@ Lock 15's dual-column filter (`transaction_date <= D and created_at < (D+1)`) ge
 
 **Lean: Option A.** It is the only one that makes the PRD's own words true, and freezing a payload is a well-understood pattern rather than a novel one. **The losing side, named:** Option A pays a real and permanent cost — the payload shape becomes a versioned compatibility surface, and a future §2.1.5 change will have to keep rendering payloads written under an older shape. Option C avoids that for two of six sections. If F/CTO weights payload-compat above render-path unity, C is defensible; B is not, because its central promise is unsatisfiable on this schema.
 
+> **⟳ Round-2 update — PM CONCEDES to Option A** (`pm-findings.md` @ `77425b3` §12.3, PM's own id **A-5**). PM's earlier (B) — freeze the history-less *inputs* and re-run composition — is, in PM's words, *"Architect's Option C with inputs where he has outputs"*, and inherits C's cost. **PM also names a case (B) cannot catch at all: the `082` Cat rename** — labels are not settings, so an input-freeze does not stop an archived report re-labelling. PM's product ground is that PRD §2.6.4 says *"rendered-value level"* verbatim and the parity anchor is a PDF. **A-5's proposed φ-1 exception wording is withdrawn; under Option A the PRD amendment is a pointer, not a rewrite — φ-1 becomes true as written.**
+>
+> **PM's rider, carried into the ruling and into A3's AC:** the frozen payload includes **every `{status, reason}` envelope, `basis_year`, the exclusion line's state, and the unclassified count as rendered** — and **staleness stays OUTSIDE it** (PRD §2.6.4's live-read carve-out; P8 item 2). *Freeze what was computed; never freeze what is observed.* A3 item 4 and P8 item 2 already state both halves; the rider makes the boundary explicit at the ruling rather than leaving it distributed across two blocks.
+>
+> **PM's half of the losing side, which is not mine and is worth the sitting's attention:** *"a frozen payload freezes its defects"* — a report generated against a bad target, or against an undesignated tax-authority ledger, is **wrong forever**, and the only remedy is the PRD's regeneration affordance, which the user must know to use. That is why PM §8's "Regenerate" copy and the pre-finalize *"No IRS/FTB ledger designated"* prompt (P4 item 4) are load-bearing under Option A rather than nice-to-have. ⚠ **Option A converts a class of silent drift into a class of permanent, visible error.** That is the better trade, and it is a trade.
+>
+> **All three roles now lean or concur on Option A.** Sec's stake (F-2 / the SD-12 derivative class) is unchanged by the concession and the joint review still governs.
+
 **`⟨RULING⟩` S-1.** Sec joint-review mandatory either way (Lock 11/12 surfaces, ADR-011 D2 + D3, financial values).
 
 **Which half of ADR-011 D2 applies (asked in the brief, answered).** **Both, and to different tables.** D2's *immutable* half governs `monthly_report_account_snapshot` and (under Option A) the frozen payload: read-only post-write. D2's *INSERT-new-version* half governs the **header's regeneration path** — Lock 11 mod #2 verbatim, *"hard-overwrite UPDATE would lose `included_reconciliation_event_ids` + `owner_header_at_generation` history."* A regeneration inserts a new row and supersedes the old; it never updates in place. The two halves are not alternatives here; the header is INSERT-new-version and each individual row is immutable once `final`.
@@ -314,3 +322,61 @@ No catalogued §10 instance is added, removed, reordered or renumbered by round 
 ### 8.9 Round-2 instruments
 
 `git fetch origin` + `git rev-parse` on both sibling refs and on `main`; `git show <ref>:<path>` piped to `md5` (both hashes matched the round-2 brief before any content was read); sibling files extracted to the session scratchpad and read whole. No tree re-measurement was performed, because `origin/main` is unmoved at `b90b846` — the round-1 measurements in §1–§7 remain current by that fact rather than by assumption.
+
+---
+
+## 9. Round 2, second pass — PM's round 2 (2026-09-04)
+
+**Ref read.** `origin/meta/v15-preflight-pm` @ `77425b3`, `docs/records/v15-preflight/pm-findings.md`, md5 `eb7bcb2cc0bec0a737dad1708e79e45d` — fetched and hashed from `origin` in this session before any content was read. `origin/main` re-checked: still `b90b846`. No tree measurement is re-taken.
+
+⚠ **PM's §12 was written against Architect's ROUND-1 file** (`architect-findings.md` md5 `d43968e7…`, `rederived-acs.md` md5 `f3335c48…`), which PM names. Several §12.5 items were therefore already applied in Architect's round 2. **Those are ref-skew, not disagreement**, and are marked as such in their blocks rather than silently absorbed — the distinction matters because a skew corrected quietly reads as a sibling having been wrong.
+
+### 9.1 S-1 is settled among the three roles
+
+PM concedes A-5 to **Option A** (freeze the rendered payload). The concession, PM's rider (envelopes / `basis_year` / exclusion state / unclassified count frozen **in**; staleness **out**) and PM's half of the losing side are carried into the **S-1 block at §1**, not restated here. **This was the wave's one one-way door and it now has no standing disagreement** — it still needs F/CTO's ruling and Sec's joint review, but it is no longer a contested seam.
+
+### 9.2 §12.5 applied, by block
+
+Applied and credited `(PM)` in `rederived-acs.md`:
+
+| PM §12.5 item | Disposition |
+|---|---|
+| A2 item 7 — RT-20 vs RT-21 false composite | **Already applied** in round 2 (ref-skew) |
+| RT-11 / RT-12 / RT-19 / RT-25 placements | **Already applied** in round 2 (ref-skew) |
+| A8 item 7 — *"advisory, not joint-review"* | **Already applied** in round 2; block now records the skew explicitly and that **all three roles concur** on mandatory |
+| P2 item 3 — *"California on the 2025 schedule"* | **Already removed** in round 2; A3 item 4 now names `basis_year` as a payload field and coins no user-facing sentence |
+| P2 item 5 — inline editing | **Newly applied.** Answer unchanged (no inline edit) but **re-grounded on PRD §2.6.2's V2+ late-edit boundary**, ADR-013 P5 citation struck, and PM's routing rule added: "Edit commentary" → P3 for a `draft`, → "Regenerate" for a `final` |
+| P3 item 6 — *"the F/CTO"* → *"the user"* | **Already applied** in round 2. ⚠ One *"the F/CTO"* survives at A9 item 7 and is **deliberate**: it names the ratifier of an ADR-054 rider, not the actor of a user action — PM **A-11** scopes the sweep to actor-framing |
+| P5 — state names + tenant-scoped read as an AC line | **Already applied** in round 2 (ref-skew) |
+| P6 — no PDF of a pending report | **Already applied** in round 2 (ref-skew) |
+| P6 — filename convention | **Newly applied.** `mosko-monthly-{YYYY-MM}-{generated_at}.pdf`; ⚠ **never the owner string** — *"a PDF name travels further than its contents"* (PM). This was the file's last `⟨PM⟩` |
+| P9 — copy already shipped | **Newly applied.** The round-1 *"`⟨PM⟩` copy for both"* is withdrawn; the AC points at `reasonCopy()` and `<StaleConstituentBadge>` instead of asking for strings |
+| A1 item 9 → item 8 — presentation labels | **Newly applied**, and PM's rewording is the better one for a reason worth keeping: *"superseded is a storage state only"* **presumes `superseded` exists as a stored value**, which is true under Sec R-1 options B and C and **false under option A**. PM's *"a superseded version is never rendered in V1"* holds under all three, so the AC no longer waits on R-1 |
+
+Two further PM items applied outside the §12.5 list: **A8's 120-character bound** moves from *proposal* to *decided* (PM §12.4, as a dispatch prerequisite), and **P7's forward-only editor notice** gets PM's string, resolving the last placeholder in that block.
+
+### 9.3 New from PM's round 2 — the rename's vehicle
+
+PM **§12.3 F-3**: PM does not object to renaming `commentary_equity` → `commentary_marketable_securities`, but the four column names are a **Gate B ratify record** carried in CHANGELOG, so the rename **rides the §9 consolidated ADR as a stated correction to Gate B's text and must not arrive by migration alone.**
+
+**Architect concurs, and this is a genuinely better disposition than round 1's.** Round 1 treated the rename as a naming call cheap to make now; PM correctly identifies that it edits a ratified enumeration. A migration that silently renames one is the same failure ADR-011 Decision 18's own amendment names — *"a Gate ratify that changes a LOCKED ENUMERATION must amend the ADR holding it, not only the log that records the Gate"* — running in the opposite direction. Folded into A1 item 8.
+
+### 9.4 Standing disagreements with PM, named and NOT reconciled
+
+1. **A8's milestone.** Architect: A1–A7 in V1.5, **A8 out**. PM **D-1 / §12.4**: A1–**A8** in. ⚠ **PM's argument is stronger than my round-1 ground and I am recording that rather than burying it:** P7 is in the milestone and V1-SHIP-BLOCK and cannot ship without A8, and A1's `owner_header_at_generation` is written from A8's row — so A8 is §2.6 substrate **on product trace**, not incidental family closure. My ground was that the Lock 14 *family* spans V1.2–V1.5, which is a fact about the family and not about this issue's trace. **I am not switching, per the sitting's instruction to leave this standing; F/CTO should know the argument runs PM's way.** Both roles agree A9 stays out.
+2. **A6's disposition.** PM **§12.3 R-2** records Architect as *close-and-note* and leans Sec's re-scope. ⚠ **Ref-skew: Architect's round 2 already moved to re-scope-in-place** (§8.7). **Not a live disagreement — all three now agree**, and the concession's reason is recorded at §8.7.
+3. **A8's review classification.** PM records Architect as keeping *advisory*. ⚠ **Ref-skew: Architect's round 2 concurs with Sec R-6 (mandatory).** **All three agree.**
+4. **F-3, the rename.** No disagreement on the rename; PM adds a **vehicle constraint** which Architect adopts (§9.3). Not standing.
+5. **S-5, the array column.** Architect (a) ship-dormant · Sec **F-2** (B) retire-by-amendment · **PM has no product stake and leaves it standing** (*"no §2.6 story names a reconciliation event"*; PRD text untouched either way). **Genuinely standing, and now a two-role split with PM abstaining.**
+
+**So of the five PM names, two are live (A8's milestone; S-5), one is an adopted refinement (F-3's vehicle), and two are ref-skew already resolved in Architect's favour-of-the-sibling.** Stated this way so the agenda does not spend time on three settled items.
+
+### 9.5 Where PM answered something I had left open
+
+- **F-10 / P2 inline editing.** I called it *"a UX call with no architectural stake"* and left it. **PM answered it** (§12.3 F-10) on PRD §2.6.2's V2+ late-edit boundary, with a routing rule. Adopted; the block no longer defers.
+- **S-4.** PM concurs with my lean (a) and supplies the argument I did not make: the section↔account mapping **is PRD §2.6.1's composition map**, which already lives in the app layer, so a DB-side primitive would be a second copy of a product definition. PM accepts my named losing side (nothing fences it) with *"markers are not money"*.
+- **Sec R-5 / the escaping control.** PM concurs with Sec (fold into P6) and adds the point that resolves my §8.4 conditional: **under S-2 options A/C the *control* is discharged structurally, but the *proof leg* is still owed** — INV-2 spans both engines regardless of who escapes. ⚠ **That makes P6 the right home under every S-2 outcome**, which my §8.4 did not see: I had the control's home tracking S-2 and missed that the obligation survives as a test even when the hazard does not. **§8.4's conditional is superseded on that point; the home is P6, and A4 carries the property only under S-2 Option B.**
+
+### 9.6 Ledger — unchanged
+
+No §10 catalogued instance added, removed, reordered or renumbered by this pass; no layer attribution moves; no Decision 3 label drafted or reallocated. PM **§12.6** records the same for PM's round 2. Path B throughout.
