@@ -8,8 +8,8 @@
 --
 -- WHAT THIS DOES: creates the enum pfin.tax_schedule_type_enum, the parent
 -- table pfin.tax_bracket_schedule (one row per user per tax_year per schedule
--- type, carrying the standard deduction and the informational prior-year tax
--- balance) and the child table pfin.tax_bracket_row (one row per bracket,
+-- type, carrying its own label, the standard deduction and the informational
+-- prior-year tax balance) and the child table pfin.tax_bracket_row (one row per bracket,
 -- carrying a lower-bound threshold and a marginal rate). Owner-only RLS on all
 -- four verbs on BOTH tables, each policy carrying the 025 aal2 step-up clause.
 -- Authors THREE functions, all SECURITY INVOKER: two trigger fences and the
@@ -67,6 +67,16 @@
 --         "one fence, two predicates" precedent is NOT extended here, because
 --         the referenced TABLE already expresses everything a second predicate
 --         would (a tax_bracket_schedule row is a tax_bracket_schedule row).
+--
+--   ⚠ THE COLUMN ADDED AT SEC'S SELF-260 V-2 (schedule_label; ruling E27,
+--     option A) IS NOT FK-SHAPED and joins no Decision-3 family: it is text, it
+--     references no row, it holds no id, and it is not an INTEGER[] of ids.
+--     Stated rather than left to inference, because the per-column disposition
+--     above is a sweep over COLUMN SHAPE and a column added after that sweep is
+--     precisely the one that escapes it. No ADR-011 Decision 4 catalogued §10
+--     instance is added, removed, reordered or renumbered by it and no layer
+--     attribution moves — read Decision 4's catalogued list live rather than
+--     from any restatement of it.
 --
 --   ⚠ THE FOLD-IN INTO DECISION 3's ENUMERATION IS OWED BY THIS PR AND IS NOT
 --     IN THIS FILE. Decision 3's own rule, written at the ADR-042 fold-in and
@@ -422,6 +432,15 @@
 --       tax_bracket_schedule_tax_year_check. 1913 is the first US federal
 --       income-tax year, so the bound refuses a transposed or zero year while
 --       refusing no real one; the smallint's own ceiling carries the upper end.
+--     schedule_label text NOT NULL, CHECK (length between 1 and 200) — named
+--       tax_bracket_schedule_schedule_label_check. The schedule's OWN
+--       statement of the assumptions its numbers rest on: the filing status
+--       they were entered for, the basis year of the published figures, and any
+--       second statute the top bracket composes (SELF-260 AC 6; E22 / E23).
+--       USER-OWNED, USER-EDITABLE data written by the same replace-all call
+--       that writes the brackets, edited beside them in the PRD §2.5.2 editor,
+--       and passed through to the tax-liability payload. The empty string is
+--       refused rather than admitted as a blank.
 --     standard_deduction     numeric(20,4) NOT NULL, >= 0, non-NaN.
 --     tax_balance_prior_year numeric(20,4) NULL — INFORMATIONAL ONLY; MUST NOT
 --       enter the computation. NULL renders as an em dash.
@@ -458,15 +477,17 @@
 --
 --   pfin.fn_tax_bracket_schedule_replace_all(p_schedule_id bigint,
 --     p_tax_year smallint, p_schedule_type pfin.tax_schedule_type_enum,
---     p_standard_deduction numeric, p_tax_balance_prior_year numeric,
---     p_rows jsonb) returns void — the atomic replace-all write body.
+--     p_schedule_label text, p_standard_deduction numeric,
+--     p_tax_balance_prior_year numeric, p_rows jsonb) returns void — the
+--     atomic replace-all write body.
 --     SECURITY INVOKER, set search_path = '', VOLATILE, EXECUTE revoked from
 --     PUBLIC and granted to authenticated. NO TENANT PARAMETER: users_id comes
 --     from auth.uid() (R4 rider 4; Sec D-2).
 --     Order is load-bearing: (1) FOR UPDATE lock on the caller's own schedule
 --     row — zero rows RAISES, and that refusal is the tenant fence; (2) validate
 --     p_rows' shape; (3) DELETE the schedule's rows; (4) INSERT the new set;
---     (5) UPDATE the three scalars, which fires the updated_at trigger. The
+--     (5) UPDATE the scalars, the label among them, which fires the
+--     updated_at trigger. The
 --     deferred set fence and the #18 matched-tenant fence fire at COMMIT, after
 --     the function returns.
 --     p_rows: a JSON ARRAY of OBJECTS each carrying EXACTLY the keys
@@ -523,6 +544,9 @@ create table if not exists pfin.tax_bracket_schedule (
                             constraint tax_bracket_schedule_tax_year_check
                             check (tax_year >= 1913),
   schedule_type           pfin.tax_schedule_type_enum not null,
+  schedule_label          text not null
+                            constraint tax_bracket_schedule_schedule_label_check
+                            check (length(schedule_label) between 1 and 200),
   standard_deduction      numeric(20, 4) not null
                             check (standard_deduction >= 0
                                    and standard_deduction <> 'NaN'::numeric),
@@ -555,7 +579,11 @@ comment on table pfin.tax_bracket_schedule is
   'row lock as the realization. Replacing as one unit is what makes the '
   'unset state of a schedule the ABSENCE OF THIS ROW, never a NULL inside '
   'it — which is what lets a reader refuse to coalesce a missing standard '
-  'deduction to zero. Settings are not audit-class (Decision 18): '
+  'deduction to zero. Each schedule also carries its own schedule_label — the '
+  'user''s statement of the filing status, basis year and any composed statute '
+  'its numbers rest on — written by the same replace-all call, edited beside '
+  'the brackets and travelling with them to the tax-liability payload. '
+  'Settings are not audit-class (Decision 18): '
   'UPSERT-in-place with updated_at, no edit-history rows. No JSONB, per '
   'Decision 18''s forward-compat fence. MUTABLE, full authenticated CRUD, RLS '
   'direct-owner (users_id = auth.uid()) with the ADR-029 / 025 aal2 step-up '
@@ -593,6 +621,27 @@ comment on column pfin.tax_bracket_schedule.schedule_type is
   'pfin.tax_schedule_type_enum for the vocabulary. Part of the unique key: the '
   'three schedule types are independent facts and a user may hold any subset of '
   'them for a given year.';
+
+comment on column pfin.tax_bracket_schedule.schedule_label is
+  'The schedule''s OWN statement of the assumptions its numbers rest on — the '
+  'filing status they were entered for, the basis year of the published figures '
+  'they were transcribed from, and any second statute its top bracket composes '
+  '(PRD §2.5.2; SELF-260 AC 6; V1.4 execution log E22 + E23). USER-OWNED, '
+  'USER-EDITABLE DATA, not a derived caption: it is written by the same '
+  'replace-all call that writes the brackets '
+  '(pfin.fn_tax_bracket_schedule_replace_all takes it as p_schedule_label), '
+  'edited beside them in the §2.5.2 editor, and passed through to the '
+  'tax-liability payload — so a user re-entering a schedule under a different '
+  'filing status states that in the same edit that changes the numbers. Any '
+  'writer that creates a schedule MUST supply one; a user MAY then overwrite '
+  'it. NOT NULL with CHECK (length(schedule_label) between 1 and 200), named '
+  'tax_bracket_schedule_schedule_label_check: a schedule whose assumptions go '
+  'unstated is the condition this column exists to prevent, so the empty string '
+  'is refused rather than admitted as a blank, and the upper bound keeps this a '
+  'caption rather than a document. ⚠ THE LABEL AND THE ROWS ARE NOT CONSTRAINED '
+  'TO AGREE, and no fence is owed that would make them: the label is a '
+  'user-authored statement about the rows, and a reader MUST NOT take it as a '
+  'system-verified description of them.';
 
 comment on column pfin.tax_bracket_schedule.standard_deduction is
   'The standard deduction for this jurisdiction and tax year, in account '
@@ -1276,6 +1325,7 @@ create or replace function pfin.fn_tax_bracket_schedule_replace_all(
   p_schedule_id            bigint,
   p_tax_year               smallint,
   p_schedule_type          pfin.tax_schedule_type_enum,
+  p_schedule_label         text,
   p_standard_deduction     numeric,
   p_tax_balance_prior_year numeric,
   p_rows                   jsonb
@@ -1356,6 +1406,7 @@ begin
   update pfin.tax_bracket_schedule s
      set tax_year               = p_tax_year,
          schedule_type          = p_schedule_type,
+         schedule_label         = p_schedule_label,
          standard_deduction     = p_standard_deduction,
          tax_balance_prior_year = p_tax_balance_prior_year
    where s.id = p_schedule_id;
@@ -1368,13 +1419,13 @@ end;
 $$;
 
 revoke execute on function pfin.fn_tax_bracket_schedule_replace_all(
-  bigint, smallint, pfin.tax_schedule_type_enum, numeric, numeric, jsonb) from public;
+  bigint, smallint, pfin.tax_schedule_type_enum, text, numeric, numeric, jsonb) from public;
 
 grant execute on function pfin.fn_tax_bracket_schedule_replace_all(
-  bigint, smallint, pfin.tax_schedule_type_enum, numeric, numeric, jsonb) to authenticated;
+  bigint, smallint, pfin.tax_schedule_type_enum, text, numeric, numeric, jsonb) to authenticated;
 
 comment on function pfin.fn_tax_bracket_schedule_replace_all(
-  bigint, smallint, pfin.tax_schedule_type_enum, numeric, numeric, jsonb) is
+  bigint, smallint, pfin.tax_schedule_type_enum, text, numeric, numeric, jsonb) is
   'Atomic replace-all write body for one pfin.tax_bracket_schedule and its '
   'pfin.tax_bracket_row set (PRD §2.5.2; ADR-011 Decision 18 / Lock 14; '
   'SELF-259). Decision 18 locks this write as replace-all UNDER SERIALIZABLE; '
@@ -1401,7 +1452,12 @@ comment on function pfin.fn_tax_bracket_schedule_replace_all(
   'resolves to zero rows and raises. The two cases share one message '
   'deliberately, so the error cannot be used as an existence oracle over other '
   'tenants'' ids. This function NEVER creates a schedule; creation is an '
-  'ordinary INSERT under RLS, and an empty schedule is legal. TAKES NO TENANT '
+  'ordinary INSERT under RLS, and an empty schedule is legal. p_schedule_label '
+  'is one of the scalars this call replaces — the schedule''s own statement of '
+  'its filing-status assumption, its basis year and any composed statute (see '
+  'that column''s comment) — and it is REQUIRED on every call, because a '
+  'replace-all determines the post-write state completely and there is no '
+  '"leave this one alone". TAKES NO TENANT '
   'PARAMETER: users_id comes from auth.uid(), never from an argument, so there '
   'is nothing for a caller to forge. p_rows is a JSON array of objects carrying '
   'EXACTLY the keys bracket_floor and bracket_rate, both JSON numbers; an empty '
