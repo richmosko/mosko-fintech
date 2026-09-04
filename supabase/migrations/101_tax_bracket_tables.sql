@@ -315,6 +315,10 @@
 --
 --   pfin.tax_bracket_schedule — one row per (users_id, tax_year, schedule_type),
 --     which is the unique key and the ON CONFLICT target for the UPSERT.
+--     tax_year smallint NOT NULL, CHECK (tax_year >= 1913) — named
+--       tax_bracket_schedule_tax_year_check. 1913 is the first US federal
+--       income-tax year, so the bound refuses a transposed or zero year while
+--       refusing no real one; the smallint's own ceiling carries the upper end.
 --     standard_deduction     numeric(20,4) NOT NULL, >= 0, non-NaN.
 --     tax_balance_prior_year numeric(20,4) NULL — INFORMATIONAL ONLY; MUST NOT
 --       enter the computation. NULL renders as an em dash.
@@ -395,7 +399,9 @@ create table if not exists pfin.tax_bracket_schedule (
   id                      bigint generated always as identity primary key,
   users_id                uuid not null default auth.uid()
                             references auth.users (id) on delete cascade,
-  tax_year                smallint not null,
+  tax_year                smallint not null
+                            constraint tax_bracket_schedule_tax_year_check
+                            check (tax_year >= 1913),
   schedule_type           pfin.tax_schedule_type_enum not null,
   standard_deduction      numeric(20, 4) not null
                             check (standard_deduction >= 0
@@ -447,7 +453,11 @@ comment on column pfin.tax_bracket_schedule.tax_year is
   'carried by citation at the V1.4 sitting R4). Part of the unique key, so one '
   'user holds at most one schedule of each type per year and a new year is a new '
   'row rather than an edit — brackets are re-entered at rollover, they are not '
-  'migrated.';
+  'migrated. CHECK (tax_year >= 1913), named '
+  'tax_bracket_schedule_tax_year_check: 1913 is the first US federal income-tax '
+  'year, so the bound refuses a transposed or zero year while refusing no real '
+  'one. The smallint''s own ceiling carries the upper end; no upper CHECK is '
+  'invented, because a future tax year is a legitimate entry.';
 
 comment on column pfin.tax_bracket_schedule.schedule_type is
   'Which published table this row states — see the type comment on '
