@@ -204,12 +204,19 @@
 --     and https://www.ftb.ca.gov/forms/2026/2026-540-booklet.pdf returned HTTP
 --     404 on 2026-09-04. 2025 is the latest published year and the schedule is
 --     labelled with the year it is actually FOR.
---     CONSEQUENCE, stated because it is invisible from the DDL: Decision 18 has
---     V1 read §2.5.3 at `EXTRACT(YEAR FROM CURRENT_DATE)`. During calendar 2026
---     that read finds NO california_ordinary schedule, and §2.5.3 renders
---     UNAVAILABLE-with-a-reason for California with the "enter it in Settings"
---     CTA. That is the CORRECT behaviour and it is what the seed buys: a
---     rendered UNSET rather than a wrong number.
+--     CONSEQUENCE, and it is RESOLVED AT THE READER RATHER THAN AT THE SEED
+--     (E22, team-lead under F/CTO delegation, 2026-09-04). Decision 18 has V1
+--     read §2.5.3 at `EXTRACT(YEAR FROM CURRENT_DATE)`, so a naive current-year
+--     read finds NO california_ordinary schedule during calendar 2026. SELF-262's
+--     helper therefore takes the CURRENT-YEAR schedule of a type WHEN PRESENT and
+--     otherwise the LATEST PRIOR-YEAR schedule of that type, and carries THE
+--     BASIS YEAR IT USED in its payload, so every consumer renders "California on
+--     the 2025 schedule" — never $0, and never a silent substitution. ⚠ THE
+--     FALLBACK IS THE READER'S, NOT THIS FILE'S: nothing here makes a 2025 row
+--     answer a 2026 question, and a consumer that reads these tables directly
+--     without that helper still sees exactly what is stored — a 2025 schedule and
+--     no 2026 one. A follow-up issue seeds California 2026 when the FTB
+--     publishes. ⚠ Do NOT "fix" this by relabelling the row: see (a) below.
 --     ⚠ THE TWO REJECTED ALTERNATIVES, named so neither is reached for later.
 --       (a) Seed the 2025 FIGURES under tax_year 2026. That is a confident,
 --           plausible, WRONG number — indistinguishable from a correct one at
@@ -226,22 +233,36 @@
 --           would also consume the (users_id, 2026, california_ordinary) key, so
 --           a later migration seeding the real published figures would be
 --           skipped by its own `on conflict do nothing`.
+--           ⚠ E22's reader fallback makes (b) WORSE, not safer, and that is worth
+--           stating because the fallback reads like it would absorb the problem.
+--           A PRESENT-but-empty 2026 schedule SUPPRESSES the fallback — the
+--           current-year schedule exists, so the helper never reaches 2025 — and
+--           the zero it then computes is indistinguishable from a real one. The
+--           ABSENCE of the 2026 row is exactly what makes the fallback fire.
 --
---   ⚠ ONE CALIFORNIA FIGURE IS DELIBERATELY ABSENT: the 1% Mental Health
---   Services Tax (R&TC §17043), which for the template's declared SINGLE filing
---   status applies to California taxable income over $1,000,000 and would appear
---   here as a tenth bracket at floor 1000000.0000 with rate 0.13300000. It is
---   NOT part of FTB Schedule X — the cited schedule ends at 12.3% — and every
---   number in this file traces to a cited row. A single filer with California
---   taxable income above $1,000,000 will find this template understates their
---   California liability by 1% of the excess, and revising it is an ordinary
---   edit. Named rather than quietly omitted so the gap is checkable and the
---   remedy is stated. ⚠ The threshold is FILING-STATUS-DEPENDENT — it is
---   $500,000 for a married/RDP filer filing separately — which is a second
---   reason not to bolt it onto a schedule whose only statement of filing status
---   is its label. Schedule X is SHARED by Single and Married/RDP-filing-
---   separately, but this template declares SINGLE and the label says so; do not
---   read the shared source schedule as a claim that the template covers both.
+--   ⚠ THE CALIFORNIA SCHEDULE CARRIES A TENTH BRACKET THAT IS NOT IN SCHEDULE X,
+--   AND ITS SOURCE IS A SECOND CITATION — ruled at E23 (team-lead under F/CTO
+--   delegation, 2026-09-04). The 1% MENTAL HEALTH SERVICES TAX, Cal. Revenue &
+--   Taxation Code §17043 (Proposition 63, 2004), applies on California taxable
+--   income above a threshold and is imposed IN ADDITION TO the Schedule X rates.
+--   It is seeded here as floor 1000000.0000 at rate 0.13300000 — the 12.3% top
+--   Schedule X rate PLUS the 1% surtax, which is the correct MARGINAL rate above
+--   the threshold and therefore the right shape for this table, whose rows are
+--   marginal rates on a lower-bound floor.
+--     ⚠ THIS IS THE ONE ROW THAT DOES NOT TRACE TO FTB SCHEDULE X — the cited
+--     schedule ends at 12.3% — so it carries its own citation rather than
+--     borrowing the schedule's, in this header and in the schedule's label.
+--     Every number in this file still traces to a cited source; two sources now
+--     compose one schedule, and saying so is what keeps that checkable.
+--     ⚠ THE THRESHOLD IS FILING-STATUS-DEPENDENT and the seeded 1,000,000 is the
+--     SINGLE-filer figure. It is $500,000 for a married/RDP filer filing
+--     separately — so a user who revises this template's filing status must
+--     revise THIS FLOOR TOO, and it is the only row on the surface where that is
+--     true. ⚠ FTB Schedule X is SHARED by Single and Married/RDP-filing-
+--     separately, which makes this trap easy to walk into: the RATE rows are
+--     identical for both statuses and this floor is not. The label says SINGLE;
+--     do not read the shared source schedule as a claim that the template covers
+--     both statuses.
 --
 --   ⚠ federal_lt_cg CARRIES standard_deduction = 0, AND THAT ZERO MEANS
 --   "THIS SCHEDULE TAKES NO DEDUCTION" — NOT "not yet entered" (AC 1;
@@ -257,9 +278,9 @@
 --   (AC 3), and the AC asks that the claim be stated here so a reviewer knows
 --   what a green apply is evidence OF.
 --
---   Every schedule this file writes arrives as ONE multi-row INSERT — seven rows
---   for federal_ordinary, three for federal_lt_cg, nine for california_ordinary —
---   which is exactly the shape a BEFORE ROW fence CANNOT judge: it fires before
+--   Every schedule this file writes arrives as ONE multi-row INSERT — several
+--   rows per schedule, the largest being california_ordinary — which is exactly
+--   the shape a BEFORE ROW fence CANNOT judge: it fires before
 --   the later rows of its own statement exist and evaluates each row against an
 --   incomplete set. 101 ships the DEFERRED CONSTRAINT TRIGGER form ruled at R4
 --   rider 1 (fn_tax_bracket_row_schedule_invariants, `deferrable initially
@@ -382,10 +403,14 @@ as $$
   -- ⚠ 2025 AND NOT 2026: the FTB had not published the 2026 schedule when this
   -- migration was authored (both 2026 form URLs returned 404 on 2026-09-04). The
   -- label carries the year so nobody reads it as the current one.
-  -- ⚠ The 1% Mental Health Services Tax over $1,000,000 (R&TC §17043) is NOT in
-  -- Schedule X and is therefore NOT here; see this file's header.
+  -- ⚠ THE TENTH ROW IS NOT FROM SCHEDULE X. floor 1000000 / rate 0.133 is the
+  -- 1% Mental Health Services Tax (R&TC §17043) composed with the 12.3% top
+  -- Schedule X rate, giving the correct MARGINAL rate above the threshold. Its
+  -- threshold is the SINGLE-filer one and is filing-status-dependent ($500,000
+  -- for married/RDP filing separately) — the only row here whose FLOOR moves
+  -- with filing status. See this file's header (E23).
   select 'california_ordinary'::pfin.tax_schedule_type_enum, 2025::smallint, 5706.0000::numeric,
-         'California (FTB) — ordinary income — tax year 2025 — SINGLE filer (template; revise to match your filing status). ⚠ This is tax year 2025, the latest year the FTB had published when it was seeded — the 2026 schedule was not yet available. Excludes the 1% Mental Health Services Tax (R&TC 17043), which for a single filer applies to California taxable income over $1,000,000. Source: FTB 2025 California Tax Rate Schedules, Schedule X (Single or Married/RDP filing separately); standard deduction from the 2025 Form 540 booklet, chart status 1 - Single.'::text,
+         'California (FTB) — ordinary income — tax year 2025 — SINGLE filer (template; revise to match your filing status). ⚠ This is tax year 2025, the latest year the FTB had published when it was seeded — the 2026 schedule was not yet available. Includes the 1% Mental Health Services Tax (R&TC 17043) as the top bracket: 13.3% above $1,000,000 is the 12.3% Schedule X rate plus that 1% surtax. ⚠ That $1,000,000 threshold is the SINGLE-filer one and moves with filing status (it is $500,000 for married/RDP filing separately), so revise that floor too if you change the status. Source: FTB 2025 California Tax Rate Schedules, Schedule X (Single or Married/RDP filing separately); standard deduction from the 2025 Form 540 booklet, chart status 1 - Single.'::text,
          f, r
     from (values (      0.0000::numeric, 0.01000000::numeric),
                  (  11079.0000,          0.02000000),
@@ -395,7 +420,8 @@ as $$
                  (  72724.0000,          0.09300000),
                  ( 371479.0000,          0.10300000),
                  ( 445771.0000,          0.11300000),
-                 ( 742953.0000,          0.12300000)) as t(f, r)
+                 ( 742953.0000,          0.12300000),
+                 (1000000.0000,          0.13300000)) as t(f, r)
 $$;
 
 revoke execute on function pfin.fn_tax_bracket_seed_template() from public;
@@ -419,7 +445,15 @@ comment on function pfin.fn_tax_bracket_seed_template() is
   'quietly. ⚠ The FEDERAL schedules are for tax year 2026 and the CALIFORNIA '
   'schedule is for tax year 2025 — the FTB had not published its 2026 schedule '
   'when this function was authored, and labelling a 2025 table as 2026 would '
-  'produce a confident, plausible, wrong number rather than a rendered UNSET. '
+  'produce a confident, plausible, wrong number rather than a basis a reader can '
+  'see. SELF-262''s helper falls back to the latest prior-year schedule of a type '
+  'and reports the basis year it used (E22), so the missing 2026 row is rendered '
+  'as a stated basis rather than as a zero. ⚠ THE CALIFORNIA SCHEDULE COMPOSES '
+  'TWO SOURCES: its top bracket (13.3% above $1,000,000) is FTB Schedule X''s '
+  '12.3% plus the 1% Mental Health Services Tax of R&TC 17043, which is NOT in '
+  'Schedule X. That $1,000,000 threshold is the SINGLE-filer figure and is the '
+  'one value here whose FLOOR moves with filing status ($500,000 for married/RDP '
+  'filing separately). '
   'Each schedule''s label states its own year and its own SINGLE-filer '
   'assumption, which is where PM''s A-6 places that assumption. ⚠ The seeded set '
   'is a TEMPLATE the user revises, never a determination about anyone''s return. '
