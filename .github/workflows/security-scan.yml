@@ -318,13 +318,21 @@ jobs:
       # shipped in npm 11. `actions/setup-node@v4` with `node-version: '20'`
       # installs the npm BUNDLED with Node 20 (npm 10.x per Node 20 LTS release
       # notes) — i.e. the last major line that still falls back to
-      # `/audits/quick` when a bulk-advisory call errors. registry.npmjs.org
-      # scheduled that endpoint for full retirement after 2026-07-15; today
-      # (2026-09-04) it is fully retired and returns a blanket 400 "Invalid
-      # package tree" to ANY request it receives — including a well-formed one
-      # — rather than genuinely reporting this repo's lockfiles as malformed
-      # (root's and api's package-lock.json are both lockfileVersion 3 and both
-      # match their package.json; neither is stale).
+      # `/audits/quick` when a bulk-advisory call errors.
+      # registry.npmjs.org has scheduled that endpoint for retirement and npm
+      # emits a retirement notice on every call to it. It is NOT yet fully
+      # retired: measured 2026-09-04, a well-formed POST to
+      # /-/npm/v1/security/audits/quick returns HTTP 200 with a valid audit
+      # result (verified by submitting a tree pinning nanoid@3.3.16 and getting
+      # back advisory GHSA-2v37-7h3g-55p8). So the 400 "Invalid package tree"
+      # the ROOT tree received is the endpoint's genuine validation response to
+      # the body npm 10 constructed for it, not a blanket rejection. The
+      # lockfiles themselves are fine and this is measured, not inferred: root
+      # and api and workers/provider-sync are all lockfileVersion 3, and under
+      # the PINNED npm 11.19.0 the root tree audits clean ("found 0
+      # vulnerabilities") — the same tree that 400s under npm 10. What npm 11
+      # buys is therefore not a working /audits/quick; it is the removal of a
+      # fallback to an endpoint whose 400 said nothing true about this repo.
       #
       # Pinning npm to a version past #7911 removes the dead fallback branch
       # entirely: a bulk-advisory error is reported as a bulk-advisory error
@@ -343,10 +351,10 @@ jobs:
       # even attempt. npm 11.x declares engines.node "^20.17.0 || >=22.9.0"
       # (registry-verified), which the runner's Node 20.20.2 satisfies, and
       # 11.0.0 (2024-12-16) already ships past #7911 (merged Nov 2024). Pin
-      # the exact patch (11.19.0, matching npm's current 11-line HEAD at
-      # authoring time) rather than a floating major, per this repo's
-      # pin-exact-version convention — an unpinned `npm@11` would silently
-      # pick up 12.x the moment npm deprecates the 11 dist-tag range.
+      # the exact patch (11.19.0; the 11-line head at authoring time was
+      # 11.19.1 — either is past #7911) rather than a floating major, per this
+      # repo's pin-exact-version convention — an unpinned `npm@11` would
+      # silently pick up 12.x the moment npm deprecates the 11 dist-tag range.
       #
       # ⚠ A 5xx (or a hang) from either audit endpoint after this pin is a
       # REGISTRY-SIDE TRANSIENT (npm.js reported 503s on this same endpoint
@@ -356,11 +364,79 @@ jobs:
       - name: Pin npm past the retired quick-audit-endpoint fallback (npm/cli#7911)
         run: npm install -g npm@11.19.0
 
+      # VERSION ASSERTION — Sec review F-5, option B minimum. `npm install -g`
+      # verifies the downloaded tarball against the registry's own dist.integrity,
+      # but not that we got the version we intended. A partial or wrong-version
+      # global install would silently leave this job on the unpinned npm bundled
+      # with Node 20 (npm 10.x) and re-enter the retired-quick-audit-endpoint
+      # failure this pin exists to prevent — and the audit step's subsequent
+      # error would look like the same registry problem, not a broken pin.
+      # Fail closed unless the installed version is exactly the pinned one.
+      - name: Assert pinned npm version
+        run: |
+          set -euo pipefail
+          ACTUAL="$(npm --version)"
+          if [ "$ACTUAL" != "11.19.0" ]; then
+            echo "FATAL: expected npm --version == 11.19.0 after the pin step, got '$ACTUAL'."
+            echo "       A partial or wrong-version global install would silently reintroduce"
+            echo "       the retired-quick-audit-endpoint failure this pin exists to prevent."
+            echo "       Failing closed (Sec review F-5)."
+            exit 1
+          fi
+          echo "OK: npm pinned to exactly 11.19.0."
+
+      # INVERSION PROBE for the empty-enumeration fail-closed leg below (Sec
+      # review F-7). Proves that leg actually fires: an empty `git ls-files`
+      # enumeration must exit non-zero with its FATAL message, not silently
+      # pass. A fence that does not fail closed on its target class is theatre.
+      #
+      # Runs against a throwaway git repo with zero tracked package.json files
+      # so it cannot perturb the real audit and does not depend on this repo's
+      # own manifests ever going away. Mirrors scheduled-dep-audit.yml's
+      # inversion-probe shape: isolated tmp dir, assert on the real logic,
+      # cleanup before the real step runs.
+      - name: Inversion probe (empty enumeration must FAIL closed)
+        run: |
+          set -euo pipefail
+          PROBE_DIR="$(mktemp -d)"
+          git init -q "$PROBE_DIR"
+          set +e
+          PROBE_OUT=$(
+            cd "$PROBE_DIR"
+            PKG_FILES=$(git ls-files '*package.json' 'package.json' | grep -v '^tests/' || true)
+            if [ -z "$PKG_FILES" ]; then
+              echo "FATAL: no tracked package.json found. This job audits a known-nonempty set"
+              echo "       (root + api/ + workers/provider-sync/ as of 2026-09-04); an empty"
+              echo "       enumeration means the enumerator broke, not that there is nothing to"
+              echo "       audit. The W1 pre-SvelteKit-init no-op posture this leg used to carry"
+              echo "       is obsolete. Failing closed — same posture as scheduled-dep-audit.yml."
+              exit 1
+            fi
+          )
+          rc=$?
+          set -e
+          rm -rf "$PROBE_DIR"
+          if [ "$rc" -eq 0 ]; then
+            echo "FATAL: the empty-enumeration leg exited 0 on a tree with zero tracked"
+            echo "       package.json files — that leg is vacuous and would silently pass a"
+            echo "       broken enumerator through to a false-green audit. Failing closed."
+            exit 1
+          fi
+          if ! printf '%s\n' "$PROBE_OUT" | grep -q 'no tracked package.json found'; then
+            echo "FATAL: the empty-enumeration leg exited non-zero but without its expected"
+            echo "       FATAL message — the message text drifted from the leg it is meant to"
+            echo "       prove; failing closed so the drift is caught, not silently accepted."
+            exit 1
+          fi
+          echo "OK: empty-enumeration leg exited $rc with the expected FATAL message."
+
       - name: npm audit (fails on high or critical)
         run: |
           set -euo pipefail
           # Enumerate package.json files under V1 scope (V1 web-app + PDF worker;
-          # both Node). Skip if none land yet — pre-SvelteKit-init posture.
+          # both Node). Fail closed if none land — see the Inversion probe step
+          # above, and F-7 in the Sec review: an empty enumeration means the
+          # enumerator broke, not that there is nothing to audit.
           #
           # ENUMERATOR RATIONALE — `git ls-files`, not `find`:
           #   The previous `find . -name 'package.json' -not -path './node_modules/*'`
@@ -379,9 +455,12 @@ jobs:
           #   checkout is a git repo, so this is available at zero cost.
           PKG_FILES=$(git ls-files '*package.json' 'package.json' | grep -v '^tests/' || true)
           if [ -z "$PKG_FILES" ]; then
-            echo "INFO: no package.json under mosko-fintech V1 scope — npm audit no-op as expected at W1."
-            echo "INFO: This scanner becomes load-bearing at first npm-init commit."
-            exit 0
+            echo "FATAL: no tracked package.json found. This job audits a known-nonempty set"
+            echo "       (root + api/ + workers/provider-sync/ as of 2026-09-04); an empty"
+            echo "       enumeration means the enumerator broke, not that there is nothing to"
+            echo "       audit. The W1 pre-SvelteKit-init no-op posture this leg used to carry"
+            echo "       is obsolete. Failing closed — same posture as scheduled-dep-audit.yml."
+            exit 1
           fi
           echo "Enumerated $(printf '%s\n' "$PKG_FILES" | wc -l | tr -d ' ') package.json file(s):"
           printf '  %s\n' $PKG_FILES
