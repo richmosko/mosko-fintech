@@ -167,7 +167,10 @@
 --
 --   ⚠ Filing status is NOT a column on either table and this file does not add
 --   one. It is carried in the schedule's own label text, which is where AC 6
---   places it. A filing-status column is a real future question (it would let the
+--   places it — and that label is a STORED COLUMN, pfin.tax_bracket_schedule.
+--   schedule_label, added to 101 at Sec's SELF-260 V-2 under ruling E27 and
+--   written by both writers below, so the assumption reaches the user rather
+--   than stopping at the template function's return value. A filing-status column is a real future question (it would let the
 --   editor re-seed on a status change) and it is deliberately not opened here.
 --
 -- ----------------------------------------------------------------------------
@@ -242,9 +245,19 @@
 --
 --   ⚠ THE CALIFORNIA SCHEDULE CARRIES A TENTH BRACKET THAT IS NOT IN SCHEDULE X,
 --   AND ITS SOURCE IS A SECOND CITATION — ruled at E23 (team-lead under F/CTO
---   delegation, 2026-09-04). The 1% MENTAL HEALTH SERVICES TAX, Cal. Revenue &
---   Taxation Code §17043 (Proposition 63, 2004), applies on California taxable
---   income above a threshold and is imposed IN ADDITION TO the Schedule X rates.
+--   delegation, 2026-09-04). The 1% BEHAVIORAL HEALTH SERVICES TAX, Cal.
+--   Revenue & Taxation Code §17043 (Proposition 63, 2004), applies on
+--   California taxable income above a threshold and is imposed IN ADDITION TO
+--   the Schedule X rates.
+--     ⚠ THE NAME IS THE CURRENT ONE, DELIBERATELY. For taxable years beginning
+--     on or after 2025-01-01 the Act was renamed the Behavioral Health Services
+--     Act and the tax was renamed with it (FTB 2025 Form 540 booklet, What's
+--     New; Form 540 LINE 62 is titled "Behavioral Health Services Tax"). The
+--     California year seeded here IS 2025, the first year of that rename, so the
+--     superseded popular name appears NOWHERE in this file — including in this
+--     sentence, deliberately, so that a grep for it remains a clean instrument.
+--     R&TC §17043 itself is unchanged and un-renamed — which is why the
+--     STATUTORY citation does not move (Sec SELF-260 F-1).
 --   It is seeded here as floor 1000000.0000 at rate 0.13300000 — the 12.3% top
 --   Schedule X rate PLUS the 1% surtax, which is the correct MARGINAL rate above
 --   the threshold and therefore the right shape for this table, whose rows are
@@ -254,15 +267,31 @@
 --     borrowing the schedule's, in this header and in the schedule's label.
 --     Every number in this file still traces to a cited source; two sources now
 --     compose one schedule, and saying so is what keeps that checkable.
---     ⚠ THE THRESHOLD IS FILING-STATUS-DEPENDENT and the seeded 1,000,000 is the
---     SINGLE-filer figure. It is $500,000 for a married/RDP filer filing
---     separately — so a user who revises this template's filing status must
---     revise THIS FLOOR TOO, and it is the only row on the surface where that is
---     true. ⚠ FTB Schedule X is SHARED by Single and Married/RDP-filing-
---     separately, which makes this trap easy to walk into: the RATE rows are
---     identical for both statuses and this floor is not. The label says SINGLE;
---     do not read the shared source schedule as a claim that the template covers
---     both statuses.
+--     ⚠ THE THRESHOLD IS FLAT ACROSS FILING STATUSES AND IS NOT INFLATION-
+--     INDEXED — R&TC §17043(c)(2), which provides that the provisions of §17041
+--     "relating to filing status and recomputation of the income tax brackets"
+--     SHALL NOT APPLY to the tax imposed by §17043; §17043(c)(3) likewise
+--     disapplies §17045 (joint returns). The statute does not merely omit a
+--     filing-status split — it switches off the mechanism by which one could
+--     exist, and that same disapplication is why there is no indexed variant of
+--     this figure to go looking for. The 2025 Form 540 line 62 worksheet
+--     subtracts the flat threshold from line 19 with no filing-status branch, on
+--     the one Form 540 that Single and Married/RDP-filing-separately both use.
+--     ⚠ NOTHING IN THIS FILE INSTRUCTS A USER TO MOVE THIS FLOOR ON A FILING-
+--     STATUS CHANGE, and the supersession is named so a reader who remembers
+--     otherwise learns it changed: an earlier revision of THIS block, of the
+--     inline comment above the California VALUES list, of that schedule's label
+--     and of the template's `comment on function` all stated that the floor was
+--     halved for a married/RDP filer filing separately and told the user to
+--     revise it. That was FALSE — Sec SELF-260 V-1 — and is corrected at all
+--     four sites. It is corrected in ruling E23 too; a migration that fixed the
+--     text while the ruling still carried the false premise would leave the next
+--     surface to inherit it.
+--     ⚠ WHAT THE SINGLE ASSUMPTION DOES GOVERN on this schedule is the STANDARD
+--     DEDUCTION. FTB Schedule X is SHARED by Single and Married/RDP-filing-
+--     separately, so the RATE rows are identical for both; the deduction taken
+--     from the Form 540 chart at status 1 is not, and that is the value a user
+--     revising the filing status must revisit.
 --
 --   ⚠ federal_lt_cg CARRIES standard_deduction = 0, AND THAT ZERO MEANS
 --   "THIS SCHEDULE TAKES NO DEDUCTION" — NOT "not yet entered" (AC 1;
@@ -270,8 +299,8 @@
 --   place on this surface where a literal zero is the right answer, and saying so
 --   is what keeps 101's absence-is-unset rule readable: on every OTHER schedule
 --   an unset deduction is the ABSENCE OF THE SCHEDULE ROW, because the column is
---   NOT NULL. The same sentence is carried in the schedule's own label so a
---   reader meeting the row in the editor sees it too.
+--   NOT NULL. The same point is carried in that schedule's own stored label, so
+--   a reader meeting the row in the editor sees it too.
 --
 -- ----------------------------------------------------------------------------
 -- 101'S DEFERRED SET FENCE — THIS IS ITS FIRST EXERCISE ON A MULTI-ROW BATCH
@@ -344,11 +373,13 @@ create schema if not exists pfin;
 -- rather than as two functions, and the flatness is SELF-POLICING rather than
 -- merely convenient: statement (3) and fn_provision_tax_brackets() both build
 -- the schedule row with `select distinct schedule_type, tax_year,
--- standard_deduction`, so if one row of a schedule carried a DIFFERENT
--- standard_deduction the distinct would yield TWO schedule rows for one
--- (users_id, tax_year, schedule_type) and `unique` would ABORT the migration.
--- A transcription slip in the repeated scalar is therefore a loud failure at
--- apply time, not a silent divergence.
+-- standard_deduction, schedule_label`, so if one row of a schedule carried a
+-- DIFFERENT standard_deduction OR a different label the distinct would yield
+-- TWO schedule rows for one (users_id, tax_year, schedule_type) and `unique`
+-- would ABORT the migration. A transcription slip in any repeated scalar is
+-- therefore a loud failure at apply time, not a silent divergence. The label
+-- joined that set when 101 gained the schedule_label column (Sec SELF-260 V-2;
+-- ruling E27), so it is policed on exactly the same terms as the deduction.
 -- ============================================================================
 create or replace function pfin.fn_tax_bracket_seed_template()
 returns table (
@@ -368,7 +399,7 @@ as $$
   -- IRS Rev. Proc. 2025-32 §3.01 TABLE 3 (§ 1(j)(2)(C), Unmarried Individuals);
   -- standard deduction §3.14(1), same filing status.
   select 'federal_ordinary'::pfin.tax_schedule_type_enum, 2026::smallint, 16100.0000::numeric,
-         'US Federal — ordinary income — tax year 2026 — SINGLE filer (template; revise to match your filing status). Source: IRS Rev. Proc. 2025-32 §3.01 Table 3; standard deduction §3.14(1).'::text,
+         'US Federal — ordinary income — tax year 2026 — SINGLE filer TEMPLATE; revise to match your filing status. Source: IRS Rev. Proc. 2025-32 §3.01 Table 3; standard deduction §3.14(1).'::text,
          f, r
     from (values (      0.0000::numeric, 0.10000000::numeric),
                  (  12400.0000,          0.12000000),
@@ -388,7 +419,7 @@ as $$
   -- it does not mean "not yet entered". Unset, on every other schedule, is the
   -- absence of the schedule row.
   select 'federal_lt_cg'::pfin.tax_schedule_type_enum, 2026::smallint, 0.0000::numeric,
-         'US Federal — long-term capital gains — tax year 2026 — SINGLE filer (template; revise to match your filing status). This schedule takes NO standard deduction, which is why its deduction is 0 — that zero is a value, not an unset. Source: IRS Rev. Proc. 2025-32 §3.03, All Other Individuals.'::text,
+         'US Federal — long-term capital gains — tax year 2026 — SINGLE filer TEMPLATE. Deduction 0 means this schedule takes NO deduction; a value, not an unset. Source: IRS Rev. Proc. 2025-32 §3.03.'::text,
          f, r
     from (values (      0.0000::numeric, 0.00000000::numeric),
                  (  49450.0000,          0.15000000),
@@ -404,13 +435,14 @@ as $$
   -- migration was authored (both 2026 form URLs returned 404 on 2026-09-04). The
   -- label carries the year so nobody reads it as the current one.
   -- ⚠ THE TENTH ROW IS NOT FROM SCHEDULE X. floor 1000000 / rate 0.133 is the
-  -- 1% Mental Health Services Tax (R&TC §17043) composed with the 12.3% top
+  -- 1% Behavioral Health Services Tax (R&TC §17043) composed with the 12.3% top
   -- Schedule X rate, giving the correct MARGINAL rate above the threshold. Its
-  -- threshold is the SINGLE-filer one and is filing-status-dependent ($500,000
-  -- for married/RDP filing separately) — the only row here whose FLOOR moves
-  -- with filing status. See this file's header (E23).
+  -- threshold is FLAT ACROSS FILING STATUSES and is not inflation-indexed:
+  -- §17043(c)(2) disapplies §17041's filing-status recomputation to this tax and
+  -- (c)(3) disapplies §17045, so NO row on this schedule has a floor that moves
+  -- with filing status. See this file's header (E23; Sec SELF-260 V-1).
   select 'california_ordinary'::pfin.tax_schedule_type_enum, 2025::smallint, 5706.0000::numeric,
-         'California (FTB) — ordinary income — tax year 2025 — SINGLE filer (template; revise to match your filing status). ⚠ This is tax year 2025, the latest year the FTB had published when it was seeded — the 2026 schedule was not yet available. Includes the 1% Mental Health Services Tax (R&TC 17043) as the top bracket: 13.3% above $1,000,000 is the 12.3% Schedule X rate plus that 1% surtax. ⚠ That $1,000,000 threshold is the SINGLE-filer one and moves with filing status (it is $500,000 for married/RDP filing separately), so revise that floor too if you change the status. Source: FTB 2025 California Tax Rate Schedules, Schedule X (Single or Married/RDP filing separately); standard deduction from the 2025 Form 540 booklet, chart status 1 - Single.'::text,
+         'California FTB — ordinary income — 2025 basis (FTB 2026 unpublished) — SINGLE filer TEMPLATE. Top bracket composes R&TC §17043 (1%) with Schedule X; its floor is FLAT across filing statuses.'::text,
          f, r
     from (values (      0.0000::numeric, 0.01000000::numeric),
                  (  11079.0000,          0.02000000),
@@ -440,9 +472,9 @@ comment on function pfin.fn_tax_bracket_seed_template() is
   'pfin.tax_bracket_row.bracket_rate. Returned FLAT — a schedule''s scalars '
   'repeat on each of its rows — and that shape is SELF-POLICING: both writers '
   'build the parent row with SELECT DISTINCT over (schedule_type, tax_year, '
-  'standard_deduction), so a scalar that disagreed across one schedule''s rows '
-  'would yield two parent rows for one unique key and ABORT rather than diverge '
-  'quietly. ⚠ The FEDERAL schedules are for tax year 2026 and the CALIFORNIA '
+  'standard_deduction, schedule_label), so a scalar that disagreed across one '
+  'schedule''s rows would yield two parent rows for one unique key and ABORT '
+  'rather than diverge quietly. ⚠ The FEDERAL schedules are for tax year 2026 and the CALIFORNIA '
   'schedule is for tax year 2025 — the FTB had not published its 2026 schedule '
   'when this function was authored, and labelling a 2025 table as 2026 would '
   'produce a confident, plausible, wrong number rather than a basis a reader can '
@@ -450,12 +482,18 @@ comment on function pfin.fn_tax_bracket_seed_template() is
   'and reports the basis year it used (E22), so the missing 2026 row is rendered '
   'as a stated basis rather than as a zero. ⚠ THE CALIFORNIA SCHEDULE COMPOSES '
   'TWO SOURCES: its top bracket (13.3% above $1,000,000) is FTB Schedule X''s '
-  '12.3% plus the 1% Mental Health Services Tax of R&TC 17043, which is NOT in '
-  'Schedule X. That $1,000,000 threshold is the SINGLE-filer figure and is the '
-  'one value here whose FLOOR moves with filing status ($500,000 for married/RDP '
-  'filing separately). '
-  'Each schedule''s label states its own year and its own SINGLE-filer '
-  'assumption, which is where PM''s A-6 places that assumption. ⚠ The seeded set '
+  '12.3% plus the 1% Behavioral Health Services Tax of R&TC 17043, which is NOT '
+  'in Schedule X. That threshold is FLAT ACROSS FILING STATUSES and is not '
+  'inflation-indexed, because R&TC 17043(c)(2) disapplies 17041''s filing-status '
+  'recomputation to this tax and (c)(3) disapplies 17045 — so no row on this '
+  'schedule has a floor that moves with filing status, and nothing here tells a '
+  'user to move one. What the SINGLE assumption governs on that schedule is its '
+  'STANDARD DEDUCTION, taken from the Form 540 chart at status 1. '
+  'Each schedule''s label states its own basis year and its own SINGLE-filer '
+  'assumption, which is where PM''s A-6 places that assumption — and since 101 '
+  'gained the schedule_label COLUMN (Sec SELF-260 V-2; ruling E27) both writers '
+  'STORE that label on the schedule row, so it reaches the user in the §2.5.2 '
+  'editor rather than stopping at this function''s return value. ⚠ The seeded set '
   'is a TEMPLATE the user revises, never a determination about anyone''s return. '
   'Correcting a published figure is a NEW migration that replaces this function '
   'and backfills the delta — never an edit to the merged one.';
@@ -492,13 +530,13 @@ begin
     select * from pfin.fn_tax_bracket_seed_template()
   ),
   parent_src as (
-    select distinct t.schedule_type, t.tax_year, t.standard_deduction
+    select distinct t.schedule_type, t.tax_year, t.standard_deduction, t.schedule_label
       from tpl t
   ),
   sched as (
     insert into pfin.tax_bracket_schedule
-      (users_id, tax_year, schedule_type, standard_deduction)
-    select v_users_id, p.tax_year, p.schedule_type, p.standard_deduction
+      (users_id, tax_year, schedule_type, schedule_label, standard_deduction)
+    select v_users_id, p.tax_year, p.schedule_type, p.schedule_label, p.standard_deduction
       from parent_src p
      -- DETERMINISTIC LOCK ORDER (see this file's 40P01 block): the parent rows
      -- are created in enum order, so the deferred set fence's FOR UPDATE locks
@@ -572,14 +610,15 @@ with tpl as (
   select * from pfin.fn_tax_bracket_seed_template()
 ),
 parent_src as (
-  select distinct u.id as users_id, t.schedule_type, t.tax_year, t.standard_deduction
+  select distinct u.id as users_id, t.schedule_type, t.tax_year, t.standard_deduction,
+                  t.schedule_label
     from auth.users u
    cross join tpl t
 ),
 sched as (
   insert into pfin.tax_bracket_schedule
-    (users_id, tax_year, schedule_type, standard_deduction)
-  select p.users_id, p.tax_year, p.schedule_type, p.standard_deduction
+    (users_id, tax_year, schedule_type, schedule_label, standard_deduction)
+  select p.users_id, p.tax_year, p.schedule_type, p.schedule_label, p.standard_deduction
     from parent_src p
    order by p.users_id, p.schedule_type
   on conflict (users_id, tax_year, schedule_type) do nothing
