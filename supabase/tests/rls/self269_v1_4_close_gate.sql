@@ -22,6 +22,25 @@
 --   wash-sale flag. AC4's literal fixture spelling (tax_deferred/tax_free,
 --   UNDERSCORES per D-5 / 003:101-102) is used throughout.
 --
+--   SECOND-PASS CORRECTION (QA, 2026-09-04, same session): the FIRST commit
+--   of this file (d1bb098) claimed AC4/AC4a/AC4b/AC4d were fully COMPOSED
+--   with no new SQL. Measured FALSE for AC4 specifically —
+--   `grep -rn tax_free supabase/tests/ supabase/migrations/10{0..5}*.sql`
+--   returns ZERO hits in any Unrealized-exclusion context tree-wide (the
+--   one hit, 042, is an unrelated Plaid-linking fixture); every existing
+--   (pi)-exclusion fixture (104's a_pi, 105's b_pi) exercises taxable +
+--   tax_deferred ONLY, never tax_free — exactly the gap this AC's own text
+--   warns against ("assert all three states, not two"). BLOCK AC4 below
+--   closes it. AC4b/AC4a/AC4d are re-scoped from "COMPOSED, no new SQL" to
+--   fresh direct pins on THIS gate's own fixture, per each AC's own
+--   explicit "gets its own leg" / "the only watcher" language — a
+--   stricter reading than the first pass took of self257's AC8/AC10
+--   economy precedent, which carries no such explicit per-AC instruction.
+--   BLOCK R10 (AC1's SELF-263 clause) is also new — the first pass cited
+--   100's own battery for the STORED values' correctness but authored
+--   nothing proving 104 CONSUMES the corrected E4 D-ii split correctly.
+--   Nothing already-committed is removed; this pass only ADDS.
+--
 -- Ratified AC coverage (mapping to the live AC block; "COMPOSED" = an
 -- already-green per-issue battery carries the exhaustive proof, cited by
 -- file + leg name, not re-derived; "NEW" = fresh SQL below):
@@ -45,6 +64,12 @@
 --          exhaustively (self257's own AC8/AC10 precedent: a composed
 --          surface earns a pin only when the gate would otherwise rest on
 --          citation ALONE for a NOVEL shape — true here only of #18).
+--          NEW (second pass): BLOCK R10 additionally proves AC1's named
+--          SELF-263 clause end to end — that 100's CORRECTED E4 D-ii
+--          tax_relevant/tax_character values (generic Dividend -> ordinary,
+--          Dividend - Qualified -> qualified_dividend) are CONSUMED
+--          correctly by 104's reader, which 100's own battery (testing only
+--          the stored values) does not prove.
 --   AC2  — SELF-262's SECURITY INVOKER composition, Wave-1 B5/SELF-209
 --          pattern (rederived-acs.md:206). COMPOSED: 104 L16h (A's total
 --          unmoved by B's rich fixture) + 105 X1/X2 (fn_nav_composition,
@@ -60,29 +85,36 @@
 --          the collision. The discipline is already STATED in six file
 --          headers (003/074/090/101 among them); this is its one
 --          falsifiable exercise under a real cross-tenant collision.
---   AC4  — three tax_treatment states (D-5 spelling). COMPOSED: 104 L11/L12
---          (a_gain/a_loss/a_pi — taxable included, tax_deferred excluded,
---          reclassification moves the figure) + 105 PI1-PI4 (the same
---          property re-proven live at the NAV composer, tenant B). No new
---          SQL for the three-state exclusion itself; the JOURNALED positive-
---          gain fixture below (BLOCK JG) gives AC4/4b a genuinely-new
---          NON-ZERO Unrealized path reached through the REAL production
---          write path (fn_create_manual_purchase, 088) rather than a raw
---          account_trans INSERT, which is what every existing Unrealized
---          fixture in the tree uses.
---   AC4a — designated-ledger §2.1.5 exclusion / NULL-designation inclusion.
---          COMPOSED: 102 L3b/L3c-L3j (the R3 rider 0b default-state walk,
---          BOTH consumers, THREE states, incl. the reversion proof) + 105
---          DES-pin/DES (the exclusion live at the composer, non-vacuously).
---          No new SQL.
---   AC4b — R9 clamp, NEGATIVE-aggregate-G/L fixture, NAV does not rise.
---          COMPOSED: 104 L11 (the clamp fires on 104's own internal figure,
---          net -1000 -> 0, non-vacuous against a would-be -170) + 105
---          R9-pin/R9 (the IDENTICAL property re-proven AT THE NAV COMPOSER —
---          "unrealized_tax_liab = {computed, 0}... nav is NOT raised by an
---          unrealized LOSS; the clamp is LIVE at the composer, not merely
---          inside 104's own internal figure" — R9-pin's own words are this
---          AC's own request, verbatim, already on the tree). No new SQL.
+--   AC4  — three tax_treatment states (D-5 spelling). NEW (second pass):
+--          BLOCK AC4 extends BLOCK JG's own baseline (1500.00 gain,
+--          unrealized_tax_liab=225.00) with a fresh tax_deferred account
+--          AND a fresh tax_free account, TWO sequential reclassification
+--          inversions (the 105 PI1/PI2/PI3 pattern extended from two
+--          states to three — see the SECOND-PASS CORRECTION note above),
+--          each moving Unrealized by EXACTLY its own account's
+--          contribution. COMPOSED alongside 104 L11/L12 + 105 PI1-PI4 for
+--          the (taxable, tax_deferred) two-state property this file does
+--          not re-derive. The JOURNALED positive-gain fixture (BLOCK JG)
+--          still gives AC4 its genuinely-new NON-ZERO Unrealized path
+--          reached through the REAL production write path
+--          (fn_create_manual_purchase, 088) rather than a raw
+--          account_trans INSERT.
+--   AC4a — designated-ledger §2.1.5 exclusion / NULL-designation inclusion
+--          — "the only watcher R3's E-2 exclusion will have" (the AC's own
+--          words). NEW (second pass): BLOCK AC4A_AC4D — a fresh
+--          undesignated account (a_ftb269, distinct from BLOCK AC7's
+--          a_irs/b_irs, which are designated FROM CREATION and never
+--          exercise this transition) direct-pinned present-in-the-leaf AND
+--          absent-from-YTD-Paid on THIS gate's own fixture. COMPOSED
+--          alongside 102's OWN L3b/L3e/L3h/L3j for the exhaustive cycle.
+--   AC4b — R9 clamp, NEGATIVE-aggregate-G/L fixture, NAV does not rise —
+--          "gets its own leg" (the AC's own words). NEW (second pass):
+--          BLOCK AC4B — a_bigloss269, a fresh independently-confirmed-
+--          negative loss on THIS gate's own fixture, closing the exact
+--          limitation this file's own INVERSION VERIFICATION section names
+--          below (BLOCK JG's gain-shaped fixture was never going to
+--          exercise the clamp). COMPOSED alongside 104's OWN L11 and 105's
+--          OWN R9/R9-pin (identical property, different fixtures).
 --   AC4c — SELF-226's foot-to-headline reconciliation, R3 rider 0's watcher.
 --          NEW: BLOCK AC4C — genuinely absent from the tree. E42 P-11/
 --          addendum confirm the APP-LEVEL half (call-shape: fn_nav_
@@ -100,10 +132,12 @@
 --          non-vacuous companion (tenant C: the two headlines agree when
 --          nothing exists) proving the divergence is state-driven, not an
 --          artifact.
---   AC4d — the exclusion's DEFAULT state, BOTH halves move together.
---          COMPOSED: 102 L3a/L3b (STATE 1, undesignated: absent from YTD
---          Paid AND present in the leaf set) through L3c-L3j (marking moves
---          BOTH figures, and the reversion on clearing). No new SQL.
+--   AC4d — the exclusion's DEFAULT state, BOTH halves move together —
+--          "gets a leg" (the AC's own words). NEW (second pass): the SAME
+--          BLOCK AC4A_AC4D as AC4a above — marking a_ftb269 'ftb' moves
+--          BOTH figures (YTD Paid NULL->500.00; leaf present->absent) in
+--          the SAME transaction. COMPOSED alongside 102's OWN L3a/L3b
+--          (STATE 1) through L3c-L3j (the marking + reversion cycle).
 --   AC4e — the R3 rider 0c partial unique index, THREE states. COMPOSED for
 --          two of three: 102 L1b (same-jurisdiction rejected) + L1c
 --          (different-jurisdiction accepted). NEW: BLOCK AC4E — the third
@@ -225,12 +259,18 @@
 --   red" as a committed assertion without leaving the strike in place):
 --   - R9 CLAMP: 104's `greatest((r.fed_ltcg_top + r.ca_top) * u.agg, 0)`
 --     struck to the bare unclamped product on a scratch clone -> 105's OWN
---     R9 leg went RED (-2415.00 instead of the clamped 0, MEASURED); this
---     file's JG-2/AC4C legs stayed GREEN, CORRECTLY — BLOCK JG's fixture is
---     a GAIN (aggregate +1500.00), so `greatest(positive,0)` is a no-op for
---     it by construction and it was never going to be the clamp's watcher;
---     that is 105's own R9-pin/R9 (a deliberately NEGATIVE aggregate), cited
---     not duplicated. Restored, GREEN again.
+--     R9 leg went RED (-2415.00 instead of the clamped 0, MEASURED); BLOCK
+--     JG's own JG-2 leg stayed GREEN, CORRECTLY — its fixture is a GAIN
+--     (aggregate +1500.00), so `greatest(positive,0)` is a no-op for it by
+--     construction and it was never going to be the clamp's watcher.
+--     ⚠ SECOND-PASS ADDITION, RE-VERIFIED: BLOCK AC4B's own AC4B-2 closes
+--     the limitation named above — struck on a FRESH scratch clone
+--     (identical mechanism), MEASURED: AC4B-2 alone went RED, reading the
+--     unclamped -6825.0000 instead of {computed,0} (AC4B-1's independently-
+--     confirmed pre-clamp figure, byte-exact) — every OTHER leg in this
+--     file (31/32) stayed GREEN, confirming AC4B-2 is a real, non-vacuous,
+--     ISOLATED watcher of the clamp. Restored, GREEN again. 105's own
+--     R9-pin/R9 remains COMPOSED, cited alongside.
 --   - DESIGNATED-LEDGER EXCLUSION: `fn_tax_authority_ledgers()`'s `where
 --     a.tax_jurisdiction is not null` struck to `where false` (excludes
 --     nothing) on a scratch clone -> MEASURED: this file's AC7-1/AC7-2 went
@@ -295,17 +335,23 @@ begin;
 
 \ir ../_fixtures/rls_verbs.psql
 
--- plan = 20: CONTROL0 1 + AC1/AC5a 2 (canonical forgery + control) + AC3 2
+-- plan = 32: CONTROL0 1 + AC1/AC5a 2 (canonical forgery + control) + AC3 2
 --   (scope-collision non-inflation, both tenants) + AC4E 1 (both accounts,
 --   same user, left unmarked, BOTH persist) + AC7 3 (B's own value / A's own
 --   value non-vacuous companion / C's NULL, three-state pen-test) + JG 2
 --   (the journaled purchase landed as expected / the Unrealized figure
---   reached through it) + AC4C 3 (inequality / exact-difference / tenant-C
---   non-vacuous companion) + CDS 2 (non-vacuous fixture check / the
---   CURRENT_DATE smoke itself) + ND 2 (cross-tenant pin / date-order
---   read-back) + AC9 2 (non-vacuous function-count companion / the sweep)
---   = 20. Recorded so a silent plan-edit shows as an arithmetic change.
-select plan(20);
+--   reached through it) + AC4 4 (three-state baseline + two reclassification
+--   inversions + the Sec D-5 underscore-literal control) + AC4B 2 (R9 clamp
+--   non-vacuous negative-aggregate + the clamped 0) + AC4A_AC4D 4
+--   (present-in-leaf / absent-from-YTD-Paid pre-mark, then both halves move
+--   on marking) + R10 2 (qualified-dividend routing / generic-dividend
+--   routing, 100's corrected values consumed by 104) + AC4C 3 (inequality /
+--   exact-difference / tenant-C non-vacuous companion) + CDS 2 (non-vacuous
+--   fixture check / the CURRENT_DATE smoke itself) + ND 2 (cross-tenant pin
+--   / date-order read-back) + AC9 2 (non-vacuous function-count companion /
+--   the sweep) = 32. Recorded so a silent plan-edit shows as an arithmetic
+--   change.
+select plan(32);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb, _rls.tenant_c() as tc \gset
 
@@ -518,6 +564,183 @@ select is(
 select set_config('role', 'postgres', true);
 
 -- =====================================================================
+-- BLOCK AC4 — three tax_treatment states (D-5 spelling), THE AC's OWN
+--   EXPLICIT WARNING: "assert all three states, not two" (SECOND-PASS
+--   CORRECTION, see the file header). Extends BLOCK JG's own baseline
+--   (1500.00 gain, unrealized_tax_liab=225.00) with a FRESH tax_deferred
+--   account and a FRESH tax_free account, TWO sequential reclassification
+--   inversions (the 105 PI1/PI2/PI3 pattern extended from two states to
+--   three), each moving Unrealized by EXACTLY its own account's
+--   contribution.
+-- =====================================================================
+insert into pfin.asset (users_id, asset_type, pricing_source, symbol, name) values
+  (null, 'equity', 'market_feed', 'SEC269X', 'Sec 269X (self269 AC4)') returning asset_id as ast4 \gset
+insert into pfin.eod_price (asset_id, price_date, source, price) values (:ast4, '2026-01-01', 'market_feed', 100.0000);
+
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment) values
+  (:'ta', 'a-deferred-269', 'investment', 'household', 'tax_deferred') returning account_id as a_deferred269 \gset
+insert into pfin.account_trans (account_id, transaction_date, amount, quantity, security_id, cost_basis, transaction_type, vendor, created_at) values
+  (:a_deferred269, '2026-01-05', -3000.0000, 40, :ast4, 3000.0000, 'standard', 'buy-def-269', '2026-01-05T00:00:00Z');
+-- mv = 40*100 = 4000, cost_basis = 3000, gain = +1000. tax_deferred -> EXCLUDED.
+
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment) values
+  (:'ta', 'a-free-269', 'investment', 'household', 'tax_free') returning account_id as a_free269 \gset
+insert into pfin.account_trans (account_id, transaction_date, amount, quantity, security_id, cost_basis, transaction_type, vendor, created_at) values
+  (:a_free269, '2026-01-05', -2000.0000, 30, :ast4, 2000.0000, 'standard', 'buy-free-269', '2026-01-05T00:00:00Z');
+-- mv = 30*100 = 3000, cost_basis = 2000, gain = +1000. tax_free -> EXCLUDED.
+
+select _rls.set_tenant(:'ta'::uuid);
+select is(
+  (pfin.fn_compute_tax_liability(:'d_as_of'::date) -> 'nav_components' -> 'unrealized_tax_liab' ->> 'amount')::numeric,
+  225.00::numeric,
+  '(AC4-0) THREE-STATE BASELINE, non-vacuous companion: with a_deferred269 (tax_deferred,+1000) and a_free269 (tax_free,+1000) BOTH added, unrealized_tax_liab is STILL 225.00 (BLOCK JG''s own figure, unaffected) — both new accounts'' gains are EXCLUDED'
+);
+
+select set_config('role', 'postgres', true);
+update pfin.account set tax_treatment = 'taxable' where account_id = :a_deferred269;
+select _rls.set_tenant(:'ta'::uuid);
+select is(
+  (pfin.fn_compute_tax_liability(:'d_as_of'::date) -> 'nav_components' -> 'unrealized_tax_liab' ->> 'amount')::numeric,
+  375.00::numeric,
+  '(AC4-1) STATE TWO — tax_deferred RECLASSIFIED to taxable: unrealized_tax_liab moves 225.00 -> 375.00, delta = 150.00 = 0.15 x 1000 EXACTLY, a_deferred269''s OWN contribution (a leaked +1000 at AC4-0 would already have made it read 375.00 there)'
+);
+
+select set_config('role', 'postgres', true);
+update pfin.account set tax_treatment = 'taxable' where account_id = :a_free269;
+select _rls.set_tenant(:'ta'::uuid);
+select is(
+  (pfin.fn_compute_tax_liability(:'d_as_of'::date) -> 'nav_components' -> 'unrealized_tax_liab' ->> 'amount')::numeric,
+  525.00::numeric,
+  '(AC4-2) STATE THREE — tax_free RECLASSIFIED to taxable: unrealized_tax_liab moves 375.00 -> 525.00, delta = 150.00 = 0.15 x 1000 EXACTLY, a_free269''s OWN contribution — ALL THREE tax_treatment states now exercised (taxable from BLOCK JG, tax_deferred-then-reclassified, tax_free-then-reclassified), closing this AC''s own "assert all three states, not two" warning'
+);
+select set_config('role', 'postgres', true);
+
+-- Sec D-5 fixture-literal control: the PRD's hyphenated spelling
+-- ('tax-deferred') is REJECTED by the CHECK — proves the fixture above
+-- used the CHECK's real underscored literals by construction, not luck.
+select _rls.set_tenant(:'ta'::uuid);
+savepoint sp_underscore;
+select throws_ok(
+  $$ insert into pfin.account (name, account_type, scope, tax_treatment) values ('hyphen-check-269', 'depository', 'household', 'tax-deferred') $$,
+  '23514', null,
+  '(AC4-UNDERSCORE) Sec D-5 fixture-literal control: tax_treatment=''tax-deferred'' (PRD hyphenated spelling) is REJECTED (23514) by 003''s CHECK — a fixture seeding the PRD spelling would read as a passing fence rather than a broken fixture'
+);
+rollback to savepoint sp_underscore;
+select set_config('role', 'postgres', true);
+
+-- =====================================================================
+-- BLOCK AC4B — the R9 clamp, ITS OWN leg on THIS gate's own fixture, with
+--   a genuinely NEGATIVE aggregate (the AC's explicit "gets its own leg"
+--   instruction) — closes the limitation named in this file's own
+--   INVERSION VERIFICATION section (BLOCK JG's gain-shaped fixture was
+--   never going to exercise the clamp). COMPOSED alongside 104's OWN L11
+--   and 105's OWN R9/R9-pin (identical property, different fixtures).
+-- =====================================================================
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment) values
+  (:'ta', 'a-bigloss-269', 'investment', 'household', 'taxable') returning account_id as a_bigloss269 \gset
+insert into pfin.account_trans (account_id, transaction_date, amount, quantity, security_id, cost_basis, transaction_type, vendor, created_at) values
+  (:a_bigloss269, '2026-01-05', -50000.0000, 10, :ast4, 50000.0000, 'standard', 'buy-bigloss-269', '2026-01-05T00:00:00Z');
+-- mv = 10*100 = 1000, loss = 1000-50000 = -49000. New taxable-only
+-- aggregate (a_journal 1500 + a_deferred269 1000 + a_free269 1000, all now
+-- taxable, - 49000) = -45500.00 (NEGATIVE).
+
+select _rls.set_tenant(:'ta'::uuid);
+select ok(
+  0.15 * (select coalesce(sum(g.unrealized_gl), 0) from pfin.fn_account_unrealized_gl(:'d_as_of'::date) g
+             join pfin.account a on a.account_id = g.account_id where a.tax_treatment = 'taxable') < 0,
+  '(AC4B-1) non-vacuous: the PRE-CLAMP figure (0.15 x the taxable-only aggregate, computed INDEPENDENTLY of 104) is genuinely NEGATIVE (-6825.00 = 0.15 x -45500) on THIS gate''s own fixture — the clamp leg below is not exercising an already-nonnegative case'
+);
+select is(
+  jsonb_build_object(
+    'status', pfin.fn_compute_tax_liability(:'d_as_of'::date) -> 'nav_components' -> 'unrealized_tax_liab' ->> 'status',
+    'amount', ((pfin.fn_compute_tax_liability(:'d_as_of'::date) -> 'nav_components' -> 'unrealized_tax_liab' ->> 'amount')::numeric)
+  ),
+  jsonb_build_object('status', 'computed', 'amount', 0::numeric),
+  '(AC4B-2) unrealized_tax_liab = {computed,0}, NOT the negative pre-clamp figure (AC4B-1) — the R9 clamp gets ITS OWN leg with a NEGATIVE-AGGREGATE-G/L fixture on THIS gate''s own fixture, per the AC''s explicit instruction; nav is NOT raised by an unrealized LOSS'
+);
+select set_config('role', 'postgres', true);
+
+-- =====================================================================
+-- BLOCK AC4A_AC4D — designated-ledger exclusion / undesignated inclusion,
+--   BOTH HALVES MOVING TOGETHER on THIS gate's own fixture — "the only
+--   watcher R3's E-2 exclusion will have" (AC4a) / "gets a leg" (AC4d),
+--   the AC's own words. BLOCK AC7's a_irs/b_irs are designated FROM
+--   CREATION and never exercise the undesignated-then-marked transition;
+--   this block is genuinely new ground. COMPOSED alongside 102's OWN
+--   L3a-L3j for the exhaustive cycle.
+-- =====================================================================
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment) values
+  (:'ta', 'a-ftb-269', 'depository', 'household', 'taxable') returning account_id as a_ftb269 \gset
+insert into pfin.account_balance_checkpoint (account_id, balance, currency, as_of_date, source) values
+  (:a_ftb269, 0.0000, 'USD', '2026-01-01', 'seed');
+insert into pfin.account_trans (account_id, transaction_date, amount, vendor, created_at) values
+  (:a_ftb269, '2026-02-01', 500.0000, 'ftb-pay-269', '2026-02-01T00:00:00Z');
+-- balance 500.00. UNDESIGNATED at load.
+
+select _rls.set_tenant(:'ta'::uuid);
+select ok(
+  exists (select 1 from jsonb_array_elements(pfin.fn_nav_composition(:'d_as_of'::date) -> 'groups') g,
+                       jsonb_array_elements(g -> 'accounts') acc
+           where (acc ->> 'account_id')::bigint = :a_ftb269),
+  '(AC4A-1) a_ftb269 (UNDESIGNATED, tax_jurisdiction NULL) is PRESENT in fn_nav_composition''s leaf set — R3 rider 0b''s default-state hazard, observed directly on THIS gate''s own fixture (BLOCK AC7''s a_irs/b_irs are designated FROM CREATION and never exercise this transition)'
+);
+select ok(
+  pfin.fn_ytd_paid_per_jurisdiction(:'d_as_of'::date, 'ftb'::pfin.tax_jurisdiction_enum) is null,
+  '(AC4A-2) california YTD Paid is NULL (unavailable) while a_ftb269 is undesignated — the OTHER half of the default-state hazard, absent-from-YTD-Paid while present-in-the-leaf-set (AC4A-1), neither figure contradicting the other on screen'
+);
+
+select set_config('role', 'postgres', true);
+update pfin.account set tax_jurisdiction = 'ftb' where account_id = :a_ftb269;
+select _rls.set_tenant(:'ta'::uuid);
+select is(
+  pfin.fn_ytd_paid_per_jurisdiction(:'d_as_of'::date, 'ftb'::pfin.tax_jurisdiction_enum),
+  500.0000::numeric,
+  '(AC4D-1) HALF ONE MOVES: marking a_ftb269 ''ftb'' moves california YTD Paid from NULL to its real 500.00 balance, in the SAME transaction'
+);
+select ok(
+  not exists (select 1 from jsonb_array_elements(pfin.fn_nav_composition(:'d_as_of'::date) -> 'groups') g,
+                           jsonb_array_elements(g -> 'accounts') acc
+              where (acc ->> 'account_id')::bigint = :a_ftb269),
+  '(AC4D-2) HALF TWO MOVES: a_ftb269 is now ABSENT from the leaf set — present->absent, the OPPOSITE direction from HALF ONE''s NULL->value, both figures moving from the SAME single UPDATE, neither contradicting the other on screen (R3 rider 0b''s exact shape)'
+);
+select set_config('role', 'postgres', true);
+
+-- =====================================================================
+-- BLOCK R10 — AC1's SELF-263 clause: 100's CORRECTED tax_relevant/
+--   tax_character values (E4 D-ii: generic Dividend -> ordinary, Dividend
+--   - Qualified -> qualified_dividend) are CONSUMED correctly by 104's
+--   reader, end to end on this shared fixture. COMPOSED with 100's OWN
+--   34-leg battery for the row-level correctness — this proves the
+--   end-to-end CONSUMPTION, which 100's own battery cannot (it tests only
+--   the stored values).
+-- =====================================================================
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment) values
+  (:'ta', 'a-div-269', 'depository', 'household', 'taxable') returning account_id as a_div269 \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat, tax_relevant, tax_character, is_tax_payment) values
+  (:'ta', 'Revenue', 'Dividend269', true, null, false) returning id as pp_div269 \gset
+insert into pfin.posting_prototype (users_id, cat, sub_cat, tax_relevant, tax_character, is_tax_payment) values
+  (:'ta', 'Revenue', 'DividendQualified269', true, 'qualified_dividend', false) returning id as pp_divq269 \gset
+insert into pfin.account_trans (account_id, transaction_date, amount, vendor, created_at) values
+  (:a_div269, '2026-01-15', 1000.0000, 'div-269', '2026-01-15T00:00:00Z') returning trans_id as t_div269 \gset
+insert into pfin.account_trans_annotation (trans_id, sub_cat_id) values (:t_div269, :pp_div269);
+insert into pfin.account_trans (account_id, transaction_date, amount, vendor, created_at) values
+  (:a_div269, '2026-01-20', 1000.0000, 'divq-269', '2026-01-20T00:00:00Z') returning trans_id as t_divq269 \gset
+insert into pfin.account_trans_annotation (trans_id, sub_cat_id) values (:t_divq269, :pp_divq269);
+
+select _rls.set_tenant(:'ta'::uuid);
+select ok(
+  exists (select 1 from jsonb_array_elements(pfin.fn_compute_tax_liability(:'d_as_of'::date) -> 'decomposition' -> 'ordinary_income' -> 'rows') r
+           where (r ->> 'sub_cat_id')::bigint = :pp_divq269 and r ->> 'tax_character' = 'qualified_dividend'),
+  '(R10-A) 100''s E4 D-ii corrected route: pp_divq269 (Dividend - Qualified) carries tax_character=''qualified_dividend'' in the decomposition row — routes to the Federal LT CG walk, not ordinary'
+);
+select ok(
+  exists (select 1 from jsonb_array_elements(pfin.fn_compute_tax_liability(:'d_as_of'::date) -> 'decomposition' -> 'ordinary_income' -> 'rows') r
+           where (r ->> 'sub_cat_id')::bigint = :pp_div269 and (r ->> 'tax_character') is null),
+  '(R10-B) 100''s E4 D-ii corrected route: pp_div269 (the GENERIC Dividend row, corrected to ordinary per PM''s C'') carries a NULL tax_character in the decomposition row — routes to the ordinary walk, not LT CG'
+);
+select set_config('role', 'postgres', true);
+
+-- =====================================================================
 -- BLOCK AC4C — SELF-226's foot-to-headline reconciliation, R3 rider 0's
 --   watcher, THE DB-LEVEL HALF: fn_nav_composition.nav <> fn_compute_nav
 --   when a designated ledger (BLOCK AC7's a_irs) or a computed tax scalar
@@ -636,7 +859,7 @@ select ok(
                          'fn_tax_authority_ledgers', 'fn_ytd_paid_per_jurisdiction',
                          'fn_compute_tax_liability', 'fn_nav_composition',
                          'fn_create_manual_purchase')),
-  '(AC9-2) forward fence: NONE of the 8 swept V1.4 functions grant EXECUTE to service_role — every one is reachable ONLY under authenticated, per ARCH §4.1. Folds in sec-262 AMBER N-3''s standing condition: fn_compute_tax_liability and fn_nav_composition (both money-figure, both INVOKER) are named explicitly in this set, not left to a broader wildcard sweep'
+  '(AC9-2) forward fence: NONE of the 7 swept V1.4 functions grant EXECUTE to service_role — every one is reachable ONLY under authenticated, per ARCH §4.1. Folds in sec-262 AMBER N-3''s standing condition: fn_compute_tax_liability and fn_nav_composition (both money-figure, both INVOKER) are named explicitly in this set, not left to a broader wildcard sweep'
 );
 
 select * from finish();
