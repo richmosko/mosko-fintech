@@ -432,7 +432,8 @@
 --       tax_bracket_schedule_tax_year_check. 1913 is the first US federal
 --       income-tax year, so the bound refuses a transposed or zero year while
 --       refusing no real one; the smallint's own ceiling carries the upper end.
---     schedule_label text NOT NULL, CHECK (length between 1 and 500) — named
+--     schedule_label text NOT NULL, CHECK (length(btrim(schedule_label))
+--       between 1 and 500) — named
 --       tax_bracket_schedule_schedule_label_check. The schedule's OWN
 --       statement of the assumptions its numbers rest on: the filing status
 --       they were entered for, the basis year of the published figures, and any
@@ -440,7 +441,9 @@
 --       USER-OWNED, USER-EDITABLE data written by the same replace-all call
 --       that writes the brackets, edited beside them in the PRD §2.5.2 editor,
 --       and passed through to the tax-liability payload. The empty string is
---       refused rather than admitted as a blank.
+--       refused rather than admitted as a blank, and so is a whitespace-only
+--       label — the CHECK btrims before measuring. The STORED value is NOT
+--       trimmed: the app trims, the database refuses the blank.
 --     standard_deduction     numeric(20,4) NOT NULL, >= 0, non-NaN.
 --     tax_balance_prior_year numeric(20,4) NULL — INFORMATIONAL ONLY; MUST NOT
 --       enter the computation. NULL renders as an em dash.
@@ -546,7 +549,7 @@ create table if not exists pfin.tax_bracket_schedule (
   schedule_type           pfin.tax_schedule_type_enum not null,
   schedule_label          text not null
                             constraint tax_bracket_schedule_schedule_label_check
-                            check (length(schedule_label) between 1 and 500),
+                            check (length(btrim(schedule_label)) between 1 and 500),
   standard_deduction      numeric(20, 4) not null
                             check (standard_deduction >= 0
                                    and standard_deduction <> 'NaN'::numeric),
@@ -634,11 +637,18 @@ comment on column pfin.tax_bracket_schedule.schedule_label is
   'tax-liability payload — so a user re-entering a schedule under a different '
   'filing status states that in the same edit that changes the numbers. Any '
   'writer that creates a schedule MUST supply one; a user MAY then overwrite '
-  'it. NOT NULL with CHECK (length(schedule_label) between 1 and 500), named '
-  'tax_bracket_schedule_schedule_label_check: a schedule whose assumptions go '
-  'unstated is the condition this column exists to prevent, so the empty string '
-  'is refused rather than admitted as a blank; the upper bound admits up to 500 '
-  'characters — a caption WITH ITS SOURCING, not a paragraph. ⚠ THE LABEL AND THE ROWS ARE NOT CONSTRAINED '
+  'it. NOT NULL with CHECK (length(btrim(schedule_label)) between 1 and 500), '
+  'named tax_bracket_schedule_schedule_label_check: a schedule whose '
+  'assumptions go unstated is the condition this column exists to prevent, so '
+  'the empty string is refused rather than admitted as a blank — and so is a '
+  'whitespace-only label, which the btrim inside the CHECK makes '
+  'indistinguishable from empty. ⚠ THE CONSTRAINT DOES NOT TRIM THE STORED '
+  'VALUE: btrim appears only inside the CHECK, so what a writer hands the '
+  'column is stored byte-for-byte, leading and trailing whitespace included. '
+  'Trimming is the APP''s job, before the write; the database''s job is to '
+  'refuse a blank, and it refuses rather than silently normalizing a value the '
+  'user typed. The 500-character upper bound is likewise measured on the '
+  'trimmed value — a caption WITH ITS SOURCING, not a paragraph. ⚠ THE LABEL AND THE ROWS ARE NOT CONSTRAINED '
   'TO AGREE, and no fence is owed that would make them: the label is a '
   'user-authored statement about the rows, and a reader MUST NOT take it as a '
   'system-verified description of them.';
@@ -1320,7 +1330,30 @@ create trigger tax_bracket_schedule_set_updated_at
 --   holds when a caller reaches PostgREST directly with their own JWT, which is
 --   the whole premise of the Lock 14 direct-DB-write surface. Exactly two keys,
 --   both JSON numbers, nothing else admitted.
+--
+-- ⚠ THE DROP BELOW IS NOT COSMETIC, AND IT IS NOT A NO-OP EVERYWHERE.
+--   `create or replace function` with a CHANGED PARAMETER LIST does not
+--   replace — it ADDS AN OVERLOAD. A database that already holds the
+--   SIX-ARGUMENT form of this function (this file's earlier revision, before
+--   p_schedule_label was added at Sec's SELF-260 V-2) would, on applying this
+--   file, end up holding BOTH forms, each with EXECUTE granted to
+--   authenticated. The six-argument form satisfies the pre-V-2 settings
+--   endpoint's call exactly, and it performs the full DELETE-and-reinsert of
+--   the bracket set while NEVER TOUCHING schedule_label — leaving the label
+--   asserting the old filing status and the old basis year over numbers that
+--   changed underneath it. That is precisely the state V-2 was opened to
+--   prevent, reachable by a plain authenticated caller, silently, with no
+--   error. On a clean sequential apply only the seven-argument form is ever
+--   created, so the drop is INERT there — which is exactly why no CI gate
+--   sees this class: the hazard lives only in an already-applied database,
+--   and CI only ever applies clean. The watcher therefore lives in the
+--   battery, not in this file: a catalog leg pins that pfin holds EXACTLY ONE
+--   proc named fn_tax_bracket_schedule_replace_all, with pronargs = 7, so the
+--   NEXT signature change fails loudly instead of overloading silently.
 -- ============================================================================
+drop function if exists pfin.fn_tax_bracket_schedule_replace_all(
+  bigint, smallint, pfin.tax_schedule_type_enum, numeric, numeric, jsonb);
+
 create or replace function pfin.fn_tax_bracket_schedule_replace_all(
   p_schedule_id            bigint,
   p_tax_year               smallint,
