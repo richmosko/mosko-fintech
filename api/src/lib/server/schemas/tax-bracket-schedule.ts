@@ -96,13 +96,33 @@ const priorYearBalance = () => z.union([z.null(), currencyAmount()]);
  *  empty one — 101's own comment: "the empty string is refused rather than admitted as a
  *  blank"), max 500 mirroring the DB CHECK exactly. A non-string is rejected by `z.string()`
  *  itself, same as every other typed field on this schema — no `z.any()` transform needed since
- *  this is a shape/length check, not a numeric-parse. */
+ *  this is a shape/length check, not a numeric-parse.
+ *
+ *  `.trim()` is chained FIRST, so every check below it (`.min()`, `.max()`, the control-character
+ *  `.regex()`) runs against the TRIMMED value — the value the length check bounds is the value
+ *  the route file forwards to the RPC and the DB stores. There is no separate "raw" value kept
+ *  anywhere in this pipeline.
+ *
+ *  CONTROL-CHARACTER REJECTION (Sec's SELF-260 V-4, second joint-review pass on this surface —
+ *  `schedule_label` is the first user-controlled free-text field on a Lock 14 write path): any
+ *  code point in U+0000–U+001F or U+007F–U+009F (tab and newline included — this is a single-line
+ *  settings label, not a multi-line caption, so there is no legitimate reason for either) is
+ *  refused with a `schedule_label` field error. This is NOT an XSS control — a `<script>` payload
+ *  is prose to this field and is accepted (see the RT-24 adversarial battery's positive control);
+ *  rejecting angle brackets here would be the wrong fence for the wrong layer. Escaping is owned
+ *  entirely by the render side: SvelteKit's default `{label}` interpolation escapes, `{@html}`
+ *  does not and must never be used on this field — that render-side leg belongs to SELF-265, not
+ *  to this schema. */
 const scheduleLabel = () =>
 	z
 		.string()
 		.trim()
 		.min(1, 'A schedule label is required.')
-		.max(500, 'Schedule label is too long (500 characters max).');
+		.max(500, 'Schedule label is too long (500 characters max).')
+		.regex(
+			/^[^\u0000-\u001F\u007F-\u009F]*$/,
+			'Schedule label may not contain control characters.'
+		);
 
 /** Zod adapter over the fraction-rate battery → a validated `number` in [0, 1]. */
 const fractionRate = () =>
