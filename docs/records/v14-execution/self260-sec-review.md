@@ -554,3 +554,146 @@ untouched** — `(P3)` still pins `pfin`'s `prosecdef = true` set to the same th
 tenant binding in both writers is still taken from the same CTE row, so #18 leg 2 still holds by
 construction with the label column added. `secrets-manifest.yml`, RT-26 and every CI fence remain
 untouched by this branch.
+
+---
+
+# Re-review 2 — 2026-09-04, tip `2173263`
+
+**Verdict: AMBER — no veto, no security defect.** VETO 3 and VETO 4 are discharged, F-4 landed
+**stronger** than I asked, and F-5 / F-6 are clean. What remains is **one finding class in four
+sites**, all prose, all in the app layer: the superseded shape of the label CHECK, including one
+line claiming a parity that `101` explicitly refuses to claim. Text only; no code, no DDL, no
+re-review. **Merge once the four lines are corrected.**
+
+Reviewed `393c7af..2173263` (8 files), which contains the final `feature/self-259` at `f540cbb`.
+Everything below is read from the **committed blob at `2173263`** — my worktree is checked out on
+`feature/self-260-sec` and is not the review surface.
+
+## FLAG 7 — four app-layer sites carry the superseded CHECK shape; one asserts a parity the DDL disclaims
+
+The constraint as landed at `eab2ad1` is
+`check (schedule_label = btrim(schedule_label, E' \t\n\r\f\v') and length(schedule_label) between 1 and 500)`
+— a **canonical-form invariant**, not a length rule.
+
+| Site | What it says | Owner |
+|---|---|---|
+| `api/src/lib/server/schemas/tax-bracket-schedule.ts:93` | states the CHECK as `length(schedule_label) between 1 and 500` | Backend |
+| same file `:97` | *"max 500 **mirroring the DB CHECK exactly**"* | Backend |
+| same file `:96` | quotes `101` as saying *"the empty string is refused rather than admitted as a blank"* | Backend |
+| `.../tax-brackets.rt24-adversarial.server.test.ts:119` | describe block — *"migration 101 CHECK, length 1..500"* | QA |
+| same file `:136` | the same quotation of `101` | QA |
+
+⚠ **`:97` is the load-bearing one.** `101`'s column comment goes out of its way to say the
+opposite: *"THE RESIDUAL, STATED HONESTLY: the two layers are NOT at parity and no parity claim
+is made here."* The app file makes precisely the claim the DDL refuses to make.
+
+⚠ **The two quotations outlived their source.** `git show 2173263:supabase/migrations/101_tax_bracket_tables.sql | grep -c "rather than admitted as a blank"` → **0**. That sentence was
+rewritten at `eab2ad1`; both files still attribute it to `101` inside quotation marks.
+
+`+server.ts` and `supabase/tests/rls/101_tax_bracket_tables.sql` are **clean** — the DB layer and
+its own battery describe the invariant correctly. The drift is one-directional, into the app.
+
+**Why four comment lines are worth a flag on this branch specifically.** This is the identical
+class as VETO 1 and VETO 2 — prose asserting a control shape the tree does not have — on the same
+surface, in the round that fixed it. The direction is safe here: it *understates* the DB control.
+But *"mirroring exactly"* invites exactly the future edit that removes a Zod control on the belief
+that the DB mirrors it, and `101`'s honest-residual paragraph is the thing that would have
+prevented that. **Fix:** restate the canonical-form shape at all four sites, replace *"mirroring
+the DB CHECK exactly"* with a pointer to `101`'s stated residual, and drop or re-quote the two
+verbatim quotations.
+
+## NOTE 6 — the control-character fence is app-only, and the DDL's residual paragraph does not name it
+
+`101`'s honest-residual paragraph is scoped to **whitespace** (JS `trim()` strips Unicode
+whitespace; the CHECK strips the six ASCII kinds). The Zod control-character regex — the
+`U+0000`–`U+001F` and `U+007F`–`U+009F` exclusion class — has **no DB counterpart at all**: the
+canonical-form CHECK looks only at the ends, so a caller reaching PostgREST directly can store a
+label with an interior newline, tab, or ANSI escape. Bounded: an escaped HTML render makes it
+inert, and Postgres `text` cannot hold `U+0000` regardless. Worth one sentence in that same
+paragraph so a reader meets both asymmetries in one place instead of one.
+
+## NOTE 7 — E30's carry-forward has no durable home yet
+
+You ruled my open VETO 4 question at **E30**: V1.4's §2.5 surfaces are web-only; the
+monthly-report renderer is V1.5 and carries the escaping control separately. **I accept that
+ruling and withdraw the PDF-worker item for V1.4.** ⚠ But E30 sits on the pending execution-log
+batch, and the V1.5 escaping obligation exists **nowhere in the tree**. A carry-forward with no
+watcher is how an obligation gets discovered at adoption rather than at design. Route it to
+`BACKLOG.md` §7 or the V1.5 Linear issue before this branch closes — a one-line placement, and it
+is the whole difference between a ruling and a control.
+
+## Discharged at this tip
+
+- **VETO 3 (i)** — `drop function if exists ...(bigint, smallint, pfin.tax_schedule_type_enum,
+  numeric, numeric, jsonb)` at `101:1420`, after the enum block at `:557` and immediately before
+  the `create or replace` at `:1423`. ⚠ **The header's placement rationale is correct and
+  non-obvious, and getting it wrong would have been worse than the bug:** `DROP FUNCTION IF
+  EXISTS` suppresses only *"function does not exist"*, **not type resolution**, so naming the enum
+  ahead of its own creation would fail the apply on a fresh database — turning a belt-and-braces
+  statement into the thing that breaks every clean apply.
+- **VETO 3 (ii)** — the endpoint passes `p_schedule_label`, and its new comment correctly
+  identifies that coexisting overloads leave PostgREST an **ambiguous candidate set** rather than
+  resolving silently to one.
+- **VETO 3 (iii)** — `(RA-SIG1a)` counts by `proname` **with no `pronargs` filter**, so a stale
+  6-arg overload is *counted, not excluded* — the failure mode a combined leg would have had.
+  `(RA-SIG1b)` then pins that row's `pronargs = 7`. Two legs that can disagree, which is what
+  makes the pair a watcher rather than a single assertion.
+- **VETO 4, app half** — `z.string()` then `.trim()`, `.min(1)`, `.max(500)`, and the
+  control-character `.regex(...)`, inside a retained `.strict()`. The RT-24 string arm covers a
+  mid-string tab, C0 (`U+0001`), `U+0000` **with an explicit rationale** for why `z.string()`
+  alone would have yielded a 500 rather than a 400, C1 (`U+0085` NEL), and the `<script>` positive
+  control. ⚠ **Every rejection leg asserts `writeCalls === 0`**, so the fence is proven to stop
+  *before* the write rather than merely to return 400.
+- **FLAG 4 — landed stronger than I asked.** I asked for `length(btrim(...))`; what landed
+  **refuses** a non-canonical value instead of accepting-and-trimming, so what a user reads back
+  is byte-for-byte what was accepted and the 500 bound is measured on the stored bytes.
+  `(LBL-CHECK2)` pins that `' x '` is *rejected*, not silently stored as `'x'`; `(LBL-CHECK3)` is
+  the non-vacuous control; `(LBL-CHECK1b)` uses a TAB-only label so all six `btrim` kinds are
+  exercised rather than the space case standing in for them; `(LBL-CHECK4)/(LBL-CHECK5)` bracket
+  500/501 with the accept leg proving 501 fires the **length** conjunct and not the canonical one.
+- **FLAG 5 — verified independently, not taken on report.**
+  `git show 2173263:supabase/migrations/103_tax_bracket_seed.sql | md5 -q` →
+  `ce07e944123f521d1ba79ae584e7497a`, matching the value pinned in the binding line; the same blob
+  at `393c7af` hashes identically. The tip the line names is two merges behind, but the **binding
+  is the md5, not the tip**, and the line already instructs its reader to recompute rather than
+  trust it. Correct as written.
+- **FLAG 6** — `grep -ci "mental health"` on the 103 battery → **0**; both sites read *"Behavioral
+  Health Services Tax"*.
+- **Not asked for, and it closes VETO 3's residual from the other side:** `101:424-446` now states
+  **FRESH-APPLY-ONLY** explicitly, spells out that `create table if not exists` would make the
+  column a silent no-op on a database already holding the table, and reasons option (A)
+  (`add column if not exists`, the repo's own convention in 13 migrations) *down* rather than
+  skipping it — because a `NOT NULL` backfill would owe a label story that would be fiction.
+
+## Verify-hook, re-run live at `2173263`
+
+D3, D4's catalogued list and D18 read live again from the ADR body. `schedule_label` remains
+**outside** the Decision 3 family (text, references no row, holds no id, not an `INTEGER[]`);
+family unchanged. §10 catalogued list unmoved on all three axes — no instance added, removed,
+reordered or renumbered, no layer re-attributed, no count carried by any file in this range; the
+CATALOGUED and CI-FENCED sets remain different sets and neither is touched. D18 — the label
+stores **text, not JSONB**, so the forward-compat fence holds, and the family is still five
+tables. **`DECISIONS.md` is unchanged in `393c7af..2173263`.**
+
+## Non-objections at this tip
+
+- **The `<script>` payload being forwarded byte-for-byte is correct and I explicitly do NOT want
+  angle-bracket rejection at this layer.** The test asserting both `p_schedule_label === payload`
+  and `writeCalls === 1` is the right pair — it pins that the field is prose and that nothing
+  silently sanitizes it. Escaping is the render side's job and belongs to SELF-265.
+- **I do NOT require widening the CHECK to a Unicode whitespace class.** `101`'s reasoning is
+  right: it would put a character-class definition in the constraint that the app's definition
+  could still drift from, trading a **stated** residual for an **unstated** one. A named residual
+  is worth more than a closed one here.
+- **I do NOT require the `.trim()`-first ordering to change**, and the two choices compose in a
+  way worth naming: `.trim()` chained first means every later check runs on the value that is
+  stored, and refuse-not-normalize at the DB means the endpoint's JSON echo of
+  `parsed.data.schedule_label` is byte-identical to the stored row. Neither choice alone would
+  give that property.
+- **I did not audit `docs/records/v14-execution/self259-sec-review.md`** (+170 in this range) — it
+  is a parallel Sec pass on SELF-259, not my artifact and not this issue. I read the commit trail
+  rather than the record, and the D-2 / D-4 / D-5 dispositions visible in the tree are consistent
+  with everything above.
+- Round-1 and round-2 non-objections all still hold; I re-checked the two the diff could have
+  moved — both `103` functions remain SECURITY INVOKER with `set search_path = ''`, and the
+  SECURITY DEFINER allowlist is untouched.
