@@ -86,16 +86,39 @@
 	}
 
 	// Auto-open the create panel only when there's truly nothing else to show for this
-	// jurisdiction (no basis at all); otherwise it opens on click. One-time capture from the
-	// loader's own initial props -- same deliberate `state_referenced_locally` shape
-	// Planning/CashflowTargetEditor's own baselines document (a fresh load() after a save
-	// re-derives this from the NEW `jurisdictions` prop via SvelteKit's `update()`-driven
-	// reload, which remounts this component with fresh initial props).
-	let openCreate = $state<Record<ScheduleType, boolean>>(
+	// jurisdiction (no basis at all). CORRECTED (team-lead, post-E35): this MUST be `$derived`
+	// from the LIVE `jurisdictions` prop, not a one-time capture -- verified against
+	// +page.svelte, which instantiates this component with no `{#key ...}` wrapper, so
+	// `invalidateAll()` (fired by every editor's own `update()` on a successful submit) does
+	// NOT remount it; SvelteKit re-runs `load()` and updates the `data` prop / this component's
+	// `jurisdictions` prop IN PLACE on the same instance. A one-time-captured default would have
+	// gone stale the instant any OTHER jurisdiction's create/save/delete completed on the same
+	// page -- e.g. a type with no schedule auto-opens its create panel, the user creates a
+	// schedule for a DIFFERENT type, `jurisdictions` refreshes, and the first panel would have
+	// stayed forced open even though it now has a schedule.
+	const autoOpenDefault = $derived(
 		Object.fromEntries(jurisdictions.map((j) => [j.schedule_type, j.basis_year === null])) as Record<
 			ScheduleType,
 			boolean
 		>
+	);
+
+	// An explicit user action (the "Add {year} schedule" click, or this schedule type's own
+	// create-panel closing itself after a successful submit) OVERRIDES the derived default for
+	// that one type. Reset to {} whenever `jurisdictions` itself changes reference (a genuine
+	// fresh load, not merely a click) -- `$effect` reruns only when its own reactive reads
+	// change, and `jurisdictions` only gets a new reference from a real reload, never from a
+	// local `userToggled` mutation, so this cannot fight a user's own in-progress click.
+	let userToggled = $state<Partial<Record<ScheduleType, boolean>>>({});
+	$effect(() => {
+		jurisdictions;
+		userToggled = {};
+	});
+
+	const openCreate = $derived(
+		Object.fromEntries(
+			jurisdictions.map((j) => [j.schedule_type, userToggled[j.schedule_type] ?? autoOpenDefault[j.schedule_type]])
+		) as Record<ScheduleType, boolean>
 	);
 </script>
 
@@ -119,7 +142,7 @@
 							<p class="missing-title">No {TYPE_LABELS[j.schedule_type]} schedule entered.</p>
 						{/if}
 						{#if !openCreate[j.schedule_type]}
-							<Button variant="secondary" type="button" onclick={() => (openCreate[j.schedule_type] = true)}>
+							<Button variant="secondary" type="button" onclick={() => (userToggled[j.schedule_type] = true)}>
 								Add {currentTaxYear} schedule
 							</Button>
 						{/if}
@@ -136,7 +159,7 @@
 					initialStandardDeduction={basis?.standard_deduction ?? 0}
 					initialPriorYearBalance={null}
 					initialRows={basis?.rows ?? [{ bracket_floor: 0, bracket_rate: 0 }]}
-					onSaved={() => (openCreate[j.schedule_type] = false)}
+					onSaved={() => (userToggled[j.schedule_type] = false)}
 				/>
 			{/if}
 

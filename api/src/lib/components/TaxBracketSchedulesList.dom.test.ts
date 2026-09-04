@@ -11,6 +11,15 @@
 //   - "Prior years on file" rendering a collapsed, fully-editable disclosure per superseded
 //     schedule, with delete now available on BOTH the basis and prior editors once a
 //     jurisdiction holds more than one schedule.
+//   - the auto-open create-panel default RE-DERIVES from a live `jurisdictions` prop change
+//     (team-lead correction, post-E35): `+page.svelte` instantiates this component with no
+//     `{#key ...}` wrapper, so a real `invalidateAll()`-driven reload updates `jurisdictions` on
+//     the SAME instance rather than remounting it (verified against that file directly — grep
+//     turned up no `{#key` anywhere in the route). A one-time-captured default would go stale
+//     the moment ANY jurisdiction's create/save/delete completed elsewhere on the page; this
+//     uses `rerender()` (the same same-instance-prop-update tool NonReAllocationTable.dom.test.ts
+//     already uses for its own stale→fresh leg) to prove the default re-derives without a
+//     remount.
 //
 // @vitest-environment jsdom
 
@@ -170,5 +179,61 @@ describe('TaxBracketSchedulesList — "Prior years on file" (E35(a): fully edita
 			props: { jurisdictions: threeCurrentJurisdictions(), currentTaxYear: CURRENT_TAX_YEAR }
 		});
 		expect(queryByText('Prior years on file')).toBeNull();
+	});
+});
+
+describe('TaxBracketSchedulesList — auto-open default RE-DERIVES from a live jurisdictions prop (no remount)', () => {
+	it('a create panel that auto-opened because a type had no schedule closes on its own once a fresh load reports a schedule for it — WITHOUT remounting the component', async () => {
+		const noScheduleYet: Jurisdiction[] = [
+			...threeCurrentJurisdictions().slice(0, 2),
+			{ schedule_type: 'california_ordinary', schedules: [], current_year_present: false, basis_year: null }
+		];
+		const { getByRole, queryByRole, rerender } = render(TaxBracketSchedulesList, {
+			props: { jurisdictions: noScheduleYet, currentTaxYear: CURRENT_TAX_YEAR }
+		});
+		// auto-opened: nothing else to show for this type
+		expect(getByRole('button', { name: 'Create schedule' })).toBeTruthy();
+
+		// Simulate the SAME reload a successful ?/createSchedule submit's `update()` triggers —
+		// `jurisdictions` changes reference on the SAME component instance (rerender, not
+		// render()-again), matching +page.svelte's un-keyed instantiation.
+		const nowHasSchedule: Jurisdiction[] = [
+			...threeCurrentJurisdictions().slice(0, 2),
+			{
+				schedule_type: 'california_ordinary',
+				schedules: [makeSchedule({ id: 3, schedule_type: 'california_ordinary' })],
+				current_year_present: true,
+				basis_year: 2026
+			}
+		];
+		await rerender({ jurisdictions: nowHasSchedule, currentTaxYear: CURRENT_TAX_YEAR });
+
+		expect(queryByRole('button', { name: 'Create schedule' })).toBeNull();
+		expect(queryByRole('status')).toBeNull(); // no missing-schedule note either — current now
+	});
+
+	it('a manual "Add {year} schedule" click opens the panel for a type that already had a basis (not auto-open), and it survives a re-render carrying an IDENTICAL jurisdictions value', async () => {
+		const withBasisButNotCurrent: Jurisdiction[] = [
+			...threeCurrentJurisdictions().slice(0, 2),
+			{
+				schedule_type: 'california_ordinary',
+				schedules: [makeSchedule({ id: 3, schedule_type: 'california_ordinary', tax_year: 2025 })],
+				current_year_present: false,
+				basis_year: 2025
+			}
+		];
+		const { getByRole, queryByRole, rerender } = render(TaxBracketSchedulesList, {
+			props: { jurisdictions: withBasisButNotCurrent, currentTaxYear: CURRENT_TAX_YEAR }
+		});
+		expect(queryByRole('button', { name: 'Create schedule' })).toBeNull(); // closed until clicked
+		await fireEvent.click(getByRole('button', { name: 'Add 2026 schedule' }));
+		expect(getByRole('button', { name: 'Create schedule' })).toBeTruthy();
+
+		// A rerender with a NEW array reference but the SAME underlying facts (as a re-run
+		// load() of unchanged data would produce) resets the override in this implementation —
+		// documented trade-off (file header): the whole page's manual toggles reset together on
+		// any reload, matching how `update()` already refreshes every form on the page at once.
+		await rerender({ jurisdictions: [...withBasisButNotCurrent], currentTaxYear: CURRENT_TAX_YEAR });
+		expect(queryByRole('button', { name: 'Create schedule' })).toBeNull();
 	});
 });
