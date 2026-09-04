@@ -15,6 +15,12 @@
 	(Income section / Capital Gains capability banner) internally, since they are section-scoped,
 	not page-scoped.
 
+	SIBLING LINK (team-lead ruling, 2026-09-04): the single "Taxes" primary-nav entry is
+	frontend-266's (`/taxes/quarterly`, active-matched on the whole `/taxes/*` prefix — SELF-264
+	carries NO nav entry of its own, see `+layout.svelte`'s own history). This page cross-links to
+	its §2.5.3 sibling in-page instead, beside the heading — same `.page-actions` convention
+	`cash-flow/+page.svelte` uses for its own "By account →" cross-link.
+
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5).
 -->
 <script lang="ts">
@@ -30,6 +36,9 @@
 
 <main class="page">
 	<h1 class="sr-only">Taxes</h1>
+	<div class="page-actions">
+		<a class="quarterly-link" href="/taxes/quarterly">Quarterly estimated taxes →</a>
+	</div>
 	<TaxDecompositionTable
 		liability={data.liability}
 		taxCharacters={data.taxCharacters}
@@ -54,5 +63,26 @@
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-4);
+	}
+
+	/* Mirrors cash-flow/+page.svelte's own `.page-actions` / `.by-account-link` cross-link
+	   convention verbatim (tokens only). */
+	.page-actions {
+		display: flex;
+		justify-content: flex-end;
+	}
+	.quarterly-link {
+		font: var(--weight-med) var(--fs-small) / 1 var(--font-ui);
+		color: var(--c-accent);
+		text-decoration: none;
+	}
+	.quarterly-link:hover {
+		color: var(--c-accent-hover);
+		text-decoration: underline;
+	}
+	.quarterly-link:focus-visible {
+		outline: none;
+		box-shadow: var(--focus-ring);
+		border-radius: var(--radius-sm);
 	}
 </style>
