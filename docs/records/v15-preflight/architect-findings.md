@@ -205,3 +205,112 @@ Three tracks. **Tracks 2 and 3 do not touch S-1 and can start immediately.**
 ## 7. Instruments
 
 Migration tree `supabase/migrations/001–105` (105 files). `git rev-parse`, `git log -- workers/pdf-render/`. `grep -rn` over `supabase/migrations/`, `api/src/`, `workers/`, `.github/workflows/`, `scripts/`. `create table` enumeration over the migration tree. Python HTML-to-text extraction over `docs/PRD/index.html`, `docs/ARCH/index.html`, `docs/SECURITY/index.html` (anchors and `<tr>` spans, cited by anchor/heading/label). `DECISIONS.md` read by bracketing `## ADR-` heading, never by line number.
+
+---
+
+## 8. Round 2 — sibling cross-reference (2026-09-04)
+
+**Refs read.** PM: `origin/meta/v15-preflight-pm` @ `4c9f628`, `docs/records/v15-preflight/pm-findings.md`, md5 `06db14a407c89cf5dedc4ecfffb39c5d`. Sec: `origin/meta/v15-preflight-sec` @ `374ba8e`, `docs/records/v15-preflight/sec-findings.md`, md5 `a8e7090d1066bf70d5bf14e982774e75`. Both re-read from `origin` in this session, not from the round-2 brief. `origin/main` re-checked: still `b90b846` — baseline unmoved, so nothing in §1–§7 needs re-measuring.
+
+⚠ **All three files use `F-n` and `D-n` independently.** Every citation below names its owner. Sibling items are cited, never restated.
+
+### 8.1 Seam ↔ sibling map
+
+| Arch | PM | Sec | Note |
+|---|---|---|---|
+| **S-1** frozen vs recomposed | **A-5** (lean **B**: freeze only the history-less inputs into the Lock 12 child) | M-5 adjacent; F-2 downstream | Same one-way door, reached by three routes. PM measured it from φ-1's text and named the exact unrecoverable inputs; I measured it from the settings tables' absence of history. **Neither of us found a fourth failure the other missed** — the convergence is the useful part. |
+| **S-2** PDF direction | **D-7** | **F-5** | Three independent confirmations of the inversion. Sec adds the half I did not state: as drafted the *content* is caller-supplied, so a valid render JWT renders arbitrary content under any owner header. That is a stronger objection than the escaping one. |
+| **S-3** tenant binding | D-11 (signature half) | **F-4** / **R-3** (lean α) | Sec supplies the mechanism I asked for and the failure mode I did not name: `request.jwt.claims` **without** `SET LOCAL ROLE authenticated` leaves `rolbypassrls` in force — `auth.uid()` returns the intended tenant, RLS is skipped, every tenant's rows compose, nothing raises. ADR-011 D4's 2026-09-03 amendment is the citation. **I adopt Sec's α and withdraw S-3's option (b)** as under-specified. |
+| **S-4** per-section staleness | §4 (*"generation time is the load-bearing defect"*) | **M-4** | Both siblings hit the freeze-vs-live axis; **neither hit the attribution axis** (the primitive is whole-tenant and cannot say *which section*). S-4 stands as mine alone. |
+| **S-5** the array column | §2 (A1) | **F-2** (lean **B** retire-by-amendment) | I leaned A (ship with a dormant fence); Sec leans B. See §8.6. |
+| **F-6** D3 ordinals | **D-4** | **F-1** | Three-way agreement. Sec adds defect 3, which is sharper than mine: a matched-tenant fence on `users_id` is *the leg that cannot fail* — not merely the wrong column. |
+| **F-1** UNIQUE constraint | — | **D-5** | Agreement. Sec's catch criterion is better than mine: **three** regenerations, not two. |
+| **F-4** RT-21 letters | — | **F-3** | Agreement. Sec keeps A5's inventions as *labelled additions* rather than striking them; folded. |
+| **F-5** A6 already built | §2 (A6) | **D-2** / **D-1** (**veto**) / **F-6** | See §8.7 — Sec found live successor work I concluded away. |
+| **F-13** A8 aal2 | §2 (A8, riders) | **F-7** / **F-9** / **D-3** | Agreement on aal2; Sec escalates the review classification (**R-6**). I concur with Sec. |
+| — | **A-1/A-2/A-3/A-6/A-8** PRD amendments | M-5 | Product-text territory; no Architect position owed. Folded into the AC blocks where they change a schema-visible fact. |
+| — | — | **D-3** five missing RT labels | Neither PM nor I found this. Folded into six blocks. |
+
+### 8.2 Three buildable counts, over three different predicates
+
+**They are not competing estimates of one quantity.** Stated so the agenda can present three definitions rather than one disputed number.
+
+| | Count | Predicate | Named |
+|---|---|---|---|
+| **Architect** | **4 / 18** | Identifiers resolve · no ratified Lock/ADR contradicted · **no unresolved seam between the AC and an engineer starting** | A8, A9, P7, P9 |
+| **PM** | **2 / 18** | Identifiers resolve · **no AC sentence contradicts a PRD V1 lock or an ADR-011 Lock** (product only; mechanism explicitly deferred to Architect) | A8, P7 — *"both with riders"* |
+| **Sec** | **3 / 18** | A competent implementer following the AC verbatim produces a surface **Sec would pass at joint review** without a correction changing schema / fence shape / test label / tenant-binding / review classification | A9, P4, P9 |
+
+⚠ **The intersection of the three sets is EMPTY, and the union is five (A8, A9, P4, P7, P9).** No issue is called buildable by all three, and every issue named is named by at most two. That is a fact about the predicates, not a contradiction:
+
+- **A9** — mine and Sec's; PM classes it out-of-§2.6-scope and therefore does not count it. Sec calls it *"the best-drafted issue in the wave."* All three would ship it.
+- **A8, P7** — mine and PM's; **Sec's D-3 (missing RT-11/RT-12) and F-9 (aal2) are corrections of exactly the grade Sec's predicate counts**, so they fall out of Sec's set without anyone disagreeing about the tree.
+- **P4** — Sec's alone, and Sec §5 says why: *"P4's author-before-generate gating is not a security control and I do not treat it as one."* It is clean on a security predicate and contradicts the PRD twice on the other two.
+- **P9** — mine and Sec's; PM finds one of its three legs already shipped, which is an amendment on PM's predicate and not a correction on Sec's.
+
+**Honesty note on my own 4.** My round-1 block for A8 attached an aal2 rider (F-13) while still counting A8 as buildable-as-drafted. That is inconsistent with my own predicate: an added policy clause changes the DDL, so it sits between the AC and the engineer. **On a strict reading my count is 3 (A9, P7, P9)**; I am not restating it as 3 because the agenda wants the three predicates as authored, but the inconsistency is mine and is recorded rather than quietly corrected.
+
+### 8.3 Position on Sec ⟨RULING R-1⟩ — supersession, derive vs store
+
+**Architect's position: option B (a narrow, column-scoped UPDATE exemption). I disagree with Sec's lean of A, and the disagreement rests on a mechanical claim, not a preference.**
+
+Sec's A says supersession is derived, so *"no UPDATE, no DEFINER, no allowlist change, Decision 2 untouched"*, and calls it *"the only option where nothing is added and nothing is weakened."*
+
+⚠ **Two mechanical facts falsify the "nothing is weakened" half.**
+
+1. **The locked partial UNIQUE forbids A.** Lock 11's index is `UNIQUE (users_id, target_month) WHERE generation_status = 'final'`. Under A no row is ever demoted out of `final`, so **the second regeneration's row cannot become `final`** — the index rejects it. A therefore requires **retiring or narrowing the locked partial index**, which is an amendment to Decision 15's locked text. A's advantage over B was that B needs an amendment and A does not; **both need one**, to different Decisions.
+2. **The locked vocabulary already requires an UPDATE, independent of supersession.** PRD §2.6.3 and Lock 11's `draft`/`final`/`superseded` mean a report is written `draft`, authored against while `draft`, and **promoted to `final`** — and that promotion is an UPDATE of `generation_status`, as is every commentary save before it. So Decision 2's blanket *"UPDATE blocked"* was never literally true of this table under its own locked vocabulary. **The real question is not how to avoid an UPDATE; it is where the mutability window closes and what fences it** — which is exactly what PM **D-6** identified from the product side.
+
+**Restated shape, which is what I would draft:** the immutability trigger permits (i) any column while `generation_status = 'draft'`, (ii) `generation_status` on the single monotone `final → superseded` transition, (iii) nothing else, ever — and `users_id` / `target_month` are fenced in every state (Lock 12's Sec catch). **No DEFINER, no allowlist change, the locked partial index kept working exactly as written, and the full locked vocabulary preserved as stored state.**
+
+**Losing side of B, named:** Decision 2's blanket append-only claim stops being true of this table and the ADR must say so — Sec's own stated cost, and it is real. Sec's second point stands too: *"an exemption on one column is an exemption a future column joins."* The mitigation is that the exemption is expressed as a **monotone transition on one column**, which is mechanically checkable in the trigger and in a battery leg, rather than as a column allowlist.
+
+**What would change my position:** if F/CTO prefers to retire the partial index and make "current final" a read-path concept, A is coherent — but it must be ruled *as* retiring a locked constraint, not as the no-change option.
+
+### 8.4 Position on the escaping control's home — PM and Sec home it differently
+
+**PM §10** attaches BACKLOG §7.32 item 6 to **A4** as a `+AC`. **Sec ⟨RULING R-5⟩** leans folding it into **P6**, *"the control and its only consumer then share a review."* **They disagree, and I think neither is unconditionally right, because the home follows S-2.**
+
+- **S-2 Option B** (app pushes JSON; worker composes HTML) → the worker owns escaping. **PM's home is correct**: it is a property of the container, asserted on rendered output, and it must exist before any payload reaches it. P6 is downstream of the hazard, not co-located with it.
+- **S-2 Option A or C** (worker never composes HTML) → **no escaping control is needed in the worker at all**, and building one would be a control with nothing to catch. The obligation converts into a **negative assertion** — that the worker composes no HTML and receives no unescaped free text — which belongs on A4 as a property and in P10 as a leg.
+
+**So: rule S-2 first; the home falls out.** ⚠ The one thing that must not happen either way is the §7.32 booking dissolving: Sec's named losing side for folding — *"folding hides a Sec-raised item inside a product issue, and the §7.32 booking is the only record that it was raised independently"* — applies to my answer too. Whichever block receives it cites §7.32 item 6 by name, and Sec **M-2**'s scope note travels with it: the booking was drafted against `schedule_label` before the commentary columns and `owner_id_header_text` existed, and reaches them only through its *"every other free-text field"* clause.
+
+### 8.5 Position on PM §7 item 2 — the five V1 surfaces no issue carries
+
+PM's five: (i) the report listing surface · (ii) the on-demand generation **write path** · (iii) the in-app pending notification + queue · (iv) copy-from-prior-month and the `$ ReAlloc` side-by-side reference · (v) the report-level staleness banner. **PM leans fold; losing side named as P5 and P3 growing past one-session granularity.**
+
+**Architect's position: fold four, open one — (ii) is a new A-item.** I disagree with PM on exactly one of the five.
+
+- **Option 1 — fold all five (PM's lean).** *Buys:* no new Linear seats; the milestone set is unchanged; each surface sits with the issue that already owns its territory. *Costs:* (ii) is not a UI gap. A3 is a **read** helper and A7 is cron-only, so **nothing on the tree or in the wave writes a `monthly_report` row on the on-demand path.** Folding it into P5 puts a Lock 11 write with a server-derived `data_as_of` and an **RT-25** obligation inside a SvelteKit issue whose reviewer is Frontend and whose gate is not `sec-joint-review`. *Harder later:* the write path has no independent record — if P5 slips, it slips invisibly, and its Sec obligations slip with it.
+- **Option 2 — fold (i)+(iii)→P5, (iv)→P3, (v)→P8; open one new A-item for (ii). Lean.** *Buys:* the write path gets the right owner, the right label and its RT-25 named; the other four sit where their territory already is, and none of them is a DB surface. *Costs:* one new issue in a wave already at eighteen, and a new blocking edge into P5.
+- **Option 3 — two new issues (PM's alternative: listing+queue as one; on-demand write as another).** *Buys:* P5 stays small. *Costs:* two seats, and the listing/queue **is** P5's own subject matter — splitting it invents a seam the PRD does not have.
+
+**Losing side of Option 2, named:** it grows the wave to nineteen and lengthens the critical path — if the new A-item is not dispatched early, P5 has nothing to call. It also concedes PM's general point (folding is right) while carving out an exception, and a carve-out is exactly the shape that gets forgotten at promotion; the mitigation is that it carries a `sec-joint-review` label, which a fold would not.
+
+A sketch block for it is drafted in `rederived-acs.md` as **A10**, marked proposed-not-promoted.
+
+### 8.6 Disagreements left standing for the sitting
+
+Not reconciled, deliberately.
+
+1. **Sec R-1 supersession** — Sec leans **A** (derive); Architect **B** (narrow exemption). §8.3 carries the mechanical objection to A. **This one has a right answer and the sitting can reach it**; it is not a preference split.
+2. **Sec F-2 / Arch S-5, the array column** — Sec leans **B** (retire the instance by ADR-011 D3 amendment, citing ADR-035); Architect leaned **A** (ship it with a dormant fence, revival condition named). ⚠ **I now find Sec's B stronger on one point I had not weighed:** my A ships a fence that cannot fire, and a fence that cannot fire is a known way to make a future regression invisible — my own round-1 losing-side note said so. I am **not** switching my lean, because B's cost is real too (retiring a label needs the same care as allocating one) and because A leaves the V1.6 writer arriving into a fenced surface. **Both leans stand; the choice is F/CTO's.**
+3. **Escaping-control home** — PM says A4, Sec says P6, Architect says it follows S-2 (§8.4).
+4. **PM §7 item 2** — PM says fold all five, Architect says fold four and open one (§8.5).
+5. **A6's disposition** — Architect round-1 said *close*; Sec **R-2** leans *re-scope in place*. **Resolved in Sec's favour, and the concession is recorded at §8.7 rather than silently absorbed.**
+
+### 8.7 What round 2 changed in my own findings
+
+- **F-5 was right that the fence is built and wrong that nothing remains.** I measured the fence's *implementation* and concluded A6 should close. Sec **F-6** measured the fence's *reach against what A4 will actually do* and found the live gap: the RT-22 script matches `RUN` install verbs and is documented not to inspect manifests, so the moment A4 lands `COPY package*.json .` + `RUN npm ci`, **`pg` can enter through a path the fence cannot see while the fence reports clean** — Lock 13 mod #2 false with its watcher green. That is a better answer than mine, and it is the shape my own memory warns about: I verified a control existed without asking what it could not observe. A6's block is re-scoped in place accordingly, and A4 gains a sequencing constraint (its `package.json` may not land before the manifest fence does).
+- **S-3 option (b) is withdrawn.** Sec **F-4** supplies the fail-open mechanism, and it is not merely "the app has no place to issue `SET LOCAL`" — it is that the plausible partial implementation (claims without role) reads every tenant silently. Sec's α is adopted as the option to rule on, with Sec's own losing side (it puts a role-assumable identity on the cron host, which `055`'s deliberately non-owner identity exists to keep small) carried unedited.
+- **My buildable count is internally inconsistent by one** (§8.2, A8). Recorded, not restated.
+- **Nothing in §1–§7 is retracted.** The baseline did not move; every measurement in those sections stands as taken.
+
+### 8.8 Ledger — unchanged, again
+
+No catalogued §10 instance is added, removed, reordered or renumbered by round 2; no layer attribution moves; no Decision 3 label is drafted or reallocated. ADR-011 Decision 4 was read verbatim before round-1 drafting and nothing in round 2 touches it. **Path B throughout — referenced, not restated, no count carried.** ⚠ Sec **D-2** independently records the same discipline note the round-1 file carries: the **CI-fenced** set and the **§10 catalogued** set are different sets, RT-22's membership in both is coincidence rather than identity, and they must not be reconciled.
+
+### 8.9 Round-2 instruments
+
+`git fetch origin` + `git rev-parse` on both sibling refs and on `main`; `git show <ref>:<path>` piped to `md5` (both hashes matched the round-2 brief before any content was read); sibling files extracted to the session scratchpad and read whole. No tree re-measurement was performed, because `origin/main` is unmoved at `b90b846` — the round-1 measurements in §1–§7 remain current by that fact rather than by assumption.
