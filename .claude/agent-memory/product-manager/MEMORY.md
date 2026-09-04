@@ -15,3 +15,4 @@
 - [GL-brainstorm PM positions](project_gl_brainstorm_pm_positions.md) — 08-18: grain=V2 gate, S1+flip trigger, rename 2 conditions, posting_template=V2; verify vs landed ADR.
 - [SELF-239 assets-only rework](project_239_assets_only_rework.md) — v2 AC set delivered 08-20 awaiting ratify; PRD §2.2.2 amendment OWED; $ReAlloc neutral per design fence 1.
 - [SELF-242 singular-endpoint ACs](project_242_singular_endpoint_acs.md) — AC3/AC7 replacement delivered 08-20 awaiting ratify; unset=DELETE never POST 0.00; DELETE on unmerged branch at drafting.
+- [SELF-263 tax-value inventory](project_263_tax_value_inventory.md) — proposal delivered 09-03 @e472bd5 awaiting ruling; leans + R-1 reader obligation + §5 bookings owed post-ratify.

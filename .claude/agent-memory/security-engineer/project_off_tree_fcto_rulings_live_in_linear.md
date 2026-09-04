@@ -38,3 +38,17 @@ At the **V1.4 pre-flight I hit it twice more in one sitting**:
 
 Related: [[triage-a-multileg-bypass-leg-by-leg]] (the absence-vs-omission rule this produced),
 [[claim-about-the-world-vs-decision-about-what-we-do]], [[relay-from-the-tree-not-the-report]].
+
+**Corollary discovered at the SELF-263 gate (2026-09-03) — the SECOND-ORDER failure, and it runs
+the other way.** Once a ruling lives only in Linear, the next session that re-does the same work
+**writes ITS OWN weaker authority into the canonical artifact over the stronger one**, because the
+stronger one is not greppable. `100`/ADR-062 Amendment 1 recorded ADR-062 Decision 3's hard
+precondition as *"discharged by the same session"* under **team-lead delegation** — but Decision 3
+scopes that enumeration to **F/CTO**, and F/CTO had already discharged it on 2026-08-25 (SELF-245
+Comment 2). Same outcome both times, so nothing looked wrong.
+
+**How to apply:** when a branch claims to discharge an obligation, check **who the obligation names**
+before checking whether it was done. A precondition scoped to F/CTO can be **CONFIRMED** by a
+delegated re-run, never **DISCHARGED** by one — and the fix is one clause, so there is no reason to
+soften it. Grep the ADR's own wording for the actor (*"the F/CTO marking enumeration"*), not just
+the verb.
