@@ -1189,7 +1189,7 @@ begin
   if p_rows is null or pg_catalog.jsonb_typeof(p_rows) <> 'array' then
     raise exception
       'tax bracket replace-all refused: p_rows must be a JSON array of bracket objects, got % (SELF-259 replace-all, p_rows shape)',
-      pg_catalog.coalesce(pg_catalog.jsonb_typeof(p_rows), 'null');
+      coalesce(pg_catalog.jsonb_typeof(p_rows), 'null');
   end if;
 
   for v_elem in select value from pg_catalog.jsonb_array_elements(p_rows) loop
