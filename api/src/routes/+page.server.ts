@@ -18,7 +18,11 @@
 
 import { redirect } from '@sveltejs/kit';
 import { loadNetWorthView } from '$lib/server/queries/netWorth';
-import { fetchNavComposition, loadNavComposition } from '$lib/server/queries/navComposition';
+import {
+	fetchNavComposition,
+	loadNavComposition,
+	loadExcludedTaxLedgers
+} from '$lib/server/queries/navComposition';
 import type { RawNavComposition } from '$lib/server/queries/navComposition';
 import { loadStaleness } from '$lib/server/queries/staleness';
 import { loadNavSeries, resolveNavSeriesWindow } from '$lib/server/queries/nav-series';
@@ -138,6 +142,23 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	} catch (err) {
 		console.error('[+page.server] composition load threw; degrading to null:', err);
 		composition = null;
+	}
+
+	// SELF-268 AC 10a / R3 rider 6: the tax-authority-designated ledgers the E-2 exclusion removed
+	// from `051`'s leaf set (SELF-267 AC 2a) — rendering this list is the ONLY observer an unmarked
+	// ledger has anywhere on the tree (rider 0b's default-state failure), so it must be fetched, not
+	// inferred. `105`'s payload does NOT carry this set (confirmed against the landed migration at
+	// `51f2297` before writing this) — this is a SEPARATE read, not a further use of
+	// `rawComposition`. Same fail-soft posture as composition/staleness above: `null` = the read
+	// failed (the exclusion notice doesn't render); `[]` = a KNOWN, common "nothing designated yet."
+	// loadExcludedTaxLedgers() fails soft internally; this try/catch is the belt-and-suspenders
+	// boundary for an unexpected throw, same convention as every other secondary read on this route.
+	let excludedTaxLedgers = null;
+	try {
+		excludedTaxLedgers = await loadExcludedTaxLedgers(locals.supabase);
+	} catch (err) {
+		console.error('[+page.server] excluded-tax-ledgers load threw; degrading to null:', err);
+		excludedTaxLedgers = null;
 	}
 
 	// §2.1.2.d NAV-over-time chart (SELF-220), mounted below the composition
@@ -320,6 +341,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		asOf,
 		staleness,
 		composition,
+		excludedTaxLedgers,
 		navSeries,
 		navSeriesParamsError,
 		navSeriesParams: {

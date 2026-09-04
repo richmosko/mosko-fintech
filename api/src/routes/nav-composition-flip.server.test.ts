@@ -64,10 +64,17 @@ type ComputeNavMock = { mode: 'throw' } | { mode: 'value'; value: unknown };
  * refinement specifically wants a PLAUSIBLE differing return, not an exception, as the fixture
  * proving the "same number" assertion can fail.
  */
+/** SELF-268 AC 10a: the two reads `loadExcludedTaxLedgers` makes, mockable independently. */
+type ExcludedLedgersMock = {
+	ledgers?: { data?: unknown; error?: { message: string } | null };
+	accountNames?: { data?: unknown; error?: { message: string } | null };
+};
+
 function makeLocals(
 	navCompositionData: unknown,
 	navCompositionError: { message: string } | null = null,
-	computeNavMock: ComputeNavMock = { mode: 'throw' }
+	computeNavMock: ComputeNavMock = { mode: 'throw' },
+	excludedLedgersMock: ExcludedLedgersMock = {}
 ) {
 	const navCompositionRpc = vi.fn(async () => ({
 		data: navCompositionData,
@@ -81,6 +88,12 @@ function makeLocals(
 		}
 		return { data: computeNavMock.value, error: null };
 	});
+	// Defaults to a KNOWN empty result — the common bootstrap-default state — so tests that don't
+	// care about the exclusion list never need to configure it explicitly.
+	const taxAuthorityLedgersRpc = vi.fn(async () => ({
+		data: excludedLedgersMock.ledgers?.data ?? [],
+		error: excludedLedgersMock.ledgers?.error ?? null
+	}));
 
 	const rpc = vi.fn(async (fnName: string) => {
 		switch (fnName) {
@@ -88,6 +101,8 @@ function makeLocals(
 				return computeNavRpc();
 			case 'fn_nav_composition':
 				return navCompositionRpc();
+			case 'fn_tax_authority_ledgers':
+				return taxAuthorityLedgersRpc();
 			case 'fn_aggregation_has_stale_constituent':
 				return { data: [{ is_stale: false, stale_items: [] }], error: null };
 			case 'fn_nav_series_inflation_adjusted':
@@ -105,9 +120,16 @@ function makeLocals(
 				throw new Error(`unexpected rpc: ${fnName}`);
 		}
 	});
+	// `select()` exposes BOTH `.or()` (netWorth.ts's open-account count) and `.in()`
+	// (loadExcludedTaxLedgers' account-name join) — two different callers of the same
+	// `.from('account').select(...)` chain shape, on this route.
 	const from = vi.fn(() => ({
 		select: vi.fn(() => ({
-			or: vi.fn(async () => ({ count: 3, error: null }))
+			or: vi.fn(async () => ({ count: 3, error: null })),
+			in: vi.fn(async () => ({
+				data: excludedLedgersMock.accountNames?.data ?? [],
+				error: excludedLedgersMock.accountNames?.error ?? null
+			}))
 		}))
 	}));
 	const supabase = { schema: vi.fn(() => ({ rpc, from })) };
@@ -115,22 +137,24 @@ function makeLocals(
 		safeGetSession: async () => ({ session: {}, user: SESSION_USER }),
 		supabase
 	};
-	return { locals, rpc, navCompositionRpc, computeNavRpc };
+	return { locals, rpc, navCompositionRpc, computeNavRpc, taxAuthorityLedgersRpc };
 }
 
 function makeEvent(
 	navCompositionData: unknown,
 	navCompositionError: { message: string } | null = null,
-	computeNavMock?: ComputeNavMock
+	computeNavMock?: ComputeNavMock,
+	excludedLedgersMock?: ExcludedLedgersMock
 ) {
-	const { locals, rpc, navCompositionRpc, computeNavRpc } = makeLocals(
+	const { locals, rpc, navCompositionRpc, computeNavRpc, taxAuthorityLedgersRpc } = makeLocals(
 		navCompositionData,
 		navCompositionError,
-		computeNavMock
+		computeNavMock,
+		excludedLedgersMock
 	);
 	const url = new URL('http://localhost/');
 	const event = { locals, url } as unknown as Parameters<typeof load>[0];
-	return { event, rpc, navCompositionRpc, computeNavRpc };
+	return { event, rpc, navCompositionRpc, computeNavRpc, taxAuthorityLedgersRpc };
 }
 
 const SAMPLE_COMPOSITION = {
@@ -229,5 +253,47 @@ describe('load() — SELF-268 / R3 rider 0: one composed value, one reader', () 
 
 		expect(data.netWorth).toBe(0);
 		expect(data.composition?.nav).toBe(0);
+	});
+});
+
+// ── SELF-268 AC 10a / R3 rider 6 — the exclusion list threads through the SAME loader ───────────
+describe('load() — SELF-268 AC 10a: excludedTaxLedgers', () => {
+	it('a genuine designation threads through to data.excludedTaxLedgers UNCHANGED (success path)', async () => {
+		const { event, taxAuthorityLedgersRpc } = makeEvent(SAMPLE_COMPOSITION, null, undefined, {
+			ledgers: { data: [{ account_id: 7, tax_jurisdiction: 'irs' }] },
+			accountNames: { data: [{ account_id: 7, name: 'IRS Payments' }] }
+		});
+		const data = (await load(event)) as {
+			excludedTaxLedgers: Array<{ account_id: number; account_name: string; jurisdiction: string }> | null;
+		};
+
+		expect(data.excludedTaxLedgers).toEqual([
+			{ account_id: 7, account_name: 'IRS Payments', jurisdiction: 'irs' }
+		]);
+		expect(taxAuthorityLedgersRpc).toHaveBeenCalledTimes(1);
+	});
+
+	it('no designations: a KNOWN empty array, not null (the bootstrap-default state)', async () => {
+		const { event } = makeEvent(SAMPLE_COMPOSITION);
+		const data = (await load(event)) as { excludedTaxLedgers: unknown[] | null };
+
+		expect(data.excludedTaxLedgers).toEqual([]);
+	});
+
+	it('an RPC error → null, and does NOT affect the headline or the foot (independent failure)', async () => {
+		const { event } = makeEvent(SAMPLE_COMPOSITION, null, undefined, {
+			ledgers: { error: { message: 'permission denied' } }
+		});
+		const data = (await load(event)) as {
+			netWorth: number | null;
+			composition: { nav: number } | null;
+			excludedTaxLedgers: unknown[] | null;
+		};
+
+		expect(data.excludedTaxLedgers).toBeNull();
+		// The composed-NAV read is a SEPARATE call from fn_tax_authority_ledgers — a failure here
+		// must not take down the headline or the foot, unlike the shared fn_nav_composition read.
+		expect(data.netWorth).toBe(SAMPLE_COMPOSITION.nav);
+		expect(data.composition?.nav).toBe(SAMPLE_COMPOSITION.nav);
 	});
 });
