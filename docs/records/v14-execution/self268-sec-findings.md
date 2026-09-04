@@ -535,3 +535,235 @@ E41 confirms Q1 is not re-opened. Item 2 (P-11's absent watcher) is **being buil
 issue**, subject to the call-shape refinement in §2a. Item 3 (the AC block's five drifts) is **in
 progress** via Linear. P-16 … P-19 are forwarded as **blocking at the freeze** to Architect,
 Backend and Frontend.
+
+---
+
+## Freeze review at `d7b68e9`
+
+**Verdict: AMBER.** No veto. **One blocking finding (F-1)** with a **pre-merge-only fix window**, one
+sign-convention question routed to F/CTO (**F-2**, the item team-lead asked me to answer), and three
+notes. No tenant-isolation defect, no privilege-boundary defect, no `SECURITY DEFINER` addition, no
+§10 ledger movement, no ADR-011 Decision 3 obligation, and **no `nav_daily` write** — P-1's veto
+trigger is clean.
+
+**Reviewed at** `origin/feature/self-268` **`d7b68e9`** (`git rev-parse`), with `origin/main`
+**`48bbcb7`** verified an **ancestor** (`git merge-base --is-ancestor` → true), so this review names
+a tree that contains `main` rather than one that diverged from it. `git diff --stat origin/main
+origin/feature/self-268` = **31 files, 3664 insertions, 289 deletions**.
+
+---
+
+### F-1 (blocking; pre-merge window) — `105`'s `comment on function` asserts a sign convention the shipped consumer does not implement, in the direction that induces M-3's double-negation
+
+**The catalog comment says the consumer negates all three subtractive rows.** Verbatim from
+`105_nav_composition_tax_flip.sql`'s `comment on function`:
+
+> *"`nav` SUBTRACTS all three. The consumer''s buildup ladder renders all three as subtractions,
+> which is exactly ONE negation in exactly ONE place; A SECOND FLIP ANYWHERE RENDERS A CORRECT VALUE
+> WITH THE WRONG SIGN."*
+
+The header carries the same claim: *"The CONSUMER's ladder renders all three as subtractions — ONE
+negation, in ONE place, for all three rows."*
+
+**The shipped consumer negates exactly one.** `api/src/lib/nav-composition.ts:246–254`
+(`buildupRows`) flips **debt only** — `displayValue: -b.debt` — and `taxRow()` at `:218–227` returns
+`displayValue: envelope.amount` with, in its own words, *"NO further transformation — no negation, no
+abs(), no clamp."* `NavCompositionTable.svelte:243` renders that value directly through a plain
+`Intl.NumberFormat` (`:125–131`, no `signDisplay`). The file's own header at `:44` states the
+opposite of the migration's: *"`amount` carries 104's sign UNCHANGED and is rendered UNFLIPPED —
+`debt` stays the ladder's ONLY negation."*
+
+**This is deliberate on the code side, which is what makes it a documentation defect rather than a
+bug.** `nav-composition.test.ts` pins it with two dedicated regressions — *"renders the tax rows
+UNFLIPPED — positive amount in, positive displayValue out"* (`:84`) and *"exactly ONE flip in the
+whole ladder: only `debt.displayValue` is the negation of its raw magnitude"* (`:95`, asserting
+`flippedKeys` equals `['debt']`).
+
+**Why it blocks, and why the window is now.** A `comment on function` has a database representation
+and can only be corrected by emitting a new migration — `105`'s own header makes exactly this
+argument about AC 9b. The direction of harm is the one M-3 exists to name: a frontend author who
+consults the catalog comment (the artifact the comment was written to be consulted as) will add the
+second flip to the two tax rows, rendering a correct value with the wrong sign and inverting the
+overpayment receivable. **The artifact written to prevent the double-negation currently instructs
+it.**
+
+**Fix:** correct the `comment on function` and the header's SIGN CONVENTION block to state the
+convention the code implements — *"`nav` subtracts all three; the consumer's ladder negates
+`debt` alone and renders both tax amounts with `104`'s sign unchanged"* — **or** change the code to
+match the comment (see F-2). Either way the two must agree **in this migration**. Not a veto: no
+money is wrong, nothing fails open, and every value on the surface is correct today.
+
+---
+
+### F-2 (flag — the M-3 question team-lead asked, answered) — the shipped shape puts two adjacent liability rows on OPPOSITE display conventions
+
+**First, the M-3 hazard proper is CLOSED, and I state that before the flag so the two are not
+confused.** M-3's actual mechanism is a **feed** defect — *"if the §2.5.3 reader sign-flips for
+display and the §2.5.4 feed reads the display-shaped value, the overpayment is counted twice with the
+wrong sign."* On this tree no display-shaped value feeds the composition: `105` calls
+`fn_compute_tax_liability(p_as_of)` **inside the SQL body**, so the DB→DB path has no display layer
+in it at all. **That route does not exist, and I am not asking for anything against it.** The
+migration's boundary-pair legs (`BND1` underpaid / `BND2` overpaid, one transaction apart) are M-3's
+required fixture and they are present.
+
+**What remains is a sign-LEGIBILITY defect on the rendered ladder, and it is real.** Under the
+shipped unflipped shape:
+
+| Row | Displayed | Effect on the foot |
+|---|---|---|
+| `Debt` | **−$50,000** | reduces NAV |
+| `Realized Tax Liab` (underpaid) | **$3,000** | reduces NAV |
+| `Realized Tax Liab` (overpaid) | **−$4,741** | **raises NAV** |
+| `Unrealized Tax Liab` | **$20,000** | reduces NAV |
+
+Two consequences, and the second is the sharper one:
+
+1. **The column does not foot.** A reader adding `Gross Total − 50,000 + 3,000 + 20,000` does not
+   arrive at the NAV foot. §2.1.5 is a *buildup ladder*; footing is the whole affordance.
+2. **A leading minus means opposite things on adjacent rows.** `Debt` shows `−$50,000` and *reduces*
+   NAV; the row immediately beneath it can show `−$4,741` and *raise* it. Two rows of the same
+   semantic class (liabilities), same visual sign, opposite effect on the number directly below
+   them. That is worse than the non-footing, because it is not visible as an inconsistency — it
+   reads as a coherent table.
+
+**Options, with what each costs:**
+
+- **(A) Negate all three at the single ladder site** — `displayValue: -amount` for both tax rows.
+  The column foots in every state; a leading minus always means "reduces NAV"; an overpayment
+  renders **+$4,741**, which is what "adds back to your net worth" looks like on a subtractive
+  ladder. **This is the convention `105`'s comment already describes**, so it resolves F-1 by making
+  the code true rather than by weakening the comment. **Cost:** the two `nav-composition.test.ts`
+  regressions at `:84` and `:95` invert, and `flippedKeys` becomes all three keys. Both are
+  assertions of the convention, not of behaviour under it — cheap, but they must be *inverted*
+  deliberately, never deleted.
+- **(B) Keep unflipped, fix the comment (F-1 minimal).** Zero code change, zero test change; the
+  legibility defect above ships. Defensible if F/CTO reads "Realized Tax Liab: $3,000" as the plain
+  statement of a liability's magnitude and accepts that `Debt` alone is displayed as a subtraction.
+- **(C) Unflipped, plus `signDisplay: 'exceptZero'` on the two tax rows** so an underpaid liability
+  reads **+$3,000** and an overpayment **−$4,741**. The sign then always encodes *direction of the
+  tax position* rather than *direction of effect on NAV* — internally consistent, still not footing
+  against `Debt`, and it needs one line of copy saying which. `usdSigned` already exists at
+  `NavCompositionTable.svelte:132` for exactly this purpose on the unrealized-G/L column.
+
+**My recommendation is (A)**, on the ground that it is the only option under which one visual
+convention holds across all five ladder rows and the column foots — and it makes the DB comment true
+instead of retreating from it. **This is a judgment call on a money surface, not a security
+requirement**, and F/CTO may take (B) or (C) without any objection from me; F-1 must be closed
+either way.
+
+---
+
+### What was verified and is CLEAN
+
+- **P-1 (the veto trigger) — clean.** `workers/etl/src/pfin_back_etl/nav_daily.py` is the only file
+  touching the checkpoint writer and its diff is **entirely inside a docstring** — read as a full
+  diff, not a filtered one, so a removed `--`-style line could not hide as context. **Zero
+  executable lines changed.** `105` creates no table, column, index, policy, trigger or grant, and
+  writes nothing. `NAV1` / `NAV2` pin both `fn_compute_nav` signatures byte-unchanged.
+- **P-16 — satisfied structurally.** One `tax` CTE holding a single
+  `pfin.fn_compute_tax_liability(p_as_of)` call; `tax_scalars` derives both the verbatim envelopes
+  and the two applied scalars from it; the final `select` is `from sums s cross join tax_scalars t`,
+  so `buildups` and `nav` read **the same row**. See N-1 for the half this does not establish.
+- **P-17 — satisfied, and the header says why.** `coalesce((… ->> 'amount')::numeric, 0)`, written
+  against the **absent key** and never against a `status` string test. Verified the key really is
+  absent on the unavailable branch: `104:805–813` builds `{status, reason}` with no `amount`. The
+  header names this coalesce as the single home of the E26 (1) rule.
+- **P-18 — satisfied, and better than I asked.** `nav-composition.ts:108` imports
+  `FundsDueEnvelope` from `tax-quarterly.ts` and re-exports it as `TaxLiabilityEnvelope` (`:167`) —
+  the shipped union reused, not re-spelled. `BuildupRow` (`:213–216`) is a three-arm discriminated
+  union with `status` **required** and `displayValue: number | null`, so `usd.format(envelope)` is a
+  compile error rather than a rendered `$NaN`.
+- **P-11 — satisfied, both halves.** `api/src/routes/nav-composition-flip.server.test.ts` carries
+  the call-shape half (`:197` `expect(navCompositionRpc).toHaveBeenCalledTimes(1)`; `:204`
+  `expect(rpc).not.toHaveBeenCalledWith('fn_compute_nav', expect.anything())`) **and** the
+  differing-value inversion (`:208–228`). This is the watcher R3 rider 0 named and that did not
+  exist at the pre-ruling.
+- **P-2 — all five legs re-aimed at an INDEPENDENTLY-COMPUTED invariant**, not merely relabelled:
+  `051` F1/F2 and `self227` leg 12 now correct by designated-ledger CMVs queried through
+  `fn_tax_authority_ledgers()` plus the two tax terms; `102` L3c/L3i carry the same correction with
+  a note that the designated ledger holds a zero balance in that fixture. None is green by absence.
+- **P-3's boundary pair — present.** `BND1` (underpaid, realized `{computed, 700}`) and `BND2`
+  (overpaid, realized `{computed, −300}`) are one transaction apart, with `BND5` pinning the
+  one-step transition at exactly the payment amount and `GT1` pinning `gross_total` unmoved.
+- **P-4 / P-5 — satisfied as option (C).** `navFootBasis()` (`nav-composition.ts:266–275`) derives
+  **three** states from the **pair** of envelope statuses, never a boolean; the foot's own label
+  carries it (`NavCompositionTable.svelte:249`) and the §2.1.1 headline carries the short form
+  (`+page.svelte:80`, `:162–163`) — so the headline half of P-4(b) is present, not dropped. An
+  unavailable row renders `Unavailable — <reason copy>` and never a numeric.
+- **P-7 / D-5 — the app mints no second clock.** `105` threads its own `p_as_of` into the callee
+  inside the SQL body; nothing app-side resolves a date for the tax read.
+- **P-8 / D-4 — discharged.** No `V1.4 ramp` caption survives in the file or the catalog; the
+  *"STILL 0::numeric"* clause is gone; the unmarked-ledger observer clause is corrected to point at
+  the rendering that now exists. `navComposition.ts`'s falsified *"foots to `fn_compute_nav` by
+  construction"* claim is rewritten.
+- **P-9 / P-12 / P-13 — present.** The exclusion line renders from loader-side `excludedTaxLedgers`
+  across undefined / null / `[]` / populated states; the AC 9a disclaimer is a visible `<span>`, not
+  a `title=` (`NavCompositionTable.svelte`), so it survives print, PDF export and AT; the chart
+  carries its gross-basis line (`NavHistoryChart.svelte:215–216`).
+- **P-14 — satisfied.** `stable` declared in the body, ACL pair re-asserted, and `P1` / `P2` pin
+  `prosecdef` false, `provolatile = 's'`, empty `search_path`, PUBLIC absent, `authenticated`
+  present.
+- **Fail-closed for a cross-tenant caller — verified at the mechanism, not from the comment.** The
+  claim *"both envelopes unavailable"* holds because `104`'s `jur_def` is a literal two-row `VALUES`
+  list (`104:635–645`), so `jur_json` always has both jurisdictions with `computed = false` for a
+  caller who can see no schedules — the `realized` envelope therefore takes the `unavailable` branch
+  rather than falling through to `{computed, amount: null}` over an empty set. `BOOT1` / `BOOT2` pin
+  the shape; `X1` / `X2` pin cross-tenant leaf-set invisibility.
+
+---
+
+### Notes
+
+**N-1 — `(ONE)` pins a SOURCE property, not an EVALUATION count, and the CTE does not force one
+either.** The battery leg asserts *"`fn_nav_composition`'s OWN `prosrc` calls
+`fn_compute_tax_liability` EXACTLY ONCE (call-shaped occurrence)"* — a property of the **text**. The
+`tax` CTE is referenced exactly once (by `tax_scalars`), so PostgreSQL will **inline** it rather than
+materialize it, and `tax_scalars` dereferences `t.nc` **four** times. Whether the planner then
+evaluates the function once or up to four times depends on subquery pull-up behaviour that neither
+the leg nor the header observes. **⚠ I could not measure this** — this review is read-only and I did
+not stand up a database — so I am stating a mechanism, not a measurement.
+
+**No correctness exposure:** `fn_compute_tax_liability` is `STABLE`, which guarantees the same result
+for the same arguments **within a single statement**, so every evaluation agrees and P-16's
+correctness half holds regardless. The exposure is **cost**: the §2.1.5 read is the dashboard's main
+query and it may run the entire tax computation several times per load. `105`'s residual (5) names
+performance as unmeasured but does not name this multiplier. **Cheap deterministic fix, one
+keyword:** `tax as materialized ( … )`, which removes the question rather than answering it. I am
+**not** blocking on this; it is worth a line in the header either way, because *"one call"* is
+currently asserted about the source and read as being about the runtime.
+
+**N-2 — P-19 partially discharged.** The new ADR-067 Decision 5 bullet is accurate and clearly scopes
+the change to `fn_nav_composition`, but it **never states that `104`'s payload is unchanged**, which
+is the sentence I asked for. Decision 5 is the citation home for SELF-264 and SELF-266, both now
+**merged** consumers. Commit-ready, for Architect to place verbatim at the end of that bullet:
+
+> ⚠ **`104`'s own payload is UNCHANGED by this.** `fn_compute_tax_liability` emits exactly what it
+> emitted before; what moved is `fn_nav_composition`'s two `buildups` keys, which now re-emit
+> `104`'s envelopes verbatim. SELF-264 and SELF-266 resolve their citations against the contract
+> above and are unaffected — but the envelope shape is now load-bearing in a **second** place, so a
+> change to it is a change to two surfaces.
+
+**N-3 — the ADR's sign bullet is ambiguous where `105`'s comment is wrong.** The new Decision 5 sign
+bullet says *"the consumer's ladder is the single flip site"*, which reads correctly under either
+convention (it names **where** the flip happens, not **how many** rows it applies to). It is not
+falsified and needs no change — recorded so that whichever way F-2 is ruled, this sentence is checked
+against the outcome rather than assumed to follow it.
+
+---
+
+### Non-objections, stated explicitly
+
+- I do **NOT** object to the envelope-as-key decision, to `realized` being unclamped, to the R9 clamp
+  living solely in `104`, or to `105` declining to defend against a JSON-null envelope — residual (2)
+  routes that to a watcher rather than a fence, and `BOOT2` is that watcher.
+- I do **NOT** require any `nav_daily` change, any `fn_compute_nav` change, a definition-version
+  column, or a back-fill. The R3 veto stands and the tree honours it.
+- I do **NOT** require a `SECURITY DEFINER` function, an ADR-011 Decision 3 fence, or any §10 ledger
+  movement. `105` creates no FK-shaped reference; ADR-011 Decision 4's catalogued list is unchanged
+  and `105` correctly states no count. The §10 **catalogued** set and the **CI-fenced** set remain
+  different sets and are not reconciled anywhere in this branch.
+- I do **NOT** object to the `STANDING CONDITION` `105` inherits from `104` (any EXECUTE grant on
+  either function to a `rolbypassrls` role is Sec-joint-review-mandatory). It is correctly stated in
+  both the header and the catalog comment.
+- **F-2 is a judgment call, not a requirement.** Options (B) and (C) are both acceptable to me; only
+  F-1 is blocking, and it is closable under any of the three.
