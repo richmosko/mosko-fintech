@@ -3,6 +3,17 @@
 --   helper (SELF-262; migration 104). Paired with the migration in the SAME
 --   PR (verify-paired-artifacts discipline). Companion to SELF-269's own
 --   two-tenant extension — this file covers the fences 104 itself owns.
+--   SECOND PASS (this file): re-cut after Sec's AMBER
+--   (docs/records/v14-execution/self262-sec-findings.md) and the Architect
+--   fixes it drove — F-1 (LT CG empty-no-fallback OR-term), F-2
+--   (standard_deduction_ignored on the LT CG leg), F-3
+--   (quarters_elapsed RENAMED to installments_due_through_next +
+--   next_due_date, and its Dec-31 >= 4 branch going LIVE), N-2 (trunc, not
+--   round, on the quarterly split), N-4 (jurisdiction basis_year gated on
+--   computed), N-5 (rounded annual_liability). Every number below was
+--   RECOMPUTED against the landed migration body, not carried from the
+--   first-pass battery or from any dispatch note — see the F-2 note below
+--   on why L5's own value moved.
 -- =====================================================================
 -- BINDS TO MIGRATION: supabase/migrations/104_fn_compute_tax_liability.sql.
 --   Object: pfin.fn_compute_tax_liability(p_data_as_of date default
@@ -16,6 +27,18 @@
 --   read live at authoring, plus E22/E25/E26 in
 --   docs/records/v14-execution/log.md.
 --
+-- ⚠ F-2 CASCADE: 104's F-2 fix makes the LT CG walk subtract NOTHING from
+--   the LT CG input, ever (PRD-verbatim, "no standard deduction applied to
+--   this schedule"). Under the first-pass battery's own fixture (LT CG
+--   input 1001, LT CG standard_deduction 1500) taxable_income.lt_cg used to
+--   floor to 0 (SD wrongly subtracted); it is now 1001.0000 (SD never
+--   subtracted), which cascades into every downstream federal number: L6a's
+--   installments, L10's realized_tax_liab. The M-9 floor-at-zero property
+--   itself is STILL REAL (greatest(taxable, 0) is unconditional in the
+--   `targets` CTE) but is now UNREACHABLE via LT CG under any fixture where
+--   inputs stay non-negative — the M9 leg below re-proves it on an ORDINARY
+--   schedule instead, where the standard deduction is actually subtracted.
+--
 -- ┌─ WHAT THIS BATTERY PROVES — one line per required leg ─────────────────────┐
 -- │ L1  DECOMPOSITION: Revenue-class fence (BOTH conjuncts) excludes a Trade/  │
 -- │       STC decoy reaching fn_cashflow_items through the split-child branch │
@@ -27,12 +50,19 @@
 -- │ L4  E22 FALLBACK: federal.basis_year is the CURRENT year, california's is │
 -- │       the LATEST PRIOR year (103's real seed shape) — read from the SAME  │
 -- │       call, not two separate fixtures.                                    │
--- │ L5  FLOOR: federal LT-CG taxable income floors at 0 when the standard     │
--- │       deduction exceeds the input; never negative.                        │
--- │ L6  INSTALLMENTS / Q4 RESIDUAL: federal's four installments sum EXACTLY   │
--- │       to round(annual,2); Q1=Q2=Q3; the residual sits on Q4 (hand-        │
--- │       verified exact cents); california asserted structurally (same      │
--- │       invariant, evenly-divisible case).                                  │
+-- │ L5  F-2: federal LT-CG taxable_income.lt_cg = 1001.0000, the FULL input,  │
+-- │       since the LT CG walk never subtracts the standard deduction.        │
+-- │ F2  standard_deduction_ignored = true on federal.schedules.federal_lt_cg  │
+-- │       (stored SD non-zero); key ABSENT on california.schedules (no LT CG  │
+-- │       type there); false when no LT CG schedule resolves at all (B/F-1).  │
+-- │ M9  the M-9 floor-at-zero property, re-proven on an ORDINARY schedule     │
+-- │       (california, tenant B, 2027) since L5's LT CG case can no longer    │
+-- │       reach it after F-2 (see F-2 CASCADE note above).                    │
+-- │ L6  INSTALLMENTS / Q4 RESIDUAL, N-2 (trunc not round): federal's four     │
+-- │       installments sum EXACTLY to round(annual,2); Q1=Q2=Q3 TRUNCATED,    │
+-- │       Q4 carries the residual and is never negative by construction       │
+-- │       (hand-verified exact cents against the F-2-cascaded 349.75 annual); │
+-- │       california asserted structurally (independent hand-computed leg).  │
 -- │ L7  APPLIED_MARGINAL_RATE present (both legs) when computed.              │
 -- │ L8  YTD PAID: designated (federal, non-null amount) vs undesignated       │
 -- │       (california, NULL not 0) in the SAME call; funds_due UNAVAILABLE/   │
@@ -42,7 +72,7 @@
 -- │       distinguishing half of L8 (E11's one-character design choice).      │
 -- │ L10 REALIZED nav_component: UNAVAILABLE/ytd_paid_unavailable while one    │
 -- │       jurisdiction's YTD is null; COMPUTED (sum of both funds_due gaps,   │
--- │       negative allowed) once both are designated.                        │
+-- │       negative allowed, F-2-cascaded to -739.5300) once both designated.  │
 -- │ L11 UNREALIZED CLAMP: a net-LOSS aggregate across TAXABLE accounts        │
 -- │       (GL-backed cost basis, not a market-value-only numerator) clamps    │
 -- │       to 0, never a negative liability.                                  │
@@ -50,8 +80,14 @@
 -- │       Unrealized aggregate; moving it to taxable MOVES the figure by      │
 -- │       exactly its own contribution — the inversion is the fixture, not a │
 -- │       struck line.                                                       │
--- │ L13 QUARTERS_ELAPSED: the count of due dates on or before p_data_as_of,   │
--- │       swept across all four federal boundaries within one tax year.      │
+-- │ L13 F-3 RENAME: quarters_elapsed is GONE. installments_due_through_next   │
+-- │       (the ordinal of the UPCOMING installment, capped at 4) + its paired │
+-- │       next_due_date, swept across the same four boundaries: 1·2·3·4.      │
+-- │ F3  F-3 BOUNDARY SET: Apr14→1, Apr15→1 (due-today still counts as         │
+-- │       upcoming), Apr16→2, Dec31→4, next-tax-year Jan10→1 — each with its   │
+-- │       next_due_date; plus the Dec-31 obligation_to_date >= 4 branch,       │
+-- │       DEAD under the old metric and now LIVE, using the ROUNDED annual    │
+-- │       rather than 4× the truncated quarter (differs by 3c, measured).      │
 -- │ L14 R8 WINDOW: open on Jan 10 and Jan 15 (inclusive), closed Jan 16;      │
 -- │       tax_year is the PRIOR year in ALL THREE calls — only `open` moves   │
 -- │       (⚠ corrects the design memo's own §8 outline, which wrongly showed  │
@@ -66,13 +102,26 @@
 -- │       its OWN decomposition rows only, never the rich tenant's, while     │
 -- │       BOTH tenants' data coexist in the same database (RLS-authenticated,│
 -- │       not a postgres-bypassed read).                                     │
+-- │ N4  jurisdictions.federal.basis_year is JSON null when the jurisdiction   │
+-- │       is unavailable (LEAST ignores SQL NULLs; N-4's ungated bug).        │
+-- │ F1  current_year_schedule_empty = true on schedules.federal_lt_cg when a  │
+-- │       current-year LT CG row is present-but-empty with NO prior-year      │
+-- │       fallback (tenant B) — the identical situation to L15, one schedule  │
+-- │       type over, that Sec's F-1 finding says the shipped code missed.      │
+-- │ N2  the trunc-not-round fix at the boundary: annual 0.02 -> installments   │
+-- │       [0.00,0.00,0.00,0.02] (never negative); annual 7532.98 -> three      │
+-- │       equal 1883.24 truncated quarters + a 1883.26 Q4.                     │
 -- │ L17 CATALOG POSTURE: prosecdef=f, provolatile=s, search_path='' pinned,   │
 -- │       EXECUTE revoked PUBLIC / granted authenticated, EXACTLY ONE         │
 -- │       overload by proname.                                               │
--- │ L18 VOLATILITY PIN: all SIX named functions (the helper itself plus its   │
--- │       three real callees plus the two functions the header's volatility  │
--- │       section additionally names) measure provolatile = 's' — the        │
--- │       watcher for a future CREATE OR REPLACE silently un-pinning one.     │
+-- │ L18 VOLATILITY PIN, split in two per Sec's second-pass note: (a) the       │
+-- │       PINNED set — the helper plus every function the header's           │
+-- │       transitive-read-set diagram marks 's' — all measure provolatile=s;  │
+-- │       (b) the two functions that diagram marks 'v' (fn_gl_entries,        │
+-- │       fn_holdings_as_of) contain NO write statement in prosrc, the        │
+-- │       property that backs calling them read-only. NOT a hard-coded        │
+-- │       six-name list extended to eight (that count would be wrong and go   │
+-- │       red for the wrong reason) — a shape change, not a bigger number.    │
 -- │ L19 NO nav_daily REFERENCE in the catalog body (not a header-comment      │
 -- │       grep — AC 1's structural exclusion, measured).                     │
 -- │ L20 fn_compute_nav(date) / fn_compute_nav(date,boolean) /                 │
@@ -113,10 +162,11 @@ begin;
 
 \ir ../_fixtures/rls_verbs.psql
 
--- plan = 45: L1 2 · L2 1 · L3 2 · L4 2 · L5 1 · L6 3 · L7 1 · L8 3 · L9 1 ·
---   L10 1 · L11 1 · L12 1 · L13 4 · L14 3 · L15 3 · L16 8 · L17 3 · L18 1 ·
---   L19 1 · L20 3.
-select plan(45);
+-- plan = 60 (second pass, +15 over the first pass's 45): L1 2 · L2 1 ·
+--   L3 2 · L4 2 · L5 1 · F2b/F2c 2 · M9 1 · L6 3 · L7 1 · L8 3 · L9 1 ·
+--   L10 1 · L11 1 · L12 1 · L13 4 · F3(a-f) 6 · L14 3 · L15 3 · L16 8 ·
+--   N4 1 · F1 1 · F2a 1 · N2(a-b) 2 · L17 3 · L18(a-b) 2 · L19 1 · L20 3.
+select plan(60);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 
@@ -262,6 +312,64 @@ insert into pfin.account_trans (account_id, transaction_date, amount, vendor, cr
   returning trans_id as b_t \gset
 insert into pfin.account_trans_annotation (trans_id, sub_cat_id) values (:b_t, :b_sal);
 
+-- ---- F-1 / F-2a / N-4 (tenant B): a federal_lt_cg schedule PRESENT at the
+--      SAME tax_year (2026) as B's other calls above, carrying ZERO bracket
+--      rows and NO other federal_lt_cg row at any year -- present-but-empty
+--      with no prior-year fallback, the case Sec's F-1 finding says the
+--      shipped code answers wrong (identical to L15's shape, one schedule
+--      type over). federal_ordinary stays absent for B throughout, so
+--      federal remains `unavailable` regardless -- this exercises the
+--      `schedules.federal_lt_cg` sub-object INSIDE an unavailable
+--      jurisdiction, which nothing above ever inspects for B.
+insert into pfin.tax_bracket_schedule (users_id, schedule_type, tax_year, standard_deduction, schedule_label)
+  values (:'tb', 'federal_lt_cg', 2026, 0.0000, 'b-fed-ltcg-2026-empty-104');
+-- (deliberately NO tax_bracket_row insert -- row_count stays 0)
+
+-- ---- M9 (tenant B): the M-9 floor-at-zero property, re-proven on an
+--      ORDINARY schedule (california_ordinary, tax_year 2027) now that F-2
+--      makes L5's LT CG case unreachable for it. standard_deduction (100)
+--      EXCEEDS the input (50) -> taxable floors at 0, never negative.
+insert into pfin.tax_bracket_schedule (users_id, schedule_type, tax_year, standard_deduction, schedule_label)
+  values (:'tb', 'california_ordinary', 2027, 100.0000, 'b-ca-ord-2027-m9-104')
+  returning id as sch_b_m9 \gset
+insert into pfin.tax_bracket_row (users_id, schedule_id, bracket_floor, bracket_rate)
+  values (:'tb', :sch_b_m9, 0, 0.10);
+insert into pfin.account_trans (account_id, transaction_date, amount, vendor, created_at)
+  values (:b_acct, '2027-01-10', 50.0000, 'b-m9-104', '2027-01-10'::timestamptz)
+  returning trans_id as b_t_m9 \gset
+insert into pfin.account_trans_annotation (trans_id, sub_cat_id) values (:b_t_m9, :b_sal);
+
+-- ---- N-2 (tenant B): two crafted california_ordinary schedules, EACH its
+--      OWN tax_year so the two calls cannot interact, a single bracket at
+--      rate=1.00 (max legal, 101's CHECK) so annual_liability equals the
+--      input EXACTLY -- 0.02 (the negative-Q4 boundary Sec measured) and
+--      7532.98 (the boundary-adjacent large case), proving `trunc` rather
+--      than `round` at both ends of the range.
+insert into pfin.tax_bracket_schedule (users_id, schedule_type, tax_year, standard_deduction, schedule_label)
+  values (:'tb', 'california_ordinary', 2029, 0.0000, 'b-ca-ord-2029-n2a-104')
+  returning id as sch_b_n2a \gset
+insert into pfin.tax_bracket_row (users_id, schedule_id, bracket_floor, bracket_rate)
+  values (:'tb', :sch_b_n2a, 0, 1.00);
+insert into pfin.account_trans (account_id, transaction_date, amount, vendor, created_at)
+  values (:b_acct, '2029-01-10', 0.0200, 'b-n2a-104', '2029-01-10'::timestamptz)
+  returning trans_id as b_t_n2a \gset
+insert into pfin.account_trans_annotation (trans_id, sub_cat_id) values (:b_t_n2a, :b_sal);
+
+insert into pfin.tax_bracket_schedule (users_id, schedule_type, tax_year, standard_deduction, schedule_label)
+  values (:'tb', 'california_ordinary', 2028, 0.0000, 'b-ca-ord-2028-n2b-104')
+  returning id as sch_b_n2b \gset
+insert into pfin.tax_bracket_row (users_id, schedule_id, bracket_floor, bracket_rate)
+  values (:'tb', :sch_b_n2b, 0, 1.00);
+insert into pfin.account_trans (account_id, transaction_date, amount, vendor, created_at)
+  values (:b_acct, '2028-01-10', 7532.9800, 'b-n2b-104', '2028-01-10'::timestamptz)
+  returning trans_id as b_t_n2b \gset
+insert into pfin.account_trans_annotation (trans_id, sub_cat_id) values (:b_t_n2b, :b_sal);
+-- ⚠ NONE of the four schedule/tax_year additions above (2026 empty-LTCG,
+--   2027, 2028, 2029) is <= 2026 in a way that changes any L16 assertion at
+--   as_of 2026-08-15: `pick` requires tax_year <= p.tax_year, so the three
+--   future-year CA rows are invisible at tax_year 2026, and the empty LT CG
+--   row never resolves (row_count=0) so it cannot make federal `computed`.
+
 -- =====================================================================
 -- L1-L11 — the MAIN walk, as TENANT A under REAL RLS (authenticated +
 -- request.jwt.claims), not a postgres-bypassed read. Both tenants' data
@@ -309,14 +417,41 @@ select is(
 
 select is(
   (pfin.fn_compute_tax_liability('2026-08-15'::date)->'jurisdictions'->'federal'->'taxable_income'->>'lt_cg')::numeric,
-  0::numeric,
-  '(L5) federal.taxable_income.lt_cg = 0 -- standard_deduction (1500) exceeds the LT-CG input (1001), floored at zero rather than going negative (Sec M-9), applied BEFORE the bracket walk'
+  1001.0000::numeric,
+  '(L5 / F-2) federal.taxable_income.lt_cg = 1001.0000, the FULL LT-CG input -- the stored 1500 standard_deduction on the federal_lt_cg schedule is NEVER subtracted (PRD-verbatim "no standard deduction applied to this schedule"), so it does not reduce this figure at all; this is the F-2 fix, and it CASCADES into L6a and L10 below'
 );
+select is(
+  (pfin.fn_compute_tax_liability('2026-08-15'::date)->'jurisdictions'->'federal'->'schedules'->'federal_lt_cg'->>'standard_deduction_ignored')::boolean,
+  true,
+  '(F-2b) schedules.federal_lt_cg.standard_deduction_ignored = true -- the resolved LT CG schedule stores a NON-ZERO standard_deduction (1500), and the payload SAYS it was ignored rather than silently disagreeing with the user-entered value'
+);
+select ok(
+  not (pfin.fn_compute_tax_liability('2026-08-15'::date)->'jurisdictions'->'california'->'schedules'->'california_ordinary' ? 'standard_deduction_ignored'),
+  '(F-2c) california.schedules.california_ordinary carries NO standard_deduction_ignored key AT ALL -- california has no LT CG type (jur_def.ltcg_type is null for it), so the key does not exist for it, key-absent rather than false'
+);
+
+-- =====================================================================
+-- M9 — the M-9 floor-at-zero property, re-proven on an ORDINARY schedule
+-- (tenant B, california_ordinary, tax_year 2027) since F-2 makes L5's LT CG
+-- case unreachable for it: standard_deduction (100) EXCEEDS the input (50).
+-- =====================================================================
+select set_config('role', 'postgres', true);
+select _rls.set_tenant(:'tb'::uuid);
+select is(
+  jsonb_build_object(
+    'ordinary', (pfin.fn_compute_tax_liability('2027-06-01'::date)->'jurisdictions'->'california'->'taxable_income'->>'ordinary')::numeric,
+    'annual',   (pfin.fn_compute_tax_liability('2027-06-01'::date)->'jurisdictions'->'california'->>'annual_liability')::numeric
+  ),
+  jsonb_build_object('ordinary', 0::numeric, 'annual', 0.00::numeric),
+  '(M9) tenant B, california_ordinary 2027: standard_deduction (100) exceeds the input (50) -> taxable_income.ordinary floors to 0 and annual_liability = 0.00, never negative -- the same greatest(taxable, 0) mechanism L5 used to exercise before F-2, now proven on the schedule type that still reaches it'
+);
+select set_config('role', 'postgres', true);
+select _rls.set_tenant(:'ta'::uuid);
 
 select is(
   pfin.fn_compute_tax_liability('2026-08-15'::date)->'jurisdictions'->'federal'->'installments',
-  '[{"quarter":1,"due_date":"2026-04-15","amount":74.93},{"quarter":2,"due_date":"2026-06-15","amount":74.93},{"quarter":3,"due_date":"2026-09-15","amount":74.93},{"quarter":4,"due_date":"2027-01-15","amount":74.91}]'::jsonb,
-  '(L6a) federal.installments -- Q1=Q2=Q3=74.93, Q4=74.91 carries the rounding residual so all four sum EXACTLY to round(299.70,2)=299.70 (E25); hand-verified exact cents'
+  '[{"quarter":1,"due_date":"2026-04-15","amount":87.43},{"quarter":2,"due_date":"2026-06-15","amount":87.43},{"quarter":3,"due_date":"2026-09-15","amount":87.43},{"quarter":4,"due_date":"2027-01-15","amount":87.46}]'::jsonb,
+  '(L6a / F-2 cascade) federal.installments -- annual is now round(299.70 ordinary + 50.05 lt_cg, 2) = 349.75 (F-2''s taxable_income.lt_cg=1001 cascades here); Q1=Q2=Q3=trunc(349.75/4,2)=87.43, Q4=87.46 carries the residual so all four sum EXACTLY to 349.75 (E25/N-2); hand-verified exact cents'
 );
 select ok(
   (with j as (select pfin.fn_compute_tax_liability('2026-08-15'::date)->'jurisdictions'->'california' as ca)
@@ -325,7 +460,7 @@ select ok(
      and (select (i->>'amount')::numeric from j, jsonb_array_elements(j.ca->'installments') i where (i->>'quarter')::int = 1)
        = (select (i->>'amount')::numeric from j, jsonb_array_elements(j.ca->'installments') i where (i->>'quarter')::int = 3)
   ),
-  '(L6b) california installments: sum(amounts) = annual_liability EXACTLY and Q1 = Q3 (structural E25 invariant, independent hand-computed leg from federal''s)'
+  '(L6b / N-5) california installments: sum(amounts) = annual_liability EXACTLY and Q1 = Q3 (structural E25 invariant, independent hand-computed leg from federal''s) -- this equality is robustly true only BECAUSE annual_liability is already rounded to 2dp (N-5): a consumer summing installments against an unrounded annual would foot a penny short/over on a case this fixture does not happen to hit'
 );
 select is(
   (pfin.fn_compute_tax_liability('2026-08-15'::date)->'jurisdictions'->'california'->>'annual_liability')::numeric,
@@ -378,8 +513,8 @@ select is(
 );
 select is(
   pfin.fn_compute_tax_liability('2026-08-15'::date)->'nav_components'->'realized_tax_liab',
-  '{"status":"computed","amount":-918.0200}'::jsonb,
-  '(L10) STATE2: nav_components.realized_tax_liab moves from unavailable (before STATE2, both jurisdictions'' ytd_paid required) to {computed, -918.0200} -- the SUM of both jurisdictions'' Estimated-Funds-Due gaps (federal -1050.14 + california 132.12), a NEGATIVE combined figure surfaced rather than clamped (nu-1)'
+  '{"status":"computed","amount":-739.5300}'::jsonb,
+  '(L10 / F-2 cascade) STATE2: nav_components.realized_tax_liab moves from unavailable (before STATE2, both jurisdictions'' ytd_paid required) to {computed, -739.5300} -- the SUM of both jurisdictions'' Estimated-Funds-Due gaps at as_of 2026-08-15 (installments_due_through_next=3: federal 3x87.43-1200=-937.71, california 3x66.06-0=+198.18), a NEGATIVE combined figure surfaced rather than clamped (nu-1); F-2''s taxable_income.lt_cg=1001 cascades into federal''s 87.43 quarter here too'
 );
 
 -- =====================================================================
@@ -405,25 +540,96 @@ update pfin.account set tax_treatment = 'tax_deferred' where account_id = :a_pi;
 select _rls.set_tenant(:'ta'::uuid);
 
 -- =====================================================================
--- L13 — QUARTERS_ELAPSED: swept across all four federal due-date
--- boundaries, all within tax_year 2026 (Q4's due date is NEVER reached
--- inside its own tax year, by construction -- see the migration header).
+-- L13 — F-3 RENAME: quarters_elapsed is GONE. installments_due_through_next
+-- is the ORDINAL OF THE UPCOMING installment (due dates STRICTLY BEFORE
+-- as_of, plus one, capped at 4) with next_due_date beside it. Swept across
+-- the SAME four boundaries as the retired quarters_elapsed leg, all within
+-- tax_year 2026.
 -- =====================================================================
 select is(
-  (pfin.fn_compute_tax_liability('2026-02-01'::date)->'jurisdictions'->'federal'->>'quarters_elapsed')::int,
-  0, '(L13a) as_of 2026-02-01, before Apr 15 -> quarters_elapsed = 0'
+  jsonb_build_object(
+    'due_through_next', (pfin.fn_compute_tax_liability('2026-02-01'::date)->'jurisdictions'->'federal'->>'installments_due_through_next')::int,
+    'next_due_date',    pfin.fn_compute_tax_liability('2026-02-01'::date)->'jurisdictions'->'federal'->>'next_due_date'
+  ),
+  jsonb_build_object('due_through_next', 1, 'next_due_date', '2026-04-15'),
+  '(L13a) as_of 2026-02-01, before Apr 15 -> installments_due_through_next = 1 (Q1 is the upcoming one), next_due_date = 2026-04-15'
 );
 select is(
-  (pfin.fn_compute_tax_liability('2026-05-01'::date)->'jurisdictions'->'federal'->>'quarters_elapsed')::int,
-  1, '(L13b) as_of 2026-05-01, after Apr 15 -> quarters_elapsed = 1'
+  jsonb_build_object(
+    'due_through_next', (pfin.fn_compute_tax_liability('2026-05-01'::date)->'jurisdictions'->'federal'->>'installments_due_through_next')::int,
+    'next_due_date',    pfin.fn_compute_tax_liability('2026-05-01'::date)->'jurisdictions'->'federal'->>'next_due_date'
+  ),
+  jsonb_build_object('due_through_next', 2, 'next_due_date', '2026-06-15'),
+  '(L13b) as_of 2026-05-01, after Apr 15 -> installments_due_through_next = 2, next_due_date = 2026-06-15'
 );
 select is(
-  (pfin.fn_compute_tax_liability('2026-07-01'::date)->'jurisdictions'->'federal'->>'quarters_elapsed')::int,
-  2, '(L13c) as_of 2026-07-01, after Jun 15 -> quarters_elapsed = 2'
+  jsonb_build_object(
+    'due_through_next', (pfin.fn_compute_tax_liability('2026-07-01'::date)->'jurisdictions'->'federal'->>'installments_due_through_next')::int,
+    'next_due_date',    pfin.fn_compute_tax_liability('2026-07-01'::date)->'jurisdictions'->'federal'->>'next_due_date'
+  ),
+  jsonb_build_object('due_through_next', 3, 'next_due_date', '2026-09-15'),
+  '(L13c) as_of 2026-07-01, after Jun 15 -> installments_due_through_next = 3, next_due_date = 2026-09-15'
 );
 select is(
-  (pfin.fn_compute_tax_liability('2026-10-01'::date)->'jurisdictions'->'federal'->>'quarters_elapsed')::int,
-  3, '(L13d) as_of 2026-10-01, after Sep 15 -> quarters_elapsed = 3 (the max reachable inside tax_year 2026 itself; Q4''s Jan-15-following-year due date can never be <= an as_of dated inside the same tax_year)'
+  jsonb_build_object(
+    'due_through_next', (pfin.fn_compute_tax_liability('2026-10-01'::date)->'jurisdictions'->'federal'->>'installments_due_through_next')::int,
+    'next_due_date',    pfin.fn_compute_tax_liability('2026-10-01'::date)->'jurisdictions'->'federal'->>'next_due_date'
+  ),
+  jsonb_build_object('due_through_next', 4, 'next_due_date', '2027-01-15'),
+  '(L13d) as_of 2026-10-01, after Sep 15 -> installments_due_through_next = 4 (the max reachable inside tax_year 2026 itself -- under the NEW ordinal-of-upcoming meaning, unlike the retired quarters_elapsed leg''s max of 3; the cap never actually binds here: Q1-Q3 strictly-before caps the running count at 3, so +1 alone reaches 4 -- Q4''s Jan-15-following-year due date can never itself be strictly before an as_of dated inside the same tax_year), next_due_date = 2027-01-15'
+);
+
+-- =====================================================================
+-- F-3 — boundary set (Apr 14/15/16, Dec 31, next-tax-year Jan 10) and the
+-- Dec-31 obligation_to_date >= 4 branch, DEAD under the old on-or-before
+-- reading and now LIVE: at a count of 4 the obligation is the ROUNDED
+-- ANNUAL, not 4x the truncated quarter (they differ by up to 3c since
+-- N-2's trunc, not round, is what makes Q1..Q3 truncate down).
+-- =====================================================================
+select is(
+  jsonb_build_object(
+    'due_through_next', (pfin.fn_compute_tax_liability('2026-04-14'::date)->'jurisdictions'->'federal'->>'installments_due_through_next')::int,
+    'next_due_date',    pfin.fn_compute_tax_liability('2026-04-14'::date)->'jurisdictions'->'federal'->>'next_due_date'
+  ),
+  jsonb_build_object('due_through_next', 1, 'next_due_date', '2026-04-15'),
+  '(F3a) as_of 2026-04-14, one day before Q1 is due -> installments_due_through_next = 1 (still the upcoming one), next_due_date = 2026-04-15'
+);
+select is(
+  jsonb_build_object(
+    'due_through_next', (pfin.fn_compute_tax_liability('2026-04-15'::date)->'jurisdictions'->'federal'->>'installments_due_through_next')::int,
+    'next_due_date',    pfin.fn_compute_tax_liability('2026-04-15'::date)->'jurisdictions'->'federal'->>'next_due_date'
+  ),
+  jsonb_build_object('due_through_next', 1, 'next_due_date', '2026-04-15'),
+  '(F3b) as_of 2026-04-15, DUE TODAY -> installments_due_through_next STILL 1 (< not <=: a payment due today is still the upcoming one, not yet elapsed), next_due_date = 2026-04-15'
+);
+select is(
+  jsonb_build_object(
+    'due_through_next', (pfin.fn_compute_tax_liability('2026-04-16'::date)->'jurisdictions'->'federal'->>'installments_due_through_next')::int,
+    'next_due_date',    pfin.fn_compute_tax_liability('2026-04-16'::date)->'jurisdictions'->'federal'->>'next_due_date'
+  ),
+  jsonb_build_object('due_through_next', 2, 'next_due_date', '2026-06-15'),
+  '(F3c) as_of 2026-04-16, one day after Q1 -> installments_due_through_next = 2, next_due_date = 2026-06-15'
+);
+select is(
+  jsonb_build_object(
+    'due_through_next', (pfin.fn_compute_tax_liability('2026-12-31'::date)->'jurisdictions'->'federal'->>'installments_due_through_next')::int,
+    'next_due_date',    pfin.fn_compute_tax_liability('2026-12-31'::date)->'jurisdictions'->'federal'->>'next_due_date'
+  ),
+  jsonb_build_object('due_through_next', 4, 'next_due_date', '2027-01-15'),
+  '(F3d) as_of 2026-12-31 -> installments_due_through_next = 4 (Q1-Q3 all strictly before), next_due_date = 2027-01-15 (Q4, still not itself due)'
+);
+select is(
+  jsonb_build_object(
+    'due_through_next', (pfin.fn_compute_tax_liability('2027-01-10'::date)->'jurisdictions'->'federal'->>'installments_due_through_next')::int,
+    'next_due_date',    pfin.fn_compute_tax_liability('2027-01-10'::date)->'jurisdictions'->'federal'->>'next_due_date'
+  ),
+  jsonb_build_object('due_through_next', 1, 'next_due_date', '2027-04-15'),
+  '(F3e) as_of 2027-01-10 -- tax_year is 2027 (its OWN Q1 due 2027-04-15, not 2026''s Q4 due 2027-01-15, which belongs to the PRIOR tax_year''s cycle) -> installments_due_through_next resets to 1, next_due_date = 2027-04-15; federal stays computed via the E22 fallback to the 2026 schedules'
+);
+select is(
+  pfin.fn_compute_tax_liability('2026-12-31'::date)->'jurisdictions'->'federal'->'funds_due',
+  '{"status":"computed","amount":-850.2500}'::jsonb,
+  '(F3f) as_of 2026-12-31, installments_due_through_next=4: funds_due uses the ROUNDED annual (349.75) MINUS ytd_paid (1200.0000) = -850.2500 -- NOT 4 x the truncated quarter (4x87.43=349.72, which would give -850.2800, off by 3c); the previously-dead ">= 4" branch is now reachable and this proves it uses the correct operand'
 );
 
 -- =====================================================================
@@ -518,6 +724,55 @@ select is(
   '(L16g) B''s capital_gains is the SAME structural-unavailable shape as A''s (L3a) -- independent of any other data B has or lacks'
 );
 
+-- =====================================================================
+-- N-4 — jurisdiction-level basis_year is JSON null when the jurisdiction is
+-- unavailable (SQL LEAST ignores NULLs; the ungated form of this field
+-- rendered a confident year beside an unavailable status). Reuses B's
+-- already-unavailable federal jurisdiction from L16c/d above.
+-- =====================================================================
+select is(
+  pfin.fn_compute_tax_liability('2026-08-15'::date)->'jurisdictions'->'federal'->'basis_year',
+  'null'::jsonb,
+  '(N4) B''s jurisdictions.federal.basis_year is JSON null, not a confident year, while federal.status = unavailable -- LEAST(ord_basis_year, coalesce(ltcg_basis_year, ord_basis_year)) is gated on `computed` at 104''s jur_calc CTE'
+);
+
+-- =====================================================================
+-- F-1 / F-2a — tenant B's federal_lt_cg schedule (seeded upfront: present
+-- at tax_year 2026, ZERO bracket rows, no other federal_lt_cg row at any
+-- year) is the identical situation to L15's california_ordinary case, one
+-- schedule type over: present-but-empty with NO prior-year fallback. Sec's
+-- F-1 finding is that the shipped code answered this LT CG leg differently
+-- from the ordinary leg (false instead of true) for the identical shape.
+-- =====================================================================
+select is(
+  (pfin.fn_compute_tax_liability('2026-08-15'::date)->'jurisdictions'->'federal'->'schedules'->'federal_lt_cg'->>'current_year_schedule_empty')::boolean,
+  true,
+  '(F1) B''s schedules.federal_lt_cg.current_year_schedule_empty = true -- a present-but-empty 2026 row with NO prior-year fallback (ltcg_empty_no_fallback, mirroring L15''s ordinary-leg shape); federal.status stays unavailable throughout since federal_ordinary is still absent for B -- the flag is visible INSIDE an unavailable jurisdiction, which is the point'
+);
+select is(
+  (pfin.fn_compute_tax_liability('2026-08-15'::date)->'jurisdictions'->'federal'->'schedules'->'federal_lt_cg'->>'standard_deduction_ignored')::boolean,
+  false,
+  '(F2a) B''s schedules.federal_lt_cg.standard_deduction_ignored = false -- when NO LT CG schedule resolves at all (wl.schedule_id null, the F-1 case above), ltcg_standard_deduction is null and coalesce(null,0)<>0 is false; paired with F-2b''s true (a schedule that DOES resolve with a non-zero stored deduction, tenant A) and F-2c''s key-absent (california, no LT CG type)'
+);
+
+-- =====================================================================
+-- N-2 — trunc, not round, at both boundary shapes Sec measured: annual
+-- 0.02 (the negative-Q4 case under the retired round() form) and 7532.98
+-- (a large case, same mechanism). Each on its OWN tax_year for tenant B so
+-- the two calls cannot interact; a single 100%-rate bracket makes
+-- annual_liability equal the seeded input EXACTLY.
+-- =====================================================================
+select is(
+  pfin.fn_compute_tax_liability('2029-06-01'::date)->'jurisdictions'->'california'->'installments',
+  '[{"quarter":1,"due_date":"2029-04-15","amount":0.00},{"quarter":2,"due_date":"2029-06-15","amount":0.00},{"quarter":3,"due_date":"2029-09-15","amount":0.00},{"quarter":4,"due_date":"2030-01-15","amount":0.02}]'::jsonb,
+  '(N2a) annual_liability = 0.02 -> installments [0.00,0.00,0.00,0.02] -- trunc(0.02/4,2)=trunc(0.005,2)=0.00 for Q1-Q3, Q4 carries the full 0.02; under the retired round() form this was [0.01,0.01,0.01,-0.01], a NEGATIVE Q4. No installment here is negative.'
+);
+select is(
+  pfin.fn_compute_tax_liability('2028-06-01'::date)->'jurisdictions'->'california'->'installments',
+  '[{"quarter":1,"due_date":"2028-04-15","amount":1883.24},{"quarter":2,"due_date":"2028-06-15","amount":1883.24},{"quarter":3,"due_date":"2028-09-15","amount":1883.24},{"quarter":4,"due_date":"2029-01-15","amount":1883.26}]'::jsonb,
+  '(N2b) annual_liability = 7532.98 -> installments 1883.24 x 3 (trunc(7532.98/4,2)=trunc(1883.245,2)=1883.24) + 1883.26 on Q4 (the residual) -- sum is exactly 7532.98, no installment negative'
+);
+
 select set_config('role', 'postgres', true);
 select _rls.set_tenant(:'ta'::uuid);
 select is(
@@ -551,25 +806,48 @@ select is(
 );
 
 -- =====================================================================
--- L18 — VOLATILITY PIN: the helper itself PLUS the five functions its own
--- header names (fn_cashflow_items, fn_account_unrealized_gl,
--- fn_ytd_paid_per_jurisdiction, fn_tax_authority_ledgers, fn_server_today)
--- all measure provolatile = 's'. ⚠ Two of these five (fn_tax_authority_
--- ledgers, fn_server_today) are NOT actually called anywhere in 104's own
--- SQL body -- confirmed by grep and by the header's OWN "NOT READ,
--- DELIBERATELY" / "no fn_server_today() call in the body" text a few lines
--- above the volatility section that names them as "callees". This leg pins
--- what the header instructs regardless; the header inaccuracy itself is
--- flagged in the hand-off, not silently corrected here.
+-- L18 — VOLATILITY PIN, split in two per Sec's second-pass N-1 finding: the
+-- first-pass leg was a hard-coded six-name count(*) that pinned NEITHER the
+-- direct-callee set NOR the reach set (it wrongly included fn_server_today,
+-- never called at all, and omitted fn_account_cash_as_of / fn_compute_nav /
+-- fn_tax_authority_ledgers, which the corrected header's TRANSITIVE READ SET
+-- diagram places in the reach set). Extending the OLD list to eight names
+-- would go red for the WRONG reason (a count mismatch, not an un-pin) --
+-- this is a shape change, read off the corrected header, not a bigger
+-- number on the same shape.
+--
+-- (a) THE PINNED SET -- every function the header's diagram marks 's':
+--     the helper itself, its three direct callees (fn_cashflow_items,
+--     fn_ytd_paid_per_jurisdiction, fn_account_unrealized_gl), and the
+--     three 's'-marked functions one or more hops deeper
+--     (fn_account_cash_as_of, fn_compute_nav [both overloads],
+--     fn_tax_authority_ledgers). Counts BOTH the row total (catches a
+--     missing function) AND that every one of those rows is 's' (catches a
+--     silent un-pin).
+-- (b) THE TWO 'v'-MARKED REACH-SET MEMBERS (fn_gl_entries,
+--     fn_holdings_as_of) contain NO write statement (insert/update/delete/
+--     truncate) in prosrc -- the property that backs treating them as
+--     read-only despite being unpinned (VOLATILE is language sql's default,
+--     not a declared write).
 -- =====================================================================
 select is(
   (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'pfin'
       and p.proname in ('fn_compute_tax_liability', 'fn_cashflow_items', 'fn_account_unrealized_gl',
-                         'fn_ytd_paid_per_jurisdiction', 'fn_tax_authority_ledgers', 'fn_server_today')
+                         'fn_ytd_paid_per_jurisdiction', 'fn_account_cash_as_of', 'fn_compute_nav',
+                         'fn_tax_authority_ledgers')
       and p.provolatile = 's'),
-  6,
-  '(L18) all SIX named functions (the helper + the five its header names) measure provolatile = ''s'' -- the watcher for a future CREATE OR REPLACE silently un-pinning one'
+  8,
+  '(L18a) the PINNED set -- helper + 3 direct callees + 3 deeper reach-set members (fn_compute_nav counted TWICE, once per overload) -- all 8 rows measure provolatile = ''s'', read off 104''s CORRECTED header (not the first-pass six-name list, which named a non-callee and omitted three real reach-set members)'
+);
+select is(
+  (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'pfin'
+      and p.proname in ('fn_gl_entries', 'fn_holdings_as_of')
+      and p.provolatile = 'v'
+      and p.prosrc !~* '\minsert\M|\mupdate\M|\mdelete\M|\mtruncate\M'),
+  2,
+  '(L18b) the two ''v''-marked reach-set members (fn_gl_entries, fn_holdings_as_of) contain NO write statement in prosrc -- pure reads simply never pinned, the property N-1''s honesty argument actually depends on (not "every callee is s")'
 );
 
 -- =====================================================================
