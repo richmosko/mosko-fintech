@@ -29,12 +29,18 @@
 	  onSaved                  : optional callback fired after a successful submit (either mode)
 	                             -- TaxBracketSchedulesList.svelte uses this to collapse a
 	                             just-completed create panel.
-	  canDelete                : edit mode only. Team-lead ruling E35: delete renders ONLY when
-	                             this jurisdiction holds more than one schedule -- never on the
-	                             sole schedule of a type, current-year or not. The LIST component
-	                             computes this (it alone knows the jurisdiction's full schedule
-	                             count); this component does not re-derive it. Ignored/absent in
-	                             'create' mode (nothing exists yet to delete).
+	  canDelete                : edit mode only. Team-lead ruling E35+E38: delete renders ONLY
+	                             when this jurisdiction holds more than one schedule (never on the
+	                             sole schedule of a type) AND this schedule is not a provisioned
+	                             seed template. The LIST component computes both halves (it alone
+	                             knows the jurisdiction's full schedule count and each row's
+	                             `is_seed_template`); this component does not re-derive either.
+	                             Ignored/absent in 'create' mode (nothing exists yet to delete).
+	  isSeedTemplate           : edit mode only. E38: renders a "cannot be deleted" note in place
+	                             of the (absent) delete control when true -- distinguishes "no
+	                             delete because this is a seed template" from "no delete because
+	                             it's the sole schedule of a type" (E35(b), which shows no note at
+	                             all), so a user isn't left guessing why the control is missing.
 
 	FORM SHAPE -- HIDDEN IDENTITY FIELDS, VISIBLE DATA FIELDS NAMED TO MATCH THE ACTION'S OWN
 	FormData READ (parseReplaceFormData in +page.server.ts): `tax_year` / `schedule_type` are
@@ -116,7 +122,8 @@
 		initialPriorYearBalance,
 		initialRows,
 		onSaved,
-		canDelete = false
+		canDelete = false,
+		isSeedTemplate = false
 	}: {
 		mode: 'edit' | 'create';
 		scheduleType: ScheduleType;
@@ -128,6 +135,12 @@
 		initialRows: BracketRow[];
 		onSaved?: () => void;
 		canDelete?: boolean;
+		/** E38 (QA live-walk DEFECT 2): a provisioned seed-template row is editable but never
+		 *  deletable — `canDelete` already factors this in (the LIST ANDs it with the
+		 *  schedule-count check), but this component still needs to know the reason WHY delete is
+		 *  absent, to show the specific note rather than silently offering nothing. Edit mode only
+		 *  — a 'create' instance has no existing row to be a seed template of. */
+		isSeedTemplate?: boolean;
 	} = $props();
 
 	// Namespaces every DOM id on this instance -- see file header's id-collision note.
@@ -292,7 +305,11 @@
 				const data = result.data as ActionSuccess | undefined;
 				if (data?.ok) {
 					statusMessage = mode === 'edit' ? 'Changes saved.' : 'Schedule created.';
-					await update();
+					// QA live-walk defect (regression test: TaxBracketScheduleEditor.submit-update.dom.test.ts):
+					// SvelteKit's default `update()` resets the native <form> on success, which blanks
+					// every field and shows it as "required" immediately after a save that actually
+					// persisted correctly — the failure branch below already knew better.
+					await update({ reset: false });
 					onSaved?.();
 					return;
 				}
@@ -486,7 +503,9 @@
 	</div>
 
 	<div class="actions">
-		{#if mode === 'edit' && scheduleId !== undefined && canDelete}
+		{#if mode === 'edit' && isSeedTemplate}
+			<p class="fixed-note">Provisioned template schedule — edit it; it cannot be deleted.</p>
+		{:else if mode === 'edit' && scheduleId !== undefined && canDelete}
 			<DeleteScheduleControl
 				{scheduleId}
 				itemLabel={`${SCHEDULE_TYPE_LABELS[scheduleType]} (tax year ${taxYear})`}

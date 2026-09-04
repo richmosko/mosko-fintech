@@ -31,6 +31,14 @@
 	    each its own full `mode="edit"` editor inside a native `<details>` -- editable, not a
 	    read-only or delete-only row, per E35(a).
 
+	SEED TEMPLATE SCHEDULES ARE NEVER DELETABLE (E38, QA live-walk DEFECT 2): a provisioned seed
+	row (`is_seed_template: true`, EXPECTED-CONTRACT field — see ScheduleRecord's own comment)
+	renders NO delete control regardless of how many other schedules exist for that type, and a
+	one-line note instead ("Provisioned template schedule — edit it; it cannot be deleted.").
+	This is the UX half only; the actual boundary is Backend's server-side 409 refusal in
+	`?/deleteSchedule` (feature/self-265-backend, in flight) — this file's gate exists so the
+	control is never even offered, not because the client is trusted to enforce the rule.
+
 	FEDERAL LT CG STANDARD DEDUCTION (Sec review, feature/self-262, relayed by team-lead): the
 	create-from-template prefill forces `initialStandardDeduction` to 0 for `federal_lt_cg`
 	regardless of the basis schedule's own stored value -- belt-and-suspenders alongside
@@ -56,6 +64,22 @@
 		standard_deduction: number;
 		tax_balance_prior_year: number | null;
 		rows: BracketRow[];
+		/** E38 (QA live-walk DEFECT 2, team-lead ruling): true for a row `fn_provision_tax_brackets`
+		 *  (migration 103) re-inserts on every request via ON CONFLICT DO NOTHING — deleting it
+		 *  "succeeds" but the row reappears on the next navigation, since provisioning re-runs
+		 *  every request. EXPECTED-CONTRACT FIELD, typed here ahead of Backend's own commit
+		 *  (feature/self-265-backend, not yet on this branch as of this edit) per team-lead's
+		 *  explicit instruction — Backend adds this field to the loader AND a server-side 409
+		 *  refusal in `?/deleteSchedule`; this file's own gate is the UX half, never the boundary.
+		 *  OPTIONAL, deliberately: the loader's own `TaxBracketScheduleRecord` (Backend-owned,
+		 *  `$lib/server/queries/taxBracketSchedules.ts`) does not carry this field yet on this
+		 *  branch's base, so `+page.svelte`'s `data.jurisdictions` structurally would not satisfy
+		 *  a REQUIRED version of it. `undefined` is read as "not a seed template" everywhere below
+		 *  (`!schedule.is_seed_template` is `true` on `undefined`) — the same permissive default
+		 *  the field's ABSENCE implies today, never a false negative that would hide the delete
+		 *  control from a normal, non-seed schedule. Tighten to required once Backend's field is
+		 *  on this branch (a one-line change; every read site already handles both). */
+		is_seed_template?: boolean;
 	};
 
 	type Jurisdiction = {
@@ -85,12 +109,16 @@
 		return j.schedules.filter((s) => s.id !== basis?.id);
 	}
 
-	/** E35(b): delete renders ONLY when this jurisdiction holds more than one schedule — never
-	 *  on the sole schedule of a type, current-year or not. Computed here (the LIST is the only
-	 *  place that knows a jurisdiction's full schedule count) and passed down; the editor never
-	 *  re-derives it. */
-	function canDelete(j: Jurisdiction): boolean {
-		return j.schedules.length > 1;
+	/** E35(b) + E38: delete renders ONLY when (a) this jurisdiction holds more than one schedule
+	 *  — never on the sole schedule of a type, current-year or not — AND (b) this SPECIFIC
+	 *  schedule is not a provisioned seed template (E38: those rows are a floor, editable but
+	 *  never deletable — a delete "succeeds" client-side and the row simply reappears on the next
+	 *  navigation, since `fn_provision_tax_brackets` re-inserts it every request). Computed here
+	 *  per-schedule (the LIST is the only place that knows both a jurisdiction's full schedule
+	 *  count AND each schedule's own `is_seed_template` flag) and passed down; the editor never
+	 *  re-derives either half. */
+	function canDeleteSchedule(j: Jurisdiction, schedule: ScheduleRecord): boolean {
+		return j.schedules.length > 1 && !schedule.is_seed_template;
 	}
 
 	// Auto-open the create panel only when there's truly nothing else to show for this
@@ -134,7 +162,6 @@
 	{#each jurisdictions as j (j.schedule_type)}
 		{@const basis = basisSchedule(j)}
 		{@const priors = priorSchedules(j)}
-		{@const deletable = canDelete(j)}
 		<section class="jurisdiction" aria-labelledby={`jur-${j.schedule_type}`}>
 			<h2 id={`jur-${j.schedule_type}`} class="jurisdiction-title">{TYPE_LABELS[j.schedule_type]}</h2>
 
@@ -201,7 +228,8 @@
 						initialStandardDeduction={basis.standard_deduction}
 						initialPriorYearBalance={basis.tax_balance_prior_year}
 						initialRows={basis.rows}
-						canDelete={deletable}
+						canDelete={canDeleteSchedule(j, basis)}
+						isSeedTemplate={basis.is_seed_template}
 					/>
 				{/key}
 			{/if}
@@ -221,7 +249,8 @@
 								initialStandardDeduction={s.standard_deduction}
 								initialPriorYearBalance={s.tax_balance_prior_year}
 								initialRows={s.rows}
-								canDelete={deletable}
+								canDelete={canDeleteSchedule(j, s)}
+								isSeedTemplate={s.is_seed_template}
 							/>
 						</details>
 					{/each}

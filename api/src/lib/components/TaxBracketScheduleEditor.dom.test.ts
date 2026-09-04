@@ -21,6 +21,9 @@
 //     `tax_year`-keyed duplicate-schedule error (E35 team-lead note) renders only after a real
 //     createSchedule 409, which is server-error-rendering-after-submit — out of this harness's
 //     reach for the same documented reason below.
+//   - isSeedTemplate (E38, QA live-walk DEFECT 2): the "cannot be deleted" note wins over a
+//     delete control even if canDelete is independently true, absent when false, and never
+//     rendered in create mode.
 //   - Save disabled (and no crash on a forced submit) while a courtesy check fails — this file
 //     does NOT assert on server-error rendering after a real submit: `tests/stubs/app-forms.ts`'s
 //     `enhance` stub deliberately never invokes a SubmitFunction's returned async callback (no
@@ -207,6 +210,48 @@ describe('TaxBracketScheduleEditor — canDelete gating (E35(b): never on the so
 			}
 		});
 		expect(queryByRole('button', { name: /^Delete /i })).toBeNull();
+	});
+});
+
+describe('TaxBracketScheduleEditor — isSeedTemplate note (E38, QA live-walk DEFECT 2)', () => {
+	it('renders the "cannot be deleted" note and NO delete control when isSeedTemplate is true, even if canDelete is also true', () => {
+		const { getByText, queryByRole } = render(TaxBracketScheduleEditor, {
+			props: { ...editProps, canDelete: true, isSeedTemplate: true }
+		});
+		expect(getByText('Provisioned template schedule — edit it; it cannot be deleted.')).toBeTruthy();
+		expect(queryByRole('button', { name: /^Delete /i })).toBeNull();
+	});
+
+	it('renders the delete control, not the note, when isSeedTemplate is false and canDelete is true', () => {
+		const { getByRole, queryByText } = render(TaxBracketScheduleEditor, {
+			props: { ...editProps, canDelete: true, isSeedTemplate: false }
+		});
+		expect(getByRole('button', { name: 'Delete Federal — Ordinary Income (tax year 2026)' })).toBeTruthy();
+		expect(queryByText(/cannot be deleted/)).toBeNull();
+	});
+
+	it('renders neither the note nor a delete control when isSeedTemplate is false and canDelete is false (E35(b)’s own sole-schedule case)', () => {
+		const { queryByRole, queryByText } = render(TaxBracketScheduleEditor, {
+			props: { ...editProps, canDelete: false, isSeedTemplate: false }
+		});
+		expect(queryByRole('button', { name: /^Delete /i })).toBeNull();
+		expect(queryByText(/cannot be deleted/)).toBeNull();
+	});
+
+	it('never renders the note in create mode (nothing exists yet to be a seed template of)', () => {
+		const { queryByText } = render(TaxBracketScheduleEditor, {
+			props: {
+				mode: 'create' as const,
+				scheduleType: 'california_ordinary' as ScheduleType,
+				taxYear: 2026,
+				initialLabel: '',
+				initialStandardDeduction: 0,
+				initialPriorYearBalance: null,
+				initialRows: [{ bracket_floor: 0, bracket_rate: 0 }],
+				isSeedTemplate: true
+			}
+		});
+		expect(queryByText(/cannot be deleted/)).toBeNull();
 	});
 });
 
