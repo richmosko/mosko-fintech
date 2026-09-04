@@ -117,8 +117,10 @@ export type TaxJurisdictionPayload = {
 	/** Keyed by pfin.tax_schedule_type_enum value: federal_ordinary / federal_lt_cg / california_ordinary. */
 	schedules: Record<string, TaxScheduleInfo>;
 	inputs: {
-		ordinary_input: number;
-		lt_cg_input: number;
+		/** NULL when the ordinary schedule itself did not resolve (jur_json's `wo` LEFT JOIN miss). */
+		ordinary_input: number | null;
+		/** NULL on `california` always (no LT CG schedule type there) and on an unresolved LT CG schedule. */
+		lt_cg_input: number | null;
 		/** The ORDINARY schedule's stored value — the one actually subtracted; never the LT CG one. */
 		standard_deduction: number | null;
 	};
