@@ -50,8 +50,13 @@ Description:
            auth.uid() — the tenant as THE DATABASE resolved it, not the Python
            variable. Architect's 054 BEFORE INSERT trigger rejects any row whose
            users_id disagrees, and fails closed when the GUC is unset.
-        3. READ: select pfin.fn_compute_nav(current_date, true)  -- the headline
-           NAV, scoped to accounts OPEN AS OF the valuation date.
+        3. READ: select pfin.fn_compute_nav(current_date, true)  -- the GROSS
+           checkpoint NAV (scoped to accounts OPEN AS OF the valuation date), NOT
+           the §2.1.1 headline as of SELF-268 / ADR-067 Decision 3 (R3, option A′):
+           the live §2.1.1 headline flipped to the composed, tax-adjusted
+           pfin.fn_nav_composition read and no longer calls this function at all.
+           fn_compute_nav is retained ONLY so this checkpoint write keeps
+           happening; nav_daily stays the permanently-gross pre-tax series.
            ⚠ 050's "sound only at current_date" TEMPORAL CONSTRAINT IS STRUCK at
            059 (ADR-042), NOT relaxed: it rested entirely on is_active being a
            current-state boolean, and closed_at IS temporal, so fn_compute_nav is

@@ -19,3 +19,10 @@
 import { vi } from 'vitest';
 
 export const goto = vi.fn(async (_url: string | URL, _opts?: unknown) => {});
+
+// Added for SELF-265 (TaxBracketScheduleEditor.svelte): unlike the redirect-on-save editors
+// that call `goto()` to a DIFFERENT read surface, this editor's own page IS the destination, so
+// a successful save re-syncs the loader's own data via `invalidateAll()` instead of navigating
+// away. Same "real vi.fn() under the shared alias" convention as `goto` above — no `vi.mock()`
+// needed.
+export const invalidateAll = vi.fn(async () => {});

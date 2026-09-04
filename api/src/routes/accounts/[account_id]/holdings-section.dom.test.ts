@@ -32,6 +32,9 @@ const ACCOUNT = {
 	account_type: 'investment',
 	scope: 'personal',
 	tax_treatment: 'taxable',
+	// tax_jurisdiction (SELF-267 AC 2) — added to ACCOUNT_COLUMNS so PageData carries it;
+	// null here (undesignated) since this fixture is unrelated to the tax-authority surface.
+	tax_jurisdiction: null,
 	closed_at: null,
 	linked_source_id: null,
 	created_at: '2026-01-01T00:00:00Z'

@@ -1,0 +1,342 @@
+<!--
+	TaxBracketSchedulesList.svelte -- top-level list for the §2.5.2 /settings/tax-brackets
+	editor (SELF-265 AC1/AC7/AC7a). Frontend-owned browser surface. Consumes the loader's
+	`jurisdictions` array VERBATIM (queries/taxBracketSchedules.ts, Backend-owned,
+	feature/self-265-backend @ e1c1845) -- always exactly three entries, in
+	federal_ordinary / federal_lt_cg / california_ordinary order, each carrying every schedule
+	of that type plus `current_year_present` + `basis_year` computed server-side.
+
+	RECONCILIATION HISTORY, kept for the record (this component's THIRD contract pass):
+	  (1) built against a provisional, guessed contract before any Backend branch existed;
+	  (2) reconciled against the real `jurisdictions[]` shape once
+	      `feature/self-265-backend @ caebbec`/`e1c1845` landed, but scoped prior-year schedules
+	      to delete-only (no edit) and gated delete with no "last schedule" guard;
+	  (3) THIS PASS -- team-lead ruling E35 (under F/CTO delegation), three corrections: (a) a
+	      prior-year schedule is the E22 fallback basis and MUST stay fully editable, not
+	      delete-only -- it renders here as a collapsed `<details>` holding a full editor; (b)
+	      delete renders ONLY when a jurisdiction holds more than one schedule (never on the sole
+	      schedule of a type) -- computed here as `canDelete`, passed down, never re-derived by
+	      the editor; (c) the create panel prefills from the NEWEST prior-year schedule as a
+	      TEMPLATE (unchanged in substance from pass 2, restated because E35 confirms it as the
+	      intended AC7a/E22 mechanism, not merely this component's own guess).
+
+	PER-JURISDICTION LAYOUT:
+	  - The BASIS schedule (current year if present, else the latest prior year on file, per
+	    E22 -- `basis_year`) renders as the primary, always-open editor when one exists.
+	  - When `current_year_present` is false, an honest E22-styled note renders above it ("No
+	    {type} schedule entered for {currentTaxYear} — using {basis_year}" when a prior year
+	    exists; "No {type} schedule entered" when none), plus an "Add {currentTaxYear} schedule"
+	    toggle that reveals a `mode="create"` editor prefilled from the basis schedule.
+	  - Every OTHER schedule on file for the type renders collapsed under "Prior years on file",
+	    each its own full `mode="edit"` editor inside a native `<details>` -- editable, not a
+	    read-only or delete-only row, per E35(a).
+
+	SEED TEMPLATE SCHEDULES ARE NEVER DELETABLE (E38, QA live-walk DEFECT 2): a provisioned seed
+	row (`is_seed_template: true`, EXPECTED-CONTRACT field — see ScheduleRecord's own comment)
+	renders NO delete control regardless of how many other schedules exist for that type, and a
+	one-line note instead ("Provisioned template schedule — edit it; it cannot be deleted.").
+	This is the UX half only; the actual boundary is Backend's server-side 409 refusal in
+	`?/deleteSchedule` (feature/self-265-backend, in flight) — this file's gate exists so the
+	control is never even offered, not because the client is trusted to enforce the rule.
+
+	FEDERAL LT CG STANDARD DEDUCTION (Sec review, feature/self-262, relayed by team-lead): the
+	create-from-template prefill forces `initialStandardDeduction` to 0 for `federal_lt_cg`
+	regardless of the basis schedule's own stored value -- belt-and-suspenders alongside
+	TaxBracketScheduleEditor's own internal override (that component locks the field
+	unconditionally for this type; this line exists so a reader of THIS file sees the same fact
+	without having to open the editor's source to confirm it isn't silently passing through a
+	stale/wrong basis value first).
+
+	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5).
+-->
+<script lang="ts">
+	import TaxBracketScheduleEditor from '$lib/components/TaxBracketScheduleEditor.svelte';
+	import Button from '$lib/components/Button.svelte';
+
+	type ScheduleType = 'federal_ordinary' | 'federal_lt_cg' | 'california_ordinary';
+	type BracketRow = { bracket_floor: number; bracket_rate: number };
+
+	type ScheduleRecord = {
+		id: number;
+		tax_year: number;
+		schedule_type: ScheduleType;
+		schedule_label: string;
+		standard_deduction: number;
+		tax_balance_prior_year: number | null;
+		rows: BracketRow[];
+		/** E38 (QA live-walk DEFECT 2, team-lead ruling): true for a row `fn_provision_tax_brackets`
+		 *  (migration 103) re-inserts on every request via ON CONFLICT DO NOTHING — deleting it
+		 *  "succeeds" but the row reappears on the next navigation, since provisioning re-runs
+		 *  every request. EXPECTED-CONTRACT FIELD, typed here ahead of Backend's own commit
+		 *  (feature/self-265-backend, not yet on this branch as of this edit) per team-lead's
+		 *  explicit instruction — Backend adds this field to the loader AND a server-side 409
+		 *  refusal in `?/deleteSchedule`; this file's own gate is the UX half, never the boundary.
+		 *  OPTIONAL, deliberately: the loader's own `TaxBracketScheduleRecord` (Backend-owned,
+		 *  `$lib/server/queries/taxBracketSchedules.ts`) does not carry this field yet on this
+		 *  branch's base, so `+page.svelte`'s `data.jurisdictions` structurally would not satisfy
+		 *  a REQUIRED version of it. `undefined` is read as "not a seed template" everywhere below
+		 *  (`!schedule.is_seed_template` is `true` on `undefined`) — the same permissive default
+		 *  the field's ABSENCE implies today, never a false negative that would hide the delete
+		 *  control from a normal, non-seed schedule. Tighten to required once Backend's field is
+		 *  on this branch (a one-line change; every read site already handles both). */
+		is_seed_template?: boolean;
+	};
+
+	type Jurisdiction = {
+		schedule_type: ScheduleType;
+		schedules: ScheduleRecord[];
+		current_year_present: boolean;
+		basis_year: number | null;
+	};
+
+	let { jurisdictions, currentTaxYear }: { jurisdictions: Jurisdiction[]; currentTaxYear: number } = $props();
+
+	const TYPE_LABELS: Record<ScheduleType, string> = {
+		federal_ordinary: 'Federal — Ordinary Income',
+		federal_lt_cg: 'Federal — Long-Term Capital Gains',
+		california_ordinary: 'California (FTB) — Ordinary Income'
+	};
+
+	function basisSchedule(j: Jurisdiction): ScheduleRecord | null {
+		if (j.basis_year === null) return null;
+		return j.schedules.find((s) => s.tax_year === j.basis_year) ?? null;
+	}
+
+	/** Every schedule of the type OTHER than the basis one — already tax_year DESCENDING (the
+	 *  loader's own order), so "newest prior year first" falls out of this filter for free. */
+	function priorSchedules(j: Jurisdiction): ScheduleRecord[] {
+		const basis = basisSchedule(j);
+		return j.schedules.filter((s) => s.id !== basis?.id);
+	}
+
+	/** E35(b) + E38: delete renders ONLY when (a) this jurisdiction holds more than one schedule
+	 *  — never on the sole schedule of a type, current-year or not — AND (b) this SPECIFIC
+	 *  schedule is not a provisioned seed template (E38: those rows are a floor, editable but
+	 *  never deletable — a delete "succeeds" client-side and the row simply reappears on the next
+	 *  navigation, since `fn_provision_tax_brackets` re-inserts it every request). Computed here
+	 *  per-schedule (the LIST is the only place that knows both a jurisdiction's full schedule
+	 *  count AND each schedule's own `is_seed_template` flag) and passed down; the editor never
+	 *  re-derives either half. */
+	function canDeleteSchedule(j: Jurisdiction, schedule: ScheduleRecord): boolean {
+		return j.schedules.length > 1 && !schedule.is_seed_template;
+	}
+
+	// Auto-open the create panel only when there's truly nothing else to show for this
+	// jurisdiction (no basis at all). CORRECTED (team-lead, post-E35): this MUST be `$derived`
+	// from the LIVE `jurisdictions` prop, not a one-time capture -- verified against
+	// +page.svelte, which instantiates this component with no `{#key ...}` wrapper, so
+	// `invalidateAll()` (fired by every editor's own `update()` on a successful submit) does
+	// NOT remount it; SvelteKit re-runs `load()` and updates the `data` prop / this component's
+	// `jurisdictions` prop IN PLACE on the same instance. A one-time-captured default would have
+	// gone stale the instant any OTHER jurisdiction's create/save/delete completed on the same
+	// page -- e.g. a type with no schedule auto-opens its create panel, the user creates a
+	// schedule for a DIFFERENT type, `jurisdictions` refreshes, and the first panel would have
+	// stayed forced open even though it now has a schedule.
+	const autoOpenDefault = $derived(
+		Object.fromEntries(jurisdictions.map((j) => [j.schedule_type, j.basis_year === null])) as Record<
+			ScheduleType,
+			boolean
+		>
+	);
+
+	// An explicit user action (the "Add {year} schedule" click, or this schedule type's own
+	// create-panel closing itself after a successful submit) OVERRIDES the derived default for
+	// that one type. Reset to {} whenever `jurisdictions` itself changes reference (a genuine
+	// fresh load, not merely a click) -- `$effect` reruns only when its own reactive reads
+	// change, and `jurisdictions` only gets a new reference from a real reload, never from a
+	// local `userToggled` mutation, so this cannot fight a user's own in-progress click.
+	let userToggled = $state<Partial<Record<ScheduleType, boolean>>>({});
+	$effect(() => {
+		jurisdictions;
+		userToggled = {};
+	});
+
+	const openCreate = $derived(
+		Object.fromEntries(
+			jurisdictions.map((j) => [j.schedule_type, userToggled[j.schedule_type] ?? autoOpenDefault[j.schedule_type]])
+		) as Record<ScheduleType, boolean>
+	);
+</script>
+
+<div class="list">
+	{#each jurisdictions as j (j.schedule_type)}
+		{@const basis = basisSchedule(j)}
+		{@const priors = priorSchedules(j)}
+		<section class="jurisdiction" aria-labelledby={`jur-${j.schedule_type}`}>
+			<h2 id={`jur-${j.schedule_type}`} class="jurisdiction-title">{TYPE_LABELS[j.schedule_type]}</h2>
+
+			{#if !j.current_year_present}
+				<div class="missing-note" role="status">
+					<span class="missing-dot" aria-hidden="true"></span>
+					<div class="missing-text">
+						{#if basis}
+							<p class="missing-title">
+								No {TYPE_LABELS[j.schedule_type]} schedule entered for {currentTaxYear} — using {basis.tax_year}.
+							</p>
+						{:else}
+							<p class="missing-title">No {TYPE_LABELS[j.schedule_type]} schedule entered.</p>
+						{/if}
+						{#if !openCreate[j.schedule_type]}
+							<Button variant="secondary" type="button" onclick={() => (userToggled[j.schedule_type] = true)}>
+								Add {currentTaxYear} schedule
+							</Button>
+						{/if}
+					</div>
+				</div>
+			{/if}
+
+			{#if openCreate[j.schedule_type]}
+				<!-- Keyed on type+year (team-lead correction, same class as the auto-open fix): while
+				     the create panel is open its OWN identity (which type/year it would create) is
+				     what must force a remount if it ever changes, not the transient `basis` it
+				     merely reads for the template prefill -- the panel already unmounts on success
+				     (onSaved clears openCreate), so its remount need is narrower than the basis
+				     editor's below, but keying costs nothing and removes the question. -->
+				{#key `${j.schedule_type}-${currentTaxYear}`}
+					<TaxBracketScheduleEditor
+						mode="create"
+						scheduleType={j.schedule_type}
+						taxYear={currentTaxYear}
+						initialLabel={basis?.schedule_label ?? ''}
+						initialStandardDeduction={j.schedule_type === 'federal_lt_cg'
+							? 0
+							: (basis?.standard_deduction ?? 0)}
+						initialPriorYearBalance={null}
+						initialRows={basis?.rows ?? [{ bracket_floor: 0, bracket_rate: 0 }]}
+						onSaved={() => (userToggled[j.schedule_type] = false)}
+					/>
+				{/key}
+			{/if}
+
+			{#if basis}
+				<!-- Keyed on the schedule's OWN id (team-lead correction): without this, creating a
+				     NEW basis year (e.g. 2026 from a 2025-only jurisdiction) reuses the SAME editor
+				     instance -- its $state-captured draft (label/standardDeduction/priorYearBalance/
+				     rows) does NOT re-initialize from new props, but its hidden tax_year/schedule_id
+				     fields DO (they read the props directly, not $state), so a save with an untouched
+				     draft would post the OLD year's rows/label under the NEW schedule's id and pass
+				     the identity guard cleanly -- a SILENT wrong-year overwrite, not even a visible
+				     error. `{#key basis.id}` forces a fresh component (and therefore fresh $state
+				     initializers) whenever the underlying schedule row changes. -->
+				{#key basis.id}
+					<TaxBracketScheduleEditor
+						mode="edit"
+						scheduleType={j.schedule_type}
+						taxYear={basis.tax_year}
+						scheduleId={basis.id}
+						initialLabel={basis.schedule_label}
+						initialStandardDeduction={basis.standard_deduction}
+						initialPriorYearBalance={basis.tax_balance_prior_year}
+						initialRows={basis.rows}
+						canDelete={canDeleteSchedule(j, basis)}
+						isSeedTemplate={basis.is_seed_template}
+					/>
+				{/key}
+			{/if}
+
+			{#if priors.length > 0}
+				<div class="prior-schedules">
+					<h3 class="prior-title">Prior years on file</h3>
+					{#each priors as s (s.id)}
+						<details class="prior-details">
+							<summary class="prior-summary">{s.tax_year} — {s.schedule_label}</summary>
+							<TaxBracketScheduleEditor
+								mode="edit"
+								scheduleType={j.schedule_type}
+								taxYear={s.tax_year}
+								scheduleId={s.id}
+								initialLabel={s.schedule_label}
+								initialStandardDeduction={s.standard_deduction}
+								initialPriorYearBalance={s.tax_balance_prior_year}
+								initialRows={s.rows}
+								canDelete={canDeleteSchedule(j, s)}
+								isSeedTemplate={s.is_seed_template}
+							/>
+						</details>
+					{/each}
+				</div>
+			{/if}
+		</section>
+	{/each}
+</div>
+
+<style>
+	.list {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-6);
+	}
+	.jurisdiction {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-3);
+	}
+	.jurisdiction-title {
+		margin: 0;
+		font: var(--weight-semi) var(--fs-h2) / var(--lh-tight) var(--font-ui);
+		color: var(--c-text-primary);
+	}
+	/* Same --c-attn-* "confirmed, actionable-adjacent" register UnpricedMarker.svelte /
+	   StaleConstituentBadge use for a definite, financially material gap in this render. */
+	.missing-note {
+		display: flex;
+		align-items: flex-start;
+		gap: var(--space-2);
+		padding: var(--space-3) var(--space-4);
+		border: 1px solid var(--c-attn-border);
+		border-left: var(--space-1) solid var(--c-attn-solid);
+		border-radius: var(--radius-md);
+		background: var(--c-attn-bg);
+	}
+	.missing-dot {
+		width: 0.5rem;
+		height: 0.5rem;
+		margin-top: 6px;
+		border-radius: var(--radius-pill);
+		background: var(--c-attn-solid);
+		flex: 0 0 auto;
+	}
+	.missing-text {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: var(--space-2);
+	}
+	.missing-title {
+		margin: 0;
+		font: var(--weight-semi) var(--fs-body) / var(--lh-tight) var(--font-ui);
+		color: var(--c-attn-text);
+	}
+	.prior-schedules {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-2);
+	}
+	.prior-title {
+		margin: 0;
+		font: var(--weight-semi) var(--fs-small) / 1.2 var(--font-ui);
+		color: var(--c-text-secondary);
+		text-transform: uppercase;
+		letter-spacing: 0.02em;
+	}
+	.prior-details {
+		border: 1px solid var(--c-border);
+		border-radius: var(--radius-md);
+		background: var(--c-surface-alt);
+	}
+	.prior-summary {
+		cursor: pointer;
+		padding: var(--space-2) var(--space-3);
+		font: var(--weight-med) var(--fs-small) / 1.2 var(--font-ui);
+		color: var(--c-text-secondary);
+	}
+	.prior-summary:focus-visible {
+		outline: none;
+		box-shadow: var(--focus-ring);
+	}
+	/* The full editor renders inside the <details>, already carrying its own surface/border/
+	   shadow — a small breathing margin keeps it from touching the disclosure's own edge. */
+	.prior-details > :global(form) {
+		margin: var(--space-2);
+	}
+</style>

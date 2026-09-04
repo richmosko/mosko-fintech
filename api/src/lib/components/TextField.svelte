@@ -12,6 +12,7 @@
 	let {
 		label,
 		name,
+		id,
 		value = $bindable(''),
 		type = 'text',
 		required = false,
@@ -30,6 +31,13 @@
 	}: {
 		label: string;
 		name: string;
+		/** Overrides the derived `f-${name}` DOM id. SELF-265's need: several
+		 *  TaxBracketScheduleEditor instances on one page share the SAME server-required
+		 *  `name` (e.g. "standard_deduction") across different <form>s, which would otherwise
+		 *  collide on id (`for`/`aria-describedby` association breaks on a duplicate id even
+		 *  though `name` uniqueness is scoped per-form). Optional; every existing call site is
+		 *  unaffected. */
+		id?: string;
 		value?: string;
 		type?: 'text' | 'date' | 'email' | 'password';
 		required?: boolean;
@@ -57,7 +65,7 @@
 		onchange?: (event: Event) => void;
 	} = $props();
 
-	const fieldId = $derived(`f-${name}`);
+	const fieldId = $derived(id ?? `f-${name}`);
 	const errId = $derived(`${fieldId}-err`);
 	const hintId = $derived(`${fieldId}-hint`);
 

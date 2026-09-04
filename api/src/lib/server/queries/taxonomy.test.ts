@@ -83,15 +83,29 @@ type TableOpts = {
 	upsertErr?: { message: string } | null;
 };
 
+/** SELF-260 (103) — options for the `fn_provision_tax_brackets()` RPC mock, the third,
+ *  guard-less branch. `data` mirrors the function's own return (schedules CREATED: 3 fresh, 0
+ *  already-provisioned); `error` mirrors an RPC-level failure. Defaults to `{ data: 0 }` so
+ *  existing tests that don't care about this branch get a quiet, already-provisioned response. */
+type TaxBracketOpts = {
+	data?: number;
+	error?: { message: string } | null;
+};
+
 /**
- * Table-dispatching supabase stub covering all four tables the two provisioning branches touch.
- * `asset` configures `user_taxonomy` + `taxonomy_default`; `cashflow` configures
- * `posting_prototype` + `posting_prototype_default`. Each table's guard/default-read/upsert is an
- * INDEPENDENT mock so a test can prove one branch's failure never reaches the other's calls.
+ * Table-dispatching supabase stub covering all four tables the two provisioning branches touch,
+ * PLUS the SELF-260 `fn_provision_tax_brackets()` RPC (a third, guard-less branch — no table
+ * dispatch, just `.schema('pfin').rpc(name)`). `asset` configures `user_taxonomy` +
+ * `taxonomy_default`; `cashflow` configures `posting_prototype` + `posting_prototype_default`;
+ * `taxBrackets` configures the RPC response. Each branch's mock is INDEPENDENT so a test can prove
+ * one branch's failure never reaches another's calls.
  */
-function makeSupabase(opts: { asset?: TableOpts; cashflow?: TableOpts } = {}) {
+function makeSupabase(
+	opts: { asset?: TableOpts; cashflow?: TableOpts; taxBrackets?: TaxBracketOpts } = {}
+) {
 	const asset = opts.asset ?? {};
 	const cashflow = opts.cashflow ?? {};
+	const taxBrackets = opts.taxBrackets ?? {};
 
 	function makeGuardAndUpsert(o: TableOpts) {
 		const maybeSingle = vi.fn(async () => ({ data: o.existing ?? null, error: o.existingErr ?? null }));
@@ -112,6 +126,11 @@ function makeSupabase(opts: { asset?: TableOpts; cashflow?: TableOpts } = {}) {
 	const taxonomyDefaultSelect = makeDefaultsSelect(asset);
 	const postingPrototype = makeGuardAndUpsert(cashflow);
 	const postingPrototypeDefaultSelect = makeDefaultsSelect(cashflow);
+	// SELF-260: no table dispatch, no guard — just the RPC's own data/error response.
+	const rpc = vi.fn(async (_fn: string, ..._args: unknown[]) => ({
+		data: taxBrackets.data ?? 0,
+		error: taxBrackets.error ?? null
+	}));
 
 	const from = vi.fn((table: string) => {
 		if (table === 'user_taxonomy') return { select: userTaxonomy.selectGuard, upsert: userTaxonomy.upsert };
@@ -121,11 +140,12 @@ function makeSupabase(opts: { asset?: TableOpts; cashflow?: TableOpts } = {}) {
 		if (table === 'posting_prototype_default') return { select: postingPrototypeDefaultSelect };
 		return {};
 	});
-	const schema = vi.fn(() => ({ from }));
+	const schema = vi.fn(() => ({ from, rpc }));
 	const client = { schema } as unknown as SupabaseClient;
 	return {
 		client,
 		from,
+		rpc,
 		userTaxonomyUpsert: userTaxonomy.upsert,
 		taxonomyDefaultSelect,
 		postingPrototypeUpsert: postingPrototype.upsert,
@@ -335,6 +355,119 @@ describe('provisionDefaultTaxonomy — post-084 two-independent-branches shape',
 		} as unknown as SupabaseClient;
 		await expect(provisionDefaultTaxonomy(client, USER_ID)).resolves.toBeUndefined();
 		expect(errSpy).toHaveBeenCalled();
+		errSpy.mockRestore();
+	});
+});
+
+// ============================================================================
+// provisionTaxBrackets (SELF-260 / migration 103) — the third, GUARD-LESS sibling branch inside
+// provisionDefaultTaxonomy. `pfin.fn_provision_tax_brackets()` IS its own existence guard
+// (per-schedule-key `on conflict do nothing`, inside the SECURITY INVOKER function) — there is no
+// app-side pre-read to assert here, only: the RPC is called once with no args, the branch stays
+// quiet (never throws) on both 3 (fresh) and 0 (already-provisioned), it fails soft on an RPC
+// error, and it runs AFTER both taxonomy siblings so a failure in one never skips the others.
+// ============================================================================
+
+describe('provisionDefaultTaxonomy → tax-bracket branch (SELF-260 / 103)', () => {
+	it('calls fn_provision_tax_brackets exactly once, with no arguments', async () => {
+		const s = makeSupabase({
+			asset: { existing: { id: 1 } },
+			cashflow: { existing: { id: 37 } },
+			taxBrackets: { data: 3 }
+		});
+		await provisionDefaultTaxonomy(s.client, USER_ID);
+
+		expect(s.rpc).toHaveBeenCalledTimes(1);
+		expect(s.rpc).toHaveBeenCalledWith('fn_provision_tax_brackets');
+	});
+
+	it('resolves quietly (no throw) when the function reports 3 schedules created (fresh caller)', async () => {
+		const s = makeSupabase({
+			asset: { existing: { id: 1 } },
+			cashflow: { existing: { id: 37 } },
+			taxBrackets: { data: 3 }
+		});
+		await expect(provisionDefaultTaxonomy(s.client, USER_ID)).resolves.toBeUndefined();
+		expect(s.rpc).toHaveBeenCalledTimes(1);
+	});
+
+	it('resolves quietly (no throw) when the function reports 0 schedules created (already provisioned)', async () => {
+		const s = makeSupabase({
+			asset: { existing: { id: 1 } },
+			cashflow: { existing: { id: 37 } },
+			taxBrackets: { data: 0 }
+		});
+		await expect(provisionDefaultTaxonomy(s.client, USER_ID)).resolves.toBeUndefined();
+		expect(s.rpc).toHaveBeenCalledTimes(1);
+	});
+
+	it('is fail-soft on an RPC error (logs, never throws) — sibling branches unaffected', async () => {
+		const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const s = makeSupabase({
+			asset: { existing: null, defaults: ASSET_DEFAULTS },
+			cashflow: { existing: null, defaults: CASHFLOW_DEFAULTS },
+			taxBrackets: { error: { message: 'rls denied' } }
+		});
+		await expect(provisionDefaultTaxonomy(s.client, USER_ID)).resolves.toBeUndefined();
+
+		expect(s.rpc).toHaveBeenCalledTimes(1);
+		expect(s.userTaxonomyUpsert).toHaveBeenCalledTimes(1); // taxonomy siblings still ran
+		expect(s.postingPrototypeUpsert).toHaveBeenCalledTimes(1);
+		expect(errSpy).toHaveBeenCalled();
+		errSpy.mockRestore();
+	});
+
+	it('is fail-soft when the RPC call itself throws (never blocks the load, sibling branches unaffected)', async () => {
+		const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const s = makeSupabase({
+			asset: { existing: null, defaults: ASSET_DEFAULTS },
+			cashflow: { existing: null, defaults: CASHFLOW_DEFAULTS }
+		});
+		s.rpc.mockImplementation(() => {
+			throw new Error('transport down');
+		});
+		await expect(provisionDefaultTaxonomy(s.client, USER_ID)).resolves.toBeUndefined();
+
+		expect(s.userTaxonomyUpsert).toHaveBeenCalledTimes(1);
+		expect(s.postingPrototypeUpsert).toHaveBeenCalledTimes(1);
+		expect(errSpy).toHaveBeenCalled();
+		errSpy.mockRestore();
+	});
+
+	it('ORDERING: runs AFTER both taxonomy siblings (taxonomy → cashflow prototypes → tax brackets) — the RPC call is the LAST call recorded across all branches', async () => {
+		const calls: string[] = [];
+		const s = makeSupabase({
+			asset: { existing: null, defaults: ASSET_DEFAULTS },
+			cashflow: { existing: null, defaults: CASHFLOW_DEFAULTS },
+			taxBrackets: { data: 3 }
+		});
+		s.userTaxonomyUpsert.mockImplementation(async () => {
+			calls.push('user_taxonomy');
+			return { error: null };
+		});
+		s.postingPrototypeUpsert.mockImplementation(async () => {
+			calls.push('posting_prototype');
+			return { error: null };
+		});
+		s.rpc.mockImplementation(async () => {
+			calls.push('fn_provision_tax_brackets');
+			return { data: 3, error: null };
+		});
+
+		await provisionDefaultTaxonomy(s.client, USER_ID);
+
+		expect(calls).toEqual(['user_taxonomy', 'posting_prototype', 'fn_provision_tax_brackets']);
+	});
+
+	it("a failure in the FIRST taxonomy branch (user_taxonomy) does not prevent the tax-bracket branch from running", async () => {
+		const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const s = makeSupabase({
+			asset: { existingErr: { message: 'rls denied' } },
+			cashflow: { existing: { id: 37 } },
+			taxBrackets: { data: 3 }
+		});
+		await expect(provisionDefaultTaxonomy(s.client, USER_ID)).resolves.toBeUndefined();
+		expect(s.rpc).toHaveBeenCalledTimes(1);
 		errSpy.mockRestore();
 	});
 });

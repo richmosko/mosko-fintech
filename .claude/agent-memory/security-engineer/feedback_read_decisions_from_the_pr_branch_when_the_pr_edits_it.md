@@ -181,3 +181,15 @@ empty`) whose body I *had* read. The real name was `expect_owner_can_read`. I ha
 the fixture file's helper list. **Grep the DEFINITION file before naming a function in commit-ready
 text**, not just the call sites you happened to read — see [[supplied-verbatim-text-ships-unfiltered]]
 for why a supplied block gets committed without a second filter.
+**⚠ A FIFTH failure the four axes assume away: the pointer may name something that EXISTS NOWHERE.**
+Pointer / content / extent / attachment all presuppose a target to read. At SELF-267 the dispatch
+brief cited ruling **E14** twice, including for the load-bearing "interim divergence accepted at E14"
+premise. Measured: the ruling log on `origin/meta/v14-execution-log` runs **E1…E13** and stops, and
+E14 was on **no** `refs/remotes/origin` ref carrying that file. The ruling actually described was
+**E3**. **How to apply: for any ruling-log ID cited in a brief, `grep -n "^### E"` the whole heading
+range on the ref BEFORE resting anything on it, and when it is absent, sweep every remote ref that
+carries the file** — `for r in $(git for-each-ref --format='%(refname)' refs/remotes/origin); do
+git cat-file -e "$r:<path>" && ...; done` — because "authored locally, never pushed" and "never
+existed" look identical from one ref and have opposite consequences. Report the absence as its own
+finding: a verdict resting on a ruling that exists on no ref is unrecorded, and if the ruling WAS
+authored, saying so is what gets it pushed. Related: [[sec-lock-cross-check-catches-my-own-misreads]].

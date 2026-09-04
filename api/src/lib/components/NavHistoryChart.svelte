@@ -32,6 +32,17 @@
 	floating banner — that's the separate P4 reauth-staleness-banner, SELF-207 territory).
 	Per ADR-013 D1 (staleness-marking surface scope is illustrative, not exhaustive), further
 	surfaces ramp later — Sec F4 (AMBER round): read D1 live, this line is a paraphrase not a quote.
+
+	SELF-268 AC 4a — GROSS BASIS NAMED (R3 rider 2, re-aimed; PRD §2.1.2 basis sentence per PM's
+	A-10). Under rider 0 the §2.1.1 headline and the §2.1.5 foot read ONE composed, tax-adjusted
+	value; this trajectory (`nav_daily` → this chart / NavDeltaPanel §2.1.3 / NavReferenceDatesPanel
+	§2.1.4) stays the CHECKPOINTED GROSS definition PERMANENTLY (Gross − Debt, before both §2.5.4 tax
+	lines and before the AC 3a tax-authority-ledger exclusion) — it is never recomputed at
+	changeover. The gap this basis line names is therefore headline/foot vs THIS CHART, not "tax
+	only": both tax lines PLUS the excluded ledgers' balances. Rendered UNCONDITIONALLY whenever the
+	chart shows real data (a structural, permanent fact — not a transient condition like the CPI/
+	resolution basis lines below it). §2.1.3 / §2.1.4 carry this by POINTER, not by restating it (one
+	copy of the fact; see NavDeltaPanel.svelte / NavReferenceDatesPanel.svelte).
 -->
 <script lang="ts">
 	import { goto } from '$app/navigation';
@@ -198,6 +209,14 @@
 		</div>
 
 		<div class="chart-basis-stack">
+			<!-- SELF-268 AC 4a — the composed gap, named permanently (not conditional: this is a
+			     structural fact of the checkpointed series, not a transient state like the lines
+			     below it). See the module header. -->
+			<p class="chart-basis-line gross-basis-line">
+				This trend shows the checkpointed <span class="basis-value">gross</span> Net Worth —
+				before the §2.5.4 tax lines and before excluding tax-authority-designated accounts.
+				Today's headline differs from today's point on this chart by both.
+			</p>
 			{#if cpiUnavailable}
 				<p class="chart-basis-line cpi-basis-line">
 					Inflation-adjusted figures are unavailable for this range — no CPI-U data on record.

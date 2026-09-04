@@ -3,16 +3,15 @@
 	surface; authors NO server logic.
 
 	Left-rail navigation over the Settings sections. V1.2 shipped two ENABLED sections —
-	Security (pre-existing, SELF-291) and Allocation (SELF-242) — and SELF-252 (this issue)
-	enables a third, Cash-flow Targets (§2.3.2), the Settings shell's SECOND V1.3 occupant per
-	its own AC1. Two placeholder SECTIONS remain — Tax Brackets
-	(pfin.tax_bracket_schedule/tax_bracket_row) and Owner Identification
-	(pfin.owner_identification) — covering the Lock 14 settings-store MEMBERS that have no
-	editor yet; sections and members do not count one-to-one (Tax Brackets is one section over
-	two tables), so no tally is carried here — read ADR-011 Decision 18 live for the family's
-	amended size. Security sits outside the V1.2/V1.3 versioning scheme named in the AC (it's
-	an existing MFA surface, not one of the planning-value settings) but belongs in this shell
-	as a real, live section.
+	Security (pre-existing, SELF-291) and Allocation (SELF-242) — SELF-252 enabled a third,
+	Cash-flow Targets (§2.3.2) — and SELF-265 (this issue) enables a fourth, Tax Brackets
+	(§2.5.2), the "third-of-four Settings occupant" per ADR-013 P5. One placeholder SECTION
+	remains — Owner Identification (pfin.owner_identification) — covering the one Lock 14
+	settings-store MEMBER that still has no editor; sections and members do not count
+	one-to-one (Tax Brackets is one section over two tables), so no tally is carried here —
+	read ADR-011 Decision 18 live for the family's amended size. Security sits outside the
+	V1.2/V1.3 versioning scheme named in the AC (it's an existing MFA surface, not one of the
+	planning-value settings) but belongs in this shell as a real, live section.
 
 	LEFT-RAIL vs TOP-TAB (AC1 offers either shape): left-rail chosen here — a Just-Decide
 	call, not routed to Visual Designer, since the design system does not lock either shape
@@ -37,7 +36,7 @@
 		{ label: 'Security', href: '/settings/security' },
 		{ label: 'Allocation', href: '/settings/allocation' },
 		{ label: 'Cash-flow Targets', href: '/settings/cash-flow-targets' },
-		{ label: 'Tax Brackets', href: null },
+		{ label: 'Tax Brackets', href: '/settings/tax-brackets' },
 		{ label: 'Owner Identification', href: null }
 	];
 

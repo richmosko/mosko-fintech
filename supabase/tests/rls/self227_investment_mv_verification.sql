@@ -212,10 +212,22 @@ select is(
   pfin.fn_compute_nav(current_date, true),
   '(11) AC#2 three-surface: 049 current_market_value(a1) == fn_compute_nav(current_date, true) — §2.1.5 leaf agrees with §2.1.1 headline');
 -- (12) SURFACES AGREE #2: fn_compute_nav(today, true) == 051.nav.
+--   RE-AIMED (SELF-268/105, Sec P-2): the RAW equality below would stay
+--   GREEN against 105 ONLY BY FIXTURE ACCIDENT -- this fixture designates no
+--   tax-authority ledger and seeds no bracket schedule, so the designated-
+--   ledger term and both tax scalars all independently evaluate to 0 (Sec's
+--   "leg that cannot fail" class). Re-aimed to the FULL post-102/105
+--   invariant with every term COMPUTED, not assumed 0, so the formula is
+--   exercised even though this fixture drives every added term to 0.
 select is(
   pfin.fn_compute_nav(current_date, true),
-  (pfin.fn_nav_composition(current_date) ->> 'nav')::numeric,
-  '(12) AC#2 three-surface: fn_compute_nav(current_date, true) == fn_nav_composition(current_date).nav — §2.1.1 headline agrees with §2.1.5 composition');
+  (pfin.fn_nav_composition(current_date) ->> 'nav')::numeric
+    + coalesce((select sum(g.current_market_value)
+                  from pfin.fn_tax_authority_ledgers() tal
+                  join pfin.fn_account_unrealized_gl(current_date) g on g.account_id = tal.account_id), 0)
+    + coalesce((pfin.fn_nav_composition(current_date) -> 'buildups' -> 'realized_tax_liab' ->> 'amount')::numeric, 0)
+    + coalesce((pfin.fn_nav_composition(current_date) -> 'buildups' -> 'unrealized_tax_liab' ->> 'amount')::numeric, 0),
+  '(12) AC#2 three-surface, RE-AIMED: fn_compute_nav(current_date, true) == fn_nav_composition(current_date).nav PLUS designated-ledger CMVs (independently queried) PLUS the two coalesced tax scalars — §2.1.1 headline agrees with §2.1.5 composition under the FULL post-102/105 invariant, not the pre-102 raw identity');
 
 -- (13) A sees NONE of B's or N's accounts (cross-tenant fail-closed under A).
 select is(

@@ -10,3 +10,4 @@
 - [Outer fence masks inner fence](feedback_outer_fence_masks_inner_fence.md) — a denial error only proves the FIRST fence fired (schema USAGE before EXECUTE); check the specific privilege directly.
 - [Never pad an abbreviated sha](feedback_never_pad_an_abbreviated_sha.md) — `git commit`'s 7-char output isn't the full sha; run `git rev-parse HEAD` before quoting one in a handoff.
 - [Session attribution overrides dispatch brief](feedback_session_attribution_overrides_dispatch_brief.md) — the live system-reminder's commit trailers win over a brief's named ones; flag the mismatch, don't silently pick either.
+- [Verify Write/Edit path targets the worktree](feedback_verify_write_path_targets_worktree.md) — `cd` doesn't steer absolute `Write`/`Edit` paths; confirm the prefix before the first Write of a dispatch, or risk silently authoring in the main checkout.
