@@ -89,8 +89,10 @@ const SAMPLE_TREE_RAW: {
 		total_non_re: 5000,
 		gross_total: 5000,
 		debt: 1200,
-		realized_tax_liab: 0,
-		unrealized_tax_liab: 0
+		// SELF-268 / E41-E42: envelopes, not plain numbers — the bootstrap-default 'unavailable'
+		// shape (no bracket schedule seeded), the common real-world case for a fresh tenant.
+		realized_tax_liab: { status: 'unavailable', reason: 'no_schedule_any_year' },
+		unrealized_tax_liab: { status: 'unavailable', reason: 'no_schedule_any_year' }
 	},
 	nav: 3800
 };
@@ -123,8 +125,12 @@ describe('loadNavComposition', () => {
 				total_non_re: 0,
 				gross_total: 0,
 				debt: 0,
-				realized_tax_liab: 0,
-				unrealized_tax_liab: 0
+				// A COMPUTED envelope here, deliberately different from SAMPLE_TREE_RAW's
+				// 'unavailable' — a zero-account tenant can still have a designated ledger + a
+				// seeded bracket schedule; a genuinely computed $0 tax liability is a real value,
+				// not a placeholder, and this fixture exercises that shape too.
+				realized_tax_liab: { status: 'computed', amount: 0 },
+				unrealized_tax_liab: { status: 'computed', amount: 0 }
 			},
 			nav: 0
 		};

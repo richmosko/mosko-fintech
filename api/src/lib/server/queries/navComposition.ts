@@ -97,16 +97,58 @@ export type NavCompositionGroup = {
 	subtotal: number;
 };
 
-/** Buildup subtotals over the FULL active-account set (051 A3 / FOOT-TO-NAV EXACT). */
+/**
+ * One `nav_components` tax-liability scalar's availability (SELF-268 / ADR-067 Decision 3;
+ * execution-log E41/E42 addendum, Q2 option (2)). Carried VERBATIM off `pfin.fn_compute_tax_liability`
+ * (`104`)'s own `nav_components.{realized_tax_liab,unrealized_tax_liab}` envelope shape into `051`'s
+ * (as amended at migration 105) `buildups.{realized_tax_liab,unrealized_tax_liab}` keys — NOT a
+ * separate `tax_components` side-channel, and NOT a plain `number` with an availability flag beside
+ * it (that shape was this repo's own FIRST DRAFT of this contract and was superseded by the ruling
+ * before it landed on any branch's migration).
+ *
+ * ⚠ A DISCRIMINATED UNION, DELIBERATELY, NOT `{status, amount?, reason?}` (Sec P-18) — the SHIPPED
+ *   precedent is `tax-quarterly.ts`'s `FundsDueEnvelope` (SELF-264/266, landed `7c81dda`); this type
+ *   follows it key-for-key rather than inventing a second spelling of "envelope." A
+ *   required-`status`-field-with-optional-siblings shape lets `amount` be read while `status ===
+ *   'unavailable'` and silently be `undefined` — `env.amount` type-checks and IS `undefined` at
+ *   runtime, a `NaN` waiting to happen the moment a consumer does arithmetic on it. Under this
+ *   union, `amount` and `reason` are each UNREACHABLE without narrowing on `status` first — reading
+ *   `env.amount` without narrowing is a COMPILE ERROR, so `usd.format(env)` (passing the whole
+ *   envelope to a number formatter, the exact regression this exists to make impossible) is also a
+ *   compile error rather than a silently-rendered `$NaN` or `$0`.
+ *
+ * `nav` (on `NavComposition` below) is ALREADY net of `coalesce((env->>'amount')::numeric, 0)` for
+ * BOTH scalars, computed ONCE inside `051`'s own SQL (P-17) — this type is a DISPLAY/AVAILABILITY
+ * signal only; no server-side code in this module (or netWorth.ts) does arithmetic on `.amount`, and
+ * none should — `nav` already carries the arithmetic effect of an `unavailable` scalar (subtract 0).
+ *
+ * ⚠ COORDINATION NOTE, not yet resolved (Sec P-18 / team-lead 2026-09-04): `api/src/lib/nav-
+ *   composition.ts` (Frontend-owned) is the canonical home for this type per P-18's instruction —
+ *   "export it from nav-composition.ts and import it server-side," so the two modules declare it
+ *   once. Frontend's `c6c62c5` landed a DIFFERENT, now-superseded shape (`TaxComponentStatus =
+ *   {status:'computed'} | {status:'unavailable',reason}` behind a separate optional
+ *   `tax_components` block, with `buildups.*_tax_liab` staying `number`) — that predates the E41/Q2
+ *   ruling this type implements. Defined LOCALLY here for now (rather than importing Frontend's
+ *   current, pre-ruling shape, which would encode the wrong contract) so this module's own type
+ *   change is not blocked on Frontend's rework landing first. TODO once Frontend updates
+ *   `nav-composition.ts` to the ruled shape: delete this local definition and import theirs instead,
+ *   per P-18 — do not let both definitions stand once that lands.
+ */
+export type TaxLiabilityEnvelope =
+	| { status: 'unavailable'; reason: string }
+	| { status: 'computed'; amount: number };
+
+/** Buildup subtotals over the FULL active-account set (051 A3). ⚠ NO LONGER foots to
+ * `fn_compute_nav` — see the module header (identity deliberately broken at `102`, E-2). */
 export type NavCompositionBuildups = {
 	total_non_re: number;
 	gross_total: number;
 	/** −(liability subtotal) = a positive magnitude, so nav = gross_total − debt reads literally. */
 	debt: number;
-	/** Option A V1.1 placeholder = 0; V1.4 ramp (051 A5). */
-	realized_tax_liab: number;
-	/** Option A V1.1 placeholder = 0; V1.4 ramp (051 A5). */
-	unrealized_tax_liab: number;
+	/** `104`'s `nav_components.realized_tax_liab` envelope, carried verbatim (SELF-268 / E41-E42). */
+	realized_tax_liab: TaxLiabilityEnvelope;
+	/** `104`'s `nav_components.unrealized_tax_liab` envelope, carried verbatim (SELF-268 / E41-E42). */
+	unrealized_tax_liab: TaxLiabilityEnvelope;
 };
 
 /** The full §2.1.5 composition tree — the raw shape of the 051 jsonb return. */

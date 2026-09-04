@@ -37,8 +37,11 @@ function rawComposition(nav: unknown): RawNavComposition {
 			total_non_re: 0,
 			gross_total: 0,
 			debt: 0,
-			realized_tax_liab: 0,
-			unrealized_tax_liab: 0
+			// SELF-268 / E41-E42: envelopes, not plain numbers — this file only ever reads
+			// `.nav`, never these two, so the specific status/reason is arbitrary but must
+			// type-check as a genuine TaxLiabilityEnvelope.
+			realized_tax_liab: { status: 'unavailable', reason: 'no_schedule_any_year' },
+			unrealized_tax_liab: { status: 'unavailable', reason: 'no_schedule_any_year' }
 		},
 		// `nav` is typed `number` on RawNavComposition, but this helper is also used to exercise
 		// coercion/NaN edge cases a real jsonb payload should never produce — hence the cast.

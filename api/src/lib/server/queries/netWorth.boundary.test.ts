@@ -136,7 +136,16 @@ function makeSupabase(rows: Row[], navValue: unknown = 0) {
 	const rpc = vi.fn(async (_fn: string, _args: Record<string, unknown>) => ({
 		data: {
 			groups: [],
-			buildups: { total_non_re: 0, gross_total: 0, debt: 0, realized_tax_liab: 0, unrealized_tax_liab: 0 },
+			// SELF-268 / E41-E42: the two tax keys are envelopes on the real payload, not plain
+			// numbers — kept well-formed here too even though this file's own assertions never
+			// touch them (only `nav` and the `.or()` filter matter to this file's own behaviour).
+			buildups: {
+				total_non_re: 0,
+				gross_total: 0,
+				debt: 0,
+				realized_tax_liab: { status: 'unavailable', reason: 'no_schedule_any_year' },
+				unrealized_tax_liab: { status: 'unavailable', reason: 'no_schedule_any_year' }
+			},
 			nav: navValue
 		},
 		error: null
