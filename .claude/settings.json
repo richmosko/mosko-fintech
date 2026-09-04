@@ -8,6 +8,8 @@
       "Bash(md5sum *)",
       "Bash(shasum)",
       "Bash(shasum *)",
+      "Write(temp/**)",
+      "Edit(temp/**)",
       "mcp__claude_ai_Linear__get_issue",
       "mcp__claude_ai_Linear__get_issue_status",
       "mcp__claude_ai_Linear__list_issues",
