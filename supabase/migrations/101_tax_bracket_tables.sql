@@ -361,7 +361,9 @@
 --   ⚠ THIS DOES NOT RETIRE THE SET FENCE. SERIALIZABLE never guaranteed
 --     monotonicity and neither does the lock (Sec D-5 / R4 rider 2): the lock
 --     orders the writers, the set fence judges what they wrote. Independent
---     controls, and the deferred fence still fires at commit inside this body.
+--     controls, and the deferred fence still fires — at COMMIT, AFTER this
+--     function returns, not inside its body. A caller that gets no exception
+--     from the function has NOT yet been told the write is valid.
 --
 --   ⚠ `p_rows jsonb` IS A TRANSPORT PARAMETER AND IS NOT A BREACH OF DECISION
 --     18's FORWARD-COMPAT FENCE. That fence bars *"no JSONB blobs in the
