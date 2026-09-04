@@ -47,6 +47,9 @@ function pageData(staleness: StalenessData, overrides: Partial<Record<string, un
 		navReferenceDates: null,
 		navDeltaPanel: null,
 		composition: null,
+		// SELF-268 AC 10a: new PageData field (Backend, mechanical fixture update only — this
+		// file's own assertions are about the staleness badge and don't touch this field).
+		excludedTaxLedgers: null,
 		navSeries: null,
 		navSeriesParamsError: null,
 		navSeriesParams: { granularity: 'monthly' as const, start: '2021-06-01', end: '2026-06-01' },

@@ -7,11 +7,23 @@
 //    accounts/new + accounts/[account_id]).
 //
 // V1.0 Option A (F/CTO-ratified): SINGLE trustworthy number. Composition table = V1.1
-// (§2.1.5 / SELF-225). No new DB function — fn_compute_nav (019) IS the aggregation.
+// (§2.1.5 / SELF-225).
+//
+// ⚠ SELF-268 / ADR-067 Decision 3 (R3 rider 0) — ONE fn_nav_composition RPC CALL SERVES BOTH THE
+//   §2.1.1 HEADLINE AND THE §2.1.5 FOOT. `fetchNavComposition` is called ONCE, below, and the same
+//   `RawNavComposition` value is threaded into BOTH `loadNetWorthView` (derives `netWorth` from its
+//   `nav` key) AND `loadNavComposition` (attaches the per-row staleness join on top of it) — never
+//   two separate calls to the same RPC for one page load. `fn_compute_nav` is no longer called from
+//   this route at all; it is retained only for `nav_daily` writes (see netWorth.ts's header).
 
 import { redirect } from '@sveltejs/kit';
 import { loadNetWorthView } from '$lib/server/queries/netWorth';
-import { loadNavComposition } from '$lib/server/queries/navComposition';
+import {
+	fetchNavComposition,
+	loadNavComposition,
+	loadExcludedTaxLedgers
+} from '$lib/server/queries/navComposition';
+import type { RawNavComposition } from '$lib/server/queries/navComposition';
 import { loadStaleness } from '$lib/server/queries/staleness';
 import { loadNavSeries, resolveNavSeriesWindow } from '$lib/server/queries/nav-series';
 import {
@@ -36,11 +48,25 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	// ZoneResolvedAsOf, so a plain string cannot reach loadNetWorthView's p_as_of at all. The
 	// brand describes the GUARANTEE (the zone question is resolved), not the provenance.
 	const asOf = serverTodayAsOf();
+
+	// SELF-268 / R3 rider 0: fetch pfin.fn_nav_composition ONCE here — the §2.1.1 headline
+	// (loadNetWorthView below) and the §2.1.5 foot (loadNavComposition further down) both derive
+	// from THIS SAME value, never two independent RPC calls. Fail-soft to `null`, logged inside
+	// fetchNavComposition; this try/catch is the belt-and-suspenders boundary for an unexpected
+	// throw, matching every other read's posture on this route.
+	let rawComposition: RawNavComposition | null = null;
+	try {
+		rawComposition = await fetchNavComposition(locals.supabase, asOf);
+	} catch (err) {
+		console.error('[+page.server] nav-composition fetch threw; degrading to null:', err);
+		rawComposition = null;
+	}
+
 	// accountPresence is THREE-VALUED ('some' | 'none' | 'unknown') — 'unknown' means the count
 	// read FAILED and is emphatically not 'none'. Passed through verbatim, never collapsed to a
 	// boolean here: collapsing is what this change exists to undo, and doing it at the loader
 	// would just move the lie one file closer to the render.
-	const { netWorth, accountPresence } = await loadNetWorthView(locals.supabase, asOf);
+	const { netWorth, accountPresence } = await loadNetWorthView(locals.supabase, asOf, rawComposition);
 
 	// D1 non-silent staleness marker (SELF-208 §2.4.4.c; ramped to the V1.1 NW surfaces at
 	// SELF-229). FAIL-SOFT is load-bearing: a staleness-read failure must NEVER break or block the
@@ -88,25 +114,51 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			? null
 			: new Set(staleness.stale_items.map((item) => String(item.linked_source_id)));
 
-	// §2.1.5 NAV-composition table (V1.1 / SELF-226; per-row staleness ramped at SELF-229). Same
-	// FAIL-SOFT posture as staleness above: a composition-read failure must NEVER take down the
-	// §2.1.1 headline netWorth — degrade to `null` (the table just doesn't render; the headline
-	// still shows). loadNavComposition() fails soft internally; this try/catch is the
-	// belt-and-suspenders boundary so an unexpected throw can't take down the NAV surface. asOf is
-	// passed explicitly so the composition foots to the headline's fn_compute_nav(asOf, true) by
-	// construction (051 FOOT-TO-NAV EXACT). staleLinkedSourceIds threads the per-row join —
-	// composition NEVER re-reads staleness itself, only the value computed above. NOTE: this
-	// `null` degrade is for the WHOLE TREE (051 RPC failure) — a DIFFERENT, narrower failure
-	// (either the root staleness read or the per-row join alone) degrades to `is_stale: null` per
-	// leaf instead (see navComposition.ts), so the composition table can still render with an
-	// explicit "staleness unknown" state rather than disappearing entirely over a metadata-only
+	// §2.1.5 NAV-composition table (V1.1 / SELF-226; per-row staleness ramped at SELF-229; read
+	// source shared with the headline at SELF-268 / R3 rider 0). `rawComposition` (fetched once,
+	// above) is threaded in as the 4th argument so this does NOT re-call fn_nav_composition — it
+	// only attaches the per-row staleness join on top of the SAME tree the headline's `netWorth`
+	// came from. ⚠ Because they now share one underlying read, a composition-fetch failure
+	// (`rawComposition === null`) degrades BOTH the §2.1.5 table AND the §2.1.1 headline netWorth
+	// to their respective "unavailable" states together — this is no longer a case where the foot
+	// can fail alone while the headline stays up, because there is only one read to fail.
+	// loadNavComposition() still fails soft internally to `null`; this try/catch is the
+	// belt-and-suspenders boundary so an unexpected throw (e.g. from the per-row staleness join)
+	// can't take down the whole route. staleLinkedSourceIds threads the per-row join — composition
+	// NEVER re-reads staleness itself, only the value computed above. NOTE: `null` here can mean
+	// EITHER the whole tree is unavailable (rawComposition was null) OR a narrower failure (the
+	// root staleness read or the per-row join alone) — the narrower case instead degrades to
+	// `is_stale: null` per leaf (see navComposition.ts), so the composition table can still render
+	// with an explicit "staleness unknown" state rather than disappearing over a metadata-only
 	// failure.
 	let composition = null;
 	try {
-		composition = await loadNavComposition(locals.supabase, asOf, staleLinkedSourceIds);
+		composition = await loadNavComposition(
+			locals.supabase,
+			asOf,
+			staleLinkedSourceIds,
+			rawComposition
+		);
 	} catch (err) {
 		console.error('[+page.server] composition load threw; degrading to null:', err);
 		composition = null;
+	}
+
+	// SELF-268 AC 10a / R3 rider 6: the tax-authority-designated ledgers the E-2 exclusion removed
+	// from `051`'s leaf set (SELF-267 AC 2a) — rendering this list is the ONLY observer an unmarked
+	// ledger has anywhere on the tree (rider 0b's default-state failure), so it must be fetched, not
+	// inferred. `105`'s payload does NOT carry this set (confirmed against the landed migration at
+	// `51f2297` before writing this) — this is a SEPARATE read, not a further use of
+	// `rawComposition`. Same fail-soft posture as composition/staleness above: `null` = the read
+	// failed (the exclusion notice doesn't render); `[]` = a KNOWN, common "nothing designated yet."
+	// loadExcludedTaxLedgers() fails soft internally; this try/catch is the belt-and-suspenders
+	// boundary for an unexpected throw, same convention as every other secondary read on this route.
+	let excludedTaxLedgers = null;
+	try {
+		excludedTaxLedgers = await loadExcludedTaxLedgers(locals.supabase);
+	} catch (err) {
+		console.error('[+page.server] excluded-tax-ledgers load threw; degrading to null:', err);
+		excludedTaxLedgers = null;
 	}
 
 	// §2.1.2.d NAV-over-time chart (SELF-220), mounted below the composition
@@ -289,6 +341,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		asOf,
 		staleness,
 		composition,
+		excludedTaxLedgers,
 		navSeries,
 		navSeriesParamsError,
 		navSeriesParams: {

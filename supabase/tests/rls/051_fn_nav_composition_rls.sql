@@ -4,20 +4,42 @@
 --   read-composition). Composes on 049 (fn_account_unrealized_gl) + pfin.account; foots EXACT
 --   to fn_compute_nav(as_of, true) (050 / ADR-038/039). Paired with the migration in the SAME
 --   PR (verify-paired-artifacts discipline — a migration merging without its battery = vacuous CI).
+--
+--   RE-CUT (SELF-268 / migration 105, §2.5.4 TAX FLIP): 105 replaces the two 0::numeric
+--   `realized_tax_liab` / `unrealized_tax_liab` literals with 104's ENVELOPE OBJECTS
+--   (ADR-067 Decision 5). Every leg here that cast either key straight to numeric is a
+--   hard ERROR against 105 (measured: it aborted the whole file, cascading into every
+--   later statement) and is re-cut below to unwrap `->>'amount'` with `coalesce(…, 0)`,
+--   exactly as 105's own `tax_scalars` CTE does. The (T) block's `== 0` placeholder legs
+--   become envelope-shape assertions (this fixture seeds NO bracket schedule for either
+--   tenant, so both scalars read {unavailable, no_schedule_any_year} — the bootstrap
+--   default, E26 ruling 1). The (F) foot-to-nav identity legs are RE-AIMED per Sec's
+--   pre-ruling P-2: the RAW `nav == fn_compute_nav(as_of, x)` equality would stay green
+--   here ONLY BY FIXTURE ACCIDENT (no designated ledger, no bracket schedule — Sec's
+--   "leg that cannot fail" class) rather than exercising the invariant it is supposed to
+--   prove. Re-aimed to the FULL post-102/105 formula — nav == fn_compute_nav(as_of,x)
+--   minus the designated-ledgers' sum minus the two coalesced tax scalars — with every
+--   term computed independently rather than assumed zero, so the formula itself is
+--   exercised even on a fixture that drives every added term to 0. The NON-degenerate
+--   legs (a real designated-ledger exclusion, real non-zero tax scalars, the D-3/Sec
+--   M-3 boundary pair) live in the NEW companion file 105_nav_composition_tax_flip.sql.
 -- =====================================================================
--- BINDS TO MIGRATION: supabase/migrations/051_fn_nav_composition.sql
+-- BINDS TO MIGRATION: supabase/migrations/051_fn_nav_composition.sql (RE-CREATED at 105)
 --   pfin.fn_nav_composition(p_as_of date default current_date) RETURNS jsonb — SECURITY INVOKER,
 --     STABLE, set search_path=''. Returns the §2.1.5 composition tree:
 --       { "groups":[ {"category", "accounts":[{"account_id","account_name",
 --                     "current_market_value","unrealized_gl"}], "subtotal"}, … ],
---         "buildups":{ "total_non_re","gross_total","debt","realized_tax_liab",
---                      "unrealized_tax_liab" },
---         "nav": gross_total − debt − realized_tax_liab − unrealized_tax_liab }
+--         "buildups":{ "total_non_re","gross_total","debt",
+--                      "realized_tax_liab":   {status:'computed',amount} | {status:'unavailable',reason},
+--                      "unrealized_tax_liab": {status:'computed',amount} | {status:'unavailable',reason} },
+--         "nav": gross_total − debt − coalesce(realized_tax_liab.amount,0) − coalesce(unrealized_tax_liab.amount,0) }
 --   groups[] in CANONICAL category order (depository/investment/retirement/crypto/manual_other →
 --   real_estate → liability); EMPTY categories omitted; accounts[] by account_id. DEBT-SIGN D-1:
 --   liability leaves + subtotal carry 049's natural NEGATIVE sign; buildups.debt = −(liability
---   subtotal) = positive magnitude. FOOT-TO-NAV EXACT (ADR-038/039): nav == fn_compute_nav(as_of,
---   TRUE) by construction (single-substrate natural summation of the same active-account leaves).
+--   subtotal) = positive magnitude. FOOT-TO-NAV (ADR-038/039, RE-AIMED at 105 — see the RE-CUT
+--   note above): nav == fn_compute_nav(as_of, TRUE) minus designated-ledger CMVs minus the two
+--   coalesced tax scalars, by construction (single-substrate natural summation of the same
+--   active-account leaves, plus 102's anti-join, plus 105's two subtractions).
 --
 -- Prereqs exercised (on the 001→051 reset stack): 003 (pfin.account direct-owner RLS +
 --   account_type CHECK 7-value + is_active + fn_grant_creator_access DEFINER trigger seeding
@@ -37,15 +59,20 @@
 -- │     to its type group; real_estate its OWN group; liability its OWN group.                     │
 -- │ (S) SUBTOTAL / BUILDUP MATH: per-category subtotals; total_non_re = Σ(asset-half − RE − liab);│
 -- │     gross_total = total_non_re + real_estate; nav = gross_total − debt − realized − unrealized.│
--- │ (F) FOOT-TO-NAV EXACT: nav == fn_compute_nav(as_of, TRUE) EXACTLY (the §2.1.1==§2.1.5 AC).    │
--- │     Non-vacuous: nav ≠ fn_compute_nav(as_of, FALSE) — the inactive a7's value lives only in   │
--- │     the all-accounts figure, so the foot is provably to the ACTIVE scope.                      │
+-- │ (F) FOOT-TO-NAV, RE-AIMED (SELF-268/105, Sec P-2): nav == fn_compute_nav(as_of, TRUE) minus   │
+-- │     designated-ledger CMVs minus the two coalesced tax scalars — the FULL post-102/105        │
+-- │     invariant, every term independently computed (not assumed 0) rather than the pre-102 raw  │
+-- │     identity, which this fixture's own zero-tax/zero-designation state would let pass          │
+-- │     vacuously. Non-vacuous companion: nav ≠ fn_compute_nav(as_of, FALSE) unless corrected the   │
+-- │     same way — the inactive a7's value lives only in the all-accounts figure.                  │
 -- │ (D) DEBT SIGN D-1: liability leaf + subtotal carry natural NEGATIVE sign; buildups.debt =     │
 -- │     positive magnitude = −(liability subtotal).                                                │
 -- │ (A) is_active INHERITANCE (via 049): the value-bearing INACTIVE a7 appears in NO group AND is  │
 -- │     absent from the buildups (depository subtotal excludes it) — the filter is inherited.      │
--- │ (T) TAX PLACEHOLDERS (Option A V1.1 / AC#5): realized_tax_liab == 0 AND unrealized_tax_liab   │
--- │     == 0.                                                                                       │
+-- │ (T) TAX ENVELOPES, RE-CUT (SELF-268/105): realized_tax_liab AND unrealized_tax_liab are the    │
+-- │     ENVELOPE OBJECT {unavailable, no_schedule_any_year} — this fixture seeds no bracket        │
+-- │     schedule for either tenant, the bootstrap default (E26 ruling 1). The V1.1 Option-A         │
+-- │     0::numeric literal is GONE; non-zero/computed legs live in 105_nav_composition_tax_flip.sql.│
 -- │ (E) EMPTY-CATEGORY OMISSION (A4): a category with 0 active accounts (crypto) does NOT appear   │
 -- │     in groups[], yet buildups still compute over the FULL active set (nav foots exact).        │
 -- │ (G) UNPRICED/EDGE: an unpriced holding contributes 0 (cash only), never NaN/NULL; nav IS NOT   │
@@ -292,28 +319,46 @@ select is(
   (pfin.fn_nav_composition('2026-06-30'::date) -> 'buildups' ->> 'gross_total')::numeric,
   411800.0000::numeric,
   '(S5) buildups.gross_total = 411800 = total_non_re 11800 + real_estate 400000');
--- (S6) nav = gross_total − debt − realized − unrealized (internal consistency from the RETURNED buildups).
+-- (S6) RE-CUT (SELF-268/105): nav = gross_total − debt − coalesce(realized.amount,0) −
+--   coalesce(unrealized.amount,0), internal consistency from the RETURNED buildups. The two
+--   tax keys are now ENVELOPE OBJECTS, not numerics (ADR-067 Decision 5) — casting either
+--   directly to numeric is a hard ERROR (measured: it aborted this whole file, cascading
+--   into every later statement). Unwrap ->>'amount' and coalesce to 0 for an unavailable
+--   envelope, exactly as 105's own tax_scalars CTE does.
 select is(
   (pfin.fn_nav_composition('2026-06-30'::date) ->> 'nav')::numeric,
   (
     (pfin.fn_nav_composition('2026-06-30'::date) -> 'buildups' ->> 'gross_total')::numeric
     - (pfin.fn_nav_composition('2026-06-30'::date) -> 'buildups' ->> 'debt')::numeric
-    - (pfin.fn_nav_composition('2026-06-30'::date) -> 'buildups' ->> 'realized_tax_liab')::numeric
-    - (pfin.fn_nav_composition('2026-06-30'::date) -> 'buildups' ->> 'unrealized_tax_liab')::numeric
+    - coalesce((pfin.fn_nav_composition('2026-06-30'::date) -> 'buildups' -> 'realized_tax_liab' ->> 'amount')::numeric, 0)
+    - coalesce((pfin.fn_nav_composition('2026-06-30'::date) -> 'buildups' -> 'unrealized_tax_liab' ->> 'amount')::numeric, 0)
   ),
-  '(S6) nav internal consistency: nav = gross_total − debt − realized_tax_liab − unrealized_tax_liab, computed from the RETURNED buildups (RED if the assemble step diverged from the documented formula)');
+  '(S6) nav internal consistency: nav = gross_total − debt − coalesce(realized.amount,0) − coalesce(unrealized.amount,0), computed from the RETURNED buildups with the tax envelopes UNWRAPPED (RED if the assemble step diverged from the documented formula)');
 -- (S7) concrete nav = 409800.
 select is(
   (pfin.fn_nav_composition('2026-06-30'::date) ->> 'nav')::numeric,
   409800.0000::numeric,
   '(S7) nav = 409800 = gross_total 411800 − debt 2000 (concrete end-to-end composition)');
 
--- ---- F: FOOT-TO-NAV EXACT (§2.1.1 == §2.1.5; the ADR-038/039 invariant) ----
--- (F1) nav == fn_compute_nav(as_of, TRUE) EXACTLY (same tenant / same as_of).
+-- ---- F: FOOT-TO-NAV, RE-AIMED (SELF-268/105, Sec P-2) ----
+-- (F1) RE-AIMED: the RAW nav == fn_compute_nav(as_of, TRUE) equality would stay GREEN on
+--   this fixture ONLY BY ACCIDENT — A designates no ledger and this file seeds no bracket
+--   schedule, so the two correction terms below independently evaluate to 0 (Sec's "leg
+--   that cannot fail" class: it would pass identically whether or not 105 had landed).
+--   Re-aimed to the FULL post-102/105 invariant instead, with EVERY term computed by an
+--   INDEPENDENT query rather than assumed 0, so the formula itself is exercised even
+--   though this particular fixture drives every added term to 0 — the non-degenerate
+--   legs (a real designated-ledger exclusion, real non-zero tax scalars, the D-3/Sec M-3
+--   boundary pair) live in 105_nav_composition_tax_flip.sql's own fixture.
 select is(
   (pfin.fn_nav_composition('2026-06-30'::date) ->> 'nav')::numeric,
-  pfin.fn_compute_nav('2026-06-30'::date, true),
-  '(F1) FOOT-TO-NAV EXACT: nav == fn_compute_nav(2026-06-30, TRUE) — the §2.1.5 composition foots to the §2.1.1 active-scoped headline by construction (single-substrate natural summation)');
+  pfin.fn_compute_nav('2026-06-30'::date, true)
+    - coalesce((select sum(g.current_market_value)
+                  from pfin.fn_tax_authority_ledgers() tal
+                  join pfin.fn_account_unrealized_gl('2026-06-30'::date) g on g.account_id = tal.account_id), 0)
+    - coalesce((pfin.fn_nav_composition('2026-06-30'::date) -> 'buildups' -> 'realized_tax_liab' ->> 'amount')::numeric, 0)
+    - coalesce((pfin.fn_nav_composition('2026-06-30'::date) -> 'buildups' -> 'unrealized_tax_liab' ->> 'amount')::numeric, 0),
+  '(F1) RE-AIMED FOOT-TO-NAV: nav == fn_compute_nav(2026-06-30, TRUE) minus designated-ledger CMVs (independently queried via fn_tax_authority_ledgers()) minus the two coalesced tax scalars — the FULL post-102/105 invariant, not the pre-102 raw identity. Every term is computed, not assumed 0, so the formula is exercised even though A designates no ledger and seeds no bracket schedule here');
 -- (F2) ⚑ INVERTED AT ADR-042, and the inversion is a DISCHARGE rather than a loss.
 --   It asserted nav ≠ the all-accounts figure, which held only because a7 was inactive WHILE
 --   HOLDING 9999. That state is unconstructible now, so a7 contributes zero to both and the
@@ -324,10 +369,16 @@ select is(
 --   nothing (058's header — "two functions are re-pointed (049 + 050), not three"). Asserting
 --   a predicate here would duplicate 049's and drift from it.
 --   This assertion now foots ACROSS the closure boundary, which is the stronger claim.
+--   RE-AIMED (SELF-268/105, same reasoning as F1): the correction terms are added here too.
 select is(
   (pfin.fn_nav_composition('2026-06-30'::date) ->> 'nav')::numeric,
-  pfin.fn_compute_nav('2026-06-30'::date, false),
-  '(F2) FOOT IS UNCONDITIONAL (inverted at ADR-042): nav == fn_compute_nav(2026-06-30, FALSE) as well as TRUE — a closed account holds zero past its closing date, so both scopes agree. The ADR-038 foot-to-NAV invariant is now exact for EVERY tenant, discharging the value-bearing-inactive caveat. RED if a closed account can carry value into either scope. Confirms F1 is an active-scoped foot, not a coincidence');
+  pfin.fn_compute_nav('2026-06-30'::date, false)
+    - coalesce((select sum(g.current_market_value)
+                  from pfin.fn_tax_authority_ledgers() tal
+                  join pfin.fn_account_unrealized_gl('2026-06-30'::date) g on g.account_id = tal.account_id), 0)
+    - coalesce((pfin.fn_nav_composition('2026-06-30'::date) -> 'buildups' -> 'realized_tax_liab' ->> 'amount')::numeric, 0)
+    - coalesce((pfin.fn_nav_composition('2026-06-30'::date) -> 'buildups' -> 'unrealized_tax_liab' ->> 'amount')::numeric, 0),
+  '(F2) FOOT IS UNCONDITIONAL (inverted at ADR-042), RE-AIMED (SELF-268/105): nav == fn_compute_nav(2026-06-30, FALSE) minus the same two correction terms as F1, as well as TRUE — a closed account holds zero past its closing date, so both scopes agree. RED if a closed account can carry value into either scope. Confirms F1 is an active-scoped foot, not a coincidence');
 
 -- ---- D: DEBT SIGN D-1 ------------------------------------------------
 -- (D1) liability leaf a5 current_market_value carries 049's natural NEGATIVE sign.
@@ -396,17 +447,21 @@ select ok(
     where (a->>'account_id')::bigint = :a7),
   '(A4) …AND THE IDENTITY IS NON-VACUOUS: a7 IS a leaf at 2026-06-10, the same account (A1) proves absent at 2026-06-30. Without this, (A3) could hold because both sides excluded a7 — two agreeing wrong answers. The pair is what shows the composition tree is a function of the AS-OF and not of the account''s state today');
 
--- ---- T: TAX PLACEHOLDERS (Option A V1.1 / AC#5) --------------------
--- (T1) realized_tax_liab == 0::numeric.
+-- ---- T: TAX ENVELOPES, RE-CUT (SELF-268/105) -------------------------
+-- (T1) realized_tax_liab is the UNAVAILABLE envelope, not a 0::numeric literal. This
+--   fixture seeds NO bracket schedule for tenant A, so 104's own nav_components.
+--   realized_tax_liab comes back {status:'unavailable', reason:'no_schedule_any_year'}
+--   and 105 carries it VERBATIM (ADR-067 Decision 5) — the bootstrap default (E26
+--   ruling 1), not a placeholder. The V1.1 Option-A 0::numeric literal is GONE.
 select is(
-  (pfin.fn_nav_composition('2026-06-30'::date) -> 'buildups' ->> 'realized_tax_liab')::numeric,
-  0::numeric,
-  '(T1) tax placeholder: buildups.realized_tax_liab == 0 (Option A V1.1; V1.4 ramp)');
--- (T2) unrealized_tax_liab == 0::numeric.
+  pfin.fn_nav_composition('2026-06-30'::date) -> 'buildups' -> 'realized_tax_liab',
+  '{"status":"unavailable","reason":"no_schedule_any_year"}'::jsonb,
+  '(T1) buildups.realized_tax_liab is the ENVELOPE OBJECT {unavailable, no_schedule_any_year} — A''s fixture seeds no bracket schedule of any type/year, carried verbatim from 104 (SELF-268/105 flip; the V1.1 0::numeric literal is gone)');
+-- (T2) unrealized_tax_liab — the same reason, an independent key from T1's.
 select is(
-  (pfin.fn_nav_composition('2026-06-30'::date) -> 'buildups' ->> 'unrealized_tax_liab')::numeric,
-  0::numeric,
-  '(T2) tax placeholder: buildups.unrealized_tax_liab == 0 (Option A V1.1; V1.4 ramp)');
+  pfin.fn_nav_composition('2026-06-30'::date) -> 'buildups' -> 'unrealized_tax_liab',
+  '{"status":"unavailable","reason":"no_schedule_any_year"}'::jsonb,
+  '(T2) buildups.unrealized_tax_liab is the ENVELOPE OBJECT {unavailable, no_schedule_any_year} — carried verbatim from 104, an INDEPENDENT key from T1''s (104 envelopes each scalar separately — see 105_nav_composition_tax_flip.sql''s ENV1/ENV2 for the byte-equality proof)');
 
 -- ---- E: EMPTY-CATEGORY OMISSION (A4) -------------------------------
 -- (E1) no 'crypto' group is emitted (A has zero active crypto accounts).

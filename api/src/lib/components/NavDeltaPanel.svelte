@@ -37,6 +37,11 @@
 
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5).
 
+	SELF-268 AC 4a — POINTER, not a restatement: these deltas are computed off the checkpointed
+	GROSS NAV series (`nav_daily`), which stays pre-tax and pre-exclusion permanently (R3 rider 0).
+	The composed-gap explanation lives ONCE, on NavHistoryChart.svelte (§2.1.2) — this panel points
+	to it rather than repeating it (one copy of the fact).
+
 	D1 stale-data-marker (SELF-229 ramp): `staleness` is the SAME whole-user `046`
 	fn_aggregation_has_stale_constituent() payload the §2.1.1 headline already consumes
 	(+page.server.ts's `data.staleness`, threaded down unchanged — the fn takes no scope
@@ -94,6 +99,11 @@
 		<p class="panel-notice">NAV performance is temporarily unavailable. Please try again shortly.</p>
 	{:else}
 		<div class="panel-basis-stack">
+			<!-- SELF-268 AC 4a POINTER — see the module header; full explanation on the trend chart
+			     below, not restated here. -->
+			<p class="panel-basis-line">
+				Tracks the checkpointed gross Net Worth — see the trend chart below for basis.
+			</p>
 			{#if asOf}
 				<p class="panel-basis-line">
 					Current values as of <span class="basis-value">{fullDate(asOf)}</span>.

@@ -17,6 +17,17 @@
 	fn_aggregation_has_stale_constituent primitive, threaded through the loader as `data.staleness`
 	({ is_stale, stale_items }). It MARKS beside the number, never suppresses it (D1).
 
+	SELF-268 (Sec item 3, relayed by team-lead) — this headline reads the SAME composed value as the
+	§2.1.5 foot (R3 rider 0), so it carries the SAME three-state tax-adjustment basis note (Sec P-5 /
+	option (C): tax-adjusted / partial / unadjusted — never a boolean), in short form, plus the AC 4a
+	fact that the trend chart further down is a different, permanently-gross basis. Derived from
+	`data.composition.buildups` (already loaded for the §2.1.5 table below — no second query) via
+	`navHeadlineBasisNote()`. VISIBLE without hover (this codebase's house discipline, PRD §2.4.4 /
+	ADR-013 — never ADR-049, a retracted attribution per Sec D-1). Absent when `composition` is
+	null (a composition-read failure): rather than fabricate a basis claim from no data, the
+	headline simply omits the note — the number itself still stands (fail-soft, matching every
+	other `composition`-gated affordance on this page).
+
 	SELF-229 RAMP: the SAME `staleness` object (the fn takes no scope filter — it is a whole-user
 	aggregate, not per-surface) is threaded down unchanged as a `staleness` prop to
 	NavHistoryChart / NavDeltaPanel / NavReferenceDatesPanel / NavCompositionTable below, each of
@@ -33,6 +44,7 @@
 	import NavCompositionTable from '$lib/components/NavCompositionTable.svelte';
 	import NavHistoryChart from '$lib/components/NavHistoryChart.svelte';
 	import { EMPTY_NAV_BOUNDARY } from '$lib/nav-boundary';
+	import { navHeadlineBasisNote } from '$lib/nav-composition';
 
 	let { data }: { data: PageData } = $props();
 
@@ -60,6 +72,20 @@
 	// through the loader as `data.composition`, FAIL-SOFT to `null` (composition-read failure must
 	// never take down the headline). `null` → the table simply doesn't render; the headline stays.
 	const composition = $derived(data.composition ?? null);
+
+	// SELF-268 (Sec item 3) — the headline's short-form basis note, derived from the SAME
+	// composition object (no second query). `null` when composition failed to load: the headline
+	// number still renders (fail-soft), it just carries no tax-adjustment-basis claim rather than
+	// fabricate one from data that didn't arrive.
+	const headlineBasisNote = $derived(composition ? navHeadlineBasisNote(composition.buildups) : null);
+
+	// SELF-268 AC 10a — the accounts AC 3a excludes from the §2.1.5 buildup as tax-authority
+	// ledgers. Backend's ROOT loader returns this as `data.excludedTaxLedgers`, a SIBLING field
+	// beside `composition` (NOT nested in it). Passed straight through, no `?? null` — `null`
+	// (the loader's reads failed) and `[]` (confirmed none designated) are DISTINCT real states
+	// NavCompositionTable.svelte renders differently; collapsing them here would re-introduce the
+	// exact silent-failure shape AC 10a exists to prevent.
+	const excludedTaxLedgers = $derived(data.excludedTaxLedgers);
 
 	// Whole-dollar USD — the headline reads cleaner without cents. Negative values render
 	// a leading minus (in primary ink, per the value-color fence above).
@@ -131,6 +157,11 @@
 			<h1 id="nav-label" class="nav-label">Net Worth</h1>
 			<p class="nav-value">{usd.format(data.netWorth)}</p>
 			<p class="nav-asof">as of {asOfLabel}</p>
+			<!-- SELF-268 (Sec item 3) — same three-state basis as the §2.1.5 foot, short form. Visible
+			     without hover (PRD §2.4.4 / ADR-013). Absent when composition failed to load. -->
+			{#if headlineBasisNote}
+				<p class="nav-basis-note">{headlineBasisNote}</p>
+			{/if}
 			<!-- D1 stale-data-marker (AC#4): marks stale contribution beside the number, never
 			     hides it. Zero-footprint when all constituents are healthy. -->
 			<StaleConstituentBadge
@@ -183,7 +214,7 @@
 		     canvas (P2 number-first). Fail-soft: renders only when the composition load succeeded;
 		     absent → the headline still stands on its own. -->
 		{#if composition}
-			<NavCompositionTable {composition} {staleness} />
+			<NavCompositionTable {composition} {staleness} {excludedTaxLedgers} />
 		{/if}
 
 		<!-- §2.1.2.d NAV-over-time chart (SELF-220 · V1.1) — mounted below composition,
@@ -237,6 +268,14 @@
 		font-variant-numeric: tabular-nums;
 	}
 	.nav-asof {
+		margin: 0;
+		font: var(--weight-reg) var(--fs-small) / var(--lh-body) var(--font-ui);
+		color: var(--c-text-muted);
+	}
+
+	/* SELF-268 (Sec item 3) — the three-state tax-adjustment basis note. Same quiet register as
+	   `.nav-asof` (it qualifies the number's basis, same family as the as-of date). */
+	.nav-basis-note {
 		margin: 0;
 		font: var(--weight-reg) var(--fs-small) / var(--lh-body) var(--font-ui);
 		color: var(--c-text-muted);

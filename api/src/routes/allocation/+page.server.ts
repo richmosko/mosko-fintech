@@ -39,7 +39,9 @@
 //           it does for `netWorth`. Pairing THIS page's `accountPresence` against `total_non_re` is
 //           therefore sound PROVIDED both reads share the same `asOf` — which they do below.
 //     `netWorth` itself (the number) is discarded — it is never part of this page's `data` and is
-//     never rendered here. Cost: one extra `fn_compute_nav` RPC call per page-load, traded against
+//     never rendered here. Cost: one extra `fn_nav_composition` RPC call per page-load (SELF-268 /
+//     R3 rider 0 flipped netWorth.ts's own read off `fn_compute_nav` onto the composed reader; this
+//     route passes no precomputed composition, so loadNetWorthView fetches its own), traded against
 //     NOT maintaining a second copy of netWorth.ts's closed-account predicate. If this page ever
 //     needs Non-RE-SCOPED presence semantics (distinct from "any account at all"), that is a NEW,
 //     differently-named signal — not a repurposing of this one. Same fail-soft-with-try/catch
