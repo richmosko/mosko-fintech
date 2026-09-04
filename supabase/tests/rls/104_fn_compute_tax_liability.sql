@@ -14,6 +14,13 @@
 --   RECOMPUTED against the landed migration body, not carried from the
 --   first-pass battery or from any dispatch note — see the F-2 note below
 --   on why L5's own value moved.
+--   THIRD PASS (this file): Sec's re-look at 5c9e0e6 found ONE blocking
+--   condition, F-4 — the second pass's (N4) leg reused B's L16c/d federal
+--   jurisdiction, where BOTH federal halves are unresolved, so
+--   least(NULL, NULL) is NULL with or without the `computed` gate and the
+--   leg could not fail. (N4) is re-pointed below onto its own tax_year
+--   (2030) where exactly ONE federal half resolves. No other leg moved, no
+--   migration change, plan count UNCHANGED at 60.
 -- =====================================================================
 -- BINDS TO MIGRATION: supabase/migrations/104_fn_compute_tax_liability.sql.
 --   Object: pfin.fn_compute_tax_liability(p_data_as_of date default
@@ -103,7 +110,10 @@
 -- │       BOTH tenants' data coexist in the same database (RLS-authenticated,│
 -- │       not a postgres-bypassed read).                                     │
 -- │ N4  jurisdictions.federal.basis_year is JSON null when the jurisdiction   │
--- │       is unavailable (LEAST ignores SQL NULLs; N-4's ungated bug).        │
+-- │       is unavailable (LEAST ignores SQL NULLs; N-4's ungated bug) --      │
+-- │       Sec F-4 THIRD PASS: re-pointed onto its OWN tax_year (2030) where   │
+-- │       exactly ONE federal half resolves (federal_lt_cg), the only shape  │
+-- │       that can tell gated-NULL apart from LEAST's ignore-NULLs default.  │
 -- │ F1  current_year_schedule_empty = true on schedules.federal_lt_cg when a  │
 -- │       current-year LT CG row is present-but-empty with NO prior-year      │
 -- │       fallback (tenant B) — the identical situation to L15, one schedule  │
@@ -727,13 +737,34 @@ select is(
 -- =====================================================================
 -- N-4 — jurisdiction-level basis_year is JSON null when the jurisdiction is
 -- unavailable (SQL LEAST ignores NULLs; the ungated form of this field
--- rendered a confident year beside an unavailable status). Reuses B's
--- already-unavailable federal jurisdiction from L16c/d above.
+-- rendered a confident year beside an unavailable status).
+-- ⚠ Sec's F-4 finding (re-look at 5c9e0e6): the FIRST-CUT leg reused B's
+-- already-unavailable federal jurisdiction from L16c/d, where BOTH federal
+-- halves are unresolved -- least(NULL, NULL) is NULL WITH OR WITHOUT the
+-- `case when jr.computed` gate, so that leg could not fail. Re-pointed onto
+-- its OWN tax year (2030 -- unused anywhere else in this file, so this
+-- fixture cannot perturb L15/L16/F1/F2a/M9/N2, and F-1's own 2026
+-- empty-federal_lt_cg row for B stays untouched) where EXACTLY ONE federal
+-- half resolves: federal_lt_cg gets a real, non-empty bracket schedule;
+-- federal_ordinary stays absent for B at every year (B never seeds one, at
+-- any tax_year, anywhere in this file). That feeds LEAST a NON-NULL
+-- ltcg_basis_year beside a NULL ord_basis_year -- the one shape where
+-- LEAST's ignore-NULLs behaviour and the `computed` gate actually disagree,
+-- so this is the only fixture that can tell them apart.
 -- =====================================================================
-select is(
-  pfin.fn_compute_tax_liability('2026-08-15'::date)->'jurisdictions'->'federal'->'basis_year',
-  'null'::jsonb,
-  '(N4) B''s jurisdictions.federal.basis_year is JSON null, not a confident year, while federal.status = unavailable -- LEAST(ord_basis_year, coalesce(ltcg_basis_year, ord_basis_year)) is gated on `computed` at 104''s jur_calc CTE'
+select set_config('role', 'postgres', true);
+insert into pfin.tax_bracket_schedule (users_id, schedule_type, tax_year, standard_deduction, schedule_label)
+  values (:'tb', 'federal_lt_cg', 2030, 0.0000, 'b-fed-ltcg-2030-n4-104')
+  returning id as sch_b_n4 \gset
+insert into pfin.tax_bracket_row (users_id, schedule_id, bracket_floor, bracket_rate)
+  values (:'tb', :sch_b_n4, 0, 0.15);
+select _rls.set_tenant(:'tb'::uuid);
+
+select ok(
+  (pfin.fn_compute_tax_liability('2030-08-15'::date)->'jurisdictions'->'federal'->>'status' = 'unavailable')
+  and (pfin.fn_compute_tax_liability('2030-08-15'::date)->'jurisdictions'->'federal'->'basis_year' = 'null'::jsonb)
+  and (pfin.fn_compute_tax_liability('2030-08-15'::date)->'jurisdictions'->'federal'->'schedules'->'federal_lt_cg'->'basis_year' = '2030'::jsonb),
+  '(N4) B, tax_year 2030 (federal_lt_cg resolved with a real bracket row; federal_ordinary still absent) -- jurisdictions.federal.status = unavailable AND jurisdictions.federal.basis_year is JSON null, in the SAME payload as schedules.federal_lt_cg.basis_year = 2030 -- LEAST(NULL, 2030) would render 2030 at the jurisdiction level if the `case when jr.computed` gate at 104''s jur_calc CTE were struck; the retired L16c/d fixture (both federal halves unresolved) fed LEAST(NULL, NULL), which is NULL either way and could never distinguish gated from ungated'
 );
 
 -- =====================================================================
