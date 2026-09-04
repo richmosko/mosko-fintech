@@ -1,6 +1,6 @@
 # SELF-263 — tax-value inventory proposal (row-by-row dispositions + the four decisions)
 
-**Status:** PM PROPOSAL — team-lead rules by recommendation (F/CTO delegation, sitting-log R5 provenance). Nothing here is a ruling. No migration is drafted here; the seed delta + backfill + `comment on column` are SELF-263 AC 3 / 4 / 6 and Architect's.
+**Status:** PM PROPOSAL — team-lead rules by recommendation (F/CTO delegation, sitting-log R5 provenance). Nothing here is a ruling. **RULED at execution-log E4 (2026-09-03): D-i (A) · D-ii Bond Premium confirm, Dividend (C′) — NOT the (C) lean below · D-iii / D-iv as proposed.** The proposal text below stays as proposed; the ruling lives in [`log.md`](log.md) E4. No migration is drafted here; the seed delta + backfill + `comment on column` are SELF-263 AC 3 / 4 / 6 and Architect's.
 
 **Baseline:** `origin/main` @ `762f793` (read 2026-09-03). Method: migration files read in full — no psql. Row sets derived by replaying every statement that touches the two default tables (`grep -n 'insert into\|update\|delete from' supabase/migrations/*.sql` filtered to `posting_prototype_default` / `taxonomy_default`, then each hit read).
 
