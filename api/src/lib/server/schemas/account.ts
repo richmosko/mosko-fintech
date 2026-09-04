@@ -42,31 +42,40 @@ const isoDate = () =>
 		}, 'Enter a real calendar date.');
 
 /**
- * tax_jurisdiction (SELF-267 AC 2) — the §2.4.2 form's tax-authority control, posted as
- * '' (no selection / cleared) or one of TAX_JURISDICTIONS. Absent from the form entirely
- * also transforms to null: FormData carries no way to distinguish "field not rendered"
- * from "field rendered and cleared", so this schema does not try to. `.union` + `.optional`
- * rather than `.enum(...).nullable()` because the wire value is always a string (or
- * missing) — never a JS `null` — and an unrecognised non-empty string (a typo'd value,
- * a stale client) is REJECTED by the union rather than silently coerced to null, which
- * would read as "cleared" for what was actually a bad request.
+ * tax_jurisdiction (SELF-267 AC 2) — the §2.4.2 form's tax-authority control. Both variants
+ * below accept '' (explicit clear) or one of TAX_JURISDICTIONS; an unrecognised non-empty
+ * string (a typo'd value, a stale client) is REJECTED by the `.union`, never silently
+ * coerced to a clear. They differ ONLY on what an ABSENT key means, because the two forms
+ * that post through them have opposite defaults:
  *
- * ⚠ CALLER'S RESPONSIBILITY, NOT THIS SCHEMA'S: any surface that submits the account-edit
- * form WITHOUT rendering this control will clear an existing designation on every save,
- * because "absent → null" is this field's contract. That is correct for the §2.4.2 form
- * (which always renders the control, pre-filled from the loaded row) and a hazard for any
- * OTHER caller of the `updateAttributes` / create actions that omits the field — flagged
- * for Frontend at the SELF-267 hand-off rather than guarded here, because guarding it here
- * (e.g. treating absent as "no change") would silently defeat the control's own clear
- * affordance for the form that DOES render it.
+ *   - CREATE (`taxJurisdictionCreateField`): absent → null. A brand-new account has no
+ *     prior designation to preserve, so "the control wasn't touched" and "the control was
+ *     touched and cleared" are the same outcome — null either way.
+ *   - EDIT (`taxJurisdictionEditField`): absent → `undefined`, meaning "do not touch the
+ *     column" — NOT "clear it". Frontend's account-edit control is HIDDEN (key absent from
+ *     the post) for a provider-linked account, and hiding a control must not silently wipe
+ *     whatever the column already holds (it's always null for a linked account today, but
+ *     the contract is "no change", not "assume null"). Only an EXPLICIT `''` clears an
+ *     existing designation on edit — the control must be rendered, pre-filled from the
+ *     loaded row, for a user to reach that state deliberately.
+ *
+ * `updateAttributes` reads `undefined` vs `null` vs a value to decide whether to include
+ * `tax_jurisdiction` in the UPDATE payload at all — see that action's own comment.
  */
-const taxJurisdictionField = () =>
-	z
-		.union([z.enum(TAX_JURISDICTIONS), z.literal('')], {
-			message: 'Choose a tax authority, or leave it unset.'
-		})
+const taxJurisdictionUnion = () =>
+	z.union([z.enum(TAX_JURISDICTIONS), z.literal('')], {
+		message: 'Choose a tax authority, or leave it unset.'
+	});
+
+const taxJurisdictionCreateField = () =>
+	taxJurisdictionUnion()
 		.optional()
 		.transform((v) => (v ? v : null));
+
+const taxJurisdictionEditField = () =>
+	taxJurisdictionUnion()
+		.optional()
+		.transform((v) => (v === undefined ? undefined : v === '' ? null : v));
 
 /**
  * Manual-account create (AC #1/#2). Six user attributes, plus SELF-267 AC 2's optional
@@ -89,7 +98,7 @@ export const manualAccountCreateSchema = z
 		tax_treatment: z.enum(TAX_TREATMENTS),
 		initial_value: currencyAmount(),
 		as_of_date: isoDate(),
-		tax_jurisdiction: taxJurisdictionField()
+		tax_jurisdiction: taxJurisdictionCreateField()
 	})
 	.strict();
 
@@ -187,9 +196,12 @@ export type ReopenAccount = z.infer<typeof reopenAccountSchema>;
  * anti-drift with the DB CHECK). Deliberately does NOT include the aggregator / connection
  * binding (deferred) nor `closed_at` (that's the close/reopen path, and 058 fences it at
  * the DB regardless) — `.strict()` rejects any of those if posted (Lock 14 mass-assignment
- * fence). ⚠ `tax_jurisdiction` is OPTIONAL IN SHAPE but its absence still writes `null` —
- * see `taxJurisdictionField`'s header for why, and for the caller obligation that follows
- * from it.
+ * fence). ⚠ `tax_jurisdiction` is OPTIONAL IN SHAPE and ABSENCE MEANS "DO NOT TOUCH THE
+ * COLUMN" — NOT a clear. See `taxJurisdictionEditField`'s header: Frontend's control is
+ * HIDDEN (key absent) for a provider-linked account, and hiding it must never wipe
+ * whatever the column already holds. Only an explicit `''` clears an existing designation.
+ * `parsed.data.tax_jurisdiction` is therefore `'irs' | 'ftb' | null | undefined`, and the
+ * action includes the key in its UPDATE payload only when it is NOT `undefined`.
  */
 export const updateAttributesSchema = z
 	.object({
@@ -197,7 +209,7 @@ export const updateAttributesSchema = z
 		account_type: z.enum(ACCOUNT_TYPES),
 		scope: z.string().trim().min(1, 'Scope is required.').max(200, 'Scope is too long.'),
 		tax_treatment: z.enum(TAX_TREATMENTS),
-		tax_jurisdiction: taxJurisdictionField()
+		tax_jurisdiction: taxJurisdictionEditField()
 	})
 	.strict();
 

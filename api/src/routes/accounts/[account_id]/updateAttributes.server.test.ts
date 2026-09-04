@@ -1,14 +1,21 @@
 // updateAttributes.server.test.ts — account-detail attribute-edit action.
 // Locks auth-gate → account-id parse → .strict() body-parse (enums + name/scope rules) →
 // single-row RLS-scoped UPDATE → error-envelope. RLS ownership is proven by QA's pgTAP battery;
-// here the client is mocked to assert the action's contract (only the 4+1 attributes are written;
-// mass-assignment + bad enums rejected).
+// here the client is mocked to assert the action's contract (only the 4 attributes are ALWAYS
+// written; tax_jurisdiction is written ONLY when the caller actually posted a decision about
+// it; mass-assignment + bad enums rejected).
 //
 // SELF-267 AC 2/2a/3: tax_jurisdiction extends this action (an ordinary UPDATE, not a new RPC).
-// Additional legs below: schema-level '' / absent → null; happy set; the 23505 → 409 field-error
-// mapping off pfin.account_tax_jurisdiction_uniq (102); provider-linked refusal (team-lead
-// ruling E12 — app-layer only, no DB fence); and that clearing (null) never trips the
-// provider-linked check (it only guards a NON-null designation).
+//
+// ⚠ ABSENT ≠ CLEAR (post-dispatch correction, relayed by team-lead from Frontend's landed
+// control at 3aae291): Frontend HIDES the tax_jurisdiction control — the key is entirely
+// ABSENT from the post — for a provider-linked account, so an absent key must leave the
+// column untouched, never wipe it. Only an EXPLICIT '' clears. Legs below: absent → UPDATE
+// omits the key entirely (no-op on the column); '' → UPDATE writes null (explicit clear); a
+// value → UPDATE writes it; the 23505 → 409 field-error mapping off
+// pfin.account_tax_jurisdiction_uniq (102); provider-linked refusal (team-lead ruling E12 —
+// app-layer only, no DB fence) fires ONLY on an actual SET (a posted value), never on absent
+// or on an explicit clear.
 
 import { describe, it, expect, vi } from 'vitest';
 import { actions } from './+page.server';
@@ -24,7 +31,7 @@ const VALID = {
 
 /**
  * `linkedSourceId` seeds the mocked account-detail SELECT the provider-linked check runs
- * (only reached when a NON-null tax_jurisdiction is posted). `undefined` means "no row" —
+ * (only reached when tax_jurisdiction is being SET to a value). `undefined` means "no row" —
  * the RLS-scoped cross-tenant/absent-account case, which the check no-ops on.
  */
 function makeEvent(
@@ -67,16 +74,18 @@ describe('POST /accounts/[account_id]?/updateAttributes', () => {
 		expect(update).not.toHaveBeenCalled();
 	});
 
-	it('valid body, no tax_jurisdiction posted → UPDATE writes the 4 attributes + null (absent → clear)', async () => {
-		const { event, update, eq } = makeEvent(VALID, { id: SESSION_UID }, '7');
+	it('valid body, no tax_jurisdiction posted → UPDATE writes ONLY the 4 attributes (key omitted, column untouched)', async () => {
+		const { event, update, eq, select } = makeEvent(VALID, { id: SESSION_UID }, '7');
 		const res = (await actions.updateAttributes(event)) as { success: boolean };
+		expect(select).not.toHaveBeenCalled();
 		expect(update).toHaveBeenCalledWith({
 			name: 'Brokerage',
 			account_type: 'investment',
 			scope: 'personal',
-			tax_treatment: 'taxable',
-			tax_jurisdiction: null
+			tax_treatment: 'taxable'
 		});
+		const [payload] = update.mock.calls[0] as unknown as [Record<string, unknown>];
+		expect('tax_jurisdiction' in payload).toBe(false);
 		expect(eq).toHaveBeenCalledWith('account_id', 7);
 		expect(res).toEqual({ success: true });
 	});
@@ -88,9 +97,7 @@ describe('POST /accounts/[account_id]?/updateAttributes', () => {
 		);
 		const res = (await actions.updateAttributes(event)) as { success: boolean };
 		expect(select).not.toHaveBeenCalled();
-		expect(update).toHaveBeenCalledWith(
-			expect.objectContaining({ tax_jurisdiction: null })
-		);
+		expect(update).toHaveBeenCalledWith(expect.objectContaining({ tax_jurisdiction: null }));
 		expect(res).toEqual({ success: true });
 	});
 
@@ -104,9 +111,7 @@ describe('POST /accounts/[account_id]?/updateAttributes', () => {
 		);
 		const res = (await actions.updateAttributes(event)) as { success: boolean };
 		expect(select).toHaveBeenCalled();
-		expect(update).toHaveBeenCalledWith(
-			expect.objectContaining({ tax_jurisdiction: 'irs' })
-		);
+		expect(update).toHaveBeenCalledWith(expect.objectContaining({ tax_jurisdiction: 'irs' }));
 		expect(res).toEqual({ success: true });
 	});
 
@@ -153,7 +158,7 @@ describe('POST /accounts/[account_id]?/updateAttributes', () => {
 		expect(res.status).toBe(422);
 	});
 
-	it('provider-linked account + non-null tax_jurisdiction → 422 field error, UPDATE never issued', async () => {
+	it('provider-linked account + a POSTED tax_jurisdiction value → 422 field error, UPDATE never issued', async () => {
 		const { event, update } = makeEvent(
 			{ ...VALID, tax_jurisdiction: 'ftb' },
 			{ id: SESSION_UID },
@@ -170,17 +175,30 @@ describe('POST /accounts/[account_id]?/updateAttributes', () => {
 		expect(update).not.toHaveBeenCalled();
 	});
 
-	it('provider-linked account + tax_jurisdiction cleared (absent) → no check run, UPDATE proceeds', async () => {
+	it('provider-linked account + tax_jurisdiction ABSENT (control hidden) → no check run, key omitted, UPDATE proceeds', async () => {
 		const { event, update, select } = makeEvent(VALID, { id: SESSION_UID }, '7', null, 99);
 		const res = (await actions.updateAttributes(event)) as { success: boolean };
 		expect(select).not.toHaveBeenCalled();
-		expect(update).toHaveBeenCalledWith(
-			expect.objectContaining({ tax_jurisdiction: null })
-		);
+		const [payload] = update.mock.calls[0] as unknown as [Record<string, unknown>];
+		expect('tax_jurisdiction' in payload).toBe(false);
 		expect(res).toEqual({ success: true });
 	});
 
-	it('cross-tenant/absent account + non-null tax_jurisdiction → link-check no-ops (no row), UPDATE still issued (RLS decides)', async () => {
+	it("provider-linked account + tax_jurisdiction posted '' (explicit clear) → no check run (clearing is always allowed), UPDATE writes null", async () => {
+		const { event, update, select } = makeEvent(
+			{ ...VALID, tax_jurisdiction: '' },
+			{ id: SESSION_UID },
+			'7',
+			null,
+			99
+		);
+		const res = (await actions.updateAttributes(event)) as { success: boolean };
+		expect(select).not.toHaveBeenCalled();
+		expect(update).toHaveBeenCalledWith(expect.objectContaining({ tax_jurisdiction: null }));
+		expect(res).toEqual({ success: true });
+	});
+
+	it('cross-tenant/absent account + a posted tax_jurisdiction value → link-check no-ops (no row), UPDATE still issued (RLS decides)', async () => {
 		const { event, update, select } = makeEvent(
 			{ ...VALID, tax_jurisdiction: 'irs' },
 			{ id: SESSION_UID },
