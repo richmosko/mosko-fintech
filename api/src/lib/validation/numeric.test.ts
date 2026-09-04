@@ -7,7 +7,14 @@
 // against BOTH wrappers, since both wrap the same core.
 
 import { describe, it, expect } from 'vitest';
-import { sanitizeCurrencyAmount, sanitizePercent, sanitizeQuantity } from './numeric';
+import {
+	sanitizeCurrencyAmount,
+	sanitizePercent,
+	sanitizeQuantity,
+	sanitizeFractionRate,
+	sanitizeBracketRatePercent,
+	fractionRateToPercentDisplay
+} from './numeric';
 
 describe('sanitizeCurrencyAmount — SELF-201 regression baseline (numeric(20,4), no range)', () => {
 	it('accepts a clean decimal string', () => {
@@ -26,7 +33,8 @@ describe('sanitizeCurrencyAmount — SELF-201 regression baseline (numeric(20,4)
 describe.each([
 	['sanitizeCurrencyAmount', sanitizeCurrencyAmount],
 	['sanitizePercent', sanitizePercent],
-	['sanitizeQuantity', sanitizeQuantity]
+	['sanitizeQuantity', sanitizeQuantity],
+	['sanitizeFractionRate', sanitizeFractionRate]
 ] as const)('%s — six-category adversarial battery', (_name, sanitize) => {
 	it('rejects NaN (literal number)', () => {
 		expect(sanitize(NaN).ok).toBe(false);
@@ -136,5 +144,62 @@ describe('sanitizeQuantity — numeric(28,8) shape (017 pfin.account_trans.quant
 	it('has no built-in positivity/range floor — 0 and negatives pass the SHAPE battery (088’s own > 0 refine is a separate layer, mirrored in schemas/purchase.ts)', () => {
 		expect(sanitizeQuantity('0')).toEqual({ ok: true, value: 0 });
 		expect(sanitizeQuantity('-5')).toEqual({ ok: true, value: -5 });
+	});
+});
+
+describe('sanitizeFractionRate — numeric(12,8) CHECK (0..1), 101 pfin.tax_bracket_row.bracket_rate shape', () => {
+	it('accepts the seeded 22% federal bracket as a fraction', () => {
+		expect(sanitizeFractionRate('0.22')).toEqual({ ok: true, value: 0.22 });
+	});
+
+	it('accepts the boundaries', () => {
+		expect(sanitizeFractionRate('0')).toEqual({ ok: true, value: 0 });
+		expect(sanitizeFractionRate('1')).toEqual({ ok: true, value: 1 });
+	});
+
+	it('rejects a value above 1 — this is a FRACTION column, "22" (meant as 22%) fails loudly here, per 101’s own ruling', () => {
+		expect(sanitizeFractionRate('22')).toEqual({ ok: false, reason: 'Enter a value of at most 1.' });
+	});
+
+	it('rejects a negative fraction', () => {
+		expect(sanitizeFractionRate('-0.1')).toEqual({ ok: false, reason: 'Enter a value of at least 0.' });
+	});
+
+	it('accepts up to 8 decimal places', () => {
+		expect(sanitizeFractionRate('0.12345678')).toEqual({ ok: true, value: 0.12345678 });
+	});
+});
+
+describe('sanitizeBracketRatePercent / fractionRateToPercentDisplay — PERCENT<->FRACTION boundary (E1, SELF-265)', () => {
+	it('round-trips the seeded 22% federal bracket', () => {
+		const percentInput = sanitizeBracketRatePercent('22');
+		expect(percentInput).toEqual({ ok: true, value: 0.22 });
+		expect(fractionRateToPercentDisplay(0.22)).toBe('22');
+	});
+
+	it('round-trips a fractional percent (13.3% — the E23 California surtax bracket)', () => {
+		const percentInput = sanitizeBracketRatePercent('13.3');
+		expect(percentInput).toEqual({ ok: true, value: 0.133 });
+		expect(fractionRateToPercentDisplay(0.133)).toBe('13.3');
+	});
+
+	it('round-trips the boundaries (0% and 100%)', () => {
+		expect(sanitizeBracketRatePercent('0')).toEqual({ ok: true, value: 0 });
+		expect(fractionRateToPercentDisplay(0)).toBe('0');
+		expect(sanitizeBracketRatePercent('100')).toEqual({ ok: true, value: 1 });
+		expect(fractionRateToPercentDisplay(1)).toBe('100');
+	});
+
+	it('rejects a percent above 100 (would be a fraction above 1, out of the DB’s CHECK domain)', () => {
+		expect(sanitizeBracketRatePercent('101').ok).toBe(false);
+	});
+
+	it('rejects a negative percent', () => {
+		expect(sanitizeBracketRatePercent('-5').ok).toBe(false);
+	});
+
+	it('never produces float dust across the /100 conversion (13.3 -> 0.133, not 0.13299999999999998)', () => {
+		const result = sanitizeBracketRatePercent('13.3');
+		expect(result.ok && result.value).toBe(0.133);
 	});
 });

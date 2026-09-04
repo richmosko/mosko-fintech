@@ -1,6 +1,7 @@
 // +server.ts — POST /api/settings/tax-brackets/:schedule_id (SELF-259 AC6 / Lock 14 / ADR-011
 // Decision 18 Sec mod / R4 (docs/records/v14-preflight/sitting-log.md § R4) / E8 (team-lead
-// ruling, 2026-09-03, on Backend's flagged atomicity gap)).
+// ruling, 2026-09-03, on Backend's flagged atomicity gap) / E33 (team-lead ruling, 2026-09-04,
+// consolidating the write path — see below)).
 //
 // Replace-all write path for ONE pfin.tax_bracket_schedule row plus its FULL
 // pfin.tax_bracket_row set, via the SECURITY INVOKER RPC E8 ruled and Architect landed on
@@ -29,7 +30,7 @@
 //     p_schedule_label text, p_standard_deduction numeric, p_tax_balance_prior_year numeric,
 //     p_rows jsonb
 //   ) returns void
-// PostgREST's `.rpc()` matches parameters BY NAME, not position, so the payload below lists
+// PostgREST's `.rpc()` matches parameters BY NAME, not position, so the payload lists
 // `p_schedule_label` alongside the other named args and their order in the call is immaterial —
 // only the SIGNATURE'S positions (as landed in 101) matter, and are quoted verbatim above.
 // ⚠ `create or replace function` with a CHANGED parameter list ADDS AN OVERLOAD rather than
@@ -45,9 +46,10 @@
 // same way `users_id` is never a body field for the parent scalars). The function locks the
 // owner's schedule row FOR UPDATE under RLS and RAISEs on an absent/other-tenant id; it NEVER
 // creates a schedule (a first-time INSERT is a separate, out-of-scope write path — SELF-260's
-// seed is the only current first-row writer). The deferred set-property trigger fires at
-// COMMIT, which for a single RPC call is the end of this one PostgREST request — so a set-fence
-// rejection surfaces as THIS call's `error`, not as some later step's.
+// seed is the only current first-row writer, and SELF-265's createSchedule action is the second).
+// The deferred set-property trigger fires at COMMIT, which for a single RPC call is the end of
+// this one PostgREST request — so a set-fence rejection surfaces as THIS call's `error`, not as
+// some later step's.
 //
 // P0001 AMBIGUITY, NAMED RATHER THAN SILENTLY RESOLVED: the function's OWN "absent/other-tenant"
 // lock failure, its per-row matched-tenant trigger fence (#18), and its deferred zero-floor /
@@ -56,21 +58,21 @@
 // way to tell them apart. CONFIRMED against the landed migration (101): none of its `raise
 // exception` sites carry an explicit `errcode`, so all three conditions genuinely do collapse to
 // P0001 — this is a real ambiguity, not a gap in what this file could confirm. This endpoint
-// therefore does NOT attempt message-string classification of the RPC's own P0001 —
-// see mapWriteError's own comment for why that would be fragile, security-relevant guesswork
+// therefore does NOT attempt message-string classification of the RPC's own P0001 — see the
+// shared write module's own comment for why that would be fragile, security-relevant guesswork
 // rather than a mechanical distinction. Instead, the PRIMARY 404 path is a separate, RLS-scoped
-// ownership read BEFORE the RPC call (see below) — reliable, SQLSTATE-independent, and
-// consistent with this endpoint's existing "never trust {schedule_id} alone" discipline. The
-// RPC's own internal not-found path is then a narrow, race-window backstop (the schedule
-// vanishing between this endpoint's read and its RPC call) that collapses into the same generic
-// 400 as the two trigger fences — a named, accepted residual, not a silent gap. Sec's SELF-259
-// joint review (docs/records/v14-execution/self259-sec-review.md @ b53f766, F-6) reviewed this
-// design and endorsed it as written: message-string classification of a security-relevant error
-// is exactly the fragile guesswork it declines to do, and the pre-RPC ownership read already
-// gives a reliable 404 for the one case that actually needs distinguishing. Sec's own suggested
-// improvement — a distinct SQLSTATE (not P0001) on the function's lock-failure raise, e.g.
-// `errcode = 'PT404'` — remains a sound future improvement, not a condition of any review to
-// date; not implemented here.
+// ownership read BEFORE the RPC call (now inside that shared module — see below) — reliable,
+// SQLSTATE-independent, and consistent with this endpoint's existing "never trust {schedule_id}
+// alone" discipline. The RPC's own internal not-found path is then a narrow, race-window backstop
+// (the schedule vanishing between the ownership read and the RPC call) that collapses into the
+// same generic 400 as the two trigger fences — a named, accepted residual, not a silent gap.
+// Sec's SELF-259 joint review (docs/records/v14-execution/self259-sec-review.md @ b53f766, F-6)
+// reviewed this design and endorsed it as written: message-string classification of a
+// security-relevant error is exactly the fragile guesswork it declines to do, and the pre-RPC
+// ownership read already gives a reliable 404 for the one case that actually needs
+// distinguishing. Sec's own suggested improvement — a distinct SQLSTATE (not P0001) on the
+// function's lock-failure raise, e.g. `errcode = 'PT404'` — remains a sound future improvement,
+// not a condition of any review to date; not implemented here.
 //
 // {schedule_id} IS A CLIENT-SUPPLIED OBJECT REFERENCE (R4 rider 4 / rederived-acs.md AC6): read
 // under RLS with the caller's own session client BEFORE calling the RPC — never trusted alone.
@@ -85,6 +87,23 @@
 // repointing should actually be permitted here — easier to relax later than to retrofit after a
 // same-tenant identity-confusion incident. Flagged explicitly in the hand-off, not silently
 // assumed either way.
+//
+// ── ONE HOME FOR THE REPLACE-ALL FENCE (team-lead ruling E33, 2026-09-04) ──────────────────────
+// The ownership read, the schedule-identity guard, the courtesy row-ordering precheck, the RPC
+// call, and the RPC's SQLSTATE → error-code mapping described above are no longer implemented IN
+// THIS FILE — they live in `$lib/server/queries/taxBracketScheduleWrite.ts`'s
+// `replaceTaxBracketSchedule`, which `/settings/tax-brackets/+page.server.ts`'s
+// saveSchedule/createSchedule actions (SELF-265) delegate to as well, so the two write paths
+// share one implementation rather than two independently-maintained copies of the same fence.
+// This file's job is now exactly the HTTP boundary: auth gate → route-param shape guard → JSON
+// body parse → schema validate → delegate → serialize the shared module's `ReplaceOutcome` into
+// THIS response contract, byte-identical to before the refactor — this endpoint's own two test
+// files (tax-brackets.server.test.ts, tax-brackets.rt24-adversarial.server.test.ts) pass
+// unchanged, which is the refactor's own acceptance test (E33: "the endpoint is the
+// Sec-reviewed one" — its status/body contract governs, and the shared module was made to match
+// it, not the reverse). The shared module's `ReplaceErrorCode` vocabulary IS this endpoint's own
+// pre-refactor `error` strings, verbatim, so the mapping below is a direct passthrough, not a
+// re-derivation.
 //
 // INVOKER + anon-key + RLS only: every call goes through `locals.supabase`, the session-bound
 // client wired at the hooks.server.ts chokepoint. service_role is FORBIDDEN here — this route
@@ -106,7 +125,8 @@
 //      rejected before the DB is ever touched.
 //   3. The DB's matched-tenant fence (D3 canonical #18) + the deferred set-property trigger +
 //      `025` aal2 backstop are the actual guarantees; this endpoint's job is to map a rejection
-//      to a clean 4xx (mapWriteError below), never to re-derive the semantics itself.
+//      to a clean 4xx, never to re-derive the semantics itself — literally true now, since the
+//      mapping lives in the shared module and this file only serializes its outcome.
 //
 // ⚠ RT-24 (docs/SECURITY/index.html) STAYS FLAGGED, NOT FIXED HERE: its row text names a BEFORE
 // INSERT/UPDATE trigger over a column called `lower_bound`; the landed DDL (5f69249) has a
@@ -115,12 +135,12 @@
 
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import type { PostgrestError } from '@supabase/supabase-js';
 import { taxBracketScheduleReplaceSchema } from '$lib/server/schemas/tax-bracket-schedule';
 import { fieldErrors } from '$lib/server/schemas/account';
+import { replaceTaxBracketSchedule } from '$lib/server/queries/taxBracketScheduleWrite';
 
-/** Shape-only guard on the route param — RLS (via the ownership read below) is the actual
- *  tenant/visibility boundary, mirroring accounts/[account_id]'s parseAccountId and
+/** Shape-only guard on the route param — RLS (via the shared helper's own ownership read) is
+ *  the actual tenant/visibility boundary, mirroring accounts/[account_id]'s parseAccountId and
  *  transactions/[trans_id]'s parseTransId. `Number.isSafeInteger` rather than a smaller bound:
  *  the PK is `bigint generated always as identity` (migration 101), and a JS
  *  `Number.isSafeInteger` id fits every value the table's own identity sequence will ever
@@ -129,84 +149,6 @@ import { fieldErrors } from '$lib/server/schemas/account';
 function parseScheduleId(param: string | undefined): number | null {
 	const n = Number(param);
 	return Number.isSafeInteger(n) && n > 0 ? n : null;
-}
-
-/**
- * App-layer COURTESY pre-check for a friendlier error — NEVER the guarantee (101's own comment:
- * "SERIALIZABLE is NOT a substitute for this and this is not a substitute for SERIALIZABLE").
- * Validates BOTH of 101's set-property legs against the array in the order the client
- * submitted it (AC2: "an ORDERED bracket-row table"), never re-sorted:
- *   - Leg A (zero floor): the first row's `bracket_floor` must be exactly 0.
- *   - Leg B (rate monotonicity): each subsequent row's `bracket_rate` must be >= the previous
- *     row's (non-decreasing, matching the DB's own NON-DECREASING — not strictly increasing —
- *     wording).
- * ⚠ STRICTER THAN THE DB, DELIBERATELY: the DB fence sorts by `bracket_floor` internally and
- * does not care what order the client SUBMITTED rows in — this check instead requires the
- * client to submit rows PRE-SORTED ascending by floor. A batch that passes this check is
- * therefore guaranteed to also pass the DB fence; the reverse is not true, and is not intended
- * to be. ⚠ SUBSUMES DUPLICATE-FLOOR DETECTION: two rows sharing one `bracket_floor` (which
- * would violate 101's `unique (schedule_id, bracket_floor)`) can never pass "each subsequent
- * floor > previous" — the comparison below is `<=`, not `<`.
- */
-function precheckRowOrdering(
-	rows: readonly { bracket_floor: number; bracket_rate: number }[]
-): { ok: true } | { ok: false; reason: string } {
-	if (rows[0].bracket_floor !== 0) {
-		return { ok: false, reason: 'The lowest bracket must start at 0.' };
-	}
-	for (let i = 1; i < rows.length; i++) {
-		if (rows[i].bracket_floor <= rows[i - 1].bracket_floor) {
-			return { ok: false, reason: 'Bracket thresholds must strictly increase, in order.' };
-		}
-		if (rows[i].bracket_rate < rows[i - 1].bracket_rate) {
-			return { ok: false, reason: 'Bracket rates must not decrease as thresholds rise.' };
-		}
-	}
-	return { ok: true };
-}
-
-/**
- * Map an RPC write failure to a clean 4xx. Every EXPECTED rejection path is a 4xx, never a 500:
- *   - '42501' — RLS WITH CHECK/USING violation; in practice the `025` aal2 step-up backstop.
- *   - 'P0001' — collapsed to one generic `invalid_schedule`, DELIBERATELY not sub-classified by
- *     message text. Three distinct DB-side conditions can raise it (the RPC's own ownership
- *     lock failure, the matched-tenant trigger, the deferred set-property trigger) and only the
- *     FIRST is conceptually a 404 rather than a 400 — but this endpoint's own pre-call
- *     ownership read (see POST below) already handles that case in the ordinary flow, so by
- *     the time this function's error reaches here, a P0001 is either a genuine trigger
- *     rejection or a rare race-window ownership failure. Parsing the RPC's message text to
- *     split these would be fragile, security-adjacent guesswork against a contract whose actual
- *     wording isn't confirmed yet — see the file header's P0001 AMBIGUITY block for the
- *     recommendation (a distinct SQLSTATE) that would let this be done mechanically instead.
- *   - '23514' — the two-sided NaN / domain CHECKs on the three numerics. Defense-in-depth only.
- *   - '23505' — either `unique (schedule_id, bracket_floor)` (defensive fallback —
- *     `precheckRowOrdering` already rejects any duplicate floor before the DB is reached) or
- *     `unique (users_id, tax_year, schedule_type)` (reachable ONLY if the schedule-identity
- *     guard above is ever relaxed to permit renaming, and a rename collides with another
- *     existing schedule). Mapped to 409 rather than 400: both are "this write conflicts with
- *     another row that already exists," a conflict, not a shape/value defect.
- *   - '40001' — SERIALIZABLE serialization failure. Not a client input error — a concurrent
- *     transaction made this one's view stale, and the client is expected to retry. Mapped to
- *     409, distinctly from the '23505' conflict case above, so the frontend can tell "retry the
- *     same request" apart from "this specific input conflicts."
- * Anything else is genuinely unexpected and stays a logged 500.
- */
-function mapWriteError(error: PostgrestError): { status: number; body: { error: string } } {
-	switch (error.code) {
-		case '42501':
-			return { status: 403, body: { error: 'step_up_required' } };
-		case 'P0001':
-			return { status: 400, body: { error: 'invalid_schedule' } };
-		case '23514':
-			return { status: 400, body: { error: 'invalid_value' } };
-		case '23505':
-			return { status: 409, body: { error: 'schedule_conflict' } };
-		case '40001':
-			return { status: 409, body: { error: 'concurrent_update_retry' } };
-		default:
-			console.error('[tax-brackets] unexpected write error:', error.code, error.message);
-			return { status: 500, body: { error: 'internal_error' } };
-	}
 }
 
 export const POST: RequestHandler = async ({ request, locals, params }) => {
@@ -228,59 +170,17 @@ export const POST: RequestHandler = async ({ request, locals, params }) => {
 		return json({ error: 'invalid_request', fieldErrors: fieldErrors(parsed.error) }, { status: 400 });
 	}
 
-	// {schedule_id} is a client-supplied object reference (R4 rider 4) — resolved under RLS
-	// with the CALLER'S OWN session client BEFORE the RPC call, for a reliable, message-
-	// independent 404 (see file header's P0001 AMBIGUITY block for why this is the PRIMARY
-	// mechanism rather than parsing the RPC's own error text). RLS filters this to the caller's
-	// own rows by construction; a cross-tenant or absent id comes back as "no row" either way —
-	// never distinguishing the two (that distinction would itself be a cross-tenant existence
-	// leak).
-	const { data: ownedSchedule, error: readError } = await locals.supabase
-		.schema('pfin')
-		.from('tax_bracket_schedule')
-		.select('id, tax_year, schedule_type')
-		.eq('id', scheduleId)
-		.maybeSingle();
+	// ONE HOME FOR THE FENCE (E33) — ownership read → identity guard → courtesy precheck → RPC
+	// call → SQLSTATE mapping, all inside the shared helper. See file header.
+	const result = await replaceTaxBracketSchedule(locals.supabase, scheduleId, parsed.data);
 
-	if (readError) {
-		console.error('[tax-brackets] ownership read failed:', readError.code, readError.message);
-		return json({ error: 'internal_error' }, { status: 500 });
-	}
-	if (!ownedSchedule) {
-		return json({ error: 'not_found' }, { status: 404 });
-	}
-
-	// Schedule-identity guard (409) — see file header for why this is a preserved, deliberately
-	// conservative judgment call rather than a DB-mandated restriction.
-	if (parsed.data.tax_year !== ownedSchedule.tax_year || parsed.data.schedule_type !== ownedSchedule.schedule_type) {
-		return json({ error: 'schedule_identity_mismatch' }, { status: 409 });
-	}
-
-	// Courtesy pre-check ONLY — see precheckRowOrdering's own header. A rejection here is a
-	// friendlier error than the DB trigger's, never a substitute for it.
-	const ordering = precheckRowOrdering(parsed.data.rows);
-	if (!ordering.ok) {
-		return json({ error: 'invalid_row_order', reason: ordering.reason }, { status: 400 });
-	}
-
-	// ONE RPC call — E8's ruled contract (see file header). `p_rows` is exactly
-	// `parsed.data.rows`: an array of `{bracket_floor, bracket_rate}`, no `schedule_id` / no
-	// `users_id` per row — the function stamps both server-side. `users_id` is NEVER passed at
-	// all (Lock 14 mod #1) — always the validated session, resolved inside the INVOKER function
-	// from auth.uid(), the same SELF-267 D-2(i) precedent this endpoint's prior revision cited.
-	const { error: writeError } = await locals.supabase.schema('pfin').rpc('fn_tax_bracket_schedule_replace_all', {
-		p_schedule_id: scheduleId,
-		p_tax_year: parsed.data.tax_year,
-		p_schedule_type: parsed.data.schedule_type,
-		p_schedule_label: parsed.data.schedule_label,
-		p_standard_deduction: parsed.data.standard_deduction,
-		p_tax_balance_prior_year: parsed.data.tax_balance_prior_year,
-		p_rows: parsed.data.rows
-	});
-
-	if (writeError) {
-		const { status, body } = mapWriteError(writeError);
-		return json(body, { status });
+	if (!result.ok) {
+		// `result.error` IS this endpoint's own pre-refactor error-string vocabulary — a direct
+		// passthrough, not a re-derivation. `invalid_row_order` is the one case that carries an
+		// extra `reason` field, matching this endpoint's original body shape exactly.
+		const body: Record<string, unknown> = { error: result.error };
+		if (result.reason !== undefined) body.reason = result.reason;
+		return json(body, { status: result.status });
 	}
 
 	return json({

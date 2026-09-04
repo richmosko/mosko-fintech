@@ -169,3 +169,78 @@ export function sanitizeQuantity(raw: unknown): SanitizeResult {
 		maxDecimalPlaces: QUANTITY_MAX_DECIMAL_PLACES
 	});
 }
+
+/** Mirrors the SERVER's `FRACTION_RATE_*` constants (`src/lib/server/validation/numeric.ts`),
+ *  shaped to `pfin.tax_bracket_row.bracket_rate` (migration 101): `numeric(12,8)`,
+ *  `CHECK (bracket_rate >= 0 and bracket_rate <= 1 and bracket_rate <> 'NaN'::numeric)`. FRACTION
+ *  unit (0.22, never 22) — SELF-259's ruling, cited at the migration: a fraction multiplies
+ *  directly into the estimated-tax arithmetic, a percent needs a /100 at every call site. */
+const FRACTION_RATE_MAX_INT_DIGITS = 4;
+const FRACTION_RATE_MAX_DECIMAL_PLACES = 8;
+const FRACTION_RATE_MIN = 0;
+const FRACTION_RATE_MAX = 1;
+
+/**
+ * Validate a FRACTION-unit bracket rate (0.22, not 22) — SELF-265's client mirror of the
+ * server's `sanitizeFractionRate` (tax-bracket-schedule.ts / bracketRowSchema). Same six
+ * adversarial categories as every other wrapper in this file, plus the DB's own [0, 1] range.
+ * This is the value the write endpoint actually stores and validates; `sanitizeBracketRatePercent`
+ * below is the PRESENTATION-layer wrapper the editor's percent-typed input actually calls, and it
+ * re-validates through this function so the client can never accept a converted value the server
+ * would reject.
+ */
+export function sanitizeFractionRate(raw: unknown): SanitizeResult {
+	return sanitizeDecimal(raw, {
+		maxIntDigits: FRACTION_RATE_MAX_INT_DIGITS,
+		maxDecimalPlaces: FRACTION_RATE_MAX_DECIMAL_PLACES,
+		min: FRACTION_RATE_MIN,
+		max: FRACTION_RATE_MAX
+	});
+}
+
+/** Percent-shape bound for `sanitizeBracketRatePercent`'s FIRST pass: 3 integer digits (0-100)
+ *  and 6 decimal places — the fraction column's 8 decimal places, shifted 2 places by the ×100
+ *  presentation conversion (0.13300000 fraction <-> 13.3 percent). This is NOT a DB-mirrored
+ *  shape (no column stores a percent) — it exists only so a shape-invalid percent string fails
+ *  with a percent-flavored message before ever being divided by 100. */
+const BRACKET_RATE_PERCENT_MAX_INT_DIGITS = 3;
+const BRACKET_RATE_PERCENT_MAX_DECIMAL_PLACES = 6;
+const BRACKET_RATE_PERCENT_MIN = 0;
+const BRACKET_RATE_PERCENT_MAX = 100;
+
+/**
+ * PRESENTATION-LAYER wrapper for SELF-265's bracket-rate editor: `pfin.tax_bracket_row
+ * .bracket_rate` is stored and validated as a FRACTION (101's ruling — see
+ * `sanitizeFractionRate` above), but a settings editor asking a human to type "0.22" instead of
+ * "22" is the wrong UX for a value published everywhere as a percent. This function accepts the
+ * PERCENT string the field actually displays, validates its own shape (percent digit bounds),
+ * converts to a fraction, and — never trusting the conversion alone — re-validates the result
+ * through `sanitizeFractionRate`, the same check the payload's own field-level validation uses.
+ * A percent input can therefore never produce a fraction this file would accept but the server's
+ * mirror would reject: the fraction check is the one both paths share.
+ * Returns the FRACTION `number` (never the percent) on success — the shape the `rows[]` payload
+ * fields expect.
+ */
+export function sanitizeBracketRatePercent(raw: unknown): SanitizeResult {
+	const shapeCheck = sanitizeDecimal(raw, {
+		maxIntDigits: BRACKET_RATE_PERCENT_MAX_INT_DIGITS,
+		maxDecimalPlaces: BRACKET_RATE_PERCENT_MAX_DECIMAL_PLACES,
+		min: BRACKET_RATE_PERCENT_MIN,
+		max: BRACKET_RATE_PERCENT_MAX
+	});
+	if (!shapeCheck.ok) return shapeCheck;
+	// Round-trip through a fixed decimal string, not raw float division, so e.g. "13.3" / 100
+	// never leaves float dust (0.13299999999999998) that a later exact-value comparison (the
+	// zero-floor / monotonicity courtesy check) could trip on.
+	const fraction = Number((shapeCheck.value / 100).toFixed(FRACTION_RATE_MAX_DECIMAL_PLACES));
+	return sanitizeFractionRate(fraction);
+}
+
+/** Converts a stored FRACTION rate to the percent string the editor displays (0.133 -> "13.3").
+ *  Inverse of `sanitizeBracketRatePercent`'s conversion half. Trims float noise the same way
+ *  (fixed-decimal round-trip, not raw multiplication display) and drops trailing zeros / a
+ *  trailing decimal point so "0.10" reads as "10", not "10.000000". */
+export function fractionRateToPercentDisplay(fraction: number): string {
+	const pct = Number((fraction * 100).toFixed(BRACKET_RATE_PERCENT_MAX_DECIMAL_PLACES));
+	return String(pct);
+}
