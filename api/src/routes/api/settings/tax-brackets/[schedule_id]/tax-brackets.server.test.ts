@@ -1,14 +1,13 @@
 // tax-brackets.server.test.ts — SELF-259 AC6 orchestration + Lock 14 adversarial coverage for
-// POST /api/settings/tax-brackets/:schedule_id. Mirrors planning-target.server.test.ts /
-// cashflow-target.server.test.ts's mocked-session / mocked-supabase-chain shape.
+// POST /api/settings/tax-brackets/:schedule_id.
 //
-// Reconciled against migration 101 (supabase/migrations/101_tax_bracket_tables.sql @ 5f69249):
-// there is no replace-all RPC, so the write path is THREE sequential `.from()` calls — UPDATE
-// pfin.tax_bracket_schedule, DELETE pfin.tax_bracket_row, INSERT pfin.tax_bracket_row (see the
-// route file's header for why this order). Every test captures which of {read, update, delete,
-// insert} actually ran, so a rejection that should stop the sequence early (auth, shape,
-// mass-assignment, identity mismatch, ordering precheck, a failure on an earlier step) can
-// assert the LATER steps never ran — not just that the response code looks right.
+// Reconciled to E8 (team-lead ruling, 2026-09-03): the write path is a single RPC call —
+// `pfin.fn_tax_bracket_schedule_replace_all(p_schedule_id, p_tax_year, p_schedule_type,
+// p_standard_deduction, p_tax_balance_prior_year, p_rows)` — that Architect is landing on
+// migration 101. This endpoint STILL does its own RLS-scoped ownership read before calling the
+// RPC (for a reliable, message-independent 404 — see the route file's header for why), so every
+// test captures both the read call and the RPC call, and asserts the RPC is never reached when
+// an earlier check should have stopped the request.
 
 import { describe, it, expect } from 'vitest';
 import { POST } from './+server';
@@ -19,86 +18,50 @@ type ReadResult = {
 	data: { id: number; tax_year: number; schedule_type: string } | null;
 	error: { code: string; message: string } | null;
 };
-type WriteResult = { error: { code: string; message: string } | null; count?: number | null };
+type RpcResult = { data: unknown; error: { code: string; message: string } | null };
 
 type Captured = {
 	readCalls: Array<{ col: string; val: unknown }>;
-	updateCalls: Array<{ payload: unknown; col: string; val: unknown }>;
-	deleteCalls: Array<{ col: string; val: unknown }>;
-	insertCalls: Array<unknown[]>;
+	rpcCalls: Array<{ fn: string; params: Record<string, unknown> }>;
 };
 
-function emptyCaptured(): Captured {
-	return { readCalls: [], updateCalls: [], deleteCalls: [], insertCalls: [] };
-}
-
-function supabaseMock(
-	readResult: ReadResult,
-	updateResult: WriteResult,
-	deleteResult: WriteResult,
-	insertResult: WriteResult,
-	captured: Captured
-) {
+function supabaseMock(readResult: ReadResult, rpcResult: RpcResult, captured: Captured) {
 	return {
 		schema: (schemaName: string) => {
 			if (schemaName !== 'pfin') throw new Error(`unexpected schema ${schemaName}`);
 			return {
 				from: (table: string) => {
-					if (table === 'tax_bracket_schedule') {
-						return {
-							select: (_cols: string) => ({
-								eq: (col: string, val: unknown) => {
-									captured.readCalls.push({ col, val });
-									return { maybeSingle: () => Promise.resolve(readResult) };
-								}
-							}),
-							update: (payload: unknown, _opts: unknown) => ({
-								eq: (col: string, val: unknown) => {
-									captured.updateCalls.push({ payload, col, val });
-									return Promise.resolve(updateResult);
-								}
-							})
-						};
-					}
-					if (table === 'tax_bracket_row') {
-						return {
-							delete: () => ({
-								eq: (col: string, val: unknown) => {
-									captured.deleteCalls.push({ col, val });
-									return Promise.resolve(deleteResult);
-								}
-							}),
-							insert: (rows: unknown[]) => {
-								captured.insertCalls.push(rows);
-								return Promise.resolve(insertResult);
+					if (table !== 'tax_bracket_schedule') throw new Error(`unexpected table ${table}`);
+					return {
+						select: (_cols: string) => ({
+							eq: (col: string, val: unknown) => {
+								captured.readCalls.push({ col, val });
+								return { maybeSingle: () => Promise.resolve(readResult) };
 							}
-						};
-					}
-					throw new Error(`unexpected table ${table}`);
+						})
+					};
+				},
+				rpc: (fn: string, params: Record<string, unknown>) => {
+					captured.rpcCalls.push({ fn, params });
+					return Promise.resolve(rpcResult);
 				}
 			};
 		}
 	};
 }
 
-const OK_WRITE: WriteResult = { error: null, count: 1 };
-
 function makeEvent(
 	body: unknown,
 	user: { id: string } | null,
 	scheduleIdParam: string,
-	overrides: {
-		readResult?: ReadResult;
-		updateResult?: WriteResult;
-		deleteResult?: WriteResult;
-		insertResult?: WriteResult;
-	} = {}
+	overrides: { readResult?: ReadResult; rpcResult?: RpcResult } = {}
 ) {
-	const captured = emptyCaptured();
+	const captured: Captured = { readCalls: [], rpcCalls: [] };
 	const readResult: ReadResult = overrides.readResult ?? {
 		data: { id: Number(scheduleIdParam), tax_year: 2026, schedule_type: 'federal_ordinary' },
 		error: null
 	};
+	const rpcResult: RpcResult = overrides.rpcResult ?? { data: null, error: null };
 	const request = new Request(`http://localhost/api/settings/tax-brackets/${scheduleIdParam}`, {
 		method: 'POST',
 		headers: { 'content-type': 'application/json' },
@@ -106,21 +69,14 @@ function makeEvent(
 	});
 	const locals = {
 		safeGetSession: async () => ({ session: user ? {} : null, user }),
-		supabase: supabaseMock(
-			readResult,
-			overrides.updateResult ?? OK_WRITE,
-			overrides.deleteResult ?? OK_WRITE,
-			overrides.insertResult ?? OK_WRITE,
-			captured
-		)
+		supabase: supabaseMock(readResult, rpcResult, captured)
 	};
 	const params = { schedule_id: scheduleIdParam };
 	return { event: { request, locals, params } as unknown as Parameters<typeof POST>[0], captured };
 }
 
 /** A minimal, otherwise-valid body: two rows, zero-floor + strictly-increasing floor and rate,
- *  matching the default read-result's identity (tax_year 2026 / federal_ordinary). Individual
- *  tests mutate one field at a time off this base. */
+ *  matching the default read-result's identity (tax_year 2026 / federal_ordinary). */
 function validBody(overrides: Record<string, unknown> = {}) {
 	return {
 		tax_year: 2026,
@@ -141,6 +97,7 @@ describe('POST /api/settings/tax-brackets/:schedule_id — orchestration', () =>
 		const res = await POST(event);
 		expect(res.status).toBe(401);
 		expect(captured.readCalls).toHaveLength(0);
+		expect(captured.rpcCalls).toHaveLength(0);
 	});
 
 	it('non-numeric schedule_id path param → 400, no DB reached', async () => {
@@ -163,14 +120,12 @@ describe('POST /api/settings/tax-brackets/:schedule_id — orchestration', () =>
 			headers: { 'content-type': 'application/json' },
 			body: '{not json'
 		});
-		const captured = emptyCaptured();
+		const captured: Captured = { readCalls: [], rpcCalls: [] };
 		const locals = {
 			safeGetSession: async () => ({ session: {}, user: { id: SESSION_UID } }),
 			supabase: supabaseMock(
 				{ data: { id: 1, tax_year: 2026, schedule_type: 'federal_ordinary' }, error: null },
-				OK_WRITE,
-				OK_WRITE,
-				OK_WRITE,
+				{ data: null, error: null },
 				captured
 			)
 		};
@@ -201,55 +156,53 @@ describe('POST /api/settings/tax-brackets/:schedule_id — orchestration', () =>
 		expect(captured.readCalls).toHaveLength(0);
 	});
 
-	it('cross-tenant / absent schedule_id: ownership read resolves no row → 404, no write calls', async () => {
+	it('cross-tenant / absent schedule_id: ownership read resolves no row → 404, RPC never called', async () => {
 		const { event, captured } = makeEvent(validBody(), { id: SESSION_UID }, '1', { readResult: { data: null, error: null } });
 		const res = await POST(event);
 		expect(res.status).toBe(404);
 		expect(await res.json()).toEqual({ error: 'not_found' });
 		expect(captured.readCalls).toEqual([{ col: 'id', val: 1 }]);
-		expect(captured.updateCalls).toHaveLength(0);
-		expect(captured.deleteCalls).toHaveLength(0);
-		expect(captured.insertCalls).toHaveLength(0);
+		expect(captured.rpcCalls).toHaveLength(0);
 	});
 
-	it('ownership read failure (unexpected DB error) → 500, no write calls', async () => {
+	it('ownership read failure (unexpected DB error) → 500, RPC never called', async () => {
 		const { event, captured } = makeEvent(validBody(), { id: SESSION_UID }, '1', {
 			readResult: { data: null, error: { code: 'XXYYY', message: 'boom' } }
 		});
 		const res = await POST(event);
 		expect(res.status).toBe(500);
-		expect(captured.updateCalls).toHaveLength(0);
+		expect(captured.rpcCalls).toHaveLength(0);
 	});
 
-	it('schedule identity mismatch: body tax_year disagrees with the resolved row → 409, no write calls', async () => {
+	it('schedule identity mismatch: body tax_year disagrees with the resolved row → 409, RPC never called', async () => {
 		const { event, captured } = makeEvent(validBody({ tax_year: 2025 }), { id: SESSION_UID }, '1', {
 			readResult: { data: { id: 1, tax_year: 2026, schedule_type: 'federal_ordinary' }, error: null }
 		});
 		const res = await POST(event);
 		expect(res.status).toBe(409);
 		expect(await res.json()).toEqual({ error: 'schedule_identity_mismatch' });
-		expect(captured.updateCalls).toHaveLength(0);
+		expect(captured.rpcCalls).toHaveLength(0);
 	});
 
-	it('schedule identity mismatch: body schedule_type disagrees with the resolved row → 409, no write calls', async () => {
+	it('schedule identity mismatch: body schedule_type disagrees with the resolved row → 409, RPC never called', async () => {
 		const { event, captured } = makeEvent(validBody({ schedule_type: 'federal_lt_cg' }), { id: SESSION_UID }, '1', {
 			readResult: { data: { id: 1, tax_year: 2026, schedule_type: 'federal_ordinary' }, error: null }
 		});
 		const res = await POST(event);
 		expect(res.status).toBe(409);
-		expect(captured.updateCalls).toHaveLength(0);
+		expect(captured.rpcCalls).toHaveLength(0);
 	});
 
-	it('zero-floor courtesy precheck: lowest bracket_floor non-zero → 400, no write calls', async () => {
+	it('zero-floor courtesy precheck: lowest bracket_floor non-zero → 400, RPC never called', async () => {
 		const body = validBody({ rows: [{ bracket_floor: 500, bracket_rate: '0.10' }] });
 		const { event, captured } = makeEvent(body, { id: SESSION_UID }, '1');
 		const res = await POST(event);
 		expect(res.status).toBe(400);
 		expect((await res.json()).error).toBe('invalid_row_order');
-		expect(captured.updateCalls).toHaveLength(0);
+		expect(captured.rpcCalls).toHaveLength(0);
 	});
 
-	it('floor-ordering courtesy precheck: a non-increasing multi-row batch (duplicate floor) → 400, no write calls', async () => {
+	it('floor-ordering courtesy precheck: a non-increasing multi-row batch (duplicate floor) → 400, RPC never called', async () => {
 		const body = validBody({
 			rows: [
 				{ bracket_floor: 0, bracket_rate: '0.10' },
@@ -261,10 +214,10 @@ describe('POST /api/settings/tax-brackets/:schedule_id — orchestration', () =>
 		const res = await POST(event);
 		expect(res.status).toBe(400);
 		expect((await res.json()).error).toBe('invalid_row_order');
-		expect(captured.updateCalls).toHaveLength(0);
+		expect(captured.rpcCalls).toHaveLength(0);
 	});
 
-	it('rate-monotonicity courtesy precheck: a decreasing rate at a higher floor → 400, no write calls', async () => {
+	it('rate-monotonicity courtesy precheck: a decreasing rate at a higher floor → 400, RPC never called', async () => {
 		const body = validBody({
 			rows: [
 				{ bracket_floor: 0, bracket_rate: '0.20' },
@@ -275,14 +228,14 @@ describe('POST /api/settings/tax-brackets/:schedule_id — orchestration', () =>
 		const res = await POST(event);
 		expect(res.status).toBe(400);
 		expect((await res.json()).error).toBe('invalid_row_order');
-		expect(captured.updateCalls).toHaveLength(0);
+		expect(captured.rpcCalls).toHaveLength(0);
 	});
 
 	it('equal adjacent rates (non-decreasing, not strictly increasing) are ACCEPTED by the courtesy precheck', async () => {
 		const body = validBody({
 			rows: [
 				{ bracket_floor: 0, bracket_rate: '0.10' },
-				{ bracket_floor: 11600, bracket_rate: '0.10' } // same rate — legal, per 101's own "non-decreasing" wording
+				{ bracket_floor: 11600, bracket_rate: '0.10' }
 			]
 		});
 		const { event } = makeEvent(body, { id: SESSION_UID }, '1');
@@ -290,7 +243,7 @@ describe('POST /api/settings/tax-brackets/:schedule_id — orchestration', () =>
 		expect(res.status).toBe(200);
 	});
 
-	it('happy path: valid replace-all → 200, UPDATE then DELETE then INSERT, in that order, users_id never written', async () => {
+	it('happy path: valid replace-all → 200, RPC called ONCE with E8\'s exact param names, no users_id, p_rows exactly the validated row array', async () => {
 		const { event, captured } = makeEvent(validBody(), { id: SESSION_UID }, '42', {
 			readResult: { data: { id: 42, tax_year: 2026, schedule_type: 'federal_ordinary' }, error: null }
 		});
@@ -306,104 +259,74 @@ describe('POST /api/settings/tax-brackets/:schedule_id — orchestration', () =>
 			row_count: 2
 		});
 
-		expect(captured.updateCalls).toHaveLength(1);
-		expect(captured.updateCalls[0].col).toBe('id');
-		expect(captured.updateCalls[0].val).toBe(42);
-		expect(captured.updateCalls[0].payload).toEqual({ standard_deduction: 14600, tax_balance_prior_year: null });
-		expect(captured.updateCalls[0].payload).not.toHaveProperty('users_id');
-		expect(captured.updateCalls[0].payload).not.toHaveProperty('tax_year');
-		expect(captured.updateCalls[0].payload).not.toHaveProperty('schedule_type');
-
-		expect(captured.deleteCalls).toEqual([{ col: 'schedule_id', val: 42 }]);
-
-		expect(captured.insertCalls).toHaveLength(1);
-		expect(captured.insertCalls[0]).toEqual([
-			{ schedule_id: 42, bracket_floor: 0, bracket_rate: 0.1 },
-			{ schedule_id: 42, bracket_floor: 11600, bracket_rate: 0.12 }
-		]);
-		for (const row of captured.insertCalls[0] as Record<string, unknown>[]) {
-			expect(row).not.toHaveProperty('users_id');
-		}
+		expect(captured.readCalls).toEqual([{ col: 'id', val: 42 }]);
+		expect(captured.rpcCalls).toHaveLength(1);
+		const call = captured.rpcCalls[0];
+		expect(call.fn).toBe('fn_tax_bracket_schedule_replace_all');
+		expect(call.params).not.toHaveProperty('p_users_id');
+		expect(call.params).not.toHaveProperty('users_id');
+		expect(call.params).toEqual({
+			p_schedule_id: 42,
+			p_tax_year: 2026,
+			p_schedule_type: 'federal_ordinary',
+			p_standard_deduction: 14600,
+			p_tax_balance_prior_year: null,
+			p_rows: [
+				{ bracket_floor: 0, bracket_rate: 0.1 },
+				{ bracket_floor: 11600, bracket_rate: 0.12 }
+			]
+		});
 	});
 
-	it('a 0-row UPDATE (race: schedule vanished between the ownership read and the write) → 404, DELETE/INSERT never called', async () => {
-		const { event, captured } = makeEvent(validBody(), { id: SESSION_UID }, '1', { updateResult: { error: null, count: 0 } });
-		const res = await POST(event);
-		expect(res.status).toBe(404);
-		expect(captured.deleteCalls).toHaveLength(0);
-		expect(captured.insertCalls).toHaveLength(0);
-	});
-
-	describe('write-error mapping — UPDATE step (schedule scalars)', () => {
-		it("'42501' (aal2 step-up) on UPDATE → 403, DELETE/INSERT never called", async () => {
-			const { event, captured } = makeEvent(validBody(), { id: SESSION_UID }, '1', {
-				updateResult: { error: { code: '42501', message: 'permission denied' } }
+	describe('RPC (DB-side) error mapping — the DB rejection surfaced correctly, never silently 200', () => {
+		it("'42501' (aal2 step-up RLS) → 403 step_up_required", async () => {
+			const { event } = makeEvent(validBody(), { id: SESSION_UID }, '1', {
+				rpcResult: { data: null, error: { code: '42501', message: 'permission denied' } }
 			});
 			const res = await POST(event);
 			expect(res.status).toBe(403);
 			expect(await res.json()).toEqual({ error: 'step_up_required' });
-			expect(captured.deleteCalls).toHaveLength(0);
-			expect(captured.insertCalls).toHaveLength(0);
 		});
 
-		it("'23514' (numeric CHECK) on UPDATE → 400 invalid_value, DELETE/INSERT never called", async () => {
-			const { event, captured } = makeEvent(validBody(), { id: SESSION_UID }, '1', {
-				updateResult: { error: { code: '23514', message: 'check violation' } }
-			});
-			const res = await POST(event);
-			expect(res.status).toBe(400);
-			expect(await res.json()).toEqual({ error: 'invalid_value' });
-			expect(captured.deleteCalls).toHaveLength(0);
-		});
-	});
-
-	describe('write-error mapping — DELETE step (old rows)', () => {
-		it("'42501' on DELETE → 403, INSERT never called (scalars already committed — the accepted residual)", async () => {
-			const { event, captured } = makeEvent(validBody(), { id: SESSION_UID }, '1', {
-				deleteResult: { error: { code: '42501', message: 'permission denied' } }
-			});
-			const res = await POST(event);
-			expect(res.status).toBe(403);
-			expect(captured.updateCalls).toHaveLength(1);
-			expect(captured.insertCalls).toHaveLength(0);
-		});
-	});
-
-	describe('write-error mapping — INSERT step (new rows) — where the deferred CONSTRAINT TRIGGER commits', () => {
-		it("'P0001' (matched-tenant fence OR the deferred zero-floor/rate-monotonicity trigger, commit-time) → 400 invalid_schedule — the DB rejection surfaced correctly, never silently 200", async () => {
-			const { event, captured } = makeEvent(validBody(), { id: SESSION_UID }, '1', {
-				insertResult: { error: { code: 'P0001', message: 'raised by trigger at commit' } }
+		it("'P0001' (ownership lock failure, matched-tenant fence, or the deferred set fence — collapsed deliberately, see file header) → 400 invalid_schedule", async () => {
+			const { event } = makeEvent(validBody(), { id: SESSION_UID }, '1', {
+				rpcResult: { data: null, error: { code: 'P0001', message: 'raised by the function or a trigger' } }
 			});
 			const res = await POST(event);
 			expect(res.status).toBe(400);
 			expect(await res.json()).toEqual({ error: 'invalid_schedule' });
-			// The prior two steps DID run (scalars updated, old rows deleted) — this is the
-			// accepted "new scalars, empty rows" residual the route file's header names.
-			expect(captured.updateCalls).toHaveLength(1);
-			expect(captured.deleteCalls).toHaveLength(1);
 		});
 
-		it("'23505' (duplicate bracket_floor, defensive fallback) → 400 duplicate_bracket_floor", async () => {
+		it("'23514' (two-sided numeric CHECK) → 400 invalid_value", async () => {
 			const { event } = makeEvent(validBody(), { id: SESSION_UID }, '1', {
-				insertResult: { error: { code: '23505', message: 'unique violation' } }
-			});
-			const res = await POST(event);
-			expect(res.status).toBe(400);
-			expect(await res.json()).toEqual({ error: 'duplicate_bracket_floor' });
-		});
-
-		it("'23514' on INSERT → 400 invalid_value", async () => {
-			const { event } = makeEvent(validBody(), { id: SESSION_UID }, '1', {
-				insertResult: { error: { code: '23514', message: 'check violation' } }
+				rpcResult: { data: null, error: { code: '23514', message: 'check violation' } }
 			});
 			const res = await POST(event);
 			expect(res.status).toBe(400);
 			expect(await res.json()).toEqual({ error: 'invalid_value' });
 		});
 
-		it('unexpected error code on INSERT → 500 internal_error, never a fake 4xx', async () => {
+		it("'23505' (unique-constraint conflict) → 409 schedule_conflict, distinct from a value-shape 4xx", async () => {
 			const { event } = makeEvent(validBody(), { id: SESSION_UID }, '1', {
-				insertResult: { error: { code: '55000', message: 'unexpected' } }
+				rpcResult: { data: null, error: { code: '23505', message: 'unique violation' } }
+			});
+			const res = await POST(event);
+			expect(res.status).toBe(409);
+			expect(await res.json()).toEqual({ error: 'schedule_conflict' });
+		});
+
+		it("'40001' (SERIALIZABLE serialization failure) → 409 concurrent_update_retry, distinct from the '23505' conflict case", async () => {
+			const { event } = makeEvent(validBody(), { id: SESSION_UID }, '1', {
+				rpcResult: { data: null, error: { code: '40001', message: 'could not serialize access' } }
+			});
+			const res = await POST(event);
+			expect(res.status).toBe(409);
+			expect(await res.json()).toEqual({ error: 'concurrent_update_retry' });
+		});
+
+		it('unexpected error code → 500 internal_error, never a fake 4xx', async () => {
+			const { event } = makeEvent(validBody(), { id: SESSION_UID }, '1', {
+				rpcResult: { data: null, error: { code: '55000', message: 'unexpected' } }
 			});
 			const res = await POST(event);
 			expect(res.status).toBe(500);

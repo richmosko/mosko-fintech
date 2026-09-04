@@ -6,7 +6,9 @@
 // RT-24's own acceptance text names TWO app-layer fences parallel to RT-23 (mod #1 .strict() +
 // mass-assignment prevention, mod #2 numeric adversarial battery) plus the DB-layer monotonicity
 // trigger and the SERIALIZABLE replace-all wrapper (mods #3/#4, both DB-side — asserted via
-// mapWriteError's DB-error-mapping tests in the orchestration file, not here).
+// mapWriteError's DB-error-mapping tests in the orchestration file, not here). Write path is E8's
+// single RPC call (pfin.fn_tax_bracket_schedule_replace_all); this file mocks the RPC call as a
+// single count, since these adversarial cases are all expected to be rejected BEFORE reaching it.
 //
 // ⚠ FLAGGED, NOT FIXED HERE (Sec/Architect territory — docs/SECURITY/index.html is Sec-owned):
 // RT-24's OWN row text, read live for this file, says the monotonicity fence is a "BEFORE
@@ -33,27 +35,17 @@ function makeEvent(body: unknown, captured: { writeCalls: number }) {
 		safeGetSession: async () => ({ session: {}, user: { id: SESSION_UID } }),
 		supabase: {
 			schema: () => ({
-				from: (table: string) => {
-					if (table === 'tax_bracket_schedule') {
-						return {
-							select: () => ({
-								eq: () => ({
-									maybeSingle: () =>
-										Promise.resolve({ data: { id: 1, tax_year: 2026, schedule_type: 'federal_ordinary' }, error: null })
-								})
-							}),
-							update: () => ({
-								eq: () => {
-									captured.writeCalls++;
-									return Promise.resolve({ error: null, count: 1 });
-								}
-							})
-						};
-					}
-					return {
-						delete: () => ({ eq: () => Promise.resolve({ error: null }) }),
-						insert: () => Promise.resolve({ error: null })
-					};
+				from: (_table: string) => ({
+					select: () => ({
+						eq: () => ({
+							maybeSingle: () =>
+								Promise.resolve({ data: { id: 1, tax_year: 2026, schedule_type: 'federal_ordinary' }, error: null })
+						})
+					})
+				}),
+				rpc: (_fn: string, _params: Record<string, unknown>) => {
+					captured.writeCalls++;
+					return Promise.resolve({ data: null, error: null });
 				}
 			})
 		}
