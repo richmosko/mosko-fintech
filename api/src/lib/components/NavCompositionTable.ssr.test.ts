@@ -20,9 +20,11 @@
 //   • Sec P-5 / option (C): the NAV foot's OWN LABEL carries the three-state tax-adjustment basis
 //     (tax-adjusted / partial / unadjusted) — never a caption beside the table, never a boolean.
 //     All three states are proven here, including BOTH partial sub-cases.
-//   • SELF-268 AC 10a — `excludedTaxLedgers`, a SIBLING PROP to `composition` (Backend's root
-//     loader field, per team-lead 2026-09-04 — NOT nested in the composition payload), proven
-//     present AND absent (graceful no-op — Backend's loader doesn't emit this field yet).
+//   • SELF-268 AC 10a — `excludedTaxLedgers`, a SIBLING PROP to `composition` (Backend's confirmed
+//     root-loader field, NOT nested in the composition payload). THREE distinct states proven:
+//     `undefined` (prop omitted → no-op), `null` (the loader's reads FAILED → explicit notice,
+//     never silently "none excluded"), `[]` (confirmed none designated → explicit "none excluded"
+//     line), plus a populated list with jurisdiction labels.
 //   • NAV foot renders whole-dollar, echoing the §2.1.1 headline (D9).
 //   • Empty categories are absent upstream → a groups:[] tree still renders the ladder + NAV.
 //
@@ -228,30 +230,46 @@ describe('NavCompositionTable — Sec P-5 / option (C): the NAV-foot LABEL carri
 	});
 });
 
-describe('NavCompositionTable — SELF-268 AC 10a / R3 rider 0b+6: excludedTaxLedgers (a SIBLING prop, not nested in composition)', () => {
-	it('prop absent (the default) → no exclusion note renders at all (a real payload gap, never a fabricated claim)', () => {
+describe('NavCompositionTable — SELF-268 AC 10a / R3 rider 0b+6: excludedTaxLedgers (a SIBLING prop, THREE distinct states)', () => {
+	it('prop absent (component default) → no exclusion note renders at all (a real payload gap, never a fabricated claim)', () => {
 		const { body } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: fixture } });
 		expect(body).not.toContain('tax-authority ledgers');
 	});
 
-	it('prop present but EMPTY → renders the "none excluded" line — the unmarked-ledger visibility rider 0b requires', () => {
+	it('prop === null (the loader read FAILED) → an explicit "couldn\'t confirm" notice, never silently read as "none excluded"', () => {
+		const { body } = render(NavCompositionTable, {
+			props: { staleness: EMPTY_STALENESS, composition: fixture, excludedTaxLedgers: null }
+		});
+		expect(body).toContain("couldn't confirm");
+		expect(body).not.toContain('No accounts are designated');
+	});
+
+	it('prop === [] (CONFIRMED none designated) → renders the "none excluded" line — the unmarked-ledger visibility rider 0b requires', () => {
 		const { body } = render(NavCompositionTable, {
 			props: { staleness: EMPTY_STALENESS, composition: fixture, excludedTaxLedgers: [] }
 		});
-		expect(body).toContain('No accounts are currently designated as tax-authority ledgers');
+		expect(body).toContain('No accounts are designated as tax-authority ledgers — none excluded');
 	});
 
-	it('prop present with entries → names each excluded account, linked to its /accounts/[id] page', () => {
+	it('prop present with entries → names each excluded account + its jurisdiction label, linked to its /accounts/[id] page', () => {
 		const { body } = render(NavCompositionTable, {
 			props: {
 				staleness: EMPTY_STALENESS,
 				composition: fixture,
-				excludedTaxLedgers: [{ account_id: 99, account_name: 'IRS Escrow', jurisdiction: 'irs' }]
+				excludedTaxLedgers: [
+					{ account_id: 99, account_name: 'IRS Escrow', jurisdiction: 'irs' },
+					{ account_id: 100, account_name: 'CA Escrow', jurisdiction: 'ftb' }
+				]
 			}
 		});
 		expect(body).toContain('Excluded from Net Worth above as tax-authority ledgers');
 		expect(body).toContain('IRS Escrow');
 		expect(body).toContain('/accounts/99');
+		// Jurisdiction rendered via the SAME account-display.ts vocabulary the §2.4.2 account form
+		// uses — never the raw 'irs'/'ftb' enum value in user-facing copy.
+		expect(body).toContain('IRS (Federal)');
+		expect(body).toContain('CA Escrow');
+		expect(body).toContain('FTB (California)');
 	});
 });
 

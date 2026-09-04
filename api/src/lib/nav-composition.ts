@@ -74,16 +74,21 @@
 // file and NavCompositionTable.svelte.
 //
 // SELF-268 AC 10a / R3 riders 0b + 6 — `excludedTaxLedgers` (the accounts AC 3a's exclusion removed
-// from the leaf set) is NOT part of the `NavComposition` JSONB above — team-lead corrected an
-// earlier draft of this header that guessed a nested `composition.excluded_tax_ledgers` key.
-// Backend's ROOT loader (`+page.server.ts`) returns it as a SEPARATE sibling field beside
-// `composition`: `excludedTaxLedgers: Array<{account_id, account_name, jurisdiction}>`. PROVISIONAL:
-// that loader field is NOT yet on the tree as of this build — `ExcludedTaxLedger` below is typed
-// against the confirmed shape so NavCompositionTable.svelte / +page.svelte can consume it the
-// moment Backend adds it (a real, visible typecheck error until then — reported as a bubble-up
-// dependency, never papered over with an unsafe cast). Rendering it (even an EMPTY list) is what
-// makes an UNMARKED tax-authority account visible as "not excluded" — rider 0b's default-state
-// failure has no other observer (PRD §2.4.4 / ADR-013, never ADR-049).
+// from the leaf set) is NOT part of the `NavComposition` JSONB above — 051/105 doesn't carry this
+// list at all (team-lead confirmed against the landed 105). Backend's ROOT loader
+// (`+page.server.ts`'s `loadExcludedTaxLedgers`, `api/src/lib/server/queries/navComposition.ts`)
+// returns it as a SEPARATE sibling field beside `composition`: `excludedTaxLedgers:
+// ExcludedTaxLedger[] | null`. TWO READS behind it (102's `fn_tax_authority_ledgers()` +
+// pfin.account name lookup) — `ExcludedTaxLedger` below MIRRORS Backend's server-side type
+// key-for-key (this file never imports it — frontend-engineer never imports from
+// `src/lib/server/**`). THREE STATES, all real and all rendered distinctly (never collapsed):
+//   `undefined` — this component's own defensive prop default (the prop wasn't passed at all);
+//   `null`      — the loader's reads FAILED (RPC error or the account-name join failed) — "could
+//                 not determine which ledgers are excluded," NEVER silently treated as `[]`;
+//   `[]`        — a KNOWN, confirmed "no ledgers are currently designated" (the common
+//                 bootstrap-default state) — rendering this is what makes an UNMARKED
+//                 tax-authority account visible as "not excluded" (rider 0b's default-state
+//                 failure has no other observer; PRD §2.4.4 / ADR-013, never ADR-049).
 //
 // Per-row STALENESS (SELF-229, ratified D4) is modelled as `NavCompositionLeaf.is_stale` below.
 // The 051 JSONB itself still carries none of this — the loader computes it via a server-side
@@ -101,6 +106,7 @@
 // as an explicit "staleness unknown" state on the affected row — NEVER as "confirmed not stale."
 
 import type { FundsDueEnvelope } from './tax-quarterly';
+import type { TaxJurisdiction } from '$lib/schemas/account-constants';
 
 /** One account leaf row — mirrors a 051 groups[].accounts[] element. */
 export interface NavCompositionLeaf {
@@ -176,9 +182,9 @@ export interface NavCompositionBuildups {
 }
 
 /** The full §2.1.5 composition payload — mirrors the 051/105 top-level JSONB. ⚠ `excluded_tax_ledgers`
- * is NOT part of this payload (team-lead, post-105-landing correction) — Backend's ROOT loader
- * (`+page.server.ts`) returns it as a SEPARATE sibling field beside `composition`, not nested in
- * it; see `ExcludedTaxLedger` / `+page.svelte` below. */
+ * is NOT part of this payload — Backend's ROOT loader (`+page.server.ts`) returns it as a SEPARATE
+ * sibling field beside `composition`, not nested in it; see `ExcludedTaxLedger` / `+page.svelte`
+ * below. */
 export interface NavComposition {
 	groups: NavCompositionGroup[];
 	buildups: NavCompositionBuildups;
@@ -188,14 +194,16 @@ export interface NavComposition {
 	nav: number;
 }
 
-/** One account excluded from the buildup leaf set under AC 3a (SELF-268 AC 10a). PROVISIONAL: the
- * root loader field this mirrors (`excludedTaxLedgers`, per team-lead 2026-09-04) is not yet on the
- * tree as of this build — typed here so NavCompositionTable.svelte / +page.svelte can consume it
- * the moment Backend adds it, and reported as a bubble-up dependency until then. */
+/** One account excluded from the §2.1.5 buildup leaf set under AC 3a (SELF-268 AC 10a). MIRRORS
+ * `api/src/lib/server/queries/navComposition.ts`'s own `ExcludedTaxLedger` key-for-key (this file
+ * never imports it — frontend-engineer never imports from `src/lib/server/**`). `jurisdiction` is
+ * the SAME `pfin.tax_jurisdiction_enum` vocabulary ('irs' | 'ftb') the §2.4.2 account form already
+ * uses (`$lib/schemas/account-constants`'s `TaxJurisdiction`) — display via
+ * `$lib/account-display`'s existing `taxJurisdictionLabel()`, never a second translation table. */
 export interface ExcludedTaxLedger {
-	account_id: number | string;
+	account_id: number;
 	account_name: string;
-	jurisdiction: string;
+	jurisdiction: TaxJurisdiction;
 }
 
 /** A single rendered buildup-ladder row (excludes the NAV foot, rendered separately). Sec P-18: the

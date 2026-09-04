@@ -80,14 +80,12 @@
 	const headlineBasisNote = $derived(composition ? navHeadlineBasisNote(composition.buildups) : null);
 
 	// SELF-268 AC 10a — the accounts AC 3a excludes from the §2.1.5 buildup as tax-authority
-	// ledgers (team-lead 2026-09-04): Backend's ROOT loader returns this as `data.excludedTaxLedgers`,
-	// a SIBLING field beside `composition` (NOT nested in it — an earlier provisional guess had it
-	// nested; corrected here). ⚠ NOT YET ON THE TREE as of this build (Backend's `+page.server.ts`
-	// doesn't emit this field yet) — this line is EXPECTED CONTRACT, typed against the field name
-	// and shape team-lead specified, and will show a real "property does not exist" typecheck error
-	// until Backend adds it. That is the correct, visible signal of the dependency; reported as a
-	// bubble-up rather than papered over with an unsafe cast.
-	const excludedTaxLedgers = $derived(data.excludedTaxLedgers ?? null);
+	// ledgers. Backend's ROOT loader returns this as `data.excludedTaxLedgers`, a SIBLING field
+	// beside `composition` (NOT nested in it). Passed straight through, no `?? null` — `null`
+	// (the loader's reads failed) and `[]` (confirmed none designated) are DISTINCT real states
+	// NavCompositionTable.svelte renders differently; collapsing them here would re-introduce the
+	// exact silent-failure shape AC 10a exists to prevent.
+	const excludedTaxLedgers = $derived(data.excludedTaxLedgers);
 
 	// Whole-dollar USD — the headline reads cleaner without cents. Negative values render
 	// a leading minus (in primary ink, per the value-color fence above).

@@ -51,6 +51,10 @@ function pageData(overrides: Partial<Record<string, unknown>> = {}) {
 		navSeriesParamsError: null,
 		navSeriesParams: { granularity: 'monthly' as const, start: '2021-06-01', end: '2026-06-01' },
 		navBoundary: null,
+		// SELF-268 AC 10a — required on PageData now that Backend's root loader lands it.
+		// `[]` (confirmed none designated) is the default here; individual tests override with
+		// `null` (the loader's reads failed) where that distinction matters.
+		excludedTaxLedgers: [] as { account_id: number; account_name: string; jurisdiction: 'irs' | 'ftb' }[] | null,
 		...overrides
 	};
 }
@@ -102,5 +106,33 @@ describe('+page.svelte — SELF-268 headline basis note: present when compositio
 			props: { data: pageData({ composition: composition(computed(4_200), computed(1_800)) }) }
 		});
 		expect(body).not.toContain('title="tax-adjusted');
+	});
+
+	// SELF-268 AC 10a wiring — this page's own concern is threading `data.excludedTaxLedgers`
+	// through unchanged to NavCompositionTable as a prop (the RENDERING of each state is
+	// NavCompositionTable.ssr.test.ts's own battery); this just proves the page doesn't crash or
+	// silently coalesce `null` on the way through, for both real states.
+	it('data.excludedTaxLedgers === null (loader read failed) renders without crashing, headline unaffected', () => {
+		const { body } = render(Page, {
+			props: {
+				data: pageData({
+					composition: composition(computed(4_200), computed(1_800)),
+					excludedTaxLedgers: null
+				})
+			}
+		});
+		expect(body).toContain('$500,000');
+	});
+
+	it('data.excludedTaxLedgers === [] (confirmed none designated) renders without crashing, headline unaffected', () => {
+		const { body } = render(Page, {
+			props: {
+				data: pageData({
+					composition: composition(computed(4_200), computed(1_800)),
+					excludedTaxLedgers: []
+				})
+			}
+		});
+		expect(body).toContain('$500,000');
 	});
 });
