@@ -29,6 +29,12 @@
 	  onSaved                  : optional callback fired after a successful submit (either mode)
 	                             -- TaxBracketSchedulesList.svelte uses this to collapse a
 	                             just-completed create panel.
+	  canDelete                : edit mode only. Team-lead ruling E35: delete renders ONLY when
+	                             this jurisdiction holds more than one schedule -- never on the
+	                             sole schedule of a type, current-year or not. The LIST component
+	                             computes this (it alone knows the jurisdiction's full schedule
+	                             count); this component does not re-derive it. Ignored/absent in
+	                             'create' mode (nothing exists yet to delete).
 
 	FORM SHAPE -- HIDDEN IDENTITY FIELDS, VISIBLE DATA FIELDS NAMED TO MATCH THE ACTION'S OWN
 	FormData READ (parseReplaceFormData in +page.server.ts): `tax_year` / `schedule_type` are
@@ -98,7 +104,8 @@
 		initialStandardDeduction,
 		initialPriorYearBalance,
 		initialRows,
-		onSaved
+		onSaved,
+		canDelete = false
 	}: {
 		mode: 'edit' | 'create';
 		scheduleType: ScheduleType;
@@ -109,6 +116,7 @@
 		initialPriorYearBalance: number | null;
 		initialRows: BracketRow[];
 		onSaved?: () => void;
+		canDelete?: boolean;
 	} = $props();
 
 	// Namespaces every DOM id on this instance -- see file header's id-collision note. A
@@ -283,6 +291,13 @@
 		<span class="tax-year">Tax year {taxYear}</span>
 	</div>
 
+	<!-- createSchedule's 23505 (a schedule for this year+type already exists) comes back keyed
+	     `tax_year` (E35 team-lead note) -- there is no separate visible tax_year field to attach
+	     it to (the year is fixed, not user-typed), so it renders here, beside the year it names. -->
+	{#if serverFieldErrors.tax_year}
+		<p class="banner" role="alert">{serverFieldErrors.tax_year.join(' ')}</p>
+	{/if}
+
 	{#if formError}
 		<p class="banner" role="alert">{formError}</p>
 	{/if}
@@ -424,7 +439,7 @@
 	</div>
 
 	<div class="actions">
-		{#if mode === 'edit' && scheduleId !== undefined}
+		{#if mode === 'edit' && scheduleId !== undefined && canDelete}
 			<DeleteScheduleControl
 				{scheduleId}
 				itemLabel={`${SCHEDULE_TYPE_LABELS[scheduleType]} (tax year ${taxYear})`}
@@ -534,8 +549,8 @@
 	.actions {
 		display: flex;
 		align-items: center;
-		justify-content: space-between;
-		gap: var(--space-3);
+		justify-content: flex-end;
+		gap: var(--space-4);
 	}
 	.banner {
 		margin: 0;
