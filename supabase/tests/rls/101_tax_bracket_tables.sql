@@ -235,7 +235,7 @@ begin;
 -- shared verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(100);
+select plan(103);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
@@ -442,6 +442,37 @@ select has_column('pfin', 'tax_bracket_schedule', 'schedule_label',
 select col_not_null('pfin', 'tax_bracket_schedule', 'schedule_label',
   '(CAT7) pfin.tax_bracket_schedule.schedule_label is NOT NULL'
 );
+
+-- =====================================================================
+-- BLOCK LBL-CHECK (Sec FLAG 4 / Architect btrim fix) — the column comment
+--   on schedule_label states that "a schedule whose assumptions go unstated
+--   is the condition this column exists to prevent, so the empty string is
+--   refused rather than admitted as a blank." A whitespace-only value is
+--   the same condition wearing a length > 0 disguise: length('   ') = 3
+--   passes the un-btrimmed form of the CHECK. Only
+--   length(btrim(schedule_label)) between 1 and 500 catches it, which is
+--   what tax_bracket_schedule_schedule_label_check must now read. Both legs
+--   roll back to their own savepoint so neither row (nor the failed one's
+--   partial effects) reaches the FIXTURE block below.
+-- =====================================================================
+savepoint sp_lbl_check1;
+select _rls.set_tenant(:'ta'::uuid);
+select throws_like(
+  format($$ insert into pfin.tax_bracket_schedule (tax_year, schedule_type, schedule_label, standard_deduction) values (2026, 'federal_ordinary', %L, 14600.00) $$, '   '),
+  '%tax_bracket_schedule_schedule_label_check%',
+  '(LBL-CHECK1) a whitespace-only schedule_label (three spaces, length 3) is REJECTED BY NAME by tax_bracket_schedule_schedule_label_check -- length() alone would pass a length-3 value; only btrim(schedule_label) catches an all-whitespace label'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint sp_lbl_check1;
+
+savepoint sp_lbl_check2;
+select _rls.set_tenant(:'ta'::uuid);
+select lives_ok(
+  format($$ insert into pfin.tax_bracket_schedule (tax_year, schedule_type, schedule_label, standard_deduction) values (2026, 'federal_ordinary', %L, 14600.00) $$, ' x '),
+  '(LBL-CHECK2) non-vacuous control: a label with real (non-whitespace) content padded by surrounding spaces (" x ") is ACCEPTED -- proves (LBL-CHECK1) is whitespace-only-driven, not a blanket rejection of any label touching a space'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint sp_lbl_check2;
 
 -- =====================================================================
 -- FIXTURE — real committed schedules + one valid bracket row each, via
@@ -1151,6 +1182,30 @@ select ok(
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'pfin' and p.proname = 'fn_tax_bracket_schedule_replace_all'),
   '(RA10) CATALOG PIN: fn_tax_bracket_schedule_replace_all''s body contains a FOR UPDATE lock (pg_get_functiondef, a real catalog read) -- this pin stands in for the concurrency proof no single-session pgTAP probe can give; the two measured race modes are recorded in this leg''s own comment above, not asserted'
+);
+
+-- (RA-SIG1) Sec VETO 3 fix criterion (iii) — the watcher that makes the
+--   NEXT signature change fail loudly instead of silently overloading.
+--   `create or replace function` with a CHANGED argument list creates an
+--   OVERLOAD, it does not replace; on a fresh sequential apply only ONE
+--   revision of this file's DDL is ever applied, so this leg is vacuous
+--   TODAY only in the sense that there is nothing yet to catch it against —
+--   its job is to go RED the day a future edit adds/drops a parameter
+--   without a preceding `drop function`, or the day this migration is
+--   applied on top of an environment still holding the STALE 6-arg form
+--   (Sec VETO 3's reachable-footgun scenario: PostgREST resolves an RPC
+--   call by its named-argument set, so a stale 6-arg overload silently
+--   satisfies a caller that never sends p_schedule_label, and the write
+--   goes through without ever touching the label). Combined into ONE
+--   aggregate leg (count(*) = 1 AND every row's pronargs = 7) rather than
+--   two separate `is()` probes, because a second live overload would make
+--   a bare scalar-subquery `is()` on pronargs error on "more than one row
+--   returned by a subquery expression" instead of failing cleanly.
+select ok(
+  (select count(*) = 1 and bool_and(pronargs = 7)
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'pfin' and p.proname = 'fn_tax_bracket_schedule_replace_all'),
+  '(RA-SIG1) pfin holds EXACTLY ONE proc named fn_tax_bracket_schedule_replace_all, and its pronargs = 7 (schedule_id, tax_year, schedule_type, schedule_label, standard_deduction, tax_balance_prior_year, rows) -- a second overload (stale 6-arg or any other arity) goes RED'
 );
 
 -- (RA-TY1) team-lead item 14 — tax_year = 1900 rejected BY NAME (the new
