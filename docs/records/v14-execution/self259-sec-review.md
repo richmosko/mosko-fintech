@@ -324,3 +324,173 @@ self-correction and the D18 amendment's two-lock bullet are both accurate as wri
 amendment now states plainly that **neither** lock covers cross-schedule write skew.
 
 **Nothing else.**
+
+---
+
+## Diff re-look verdict — 2026-09-04, `e9772e5` (schedule_label, E27/E29)
+
+**AMBER.** One flag I want closed in-branch before merge (**D-1**, Architect, one DDL line plus one
+battery leg). Everything else in the range is clean and the column itself is well-built. **Scope:
+`git diff 6b3aa61..e9772e5` only** — the GREEN'd tip to the current tip, six files, nothing outside
+them. `6b3aa61` was confirmed to contain `3a599de` (the ref the GREEN named) and to be an ancestor
+of `e9772e5`, so this range is contiguous with the prior review and leaves no gap between them.
+
+**Verify-hook discharged.** ADR-011 Decision 3, Decision 4 and Decision 18 were read **verbatim
+from this branch's own `DECISIONS.md`**, each located by bracketing `## ADR-` heading, never by line
+position, and Decision 4's amendments read in the same pass. **§10 three axes clean:** no catalogued
+instance is added, removed, reordered or renumbered (the list reads RT-22 first / RT-26 second /
+RT-27 third, unchanged); no layer attribution moves; and the migration's new paragraph is **Path B**
+— it drops the enumeration and tells the reader to read Decision 4's list live, rather than
+restating it. ⚠ The §10 **catalogued** set and the **CI-fenced** RT set are different sets and are
+not reconciled here. Nothing in this range touches `.github/workflows/`, `secrets-manifest.yml`, the
+ADR-016 D1 / RT-26 allowlist, or the ADR-011 Decision 9 SECURITY DEFINER allowlist — the diff is six
+files and none of them is one of those surfaces.
+
+### The six checks, answered
+
+**(1) Decision 3 — no obligation, and the migration says so in the right shape.** Decision 3's rule,
+verbatim, binds *"Any FK-shaped reference column (single FK, self-FK, INTEGER[] array element) that
+crosses an isolation boundary."* `schedule_label text` is none of the three: it references no row,
+holds no id, and is not an array of ids. The family is unchanged — eighteen labeled instances,
+fifteen DDL-realized, #18 at `101`. `101`'s new ⚠ paragraph states the non-membership explicitly
+rather than leaving it to inference, which is the same disposition `085` records for itself
+(`085_taxonomy_element.sql`: *"085 added no FK-shaped column and no Decision-3 instance"*). Stating
+it in the migration is the right home, because the per-column sweep above it is a sweep over column
+SHAPE and a column added after that sweep is exactly the one it would miss.
+
+**(2) RLS — the new column is covered, with nothing column-level anywhere.** Measured: a grep for
+column-list grants against either `pfin.tax_bracket_*` table across `supabase/migrations/` returns
+nothing; the only grants on the parent are the two table-level `grant select, insert, update, delete
+… to authenticated` lines in `101`'s GRANTS block. A column added to a table whose access is
+governed entirely by row-level policies plus a table-level DML grant is covered by those policies by
+construction — there is no column ACL for it to fall outside of. QA also pins it behaviourally at
+`(LBL-R)`: tenant A querying on B's known label value returns zero rows, so the column is inside the
+row fence and not merely assumed to be. The eight structural policy legs (`S1`–`S8`) and the aal2
+backstop blocks are untouched by this range.
+
+**(3) The signature change — clean on every axis except the drop.** No stale six-argument text
+survives anywhere in the tree (a tree-wide grep for the old parameter list at `e9772e5` returns
+nothing); all twelve replace-all call sites and all seven schedule `INSERT`s are re-pinned; the
+`revoke … from public` / `grant … to authenticated` pair and the `comment on function` are all three
+re-attached to the seven-argument form, with the ACL shape identical to what it replaced (and
+`(RA9)` still pins that `anon`, `service_role` and `PUBLIC` hold no `EXECUTE`). `(FN1)` still pins
+`prosecdef = false` on all three functions — **no new SECURITY DEFINER function, and the Lock 11
+INVOKER default is untouched.** What is missing is the `drop` — see **D-1**.
+
+**(4) The overload hazard is documented — but not where an operator applying migrations reads it.**
+It is stated well in two places: the endpoint's header (`+server.ts`, the ⚠ block on
+`create or replace` adding an overload) and the battery's `⟦WIRE-VALIDATE⟧` header (which also
+records that the scratch DB was rebuilt by sequential apply rather than cloned from a template, for
+exactly this reason). It is **not** in `101` itself. See **D-1** and **D-2**.
+
+**(5) The 500-char bound — the app-layer half is right; the render half is prospective.** The Zod
+field is `z.string().trim().min(1).max(500)` inside the existing `.strict()` object, so the DB CHECK
+is mirrored on the trimmed value and the whitespace-only case collapses onto the empty case, which
+is what `101`'s own comment asks for. **The two bounds cannot disagree in the dangerous direction:**
+JS `String.length` counts UTF-16 code units and Postgres `length(text)` counts characters, so for
+any string the JS count is greater than or equal to the Postgres count — the app is stricter or
+equal, never more permissive, and an astral-plane character is refused by the app before the DB
+would have accepted it. The DB CHECK remains as the backstop either way. On rendering: **there is no
+consumer today.** A grep for `schedule_label` across `api/src` at `e9772e5` returns only the schema,
+the route, and that route's two test files — no Svelte component reads it yet. The obligation is
+therefore **prospective, not a live gap**, and it is stated as such at **D-3**.
+
+**(6) R-1 is fully discharged — all three of its asks, not two.** `(SF-L1)` pins the set fence's own
+`FOR UPDATE` by `pg_get_functiondef`, carrying RA10's presence-never-effect caveat. `(SF-L2)` pins
+the load-bearing half — the lock's position ahead of the `count(*)` set read. I verified `SF-L2`'s
+premise against the actual body rather than trusting the leg: the function contains exactly one
+`for update`, it is the parent-row lock, and the first `count(*)` is the set read that follows it,
+so the position test is measuring the thing its message claims. R-1's third ask — that the
+genuinely-untestable raise leg be *stated* in the battery header rather than left silent — is
+discharged in the header's own leg-by-leg block, which names the leg UNTESTABLE and gives the
+reason (`session_replication_role = replica`, a superuser-only GUC, which `054`'s battery already
+declines to assert). `plan(91) → plan(100)`: `+2` from R-1's pins at `78f581b`, `+7` from the label
+work, and the header's own leg enumeration sums to exactly 100.
+
+### Findings
+
+- **D-1 — flag / Architect. `101` adds no `drop function` for the superseded six-argument form, so
+  on any database that already applied the file, the old function survives with its `EXECUTE` grant
+  to `authenticated` intact.** Measured: `101` at `e9772e5` contains no `drop function` /
+  `drop routine` statement of any kind, and the prior form (measured at `6b3aa61`) took six
+  arguments. `create or replace` with a changed parameter list adds an overload; it does not replace.
+  **Why this is a security finding and not only an operations one:** the surviving overload is a
+  *live write path that does not take the label*. Its `UPDATE` never touches `schedule_label`, so
+  the `NOT NULL` does not stop it — the brackets are rewritten and the caption that states which
+  filing status and basis year they rest on is silently carried forward from the previous set. That
+  is precisely the condition E27 created the column to prevent, and it would be reachable by any
+  client still posting the old body shape, because PostgREST resolves an RPC by name against the
+  argument names it is given. **The runbook in the route header is not a control** — it is advice in
+  a file the person applying migrations does not open, and it degrades to nothing the moment nobody
+  reads it. ⚠ **The repo's "drop-replace migration pattern" does not cover this** — I checked, and
+  that term in `docs/MILESTONE-FRAMING.md` §8.2 names the Google-Sheets-to-V1 data-plane transition,
+  not a convention of re-applying migrations to a fresh database. The name collision should not be
+  allowed to retire this flag.
+  **Catch criterion, and it is cheap:** a `drop function if exists
+  pfin.fn_tax_bracket_schedule_replace_all(bigint, smallint, pfin.tax_schedule_type_enum, numeric,
+  numeric, jsonb);` immediately ahead of the `create or replace`, which no-ops on a fresh database
+  and removes the hazard **by construction** rather than by runbook; plus one QA leg pinning that
+  exactly **one** `pg_proc` row carries `proname = 'fn_tax_bracket_schedule_replace_all'` in `pfin`.
+  ⚠ **Three existing legs already fail if the stale overload is present** — `(FN1)`'s count would
+  read 4 instead of 3, and `(RA9)` and `(RA10)` are scalar subqueries keyed on `proname` alone, so
+  each would error on a second matching row. **That is a real detector and I am crediting it — but
+  it can never fire in CI**, because CI builds the database from scratch and so structurally cannot
+  hold the object the legs would catch. A detector that only fires in the environment nobody runs
+  the battery in is not the fence; the `drop` is.
+  **If F/CTO rules that no environment has ever applied `101`'s six-argument form and none will,
+  D-1 downgrades to a note and this verdict is GREEN.** I cannot measure deployed database state
+  from the repository, so I am naming the conditional rather than assuming either way.
+
+- **D-2 — flag / QA. Comment-only, but it is the exact sentence an operator would read to decide
+  whether their database is affected, and it points them at the wrong object.** The battery's
+  `⟦WIRE-VALIDATE⟧` header says a stale template *"already had the old 7-argument-without-label
+  signature."* The old form has **six** arguments (measured at `6b3aa61`); seven is the **new** form.
+  A reader checking their database for a "7-argument" function will find the new one and conclude
+  they are clean. One-word fix, same file.
+
+- **D-3 — note / Frontend + Backend, prospective. The render-side obligation on `schedule_label`,
+  stated now so it is not discovered at the consuming surface.** The column is user-authored text
+  with no character-class restriction, and it is destined for the §2.5.2 editor and the
+  tax-liability payload. **There is nothing to catch today** — no component reads it (measured
+  above), and the only `{@html}` in the tree is the MFA QR at
+  `api/src/routes/settings/security/+page.svelte`, which is unrelated. The criterion for whichever
+  surface picks it up: render through Svelte's default `{…}` interpolation, which escapes; `{@html}`
+  on this field would be a veto, not a flag. If the label ever reaches a CSV export or the PDF
+  worker's payload, formula-injection (a leading `=` / `+` / `-` / `@`) and the worker's own escaping
+  become live questions — neither surface exists at `e9772e5`, so neither is a finding now.
+
+- **D-4 — note / Backend. A `U+0000` code point in `schedule_label` produces a 500 rather than a
+  400.** `z.string()` accepts it; Postgres `text` cannot hold it, so the write fails with a code
+  `mapWriteError`'s switch does not name, and its `default` branch returns
+  `{ status: 500, error: 'internal_error' }`. This **fails closed** — nothing is written and nothing
+  leaks, and the logged line carries only the code and the driver's message — so it is a status-code
+  and log-noise residual, not a hole. Cheap fix if Backend wants it: a `.refine()` on
+  `scheduleLabel()` rejecting a string that contains the `U+0000` code point, which moves the case
+  into the existing 400 path with the other shape rejections.
+
+- **D-5 — note / QA. Two small gaps in an otherwise thorough battery, neither blocking.** (i) `SF-L2`
+  is a text-position test over `pg_get_functiondef`, whose output includes the body's own comments.
+  A future comment containing the literal `for update` placed above the real lock would make the leg
+  pass **vacuously** even if the lock had moved after the read — the fail-open direction. I verified
+  it is clean at `e9772e5`; hardening it to assert exactly one occurrence would close the direction
+  that matters. (ii) Nothing asserts that the **trim** reaches the database — the rejection legs
+  cover whitespace-only input, and `(RA7e)` reads back an untrimmed literal, so the one path that
+  silently mutates a user's data is the one path with no leg on it.
+
+### Non-objections on this diff
+
+I do **NOT** object to: `schedule_label` being plain `text` rather than a structured type — it
+respects Decision 18's forward-compat fence (*"no JSONB blobs in settings store under any future
+surface"*) and a constrained shape would be the wrong instrument for a free-text caption. I do
+**NOT** object to the column being `NOT NULL` with no default: a replace-all that determines the
+post-write state completely has no *"leave this one alone"*, and the function comment says so. I do
+**NOT** object to the 500-character bound, to the empty string being refused, or to the label and
+the rows being deliberately unconstrained to agree — the column comment names that non-guarantee
+explicitly, which is the right disposition for user-authored data. I do **NOT** object to
+`p_schedule_label` sitting in fourth position, since PostgREST binds by name. I do **NOT** require
+any ADR amendment, any change to the §10 ledger, any Decision 3 fold-in, or any change to the
+SECURITY DEFINER allowlist — none of them is touched by this range. I do **NOT** require a
+re-review of the surfaces the prior GREEN cleared; this section is scoped to the diff and says
+nothing about them.
+
+**Nothing else.**

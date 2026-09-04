@@ -11,12 +11,16 @@
 -- BINDS TO MIGRATION: supabase/migrations/101_tax_bracket_tables.sql
 --   - pfin.tax_bracket_schedule (id, users_id NOT NULL DEFAULT auth.uid() ->
 --       auth.users ON DELETE CASCADE, tax_year smallint, schedule_type
---       pfin.tax_schedule_type_enum, standard_deduction numeric(20,4) NOT
---       NULL >= 0 <> NaN, tax_balance_prior_year numeric(20,4) NULL <> NaN
---       (no sign bound — an overpayment is real), created/updated_at,
---       unique(users_id, tax_year, schedule_type)). RLS direct-owner ANDed
---       with the 025 aal2 clause on all four verbs; full authenticated CRUD;
---       anon zero-grant; service_role ungranted.
+--       pfin.tax_schedule_type_enum, schedule_label text NOT NULL (length
+--       between 1 and 500, named tax_bracket_schedule_schedule_label_check —
+--       ADDED at Sec's SELF-260 review, rulings E27/E29, b073641; NOT
+--       FK-shaped, joins no Decision-3 family, adds no §10 instance — see the
+--       migration header's own per-column disposition), standard_deduction
+--       numeric(20,4) NOT NULL >= 0 <> NaN, tax_balance_prior_year
+--       numeric(20,4) NULL <> NaN (no sign bound — an overpayment is real),
+--       created/updated_at, unique(users_id, tax_year, schedule_type)). RLS
+--       direct-owner ANDed with the 025 aal2 clause on all four verbs; full
+--       authenticated CRUD; anon zero-grant; service_role ungranted.
 --   - pfin.tax_bracket_row (id, users_id NOT NULL DEFAULT auth.uid() ->
 --       auth.users ON DELETE CASCADE — grain (C): the CHILD'S OWN tenant
 --       fact, beside schedule_id, not instead of it — schedule_id bigint NOT
@@ -73,6 +77,13 @@
 --       then-update. The deferred set fence and #18 still fire at COMMIT,
 --       AFTER the function returns — a caller with no exception from the
 --       call has not yet been told the write is valid.
+--       ⚠ AT b073641 (Sec's SELF-260 E27/E29) THE SIGNATURE GAINED
+--       `p_schedule_label text` AS THE FOURTH POSITIONAL PARAMETER —
+--       (p_schedule_id, p_tax_year, p_schedule_type, p_schedule_label,
+--       p_standard_deduction, p_tax_balance_prior_year, p_rows). Every one of
+--       this file's 12 pre-existing calls (BLOCK RA) was re-pinned to supply
+--       it in position; none changed shape otherwise. The function's own
+--       UPDATE step now also writes schedule_label, asserted at (RA7e).
 --   - the parent's `tax_year` now carries `check (tax_year >= 1913)`
 --       (`tax_bracket_schedule_tax_year_check`, added at fcd8e98) — 1913 is
 --       the first US federal income-tax year. Not independently battery-
@@ -167,36 +178,68 @@
 --   lock — both its presence (SF-L1) and, the load-bearing half, its ORDER
 --   ahead of the set read (SF-L2) — since (RA10) pinned the FOR UPDATE lock
 --   only on the replace-all function and left the set fence's own lock
---   unwatched. Verified against a scratch DB cloned via
---   scripts/db-template-clone.sh from `pfin_tmpl` (rebuilt through 101 at
---   a2498ea) via `pg_prove` (never bare `psql` — a plan under-run exits 0
+--   unwatched.
+--   RE-VERIFIED AGAIN against b073641 after Sec's SELF-260 review (rulings
+--   E27/E29) added `schedule_label text not null` (CHECK length 1-500,
+--   named tax_bracket_schedule_schedule_label_check) to the parent table and
+--   inserted `p_schedule_label text` as the FOURTH positional parameter of
+--   fn_tax_bracket_schedule_replace_all: every existing schedule INSERT (7
+--   sites) and every existing replace-all call (12 sites) was re-pinned to
+--   supply it, and 7 new legs were added (CAT6/CAT7 column-shape catalog
+--   pins, CHK9-CHK11 the CHECK bound by constraint name, LBL-R per-tenant
+--   isolation on the new column, RA7e the replace-all write-then-read-back).
+--   Verified on a scratch DB built FRESH via sequential migration apply
+--   (001→099 + 101 at b073641, NOT a `pfin_tmpl` clone — a `create or
+--   replace` that changes a function's parameter list ADDS an overload
+--   rather than replacing it on a DB that already had the old
+--   6-argument-without-label signature (Sec D-2: the OLD form is SIX args —
+--   before p_schedule_label was added as the fourth positional parameter —
+--   this line previously misnamed it "7-argument"), so a stale template
+--   could silently carry both) via `pg_prove` (never bare `psql` — a plan under-run exits 0
 --   there). `supabase db reset` is mechanically banned and was not used;
 --   F/CTO's local dev DB was not touched.
---   plan(93): 8 structural policy (S1-S8, tenant/aal2 split per table,
+--   plan(110): 8 structural policy (S1-S8, tenant/aal2 split per table,
 --   USING/WITH CHECK halves per 090's S6a/b masking lesson) + 5 grants
 --   (GR1-GR5: anon zero both tables, service_role zero both tables,
 --   authenticated full CRUD per table x2, anon behavioral throw) + 1
---   function posture (FN1, all THREE functions combined) + 5 catalog pins
+--   function posture (FN1, all THREE functions combined) + 7 catalog pins
 --   (CAT1-CAT5: both triggers' deferrable flags, the enum's 3 labels, both
---   unique keys) + 1 updated_at refresh (UPD1) + 4 two-tenant read
---   isolation (R1-R4) + 6 cross-tenant write (W1-W6) + 3 D3 #18 adversarial
---   (D0-D2, RLS-exempt writer via service_role) + 12 deferred set-fence
+--   unique keys; CAT6-CAT7: schedule_label column exists + is NOT NULL,
+--   E27/E29) + 1 updated_at refresh (UPD1) + 4 two-tenant read
+--   isolation (R1-R4) + 1 per-tenant label isolation (LBL-R: authenticated A
+--   cannot read B's schedule_label, E27/E29) + 6 cross-tenant write (W1-W6)
+--   + 3 D3 #18 adversarial (D0-D2, RLS-exempt writer via service_role) + 12
+--   deferred set-fence
 --   (SF-M1/M2/M3a/M3b rate monotonicity, SF-Z1/Z2/Z3/Z4 zero-floor,
 --   SF-E1/E2 empty-schedule, SF-L1/L2 the row-fence's own parent-row lock
---   presence + ordering-before-the-set-read, Sec R-1) + 8 CHECK constraint
+--   presence + ordering-before-the-set-read, Sec R-1) + 11 CHECK constraint
 --   (CHK1-CHK8: NaN x3,
---   Infinity x3, rate=22 rejected, rate=0.22 control) + 8 aal2 backstop on
+--   Infinity x3, rate=22 rejected, rate=0.22 control; CHK9-CHK11:
+--   schedule_label's own CHECK by constraint name — empty string rejected,
+--   a 501-char string rejected, a 500-char string accepted as control,
+--   E27/E29) + 8 aal2 backstop on
 --   schedule (AAL-S, mirrors 090 M1-M8) + 8 aal2 backstop on row (AAL-R,
 --   incl. the investigated INSERT shadow) + 1 cross-tenant-at-aal2 (AAL-X,
 --   the aal conjunct never replaces the tenant predicate) + 1 corrupt-the-
---   control leak proof (X1) + 22 replace-all coverage (BLOCK RA — RA1/RA1b/
+--   control leak proof (X1) + 23 replace-all coverage (BLOCK RA — RA1/RA1b/
 --   RA1c/RA2 the lock-is-the-fence plus its paired control, RA3-RA6 p_rows
---   shape validation, RA7+RA7a-RA7d the call itself plus its atomic-replace
---   effects incl. updated_at, RA8+RA8b the call itself plus its
+--   shape validation, RA7+RA7a-RA7e the call itself plus its atomic-replace
+--   effects incl. updated_at AND schedule_label read-back (E27/E29), RA8+RA8b
+--   the call itself plus its
 --   empty-clears effect, RA9 grant structural, RA10 the FOR UPDATE catalog
 --   pin, RA-TY1 the tax_year>=1913 CHECK by name, RA11a-RA11d the deferred
 --   fence surviving a function boundary plus the prior-row-set-intact proof)
---   = 93.
+--   = 100, PLUS (Sec SELF-260 second-pass / E31, this pass) + 6 canonical-
+--   form schedule_label CHECK legs (LBL-CHECK1 whitespace-only rejected,
+--   LBL-CHECK1b tab-only rejected, LBL-CHECK2 a padded-but-real value
+--   rejected — E31's correction, the CHECK is canonical-form not merely
+--   non-blank — LBL-CHECK3 a bare canonical char accepted as control,
+--   LBL-CHECK4/LBL-CHECK5 the 500/501-char length bound) + 2 signature-
+--   overload watchers (RA-SIG1a exactly one proc BY NAME, RA-SIG1b THAT
+--   proc's pronargs = 7 — split per Sec E31 rather than one combined leg)
+--   + 2 trim-reaches-the-DB-untrimmed legs via the RPC path (RA-LBL1 a
+--   non-canonical label refused by the SAME named CHECK, RA-LBL2 the
+--   canonical control) = 110.
 -- =====================================================================
 
 begin;
@@ -204,7 +247,7 @@ begin;
 -- shared verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(93);
+select plan(110);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
@@ -405,6 +448,88 @@ select ok(
   ),
   '(CAT5) unique (schedule_id, bracket_floor) EXISTS on tax_bracket_row (makes one schedule''s floors pairwise distinct — the premise E6''s ruling rests on)'
 );
+select has_column('pfin', 'tax_bracket_schedule', 'schedule_label',
+  '(CAT6) pfin.tax_bracket_schedule.schedule_label column EXISTS — added at Sec''s SELF-260 review, rulings E27/E29'
+);
+select col_not_null('pfin', 'tax_bracket_schedule', 'schedule_label',
+  '(CAT7) pfin.tax_bracket_schedule.schedule_label is NOT NULL'
+);
+
+-- =====================================================================
+-- BLOCK LBL-CHECK (Sec FLAG 4 / E31) — tax_bracket_schedule_schedule_label_check
+--   is a CANONICAL-FORM invariant, not a plain length bound:
+--   `schedule_label = btrim(schedule_label, E' \t\n\r\f\v') and length(...)
+--   between 1 and 500`. The stored value must ALREADY be its own btrim
+--   result across all six whitespace kinds — a label carrying ANY leading
+--   or trailing whitespace is refused BY THE DB, not merely by an all-
+--   whitespace value. Six legs: two REJECTED forms that are all-whitespace
+--   (empty-in-disguise, the FLAG 4 case), one REJECTED form that has real
+--   content but is NOT canonical (leading/trailing space around it — the
+--   E31 correction: this is refused, not accepted), one ACCEPTED single
+--   canonical character (the non-vacuous control proving the CHECK is
+--   surface-driven, not a blanket rejection of anything that once touched
+--   whitespace), and the two length-bound legs (500 accepted, 501
+--   rejected) exercised in this same canonical form so neither leg
+--   conflates the two conjuncts. Every leg rolls back to its own savepoint
+--   so no row (nor a failed one's partial effects) reaches FIXTURE below.
+-- =====================================================================
+savepoint sp_lbl_check1;
+select _rls.set_tenant(:'ta'::uuid);
+select throws_like(
+  format($$ insert into pfin.tax_bracket_schedule (tax_year, schedule_type, schedule_label, standard_deduction) values (2026, 'federal_ordinary', %L, 14600.00) $$, '   '),
+  '%tax_bracket_schedule_schedule_label_check%',
+  '(LBL-CHECK1) a whitespace-only schedule_label (three ASCII spaces) is REJECTED BY NAME by tax_bracket_schedule_schedule_label_check -- length() alone would pass a length-3 value; the canonical-form conjunct (schedule_label = btrim(schedule_label, ...)) catches an all-whitespace label because btrim of it is the empty string, never equal to the un-trimmed original'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint sp_lbl_check1;
+
+savepoint sp_lbl_check1b;
+select _rls.set_tenant(:'ta'::uuid);
+select throws_like(
+  format($$ insert into pfin.tax_bracket_schedule (tax_year, schedule_type, schedule_label, standard_deduction) values (2026, 'federal_ordinary', %L, 14600.00) $$, E'\t'),
+  '%tax_bracket_schedule_schedule_label_check%',
+  '(LBL-CHECK1b) a TAB-only schedule_label is REJECTED BY NAME -- proves the canonical-form conjunct catches all SIX whitespace kinds btrim is given here (space/tab/newline/CR/formfeed/vertical-tab), not merely the ASCII-space case (LBL-CHECK1)'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint sp_lbl_check1b;
+
+savepoint sp_lbl_check2;
+select _rls.set_tenant(:'ta'::uuid);
+select throws_like(
+  format($$ insert into pfin.tax_bracket_schedule (tax_year, schedule_type, schedule_label, standard_deduction) values (2026, 'federal_ordinary', %L, 14600.00) $$, ' x '),
+  '%tax_bracket_schedule_schedule_label_check%',
+  '(LBL-CHECK2) E31 CORRECTION: a label with real (non-whitespace) content PADDED by surrounding spaces (" x ") is REJECTED, not accepted -- this is a CANONICAL-FORM invariant, so a label need not be all-whitespace to fail it; only a value that is ALREADY its own btrim passes'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint sp_lbl_check2;
+
+savepoint sp_lbl_check3;
+select _rls.set_tenant(:'ta'::uuid);
+select lives_ok(
+  format($$ insert into pfin.tax_bracket_schedule (tax_year, schedule_type, schedule_label, standard_deduction) values (2026, 'federal_ordinary', %L, 14600.00) $$, 'x'),
+  '(LBL-CHECK3) non-vacuous control: a single canonical character with NO surrounding whitespace ("x") is ACCEPTED -- proves (LBL-CHECK1/1b/2) are canonical-form-driven, not a blanket rejection of every short or whitespace-adjacent label'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint sp_lbl_check3;
+
+savepoint sp_lbl_check4;
+select _rls.set_tenant(:'ta'::uuid);
+select lives_ok(
+  format($$ insert into pfin.tax_bracket_schedule (tax_year, schedule_type, schedule_label, standard_deduction) values (2026, 'federal_ordinary', %L, 14600.00) $$, repeat('x', 500)),
+  '(LBL-CHECK4) a 500-character canonical label (the upper length bound, exactly) is ACCEPTED'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint sp_lbl_check4;
+
+savepoint sp_lbl_check5;
+select _rls.set_tenant(:'ta'::uuid);
+select throws_like(
+  format($$ insert into pfin.tax_bracket_schedule (tax_year, schedule_type, schedule_label, standard_deduction) values (2026, 'federal_ordinary', %L, 14600.00) $$, repeat('x', 501)),
+  '%tax_bracket_schedule_schedule_label_check%',
+  '(LBL-CHECK5) a 501-character canonical label (one past the upper bound) is REJECTED BY NAME -- (LBL-CHECK4) is the non-vacuous control proving this is the LENGTH conjunct, not the canonical-form one (a 501-char run of "x" carries no whitespace at all)'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint sp_lbl_check5;
 
 -- =====================================================================
 -- FIXTURE — real committed schedules + one valid bracket row each, via
@@ -412,15 +537,15 @@ select ok(
 --   074/090's convention over a privileged pre-seed).
 -- =====================================================================
 select _rls.set_tenant(:'ta'::uuid);
-insert into pfin.tax_bracket_schedule (tax_year, schedule_type, standard_deduction)
-  values (2026, 'federal_ordinary', 14600.00) returning id as sched_a \gset
+insert into pfin.tax_bracket_schedule (tax_year, schedule_type, schedule_label, standard_deduction)
+  values (2026, 'federal_ordinary', 'A Federal 2026', 14600.00) returning id as sched_a \gset
 insert into pfin.tax_bracket_row (schedule_id, bracket_floor, bracket_rate)
   values (:sched_a, 0, 0.10);
 select set_config('role', 'postgres', true);
 
 select _rls.set_tenant(:'tb'::uuid);
-insert into pfin.tax_bracket_schedule (tax_year, schedule_type, standard_deduction)
-  values (2026, 'federal_ordinary', 5000.00) returning id as sched_b \gset
+insert into pfin.tax_bracket_schedule (tax_year, schedule_type, schedule_label, standard_deduction)
+  values (2026, 'federal_ordinary', 'B Federal 2026', 5000.00) returning id as sched_b \gset
 insert into pfin.tax_bracket_row (schedule_id, bracket_floor, bracket_rate)
   values (:sched_b, 0, 0.10);
 select set_config('role', 'postgres', true);
@@ -454,6 +579,16 @@ select _rls.expect_owner_can_read('pfin.tax_bracket_schedule'::regclass, :'ta'::
 select _rls.expect_cross_tenant_read_empty('pfin.tax_bracket_schedule'::regclass, :'ta'::uuid, :'tb'::uuid);
 select _rls.expect_owner_can_read('pfin.tax_bracket_row'::regclass, :'ta'::uuid, 1::bigint);
 select _rls.expect_cross_tenant_read_empty('pfin.tax_bracket_row'::regclass, :'ta'::uuid, :'tb'::uuid);
+
+-- (LBL-R) schedule_label is per-tenant LIKE EVERY OTHER COLUMN on this table
+--   (E27/E29): A's query filtered on B's OWN KNOWN schedule_label value
+--   ('B Federal 2026', set at this file's fixture INSERT) returns 0 rows —
+--   RLS hides the whole row, column value included, not merely the id.
+select is(
+  _rls.count_as(:'ta'::uuid, null, format('select count(*) from pfin.tax_bracket_schedule where schedule_label = %L', 'B Federal 2026')),
+  0::bigint,
+  '(LBL-R) schedule_label is per-tenant like every other column: authenticated A''s query filtered on B''s known schedule_label value returns 0 rows'
+);
 
 -- =====================================================================
 -- BLOCK D (adversarial matched-tenant leg, R4 rider 7 / item 2) — an
@@ -501,9 +636,9 @@ rollback to savepoint sp_d2;
 select _rls.set_tenant(:'tb'::uuid);
 savepoint sp_w1;
 select throws_ok(
-  format($$ insert into pfin.tax_bracket_schedule (users_id, tax_year, schedule_type, standard_deduction) values (%L, 2027, 'federal_ordinary', 1000.00) $$, :'ta'),
+  format($$ insert into pfin.tax_bracket_schedule (users_id, tax_year, schedule_type, schedule_label, standard_deduction) values (%L, 2027, 'federal_ordinary', 'W1 forge label', 1000.00) $$, :'ta'),
   '42501', null,
-  '(W1) schedule cross-tenant INSERT forge: B claims users_id=A -> RLS WITH CHECK rejects (42501) directly — no trigger shadows this table''s WITH CHECK'
+  '(W1) schedule cross-tenant INSERT forge: B claims users_id=A -> RLS WITH CHECK rejects (42501) directly — no trigger shadows this table''s WITH CHECK (schedule_label supplied so the NOT NULL constraint, which enforces before RLS WITH CHECK, is not what fires here)'
 );
 rollback to savepoint sp_w1;
 select set_config('role', 'postgres', true);
@@ -571,8 +706,8 @@ select is(
 --   deferred` / `... all immediate` per the 029/038 idiom (see header box).
 -- =====================================================================
 select _rls.set_tenant(:'ta'::uuid);
-insert into pfin.tax_bracket_schedule (tax_year, schedule_type, standard_deduction)
-  values (2026, 'california_ordinary', 5202.00) returning id as sched_sf \gset
+insert into pfin.tax_bracket_schedule (tax_year, schedule_type, schedule_label, standard_deduction)
+  values (2026, 'california_ordinary', 'A California SF 2026', 5202.00) returning id as sched_sf \gset
 
 -- --- SF-M: RATE MONOTONICITY (E6: over rate, never floor order) ---
 set constraints all deferred;
@@ -656,12 +791,12 @@ select ok(
         from pg_proc p join pg_namespace n on n.oid = p.pronamespace
        where n.nspname = 'pfin' and p.proname = 'fn_tax_bracket_row_schedule_invariants'
     )
-    select position('for update' in src) > 0
+    select regexp_count(src, 'for update') = 1
        and position('count(*)' in src) > 0
        and position('for update' in src) < position('count(*)' in src)
       from body
   ),
-  '(SF-L2) LOAD-BEARING, NOT MERE PRESENCE: the FOR UPDATE lock''s position in the function body PRECEDES the position of the set read it must precede (`count(*)`, the schedule''s row-count read) — the function''s own header states this lock "must be the FIRST statement after the schedule is resolved", and an edit that moved the lock AFTER the read would kill this control while every existing leg in this file (SF-M/SF-Z/SF-E, all behavioral, none of which can observe statement ORDER) stayed green'
+  '(SF-L2) LOAD-BEARING, NOT MERE PRESENCE, AND NOT A COMMENT (Sec D-5i): the FOR UPDATE lock''s position in the function body PRECEDES the position of the set read it must precede (`count(*)`, the schedule''s row-count read) — the function''s own header states this lock "must be the FIRST statement after the schedule is resolved", and an edit that moved the lock AFTER the read would kill this control while every existing leg in this file (SF-M/SF-Z/SF-E, all behavioral, none of which can observe statement ORDER) stayed green. `pg_get_functiondef`''s output for a plpgsql body is the literal prosrc text, comments included — a bare `position(...) > 0` presence check is satisfiable by a FUTURE COMMENT that merely mentions "for update" sitting above the real lock (or in place of a real lock that got removed), passing vacuously. `regexp_count(src, ''for update'') = 1` closes that: exactly one occurrence in the whole body, so a stray comment containing the phrase collides with (and fails against) the real clause rather than silently coexisting with it'
 );
 
 -- =====================================================================
@@ -732,6 +867,30 @@ select throws_ok(
   '(CHK8) bracket_rate +Infinity rejected by the numeric(12,8) TYPMOD (22003) — a DIFFERENT mechanism and SQLSTATE than (CHK5)/(CHK6)'
 );
 rollback to savepoint sp_chk8;
+
+-- --- schedule_label's OWN CHECK (E27/E29), by CONSTRAINT NAME ---
+savepoint sp_chk9;
+select throws_like(
+  format($$ update pfin.tax_bracket_schedule set schedule_label = '' where id = %s $$, :sched_a),
+  '%tax_bracket_schedule_schedule_label_check%',
+  '(CHK9) schedule_label = '''' (empty string, below the length>=1 bound) rejected BY NAME — tax_bracket_schedule_schedule_label_check'
+);
+rollback to savepoint sp_chk9;
+
+savepoint sp_chk10;
+select throws_like(
+  format($$ update pfin.tax_bracket_schedule set schedule_label = %L where id = %s $$, repeat('x', 501), :sched_a),
+  '%tax_bracket_schedule_schedule_label_check%',
+  '(CHK10) schedule_label at 501 characters (one over the length<=500 bound) rejected BY NAME — tax_bracket_schedule_schedule_label_check'
+);
+rollback to savepoint sp_chk10;
+
+savepoint sp_chk11;
+select lives_ok(
+  format($$ update pfin.tax_bracket_schedule set schedule_label = %L where id = %s $$, repeat('x', 500), :sched_a),
+  '(CHK11) CONTROL: schedule_label at EXACTLY 500 characters (the upper bound itself) is ACCEPTED — proves (CHK10) is bound-driven, not a blanket rejection of long strings'
+);
+rollback to savepoint sp_chk11;
 select set_config('role', 'postgres', true);
 
 -- =====================================================================
@@ -759,16 +918,16 @@ rollback to savepoint sp_leak;
 select _rls.set_tenant_aal(:'td'::uuid, 'aal1');
 savepoint sp_aal_s_ins1;
 select throws_ok(
-  $$ insert into pfin.tax_bracket_schedule (tax_year, schedule_type, standard_deduction) values (2026, 'federal_ordinary', 12000.00) $$,
+  $$ insert into pfin.tax_bracket_schedule (tax_year, schedule_type, schedule_label, standard_deduction) values (2026, 'federal_ordinary', 'D aal1 attempt', 12000.00) $$,
   '42501', null,
-  '(AAL-S-INS1) INSERT: totp-declared D at aal1 -- the aal2 WITH CHECK conjunct rejects (42501), directly (no trigger sits in front of tax_bracket_schedule)'
+  '(AAL-S-INS1) INSERT: totp-declared D at aal1 -- the aal2 WITH CHECK conjunct rejects (42501), directly (no trigger sits in front of tax_bracket_schedule; schedule_label supplied so NOT NULL, which enforces before the RLS WITH CHECK, is not what fires here)'
 );
 rollback to savepoint sp_aal_s_ins1;
 select set_config('role', 'postgres', true);
 
 select _rls.set_tenant_aal(:'td'::uuid, 'aal2');
 select lives_ok(
-  $$ insert into pfin.tax_bracket_schedule (tax_year, schedule_type, standard_deduction) values (2026, 'federal_ordinary', 12000.00) $$,
+  $$ insert into pfin.tax_bracket_schedule (tax_year, schedule_type, schedule_label, standard_deduction) values (2026, 'federal_ordinary', 'D aal2 schedule', 12000.00) $$,
   '(AAL-S-INS2) INSERT: SAME totp D at aal2 -- succeeds -- proves (AAL-S-INS1) is non-vacuous and creates D''s schedule for the rest of this block'
 );
 select set_config('role', 'postgres', true);
@@ -824,8 +983,8 @@ select is(
 --   aal2 (INSERT on tax_bracket_schedule requires it).
 -- =====================================================================
 select _rls.set_tenant_aal(:'td'::uuid, 'aal2');
-insert into pfin.tax_bracket_schedule (tax_year, schedule_type, standard_deduction)
-  values (2026, 'federal_lt_cg', 0.00) returning id as d_sched2 \gset
+insert into pfin.tax_bracket_schedule (tax_year, schedule_type, schedule_label, standard_deduction)
+  values (2026, 'federal_lt_cg', 'D aal2 row schedule', 0.00) returning id as d_sched2 \gset
 select set_config('role', 'postgres', true);
 
 -- (AAL-R-INS1) ⭐ INVESTIGATED, not assumed (see header box): fn_tax_bracket_
@@ -927,7 +1086,7 @@ select is(_rls.count_as(:'tb'::uuid, 'aal2', format('select count(*) from pfin.t
 select _rls.set_tenant(:'tb'::uuid);
 savepoint sp_ra1;
 select throws_like(
-  format($$ select pfin.fn_tax_bracket_schedule_replace_all(%s::bigint, 2026::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, 10000.00::numeric, null::numeric, '[]'::jsonb) $$, :sched_a),
+  format($$ select pfin.fn_tax_bracket_schedule_replace_all(%s::bigint, 2026::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, 'ra1 label'::text, 10000.00::numeric, null::numeric, '[]'::jsonb) $$, :sched_a),
   '%is not a schedule this caller owns%',
   '(RA1) B calls replace-all naming A''s REAL schedule_id -> the FOR UPDATE lock runs under B''s own RLS, resolves ZERO ROWS, and RAISES -- the lock IS the tenant fence'
 );
@@ -943,7 +1102,7 @@ select set_config('role', 'postgres', true);
 select _rls.set_tenant(:'tb'::uuid);
 savepoint sp_ra1c;
 select lives_ok(
-  format($$ select pfin.fn_tax_bracket_schedule_replace_all(%s::bigint, 2026::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, 6000.00::numeric, null::numeric, '[]'::jsonb) $$, :sched_b),
+  format($$ select pfin.fn_tax_bracket_schedule_replace_all(%s::bigint, 2026::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, 'ra1c label'::text, 6000.00::numeric, null::numeric, '[]'::jsonb) $$, :sched_b),
   '(RA1c) CONTROL (team-lead item 11''s required pairing): B calls replace-all on B''S OWN schedule -- SUCCEEDS -- proves (RA1)''s raise is owner-mismatch-driven, not a blanket refusal'
 );
 rollback to savepoint sp_ra1c;
@@ -952,7 +1111,7 @@ select set_config('role', 'postgres', true);
 select _rls.set_tenant(:'ta'::uuid);
 savepoint sp_ra2;
 select throws_like(
-  $$ select pfin.fn_tax_bracket_schedule_replace_all(999999999::bigint, 2026::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, 10000.00::numeric, null::numeric, '[]'::jsonb) $$,
+  $$ select pfin.fn_tax_bracket_schedule_replace_all(999999999::bigint, 2026::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, 'ra2 label'::text, 10000.00::numeric, null::numeric, '[]'::jsonb) $$,
   '%is not a schedule this caller owns%',
   '(RA2) A calls replace-all naming a NONEXISTENT schedule_id -> SAME message as (RA1) -- confirms the two cases (foreign vs. absent) are deliberately not distinguished'
 );
@@ -962,7 +1121,7 @@ rollback to savepoint sp_ra2;
 --   caller reaches PostgREST directly, bypassing the app's own Zod layer.
 savepoint sp_ra3;
 select throws_like(
-  format($$ select pfin.fn_tax_bracket_schedule_replace_all(%s::bigint, 2026::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, 10000.00::numeric, null::numeric, '"not-an-array"'::jsonb) $$, :sched_a),
+  format($$ select pfin.fn_tax_bracket_schedule_replace_all(%s::bigint, 2026::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, 'ra3 label'::text, 10000.00::numeric, null::numeric, '"not-an-array"'::jsonb) $$, :sched_a),
   '%must be a JSON array of bracket objects%',
   '(RA3) p_rows is a JSON STRING, not an array -> RAISES p_rows-shape'
 );
@@ -970,7 +1129,7 @@ rollback to savepoint sp_ra3;
 
 savepoint sp_ra4;
 select throws_like(
-  format($$ select pfin.fn_tax_bracket_schedule_replace_all(%s::bigint, 2026::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, 10000.00::numeric, null::numeric, '[1,2]'::jsonb) $$, :sched_a),
+  format($$ select pfin.fn_tax_bracket_schedule_replace_all(%s::bigint, 2026::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, 'ra4 label'::text, 10000.00::numeric, null::numeric, '[1,2]'::jsonb) $$, :sched_a),
   '%every p_rows element must be an object%',
   '(RA4) p_rows is an array of NUMBERS, not objects -> RAISES p_rows-shape'
 );
@@ -978,7 +1137,7 @@ rollback to savepoint sp_ra4;
 
 savepoint sp_ra5;
 select throws_like(
-  format($$ select pfin.fn_tax_bracket_schedule_replace_all(%s::bigint, 2026::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, 10000.00::numeric, null::numeric, '[{"bracket_floor": 0}]'::jsonb) $$, :sched_a),
+  format($$ select pfin.fn_tax_bracket_schedule_replace_all(%s::bigint, 2026::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, 'ra5 label'::text, 10000.00::numeric, null::numeric, '[{"bracket_floor": 0}]'::jsonb) $$, :sched_a),
   '%must carry EXACTLY the keys bracket_floor and bracket_rate%',
   '(RA5) an element is MISSING bracket_rate -> RAISES p_rows-shape (exact-key check, not a subset check)'
 );
@@ -986,7 +1145,7 @@ rollback to savepoint sp_ra5;
 
 savepoint sp_ra6;
 select throws_like(
-  format($$ select pfin.fn_tax_bracket_schedule_replace_all(%s::bigint, 2026::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, 10000.00::numeric, null::numeric, '[{"bracket_floor": "0", "bracket_rate": 0.10}]'::jsonb) $$, :sched_a),
+  format($$ select pfin.fn_tax_bracket_schedule_replace_all(%s::bigint, 2026::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, 'ra6 label'::text, 10000.00::numeric, null::numeric, '[{"bracket_floor": "0", "bracket_rate": 0.10}]'::jsonb) $$, :sched_a),
   '%must both be JSON numbers%',
   '(RA6) bracket_floor arrives as a QUOTED numeric STRING, not a JSON number -> RAISES -- refused deliberately, per the function''s own comment'
 );
@@ -1002,7 +1161,7 @@ select set_config('role', 'postgres', true);
 update pfin.tax_bracket_schedule set updated_at = '2000-01-01'::timestamptz where id = :sched_a;
 select _rls.set_tenant(:'ta'::uuid);
 select lives_ok(
-  format($$ select pfin.fn_tax_bracket_schedule_replace_all(%s::bigint, 2026::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, 15000.00::numeric, 250.00::numeric, '[{"bracket_floor":0,"bracket_rate":0.12},{"bracket_floor":45000,"bracket_rate":0.22}]'::jsonb) $$, :sched_a),
+  format($$ select pfin.fn_tax_bracket_schedule_replace_all(%s::bigint, 2026::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, 'RA7 replaced label'::text, 15000.00::numeric, 250.00::numeric, '[{"bracket_floor":0,"bracket_rate":0.12},{"bracket_floor":45000,"bracket_rate":0.22}]'::jsonb) $$, :sched_a),
   '(RA7) A replaces its OWN schedule''s brackets and scalars in one call -- succeeds'
 );
 select set_config('role', 'postgres', true);
@@ -1025,12 +1184,51 @@ select ok(
   (select updated_at > '2000-01-01'::timestamptz from pfin.tax_bracket_schedule where id = :sched_a),
   '(RA7d) updated_at MOVED away from the forced 2000-01-01 sentinel -- the function''s own UPDATE step fires tax_bracket_schedule_set_updated_at just like a direct authenticated UPDATE does'
 );
+select is(
+  (select schedule_label from pfin.tax_bracket_schedule where id = :sched_a),
+  'RA7 replaced label',
+  '(RA7e) E27/E29: fn_tax_bracket_schedule_replace_all writes p_schedule_label -- read back matches the exact value ("RA7 replaced label") passed at (RA7), not merely a non-null placeholder'
+);
+
+-- (RA-LBL1)/(RA-LBL2) Sec D-5(ii)/E31 -- TRIM IS THE APP'S JOB, THE DB
+--   REFUSES. A caller reaching PostgREST directly (bypassing the app's own
+--   Zod layer, which trims before it ever issues the RPC) sends
+--   p_schedule_label AS-IS; this function does not trim it. At the DB
+--   layer, the canonical-form CHECK (tax_bracket_schedule_
+--   schedule_label_check -- the SAME constraint (LBL-CHECK1-5) pin by
+--   name on the direct-INSERT path) is the actual enforcement, and it
+--   REFUSES a non-canonical value outright rather than silently trimming
+--   or accepting it. Both legs savepoint/rollback so sched_a's REAL state
+--   (as RA7 left it) reaches (RA8) unchanged.
+--   ⚠ Documented so a future change is legible either way: if a DB-side
+--   trim were ever added to this function (normalizing p_schedule_label
+--   before the UPDATE), (RA-LBL1) would flip from throws_like to
+--   lives_ok -- that flip would be the INTENDED tripwire marking a
+--   deliberate design change, not a silent regression to chase.
+savepoint sp_ra_lbl1;
+select _rls.set_tenant(:'ta'::uuid);
+select throws_like(
+  format($$ select pfin.fn_tax_bracket_schedule_replace_all(%s::bigint, 2026::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, %L::text, 15000.00::numeric, 250.00::numeric, '[]'::jsonb) $$, :sched_a, ' x '),
+  '%tax_bracket_schedule_schedule_label_check%',
+  '(RA-LBL1) fn_tax_bracket_schedule_replace_all called with a NON-CANONICAL p_schedule_label (" x ", leading/trailing space around real content) is REFUSED by tax_bracket_schedule_schedule_label_check -- the function does not trim on the caller''s behalf; the DB refuses instead'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint sp_ra_lbl1;
+
+savepoint sp_ra_lbl2;
+select _rls.set_tenant(:'ta'::uuid);
+select lives_ok(
+  format($$ select pfin.fn_tax_bracket_schedule_replace_all(%s::bigint, 2026::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, %L::text, 15000.00::numeric, 250.00::numeric, '[]'::jsonb) $$, :sched_a, 'x'),
+  '(RA-LBL2) non-vacuous control: the IDENTICAL call with a CANONICAL p_schedule_label ("x", no surrounding whitespace) SUCCEEDS -- proves (RA-LBL1) is canonical-form-driven, not a blanket refusal of the RPC write path'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint sp_ra_lbl2;
 
 -- (RA8) EMPTY ARRAY CLEARS THE SCHEDULE -- legal, per the migration's own
 --   absence-is-unset posture.
 select _rls.set_tenant(:'ta'::uuid);
 select lives_ok(
-  format($$ select pfin.fn_tax_bracket_schedule_replace_all(%s::bigint, 2026::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, 15000.00::numeric, 250.00::numeric, '[]'::jsonb) $$, :sched_a),
+  format($$ select pfin.fn_tax_bracket_schedule_replace_all(%s::bigint, 2026::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, 'ra8 label'::text, 15000.00::numeric, 250.00::numeric, '[]'::jsonb) $$, :sched_a),
   '(RA8) an EMPTY p_rows array is legal and CLEARS the schedule''s brackets -- succeeds'
 );
 select set_config('role', 'postgres', true);
@@ -1077,6 +1275,43 @@ select ok(
   '(RA10) CATALOG PIN: fn_tax_bracket_schedule_replace_all''s body contains a FOR UPDATE lock (pg_get_functiondef, a real catalog read) -- this pin stands in for the concurrency proof no single-session pgTAP probe can give; the two measured race modes are recorded in this leg''s own comment above, not asserted'
 );
 
+-- (RA-SIG1) Sec VETO 3 fix criterion (iii) — the watcher that makes the
+--   NEXT signature change fail loudly instead of silently overloading.
+--   `create or replace function` with a CHANGED argument list creates an
+--   OVERLOAD, it does not replace; on a fresh sequential apply only ONE
+--   revision of this file's DDL is ever applied, so this leg is vacuous
+--   TODAY only in the sense that there is nothing yet to catch it against —
+--   its job is to go RED the day a future edit adds/drops a parameter
+--   without a preceding `drop function`, or the day this migration is
+--   applied on top of an environment still holding the STALE 6-arg form
+--   (Sec VETO 3's reachable-footgun scenario: PostgREST resolves an RPC
+--   call by its named-argument set, so a stale 6-arg overload silently
+--   satisfies a caller that never sends p_schedule_label, and the write
+--   goes through without ever touching the label).
+--   SPLIT INTO TWO ASSERTIONS (Sec E31): (a) count BY NAME ALONE — no
+--   `pronargs = 7` filter anywhere in this leg's WHERE clause, because a
+--   filter on the very column under test would silently EXCLUDE a stale
+--   6-arg row from the count and read green with the overload present —
+--   then (b) THAT row's pronargs = 7. (b) guards its own scalar subquery
+--   with `limit 1` so a multi-row scenario (a) already caught fails
+--   CLEANLY as a named (RA-SIG1a) red, rather than aborting the whole file
+--   on a Postgres "more than one row returned by a subquery expression"
+--   error the way the pre-existing (RA9)/(RA10) bare scalar-subquery legs
+--   do (measured during this leg's own inversion test).
+select is(
+  (select count(*)::bigint from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'pfin' and p.proname = 'fn_tax_bracket_schedule_replace_all'),
+  1::bigint,
+  '(RA-SIG1a) pfin holds EXACTLY ONE proc named fn_tax_bracket_schedule_replace_all -- counted BY NAME ALONE, no pronargs filter -- a stale 6-arg overload sitting alongside the 7-arg form is COUNTED, not excluded'
+);
+select is(
+  (select p.pronargs::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'pfin' and p.proname = 'fn_tax_bracket_schedule_replace_all'
+    order by p.oid limit 1),
+  7,
+  '(RA-SIG1b) THEN (given (RA-SIG1a) already proved uniqueness): that one proc''s pronargs = 7 (schedule_id, tax_year, schedule_type, schedule_label, standard_deduction, tax_balance_prior_year, rows) -- a second overload (stale 6-arg or any other arity) is caught by (RA-SIG1a) above, not here'
+);
+
 -- (RA-TY1) team-lead item 14 — tax_year = 1900 rejected BY NAME (the new
 --   `tax_bracket_schedule_tax_year_check`, fcd8e98). Exercised via the
 --   replace-all function itself (this surface's actual write path), not a
@@ -1084,7 +1319,7 @@ select ok(
 select _rls.set_tenant(:'ta'::uuid);
 savepoint sp_ra_ty1;
 select throws_like(
-  format($$ select pfin.fn_tax_bracket_schedule_replace_all(%s::bigint, 1900::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, 15000.00::numeric, null::numeric, '[]'::jsonb) $$, :sched_a),
+  format($$ select pfin.fn_tax_bracket_schedule_replace_all(%s::bigint, 1900::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, 'ra-ty1 label'::text, 15000.00::numeric, null::numeric, '[]'::jsonb) $$, :sched_a),
   '%tax_bracket_schedule_tax_year_check%',
   '(RA-TY1) tax_year = 1900 (before the first US federal income-tax year, 1913) REJECTED BY NAME -- the CHECK constraint tax_bracket_schedule_tax_year_check fires, not merely SOME 23514'
 );
@@ -1108,14 +1343,14 @@ select set_config('role', 'postgres', true);
 --   without this file's OWN outer rollback the bad (non-monotone) row set
 --   would be left sitting in the table, not the prior one.
 select _rls.set_tenant(:'ta'::uuid);
-select pfin.fn_tax_bracket_schedule_replace_all(:sched_a::bigint, 2026::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, 15000.00::numeric, 250.00::numeric, '[{"bracket_floor":0,"bracket_rate":0.05}]'::jsonb);
+select pfin.fn_tax_bracket_schedule_replace_all(:sched_a::bigint, 2026::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, 'ra11-setup label'::text, 15000.00::numeric, 250.00::numeric, '[{"bracket_floor":0,"bracket_rate":0.05}]'::jsonb);
 select set_config('role', 'postgres', true);
 
 savepoint sp_ra11;
 select _rls.set_tenant(:'ta'::uuid);
 set constraints all deferred;
 select lives_ok(
-  format($$ select pfin.fn_tax_bracket_schedule_replace_all(%s::bigint, 2026::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, 15000.00::numeric, 250.00::numeric, '[{"bracket_floor":0,"bracket_rate":0.30},{"bracket_floor":40000,"bracket_rate":0.10}]'::jsonb) $$, :sched_a),
+  format($$ select pfin.fn_tax_bracket_schedule_replace_all(%s::bigint, 2026::smallint, 'federal_ordinary'::pfin.tax_schedule_type_enum, 'ra11a label'::text, 15000.00::numeric, 250.00::numeric, '[{"bracket_floor":0,"bracket_rate":0.30},{"bracket_floor":40000,"bracket_rate":0.10}]'::jsonb) $$, :sched_a),
   '(RA11a) the CALL ITSELF succeeds even though the batch is non-monotone (0.30 then 0.10) -- the set fence is DEFERRED and has not fired yet, so the function RETURNS CLEANLY'
 );
 select throws_like(
