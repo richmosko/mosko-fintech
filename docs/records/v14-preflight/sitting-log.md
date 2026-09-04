@@ -63,7 +63,7 @@ Agenda: [`sitting-agenda.md`](sitting-agenda.md). Rulings are numbered as there 
 **Consequences recorded:**
 - **SELF-268 AC1** rewritten against A′ (as drafted it puts the tax leg into `fn_compute_nav` → `nav_daily`). **AC4 struck**, not softened — Sec D-4's benign second reading (that *"the chart recomputes from live inputs and therefore 'back-fills' visually"*, sec-findings D-4) is also out, because the trajectory is not recomputed at all. AC5 minus the trajectory. **AC1 also moves the §2.1.1 headline's read source to the composed reader** (rider 0).
 - **SELF-267 AC2a**: the designation is the exclusion hook; cites rider 1.
-- **SELF-262 AC12**: the helper's two scalars compose into `051`'s foot at read time; `nav_daily`'s SELECT policy must admit the owner for the INVOKER read (Sec 10.5e).
+- **SELF-262 AC12**: the helper's two scalars compose into `051`'s foot at read time. Sec 10.5e's `nav_daily` SELECT-policy obligation attaches to **whichever object reads `nav_daily` under INVOKER**; per the re-derived SELF-262 AC1 the helper does NOT read `nav_daily` (Unrealized reads through `049`), so the obligation sits on the §2.1.5 read-time path at `051`, and a `nav_daily` read inside the helper would be an AC1 change routed back to Sec (Architect close-out item 2, accepted).
 - **The trajectory carries no step** at changeover under A′: `nav_daily` freezes `fn_compute_nav(current_date, true)` (`054` at :419/:463; the ETL worker reads the same source), and A′ leaves `fn_compute_nav` untouched, so the checkpoint definition never changes. Sec §9.1 stated its step consequence **unconditionally** ("whenever the A-9 exclusion lands…"); it is **voided** here by the mechanism, not qualified in Sec's text. *(Wording corrected 2026-09-03 on Sec's (a).)*
 - Not light-loop eligible ([ADR-066](../../../DECISIONS.md#adr-066) D1 b); Sec joint-review MANDATORY; walk-gated before the Sec spawn.
 
@@ -142,9 +142,9 @@ Agenda: [`sitting-agenda.md`](sitting-agenda.md). Rulings are numbered as there 
 
 **Standing:** under R1-A this has **no V1 instance** (no sells, matched or unmatched). Ruled now so the sale-writer milestone cites it rather than re-deriving it; written into SELF-262 AC2 as a dormant clause with this entry as its citation. `lot_match` carries no `users_id` — tenancy inherits through two `account_trans` FKs (Architect Seam G); any future §2.5.1 reader honors that rather than assumes it. **Two mechanics travel with the disposition (Sec M-1 second half + §4 SELF-264 item 1), so the citing milestone gets the rule with what makes it correct:** apportionment is **per `lot_match` row, not per transaction** — one sell can match buys on both sides of the one-year line; and the holding-period `LEFT JOIN` NULL is tested for NULL **before** any membership test (the shipped 099 pattern).
 
-### R12 — Ordering: SELF-268 at step 9 · **F/CTO RULING BY DELEGATION: accept** · 2026-09-03
+### R12 — Ordering: SELF-268 after the two read surfaces · **F/CTO RULING BY DELEGATION: accept** · 2026-09-03
 
-**Ruled.** SELF-268 (the NAV composition flip) runs at step 9, **after the two read surfaces** (SELF-264 ∥ SELF-266), not immediately after SELF-262. Not a dependency; a walk-order judgment shared by Architect and PM: walk the legible tax surfaces before the flip moves the headline, so the walker sees the components before the composed figure changes.
+**Ruled.** SELF-268 (the NAV composition flip) runs **after the two read surfaces** (SELF-264 ∥ SELF-266), not immediately after SELF-262. The agenda numbered this step 9 with SELF-302/303 holding step 5; with those two out per R6 the ruled order below renumbers and 268 is **step 8**, 269 step 9. *(Step number corrected 2026-09-03 on Architect's read-back; the ruled-order block is authoritative.)* Not a dependency; a walk-order judgment shared by Architect and PM: walk the legible tax surfaces before the flip moves the headline, so the walker sees the components before the composed figure changes.
 
 ---
 
