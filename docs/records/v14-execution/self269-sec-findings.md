@@ -23,8 +23,9 @@ to `main` at **`c8b02d5`**. Measured rather than assumed: `git rev-parse e20906b
 `git diff --name-only e20906b 29f9a83` is **empty**. `origin/main` `c8b02d5` is an ancestor of
 `29f9a83`. **Every finding, every cited leg label and every measurement below therefore describes
 `29f9a83` byte-for-byte**, with no re-derivation — which is a stronger statement than moving the
-sha would have been, and it is why the anchor moves for free. The battery blob md5 is likewise
-unchanged at `a1e6ff19ed126838d949d835aa4be092`. Delta = **one new file**, `supabase/tests/rls/self269_v1_4_close_gate.sql`,
+sha would have been, and it is why the anchor moves for free.
+
+Delta vs `origin/main` = **one new file**, `supabase/tests/rls/self269_v1_4_close_gate.sql`,
 643 lines, blob md5 **`a1e6ff19ed126838d949d835aa4be092`** (measured; matches the dispatch). Nothing
 else changed — no migration, no source, no workflow, no ADR.
 
