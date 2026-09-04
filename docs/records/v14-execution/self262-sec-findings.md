@@ -350,3 +350,198 @@ and *"is_tax_payment is NOT a source anywhere"* is true — the string appears n
 - **SELF-269** — a leg for F-1 that reds when the OR-term is struck; the volatility pin leg named in ADR-067 (and, if N-1 is taken, over the reach set rather than the direct callees); the Trade decoy and negative-aggregate clamp legs I did not reproduce.
 - **SELF-302 / SELF-303 or `BACKLOG.md` §7** — R11's disposition needs a home that is read at the moment it matters (departure (d)).
 - **Standing** — any grant of EXECUTE on `104` to a `rolbypassrls` role is Sec-joint-review-mandatory (N-3).
+
+---
+
+# Re-look at `5c9e0e6`
+
+**Reviewer:** security-engineer · **Date:** 2026-09-04 · **Anchor:** `origin/feature/self-262` @ `5c9e0e6`
+(= Architect's second pass `d3809c1` + QA's re-cut battery `c834f36` + `origin/main` merged in).
+⚠ The dated **AMBER at `982ae4a`** section above is **not rewritten** — it records what was true at
+first review, and the second pass is legible only against it.
+
+## VERDICT — **AMBER**, one blocking condition
+
+Every disposition landed, and **four of the five controls I struck went red for the right reason and
+only the right reason.** The fifth did not go red at all.
+
+| id | blocking condition | clears |
+|---|---|---|
+| **F-4** | The **N-4 watcher is vacuous** — QA's `(N4)` leg passes with the control struck. It asserts NULL on a fixture where both federal halves are unresolved, so `LEAST(NULL, NULL)` is NULL whether or not the `computed` gate exists. Re-point it at a fixture where **one** half resolves and the other does not. | QA only — a fixture change, no migration impact, does not re-open the SQL review |
+
+Everything else is **GREEN**. F-1, F-2, F-3, N-1, N-2, N-3 and N-5 are each realized in the SQL,
+stated accurately in both artifacts, and watched by a leg that fails when the control is removed.
+
+**Evidence base.** A **second** fresh scratch database, `secscratch262b` — new name, distinct from the
+first review's `secscratch262`, not `pfin_tmpl`, and no destructive local-stack command at any point.
+Sequential apply `001` → `104` at `5c9e0e6` with `ON_ERROR_STOP=1`, zero failures. Two synthetic
+tenants provisioned through the shipped `fn_provision_tax_brackets()`.
+⚠ Still a **schema/data-level control only**.
+
+---
+
+## The five confirmations asked for — all four verifiable ones hold
+
+1. **"Three direct callees" is what landed.** `104`'s volatility block reads *"DIRECT CALLEES — THREE,
+   read off THIS body rather than from memory"* and names `fn_cashflow_items(date)` ·
+   `fn_ytd_paid_per_jurisdiction(date, pfin.tax_jurisdiction_enum)` · `fn_account_unrealized_gl(date)`.
+   It states explicitly that `fn_tax_authority_ledgers()` is reached only through `102` and that
+   `fn_server_today()` is not called at all. ADR-067's Consequences carries the same three.
+   **The wrong "four" did not reach the tree.** I also re-measured the header's TRANSITIVE READ SET
+   diagram against the catalog and it is accurate row for row: `fn_gl_entries(date)` = `v`,
+   `fn_holdings_as_of(date)` = `v`, `fn_account_cash_as_of` / `fn_tax_authority_ledgers` /
+   `fn_compute_nav(date)` / `fn_compute_nav(date, boolean)` all = `s`.
+2. **The design memo was not retro-edited.** `git diff --stat 982ae4a origin/feature/self-262 --
+   … docs/records/v14-execution/self262-design.md` — the path is **absent** from the output. I named
+   it explicitly in the pathspec, so absence is a measurement, not an oversight. ADR-016 Decision 4
+   honoured.
+3. **ADR-067 Decision 5's key list moved in the same commit.** `git show --stat d3809c1` touches
+   exactly two files: `DECISIONS.md` and `104`. Sub-items **(h)** (deduction scope +
+   `standard_deduction_ignored`) and **(i)** (`installments_due_through_next` + `next_due_date`) are
+   both present, and the Status block now warns that (h), (i) and the (d) rounding change did not
+   exist in the first-pass draft. The canonical home and the surface moved together, which is what
+   SELF-264 / 266 / 268 resolve against.
+4. **The Dec-31 obligation branch returns the rounded annual — proven on a DISCRIMINATING fixture.**
+   The fixture QA and Architect both used has an annual divisible by four cents, where
+   `4 × Q1 = annual` and the two branches are indistinguishable. I forced them apart
+   (`standard_deduction = 16100.10`): `annual_liability = 17569.98`, `Q1 = 4392.49`,
+   `4 × Q1 = 17569.96`, and the obligation actually used was **`17569.98`** — the rounded annual,
+   two cents above the multiplication form. The branch is live and load-bearing.
+   ⚠ **It is live for far more of the year than "Dec 31":** `installments_due_through_next` reaches 4
+   on **2026-09-16**, the day after Q3's due date, so the branch governs a 3.5-month window. Measured
+   across the boundaries: `2026-04-14 → 1` · `04-15 → 1` · `04-16 → 2` · `09-15 → 3` · `09-16 → 4` ·
+   `12-31 → 4` · `2027-01-10 → 1`, with `next_due_date` tracking it (`2026-04-15`, `2026-04-15`,
+   `2026-06-15`, `2026-09-15`, `2027-01-15`, `2027-01-15`, `2027-04-15`). `quarters_elapsed` returns
+   NULL — the key is gone, as (i) says.
+5. **N-3's standing condition is in both files.** `104`'s header carries it at lines 46–57, split by
+   caller class (`rolbypassrls` vs not), and the `comment on function` repeats it; ADR-067 carries it
+   as its own Consequences bullet. Both name `service_role`, both say the EXECUTE grant is the entire
+   perimeter for that caller, and both mark the grant Sec-joint-review-mandatory.
+
+## Re-verified independently at `5c9e0e6`
+
+- **Posture triple** — `prosecdef = f`, `provolatile = s`, `proconfig = {search_path=""}`.
+- **ACL** — `{postgres=X/postgres,authenticated=X/postgres}`. PUBLIC absent.
+- **DEFINER allowlist** — `fn_grant_creator_access`, `fn_reclass_history_insert`,
+  `fn_refresh_updated_at`. Unchanged; matches ADR-011 D9's authored-set of three.
+- **Role reachability** — `anon` denied at the schema layer (`permission denied for schema pfin`);
+  `service_role` still `rolbypassrls = t`, `pfin` USAGE `t`, **EXECUTE `f`**; `authenticator` and
+  `pfin_etl` unreachable.
+- **Cross-tenant fail-closed** — tenant B, with tenant A holding schedules, income and a designated
+  `irs` ledger: both jurisdictions `unavailable`, `ytd_paid` `no_ledger_designated`, both
+  `nav_components` scalars `unavailable`, and `basis_year` / `annual_liability` / `installments` all
+  JSON null. No A figure appears anywhere in B's payload.
+- **F-1** — the boundary pair that produced the finding, re-run: emptied current-year schedule with no
+  prior-year fallback now reports `current_year_schedule_empty = true` on **both** legs. It was
+  `false` on the LT CG leg at `982ae4a`.
+- **F-2** — LT CG schedule storing `standard_deduction = 7000` against a `5000` LT CG input:
+  `taxable_income.lt_cg = 5000.0000` (the full input, deduction not applied),
+  `standard_deduction_ignored = true`, and `inputs.standard_deduction = 16100.0000` — the **ordinary**
+  schedule's value, as (h) promises. California's schedule block carries **no**
+  `standard_deduction_ignored` key at all.
+- **N-2** — annual `0.02` splits `[0.00, 0.00, 0.00, 0.02]`. Non-negative, sum exact. The negative Q4
+  is gone.
+- **N-4 (the code, not its watcher)** — with `federal_ordinary` unresolved and `federal_lt_cg`
+  resolved, the jurisdiction reads `status: unavailable` with `basis_year: NULL` while
+  `schedules.federal_ordinary.basis_year` stays `2026`. **The fix itself is correct.** See F-4 for its
+  watcher.
+- **N-5** — `annual_liability` emitted rounded and equal to the installment sum exactly. No unrounded
+  annual key remains; `annual_raw` and `quarters_elapsed` both return **zero** occurrences in the SQL
+  body (measured between the `as $$` and `$$;` delimiters, so header prose cannot contribute — the
+  only surviving mention of `quarters_elapsed` is the header paragraph that explains the rename).
+
+## The battery — run, and inversion-swept
+
+Run against my own scratch DB from a clean `001` → `104` apply. ⚠ **Tallied as a manual TAP consumer,
+not by psql's exit code** — `psql` exits 0 on TAP failures and does not enforce the plan, so an exit
+code here would be no evidence at all. **Plan `1..60`, `ok` 60, `not ok` 0, `ERROR` 0.**
+
+**Inversion sweep — five controls struck one at a time on the live function, each restored after:**
+
+| control struck | legs that went RED | verdict |
+|---|---|---|
+| F-1 `ltcg_empty_no_fallback` OR-term | `(F1)` — exactly one | ✅ precise |
+| F-2 LT CG deduction `case` | `(L5 / F-2)`, `(L6a)`, `(L10)`, `(F3f)` | ✅ with cascade |
+| F-3 `<` → `<=` on the due-date comparison | `(F3b)` — exactly one, the "due today" boundary | ✅ precise |
+| N-2 `trunc` → `round` | `(L6a)`, `(L10)`, `(N2a)`, `(N2b)` | ✅ |
+| **N-4 ungate `basis_year`** | **NONE** | ❌ **F-4** |
+
+Restored to the shipped function afterwards: plan `1..60`, 60 `ok`, 0 `not ok`.
+
+Two gaps from my first review are closed by this battery rather than by me: `(L1a)` proves the
+`Trade / STC` decoy reaches `fn_cashflow_items` through the split-child branch and contributes
+nothing, and `(L11)` / `(L12)` cover the negative-aggregate Unrealized clamp and the `(π)` exclusion.
+`(M9)` correctly **moves** the M-9 floor leg onto an ordinary schedule — the old `(L5)` fixture floored
+on the LT CG schedule, which (h) makes unreachable, so leaving it there would have retired the floor's
+only observer. That was the highest-risk part of this re-cut and it was handled.
+
+---
+
+## F-4 — the N-4 watcher cannot fail
+
+`(N4)` asserts that tenant B's `jurisdictions.federal.basis_year` is JSON null while
+`federal.status = unavailable`. It reuses B's jurisdiction from `(L16c)` / `(L16d)`, where **both**
+federal halves are unresolved — `federal_ordinary` absent entirely and `federal_lt_cg` present-but-empty
+with no fallback.
+
+In that shape `least(ord_basis_year, coalesce(ltcg_basis_year, ord_basis_year))` is
+`least(NULL, NULL)`, which is NULL **with or without** the `case when jr.computed` gate. The leg
+therefore passes either way.
+
+**Measured with the gate struck**, on the two fixtures side by side:
+
+| fixture | `status` | `basis_year` |
+|---|---|---|
+| `federal_ordinary` unresolved, `federal_lt_cg` **resolved** (discriminating) | `unavailable` | **`2026`** ← the defect, visible |
+| both halves unresolved (**the shape `(N4)` uses**) | `unavailable` | `NULL` ← passes anyway |
+
+The whole point of N-4 is that **`LEAST` ignores NULLs**, which can only be observed when at least one
+argument is **not** NULL. A fixture with no non-NULL argument cannot see it.
+
+ADR-067's own Consequences state the rule this breaks: *"A leg that cannot fail is not a test: each of
+these exists to go **red** when its fence is struck."*
+
+**Fix:** re-point `(N4)` at a jurisdiction with exactly one half resolved — give tenant B's
+`federal_lt_cg` 2026 schedule at least one bracket row while leaving `federal_ordinary` absent, and
+assert both that the jurisdiction-level `basis_year` is null **and** that
+`schedules.federal_lt_cg.basis_year` is `2026`. The pair is what makes the finding legible: one field
+NULL, its sibling populated, in the same object.
+⚠ That row also feeds `(F1)`, which needs the LT CG schedule **empty**. Use a **separate tax year** for
+the N-4 fixture — the pattern `(N2a)` / `(N2b)` already establish in this file — rather than mutating
+the one `(F1)` depends on.
+
+**Clears:** QA. No migration change, no ADR change, and it does not re-open the SQL review.
+
+## Notes
+
+**N-11 — `installments_due_through_next` and `next_due_date` are emitted on an `unavailable`
+jurisdiction.** Measured: tenant B's `california` block reads `status: unavailable` beside
+`installments_due_through_next: 3` and `next_due_date: "2026-09-15"`. This extends N-6 by one new key.
+⚠ **I am NOT asking for it to be gated, and the reason is the distinction N-4 turned on:**
+`basis_year` asserted *which schedule we used* when there was none, so it was a false claim;
+`next_due_date` asserts *when the next payment is due*, which is a fact about the calendar and stays
+true whether or not the amount is computable. Recorded so the two are not "made consistent" later by
+gating both or neither.
+
+**N-12 — the `least(…, 4)` cap is unreachable, and Architect's claim about it is correct.** `tax_year`
+is derived from `p_data_as_of`, so Q4's due date (Jan 15 of `tax_year + 1`) is never strictly before a
+date inside `tax_year`; the strictly-before count maxes at 3 and the total at 4. It is a guard, not a
+branch. Verified rather than assumed because an unreachable `least` would be the natural place for an
+off-by-one to hide.
+
+## Explicit non-objections on the second pass
+
+- I do **NOT** object to (h) living in the reader rather than as a CHECK at `101`. The rejection
+  reasoning is sound and better than my own option A: a CHECK makes the editor **reject** a value the
+  PRD merely calls meaningless, and (h) preserves the stored value while reporting that it was ignored.
+- I do **NOT** object to the `standard_deduction_ignored` key reading `false` when no LT CG schedule
+  resolves at all. `coalesce(null, 0) <> 0` is the right answer — there is nothing being ignored — and
+  `(F2a)` pins exactly that state.
+- I do **NOT** require `fn_gl_entries` / `fn_holdings_as_of` to be pinned `stable` in this PR. Naming
+  them and pinning the read-only property is the correct discharge; the pin is a separate migration.
+- I do **NOT** require any further change to `104`'s SQL. F-4 is a battery fixture.
+- I do **NOT** require re-review after F-4 lands, provided the fix is the fixture change described
+  above and nothing in `104` moves. If `104` moves, it returns to me.
+- Ledgers re-checked at `5c9e0e6` and still flat: §10 unchanged (Path B, no count carried in either
+  artifact, catalogued and CI-fenced sets still not reconciled), Decision 3 flat, DEFINER allowlist
+  unchanged, Lock 11 and Lock 15 unaffected by the second pass.
