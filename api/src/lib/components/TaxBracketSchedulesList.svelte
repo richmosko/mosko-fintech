@@ -159,32 +159,51 @@
 			{/if}
 
 			{#if openCreate[j.schedule_type]}
-				<TaxBracketScheduleEditor
-					mode="create"
-					scheduleType={j.schedule_type}
-					taxYear={currentTaxYear}
-					initialLabel={basis?.schedule_label ?? ''}
-					initialStandardDeduction={j.schedule_type === 'federal_lt_cg'
-						? 0
-						: (basis?.standard_deduction ?? 0)}
-					initialPriorYearBalance={null}
-					initialRows={basis?.rows ?? [{ bracket_floor: 0, bracket_rate: 0 }]}
-					onSaved={() => (userToggled[j.schedule_type] = false)}
-				/>
+				<!-- Keyed on type+year (team-lead correction, same class as the auto-open fix): while
+				     the create panel is open its OWN identity (which type/year it would create) is
+				     what must force a remount if it ever changes, not the transient `basis` it
+				     merely reads for the template prefill -- the panel already unmounts on success
+				     (onSaved clears openCreate), so its remount need is narrower than the basis
+				     editor's below, but keying costs nothing and removes the question. -->
+				{#key `${j.schedule_type}-${currentTaxYear}`}
+					<TaxBracketScheduleEditor
+						mode="create"
+						scheduleType={j.schedule_type}
+						taxYear={currentTaxYear}
+						initialLabel={basis?.schedule_label ?? ''}
+						initialStandardDeduction={j.schedule_type === 'federal_lt_cg'
+							? 0
+							: (basis?.standard_deduction ?? 0)}
+						initialPriorYearBalance={null}
+						initialRows={basis?.rows ?? [{ bracket_floor: 0, bracket_rate: 0 }]}
+						onSaved={() => (userToggled[j.schedule_type] = false)}
+					/>
+				{/key}
 			{/if}
 
 			{#if basis}
-				<TaxBracketScheduleEditor
-					mode="edit"
-					scheduleType={j.schedule_type}
-					taxYear={basis.tax_year}
-					scheduleId={basis.id}
-					initialLabel={basis.schedule_label}
-					initialStandardDeduction={basis.standard_deduction}
-					initialPriorYearBalance={basis.tax_balance_prior_year}
-					initialRows={basis.rows}
-					canDelete={deletable}
-				/>
+				<!-- Keyed on the schedule's OWN id (team-lead correction): without this, creating a
+				     NEW basis year (e.g. 2026 from a 2025-only jurisdiction) reuses the SAME editor
+				     instance -- its $state-captured draft (label/standardDeduction/priorYearBalance/
+				     rows) does NOT re-initialize from new props, but its hidden tax_year/schedule_id
+				     fields DO (they read the props directly, not $state), so a save with an untouched
+				     draft would post the OLD year's rows/label under the NEW schedule's id and pass
+				     the identity guard cleanly -- a SILENT wrong-year overwrite, not even a visible
+				     error. `{#key basis.id}` forces a fresh component (and therefore fresh $state
+				     initializers) whenever the underlying schedule row changes. -->
+				{#key basis.id}
+					<TaxBracketScheduleEditor
+						mode="edit"
+						scheduleType={j.schedule_type}
+						taxYear={basis.tax_year}
+						scheduleId={basis.id}
+						initialLabel={basis.schedule_label}
+						initialStandardDeduction={basis.standard_deduction}
+						initialPriorYearBalance={basis.tax_balance_prior_year}
+						initialRows={basis.rows}
+						canDelete={deletable}
+					/>
+				{/key}
 			{/if}
 
 			{#if priors.length > 0}
