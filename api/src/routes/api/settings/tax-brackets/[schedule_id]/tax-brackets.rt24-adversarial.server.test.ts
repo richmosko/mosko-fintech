@@ -285,3 +285,95 @@ describe('RT-24 numeric-input adversarial battery (Lock 14 mod #2) — bracket_r
 		expect(captured.writeCalls).toBe(1);
 	});
 });
+
+// tax_year (Sec F-4, SELF-259 joint review, 2026-09-03): the one numeric field on this surface
+// that previously bypassed the battery via `z.coerce.number()` — measured to accept "2e3",
+// "0x7d0", " 2000 ", and [2000] as 2000. Now routed through `sanitizeYear` (numeric.ts) via the
+// schema's `taxYear()` adapter, same reject-not-coerce discipline as standard_deduction /
+// bracket_floor / bracket_rate above. Reject cases use the DEFAULT makeEvent fixture (schema
+// validation fails before the ownership-read mock is ever reached, so its fixed `tax_year: 2026`
+// is irrelevant here); accept cases use `makeEventForYear` so the mocked ownership read's
+// `tax_year` matches the body's post-sanitization value and the schedule-identity guard (409)
+// doesn't mask the 200 this battery is actually checking for.
+function makeEventForYear(body: unknown, captured: { writeCalls: number }, ownedTaxYear: number) {
+	const request = new Request('http://localhost/api/settings/tax-brackets/1', {
+		method: 'POST',
+		headers: { 'content-type': 'application/json' },
+		body: JSON.stringify(body)
+	});
+	const locals = {
+		safeGetSession: async () => ({ session: {}, user: { id: SESSION_UID } }),
+		supabase: {
+			schema: () => ({
+				from: (_table: string) => ({
+					select: () => ({
+						eq: () => ({
+							maybeSingle: () =>
+								Promise.resolve({
+									data: { id: 1, tax_year: ownedTaxYear, schedule_type: 'federal_ordinary' },
+									error: null
+								})
+						})
+					})
+				}),
+				rpc: (_fn: string, _params: Record<string, unknown>) => {
+					captured.writeCalls++;
+					return Promise.resolve({ data: null, error: null });
+				}
+			})
+		}
+	};
+	return { request, locals, params: { schedule_id: '1' } } as unknown as Parameters<typeof POST>[0];
+}
+
+describe('RT-24 numeric-input adversarial battery (Lock 14 mod #2) — tax_year (Sec F-4, reject-not-coerce)', () => {
+	it('rejects scientific notation ("2e3") with a tax_year field error', async () => {
+		const captured = { writeCalls: 0 };
+		const res = await POST(makeEvent(validBody({ tax_year: '2e3' }), captured));
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { fieldErrors?: Record<string, string[]> };
+		expect(body.fieldErrors?.tax_year?.length).toBeGreaterThan(0);
+		expect(captured.writeCalls).toBe(0);
+	});
+
+	it('rejects hex ("0x7d0") with a tax_year field error', async () => {
+		const captured = { writeCalls: 0 };
+		const res = await POST(makeEvent(validBody({ tax_year: '0x7d0' }), captured));
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { fieldErrors?: Record<string, string[]> };
+		expect(body.fieldErrors?.tax_year?.length).toBeGreaterThan(0);
+		expect(captured.writeCalls).toBe(0);
+	});
+
+	it('rejects whitespace-padded input (" 2000 ") with a tax_year field error', async () => {
+		const captured = { writeCalls: 0 };
+		const res = await POST(makeEvent(validBody({ tax_year: ' 2000 ' }), captured));
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { fieldErrors?: Record<string, string[]> };
+		expect(body.fieldErrors?.tax_year?.length).toBeGreaterThan(0);
+		expect(captured.writeCalls).toBe(0);
+	});
+
+	it('rejects array coercion ([2000]) with a tax_year field error', async () => {
+		const captured = { writeCalls: 0 };
+		const res = await POST(makeEvent(validBody({ tax_year: [2000] }), captured));
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { fieldErrors?: Record<string, string[]> };
+		expect(body.fieldErrors?.tax_year?.length).toBeGreaterThan(0);
+		expect(captured.writeCalls).toBe(0);
+	});
+
+	it('accepts a clean integer number (2000) — positive control', async () => {
+		const captured = { writeCalls: 0 };
+		const res = await POST(makeEventForYear(validBody({ tax_year: 2000 }), captured, 2000));
+		expect(res.status).toBe(200);
+		expect(captured.writeCalls).toBe(1);
+	});
+
+	it('accepts a clean canonical decimal-integer string ("2000") — positive control', async () => {
+		const captured = { writeCalls: 0 };
+		const res = await POST(makeEventForYear(validBody({ tax_year: '2000' }), captured, 2000));
+		expect(res.status).toBe(200);
+		expect(captured.writeCalls).toBe(1);
+	});
+});

@@ -4,9 +4,12 @@
 // read live before trusting any fact below; this file cites, not restates, its `comment on`
 // text) — no field/type here is a proposal any more.
 //
-// ⚠ SEE THE ROUTE FILE (`[schedule_id]/+server.ts`) for the full write-path design (the
-// UPDATE→DELETE→INSERT sequencing, why there is no RPC, the schedule-identity-mismatch guard) —
-// not restated here to avoid a second, driftable copy.
+// ⚠ SEE THE ROUTE FILE (`[schedule_id]/+server.ts`) for the full write-path design — ONE
+// SECURITY INVOKER RPC, `pfin.fn_tax_bracket_schedule_replace_all` (migration 101), CONFIRMED
+// by Sec's SELF-259 joint review (`docs/records/v14-execution/self259-sec-review.md` @
+// `b53f766`, F-6: the landed signature matches this endpoint's `.rpc()` call name-for-name and
+// type-for-type) — plus the schedule-identity-mismatch guard. Not restated here to avoid a
+// second, driftable copy.
 //
 // SOURCE OF TRUTH: Frontend's editor (SELF-265) mirrors this client-side (Lock 14) and must
 // never ship a looser schema. `.strict()` at every level (outer object AND each row) is the
@@ -55,7 +58,7 @@
 // per-VALUE-not-per-SUBMISSION-ORDER guarantee).
 
 import { z } from 'zod';
-import { sanitizeCurrencyAmount, sanitizeFractionRate } from '$lib/server/validation/numeric';
+import { sanitizeCurrencyAmount, sanitizeFractionRate, sanitizeYear } from '$lib/server/validation/numeric';
 
 /** Zod adapter over the shared currency battery → a validated `number`. Mirrors
  *  cashflow-target.ts's `currencyAmount()` / planning-target's pattern — one adapter per
@@ -86,6 +89,21 @@ const priorYearBalance = () => z.union([z.null(), currencyAmount()]);
 const fractionRate = () =>
 	z.any().transform((val, ctx) => {
 		const r = sanitizeFractionRate(val);
+		if (!r.ok) {
+			ctx.addIssue({ code: z.ZodIssueCode.custom, message: r.reason });
+			return z.NEVER;
+		}
+		return r.value;
+	});
+
+/** Zod adapter over the integer-year battery → a validated `number` in [1913, 2100]. Sec F-4
+ *  (SELF-259 joint review, 2026-09-03): `tax_year` was the one numeric field on this surface
+ *  still using `z.coerce.number()` — coerce-not-reject, the inverse of every other field's
+ *  discipline. Same one-adapter-per-wrapped-sanitizer shape as `currencyAmount()` /
+ *  `fractionRate()` above. */
+const taxYear = () =>
+	z.any().transform((val, ctx) => {
+		const r = sanitizeYear(val);
 		if (!r.ok) {
 			ctx.addIssue({ code: z.ZodIssueCode.custom, message: r.reason });
 			return z.NEVER;
@@ -138,11 +156,15 @@ const MAX_ROWS = 50;
  * year of the US federal income tax) — team-lead-confirmed 2026-09-03. The upper bound (2100)
  * is NOT DB-sourced (no upper CHECK is confirmed); it is this schema's own defensive judgment
  * call, purely to reject an obviously-fat-fingered year, and may be loosened or dropped without
- * reconciling against any migration.
+ * reconciling against any migration. Routed through `sanitizeYear` (Sec F-4, SELF-259 joint
+ * review, 2026-09-03) — REJECT-not-coerce, same battery discipline as the currency/fraction
+ * fields, rather than `z.coerce.number()`, which silently accepted scientific notation
+ * (`"2e3"`), hex (`"0x7d0"`), whitespace-padded strings (`" 2000 "`), and single-element
+ * arrays (`[2000]`).
  */
 export const taxBracketScheduleReplaceSchema = z
 	.object({
-		tax_year: z.coerce.number().int().min(1913).max(2100),
+		tax_year: taxYear(),
 		schedule_type: taxBracketScheduleTypeSchema,
 		standard_deduction: nonNegativeCurrencyAmount(),
 		tax_balance_prior_year: priorYearBalance(),
