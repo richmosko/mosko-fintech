@@ -43,14 +43,22 @@
 --   definition, keeps writing nav_daily, and the checkpointed series stays the
 --   gross pre-tax definition permanently (R3). The two figures differ by exactly
 --   the designated ledgers' balances, and while no account is designated they
---   are equal — which is why the existing self227 (12) and self228 (D2) equality
---   legs stay green on their own fixtures rather than being retired.
+--   are equal — which is why the existing equality legs stay green on their own
+--   fixtures rather than being retired: 051's own (F1) / (F2)
+--   (`nav == fn_compute_nav(as_of, TRUE)` and `… FALSE`) and self227's (12).
+--   self228's (D2) is affected by the same fixture condition but asserts
+--   agreement with an independently-summed household total, not equality with
+--   fn_compute_nav. Every one of them holds only while no account in its fixture
+--   is designated; a fixture that designates one must re-derive them, not delete
+--   them.
 --
 -- ----------------------------------------------------------------------------
--- ONE EXTRACTED PREDICATE, ZERO COPIES — R3 rider 1 / ADR-063 Decision item 2.
---   `tax_jurisdiction is not null` is realized in exactly ONE object,
---   pfin.fn_tax_authority_ledgers(), and BOTH consumers call it: the YTD-Paid
---   primitive drives off it, and fn_nav_composition anti-joins against it.
+-- ONE EXTRACTED PREDICATE, ZERO READ-PATH COPIES — R3 rider 1 / ADR-063
+--   Decision item 2.
+--   `tax_jurisdiction is not null` has exactly ONE EXECUTABLE HOME,
+--   pfin.fn_tax_authority_ledgers(), and BOTH read consumers call it: the
+--   YTD-Paid primitive drives off it, and fn_nav_composition anti-joins against
+--   it.
 --   ⚠ WHY A SECOND COPY IS THE DEFECT ADR-063 NAMES: four restatements of one
 --   predicate drift independently and the drift is INVISIBLE, because each copy
 --   is locally plausible. Here the two copies would drift in opposite directions
@@ -64,6 +72,15 @@
 --   test would be the second realization of the same idea. The set form lets the
 --   jurisdiction filter be a REFINEMENT of the shared set rather than a parallel
 --   statement of it.
+--   ⚠ ONE further textual occurrence exists and CANNOT be routed through the
+--   helper: the partial unique index's own `where tax_jurisdiction is not null`
+--   predicate below. An index predicate must be IMMUTABLE, and a STABLE
+--   set-returning function is not indexable — so this is a constraint clause
+--   that the extraction discipline structurally cannot reach, not a read-path
+--   copy that was missed. Stated so a later reader does not "fix" it. ⚠ The
+--   residual is real: if the shared predicate ever NARROWS (say, to exclude
+--   closed accounts), the index will NOT follow and nothing will say so — the
+--   two must be changed together by hand.
 --   ⚠ CITATION NOTE: ADR-063 numbers its four protocols as ITEMS inside a single
 --   `### Decision` block, so *"ADR-063 Decision 2"* — the form the SELF-267 AC and
 --   R3 rider 1 both use — is not a well-formed pointer. Read as Decision ITEM 2
@@ -120,8 +137,12 @@
 --   LOCK 14 NOTE: the designation is a user-facing direct DB write, so it joins
 --   the Lock 14 CLASS — and class membership is not a catalogued instance
 --   (ADR-042's own Consequences ruling for the 058 fences). Its Lock 14 layers
---   are the app-layer validation (Backend/Frontend), the RLS WITH CHECK it
---   already inherits from 003+025, and the DB-level partial unique index below.
+--   are the app-layer validation (Backend/Frontend `.strict()` + the enum union)
+--   and the RLS WITH CHECK it already inherits from 003+025. Decision 4's
+--   numeric-input adversarial battery is INAPPLICABLE to an enum column rather
+--   than absent, and the partial unique index below is a correctness fence
+--   rather than one of Decision 4's enumerated Lock 14 components — named here
+--   so it is not counted as one.
 --
 -- ----------------------------------------------------------------------------
 -- JOINT-REVIEW-MANDATORY (Sec veto surface) — a money figure, a new column on a
@@ -409,7 +430,7 @@ revoke execute on function pfin.fn_ytd_paid_per_jurisdiction(date, pfin.tax_juri
 grant execute on function pfin.fn_ytd_paid_per_jurisdiction(date, pfin.tax_jurisdiction_enum) to authenticated;
 
 comment on function pfin.fn_ytd_paid_per_jurisdiction(date, pfin.tax_jurisdiction_enum) is
-  'SECURITY INVOKER §2.5.3 YTD-Paid read primitive (SELF-267 AC 4/5/5a; PRD §2.5.3.c; Lock 11 read-composition). Returns the caller''s tax-authority ledger balance for p_jurisdiction as of p_as_of: the ledgers come from pfin.fn_tax_authority_ledgers() (the single home of the designation predicate) and the balance from pfin.fn_account_cash_as_of (056), composed — NOT re-derived, because a second copy of that roll-forward fails apart from NAV and is green while NAV is wrong. WHAT A PAYMENT IS, since nothing per-row marks one: money sent to the authority lands on the designated ledger as a POSITIVE amount, so this figure is POSITIVE when payments have been made, and the paying account falls by the same amount on its own row. A REFUND is a negative amount on the ledger and REDUCES this figure. AN INBOUND TRANSFER is not distinguished from a payment and is not meant to be — every cash row on a designated ledger counts, which is the whole content of "no per-row is-payment flag", and there is deliberately no transaction_type filter, so an acct_setup opening row counts as payments already made. A CORRECTION is a new offsetting row (pfin.account_trans is immutable audit-class, 004) and nets in with no special handling. NOT CLAMPED: a net-negative figure means refunds exceeded payments and is reported rather than floored, because flooring would hide a data-entry error as a plausible zero — this is deliberately NOT symmetric with the R9 zero-clamp on Unrealized Tax Liability, and the two must not be reconciled. NOT is_tax_payment: ADR-062 scopes that flag to Expense-class prototypes while the seeded tax buckets (041) are Transfer-class, so it cannot reach them. NULL MEANS NO LEDGER IS DESIGNATED FOR THIS AUTHORITY; 0 means a designated ledger holding nothing — collapsing the two would report "not set up" as "nothing paid", which OVERSTATES Funds Due exactly as an unmarked ledger does. NATIVE currency, no fx term (inherited from 056); a non-USD designated ledger must be fx-normalized by the consumer. NO TENANT PARAMETER (a client-supplied tenant on an INVOKER function is either ignored or an ownership-forge vector) and the jurisdiction parameter is ENUM-typed so an unknown authority is a type error at the boundary rather than a silent $0. NO QUARTER PARAMETER: this is a balance as of a date, which is why the Federal Q4-due-Jan-15 hazard does not reach it; the render-window boundary is computed once in fn_compute_tax_liability and cited, and Sec M-4''s UTC year-boundary flag is broader than §2.5 and is NOT discharged here. INVOKER: a cross-tenant caller sees no ledgers => NULL, fails closed. set search_path = ''''; NOT a SECURITY DEFINER allowlist entry. Sec joint-review-mandatory (money figure); two-tenant pgTAP pairing ships same-PR.';
+  'SECURITY INVOKER §2.5.3 YTD-Paid read primitive (SELF-267 AC 4/5/5a; PRD §2.5.3.c; Lock 11 read-composition). Returns the caller''s tax-authority ledger balance for p_jurisdiction as of p_as_of: the ledgers come from pfin.fn_tax_authority_ledgers() (the single home of the designation predicate) and the balance from pfin.fn_account_cash_as_of (056), composed — NOT re-derived, because a second copy of that roll-forward fails apart from NAV and is green while NAV is wrong. WHAT A PAYMENT IS, since nothing per-row marks one: money sent to the authority lands on the designated ledger as a POSITIVE amount, so this figure is POSITIVE when payments have been made, and the paying account falls by the same amount on its own row. A REFUND is a negative amount on the ledger and REDUCES this figure. AN INBOUND TRANSFER is not distinguished from a payment and is not meant to be — every cash row on a designated ledger counts, which is the whole content of "no per-row is-payment flag", and there is deliberately no transaction_type filter, so an acct_setup opening row counts as payments already made. A CORRECTION is a new offsetting row (pfin.account_trans is immutable audit-class, 004) and nets in with no special handling. NOT CLAMPED: a net-negative figure means refunds exceeded payments and is reported rather than floored, because flooring would hide a data-entry error as a plausible zero — this is deliberately NOT symmetric with the R9 zero-clamp on Unrealized Tax Liability, and the two must not be reconciled. NOT is_tax_payment: ADR-062 scopes that flag to Expense-class prototypes while the seeded tax buckets (041) are Transfer-class, so it cannot reach them. NO YEAR LOWER BOUND, AND THE NAME OVERSTATES THE SCOPE: this is the ledger''s balance as of p_as_of since account inception, not a calendar-year flow. Nothing in V1 drains a designated ledger at a year boundary and account_tax_jurisdiction_uniq prevents a fresh ledger per tax year, so from the SECOND tax year onward this figure carries prior years'' payments forward — which OVERSTATES YTD Paid and therefore UNDERSTATES Funds Due, the under-reserving direction. The balance-as-of shape is F/CTO-ruled (sitting-log R8 rider, Seam B Option A, explicitly NOT re-opened); this clause records the consequence rather than the choice, so a later reader does not take the absence of a year bound as a question already asked and answered. THE ROLLOVER MECHANISM, AND V1 SHIPS NO OTHER: the user clears the old ledger''s designation and designates a fresh ledger for the new tax year — account_tax_jurisdiction_uniq is per user + jurisdiction, NOT per year, so a fresh designation is always available once the old one is cleared. V1 ships no year-end settle/drain affordance; whether it owes one is a booked product call. NULL MEANS NO LEDGER IS DESIGNATED FOR THIS AUTHORITY; 0 means a designated ledger holding nothing — collapsing the two would report "not set up" as "nothing paid", which OVERSTATES Funds Due exactly as an unmarked ledger does. NATIVE currency, no fx term (inherited from 056); a non-USD designated ledger must be fx-normalized by the consumer. NO TENANT PARAMETER (a client-supplied tenant on an INVOKER function is either ignored or an ownership-forge vector) and the jurisdiction parameter is ENUM-typed so an unknown authority is a type error at the boundary rather than a silent $0. NO QUARTER PARAMETER: this is a balance as of a date, which is why the Federal Q4-due-Jan-15 hazard does not reach it; the render-window boundary is computed once in fn_compute_tax_liability and cited, and Sec M-4''s UTC year-boundary flag is broader than §2.5 and is NOT discharged here. INVOKER: a cross-tenant caller sees no ledgers => NULL, fails closed. set search_path = ''''; NOT a SECURITY DEFINER allowlist entry. Sec joint-review-mandatory (money figure); two-tenant pgTAP pairing ships same-PR.';
 
 -- ----------------------------------------------------------------------------
 -- (6) THE §2.1.5 LEAF-SET EXCLUSION — SELF-267 AC 2a, F/CTO ruling R3 / E-2 (A).
