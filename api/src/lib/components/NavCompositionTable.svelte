@@ -7,7 +7,7 @@
 	The "composition foot" of the single-canvas §2.1 surface (P2 dense number-first): it sits
 	below the SELF-211 NAV headline on the root dashboard.
 
-	RATIFIED SHAPE (F/CTO 2026-08-02):
+	RATIFIED SHAPE (F/CTO 2026-08-02; SELF-268 V1.4 flip amends the tax-row treatment below):
 	  • 3 visual tiers (AC#4 · VD Item A, F/CTO-ratified): category group-header (normal row band,
 	    BOLD label + caret disclosure, row-hover) < buildup .subtotal (border-top-strong delimiter)
 	    < NAV .foot (2px border, bold, surface-alt) — tokens only (screen.css not loaded app-side).
@@ -19,10 +19,30 @@
 	  • VALUE-COLOR FENCE: --c-pos/--c-neg is ACTUAL-performance only → applied ONLY to the
 	    Unrealized G/L column. Positions (current value, negative liability subtotals, the
 	    Debt subtraction, a negative NAV) render in NEUTRAL ink (design-system-spec §5 fence 1).
-	  • Debt/tax signs (D5/D7): Debt row = −magnitude (subtraction); tax rows = `$0` + a V1.4
-	    caption (AC#6). Empty categories are omitted upstream → simply absent (D3).
+	  • Debt sign (D5): Debt row = −magnitude (subtraction). SELF-268 (R3 rider 5 / AC 2-3-7):
+	    the V1.1 tax-placeholder shape (`isTaxPlaceholder`, `$0` + a "V1.4 ramp" caption) is REMOVED
+	    — the two tax rows now render their real `displayValue`, UNFLIPPED (debt stays the ladder's
+	    only negation; see $lib/nav-composition.ts). ⚠ THIS WAS THE SILENT LAYER (R3 rider 5 part
+	    3): fixing 105 + nav-composition.ts and missing this file would still render `$0` here
+	    against correct upstream data, with a green suite. Empty categories are omitted upstream →
+	    simply absent (D3).
 	  • Whole-dollar, tabular-nums (D9): the NAV foot reads identical to the §2.1.1 headline and
 	    subtotals never appear off-by-rounding.
+	  • SELF-268 AC 9a — the §2.5.4 disclaimer (PRD verbatim) renders as a VISIBLE footnote under
+	    the Unrealized Tax Liability row (never hover-only — survives print/PDF/AT, same posture
+	    §2.4.4 requires of its informational marker).
+	  • SELF-268 AC 6 (EXPECTED CONTRACT, provisional pending migration 105 / Architect's A-vs-B
+	    ruling) — when `composition.tax_components` marks a tax scalar unavailable, its cell
+	    renders an "unavailable" notice instead of the dollar figure: `buildups.*_tax_liab` is 0 in
+	    that state per 105's own arithmetic constraint (can't subtract a JSON null), and rendering
+	    that 0 as a determination would be exactly the silent-zero defect this ruling exists to
+	    avoid. Absent `tax_components` → no notice (the field simply hasn't landed on 105 yet).
+	  • SELF-268 AC 10a / R3 riders 0b + 6 (EXPECTED CONTRACT, provisional) — `composition
+	    .excluded_tax_ledgers`, when present, names the accounts AC 3a excluded from the buildup as
+	    tax-authority ledgers. Rendering it (even when the list is empty) is what makes an UNMARKED
+	    designated account visible as "not excluded" — rider 0b's whole point. Absent the field →
+	    nothing renders here (a real payload gap to close with Architect/Backend, not invented via a
+	    second component-level query).
 
 	D1 stale-data-marker (SELF-229 ramp): the AGGREGATION-level badge is wired below off the SAME
 	whole-user `046` fn_aggregation_has_stale_constituent() payload the §2.1.1 headline already
@@ -51,7 +71,7 @@
 	Tokens only (var(--c-*)); no hardcoded hex/px-spacing/font (ADR-013 P5).
 -->
 <script lang="ts">
-	import type { NavComposition } from '$lib/nav-composition';
+	import type { NavComposition, TaxComponentStatus } from '$lib/nav-composition';
 	import { buildupRows } from '$lib/nav-composition';
 	import { accountTypeLabel } from '$lib/account-display';
 	import type { StalenessData } from '$lib/staleness/stale-constituent';
@@ -65,6 +85,37 @@
 
 	const groups = $derived(composition.groups);
 	const ladder = $derived(buildupRows(composition.buildups));
+
+	// SELF-268 AC 6 EXPECTED CONTRACT (provisional — see $lib/nav-composition.ts header).
+	// `??` here is safe (unlike the ADR-013 staleness fallbacks elsewhere in this codebase): an
+	// ABSENT `tax_components` means "105 doesn't emit this yet," not "confirmed available" — and
+	// `null` renders NO notice either way, never a fabricated availability claim.
+	const taxComponents = $derived(composition.tax_components ?? null);
+	function taxStatusFor(key: string): TaxComponentStatus | null {
+		if (!taxComponents) return null;
+		if (key === 'realized_tax_liab') return taxComponents.realized_tax_liab;
+		if (key === 'unrealized_tax_liab') return taxComponents.unrealized_tax_liab;
+		return null;
+	}
+	// Stable machine `reason` codes (104's vocabulary) → user-facing copy. Minimal V1.4 wording;
+	// UX/PM own the final phrasing (bubble-up) — this exists so an unavailable scalar never
+	// silently renders as its 0-for-arithmetic value (AC 6).
+	const UNAVAILABLE_REASON_COPY: Record<string, string> = {
+		no_schedule_any_year: 'no tax bracket schedule on file',
+		ytd_paid_unavailable: 'no tax-authority ledger designated',
+		no_ledger_designated: 'no tax-authority ledger designated'
+	};
+	function unavailableCopy(status: TaxComponentStatus): string {
+		if (status.status !== 'unavailable') return '';
+		return UNAVAILABLE_REASON_COPY[status.reason] ?? 'currently unavailable';
+	}
+
+	// SELF-268 AC 10a / R3 riders 0b + 6 EXPECTED CONTRACT (provisional — see $lib/nav-composition.ts
+	// header). `undefined`/`null` → render nothing (a real payload gap, not a "no exclusions" claim
+	// this component would have to invent). An empty ARRAY is a genuine, renderable fact — it means
+	// zero accounts are currently designated, which is exactly the unmarked-ledger state rider 0b
+	// needs made visible, so it is NOT treated the same as "field absent."
+	const excludedLedgers = $derived(composition.excluded_tax_ledgers ?? undefined);
 
 	// Whole-dollar USD — matches the §2.1.1 headline so the NAV foot reads identical to it
 	// (foot-to-NAV visual consistency; the exactness is a backend invariant on the raw numbers).
@@ -164,16 +215,31 @@
 
 		<tbody class="ladder">
 			{#each ladder as row (row.key)}
+				{@const taxStatus = taxStatusFor(row.key)}
 				<tr class="subtotal">
 					<th scope="row">
 						{row.label}
-						{#if row.isTaxPlaceholder}
-							<!-- AC#6 / D7 (VD Item B): extend the §2.5 source tag with the V1.4 trace.
-							     $0 stays a clean tabular value in the num column; this prose lives left. -->
-							<span class="tax-note">(from §2.5) · full estimate arrives in V1.4</span>
+						{#if row.key === 'unrealized_tax_liab'}
+							<!-- AC 9a — PRD §2.5.4 disclaimer VERBATIM, a visible footnote (never hover-only:
+							     survives print/PDF export and assistive technology, same posture §2.4.4
+							     requires of its informational marker). -->
+							<span class="tax-disclaimer">
+								Treat this as an LT-aware floor estimate, not a precise tax forecast.
+							</span>
 						{/if}
 					</th>
-					<td class="num">{row.isTaxPlaceholder ? usd.format(0) : usd.format(row.displayValue)}</td>
+					{#if taxStatus?.status === 'unavailable'}
+						<!-- AC 6 (EXPECTED CONTRACT, provisional — see $lib/nav-composition.ts header): the
+						     underlying buildups value is 0 here purely for 105's arithmetic (it cannot
+						     subtract a JSON null); rendering that 0 as though it were a determination is the
+						     exact silent-zero defect this branch exists to prevent. -->
+						<td class="num tax-unavailable">
+							Unavailable
+							<span class="tax-unavailable-reason">— {unavailableCopy(taxStatus)}</span>
+						</td>
+					{:else}
+						<td class="num">{usd.format(row.displayValue)}</td>
+					{/if}
 					<td class="num"></td>
 				</tr>
 			{/each}
@@ -185,6 +251,33 @@
 		</tbody>
 	</table>
 </div>
+
+<!-- AC 10a / R3 riders 0b + 6 (EXPECTED CONTRACT, provisional — see $lib/nav-composition.ts
+     header). Rendered even when the list is EMPTY: an unmarked tax-authority account becomes
+     visible as "not excluded" only because this note names what IS excluded — hiding an empty
+     state here would hide the exact default-state failure rider 0b names. Absent the field
+     entirely (105 doesn't emit it yet) → nothing renders; that gap is reported upstream, never
+     papered over with a second component-level query. -->
+{#if excludedLedgers !== undefined}
+	<div class="exclusion-note">
+		{#if excludedLedgers.length > 0}
+			<p class="exclusion-line">
+				Excluded from Net Worth above as tax-authority ledgers (their balance moves NAV only
+				through the Realized Tax Liability line):
+			</p>
+			<ul class="exclusion-list">
+				{#each excludedLedgers as ledger (ledger.account_id)}
+					<li><a class="leaf-link" href={`/accounts/${ledger.account_id}`}>{ledger.account_name}</a></li>
+				{/each}
+			</ul>
+		{:else}
+			<p class="exclusion-line">
+				No accounts are currently designated as tax-authority ledgers — none are excluded from
+				Net Worth above.
+			</p>
+		{/if}
+	</div>
+{/if}
 </section>
 
 <style>
@@ -337,14 +430,29 @@
 		border-top: 1px solid var(--c-border-strong);
 		font-weight: var(--weight-semi);
 	}
-	/* The V1.4 tax caption (AC#6 / VD Item B): quiet sub-line beneath the row label. Muted,
-	   fs-small, regular weight, roman (NOT italic — italic is reserved for .disclaimer/empty). */
-	.tax-note {
+	/* AC 9a — the §2.5.4 disclaimer: a quiet sub-line beneath the Unrealized Tax Liability row
+	   label, VISIBLE without hover (not a title attribute — survives print/PDF/AT). Same
+	   treatment family as the old V1.1 tax caption this replaces: muted, fs-small, regular
+	   weight, roman (NOT italic — italic is reserved for .disclaimer/empty elsewhere). */
+	.tax-disclaimer {
 		display: block;
 		margin-top: var(--space-1);
 		font-size: var(--fs-small);
 		font-weight: var(--weight-reg);
 		color: var(--c-text-muted);
+	}
+
+	/* AC 6 (EXPECTED CONTRACT, provisional) — an unavailable tax scalar's cell. Muted, NOT
+	   --c-neg/--c-attn: this is an availability fact, not a bad value or an actionable warning
+	   (same register as the CPI-unavailable / insufficient-history cells elsewhere in this
+	   surface family). */
+	.tax-unavailable {
+		font-weight: var(--weight-reg);
+		font-style: italic;
+		color: var(--c-text-muted);
+	}
+	.tax-unavailable-reason {
+		font-size: var(--fs-small);
 	}
 
 	/* ── Tier 3 — NAV foot (locked tr.foot; dominant, echoes the §2.1.1 headline). ── */
@@ -354,5 +462,27 @@
 		border-bottom: none;
 		font-weight: var(--weight-bold);
 		background: var(--c-surface-alt);
+	}
+
+	/* AC 10a / R3 riders 0b + 6 (EXPECTED CONTRACT, provisional) — the excluded-tax-ledger note
+	   below the table. Same basis-line register NavHistoryChart / NavDeltaPanel use for their
+	   own disclosures, so this surface's provisional notice reads as part of the same system. */
+	.exclusion-note {
+		margin-top: var(--space-3);
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-1);
+	}
+	.exclusion-line {
+		margin: 0;
+		font-size: var(--fs-small);
+		color: var(--c-text-secondary);
+		line-height: var(--lh-body);
+	}
+	.exclusion-list {
+		margin: 0;
+		padding-left: var(--space-5);
+		font-size: var(--fs-small);
+		color: var(--c-text-secondary);
 	}
 </style>

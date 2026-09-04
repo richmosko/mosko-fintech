@@ -1,7 +1,8 @@
-// nav-composition.test.ts — unit battery for the §2.1.5 buildup-ladder logic (SELF-226).
-// Browser-safe, dep-free (node env). NavCompositionTable.svelte is a thin presentational
-// shell over buildupRows(); exercising it here proves the AC#4 EXACT order + the D5 debt
-// sign flip + the AC#6 tax-placeholder flagging deterministically WITHOUT a DOM env.
+// nav-composition.test.ts — unit battery for the §2.1.5 buildup-ladder logic (SELF-226 · V1.1;
+// SELF-268 V1.4 flip). Browser-safe, dep-free (node env). NavCompositionTable.svelte is a thin
+// presentational shell over buildupRows(); exercising it here proves the AC#4 EXACT order + the
+// D5 debt sign flip + SELF-268 AC 7 / M-3's "exactly one flip in the ladder" invariant
+// deterministically WITHOUT a DOM env.
 
 import { describe, it, expect } from 'vitest';
 import { buildupRows, type NavCompositionBuildups } from './nav-composition';
@@ -10,8 +11,8 @@ const b: NavCompositionBuildups = {
 	total_non_re: 800_000,
 	gross_total: 1_000_000,
 	debt: 150_000, // POSITIVE magnitude per the 051 contract
-	realized_tax_liab: 0,
-	unrealized_tax_liab: 0
+	realized_tax_liab: 5_000, // SELF-268: real value, POSITIVE magnitude (AC 7 / M-3)
+	unrealized_tax_liab: 2_500 // SELF-268: real value, POSITIVE magnitude (AC 7 / M-3)
 };
 
 describe('buildupRows — the ratified ladder (AC#4 EXACT order)', () => {
@@ -54,18 +55,27 @@ describe('buildupRows — Debt sign flip (D5)', () => {
 	});
 });
 
-describe('buildupRows — tax placeholder flagging (AC#6 / D7 · V1.1 Option A)', () => {
-	it('flags ONLY the two tax rows as placeholders (they carry the V1.4 caption + render $0)', () => {
-		const flagged = buildupRows(b)
-			.filter((r) => r.isTaxPlaceholder)
-			.map((r) => r.key);
-		expect(flagged).toEqual(['realized_tax_liab', 'unrealized_tax_liab']);
+describe('buildupRows — SELF-268 tax-line flip: real values, NO second sign flip (AC 7 / M-3)', () => {
+	it('a NON-ZERO helper value reaches the rendered cell (AC 10 — not merely "$0 is absent")', () => {
+		const rows = buildupRows(b);
+		expect(rows.find((r) => r.key === 'realized_tax_liab')?.displayValue).toBe(5_000);
+		expect(rows.find((r) => r.key === 'unrealized_tax_liab')?.displayValue).toBe(2_500);
 	});
 
-	it('never flags the asset/debt rows as placeholders', () => {
+	it('renders the tax rows UNFLIPPED — positive magnitude in, positive magnitude out', () => {
+		const rows = buildupRows({ ...b, realized_tax_liab: 12_345, unrealized_tax_liab: 999 });
+		expect(rows.find((r) => r.key === 'realized_tax_liab')?.displayValue).toBe(12_345);
+		expect(rows.find((r) => r.key === 'unrealized_tax_liab')?.displayValue).toBe(999);
+	});
+
+	it('exactly ONE flip in the whole ladder: only debt.displayValue is the negation of its raw magnitude', () => {
 		const rows = buildupRows(b);
-		expect(rows.find((r) => r.key === 'total_non_re')?.isTaxPlaceholder).toBe(false);
-		expect(rows.find((r) => r.key === 'gross_total')?.isTaxPlaceholder).toBe(false);
-		expect(rows.find((r) => r.key === 'debt')?.isTaxPlaceholder).toBe(false);
+		const flippedKeys = rows
+			.filter((r) => {
+				const raw = b[r.key as keyof NavCompositionBuildups];
+				return r.displayValue === -raw && raw !== 0;
+			})
+			.map((r) => r.key);
+		expect(flippedKeys).toEqual(['debt']);
 	});
 });

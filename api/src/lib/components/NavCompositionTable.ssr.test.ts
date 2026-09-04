@@ -8,7 +8,12 @@
 //     /accounts/[id] link + G/L cells are not in the initial output; the caret is the ▸ (closed)
 //     glyph; every group toggle is a <button aria-expanded="false"> (keyboard-native disclosure).
 //   • Buildup ladder EXACT order + labels (AC#4) + the Debt SUBTRACTION render (D5: −magnitude).
-//   • Tax placeholders render `$0` + the V1.4 caption (AC#6 / D7).
+//   • SELF-268 V1.4 flip: the two tax rows render their REAL, UNFLIPPED positive values (AC 7 /
+//     M-3 / AC 10) — the V1.1 `isTaxPlaceholder` `$0` + "V1.4 ramp" caption shape is GONE.
+//   • SELF-268 AC 9a: the §2.5.4 disclaimer renders as a visible footnote (no hover-only).
+//   • SELF-268 AC 6 / AC 10a (EXPECTED CONTRACT, provisional — see $lib/nav-composition.ts):
+//     `tax_components` unavailable rendering and `excluded_tax_ledgers` rendering, each proven
+//     present AND absent (graceful no-op when 105 hasn't landed the field yet).
 //   • NAV foot renders whole-dollar, echoing the §2.1.1 headline (D9).
 //   • Empty categories are absent upstream → a groups:[] tree still renders the ladder + NAV.
 //
@@ -47,8 +52,8 @@ const fixture: NavComposition = {
 		total_non_re: 500_000,
 		gross_total: 500_000,
 		debt: 150_000, // positive magnitude (051 contract)
-		realized_tax_liab: 0,
-		unrealized_tax_liab: 0
+		realized_tax_liab: 4_200, // SELF-268: real value, positive magnitude (AC 7 / M-3)
+		unrealized_tax_liab: 1_800 // SELF-268: real value, positive magnitude (AC 7 / M-3)
 	},
 	nav: 350_000
 };
@@ -84,7 +89,7 @@ describe('NavCompositionTable — collapse default COLLAPSED (AC#2)', () => {
 	});
 });
 
-describe('NavCompositionTable — buildup ladder (AC#4) + signs (D5) + tax placeholders (AC#6/D7)', () => {
+describe('NavCompositionTable — buildup ladder (AC#4) + signs (D5) + SELF-268 real tax values (AC 7 / AC 10)', () => {
 	it('renders the ladder labels in the exact ratified order', () => {
 		const { body } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: fixture } });
 		const order = ['Total Non-RE', 'Gross Total', 'Debt', 'Realized Tax Liab', 'Unrealized Tax Liab'];
@@ -101,16 +106,95 @@ describe('NavCompositionTable — buildup ladder (AC#4) + signs (D5) + tax place
 		expect(body).toContain('-$150,000');
 	});
 
-	it('renders the two tax placeholders as $0 + the V1.4 caption (AC#6 / D7)', () => {
+	it('AC 10 — a NON-ZERO helper value reaches the rendered cell (asserts the number, not the absence of "$0")', () => {
 		const { body } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: fixture } });
-		expect(body).toContain('$0');
-		expect(body).toContain('(from §2.5) · full estimate arrives in V1.4');
+		expect(body).toContain('$4,200');
+		expect(body).toContain('$1,800');
+	});
+
+	it('AC 7 / M-3 — the tax rows render UNFLIPPED (no leading minus sign; debt stays the only negation)', () => {
+		const { body } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: fixture } });
+		expect(body).not.toContain('-$4,200');
+		expect(body).not.toContain('-$1,800');
+	});
+
+	it('the V1.1 tax-placeholder shape is GONE: no "$0" tax rows, no V1.4-ramp caption text', () => {
+		const { body } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: fixture } });
+		expect(body).not.toContain('(from §2.5) · full estimate arrives in V1.4');
 	});
 
 	it('renders the NAV foot whole-dollar (echoes the §2.1.1 headline, D9)', () => {
 		const { body } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: fixture } });
 		expect(body).toContain('Net Assets Value (NAV)');
 		expect(body).toContain('$350,000');
+	});
+});
+
+describe('NavCompositionTable — SELF-268 AC 9a: the §2.5.4 disclaimer is a visible footnote (never hover-only)', () => {
+	it('renders the PRD-verbatim disclaimer text in the page body itself (not a title attribute)', () => {
+		const { body } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: fixture } });
+		expect(body).toContain('Treat this as an LT-aware floor estimate, not a precise tax forecast.');
+		// A title attribute would put the text INSIDE a `title="..."`, invisible to SSR body text
+		// unless it's real rendered content — assert it's not merely present as an attribute value.
+		expect(body).not.toContain('title="Treat this as an LT-aware floor estimate');
+	});
+});
+
+describe('NavCompositionTable — SELF-268 AC 6 (EXPECTED CONTRACT, provisional): tax_components availability', () => {
+	it('absent `tax_components` → no "Unavailable" notice renders (graceful no-op, not a crash)', () => {
+		const { body } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: fixture } });
+		expect(body).not.toContain('Unavailable');
+	});
+
+	it('an unavailable realized scalar renders "Unavailable" instead of its $0 buildups value — never a silent zero', () => {
+		const unavailable: NavComposition = {
+			...fixture,
+			buildups: { ...fixture.buildups, realized_tax_liab: 0 },
+			tax_components: {
+				realized_tax_liab: { status: 'unavailable', reason: 'no_ledger_designated' },
+				unrealized_tax_liab: { status: 'computed' }
+			}
+		};
+		const { body } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: unavailable } });
+		expect(body).toContain('Unavailable');
+		expect(body).toContain('no tax-authority ledger designated');
+	});
+
+	it('a computed status renders the real dollar figure, no "Unavailable" text', () => {
+		const computed: NavComposition = {
+			...fixture,
+			tax_components: {
+				realized_tax_liab: { status: 'computed' },
+				unrealized_tax_liab: { status: 'computed' }
+			}
+		};
+		const { body } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: computed } });
+		expect(body).not.toContain('Unavailable');
+		expect(body).toContain('$4,200');
+	});
+});
+
+describe('NavCompositionTable — SELF-268 AC 10a / R3 rider 0b+6 (EXPECTED CONTRACT, provisional): excluded_tax_ledgers', () => {
+	it('field absent → no exclusion note renders at all (a real payload gap, never a fabricated claim)', () => {
+		const { body } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: fixture } });
+		expect(body).not.toContain('tax-authority ledgers');
+	});
+
+	it('field present but EMPTY → renders the "none excluded" line — the unmarked-ledger visibility rider 0b requires', () => {
+		const noneExcluded: NavComposition = { ...fixture, excluded_tax_ledgers: [] };
+		const { body } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: noneExcluded } });
+		expect(body).toContain('No accounts are currently designated as tax-authority ledgers');
+	});
+
+	it('field present with entries → names each excluded account, linked to its /accounts/[id] page', () => {
+		const withExclusion: NavComposition = {
+			...fixture,
+			excluded_tax_ledgers: [{ account_id: 99, account_name: 'IRS Escrow' }]
+		};
+		const { body } = render(NavCompositionTable, { props: { staleness: EMPTY_STALENESS, composition: withExclusion } });
+		expect(body).toContain('Excluded from Net Worth above as tax-authority ledgers');
+		expect(body).toContain('IRS Escrow');
+		expect(body).toContain('/accounts/99');
 	});
 });
 
