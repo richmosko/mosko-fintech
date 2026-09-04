@@ -43,4 +43,14 @@ battery leg, not a constraint trigger.
   argument must be re-made against a different property. An analysis that reads as
   unconditional gets carried across a decision it never covered.
 
+- ⚠ **A UNIQUE constraint can make an "ordering" requirement by-construction, and the
+  requirement's own wording hides it.** SELF-259's AC named *"bracket-row
+  monotonicity"* without naming a column. `unique (schedule_id, bracket_floor)` already
+  makes a schedule's floors pairwise **distinct**, and any distinct numeric set is
+  **totally ordered** — so a floor-ordering trigger leg could never fire. The
+  falsifiable set property was the **PAIRING**: rate non-decreasing in ascending floor
+  order, which no unique constraint and no per-row check can see. **When a spec says
+  "monotonic / ordered / sequential" but does not name the column, find the one whose
+  ordering is not already given away by a key.**
+
 Related: [[structural-fence-must-cover-the-same-class]] · [[fixture-is-shared-state]]

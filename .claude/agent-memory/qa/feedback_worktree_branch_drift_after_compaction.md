@@ -67,3 +67,21 @@ creates a NEW file (not editing one already read from the correct path), spell o
 path starting from the worktree root explicitly in the call, and if in doubt, `ls` the target
 directory via Bash immediately beforehand to confirm it's the worktree's copy, not main's — do not
 rely on "I've been `cd`-ing to the worktree in Bash" to carry over to Write/Edit.
+
+**RECURRED a fifth time (SELF-259, 2026-09-03) — a BENIGN mechanism, but real scope
+consequences.** Mid-authoring, `git status --short --branch` on the correctly-checked-out qa
+worktree started reporting `[behind 2]` against `origin/feature/self-259` — Architect had pushed
+two follow-on commits to the SHARED branch the QA branch was built from (a legitimate, expected
+sibling-branch pattern this time, not a stray detach). One of those two commits added an entire
+THIRD function to the migration (a directly-callable SECURITY INVOKER write body) that the original
+dispatch never mentioned, because it did not exist yet when the dispatch was written. `git merge
+--ff-only origin/feature/self-259` picked it up cleanly (zero conflict, since my own branch had no
+commits of its own yet — pure fast-forward), but the real cost wasn't the merge, it was that the
+battery already drafted against the stale tip was now missing coverage for a real, undispatched,
+security-relevant surface. **How to apply:** re-check `git status --short --branch` (not just `git
+log -1`) at least once before the FINAL commit/push of any multi-hour battery-authoring task, even
+when the initial checkout was correct — a sibling branch can move out from under you mid-task
+without any local detach at all. If it has, diff the sibling's new commits (`git log
+<old>..<new>` + `git diff --stat`) before merging, not just take it — a new FUNCTION/TABLE/POLICY
+in that diff is a coverage decision (extend now vs. flag for a follow-up), not something to silently
+absorb or silently ignore.
