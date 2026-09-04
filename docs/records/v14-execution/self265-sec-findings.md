@@ -133,3 +133,43 @@ I began this review treating the brief's item-7 statement (*"104 ignores + flags
 ### ⚠ Correcting the notification that prompted this block, because the error direction matters
 
 The message said *"no file under review changed."* Measured, that is **false as stated and true only of `api/`**: `DECISIONS.md` moved 16 lines and `104` moved 278 between `ba8938c` and the tip — and those are precisely the two files F-1 was about. The framing would have had me leave a **cleared blocker standing** against the branch. That is the exact inverse of the error recorded at the foot of the review above, from the same brief, in the same review: there I nearly accepted a premise that a control existed when it did not; here I was invited to accept a premise that nothing had moved when the thing that moved was the finding's whole subject. **Both directions are the same failure — taking a claim about the tree from a message instead of from the tree — and a "not a scope change, FYI" framing is what makes the second one easy to wave through.**
+
+---
+
+## Re-look — requested at `9c9bda8`, MEASURED at `b2fbe38`. Appended, not rewritten.
+
+⚠ **The ref moved between the request and the measurement, and the anchor is the sha I measured.** Team-lead asked for a re-look at `origin/feature/self-265` @ `9c9bda8`; by the time I read it the branch was **`b2fbe38be35767c3ea26b4dbcaf20fffb0cdca5f`**. `git diff --stat 9c9bda8 origin/feature/self-265` → **one file, 30 insertions: this findings file** — `b2fbe38` merges `feature/self-265-sec` @ `4445597`, i.e. the clearance block above. **No code, migration or doc other than this file differs between the two shas**, so everything verified below holds identically at `9c9bda8`. It is anchored to `b2fbe38` regardless, because a verdict names the ref it was taken against.
+
+`origin/main` @ `346d204`.
+
+### F-1 — **CONFIRMED CLEARED**, re-measured against `main` rather than against the sibling branch.
+
+`git diff --stat origin/main origin/feature/self-265 -- supabase/migrations/104_fn_compute_tax_liability.sql DECISIONS.md supabase/tests/rls/104_fn_compute_tax_liability.sql` → **empty**. This is the corrected predicate: `104` is on `main` now (PR #612), so byte-identity against `main` is the check that keeps meaning something once `feature/self-262` is deleted. **F-2 cleared with it**, as ruled.
+
+### F-3 — **CLOSED.** Fix and watcher both verified by reading, and the inversion claim checked leg by leg.
+
+**The fix** (`DeleteScheduleControl.svelte:41–57`): `result.type === 'failure'` flattens `Object.values(data?.errors ?? {})` and joins every message, falling back to a generic string when the envelope is empty or absent; `result.type === 'error'` renders its own generic; `update({ reset: false })` on every path. The 409 seed-template refusal, the 400 invalid-schedule case and both 500s now all reach the user. Optional chaining plus the `?? {}` default means a malformed or missing `data` degrades to the generic message rather than throwing inside the callback — which matters, because a throw there would restore the silence this finding is about.
+
+**The watcher** (`DeleteScheduleControl.dom.test.ts`, 5 legs). Frontend reported *"3 of 5 legs red pre-fix"*. **I checked which two did not red, because an unexplained non-failing leg is the tell for a vacuous test, and both are legitimately non-failing:**
+
+| Leg | Pre-fix | Correct? |
+|---|---|---|
+| 409 `_form` renders + `update({reset:false})` | RED | ✔ the finding itself — and it also pins the `update` argument, which the pre-fix bare `update()` fails independently of the message |
+| multiple field errors joined when `_form` absent | RED | ✔ |
+| generic message on `result.type === 'error'` | RED | ✔ |
+| pre-existing `deleted:false` message still renders | GREEN | ✔ **regression guard on behaviour that already worked** — it must pass before and after; red here would mean the fix broke the one branch that was fine |
+| clean success renders **no** message | GREEN | ✔ **negative control** — it reds if a future edit makes the failure branch fire on success, or introduces a default message |
+
+**3 red + 1 regression guard + 1 negative control is the right composition, not a shortfall.** The isolation technique is sound: a file-scoped `vi.mock('$app/forms')` that actually invokes the returned result-callback (the shared `tests/stubs/app-forms.ts` deliberately does not), so it cannot leak into sibling files.
+
+### Nothing else moved.
+
+`git diff --stat ba8938c origin/feature/self-265 -- api/` → **`DeleteScheduleControl.svelte` (+20/−1) and its new dom test only**. Every other file on the SELF-265-authored surface — loader, three form actions, shared replace-all helper, Zod schema, client mirrors, the two other components — is byte-unchanged from the original review. `101` and `103` untouched. Zero added or removed `DECISIONS.md` lines mention ADR-011 Decision 3, 4 or 18. **The verify-hook discharge at the head of this file stands without re-running.**
+
+---
+
+## **FINAL VERDICT AT `b2fbe38`: GREEN. No open findings.**
+
+F-1 cleared, F-2 cleared with it, F-3 closed with a non-vacuous watcher. No blocking condition, no flag, nothing routed onward. **No further Sec commit is owed on this issue** — one last merge of `feature/self-265-sec` puts this section on the branch and the artifact is final.
+
+**One note, explicitly NOT a Sec finding.** The refusal renders into `<p class="delete-note" role="status">` (line 79) — a *polite* live region. For a refusal an *assertive* `role="alert"` is the conventional choice, and it is what the editor's own error banner already uses. Accessibility, Frontend's call, no security consequence either way; recorded so the inconsistency is a decision rather than an oversight.
