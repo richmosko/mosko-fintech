@@ -437,8 +437,10 @@
 --   file, ON PURPOSE.
 --
 --   WHY OPTION (A) WAS NOT TAKEN. The repo's own convention for exactly that
---   situation is `add column if not exists` — 13 migrations use it (010, 012,
---   015, 017, 019, 030, 033, 037, 044, 045, 058, 085, 091). Taking it here
+--   situation is `add column if not exists` — the migrations that use it are
+--   010, 012, 015, 017, 019, 030, 033, 037, 044, 045, 058, 085, 091 (no count
+--   is stated: this header's own prose now contains the phrase, so a grep
+--   over-counts by one — Sec E-1). Taking it here
 --   would oblige a backfill story for a NOT NULL column: what label an
 --   already-existing schedule row gets, and on whose authority. That story
 --   would be fiction. The only databases that ever held the pre-E27 form (no
@@ -702,7 +704,10 @@ comment on column pfin.tax_bracket_schedule.schedule_label is
   'whitespace — NBSP U+00A0, U+2028, and their kin — is therefore DB-LEGAL and '
   'APP-ILLEGAL: the app would reduce it to the empty string and reject it, '
   'while the database sees a one-character value equal to its own btrim and '
-  'accepts it. That row is visually blank and structurally valid. Widening the '
+  'accepts it. That row is visually blank and structurally valid. A SECOND '
+  'divergence, same class: btrim reaches only the ends, so a tab or newline '
+  'INSIDE the text passes this CHECK while the app refuses it (control-character '
+  'rejection) — self-inflicted, own row, no cross-tenant reach (Sec E-2). Widening the '
   'CHECK to a Unicode whitespace class was NOT done, because it would put a '
   'character-class definition in the constraint that the app''s definition '
   'could still drift from, trading a stated residual for an unstated one. '
