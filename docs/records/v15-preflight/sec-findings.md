@@ -351,3 +351,209 @@ The single test that would catch a real violation, for the P10 battery to absorb
 Every count in this file states what it is over. No count is stated over the Decision-3 family, the §10 catalogued ledger, or the SECURITY DEFINER allowlist — all three are read live from `DECISIONS.md` at review time, and this file cites them by shape rather than by tally, deliberately.
 
 One drafted assertion I checked and did **not** find defective, recorded because an unstated check reads as an unexamined one: A4's claim that *"TenantBoundConnection fence (Wave 1 E2) applies to `pfin_back_etl` Python; PDF worker has NO DB connection so no TBC fence needed"* is consistent with `scripts/ci/fence-tbc-node.sh`'s own header at `b90b846`, which records the same reasoning. It is true today and is a premise rather than a control — F-6 names the condition under which it stops holding.
+
+---
+---
+
+# Round 2
+
+**Sibling refs, re-read from `origin` in this session — not taken from the round-2 brief.**
+
+| Ref | sha | Artifact | md5 (from the ref) |
+|---|---|---|---|
+| `origin/meta/v15-preflight-arch` | `66288e0` | `architect-findings.md` | `d43968e7795e0bd65842d8a20819bd5c` |
+| " | " | `rederived-acs.md` | `f3335c4840b22dabb5cdeb665b6651f1` |
+| `origin/meta/v15-preflight-pm` | `4c9f628` | `pm-findings.md` | `06db14a407c89cf5dedc4ecfffb39c5d` |
+
+All three agree with the brief. `git merge-base origin/main <each>` = `b90b846` for both siblings, and `git diff --stat origin/main <each>` shows each touches only its own records file and its own agent-memory — **no carried sibling blobs, no cross-contamination**, so the baseline this file was written against is still the baseline all three describe. `origin/main` re-read at the start of this pass: unmoved at `b90b846`.
+
+Sibling findings are cited **by their own ids and never restated**. Where I confirm one, I say so and stop; where my round-1 text is now wrong, I say *retracted* and say why. Nothing below re-decides a ratified lock.
+
+**§10 three-axis cross-check re-run** against ADR-011 Decision 4 read live at `b90b846` before drafting this section. Round 2 touches the ledger by reference only — still Path B. It states no ledger tally. ⚠ The catalogued set and the CI-fenced set remain different sets and are not reconciled here; N-4 below concerns the CI-fenced side only and explicitly does not move the catalogued side.
+
+---
+
+## R2.1 — Position on S-1 (Architect `S-1` = PM `A-5`)
+
+**I confirm the seam and I confirm it is a one-way door.** My round-1 M-1 and M-5 each touched one edge of it; neither reached the structural claim, which is Architect's: **read-time recomposition cannot reproduce the settings-derived cells of a past month, because Lock 14 locks the settings store as UPSERT-in-place with no edit-history rows.** That is not a gap in my round-1 pass I want to paper over — I found the two symptoms (a live owner header, a live-recompute contradiction) and did not find the cause.
+
+### Position: **Option A (freeze the rendered payload)**, and **I veto Option B**.
+
+**Why A, on grounds only this role supplies.** Under A the report is **one stored artifact** that both the in-app view and the PDF read. That makes the P10 tenant-isolation battery's job finite: there is a single object to fence and a single read path to prove. Under C there are two render paths and the battery must prove tenancy on both, forever, including for every §2.x surface added later — and the two-path boundary is exactly the seam where a future contributor puts a section on the wrong side without noticing. Under B there is no artifact at all.
+
+**The veto on Option B, stated without hedging.** B renders unrecoverable past state as present fact on an audit-class artifact the user archives. F/CTO sign-off is required to override, and I would want that override recorded rather than assumed.
+
+⚠ **I am scoping the veto's ground precisely, because half of the precedent transfers and half does not, and overclaiming here would be the error I flag in others.** ADR-067 Decision 3 records a **Sec VETO on Option C (backfill the series)** — read verbatim at `b90b846`: *"**Option C** (backfill the series) carries a recorded **Sec VETO**, reached independently by Architect, Sec and PM."* Its two grounds, from the V1.4 record:
+
+- **Ground (i) — a backfill rewrites an append-only audit surface.** This does **NOT** transfer to S-1 Option B. B writes nothing; there is no rewrite.
+- **Ground (ii) — the tax state for a past date is not recoverable, so the values would be fabricated.** This **DOES** transfer, and it transfers intact. Rendering April's report from September's schedules, September's designations and September's `%Target` values produces figures that were never true of April, presented on a document whose own PRD contract (§2.6.4 φ-1) promises they are. Stored or not stored is immaterial to ground (ii); *presented as a measurement* is the whole of it.
+
+So the veto rests on ground (ii) alone, and it is enough. **Losing side of vetoing B, named:** B is genuinely the cheapest option and the only one requiring no new storage; if the PRD's φ-1 commitment were itself reopened and narrowed, the veto's basis would narrow with it — which is why PM's A-5 Option (A) (*amend φ-1 to name the exceptions, loudly labelled*) is a **different proposal from S-1 Option B and is not vetoed by this.** It is honest where B is not: it changes the promise instead of breaking it. I have no security objection to PM's A-5 (A) as a product call, only the standing requirement that the label be rendered on the historical report and not merely recorded in the PRD.
+
+**Between A and C.** Architect leans A; PM's A-5 leans (B) — *freeze only the history-less inputs, recompose everything that has history* — which is Architect's Option C by another route. **I back A over the hybrid**, and the reason is a security-testability one rather than an architectural one: the hybrid's per-section boundary is a classification that must be re-applied by every future author of a §2.x surface, and a misclassification is silent — the section simply recomposes and nobody sees a symptom. **Losing side of A, named, and it is real:** A pays a permanent payload-compatibility cost that the hybrid pays for only four of six sections, and Architect's `payload_schema_version SMALLINT` mitigation is a mitigation, not an elimination. If F/CTO weights payload-compat above render-path unity, PM's (B) / Architect's C is defensible and I will not block it — I would then require the section classification to be stated **in the schema** (a per-section frozen/recomposed marker on the child), not in prose, so a misclassification is a visible column value rather than an absence.
+
+**⚠ N-1 — a citation-form correction, raised because the S-1 argument will be quoted into an ADR.** Architect's S-1 presents the ground-(ii) sentence as ADR-067 Decision 3's own words: *"ADR-067 Decision 3 rules, on `nav_daily`: 'the tax state for a past date is not recoverable, so a back-fill would be a fabrication with the shape of a measurement (Sec veto).'"* **That sentence is not in `DECISIONS.md`.** `git grep -n 'shape of a measurement' b90b846` returns five hits, all in `docs/records/` — `v14-preflight/architect-findings.md:219` and `:479`, `v14-preflight/rederived-acs.md:177`, `v14-execution/self268-sec-findings.md:119`, and my own `v14-preflight/sec-findings.md:1046`. The **ruling** is correctly attributed and real; the **rationale sentence** is from the V1.4 pre-flight records, which are not canon. The substance survives untouched — I have just relied on it myself, above. What must not happen is the sentence entering a V1.5 migration header or an ADR as a quotation *of ADR-067*, which is the ADR-011 Decision 4 PR #476 "right ruling, wrong pointer" class. **Fix: cite ADR-067 D3 for the veto, cite the records file for the rationale, or promote the sentence into the ADR deliberately.** Not a substantive finding; a five-word attribution fix.
+
+---
+
+## R2.2 — Position on S-2 (Architect `S-2` = PM `D-7`)
+
+**I confirm the inversion, and I confirm I missed it.** I did not read `docs/ARCH/index.html` §3.2 in round 1. Re-measured myself at `b90b846`: `docs/ARCH/index.html:325` reads `PW->>V1: "GET /internal/pdf-render + signed JWT"`, `:330` reads `V1-->>PW: Rendered HTML`, `:332` reads `PW->>Pup: "Load HTML in browser-context-per-render"`. **The worker pulls.** The drafts invert it.
+
+### Position: **Option C (the app composes and escapes; the worker receives finished HTML and returns PDF bytes)** — with two conditions Architect's option does not carry.
+
+**Why C.** It removes the impersonation surface entirely. Under Option A the app must serve a rendered page *for a user identity* to a machine caller with no user session — that is S-3, it is unsolved, and a tenant-confusion defect there is silent and leaks exactly the data the whole RLS posture exists to protect. Under C the composition happens under the user's own live session with their own RLS, and the worker becomes a pure function. **Trading a silent tenant-confusion class for a loud network class is the right trade on a fintech surface.**
+
+**⚠ The losing side of C, named — and Architect's S-2 does not name it.** C makes the HTML body an **inbound network input to a browser engine**. Under Option A the worker only ever loads what it fetched from a known app URL; under C anyone who can reach the worker's port supplies arbitrary HTML to Puppeteer. The concrete consequence is not abstract: `<iframe src="file:///proc/self/environ">` rendered into a PDF the caller receives back exfiltrates `PDF_WORKER_SIGNING_KEY`, which is that container's only secret and therefore its entire compromise. Two conditions follow, and **C is not safe without both**:
+
+1. **The worker renders with all outbound and local resource loading denied.** `page.setContent()` plus request interception that aborts every request whose scheme is not `data:` — no `file:`, no `http`, no `https`. Lock 13 mod #7's shipped hardening list (system-fonts-only, `--disable-features=BackgroundFetch,ServiceWorker,BackgroundSync`, cache-disable, per-render metadata clear) does **not** contain this, so it is an addition rather than an inheritance. **Catch criterion:** POST HTML containing `<iframe src="file:///proc/self/environ">` and `<img src="http://169.254.169.254/">`; assert the returned PDF contains neither the key nor any fetched content, and assert the interception handler recorded two aborts. ⚠ Asserting only "the PDF looks fine" is vacuous — a failed fetch and a blocked fetch render identically.
+2. **⚠ N-4 — C creates a second inbound admission channel, and the RT-27 fence does not cover it.** Measured: `scripts/ci/fence-admission-private-bind.sh` audits a **Coolify Compose manifest** and locates its target by an in-file sentinel (`# fence-admission-private-bind: target`), rejecting `ports:`-publishing and `network_mode: host`. Its shipped invocation is the **provider-sync** manifest. `workers/pdf-render/` holds a `Dockerfile` and a `.env.example` and **no compose manifest at all** — so under S-2 B or C the pdf-render admission endpoint would come up with no private-bind fence over it. **Requirement, routed to DevOps:** pdf-render ships a compose manifest carrying the sentinel, and the RT-27 fence job invokes the script against it. The fence script is already generic over its target, so this is a wiring change, not a new fence.
+   - ⚠ **This is an INTRA-instance coverage expansion of RT-27 and changes NOTHING on the §10 catalogued ledger.** The direct precedent is on the record and should be cited rather than re-argued: SECURITY §4.5 records RT-30's fourth RT-26 surface as *"an INTRA-instance allowlist expansion (RT-26 3→4)"* with *"§10 ledger UNCHANGED"*. **No new catalogued instance may be drafted for pdf-render's channel, and no ledger edit is owed.** Stated here because the alternative failure — someone reading "a second admission channel" and catalogueing it — would look like diligence.
+   - ⚠ It **is** a CI fence-boundary change, which is a standing escalation trigger and joint-review-mandatory: DevOps proposes the catch criterion, I review it, and it ships with a golden fixture that fails closed.
+
+**Option A remains correct and I will not block it** — it is the only option requiring no ADR amendment, and its network posture is strictly better (the worker holds no listener at all). If F/CTO prefers not to reopen Lock 13, **A is the answer and S-3 becomes live and must be ruled**, at which point my R2.3 position on R-3 applies. **Option B I do not support:** Architect's "dominated by C" is right, and it additionally carries the escaping obligation C discharges.
+
+**On §7.32 item 6 — I am changing my round-1 position.** Round 1 I asked for the escaping control to live in the PDF worker (M-2) and asked for the booking to be promoted (R-5). Under A or C the worker composes no HTML and Svelte's default escaping is the control, so **both of those are wrong under the ratified direction**. See R2.3 M-2 and R-5.
+
+---
+
+## R2.3 — Disposition of every round-1 item
+
+Confirmed / retracted / narrowed, by id, against the sibling files.
+
+### Rulings
+
+| id | Disposition |
+|---|---|
+| **R-1** DEFINER supersession | **CONFIRMED**, now nested under S-1. Lean unchanged: derive supersession from the partial-UNIQUE ordering rather than store it — no UPDATE, no allowlist growth. The re-derived A1 item 5 routes it correctly. ⚠ Addition: if a DEFINER lands, the ADR-011 Decision 9 **allowlist amendment is owed in the same PR**, not at a later reconciliation — A1 item 5 names the allowlist but not the amendment obligation. |
+| **R-2** A6 disposition | **CONFIRMED**, and **my lean is changed.** Round 1 I leaned (ii) re-scope-in-place; both siblings independently reached *close as delivered* (Architect F-5, PM §2 A6). I now back **(i) close, and open the F-6 manifest extension as a separate successor** — the successor is genuinely different work from what the issue's title describes, and closing is the cleaner record. My round-1 objection to (i) (that the successor loses the dependency edges) is answered by Architect's A4 block, which already states *"A6 is not downstream — its fence already exists and already audits this file."* |
+| **R-3** tenant binding | **CONFIRMED as a hazard, NARROWED twice, and one option retracted.** (a) The **cron half is already solved on the tree** — I verified `workers/etl/src/pfin_back_etl/connection.py` myself: `SET LOCAL ROLE authenticated` + `set_config('request.jwt.claims', …, true)`, with `request.jwt.claim.sub` explicitly nulled first. My option α *is* the shipped pattern, which makes it the default rather than a proposal. (b) The **app half is subsumed by S-2** — vote C and it disappears. (c) ⚠ **I retract option β** (keep `service_role` + `p_users_id` as the code-layer binding): ARCH §3.2 states the endpoint *"does not use `service_role` in V1"*, so β was excluded by a ratified artifact I had not read. Naming the retraction rather than quietly dropping it. |
+| **R-4** PRD overwrite vs ADR | **CONFIRMED; my open question is answered and withdrawn.** I asked which vehicle corrects the PRD; PM's A-6 answers it as a class (c) pointer edit with drafted wording, and separates the product-visible claim (one current report per month — survives) from the storage claim (gets the Lock 11 pointer). I endorse A-6 as the discharge and withdraw the question. |
+| **R-5** §7.32 item 6 promotion | **RETRACTED IN PART.** Promoting it as a 19th issue is wrong: under S-2 A or C the ruling deletes the work. Correct disposition is **conditional** — the booking stays in `BACKLOG.md` §7.32 and activates only if S-2 lands on B. The re-derived A4 item 4 already carries it that way, correctly. What survives from R-5: the booking must not be read as discharged until S-2 rules, and if S-2 lands on B it becomes mandatory and testable. |
+| **R-6** A8 classification | **CONFIRMED, and now with two independent supports.** PM §2 A8 reaches it (*"'Sec advisory (not joint-review)' is Sec's to accept — INV-1 makes the owner string security-load-bearing and RT-12 is its test"*). And the re-derived A8 block contradicts itself: item 2 **adds** an ADR-029 aal2 requirement while item 7 carries *"Sec advisory, not joint-review … as drafted."* An AC that adds an aal2 clause to a new sensitive tenant-owned `pfin` table is not advisory. Still my call, still overridable. |
+
+### Isolation findings
+
+- **F-1** (D3 ordinals) — **CONFIRMED**, independently by Architect F-6 and PM D-4. Absorbed into re-derived A1 item 4 and A2 item 3. Closed on absorption.
+- **F-2** (dropped INTEGER[] column) — **CONFIRMED**, and **my lean is retracted.** I leaned B (retire the instance by ADR amendment). ADR-035 names a **V1.6 successor** (the statement control tie-out), so the instance is *deferred-with-a-consumer*, not orphaned — retiring it would have to be undone. I back Architect's **S-5 (a)**: ship the column with the dormant fence, header naming the revival condition. The decisive argument is Decision 3's own history: fold-ins get forgotten (its `#15`/`#16` record says so twice), and a fence that must be *remembered* at V1.6 is a fence that will not exist at V1.6. ⚠ Condition: the paired QA leg is labelled **construction-only** in its own text — it asserts the fence exists and is attached, not that it fires — so a later reader cannot mistake a leg that cannot fail for coverage.
+- **F-3** (RT-21 letter collision) — **CONFIRMED**, reached independently by Architect F-4. **Fully absorbed** by re-derived A5 item 2, which restores the canonical (a)–(g) verbatim, and item 3, which handles (g)'s known-defective status correctly. Closed.
+- **F-4** (fail-open tenant binding) — see R-3. The hazard is confirmed and is exactly what `connection.py` guards against; the remedy is *reuse that module*, not invent one.
+- **F-5** (client-composed payload) — **CONDITIONAL, not retracted.** Void under S-2 A or C; live under B. Re-derived P6 item 1 absorbs it and adds the half I did not state — that the drafted direction *"would additionally put `PDF_WORKER_SIGNING_KEY`'s trust boundary in the browser."*
+- **F-6** (RT-22 blind to the dependency manifest) — **CONFIRMED, and I hold it against the sibling's disposition.** Named disagreement below at R2.5.
+- **F-7** (A8 mandatory) — **CONFIRMED** = R-6.
+- **F-8** (pending queue) — **CONFIRMED and NOT absorbed.** Re-derived P5 items 1–2 add the listing surface and the pending queue and state no tenant scoping for either. Severity unchanged (note): the natural implementation is scoped by construction; I want it asserted, not redesigned.
+- **F-9** (aal2 on three new tables) — **CONFIRMED and fully absorbed**: re-derived A1 item 7, A2 item 5, A8 item 2, A9 item 5 each carry it, and A8 item 2 additionally names why the `user_settings` exclusion does not apply. Closed.
+
+### Money / isolation flags
+
+- **M-1** (live owner header) — **CONFIRMED**, reached independently by Architect F-2 and PM D-5. Absorbed into A1 item 1, A8 item 4, P7 item 4. Closed.
+- **M-2** (escaping location) — ⚠ **RETRACTED IN PART, and this is the round-1 statement of mine most likely to mislead if left standing.** I wrote *"the escaping control lives in the PDF worker."* Under ARCH §3.2's ratified direction the worker composes no HTML, so that requirement is **wrong** and would have had Backend build a control the architecture makes unnecessary. **Corrected statement: the escaping control lives wherever HTML is composed, and S-2 decides where.** What survives intact is the underlying requirement, which is direction-independent: *every free-text field is escaped by whatever composes the HTML, and it is asserted on the RENDERED OUTPUT — a stored `<script>` proving inert in the PDF, not only in the HTML view* (ADR-013 INV-2 spans both). Under A or C that assertion is a regression test on the Svelte template; under B it is a new control in the worker.
+- **M-3** (conditional tri-axis) — **CONFIRMED and NOT absorbed.** Re-derived P10 item 6 states tri-axis unconditionally. It adds a genuinely valuable mechanical correction I did not have (both non-tenant axes are `text not null` columns on `pfin.account`, so they are varied as values, and `pfin.scope` is not a type) — but it does not carry PRD §2.6.6's collapse condition. See the AMBER on P10.
+- **M-4** (staleness frozen at generation) — **CONFIRMED**, reached independently by PM §2 P8. **Absorbed** by re-derived P8 item 5, which states it survives S-1 in either direction and must not be folded into the snapshot. Closed.
+- **M-5** (PRD overwrite) — **CONFIRMED**; discharged by PM A-6. Closed.
+- **M-6** (no PDF bytes at rest) — **CONFIRMED and strengthened.** Re-derived P6 item 4 states it from PRD §2.6.3 verbatim (*"a transient export, not persisted server-side"*). **My non-objection stands**, with its standing condition: the first AC that persists a rendered PDF creates a storage-class surface and is joint-review-mandatory at that PR.
+
+### Drift findings
+
+- **D-1** (A6 veto + stale ledger figure) — **CONFIRMED by both siblings independently** (Architect F-5 items 1–2; PM §2 A6). **The veto stands.** Absorbed verbatim into re-derived A6, including *"The carve-out would weaken a shipped fence"* and the Path-B ledger non-effect.
+- **D-2** (A6 built, A4 partial) — **CONFIRMED by both.** Architect adds the landing commit `eada4b2`, which I had not measured.
+- **D-3** (five missing RT labels) — **PARTIALLY absorbed.** RT-11 / RT-12 / RT-19 / RT-25 are fold items for Architect's round 2 and I do not grade them. ⚠ **RT-20 is different and did not fold:** re-derived A2 item 7 still reads *"RT-21 HIGH + the SD-12 child sub-class addendum."* That is not a missing label, it is the **wrong test named for this surface** — Decision 16 verbatim names *"new RT-20 HIGH (fourth-instance FK-bypass + service_role bypass + parent immutability extension)"*. PM §2 A2 caught it; the re-derived block did not absorb it. See the AMBER on A2.
+- **D-4** (commentary label) — **CONFIRMED by both, AND THE TWO SIBLINGS DISAGREE ON THE FIX.** Architect F-3 renames the **column** (`commentary_marketable_securities`, carried into re-derived A1 item 1 and P3 item 1). PM D-3 rules the opposite: *"Product phrase governs the user-facing heading (**Marketable Securities**); the identifier `commentary_equity` stands (schema wording governs identifiers). Fix lands in SELF-355's AC and BACKLOG §5.6, not the PRD."* **This is a live cross-sibling conflict on a DDL identifier that will be permanent once the migration lands.** I have **no security stake and I state that explicitly: I do NOT require either name.** I am surfacing it because the two re-derived blocks currently carry Architect's answer and PM's file carries the opposite, and whoever writes the migration will resolve it silently by picking one. It needs one line at the sitting.
+- **D-5** (UNIQUE constraint) — **CONFIRMED**, reached independently by Architect F-1. Absorbed into re-derived A1 item 3. Closed.
+
+---
+
+## R2.4 — New in round 2
+
+Findings that exist only because a sibling's measurement changed what I looked at, plus one correction to my own round-1 output.
+
+**N-2 — A7's ADR-011 Decision 1 clause (d) audit log has no writable home, and this corrects a catch criterion I published in round 1. — flag.**
+
+PM's D-8 reports that A7's cited *"Lock 13 mod #4 audit log"* table was dropped at `015`. Measured myself at `b90b846`, and the precise state is one step further on than "dropped":
+
+- `pfin.plaid_sync_audit` appears in `007`, `008`, `015`, `047` and is not a live table.
+- Its successor **exists**: `pfin.linked_source_sync_audit` (`015:441`), whose `users_id` column is commented *"resolved tenant (Decision 1 clause (d))"* and whose `detail jsonb` is commented *"tenant-resolution chain"*. So there *is* a D1(d) surface.
+- ⚠ **But it cannot take a report-generation row.** Its `source` column is `check (source in ('webhook', 'scheduled_poll'))` and its `provider` column is checked against a provider list with no internal/report member. A monthly-report generation event is neither, on both columns.
+- And the **general** audit-log helper is unauthored: `git grep -lni 'emit_audit_log|fn_audit_log' b90b846 -- supabase/migrations/` returns nothing, consistent with ADR-011 Decision 9's amendment recording the general slot as *reserved-unauthored*.
+
+**My own error, named here rather than in a follow-up:** my round-1 catch-criteria table carries, for A7, *"assert the same-transaction audit row exists and names the resolved tenant."* I wrote that as if the surface existed. A builder following it would either widen two CHECK constraints on a shipped **append-only audit-class table** — a Decision 2 surface change, joint-review-mandatory, and not something an AC should reach by accident — or invent a table with no design. **Corrected criterion: A7's D1(d) obligation needs a named home before the criterion is testable; the ruling on which home is Architect's.** Options I can see: extend the successor's two CHECKs (cheap, but widens an audit-class table's domain from "sync" to "any privileged write"); author the reserved general helper (largest, and it discharges a long-standing reservation); or a report-scoped audit table (narrow, and adds a fourth audit surface). I have no lean and it is not mine to pick.
+
+**N-3 — a third ratified artifact constrains S-3, and neither sibling quoted it in this form. — note.**
+
+`docs/ARCH/index.html:208` reads: *"All **reads** flow through a single `SECURITY INVOKER` read-composition helper (**user-session only — never invoked from a worker**), which is also the render source the PDF worker reaches through the V1 web-app's `/internal/pdf-render` endpoint rather than the database directly."*
+
+Re-derived A7 item 2 has the **cron worker** invoking A3 per tenant from Python. That is a worker invoking the helper, which this sentence forbids in terms. Two readings are available and I do not know which is intended: the sentence may be scoped to the *PDF* worker (its subject in the second clause), or it may be the general statement it appears to be. Either way it is a third ratified artifact bearing on S-3 and it should be read at the sitting rather than discovered at the A7 joint review. If it is general, A7's whole shape changes; if it is PDF-scoped, the sentence is imprecise and should be narrowed so the next reader does not hit this. **Raising it as a genuine ambiguity, not as a confirmed defect** — I am not confident which reading is correct.
+
+**N-5 — the commentary columns are unbounded TEXT feeding a PDF renderer. — flag.**
+
+Re-derived A1 item 1 specifies the four commentary columns as bare `TEXT`. Re-derived P3 item 4 correctly requires the **TEXT-variant** adversarial battery including *"length bounds"* — but a length bound asserted in the app layer over a column with no DDL bound is a single-layer control on a Lock 14 write path, and Decision 4's user-facing-surface class is explicitly a multi-layer commitment. The consumer is a browser engine rendering a PDF: unbounded prose is a memory and render-time cost there in a way it is not on a web page the user scrolls. PM's §2 A8 already proposes a bound for the owner string (120 characters, parity example 41) and nothing proposes one for commentary. **Requirement, routed to Architect (DDL) + Backend (Zod):** a CHECK-enforced length bound on each commentary column, mirrored in the Zod schema, with the bound chosen by PM against the parity artifact. **Catch criterion:** a body one byte over the bound is rejected 400 at the app layer **and** the same value is rejected by the DB when submitted directly through PostgREST — two facts that can disagree, which is what makes it a real second layer.
+
+**N-6 — cross-sibling disagreement on a permanent identifier.** See D-4 above. Recorded as its own item because it needs a decision and neither sibling's file records that the other disagrees.
+
+---
+
+## R2.5 — What moves on my map and my criteria
+
+**Joint-review map — three rows move, and one does not move but is worth stating.**
+
+1. **A6 → from MANDATORY-because-fence-change to MANDATORY-because-closure-review.** The trigger changes, not the classification. Round 1 I classified it under *CI fence change touching a fenced RT*. Since the fence already exists and the recommendation is to close, what I now review is the **closing comment** — specifically that it records the `SUPABASE_URL` correction so no future edit inherits the weakened carve-out. Same class, different object.
+2. **A4 → gains a second trigger under S-2 B or C.** Round 1 its trigger was Lock 13 mod #2 alone. Under B or C it also becomes a **CI fence-boundary change** via N-4 (the RT-27 private-bind wiring) — which is a standing escalation trigger, not merely joint review. Under Option A this second trigger does not arise, because the worker holds no listener.
+3. **P5 → I am adding a trigger I did not name in round 1.** Re-derived P5 item 4 makes the on-demand path *"invoke A3 through an app endpoint under the user's own session."* PM §2 P5 measured what I missed: **generation is a WRITE** (a Lock 11 row with a server-derived `data_as_of`) and no issue owns that write path — A7 is cron-only. A new user-reachable write path onto a **Decision 2 audit-class table** is D2-mandatory. P5 was already not-light-loop-eligible in my map, so the row's class is unchanged; the trigger is now D2 rather than only the queue-read surface.
+4. **Not moving, stated because silence would read as agreement:** P4's conditional light-loop eligibility survives all three files. Both siblings found real PRD contradictions in P4 (Architect F-8, PM §2 P4), and re-derived P4 fixes them — but every fix is product wording and control flow, none touches a mandatory surface. **P4 remains conditionally light-loop-eligible on the same condition: it lands as control flow inside an already-reviewed A7.** P8 and P9 remain light-loop-eligible unconditionally.
+
+**Catch criteria — two change.**
+
+- **A7's audit-log leg is withdrawn as written** and replaced per N-2. It is not testable until the home is named.
+- **A3 gains the best leg in the wave, and it is Architect's, not mine.** Re-derived P10 item 2 requires asserting *as a catalog fact* that **no `rolbypassrls` role holds EXECUTE on A3**. I verified the mechanism it depends on: the shipped pattern at `104:913-914` and `105:434-435` is `revoke execute … from public; grant execute … to authenticated;`, and `008_pfin_service_role_grants.sql` contains **no** function-level EXECUTE grant, so `service_role` acquires EXECUTE only by an explicit future grant. **This is the leg that closes F-4 at the database layer regardless of how S-2 and S-3 resolve** — if no bypass-RLS role can execute the helper, no bypass-RLS caller can compose across tenants through it, whatever the app does. I want it stated as a **standing** catalog assertion, not a one-time check, because the failure mode is a future migration adding a grant to make something work. ⚠ Note the asymmetry that makes it load-bearing here: for a SECURITY INVOKER function the EXECUTE ACL is normally the weakest of several fences; against a `rolbypassrls` caller it is the **only** one, because RLS is not in the picture.
+
+**Named disagreement with Architect — F-6 and A6's residual.** Architect's re-derived A6 residual leaves the fence's documented non-catches (*"a `COPY` of a manifest; a Postgres client transitive via base image"*) as *"human-PR-review second line per ARCH §6.1."* That disposition is correct **today**, while the Dockerfile is a placeholder whose `CMD` is `node --version`. It stops being correct the moment A4 lands a real Puppeteer application, because the standard shape is `COPY package*.json .` then `RUN npm ci`, and at that point `pg` enters the container through the exact path the fence is documented not to look at — with the fence reporting clean. Lock 13 mod #2 is a **V1-SHIP-BLOCK** property; leaving it to human review at the moment it becomes reachable is the disposition I decline. **My requirement stands: A4's PR extends RT-22's catch criterion to `workers/pdf-render/package.json` and its lockfile, with a paired golden fixture.** Stated as a disagreement rather than folded in silently, because Architect and I reached different dispositions from the same measurement and F/CTO should see both.
+
+---
+
+## R2.6 — PRE-verdicts on `rederived-acs.md` @ `66288e0`
+
+**These verdict the ROUND-1 blocks at `66288e0`.** Architect is folding PM wording, my RT labels and the aal2 clauses in parallel, so **I do not grade a block down for a missing RT label or a missing aal2 clause** — those are listed separately as fold items. I grade on substance: *would this AC, built verbatim, pass at joint review?*
+
+**GREEN 12 · AMBER 5 · RED 1.**
+
+| Block | Verdict | Named sentence / clause |
+|---|---|---|
+| **A1** | **AMBER** | **Item 6.** It fences `users_id` and `target_month` post-creation, and item 5 *asserts* that a `final` row is immutable — but **no item states the mechanism that blocks UPDATE on a final row, and nothing addresses `service_role` on this table at all.** Decision 2 verbatim requires append-only *"across both `authenticated` AND `service_role` roles"*; A2 item 4(iii) carries a `service_role` bypass trigger for the child and A1 has no equivalent. Built verbatim this ships the wave's canonical D2 surface with a two-column fence where a whole-row-on-final fence is locked. AMBER bordering RED: everything needed is named in the block, but the missing mechanism would be a joint-review blocker if it reached me unfixed. |
+| **A2** | **AMBER** | **Item 7**, *"RT-21 HIGH + the SD-12 child sub-class addendum."* RT-21 is the PDF-worker JWT battery; Decision 16 verbatim names **RT-20** as this surface's test. A false composite — both labels real, the pairing invented — which is why it survived the re-derivation. Built verbatim, the RT-20 battery is never written and an RT-21 battery elsewhere is green, masking it. (PM §2 A2 reached this; the block did not absorb it.) |
+| **A3** | **GREEN** | Item 1's dropped `p_users_id` with both tree precedents, item 4's unflattened envelopes, item 5's one-call-one-clock and item 6's EXECUTE posture are all correct. Fold: RT-19, RT-25. |
+| **A4** | **AMBER** | **Item 3.** Lock 13 mod #7's hardening list is carried faithfully and does **not** contain a resource-loading fence. Under S-2 B or C the worker renders network-supplied HTML in Puppeteer; without `setContent` + request interception denying every scheme but `data:`, `file:///proc/self/environ` exfiltrates the container's only secret. Add the fence and the two-abort catch criterion (R2.2 condition 1). Also gains N-4's compose-manifest requirement under B or C. Minor: the BLOCKED line cites *"(F-2 / S-2)"* where F-2 is the A1 column-omission finding — likely a typo for F-4. |
+| **A5** | **GREEN** | Item 2 restores canonical RT-21 (a)–(g) verbatim; item 3 handles (g)'s known-defective status and the dropped-table pointer; item 4 correctly retracts the *"Arch-locked per RT-21(e)"* false composite and cites `connection.py` as prior art. This block fully absorbs my F-3. The strongest block in the file. |
+| **A6** | **GREEN** | Close-as-delivered with both AC corrections preserved and the Path-B ledger non-effect stated. My F-6 disagreement is with the **residual's disposition**, not with this block's verdict, and it attaches to A4. |
+| **A7** | **RED** | **Item 5**, *"Lock 13 mod #4 audit-log entry, same transaction."* Per N-2 the named surface does not exist and its only successor rejects the row on two CHECK constraints. Built verbatim this either silently drops ADR-011 Decision 1 clause (d) — the forensic-detectability clause, on the wave's only privileged non-JWT writer — or widens CHECKs on a shipped append-only audit-class table without a review that noticed. The clause needs a home before it is buildable. |
+| **A8** | **AMBER** | **Item 7**, *"Sec advisory, not joint-review (single-column user-scoped table, no chain) — as drafted."* Internally inconsistent with the same block's item 2, which adds an ADR-029 aal2 requirement, and with Lock 14 membership (R-6 / F-7). "No chain" is true and is not the predicate. |
+| **A9** | **GREEN** | Substance unchanged from a well-drafted original; the tense correction is right and the post-V1.4 coherence check (A9 renders nothing, so it cannot drift from `105`) is the argument that makes early dispatch safe. |
+| **P2** | **GREEN** | Item 3's mandatory envelope rendering (*"a `?? 0` … applied to an envelope is a defect"*) and item 4's one-flip-site sign convention are both money-correctness controls I would otherwise have had to ask for. |
+| **P3** | **GREEN** | Item 3's correction — SERIALIZABLE is unreachable from this transport, realize it as the `101` `FOR UPDATE`-first-statement pattern with no tenant parameter — is exactly the ratified mechanism. Item 4's TEXT-variant battery is right. Fold: RT-11. Route N-5's length bound to A1. |
+| **P4** | **GREEN** | Complete-or-explicitly-skip and the in-app-not-Discord correction both track the PRD verbatim. No mandatory surface. |
+| **P5** | **GREEN** | Items 4 and 5 carry the session-binding and the server-derived-only fence correctly. Two additions rather than defects: state the tenant scoping on the listing and queue reads (F-8), and name the generation **write** path's D2 obligation (R2.5 item 3). |
+| **P6** | **GREEN** | Item 1 names the browser-holding-the-worker-credential problem, which is the sharper half of my F-5. Item 4 states the no-persistence contract that carries my M-6 non-objection. |
+| **P7** | **GREEN** | Item 2's note that a single-row UPSERT needs no lock is correct and avoids importing `101`'s machinery where it does not apply. Item 4 states the forward-only consequence. Fold: RT-12. |
+| **P8** | **GREEN** | Item 5 absorbs M-4 and states the property that makes it durable — the live-read carve-out survives S-1 in either direction and must not be folded into the snapshot. |
+| **P9** | **GREEN** | The addition — that the `{status:'unavailable'}` envelopes are **not** staleness and must not merge into the stale badge — is a real correctness control: *"no ledger designated"* and *"your brokerage needs re-auth"* are different facts with different user actions, and collapsing them would silently mislabel a configuration state as a data-freshness state. |
+| **P10** | **AMBER** | **Item 6.** It states tri-axis unconditionally. PRD §2.6.6 verbatim makes it conditional — *"where the underlying classes carry tax-treatment … for §2.6.1 surfaces with no tax-treatment dimension, the tri-axis collapses to the tenant_id × scope pair"* (M-3). Its own mechanical correction (both non-tenant axes are `text not null` columns, `pfin.scope` is not a type) is valuable and I want it kept. ⚠ Item 2's no-`rolbypassrls`-EXECUTE leg is the single most valuable assertion in the file — see R2.5. Fold: RT-11/12/19/20/25 into the item 1 coverage list. |
+
+**Blocks whose conditional structure I explicitly endorse:** A1, A2, A3 (S-1), A4, A5, P6 (S-2), P8 (S-4). Marking a block BLOCKED rather than guessing the ruling is the right shape and I do not want it read as incompleteness.
+
+---
+
+## R2.7 — What "3 of 18" was over
+
+**It was over the ORIGINAL drafted AC text in `temp/v15-preflight/issue-dump.md` (md5 `b6f9e76c3420534d10378f2426298409`) at `b90b846` — not over Architect's re-derived blocks**; against those, the same predicate gives **12 GREEN / 5 AMBER / 1 RED** at `66288e0`.
+
+The three numbers in play are over three different objects and none of them is wrong: mine (3 — A9, P4, P9) over the drafted text under a *joint-review-pass* predicate; Architect's (4 — A8, A9, P7, P9) over the drafted text under an *identifiers-resolve + contradicts-no-lock + no-unresolved-seam* predicate; PM's (2 — A8, P7, both with riders) over the drafted text under a *product-lock-contradiction* predicate. **A9 and P9 are in all three.** The spreads are the predicates, not a disagreement about the tree — A8 is buildable on Architect's and PM's predicates and fails mine only on its self-classification (R-6), and P7 fails mine only on a missing RT label, which is a fold item I have said I do not grade. Stated this way so nobody reconciles three correct numbers into one wrong one.
+
+---
+
+## R2.8 — Round-2 summary of position
+
+- **S-1: Option A.** Option B **vetoed** on ADR-067 D3 ground (ii) only; ground (i) does not transfer and I say so. PM's A-5 (A) is a different, non-vetoed proposal. Losing side of A named.
+- **S-2: Option C**, conditional on the resource-loading fence and the RT-27 compose-manifest wiring (N-4). **Option A is fully acceptable** and has the better network posture; it makes S-3 live. Option B not supported.
+- **S-3:** moot under S-2 C; under S-2 A the answer is the shipped `connection.py` shape, not a new design.
+- **S-4:** advisory; **I do NOT require Sec review of the per-section attribution route.** Architect's lean (a) is fine by me, and his own losing-side note (app-layer mapping is unfenced) is the right thing to have written down.
+- **S-5:** Architect's **(a)**, ship the dormant fence — my round-1 lean B retracted, reason given.
+- **One RED** (A7 item 5), **five AMBER** (A1 item 6, A2 item 7, A4 item 3, A8 item 7, P10 item 6), **one named disagreement** (F-6 vs A6's residual disposition), **one cross-sibling conflict needing a line at the sitting** (D-4, the commentary identifier), **one citation-form fix** (N-1), and **one error of my own corrected** (N-2, the A7 audit-log catch criterion).
