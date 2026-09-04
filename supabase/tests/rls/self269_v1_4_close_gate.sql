@@ -41,6 +41,38 @@
 --   nothing proving 104 CONSUMES the corrected E4 D-ii split correctly.
 --   Nothing already-committed is removed; this pass only ADDS.
 --
+--   THIRD-PASS FIX (QA, 2026-09-04, per Sec joint-review AMBER verdict —
+--   docs/records/v14-execution/self269-sec-findings.md @ feature/self-268-sec
+--   5f8a0a1). ⚠ Sec's review target (`origin/feature/self-269` @ `29f9a83`,
+--   battery blob md5 `a1e6ff19…`) is the FIRST-commit (`d1bb098`) content —
+--   it does NOT include the SECOND-PASS additions above (blob md5 at that
+--   point was `2d004d62…`), because `feature/self-269`'s merge of
+--   `feature/self-269-qa` (`e20906b`) predates this branch's second commit.
+--   Sec's ruling (1) — ACCEPT the one-pin-plus-citation composition for the
+--   #18 forgery shape, no fresh leg required for AC2/4/4a/4b/5b/6/8a's
+--   structural half — is read here and not undone; the SECOND-PASS
+--   additions stand as EXTRA rigor the AC's own "gets its own leg" text
+--   independently supports, not as something Sec's ruling required. Fixed
+--   in THIS pass, all still-live on the current (post-second-pass) file
+--   (verified by re-grep, not assumed carried over): F-1 (blocking) —
+--   `(AC4C-1)`'s `isnt()` (fail-open on NULL) replaced with `ok()`'s
+--   three-state form. F-2 (blocking) — the AC 8a header deferral sentence
+--   added, Sec's commit-ready text verbatim. F-3 — already fixed in the
+--   SECOND PASS ("8 swept" -> "7 swept"). F-4 — the dangling `102 L3a`
+--   citation (102 carries no `L3a`) corrected to `(L3b)` + `(L3h)` at
+--   BOTH sites it appeared (the AC4d header bullet and the BLOCK
+--   AC4A_AC4D comment — a second, THIS-PASS-INTRODUCED instance of the
+--   identical citation bug, since the second pass's own AC4d rewrite
+--   copied the wrong label forward without checking it resolved). N-2 —
+--   `_rls.expect_owner_can_read` (Sec's finding named `expect_owner_reads`,
+--   which does not exist in rls_verbs.psql; corrected to the real helper)
+--   added to BLOCK CONTROL0. N-3 — `(AC4C-3b)` pins tenant C's headline to
+--   a real 0. N-4 — the AC4C-2 mitigation citation moved from "105
+--   DES-pin" (not independent of the shared helper either) to "102 (L2b)"
+--   (the genuinely independent watcher); the historical INVERSION
+--   VERIFICATION record is annotated in place, not rewritten. Plan 32 -> 34
+--   (N-2 + N-3 each add one leg; every other fix is text-only).
+--
 -- Ratified AC coverage (mapping to the live AC block; "COMPOSED" = an
 -- already-green per-issue battery carries the exhaustive proof, cited by
 -- file + leg name, not re-derived; "NEW" = fresh SQL below):
@@ -127,17 +159,23 @@
 --          100-105 (105's own NAV1/NAV2 pin fn_compute_nav's BYTE-IDENTITY,
 --          never call it and compare its VALUE against fn_nav_composition's
 --          nav in one fixture state — measured by grep, zero hits). BLOCK
---          AC4C closes that gap: an inequality leg, an EXACT-DIFFERENCE leg
---          (independently reconstructed, the 105-DES-leg discipline), and a
---          non-vacuous companion (tenant C: the two headlines agree when
---          nothing exists) proving the divergence is state-driven, not an
---          artifact.
+--          AC4C closes that gap: an inequality leg (ok(), not isnt() —
+--          Sec F-1), an EXACT-DIFFERENCE leg (independently reconstructed,
+--          citing 102's (L2b) as the real independent watcher on the
+--          shared fn_tax_authority_ledgers() helper — Sec N-4), and a
+--          non-vacuous companion pinning tenant C's headline to a REAL 0,
+--          not merely IS NOT DISTINCT FROM (Sec N-3), proving the
+--          divergence is state-driven, not an artifact.
 --   AC4d — the exclusion's DEFAULT state, BOTH halves move together —
 --          "gets a leg" (the AC's own words). NEW (second pass): the SAME
 --          BLOCK AC4A_AC4D as AC4a above — marking a_ftb269 'ftb' moves
 --          BOTH figures (YTD Paid NULL->500.00; leaf present->absent) in
---          the SAME transaction. COMPOSED alongside 102's OWN L3a/L3b
---          (STATE 1) through L3c-L3j (the marking + reversion cycle).
+--          the SAME transaction. COMPOSED alongside 102's OWN (L3b)
+--          ("STATE 1: a_walk (undesignated) is PRESENT in fn_nav_
+--          composition" — the buildup half) and (L3h) ("STATE 3
+--          (reverted to NULL): YTD Paid is NULL again" — the YTD-Paid
+--          half, reached by reversion; corrected from this file's first
+--          pass, which cited a nonexistent `L3a` — Sec F-4).
 --   AC4e — the R3 rider 0c partial unique index, THREE states. COMPOSED for
 --          two of three: 102 L1b (same-jurisdiction rejected) + L1c
 --          (different-jurisdiction accepted). NEW: BLOCK AC4E — the third
@@ -195,6 +233,16 @@
 --          such — R1 (A). COMPOSED: 104 L3a/L3b (the structural-unavailable
 --          shape, no `rows` key) + L16g (identical shape for tenant B,
 --          independent of any other data). No new SQL.
+--          ⚠ ROW-LEVEL CG ISOLATION IS NOT PROVEN BY THIS GATE AND IS
+--          DEFERRED TO THE SALE-WRITER MILESTONE (Sec F-2, commit-ready
+--          text verbatim). No `pfin.lot_match` row can exist in V1 (no
+--          sale writer, no `lot_match` writer), so any "tenant A cannot
+--          see tenant B's realized gains" leg would pass on both tenants
+--          having none. What is asserted here is the STRUCTURAL fact
+--          only — the CG surface reads `unavailable` for both tenants on
+--          a capability, never on a row count. The first milestone that
+--          lands a sale writer owes the row-level isolation legs this
+--          gate cannot write.
 --   AC9  — forward fence: no service_role reach on any V1.4 surface, all
 --          execute under authenticated per ARCH §4.1. NEW: BLOCK AC9 — a
 --          declarative sweep over every live-callable V1.4 function (the
@@ -213,7 +261,9 @@
 --   AC11 — harness obligations, each followed structurally below:
 --          pg_prove-only verification (see hand-off report, never bare
 --          psql); ok()/not isnt() on every NULL-able negative (BLOCK AC7-3,
---          BLOCK AC4D-composed); BLOCK CONTROL0 runs FIRST and is a genuine
+--          BLOCK AC4D-composed, BLOCK AC4C-1 — the THIRD-PASS fix for Sec
+--          F-1, which caught this note stopping one short of its own code);
+--          BLOCK CONTROL0 runs FIRST and is a genuine
 --          RLS-gated cross-tenant-empty assertion (would read TRUE, not
 --          merely non-erroring, under a silent `set_config` no-op); BLOCK
 --          CDS is the CURRENT_DATE smoke (a row created_at=now(),
@@ -286,8 +336,15 @@
 --     (1300.0000), not against a second derivation of the same helper, so
 --     a break inside the shared primitive has somewhere to show up. AC4C's
 --     equality-of-two-derivations SHAPE is therefore the weaker form for
---     THIS specific fault and 105's DES-pin/BND-block literals are this
---     exclusion's real watchers, composed not duplicated. Restored, GREEN.
+--     THIS specific fault and 105's DES-pin/BND-block literals are ALSO
+--     real watchers for it, composed not duplicated. Restored, GREEN.
+--     ⚠ ANNOTATED, dated record kept as measured (Sec N-4): 105's DES-pin
+--     is NOT independent of the shared helper either (it too reconstructs
+--     via fn_tax_authority_ledgers()) — it happened to catch THIS specific
+--     strike because it compares against a hardcoded literal, not because
+--     it is helper-independent. 102's (L2b), which asserts the helper
+--     returns ONLY a named fixture account, is the genuinely independent
+--     watcher and is what the AC4C-2 header comment now cites.
 --   - MATCHED-TENANT FENCE: `tax_bracket_row_matched_schedule` trigger
 --     DISABLED on a scratch clone -> MEASURED: this file's AC1/AC5a-1 and
 --     101's OWN W4 both failed (their throws_like MESSAGE stopped matching
@@ -335,23 +392,26 @@ begin;
 
 \ir ../_fixtures/rls_verbs.psql
 
--- plan = 32: CONTROL0 1 + AC1/AC5a 2 (canonical forgery + control) + AC3 2
---   (scope-collision non-inflation, both tenants) + AC4E 1 (both accounts,
---   same user, left unmarked, BOTH persist) + AC7 3 (B's own value / A's own
---   value non-vacuous companion / C's NULL, three-state pen-test) + JG 2
---   (the journaled purchase landed as expected / the Unrealized figure
---   reached through it) + AC4 4 (three-state baseline + two reclassification
---   inversions + the Sec D-5 underscore-literal control) + AC4B 2 (R9 clamp
---   non-vacuous negative-aggregate + the clamped 0) + AC4A_AC4D 4
---   (present-in-leaf / absent-from-YTD-Paid pre-mark, then both halves move
---   on marking) + R10 2 (qualified-dividend routing / generic-dividend
---   routing, 100's corrected values consumed by 104) + AC4C 3 (inequality /
---   exact-difference / tenant-C non-vacuous companion) + CDS 2 (non-vacuous
---   fixture check / the CURRENT_DATE smoke itself) + ND 2 (cross-tenant pin
---   / date-order read-back) + AC9 2 (non-vacuous function-count companion /
---   the sweep) = 32. Recorded so a silent plan-edit shows as an arithmetic
---   change.
-select plan(32);
+-- plan = 34: CONTROL0 2 (cross-tenant-empty + Sec N-2's expect_owner_can_read
+--   companion, distinguishing working RLS from deny-all) + AC1/AC5a 2
+--   (canonical forgery + control) + AC3 2 (scope-collision non-inflation,
+--   both tenants) + AC4E 1 (both accounts, same user, left unmarked, BOTH
+--   persist) + AC7 3 (B's own value / A's own value non-vacuous companion /
+--   C's NULL, three-state pen-test) + JG 2 (the journaled purchase landed as
+--   expected / the Unrealized figure reached through it) + AC4 4
+--   (three-state baseline + two reclassification inversions + the Sec D-5
+--   underscore-literal control) + AC4B 2 (R9 clamp non-vacuous
+--   negative-aggregate + the clamped 0) + AC4A_AC4D 4 (present-in-leaf /
+--   absent-from-YTD-Paid pre-mark, then both halves move on marking) + R10 2
+--   (qualified-dividend routing / generic-dividend routing, 100's corrected
+--   values consumed by 104) + AC4C 4 (inequality via ok()/three-state per
+--   Sec F-1 / exact-difference citing 102 L2b per Sec N-4 / tenant-C
+--   agreement / tenant-C's value pinned to a real 0 per Sec N-3) + CDS 2
+--   (non-vacuous fixture check / the CURRENT_DATE smoke itself) + ND 2
+--   (cross-tenant pin / date-order read-back) + AC9 2 (non-vacuous
+--   function-count companion / the sweep) = 34. Recorded so a silent
+--   plan-edit shows as an arithmetic change.
+select plan(34);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb, _rls.tenant_c() as tc \gset
 
@@ -389,6 +449,15 @@ insert into pfin.tax_bracket_row (users_id, schedule_id, bracket_floor, bracket_
   values (:'tb', :sched_b, 0, 0.10);
 
 select _rls.expect_cross_tenant_read_empty('pfin.tax_bracket_schedule'::regclass, :'ta'::uuid, :'tb'::uuid);
+
+-- Sec N-2: the cross-tenant-empty leg above cannot distinguish WORKING RLS
+-- from DENY-ALL (an intruder count of 0 also results if A's own policies
+-- were accidentally deny-all). This companion closes that: A reads its OWN
+-- schedule (sched_a), non-vacuously, on the SAME table CONTROL0 already
+-- exercises. (Verb name corrected from Sec's finding text, which named
+-- `_rls.expect_owner_reads` — the real helper in rls_verbs.psql is
+-- `_rls.expect_owner_can_read`.)
+select _rls.expect_owner_can_read('pfin.tax_bracket_schedule'::regclass, :'ta'::uuid, 1::bigint);
 
 -- =====================================================================
 -- BLOCK AC1/AC5a — THE CANONICAL LEG: tenant A injects tenant B's users_id
@@ -667,7 +736,8 @@ select set_config('role', 'postgres', true);
 --   the AC's own words. BLOCK AC7's a_irs/b_irs are designated FROM
 --   CREATION and never exercise the undesignated-then-marked transition;
 --   this block is genuinely new ground. COMPOSED alongside 102's OWN
---   L3a-L3j for the exhaustive cycle.
+--   (L3b) through (L3j) for the exhaustive cycle (102 carries no `L3a`
+--   — Sec F-4).
 -- =====================================================================
 insert into pfin.account (users_id, name, account_type, scope, tax_treatment) values
   (:'ta', 'a-ftb-269', 'depository', 'household', 'taxable') returning account_id as a_ftb269 \gset
@@ -753,10 +823,16 @@ select set_config('role', 'postgres', true);
 --   identity, never its output value against fn_nav_composition's).
 -- =====================================================================
 select _rls.set_tenant(:'ta'::uuid);
-select isnt(
-  (pfin.fn_compute_nav(:'d_as_of'::date))::numeric,
-  (pfin.fn_nav_composition(:'d_as_of'::date) ->> 'nav')::numeric,
-  '(AC4C-1) THE RECONCILIATION WATCHER: fn_nav_composition''s tax-adjusted nav is NOT EQUAL to fn_compute_nav''s gross headline for tenant A — a_irs (BLOCK AC7, designated ''irs'') is excluded from the composer''s leaf set and JG''s 225.00 computed Unrealized scalar is subtracted; RED if the §2.1.1 headline were ever re-pointed to read fn_nav_composition''s value while still claiming fn_compute_nav''s identity, or vice versa (SELF-226''s own failure shape)'
+-- Sec F-1 (blocking): isnt() is IS DISTINCT FROM and PASSES on NULL — a
+-- watcher for 105's own "nav is NEVER NULL" contract that could not
+-- observe a regression of exactly that promise. Replaced with ok() over
+-- AC 11's "prove three states" form: both sides present, AND unequal.
+select ok(
+  (pfin.fn_compute_nav(:'d_as_of'::date))::numeric is not null
+  and (pfin.fn_nav_composition(:'d_as_of'::date) ->> 'nav')::numeric is not null
+  and (pfin.fn_compute_nav(:'d_as_of'::date))::numeric
+      <> (pfin.fn_nav_composition(:'d_as_of'::date) ->> 'nav')::numeric,
+  '(AC4C-1) THE RECONCILIATION WATCHER: BOTH fn_compute_nav''s gross headline AND fn_nav_composition''s tax-adjusted nav are NOT NULL, AND they are NOT EQUAL, for tenant A — a_irs (BLOCK AC7, designated ''irs'') is excluded from the composer''s leaf set and JG''s 225.00 computed Unrealized scalar is subtracted; RED if the §2.1.1 headline were ever re-pointed to read fn_nav_composition''s value while still claiming fn_compute_nav''s identity, or vice versa (SELF-226''s own failure shape), OR if either side ever regressed to NULL (105''s own "nav is NEVER NULL" contract) — ok(), not isnt(), per AC 11 (Sec F-1)'
 );
 select is(
   (pfin.fn_compute_nav(:'d_as_of'::date))::numeric - (pfin.fn_nav_composition(:'d_as_of'::date) ->> 'nav')::numeric,
@@ -765,14 +841,32 @@ select is(
      join pfin.fn_account_unrealized_gl(:'d_as_of'::date) g on g.account_id = tal.account_id)
   + coalesce((pfin.fn_compute_tax_liability(:'d_as_of'::date) -> 'nav_components' -> 'unrealized_tax_liab' ->> 'amount')::numeric, 0)
   + coalesce((pfin.fn_compute_tax_liability(:'d_as_of'::date) -> 'nav_components' -> 'realized_tax_liab' ->> 'amount')::numeric, 0),
-  '(AC4C-2) EXACT-DIFFERENCE, independently reconstructed (the 105-DES-leg discipline, not a magic literal): gross minus tax-adjusted equals EXACTLY the designated ledgers'' summed balance PLUS both tax scalars, computed via THREE independent calls rather than assumed — robust to whatever else this file''s fixture adds for tenant A elsewhere'
+  -- Sec N-4: this reconstruction calls fn_tax_authority_ledgers() — the SAME
+  -- helper fn_nav_composition itself anti-joins against — so a regression
+  -- INSIDE that helper would move both sides together and this leg alone
+  -- would not see it. 102''s (L2b) is the real independent watcher for that
+  -- fault (it asserts the helper returns ONLY a NAMED fixture account,
+  -- a_idx2 — a regression there reds L2b even though it would not red
+  -- here); 105''s DES/DES-pin reconstruct via the SAME helper and are NOT
+  -- independent of it either (corrected from this file''s first pass, which
+  -- cited DES-pin as if it were).
+  '(AC4C-2) EXACT-DIFFERENCE, independently reconstructed (not a magic literal): gross minus tax-adjusted equals EXACTLY the designated ledgers'' summed balance PLUS both tax scalars, computed via THREE independent calls rather than assumed — robust to whatever else this file''s fixture adds for tenant A elsewhere. Composed with 102''s (L2b) for the actual independent watcher on the fn_tax_authority_ledgers() helper this reconstruction shares with the function under test (Sec N-4)'
 );
 select set_config('role', 'postgres', true);
 select _rls.set_tenant(:'tc'::uuid);
 select is(
   (pfin.fn_compute_nav(:'d_as_of'::date))::numeric,
   (pfin.fn_nav_composition(:'d_as_of'::date) ->> 'nav')::numeric,
-  '(AC4C-3) non-vacuous companion: tenant C (zero accounts, zero designations, zero schedules) has the two headlines AGREE (both 0) — proving (AC4C-1)/(AC4C-2)''s inequality is DRIVEN by A''s designated-ledger-and-computed-scalar state, not a universal artifact of calling the two functions together'
+  '(AC4C-3) non-vacuous companion: tenant C (zero accounts, zero designations, zero schedules) has the two headlines AGREE — proving (AC4C-1)/(AC4C-2)''s inequality is DRIVEN by A''s designated-ledger-and-computed-scalar state, not a universal artifact of calling the two functions together'
+);
+-- Sec N-3: is() is IS NOT DISTINCT FROM under pgTAP, so (AC4C-3) alone
+-- would pass on a double-NULL regression as readily as on a double-zero
+-- one, and its own message claims "both 0" with nothing pinning that.
+-- This companion pins the actual value.
+select is(
+  (pfin.fn_compute_nav(:'d_as_of'::date))::numeric,
+  0::numeric,
+  '(AC4C-3b) THE VALUE (AC4C-3)''s message claims: tenant C''s gross headline is a REAL 0, not a NULL that (AC4C-3)''s IS NOT DISTINCT FROM equality would have let pass silently (Sec N-3)'
 );
 select set_config('role', 'postgres', true);
 
