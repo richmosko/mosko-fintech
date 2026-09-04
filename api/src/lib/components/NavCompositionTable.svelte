@@ -32,11 +32,14 @@
 	  • SELF-268 AC 9a — the §2.5.4 disclaimer (PRD verbatim) renders as a VISIBLE footnote under
 	    the Unrealized Tax Liability row (never hover-only — survives print/PDF/AT, same posture
 	    §2.4.4 requires of its informational marker).
-	  • SELF-268 AC 6 — E41 RULED SHAPE (team-lead): `buildups.realized_tax_liab` /
-	    `unrealized_tax_liab` are ENVELOPES, not plain numbers. `buildupRows()` ($lib/nav-composition)
-	    already routes an unavailable envelope to a row variant with NO `displayValue` field — this
-	    template renders that row's `reason` as an "Unavailable" notice instead, so there is no `$0`
-	    left to accidentally render as a determination (a type-level guard, not just a runtime check).
+	  • SELF-268 AC 6 — E41/E42 RULED SHAPE, Sec P-18: `buildups.realized_tax_liab` /
+	    `unrealized_tax_liab` are ENVELOPES (`TaxLiabilityEnvelope`, reusing tax-quarterly.ts's
+	    shipped `FundsDueEnvelope` shape), not plain numbers. `buildupRows()` ($lib/nav-composition)
+	    already routes an unavailable envelope to a row with `displayValue: null` + a `reason` — this
+	    template renders that as an "Unavailable" notice instead, so a `$0` never stands in for a
+	    determination that was never made. ⚠ SIGN: `realized_tax_liab`'s amount may be NEGATIVE (an
+	    overpayment is a genuine receivable) and is rendered UNFLIPPED, never abs()'d or clamped —
+	    see $lib/nav-composition.ts's own comment; `unrealized_tax_liab` is always ≥ 0 (104's clamp).
 	  • SELF-268 NAV-FOOT THREE-STATE BASIS (Sec P-5 / option (C)) — the two envelopes are
 	    INDEPENDENT and can disagree: 'tax-adjusted' (both computed) / 'partial' (one unavailable —
 	    NAV reads pre-tax for THAT line only) / 'unadjusted' (both unavailable — NAV reads fully
@@ -44,12 +47,15 @@
 	    (`navFootLabel()`, $lib/nav-composition) — not a caption beside the table (Sec's explicit
 	    instruction). PRD §2.4.4 / ADR-013 is the citation for "state visibly" here — never ADR-049
 	    (Sec D-1: a retracted attribution, E36).
-	  • SELF-268 AC 10a / R3 riders 0b + 6 (EXPECTED CONTRACT, provisional) — `composition
-	    .excluded_tax_ledgers`, when present, names the accounts AC 3a excluded from the buildup as
-	    tax-authority ledgers. Rendering it (even when the list is empty) is what makes an UNMARKED
-	    designated account visible as "not excluded" (PRD §2.4.4 / ADR-013, never ADR-049). Absent
-	    the field → nothing renders here (a real payload gap to close with Architect/Backend, not
-	    invented via a second component-level query).
+	  • SELF-268 AC 10a / R3 riders 0b + 6 — the `excludedTaxLedgers` PROP (a SIBLING to
+	    `composition`, not nested in it — team-lead 2026-09-04, post-105-landing correction of an
+	    earlier provisional `composition.excluded_tax_ledgers` guess), when present, names the
+	    accounts AC 3a excluded from the buildup as tax-authority ledgers. Rendering it (even when
+	    the list is empty) is what makes an UNMARKED designated account visible as "not excluded"
+	    (PRD §2.4.4 / ADR-013, never ADR-049). Backend's root loader field for this
+	    (`excludedTaxLedgers`) is not yet on the tree as of this build — absent (`undefined`) →
+	    nothing renders here (a real payload gap to close with Backend, not invented via a second
+	    component-level query).
 
 	D1 stale-data-marker (SELF-229 ramp): the AGGREGATION-level badge is wired below off the SAME
 	whole-user `046` fn_aggregation_has_stale_constituent() payload the §2.1.1 headline already
@@ -78,8 +84,8 @@
 	Tokens only (var(--c-*)); no hardcoded hex/px-spacing/font (ADR-013 P5).
 -->
 <script lang="ts">
-	import type { NavComposition } from '$lib/nav-composition';
-	import { buildupRows, navFootLabel, unavailableActionCopy } from '$lib/nav-composition';
+	import type { NavComposition, ExcludedTaxLedger } from '$lib/nav-composition';
+	import { buildupRows, navFootLabel, unavailableReasonCopy } from '$lib/nav-composition';
 	import { accountTypeLabel } from '$lib/account-display';
 	import type { StalenessData } from '$lib/staleness/stale-constituent';
 	import StaleConstituentBadge from './StaleConstituentBadge.svelte';
@@ -87,8 +93,19 @@
 	// Sec F3(B) (F/CTO-ruled): `staleness` is REQUIRED, no default — a caller that forgets to
 	// thread real staleness data now fails at TYPECHECK, not as a silent "confirmed healthy"
 	// fallback. The live mount (+page.svelte) already passes the real loader value unconditionally.
-	let { composition, staleness }: { composition: NavComposition; staleness: StalenessData } =
-		$props();
+	// `excludedTaxLedgers` (AC 10a) DEFAULTS to `undefined` — a genuinely optional prop, not a
+	// fail-open fallback for a required signal: absent means "Backend's root loader doesn't carry
+	// this field yet," which is a real, reportable payload gap (see module header), not a state
+	// this component can determine on its own.
+	let {
+		composition,
+		staleness,
+		excludedTaxLedgers = undefined
+	}: {
+		composition: NavComposition;
+		staleness: StalenessData;
+		excludedTaxLedgers?: ExcludedTaxLedger[] | null;
+	} = $props();
 
 	const groups = $derived(composition.groups);
 	const ladder = $derived(buildupRows(composition.buildups));
@@ -96,12 +113,13 @@
 	// never a caption beside the table, never a boolean. See $lib/nav-composition.ts.
 	const footLabel = $derived(navFootLabel(composition.buildups));
 
-	// SELF-268 AC 10a / R3 riders 0b + 6 EXPECTED CONTRACT (provisional — see $lib/nav-composition.ts
-	// header). `undefined`/`null` → render nothing (a real payload gap, not a "no exclusions" claim
-	// this component would have to invent). An empty ARRAY is a genuine, renderable fact — it means
-	// zero accounts are currently designated, which is exactly the unmarked-ledger state rider 0b
-	// needs made visible, so it is NOT treated the same as "field absent."
-	const excludedLedgers = $derived(composition.excluded_tax_ledgers ?? undefined);
+	// SELF-268 AC 10a / R3 riders 0b + 6 — `excludedTaxLedgers` is now a SIBLING prop (Backend's
+	// root loader field, per team-lead 2026-09-04), not nested in `composition`. `undefined`/`null`
+	// → render nothing (a real payload gap, not a "no exclusions" claim this component would have
+	// to invent). An empty ARRAY is a genuine, renderable fact — it means zero accounts are
+	// currently designated, which is exactly the unmarked-ledger state rider 0b needs made visible,
+	// so it is NOT treated the same as "field absent."
+	const excludedLedgers = $derived(excludedTaxLedgers ?? undefined);
 
 	// Whole-dollar USD — matches the §2.1.1 headline so the NAV foot reads identical to it
 	// (foot-to-NAV visual consistency; the exactness is a backend invariant on the raw numbers).
@@ -214,12 +232,13 @@
 						{/if}
 					</th>
 					{#if 'status' in row && row.status === 'unavailable'}
-						<!-- AC 6 (E41 envelope shape): buildupRows() routes an unavailable envelope to a row
-						     variant with NO `displayValue` field at all — there is nothing numeric here to
-						     accidentally render as `$0`. `row.reason` is 104's stable machine code. -->
+						<!-- AC 6 (E41-E42 envelope shape, Sec P-18): buildupRows() routes an unavailable
+						     envelope to `displayValue: null` — never a numeric value to accidentally render
+						     as `$0`. `row.reason` (104's stable machine code) maps to user-facing copy via
+						     unavailableReasonCopy() so this cell never shows the raw machine code. -->
 						<td class="num tax-unavailable">
 							Unavailable
-							<span class="tax-unavailable-reason">— {unavailableActionCopy(row.reason)}</span>
+							<span class="tax-unavailable-reason">— {unavailableReasonCopy(row.reason)}</span>
 						</td>
 					{:else}
 						<td class="num">{usd.format(row.displayValue)}</td>
@@ -237,12 +256,12 @@
 	</table>
 </div>
 
-<!-- AC 10a / R3 riders 0b + 6 (EXPECTED CONTRACT, provisional — see $lib/nav-composition.ts
-     header). Rendered even when the list is EMPTY: an unmarked tax-authority account becomes
-     visible as "not excluded" only because this note names what IS excluded — hiding an empty
-     state here would hide the exact default-state failure rider 0b names. Absent the field
-     entirely (105 doesn't emit it yet) → nothing renders; that gap is reported upstream, never
-     papered over with a second component-level query. -->
+<!-- AC 10a / R3 riders 0b + 6 — `excludedTaxLedgers` PROP (see $lib/nav-composition.ts header).
+     Rendered even when the list is EMPTY: an unmarked tax-authority account becomes visible as
+     "not excluded" only because this note names what IS excluded — hiding an empty state here
+     would hide the exact default-state failure rider 0b names. Absent the prop entirely (Backend's
+     root loader doesn't emit `excludedTaxLedgers` yet) → nothing renders; that gap is reported
+     upstream, never papered over with a second component-level query. -->
 {#if excludedLedgers !== undefined}
 	<div class="exclusion-note">
 		{#if excludedLedgers.length > 0}
