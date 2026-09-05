@@ -19,6 +19,10 @@
 # Explicitly NOT catching at CI (covered by human PR-review per ARCH §6.1 RT-22 row):
 #   - COPY of package.json / requirements.txt manifests (install intent revealed
 #     at RUN time, not COPY time; manifest inspection is human-second-line).
+#     ⚠ package.json ONLY: this claim is now stale at the RT-22 level — see
+#     fence-rt22-pdf-worker-manifest.sh (SELF-350 A6), which opens and parses
+#     the manifest directly. Still true for requirements.txt: no Python
+#     manifest fence exists.
 #   - Transitive Postgres client via base image (not Dockerfile-grep-detectable).
 #
 # Usage:
