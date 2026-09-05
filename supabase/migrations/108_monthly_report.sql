@@ -285,18 +285,35 @@
 --   PostgREST — two facts that can disagree, which is what makes it a real second
 --   layer.** A battery that only exercises the app layer proves nothing about this
 --   constraint.
---   ⚠⚠ **`[PM PENDING]` — THE NUMBER IS PM's, NOT ARCHITECT's.** Taken as
---   default-and-notify at the sitting (*"commentary CHECK-enforced length bound
---   mirrored in Zod, PM picks the number"*), and it is a product prerequisite for
---   this migration rather than a blocker on it. **The value below is a placeholder
---   chosen so the fence is real and testable from day one, NOT a product ruling:
---   4000 characters per column** (≈650 words — comfortably more than a PDF
---   sub-section's prose, comfortably less than a render hazard). **P3's Zod bound
---   must be the SAME number**, and changing it before merge is a one-line edit to
---   this file plus one to the Zod schema. If it changes after merge it is a new
---   migration. ⚠ **`length()` counts CHARACTERS, not bytes** — the Zod mirror must
---   count the same unit or the two layers disagree on multi-byte prose, which is
---   the exact disagreement the catch criterion is designed to surface.
+--   **THE BOUND IS 4000 CHARACTERS PER COLUMN — PM's PRODUCT RULING, taken
+--   2026-09-05**, closing the default-and-notify item the sitting recorded
+--   (*"commentary CHECK-enforced length bound mirrored in Zod, PM picks the
+--   number"*). PM's reasoning, recorded because the number will otherwise look
+--   arbitrary to whoever meets it: a sub-section's commentary is a few sentences to
+--   a short paragraph, so 4000 is roughly **one PDF page per sub-section at the
+--   worst case** — and a tighter bound such as 2000 **risks refusing a heavy month's
+--   commentary inside the draft window**, which is the wrong failure for an
+--   authoring surface.
+--
+--   ⚠⚠ **THE MIRROR RULE, AND IT IS A UNIT QUESTION BEFORE IT IS A NUMBER
+--   QUESTION.** Sec **N-5**'s catch criterion is that *the same value* is rejected at
+--   both layers — an EQUALITY, not merely "the app is at least as strict". The two
+--   layers do not count the same thing by default:
+--     · PostgreSQL `length()` counts **CODE POINTS**;
+--     · JavaScript `String.prototype.length` counts **UTF-16 CODE UNITS**, so every
+--       character outside the BMP (an emoji, many CJK extension characters) counts
+--       as **TWO**.
+--   **So a `.length`-based Zod bound of 4000 is STRICTER than this CHECK, and a body
+--   of 2001 astral characters would be refused by the app and ACCEPTED by the
+--   database — the two layers disagreeing on exactly the input N-5 asks them to
+--   agree on.** **P3's Zod bound must therefore count CODE POINTS:
+--   `Array.from(s).length`, not `s.length`.**
+--   ⚠ **This deliberately differs from the `106` / P7 precedent, and the difference
+--   is not an inconsistency.** There the app used `.length` — the stricter direction
+--   — and Sec accepted it, because that obligation was *"the app must not admit what
+--   the DB refuses"*. **N-5 asks for EQUALITY here**, and stricter-in-one-direction
+--   does not satisfy an equality. Recorded so nobody "aligns" this back to the `106`
+--   idiom on the grounds that it is the house style.
 --
 -- ----------------------------------------------------------------------------
 -- `commentary_disposition` — R12 rider 1. A durable authored-vs-skipped fact per
@@ -418,6 +435,13 @@
 --  10. commentary one character over the bound → refused **through PostgREST**, not
 --      only in the app (Sec N-5).
 --  11. `target_month` not the 1st → refused.
+--  11b. **ONE LIVE DRAFT:** a second INSERT in `draft` for the same
+--      (users_id, target_month) → refused 23505 on
+--      `monthly_report_one_live_draft_per_month`. ⚠ And the leg that proves the index
+--      is PARTIAL rather than over-broad: with a `final` and a `superseded` row
+--      already present for that month, inserting a draft still SUCCEEDS. A leg
+--      testing only the refusal cannot tell this index from one keyed on all three
+--      states, which would make regeneration impossible.
 --  12. **CONSTRUCTION-ONLY (R5 rider — RULED; label the leg as such in its own
 --      text):** the `#3` array fence EXISTS, is attached to
 --      `included_reconciliation_event_ids`, and carries the matched-tenant body.
@@ -442,13 +466,27 @@
 --     generated_at timestamptz · owner_header_at_generation text (NULLable; stays
 --     NULL for a report generated before the user set a header — PM A-13,
 --     authorized at R10) · commentary_cash / commentary_bonds /
---     commentary_marketable_securities / commentary_alternatives text (each
---     length-bounded) · commentary_disposition text (`authored` / `skipped`) ·
+--     commentary_marketable_securities / commentary_alternatives text (each bounded
+--     at 4000 by CHECK) · commentary_disposition text (`authored` / `skipped`) ·
 --     rendered_payload jsonb + payload_schema_version smallint (the R1 frozen
 --     artifact; NULL only while `draft`) · included_reconciliation_event_ids
 --     integer[] (Decision 3 #3, dormant) · created_at · updated_at.
 --     UNIQUE (users_id, target_month) WHERE generation_status = 'final' — Lock 11
---     verbatim.
+--     verbatim. PLUS a SECOND partial UNIQUE on the same key WHERE
+--     generation_status = 'draft' — NOT Lock 11; the product invariant that at most
+--     ONE LIVE DRAFT exists per (user, month), so a concurrent Generate cannot
+--     silently orphan an author's in-progress commentary on a row nothing will ever
+--     finalize or delete.
+--   ⚠ COMMENTARY LENGTH — THE MIRROR RULE, a UNIT question before it is a number
+--     question. The CHECK bound is 4000 and `length()` counts CODE POINTS.
+--     JavaScript `.length` counts UTF-16 CODE UNITS, so an astral character counts
+--     TWICE there. **P3's Zod bound must count code points — `Array.from(s).length`,
+--     never `s.length`** — because Sec N-5's criterion is that the SAME VALUE is
+--     rejected at both layers, an EQUALITY rather than "the app is at least as
+--     strict". A `.length` mirror would refuse 2001 astral characters that this
+--     CHECK accepts. ⚠ This differs from the `106` precedent on purpose: there the
+--     obligation was one-directional and the stricter unit was accepted; here it is
+--     an equality, and stricter does not satisfy it.
 --   MUTATION SURFACE, per role:
 --     · authenticated — SELECT / INSERT / UPDATE on own rows, aal2-claused. **NO
 --       DELETE grant and NO DELETE policy.** Every write additionally passes the
@@ -545,9 +583,13 @@ create table if not exists pfin.monthly_report (
     check (commentary_disposition is null
         or commentary_disposition in ('authored', 'skipped')),
 
-  -- [PM PENDING] the number is PM's; 4000 is a placeholder chosen so the fence is
-  -- real and testable from day one. P3's Zod bound must be the SAME number and must
-  -- count CHARACTERS, as length() does.
+  -- 4000 characters, PM's product ruling (2026-09-05): roughly one PDF page per
+  -- sub-section at the worst case, where a tighter bound risks refusing a heavy
+  -- month's commentary inside the draft window. ⚠ P3's Zod bound must be the SAME
+  -- number AND must count CODE POINTS (Array.from(s).length) — length() here counts
+  -- code points while JS .length counts UTF-16 units, so a .length bound would be
+  -- STRICTER and the two layers would disagree on astral characters, which is
+  -- exactly the input Sec N-5 requires them to agree on.
   constraint monthly_report_commentary_cash_len
     check (commentary_cash is null or length(commentary_cash) <= 4000),
   constraint monthly_report_commentary_bonds_len
@@ -569,11 +611,47 @@ create table if not exists pfin.monthly_report (
 );
 
 -- Lock 11's partial UNIQUE, verbatim. At most one `final` report per user per
--- month; drafts and superseded rows are unconstrained, which is what makes
--- regeneration expressible at all.
+-- month; superseded rows are unconstrained, which is what makes regeneration
+-- expressible at all.
 create unique index if not exists monthly_report_one_final_per_month
   on pfin.monthly_report (users_id, target_month)
   where generation_status = 'final';
+
+-- ----------------------------------------------------------------------------
+-- ⚠ AT MOST ONE **LIVE DRAFT** PER (user, month) — ruled 2026-09-05 on PM's
+-- objection, REVERSING an earlier ruling that declined this index. It is NOT part of
+-- Lock 11 and it is recorded as a product invariant with its own reason.
+--
+-- THE FALSIFYING CASE PM SUPPLIED, which is why "multiple drafts are just the
+-- audit-class shape" does not survive: tab A is editing draft #1; tab B clicks
+-- Generate and INSERTs draft #2; tab A's Save lands on #1, which is still `draft`
+-- and therefore still writable; P4 then finalizes #2 — **blank**. The author's
+-- commentary is silently lost, and #1 **persists forever**, because clause 6(a)
+-- blocks DELETE on everything and no role holds a DELETE grant even for drafts.
+-- ⚠ **Silent, permanent, and invisible to every existing fence** — the immutability
+-- trigger is working exactly as designed in that story.
+--
+-- WHAT THIS INDEX DOES NOT DO: it does not constrain `final` or `superseded`, so the
+-- full regeneration history still coexists under one month. It fences only the
+-- LIVE-EDIT slot.
+-- CONSEQUENCES FOR THE WRITE PATHS, which is where the behaviour actually changes:
+-- **Generate on a month that already has a live draft OPENS that draft; it never
+-- INSERTs.** **Regenerate becomes a FINAL-ONLY affordance** (the final -> superseded
+-- path). Copy is PM's.
+-- LOSING SIDE, RECORDED — it is the earlier ruling's position, now the minority one:
+-- a second Generate click **can now raise 23505** where before it silently created a
+-- row, so the app owes that path a real handler rather than an error toast; and this
+-- is a uniqueness fence on an audit-class table, which is a shape this project
+-- otherwise reserves for Lock 11's own index.
+-- ⚠ It also makes the read-composition helper's *"highest `report_id` in draft"* rule
+-- degenerate — with at most one live draft there is nothing to choose between. That
+-- rule and its echoed `source_report_id` are KEPT as written: the echo is what lets a
+-- caller ASSERT it composed from the row it is about to write, and an assertion that
+-- can no longer fail is still the thing that proves this index is holding.
+-- ----------------------------------------------------------------------------
+create unique index if not exists monthly_report_one_live_draft_per_month
+  on pfin.monthly_report (users_id, target_month)
+  where generation_status = 'draft';
 
 comment on table pfin.monthly_report is
   'The Lock 11 monthly-report HEADER and the carrier of the R1 frozen rendered '

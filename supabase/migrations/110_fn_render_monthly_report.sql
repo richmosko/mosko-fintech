@@ -1,4 +1,155 @@
 -- ============================================================================
+-- PART 1 OF THIS FILE — pfin.fn_nav_delta_panel_as_of + pfin.fn_nav_reference_dates_as_of:
+--   AS-OF-THREADABLE forms of the §2.1.3 period-delta panel and the §2.1.4
+--   reference-date panel, plus the two existing zero-argument functions RE-ISSUED
+--   as thin delegators onto them. They close Finding 1 below.
+--   ⚠ JOINT-REVIEW-MANDATORY IN ITS OWN RIGHT: this part RE-ISSUES TWO SHIPPED
+--   FINANCIAL READ SURFACES. A reviewer must read it as a separate concern from the
+--   composer in Part 2, even though the two share a file.
+--
+--   ⚠⚠ **WHY THESE SHARE A FILE WITH THE COMPOSER RATHER THAN SITTING IN THEIR OWN
+--   MIGRATION, which was the first shape and was WRONG.** They were drafted as a
+--   separate `112`. **That does not apply on a clean chain: migrations run in
+--   filename order, and the composer at `110` would then reference functions that do
+--   not exist until `112`.** The defect was invisible on the scratch database where
+--   the composer had been re-applied AFTER `112` — a migration applied on top of its
+--   own prior outcome demonstrates nothing — and surfaced only on a clean
+--   `001`-onwards chain. **The prerequisite must precede its consumer, and there is
+--   no free number below `110`**, so the two parts share one file with the
+--   dependency ordered inside it. Renumbering the already-pushed composer was the
+--   alternative and was declined: QA and Backend build against `110` by number.
+--
+-- ----------------------------------------------------------------------------
+-- THE CATCH CRITERION THIS EXISTS TO MEET, stated first because it is the whole
+--   point: **a regenerated report about a PAST month must render §2.1.3 and §2.1.4
+--   as of THAT month, or say `unavailable` with a stable code — never today's
+--   numbers frozen as a measurement.**
+--   Before this migration only the second half was reachable. `fn_nav_delta_panel()`
+--   and `fn_nav_reference_dates()` take NO parameters and read
+--   `pfin.fn_server_today()` internally, so `110` could not thread `p_data_as_of`
+--   into them and emitted an `unavailable` envelope carrying
+--   `reader_not_as_of_threadable`. **That was correct and safe and it withheld two of
+--   the six report sections' content.** This migration makes the first half
+--   reachable, so the envelope becomes the fallback rather than the outcome.
+--
+-- ----------------------------------------------------------------------------
+-- ⚠⚠ SHAPE — **DISTINCT NAMES, NOT AN OVERLOAD, AND THE REASON IS A SHIPPED
+--   POSTGREST CALL PATH RATHER THAN A DATABASE CONCERN.**
+--   The shape proposed to me was an overload: add `fn_nav_delta_panel(p_data_as_of
+--   date)` as a NEW signature beside the existing zero-argument one, no default, so
+--   nothing is dropped. **In the database that is sound** — a no-default one-argument
+--   overload beside a zero-argument function is unambiguous in both directions, no
+--   `regprocedure`-anchored assertion in any other file breaks, [ADR-011](DECISIONS.md#adr-011)
+--   Decision 9 is untouched because both are INVOKER, and Lock 15 threading holds.
+--   **It is not taken, and the disqualifying fact is outside the database:** these
+--   functions are called over **PostgREST RPC** from shipped app code —
+--   `supabase.schema('pfin').rpc('fn_nav_reference_dates')`, verified in
+--   `api/src/lib/server/queries/nav-reference-dates.ts` — with **no arguments**.
+--   PostgREST resolves an overloaded RPC by matching the request body's KEYS to
+--   parameter names, so an empty body would have to select the zero-argument
+--   candidate out of a set of two. **That resolution step does not exist today, and I
+--   cannot verify it without writing to the dev database, which is not mine to
+--   write.** A distinct name **removes the question instead of answering it**: there
+--   is no overload, so `rpc('fn_nav_reference_dates')` resolves exactly as it does
+--   now, and the only thing that changed for that caller is what the body does
+--   internally.
+--   **LOSING SIDE, NAMED: the names are uglier**, and a reader meeting
+--   `fn_nav_delta_panel_as_of` may reasonably ask why it is not simply an overload.
+--   This block is the answer. **A cosmetic cost is the right thing to pay to avoid
+--   introducing an unverifiable resolution dependency on a shipped read path.**
+--
+-- ----------------------------------------------------------------------------
+-- ⚠ THE ZERO-ARGUMENT FUNCTIONS ARE RE-ISSUED AS DELEGATORS, AND THAT IS THE HALF
+--   THAT NEEDS THE MOST CARE. The alternative — leaving them alone and letting the
+--   `_as_of` forms carry their own copy of the logic — would put **two copies of
+--   financial arithmetic on the tree that must agree forever**, which is the failure
+--   this project's single-substrate rule exists to prevent. So there is ONE body per
+--   panel, parameterized, and the zero-argument form supplies
+--   `pfin.fn_server_today()` to it.
+--   **CONTRACT PRESERVED EXACTLY:** same names, same `RETURNS TABLE` column lists
+--   byte-for-byte, same INVOKER posture, same `search_path` pin. Their EXECUTE ACLs
+--   survive untouched — `CREATE OR REPLACE` preserves them — so no grant is re-issued
+--   here and none should be.
+--   ⚠⚠ **VOLATILITY IS RE-DECLARED ON EVERY FUNCTION IN THIS FILE, AND OMITTING IT
+--   WOULD BE A SILENT REGRESSION.** `CREATE OR REPLACE` **RESETS volatility to the
+--   default (VOLATILE)**; both zero-argument functions are `STABLE` today, and that
+--   pin is invisible to every value assertion — a battery comparing rows would stay
+--   green while the planner lost every optimisation that depends on it. `stable` is
+--   therefore written into all four bodies.
+--
+-- ----------------------------------------------------------------------------
+-- HOW THE `_as_of` BODIES WERE PRODUCED — fidelity by CONSTRUCTION, not by review.
+--   They were not retyped. Each was extracted with `pg_get_functiondef` from a clean
+--   `001`–`111` scratch apply — **the LIVE definition from the catalog, not the text
+--   of whichever migration file appears to define it** — and exactly three
+--   substitutions were applied, each asserted to match EXACTLY ONCE:
+--     (1) the function name and signature;
+--     (2) `v_today := pfin.fn_server_today();` → `v_today := p_data_as_of;`;
+--     (3) the posture header, to state `security invoker` explicitly (the catalog
+--         omits it because INVOKER is the default).
+--   **Substitution (2) is safe because each body reads the clock EXACTLY ONCE, and
+--   each says so in its own comment** — *"070's answer; the ONLY clock read in this
+--   function"* — which was verified by count rather than trusted: one occurrence of
+--   `pfin.fn_server_today()` in each definition. Every date each panel derives
+--   (`v_base`, `v_ye_period`, `v_ye_date`, `v_prior_mth`) is computed FROM `v_today`,
+--   so parameterizing that one assignment moves the whole panel's anchor coherently.
+--   ⚠ **If a future edit adds a second clock read to either body, this migration's
+--   substitution is no longer sufficient and the `_as_of` form silently goes back to
+--   being partly anchored on today.** That is the regression to watch for, and it is
+--   what the paired QA leg below is for.
+--
+-- ----------------------------------------------------------------------------
+-- POSTURE RATIONALE — SECURITY INVOKER on all four (the shipped posture, preserved);
+--   NOT SECURITY DEFINER. `set search_path = ''` on all four. Volatility `stable`,
+--   declared per signature. **The Decision 9 allowlist is UNCHANGED** — read it live;
+--   no size is stated here. EXECUTE on the two NEW functions is revoked from `public`
+--   and granted to `authenticated` only, the `104` / `105` shape; **never to a
+--   `rolbypassrls` role**, where the EXECUTE grant would be the entire perimeter
+--   rather than the weakest fence.
+--
+-- ----------------------------------------------------------------------------
+-- ⚠ ADR-011 DECISION 3 — UNTOUCHED. This migration creates no table, no column and
+--   no FK-shaped reference. Read Decision 3 live; no count is carried here.
+--
+-- §10 3-AXIS CROSS-CHECK ([ADR-011](DECISIONS.md#adr-011) Decision 4 read VERBATIM
+--   and LIVE before drafting, 2026-09-05. Path B — not restated, no count carried).
+--   (i)   INSTANCE-NUMBERING — nothing added, removed, reordered or renumbered.
+--   (ii)  LAYER-ATTRIBUTION — nothing moves; no surface becomes "four-layer".
+--   (iii) VERBATIM-VS-PARAPHRASE — Decision 4 is LINKED, never restated.
+--
+-- ----------------------------------------------------------------------------
+-- Part 1's dependencies: 097 (the two functions it re-issues), 070
+--   (`fn_server_today`), and 062 / 095 (the series readers those bodies compose on).
+--   ⚠ PART 1 MUST EXECUTE BEFORE PART 2 IN THIS FILE — Part 2's composer calls the
+--   `_as_of` forms Part 1 creates. That ordering is the whole reason the two share a
+--   file rather than sitting in separate migrations.
+--
+-- ----------------------------------------------------------------------------
+-- QA PAIRING LIST for this file:
+--   1. **EQUIVALENCE, the load-bearing leg:** for every returned column,
+--      `fn_nav_delta_panel()` equals `fn_nav_delta_panel_as_of(fn_server_today())`,
+--      and likewise for the reference-dates pair. The delegation must be
+--      behaviour-preserving, and this is what says so.
+--   2. **THE PANEL ACTUALLY MOVES:** `..._as_of(D1)` and `..._as_of(D2)` for two
+--      dates in different months return DIFFERENT anchors. ⚠ Without this leg, a
+--      body that ignored its parameter would pass leg 1 perfectly — the parameter
+--      must be shown to be load-bearing, not merely accepted.
+--   3. **ONE CLOCK:** `..._as_of(D)` for a PAST `D` must not vary with the server's
+--      today. The sharp form is to run it under two different `TimeZone`/clock
+--      conditions, or simply to assert its anchors are derived from `D` alone.
+--   4. **Volatility is still pinned:** `provolatile = 's'` on all four signatures
+--      after this migration. A `CREATE OR REPLACE` that dropped the declaration would
+--      be invisible to every value assertion, which is why this is a catalog leg.
+--   5. EXECUTE ACL: the two new functions grant `authenticated` and NOT `public`, and
+--      no `rolbypassrls` role holds EXECUTE on any of the four.
+--   6. The two zero-argument signatures still EXIST (nothing was dropped), so every
+--      `regprocedure`-anchored assertion elsewhere still resolves.
+-- ============================================================================
+--
+-- (Part 2 — the composer itself — begins at its own CONTRACT block below.)
+-- ============================================================================
+
+-- ============================================================================
 -- Migration: pfin.fn_render_monthly_report — the SINGLE SECURITY INVOKER
 --   read-composition helper for the §2.6 monthly report. Phase 6 Build Loop,
 --   Linear SELF-347 / A3. Realizes [ADR-011](DECISIONS.md#adr-011) Decision 15 /
@@ -89,27 +240,37 @@
 --   wrong number, indistinguishable from a correct one and permanent once frozen.
 --   That is the exact pathology `062`'s header and ADR-053 Decision 1 are built
 --   around, arriving on a different surface.
---   **OPTIONS, WITH THE ONE TAKEN AND WHY:**
---     (α) **TAKEN, for this migration.** Compose NAV Performance from the
---         AS-OF-THREADABLE readers only (`fn_nav_series` +
---         `fn_nav_series_inflation_adjusted`, both bounded by `p_data_as_of`), and
---         EMIT THE §2.1.3 / §2.1.4 SECTIONS AS AN EXPLICIT `unavailable` ENVELOPE
---         CARRYING A STABLE MACHINE CODE — `reader_not_as_of_threadable`. **The
---         report says the panel is absent and why; it does not silently omit it and
---         it does not print a wrong one.** Cost, named: the §2.6.1 NAV Performance
---         section is incomplete against AC 4 until (γ) lands.
---     (β) **NOT TAKEN.** Call them anyway and accept a today-anchored panel. Rejected
---         on the reasoning above — it is the fabrication-shaped-like-a-measurement
+--   ⚠ **CLOSED 2026-09-05 BY PART 1 OF THIS FILE. This function now threads all four readers, and
+--   the `unavailable` envelope is the FALLBACK rather than the outcome.**
+--   **OPTIONS, AND WHY THE THIRD WAS BUILT:**
+--     (α) **SHIPPED FIRST, NOW SUPERSEDED.** Compose from the threadable readers only
+--         and emit §2.1.3 / §2.1.4 as an explicit `unavailable` envelope carrying
+--         `reader_not_as_of_threadable`. Correct and safe, and it **withheld two of
+--         the six sections' content** — which is why it was the interim and not the
+--         answer.
+--     (β) **NOT TAKEN, EVER.** Call the zero-argument forms anyway and accept a
+--         today-anchored panel. It is the fabrication-shaped-like-a-measurement
 --         failure, made permanent by the freeze.
---     (γ) **THE REAL FIX, AND IT IS F/CTO's CALL BECAUSE IT WIDENS THIS PR.** Add an
---         as-of parameter to both readers so they can be threaded. ⚠ **It is NOT a
---         free additive change:** `fn_nav_delta_panel()` takes zero arguments, so
---         adding `p_as_of date default …` creates an AMBIGUOUS zero-argument call
---         against the existing signature; the old signature must be DROPPED, which
---         **invalidates every `regprocedure`-anchored assertion in other files'
---         batteries** and re-opens two shipped financial read surfaces under Sec
---         review. That is a real cost on real files, which is why it is not taken
---         unilaterally inside a migration whose subject is a different table.
+--     (γ) **TAKEN, as Part 1 above.** Give both panels AS-OF forms and thread them.
+--         ⚠ My earlier note that this required DROPPING the zero-argument signatures
+--         **was wrong, and the correction is the whole reason it became cheap:** the
+--         ambiguity I described arises only from a parameter with a DEFAULT, which
+--         would make a one-argument function callable with zero arguments. **A
+--         no-default form creates no ambiguity**, so nothing had to be dropped and no
+--         `regprocedure`-anchored assertion anywhere breaks. Recorded because the
+--         earlier reasoning was the sole ground for calling this expensive.
+--         ⚠ **Part 1 does NOT use an overload, though — it uses DISTINCT NAMES**
+--         (`..._as_of(date)`), because these functions are called over PostgREST RPC
+--         by shipped app code with no arguments, and an overload would make an empty
+--         request body resolve against a candidate SET rather than a single
+--         function. That resolution step does not exist today and cannot be verified
+--         without writing to the dev database. See Part 1's header block for the
+--         full reasoning and its named losing side.
+--   **THE CATCH CRITERION IS MET, MEASURED RATHER THAN ASSERTED:** composing a report
+--   for a PAST month returns that month's anchors, not today's — verified on a clean
+--   apply, `p_data_as_of = 2025-06-30` yielding anchors 2020-06-30 / 2022-06-30 /
+--   2024-06-30 / 2024-12-31 / 2025-05-31, against a wholly different set for
+--   2026-08-31.
 --   **A NOTE ON WHY THIS WAS NOT VISIBLE AT THE SITTING:** AC 4 names the readers by
 --   PRD SECTION, not by signature, and the two unthreadable ones were re-issued at
 --   `097` under a migration named for something else. The identifiers resolve; the
@@ -327,9 +488,16 @@
 --   6. The `unavailable` case is the BOOTSTRAP DEFAULT, not an edge case: a user with
 --      no designated tax ledger gets `unavailable` envelopes and a rendered reason,
 --      never `$0`.
---   7. The §2.1.3 / §2.1.4 sections carry the `reader_not_as_of_threadable`
---      envelope (Finding 1, option α) — asserted so that closing Finding 1 REDS this
---      leg and forces the payload contract to be re-read.
+--   7. **THE FINDING-1 CATCH CRITERION, and it is the sharp leg in this file:**
+--      compose the SAME `p_target_month` twice with two different `p_data_as_of`
+--      values in different months, and assert the §2.1.3 `anchor_date` set and the
+--      §2.1.4 `reference_date` set DIFFER. ⚠ **A leg that only checks the panels are
+--      present passes against a today-anchored implementation**, which is the exact
+--      defect Finding 1 exists to prevent — the panels must be shown to MOVE with the
+--      as-of, not merely to be there. Pair it with Part 1's own equivalence leg
+--      (`fn_nav_delta_panel()` = `fn_nav_delta_panel_as_of(fn_server_today())`), which
+--      is what proves the delegation did not change the live behaviour of the
+--      zero-argument readers the app already calls.
 --   8. A cross-tenant caller (INVOKER, no rows) gets a well-formed payload with empty
 --      sections, NOT an error and NOT a NULL — it fails closed INTO A SHAPE THAT SAYS
 --      SO.
@@ -355,15 +523,24 @@
 --   `sections.rebalancing_targets.source_report_id`, so the caller can ASSERT it
 --   equals the row it is about to write.** That converts a silent mismatch into a
 --   checkable one, which is the most a two-argument signature can do from inside.
---   **THE ACTUAL FIX, RECOMMENDED AND NOT TAKEN HERE:** a second partial unique index
---   on `108` — `unique (users_id, target_month) where generation_status = 'draft'` —
---   which makes *"the draft for this month"* well-defined and makes the ruled
---   signature coherent by construction. **It is not added unilaterally because it is
---   PRODUCT-VISIBLE: a second Regenerate click would fail 23505 instead of creating a
---   draft, and no ruling covers that.** It is one line in `108` if F/CTO says yes.
---   ⚠ Recorded rather than papered over, because *"pending = draft"* (the R10
---   presentation bridge) is phrased in the singular and reads as though the
---   guarantee already exists.
+--   ⚠ **RESOLVED 2026-09-05 — THE GUARANTEE NOW EXISTS, AND THIS FUNCTION IS
+--   UNCHANGED BY IT.** `108` gained a second partial unique index,
+--   `(users_id, target_month) where generation_status = 'draft'`, on PM's objection:
+--   the falsifying case is two tabs, where tab B's Generate inserts a second draft,
+--   tab A's Save lands on the first, and P4 finalizes the second BLANK — silent
+--   commentary loss, with the orphan persisting forever because DELETE is blocked on
+--   everything. So *"pending = draft"* is now singular in fact and not only in
+--   phrasing.
+--   **WHAT THAT CHANGES HERE: nothing in the body, deliberately.** The
+--   highest-`report_id` rule becomes degenerate — there is at most one row to choose
+--   from — and `source_report_id` is still echoed. **An assertion that can no longer
+--   fail is still the instrument that proves the index is holding**, and if the index
+--   is ever dropped or narrowed this function keeps composing deterministically
+--   rather than arbitrarily. Removing either would trade a working check for nothing.
+--   **The cost moved rather than disappeared:** a second Generate click can now raise
+--   23505, so Generate must OPEN an existing live draft rather than insert, and
+--   Regenerate becomes a FINAL-only affordance. That is app-layer copy and behaviour,
+--   not a schema question, and it is recorded in the ADR rather than here.
 --
 -- ----------------------------------------------------------------------------
 -- CONTRACT — **THIS IS THE PAYLOAD SHAPE BACKEND AND FRONTEND BUILD AGAINST**
@@ -390,10 +567,18 @@
 --       "nav_performance": {                 -- §2.6.1 (2) <- §2.1.2/.3/.4 readers
 --          "series":                   [ {point_date, nav_value, checkpoint_date} ],
 --          "series_inflation_adjusted":[ {point_date, nav_nominal, nav_inflation_adjusted, ...} ],
---          "delta_panel":     {"status":"unavailable","reason":"reader_not_as_of_threadable"},
---          "reference_dates": {"status":"unavailable","reason":"reader_not_as_of_threadable"}
---          -- ⚠ the last two are Finding 1. They are ABSENT-WITH-A-REASON, never
---          -- silently omitted and never today-anchored.
+--          "delta_panel":     [ {horizon, anchor_date, anchor_checkpoint_date,
+--                                current_checkpoint_date, delta_nominal, delta_percent,
+--                                delta_inflation_adjusted,
+--                                delta_inflation_adjusted_percent, cpi_basis_period,
+--                                cpi_any_carried, cpi_unavailable} ],
+--          "reference_dates": [ {reference, reference_date, reference_checkpoint_date,
+--                                nav, nav_prior_yr_dollars, cpi_period,
+--                                cpi_basis_period, cpi_any_carried, cpi_unavailable} ]
+--          -- ⚠ BOTH ARE ARRAYS, threaded on p_data_as_of via Part 1's as-of forms —
+--          -- NOT the {status, reason} envelopes an earlier draft emitted. A consumer
+--          -- written against that draft must be updated; this is a payload-shape
+--          -- change and would be a payload_schema_version bump after merge.
 --       },
 --       "asset_allocation": {                -- §2.6.1 (3) <- fn_subcat_market_value + planning_target
 --          "rows": [ {sub_cat_id, cat, sub_cat, market_value, target_percent} ]
@@ -444,6 +629,373 @@
 -- ============================================================================
 
 create schema if not exists pfin;
+
+-- ---------------- PART 1: the as-of panel readers (prerequisites) -------------
+
+-- ----------------------------------------------------------------------------
+-- The AS-OF forms. Bodies are the live catalog definitions with exactly one
+-- behavioural substitution: the single clock read becomes the caller's parameter.
+-- ----------------------------------------------------------------------------
+create or replace function pfin.fn_nav_delta_panel_as_of(p_data_as_of date)
+ RETURNS TABLE(horizon text, anchor_date date, anchor_checkpoint_date date, current_checkpoint_date date, delta_nominal numeric, delta_percent numeric, delta_inflation_adjusted numeric, delta_inflation_adjusted_percent numeric, cpi_basis_period date, cpi_any_carried boolean, cpi_unavailable boolean)
+language plpgsql
+security invoker
+stable
+set search_path = ''
+AS $function$
+-- Output names collide with column names on the relations read below. Every
+-- reference is table-qualified and this directive makes the resolution explicit:
+-- an ambiguous bare name resolves to the COLUMN, never the output variable.
+#variable_conflict use_column
+declare
+  v_today       date;      -- 070's answer; the ONLY clock read in this function
+  v_base        date;      -- month-end AT-OR-BEFORE today. The grain anchor for
+                           -- 1y/3y/5y ONLY -- NOT the month anchor; see below.
+  v_cur_nav     numeric;   -- current endpoint value
+  v_cur_cp      date;      -- checkpoint that served the current endpoint
+  v_ye_period   date;      -- December of the prior calendar year
+  v_cpi_ye      numeric;   -- basis CPI
+  v_cpi_ye_c    boolean;   -- basis CPI was carried
+  v_cpi_cur     numeric;   -- CPI at coverage_through ("now")
+  v_cpi_cur_c   boolean;
+  v_coverage    date;
+  h             record;    -- per-horizon anchor
+  v_a_nav       numeric;
+  v_a_cp        date;
+  v_cpi_a       numeric;
+  v_cpi_a_c     boolean;
+  v_real_base   numeric;   -- the anchor endpoint IN PRIOR-YEAR-END DOLLARS;
+                           -- bound once and used by BOTH real-terms outputs
+  v_adj         numeric;
+  v_adj_pct     numeric;
+  v_unavail     boolean;
+  v_carried     boolean;
+begin
+  -- ONE clock read, via 070, so both sides of every comparison below use the
+  -- same day (ADR-044 R2). Everything downstream is date arithmetic on a `date`
+  -- and is therefore zone-free; the residual across containers is in the header.
+  v_today := p_data_as_of;   -- 110 Part 1: the clock is the CALLER'S as-of, threaded
+
+  -- The month-end AT-OR-BEFORE today, today included. `::timestamp` is
+  -- zone-free (WITHOUT time zone) — the 062 idiom.
+  -- ⚠ THIS FEEDS 1y/3y/5y ONLY. Its true-branch (today IS a month-end -> today
+  -- is its own base) is what keeps those three anchors at EXACTLY 12/36/60
+  -- months on a month-end day, and it is why this CASE is kept. The `month`
+  -- horizon must NOT use it: month = base would then make the anchor and the
+  -- current endpoint the same LOCF predicate and force delta 0. See the header.
+  v_base := case
+              when v_today = (date_trunc('month', v_today::timestamp)
+                              + '1 mon'::interval - '1 day'::interval)::date
+                then v_today
+              else (date_trunc('month', v_today::timestamp) - '1 day'::interval)::date
+            end;
+
+  v_ye_period := (date_trunc('year', v_today::timestamp) - '1 year'::interval
+                  + '11 mon'::interval)::date;   -- 1 December of the prior year
+
+  -- Current endpoint: the caller's latest checkpoint at-or-before today.
+  select nd.nav_value, nd.nav_date into v_cur_nav, v_cur_cp
+  from pfin.nav_daily nd
+  where nd.nav_date <= v_today
+  order by nd.nav_date desc
+  limit 1;
+
+  -- Basis and "now" CPI, both through 066. coverage_through is a property of the
+  -- STORE, so any non-NULL argument yields it; the CPI-U epoch is a fixed,
+  -- never-NULL, zone-free probe (the 067 idiom).
+  select h2.coverage_through into v_coverage
+  from pfin.fn_cpi_u_index_for_period(date '1913-01-01') h2;
+
+  select h2.cpi_value, h2.is_carried into v_cpi_ye, v_cpi_ye_c
+  from pfin.fn_cpi_u_index_for_period(v_ye_period) h2;
+
+  if v_coverage is not null then
+    select h2.cpi_value, h2.is_carried into v_cpi_cur, v_cpi_cur_c
+    from pfin.fn_cpi_u_index_for_period(v_coverage) h2;
+  end if;
+
+  for h in
+    -- Fixed order. All anchors are month-ends, so every one lands on the
+    -- imported decade's grain (ADR-053 D7). 'adj' marks the horizons that carry
+    -- an inflation-adjusted figure at all — month/ytd do not, BY DESIGN.
+    -- ⚠ 'month' is the month-end STRICTLY BEFORE today, written INLINE rather
+    -- than off v_base — deliberately, and in the same shape as the 'ytd' row
+    -- directly below it, which has always been written this way. Off v_base it
+    -- degenerates to the current endpoint on a month-end (delta 0 every time);
+    -- 1y/3y/5y keep v_base because they need its at-or-before branch. The
+    -- expression is the CASE's else-branch, now unconditional.
+    select * from (values
+      ('month'::text, (date_trunc('month', v_today::timestamp)
+                       - '1 day'::interval)::date,                         false),
+      ('ytd'::text,   (date_trunc('year', v_today::timestamp)
+                       - '1 day'::interval)::date,                          false),
+      ('1y'::text,    (v_base::timestamp - '12 mon'::interval)::date,       true),
+      ('3y'::text,    (v_base::timestamp - '36 mon'::interval)::date,       true),
+      ('5y'::text,    (v_base::timestamp - '60 mon'::interval)::date,       true)
+    ) as t(name, anchor, adj)
+  loop
+    -- Anchor endpoint by at-or-before carry-forward (the 062 idiom). No row =
+    -- the anchor predates every observation this caller has: insufficient
+    -- history, reported as NULLs rather than computed against the earliest
+    -- available checkpoint (which would label a two-month change "1-Year").
+    select nd.nav_value, nd.nav_date into v_a_nav, v_a_cp
+    from pfin.nav_daily nd
+    where nd.nav_date <= h.anchor
+    order by nd.nav_date desc
+    limit 1;
+
+    -- Reset EVERY per-horizon carrier each iteration — these are function-scoped
+    -- variables in a loop, so a value left behind would be attributed to the
+    -- next horizon.
+    v_adj := null; v_adj_pct := null; v_real_base := null;
+    v_unavail := null; v_carried := null;
+
+    if h.adj then
+      -- CPI pinned to the CALENDAR anchor month, never to the serving
+      -- checkpoint — this is what keeps the basis reference from drifting when
+      -- carry-forward reaches back (see the header).
+      select h2.cpi_value, h2.is_carried into v_cpi_a, v_cpi_a_c
+      from pfin.fn_cpi_u_index_for_period(
+             date_trunc('month', h.anchor::timestamp)::date) h2;
+
+      -- Strictly positive on ALL THREE legs: 053 bars NaN/±Infinity but not zero
+      -- or negative, so this is the only thing standing between a poisoned print
+      -- and either a raise or a sign-flipped net-worth figure.
+      v_unavail := not (v_cpi_ye  is not null and v_cpi_ye  > 0
+                    and v_cpi_cur is not null and v_cpi_cur > 0
+                    and v_cpi_a   is not null and v_cpi_a   > 0);
+      v_carried := coalesce(v_cpi_ye_c, false)
+                or coalesce(v_cpi_cur_c, false)
+                or coalesce(v_cpi_a_c, false);
+
+      if not v_unavail and v_cur_nav is not null and v_a_nav is not null then
+        -- THE RATIFIED FORMULA: deflate EACH endpoint into prior-year-end
+        -- dollars, then subtract. Do NOT "simplify" this to a single ratio over
+        -- the nominal delta — that form never deflates the current endpoint and
+        -- is the defect 071 corrected.
+        -- The anchor term is BOUND, not re-spelled: it is the dollar delta's
+        -- subtrahend AND the percent's denominator, and binding it is what
+        -- makes the two columns incapable of disagreeing about the anchor.
+        v_real_base := v_a_nav * (v_cpi_ye / v_cpi_a);
+        v_adj := v_cur_nav * (v_cpi_ye / v_cpi_cur) - v_real_base;
+
+        -- The percent of the DEFLATED anchor — numerator and denominator both
+        -- in prior-year-end dollars. NULL, never 0, on a non-positive base:
+        -- same alike-rendering principle as delta_percent, and a negative base
+        -- would invert the sign of a real-terms figure. The guard is written on
+        -- THE DENOMINATOR ITSELF rather than on v_a_nav, which it is currently
+        -- equivalent to under the strictly-positive CPI guard above — so it
+        -- stays sound if that guard is ever reshaped.
+        if v_real_base > 0 then
+          v_adj_pct := v_adj / v_real_base * 100;
+        end if;
+      end if;
+    end if;
+
+    return query select
+      h.name,
+      h.anchor,
+      v_a_cp,
+      v_cur_cp,
+      case when v_cur_nav is not null and v_a_nav is not null
+           then v_cur_nav - v_a_nav end,
+      -- NULL, never 0, on a zero, NEGATIVE or absent anchor. A NEGATIVE base
+      -- INVERTS THE SIGN — improving from -100 to +100 would report -200%,
+      -- a negative percentage for a positive improvement — which is the
+      -- alike-rendering the ratified principle bars. Nominal and adjusted are
+      -- arithmetically sound over a negative base and are NOT guarded here.
+      case when v_cur_nav is not null and v_a_nav is not null and v_a_nav > 0
+           then (v_cur_nav - v_a_nav) / v_a_nav * 100 end,
+      v_adj,
+      v_adj_pct,
+      case when h.adj then v_ye_period end,
+      v_carried,
+      v_unavail;
+  end loop;
+end;
+$function$;
+
+create or replace function pfin.fn_nav_reference_dates_as_of(p_data_as_of date)
+ RETURNS TABLE(reference text, reference_date date, reference_checkpoint_date date, nav numeric, nav_prior_yr_dollars numeric, cpi_period date, cpi_basis_period date, cpi_any_carried boolean, cpi_unavailable boolean)
+language plpgsql
+security invoker
+stable
+set search_path = ''
+AS $function$
+-- Output names collide with column names on the relations read below. Every
+-- reference is table-qualified and this directive makes the resolution explicit:
+-- an ambiguous bare name resolves to the COLUMN, never the output variable.
+#variable_conflict use_column
+declare
+  v_today      date;      -- 070's answer; the ONLY clock read in this function
+  v_prior_mth  date;      -- month-end STRICTLY BEFORE today = the prior-month
+                          -- reference date. Was v_base, an at-or-before CASE.
+  v_ye_period  date;      -- 1 December of the prior year — the CPI basis PERIOD
+  v_ye_date    date;      -- 31 December of the prior year — the reference DATE
+  v_coverage   date;      -- 066's coverage_through: the "now" CPI observation
+  v_cpi_ye     numeric;   -- basis CPI value
+  v_cpi_ye_c   boolean;   -- basis CPI was carried
+  r            record;    -- per-reference row
+  v_nav        numeric;
+  v_cp         date;
+  v_cpi_r      numeric;   -- this row's own reference-date CPI
+  v_cpi_r_c    boolean;
+  v_real       numeric;
+  v_unavail    boolean;
+  v_carried    boolean;
+begin
+  -- ONE clock read, via 070, so both sides of every comparison below use the
+  -- same day (ADR-044 R2). Everything downstream is date arithmetic on a `date`
+  -- and is therefore zone-free.
+  v_today := p_data_as_of;   -- 110 Part 1: the clock is the CALLER'S as-of, threaded
+
+  -- The most recent COMPLETED month-end, where COMPLETED means completed
+  -- BEFORE today — the SAME expression THIS MIGRATION gives
+  -- pfin.fn_nav_delta_panel's `month` anchor, which is the property that keeps
+  -- the two panels reconcilable on screen. (Pointing at this migration rather
+  -- than at a file number is deliberate: the sentence below names 072 as an
+  -- AUTHORING HOME, and one notation must not carry both meanings here.)
+  -- `::timestamp` is zone-free (WITHOUT time zone), the 062 idiom.
+  -- ⚠ THE CASE THAT USED TO STAND HERE IS GONE, NOT SIMPLIFIED AWAY. Its
+  -- true-branch made today its own base on a month-end, which collapsed
+  -- prior_month onto this_month for the whole of those twelve days. 072 keeps
+  -- an equivalent CASE (its `v_base`) because its 1y/3y/5y anchors need the
+  -- at-or-before reading; this function has no multi-year row, so nothing here
+  -- needs it and the variable is gone rather than left unused.
+  v_prior_mth := (date_trunc('month', v_today::timestamp)
+                  - '1 day'::interval)::date;
+
+  -- Basis PERIOD (1 December, prior year) and prior-year-end reference DATE (31
+  -- December, prior year). Both are pure calendar arithmetic — no 066 call — so
+  -- carry-forward can move the VALUE served for the period but never the period
+  -- itself. v_ye_period matches 072's basis expression exactly.
+  v_ye_period := (date_trunc('year', v_today::timestamp) - '1 year'::interval
+                  + '11 mon'::interval)::date;
+  v_ye_date   := (date_trunc('year', v_today::timestamp) - '1 day'::interval)::date;
+
+  -- coverage_through is a property of the STORE, so any non-NULL argument yields
+  -- it; the CPI-U epoch is a fixed, never-NULL, zone-free probe (the 067 idiom).
+  select h.coverage_through into v_coverage
+  from pfin.fn_cpi_u_index_for_period(date '1913-01-01') h;
+
+  -- The basis leg, read ONCE for the whole table.
+  select h.cpi_value, h.is_carried into v_cpi_ye, v_cpi_ye_c
+  from pfin.fn_cpi_u_index_for_period(v_ye_period) h;
+
+  for r in
+    -- Fixed order. The CPI period per row: "now" for this_month (066's
+    -- coverage_through — the same observation 067/072 call now), and the
+    -- first-of-month of the CALENDAR reference for the other two. Note that
+    -- prior_year_end's calendar reference month IS the basis period, which is
+    -- what makes that row's deflator exactly 1 — it falls out of the pinning
+    -- rule and is NOT special-cased here.
+    select * from (values
+      ('this_month'::text,     v_today,   v_coverage),
+      ('prior_month'::text,    v_prior_mth,
+                               date_trunc('month', v_prior_mth::timestamp)::date),
+      ('prior_year_end'::text, v_ye_date, v_ye_period)
+    ) as t(name, ref_date, cpi_per)
+  loop
+    -- The level at this reference date by at-or-before carry-forward (the 062
+    -- idiom). No row = no observation reaches this reference date: insufficient
+    -- history, reported as NULLs rather than computed against the earliest
+    -- available checkpoint.
+    select nd.nav_value, nd.nav_date into v_nav, v_cp
+    from pfin.nav_daily nd
+    where nd.nav_date <= r.ref_date
+    order by nd.nav_date desc
+    limit 1;
+
+    -- Reset every per-row carrier: these are function-scoped variables in a
+    -- loop, so a value left behind would be attributed to the next reference.
+    v_cpi_r := null; v_cpi_r_c := null; v_real := null;
+
+    -- CPI pinned to the CALENDAR reference, never to the serving checkpoint —
+    -- this is what keeps the basis reference from drifting when carry-forward
+    -- reaches back (see the header). A NULL period means 066 has no coverage at
+    -- all, which resolves to unavailable below rather than to an error.
+    if r.cpi_per is not null then
+      select h.cpi_value, h.is_carried into v_cpi_r, v_cpi_r_c
+      from pfin.fn_cpi_u_index_for_period(r.cpi_per) h;
+    end if;
+
+    -- Strictly positive on BOTH legs: 053 bars NaN/+-Infinity but not zero or
+    -- negative, so this is the only thing standing between a poisoned print and
+    -- either a raise or a sign-flipped net-worth figure.
+    v_unavail := not (v_cpi_ye is not null and v_cpi_ye > 0
+                  and v_cpi_r  is not null and v_cpi_r  > 0);
+
+    -- An OR over THIS ROW'S TWO LEGS — basis and reference. Never NULL: every
+    -- row of this surface is CPI-eligible, so there is no not-applicable case.
+    v_carried := coalesce(v_cpi_ye_c, false) or coalesce(v_cpi_r_c, false);
+
+    if not v_unavail and v_nav is not null then
+      -- Level deflation into prior-year-end dollars — the 067 / 072 shape. On
+      -- the prior_year_end row both legs are the SAME request to 066, so this
+      -- is nav x (v/v) = nav exactly. Do NOT "simplify" the three rows onto a
+      -- single coverage_through observation: that is correct only for
+      -- this_month, and it would silently destroy that exactness.
+      v_real := v_nav * (v_cpi_ye / v_cpi_r);
+    end if;
+
+    return query select
+      r.name,
+      r.ref_date,
+      v_cp,
+      v_nav,
+      v_real,
+      r.cpi_per,
+      v_ye_period,   -- calendar-derived; identical on all rows, never NULL
+      v_carried,
+      v_unavail;
+  end loop;
+end;
+$function$;
+
+-- ----------------------------------------------------------------------------
+-- The zero-argument forms, RE-ISSUED as thin delegators so there is ONE body per
+-- panel. Contract preserved exactly: same names, same RETURNS TABLE column lists,
+-- same INVOKER posture, same search_path pin, `stable` RE-DECLARED because
+-- CREATE OR REPLACE resets volatility. EXECUTE ACLs survive and are not re-issued.
+-- ----------------------------------------------------------------------------
+create or replace function pfin.fn_nav_delta_panel()
+returns table(horizon text, anchor_date date, anchor_checkpoint_date date, current_checkpoint_date date, delta_nominal numeric, delta_percent numeric, delta_inflation_adjusted numeric, delta_inflation_adjusted_percent numeric, cpi_basis_period date, cpi_any_carried boolean, cpi_unavailable boolean)
+language sql
+security invoker
+stable
+set search_path = ''
+as $$
+  select * from pfin.fn_nav_delta_panel_as_of(pfin.fn_server_today());
+$$;
+
+create or replace function pfin.fn_nav_reference_dates()
+returns table(reference text, reference_date date, reference_checkpoint_date date, nav numeric, nav_prior_yr_dollars numeric, cpi_period date, cpi_basis_period date, cpi_any_carried boolean, cpi_unavailable boolean)
+language sql
+security invoker
+stable
+set search_path = ''
+as $$
+  select * from pfin.fn_nav_reference_dates_as_of(pfin.fn_server_today());
+$$;
+
+revoke execute on function pfin.fn_nav_delta_panel_as_of(date) from public;
+grant  execute on function pfin.fn_nav_delta_panel_as_of(date) to authenticated;
+revoke execute on function pfin.fn_nav_reference_dates_as_of(date) from public;
+grant  execute on function pfin.fn_nav_reference_dates_as_of(date) to authenticated;
+
+comment on function pfin.fn_nav_delta_panel_as_of(date) is
+  'AS-OF-THREADABLE form of the PRD §2.1.3 period-delta panel (SELF-347 / A3 Finding 1; Part 1 of migration 110). Identical to pfin.fn_nav_delta_panel() in every respect EXCEPT that the anchor clock is the CALLER''S p_data_as_of instead of pfin.fn_server_today(). SECURITY INVOKER, stable, set search_path = '''' — NOT a SECURITY DEFINER allowlist entry (read ADR-011 Decision 9 live; no size is stated here). ⚠ WHY IT EXISTS: the monthly report is a FROZEN artifact and regeneration is a first-class path, so a panel anchored to the server''s today would, on a regeneration months later, freeze TODAY''S deltas into a report about a PAST month — a confident, plausible, wrong number, indistinguishable from a correct one and permanent once frozen. The report composer threads this function''s parameter from its own p_data_as_of so the panel describes the month the report is about. ⚠ WHY A DISTINCT NAME RATHER THAN AN OVERLOAD ON THE ZERO-ARGUMENT FORM: that form is called over PostgREST RPC by shipped app code with no arguments, and an overload would make an empty request body resolve against a candidate SET rather than a single function — a resolution step that does not exist today and that cannot be verified without writing to the dev database. A distinct name removes the question instead of answering it; the cost is a longer name and it is the right cost to pay. ⚠ THE BODY IS THE LIVE CATALOG DEFINITION OF THE ZERO-ARGUMENT FORM with exactly one behavioural substitution — the single clock read became the parameter — extracted with pg_get_functiondef rather than retyped, and asserted to match exactly once. That substitution is sufficient ONLY BECAUSE the body reads the clock exactly once and derives every other date from it; IF A FUTURE EDIT ADDS A SECOND CLOCK READ, THIS FUNCTION SILENTLY GOES BACK TO BEING PARTLY ANCHORED ON TODAY, which is what the paired equivalence and does-it-move battery legs exist to catch. EXECUTE revoked from public and granted to authenticated only — never to a rolbypassrls role, for which the EXECUTE grant would be the entire perimeter rather than the weakest fence.';
+
+comment on function pfin.fn_nav_reference_dates_as_of(date) is
+  'AS-OF-THREADABLE form of the PRD §2.1.4 reference-date panel (SELF-347 / A3 Finding 1; Part 1 of migration 110). Identical to pfin.fn_nav_reference_dates() except that the anchor clock is the CALLER''S p_data_as_of instead of pfin.fn_server_today(). SECURITY INVOKER, stable, set search_path = '''' — NOT a SECURITY DEFINER allowlist entry (read ADR-011 Decision 9 live). Same provenance, same rationale and same standing hazard as pfin.fn_nav_delta_panel_as_of(date): body extracted from the live catalog definition with one asserted-unique substitution, sufficient only while the body reads the clock exactly once. See that function''s comment for the full reasoning, including why this is a distinct name rather than an overload on the zero-argument form. EXECUTE revoked from public and granted to authenticated only.';
+
+comment on function pfin.fn_nav_delta_panel() is
+  'PRD §2.1.3 period-delta panel, anchored on the SERVER''S TODAY. ⚠ RE-ISSUED IN PART 1 OF MIGRATION 110 AS A THIN DELEGATOR: its logic now lives in pfin.fn_nav_delta_panel_as_of(date), and this function supplies pfin.fn_server_today() to it. THE CONTRACT IS UNCHANGED — same name, same RETURNS TABLE columns, same SECURITY INVOKER posture, same search_path pin, same EXECUTE ACL (CREATE OR REPLACE preserves it, so 112 re-issues no grant here) — and callers, including the PostgREST RPC path in the app, are unaffected. WHY DELEGATE RATHER THAN LEAVE THIS BODY ALONE: the monthly report needs an as-of-threadable form, and the alternative was TWO COPIES OF THE SAME FINANCIAL ARITHMETIC on the tree that would have to agree forever. There is now one body per panel. ⚠ VOLATILITY IS RE-DECLARED stable IN THIS RE-ISSUE BECAUSE CREATE OR REPLACE RESETS IT; omitting the declaration would have silently dropped the pin, invisible to every value assertion. A battery leg asserts this function equals pfin.fn_nav_delta_panel_as_of(pfin.fn_server_today()) column-for-column — that equivalence is what makes the delegation provably behaviour-preserving rather than merely plausible.';
+
+comment on function pfin.fn_nav_reference_dates() is
+  'PRD §2.1.4 reference-date panel, anchored on the SERVER''S TODAY. ⚠ RE-ISSUED IN PART 1 OF MIGRATION 110 AS A THIN DELEGATOR onto pfin.fn_nav_reference_dates_as_of(date), which now holds the logic. THE CONTRACT IS UNCHANGED — same name, same RETURNS TABLE columns, same SECURITY INVOKER posture, same search_path pin, same EXECUTE ACL — so the shipped PostgREST RPC call for this function resolves and behaves exactly as before. Volatility is re-declared stable because CREATE OR REPLACE resets it. See pfin.fn_nav_delta_panel() for the full delegation rationale; a battery leg asserts this function equals its _as_of form at fn_server_today(), column-for-column.';
+
+-- ---------------- PART 2: the read-composition helper -------------------------
 
 create or replace function pfin.fn_render_monthly_report(
   p_target_month date,
@@ -528,6 +1080,41 @@ as $$
       left join pfin.planning_target pt on pt.sub_cat_id = m.sub_cat_id
   ),
 
+  -- §2.6.1 (2) — the §2.1.3 / §2.1.4 panels, THREADED. Part 1's as-of forms are the
+  -- reason this section is complete rather than an unavailable envelope: the
+  -- zero-argument forms read the server's today internally and would have frozen
+  -- TODAY's panel into a report about a past month on every regeneration.
+  delta_panel as (
+    select coalesce(jsonb_agg(jsonb_build_object(
+             'horizon',                          d.horizon,
+             'anchor_date',                      d.anchor_date,
+             'anchor_checkpoint_date',           d.anchor_checkpoint_date,
+             'current_checkpoint_date',          d.current_checkpoint_date,
+             'delta_nominal',                    d.delta_nominal,
+             'delta_percent',                    d.delta_percent,
+             'delta_inflation_adjusted',         d.delta_inflation_adjusted,
+             'delta_inflation_adjusted_percent', d.delta_inflation_adjusted_percent,
+             'cpi_basis_period',                 d.cpi_basis_period,
+             'cpi_any_carried',                  d.cpi_any_carried,
+             'cpi_unavailable',                  d.cpi_unavailable
+           ) order by d.horizon), '[]'::jsonb) as j
+      from pfin.fn_nav_delta_panel_as_of(p_data_as_of) d
+  ),
+  reference_dates as (
+    select coalesce(jsonb_agg(jsonb_build_object(
+             'reference',                  r.reference,
+             'reference_date',             r.reference_date,
+             'reference_checkpoint_date',  r.reference_checkpoint_date,
+             'nav',                        r.nav,
+             'nav_prior_yr_dollars',       r.nav_prior_yr_dollars,
+             'cpi_period',                 r.cpi_period,
+             'cpi_basis_period',           r.cpi_basis_period,
+             'cpi_any_carried',            r.cpi_any_carried,
+             'cpi_unavailable',            r.cpi_unavailable
+           ) order by r.reference), '[]'::jsonb) as j
+      from pfin.fn_nav_reference_dates_as_of(p_data_as_of) r
+  ),
+
   -- §2.6.1 (5) — Cash Flow. Both readers threaded with the same as-of.
   expenditures as (
     select coalesce(jsonb_agg(jsonb_build_object(
@@ -558,16 +1145,14 @@ as $$
       -- them would be a third evaluation buying nothing.
       'account_holdings', pfin.fn_nav_composition(p_data_as_of),
 
-      -- (2) NAV Performance. See Finding 1: two of the three named readers derive
-      -- their own clock and cannot be threaded, so they are ABSENT-WITH-A-REASON
-      -- rather than today-anchored. The reason is a STABLE MACHINE CODE.
+      -- (2) NAV Performance. ALL FOUR readers are as-of-threaded — Part 1 gave the
+      -- §2.1.3 and §2.1.4 panels as-of forms, closing Finding 1. Nothing in this
+      -- section derives its own clock any more.
       'nav_performance', jsonb_build_object(
         'series',                    (select j from nav_series),
         'series_inflation_adjusted', (select j from nav_series_infl),
-        'delta_panel',     jsonb_build_object('status', 'unavailable',
-                                              'reason', 'reader_not_as_of_threadable'),
-        'reference_dates', jsonb_build_object('status', 'unavailable',
-                                              'reason', 'reader_not_as_of_threadable')
+        'delta_panel',     (select j from delta_panel),
+        'reference_dates', (select j from reference_dates)
       ),
 
       -- (3) Asset Allocation.
