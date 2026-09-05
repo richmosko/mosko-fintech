@@ -76,21 +76,36 @@ jobs:
         # therefore expected to pass both before and after A4 lands.
         run: bash scripts/ci/fence-rt22-pdf-worker-manifest.sh workers/pdf-render/package.json
 
-      - name: RT-22-manifest inversion-mode (golden fixture; expects violation)
-        # QA-authored fixture: tests/fixtures/ci/rt22-manifest-violation/{package.json,package-lock.json}
-        # naming `pg`. Unlike production-mode, this step is NOT pass-if-absent —
-        # the fixture is required scaffolding for this job, same as the RT-22
-        # Dockerfile fence's inversion step.
+      - name: RT-22-manifest inversion-mode (golden fixtures; both routes must violate)
+        # QA-authored two-directory fixture set under
+        # tests/fixtures/ci/rt22-manifest-violation/, one subdirectory per
+        # detection route so each route is proven live independently — a
+        # single fixture could pass by exercising only one code path:
+        #   - manifest-direct/      — pg listed directly in package.json
+        #     dependencies (manifest-scan route).
+        #   - lockfile-transitive/  — package.json names only knex; pg
+        #     appears solely in package-lock.json's resolved tree as knex's
+        #     transitive dependency (lockfile-scan route a manifest-only
+        #     scan cannot see).
+        # Unlike production-mode, this step is NOT pass-if-absent — both
+        # fixtures are required scaffolding for this job, same as the RT-22
+        # Dockerfile fence's inversion step. Fails if EITHER reports clean.
         run: |
           set +e
-          bash scripts/ci/fence-rt22-pdf-worker-manifest.sh tests/fixtures/ci/rt22-manifest-violation/package.json
-          rc=$?
+          bash scripts/ci/fence-rt22-pdf-worker-manifest.sh tests/fixtures/ci/rt22-manifest-violation/manifest-direct/package.json
+          rc_manifest=$?
+          bash scripts/ci/fence-rt22-pdf-worker-manifest.sh tests/fixtures/ci/rt22-manifest-violation/lockfile-transitive/package.json
+          rc_lockfile=$?
           set -e
-          if [ $rc -eq 0 ]; then
-            echo "FATAL: RT-22-manifest fence reported clean/absent against violation fixture — fence or fixture is broken; failing closed."
+          if [ $rc_manifest -eq 0 ]; then
+            echo "FATAL: RT-22-manifest fence reported clean/absent against manifest-direct/ violation fixture — manifest-scan route is broken; failing closed."
             exit 1
           fi
-          echo "OK: RT-22-manifest fence caught fixture violation (exit $rc)."
+          if [ $rc_lockfile -eq 0 ]; then
+            echo "FATAL: RT-22-manifest fence reported clean/absent against lockfile-transitive/ violation fixture — lockfile-scan route is broken; failing closed."
+            exit 1
+          fi
+          echo "OK: RT-22-manifest fence caught manifest-direct/ violation (exit $rc_manifest) and lockfile-transitive/ violation (exit $rc_lockfile)."
 
   fence-rt26:
     name: RT-26 — SUPABASE_SERVICE_ROLE_KEY allowlist
