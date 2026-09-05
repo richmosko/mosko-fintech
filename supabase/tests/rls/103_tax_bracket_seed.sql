@@ -453,16 +453,17 @@ select is(
   1::bigint,
   '(P2) fn_provision_tax_brackets(): SECURITY INVOKER, VOLATILE, search_path="", PUBLIC/anon/service_role EXECUTE all absent, authenticated EXECUTE present'
 );
--- Allowlist widened to 4 entries at `111` (SELF-345 / AH, 2026-09-05): fn_emit_audit_log
--- is the reserved slot's now-authored occupant (ADR-011 Decision 9). Added here
--- alongside self209's (a1)/(a2)/(E-iii), 057's (D6b) and 058's (P3) so this schema-wide
+-- AUTHORED count reaches 4 at `111` (SELF-345 / AH, 2026-09-05) — the reserved
+-- entry (ADR-011 Decision 9) is REALIZED, not added; the committed allowlist
+-- size is unchanged (read ADR-011 Decision 9 live). Added here alongside
+-- self209's (a1)/(a2)/(E-iii), 057's (D6b) and 058's (P3) so this schema-wide
 -- query does not read 111's legitimate authoring as an escalation in THIS file.
 select is(
   (select array_agg(p.proname::text order by p.proname)
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'pfin' and p.prosecdef = true),
   array['fn_emit_audit_log', 'fn_grant_creator_access', 'fn_reclass_history_insert', 'fn_refresh_updated_at']::text[],
-  '(P3) pfin''s SECURITY DEFINER allowlist is now exactly these FOUR names (ADR-011 Decision 9; widened at `111`); neither `101` nor `103` added a fifth'
+  '(P3) pfin''s SECURITY DEFINER allowlist is now exactly these FOUR names — AUTHORED count reaches 4 at `111` (ADR-011 Decision 9, the reserved entry realized, not the covenant widened); neither `101` nor `103` added a fifth'
 );
 
 -- =====================================================================

@@ -777,10 +777,11 @@ select skip('(P1) two-phase: `058` leaves is_active in place — window-scoped, 
 \endif
 select col_type_is('pfin', 'account', 'closed_at', 'timestamp with time zone',
   '(P2) closed_at is timestamptz — a DATED closure, which is what makes "closed in June still counts in a May NAV" expressible at all');
--- Allowlist widened to 4 entries at `111` (SELF-345 / AH, 2026-09-05): fn_emit_audit_log
--- is the reserved slot's now-authored occupant (ADR-011 Decision 9). Added here alongside
--- self209's (a1)/(a2)/(E-iii) and 057's (D6b) so this schema-wide query does not read
--- 111's legitimate authoring as an escalation in THIS file.
+-- AUTHORED count reaches 4 at `111` (SELF-345 / AH, 2026-09-05) — the reserved
+-- entry (ADR-011 Decision 9) is REALIZED, not added; the committed allowlist
+-- size is unchanged (read ADR-011 Decision 9 live). Added here alongside
+-- self209's (a1)/(a2)/(E-iii) and 057's (D6b) so this schema-wide query does not
+-- read 111's legitimate authoring as an escalation in THIS file.
 select is(
   (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
      where n.nspname = 'pfin' and p.prosecdef
