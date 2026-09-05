@@ -37,7 +37,7 @@ begin;
 \set m_immut_col '%users_id and target_month are immutable in EVERY state%'
 \set m_live_draft '%monthly_report_one_live_draft_per_month%'
 
-select plan(34);
+select plan(36);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 \set td '00000000-0000-0000-0000-00000000000d'
@@ -259,6 +259,20 @@ select throws_like(
 select lives_ok(
   format($$ update pfin.monthly_report set commentary_cash = repeat('x', 4000) where report_id = %s $$, :d10),
   '(10b) NON-VACUOUS: exactly 4000 chars is accepted'
+);
+-- (10c)/(10d) SEC N-5 UNIT PROOF: an ASTRAL character (outside the BMP, e.g. an
+-- emoji) is ONE code point to Postgres length() but TWO UTF-16 code units to
+-- JavaScript's `.length` — N-5's catch criterion is that the SAME VALUE is
+-- rejected at BOTH layers, an EQUALITY. A `.length`-based Zod mirror would
+-- treat 4000 astral characters as 8000 and wrongly refuse what the DB accepts.
+select throws_like(
+  format($$ update pfin.monthly_report set commentary_cash = repeat('😀', 4001) where report_id = %s $$, :d10),
+  '%monthly_report_commentary_cash_len%',
+  '(10c) 4001 ASTRAL characters (code points, not bytes/UTF-16 units) -> refused by the SAME DB CHECK as (10a) — the bound is measured in code points'
+);
+select lives_ok(
+  format($$ update pfin.monthly_report set commentary_cash = repeat('😀', 4000) where report_id = %s $$, :d10),
+  '(10d) NON-VACUOUS, THE EQUALITY N-5 REQUIRES: exactly 4000 astral characters is ACCEPTED — a `.length`-based Zod mirror would count this input as 8000 and WRONGLY reject it, the exact layer-disagreement N-5 exists to prevent (P3''s Zod bound must use Array.from(s).length, never s.length)'
 );
 select set_config('role', 'postgres', true);
 
