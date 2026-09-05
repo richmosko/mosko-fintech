@@ -41,12 +41,20 @@
 //       escalate to one. Nothing in this module reaches for one.
 //   (f) dedicated endpoint — this verification logic is called from exactly
 //       one place, the render endpoint (server.js) — not exposed elsewhere.
-//   (g) rejected payloads dropped with a detection signal — explicitly
-//       ROUTED TO SEC AT BUILD per RT-21 (its storage-surface question is
-//       unresolved on the tree); this module logs a rejection reason to
-//       stderr (bounded, no attacker-controlled content beyond a fixed enum
-//       of reason codes) as the interim signal and does NOT invent a storage
-//       surface — that is Sec's call, not this file's.
+//   (g) rejected payloads dropped with a detection signal — MINIMAL FORM
+//       shipped here per team-lead's SELF-349 (A5) follow-up ruling: a
+//       structured (JSON) log line + an in-process bounded counter, keyed
+//       ONLY by the fixed AuthError reason-code enum below — never request
+//       content. This does NOT fully satisfy ADR-050 Decision 4's catch
+//       criterion as ratified (that criterion calls for retention
+//       INDEPENDENT of container-log rotation; this counter resets on every
+//       process restart, same as the nonce store above) — that gap is
+//       explicitly routed to Sec as a proposal, not silently closed here.
+//       Decision 6 already anticipates F3 (this letter) may legitimately
+//       want a row-per-event store distinct from F2/RT-05's rejected one,
+//       given the private-network threat model on this boundary; a real
+//       storage surface, if Sec ratifies one, is future work. See
+//       `_rejected()` below for the implementation and its own header.
 
 "use strict";
 
@@ -82,6 +90,51 @@ class AuthError extends Error {
   }
 }
 
+// ── RT-21 (g) detection signal — bounded counter + structured log line ─────
+// Keyed by AuthError reason code ONLY (a fixed, closed enum authored in this
+// file — see every `_rejected(...)` call site below); never by request
+// content, header value, IP, or nonce/token material. "Bounded" here means
+// the KEY SPACE is bounded (one entry per reason code, currently 10), not
+// that counts themselves are capped — a sustained rejection burst is exactly
+// the rate anomaly this signal exists to surface, so counts are left to grow
+// for the process lifetime rather than clamped.
+const _rejectionCounts = new Map();
+
+/** Test-only accessor — a snapshot, not a live reference. */
+function _getRejectionCountsForTests() {
+  return new Map(_rejectionCounts);
+}
+
+/** Test-only escape hatch, mirrors _resetNonceStoreForTests. */
+function _resetRejectionCountsForTests() {
+  _rejectionCounts.clear();
+}
+
+/**
+ * Build (and count, and log) a rejection. Every throw site below calls this
+ * instead of `new AuthError(reason)` directly, so the counter and the log
+ * line can never drift out of sync with the set of reasons this module
+ * actually produces.
+ */
+function _rejected(reason) {
+  const countSinceStart = (_rejectionCounts.get(reason) || 0) + 1;
+  _rejectionCounts.set(reason, countSinceStart);
+  // Structured (JSON), not string-interpolated — a log aggregator can query
+  // on `reason` / `count_since_start` directly without a parse step. This is
+  // the "queryable" half of the ADR-050 D4 criterion this minimal form can
+  // actually deliver without a storage surface; see the module-header note
+  // on what it does NOT deliver (retention past container-log rotation).
+  console.error(
+    JSON.stringify({
+      event: "pdf_render_auth_rejected",
+      reason,
+      count_since_start: countSinceStart,
+      ts: new Date().toISOString(),
+    })
+  );
+  return new AuthError(reason);
+}
+
 /**
  * Verify a render request's bearer token against PDF_WORKER_SIGNING_KEY.
  * Throws AuthError (never returns a falsy "invalid" value) on ANY failure —
@@ -102,15 +155,15 @@ function verifyRenderAuth(authorizationHeader, signingKey) {
     // library version). This is a startup misconfiguration, not a client
     // error, but the caller still gets a 401 — the worker never runs
     // unauthenticated as a fallback.
-    throw new AuthError("signing_key_not_configured");
+    throw _rejected("signing_key_not_configured");
   }
 
   if (typeof authorizationHeader !== "string") {
-    throw new AuthError("missing_authorization_header");
+    throw _rejected("missing_authorization_header");
   }
   const match = /^Bearer\s+(\S+)$/.exec(authorizationHeader);
   if (!match) {
-    throw new AuthError("malformed_authorization_header");
+    throw _rejected("malformed_authorization_header");
   }
   const token = match[1];
 
@@ -121,24 +174,24 @@ function verifyRenderAuth(authorizationHeader, signingKey) {
     // fails here on signature mismatch, never on a downstream claim check.
     decoded = jwt.verify(token, signingKey, { algorithms: ["HS256"] });
   } catch (err) {
-    throw new AuthError("signature_verification_failed");
+    throw _rejected("signature_verification_failed");
   }
 
   if (typeof decoded !== "object" || decoded === null) {
-    throw new AuthError("malformed_payload");
+    throw _rejected("malformed_payload");
   }
   if (typeof decoded.users_id !== "string" || decoded.users_id.length === 0) {
     // Per SD-20: "JWT containing users_id claim ONLY". The claim's PRESENCE
     // is checked (a token missing it is malformed against the ratified
     // shape); its VALUE is never read again anywhere in this worker — see
     // the module header on why (AC #0/#2: no tenant knowledge here).
-    throw new AuthError("missing_users_id_claim");
+    throw _rejected("missing_users_id_claim");
   }
   if (typeof decoded.iat !== "number") {
-    throw new AuthError("missing_iat_claim");
+    throw _rejected("missing_iat_claim");
   }
   if (typeof decoded.nonce !== "string" || decoded.nonce.length === 0) {
-    throw new AuthError("missing_nonce_claim");
+    throw _rejected("missing_nonce_claim");
   }
 
   const nowSeconds = Math.floor(Date.now() / 1000);
@@ -148,13 +201,13 @@ function verifyRenderAuth(authorizationHeader, signingKey) {
   // as accepting an arbitrarily-future-dated token.
   const age = nowSeconds - decoded.iat;
   if (age > FRESHNESS_WINDOW_SECONDS || age < -FRESHNESS_WINDOW_SECONDS) {
-    throw new AuthError("stale_token");
+    throw _rejected("stale_token");
   }
 
   // (d) nonce replay protection.
   _sweepExpiredNonces(nowSeconds);
   if (_seenNonces.has(decoded.nonce)) {
-    throw new AuthError("nonce_replay");
+    throw _rejected("nonce_replay");
   }
   _seenNonces.set(decoded.nonce, nowSeconds);
 
@@ -166,4 +219,6 @@ module.exports = {
   AuthError,
   FRESHNESS_WINDOW_SECONDS,
   _resetNonceStoreForTests,
+  _getRejectionCountsForTests,
+  _resetRejectionCountsForTests,
 };

@@ -45,11 +45,11 @@ async function handleRender(req, res) {
     auth = verifyRenderAuth(req.headers["authorization"], process.env.PDF_WORKER_SIGNING_KEY);
   } catch (err) {
     if (err instanceof AuthError) {
-      // RT-21 (g): a fixed reason CODE is logged server-side (bounded, no
-      // attacker-controlled content); the response body carries NOTHING
-      // beyond the generic 401 — never the reason, which would help an
-      // attacker iterate toward a valid forgery.
-      console.error(`[pdf-render] auth rejected: ${err.reason}`);
+      // RT-21 (g): the structured detection-signal log line (reason code +
+      // bounded counter, ADR-050 D4 minimal form) is already emitted by
+      // `_rejected()` inside auth.js at throw time — not duplicated here.
+      // The response body carries NOTHING beyond the generic 401 — never the
+      // reason, which would help an attacker iterate toward a valid forgery.
       res.writeHead(401, { "content-type": "text/plain" });
       res.end("unauthorized");
       return;
