@@ -392,9 +392,24 @@
 --   The probe and the ruling therefore disagree about the draft view specifically,
 --   and the schema settles which of them is describing something that exists.
 --   **This function is written for either answer** — it composes on demand and holds
---   no opinion about who calls it. What is owed is a P2/P5 decision on how the draft
---   view is rendered (compose-on-open, compose-on-explicit-refresh, or a draft-scoped
---   cache), and it is NOT a schema question.
+--   no opinion about who calls it.
+--   ⚠ **RULED 2026-09-05: A `draft` COMPOSES LIVE THROUGH THIS FUNCTION ON VIEW; a
+--   `final` READS THE FROZEN PAYLOAD. This function stays exactly as written, and the
+--   rendering surface renders both ways.**
+--   **The reason the ~549 ms is acceptable here and the probe's recommendation still
+--   stands is a distinction the probe did not draw:** its *"do not render this
+--   inline"* is about a **per-visit hot page**, and the draft view is an **authoring
+--   surface visited rarely** — a handful of times in the window between the cron's
+--   draft and finalization, by one author, deliberately. **The probe and the ruling
+--   were never actually in conflict about the same page**; they were talking about
+--   different surfaces, which is what this finding surfaced by asking the schema
+--   which one exists.
+--   **CONSEQUENCE THAT SURVIVES THE RULING and is not softened by it:** the draft view
+--   is the ONLY surface on which this composition's latency is user-visible, so it is
+--   the surface where the tenant-tenure scaling above lands first. **When the tripwire
+--   is approached, the draft view is where it will be felt before the on-demand
+--   generation path notices**, and that is worth knowing when the rollup mechanism is
+--   scheduled.
 --
 -- ----------------------------------------------------------------------------
 -- ⚠ FINDING 3 — DATED IDENTIFIERS IN THE SOURCES, corrected here rather than
