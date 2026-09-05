@@ -112,6 +112,44 @@ async function closeBrowser() {
 
 const ALLOWED_SCHEME = "data:";
 
+// ── Sec F-18 (PR #634) — page.setJavaScriptEnabled: DECLINED, with reason ──
+// WebSocket/WebRTC traffic is outside CDP request interception (the fence
+// above only sees `request` events, which those protocols don't emit), so a
+// SCRIPT running on the page could exfiltrate bytes through either — the
+// only way such a script gets onto the page at all is an XSS in the app's
+// own render template (AC #5's escaping control, upstream of this worker).
+// Sec's strongest fix is `page.setJavaScriptEnabled(false)`, which would
+// close that path structurally.
+//
+// Read against the ACTUAL template pushed here (MonthlyReportView.svelte,
+// origin/feature/self-354 @ a117826 — the same component A5/P6 render
+// server-side for this exact PDF path per its own header): the Historical
+// Expenditures section mounts `HistoricalExpendituresChart.svelte`, which
+// renders through `LayerCake` (`layercake` + `d3-scale`). LayerCake's chart
+// sizing is measured client-side (this codebase's own established
+// convention — see `NavHistoryChart.svelte`'s "LayerCake needs an explicit
+// sized container" comment): the bars' actual pixel geometry is computed
+// from a browser-side container measurement, not from anything present in
+// the static markup alone. Disabling JS would leave that chart's SVG
+// un-sized/degenerate in the exported PDF — a real content defect, not a
+// cosmetic one — for a chart this exact template renders today.
+//
+// DECISION: JS stays ENABLED on this page. The compensating control is
+// upstream, not here: the WebSocket/WebRTC exfiltration path is only
+// reachable through a script that AC #5's Svelte-escaping discipline is
+// supposed to make unreachable in the first place — that control needs to
+// be the one that's airtight, and its own battery leg (P6/A7's composition
+// path, whichever ships the app-side render call) should be WIDENED to
+// assert directly that a `<script>` tag or event-handler attribute injected
+// into any free-text field never survives Svelte's template compilation as
+// live markup — a stronger, more direct proof than this worker disabling JS
+// as a blunt backstop for a defect that would have to originate one layer
+// up. Flagged to Sec/team-lead as a proposal, not unilaterally closed: if a
+// future revision of this template drops its LayerCake dependency (or if
+// P6 renders a JS-free print variant distinct from the in-app one), this
+// decision should be revisited — it depends on the ACTUAL template's needs,
+// not a general worker-side default.
+
 /**
  * Render `html` (a COMPLETE document string) to PDF bytes.
  *
@@ -266,4 +304,5 @@ module.exports = {
   getBrowser,
   closeBrowser,
   _stripPdfInfoMetadata,
+  _childEnvWithoutSecrets,
 };

@@ -192,6 +192,51 @@ test("resource-loading fence (non-vacuous control): a LOCAL reachable http:// ta
   }
 });
 
+// ---------------------------------------------------------------------------
+// Sec F-18 (PR #634): JS stays ENABLED on this page (see render.js's own
+// header note on the decision + its reasoning — MonthlyReportView.svelte's
+// LayerCake chart needs client-side measurement to paint correctly). The
+// residual concern was a script exfiltrating bytes via a channel outside CDP
+// request interception (WebSocket/WebRTC) — but for the ordinary case, a
+// SCRIPT DOES run (proving JS truly is on, not accidentally disabled) and
+// its own `fetch()` call is caught by the SAME interception fence every
+// other resource load goes through, exactly like a <img>/<iframe> tag would
+// be. This does not close the WebSocket/WebRTC gap (nothing at this layer
+// can — see the header note), but it does prove the fence isn't bypassed
+// merely by initiating the request from script instead of markup.
+// ---------------------------------------------------------------------------
+test("Sec F-18: JS runs (proving it is not disabled), and a SCRIPT-INITIATED fetch is caught by the same interception fence as a markup-initiated one", async () => {
+  const sentinel = `SCRIPT-SENTINEL-${crypto.randomUUID()}`;
+  const localServer = http.createServer((req, res) => {
+    res.writeHead(200, { "content-type": "text/plain" });
+    res.end(sentinel);
+  });
+  await new Promise((resolve) => localServer.listen(0, "127.0.0.1", resolve));
+  const { port } = localServer.address();
+  try {
+    const html = `<html><body>
+      <div id="marker">not-yet-run</div>
+      <script>
+        document.getElementById('marker').textContent = 'script-ran';
+        fetch('http://127.0.0.1:${port}/leak').catch(() => {});
+      </script>
+    </body></html>`;
+    const res = await postRender(html);
+    assert.equal(res.status, 200);
+    // The script's OWN fetch is the abort this asserts on (>= 1, not exactly
+    // 1 — Chromium's own preflight/internal requests for a data:-only page
+    // are already accounted for by the other legs' exact-count assertions;
+    // this leg's job is proving the SCRIPT's fetch specifically was caught,
+    // not pinning an unrelated total).
+    const abortedCount = Number(res.headers["x-pdf-render-aborted-count"]);
+    assert.ok(abortedCount >= 1, "the script-initiated fetch must be aborted by the same fence");
+    const pdfText = res.body.toString("latin1");
+    assert.ok(!pdfText.includes(sentinel), "the script must never succeed in exfiltrating the local server's content into the PDF");
+  } finally {
+    await new Promise((resolve) => localServer.close(resolve));
+  }
+});
+
 // `data:` URIs are the one allowed scheme — the fence must not be so broad it
 // blocks the legitimate case (an inline base64 image the app already embedded).
 test("data: URIs are NOT aborted — the one allowed resource scheme", async () => {
