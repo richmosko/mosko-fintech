@@ -282,18 +282,24 @@
 		/>
 	</section>
 
-	<!-- (6) Estimated Taxes — DIRECT reuse; `estimated_taxes` structurally satisfies both. -->
+	<!-- (6) Estimated Taxes — DIRECT reuse; `estimated_taxes` structurally satisfies both.
+	     `staleness` on both components below was added at the SELF-354→feature/self-345 rebase
+	     (2026-09-05): P9/SELF-361 landed a REQUIRED `staleness` prop on both components (the
+	     §2.5.x staleness ramp) after this file was first authored — P8 SLOT, same convention as
+	     every other reused component here (see the file header). -->
 	<section aria-label="Estimated Taxes">
 		<TaxDecompositionTable
 			liability={payload.sections.estimated_taxes}
 			{taxCharacters}
 			{seedDeltaMigration}
+			staleness={UNKNOWN_STALENESS}
 			capitalGainsUnavailableCopy="Capital gains were unavailable when this report was generated — sale recording lands at a later V1.x."
 		/>
 		<TaxQuarterlyTables
 			liability={payload.sections.estimated_taxes}
 			noTaxAuthorityDesignated={false}
 			priorYearQ4={null}
+			staleness={UNKNOWN_STALENESS}
 		/>
 	</section>
 </article>
