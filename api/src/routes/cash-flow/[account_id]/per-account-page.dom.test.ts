@@ -30,6 +30,7 @@ function setPageParams(params: Record<string, string>): void {
 const LAYOUT_DEFAULTS = {
 	userEmail: null,
 	pendingClassificationCount: 0,
+	pendingMonthlyReportCount: 0,
 	connectionHealth: { reauthCount: 0, institutionDownCount: 0 }
 };
 

@@ -39,6 +39,7 @@ function pageData(overrides: Partial<Record<string, unknown>> = {}) {
 	return {
 		userEmail: null,
 		pendingClassificationCount: 0,
+		pendingMonthlyReportCount: 0,
 		connectionHealth: { reauthCount: 0, institutionDownCount: 0 },
 		netWorth: 500_000,
 		accountPresence: 'some' as const,
