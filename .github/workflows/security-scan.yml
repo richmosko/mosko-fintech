@@ -59,6 +59,100 @@ jobs:
           fi
           echo "OK: RT-22 fence caught fixture violation (exit $rc)."
 
+  fence-rt22-manifest:
+    name: RT-22 — PDF worker dependency-manifest audit (SELF-350 A6)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: RT-22-manifest production-mode (PDF worker package.json + lockfile)
+        # Pass-if-absent (R6 rider 2), DISCOVERED rather than a hardcoded path
+        # (Sec F-1): A4 may land workers/pdf-render/package.json at a nested
+        # location (a workspace child, an app/ subfolder) rather than the
+        # top-level canonical path, and a hardcoded path would then report
+        # "absent — pass" forever with nothing watching — the same
+        # sequencing-convention-with-no-mechanism rot rider 2 already removed
+        # one level up. Every package.json under workers/pdf-render/ (excl.
+        # node_modules/) is audited; zero found still resolves to the
+        # canonical path so PASS-IF-ABSENT is preserved exactly for the
+        # current (pre-A4) state.
+        run: |
+          found=0
+          while IFS= read -r m; do
+            found=1
+            echo "RT-22-manifest: auditing discovered manifest at $m"
+            bash scripts/ci/fence-rt22-pdf-worker-manifest.sh "$m"
+          done < <(find workers/pdf-render -name package.json -not -path '*/node_modules/*' 2>/dev/null | sort)
+          if [ "$found" -eq 0 ]; then
+            bash scripts/ci/fence-rt22-pdf-worker-manifest.sh workers/pdf-render/package.json
+          fi
+
+      - name: RT-22-manifest inversion-mode (golden fixtures; both routes must violate)
+        # QA-authored two-directory fixture set under
+        # tests/fixtures/ci/rt22-manifest-violation/, one subdirectory per
+        # detection route so each route is proven live independently — a
+        # single fixture could pass by exercising only one code path:
+        #   - manifest-direct/      — pg listed directly in package.json
+        #     dependencies (manifest-scan route).
+        #   - lockfile-transitive/  — package.json names only a non-denylisted
+        #     dep; pg appears solely in package-lock.json's resolved tree as
+        #     that dep's transitive dependency (lockfile-scan route a
+        #     manifest-only scan cannot see).
+        # Unlike production-mode, this step is NOT pass-if-absent — both
+        # fixtures are required scaffolding for this job, same as the RT-22
+        # Dockerfile fence's inversion step.
+        #
+        # Sec F-2: asserting exit-code != 0 alone is not proof either route
+        # fired — a malformed manifest, a malformed lockfile, or `node` off
+        # PATH ALSO exits 1 (the fence's own-dependency fail-closed path),
+        # and would print "OK: caught..." having proven nothing. Each
+        # fixture's captured stdout+stderr is asserted for the SPECIFIC
+        # token the route that fixture exists to prove must emit; the
+        # lockfile-transitive fixture is additionally asserted to carry NO
+        # "manifest:" token, so a fixture that silently regained a
+        # manifest-side trip (as an earlier draft of it did) is caught here,
+        # not just read as an incidental extra hit.
+        run: |
+          set +e
+          out_manifest="$(bash scripts/ci/fence-rt22-pdf-worker-manifest.sh tests/fixtures/ci/rt22-manifest-violation/manifest-direct/package.json 2>&1)"
+          rc_manifest=$?
+          out_lockfile="$(bash scripts/ci/fence-rt22-pdf-worker-manifest.sh tests/fixtures/ci/rt22-manifest-violation/lockfile-transitive/package.json 2>&1)"
+          rc_lockfile=$?
+          set -e
+
+          echo "--- manifest-direct/ fence output ---"
+          echo "$out_manifest"
+          echo "--- lockfile-transitive/ fence output ---"
+          echo "$out_lockfile"
+
+          if [ "$rc_manifest" -eq 0 ]; then
+            echo "FATAL: RT-22-manifest fence reported clean/absent against manifest-direct/ violation fixture — failing closed."
+            exit 1
+          fi
+          if ! echo "$out_manifest" | grep -q 'manifest:dependencies:pg'; then
+            echo "FATAL: manifest-direct/ fixture exited non-zero but the expected token 'manifest:dependencies:pg' is absent from its output — the non-zero exit does not prove the manifest-scan route fired (could be a parse error or a missing node); failing closed."
+            exit 1
+          fi
+
+          if [ "$rc_lockfile" -eq 0 ]; then
+            echo "FATAL: RT-22-manifest fence reported clean/absent against lockfile-transitive/ violation fixture — failing closed."
+            exit 1
+          fi
+          if ! echo "$out_lockfile" | grep -q 'lockfile:pg'; then
+            echo "FATAL: lockfile-transitive/ fixture exited non-zero but the expected token 'lockfile:pg' is absent from its output — the non-zero exit does not prove the lockfile-scan route fired; failing closed."
+            exit 1
+          fi
+          if echo "$out_lockfile" | grep -q 'manifest:'; then
+            echo "FATAL: lockfile-transitive/ fixture output carries a 'manifest:' token — this fixture exists to prove the lockfile-ONLY route and must not also trip the manifest-scan leg; fixture isolation is broken."
+            exit 1
+          fi
+
+          echo "OK: RT-22-manifest fence caught manifest-direct/ via manifest:dependencies:pg (exit $rc_manifest) and lockfile-transitive/ via lockfile:pg with no manifest: token (exit $rc_lockfile) — both routes proven independently."
+
   fence-rt26:
     name: RT-26 — SUPABASE_SERVICE_ROLE_KEY allowlist
     runs-on: ubuntu-latest
