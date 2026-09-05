@@ -1,19 +1,18 @@
 // reports/monthly/[target_month]/commentary/+page.server.ts — loader + save action for the
 // §2.6.2.b commentary editor (SELF-355 / P3), on top of migration 108 (pfin.monthly_report) and
-// migration 112 (pfin.fn_save_monthly_commentary), landed on feature/self-355-db @ 5789c2d
-// (stacked on the A1+A2+A3 unit).
+// migration 112 (pfin.fn_save_monthly_commentary).
 //
 // ⚠ AUTHORSHIP NOTE (same class as SELF-354/359/361's own): this file lives under Backend's ARCH
 // §4.1 allowlist surface and was authored by Frontend under this ticket's explicit dispatch.
 // Flagged for a Backend/Sec re-read at the RT-11 joint review this surface carries.
 //
-// ⚠ CROSS-BRANCH NOTE, flagged rather than silently duplicated: this branch is stacked on the DB
-// unit (5789c2d), NOT on top of SELF-354/P2's own frontend branch, so P2's
-// `reports/monthly/[target_month]/+page.server.ts` and `$lib/monthly-report.ts` do NOT exist here.
-// `parseTargetMonth` below is therefore a SECOND, independent copy of the exact same `YYYY-MM`
-// regex + normalization P2's loader already has — not a shared import. Whoever integrates the two
-// branches should extract one shared helper; this file does not invent a dependency on a module
-// that does not exist on its own branch.
+// SHARED-MODULE NOTE (was a CROSS-BRANCH duplication, resolved at the P2/P3/P5 rebase-integration,
+// 2026-09-05): this file originally carried its own local `parseTargetMonth` and its own exported
+// `CommentaryValues` because it was authored on a branch stacked on the DB-only unit, not on top of
+// P2's own frontend branch — P2's `$lib/monthly-report.ts` didn't exist on this branch's tree yet.
+// Now that P3 is rebased ONTO P2, both are imported from `$lib/monthly-report.ts` instead — the ONE
+// shared copy every `/reports/monthly` route uses. `MonthlyCommentaryEditor.svelte`'s own former
+// local `CommentaryValues` interface is likewise gone, importing this same one.
 //
 // READ PATH: this route only ever WRITES to a `draft` (112's own precondition), but it must still
 // RENDER for a `final` month (a user can reach this URL directly, or via a stale bookmark) — in
@@ -41,15 +40,9 @@ import type { NonReAllocation } from '$lib/nonre-allocation';
 import { serverTodayAsOf } from '$lib/server/time/asOf';
 import { monthlyCommentaryUpsertSchema } from '$lib/server/schemas/monthly-commentary';
 import { fieldErrors } from '$lib/server/schemas/account';
+import { parseTargetMonth, type CommentaryValues } from '$lib/monthly-report';
 import type { PostgrestError } from '@supabase/supabase-js';
 import type { PageServerLoad, Actions } from './$types';
-
-const TARGET_MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
-
-function parseTargetMonth(raw: string): string | null {
-	if (!TARGET_MONTH_RE.test(raw)) return null;
-	return `${raw}-01`;
-}
 
 /** One calendar month before `targetMonth` (`YYYY-MM-01`), computed in UTC so this never shifts
  *  under a non-UTC server clock — mirrors every other date-formatting helper on this tree. */
@@ -75,13 +68,6 @@ type CommentaryRow = {
 	commentary_bonds: string | null;
 	commentary_marketable_securities: string | null;
 	commentary_alternatives: string | null;
-};
-
-export type CommentaryValues = {
-	cash: string;
-	bonds: string;
-	marketable_securities: string;
-	alternatives: string;
 };
 
 function toCommentaryValues(row: Pick<CommentaryRow, 'commentary_cash' | 'commentary_bonds' | 'commentary_marketable_securities' | 'commentary_alternatives'> | null): CommentaryValues {

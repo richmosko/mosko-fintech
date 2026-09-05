@@ -118,6 +118,42 @@ export type MonthlyReportGenerationStatus = 'draft' | 'final' | 'superseded';
  *  distinguishable). `null` means neither has happened yet (still in the draft authoring window). */
 export type CommentaryDisposition = 'authored' | 'skipped' | null;
 
+/** The one canonical `[target_month]` route-param parser for every §2.6 route under
+ *  `/reports/monthly` — EXTRACTED at the P2/P3/P5 rebase-integration (2026-09-05) from THREE
+ *  independent local copies (P2's own `[target_month]/+page.server.ts`, P3's own
+ *  `[target_month]/commentary/+page.server.ts`, and P5's `reports/monthly/+page.server.ts`'s own
+ *  candidate-month helper, which used a similar but distinct `monthStart` shape and is UNCHANGED
+ *  by this extraction — it computes a month OFFSET from today, not a route-param parse, and stays
+ *  local). Accepts `YYYY-MM` (e.g. `2026-08`) — no existing convention in this codebase named a
+ *  month-only route-param format before P2 introduced it (flagged there as a fresh, narrow
+ *  judgment call) — and normalizes to `YYYY-MM-01` for every `108`-backed query, which requires
+ *  `target_month = date_trunc('month', target_month)`. Returns `null` on anything malformed; every
+ *  caller turns that into a 400, never a guess. Server-callable (plain string logic, no I/O) AND
+ *  browser-safe, so both `+page.server.ts` files and this module's own client-facing exports can
+ *  share it without crossing the `$lib/server/**` boundary. */
+const TARGET_MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+export function parseTargetMonth(raw: string): string | null {
+	if (!TARGET_MONTH_RE.test(raw)) return null;
+	return `${raw}-01`;
+}
+
+/** The §2.6.2 commentary sub-section shape — EXTRACTED at the same rebase-integration from two
+ *  independent copies (P3's own `commentary/+page.server.ts` `export type CommentaryValues`, and
+ *  a structurally-identical local `interface CommentaryValues` `MonthlyCommentaryEditor.svelte`
+ *  declared because it could not, at the time, import from a server file OR a shared non-server
+ *  module — this file didn't exist on P3's own branch yet, see that component's own
+ *  now-superseded header note). One field per migration 108 commentary column
+ *  (`commentary_cash` / `commentary_bonds` / `commentary_marketable_securities` /
+ *  `commentary_alternatives`), always a plain string — '' is a legitimate "cleared" value, never
+ *  normalized to null (108 carries no not-blank CHECK on these columns, unlike
+ *  `owner_identification`'s). */
+export interface CommentaryValues {
+	cash: string;
+	bonds: string;
+	marketable_securities: string;
+	alternatives: string;
+}
+
 /** One row of `pfin.monthly_report` — everything this render needs OUTSIDE the frozen/composed
  *  `rendered_payload` (which is `MonthlyReportPayload` below, arriving from one of two sources
  *  depending on `generation_status` — see this file's own header). */

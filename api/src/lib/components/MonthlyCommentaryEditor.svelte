@@ -85,23 +85,18 @@
 	import { NONRE_TABLE_CAT_ORDER } from '$lib/nonre-allocation';
 	import type { NonReAllocation } from '$lib/nonre-allocation';
 	import type { StalenessData } from '$lib/staleness/stale-constituent';
+	import type { CommentaryValues } from '$lib/monthly-report';
 	import {
 		MONTHLY_COMMENTARY_MAX_CODE_POINTS,
 		codePointLength,
 		normalizeLineEndings
 	} from '$lib/validation/monthlyCommentary';
 
-	// Local, self-contained shape — this branch is stacked on the DB unit, not on P2/SELF-354's
-	// own branch (see +page.server.ts's CROSS-BRANCH NOTE), so there is no shared
-	// `$lib/monthly-report.ts` to import a `CommentaryValues` type from. Structurally identical to
-	// +page.server.ts's own exported `CommentaryValues` — duplicated, not re-declared differently.
+	// `CommentaryValues` is now imported from the shared `$lib/monthly-report.ts` (EXTRACTED at the
+	// P2/P3/P5 rebase-integration, 2026-09-05) — this file used to declare its own local, structurally
+	// identical copy because P3 was authored on a branch stacked on the DB-only unit, with no shared
+	// module to import from yet (see +page.server.ts's own now-updated header note).
 	type CommentarySection = 'cash' | 'bonds' | 'marketable_securities' | 'alternatives';
-	interface CommentaryValues {
-		cash: string;
-		bonds: string;
-		marketable_securities: string;
-		alternatives: string;
-	}
 
 	const SECTION_KEY: Record<(typeof NONRE_TABLE_CAT_ORDER)[number], CommentarySection> = {
 		Cash: 'cash',

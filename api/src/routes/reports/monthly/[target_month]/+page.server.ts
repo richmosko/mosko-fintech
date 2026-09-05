@@ -29,22 +29,18 @@
 // a read failure, same posture as that sibling loader (an incomplete vocabulary is not a
 // candidate for fail-soft degrade).
 //
-// TARGET_MONTH PARAM: accepted as `YYYY-MM` (e.g. `2026-08`) — no existing convention in this
-// codebase names a month-only route-param format, so this is a fresh, narrow judgment call,
-// flagged at hand-off. Normalized to `YYYY-MM-01` for the DB query (108's own CHECK requires
-// `target_month = date_trunc('month', target_month)`). A malformed param is a 400, never a guess.
+// TARGET_MONTH PARAM: accepted as `YYYY-MM` (e.g. `2026-08`), normalized to `YYYY-MM-01` for the
+// DB query (108's own CHECK requires `target_month = date_trunc('month', target_month)`). A
+// malformed param is a 400, never a guess. `parseTargetMonth` is now the ONE shared parser for
+// every `/reports/monthly/[target_month]` route — EXTRACTED to `$lib/monthly-report.ts` at the
+// P2/P3/P5 rebase-integration (2026-09-05); this file's own local copy (the original narrow
+// judgment call this note used to describe as fresh) is gone.
 
 import { error, redirect } from '@sveltejs/kit';
 import { INVENTORY_SEED_DELTA_MIGRATION } from '$lib/server/queries/taxLiability';
+import { parseTargetMonth } from '$lib/monthly-report';
 import type { MonthlyReportHeader, MonthlyReportPayload } from '$lib/monthly-report';
 import type { PageServerLoad } from './$types';
-
-const TARGET_MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
-
-function parseTargetMonth(raw: string): string | null {
-	if (!TARGET_MONTH_RE.test(raw)) return null;
-	return `${raw}-01`;
-}
 
 type MonthlyReportRow = MonthlyReportHeader & { rendered_payload: MonthlyReportPayload | null };
 
