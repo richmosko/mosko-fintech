@@ -46,9 +46,11 @@
 --       zero-grant; service_role UNGRANTED.
 --   - trigger owner_identification_set_updated_at (reuses the 001 DEFINER
 --       allowlist entry, fn_refresh_updated_at). This migration authors NO
---       function of its own kind, and no BEFORE-trigger sits in front of
---       this table's WITH CHECK (Decision 3: +0, no label — the sole
---       reference column is users_id itself, the tenant anchor).
+--       function of its own kind, and the one BEFORE trigger it attaches
+--       (updated_at refresh, BEFORE UPDATE) raises nothing, so no trigger
+--       SHADOWS this table's WITH CHECK on any verb (Decision 3: +0, no
+--       label — the sole reference column is users_id itself, the tenant
+--       anchor).
 --   - DELETE POLICY carries its OWN tenant+aal2 clause and is never trimmed
 --       (SECURITY §4.6 Lock-14 settings-family DELETE-policy fence, named
 --       for this table). The migration's own header states the exact SD-22
@@ -112,12 +114,14 @@
 -- └───────────────────────────────────────────────────────────────────────────┘
 --
 -- §10 / DECISION 3: §10 catalogued ledger — read ADR-011 Decision 4 live,
---   never from here; this migration adds ZERO catalogued instances beyond
---   RT-12 (Sec D-3, AC8, already in the Sec-owned RT catalog — this file
---   creates no RT entry and moves no ledger). Decision-3 family: +0, NO
---   LABEL — the sole reference column is the direct users_id owner anchor;
---   no other FK-shaped column exists on this table (migration's own header
---   confirms).
+--   never from here; this migration adds ZERO catalogued §10 instances.
+--   ⚠ RT-12 is NOT one of them: the §10 CATALOGUED set and the Sec-owned RT
+--   CATALOG are DIFFERENT REGISTERS and must never be reconciled. RT-12
+--   (Sec D-3, AC8) is this surface's canonical test label and already exists
+--   in the RT catalog — this file creates no RT entry and moves no ledger.
+--   Decision-3 family: +0, NO LABEL — the sole reference column is the
+--   direct users_id owner anchor; no other FK-shaped column exists on this
+--   table (migration's own header confirms).
 --
 -- ⚠ SCOPE NOTE: RT-12 also names an adversarial-input battery at the WRITE
 --   ENDPOINT (XSS / SQLi / oversize / Unicode control / RTL override /
@@ -154,15 +158,17 @@
 --   `pg_prove` (never bare `psql` — a plan under-run exits 0 there).
 --   `supabase db reset` is mechanically banned and was not used; F/CTO's
 --   local dev DB was not touched.
---   plan(46): 5 structural (S1-S5) + 2 structural aal2 split (S6a-S6b) + 4
---   grants (GR1-GR4) + 1 no-JSONB fence (NEG1) + 1 fresh-insert round-trip
---   (INS1) + 1 unique-per-user (UQ1) + 4 length/multibyte (LEN1-LEN4) + 3
---   not-blank (BLANK1-BLANK2, BLANKC) + 4 single-line (CATLINE1, LINE1-
---   LINE3) + 2 NULL-is-unset (NUL1-NUL2) + 3 UPSERT-in-place (UPS1-UPS3) + 2
---   two-tenant read isolation (R1-R2) + 2 cross-tenant write blocked
---   (W1-W2) + 3 DELETE-policy isolation + corrupt-the-control pair
---   (DEL1-DEL3) + 1 corrupt-SELECT exact-value leak (X1) + 8 aal2 backstop,
---   all four verbs (M1-M8) = 46.
+--   plan(47): 5 structural (S1-S5) + 2 structural aal2 split, EACH now also
+--   pinning BOTH 'totp' and 'passkey' present in the expression text
+--   (S6a-S6b) + 4 grants (GR1-GR4) + 1 no-JSONB fence (NEG1) + 1
+--   fresh-insert round-trip (INS1) + 1 unique-per-user (UQ1) + 4
+--   length/multibyte (LEN1-LEN4) + 3 not-blank (BLANK1-BLANK2, BLANKC) + 4
+--   single-line (CATLINE1, LINE1-LINE3) + 2 NULL-is-unset (NUL1-NUL2) + 3
+--   UPSERT-in-place (UPS1-UPS3) + 2 two-tenant read isolation (R1-R2) + 3
+--   cross-tenant write blocked (W1-W2 forge/no-op, W3 the Lock 14 mod #1
+--   UPDATE tenant-move forge) + 3 DELETE-policy isolation +
+--   corrupt-the-control pair (DEL1-DEL3) + 1 corrupt-SELECT exact-value leak
+--   (X1) + 8 aal2 backstop, all four verbs (M1-M8) = 47.
 -- =====================================================================
 
 begin;
@@ -170,7 +176,7 @@ begin;
 -- shared verbs (Option C via \ir); nested case -> ../_fixtures/ per DESIGN.md.
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(46);
+select plan(47);
 
 -- Resolve the fixed tenant UUIDs to psql literals while privileged (role=postgres).
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
@@ -227,16 +233,20 @@ select ok(
 select is(
   (select count(*)::bigint from pg_policy
     where polrelid = 'pfin.owner_identification'::regclass
-      and coalesce(pg_get_expr(polqual, polrelid), '') ilike '%aal2%'),
+      and coalesce(pg_get_expr(polqual, polrelid), '') ilike '%aal2%'
+      and coalesce(pg_get_expr(polqual, polrelid), '') ilike '%totp%'
+      and coalesce(pg_get_expr(polqual, polrelid), '') ilike '%passkey%'),
   3::bigint,
-  '(S6a) STRUCTURAL — USING half: select/update/delete all carry the ADR-029/025 aal2 backstop (Sec F-9) in polqual — RED if any USING-side aal2 clause were dropped, independent of the WITH CHECK half'
+  '(S6a) STRUCTURAL — USING half: select/update/delete all carry the ADR-029/025 aal2 backstop (Sec F-9) in polqual, WITH BOTH ''totp'' and ''passkey'' present in the pinned mfa_policy IN-list — RED if any USING-side aal2 clause were dropped, OR if a regression narrowed the IN-list to ''totp'' alone (bare ''%aal2%'' alone would still pass that narrowing; this does not)'
 );
 select is(
   (select count(*)::bigint from pg_policy
     where polrelid = 'pfin.owner_identification'::regclass
-      and coalesce(pg_get_expr(polwithcheck, polrelid), '') ilike '%aal2%'),
+      and coalesce(pg_get_expr(polwithcheck, polrelid), '') ilike '%aal2%'
+      and coalesce(pg_get_expr(polwithcheck, polrelid), '') ilike '%totp%'
+      and coalesce(pg_get_expr(polwithcheck, polrelid), '') ilike '%passkey%'),
   2::bigint,
-  '(S6b) STRUCTURAL — WITH CHECK half: insert/update both carry the ADR-029/025 aal2 backstop in polwithcheck — RED if owner_identification_update''s WITH CHECK lost its aal2 clause while USING kept it'
+  '(S6b) STRUCTURAL — WITH CHECK half: insert/update both carry the ADR-029/025 aal2 backstop in polwithcheck, WITH BOTH ''totp'' and ''passkey'' present in the pinned mfa_policy IN-list — RED if owner_identification_update''s WITH CHECK lost its aal2 clause while USING kept it, OR if a regression narrowed the IN-list to ''totp'' alone'
 );
 
 -- =====================================================================
@@ -505,8 +515,10 @@ select _rls.expect_cross_tenant_read_empty('pfin.owner_identification'::regclass
 -- =====================================================================
 -- BLOCK W (authenticated B) — cross-tenant WRITE fails closed: INSERT
 --   forge (direct WITH CHECK 42501, no trigger shadows this table — AC6),
---   UPDATE no-op. The DELETE leg is BLOCK DEL below, per the AC12-shape
---   isolation the migration's own header requires (see header box).
+--   UPDATE no-op. BLOCK W3 immediately below is the companion Lock 14
+--   mod #1 UPDATE tenant-move forge, run as A rather than B. The DELETE
+--   leg is BLOCK DEL below, per the AC12-shape isolation the migration's
+--   own header requires (see header box).
 -- =====================================================================
 select _rls.set_tenant(:'tb'::uuid);
 
@@ -529,6 +541,25 @@ select is(
   'Mosko Household — Primary',
   '(W2) cross-tenant UPDATE: B''s update where users_id=A matches 0 rows under RLS (USING filters it out) — A''s row UNCHANGED'
 );
+
+-- =====================================================================
+-- BLOCK W3 (authenticated A) — Lock 14 mod #1 mass-assignment, the
+--   UPDATE tenant-move forge: A owns its OWN row (USING passes on the
+--   pre-update row) and attempts to retarget users_id to B on the SAME
+--   UPDATE. WITH CHECK evaluates the NEW row and must reject, because the
+--   post-update users_id (B) no longer equals auth.uid() (A). This is the
+--   behavioural pair to (S4)'s structural pin — S4 only proves the WITH
+--   CHECK clause is PRESENT, never that it actually fires on this route.
+-- =====================================================================
+select _rls.set_tenant(:'ta'::uuid);
+savepoint sp_w3;
+select throws_ok(
+  format($$ update pfin.owner_identification set users_id = %L where users_id = auth.uid() $$, :'tb'),
+  '42501', null,
+  '(W3) UPDATE tenant-move forge: A owns the row (USING passes) and attempts to retarget its OWN row''s users_id to B in the same UPDATE — WITH CHECK rejects (42501) because the post-update row''s users_id (B) no longer equals auth.uid() (A); Lock 14 mod #1 mass-assignment route, behaviourally pairing (S4)''s structural pin'
+);
+rollback to savepoint sp_w3;
+select set_config('role', 'postgres', true);
 
 -- =====================================================================
 -- BLOCK DEL (authenticated B, then corrupted) — the DELETE-policy leg,
