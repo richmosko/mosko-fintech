@@ -88,6 +88,59 @@ Description:
 
     Lock anchors: Lock 11 (INVOKER read-composition) · Lock 13 mod #3 (TBC) ·
     migration 050 (fn_compute_nav) · migration 054 (pfin.nav_daily — consumed).
+
+    SELF-353 / A9 — per-account leaf capture (migration 107, pfin.nav_component_daily)
+    -----------------------------------------------------------------------------------
+    Added BESIDE the scalar checkpoint above, in the SAME transaction, per 107's own
+    WORKER CONTRACT (Backend obligation, four parts, none optional):
+
+        (W1) SOURCE: leaves come from `pfin.fn_account_unrealized_gl(current_date)`
+             — the SAME `current_date` the scalar checkpoint uses (Postgres fixes
+             `current_date` for the whole transaction, so both calls see the same
+             value by construction; no Python-side date is threaded between them) —
+             taking (account_id, current_market_value). ⚠ NOT pfin.fn_nav_composition:
+             102/105 re-cut that function's leaf set to anti-join every tax-authority-
+             designated ledger, so its Σ no longer equals nav_daily.nav_value (107's
+             own header, ruling E7). fn_account_unrealized_gl (049, re-issued at 056)
+             is the SAME single leaf substrate fn_nav_composition itself composes on,
+             and Σ over it IS fn_compute_nav(as_of, true) exactly (ADR-038/039) — the
+             identity the reconciliation battery (AC 6) actually watches. Read INSIDE
+             the SAME impersonated block as the scalar, under the tenant's own RLS.
+        (W2) GUC: reuses `app.nav_computed_for` (the SAME binding _BIND_WRITE_TENANT
+             already sets for the scalar) — ONE binding covers both tables; there is
+             no second, table-specific GUC.
+        (W3) ORDER + CONDITION: the scalar INSERT runs FIRST; `result.rowcount` is
+             the did-it-insert signal (RULING E10 — NOT `returning nav_id`, which
+             107's WORKER CONTRACT text originally named: `service_role` lacks
+             SELECT on `nav_id` under 054's grant, so RETURNING fails 42501; see
+             _CHECKPOINT_INSERT's own comment). Leaves are written ONLY when that
+             INSERT's rowcount is 1. On a same-day re-run the scalar's
+             `on conflict (users_id, nav_date) do nothing` reports rowcount 0, and NO
+             leaves are written either — this is what keeps Σ(leaves) = nav_value
+             across re-runs even if the tenant's account set changed between runs
+             (107's own worked example; there is no DDL that can enforce this, which
+             is why it is a worker-contract obligation rather than a constraint).
+        (W4) STATEMENT: one multi-row INSERT into pfin.nav_component_daily, in the
+             SAME transaction, executing AS `service_role` (the role is already
+             assumed for the scalar INSERT — no second `set local role`), with a
+             TARGETED `on conflict (users_id, nav_date, account_id) do nothing`
+             (107's B9-precedent ruling — never bare, never `do update`, which would
+             trip the leaf table's own append-only trigger). Skipped entirely when
+             the leaf set is empty (an all-closed-accounts tenant) — an empty VALUES
+             list is not valid SQL, and there is nothing to reconcile against for a
+             tenant whose scalar nav_value is itself 0 for the same reason.
+
+    A leaf-side raise (any of 107's five FAIL SURFACE cases — the FK/finite/matched-
+    tenant fences, all of which MUST raise) rolls back the WHOLE transaction,
+    including the scalar checkpoint just inserted — this is the residual 107's own
+    header names and accepts explicitly (Decision 2's per-surface independence
+    argument is about the TABLE, not the write transaction; SAME TRANSACTION is
+    load-bearing here, not negotiable), so a tenant with a leaf-side fault gets NO
+    checkpoint for that day rather than a scalar with no matching leaves.
+
+    Lock anchors (added): migration 107 (pfin.nav_component_daily — consumed) ·
+    ADR-054 (Decisions 1-6) · ADR-011 Decision 3 instance #19 (account_id
+    matched-tenant fence, DB-side; nothing on the Python side references it).
 """
 
 import logging
@@ -180,12 +233,82 @@ _ARBITER_COLUMNS = ("users_id", "nav_date")
 # DO NOTHING, never DO UPDATE: an UPDATE path would trip 054's append-only trigger.
 # The 054 BEFORE INSERT write-tenant trigger still fires on a same-day re-run
 # (BEFORE INSERT precedes conflict detection, so B7 is NOT bypassed), and
-# `result.rowcount` remains a valid inserted/skipped signal.
+# `result.rowcount` is a valid inserted/skipped signal for this exact statement
+# shape (a single-row INSERT ... ON CONFLICT DO NOTHING).
+#
+# RULING E10 (team-lead, cross-checked against 054 and independently measured
+# here and by QA): W3's ORIGINAL text named `returning nav_id` as the did-it-
+# insert signal. `insert ... returning nav_id` against a live scratch DB raises
+# `psycopg2.errors.InsufficientPrivilege: permission denied for table nav_daily`
+# under `service_role`, because 054's own grant is
+# `grant select (users_id, nav_date) on pfin.nav_daily to service_role` (589) —
+# `nav_id` is NOT one of the two granted columns, and Postgres requires SELECT
+# privilege on every column named in a RETURNING clause, not merely INSERT.
+# E10: do NOT widen the grant — `result.rowcount` on this exact statement shape
+# (no RETURNING clause at all) is the ratified signal: 1 → write the leaves,
+# 0 → write none. 107's WORKER CONTRACT header is being amended by Architect to
+# match. QA's battery exercises this rowcount form.
 _CHECKPOINT_INSERT = (
     "insert into pfin.nav_daily "
     "(users_id, nav_date, nav_value) "
     "values (:uid, current_date, :nav) "
     "on conflict (users_id, nav_date) do nothing"
+)
+
+# ---------------------------------------------------------------------------
+# SELF-353 / A9 — per-account leaf capture (migration 107, pfin.nav_component_daily).
+# ---------------------------------------------------------------------------
+
+# 107's WORKER CONTRACT W4 ARBITER — the columns of the leaf table's unique
+# constraint (`unique (users_id, nav_date, account_id)`), and therefore exactly
+# the columns 107's column-level grant makes readable to `service_role`. Same
+# three-artifact invariant as _ARBITER_COLUMNS above (constraint / grant / ON
+# CONFLICT target must agree) — QA's battery fences the DB side; this constant
+# is the app-side pin.
+_LEAF_ARBITER_COLUMNS = ("users_id", "nav_date", "account_id")
+
+# The FIXED parts of the leaf INSERT's shape — column list and the targeted ON
+# CONFLICT clause (107's B9-precedent ruling: targeted, never bare; DO NOTHING,
+# never DO UPDATE — an UPDATE path would trip the leaf table's own append-only
+# trigger). Named constants, not inlined, for the same reason _CHECKPOINT_INSERT
+# is a named constant: a test importing these can assert the production shape
+# without retyping a simplified equivalent (RT-31 leg (h)).
+_LEAF_INSERT_COLUMNS = "(users_id, nav_date, account_id, component_value)"
+_LEAF_INSERT_CONFLICT = "on conflict (users_id, nav_date, account_id) do nothing"
+
+
+def _build_leaf_insert(leaf_count):
+    """Build the production nav_component_daily multi-row INSERT for exactly
+    `leaf_count` leaf rows (107 WORKER CONTRACT W4). The row count varies with
+    the tenant's account count, so — unlike _CHECKPOINT_INSERT, always exactly
+    one row — this cannot be a single fixed string; the FIXED parts
+    (_LEAF_INSERT_COLUMNS / _LEAF_INSERT_CONFLICT) are still named constants,
+    and only the VALUES tuple list is generated. `current_date` is repeated
+    per row rather than threaded from Python — same as _CHECKPOINT_INSERT,
+    and Postgres fixes it for the whole transaction, so every row and the
+    scalar checkpoint agree on the SAME as-of by construction (W1).
+
+    Requires `leaf_count >= 1` — an empty VALUES list is not valid SQL; the
+    caller skips this entirely when there are no leaves to write.
+    """
+    if leaf_count < 1:
+        raise ValueError("_build_leaf_insert requires leaf_count >= 1")
+    values = ", ".join(
+        f"(:uid, current_date, :aid{i}, :cmv{i})" for i in range(leaf_count)
+    )
+    return sqla.text(
+        f"insert into pfin.nav_component_daily {_LEAF_INSERT_COLUMNS} "
+        f"values {values} "
+        f"{_LEAF_INSERT_CONFLICT}"
+    )
+
+
+# The leaf READ (W1) — same as-of as the scalar (current_date, transaction-fixed),
+# read under the SAME impersonated RLS session. NOT fn_nav_composition — see the
+# module docstring's SELF-353 / A9 section for why.
+_LEAF_READ = (
+    "select account_id, current_market_value "
+    "from pfin.fn_account_unrealized_gl(current_date)"
 )
 
 
@@ -261,12 +384,17 @@ class NavDailyWorker:
     def compute_and_checkpoint_user(self, users_id):
         """Impersonate `users_id`, compute today's NAV via the locked INVOKER
         fn_compute_nav(current_date, true) under RLS, then append the frozen
-        checkpoint to pfin.nav_daily AS `service_role` — one atomic transaction.
+        scalar checkpoint to pfin.nav_daily AND (SELF-353 / A9, migration 107)
+        the per-account leaf rows to pfin.nav_component_daily — AS `service_role`,
+        one atomic transaction, per 107's WORKER CONTRACT (module docstring).
 
-        Idempotent + forward-only: ON CONFLICT (users_id, nav_date) DO NOTHING (see
-        _CHECKPOINT_INSERT — the targeted form is admitted by a minimal column-level
-        grant on exactly the two arbiter columns), so a same-day re-run is a no-op
-        (rowcount 0). Returns (nav_value, inserted).
+        Idempotent + forward-only: the scalar's ON CONFLICT (users_id, nav_date) DO
+        NOTHING (see _CHECKPOINT_INSERT) gates the leaves too — leaves are written
+        ONLY when the scalar INSERT actually returned a row, so a same-day re-run
+        writes nothing on either table (W3). Returns (nav_value, inserted,
+        leaves_written) — `inserted` is 1/0 (scalar), `leaves_written` is the leaf
+        row count actually inserted (0 on a no-op re-run or an all-closed-accounts
+        tenant).
         """
         tbc = TenantBoundConnection.for_tenant(self._db_url, users_id)
         with tbc.engine.connect() as conn:
@@ -278,33 +406,59 @@ class NavDailyWorker:
                     # DATABASE resolved it (never from self._users_id — see
                     # _NAV_TENANT_GUC). Must be set INSIDE the block, while the
                     # claims are live; it survives teardown and clears at COMMIT.
+                    # ONE binding covers BOTH pfin.nav_daily and (SELF-353) the
+                    # leaf table below (107 W2) — no second GUC.
                     conn.execute(sqla.text(_BIND_WRITE_TENANT))
 
                     nav_value = conn.execute(
                         sqla.text("select pfin.fn_compute_nav(current_date, true)")
                     ).scalar()
 
-                # (2) privileged append-only checkpoint. impersonate()'s teardown
-                # left the session back on the NOINHERIT login role, which holds no
-                # privileges — assume the ADR-023 write role explicitly or the
-                # INSERT fails 42501 (Sec joint-review v3 B1(c)).
+                    # (1b) SELF-353 / A9 W1 — the per-account leaves, SAME as-of,
+                    # SAME impersonated RLS session. See module docstring for why
+                    # this is fn_account_unrealized_gl and NOT fn_nav_composition.
+                    leaves = conn.execute(sqla.text(_LEAF_READ)).fetchall()
+
+                # (2) privileged writes. impersonate()'s teardown left the session
+                # back on the NOINHERIT login role, which holds no privileges —
+                # assume the ADR-023 write role explicitly or every write below
+                # fails 42501 (Sec joint-review v3 B1(c)).
                 conn.execute(sqla.text(_SET_WRITE_ROLE))
 
-                # VALUES carries users_id literally → satisfies the TBC assertion's
-                # direct-write (literal) binding, and 054's BEFORE INSERT trigger
-                # independently checks it against app.nav_computed_for at the DB
-                # layer. DO NOTHING = insert-if-absent.
-                result = conn.execute(
+                # (2a) the scalar checkpoint. VALUES carries users_id literally →
+                # satisfies the TBC assertion's direct-write (literal) binding, and
+                # 054's BEFORE INSERT trigger independently checks it against
+                # app.nav_computed_for at the DB layer. DO NOTHING = insert-if-
+                # absent; `rowcount` is the W3 did-it-insert signal (RULING E10 —
+                # see _CHECKPOINT_INSERT's own comment for why this is rowcount
+                # and not `returning nav_id`, 107's original WORKER CONTRACT text).
+                scalar_result = conn.execute(
                     sqla.text(_CHECKPOINT_INSERT),
                     {"uid": str(users_id), "nav": nav_value},
                 )
-                inserted = result.rowcount
+                inserted = scalar_result.rowcount
+
+                # (2b) SELF-353 / A9 W3/W4 — leaves ONLY if the scalar actually
+                # inserted (a same-day re-run must write NO leaves either, even if
+                # the account set changed since the first run — see module
+                # docstring). Same transaction, same (already-assumed) service_role.
+                leaves_written = 0
+                if inserted and leaves:
+                    params = {"uid": str(users_id)}
+                    for i, (account_id, current_market_value) in enumerate(leaves):
+                        params[f"aid{i}"] = account_id
+                        params[f"cmv{i}"] = current_market_value
+                    leaf_result = conn.execute(
+                        _build_leaf_insert(len(leaves)), params
+                    )
+                    leaves_written = leaf_result.rowcount
 
         logger.info(
             f"nav_daily checkpoint users_id={users_id} nav_value={nav_value} "
-            f"inserted={inserted} (0 = already checkpointed today)"
+            f"inserted={inserted} leaves_written={leaves_written} "
+            f"(inserted=0 => already checkpointed today, no leaves written either)"
         )
-        return nav_value, inserted
+        return nav_value, inserted, leaves_written
 
     # ------------------------------------------------------------------ #
     # Nightly entry — checkpoint every account-owning tenant for today.
