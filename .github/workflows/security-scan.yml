@@ -708,6 +708,38 @@ jobs:
           fi
           echo "OK: fence caught the host-network exposure vector (exit $rc)."
 
+      - name: Production-mode — pdf-render compose (SELF-348 A4 item 4c; expects internal-only, exit 0)
+        # Intra-instance coverage expansion of RT-27 on the CI-fenced side —
+        # a wiring change over the already-generic fence, not a new fence
+        # (Sec N-4). Ledger effect NONE: no new §10 instance, no ordinal, no
+        # count (see SECURITY §4.5's RT-30 entry, cited by pointer per the
+        # A4 ruling — never restate its quoted text here).
+        run: bash scripts/ci/fence-admission-private-bind.sh workers/pdf-render/docker-compose.yaml
+
+      - name: "Inversion — pdf-render golden: published ports (expects violation, exit 1, vector-1 token)"
+        # Sec F-2 lesson (SELF-350): asserting exit-code != 0 alone is not
+        # proof the right vector fired — a structural error (missing
+        # sentinel, non-compose file) also exits non-zero (2, here, but the
+        # discipline is the same: assert the SPECIFIC token, not just a
+        # non-zero code) and would print "OK: caught..." having proven
+        # nothing. Captured stdout+stderr is asserted for the vector-1 token
+        # the fence itself emits, via if/then/fi under set -e.
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-admission-private-bind.sh tests/fixtures/ci/admission-bind-pdf-render-public-ports.compose.yaml 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: admission-bind fence expected exit 1 on the pdf-render published-ports golden but got $rc — failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'vector 1: published host-port mapping'; then
+            echo "FATAL: pdf-render published-ports golden exited 1 but the expected vector-1 token is absent from fence output — the non-zero exit does not prove the published-ports vector fired; failing closed."
+            exit 1
+          fi
+          echo "OK: fence caught the pdf-render published-ports exposure vector via its vector-1 token (exit $rc)."
+
   dedup-hash-identical:
     name: dedup-hash — import_hash canonical↔copy drift fence
     runs-on: ubuntu-latest
