@@ -70,28 +70,25 @@ jobs:
           node-version: '20'
 
       - name: RT-22-manifest production-mode (PDF worker package.json + lockfile)
-        # Pass-if-absent (R6 rider 2), DISCOVERED rather than a hardcoded path
-        # (Sec F-1): A4 may land workers/pdf-render/package.json at a nested
-        # location (a workspace child, an app/ subfolder) rather than the
-        # top-level canonical path, and a hardcoded path would then report
-        # "absent — pass" forever with nothing watching — the same
-        # sequencing-convention-with-no-mechanism rot rider 2 already removed
-        # one level up. Every package.json under workers/pdf-render/ (excl.
-        # node_modules/) is audited; zero found still resolves to the
-        # canonical path so PASS-IF-ABSENT is preserved exactly for the
-        # current (pre-A4) state.
+        # DISCOVERED rather than a hardcoded path (Sec F-1): SELF-348 (A4)
+        # could in principle have landed workers/pdf-render/package.json at a
+        # nested location (a workspace child, an app/ subfolder) rather than
+        # the top-level canonical path, and a hardcoded path would then miss
+        # it silently. Every package.json under workers/pdf-render/ (excl.
+        # node_modules/) is audited.
         #
-        # Sec F-6, REDIRECTED (2026-09-05): an earlier revision of this step
-        # tried to guess "has A4 landed?" from a Dockerfile apt-get heuristic.
-        # That is itself a convention with no mechanism — a fence keyed to a
-        # guess about how Backend will extend the Dockerfile fails silently
-        # in exactly the case the guess is wrong — so it was removed. The
-        # correct fix ships in the SAME COMMIT that finalizes the SELF-348 A4
-        # allowlist flip (still pending Backend's dependency list): from the
-        # commit that lands workers/pdf-render/package.json, the manifest is
-        # REQUIRED, so that commit makes this step UNCONDITIONAL — zero
-        # manifests found becomes FATAL with no pass-if-absent branch left at
-        # all. Until then, pass-if-absent (below) is correct and unguessed.
+        # UNCONDITIONAL — PASS-IF-ABSENT RETIRED AT A4 (Sec F-6, redirected
+        # 2026-09-05): R6 rider 2's pass-if-absent fallback existed only for
+        # the pre-A4 window, when workers/pdf-render/package.json legitimately
+        # did not exist yet. SELF-348 (A4) has landed that file (Backend's
+        # dependency list — puppeteer-core + jsonwebtoken — is now baked into
+        # scripts/ci/fence-rt22-pdf-worker-manifest.sh's ALLOWLIST_JSON), so
+        # the manifest is REQUIRED from here on: zero manifests found under
+        # workers/pdf-render/ is now FATAL, with no fallback branch at all. An
+        # earlier revision tried to guess "has A4 landed?" from a Dockerfile
+        # apt-get line — a convention with no mechanism, since it fails
+        # silently in exactly the case the guess is wrong — and was removed
+        # rather than kept as a redundant residual.
         run: |
           found=0
           while IFS= read -r m; do
@@ -100,7 +97,8 @@ jobs:
             bash scripts/ci/fence-rt22-pdf-worker-manifest.sh "$m"
           done < <(find workers/pdf-render -name package.json -not -path '*/node_modules/*' 2>/dev/null | sort)
           if [ "$found" -eq 0 ]; then
-            bash scripts/ci/fence-rt22-pdf-worker-manifest.sh workers/pdf-render/package.json
+            echo "FATAL: no package.json found anywhere under workers/pdf-render/. SELF-348 (A4) requires one; pass-if-absent (R6 rider 2) was the pre-A4 shape and was retired once A4 landed workers/pdf-render/package.json. Failing closed."
+            exit 1
           fi
 
       - name: RT-22-manifest inversion-mode (golden fixtures; both routes must violate)
