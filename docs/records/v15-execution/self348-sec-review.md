@@ -321,3 +321,102 @@ Host-agnostic, so it survives a proxy/mirror registry and both fixtures; catches
 
 ## Second error of my own, named here
 While re-running the three fences at `6fbcec5` I wrote a `for f in "<script> <arg>"` loop and invoked `bash $f`. The Bash tool runs **zsh**, which does not word-split unquoted parameters, so all three invocations became a single bogus path and returned `rc=127`. I caught it because 127 is not a code any of these fences emits, and re-ran them individually — the rc=0/0/0 above are from the corrected invocations. Recording it because a 127 misread as a failure would have produced three false findings, and because it is a hazard already in my own memory that I walked into anyway.
+
+---
+---
+
+# FINAL VERDICT — PR #634 at d49cc15 (2026-09-05)
+
+## GREEN
+
+Every item I raised as a merge condition or flag in the two prior passes is discharged by measurement. Two pre-existing non-blocking flags (F-12, F-16) remain open by design — neither was ever a merge condition. One new comment-only defect (NEW-1) is a should-fix, not a blocker.
+
+## Instrument note — the true PR delta, and why the obvious command was wrong
+
+`git diff --name-only origin/main d49cc15` returned 31 files including `supabase/migrations/107_nav_component_daily.sql`, `DECISIONS.md` and two `workers/etl/` files — which would have put a **Decision 3 matched-tenant surface inside this PR** and changed the review scope entirely. It does not. My `origin/main` ref was stale; after `git fetch origin main` (→ `c6884c2`), `107` is confirmed **already on main** via PR #633 / SELF-353, and those files appear only because the branch is behind.
+
+**True PR delta = `git diff --name-only $(git merge-base origin/main d49cc15) d49cc15`, merge-base `6c52cdb` → 25 files**, all A4 surface plus two `CLAUDE.md`. No migration, no `DECISIONS.md`, no ETL. **No Decision 3 surface in this PR.**
+
+## ⚠ NEW-5 (operational, needs action before merge) — the PR is BEHIND main
+
+`gh pr view 634 --json mergeStateStatus` → **`BEHIND`** (mergeable: MERGEABLE), 18 commits on `origin/main` not in the branch. Branch protection wants an up-to-date branch, so this will not turn CLEAN on its own: **`gh pr update-branch`, never `--admin`.**
+
+**My verdict carries to the post-update sha, and I verified that rather than assuming it.** `comm -12` over (files main changed since merge-base) ∩ (files this PR changes) is **empty**, and `git diff --name-only 6c52cdb origin/main -- workers/pdf-render/ scripts/ci/ .github/workflows/ tests/fixtures/ci/` is **empty**. Main's 18 commits touch no file this PR changes and no A4-surface file at all, so the update is a mechanical fast-forward merge with no content interaction. **No re-review needed after the update-branch** — only a sha re-anchor.
+
+## Merge conditions and flags — closure, by measurement
+
+| Item | Status | Measurement |
+|---|---|---|
+| **F-11A** `--ignore-scripts` | **CLOSED** | `Dockerfile:102` = `RUN npm ci --omit=dev --ignore-scripts`. Verified the control actually works: scratch manifest with a `postinstall`, marker file **ABSENT** with the flag, **RAN** without it. |
+| **F-11B** `scripts` as 7th source | **CLOSED** | Implemented as a **key allowlist** (`SCRIPT_KEY_ALLOWLIST = {start, test}`) — stronger than the denylist I proposed, and it matches the file's own allowlist model. My e8 postinstall case now exits **rc=1** (was 0). |
+| **D-1** §10 numbering | **CLOSED** | Whitespace-normalized exact match on my supplied sentence: **True**. `2-instance` present: **False**. Re-flowed to the file's wrap width — correct, that is matching the target file's convention, not drift. |
+| **F-13** child-env + healthz watchers | **CLOSED** | `render-env.test.js` 3 legs (key absent; PATH survives — a non-vacuous control proving it is not just an empty object; no `process.env` mutation) + `healthz.test.js` 2 legs (200, and 404 on an unknown route). |
+| **F-14** CI job | **CLOSED** | `pdf-render` job in `worker-ci.yml`, job-level `working-directory` override, **run-always with no `paths:` filter**. Guard verified as a **FATAL, not a skip**: a dedicated step exits 1 when `PUPPETEER_EXECUTABLE_PATH` is unset **or not executable**, placed *before* the battery runs, so `render.test.js`'s self-skip branch is unreachable from this job. |
+| **F-15** port mismatch | **CLOSED** | `expose: "8080"` = `EXPOSE 8080` = `PORT \|\| 8080`. Only residual `8082` is a historical note explaining the change. Golden fixture re-aligned to `8080:8080` and still trips vector 1. |
+| **F-17** container hardening | **CLOSED** | `cap_drop: [ALL]` + `security_opt: [no-new-privileges:true]` on the compose service. |
+| **N-3** stale (A)-direction text | **CLOSED, and over-delivered** | Zero hits for `internal/pdf-render` or "reaches the data layer" in `.env.example`. **DevOps also corrected `api/CLAUDE.md` and `workers/CLAUDE.md`, which my enumeration missed** — both carried the retired app-pulls-from-worker shape as current state, in files agents read as authoritative. That scope expansion was right and I endorse it. |
+| **N-6** stale workflow comment | **CLOSED** | Now reads "allowlisted", the property that actually makes the fixture work under the flip. |
+| **F-12** lockfile `resolved` unchecked | **OPEN by design** | e9/e10 still rc=0. Never a merge condition. Corrected predicate re-confirmed valid: **0 violations** on the real lockfile and on all three golden fixtures. |
+| **F-16** Chromium pin / hadolint | **OPEN by design** | `grep -ric hadolint .github/` still returns **zero non-zero counts** — the lint the apt pin exists to satisfy still has no CI watcher. Never a merge condition. |
+
+## Fences, fixtures and battery at d49cc15
+
+| Check | Result |
+|---|---|
+| RT-22 Dockerfile fence | rc=0 |
+| RT-22 manifest fence, production | rc=0 |
+| RT-27 production (pdf-render compose) | rc=0 |
+| RT-27 inversion (pdf-render golden) | rc=1, `vector 1: published host-port mapping` present |
+| Golden `manifest-direct/` | rc=1 |
+| Golden `lockfile-transitive/` | rc=1 |
+| Golden `lifecycle-script/` (new) | rc=1, token `manifest:scripts:postinstall(script-not-allowlisted)` present, **0 other `manifest:*` tokens — route-isolated** |
+| Evasion matrix, 12 cases | e1–e5, e8, e11 → rc=1 · **nc (negative control) → rc=0** · e6/e7/e9/e10 → rc=0 (known notes / open F-12) |
+| `npm test` (now the bare `node --test` form) | **26 tests, 26 pass, 0 fail, 0 skipped** |
+
+## Three-axis hook (ADR-011 Decision 4 re-read live at d49cc15)
+
+Live D4: `§10 catalogued-instance count = 3`, `RT-22 first / RT-26 second / RT-27 third`.
+
+- **(i) instance-numbering — CLEAN.** The stale `2-instance` is gone; `RT-27 is the third catalogued §10 instance` matches D4; every other mention says intra-instance with "Ledger effect NONE, no new §10 instance, no ordinal, no count."
+- **(ii) layer-attribution — CLEAN.** RT-27 = network-exposure/config; RT-22 = infrastructure-credential-presence (asserted correctly in `workers/CLAUDE.md` too); TBC named as the Privileged-context-surfaces bullet, not a catalogued instance. No surface becomes "four-layer".
+- **(iii) verbatim-vs-paraphrase — CLEAN.** RT-30 cited at exactly two sites, both prose pointers, no quotation; the false composite was not restored.
+
+**CI-fenced RT set:** `main` = RT-05 RT-22 RT-26 RT-27; `d49cc15` = the same **plus RT-30** (comment pointer at `security-scan.yml:749`). Unchanged from my earlier passes. §10 catalogued = {RT-22, RT-26, RT-27}. **Different sets; do not reconcile.**
+
+## R-7 — RULING on F-18: JS stays enabled, ACCEPTED. The proposed P6 widening, ACCEPTED and it is better than what I asked for. One condition on it.
+
+**JS-stays-enabled: accepted.** I raised `setJavaScriptEnabled(false)` explicitly as feasibility-unknown and routed the call to Backend/Architect. Backend read the actual P2 template, found LayerCake sizing the chart client-side, and established that disabling JS ships degenerate SVGs. That is the question being answered by measurement rather than by my assumption, which is the right outcome. The new leg (`render.test.js:233`) is a genuine strengthening: it converts *"interception presumably covers script-initiated fetch"* — my assumption — into a measurement, and it is a **positive control on JS execution** at the same time, so it cannot pass by JS being silently off.
+
+**The proposed P6 widening — *"script content never survives template compilation as live markup"* — is accepted, and it is a better assertion than the *"script does not execute"* I proposed.** Mine would be asserted at the worker and would only ever cover the transports someone thought to enumerate; Backend's is asserted at the **injection point**, and one claim there covers `fetch`, WebSocket, WebRTC and every transport nobody has thought of yet. Under (C) the app is the only party that can put script into the HTML, so that is where the control belongs.
+
+⚠ **Condition, because the leg as worded tests today's template and nothing watches tomorrow's.** Pair it with a **structural** assertion: the report template contains no `{@html ...}` on any user-derived value. Svelte's `{@html}` is precisely the route by which *"script content survives template compilation as live markup"* becomes true without anyone writing a `<script>` tag, and a behavioural leg over today's fields will not see it arrive. Cheapest durable form is a grep-fence over the template path rather than a one-time test. Owner: QA to author with Frontend/Architect naming the template path; home P6, alongside the widened leg.
+
+⚠ **Residual, recorded so the coupling is not lost.** WebSocket and WebRTC remain outside CDP request interception — that is unchanged and unfixable in the worker. With the P6 control in place the residual has **no reachable trigger** under (C). It becomes live again only if some future surface lets a non-app party POST HTML to the worker — which is exactly what RT-27's private-bind fence prevents. **So this residual is fenced by RT-27, not by the worker's own code.** If RT-27's fence is ever weakened, this becomes reachable, and nobody would connect the two without this sentence.
+
+## New findings this pass
+
+### NEW-1 (flag, should-fix, does NOT block) — a fence header asserts a mechanism claim that is false, and contradicts the Dockerfile on the same surface. Owner: DevOps.
+`scripts/ci/fence-rt22-pdf-worker-manifest.sh:283-285` reads: *"`npm ci` runs lifecycle scripts … **whether or not `--ignore-scripts` is passed at the install site**."* **Measured false:** with `--ignore-scripts` the marker is ABSENT; without it, RAN. The Dockerfile's own comment at `:88-101` states the mechanism **correctly** and even names the losing side — so two artifacts on one surface now assert contradictory mechanics, and the fence is the one that is wrong.
+
+Nothing is weakened today (both controls exist and both work). The hazard is directional: a reader who checks the claim finds it false and discounts the rationale, or reasons the other way and removes `--ignore-scripts` believing the fence already covers it.
+
+**The real rationale is different and stronger — suggested replacement for those three lines:**
+
+> `--ignore-scripts` at this worker's own install site (Dockerfile) suppresses these for OUR image build, and that is a different control from this one with a different reach. This fence catches a lifecycle script at **PR-review time**, before it reaches any install: it also covers a developer's local `npm install`, a future CI lane that omits the flag (`worker-ci.yml`'s install does today), and the case where a future PR quietly drops `--ignore-scripts` from the Dockerfile. Two independent controls, neither of which subsumes the other.
+
+### NEW-2 (note) — the CI lane's install is more permissive than the image build. Owner: DevOps.
+`worker-ci.yml`'s pdf-render job runs bare `npm ci` (no `--ignore-scripts`) while the Dockerfile has it. Both `security-scan.yml` (the fence) and `worker-ci.yml` run on every PR with no ordering guarantee between jobs, so a PR adding a malicious `postinstall` could execute it on the runner while the fence is concurrently failing. Modest — the fence still reds the PR — but the one-word fix makes the two lanes consistent and removes runner code-execution from the picture entirely.
+
+### NEW-3 (note) — the battery step's comment is stale *within its own sha*. Owner: DevOps.
+The step correctly runs `node --test`, but its comment says *"NOT `npm test` — its script (`node --test test/`…) crashes"* and *"flagged to Backend to fix the script itself"*. **Backend fixed it in this same PR** — `package.json` now reads `"test": "node --test"`. It also says *"all 20 tests"* (now **26**) and the step name says *"auth.test.js + render.test.js"* while `node --test` discovers four files. Harmless today; it instructs a future maintainer to keep routing around a defect that no longer exists.
+
+### NEW-4 (note) — a directory CLAUDE.md names an unbuilt file in the present tense. Owner: whoever holds `api/CLAUDE.md`.
+The corrected `/internal/pdf-render` sentence says *"instead `src/lib/server/pdf/renderClient.ts` (SELF-349) PUSHES…"*. Verified: `api/src/lib/server/pdf/` **does not exist** at `d49cc15` — A5 is unbuilt. The correction itself is right and wanted; the tense is a forward claim in a file agents read as current state. Suggest *"will push (SELF-349, unbuilt at this writing)"*.
+
+### NEW-6 (note) — the child-env watcher tests the control but not the wire.
+`render-env.test.js` exercises `_childEnvWithoutSecrets()` directly. It does **not** assert that `_launchBrowser` passes it — `render.js:92` `env: _childEnvWithoutSecrets()` is a single line with no watcher, so deleting it leaves all three new tests green. This is a real improvement over no watcher at all and I am not asking for more at this merge; recording the residual and its criterion (on Linux, enumerate the Chromium child pids and assert `PDF_WORKER_SIGNING_KEY` appears in none of their `/proc/<pid>/environ`) so it can be homed at P10 with the other environment legs.
+
+## My errors this pass, named here
+
+1. **Stale `origin/main` ref.** I ran `git diff origin/main d49cc15` against a ref I had fetched two passes earlier, and it reported migration `107` and `DECISIONS.md` as part of this PR. Had I not re-fetched, I would have opened a Decision 3 joint-review on a surface that is already merged. Caught because a Decision 3 instance appearing in a PDF-worker PR was implausible enough to check rather than report. **The two-dot diff was the wrong instrument regardless** — merge-base three-dot is the one that answers "what does this branch change."
+2. **A simplified copy of the function under test.** Checking F-12's corrected predicate I inlined a `nameFromResolved` that omitted the scope walk-back, and it reported **1 violation** on the real lockfile. The violation was `@puppeteer/browsers`, which my copy parsed as `browsers`. The real scope-aware function returns `@puppeteer/browsers` and matches — **0 violations**. I nearly reported that my own recommended fix would red the production lockfile. Re-run with the actual function, not a paraphrase of it.
