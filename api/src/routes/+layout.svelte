@@ -19,15 +19,16 @@
 	nav hunk) so it stays highlighted once SELF-264's /taxes/decomposition lands alongside it. This
 	is now the ONE nav edit for both §2.5 surfaces — frontend-264 reverted its own.
 
-	"Monthly Report" — RECONCILED at the P2/P3/P5 rebase-integration (2026-09-05) from two
-	independent additions built on separate branches (P2's own bare link, P5's badge-carrying
-	one; see each ticket's own commit for the individual history). Added at SELF-354 (P2 AC1's
-	"sidebar entry owed" note) → /reports/monthly, active-matched on the WHOLE /reports/monthly
-	subtree (WITH the trailing-slash-or-exact form, same `/taxes/` rationale — covers P2's
-	per-month view and P3's commentary editor under it, not just P5's listing itself). Carries
-	the SAME pending-count badge treatment the Classify link established (SELF-200, P5's own
-	AC2) — zero footprint when `pendingMonthlyReportCount` is 0, ACCENT ramp (not `--c-attn-*`),
-	sourced from +layout.server.ts's own tenant-scoped read (AC2's Sec F-8).
+	"Monthly Report" — RECONCILED at the P2/P3/P5 rebase-integration (2026-09-05, team-lead
+	ruling: "P2's version wins; P5 adds only the pending badge") from two independent additions
+	built on separate branches. P2's OWN link + active-match survive unchanged: added at SELF-354
+	(P2 AC1's "sidebar entry owed" note) → /reports/monthly, active-matched on the whole
+	/reports/ subtree via `path.startsWith('/reports/')` (covers P2's per-month view and P3's
+	commentary editor under it, not just P5's listing itself — no OTHER /reports/* surface exists
+	today, so this is equivalent in practice to a narrower /reports/monthly-only match). P5 adds
+	ONLY the pending-count badge on top (SELF-357 AC2) — the SAME treatment the Classify link
+	established (SELF-200): zero footprint when `pendingMonthlyReportCount` is 0, ACCENT ramp
+	(not `--c-attn-*`), sourced from +layout.server.ts's own tenant-scoped read (AC2's Sec F-8).
 
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5). The count badge uses the
 	ACCENT ramp — NOT `--c-attn-*` (canary is reserved for staleness/re-auth; §5 fence).
@@ -56,7 +57,7 @@
 	const isAllocation = $derived(path === '/allocation');
 	const isCashFlow = $derived(path === '/cash-flow');
 	const isTaxes = $derived(path.startsWith('/taxes/'));
-	const isMonthlyReport = $derived(path.startsWith('/reports/monthly/') || path === '/reports/monthly');
+	const isMonthlyReport = $derived(path.startsWith('/reports/'));
 
 	// SELF-207 P4 re-auth banner health summary — from +layout.server.ts (Backend-computed via the
 	// shared needsReauth/isInstitutionDown predicates, active-connections-only, fail-soft to {0,0}).
