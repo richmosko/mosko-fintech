@@ -116,8 +116,13 @@
 --   4. **Atomicity:** force the delegated insert to fail (e.g. a `target_month` that
 --      is not a month start) and assert the `final` row is **still `final`** — the
 --      transition must not survive a failed regeneration.
---   5. **Exactly ONE audit row** per successful regeneration, with trigger source
---      `on_demand`; **zero** on the draft-month path.
+--   5. **Exactly ONE audit row** per successful regeneration; **zero** on the
+--      draft-month path. ⚠ Its trigger source is **DERIVED BY THE DELEGATE**, not
+--      fixed here: `113` reads the transaction-local GUC `app.report_generation_source`,
+--      so a regeneration from an ordinary session records `on_demand` and one issued
+--      inside the cron's impersonated block records `cron`. Assert `on_demand` from an
+--      ordinary session — and do NOT assert it unconditionally, which would encode the
+--      hardcoded value this leg's own defect was.
 --   6. **Three regenerations of one month** → three rows, exactly one `final` at each
 --      settled point and exactly one `draft` in flight. ⚠ Sec D-5's
 --      three-not-two rule applies here too: two regenerations pass against a
