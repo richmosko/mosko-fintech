@@ -1,0 +1,10 @@
+{
+  "name": "pdf-render-fixture-lockfile-transitive",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DELIBERATELY VIOLATION-SHAPED golden fixture for the RT-22 dependency-manifest fence (SELF-350 A6). Lockfile-scan route: package.json names only objection-lite, a plausible non-denylisted report-utility package; pg is never mentioned here or in any denylisted-name form. DO NOT install or use as a template.",
+  "dependencies": {
+    "puppeteer-core": "^23.0.0",
+    "objection-lite": "^1.4.0"
+  }
+}
