@@ -109,11 +109,13 @@ Description:
         (W2) GUC: reuses `app.nav_computed_for` (the SAME binding _BIND_WRITE_TENANT
              already sets for the scalar) — ONE binding covers both tables; there is
              no second, table-specific GUC.
-        (W3) ORDER + CONDITION: the scalar INSERT runs FIRST, now with
-             `returning nav_id` (used ONLY as the did-it-insert signal — nav_id is
-             NOT stored on the leaf table, no FK). Leaves are written ONLY when that
-             INSERT actually returned a row. On a same-day re-run the scalar's
-             `on conflict (users_id, nav_date) do nothing` returns nothing, and NO
+        (W3) ORDER + CONDITION: the scalar INSERT runs FIRST; `result.rowcount` is
+             the did-it-insert signal (RULING E10 — NOT `returning nav_id`, which
+             107's WORKER CONTRACT text originally named: `service_role` lacks
+             SELECT on `nav_id` under 054's grant, so RETURNING fails 42501; see
+             _CHECKPOINT_INSERT's own comment). Leaves are written ONLY when that
+             INSERT's rowcount is 1. On a same-day re-run the scalar's
+             `on conflict (users_id, nav_date) do nothing` reports rowcount 0, and NO
              leaves are written either — this is what keeps Σ(leaves) = nav_value
              across re-runs even if the tenant's account set changed between runs
              (107's own worked example; there is no DDL that can enforce this, which
@@ -234,21 +236,18 @@ _ARBITER_COLUMNS = ("users_id", "nav_date")
 # `result.rowcount` is a valid inserted/skipped signal for this exact statement
 # shape (a single-row INSERT ... ON CONFLICT DO NOTHING).
 #
-# ⚠ DEVIATION FROM 107'S WORKER CONTRACT TEXT, MEASURED NOT ASSUMED: W3 says
-# `returning nav_id`. Tried it first — `insert ... returning nav_id` against this
-# scratch DB raises `psycopg2.errors.InsufficientPrivilege: permission denied for
-# table nav_daily` under `service_role`, because 054's own grant is
+# RULING E10 (team-lead, cross-checked against 054 and independently measured
+# here and by QA): W3's ORIGINAL text named `returning nav_id` as the did-it-
+# insert signal. `insert ... returning nav_id` against a live scratch DB raises
+# `psycopg2.errors.InsufficientPrivilege: permission denied for table nav_daily`
+# under `service_role`, because 054's own grant is
 # `grant select (users_id, nav_date) on pfin.nav_daily to service_role` (589) —
 # `nav_id` is NOT one of the two granted columns, and Postgres requires SELECT
-# privilege on every column named in a RETURNING clause, not merely INSERT. 107
-# does not amend 054's grant (grep-confirmed — no `grant`/`nav_daily` DDL in 107
-# at all). `result.rowcount` achieves the IDENTICAL did-it-insert signal the
-# CONTRACT's intent asks for (already what this file used before SELF-353, per
-# the comment above), needs no new privilege, and is what ships here. Flagged to
-# team-lead/Architect as a migration-vs-contract gap (either 054 needs `nav_id`
-# added to the service_role grant, or 107's WORKER CONTRACT text should read
-# "rowcount" instead of "returning nav_id") — not resolved unilaterally by
-# widening a grant from this file, which Backend does not own.
+# privilege on every column named in a RETURNING clause, not merely INSERT.
+# E10: do NOT widen the grant — `result.rowcount` on this exact statement shape
+# (no RETURNING clause at all) is the ratified signal: 1 → write the leaves,
+# 0 → write none. 107's WORKER CONTRACT header is being amended by Architect to
+# match. QA's battery exercises this rowcount form.
 _CHECKPOINT_INSERT = (
     "insert into pfin.nav_daily "
     "(users_id, nav_date, nav_value) "
@@ -430,10 +429,9 @@ class NavDailyWorker:
                 # satisfies the TBC assertion's direct-write (literal) binding, and
                 # 054's BEFORE INSERT trigger independently checks it against
                 # app.nav_computed_for at the DB layer. DO NOTHING = insert-if-
-                # absent; `rowcount` is the W3 did-it-insert signal (see
-                # _CHECKPOINT_INSERT's own comment for why this is rowcount and
-                # not `returning nav_id`, as 107's WORKER CONTRACT text names —
-                # the grant that would admit RETURNING doesn't exist).
+                # absent; `rowcount` is the W3 did-it-insert signal (RULING E10 —
+                # see _CHECKPOINT_INSERT's own comment for why this is rowcount
+                # and not `returning nav_id`, 107's original WORKER CONTRACT text).
                 scalar_result = conn.execute(
                     sqla.text(_CHECKPOINT_INSERT),
                     {"uid": str(users_id), "nav": nav_value},
