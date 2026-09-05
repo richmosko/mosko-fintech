@@ -27,7 +27,11 @@
 # entry, AND (b) pin it with a PLAIN REGISTRY SEMVER SPEC. ALLOWLIST_JSON is
 # exactly Backend's shipped `workers/pdf-render/package.json` dependency set —
 # `puppeteer-core` + `jsonwebtoken`, no devDependencies (verified at
-# origin/feature/self-348 @ d44d7d0). DENYLIST_JSON and its lockfile/alias
+# origin/feature/self-348 @ d44d7d0). PLUS a SEVENTH source, `scripts` — Sec
+# F-11B: `npm ci` runs lifecycle scripts regardless of the six fields above,
+# so any `scripts` key outside `{"start","test"}` (this worker's real, and
+# only legitimate, script keys) is its own violation, independent of the
+# allowlist/denylist machinery entirely. DENYLIST_JSON and its lockfile/alias
 # detection logic are UNCHANGED and still run — kept for human legibility (an
 # explicit "these are definitely forbidden" list next to the allowlist a
 # reviewer actually reads) and as defense-in-depth (a denylisted name that
@@ -41,17 +45,21 @@
 # value (F-7: `"db": "https://registry.npmjs.org/pg/-/pg-8.11.3.tgz"`), a
 # `github:`/`file:`/`git+ssh:`/`link:`/`workspace:` spec (F-8), or scanning
 # `overrides`/`resolutions` (F-9) with their own bespoke per-shape checks, the
-# manifest side enforces a SINGLE rule uniformly across all six sources (four
-# dependency fields + overrides + resolutions): the spec string for an
-# allowlisted name must be a PLAIN REGISTRY SEMVER — a character-allowlist
-# (`isPlainRegistrySpec()`), not a grammar trying to enumerate every escape.
-# Any spec containing `:` or `/` or `#` — which covers every alias/git/file/
-# tarball/workspace form Sec named, uniformly, because none of them can be
-# expressed without at least one of those three characters — is a violation
-# regardless of what name it resolves to. This is why `aliasTarget()` is not
-# consulted for the primary manifest-side decision (a non-registry spec is
-# caught before its target name would even matter); it is kept ONLY to label
-# a denylist-legibility hit more specifically when one fires.
+# manifest side enforces a SINGLE rule uniformly across all six DEPENDENCY
+# sources (four dependency fields + overrides + resolutions): the spec string
+# for an allowlisted name must be a PLAIN REGISTRY SEMVER — a
+# character-allowlist (`isPlainRegistrySpec()`), not a grammar trying to
+# enumerate every escape. Any spec containing `:` or `/` or `#` — which covers
+# every alias/git/file/tarball/workspace form Sec named, uniformly, because
+# none of them can be expressed without at least one of those three
+# characters — is a violation regardless of what name it resolves to. This is
+# why `aliasTarget()` is not consulted for the primary manifest-side decision
+# (a non-registry spec is caught before its target name would even matter);
+# it is kept ONLY to label a denylist-legibility hit more specifically when
+# one fires. `scripts` (the seventh source, F-11B) is a DIFFERENT shape — a
+# script's VALUE is an arbitrary shell command, not a dependency spec, so
+# there is no spec-shape rule to apply to it; the key itself is what is
+# allowlisted instead.
 #
 # TARGET MUST EXIST — PASS-IF-ABSENT RETIRED AT A4 (Sec F-6, redirected
 # 2026-09-05): R6 rider 2 shipped this fence PASS-IF-ABSENT, deliberately
@@ -272,6 +280,25 @@ if (manifest.resolutions && typeof manifest.resolutions === "object") {
   }
 }
 
+// Sec F-11B: `npm ci` runs lifecycle scripts (preinstall/install/postinstall/
+// prepare/prepublish/prepack, both the root package OWN AND every
+// dependency OWN) whether or not `--ignore-scripts` is passed at the install
+// site — this fence has no visibility into WHAT a script does (it could
+// silently `npm i pg` outside every field scanned above), so the only
+// fail-closed posture is to allowlist the SCRIPT KEYS themselves. This
+// worker real package.json declares exactly {"start","test"} and has no
+// legitimate use for any lifecycle hook — so, matching the "allowlist as the
+// fence" model applied everywhere else in this file, any `scripts` key
+// outside {"start","test"} is a violation, regardless of what its value is.
+const SCRIPT_KEY_ALLOWLIST = new Set(["start", "test"]);
+if (manifest.scripts && typeof manifest.scripts === "object") {
+  for (const key of Object.keys(manifest.scripts)) {
+    if (!SCRIPT_KEY_ALLOWLIST.has(key)) {
+      violations.push(`manifest:scripts:${key}(script-not-allowlisted)`);
+    }
+  }
+}
+
 if (!fs.existsSync(lockPath)) {
   console.log("NOTE:lockfile absent at " + lockPath + " — treated as absent manifest (pass on lockfile half).");
 } else {
@@ -346,10 +373,11 @@ if [ "$RC" -ne 0 ]; then
   fi
   echo "PDF worker manifest/lockfile dependencies must each be an ALLOWLISTED" >&2
   echo "package (puppeteer-core, jsonwebtoken) pinned by a plain registry" >&2
-  echo "semver spec, and must not resolve a Postgres client or DB-driver-" >&2
-  echo "bundling ORM package (pg, postgres, node-postgres, @supabase/supabase-js," >&2
-  echo "@supabase/postgrest-js, knex, sequelize) per Lock 13 mod #2" >&2
-  echo "(zero-DB-isolation)." >&2
+  echo "semver spec; manifest.scripts must contain no key outside {start,test}" >&2
+  echo "(npm ci runs lifecycle scripts regardless of the allowlist); and must" >&2
+  echo "not resolve a Postgres client or DB-driver-bundling ORM package (pg," >&2
+  echo "postgres, node-postgres, @supabase/supabase-js, @supabase/postgrest-js," >&2
+  echo "knex, sequelize) per Lock 13 mod #2 (zero-DB-isolation)." >&2
   exit 1
 fi
 

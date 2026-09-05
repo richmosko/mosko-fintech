@@ -44,9 +44,11 @@ Per ADR-011 Decision 4:
   server-side source; SECURITY §4.2 axis vi; HIGH + V1-SHIP-BLOCK).
 - **TBC** is the **Privileged-context-surfaces bullet at Decision 4** (code-layer
   parallel to RT-26 on `workers/etl/` Python source; Lock 13 mod #3 V1-SHIP-BLOCK). **NOT in
-  Decision 4's catalogued numbered list** — the numbered list stays 2-instance per
-  the discipline-preservation guard. V1-SHIP-BLOCK axis (Lock 13 mod #3) is
-  orthogonal to the §10 catalogued-instance axis.
+  Decision 4's catalogued numbered list** — TBC is a Privileged-context-surfaces-bullet
+  mechanism, not a catalogued instance, per the discipline-preservation guard; read
+  the list's membership live from ADR-011 Decision 4, never from a count pinned
+  here. V1-SHIP-BLOCK axis (Lock 13 mod #3) is orthogonal to the §10
+  catalogued-instance axis.
 - **RT-27** is the **third catalogued §10 instance** (network-exposure/config
   layer; SELF-212 C6-1 limb (b)). The `workers/pdf-render/docker-compose.yaml`
   coverage added at SELF-348 A4 item 4c is an **intra-instance expansion of this

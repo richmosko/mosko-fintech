@@ -16,9 +16,10 @@ services:
     build: .
     restart: unless-stopped
     # VIOLATION: published host-port mapping (should be `expose:` only, as in
-    # the real workers/pdf-render/docker-compose.yaml).
+    # the real workers/pdf-render/docker-compose.yaml). Port matches the real
+    # manifest's 8080 (Sec F-15 fixed a stale 8082 there 2026-09-05).
     ports:
-      - "8082:8082"
+      - "8080:8080"
     environment:
       - NODE_ENV=production
       - PDF_WORKER_SIGNING_KEY=${PDF_WORKER_SIGNING_KEY}

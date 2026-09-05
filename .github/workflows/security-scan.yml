@@ -101,43 +101,54 @@ jobs:
             exit 1
           fi
 
-      - name: RT-22-manifest inversion-mode (golden fixtures; both routes must violate)
-        # QA-authored two-directory fixture set under
-        # tests/fixtures/ci/rt22-manifest-violation/, one subdirectory per
-        # detection route so each route is proven live independently — a
-        # single fixture could pass by exercising only one code path:
+      - name: RT-22-manifest inversion-mode (golden fixtures; all three routes must violate)
+        # Fixture set under tests/fixtures/ci/rt22-manifest-violation/, one
+        # subdirectory per detection route so each route is proven live
+        # independently — a single fixture could pass by exercising only one
+        # code path:
         #   - manifest-direct/      — pg listed directly in package.json
         #     dependencies (manifest-scan route).
-        #   - lockfile-transitive/  — package.json names only a non-denylisted
-        #     dep; pg appears solely in package-lock.json's resolved tree as
-        #     that dep's transitive dependency (lockfile-scan route a
-        #     manifest-only scan cannot see).
-        # Unlike production-mode, this step is NOT pass-if-absent — both
+        #   - lockfile-transitive/  — package.json names only allowlisted
+        #     deps; pg appears solely in package-lock.json's resolved tree as
+        #     one of them's transitive dependency (lockfile-scan route a
+        #     manifest-only scan cannot see). Adapted at E21 for the
+        #     allowlist flip (was QA-authored pre-flip).
+        #   - lifecycle-script/     — dependencies name only allowlisted deps,
+        #     lockfile resolves nothing denylisted, but scripts.postinstall
+        #     installs pg outside every field the manifest/lockfile scan
+        #     otherwise covers (Sec F-11B — npm ci runs lifecycle scripts
+        #     regardless of --omit=dev).
+        # Unlike production-mode, this step is NOT pass-if-absent — all three
         # fixtures are required scaffolding for this job, same as the RT-22
         # Dockerfile fence's inversion step.
         #
-        # Sec F-2: asserting exit-code != 0 alone is not proof either route
-        # fired — a malformed manifest, a malformed lockfile, or `node` off
-        # PATH ALSO exits 1 (the fence's own-dependency fail-closed path),
-        # and would print "OK: caught..." having proven nothing. Each
+        # Sec F-2: asserting exit-code != 0 alone is not proof the right
+        # route fired — a malformed manifest, a malformed lockfile, or `node`
+        # off PATH ALSO exits 1 (the fence's own-dependency fail-closed
+        # path), and would print "OK: caught..." having proven nothing. Each
         # fixture's captured stdout+stderr is asserted for the SPECIFIC
         # token the route that fixture exists to prove must emit; the
-        # lockfile-transitive fixture is additionally asserted to carry NO
-        # "manifest:" token, so a fixture that silently regained a
-        # manifest-side trip (as an earlier draft of it did) is caught here,
-        # not just read as an incidental extra hit.
+        # lockfile-transitive AND lifecycle-script fixtures are additionally
+        # asserted to carry NO "manifest:dependencies:"/"manifest:scripts:"
+        # cross-contamination from the other two routes, so a fixture that
+        # silently regained a trip on the wrong leg is caught here, not just
+        # read as an incidental extra hit.
         run: |
           set +e
           out_manifest="$(bash scripts/ci/fence-rt22-pdf-worker-manifest.sh tests/fixtures/ci/rt22-manifest-violation/manifest-direct/package.json 2>&1)"
           rc_manifest=$?
           out_lockfile="$(bash scripts/ci/fence-rt22-pdf-worker-manifest.sh tests/fixtures/ci/rt22-manifest-violation/lockfile-transitive/package.json 2>&1)"
           rc_lockfile=$?
+          out_lifecycle="$(bash scripts/ci/fence-rt22-pdf-worker-manifest.sh tests/fixtures/ci/rt22-manifest-violation/lifecycle-script/package.json 2>&1)"
+          rc_lifecycle=$?
           set -e
 
           echo "--- manifest-direct/ fence output ---"
           echo "$out_manifest"
           echo "--- lockfile-transitive/ fence output ---"
           echo "$out_lockfile"
+          echo "--- lifecycle-script/ fence output ---"
+          echo "$out_lifecycle"
 
           if [ "$rc_manifest" -eq 0 ]; then
             echo "FATAL: RT-22-manifest fence reported clean/absent against manifest-direct/ violation fixture — failing closed."
@@ -161,7 +172,20 @@ jobs:
             exit 1
           fi
 
-          echo "OK: RT-22-manifest fence caught manifest-direct/ via manifest:dependencies:pg (exit $rc_manifest) and lockfile-transitive/ via lockfile:pg with no manifest: token (exit $rc_lockfile) — both routes proven independently."
+          if [ "$rc_lifecycle" -eq 0 ]; then
+            echo "FATAL: RT-22-manifest fence reported clean/absent against lifecycle-script/ violation fixture — failing closed."
+            exit 1
+          fi
+          if ! echo "$out_lifecycle" | grep -q 'manifest:scripts:postinstall(script-not-allowlisted)'; then
+            echo "FATAL: lifecycle-script/ fixture exited non-zero but the expected token 'manifest:scripts:postinstall(script-not-allowlisted)' is absent from its output — the non-zero exit does not prove the lifecycle-script route fired; failing closed."
+            exit 1
+          fi
+          if echo "$out_lifecycle" | grep -Eq 'manifest:dependencies:|lockfile:'; then
+            echo "FATAL: lifecycle-script/ fixture output carries a 'manifest:dependencies:' or 'lockfile:' token — this fixture exists to prove the lifecycle-script route in isolation and must not also trip the dependency/lockfile legs; fixture isolation is broken."
+            exit 1
+          fi
+
+          echo "OK: RT-22-manifest fence caught manifest-direct/ via manifest:dependencies:pg (exit $rc_manifest), lockfile-transitive/ via lockfile:pg with no manifest: token (exit $rc_lockfile), and lifecycle-script/ via manifest:scripts:postinstall with no dependency/lockfile token (exit $rc_lifecycle) — all three routes proven independently."
 
   fence-rt26:
     name: RT-26 — SUPABASE_SERVICE_ROLE_KEY allowlist
