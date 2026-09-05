@@ -35,8 +35,9 @@ begin;
 \set m_insert_state '%may be INSERTed in the `draft` state ONLY%'
 \set m_matched3 '%ADR-011 Decision 3 #3 array-element matched-tenant fence%'
 \set m_immut_col '%users_id and target_month are immutable in EVERY state%'
+\set m_live_draft '%monthly_report_one_live_draft_per_month%'
 
-select plan(32);
+select plan(34);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 \set td '00000000-0000-0000-0000-00000000000d'
@@ -241,15 +242,19 @@ select lives_ok(
 select set_config('role', 'postgres', true);
 
 -- =====================================================================
--- LEG 10 — commentary one character over the [PM PENDING] 4000-char bound
--- refused THROUGH POSTGREST (the DB layer), not only the app.
+-- LEG 10 — commentary one character over the 4000-char bound (PM's ruled
+-- product number, 2026-09-05 — no longer a placeholder) refused THROUGH
+-- POSTGREST (the DB layer), not only the app. Sec N-5: the bound is CODE
+-- POINTS (length()), and P3's Zod mirror must count the same unit
+-- (Array.from(s).length, not s.length) or the two layers disagree on
+-- astral characters — this leg proves the DB half of that equality.
 -- =====================================================================
 select _rls.set_tenant(:'ta'::uuid);
 insert into pfin.monthly_report (target_month, data_as_of) values ('2026-06-01', '2026-06-30') returning report_id as d10 \gset
 select throws_like(
   format($$ update pfin.monthly_report set commentary_cash = repeat('x', 4001) where report_id = %s $$, :d10),
   '%monthly_report_commentary_cash_len%',
-  '(10a) commentary_cash at 4001 chars -> refused by the DB CHECK (parameterized on the [PM PENDING] placeholder bound; relay PM''s number when it lands)'
+  '(10a) commentary_cash at 4001 chars -> refused by the DB CHECK (the ruled bound: 4000 characters, PM 2026-09-05)'
 );
 select lives_ok(
   format($$ update pfin.monthly_report set commentary_cash = repeat('x', 4000) where report_id = %s $$, :d10),
@@ -337,6 +342,27 @@ select ok(
      from pg_trigger where tgrelid = 'pfin.monthly_report'::regclass and tgname = 'monthly_report_refresh_updated_at'),
   '(13b) STRUCTURAL: the refresh trigger carries a WHEN (old.generation_status = ''draft'') clause — the reason it cannot fire on final/superseded rows is structural, not merely unobserved-in-this-harness (now() is frozen for the whole transaction, so a plain before/after value comparison on the final->superseded path cannot tell "correctly did not fire" from "fired and produced this same frozen instant coincidentally")'
 );
+
+-- =====================================================================
+-- LEG 14 — E15: AT MOST ONE LIVE DRAFT PER (user, month)
+-- (monthly_report_one_live_draft_per_month, ruled 2026-09-05 reversing an
+-- earlier decline — PM's tab-A/tab-B silent-loss scenario). Reuses LEG 8's
+-- still-`draft` row (d8, month 2026-04-01) for the collision, and LEG 3's
+-- month (2026-02-01, one `final` + two `superseded`, zero live drafts) for
+-- the positive control — proving the index is PARTIAL (WHERE draft), not a
+-- blanket one-row-per-month fence that would make regeneration impossible.
+-- =====================================================================
+select _rls.set_tenant(:'ta'::uuid);
+select throws_like(
+  $$ insert into pfin.monthly_report (target_month, data_as_of) values ('2026-04-01', '2026-04-30') $$,
+  :'m_live_draft',
+  '(14a) A SECOND draft for a month that already has a live draft (d8, still `draft` from LEG 8) -> REJECTED 23505 on monthly_report_one_live_draft_per_month — the tab-A/tab-B scenario PM supplied: without this fence a concurrent Generate silently orphans the first draft''s commentary forever (no DELETE grant exists for any role)'
+);
+select lives_ok(
+  $$ insert into pfin.monthly_report (target_month, data_as_of) values ('2026-02-01', '2026-02-28') $$,
+  '(14b) NON-VACUOUS, PROVES PARTIAL: a NEW draft for 2026-02-01 -- a month that already carries one `final` (d3) and two `superseded` (d1, d2) rows from LEG 3, and ZERO live drafts -- is ACCEPTED. A leg testing only (14a)''s refusal cannot distinguish this index from one keyed on ALL THREE states, which would make regeneration impossible'
+);
+select set_config('role', 'postgres', true);
 
 select * from finish();
 rollback;
