@@ -59,6 +59,39 @@ jobs:
           fi
           echo "OK: RT-22 fence caught fixture violation (exit $rc)."
 
+  fence-rt22-manifest:
+    name: RT-22 — PDF worker dependency-manifest audit (SELF-350 A6)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: RT-22-manifest production-mode (PDF worker package.json + lockfile)
+        # Pass-if-absent (R6 rider 2): workers/pdf-render/package.json does not
+        # exist yet — A4 has not landed it. The fence exits 0 and no-ops until
+        # A4 creates the file, then bites on A4's first commit. This step is
+        # therefore expected to pass both before and after A4 lands.
+        run: bash scripts/ci/fence-rt22-pdf-worker-manifest.sh workers/pdf-render/package.json
+
+      - name: RT-22-manifest inversion-mode (golden fixture; expects violation)
+        # QA-authored fixture: tests/fixtures/ci/rt22-manifest-violation/{package.json,package-lock.json}
+        # naming `pg`. Unlike production-mode, this step is NOT pass-if-absent —
+        # the fixture is required scaffolding for this job, same as the RT-22
+        # Dockerfile fence's inversion step.
+        run: |
+          set +e
+          bash scripts/ci/fence-rt22-pdf-worker-manifest.sh tests/fixtures/ci/rt22-manifest-violation/package.json
+          rc=$?
+          set -e
+          if [ $rc -eq 0 ]; then
+            echo "FATAL: RT-22-manifest fence reported clean/absent against violation fixture — fence or fixture is broken; failing closed."
+            exit 1
+          fi
+          echo "OK: RT-22-manifest fence caught fixture violation (exit $rc)."
+
   fence-rt26:
     name: RT-26 — SUPABASE_SERVICE_ROLE_KEY allowlist
     runs-on: ubuntu-latest

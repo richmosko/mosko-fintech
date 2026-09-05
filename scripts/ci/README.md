@@ -4,6 +4,9 @@ This directory holds the V1 CI fence scripts that gate `mosko-fintech` PRs again
 three classes of security-load-bearing regressions:
 
 - **RT-22** — PDF worker Dockerfile zero-DB-isolation audit.
+- **RT-22-manifest** — PDF worker `package.json` + lockfile dependency-manifest
+  audit (SELF-350 A6, re-scoped at R6 2026-09-04); the sibling fence that closes
+  the gap the Dockerfile fence's own header names as its non-catch.
 - **RT-26** — `SUPABASE_SERVICE_ROLE_KEY` allowlist grep fence on the V1 web-app
   server-side source surface.
 - **TBC** — `TenantBoundConnection` grep fence on the `workers/etl/` Python source
@@ -27,7 +30,10 @@ clean against the fixture, CI fails closed (the fence is unverified/broken).
 Per ADR-011 Decision 4:
 
 - **RT-22** is the **first catalogued §10 instance** (infrastructure-credential-
-  presence layer; Lock 13 mod #2).
+  presence layer; Lock 13 mod #2). The RT-22-manifest fence (below) extends
+  RT-22's CI coverage; per SELF-350 (A6) R6, this adds, removes, reorders and
+  renumbers nothing in Decision 4 — read it live, never from a count pinned
+  here.
 - **RT-26** is the **second catalogued §10 instance** (code-layer on V1-web-app
   server-side source; SECURITY §4.2 axis vi; HIGH + V1-SHIP-BLOCK).
 - **TBC** is the **Privileged-context-surfaces bullet at Decision 4** (code-layer
@@ -45,6 +51,7 @@ by anything in this directory.
 ```
 scripts/ci/
 ├── fence-rt22-pdf-worker-dockerfile.sh   # RT-22 audit script
+├── fence-rt22-pdf-worker-manifest.sh     # RT-22-manifest audit script (SELF-350 A6)
 ├── fence-rt26-service-role-allowlist.sh  # RT-26 grep fence (γ-hybrid)
 ├── fence-tbc-pfin-back-etl.sh            # TBC grep fence (single-repo; scans workers/etl/src/)
 ├── check-dedup-hash-identical.sh         # import_hash canonical↔copy drift fence (SELF-204 / ADR-034 D4)
@@ -61,21 +68,65 @@ Catches BOTH (i) `SUPABASE_*` env vars (ENV/ARG) and (ii) Postgres client instal
 (psycopg2 / psycopg2-binary / asyncpg / pg / node-postgres / postgresql-client) in
 the PDF worker Dockerfile.
 
-**Explicitly NOT catching at CI** (covered by human PR-review per ARCH §6.1 RT-22
-row verbatim *"human PR-review stays second-line for non-CI-detectable shape
-drift"*):
+**Explicitly NOT catching at CI:**
 
 - `COPY package.json` / `COPY requirements.txt` (install intent revealed at RUN
-  time; manifest inspection is human-second-line).
-- **Transitive Postgres client via base image** — the fence does NOT inspect the
-  base image. If a future base-image change inherits `postgresql-client`
-  transitively, the fence won't catch it. This is the canonical second-line
-  surface for human PR-review per ARCH §6.1 RT-22 row.
+  time, not COPY time; this Dockerfile fence does not open the manifest it
+  COPYs). **This gap is now closed by the sibling RT-22-manifest fence below**,
+  which opens and parses the manifest directly (SELF-350 A6, R6
+  2026-09-04) — kept covered by human PR-review only until A4 lands the
+  manifest (pass-if-absent; see below).
+- **Transitive Postgres client via base image** — neither this fence nor
+  RT-22-manifest inspects the base image. If a future base-image change
+  inherits `postgresql-client` transitively, nothing at CI catches it. This
+  stays the canonical second-line surface for human PR-review per ARCH §6.1
+  RT-22 row verbatim *"human PR-review stays second-line for non-CI-detectable
+  shape drift"*.
 
 Local invocation:
 
 ```bash
 bash scripts/ci/fence-rt22-pdf-worker-dockerfile.sh workers/pdf-render/Dockerfile
+```
+
+## RT-22-manifest — PDF worker dependency-manifest audit
+
+**Lock:** ADR-011 Decision 17 / Lock 13 mod #2 + SECURITY §4.5 RT-22. Ledger
+effect NONE — see the §10 cross-reference above; this is CI-coverage
+extension, not a new catalogued instance.
+
+Closes the gap the Dockerfile fence's own header names as a deliberate
+non-catch (quoted above, verbatim): *"COPY of package.json / requirements.txt
+manifests (install intent revealed at RUN time, not COPY time; manifest
+inspection is human-second-line)."* This fence opens
+`workers/pdf-render/package.json` and its lockfile (`package-lock.json`)
+directly and rejects a Postgres-client or DB-driver-bundling ORM package
+anywhere in the resolved tree: `pg`, `postgres`, `node-postgres`,
+`@supabase/supabase-js`, `knex`, `sequelize`.
+
+**Pass-if-absent (deliberately DIFFERS from the Dockerfile fence's exit-2-on-
+missing-target):** `workers/pdf-render/package.json` does not exist yet — the
+PDF worker's dependencies land in a later issue (A4). This fence exits 0 with
+a "target absent — pass" line until that file exists, then bites on its first
+commit. An absent lockfile with a present manifest is handled the same way
+(pass on the lockfile half only) — a lockfile is only generated once npm has
+run against a real manifest. This shape is a ruled substitute for a sequencing
+dependency between issues: a convention stated in an AC ("land the fence after
+the manifest") has no mechanism and rots silently, so the ordering constraint
+is designed out instead of documented.
+
+Fails closed on its own dependency: this fence parses JSON with `node`; if
+`node` is unavailable, or either JSON file fails to parse, the fence exits 1
+rather than silently passing an unverifiable target.
+
+**Explicitly NOT catching at CI** (unchanged second-line surface — see the
+Dockerfile fence section above): a Postgres client pulled in transitively
+through the base image.
+
+Local invocation:
+
+```bash
+bash scripts/ci/fence-rt22-pdf-worker-manifest.sh workers/pdf-render/package.json
 ```
 
 ## RT-26 — `SUPABASE_SERVICE_ROLE_KEY` allowlist (γ-hybrid)
