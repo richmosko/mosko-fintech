@@ -26,7 +26,9 @@ begin;
 
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(11);
+\set m_live_draft '%monthly_report_one_live_draft_per_month%'
+
+select plan(14);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb, _rls.tenant_c() as tc \gset
 
@@ -119,16 +121,20 @@ select throws_like(
 select set_config('role', 'postgres', true);
 
 -- =====================================================================
--- LEG 5 — every envelope crosses UNFLATTENED: {status, reason} arrives as an
--- OBJECT, not a collapsed scalar.
+-- LEG 5 — UPDATED BY FINDING-1 CLOSURE (2026-09-05): delta_panel/reference_dates
+-- no longer cross as the {status,reason} unavailable envelope (that shape moved
+-- to LEG 7's fallback case) — they now cross as real ARRAYS of per-horizon rows.
+-- The principle this leg exists to prove is unchanged: an unavailable DATA POINT
+-- inside a row (no checkpoint data in this bare fixture) crosses as JSON null,
+-- never a collapsed `?? 0`.
 -- =====================================================================
 select _rls.set_tenant(:'ta'::uuid);
 select ok(
-  (select jsonb_typeof(r -> 'sections' -> 'nav_performance' -> 'delta_panel') = 'object'
-      and (r -> 'sections' -> 'nav_performance' -> 'delta_panel') ? 'status'
-      and (r -> 'sections' -> 'nav_performance' -> 'delta_panel') ? 'reason'
+  (select jsonb_typeof(r -> 'sections' -> 'nav_performance' -> 'delta_panel') = 'array'
+      and jsonb_typeof(r -> 'sections' -> 'nav_performance' -> 'reference_dates') = 'array'
+      and (r -> 'sections' -> 'nav_performance' -> 'delta_panel' -> 0 -> 'delta_nominal') = 'null'::jsonb
      from (select pfin.fn_render_monthly_report('2026-08-01', '2026-08-31') as r) q),
-  '(5) nav_performance.delta_panel crosses as an OBJECT with status+reason keys, not a collapsed scalar — no `?? 0` inside this function'
+  '(5) nav_performance.delta_panel / reference_dates cross as real ARRAYS (Finding 1 closed — no longer the collapsed envelope), and an unavailable data point inside a row (delta_nominal, no checkpoint data in this fixture) crosses as JSON null — no `?? 0` inside this function'
 );
 
 -- =====================================================================
@@ -152,15 +158,33 @@ select ok(
 );
 
 -- =====================================================================
--- LEG 7 — the §2.1.3 / §2.1.4 sections carry the reader_not_as_of_threadable
--- envelope (Finding 1, option α): asserted so that closing Finding 1 REDS
--- this leg and forces the payload contract to be re-read.
+-- LEG 7 — FINDING 1 CLOSED (2026-09-05, migration 110 Part 1): the composer now
+-- threads p_data_as_of through fn_nav_delta_panel_as_of / fn_nav_reference_dates_as_of
+-- instead of emitting the reader_not_as_of_threadable fallback. As originally
+-- promised at this leg's own prior text: closing Finding 1 REDDENED it and forced
+-- the payload contract to be re-read — this is that re-read.
+-- (7a) THE REAL CATCH CRITERION (regeneration-months-later): composing for a PAST
+-- month returns THAT month's anchors, not today's. Values match Architect's own
+-- measured worked example verbatim (110 header, RENDER-BUDGET section neighbor).
+-- (7b) NON-VACUOUS / "THE PANEL ACTUALLY MOVES" (QA PAIRING LIST item 2): the SAME
+-- horizon set anchored on a DIFFERENT p_data_as_of (2026-08-31, LEG 1/3's date)
+-- returns DIFFERENT anchor dates — a body that ignored p_data_as_of would pass
+-- (7a) by coincidence; this is what rules that out.
 -- =====================================================================
 select ok(
-  (select (r -> 'sections' -> 'nav_performance' -> 'delta_panel' ->> 'reason') = 'reader_not_as_of_threadable'
-      and (r -> 'sections' -> 'nav_performance' -> 'reference_dates' ->> 'reason') = 'reader_not_as_of_threadable'
+  (select (r -> 'sections' -> 'nav_performance' -> 'delta_panel' -> 0 ->> 'anchor_date') = '2024-06-30'   -- 1y
+      and (r -> 'sections' -> 'nav_performance' -> 'delta_panel' -> 1 ->> 'anchor_date') = '2022-06-30'   -- 3y
+      and (r -> 'sections' -> 'nav_performance' -> 'delta_panel' -> 2 ->> 'anchor_date') = '2020-06-30'   -- 5y
+      and (r -> 'sections' -> 'nav_performance' -> 'delta_panel' -> 3 ->> 'anchor_date') = '2025-05-31'   -- month
+      and (r -> 'sections' -> 'nav_performance' -> 'delta_panel' -> 4 ->> 'anchor_date') = '2024-12-31'   -- ytd
+      and (r -> 'sections' -> 'nav_performance' -> 'reference_dates' -> 2 ->> 'reference_date') = '2025-06-30'  -- this_month = p_data_as_of itself
+     from (select pfin.fn_render_monthly_report('2025-06-01', '2025-06-30') as r) q),
+  '(7a) AS-OF ANCHORING, REGENERATION-MONTHS-LATER CASE: composing for target_month=2025-06 / data_as_of=2025-06-30 anchors every delta_panel horizon and reference_dates.this_month on THAT month — 1y/3y/5y/month/ytd = 2024-06-30/2022-06-30/2020-06-30/2025-05-31/2024-12-31, matching Architect''s own measured worked example — never today''s server date frozen into a report about the past'
+);
+select ok(
+  (select (r -> 'sections' -> 'nav_performance' -> 'delta_panel' -> 0 ->> 'anchor_date') <> '2024-06-30'
      from (select pfin.fn_render_monthly_report('2026-08-01', '2026-08-31') as r) q),
-  '(7) both delta_panel AND reference_dates carry reason = ''reader_not_as_of_threadable'' (Finding 1) — closing that finding must REDDEN this leg, forcing the payload contract to be re-read rather than silently drifting'
+  '(7b) NON-VACUOUS, THE PANEL ACTUALLY MOVES (QA PAIRING LIST item 2): the SAME 1y-horizon anchor for a DIFFERENT p_data_as_of (2026-08-31) is NOT (7a)''s 2024-06-30 — the parameter is genuinely load-bearing, not merely accepted'
 );
 select set_config('role', 'postgres', true);
 
@@ -179,28 +203,71 @@ select ok(
 select set_config('role', 'postgres', true);
 
 -- =====================================================================
--- LEG E13 — Finding 4 (F/CTO + Sec, routed, one-line fix not taken
--- unilaterally): nothing guarantees one draft per month. Two drafts for the
--- SAME month are legal; the composer picks the HIGHEST report_id and echoes
--- it as source_report_id so the caller can ASSERT it against the row it is
--- about to write.
+-- LEG E13 — UPDATED BY E15 (108, 2026-09-05): monthly_report_one_live_draft_per_month
+-- now enforces AT MOST ONE LIVE DRAFT per (user, month), so the scenario this leg
+-- originally exercised — TWO SIMULTANEOUS drafts for the same month — is no longer
+-- reachable at the DB layer; the second INSERT below now raises 23505 instead of
+-- landing. Per 108's own header, the "highest report_id in draft" rule and its
+-- echoed source_report_id are KEPT AS WRITTEN even though E15 makes the choice
+-- degenerate (nothing to choose between with at most one candidate) — the echo is
+-- still what lets a caller assert the composer read the exact row it is about to
+-- write, and an assertion that can no longer fail is still what proves E15 holds.
 -- =====================================================================
+select set_config('role', 'postgres', true);
 select _rls.set_tenant(:'ta'::uuid);
 insert into pfin.monthly_report (target_month, data_as_of, commentary_cash)
   values ('2026-09-01', '2026-09-30', 'first-draft') returning report_id as d_first \gset
-insert into pfin.monthly_report (target_month, data_as_of, commentary_cash)
-  values ('2026-09-01', '2026-09-30', 'second-draft') returning report_id as d_second \gset
-select ok(
-  :d_second > :d_first,
-  '(E13-setup) NON-VACUOUS: the second draft''s report_id is genuinely HIGHER than the first (fixture sanity, not a real assertion of the fence)'
+select throws_like(
+  $$ insert into pfin.monthly_report (target_month, data_as_of, commentary_cash)
+       values ('2026-09-01', '2026-09-30', 'second-draft') $$,
+  :'m_live_draft',
+  '(E13-setup) E15 HOLDS HERE TOO: a second draft for the SAME month is REJECTED by monthly_report_one_live_draft_per_month — the two-simultaneous-drafts scenario this leg originally exercised is no longer reachable, cross-checked from a different battery file than 108''s own E15 leg'
 );
 select ok(
-  (select (r -> 'sections' -> 'rebalancing_targets' ->> 'source_report_id')::bigint = :d_second
-      and (r -> 'sections' -> 'rebalancing_targets' ->> 'cash') = 'second-draft'
+  (select (r -> 'sections' -> 'rebalancing_targets' ->> 'source_report_id')::bigint = :d_first
+      and (r -> 'sections' -> 'rebalancing_targets' ->> 'cash') = 'first-draft'
      from (select pfin.fn_render_monthly_report('2026-09-01', '2026-09-30') as r) q),
-  '(E13) MULTIPLE DRAFTS PER MONTH ARE LEGAL: with two drafts open for the same month, the composer picks the HIGHEST report_id (the LATER draft) — source_report_id echoes it AND the commentary actually read back is the SECOND draft''s, not the first''s'
+  '(E13) DEGENERATE BUT KEPT (108 header): with at most one live draft possible, the "highest report_id in draft" rule has nothing left to choose between — but source_report_id still echoes the ONE draft actually read (d_first) and its commentary reads back correctly, proving the composer reads the row it claims to rather than coincidentally succeeding because only one candidate exists'
 );
 select set_config('role', 'postgres', true);
+
+-- =====================================================================
+-- LEG D1 — DELEGATION EQUIVALENCE (QA PAIRING LIST item 1, migration 110 Part 1):
+-- the re-issued zero-argument delta_panel/reference_dates delegators are
+-- BEHAVIOUR-PRESERVING — each equals its own _as_of form called with
+-- pfin.fn_server_today(), column-for-column, on a NON-EMPTY set (tenant A's
+-- fixture already produces 5 delta_panel rows and 3 reference_dates rows, per
+-- LEG 5/7 above).
+-- =====================================================================
+select _rls.set_tenant(:'ta'::uuid);
+select ok(
+  (select count(*) > 0 from pfin.fn_nav_delta_panel())
+  and not exists (select * from pfin.fn_nav_delta_panel() except select * from pfin.fn_nav_delta_panel_as_of(pfin.fn_server_today()))
+  and not exists (select * from pfin.fn_nav_delta_panel_as_of(pfin.fn_server_today()) except select * from pfin.fn_nav_delta_panel())
+  and (select count(*) > 0 from pfin.fn_nav_reference_dates())
+  and not exists (select * from pfin.fn_nav_reference_dates() except select * from pfin.fn_nav_reference_dates_as_of(pfin.fn_server_today()))
+  and not exists (select * from pfin.fn_nav_reference_dates_as_of(pfin.fn_server_today()) except select * from pfin.fn_nav_reference_dates()),
+  '(D1) DELEGATION EQUIVALENCE, NON-VACUOUS: fn_nav_delta_panel() returns a NON-EMPTY set and matches fn_nav_delta_panel_as_of(fn_server_today()) exactly (zero rows in either symmetric-difference direction), and likewise for fn_nav_reference_dates() / fn_nav_reference_dates_as_of — the delegation is behaviour-preserving, not merely plausible'
+);
+select set_config('role', 'postgres', true);
+
+-- =====================================================================
+-- LEG D2 — CATALOG: volatility is `stable` on all four signatures after this
+-- migration (QA PAIRING LIST item 4). `CREATE OR REPLACE` resets volatility to
+-- the default (VOLATILE) unless re-declared — invisible to every value
+-- assertion above, which is why this is a catalog leg and not inferred from D1.
+-- =====================================================================
+select is(
+  (select count(*)::int from pg_proc
+    where oid in (
+      'pfin.fn_nav_delta_panel()'::regprocedure,
+      'pfin.fn_nav_reference_dates()'::regprocedure,
+      'pfin.fn_nav_delta_panel_as_of(date)'::regprocedure,
+      'pfin.fn_nav_reference_dates_as_of(date)'::regprocedure
+    ) and provolatile = 's'),
+  4,
+  '(D2) all four signatures — the two zero-argument delegators and the two _as_of forms — are STABLE. Omitting the re-declaration on a CREATE OR REPLACE would silently reset it to VOLATILE, losing planner optimisation with no value assertion able to see the regression'
+);
 
 select * from finish();
 rollback;
