@@ -16,12 +16,32 @@
 # that gap by parsing the manifest and lockfile directly. The Dockerfile fence
 # is unmodified by this work.
 #
-# Catch criterion: workers/pdf-render/package.json `dependencies` and
-# `devDependencies`, AND package-lock.json's fully resolved dependency tree
-# (direct + transitive), must not name a Postgres-client or DB-driver-bundling
-# ORM package: pg, postgres, node-postgres, @supabase/supabase-js, knex,
-# sequelize. Fail-closed: exit 1 on any hit, in either the manifest or the
-# lockfile.
+# Catch criterion: workers/pdf-render/package.json `dependencies`,
+# `devDependencies`, `optionalDependencies` and `peerDependencies`, AND
+# package-lock.json's fully resolved dependency tree (direct + transitive),
+# must not name a Postgres-client or DB-driver-bundling ORM package: pg,
+# postgres, node-postgres, @supabase/supabase-js, @supabase/postgrest-js,
+# knex, sequelize. Fail-closed: exit 1 on any hit, in either the manifest or
+# the lockfile.
+#
+# Evasion coverage (Sec F-3, joint-review 2026-09-05):
+#   (a) npm alias — a manifest entry like `"db": "npm:pg@^8"` installs `pg`
+#       under a non-denylisted key name. Manifest values are checked for the
+#       `npm:<name>@<spec>` alias form and the ALIASED name is what's tested
+#       against the denylist. Symmetrically, a lockfile `packages` entry is
+#       identified by up to three independent signals — its own key's last
+#       `node_modules/` path segment, its `name` field (npm writes this when
+#       the install-tree folder name and the real package name diverge, which
+#       is exactly what an alias produces), and the package name parsed from
+#       its `resolved` tarball URL (the path segment(s) immediately before
+#       `/-/`, which is scope-aware) — any one of the three matching the
+#       denylist is a violation.
+#   (b) optionalDependencies / peerDependencies — npm 7+ installs both, and
+#       the live gap is exactly the manifest-present/lockfile-absent window
+#       PASS-IF-ABSENT sanctions (rider 2): with no lockfile the manifest is
+#       the only signal, so it is scanned on all four dependency fields.
+#   (c) @supabase/postgrest-js — the PostgREST HTTP client @supabase/supabase-js
+#       wraps; usable directly with no `pg` anywhere in the tree.
 #
 # PASS-IF-ABSENT (R6 rider 2 — deliberately DIFFERS from the Dockerfile fence,
 # which exits 2 on a missing target): workers/pdf-render/package.json does not
@@ -79,7 +99,7 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 
 LOCKFILE="$(dirname "$TARGET")/package-lock.json"
-DENYLIST_JSON='["pg","postgres","node-postgres","@supabase/supabase-js","knex","sequelize"]'
+DENYLIST_JSON='["pg","postgres","node-postgres","@supabase/supabase-js","@supabase/postgrest-js","knex","sequelize"]'
 
 set +e
 OUTPUT="$(node -e '
@@ -94,6 +114,41 @@ function fail(msg) {
   process.exit(1);
 }
 
+// Resolve an npm alias spec ("npm:<name>@<version-range>") to the real
+// package name. Scope-aware: the name may itself start with "@", so the
+// version separator is the FIRST "@" after position 0, not position 0 itself.
+// Returns null for a non-alias (plain semver range, git url, tag, etc).
+function aliasTarget(spec) {
+  if (typeof spec !== "string" || !spec.startsWith("npm:")) return null;
+  const rest = spec.slice(4);
+  if (rest.length === 0) return null;
+  const searchFrom = rest.startsWith("@") ? 1 : 0;
+  const at = rest.indexOf("@", searchFrom);
+  return at === -1 ? rest : rest.slice(0, at);
+}
+
+// Parse the real (scope-aware) package name out of an npm tarball "resolved"
+// URL, e.g. "https://registry.npmjs.org/@supabase/supabase-js/-/supabase-js-2.0.0.tgz"
+// -> "@supabase/supabase-js", or ".../pg/-/pg-8.11.3.tgz" -> "pg". The path
+// segment(s) immediately before the literal "/-/" separator are the name;
+// returns null if the URL does not follow this convention (git/file/etc).
+function nameFromResolved(url) {
+  if (typeof url !== "string") return null;
+  const marker = "/-/";
+  const idx = url.indexOf(marker);
+  if (idx === -1) return null;
+  const withoutMarker = url.slice(0, idx);
+  const lastSlash = withoutMarker.lastIndexOf("/");
+  if (lastSlash === -1) return null;
+  // Walk back one more segment if the preceding segment is a scope ("@...").
+  const nameSeg = withoutMarker.slice(lastSlash + 1);
+  const beforeName = withoutMarker.slice(0, lastSlash);
+  const scopeSlash = beforeName.lastIndexOf("/");
+  const maybeScope = beforeName.slice(scopeSlash + 1);
+  if (maybeScope.startsWith("@")) return `${maybeScope}/${nameSeg}`;
+  return nameSeg;
+}
+
 let manifest;
 try {
   manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
@@ -102,10 +157,18 @@ try {
 }
 
 const violations = [];
-for (const field of ["dependencies", "devDependencies"]) {
+const MANIFEST_FIELDS = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"];
+for (const field of MANIFEST_FIELDS) {
   const deps = manifest[field] || {};
-  for (const name of Object.keys(deps)) {
-    if (denylist.has(name)) violations.push(`manifest:${field}:${name}`);
+  for (const [name, spec] of Object.entries(deps)) {
+    if (denylist.has(name)) {
+      violations.push(`manifest:${field}:${name}`);
+      continue;
+    }
+    const aliased = aliasTarget(spec);
+    if (aliased && denylist.has(aliased)) {
+      violations.push(`manifest:${field}:${name}(npm-alias-for:${aliased})`);
+    }
   }
 }
 
@@ -123,21 +186,36 @@ if (!fs.existsSync(lockPath)) {
 
   // npm lockfileVersion 2/3 shape: flat "packages" map keyed by node_modules
   // path (including nested transitive paths, e.g.
-  // "node_modules/knex/node_modules/pg").
+  // "node_modules/knex/node_modules/pg"). Each entry is tested on THREE
+  // independent signals so an aliased folder name cannot hide the real
+  // package: (1) the key own last node_modules/ path segment, (2) the
+  // entry "name" field (npm writes this when the folder name and the real
+  // package name diverge — exactly what an alias produces), (3) the name
+  // parsed from the entry "resolved" tarball URL.
   if (lock.packages && typeof lock.packages === "object") {
     for (const key of Object.keys(lock.packages)) {
       if (key === "") continue;
+      const entry = lock.packages[key] || {};
       const segs = key.split("node_modules/").filter(Boolean);
-      const last = segs[segs.length - 1];
-      if (last && denylist.has(last)) hits.add(last);
+      const keySegName = segs[segs.length - 1];
+      const candidates = [keySegName, entry.name, nameFromResolved(entry.resolved)];
+      for (const candidate of candidates) {
+        if (candidate && denylist.has(candidate)) hits.add(candidate);
+      }
     }
   }
 
-  // npm lockfileVersion 1 shape: nested "dependencies" tree.
+  // npm lockfileVersion 1 shape: nested "dependencies" tree. Each node may
+  // likewise carry a "version"/no distinguishing alias field historically,
+  // but v1 predates common use of the npm: alias protocol — key name and
+  // "resolved" are checked for parity with the v2/v3 branch above.
   (function walk(depsObj) {
     if (!depsObj) return;
     for (const [name, meta] of Object.entries(depsObj)) {
-      if (denylist.has(name)) hits.add(name);
+      const resolvedName = meta && typeof meta === "object" ? nameFromResolved(meta.resolved) : null;
+      for (const candidate of [name, resolvedName]) {
+        if (candidate && denylist.has(candidate)) hits.add(candidate);
+      }
       if (meta && typeof meta === "object" && meta.dependencies) walk(meta.dependencies);
     }
   })(lock.dependencies);
@@ -168,8 +246,8 @@ if [ "$RC" -ne 0 ]; then
   fi
   echo "PDF worker manifest/lockfile must not resolve a Postgres client or" >&2
   echo "DB-driver-bundling ORM package (pg, postgres, node-postgres," >&2
-  echo "@supabase/supabase-js, knex, sequelize) per Lock 13 mod #2" >&2
-  echo "(zero-DB-isolation)." >&2
+  echo "@supabase/supabase-js, @supabase/postgrest-js, knex, sequelize) per" >&2
+  echo "Lock 13 mod #2 (zero-DB-isolation)." >&2
   exit 1
 fi
 
