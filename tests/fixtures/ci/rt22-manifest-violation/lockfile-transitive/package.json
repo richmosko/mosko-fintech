@@ -1,0 +1,10 @@
+{
+  "name": "pdf-render-fixture-lockfile-transitive",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DELIBERATELY VIOLATION-SHAPED golden fixture for the RT-22 dependency-manifest fence (SELF-350 A6). Lockfile-scan route: package.json names only knex (a query-builder that BUNDLES a Postgres driver); pg is never mentioned here. DO NOT install or use as a template.",
+  "dependencies": {
+    "puppeteer-core": "^23.0.0",
+    "knex": "^3.1.0"
+  }
+}
