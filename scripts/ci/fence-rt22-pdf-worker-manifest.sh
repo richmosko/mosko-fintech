@@ -132,10 +132,17 @@ function aliasTarget(spec) {
 // -> "@supabase/supabase-js", or ".../pg/-/pg-8.11.3.tgz" -> "pg". The path
 // segment(s) immediately before the literal "/-/" separator are the name;
 // returns null if the URL does not follow this convention (git/file/etc).
+//
+// Sec F-10 (joint-review 2026-09-05): split on the LAST "/-/", not the
+// first. A proxy/mirror registry URL can legitimately contain "/-/" earlier
+// in its path (e.g. a proxy route segment before the real registry path is
+// appended) — indexOf() would split at that spurious earlier occurrence and
+// misparse the host or a proxy path segment as the package name instead of
+// the real one immediately before the tarball filename.
 function nameFromResolved(url) {
   if (typeof url !== "string") return null;
   const marker = "/-/";
-  const idx = url.indexOf(marker);
+  const idx = url.lastIndexOf(marker);
   if (idx === -1) return null;
   const withoutMarker = url.slice(0, idx);
   const lastSlash = withoutMarker.lastIndexOf("/");

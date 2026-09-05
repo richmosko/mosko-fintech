@@ -80,6 +80,20 @@ jobs:
         # node_modules/) is audited; zero found still resolves to the
         # canonical path so PASS-IF-ABSENT is preserved exactly for the
         # current (pre-A4) state.
+        #
+        # Sec F-6: the discovery ROOT (workers/pdf-render) is itself a fixed
+        # path, so "zero manifests found" alone cannot distinguish "A4 hasn't
+        # landed yet" (legitimate pass) from "A4 landed real worker code with
+        # no manifest" (a real gap pass-if-absent would hide forever). Best-
+        # effort readiness heuristic, not a perfect one: A4 item 1 extends the
+        # placeholder Dockerfile with Puppeteer + SYSTEM CHROMIUM DEPS, which
+        # on this Debian-derived base image (node:20-bookworm-slim) requires
+        # an apt-get install line the W1 placeholder does not carry. If that
+        # line has appeared, treat A4 as landed and FATAL on a still-absent
+        # manifest instead of passing it. This closes naturally once A4 adds
+        # the real package.json (discovery finds it and this branch is never
+        # reached again) — the heuristic only matters for the window where
+        # A4 has partially landed.
         run: |
           found=0
           while IFS= read -r m; do
@@ -88,6 +102,10 @@ jobs:
             bash scripts/ci/fence-rt22-pdf-worker-manifest.sh "$m"
           done < <(find workers/pdf-render -name package.json -not -path '*/node_modules/*' 2>/dev/null | sort)
           if [ "$found" -eq 0 ]; then
+            if grep -q 'apt-get' workers/pdf-render/Dockerfile 2>/dev/null; then
+              echo "FATAL: workers/pdf-render/Dockerfile has been extended with apt-get (Puppeteer/system-Chromium deps — A4 appears to have landed) but no package.json was found anywhere under workers/pdf-render/. A real worker with no dependency manifest is exactly the gap this fence exists to catch; failing closed instead of pass-if-absent."
+              exit 1
+            fi
             bash scripts/ci/fence-rt22-pdf-worker-manifest.sh workers/pdf-render/package.json
           fi
 
