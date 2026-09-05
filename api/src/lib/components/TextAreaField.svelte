@@ -12,6 +12,9 @@
 	Tokens ONLY (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5). Same accessibility wiring as
 	TextField: <label for>, aria-required, aria-invalid, aria-describedby -> hint + error ids,
 	role="alert" on the error.
+
+	`disabled` (SELF-355 addition): a plain passthrough to the native `<textarea disabled>` — no
+	existing consumer passed this, so every prior call site is unaffected by the default `false`.
 -->
 <script lang="ts">
 	let {
@@ -20,6 +23,7 @@
 		id,
 		value = $bindable(''),
 		required = false,
+		disabled = false,
 		errors = [],
 		hint = '',
 		placeholder = '',
@@ -34,6 +38,7 @@
 		id?: string;
 		value?: string;
 		required?: boolean;
+		disabled?: boolean;
 		errors?: string[];
 		hint?: string;
 		placeholder?: string;
@@ -64,6 +69,7 @@
 		{placeholder}
 		{maxlength}
 		{rows}
+		{disabled}
 		bind:value
 		class="field-input"
 		class:is-error={hasError}
