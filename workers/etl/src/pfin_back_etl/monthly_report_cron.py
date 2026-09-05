@@ -63,43 +63,48 @@ Description:
     DEFAULT.
 
     SELF-351 AC 2 rules "IMPERSONATION, reusing the shipped module. Do not
-    re-specify it" for this exact tenant-binding need, and this file takes
-    that as having already decided the SHAPE — but the specific tension with
-    connection.py's own "must never wrap a write" invariant is NOT spelled
-    out anywhere on the tree, and connection.py's docstring has not been
-    amended to name an exception. Flagged prominently here and in the SELF-
-    351 hand-off report for Sec's mandatory joint review (AC 10) to rule:
-    (a) accept this as a ratified exception and amend connection.py's
-    docstring to name it, or (b) give `fn_open_monthly_report_draft` (or a
-    cron-specific sibling) a `p_users_id` parameter usable from a
-    `service_role` write, matching every OTHER writer in this codebase, and
-    rebuild this call site against the new signature. This file does
-    NEITHER unilaterally — it implements the dispatched shape and names the
-    tension rather than silently resolving or silently ignoring it.
+    re-specify it" for this exact tenant-binding need. Architect's 113 fix
+    (migration `c24a000`) now records this call site's own status directly
+    in 113's comment: "PROVISIONAL RULING, SEC RATIFIES AT SELF-351:
+    because there is no tenant parameter and EXECUTE is authenticated-only,
+    the cron's only route in is a select of this function inside
+    TenantBoundConnection.impersonate() — a write through a primitive
+    documented never to wrap one, arriving through that fence's own named
+    residual. Ruled provisionally to BE the R3 (i) shape... the never-wrap-
+    a-write rule was written for direct DML by an RLS-exempt role." A
+    `p_users_id` parameter for a `service_role` call was considered and
+    explicitly NOT taken, because it would reopen Gate A (no tenant
+    parameter, ever). This module implements exactly that provisional
+    shape and changes nothing here pending Sec's ratification —
+    connection.py's own docstring is left untouched until Sec rules (not
+    this file's decision to make), and this residual comment stays in
+    place as the pointer for the next reader until it does.
 
-    ⚠⚠ FLAG 2 (routed to Architect, NOT resolved here) — THE AUDIT ROW'S
-    `trigger_source` IS HARDCODED TO THE LITERAL 'on_demand' INSIDE 113's
-    BODY, WITH NO PARAMETER OR GUC TO VARY IT.
+    ⚠⚠ FLAG 2 — RESOLVED at 113's fix (migration `c24a000`, A7 AC 6):
+    `trigger_source` IS NOW DERIVED FROM A TRANSACTION-LOCAL GUC, NOT
+    HARDCODED.
 
-    `fn_open_monthly_report_draft`'s own `perform pfin.fn_emit_audit_log(...)`
-    call passes the literal string `'on_demand'` as the trigger-source
-    argument — there is no `p_trigger_source` parameter on the function and
-    no GUC read for it. SELF-351 AC 6 requires this cron's audit row to
-    carry `trigger_source = 'cron'` (ADR-011 Decision 1 clause (d); R12
-    clause (2) reads exactly this field). AS 113 IS CURRENTLY AUTHORED, every
-    draft this worker opens is audit-logged indistinguishably from A10's own
-    on-demand path — a real, measured contradiction of AC 6, not a
-    hypothetical one. This module does NOT work around it (no second
-    `fn_emit_audit_log` call is issued from here — that would produce TWO
-    audit rows for one generation event, which block AH's own design
-    explicitly does not want: "the ROW MUST BE WRITTEN IN THE SAME
-    TRANSACTION AS THE PRIVILEGED WRITE IT DESCRIBES," singular). Migration
-    113 is Architect-owned and read-only to Backend; this needs EITHER a
-    `p_trigger_source text default 'on_demand'` parameter Architect adds (A10
-    keeps passing nothing / the default, unchanged behavior) or another
-    Architect-ruled mechanism. Flagged in the hand-off report; the test
-    battery below asserts the CURRENT, measured value so this gap is visible
-    in the tree rather than merely described in prose.
+    113 now reads `current_setting('app.report_generation_source', true)`
+    — EXACT match `'cron'`, any other value (including unset/NULL/blank)
+    falls to `'on_demand'` (113's own comment: "under-claiming provenance
+    is the fail-closed direction — a cron that forgets the GUC under-
+    counts a month it really did generate, whereas the opposite default
+    would let UI clicking inflate the metric"). This worker sets that GUC
+    — see `open_draft_for_tenant`'s own docstring for the exact mechanism
+    and the transaction-locality requirement.
+
+    ⚠ WHAT THIS DOES NOT CLOSE (113's own comment, carried forward here
+    rather than restated independently): deriving from the GUC makes 113
+    itself incapable of mislabelling a row it writes, but it does NOT make
+    `'cron'` unforgeable on `pfin.audit_log` — `pfin.fn_emit_audit_log`
+    (111) is SECURITY DEFINER, EXECUTE-granted to `authenticated` in a
+    Data-API-exposed schema, and takes `p_trigger_source` FROM ITS CALLER;
+    113's own comment records a live measurement (2026-09-05) that an
+    ordinary authenticated session minted a `'cron'` row by calling that
+    helper directly. That residual belongs to 111, is routed to Sec's
+    joint review there, and nothing in this module reaches or could close
+    it — flagged for visibility, not because this file has any lever on
+    it.
 
     Coolify->Discord (PM A-14, SELF-351 AC 5): the OPERATOR channel for run
     success/failure ONLY, never a user-facing notice. See
@@ -130,6 +135,15 @@ logger = logging.getLogger("pfin_etl")
 # nav_backfill.py. `pfin_etl` is NOINHERIT; tenant enumeration needs
 # `service_role`'s cross-tenant `select` grant on `pfin.account`.
 _SET_WRITE_ROLE = "set local role service_role"
+
+# 113's fix (A7 AC 6) — the transaction-local GUC 113 reads to derive the
+# audit row's trigger_source. EXACT match 'cron', else 'on_demand' — see
+# open_draft_for_tenant's own docstring for the transaction-locality
+# requirement (`true` as set_config's third argument; a session-level set
+# would leak into a LATER transaction on the same connection, per 113's own
+# measured comment). PINNED CONTRACT, same convention as nav_daily.py's
+# `_NAV_TENANT_GUC` — do not rename without a coordinated migration change.
+_PROVENANCE_GUC = "app.report_generation_source"
 
 # The single call this worker makes per tenant. HEAD 'select' — see module
 # docstring FLAG 1 for why this passes connection.py's read-only assertion
@@ -248,6 +262,26 @@ class MonthlyReportCronWorker:
 
         Returns the report_id.
 
+        PROVENANCE GUC (113's fix, A7 AC 6): 113 derives the audit row's
+        `trigger_source` from the transaction-local GUC
+        `app.report_generation_source` — EXACT match `'cron'`, else
+        `'on_demand'` (113's own comment: "under-claiming provenance is the
+        fail-closed direction"). Set here via `set_config(...,
+        true)` — `true` is the THIRD argument, meaning transaction-local,
+        the SAME requirement 054's `app.nav_computed_for` GUC carries (a
+        session-level set would leak into a LATER transaction's row on the
+        same pooled connection — 113's own comment measures this directly:
+        "a session-level set DOES reach a later transaction's row"). Set
+        INSIDE the impersonated block, immediately before the call it
+        labels — 113's own comment frames the production shape as "before
+        its SET LOCAL ROLE," which `impersonate()`'s internal `SET LOCAL
+        ROLE authenticated` already is; ORDER relative to that specific
+        statement does not change correctness (a transaction-local GUC
+        survives a role switch either way — 113's own comment says so
+        explicitly), but setting it here keeps it visibly adjacent to the
+        ONE call it exists to label, rather than separated from it by
+        `impersonate()`'s own internals.
+
         `impersonate()`'s own teardown (connection.py's `finally` block)
         unconditionally clears the JWT-claims GUC and issues `reset role` on
         exit — success or exception — which is this call's ONLY reset-role
@@ -256,12 +290,22 @@ class MonthlyReportCronWorker:
         so there is nothing for one tenant's session state to leak INTO for
         the next — see test_monthly_report_cron.py's leaked-SET legs for the
         concrete, DB-verified proof of both halves (teardown fires; a
-        subsequent tenant is unaffected even if it didn't).
+        subsequent tenant is unaffected even if it didn't). The
+        `app.report_generation_source` GUC set below is likewise
+        transaction-local (`true`) and therefore falls under the SAME
+        auto-clear-at-COMMIT/ROLLBACK guarantee — nothing further is needed
+        to keep it from leaking into a later tenant's transaction on a
+        fresh connection.
         """
         tbc = TenantBoundConnection.for_tenant(self._db_url, users_id)
         with tbc.engine.connect() as conn:
             with conn.begin():
                 with tbc.impersonate(conn):
+                    conn.execute(
+                        sqla.text(
+                            f"select set_config('{_PROVENANCE_GUC}', 'cron', true)"
+                        )
+                    )
                     report_id = conn.execute(
                         sqla.text(_OPEN_DRAFT_STMT),
                         {"target_month": target_month},

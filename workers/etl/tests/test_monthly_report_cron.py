@@ -260,9 +260,9 @@ def test_open_draft_for_tenant_inserts_one_draft_and_one_audit_row(pfin_env, see
 
 def test_open_draft_for_tenant_audit_row_names_the_resolved_tenant_and_chain(pfin_env, seeded_tenants):
     """AC 6's catch criterion, restored at P10: the audit row exists and
-    names the resolved tenant. See the class-level xfail-style note below
-    for the trigger_source half this AC also requires — measured, not
-    assumed."""
+    names the resolved tenant. See
+    test_audit_row_trigger_source_is_cron_when_the_provenance_guc_is_set
+    below for the trigger_source half this AC also requires."""
     from pfin_back_etl import MonthlyReportCronWorker
 
     worker = MonthlyReportCronWorker()
@@ -274,21 +274,15 @@ def test_open_draft_for_tenant_audit_row_names_the_resolved_tenant_and_chain(pfi
     assert str(tenant_b) in audit_out
 
 
-def test_MEASURED_GAP_audit_row_trigger_source_is_currently_on_demand_not_cron(pfin_env, seeded_tenants):
-    """⚠⚠ THIS TEST DOCUMENTS A REAL, MEASURED CONTRADICTION OF SELF-351 AC 6,
-    NOT A PASSING REQUIREMENT. `pfin.fn_open_monthly_report_draft` (113)
-    hardcodes `trigger_source = 'on_demand'` in its own
-    `perform pfin.fn_emit_audit_log(...)` call — there is no parameter or
-    GUC this cron worker can vary to make it emit `'cron'` instead (see
-    monthly_report_cron.py's module docstring FLAG 2, and the SELF-351
-    hand-off report). This test asserts the CURRENT, ACTUAL value rather
-    than the AC's REQUIRED value, so the gap is visible as a committed,
-    running fact in the tree — not merely described in prose — until
-    Architect gives 113 a way to vary it (e.g. a `p_trigger_source`
-    parameter). When that lands, THIS TEST MUST BE REWRITTEN to assert
-    `'cron'` and FAIL if it still reads `'on_demand'` — flip it, do not
-    delete it, so the fix is provably exercised.
-    """
+def test_audit_row_trigger_source_is_cron_when_the_provenance_guc_is_set(pfin_env, seeded_tenants):
+    """FLIPPED from the pre-fix `test_MEASURED_GAP_...` version of this test
+    (113's fix, migration `c24a000`, A7 AC 6): `open_draft_for_tenant` sets
+    the transaction-local GUC `app.report_generation_source = 'cron'`
+    immediately before calling `fn_open_monthly_report_draft`, and 113 now
+    derives `trigger_source` from it (EXACT match). This is the positive
+    requirement AC 6 always wanted — the pre-fix version of this test
+    asserted the WRONG value on purpose, with instructions to flip it once
+    113 gained a way to vary the source; that has now happened."""
     from pfin_back_etl import MonthlyReportCronWorker
 
     worker = MonthlyReportCronWorker()
@@ -297,12 +291,52 @@ def test_MEASURED_GAP_audit_row_trigger_source_is_currently_on_demand_not_cron(p
 
     report_id = worker.open_draft_for_tenant(tenant_a, target_month)
     audit_out = _audit_rows_for(_SCRATCH_DB, report_id)
-    assert "on_demand" in audit_out, (
-        "If this fails because the row now says 'cron', 113 has been fixed — "
-        "update this test (see its own docstring) to require 'cron' and stop "
-        "asserting the old, wrong value."
-    )
-    assert "cron" not in audit_out.replace("on_demand", "")
+    assert "cron" in audit_out
+    assert "on_demand" not in audit_out
+    # 113's own comment: the resolution chain moves WITH the source — a
+    # fixed string would be a second false claim in the same row. The
+    # cron's chain names the W-1 impersonation binding, never a bare
+    # "user session" claim.
+    assert "impersonat" in audit_out.lower()
+
+
+def test_audit_row_trigger_source_falls_to_on_demand_when_the_guc_is_forgotten(
+    pfin_env, seeded_tenants
+):
+    """The fail-closed direction 113's fix explicitly chose (113's own
+    comment: "under-claiming provenance is the fail-closed direction — a
+    cron that forgets the GUC under-counts a month it really did generate,
+    whereas the opposite default would let UI clicking inflate the
+    metric"). Calls `fn_open_monthly_report_draft` directly, WITHOUT
+    setting `app.report_generation_source` first — the exact shape of a
+    future edit to this worker that accidentally drops the `set_config`
+    call — and proves the row still lands, correctly mislabelled toward
+    UNDER-counting rather than raising or over-counting."""
+    import sqlalchemy as sqla
+
+    from pfin_back_etl.connection import TenantBoundConnection
+    from pfin_back_etl import utils
+
+    params = utils.load_db_params("PFIN_")
+    db_url = utils.build_database_url(params)
+    tenant_a = seeded_tenants["a"]
+    tbc = TenantBoundConnection.for_tenant(db_url, tenant_a)
+
+    with tbc.engine.connect() as conn:
+        with conn.begin():
+            with tbc.impersonate(conn):
+                # Deliberately NO set_config('app.report_generation_source', ...)
+                # call here — this is the forgotten-GUC shape.
+                report_id = conn.execute(
+                    sqla.text(
+                        "select pfin.fn_open_monthly_report_draft(:m) as report_id"
+                    ),
+                    {"m": dt.date(2026, 8, 1)},
+                ).scalar()
+
+    audit_out = _audit_rows_for(_SCRATCH_DB, report_id)
+    assert "on_demand" in audit_out
+    assert "cron" not in audit_out
 
 
 def test_open_draft_for_tenant_is_idempotent(pfin_env, seeded_tenants):
