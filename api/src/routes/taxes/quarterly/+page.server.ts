@@ -41,9 +41,21 @@
 // either way (true would wrongly show the CTA-suppressed table, false would wrongly hide the
 // CTA), so this loader throws rather than guessing. Same posture for loadPriorYearQ4 — the prior-
 // year Q4 row is still primary content while its window is open, not a degradable extra.
+//
+// STALENESS (SELF-361 / P9 AC1/AC2): `staleness: StalenessData` — the SAME whole-tenant
+// `loadStaleness()` read every other V1.1+ NAV/composition surface consumes
+// (`fn_aggregation_has_stale_constituent()` takes NO per-surface argument), mirroring root
+// `+page.server.ts` / `allocation/+page.server.ts`'s own try/catch + degrade-to-UNKNOWN posture
+// byte-for-byte. Belt-and-suspenders try/catch around `loadStaleness` itself (which already
+// degrades an RPC error internally) for an unexpected throw — same non-fail-loud posture as
+// `taxes/decomposition`'s own staleness read, distinct from this file's OTHER two reads
+// (`fn_tax_authority_ledgers` / `loadPriorYearQ4`), which stay fail-loud per this file's own
+// header above.
 
 import { redirect } from '@sveltejs/kit';
 import { loadTaxLiability, loadPriorYearQ4 } from '$lib/server/queries/taxLiability';
+import { loadStaleness } from '$lib/server/queries/staleness';
+import { UNKNOWN_STALENESS } from '$lib/staleness/stale-constituent';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -51,6 +63,14 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	if (!user) throw redirect(303, `/login?redirectTo=${encodeURIComponent(url.pathname)}`);
 
 	const liability = await loadTaxLiability(locals.supabase);
+
+	let staleness = UNKNOWN_STALENESS;
+	try {
+		staleness = await loadStaleness(locals.supabase);
+	} catch (err) {
+		console.error('[taxes/quarterly] staleness load threw; degrading to unknown staleness:', err);
+		staleness = UNKNOWN_STALENESS;
+	}
 
 	const { data: designatedLedgers, error: ledgersErr } = await locals.supabase
 		.schema('pfin')
@@ -69,6 +89,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	return {
 		liability,
 		noTaxAuthorityDesignated: (designatedLedgers ?? []).length === 0,
-		priorYearQ4
+		priorYearQ4,
+		staleness
 	};
 };

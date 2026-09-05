@@ -9,6 +9,10 @@
 	No form actions on this page (AC 8 — no inline edit, ADR-013 P5): the "Edit tax brackets" CTA
 	(TaxJurisdictionTable's own AC7) and the "Designate an account" CTA (AC 6(ii)/(iii)) are both
 	plain client-side navigation links, never a form/action that writes anything here.
+
+	SELF-361 / P9: `data.staleness` — the SAME whole-tenant `loadStaleness()` read every other
+	V1.1+ surface consumes — threaded straight through to TaxQuarterlyTables.svelte, which mounts
+	the D1 `<StaleConstituentBadge>` beside the page heading.
 -->
 <script lang="ts">
 	import TaxQuarterlyTables from '$lib/components/TaxQuarterlyTables.svelte';
@@ -25,4 +29,5 @@
 	liability={data.liability}
 	noTaxAuthorityDesignated={data.noTaxAuthorityDesignated}
 	priorYearQ4={data.priorYearQ4}
+	staleness={data.staleness}
 />
