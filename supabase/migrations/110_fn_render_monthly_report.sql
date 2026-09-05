@@ -140,6 +140,25 @@
 --       to prevent, and it would trade a duplicated call for duplicated arithmetic
 --       on money.
 --   **SO: TWO EVALUATIONS, AND THE SECOND IS BOUGHT BY AC 6's OWN CONTENT.**
+--
+--   ⚠⚠ **THIS IS A CORRECTION TO THE LATENCY PROBE'S FOLLOW-UP (a), AND THE
+--   DIFFERENCE IS WORTH ~165 ms THAT IS NOT ACTUALLY AVAILABLE.** The probe records
+--   that *"dropping the second evaluation would cut the composed total from 548.8ms →
+--   ~384ms … roughly a 30% cut … for a pure reuse fix with no schema change"*, and
+--   routes it as a signature note. **The envelope-reuse half is IMPLEMENTED here and
+--   always was** — this function reads `buildups.realized_tax_liab` and
+--   `buildups.unrealized_tax_liab` out of `fn_nav_composition`'s payload and never
+--   re-invokes `104` for them. **What is NOT available is dropping the second
+--   evaluation, because the two are different things:** reuse removes a THIRD call
+--   that this function never made; the SECOND call serves the §2.6.1 Estimated Taxes
+--   section, whose `decomposition`, `jurisdictions`, `basis_year`,
+--   `current_year_schedule_empty` and `prior_year_q4_window` appear NOWHERE in
+--   `fn_nav_composition`'s payload — measured against its live body, whose only
+--   branches are `groups`, `buildups` and `nav`. **AC 6 requires every one of those to
+--   travel.** So the ~30% is only realizable by dropping AC 6 content, and **549 ms —
+--   not ~385 ms — is the number the budget above is correctly set over.** Recorded
+--   because a follow-up that reads as free money will otherwise be re-attempted, and
+--   the attempt would silently thin the frozen payload.
 --   ⚠ **HARD REQUIREMENT THAT FALLS OUT OF IT: both evaluations MUST receive the
 --   SAME date.** `fn_nav_composition(p_data_as_of)` threads `p_data_as_of` into its
 --   internal call, and this function calls `fn_compute_tax_liability(p_data_as_of)`
@@ -148,27 +167,73 @@
 --   exactly one date variable in this function and it is never modified.
 --
 -- ----------------------------------------------------------------------------
--- ⚠ `[PROBE PENDING]` — RENDER-BUDGET CLAUSE (AC 11; PM §10, routed to Architect).
---   **THIS CLAUSE IS DELIBERATELY UNCLOSED AND MUST BE CLOSED BEFORE THIS PR OPENS.**
---   This helper is the heaviest read on the tree: `fn_nav_composition` PLUS every
---   §2.1–§2.3 reader PLUS `104` in one call. R1 (A) REDUCES the exposure and does not
---   remove it — a `final` report is read from the payload, so this composition runs
---   on GENERATION (cron and on-demand) and on the DRAFT view, not on every historical
---   read.
---   **WHAT IS OWED HERE:** a stated render budget that the ON-DEMAND generation path
---   (A10, interactive) either MEETS or, failing that, an explicitly named ASYNC SHAPE
---   for that path. Backend's latency probe on `fn_compute_tax_liability` — rerun on a
---   scratch clone at synthetic scale — supplies the p95 figures; they are not
---   available at authoring, and **a budget invented without them would be a number
---   with the shape of a measurement.**
---   **WHAT IS ALREADY KNOWN AND DOES NOT DEPEND ON THE PROBE:** the two-evaluation
---   floor above is structural, so the budget must be stated OVER two evaluations of
---   `104` and not one; and `fn_gl_entries` / `fn_holdings_as_of` are VOLATILE (below),
---   so the planner may re-execute them per reference — which is where a surprise, if
---   there is one, will come from.
---   **CLOSED BY:** a follow-up commit on this branch before the PR opens, replacing
---   this block with the budget and the met-or-async decision. Team-lead relays the
---   figures.
+-- RENDER-BUDGET CLAUSE (AC 11; PM §10, routed to Architect) — **CLOSED 2026-09-05**
+--   against `docs/records/v15-execution/a3-latency-probe.md` (commit `7e0deb2`, merged
+--   to `main`). Figures below were read from that file on the tree, not from a relay.
+--
+--   **THE BUDGET: on-demand generation (A10) p95 ≤ 2000 ms, SYNCHRONOUS. No async
+--   shape is adopted at V1.5.**
+--
+--   MEASURED BASELINE, and the conditions that make it the right number to reason
+--   from: a synthetic production-shaped tenant — 20 accounts, 4,903 `account_trans`
+--   over 24 months, Federal and California both designated, both `fn_nav_composition`
+--   and `fn_compute_tax_liability` returning fully `computed` rather than
+--   `unavailable` — composed at **549 p50 / 556 p95 ms**, with the checkpoint tables
+--   EMPTY. ⚠ **Empty is the DB's real state on every tenant** (nothing in the pipeline
+--   populates them), which is why the probe's checkpoint-populated column is a
+--   control and not a better case. That leaves roughly **3.6× headroom**.
+--
+--   ⚠ **THE RISK IS SCALING, NOT THE CURRENT NUMBER, AND IT IS UNBOUNDED BY DESIGN.**
+--   Cost is **linear in transaction count**, because the expensive paths have no
+--   bounded form in the schema: `fn_gl_entries` walks the full `account_trans` history
+--   for trade-position classification with no checkpoint awareness of any kind, and
+--   `fn_cashflow_items` takes only `p_as_of` — it has **no lower bound and no
+--   since-checkpoint alternative form** in its contract. So the budget is consumed by
+--   TENANT TENURE, not by load. **TRIPWIRE, stated as a number so it can be watched
+--   rather than felt: linear scaling puts p95 at the 2000 ms budget somewhere near
+--   3.5× the measured volume — on the order of 17,000 transactions for a comparable
+--   account count.** A tenant approaching that is the signal to build the mechanism
+--   named below, or to adopt the async shape as an interim.
+--
+--   ⚠⚠ **POPULATING THE EXISTING CHECKPOINT TABLES IS NOT THE FIX, AND THAT IS
+--   MEASURED RATHER THAN ASSUMED.** The probe populated both at 24 monthly month-ends
+--   and cost did not fall — `fn_nav_composition`'s buffer-hit count went UP, the
+--   opposite of what a scan-bounding optimisation produces. Traced to the code:
+--   **`pfin.holdings_checkpoint` has NO READER in the 049/056/093/104/105 chain at
+--   all**, so those rows are structurally inert here. The one genuinely bounded path
+--   (`account_balance_checkpoint` via `fn_account_cash_as_of`) works as designed and
+--   **was never the expensive part.** Recorded because "populate the checkpoints" is
+--   the obvious next idea and it is now falsified, not merely untested.
+--
+--   **THE IN-APP VIEW DOES NOT COMPOSE LIVE FOR A `final` REPORT** — it reads the
+--   frozen payload (R1 (A)), so this budget does not govern historical viewing at all.
+--   ⚠ **BUT SEE FINDING 5 BELOW: A `draft` HAS NO PAYLOAD TO READ**, so the draft view
+--   is a live composition and inherits this budget per visit. That is not a defect in
+--   the ruling; it is a case the ruling's phrasing does not cover, and it is stated
+--   rather than absorbed.
+--
+-- ----------------------------------------------------------------------------
+-- ⚠⚠ FINDING 5 — **"THE IN-APP VIEW READS THE FROZEN `final`/`draft` PAYLOAD" IS TRUE
+--   OF `final` AND CANNOT BE TRUE OF `draft`. ROUTED TO F/CTO AND PM.**
+--   `108`'s `monthly_report_payload_by_status` permits `rendered_payload` to be NULL
+--   **precisely while `draft`**, because R1 writes the payload **once, at
+--   finalization** and the cron creates the draft row before any payload exists.
+--   **So there is no draft payload to read.** Any surface rendering a draft either
+--   composes live through this function or renders nothing.
+--   **AND COMPOSING LIVE IS ALMOST CERTAINLY CORRECT ON PRODUCT GROUNDS, which is why
+--   this is a wording gap and not a bug to fix by writing a draft payload:** the draft
+--   view exists so the author can see **current** figures before freezing them. A
+--   draft that served a stale frozen payload would show numbers the author is about
+--   to finalize but which are no longer true — the exact failure the freeze exists to
+--   prevent, inverted.
+--   **CONSEQUENCE, and it is the load-bearing half:** the draft view pays ~549 ms per
+--   visit, and the probe's own recommendation 1 says **do not render that inline.**
+--   The probe and the ruling therefore disagree about the draft view specifically,
+--   and the schema settles which of them is describing something that exists.
+--   **This function is written for either answer** — it composes on demand and holds
+--   no opinion about who calls it. What is owed is a P2/P5 decision on how the draft
+--   view is rendered (compose-on-open, compose-on-explicit-refresh, or a draft-scoped
+--   cache), and it is NOT a schema question.
 --
 -- ----------------------------------------------------------------------------
 -- ⚠ FINDING 3 — DATED IDENTIFIERS IN THE SOURCES, corrected here rather than
