@@ -59,8 +59,48 @@
 --         row that survives a rolled-back generation is worse than no row) or would
 --         void A10's session-as-tenant-binding. Neither is available.
 --   **CONCLUSION: DEFINER, with `authenticated` holding EXECUTE on the helper and NO
---   GRANT AT ALL on the table.** That is the only shape where the audit row is
---   written in the caller's transaction AND the caller cannot forge one.
+--   GRANT AT ALL on the table.** That is the only shape where the audit row is written
+--   in the caller's transaction while the caller controls no field that matters.
+--
+--   ⚠⚠ **THE ORIGINAL FORM OF THAT SENTENCE READ "…AND THE CALLER CANNOT FORGE ONE",
+--   AND IT WAS FALSE AS WRITTEN. Re-derived here per Sec C4 (PR #636).** Step (4)
+--   above is what falsifies it: it rejects an INVOKER+grant path because a user
+--   holding INSERT on an append-only table can POST forged rows — and **EXECUTE on a
+--   DEFINER function that INSERTs is that same grant, one level up.** The word
+--   "grant" was read as meaning a TABLE grant. Measured 2026-09-05 on a clean chain:
+--   an ordinary `authenticated` session, in the exact shape PostgREST produces, minted
+--   a row with caller-chosen `trigger_source`, resolution chain and `subject_id`,
+--   permanently uncorrectable on a table that blocks UPDATE and DELETE.
+--   **General form, and the standing check it produces: on a DEFINER function whose
+--   EXECUTE reaches `authenticated`, EVERY parameter is caller-controlled — so a
+--   parameter that CLASSIFIES or LOCATES the row is forgeable content, not metadata.**
+--
+--   ⚠⚠ **WHAT IS AND IS NOT FORGEABLE AFTER C1 + C2 — stated as an inventory, because
+--   a single adjective is what got this wrong the first time.**
+--     · **`users_id` — NOT forgeable.** Stamped from `auth.uid()`; no parameter.
+--     · **`trigger_source` — NOT forgeable through this function (C1).** It has no
+--       parameter and is derived from a GUC no PostgREST-reachable surface writes.
+--       ⚠ **That last clause is a NEGATIVE-SPACE claim, not a fence**: it holds because
+--       no exposed function takes a GUC NAME from its caller, which is a property of
+--       the current tree rather than something this file enforces. **Sec's C3 CI half
+--       exists to watch exactly that absence**, and if it cannot be built this wave,
+--       C1 alone does not carry `'cron'` — the named fallback is to move emission to
+--       an `AFTER INSERT` trigger on `pfin.monthly_report`, which needs no GUC because
+--       it reads the subject off `NEW`. That fallback is designed and NOT on the tree.
+--     · **`subject_table` / `subject_id` — NOT forgeable for this surface (C2).** The
+--       table is fixed by literal and the id must name a row that is the caller's own
+--       AND was written in this very transaction.
+--     · **`surface_name` — NOT INVENTABLE, but selectable.** The CHECK admits only a
+--       vocabulary that grows by migration; within it a caller may still choose.
+--       Today the vocabulary has one member, so the choice is empty.
+--     · **`tenant_resolution_chain` — CALLER-ASSERTED, AND DELIBERATELY NOT
+--       CONSTRAINED.** It is free text and this function does not and cannot check
+--       that it describes what actually happened. ⚠ **Read it as an ANNOTATION ON A
+--       WRITE THE HELPER HAS INDEPENDENTLY CONFIRMED, not as evidence in its own
+--       right.** C2 already establishes that a real write, by this tenant, in this
+--       transaction, occurred; the chain says how the caller believes the tenant was
+--       resolved. A wrong chain misdescribes a write that definitely happened — it
+--       cannot manufacture one. Sec is NOT asking for this column to be constrained.
 --
 --   ⚠ **THIS REALIZES THE RESERVED SLOT; IT DOES NOT GROW THE ALLOWLIST.** Decision 9
 --   read LIVE at authoring (2026-09-05): the general same-transaction audit-log
@@ -228,10 +268,27 @@
 --      positive alone cannot distinguish DEFINER-with-no-grant from
 --      INVOKER-with-a-grant, which is the whole security difference.
 --   6. UPDATE / DELETE / TRUNCATE refused **under both roles**.
---   7. **STANDING catalog assertion:** `pfin.fn_emit_audit_log` is the only
---      `prosecdef = true` function added by this wave, and its EXECUTE ACL names
---      exactly `authenticated` and `service_role` and NOT `public`.
---   8. Two callers, one shape: rows written by the cron and by the on-demand path
+--   7. **STANDING catalog assertions — THREE, and the second is the one that would
+--      have caught the forgery:** (i) `pfin.fn_emit_audit_log` is the only
+--      `prosecdef = true` function added by this wave, its EXECUTE ACL names exactly
+--      `authenticated` and `service_role` and NOT `public`; (ii) **exactly ONE
+--      `pfin.fn_emit_audit_log` exists in `pg_proc`** — the 6-argument signature does
+--      not survive as an overload (C1); (iii) it takes **no** `p_trigger_source`
+--      parameter.
+--   7a. **C2 legs, and the two refusals must be asserted SEPARATELY (Sec):**
+--      an audit call naming a report **written in an earlier transaction** is refused
+--      with the earlier-transaction message; one naming **another tenant's** report is
+--      refused with the not-yours message; and — the leg that proves C2 is not
+--      vacuous — a call inside the same transaction as a real INSERT **succeeds**.
+--      ⚠ **The success leg MUST route through `pfin.fn_open_monthly_report_draft`,
+--      not through a bare INSERT**: that function's INSERT sits inside a plpgsql
+--      exception block, i.e. a SUBTRANSACTION, and a bare-INSERT leg would pass
+--      against an xid-equality implementation that refuses the real product path.
+--   7b. **A read-only transaction is refused** (no xid assigned) — the fail-closed leg.
+--   8. Two callers, one shape — ⚠ AND THE CRON ROW MUST BE PRODUCED BY SETTING THE
+--      GUC, NOT BY PASSING A VALUE (C1 removed the parameter). Only then is this a
+--      genuine two-caller leg; passing `'cron'` from the battery's own session was one
+--      caller twice. Rows written by the cron and by the on-demand path
 --      differ ONLY in `trigger_source`.
 -- ============================================================================
 
@@ -276,8 +333,24 @@ comment on table pfin.audit_log is
   'the on-demand generation endpoint, which are its TWO callers at V1.5, writing the '
   'same shape and discriminated only by trigger_source. ⚠ IT IS WRITTEN ONLY THROUGH '
   'pfin.fn_emit_audit_log, WHICH IS SECURITY DEFINER: no role holds any grant on '
-  'this table, so there is no direct write path at all, and a caller cannot POST a '
-  'forged audit row through PostgREST. That posture is FORCED rather than chosen — '
+  'this table, so there is no direct INSERT path. ⚠⚠ AN EARLIER FORM OF THIS SENTENCE '
+  'ADDED "and a caller cannot POST a forged audit row through PostgREST" AND THAT WAS '
+  'FALSE — measured 2026-09-05, an ordinary authenticated session minted a row with '
+  'caller-chosen trigger_source, resolution chain and subject_id by calling the helper '
+  'directly. The superseded claim is quoted here AS WRONG so a reader who remembers it '
+  'learns it changed rather than doubting their memory; the lesson it encodes is that '
+  'EXECUTE on a DEFINER function that INSERTs is a table grant one level up. WHAT IS '
+  'TRUE NOW, PER FIELD: users_id is stamped from auth.uid() and has no parameter; '
+  'trigger_source has no parameter and is derived from a transaction-local GUC no '
+  'PostgREST-reachable surface writes (a NEGATIVE-SPACE property of the tree, watched '
+  'by a CI fence, NOT enforced by this file); subject_table is fixed by literal for '
+  'the generation surface and subject_id must name a row that is the caller''s own AND '
+  'was written in the SAME transaction; surface_name is not inventable but is '
+  'selectable within a vocabulary that grows only by migration. ⚠ '
+  'tenant_resolution_chain REMAINS CALLER-ASSERTED AND IS DELIBERATELY NOT '
+  'CONSTRAINED: it annotates a write this function has INDEPENDENTLY CONFIRMED '
+  'happened, by this tenant, in this transaction — a wrong chain misdescribes a real '
+  'write and cannot manufacture one. That posture is FORCED rather than chosen — '
   'one of the two callers runs under the user''s own session, so an INVOKER helper '
   'would have required an INSERT grant to authenticated, which is exactly the shape '
   'ADR-011 Decision 9 already ruled against on a structurally identical surface '
@@ -311,7 +384,8 @@ comment on table pfin.audit_log is
 
 comment on column pfin.audit_log.surface_name is
   'WHICH privileged surface wrote this row. A REQUIRED argument to '
-  'pfin.fn_emit_audit_log and CHECK-constrained against an enumerated list that '
+  'pfin.fn_emit_audit_log — NOT INVENTABLE but selectable within the vocabulary — '
+  'CHECK-constrained against an enumerated list that '
   'GROWS ONLY BY MIGRATION (R7 rider 5). ⚠ THIS IS THE MITIGATION FOR A NAMED RISK, '
   'not bookkeeping: a general helper is where per-surface discipline goes to be '
   'forgotten, so a caller that omits or invents a surface name FAILS rather than '
@@ -320,7 +394,18 @@ comment on column pfin.audit_log.surface_name is
 
 comment on column pfin.audit_log.trigger_source is
   'What triggered the privileged write: `cron` (the scheduled generation) or '
-  '`on_demand` (the user-initiated endpoint). ⚠ THE HELPER HAS TWO CALLERS AT V1.5, '
+  '`on_demand` (the user-initiated endpoint). ⚠⚠ DERIVED, NEVER PASSED (Sec C1): '
+  'there is NO p_trigger_source parameter. The helper reads the transaction-local GUC '
+  'app.report_generation_source and writes ''cron'' only on an EXACT match — never a '
+  'prefix, never case-folded, never trimmed — with unset, empty and every '
+  'unrecognised value alike yielding ''on_demand''. UNDER-claiming is the fail-closed '
+  'direction here: a cron that forgets the GUC under-counts a month it really did '
+  'generate, whereas the opposite default would let ordinary UI clicking inflate the '
+  'V1.final metric. ⚠ THE CRON CAN SET THAT GUC AND A POSTGREST CALLER CANNOT, BUT '
+  'THAT IS A PROPERTY OF THE TREE RATHER THAN A FENCE IN THIS FILE: set_config is '
+  'executable by any role, and what keeps it unreachable is that PostgREST admits no '
+  'arbitrary SQL, each request is its own transaction, and no exposed function takes '
+  'a GUC NAME from its caller. A CI fence watches that absence. ⚠ THE HELPER HAS TWO CALLERS AT V1.5, '
   'NOT ONE, and they write the SAME SHAPE — this column is the only thing that '
   'distinguishes them, which is why a battery must assert that and not merely that '
   'each writes something. The V1.final "month of operation" measurement reads '
@@ -446,9 +531,19 @@ create trigger audit_log_block_truncate
 -- entire perimeter. `p_users_id` IS ABSENT BY DESIGN — the tenant is stamped from
 -- auth.uid(), so there is no parameter through which to attribute a row elsewhere.
 -- ----------------------------------------------------------------------------
+-- ⚠⚠ THE OLD SIGNATURE IS DROPPED, NOT REPLACED, AND THE DROP IS LOAD-BEARING (C1).
+-- `create or replace` CANNOT remove a parameter: it would create a SECOND, overloaded
+-- function and leave the 6-argument version alive, still carrying its `authenticated`
+-- EXECUTE grant. PostgREST resolves RPC overloads BY REQUEST-BODY KEYS, so a caller
+-- posting a `p_trigger_source` key would be routed to the old function DELIBERATELY —
+-- source closed, database open. **Invisible to a clean apply and to a scratch-clone
+-- battery**, because on a fresh chain only the new function is ever created; it bites
+-- only on a database where `111` had already been applied. The paired assertion is a
+-- catalog check that exactly ONE `pfin.fn_emit_audit_log` exists.
+drop function if exists pfin.fn_emit_audit_log(text, text, text, date, text, bigint);
+
 create or replace function pfin.fn_emit_audit_log(
   p_surface_name            text,
-  p_trigger_source          text,
   p_tenant_resolution_chain text,
   p_data_as_of              date,
   p_subject_table           text,
@@ -460,8 +555,23 @@ security definer
 set search_path = ''
 as $$
 declare
-  v_users_id uuid := auth.uid();
-  v_audit_id bigint;
+  v_users_id       uuid := auth.uid();
+  v_audit_id       bigint;
+  -- C1: DERIVED, never passed. EXACT match on 'cron' — never a prefix, never
+  -- case-folded, never trimmed. Unset reads as NULL on a fresh session and as the
+  -- empty string once the name has been touched; unset, empty and every unrecognised
+  -- value alike yield 'on_demand'. Under-claiming provenance is the fail-closed
+  -- direction: a cron that forgets the GUC under-counts a month it really did
+  -- generate, whereas the opposite default would let ordinary UI clicking inflate the
+  -- V1.final month-of-operation metric. No `IS DISTINCT FROM` guard is needed here —
+  -- `NULL = 'cron'` is NULL and takes the ELSE branch, which is the wanted direction.
+  v_trigger_source text := case
+                             when current_setting('app.report_generation_source', true) = 'cron'
+                               then 'cron'
+                             else 'on_demand'
+                           end;
+  v_subject_tenant uuid;
+  v_written_here   boolean;
 begin
   -- FAIL CLOSED ON AN UNRESOLVED TENANT, before anything else. A service_role
   -- session that has not impersonated has a NULL auth.uid(); Decision 1 clause (d)
@@ -487,12 +597,84 @@ begin
       'pfin.fn_emit_audit_log refused: p_tenant_resolution_chain is required and must be non-blank. A resolved tenant id with no account of HOW it was resolved discharges only half of ADR-011 Decision 1 clause (d) — the question the clause exists to answer is whether the resolution was sound.';
   end if;
 
+  -- ==========================================================================
+  -- C2 — THE ARGUMENTS ARE BOUND TO A REAL PRIVILEGED WRITE IN THIS TRANSACTION.
+  -- Without this, a caller with EXECUTE could annotate a write that never happened,
+  -- or annotate somebody else's. C1 removes the forgeable PROVENANCE; C2 removes the
+  -- forgeable SUBJECT. Neither alone is sufficient.
+  -- ==========================================================================
+  if p_surface_name = 'monthly_report_generation' then
+
+    -- (a) FAIL CLOSED FIRST. A transaction that has written nothing has no assigned
+    -- xid, so there is no privileged write for this row to describe. Refusing here
+    -- rather than falling through is Sec's explicit condition: NULL means nothing was
+    -- written, therefore refuse.
+    if pg_current_xact_id_if_assigned() is null then
+      raise exception
+        'pfin.fn_emit_audit_log refused: this transaction has written nothing (no xid assigned), so there is no privileged write for an audit row to describe. An audit row is an ANNOTATION ON A WRITE, not a standalone assertion — emit it in the same transaction as the write it names.';
+    end if;
+
+    -- (b) The subject table is FIXED for this surface, not caller-chosen.
+    if p_subject_table is distinct from 'pfin.monthly_report' or p_subject_id is null then
+      raise exception
+        'pfin.fn_emit_audit_log refused: surface monthly_report_generation requires p_subject_table = ''pfin.monthly_report'' and a non-null p_subject_id. Got table % and id %.',
+        coalesce(p_subject_table, '<null>'), coalesce(p_subject_id::text, '<null>');
+    end if;
+
+    -- (c) Resolve the subject. This runs as the function owner, so it sees the row
+    -- regardless of the caller's RLS — which is what makes the tenant comparison
+    -- below meaningful rather than tautological.
+    -- ⚠ THE VISIBILITY TEST, NOT AN xid EQUALITY TEST, AND THE DIFFERENCE IS A
+    -- MEASURED DEFECT AVOIDED. The obvious expression — `xmin = pg_current_xact_id()`
+    -- — IS WRONG HERE: `fn_open_monthly_report_draft` performs its INSERT inside a
+    -- plpgsql `begin … exception when unique_violation` block, which opens a
+    -- SUBTRANSACTION with its own xid, while `pg_current_xact_id_if_assigned()`
+    -- returns the TOP-LEVEL xid. Measured 2026-09-05: top `1664121`, row xmin
+    -- `1664122`, equality FALSE. A naive check would refuse the one path this
+    -- condition exists to permit, and would pass every test whose INSERT was not
+    -- wrapped in an exception block.
+    -- `pg_visible_in_snapshot` is correct for both: a row written by our own
+    -- transaction OR any of its subtransactions is NOT visible in our own snapshot,
+    -- while a row from an earlier committed transaction IS (measured, all four cases).
+    -- ⚠ It also closes a hole an ordered comparison would leave open: `xmin >= top`
+    -- would ACCEPT a row committed by a concurrent transaction that started after us
+    -- and therefore holds a higher xid.
+    -- ⚠ BOUNDED ASSUMPTION, NAMED: `xmin::text::xid8` reconstructs the 64-bit id
+    -- without an epoch, so this comparison is only sound within one xid epoch (2^32
+    -- transactions). There is no exposed epoch-preserving xid→xid8 conversion; the
+    -- assumption is stated rather than hidden.
+    select r.users_id,
+           not pg_visible_in_snapshot(r.xmin::text::xid8, pg_current_snapshot())
+      into v_subject_tenant, v_written_here
+      from pfin.monthly_report r
+     where r.report_id = p_subject_id;
+
+    -- (d) ABSENT and OTHER-TENANT share ONE message DELIBERATELY. Sec requires the
+    -- earlier-transaction case and the other-tenant case to be distinguishable, and
+    -- they are; but distinguishing ABSENT from OTHER-TENANT would hand a caller who
+    -- holds EXECUTE an existence oracle over every tenant's report_ids. One condition,
+    -- one message.
+    if v_subject_tenant is null or v_subject_tenant <> v_users_id then
+      raise exception
+        'pfin.fn_emit_audit_log refused: report_id % is not a row belonging to the tenant this session resolved to. An audit row may only annotate a write the caller actually made, and the tenant is taken from auth.uid(), never from an argument.',
+        p_subject_id;
+    end if;
+
+    -- (e) The EARLIER-TRANSACTION case, distinct on purpose (QA legs depend on it).
+    if not v_written_here then
+      raise exception
+        'pfin.fn_emit_audit_log refused: report_id % exists and is yours, but was NOT written in this transaction. An audit row annotates a write that happened HERE; back-annotating an earlier report would put an unfalsifiable claim into an append-only table.',
+        p_subject_id;
+    end if;
+
+  end if;
+
   insert into pfin.audit_log (
     surface_name, trigger_source, users_id, tenant_resolution_chain,
     data_as_of, subject_table, subject_id
   )
   values (
-    p_surface_name, p_trigger_source, v_users_id, p_tenant_resolution_chain,
+    p_surface_name, v_trigger_source, v_users_id, p_tenant_resolution_chain,
     p_data_as_of, p_subject_table, p_subject_id
   )
   returning audit_id into v_audit_id;
@@ -501,9 +683,9 @@ begin
 end;
 $$;
 
-revoke execute on function pfin.fn_emit_audit_log(text, text, text, date, text, bigint) from public;
-grant  execute on function pfin.fn_emit_audit_log(text, text, text, date, text, bigint) to authenticated;
-grant  execute on function pfin.fn_emit_audit_log(text, text, text, date, text, bigint) to service_role;
+revoke execute on function pfin.fn_emit_audit_log(text, text, date, text, bigint) from public;
+grant  execute on function pfin.fn_emit_audit_log(text, text, date, text, bigint) to authenticated;
+grant  execute on function pfin.fn_emit_audit_log(text, text, date, text, bigint) to service_role;
 
-comment on function pfin.fn_emit_audit_log(text, text, text, date, text, bigint) is
-  '⚠ SECURITY DEFINER. The general same-transaction audit-log insert helper (block AH; V1.5 pre-flight ruling R7 option (2)). It discharges ADR-011 Decision 1 clause (d) for the monthly-report cron and the on-demand generation endpoint — its TWO callers at V1.5, writing the same shape and discriminated only by trigger_source. ⚠ IT REALIZES THE RESERVED, PREVIOUSLY-UNAUTHORED general audit-log insert entry on the ADR-011 Decision 9 allowlist; it does NOT grow the allowlist. Read Decision 9 live; no size is stated here, and the Decision 9 amendment recording this authoring rides the same PR rather than a later reconciliation. ⚠ THE DEFINER POSTURE IS FORCED, NOT CHOSEN. INVOKER was drafted first, per R7 rider 1, and does not survive the second caller: the on-demand path runs under the USER''S OWN SESSION, so an INVOKER helper would have required an INSERT grant on the audit table to `authenticated` — which is exactly the shape Decision 9 has already ruled against in its own words ("an INVOKER+grant path would let a user POST forged history rows — defeating the tamper-evidence"), and on an append-only table such a forged row would be permanently uncorrectable. Moving that write to a service_role hop was unavailable: it would break the same-transaction requirement, or void the endpoint''s session-as-tenant-binding. ⚠ ON A DEFINER FUNCTION THE EXECUTE ACL IS THE ENTIRE PERIMETER, not the weakest fence — there is no RLS and no table grant behind it, because the table has neither. EXECUTE is revoked from public and granted to exactly `authenticated` and `service_role`; any further grant, and any grant to a new role, is SEC-JOINT-REVIEW-MANDATORY. Consequently EVERY ARGUMENT IS VALIDATED IN THE BODY, since the arguments are the only thing a caller controls. ⚠ THERE IS NO p_users_id PARAMETER, BY DESIGN: the tenant is STAMPED from auth.uid() inside the body, so a caller has no argument through which to attribute a row to another tenant. A session with NO resolved tenant is REFUSED with a message naming the impersonation binding it should have performed — a service_role connection that has not impersonated has a NULL auth.uid(), and Decision 1 clause (d) is precisely the requirement that such a write not be kept; the refusal takes the whole privileged transaction with it, which is the intended outcome. p_surface_name is REQUIRED and CHECK-constrained on the table against a vocabulary that grows ONLY BY MIGRATION (R7 rider 5) — the mitigation for the named risk that a general helper is where per-surface discipline goes to be forgotten. p_tenant_resolution_chain is REQUIRED and non-blank: a resolved id with no account of how it was resolved discharges only half the clause. RETURNS the new audit_id so a caller can assert in-transaction that the row exists. ⚠ THE ROW MUST BE WRITTEN IN THE SAME TRANSACTION AS THE PRIVILEGED WRITE IT DESCRIBES — a row that survives a rolled-back generation is worse than no row, and the paired battery asserts BOTH that it exists on commit and that it is ABSENT on rollback. JOINT-REVIEW-MANDATORY.';
+comment on function pfin.fn_emit_audit_log(text, text, date, text, bigint) is
+  '⚠ SECURITY DEFINER. The general same-transaction audit-log insert helper (block AH; V1.5 pre-flight ruling R7 option (2)). It discharges ADR-011 Decision 1 clause (d) for the monthly-report cron and the on-demand generation endpoint — its TWO callers at V1.5, writing the same shape and discriminated only by trigger_source. ⚠ IT REALIZES THE RESERVED, PREVIOUSLY-UNAUTHORED general audit-log insert entry on the ADR-011 Decision 9 allowlist; it does NOT grow the allowlist. Read Decision 9 live; no size is stated here, and the Decision 9 amendment recording this authoring rides the same PR rather than a later reconciliation. ⚠ THE DEFINER POSTURE IS FORCED, NOT CHOSEN. INVOKER was drafted first, per R7 rider 1, and does not survive the second caller: the on-demand path runs under the USER''S OWN SESSION, so an INVOKER helper would have required an INSERT grant on the audit table to `authenticated` — which is exactly the shape Decision 9 has already ruled against in its own words ("an INVOKER+grant path would let a user POST forged history rows — defeating the tamper-evidence"), and on an append-only table such a forged row would be permanently uncorrectable. Moving that write to a service_role hop was unavailable: it would break the same-transaction requirement, or void the endpoint''s session-as-tenant-binding. ⚠ ON A DEFINER FUNCTION THE EXECUTE ACL IS THE ENTIRE PERIMETER, not the weakest fence — there is no RLS and no table grant behind it, because the table has neither. EXECUTE is revoked from public and granted to exactly `authenticated` and `service_role`; any further grant, and any grant to a new role, is SEC-JOINT-REVIEW-MANDATORY. Consequently EVERY ARGUMENT IS VALIDATED IN THE BODY, since the arguments are the only thing a caller controls — AND THE TWO MOST DANGEROUS ONES WERE REMOVED OR BOUND RATHER THAN VALIDATED, because validating a value''s SHAPE never establishes its TRUTH. ⚠ p_trigger_source IS GONE (Sec C1): it is derived from the transaction-local GUC app.report_generation_source, exact match on ''cron'', defaulting to ''on_demand''. ⚠ p_subject_table AND p_subject_id ARE BOUND TO A REAL WRITE (Sec C2): for surface monthly_report_generation the table is fixed by literal and the id must name a pfin.monthly_report row that belongs to the tenant auth.uid() resolved to AND was written IN THIS TRANSACTION — with a read-only transaction (no assigned xid) refused outright, since a transaction that wrote nothing has nothing for an audit row to annotate. ⚠ THE TRANSACTION TEST IS A SNAPSHOT-VISIBILITY TEST, NOT AN xid EQUALITY TEST, AND THAT IS A MEASURED DEFECT AVOIDED: fn_open_monthly_report_draft INSERTs inside a plpgsql exception block, i.e. a SUBTRANSACTION with its own xid, while pg_current_xact_id_if_assigned() returns the TOP-LEVEL xid — measured 2026-09-05 as top 1664121 against row xmin 1664122, equality FALSE — so a naive equality check would refuse the very path C2 exists to permit while passing every test whose INSERT was not wrapped in an exception block. ⚠ tenant_resolution_chain REMAINS CALLER-ASSERTED AND IS DELIBERATELY UNCONSTRAINED: it ANNOTATES a write this function has independently confirmed occurred, by this tenant, in this transaction, so a wrong chain misdescribes a real write and cannot manufacture one. ⚠ THERE IS NO p_users_id PARAMETER, BY DESIGN: the tenant is STAMPED from auth.uid() inside the body, so a caller has no argument through which to attribute a row to another tenant. A session with NO resolved tenant is REFUSED with a message naming the impersonation binding it should have performed — a service_role connection that has not impersonated has a NULL auth.uid(), and Decision 1 clause (d) is precisely the requirement that such a write not be kept; the refusal takes the whole privileged transaction with it, which is the intended outcome. p_surface_name is REQUIRED and CHECK-constrained on the table against a vocabulary that grows ONLY BY MIGRATION (R7 rider 5) — the mitigation for the named risk that a general helper is where per-surface discipline goes to be forgotten. p_tenant_resolution_chain is REQUIRED and non-blank: a resolved id with no account of how it was resolved discharges only half the clause. RETURNS the new audit_id so a caller can assert in-transaction that the row exists. ⚠ THE ROW MUST BE WRITTEN IN THE SAME TRANSACTION AS THE PRIVILEGED WRITE IT DESCRIBES — a row that survives a rolled-back generation is worse than no row, and the paired battery asserts BOTH that it exists on commit and that it is ABSENT on rollback. JOINT-REVIEW-MANDATORY.';

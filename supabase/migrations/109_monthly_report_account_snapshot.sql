@@ -517,11 +517,13 @@ set search_path = ''
 as $$
 declare
   v_report_tenant uuid;
+  v_report_status pfin.report_generation_status_enum;
 begin
   -- Resolve this row's tenant through the parent. NULL-safe by construction: the
   -- variable stays NULL when the parent is absent or invisible, and the comparison
   -- below is written so NULL rejects rather than passing.
-  select r.users_id into v_report_tenant
+  select r.users_id, r.generation_status
+    into v_report_tenant, v_report_status
     from pfin.monthly_report r
    where r.report_id = new.monthly_report_id;
 
@@ -539,6 +541,28 @@ begin
     raise exception
       'cross-tenant monthly_report_account_snapshot rejected: account_id % is not owned by the report''s tenant % (ADR-011 Decision 3 #4 matched-tenant fence, chain-resolved through monthly_report_id).',
       new.account_id, v_report_tenant;
+  end if;
+
+  -- ⚠ THE SNAPSHOT SET CLOSES AT FINALIZATION (Sec FLAG-4, PR #636). Without this
+  -- predicate the child set stays OPEN on a `final` parent: a caller could append a
+  -- snapshot row to a report whose payload was frozen days earlier, and every other
+  -- fence would permit it — the tenant still matches, the account still belongs to
+  -- that tenant, and 108's immutability trigger governs the PARENT's columns, not the
+  -- arrival of new CHILDREN. The result is a finalized report whose stored artifact
+  -- and whose per-account children disagree, permanently, with the children immutable
+  -- too. THE PARENT'S DRAFT WINDOW IS THE CHILD SET'S WRITE WINDOW.
+  -- ⚠ Placed AFTER the tenant resolution deliberately: an unresolvable parent must go
+  -- on reporting as unresolvable rather than as not-a-draft, because under RLS
+  -- "another tenant's report" and "absent" are ONE condition, and this message must
+  -- not become a second way to probe existence.
+  -- ⚠ `IS DISTINCT FROM`, not `<>`: v_report_status cannot be NULL here (the
+  -- resolution above already refused that case), but the NULL-safe form is what keeps
+  -- that true if the refusal above is ever loosened — `NULL <> 'draft'` is NULL, not
+  -- true, and would fail OPEN.
+  if v_report_status is distinct from 'draft' then
+    raise exception
+      'monthly_report_account_snapshot INSERT rejected: parent report % is % — the snapshot set CLOSES at finalization (Sec FLAG-4). Per-account snapshot rows are written during the parent''s draft window only; a report whose payload is frozen cannot acquire new children, or its stored artifact and its children would permanently disagree. Regenerate the month to open a new draft with its own children.',
+      new.monthly_report_id, v_report_status;
   end if;
 
   return new;
