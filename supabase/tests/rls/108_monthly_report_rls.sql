@@ -37,7 +37,7 @@ begin;
 \set m_immut_col '%users_id and target_month are immutable in EVERY state%'
 \set m_live_draft '%monthly_report_one_live_draft_per_month%'
 
-select plan(36);
+select plan(39);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 \set td '00000000-0000-0000-0000-00000000000d'
@@ -159,6 +159,30 @@ select throws_like(
   '(5d) service_role DELETE of the superseded row refused AT THE ACL'
 );
 select set_config('role', 'postgres', true);
+
+-- (5e)/(5f) Sec FLAG-3: (5a)-(5d) all observe the ACL, so nothing above ever
+-- reaches fn_monthly_report_immutability's OWN DELETE branch (its refusal
+-- and its permitted-draft return are both DORMANT BY GRANT at every role that
+-- holds no DELETE grant). As `postgres` (table owner, RLS-bypassed AND
+-- ACL-exempt), the ACL is no longer in the way, so the trigger's own DELETE
+-- logic is what actually fires — the mechanism the migration's own header
+-- names as "dormant by grant", made observable the one way that is possible
+-- without granting DELETE to any real role.
+select throws_like(
+  format($$ delete from pfin.monthly_report where report_id = %s $$, :d3),
+  '%report is retained indefinitely%Only a draft may be deleted%',
+  '(5e) FLAG-3: as owner (ACL-exempt), DELETE of the FINAL row is refused by the TRIGGER''S OWN message — not the ACL denial (5a) observed, a genuinely different layer'
+);
+insert into pfin.monthly_report (target_month, data_as_of) values ('2026-11-01', '2026-11-30') returning report_id as d5f \gset
+select lives_ok(
+  format($$ delete from pfin.monthly_report where report_id = %s $$, :d5f),
+  '(5f) FLAG-3, NON-VACUOUS: as owner, DELETE of a `draft` row IS PERMITTED by the trigger — the dormant-by-grant branch genuinely returns OLD rather than raising, confirming (5e)''s refusal is status-conditional and not a blanket owner-tier block'
+);
+select is(
+  (select count(*)::int from pfin.monthly_report where report_id = :d5f::bigint),
+  0,
+  '(5g) NON-VACUOUS: the draft row is actually GONE after the permitted DELETE'
+);
 
 -- =====================================================================
 -- LEG 6 — INSERT directly as final refused; INSERT as draft accepted.
