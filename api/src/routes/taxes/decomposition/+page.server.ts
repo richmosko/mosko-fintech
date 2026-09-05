@@ -35,9 +35,21 @@
 // A tax_character read failure means the page cannot legend its own rows correctly, so it is not
 // a candidate for fail-soft degrade; this loader lets it throw rather than rendering a table with
 // an incomplete or silently-empty vocabulary.
+//
+// STALENESS (SELF-361 / P9 AC1/AC2): `staleness: StalenessData` — the SAME whole-tenant
+// `loadStaleness()` read every other V1.1+ NAV/composition surface consumes
+// (`fn_aggregation_has_stale_constituent()` takes NO per-surface argument), mirroring root
+// `+page.server.ts` / `allocation/+page.server.ts`'s own try/catch + degrade-to-UNKNOWN posture
+// byte-for-byte. This was the exact gap TaxDecompositionTable.svelte's own header flagged at
+// SELF-264 hand-off ("no staleness prop is threaded through this issue's loader contract") —
+// closed here, not re-derived. Belt-and-suspenders try/catch around `loadStaleness` itself
+// (which already degrades an RPC error internally) for an unexpected throw, same posture the
+// `tax_character` read above does NOT take (that read is fail-loud by design; this one is not).
 
 import { redirect } from '@sveltejs/kit';
 import { loadTaxLiability, INVENTORY_SEED_DELTA_MIGRATION } from '$lib/server/queries/taxLiability';
+import { loadStaleness } from '$lib/server/queries/staleness';
+import { UNKNOWN_STALENESS } from '$lib/staleness/stale-constituent';
 import type { PageServerLoad } from './$types';
 
 export type TaxCharacterRow = {
@@ -51,6 +63,14 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	if (!user) throw redirect(303, `/login?redirectTo=${encodeURIComponent(url.pathname)}`);
 
 	const liability = await loadTaxLiability(locals.supabase);
+
+	let staleness = UNKNOWN_STALENESS;
+	try {
+		staleness = await loadStaleness(locals.supabase);
+	} catch (err) {
+		console.error('[taxes/decomposition] staleness load threw; degrading to unknown staleness:', err);
+		staleness = UNKNOWN_STALENESS;
+	}
 
 	const { data: taxCharacters, error: taxCharacterErr } = await locals.supabase
 		.schema('pfin')
@@ -67,6 +87,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	return {
 		liability,
 		taxCharacters: (taxCharacters ?? []) as TaxCharacterRow[],
-		inventorySeedDeltaMigration: INVENTORY_SEED_DELTA_MIGRATION
+		inventorySeedDeltaMigration: INVENTORY_SEED_DELTA_MIGRATION,
+		staleness
 	};
 };
