@@ -27,3 +27,9 @@ Style: each block is verbatim AC-item text in the file's shape — numbered, bol
 ---
 
 **Routing notes (not AC text):** the `108` partial index + the `unique_violation` branch are Architect's (A1 / A10) and a Sec touch (Decision 2 table; both surfaces already carry `sec-joint-review`). `Array.from(s).length` in the SELF-233 shared Zod layer is Backend's. Nothing here changes the PRD; §2.6.2 already says plain text with line breaks preserved.
+
+---
+
+## (d) SELF-348 — A4 AC 4b + sitting-log R2.2 — CORRECTION (Sec R-1 at PR #634, ruling E25)
+
+The literal *"the interception handler recorded two aborts"* is STRUCK. Measured: Chromium refuses the `file:///proc/self/environ` iframe under its own local-resource policy before any request event fires, so only the `http://169.254.169.254/` vector reaches interception. The criterion's rationale (a failed fetch and a blocked fetch render identically) is discharged by three legs, not a count: a LOCALLY REACHABLE `http://` positive control that the handler aborts; `file://` attributed separately to Chromium's policy (console "Not allowed to load local resource"), never folded into the count; and `data:` NOT aborted as the discriminating negative control. ⚠ P10's battery must be written to these three legs; an `abortedCount === 2` assertion would red against correct behaviour, and the tempting repair for that red is to weaken the fence. Sec's full replacement wording: `docs/records/v15-execution/self348-sec-review.md` § R-1.
