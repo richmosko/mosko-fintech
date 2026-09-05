@@ -39,6 +39,8 @@
 --   I  — immutability (UPDATE/DELETE/TRUNCATE, all roles) + the authenticated no-write ACL.
 --   S  — RLS SELECT (owner-only + cross-tenant-empty) + the 025 aal2 step-up backstop.
 --   G  — grants exactly as declared; no JSONB; FK delete-actions.
+--   N  — finiteness CHECK (nav_component_daily_value_finite): NaN/±Infinity rejected,
+--        finite numeric accepted (F-4).
 --   F  — structural BEFORE-INSERT-only pin + same-transaction rollback (F-2).
 -- =====================================================================
 
@@ -54,7 +56,7 @@ begin;
 \set m_acl '%permission denied for table nav_component_daily%'
 \set m_acl_navdaily '%permission denied for table nav_daily%'
 
-select plan(47);
+select plan(52);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 -- Tenant D: battery-local, totp-enrolled reader for the aal2 backstop leg (054/057 shape).
@@ -134,7 +136,7 @@ select set_config('role', 'postgres', true);
 -- =====================================================================
 -- R — THE RECONCILIATION (AC 6): Σ(component_value) = nav_daily.nav_value for the
 --   same (users_id, nav_date), via the PRODUCTION STATEMENT SHAPE VERBATIM (W1-W4):
---   scalar INSERT first (RETURNING nav_id), then the multi-row leaf INSERT with the
+--   scalar INSERT first (ROW_COUNT signal, NOT `returning nav_id` — ruling E10; see (R0)),
 --   TARGETED on conflict (users_id, nav_date, account_id) do nothing, as service_role
 --   under the app.nav_computed_for GUC 054 and this table share.
 -- =====================================================================
@@ -147,14 +149,17 @@ select set_config('app.nav_computed_for', :'ta', true);
 -- just inserted (measured directly; not inferred). service_role's column-level
 -- SELECT grant on pfin.nav_daily (054) is (users_id, nav_date) ONLY — no nav_id.
 -- So the VERBATIM W3 statement, as specified, is REJECTED for service_role today.
--- Two remediations, Architect's call: (a) widen the 054 grant to `select (nav_id)`
--- too, or (b) change W3 to use GET DIAGNOSTICS ROW_COUNT instead of RETURNING (no
--- grant needed — this battery's own helper uses that form; see qa_scalar_insert).
+-- RULING E10: W3 uses GET DIAGNOSTICS ROW_COUNT instead of RETURNING (no grant
+-- needed — this battery's own helper uses that form; see qa_scalar_insert).
+-- Widening the 054 grant to `select (nav_id)` is FORBIDDEN without Sec joint
+-- review — 054's own header requires that review for any grant change on
+-- nav_daily, and this leg exists to keep that requirement from being routed
+-- around silently.
 select throws_like(
   format($$ insert into pfin.nav_daily (users_id, nav_date, nav_value) values (%L, '2026-09-01', 1.00)
               on conflict (users_id, nav_date) do nothing returning nav_id $$, :'ta'),
   :'m_acl_navdaily',
-  '(R0) KNOWN GAP: the W3-specified `RETURNING nav_id` form of the scalar INSERT is REJECTED for service_role — 054''s column grant is (users_id, nav_date) only, and RETURNING needs SELECT on every returned column even for a just-inserted row. Flagged to Architect (widen the grant, or switch W3 to ROW_COUNT); this battery''s own scalar-insert helper uses ROW_COUNT to avoid it'
+  '(R0) PERMANENT KNOWN-GAP WATCHER: the `RETURNING nav_id` form of the scalar INSERT is REJECTED for service_role — 054''s column grant is (users_id, nav_date) only, and RETURNING needs SELECT on every returned column even for a just-inserted row. RULING E10: the signal is ROW_COUNT, and 054''s grant is NOT widened. ⚠ IF THIS LEG REDS, the grant was widened — that is a Sec-joint-review-mandatory change per 054''s own header, not a repair to make here'
 );
 
 select is(
@@ -270,6 +275,14 @@ select throws_like(
               values (%L, '2026-09-04', %s, 250.00) $$, :'tb', :tb1),
   :'m_binding',
   '(M3) SELF-CONSISTENT PAIR, WRONG SERVED TENANT: (users_id=B, account_id=B''s own) is internally matched -> #19 would PASS it -> but the GUC says the database served tenant A -> REJECTED ONLY by the write-tenant binding fence. Disjointness leg 2/2 (Architect notes leg 4): #19 alone would NOT catch this'
+);
+
+select set_config('app.nav_computed_for', :'ta', true);
+select throws_like(
+  format($$ insert into pfin.nav_component_daily (users_id, nav_date, account_id, component_value)
+              values (%L, '2026-09-05', 999999999, 250.00) $$, :'ta'),
+  :'m_matched',
+  '(M4) NONEXISTENT account_id UNDER A CORRECTLY BOUND GUC (F-5): users_id=A matches the GUC (assert_computed_for PASSES), but account_id 999999999 references no pfin.account row AT ALL -> REJECTED by #19''s own NOT EXISTS check, not by the account_id FK. PINS ORDERING: a BEFORE INSERT row trigger always runs before the referencing FK constraint is checked, so the matched-tenant message is what a caller observes for a wholly-invented account_id, never a foreign key violation — the second of #19''s two catalogued raise legs (the first is the cross-tenant leg at M2)'
 );
 select set_config('role', 'postgres', true);
 
@@ -440,6 +453,38 @@ select is(
   '(G8) the users_id FK is ON DELETE CASCADE — a user''s checkpoints are dependent data'
 );
 select ok(has_table_privilege('authenticated', 'pfin.nav_component_daily', 'SELECT'), '(G9) authenticated holds table-level SELECT (grant-before-RLS, PR #106 shape) — RLS filters rows, the grant lets the role reach the table at all');
+
+-- =====================================================================
+-- N — FINITENESS CHECK (nav_component_daily_value_finite): NaN and ±Infinity
+--   rejected; an ordinary finite numeric passes (F-4 — this CHECK had no watcher).
+-- =====================================================================
+select set_config('role', 'service_role', true);
+select set_config('app.nav_computed_for', :'ta', true);
+
+select throws_like(
+  format($$ insert into pfin.nav_component_daily (users_id, nav_date, account_id, component_value)
+              values (%L, '2026-09-11', %s, 'NaN'::numeric) $$, :'ta', :ta1),
+  '%nav_component_daily_value_finite%',
+  '(N1) NaN is REJECTED by the finiteness CHECK — a poisoned leaf must never enter the series (the 053 N1 lesson this idiom is named for)'
+);
+select throws_like(
+  format($$ insert into pfin.nav_component_daily (users_id, nav_date, account_id, component_value)
+              values (%L, '2026-09-12', %s, 'Infinity'::numeric) $$, :'ta', :ta1),
+  '%nav_component_daily_value_finite%',
+  '(N2) +Infinity is REJECTED by the same CHECK'
+);
+select throws_like(
+  format($$ insert into pfin.nav_component_daily (users_id, nav_date, account_id, component_value)
+              values (%L, '2026-09-13', %s, '-Infinity'::numeric) $$, :'ta', :ta1),
+  '%nav_component_daily_value_finite%',
+  '(N3) -Infinity is REJECTED by the same CHECK — both non-finite ends of the domain, not just NaN'
+);
+select lives_ok(
+  format($$ insert into pfin.nav_component_daily (users_id, nav_date, account_id, component_value)
+              values (%L, '2026-09-14', %s, 42.00) $$, :'ta', :ta1),
+  '(N4) POSITIVE CONTROL: an ordinary finite numeric is ACCEPTED — N1-N3 reject non-finite values specifically, not every write through this CHECK'
+);
+select set_config('role', 'postgres', true);
 
 -- =====================================================================
 -- F — STRUCTURAL BEFORE-INSERT-ONLY PIN + SAME-TRANSACTION ROLLBACK (F-2).
