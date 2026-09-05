@@ -8,8 +8,21 @@
 // Requires a Chromium/Chrome binary reachable via PUPPETEER_EXECUTABLE_PATH —
 // set by the Dockerfile in the container, and by the developer's environment
 // locally (see README note at the bottom of this file if PUPPETEER_EXECUTABLE_PATH
-// is unset). Skips cleanly, not a hard failure, when it isn't set, so this
-// suite doesn't red a checkout with no local Chromium.
+// is unset).
+//
+// LOCALLY (process.env.CI unset): skips cleanly with a loud console notice
+// when Chromium isn't available, so a developer's checkout with no local
+// Chromium doesn't red on this file alone.
+//
+// IN CI (process.env.CI set): an unset PUPPETEER_EXECUTABLE_PATH is a HARD
+// FAILURE, not a skip (Sec addendum to PR #634 — team-lead's follow-up
+// ruling). A CI job that silently "passes" a suite it never actually ran is
+// a worse failure mode than a red job: it reports coverage that doesn't
+// exist. DevOps is standing up a CI job for auth.test.js now (no Chromium
+// needed); this file's own CI job lands once Chromium-in-CI is solved — the
+// fail-not-skip here is what keeps THAT future job honest from day one,
+// rather than shipping a job that green-passes by skipping forever if the
+// Chromium setup step is ever accidentally broken or removed.
 
 "use strict";
 
@@ -23,6 +36,18 @@ const SIGNING_KEY = "test-signing-key-do-not-leak-12345";
 const OTHER_KEY = "a-different-key-not-the-real-one";
 
 if (!process.env.PUPPETEER_EXECUTABLE_PATH) {
+  if (process.env.CI) {
+    test("FAILED (CI) — PUPPETEER_EXECUTABLE_PATH is required in CI, not optional", () => {
+      assert.fail(
+        "PUPPETEER_EXECUTABLE_PATH is unset in a CI environment (process.env.CI is set). " +
+          "This suite must not silently skip in CI — that would report coverage that doesn't " +
+          "exist for the resource-loading fence and auth legs this file exists to prove. Set " +
+          "PUPPETEER_EXECUTABLE_PATH to a Chromium/Chrome binary in this CI job, or gate the job " +
+          "itself off (not this test) if Chromium-in-CI genuinely isn't wired up yet."
+      );
+    });
+    return;
+  }
   test("SKIPPED — PUPPETEER_EXECUTABLE_PATH not set locally", () => {
     console.log(
       "[render.test.js] PUPPETEER_EXECUTABLE_PATH is unset — skipping the render battery. " +
