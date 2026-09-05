@@ -70,16 +70,25 @@ jobs:
           node-version: '20'
 
       - name: RT-22-manifest production-mode (PDF worker package.json + lockfile)
-        # Pass-if-absent (R6 rider 2), DISCOVERED rather than a hardcoded path
-        # (Sec F-1): A4 may land workers/pdf-render/package.json at a nested
-        # location (a workspace child, an app/ subfolder) rather than the
-        # top-level canonical path, and a hardcoded path would then report
-        # "absent — pass" forever with nothing watching — the same
-        # sequencing-convention-with-no-mechanism rot rider 2 already removed
-        # one level up. Every package.json under workers/pdf-render/ (excl.
-        # node_modules/) is audited; zero found still resolves to the
-        # canonical path so PASS-IF-ABSENT is preserved exactly for the
-        # current (pre-A4) state.
+        # DISCOVERED rather than a hardcoded path (Sec F-1): SELF-348 (A4)
+        # could in principle have landed workers/pdf-render/package.json at a
+        # nested location (a workspace child, an app/ subfolder) rather than
+        # the top-level canonical path, and a hardcoded path would then miss
+        # it silently. Every package.json under workers/pdf-render/ (excl.
+        # node_modules/) is audited.
+        #
+        # UNCONDITIONAL — PASS-IF-ABSENT RETIRED AT A4 (Sec F-6, redirected
+        # 2026-09-05): R6 rider 2's pass-if-absent fallback existed only for
+        # the pre-A4 window, when workers/pdf-render/package.json legitimately
+        # did not exist yet. SELF-348 (A4) has landed that file (Backend's
+        # dependency list — puppeteer-core + jsonwebtoken — is now baked into
+        # scripts/ci/fence-rt22-pdf-worker-manifest.sh's ALLOWLIST_JSON), so
+        # the manifest is REQUIRED from here on: zero manifests found under
+        # workers/pdf-render/ is now FATAL, with no fallback branch at all. An
+        # earlier revision tried to guess "has A4 landed?" from a Dockerfile
+        # apt-get line — a convention with no mechanism, since it fails
+        # silently in exactly the case the guess is wrong — and was removed
+        # rather than kept as a redundant residual.
         run: |
           found=0
           while IFS= read -r m; do
@@ -88,46 +97,58 @@ jobs:
             bash scripts/ci/fence-rt22-pdf-worker-manifest.sh "$m"
           done < <(find workers/pdf-render -name package.json -not -path '*/node_modules/*' 2>/dev/null | sort)
           if [ "$found" -eq 0 ]; then
-            bash scripts/ci/fence-rt22-pdf-worker-manifest.sh workers/pdf-render/package.json
+            echo "FATAL: no package.json found anywhere under workers/pdf-render/. SELF-348 (A4) requires one; pass-if-absent (R6 rider 2) was the pre-A4 shape and was retired once A4 landed workers/pdf-render/package.json. Failing closed."
+            exit 1
           fi
 
-      - name: RT-22-manifest inversion-mode (golden fixtures; both routes must violate)
-        # QA-authored two-directory fixture set under
-        # tests/fixtures/ci/rt22-manifest-violation/, one subdirectory per
-        # detection route so each route is proven live independently — a
-        # single fixture could pass by exercising only one code path:
+      - name: RT-22-manifest inversion-mode (golden fixtures; all three routes must violate)
+        # Fixture set under tests/fixtures/ci/rt22-manifest-violation/, one
+        # subdirectory per detection route so each route is proven live
+        # independently — a single fixture could pass by exercising only one
+        # code path:
         #   - manifest-direct/      — pg listed directly in package.json
         #     dependencies (manifest-scan route).
-        #   - lockfile-transitive/  — package.json names only a non-denylisted
-        #     dep; pg appears solely in package-lock.json's resolved tree as
-        #     that dep's transitive dependency (lockfile-scan route a
-        #     manifest-only scan cannot see).
-        # Unlike production-mode, this step is NOT pass-if-absent — both
+        #   - lockfile-transitive/  — package.json names only allowlisted
+        #     deps; pg appears solely in package-lock.json's resolved tree as
+        #     one of them's transitive dependency (lockfile-scan route a
+        #     manifest-only scan cannot see). Adapted at E21 for the
+        #     allowlist flip (was QA-authored pre-flip).
+        #   - lifecycle-script/     — dependencies name only allowlisted deps,
+        #     lockfile resolves nothing denylisted, but scripts.postinstall
+        #     installs pg outside every field the manifest/lockfile scan
+        #     otherwise covers (Sec F-11B — npm ci runs lifecycle scripts
+        #     regardless of --omit=dev).
+        # Unlike production-mode, this step is NOT pass-if-absent — all three
         # fixtures are required scaffolding for this job, same as the RT-22
         # Dockerfile fence's inversion step.
         #
-        # Sec F-2: asserting exit-code != 0 alone is not proof either route
-        # fired — a malformed manifest, a malformed lockfile, or `node` off
-        # PATH ALSO exits 1 (the fence's own-dependency fail-closed path),
-        # and would print "OK: caught..." having proven nothing. Each
+        # Sec F-2: asserting exit-code != 0 alone is not proof the right
+        # route fired — a malformed manifest, a malformed lockfile, or `node`
+        # off PATH ALSO exits 1 (the fence's own-dependency fail-closed
+        # path), and would print "OK: caught..." having proven nothing. Each
         # fixture's captured stdout+stderr is asserted for the SPECIFIC
         # token the route that fixture exists to prove must emit; the
-        # lockfile-transitive fixture is additionally asserted to carry NO
-        # "manifest:" token, so a fixture that silently regained a
-        # manifest-side trip (as an earlier draft of it did) is caught here,
-        # not just read as an incidental extra hit.
+        # lockfile-transitive AND lifecycle-script fixtures are additionally
+        # asserted to carry NO "manifest:dependencies:"/"manifest:scripts:"
+        # cross-contamination from the other two routes, so a fixture that
+        # silently regained a trip on the wrong leg is caught here, not just
+        # read as an incidental extra hit.
         run: |
           set +e
           out_manifest="$(bash scripts/ci/fence-rt22-pdf-worker-manifest.sh tests/fixtures/ci/rt22-manifest-violation/manifest-direct/package.json 2>&1)"
           rc_manifest=$?
           out_lockfile="$(bash scripts/ci/fence-rt22-pdf-worker-manifest.sh tests/fixtures/ci/rt22-manifest-violation/lockfile-transitive/package.json 2>&1)"
           rc_lockfile=$?
+          out_lifecycle="$(bash scripts/ci/fence-rt22-pdf-worker-manifest.sh tests/fixtures/ci/rt22-manifest-violation/lifecycle-script/package.json 2>&1)"
+          rc_lifecycle=$?
           set -e
 
           echo "--- manifest-direct/ fence output ---"
           echo "$out_manifest"
           echo "--- lockfile-transitive/ fence output ---"
           echo "$out_lockfile"
+          echo "--- lifecycle-script/ fence output ---"
+          echo "$out_lifecycle"
 
           if [ "$rc_manifest" -eq 0 ]; then
             echo "FATAL: RT-22-manifest fence reported clean/absent against manifest-direct/ violation fixture — failing closed."
@@ -151,7 +172,20 @@ jobs:
             exit 1
           fi
 
-          echo "OK: RT-22-manifest fence caught manifest-direct/ via manifest:dependencies:pg (exit $rc_manifest) and lockfile-transitive/ via lockfile:pg with no manifest: token (exit $rc_lockfile) — both routes proven independently."
+          if [ "$rc_lifecycle" -eq 0 ]; then
+            echo "FATAL: RT-22-manifest fence reported clean/absent against lifecycle-script/ violation fixture — failing closed."
+            exit 1
+          fi
+          if ! echo "$out_lifecycle" | grep -q 'manifest:scripts:postinstall(script-not-allowlisted)'; then
+            echo "FATAL: lifecycle-script/ fixture exited non-zero but the expected token 'manifest:scripts:postinstall(script-not-allowlisted)' is absent from its output — the non-zero exit does not prove the lifecycle-script route fired; failing closed."
+            exit 1
+          fi
+          if echo "$out_lifecycle" | grep -Eq 'manifest:dependencies:|lockfile:'; then
+            echo "FATAL: lifecycle-script/ fixture output carries a 'manifest:dependencies:' or 'lockfile:' token — this fixture exists to prove the lifecycle-script route in isolation and must not also trip the dependency/lockfile legs; fixture isolation is broken."
+            exit 1
+          fi
+
+          echo "OK: RT-22-manifest fence caught manifest-direct/ via manifest:dependencies:pg (exit $rc_manifest), lockfile-transitive/ via lockfile:pg with no manifest: token (exit $rc_lockfile), and lifecycle-script/ via manifest:scripts:postinstall with no dependency/lockfile token (exit $rc_lifecycle) — all three routes proven independently."
 
   fence-rt26:
     name: RT-26 — SUPABASE_SERVICE_ROLE_KEY allowlist
@@ -707,6 +741,38 @@ jobs:
             exit 1
           fi
           echo "OK: fence caught the host-network exposure vector (exit $rc)."
+
+      - name: Production-mode — pdf-render compose (SELF-348 A4 item 4c; expects internal-only, exit 0)
+        # Intra-instance coverage expansion of RT-27 on the CI-fenced side —
+        # a wiring change over the already-generic fence, not a new fence
+        # (Sec N-4). Ledger effect NONE: no new §10 instance, no ordinal, no
+        # count (see SECURITY §4.5's RT-30 entry, cited by pointer per the
+        # A4 ruling — never restate its quoted text here).
+        run: bash scripts/ci/fence-admission-private-bind.sh workers/pdf-render/docker-compose.yaml
+
+      - name: "Inversion — pdf-render golden: published ports (expects violation, exit 1, vector-1 token)"
+        # Sec F-2 lesson (SELF-350): asserting exit-code != 0 alone is not
+        # proof the right vector fired — a structural error (missing
+        # sentinel, non-compose file) also exits non-zero (2, here, but the
+        # discipline is the same: assert the SPECIFIC token, not just a
+        # non-zero code) and would print "OK: caught..." having proven
+        # nothing. Captured stdout+stderr is asserted for the vector-1 token
+        # the fence itself emits, via if/then/fi under set -e.
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-admission-private-bind.sh tests/fixtures/ci/admission-bind-pdf-render-public-ports.compose.yaml 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: admission-bind fence expected exit 1 on the pdf-render published-ports golden but got $rc — failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'vector 1: published host-port mapping'; then
+            echo "FATAL: pdf-render published-ports golden exited 1 but the expected vector-1 token is absent from fence output — the non-zero exit does not prove the published-ports vector fired; failing closed."
+            exit 1
+          fi
+          echo "OK: fence caught the pdf-render published-ports exposure vector via its vector-1 token (exit $rc)."
 
   dedup-hash-identical:
     name: dedup-hash — import_hash canonical↔copy drift fence
