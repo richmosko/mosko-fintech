@@ -212,3 +212,112 @@ Read live from `DECISIONS.md` at 3c449cc: ADR-011 Decision 17 (Lock 13, mods #2 
 ## My own errors in this review
 1. My first grep for the `"the referent moves"` quote was **case-sensitive** and returned only `auth.js`, which I initially read as a fabricated quotation attributed to RT-21. The phrase is real — `rederived-acs.md:209`, rendered `the REFERENT MOVES`. Caught by re-running case-insensitively before writing the finding. The finding survives only as the cosmetic N-3 attribution note.
 2. The "two aborts" in my own R2.2 catch criterion was wrong (R-1). It assumed both vectors reach interception; the `file://` one does not. Backend measured it correctly and I reproduced their measurement.
+
+---
+---
+
+# ADDENDUM — re-review at f5f0354 then 6fbcec5 (2026-09-05)
+
+**Verdict unchanged: AMBER. Both merge conditions (F-11, D-1) remain open and are untouched by either delta.**
+
+## Scoping claims, independently verified (not relayed)
+
+`git diff --name-only 3c449cc 6fbcec5` = exactly 6 files: `tests/fixtures/ci/README.md`, the two `lockfile-transitive/` fixture files, `workers/pdf-render/src/auth.js`, `src/server.js`, `test/auth.test.js`.
+
+`git diff --name-only 3c449cc 6fbcec5 -- scripts/ci/ .github/ workers/pdf-render/Dockerfile workers/pdf-render/docker-compose.yaml workers/pdf-render/package.json workers/pdf-render/package-lock.json workers/pdf-render/src/render.js` → **EMPTY**. So no fence script, no workflow, no Dockerfile, no compose manifest, no dependency manifest and no `render.js` moved across either delta. Both scoping claims hold.
+
+**CI-fenced RT set at `6fbcec5`** = RT-05 RT-22 RT-26 RT-27 RT-30 — identical to `3c449cc`. The correction I filed against the brief's premise still stands and is unchanged by these two commits: the set grew by RT-30 (comment pointer) between `main` and `3c449cc`, and has not moved since. §10 CATALOGUED remains {RT-22, RT-26, RT-27}. **Different sets; do not reconcile.**
+
+## Re-measurements at 6fbcec5 (all re-run, not carried forward)
+
+| Predicate | Result |
+|---|---|
+| RT-22 Dockerfile fence | rc=0 |
+| RT-22 manifest fence, production target | rc=0 |
+| RT-27 production, pdf-render compose | rc=0 |
+| RT-27 inversion, pdf-render golden | rc=1, `vector 1: published host-port mapping` present |
+| RT-22-manifest inversion, `manifest-direct/` | rc=1, token `manifest:dependencies:pg` present |
+| RT-22-manifest inversion, `lockfile-transitive/` | rc=1, token `lockfile:pg` present, **`grep -c 'manifest:'` = 0** — isolation assertion restored |
+| `render.test.js` (real Chromium) | 14 pass / 0 fail / 0 skipped |
+| `auth.test.js` (new) | 6 pass / 0 fail / 0 skipped |
+| D-1 open? `grep -c "numbered list stays 2-instance" scripts/ci/README.md` | 1 — **still open** |
+| F-11 open? `grep -c '"scripts"' fence-rt22-…-manifest.sh` / `grep -c 'ignore-scripts' Dockerfile` | 0 / 0 — **still open**; the e8 postinstall fixture still exits rc=0 |
+
+## f5f0354 — the E21 fixture adaptation
+
+**The security substance at 3c449cc is unchanged by this delta.** Nothing under `workers/`, `scripts/ci/` or `.github/` moved; the fence's rule, the workflow's assertions and the production manifest are byte-identical. What changed is one golden fixture's manifest half and its two README rows.
+
+The adaptation is **correct, and the failure it repairs is a real one I should name for what it is**: E4's isolation assertion is *"this fixture proves the lockfile route fires independently"*, and once the fence flipped to allowlist-enforcement, `objection-lite` tripped `manifest:dependencies:objection-lite(not-allowlisted)` on its own — so the fixture was asserting isolation while no longer having it. **The CI red was the watcher working**, not an inconvenience: the workflow's `if echo "$out_lockfile" | grep -q 'manifest:'` leg is precisely the guard that catches a fixture silently regaining a manifest-side trip, and it caught this one. Ruling E21 (keep the assertion, adapt the fixture) is the right disposition — the alternative, relaxing the isolation assertion to tolerate an incidental extra token, would have destroyed the only thing the fixture exists to prove. Verified above: the token now fires and the `manifest:` count is 0.
+
+**N-5 (note, non-objection) — the fixture's manifest is now an exact copy of the production dependency set, and that coupling is INHERENT rather than a defect.** Under an allowlist fence, "a manifest that passes the manifest leg" is definitionally "a manifest whose names are allowlisted", so any fixture proving the lockfile route in isolation must mirror allowlist membership. **The recurrence condition, stated so it is not rediscovered:** *narrowing* `ALLOWLIST_JSON` (dropping `jsonwebtoken`, say) re-breaks this fixture the same way E21 broke it; *widening* it does not. That recurrence is watched — by the same isolation leg that caught E21 — so I require nothing. Recorded because "the fixture mirrors production" reads like coupling to be removed, and removing it would be wrong.
+
+**N-6 (note) — one stale workflow comment left behind by E21. Owner: DevOps, cosmetic.** The inversion step's own comment at `security-scan.yml` still describes the fixture as *"`package.json` names only a non-denylisted dep"*. Still literally true, but it no longer names the property that makes the fixture work under the allowlist (allowlisted, not merely non-denylisted) — which is the exact confusion E21 existed to resolve. One-line comment fix; fold into the D-1 commit.
+
+## 6fbcec5 — RT-21 letter (g), the worker-side detection signal
+
+### R-2 SUPERSEDED by R-6. My earlier ruling discharged (g) on the shipped `console.error` string line; Backend has since shipped a materially better form and asked the ADR-050 D4 question directly. That question deserves the direct answer, so R-2 is withdrawn and replaced.
+
+### R-6 — **ACCEPT the minimal form. Clause 6 is NOT met, CANNOT be met at the worker in code, and the obligation MOVES to DevOps rather than being retired.** This does not block merge.
+
+**ADR-050 Decision 4's criterion, quoted in full so the clause scoping is checkable:**
+
+> **A bounded, retained, queryable signal sufficient to detect a rate anomaly in signature rejections — carrying no attacker-controlled content, requiring no tenant resolution, and with retention independent of container-log rotation.**
+
+Evaluated clause by clause **at the worker**, against the shipped code:
+
+| Clause | Verdict | Measured on |
+|---|---|---|
+| **bounded** | ✓ MET | Key space is the fixed 10-code `AuthError` enum authored in-file. No attacker-controlled key. Backend's gloss ("the KEY SPACE is bounded, not that counts are capped") is precise and is the right reading — D4's *bounded* is about the writer being attacker-reachable, which is a key-space property. |
+| **retained** | ✗ PARTIAL | Counter resets on process restart; the log line lives until rotation. |
+| **queryable** | ✓ MET | Structured JSON with a `reason` field — an aggregator queries without a parse step. This is a real improvement over the string-interpolated line at 3c449cc, and it is the half that makes clause 6 satisfiable **by configuration** (below). An unstructured line would not have been. |
+| **no attacker-controlled content** | ✓ MET | Payload is exactly `{event, reason, count_since_start, ts}`. Verified by reading the `JSON.stringify` literal: no header value, no IP, no nonce, no token or key material. `auth.test.js` has a leg asserting this. |
+| **no tenant resolution** | ✓ MET | `_rejected()` takes a reason and nothing else; `users_id` is never read on the rejection path. ⚠ This is the clause D6 explicitly warned about — *"on a rejected JWT that claim is unverified and must not be trusted as a tenant"* — and Backend avoided it. |
+| **retention independent of container-log rotation** | ✗ **NOT MET** | Stated plainly by Backend rather than papered over. |
+
+**Five of six met; the sixth is the one D4 itself calls out as *"the property actually being lost today."* So the gap is the load-bearing one, and it still does not block. Here is why, and the reasoning matters more than the verdict.**
+
+**⚠ First, a premise in ADR-050 Decision 6 has been falsified by R2 (C), and it is the premise that would otherwise decide this.** D6 argues row-per-event *"may be legitimately correct for F3"* because *"`/internal/pdf-render` is a **cross-container endpoint on the private Docker network**"*. D6 was written 2026-08-10, when the verifier was the **app's** inbound route — a surface with DB reach. **R2 (C), ruled 2026-09-04, retired that route and moved the verifier to the worker.** D6's *threat-model* half **survives** the flip intact (the worker's render endpoint is equally private-network-only and RT-27-fenced, so the unbounded-INSERT objection still does not transfer). D6's *feasibility* half **does not**: it presupposed a rejecting party that could write a row. At the worker, a row-per-event store is not merely undesirable, it is **structurally unavailable** — Lock 13 mod #2, D-1, no exception. **This should be recorded against ADR-050 D6, because the next reader will otherwise apply D6's conclusion to a surface it was not written about.**
+
+**Second, clause 6 is not a code obligation and never was.** It says *"retention independent of container-log rotation"* — not *"retention implemented in the rejecting process."* The two ways a zero-DB-reach container could satisfy it in code are (a) a DB write, which is vetoed, and (b) a file on the container filesystem, which is exactly as ephemeral as the log and buys a writable path for nothing. **The third way is the correct one and it is a configuration, not a code change: ship this container's stderr to a log sink with its own retention.** The structured-JSON form Backend chose is precisely what makes that sink able to serve D4 — `reason` becomes a queryable field rather than a substring to regex out of prose.
+
+**Therefore: `joint-review:sec`, owner DevOps, not Backend.** Book it as a tracked issue, not a PR-body follow-up line — a follow-up recorded only in a merged PR description has no watcher. Discharge criterion: worker stderr reaches a sink whose retention outlives container restarts and rotation, and a query over `event = "pdf_render_auth_rejected"` grouped by `reason` returns a rate over a window longer than one rotation period.
+
+**⚠ Two binding constraints on that follow-up, because both are shapes someone would reach for and both would reverse a shipped control:**
+
+1. **The retention surface must NOT be built by having the worker echo its reason code back in the response.** `server.js` deliberately returns a bare 401 — *"never the reason, which would help an attacker iterate toward a valid forgery."* Relaying the reason to the caller so the app can store it would trade an admission-control property for an observability one. If a future design proposes it, that is a Sec re-consult, not a detail.
+2. **An app-side rejection counter is NOT a substitute and must not be recorded as one.** It measures a different population: the app is the only *legitimate* caller, so an anomaly it observes means the app is malfunctioning. **An attacker on the private network who is not the app produces rejections the app never sees** — and those are the ones RT-21 (g) exists to detect. The worker-side signal is the only observer of that population, which is exactly why its retention gap is load-bearing rather than cosmetic.
+
+**Implementation quality — reviewed, and it is good.** Every throw site routes through `_rejected()`; `grep -n "throw new AuthError"` over `auth.js` returns **zero** hits, so the counter and the log line cannot drift from the reason set (the failure mode the helper exists to prevent, and the one that would have been introduced by a per-site `console.error`). Reason-code precedence is correct: `signing_key_not_configured` is evaluated before any attacker input is parsed, so a misconfigured worker reports misconfiguration rather than mislabelling it as malformed input. The 6 new tests each fail for their own reason, including the distinct-keys-never-collapsed leg and a leg asserting the log line carries no token or key material.
+
+**N-7 (note) — the counter has no reader other than the log line it is embedded in.** `_rejectionCounts` is exported only to tests; no endpoint surfaces it. So `count_since_start` adds a per-line running total (a single line reveals a rate without aggregation) and nothing more. That is a modest but real gain and I am not asking for an endpoint — an unauthenticated metrics endpoint on this container would be a new admission surface under RT-27, which is a worse trade.
+
+**N-8 (note) — log-volume amplification, accepted.** One stderr line per rejected request; an attacker already on the project network can drive unbounded log volume, and rotation is the only bound. This is the RT-05 unbounded-writer objection in log form — and per D6 it **does not transfer**, for D6's own stated reason: an adversary inside the private network has produced a far larger incident than a full log. Accepted. ⚠ Worth one sentence in the DevOps follow-up: whatever sink is chosen needs a volume cap, or the retention fix reintroduces the cost-DOS that D5 rejected shape (a) over.
+
+## ⚠ CORRECTION TO MY OWN F-12 REMEDIATION — the fix I proposed would have broken both golden fixtures
+
+In the main report I proposed that the lockfile-side fix assert `resolved` matches `^https://registry\.npmjs\.org/`. **Measured: both golden fixtures use `https://example-registry.invalid/...` — 2 non-matching entries in `manifest-direct/`, 3 in `lockfile-transitive/`, 5 of 5 total.** My narrowing constraint would have red-lit every fixture that seeds the barred value, and the tempting repair for that red is to rewrite the fixtures to use the real registry host — which would make them look like real manifests, exactly what a `DO NOT install or use as a template` fixture must not become.
+
+**Corrected predicate, verified empirically rather than reasoned:** for every `lock.packages` entry carrying a `resolved` field, assert (i) `nameFromResolved(resolved)` is non-null **and equals** `entry.name || <key's last node_modules segment>`, and (ii) `integrity` is present.
+
+| Target | Violations under the corrected predicate |
+|---|---|
+| real `workers/pdf-render/package-lock.json` | **0** |
+| golden `manifest-direct/` | **0** |
+| golden `lockfile-transitive/` | **0** |
+| e9 (allowlisted name, `resolved: https://evil.example.com/pwned.tgz`) | **1** — resolved-name-mismatch |
+| e10 (`node_modules/harmless` ← `git+ssh://…/pg.git`) | **2** — resolved-name-mismatch + no-integrity |
+
+Host-agnostic, so it survives a proxy/mirror registry and both fixtures; catches both evasions; lands green on the tree. **This supersedes the F-12 remediation text in the main report — do not implement the registry-host form.**
+
+## Findings status at 6fbcec5
+
+- **F-11** (merge condition) — OPEN, unchanged, re-confirmed by re-running the e8 fixture (rc=0).
+- **D-1** (merge condition) — OPEN, unchanged. Fold N-6's one-line comment fix into the same commit.
+- **F-12** — OPEN, **remediation corrected above.**
+- **F-13** — PARTIALLY IMPROVED. `test/auth.test.js` now watches the auth surface with 6 legs. Still no watcher for `_childEnvWithoutSecrets()`, `/healthz`, or a `docker build` smoke, and the PR body still names all three. **The PR body must be corrected before F/CTO ratify.**
+- **F-14** — OPEN, and now **cheaper to close than I first scoped it.** `test/auth.test.js` needs **no Chromium** — verified by running it with no `PUPPETEER_EXECUTABLE_PATH`. So a CI job can watch the entire auth half today with a bare `actions/setup-node` + `npm ci` + `node --test test/auth.test.js`, no browser install step, before anyone solves the Chromium-in-CI question for `render.test.js`. That materially shrinks the interim gap and I'd take it even if the render half waits for P10. ⚠ The `render.test.js:25` pass-on-skip hazard is unchanged: if the render half is wired later, unset `PUPPETEER_EXECUTABLE_PATH` must **fail**, not skip.
+- **F-15 / F-16 / F-17 / F-18, N-1 … N-4** — all unchanged; none of the touched files bears on them.
+- **N-5 / N-6 / N-7 / N-8** — new, all non-blocking, all recorded above.
+
+## Second error of my own, named here
+While re-running the three fences at `6fbcec5` I wrote a `for f in "<script> <arg>"` loop and invoked `bash $f`. The Bash tool runs **zsh**, which does not word-split unquoted parameters, so all three invocations became a single bogus path and returned `rc=127`. I caught it because 127 is not a code any of these fences emits, and re-ran them individually — the rc=0/0/0 above are from the corrected invocations. Recording it because a 127 misread as a failure would have produced three false findings, and because it is a hazard already in my own memory that I walked into anyway.
