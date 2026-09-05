@@ -153,6 +153,123 @@ jobs:
 
           echo "OK: RT-22-manifest fence caught manifest-direct/ via manifest:dependencies:pg (exit $rc_manifest) and lockfile-transitive/ via lockfile:pg with no manifest: token (exit $rc_lockfile) — both routes proven independently."
 
+  fence-set-config:
+    name: C3 — set_config() non-literal GUC-name watcher (054/107/111)
+    runs-on: ubuntu-latest
+    # New Sec dispatch (2026-09-05): 054 (pfin.nav_daily) and 107
+    # (pfin.nav_component_daily) derive trust-critical trigger behavior from
+    # the transaction-local GUC app.nav_computed_for; 111's forward-looking
+    # audit helper will derive trigger_source from app.report_generation_source.
+    # All three assume no PostgREST-reachable function can set either GUC
+    # under CALLER control — measured today only 058 calls set_config, both
+    # sites with a literal GUC name. This job is the watcher for that
+    # assumption. See scripts/ci/fence-set-config-non-literal.sh's header for
+    # the full catch criterion, the three covered surfaces, and what this
+    # fence explicitly cannot see (dynamic-SQL obfuscation; and — the point
+    # of the fence — that it DOES catch the SETTER, not any reader of a GUC
+    # some other function sets).
+    #
+    # Catalog-driven, so it needs a real, fully-migrated Postgres — spun up
+    # via the same `supabase start` (db-only) stack as db-tests.yml, then
+    # snapshotted into the DevOps scratch-DB template
+    # (scripts/db-template-build.sh) and cloned per-mode
+    # (scripts/db-template-clone.sh), mirroring this dispatch's specified
+    # mechanism. Dual-mode (production + inversion), golden fixture applied
+    # AND its catch asserted BY THIS WORKFLOW — not by hand (E21 lesson: a
+    # fixture's own trip must be verified in-band, never eyeballed once and
+    # trusted forever).
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Supabase CLI (pinned, shared source of truth)
+        uses: ./.github/actions/supabase-cli-setup
+
+      - name: Start local stack (db-only; -x drops non-db services incl gotrue/auth)
+        # `supabase start` applies supabase/migrations/** on bring-up. Mirrors
+        # db-tests.yml's db-only bring-up exactly (same -x exclusion list).
+        run: |
+          supabase start -x gotrue,realtime,storage-api,imgproxy,studio,edge-runtime,logflare,vector,supavisor,postgres-meta,mailpit
+
+      - name: Build the DevOps scratch-DB template from the running stack
+        # scripts/db-template-build.sh discovers the running supabase_db_*
+        # container itself (via supabase/config.toml project_id), re-applies
+        # supabase/migrations/*.sql sequentially into a fresh candidate DB,
+        # and swaps it in as pfin_tmpl — the same recipe used for local
+        # verification of this fence, now run in CI so the template can
+        # never silently be stale here (there is no local pfin_tmpl to be
+        # stale relative to; this job builds its own every run).
+        run: bash scripts/db-template-build.sh
+
+      - name: Production-mode — clone + scan the real tree (expects clean, exit 0)
+        run: |
+          bash scripts/db-template-clone.sh c3_prod
+          PGPASSWORD=postgres bash scripts/ci/fence-set-config-non-literal.sh -h 127.0.0.1 -p 54322 -U postgres -d c3_prod
+
+      - name: Inversion — apply golden violation fixture, scan, assert the catch (expects exit 1)
+        # The fixture (tests/fixtures/ci/c3-set-config-violation.sql) is a
+        # function of exactly the shape 054/107/111's trust model depends on
+        # never existing: authenticated-EXECUTE, in the pfin (Data-API-exposed)
+        # schema, calling set_config() with a NON-LITERAL first argument (a
+        # caller-supplied parameter). Applying it here and asserting the catch
+        # IN THIS WORKFLOW — rather than trusting a one-time manual run — is
+        # the E21 lesson: an inversion's own trip must be a verified, standing
+        # CI leg, not a claim taken on faith after the fact.
+        #
+        # Asserts exit 1 EXACTLY (not merely non-zero — mirrors the RT-26
+        # inversion's own lesson: a bare "non-zero" would also accept exit 2,
+        # i.e. the fence aborting before it ever scanned anything) AND that
+        # the fixture's OWN function name appears in the output — mirroring
+        # the RT-22-manifest F-2 lesson: a non-zero exit alone does not prove
+        # THIS violation was caught rather than an unrelated catalog/connection
+        # failure landing on the same fail-closed exit code.
+        run: |
+          bash scripts/db-template-clone.sh c3_fixture
+          PGPASSWORD=postgres psql -X -h 127.0.0.1 -p 54322 -U postgres -d c3_fixture -v ON_ERROR_STOP=1 -f tests/fixtures/ci/c3-set-config-violation.sql
+
+          set +e
+          OUT="$(PGPASSWORD=postgres bash scripts/ci/fence-set-config-non-literal.sh -h 127.0.0.1 -p 54322 -U postgres -d c3_fixture 2>&1)"
+          rc=$?
+          set -e
+          echo "$OUT"
+
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: fence-set-config-non-literal expected exit 1 (violation caught) against the golden fixture but got $rc."
+            case "$rc" in
+              0) echo "       0 = fence reported the violation fixture CLEAN. The fence is broken." ;;
+              2) echo "       2 = fence aborted on an argument/config/psql error and never scanned the catalog." ;;
+              *) echo "       Unexpected exit code — the fence did something unmodelled." ;;
+            esac
+            echo "       Failing closed."
+            exit 1
+          fi
+          # Two separate, non-overlapping assertions — NOT one grep for a shared
+          # prefix. `__c3_fixture_guc_spoof` is a PREFIX of
+          # `__c3_fixture_guc_spoof_sqlbody`, so a single substring check would
+          # report "caught" even if only the plpgsql fixture tripped and the
+          # PG14+ SQL-standard-body case (Sec FLAG, 2026-09-06 — the shape whose
+          # prosrc is empty/NULL rather than holding the body) silently did not.
+          # Each fixture function gets its own token so a regression on either
+          # one is visible on its own, not laundered through the other's catch.
+          if ! echo "$OUT" | grep -q '__c3_fixture_guc_spoof(text,text)'; then
+            echo "FATAL: fence exited 1 but its output does not name the plpgsql fixture function __c3_fixture_guc_spoof."
+            echo "       A non-zero exit alone does not prove THIS violation was caught — it could be an"
+            echo "       unrelated catalog error landing on the same fail-closed exit code. Failing closed."
+            exit 1
+          fi
+          if ! echo "$OUT" | grep -q '__c3_fixture_guc_spoof_sqlbody'; then
+            echo "FATAL: fence exited 1 but its output does not name the SQL-standard-body fixture function"
+            echo "       __c3_fixture_guc_spoof_sqlbody. This is the Sec FLAG regression check specifically:"
+            echo "       a fence that catches only the plpgsql fixture while missing this one has regressed"
+            echo "       to exactly the silent pass the FLAG fix (coalesce(nullif(prosrc,''), pg_get_functiondef))"
+            echo "       exists to close. Failing closed."
+            exit 1
+          fi
+          echo "OK: fence-set-config-non-literal caught BOTH golden fixtures (exit 1, __c3_fixture_guc_spoof(text,text) and __c3_fixture_guc_spoof_sqlbody named in output)."
+
+      - name: Stop local stack
+        if: always()
+        run: supabase stop --no-backup || true
+
   fence-rt26:
     name: RT-26 — SUPABASE_SERVICE_ROLE_KEY allowlist
     runs-on: ubuntu-latest
