@@ -10,6 +10,7 @@ import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/svelte';
 import TaxesDecompositionPage from './+page.svelte';
 import type { TaxCharacterCatalog } from '$lib/tax-decomposition';
+import { EMPTY_STALENESS } from '$lib/staleness/stale-constituent';
 
 // Root +layout.server.ts's own fields (SELF-285/200/207) — this page's props type is the FULL
 // merged PageData, so every fixture spreads these the same way cash-flow-page.dom.test.ts's own
@@ -76,7 +77,8 @@ describe('taxes/decomposition/+page.svelte — §2.5.3 cross-link', () => {
 					...LAYOUT_DEFAULTS,
 					liability: LIABILITY,
 					taxCharacters: CATALOG,
-					inventorySeedDeltaMigration: '100_tax_value_inventory_seed_delta.sql'
+					inventorySeedDeltaMigration: '100_tax_value_inventory_seed_delta.sql',
+					staleness: EMPTY_STALENESS
 				}
 			}
 		});
