@@ -19,6 +19,12 @@
 	nav hunk) so it stays highlighted once SELF-264's /taxes/decomposition lands alongside it. This
 	is now the ONE nav edit for both §2.5 surfaces — frontend-264 reverted its own.
 
+	"Monthly Report" added at SELF-354 (P2 AC1's own "sidebar entry owed" note) → /reports/monthly,
+	active-matched on the /reports/ subtree. P2 builds only the individual-month view
+	(/reports/monthly/[target_month]); the LISTING route this link targets is P5's own (not yet
+	built) — same "route now, build later" convention TaxQuarterlyTables' own decompositionHref /
+	CashflowRollupTable's editTargetsHref already use, expected to 404 until that branch lands.
+
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5). The count badge uses the
 	ACCENT ramp — NOT `--c-attn-*` (canary is reserved for staleness/re-auth; §5 fence).
 -->
@@ -46,6 +52,7 @@
 	const isAllocation = $derived(path === '/allocation');
 	const isCashFlow = $derived(path === '/cash-flow');
 	const isTaxes = $derived(path.startsWith('/taxes/'));
+	const isMonthlyReport = $derived(path.startsWith('/reports/'));
 
 	// SELF-207 P4 re-auth banner health summary — from +layout.server.ts (Backend-computed via the
 	// shared needsReauth/isInstitutionDown predicates, active-connections-only, fail-soft to {0,0}).
@@ -74,6 +81,13 @@
 				</a>
 				<a class="nav-link" href="/taxes/quarterly" aria-current={isTaxes ? 'page' : undefined}>
 					Taxes
+				</a>
+				<a
+					class="nav-link"
+					href="/reports/monthly"
+					aria-current={isMonthlyReport ? 'page' : undefined}
+				>
+					Monthly Report
 				</a>
 			</nav>
 		</div>
