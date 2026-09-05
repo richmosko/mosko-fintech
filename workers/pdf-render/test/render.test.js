@@ -8,8 +8,21 @@
 // Requires a Chromium/Chrome binary reachable via PUPPETEER_EXECUTABLE_PATH —
 // set by the Dockerfile in the container, and by the developer's environment
 // locally (see README note at the bottom of this file if PUPPETEER_EXECUTABLE_PATH
-// is unset). Skips cleanly, not a hard failure, when it isn't set, so this
-// suite doesn't red a checkout with no local Chromium.
+// is unset).
+//
+// LOCALLY (process.env.CI unset): skips cleanly with a loud console notice
+// when Chromium isn't available, so a developer's checkout with no local
+// Chromium doesn't red on this file alone.
+//
+// IN CI (process.env.CI set): an unset PUPPETEER_EXECUTABLE_PATH is a HARD
+// FAILURE, not a skip (Sec addendum to PR #634 — team-lead's follow-up
+// ruling). A CI job that silently "passes" a suite it never actually ran is
+// a worse failure mode than a red job: it reports coverage that doesn't
+// exist. DevOps is standing up a CI job for auth.test.js now (no Chromium
+// needed); this file's own CI job lands once Chromium-in-CI is solved — the
+// fail-not-skip here is what keeps THAT future job honest from day one,
+// rather than shipping a job that green-passes by skipping forever if the
+// Chromium setup step is ever accidentally broken or removed.
 
 "use strict";
 
@@ -23,6 +36,18 @@ const SIGNING_KEY = "test-signing-key-do-not-leak-12345";
 const OTHER_KEY = "a-different-key-not-the-real-one";
 
 if (!process.env.PUPPETEER_EXECUTABLE_PATH) {
+  if (process.env.CI) {
+    test("FAILED (CI) — PUPPETEER_EXECUTABLE_PATH is required in CI, not optional", () => {
+      assert.fail(
+        "PUPPETEER_EXECUTABLE_PATH is unset in a CI environment (process.env.CI is set). " +
+          "This suite must not silently skip in CI — that would report coverage that doesn't " +
+          "exist for the resource-loading fence and auth legs this file exists to prove. Set " +
+          "PUPPETEER_EXECUTABLE_PATH to a Chromium/Chrome binary in this CI job, or gate the job " +
+          "itself off (not this test) if Chromium-in-CI genuinely isn't wired up yet."
+      );
+    });
+    return;
+  }
   test("SKIPPED — PUPPETEER_EXECUTABLE_PATH not set locally", () => {
     console.log(
       "[render.test.js] PUPPETEER_EXECUTABLE_PATH is unset — skipping the render battery. " +
@@ -187,6 +212,51 @@ test("resource-loading fence (non-vacuous control): a LOCAL reachable http:// ta
     assert.equal(res.headers["x-pdf-render-aborted-count"], "1");
     const pdfText = res.body.toString("latin1");
     assert.ok(!pdfText.includes(sentinel), "a REACHABLE local server's content must still never appear — proves the fence, not just target-unreachability");
+  } finally {
+    await new Promise((resolve) => localServer.close(resolve));
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Sec F-18 (PR #634): JS stays ENABLED on this page (see render.js's own
+// header note on the decision + its reasoning — MonthlyReportView.svelte's
+// LayerCake chart needs client-side measurement to paint correctly). The
+// residual concern was a script exfiltrating bytes via a channel outside CDP
+// request interception (WebSocket/WebRTC) — but for the ordinary case, a
+// SCRIPT DOES run (proving JS truly is on, not accidentally disabled) and
+// its own `fetch()` call is caught by the SAME interception fence every
+// other resource load goes through, exactly like a <img>/<iframe> tag would
+// be. This does not close the WebSocket/WebRTC gap (nothing at this layer
+// can — see the header note), but it does prove the fence isn't bypassed
+// merely by initiating the request from script instead of markup.
+// ---------------------------------------------------------------------------
+test("Sec F-18: JS runs (proving it is not disabled), and a SCRIPT-INITIATED fetch is caught by the same interception fence as a markup-initiated one", async () => {
+  const sentinel = `SCRIPT-SENTINEL-${crypto.randomUUID()}`;
+  const localServer = http.createServer((req, res) => {
+    res.writeHead(200, { "content-type": "text/plain" });
+    res.end(sentinel);
+  });
+  await new Promise((resolve) => localServer.listen(0, "127.0.0.1", resolve));
+  const { port } = localServer.address();
+  try {
+    const html = `<html><body>
+      <div id="marker">not-yet-run</div>
+      <script>
+        document.getElementById('marker').textContent = 'script-ran';
+        fetch('http://127.0.0.1:${port}/leak').catch(() => {});
+      </script>
+    </body></html>`;
+    const res = await postRender(html);
+    assert.equal(res.status, 200);
+    // The script's OWN fetch is the abort this asserts on (>= 1, not exactly
+    // 1 — Chromium's own preflight/internal requests for a data:-only page
+    // are already accounted for by the other legs' exact-count assertions;
+    // this leg's job is proving the SCRIPT's fetch specifically was caught,
+    // not pinning an unrelated total).
+    const abortedCount = Number(res.headers["x-pdf-render-aborted-count"]);
+    assert.ok(abortedCount >= 1, "the script-initiated fetch must be aborted by the same fence");
+    const pdfText = res.body.toString("latin1");
+    assert.ok(!pdfText.includes(sentinel), "the script must never succeed in exfiltrating the local server's content into the PDF");
   } finally {
     await new Promise((resolve) => localServer.close(resolve));
   }

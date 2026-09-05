@@ -4,8 +4,12 @@
 #
 # Lock anchors:
 #   - ADR-011 Decision 17 / Lock 13 (hybrid 3-container topology — PDF worker is
-#     the third container; Puppeteer browser-context-per-render hitting V1 app
-#     /internal/pdf-render under short-lived signed JWT).
+#     the third container). DIRECTION under R2 (C) (docs/records/v15-preflight/
+#     sitting-log.md § R2 — supersedes ADR-011 D17's original app-pulls-from-
+#     worker shape): the V1 app composes+renders HTML and PUSHES the finished
+#     document to THIS worker's own /render endpoint under a short-lived
+#     signed JWT the app mints and this worker verifies (SD-20). There is no
+#     /internal/pdf-render app route under (C).
 #   - Lock 13 mod #2 — ZERO-DB-ISOLATION: NO SUPABASE_* env vars; NO Postgres
 #     client installed. The single permitted env var is PDF_WORKER_SIGNING_KEY
 #     per SD-20.
@@ -81,8 +85,21 @@ ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 # @supabase/postgrest-js / knex / sequelize) — none is a dependency of this
 # worker (see package.json: puppeteer-core + jsonwebtoken, nothing else).
 # `npm ci` (not `npm install`) — reproducible from the committed lockfile.
+# `--ignore-scripts` (Sec F-11, PR #634): `npm ci` otherwise runs the root
+# package's (and every dependency's) lifecycle scripts, including
+# `postinstall` — a manifest carrying
+# `"postinstall": "apt-get install -y postgresql-client && npm i pg"` would
+# pass the RT-22 + RT-22-manifest fences CLEAN (they audit declared
+# dependencies and Dockerfile RUN lines, not arbitrary script bodies) and
+# still install a Postgres client at build time. `puppeteer-core` and
+# `jsonwebtoken` (this worker's only two dependencies) ship NO install
+# scripts, so `--ignore-scripts` costs nothing today. LOSING SIDE, named per
+# convention: any future dependency that legitimately NEEDS an install
+# script will silently no-op it here — such a dependency must be added to
+# the fence allowlist AND have its script reviewed BEFORE `--ignore-scripts`
+# is loosened for it, never the reverse.
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+RUN npm ci --omit=dev --ignore-scripts
 
 COPY src/ ./src/
 
