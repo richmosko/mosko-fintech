@@ -1,0 +1,19 @@
+{
+  "name": "pdf-render-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SELF-348 (A4) — PDF worker: renders app-pushed finished HTML to PDF bytes via headless Chromium. NO database access, NO template, NO tenant or money knowledge (ADR-011 Decision 17 / Lock 13 mod #2). A PDF printer, nothing else.",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "jsonwebtoken": "9.0.2",
+    "puppeteer-core": "25.10.0"
+  }
+}
