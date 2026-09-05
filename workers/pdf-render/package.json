@@ -10,7 +10,7 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "test": "node --test test/"
+    "test": "node --test"
   },
   "dependencies": {
     "jsonwebtoken": "9.0.2",
