@@ -3,9 +3,12 @@
 // is loadTaxLiability's return VERBATIM (loadTaxLiability itself is mocked — its own contract is
 // taxLiability.test.ts's job, this file only proves the wiring); (c) pfin.tax_character rows pass
 // through ordered by display_order, with the AC 11 seed-delta migration name attached; (d) a
-// tax_character read failure throws rather than rendering an incomplete vocabulary.
+// tax_character read failure throws rather than rendering an incomplete vocabulary; (e) SELF-361 /
+// P9 — `staleness` is `loadStaleness()`'s return threaded straight through, fail-SOFT to
+// UNKNOWN_STALENESS on an unexpected throw (mirrors allocation/+page.server.ts's own leg shape),
+// unlike the fail-loud tax_character read in (d).
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 const loadTaxLiabilityMock = vi.fn();
@@ -15,7 +18,15 @@ vi.mock('$lib/server/queries/taxLiability', () => ({
 	INVENTORY_SEED_DELTA_MIGRATION
 }));
 
+const loadStalenessMock = vi.fn();
+vi.mock('$lib/server/queries/staleness', () => ({
+	loadStaleness: loadStalenessMock
+}));
+
+const { UNKNOWN_STALENESS } = await import('$lib/staleness/stale-constituent');
 const { load } = await import('./+page.server');
+
+const HAPPY_STALENESS = { is_stale: false, stale_items: [] };
 
 const SESSION_UID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
@@ -57,10 +68,18 @@ type LoadResult = {
 	liability: unknown;
 	taxCharacters: Array<{ code: string; label: string; display_order: number | null }>;
 	inventorySeedDeltaMigration: string;
+	staleness: { is_stale: boolean | null; stale_items: unknown[] };
 };
 async function loadData(event: Parameters<typeof load>[0]): Promise<LoadResult> {
 	return (await load(event)) as unknown as LoadResult;
 }
+
+// Default every test to a happy staleness read — only the dedicated SELF-361 legs below override
+// this, mirroring per-account-loader.server.test.ts's own `beforeEach` convention.
+beforeEach(() => {
+	loadStalenessMock.mockReset();
+	loadStalenessMock.mockResolvedValue(HAPPY_STALENESS);
+});
 
 describe('load() — SELF-264 auth', () => {
 	it('redirects unauthenticated callers to /login with redirectTo pointing back at this page', async () => {
@@ -119,6 +138,55 @@ describe('load() — SELF-264 payload passthrough', () => {
 describe('load() — SELF-264 fail-loud tax_character read', () => {
 	it('throws when pfin.tax_character read errors, rather than rendering an incomplete vocabulary', async () => {
 		loadTaxLiabilityMock.mockResolvedValueOnce(LIABILITY_STUB);
+		const { client } = makeSupabase({ taxCharacterError: { message: 'timeout' } });
+		await expect(load(makeEvent(client))).rejects.toThrow(/tax_character read failed/);
+	});
+});
+
+describe('load() — SELF-361 / P9 staleness wiring', () => {
+	it('calls loadStaleness EXACTLY ONCE and threads the result straight through to data.staleness, unmodified', async () => {
+		loadTaxLiabilityMock.mockResolvedValueOnce(LIABILITY_STUB);
+		const { client } = makeSupabase({ taxCharacters: TAX_CHARACTER_ROWS });
+		const result = await loadData(makeEvent(client));
+		expect(loadStalenessMock).toHaveBeenCalledTimes(1);
+		expect(result.staleness).toEqual(HAPPY_STALENESS);
+	});
+
+	it('a confirmed-stale result passes through verbatim', async () => {
+		loadTaxLiabilityMock.mockResolvedValueOnce(LIABILITY_STUB);
+		const staleResult = {
+			is_stale: true,
+			stale_items: [
+				{
+					linked_source_id: '42',
+					institution_name: 'Test Bank',
+					provider: 'plaid',
+					connection_status: 'login_required',
+					status_class: null
+				}
+			]
+		};
+		loadStalenessMock.mockReset();
+		loadStalenessMock.mockResolvedValueOnce(staleResult);
+		const { client } = makeSupabase({ taxCharacters: TAX_CHARACTER_ROWS });
+		const result = await loadData(makeEvent(client));
+		expect(result.staleness).toEqual(staleResult);
+	});
+
+	it('an unexpected throw from loadStaleness degrades data.staleness to UNKNOWN_STALENESS, WITHOUT touching data.taxCharacters', async () => {
+		loadTaxLiabilityMock.mockResolvedValueOnce(LIABILITY_STUB);
+		loadStalenessMock.mockReset();
+		loadStalenessMock.mockRejectedValueOnce(new Error('network blip'));
+		const { client } = makeSupabase({ taxCharacters: TAX_CHARACTER_ROWS });
+		const result = await loadData(makeEvent(client));
+		expect(result.staleness).toEqual(UNKNOWN_STALENESS);
+		expect(result.taxCharacters).toEqual(TAX_CHARACTER_ROWS);
+	});
+
+	it('a staleness throw does not prevent the fail-loud tax_character error from still throwing', async () => {
+		loadTaxLiabilityMock.mockResolvedValueOnce(LIABILITY_STUB);
+		loadStalenessMock.mockReset();
+		loadStalenessMock.mockRejectedValueOnce(new Error('network blip'));
 		const { client } = makeSupabase({ taxCharacterError: { message: 'timeout' } });
 		await expect(load(makeEvent(client))).rejects.toThrow(/tax_character read failed/);
 	});
