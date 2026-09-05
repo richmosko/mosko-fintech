@@ -78,8 +78,12 @@
 --   ⚠⚠ **WHAT IS AND IS NOT FORGEABLE AFTER C1 + C2 — stated as an inventory, because
 --   a single adjective is what got this wrong the first time.**
 --     · **`users_id` — NOT forgeable.** Stamped from `auth.uid()`; no parameter.
---     · **`trigger_source` — NOT forgeable through this function (C1).** It has no
---       parameter and is derived from a GUC no PostgREST-reachable surface writes.
+--     · **`trigger_source` — NOT forgeable through this function (C1), and its
+--       RESIDUAL IS BOUNDED BY C2.** It has no parameter and is derived from a GUC no
+--       PostgREST-reachable surface writes. ⚠ Should that unreachability ever fail,
+--       the reachable outcome is not a forged row but a **mislabelled one attached to
+--       a generation the forger actually performed**, capped per (user, month) by
+--       `108`'s one-live-draft index and attributable by the `auth.uid()` stamp.
 --       ⚠ **That last clause is a NEGATIVE-SPACE claim, not a fence**: it holds because
 --       no exposed function takes a GUC NAME from its caller, which is a property of
 --       the current tree rather than something this file enforces. **Sec's C3 CI half
@@ -346,7 +350,13 @@ comment on table pfin.audit_log is
   'by a CI fence, NOT enforced by this file); subject_table is fixed by literal for '
   'the generation surface and subject_id must name a row that is the caller''s own AND '
   'was written in the SAME transaction; surface_name is not inventable but is '
-  'selectable within a vocabulary that grows only by migration. ⚠ '
+  'selectable within a vocabulary that grows only by migration. ⚠⚠ THOSE TWO CONTROLS '
+  'ARE NOT PARALLEL: THE SUBJECT BINDING IS LOAD-BEARING AND THE DERIVED SOURCE IS '
+  'WHAT MAKES ITS RESIDUAL SMALL. If the GUC''s unreachability ever failed, the '
+  'reachable outcome is a MISLABELLED row attached to a generation the forger actually '
+  'performed — capped per user per month by the one-live-draft partial unique index '
+  'and attributable by the auth.uid() stamp — and NOT a row minted from nothing, which '
+  'is what was measured before the subject binding existed. ⚠ '
   'tenant_resolution_chain REMAINS CALLER-ASSERTED AND IS DELIBERATELY NOT '
   'CONSTRAINED: it annotates a write this function has INDEPENDENTLY CONFIRMED '
   'happened, by this tenant, in this transaction — a wrong chain misdescribes a real '
@@ -600,8 +610,17 @@ begin
   -- ==========================================================================
   -- C2 — THE ARGUMENTS ARE BOUND TO A REAL PRIVILEGED WRITE IN THIS TRANSACTION.
   -- Without this, a caller with EXECUTE could annotate a write that never happened,
-  -- or annotate somebody else's. C1 removes the forgeable PROVENANCE; C2 removes the
-  -- forgeable SUBJECT. Neither alone is sufficient.
+  -- or annotate somebody else's.
+  -- ⚠⚠ C1 AND C2 ARE NOT PARALLEL, AND THE ASYMMETRY IS THE WHOLE POSTURE (Sec's own
+  -- emphasis correction, E46 follow-up). **C2 IS THE LOAD-BEARING CONTROL; C1 IS WHAT
+  -- MAKES ITS RESIDUAL SMALL.** With C2 in place, the worst a GUC-forger can achieve
+  -- is MISLABELLING A GENERATION THEY ACTUALLY PERFORMED — bounded per (user, month)
+  -- by 108's one-live-draft partial unique index, and attributable to them by the
+  -- auth.uid() stamp. That is categorically different from the measured original
+  -- defect, where audit_id 1 was minted from NOTHING: no write, any tenant's subject
+  -- id, any provenance. **A future discussion about C1's carrier — GUC vs session_user
+  -- vs anything else — must not be allowed to erode C2**, because C1's residual is
+  -- acceptable only while C2 caps the blast radius.
   -- ==========================================================================
   if p_surface_name = 'monthly_report_generation' then
 
