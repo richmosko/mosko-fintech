@@ -318,14 +318,41 @@
 --        tenants — which is the exact failure the fence exists to prevent. The
 --        name is PINNED: `app.nav_computed_for`, exact.
 --
---   (W3) ORDER AND CONDITION. INSERT the scalar row into pfin.nav_daily FIRST,
---        with `returning nav_id`. Write the leaves ONLY IF that INSERT actually
---        returned a row. On a same-day re-run the scalar's `on conflict (users_id,
---        nav_date) do nothing` returns NOTHING, and the correct behaviour is to
---        write NO leaves — the day is already captured. This is what keeps
+--   (W3) ORDER AND CONDITION. INSERT the scalar row into pfin.nav_daily FIRST.
+--        **Write the leaves ONLY IF that INSERT actually inserted a row, and read
+--        that fact from the STATEMENT'S ROW COUNT — `cur.rowcount` in psycopg,
+--        `GET DIAGNOSTICS … = ROW_COUNT` in SQL. THERE IS NO `RETURNING` CLAUSE.**
+--        On a same-day re-run the scalar's `on conflict (users_id, nav_date) do
+--        nothing` inserts nothing, the row count is 0, and the correct behaviour is
+--        to write NO leaves — the day is already captured. This is what keeps
 --        Σ(leaves) = nav_value across re-runs when the account set has changed
---        between runs. (`nav_id` is used ONLY as the did-it-insert signal; it is
---        NOT stored here — there is no nav_id column and no FK, deliberately.)
+--        between runs.
+--
+--        ⚠ **CORRECTED IN PLACE 2026-09-05, BEFORE THIS MIGRATION EVER MERGED OR
+--        APPLIED. This block previously said `returning nav_id`, AND THAT FORM DOES
+--        NOT EXECUTE FOR THE WRITER.** `RETURNING` requires SELECT on the returned
+--        column, and `054` grants `service_role` only `select (users_id, nav_date)`
+--        — a COLUMN-level grant that deliberately excludes `nav_id` and `nav_value`.
+--        Measured on a clean `001`–`107` scratch apply under `set local role
+--        service_role`: the statement with `returning nav_id` fails **42501,
+--        permission denied for table nav_daily**, and the identical statement
+--        without it succeeds. **The header would have shipped an instruction that
+--        raises on the cron's very first run.**
+--        ⚠ **THE FIX IS THE SIGNAL, NOT THE GRANT (ruling E10).** Widening `054` to
+--        `select (nav_id)` is one line and would keep this paragraph as written —
+--        **and it is NOT taken.** That narrow column grant IS the fence `054` spends
+--        a page defending: it exists so `service_role` can read the two arbiter
+--        columns its targeted `ON CONFLICT` needs **and nothing else**, and `054`
+--        records that widening it is SEC-JOINT-REVIEW-MANDATORY. Spending that
+--        review to hand the writer a read it does not need, in order to avoid
+--        changing one line of worker code, inverts the trade. **Losing side,
+--        recorded: the grant route is simpler and leaves this header untouched.**
+--        Both row-count forms were measured to DISCRIMINATE correctly on the same
+--        scratch apply — 1 on a fresh day, 0 on a re-run — so the replacement signal
+--        is verified rather than assumed.
+--        (`nav_id` is used ONLY as the did-it-insert signal and is now not read at
+--        all; it is NOT stored here — there is no nav_id column and no FK,
+--        deliberately.)
 --
 --   (W4) STATEMENT. One multi-row INSERT, in the SAME transaction as the scalar,
 --        executing AS service_role:
