@@ -70,16 +70,25 @@ jobs:
           node-version: '20'
 
       - name: RT-22-manifest production-mode (PDF worker package.json + lockfile)
-        # Pass-if-absent (R6 rider 2), DISCOVERED rather than a hardcoded path
-        # (Sec F-1): A4 may land workers/pdf-render/package.json at a nested
-        # location (a workspace child, an app/ subfolder) rather than the
-        # top-level canonical path, and a hardcoded path would then report
-        # "absent — pass" forever with nothing watching — the same
-        # sequencing-convention-with-no-mechanism rot rider 2 already removed
-        # one level up. Every package.json under workers/pdf-render/ (excl.
-        # node_modules/) is audited; zero found still resolves to the
-        # canonical path so PASS-IF-ABSENT is preserved exactly for the
-        # current (pre-A4) state.
+        # DISCOVERED rather than a hardcoded path (Sec F-1): SELF-348 (A4)
+        # could in principle have landed workers/pdf-render/package.json at a
+        # nested location (a workspace child, an app/ subfolder) rather than
+        # the top-level canonical path, and a hardcoded path would then miss
+        # it silently. Every package.json under workers/pdf-render/ (excl.
+        # node_modules/) is audited.
+        #
+        # UNCONDITIONAL — PASS-IF-ABSENT RETIRED AT A4 (Sec F-6, redirected
+        # 2026-09-05): R6 rider 2's pass-if-absent fallback existed only for
+        # the pre-A4 window, when workers/pdf-render/package.json legitimately
+        # did not exist yet. SELF-348 (A4) has landed that file (Backend's
+        # dependency list — puppeteer-core + jsonwebtoken — is now baked into
+        # scripts/ci/fence-rt22-pdf-worker-manifest.sh's ALLOWLIST_JSON), so
+        # the manifest is REQUIRED from here on: zero manifests found under
+        # workers/pdf-render/ is now FATAL, with no fallback branch at all. An
+        # earlier revision tried to guess "has A4 landed?" from a Dockerfile
+        # apt-get line — a convention with no mechanism, since it fails
+        # silently in exactly the case the guess is wrong — and was removed
+        # rather than kept as a redundant residual.
         run: |
           found=0
           while IFS= read -r m; do
@@ -88,7 +97,8 @@ jobs:
             bash scripts/ci/fence-rt22-pdf-worker-manifest.sh "$m"
           done < <(find workers/pdf-render -name package.json -not -path '*/node_modules/*' 2>/dev/null | sort)
           if [ "$found" -eq 0 ]; then
-            bash scripts/ci/fence-rt22-pdf-worker-manifest.sh workers/pdf-render/package.json
+            echo "FATAL: no package.json found anywhere under workers/pdf-render/. SELF-348 (A4) requires one; pass-if-absent (R6 rider 2) was the pre-A4 shape and was retired once A4 landed workers/pdf-render/package.json. Failing closed."
+            exit 1
           fi
 
       - name: RT-22-manifest inversion-mode (golden fixtures; both routes must violate)
@@ -707,6 +717,38 @@ jobs:
             exit 1
           fi
           echo "OK: fence caught the host-network exposure vector (exit $rc)."
+
+      - name: Production-mode — pdf-render compose (SELF-348 A4 item 4c; expects internal-only, exit 0)
+        # Intra-instance coverage expansion of RT-27 on the CI-fenced side —
+        # a wiring change over the already-generic fence, not a new fence
+        # (Sec N-4). Ledger effect NONE: no new §10 instance, no ordinal, no
+        # count (see SECURITY §4.5's RT-30 entry, cited by pointer per the
+        # A4 ruling — never restate its quoted text here).
+        run: bash scripts/ci/fence-admission-private-bind.sh workers/pdf-render/docker-compose.yaml
+
+      - name: "Inversion — pdf-render golden: published ports (expects violation, exit 1, vector-1 token)"
+        # Sec F-2 lesson (SELF-350): asserting exit-code != 0 alone is not
+        # proof the right vector fired — a structural error (missing
+        # sentinel, non-compose file) also exits non-zero (2, here, but the
+        # discipline is the same: assert the SPECIFIC token, not just a
+        # non-zero code) and would print "OK: caught..." having proven
+        # nothing. Captured stdout+stderr is asserted for the vector-1 token
+        # the fence itself emits, via if/then/fi under set -e.
+        run: |
+          set +e
+          out="$(bash scripts/ci/fence-admission-private-bind.sh tests/fixtures/ci/admission-bind-pdf-render-public-ports.compose.yaml 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: admission-bind fence expected exit 1 on the pdf-render published-ports golden but got $rc — failing closed."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q 'vector 1: published host-port mapping'; then
+            echo "FATAL: pdf-render published-ports golden exited 1 but the expected vector-1 token is absent from fence output — the non-zero exit does not prove the published-ports vector fired; failing closed."
+            exit 1
+          fi
+          echo "OK: fence caught the pdf-render published-ports exposure vector via its vector-1 token (exit $rc)."
 
   dedup-hash-identical:
     name: dedup-hash — import_hash canonical↔copy drift fence

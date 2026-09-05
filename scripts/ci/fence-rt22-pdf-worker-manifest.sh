@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 #
-# RT-22 — PDF worker dependency-manifest audit (SELF-350 A6, re-scoped at R6)
+# RT-22-manifest — PDF worker dependency-manifest audit
+# (SELF-350 A6, re-scoped at R6; allowlist adopted at SELF-348 A4 per Sec F-4
+# Option B, finalized against Backend's shipped dependency list — verified at
+# origin/feature/self-348 @ d44d7d0)
 #
 # Lock anchors:
 #   - ADR-011 Decision 17 / Lock 13 mod #2 (zero-DB-isolation)
@@ -16,42 +19,55 @@
 # that gap by parsing the manifest and lockfile directly. The Dockerfile fence
 # is unmodified by this work.
 #
-# Catch criterion: workers/pdf-render/package.json `dependencies`,
-# `devDependencies`, `optionalDependencies` and `peerDependencies`, AND
-# package-lock.json's fully resolved dependency tree (direct + transitive),
-# must not name a Postgres-client or DB-driver-bundling ORM package: pg,
-# postgres, node-postgres, @supabase/supabase-js, @supabase/postgrest-js,
-# knex, sequelize. Fail-closed: exit 1 on any hit, in either the manifest or
-# the lockfile.
+# ENFORCEMENT MODEL (Sec F-4 Option B — "allowlist as the fence + denylist
+# kept as legibility"): on the MANIFEST side, the decision is "reject anything
+# not known-good," not "reject known-bad." Every direct dependency (across
+# `dependencies`, `devDependencies`, `optionalDependencies`, `peerDependencies`,
+# PLUS `overrides`/`resolutions` — Sec F-9) must (a) name an ALLOWLIST_JSON
+# entry, AND (b) pin it with a PLAIN REGISTRY SEMVER SPEC. ALLOWLIST_JSON is
+# exactly Backend's shipped `workers/pdf-render/package.json` dependency set —
+# `puppeteer-core` + `jsonwebtoken`, no devDependencies (verified at
+# origin/feature/self-348 @ d44d7d0). DENYLIST_JSON and its lockfile/alias
+# detection logic are UNCHANGED and still run — kept for human legibility (an
+# explicit "these are definitely forbidden" list next to the allowlist a
+# reviewer actually reads) and as defense-in-depth (a denylisted name that
+# somehow entered the allowlist by mistake still trips). The LOCKFILE side is
+# UNCHANGED (denylist + all three evasion signals, with the F-10 lastIndexOf
+# fix) — the resolved tree can run to dozens of transitive packages, and
+# allowlisting that whole set is not what Sec F-4 asked for.
 #
-# Evasion coverage (Sec F-3, joint-review 2026-09-05):
-#   (a) npm alias — a manifest entry like `"db": "npm:pg@^8"` installs `pg`
-#       under a non-denylisted key name. Manifest values are checked for the
-#       `npm:<name>@<spec>` alias form and the ALIASED name is what's tested
-#       against the denylist. Symmetrically, a lockfile `packages` entry is
-#       identified by up to three independent signals — its own key's last
-#       `node_modules/` path segment, its `name` field (npm writes this when
-#       the install-tree folder name and the real package name diverge, which
-#       is exactly what an alias produces), and the package name parsed from
-#       its `resolved` tarball URL (the path segment(s) immediately before
-#       `/-/`, which is scope-aware) — any one of the three matching the
-#       denylist is a violation.
-#   (b) optionalDependencies / peerDependencies — npm 7+ installs both, and
-#       the live gap is exactly the manifest-present/lockfile-absent window
-#       PASS-IF-ABSENT sanctions (rider 2): with no lockfile the manifest is
-#       the only signal, so it is scanned on all four dependency fields.
-#   (c) @supabase/postgrest-js — the PostgREST HTTP client @supabase/supabase-js
-#       wraps; usable directly with no `pg` anywhere in the tree.
+# ONE RULE, NOT FIVE PATCHES (team-lead direction, folding Sec F-7/F-8/F-9):
+# rather than separately patching for an npm-alias-via-tarball-URL manifest
+# value (F-7: `"db": "https://registry.npmjs.org/pg/-/pg-8.11.3.tgz"`), a
+# `github:`/`file:`/`git+ssh:`/`link:`/`workspace:` spec (F-8), or scanning
+# `overrides`/`resolutions` (F-9) with their own bespoke per-shape checks, the
+# manifest side enforces a SINGLE rule uniformly across all six sources (four
+# dependency fields + overrides + resolutions): the spec string for an
+# allowlisted name must be a PLAIN REGISTRY SEMVER — a character-allowlist
+# (`isPlainRegistrySpec()`), not a grammar trying to enumerate every escape.
+# Any spec containing `:` or `/` or `#` — which covers every alias/git/file/
+# tarball/workspace form Sec named, uniformly, because none of them can be
+# expressed without at least one of those three characters — is a violation
+# regardless of what name it resolves to. This is why `aliasTarget()` is not
+# consulted for the primary manifest-side decision (a non-registry spec is
+# caught before its target name would even matter); it is kept ONLY to label
+# a denylist-legibility hit more specifically when one fires.
 #
-# PASS-IF-ABSENT (R6 rider 2 — deliberately DIFFERS from the Dockerfile fence,
-# which exits 2 on a missing target): workers/pdf-render/package.json does not
-# exist yet at this sha — A4 has not landed it. Exiting non-zero here would red
-# CI from the day this fence merges, for a file with no sequencing guarantee
-# to exist yet. This fence exits 0 with a clear "target absent — pass" line and
-# no-ops until A4 creates the manifest, then bites on A4's first commit. A
-# present manifest with an absent lockfile is handled the SAME way (pass on
-# the lockfile half only) — a lockfile only exists once npm has run against a
-# real manifest, and its absence is not itself a violation.
+# TARGET MUST EXIST — PASS-IF-ABSENT RETIRED AT A4 (Sec F-6, redirected
+# 2026-09-05): R6 rider 2 shipped this fence PASS-IF-ABSENT, deliberately
+# UNLIKE the Dockerfile fence's exit-2-on-missing-target, because SELF-350 (A6)
+# landed before SELF-348 (A4) — `workers/pdf-render/package.json` legitimately
+# did not exist yet, and exiting non-zero for that would have red CI from day
+# one for a file with no sequencing guarantee. SELF-348 (A4) has now landed
+# that file (origin/feature/self-348 @ d44d7d0) — it is REQUIRED from here on,
+# so this fence's shape now matches the Dockerfile fence's own precedent
+# exactly, for the identical reason R6 rider 2 stated for that fence: "correct
+# because its target already exists." A missing target is now a structural
+# error (exit 2, fail-closed), not a legitimate pre-build state. An earlier
+# attempt to bridge the two states with a Dockerfile-apt-get-line readiness
+# guess (tried in a since-retracted revision of the CI job) was itself a
+# convention with no mechanism and was removed — the real fix is this: once
+# the manifest exists, its absence needs no guessing to be a violation.
 #
 # Fail-closed on the fence's OWN dependency: this fence parses JSON with
 # `node`. If `node` is not on PATH, or either JSON file fails to parse, the
@@ -72,11 +88,15 @@
 #   bash fence-rt22-pdf-worker-manifest.sh <path-to-package.json>
 #
 # Exit codes:
-#   0 — target absent (pass), or manifest + lockfile both clean.
-#   1 — denylisted package found (fail-closed), OR node is unavailable /
-#       either JSON file fails to parse (fail-closed on the fence's own
-#       dependency).
-#   2 — argument error (no target path given).
+#   0 — manifest + lockfile both clean (every dependency allowlisted with a
+#       plain registry spec; no denylist hit anywhere).
+#   1 — a manifest dependency is not allowlisted, or is allowlisted but pinned
+#       by a non-registry spec, or a denylisted package is found (manifest or
+#       lockfile) — fail-closed. OR node is unavailable / either JSON file
+#       fails to parse (fail-closed on the fence's own dependency).
+#   2 — argument error (no target path given), OR the target package.json
+#       does not exist (structural error post-A4 — see TARGET MUST EXIST
+#       above; matches the Dockerfile fence's own missing-target convention).
 
 set -euo pipefail
 
@@ -88,8 +108,11 @@ if [ -z "$TARGET" ]; then
 fi
 
 if [ ! -f "$TARGET" ]; then
-  echo "RT-22 manifest fence: target absent at $TARGET — pass (A4 has not landed the PDF worker package.json yet; R6 rider 2)."
-  exit 0
+  echo "FATAL: target package.json not found at: $TARGET" >&2
+  echo "PASS-IF-ABSENT (R6 rider 2) was the pre-A4 shape and was retired once" >&2
+  echo "SELF-348 (A4) landed workers/pdf-render/package.json. The manifest is" >&2
+  echo "now REQUIRED; a missing target is a structural error. Failing closed." >&2
+  exit 2
 fi
 
 if ! command -v node >/dev/null 2>&1; then
@@ -100,6 +123,11 @@ fi
 
 LOCKFILE="$(dirname "$TARGET")/package-lock.json"
 DENYLIST_JSON='["pg","postgres","node-postgres","@supabase/supabase-js","@supabase/postgrest-js","knex","sequelize"]'
+# Backend's shipped workers/pdf-render/package.json dependency set, verified
+# at origin/feature/self-348 @ d44d7d0: exactly puppeteer-core + jsonwebtoken,
+# no devDependencies. Adding a new dependency requires an entry here — that
+# review IS the control (Sec F-4 Option B).
+ALLOWLIST_JSON='["puppeteer-core","jsonwebtoken"]'
 
 set +e
 OUTPUT="$(node -e '
@@ -108,10 +136,24 @@ const fs = require("fs");
 const manifestPath = process.argv[1];
 const lockPath = process.argv[2];
 const denylist = new Set(JSON.parse(process.argv[3]));
+const allowlist = new Set(JSON.parse(process.argv[4]));
 
 function fail(msg) {
   console.log("PARSE_ERROR:" + msg);
   process.exit(1);
+}
+
+// Sec F-4 Option B "single rule" (folds F-7/F-8/F-9): a character-allowlist,
+// not an attempt to enumerate every escape grammar. A plain npm semver range
+// never needs ":" (rules out every "<scheme>:" form — npm alias "npm:",
+// "github:", "git:", "git+ssh:", "git+https:", "file:", "link:",
+// "workspace:", "catalog:", "http(s):"), "/" (rules out github "user/repo"
+// shorthand AND a bare tarball URL path), or "#" (rules out a git ref).
+// Anything outside [0-9A-Za-z.\-+^~*<>=| ] is rejected outright, regardless
+// of what package name it would otherwise resolve to.
+function isPlainRegistrySpec(spec) {
+  if (typeof spec !== "string" || spec.length === 0) return false;
+  return /^[0-9A-Za-z.\-+^~*<>=| ]+$/.test(spec);
 }
 
 // Resolve an npm alias spec ("npm:<name>@<version-range>") to the real
@@ -132,10 +174,17 @@ function aliasTarget(spec) {
 // -> "@supabase/supabase-js", or ".../pg/-/pg-8.11.3.tgz" -> "pg". The path
 // segment(s) immediately before the literal "/-/" separator are the name;
 // returns null if the URL does not follow this convention (git/file/etc).
+//
+// Sec F-10 (joint-review 2026-09-05): split on the LAST "/-/", not the
+// first. A proxy/mirror registry URL can legitimately contain "/-/" earlier
+// in its path (e.g. a proxy route segment before the real registry path is
+// appended) — indexOf() would split at that spurious earlier occurrence and
+// misparse the host or a proxy path segment as the package name instead of
+// the real one immediately before the tarball filename.
 function nameFromResolved(url) {
   if (typeof url !== "string") return null;
   const marker = "/-/";
-  const idx = url.indexOf(marker);
+  const idx = url.lastIndexOf(marker);
   if (idx === -1) return null;
   const withoutMarker = url.slice(0, idx);
   const lastSlash = withoutMarker.lastIndexOf("/");
@@ -161,6 +210,22 @@ const MANIFEST_FIELDS = ["dependencies", "devDependencies", "optionalDependencie
 for (const field of MANIFEST_FIELDS) {
   const deps = manifest[field] || {};
   for (const [name, spec] of Object.entries(deps)) {
+    // Sec F-4 Option B: allowlist membership and spec shape are INDEPENDENT
+    // checks, not gated behind each other — an unallowlisted name with a
+    // non-registry spec must report BOTH, not whichever is checked first.
+    if (!allowlist.has(name)) {
+      violations.push(`manifest:${field}:${name}(not-allowlisted)`);
+    }
+    if (!isPlainRegistrySpec(spec)) {
+      // Non-registry spec — the single rule folding F-7/F-8/F-9 — reported
+      // regardless of whether the name is also allowlisted.
+      violations.push(`manifest:${field}:${name}(non-registry-spec:${JSON.stringify(spec)})`);
+    }
+    // Denylist kept for legibility + defense-in-depth (Option B): still
+    // checked and still reported, even for a name that is (incorrectly)
+    // allowlisted. aliasTarget() is consulted here only to give a denylist
+    // hit a more specific label when the spec is an npm: alias — it no
+    // longer drives the primary manifest-side decision (see header).
     if (denylist.has(name)) {
       violations.push(`manifest:${field}:${name}`);
       continue;
@@ -168,6 +233,41 @@ for (const field of MANIFEST_FIELDS) {
     const aliased = aliasTarget(spec);
     if (aliased && denylist.has(aliased)) {
       violations.push(`manifest:${field}:${name}(npm-alias-for:${aliased})`);
+    }
+  }
+}
+
+// Sec F-9: npm `overrides` (nested-object shape; a "." key overrides the
+// parent key OWN version, any other key overrides a transitive dependency
+// reached through it) and Yarn `resolutions` (flat, glob-path-shaped keys,
+// e.g. "**/pg" or "foo/pg" — the real package name is the LAST path
+// segment). Every key encountered (excluding ".") is a package name checked
+// against the allowlist; every string value is a spec checked against the
+// single plain-registry-spec rule, at any nesting depth.
+function scanOverridesObject(obj, sourceLabel) {
+  if (!obj || typeof obj !== "object") return;
+  for (const [key, value] of Object.entries(obj)) {
+    const name = key === "." ? null : key;
+    if (name && !allowlist.has(name)) {
+      violations.push(`${sourceLabel}:${name}(not-allowlisted)`);
+    }
+    if (typeof value === "string") {
+      if (!isPlainRegistrySpec(value)) {
+        violations.push(`${sourceLabel}:${name || "(self)"}(non-registry-spec:${JSON.stringify(value)})`);
+      }
+    } else if (value && typeof value === "object") {
+      scanOverridesObject(value, sourceLabel);
+    }
+  }
+}
+if (manifest.overrides) scanOverridesObject(manifest.overrides, "manifest:overrides");
+if (manifest.resolutions && typeof manifest.resolutions === "object") {
+  for (const [key, value] of Object.entries(manifest.resolutions)) {
+    const segs = key.split("/").filter((s) => s && s !== "**");
+    const name = segs[segs.length - 1] || key;
+    if (!allowlist.has(name)) violations.push(`manifest:resolutions:${name}(not-allowlisted)`);
+    if (typeof value === "string" && !isPlainRegistrySpec(value)) {
+      violations.push(`manifest:resolutions:${name}(non-registry-spec:${JSON.stringify(value)})`);
     }
   }
 }
@@ -229,7 +329,7 @@ if (violations.length > 0) {
 }
 console.log("CLEAN");
 process.exit(0);
-' "$TARGET" "$LOCKFILE" "$DENYLIST_JSON")"
+' "$TARGET" "$LOCKFILE" "$DENYLIST_JSON" "$ALLOWLIST_JSON")"
 RC=$?
 set -e
 
@@ -244,12 +344,14 @@ if [ "$RC" -ne 0 ]; then
     DETAIL="$(echo "$OUTPUT" | grep -E '^VIOLATIONS:' | sed 's/^VIOLATIONS://')"
     echo "RT-22 manifest fence: $DETAIL in $TARGET / $LOCKFILE. Failing closed." >&2
   fi
-  echo "PDF worker manifest/lockfile must not resolve a Postgres client or" >&2
-  echo "DB-driver-bundling ORM package (pg, postgres, node-postgres," >&2
-  echo "@supabase/supabase-js, @supabase/postgrest-js, knex, sequelize) per" >&2
-  echo "Lock 13 mod #2 (zero-DB-isolation)." >&2
+  echo "PDF worker manifest/lockfile dependencies must each be an ALLOWLISTED" >&2
+  echo "package (puppeteer-core, jsonwebtoken) pinned by a plain registry" >&2
+  echo "semver spec, and must not resolve a Postgres client or DB-driver-" >&2
+  echo "bundling ORM package (pg, postgres, node-postgres, @supabase/supabase-js," >&2
+  echo "@supabase/postgrest-js, knex, sequelize) per Lock 13 mod #2" >&2
+  echo "(zero-DB-isolation)." >&2
   exit 1
 fi
 
-echo "RT-22 manifest fence: $TARGET clean (manifest + lockfile resolve no denylisted Postgres-client/ORM package)."
+echo "RT-22 manifest fence: $TARGET clean (every dependency allowlisted with a plain registry spec; no denylisted Postgres-client/ORM package anywhere)."
 exit 0
