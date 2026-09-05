@@ -37,12 +37,12 @@
 	clearly-named placeholder. P8 replaces these two constants with real live reads; nothing else
 	in this file should need to change when it does.
 
-	ENVELOPE RENDERING (AC5) is mandatory, never defensive: every `{status, ...}` object here is
-	either handled by a reused component that already enforces this (NavCompositionTable's
-	buildups; TaxDecompositionTable/TaxQuarterlyTables' jurisdiction envelopes) or, for
-	`delta_panel` / `reference_dates` (ALWAYS unavailable in V1 — see the header note on those
-	fields below), rendered via `unavailableEnvelopeCopy()` — never `?? 0`, never currency-
-	formatted, never silently dropped.
+	ENVELOPE RENDERING (AC5) is mandatory, never defensive: every remaining `{status, ...}` object
+	in this payload (NavCompositionTable's buildups; TaxDecompositionTable/TaxQuarterlyTables'
+	jurisdiction envelopes) is handled by the reused component that already enforces this — never
+	`?? 0`, never currency-formatted, never silently dropped. `delta_panel` / `reference_dates` are
+	NO LONGER envelopes (E16 closed 110 Finding 1 with real as-of-threaded arrays) — see
+	monthly-report.ts's header for the shape change and the direct-reuse this enabled.
 
 	NO INLINE EDIT (AC8, §2.6.2's V2+ ground, not ADR-013 P5): every commentary/owner-header value
 	renders as plain escaped text (Svelte's default `{...}` interpolation, INV-1) — no
@@ -55,6 +55,8 @@
 -->
 <script lang="ts">
 	import NavCompositionTable from './NavCompositionTable.svelte';
+	import NavDeltaPanel from './NavDeltaPanel.svelte';
+	import NavReferenceDatesPanel from './NavReferenceDatesPanel.svelte';
 	import TaxDecompositionTable from './TaxDecompositionTable.svelte';
 	import TaxQuarterlyTables from './TaxQuarterlyTables.svelte';
 	import CashflowRollupTable from './CashflowRollupTable.svelte';
@@ -62,7 +64,6 @@
 	import {
 		groupAllocationByCat,
 		rebalancingSubSections,
-		unavailableEnvelopeCopy,
 		monthYearStamp,
 		type MonthlyReportHeader,
 		type MonthlyReportPayload
@@ -157,10 +158,14 @@
 		<NavCompositionTable composition={payload.sections.account_holdings} staleness={UNKNOWN_STALENESS} />
 	</section>
 
-	<!-- (2) NAV Performance — see this component's own header + monthly-report.ts's header for why
-	     this is NOT NavHistoryChart/NavDeltaPanel/NavReferenceDatesPanel. -->
-	<section class="nav-performance" aria-labelledby="nav-performance-label">
-		<h2 id="nav-performance-label" class="section-label">NAV Performance</h2>
+	<!-- (2) NAV Performance — E16 (team-lead): delta_panel/reference_dates are now real, always-
+	     threadable arrays (110 Finding 1 closed via Part 1's as-of readers) and are reused DIRECTLY
+	     via NavDeltaPanel/NavReferenceDatesPanel below. NavDeltaPanel's OWN `<h2>NAV Performance</h2>`
+	     is THE section heading (AC1) — no second one rendered here. `series` /
+	     `series_inflation_adjusted` are still NOT NavHistoryChart (see monthly-report.ts's header). -->
+	<section class="nav-performance">
+		<NavDeltaPanel rows={payload.sections.nav_performance.delta_panel} staleness={UNKNOWN_STALENESS} />
+
 		<p class="basis-line">
 			This trend shows the checkpointed gross Net Worth — before the two tax lines and the
 			designated tax-authority ledgers; the Account Holdings foot is the tax-adjusted figure.
@@ -198,16 +203,10 @@
 			<p class="empty-note" role="status">No NAV checkpoint history available for this window.</p>
 		{/if}
 
-		<!-- delta_panel / reference_dates — ALWAYS the unavailable envelope in V1 (110 Finding 1).
-		     Mandatory envelope rendering (AC5): named reason, never silently dropped, never a
-		     fabricated number. See monthly-report.ts's `unavailableEnvelopeCopy` for why this copy
-		     is a generic honest fallback rather than shipped UX copy — flagged, not invented. -->
-		<p class="envelope-unavailable" role="status">
-			NAV deltas: {unavailableEnvelopeCopy(payload.sections.nav_performance.delta_panel)}
-		</p>
-		<p class="envelope-unavailable" role="status">
-			Reference dates: {unavailableEnvelopeCopy(payload.sections.nav_performance.reference_dates)}
-		</p>
+		<NavReferenceDatesPanel
+			rows={payload.sections.nav_performance.reference_dates}
+			staleness={UNKNOWN_STALENESS}
+		/>
 	</section>
 
 	<!-- (3) Asset Allocation — new minimal grouped table; see monthly-report.ts's header for why
@@ -410,8 +409,7 @@
 	.cell-unavailable {
 		color: var(--c-text-muted);
 	}
-	.empty-note,
-	.envelope-unavailable {
+	.empty-note {
 		margin: 0;
 		font: var(--weight-reg) var(--fs-small) / var(--lh-body) var(--font-ui);
 		color: var(--c-text-secondary);

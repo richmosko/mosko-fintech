@@ -93,12 +93,17 @@ describe('MonthlyReportView — NAV Performance (new minimal render)', () => {
 		expect(body).toContain('$340,000');
 	});
 
-	it('renders BOTH delta_panel and reference_dates as unavailable-with-reason (AC5, mandatory envelope rendering)', () => {
+	it('E16: delta_panel/reference_dates are real as-of-threaded arrays, rendered via DIRECT reuse of NavDeltaPanel / NavReferenceDatesPanel', () => {
 		const { body } = renderReport();
-		expect(body).toContain('NAV deltas: Unavailable (reader_not_as_of_threadable).');
-		expect(body).toContain('Reference dates: Unavailable (reader_not_as_of_threadable).');
-		// Never the wrong, transient-failure-shaped copy those live components would otherwise emit.
+		// NavDeltaPanel's own section heading is now THE "NAV Performance" heading (AC1) — no
+		// second one rendered by this component.
+		expect(body).toContain('NAV Performance');
+		expect(body).toContain('Reference NAV');
+		// Real computed figures reach the page — never the wrong, transient-failure-shaped copy
+		// those components would emit for a genuinely null `rows` (which this payload never is).
 		expect(body).not.toContain('temporarily unavailable');
+		expect(body).toContain('+$8,000');
+		expect(body).toContain('Insufficient history');
 	});
 });
 

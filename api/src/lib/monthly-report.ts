@@ -19,22 +19,26 @@
 // takes live-loader props, add a payload-fed entry point rather than forking it):
 //   account_holdings    -> NavCompositionTable.svelte, DIRECT reuse (payload shape IS `NavComposition`
 //                          verbatim per 110's own comment: "carried VERBATIM").
-//   nav_performance      -> NO direct reuse. `series` / `series_inflation_adjusted` are threadable
-//                          (110 Finding 1, option α) but their FIELD NAMES do not match
-//                          `NavSeriesPoint` (`nav_value` vs `nav_nominal`), and NavHistoryChart is
-//                          built for the LIVE page's own interactive granularity/date-range
-//                          controls (`params`, `paramsError`) — controls that make no sense on a
-//                          frozen, single-as-of report. `delta_panel` / `reference_dates` are
-//                          ALWAYS `{status:'unavailable', reason:'reader_not_as_of_threadable'}` in
-//                          V1 (110 Finding 1) — NavDeltaPanel / NavReferenceDatesPanel's own
-//                          built-in `readFailed` copy ("temporarily unavailable... try again
-//                          shortly") is FACTUALLY WRONG for this PERMANENT, structural state, so
-//                          reusing them via `rows: null` would render a false transient-failure
-//                          message for something that will never succeed on a historical month.
-//                          This file's own `MonthlyReportNavPerformance` type + the minimal static
-//                          table markup in MonthlyReportView.svelte render this section instead —
-//                          flagged at hand-off (see that component's own header) as a Visual-
-//                          Designer-worthy follow-up, not a silent gap.
+//   nav_performance      -> PARTIAL direct reuse, per E16 (team-lead, closing 110 Finding 1 with
+//                          Part 1's new as-of readers `fn_nav_delta_panel_as_of` /
+//                          `fn_nav_reference_dates_as_of`). `delta_panel` / `reference_dates` are
+//                          now ARRAYS whose field names match `NavDeltaPanelRow` /
+//                          `NavReferenceDateRow` EXACTLY (verified against 110's own CTEs, not
+//                          just its CONTRACT comment) — DIRECT reuse of NavDeltaPanel.svelte /
+//                          NavReferenceDatesPanel.svelte, each already correct for a `null`-vs-
+//                          real-array distinction and carrying no wrong "temporarily unavailable"
+//                          copy risk now that these are real, permanently-threadable readers, not
+//                          a structural gap. `series` / `series_inflation_adjusted` remain NOT
+//                          reused: their FIELD NAMES still do not match `NavSeriesPoint`
+//                          (`nav_value` vs `nav_nominal`), and NavHistoryChart is built for the
+//                          LIVE page's own interactive granularity/date-range controls (`params`,
+//                          `paramsError`) — controls that make no sense on a frozen, single-as-of
+//                          report. This file's own `MonthlyReportNavSeriesInflationPoint` type +
+//                          the minimal static table markup in MonthlyReportView.svelte render that
+//                          half instead — flagged at hand-off (see that component's own header) as
+//                          a Visual-Designer-worthy follow-up, not a silent gap. NavDeltaPanel's
+//                          own `<h2>NAV Performance</h2>` is now THE section heading (AC1) — this
+//                          file's template no longer renders a second one.
 //   asset_allocation     -> NO direct reuse. NonReAllocationTable.svelte expects
 //                          `{groups: [{cat, rows, dollar_alloc_subtotal, pct_alloc_subtotal}],
 //                          unsorted, total_non_re}` — SERVER-authoritative per-group subtotals this
@@ -96,6 +100,8 @@
 // named, flagged simplifications, not silent guesses.
 
 import type { NavComposition } from './nav-composition';
+import type { NavDeltaPanelRow } from './nav-delta-panel';
+import type { NavReferenceDateRow } from './nav-reference-dates';
 import type { CashflowCrossAccountRollup } from './cashflow-rollup';
 import type { HistoricalExpenditurePoint } from './historical-expenditures';
 import type { TaxDecomposition } from './tax-decomposition';
@@ -129,9 +135,9 @@ export interface MonthlyReportHeader {
 	commentary_disposition: CommentaryDisposition;
 }
 
-/** §2.6.1 (2) NAV Performance — see this file's own header for why this does NOT reuse
- *  NavHistoryChart / NavDeltaPanel / NavReferenceDatesPanel. Field names copied byte-for-byte from
- *  migration 110's `nav_series` / `nav_series_infl` CTEs. */
+/** §2.6.1 (2) NAV Performance — `series` / `series_inflation_adjusted` are NOT reused via
+ *  NavHistoryChart (see this file's own header). Field names copied byte-for-byte from migration
+ *  110's `nav_series` / `nav_series_infl` CTEs. */
 export interface MonthlyReportNavSeriesPoint {
 	point_date: string;
 	nav_value: number;
@@ -152,20 +158,16 @@ export interface MonthlyReportNavSeriesInflationPoint {
 	cpi_coverage_through: string | null;
 }
 
-/** `{status:'unavailable', reason}` — ALWAYS this shape in V1 for both `delta_panel` and
- *  `reference_dates` (110 Finding 1, option α). Typed as a literal-status envelope (not a bare
- *  string) so a future threadable reader (option γ) is a type change here too, not a silent
- *  reinterpretation. */
-export interface UnavailableEnvelope {
-	status: 'unavailable';
-	reason: string;
-}
-
+/** `delta_panel` / `reference_dates` — E16 (team-lead, closing 110 Finding 1): as of Part 1's new
+ *  as-of readers, these are REAL ARRAYS whose field names match `NavDeltaPanelRow` /
+ *  `NavReferenceDateRow` exactly (verified against 110's own `delta_panel` / `reference_dates`
+ *  CTEs) — no longer the `{status:'unavailable', reason}` envelope an earlier revision of this
+ *  file typed. DIRECT reuse of NavDeltaPanel.svelte / NavReferenceDatesPanel.svelte. */
 export interface MonthlyReportNavPerformance {
 	series: MonthlyReportNavSeriesPoint[];
 	series_inflation_adjusted: MonthlyReportNavSeriesInflationPoint[];
-	delta_panel: UnavailableEnvelope;
-	reference_dates: UnavailableEnvelope;
+	delta_panel: NavDeltaPanelRow[];
+	reference_dates: NavReferenceDateRow[];
 }
 
 /** §2.6.1 (3) Asset Allocation. `target_percent` NULL = no `planning_target` row (unset is
@@ -282,16 +284,6 @@ export interface MonthlyReportPayload {
 		cash_flow: MonthlyReportCashFlow;
 		estimated_taxes: MonthlyReportEstimatedTaxes;
 	};
-}
-
-/** A generic, HONEST fallback for an unrecognized/uncopied machine reason code — mirrors
- *  tax-quarterly.ts's own `reasonCopy()` fallback shape exactly (`Unavailable (${reason}).`).
- *  `reader_not_as_of_threadable` has NO shipped PM/UX copy anywhere in this wave's ACs (migration
- *  110's own "Finding 1" is an Architect-discovered gap the sitting's copy block never covered —
- *  verified: no AC or PM copy block names this reason) — flagged at hand-off as a real, unfilled
- *  copy gap, not invented here. */
-export function unavailableEnvelopeCopy(envelope: UnavailableEnvelope): string {
-	return `Unavailable (${envelope.reason}).`;
 }
 
 /** AC4's month/year stamp, folded verbatim: "{Month YYYY} · data as of {Mon D, YYYY} · generated

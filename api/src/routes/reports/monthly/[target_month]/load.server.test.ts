@@ -7,11 +7,15 @@
 // / ONE CALL, ONE CLOCK); (f) `final` wins over `draft` when both are (unexpectedly) resolved for
 // the same month; (g) `superseded` rows are excluded from the query entirely (R10 A-8 — never
 // rendered in V1); (h) the pfin.tax_character catalog read is fail-loud, mirroring
-// taxes/decomposition's own posture.
+// taxes/decomposition's own posture; (i) E16 (team-lead) — the final (frozen-payload) path and the
+// draft (live-composed) path yield the IDENTICAL payload SHAPE on the same fixture, proving the
+// template's own "one shape, two sources" contract rather than merely asserting each path in
+// isolation.
 
 import { describe, it, expect } from 'vitest';
 import { isHttpError, isRedirect } from '@sveltejs/kit';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { MONTHLY_REPORT_PAYLOAD } from '$lib/fixtures/monthly-report';
 
 const { load } = await import('./+page.server');
 
@@ -255,6 +259,42 @@ describe('load() — superseded rows never reach this route (R10 A-8)', () => {
 		}
 		expect(isHttpError(caught)).toBe(true);
 		expect((caught as { status: number }).status).toBe(404);
+	});
+});
+
+describe('load() — E16: final and draft paths yield the SAME payload shape on the same fixture', () => {
+	it('a final row (frozen rendered_payload) and a draft row (live fn_render_monthly_report) both return the SAME section keys', async () => {
+		const finalRow = { ...FINAL_ROW, rendered_payload: MONTHLY_REPORT_PAYLOAD };
+		const { client: finalClient } = makeSupabase({
+			reportRows: [finalRow],
+			taxCharacterRows: TAX_CHARACTER_ROWS
+		});
+		const finalResult = (await load(makeEvent('2026-08', { id: SESSION_UID }, finalClient))) as unknown as {
+			payload: { sections: Record<string, unknown> };
+		};
+
+		const { client: draftClient } = makeSupabase({
+			reportRows: [DRAFT_ROW],
+			rpcResult: { data: MONTHLY_REPORT_PAYLOAD, error: null },
+			taxCharacterRows: TAX_CHARACTER_ROWS
+		});
+		const draftResult = (await load(makeEvent('2026-08', { id: SESSION_UID }, draftClient))) as unknown as {
+			payload: { sections: Record<string, unknown> };
+		};
+
+		const expectedSectionKeys = [
+			'account_holdings',
+			'nav_performance',
+			'asset_allocation',
+			'rebalancing_targets',
+			'cash_flow',
+			'estimated_taxes'
+		].sort();
+		expect(Object.keys(finalResult.payload.sections).sort()).toEqual(expectedSectionKeys);
+		expect(Object.keys(draftResult.payload.sections).sort()).toEqual(expectedSectionKeys);
+		expect(Object.keys(draftResult.payload.sections).sort()).toEqual(
+			Object.keys(finalResult.payload.sections).sort()
+		);
 	});
 });
 

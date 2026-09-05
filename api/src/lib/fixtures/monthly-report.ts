@@ -176,8 +176,110 @@ export const MONTHLY_REPORT_PAYLOAD: MonthlyReportPayload = {
 					cpi_coverage_through: '2026-07'
 				}
 			],
-			delta_panel: { status: 'unavailable', reason: 'reader_not_as_of_threadable' },
-			reference_dates: { status: 'unavailable', reason: 'reader_not_as_of_threadable' }
+			// E16: real as-of-threaded arrays (110 Finding 1 closed) — field names match
+			// NavDeltaPanelRow / NavReferenceDateRow exactly.
+			delta_panel: [
+				{
+					horizon: 'month',
+					anchor_date: '2026-07-31',
+					anchor_checkpoint_date: '2026-07-31',
+					current_checkpoint_date: '2026-08-31',
+					delta_nominal: 8_000,
+					delta_percent: 0.023,
+					delta_inflation_adjusted: null,
+					delta_inflation_adjusted_percent: null,
+					cpi_basis_period: null,
+					cpi_any_carried: null,
+					cpi_unavailable: null
+				},
+				{
+					horizon: 'ytd',
+					anchor_date: '2025-12-31',
+					anchor_checkpoint_date: '2025-12-31',
+					current_checkpoint_date: '2026-08-31',
+					delta_nominal: 25_000,
+					delta_percent: 0.077,
+					delta_inflation_adjusted: null,
+					delta_inflation_adjusted_percent: null,
+					cpi_basis_period: null,
+					cpi_any_carried: null,
+					cpi_unavailable: null
+				},
+				{
+					horizon: '1y',
+					anchor_date: '2025-08-31',
+					anchor_checkpoint_date: '2025-08-31',
+					current_checkpoint_date: '2026-08-31',
+					delta_nominal: 40_000,
+					delta_percent: 0.128,
+					delta_inflation_adjusted: 35_000,
+					delta_inflation_adjusted_percent: 0.112,
+					cpi_basis_period: '2025-08',
+					cpi_any_carried: false,
+					cpi_unavailable: false
+				},
+				{
+					horizon: '3y',
+					anchor_date: '2023-08-31',
+					anchor_checkpoint_date: null,
+					current_checkpoint_date: '2026-08-31',
+					delta_nominal: null,
+					delta_percent: null,
+					delta_inflation_adjusted: null,
+					delta_inflation_adjusted_percent: null,
+					cpi_basis_period: null,
+					cpi_any_carried: false,
+					cpi_unavailable: false
+				},
+				{
+					horizon: '5y',
+					anchor_date: '2021-08-31',
+					anchor_checkpoint_date: null,
+					current_checkpoint_date: '2026-08-31',
+					delta_nominal: null,
+					delta_percent: null,
+					delta_inflation_adjusted: null,
+					delta_inflation_adjusted_percent: null,
+					cpi_basis_period: null,
+					cpi_any_carried: false,
+					cpi_unavailable: false
+				}
+			],
+			reference_dates: [
+				{
+					reference: 'this_month',
+					reference_date: '2026-08-31',
+					reference_checkpoint_date: '2026-08-31',
+					nav: 350_000,
+					nav_prior_yr_dollars: 340_000,
+					cpi_period: '2026-07',
+					cpi_basis_period: '2025-12',
+					cpi_any_carried: false,
+					cpi_unavailable: false
+				},
+				{
+					reference: 'prior_month',
+					reference_date: '2026-07-31',
+					reference_checkpoint_date: '2026-07-31',
+					nav: 342_000,
+					nav_prior_yr_dollars: 332_500,
+					cpi_period: '2026-06',
+					cpi_basis_period: '2025-12',
+					cpi_any_carried: false,
+					cpi_unavailable: false
+				},
+				{
+					reference: 'prior_year_end',
+					reference_date: '2025-12-31',
+					reference_checkpoint_date: '2025-12-31',
+					nav: 325_000,
+					nav_prior_yr_dollars: 325_000,
+					cpi_period: '2025-12',
+					cpi_basis_period: '2025-12',
+					cpi_any_carried: false,
+					cpi_unavailable: false
+				}
+			]
 		},
 		asset_allocation: {
 			rows: [
