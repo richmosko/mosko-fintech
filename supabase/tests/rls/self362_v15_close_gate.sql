@@ -257,6 +257,32 @@
 --          the close-gate verdict (item 14) does not silently pass without
 --          this leg ever having been reachable, and so P6's own PR is the
 --          one that owes it, per its own AC (P6 item 7).
+--   AC4  — TRI-AXIS IS CONDITIONAL (Sec M-3), quoted verbatim so a future
+--          reader cannot "fix" the asymmetry into uniformity: "tri-axis
+--          tenant x scope x tax_treatment where the underlying classes
+--          carry tax-treatment; for §2.6.1 surfaces with no tax-treatment
+--          dimension it collapses to tenant x scope." Of the six §2.6.1
+--          sections A3 composes, only Estimated Taxes (<- 104) keys on
+--          `tax_treatment` at all — Account Holdings (<- 105/
+--          fn_nav_composition) keys on `scope`+`cat`, never on
+--          `tax_treatment`, and the AC's own text says that surface
+--          therefore collapses to tenant x scope. Writing a tax_treatment
+--          axis over it would be a leg that CANNOT FAIL — "the tell" the
+--          AC names explicitly.
+--          NEW: BLOCK AC4 below — genuinely absent tree-wide (measured:
+--          no existing battery gives two tenants the IDENTICAL scope
+--          string AND the IDENTICAL tax_treatment string simultaneously;
+--          110's own LEG 1 proves isolation with tenant B's data merely
+--          PRESENT, not with both non-tenant axes COLLIDING, which is
+--          exactly the shape a leg that "cannot fail" would hide behind —
+--          isolation keyed on the wrong column can pass by accident when
+--          the axes happen to differ between tenants). One fixture, two
+--          tenants, IDENTICAL scope ('household') AND IDENTICAL
+--          tax_treatment ('tax_deferred') strings, different amounts:
+--          proves Account Holdings (tenant x scope) and Estimated Taxes
+--          (tenant x scope x tax_treatment, per the AC's own axis
+--          assignment) both isolate on TENANCY specifically, not by
+--          accident of the strings differing.
 -- =====================================================================
 -- QA-owned. Authors NO schema. Composes 106/108-115 + workers/etl's pytest.
 --
@@ -275,7 +301,7 @@ begin;
 
 \ir ../_fixtures/rls_verbs.psql
 
-select plan(3);
+select plan(6);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 \set td '00000000-0000-0000-0000-00000000000d'
@@ -346,6 +372,62 @@ select _rls.set_tenant(:'ta'::uuid);
 select ok(
   (select pfin.fn_render_monthly_report('2026-01-01', '2026-01-31')) is not null,
   '(AC7-control) NON-VACUOUS: with the EXECUTE grant restored (post-rollback), fn_render_monthly_report is callable again and composes a non-null payload for this tenant — the revoke above was a genuine disable, not an accident that happened to leave the leg trivially true'
+);
+select set_config('role', 'postgres', true);
+
+-- =====================================================================
+-- BLOCK AC4 — TRI-AXIS ORTHOGONALITY (Sec M-3, quoted in the header above).
+-- Account Holdings (<- 105/fn_nav_composition) keys on `scope`+`cat`, NEVER
+-- on `tax_treatment` — it is a §2.6.1 surface with no tax-treatment
+-- dimension, so per the AC's own text it collapses to tenant x scope. Both
+-- tenants below are given the IDENTICAL scope ('household') AND the
+-- IDENTICAL tax_treatment ('tax_deferred') string — a leg that isolated by
+-- accident of the non-tenant axes differing between tenants would be a leg
+-- that CANNOT FAIL, which is the exact tell the AC names.
+-- =====================================================================
+select _rls.set_tenant(:'ta'::uuid);
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
+  values (:'ta', 'AC4-ta-acct', 'depository', 'household', 'tax_deferred') returning account_id as ac4_ta_acct \gset
+select set_config('role', 'postgres', true);
+select _rls.set_tenant(:'tb'::uuid);
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
+  values (:'tb', 'AC4-tb-acct', 'depository', 'household', 'tax_deferred') returning account_id as ac4_tb_acct \gset
+select set_config('role', 'postgres', true);
+
+insert into pfin.account_trans (account_id, transaction_date, amount, vendor, description, transaction_type)
+  values (:ac4_ta_acct, '2026-03-01', 4000, 'setup', 'opening balance', 'acct_setup');
+insert into pfin.account_trans (account_id, transaction_date, amount, vendor, description, transaction_type)
+  values (:ac4_tb_acct, '2026-03-01', 9000, 'setup', 'opening balance', 'acct_setup');
+
+select _rls.set_tenant(:'ta'::uuid);
+select is(
+  (select (pfin.fn_render_monthly_report('2026-03-01', '2026-03-31')
+             -> 'sections' -> 'account_holdings' -> 'buildups' ->> 'gross_total')::numeric),
+  5000.00,
+  '(AC4-scope) QUOTING THE AC (Sec M-3): "tri-axis tenant x scope x tax_treatment where the underlying classes carry tax-treatment; for §2.6.1 surfaces with no tax-treatment dimension it collapses to tenant x scope." Account Holdings has NO tax_treatment dimension, so this collapses to tenant x scope — proven here with BOTH tenants holding the IDENTICAL scope (''household'') AND the IDENTICAL tax_treatment (''tax_deferred'') string on the account itself: composing for tenant A returns $5000 — tenant A''s OWN two accounts (BLOCK AC7''s $1000 baseline + this block''s $4000), NEVER tenant B''s $9000 on top — isolation is genuinely keyed on TENANCY, not on the non-tenant axes happening to differ between tenants'
+);
+select set_config('role', 'postgres', true);
+
+select _rls.set_tenant(:'tb'::uuid);
+select is(
+  (select (pfin.fn_render_monthly_report('2026-03-01', '2026-03-31')
+             -> 'sections' -> 'account_holdings' -> 'buildups' ->> 'gross_total')::numeric),
+  9000.00,
+  '(AC4-scope-b) THE REVERSE, NON-VACUOUS: composing for tenant B under the SAME colliding scope/tax_treatment strings returns tenant B''s own $9000 — not tenant A''s $5000 and not the combined $14000 — proving the isolation direction is not coincidental (e.g. always reading whichever account was inserted first)'
+);
+select set_config('role', 'postgres', true);
+
+-- (AC4-scope-control) CORRUPT-THE-CONTROL, mirroring 110 LEG 1's (1b): the
+-- SAME query, role assumption struck (called as postgres, RLS bypassed —
+-- no SET LOCAL ROLE authenticated). If (AC4-scope)'s isolation were
+-- vacuous — e.g. the fixture accidentally isolating on the account_id
+-- values rather than tenancy — this would read the SAME $5000 regardless.
+-- It does not: it picks up BOTH tenants' colliding-scope accounts.
+select isnt(
+  (select (pfin.fn_render_monthly_report('2026-03-01', '2026-03-31')
+             -> 'sections' -> 'account_holdings' -> 'buildups' ->> 'gross_total')::numeric),
+  5000.00,
+  '(AC4-scope-control) TEETH: with the role assumption struck (called as postgres, RLS bypassed), gross_total is NOT tenant A''s $5000 — it picks up BOTH tenants'' colliding-scope/tax_treatment accounts ($14000), proving (AC4-scope)''s isolation genuinely depends on RLS/tenancy and is not an artifact of the fixture'
 );
 select set_config('role', 'postgres', true);
 
