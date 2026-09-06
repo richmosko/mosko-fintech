@@ -125,9 +125,20 @@ def post_discord(webhook_url, payload):
             "(cron run result is unaffected)."
         )
         return False
-    except Exception:
-        logger.exception(
-            "notify_discord: POST to Discord webhook failed (cron run "
-            "result is unaffected)."
+    except Exception as exc:
+        # Sec finding (SELF-351 A7 review): the Discord webhook URL is the
+        # `production_only` credential, and `requests` embeds the request URL
+        # in its own connection/timeout exception text
+        # (`HTTPSConnectionPool(host='discord.com', ...): Max retries
+        # exceeded with url: /api/webhooks/<id>/<token>`) — `str(exc)`,
+        # `repr(exc)`, and `logger.exception` (which logs the traceback,
+        # itself carrying the exception's string form) ALL leak it. The
+        # sibling notifier this module mirrors, `workers/provider-sync/src/
+        # notify/discord.ts` L132-134, discards the raw error for exactly
+        # this reason — match that discipline: log only the exception TYPE,
+        # never its text or traceback.
+        logger.warning(
+            f"notify_discord: POST to Discord webhook failed "
+            f"({type(exc).__name__}) — cron run result is unaffected."
         )
         return False

@@ -303,7 +303,7 @@ class MonthlyReportCronWorker:
                 with tbc.impersonate(conn):
                     conn.execute(
                         sqla.text(
-                            f"select set_config('{_PROVENANCE_GUC}', 'cron', true)"
+                            "select set_config('app.report_generation_source', 'cron', true)"
                         )
                     )
                     report_id = conn.execute(
