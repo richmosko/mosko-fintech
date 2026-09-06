@@ -24,6 +24,9 @@
 		payload={data.payload}
 		taxCharacters={data.taxCharacters}
 		seedDeltaMigration={data.seedDeltaMigration}
+		staleness={data.staleness}
+		cashflowRowStaleness={data.cashflowRowStaleness}
+		staleAccountNames={data.staleAccountNames}
 	/>
 </main>
 

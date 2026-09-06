@@ -30,12 +30,17 @@
 	SIX SECTIONS, VERBATIM ORDER (AC1, §2.6 as amended at the R10 PR): Account Holdings, NAV
 	Performance, Asset Allocation, Rebalancing Targets, Cash Flow, Estimated Taxes.
 
-	P8 STALENESS SLOT (AC7 — staleness markers are read LIVE at every render, over the frozen
-	payload; P8 owns them): every reused component requiring `staleness` / `cashflowRowStaleness`
-	is fed `UNKNOWN_STALENESS` / `EMPTY_CASHFLOW_ROW_STALENESS_MAP` here, NEVER a live read — see
-	$lib/monthly-report.ts's own header for why partial wiring would be worse than an honest,
-	clearly-named placeholder. P8 replaces these two constants with real live reads; nothing else
-	in this file should need to change when it does.
+	P8 STALENESS (SELF-360, AC2/AC3/AC4/AC6/AC7): staleness is read LIVE by the caller at every
+	render/export, NEVER from the frozen payload — `staleness` / `cashflowRowStaleness` /
+	`staleAccountNames` are REQUIRED props (no default; a caller that forgets to thread real data
+	fails at TYPECHECK). `staleness` (whole-tenant) feeds every section-level
+	`<StaleConstituentBadge>` — Account Holdings, NAV Performance (x2), the NEW Asset Allocation
+	header badge, Cash Flow (x2), Estimated Taxes (x2). Account Holdings' own per-leaf `is_stale`
+	arrives ALREADY REFRESHED by the loader (never trust whatever the payload's own leaves carry).
+	`cashflowRowStaleness` feeds the Cash Flow per-row map (AC4's shipped V1.3 shape).
+	`staleAccountNames` feeds the report-level banner (AC3/AC7) at the top of this article.
+	EXCLUDED (AC6, not account-derived): Rebalancing Targets and the owner header carry no marker
+	anywhere in this file.
 
 	ENVELOPE RENDERING (AC5) is mandatory, never defensive: every remaining `{status, ...}` object
 	in this payload (NavCompositionTable's buildups; TaxDecompositionTable/TaxQuarterlyTables'
@@ -61,6 +66,8 @@
 	import TaxQuarterlyTables from './TaxQuarterlyTables.svelte';
 	import CashflowRollupTable from './CashflowRollupTable.svelte';
 	import HistoricalExpendituresChart from './HistoricalExpendituresChart.svelte';
+	import StaleConstituentBadge from './StaleConstituentBadge.svelte';
+	import MonthlyReportStaleBanner from './MonthlyReportStaleBanner.svelte';
 	import {
 		groupAllocationByCat,
 		rebalancingSubSections,
@@ -69,14 +76,17 @@
 		type MonthlyReportPayload
 	} from '$lib/monthly-report';
 	import type { TaxCharacterCatalog } from '$lib/tax-decomposition';
-	import { UNKNOWN_STALENESS } from '$lib/staleness/stale-constituent';
-	import { EMPTY_CASHFLOW_ROW_STALENESS_MAP } from '$lib/cashflow-row-staleness';
+	import type { StalenessData } from '$lib/staleness/stale-constituent';
+	import type { CashflowRowStalenessMap } from '$lib/cashflow-row-staleness';
 
 	let {
 		header,
 		payload,
 		taxCharacters,
 		seedDeltaMigration,
+		staleness,
+		cashflowRowStaleness,
+		staleAccountNames,
 		ownerHeaderHref = '/settings/owner-id',
 		commentaryHref = `/reports/monthly/${header.target_month.slice(0, 7)}/commentary`,
 		regenerateHref = '/reports/monthly',
@@ -86,6 +96,19 @@
 		payload: MonthlyReportPayload;
 		taxCharacters: TaxCharacterCatalog;
 		seedDeltaMigration: string;
+		/** P8 (SELF-360 AC2): the SAME whole-tenant, LIVE `loadStaleness()` read every other
+		 *  section-level badge on this tree already consumes — REQUIRED, no default (Sec F3(B)-
+		 *  style discipline: a caller that forgets to thread real data fails at TYPECHECK, never
+		 *  as a silent "confirmed healthy" `EMPTY_STALENESS` fallback). */
+		staleness: StalenessData;
+		/** P8 (SELF-360 AC4): the Cash Flow section's per-(cat, sub_cat) row map — the shipped
+		 *  V1.3 shape (`cashflowContributors.ts` / `cashflow-row-staleness.ts`), computed by the
+		 *  loader at THIS report's own `data_as_of`. */
+		cashflowRowStaleness: CashflowRowStalenessMap;
+		/** P8 (SELF-360 AC3/AC7): already-resolved, already-sorted LIVE account names for the
+		 *  report-level banner — see MonthlyReportStaleBanner.svelte's own header for why this
+		 *  component does no further lookup/filtering/sorting. */
+		staleAccountNames: string[];
 		ownerHeaderHref?: string;
 		commentaryHref?: string;
 		regenerateHref?: string;
@@ -94,6 +117,17 @@
 
 	const stamp = $derived(monthYearStamp(header));
 	const isPending = $derived(header.generation_status === 'draft');
+
+	// AC7's banner copy needs the BARE "{Month YYYY}" — `monthYearStamp()` above is the fuller
+	// "{Month YYYY} · data as of {date} · generated {date}" stamp rendered in the report head,
+	// not this shape. A small, separate derivation rather than parsing `stamp` back apart.
+	const bareMonthLabel = $derived(
+		new Date(`${header.target_month}T00:00:00Z`).toLocaleDateString('en-US', {
+			month: 'long',
+			year: 'numeric',
+			timeZone: 'UTC'
+		})
+	);
 
 	const allocationGroups = $derived(groupAllocationByCat(payload.sections.asset_allocation.rows));
 	const rebalancing = $derived(rebalancingSubSections(payload.sections.rebalancing_targets));
@@ -117,13 +151,19 @@
 </script>
 
 <article class="monthly-report">
+	<!-- P8 (SELF-360 AC3/AC7) — the report-level banner. Renders nothing when
+	     `staleAccountNames` is empty; see MonthlyReportStaleBanner.svelte's own header. -->
+	<MonthlyReportStaleBanner accountNames={staleAccountNames} monthLabel={bareMonthLabel} />
+
 	<header class="report-head">
 		<p class="report-stamp">{stamp}</p>
 
 		<!-- AC4 — the owner header line; unset -> the in-app prompt (PDF unset -> no header line at
 		     all, PM A-13 — that branch is A5/P6's rendering context, not this one's; this element
 		     always renders something FOR THE IN-APP VIEW, which always has a place to put a
-		     "Set it" prompt). -->
+		     "Set it" prompt). P8 (SELF-360 AC6): EXCLUDED from marking, deliberately — no
+		     `<StaleConstituentBadge>` anywhere near this element; the owner header is settings-
+		     store config, not account-derived. -->
 		{#if header.owner_header_at_generation}
 			<p class="owner-header">{header.owner_header_at_generation}</p>
 		{:else}
@@ -153,9 +193,11 @@
 		</div>
 	</header>
 
-	<!-- (1) Account Holdings — DIRECT reuse; payload IS a NavComposition verbatim. -->
+	<!-- (1) Account Holdings — DIRECT reuse; payload IS a NavComposition verbatim. Per-leaf
+	     `is_stale` arrives ALREADY REFRESHED by the loader (P8 AC2) — this component never sees
+	     whatever value the frozen payload's own leaves carried. -->
 	<section aria-label="Account Holdings">
-		<NavCompositionTable composition={payload.sections.account_holdings} staleness={UNKNOWN_STALENESS} />
+		<NavCompositionTable composition={payload.sections.account_holdings} {staleness} />
 	</section>
 
 	<!-- (2) NAV Performance — E16 (team-lead): delta_panel/reference_dates are now real, always-
@@ -164,7 +206,7 @@
 	     is THE section heading (AC1) — no second one rendered here. `series` /
 	     `series_inflation_adjusted` are still NOT NavHistoryChart (see monthly-report.ts's header). -->
 	<section class="nav-performance">
-		<NavDeltaPanel rows={payload.sections.nav_performance.delta_panel} staleness={UNKNOWN_STALENESS} />
+		<NavDeltaPanel rows={payload.sections.nav_performance.delta_panel} {staleness} />
 
 		<p class="basis-line">
 			This trend shows the checkpointed gross Net Worth — before the two tax lines and the
@@ -205,14 +247,22 @@
 
 		<NavReferenceDatesPanel
 			rows={payload.sections.nav_performance.reference_dates}
-			staleness={UNKNOWN_STALENESS}
+			{staleness}
 		/>
 	</section>
 
 	<!-- (3) Asset Allocation — new minimal grouped table; see monthly-report.ts's header for why
-	     NonReAllocationTable is not reused (shape mismatch: no total_non_re in this payload). -->
+	     NonReAllocationTable is not reused (shape mismatch: no total_non_re in this payload).
+	     P8 (SELF-360 AC4, pre-ruling (i)): a SECTION-HEADER badge only — `MonthlyReportAllocationRow`
+	     carries no `account_id`, so no per-row attribution is possible from this payload (unlike
+	     Account Holdings' own leaves). AC4 requires per-section marking, not per-row, so a
+	     header-level badge off the SAME whole-tenant `staleness` fully discharges this section's
+	     obligation without a payload change. -->
 	<section class="asset-allocation" aria-labelledby="asset-allocation-label">
-		<h2 id="asset-allocation-label" class="section-label">Asset Allocation</h2>
+		<header class="head">
+			<h2 id="asset-allocation-label" class="section-label">Asset Allocation</h2>
+			<StaleConstituentBadge isStale={staleness.is_stale} staleItems={staleness.stale_items} />
+		</header>
 		{#if allocationGroups.length === 0}
 			<p class="empty-note" role="status">No allocation data for this month.</p>
 		{:else}
@@ -256,7 +306,9 @@
 		{/if}
 	</section>
 
-	<!-- (4) Rebalancing Targets — new minimal read-only display; no editor exists yet (P3). -->
+	<!-- (4) Rebalancing Targets — new minimal read-only display; no editor exists yet (P3).
+	     P8 (SELF-360 AC6): EXCLUDED from marking — user-authored free-text commentary is not
+	     account-derived. No `<StaleConstituentBadge>` anywhere in this section, deliberately. -->
 	<section class="rebalancing-targets" aria-labelledby="rebalancing-targets-label">
 		<h2 id="rebalancing-targets-label" class="section-label">Rebalancing Targets</h2>
 		{#each rebalancing as sub (sub.heading)}
@@ -268,38 +320,39 @@
 		{/each}
 	</section>
 
-	<!-- (5) Cash Flow — DIRECT reuse; field names match verbatim. -->
+	<!-- (5) Cash Flow — DIRECT reuse; field names match verbatim. `cashflowRowStaleness` is P8's
+	     AC4 shipped-V1.3-shape per-row map, computed by the loader at this report's OWN
+	     `data_as_of`. -->
 	<section aria-label="Cash Flow">
 		<CashflowRollupTable
 			rollup={payload.sections.cash_flow.cross_account_rollup}
-			staleness={UNKNOWN_STALENESS}
-			cashflowRowStaleness={EMPTY_CASHFLOW_ROW_STALENESS_MAP}
+			{staleness}
+			{cashflowRowStaleness}
 		/>
 		<HistoricalExpendituresChart
 			points={payload.sections.cash_flow.historical_expenditures}
-			staleness={UNKNOWN_STALENESS}
+			{staleness}
 			unclassifiedCount={payload.sections.cash_flow.cross_account_rollup.unclassified.count_ytd}
 		/>
 	</section>
 
 	<!-- (6) Estimated Taxes — DIRECT reuse; `estimated_taxes` structurally satisfies both.
-	     `staleness` on both components below was added at the SELF-354→feature/self-345 rebase
-	     (2026-09-05): P9/SELF-361 landed a REQUIRED `staleness` prop on both components (the
-	     §2.5.x staleness ramp) after this file was first authored — P8 SLOT, same convention as
-	     every other reused component here (see the file header). -->
+	     `staleness` on both components below is P8's own live wiring (P9/SELF-361 landed the
+	     REQUIRED prop at the SELF-354→feature/self-345 rebase, 2026-09-05; this is the P8 slot
+	     that prop created, now filled with the real whole-tenant read). -->
 	<section aria-label="Estimated Taxes">
 		<TaxDecompositionTable
 			liability={payload.sections.estimated_taxes}
 			{taxCharacters}
 			{seedDeltaMigration}
-			staleness={UNKNOWN_STALENESS}
+			{staleness}
 			capitalGainsUnavailableCopy="Capital gains were unavailable when this report was generated — sale recording lands at a later V1.x."
 		/>
 		<TaxQuarterlyTables
 			liability={payload.sections.estimated_taxes}
 			noTaxAuthorityDesignated={false}
 			priorYearQ4={null}
-			staleness={UNKNOWN_STALENESS}
+			{staleness}
 		/>
 	</section>
 </article>
@@ -374,6 +427,18 @@
 		margin: 0 0 var(--space-3) 0;
 		font: var(--weight-semi) var(--fs-h2) / var(--lh-tight) var(--font-ui);
 		color: var(--c-text-primary);
+	}
+	/* Asset Allocation's own header row — the section-label heading plus its P8 stale badge,
+	   mirrors TaxDecompositionTable.svelte's own `.head` layout for the identical pairing. */
+	.asset-allocation .head {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: var(--space-3);
+		flex-wrap: wrap;
+	}
+	.asset-allocation .head .section-label {
+		margin: 0;
 	}
 	.basis-line {
 		margin: 0 0 var(--space-3) 0;
