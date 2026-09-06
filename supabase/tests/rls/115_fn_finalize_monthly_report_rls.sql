@@ -371,7 +371,7 @@ select ok(
 );
 
 -- =====================================================================
--- LEGS 14a-14h — THE LOCK 12 CHILDREN (pfin.monthly_report_account_snapshot),
+-- LEGS 14a-14i — THE LOCK 12 CHILDREN (pfin.monthly_report_account_snapshot),
 -- Sec's pairing list. `109` shipped this table with NO WRITER anywhere in the
 -- product until this migration; every one of these legs is genuinely new
 -- coverage, not a re-aim.
@@ -533,6 +533,16 @@ select is(
   0,
   '(14g) NON-VACUOUS: zero children were written, matching the zero-account payload'
 );
+
+-- --- ⚠ 14i — NOT A LEG, AND THIS LIST MUST NOT IMPLY OTHERWISE: the
+-- sibling-key shape is UNCOVERABLE here. If a `110` restructuring relocated
+-- accounts to a NEW sibling key while `sections.account_holdings.groups`
+-- stayed a legitimately empty `'[]'`, every guard in `115` passes — it is
+-- INDISTINGUISHABLE from 14g's own zero-account tenant, which is the exact
+-- shape this file must NOT false-RED on. A `payload_schema_version` pin
+-- would catch it and was deliberately NOT taken: a payload version bump is
+-- a Sec-review event, not something a DB self-check should gate on. No leg
+-- is written here that would appear to cover this residual gap.
 
 -- --- 14h — Sec FLAG-7: THE FOUR RESTRUCTURING SHAPES, each driven by
 -- REPLACING pfin.fn_render_monthly_report on THIS transaction (savepoint-
