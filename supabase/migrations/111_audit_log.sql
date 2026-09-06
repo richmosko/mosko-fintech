@@ -285,14 +285,19 @@
 --      `pfin.fn_emit_audit_log` exists in `pg_proc`** — the 6-argument signature does
 --      not survive as an overload (C1); (iii) it takes **no** `p_trigger_source`
 --      parameter.
---   7c. **THE UNKNOWN-SURFACE REFUSAL, and ⚠ IT CHANGES WHICH ERROR AN EXISTING LEG
---      SEES.** An invented `surface_name` now hits the C2 dispatch's `else` (P0001,
---      naming the missing binding) **before** reaching the table's
---      `audit_log_surface_name_vocab` CHECK, so a leg matching on that constraint name
---      goes red. Both still refuse; the enforcement point for what is STORABLE is
---      still the CHECK. Assert the P0001 message from the helper, and assert the CHECK
---      separately by a direct INSERT as the owner if the constraint itself needs a
---      watcher.
+--   7c. **THE UNKNOWN-SURFACE REFUSAL — TWO LEGS, BOTH REQUIRED, AND IT CHANGES WHICH
+--      ERROR AN EXISTING LEG SEES.** An invented `surface_name` now hits the C2
+--      dispatch's `else` (P0001, naming the missing binding) **before** reaching
+--      `audit_log_surface_name_vocab`, so a leg matching on that constraint name goes
+--      red and must be **re-aimed at the helper's P0001**.
+--      ⚠ **AND A SECOND LEG IS REQUIRED, NOT CONDITIONAL: assert the CHECK directly,
+--      by an OWNER-PATH INSERT.** The two are not interchangeable — the CHECK asks
+--      *is this name storable*, the `else` asks *is this name bound*, and the `else`
+--      additionally catches a vocabulary-valid-but-UNBOUND name, which the CHECK
+--      cannot see. Because the `else` now fires first, **the CHECK has no observer at
+--      all through the granted path**, and an unobservable constraint is precisely the
+--      one a later reader drops as dead code — which would remove the storability
+--      floor for the owner path. Two questions, two legs.
 --   7a. **C2 legs, and the two refusals must be asserted SEPARATELY (Sec):**
 --      an audit call naming a report **written in an earlier transaction** is refused
 --      with the earlier-transaction message; one naming **another tenant's** report is
@@ -725,6 +730,18 @@ begin
     -- emission for it until its binding is written here.
     -- It is C2's own lesson applied one level up: validating the SHAPE of a dispatch
     -- never establishes that a binding exists behind it.
+    -- ⚠⚠ THIS ELSE AND audit_log_surface_name_vocab ARE NOT INTERCHANGEABLE, AND BOTH
+    -- REMOVALS LOOK LIKE CLEANUP. The CHECK answers **is this name STORABLE**; this
+    -- else answers **is this name BOUND**. The else catches an invented name AND a
+    -- vocabulary-VALID-but-unbound one — and the second is the actual gap, which the
+    -- CHECK cannot see at all. Because this else now fires first, the CHECK is
+    -- unreachable through the only granted write path, so:
+    --   · a reader who drops the ELSE believing "the CHECK covers surface names"
+    --     REOPENS exactly the hole it closes, for every future vocabulary member;
+    --   · a reader who drops the CHECK believing "it is dead code" loses the
+    --     storability floor for the OWNER path, which does not come through here.
+    -- NEITHER SUBSUMES THE OTHER. The CHECK's own watcher is therefore a REQUIRED
+    -- battery leg, not an optional one — see the QA list.
     raise exception
       'pfin.fn_emit_audit_log refused: no C2 subject binding is defined for surface %. A surface added to pfin.audit_log''s vocabulary MUST add its binding in this function — the rule that arguments are bound to a real privileged write in the same transaction is per-surface, and an unbound surface would accept an audit row describing a write that never happened. This refusal is deliberate and is not a missing case.',
       p_surface_name;
