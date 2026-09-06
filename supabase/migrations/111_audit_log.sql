@@ -327,7 +327,19 @@
 --      correct expression from one that will fail in production under ordinary load.
 --   7e. **A RELEASED savepoint that WROTE the subject row still permits the emit** —
 --      the sub-committed-xid case, which is where a commit-status test would break if
---      it treated sub-commit as commit.
+--      it treated sub-commit as commit. ⚠ Also cover the **production shape**: a write
+--      inside an exception block that **exits NORMALLY** without firing, which
+--      sub-commits the same way and is what `fn_open_monthly_report_draft` actually
+--      does on its winning path.
+--   7f. **⚠ NOT A LEG, AND THE LIST MUST NOT IMPLY OTHERWISE: another session's
+--      UNCOMMITTED row is refused STRUCTURALLY BY MVCC, not by any assertion here.**
+--      `'in progress'` is returned for that row too; what excludes it is that this
+--      transaction's own read never resolves it. **The case is UNBUILDABLE in a
+--      single-connection pgTAP battery**, so no leg can cover it and none should be
+--      written to look as though it does. It is a **structural argument**, recorded
+--      here so a reader of this list does not infer coverage that cannot exist — and
+--      the thing that would falsify it is not a test but an edit: see the
+--      one-statement invariant in the body.
 --   8. Two callers, one shape — ⚠ AND THE CRON ROW MUST BE PRODUCED BY SETTING THE
 --      GUC, NOT BY PASSING A VALUE (C1 removed the parameter). Only then is this a
 --      genuine two-caller leg; passing `'cron'` from the battery's own session was one
@@ -740,19 +752,35 @@ begin
     -- subtransactions — including a subtransaction that was RELEASED rather than
     -- aborted, which is the case the commit-status family had to survive and does —
     -- and 'committed' for a row from an earlier transaction.
-    -- ⚠ A concurrent session's uncommitted row would also read 'in progress', and that
-    -- is unreachable rather than unhandled: under MVCC the SELECT below cannot see
-    -- such a row at all, so it fails at the not-yours branch before this value is used.
+    -- ⚠⚠ THE INVARIANT THAT MAKES THIS SOUND, AND IT IS A PROPERTY OF THE STATEMENT
+    -- BELOW RATHER THAN OF THE PREDICATE (Sec, confirming the expression).
+    -- `'in progress'` is returned for OUR transaction AND for ANY OTHER SESSION'S
+    -- in-progress transaction. **The predicate does not discriminate between them and
+    -- was never asked to.** What discriminates is that the row was resolved by THIS
+    -- TRANSACTION'S OWN MVCC READ, IN THE SAME STATEMENT — another session's
+    -- uncommitted row is invisible to that read, so it never reaches the test at all.
+    -- **THEREFORE: `users_id` AND the transaction status MUST be read in ONE
+    -- `select … from pfin.monthly_report where report_id = p_subject_id`.** Splitting
+    -- them, caching the row, passing it in, or accepting a row obtained any other way
+    -- **breaks the coupling SILENTLY** — the predicate keeps returning a value and
+    -- starts answering a different question. This is the single line in this function
+    -- most worth refusing to "tidy".
+    -- ⚠ `pg_xact_status` tests `TransactionIdIsCurrentTransactionId` first, which is
+    -- true for the current transaction AND ALL OF ITS SUBTRANSACTIONS — it is the
+    -- primitive that expresses the requirement, not a workaround that happens to fit.
     -- ⚠ IT WORKS FROM AN `authenticated` CALLER — measured. `pg_xact_status` carries no
     -- ACL entry, so EXECUTE is PUBLIC; it does not depend on this function's DEFINER
     -- posture, and QA can assert it directly.
     -- ⚠ BOUNDED ASSUMPTION, NAMED, WITH ITS DIRECTION. `xmin::text::xid8` reconstructs
     -- the 64-bit id without an epoch — there is no exposed epoch-preserving
     -- conversion — so this is sound within one xid epoch. A frozen `xmin` reads as
-    -- 'committed' cleanly (measured on FrozenTransactionId), so an ancient row is
-    -- REFUSED rather than erroring. Beyond clog retention `pg_xact_status` raises,
-    -- which aborts the transaction: an AVAILABILITY failure, fail-closed, not
-    -- exploitable in either direction.
+    -- 'committed' cleanly (measured on FrozenTransactionId), so **the ordinary
+    -- ancient-row path REFUSES rather than erroring**. Beyond clog retention
+    -- `pg_xact_status` raises, which aborts: an AVAILABILITY failure, fail-closed.
+    -- ⚠ **AND THE RAISE IS REACHABLE ONLY ON THE REFUSAL SIDE, NEVER ON THE ACCEPT
+    -- SIDE** — an xid old enough to fall out of clog cannot be one this transaction
+    -- just assigned. So the error path can cost availability and can never grant
+    -- acceptance; it is not exploitable in either direction.
     select r.users_id,
            pg_xact_status(r.xmin::text::xid8) = 'in progress'
       into v_subject_tenant, v_written_here
