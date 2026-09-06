@@ -28,7 +28,7 @@ begin;
 
 \set m_live_draft '%monthly_report_one_live_draft_per_month%'
 
-select plan(14);
+select plan(15);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb, _rls.tenant_c() as tc \gset
 
@@ -267,6 +267,33 @@ select is(
     ) and provolatile = 's'),
   4,
   '(D2) all four signatures — the two zero-argument delegators and the two _as_of forms — are STABLE. Omitting the re-declaration on a CREATE OR REPLACE would silently reset it to VOLATILE, losing planner optimisation with no value assertion able to see the regression'
+);
+
+-- =====================================================================
+-- LEG 9 (Sec FLAG-4, option A) — VERSION PIN. The purpose of this leg is to
+-- give "a payload_schema_version bump is a Sec-review event" an actual
+-- MECHANISM: nothing in CI or the workflows currently fences that literal
+-- (Sec measured zero pins, zero `fence-payload-version` context), so a bump
+-- could land silently and freeze `108`'s rendered_payload contract forever
+-- with no reviewer noticing. This leg asserts the CURRENT literal against
+-- the INSTALLED body's `prosrc`, comment-stripped and case-insensitive,
+-- matching this file's own 111-sibling structural-leg convention (see
+-- `111`'s leg 7g). A version bump changes the literal and REDs THIS test —
+-- in front of QA and Sec, at the same PR that makes the change — rather
+-- than shipping a frozen-but-invisible contract drift. Deliberately placed
+-- HERE and NOT in `115`: Sec's FLAG-4 read accepted 115's reasoning for
+-- declining a pin there (a real payload-shape gap 14i already discloses
+-- would be masked by a same-file pin comparing the column to its own
+-- field), so the mechanism-carrying pin belongs on the composer that OWNS
+-- the literal, not on a consumer that only echoes it.
+-- =====================================================================
+select ok(
+  (select count(*) = 1
+     from regexp_matches(
+            (select regexp_replace(prosrc, '--[^\n]*', '', 'g') from pg_proc
+              where oid = 'pfin.fn_render_monthly_report(date,date)'::regprocedure),
+            '''payload_schema_version''\s*,\s*1\y', 'gi')),
+  '(9) VERSION PIN: the composed payload''s payload_schema_version literal is 1 in the installed, comment-stripped body of fn_render_monthly_report — a bump to any other value REDs this leg instead of silently changing the frozen `108` contract shape with no fence anywhere in CI'
 );
 
 select * from finish();
