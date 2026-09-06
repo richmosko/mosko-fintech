@@ -21,6 +21,7 @@
 - [temp/ handoff files need a shared path](feedback_temp_handoff_files_need_a_shared_path.md) — per-worktree `temp/` is gitignored and never syncs; check the main checkout or ask for inline paste.
 - [Mechanical boundary exception — flag, don't block](feedback_mechanical_boundary_exception_flag_dont_block.md) — a one-line pattern-matching fix to a Backend-owned file is fine unilaterally when my own committed work needs it; anything requiring real judgment still needs to ask first.
 - [Batch commit-ready deliveries](feedback_batch_commit_ready_deliveries.md) — send path+md5 for ALL changed files in ONE message once every file is final; a piecemeal per-file send lets the committer read a file mid-edit against a stale md5.
+- **[A fork's prompt scope is advisory, not enforced](feedback_fork_scope_is_advisory_not_enforced.md)** — a "research-only" fork can still write/commit/push to a shared remote and SendMessage a teammate on its own; verify the live tree after any fork returns, don't trust its self-narration.
 
 ## Test-environment gotchas
 

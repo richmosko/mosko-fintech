@@ -35,12 +35,29 @@ discriminates is structural: assert `pg_proc.provolatile = 's'` **per signature*
 OVERLOAD.** A function's identity is its signature, so `create or replace` with a
 new argument creates a second function beside the first. On a clean chain apply
 only the new one exists and every check is green; on a database where the earlier
-version of the same *file* was already applied, both exist, and a name-only
-`.rpc()` / PostgREST call then resolves ambiguously. Measured at `101` (SELF-260
-V-2, adding `p_schedule_label`): one overload after a fresh 001→101 apply, which
-is exactly the state that hides the problem. When an unmerged migration's function
-gains or loses a parameter, say so in the apply brief and name the old signature
-to drop — a clean-apply verification cannot observe this.
+version of the same *file* was already applied, both exist. Measured at `101`
+(SELF-260 V-2, adding `p_schedule_label`): one overload after a fresh 001→101
+apply, which is exactly the state that hides the problem. When an unmerged
+migration's function gains or loses a parameter, say so in the apply brief and
+name the old signature to drop — a clean-apply verification cannot observe this.
+
+**⚠⚠ WHEN THE DROPPED PARAMETER WAS THE VULNERABILITY, THE SURVIVING OVERLOAD IS
+THE UN-FIXED HOLE — and PostgREST reaches it DELIBERATELY, not ambiguously.**
+PostgREST resolves an RPC overload **by the request-body KEYS**, so an attacker
+who keeps posting the old parameter name is *routed to the old function*. The
+source reads as fixed, the review passes, the database is untouched. Met while
+preparing the `111` `p_trigger_source` removal (2026-09-05): removing a
+caller-supplied provenance argument from a `SECURITY DEFINER` helper granted to
+`authenticated` is worthless without an explicit
+`drop function if exists <old exact signature>` **before** the CREATE. Pair it
+with a catalog assertion that the name resolves to exactly ONE `pg_proc` row —
+"the new signature exists" is not the same claim.
+
+⚠ Two sibling edits are easy to miss on a parameter change and both fail *after*
+the function is created, so re-running the file reports a misleading
+already-exists error from an earlier statement instead of the real one: the
+`revoke`/`grant` lines **and the `comment on function` line**, each of which names
+the full signature.
 
 ⚠ `returns table` is the mirror image: `create or replace` **cannot** change the
 returned column list at all and errors instead, so that one fails loudly.
