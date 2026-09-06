@@ -73,6 +73,59 @@
 --          proves the STORED payload is byte-identical to what A3 composed
 --          — so an envelope A3 composed unflattened is unflattened in the
 --          frozen artifact too, by the same byte-identity proof.
+--   AC1  — (A3+A10 halves, group 2) two-tenant coverage.
+--          A3: COMPOSED — 110_fn_render_monthly_report_rls.sql LEG 8 (a
+--          cross-tenant/no-rows caller gets a well-formed payload with
+--          EMPTY sections, not an error and not NULL).
+--          A10 (113/114/115, the draft/regenerate/finalize write path):
+--          COMPOSED — each of 113/114/115 carries its own LEG 1
+--          cross-tenant-refused / owner-succeeds pair.
+--   AC3  — A3 cross-tenant leak analysis: a foreign caller gets the
+--          empty/unavailable shape (fails closed INTO A SHAPE THAT SAYS
+--          SO). Plus Sec F-4's cron leg WITH ITS POSITIVE CONTROL (R3
+--          rider 2): tenant A composed while tenant B's rows EXIST, zero
+--          tenant-B rows in the output, PROVEN NON-VACUOUS by striking the
+--          role assumption and watching the leg red. Plus the STANDING
+--          no-rolbypassrls-EXECUTE catalog assertion (R3 rider 1 — "the
+--          single most valuable assertion in the file"). Plus RESET ROLE
+--          discipline on the pooled connection (R3 rider 3).
+--          Leak shape: COMPOSED — 110 LEG 8 (cited above under AC1).
+--          F-4 + positive control: COMPOSED — 110 LEG 1 ("Sec F-4 catch
+--          criterion WITH ITS POSITIVE CONTROL (R3 rider 2)" — composed for
+--          tenant A while tenant B's $2000 exists, gross_total = A's own
+--          1000.00; the role-assumption-struck control at (1b) proves the
+--          isolation is genuinely RLS-dependent, not a fixture accident).
+--          Standing no-rolbypassrls-EXECUTE: COMPOSED, FIVE TIMES OVER, not
+--          once — every INVOKER function on this surface carries its OWN
+--          copy, independently, so no single file's drift silently loses
+--          the assertion: 110 LEG 2 (explicitly self-labelled "R3 rider 1,
+--          P10 item 3" in its own header), 113 LEG 10, 114 LEG 10, 115
+--          LEG 16 — all four assert `not has_function_privilege(
+--          'service_role', <fn>, 'EXECUTE')` on their own signature. A
+--          FIFTH, combined sweep leg here would duplicate protection
+--          already held four times independently, not add any — the file's
+--          own header rule ("adds only the NET-NEW... legs no per-issue
+--          battery makes on its own") argues against it. No new SQL.
+--          RESET ROLE discipline: COMPOSED, non-pgTAP —
+--          workers/etl/tests/test_connection.py::TestImpersonationInvariants
+--          ::test_reset_role_tears_down_impersonation (the impersonation
+--          state-machine assertion helper's own teardown case) plus
+--          test_full_worker_transaction_sequence (the full statement
+--          sequence a real transaction issues, impersonation torn down
+--          before the write). RESET ROLE is a connection-discipline
+--          property of `TenantBoundConnection`/the impersonation loop, not
+--          a DB-schema property — the Python suite is where the mechanism
+--          actually lives, and P10's own convention (this file, group 1)
+--          already accepts a non-pgTAP citation for A7. No pgTAP-side gap.
+--   AC11 — (RT-25 half, group 2) A10's server-derived data_as_of: a
+--          client-supplied as-of is REFUSED, not ignored.
+--          COMPOSED — 113_fn_open_monthly_report_draft_rls.sql LEG 8:
+--          `data_as_of` on the inserted row equals `pfin.fn_server_today()`
+--          — "there is no argument by which a caller could have set a
+--          different value," which is the DB-signature form of "refused,
+--          not ignored": the function carries no `p_data_as_of` parameter
+--          at all, so a client cannot even attempt to supply one, let alone
+--          have it silently dropped.
 -- =====================================================================
 -- QA-owned. Authors NO schema. Composes 106/108-115 + workers/etl's pytest.
 --
