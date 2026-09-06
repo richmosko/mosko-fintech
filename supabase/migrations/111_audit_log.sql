@@ -337,6 +337,11 @@
 --      EXECUTABLE occurrences, not raw text:** the invariant's own comment quotes the
 --      statement it protects, so the raw count is **2** and the stripped count is
 --      **1** (measured) — a naive watcher goes RED on correct code.
+--      ⚠⚠ **MATCH CASE-INSENSITIVELY (`~*` / `'gi'`). A CASE-SENSITIVE LEG FAILS
+--      OPEN**, and this prose previously omitted it: SQL does not care about case, so
+--      a split read whose second statement is written `FROM` scores 1 and **passes on
+--      a broken body** (measured). The migration's apply-time check carries the same
+--      flag, and DevOps's C3 `prosrc` scanner already uses `~*` for this class.
 --      ⚠ **This leg exists because no BEHAVIOURAL leg can cover it:** splitting the
 --      read behaves correctly on an idle database and diverges only under concurrency.
 --      The migration carries an apply-time version of the same check, but that one
@@ -882,8 +887,22 @@ grant  execute on function pfin.fn_emit_audit_log(text, text, date, text, bigint
 -- ⚠ SCOPE, STATED SO IT IS NOT OVER-READ: this fires at APPLY time and therefore
 -- watches edits to THIS file. A later migration that re-creates the function is
 -- outside it; that case is QA leg 7g, which reads the INSTALLED definition.
+-- ⚠ THE MATCH IS CASE-INSENSITIVE (`'gi'`), AND THE `i` IS NOT COSMETIC — WITHOUT IT
+-- THE WATCHER FAILS OPEN. SQL is case-insensitive, so a developer splitting the read
+-- has a free coin-flip on `from` versus `FROM`; measured, a split whose second read is
+-- written `FROM` scored 1 under `'g'` and **passed on a broken body**. This is a
+-- REGRESSION watcher, not an adversarial fence — the regression it exists to catch can
+-- arrive in a form it cannot see, which is worse than an evasion because nobody is
+-- trying. `'gi'` only widens the fail-loud direction already chosen below; it cannot
+-- make anything pass that currently refuses. **DevOps's C3 `prosrc` scanner uses `~*`
+-- / `'gi'` for this same class**, so the two structural scanners in this wave now
+-- behave the same way.
 -- ⚠ The comment-stripping is `--`-only. A second read hidden inside a string literal
 -- would count and go RED — fail-loud, which is the direction we want.
+-- ⚠ RESIDUAL FORMS IT DOES NOT SEE, named so the boundary is known rather than
+-- assumed: a quoted identifier (`pfin."monthly_report"`), `from only pfin.…`, and a
+-- read built by dynamic SQL. None is a plausible way to write this function, and no
+-- further coverage was requested — but a reader should not read this check as total.
 do $watch$
 declare
   v_executable_reads int;
@@ -893,7 +912,7 @@ begin
     from pg_proc p
     left join lateral regexp_matches(
            regexp_replace(p.prosrc, '--[^\n]*', '', 'g'),
-           'from\s+pfin\.monthly_report', 'g') m on true
+           'from\s+pfin\.monthly_report', 'gi') m on true
    where p.pronamespace = 'pfin'::regnamespace
      and p.proname      = 'fn_emit_audit_log'
      and m is not null;
