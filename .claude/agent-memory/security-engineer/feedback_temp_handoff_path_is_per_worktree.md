@@ -1,12 +1,12 @@
 ---
 name: temp-handoff-path-is-per-worktree
-description: When routing findings to temp/, give the ABSOLUTE worktree path and say it is per-worktree — the coordinator checking from the shared checkout sees an unchanged/absent file and reads it as "no work done"
+description: When routing findings to temp/, give the ABSOLUTE worktree path AS OF THE HAND-OFF and say it is per-worktree — the path itself moves, and a coordinator checking from the shared checkout reads an absent file as "no work done"
 metadata:
   type: feedback
 ---
 
 `temp/` is **per-worktree and gitignored**. A findings file I write at
-`…/mosko-fintech-worktrees/sec/temp/<topic>.md` is **invisible** from the shared checkout or any other
+`<my-worktree>/temp/<topic>.md` is **invisible** from the shared checkout or any other
 agent's worktree — there is no sync, and `git status` shows nothing.
 
 **Why:** at SELF-229 round 2, team-lead opened a diagnostic ("your review notes file is unchanged since
@@ -22,6 +22,24 @@ lives in my worktree and will not appear elsewhere. When a teammate reports my f
 **do not re-do the work** — measure it (`ls -l` mtime + `head`/`grep` for the newest section) and reply
 with the mtime, size, and the marker string, then name the path mismatch as the likely cause. A stale-file
 report is a location claim, not a content claim.
+
+**⚠ THE WORKTREE PATH ITSELF MOVES — measured 2026-09-06.** The roster's worktrees were relocated by
+F/CTO directive from `~/Projects/mosko-fintech-worktrees/<agent>` to
+`<repo>/.claude/worktrees/<agent>`, so every absolute `temp/` path quoted in an earlier hand-off went
+stale in a single move — **including the one this entry used to name.** So: quote the absolute path
+**as of the hand-off**, re-verify it in the same turn you cite it, and never reuse a remembered one.
+That is the rule this file already applies to a teammate's stale-file report, turned on my own
+citations: **a path is a measurement, not a constant.**
+
+**⚠ "PLACED" IS AMBIGUOUS BETWEEN WORKING TREE AND REF, AND THE TWO HAVE DIFFERENT DURABILITY —
+measured 2026-09-06, and it nearly caused a destructive discard.** Team-lead reported three of my
+`temp/` memory candidates as *"already placed … so `temp/` may be discarded."* They were placed in the
+**main checkout's working tree, uncommitted**; `git ls-tree` over `main`, `origin/main` and `HEAD`
+returned **0 of 3**. Both readings were true of different things, and acting on the wrong one would
+have deleted the only durable copy. **How to apply:** when told an artifact is placed, check the
+**ref**, not a working tree — and when a discard is proposed on the strength of a placement, say which
+of the two you verified. ⚠ Check the ref for the *absence* claim too: a working-tree absence in MY
+worktree proves nothing, because my branch may simply predate the placement.
 
 Corollary for the coordinator's obligation: a per-worktree overflow file is even less durable than the
 "gitignored, no watcher" framing suggests — it is also **unreachable** to the party who owns placing it.
