@@ -29,80 +29,111 @@
 -- the tree (no exposed function takes a GUC name from its argument) and is
 -- DevOps's CI-fence to watch, not provable from inside a database session.
 --
--- ⚠⚠ LEGS 7a-i (earlier-transaction refusal) AND 7b (read-only/no-xid
--- refusal) ARE STRUCTURAL CATALOG PINS, NOT LIVE BEHAVIOURAL PROOFS — A
--- DISCLOSED DOWNGRADE FROM Sec's SPEC, WITH A MEASURED REASON, NOT A
--- CONVENIENCE. Both conditions need a row or a session state that is
--- genuinely EARLIER than / OUTSIDE this file's own wrapped transaction — no
--- savepoint can ever produce that, because anything this file writes, at any
--- savepoint depth, is by construction part of its OWN top-level transaction
--- (verified directly: a row inserted under a savepoint that is then RELEASED,
--- not rolled back, is still reported as written-here).
+-- ⚠⚠ RE-LEGGED A SECOND TIME AT `72c3e5c` — Sec's C2 EXPRESSION ITSELF WAS
+-- UNSOUND, RULED, NOT A TEST-HARNESS LIMITATION, CORRECTING WHAT THIS HEADER
+-- PREVIOUSLY SAID. An earlier version of this file diagnosed "opening a
+-- dblink connection mid-transaction corrupts `pg_current_snapshot()`" as a
+-- harness quirk and downgraded two legs to structural pins to route around
+-- it; a second, independent-looking observation ("a caught trigger-raised
+-- exception poisons the same transaction's own later writes") was treated as
+-- a THIRD, separate quirk and worked around by physically reordering legs.
+-- **Sec reproduced both with a matched control pair and ruled they were the
+-- SAME real defect in C2's predicate — `pg_visible_in_snapshot(row.xmin::
+-- text::xid8, pg_current_snapshot())` — not two harness limitations at all:**
+-- **THE MECHANISM.** A transaction's own xid is NEVER listed in its own
+-- snapshot's `xip` (in-progress) array — `pg_visible_in_snapshot` does not
+-- special-case "is this me," only real MVCC visibility checks do that, and
+-- this function did not use one. Snapshot `xmax` is effectively
+-- `latestCompletedXid + 1`, and `latestCompletedXid` is CLUSTER-WIDE, not
+-- transaction-local. So the moment ANY xid — belonging to anyone, not just
+-- this session — completes (commits OR aborts) after our subject row's xid
+-- was consumed and before we check it, `xmax` advances past that xid, and
+-- since it is not in `xip`, `pg_visible_in_snapshot` misreports it as
+-- already-committed rather than still-running. **This is real on a NON-IDLE
+-- production database**: an aborted WRITING subtransaction of our own
+-- (dblink's side effect and the caught-trigger-exception's side effect are
+-- both instances of exactly this), or an ORDINARY COMMIT FROM A SECOND
+-- SESSION between the write and the emit, trip it identically — no
+-- exception, no trigger, no dblink required. **The consequence was never a
+-- missing audit row: the emit runs inside the generation transaction, so a
+-- false refusal rolls back THE WHOLE REPORT GENERATION, non-deterministically,
+-- on any non-idle database — every battery passed only because a scratch DB
+-- is idle.**
+-- **THE FIX, at `72c3e5c`: `pg_xact_status(r.xmin::text::xid8) = 'in
+-- progress'`, resolved in ONE statement together with `r.users_id`.**
+-- `pg_xact_status` reads the commit log for THAT specific xid — no snapshot,
+-- no cluster-wide counter, nothing that another session's activity can move.
+-- It answers `'in progress'` for a row written by this transaction OR ANY OF
+-- ITS SUBTRANSACTIONS (released or not), which is what the earlier
+-- `xmin = pg_current_xact_id()` attempt got wrong, and `'committed'` for a
+-- row from an earlier transaction — WITHOUT depending on anything
+-- cluster-wide, which is what `pg_visible_in_snapshot` got wrong. ⚠⚠ **THE
+-- INVARIANT THAT MAKES THIS SOUND IS A PROPERTY OF THE STATEMENT, NOT OF THE
+-- PREDICATE: `'in progress'` is ALSO true for another session's own
+-- in-progress transaction — the predicate does not discriminate between them
+-- and was never asked to.** What discriminates is that `users_id` and the
+-- transaction-status flag are resolved by THIS transaction's OWN MVCC READ,
+-- IN THE SAME STATEMENT — another session's uncommitted row is invisible to
+-- that read and never reaches the test at all. Splitting the read (caching
+-- the row, resolving the two facts separately) breaks this coupling SILENTLY:
+-- the predicate keeps returning a value and starts answering a different
+-- question, correctly on an idle database and wrongly under concurrency —
+-- see leg 7g below, the structural leg that watches exactly this.
+-- **ANY FUTURE REPLACEMENT OF THIS EXPRESSION MUST NOT DEPEND ON
+-- `latestCompletedXid`, snapshot `xmax`, OR ANY OTHER CLUSTER-WIDE COUNTER**
+-- — that is the disqualifier both prior attempts failed.
 --
--- `dblink` (a separate physical connection to this same database, opened and
--- closed mid-file) was tried FIRST and WORKS for creating the fact each leg
--- needs — but it has a MEASURED, SERIOUS side effect: opening and closing a
--- dblink connection mid-transaction corrupts `pg_current_snapshot()` for the
--- REST of that transaction, such that the session's OWN xid subsequently
--- reads as "already visible" to itself. Measured directly, reproduced
--- minimally: `pg_current_snapshot()` before any dblink activity reports
--- `xmin:xmin:` (empty range, own xid correctly excluded); after a
--- dblink-connect/insert/disconnect sequence in the SAME transaction, the very
--- next snapshot reports `xmin:xmin+N:` — a NON-EMPTY range with an EMPTY
--- `xip_list` — which makes `pg_visible_in_snapshot` treat ANY xid in that
--- range, INCLUDING the calling transaction's own, as already-committed. This
--- broke every C2-success leg that would otherwise follow a dblink call in the
--- same file (confirmed: a bare INSERT's own row, checked immediately after,
--- read as "not written here"). An EXTERNAL pre-seed — a row committed via a
--- FULLY SEPARATE connection that opens, commits, and exits BEFORE this file's
--- own `begin` — does NOT exhibit the corruption (no temporal overlap with
--- this transaction at all), but requires a companion step outside this
--- self-contained file, which is a real convention departure of its own.
--- Given neither safe option fits inside one file without cost, these two legs
--- are PRESENCE pins instead (matching 101's own SF-L "presence, not effect"
--- posture for a different un-simulatable claim): they confirm the function's
--- body actually calls the right primitives and raises the right messages,
--- never that calling it under the real condition behaviourally reproduces the
--- refusal. Flagged to team-lead/Sec as a live gap, not silently routed
--- around — an external pre-seed script is the concrete follow-up if full
--- behavioural coverage is wanted.
+-- ⚠⚠ STANDING RULE FOR EVERY `prosrc` ASSERTION IN THIS FILE'S BATTERY
+-- (Sec): **presence/count checks on `prosrc` are VACUOUS in BOTH directions
+-- here, PRECISELY BECAUSE THIS FILE'S COMMENTS ARE GOOD** — a superseded
+-- primitive's name survives in the prose explaining why it was abandoned
+-- (measured at `72c3e5c`: `pg_visible_in_snapshot` raw **3**, comment-stripped
+-- **0**; `pg_xact_status` raw **5**, comment-stripped **1**;
+-- `pg_current_xact_id_if_assigned` raw **2**, comment-stripped **1**), so a
+-- legacy leg asserting the SUPERSEDED primitive goes GREEN certifying a
+-- primitive the body does not use AT ALL, and a naively re-aimed leg on the
+-- CURRENT primitive would pass even if the body used something else
+-- entirely. A red gets investigated; a green gets trusted — which makes the
+-- first case the dangerous one. **THEREFORE: strip `--` comments first
+-- (`regexp_replace(prosrc, '--[^\n]*', '', 'g')`), then assert, matching
+-- CASE-INSENSITIVELY (`~*` / `'gi'`)** — SQL does not care about case, so a
+-- case-sensitive leg fails open on a body whose split statement happens to be
+-- capitalized. `111`'s own apply-time `do $watch$` block (the one-statement
+-- invariant's watcher, at the end of the migration) is the reference
+-- implementation this file's own structural legs copy.
 --
--- ⚠⚠ SECOND MEASURED FINDING, INDEPENDENT OF DBLINK — a caught trigger-raised
--- exception poisons this SAME transaction's OWN later writes for
--- `pg_visible_in_snapshot`. Minimal reproduction (13 lines, no dblink
--- anywhere): create a table with a BEFORE UPDATE/DELETE trigger that RAISEs;
--- `throws_like()` a real UPDATE against an existing row of that table (the
--- exact shape leg 6's 6a-6d need to prove the immutability trigger fires);
--- then, as a perfectly ordinary LATER top-level statement in the SAME
--- transaction, INSERT a fresh row and check
--- `pg_visible_in_snapshot(newrow.xmin::text::xid8, pg_current_snapshot())` —
--- it reads TRUE (wrongly "already committed/visible", i.e. NOT "written
--- here") even though that INSERT is a bare top-level statement with no
--- savepoint of its own. Bisected against this file directly (truncating at
--- successive leg boundaries and probing): the gap is absent through the end
--- of leg 5, present by the end of the original leg 6, and narrows to leg
--- 6a alone (a single throws_like'd UPDATE hitting the real trigger) —
--- confirmed NOT caused by: throws_like alone with no real trigger-write
--- (25-iteration burst, no gap); a bare savepoint/real-write/rollback cycle
--- alone or repeated 8x in the exact shape of leg 1 (no gap); GRANT/REVOKE
--- DDL alone. The isolating factor is specifically a data-modifying statement
--- that reaches a BEFORE trigger which raises, caught by throws_like. Fix
--- applied here: LEG 6 IS MOVED TO THE END OF THIS FILE (after leg 12), so
--- every C2-success/derivation leg that depends on `fn_emit_audit_log`'s own
--- internal `pg_visible_in_snapshot` call (8-iii, 10, 11, 12) runs BEFORE the
--- poisoning trigger fires, keeping them genuinely BEHAVIOURAL rather than
--- forcing a further structural-pin downgrade. This is a PRODUCT-RELEVANT
--- finding, not just a test-harness artifact: any real application
--- transaction that catches an exception from a trigger-raised UPDATE/DELETE
--- and THEN calls `fn_emit_audit_log` naming a row written earlier in that
--- SAME transaction risks the identical false refusal — flagged to
--- team-lead/Architect/Sec; the reorder here is QA's test-file mitigation
--- only, not a statement that the product mechanism itself is safe.
+-- ⚠ `dblink` IS NOW A LEGITIMATE, VERIFIED-SAFE FIXTURE MECHANISM, reversing
+-- this file's earlier posture. Since C2 no longer depends on ANY
+-- cluster-wide snapshot state, opening/using/closing a dblink connection
+-- mid-transaction no longer corrupts anything this file's own legs rely on —
+-- verified directly against `72c3e5c` before writing legs 8-i and 7d below.
+-- It is used ONLY to construct facts genuinely impossible from inside a
+-- single wrapped, rolled-back pgTAP transaction (a row from a truly earlier,
+-- separate, committed transaction). ⚠ ITS FIXTURE ROWS (a dedicated
+-- synthetic tenant E, fixed UUID, no PII) ARE REAL COMMITTED WRITES THAT DO
+-- NOT ROLL BACK WITH THE REST OF THIS FILE — the one disclosed departure
+-- from this battery's usual all-rolls-back convention, cleaned up explicitly
+-- by the leg that creates them rather than left as residue.
+--
+-- ⚠ LEG 6 (immutability) IS BACK IN ITS NATURAL POSITION, after leg 5. The
+-- previous version of this file moved it to the end of the file as a
+-- mitigation for the (mis-diagnosed) dblink/trigger-exception "poisoning" —
+-- that mitigation is no longer needed once the underlying predicate is
+-- sound, and reordering legs for narrative convenience rather than
+-- correctness is not this battery's convention.
 -- =====================================================================
 
 begin;
 
 \ir ../_fixtures/rls_verbs.psql
+
+-- Used ONLY by leg 8-i's earlier-transaction fixture — verified-safe under
+-- the new pg_xact_status expression (file header). Legs 7d/7e's own
+-- counter-advance proxy is a same-connection aborted subtransaction and
+-- needs no second connection at all. create extension is transactional; it
+-- does not survive this file's own rollback, matching every other schema
+-- object here.
+create extension if not exists dblink;
 
 \set m_no_tenant '%no resolved tenant%'
 \set m_chain '%p_tenant_resolution_chain is required%'
@@ -113,11 +144,19 @@ begin;
 \set m_vocab_check '%audit_log_surface_name_vocab%'
 \set m_bad_subject '%requires p_subject_table%'
 \set m_not_yours '%is not a row belonging to the tenant%'
+\set m_not_written '%was NOT written in this transaction%'
 
-select plan(29);
+select plan(34);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 insert into auth.users (id) values (:'ta'), (:'tb');
+-- Tenant E is a THIRD synthetic tenant, used ONLY by the dblink-fixture legs
+-- below (8-i, 7d). It is deliberately NOT inserted into auth.users here — a
+-- dblink connection is a SEPARATE session that cannot see this transaction's
+-- own uncommitted rows, so tenant E's auth.users row is created (and
+-- committed) entirely THROUGH the dblink connection instead, at the point of
+-- use. Its id is fixed and synthetic; no PII, no real account numbers.
+\set te '00000000-0000-0000-0000-00000000000e'
 
 -- =====================================================================
 -- LEG 1 — the row exists IN THE SAME TRANSACTION as the privileged write it
@@ -241,6 +280,50 @@ select lives_ok(
 select set_config('role', 'postgres', true);
 
 -- =====================================================================
+-- LEG 6 — UPDATE / DELETE / TRUNCATE refused under both roles.
+-- =====================================================================
+select is(
+  (select count(*)::int from pfin.audit_log where audit_id = :a1::bigint),
+  1,
+  '(6-setup) NON-VACUOUS sanity: leg 2''s row (the one 6a-6d mutate) still exists — robust to how many OTHER legs have written by this point in the file, unlike a total per-tenant count would be'
+);
+select throws_like(
+  format($$ update pfin.audit_log set tenant_resolution_chain = 'forged' where audit_id = %s $$, :a1),
+  :'m_immut',
+  '(6a) UPDATE refused as postgres/owner (no role test in the trigger)'
+);
+select throws_like(
+  format($$ delete from pfin.audit_log where audit_id = %s $$, :a1),
+  :'m_immut',
+  '(6b) DELETE refused as postgres/owner'
+);
+-- NOTE: SELECT is required alongside UPDATE/DELETE even though this leg never
+-- reads a column value directly — the WHERE audit_id = %s predicate itself
+-- needs SELECT to evaluate (same privilege-model fact as RETURNING: a command
+-- that filters or returns a column needs SELECT on it, distinct from the
+-- write verb's own grant).
+grant usage on schema pfin to service_role;
+grant select, update, delete on pfin.audit_log to service_role;
+select set_config('role', 'service_role', true);
+select throws_like(
+  format($$ update pfin.audit_log set tenant_resolution_chain = 'forged' where audit_id = %s $$, :a1),
+  :'m_immut',
+  '(6c) UPDATE refused as service_role too (test-only grant; no role test in the trigger)'
+);
+select throws_like(
+  format($$ delete from pfin.audit_log where audit_id = %s $$, :a1),
+  :'m_immut',
+  '(6d) DELETE refused as service_role'
+);
+select set_config('role', 'postgres', true);
+revoke select, update, delete on pfin.audit_log from service_role;
+select throws_like(
+  $$ truncate pfin.audit_log $$,
+  :'m_truncate',
+  '(6e) TRUNCATE refused — the one operation an audit trail exists to make impossible'
+);
+
+-- =====================================================================
 -- LEG 7 — STANDING catalog assertions: (i) EXECUTE ACL exactly
 -- {authenticated, service_role}; (ii) EXACTLY ONE fn_emit_audit_log exists
 -- (the OLD 6-argument signature does not survive as a live overload — Sec
@@ -275,12 +358,132 @@ select ok(
 );
 
 -- =====================================================================
--- LEG 8 (Sec C2, item 7a) — THE C2 SUBJECT-BINDING LEGS.
--- (i) STRUCTURAL PIN (see file header for the measured dblink-snapshot-
---     corruption finding that forces this downgrade): an emit naming a
---     report_id from an EARLIER, genuinely separate transaction is REFUSED
---     WITH A DISTINCT MESSAGE — confirmed by catalog inspection of the
---     function body, not by live reproduction.
+-- LEG 7d (Sec, REQUIRED WHATEVER EXPRESSION IS IN PLACE) — THE
+-- COUNTER-ADVANCE LEG: advance `latestCompletedXid` between the subject
+-- write and the emit, and assert the emit STILL SUCCEEDS. This is the leg
+-- whose absence let the superseded expression survive review — a scratch DB
+-- is idle, so every OTHER leg here passes regardless of whether C2 depends
+-- on cluster-wide state. T1 is the faithful proxy: an ABORTED WRITING
+-- subtransaction between the write and the emit (no second connection or
+-- dblink needed — a savepoint with a real INSERT, then ROLLBACK TO
+-- SAVEPOINT, consumes and completes an xid exactly as a caught trigger
+-- exception or a caught unique_violation would). T2 is its MATCHED NEGATIVE
+-- CONTROL: the identical shape with NO write inside the aborted
+-- subtransaction. Both are asserted, not just T1 — the pair is what
+-- identifies xid consumption as the cause rather than "exceptions" in
+-- general (verified directly against the superseded expression before this
+-- rework: T1 failed, T2 passed — the exact signature of the bug this leg
+-- exists to catch).
+-- =====================================================================
+select _rls.set_tenant(:'ta'::uuid);
+insert into pfin.monthly_report (target_month, data_as_of) values ('2027-07-01', '2027-07-31') returning report_id as d7_t1_subj \gset
+savepoint sp_d7_t1;
+insert into pfin.monthly_report (target_month, data_as_of) values ('2027-08-01', '2027-08-31');
+rollback to savepoint sp_d7_t1;
+select lives_ok(
+  format($$ select pfin.fn_emit_audit_log('monthly_report_generation', 'impersonated session: request.jwt.claims.sub', '2027-07-31', 'pfin.monthly_report', %s) $$, :d7_t1_subj),
+  '(7d-T1) THE LEG: an ABORTED WRITING subtransaction between the write and the emit does NOT cause a false refusal — the faithful single-connection proxy for "any xid completes between write and emit," which is the real, cluster-wide shape of the defect this leg exists to catch'
+);
+select set_config('role', 'postgres', true);
+select _rls.set_tenant(:'ta'::uuid);
+insert into pfin.monthly_report (target_month, data_as_of) values ('2027-09-01', '2027-09-30') returning report_id as d7_t2_subj \gset
+savepoint sp_d7_t2;
+do $$ begin raise exception 'no write, just abort — the matched negative control'; exception when others then null; end $$;
+rollback to savepoint sp_d7_t2;
+select lives_ok(
+  format($$ select pfin.fn_emit_audit_log('monthly_report_generation', 'impersonated session: request.jwt.claims.sub', '2027-09-30', 'pfin.monthly_report', %s) $$, :d7_t2_subj),
+  '(7d-T2) MATCHED NEGATIVE CONTROL: a NON-WRITING aborted subtransaction in the identical slot also succeeds (trivially, under a sound expression) — asserted alongside T1 so the pair, not either leg alone, is what pins xid consumption (not "any exception") as the mechanism'
+);
+select set_config('role', 'postgres', true);
+
+-- =====================================================================
+-- LEG 7e — BOTH SUB-COMMIT SHAPES: a write that completes inside a
+-- subtransaction WITHOUT aborting (a "sub-commit") still permits the emit.
+-- (i) an explicit SAVEPOINT ... RELEASE around the write. (ii) THE
+-- PRODUCTION SHAPE: a write inside a plpgsql `begin ... exception ... end`
+-- block that exits NORMALLY (no exception raised) — sub-commits the same
+-- way and is what `fn_open_monthly_report_draft` (113, feature/self-355-db)
+-- actually does on its winning (non-colliding) path.
+-- =====================================================================
+select _rls.set_tenant(:'ta'::uuid);
+savepoint sp_e7i;
+insert into pfin.monthly_report (target_month, data_as_of) values ('2027-10-01', '2027-10-31') returning report_id as e7i_subj \gset
+release savepoint sp_e7i;
+select lives_ok(
+  format($$ select pfin.fn_emit_audit_log('monthly_report_generation', 'impersonated session: request.jwt.claims.sub', '2027-10-31', 'pfin.monthly_report', %s) $$, :e7i_subj),
+  '(7e-i) a write inside an explicit SAVEPOINT that is then RELEASED (not rolled back) — a sub-commit, not an abort — still permits the emit'
+);
+select set_config('role', 'postgres', true);
+select _rls.set_tenant(:'ta'::uuid);
+do $$
+declare v_id bigint;
+begin
+  insert into pfin.monthly_report (target_month, data_as_of) values ('2027-11-01', '2027-11-30') returning report_id into v_id;
+  perform set_config('audit_test.e7ii_subj', v_id::text, true);
+exception when unique_violation then
+  raise;
+end $$;
+select current_setting('audit_test.e7ii_subj')::bigint as e7ii_subj \gset
+select lives_ok(
+  format($$ select pfin.fn_emit_audit_log('monthly_report_generation', 'impersonated session: request.jwt.claims.sub', '2027-11-30', 'pfin.monthly_report', %s) $$, :e7ii_subj),
+  '(7e-ii) THE PRODUCTION SHAPE: a write inside a plpgsql exception block that exits NORMALLY — exactly what fn_open_monthly_report_draft (113) does on its winning path — still permits the emit'
+);
+select set_config('role', 'postgres', true);
+
+-- =====================================================================
+-- ⚠ LEG 7f — NOT A LEG, AND THIS LIST MUST NOT IMPLY OTHERWISE: another
+-- session's UNCOMMITTED row is refused STRUCTURALLY BY MVCC, not by any
+-- assertion in this file. `pg_xact_status` returns 'in progress' for that
+-- row too — what excludes it is that THIS transaction's own read (the
+-- one-statement invariant, see leg 7g) never resolves it at all, because an
+-- uncommitted row from another session is invisible to an ordinary MVCC
+-- read. The case is UNBUILDABLE in a single-connection pgTAP battery, so no
+-- leg can cover it and none should be written to look as though it does.
+-- Recorded here so a reader of this list does not infer coverage that
+-- cannot exist. What WOULD falsify it is not a test but an edit — see 7g.
+-- =====================================================================
+
+-- =====================================================================
+-- LEG 7g — THE ONE-STATEMENT INVARIANT, AS A STRUCTURAL LEG ON THE
+-- INSTALLED DEFINITION. Strip `--` comments from `pg_proc.prosrc` and assert
+-- EXACTLY ONE executable `from pfin.monthly_report` in fn_emit_audit_log's
+-- body (case-insensitive: SQL doesn't care about case, so a case-sensitive
+-- leg fails open on a split whose second read happens to be written `FROM`
+-- — measured, see below). ⚠ WHY THIS LEG SPECIFICALLY: splitting the
+-- one-statement read behaves CORRECTLY on an idle database and diverges
+-- only under concurrency — no behavioural leg in this file, including 7d
+-- above, can distinguish a correct body from a split one, because neither
+-- this file nor a scratch DB is ever concurrent with itself. This is a
+-- STRUCTURAL leg watching the INSTALLED definition (the migration's own
+-- apply-time `do $watch$` block watches only THIS migration's edits; a
+-- LATER migration re-creating the function is outside that watcher's scope
+-- but inside this one's).
+-- ⚠⚠ INVERSION-PROVEN, NOT ASSERTED GREEN (Sec) — verified directly against
+-- three bodies on scratch clones before landing this leg, matching the
+-- migration's own measured counts exactly: the CORRECT body (stripped
+-- count 1, this leg passes silently); a split written in LOWERCASE (`from`
+-- twice — stripped count 2, RED); and a split whose SECOND read is written
+-- `FROM` (stripped count 2 case-insensitively — RED — but case-SENSITIVE
+-- count 1, which would have WRONGLY PASSED — the reason `~*`/`'gi'` is not
+-- cosmetic here, matching DevOps's own C3 prosrc scanner convention).
+-- =====================================================================
+select ok(
+  (select count(*) = 1
+     from regexp_matches(
+            (select regexp_replace(prosrc, '--[^\n]*', '', 'g') from pg_proc
+              where oid = 'pfin.fn_emit_audit_log(text,text,date,text,bigint)'::regprocedure),
+            'from\s+pfin\.monthly_report', 'gi')),
+  '(7g) THE ONE-STATEMENT INVARIANT: EXACTLY ONE executable, comment-stripped, case-insensitive `from pfin.monthly_report` read in the installed body — inversion-proven on three bodies (correct / lowercase split / FROM split) before landing, see comment above'
+);
+
+-- =====================================================================
+-- LEG 8 (Sec C2, item 7a) — THE C2 SUBJECT-BINDING LEGS, ALL THREE NOW
+-- BEHAVIOURAL. `dblink` is verified-safe under the new expression (file
+-- header) and is used here to construct the ONE fact genuinely impossible
+-- from inside a single wrapped, rolled-back transaction: a row from a truly
+-- earlier, separate, COMMITTED transaction.
+-- (i) an emit naming a report_id from an EARLIER, genuinely separate
+--     transaction (tenant E, via dblink) is REFUSED WITH A DISTINCT MESSAGE.
 -- (ii) an emit naming ANOTHER tenant's report_id is refused with the
 --      not-yours message — distinct from (i), self-contained and BEHAVIOURAL
 --      (both rows exist in THIS transaction, owned by different tenants, no
@@ -288,30 +491,37 @@ select ok(
 -- (iii) NON-VACUOUS: an emit naming a report_id from a BARE INSERT in THIS
 --       transaction, by the SAME tenant, SUCCEEDS. ⚠ This is the bare-INSERT
 --       half only — the subtransaction-wrapped form (the real
---       fn_open_monthly_report_draft product path, the one a naive
---       xid-equality implementation would have refused) is proved on
+--       fn_open_monthly_report_draft product path) is proved on
 --       feature/self-355-db-qa's 113 battery, which is where that function
---       actually lives; it does not exist on this branch.
+--       actually lives; it does not exist on this branch. Legs 7d/7e above
+--       cover the subtransaction shape self-contained, without needing that
+--       function.
 -- =====================================================================
--- --- (i) EARLIER TRANSACTION — STRUCTURAL, per the file header's disclosed
--- downgrade. Pins: the CORRECT mechanism (a snapshot-visibility check) is
--- present exactly once; the refusal message this leg is about exists in the
--- body; and it is a DISTINCT string from (8-ii)'s not-yours message (Sec's
--- own requirement that the two be separately identifiable, checked here as
--- "two different strings exist" rather than "two different behaviours fire").
--- NOTE: presence checks only (>=1), not exact-count — prosrc includes this
--- function's own extensive inline commentary, which independently mentions
--- both primitives and both message families in prose (e.g. explaining WHY
--- pg_visible_in_snapshot is correct and an xid-equality check would be
--- wrong), so an exact-count or a combined "X but not Y nearby" regex is
--- fooled by the comments rather than reading the executable body.
-select ok(
-  (select prosrc ~ 'pg_visible_in_snapshot'
-      and prosrc ~ 'pg_current_xact_id_if_assigned'
-      and prosrc ~ 'was NOT written in this transaction'
-     from pg_proc where oid = 'pfin.fn_emit_audit_log(text,text,date,text,bigint)'::regprocedure),
-  '(8-i) STRUCTURAL (dblink-corruption downgrade, see file header): the body calls pg_visible_in_snapshot (the correct snapshot-based mechanism) and pg_current_xact_id_if_assigned, and contains the earlier-transaction refusal message'
+-- --- (i) EARLIER TRANSACTION, via dblink (verified-safe, see file header) ---
+select dblink_connect('conn111i', format('dbname=%s host=%s port=%s user=postgres password=postgres', current_database(), inet_server_addr(), inet_server_port()));
+select * from dblink('conn111i', format($$ insert into auth.users (id) values ('%s') $$, :'te')) as t(x text);
+select * from dblink('conn111i', format($$
+  select set_config('role', 'authenticated', false);
+  select set_config('request.jwt.claims', json_build_object('sub', '%s', 'role', 'authenticated')::text, false);
+$$, :'te')) as t(x text);
+select * from dblink('conn111i', $$
+  insert into pfin.monthly_report (target_month, data_as_of) values ('2027-12-01', '2027-12-31') returning report_id
+$$) as t(report_id bigint) \gset
+select dblink_disconnect('conn111i');
+select set_config('role', 'postgres', true);
+select _rls.set_tenant(:'te'::uuid);
+select throws_like(
+  format($$ select pfin.fn_emit_audit_log('monthly_report_generation', 'impersonated session: request.jwt.claims.sub', '2027-12-31', 'pfin.monthly_report', %s) $$, :report_id),
+  :'m_not_written',
+  '(8-i) BEHAVIOURAL (dblink, verified-safe under pg_xact_status — see file header): an emit naming a report_id from a GENUINELY earlier, separate, COMMITTED transaction is refused with the earlier-transaction message, distinct from (8-ii)''s not-yours message'
 );
+select set_config('role', 'postgres', true);
+-- Cleanup: tenant E's dblink-committed rows do NOT roll back with the rest
+-- of this file (see file header) — removed explicitly rather than left as
+-- residue in whatever database this battery runs against.
+select dblink_connect('conn111i_cleanup', format('dbname=%s host=%s port=%s user=postgres password=postgres', current_database(), inet_server_addr(), inet_server_port()));
+select * from dblink('conn111i_cleanup', format($$ delete from auth.users where id = '%s' $$, :'te')) as t(x text);
+select dblink_disconnect('conn111i_cleanup');
 
 -- --- (ii) OTHER TENANT (self-contained, no dblink, fully BEHAVIOURAL) ---
 select _rls.set_tenant(:'tb'::uuid);
@@ -336,23 +546,29 @@ select set_config('role', 'postgres', true);
 
 -- =====================================================================
 -- LEG 9 (Sec C2, item 7b) — A READ-ONLY TRANSACTION IS REFUSED (no xid
--- assigned): the fail-closed leg. STRUCTURAL, for TWO independent reasons,
--- not one: (a) it is UNTESTABLE from inside THIS file's own transaction by
--- the time any pgTAP assertion can run — `plan()` itself assigns an xid
--- (verified directly: `pg_current_xact_id_if_assigned()` is NULL before
--- `plan()` and non-NULL immediately after), so every assertion in this file
--- already has a top-level xid by construction; (b) the ONLY mechanism that
--- could otherwise produce a genuinely xid-less session mid-file — dblink —
--- is the one the file header documents as corrupting this exact function's
--- own snapshot-visibility check for the rest of the transaction. Both
--- reasons independently rule out a behavioural leg here.
+-- assigned): the fail-closed leg. STILL STRUCTURAL — but RE-DERIVED here,
+-- not carried forward: the previous version of this file gave TWO reasons,
+-- and the second ("dblink corrupts the snapshot") is now known to be a
+-- mis-diagnosis of the real, now-fixed defect and does not survive. THE ONE
+-- REASON THAT DOES SURVIVE, UNCHANGED BY EITHER REWORK: `plan()` itself
+-- unconditionally assigns this transaction a top-level xid before any leg
+-- in this file can run (verified directly: `pg_current_xact_id_if_assigned()`
+-- is NULL immediately before `plan()` and non-NULL immediately after), so a
+-- genuinely xid-less state in THIS SESSION'S OWN transaction is unreachable
+-- from any leg here — dblink or not, since dblink is a SEPARATE session and
+-- cannot affect this session's own xid-assignment history either way. This
+-- is the one guard in the function that this rework left untouched (it is
+-- part of the C1 fail-closed-first check, not the C2 subject-resolution
+-- predicate that changed), so its structural check needs no re-aiming to a
+-- new primitive — only the standing comment-stripping rule, applied for
+-- consistency with every other prosrc assertion in this file.
 -- =====================================================================
 select ok(
-  (select prosrc ~ 'pg_current_xact_id_if_assigned\(\) is null'
-      and prosrc ~ 'this transaction has written nothing'
+  (select regexp_replace(prosrc, '--[^\n]*', '', 'g') ~* 'pg_current_xact_id_if_assigned\(\)\s+is\s+null'
+      and regexp_replace(prosrc, '--[^\n]*', '', 'g') ~* 'this transaction has written nothing'
      from pg_proc
     where oid = 'pfin.fn_emit_audit_log(text,text,date,text,bigint)'::regprocedure),
-  '(9) STRUCTURAL (untestable behaviourally from inside this file for two independent reasons — see the comment above): the body guards on pg_current_xact_id_if_assigned() IS NULL and raises naming "this transaction has written nothing"'
+  '(9) STRUCTURAL, RE-DERIVED (see comment above): untestable behaviourally because plan() itself assigns this transaction''s xid before any leg can run, independent of dblink or the C2 predicate that changed. Comment-stripped, case-insensitive: the body guards on pg_current_xact_id_if_assigned() IS NULL and raises naming "this transaction has written nothing"'
 );
 
 -- =====================================================================
@@ -443,59 +659,6 @@ select is(
   (select array_agg(trigger_source order by audit_id) from pfin.audit_log where audit_id in (:c12a_id, :c12b_id, :c12c_id, :c12d_id)),
   array['on_demand', 'on_demand', 'on_demand', 'on_demand'],
   '(12) ''CRON'', ''cron '', '''', and ''on_demand,cron'' ALL yield ''on_demand'' — exact match only, never a prefix, never case-folded, never trimmed'
-);
-
--- =====================================================================
--- LEG 6 — UPDATE / DELETE / TRUNCATE refused under both roles. MOVED HERE,
--- last, DELIBERATELY — see the file header's second measured finding: a
--- throws_like()-caught exception from a real BEFORE trigger on an
--- UPDATE/DELETE (exactly what 6a-6d need) leaves THIS transaction's own
--- pg_current_snapshot() unable to correctly attest a LATER plain top-level
--- write as "written in this transaction" — which is exactly what legs
--- 8-iii/10/11/12 need `fn_emit_audit_log`'s C2 check to get right. Running
--- leg 6 after them, not before, keeps those legs BEHAVIOURAL instead of
--- forcing a further structural-pin downgrade. Leg 6 itself needs no C2
--- success path, so its own correctness is unaffected by running last.
--- =====================================================================
-select is(
-  (select count(*)::int from pfin.audit_log where audit_id = :a1::bigint),
-  1,
-  '(6-setup) NON-VACUOUS sanity: leg 2''s row (the one 6a-6d mutate) still exists — robust to how many OTHER legs have written by this point in the file, unlike a total per-tenant count would be'
-);
-select throws_like(
-  format($$ update pfin.audit_log set tenant_resolution_chain = 'forged' where audit_id = %s $$, :a1),
-  :'m_immut',
-  '(6a) UPDATE refused as postgres/owner (no role test in the trigger)'
-);
-select throws_like(
-  format($$ delete from pfin.audit_log where audit_id = %s $$, :a1),
-  :'m_immut',
-  '(6b) DELETE refused as postgres/owner'
-);
--- NOTE: SELECT is required alongside UPDATE/DELETE even though this leg never
--- reads a column value directly — the WHERE audit_id = %s predicate itself
--- needs SELECT to evaluate (same privilege-model fact as RETURNING: a command
--- that filters or returns a column needs SELECT on it, distinct from the
--- write verb's own grant).
-grant usage on schema pfin to service_role;
-grant select, update, delete on pfin.audit_log to service_role;
-select set_config('role', 'service_role', true);
-select throws_like(
-  format($$ update pfin.audit_log set tenant_resolution_chain = 'forged' where audit_id = %s $$, :a1),
-  :'m_immut',
-  '(6c) UPDATE refused as service_role too (test-only grant; no role test in the trigger)'
-);
-select throws_like(
-  format($$ delete from pfin.audit_log where audit_id = %s $$, :a1),
-  :'m_immut',
-  '(6d) DELETE refused as service_role'
-);
-select set_config('role', 'postgres', true);
-revoke select, update, delete on pfin.audit_log from service_role;
-select throws_like(
-  $$ truncate pfin.audit_log $$,
-  :'m_truncate',
-  '(6e) TRUNCATE refused — the one operation an audit trail exists to make impossible'
 );
 
 select * from finish();
