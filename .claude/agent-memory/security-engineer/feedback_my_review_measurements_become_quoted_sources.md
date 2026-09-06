@@ -154,3 +154,18 @@ assertion. ⚠ And watch the `count(*) = N over a hard-coded name list` shape sp
 the list to match a corrected header turns the leg RED for the right reason in the wrong place, and
 the natural "fix" is to delete the new names — undoing the correction. Enumerate the broken legs BY
 NAME in the hand-off so they are re-cut deliberately rather than discovered by red.
+
+**⚠ AND A BADLY-BUILT COUNT REPORTS A DIFFERENT UNIT THAN I READ IT AS — it nearly produced a false
+ADR-016 allowlist finding (A7 pre-placement, 2026-09-06).** Sweeping the six UI branches for
+`SUPABASE_SERVICE_ROLE_KEY` against team-lead's claim of *"no reference anywhere in the chain"*, I ran
+`git grep -c PATTERN <ref> -- api/src | wc -l` and got **1 on all six**, which read as six
+contradictions. `git grep -c` emits one `ref:file:count` LINE PER MATCHING FILE, so `wc -l` counted
+**files**, not hits — and the single file was the pre-existing, allowlisted
+`api/src/lib/server/supabase-admin.ts`, byte-identical to `main`. The claim was true.
+**The right instrument for "did THIS BRANCH add one" is a diff, not a census:**
+`git diff origin/main <ref> -- <path> | grep '^+' | grep PATTERN`. **How to apply:** before reporting
+any count that contradicts a teammate, say out loud what ONE unit of the number is (a file? a line? an
+occurrence?) and confirm the command emits that unit — and for a did-it-CHANGE question, never reach
+for a census at all. Related: [[read-the-branch-from-the-ref-not-the-worktree]] (a census answers
+"is it true at the ref", a diff answers "did it change") and
+[[a-probe-asserting-only-rc-neq-0-goes-vacuous]].

@@ -1,9 +1,13 @@
 ---
 name: pdf-worker-pulls-html-it-is-not-pushed-json
-description: ARCH §3.2 + Lock 13 + RT-21 all have the PDF worker PULLING rendered HTML from the app; three drafted V1.5 ACs inverted it into an app→worker JSON push — borrowed from the provider-sync admission hop, a different attacker model.
+description: SUPERSEDED as live state by R2 (C) 2026-09 — the app now PUSHES finished HTML and the worker is a PDF printer. Kept for its still-live lesson: read the ARCH sequence diagram before drafting either side of a cross-container hop, and direction decides who owns escaping.
 metadata:
   type: reference
 ---
+
+⚠ **SUPERSEDED AS LIVE STATE, 2026-09-06.** The V1.5 sitting ruled **R2 (C)**: the app composes under the user's own session, renders the shared Svelte template, and **PUSHES finished HTML** to the worker, which is *"a PDF printer, nothing else"* — exactly the *third option* this note flagged as worth keeping (last paragraph). `/internal/pdf-render` is **retired as an app route**; ARCH §3.2 and RT-21 are the artifacts that were wrong, and SD-20 — the outlier called out below — was **right all along**. Read the live record before citing anything here as current.
+
+What follows is the 2026-08 state, kept for the reasoning, not the direction.
 
 **The PDF worker pulls; it is not pushed to.** `docs/ARCH/index.html` §3.2's sequence diagram, verbatim in order: worker mints JWT → `PW->>V1: "GET /internal/pdf-render + signed JWT"` → V1 verifies (RT-21) → V1 calls the INVOKER helper → DB returns data → **`V1-->>PW: Rendered HTML`** → Puppeteer → PDF. SECURITY RT-21 agrees (*"V1 app `/internal/pdf-render` endpoint verifies inbound JWT **from PDF worker**"*); ADR-011 Decision 17 / Lock 13 agrees (*"Puppeteer browser-context-per-render hitting V1 app render URL"*).
 
