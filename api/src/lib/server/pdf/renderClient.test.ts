@@ -19,8 +19,10 @@ import { renderReportHtml, mintRenderToken, __resetConfigForTests } from './rend
 declare const process: { env: Record<string, string | undefined> };
 
 const USERS_ID = '22222222-2222-4222-8222-222222222222';
-const SIGNING_KEY = 'test-signing-key-do-not-leak';
-const OTHER_KEY = 'a-different-key-entirely';
+// >= MIN_SIGNING_KEY_LENGTH (32, Sec F-8) — a shorter value here would make every
+// non-config test in this file fail at renderConfig()'s own entropy-floor check.
+const SIGNING_KEY = 'test-signing-key-do-not-leak-3456789';
+const OTHER_KEY = 'a-different-key-entirely-0123456789';
 
 function pdfResponse(): Response {
 	return new Response(new Uint8Array([0x25, 0x50, 0x44, 0x46]) /* %PDF */, {
@@ -50,7 +52,7 @@ describe('RT-21 (b): dedicated signing key', () => {
 		expect(payload.users_id).toBe(USERS_ID);
 	});
 
-	it('the SAME token does NOT verify under a different key — proves this is the dedicated key, not an incidental one', async () => {
+	it('DOCUMENTATION LEG, not coverage (Sec F-3(b)): the SAME token does not verify under a different key. This is a property of HMAC itself and cannot fail for any defect of THIS module — kept as a readable statement of the property this letter relies on, not counted toward RT-21 (b)\'s actual coverage (the first leg above, which DOES exercise this module\'s own key selection, is that coverage)', async () => {
 		const token = await mintRenderToken(USERS_ID);
 		await expect(
 			jwtVerify(token, new TextEncoder().encode(OTHER_KEY), { algorithms: ['HS256'] })
@@ -59,14 +61,26 @@ describe('RT-21 (b): dedicated signing key', () => {
 });
 
 // ── (a) tier restriction -> key restriction ────────────────────────────────────────────
-describe('RT-21 (a): no Supabase-tier concept on this path', () => {
-	it('this module never IMPORTS a Supabase client or touches a Supabase session token (prose mentions in comments are fine — this checks actual usage, via import statements)', () => {
+// Sec F-3(a): "deleting it removes the assertion that a Supabase-issued token cannot drive
+// a render" is the AC's own claim for this letter, and this leg does not carry it — that
+// assertion is WORKER-side and is covered at A4
+// (workers/pdf-render/test/auth.test.js: "a wrong-key signature is rejected and counted
+// under signature_verification_failed"). This leg's actual job is narrower and stated as
+// such: this module IMPORTS no Supabase client anywhere in its own source.
+describe('RT-21 (a): no Supabase-tier concept on this path (the "cannot drive a render" assertion itself lives at A4 — see auth.test.js)', () => {
+	it('this module never IMPORTS a Supabase client (prose mentions in comments are fine — this checks actual usage, matched against the WHOLE source so a wrapped/multi-line import or a dynamic import() cannot slip past a line-anchored filter)', () => {
 		const src = readFileSync(fileURLToPath(new URL('./renderClient.ts', import.meta.url)), 'utf8');
-		const importLines = src
+		// Strip comments first so a prose mention (this file's own module header discusses
+		// "Supabase-tier" at length) cannot false-positive the match — then match the WHOLE
+		// remaining source, not line-by-line: a wrapped import
+		// (`import {\n  x\n} from '@supabase/...'`) puts the specifier on a line that does
+		// not itself start with `import`, and `await import('@supabase/...')` never starts
+		// a line with the `import` keyword at all. Sec F-3(a).
+		const code = src
 			.split('\n')
-			.filter((line) => /^\s*import\b/.test(line))
+			.filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
 			.join('\n');
-		expect(importLines).not.toMatch(/supabase/i);
+		expect(code).not.toMatch(/from\s+['"][^'"]*supabase|import\s*\(\s*['"][^'"]*supabase/i);
 	});
 });
 
@@ -104,6 +118,19 @@ describe('RT-21 (d): a fresh nonce every mint', () => {
 			.headers['authorization'];
 		expect(auth1).not.toBe(auth2);
 	});
+
+	it('the authorization header is EXACTLY "Bearer <jwt>" — matches the worker\'s own parse (/^Bearer\\s+(\\S+)$/, workers/pdf-render/src/auth.js), which the two legs above compare VALUES against without ever asserting the prefix shape itself (Sec F-3)', async () => {
+		const fetchMock = vi.fn(async () => pdfResponse());
+		vi.stubGlobal('fetch', fetchMock);
+		await renderReportHtml(USERS_ID, '<html></html>');
+		const auth = (fetchMock.mock.calls[0] as unknown as [string, { headers: Record<string, string> }])[1]
+			.headers['authorization'];
+		const match = /^Bearer\s+(\S+)$/.exec(auth);
+		expect(match).not.toBeNull();
+		// The captured token is a real JWT — three dot-separated, non-empty segments —
+		// never an empty string a looser prefix check could pass.
+		expect(match?.[1].split('.')).toHaveLength(3);
+	});
 });
 
 // ── (e) NO service_role escalation — structural under R2 (C) ──────────────────────────
@@ -115,13 +142,11 @@ describe('RT-21 (e): no escalation path, structural not behavioral', () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
-	it('references A4\'s own fence rather than re-asserting DB-isolation independently (cited, not re-implemented)', () => {
-		// This leg is intentionally a CITATION, not a duplicate control: the worker's
-		// zero-Supabase-credential guarantee is RT-22 + the RT-22-manifest fence
-		// (workers/pdf-render/Dockerfile + package.json, SELF-348). Re-asserting it here
-		// against files that don't exist on THIS branch (A4 hasn't merged) would be a
-		// false-positive-prone duplicate of a control this module cannot see.
-		expect(true).toBe(true);
+	it('this module holds no Supabase credential reach: the source names no SUPABASE_* env var and no service_role (Sec F-3(e) — the worker\'s OWN zero-Supabase-credential guarantee is a separate, cited fence: RT-22 + the RT-22-manifest fence, workers/pdf-render/Dockerfile + package.json, SELF-348, merged to `main` at `bde35a7` — this leg does not re-assert that against files it cannot see; it checks THIS module\'s own source, which is a real, failable assertion, replacing a previous `expect(true).toBe(true)`)', () => {
+		const src = readFileSync(fileURLToPath(new URL('./renderClient.ts', import.meta.url)), 'utf8');
+		const code = src.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+		expect(code).not.toMatch(/SUPABASE_[A-Z_]+/);
+		expect(code).not.toMatch(/service_role/);
 	});
 });
 
@@ -133,6 +158,15 @@ describe('RT-21 (f): dedicated endpoint', () => {
 		await renderReportHtml(USERS_ID, '<html></html>');
 		const [url] = fetchMock.mock.calls[0] as unknown as [string];
 		expect(url).toBe('http://worker.test:8080/render');
+	});
+
+	it('POSTs the html argument BYTE-FOR-BYTE as the request body — this module constructs no markup and interpolates nothing into it (Sec F-3; the module header\'s own negative assertion, previously unwatched)', async () => {
+		const fetchMock = vi.fn(async () => pdfResponse());
+		vi.stubGlobal('fetch', fetchMock);
+		const html = '<html><body>MARKER-' + Math.random() + '</body></html>';
+		await renderReportHtml(USERS_ID, html);
+		const call = fetchMock.mock.calls[0] as unknown as [string, { body: string }];
+		expect(call[1].body).toBe(html);
 	});
 });
 
@@ -160,6 +194,53 @@ describe('RT-21 (g): worker rejection propagates as ok:false, status only in log
 		vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('ECONNREFUSED'); }));
 		const result = await renderReportHtml(USERS_ID, '<html></html>');
 		expect(result).toEqual({ ok: false, status: 502 });
+	});
+
+	it('Sec F-1 catch criterion (1): a 200 response whose BODY READ rejects (mid-body network failure, after headers already arrived) returns { ok:false, status:502 }, never a thrown error out of renderReportHtml', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(
+				async () =>
+					new Response(
+						new ReadableStream({
+							start(controller) {
+								controller.error(new Error('mid-body network failure'));
+							}
+						}),
+						{ status: 200 }
+					)
+			)
+		);
+		// If the body read were outside the try/catch (the pre-fix shape), this call
+		// would REJECT instead of resolving to a discriminated result — the assertion
+		// itself is the catch criterion.
+		await expect(renderReportHtml(USERS_ID, '<html></html>')).resolves.toEqual({
+			ok: false,
+			status: 502
+		});
+	});
+
+	// Sec F-1's SECOND catch criterion — "a stub whose arrayBuffer() never settles must be
+	// aborted by TIMEOUT_MS rather than hanging the spec" — is explicitly labelled in Sec's
+	// own review file as a leg "for the paired legs (QA)", not authored here. Attempted it
+	// here first regardless (`vi.useFakeTimers()` + `vi.advanceTimersByTimeAsync(30_000)`
+	// around a hung `fetch` mock) and it does NOT work in this file as a quick add: this
+	// module's `mintRenderToken` calls `jose`'s `SignJWT.sign()` (WebCrypto HMAC signing)
+	// BEFORE the fetch/timeout logic ever runs, and that operation appears to depend on
+	// real event-loop/libuv completion rather than resolving purely off vitest's fake
+	// timer + microtask queue — the whole test hangs to vitest's OWN 5s test timeout
+	// without ever reaching the code path it's meant to exercise, regardless of how the
+	// fetch mock itself is shaped. Left for QA to solve (a per-test `vi.spyOn` on
+	// `mintRenderToken` to skip real signing while fake timers are active is one plausible
+	// route; a real, short-real-time test with a small custom timeout is another) rather
+	// than land a leg that either hangs CI or silently passes for the wrong reason.
+});
+
+// ── Claim SET (Sec F-2) — the exhaustive shape, not just individual presence/absence ────
+describe('SD-20 claim set: EXACTLY { users_id, nonce, iat }, no data_as_of, no silent additions', () => {
+	it('the claim set is EXACTLY { users_id, nonce, iat } — no data_as_of claim (SD-20 verbatim; ADR-011 Decision 19 / Lock 15 mod #7b), no silent additions', async () => {
+		const token = await mintRenderToken(USERS_ID);
+		expect(Object.keys(decodeJwt(token)).sort()).toEqual(['iat', 'nonce', 'users_id']);
 	});
 });
 
@@ -218,5 +299,17 @@ describe('config', () => {
 		await renderReportHtml(USERS_ID, '<html></html>');
 		const [url] = fetchMock.mock.calls[0] as unknown as [string];
 		expect(url).toBe('http://pdf-render:8080/render');
+	});
+
+	it('Sec F-8: throws a clear error when PDF_WORKER_SIGNING_KEY is shorter than the entropy floor, rather than signing with an obviously-too-short secret', async () => {
+		process.env.PDF_WORKER_SIGNING_KEY = 'too-short';
+		__resetConfigForTests();
+		await expect(mintRenderToken(USERS_ID)).rejects.toThrow(/shorter than/i);
+	});
+
+	it('Sec F-8: a signing key AT the entropy floor (32 chars) is accepted', async () => {
+		process.env.PDF_WORKER_SIGNING_KEY = 'x'.repeat(32);
+		__resetConfigForTests();
+		await expect(mintRenderToken(USERS_ID)).resolves.toEqual(expect.any(String));
 	});
 });

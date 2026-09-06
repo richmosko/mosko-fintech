@@ -33,9 +33,11 @@
 //       never the Supabase JWT secret, never derived from a user's session token.
 //   (c) 60-SECOND FRESHNESS WINDOW on `iat` (NOT `exp` — a freshness window asserts when
 //       the token was MINTED, and pinning `exp` instead would let a token minted long ago
-//       with a generous expiry pass). Minted here, checked worker-side
-//       (workers/pdf-render/src/auth.js, FRESHNESS_WINDOW_SECONDS = 60 — SAME value; if
-//       these ever diverge the freshness check on one side is arguing with the other).
+//       with a generous expiry pass). Minted here (this module sets `iat` only, via
+//       `setIssuedAt()`); the 60-second WINDOW is checked and enforced ENTIRELY worker-side
+//       (workers/pdf-render/src/auth.js, FRESHNESS_WINDOW_SECONDS) — this module holds no
+//       numeral for it and has nothing that could diverge from the worker's, because
+//       nothing here reads one (Sec F-4).
 //   (d) NONCE REPLAY PROTECTION. A fresh `randomUUID()` (node:crypto) per call — this module never
 //       reuses a nonce across calls, and never accepts one as an argument (an argument
 //       would be a second, caller-controlled path to a forged single-use guarantee).
@@ -53,12 +55,14 @@
 //       is none; see DIRECTION above).
 //   (g) REJECTED PAYLOADS DROPPED WITH A DETECTION SIGNAL. This is the WORKER'S obligation
 //       (a rejection happens on ITS verification, not this caller's) — see
-//       workers/pdf-render/src/auth.js for the ADR-050 Decision 4 proposal + minimal
-//       bounded-counter implementation (a follow-up commit on feature/self-348, not this
-//       branch, since that file doesn't exist on `main` yet — A4 hasn't merged). This
-//       module's OWN half of (g): a non-2xx response is logged as a STATUS ONLY
+//       workers/pdf-render/src/auth.js for the ADR-050 Decision 4 bounded-counter
+//       implementation (feature/self-348, merged to `main` at `bde35a7`).
+//       This module's app-side conduct on a rejection is REDACTION ONLY, and is NOT part
+//       of (g)'s discharge: a non-2xx response is logged as a STATUS ONLY
 //       (`[pdf-render] worker returned <status>`), never the body, the token, or the
-//       signing key — see REDACTION below.
+//       signing key — see REDACTION below. Per ADR-050 Decision 6's 2026-09-05 annotation
+//       (Sec R-6, E28), an app-side rejection signal measures a DIFFERENT POPULATION than
+//       (g) and is not a substitute for it; (g) is discharged wholly at the worker.
 //   Labelled ADDITIONS (Sec F-3; kept as SUCH, not folded into the canonical letters):
 //     tenant-claim PRESENCE  — `users_id` is a REQUIRED claim (never omitted); this is
 //       presence, not trust — see the ⟨OPEN⟩ note below for what the worker does with it
@@ -71,26 +75,24 @@
 //       distinction that does not exist on this boundary today. Revisit if a second
 //       caller or a second verifier is ever added.
 //
-// ⟨OPEN⟩ — ITEM 6, `users_id` CLAIM vs AN OPAQUE CORRELATION ID (recorded, NOT resolved
-// here — routed to Sec per team-lead's instruction, this paragraph IS the proposal, not
-// a decision). SD-20 is ratified and already written for a `users_id`-carrying claim, and
-// this module keeps it AS RATIFIED. The tension worth Sec's read: R2 (C) states the
-// worker holds "no tenant or money knowledge", and a `users_id` claim gives it one bit of
-// tenant knowledge it never uses (verified: workers/pdf-render/src/auth.js reads the claim
-// only to confirm PRESENCE — `typeof decoded.users_id !== 'string'` — never its VALUE,
-// past that check). Two ways to read that: (i) it's already inert in practice, so leaving
-// it is the lower-churn choice — SD-20 is ratified, a change is a one-way door on a
-// Sec-owned artifact, and "the worker doesn't use it" is not the same claim as "the worker
-// couldn't be made to use it by a later, less careful edit" — an opaque correlation id
-// (e.g. a per-render UUID minted here, carrying no tenant semantics at all) would remove
-// that capability structurally rather than by convention, closing the gap ADR-011
-// Decision 1's own reasoning about capability-vs-discipline generally argues for; OR
-// (ii) `users_id`'s presence is useful FORENSICALLY (a worker-side rejection log line
-// naming the claim, even unverified-and-untrusted per RT-21 letter (g)'s own caveat, is
-// more actionable during an incident than an opaque id with no meaning outside this
-// module). This module does not adjudicate between (i) and (ii) — it ships (i)'s
-// as-ratified shape and states the question so Sec can answer it once rather than have it
-// re-litigated per surface.
+// ⟨OPEN⟩ — ITEM 6, `users_id` CLAIM vs AN OPAQUE CORRELATION ID — RULED: ship the
+// `users_id`-carrying claim AS RATIFIED, no SD-20/RT-21 edit (Sec, SELF-349 review). SD-20
+// is ratified and already written for it, and this module keeps it unchanged. The tension
+// this paragraph records for institutional memory, not as an open question: R2 (C) states
+// the worker holds "no tenant or money knowledge", and a `users_id` claim gives it one bit
+// of tenant knowledge it never uses (verified: workers/pdf-render/src/auth.js reads the
+// claim only to confirm PRESENCE — `typeof decoded.users_id !== 'string'` — never its
+// VALUE, past that check). The surviving ground for the ruling: leaving it is the
+// lower-churn choice — a change is a one-way door on a Sec-owned artifact, and "the worker
+// doesn't use it" is not the same claim as "the worker couldn't be made to use it by a
+// later, less careful edit"; an opaque correlation id would remove that capability
+// structurally rather than by convention, but the churn of a ratified-artifact change was
+// not judged worth it here.
+// ⚠ A prior draft of this paragraph also argued the claim's presence is useful
+// FORENSICALLY, on the premise that a worker-side rejection log could NAME the claim's
+// value. That premise is FALSE, measured: `_rejected()` (workers/pdf-render/src/auth.js,
+// ADR-050 Decision 4) logs a fixed, bounded REASON CODE only — it never reads or logs
+// `users_id`'s value on any path. That argument is dropped, not carried forward.
 //
 // RT-25 (as-of-date parameter-bypass) — DOES NOT APPLY TO THIS BOUNDARY, stated rather
 // than silently assumed: `html` is ALREADY RENDERED before it reaches this module — no
@@ -117,10 +119,11 @@ const DEFAULT_BASE_URL = 'http://pdf-render:8080';
 // Longer than admissionClient's 10s — this call does a real headless-Chrome render on
 // the far side, not a lightweight admission RPC.
 const TIMEOUT_MS = 30_000;
-// MUST match workers/pdf-render/src/auth.js's FRESHNESS_WINDOW_SECONDS exactly (RT-21
-// letter (c)) — minted here, checked there. A mismatch would not fail loudly; it would
-// silently widen or narrow the window on whichever side is stale.
-const FRESHNESS_WINDOW_SECONDS = 60;
+// Sec F-8: under R2 (C) this single shared secret is the ENTIRE admission perimeter for
+// "make headless Chrome render arbitrary bytes" — there is no second factor. A floor, not
+// a real entropy check (length is not entropy), but cheap and catches a placeholder/typo
+// value before it ever reaches a signing call.
+const MIN_SIGNING_KEY_LENGTH = 32;
 
 // ── Env config (memoized, fail-loud at first use — mirrors admissionClient.ts) ─────────
 let cfg: { baseUrl: string; secret: Uint8Array } | null = null;
@@ -130,6 +133,13 @@ function renderConfig(): { baseUrl: string; secret: Uint8Array } {
 	if (!secret) {
 		throw new Error(
 			'Missing PDF_WORKER_SIGNING_KEY — set it in the container runtime env (production_only per secrets-manifest.yml; SD-20).'
+		);
+	}
+	if (secret.length < MIN_SIGNING_KEY_LENGTH) {
+		// Sec F-8: fail loud on an obviously-too-short secret rather than sign with one —
+		// this key is the whole perimeter (see the constant's own comment above).
+		throw new Error(
+			`PDF_WORKER_SIGNING_KEY is shorter than ${MIN_SIGNING_KEY_LENGTH} characters — refusing to sign with a secret this short (SD-20; it is the entire admission perimeter under R2 (C)).`
 		);
 	}
 	const baseUrl = (env.PDF_RENDER_WORKER_URL || DEFAULT_BASE_URL).replace(/\/+$/, '');
@@ -172,34 +182,48 @@ export async function renderReportHtml(usersId: string, html: string): Promise<R
 	const { baseUrl } = renderConfig();
 	const token = await mintRenderToken(usersId);
 
+	// Sec F-1: the body read (`res.arrayBuffer()` — the whole PDF download) MUST stay
+	// inside this same try/finally, guarded by the SAME abort timer, exactly like
+	// admissionClient.ts's `callWorker()` does for its own body read. `fetch()` resolves
+	// once RESPONSE HEADERS arrive — a version that clears the timer and exits the try
+	// right after `fetch()` returns leaves the body download unbounded (a worker that
+	// dribbles the body holds this call open indefinitely) and lets a mid-body network
+	// error THROW OUT of this function, contradicting its own discriminated-result
+	// contract below.
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-	let res: Response;
 	try {
-		res = await fetch(`${baseUrl}${RENDER_PATH}`, {
+		const res = await fetch(`${baseUrl}${RENDER_PATH}`, {
 			method: 'POST',
 			headers: {
 				'content-type': 'text/html',
 				[AUTH_HEADER]: `Bearer ${token}`
 			},
 			body: html,
-			signal: controller.signal
+			signal: controller.signal,
+			// Sec N-2: a compromised/misconfigured worker could otherwise 307/308 this
+			// POST (with the finished report HTML) to a redirect target, and a
+			// subsequent 200 from THAT target would read as a successful render. The
+			// worker never legitimately redirects; refuse the class outright rather
+			// than following it.
+			redirect: 'error'
 		});
+
+		if (res.status !== 200) {
+			// (g)'s app-side half — status ONLY, never the body.
+			console.error(`[pdf-render] worker returned ${res.status}`);
+			return { ok: false, status: res.status };
+		}
+
+		const pdfBytes = new Uint8Array(await res.arrayBuffer());
+		return { ok: true, pdfBytes };
 	} catch {
-		// Network error / DNS / connection refused / timeout-abort → worker unreachable.
-		// Never logs `html` or `token` — see REDACTION above.
+		// Network error / DNS / connection refused / timeout-abort / a mid-body read
+		// failure / a refused redirect → worker unreachable or misbehaving. Never logs
+		// `html` or `token` — see REDACTION above.
 		console.error('[pdf-render] worker unreachable (transport failure)');
 		return { ok: false, status: 502 };
 	} finally {
 		clearTimeout(timer);
 	}
-
-	if (res.status !== 200) {
-		// (g)'s app-side half — status ONLY, never the body.
-		console.error(`[pdf-render] worker returned ${res.status}`);
-		return { ok: false, status: res.status };
-	}
-
-	const pdfBytes = new Uint8Array(await res.arrayBuffer());
-	return { ok: true, pdfBytes };
 }
