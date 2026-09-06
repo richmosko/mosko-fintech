@@ -298,6 +298,29 @@
 --      all through the granted path**, and an unobservable constraint is precisely the
 --      one a later reader drops as dead code — which would remove the storability
 --      floor for the owner path. Two questions, two legs.
+--   ⚠⚠ **STANDING RULE FOR EVERY `prosrc` ASSERTION IN THIS FILE'S BATTERY — NOT ONLY
+--      7g, AND THE REASON IS UNCOMFORTABLE: PRESENCE CHECKS ON `prosrc` ARE VACUOUS
+--      HERE *BECAUSE THE COMMENTS ARE GOOD*.** This file explains at length which
+--      primitives it uses, which it rejected, and why — so a substring survives in the
+--      prose long after it has left the code. **The better the explanatory comment, the
+--      more reliably a presence check passes on it.** That is an unwelcome property of
+--      the documentation discipline this file otherwise exemplifies, and it is written
+--      here rather than at one leg because it applies to every assertion of this shape.
+--      **MEASURED IN THE INSTALLED BODY (`ca6d5cb`):**
+--        · `pg_visible_in_snapshot`        — raw **3**, comment-stripped **0**
+--        · `pg_xact_status`                — raw **5**, comment-stripped **1**
+--        · `pg_current_xact_id_if_assigned` — raw **2**, comment-stripped **1**
+--      ⚠ **It is vacuous in BOTH directions, which is the part that bites.** A legacy
+--      leg asserting the SUPERSEDED primitive goes **GREEN** — the abandoned name is
+--      still in the comments explaining the abandonment — so it certifies that the body
+--      uses a primitive it does not use **at all**. And a re-aimed leg asserting the
+--      CURRENT primitive would pass even if the executable body used something else
+--      entirely. ⚠ **A red gets investigated; a GREEN GETS TRUSTED**, which makes the
+--      first case the dangerous one and makes "the battery was checked" false evidence.
+--      **THEREFORE: strip `--` comments first, then assert, and match case-insensitively
+--      (`~*` / `'gi'`).** This file's own apply-time watcher is the reference
+--      implementation — strip, then count, case-insensitive.
+--
 --   7a. **C2 legs, and the two refusals must be asserted SEPARATELY (Sec):**
 --      an audit call naming a report **written in an earlier transaction** is refused
 --      with the earlier-transaction message; one naming **another tenant's** report is
