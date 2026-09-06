@@ -28,8 +28,10 @@
 -- and cross-tenant share ONE message family here (both leave v_report_id
 -- null), unlike 113 where the code path falls through to an INSERT.
 --
--- ⚠ "LOOKS LIKE YOU PLANNED 53 TESTS BUT RAN 49" IS EXPECTED, AND DOES NOT
--- MEAN A SAVEPOINT-WRAPPED LEG CAN'T FAIL (VERIFIED, not inferred — struck
+-- ⚠ BEFORE the ran-count watcher leg below existed, this file showed
+-- "LOOKS LIKE YOU PLANNED 53 TESTS BUT RAN 49" in an aggregate pg_prove run
+-- — EXPECTED, and it did NOT MEAN a savepoint-wrapped leg can't fail
+-- (VERIFIED, not inferred — struck
 -- guard (6a) in the real `fn_finalize_monthly_report` on a scratch clone and
 -- ran this UNMODIFIED file through pg_prove: (14h-i)/(14h-ii) correctly went
 -- `not ok`, by name, with `Result: FAIL`). The mechanism: an `ok(...)`/
@@ -43,17 +45,37 @@
 -- trailing savepoint-wrapped legs with nothing non-rolled-back after them to
 -- refresh that counter. Expected drift here = 4, exactly the trailing 14h-i
 -- through 14h-iv legs (each its own `savepoint ... rollback to savepoint`
--- pair, immediately before `finish()`). This line is COSMETIC to pass/fail
--- detection — but the residual it leaves is real: the PLAN COUNT itself no
--- longer functions as a guard against a leg that is ACCIDENTALLY never
--- executed at all inside such a savepoint (a leg whose `select ok(...)` is
--- itself missing, or short-circuited before it runs, produces the identical
--- "planned N ran M" comment as one that ran and passed or ran and was
--- correctly caught failing — the comment cannot distinguish those cases).
+-- pair, immediately before `finish()`).
+--
+-- ⚠ WITH THE RAN-COUNT WATCHER LEG BELOW IN PLACE, the "planned N ran M"
+-- comment no longer appears at all (verified) — the watcher leg is itself
+-- NOT savepoint-wrapped, so its own `_set('curr_test', …)` write survives to
+-- `finish()`'s read and resurrects the counter to match the plan exactly,
+-- the same "a later non-rolled-back write overwrites the loss" mechanism
+-- this note already describes. That is a side effect, not the point: the
+-- watcher's OWN comparison runs BEFORE that resurrecting write, comparing
+-- the declared plan against the counter as the four rolled-back legs
+-- actually left it — a GAP, not a bare literal (see the leg's own comment
+-- for why a bare `curr_test = 49` literal was tried first and inversion-
+-- proven wrong).
+--
+-- ⚠ THIS IS A KNOWINGLY DISARMED PLAN/RAN WATCHER, NEVER "COSMETIC" (Sec-c):
+-- pass/fail detection itself is intact (see above, verified) — but the PLAN
+-- COUNT watcher specifically no longer functions as a guard against a leg
+-- that is ACCIDENTALLY never executed at all inside such a savepoint (a leg
+-- whose `select ok(...)` is itself missing, or short-circuited before it
+-- runs, produces the IDENTICAL "planned N ran M" comment as one that ran
+-- and passed, or ran and was correctly caught failing — the comment cannot
+-- distinguish those cases). Calling that "cosmetic" undersells it: a WATCHER
+-- exists here and it has been deliberately disarmed by this file's own
+-- shape, on purpose, with the tradeoff named. The leg right before
+-- `finish()` below RE-ARMS it explicitly, so a FIFTH silent drift (a new
+-- trailing savepoint-wrapped leg added later without this note being
+-- updated) REDs instead of hiding inside the same unwatched comment.
 -- Trust `Result:`/the `Failed tests:` list, not the plan-count comment, for
--- pass/fail; if a leg's actual EXECUTION is ever in doubt, verify it the way
--- this note was verified — strike the real guard and watch the real leg
--- flip, not from the plan-count line alone.
+-- individual leg pass/fail; if a leg's actual EXECUTION is ever in doubt,
+-- verify it the way this note was verified — strike the real guard and
+-- watch the real leg flip, not from the plan-count line alone.
 -- =====================================================================
 
 begin;
@@ -71,7 +93,7 @@ begin;
 \set m_group_no_accounts '%has no `accounts` array%'
 \set m_cardinality_mismatch '%the composed payload names % accounts%'
 
-select plan(53);
+select plan(54);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 \set td '00000000-0000-0000-0000-00000000000d'
@@ -688,6 +710,37 @@ select throws_like(
 );
 select set_config('role', 'postgres', true);
 rollback to savepoint sp_14h_iv;
+
+-- =====================================================================
+-- LEG (RAN-COUNT WATCHER) — Sec-c FLAG-4/option-(C): RE-ARMS the plan/ran
+-- drift this file's own header discusses. Deliberately the LAST leg before
+-- `finish()` and deliberately NOT inside a savepoint, so it always runs and
+-- always counts.
+-- ⚠ NOT a bare `curr_test = 49` literal (tried first, INVERSION-PROVEN
+-- WRONG): struck this exact shape by injecting a FIFTH trailing
+-- savepoint-wrapped leg on a scratch copy and it stayed GREEN — `curr_test`
+-- reverts to whatever the LAST NON-rolled-back write set (49, from leg
+-- 14g's own check) after EVERY rolled-back savepoint, regardless of how
+-- many such legs run in sequence, so a bare literal comparison cannot see a
+-- count of trailing legs change AT ALL.
+-- ⚠ THE ACTUAL CHECK: the ARITHMETIC GAP between the declared plan
+-- (`_get('plan')`, set once by `plan(54)` above, long before any savepoint,
+-- so it never rolls back) and `curr_test` (`_get('curr_test')`, reverted by
+-- every trailing rollback) equals the KNOWN drift of 4. A new trailing
+-- savepoint-wrapped leg bumps the declared plan (a real assertion was
+-- added) but does NOT move `curr_test` (its own write also rolls back), so
+-- the gap becomes 5 and THIS leg REDs — INVERSION-PROVEN on the same
+-- injected-fifth-leg scratch copy, with `plan()` bumped to match, before
+-- landing this shape. Whoever adds a NEW trailing savepoint-wrapped leg to
+-- this file must update the expected drift here (and the header note above)
+-- in the SAME commit — that is the point of naming it a leg rather than
+-- leaving it as prose.
+-- =====================================================================
+select is(
+  public._get('plan') - public._get('curr_test'),
+  5,
+  '(115-watcher) EXPLICIT drift check: the gap between the declared plan (54, set once pre-savepoint, never rolls back) and pgTAP''s own bookkeeping counter (reverted by every trailing rolled-back savepoint, reads 49 here) is EXACTLY 5 — the 4 KNOWN trailing 14h-i..iv legs PLUS this watcher leg itself (planned but not yet run at the moment this comparison executes). A new trailing savepoint-wrapped leg bumps the plan without moving the counter, widening this gap, and REDs this leg by name instead of hiding in the plan-count comment'
+);
 
 select * from finish();
 rollback;
