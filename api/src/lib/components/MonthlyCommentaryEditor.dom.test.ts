@@ -1,4 +1,5 @@
-// MonthlyCommentaryEditor.dom.test.ts — SELF-355 / P3 DOM battery. Covers:
+// MonthlyCommentaryEditor.dom.test.ts — SELF-355 / P3 DOM battery, extended under P4 (SELF-356)
+// for the finalize/skip affordances. Covers:
 //   - the live "{n} / 4000" code-point counter, per section, including the astral-character
 //     unit (Array.from vs .length) and \r\n normalization into the hidden submitted field;
 //   - Save disabled when any section is over the 4000-code-point bound;
@@ -6,7 +7,10 @@
 //     behavior (overwrites the current draft value);
 //   - final/non-draft read-only rendering: disabled textareas, no Save/Finalize-adjacent
 //     copy affordances, the "this report is final" banner;
-//   - the permanently-disabled Finalize stub, regardless of isDraft;
+//   - P4: Finalize wired to its own `?/finalize` form, gated on isDraft, disabled while dirty
+//     (the unsaved-changes guard — see the component's own header for why), and re-enabled once
+//     `lastSaved` catches up to a successful Save's own echoed values;
+//   - P4 AC4: NoLedgerDesignatedPrompt renders when `noLedgerDesignated` is true, never when false;
 //   - the $ ReAlloc reference panel's null-allocation "unavailable" fallback.
 //
 // @vitest-environment jsdom
@@ -35,6 +39,7 @@ function baseProps(overrides: Record<string, unknown> = {}) {
 		priorCommentary: { ...BLANK },
 		allocation: ALLOCATION_STUB,
 		staleness: EMPTY_STALENESS,
+		noLedgerDesignated: false,
 		...overrides
 	};
 }
@@ -222,19 +227,86 @@ describe('MonthlyCommentaryEditor — final / read-only rendering', () => {
 	});
 });
 
-describe('MonthlyCommentaryEditor — Finalize stub (P4 slot, not built here)', () => {
-	it('Finalize is permanently disabled regardless of draft/final state', () => {
-		const draft = render(MonthlyCommentaryEditor, { props: baseProps({ isDraft: true }) });
-		expect(
-			(draft.getByRole('button', { name: 'Finalize September 2026' }) as HTMLButtonElement).disabled
-		).toBe(true);
-		draft.unmount();
+describe('MonthlyCommentaryEditor — Finalize (P4 / SELF-356 AC5, wired)', () => {
+	it('Finalize does not render at all on a final (!isDraft) report — nothing left to finalize', () => {
+		const { queryByRole } = render(MonthlyCommentaryEditor, { props: baseProps({ isDraft: false }) });
+		expect(queryByRole('button', { name: /Finalize/ })).toBeNull();
+	});
 
-		const final = render(MonthlyCommentaryEditor, { props: baseProps({ isDraft: false }) });
+	it('Finalize is ENABLED on a clean draft (values match the last-saved baseline, here the starting commentary)', () => {
+		const { getByRole } = render(MonthlyCommentaryEditor, { props: baseProps() });
 		expect(
-			(final.getByRole('button', { name: 'Finalize September 2026' }) as HTMLButtonElement).disabled
+			(getByRole('button', { name: 'Finalize September 2026' }) as HTMLButtonElement).disabled
+		).toBe(false);
+	});
+
+	it('unsaved-changes guard: typing into a section (without Save) disables Finalize', async () => {
+		const { getByLabelText, getByRole } = render(MonthlyCommentaryEditor, { props: baseProps() });
+		const textarea = getByLabelText('Cash commentary') as HTMLTextAreaElement;
+		await fireEvent.input(textarea, { target: { value: 'unsaved edit' } });
+		expect(
+			(getByRole('button', { name: 'Finalize September 2026' }) as HTMLButtonElement).disabled
 		).toBe(true);
-		final.unmount();
+	});
+
+	it('unsaved-changes guard: shows the "Save your changes before finalizing." hint while dirty', async () => {
+		const { getByLabelText, getByText } = render(MonthlyCommentaryEditor, { props: baseProps() });
+		const textarea = getByLabelText('Cash commentary') as HTMLTextAreaElement;
+		await fireEvent.input(textarea, { target: { value: 'unsaved edit' } });
+		expect(getByText('Save your changes before finalizing.')).toBeTruthy();
+	});
+
+	it('the hint is absent on a clean draft', () => {
+		const { queryByText } = render(MonthlyCommentaryEditor, { props: baseProps() });
+		expect(queryByText('Save your changes before finalizing.')).toBeNull();
+	});
+
+	it('the finalize form carries no body fields beyond the CSRF-free literal action itself (disposition is server-side, never posted)', async () => {
+		const { container } = render(MonthlyCommentaryEditor, { props: baseProps() });
+		const finalizeForm = container.querySelector('form[action="?/finalize"]') as HTMLFormElement;
+		expect(finalizeForm).toBeTruthy();
+		expect(Array.from(new FormData(finalizeForm).keys())).toEqual([]);
+	});
+
+	it('clicking Finalize (clean draft) enters the loading state', async () => {
+		const { getByRole } = render(MonthlyCommentaryEditor, { props: baseProps() });
+		const btn = getByRole('button', { name: 'Finalize September 2026' }) as HTMLButtonElement;
+		await fireEvent.click(btn);
+		expect(btn.getAttribute('aria-busy')).toBe('true');
+	});
+});
+
+describe('MonthlyCommentaryEditor — no-ledger-designated prompt (P4 / SELF-356 AC4)', () => {
+	it('renders the verbatim prompt when noLedgerDesignated is true', () => {
+		const { getByText } = render(MonthlyCommentaryEditor, {
+			props: baseProps({ noLedgerDesignated: true })
+		});
+		expect(
+			getByText('No IRS/FTB ledger designated — NAV on this report will exclude tax liabilities.')
+		).toBeTruthy();
+	});
+
+	it('is absent when noLedgerDesignated is false — a prompt, not a permanent fixture', () => {
+		const { queryByText } = render(MonthlyCommentaryEditor, {
+			props: baseProps({ noLedgerDesignated: false })
+		});
+		expect(queryByText(/No IRS\/FTB ledger designated/)).toBeNull();
+	});
+
+	it('never disables Finalize by itself — a prompt, not a block (AC4)', () => {
+		const { getByRole } = render(MonthlyCommentaryEditor, {
+			props: baseProps({ noLedgerDesignated: true })
+		});
+		expect(
+			(getByRole('button', { name: 'Finalize September 2026' }) as HTMLButtonElement).disabled
+		).toBe(false);
+	});
+
+	it('does not render on a final report (nothing left to finalize)', () => {
+		const { queryByText } = render(MonthlyCommentaryEditor, {
+			props: baseProps({ isDraft: false, noLedgerDesignated: true })
+		});
+		expect(queryByText(/No IRS\/FTB ledger designated/)).toBeNull();
 	});
 });
 

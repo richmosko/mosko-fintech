@@ -329,6 +329,29 @@ export interface MonthlyReportPayload {
  *  hand-off. UTC-pinned (matches every other date-formatting helper in this codebase — nav-series
  *  / historical-expenditures / tax-quarterly's own `fmtDueDate` — so a report's own stamp never
  *  shifts a day under a non-UTC browser clock). */
+/** P4 (SELF-356 AC4, R1 rider 6) — "No IRS/FTB ledger designated" pre-finalize prompt, derived
+ *  from the ALREADY-COMPOSED draft payload's own tax-authority exclusion signal — NOT a second
+ *  `fn_tax_authority_ledgers()` query (team-lead's explicit instruction; that RPC is
+ *  `taxes/quarterly/+page.server.ts`'s own page-level `noTaxAuthorityDesignated` read and is
+ *  deliberately NOT replicated here). The signal already lives on the payload: each jurisdiction's
+ *  `ytd_paid` envelope carries `{status:'unavailable', reason:'no_ledger_designated'}` when no
+ *  account is designated for it — the SAME reason-string `TaxQuarterlyTables.svelte`'s own inline
+ *  per-jurisdiction CTA already inspects (AC 6(iii) there), read here at the PAGE level instead of
+ *  per-jurisdiction.
+ *
+ *  JUDGMENT CALL, flagged: the AC names one combined prompt ("No IRS/FTB ledger designated"), not
+ *  two independent ones, so this returns true when EITHER jurisdiction (federal/IRS OR
+ *  california/FTB) shows the reason — an ANY, not an ALL. A tenant with exactly one of the two
+ *  designated still sees the prompt (their NAV genuinely excludes the OTHER jurisdiction's tax
+ *  liability), which matches the sentence's own plural framing ("NAV on this report will exclude
+ *  tax liabilities") better than a per-jurisdiction split would on a single page-level nudge. */
+export function noLedgerDesignated(payload: Pick<MonthlyReportPayload, 'sections'>): boolean {
+	const jurisdictions = payload.sections.estimated_taxes.jurisdictions;
+	return Object.values(jurisdictions).some(
+		(j) => j.ytd_paid.status === 'unavailable' && j.ytd_paid.reason === 'no_ledger_designated'
+	);
+}
+
 export function monthYearStamp(header: MonthlyReportHeader): string {
 	const monthLabel = new Date(`${header.target_month}T00:00:00Z`).toLocaleDateString('en-US', {
 		month: 'long',

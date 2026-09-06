@@ -1,6 +1,8 @@
 // load.server.test.ts — SELF-357 / P5 orchestration coverage for the §2.6.3.b listing loader +
 // `generate`/`regenerate` form actions, against migration 108 (pfin.monthly_report), migration
 // 113 (pfin.fn_open_monthly_report_draft) and migration 114 (pfin.fn_regenerate_monthly_report).
+// EXTENDED under P4 (SELF-356) for each pending row's `noLedgerDesignated` derivation (AC4) and
+// the new `skip` action (AC1/AC5, migration 115 pfin.fn_finalize_monthly_report).
 //
 // SCOPE: auth gates, the final/draft listing split (AC1/AC2/AC7 — superseded never listed, one
 // entry per month), the two-candidate target-month computation (AC3), the structural
@@ -8,6 +10,8 @@
 // +page.server.ts's own header), `?/regenerate`'s looser month-format-only check, and the
 // redirect-into-P3-commentary contract on both actions' success path (AC5). 113/114's own DB
 // contracts are those migrations' own pgTAP batteries' job — this file only proves the wiring.
+// `noLedgerDesignated`'s own pure-logic coverage lives in monthly-report.test.ts; this file only
+// proves the loader composes each pending row's own draft payload and threads the result through.
 
 import { describe, it, expect, vi } from 'vitest';
 
@@ -83,9 +87,26 @@ function makeActionEvent(
 
 type LoadResult = {
 	generated: Array<{ reportId: number; targetMonth: string; monthLabel: string; generatedAt: string | null }>;
-	pending: Array<{ reportId: number; targetMonth: string; monthLabel: string }>;
+	pending: Array<{ reportId: number; targetMonth: string; monthLabel: string; noLedgerDesignated: boolean }>;
 	candidates: Array<{ targetMonth: string; label: string; plainLabel: string; state: string }>;
 };
+
+// P4 (SELF-356 AC4) — see the identical fixture in commentary/load.server.test.ts's own header for
+// why only `ytd_paid` is filled in.
+function composedPayload(federalDesignated: boolean, californiaDesignated: boolean) {
+	const ytd = (designated: boolean) =>
+		designated ? { status: 'designated', amount: 0 } : { status: 'unavailable', reason: 'no_ledger_designated' };
+	return {
+		sections: {
+			estimated_taxes: {
+				jurisdictions: {
+					federal: { ytd_paid: ytd(federalDesignated) },
+					california: { ytd_paid: ytd(californiaDesignated) }
+				}
+			}
+		}
+	};
+}
 
 describe('load', () => {
 	it('unauthenticated → redirect to /login', async () => {
@@ -138,6 +159,48 @@ describe('load', () => {
 		});
 		const result = (await load(makeLoadEvent({ id: SESSION_UID }, client))) as unknown as LoadResult;
 		expect(result.candidates[0].state).toBe('final');
+	});
+});
+
+describe('load — pending noLedgerDesignated (P4 / SELF-356 AC4)', () => {
+	it('composes the pending draft\'s own payload (fn_render_monthly_report, its OWN data_as_of) — not a second dedicated query', async () => {
+		const { client, rpcCalls } = makeSupabase({
+			rows: [
+				row({ report_id: 2, target_month: '2026-09-01', generation_status: 'draft', data_as_of: '2026-09-14' })
+			],
+			rpcResult: { data: composedPayload(true, true), error: null }
+		});
+		const result = (await load(makeLoadEvent({ id: SESSION_UID }, client))) as unknown as LoadResult;
+		expect(result.pending[0].noLedgerDesignated).toBe(false);
+		expect(rpcCalls).toEqual([
+			{ fn: 'fn_render_monthly_report', params: { p_target_month: '2026-09-01', p_data_as_of: '2026-09-14' } }
+		]);
+	});
+
+	it('flags true when the composed payload shows no ledger designated', async () => {
+		const { client } = makeSupabase({
+			rows: [row({ report_id: 2, target_month: '2026-09-01', generation_status: 'draft' })],
+			rpcResult: { data: composedPayload(false, false), error: null }
+		});
+		const result = (await load(makeLoadEvent({ id: SESSION_UID }, client))) as unknown as LoadResult;
+		expect(result.pending[0].noLedgerDesignated).toBe(true);
+	});
+
+	it('a composition RPC error degrades that row to false, the listing still renders (fail-soft)', async () => {
+		const { client } = makeSupabase({
+			rows: [row({ report_id: 2, target_month: '2026-09-01', generation_status: 'draft' })],
+			rpcResult: { data: null, error: { code: '55555', message: 'boom' } }
+		});
+		const result = (await load(makeLoadEvent({ id: SESSION_UID }, client))) as unknown as LoadResult;
+		expect(result.pending[0].noLedgerDesignated).toBe(false);
+	});
+
+	it('a final-only row set makes no composition call at all (nothing pending)', async () => {
+		const { client, rpcCalls } = makeSupabase({
+			rows: [row({ report_id: 1, target_month: '2026-08-01', generation_status: 'final' })]
+		});
+		await load(makeLoadEvent({ id: SESSION_UID }, client));
+		expect(rpcCalls).toHaveLength(0);
 	});
 });
 
@@ -237,6 +300,82 @@ describe('actions.regenerate — month-format check only, no candidate restricti
 		const { client } = makeSupabase({ rpcResult: { data: null, error: { code: '55555', message: 'weird' } } });
 		const event = makeActionEvent({ target_month: '2026-08-01' }, { id: SESSION_UID }, client);
 		const res = (await actions.regenerate(event)) as { status: number };
+		expect(res.status).toBe(500);
+	});
+});
+
+// P4 (SELF-356 AC1/AC5) — "Skip commentary and finalize", the pending list's own secondary CTA.
+// Calls migration 115 (pfin.fn_finalize_monthly_report) with the `'skipped'` disposition literal.
+describe('actions.skip', () => {
+	it('unauthenticated → 401, no RPC reached', async () => {
+		const { client, rpcCalls } = makeSupabase({});
+		const event = makeActionEvent({ target_month: '2026-08-01' }, null, client);
+		const res = (await actions.skip(event)) as { status: number };
+		expect(res.status).toBe(401);
+		expect(rpcCalls).toHaveLength(0);
+	});
+
+	it('malformed target_month → 400 (Zod .strict() mirror), no RPC reached', async () => {
+		const { client, rpcCalls } = makeSupabase({});
+		const event = makeActionEvent({ target_month: '2026-08' }, { id: SESSION_UID }, client);
+		const res = (await actions.skip(event)) as { status: number };
+		expect(res.status).toBe(400);
+		expect(rpcCalls).toHaveLength(0);
+	});
+
+	it('mass-assignment: a stray posted field is refused (`.strict()`), no RPC reached', async () => {
+		const { client, rpcCalls } = makeSupabase({});
+		const event = makeActionEvent(
+			{ target_month: '2026-08-01', p_commentary_disposition: 'authored', users_id: 'evil' },
+			{ id: SESSION_UID },
+			client
+		);
+		const res = (await actions.skip(event)) as { status: number };
+		expect(res.status).toBe(400);
+		expect(rpcCalls).toHaveLength(0);
+	});
+
+	it("calls 115 with the 'skipped' disposition — never a posted value — and redirects into P2's final view", async () => {
+		const { client, rpcCalls } = makeSupabase({ rpcResult: { data: 2, error: null } });
+		const event = makeActionEvent({ target_month: '2026-08-01' }, { id: SESSION_UID }, client);
+		await expect(actions.skip(event)).rejects.toMatchObject({ status: 303, location: '/reports/monthly/2026-08' });
+		expect(rpcCalls).toEqual([
+			{
+				fn: 'fn_finalize_monthly_report',
+				params: { p_target_month: '2026-08-01', p_commentary_disposition: 'skipped' }
+			}
+		]);
+	});
+
+	it('P0001 (no live draft) → generic 4xx, no function name leaked', async () => {
+		const { client } = makeSupabase({
+			rpcResult: {
+				data: null,
+				error: {
+					code: 'P0001',
+					message: 'pfin.fn_finalize_monthly_report refused: no live draft for that month.'
+				}
+			}
+		});
+		const event = makeActionEvent({ target_month: '2026-08-01' }, { id: SESSION_UID }, client);
+		const res = (await actions.skip(event)) as { status: number; data: { errors: { _form: string[] } } };
+		expect(res.status).toBe(400);
+		expect(res.data.errors._form.join(' ')).not.toContain('fn_finalize_monthly_report');
+	});
+
+	it('42501 (step-up required) → 403', async () => {
+		const { client } = makeSupabase({
+			rpcResult: { data: null, error: { code: '42501', message: 'insufficient_privilege' } }
+		});
+		const event = makeActionEvent({ target_month: '2026-08-01' }, { id: SESSION_UID }, client);
+		const res = (await actions.skip(event)) as { status: number };
+		expect(res.status).toBe(403);
+	});
+
+	it('an unexpected error code → 500 generic', async () => {
+		const { client } = makeSupabase({ rpcResult: { data: null, error: { code: '55555', message: 'weird' } } });
+		const event = makeActionEvent({ target_month: '2026-08-01' }, { id: SESSION_UID }, client);
+		const res = (await actions.skip(event)) as { status: number };
 		expect(res.status).toBe(500);
 	});
 });
