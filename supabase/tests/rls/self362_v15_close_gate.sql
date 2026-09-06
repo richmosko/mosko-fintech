@@ -126,6 +126,63 @@
 --          not ignored": the function carries no `p_data_as_of` parameter
 --          at all, so a client cannot even attempt to supply one, let alone
 --          have it silently dropped.
+--   RIDER (group 3, correcting group 2): a STRONGER RESET ROLE citation
+--   exists than the one group 2 cited and should be read alongside it —
+--   found while researching A7's own coverage. group 2 cited
+--   test_connection.py's unit-level state-machine helper tests (the
+--   MECHANISM, in isolation). workers/etl/tests/test_monthly_report_cron.py
+--   carries the INTEGRATION-level proof, against a REAL connection, self-
+--   labelled "R3 rider 3's catch criterion":
+--   test_reset_role_discipline_teardown_actually_fires (SHOW ROLE reads
+--   'authenticated' during impersonation and 'none' immediately after
+--   teardown, on the SAME connection/transaction) and
+--   test_reset_role_discipline_a_fresh_tenant_connection_is_unaffected_by
+--   _a_prior_one (a second tenant's fresh connection resolves auth.uid()
+--   to itself, never the first tenant, after the first's connection
+--   allegedly left state dirty). Both citations stand; this one is the
+--   stronger of the two and is the one to reach for first.
+--   AC9  — block AH: the same-transaction row exists, names the resolved
+--          tenant, is absent when the generation transaction rolls back;
+--          surface-name required and a bad value refused; append-only
+--          under both roles.
+--          COMPOSED, exhaustively — 111_audit_log_rls.sql LEG 1 (same-
+--          transaction exists + the restored rollback-absence catch
+--          criterion), LEG 2 (names the resolved tenant), LEG 4a/4d
+--          (invented surface_name refused, both through the dispatch AND
+--          through the table's own CHECK as the owner-path observer), LEG 6
+--          (UPDATE/DELETE/TRUNCATE refused under BOTH roles — append-only),
+--          LEG 10 (two callers, cron vs on_demand, one shape).
+--          Reinforced end-to-end for the CRON caller specifically (non-
+--          pgTAP) — workers/etl/tests/test_monthly_report_cron.py:
+--          test_open_draft_for_tenant_inserts_one_draft_and_one_audit_row
+--          + test_open_draft_for_tenant_audit_row_names_the_resolved_tenant
+--          _and_chain (same-transaction row, resolved tenant, FOR THE REAL
+--          CRON CALL, not a synthetic emit) +
+--          test_audit_row_trigger_source_is_cron_when_the_provenance_guc_is
+--          _set / _falls_to_on_demand_when_the_guc_is_forgotten (the two-
+--          callers shape, exercised through the real dispatch rather than
+--          a literal argument). No pgTAP-side gap; no new SQL.
+--   AC10 — A7's cron tenant-binding isolation, including the singular-GUC
+--          catch criterion (one tenant's data served for every tenant, no
+--          code bug, no app-layer assertion failure).
+--          Two-tenant isolation: COMPOSED, non-pgTAP —
+--          test_monthly_report_cron.py::
+--          test_cross_tenant_isolation_tenant_b_never_opens_or_sees_tenant
+--          _as_draft.
+--          THE SINGULAR-GUC MECHANISM ITSELF: COMPOSED, non-pgTAP —
+--          test_connection.py::TestLegacySingularGuc ("N7 — clear
+--          permitted, set forbidden"): the two GUC names are disjoint
+--          (the branch order the whole fence relies on, asserted not
+--          assumed); the defensive NULL-clear at impersonate()'s own entry
+--          is permitted and does not disturb an active binding; setting
+--          the legacy GUC is REJECTED even to the CORRECT tenant ("the
+--          precedence hazard is the point; worker code has no legitimate
+--          reason to write it") — the exact hazard A7 item 4 names
+--          (auth.uid() prefers request.jwt.claim.sub over the plural blob)
+--          is fenced at the WRITE side, not merely nulled at the read side.
+--          This is the SAME shared connection.py module A7 item 2 reuses
+--          rather than re-specifies; the mechanism lives here, not in a
+--          per-cron pgTAP leg. No pgTAP-side gap.
 -- =====================================================================
 -- QA-owned. Authors NO schema. Composes 106/108-115 + workers/etl's pytest.
 --
