@@ -82,12 +82,21 @@
 // the worker holds "no tenant or money knowledge", and a `users_id` claim gives it one bit
 // of tenant knowledge it never uses (verified: workers/pdf-render/src/auth.js reads the
 // claim only to confirm PRESENCE — `typeof decoded.users_id !== 'string'` — never its
-// VALUE, past that check). The surviving ground for the ruling: leaving it is the
-// lower-churn choice — a change is a one-way door on a Sec-owned artifact, and "the worker
-// doesn't use it" is not the same claim as "the worker couldn't be made to use it by a
-// later, less careful edit"; an opaque correlation id would remove that capability
-// structurally rather than by convention, but the churn of a ratified-artifact change was
-// not judged worth it here.
+// VALUE, past that check). The grounds, in the order they carried the ruling. (1) The
+// security delta today is ZERO AND IS FENCED, not merely unused: the worker holds no DB
+// reach and no Supabase credential of any kind (RT-22 + the RT-22-manifest fence, both
+// run-always in CI), so it cannot act on the claim even if a later edit read its value.
+// (2) The residual is PROSPECTIVE and has a NAMED SHAPE: a `users_id` claim is the
+// affordance that would make a tenant-keyed render cache inside the worker easy to write,
+// which is an RT-10 violation; an opaque per-render id would foreclose that structurally
+// rather than by convention. Note the opaque-id shape is a DELETION, not a substitution —
+// the `nonce` already is a per-render opaque UUID, so correlation can live app-side against
+// it without the worker holding any tenant knowledge at all. (3) COST: the swap touches
+// five artifacts, two of them already merged (auth.js and its battery), and would land a
+// claim-set change mid-rewrite of RT-21. REVISIT TRIGGER — capability, not churn: if the
+// worker ever gains outbound reach, a persistence surface, or any per-tenant keying, the
+// swap becomes the right shape and should be booked as its own change to SD-20 + the
+// worker.
 // ⚠ A prior draft of this paragraph also argued the claim's presence is useful
 // FORENSICALLY, on the premise that a worker-side rejection log could NAME the claim's
 // value. That premise is FALSE, measured: `_rejected()` (workers/pdf-render/src/auth.js,
@@ -210,7 +219,7 @@ export async function renderReportHtml(usersId: string, html: string): Promise<R
 		});
 
 		if (res.status !== 200) {
-			// (g)'s app-side half — status ONLY, never the body.
+			// Redaction only — NOT part of (g)'s discharge (see header): status ONLY, never the body.
 			console.error(`[pdf-render] worker returned ${res.status}`);
 			return { ok: false, status: res.status };
 		}
