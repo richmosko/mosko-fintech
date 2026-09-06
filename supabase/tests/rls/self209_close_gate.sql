@@ -126,59 +126,56 @@ insert into pfin.linked_source (users_id, provider, external_connection_id, inst
 --   audit-log helper appearing as an actual function).
 -- =====================================================================
 
+-- ⚠⚠ UPDATED 2026-09-05, IN THE SAME PR THAT AUTHORS THE 4TH ENTRY (SELF-345 / AH /
+--   `111_audit_log.sql`, `pfin.fn_emit_audit_log`) — exactly the RULE this block used to
+--   state below before this edit: "3 must NOT be raised to 4 until the audit-log helper
+--   is ACTUALLY AUTHORED, under Sec review, at which point (a1)'s set_eq list gains its
+--   name in the same commit." That moment has now occurred. The reserved-but-unauthored
+--   4th allowlist slot (ADR-011 Decision 9 / SELF-293 amendment; BACKLOG.md §7.6 S7) is
+--   now AUTHORED, so AUTHORED and ALLOWLIST are the same number again: **4**. This is a
+--   RULED, expected transition, not a silent tripwire widening — the DEFINER argument for
+--   why it took DEFINER (forced by A10's own-session caller; not an INVOKER+grant path)
+--   is stated in `111`'s header, not re-litigated here.
+--
 -- (a-inv) INVERSION (teeth): plant a stray DEFINER fn in pfin -> the guard DETECTS it
---   (count -> 4), then roll it back. Mirrors 00_rls_inversion_self_test's canary pattern.
+--   (count -> 5, one more than the now-4-strong allowlist), then roll it back.
 savepoint sp_definer_canary;
 create function pfin._zzz_definer_canary() returns void
   language plpgsql security definer set search_path = '' as $$ begin end $$;
 select is(
   (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
      where n.nspname = 'pfin' and p.prosecdef),
-  4,
-  '(a-inv) DEFINER-guard TEETH: a stray SECURITY DEFINER fn planted in pfin is DETECTED (prosecdef count -> 4) -> the (a1)/(a2) posture assertions are non-vacuous'
+  5,
+  '(a-inv) DEFINER-guard TEETH: a stray SECURITY DEFINER fn planted in pfin is DETECTED (prosecdef count -> 5, one past the 4-entry allowlist) -> the (a1)/(a2) posture assertions are non-vacuous'
 );
 rollback to savepoint sp_definer_canary;
 
--- (a1) the set is EXACTLY the 3 authored DEFINER fns (no unexpected 4th).
+-- (a1) the set is EXACTLY the 4 authored DEFINER fns (no unexpected 5th).
 select set_eq(
   $$ select p.proname::text from pg_proc p join pg_namespace n on n.oid = p.pronamespace
        where n.nspname = 'pfin' and p.prosecdef $$,
-  $$ values ('fn_grant_creator_access'::text), ('fn_reclass_history_insert'), ('fn_refresh_updated_at') $$,
-  '(a1) DEFINER allowlist = EXACTLY {fn_refresh_updated_at, fn_grant_creator_access, fn_reclass_history_insert}; no unexpected 4th DEFINER (the SELF-201 Task #7 audit-log helper stays reserved-unauthored)'
+  $$ values ('fn_grant_creator_access'::text), ('fn_reclass_history_insert'), ('fn_refresh_updated_at'), ('fn_emit_audit_log') $$,
+  '(a1) DEFINER allowlist = EXACTLY {fn_refresh_updated_at, fn_grant_creator_access, fn_reclass_history_insert, fn_emit_audit_log}; no unexpected 5th DEFINER (the SELF-201 Task #7 audit-log helper is now AUTHORED at `111` — SELF-345/AH)'
 );
 
--- ⚠⚠ DO NOT "CORRECT" 3 TO 4. READ THIS BEFORE EDITING (a1)/(a2)/(E-iii). ⚠⚠
---   Added 2026-08-03 at Sec's + Architect's joint request during the ADR-042 close-gate
---   review, because this is a live trap and the failure looks like tidying up.
+-- ⚠⚠ DO NOT "CORRECT" 4 TO 5. READ THIS BEFORE EDITING (a1)/(a2)/(E-iii). ⚠⚠
+--   Originally added 2026-08-03 at Sec's + Architect's joint request during the ADR-042
+--   close-gate review; re-armed 2026-09-05 at the moment the reserved slot was authored,
+--   because the SAME live-trap shape recurs at the NEXT count too — a future reviewer
+--   adding a genuinely new DEFINER function must not "reconcile" a red here by bumping
+--   this number without an equivalent authoring event and Sec review of their own.
 --
---   These assertions measure **AUTHORED** SECURITY DEFINER functions. That number is **3**:
---     fn_refresh_updated_at (`001`) · fn_grant_creator_access (`003`) ·
---     fn_reclass_history_insert (`031`).
---   The **ALLOWLIST** is **4**. The fourth entry is the **reserved-but-UNAUTHORED** general
---   same-transaction audit-log insert helper (ADR-011 Decision 9 + its SELF-293 amendment;
---   standing tracker at BACKLOG.md §7.6 S7). It has no function object, so it cannot appear
---   in a pg_proc count.
+--   COROLLARY, UNCHANGED: if this test goes RED on new work, that is a REAL DEFECT —
+--   something acquired SECURITY DEFINER that should not have. Fix the migration, never
+--   the test, unless that migration IS a reviewed, ADR-011-Decision-9-live authoring of a
+--   new allowlist entry (as `111` was).
 --
---   BOTH NUMBERS ARE CORRECT. They have DIFFERENT REFERENTS and they live in DIFFERENT
---   ARTIFACTS — ADR-042's Consequences block says "allowlist unchanged at 4"; this test
---   says 3. A reviewer who knows "the allowlist is 4", meets a test asserting 3, and
---   reconciles the two by editing the test **silently widens this tripwire to admit one new
---   SECURITY DEFINER function** — the exact thing it exists to catch. The edit reads as
---   housekeeping and leaves no trace of what it cost.
---
---   RULE: 3 must NOT be raised to 4 until the audit-log helper is ACTUALLY AUTHORED, under
---   Sec review, at which point (a1)'s set_eq list gains its name in the same commit.
---   COROLLARY: if this test goes RED on new work, that is a REAL DEFECT — something
---   acquired SECURITY DEFINER that should not have. Fix the migration, never the test.
---   ADR-042 confirmed intent is all-INVOKER for every `056`/`057`/`058`/`059` fence, so a
---   red there has no legitimate reading.
---
--- (a2) count is exactly 3 (the reserved 4th allowlist slot is unauthored).
+-- (a2) count is exactly 4 (all four allowlist slots now authored).
 select is(
   (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
      where n.nspname = 'pfin' and p.prosecdef),
-  3,
-  '(a2) exactly 3 SECURITY DEFINER functions in pfin (authored=3; the reserved 4th slot is unauthored -> count stays 3)'
+  4,
+  '(a2) exactly 4 SECURITY DEFINER functions in pfin (authored=4; the SELF-201 Task #7 slot is no longer reserved-unauthored)'
 );
 
 -- =====================================================================
@@ -427,13 +424,19 @@ select throws_like(
   '(E-ii-b) deferral #2 Decision-3 #15 TEETH: a sync_audit INSERT with users_id=A but linked_source_id = B''s source RAISES the #15 fence -> lenient-on-NULL is a conscious completeness posture, NOT a hole; the non-null path fails closed'
 );
 
--- (iii) SELF-201 Task #7 general audit-log helper: reserved-unauthored (empty 4th slot).
+-- (iii) SELF-201 Task #7 general audit-log helper: RESERVATION DISCHARGED at `111`
+-- (SELF-345 / AH) — updated 2026-09-05 alongside (a1)/(a2). This assertion's ORIGINAL
+-- premise ("reserved-unauthored, the 4th slot is empty") is now false BY DESIGN, not
+-- by drift: the helper is authored and is `fn_emit_audit_log`. Repurposed rather than
+-- deleted, so the deferral's resolution stays a visible fact in this gate rather than
+-- a silently vanished assertion: the DEFINER set is ZERO outside the now-4-entry
+-- allowlist, which is the closed form of the same tripwire (a2) states positively.
 select is(
   (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
      where n.nspname = 'pfin' and p.prosecdef
-       and p.proname not in ('fn_refresh_updated_at', 'fn_grant_creator_access', 'fn_reclass_history_insert')),
+       and p.proname not in ('fn_refresh_updated_at', 'fn_grant_creator_access', 'fn_reclass_history_insert', 'fn_emit_audit_log')),
   0,
-  '(E-iii) deferral #3 SELF-201 Task #7: ZERO SECURITY DEFINER functions in pfin outside the 3-entry authored allowlist -> the reserved general audit-log helper is provably unauthored (the 4th slot is empty)'
+  '(E-iii) deferral #3 SELF-201 Task #7 DISCHARGED at `111`: ZERO SECURITY DEFINER functions in pfin outside the 4-entry authored allowlist — the general audit-log helper (fn_emit_audit_log) is no longer reserved-unauthored'
 );
 
 select * from finish();
