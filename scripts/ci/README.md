@@ -72,6 +72,7 @@ scripts/ci/
 ├── fence-admission-private-bind.sh       # RT-27 private-bind config-lint (generic over target via sentinel)
 ├── check-dedup-hash-identical.sh         # import_hash canonical↔copy drift fence (SELF-204 / ADR-034 D4)
 ├── check-tz-sweep-identical.py           # TimeZone role-sweep query drift fence (runbook §4.1 ↔ (T3); R3 Part A)
+├── check-report-css-identical.sh         # report.css build-vs-committed-artifact drift fence (SELF-358 / P6)
 ├── rt26-allowlist.txt                    # RT-26 allowlist registry (3 ADR-016 D1 file paths)
 └── README.md                             # (this file)
 ```

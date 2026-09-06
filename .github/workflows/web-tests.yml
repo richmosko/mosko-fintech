@@ -67,6 +67,57 @@ jobs:
         # No push — build-only verification that the container assembles cleanly.
         run: docker build api/
 
+  report-css-drift:
+    name: SELF-358 (P6) — report.css regenerate-and-diff fence
+    runs-on: ubuntu-latest
+    # Architect's ruling (docs/records/v15-execution/self358-css-ruling.md, Option A):
+    # api/src/lib/generated/report.css is a COMMITTED generated artifact — a standalone
+    # Vite lib build over the ~14 monthly-report components (api/vite.report-css.config.mjs)
+    # — inlined by the PDF route via the same `?raw` mechanism already used for
+    # tokens.css/app.css. BELT-AND-BRACES on top of QA's hash-coverage assertion (the
+    # PRIMARY control per the ruling — every `svelte-[a-z0-9]+` scoping token the rendered
+    # body carries must appear in the extracted CSS): this fence proves the committed BYTES
+    # are exactly what the build emits right now, from source, on the PR head. It cannot see
+    # a selector that's present but wrong for the markup — that's the hash-coverage
+    # assertion's job, not this fence's. See scripts/ci/check-report-css-identical.sh's
+    # header for the full catch-criterion / non-catch statement / exit-code semantics.
+    #
+    # Own job (not folded into `web-app` above): this fence runs the NARROW
+    # `build:report-css` script standalone, deliberately independent of web-app's fuller
+    # `npm run build` (which itself invokes `build:report-css` as a prebuild step, per
+    # api/package.json) — so this fence still runs even if that ordering ever changes.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node (22, matches api/Dockerfile runtime)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: api/package-lock.json
+
+      - name: Install deps (npm ci from lockfile)
+        working-directory: api
+        run: npm ci
+
+      - name: Production-mode — real regenerate vs committed artifact (expects clean, exit 0)
+        run: bash scripts/ci/check-report-css-identical.sh
+
+      - name: Inversion-mode — golden corrupted-copy fixture (expects drift, exit 1)
+        # Golden fixture = the real committed report.css + one appended corrupting CSS
+        # comment (tests/fixtures/ci/report-css-drift-corrupted.css) — proves the fence
+        # actually reds on a byte-level divergence, not merely that it ran.
+        run: |
+          set +e
+          bash scripts/ci/check-report-css-identical.sh --reference tests/fixtures/ci/report-css-drift-corrupted.css
+          rc=$?
+          set -e
+          if [ "$rc" -ne 1 ]; then
+            echo "FATAL: report-css fence expected exit 1 on the corrupted-copy golden but got $rc — fence is broken; failing closed."
+            exit 1
+          fi
+          echo "OK: report-css fence caught the golden corrupted-copy drift (exit $rc)."
+
   dependency-audit:
     name: api — dependency vuln audit (npm audit)
     runs-on: ubuntu-latest
