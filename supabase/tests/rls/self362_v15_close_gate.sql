@@ -183,6 +183,80 @@
 --          This is the SAME shared connection.py module A7 item 2 reuses
 --          rather than re-specifies; the mechanism lives here, not in a
 --          per-cron pgTAP leg. No pgTAP-side gap.
+--   AC1/AC2 — (A8 half, group 4) two-tenant + aal2-separate for
+--          `pfin.owner_identification`.
+--          COMPOSED, non-duplicating a whole existing battery —
+--          106_owner_identification_rls.sql: (R2)/(X1)
+--          (`_rls.expect_cross_tenant_read_empty`, cross-tenant-empty with
+--          a corrupt-the-control non-vacuous proof) for cross-tenant;
+--          (M5)/(M7) for aal2 as a SEPARATE leg (totp-enrolled tenant D at
+--          aal1 is hidden by the USING-side backstop on UPDATE/DELETE,
+--          value/row genuinely unchanged); (S1-S6) structural RLS +
+--          grant + aal2-IN-list catalog assertions. No new SQL.
+--   AC9/RT-11 — (P3 half, group 4) the §2.6.2 commentary write path.
+--          COMPOSED — 112_fn_save_monthly_commentary_rls.sql LEG 1
+--          (cross-tenant refused), LEG 2 (aal2 SEPARATE from cross-tenant),
+--          LEG 3 (draft-window-only, refused on `final`), LEG 4
+--          (replace-all is literal), LEG 6/6b (the ruled 4000/4001
+--          length bound, unit-tested against a `.length`-reversion), LEG 8
+--          (standing no-rolbypassrls-EXECUTE). No new SQL.
+--   AC11 — (owner_header_at_generation half, group 4) a Settings rename
+--          does not change a prior final report's frozen header (P7 item
+--          7).
+--          COMPOSED — 115_fn_finalize_monthly_report_rls.sql LEG 11
+--          ("owner_header_at_generation IS FROZEN FROM 106": set a header,
+--          finalize, rename in 106, re-read the final row — unchanged).
+--   AC11 — (pending-queue tenant-scoped half, group 4) tenant A sees zero
+--          of tenant B's pending-queue entries.
+--          COMPOSED BY INHERITANCE: the pending-queue affordance is P5's
+--          UI (not yet merged to main — verified live, no `api/src/routes`
+--          entry for §2.6.3's report listing exists at this sha), but the
+--          affordance is a FILTERED READ over `pfin.monthly_report` through
+--          the SAME RLS this gate already exercises exhaustively for A1
+--          (108 LEG 1) — there is no separate DB object for "pending" to
+--          carry its own isolation defect. Nothing new to write until P5
+--          introduces a DB-side object of its own (a view, a function);
+--          recorded here so a LATER reader does not mistake the absence of
+--          a P5-specific leg for an oversight.
+--   AC8  — (A5/A4, group 4) the two-abort leg, the inert-<script> leg
+--          (P6 item 7), the re-derived RT-21 letters.
+--          ⚠ CORRECTION, RECORDED PER SEC'S OWN RULING (v15-execution-log
+--          E25, 2026-09-05): the literal "two aborts" in this AC's own text
+--          is STRUCK by Sec — measured, `file:///proc/self/environ` never
+--          reaches this worker's interception layer at all (Chromium
+--          refuses it under its OWN local-resource policy before any
+--          request event fires), so only the `http://169.254.169.254/`
+--          vector is observable at the interception fence, count = 1, not
+--          2. Sec ruled Backend's THREE legs stronger than the count: a
+--          reachable `http://` POSITIVE CONTROL, `file://` attributed
+--          explicitly to Chromium's own policy (not this worker's fence),
+--          and `data:` NOT aborted as the discriminating negative. Do not
+--          write a leg asserting "2" — it would encode a struck claim.
+--          COMPOSED — workers/pdf-render/test/render.test.js: "resource-
+--          loading fence: file:// iframe + metadata-IP img -> Sec's exact
+--          payload, neither the signing key nor fetched content in the
+--          PDF" (measures and DOCUMENTS the count=1 divergence in its own
+--          text, flagged for Sec re-read rather than silently reconciled —
+--          exactly the discipline this close-gate file itself follows);
+--          "resource-loading fence: file:// is refused by Chromium's OWN
+--          local-resource policy, independent of this worker's
+--          interception"; "resource-loading fence (non-vacuous control): a
+--          LOCAL reachable http:// target's content never reaches the
+--          PDF"; "data: URIs are NOT aborted — the one allowed resource
+--          scheme".
+--          RT-21 letters: COMPOSED — api/src/lib/server/pdf/
+--          renderClient.test.ts, the re-derived (a)-(g) battery, each its
+--          own leg per the AC's own instruction.
+--          Inert-<script> (P6 item 7): ⟨OPEN⟩ — NOT YET BUILDABLE against
+--          `main`. Verified live: P6's own export route
+--          (`api/src/routes/.../reports/...`) does not exist on `main` at
+--          this sha (only its DB substrate, 112/115, is merged) — the
+--          shared Svelte template this leg spans has no server-rendered
+--          PDF path to exercise yet. This is a DEPENDENCY-ORDERING gap
+--          (P6 has not landed), not a P10 authoring gap — recorded here so
+--          the close-gate verdict (item 14) does not silently pass without
+--          this leg ever having been reachable, and so P6's own PR is the
+--          one that owes it, per its own AC (P6 item 7).
 -- =====================================================================
 -- QA-owned. Authors NO schema. Composes 106/108-115 + workers/etl's pytest.
 --
