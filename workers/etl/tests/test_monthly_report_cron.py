@@ -339,6 +339,88 @@ def test_audit_row_trigger_source_falls_to_on_demand_when_the_guc_is_forgotten(
     assert "cron" not in audit_out
 
 
+def test_provenance_guc_does_not_leak_into_a_second_transaction_on_the_same_connection(
+    pfin_env, seeded_tenants
+):
+    """Sec's adopted catch criterion for A7 (SELF-351 review): the
+    transaction-local `set_config(..., true)` must be scoped to the SAME
+    transaction as the `fn_open_monthly_report_draft` call it labels
+    (already true — see `open_draft_for_tenant`'s own docstring) AND a
+    second, LATER transaction on the SAME physical connection must NOT
+    inherit `'cron'` from the first.
+
+    This worker's own normal operation never reuses a connection across
+    tenants (`open_draft_for_tenant` opens a fresh `for_tenant()` TBC —
+    hence a fresh engine, hence under `NullPool` a fresh physical
+    connection — per tenant), so this hazard cannot arise through the
+    worker's own code path today. The leg is required anyway because
+    connection reuse INSIDE a future edit of this worker (or a change to
+    the pooling/engine strategy) is exactly the shape this guards against
+    — "direct Postgres, no pooler" (confirmed to team-lead) narrows WHERE
+    reuse could be introduced, it does not prove it never will be.
+
+    Proven directly against the SAME `Connection` object across two
+    SEPARATE transactions (`conn.begin()` called twice in sequence, not
+    nested), matching 113's own measured claim: "a session-level set DOES
+    reach a later transaction's row... what keeps that harmless is the
+    perimeter, not this code." This test IS that perimeter check, run
+    against the actual mechanism rather than assumed from the comment.
+    """
+    import sqlalchemy as sqla
+
+    from pfin_back_etl.connection import TenantBoundConnection
+    from pfin_back_etl import utils
+
+    params = utils.load_db_params("PFIN_")
+    db_url = utils.build_database_url(params)
+    tenant_a = seeded_tenants["a"]
+    tbc = TenantBoundConnection.for_tenant(db_url, tenant_a)
+
+    with tbc.engine.connect() as conn:
+        # Transaction 1: set the GUC to 'cron', call 113 for month M1.
+        with conn.begin():
+            with tbc.impersonate(conn):
+                conn.execute(
+                    sqla.text(
+                        "select set_config('app.report_generation_source', 'cron', true)"
+                    )
+                )
+                report_id_1 = conn.execute(
+                    sqla.text(
+                        "select pfin.fn_open_monthly_report_draft(:m) as report_id"
+                    ),
+                    {"m": dt.date(2026, 8, 1)},
+                ).scalar()
+
+        # Transaction 2: SAME connection object, a NEW transaction, a
+        # DIFFERENT month (so 113's own idempotency does not just re-find
+        # transaction 1's draft and skip the audit write entirely — this
+        # must be a REAL second insert to observe what trigger_source it
+        # gets). Deliberately does NOT set the GUC.
+        with conn.begin():
+            with tbc.impersonate(conn):
+                report_id_2 = conn.execute(
+                    sqla.text(
+                        "select pfin.fn_open_monthly_report_draft(:m) as report_id"
+                    ),
+                    {"m": dt.date(2026, 7, 1)},
+                ).scalar()
+
+    assert report_id_1 != report_id_2
+
+    audit_1 = _audit_rows_for(_SCRATCH_DB, report_id_1)
+    assert "cron" in audit_1
+
+    audit_2 = _audit_rows_for(_SCRATCH_DB, report_id_2)
+    assert "on_demand" in audit_2, (
+        "transaction 2 read trigger_source='cron' — the GUC LEAKED across "
+        "transactions on the same connection. The perimeter 113's own "
+        "comment names (the caller must set it fresh, per transaction) is "
+        "not holding here."
+    )
+    assert "cron" not in audit_2
+
+
 def test_open_draft_for_tenant_is_idempotent(pfin_env, seeded_tenants):
     """Calling twice for the SAME (tenant, month) returns the SAME report_id
     and writes exactly ONE draft row and ONE audit row — 113's own
