@@ -308,17 +308,26 @@
 --      exception block, i.e. a SUBTRANSACTION, and a bare-INSERT leg would pass
 --      against an xid-equality implementation that refuses the real product path.
 --   7b. **A read-only transaction is refused** (no xid assigned) — the fail-closed leg.
---   7d. **⚠ THE CAUGHT-EXCEPTION LEG, WHICH IS THE ONE A BATTERY WILL TRIP BY
---      ACCIDENT.** Assert that a successful emit STILL succeeds when an exception was
---      caught earlier in the same transaction — a `throws_like()` leg, a caught
---      `unique_violation`, or a caught trigger refusal — **and place that leg BEFORE
---      the emit leg, not after**, so it actually exercises the interaction. This
---      passes on the clog test and FAILS on a snapshot-visibility implementation, and
---      the failure is what a battery reports as a mysterious refusal.
---      ⚠ **The rule it encodes is broader than "do not catch between the write and the
---      emit":** an aborted subtransaction ANYWHERE EARLIER in the transaction — even
---      BEFORE the write — poisoned the snapshot form. Measured. There is nothing to
---      avoid any more, which is why this is a leg and not a documented constraint.
+--   7d. **⚠⚠ THE COUNTER-ADVANCE LEG — REQUIRED WHATEVER EXPRESSION IS IN PLACE, AND
+--      IT IS THE REASON THIS DEFECT SURVIVED TO REVIEW.** Advance `latestCompletedXid`
+--      between the subject write and the emit, and assert the emit **still succeeds**.
+--      **An ABORTED WRITING SUBTRANSACTION between the two is a faithful proxy** — no
+--      second connection or dblink needed — and its matched negative control is a
+--      **non-writing** abort, which must leave the snapshot untouched. Assert the pair,
+--      not just the positive: the pair is what identifies the cause as xid consumption
+--      rather than as "exceptions".
+--      ⚠ **A stronger form, if the harness can manage a second connection: an ordinary
+--      COMMIT FROM ANOTHER SESSION between the write and the emit.** That is the real
+--      shape — the counter is cluster-wide — and dblink was only ever a convenient way
+--      to produce it.
+--      ⚠ **WHY THIS LEG IS MANDATORY RATHER THAN NICE:** the failure it catches is
+--      NON-DETERMINISTIC and rolls back THE WHOLE GENERATION, not just the audit row,
+--      because the emit is inside the generation transaction. **A scratch DB is idle,
+--      so every battery passes.** Without this leg the suite cannot distinguish a
+--      correct expression from one that will fail in production under ordinary load.
+--   7e. **A RELEASED savepoint that WROTE the subject row still permits the emit** —
+--      the sub-committed-xid case, which is where a commit-status test would break if
+--      it treated sub-commit as commit.
 --   8. Two callers, one shape — ⚠ AND THE CRON ROW MUST BE PRODUCED BY SETTING THE
 --      GUC, NOT BY PASSING A VALUE (C1 removed the parameter). Only then is this a
 --      genuine two-caller leg; passing `'cron'` from the battery's own session was one
@@ -699,21 +708,38 @@ begin
     --     xid. Measured: top 1664121, row xmin 1664122, equality FALSE. It would
     --     refuse the one path this condition exists to permit, and pass every test
     --     whose INSERT was not wrapped in an exception block.
-    -- (ii) `not pg_visible_in_snapshot(...)` IS ALSO WRONG, AND MORE SUBTLY:
-    --     **ANY ABORTED SUBTRANSACTION ANYWHERE EARLIER IN THE TRANSACTION POISONS
-    --     IT.** Once a subtransaction aborts, our own top-level xid reads as VISIBLE
-    --     in our own snapshot, so the test flips to FALSE and every later emission is
-    --     refused. Measured, and the rule is broader than the way it was first
-    --     reported: a caught trigger exception AFTER the write, a caught
-    --     `unique_violation` after the write, and — the case that shows the real
-    --     rule — **a caught exception BEFORE the write** all poison it. Only a
-    --     non-firing exception block is safe. A pgTAP battery hits this constantly,
-    --     because `throws_like()` legs catch exceptions.
-    -- **`pg_xact_status` reads the commit log directly and is immune to both.** It
-    -- answers 'in progress' for a row written by our transaction OR any of its
-    -- subtransactions, whether or not any subtransaction has aborted, and 'committed'
-    -- for a row from an earlier transaction — measured across all seven cases,
-    -- including the three that break the snapshot test.
+    -- (ii) `not pg_visible_in_snapshot(...)` IS ALSO WRONG, AND THE CAUSE IS NOT
+    --     EXCEPTIONS AT ALL — that was the symptom the defect was first found by.
+    --     **THE CAUSE IS THAT IT DEPENDS ON A CLUSTER-WIDE COUNTER.** Our own xid is
+    --     never in our own snapshot's `xip`, and `latestCompletedXid` advances when
+    --     ANY transaction ANYWHERE completes. So as soon as the snapshot's `xmax`
+    --     rises past our xid, `pg_visible_in_snapshot` calls our own write visible and
+    --     the attestation flips FALSE. **An ordinary COMMIT FROM A SECOND SESSION
+    --     between the write and this call is enough — no exception, no trigger, no
+    --     dblink.** An aborted subtransaction of our own reaches it too, but only when
+    --     it CONSUMED AN XID: a writing subxact takes one and aborting completes it,
+    --     whereas a non-writing abort leaves the snapshot untouched. That matched pair
+    --     is the discriminator.
+    --     ⚠ **AND THE CONSEQUENCE WAS NOT A MISSING AUDIT ROW.** The emit runs inside
+    --     the generation transaction, so a refusal rolls back THE WHOLE REPORT
+    --     GENERATION — non-deterministically, on any non-idle database. **Every
+    --     battery passed because a scratch DB is idle.**
+    --     MEASURED side by side in ONE transaction: with a concurrent session
+    --     committing between the write and the emit, the snapshot moved
+    --     `1711648:1711648:` → `1711648:1711651:`, the clog test answered
+    --     `written_here = true` and the snapshot test answered `false`.
+    -- ⚠⚠ **THE DISQUALIFIER, WHICH IS THE REUSABLE HALF AND OUTLIVES BOTH ATTEMPTS:
+    -- a candidate for this test MUST NOT depend on `latestCompletedXid`, on snapshot
+    -- `xmax`, or on ANY OTHER CLUSTER-WIDE COUNTER.** The two rejected shapes fail in
+    -- opposite directions — `xmin = pg_current_xact_id()` is blind to subtransactions,
+    -- `pg_visible_in_snapshot` is sensitive to unrelated transactions — and only the
+    -- second is non-deterministic, which is why it survived review.
+    -- **`pg_xact_status` reads the commit log for THAT XID and satisfies the
+    -- disqualifier: no snapshot, no counter, nothing cluster-wide.** It answers
+    -- 'in progress' for a row written by our transaction or any of its
+    -- subtransactions — including a subtransaction that was RELEASED rather than
+    -- aborted, which is the case the commit-status family had to survive and does —
+    -- and 'committed' for a row from an earlier transaction.
     -- ⚠ A concurrent session's uncommitted row would also read 'in progress', and that
     -- is unreachable rather than unhandled: under MVCC the SELECT below cannot see
     -- such a row at all, so it fails at the not-yours branch before this value is used.
