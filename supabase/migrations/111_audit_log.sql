@@ -82,8 +82,14 @@
 --       RESIDUAL IS BOUNDED BY C2.** It has no parameter and is derived from a GUC no
 --       PostgREST-reachable surface writes. ⚠ Should that unreachability ever fail,
 --       the reachable outcome is not a forged row but a **mislabelled one attached to
---       a generation the forger actually performed**, capped per (user, month) by
---       `108`'s one-live-draft index and attributable by the `auth.uid()` stamp.
+--       a generation the forger actually performed**, and attributable to them by the
+--       `auth.uid()` stamp. ⚠ **C2 BOUNDS FABRICATION, NOT ROW COUNT** — an earlier
+--       form of this sentence claimed the one-live-draft index capped it per (user,
+--       month), and that was WRONG: the index caps CONCURRENT live drafts, not
+--       lifetime generations, and `fn_regenerate_monthly_report` supersedes the
+--       incumbent before delegating an INSERT, so a second live draft never exists for
+--       it to refuse. Every row still annotates a real write by that caller; how MANY
+--       rows is bounded only by how often they regenerate.
 --       ⚠ **That last clause is a NEGATIVE-SPACE claim, not a fence**: it holds because
 --       no exposed function takes a GUC NAME from its caller, which is a property of
 --       the current tree rather than something this file enforces. **Sec's C3 CI half
@@ -279,6 +285,14 @@
 --      `pfin.fn_emit_audit_log` exists in `pg_proc`** — the 6-argument signature does
 --      not survive as an overload (C1); (iii) it takes **no** `p_trigger_source`
 --      parameter.
+--   7c. **THE UNKNOWN-SURFACE REFUSAL, and ⚠ IT CHANGES WHICH ERROR AN EXISTING LEG
+--      SEES.** An invented `surface_name` now hits the C2 dispatch's `else` (P0001,
+--      naming the missing binding) **before** reaching the table's
+--      `audit_log_surface_name_vocab` CHECK, so a leg matching on that constraint name
+--      goes red. Both still refuse; the enforcement point for what is STORABLE is
+--      still the CHECK. Assert the P0001 message from the helper, and assert the CHECK
+--      separately by a direct INSERT as the owner if the constraint itself needs a
+--      watcher.
 --   7a. **C2 legs, and the two refusals must be asserted SEPARATELY (Sec):**
 --      an audit call naming a report **written in an earlier transaction** is refused
 --      with the earlier-transaction message; one naming **another tenant's** report is
@@ -354,8 +368,8 @@ comment on table pfin.audit_log is
   'ARE NOT PARALLEL: THE SUBJECT BINDING IS LOAD-BEARING AND THE DERIVED SOURCE IS '
   'WHAT MAKES ITS RESIDUAL SMALL. If the GUC''s unreachability ever failed, the '
   'reachable outcome is a MISLABELLED row attached to a generation the forger actually '
-  'performed — capped per user per month by the one-live-draft partial unique index '
-  'and attributable by the auth.uid() stamp — and NOT a row minted from nothing, which '
+  'performed and attributable by the auth.uid() stamp — and NOT a row minted from '
+  'nothing, which '
   'is what was measured before the subject binding existed. ⚠ '
   'tenant_resolution_chain REMAINS CALLER-ASSERTED AND IS DELIBERATELY NOT '
   'CONSTRAINED: it annotates a write this function has INDEPENDENTLY CONFIRMED '
@@ -614,9 +628,14 @@ begin
   -- ⚠⚠ C1 AND C2 ARE NOT PARALLEL, AND THE ASYMMETRY IS THE WHOLE POSTURE (Sec's own
   -- emphasis correction, E46 follow-up). **C2 IS THE LOAD-BEARING CONTROL; C1 IS WHAT
   -- MAKES ITS RESIDUAL SMALL.** With C2 in place, the worst a GUC-forger can achieve
-  -- is MISLABELLING A GENERATION THEY ACTUALLY PERFORMED — bounded per (user, month)
-  -- by 108's one-live-draft partial unique index, and attributable to them by the
-  -- auth.uid() stamp. That is categorically different from the measured original
+  -- is MISLABELLING A GENERATION THEY ACTUALLY PERFORMED, attributable to them by the
+  -- auth.uid() stamp. ⚠ C2 BOUNDS FABRICATION, NOT ROW COUNT: an earlier form of this
+  -- sentence claimed the one-live-draft index capped it per (user, month), and that
+  -- was WRONG — the index caps CONCURRENT live drafts, not lifetime generations, and
+  -- fn_regenerate_monthly_report supersedes the incumbent before delegating an INSERT,
+  -- so a second live draft never exists for it to refuse. Row COUNT is bounded only by
+  -- how often the caller regenerates. That is still categorically different from the
+  -- measured original
   -- defect, where audit_id 1 was minted from NOTHING: no write, any tenant's subject
   -- id, any provenance. **A future discussion about C1's carrier — GUC vs session_user
   -- vs anything else — must not be allowed to erode C2**, because C1's residual is
@@ -658,10 +677,16 @@ begin
     -- ⚠ It also closes a hole an ordered comparison would leave open: `xmin >= top`
     -- would ACCEPT a row committed by a concurrent transaction that started after us
     -- and therefore holds a higher xid.
-    -- ⚠ BOUNDED ASSUMPTION, NAMED: `xmin::text::xid8` reconstructs the 64-bit id
-    -- without an epoch, so this comparison is only sound within one xid epoch (2^32
-    -- transactions). There is no exposed epoch-preserving xid→xid8 conversion; the
-    -- assumption is stated rather than hidden.
+    -- ⚠ BOUNDED ASSUMPTION, NAMED — AND ITS DIRECTION NAMED WITH IT, because
+    -- "bounded assumption" alone reads to the next reader as an open risk.
+    -- `xmin::text::xid8` reconstructs the 64-bit id without an epoch, so the
+    -- comparison is sound only within one xid epoch (2^32 transactions); there is no
+    -- exposed epoch-preserving xid→xid8 conversion. **AFTER A ROLLOVER IT FAILS
+    -- CLOSED, NOT OPEN:** the reconstructed epoch-0 value falls below
+    -- pg_current_snapshot()'s xmin, pg_visible_in_snapshot returns TRUE,
+    -- v_written_here goes FALSE, and EVERY emission is refused. That is an
+    -- AVAILABILITY failure roughly 2^32 transactions out, not a security one — it
+    -- cannot be exploited in either direction.
     select r.users_id,
            not pg_visible_in_snapshot(r.xmin::text::xid8, pg_current_snapshot())
       into v_subject_tenant, v_written_here
@@ -686,6 +711,23 @@ begin
         p_subject_id;
     end if;
 
+  else
+    -- ⚠⚠ THE DEFAULT IS REFUSE, NOT PROCEED — AND THIS ELSE IS THE POINT OF IT.
+    -- Without it the dispatch falls through to the INSERT for any surface that is not
+    -- monthly_report_generation, so its emissions would be UNBOUND and mintable from
+    -- nothing: the original defect, returning for the new surface. There is no live
+    -- gap today because the CHECK vocabulary has one member — which is exactly why an
+    -- `if` with no `else` reads as safe.
+    -- ⚠ R7 rider 5's grows-only-by-migration is a PROCEDURAL control, and it was
+    -- sitting on a STRUCTURAL DEFAULT OF UNBOUND. The migration that adds a surface is
+    -- the moment someone is thinking about the CHECK and NOT about this branch, so the
+    -- default must be the one that fails. Adding a vocabulary member now BREAKS every
+    -- emission for it until its binding is written here.
+    -- It is C2's own lesson applied one level up: validating the SHAPE of a dispatch
+    -- never establishes that a binding exists behind it.
+    raise exception
+      'pfin.fn_emit_audit_log refused: no C2 subject binding is defined for surface %. A surface added to pfin.audit_log''s vocabulary MUST add its binding in this function — the rule that arguments are bound to a real privileged write in the same transaction is per-surface, and an unbound surface would accept an audit row describing a write that never happened. This refusal is deliberate and is not a missing case.',
+      p_surface_name;
   end if;
 
   insert into pfin.audit_log (
