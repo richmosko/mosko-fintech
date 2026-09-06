@@ -126,7 +126,7 @@ select ok(
 select is(
   (select count(*)::int from pfin.audit_log where subject_table = 'pfin.monthly_report' and subject_id = :d3_first::bigint and trigger_source in ('cron', 'on_demand')),
   1,
-  '(4d) THE LEG: `111`''s C2 (pg_visible_in_snapshot, not xid equality) accepted this SUBTRANSACTION-written row anyway and stamped a real trigger_source on it — combined with (4c), this is the exact call a naive xid-equality C2 implementation would have refused'
+  '(4d) THE LEG: `111`''s C2 (RE-AIMED at 72c3e5c: pg_xact_status = ''in progress'', resolved with users_id in ONE statement — not xid equality, and not the superseded pg_visible_in_snapshot expression either) accepted this SUBTRANSACTION-written row anyway and stamped a real trigger_source on it — combined with (4c), this is the exact call a naive xid-equality C2 implementation would have refused'
 );
 select _rls.set_tenant(:'ta'::uuid);
 select is(
