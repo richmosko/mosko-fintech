@@ -9,6 +9,7 @@ from .core import PFinBackend
 from .connection import TenantBoundConnection, TenantBindingError
 from .nav_daily import NavDailyWorker
 from .nav_backfill import NavBackfillWorker, NavBackfillCsvError
+from .monthly_report_cron import MonthlyReportCronWorker, prior_month_first_day
 
 __all__ = [
     "PFinFMP",
@@ -19,4 +20,6 @@ __all__ = [
     "NavDailyWorker",
     "NavBackfillWorker",
     "NavBackfillCsvError",
+    "MonthlyReportCronWorker",
+    "prior_month_first_day",
 ]
