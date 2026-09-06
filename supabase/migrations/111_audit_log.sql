@@ -308,6 +308,17 @@
 --      exception block, i.e. a SUBTRANSACTION, and a bare-INSERT leg would pass
 --      against an xid-equality implementation that refuses the real product path.
 --   7b. **A read-only transaction is refused** (no xid assigned) — the fail-closed leg.
+--   7d. **⚠ THE CAUGHT-EXCEPTION LEG, WHICH IS THE ONE A BATTERY WILL TRIP BY
+--      ACCIDENT.** Assert that a successful emit STILL succeeds when an exception was
+--      caught earlier in the same transaction — a `throws_like()` leg, a caught
+--      `unique_violation`, or a caught trigger refusal — **and place that leg BEFORE
+--      the emit leg, not after**, so it actually exercises the interaction. This
+--      passes on the clog test and FAILS on a snapshot-visibility implementation, and
+--      the failure is what a battery reports as a mysterious refusal.
+--      ⚠ **The rule it encodes is broader than "do not catch between the write and the
+--      emit":** an aborted subtransaction ANYWHERE EARLIER in the transaction — even
+--      BEFORE the write — poisoned the snapshot form. Measured. There is nothing to
+--      avoid any more, which is why this is a leg and not a documented constraint.
 --   8. Two callers, one shape — ⚠ AND THE CRON ROW MUST BE PRODUCED BY SETTING THE
 --      GUC, NOT BY PASSING A VALUE (C1 removed the parameter). Only then is this a
 --      genuine two-caller leg; passing `'cron'` from the battery's own session was one
@@ -463,7 +474,19 @@ comment on column pfin.audit_log.tenant_resolution_chain is
 comment on column pfin.audit_log.data_as_of is
   'The as-of date the privileged write composed at. Part of R7 rider 2''s minimum row '
   'shape rather than optional colour: the V1.final "month of operation" measurement '
-  'reads exactly this field alongside trigger_source = ''cron'', and ADR-011 Decision '
+  'reads exactly this field alongside trigger_source = ''cron'' AND '
+  'surface_name = ''monthly_report_generation''. ⚠ THE SURFACE FILTER IS LOAD-BEARING '
+  'AND AN EARLIER FORM OF THIS SENTENCE OMITTED IT: the vocabulary grows by migration, '
+  'and the first added surface that a cron-initiated transaction can write would '
+  'change this measurement''s result WITHOUT ANYONE TOUCHING THE MEASUREMENT — the '
+  'defect would then be attributed to the query rather than to the migration. ⚠ AND '
+  'PROSE IS THE WEAK FORM OF THIS FIX: a predicate described in a column comment has '
+  'no watcher and cannot be executed. The durable fix is to COMMIT THE PREDICATE AS '
+  'SQL — a view — so the measurement has one definition instead of a description; that '
+  'is routed to PM and is not in this migration. ⚠ AND THE COUNT MUST BE OVER DISTINCT '
+  '(users_id, month of data_as_of), NEVER OVER ROWS: a regeneration supersedes the '
+  'incumbent and inserts a fresh draft, so each regeneration writes another row for '
+  'the same month and a row count is inflatable by ordinary product use. ADR-011 Decision '
   '19 extends that clause with it. NULLable at the COLUMN so a future surface with no '
   'as-of can write honestly, while the HELPER''S PARAMETER IS REQUIRED — a report '
   'caller cannot omit it by accident, only pass NULL deliberately.';
@@ -667,33 +690,45 @@ begin
     -- (c) Resolve the subject. This runs as the function owner, so it sees the row
     -- regardless of the caller's RLS — which is what makes the tenant comparison
     -- below meaningful rather than tautological.
-    -- ⚠ THE VISIBILITY TEST, NOT AN xid EQUALITY TEST, AND THE DIFFERENCE IS A
-    -- MEASURED DEFECT AVOIDED. The obvious expression — `xmin = pg_current_xact_id()`
-    -- — IS WRONG HERE: `fn_open_monthly_report_draft` performs its INSERT inside a
-    -- plpgsql `begin … exception when unique_violation` block, which opens a
-    -- SUBTRANSACTION with its own xid, while `pg_current_xact_id_if_assigned()`
-    -- returns the TOP-LEVEL xid. Measured 2026-09-05: top `1664121`, row xmin
-    -- `1664122`, equality FALSE. A naive check would refuse the one path this
-    -- condition exists to permit, and would pass every test whose INSERT was not
-    -- wrapped in an exception block.
-    -- `pg_visible_in_snapshot` is correct for both: a row written by our own
-    -- transaction OR any of its subtransactions is NOT visible in our own snapshot,
-    -- while a row from an earlier committed transaction IS (measured, all four cases).
-    -- ⚠ It also closes a hole an ordered comparison would leave open: `xmin >= top`
-    -- would ACCEPT a row committed by a concurrent transaction that started after us
-    -- and therefore holds a higher xid.
-    -- ⚠ BOUNDED ASSUMPTION, NAMED — AND ITS DIRECTION NAMED WITH IT, because
-    -- "bounded assumption" alone reads to the next reader as an open risk.
-    -- `xmin::text::xid8` reconstructs the 64-bit id without an epoch, so the
-    -- comparison is sound only within one xid epoch (2^32 transactions); there is no
-    -- exposed epoch-preserving xid→xid8 conversion. **AFTER A ROLLOVER IT FAILS
-    -- CLOSED, NOT OPEN:** the reconstructed epoch-0 value falls below
-    -- pg_current_snapshot()'s xmin, pg_visible_in_snapshot returns TRUE,
-    -- v_written_here goes FALSE, and EVERY emission is refused. That is an
-    -- AVAILABILITY failure roughly 2^32 transactions out, not a security one — it
-    -- cannot be exploited in either direction.
+    -- ⚠⚠ THE CLOG TEST, NOT AN xid EQUALITY TEST AND NOT A SNAPSHOT TEST. TWO
+    -- MEASURED DEFECTS ARE AVOIDED HERE AND BOTH ARE INVISIBLE TO AN ORDINARY LEG.
+    -- (i) `xmin = pg_current_xact_id_if_assigned()` IS WRONG:
+    --     `fn_open_monthly_report_draft` INSERTs inside a plpgsql
+    --     `begin … exception when unique_violation` block, which opens a
+    --     SUBTRANSACTION with its own xid, while that function returns the TOP-LEVEL
+    --     xid. Measured: top 1664121, row xmin 1664122, equality FALSE. It would
+    --     refuse the one path this condition exists to permit, and pass every test
+    --     whose INSERT was not wrapped in an exception block.
+    -- (ii) `not pg_visible_in_snapshot(...)` IS ALSO WRONG, AND MORE SUBTLY:
+    --     **ANY ABORTED SUBTRANSACTION ANYWHERE EARLIER IN THE TRANSACTION POISONS
+    --     IT.** Once a subtransaction aborts, our own top-level xid reads as VISIBLE
+    --     in our own snapshot, so the test flips to FALSE and every later emission is
+    --     refused. Measured, and the rule is broader than the way it was first
+    --     reported: a caught trigger exception AFTER the write, a caught
+    --     `unique_violation` after the write, and — the case that shows the real
+    --     rule — **a caught exception BEFORE the write** all poison it. Only a
+    --     non-firing exception block is safe. A pgTAP battery hits this constantly,
+    --     because `throws_like()` legs catch exceptions.
+    -- **`pg_xact_status` reads the commit log directly and is immune to both.** It
+    -- answers 'in progress' for a row written by our transaction OR any of its
+    -- subtransactions, whether or not any subtransaction has aborted, and 'committed'
+    -- for a row from an earlier transaction — measured across all seven cases,
+    -- including the three that break the snapshot test.
+    -- ⚠ A concurrent session's uncommitted row would also read 'in progress', and that
+    -- is unreachable rather than unhandled: under MVCC the SELECT below cannot see
+    -- such a row at all, so it fails at the not-yours branch before this value is used.
+    -- ⚠ IT WORKS FROM AN `authenticated` CALLER — measured. `pg_xact_status` carries no
+    -- ACL entry, so EXECUTE is PUBLIC; it does not depend on this function's DEFINER
+    -- posture, and QA can assert it directly.
+    -- ⚠ BOUNDED ASSUMPTION, NAMED, WITH ITS DIRECTION. `xmin::text::xid8` reconstructs
+    -- the 64-bit id without an epoch — there is no exposed epoch-preserving
+    -- conversion — so this is sound within one xid epoch. A frozen `xmin` reads as
+    -- 'committed' cleanly (measured on FrozenTransactionId), so an ancient row is
+    -- REFUSED rather than erroring. Beyond clog retention `pg_xact_status` raises,
+    -- which aborts the transaction: an AVAILABILITY failure, fail-closed, not
+    -- exploitable in either direction.
     select r.users_id,
-           not pg_visible_in_snapshot(r.xmin::text::xid8, pg_current_snapshot())
+           pg_xact_status(r.xmin::text::xid8) = 'in progress'
       into v_subject_tenant, v_written_here
       from pfin.monthly_report r
      where r.report_id = p_subject_id;
