@@ -342,6 +342,23 @@
 --      a split read whose second statement is written `FROM` scores 1 and **passes on
 --      a broken body** (measured). The migration's apply-time check carries the same
 --      flag, and DevOps's C3 `prosrc` scanner already uses `~*` for this class.
+--      ⚠⚠ **AND THIS LEG MUST BE INVERSION-PROVEN, NOT ASSERTED GREEN (Sec).** Strike
+--      the invariant on a copy — split the read into two statements — and require 7g
+--      to go **RED**; then apply the correct body to an identical clean base and
+--      require it **silent**. **Three bodies, because two are not enough here:** the
+--      split written in lowercase AND the split with the second read written `FROM`,
+--      since a case-sensitive leg passes the second one. That matched set is the
+--      shape the migration's own check was proven against.
+--      ⚠ **WHY THIS LEG SPECIFICALLY:** every other leg here fails when the product is
+--      broken. A STRUCTURAL leg asserted only against correct code **cannot be
+--      distinguished from one that cannot fail at all** — which is the same class that
+--      let the superseded C2 predicate through review, and the same class that made a
+--      verification harness for this very check report three bodies as passing when
+--      one of them had already been proven to refuse.
+--      **THE BAR, stated once and applying to every structural leg in this file:** a
+--      green from a test you wrote is worth exactly as much as that test's own
+--      falsifiability, so a watcher is not reportable until it has been inversion-proven
+--      on a matched pair.
 --      ⚠ **This leg exists because no BEHAVIOURAL leg can cover it:** splitting the
 --      read behaves correctly on an idle database and diverges only under concurrency.
 --      The migration carries an apply-time version of the same check, but that one
