@@ -27,6 +27,33 @@
 -- an INSERT/UPDATE whose WITH CHECK could raise a bespoke RLS error, so aal2
 -- and cross-tenant share ONE message family here (both leave v_report_id
 -- null), unlike 113 where the code path falls through to an INSERT.
+--
+-- ⚠ "LOOKS LIKE YOU PLANNED 53 TESTS BUT RAN 49" IS EXPECTED, AND DOES NOT
+-- MEAN A SAVEPOINT-WRAPPED LEG CAN'T FAIL (VERIFIED, not inferred — struck
+-- guard (6a) in the real `fn_finalize_monthly_report` on a scratch clone and
+-- ran this UNMODIFIED file through pg_prove: (14h-i)/(14h-ii) correctly went
+-- `not ok`, by name, with `Result: FAIL`). The mechanism: an `ok(...)`/
+-- `throws_like(...)` call's TAP line is that statement's own RETURN VALUE —
+-- psql prints it the moment the `select` completes, which is BEFORE the
+-- following `rollback to savepoint` runs, so pass/fail survives the
+-- rollback intact and pg_prove (the real consumer) sees and counts it
+-- correctly. What DOES roll back with the savepoint is pgTAP's OWN internal
+-- bookkeeping table (`finish()`'s self-diagnostic counter, not the TAP
+-- stream), which is why `finish()` reports a mismatched "ran" count for any
+-- trailing savepoint-wrapped legs with nothing non-rolled-back after them to
+-- refresh that counter. Expected drift here = 4, exactly the trailing 14h-i
+-- through 14h-iv legs (each its own `savepoint ... rollback to savepoint`
+-- pair, immediately before `finish()`). This line is COSMETIC to pass/fail
+-- detection — but the residual it leaves is real: the PLAN COUNT itself no
+-- longer functions as a guard against a leg that is ACCIDENTALLY never
+-- executed at all inside such a savepoint (a leg whose `select ok(...)` is
+-- itself missing, or short-circuited before it runs, produces the identical
+-- "planned N ran M" comment as one that ran and passed or ran and was
+-- correctly caught failing — the comment cannot distinguish those cases).
+-- Trust `Result:`/the `Failed tests:` list, not the plan-count comment, for
+-- pass/fail; if a leg's actual EXECUTION is ever in doubt, verify it the way
+-- this note was verified — strike the real guard and watch the real leg
+-- flip, not from the plan-count line alone.
 -- =====================================================================
 
 begin;
