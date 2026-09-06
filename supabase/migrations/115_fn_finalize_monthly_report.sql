@@ -338,6 +338,25 @@
 --      `draft`. Assert both — the refusal alone passed while the table was empty.
 --  14g. **A tenant with NO accounts finalizes successfully with ZERO children.** An
 --      empty set is a valid outcome, not a failure.
+--  14h. **⚠ FLAG-7 — THE FOUR RESTRUCTURING SHAPES, EACH DRIVEN BY REPLACING
+--      `fn_render_monthly_report` ON A SCRATCH CLONE, EACH MUST REFUSE.** These are
+--      SILENT without the guards, and two of them freeze a report permanently with a
+--      wrong child set:
+--        (i)   the `{sections,account_holdings,groups}` path RENAMED or moved → refused
+--              (without the guard: **zero children, no error, report frozen** — the
+--              exact P8 degradation this file exists to fix, re-created);
+--        (ii)  that path present but a SCALAR → refused with the SAME named message,
+--              because it is the same failure — a restructuring — and an operator
+--              should not get a raw 22023 from inside the traversal;
+--        (iii) an account element with no `account_id` key → refused by the cardinality
+--              assertion (without it: **partial set, no error**);
+--        (iv)  a group with no `accounts` array → refused by its own guard, because the
+--              cardinality assertion CANNOT see this one: the count query and the
+--              INSERT share the traversal, so both drop it and the counts still match.
+--      ⚠ **BOTH CONTROLS MUST PASS IN THE SAME RUN**, or the legs prove only that the
+--      function can refuse — a tenant WITH accounts finalizes with the full set, and a
+--      tenant with NO accounts finalizes with zero children, since `'[]'` resolves, is
+--      an array, and expects zero.
 --  15. **`data_as_of` is unchanged by finalization** and the payload's `as_of` equals
 --      it — the draft's as-of is what was composed, and no clock was re-derived.
 --
@@ -376,11 +395,14 @@ volatile
 set search_path = ''
 as $$
 declare
-  v_report_id  bigint;
-  v_data_as_of date;
-  v_owner_hdr  text;
-  v_payload    jsonb;
-  v_echoed_id  bigint;
+  v_report_id       bigint;
+  v_data_as_of      date;
+  v_owner_hdr       text;
+  v_payload         jsonb;
+  v_echoed_id       bigint;
+  v_groups          jsonb;
+  v_payload_accts   bigint;
+  v_children_written bigint;
 begin
   -- (0) Vocabulary. 108's CHECK is the enforcement point and is directly reachable
   -- through PostgREST; this raise exists so a caller of THIS function learns the rule
@@ -479,12 +501,79 @@ begin
   -- account.account_type, and an account has exactly one, so a duplicate would mean
   -- the composition itself is malformed. Swallowing that would freeze a report whose
   -- children silently disagree with its payload.
+  -- ⚠⚠ (6a) THE PATH MUST RESOLVE — Sec FLAG-7, and this is the assertion that makes
+  -- the whole INSERT honest. Without it, a `110` restructuring that RENAMES or MOVES
+  -- this path yields NO rows and NO error: every fence stays green, the report freezes
+  -- permanently with an empty snapshot set, and P8's banner degrades to the full
+  -- live-stale set — RE-CREATING THE EXACT DEFECT THIS COMMIT EXISTS TO FIX.
+  -- ⚠ **That is not a hypothetical: it is the regression `payload_schema_version` was
+  -- put there to make possible.** ADR-068 Decision 4 designs the payload to be
+  -- restructured under a version bump, so a path rename is a SANCTIONED change — and
+  -- this function reads a fixed path with no version guard. The assertion is the guard.
+  -- ⚠ `is not null` distinguishes ABSENT from legitimately EMPTY: a tenant with no
+  -- accounts yields `'[]'`, which resolves and is not null, so this does not false-RED
+  -- on the zero-account case that leg 14g requires to succeed.
+  -- ⚠ The type check rides with the null check because they are ONE failure — a
+  -- restructuring — and an operator should get one message for it. A scalar at that
+  -- path already failed closed, but with a raw 22023 from deep inside the traversal;
+  -- fail-closed with an unreadable reason is a worse artifact than fail-closed with a
+  -- named one, and this is the file that tells someone their report would not freeze.
+  v_groups := v_payload #> '{sections,account_holdings,groups}';
+  if v_groups is null or jsonb_typeof(v_groups) <> 'array' then
+    raise exception
+      'pfin.fn_finalize_monthly_report refused: the composed payload''s {sections,account_holdings,groups} path is % — expected a JSON array, so the Lock 12 child set cannot be derived. This function reads a FIXED path and payload_schema_version exists precisely so that path may be restructured under a version bump — if pfin.fn_render_monthly_report moved, renamed or reshaped it, THIS FUNCTION MUST BE UPDATED WITH IT. Refusing rather than freezing a report with a silently empty snapshot set. (An account-less tenant yields [] here, which IS an array and IS permitted.)',
+      coalesce(jsonb_typeof(v_groups), 'absent');
+  end if;
+
+  -- ⚠ (6b) EVERY GROUP MUST CARRY AN `accounts` ARRAY — MY ADDITION, not Sec's, and
+  -- flagged as such because it closes a shape (6c) STRUCTURALLY CANNOT SEE. A group
+  -- missing its `accounts` key is dropped identically by the count query and by the
+  -- INSERT below — they use the same traversal — so the cardinality check matches and
+  -- passes while accounts have silently vanished. The equal-counts assertion catches
+  -- drops at the JOIN; it cannot catch drops at the TRAVERSAL.
+  if exists (
+    select 1 from jsonb_array_elements(v_groups) g
+     where jsonb_typeof(g -> 'accounts') is distinct from 'array'
+  ) then
+    raise exception
+      'pfin.fn_finalize_monthly_report refused: a group in the composed payload has no `accounts` array. The child-set traversal would drop that group silently AND the cardinality assertion below would not see it, because both walk the same path. Refusing rather than freezing a partial snapshot set.';
+  end if;
+
+  -- (6c) The expected cardinality, taken from the PAYLOAD before the write, so the
+  -- comparison below is against the artifact rather than against another read.
+  select count(*)
+    into v_payload_accts
+    from jsonb_array_elements(v_groups) g
+    cross join lateral jsonb_array_elements(g -> 'accounts') acc;
+
   insert into pfin.monthly_report_account_snapshot
     (monthly_report_id, account_id, acct_name_at_generation, tax_treatment_at_generation)
   select v_report_id, a.account_id, a.name, a.tax_treatment
-    from jsonb_array_elements(v_payload #> '{sections,account_holdings,groups}') g
+    from jsonb_array_elements(v_groups) g
     cross join lateral jsonb_array_elements(g -> 'accounts') acc
     join pfin.account a on a.account_id = (acc ->> 'account_id')::bigint;
+
+  get diagnostics v_children_written = row_count;
+
+  -- ⚠⚠ (6d) THE CARDINALITY ASSERTION — Sec FLAG-7 (b), and the watcher for the
+  -- OMISSION direction that `on conflict`'s absence does not cover. A duplicate raises
+  -- 23505 loudly; a DROPPED account is silent, and the inner join is where it happens:
+  -- an element without an `account_id` key yields NULL and is dropped, as is an id that
+  -- matches no row the caller can see.
+  -- ⚠ **THIS IS BOUND ON THE CARDINALITY OUTCOME, WHICH THIS FILE CAN SEE — NOT ON THE
+  -- GROUPING PREMISE, WHICH IT CANNOT** (Sec's ruling on the `on conflict` question).
+  -- The no-duplicates argument rests on `fn_nav_composition` grouping by
+  -- `account.account_type`, a property of a function in another migration that nothing
+  -- binds to this one. This assertion needs no such premise.
+  -- ⚠ It cannot false-RED on the zero-account tenant: 0 expected, 0 written.
+  -- ⚠ **AND IT IS IN THE SHAPE STEP (5) ALREADY USES** — an assertion that should be
+  -- unreachable while the composition and the schema agree. Unreachable is not useless:
+  -- it is the instrument that proves they still agree.
+  if v_children_written <> v_payload_accts then
+    raise exception
+      'pfin.fn_finalize_monthly_report refused: wrote % Lock 12 child rows but the composed payload names % accounts. The difference is a SILENT DROP at the join — an account element carrying no `account_id`, or an id resolving to no row visible to this caller — and freezing the report would make the artifact and its per-account children permanently disagree, with the children immutable too. Refusing instead.',
+      v_children_written, v_payload_accts;
+  end if;
 
   -- (7) FREEZE. One statement, same transaction: payload, its version (taken FROM the
   -- payload so column and artifact cannot disagree), the freeze instant (now() is the
