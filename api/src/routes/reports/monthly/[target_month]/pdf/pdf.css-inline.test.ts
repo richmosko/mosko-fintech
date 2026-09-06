@@ -3,31 +3,28 @@
 // worker fetches nothing else (R2 (C)) — so the generated component CSS must be INLINED, never
 // referenced.
 //
-// ⚠ ENVIRONMENT DEFECT, NOT THIS FEATURE (flagged at hand-off, bubble up to DevOps/Architect —
-// possible `vite: ^8.0.16` version-pin concern): under THIS repo's `vitest` node project (Vite
-// 8.1.3's "serve"-command CSS pipeline, `node_modules/vite/dist/node/chunks/node.js`'s
-// `vite:css-post` transform), a `.css` file consumed from a "server"-environment module —
-// `?raw` OR `?inline`, both tried — resolves to an EMPTY string, not its real content. PRE-
-// EXISTING (reproduces on `main`, unrelated to this branch) and NOT SPECIFIC to `report.css` —
-// `tokens.css`/`app.css` (already `?raw`-imported by this same route before SELF-358) hit the
-// identical empty-string result. VERIFIED NOT TO REACH PRODUCTION: a real `vite build` (Vite's
-// "build" command, a different code path) correctly embeds the genuine CSS content — grepped the
-// built chunk `build/server/chunks/entries/endpoints/reports/monthly/_target_month_/pdf/
-// _server.ts.js-*.js` for `monthly-report.svelte-<hash>` and found it, byte-real. `npm run dev`
-// likely shares the "serve" code path and may ALSO ship unstyled — worth a live check, not done
-// here (out of this spike's scope). Legs below are written to be MEANINGFUL under this
-// constraint, not to paper over it with an assertion that can only ever pass or only ever fail.
+// PRIOR REVISION'S HEADER WAS WRONG — corrected, DevOps-c's live-verified triage: the vitest
+// `node` project's `.css`/`?raw` empty-string result is vitest-dev/vitest#10788, NOT a `vite:css-
+// post` quirk. `test.css` defaults `false`; vitest's OWN css-disable short-circuit fires BEFORE
+// Vite's raw-import pipeline ever runs, unconditionally, regardless of `?raw`/`?inline` — that is
+// why both queries returned empty. Reproduced on vitest 3.2.4 / 4.1.9 / this repo's 4.1.10; no
+// version bump fixes it. Fix: `test.css: true` on the `node` project (`vitest.config.ts`), scoped
+// so the `dom` project (already `?raw`-unaffected — never exercised the empty-string defect) is
+// unchanged; both projects measured green after the change. Also corrected: `npm run dev`'s real
+// `vite` server does NOT share this path — DevOps-c's own `ssrLoadModule('report.css?raw')`
+// against a live dev server returned the full 37,352-byte artifact, not empty; the prior header's
+// "may also ship unstyled" guess was wrong and is retracted.
 //
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { render } from 'svelte/server';
 import MonthlyReportView from '$lib/components/MonthlyReportView.svelte';
-// SELF-358 / P6 fix: moved from './+server' — see composeReportDocument.ts's own header.
 import { composeReportDocument } from '$lib/server/pdf/composeReportDocument';
 import { MONTHLY_REPORT_HEADER_FINAL, MONTHLY_REPORT_PAYLOAD } from '$lib/fixtures/monthly-report';
 import { EMPTY_STALENESS } from '$lib/staleness/stale-constituent';
 import { EMPTY_CASHFLOW_ROW_STALENESS_MAP } from '$lib/cashflow-row-staleness';
+import reportCss from '$lib/generated/report.css?raw';
 
 function renderDocument(): string {
 	const { head, body } = render(MonthlyReportView, {
@@ -46,28 +43,39 @@ function renderDocument(): string {
 }
 
 describe('PDF export — SELF-358 / P6 CSS ruling: the extracted component CSS is inlined', () => {
-	it('the committed report.css artifact on disk is real and substantial (bypasses the vitest ?raw/?inline defect above via a direct fs read, the SAME technique the build-time census used)', () => {
-		// Guards the guard: the ONE property a build-drift regression would actually corrupt —
-		// the artifact itself, not this test harness's ability to see it.
+	it('the `?raw` import matches the artifact on disk byte-for-byte (proves the import mechanism itself, independent of what any one render happens to use)', () => {
 		const onDisk = readFileSync('src/lib/generated/report.css', 'utf-8');
-		expect(onDisk.length).toBeGreaterThan(1000);
-		expect(onDisk).toMatch(/\.monthly-report\.svelte-[a-z0-9]+/);
+		expect(reportCss).toBe(onDisk);
 	});
 
-	it('the document shell has exactly three inlined <style> tags before the print-base block (tokens.css, app.css, report.css — the wiring this route\'s header documents), never an external <link>', () => {
-		const document = renderDocument();
-		// The wiring assertion: three `<style>` opens precede the named print-base comment, in the
-		// order composeReportDocument.ts declares them. Content-equality is NOT assertable here
-		// (see file header) — this proves the INTERPOLATION SITE exists and precedes the doc's own
-		// `</head>`, which is what a "forgot to add the <style> tag" regression would break.
-		const headSlice = document.slice(0, document.indexOf('</head>'));
-		const styleOpens = headSlice.match(/<style>/g) ?? [];
-		expect(styleOpens.length).toBeGreaterThanOrEqual(4); // 3 CSS files + the print-base block
-		expect(document).not.toMatch(/<link\b/i);
+	it('never emits an empty or near-empty extracted-CSS artifact — the ruling\'s own named failure mode (a build drift that silently ships an unstyled PDF while every value assertion still passes)', () => {
+		// Byte length within tolerance of the measured baseline (37,352 B at `fbf2fd8`) rather than
+		// an exact pin — the component tree is expected to grow, a hard pin would just bit-rot.
+		expect(reportCss.length).toBeGreaterThan(20000);
+		expect(reportCss.length).toBeLessThan(80000);
 	});
 
-	it('introduces no external script reference — the worker fetches nothing else (R2 (C))', () => {
+	it('inlines the FULL extracted report.css verbatim inside a <style> tag', () => {
 		const document = renderDocument();
-		expect(document).not.toMatch(/<script\s+src=/i);
+		expect(document).toContain(`<style>${reportCss}</style>`);
+	});
+
+	it('carries a distinctive component-scoped selector from the report tree (not just the two pre-existing global sheets)', () => {
+		const document = renderDocument();
+		// MonthlyReportView.svelte's own root class, scoped-hash-suffixed — proves this is the
+		// COMPONENT tree's CSS, not merely tokens.css/app.css re-asserted under a new name.
+		expect(document).toMatch(/\.monthly-report\.svelte-[a-z0-9]+/);
+	});
+
+	it('introduces no external stylesheet or script reference — the worker fetches nothing else (R2 (C))', () => {
+		const document = renderDocument();
+		// Strip <style>...</style> blocks first — real CSS content (now visible thanks to the
+		// #10788 fix above) legitimately contains the SUBSTRING "<link" inside a comment
+		// (tokens.css documents its own font loading via a review-page `<link>` tag); a bare
+		// document-wide match would false-positive on that comment, not on an actual tag this
+		// document emits.
+		const withoutStyleBlocks = document.replace(/<style>[\s\S]*?<\/style>/g, '');
+		expect(withoutStyleBlocks).not.toMatch(/<link\b/i);
+		expect(withoutStyleBlocks).not.toMatch(/<script\s+src=/i);
 	});
 });
