@@ -146,7 +146,7 @@ create extension if not exists dblink;
 \set m_not_yours '%is not a row belonging to the tenant%'
 \set m_not_written '%was NOT written in this transaction%'
 
-select plan(34);
+select plan(36);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 insert into auth.users (id) values (:'ta'), (:'tb');
@@ -259,6 +259,38 @@ select throws_like(
   :'m_vocab_check',
   '(4d) a DIRECT owner-path INSERT with an invented surface_name is refused by the TABLE CHECK itself — the check''s own, still-live observer, independent of the helper''s dispatch'
 );
+
+-- =====================================================================
+-- LEG 4e/4f (Sec FLAG-3) — C2 GUARD (b) HAS NO OTHER OBSERVER. p_subject_table
+-- is written VERBATIM into the row (see the INSERT below guard (c)), so this
+-- guard is the ONLY thing standing between a caller holding EXECUTE and a
+-- FORGED LOCATOR on an emit that is valid in every other respect: real
+-- subject row, own tenant, this transaction. `\set m_bad_subject` above was
+-- declared and never referenced across the re-leg for 72c3e5c — the tell
+-- that this leg was lost. The guard is a DISJUNCTION (`p_subject_table is
+-- distinct from ... or p_subject_id is null`), so BOTH branches are asserted
+-- separately — one leg alone leaves the other branch unwatched. Reachability
+-- checked against the body's own guard order (111 migration L749-772): (a)
+-- xid-assigned fires first and passes, because the `insert into
+-- pfin.monthly_report` below IS a write in this same transaction, giving it
+-- an assigned xid; guard (b) fires next and refuses. Neither leg reaches
+-- guard (c), so neither depends on the C2 subject-resolution predicate FLAG-2
+-- discusses.
+-- =====================================================================
+select _rls.set_tenant(:'ta'::uuid);
+insert into pfin.monthly_report (target_month, data_as_of)
+  values ('2028-01-01', '2028-01-31') returning report_id as leg4e_subj \gset
+select throws_like(
+  format($$ select pfin.fn_emit_audit_log('monthly_report_generation', 'impersonated session: request.jwt.claims.sub', '2028-01-31', 'pfin.account', %s) $$, :leg4e_subj),
+  :'m_bad_subject',
+  '(4e) THE LEG: a REAL, OWN, same-transaction report_id submitted with a FORGED p_subject_table is refused by C2 guard (b) — the column is written verbatim into the row, so without this guard an otherwise-valid emit records a locator pointing at a table the write never touched'
+);
+select throws_like(
+  $$ select pfin.fn_emit_audit_log('monthly_report_generation', 'impersonated session: request.jwt.claims.sub', '2028-01-31', 'pfin.monthly_report', null) $$,
+  :'m_bad_subject',
+  '(4f) the NULL p_subject_id half of the SAME disjunctive guard, asserted separately — a caller supplying the correct table but omitting the id is refused by the same guard, not silently coerced'
+);
+select set_config('role', 'postgres', true);
 
 -- =====================================================================
 -- LEG 5 — authenticated holds NO table grant: a direct INSERT through
