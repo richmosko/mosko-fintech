@@ -338,6 +338,12 @@
 --      `draft`. Assert both — the refusal alone passed while the table was empty.
 --  14g. **A tenant with NO accounts finalizes successfully with ZERO children.** An
 --      empty set is a valid outcome, not a failure.
+--  14i. **⚠ NOT A LEG — THE SIBLING-KEY SHAPE IS UNCOVERABLE HERE AND THE LIST SAYS
+--      SO.** Accounts relocated to a NEW sibling key while `groups` stays a legitimate
+--      `'[]'` passes every guard, because it is indistinguishable from a tenant with no
+--      accounts. A `payload_schema_version` pin would catch it and was deliberately not
+--      taken; a payload version bump is a **Sec-review event**, not a DB self-check. Do
+--      not write a leg that appears to cover this.
 --  14h. **⚠ FLAG-7 — THE FOUR RESTRUCTURING SHAPES, EACH DRIVEN BY REPLACING
 --      `fn_render_monthly_report` ON A SCRATCH CLONE, EACH MUST REFUSE.** These are
 --      SILENT without the guards, and two of them freeze a report permanently with a
@@ -486,6 +492,19 @@ begin
   -- therefore enforced, not merely intended — and the two changes prove each other:
   -- the fence stops being moot because a writer exists, and the writer cannot drift
   -- past the fence.
+  -- ⚠⚠ THE FILE TO WATCH IS NOT `110` — IT IS `pfin.fn_nav_composition`, CURRENTLY
+  -- DEFINED AT `105`. This traversal's entire subtree is produced WHOLESALE one call
+  -- deeper: `110` contains exactly one line for it —
+  --     'account_holdings', pfin.fn_nav_composition(p_data_as_of),
+  -- — and **neither intermediate binds the shape**. A reader who follows the guard
+  -- above to `110`, finds that single delegating line and concludes the coupling is
+  -- safe has stopped one file short of the thing that can break it.
+  -- ⚠ `fn_nav_composition` is RE-CREATED across `051` → `102` → `105`, so "watch
+  -- `105`" is itself a dated statement: the live definition is **the last migration
+  -- that re-creates it**, and a `create or replace` chain leaves every superseded body
+  -- greppable. Resolve it from the catalog (`pg_proc.prosrc`), not by grepping the
+  -- tree for the first `create`.
+  --
   -- ⚠ THE ACCOUNT SET COMES FROM THE COMPOSED PAYLOAD, NOT FROM pfin.account.
   -- Reading every account the caller owns would capture a DIFFERENT set: the
   -- composition deliberately excludes tax-authority ledger accounts, so a live read
@@ -569,6 +588,21 @@ begin
   -- ⚠ **AND IT IS IN THE SHAPE STEP (5) ALREADY USES** — an assertion that should be
   -- unreachable while the composition and the schema agree. Unreachable is not useless:
   -- it is the instrument that proves they still agree.
+  -- ⚠⚠ WHAT THE FOUR GUARDS DO NOT COVER, STATED SO THE SET IS NOT READ AS TOTAL.
+  -- They catch the path being ABSENT, MISTYPED, or an account being DROPPED. They do
+  -- NOT catch **"moved to an additional SIBLING key"**: if the composer grew
+  -- `sections.account_holdings.groups_v2` and relocated accounts into it while leaving
+  -- `groups` as a legitimate `'[]'`, every guard here passes — the path resolves, it is
+  -- an array, zero expected, zero written, counts agree — and the report freezes with
+  -- an empty child set. **That shape is indistinguishable, from inside this function,
+  -- from a tenant who genuinely holds no accounts.**
+  -- ⚠ A `payload_schema_version` PIN WOULD CATCH IT AND IS DELIBERATELY NOT TAKEN.
+  -- Asserting the version equals a constant here would make every legitimate bump a
+  -- forced edit to this file — which is arguably correct, and is exactly the review
+  -- that Sec would rather have happen with a human in it. **So a payload version bump
+  -- remains a SEC-REVIEW EVENT, not something the database self-checks**, and this
+  -- comment is the record of that being a decision rather than an oversight. See
+  -- [ADR-068](DECISIONS.md#adr-068) Decision 4.
   if v_children_written <> v_payload_accts then
     raise exception
       'pfin.fn_finalize_monthly_report refused: wrote % Lock 12 child rows but the composed payload names % accounts. The difference is a SILENT DROP at the join — an account element carrying no `account_id`, or an id resolving to no row visible to this caller — and freezing the report would make the artifact and its per-account children permanently disagree, with the children immutable too. Refusing instead.',
