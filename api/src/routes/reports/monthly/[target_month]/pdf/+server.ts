@@ -18,11 +18,15 @@
 // only the NEW final-vs-draft business rule (the shared loader deliberately does not own this —
 // see that module's own header).
 //
-// AC 3 — ONE TEMPLATE: this route passes MonthlyReportView.svelte the EXACT SAME prop set
-// `+page.server.ts`'s `load()` return threads to it (header/payload/taxCharacters/
+// AC 3 — ONE TEMPLATE: this route passes MonthlyReportView.svelte the EXACT SAME REPORT-DATA prop
+// set `+page.server.ts`'s `load()` return threads to it (header/payload/taxCharacters/
 // seedDeltaMigration/staleness/cashflowRowStaleness/staleAccountNames) — sourced from the SAME
 // `loadMonthlyReportForRender()` call, so the two surfaces cannot silently diverge (R2 (C) makes
-// this structural, not a discipline).
+// this structural, not a discipline). SELF-358 / P6 adds exactly one more prop, `renderContext:
+// 'print'` (the in-app page passes none, defaulting to `'browser'`) — per the CSS ruling's own
+// LayerCake note, this is SIZING ONLY: it carries no report data and no user-controlled text, and
+// must never gate rendered content, so it does not weaken this AC's "cannot silently diverge"
+// guarantee.
 //
 // AC 4 — TRANSIENT: the PDF bytes are streamed straight back in the HTTP response and never
 // written to any table, bucket, or disk path this route owns. Nothing here persists them.
@@ -40,8 +44,8 @@
 // discharged structurally by Svelte's own default `{...}` interpolation inside
 // MonthlyReportView.svelte and everything it composes (INV-1, already proven per-component in
 // `MonthlyReportView.ssr.test.ts`) — this route adds no template of its own and interpolates
-// nothing user-controlled into the document shell (see `composeReportDocument` below: every
-// per-report value it touches directly — `header.target_month`, `header.generated_at` — is a
+// nothing user-controlled into the document shell (see `$lib/server/pdf/composeReportDocument.ts`:
+// every per-report value it touches directly — `header.target_month`, `header.generated_at` — is a
 // server-derived, fixed-shape value, never free text). The PROOF owed HERE (Sec R-5 / rederived-
 // acs.md § SELF-358 AC7) is that this holds through the FULL document this route actually builds
 // and pushes, not just the bare component render — see that test file for why `schedule_label`
@@ -51,36 +55,29 @@
 // boundary. The as-of this report used was resolved entirely inside `loadMonthlyReportForRender`
 // (`row.data_as_of`), under that module's own RT-25 discipline.
 //
-// ⚠⚠ BLOCKING GAP FOR PDF FIDELITY — FLAGGED AT HAND-OFF, NOT SILENTLY SHIPPED, NOT YET RULED ON:
-// `render()` from `svelte/server` emits ZERO scoped CSS. Verified empirically (not assumed)
-// against a real merged component: `head` came back empty, and the returned `body` carries
-// Svelte's compiled `.svelte-xxxxxx` scoped-class markers on every element, but there is no
-// accompanying `<style>` block anywhere in the render output defining what those classes DO.
-// This route inlines the two GLOBAL, UNSCOPED stylesheets (`$lib/styles/tokens.css` + `src/
-// app.css`, plain CSS files, safe to inline verbatim via a Vite `?raw` import — no hash-matching
-// risk, since they were never Svelte-scoped to begin with) plus a minimal system-font print base
-// below — but has NO source for the ~14 individual components' own SCOPED `<style>` rules (the
-// ones that actually apply `display:flex`, spacing, color, etc. — i.e. everything that makes the
-// six report sections look like anything). Without them, the PDF this route currently produces is
-// STRUCTURALLY and ESCAPING-CORRECT (every AC this route owns other than visual fidelity holds)
-// but renders as an unstyled, unformatted wall of text — a real fidelity defect, not a cosmetic
-// one, BLOCKING for shipping this feature as a usable export.
+// PDF FIDELITY — RULED (Architect, `docs/records/v15-execution/self358-css-ruling.md`, Option A;
+// escalated at the prior hand-off per BACKEND CLAUDE.md "options with tradeoffs" — see git
+// history on this file's earlier revision for the full options analysis this replaced):
+// `render()` from `svelte/server` emits ZERO scoped CSS (`head` comes back empty; `body` carries
+// Svelte's `.svelte-xxxxxx` scoped-class markers with no accompanying `<style>` block). Option B
+// (`css: 'injected'`) is STRUCK on a measured CSP defect — Kit passes a component's `head` through
+// verbatim and nonces only the style IT emits, so an injected inline style is silently CSP-blocked
+// under this app's `style-src: ['self']` on every report page load. Option C (reading SvelteKit's
+// build manifest at runtime) is rejected — no public API, no precedent under `api/src`, a
+// request-time filesystem read on a §4.1 server surface.
 //
-// Svelte compiles each component's scoped CSS into a Vite chunk that browsers load via a normal
-// page's `<link>` tag — a mechanism this route's bare `render()` call never goes through (there is
-// no browsable "PDF page," only this endpoint). Reproducing that CSS here needs either
-// (a) reading SvelteKit/adapter-node's build manifest at runtime to locate the exact chunk the
-// live `/reports/monthly/[target_month]` page already ships to browsers (reuses existing build
-// output, zero new build step, but couples this route to SvelteKit/Vite build-manifest internals
-// that are not a stable public API and that this codebase has never read at runtime before —
-// grepped: zero precedent anywhere under `api/src`), or (b) a new, purpose-built build step
-// producing a standalone CSS bundle for this component tree (decoupled from SvelteKit's page-
-// manifest internals, but is genuinely new build/deploy infrastructure — a new script, a new
-// invocation point in `npm run build`/the Dockerfile, a new staleness risk if it isn't
-// regenerated in lockstep with the components). BOTH are one-way-door-adjacent build/deploy-shape
-// decisions per BACKEND CLAUDE.md ("new build-pipeline component," "options with tradeoffs"), not
-// a "just decide" — escalated to team-lead/Architect at hand-off rather than picked unilaterally.
-// DO NOT wire either option in without that ruling landing first.
+// SHIPPED (Option A): a STANDALONE Vite lib build (`vite.report-css.config.mjs`, run by
+// `npm run build:report-css`, wired as a `build` prebuild step — NEVER SvelteKit's own build) over
+// the SAME `MonthlyReportView.svelte` tree this route renders, `cssCodeSplit: false`, emitting ONE
+// committed, plain CSS file (`$lib/generated/report.css`) inlined below via the SAME `?raw`
+// mechanism as `tokens.css`/`app.css`. `layercake`/`d3-scale`/`d3-shape` are externalized in that
+// build — it only needs Svelte to compile each component's template + `<style>` block, never to
+// execute the chart. Reproducibility verified (3 clean builds, byte-identical). Backend's spike
+// census (fixture render vs. extracted CSS): every `svelte-[a-z0-9]+` token in the rendered body
+// had ≥1 matching selector in `report.css` (zero missing) — the failure mode this mechanism must
+// not silently produce (build drift → an unstyled PDF that still passes every value assertion).
+// QA owns the committed version of that assertion; DevOps owes the regenerate-and-diff CI fence
+// (the `052` shape) so a stale `report.css` reds a PR instead of shipping quietly wrong.
 //
 // SEPARATE, ALREADY-SOLVED FINDING (no Architect call needed, kept here for the same reader):
 // the LayerCake chart inside `HistoricalExpendituresChart.svelte` normally auto-sizes itself via
@@ -102,49 +99,19 @@ import { INVENTORY_SEED_DELTA_MIGRATION } from '$lib/server/queries/taxLiability
 import { loadMonthlyReportForRender } from '$lib/server/monthly-report/loadMonthlyReport';
 import { renderReportHtml } from '$lib/server/pdf/renderClient';
 import MonthlyReportView from '$lib/components/MonthlyReportView.svelte';
-import tokensCss from '$lib/styles/tokens.css?raw';
-import appCss from '../../../../../app.css?raw';
+// SELF-358 / P6 fix (hand-off flag, see that file's own header): `composeReportDocument` moved to
+// `$lib/server/pdf/composeReportDocument.ts` — it was a named export directly off this
+// `+`-prefixed route module, which `route-module-export-allowlist.server.test.ts` already forbids
+// (a PRE-EXISTING defect, not introduced by this dispatch) and which fails `npm run build`
+// outright (SvelteKit's postbuild `analyse` step rejects any export outside its own allowlist).
+import { composeReportDocument } from '$lib/server/pdf/composeReportDocument';
 import type { RequestHandler } from './$types';
-
-// Sec F3(B)-style discipline (mirrors renderClient.ts's own entropy floor comment style): named
-// constants, not magic literals, for the two document-shell decisions this file itself makes.
-const PRINT_FONT_STACK =
-	'-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
 
 /** `2026-09-02T14:00:00Z` -> `20260902T140000Z` — filename-safe (no `:`), still sortable,
  *  still traceable back to the exact ISO instant by a human who needs to. Never the owner
  *  string (AC5) — this function's only input is a machine timestamp. */
 function filenameSafeGeneratedAt(generatedAtIso: string): string {
 	return generatedAtIso.replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
-}
-
-/** Assembles the COMPLETE, self-contained HTML document pushed to the PDF-render worker (R2 (C)
- *  — the worker fetches nothing else; every byte it needs is in this string). Interpolates
- *  exactly two per-report values, both server-derived and fixed-shape (never free text; INV-2
- *  is not at stake here — see this file's own header): `header.target_month` (already validated
- *  `YYYY-MM-01` by `parseTargetMonth`) for the `<title>`, and the rendered component `head`/
- *  `body` from Svelte's OWN escaping (proven per-component, re-proven end-to-end in
- *  `pdf.escaping.test.ts`). */
-export function composeReportDocument(componentHead: string, componentBody: string, targetMonth: string): string {
-	return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<title>Monthly Report — ${targetMonth.slice(0, 7)}</title>
-<style>${tokensCss}</style>
-<style>${appCss}</style>
-<style>
-	/* Print-document base — system fonts only (worker fetches no font resource; RT-22-adjacent
-	   posture: this route asks the worker for nothing beyond the one POST body). Component-level
-	   layout/color rules are NOT yet inlined here — see this file's own header "BLOCKING GAP". */
-	body { font-family: ${PRINT_FONT_STACK}; margin: 0; }
-</style>
-${componentHead}
-</head>
-<body>
-${componentBody}
-</body>
-</html>`;
 }
 
 export const GET: RequestHandler = async ({ locals, params }) => {
@@ -174,7 +141,12 @@ export const GET: RequestHandler = async ({ locals, params }) => {
 			seedDeltaMigration: INVENTORY_SEED_DELTA_MIGRATION,
 			staleness,
 			cashflowRowStaleness,
-			staleAccountNames
+			staleAccountNames,
+			// SELF-358 / P6: `render()` has no DOM, so LayerCake's normal ResizeObserver-based
+			// auto-sizing never fires — `'print'` makes HistoricalExpendituresChart pass LayerCake
+			// fixed ssr/width/height props instead. SIZING ONLY (see MonthlyReportView.svelte's
+			// own header) — no other branch of this template reads this value.
+			renderContext: 'print'
 		}
 	});
 

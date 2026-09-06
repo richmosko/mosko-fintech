@@ -26,6 +26,11 @@
 	                    those branches land, the SAME "route now, build later" convention
 	                    TaxQuarterlyTables' own `decompositionHref` / CashflowRollupTable's
 	                    `editTargetsHref` already use for their own not-yet-built siblings.
+	  renderContext     : SELF-358 / P6 (backend flag, Frontend TO REVIEW) — SIZING ONLY, passed
+	                    straight through to `HistoricalExpendituresChart` (see that file's own
+	                    header for the full rationale). `'browser'` (default) is byte-identical to
+	                    this component's pre-P6 behavior. Must never gate rendered CONTENT here or
+	                    anywhere downstream — AC3's one-template guarantee depends on that.
 
 	SIX SECTIONS, VERBATIM ORDER (AC1, §2.6 as amended at the R10 PR): Account Holdings, NAV
 	Performance, Asset Allocation, Rebalancing Targets, Cash Flow, Estimated Taxes.
@@ -90,7 +95,8 @@
 		ownerHeaderHref = '/settings/owner-id',
 		commentaryHref = `/reports/monthly/${header.target_month.slice(0, 7)}/commentary`,
 		regenerateHref = '/reports/monthly',
-		pdfHref = `/reports/monthly/${header.target_month.slice(0, 7)}/pdf`
+		pdfHref = `/reports/monthly/${header.target_month.slice(0, 7)}/pdf`,
+		renderContext = 'browser'
 	}: {
 		header: MonthlyReportHeader;
 		payload: MonthlyReportPayload;
@@ -113,6 +119,9 @@
 		commentaryHref?: string;
 		regenerateHref?: string;
 		pdfHref?: string;
+		/** SELF-358 / P6 — see this file's own header + `HistoricalExpendituresChart.svelte`'s.
+		 *  SIZING ONLY. */
+		renderContext?: 'browser' | 'print';
 	} = $props();
 
 	const stamp = $derived(monthYearStamp(header));
@@ -333,6 +342,7 @@
 			points={payload.sections.cash_flow.historical_expenditures}
 			{staleness}
 			unclassifiedCount={payload.sections.cash_flow.cross_account_rollup.unclassified.count_ytd}
+			{renderContext}
 		/>
 	</section>
 

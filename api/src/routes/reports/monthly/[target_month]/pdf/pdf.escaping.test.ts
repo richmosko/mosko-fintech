@@ -29,7 +29,8 @@
 import { describe, it, expect } from 'vitest';
 import { render } from 'svelte/server';
 import MonthlyReportView from '$lib/components/MonthlyReportView.svelte';
-import { composeReportDocument } from './+server';
+// SELF-358 / P6 fix: moved from './+server' — see composeReportDocument.ts's own header.
+import { composeReportDocument } from '$lib/server/pdf/composeReportDocument';
 import {
 	MONTHLY_REPORT_HEADER_FINAL,
 	MONTHLY_REPORT_PAYLOAD
