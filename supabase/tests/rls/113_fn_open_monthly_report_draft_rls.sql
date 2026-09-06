@@ -36,7 +36,7 @@ begin;
 \set m_live_draft '%monthly_report_one_live_draft_per_month%'
 \set m_rls '%row-level security policy%'
 
-select plan(21);
+select plan(23);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 \set td '00000000-0000-0000-0000-00000000000d'
@@ -94,7 +94,17 @@ select set_config('role', 'postgres', true);
 -- LEG 3 — IDEMPOTENCE: calling twice in sequence returns the SAME report_id
 -- and leaves exactly one row.
 -- LEG 4 — AUDIT ROWS, BOTH HALVES: exactly ONE on the inserting (first) call,
--- and NO additional row on the idempotent (second) call.
+-- and NO additional row on the idempotent (second) call. (4c)/(4d) — team-lead
+-- relay at the 5ca2cd1 rebase — make the (4a) proof EXPLICIT rather than
+-- incidental: this function's own INSERT sits inside `begin … exception when
+-- unique_violation … end` (a SUBTRANSACTION with its own xid) on EVERY
+-- successful call, colliding or not — exactly the shape a naive `xmin =
+-- pg_current_xact_id()` C2 implementation would refuse (measured by
+-- Architect: top xid and row xmin differ by the subtransactions consumed
+-- since top-xid assignment). `111`'s own battery only proves C2 accepts a
+-- BARE top-level INSERT (its leg 8-iii, self-contained on that branch, with
+-- no `fn_open_monthly_report_draft` to call) — THIS is the through-the-real-
+-- subtransaction half, on the branch where that function actually lives.
 -- =====================================================================
 select _rls.set_tenant(:'ta'::uuid);
 select pfin.fn_open_monthly_report_draft('2026-03-01') as d3_first \gset
@@ -108,6 +118,15 @@ select is(
   (select count(*)::int from pfin.audit_log where subject_table = 'pfin.monthly_report' and subject_id = :d3_first::bigint),
   1,
   '(4a) exactly ONE audit row exists after the inserting (first) call'
+);
+select ok(
+  (select r.xmin::text::xid8 <> pg_current_xact_id() from pfin.monthly_report r where r.report_id = :d3_first::bigint),
+  '(4c) NON-VACUOUS: the row this call inserted carries a SUBTRANSACTION xid, NOT the session''s top-level xact id — this really is the exception-wrapped path (line ~283 of 113''s migration), not a bare top-level INSERT that merely happens to sit inside a plpgsql function'
+);
+select is(
+  (select count(*)::int from pfin.audit_log where subject_table = 'pfin.monthly_report' and subject_id = :d3_first::bigint and trigger_source in ('cron', 'on_demand')),
+  1,
+  '(4d) THE LEG: `111`''s C2 (pg_visible_in_snapshot, not xid equality) accepted this SUBTRANSACTION-written row anyway and stamped a real trigger_source on it — combined with (4c), this is the exact call a naive xid-equality C2 implementation would have refused'
 );
 select _rls.set_tenant(:'ta'::uuid);
 select is(
