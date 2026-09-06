@@ -331,6 +331,17 @@
 --      inside an exception block that **exits NORMALLY** without firing, which
 --      sub-commits the same way and is what `fn_open_monthly_report_draft` actually
 --      does on its winning path.
+--   7g. **THE ONE-STATEMENT INVARIANT, AS A STRUCTURAL LEG ON THE INSTALLED
+--      DEFINITION.** Strip `--` comments from `pg_proc.prosrc` and assert **exactly
+--      one** `from pfin.monthly_report` in `pfin.fn_emit_audit_log`'s body. ⚠ **Count
+--      EXECUTABLE occurrences, not raw text:** the invariant's own comment quotes the
+--      statement it protects, so the raw count is **2** and the stripped count is
+--      **1** (measured) — a naive watcher goes RED on correct code.
+--      ⚠ **This leg exists because no BEHAVIOURAL leg can cover it:** splitting the
+--      read behaves correctly on an idle database and diverges only under concurrency.
+--      The migration carries an apply-time version of the same check, but that one
+--      watches edits to `111`; this one watches the INSTALLED definition, so it also
+--      catches a later migration re-creating the function.
 --   7f. **⚠ NOT A LEG, AND THE LIST MUST NOT IMPLY OTHERWISE: another session's
 --      UNCOMMITTED row is refused STRUCTURALLY BY MVCC, not by any assertion here.**
 --      `'in progress'` is returned for that row too; what excludes it is that this
@@ -853,6 +864,47 @@ $$;
 revoke execute on function pfin.fn_emit_audit_log(text, text, date, text, bigint) from public;
 grant  execute on function pfin.fn_emit_audit_log(text, text, date, text, bigint) to authenticated;
 grant  execute on function pfin.fn_emit_audit_log(text, text, date, text, bigint) to service_role;
+
+-- ----------------------------------------------------------------------------
+-- ⚠⚠ APPLY-TIME STRUCTURAL WATCHER FOR THE ONE-STATEMENT INVARIANT.
+-- The invariant in the body — that `users_id` and the transaction status are read in
+-- ONE statement — is the only control here that **no behavioural test can watch**.
+-- Splitting that read into two statements produces CORRECT BEHAVIOUR ON AN IDLE
+-- DATABASE and diverges only under concurrency, which is exactly why the predicate it
+-- replaced survived review. A warning is the weakest available protection for the one
+-- invariant that cannot be caught any other way, so it gets a mechanism.
+-- ⚠ IT COUNTS EXECUTABLE OCCURRENCES, NOT RAW TEXT, AND THAT IS NOT A REFINEMENT — IT
+-- IS THE DIFFERENCE BETWEEN A WATCHER AND A FALSE ALARM. The invariant's own comment
+-- QUOTES the statement it protects, so `from pfin.monthly_report` appears TWICE in
+-- `prosrc` and ONCE with comments stripped (measured). A naive raw-text count goes RED
+-- on correct code — the same comment-versus-code trap the C3 fence already met at
+-- `058`, now living inside this file.
+-- ⚠ SCOPE, STATED SO IT IS NOT OVER-READ: this fires at APPLY time and therefore
+-- watches edits to THIS file. A later migration that re-creates the function is
+-- outside it; that case is QA leg 7g, which reads the INSTALLED definition.
+-- ⚠ The comment-stripping is `--`-only. A second read hidden inside a string literal
+-- would count and go RED — fail-loud, which is the direction we want.
+do $watch$
+declare
+  v_executable_reads int;
+begin
+  select count(*)
+    into v_executable_reads
+    from pg_proc p
+    left join lateral regexp_matches(
+           regexp_replace(p.prosrc, '--[^\n]*', '', 'g'),
+           'from\s+pfin\.monthly_report', 'g') m on true
+   where p.pronamespace = 'pfin'::regnamespace
+     and p.proname      = 'fn_emit_audit_log'
+     and m is not null;
+
+  if v_executable_reads <> 1 then
+    raise exception
+      'pfin.fn_emit_audit_log: the C2 one-statement invariant is BROKEN — % executable reads of pfin.monthly_report in the body, expected exactly 1. The subject row''s users_id AND its transaction status must be resolved by ONE select, because the predicate pg_xact_status = ''in progress'' is ALSO true for another session''s transaction: what excludes that row is this transaction''s own MVCC read, in the same statement. Splitting the read keeps returning a value and starts answering a different question — correctly on an idle database, wrongly under concurrency. Restore the single select; do not relax this check.',
+      v_executable_reads;
+  end if;
+end
+$watch$;
 
 comment on function pfin.fn_emit_audit_log(text, text, date, text, bigint) is
   '⚠ SECURITY DEFINER. The general same-transaction audit-log insert helper (block AH; V1.5 pre-flight ruling R7 option (2)). It discharges ADR-011 Decision 1 clause (d) for the monthly-report cron and the on-demand generation endpoint — its TWO callers at V1.5, writing the same shape and discriminated only by trigger_source. ⚠ IT REALIZES THE RESERVED, PREVIOUSLY-UNAUTHORED general audit-log insert entry on the ADR-011 Decision 9 allowlist; it does NOT grow the allowlist. Read Decision 9 live; no size is stated here, and the Decision 9 amendment recording this authoring rides the same PR rather than a later reconciliation. ⚠ THE DEFINER POSTURE IS FORCED, NOT CHOSEN. INVOKER was drafted first, per R7 rider 1, and does not survive the second caller: the on-demand path runs under the USER''S OWN SESSION, so an INVOKER helper would have required an INSERT grant on the audit table to `authenticated` — which is exactly the shape Decision 9 has already ruled against in its own words ("an INVOKER+grant path would let a user POST forged history rows — defeating the tamper-evidence"), and on an append-only table such a forged row would be permanently uncorrectable. Moving that write to a service_role hop was unavailable: it would break the same-transaction requirement, or void the endpoint''s session-as-tenant-binding. ⚠ ON A DEFINER FUNCTION THE EXECUTE ACL IS THE ENTIRE PERIMETER, not the weakest fence — there is no RLS and no table grant behind it, because the table has neither. EXECUTE is revoked from public and granted to exactly `authenticated` and `service_role`; any further grant, and any grant to a new role, is SEC-JOINT-REVIEW-MANDATORY. Consequently EVERY ARGUMENT IS VALIDATED IN THE BODY, since the arguments are the only thing a caller controls — AND THE TWO MOST DANGEROUS ONES WERE REMOVED OR BOUND RATHER THAN VALIDATED, because validating a value''s SHAPE never establishes its TRUTH. ⚠ p_trigger_source IS GONE (Sec C1): it is derived from the transaction-local GUC app.report_generation_source, exact match on ''cron'', defaulting to ''on_demand''. ⚠ p_subject_table AND p_subject_id ARE BOUND TO A REAL WRITE (Sec C2): for surface monthly_report_generation the table is fixed by literal and the id must name a pfin.monthly_report row that belongs to the tenant auth.uid() resolved to AND was written IN THIS TRANSACTION — with a read-only transaction (no assigned xid) refused outright, since a transaction that wrote nothing has nothing for an audit row to annotate. ⚠ THE TRANSACTION TEST IS A SNAPSHOT-VISIBILITY TEST, NOT AN xid EQUALITY TEST, AND THAT IS A MEASURED DEFECT AVOIDED: fn_open_monthly_report_draft INSERTs inside a plpgsql exception block, i.e. a SUBTRANSACTION with its own xid, while pg_current_xact_id_if_assigned() returns the TOP-LEVEL xid — measured 2026-09-05 as top 1664121 against row xmin 1664122, equality FALSE — so a naive equality check would refuse the very path C2 exists to permit while passing every test whose INSERT was not wrapped in an exception block. ⚠ tenant_resolution_chain REMAINS CALLER-ASSERTED AND IS DELIBERATELY UNCONSTRAINED: it ANNOTATES a write this function has independently confirmed occurred, by this tenant, in this transaction, so a wrong chain misdescribes a real write and cannot manufacture one. ⚠ THERE IS NO p_users_id PARAMETER, BY DESIGN: the tenant is STAMPED from auth.uid() inside the body, so a caller has no argument through which to attribute a row to another tenant. A session with NO resolved tenant is REFUSED with a message naming the impersonation binding it should have performed — a service_role connection that has not impersonated has a NULL auth.uid(), and Decision 1 clause (d) is precisely the requirement that such a write not be kept; the refusal takes the whole privileged transaction with it, which is the intended outcome. p_surface_name is REQUIRED and CHECK-constrained on the table against a vocabulary that grows ONLY BY MIGRATION (R7 rider 5) — the mitigation for the named risk that a general helper is where per-surface discipline goes to be forgotten. p_tenant_resolution_chain is REQUIRED and non-blank: a resolved id with no account of how it was resolved discharges only half the clause. RETURNS the new audit_id so a caller can assert in-transaction that the row exists. ⚠ THE ROW MUST BE WRITTEN IN THE SAME TRANSACTION AS THE PRIVILEGED WRITE IT DESCRIBES — a row that survives a rolled-back generation is worse than no row, and the paired battery asserts BOTH that it exists on commit and that it is ABSENT on rollback. JOINT-REVIEW-MANDATORY.';
