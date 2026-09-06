@@ -140,3 +140,114 @@ jobs:
         if: always()
         working-directory: .
         run: supabase stop --no-backup || true
+
+  pdf-render:
+    name: pdf-render worker battery (real headless Chromium)
+    runs-on: ubuntu-latest
+    # Sec F-14 (SELF-348 A4 PR #634 review): zero CI job ran this worker's test
+    # battery — `worker-ci.yml`'s top-level `defaults.run.working-directory`
+    # pins `workers/provider-sync`, so this file's existing jobs never touch
+    # `workers/pdf-render/`, and `scheduled-dep-audit.yml`'s auto-discovery
+    # covers `npm audit` only, not the battery. This job overrides the
+    # working-directory at the job level (below) to add pdf-render coverage
+    # to the SAME file rather than a new one, per team-lead dispatch.
+    #
+    # RUN-ALWAYS, no `paths:` filter — DEVIATION FROM team-lead's dispatch,
+    # which authorized `workers/pdf-render/**` path-triggering as acceptable
+    # for this job specifically (a test job, not a fence, so the
+    # required-unfiltered discipline this file's header argues for doesn't
+    # bind it the same way). Chose run-always instead because: (1) it matches
+    # this file's own stated design philosophy verbatim — the header above
+    # argues AGAINST path-filtering on cost grounds (public repo, free
+    # unmetered Actions minutes) and on correctness grounds (a path-filtered
+    # workflow can never safely become a required check later); (2) the
+    # runner's own Chromium is used (Sec-verified: GitHub's ubuntu-latest
+    # image ships Chromium as a pre-installed browser), so this job does NOT
+    # pay a Docker-build or apt-install cost — it is closer in weight to
+    # `unit` above than to `integration`. If a future path-filtered shape is
+    # preferred, it needs its own trigger mechanism, since a job-level `if:`
+    # here would only skip STEPS, not the runner minute this job already
+    # spends spinning up — flagged to team-lead as a judgment call to revisit
+    # if this job's cost profile changes (e.g. if it ever needs a real apt
+    # install because the runner's bundled Chromium version drifts too far
+    # from the Dockerfile's pinned one for parity to hold).
+    defaults:
+      run:
+        working-directory: workers/pdf-render
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'  # matches workers/pdf-render/Dockerfile FROM node:22-bookworm-slim
+
+      - name: Install deps (clean, lockfile-pinned)
+        run: npm ci
+
+      - name: Locate a Chromium/Chrome binary
+        # Discovery, not a hardcoded path — the exact binary name varies by
+        # runner-image version (chromium vs chromium-browser vs
+        # google-chrome-stable). GitHub's ubuntu-latest ships Chromium
+        # pre-installed (verified against actions/runner-images' published
+        # software manifest, 2026-09-05) so this should always find one
+        # without an apt-get; the install fallback exists so this job does
+        # not silently start skipping if a future runner image drops it.
+        run: |
+          set -e
+          CANDIDATE=""
+          for bin in google-chrome-stable google-chrome chromium-browser chromium; do
+            if command -v "$bin" >/dev/null 2>&1; then
+              CANDIDATE="$(command -v "$bin")"
+              break
+            fi
+          done
+          if [ -z "$CANDIDATE" ]; then
+            echo "No pre-installed Chrome/Chromium found on the runner — installing chromium via apt as a fallback."
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends chromium || sudo apt-get install -y --no-install-recommends chromium-browser
+            for bin in chromium chromium-browser; do
+              if command -v "$bin" >/dev/null 2>&1; then
+                CANDIDATE="$(command -v "$bin")"
+                break
+              fi
+            done
+          fi
+          if [ -z "$CANDIDATE" ]; then
+            echo "FATAL: could not locate or install a Chrome/Chromium binary on the runner." >&2
+            exit 1
+          fi
+          echo "PUPPETEER_EXECUTABLE_PATH=$CANDIDATE" >> "$GITHUB_ENV"
+          echo "Resolved Chrome/Chromium binary: $CANDIDATE"
+
+      - name: Require PUPPETEER_EXECUTABLE_PATH (Sec F-14 — must FAIL if unset, not skip)
+        # render.test.js self-skips into a PASSING "SKIPPED" test when
+        # PUPPETEER_EXECUTABLE_PATH is unset (worker source, verified —
+        # test/render.test.js's own early-return branch), which would let
+        # this job go green having run 1 test instead of the real 14. This
+        # step makes that impossible by construction: it hard-fails BEFORE
+        # `npm test` ever runs if the previous step failed to resolve a real,
+        # executable binary — the self-skip branch inside the test file can
+        # then never be reached with an unset/invalid path from this job.
+        run: |
+          if [ -z "${PUPPETEER_EXECUTABLE_PATH:-}" ] || [ ! -x "$PUPPETEER_EXECUTABLE_PATH" ]; then
+            echo "FATAL: PUPPETEER_EXECUTABLE_PATH is unset or not an executable file (got: '${PUPPETEER_EXECUTABLE_PATH:-<unset>}'). Failing closed rather than letting render.test.js's self-skip produce a false green." >&2
+            exit 1
+          fi
+          echo "OK: PUPPETEER_EXECUTABLE_PATH=$PUPPETEER_EXECUTABLE_PATH is executable."
+
+      - name: Run the worker battery (auth.test.js + render.test.js, real Chromium)
+        # NOT `npm test` — its script (`node --test test/`, a bare directory
+        # argument) crashes with MODULE_NOT_FOUND before running a single
+        # test, verified independently of this job under a real
+        # node:22-bookworm-slim container (matching the Dockerfile exactly)
+        # AND under a local Node 26: `node --test test/` and `node --test
+        # ./test/` both fail identically; bare `node --test` (Node's own
+        # default recursive discovery, zero path args) and `node --test
+        # test/*.test.js` (shell-expanded glob) both correctly run all 20
+        # tests. This is a genuine, pre-existing defect in
+        # workers/pdf-render/package.json's own "test" script, independent
+        # of Sec F-14's self-skip finding — routing around it here so this
+        # job actually runs the battery rather than papering over it; flagged
+        # to Backend to fix the script itself (worker source, not this file's
+        # surface to edit).
+        run: node --test
