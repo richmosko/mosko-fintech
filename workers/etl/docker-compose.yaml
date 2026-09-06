@@ -1,3 +1,26 @@
+# workers/etl/docker-compose.yaml — pfin_back_etl Coolify units.
+#
+# Two services, ONE image/build, each its OWN Coolify unit with an INDEPENDENT
+# deploy/restart/resource ceiling (per DECISIONS.md's "4th Coolify unit" framing
+# for sibling workers) and its OWN native Coolify Scheduled Task attached to it.
+# Neither service's `environment:` list is exhaustive of everything the shared
+# image CAN do (run_nav_backfill.py / run_cpi_backfill.py live in the same
+# image too) — each lists only what ITS OWN entrypoint script's import graph
+# actually touches (verified by reading the code, not assumed from the
+# container's full .env.example contract), matching the "single-entry
+# enumeration IS the security property" posture this repo applies to every
+# other container. Both entrypoints are triggered EXTERNALLY (Coolify
+# Scheduled Task exec-ing a command into the running, idling container) —
+# neither is expressed as this file's `CMD`, which stays `tail -f /dev/null`
+# (Dockerfile) so the container has something to exec into between runs.
+#
+# RT-27 (admission private-bind config-lint) does NOT cover either service
+# here, and no sentinel is added — RT-27 audits admission ENDPOINTS (a
+# service a caller connects TO), and neither cron container exposes one: both
+# are pure batch workers that connect OUT (to Postgres, to Discord) and
+# accept no inbound connections at all. No `expose:`/`ports:` on either
+# service, by construction, not by fence.
+
 services:
   pfin-back-etl:
     container_name: pfin-back-etl
@@ -5,3 +28,56 @@ services:
     restart: unless-stopped
     environment:
       - PYTHONUNBUFFERED=1
+
+  # SELF-351 (A7) — monthly_report cron. Gate F Option α (native Coolify cron
+  # container; the consolidated ADR records this as a MECHANISM RIDER on Lock
+  # 13, which locks location, not mechanism) + ADR-011 Decision 15/17.
+  #
+  # SCHEDULE — configured in Coolify's native Scheduled Task UI attached to
+  # THIS service, NOT expressible in this compose file (Coolify's cron
+  # scheduling is a dashboard-level construct against an application, not a
+  # docker-compose field): `0 6 1 * *` — 06:00 UTC on the 1st of each month.
+  # Command: `python run_monthly_report.py` (Backend's own naming proposal,
+  # matching run_nav_daily.py / run_nav_backfill.py / run_cpi_backfill.py's
+  # existing convention — verified against origin/feature/self-351 @ f7aa971).
+  #
+  # ⚠ UTC CHOICE + KNOWN RESIDUAL (A7 AC 9; BACKLOG §7.34 item 3, owner still
+  # unnamed): `data_as_of` derives from the UTC-pinned clock (migrations
+  # 061/070), so for a Pacific-timezone user the prior-month boundary fires
+  # ~7 hours EARLY relative to their own local month-end. Not fixed here —
+  # recorded as the second named consumer of that still-unowned boundary
+  # question, not silently worked around by shifting this schedule.
+  #
+  # ENV — PFIN_DB_* only (+ DISCORD_WEBHOOK_URL below), verified against
+  # monthly_report_cron.py's own import graph (origin/feature/self-351): it
+  # imports ONLY pfin_back_etl.utils + pfin_back_etl.connection —
+  # TenantBoundConnection, same DB-only surface nav_daily.py's own cron uses.
+  # NO FMP_API_KEY / BLS_API_KEY / BLS_SERIES_ID / PLAID_CLIENT_ID /
+  # PLAID_SECRET — this worker never calls any FMP/BLS/Plaid code path, so
+  # those credentials are deliberately NOT given to this unit. NO
+  # SUPABASE_SERVICE_ROLE_KEY / no SUPABASE_* var of any kind — this worker
+  # connects directly to Postgres as `pfin_etl` (Lock 13 mod #3;
+  # TenantBoundConnection), the same posture the existing nav-daily unit
+  # above already carries per its own .env.example contract.
+  pfin-back-etl-monthly-report:
+    container_name: pfin-back-etl-monthly-report
+    build: .
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+      # --- pfin Postgres transport (login role = pfin_etl; writes AS
+      # service_role per ADR-023) — mirrors workers/etl/.env.example verbatim.
+      - PFIN_DB_USER=pfin_etl
+      - PFIN_DB_HOST=${PFIN_DB_HOST}
+      - PFIN_DB_PORT=${PFIN_DB_PORT}
+      - PFIN_DB_NAME=${PFIN_DB_NAME}
+      - PFIN_DB_PASSWORD=${PFIN_DB_PASSWORD}
+      - PFIN_DB_SSLMODE=${PFIN_DB_SSLMODE}
+      # DISCORD_WEBHOOK_URL (PM A-14; Gate F) — Coolify->Discord OPERATOR
+      # notification of run success/failure ONLY, posted by
+      # notify_discord.py; NEVER a user-facing notice (PRD §2.6.3: the
+      # user's own notice is in-app, not Discord). SAME production_only
+      # secret name provider-sync's worker + the V1 web-app already hold
+      # (secrets-manifest.yml); this cron container is documented there as
+      # a fourth consumer, not a new secret.
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
