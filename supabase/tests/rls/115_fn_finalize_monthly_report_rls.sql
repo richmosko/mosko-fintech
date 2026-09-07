@@ -735,6 +735,23 @@ rollback to savepoint sp_14h_iv;
 -- this file must update the expected drift here (and the header note above)
 -- in the SAME commit — that is the point of naming it a leg rather than
 -- leaving it as prose.
+-- ⚠ THIS IS THE FIRST EXECUTABLE CALL TO A pgTAP INTERNAL ANYWHERE IN
+-- supabase/tests/rls/ — `085_taxonomy_element_rls.sql` and
+-- `self244_v12_close_gate.sql` both reason about this SAME class of drift
+-- (`__tresults___numb_seq`, `_set('curr_test', ...)`, `__tcache__`) but only
+-- IN PROSE, as a documented-and-tolerated `finish()` diagnostic, never as an
+-- executable assertion. Departed from that precedent deliberately, having
+-- confirmed there is no public (non-underscore) pgTAP function exposing
+-- either the declared plan or the running test count (`\dx+ pgtap` on
+-- extension 1.3.3 lists only `_get(text)` for this; every other `_get_*`
+-- name is an unrelated schema-introspection helper). `_get()` is not a
+-- fragile edge of the extension despite the leading underscore: pgTAP's OWN
+-- public `finish()` calls `_get('curr_test')` and `_get('plan')` internally
+-- (`select prosrc from pg_proc where proname='finish'`) to produce the exact
+-- "planned X but ran Y" line this leg re-arms as a named, gradeable
+-- assertion — so this leg's dependency is the same one every pgTAP test
+-- file already carries transitively through `finish()`, made explicit
+-- rather than novel.
 -- =====================================================================
 select is(
   _get('plan') - _get('curr_test'),
