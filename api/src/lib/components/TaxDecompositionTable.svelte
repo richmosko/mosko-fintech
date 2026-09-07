@@ -37,6 +37,9 @@
 	a table of zeros — `decomposition.capital_gains.status === 'unavailable'` is the ONLY
 	reachable V1.4 shape (ADR-067 Decision 5(b); R11's unmatched-sell disposition ships dormant).
 	The copy names the missing CAPABILITY (recording a sale), never a milestone name — R1 rider 2.
+	`capitalGainsUnavailableCopy` (SELF-354 / P2 addition) lets the monthly-report renderer swap in
+	its own past-tense AC4 sentence for this same state without forking this component — see the
+	prop's own doc comment below.
 
 	UNCLASSIFIED LINE (AC 3b): `decomposition.unclassified.count_ytd`, PM's copy rendered
 	verbatim via `unclassifiedCopyPrefix()` + a literal "classify" link — ONE source, no second
@@ -110,7 +113,8 @@
 		taxCharacters,
 		seedDeltaMigration,
 		staleness,
-		classifyHref = '/accounts'
+		classifyHref = '/accounts',
+		capitalGainsUnavailableCopy = "Capital gains aren't shown here yet — this app doesn't yet support recording a security sale, so there is no realized-gain figure to report."
 	}: {
 		liability: TaxLiabilitySlice;
 		/** AC5 — the `pfin.tax_character` catalog rows resolve against; never a client-side list. */
@@ -120,6 +124,13 @@
 		/** SELF-361 / P9 — the whole-tenant `046` read; rendered via the page-level badge below. */
 		staleness: StalenessData;
 		classifyHref?: string;
+		/** SELF-354 / P2 addition: the monthly-report renderer's AC4 copy block gives a DIFFERENT,
+		 *  past-tense sentence for this same state — "Capital gains were unavailable when this
+		 *  report was generated — sale recording lands at a later V1.x." — because a report is a
+		 *  frozen historical artifact, not the live present-tense page. Optional, defaulting to the
+		 *  live copy unchanged, so every existing call site (the live /taxes/decomposition page) is
+		 *  unaffected; MonthlyReportView.svelte is the one caller that overrides it. */
+		capitalGainsUnavailableCopy?: string;
 	} = $props();
 
 	const decomposition = $derived(liability.decomposition);
@@ -238,8 +249,7 @@
 		<h3 class="subsection-label">Capital Gains</h3>
 		{#if decomposition.capital_gains.status === 'unavailable'}
 			<p class="cg-unavailable-note" role="status">
-				Capital gains aren't shown here yet — this app doesn't yet support recording a
-				security sale, so there is no realized-gain figure to report.
+				{capitalGainsUnavailableCopy}
 			</p>
 		{/if}
 	</div>

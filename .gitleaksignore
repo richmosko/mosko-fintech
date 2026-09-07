@@ -1,0 +1,6 @@
+# Rule generic-api-key false positive in api/vite.report-css.config.mjs:40 —
+# the flagged string is a build-output path (`outDir: path.resolve(apiRoot,
+# 'src/lib/generated')`), not a secret. See execution-log entries E94/E97.
+# Fingerprint pinned to the single introducing commit (a6107187) — scoped to
+# this one finding, widens nothing else.
+a6107187f56c213898f8b4b0eec8f858ad04570c:api/vite.report-css.config.mjs:generic-api-key:40

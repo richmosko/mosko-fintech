@@ -19,6 +19,11 @@ three classes of security-load-bearing regressions:
   **(2)** a Sec-condition `SUPABASE_SERVICE_ROLE_KEY` *absence* tripwire (assert-absent,
   zero-hit) — together they enforce direct-Postgres-only and keep provider-sync off the
   RT-26 allowlist (asserts absence; does NOT amend ADR-016 D2).
+- **Gitleaksignore inversion** — golden inversion fixture proving the fingerprint-
+  scoped `.gitleaksignore` suppression (SELF-358 / P6) is scoped to the ONE pinned
+  finding it names, not to the whole file it lives in. See
+  [Gitleaksignore inversion — fingerprint-scoping golden fixture](#gitleaksignore-inversion--fingerprint-scoping-golden-fixture)
+  below.
 - **RT-27** — admission-endpoint private-bind config-lint over committed Coolify
   Compose manifests (`expose:`-only; no `ports:`; no proxy Domain/Host() label;
   no `network_mode: host`). Generic over its target by a sentinel line, not a
@@ -72,6 +77,8 @@ scripts/ci/
 ├── fence-admission-private-bind.sh       # RT-27 private-bind config-lint (generic over target via sentinel)
 ├── check-dedup-hash-identical.sh         # import_hash canonical↔copy drift fence (SELF-204 / ADR-034 D4)
 ├── check-tz-sweep-identical.py           # TimeZone role-sweep query drift fence (runbook §4.1 ↔ (T3); R3 Part A)
+├── check-report-css-identical.sh         # report.css build-vs-committed-artifact drift fence (SELF-358 / P6)
+├── fence-gitleaksignore-inversion.sh     # .gitleaksignore fingerprint-scoping golden inversion fixture (SELF-358 / P6)
 ├── rt26-allowlist.txt                    # RT-26 allowlist registry (3 ADR-016 D1 file paths)
 └── README.md                             # (this file)
 ```
@@ -267,6 +274,61 @@ Local invocation:
 ```bash
 bash scripts/ci/fence-admission-private-bind.sh workers/provider-sync/docker-compose.yaml
 bash scripts/ci/fence-admission-private-bind.sh workers/pdf-render/docker-compose.yaml
+```
+
+## Gitleaksignore inversion — fingerprint-scoping golden fixture
+
+**Lock:** Sec's grading criterion (pre-brief, 2026-09-07, P6 mandatory read), verbatim:
+*"plant a new fake secret in a file that already has a suppressed fingerprint and
+confirm the scan still REDs ... as a golden fixture rather than a claim — a green
+run cannot distinguish caught-nothing from scanned-nothing."*
+
+`.gitleaksignore` (repo root) currently carries one entry, pinned to the single
+INTRODUCING COMMIT of the `generic-api-key` false-positive on
+`api/vite.report-css.config.mjs`'s `outDir` line (SELF-358 / P6). A gitleaks
+fingerprint (`commit:file:rule:line`) is supposed to suppress ONLY that one
+already-reviewed finding — not blanket-suppress every future secret-shaped string
+that happens to land in the same file. A green `scanner-gitleaks` run cannot tell
+those two apart from the outside; this fence turns the ambiguity into a
+deterministic three-leg probe, entirely inside a throwaway clone (never the
+working tree):
+
+1. **Positive control** — run gitleaks over the exact commit range and command
+   shape `scanner-gitleaks`'s `gitleaks-action@v2` uses internally
+   (`gitleaks detect --redact --exit-code=2 --log-opts="--no-merges --first-parent
+   <base>^..<head>"`) against the real repo at HEAD. Expect exit 0.
+2. **Inversion** — in the same clone, append a synthetic AWS-access-key-id-shaped
+   fake secret (clearly labelled FAKE; never a real credential) to the END of the
+   SAME file the fingerprint entry covers, commit it in the clone, and re-run the
+   identical command. Expect exit 2, with the finding naming that file — proof the
+   suppression is fingerprint-scoped, not file-scoped.
+3. **Shape check** — every non-comment line of the real `.gitleaksignore` must be
+   a well-formed four-part `commit:file:rule:line` fingerprint (no bare path, no
+   bare rule id), and no fingerprint's file component may name `.env*`,
+   `.github/workflows/**`, `secrets-manifest.yml`, or `docker-compose*`.
+
+Either assertion failing = the fence REDs with a message naming which leg failed.
+
+**Fingerprints fail loud when the file moves, by design:** a fingerprint is
+`commit:file:rule:line`. If `api/vite.report-css.config.mjs` is ever renamed or
+the suppressed line moves, the pinned fingerprint stops matching gitleaks'
+recomputed finding for that commit, and `scanner-gitleaks` goes RED again on the
+original (already-reviewed) finding — never silently green. This fence does not
+special-case that; a stale suppression re-surfacing for human review is the
+intended behavior of fingerprint-scoping, not a defect.
+
+This job is wired beside `scanner-gitleaks` in `.github/workflows/security-scan.yml`
+as `fence-gitleaksignore-inversion` and is NOT (yet) added to
+`.github/required-contexts.tsv` — that is a branch-protection change outside this
+fixture's scope.
+
+Local invocation (installs no binary itself — point `--gitleaks-bin` at a pinned
+gitleaks 8.24.3, or put it on `PATH`):
+
+```bash
+bash scripts/ci/fence-gitleaksignore-inversion.sh
+# or, to pin the base explicitly (mirrors the PR job):
+bash scripts/ci/fence-gitleaksignore-inversion.sh --base <base-sha>
 ```
 
 ## Convention — fence design discipline

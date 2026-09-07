@@ -4,14 +4,15 @@
 
 	Left-rail navigation over the Settings sections. V1.2 shipped two ENABLED sections —
 	Security (pre-existing, SELF-291) and Allocation (SELF-242) — SELF-252 enabled a third,
-	Cash-flow Targets (§2.3.2) — and SELF-265 (this issue) enables a fourth, Tax Brackets
-	(§2.5.2), the "third-of-four Settings occupant" per ADR-013 P5. One placeholder SECTION
-	remains — Owner Identification (pfin.owner_identification) — covering the one Lock 14
-	settings-store MEMBER that still has no editor; sections and members do not count
-	one-to-one (Tax Brackets is one section over two tables), so no tally is carried here —
-	read ADR-011 Decision 18 live for the family's amended size. Security sits outside the
-	V1.2/V1.3 versioning scheme named in the AC (it's an existing MFA surface, not one of the
-	planning-value settings) but belongs in this shell as a real, live section.
+	Cash-flow Targets (§2.3.2), SELF-265 enabled a fourth, Tax Brackets (§2.5.2), and SELF-359
+	(this issue) enables the fifth, Owner Identification (§2.6.4.b, pfin.owner_identification)
+	— closing the Settings ramp at 4/4 planning-value editors (AC6: SELF-242 + SELF-252 +
+	SELF-265 + this). Sections and Lock 14 members do not count one-to-one (Tax Brackets is one
+	section over two tables; Owner Identification is the fifth and last table but the fourth
+	editor), so no tally is carried here — read ADR-011 Decision 18 live for the family's
+	amended size. Security sits outside the V1.2/V1.3 versioning scheme named in the AC (it's
+	an existing MFA surface, not one of the planning-value settings) but belongs in this shell
+	as a real, live section.
 
 	LEFT-RAIL vs TOP-TAB (AC1 offers either shape): left-rail chosen here — a Just-Decide
 	call, not routed to Visual Designer, since the design system does not lock either shape
@@ -37,7 +38,7 @@
 		{ label: 'Allocation', href: '/settings/allocation' },
 		{ label: 'Cash-flow Targets', href: '/settings/cash-flow-targets' },
 		{ label: 'Tax Brackets', href: '/settings/tax-brackets' },
-		{ label: 'Owner Identification', href: null }
+		{ label: 'Owner Identification', href: '/settings/owner-id' }
 	];
 
 	const path = $derived(page.url.pathname);

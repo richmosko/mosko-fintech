@@ -30,6 +30,7 @@ import { US_EQUITY_SUB_CATS } from '$lib/allocation-taxonomy';
 const LAYOUT_DEFAULTS = {
 	userEmail: null,
 	pendingClassificationCount: 0,
+	pendingMonthlyReportCount: 0,
 	connectionHealth: { reauthCount: 0, institutionDownCount: 0 }
 };
 
