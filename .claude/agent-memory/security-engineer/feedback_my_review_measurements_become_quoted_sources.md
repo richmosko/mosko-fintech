@@ -169,3 +169,45 @@ occurrence?) and confirm the command emits that unit — and for a did-it-CHANGE
 for a census at all. Related: [[read-the-branch-from-the-ref-not-the-worktree]] (a census answers
 "is it true at the ref", a diff answers "did it change") and
 [[a-probe-asserting-only-rc-neq-0-goes-vacuous]].
+
+**⚠⚠ THREE MALFORMED INSTRUMENTS IN ONE ENGAGEMENT, ALL RETURNING THE REASSURING ANSWER (V1.5 wave,
+2026-09-06/07).** Not one mistake — a pattern, and the direction is the tell:
+
+1. `git grep -c PATTERN <ref> -- <path> | wc -l` counted **files**, not hits, when checking a
+   teammate's "no reference anywhere" claim. Read as six contradictions; was one allowlisted file.
+2. `grep -rn '?raw' api/src` aimed at **`main`** when grading a draft that lands on a feature
+   branch. Read as "the claim is unverified"; the claim was true on its landing branch.
+3. `git diff --name-only "$sha" HEAD -- $files` in **zsh**, where an unquoted parameter is **not
+   word-split**: the newline-joined list became ONE pathspec, matched nothing, and every surface
+   reported **UNCHANGED**. I was one step from ratifying a composition claim on a command that
+   never compared anything.
+
+**All three failed toward "everything is fine."** That is not chance: a malformed filter, a wrong
+ref and a broken pathspec all produce the EMPTY result, and empty reads as clean. **A correct
+command and a broken one are distinguishable only by the shape of the output, never by its
+comfort.**
+
+**The habit that caught all three: an answer that is TOO CLEAN is a prompt to re-measure, not to
+report.** Six-for-six unchanged across independently-authored surfaces was not plausible; that
+implausibility, not any rule, is what made me re-run it.
+
+**Concrete guards.**
+- **Never build a pathspec from a shell variable in zsh.** Intersect instead:
+  `git diff --name-only A B | grep -Fx -f <(printf '%s\n' "$list")`. Or `xargs`. Never bare `$var`.
+- **Give every scoped command a positive control** — one input you KNOW should appear. If the
+  control does not show up, the instrument is broken, not the tree.
+- **Say what one unit of the output is** before reporting a count (file? line? hit?).
+- **Name the ref in the command**, per [[read-the-branch-from-the-ref-not-the-worktree]].
+
+**And the framing error underneath #3, which is the more interesting half.** My first pass asked
+*"are surface N's cleared files unchanged since surface N's read?"* On a **stacked** chain that is
+the wrong question — later surfaces legitimately modify earlier ones, and I would have reported
+alarming churn as a finding. The right question is *"did any blob reach the final sha through a
+commit NOBODY reviewed?"*, answered by two measurements: the diff from the last full read to the
+tip, and the merge list over that window. **When a wrong instrument and a wrong question coincide,
+fixing only the instrument yields a confident wrong answer.**
+
+**⚠ Bound the resulting claim honestly: I graded DELTAS, not TREES.** The chain proves no unreviewed
+CHANGE entered during the wave; it does **not** prove every blob at the tip has been read — the
+starting point never was. *"No unreviewed change entered X"* and *"every blob at X has been read"*
+are different sentences; only the first is supportable, and the record must carry that one.

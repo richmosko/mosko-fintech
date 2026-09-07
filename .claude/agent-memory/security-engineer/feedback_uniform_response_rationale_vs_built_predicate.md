@@ -50,3 +50,62 @@ either fixed (report the outcome — `count: 'exact'` leaks nothing once the ten
 reachability through the UI is nil but the direct API call reaches it — and say which. Related:
 [[rls-delete-select-policy-conjunction-is-conditional]],
 [[sec-lock-cross-check-catches-my-own-misreads]].
+
+**⚠ AN aal2 BACKSTOP IN AN RLS POLICY IS A 0-ROW EFFECT, SO AN RPC-HELD `FOR UPDATE` LOCK TURNS
+"step up" INTO "the row does not exist" (P3 / SELF-355, 2026-09-06).** `108`'s `authenticated`
+SELECT+UPDATE policies carry the `025` aal2 clause; `112`'s first statement is
+`SELECT … FOR UPDATE`, checked against both. A totp/passkey-enrolled caller on a below-aal2 JWT
+therefore **finds zero rows**, the function raises `P0001`, and the route maps that to a 400 reading
+*"the report may already be finalized, or no longer exists."* **The user's natural remedy —
+regenerate, or assume data loss — is the wrong one**, and an MFA step-up nobody can discover is an
+availability failure of the control.
+
+**The second half, and it is the maintainer-facing one: the `42501 → 403` branch is DEAD on such a
+route.** It is correct on **direct-table-write** Lock 14 paths (`settings/owner-id`,
+`settings/tax-brackets` — verified, the latter uses `.insert(...)`), where an RLS `WITH CHECK`
+failure genuinely raises `42501`. It cannot fire behind an RPC whose refusal is a lock that matched
+nothing. A future reviewer asking *"does this route handle step-up?"* reads the branch and answers
+yes.
+
+**How to apply.** On any Lock 14 write path, first classify the transport: **direct write** (RLS
+`WITH CHECK` → `42501`, mapper works) vs **RPC holding a `FOR UPDATE` lock** (policy refusal → 0
+rows → the function's own raise; `42501` unreachable). Then ask **which distinguishable states
+collapse into the single refusal**, and whether any of them has a *user remedy* the copy must name.
+Non-disclosure and recoverability are not in tension here: widening the copy to name
+re-verification as one possibility preserves the uniform response across cross-tenant / missing /
+below-aal2 while restoring the remedy — no need to distinguish the cases. **Do not fix it with a
+route-side pre-check**: that needs an enrollment read to know whether the backstop even applies, and
+puts a second copy of the aal2 rule in app code.
+
+**Disposition taken:** FLAG, routed, **not gated** — it fails closed, and the exact copy is a
+PM/Frontend call rather than wording I should impose at a merge gate. Related:
+[[an-rpc-held-for-update-lock-binds-only-rpc-callers]] and
+[[a-red-whose-message-names-the-wrong-defect]] (a refusal whose message dictates the wrong repair).
+
+**⚠ SHARPER, AND IT IS THE ONE THAT INVERTS A BOOKED FIX (P5 / SELF-357, 2026-09-06).** Asked to
+grade the same pattern on a sibling route, I expected one of the two shapes I had already named —
+*dead branch* or *mis-signalled copy*. The answer was **neither: the route had NO error mapper at
+all.** Both form actions ended in
+`if (rpcError || typeof x !== 'number') return fail(500, 'Something went wrong.')`, so a **live**
+`42501` (the aal2 backstop on `113`'s INSERT `WITH CHECK`) surfaced as a **500** — wrong status
+class, no recovery path, and an auth condition dumped into 5xx monitoring where a real server fault
+becomes indistinguishable.
+
+**The lesson is about the FIX, not the defect.** A family-level follow-up had already been booked as
+*"widen the copy and comment the dead branch across the three routes."* **Neither half applies to a
+route with no branch at all** — you cannot widen copy that does not exist. Shipped as written, that
+follow-up would have **closed the item while leaving the worst of the three routes untouched.**
+
+**How to apply. When a finding is generalised into a family fix, grade each member for the
+PRESENCE of the thing being fixed before agreeing the fix covers it.** "Same pattern" claims travel
+as *"these routes share a mechanism"*; the fix travels as *"edit this construct"* — and a member can
+share the mechanism while **lacking the construct entirely**. Produce a per-member table with a
+`fix needed` column whose cells are allowed to differ (*widen copy* · *add a mapper* · *nothing*),
+never a single scoped sentence. Related: [[a-red-whose-message-names-the-wrong-defect]] (the
+tempting repair disables the watcher) and
+[[an-enumeration-and-its-watcher-both-stop-one-short]].
+
+**Second-order, worth its own line: a blanket "remove the dead `42501` branch" would have deleted a
+WORKING step-up 403** on the one action where `42501` is live. **Absent-vs-dead-vs-live is a
+three-value property per ACTION, not per route** — one route can hold two actions with different
+answers.

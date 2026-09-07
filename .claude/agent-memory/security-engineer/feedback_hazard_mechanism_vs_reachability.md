@@ -83,3 +83,70 @@ anything else** — here "live" was the entire difference between "amend for cla
 milestone exceeded a ratified fence." And note where the false word lived: **in the source comment**,
 which is where the next reader will find it, so the correction routes to the code owner, not only to
 the ADR.
+
+**⚠ THE INVERSE, AND IT IS THE ONE THAT SHIPS: A CAPABILITY ACCEPTED AS UNREACHABLE LATER ACQUIRES
+ITS FIRST CALLER, AND THE ARTIFACT RECORDING THE ACCEPTANCE STILL SAYS IT HASN'T (P8 / SELF-360,
+2026-09-06).** `api/src/lib/server/time/asOf.ts` carried a dated Sec disposition — *"CORRECTED (V1.3
+pre-flight D-7, Sec bounded consult, HIGH confidence): no route wires a client-supplied `as_of`
+anywhere in the tree … and `userSuppliedAsOf` has no caller outside its own schema module and its
+tests."* The capability was accepted **because** it had no production caller. P8's loader became the
+first one. **No exposure** — the argument passed was a DB-derived `row.data_as_of` — but the premise
+of the acceptance was gone and the record still asserted it.
+
+**How to catch it: a disposition that rests on ABSENCE needs a caller census re-run at every new
+surface that touches the module.** `git grep -n <symbol> <ref> -- <src>` on **both** the pre-change
+ref and the change ref, filtering tests, and compare. Absence is not a property you verify once.
+
+**Second half, and it is the cheaper tell: the new caller JUSTIFIED ITSELF BY A CONVENTION THAT DID
+NOT EXIST.** Its comment read *"the same factory every other 'already have a real DB date' call site
+in this tree uses"* — measured, there were **zero** other call sites. **A "we already do this
+everywhere" claim in a new file is a claim about the tree; grep it before accepting it**, because it
+is exactly the sentence that makes a reviewer skip the check. Same family as
+[[a-preference-reads-as-a-ruling-and-a-caveat-sets-the-axis]] (measure the SIBLING's convention
+first).
+
+**Third: a BRAND launders provenance the moment a differently-sourced value wears it.** The module
+stated the brand *"fences the PROVENANCE of production dates."* Once a DB-derived date is passed
+through `userSuppliedAsOf`, the type no longer discriminates, and a reviewer grepping *"does a
+client as-of reach production?"* finds a hit named for the thing they fear and must read the
+argument to clear it. **Preferred fix is a correctly-named second factory, not a comment** — a
+comment restores the record, only the name restores the fence.
+
+**⚠ Pattern across one wave, worth naming as a class: TWO recorded Sec dispositions were falsified
+without their recording artifacts being touched** (ADR-068 D7's `service_role` supersession premise;
+this one). **When a change makes a recorded Sec conclusion untrue, updating that record is part of
+the change, not a follow-up.** Related: [[read-the-whole-cell-before-diagnosing-doc-drift]].
+
+**⚠ THE SAME ERROR IN THE OPPOSITE DIRECTION — OVER-READING FRAGILITY (P10 / SELF-362, 2026-09-07,
+twice in two turns).** This file's whole subject is *not* mistaking a capability for a live path.
+The mirror-image failure costs the team just as much, and I committed it twice in one review:
+
+- **NOTE-1.** I flagged a watcher's soundness as resting on "an unguarded ordering property" — that
+  a future edit moving the read after the write would silently make it compare `54` against `54`.
+  Seeing the full expression, the two reads are **arguments to the asserting call itself**
+  (`is(_get('plan') - _get('curr_test'), 5, …)`), and Postgres evaluates arguments before invoking
+  the function. **The ordering is guaranteed by evaluation semantics, not by line placement.**
+- **Constraint 3.** I flagged "the first executable call to a pgTAP internal in the tree" and asked
+  whether the dependency could be avoided. QA measured: pgTAP exposes **no** public accessor for
+  those counters, and **`finish()` itself calls the same `_get()`** — so all 110 files already carry
+  it transitively, and a rename would break the whole battery loudly, together. **The dependency was
+  made explicit, not introduced.** My question invited a search for an alternative that does not exist.
+
+**Both were the safe direction (wasted effort, not missed exposure) — which is exactly why they are
+easy to keep making.** No one pushes back on a reviewer asking for more hardening.
+
+**How to apply — before writing "fragile", "unguarded" or "first of its kind", ask:**
+1. **What actually enforces it?** Language/engine semantics (argument evaluation, transaction
+   boundaries, type systems) are *stronger* than placement conventions. Read the whole expression,
+   not the line.
+2. **Is the risk borne alone or in company?** A dependency shared with the framework's own public
+   API fails loudly and collectively; a dependency unique to this call site fails quietly and
+   alone. Only the second is worth hardening.
+3. **Would the "safer" alternative exist?** Ask for it as a QUESTION ("can this be done without
+   X?"), never as an implied requirement — I framed it as the latter and it read as a demand.
+
+**And correct it in the same channel, promptly**: both corrections went back before the close-out
+record was written, so the *corrected* forms are what landed. An over-read that reaches a permanent
+record teaches the next reader to treat a robust property as fragile — see
+[[supplied-verbatim-text-ships-unfiltered]] and
+[[clearance-conditions-must-absorb-my-own-recommendations]].
