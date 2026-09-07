@@ -18,6 +18,7 @@ import { EMPTY_STALENESS } from '$lib/staleness/stale-constituent';
 const LAYOUT_DEFAULTS = {
 	userEmail: 'owner@example.com',
 	pendingClassificationCount: 0,
+	pendingMonthlyReportCount: 0,
 	connectionHealth: { reauthCount: 0, institutionDownCount: 0 }
 };
 
