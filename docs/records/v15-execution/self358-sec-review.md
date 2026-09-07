@@ -1,0 +1,52 @@
+# SELF-358 (P6) — Sec joint-review verdict · GREEN at `8b4315b` · 2026-09-07
+
+Verbatim from Security (sec-c), measured against `main` @ `a30c5e3`. The frozen sha is the PR head (a content-resolved merge of P6's `4136a24` with `main`), graded as the full 27-file diff. Covers the `.gitleaksignore` fingerprint + the inversion fixture (E103/E104/E108/E113), ADR-069, the export route, the CSS extraction, and the relocated `storedAsOf` site (E111). Team-lead ruling recorded at execution log E114.
+
+---
+
+P6 / SELF-358 is **GREEN at `8b4315b`**, measured against `main` @ `a30c5e3`. **CLEAR TO MERGE from Sec's side: YES, no conditions.** The content resolution preserved #653, all four of my fixture catches are mechanized rather than commented, and my ADR-069 correction held. Two notes, neither gating.
+
+**md5 `d6f05379fa3fb59f2575b3b6d0c8f16e`** — the 27 blobs of `a30c5e3..8b4315b` concatenated in `git diff --name-only` order, read via `git show 8b4315b:<path>`.
+
+## 1. Summary
+
+I graded the full 27-file diff rather than the first-parent chain, verified the content resolution did not drop #653's work, and checked the gitleaks fence against my five criteria and four catches. The export route refuses a draft server-side, the filename is DB-derived on both components, and no secret reaches the worker HTML.
+
+## 2. Paths changed — my own classification, all 27
+
+**CI fences (my review surface), 6:** `.github/workflows/security-scan.yml` (+66) — the inversion job + `GITLEAKS_VERSION` · `.github/workflows/web-tests.yml` (+51) · `.gitleaksignore` (+6, **new file**) · `scripts/ci/fence-gitleaksignore-inversion.sh` (+353) · `scripts/ci/check-report-css-identical.sh` (+162) · `scripts/ci/README.md` (+62).
+**CI fixtures, 3:** `tests/fixtures/ci/gitleaksignore-malformed` (+17) · `report-css-drift-corrupted.css` (+3) · `README.md` (+1).
+**Server surface (ARCH §4.1), 4:** `pdf/+server.ts` (+176, **new route**) · `lib/server/monthly-report/loadMonthlyReport.ts` (+256, **new**, the P8 extraction) · `lib/server/pdf/composeReportDocument.ts` (+59, new) · `[target_month]/+page.server.ts` (−282, gutted by the extraction).
+**Build + generated, 4:** `api/vite.report-css.config.mjs` (+53) · `api/src/lib/generated/report.css` (+2) · `api/vitest.config.ts` (+12) · `api/package.json` · `api/.gitignore`.
+**Components, 2:** `MonthlyReportView.svelte` (+12) · `HistoricalExpendituresChart.svelte` (+31).
+**ADR, 1:** `DECISIONS.md` (+14) — ADR-069.
+**Tests, 7:** the two PDF tests, `cssCoverage`, `renderContextParity`, `loadMonthlyReport.test.ts` (+518), and the two relocated `load.server.test.ts` (−591).
+`git merge-tree --write-tree --name-only origin/main 8b4315b` → **CLEAN**. **No `SUPABASE_SERVICE_ROLE_KEY` added** — RT-26 allowlist untouched.
+
+## 3. Broken
+
+None.
+
+## 4. Bubble up
+
+**✅ (1) THE CONTENT RESOLUTION PRESERVED #653 — verified, not accepted.** This was the highest-risk item: a content-resolved merge is where a landed fix silently disappears. Measured at `8b4315b`: the extracted `loadMonthlyReport.ts` imports `storedAsOf` (L36) and calls `storedAsOf(row.data_as_of)` (L191). **The census leg from #653 still passes** — the only `userSuppliedAsOf` occurrence anywhere in production code is a *comment* at L186 saying it stays reserved, and that leg strips comments before matching. ⚠ I also checked the one way this could have been broken silently: `vitest.config.ts` changed, and a narrowed test glob would have **disabled my census leg without failing anything**. It does not narrow — the change is `css: true` on the `node` project, which widens. #653's five-action mapper files are absent from this diff entirely, i.e. unchanged from `main`.
+
+**Worth flagging on its own merits:** the `css: true` finding is a good catch by DevOps-c. Vitest defaults `test.css` to `false`, which makes a `.css?raw` import resolve to an **empty string, silently** — and it affected the two pre-existing `tokens.css`/`app.css` imports identically, not just `report.css`. That is a vacuous-green harness condition. It fails **closed** here (ADR-069's primary control, the token-to-selector coverage assertion, would RED on empty CSS rather than pass), so nothing shipped wrong — but it is exactly the class where a permissive harness makes a real assertion meaningless, and it was found rather than stumbled over.
+
+**✅ (2) THE GITLEAKS FENCE — all five criteria and all four catches are MECHANIZED, not commented.** Criterion-by-criterion, measured in `shape_check`: the entry regex is `^[0-9a-f]{40}:[^:]+:[^:]+:[0-9]+$`, so **a bare path or bare `rule:` cannot pass** (criterion 1); the forbidden-file case list is `.env*|.github/workflows/*|secrets-manifest.yml|docker-compose*` — the exact four I named (criterion 3). On my four catches: **(i) version divergence is closed both ways** — `GITLEAKS_VERSION: 8.24.3` is now set on the `gitleaks-action@v2` gate *and* the fixture fails **FATAL exit 2** if the binary's reported version differs from `GITLEAKS_VERSION_EXPECTED`, with the message naming the reason; **(ii) path fidelity** uses `git worktree add --detach` at the same relative path with trap-based `worktree remove --force`, not a copy — my recommended shape, and no residue on abort; **(iii)** the legs assert the **JSON report's token content**, explicitly so "a structural error that happens to also exit non-zero can never be mistaken for caught-the-right-thing"; **(iv) pass-if-absent is closed** — a missing `.gitleaksignore` is FATAL exit 2 with the reason spelled out, never a silent clean pass.
+
+**I sampled the one fingerprint against the tree rather than taking its label**, as I said I would. `a6107187:api/vite.report-css.config.mjs:generic-api-key:40` — line 40 at that commit is `outDir: path.resolve(apiRoot, 'src/lib/generated'),`. A build-output path, not a secret. The label is accurate and the file is not a live-secret file.
+
+**NOTE-1 — two suppression mechanisms now cover that one finding, and the reason is right but unwritten.** At `8b4315b` line 40 also carries an inline `// gitleaks:allow`. Reading it as redundancy would be wrong: the fingerprint pins commit `a6107187`, and `2f7591b` changed that line's content, so the fingerprint covers the **historical** commit while the inline allow covers **HEAD and every future commit** — two scan modes, not two copies. That is the direct consequence of my own catch #5 (fingerprints go stale when the line moves) and it is handled correctly. **What is missing is the sentence saying so.** ⚠ The consequence, and the only reason I am recording this: with the inline allow in place, **the fixture's positive control would stay green even if the fingerprint entry were deleted** (`shape_check` iterates entries and passes on zero — an *empty but present* file is clean), so the entry itself has no behavioural observer. The failure direction is **safe** — removing a suppression makes the scanner more sensitive and a re-fired finding REDs CI — so this is not a gap I am asking you to close. One line in `.gitleaksignore`'s comment naming which mechanism covers which scan mode would stop the next maintainer removing the "redundant" one for the wrong reason.
+
+**✅ (3) ADR-069 — and my own correction held.** The entry is in `DECISIONS.md` with *"a request-time filesystem read on an **ARCH §4.1** server-source surface"*; the string `SECURITY §4.1 server surface` appears **zero** times. My wrong-section finding from the CSP review was applied and did not regress through the auto-merge with #645's D7 correction. The §10 clause is present verbatim and is correct: **no catalogued instance is added, removed or renumbered**, and the ledger reads **3** live at `a30c5e3`.
+
+**✅ (4) THE EXPORT ROUTE — draft refused server-side, and the filename is safe on both components.** `safeGetSession()` gates the route; the refusal is `if (header.generation_status !== 'final' || header.generated_at === null) throw error(409, …)` at L132–133 — **server-side, not the disabled button**, with a belt-and-braces `generated_at` non-null check on the frozen contract. ⚠ I checked the `content-disposition` header specifically, because a user-controlled filename there is a real injection surface: **both components are DB-derived** — `header.target_month` from the row, and `generated_at` passed through `filenameSafeGeneratedAt` which strips colons. No caller-supplied string reaches that header. No Supabase credential of any kind appears in the route; the worker signing key stays in `renderClient.ts` (A5, untouched here) and never reaches the browser.
+
+**✅ (5)(6) The CSS extraction, the drift job, and the version pin** all land as ADR-069 specifies: the prebuild emits a committed `report.css`, `check-report-css-identical.sh` (+162) is the regenerate-and-diff fence with its own corrupted-CSS fixture, and the **primary** control remains the token-to-selector coverage assertion (`MonthlyReportView.cssCoverage.test.ts`, +192) — which is the ordering ADR-069 requires, with the diff fence belt-and-braces on top rather than standing in for it.
+
+**NOTE-2, no action — one residual I cannot verify from the tree.** `GITLEAKS_VERSION: 8.24.3` is set as an `env:` on the `gitleaks-action@v2` step. That is the documented mechanism for pinning that action's binary, and the fixture's own version assertion is measured and strict — but **I verified the declaration, not the action's honouring of it.** If v2 ever ignores or renames that variable, the two instruments drift again and only the fixture would notice (it checks its own binary, not the action's). Cheap future hardening if you want it: have the action step echo `gitleaks version` and assert it. Not required.
+
+**Verify-hook.** §10 read live from the ADR body at `main` @ `a30c5e3`: **count = 3**, RT-22 / RT-26 / RT-27 — unchanged by this diff; no instance added, removed, reordered or renumbered; no layer attribution moves; ADR-069's own §10 clause is Path B (link carries, enumeration not restated) and is accurate. **No drift to surface.** Stated separately because they coincide on three labels and must never be reconciled: the CI-fenced RT set is a different set, and this PR adds a new fenced job without changing that relationship — I did not reconcile them.
+
+**VERDICT — GREEN. CLEAR TO MERGE: YES, no conditions.** That closes all seven V1.5 user-facing surfaces plus the follow-up from Sec's side. ⚠ Re-run `git merge-tree` in the same turn as the merge — my CLEAN read is scoped to `a30c5e3`.
