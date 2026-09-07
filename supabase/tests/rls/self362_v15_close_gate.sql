@@ -294,6 +294,61 @@
 --          (tenant x scope x tax_treatment, per the AC's own axis
 --          assignment) both isolate on TENANCY specifically, not by
 --          accident of the strings differing.
+--   ITEM (d) — 115's render budget (a probe leg or a documented
+--          measurement of fn_finalize_monthly_report against the on-demand
+--          p95 <= 2000ms budget at synthetic scale) AND P4's per-pending-
+--          row composition cost, measured once (team-lead Ruling 2,
+--          2026-09-06: (d) stays here since 115 is on main; the P4 half is
+--          measured READ-ONLY against origin/feature/self-356 @ f1d8283,
+--          never authored there).
+--          DOCUMENTED MEASUREMENT, not a repeatable CI-graded leg —
+--          deliberately: a hard wall-clock assertion in a shared-runner CI
+--          lane is exactly the "sleeps, retries, flaky-on-Tuesday" class
+--          this discipline exists to refuse (QA's own standing rule), and
+--          a single scratch-DB run cannot bound CI-runner variance anyway.
+--          FIXTURE: synthetic-scale, one tenant, 10 accounts (mixed
+--          depository/investment, mixed scope, mixed tax_treatment) x 12
+--          months of account_trans each = 120 transaction rows. Measured
+--          on a fresh scratch clone (db-template-clone.sh) via psql
+--          `\timing`, 2026-09-06:
+--            fn_render_monthly_report('2026-08-01','2026-08-31') alone:
+--              122.391 ms (COLD — first call in the transaction; query
+--              plans not yet cached).
+--            fn_open_monthly_report_draft + fn_finalize_monthly_report,
+--              end to end (draft insert + A3 composition + Lock 12
+--              children write + payload freeze, ONE transaction):
+--              1.904 ms + 108.421 ms = 110.325 ms (WARM — runs after the
+--              render call above in the same session, so plan/buffer
+--              caching plausibly explains it reading FASTER than the
+--              standalone cold call rather than being genuinely cheaper;
+--              a single run cannot separate the two, and this measurement
+--              does not claim to).
+--          BOTH single-digit-hundreds-of-ms, comfortably inside the
+--          2000ms p95 budget — roughly 15x-18x margin even taking the
+--          COLD number as the worst case. No probe LEG is added on top of
+--          this: at this margin a hard threshold assertion would either
+--          never fire (dead code) or fire on CI-runner noise unrelated to
+--          a real regression (exactly the flaky-exclusion class this
+--          discipline refuses) — the number is recorded for a human or a
+--          future dedicated perf-budget harness to act on, not asserted
+--          here.
+--          P4's PER-PENDING-ROW COST (feature/self-356 @ f1d8283, read
+--          only): `reports/monthly/+page.server.ts`'s `load()` issues
+--          EXACTLY ONE `fn_render_monthly_report` RPC per PENDING (draft)
+--          row, to derive the `noLedgerDesignated` display flag from that
+--          draft's own composed payload (verified live: `.rpc(
+--          'fn_render_monthly_report', ...)` inside `draftRows.map(...)`,
+--          the file's own comment states "One RPC per pending row: bounded
+--          in ordinary use" citing 108's own one-live-draft-per-month
+--          partial unique index as the structural cap). So the per-
+--          pending-row cost IS the fn_render_monthly_report measurement
+--          above (~122ms cold) — not a separate code path, and not
+--          separately measured. A tenant with the product-structural
+--          maximum of ONE pending draft per month therefore pays at most
+--          ~122ms extra on that listing page load; there is no scenario
+--          in the current write paths (113/114 both enforce at-most-one-
+--          live-draft-per-month) where this multiplies across many
+--          concurrent pending rows for one tenant.
 -- =====================================================================
 -- QA-owned. Authors NO schema. Composes 106/108-115 + workers/etl's pytest.
 --
