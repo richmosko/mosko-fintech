@@ -27,6 +27,7 @@
 		priorCommentary={data.priorCommentary}
 		allocation={data.allocation}
 		staleness={data.staleness}
+		noLedgerDesignated={data.noLedgerDesignated}
 	/>
 </main>
 

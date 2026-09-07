@@ -9,9 +9,12 @@
 	    `<form method="POST" action="?/generate">` (no `use:enhance`; the action REDIRECTS on
 	    success, so the well-understood no-JS-required pattern is the default winner). JS is
 	    used only for that component's own CTA-label reactivity, not the submission itself.
-	  - Pending queue (AC2): draft rows awaiting commentary — links into P3's editor. "Pending"
-	    is NOT a job-state queue (no queued/in-flight/done, no generation-failed notice — struck
-	    at the amendment; this section names months, nothing more).
+	  - Pending queue (AC2): draft rows awaiting commentary. "Pending" is NOT a job-state queue (no
+	    queued/in-flight/done, no generation-failed notice — struck at the amendment; this section
+	    names months, nothing more). P4 (SELF-356 AC1-AC4): each row is now
+	    PendingMonthlyReportItem.svelte — the item copy, the conditional no-ledger-designated
+	    prompt, "Write commentary" (into P3's editor, unchanged) and "Skip commentary and finalize"
+	    (this file's own new `?/skip` action, an inline two-step confirm — never window.confirm()).
 	  - Generated reports (AC1/AC4/AC7): one row per `final` target_month, linking into P2's
 	    view; RegenerateReportControl.svelte per row (E15 item 10 — final-only) — an INLINE
 	    two-step confirm, NOT `window.confirm()` (this codebase's own DeleteScheduleControl.svelte
@@ -30,6 +33,7 @@
 <script lang="ts">
 	import GenerateMonthlyReportControl from '$lib/components/GenerateMonthlyReportControl.svelte';
 	import RegenerateReportControl from '$lib/components/RegenerateReportControl.svelte';
+	import PendingMonthlyReportItem from '$lib/components/PendingMonthlyReportItem.svelte';
 	import type { PageData, ActionData } from './$types';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
@@ -58,11 +62,11 @@
 			<h2 id="pending-heading">Pending — awaiting commentary</h2>
 			<ul class="pending-list">
 				{#each data.pending as p (p.reportId)}
-					<li>
-						<a href={`/reports/monthly/${p.targetMonth.slice(0, 7)}/commentary`}>
-							{p.monthLabel} — write commentary
-						</a>
-					</li>
+					<PendingMonthlyReportItem
+						targetMonth={p.targetMonth}
+						monthLabel={p.monthLabel}
+						noLedgerDesignated={p.noLedgerDesignated}
+					/>
 				{/each}
 			</ul>
 		</section>
@@ -143,13 +147,11 @@
 	.report-row:last-child {
 		border-bottom: none;
 	}
-	.pending-list a,
 	.report-row a {
 		color: var(--c-accent);
 		font: var(--weight-med) var(--fs-body) / var(--lh-body) var(--font-ui);
 		text-decoration: none;
 	}
-	.pending-list a:hover,
 	.report-row a:hover {
 		text-decoration: underline;
 	}

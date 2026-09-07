@@ -93,6 +93,47 @@ it only makes an unscoped read look deliberate.
 Related: [[measure-the-fence-regex-not-its-comment]] — same shape one level down (measure the real
 predicate at the real ref, not the description of it).
 
+**⚠ A NOT-YET-LANDED ARTIFACT'S TREE CLAIMS ARE GRADED AGAINST ITS *LANDING* BRANCH, NOT `main`
+(sec-c re-verification, 2026-09-06).** Grading a `temp/` DECISIONS entry that Backend would land in
+the SELF-358 PR, I checked its claim *"the PDF route inlines it with the `?raw` mechanism it already
+uses"* with `grep -rn '?raw' api/src` on the working dir — **zero hits** — and was one step from
+reporting the claim unverified. The route does not exist on `main` at all; it exists on
+`origin/feature/self-358`, where `api/src/routes/reports/monthly/[target_month]/pdf/+server.ts`
+L105–106 are exactly two `?raw` imports. **The claim was true; my ref was wrong.** The tell I
+ignored: `find api/src -ipath '*report*'` returned nothing, i.e. the *whole feature* was absent —
+an absence that broad is a ref error, not a defect. **How to apply:** before grading any claim in a
+draft/`temp/` artifact, ask *which branch does this land on* and read there; `main` is the wrong
+baseline for text whose subject is the same PR. Same failure direction as the stale-base diff above
+— it reports a true statement as false, and "your citation has no referent" is the most damaging
+class to raise wrongly.
+
+**⚠ A SUPPLIED CHECK PREDICATE THAT IS TOO NARROW SILENTLY REMOVES A SURFACE FROM REVIEW — RUN THE
+UNSCOPED DIFF FIRST (PR #641, 2026-09-06).** A diff-only re-confirm brief listed four checks, one of
+them *"`git log --oneline origin/main..<head>` is migrations + batteries only."* Running the
+**unscoped** `git diff --stat origin/main <head>` instead returned **nine** files: the four
+migrations, the four batteries, **and `DECISIONS.md` (+6)** — a Sec-attributed block landing inside
+an ADR. Had I diffed only `supabase/` as the predicate framed it, ADR text written in Sec's name
+would have merged without Sec reading it. A second predicate in the same brief (*"the delta is that
+one file, comment-only"*) also failed, for a benign reason: the comparison sha predated a `main`
+merge, so the diff was dominated by content already on `main`. **How to apply:** treat every
+supplied path scope as a *hypothesis about what changed*, never as the boundary of the review.
+Open with one unscoped `git diff --stat <base> <head>`, reconcile it against the brief's
+enumeration, and **report a predicate that did not hold even when the outcome was fine** — the
+outcome was luck, the predicate is the defect. Same family as
+[[triage-a-multileg-bypass-leg-by-leg]] (grep the tree before ruling on an enumeration) and
+[[an-enumeration-and-its-watcher-both-stop-one-short]].
+
+**⚠ A BRIEF'S RESTATEMENT OF A PREDECESSOR'S REQUIREMENT IS A PARAPHRASE — GRADE AGAINST THE
+PREDECESSOR'S OWN RECORD AND THE TREE (same review).** My brief said the ADR-011 D9 amendment "must
+now name the FIVE-argument `pfin.fn_emit_audit_log(text, text, text, date, text)`". That signature
+exists nowhere: the shipped function is `(text, text, date, text, bigint)` (five args, different
+types and order), which is also what the clearance record's commit-ready fix specified and what
+landed. The brief had preserved the *arity* and mangled the *types* — a drift shape that survives a
+casual check because the headline number is right. Had I graded against the brief I would have
+opened a defect on correct text. **How to apply:** a re-verification brief is a pointer, never the
+requirement. Read the predecessor's record verbatim for the requirement, the tree for the fact, and
+report brief drift inline — see [[sec-lock-cross-check-catches-my-own-misreads]].
+
 **A DIFF AGAINST A STALE BASE RETURNS A FALSE NEGATIVE ON "did it land?" (SELF-268 re-look).**
 Checking whether supplied verbatim text had reached `DECISIONS.md`, I ran
 `git diff <old-freeze-sha> <ref> -- DECISIONS.md | grep '<my sentence>'` and got **nothing** — and

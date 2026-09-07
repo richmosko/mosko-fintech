@@ -39,8 +39,14 @@ import { loadNonReAllocation } from '$lib/server/queries/nonReAllocation';
 import type { NonReAllocation } from '$lib/nonre-allocation';
 import { serverTodayAsOf } from '$lib/server/time/asOf';
 import { monthlyCommentaryUpsertSchema } from '$lib/server/schemas/monthly-commentary';
+import { authoredFinalizeSchema } from '$lib/server/schemas/monthly-report-finalize';
 import { fieldErrors } from '$lib/server/schemas/account';
-import { parseTargetMonth, type CommentaryValues } from '$lib/monthly-report';
+import {
+	parseTargetMonth,
+	noLedgerDesignated as computeNoLedgerDesignated,
+	type CommentaryValues,
+	type MonthlyReportPayload
+} from '$lib/monthly-report';
 import type { PostgrestError } from '@supabase/supabase-js';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -64,6 +70,7 @@ type CommentaryRow = {
 	report_id: number;
 	target_month: string;
 	generation_status: 'draft' | 'final' | 'superseded';
+	data_as_of: string;
 	commentary_cash: string | null;
 	commentary_bonds: string | null;
 	commentary_marketable_securities: string | null;
@@ -92,7 +99,7 @@ export const load: PageServerLoad = async ({ locals, url, params }) => {
 		.schema('pfin')
 		.from('monthly_report')
 		.select(
-			'report_id, target_month, generation_status, commentary_cash, commentary_bonds, commentary_marketable_securities, commentary_alternatives'
+			'report_id, target_month, generation_status, data_as_of, commentary_cash, commentary_bonds, commentary_marketable_securities, commentary_alternatives'
 		)
 		.eq('target_month', targetMonth)
 		.in('generation_status', ['final', 'draft']);
@@ -142,15 +149,42 @@ export const load: PageServerLoad = async ({ locals, url, params }) => {
 		console.error('[reports/monthly/commentary] allocation load threw; degrading to null:', err);
 	}
 
+	// P4 (SELF-356 AC4, R1 rider 6) — the SAME live-compose call `[target_month]/+page.server.ts`
+	// already makes for a draft's own render (`fn_render_monthly_report`), NOT a second dedicated
+	// query. Only meaningful while `isDraft` (a `final` row can no longer be finalized, so the
+	// prompt has nothing left to gate); fail-soft to `false` on a composition-read failure — a
+	// missed nudge, never a broken editor page.
+	const isDraft = row.generation_status === 'draft';
+	let noLedgerDesignated = false;
+	if (isDraft) {
+		try {
+			const { data: composed, error: renderErr } = await locals.supabase
+				.schema('pfin')
+				.rpc('fn_render_monthly_report', {
+					p_target_month: row.target_month,
+					p_data_as_of: row.data_as_of
+				});
+			if (!renderErr && composed) {
+				noLedgerDesignated = computeNoLedgerDesignated(composed as MonthlyReportPayload);
+			}
+		} catch (err) {
+			console.error(
+				'[reports/monthly/commentary] payload composition threw; degrading noLedgerDesignated to false:',
+				err
+			);
+		}
+	}
+
 	return {
 		targetMonth,
 		targetMonthLabel: monthLabel(targetMonth),
-		isDraft: row.generation_status === 'draft',
+		isDraft,
 		commentary: toCommentaryValues(row),
 		priorMonthLabel: monthLabel(priorMonth),
 		priorCommentary: toCommentaryValues(priorRow as CommentaryRow | null),
 		allocation,
-		staleness
+		staleness,
+		noLedgerDesignated
 	};
 };
 
@@ -181,6 +215,31 @@ function mapSaveError(error: PostgrestError): { status: number; message: string 
 			};
 		default:
 			console.error('[reports/monthly/commentary] unexpected write error:', error.code, error.message);
+			return { status: 500, message: 'Something went wrong. Please try again.' };
+	}
+}
+
+/** Maps a `pfin.fn_finalize_monthly_report` failure to a clean 4xx/5xx — mirrors `mapSaveError`
+ *  just above (112's own sibling write path) and the identically-named mapper in
+ *  `reports/monthly/+page.server.ts` (P5's own `?/skip` action, the OTHER call site onto this same
+ *  115 RPC). Not extracted into a shared module — the two files are each a small, self-contained
+ *  Backend-surface file per this ticket's own authorship note, and the mapping is three lines;
+ *  flagged as a judgment call at hand-off rather than a silent duplication. */
+function mapFinalizeError(error: PostgrestError): { status: number; message: string } {
+	switch (error.code) {
+		case '42501':
+			return {
+				status: 403,
+				message: 'This action requires a freshly verified session. Please step up and try again.'
+			};
+		case 'P0001':
+			return {
+				status: 400,
+				message:
+					'Could not finalize this report — it may already be finalized, or no longer exists. Refresh and try again.'
+			};
+		default:
+			console.error('[reports/monthly/commentary] unexpected finalize error:', error.code, error.message);
 			return { status: 500, message: 'Something went wrong. Please try again.' };
 	}
 }
@@ -220,5 +279,47 @@ export const actions: Actions = {
 		}
 
 		return { ok: true as const, commentary: parsed.data };
+	},
+
+	// P4 (SELF-356 AC5) — the editor's own "Finalize {Month YYYY}" action (P3 item 4's former
+	// PERMANENTLY DISABLED stub, now wired). Calls 115 with the `'authored'` disposition — the
+	// DURABLE fact that the author declared this month done, which does NOT require non-empty
+	// commentary (four empty strings ARE authored, per 115's own header — R12 rider 1). Whatever
+	// commentary text is currently SAVED on the row is what gets frozen; this action does not
+	// itself save unsaved edits (115 takes no commentary text at all — see monthly-report-
+	// finalize.ts's own header). `p_commentary_disposition` is this action's OWN literal, never a
+	// posted field.
+	finalize: async ({ request, locals, params }) => {
+		const { user } = await locals.safeGetSession();
+		if (!user) return fail(401, { errors: { _form: ['You must be signed in.'] } });
+
+		const targetMonth = parseTargetMonth(params.target_month);
+		if (targetMonth === null) {
+			return fail(400, { errors: { _form: ['Invalid target month.'] } });
+		}
+
+		const form = await request.formData();
+		const parsed = authoredFinalizeSchema.safeParse(Object.fromEntries(form));
+		if (!parsed.success) {
+			return fail(400, { errors: fieldErrors(parsed.error) });
+		}
+
+		const { data: reportId, error: rpcError } = await locals.supabase
+			.schema('pfin')
+			.rpc('fn_finalize_monthly_report', {
+				p_target_month: targetMonth,
+				p_commentary_disposition: 'authored'
+			});
+
+		if (rpcError || typeof reportId !== 'number') {
+			const { status, message } = rpcError
+				? mapFinalizeError(rpcError)
+				: { status: 500, message: 'Something went wrong. Please try again.' };
+			return fail(status, { errors: { _form: [message] } });
+		}
+
+		// AC6 / P2's final view — the promotion is 115's own UPDATE; nothing inserts final
+		// directly.
+		throw redirect(303, `/reports/monthly/${targetMonth.slice(0, 7)}`);
 	}
 };
