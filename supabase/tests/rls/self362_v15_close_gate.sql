@@ -247,16 +247,27 @@
 --          RT-21 letters: COMPOSED — api/src/lib/server/pdf/
 --          renderClient.test.ts, the re-derived (a)-(g) battery, each its
 --          own leg per the AC's own instruction.
---          Inert-<script> (P6 item 7): ⟨OPEN⟩ — NOT YET BUILDABLE against
---          `main`. Verified live: P6's own export route
---          (`api/src/routes/.../reports/...`) does not exist on `main` at
---          this sha (only its DB substrate, 112/115, is merged) — the
---          shared Svelte template this leg spans has no server-rendered
---          PDF path to exercise yet. This is a DEPENDENCY-ORDERING gap
---          (P6 has not landed), not a P10 authoring gap — recorded here so
---          the close-gate verdict (item 14) does not silently pass without
---          this leg ever having been reachable, and so P6's own PR is the
---          one that owes it, per its own AC (P6 item 7).
+--          Inert-<script> (P6 item 7): ⚠ CORRECTED (team-lead Ruling 1,
+--          2026-09-06) — NOT open, and NOT unbuildable; it was already
+--          BUILT on `feature/self-358` (P6's own branch, not yet merged to
+--          `main`), which the earlier pass of this file did not check.
+--          COMPOSED, spanning both engines exactly as Sec's own wording
+--          requires: the APP side is
+--          `api/src/routes/reports/monthly/[target_month]/pdf/
+--          pdf.escaping.test.ts`, committed at `a610718` (already on
+--          `feature/self-358` before this pass touched it) — its own
+--          header names itself explicitly: `"the WORKER side (the two-abort
+--          interception leg) is A4's own battery, named for QA at P10;
+--          THIS file is the APP side."` It proves the FULL self-contained
+--          document this route pushes to the PDF worker never carries a
+--          live `<script>` tag for a stored commentary payload or the
+--          owner string. The WORKER side is A4's `render.test.js`
+--          (already on `main`, cited above). Both halves exist; nothing
+--          new was owed here. Still genuinely open: this leg (like items
+--          (e)/(f) below) cannot be EXERCISED against `main` until P6
+--          merges — that dependency-ordering fact stands, but it is a
+--          MERGE-ORDER gate on the close-gate VERDICT (item 14), not a
+--          missing leg.
 --   AC4  — TRI-AXIS IS CONDITIONAL (Sec M-3), quoted verbatim so a future
 --          reader cannot "fix" the asymmetry into uniformity: "tri-axis
 --          tenant x scope x tax_treatment where the underlying classes
