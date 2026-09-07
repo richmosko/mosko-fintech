@@ -751,7 +751,14 @@ rollback to savepoint sp_14h_iv;
 -- "planned X but ran Y" line this leg re-arms as a named, gradeable
 -- assertion — so this leg's dependency is the same one every pgTAP test
 -- file already carries transitively through `finish()`, made explicit
--- rather than novel.
+-- rather than novel. The watcher cannot compare the declared plan to the
+-- running counter without naming both, and `_get()` is the only name that
+-- reaches either one — there is no assertion-only workaround. Accepted
+-- knowingly, not overlooked: a future pgTAP release that renames or removes
+-- `_get()` REDs this leg LOUDLY, by design — `function _get(unknown) does
+-- not exist` (the exact CI failure this fix corrected) is the intended
+-- failure mode for that case, not a silent pass, so no further guard is
+-- warranted here.
 -- =====================================================================
 select is(
   _get('plan') - _get('curr_test'),
