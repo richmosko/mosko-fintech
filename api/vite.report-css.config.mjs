@@ -37,7 +37,7 @@ export default defineConfig({
 		}
 	},
 	build: {
-		outDir: path.resolve(apiRoot, 'src/lib/generated'),
+		outDir: path.resolve(apiRoot, 'src/lib/generated'), // gitleaks:allow — generic-api-key false positive: this is a filesystem path, not a secret
 		emptyOutDir: false,
 		cssCodeSplit: false,
 		lib: {
