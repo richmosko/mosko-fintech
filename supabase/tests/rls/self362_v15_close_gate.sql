@@ -107,7 +107,12 @@
 --          own header rule ("adds only the NET-NEW... legs no per-issue
 --          battery makes on its own") argues against it. No new SQL.
 --          RESET ROLE discipline: COMPOSED, non-pgTAP —
---          workers/etl/tests/test_connection.py::TestImpersonationInvariants
+--          workers/etl/tests/test_connection.py::TestImpersonationAssertion
+--          ⚠ CORRECTED (verdict AC item 14, 2026-09-07): this class was cited as
+--          `TestImpersonationInvariants` when this file was first authored — that name
+--          never existed; the real class is `TestImpersonationAssertion`. The two
+--          methods named below were always real and green under it; only the class
+--          name in this citation was wrong.
 --          ::test_reset_role_tears_down_impersonation (the impersonation
 --          state-machine assertion helper's own teardown case) plus
 --          test_full_worker_transaction_sequence (the full statement
@@ -208,13 +213,21 @@
 --          finalize, rename in 106, re-read the final row — unchanged).
 --   AC11 — (pending-queue tenant-scoped half, group 4) tenant A sees zero
 --          of tenant B's pending-queue entries.
---          COMPOSED BY INHERITANCE: the pending-queue affordance is P5's
---          UI (not yet merged to main — verified live, no `api/src/routes`
---          entry for §2.6.3's report listing exists at this sha), but the
---          affordance is a FILTERED READ over `pfin.monthly_report` through
---          the SAME RLS this gate already exercises exhaustively for A1
---          (108 LEG 1) — there is no separate DB object for "pending" to
---          carry its own isolation defect. Nothing new to write until P5
+--          COMPOSED BY INHERITANCE: the pending-queue affordance is P5's UI
+--          (`feature/self-357`, merged to `main` at PR #649 — ⚠ CORRECTED,
+--          verdict AC item 14, 2026-09-07: this file originally said P5 was
+--          "not yet merged... no `api/src/routes` entry exists at this
+--          sha", true when this file was first authored but stale by the
+--          verdict sha; the underlying conclusion below was RE-VERIFIED
+--          directly against the live, merged route rather than trusted on
+--          the old premise). `reports/monthly/+page.server.ts`'s `load()`
+--          and its actions query only `pfin.monthly_report` and the four
+--          RPCs already covered elsewhere in this file — no new DB object
+--          (view, function) was introduced for the listing. The affordance
+--          is a FILTERED READ over `pfin.monthly_report` through the SAME
+--          RLS this gate already exercises exhaustively for A1 (108 LEG 1)
+--          — there is no separate DB object for "pending" to carry its own
+--          isolation defect. Nothing new to write unless a LATER change
 --          introduces a DB-side object of its own (a view, a function);
 --          recorded here so a LATER reader does not mistake the absence of
 --          a P5-specific leg for an oversight.
