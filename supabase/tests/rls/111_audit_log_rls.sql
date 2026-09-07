@@ -115,6 +115,19 @@
 -- from this battery's usual all-rolls-back convention, cleaned up explicitly
 -- by the leg that creates them rather than left as residue.
 --
+-- ⚠ LEG 8-i'S dblink CONNECTION IS EXPECTED-DIFFERENT-LOCALLY (meta/battery-
+-- local-stack-disposition, matching 054's h14b annotation pattern). Measured
+-- on a local dev stack: `dblink_connect('conn111i', 'dbname=... host=...
+-- port=... user=postgres password=postgres')` can error `password or GSSAPI
+-- delegated credentials required` — a local `pg_hba.conf` auth-method
+-- mismatch (the local stack's postgres superuser connection over TCP with an
+-- explicit password does not satisfy whatever method is configured there),
+-- NOT a defect in this leg or in C2. PR #636's CI lane ran leg 8-i CLEAN —
+-- CI's fresh `supabase start` cluster accepts the same connection string.
+-- So: RED on a local stack is EXPECTED-DIFFERENT; RED in CI would be a
+-- genuine finding. Verified in CI every PR (.github/workflows/db-tests.yml),
+-- not unverifiable.
+--
 -- ⚠ LEG 6 (immutability) IS BACK IN ITS NATURAL POSITION, after leg 5. The
 -- previous version of this file moved it to the end of the file as a
 -- mitigation for the (mis-diagnosed) dblink/trigger-exception "poisoning" —
@@ -529,9 +542,28 @@ select ok(
 --       cover the subtransaction shape self-contained, without needing that
 --       function.
 -- =====================================================================
+-- ⚠ RESET FIRST (P10 item b): tenant E's fixture below is a REAL COMMITTED
+-- write via dblink, independent of this file's own rolled-back transaction
+-- (see file header). If a PRIOR run of this file ever aborted between this
+-- INSERT and its own cleanup (a genuine bug in the assertion, an
+-- interrupted process, …), the residue survives on a PERSISTENT database
+-- and this leg is NOT RE-RUNNABLE: the INSERT below would hit a duplicate
+-- `auth.users(id)` and error the whole file before ever reaching the
+-- assertion. Reset unconditionally before inserting — idempotent whether or
+-- not residue exists — via its own committed connection, matching the
+-- cleanup below. `auth.users.id ... references ... on delete cascade`
+-- (`108`) takes tenant E's `pfin.monthly_report` rows with it, so one
+-- DELETE clears both tables.
+select dblink_connect('conn111i_reset', format('dbname=%s host=%s port=%s user=postgres password=postgres', current_database(), inet_server_addr(), inet_server_port()));
+select * from dblink('conn111i_reset', format($$ delete from auth.users where id = '%s' $$, :'te')) as t(x text);
+select dblink_disconnect('conn111i_reset');
+
 -- --- (i) EARLIER TRANSACTION, via dblink (verified-safe, see file header) ---
 select dblink_connect('conn111i', format('dbname=%s host=%s port=%s user=postgres password=postgres', current_database(), inet_server_addr(), inet_server_port()));
-select * from dblink('conn111i', format($$ insert into auth.users (id) values ('%s') $$, :'te')) as t(x text);
+-- `on conflict do nothing` is defense-in-depth ON TOP OF the reset above
+-- (not a substitute for it) — the reset already clears residue; this
+-- tolerates a concurrent/racing writer rather than erroring this leg.
+select * from dblink('conn111i', format($$ insert into auth.users (id) values ('%s') on conflict (id) do nothing $$, :'te')) as t(x text);
 select * from dblink('conn111i', format($$
   select set_config('role', 'authenticated', false);
   select set_config('request.jwt.claims', json_build_object('sub', '%s', 'role', 'authenticated')::text, false);
@@ -545,7 +577,7 @@ select _rls.set_tenant(:'te'::uuid);
 select throws_like(
   format($$ select pfin.fn_emit_audit_log('monthly_report_generation', 'impersonated session: request.jwt.claims.sub', '2027-12-31', 'pfin.monthly_report', %s) $$, :report_id),
   :'m_not_written',
-  '(8-i) BEHAVIOURAL (dblink, verified-safe under pg_xact_status — see file header): an emit naming a report_id from a GENUINELY earlier, separate, COMMITTED transaction is refused with the earlier-transaction message, distinct from (8-ii)''s not-yours message'
+  '(8-i) BEHAVIOURAL (dblink, verified-safe under pg_xact_status — see file header): an emit naming a report_id from a GENUINELY earlier, separate, COMMITTED transaction is refused with the earlier-transaction message, distinct from (8-ii)''s not-yours message. EXPECTED-DIFFERENT-LOCALLY (meta/battery-local-stack-disposition, see file header): this leg''s dblink_connect can RED on a local stack with "password or GSSAPI delegated credentials required" — a local pg_hba.conf auth-method mismatch, not a C2 defect. Verified CLEAN in CI (PR #636); RED in CI would be the genuine finding, RED here is not'
 );
 select set_config('role', 'postgres', true);
 -- Cleanup: tenant E's dblink-committed rows do NOT roll back with the rest
