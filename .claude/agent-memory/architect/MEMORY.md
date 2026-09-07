@@ -2,123 +2,115 @@
 
 ## Open work / findings
 
-- **[053 CPI positivity CHECK — SHIPPED at `095`](project_053_cpi_positivity_check_followup.md)** — additive to `cpi_u_index_value_finite`; residual = two catalog comments `095` falsified (`072`/`073`), team-lead-owned.
-
-- **[The 071/072 month-anchor degeneracy — FIXED by 097](project_nav_month_anchor_degeneracy.md)** — Option C ratified 2026-08-30; ADR-065 is the canonical home; 071's weak copy still misleads.
-- **[`in_queue` is a ratified NAME with zero DDL](project_in_queue_is_a_ratified_name_not_ddl.md)** — but the semantics ARE built inside `fn_cashflow_items`; equivalence proof + the four-hand-copies drift risk.
-- **[`is_tax_payment` is Expense-scoped; the real tax rows are Transfer-class](project_is_tax_payment_expense_scope_gap.md)** — ADR-062 `091`; the flag cannot reach `Tax - US Federal` / `Tax - California`. Unresolved at 2026-08-25.
-- **[`cashflow_target` shape supersedes D18 + SD-22](project_cashflow_target_shape_supersession.md)** — `090` built the WIDE row; both artifacts still record the inherited `(users_id, target_kind)` 2-row shape. Owner-routed; RT still owed.
-- **[099 cash-flow contributor map — no verdict in the DB](project_self258_cashflow_contributor_map.md)** — single-sourced by ZERO copies; ⚠ the §2.3.3 per-row badge is structurally DEGENERATE (one account per row).
-- **[A DEFINER helper's classification PARAMETER is a forgery channel](project_definer_helper_classification_parameter_forgery.md)** — `111` lets any `authenticated` caller mint a `'cron'` audit row (measured); no downstream fix in `113` can close it.
-- **[The tax-ledger rollover has no executable close and no NAV-safe drain](project_tax_ledger_rollover_has_no_safe_drain.md)** — `058` leg 2 refuses to close a funded ledger; emptying by transfer restores the money to the NAV leaf set. PM-routed.
-- **[No sale writer, zero `lot_match` writers — every realized-CG surface is structurally empty](project_no_sale_writer_lot_match_unreachable.md)** — and `lot_match` is write-**ENABLED-and-unreachable**, not write-dormant; render on the capability, never the row count.
-- **[The monthly report: FROZEN vs RECOMPOSED is a ONE-WAY DOOR](project_monthly_report_snapshot_vs_recompute_owd.md)** — PRD §2.6.4 freezes RENDERED values; Lock 11 locks read-time composition; Lock 14 settings carry NO edit history, so 4 of 6 sections cannot recompute as-of.
-- **[The NAV-definition flip is a ONE-WAY DOOR](reference_nav_definition_flip_is_a_oneway_door.md)** — `051` hardcodes both tax lines INSIDE the `nav` arithmetic; `nav_daily` is append-only with no definition-version column. Four layers; the 4th (`NavCompositionTable.svelte`) discards `displayValue` silently.
-- **[The AC10 fence does not reach the split-child grain](project_p4_split_child_journaled_cat_residual.md)** — `084`'s P4 branch reruns the same ordered CASE over the CHILD's cat with the PARENT's `journal_id`; `092` structurally cannot see it.
-- **[GL arc COMPLETE — rename + split + element ALL SHIPPED](project_gl_taxonomy_split_ratified.md)** — #502/#503 · #507/`084` · #510/`085`, Sec GREEN throughout. ⚠ That file has been silently reverted to "no DDL yet" TWICE; if you meet that claim, grep the migrations and re-correct.
-- **[A Backlog issue's deliverable may already have shipped](feedback_backlog_issue_deliverable_may_already_have_shipped.md)** — all-identifiers-falsified is a signal to widen the search, not to conclude UNBUILT. Grep the seeded state, not the AC's names.
-- **[Schema-impossible ACs trace to the incumbent](reference_schema_impossible_ac_traces_to_incumbent.md)** — the folded ETL still names `pfin.asset_cat`; "wrong AC" vs "different system" changes the disposition, and the masked residual is the load-bearing part.
+- [053 CPI positivity CHECK — SHIPPED at `095`](project_053_cpi_positivity_check_followup.md) — residual: two catalog comments falsified.
+- [071/072 month-anchor degeneracy — FIXED by 097](project_nav_month_anchor_degeneracy.md) — ADR-065 is canonical; 071's copy still misleads.
+- [`in_queue` is a ratified NAME with zero DDL](project_in_queue_is_a_ratified_name_not_ddl.md) — semantics live inside `fn_cashflow_items`; four hand-copies.
+- [`is_tax_payment` is Expense-scoped; real tax rows are Transfer-class](project_is_tax_payment_expense_scope_gap.md) — flag can't reach the tax cats.
+- [`cashflow_target` shape supersedes D18 + SD-22](project_cashflow_target_shape_supersession.md) — `090` built the WIDE row; both artifacts stale.
+- [099 cash-flow contributor map — no verdict in the DB](project_self258_cashflow_contributor_map.md) — the §2.3.3 per-row badge is DEGENERATE.
+- [A DEFINER helper's classification PARAMETER is a forgery channel](project_definer_helper_classification_parameter_forgery.md) — `111`; no downstream fix closes it.
+- [Tax-ledger rollover has no executable close, no NAV-safe drain](project_tax_ledger_rollover_has_no_safe_drain.md) — PM-routed.
+- [No sale writer, zero `lot_match` writers](project_no_sale_writer_lot_match_unreachable.md) — write-ENABLED-and-unreachable; render on capability, not row count.
+- [Monthly report FROZEN vs RECOMPOSED is a ONE-WAY DOOR](project_monthly_report_snapshot_vs_recompute_owd.md) — 4 of 6 sections can't recompute as-of.
+- [The NAV-definition flip is a ONE-WAY DOOR](reference_nav_definition_flip_is_a_oneway_door.md) — `nav_daily` append-only, no version column; 4 layers.
+- [AC10 fence does not reach the split-child grain](project_p4_split_child_journaled_cat_residual.md) — `092` structurally cannot see it.
+- [GL arc COMPLETE — rename + split + element ALL SHIPPED](project_gl_taxonomy_split_ratified.md) — ⚠ reverted to "no DDL yet" twice; grep the migrations.
+- [A Backlog issue's deliverable may already have shipped](feedback_backlog_issue_deliverable_may_already_have_shipped.md) — widen the search, don't conclude UNBUILT.
+- [Schema-impossible ACs trace to the incumbent](reference_schema_impossible_ac_traces_to_incumbent.md) — the masked residual is load-bearing.
 
 ## Postgres / RLS facts worth not re-deriving
 
-- **[D3 entries record ORIGINAL provenance](reference_decision3_entries_record_original_provenance.md)** — re-targets live in AMENDMENTS below the entry, which is never edited. #10/#13 now point at `posting_prototype`, not `user_taxonomy` (084).
-- **[`WITH CHECK` is a POLICY, not a CHECK constraint](reference_with_check_is_a_policy_not_a_check_constraint.md)** — it subqueries and SURVIVES replica; D3 sanctions both forms, so "every fence is a trigger" is a dated inventory, never a law.
-- **[A BEFORE ROW trigger cannot see later rows in the same statement](reference_before_row_trigger_cannot_see_later_rows.md)** — a SET-property fence (monotonicity, ordering) written per-ROW passes a bad multi-row batch; needs a deferred CONSTRAINT TRIGGER. ⚠ SERIALIZABLE is never a substitute.
-- **[A fail-closed lock in a DEFERRED fence can block CASCADE DELETE](reference_a_fail_closed_lock_in_a_deferred_fence_can_block_cascade_delete.md)** — the parent is already gone at COMMIT; judge the empty SET before the empty LOCK. The raise leg is an OBSERVER for the matched-tenant fence, not a caller fence.
-- **[`SET CONSTRAINTS ALL IMMEDIATE` reproduces the commit interleave](reference_set_constraints_immediate_reproduces_the_commit_interleave.md)** — parks a session between its deferred fence and its commit record, so a two-session skew race is deterministic. ⚠ A staggered-`pg_sleep` version goes red with or without the lock.
-- **[A BEFORE ROW fence makes its FK UNREACHABLE](reference_before_row_fence_makes_the_fk_unreachable.md)** — P0001 not 23503; fences come in stacks; ⚠ `session_replication_role=replica` skips fence AND FK (superuser-only).
-- **[account_trans and account are fenced DIFFERENTLY](reference_account_trans_and_account_are_fenced_differently.md)** — ACL-JOIN vs users_id: an INNER join between them fails OPEN, and `sub_cat_id`/`cat`/`sub_cat` are NOT NULL-together.
-- **[Fence reachability is a property of the CALLER](reference_fence_reachability_is_a_property_of_the_caller.md)** — an upstream OWNER-SCOPED read collapses a downstream matched-tenant fence into a no-op. Say DORMANT + name the revival condition. ⚠ Grep the CLAIM; it had 4 sites, not 2.
-- **["No FK on this column" is not "no FK in the lineage"](reference_no_fk_on_column_is_not_no_fk_in_lineage.md)** — an FK-less snapshot is still fenced one hop upstream; sweep upstream of every FK-less mirror column when a target moves.
-- **[A reserved id range needs a MAXVALUE on the lower sequence](reference_reserved_id_range_needs_a_maxvalue.md)** — an offset alone is disjoint by DISTANCE; assert the construction from `pg_sequence`, never an overlap count.
-- **[`rollback` does NOT reset sequences](reference_rollback_does_not_reset_sequences.md)** — a new battery shifts every later battery's ids and can redden an unrelated file; ⚠ a RE-USED scratch DB hides the whole class. Rebuild before every full-suite claim.
-- **[Scratch-DB recipe for a full clean chain apply](reference_scratch_db_full_chain_recipe.md)** — container `pg_dump`, load as `supabase_admin`, never `--no-privileges`, **name it all-lowercase**. ⚠ Fresh DATABASE on a DIRTY CLUSTER: no control for role/membership/grantor claims.
-- **[Catalog-comment staleness needs the CATALOG](feedback_catalog_comment_staleness_needs_the_catalog.md)** — a later migration may have re-emitted it; grepping the source over-reports staleness. Two checks via one instrument = one check.
-- **[`set local` outside a transaction is a silent no-op](feedback_set_local_outside_transaction_is_a_noop.md)** — the RLS smoke then runs as superuser and every leg passes; a vacuous harness looks PERMISSIVE, not empty. Control leg first.
-- **[`user_settings` can never carry the aal2 clause](reference_user_settings_excluded_from_aal2_backstop.md)** — `025` names it a NON-NEGOTIABLE exclusion (policy recursion); wrong home for step-up-fenced tenant data.
-- **[manual_valuation OUTRANKS every feed in the price pick](reference_manual_valuation_outranks_feeds_in_price_pick.md)** — F4: an 087-style companion price on an ALREADY-HELD position restates every prior lot at cost. ⚠ **No `market_feed` writer exists in V1**; users cannot mint or price GLOBAL assets (OWD-E).
-- **[A Σ=0 trial balance cannot see a Suspense-absorbed divergence](reference_suspense_branch_absorbs_the_divergence.md)** — holdings read `quantity`, the GL reads `cost_basis`; an omitted column RE-ROUTES an `fn_gl_entries` branch. ⚠ A fence after the irreversible write is not a fence.
-- **[Freshly-seeded rows are invisible to a PAST as-of](reference_freshly_seeded_rows_are_invisible_to_a_past_as_of.md)** — rule 6's `created_at` half excludes rows you just INSERTed; the all-zero result is byte-identical to broken/non-owned/NULL. Smoke at `current_date`.
-- **[`timestamptz <= date` drops the as-of DAY](reference_timestamptz_vs_date_excludes_the_as_of_day.md)** — promotes to midnight; ⚠ **Lock 15/ADR-011 D19 states the filter in exactly this defective form**. Use `< (D+1)`; fix by amendment.
-- **[Subtransaction xids break same-txn checks](reference_subtransaction_xid_breaks_same_txn_checks.md)** — a plpgsql EXCEPTION block gets its own xid; use `pg_visible_in_snapshot`, and route the success leg through the real function.
-- **[GUC locality is NOT checkable](reference_guc_locality_is_not_checkable.md)** — `current_setting` cannot tell `SET LOCAL` from session-level, and an undeclared custom GUC is absent from `pg_settings` entirely; the natural QA leg goes RED, correctly.
-- **[The TimeZone pin is a default, not a fence](reference_timezone_pin_is_a_default_not_a_fence.md)** — `061` pins the DB default; `PGTZ` moves a client's own session. Make timestamptz/date comparisons invariant BY MARGIN (>26h zone span).
-- **[pgTAP `isnt()` PASSES on NULL](reference_pgtap_isnt_passes_on_null.md)** — `IS DISTINCT FROM`, so a negative assertion over a subquery is fail-OPEN; `ok()` fails on NULL. Prove three states.
-- **[A stale worktree listing misreads the tree](reference_stale_worktree_listing_misreads_the_tree.md)** — `ls` answers about the ref you're parked at; use `git ls-tree origin/main`. Twice in one session; Sec's instance nearly became a false accusation.
-- **[A join's key decides its failure DIRECTION](reference_join_key_decides_failure_direction.md)** — surrogate-id keys fail CLOSED under an RLS regression; shared-vocabulary string keys fail OPEN and need an explicit `users_id` conjunct. ⚠ A fence justified as "explicit not inherited" invites its own removal.
-- **[A mermaid `;` terminates a statement INSIDE quotes](reference_mermaid_semicolon_terminates_inside_quotes.md)** — renders as a bare "Syntax error in text"; grep/diff cannot see it. Harness the vendored lib and read the parse error.
-- **[A `p_users_id` on an INVOKER helper fails SILENT](reference_p_users_id_on_an_invoker_helper_fails_silent.md)** — a foreign id returns EMPTY, not an error; ruled twice (`105`, `101`). Bind an identity, never pass an id. ⚠ singular-vs-plural claims GUC.
-- **[A ratified DDL sketch can be UNBUILDABLE](reference_ratified_ddl_sketch_can_be_unbuildable.md)** — R1's `NOT NULL` payload vs the cron's draft-first write; a delegated-DDL-call clause licenses realizing it, never re-opening. Test sketches against sibling rulings about write ORDER.
-- **[An ADR-named function's SEMANTICS can move under its name](reference_adr_named_function_semantics_can_move_under_the_name.md)** — `105` re-cut `fn_nav_composition`'s leaf set; the identifier still resolves, so no grep catches it. Read the live body's row set.
-- **[A Lock's join list is a DATED artifact](reference_lock_join_lists_are_dated_artifacts.md)** — Lock 11 names `pfin.nav`, which never existed; Lock 12 names `plaid_items.state`, folded at `015`. The RULING stands; grep the identifiers.
-- **[The PDF worker PULLS HTML; it is not pushed JSON](reference_pdf_worker_pulls_html_it_is_not_pushed_json.md)** — ARCH §3.2 + Lock 13 + RT-21 agree; 3 V1.5 ACs inverted it, borrowing provider-sync's admission hop. Direction decides who owns escaping.
-- [RLS qual privilege semantics](reference_rls_qual_privilege_semantics.md) — policy quals call by stored OID, so schema USAGE is never re-checked; a harness missing the bootstrap's REVOKEs is more permissive than prod.
-- **[Named vs predicate exclusion: opposite visibility instruments](reference_named_vs_predicate_exclusion_visibility.md)** — listing a predicate-excluded value in the named-exclusion set turns a LOUD failure silent; two constants + a COMPLEMENT leg (raw minus filtered == named set) collapses the totality trade; a watcher that exists is not armed.
-- **[Prove the rule ONCE; prove SURVIVAL per composer](reference_prove_rule_once_survival_per_composer.md)** — "tested once not N times" is an inventory ruling, not fresh SQL; D19's created-ON-D leg RULED DISTRIBUTIVE — every reader-composer owes one.
-- **[A return SHAPE can discharge an equivalence obligation](reference_return_shape_can_discharge_an_equivalence_obligation.md)** — two states that must mean one thing belong in the TYPE, not in consumer discipline; "a handler anticipating only one diverges" is the tell.
-- **[ADR-063 numbers protocols as ITEMS, not Decisions](reference_adr063_numbers_protocols_as_items.md)** — "ADR-063 Decision 3" is malformed and I shipped it into merged bytes; grep `^### Decision` before citing `Decision N`.
-- **[A WebFetch summary of a NUMERIC TABLE is a hallucination surface](feedback_webfetch_summary_of_a_numeric_table_is_a_hallucination_surface.md)** — it returned 2023/2024 IRS figures from a 2026 Rev. Proc.; pull the primary bytes (`pdftotext -layout`). ⚠ WebFetch 403 ≠ unavailable.
-- **[Mirror a function from the CATALOG, not the file](feedback_mirror_a_function_from_the_catalog_not_the_file.md)** — a `CREATE OR REPLACE` chain leaves every superseded body greppable; the replacing migration is often named after something else. Measured: the copy did not parse.
-- **[CREATE OR REPLACE resets volatility](reference_create_or_replace_resets_volatility.md)** — silently erases an `ALTER … STABLE` pin, invisible to every value assertion; pin per SIGNATURE, and a STABLE caller of a VOLATILE callee is an unbacked promise.
-- **[A handed-down `grep -c … = 0` criterion can be UNSATISFIABLE](feedback_a_handed_down_grep_criterion_can_be_unsatisfiable.md)** — correct figures held the digit run; report the residual + tight predicates, never edit content to hit a count. ⚠ Run it case-insensitively first.
-- **[A ROWS window frame satisfies a 12-period guard across a gap](reference_rows_frame_satisfies_the_count_across_a_gap.md)** — it counts ROWS, not periods; measured 12-vs-1 against RANGE over an integer month ordinal. Interval offsets clamp at month end.
-- **[Count function EVALUATIONS with `track_functions` + `pg_stat_user_functions`](reference_count_function_evaluations_with_track_functions.md)** — a once-referenced CTE INLINES, so each dereference re-evaluates (measured 4->1 via `materialized`); the empty-search_path SET is why the callee is countable; stats flush on a >=1s interval.
-- **[The fence scans the prose ABOUT the fence](feedback_the_fence_scans_the_prose_about_the_fence.md)** — a banned literal in your commit message blocks the commit, and again in the command you use to fix it. Describe, never quote.
-- **[A bare `numeric` admits ±Infinity](reference_bare_numeric_admits_infinity.md)** — the two-sided NaN CHECK does NOT catch it; the TYPMOD refuses it at coercion. Two halves, different values, neither sufficient alone.
-- **[A CHECK violation is reported in constraint-NAME order](reference_check_violation_reported_in_constraint_name_order.md)** — not creation order; an overlapping new constraint is MASKED by an alphabetically-earlier sibling, and a rename silently reds every name-anchored leg.
-
-- [Scratch DB for migration clean-apply](reference_scratch_db_for_migration_verify.md) — createdb on :54322 + **container-side** pg_dump of `auth` (local pg_dump is v14, refuses 17.6); nav_daily needs `app.nav_computed_for`.
+- [D3 entries record ORIGINAL provenance](reference_decision3_entries_record_original_provenance.md) — re-targets live in AMENDMENTS; the entry is never edited.
+- [`WITH CHECK` is a POLICY, not a CHECK constraint](reference_with_check_is_a_policy_not_a_check_constraint.md) — subqueries, survives replica; "every fence is a trigger" is dated.
+- [A BEFORE ROW trigger can't see later rows in the statement](reference_before_row_trigger_cannot_see_later_rows.md) — SET-property fences need a deferred CONSTRAINT TRIGGER.
+- [A fail-closed lock in a DEFERRED fence can block CASCADE DELETE](reference_a_fail_closed_lock_in_a_deferred_fence_can_block_cascade_delete.md) — judge the empty SET before the empty LOCK.
+- [`SET CONSTRAINTS ALL IMMEDIATE` reproduces the commit interleave](reference_set_constraints_immediate_reproduces_the_commit_interleave.md) — deterministic two-session skew race.
+- [A BEFORE ROW fence makes its FK UNREACHABLE](reference_before_row_fence_makes_the_fk_unreachable.md) — P0001 not 23503; replica skips fence AND FK.
+- [account_trans and account are fenced DIFFERENTLY](reference_account_trans_and_account_are_fenced_differently.md) — ACL-JOIN vs users_id; an INNER join fails OPEN.
+- [Fence reachability is a property of the CALLER](reference_fence_reachability_is_a_property_of_the_caller.md) — say DORMANT + name the revival condition.
+- ["No FK on this column" ≠ "no FK in the lineage"](reference_no_fk_on_column_is_not_no_fk_in_lineage.md) — sweep upstream of every FK-less mirror column.
+- [A reserved id range needs a MAXVALUE](reference_reserved_id_range_needs_a_maxvalue.md) — an offset alone is disjoint by distance; assert from `pg_sequence`.
+- [`rollback` does NOT reset sequences](reference_rollback_does_not_reset_sequences.md) — ⚠ a re-used scratch DB hides the class; rebuild before full-suite claims.
+- **[db-template scripts supersede the scratch recipes](reference_db_template_scripts_supersede_the_scratch_recipes.md)** — canonical build+clone; ⚠ they export PGPASSWORD, your psql does not (it HANGS).
+- [Prove a delta is comment/string-only](reference_prove_a_delta_is_comment_string_only.md) — normalize both revisions, diff; inversion-prove the normalizer or it's decoration.
+- [Scratch-DB recipe for a clean chain apply](reference_scratch_db_full_chain_recipe.md) — container `pg_dump`, load as `supabase_admin`, all-lowercase name.
+- [Catalog-comment staleness needs the CATALOG](feedback_catalog_comment_staleness_needs_the_catalog.md) — grepping source over-reports staleness.
+- [`set local` outside a transaction is a silent no-op](feedback_set_local_outside_transaction_is_a_noop.md) — a vacuous harness looks PERMISSIVE. Control leg first.
+- [`user_settings` can never carry the aal2 clause](reference_user_settings_excluded_from_aal2_backstop.md) — `025` non-negotiable exclusion (policy recursion).
+- [manual_valuation OUTRANKS every feed in the price pick](reference_manual_valuation_outranks_feeds_in_price_pick.md) — ⚠ no `market_feed` writer exists in V1.
+- [A Σ=0 trial balance can't see a Suspense-absorbed divergence](reference_suspense_branch_absorbs_the_divergence.md) — an omitted column RE-ROUTES a branch.
+- [Freshly-seeded rows are invisible to a PAST as-of](reference_freshly_seeded_rows_are_invisible_to_a_past_as_of.md) — smoke at `current_date`.
+- [`timestamptz <= date` drops the as-of DAY](reference_timestamptz_vs_date_excludes_the_as_of_day.md) — ⚠ Lock 15/D19 states it in exactly this defective form.
+- [Subtransaction xids break same-txn checks](reference_subtransaction_xid_breaks_same_txn_checks.md) — use `pg_visible_in_snapshot`.
+- [GUC locality is NOT checkable](reference_guc_locality_is_not_checkable.md) — the natural QA leg goes RED, correctly.
+- [The TimeZone pin is a default, not a fence](reference_timezone_pin_is_a_default_not_a_fence.md) — make comparisons invariant BY MARGIN (>26h).
+- [Kit passes component `head` through un-nonced](reference_sveltekit_head_passthrough_defeats_css_injected.md) — `css:'injected'` is CSP-blocked silently; ruled out at P6.
+- [pgTAP `isnt()` PASSES on NULL](reference_pgtap_isnt_passes_on_null.md) — fail-OPEN over a subquery; `ok()` fails on NULL. Prove three states.
+- [A stale worktree listing misreads the tree](reference_stale_worktree_listing_misreads_the_tree.md) — use `git ls-tree origin/main`.
+- [A join's key decides its failure DIRECTION](reference_join_key_decides_failure_direction.md) — string keys fail OPEN; add an explicit `users_id` conjunct.
+- [A mermaid `;` terminates a statement INSIDE quotes](reference_mermaid_semicolon_terminates_inside_quotes.md) — grep/diff cannot see it.
+- [A `p_users_id` on an INVOKER helper fails SILENT](reference_p_users_id_on_an_invoker_helper_fails_silent.md) — bind an identity, never pass an id.
+- [A ratified DDL sketch can be UNBUILDABLE](reference_ratified_ddl_sketch_can_be_unbuildable.md) — test sketches against sibling rulings about write ORDER.
+- [An ADR-named function's SEMANTICS can move under its name](reference_adr_named_function_semantics_can_move_under_the_name.md) — read the live body's row set.
+- [A Lock's join list is a DATED artifact](reference_lock_join_lists_are_dated_artifacts.md) — the RULING stands; grep the identifiers.
+- [The PDF worker PULLS HTML; it is not pushed JSON](reference_pdf_worker_pulls_html_it_is_not_pushed_json.md) — ⚠ superseded by R2 (C) 2026-09; verify live.
+- [RLS qual privilege semantics](reference_rls_qual_privilege_semantics.md) — quals call by stored OID; a harness missing the REVOKEs is more permissive than prod.
+- [Named vs predicate exclusion: opposite instruments](reference_named_vs_predicate_exclusion_visibility.md) — a watcher that exists is not armed.
+- [Prove the rule ONCE; prove SURVIVAL per composer](reference_prove_rule_once_survival_per_composer.md) — D19's created-ON-D leg is DISTRIBUTIVE.
+- [A return SHAPE can discharge an equivalence obligation](reference_return_shape_can_discharge_an_equivalence_obligation.md) — put it in the TYPE, not consumer discipline.
+- [ADR-063 numbers protocols as ITEMS, not Decisions](reference_adr063_numbers_protocols_as_items.md) — grep `^### Decision` before citing.
+- [A WebFetch summary of a NUMERIC TABLE hallucinates](feedback_webfetch_summary_of_a_numeric_table_is_a_hallucination_surface.md) — pull primary bytes; 403 ≠ unavailable.
+- [Mirror a function from the CATALOG, not the file](feedback_mirror_a_function_from_the_catalog_not_the_file.md) — superseded bodies stay greppable.
+- [CREATE OR REPLACE resets volatility](reference_create_or_replace_resets_volatility.md) — erases an `ALTER … STABLE` pin invisibly; pin per SIGNATURE.
+- [A handed-down `grep -c … = 0` criterion can be UNSATISFIABLE](feedback_a_handed_down_grep_criterion_can_be_unsatisfiable.md) — report the residual, never edit to hit a count.
+- [A ROWS frame satisfies a 12-period guard across a gap](reference_rows_frame_satisfies_the_count_across_a_gap.md) — it counts ROWS, not periods.
+- [Count function EVALUATIONS with `track_functions`](reference_count_function_evaluations_with_track_functions.md) — a once-referenced CTE INLINES and re-evaluates.
+- [The fence scans the prose ABOUT the fence](feedback_the_fence_scans_the_prose_about_the_fence.md) — describe, never quote, in commit messages.
+- [A bare `numeric` admits ±Infinity](reference_bare_numeric_admits_infinity.md) — the NaN CHECK misses it; the TYPMOD refuses it at coercion.
+- [A CHECK violation reports in constraint-NAME order](reference_check_violation_reported_in_constraint_name_order.md) — an alphabetically-earlier sibling MASKS the new one.
+- [Scratch DB for migration clean-apply](reference_scratch_db_for_migration_verify.md) — container-side `pg_dump` of `auth`; `nav_daily` needs `app.nav_computed_for`.
 
 ## How to work
 
-- **[The repo runs on LOCAL time; agents read UTC](reference_repo_runs_on_local_time_agents_read_utc.md)** — evening datestamps come out a day ahead. ⚠ Treat a wrong date as SYSTEMATIC, not a typo; re-grep the branch, not the file.
-
-- **[A harness divergence arrives as a FINDING](feedback_harness_divergence_arrives_as_a_finding.md)** — a scratch applied as the wrong role produced a specific, plausible role claim I shipped into committed bytes *and* into Sec's review text. Re-measure every role/ownership/ACL claim against the live stack + the CI workflow.
-
-- **[A prose observation needs re-anchoring too](feedback_a_prose_observation_needs_reanchoring_too.md)** — I re-read every sha and md5 in-turn, then reported a wording finding measured on mid-edit bytes. Read the COMMITTED bytes; a mid-edit read is a draft note, not a finding.
-- **[Push with the defect FLAGGED, don't hold](feedback_push_with_flagged_defect_over_holding.md)** — standing preference; a PR is reviewable not ratified state. Hold only if the defect misleads the REVIEW (Summary/test-plan claims).
-- **[A ref handed over is not yours to advance](feedback_a_ref_handed_over_is_not_yours_to_advance.md)** — after "ready at `<sha>`", unknown review state is BLOCKING; a hold in flight can't stop a push already moving. ⚠ Never force-push back to the reviewed sha.
-
-- **[`temp/` is per-worktree, not shared](feedback_temp_is_per_worktree_not_shared.md)** — invisible from a teammate's worktree; hand over an ABSOLUTE path + md5. ⚠ **Committed migrations already cite DELETED temp docs** — never point committed code at `temp/`. ⚠ The session-close SWEEP inherits the blindness and reports clean: 29 files, 9 days old, measured at SELF-330.
-
-- **[A consequence list inherits its author's instrument](feedback_consequence_list_inherits_its_authors_instrument.md)** — re-measure over the instruments the ADR did NOT use (the live catalog, not the tree); and record an obligation whose referent doesn't exist.
-
-- **[Measure the CLAIM, not the conclusion](feedback_joint_review_catches_the_author_shipped_gap.md)** — measuring tests the SEAM; reasoning that replaces a measurement is always locally valid, so triggers must be CLASS-based (every predicate edit owes its matrix), never awareness-based.
-- **[A check I RAN is not a check that EXISTS](feedback_a_check_i_ran_is_not_a_check_that_exists.md)** — name its file:line or you only measured it; inversion-prove watchers; count EXECUTABLE occurrences in `prosrc`.
-- **[Agent worktree location](reference_agent_worktree_location.md)** — now `<repo>/.claude/worktrees/<agent>` (moved 2026-09-06, mid-task); a failing `cd` means RELOCATED, not deleted — run `git worktree list` first.
-- **[Route the SHA, not the description](feedback_route_the_sha_not_the_description.md)** — a joint-review surface on a STACKED branch is a separate review scope; describing it well makes the substitution likelier, not safer.
-- **[A filtered grep is a claim about the FILTER](feedback_a_filtered_grep_is_a_claim_about_the_filter.md)** — the FILE filter counts too; anchor findings by content, not line number; `git merge` never echoes the branch it merged INTO.
-- **[Fix the CITATION, not the referent](feedback_fix_the_citation_not_the_referent.md)** — relocating a mis-cited paragraph moves a control out from under what needed it; cite by CONTENT, not ordinal. ⚠ Scope a citation finding by what you GREPPED, not what you noticed.
-
-- **[A self-authored label hardens into fact](feedback_self_authored_label_hardens_into_fact.md)** — I invented `C1` for symmetry and it reached a commit subject, which has NO supersession mechanism. Grep the dispatch, not your own earlier use.
-
-- **[A Trade-class annotation needs `security_id`; the split child is the only route](reference_trade_class_annotation_needs_security_id.md)** — `030` refuses it, `093` excludes security rows; a cat-fence fixture on the transaction grain FAILS TO SEED and goes green for the wrong reason.
-- **[`psql -c` prints ONLY the last result](feedback_psql_dash_c_prints_only_the_last_result.md)** — intermediate SELECTs vanish silently and read as failures; use `-f` for any multi-statement or `set local role` probe.
-- **[A grep hit in a COMMENT is not a call site](feedback_a_grep_hit_in_a_comment_is_not_a_call_site.md)** — the densest mention of a symbol is often the prose saying it is NOT wired; ⚠ *built but unreached* ≠ *live*. Query the CONSUMER.
-- **[A failed grep looks like a clean result](feedback_failed_grep_looks_like_a_clean_result.md)** — zsh eats a bare `--include=*.ts`; empty output reads as "no matches". Over-match + hand-filter. ⚠ Run the package script, not the bare tool (`svelte-check` w/o `sync` = false positives).
-- **[A "clean sweep" is a claim about your FILTER](feedback_clean_sweep_claim_is_a_claim_about_the_filter.md)** — over-match bare + `-i`, then hand-filter; zero hits is more suspicious than explained hits. Survivors hide in adjacent-reads-as-fixed positions.
-- **[A count over history is not a count over live definitions](feedback_count_over_history_vs_live_definitions.md)** — 6 textual kernel copies vs 3 live; a CI fence specced from the historical count goes RED on correct code. Case-insensitive grep, or `059` reads as empty.
-
-- **["No concept exists today" needs an ADR grep, not a DDL sweep](feedback_no_concept_exists_check_deferred_decisions.md)** — a ratified-but-DEFERRED decision leaves zero DDL trace; a read helper's string literals ARE a schema surface. The inverse of the line below.
-- **[A ratified name is not a built table](feedback_ratified_name_is_not_a_built_table.md)** — the whole Lock-14 settings family was named in 6 artifacts with ZERO DDL; grep migrations first, and the shape you ratify templates every unbuilt sibling.
-- **[Scope the invariant before writing it](feedback_scope_the_invariant_before_writing_it.md)** — "always equal / NULL together" is usually falsified by the surface's own NULL-cause rows. One message in a draft; a migration after merge.
-- **[A diff of two outputs proves nothing until both are non-empty](feedback_diff_of_two_outputs_proves_nothing_until_nonempty.md)** — two empty captures diff as IDENTICAL; `wc -l` both in the same command as the diff.
-- **[A banned command's STRING blocks the commit message](feedback_a_banned_command_string_blocks_the_commit_message.md)** — the guard scans the Bash command text, so the fix-up script quoting it is blocked too. Say what you did, not what you avoided.
-- **[A delivery preamble becomes repo bytes](feedback_delivery_preamble_becomes_repo_bytes.md)** — a teammate's header is addressed to YOU and ships as a status claim; diff it against a landed sibling, and mine it before stripping.
-- **[Verify the bytes you commit](feedback_verify_the_bytes_you_commit.md)** — copy FIRST, then verify the copy. Verifying a teammate's source and copying later let a concurrent edit in; my commit message then described bytes I never checked.
-- **[An incoming message is not newer state](feedback_incoming_message_is_not_newer_state.md)** — a holder doc describes its own moment, not a status feed. ⚠ Also the inverse: a stale "you didn't do it" poke gets MEASURED, never redone (ship an **md5** — it ends it in one round); an **unpushed** branch makes every origin-anchored check read as *never done*.
-- **[Address teammates by NAME, not agent type](feedback_address_teammates_by_name_not_type.md)** — `frontend` not `frontend-engineer`; ⚠ `ListAgents` cannot see in-process teammates, so its silence is not absence.
-
-- **[Search the record for the RULING, not only the tree for the mechanism](feedback_search_the_record_for_the_ruling_not_only_the_tree.md)** — a correct measurement licenses no claim of NOVELTY; your own prior records are external sources.
-- **[A rationale home is not an enforcement home](feedback_a_rationale_home_is_not_an_enforcement_home.md)** — an ADR answers WHY, and is never open when the mistake is made; name the enforcement home too, and say "not discharged".
-- **[Watcher, not fence, for by-construction properties](feedback_watcher_not_fence_for_by_construction_properties.md)** — a constraint over a guaranteed property can't fire and turns a future regression into an outage. Test it instead.
-- **[A bigint crosses a wire as a STRING](reference_bigint_crosses_a_wire_as_a_string.md)** — TS claims `number`, driver returns a string; both sides' unit tests pass because neither crosses the wire. ⚠ A silent failure branch hides the outage.
-- **[Layers green, seam absent](feedback_layers_green_seam_absent.md)** — a stub-tested suite proves each piece works ALONE. Grep call sites of every new module; walk it in a browser. ⚠ A defensive default hides the gap.
-- **[Spot-check the contract at its consumer](feedback_spot_check_the_contract_at_its_consumer.md)** — authoring ≠ watching it land; a predicate sound in isolation can be unsound as a stand-in for a broader question. Test where implementations DIVERGE.
-- **[A structural fence must cover the same class](feedback_structural_fence_must_cover_the_same_class.md)** — swapping a deny-list for a structural property removes a watcher unless the sets match. Two classes → two legs.
-- **[A span-replace between two anchors swallows the middle](feedback_span_replace_between_anchors_swallows_the_middle.md)** — it deleted a whole ruled block; the tell was the line count moving the WRONG WAY. Predict the delta; `grep -c` the neighbours.
-- **[Diff filters strip `--` comment lines](feedback_diff_filter_strips_comment_lines.md)** — `grep '^[+-][^+-]'` blinds you to comment changes; use `--numstat`. Bit me twice in one session.
-- **[A cited precedent transmits its RETRACTED half](feedback_cited_precedent_transmits_its_retracted_half.md)** — ADR-042 already corrected the "RLS-exempt writer only" claim for #16; I cited its rationale and reproduced the retraction into 4 surfaces. Grep the ADR for later amendments before citing.
-- **[Prove derived text against its source](feedback_prove_derived_text_against_its_source.md)** — rebuild from source + named substitutions (fidelity by construction); a period inside quote marks claims the sentence ended; ⚠ **verbatim carry is safe for claims, UNSAFE for indexicals** ("here" re-points with no edit) **and for FIGURES** — a byte-exact quote of a wrong number passes every fidelity check, so measure what you quote and check a count against its own enumeration.
-- [A fixture is shared state](feedback_fixture_is_shared_state.md) — a per-leg fixture edit is a global edit; "all fixture, no assertion logic" means re-derive every leg.
-- [Path beats paste for reviewable artifacts](feedback_path_beats_paste_for_reviewable_artifacts.md) — a path can be grepped; a paste adds a transcription surface. Name which path — not the shared read anchor.
+- [The repo runs on LOCAL time; agents read UTC](reference_repo_runs_on_local_time_agents_read_utc.md) — treat a wrong date as SYSTEMATIC.
+- [A harness divergence arrives as a FINDING](feedback_harness_divergence_arrives_as_a_finding.md) — re-measure every role/ownership/ACL claim against the live stack.
+- [A prose observation needs re-anchoring too](feedback_a_prose_observation_needs_reanchoring_too.md) — read COMMITTED bytes; a mid-edit read is a draft note.
+- [Push with the defect FLAGGED, don't hold](feedback_push_with_flagged_defect_over_holding.md) — hold only if the defect misleads the REVIEW.
+- [A ref handed over is not yours to advance](feedback_a_ref_handed_over_is_not_yours_to_advance.md) — never force-push back to a reviewed sha.
+- [`temp/` is per-worktree, not shared](feedback_temp_is_per_worktree_not_shared.md) — hand over an ABSOLUTE path + md5; never cite it from committed code.
+- [A consequence list inherits its author's instrument](feedback_consequence_list_inherits_its_authors_instrument.md) — re-measure over instruments the ADR did NOT use.
+- [Measure the CLAIM, not the conclusion](feedback_joint_review_catches_the_author_shipped_gap.md) — triggers must be CLASS-based, never awareness-based.
+- [A check I RAN is not a check that EXISTS](feedback_a_check_i_ran_is_not_a_check_that_exists.md) — name its file:line; inversion-prove watchers.
+- [Agent worktree location](reference_agent_worktree_location.md) — `<repo>/.claude/worktrees/<agent>`; a failing `cd` means RELOCATED.
+- [Route the SHA, not the description](feedback_route_the_sha_not_the_description.md) — a stacked branch is a separate review scope.
+- [A filtered grep is a claim about the FILTER](feedback_a_filtered_grep_is_a_claim_about_the_filter.md) — anchor findings by content, not line number.
+- [Fix the CITATION, not the referent](feedback_fix_the_citation_not_the_referent.md) — cite by CONTENT, not ordinal.
+- [A self-authored label hardens into fact](feedback_self_authored_label_hardens_into_fact.md) — grep the dispatch, not your own earlier use.
+- [A Trade-class annotation needs `security_id`](reference_trade_class_annotation_needs_security_id.md) — the split child is the only route; fixtures fail to seed.
+- [`psql -c` prints ONLY the last result](feedback_psql_dash_c_prints_only_the_last_result.md) — use `-f` for any multi-statement probe.
+- [A grep hit in a COMMENT is not a call site](feedback_a_grep_hit_in_a_comment_is_not_a_call_site.md) — built-but-unreached ≠ live. Query the CONSUMER.
+- [A failed grep looks like a clean result](feedback_failed_grep_looks_like_a_clean_result.md) — zsh eats a bare `--include=*.ts`; over-match + hand-filter.
+- [A "clean sweep" is a claim about your FILTER](feedback_clean_sweep_claim_is_a_claim_about_the_filter.md) — zero hits is more suspicious than explained hits.
+- [A count over history ≠ a count over live definitions](feedback_count_over_history_vs_live_definitions.md) — a fence specced from history reds correct code.
+- ["No concept exists today" needs an ADR grep](feedback_no_concept_exists_check_deferred_decisions.md) — a deferred decision leaves zero DDL trace.
+- [A ratified name is not a built table](feedback_ratified_name_is_not_a_built_table.md) — grep migrations first; the shape you ratify templates its siblings.
+- [Scope the invariant before writing it](feedback_scope_the_invariant_before_writing_it.md) — "always equal/NULL together" is usually falsified by NULL-cause rows.
+- [A diff of two outputs proves nothing until both are non-empty](feedback_diff_of_two_outputs_proves_nothing_until_nonempty.md) — `wc -l` both in the same command.
+- [A banned command's STRING blocks the commit message](feedback_a_banned_command_string_blocks_the_commit_message.md) — say what you did, not what you avoided.
+- [A delivery preamble becomes repo bytes](feedback_delivery_preamble_becomes_repo_bytes.md) — mine it before stripping; diff against a landed sibling.
+- [Verify the bytes you commit](feedback_verify_the_bytes_you_commit.md) — copy FIRST, then verify the copy.
+- [An incoming message is not newer state](feedback_incoming_message_is_not_newer_state.md) — a stale poke gets MEASURED (ship an md5), never redone.
+- [Address teammates by NAME, not agent type](feedback_address_teammates_by_name_not_type.md) — `ListAgents` can't see in-process teammates.
+- [Search the record for the RULING, not only the tree](feedback_search_the_record_for_the_ruling_not_only_the_tree.md) — your own prior records are external sources.
+- [A rationale home is not an enforcement home](feedback_a_rationale_home_is_not_an_enforcement_home.md) — name the enforcement home; say "not discharged".
+- [Watcher, not fence, for by-construction properties](feedback_watcher_not_fence_for_by_construction_properties.md) — a constraint that can't fire turns a regression into an outage.
+- [A bigint crosses a wire as a STRING](reference_bigint_crosses_a_wire_as_a_string.md) — both sides' unit tests pass because neither crosses the wire.
+- [Layers green, seam absent](feedback_layers_green_seam_absent.md) — grep call sites of every new module; walk it in a browser.
+- [Spot-check the contract at its consumer](feedback_spot_check_the_contract_at_its_consumer.md) — test where implementations DIVERGE.
+- [A structural fence must cover the same class](feedback_structural_fence_must_cover_the_same_class.md) — two classes → two legs.
+- [A span-replace between two anchors swallows the middle](feedback_span_replace_between_anchors_swallows_the_middle.md) — predict the delta; `grep -c` the neighbours.
+- [Diff filters strip `--` comment lines](feedback_diff_filter_strips_comment_lines.md) — use `--numstat`.
+- [A cited precedent transmits its RETRACTED half](feedback_cited_precedent_transmits_its_retracted_half.md) — grep the ADR for later amendments before citing.
+- [Prove derived text against its source](feedback_prove_derived_text_against_its_source.md) — verbatim carry is UNSAFE for indexicals and for FIGURES.
+- [A fixture is shared state](feedback_fixture_is_shared_state.md) — a per-leg fixture edit is a global edit.
+- [Path beats paste for reviewable artifacts](feedback_path_beats_paste_for_reviewable_artifacts.md) — name which path, not the shared read anchor.
