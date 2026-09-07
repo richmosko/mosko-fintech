@@ -309,3 +309,6 @@ Sec-c's verdict placed verbatim at `self356-sec-review.md`. The one-way door hol
 
 ### E99 — P6's secrets scan GREEN via a one-fingerprint `.gitleaksignore` (`cab9866` on `feature/self-358`); DevOps-e stopped · TEAM-LEAD · 2026-09-07
 Verified from the tree: two commits on `63cbad0` — the inline allow (`2f7591b`, kept as documentation) and the repo-root `.gitleaksignore` carrying exactly one fingerprint (`a6107187…:api/vite.report-css.config.mjs:generic-api-key:40`) with a comment naming the rule, the file, the reason and the log entries; the gitleaks job on #652 passes (run 34093408218). The file sits in P6's diff range, so Sec grades it inside the mandatory read. P6's tip for the Sec dispatch is `cab9866`; the walk is valid at `63cbad0` or `cab9866`. #652 touches `.github/workflows/`, so `main` is brought in by a local merge and an SSH push once P4 has merged, not by `gh pr update-branch`.
+
+### E100 — P4 (SELF-356, PR #651) MERGED at `df7d015`: the one-way door on `main`; P6 is the last surface · TEAM-LEAD · 2026-09-07
+Walk GREEN (E96), Sec GREEN at the frozen sha (E98), CI CLEAN at `a9ec403`, merge-tree CLEAN in the merge turn. Remote branch deleted. `main` now carries every V1.5 surface except P6 (walk in progress) and the P10 verdict. P6's branch gets `main` by a local merge in a team-lead detached worktree and an SSH push (workflow-touching PR).
