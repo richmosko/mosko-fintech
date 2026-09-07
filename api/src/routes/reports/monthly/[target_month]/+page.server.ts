@@ -81,7 +81,7 @@ import {
 	EMPTY_CASHFLOW_ROW_STALENESS,
 	type CashflowRowStalenessMap
 } from '$lib/server/queries/cashflowContributors';
-import { userSuppliedAsOf } from '$lib/server/time/asOf';
+import { storedAsOf } from '$lib/server/time/asOf';
 import type { PageServerLoad } from './$types';
 
 type MonthlyReportRow = MonthlyReportHeader & { rendered_payload: MonthlyReportPayload | null };
@@ -213,13 +213,15 @@ export const load: PageServerLoad = async ({ locals, url, params }) => {
 	};
 
 	// (2) Cash Flow per-row map (AC4's shipped V1.3 shape, reused verbatim) — at the report's OWN
-	// `data_as_of` (Lock 15), never today's date. `userSuppliedAsOf` re-brands an already-
-	// validated stored date (`row.data_as_of` is real by construction — 108's own column type),
-	// the same factory every other "already have a real DB date" call site in this tree uses.
+	// `data_as_of` (Lock 15), never today's date. `storedAsOf` re-brands an already-real stored
+	// date (`row.data_as_of` — 108's own column type) — the factory for a DB-derived date (V1.5
+	// aal2/asOf close-out follow-up, Sec self360-sec-review.md shape (a)). `userSuppliedAsOf`
+	// stays reserved for an ACTUAL client-supplied as-of, which this is not — see asOf.ts's own
+	// module header for why the two factories must not be conflated.
 	let cashflowRowStaleness: CashflowRowStalenessMap = EMPTY_CASHFLOW_ROW_STALENESS;
 	if (staleAccountIds !== null) {
 		try {
-			const contributors = await loadCashflowContributors(locals.supabase, userSuppliedAsOf(row.data_as_of));
+			const contributors = await loadCashflowContributors(locals.supabase, storedAsOf(row.data_as_of));
 			if (contributors !== null) {
 				cashflowRowStaleness = computeCashflowRowStaleness(contributors, staleAccountIds);
 			}
