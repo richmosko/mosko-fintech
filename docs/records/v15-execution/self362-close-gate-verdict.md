@@ -117,3 +117,9 @@ Consistent with the original measurement (122.391 ms cold / 110.325 ms warm) wit
 **V1.5 close-gate: PASS at `ab92187fd3830039eb904371de9c775533cb2f23`.**
 
 Two disclosed residuals, neither blocking: (1) `self362_v15_close_gate.sql`'s citation of `TestImpersonationInvariants` should read `TestImpersonationAssertion` (the cited methods are real and green under the correct name); (2) the same file's AC11 pending-queue prose ("P5 not yet merged") is stale now that P5 is on `main` — the underlying RLS-inheritance conclusion was re-verified directly and still holds. Both are doc-only fixes for a follow-up commit to the close-gate file, not gaps in coverage.
+
+---
+
+## Addendum — Sec ratification (2026-09-07; `self362-close-gate-ratification.md`)
+
+RATIFIED at `main` = `ab92187` (md5 of this file as read by Sec: `b9df4dbbbc09f230d26b408b23dd868d`, computed independently). The one grep-only citation — `111` LEG 10 (AC9), unexecuted locally because `111` aborts at LEG 8-i's EXPECTED-DIFFERENT-LOCALLY dblink leg (36 planned / 26 ran; the 2893-vs-2903 count difference is exactly those ten legs) — is discharged by CI evidence: run 34142070004 on `01a39c1` reported Files=110, Tests=2903, Result: PASS with zero `not ok`, which includes all 36 of `111`'s legs; `01a39c1..a115830` changes zero executable lines (two-sided filter; `plan(54)`/54-assertion parity) and `a115830..ab92187` is a merge commit only, so the evidence carries to `ab92187` by executable identity. The two doc-only residuals disclosed above are corrected in the close-gate file on `main` by PR #655.
