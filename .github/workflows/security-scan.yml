@@ -767,6 +767,72 @@ jobs:
           # org owner, surface the license-key requirement to the secrets-manifest
           # work at Phase 5 Step 8.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # SAME INSTRUMENT as fence-gitleaksignore-inversion's checksum-pinned
+          # binary below (Sec ruling, 2026-09-07): pin this gate to the identical
+          # gitleaks version the golden inversion fixture validates against, so
+          # the two never silently drift apart. Bump both together.
+          GITLEAKS_VERSION: 8.24.3
+
+  fence-gitleaksignore-inversion:
+    name: Gitleaksignore inversion — fingerprint-scoping golden fixture
+    runs-on: ubuntu-latest
+    # SELF-358 / P6 — Sec's grading criterion (pre-brief, 2026-09-07), verbatim:
+    # "plant a new fake secret in a file that already has a suppressed
+    # fingerprint and confirm the scan still REDs ... as a golden fixture
+    # rather than a claim — a green run cannot distinguish caught-nothing
+    # from scanned-nothing." See scripts/ci/fence-gitleaksignore-inversion.sh
+    # for the full mechanism (positive control + inversion + shape check).
+    #
+    # This job is deliberately NOT added to .github/required-contexts.tsv here
+    # — that is a branch-protection change (F/CTO territory per the DevOps
+    # role's Escalate list), out of scope for this fixture-only wiring.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history — the fence scans a base^..head commit range
+
+      - name: Install gitleaks 8.24.3 (pinned; checksum-verified; no unpinned curl|sh)
+        run: |
+          set -euo pipefail
+          GITLEAKS_VERSION="8.24.3"
+          # Pinned to the exact release asset gitleaks-action@v2 itself bundles
+          # for this version; sha256 taken from the release's own
+          # gitleaks_8.24.3_checksums.txt (gitleaks/gitleaks GitHub release), not
+          # recomputed from an unverified download.
+          GITLEAKS_SHA256="9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c"
+          ASSET="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSLo "$ASSET" "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${ASSET}"
+          echo "${GITLEAKS_SHA256}  ${ASSET}" | sha256sum -c -
+          tar xzf "$ASSET" gitleaks
+          chmod +x gitleaks
+          sudo mv gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Gitleaksignore inversion fence (production-mode; real .gitleaksignore)
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          if [ -z "$BASE_SHA" ]; then
+            BASE_SHA="$(git merge-base origin/main HEAD)"
+          fi
+          bash scripts/ci/fence-gitleaksignore-inversion.sh --base "$BASE_SHA"
+
+      - name: Shape-check inversion-mode (golden violation fixture; expects violation)
+        # Proves leg (c)'s own discriminator: if the shape check reports clean
+        # against a fixture that is deliberately malformed, the check is
+        # unverified/broken — fail closed (mirrors every other fence's paired
+        # golden-fixture convention in this workflow).
+        run: |
+          set +e
+          bash scripts/ci/fence-gitleaksignore-inversion.sh --shape-check-only tests/fixtures/ci/gitleaksignore-malformed
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then
+            echo "FATAL: shape check reported clean against the malformed fixture — the leg (c) discriminator is broken; failing closed."
+            exit 1
+          fi
+          echo "OK: shape check caught the fixture violation (exit $rc)."
 
   secrets-nonoverlap:
     name: Secrets manifest — CI/production non-overlap
