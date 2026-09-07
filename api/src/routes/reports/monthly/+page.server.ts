@@ -38,6 +38,10 @@
 
 import { error, fail, redirect } from '@sveltejs/kit';
 import { serverTodayAsOf } from '$lib/server/time/asOf';
+import { noLedgerDesignated, type MonthlyReportPayload } from '$lib/monthly-report';
+import { skipFinalizeSchema } from '$lib/server/schemas/monthly-report-finalize';
+import { fieldErrors } from '$lib/server/schemas/account';
+import type { PostgrestError } from '@supabase/supabase-js';
 import type { Actions, PageServerLoad } from './$types';
 
 const MONTH_START_RE = /^\d{4}-\d{2}-01$/;
@@ -79,6 +83,10 @@ export type PendingEntry = {
 	reportId: number;
 	targetMonth: string;
 	monthLabel: string;
+	// P4 (SELF-356 AC4) — see this file's `load()` for how this is derived (composed draft
+	// payload's own tax-authority exclusion envelope, not a second query). Fail-soft `false` on a
+	// composition-read failure — a missed nudge, never a blocked/broken listing page.
+	noLedgerDesignated: boolean;
 };
 
 type CandidateState = 'none' | 'draft' | 'final';
@@ -144,18 +152,79 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
 	// AC2: one pending item per month (at most one live draft per month, 108's sibling partial
 	// unique index) — "pending" means awaiting COMMENTARY, not a job-state queue.
-	const pending: PendingEntry[] = allRows
-		.filter((r) => r.generation_status === 'draft')
-		.map((r) => ({
-			reportId: r.report_id,
-			targetMonth: r.target_month,
-			monthLabel: monthLabel(r.target_month)
-		}));
+	//
+	// P4 (SELF-356 AC4, R1 rider 6) — each pending item ALSO carries `noLedgerDesignated`, derived
+	// from composing that draft's OWN payload via `fn_render_monthly_report(target_month,
+	// data_as_of)` — the SAME live-compose call `[target_month]/+page.server.ts` already makes for
+	// a draft's own render, not a new dedicated query. One RPC per pending row: bounded in ordinary
+	// V1 use (at most the two `?/generate` candidate months plus any month a user has re-opened via
+	// `?/regenerate` and not yet re-finalized), but JUDGMENT CALL flagged at hand-off — nothing
+	// structurally caps how many drafts could accumulate pending over time, and this is full
+	// report composition run purely to read one boolean off it. Fail-soft per row: a composition
+	// failure degrades that row's own `noLedgerDesignated` to `false` (a missed nudge, never a
+	// blocked listing page — "a prompt, not a block" extends to its own read failing, too).
+	const draftRows = allRows.filter((r) => r.generation_status === 'draft');
+	const pending: PendingEntry[] = await Promise.all(
+		draftRows.map(async (r) => {
+			let flagged = false;
+			try {
+				const { data: composed, error: renderErr } = await locals.supabase
+					.schema('pfin')
+					.rpc('fn_render_monthly_report', {
+						p_target_month: r.target_month,
+						p_data_as_of: r.data_as_of
+					});
+				if (!renderErr && composed) {
+					flagged = noLedgerDesignated(composed as MonthlyReportPayload);
+				}
+			} catch (err) {
+				console.error(
+					'[reports/monthly] pending-item payload composition threw; degrading noLedgerDesignated to false:',
+					err
+				);
+			}
+			return {
+				reportId: r.report_id,
+				targetMonth: r.target_month,
+				monthLabel: monthLabel(r.target_month),
+				noLedgerDesignated: flagged
+			};
+		})
+	);
 
 	const candidates = candidatesFor(allRows, serverTodayAsOf());
 
 	return { generated, pending, candidates };
 };
+
+/** Maps a `pfin.fn_finalize_monthly_report` failure to a clean 4xx/5xx — mirrors
+ *  `[target_month]/commentary/+page.server.ts`'s own `mapSaveError` precedent for the sibling 112
+ *  write path. 115 raises both of its user-reachable refusals as plain `RAISE EXCEPTION` (default
+ *  SQLSTATE `P0001`, no discriminating code) — its own header states the "no live draft" refusal
+ *  is DELIBERATELY non-discriminating ("absent / not-yours / already-final ... under RLS those are
+ *  one condition and separating them leaks existence"), and this app's own two call sites always
+ *  pass a literal `'authored'`/`'skipped'` disposition (never client-supplied), so the "invalid
+ *  disposition" refusal is a defensive DB-side check against a caller this app never is, not a
+ *  case this mapper needs to discriminate either — one generic sentence covers both P0001 cases,
+ *  same non-disclosure-by-construction posture as `mapSaveError`. */
+function mapFinalizeError(error: PostgrestError): { status: number; message: string } {
+	switch (error.code) {
+		case '42501':
+			return {
+				status: 403,
+				message: 'This action requires a freshly verified session. Please step up and try again.'
+			};
+		case 'P0001':
+			return {
+				status: 400,
+				message:
+					'Could not finalize this report — it may already be finalized, or no longer exists. Refresh and try again.'
+			};
+		default:
+			console.error('[reports/monthly] unexpected finalize error:', error.code, error.message);
+			return { status: 500, message: 'Something went wrong. Please try again.' };
+	}
+}
 
 export const actions: Actions = {
 	generate: async ({ request, locals }) => {
@@ -207,5 +276,44 @@ export const actions: Actions = {
 		}
 
 		throw redirect(303, `/reports/monthly/${targetMonth.slice(0, 7)}/commentary`);
+	},
+
+	// P4 (SELF-356 AC1/AC5) — "Skip commentary and finalize", the pending list's own secondary CTA
+	// (inline two-step confirm in the component, never window.confirm — see
+	// PendingMonthlyReportItem.svelte / SkipFinalizeControl.svelte). Calls 115 with the `'skipped'`
+	// disposition, the DURABLE authored-vs-skipped fact (R12(A): a skipped month does not count
+	// toward SELF-365's N=2 gate) — skip is a first-class V1 affordance, not a workaround (AC1).
+	// `p_commentary_disposition` is this action's OWN literal, never a posted field (see
+	// monthly-report-finalize.ts's own header).
+	skip: async ({ request, locals }) => {
+		const { user } = await locals.safeGetSession();
+		if (!user) return fail(401, { errors: { _form: ['You must be signed in.'] } });
+
+		const form = await request.formData();
+		// Whole-form parse (not a hand-picked single field) so `.strict()` actually fences a stray
+		// posted field — a manual `form.get('target_month')` extraction would silently ignore
+		// anything else in the body, making the mass-assignment mirror decorative rather than real.
+		const parsed = skipFinalizeSchema.safeParse(Object.fromEntries(form));
+		if (!parsed.success) {
+			return fail(400, { errors: fieldErrors(parsed.error) });
+		}
+
+		const { data: reportId, error: rpcError } = await locals.supabase
+			.schema('pfin')
+			.rpc('fn_finalize_monthly_report', {
+				p_target_month: parsed.data.target_month,
+				p_commentary_disposition: 'skipped'
+			});
+
+		if (rpcError || typeof reportId !== 'number') {
+			const { status, message } = rpcError
+				? mapFinalizeError(rpcError)
+				: { status: 500, message: 'Something went wrong. Please try again.' };
+			return fail(status, { errors: { _form: [message] } });
+		}
+
+		// AC6 / P2's final view — the promotion is 115's own UPDATE; nothing inserts final
+		// directly, so the row this route now navigates to is the SAME report_id, freshly `final`.
+		throw redirect(303, `/reports/monthly/${parsed.data.target_month.slice(0, 7)}`);
 	}
 };

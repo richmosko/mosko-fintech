@@ -55,9 +55,24 @@
 	and shows a "this report is final" banner — showing the row's own frozen commentary values,
 	never blank.
 
-	FINALIZE STUB: "Finalize {Month YYYY}" renders as a PERMANENTLY DISABLED control (P4's own
-	transition is not built — dispatch is explicit not to build it here). It is not gated on
-	`isDraft` the way Save is; it is unconditionally inert in this ticket regardless of state.
+	FINALIZE (P4 / SELF-356 AC5, now wired): "Finalize {Month YYYY}" posts to its OWN
+	`?/finalize` form action (SEPARATE `<form>` from the Save form above — two independent
+	server actions, two independent submit/error states, same split TaxBracketScheduleEditor.svelte
+	uses for its own multi-action page), calling 115 with the `'authored'` disposition. Gated on
+	`isDraft` the same way Save is (hidden entirely once final — nothing left to finalize).
+
+	UNSAVED-CHANGES GUARD (JUDGMENT CALL, flagged — not in the AC): 115 takes NO commentary text at
+	all; it freezes whatever is currently SAVED on the row. A user who types into a section and
+	clicks Finalize without ever clicking "Save draft" would silently finalize the OLD saved text
+	(or blank, on a fresh draft), discarding the unsaved keystrokes with no error — the exact "your
+	authored declaration doesn't match what you meant to author" failure R1 rider 6 is otherwise
+	guarding against for the no-ledger case. `dirty` compares the live `values` against the
+	LAST-SAVED baseline (the initial `commentary` prop, updated on every successful Save) and
+	disables Finalize while true, with an inline hint rather than a silent no-op.
+
+	NO-LEDGER PROMPT (AC4): NoLedgerDesignatedPrompt.svelte renders above the Finalize action when
+	the `noLedgerDesignated` prop is true — a PROMPT, NOT A BLOCK (AC4's own framing): it never
+	disables Finalize, only informs before the freeze.
 
 	$ ReAlloc REFERENCE PANEL (AC3): `<NonReAllocationTable>` — the SAME shipped table SELF-239's
 	`/allocation` page renders — fed from the loader's OWN live read (loadStaleness +
@@ -82,6 +97,7 @@
 	import TextAreaField from '$lib/components/TextAreaField.svelte';
 	import Button from '$lib/components/Button.svelte';
 	import NonReAllocationTable from '$lib/components/NonReAllocationTable.svelte';
+	import NoLedgerDesignatedPrompt from '$lib/components/NoLedgerDesignatedPrompt.svelte';
 	import { NONRE_TABLE_CAT_ORDER } from '$lib/nonre-allocation';
 	import type { NonReAllocation } from '$lib/nonre-allocation';
 	import type { StalenessData } from '$lib/staleness/stale-constituent';
@@ -114,7 +130,8 @@
 		priorMonthLabel,
 		priorCommentary,
 		allocation,
-		staleness
+		staleness,
+		noLedgerDesignated
 	}: {
 		targetMonthLabel: string;
 		isDraft: boolean;
@@ -123,6 +140,7 @@
 		priorCommentary: CommentaryValues;
 		allocation: NonReAllocation | null;
 		staleness: StalenessData;
+		noLedgerDesignated: boolean;
 	} = $props();
 
 	// Raw, un-normalized draft state -- one $state string per section, bound directly to each
@@ -132,10 +150,18 @@
 	// instance -- the whole page remounts on navigation to a different month).
 	let values = $state<CommentaryValues>({ ...commentary });
 
+	// UNSAVED-CHANGES GUARD (see file header) — the last-known-SAVED baseline, compared against
+	// the live `values` to gate Finalize. Starts at the loader's own `commentary` prop (what's
+	// actually on the row right now) and is reassigned wholesale on every successful Save.
+	let lastSaved = $state<CommentaryValues>({ ...commentary });
+
 	let serverFieldErrors = $state<Record<string, string[]>>({});
 	let formError = $state('');
 	let statusMessage = $state('');
 	let saving = $state(false);
+
+	let finalizing = $state(false);
+	let finalizeError = $state('');
 
 	function normalized(key: CommentarySection): string {
 		return normalizeLineEndings(values[key]);
@@ -151,6 +177,13 @@
 
 	const anyOverBound = $derived(SECTIONS.some((s) => overBound(s.key)));
 	const saveDisabled = $derived(!isDraft || anyOverBound || saving);
+
+	// UNSAVED-CHANGES GUARD (see file header) — true when any section's live NORMALIZED value
+	// differs from the last-saved baseline. Compared on the SAME normalized representation Save
+	// itself persists, so a CRLF-only difference (already normalized on read, per this file's own
+	// verified textarea behavior) never falsely reads as dirty.
+	const dirty = $derived(SECTIONS.some((s) => normalized(s.key) !== lastSaved[s.key]));
+	const finalizeDisabled = $derived(!isDraft || finalizing || saving || dirty);
 
 	function errorsFor(key: CommentarySection): string[] {
 		const server = serverFieldErrors[key];
@@ -202,6 +235,7 @@
 				const data = result.data as ActionSuccess | undefined;
 				if (data?.ok) {
 					statusMessage = 'Draft saved.';
+					lastSaved = { ...data.commentary };
 					await update({ reset: false });
 					return;
 				}
@@ -216,6 +250,33 @@
 			}
 			formError = 'Something went wrong saving your changes. Please try again.';
 			await update({ reset: false });
+		};
+	};
+
+	type FinalizeFailure = { errors: Record<string, string[]> };
+
+	/** `?/finalize` — its OWN submit/error state, a SEPARATE `<form>` from Save (see file header).
+	 *  A successful finalize redirects into P2's final view; `update()`'s default apply follows
+	 *  that redirect the same way RegenerateReportControl/SkipFinalizeControl's own convention
+	 *  does, so no special-casing is needed here beyond calling it unconditionally. */
+	const handleFinalize: SubmitFunction = ({ cancel }) => {
+		if (finalizeDisabled) {
+			cancel();
+			return;
+		}
+		finalizeError = '';
+		finalizing = true;
+		return async ({ result, update }) => {
+			finalizing = false;
+			if (result.type === 'failure') {
+				const data = result.data as FinalizeFailure | undefined;
+				const messages = Object.values(data?.errors ?? {}).flat();
+				finalizeError =
+					messages.length > 0 ? messages.join(' ') : 'Could not finalize this report. Please try again.';
+			} else if (result.type === 'error') {
+				finalizeError = 'Something went wrong. Please try again.';
+			}
+			await update();
 		};
 	};
 </script>
@@ -290,11 +351,29 @@
 						Save draft
 					</Button>
 				{/if}
-				<Button variant="secondary" type="button" disabled title={`Not yet available (P4)`}>
-					Finalize {targetMonthLabel}
-				</Button>
 			</div>
 		</form>
+
+		{#if isDraft}
+			<div class="finalize-block">
+				{#if noLedgerDesignated}
+					<NoLedgerDesignatedPrompt />
+				{/if}
+				<form method="POST" action="?/finalize" use:enhance={handleFinalize}>
+					{#if finalizeError}
+						<p class="banner error-banner" role="alert">{finalizeError}</p>
+					{/if}
+					<div class="actions">
+						<Button variant="secondary" type="submit" loading={finalizing} disabled={finalizeDisabled}>
+							Finalize {targetMonthLabel}
+						</Button>
+					</div>
+					{#if dirty}
+						<p class="finalize-hint">Save your changes before finalizing.</p>
+					{/if}
+				</form>
+			</div>
+		{/if}
 	</div>
 
 	<aside class="reference-col" aria-label="$ ReAlloc reference">
@@ -381,6 +460,22 @@
 		display: flex;
 		justify-content: flex-end;
 		gap: var(--space-3);
+	}
+	.finalize-block {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-3);
+	}
+	.finalize-block form {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-2);
+	}
+	.finalize-hint {
+		margin: 0;
+		text-align: right;
+		font-size: var(--fs-small);
+		color: var(--c-text-muted);
 	}
 	.banner {
 		margin: 0;
