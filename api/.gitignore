@@ -21,3 +21,7 @@ Thumbs.db
 # Vite
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# SELF-358 / P6 build-time CSS extraction (vite.report-css.config.mjs): report.js is a Vite
+# lib-build byproduct, not the artifact — never consumed anywhere. Only report.css is committed.
+src/lib/generated/report.js

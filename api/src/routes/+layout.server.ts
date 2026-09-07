@@ -46,5 +46,36 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 		? await loadConnectionHealth(locals.supabase)
 		: { reauthCount: 0, institutionDownCount: 0 };
 
-	return { userEmail: user?.email ?? null, pendingClassificationCount, connectionHealth };
+	// SELF-357 (§2.6.3.b P5, AC2's Sec F-8): the in-app pending-monthly-report notification
+	// badge. "Pending" here means a LIVE DRAFT awaiting commentary — the SAME tenant-scoped read
+	// (`locals.supabase`, under the caller's own RLS, no service_role) the /reports/monthly
+	// listing page's own pending-queue section performs, just a `count`-only shape for the cheap
+	// per-navigation badge — mirrors pendingClassificationCount's own "lean dedicated count read,
+	// distinct from the full page-level read" convention (SELF-200). Inline here rather than a
+	// new $lib/server/queries/ module, matching this ticket family's established precedent of
+	// writing raw reads directly inside the Backend-surface file under explicit dispatch (P2/P3's
+	// own +page.server.ts loaders) rather than adding a file under Backend's query-layer
+	// directory. FAIL-SOFT-TO-0 on a read error — same reasoning as the two counts above: a
+	// layout load that threw would break every page, and the listing page itself is where a real
+	// read failure surfaces as a retriable error (mirrors the SELF-200 Gap 1 posture).
+	let pendingMonthlyReportCount = 0;
+	if (user) {
+		try {
+			const { count } = await locals.supabase
+				.schema('pfin')
+				.from('monthly_report')
+				.select('report_id', { count: 'exact', head: true })
+				.eq('generation_status', 'draft');
+			pendingMonthlyReportCount = count ?? 0;
+		} catch (err) {
+			console.error('[+layout.server] pendingMonthlyReportCount read threw; degrading to 0:', err);
+		}
+	}
+
+	return {
+		userEmail: user?.email ?? null,
+		pendingClassificationCount,
+		connectionHealth,
+		pendingMonthlyReportCount
+	};
 };

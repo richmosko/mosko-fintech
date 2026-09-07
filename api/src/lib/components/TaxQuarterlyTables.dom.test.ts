@@ -8,6 +8,7 @@ import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/svelte';
 import TaxQuarterlyTables from './TaxQuarterlyTables.svelte';
 import type { TaxQuarterlyLiability, TaxJurisdictionPayload } from '$lib/tax-quarterly';
+import { EMPTY_STALENESS, type StaleConstituentItem } from '$lib/staleness/stale-constituent';
 
 function jurisdiction(over: Partial<TaxJurisdictionPayload> = {}): TaxJurisdictionPayload {
 	return {
@@ -51,6 +52,7 @@ function fixture(over: Partial<TaxQuarterlyLiability> = {}): TaxQuarterlyLiabili
 describe('TaxQuarterlyTables', () => {
 	it('renders both parallel tables from one fixture payload', () => {
 		render(TaxQuarterlyTables, {
+			staleness: EMPTY_STALENESS,
 			liability: fixture(),
 			noTaxAuthorityDesignated: false,
 			priorYearQ4: null
@@ -61,6 +63,7 @@ describe('TaxQuarterlyTables', () => {
 
 	it('renders the page-level "no tax authority account" banner when noTaxAuthorityDesignated is true (AC6(ii))', () => {
 		render(TaxQuarterlyTables, {
+			staleness: EMPTY_STALENESS,
 			liability: fixture(),
 			noTaxAuthorityDesignated: true,
 			priorYearQ4: null
@@ -70,6 +73,7 @@ describe('TaxQuarterlyTables', () => {
 
 	it('omits the page banner when noTaxAuthorityDesignated is false, even if one jurisdiction still lacks a designated ledger (AC6(ii) vs 6(iii) independence)', () => {
 		render(TaxQuarterlyTables, {
+			staleness: EMPTY_STALENESS,
 			liability: fixture({
 				jurisdictions: {
 					federal: jurisdiction(),
@@ -88,6 +92,7 @@ describe('TaxQuarterlyTables', () => {
 
 	it('QA-walk regression: "Edit tax brackets" is a page-level STANDING affordance (AC 7) — present even when both jurisdictions are the ordinary `computed` case, not only from the AC-7a unavailable state', () => {
 		render(TaxQuarterlyTables, {
+			staleness: EMPTY_STALENESS,
 			liability: fixture(), // both jurisdictions computed — the default fixture shape
 			noTaxAuthorityDesignated: false,
 			priorYearQ4: null
@@ -97,6 +102,7 @@ describe('TaxQuarterlyTables', () => {
 
 	it('routes the page-level "Edit tax brackets" link to the given editBracketsHref', () => {
 		render(TaxQuarterlyTables, {
+			staleness: EMPTY_STALENESS,
 			liability: fixture(),
 			noTaxAuthorityDesignated: false,
 			priorYearQ4: null,
@@ -108,6 +114,7 @@ describe('TaxQuarterlyTables', () => {
 
 	it('threads priorYearQ4 through to both jurisdiction tables (E39)', () => {
 		render(TaxQuarterlyTables, {
+			staleness: EMPTY_STALENESS,
 			liability: fixture(),
 			noTaxAuthorityDesignated: false,
 			priorYearQ4: {
@@ -128,5 +135,80 @@ describe('TaxQuarterlyTables', () => {
 		});
 		// Both tables render their own "still outstanding" notice — one per jurisdiction.
 		expect(screen.getAllByText('2025 Q4 still outstanding')).toHaveLength(2);
+	});
+});
+
+describe('TaxQuarterlyTables — SELF-361 / P9: D1 stale-data-marker beside the page heading', () => {
+	it('staleness confirmed healthy (EMPTY_STALENESS) → zero-footprint, no badge markup', () => {
+		render(TaxQuarterlyTables, {
+			staleness: EMPTY_STALENESS,
+			liability: fixture(),
+			noTaxAuthorityDesignated: false,
+			priorYearQ4: null
+		});
+		expect(screen.queryByText('May be stale')).toBeNull();
+	});
+
+	it('is_stale true → the shared StaleConstituentBadge renders beside the page heading, ONE mount for both jurisdiction tables', () => {
+		const staleItem: StaleConstituentItem = {
+			linked_source_id: '42',
+			institution_name: 'Test Bank',
+			provider: 'plaid',
+			connection_status: 'login_required',
+			status_class: null
+		};
+		render(TaxQuarterlyTables, {
+			staleness: { is_stale: true, stale_items: [staleItem] },
+			liability: fixture(),
+			noTaxAuthorityDesignated: false,
+			priorYearQ4: null
+		});
+		// ONE badge for the whole page — not one per jurisdiction table.
+		expect(screen.getAllByText('May be stale')).toHaveLength(1);
+	});
+
+	// AC3 — the badge must never merge with (a) the noTaxAuthorityDesignated banner or (b) the
+	// per-jurisdiction reasonCopy()/basis_year register: all three render together, independently.
+	it('a stale badge and the noTaxAuthorityDesignated banner render TOGETHER, independently (AC3 separation)', () => {
+		const staleItem: StaleConstituentItem = {
+			linked_source_id: '42',
+			institution_name: 'Test Bank',
+			provider: 'plaid',
+			connection_status: 'login_required',
+			status_class: null
+		};
+		render(TaxQuarterlyTables, {
+			staleness: { is_stale: true, stale_items: [staleItem] },
+			liability: fixture(),
+			noTaxAuthorityDesignated: true,
+			priorYearQ4: null
+		});
+		expect(screen.getByText('May be stale')).toBeTruthy();
+		expect(screen.getByText('No account is marked as a tax authority.')).toBeTruthy();
+	});
+
+	it('a stale badge and a per-jurisdiction "no ledger designated" CTA render TOGETHER, independently', () => {
+		const staleItem: StaleConstituentItem = {
+			linked_source_id: '42',
+			institution_name: 'Test Bank',
+			provider: 'plaid',
+			connection_status: 'login_required',
+			status_class: null
+		};
+		render(TaxQuarterlyTables, {
+			staleness: { is_stale: true, stale_items: [staleItem] },
+			liability: fixture({
+				jurisdictions: {
+					federal: jurisdiction(),
+					california: jurisdiction({
+						ytd_paid: { status: 'unavailable', reason: 'no_ledger_designated' }
+					})
+				}
+			}),
+			noTaxAuthorityDesignated: false,
+			priorYearQ4: null
+		});
+		expect(screen.getByText('May be stale')).toBeTruthy();
+		expect(screen.getByRole('link', { name: /Designate an FTB \(California\) account/ })).toBeTruthy();
 	});
 });

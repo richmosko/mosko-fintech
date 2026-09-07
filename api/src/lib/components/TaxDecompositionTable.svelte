@@ -37,6 +37,9 @@
 	a table of zeros — `decomposition.capital_gains.status === 'unavailable'` is the ONLY
 	reachable V1.4 shape (ADR-067 Decision 5(b); R11's unmatched-sell disposition ships dormant).
 	The copy names the missing CAPABILITY (recording a sale), never a milestone name — R1 rider 2.
+	`capitalGainsUnavailableCopy` (SELF-354 / P2 addition) lets the monthly-report renderer swap in
+	its own past-tense AC4 sentence for this same state without forking this component — see the
+	prop's own doc comment below.
 
 	UNCLASSIFIED LINE (AC 3b): `decomposition.unclassified.count_ytd`, PM's copy rendered
 	verbatim via `unclassifiedCopyPrefix()` + a literal "classify" link — ONE source, no second
@@ -69,13 +72,24 @@
 
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5).
 
-	⚠ STALENESS (bubble-up, not built here): this table's Income section aggregates over
-	`pfin.posting_prototype` — the SAME substrate §2.3.2's CashflowRollupTable reads, which DOES
-	carry a D1 staleness marker (SELF-258). PRD §2.4.4's named-surface list is
-	illustrative-not-exhaustive per ADR-013 D1, and §2.5.1 is not on it today. No staleness prop
-	is threaded through this issue's loader contract (`{liability, taxCharacters,
-	inventorySeedDeltaMigration}`), so none is rendered here — flagged at hand-off rather than
-	built without real data or invented unilaterally.
+	STALENESS (SELF-361 / P9, closing the gap this file's own header used to flag at SELF-264
+	hand-off): this table's Income section aggregates over `pfin.posting_prototype` — the SAME
+	substrate §2.3.2's CashflowRollupTable reads, which carries a D1 staleness marker (SELF-258).
+	PRD §2.4.4's named-surface list is illustrative-not-exhaustive per ADR-013 D1; §2.5.1 is now
+	ramped. `staleness` (a REQUIRED prop, `+page.server.ts`'s own whole-tenant `loadStaleness()`
+	read, threaded verbatim) is rendered via ONE page-level `<StaleConstituentBadge>` beside the
+	`<h2>` below — NOT a per-row join (unlike SELF-330's NonReAllocationTable / SELF-229's
+	NavCompositionTable): this table's rows are Sub-Cat aggregates over posting_prototype, not
+	individual accounts, so there is no per-row `linked_source_id` to tint against.
+
+	⚠ SEPARATION (AC3, stated here because this is where both registers are actually composed on
+	this page): the `<StaleConstituentBadge>` below covers ONLY §2.4.4 Plaid-connection staleness
+	("your brokerage needs re-auth"). It is NOT the same signal as the Capital Gains section's own
+	`{status:'unavailable', reason}`-shaped capability notice a few lines down ("this app doesn't
+	yet support recording a sale") — an ADR-067 Decision 5 envelope, a missing-CAPABILITY fact, not
+	a missing-CONNECTION fact. Different facts, different (non-)actions for the user; neither
+	register may ever collapse into the other, and no new copy is owed for either — both are
+	already shipped (StaleConstituentBadge here; the capability note inline below).
 -->
 <script lang="ts">
 	import {
@@ -88,22 +102,35 @@
 		type TaxLiabilitySlice,
 		type TaxCharacterCatalog
 	} from '$lib/tax-decomposition';
+	import StaleConstituentBadge from './StaleConstituentBadge.svelte';
+	import type { StalenessData } from '$lib/staleness/stale-constituent';
 
-	// All three data props REQUIRED, no default (Sec F3(B)-style discipline, mirrors every
+	// All four data props REQUIRED, no default (Sec F3(B)-style discipline, mirrors every
 	// §2.2/§2.3 aggregation table in this codebase) — a caller that forgets to thread real data
 	// fails at TYPECHECK, not as a silent "confirmed healthy" empty-table fallback.
 	let {
 		liability,
 		taxCharacters,
 		seedDeltaMigration,
-		classifyHref = '/accounts'
+		staleness,
+		classifyHref = '/accounts',
+		capitalGainsUnavailableCopy = "Capital gains aren't shown here yet — this app doesn't yet support recording a security sale, so there is no realized-gain figure to report."
 	}: {
 		liability: TaxLiabilitySlice;
 		/** AC5 — the `pfin.tax_character` catalog rows resolve against; never a client-side list. */
 		taxCharacters: TaxCharacterCatalog;
 		/** AC11 — the SELF-263 seed-delta migration filename this page was built against. */
 		seedDeltaMigration: string;
+		/** SELF-361 / P9 — the whole-tenant `046` read; rendered via the page-level badge below. */
+		staleness: StalenessData;
 		classifyHref?: string;
+		/** SELF-354 / P2 addition: the monthly-report renderer's AC4 copy block gives a DIFFERENT,
+		 *  past-tense sentence for this same state — "Capital gains were unavailable when this
+		 *  report was generated — sale recording lands at a later V1.x." — because a report is a
+		 *  frozen historical artifact, not the live present-tense page. Optional, defaulting to the
+		 *  live copy unchanged, so every existing call site (the live /taxes/decomposition page) is
+		 *  unaffected; MonthlyReportView.svelte is the one caller that overrides it. */
+		capitalGainsUnavailableCopy?: string;
 	} = $props();
 
 	const decomposition = $derived(liability.decomposition);
@@ -125,6 +152,11 @@
 		<h2 id="tax-decomp-label" class="section-label">
 			Tax-Relevant Income Decomposition — Tax Year {liability.tax_year}
 		</h2>
+		<!-- D1 stale-data-marker (SELF-361 / P9): marks stale contribution beside the surface,
+		     never hides it. See this file's own header for why this is a page-level badge, not a
+		     per-row join, and why it must not merge with the Capital Gains section's own
+		     capability-unavailable notice below. -->
+		<StaleConstituentBadge isStale={staleness.is_stale} staleItems={staleness.stale_items} />
 	</header>
 
 	<!-- AC3b — the S-2 one-source unclassified line. -->
@@ -217,8 +249,7 @@
 		<h3 class="subsection-label">Capital Gains</h3>
 		{#if decomposition.capital_gains.status === 'unavailable'}
 			<p class="cg-unavailable-note" role="status">
-				Capital gains aren't shown here yet — this app doesn't yet support recording a
-				security sale, so there is no realized-gain figure to report.
+				{capitalGainsUnavailableCopy}
 			</p>
 		{/if}
 	</div>
@@ -256,6 +287,7 @@
 		align-items: baseline;
 		justify-content: space-between;
 		gap: var(--space-3);
+		flex-wrap: wrap;
 	}
 	.section-label {
 		margin: 0;

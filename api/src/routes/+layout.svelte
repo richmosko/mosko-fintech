@@ -19,6 +19,17 @@
 	nav hunk) so it stays highlighted once SELF-264's /taxes/decomposition lands alongside it. This
 	is now the ONE nav edit for both §2.5 surfaces — frontend-264 reverted its own.
 
+	"Monthly Report" — RECONCILED at the P2/P3/P5 rebase-integration (2026-09-05, team-lead
+	ruling: "P2's version wins; P5 adds only the pending badge") from two independent additions
+	built on separate branches. P2's OWN link + active-match survive unchanged: added at SELF-354
+	(P2 AC1's "sidebar entry owed" note) → /reports/monthly, active-matched on the whole
+	/reports/ subtree via `path.startsWith('/reports/')` (covers P2's per-month view and P3's
+	commentary editor under it, not just P5's listing itself — no OTHER /reports/* surface exists
+	today, so this is equivalent in practice to a narrower /reports/monthly-only match). P5 adds
+	ONLY the pending-count badge on top (SELF-357 AC2) — the SAME treatment the Classify link
+	established (SELF-200): zero footprint when `pendingMonthlyReportCount` is 0, ACCENT ramp
+	(not `--c-attn-*`), sourced from +layout.server.ts's own tenant-scoped read (AC2's Sec F-8).
+
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5). The count badge uses the
 	ACCENT ramp — NOT `--c-attn-*` (canary is reserved for staleness/re-auth; §5 fence).
 -->
@@ -46,6 +57,7 @@
 	const isAllocation = $derived(path === '/allocation');
 	const isCashFlow = $derived(path === '/cash-flow');
 	const isTaxes = $derived(path.startsWith('/taxes/'));
+	const isMonthlyReport = $derived(path.startsWith('/reports/'));
 
 	// SELF-207 P4 re-auth banner health summary — from +layout.server.ts (Backend-computed via the
 	// shared needsReauth/isInstitutionDown predicates, active-connections-only, fail-soft to {0,0}).
@@ -74,6 +86,19 @@
 				</a>
 				<a class="nav-link" href="/taxes/quarterly" aria-current={isTaxes ? 'page' : undefined}>
 					Taxes
+				</a>
+				<a
+					class="nav-link monthly-report-link"
+					href="/reports/monthly"
+					aria-current={isMonthlyReport ? 'page' : undefined}
+					aria-label={data.pendingMonthlyReportCount > 0
+						? `Monthly Report — ${data.pendingMonthlyReportCount} pending`
+						: undefined}
+				>
+					Monthly Report
+					{#if data.pendingMonthlyReportCount > 0}
+						<CountBadge count={data.pendingMonthlyReportCount} />
+					{/if}
 				</a>
 			</nav>
 		</div>
@@ -165,6 +190,19 @@
 		outline: none;
 		box-shadow: var(--focus-ring);
 		border-radius: var(--radius-sm);
+	}
+	/* The Monthly Report nav link's pending-count badge — same treatment as the Classify link's
+	   own badge below (SELF-200 precedent), applied inside .primary-nav instead of .account. */
+	.monthly-report-link {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-1);
+	}
+	.monthly-report-link:hover {
+		text-decoration: none;
+	}
+	.monthly-report-link:hover :global(.count-badge) {
+		background: var(--c-accent-hover);
 	}
 	/* The Classify link keeps its badge on the baseline and never underlines the pill. */
 	.classify-link {

@@ -19,7 +19,15 @@
 //
 // DELIBERATELY STANDALONE (does NOT import vite.config.ts / the SvelteKit plugin): pure-TS
 // server tests run without `svelte-kit sync` / a browser env.
-
+//
+// `node` project: `css: true` (SELF-358 / P6, DevOps-c's live-verified triage) — vitest
+// defaults `test.css` to `false`, which short-circuits BEFORE Vite's own `?raw`/`?inline` CSS
+// pipeline ever runs, unconditionally (vitest-dev/vitest#10788; reproduced on 3.2.4 / 4.1.9 /
+// this repo's 4.1.10 — no version bump fixes it). Without this, a `.css?raw` import inside a
+// `node`-environment test resolves to an EMPTY STRING, silently — it affected the two
+// PRE-EXISTING `tokens.css`/`app.css` imports in the PDF route identically, not just the new
+// `report.css`. Scoped to `node` only: the `dom` project never hit this (its component tests
+// don't `?raw`-import CSS), and both projects are measured green after this change.
 import { defineConfig } from 'vitest/config';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { svelteTesting } from '@testing-library/svelte/vite';
@@ -63,6 +71,8 @@ export default defineConfig({
 				test: {
 					name: 'node',
 					environment: 'node',
+					// SELF-358 / P6 — see this file's own header (vitest#10788).
+					css: true,
 					include: ['src/**/*.{test,spec}.ts', 'tests/**/*.{test,spec}.ts'],
 					// The DOM project owns *.dom.test.ts — keep them out of the node project.
 					exclude: [...baseExclude, 'src/**/*.dom.test.ts']

@@ -3,13 +3,16 @@
 	(SELF-264). Frontend-owned browser surface. Consumes +page.server.ts's `data` (PageData) —
 	Backend-owned; authors NO server logic.
 
-	CONTRACT (verified against +page.server.ts post-merge, commit 570a4d6): `data.liability` is
-	the FULL `TaxLiabilityPayload` (non-nullable — the loader is FAIL-LOUD, throwing rather than
-	degrading to null on an RPC or shape failure; SvelteKit's default 500 page handles that case,
-	not a null-check here — see taxLiability.ts's own module header for why this surface diverges
-	from the dominant fail-soft convention). `data.taxCharacters` is the `pfin.tax_character`
-	catalog (5 seeded rows). `data.inventorySeedDeltaMigration` is AC11's seed-delta migration
-	name.
+	CONTRACT (verified against +page.server.ts post-merge, commit 570a4d6; SELF-361 added
+	`staleness`): `data.liability` is the FULL `TaxLiabilityPayload` (non-nullable — the loader is
+	FAIL-LOUD, throwing rather than degrading to null on an RPC or shape failure; SvelteKit's
+	default 500 page handles that case, not a null-check here — see taxLiability.ts's own module
+	header for why this surface diverges from the dominant fail-soft convention). `data.taxCharacters`
+	is the `pfin.tax_character` catalog (5 seeded rows). `data.inventorySeedDeltaMigration` is
+	AC11's seed-delta migration name. `data.staleness` (SELF-361 / P9) is the SAME whole-tenant
+	`loadStaleness()` read every other V1.1+ surface consumes — fail-SOFT (degrades to
+	UNKNOWN_STALENESS on a read failure, unlike the two fail-loud reads above), threaded straight
+	through to TaxDecompositionTable.svelte, which mounts the D1 `<StaleConstituentBadge>`.
 
 	No page-level empty state: TaxDecompositionTable.svelte owns both of AC9's two empty states
 	(Income section / Capital Gains capability banner) internally, since they are section-scoped,
@@ -43,6 +46,7 @@
 		liability={data.liability}
 		taxCharacters={data.taxCharacters}
 		seedDeltaMigration={data.inventorySeedDeltaMigration}
+		staleness={data.staleness}
 	/>
 </main>
 

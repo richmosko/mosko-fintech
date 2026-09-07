@@ -1,0 +1,10 @@
+{
+  "name": "pdf-render-fixture-lockfile-transitive",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DELIBERATELY VIOLATION-SHAPED golden fixture for the RT-22 dependency-manifest fence (SELF-350 A6; adapted at E21 for the SELF-348 A4 allowlist flip). Lockfile-scan route: package.json names ONLY the two ALLOWLISTED packages (puppeteer-core + jsonwebtoken, matching workers/pdf-render/package.json exactly); pg is never mentioned here or in any denylisted-name form — it appears solely in package-lock.json's resolved tree as jsonwebtoken's own (fictional) transitive dependency. DO NOT install or use as a template.",
+  "dependencies": {
+    "puppeteer-core": "25.10.0",
+    "jsonwebtoken": "9.0.2"
+  }
+}

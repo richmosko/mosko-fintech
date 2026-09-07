@@ -1,0 +1,514 @@
+-- =====================================================================
+-- SELF-362 — P10. §2.6.6 RLS VERIFICATION BATTERY — V1.5 CLOSE-GATE.
+--   AC block: docs/records/v15-preflight/rederived-acs.md § "SELF-362 — P10"
+--   items 1-14, read verbatim at drafting, plus the items booked to P10
+--   during execution (docs/records/v15-execution/log.md, search "P10").
+--   Mirrors self269_v1_4_close_gate.sql's shape (the explicit precedent):
+--   SEAM-ONLY, authors NO schema. Proves the V1.5 §2.6 read/write surface
+--   holds closed AS A WHOLE. Composes already-green per-issue batteries
+--   (106, 108-115, plus workers/etl's own pytest suite for A7) for the deep
+--   per-function proofs; adds only the NET-NEW seam + cross-cutting +
+--   genuinely-missing legs no per-issue battery makes on its own.
+--
+--   ⚠ AUTHORED SURFACE-GROUP BY SURFACE-GROUP, ONE COMMIT PER GROUP
+--   (team-lead dispatch, 2026-09-06): (1) A1+A2 — Lock 11/12, the R4 four,
+--   frozen payload, aal2 separate; (2) A3+A10 — composition leak with its
+--   positive control, the standing no-rolbypassrls-EXECUTE catalog
+--   assertion, RESET ROLE, RT-25 refusal; (3) AH+A7 — audit legs, singular-
+--   GUC leg; (4) A5/A8/P3 — owner header frozen, commentary write path,
+--   tenant-scoped queue; (5) the tri-axis conditional legs (AC4). Each
+--   group's own commit states its plan-count delta and strike results.
+--
+-- Ratified AC coverage (mapping to the live AC block; "COMPOSED" = an
+-- already-green per-issue battery carries the exhaustive proof, cited by
+-- file + leg name, not re-derived; "NEW" = fresh SQL below):
+--   AC1  — two-tenant coverage of A1+A2+A3+A5+A7+A8+A10+AH+P3, cross-tenant
+--          injection rejected on each.
+--          A1: COMPOSED — 108_monthly_report_rls.sql LEG 1 (cross-tenant
+--          read fails closed; owner reads own rows).
+--          A2: COMPOSED — 109_monthly_report_account_snapshot_rls.sql
+--          LEG 1 (cross-tenant read via the parent chain fails closed).
+--          A3/A7/A10/AH/A5/A8/P3: addressed in their own groups below (this
+--          file's later commits); cited there, not duplicated here.
+--   AC2  — aal2 legs SEPARATE from cross-tenant legs on A1, A2 (this group)
+--          and A8 (group 4).
+--          A1: COMPOSED — 108 LEG 2 (aal2 as a separate leg from
+--          cross-tenant, Sec F-9).
+--          A2: COMPOSED — 109 LEG 2 (aal2 as a separate leg from
+--          cross-tenant).
+--   AC5  — SD-12 child sub-class addendum; NOT a new SD class (Sec M-3 and
+--          Sec §5 both confirm). Statement only — no leg, per the AC's own
+--          text.
+--   AC6  — A1's immutability trigger, the four R4 catch criteria, EACH ITS
+--          OWN leg, ALL COMPOSED — 108's battery was authored against this
+--          exact AC text:
+--          (i)   regenerate one month THREE times -> three rows, exactly
+--                one final — 108 LEG 3.
+--          (ii)  UPDATE a final row refused, as authenticated AND as
+--                service_role — 108 LEG 4.
+--          (iii) DELETE as each role refused on any non-draft row — 108
+--                LEG 5 (covers both final and superseded rows, both roles).
+--          (iv)  INSERT directly as final refused — 108 LEG 6 (also proves
+--                INSERT as draft accepted, the non-vacuous half).
+--          (v)   superseded is TERMINAL, every transition out of it
+--                refused — 108 LEG 7.
+--          No new SQL for the four criteria themselves.
+--   AC7  — A1's frozen payload (R1): byte-stable rendered payload across
+--          reads; no call to A3 on a read of a final report; envelopes
+--          survive round-trip unflattened; payload_schema_version present
+--          and non-NULL on every final/superseded row, NULL permitted only
+--          on draft (both directions).
+--          The CHECK-constraint half (both directions) is COMPOSED — 108
+--          LEG 9 (9a/9b/9c refuse promotion with any of the three payload
+--          fields still NULL; 9d the same row promotes cleanly once all
+--          three are set together).
+--          NEW: BLOCK AC7 below — genuinely absent from every per-issue
+--          battery. No existing leg states the POSITIVE claim that a read
+--          of a final report's rendered_payload issues NO call to A3
+--          (fn_render_monthly_report) at all — 110's own battery tests A3
+--          in isolation and never touches A1's stored-payload read path.
+--          "Envelopes survive round-trip unflattened" is COMPOSED
+--          transitively: 110's own battery (LEG 5/6/7) asserts A3 never
+--          collapses an envelope at COMPOSITION time, and BLOCK AC7 below
+--          proves the STORED payload is byte-identical to what A3 composed
+--          — so an envelope A3 composed unflattened is unflattened in the
+--          frozen artifact too, by the same byte-identity proof.
+--   AC1  — (A3+A10 halves, group 2) two-tenant coverage.
+--          A3: COMPOSED — 110_fn_render_monthly_report_rls.sql LEG 8 (a
+--          cross-tenant/no-rows caller gets a well-formed payload with
+--          EMPTY sections, not an error and not NULL).
+--          A10 (113/114/115, the draft/regenerate/finalize write path):
+--          COMPOSED — each of 113/114/115 carries its own LEG 1
+--          cross-tenant-refused / owner-succeeds pair.
+--   AC3  — A3 cross-tenant leak analysis: a foreign caller gets the
+--          empty/unavailable shape (fails closed INTO A SHAPE THAT SAYS
+--          SO). Plus Sec F-4's cron leg WITH ITS POSITIVE CONTROL (R3
+--          rider 2): tenant A composed while tenant B's rows EXIST, zero
+--          tenant-B rows in the output, PROVEN NON-VACUOUS by striking the
+--          role assumption and watching the leg red. Plus the STANDING
+--          no-rolbypassrls-EXECUTE catalog assertion (R3 rider 1 — "the
+--          single most valuable assertion in the file"). Plus RESET ROLE
+--          discipline on the pooled connection (R3 rider 3).
+--          Leak shape: COMPOSED — 110 LEG 8 (cited above under AC1).
+--          F-4 + positive control: COMPOSED — 110 LEG 1 ("Sec F-4 catch
+--          criterion WITH ITS POSITIVE CONTROL (R3 rider 2)" — composed for
+--          tenant A while tenant B's $2000 exists, gross_total = A's own
+--          1000.00; the role-assumption-struck control at (1b) proves the
+--          isolation is genuinely RLS-dependent, not a fixture accident).
+--          Standing no-rolbypassrls-EXECUTE: COMPOSED, FIVE TIMES OVER, not
+--          once — every INVOKER function on this surface carries its OWN
+--          copy, independently, so no single file's drift silently loses
+--          the assertion: 110 LEG 2 (explicitly self-labelled "R3 rider 1,
+--          P10 item 3" in its own header), 113 LEG 10, 114 LEG 10, 115
+--          LEG 16 — all four assert `not has_function_privilege(
+--          'service_role', <fn>, 'EXECUTE')` on their own signature. A
+--          FIFTH, combined sweep leg here would duplicate protection
+--          already held four times independently, not add any — the file's
+--          own header rule ("adds only the NET-NEW... legs no per-issue
+--          battery makes on its own") argues against it. No new SQL.
+--          RESET ROLE discipline: COMPOSED, non-pgTAP —
+--          workers/etl/tests/test_connection.py::TestImpersonationAssertion
+--          ⚠ CORRECTED (verdict AC item 14, 2026-09-07): this class was cited as
+--          `TestImpersonationInvariants` when this file was first authored — that name
+--          never existed; the real class is `TestImpersonationAssertion`. The two
+--          methods named below were always real and green under it; only the class
+--          name in this citation was wrong.
+--          ::test_reset_role_tears_down_impersonation (the impersonation
+--          state-machine assertion helper's own teardown case) plus
+--          test_full_worker_transaction_sequence (the full statement
+--          sequence a real transaction issues, impersonation torn down
+--          before the write). RESET ROLE is a connection-discipline
+--          property of `TenantBoundConnection`/the impersonation loop, not
+--          a DB-schema property — the Python suite is where the mechanism
+--          actually lives, and P10's own convention (this file, group 1)
+--          already accepts a non-pgTAP citation for A7. No pgTAP-side gap.
+--   AC11 — (RT-25 half, group 2) A10's server-derived data_as_of: a
+--          client-supplied as-of is REFUSED, not ignored.
+--          COMPOSED — 113_fn_open_monthly_report_draft_rls.sql LEG 8:
+--          `data_as_of` on the inserted row equals `pfin.fn_server_today()`
+--          — "there is no argument by which a caller could have set a
+--          different value," which is the DB-signature form of "refused,
+--          not ignored": the function carries no `p_data_as_of` parameter
+--          at all, so a client cannot even attempt to supply one, let alone
+--          have it silently dropped.
+--   RIDER (group 3, correcting group 2): a STRONGER RESET ROLE citation
+--   exists than the one group 2 cited and should be read alongside it —
+--   found while researching A7's own coverage. group 2 cited
+--   test_connection.py's unit-level state-machine helper tests (the
+--   MECHANISM, in isolation). workers/etl/tests/test_monthly_report_cron.py
+--   carries the INTEGRATION-level proof, against a REAL connection, self-
+--   labelled "R3 rider 3's catch criterion":
+--   test_reset_role_discipline_teardown_actually_fires (SHOW ROLE reads
+--   'authenticated' during impersonation and 'none' immediately after
+--   teardown, on the SAME connection/transaction) and
+--   test_reset_role_discipline_a_fresh_tenant_connection_is_unaffected_by
+--   _a_prior_one (a second tenant's fresh connection resolves auth.uid()
+--   to itself, never the first tenant, after the first's connection
+--   allegedly left state dirty). Both citations stand; this one is the
+--   stronger of the two and is the one to reach for first.
+--   AC9  — block AH: the same-transaction row exists, names the resolved
+--          tenant, is absent when the generation transaction rolls back;
+--          surface-name required and a bad value refused; append-only
+--          under both roles.
+--          COMPOSED, exhaustively — 111_audit_log_rls.sql LEG 1 (same-
+--          transaction exists + the restored rollback-absence catch
+--          criterion), LEG 2 (names the resolved tenant), LEG 4a/4d
+--          (invented surface_name refused, both through the dispatch AND
+--          through the table's own CHECK as the owner-path observer), LEG 6
+--          (UPDATE/DELETE/TRUNCATE refused under BOTH roles — append-only),
+--          LEG 10 (two callers, cron vs on_demand, one shape).
+--          Reinforced end-to-end for the CRON caller specifically (non-
+--          pgTAP) — workers/etl/tests/test_monthly_report_cron.py:
+--          test_open_draft_for_tenant_inserts_one_draft_and_one_audit_row
+--          + test_open_draft_for_tenant_audit_row_names_the_resolved_tenant
+--          _and_chain (same-transaction row, resolved tenant, FOR THE REAL
+--          CRON CALL, not a synthetic emit) +
+--          test_audit_row_trigger_source_is_cron_when_the_provenance_guc_is
+--          _set / _falls_to_on_demand_when_the_guc_is_forgotten (the two-
+--          callers shape, exercised through the real dispatch rather than
+--          a literal argument). No pgTAP-side gap; no new SQL.
+--   AC10 — A7's cron tenant-binding isolation, including the singular-GUC
+--          catch criterion (one tenant's data served for every tenant, no
+--          code bug, no app-layer assertion failure).
+--          Two-tenant isolation: COMPOSED, non-pgTAP —
+--          test_monthly_report_cron.py::
+--          test_cross_tenant_isolation_tenant_b_never_opens_or_sees_tenant
+--          _as_draft.
+--          THE SINGULAR-GUC MECHANISM ITSELF: COMPOSED, non-pgTAP —
+--          test_connection.py::TestLegacySingularGuc ("N7 — clear
+--          permitted, set forbidden"): the two GUC names are disjoint
+--          (the branch order the whole fence relies on, asserted not
+--          assumed); the defensive NULL-clear at impersonate()'s own entry
+--          is permitted and does not disturb an active binding; setting
+--          the legacy GUC is REJECTED even to the CORRECT tenant ("the
+--          precedence hazard is the point; worker code has no legitimate
+--          reason to write it") — the exact hazard A7 item 4 names
+--          (auth.uid() prefers request.jwt.claim.sub over the plural blob)
+--          is fenced at the WRITE side, not merely nulled at the read side.
+--          This is the SAME shared connection.py module A7 item 2 reuses
+--          rather than re-specifies; the mechanism lives here, not in a
+--          per-cron pgTAP leg. No pgTAP-side gap.
+--   AC1/AC2 — (A8 half, group 4) two-tenant + aal2-separate for
+--          `pfin.owner_identification`.
+--          COMPOSED, non-duplicating a whole existing battery —
+--          106_owner_identification_rls.sql: (R2)/(X1)
+--          (`_rls.expect_cross_tenant_read_empty`, cross-tenant-empty with
+--          a corrupt-the-control non-vacuous proof) for cross-tenant;
+--          (M5)/(M7) for aal2 as a SEPARATE leg (totp-enrolled tenant D at
+--          aal1 is hidden by the USING-side backstop on UPDATE/DELETE,
+--          value/row genuinely unchanged); (S1-S6) structural RLS +
+--          grant + aal2-IN-list catalog assertions. No new SQL.
+--   AC9/RT-11 — (P3 half, group 4) the §2.6.2 commentary write path.
+--          COMPOSED — 112_fn_save_monthly_commentary_rls.sql LEG 1
+--          (cross-tenant refused), LEG 2 (aal2 SEPARATE from cross-tenant),
+--          LEG 3 (draft-window-only, refused on `final`), LEG 4
+--          (replace-all is literal), LEG 6/6b (the ruled 4000/4001
+--          length bound, unit-tested against a `.length`-reversion), LEG 8
+--          (standing no-rolbypassrls-EXECUTE). No new SQL.
+--   AC11 — (owner_header_at_generation half, group 4) a Settings rename
+--          does not change a prior final report's frozen header (P7 item
+--          7).
+--          COMPOSED — 115_fn_finalize_monthly_report_rls.sql LEG 11
+--          ("owner_header_at_generation IS FROZEN FROM 106": set a header,
+--          finalize, rename in 106, re-read the final row — unchanged).
+--   AC11 — (pending-queue tenant-scoped half, group 4) tenant A sees zero
+--          of tenant B's pending-queue entries.
+--          COMPOSED BY INHERITANCE: the pending-queue affordance is P5's UI
+--          (`feature/self-357`, merged to `main` at PR #649 — ⚠ CORRECTED,
+--          verdict AC item 14, 2026-09-07: this file originally said P5 was
+--          "not yet merged... no `api/src/routes` entry exists at this
+--          sha", true when this file was first authored but stale by the
+--          verdict sha; the underlying conclusion below was RE-VERIFIED
+--          directly against the live, merged route rather than trusted on
+--          the old premise). `reports/monthly/+page.server.ts`'s `load()`
+--          and its actions query only `pfin.monthly_report` and the four
+--          RPCs already covered elsewhere in this file — no new DB object
+--          (view, function) was introduced for the listing. The affordance
+--          is a FILTERED READ over `pfin.monthly_report` through the SAME
+--          RLS this gate already exercises exhaustively for A1 (108 LEG 1)
+--          — there is no separate DB object for "pending" to carry its own
+--          isolation defect. Nothing new to write unless a LATER change
+--          introduces a DB-side object of its own (a view, a function);
+--          recorded here so a LATER reader does not mistake the absence of
+--          a P5-specific leg for an oversight.
+--   AC8  — (A5/A4, group 4) the two-abort leg, the inert-<script> leg
+--          (P6 item 7), the re-derived RT-21 letters.
+--          ⚠ CORRECTION, RECORDED PER SEC'S OWN RULING (v15-execution-log
+--          E25, 2026-09-05): the literal "two aborts" in this AC's own text
+--          is STRUCK by Sec — measured, `file:///proc/self/environ` never
+--          reaches this worker's interception layer at all (Chromium
+--          refuses it under its OWN local-resource policy before any
+--          request event fires), so only the `http://169.254.169.254/`
+--          vector is observable at the interception fence, count = 1, not
+--          2. Sec ruled Backend's THREE legs stronger than the count: a
+--          reachable `http://` POSITIVE CONTROL, `file://` attributed
+--          explicitly to Chromium's own policy (not this worker's fence),
+--          and `data:` NOT aborted as the discriminating negative. Do not
+--          write a leg asserting "2" — it would encode a struck claim.
+--          COMPOSED — workers/pdf-render/test/render.test.js: "resource-
+--          loading fence: file:// iframe + metadata-IP img -> Sec's exact
+--          payload, neither the signing key nor fetched content in the
+--          PDF" (measures and DOCUMENTS the count=1 divergence in its own
+--          text, flagged for Sec re-read rather than silently reconciled —
+--          exactly the discipline this close-gate file itself follows);
+--          "resource-loading fence: file:// is refused by Chromium's OWN
+--          local-resource policy, independent of this worker's
+--          interception"; "resource-loading fence (non-vacuous control): a
+--          LOCAL reachable http:// target's content never reaches the
+--          PDF"; "data: URIs are NOT aborted — the one allowed resource
+--          scheme".
+--          RT-21 letters: COMPOSED — api/src/lib/server/pdf/
+--          renderClient.test.ts, the re-derived (a)-(g) battery, each its
+--          own leg per the AC's own instruction.
+--          Inert-<script> (P6 item 7): ⚠ CORRECTED (team-lead Ruling 1,
+--          2026-09-06) — NOT open, and NOT unbuildable; it was already
+--          BUILT on `feature/self-358` (P6's own branch, not yet merged to
+--          `main`), which the earlier pass of this file did not check.
+--          COMPOSED, spanning both engines exactly as Sec's own wording
+--          requires: the APP side is
+--          `api/src/routes/reports/monthly/[target_month]/pdf/
+--          pdf.escaping.test.ts`, committed at `a610718` (already on
+--          `feature/self-358` before this pass touched it) — its own
+--          header names itself explicitly: `"the WORKER side (the two-abort
+--          interception leg) is A4's own battery, named for QA at P10;
+--          THIS file is the APP side."` It proves the FULL self-contained
+--          document this route pushes to the PDF worker never carries a
+--          live `<script>` tag for a stored commentary payload or the
+--          owner string. The WORKER side is A4's `render.test.js`
+--          (already on `main`, cited above). Both halves exist; nothing
+--          new was owed here. Still genuinely open: this leg (like items
+--          (e)/(f) below) cannot be EXERCISED against `main` until P6
+--          merges — that dependency-ordering fact stands, but it is a
+--          MERGE-ORDER gate on the close-gate VERDICT (item 14), not a
+--          missing leg.
+--   AC4  — TRI-AXIS IS CONDITIONAL (Sec M-3), quoted verbatim so a future
+--          reader cannot "fix" the asymmetry into uniformity: "tri-axis
+--          tenant x scope x tax_treatment where the underlying classes
+--          carry tax-treatment; for §2.6.1 surfaces with no tax-treatment
+--          dimension it collapses to tenant x scope." Of the six §2.6.1
+--          sections A3 composes, only Estimated Taxes (<- 104) keys on
+--          `tax_treatment` at all — Account Holdings (<- 105/
+--          fn_nav_composition) keys on `scope`+`cat`, never on
+--          `tax_treatment`, and the AC's own text says that surface
+--          therefore collapses to tenant x scope. Writing a tax_treatment
+--          axis over it would be a leg that CANNOT FAIL — "the tell" the
+--          AC names explicitly.
+--          NEW: BLOCK AC4 below — genuinely absent tree-wide (measured:
+--          no existing battery gives two tenants the IDENTICAL scope
+--          string AND the IDENTICAL tax_treatment string simultaneously;
+--          110's own LEG 1 proves isolation with tenant B's data merely
+--          PRESENT, not with both non-tenant axes COLLIDING, which is
+--          exactly the shape a leg that "cannot fail" would hide behind —
+--          isolation keyed on the wrong column can pass by accident when
+--          the axes happen to differ between tenants). One fixture, two
+--          tenants, IDENTICAL scope ('household') AND IDENTICAL
+--          tax_treatment ('tax_deferred') strings, different amounts:
+--          proves Account Holdings (tenant x scope) and Estimated Taxes
+--          (tenant x scope x tax_treatment, per the AC's own axis
+--          assignment) both isolate on TENANCY specifically, not by
+--          accident of the strings differing.
+--   ITEM (d) — 115's render budget (a probe leg or a documented
+--          measurement of fn_finalize_monthly_report against the on-demand
+--          p95 <= 2000ms budget at synthetic scale) AND P4's per-pending-
+--          row composition cost, measured once (team-lead Ruling 2,
+--          2026-09-06: (d) stays here since 115 is on main; the P4 half is
+--          measured READ-ONLY against origin/feature/self-356 @ f1d8283,
+--          never authored there).
+--          DOCUMENTED MEASUREMENT, not a repeatable CI-graded leg —
+--          deliberately: a hard wall-clock assertion in a shared-runner CI
+--          lane is exactly the "sleeps, retries, flaky-on-Tuesday" class
+--          this discipline exists to refuse (QA's own standing rule), and
+--          a single scratch-DB run cannot bound CI-runner variance anyway.
+--          FIXTURE: synthetic-scale, one tenant, 10 accounts (mixed
+--          depository/investment, mixed scope, mixed tax_treatment) x 12
+--          months of account_trans each = 120 transaction rows. Measured
+--          on a fresh scratch clone (db-template-clone.sh) via psql
+--          `\timing`, 2026-09-06:
+--            fn_render_monthly_report('2026-08-01','2026-08-31') alone:
+--              122.391 ms (COLD — first call in the transaction; query
+--              plans not yet cached).
+--            fn_open_monthly_report_draft + fn_finalize_monthly_report,
+--              end to end (draft insert + A3 composition + Lock 12
+--              children write + payload freeze, ONE transaction):
+--              1.904 ms + 108.421 ms = 110.325 ms (WARM — runs after the
+--              render call above in the same session, so plan/buffer
+--              caching plausibly explains it reading FASTER than the
+--              standalone cold call rather than being genuinely cheaper;
+--              a single run cannot separate the two, and this measurement
+--              does not claim to).
+--          BOTH single-digit-hundreds-of-ms, comfortably inside the
+--          2000ms p95 budget — roughly 15x-18x margin even taking the
+--          COLD number as the worst case. No probe LEG is added on top of
+--          this: at this margin a hard threshold assertion would either
+--          never fire (dead code) or fire on CI-runner noise unrelated to
+--          a real regression (exactly the flaky-exclusion class this
+--          discipline refuses) — the number is recorded for a human or a
+--          future dedicated perf-budget harness to act on, not asserted
+--          here.
+--          P4's PER-PENDING-ROW COST (feature/self-356 @ f1d8283, read
+--          only): `reports/monthly/+page.server.ts`'s `load()` issues
+--          EXACTLY ONE `fn_render_monthly_report` RPC per PENDING (draft)
+--          row, to derive the `noLedgerDesignated` display flag from that
+--          draft's own composed payload (verified live: `.rpc(
+--          'fn_render_monthly_report', ...)` inside `draftRows.map(...)`,
+--          the file's own comment states "One RPC per pending row: bounded
+--          in ordinary use" citing 108's own one-live-draft-per-month
+--          partial unique index as the structural cap). So the per-
+--          pending-row cost IS the fn_render_monthly_report measurement
+--          above (~122ms cold) — not a separate code path, and not
+--          separately measured. A tenant with the product-structural
+--          maximum of ONE pending draft per month therefore pays at most
+--          ~122ms extra on that listing page load; there is no scenario
+--          in the current write paths (113/114 both enforce at-most-one-
+--          live-draft-per-month) where this multiplies across many
+--          concurrent pending rows for one tenant.
+-- =====================================================================
+-- QA-owned. Authors NO schema. Composes 106/108-115 + workers/etl's pytest.
+--
+-- ⟦EXPECTED STACK⟧ 106-115-applied (main tip 910148c or later). Below any
+-- of them the referenced surface does not exist and any NEW leg touching
+-- it is RED for that reason alone.
+--
+-- POSTURE (SECURITY §4.5): SYNTHETIC ONLY — fixed-UUID tenants
+-- (_rls.tenant_a()/_b(), plus battery-local tenant D, totp-enrolled, for
+-- the aal2 leg — same fixed UUID 108/109/115 already use). No PII, no real
+-- account numbers, no production data. Rolled-back txn; no
+-- `supabase db reset`.
+-- =====================================================================
+
+begin;
+
+\ir ../_fixtures/rls_verbs.psql
+
+select plan(6);
+
+select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
+\set td '00000000-0000-0000-0000-00000000000d'
+
+insert into auth.users (id) values (:'ta'), (:'tb'), (:'td');
+insert into pfin.user_settings (users_id, mfa_policy) values
+  (:'ta', 'none'), (:'tb', 'none'), (:'td', 'totp');
+
+-- Minimal manual-account fixture (110's / 115's own precedent) so
+-- fn_render_monthly_report composes a genuinely non-empty payload — a
+-- byte-identity proof over an EMPTY payload would be vacuous (both sides
+-- would agree trivially on '{}'-shaped output).
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
+  values (:'ta', 'AC7-acct', 'depository', 'household', 'taxable') returning account_id as ac7_acct \gset
+insert into pfin.account_trans (account_id, transaction_date, amount, vendor, description, transaction_type)
+  values (:ac7_acct, '2026-01-01', 1000, 'setup', 'opening balance', 'acct_setup');
+
+-- =====================================================================
+-- BLOCK AC7 — THE FROZEN PAYLOAD IS GENUINELY STORED, NOT RECOMPOSED (A1
+-- item 2, R1 rider 1). 108's own LEG 9 proves the CHECK constraint (the
+-- three payload fields are jointly NULL-or-NOT-NULL by status); it does
+-- NOT prove the read path itself never re-invokes A3. This is that proof.
+-- =====================================================================
+select _rls.set_tenant(:'ta'::uuid);
+select pfin.fn_open_monthly_report_draft('2026-01-01') as d_ac7 \gset
+select pfin.fn_finalize_monthly_report('2026-01-01', 'skipped');
+select set_config('role', 'postgres', true);
+
+select (select rendered_payload::text from pfin.monthly_report where report_id = :d_ac7::bigint) as ac7_payload1 \gset
+
+-- ⚠ THE REAL PROOF, not the trivial one: revoke EXECUTE on
+-- fn_render_monthly_report ENTIRELY (savepoint-wrapped, restored after) and
+-- confirm the read STILL succeeds and returns the IDENTICAL bytes. If a
+-- read of a final row ever called A3, this read would fail outright the
+-- instant EXECUTE is gone — a `select` returning the frozen payload with
+-- A3 unreachable is the one thing that cannot happen if the payload were
+-- recomposed at read time. INVERSION-PROVEN (Sec-c convention): with the
+-- EXECUTE grant intact, the same assertion is vacuously true regardless of
+-- whether the payload is stored or recomposed (either way the bytes would
+-- match, since the fixture is unchanged between generation and read) —
+-- the revoke is WHAT MAKES THIS A REAL TEST rather than a tautology.
+savepoint sp_ac7_revoke;
+revoke execute on function pfin.fn_render_monthly_report(date, date) from authenticated;
+select _rls.set_tenant(:'ta'::uuid);
+-- THE REVOKE IS ACTUALLY IN EFFECT (not merely issued): a DIRECT call to A3
+-- under this same tenant, inside the same savepoint, is refused outright.
+-- Without this leg, a no-op REVOKE (wrong signature, wrong grantee, a
+-- superuser role that bypasses ACLs) would let the read below pass for the
+-- wrong reason — proving nothing about the read path.
+select throws_like(
+  $$ select pfin.fn_render_monthly_report('2026-01-01', '2026-01-31') $$,
+  '%permission denied for function fn_render_monthly_report%',
+  '(AC7-revoke-check) THE REVOKE IS GENUINELY IN EFFECT: a DIRECT call to fn_render_monthly_report under this same tenant, same savepoint, is refused — the read below is not vacuously passing because the revoke silently failed to bind'
+);
+select is(
+  (select rendered_payload::text from pfin.monthly_report where report_id = :d_ac7::bigint),
+  :'ac7_payload1'::text,
+  '(AC7) THE REAL PROOF: with fn_render_monthly_report''s (A3) EXECUTE grant revoked entirely (confirmed above, not assumed), reading a final report''s rendered_payload STILL SUCCEEDS and returns BYTE-IDENTICAL content to what was captured right after finalization — a read of a final row issues NO call to A3, proving the payload is genuinely stored, not recomposed (R1 (A))'
+);
+select set_config('role', 'postgres', true);
+rollback to savepoint sp_ac7_revoke;
+
+-- Non-vacuous control: WITH EXECUTE restored (post-rollback), A3 itself is
+-- still callable and still composes for this tenant — proves the revoke
+-- above genuinely disabled the function rather than the leg accidentally
+-- calling a different, already-broken path.
+select _rls.set_tenant(:'ta'::uuid);
+select ok(
+  (select pfin.fn_render_monthly_report('2026-01-01', '2026-01-31')) is not null,
+  '(AC7-control) NON-VACUOUS: with the EXECUTE grant restored (post-rollback), fn_render_monthly_report is callable again and composes a non-null payload for this tenant — the revoke above was a genuine disable, not an accident that happened to leave the leg trivially true'
+);
+select set_config('role', 'postgres', true);
+
+-- =====================================================================
+-- BLOCK AC4 — TRI-AXIS ORTHOGONALITY (Sec M-3, quoted in the header above).
+-- Account Holdings (<- 105/fn_nav_composition) keys on `scope`+`cat`, NEVER
+-- on `tax_treatment` — it is a §2.6.1 surface with no tax-treatment
+-- dimension, so per the AC's own text it collapses to tenant x scope. Both
+-- tenants below are given the IDENTICAL scope ('household') AND the
+-- IDENTICAL tax_treatment ('tax_deferred') string — a leg that isolated by
+-- accident of the non-tenant axes differing between tenants would be a leg
+-- that CANNOT FAIL, which is the exact tell the AC names.
+-- =====================================================================
+select _rls.set_tenant(:'ta'::uuid);
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
+  values (:'ta', 'AC4-ta-acct', 'depository', 'household', 'tax_deferred') returning account_id as ac4_ta_acct \gset
+select set_config('role', 'postgres', true);
+select _rls.set_tenant(:'tb'::uuid);
+insert into pfin.account (users_id, name, account_type, scope, tax_treatment)
+  values (:'tb', 'AC4-tb-acct', 'depository', 'household', 'tax_deferred') returning account_id as ac4_tb_acct \gset
+select set_config('role', 'postgres', true);
+
+insert into pfin.account_trans (account_id, transaction_date, amount, vendor, description, transaction_type)
+  values (:ac4_ta_acct, '2026-03-01', 4000, 'setup', 'opening balance', 'acct_setup');
+insert into pfin.account_trans (account_id, transaction_date, amount, vendor, description, transaction_type)
+  values (:ac4_tb_acct, '2026-03-01', 9000, 'setup', 'opening balance', 'acct_setup');
+
+select _rls.set_tenant(:'ta'::uuid);
+select is(
+  (select (pfin.fn_render_monthly_report('2026-03-01', '2026-03-31')
+             -> 'sections' -> 'account_holdings' -> 'buildups' ->> 'gross_total')::numeric),
+  5000.00,
+  '(AC4-scope) QUOTING THE AC (Sec M-3): "tri-axis tenant x scope x tax_treatment where the underlying classes carry tax-treatment; for §2.6.1 surfaces with no tax-treatment dimension it collapses to tenant x scope." Account Holdings has NO tax_treatment dimension, so this collapses to tenant x scope — proven here with BOTH tenants holding the IDENTICAL scope (''household'') AND the IDENTICAL tax_treatment (''tax_deferred'') string on the account itself: composing for tenant A returns $5000 — tenant A''s OWN two accounts (BLOCK AC7''s $1000 baseline + this block''s $4000), NEVER tenant B''s $9000 on top — isolation is genuinely keyed on TENANCY, not on the non-tenant axes happening to differ between tenants'
+);
+select set_config('role', 'postgres', true);
+
+select _rls.set_tenant(:'tb'::uuid);
+select is(
+  (select (pfin.fn_render_monthly_report('2026-03-01', '2026-03-31')
+             -> 'sections' -> 'account_holdings' -> 'buildups' ->> 'gross_total')::numeric),
+  9000.00,
+  '(AC4-scope-b) THE REVERSE, NON-VACUOUS: composing for tenant B under the SAME colliding scope/tax_treatment strings returns tenant B''s own $9000 — not tenant A''s $5000 and not the combined $14000 — proving the isolation direction is not coincidental (e.g. always reading whichever account was inserted first)'
+);
+select set_config('role', 'postgres', true);
+
+-- (AC4-scope-control) CORRUPT-THE-CONTROL, mirroring 110 LEG 1's (1b): the
+-- SAME query, role assumption struck (called as postgres, RLS bypassed —
+-- no SET LOCAL ROLE authenticated). If (AC4-scope)'s isolation were
+-- vacuous — e.g. the fixture accidentally isolating on the account_id
+-- values rather than tenancy — this would read the SAME $5000 regardless.
+-- It does not: it picks up BOTH tenants' colliding-scope accounts.
+select isnt(
+  (select (pfin.fn_render_monthly_report('2026-03-01', '2026-03-31')
+             -> 'sections' -> 'account_holdings' -> 'buildups' ->> 'gross_total')::numeric),
+  5000.00,
+  '(AC4-scope-control) TEETH: with the role assumption struck (called as postgres, RLS bypassed), gross_total is NOT tenant A''s $5000 — it picks up BOTH tenants'' colliding-scope/tax_treatment accounts ($14000), proving (AC4-scope)''s isolation genuinely depends on RLS/tenancy and is not an artifact of the fixture'
+);
+select set_config('role', 'postgres', true);
+
+select * from finish();
+rollback;

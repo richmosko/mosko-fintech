@@ -37,12 +37,32 @@
 	collapsed to its empty state and this page-level header is still the fallback either way).
 
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5).
+
+	STALENESS (SELF-361 / P9): `staleness` (a REQUIRED prop, `+page.server.ts`'s own whole-tenant
+	`loadStaleness()` read, threaded verbatim) is rendered via ONE page-level
+	`<StaleConstituentBadge>` beside the `<h2>` below — mirrors NavDeltaPanel's own "badge beside
+	the section heading" convention. This page has no per-account row to tint (each jurisdiction
+	table is a fixed set of computed lines, not an account list), so a single page-level mount
+	covers both jurisdiction tables — no second mount inside TaxJurisdictionTable.svelte.
+
+	⚠ SEPARATION (AC3, stated here because this is where all three registers are actually composed
+	on this page): the `<StaleConstituentBadge>` covers ONLY §2.4.4 Plaid-connection staleness
+	("your brokerage needs re-auth"). It is NOT the same signal as (a) the
+	`noTaxAuthorityDesignated` banner just below ("no account is marked as a tax authority" — a
+	designation gap, not a connection problem) or (b) `reasonCopy()`'s `{status:'unavailable',
+	reason}` envelopes and the `basis_year` fallback rendered inside each `TaxJurisdictionTable`
+	(ADR-067 Decision 5 — "no schedule published yet" / "no ledger designated", capability/
+	configuration facts, not connection facts). Three distinct registers, three distinct user
+	actions; none may collapse into another, and no new copy is owed for any of them — all three
+	are already shipped.
 -->
 <script lang="ts">
 	import TaxJurisdictionTable from './TaxJurisdictionTable.svelte';
+	import StaleConstituentBadge from './StaleConstituentBadge.svelte';
 	import type { TaxQuarterlyLiability, PriorYearQ4 } from '$lib/tax-quarterly';
+	import type { StalenessData } from '$lib/staleness/stale-constituent';
 
-	// Sec F3(B)-style discipline: all three REQUIRED, no default — a caller that forgets to thread
+	// Sec F3(B)-style discipline: all four REQUIRED, no default — a caller that forgets to thread
 	// real loader data fails at TYPECHECK, not as a silent "confirmed healthy" fallback.
 	// `priorYearQ4` is typed `PriorYearQ4 | null` rather than optional — null IS the closed-window
 	// state, a caller must decide, not omit.
@@ -50,6 +70,7 @@
 		liability,
 		noTaxAuthorityDesignated,
 		priorYearQ4,
+		staleness,
 		editBracketsHref = '/settings/tax-brackets',
 		designateAccountHref = '/accounts',
 		decompositionHref = '/taxes/decomposition'
@@ -57,6 +78,8 @@
 		liability: TaxQuarterlyLiability;
 		noTaxAuthorityDesignated: boolean;
 		priorYearQ4: PriorYearQ4 | null;
+		/** SELF-361 / P9 — the whole-tenant `046` read; rendered via the page-level badge below. */
+		staleness: StalenessData;
 		editBracketsHref?: string;
 		designateAccountHref?: string;
 		/** Team-lead ruling — cross-link to the §2.5.1 sibling (SELF-264). */
@@ -66,7 +89,12 @@
 
 <section class="quarterly" aria-labelledby="quarterly-label">
 	<header class="page-head">
-		<h2 id="quarterly-label" class="page-label">Estimated Quarterly Taxes</h2>
+		<div class="page-title-group">
+			<h2 id="quarterly-label" class="page-label">Estimated Quarterly Taxes</h2>
+			<!-- D1 stale-data-marker (SELF-361 / P9): marks stale contribution beside the surface,
+			     never hides it. See this file's own header for the three-register separation. -->
+			<StaleConstituentBadge isStale={staleness.is_stale} staleItems={staleness.stale_items} />
+		</div>
 		<div class="page-actions">
 			<a class="decomposition-link" href={decompositionHref}>Income decomposition →</a>
 			<!-- AC 7 — standing affordance, unconditional (QA-walk defect fix). -->
@@ -113,6 +141,13 @@
 		align-items: baseline;
 		justify-content: space-between;
 		gap: var(--space-3);
+		flex-wrap: wrap;
+	}
+	.page-title-group {
+		display: flex;
+		align-items: baseline;
+		gap: var(--space-3);
+		flex-wrap: wrap;
 	}
 	.page-label {
 		margin: 0;

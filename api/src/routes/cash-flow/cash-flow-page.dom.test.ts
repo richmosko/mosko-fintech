@@ -32,6 +32,7 @@ import { EMPTY_CASHFLOW_ROW_STALENESS_MAP } from '$lib/cashflow-row-staleness';
 const LAYOUT_DEFAULTS = {
 	userEmail: null,
 	pendingClassificationCount: 0,
+	pendingMonthlyReportCount: 0,
 	connectionHealth: { reauthCount: 0, institutionDownCount: 0 },
 	historicalExpenditures: null,
 	historicalExpendituresUnclassifiedCount: null,
