@@ -22,6 +22,8 @@ import {
 } from '$lib/fixtures/monthly-report';
 import type { TaxCharacterCatalog } from '$lib/tax-decomposition';
 import type { MonthlyReportHeader, MonthlyReportPayload } from '$lib/monthly-report';
+import { EMPTY_STALENESS, type StalenessData } from '$lib/staleness/stale-constituent';
+import { EMPTY_CASHFLOW_ROW_STALENESS_MAP, type CashflowRowStalenessMap } from '$lib/cashflow-row-staleness';
 
 const SEED_DELTA = '100_tax_value_inventory_seed_delta.sql';
 const CATALOG: TaxCharacterCatalog = [{ code: 'ordinary', label: 'Ordinary income', display_order: 10 }];
@@ -31,6 +33,9 @@ type RenderOverrides = {
 	payload?: MonthlyReportPayload;
 	taxCharacters?: TaxCharacterCatalog;
 	seedDeltaMigration?: string;
+	staleness?: StalenessData;
+	cashflowRowStaleness?: CashflowRowStalenessMap;
+	staleAccountNames?: string[];
 };
 
 function renderReport(overrides: RenderOverrides = {}) {
@@ -40,6 +45,13 @@ function renderReport(overrides: RenderOverrides = {}) {
 			payload: MONTHLY_REPORT_PAYLOAD,
 			taxCharacters: CATALOG,
 			seedDeltaMigration: SEED_DELTA,
+			// P8 (SELF-360) defaults: CONFIRMED-healthy / zero-footprint, so every pre-existing
+			// test in this file keeps asserting exactly what it always did — no stray badge
+			// markup, no banner — without needing to know P8 exists. The P8-specific describe
+			// block below overrides these explicitly per case.
+			staleness: EMPTY_STALENESS,
+			cashflowRowStaleness: EMPTY_CASHFLOW_ROW_STALENESS_MAP,
+			staleAccountNames: [],
 			...overrides
 		}
 	});
@@ -246,5 +258,132 @@ describe('MonthlyReportView — AC2/AC4/AC8: draft vs final branching', () => {
 
 		const { body: authored } = renderReport({ header: MONTHLY_REPORT_HEADER_FINAL });
 		expect(authored).not.toContain('Commentary was skipped for this month.');
+	});
+});
+
+// ── P8 (SELF-360) — §2.6.5 staleness markers ────────────────────────────────────────────────
+const STALE: StalenessData = {
+	is_stale: true,
+	stale_items: [
+		{
+			linked_source_id: '1',
+			institution_name: 'Chase',
+			provider: 'plaid',
+			connection_status: 'login_required',
+			status_class: 'error'
+		}
+	]
+};
+
+/** Extracts one named `<section ...>...</section>` block from the rendered body, by its own
+ *  distinguishing attribute substring — scoping an assertion to ONE section rather than the
+ *  whole body, the same discipline this file's other tests already apply (e.g. the report-stamp
+ *  regex above) to avoid a marker elsewhere on the page producing a false pass.
+ *
+ *  ⚠ NESTED-SECTION-AWARE, deliberately: every reused component this file wraps (NavCompositionTable,
+ *  NavDeltaPanel, NavReferenceDatesPanel, CashflowRollupTable, HistoricalExpendituresChart,
+ *  TaxDecompositionTable, TaxQuarterlyTables) renders its OWN root `<section>` — so a naive
+ *  `indexOf('</section>', start)` would stop at the FIRST inner component's own closing tag,
+ *  silently truncating the "NAV Performance" wrapper (NavDeltaPanel + the basis-line/series table
+ *  + NavReferenceDatesPanel, in that order) before ever reaching the second reused component.
+ *  This counts nested `<section` opens against `</section>` closes to find the OUTER wrapper's
+ *  own matching close. */
+function sectionBody(body: string, openTagSubstring: string): string {
+	const start = body.indexOf(openTagSubstring);
+	expect(start, `section opening "${openTagSubstring}" found`).toBeGreaterThanOrEqual(0);
+
+	let depth = 0;
+	let cursor = start;
+	const tagPattern = /<section\b|<\/section>/g;
+	tagPattern.lastIndex = start;
+	let match: RegExpExecArray | null;
+	while ((match = tagPattern.exec(body)) !== null) {
+		if (match[0] === '</section>') {
+			depth -= 1;
+			if (depth === 0) {
+				cursor = match.index;
+				return body.slice(start, cursor);
+			}
+		} else {
+			depth += 1;
+		}
+	}
+	throw new Error(`no matching closing </section> found for "${openTagSubstring}"`);
+}
+
+describe('MonthlyReportView — P8 (SELF-360): report-level banner (AC3/AC7)', () => {
+	it('renders NOTHING when staleAccountNames is empty (zero footprint — covers both "confirmed healthy" and "read failed")', () => {
+		const { body } = renderReport({ staleAccountNames: [] });
+		expect(body).not.toContain('currently in re-auth state');
+	});
+
+	it("renders AC7's copy verbatim, naming the accounts and the report's own bare month/year", () => {
+		const { body } = renderReport({ staleAccountNames: ['Chase Checking', 'Fidelity Brokerage'] });
+		expect(body).toContain(
+			'These accounts are currently in re-auth state; sections sourced from them are marked stale as of today, not as of August 2026: Chase Checking, Fidelity Brokerage.'
+		);
+	});
+});
+
+describe('MonthlyReportView — P8 (SELF-360): per-section live staleness wiring (AC2/AC4)', () => {
+	it('threads the REAL staleness object into Account Holdings (NavCompositionTable), not a placeholder', () => {
+		const { body } = renderReport({ staleness: STALE });
+		const holdings = sectionBody(body, '<section aria-label="Account Holdings">');
+		expect(holdings).toContain('May be stale');
+	});
+
+	it('threads the REAL staleness object into NAV Performance (NavDeltaPanel / NavReferenceDatesPanel)', () => {
+		const { body } = renderReport({ staleness: STALE });
+		const navPerf = sectionBody(body, '<section class="nav-performance">');
+		expect(navPerf).toContain('May be stale');
+	});
+
+	it('Asset Allocation (pre-ruling i): a SECTION-HEADER badge off the whole-tenant staleness, since the payload carries no account_id for per-row attribution', () => {
+		// No trailing `"` on the search string: Svelte appends a scoped-style hash class to any
+		// class attribute matched by a rule in this file's own <style> block (`.asset-allocation`
+		// is — see the `.asset-allocation .head` rule), so the rendered attribute is
+		// `class="asset-allocation svelte-xxxxx"`, never a bare `class="asset-allocation"`.
+		const { body: staleBody } = renderReport({ staleness: STALE });
+		const allocStale = sectionBody(staleBody, '<section class="asset-allocation');
+		expect(allocStale).toContain('May be stale');
+
+		const { body: healthyBody } = renderReport({ staleness: EMPTY_STALENESS });
+		const allocHealthy = sectionBody(healthyBody, '<section class="asset-allocation');
+		expect(allocHealthy).not.toContain('May be stale');
+	});
+
+	it('threads the REAL staleness + cashflowRowStaleness into Cash Flow (CashflowRollupTable / HistoricalExpendituresChart)', () => {
+		const { body } = renderReport({ staleness: STALE });
+		const cashFlow = sectionBody(body, '<section aria-label="Cash Flow">');
+		expect(cashFlow).toContain('May be stale');
+	});
+
+	it('threads the REAL staleness into Estimated Taxes (TaxDecompositionTable / TaxQuarterlyTables)', () => {
+		const { body } = renderReport({ staleness: STALE });
+		const estTaxes = sectionBody(body, '<section aria-label="Estimated Taxes">');
+		expect(estTaxes).toContain('May be stale');
+	});
+});
+
+describe('MonthlyReportView — P8 (SELF-360) AC6: negative leg — commentary and owner header never marked', () => {
+	it('Rebalancing Targets (commentary) renders NO stale badge even when staleness is confirmed-stale', () => {
+		const { body } = renderReport({ staleness: STALE });
+		const rebalancing = sectionBody(body, '<section class="rebalancing-targets"');
+		expect(rebalancing).not.toContain('stale-connection-marker');
+		expect(rebalancing).not.toContain('May be stale');
+	});
+
+	it('the owner-header line renders NO stale badge even when staleness is confirmed-stale', () => {
+		// No trailing `"` on either search string — both `.report-head` and `.report-actions`
+		// are styled in this file's own <style> block, so Svelte appends a scoped-style hash to
+		// each rendered class attribute (same reasoning as the Asset Allocation leg above).
+		const { body } = renderReport({ staleness: STALE, header: MONTHLY_REPORT_HEADER_FINAL });
+		const headStart = body.indexOf('<header class="report-head');
+		const headEnd = body.indexOf('<div class="report-actions');
+		expect(headStart).toBeGreaterThanOrEqual(0);
+		expect(headEnd).toBeGreaterThan(headStart);
+		const reportHead = body.slice(headStart, headEnd);
+		expect(reportHead).not.toContain('stale-connection-marker');
+		expect(reportHead).not.toContain('May be stale');
 	});
 });
