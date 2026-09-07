@@ -41,6 +41,7 @@ import { serverTodayAsOf } from '$lib/server/time/asOf';
 import { monthlyCommentaryUpsertSchema } from '$lib/server/schemas/monthly-commentary';
 import { authoredFinalizeSchema } from '$lib/server/schemas/monthly-report-finalize';
 import { fieldErrors } from '$lib/server/schemas/account';
+import { mapMonthlyReportWriteError } from '$lib/server/monthly-report-write-error';
 import {
 	parseTargetMonth,
 	noLedgerDesignated as computeNoLedgerDesignated,
@@ -154,9 +155,16 @@ export const load: PageServerLoad = async ({ locals, url, params }) => {
 	// query. Only meaningful while `isDraft` (a `final` row can no longer be finalized, so the
 	// prompt has nothing left to gate); fail-soft to `false` on a composition-read failure — a
 	// missed nudge, never a broken editor page.
+	// OPTIONAL C (V1.5 aal2 close-out follow-up, Sec self356-sec-review.md NOTE-1): tri-state, not
+	// boolean — `null` means "could not determine" and is kept DISTINCT from a real `false`
+	// ("checked, both jurisdictions are designated"), matching StaleConstituentBadge's own
+	// discipline (a degraded read must never render as silently healthy). `false` remains the
+	// value for a `final` row, where the prompt is structurally inapplicable (nothing left to
+	// finalize) rather than unknown.
 	const isDraft = row.generation_status === 'draft';
-	let noLedgerDesignated = false;
+	let noLedgerDesignated: boolean | null = false;
 	if (isDraft) {
+		noLedgerDesignated = null;
 		try {
 			const { data: composed, error: renderErr } = await locals.supabase
 				.schema('pfin')
@@ -166,10 +174,15 @@ export const load: PageServerLoad = async ({ locals, url, params }) => {
 				});
 			if (!renderErr && composed) {
 				noLedgerDesignated = computeNoLedgerDesignated(composed as MonthlyReportPayload);
+			} else if (renderErr) {
+				console.error(
+					'[reports/monthly/commentary] payload composition failed; degrading noLedgerDesignated to unknown:',
+					renderErr.message
+				);
 			}
 		} catch (err) {
 			console.error(
-				'[reports/monthly/commentary] payload composition threw; degrading noLedgerDesignated to false:',
+				'[reports/monthly/commentary] payload composition threw; degrading noLedgerDesignated to unknown:',
 				err
 			);
 		}
@@ -198,6 +211,12 @@ export const load: PageServerLoad = async ({ locals, url, params }) => {
 function mapSaveError(error: PostgrestError): { status: number; message: string } {
 	switch (error.code) {
 		case '42501':
+			// DEAD on this path (V1.5 aal2 close-out follow-up, Sec self355/self356-sec-review.md):
+			// 112's own first statement is `SELECT ... FOR UPDATE`, which refuses a below-aal2
+			// caller by finding ZERO ROWS to lock — that surfaces as P0001 below, never reaches an
+			// INSERT/UPDATE whose own WITH CHECK could raise this. Kept for shape, matching the
+			// Lock-14 direct-write convention (`settings/owner-id`, `settings/tax-brackets`) this
+			// branch was originally copied from, where 42501 genuinely does fire.
 			return {
 				status: 403,
 				message: 'This action requires a freshly verified session. Please step up and try again.'
@@ -208,38 +227,16 @@ function mapSaveError(error: PostgrestError): { status: number; message: string 
 				message: 'Could not save — one section is over the character limit. Please shorten it and try again.'
 			};
 		case 'P0001':
+			// Widened (V1.5 aal2 close-out follow-up, Sec self355-sec-review.md FLAG): names the
+			// third possibility — a below-aal2 session — alongside the two this collapsed message
+			// already covered, without disclosing WHICH of the three actually applies.
 			return {
 				status: 400,
 				message:
-					'Could not save commentary for this month — the report may already be finalized, or no longer exists. Refresh and try again.'
+					'Could not save commentary for this month — the report may already be finalized, no longer exist, or your session may need re-verification — try signing in again.'
 			};
 		default:
 			console.error('[reports/monthly/commentary] unexpected write error:', error.code, error.message);
-			return { status: 500, message: 'Something went wrong. Please try again.' };
-	}
-}
-
-/** Maps a `pfin.fn_finalize_monthly_report` failure to a clean 4xx/5xx — mirrors `mapSaveError`
- *  just above (112's own sibling write path) and the identically-named mapper in
- *  `reports/monthly/+page.server.ts` (P5's own `?/skip` action, the OTHER call site onto this same
- *  115 RPC). Not extracted into a shared module — the two files are each a small, self-contained
- *  Backend-surface file per this ticket's own authorship note, and the mapping is three lines;
- *  flagged as a judgment call at hand-off rather than a silent duplication. */
-function mapFinalizeError(error: PostgrestError): { status: number; message: string } {
-	switch (error.code) {
-		case '42501':
-			return {
-				status: 403,
-				message: 'This action requires a freshly verified session. Please step up and try again.'
-			};
-		case 'P0001':
-			return {
-				status: 400,
-				message:
-					'Could not finalize this report — it may already be finalized, or no longer exists. Refresh and try again.'
-			};
-		default:
-			console.error('[reports/monthly/commentary] unexpected finalize error:', error.code, error.message);
 			return { status: 500, message: 'Something went wrong. Please try again.' };
 	}
 }
@@ -311,9 +308,12 @@ export const actions: Actions = {
 				p_commentary_disposition: 'authored'
 			});
 
+		// 42501 is DEAD here (115's own `SELECT ... FOR UPDATE` refuses a below-aal2 caller by
+		// finding zero rows to lock, before the INSERT that could otherwise raise it — see
+		// monthly-report-write-error.ts's own header) but the shared mapper keeps the branch.
 		if (rpcError || typeof reportId !== 'number') {
 			const { status, message } = rpcError
-				? mapFinalizeError(rpcError)
+				? mapMonthlyReportWriteError(rpcError, 'reports/monthly/commentary finalize')
 				: { status: 500, message: 'Something went wrong. Please try again.' };
 			return fail(status, { errors: { _form: [message] } });
 		}

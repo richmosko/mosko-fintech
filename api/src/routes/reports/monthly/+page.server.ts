@@ -41,7 +41,7 @@ import { serverTodayAsOf } from '$lib/server/time/asOf';
 import { noLedgerDesignated, type MonthlyReportPayload } from '$lib/monthly-report';
 import { skipFinalizeSchema } from '$lib/server/schemas/monthly-report-finalize';
 import { fieldErrors } from '$lib/server/schemas/account';
-import type { PostgrestError } from '@supabase/supabase-js';
+import { mapMonthlyReportWriteError } from '$lib/server/monthly-report-write-error';
 import type { Actions, PageServerLoad } from './$types';
 
 const MONTH_START_RE = /^\d{4}-\d{2}-01$/;
@@ -84,9 +84,11 @@ export type PendingEntry = {
 	targetMonth: string;
 	monthLabel: string;
 	// P4 (SELF-356 AC4) — see this file's `load()` for how this is derived (composed draft
-	// payload's own tax-authority exclusion envelope, not a second query). Fail-soft `false` on a
-	// composition-read failure — a missed nudge, never a blocked/broken listing page.
-	noLedgerDesignated: boolean;
+	// payload's own tax-authority exclusion envelope, not a second query). Fail-soft `null`
+	// (unknown, V1.5 aal2 close-out follow-up per self356-sec-review.md NOTE-1) on a
+	// composition-read failure — a missed nudge, never a fabricated "confirmed clear", and never a
+	// blocked/broken listing page.
+	noLedgerDesignated: boolean | null;
 };
 
 type CandidateState = 'none' | 'draft' | 'final';
@@ -166,7 +168,12 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const draftRows = allRows.filter((r) => r.generation_status === 'draft');
 	const pending: PendingEntry[] = await Promise.all(
 		draftRows.map(async (r) => {
-			let flagged = false;
+			// OPTIONAL C (V1.5 aal2 close-out follow-up, Sec self356-sec-review.md NOTE-1):
+			// tri-state — `null` (unknown) is the default and the fail-soft landing value, kept
+			// distinct from a real `false` ("checked, both jurisdictions are designated"), matching
+			// StaleConstituentBadge's own discipline. Every row here is already a draft (see the
+			// filter above), so there is no separate "not applicable" bucket to preserve.
+			let flagged: boolean | null = null;
 			try {
 				const { data: composed, error: renderErr } = await locals.supabase
 					.schema('pfin')
@@ -176,10 +183,15 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 					});
 				if (!renderErr && composed) {
 					flagged = noLedgerDesignated(composed as MonthlyReportPayload);
+				} else if (renderErr) {
+					console.error(
+						'[reports/monthly] pending-item payload composition failed; degrading noLedgerDesignated to unknown:',
+						renderErr.message
+					);
 				}
 			} catch (err) {
 				console.error(
-					'[reports/monthly] pending-item payload composition threw; degrading noLedgerDesignated to false:',
+					'[reports/monthly] pending-item payload composition threw; degrading noLedgerDesignated to unknown:',
 					err
 				);
 			}
@@ -196,35 +208,6 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
 	return { generated, pending, candidates };
 };
-
-/** Maps a `pfin.fn_finalize_monthly_report` failure to a clean 4xx/5xx — mirrors
- *  `[target_month]/commentary/+page.server.ts`'s own `mapSaveError` precedent for the sibling 112
- *  write path. 115 raises both of its user-reachable refusals as plain `RAISE EXCEPTION` (default
- *  SQLSTATE `P0001`, no discriminating code) — its own header states the "no live draft" refusal
- *  is DELIBERATELY non-discriminating ("absent / not-yours / already-final ... under RLS those are
- *  one condition and separating them leaks existence"), and this app's own two call sites always
- *  pass a literal `'authored'`/`'skipped'` disposition (never client-supplied), so the "invalid
- *  disposition" refusal is a defensive DB-side check against a caller this app never is, not a
- *  case this mapper needs to discriminate either — one generic sentence covers both P0001 cases,
- *  same non-disclosure-by-construction posture as `mapSaveError`. */
-function mapFinalizeError(error: PostgrestError): { status: number; message: string } {
-	switch (error.code) {
-		case '42501':
-			return {
-				status: 403,
-				message: 'This action requires a freshly verified session. Please step up and try again.'
-			};
-		case 'P0001':
-			return {
-				status: 400,
-				message:
-					'Could not finalize this report — it may already be finalized, or no longer exists. Refresh and try again.'
-			};
-		default:
-			console.error('[reports/monthly] unexpected finalize error:', error.code, error.message);
-			return { status: 500, message: 'Something went wrong. Please try again.' };
-	}
-}
 
 export const actions: Actions = {
 	generate: async ({ request, locals }) => {
@@ -248,7 +231,17 @@ export const actions: Actions = {
 			.schema('pfin')
 			.rpc('fn_open_monthly_report_draft', { p_target_month: targetMonth });
 
-		if (rpcError || typeof reportId !== 'number') {
+		// V1.5 aal2 close-out follow-up (Sec self357-sec-review.md's headline finding: this action
+		// previously had NO mapper at all, so a below-aal2 caller's LIVE 42501 — 113's own empty-lock
+		// INSERT WITH CHECK, the ONE case among these four actions where it is reachable — collapsed
+		// to an undifferentiated 500). Pure mapper on the returned `rpcError`, branched here at the
+		// call site; the redirect below stays OUTSIDE any try/catch so a committed write is never
+		// reported as a failure.
+		if (rpcError) {
+			const { status, message } = mapMonthlyReportWriteError(rpcError, 'reports/monthly generate');
+			return fail(status, { errors: { _form: [message] } });
+		}
+		if (typeof reportId !== 'number') {
 			return fail(500, { errors: { _form: ['Something went wrong. Please try again.'] } });
 		}
 
@@ -271,7 +264,14 @@ export const actions: Actions = {
 			.schema('pfin')
 			.rpc('fn_regenerate_monthly_report', { p_target_month: targetMonth });
 
-		if (rpcError || typeof reportId !== 'number') {
+		// 42501 is DEAD here (114 refuses a below-aal2 caller by finding zero rows to lock, raising
+		// P0001 instead — see monthly-report-write-error.ts's own header) but the shared mapper
+		// keeps the branch.
+		if (rpcError) {
+			const { status, message } = mapMonthlyReportWriteError(rpcError, 'reports/monthly regenerate');
+			return fail(status, { errors: { _form: [message] } });
+		}
+		if (typeof reportId !== 'number') {
 			return fail(500, { errors: { _form: ['Something went wrong. Please try again.'] } });
 		}
 
@@ -305,9 +305,12 @@ export const actions: Actions = {
 				p_commentary_disposition: 'skipped'
 			});
 
+		// 42501 is DEAD here (115's own `SELECT ... FOR UPDATE` refuses a below-aal2 caller by
+		// finding zero rows to lock, before the INSERT that could otherwise raise it — see
+		// monthly-report-write-error.ts's own header) but the shared mapper keeps the branch.
 		if (rpcError || typeof reportId !== 'number') {
 			const { status, message } = rpcError
-				? mapFinalizeError(rpcError)
+				? mapMonthlyReportWriteError(rpcError, 'reports/monthly skip')
 				: { status: 500, message: 'Something went wrong. Please try again.' };
 			return fail(status, { errors: { _form: [message] } });
 		}

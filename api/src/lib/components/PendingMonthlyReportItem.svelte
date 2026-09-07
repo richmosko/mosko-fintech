@@ -23,7 +23,7 @@
 		targetMonth,
 		monthLabel,
 		noLedgerDesignated
-	}: { targetMonth: string; monthLabel: string; noLedgerDesignated: boolean } = $props();
+	}: { targetMonth: string; monthLabel: string; noLedgerDesignated: boolean | null } = $props();
 </script>
 
 <li class="pending-item">

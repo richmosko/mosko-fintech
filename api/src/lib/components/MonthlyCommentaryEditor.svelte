@@ -140,7 +140,7 @@
 		priorCommentary: CommentaryValues;
 		allocation: NonReAllocation | null;
 		staleness: StalenessData;
-		noLedgerDesignated: boolean;
+		noLedgerDesignated: boolean | null;
 	} = $props();
 
 	// Raw, un-normalized draft state -- one $state string per section, bound directly to each

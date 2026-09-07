@@ -87,7 +87,7 @@ function makeActionEvent(
 
 type LoadResult = {
 	generated: Array<{ reportId: number; targetMonth: string; monthLabel: string; generatedAt: string | null }>;
-	pending: Array<{ reportId: number; targetMonth: string; monthLabel: string; noLedgerDesignated: boolean }>;
+	pending: Array<{ reportId: number; targetMonth: string; monthLabel: string; noLedgerDesignated: boolean | null }>;
 	candidates: Array<{ targetMonth: string; label: string; plainLabel: string; state: string }>;
 };
 
@@ -186,13 +186,16 @@ describe('load — pending noLedgerDesignated (P4 / SELF-356 AC4)', () => {
 		expect(result.pending[0].noLedgerDesignated).toBe(true);
 	});
 
-	it('a composition RPC error degrades that row to false, the listing still renders (fail-soft)', async () => {
+	// V1.5 aal2/asOf close-out follow-up (OPTIONAL C, Sec self356-sec-review.md NOTE-1): tri-state
+	// now — a composition failure degrades to `null` (unknown), never a fabricated `false`
+	// ("confirmed clear"), matching StaleConstituentBadge's own discipline.
+	it('a composition RPC error degrades that row to null (unknown), the listing still renders (fail-soft)', async () => {
 		const { client } = makeSupabase({
 			rows: [row({ report_id: 2, target_month: '2026-09-01', generation_status: 'draft' })],
 			rpcResult: { data: null, error: { code: '55555', message: 'boom' } }
 		});
 		const result = (await load(makeLoadEvent({ id: SESSION_UID }, client))) as unknown as LoadResult;
-		expect(result.pending[0].noLedgerDesignated).toBe(false);
+		expect(result.pending[0].noLedgerDesignated).toBeNull();
 	});
 
 	it('a final-only row set makes no composition call at all (nothing pending)', async () => {
@@ -259,6 +262,32 @@ describe('actions.generate — structural picker fence (AC3)', () => {
 		const res = (await actions.generate(event)) as { status: number };
 		expect(res.status).toBe(500);
 	});
+
+	// V1.5 aal2 close-out follow-up (Sec self357-sec-review.md's headline finding): `?/generate`
+	// previously had NO mapper at all, so this LIVE 42501 (113's own empty-lock INSERT WITH CHECK
+	// — the ONE case among the four write actions where it is reachable) collapsed to a 500. This
+	// is the strike-proof leg: if the mapper's `42501` branch is ever dropped, this test goes red
+	// (falls through to the generic 500 default), not silently green.
+	it('42501 (step-up required) → 403 — the LIVE case among these four write actions', async () => {
+		const { client } = makeSupabase({
+			rpcResult: { data: null, error: { code: '42501', message: 'insufficient_privilege' } }
+		});
+		const event = makeActionEvent(validFields(), { id: SESSION_UID }, client);
+		const res = (await actions.generate(event)) as { status: number };
+		expect(res.status).toBe(403);
+	});
+
+	it('P0001 → 400 with the WIDENED copy naming re-verification as a possibility', async () => {
+		const { client } = makeSupabase({
+			rpcResult: { data: null, error: { code: 'P0001', message: 'pfin.fn_open_monthly_report_draft refused' } }
+		});
+		const event = makeActionEvent(validFields(), { id: SESSION_UID }, client);
+		const res = (await actions.generate(event)) as { status: number; data: { errors: { _form: string[] } } };
+		expect(res.status).toBe(400);
+		const shown = res.data.errors._form.join(' ');
+		expect(shown).toContain('may need re-verification');
+		expect(shown).toContain('signing in again');
+	});
 });
 
 describe('actions.regenerate — month-format check only, no candidate restriction (E15 item 10)', () => {
@@ -301,6 +330,21 @@ describe('actions.regenerate — month-format check only, no candidate restricti
 		const event = makeActionEvent({ target_month: '2026-08-01' }, { id: SESSION_UID }, client);
 		const res = (await actions.regenerate(event)) as { status: number };
 		expect(res.status).toBe(500);
+	});
+
+	// V1.5 aal2 close-out follow-up (Sec self356-sec-review.md's completed per-action table): the
+	// shared mapper's P0001 copy names re-verification here too, even though 42501 stays dead on
+	// this call site (114 refuses by finding zero rows to lock, before any write statement).
+	it('P0001 → 400 with the WIDENED copy naming re-verification as a possibility', async () => {
+		const { client } = makeSupabase({
+			rpcResult: { data: null, error: { code: 'P0001', message: 'pfin.fn_regenerate_monthly_report refused' } }
+		});
+		const event = makeActionEvent({ target_month: '2026-08-01' }, { id: SESSION_UID }, client);
+		const res = (await actions.regenerate(event)) as { status: number; data: { errors: { _form: string[] } } };
+		expect(res.status).toBe(400);
+		const shown = res.data.errors._form.join(' ');
+		expect(shown).toContain('may need re-verification');
+		expect(shown).toContain('signing in again');
 	});
 });
 
@@ -347,7 +391,7 @@ describe('actions.skip', () => {
 		]);
 	});
 
-	it('P0001 (no live draft) → generic 4xx, no function name leaked', async () => {
+	it('P0001 (no live draft) → generic 4xx with the WIDENED copy, no function name leaked', async () => {
 		const { client } = makeSupabase({
 			rpcResult: {
 				data: null,
@@ -360,7 +404,12 @@ describe('actions.skip', () => {
 		const event = makeActionEvent({ target_month: '2026-08-01' }, { id: SESSION_UID }, client);
 		const res = (await actions.skip(event)) as { status: number; data: { errors: { _form: string[] } } };
 		expect(res.status).toBe(400);
-		expect(res.data.errors._form.join(' ')).not.toContain('fn_finalize_monthly_report');
+		const shown = res.data.errors._form.join(' ');
+		expect(shown).not.toContain('fn_finalize_monthly_report');
+		// V1.5 aal2 close-out follow-up (Sec self356-sec-review.md's completed per-action table):
+		// the shared mapper's P0001 copy names re-verification as a possibility here too.
+		expect(shown).toContain('may need re-verification');
+		expect(shown).toContain('signing in again');
 	});
 
 	it('42501 (step-up required) → 403', async () => {

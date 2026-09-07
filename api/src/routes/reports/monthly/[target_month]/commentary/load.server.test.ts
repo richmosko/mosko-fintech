@@ -131,7 +131,7 @@ type LoadResult = {
 	priorCommentary: { cash: string; bonds: string; marketable_securities: string; alternatives: string };
 	allocation: unknown;
 	staleness: unknown;
-	noLedgerDesignated: boolean;
+	noLedgerDesignated: boolean | null;
 };
 
 const ALLOCATION_STUB = { groups: [], unsorted: null, total_non_re: 0 };
@@ -310,7 +310,11 @@ describe('load — noLedgerDesignated (P4 / SELF-356 AC4)', () => {
 		expect(rpcCalls).toHaveLength(0);
 	});
 
-	it('composition RPC error → fail-soft false, page still renders (a prompt, not a block, extends to its own read failing)', async () => {
+	// V1.5 aal2/asOf close-out follow-up (OPTIONAL C, Sec self356-sec-review.md NOTE-1): tri-state
+	// now — a composition failure degrades to `null` (unknown), never a fabricated `false`
+	// ("confirmed clear"), matching StaleConstituentBadge's own discipline. The prompt stays
+	// informational either way — `null` renders nothing, same as `false` did.
+	it('composition RPC error → fail-soft null (unknown), page still renders (a prompt, not a block, extends to its own read failing)', async () => {
 		stubLiveReadsHealthy();
 		const { client } = makeSupabase({
 			rows: [draftRow()],
@@ -318,7 +322,7 @@ describe('load — noLedgerDesignated (P4 / SELF-356 AC4)', () => {
 		});
 		const event = makeLoadEvent('2026-09', { id: SESSION_UID }, client);
 		const result = (await load(event)) as unknown as LoadResult;
-		expect(result.noLedgerDesignated).toBe(false);
+		expect(result.noLedgerDesignated).toBeNull();
 	});
 });
 
@@ -429,6 +433,20 @@ describe('actions.save', () => {
 		expect(shown).not.toContain('it is not yours');
 	});
 
+	// V1.5 aal2 close-out follow-up (Sec self355-sec-review.md FLAG): the P0001 copy now names a
+	// below-aal2 session as a third possibility, without disclosing which of the three applies.
+	it('P0001 → 400 with the WIDENED copy naming re-verification as a possibility', async () => {
+		const { client } = makeSupabase({
+			rpcResult: { data: null, error: { code: 'P0001', message: 'pfin.fn_save_monthly_commentary refused' } }
+		});
+		const event = makeActionEvent('2026-09', validFields(), { id: SESSION_UID }, client);
+		const res = (await actions.save(event)) as { status: number; data: { errors: { _form: string[] } } };
+		expect(res.status).toBe(400);
+		const shown = res.data.errors._form.join(' ');
+		expect(shown).toContain('may need re-verification');
+		expect(shown).toContain('signing in again');
+	});
+
 	it('23514 (DB length CHECK, belt-and-suspenders) → 400 generic length message', async () => {
 		const { client } = makeSupabase({
 			rpcResult: { data: null, error: { code: '23514', message: 'value too long for type character varying' } }
@@ -537,6 +555,24 @@ describe('actions.finalize', () => {
 		const event = makeFinalizeActionEvent('2026-09', {}, { id: SESSION_UID }, client);
 		const res = (await actions.finalize(event)) as { status: number };
 		expect(res.status).toBe(403);
+	});
+
+	// V1.5 aal2 close-out follow-up (Sec self356-sec-review.md's completed per-action table): the
+	// shared mapper's P0001 copy now names re-verification as a possibility here too, even though
+	// 42501 stays dead on this call site (115's own lock refuses before the INSERT).
+	it('P0001 → 400 with the WIDENED copy naming re-verification as a possibility', async () => {
+		const { client } = makeSupabase({
+			rpcResult: {
+				data: null,
+				error: { code: 'P0001', message: 'pfin.fn_finalize_monthly_report refused: no live draft.' }
+			}
+		});
+		const event = makeFinalizeActionEvent('2026-09', {}, { id: SESSION_UID }, client);
+		const res = (await actions.finalize(event)) as { status: number; data: { errors: { _form: string[] } } };
+		expect(res.status).toBe(400);
+		const shown = res.data.errors._form.join(' ');
+		expect(shown).toContain('may need re-verification');
+		expect(shown).toContain('signing in again');
 	});
 
 	it('an unexpected error code → 500 generic message', async () => {
