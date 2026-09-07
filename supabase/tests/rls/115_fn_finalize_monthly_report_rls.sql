@@ -737,7 +737,7 @@ rollback to savepoint sp_14h_iv;
 -- leaving it as prose.
 -- =====================================================================
 select is(
-  public._get('plan') - public._get('curr_test'),
+  _get('plan') - _get('curr_test'),
   5,
   '(115-watcher) EXPLICIT drift check: the gap between the declared plan (54, set once pre-savepoint, never rolls back) and pgTAP''s own bookkeeping counter (reverted by every trailing rolled-back savepoint, reads 49 here) is EXACTLY 5 — the 4 KNOWN trailing 14h-i..iv legs PLUS this watcher leg itself (planned but not yet run at the moment this comparison executes). A new trailing savepoint-wrapped leg bumps the plan without moving the counter, widening this gap, and REDs this leg by name instead of hiding in the plan-count comment'
 );
