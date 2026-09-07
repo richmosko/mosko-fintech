@@ -1,0 +1,105 @@
+# fence-admission-private-bind: target
+# workers/pdf-render/docker-compose.yaml
+#
+# Coolify **Compose build-pack** manifest for the PDF worker (SELF-348 A4 item 4c
+# / Sec N-4, adopted with R2 as condition 2). Adopting a committed compose — vs.
+# the Dockerfile+Base-Directory build pack this container shipped with at Phase 5
+# Step 4 W1 (`eada4b2`) — is what makes this container's network-exposure surface
+# COMMITTED and therefore LINTABLE by scripts/ci/fence-admission-private-bind.sh.
+# Precedent: workers/provider-sync/docker-compose.yaml (SELF-212), workers/etl/docker-compose.yaml.
+#
+# ┌─ WHY THIS FILE EXISTS (A4 item 4c) ─────────────────────────────────────────┐
+# │ Under the R2 (C) direction (ADR-011 Decision 17 / Lock 13 as amended at      │
+# │ R14), the V1 app POSTs finished HTML to this worker's render endpoint and    │
+# │ the worker returns PDF bytes. That render endpoint is this container's       │
+# │ admission surface, and `fence-admission-private-bind.sh` finds its target    │
+# │ by an in-file sentinel (the line above) — before this file existed, that     │
+# │ fence had NOTHING to point at for workers/pdf-render/, so the render         │
+# │ endpoint would come up with no private-bind fence over it. This manifest     │
+# │ ships the sentinel and the RT-27 job (`fence-admission-bind` in               │
+# │ security-scan.yml) is wired to audit it — a WIRING change to an existing,    │
+# │ already-generic fence, not a new fence (Sec N-4).                           │
+# └───────────────────────────────────────────────────────────────────────────┘
+#
+# ┌─ RENDER ENDPOINT — INTERNAL-ONLY BY CONSTRUCTION (RT-27) ───────────────────┐
+# │ The render endpoint (A5, landed) is reachable ONLY over the shared Coolify   │
+# │ PROJECT Docker network, via the service name `http://pdf-render:8080` — the │
+# │ app container is the only caller, per the R2 (C) app→worker direction.      │
+# │                                                                              │
+# │ PORT — Sec F-15 (2026-09-05): 8080, matching the real listener               │
+# │ (`Dockerfile`'s `EXPOSE 8080` + `server.js`'s `PORT = process.env.PORT ||    │
+# │ 8080` default; no `PORT` override is set below). An earlier revision of      │
+# │ this file declared `8082` — a DevOps placeholder chosen before A4 landed     │
+# │ the real listener — and never got reconciled once it did; a reviewer        │
+# │ reading a green RT-27 result alongside that manifest would have read a      │
+# │ false sentence about which port the admission surface is actually on. The   │
+# │ fence's own predicate is unaffected either way (it asserts the ABSENCE of   │
+# │ `ports:`/host-network/proxy-label, not a specific port number) — this is a  │
+# │ correctness-of-the-committed-description fix, not a fence-behavior change.  │
+# │                                                                              │
+# │ ENFORCED HERE by the ABSENCE of the same three vectors fence-admission-      │
+# │ private-bind.sh checks on every target:                                     │
+# │   1. NO published host-port mapping (`ports:`) — only `expose:` (internal). │
+# │   2. NO reverse-proxy Domain / Traefik `Host()` label / Coolify              │
+# │      `SERVICE_FQDN_*`/`SERVICE_URL_*` magic requesting a public FQDN.        │
+# │   3. NO `network_mode: host` (bypasses the project network entirely).        │
+# └─────────────────────────────────────────────────────────────────────────────┘
+#
+# CONTAINER HARDENING — Sec F-17 (2026-09-05, recommended not required):
+# `cap_drop: [ALL]` + `security_opt: [no-new-privileges:true]` below. Named
+# residual this compensates, partially: `render.js` disables Chromium's own
+# renderer sandbox (`--no-sandbox`) — accepted by Sec on the grounds that the
+# container holds exactly one secret (PDF_WORKER_SIGNING_KEY), that secret is
+# stripped from Chromium's child-process environment (render.js's
+# `_childEnvWithoutSecrets()`), and the container has zero DB reach. The
+# residual: the Dockerfile has no `USER` directive, so the Node process and
+# Chromium run as the same root UID, and a renderer-escape can still read
+# `/proc/<node-pid>/environ`, which DOES hold the signing key. Dropping all
+# Linux capabilities and blocking privilege-escalation narrows what a
+# root-UID escape can do at the container-namespace level; it does not by
+# itself separate the two processes' UIDs (that would need a Dockerfile
+# `USER` change — Backend's surface, not this file's).
+#
+# ZERO-DB-ISOLATION, UNCHANGED (Lock 13 mod #2; A4 item 2): NO SUPABASE_* env
+# vars anywhere in this file — no carve-out (Sec D-1, a veto). NO Postgres
+# client — this build-pack still builds workers/pdf-render/Dockerfile, which
+# RT-22's Dockerfile fence and RT-22-manifest's dependency-manifest fence
+# (SELF-350 A6) both continue to enforce on every PR. This compose file adds
+# NOTHING to that surface; it only makes the render endpoint's network shape
+# committed and lintable.
+#
+# SECRETS: Coolify-injected at RUNTIME (deploy-time, greenfield VPS per
+# ADR-021). The single permitted variable is PDF_WORKER_SIGNING_KEY per SD-20 —
+# `${PDF_WORKER_SIGNING_KEY}` documents the contract; Coolify substitutes the
+# real value from the service/project env at deploy. production_only per
+# secrets-manifest.yml (shared with the V1 web-app, which mints the JWT this
+# worker verifies). NO OTHER SECRET belongs in this file, by Lock 13 mod #2.
+
+services:
+  pdf-render:
+    container_name: pdf-render
+    build: .
+    restart: unless-stopped
+    # INTERNAL-ONLY render-endpoint port. `expose:` = reachable to sibling
+    # containers on the project network; NOT host-published. NEVER convert
+    # this to a `ports:` mapping (fence-admission-private-bind fails closed
+    # on `ports:`).
+    expose:
+      - "8080"
+    # Sec F-17: no capability this container needs requires anything beyond
+    # base; Chromium headless + a Node HTTP server run fine with the full
+    # Linux capability set dropped. no-new-privileges blocks setuid/setgid
+    # privilege escalation inside the container regardless.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - NODE_ENV=production
+      # PDF_WORKER_SIGNING_KEY — the worker's ONLY credential (SD-20; Lock 13
+      # mod #2). Matches the V1 web-app's PDF_WORKER_SIGNING_KEY. Coolify
+      # project-scoped var; production_only in secrets-manifest.yml. NEVER a
+      # literal here. DO NOT add any SUPABASE_* variable to this list — RT-22
+      # and RT-22-manifest both fail closed on that, and this container has
+      # no database reach to justify one by construction (R2 (C)).
+      - PDF_WORKER_SIGNING_KEY=${PDF_WORKER_SIGNING_KEY}

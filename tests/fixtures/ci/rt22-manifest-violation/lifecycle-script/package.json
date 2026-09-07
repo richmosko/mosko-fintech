@@ -1,0 +1,13 @@
+{
+  "name": "pdf-render-fixture-lifecycle-script",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DELIBERATELY VIOLATION-SHAPED golden fixture for the RT-22 dependency-manifest fence (Sec F-11B). Lifecycle-script route, isolated from every other route: dependencies name ONLY the two allowlisted packages (puppeteer-core + jsonwebtoken, matching workers/pdf-render/package.json exactly, plain registry semver) and the lockfile resolves nothing denylisted — clean on every other route — but scripts.postinstall installs a Postgres client outside every field the manifest/lockfile scan otherwise covers (the exact evasion Sec measured live: `npm ci` runs lifecycle scripts regardless of --omit=dev). DO NOT install or use as a template.",
+  "dependencies": {
+    "puppeteer-core": "25.10.0",
+    "jsonwebtoken": "9.0.2"
+  },
+  "scripts": {
+    "postinstall": "apt-get install -y postgresql-client && npm i pg"
+  }
+}

@@ -7,9 +7,11 @@
 // (d) a fn_tax_authority_ledgers() read failure throws rather than guessing the flag either way;
 // (e) E39's priorYearQ4 wiring — loadPriorYearQ4 (also mocked; its own contract is
 // taxLiability.test.ts's job) is called ONLY when `liability.prior_year_q4_window.open` is true,
-// and its resolved value passes through as `priorYearQ4` verbatim; `null` when the window is shut.
+// and its resolved value passes through as `priorYearQ4` verbatim; `null` when the window is shut;
+// (f) SELF-361 / P9 — `staleness` is `loadStaleness()`'s return threaded straight through,
+// fail-SOFT to UNKNOWN_STALENESS on an unexpected throw, unlike this file's two fail-loud reads.
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 const loadTaxLiabilityMock = vi.fn();
@@ -19,7 +21,20 @@ vi.mock('$lib/server/queries/taxLiability', () => ({
 	loadPriorYearQ4: loadPriorYearQ4Mock
 }));
 
+const loadStalenessMock = vi.fn();
+vi.mock('$lib/server/queries/staleness', () => ({
+	loadStaleness: loadStalenessMock
+}));
+
+const { UNKNOWN_STALENESS } = await import('$lib/staleness/stale-constituent');
 const { load } = await import('./+page.server');
+
+const HAPPY_STALENESS = { is_stale: false, stale_items: [] };
+
+beforeEach(() => {
+	loadStalenessMock.mockReset();
+	loadStalenessMock.mockResolvedValue(HAPPY_STALENESS);
+});
 
 const SESSION_UID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
@@ -170,5 +185,53 @@ describe('load() — SELF-266 / E39 priorYearQ4 wiring', () => {
 		loadPriorYearQ4Mock.mockRejectedValueOnce(new Error('second call failed'));
 		const { client } = makeSupabase({ ledgers: [] });
 		await expect(load(makeEvent(client))).rejects.toThrow(/second call failed/);
+	});
+});
+
+describe('load() — SELF-361 / P9 staleness wiring', () => {
+	it('calls loadStaleness EXACTLY ONCE and threads the result straight through to data.staleness, unmodified', async () => {
+		loadTaxLiabilityMock.mockResolvedValueOnce(LIABILITY_STUB);
+		const { client } = makeSupabase({ ledgers: [] });
+		const result = await load(makeEvent(client));
+		expect(loadStalenessMock).toHaveBeenCalledTimes(1);
+		expect(result).toMatchObject({ staleness: HAPPY_STALENESS });
+	});
+
+	it('a confirmed-stale result passes through verbatim', async () => {
+		loadTaxLiabilityMock.mockResolvedValueOnce(LIABILITY_STUB);
+		const staleResult = {
+			is_stale: true,
+			stale_items: [
+				{
+					linked_source_id: '42',
+					institution_name: 'Test Bank',
+					provider: 'plaid',
+					connection_status: 'login_required',
+					status_class: null
+				}
+			]
+		};
+		loadStalenessMock.mockReset();
+		loadStalenessMock.mockResolvedValueOnce(staleResult);
+		const { client } = makeSupabase({ ledgers: [] });
+		const result = await load(makeEvent(client));
+		expect(result).toMatchObject({ staleness: staleResult });
+	});
+
+	it('an unexpected throw from loadStaleness degrades data.staleness to UNKNOWN_STALENESS, WITHOUT touching data.noTaxAuthorityDesignated', async () => {
+		loadTaxLiabilityMock.mockResolvedValueOnce(LIABILITY_STUB);
+		loadStalenessMock.mockReset();
+		loadStalenessMock.mockRejectedValueOnce(new Error('network blip'));
+		const { client } = makeSupabase({ ledgers: [] });
+		const result = await load(makeEvent(client));
+		expect(result).toMatchObject({ staleness: UNKNOWN_STALENESS, noTaxAuthorityDesignated: true });
+	});
+
+	it('a staleness throw does not prevent the fail-loud fn_tax_authority_ledgers error from still throwing', async () => {
+		loadTaxLiabilityMock.mockResolvedValueOnce(LIABILITY_STUB);
+		loadStalenessMock.mockReset();
+		loadStalenessMock.mockRejectedValueOnce(new Error('network blip'));
+		const { client } = makeSupabase({ ledgersError: { message: 'timeout' } });
+		await expect(load(makeEvent(client))).rejects.toThrow(/fn_tax_authority_ledgers read failed/);
 	});
 });

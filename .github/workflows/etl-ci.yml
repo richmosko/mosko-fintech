@@ -235,3 +235,142 @@ jobs:
         #     skip is indistinguishable from a pass in a summary line. Do NOT "fix"
         #     it into a skip.
         run: uv run --no-sync pytest -m pgtest
+
+  integration:
+    name: Integration battery (pytest -m integration; real schema, scratch DB)
+    runs-on: ubuntu-latest
+
+    # SELF-372 (Sec F-6, PR #633 review): workers/etl/tests/test_nav_component_write.py
+    # (A9, merged 326a9f2) carries `pytestmark = pytest.mark.integration`; the `unit`
+    # lane above deliberately DESELECTS everything non-unit-marked, and `pgtest`
+    # selects only its own tier — so the five legs guarding the Σ-breaking re-run
+    # (SELF-353 / migration 107) NEVER ran in CI. test_nav_backfill_write.py (QA,
+    # SELF-217, ALSO integration-marked, ALSO never run in CI) is the same class and
+    # in scope here too. A7's tests (Backend, feature/self-351, in progress) are
+    # expected to follow the SAME scratch-DB-harness shape — ADD THEM to the file
+    # list in the last step below when that lands; do not switch to a bare `-m
+    # integration` selector (see the NOT INCLUDED note).
+    #
+    # ⚠ WHY "the CI Postgres service the pgtest lane uses" is NOT what this job
+    # runs, despite the dispatch initially naming it that way — verified against
+    # the actual test code before building this, not assumed from the dispatch.
+    # test_nav_component_write.py (and test_nav_backfill_write.py) hard-require a
+    # Docker container literally named `supabase_db_mosko-fintech` reachable via
+    # `docker exec`, with `pg_dump`/`psql` inside it and Supabase's own `auth`
+    # schema already populated (`pg_dump --schema=auth` FROM the "postgres" DB) —
+    # that is the Supabase CLI's own container-naming convention
+    # (`supabase_db_<project_id>`; project_id = "mosko-fintech" per
+    # supabase/config.toml), produced ONLY by `supabase start`, never by a bare
+    # `postgres:17` GH Actions `services:` block (which the pgtest lane above uses
+    # precisely because ITS tests need nothing more than a bare Postgres — see
+    # that job's own header). So this job mirrors db-tests.yml's / worker-ci.yml's
+    # `integration` job instead: the Supabase CLI, `supabase start -x ...`
+    # (db-only), which is ALSO exactly "migrations applied through the current
+    # head the same way db-tests.yml does" — literally the same mechanism, not an
+    # approximation, since `supabase start` applies `supabase/migrations/**` on
+    # bring-up. Each test file's OWN fixture then builds its own scratch database
+    # + re-applies every migration into it + creates and drops its own throwaway
+    # login role — this job does not need to do any of that itself.
+    #
+    # ⚠ `pfin_etl` (055) IS NOT PROVISIONED HERE, DELIBERATELY — STOPPED, NOT
+    # SKIPPED. Migration 055 creates `pfin_etl` NOLOGIN with NO PASSWORD by design
+    # (the "DEPLOY-TIME CREDENTIAL HANDOFF" block in that file); making it a real
+    # LOGIN role in CI needs a password from a NEW ci_only secret that does not
+    # exist today (checked secrets-manifest.yml's ci_only set — nothing named for
+    # an ETL DB login). Both test files IN SCOPE HERE explicitly avoid `pfin_etl`
+    # (each creates its own scratch login role — see either file's fixture
+    # docstring for the incident that convention exists to prevent), so today's
+    # two files need no such secret. Per dispatch: naming it and stopping rather
+    # than adding it — the candidate name would be `PFIN_DB_PASSWORD_TEST`
+    # (mirrors the `_TEST` suffix convention every other ci_only/production_only
+    # pair in that file already uses). Provision it, with Sec joint-review on the
+    # manifest edit, WHEN a test that actually authenticates as `pfin_etl` lands
+    # (plausibly A7, since that is the worker's real production identity —
+    # unconfirmed until that file exists).
+    #
+    # NOT INCLUDED, DELIBERATELY: workers/etl/tests/test_dbase_setup.py and
+    # test_dbase_update.py are ALSO integration-marked but are pre-existing
+    # legacy tests requiring real hosted-Supabase-instance `.env` credentials
+    # and (for test_dbase_update.py) live external API access — categorically
+    # different from the local-scratch-DB-harness class this job serves, and
+    # not something to provision CI secrets for here. This is why the final
+    # step below names explicit file paths rather than a bare `-m integration`
+    # (which would collect those two files too and either error or need to be
+    # tolerated-skipped — reopening exactly the vacuous-green class this job
+    # exists to close).
+    #
+    # NO `services:` BLOCK — deliberately, unlike the `pgtest` job above. The
+    # Supabase CLI (`supabase start`, next step) manages its own Postgres
+    # container; a bare `postgres:17` GH Actions service alongside it would be
+    # unused dead weight (see the header note above on why it can't be reused
+    # here) and would collide with `pgtest`'s own service on the same
+    # runner if this job's `postgres:5432` port ever became load-bearing —
+    # it never is, so there is nothing here to collide, but there is also
+    # nothing to gain by declaring it.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Supabase CLI (pinned, shared source of truth)
+        uses: ./.github/actions/supabase-cli-setup
+
+      - name: Start local stack (db-only; -x drops non-db services incl gotrue/auth)
+        # Same exclusion list as db-tests.yml's rls-battery job. The `auth`
+        # SCHEMA (needed by both test files' `pg_dump --schema=auth` step) is
+        # created at DB init independent of the excluded GoTrue CONTAINER — see
+        # db-tests.yml's own "Smoke — auth.uid() resolves under db-only" step,
+        # which proves this same property. `supabase start` applies
+        # supabase/migrations/** (through the current head) on bring-up.
+        working-directory: .
+        run: |
+          supabase start -x gotrue,realtime,storage-api,imgproxy,studio,edge-runtime,logflare,vector,supavisor,postgres-meta,mailpit
+
+      - name: Install uv (provisions Python per workers/etl/.python-version = 3.14)
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: 'workers/etl/uv.lock'
+
+      - name: Sync deps (frozen lockfile; test group)
+        run: uv sync --frozen --group test
+
+      - name: Install project editable (src-layout; see PACKAGE-IMPORT NOTE)
+        run: uv pip install -e .
+
+      - name: Integration battery (pytest -m integration; explicit file list — see header)
+        # Sec's vacuous-green class, two layers, BOTH must fail closed:
+        #   (1) COLLECTION — if the `integration` marker is ever unregistered or
+        #       every test in these files deleted/re-marked, pytest collects 0
+        #       and exits 5. Do NOT add `|| true` / `continue-on-error`.
+        #   (2) RUNTIME SKIP — a layer the literal "fail on zero collected" ask
+        #       does not cover on its own: both test files SELF-SKIP (not fail)
+        #       when the `supabase_db_mosko-fintech` container is unreachable —
+        #       correct for a developer's Chromium-less-equivalent local
+        #       convenience, WRONG for this job, where the stack this job JUST
+        #       started being unreachable is itself the finding, not a reason to
+        #       report a hollow pass. A "5 collected, 5 skipped" run exits 0 from
+        #       pytest's own perspective and would otherwise read as this job's
+        #       first green.  Explicitly grepped for and failed on below.
+        run: |
+          set +e
+          OUTPUT="$(uv run --no-sync pytest -m integration --strict-markers tests/test_nav_backfill_write.py tests/test_nav_component_write.py 2>&1)"
+          RC=$?
+          set -e
+          echo "$OUTPUT"
+          if [ "$RC" -eq 5 ]; then
+            echo "FATAL: zero integration tests collected across the target files — vacuous green; failing closed." >&2
+            exit 1
+          fi
+          if [ "$RC" -ne 0 ]; then
+            echo "FATAL: integration battery failed (pytest exit $RC)." >&2
+            exit 1
+          fi
+          if echo "$OUTPUT" | grep -qE '[0-9]+ skipped'; then
+            echo "FATAL: one or more integration tests SKIPPED rather than running. In this job a skip means the supabase_db_mosko-fintech stack this job just started is unreachable to the test's own fixture (docker exec failure, naming drift, etc) — exactly the vacuous-green class this job exists to close. Failing closed instead of accepting the skip as a pass." >&2
+            exit 1
+          fi
+          echo "OK: integration battery ran to completion with zero skips."
+
+      - name: Stop local stack
+        if: always()
+        working-directory: .
+        run: supabase stop --no-backup || true

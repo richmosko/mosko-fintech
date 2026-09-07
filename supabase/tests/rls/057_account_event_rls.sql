@@ -615,13 +615,19 @@ select ok(
       and pg_get_triggerdef(t.oid) like '%closed_at IS DISTINCT FROM%') >= 1,
   '(D6a) the audit trigger fires on `closed_at IS DISTINCT FROM old.closed_at` — BOTH directions (close, reopen, and clears), while the GATE fires into-closed only. A one-directional trail loses every reopen, which is the correction path reject-all depends on being visible'
 );
--- (D6b) authors no SECURITY DEFINER function.
+-- (D6b) authors no SECURITY DEFINER function. AUTHORED count reaches 4 at `111`
+-- (SELF-345 / AH, 2026-09-05) — the reserved entry (ADR-011 Decision 9) is
+-- REALIZED, not added; the committed allowlist size is unchanged (read ADR-011
+-- Decision 9 live). fn_emit_audit_log added here alongside self209's
+-- (a1)/(a2)/(E-iii) so this schema-wide query — checked against the WHOLE pfin
+-- schema, not just 057's own objects — does not read 111's legitimate
+-- authoring as an escalation in THIS file.
 select is(
   (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
      where n.nspname = 'pfin' and p.prosecdef
-       and p.proname not in ('fn_refresh_updated_at', 'fn_grant_creator_access', 'fn_reclass_history_insert')),
+       and p.proname not in ('fn_refresh_updated_at', 'fn_grant_creator_access', 'fn_reclass_history_insert', 'fn_emit_audit_log')),
   0,
-  '(D6b) `057` authors ZERO SECURITY DEFINER functions -> the allowlist stays at its 3 authored entries; any escalation here is a Sec-joint-review ledger event, not a free ALTER'
+  '(D6b) `057` authors ZERO SECURITY DEFINER functions -> the AUTHORED allowlist reaches 4 entries at 111 (the reservation realized, not the covenant widened); any escalation here is a Sec-joint-review ledger event, not a free ALTER'
 );
 
 select * from finish();

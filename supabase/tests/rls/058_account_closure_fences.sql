@@ -777,12 +777,17 @@ select skip('(P1) two-phase: `058` leaves is_active in place — window-scoped, 
 \endif
 select col_type_is('pfin', 'account', 'closed_at', 'timestamp with time zone',
   '(P2) closed_at is timestamptz — a DATED closure, which is what makes "closed in June still counts in a May NAV" expressible at all');
+-- AUTHORED count reaches 4 at `111` (SELF-345 / AH, 2026-09-05) — the reserved
+-- entry (ADR-011 Decision 9) is REALIZED, not added; the committed allowlist
+-- size is unchanged (read ADR-011 Decision 9 live). Added here alongside
+-- self209's (a1)/(a2)/(E-iii) and 057's (D6b) so this schema-wide query does not
+-- read 111's legitimate authoring as an escalation in THIS file.
 select is(
   (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
      where n.nspname = 'pfin' and p.prosecdef
-       and p.proname not in ('fn_refresh_updated_at', 'fn_grant_creator_access', 'fn_reclass_history_insert')),
+       and p.proname not in ('fn_refresh_updated_at', 'fn_grant_creator_access', 'fn_reclass_history_insert', 'fn_emit_audit_log')),
   0,
-  '(P3) `058` authors ZERO SECURITY DEFINER functions — every fence is INVOKER per ADR-042 Consequences and Architect''s confirmation. NOTE the referent: this counts AUTHORED DEFINER functions (3); the ALLOWLIST is 4, the fourth being the reserved-but-unauthored audit-log helper. Both numbers are correct and they measure different things — do not "correct" 3 to 4, which would silently widen the fence by one slot'
+  '(P3) `058` authors ZERO SECURITY DEFINER functions — every fence is INVOKER per ADR-042 Consequences and Architect''s confirmation. NOTE the referent: this counts AUTHORED DEFINER functions (4, as of `111`); the ALLOWLIST is now also 4 — the reserved slot that used to make these numbers differ is discharged. Do not further widen this list without an equivalent authoring + Sec review'
 );
 
 -- (P4) THE INSERT PATH — the specific hole the design changed shape to close.

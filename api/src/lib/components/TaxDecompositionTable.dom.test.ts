@@ -20,6 +20,7 @@ import type {
 	TaxCharacterCatalog,
 	DecompositionRow
 } from '$lib/tax-decomposition';
+import { EMPTY_STALENESS, type StaleConstituentItem } from '$lib/staleness/stale-constituent';
 
 const SEED_DELTA = '100_tax_value_inventory_seed_delta.sql';
 
@@ -63,6 +64,7 @@ function liability(
 describe('TaxDecompositionTable', () => {
 	it('renders the UNAVAILABLE-with-a-reason capital gains banner (AC 3a / R1)', () => {
 		render(TaxDecompositionTable, {
+			staleness: EMPTY_STALENESS,
 			liability: liability(),
 			taxCharacters: CATALOG,
 			seedDeltaMigration: SEED_DELTA
@@ -76,6 +78,7 @@ describe('TaxDecompositionTable', () => {
 
 	it('renders the empty state for the Income section when there are zero rows (AC9(i))', () => {
 		render(TaxDecompositionTable, {
+			staleness: EMPTY_STALENESS,
 			liability: liability(),
 			taxCharacters: CATALOG,
 			seedDeltaMigration: SEED_DELTA
@@ -86,6 +89,7 @@ describe('TaxDecompositionTable', () => {
 
 	it('renders PM\'s unclassified copy exactly, and only when count_ytd > 0 (AC 3b)', () => {
 		const { rerender } = render(TaxDecompositionTable, {
+			staleness: EMPTY_STALENESS,
 			liability: liability({ unclassified: { count_ytd: 0 } }),
 			taxCharacters: CATALOG,
 			seedDeltaMigration: SEED_DELTA
@@ -93,6 +97,7 @@ describe('TaxDecompositionTable', () => {
 		expect(screen.queryByText(/unclassified/i)).toBeNull();
 
 		rerender({
+			staleness: EMPTY_STALENESS,
 			liability: liability({ unclassified: { count_ytd: 3 } }),
 			taxCharacters: CATALOG,
 			seedDeltaMigration: SEED_DELTA
@@ -118,6 +123,7 @@ describe('TaxDecompositionTable', () => {
 			{ code: 'qualified_dividend', label: 'TEST-ONLY RELABEL', display_order: 20 }
 		];
 		render(TaxDecompositionTable, {
+			staleness: EMPTY_STALENESS,
 			liability: liability(
 				{},
 				[row({ sub_cat: 'Dividend - Qualified', tax_character: 'qualified_dividend', amount: 500 })]
@@ -132,6 +138,7 @@ describe('TaxDecompositionTable', () => {
 
 	it('falls back to the raw code when it is missing from the catalog, never a guessed label', () => {
 		render(TaxDecompositionTable, {
+			staleness: EMPTY_STALENESS,
 			liability: liability({}, [
 				row({ sub_cat: 'Mystery Row', tax_character: 'not_in_catalog', amount: 1 })
 			]),
@@ -144,6 +151,7 @@ describe('TaxDecompositionTable', () => {
 
 	it('renders no chip at all for a NULL tax_character', () => {
 		render(TaxDecompositionTable, {
+			staleness: EMPTY_STALENESS,
 			liability: liability({}, [row({ sub_cat: 'No Character', tax_character: null, amount: 1 })]),
 			taxCharacters: CATALOG,
 			seedDeltaMigration: SEED_DELTA
@@ -157,6 +165,7 @@ describe('TaxDecompositionTable', () => {
 
 	it('groups by Cat with a header row, per-group subtotal, and a footing total read from the server-authoritative total (AC4)', () => {
 		render(TaxDecompositionTable, {
+			staleness: EMPTY_STALENESS,
 			liability: liability({}, [
 				row({ sub_cat: 'Salary', cat: 'Revenue', amount: 1000 }),
 				row({ sub_cat: 'Dividend', cat: 'Revenue', amount: 200 })
@@ -176,6 +185,7 @@ describe('TaxDecompositionTable', () => {
 
 	it('renders every ST CG / LT CG cell as "—", never derived from tax_character (contract gap note)', () => {
 		render(TaxDecompositionTable, {
+			staleness: EMPTY_STALENESS,
 			liability: liability({}, [
 				row({
 					sub_cat: 'LT Gain Eligible Dividend',
@@ -197,6 +207,7 @@ describe('TaxDecompositionTable', () => {
 
 	it('names the seed-delta migration in the basis note (AC11)', () => {
 		render(TaxDecompositionTable, {
+			staleness: EMPTY_STALENESS,
 			liability: liability(),
 			taxCharacters: CATALOG,
 			seedDeltaMigration: SEED_DELTA
@@ -207,6 +218,7 @@ describe('TaxDecompositionTable', () => {
 
 	it('renders no interactive elements in any data cell (AC10 — no inline edit)', () => {
 		render(TaxDecompositionTable, {
+			staleness: EMPTY_STALENESS,
 			liability: liability({}, [row({ sub_cat: 'Salary', amount: 1000 })]),
 			taxCharacters: CATALOG,
 			seedDeltaMigration: SEED_DELTA
@@ -216,5 +228,55 @@ describe('TaxDecompositionTable', () => {
 		expect(within(table).queryAllByRole('button')).toHaveLength(0);
 		expect(within(table).queryAllByRole('textbox')).toHaveLength(0);
 		expect(within(table).queryAllByRole('link')).toHaveLength(0);
+	});
+});
+
+describe('TaxDecompositionTable — SELF-361 / P9: D1 stale-data-marker beside the section heading', () => {
+	it('staleness confirmed healthy (EMPTY_STALENESS) → zero-footprint, no badge markup', () => {
+		render(TaxDecompositionTable, {
+			staleness: EMPTY_STALENESS,
+			liability: liability(),
+			taxCharacters: CATALOG,
+			seedDeltaMigration: SEED_DELTA
+		});
+		expect(screen.queryByText('May be stale')).toBeNull();
+	});
+
+	it('is_stale true → the shared StaleConstituentBadge renders beside the heading', () => {
+		const staleItem: StaleConstituentItem = {
+			linked_source_id: '42',
+			institution_name: 'Test Bank',
+			provider: 'plaid',
+			connection_status: 'login_required',
+			status_class: null
+		};
+		render(TaxDecompositionTable, {
+			staleness: { is_stale: true, stale_items: [staleItem] },
+			liability: liability(),
+			taxCharacters: CATALOG,
+			seedDeltaMigration: SEED_DELTA
+		});
+		expect(screen.getByText('May be stale')).toBeTruthy();
+	});
+
+	// AC3 — the badge must never merge with the Capital Gains capability-unavailable register:
+	// both a confirmed-stale badge AND the (always-active, R1) capability banner render together,
+	// each independently, neither substituting for or suppressing the other.
+	it('a stale badge and the Capital Gains capability-unavailable banner render TOGETHER, independently (AC3 separation)', () => {
+		const staleItem: StaleConstituentItem = {
+			linked_source_id: '42',
+			institution_name: 'Test Bank',
+			provider: 'plaid',
+			connection_status: 'login_required',
+			status_class: null
+		};
+		render(TaxDecompositionTable, {
+			staleness: { is_stale: true, stale_items: [staleItem] },
+			liability: liability(),
+			taxCharacters: CATALOG,
+			seedDeltaMigration: SEED_DELTA
+		});
+		expect(screen.getByText('May be stale')).toBeTruthy();
+		expect(screen.getByText(/doesn't yet support recording a security sale/i)).toBeTruthy();
 	});
 });

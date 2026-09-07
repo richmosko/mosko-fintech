@@ -219,10 +219,24 @@ class TenantBoundConnection:
         SECURITY INVOKER reads (e.g. pfin.fn_compute_nav) resolve `auth.uid()` to
         the bound users_id under RLS.
 
-        THIS IS A READ-ONLY PRIMITIVE. It mints a synthetic `aal2` claim, and it
-        MUST NEVER WRAP A WRITE. The read-only property is ENFORCED, not merely
-        documented: while the binding is active the per-tenant assertion rejects
-        every write/DDL statement (see _reject_write_while_impersonating).
+        THIS PRIMITIVE IS READ-ONLY BY DEFAULT AND FENCED, WITH ONE RATIFIED
+        EXCEPTION. It mints a synthetic `aal2` claim. The fence rejects every
+        write/DDL-headed statement while the binding is active (see
+        _reject_write_while_impersonating), and its named residual is real: a
+        `select` that INVOKES a data-modifying function is not statically
+        detectable and passes. ⚠ That residual is now a LOAD-BEARING, EXERCISED
+        PATH, not a theoretical one — SELF-351's monthly_report cron calls
+        `pfin.fn_open_monthly_report_draft(date)` through it, ratified by Sec at
+        that review. It is permitted because the alternative is worse, not
+        because the write is incidental: that function takes NO tenant parameter
+        and holds EXECUTE for `authenticated` only, so the row's tenant comes
+        from the DATABASE-RESOLVED `auth.uid()` under live RLS rather than from a
+        caller-supplied id — a stronger ADR-011 Decision 1 clause (c) discharge
+        than exiting the block and writing under `service_role` with a
+        Python-supplied `users_id`. ⚠ ANY OTHER WRITE THROUGH THIS BLOCK IS OUT
+        OF SCOPE AND IS SEC-JOINT-REVIEW-MANDATORY. Writes that CAN be expressed
+        as direct DML still belong after teardown, under an explicitly assumed
+        write role.
 
         SELF-214 W-1 (first live per-user worker write path; Sec-joint-reviewed):
         the worker LOGS IN as `pfin_etl` (dedicated NOINHERIT role; see the module
@@ -252,8 +266,9 @@ class TenantBoundConnection:
             the firmed per-tenant assertion verifies the impersonation binding
             matches the bound users_id (strict equality on the claims `sub`) before
             permitting non-users_id-carrying reads.
-          - The block is READ-ONLY (fenced). Writes belong after teardown, under an
-            explicitly assumed write role.
+          - The block is READ-ONLY (fenced) except for the one ratified call named
+            above. Any other write belongs after teardown, under an explicitly
+            assumed write role.
         """
         if self.is_system:
             raise TenantBindingError(

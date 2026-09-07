@@ -4,6 +4,9 @@ This directory holds the V1 CI fence scripts that gate `mosko-fintech` PRs again
 three classes of security-load-bearing regressions:
 
 - **RT-22** — PDF worker Dockerfile zero-DB-isolation audit.
+- **RT-22-manifest** — PDF worker `package.json` + lockfile dependency-manifest
+  audit (SELF-350 A6, re-scoped at R6 2026-09-04); the sibling fence that closes
+  the gap the Dockerfile fence's own header names as its non-catch.
 - **RT-26** — `SUPABASE_SERVICE_ROLE_KEY` allowlist grep fence on the V1 web-app
   server-side source surface.
 - **TBC** — `TenantBoundConnection` grep fence on the `workers/etl/` Python source
@@ -16,6 +19,12 @@ three classes of security-load-bearing regressions:
   **(2)** a Sec-condition `SUPABASE_SERVICE_ROLE_KEY` *absence* tripwire (assert-absent,
   zero-hit) — together they enforce direct-Postgres-only and keep provider-sync off the
   RT-26 allowlist (asserts absence; does NOT amend ADR-016 D2).
+- **RT-27** — admission-endpoint private-bind config-lint over committed Coolify
+  Compose manifests (`expose:`-only; no `ports:`; no proxy Domain/Host() label;
+  no `network_mode: host`). Generic over its target by a sentinel line, not a
+  hardcoded path — covers `workers/provider-sync/docker-compose.yaml` (SELF-212,
+  original) and `workers/pdf-render/docker-compose.yaml` (SELF-348 A4 item 4c,
+  intra-instance coverage expansion — a wiring change, not a new fence).
 
 The fences are invoked from `.github/workflows/security-scan.yml`. Each fence ships
 with a paired golden-test fixture under `tests/fixtures/ci/` and a CI inversion-mode
@@ -27,14 +36,26 @@ clean against the fixture, CI fails closed (the fence is unverified/broken).
 Per ADR-011 Decision 4:
 
 - **RT-22** is the **first catalogued §10 instance** (infrastructure-credential-
-  presence layer; Lock 13 mod #2).
+  presence layer; Lock 13 mod #2). The RT-22-manifest fence (below) extends
+  RT-22's CI coverage; per SELF-350 (A6) R6, this adds, removes, reorders and
+  renumbers nothing in Decision 4 — read it live, never from a count pinned
+  here.
 - **RT-26** is the **second catalogued §10 instance** (code-layer on V1-web-app
   server-side source; SECURITY §4.2 axis vi; HIGH + V1-SHIP-BLOCK).
 - **TBC** is the **Privileged-context-surfaces bullet at Decision 4** (code-layer
   parallel to RT-26 on `workers/etl/` Python source; Lock 13 mod #3 V1-SHIP-BLOCK). **NOT in
-  Decision 4's catalogued numbered list** — the numbered list stays 2-instance per
-  the discipline-preservation guard. V1-SHIP-BLOCK axis (Lock 13 mod #3) is
-  orthogonal to the §10 catalogued-instance axis.
+  Decision 4's catalogued numbered list** — TBC is a Privileged-context-surfaces-bullet
+  mechanism, not a catalogued instance, per the discipline-preservation guard; read
+  the list's membership live from ADR-011 Decision 4, never from a count pinned
+  here. V1-SHIP-BLOCK axis (Lock 13 mod #3) is orthogonal to the §10
+  catalogued-instance axis.
+- **RT-27** is the **third catalogued §10 instance** (network-exposure/config
+  layer; SELF-212 C6-1 limb (b)). The `workers/pdf-render/docker-compose.yaml`
+  coverage added at SELF-348 A4 item 4c is an **intra-instance expansion of this
+  same instance on the CI-fenced side only** — see SECURITY §4.5's RT-30 entry,
+  cited **by pointer, never by quotation** (the pre-sitting draft's quoted form
+  was a false composite and must not be restored). NO new §10 instance, NO
+  ordinal, NO count change in Decision 4.
 
 This directory is the **enforcement venue** for these mechanisms — it is NOT a §10
 attribution surface. Decision 4's canonical catalogued numbered list is unchanged
@@ -45,8 +66,10 @@ by anything in this directory.
 ```
 scripts/ci/
 ├── fence-rt22-pdf-worker-dockerfile.sh   # RT-22 audit script
+├── fence-rt22-pdf-worker-manifest.sh     # RT-22-manifest audit script (SELF-350 A6)
 ├── fence-rt26-service-role-allowlist.sh  # RT-26 grep fence (γ-hybrid)
 ├── fence-tbc-pfin-back-etl.sh            # TBC grep fence (single-repo; scans workers/etl/src/)
+├── fence-admission-private-bind.sh       # RT-27 private-bind config-lint (generic over target via sentinel)
 ├── check-dedup-hash-identical.sh         # import_hash canonical↔copy drift fence (SELF-204 / ADR-034 D4)
 ├── check-tz-sweep-identical.py           # TimeZone role-sweep query drift fence (runbook §4.1 ↔ (T3); R3 Part A)
 ├── rt26-allowlist.txt                    # RT-26 allowlist registry (3 ADR-016 D1 file paths)
@@ -61,21 +84,65 @@ Catches BOTH (i) `SUPABASE_*` env vars (ENV/ARG) and (ii) Postgres client instal
 (psycopg2 / psycopg2-binary / asyncpg / pg / node-postgres / postgresql-client) in
 the PDF worker Dockerfile.
 
-**Explicitly NOT catching at CI** (covered by human PR-review per ARCH §6.1 RT-22
-row verbatim *"human PR-review stays second-line for non-CI-detectable shape
-drift"*):
+**Explicitly NOT catching at CI:**
 
 - `COPY package.json` / `COPY requirements.txt` (install intent revealed at RUN
-  time; manifest inspection is human-second-line).
-- **Transitive Postgres client via base image** — the fence does NOT inspect the
-  base image. If a future base-image change inherits `postgresql-client`
-  transitively, the fence won't catch it. This is the canonical second-line
-  surface for human PR-review per ARCH §6.1 RT-22 row.
+  time, not COPY time; this Dockerfile fence does not open the manifest it
+  COPYs). **This gap is now closed by the sibling RT-22-manifest fence below**,
+  which opens and parses the manifest directly (SELF-350 A6, R6
+  2026-09-04) — kept covered by human PR-review only until A4 lands the
+  manifest (pass-if-absent; see below).
+- **Transitive Postgres client via base image** — neither this fence nor
+  RT-22-manifest inspects the base image. If a future base-image change
+  inherits `postgresql-client` transitively, nothing at CI catches it. This
+  stays the canonical second-line surface for human PR-review per ARCH §6.1
+  RT-22 row verbatim *"human PR-review stays second-line for non-CI-detectable
+  shape drift"*.
 
 Local invocation:
 
 ```bash
 bash scripts/ci/fence-rt22-pdf-worker-dockerfile.sh workers/pdf-render/Dockerfile
+```
+
+## RT-22-manifest — PDF worker dependency-manifest audit
+
+**Lock:** ADR-011 Decision 17 / Lock 13 mod #2 + SECURITY §4.5 RT-22. Ledger
+effect NONE — see the §10 cross-reference above; this is CI-coverage
+extension, not a new catalogued instance.
+
+Closes the gap the Dockerfile fence's own header names as a deliberate
+non-catch (quoted above, verbatim): *"COPY of package.json / requirements.txt
+manifests (install intent revealed at RUN time, not COPY time; manifest
+inspection is human-second-line)."* This fence opens
+`workers/pdf-render/package.json` and its lockfile (`package-lock.json`)
+directly and rejects a Postgres-client or DB-driver-bundling ORM package
+anywhere in the resolved tree: `pg`, `postgres`, `node-postgres`,
+`@supabase/supabase-js`, `knex`, `sequelize`.
+
+**Pass-if-absent (deliberately DIFFERS from the Dockerfile fence's exit-2-on-
+missing-target):** `workers/pdf-render/package.json` does not exist yet — the
+PDF worker's dependencies land in a later issue (A4). This fence exits 0 with
+a "target absent — pass" line until that file exists, then bites on its first
+commit. An absent lockfile with a present manifest is handled the same way
+(pass on the lockfile half only) — a lockfile is only generated once npm has
+run against a real manifest. This shape is a ruled substitute for a sequencing
+dependency between issues: a convention stated in an AC ("land the fence after
+the manifest") has no mechanism and rots silently, so the ordering constraint
+is designed out instead of documented.
+
+Fails closed on its own dependency: this fence parses JSON with `node`; if
+`node` is unavailable, or either JSON file fails to parse, the fence exits 1
+rather than silently passing an unverifiable target.
+
+**Explicitly NOT catching at CI** (unchanged second-line surface — see the
+Dockerfile fence section above): a Postgres client pulled in transitively
+through the base image.
+
+Local invocation:
+
+```bash
+bash scripts/ci/fence-rt22-pdf-worker-manifest.sh workers/pdf-render/package.json
 ```
 
 ## RT-26 — `SUPABASE_SERVICE_ROLE_KEY` allowlist (γ-hybrid)
@@ -155,6 +222,51 @@ Local invocation (inversion-mode against the golden fixture):
 ```bash
 bash scripts/ci/fence-tbc-pfin-back-etl.sh tests/fixtures/ci/
 # Expect non-zero exit.
+```
+
+## RT-27 — admission-endpoint private-bind config-lint
+
+**Lock:** SELF-212 Option-C C6-1 limb (b) + SECURITY §4.5 RT-27 entry + ADR-011
+Decision 4 (third catalogued §10 instance).
+
+Over a COMMITTED Coolify Compose manifest, the fence enforces that the target's
+admission/render endpoint stays INTERNAL-ONLY: `expose:` is allowed (sibling-
+container reach on the project network); a published `ports:` mapping, a
+reverse-proxy Domain / Traefik `Host()` label / Coolify `SERVICE_FQDN_*` /
+`SERVICE_URL_*` magic, or `network_mode: host` are each a committed exposure
+vector and fail closed (exit 1).
+
+**Generic over its target, by construction:** the fence takes the compose path
+as an argument and does not hardcode which service it audits. It finds its
+target by an **in-file sentinel** (`# fence-admission-private-bind: target`)
+and **exits 2** if that sentinel is absent — refusing to emit a clean pass over
+an unmarked or renamed file. Adding coverage for a new container is therefore a
+**wiring change** (ship the manifest with the sentinel; add a job step), never a
+new fence.
+
+**Instances wired (both in the `fence-admission-bind` job,
+`.github/workflows/security-scan.yml`):**
+
+- `workers/provider-sync/docker-compose.yaml` — the original SELF-212 target.
+- `workers/pdf-render/docker-compose.yaml` — added at SELF-348 A4 item 4c. The
+  R2 (C) app→worker direction gives this container a render endpoint reachable
+  only from the app container; before this manifest existed, the fence had no
+  compose target for `workers/pdf-render/` to audit, so that endpoint would
+  have come up with no private-bind fence over it at all. **Ledger effect
+  NONE** — see the §10 cross-reference above; this is intra-instance coverage
+  expansion of the SAME catalogued RT-27 instance, not a new one.
+
+Each instance ships a paired golden violation fixture and a CI inversion-mode
+step; per Sec F-2 (SELF-350), the inversion step for a given fixture asserts
+the SPECIFIC violation token the fence emits for that vector, not just a
+non-zero exit code — a structural error (e.g. a missing sentinel) also exits
+non-zero and would otherwise let a broken fixture read as a caught violation.
+
+Local invocation:
+
+```bash
+bash scripts/ci/fence-admission-private-bind.sh workers/provider-sync/docker-compose.yaml
+bash scripts/ci/fence-admission-private-bind.sh workers/pdf-render/docker-compose.yaml
 ```
 
 ## Convention — fence design discipline

@@ -68,8 +68,9 @@
      scheduled-poll, and the NAV worker on top of incumbent BLS&nbsp;+&nbsp;FMP ingestion); the
      <strong>V1 web app</strong> (SvelteKit + TypeScript; owns the Plaid webhook handler and all user-facing
      read/render paths via a <code>SECURITY&nbsp;INVOKER</code> read-composition helper); and a <strong>new Node PDF-render
-     worker</strong> (Puppeteer, rendering <em>through</em> the V1 app's authenticated render URL — never
-     touching the database directly). External dependencies are Plaid (aggregation + webhooks) and the two
+     worker</strong> (Puppeteer; the app renders the page and <em>pushes</em> finished HTML to it, and it returns
+     PDF bytes — it holds no template, no tenant knowledge and no database access whatsoever, per
+     <a href="../../DECISIONS.md#adr-068">ADR-068</a> Decision 5, which amended Lock 13's direction). External dependencies are Plaid (aggregation + webhooks) and the two
      reference-data feeds already wired into <code>pfin_back_etl</code> (BLS CPI-U; FMP prices).</p>
 
   <blockquote>
@@ -99,7 +100,7 @@ flowchart LR
   app -->|"Link · token exchange · webhooks"| plaid(["Plaid API"])
   etl[["pfin_back_etl + workers"]] -->|"service_role · TenantBoundConnection · audit log"| db
   etl -->|"aggregation + reference data"| ext(["Plaid · BLS · FMP"])
-  pdf[["PDF render worker"]] -->|"authenticated-tier JWT · no DB creds"| app
+  app -->|"finished HTML + signed JWT proving the caller is our app · no DB creds"| pdf[["PDF render worker"]]
   </pre>
 </section>
 
@@ -111,9 +112,9 @@ flowchart LR
     <tbody>
       <tr>
         <td><strong>V1 web app</strong><br/>(SvelteKit + TypeScript)</td>
-        <td>All user-facing read/render of the 6 surfaces; settings write endpoints; as-of-date query paths; Plaid webhook handler; <code>SECURITY INVOKER</code> read-composition helper; <code>/internal/pdf-render</code> endpoint</td>
+        <td>All user-facing read/render of the 6 surfaces; settings write endpoints; as-of-date query paths; Plaid webhook handler; <code>SECURITY INVOKER</code> read-composition helper; composes and renders the report HTML and pushes it to the PDF worker</td>
         <td><code>frontend-engineer</code> + <code>backend-engineer</code></td>
-        <td>HTTPS UI; REST/RPC API; <code>/api/plaid/webhook</code>; <code>/internal/pdf-render</code></td>
+        <td>HTTPS UI; REST/RPC API; <code>/api/plaid/webhook</code></td>
         <td>Supabase (user-session JWT, RLS); Plaid Link / token-exchange; design tokens (Phase 2)</td>
       </tr>
       <tr>
@@ -128,7 +129,7 @@ flowchart LR
         <td>Headless render of the monthly report to PDF</td>
         <td><code>backend-engineer</code> / <code>devops</code></td>
         <td>PDF artifact</td>
-        <td>V1 app <code>/internal/pdf-render</code> (authenticated-tier JWT; <strong>no DB creds</strong>)</td>
+        <td>Finished HTML pushed by the V1 app, under a signed JWT proving <em>the caller is our app</em> (<strong>no DB creds</strong>; ADR-068 Decision 5)</td>
       </tr>
       <tr>
         <td><strong>Supabase / Postgres</strong></td>
@@ -160,7 +161,7 @@ flowchart TB
     subgraph appc["V1 web app container — SvelteKit + TypeScript"]
       ui["UI · 6 surfaces"] --> apil["API / RPC · settings writes · as-of-date paths"]
       wh["Plaid webhook handler"]
-      pe["/internal/pdf-render endpoint"]
+      pe["PDF export route · user session"]
       comp[["SECURITY INVOKER read-composition helper"]]
     end
     subgraph etlc["pfin_back_etl container — Python"]
@@ -181,8 +182,8 @@ flowchart TB
   poll -->|"service_role · TenantBoundConnection"| db
   nav -->|"service_role"| db
   ref -->|"service_role"| db
-  pup -->|"authenticated-tier JWT"| pe
   pe --> comp
+  pe -->|"POST finished HTML + signed JWT"| pup
   poll --> plaid(["Plaid API"])
   wh --> plaid
   ref --> rext(["BLS · FMP APIs"])
@@ -203,9 +204,9 @@ flowchart TB
     <li><strong>V1 web-app Plaid webhook handler</strong> (SvelteKit <code>src/routes/api/plaid/webhook/+server.ts</code>) — inside <a href="../SECURITY/#rt-26">RT-26</a>'s code-layer <strong>audit scope</strong>, holding <strong>no</strong> allowlist entry. That is the correct state: the route references no <code>SUPABASE_SERVICE_ROLE_KEY</code>. Composition lives at <a href="../../DECISIONS.md#adr-016">ADR-016</a>; <a href="#sec-4-1">§4.1</a> states the distinction, not the membership. Handles the <a href="../SECURITY/#rt-02">RT-02</a> Plaid Items table + <a href="../SECURITY/#rt-05">RT-05</a> webhook signature verification critical-severity surfaces. Webhook handler obtains a <code>service_role</code> Supabase client via <code>src/lib/server/**</code> factory (per <a href="#sec-4-1">§4.1</a> — and per <a href="../../DECISIONS.md#adr-016">ADR-016</a> the <strong>sole</strong> permitted surface: callers import the factory and hold no key); writes are bound in same-SERIALIZABLE-transaction with audit-log emission per the same Decision 1 discipline (analogous to the <code>pfin_back_etl</code> shape; TypeScript-side helper rather than the Python <code>TenantBoundConnection</code> class). Detailed flow in <a href="#sec-3-1">§3.1</a>.</li>
   </ul>
 
-  <p>Both write contexts land in <strong>immutable audit-class tables</strong> for money-correctness surfaces (<code>account_trans</code>, <code>reconciliation_event</code>, <code>monthly_report</code>, <code>plaid_item_state_history</code>; SD-00 immutability per <a href="../../DECISIONS.md#adr-008">ADR-008</a>) and emit an explicit audit-log row (<code>pfin.plaid_sync_audit</code> per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 17 mod #8 cross-language schema-as-contract).</p>
+  <p>Both write contexts land in <strong>immutable audit-class tables</strong> for money-correctness surfaces (<code>account_trans</code>, <code>reconciliation_event</code>, <code>monthly_report</code>, <code>plaid_item_state_history</code>; SD-00 immutability per <a href="../../DECISIONS.md#adr-008">ADR-008</a>) and emit an explicit audit-log row. &#9888; <strong>Corrected 2026-09-05:</strong> this sentence named <code>pfin.plaid_sync_audit</code> (<a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 17 mod &#35;8), <strong>which was created at migration <code>007</code> and dropped at <code>015</code></strong> &mdash; it is not a live table. Sync-path audit rows land in its successor <code>pfin.linked_source_sync_audit</code> (<code>015</code>); privileged <em>report-generation</em> writes land in <code>pfin.audit_log</code> via <code>pfin.fn_emit_audit_log</code> (<code>111</code>), the general same-transaction helper authored at <a href="../../DECISIONS.md#adr-068">ADR-068</a> Decision 9. The mod &#35;8 cross-language schema-as-contract requirement is unchanged; only the table it named has moved.</p>
 
-  <p>All <strong>reads</strong> flow through a single <code>SECURITY INVOKER</code> read-composition helper (user-session only — never invoked from a worker), which is also the render source the PDF worker reaches through the V1 web-app's <code>/internal/pdf-render</code> endpoint rather than the database directly. The PDF worker container has <strong>no Supabase credentials</strong> by Dockerfile audit (<a href="../SECURITY/#rt-22">RT-22</a> — the first catalogued §10 instance per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 4 ledger; infrastructure-credential-presence layer enforced in the PDF worker container). Detailed flow in <a href="#sec-3-2">§3.2</a>.</p>
+  <p>All <strong>reads</strong> flow through a single <code>SECURITY INVOKER</code> read-composition helper (<strong>never invoked from a worker's own database connection; a worker composing per tenant does so under an <em>impersonated user session</em></strong> — Lock 11 mod &#35;4), which is also the render source behind the V1 web-app's <code>/internal/pdf-render</code> flow rather than the database directly. <strong>Narrowed 2026-09-05</strong> per <a href="../../DECISIONS.md#adr-068">ADR-068</a> Decision 6 (V1.5 pre-flight ruling R3 (ii)): this clause constrains the <strong>session context</strong>, not the process identity, and it is PDF-scoped. It previously read <em>&ldquo;user-session only &mdash; never invoked from a worker&rdquo;</em>, which on its general reading would have made the monthly-report cron impossible and voided Lock 11 mod &#35;4's ratified V1-SHIP-BLOCK cron tenant-binding discipline. What it forbids is a worker reaching the database <em>directly, outside any user session</em>. &#9888; This makes the finding sharper rather than weaker: setting <code>request.jwt.claims</code> <em>without</em> <code>SET LOCAL ROLE authenticated</code> does not satisfy a session-context constraint either, because <code>rolbypassrls</code> remains in force, every RLS predicate is skipped, the composition reads every tenant's rows, and nothing raises. The PDF worker container has <strong>no Supabase credentials</strong> by Dockerfile audit (<a href="../SECURITY/#rt-22">RT-22</a> — the first catalogued §10 instance per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 4 ledger; infrastructure-credential-presence layer enforced in the PDF worker container). Detailed flow in <a href="#sec-3-2">§3.2</a>.</p>
 
   <p class="section-hint">This is the system-level overview only. A per-story <code>sequenceDiagram</code> is drafted
      with each surface's own later section (Data model, Plaid integration, Workers, etc.) — those carry the
@@ -218,7 +219,7 @@ flowchart TB
   db --> immut{{"Immutable audit-class tables · account_trans · reconciliation_event · monthly_report · plaid_item_state_history"}}
   db --> read[["SECURITY INVOKER read-composition helper"]]
   read -->|"user-session only"| render["6 read surfaces + monthly report"]
-  render --> pdfp["PDF worker render path<br>(via /internal/pdf-render; no DB creds; RT-22)"]
+  render --> pdfp["PDF worker render path<br>(app pushes finished HTML; no DB creds; RT-22)"]
   </pre>
 
   <h3 id="sec-3-1">3.1 Plaid webhook privileged-context write</h3>
@@ -307,56 +308,71 @@ sequenceDiagram
     credentials by Dockerfile audit</strong> — <a href="../SECURITY/#rt-22">RT-22</a> enforces credential-absence at
     the infrastructure-credential-presence layer (canonical first catalogued §10 instance per
     <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 4 ledger; Lock 13 mod #2 + Lock 12 mod #1
-    read-path-only fence preserved by-construction). All PDF render work crosses through the V1
-    web-app's <code>/internal/pdf-render</code> endpoint under a short-lived signed JWT carrying the
-    user's session identity — never directly to the database. The JWT shape (60s freshness + nonce
-    replay protection + dedicated <code>PDF_WORKER_SIGNING_KEY</code> per
-    <a href="../SECURITY/#sd-20">SD-20</a>) is V1-SHIP-BLOCK per Lock 13 mod #1 and verified at
-    <a href="../SECURITY/#rt-21">RT-21</a>.</p>
+    read-path-only fence preserved by-construction). <strong>&#9888; DIRECTION AMENDED 2026-09-05</strong>
+    per <a href="../../DECISIONS.md#adr-068">ADR-068</a> Decision 5 (V1.5 pre-flight ruling R2, option C):
+    <strong>the app composes and renders, then PUSHES finished HTML to the worker, which returns PDF bytes</strong>.
+    It previously read that the worker <em>pulled</em> rendered HTML from
+    <code>/internal/pdf-render</code> under a machine JWT — the direction Lock 13 locked, and the one this
+    amendment supersedes, because it forces the app to render a page for a user identity that has no session.
+    <strong>The worker holds no database access, no template, and no tenant or money knowledge &mdash; a PDF
+    printer, nothing else.</strong> The JWT survives with a <strong>changed purpose</strong>: it no longer proves
+    <em>who is asking</em>, it proves <em>the caller is our app</em>. Its shape (60s freshness + nonce replay
+    protection + dedicated <code>PDF_WORKER_SIGNING_KEY</code> per
+    <a href="../SECURITY/#sd-20">SD-20</a>) is V1-SHIP-BLOCK per Lock 13 mod &#35;1 and verified at
+    <a href="../SECURITY/#rt-21">RT-21</a>, whose letters are re-derived against this direction.</p>
 
   <pre class="mermaid">
 sequenceDiagram
   autonumber
-  participant PW as "PDF worker"
-  participant V1 as "Web-app endpoint"
+  participant U as "User session"
+  participant V1 as "Web-app (SvelteKit)"
   participant DB as "Postgres"
+  participant PW as "PDF worker"
   participant Pup as "Puppeteer"
-  PW->>PW: "Mint short-lived JWT (SD-20)"
-  PW->>V1: "GET /internal/pdf-render + signed JWT"
-  V1->>V1: "Verify JWT (RT-21)"
-  V1->>DB: SECURITY INVOKER helper(user_id)
-  Note over DB: "RLS predicate enforces tenant scope"
-  DB-->>V1: Rendered data
-  V1-->>PW: Rendered HTML
-  Note over V1, PW: "RLS-predicate construction at DB prevents cross-tenant leak"
-  PW->>Pup: "Load HTML in browser-context-per-render (Lock 13 mod #35;7)"
-  Pup-->>PW: PDF artifact
+  U->>V1: "Download report (user session)"
+  V1->>DB: "fn_render_monthly_report or stored payload"
+  Note over DB: "RLS applies, and auth.uid() is the tenant"
+  DB-->>V1: "Report values"
+  V1->>V1: "Render Svelte template, escaping all free text"
+  V1->>V1: "Mint short-lived JWT (SD-20)"
+  V1->>PW: "POST finished HTML + signed JWT"
+  PW->>PW: "Verify JWT (RT-21) — caller is our app"
+  Note over PW: "No DB access, no template, no tenant or money knowledge"
+  PW->>Pup: "setContent, aborting every non-data URL request"
+  Pup-->>PW: "PDF bytes"
+  PW-->>V1: "PDF bytes"
+  V1-->>U: "PDF download"
   </pre>
 
-  <p>The PDF worker mints a <strong>custom JWT signed with <code>PDF_WORKER_SIGNING_KEY</code></strong>
-    (NOT a Supabase Auth JWT — per <a href="../SECURITY/#rt-21">RT-21</a>(a/b) verification battery
-    rejects Supabase-JWT-signed tokens) carrying the user's <code>auth.uid()</code> <strong>claim</strong>.
-    V1's <code>/internal/pdf-render</code> verifies the custom JWT against
-    <code>PDF_WORKER_SIGNING_KEY</code> and binds the extracted user identity to the SECURITY INVOKER
-    helper's invocation under the <code>authenticated</code> tier. <strong>Concrete binding
-    mechanism</strong> (Supabase JWT claim injection via <code>SET LOCAL request.jwt.claims</code> vs
-    parametric <code>WHERE users_id = $1</code> at helper level vs other) <strong>is Phase 5 detail
-    design</strong> per Lock 13 mod #1 contract — constrained by RT-21(e) no-service_role-escalation.
-    The JWT-shape-layer (RLS predicate <code>users_id = auth.uid()</code> at DB) consumes the bound
-    identity to enforce tenant scope on the read.</p>
+  <p><strong>The V1 web-app</strong> composes the report under <strong>the user's own live session</strong> &mdash;
+    so the tenant binding is the session itself and there is no identity to transport &mdash; renders it through
+    <strong>the same Svelte template the in-app view uses</strong>, and escapes every free-text field there.
+    It then mints a <strong>custom JWT signed with <code>PDF_WORKER_SIGNING_KEY</code></strong> (NOT a Supabase
+    Auth JWT; the <a href="../SECURITY/#rt-21">RT-21</a> battery rejects Supabase-JWT-signed tokens) and
+    <strong>POSTs the finished HTML</strong> to the worker, which verifies the token and returns PDF bytes.
+    <strong>&#9888; The escaping control is now discharged STRUCTURALLY rather than by a worker-side rule:</strong>
+    the worker composes nothing, so Svelte's default escaping <em>is</em> the control. The proof leg is still
+    owed and spans both engines &mdash; a stored <code>&lt;script&gt;</code> in commentary, in the owner string
+    and in a schedule label must render inert in the PDF. <strong>Sec's resource-loading fence rides this
+    direction change</strong> (an addition to Lock 13 mod &#35;7, not an inheritance): <code>page.setContent()</code>
+    plus request interception aborting <em>every</em> request whose scheme is not <code>data:</code>. &#9888; Its catch
+    criterion requires the handler to record <strong>two aborts</strong>, because a failed fetch and a blocked
+    fetch render identically and &ldquo;the PDF looks fine&rdquo; is vacuous.</p>
 
-  <p><strong>Layer composition (per Decision 4 ledger):</strong> the PDF worker container is
-    <em>where</em> <a href="../SECURITY/#rt-22">RT-22</a> is enforced (canonical first catalogued §10
-    instance) — the infrastructure-credential-presence layer is the Dockerfile audit fence, not the
-    container itself. The V1 web-app's <code>/internal/pdf-render</code> endpoint is a §4.1 server-source surface
-    <em>inside</em> <a href="../SECURITY/#rt-26">RT-26</a>'s code-layer audit
-    scope, holding no allowlist entry — and does <strong>not</strong> use <code>service_role</code> in V1 — it operates under the
-    <code>authenticated</code> tier using the user-session-identity claim from the verified PDF-worker
-    JWT (Phase 5 mechanism per the paragraph above). Three-layer composition fully exercised on this
-    one flow: code-layer (<a href="../SECURITY/#rt-26">RT-26</a> on
-    <code>/internal/pdf-render</code>) + JWT-shape-layer (RLS predicate consumes the bound identity at
-    DB) + infrastructure-credential-presence-layer (<a href="../SECURITY/#rt-22">RT-22</a> on the PDF
-    worker Dockerfile).</p>
+  <p><strong>Layer composition (per Decision 4 ledger &mdash; the catalogued list is NOT restated here; read
+    <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 4 live):</strong> the PDF worker container is
+    <em>where</em> <a href="../SECURITY/#rt-22">RT-22</a> is enforced &mdash; the
+    infrastructure-credential-presence layer is the Dockerfile audit fence, not the container itself. The V1
+    web-app's PDF route is a §4.1 server-source surface <em>inside</em>
+    <a href="../SECURITY/#rt-26">RT-26</a>'s code-layer audit scope, holding no allowlist entry, and does
+    <strong>not</strong> use <code>service_role</code> in V1 &mdash; it operates under the
+    <code>authenticated</code> tier on the requesting user's own session. Three-layer composition is fully
+    exercised on this one flow: code-layer (<a href="../SECURITY/#rt-26">RT-26</a>) + JWT-shape-layer +
+    infrastructure-credential-presence-layer (<a href="../SECURITY/#rt-22">RT-22</a> on the PDF worker
+    Dockerfile). <strong>&#9888; The direction change does not move any layer attribution and adds no catalogued
+    instance</strong>; the compose-manifest wiring that accompanies it is an <strong>intra-instance</strong>
+    coverage expansion of <a href="../SECURITY/#rt-27">RT-27</a> on the <em>CI-fenced</em> side only, and the
+    &sect;10 catalogued set and the CI-fenced set are different sets that are not reconciled.</p>
 </section>
 
 <section id="sec-4" data-section="stack">
@@ -367,7 +383,7 @@ sequenceDiagram
     <tbody>
       <tr>
         <td><strong>V1 web-app container</strong></td>
-        <td><strong>SvelteKit (Svelte 5)</strong> — UI + SSR + Plaid webhook handler + <code>/internal/pdf-render</code> endpoint. Anchored as the V1 web-app container per <a href="../../DECISIONS.md#adr-015">ADR-015</a> + <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 17. Build via Vite; deploy as a small Node server in its Coolify container on Hetzner cax21.</td>
+        <td><strong>SvelteKit (Svelte 5)</strong> — UI + SSR + Plaid webhook handler; composes and renders report HTML and pushes it to the PDF worker. Anchored as the V1 web-app container per <a href="../../DECISIONS.md#adr-015">ADR-015</a> + <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 17. Build via Vite; deploy as a small Node server in its Coolify container on Hetzner cax21.</td>
         <td><strong>SSR-by-default surfaces</strong> (<code>+server.ts</code> / <code>+page.server.ts</code> / <code>+layout.server.ts</code>) satisfy the Lock 13 mod #1 PDF-render contract with no caching/<code>dynamic</code> knob to misconfigure. <strong>Component-scoped <code>&lt;style&gt;</code> + CSS custom properties</strong> consume <a href="../../DECISIONS.md#adr-014">ADR-014</a>'s <code>--color-*</code> → <code>--c-*</code> token taxonomy 1:1 — no transformation layer; closes the <a href="../../DECISIONS.md#adr-012">ADR-012</a> Phase 2 ↔ Phase 3 coupling. <strong><code>src/lib/server/**</code> server-only-module convention</strong> (Vite-enforced at import time) is the structural fence for shared server-side helpers including database-client factories — the natural home for the <code>SUPABASE_SERVICE_ROLE_KEY</code> allowlist anchor (see <a href="#sec-4-1">§4.1</a>). F/CTO ratified on engineering-merit grounds.</td>
         <td><strong>Next.js (App Router)</strong> — heaviest agent-fluency + starter-template advantage; con: <code>dynamic = "force-dynamic"</code> opt-out knob on PDF-render contract is a footgun; middleware-vs-route split adds Supabase-JWT ceremony. Rejected: structural-engineering disadvantage on PDF-render contract weighed against agent-fluency advantage. <strong>Remix (React Router v7 framework mode)</strong> — Architect's pre-ratify lean; two-primitive loader/action SSR-by-default; preserves React ecosystem; con: mid-rebrand doc fragmentation (Nov 2024 React Router v7 merge); smaller starter pool. Rejected by F/CTO on structural-engineering merit weighing above mental-load / agent-fluency. Long-list rejected at framing (Nuxt / Astro / Express+HTMX / Vite-SPA+Express SSR) — see <a href="../../DECISIONS.md#adr-015">ADR-015</a> Alternatives Considered.</td>
       </tr>
@@ -379,7 +395,7 @@ sequenceDiagram
       </tr>
       <tr>
         <td><strong>PDF render worker container</strong></td>
-        <td><strong>Node + Puppeteer</strong> (new at V1). Browser-context-per-render hitting V1 web app's <code>/internal/pdf-render</code> URL under a short-lived signed JWT per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 17 / Lock 13 mod #1. <strong>No DB credentials</strong>: no <code>SUPABASE_*</code> env vars; no Postgres client in Dockerfile; only <code>PDF_WORKER_SIGNING_KEY</code> per <a href="../SECURITY/#sd-20">SD-20</a>. <a href="../SECURITY/#rt-22">RT-22</a> verifies absence at PR-review on every Dockerfile change.</td>
+        <td><strong>Node + Puppeteer</strong> (new at V1). Browser-context-per-render over finished HTML PUSHED by the V1 web app under a short-lived signed JWT per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 17 / Lock 13 mod #1. <strong>No DB credentials</strong>: no <code>SUPABASE_*</code> env vars; no Postgres client in Dockerfile; only <code>PDF_WORKER_SIGNING_KEY</code> per <a href="../SECURITY/#sd-20">SD-20</a>. <a href="../SECURITY/#rt-22">RT-22</a> verifies absence at PR-review on every Dockerfile change.</td>
         <td>Preserves Lock 12 mod #1 read-path-only fence by-construction + by-infrastructure. PDF-via-HTTP-through-V1-app under user-session JWT means the worker never touches the database directly; infrastructure-credential-absence layer guarantees a "performance optimization" cannot silently violate the fence under refactor. First catalogued instance of the infrastructure-credential-presence layer in the <a href="../../DECISIONS.md#adr-011">§10</a> defense-in-depth meta-pattern. Puppeteer for browser-fidelity guarantee on the monthly-report HTML render surface (Lock 13 mod #7 hardening battery).</td>
         <td><strong>PDF in V1 web app process directly</strong> — rejected at Lock 13. Memory-heavy Puppeteer inside user-facing route-handler container; restart + crash-recovery don't compose; collapses infrastructure-credential-absence fence. <strong>Non-Puppeteer HTML-to-PDF</strong> (wkhtmltopdf, WeasyPrint) — rejected: SvelteKit-rendered CSS + browser-runtime layout don't reproduce on non-Chromium engines. <strong>Server-side PDF libraries</strong> (pdfkit, jsPDF) — rejected: §2.6 monthly report is HTML-first; PDF-DSL doubles work + forks visual.</td>
       </tr>
@@ -413,7 +429,7 @@ sequenceDiagram
   <table>
     <thead><tr><th>Glob</th><th>What it is</th><th>Why it's audit-relevant</th></tr></thead>
     <tbody>
-      <tr><td><code>src/routes/**/+server.ts</code></td><td>Route handlers (REST/JSON endpoints) — e.g., <code>/api/plaid/webhook</code>, <code>/internal/pdf-render</code></td><td>Privileged-context-write surfaces live here. <strong>Route handlers are in RT-26's audit scope; which of them hold an allowlist entry is a separate question, and its answer lives at <a href="../../DECISIONS.md#adr-016">ADR-016</a> + <a href="../SECURITY/#sec-4-2">SECURITY §4.2</a> — §4.1 states no membership and no count.</strong> Per-endpoint behavioral contract at <a href="#sec-7-1">§7.1</a>. High-risk surface for service_role drift under a "make the failing query work" refactor; allowlist additions require Sec-consult + ADR amendment at the surface-introducing lock per <a href="../SECURITY/#sec-4-2">SECURITY §4.2</a> webhook-allowlist annotation convention.</td></tr>
+      <tr><td><code>src/routes/**/+server.ts</code></td><td>Route handlers (REST/JSON endpoints) — e.g., <code>/api/plaid/webhook</code></td><td>Privileged-context-write surfaces live here. <strong>Route handlers are in RT-26's audit scope; which of them hold an allowlist entry is a separate question, and its answer lives at <a href="../../DECISIONS.md#adr-016">ADR-016</a> + <a href="../SECURITY/#sec-4-2">SECURITY §4.2</a> — §4.1 states no membership and no count.</strong> Per-endpoint behavioral contract at <a href="#sec-7-1">§7.1</a>. High-risk surface for service_role drift under a "make the failing query work" refactor; allowlist additions require Sec-consult + ADR amendment at the surface-introducing lock per <a href="../SECURITY/#sec-4-2">SECURITY §4.2</a> webhook-allowlist annotation convention.</td></tr>
       <tr><td><code>src/routes/**/+page.server.ts</code></td><td>Per-route SSR data loading</td><td>Reads under the user session's <code>authenticated</code>-tier JWT; service_role would silently break tenant isolation.</td></tr>
       <tr><td><code>src/routes/**/+layout.server.ts</code></td><td>Layout-level SSR data + auth gates</td><td>Same RLS-enforcement profile as <code>+page.server.ts</code>; covers auth-gate composition (the natural "I'll just bypass for now" failure surface).</td></tr>
       <tr><td><code>src/hooks.server.ts</code></td><td>Centralized Supabase session forwarding + auth refresh</td><td>Single chokepoint for the user-session JWT lifecycle; any <code>SUPABASE_SERVICE_ROLE_KEY</code> reference here would compromise every request.</td></tr>
@@ -426,7 +442,7 @@ sequenceDiagram
   <p><strong>Worker-entry codepaths covered under separate fence layers</strong> (named here for completeness; not in the V1 web-app RT-26 grep scope):</p>
   <ul>
     <li><strong><code>pfin_back_etl</code></strong> (Python container) — uses the <code>TenantBoundConnection</code> class code-layer fence per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 17 / Lock 13; CI grep enforces the class as the only allowed Postgres-client entry point (no raw <code>psycopg2.connect()</code> outside the class). Code-layer §10 fence per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 4 Privileged-context surfaces bullet (parallel to RT-26's V1-web-app code-layer fence; not in <a href="../../DECISIONS.md#adr-011">Decision 4</a>'s catalogued-instance numbered list).</li>
-    <li><strong>Node PDF worker container</strong> — covered by the <a href="../SECURITY/#rt-22">RT-22</a> infrastructure-credential-presence fence: no <code>SUPABASE_*</code> env vars; no Postgres client in Dockerfile; only <code>PDF_WORKER_SIGNING_KEY</code> per <a href="../SECURITY/#sd-20">SD-20</a>. RT-22 verifies absence at PR-review on every Dockerfile change. PDF worker reaches the data layer <strong>only</strong> via the V1 web-app's <code>/internal/pdf-render</code> endpoint under a short-lived signed JWT (Lock 13 mod #1 contract — preserves Lock 12 mod #1 read-path-only fence by-construction).</li>
+    <li><strong>Node PDF worker container</strong> — covered by the <a href="../SECURITY/#rt-22">RT-22</a> infrastructure-credential-presence fence: no <code>SUPABASE_*</code> env vars; no Postgres client in Dockerfile; only <code>PDF_WORKER_SIGNING_KEY</code> per <a href="../SECURITY/#sd-20">SD-20</a>. RT-22 verifies absence at PR-review on every Dockerfile change. PDF worker <strong>never reaches the data layer at all</strong> — it receives finished HTML pushed by the V1 web-app under a short-lived signed JWT and returns PDF bytes (Lock 13 mod #1 contract as amended in direction by <a href="../../DECISIONS.md#adr-068">ADR-068</a> Decision 5 — preserves Lock 12 mod #1 read-path-only fence by-construction).</li>
   </ul>
 
   <p><strong>Three-layer §10 defense composition</strong> (per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 4 + <a href="../SECURITY/#sec-4-2">SECURITY §4.2</a>):</p>
@@ -450,7 +466,7 @@ sequenceDiagram
   <strong>Browser ↔ V1 web-app:</strong> TLS via Coolify reverse-proxy; <a href="../../DECISIONS.md#adr-011">Supabase Auth</a> JWT (authenticated tier; <code>auth.uid()</code> claim) forwarded via <code>src/hooks.server.ts</code> per <a href="../../DECISIONS.md#adr-015">ADR-015</a> centralized chokepoint.
   <strong>V1 web-app ↔ Supabase:</strong> <strong>authenticated tier</strong> by default (RLS predicate <code>users_id = auth.uid()</code> consumes the JWT at the JWT-shape-layer); <strong><code>service_role</code> tier</strong> only on surfaces holding an <a href="../SECURITY/#rt-26">RT-26</a> allowlist entry — a strict subset of the §4.1 server-source surfaces inside RT-26's code-layer audit scope. Composition is enumerated at <a href="../../DECISIONS.md#adr-016">ADR-016</a>, not here. Supabase Auth supplies the JWT shape; the JWT-shape-layer itself lives at the DB.
   <strong>V1 web-app ↔ Plaid:</strong> inbound webhook (POST <code>/api/plaid/webhook</code> on a SvelteKit <code>+server.ts</code> surface; signature verify per <a href="../SECURITY/#rt-05">RT-05</a> + idempotency gate via <code>linked_source_sync_audit.provider_event_id</code> UNIQUE per ADR-011 Decision 2 / Lock 13 mod #8 — full flow at <a href="#sec-3-1">§3.1</a>); outbound API (Plaid Link, Items, Transactions, Investments — access tokens per <a href="../SECURITY/#sd-03">SD-03</a> Vault-encrypted).
-  <strong>V1 web-app ↔ PDF worker:</strong> inbound <code>/internal/pdf-render</code> under short-lived signed JWT (60s freshness + nonce + <code>auth.uid()</code> claim; signed with <code>PDF_WORKER_SIGNING_KEY</code> per <a href="../SECURITY/#sd-20">SD-20</a>; verified per <a href="../SECURITY/#rt-21">RT-21</a> battery a/b/c/d/e/f — full flow at <a href="#sec-3-2">§3.2</a>). PDF worker has <strong>no Supabase credentials</strong> by Dockerfile audit (<a href="../SECURITY/#rt-22">RT-22</a> Dockerfile audit enforces credential-absence; the canonical first catalogued §10 instance per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 4 ledger; infrastructure-credential-presence layer is the audit fence, not the container itself).
+  <strong>V1 web-app → PDF worker:</strong> <strong>outbound</strong> push of finished HTML under a short-lived signed JWT (60s freshness + nonce; ⚠ the token proves <em>the caller is our app</em>, <strong>not</strong> who is asking — <a href="../../DECISIONS.md#adr-068">ADR-068</a> Decision 5 changed its purpose when it amended the direction; signed with <code>PDF_WORKER_SIGNING_KEY</code> per <a href="../SECURITY/#sd-20">SD-20</a>; verified per <a href="../SECURITY/#rt-21">RT-21</a> battery a/b/c/d/e/f — full flow at <a href="#sec-3-2">§3.2</a>). PDF worker has <strong>no Supabase credentials</strong> by Dockerfile audit (<a href="../SECURITY/#rt-22">RT-22</a> Dockerfile audit enforces credential-absence; the canonical first catalogued §10 instance per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 4 ledger; infrastructure-credential-presence layer is the audit fence, not the container itself).
   <strong>pfin_back_etl ↔ Supabase:</strong> service_role tier; tenant correctness bound in code via the <code>TenantBoundConnection</code> class CI fence per <a href="../../DECISIONS.md#adr-011">ADR-011</a> Decision 17 / Lock 13 mod #3 (<strong>parallel code-layer fence</strong> to RT-26's V1-web-app code-layer fence; not in the <a href="../../DECISIONS.md#adr-011">Decision 4</a> catalogued-instance numbered list). Same-transaction audit-log discipline per Decision 1.
   <strong>pfin_back_etl ↔ Plaid / BLS / FMP:</strong> outbound API only (Plaid scheduled-poll + BLS CPI-U + FMP security prices; reference data ingestion).
   <strong>V1 web-app ↔ Discord webhook:</strong> outbound notification dispatch per <code>reference_coolify_discord_notifications</code> memory + PR #68 (conditional-lock with named fallback — see notification routing topology paragraph below).</p>
@@ -498,7 +514,7 @@ flowchart TB
   webend -->|"authenticated tier<br/>RLS users_id = auth.uid()"| supa
   webend -->|"service_role<br/>(allowlisted §4.1 only)"| supa
   webend <-->|"Plaid Items + outbound API<br/>+ inbound webhook (RT-05 + Lock 4 mod #3)"| plaid
-  pdfend -->|"signed JWT (RT-21; 60s + nonce; SD-20)<br/>NO direct DB access"| webend
+  webend -->|"finished HTML + signed JWT (RT-21; 60s + nonce; SD-20)<br/>caller-is-our-app, NOT who-is-asking<br/>worker has NO direct DB access"| pdfend
   etlend -->|"service_role + audit<br/>(Lock 13 mod #3 / mod #4)"| supa
   etlend -->|"Plaid scheduled-poll"| plaid
   etlend -->|"CPI-U ingest"| bls
@@ -559,7 +575,7 @@ flowchart TB
     <tbody>
       <tr><td><a href="../SECURITY/#rt-02">RT-02</a></td><td>critical</td><td>Test (Vitest + Supabase fixture)</td><td><strong>YES</strong></td><td>SECURITY §4.2 + §4.5</td><td>Plaid Item table RLS isolation under two-tenant fixture; access tokens never surface in client query results</td></tr>
       <tr><td><a href="../SECURITY/#rt-05">RT-05</a></td><td>critical</td><td>Test (Vitest + adversarial battery)</td><td><strong>YES</strong></td><td>SECURITY §4.2 + §4.5</td><td>Plaid webhook signature verification under adversarial-input battery (signature stripping / substitution / replay / payload-tampering)</td></tr>
-      <tr><td><a href="../SECURITY/#rt-21">RT-21</a></td><td>HIGH</td><td>Test (Vitest + PDF worker integration)</td><td><strong>YES</strong> per Lock 13 mod #1</td><td>SECURITY §4.5 + ARCH §3.2</td><td>PDF worker JWT verification battery (a)–(g) — the sub-case (g) <em>detection</em> commitment lives at <a href="#sec-4">§4 Observability row</a> OBS-F3 (NOT a CI gate; CI gate is verification-battery passing). ⚠ Per <a href="../../DECISIONS.md#adr-050">ADR-050</a> Decision 6 that commitment is <strong>unbuilt and its shape is not yet decided</strong> — the earlier "runtime audit-log commitment" wording presumed the RT-05-mirroring design that ADR-050 corrects; see OBS-F3</td></tr>
+      <tr><td><a href="../SECURITY/#rt-21">RT-21</a></td><td>HIGH</td><td>Test (Vitest + PDF worker integration)</td><td><strong>YES</strong> per Lock 13 mod #1</td><td>SECURITY §4.5 + ARCH §3.2</td><td><strong>&#9888; The battery's DIRECTION changed at <a href="../../DECISIONS.md#adr-068">ADR-068</a> Decision 5 (2026-09-05): the app now PUSHES finished HTML to the worker, so the token's purpose moves from <em>prove who is asking</em> to <em>prove the caller is our app</em>, and the canonical (a)&ndash;(g) letters are RE-DERIVED against that direction rather than inherited.</strong> Checked at this edit: this citation and SECURITY &sect;4.5 both carry <strong>seven</strong> letters, so the six-against-seven mismatch booked at the amendment batch is <strong>not reproduced here</strong> &mdash; recorded rather than silently dropped, since an un-found defect and a fixed one look identical later. RT-21's SECURITY row is Sec-owned and its rewrite is routed to Sec, not landed here. PDF worker JWT verification battery (a)&ndash;(g) &mdash; the sub-case (g) <em>detection</em> commitment lives at <a href="#sec-4">§4 Observability row</a> OBS-F3 (NOT a CI gate; CI gate is verification-battery passing). ⚠ Per <a href="../../DECISIONS.md#adr-050">ADR-050</a> Decision 6 that commitment is <strong>unbuilt and its shape is not yet decided</strong> — the earlier "runtime audit-log commitment" wording presumed the RT-05-mirroring design that ADR-050 corrects; see OBS-F3</td></tr>
       <tr><td><a href="../SECURITY/#rt-26">RT-26</a></td><td>HIGH</td><td><strong>Security scan (grep fence)</strong></td><td><strong>YES</strong> per SECURITY §4.2</td><td>SECURITY §4.2 + ARCH §4.1 + ADR-016</td><td>V1-web-app <code>SUPABASE_SERVICE_ROLE_KEY</code> allowlist CI grep fence; <strong>consumes the ADR-016 allowlist registry</strong> as data input; failure mode is grep-fence hit outside allowlist (fail-closed)</td></tr>
       <tr><td><a href="../SECURITY/#rt-09">RT-09</a></td><td>HIGH</td><td>Test (pytest; sub-cases a + b)</td><td>No (HIGH gate)</td><td>SECURITY §4.5 + ADR-011 Lock 13 mod #6</td><td>Cron worker tenant-context isolation; sub-case (a) monthly-report cron + sub-case (b) Plaid scheduled-poll on <code>pfin_back_etl</code></td></tr>
       <tr><td><a href="../SECURITY/#rt-10">RT-10</a></td><td>HIGH</td><td>Test (Node test runner; PDF worker hardening battery)</td><td>No (HIGH gate)</td><td>SECURITY §4.5 + ADR-011 Lock 13 mod #7</td><td>PDF worker tenant-isolation; browser-context-per-render + system-fonts + cache-disable + per-render metadata-clear hardening</td></tr>
