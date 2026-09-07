@@ -41,6 +41,20 @@ Used for: one-off decisions, simple supersessions, isolated choices that don't w
 
 ---
 
+## ADR-069 — The monthly-report PDF stylesheet is extracted at BUILD time: `css: 'injected'` was struck on a measured CSP defect, not on preference (terse pattern)
+
+**Date:** 2026-09-06 · **Status:** **Accepted** — team-lead ruling under delegation (E55), Option A of five (A–E; the rejected four are enumerated in the ruling record). **Not a one-way door**: the decision is one prebuild step plus one generated file, reversible by deleting both. · **Phase:** 6 Build Loop · **Surface:** the P6 PDF export route and `MonthlyReportView.svelte`. · **Source:** SELF-358; ruling record `self358-css-ruling.md`.
+
+**Decision.** A standalone Vite lib build over `MonthlyReportView.svelte` (`cssCodeSplit: false`) emits one committed `src/lib/generated/report.css` as a prebuild step; the PDF route inlines it with the `?raw` mechanism it already uses. No new dependency.
+
+**Why `css: 'injected'` is struck — a measured CSP defect, not a style preference.** SvelteKit passes a component's `head` through **verbatim** and attaches the CSP nonce **only to the style element Kit itself emits**; the root render's `rendered.css` is destructured and then never used (measured in the installed `@sveltejs/kit` — `render.js` around lines 264 / 302 / 325–327; re-measure the anchors after any Kit bump, the ruling does not depend on them). `api/vite.config.ts` runs `csp` in `mode: 'nonce'` with `style-src`/`style-src-elem` at `['self']`. An injected component style therefore reaches the browser **un-nonced and blocked**, on every report page load, while the page still renders correctly from its normal route CSS — a permanent, silent violation stream on a Sec-reviewed surface. The option is settable per-file via `dynamicCompileOptions` but **not per-route** (one server build; a query suffix does not reach child components), so it cannot be scoped away.
+
+**Also rejected: a runtime manifest read.** A request-time filesystem read on an ARCH §4.1 server-source surface, with no precedent in the codebase. **Any reversal of this routes to Sec joint-review.** **No §10 catalogued instance is added, removed or renumbered by this entry** — it decides a build mechanism, not a defense-in-depth layer.
+
+**Losing side, recorded.** Build-time extraction adds a generated file that can drift from its source without any value assertion noticing — a hash-coverage gap, not a correctness one. Two carry-forwards close it and are conditions of this decision, not follow-ups: **QA** owes the primary control — an assertion that every `svelte-[a-z0-9]+` token in the rendered body matches at least one selector in the extracted CSS; a rule change changes the CSS text, so that one leg catches both drift and a stale artifact, and without it a build drift yields a fully-unstyled PDF that passes every value assertion. **DevOps** owes a regenerate-and-diff fence in the `052` shape, belt-and-braces on top of it, not the primary control.
+
+---
+
 ## ADR-068 — The V1.5 monthly-report substrate: a frozen rendered artifact, one composing helper, and the three off-tree gate ratifies finally written down
 
 **Date:** 2026-09-05 · **Phase:** 6 Build Loop · **Surface:** `pfin.monthly_report` (`108`), `pfin.monthly_report_account_snapshot` (`109`), `pfin.fn_render_monthly_report` (`110`), `pfin.audit_log` + `pfin.fn_emit_audit_log` (`111`), ARCH §3.2 / §4, SECURITY RT-21.

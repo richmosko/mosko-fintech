@@ -44,6 +44,21 @@
 	the exact defect this file shipped and QA caught live.)
 
 	Tokens only (var(--c-*)); no hardcoded hex/px/font (ADR-013 P5).
+
+	SELF-358 / P6 (backend flag, `self358-css-ruling.md` § LayerCake — Frontend TO REVIEW): the
+	optional `renderContext` prop below is a MINIMAL, ADDITIVE, backward-compatible change threaded
+	route → MonthlyReportView → here. `'browser'` (the default) is BYTE-IDENTICAL to this file's
+	pre-P6 behavior — LayerCake auto-measures its container via ResizeObserver, as it always has.
+	`'print'` is the PDF route's SSR render (`svelte/server` has no DOM, so no ResizeObserver fires
+	and LayerCake would otherwise compute a zero-size chart) — it passes LayerCake's own `ssr`/
+	`width!`/`height!` override props (v10.0.3, no fork/patch) so scales compute synchronously from
+	fixed dimensions instead of a DOM measurement. SIZING ONLY, per the ruling: this prop must never
+	gate rendered CONTENT (a section shown/hidden, a value formatted differently) — doing so would
+	break SELF-358 AC3's one-template guarantee, since `renderContext` carries no report data and no
+	user-controlled text. `PRINT_CHART_WIDTH`/`PRINT_CHART_HEIGHT` below are derived from this file's
+	OWN already-declared print-relevant constants (`.monthly-report`'s 64rem max-width,
+	`--_chart-canvas-height`'s 20rem, both at the 16px root em this app never overrides) — a
+	first-pass number, not a Visual Designer ruling; Frontend/Visual may want a different figure.
 -->
 <script lang="ts">
 	import { LayerCake, Svg } from 'layercake';
@@ -61,6 +76,12 @@
 	import type { StalenessData } from '$lib/staleness/stale-constituent';
 	import StaleConstituentBadge from './StaleConstituentBadge.svelte';
 
+	// SELF-358 / P6: fixed SSR dimensions for `renderContext === 'print'` — see this file's own
+	// header. Named constants, not magic literals (Sec F3(B)-style discipline, matches
+	// `+server.ts`'s own `PRINT_FONT_STACK`).
+	const PRINT_CHART_WIDTH = 1024; // 64rem @ 16px root em — `.monthly-report`'s own max-width.
+	const PRINT_CHART_HEIGHT = 320; // 20rem @ 16px root em — `--_chart-canvas-height`, this file.
+
 	// Sec F3(B)-style discipline (mirrors CashflowRollupTable / NonReAllocationTable / etc.):
 	// `staleness` is REQUIRED, no default — a caller that forgets to thread real data fails at
 	// TYPECHECK, not as a silent "confirmed healthy" fallback.
@@ -68,7 +89,8 @@
 		points,
 		staleness,
 		unclassifiedCount = null,
-		classifyHref = '/accounts'
+		classifyHref = '/accounts',
+		renderContext = 'browser'
 	}: {
 		points: HistoricalExpenditurePoint[] | null;
 		staleness: StalenessData;
@@ -83,6 +105,10 @@
 		 * page, so `/accounts` is the best-available entry point pending a real §2.3.1 queue
 		 * surface (same flagged default, not re-derived here). */
 		classifyHref?: string;
+		/** SELF-358 / P6 — see this file's own header. SIZING ONLY: gates LayerCake's `ssr`/
+		 * `width`/`height` override props alone, never rendered content. `'browser'` (default) is
+		 * this file's original, unchanged behavior. */
+		renderContext?: 'browser' | 'print';
 	} = $props();
 
 	// ---- state classification — mirrors NavHistoryChart's ordering rationale: a read failure
@@ -206,6 +232,9 @@
 				xScale={scaleBand().paddingInner(0.25).paddingOuter(0.1)}
 				yScale={scaleLinear()}
 				padding={{ top: 16, right: 16, bottom: 32, left: 64 }}
+				{...renderContext === 'print'
+					? { ssr: true, width: PRINT_CHART_WIDTH, height: PRINT_CHART_HEIGHT }
+					: {}}
 			>
 				<Svg>
 					<HistoricalExpendituresBars

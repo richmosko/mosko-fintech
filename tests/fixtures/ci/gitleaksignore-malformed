@@ -1,0 +1,17 @@
+# gitleaksignore-malformed — golden violation fixture for
+# scripts/ci/fence-gitleaksignore-inversion.sh's shape-check leg (leg c).
+#
+# NOT a real .gitleaksignore — never referenced by .gitleaks.toml or any
+# gitleaks invocation. Exercised ONLY via:
+#   bash scripts/ci/fence-gitleaksignore-inversion.sh --shape-check-only \
+#     tests/fixtures/ci/gitleaksignore-malformed
+# which MUST exit 1 (violation caught) — if it ever exits 0, the shape
+# check's own discriminator is broken and CI must fail closed.
+#
+# Two independent violation shapes, either one sufficient to fail the check:
+#   (1) a bare rule:line pair with no commit sha or file component at all —
+#       not a four-part commit:file:rule:line fingerprint.
+#   (2) a well-formed four-part fingerprint whose file component names a
+#       forbidden surface (.env*) — Sec criterion 3.
+generic-api-key:3
+deadbeefdeadbeefdeadbeefdeadbeefdeadbeef:.env.production:generic-api-key:7
