@@ -159,7 +159,7 @@ create extension if not exists dblink;
 \set m_not_yours '%is not a row belonging to the tenant%'
 \set m_not_written '%was NOT written in this transaction%'
 
-select plan(36);
+select plan(37);
 
 select _rls.tenant_a() as ta, _rls.tenant_b() as tb \gset
 insert into auth.users (id) values (:'ta'), (:'tb');
@@ -723,6 +723,43 @@ select is(
   (select array_agg(trigger_source order by audit_id) from pfin.audit_log where audit_id in (:c12a_id, :c12b_id, :c12c_id, :c12d_id)),
   array['on_demand', 'on_demand', 'on_demand', 'on_demand'],
   '(12) ''CRON'', ''cron '', '''', and ''on_demand,cron'' ALL yield ''on_demand'' — exact match only, never a prefix, never case-folded, never trimmed'
+);
+
+-- =====================================================================
+-- LEG 13 (SELF-375, record docs/records/v1final/self365-protocol.md §C.1
+-- / ratified §G.6, M-3 carrier — the FLAG-4 pattern per
+-- 110_fn_render_monthly_report_rls.sql's LEG 9 VERSION PIN). Leg 4d above
+-- proves an INVENTED surface_name is refused; it does NOT prove the
+-- vocabulary is EXACTLY one value, and a second, legitimately-bound value
+-- would sail straight through leg 4d unnoticed. The V1.final
+-- cron-generation measurement (§C.1: "A month M is cron-generated for
+-- tenant T iff there exists at least one pfin.audit_log row with
+-- surface_name = 'monthly_report_generation' and trigger_source = 'cron'
+-- ...") is filtered on that one literal — this file's own data_as_of
+-- column comment already calls the filter LOAD-BEARING: a future surface
+-- a cron transaction can write would silently change what the recorded
+-- query counts, with no reviewer noticing. This leg extracts every
+-- single-quoted literal out of the INSTALLED audit_log_surface_name_vocab
+-- CHECK's reconstructed definition (pg_get_constraintdef — robust to
+-- whether Postgres renders a single-element IN-list as a plain `=` or, once
+-- the vocabulary grows, as `= ANY (ARRAY[...])`) and asserts the set is
+-- EXACTLY {'monthly_report_generation'}.
+-- ⚠ WHEN THIS REDS: the vocabulary grew. That is not this leg's bug — do
+-- NOT loosen the expected array to match. Re-rule the SELF-365 record
+-- §C.1 measurement's surface filter (and every recorded month-record
+-- query already run against it) FIRST, at the same PR that grows the
+-- vocabulary, THEN widen this leg's expected set to match the newly
+-- ratified filter.
+-- =====================================================================
+select is(
+  (select array_agg(lit[1] order by lit[1])
+     from pg_constraint c,
+          lateral regexp_matches(pg_get_constraintdef(c.oid), '''([^'']*)''', 'g') as lit
+     where c.conrelid = 'pfin.audit_log'::regclass
+       and c.conname = 'audit_log_surface_name_vocab'
+       and c.contype = 'c'),
+  array['monthly_report_generation'],
+  '(13) SELF-375 §C.1 VOCABULARY PIN: the installed audit_log_surface_name_vocab CHECK admits EXACTLY the literal ''monthly_report_generation'' — a second admitted value REDs this leg, which is the mechanism behind "the surface filter is load-bearing" (this file''s own data_as_of comment) rather than a silent widening of what the V1.final cron-generation measurement (SELF-365 §C.1) counts. ON RED: re-rule the SELF-365 record §C.1 measurement''s surface filter before touching this leg''s expected set'
 );
 
 select * from finish();
