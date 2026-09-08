@@ -1218,7 +1218,7 @@ Phase 4 ran 2026-06-02 → 2026-06-04 (3 calendar days; intensive parallel PM/Ar
 
 **Exit criteria:**
 
-- All V1 milestones complete
+- All V1 milestones complete except the calendar-gated V1.final close-gate, which closes in Phase 7
 - All V1 PRD requirements have shipped and passed acceptance
 - Test coverage meets standards defined in Phase 5
 - Security Reviewer signs off on V1 as a whole
