@@ -63,7 +63,7 @@
 --         shared credential.
 --
 -- ----------------------------------------------------------------------------
--- THE ROTATION-COUPLING PROPERTY THIS DISCHARGES, AND A CITATION CAVEAT.
+-- THE ROTATION-COUPLING PROPERTY THIS DISCHARGES, AND A MIS-ATTRIBUTED LABEL.
 --   The property: provider-sync's `PFIN_DB_PASSWORD` currently holds the
 --   `authenticator` password, which is also PostgREST's credential — so rotating
 --   either forces a coordinated redeploy of both. `secrets-manifest.yml` states
@@ -73,17 +73,57 @@
 --   ADR-041 records that the coupling narrowed to PostgREST + provider-sync when
 --   the ETL left it.
 --
---   ⚠ CITATION CAVEAT — verified against DECISIONS.md as merged at 2bb6b0e6, and
---   recorded here rather than silently reproduced. ADR-041, migration `055`'s
---   `comment on role`, `secrets-manifest.yml`, `docs/deployment-runbook.md` §6.1
---   and BACKLOG §7.6 S5 all label this coupling **"ADR-023 condition C1"**.
---   ADR-023's own enumerated C1 is a different condition (an exposure-readiness
---   artifact reviewed before exposure), and no text in DECISIONS.md attaches the
---   rotation coupling to a condition labeled C1 anywhere. The SUBSTANCE is real
---   and is correctly stated above; only the label is unsupported. This migration
---   therefore names the PROPERTY and its evidence rather than the label, and the
---   label is routed to Sec + F/CTO for an adjudicated correction. Do not
---   propagate the label from this file.
+--   ⚠ LABEL CORRECTION IN FLIGHT — the coupling is labeled "ADR-023 condition
+--   C1" across the tree, and that POINTER IS WRONG. Recorded here, and revised
+--   at the Sec joint-review of PR #671 (2026-09-08), which refuted the claim
+--   this block first carried. THE CLAIM THAT WAS HERE AND IS FALSE: "no text in
+--   DECISIONS.md attaches the rotation coupling to a condition labeled C1
+--   anywhere." It does — ADR-041 attaches it in the paragraph arguing why it is
+--   not an ADR-023 amendment, again in its Consequences, and again in its
+--   Cross-references.
+--
+--   Carriers of the label, each reachable by grepping for C1 in the named file:
+--   ADR-041 (the three sites above), migration `055`'s header AND its
+--   `comment on role`, `secrets-manifest.yml`'s `PFIN_DB_PASSWORD` entry,
+--   `docs/deployment-runbook.md` §6.1's rotation paragraph, and BACKLOG §7.6
+--   S5's AC line ("Discharges the remainder of ADR-023 condition C1").
+--
+--   MEASURED, not inferred: ADR-023's own enumerated C1 is a DIFFERENT
+--   condition — an exposure-readiness artifact (per-table RLS + policy proof)
+--   reviewed before exposure. So the label is MIS-ATTRIBUTED, not invented:
+--   right content, wrong pointer. That pairing is the failure mode ADR-011
+--   Decision 4's attribution-discipline CHANGELOG names a "false composite" —
+--   it survives every spot-check because both halves are separately real. This
+--   block NAMES that class; it asserts nothing about the §10 catalogued ledger,
+--   which neither this migration nor this correction moves.
+--
+--   INFERRED, and F/CTO's to rule: the label's home is ADR-019's Sec condition
+--   C1. Evidence is `workers/provider-sync/.env.example`, which pins the login
+--   role "(F/CTO-ratified; Sec conditions C1/C3)" — ADR-019's condition set —
+--   and then spells the condition out as "CONDITION C1 (rotation coupling —
+--   Sec-load-bearing)". ADR-019's Status line ratifies "Sec conditions C1–C4",
+--   but of that set DECISIONS.md enumerates only C2. WHETHER THE C1 / C3 / C4
+--   TEXT IS RECOVERABLE, or must be reconstructed from `.env.example`, IS AN
+--   OPEN F/CTO RULING as of 2026-09-08. Until it is ruled, no artifact should
+--   re-point the label.
+--
+--   ⚠ THE CORRECTION IS RE-ATTRIBUTION PLUS ENUMERATION — NEVER DELETION. A
+--   condition label is a reference into a canonical enumeration; stripping it
+--   severs the reference and leaves a reader holding a rule with no way to look
+--   up the instance. Sec's PR #671 ruling is explicit that the label stays in
+--   the tree. The remedy this block first proposed — name the property instead
+--   of the label — is WITHDRAWN for that reason.
+--
+--   Per-artifact vehicles, so that no one corrects the wrong surface:
+--     · ADR-041 — edit-in-place, folded into the ADR-019-C2 realization
+--       amendment (Architect; a separate PR, after the ruling).
+--     · `055`'s header — edit-in-place; a `--` block has no DB representation.
+--     · `055`'s `comment on role` — a DATABASE object, correctable only by a
+--       comment-only migration `117`. Booked, not authored here.
+--     · `secrets-manifest.yml` and `docs/deployment-runbook.md` — DevOps;
+--       `secrets-manifest.yml` returns to Sec joint-review.
+--     · `workers/provider-sync/.env.example` — CORRECT AS WRITTEN under the
+--       re-attribution reading. Do not "fix" the label there.
 --
 -- ----------------------------------------------------------------------------
 -- WHAT DISCHARGES THE GATE — AND WHY THIS MIGRATION CANNOT OBSERVE IT.
