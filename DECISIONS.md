@@ -4753,7 +4753,7 @@ The tree evidences that a C3 **exists and belongs to this set**: `workers/provid
 
 #### C4 — **text unrecoverable; number retained; no artifact may cite it as a rule.**
 
-C4 is evidenced **only** by the `C1–C4` range in this ADR's own Status and Approved-by lines. No downstream artifact cites a C4 from this set at all — not the `.env.example` files, not the manifest, not the runbook, not `055` or `116`. Neither its substance nor, independently, its discharge state is recoverable. Number retained; nothing may cite C4 as a rule.
+C4 is evidenced **only** by the `C1–C4` range in this ADR's own Status and Approved-by lines, echoed as a bare range at `055`'s and `116`'s headers. **No artifact anywhere states a C4 requirement from this set** — not the `.env.example` files, not the manifest, not the runbook, not `055` or `116`. Neither its substance nor, independently, its discharge state is recoverable. Number retained; nothing may cite C4 as a rule.
 
 ⚠ **The Sec joint-review of PR #671 / migration `116` has its OWN condition C4** — the silent half-applied-state control, booked at [`BACKLOG.md`](BACKLOG.md) §7.36 item 2. Different review, different numbering, **not this C4**. The same caution applies to that review's C1, which is the finding that produced this amendment and is not itself this ADR's C1.
 
