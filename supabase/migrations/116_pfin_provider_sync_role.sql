@@ -139,8 +139,18 @@
 --   revision of this block quoted it as "(F/CTO-ratified; Sec conditions
 --   C1/C3)", silently dropping "migration 116" — an UNMARKED ELISION inside a
 --   verbatim quote (Sec, ADR-019 review F3), which ADR-019's own amendment then
---   inherited from here. A quotation that normalises its source is the same
---   class whether it drops words or joins lines; mark both or quote neither.
+--   inherited from here.
+--   THE RULE, SCOPED — stated narrowly because its absolute form is failed by
+--   its own neighbours (Sec, #675 review C4). It governs quotation of a SOURCE
+--   ARTIFACT, where the reader's next move is to go find the quoted bytes:
+--   DROPPING OR ALTERING WORDS is a transformation and must be marked; quoting
+--   ACROSS A `--` / `#` COMMENT BLOCK'S OWN SOFT WRAPS is not — re-flowing a
+--   wrap restores the sentence the author wrote and changes no word. That is
+--   why the rejoin above is merely noted rather than treated as a defect, and
+--   why the superseded sentences quoted elsewhere in this header and in `055`,
+--   and the `.env.example` pin quoted in ADR-019's amendment, are all sound as
+--   written. ⚠ The narrow half is the load-bearing half: an elided clause is
+--   invisible and changes meaning; a rejoined wrap is neither.
 --
 --   ⚠ RECONSTRUCTED, NOT RECOVERED. The originating Sec artifact was never
 --   committed, so C1's text is written FROM tree evidence rather than quoted

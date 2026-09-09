@@ -1,10 +1,25 @@
 -- ============================================================================
 -- Migration: pfin_etl role comment — C1 LABEL RE-ATTRIBUTION. COMMENT-ONLY.
---   Re-issues `comment on role pfin_etl` (created at 055) with ONE span replaced:
---   the rotation-coupling condition label, which read "ADR-023's C1" and now reads
---   "ADR-019 condition C1 (reconstructed 2026-09-09)". Nothing else in the comment
---   changes; no role attribute, no membership, no grant, no privilege, no function,
---   no table, no policy is created, altered or dropped by this file.
+--   Re-issues `comment on role pfin_etl` (created at 055) with ONE CONTIGUOUS
+--   REGION changed: the rotation-coupling condition label, which pointed at
+--   ADR-023 and now points at ADR-019 condition C1, followed by a dated
+--   parenthetical recording what it previously read.
+--   ⚠ DESCRIBED, NOT QUOTED. The shipped wording is the literal at the foot of
+--   this file — read it there. An inline quotation here would have to elide, and
+--   an earlier revision of this line did exactly that: it quoted the new text as
+--   "ADR-019 condition C1 (reconstructed 2026-09-09)", dropping "rotation
+--   coupling" from inside the quotation and truncating the parenthetical, both
+--   unmarked — the same defect this branch fixes elsewhere, in the file that
+--   exists to fix it (Sec, #675 review C5).
+--   ⚠ "ONE REGION", NOT "ONE SPAN". The word-diff is a REPLACEMENT (the label's
+--   pointer) plus a separate INSERTION (the dated parenthetical), three unchanged
+--   words apart. The containment proof claims — and demonstrates — that
+--   everything outside the enclosing contiguous region is byte-identical; it does
+--   not claim a single edit operation, and the earlier "one span" wording
+--   overstated it.
+--   Nothing else in the comment changes; no role attribute, no membership, no
+--   grant, no privilege, no function, no table, no policy is created, altered or
+--   dropped by this file.
 --   BACKLOG §7.36 item 3. F/CTO ruling 2026-09-09 (the label's home is ADR-019
 --   condition C1, reconstructed by ADR amendment). apply-migration procedure applied.
 --   JOINT-REVIEW-MANDATORY (Sec veto surface): 055 is Sec-load-bearing and this
@@ -63,18 +78,31 @@
 --
 -- CONTRACT
 --   comment on role pfin_etl — replaces the role's pg_shdescription entry with a
---     regenerated copy of 055's text carrying exactly one replaced span (the
---     condition label). No behaviour, no privilege and no attribute is contingent
+--     regenerated copy of 055's text carrying exactly one changed contiguous
+--     region (the condition label: a replaced pointer plus an inserted dated
+--     parenthetical). No behaviour, no privilege and no attribute is contingent
 --     on this statement; a catalog comment is documentation.
 --   ⚠ pg_shdescription is a SHARED catalog: a role comment is CLUSTER-WIDE, not
---     per-database. Applying this on a scratch database changes the comment for
---     every database in that cluster. That is correct here (the new text is the
---     intended end state) but it is why a scratch-DB apply of this file is not
---     isolated the way a pfin-schema migration's is.
+--     per-database. Applying this against a scratch DATABASE mutates the comment
+--     for every database in that cluster — which is what happened to the local
+--     dev cluster when this migration was first verified (Sec, #675 review C7).
+--     ⚠ THAT IS A REQUIREMENT ON VERIFICATION, NOT A CAVEAT ON IT: render-verify
+--     and the 055 -> 116 -> 117 replay MUST run in a DISPOSABLE CLUSTER (a fresh
+--     container), never a scratch database inside the dev cluster. A scratch-DB
+--     run reads the right bytes but does not isolate them — the "before" text is
+--     unrepeatable once the first apply lands, and a failed run leaves the
+--     cluster changed with nothing to roll back to.
+--     REPAIR, if this file changes: re-apply 055 then 117. The overwrite is
+--     benign because the new text is the intended end state, and `comment on
+--     role` REPLACES rather than accumulates.
 --   IDEMPOTENCE: `comment on role` REPLACES; re-applying 117 is a no-op onto its
 --     own outcome. Re-applying 055 AFTER 117 would restore the OLD label — 055 is
 --     earlier in the sorted chain, so the sorted-order apply this repo uses always
---     leaves 117's text last. Verified by applying 055 then 117 and re-reading.
+--     leaves 117's text last. Applied, replayed and read back — but in a scratch
+--     DATABASE inside the dev cluster, which per the shared-catalog warning above
+--     is the WRONG INSTRUMENT: it measured the right bytes without isolating
+--     them. Treat that run as evidence, not as the owed render-verify; the owed
+--     one runs in a disposable cluster and is booked (Sec, #675 review C7).
 --
 -- ----------------------------------------------------------------------------
 -- §10 3-AXIS CROSS-CHECK — ADR-011 Decision 4 read VERBATIM, live, before drafting
@@ -107,7 +135,7 @@ create schema if not exists pfin;
 -- ----------------------------------------------------------------------------
 -- The role comment, REGENERATED from 055's literal (never retyped) with one
 -- anchored substitution asserted to match exactly once, and a containment proof
--- that the prefix before the replaced span and the suffix after it are
+-- that the prefix before the changed region and the suffix after it are
 -- byte-identical to 055's text. The generator and its proof are recorded in the
 -- PR body.
 -- ----------------------------------------------------------------------------
