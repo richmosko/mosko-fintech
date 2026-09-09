@@ -82,15 +82,35 @@
 --           precisely the objects that matter.
 --   (r10) -> the general case (r9) cannot reach: ANY privilege granted to this
 --           role anywhere in the cluster, on any relation, column, schema,
---           function, type, database, tablespace or default-ACL, or this role
---           becoming the owner of anything. 116 grants object privileges to
---           NOTHING, so the correct assertion is an EMPTY inventory, and this
---           leg REDs on the first grant of any kind — including one added by a
---           future migration that never touches this file.
+--           function, type, database, tablespace, default-ACL, PARAMETER or
+--           LARGE OBJECT, or this role becoming the owner of anything. 116
+--           grants object privileges to NOTHING, so the correct assertion is an
+--           EMPTY inventory, and this leg REDs on the first grant of any kind —
+--           including one added by a future migration that never touches this
+--           file. Sec F4 (2026-09-08): the pre-existing inventory omitted
+--           `pg_parameter_acl` — a `GRANT SET ON PARAMETER
+--           session_replication_role TO pfin_provider_sync` would re-open the
+--           bypass (r2)'s own message calls superuser-only, invisible to every
+--           other leg — and `pg_largeobject_metadata.lomacl` (low severity: zero
+--           `lo_*` usage anywhere in this schema, so this role can never become a
+--           large-object grantee through any real code path, but the general
+--           unscoped claim this leg makes was not true until both were added).
+--           Both are now enumerated in the same catch-all rather than as
+--           separate legs, matching (r10)'s own shape.
 --   (r11) -> the role's `comment on role` going missing. That comment is where
 --           the deploy-time two-step, the prohibition on the single-statement
 --           password form, and the PFIN_DB_USER caveat reach an operator who is
 --           reading the catalog with no repository in front of them.
+--   (r12) -> Sec C2 (2026-09-08): a per-role session default bypassing this
+--           entire posture from a layer no other leg reads. `ALTER ROLE
+--           pfin_provider_sync SET role = 'service_role'` makes every session
+--           start ambiently AS service_role at LOGIN, before any `set local
+--           role` runs — (r1)/(r6)/(r7)/(r8)/(r9)/(r10) all stay green because
+--           none of them read `rolconfig` or `pg_db_role_setting`, and an
+--           ordinary role may set this on itself (no privileged actor needed).
+--           `ALTER ROLE pfin_provider_sync SET timezone` is the same class of
+--           vector escaping the 061 UTC pin — DEMONSTRATED on this project's
+--           `authenticator` role, 2026-08-04 (061:61-69), not theoretical.
 --
 -- LEG INDEPENDENCE: (r5) owns "which memberships exist"; (r8) is SCOPED to the
 --   two required edges so that a third membership REDs (r5) alone. (r9) names
@@ -119,7 +139,7 @@
 
 begin;
 
-select plan(12);
+select plan(13);
 
 -- ---------------------------------------------------------------------
 -- (r0) DEPENDENCY GUARD — must come first and must be LEGIBLE.
@@ -294,6 +314,14 @@ select is(
         from pg_default_acl da, aclexplode(da.defaclacl) a
        where a.grantee = to_regrole('pfin_provider_sync')
       union all
+      select 'parameter-acl ' || pa.parname
+        from pg_parameter_acl pa, aclexplode(pa.paracl) a
+       where a.grantee = to_regrole('pfin_provider_sync')
+      union all
+      select 'largeobject-acl ' || lom.oid::text
+        from pg_largeobject_metadata lom, aclexplode(lom.lomacl) a
+       where a.grantee = to_regrole('pfin_provider_sync')
+      union all
       select 'owns-relation ' || c.oid::regclass::text
         from pg_class c where c.relowner = to_regrole('pfin_provider_sync')
       union all
@@ -311,7 +339,7 @@ select is(
         from pg_default_acl da where da.defaclrole = to_regrole('pfin_provider_sync')
     ) t), '') end,
   '',
-  '(r10) ZERO object privilege anywhere, and ZERO ownership: `pfin_provider_sync` appears in NO relation, column, schema, function, type, database, tablespace or default ACL in this database, and owns nothing. Migration 116 grants object privileges to NOTHING — the login role''s entire reach is its two memberships — so the correct inventory is EMPTY. This is the leg that REDs when a grant is added, including by a future migration that never touches this file. A non-empty result names exactly what was granted or what is owned; ''ROLE MISSING'' means 116 is not applied (see r0), never that the inventory is clean'
+  '(r10) ZERO object privilege anywhere, and ZERO ownership: `pfin_provider_sync` appears in NO relation, column, schema, function, type, database, tablespace, default-ACL, PARAMETER or LARGE OBJECT ACL in this database, and owns nothing. Migration 116 grants object privileges to NOTHING — the login role''s entire reach is its two memberships — so the correct inventory is EMPTY. This is the leg that REDs when a grant is added, including by a future migration that never touches this file. Sec F4: `pg_parameter_acl` closes the gap where `GRANT SET ON PARAMETER session_replication_role TO pfin_provider_sync` would re-open the superuser-only trigger bypass (r2) names, unseen by any other leg; `pg_largeobject_metadata.lomacl` closes a second gap of the same shape (no `lo_*` usage exists anywhere in this schema, so this is defense-in-depth against a future one, not a live path). A non-empty result names exactly what was granted or what is owned; ''ROLE MISSING'' means 116 is not applied (see r0), never that the inventory is clean'
 );
 
 -- ---------------------------------------------------------------------
@@ -326,6 +354,33 @@ select ok(
   (select shobj_description(oid, 'pg_authid') is not null
      from pg_authid where rolname = 'pfin_provider_sync'),
   '(r11) `comment on role pfin_provider_sync` is present. It carries the deploy-time two-step, the PROHIBITION on the single-statement `ALTER ROLE … WITH LOGIN PASSWORD` form, and the caveat that creating this role does not by itself move provider-sync off `authenticator` — all of which an operator reads from the catalog rather than from the repository. Asserted with ok(… is not null) rather than isnt(…, null) because pgTAP''s isnt() PASSES on NULL and would fail open here'
+);
+
+-- ---------------------------------------------------------------------
+-- (r12) Sec C2 — NO per-role session default anywhere, on this role.
+--       ⚠ CORRECTED FROM BRIEF: the brief named `pg_authid.rolconfig`, but
+--       `pg_authid` carries NO `rolconfig` column at all (confirmed via
+--       `\d pg_authid` on this stack, PG 17) — `rolconfig` exists only on
+--       the `pg_roles` VIEW, and `pg_get_viewdef` shows it is populated by
+--       `LEFT JOIN pg_db_role_setting s ON pg_authid.oid = s.setrole AND
+--       s.setdatabase = 0` i.e. it IS the row this leg's second predicate
+--       already reads, restricted to the GLOBAL scope. Reading it from
+--       `pg_roles` is therefore not a second independent surface — it is
+--       the same table, pre-filtered to setdatabase = 0 — kept here anyway
+--       as a legible, view-level cross-check alongside the unrestricted
+--       `pg_db_role_setting` scan below, which additionally covers the
+--       `IN DATABASE <db>`-scoped shape the view never surfaces. A missing
+--       role makes the `pg_roles` read NULL, and NULL AND <anything> is
+--       never TRUE, so this leg fails closed exactly like (r4).
+-- ---------------------------------------------------------------------
+select ok(
+  (select r.rolconfig is null from pg_roles r where r.rolname = 'pfin_provider_sync')
+  and not exists (
+    select 1 from pg_db_role_setting drs
+    join pg_roles r on r.oid = drs.setrole
+    where r.rolname = 'pfin_provider_sync'
+  ),
+  '(r12) C2: NO per-role session default anywhere. `pfin_provider_sync` carries pg_roles.rolconfig IS NULL (no `ALTER ROLE ... SET <param>` recorded on the role itself, global scope) and has ZERO rows in pg_db_role_setting for this role, database-scoped or global. UNDISCHARGED BY (r1)-(r11): `ALTER ROLE pfin_provider_sync SET role = ''service_role''` makes every session start ambiently AS service_role AT LOGIN, before any `set local role` runs — rolinherit/MEMBER-USAGE/set_option/the ACL inventory all keep reading exactly as asserted above, because none of those legs read rolconfig or pg_db_role_setting, and an ordinary role may set this on itself with no privileged actor required. The same vector applied to `SET timezone` escapes the 061 UTC pin (DEMONSTRATED on `authenticator`, 2026-08-04 — see 061:61-69, not theoretical). ON RED: a per-role setting here is a POSTURE BYPASS, not a convenience default — REVOKE it (`ALTER ROLE pfin_provider_sync RESET ALL;` and, for any database-scoped row, `ALTER ROLE pfin_provider_sync IN DATABASE <db> RESET ALL;`), never loosen this leg to tolerate it'
 );
 
 select * from finish();
