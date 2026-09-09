@@ -1,0 +1,434 @@
+-- ============================================================================
+-- Migration: pfin_provider_sync — a dedicated NOINHERIT login role for the
+--   workers/provider-sync container. This is provider-sync's own database
+--   identity, replacing the shared `authenticator` credential it logs in with
+--   today. Once provisioned it LOGS IN as `pfin_provider_sync` and holds NO
+--   privilege until it explicitly `SET ROLE`s to `authenticated` (the INVOKER
+--   ingest + tenant-scoped read/write path) or `service_role` (the privileged
+--   snapshot / global-asset / Vault-admission path). **CREATED HERE AS
+--   `NOLOGIN` WITH NO PASSWORD** — the role ships inert and is switched on by
+--   the deploy-time two-step; see the DEPLOY-TIME CREDENTIAL HANDOFF block.
+--   Migration-time `rolcanlogin` is FALSE.
+--
+--   BACKLOG.md §7.6 item S5. Realizes ADR-019's Condition C2 (a dedicated
+--   NOINHERIT login role for provider-sync, declined as day-one, forward-flagged
+--   as hardening) under the name ADR-041 pinned for it — the `pfin_<workers/
+--   subdirectory>` convention, which supersedes C2's original `pfin_worker`.
+--   ADR-041 also promoted C2 from "V1.x hardening" to a **Phase-7 deploy gate**.
+--   apply-migration procedure applied.
+--
+--   JOINT-REVIEW-MANDATORY (Sec veto surface): a cluster-level identity + two
+--   privileged-role membership grants. C2's Sec-joint-review-mandatory condition
+--   is unchanged by ADR-041 and gates this migration.
+--
+-- ----------------------------------------------------------------------------
+-- Numbering: 116 follows 115 (fn_finalize_monthly_report). Depends on: NOTHING
+--   in pfin — this migration creates no object in the pfin schema and touches no
+--   table, no function, and no policy. It depends only on the Supabase-provisioned
+--   platform roles `service_role` + `authenticated` existing, which they do from
+--   cluster bootstrap. No downstream migration depends on 116. It is
+--   order-independent and is numbered 116 only because it was authored after 115.
+--
+-- WHY A SEPARATE MIGRATION: this is a CLUSTER-LEVEL IDENTITY concern with its own
+--   lifecycle and blast radius, exactly as 055 was for the ETL. It is deliberately
+--   NOT folded into any pfin-schema migration, and it deliberately does NOT
+--   converge with 055: `pfin_etl` and `pfin_provider_sync` stay two roles. Merging
+--   them would reintroduce the shared-credential blast radius and the loss of
+--   independent revocation that ADR-041 option (A) was rejected for.
+--
+-- ----------------------------------------------------------------------------
+-- WHY A DEDICATED ROLE — the argument, and why it is STRONGER here than at 055.
+--   ADR-041 records this as an Architect call on Sec's recommendation. The B8
+--   reasoning that won `pfin_etl` its own identity applies more forcefully to
+--   provider-sync: this container holds PLAID_SECRET, decrypts SD-03 provider
+--   credentials through pfin.decrypted_source_credential, admits new secrets via
+--   vault.create_secret / vault.update_secret, and writes the tenant-scoped
+--   account / account_trans surface. On blast radius it is the higher-value
+--   target of the two, and until this migration is provisioned it is the one
+--   still logging in with `authenticator` — the credential PostgREST itself
+--   authenticates with, i.e. the identity fronting the entire public Data API.
+--
+--   Three properties this buys, all of which `authenticator` denies:
+--     (1) INDEPENDENT REVOCATION — `ALTER ROLE pfin_provider_sync NOLOGIN` stops
+--         provider-sync and NOTHING else. Revoking `authenticator` downs the
+--         public Data API and the ETL-adjacent surfaces with it.
+--     (2) INDEPENDENT ROTATION — provider-sync's credential rotates with a
+--         container restart, with no coordinated PostgREST redeploy.
+--     (3) A NARROWER MEMBERSHIP SET — `authenticator` is a member of anon,
+--         authenticated AND service_role. provider-sync never SET ROLEs to anon
+--         (measured: workers/provider-sync/src issues exactly two role switches,
+--         `set local role authenticated` and `set local role service_role`, both
+--         in TenantBoundClient). This role therefore drops the anon membership,
+--         which is inert for the worker but is reachable surface under the
+--         shared credential.
+--
+-- ----------------------------------------------------------------------------
+-- THE ROTATION-COUPLING PROPERTY THIS DISCHARGES, AND A CITATION CAVEAT.
+--   The property: provider-sync's `PFIN_DB_PASSWORD` currently holds the
+--   `authenticator` password, which is also PostgREST's credential — so rotating
+--   either forces a coordinated redeploy of both. `secrets-manifest.yml` states
+--   this coupling in its `PFIN_DB_PASSWORD` entry, ADR-019's Condition C2 names
+--   "decouples the worker's credential from PostgREST's authenticator-password
+--   rotation" as the reason a dedicated role is the tighter end-state, and
+--   ADR-041 records that the coupling narrowed to PostgREST + provider-sync when
+--   the ETL left it.
+--
+--   ⚠ CITATION CAVEAT — verified against DECISIONS.md as merged at 2bb6b0e6, and
+--   recorded here rather than silently reproduced. ADR-041, migration `055`'s
+--   `comment on role`, `secrets-manifest.yml`, `docs/deployment-runbook.md` §6.1
+--   and BACKLOG §7.6 S5 all label this coupling **"ADR-023 condition C1"**.
+--   ADR-023's own enumerated C1 is a different condition (an exposure-readiness
+--   artifact reviewed before exposure), and no text in DECISIONS.md attaches the
+--   rotation coupling to a condition labeled C1 anywhere. The SUBSTANCE is real
+--   and is correctly stated above; only the label is unsupported. This migration
+--   therefore names the PROPERTY and its evidence rather than the label, and the
+--   label is routed to Sec + F/CTO for an adjudicated correction. Do not
+--   propagate the label from this file.
+--
+-- ----------------------------------------------------------------------------
+-- WHAT DISCHARGES THE GATE — AND WHY THIS MIGRATION CANNOT OBSERVE IT.
+--   Creating the role does NOT discharge the coupling. The discharge is
+--   provider-sync's `PFIN_DB_USER` reading `pfin_provider_sync` instead of
+--   `authenticator`, in the deployed container's environment. That is an env-var
+--   fact, not a catalog fact, and NOTHING in this migration, in pg_roles, or in
+--   any pgTAP assertion over the catalog can see it.
+--
+--   The two half-applied states are NOT symmetric, and the asymmetry is the
+--   reason this block exists:
+--     · env switched, role not provisioned  → provider-sync fails at connect with
+--       `role "pfin_provider_sync" is not permitted to log in`. LOUD. An outage,
+--       never an exposure.
+--     · role provisioned, env not switched  → provider-sync keeps running on
+--       `authenticator` and the coupling stays live. SILENT, and it looks done
+--       from every catalog read: `rolcanlogin = t` on this role proves the
+--       operator ran the deploy step, and proves nothing at all about which
+--       credential the container is using.
+--   The dangerous half is the silent one. The deploy pass must verify the
+--   container's effective `PFIN_DB_USER`, not the role's attributes.
+--
+-- ----------------------------------------------------------------------------
+-- POSTURE RATIONALE — NO FUNCTION IS AUTHORED HERE, so the SECURITY DEFINER
+--   allowlist (ADR-011 Decision 9 / Lock 11) is not engaged in either direction:
+--   this migration authors neither a SECURITY INVOKER nor a SECURITY DEFINER
+--   function. There is no `search_path` to pin and no function comment to write.
+--   The posture question this migration DOES answer is a role-privilege one, and
+--   the answer is NOINHERIT-with-no-direct-privilege.
+--
+-- WHY NOINHERIT IS LOAD-BEARING (not stylistic). With `rolinherit = f` the role
+--   holds the PRIVILEGES of neither membership until it issues an explicit
+--   SET ROLE. Two properties follow: (i) fail-closed, loudly — a code path that
+--   forgets its `set local role` gets a hard 42501 at the ACL rather than
+--   silently succeeding while over-privileged; (ii) the elevated window is
+--   bounded by the SET ROLE, not by the connection lifetime. It also mirrors the
+--   `authenticator` posture TenantBoundClient is ALREADY written against, so this
+--   role requires NO Backend code change — the memberships granted are two of the
+--   three `authenticator` carries.
+--
+-- ⚠ `rolinherit = false` ALONE IS NOT SUFFICIENT ON PG 16+. Since PG 16
+--   inheritance is PER-MEMBERSHIP: `GRANT service_role TO r WITH INHERIT TRUE`
+--   confers privileges implicitly WHILE `rolinherit` still reads false. The
+--   grants below deliberately omit any INHERIT clause so the role default
+--   applies. Two checks are therefore required and they govern different things:
+--   `rolinherit = false` governs FUTURE memberships; the pair
+--   `pg_has_role(...,'MEMBER') = true AND pg_has_role(...,'USAGE') = false`
+--   governs the EXISTING ones. A third, independent setting decides whether the
+--   worker can use them at all: per-membership `set_option`. A re-grant
+--   `WITH SET FALSE` flips `set_option` to f while MEMBER stays true, which would
+--   fail every `set local role` at 42501 while every role-level flag still read
+--   correctly. All three are asserted in the paired battery.
+--
+-- ----------------------------------------------------------------------------
+-- THE GRANT LIST, AND WHY IT IS EMPTY OF OBJECT PRIVILEGES.
+--   MEASURED against workers/provider-sync/src at 2bb6b0e6, not assumed. Every
+--   statement the worker issues runs inside TenantBoundClient.withTenant() or
+--   .withServiceRole(), and both open a transaction and issue their `set local
+--   role` BEFORE the caller's callback runs. TenantBoundClient is the SOLE raw
+--   Postgres client construction site in the worker source, and that is fenced in
+--   CI (scripts/ci/fence-tbc-node.sh treats any other raw-client construction as
+--   a V1-SHIP-BLOCK violation). So no statement the worker issues is ever
+--   evaluated with `pfin_provider_sync` as the effective role.
+--
+--   CONSEQUENCE: the minimum privilege set for this LOGIN role is the EMPTY SET.
+--   It gets its two memberships and nothing else — no schema USAGE on pfin, no
+--   table privilege, no function EXECUTE, no sequence privilege. Table and
+--   function privileges stay decided where they already are (008 and the
+--   per-migration grants), so that decision surface is not forked.
+--
+--   The objects the worker reaches, and the role each is reached UNDER — the
+--   inventory the grant decision was made against, so a reviewer can check the
+--   reasoning rather than the conclusion:
+--     under `authenticated` (SET LOCAL ROLE authenticated + a synthetic
+--     request.jwt.claims, RLS ENFORCED):
+--       pfin.linked_source            S/I/U/D   connection lifecycle + cursor
+--       pfin.linked_source_state_history  I     reauth / status-class capture
+--       pfin.account                  S/I           provider account landing +
+--                                                   provider_account_id resolution
+--       pfin.asset                    S/I           symbol/cusip resolution
+--       pfin.fn_ingest_transactions   EXECUTE       017, SECURITY INVOKER,
+--                                                   granted to authenticated
+--     under `service_role` (SET LOCAL ROLE service_role, BYPASSRLS):
+--       pfin.linked_source                S/U       cross-tenant poll enumeration
+--       pfin.linked_source_sync_audit     I         per-run audit row
+--       pfin.decrypted_source_credential  S         service_role-only decrypt view
+--       pfin.holdings_checkpoint          I         provider snapshot
+--       pfin.account_balance_checkpoint   I         provider snapshot
+--       pfin.eod_price                    I         provider_implied valuation
+--       pfin.asset                        I         global auto-register (020)
+--       vault.create_secret / vault.update_secret  EXECUTE  credential admission
+--
+--   ⚠ EXECUTE-ACL AND SECURITY DEFINER — the inversion worth stating plainly,
+--   because the intuition runs the wrong way. EXECUTE is checked against the
+--   CURRENT EFFECTIVE role, which on this worker's connections is always
+--   `authenticated` or `service_role`. So a DEFINER function this worker reaches
+--   needs NO grant to `pfin_provider_sync`, and granting one would be a WIDENING,
+--   not a hardening: it would make that function reachable WITHOUT a SET ROLE,
+--   which is precisely the NOINHERIT property this role exists to hold. The
+--   DEFINER functions in the worker's blast radius are reached as TRIGGERS on
+--   tables it writes (a trigger function's privileges are not checked against the
+--   statement's caller), not as direct calls — the worker source contains no
+--   direct call to any allowlisted DEFINER function. This migration grants EXECUTE
+--   to nothing, and a future proposal to grant EXECUTE to this role directly
+--   should be read as a posture change requiring Sec review, not as plumbing.
+--
+-- ----------------------------------------------------------------------------
+-- *** DEPLOY-TIME CREDENTIAL HANDOFF — DO NOT MISS THIS ***
+--   THIS MIGRATION DELIBERATELY CREATES `pfin_provider_sync` **NOLOGIN, WITH NO
+--   PASSWORD**. A credential in the repository is a hard no (root CLAUDE.md:
+--   "Secrets never go in the repo"), and a migration file is committed, diffed
+--   and mirrored to GitHub. The role ships INERT and is switched on at deploy.
+--
+--   REQUIRED at deploy time, in the SAME Phase-7 deploy pass that provisions
+--   `pfin_etl` (BACKLOG §7.6 S5 AC — one operation reaches a consistent
+--   role-graph rather than carrying a half-applied convention across releases).
+--   TWO statements, and THE ORDER IS LOAD-BEARING:
+--
+--       \password pfin_provider_sync          -- psql meta-command. Prompts;
+--                                             -- computes the verifier CLIENT-SIDE
+--                                             -- per password_encryption. Role is
+--                                             -- still NOLOGIN here -> inert.
+--       ALTER ROLE pfin_provider_sync LOGIN;  -- carries NO secret.
+--
+--   Then set the provider-sync container's env: PFIN_DB_USER=pfin_provider_sync
+--   (non-secret username, CHANGED from `authenticator`) and PFIN_DB_PASSWORD =
+--   this role's secret. The secret NAME does not change — `secrets-manifest.yml`
+--   already commits to one name carrying DIFFERENT VALUES per container, and this
+--   migration realizes that commitment for a second container rather than
+--   amending it. There is no new secret key to add to the manifest.
+--
+--   Rotation = `\password pfin_provider_sync` + restart the provider-sync
+--   container ONLY. Revocation = `ALTER ROLE pfin_provider_sync NOLOGIN` — stops
+--   provider-sync and NOTHING else.
+--   OPERATOR PRIVILEGE: `\password` is `ALTER USER` underneath, so the operator
+--   must be superuser, or hold CREATEROLE / ADMIN OPTION on the role.
+--
+--   *** THE SECRET MUST BE HIGH-ENTROPY AND MACHINE-GENERATED, NOT HUMAN-CHOSEN ***
+--   (`openssl rand -hex 32`). This is what makes the logged SCRAM verifier's
+--   residual offline attack economically irrelevant; a human-chosen password
+--   makes that verifier a real exposure rather than a theoretical one.
+--
+--   THE SINGLE-STATEMENT FORM `ALTER ROLE ... WITH LOGIN PASSWORD '<plaintext>'`
+--   IS PROHIBITED (Sec ruling B10, 2026-08-02, recorded at ADR-041 and
+--   docs/deployment-runbook.md §6.1). Postgres does not redact passwords from
+--   `log_statement`, so that form writes the credential to the server log in
+--   cleartext; typing it also lands it in psql's plaintext ~/.psql_history. The
+--   prohibition is MEASUREMENT-INDEPENDENT — do not measure a target, find
+--   statement logging off, and conclude it lapses.
+--
+--   BE PRECISE ABOUT WHAT `\password` BUYS — do NOT write "the secret isn't
+--   logged". It still sends `ALTER USER ... PASSWORD 'SCRAM-SHA-256$4096:...'`,
+--   which is DDL and IS logged. What changes is WHAT is logged: plaintext never
+--   leaves the client, and the logged verifier is not a usable credential (it
+--   holds StoredKey + ServerKey; a client proof needs ClientKey, and
+--   StoredKey = H(ClientKey) does not invert). The residual is an offline attack
+--   bounded by secret entropy and the iteration count.
+--
+--   ORDERING: running step 2 without step 1 leaves LOGIN-with-no-password, the
+--   exact state this shape exists to prevent — and it is what the re-apply
+--   WARNING branch below detects. Splitting the statement does NOT reopen that
+--   window, because the credential lands while the role is still NOLOGIN and
+--   LOGIN then flips onto an already-credentialed role.
+--
+--   WHY NOLOGIN RATHER THAN LOGIN-WITHOUT-A-PASSWORD: `rolcanlogin` is checked
+--   from the role attribute itself, BEFORE any pg_hba authentication method. A
+--   passwordless LOGIN role is reachable with NO credential under a `trust` line
+--   (the local stack trusts 127.0.0.1/32, ::1/128 and local), so that shape
+--   outsources its fail-closed property to a config file outside this repo.
+--   NOLOGIN is fail-closed BY CONSTRUCTION.
+--
+-- ----------------------------------------------------------------------------
+-- WHAT DEVOPS AND THE RUNBOOK OWE (routed, NOT edited here — Architect does not
+--   edit secrets-manifest.yml, .env.example files, or Coolify config):
+--     · workers/provider-sync/.env.example — `PFIN_DB_USER=authenticator` becomes
+--       `PFIN_DB_USER=pfin_provider_sync`, and the PFIN_DB_PASSWORD comment
+--       ("the `authenticator` password (== PostgREST cred; C1 rotation
+--       coupling)") becomes this role's own credential, independently rotatable.
+--     · secrets-manifest.yml — the PFIN_DB_PASSWORD entry currently states
+--       provider-sync's value IS the `authenticator` credential and that the
+--       rotation coupling covers PostgREST + provider-sync. Both halves become
+--       false at cutover. NO NEW SECRET KEY: the name stays PFIN_DB_PASSWORD;
+--       only the described VALUE and the coupling scope change. PFIN_DB_USER
+--       remains a non-secret username whose value now differs per container
+--       across three values (`authenticator` for PostgREST, `pfin_etl`,
+--       `pfin_provider_sync`).
+--     · Coolify — the provider-sync service's PFIN_DB_USER and PFIN_DB_PASSWORD
+--       values, injected before the container restarts.
+--     · docs/deployment-runbook.md — §6.1 is `pfin_etl`-specific and its
+--       precedence note names three artifacts. A sibling section for this role
+--       is owed, provisioned in the SAME deploy pass, plus the post-cutover
+--       verification that reads the CONTAINER's effective PFIN_DB_USER (see the
+--       asymmetry block above — the catalog cannot answer it).
+--
+-- ----------------------------------------------------------------------------
+-- §10 3-AXIS CROSS-CHECK (Path B — reference ADR-011 Decision 4; the catalogued
+--   numbered list is NOT restated here and no count is carried into this file.
+--   Decision 4 read VERBATIM and live before drafting, on 2026-09-08.)
+--   LEDGER EFFECT: NONE.
+--   (i)   Instance-numbering — no catalogued instance is added, removed,
+--         reordered or renumbered. The relative ordering recorded in Decision 4
+--         is untouched.
+--   (ii)  Layer-attribution — `pfin_provider_sync` is a DB-LAYER cluster
+--         ROLE/identity. It is NOT the code-layer SUPABASE_SERVICE_ROLE_KEY
+--         allowlist grep fence (this is a direct-Postgres login credential;
+--         provider-sync holds no Supabase service-role KEY and stays off that
+--         allowlist, unchanged by this migration), NOT the PDF-worker container
+--         credential-presence audit, and NOT the app->worker admission
+--         network/config surface. No catalogued instance's layer attribution
+--         moves, and no surface becomes "four-layer".
+--   (iii) Verbatim-vs-paraphrase — Decision 4 is linked, not restated. 116 is
+--         not the canonical anchor.
+--   DE-CONFLATION GUARD: introducing a new LOGIN identity is a credential-posture
+--   change, NOT a §10 catalogued-instance addition — the §10 ledger enumerates
+--   specific defense-in-depth FENCE instances, not every role in the cluster.
+--   ⚠ The §10 CATALOGUED set and the CI-FENCED RT set are DIFFERENT SETS and are
+--   not reconciled against one another; this migration changes neither.
+--
+-- ----------------------------------------------------------------------------
+-- DECISION 3 (cross-tenant FK-bypass family) — UNCHANGED (+0). ADR-011 Decision 3
+--   read verbatim and live on 2026-09-08. This migration creates NO table, NO
+--   column, and therefore NO FK-shaped reference column of any kind — not a
+--   single FK, not a self-FK, not an INTEGER[] array. There is nothing here for
+--   matched-tenant validation to apply to, and no instance label is claimed.
+--
+-- OTHER LEDGERS — ALL FLAT (each confirmed by reading the canonical ADR-011 body
+--   live on 2026-09-08, not from memory):
+--     · SECURITY DEFINER allowlist — unchanged; this migration authors NO
+--       function at all.
+--     · aal2 step-up backstop (ADR-029 / 025) — not engaged; no new table.
+--     · SECURITY doc — no new SD/RT entry proposed here. The SD/RT entries that
+--       frame provider-sync's login identity are Sec-owned; the wording update
+--       recording that C2 is realized is ROUTED to Sec, not edited by Architect.
+--
+-- ----------------------------------------------------------------------------
+-- CONTRACT
+--   pfin_provider_sync — cluster-level login role; the workers/provider-sync
+--     container's database identity. Attributes AS CREATED BY THIS MIGRATION:
+--     **NOLOGIN**, NOINHERIT, NO PASSWORD — the role ships INERT. Explicitly NOT:
+--     SUPERUSER, CREATEDB, CREATEROLE, REPLICATION, BYPASSRLS. Owns no object.
+--     Holds NO direct table, schema, function or sequence privilege anywhere. It
+--     becomes usable only at deploy time, via the two-step handoff above. So
+--     `rolcanlogin` is FALSE at migration time and TRUE only in a provisioned
+--     environment — a test asserting migration-time state must expect FALSE.
+--   Memberships (the role's ONLY source of reach, and only after an explicit
+--     SET ROLE, because NOINHERIT):
+--     · authenticated  — the INVOKER / caller-RLS path: fn_ingest_transactions
+--                        (017) under RLS, account_id resolution, and the
+--                        tenant-scoped linked_source / account / asset work.
+--                        Reached via `set local role authenticated` plus a
+--                        synthetic request.jwt.claims binding auth.uid().
+--     · service_role   — the privileged path: the cross-tenant poll enumeration,
+--                        the provider snapshot / eod_price / global-asset writes,
+--                        the service_role-only decrypt view, and Vault credential
+--                        admission. Reached via `set local role service_role`,
+--                        per the ADR-023 write role-of-record.
+--     · NOT anon       — deliberately omitted. `authenticator` carries it; the
+--                        worker never SET ROLEs to it.
+--   Security-load-bearing edges: NOLOGIN-at-creation makes the role unreachable
+--     by its own attribute, checked BEFORE any pg_hba method, so it is inert even
+--     under a `trust` line with no dependency on a config file outside this repo;
+--     NOINHERIT means a forgotten SET ROLE fails 42501 rather than silently
+--     running elevated; the role is neither owner nor superuser, so it cannot
+--     suppress any trigger-realized fence in the pfin schema by ANY mechanism
+--     (ALTER TABLE ... DISABLE TRIGGER requires ownership, session_replication_role
+--     requires superuser) — which matters because the Decision 3 matched-tenant
+--     fences the worker's own writes pass through are trigger-realized; it holds
+--     no BYPASSRLS attribute of its own, so RLS engages normally while it is
+--     SET ROLE authenticated; and it is independently revocable.
+--   Idempotency: CREATE ROLE has no IF NOT EXISTS, so creation is guarded on
+--     pg_roles in a DO block. GRANT of an already-held membership is a no-op and
+--     COMMENT is a straight overwrite, so the whole migration is re-runnable.
+--     NOTE: the guard does NOT reset attributes on a pre-existing role, and that
+--     is DELIBERATE — after deploy the role is legitimately LOGIN, and
+--     "correcting" it on re-application would take live provider-sync down.
+--     Because the migration therefore cannot vouch for a pre-existing role's
+--     shape, the else-branch REPORTS the found attributes and raises a WARNING on
+--     the two states that would defeat the posture: INHERIT, and
+--     LOGIN-with-no-password. (Password state is read from pg_authid —
+--     pg_roles.rolpassword is the literal '********' for every role and is
+--     useless for this check; the read degrades gracefully if pg_authid is not
+--     visible to the applying role.)
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- Create the role, guarded (CREATE ROLE has no IF NOT EXISTS).
+-- NOLOGIN + NO PASSWORD by design — see the DEPLOY-TIME CREDENTIAL HANDOFF block.
+-- The role ships INERT: unreachable by its own attribute, independent of pg_hba.
+-- ----------------------------------------------------------------------------
+do $$
+declare
+  v_canlogin  boolean;
+  v_inherit   boolean;
+  v_haspass   text;
+begin
+  if not exists (select 1 from pg_catalog.pg_roles where rolname = 'pfin_provider_sync') then
+    create role pfin_provider_sync with nologin noinherit;
+    raise notice 'pfin_provider_sync created NOLOGIN + NOINHERIT + no password (inert by construction). DEPLOY STEPS REQUIRED, IN ORDER: (1) \password pfin_provider_sync  [prompts; verifier computed client-side; role still NOLOGIN so this is inert]  then (2) ALTER ROLE pfin_provider_sync LOGIN;  [carries no secret]. Do NOT use ALTER ROLE ... WITH LOGIN PASSWORD ''<plaintext>'' — statement logging captures it verbatim in the server log (Sec B10). THEN switch the container env: PFIN_DB_USER=pfin_provider_sync. Creating this role does NOT by itself move provider-sync off authenticator — the env var does, and no catalog read can see it.';
+  else
+    select r.rolcanlogin, r.rolinherit into v_canlogin, v_inherit
+      from pg_catalog.pg_roles r where r.rolname = 'pfin_provider_sync';
+    begin
+      select case when a.rolpassword is null then 'NO' else 'yes' end into v_haspass
+        from pg_catalog.pg_authid a where a.rolname = 'pfin_provider_sync';
+    exception when insufficient_privilege then
+      v_haspass := 'unreadable (pg_authid not visible to the applying role)';
+    end;
+    raise notice 'pfin_provider_sync already exists — creation SKIPPED; attributes NOT re-applied (deliberate: a deployed role is legitimately LOGIN, and resetting it would take provider-sync down). Found: rolcanlogin=% / rolinherit=% / password set=%.',
+      v_canlogin, v_inherit, v_haspass;
+    if v_inherit then
+      raise warning 'pfin_provider_sync exists but is INHERIT — this DEFEATS the 116 posture (privileges would be held without an explicit SET ROLE, so a forgotten SET ROLE runs elevated instead of failing 42501). Investigate before deploying; fix with: ALTER ROLE pfin_provider_sync NOINHERIT;';
+    end if;
+    if v_canlogin and v_haspass = 'NO' then
+      raise warning 'pfin_provider_sync exists as LOGIN with NO PASSWORD — reachable with NO CREDENTIAL under any pg_hba `trust` line (local/CI). This is the exact state 116 is shaped to avoid, and it is what running deploy step (2) without step (1) leaves behind. Either complete the deploy step (\password pfin_provider_sync) or disable it (ALTER ROLE pfin_provider_sync NOLOGIN).';
+    end if;
+  end if;
+end
+$$;
+
+-- ----------------------------------------------------------------------------
+-- Memberships — the role's ONLY source of reach, and only after an explicit
+-- SET ROLE (NOINHERIT). These are two of the three memberships `authenticator`
+-- carries; `anon` is deliberately NOT granted.
+-- No INHERIT clause and no SET clause: the role defaults apply (INHERIT off per
+-- the role's NOINHERIT attribute, SET on). Both defaults are asserted, not
+-- assumed, in the paired battery — on PG 16+ each is an independent
+-- per-membership setting.
+-- Re-granting an already-held membership is a no-op, so this is idempotent.
+-- ----------------------------------------------------------------------------
+
+-- Privileged path: `set local role service_role` (ADR-023 write role-of-record).
+-- Table and function privileges themselves stay decided in 008 and the per-table
+-- grants — NOT here.
+grant service_role to pfin_provider_sync;
+
+-- INVOKER / caller-RLS path: `set local role authenticated` + a synthetic
+-- request.jwt.claims binding auth.uid() to the tenant, per Lock 13 mod #3.
+grant authenticated to pfin_provider_sync;
+
+-- ----------------------------------------------------------------------------
+-- Self-documenting comment (the role analogue of `comment on function`).
+-- Deliberately carries no ledger count and no enumeration of any catalogued set:
+-- a catalog comment is read by someone with no repo in front of them and can only
+-- be corrected by a further migration, so it states durable properties and
+-- standing requirements rather than facts about today's tree.
+-- ----------------------------------------------------------------------------
+comment on role pfin_provider_sync is
+  'Dedicated login identity for the workers/provider-sync container (BACKLOG §7.6 item S5; realizes ADR-019 Condition C2, renamed by ADR-041 to the pfin_<workers subdirectory> convention and promoted by it from V1.x hardening to a Phase-7 deploy gate; migration 116). Created NOLOGIN + NOINHERIT with NO PASSWORD (inert by construction); NOT superuser, NOT owner, NOT BYPASSRLS, owns nothing, and holds NO direct table, schema, function or sequence privilege. Its entire reach is via explicit SET ROLE to its two memberships: authenticated (the SECURITY INVOKER / caller-RLS path — fn_ingest_transactions under RLS, account and asset resolution, the tenant-scoped linked_source lifecycle) and service_role (the privileged path — cross-tenant poll enumeration, provider snapshot and eod_price writes, the service_role-only credential decrypt view, and Vault credential admission), per the ADR-023 write role-of-record. Membership in anon is deliberately WITHHELD: it is one of the three memberships the shared authenticator carries, and the worker never SET ROLEs to it. NOINHERIT is load-bearing: a forgotten SET ROLE MUST fail 42501 loudly rather than silently run elevated. On PG 16+ three independent settings govern this and all three MUST hold — rolinherit false (future memberships), MEMBER-yes/USAGE-no per existing membership (no implicit privilege today), and per-membership set_option true (SET ROLE actually permitted); a re-grant WITH INHERIT TRUE or WITH SET FALSE defeats the posture while role-level flags still read correctly. Because this role is neither table owner nor superuser it can reach neither owner-only trigger bypass (ALTER TABLE ... DISABLE TRIGGER, session_replication_role), so the trigger-realized matched-tenant and immutability fences its own writes pass through are un-bypassable by the writer. Chosen over continuing to share PostgREST''s authenticator so provider-sync is INDEPENDENTLY REVOCABLE (ALTER ROLE pfin_provider_sync NOLOGIN stops provider-sync and nothing else) and independently rotatable, and so a compromise of the container that holds the Plaid secret and decrypts provider credentials does not yield the identity fronting the entire public Data API. CREATED NOLOGIN WITH NO PASSWORD — a repo-committed credential is prohibited; an operator switches the role on at deploy time with TWO statements IN A LOAD-BEARING ORDER: (1) `\password pfin_provider_sync` (prompts, computes the SCRAM verifier CLIENT-SIDE, sets ONLY the password while the role is still NOLOGIN and therefore inert), then (2) `ALTER ROLE pfin_provider_sync LOGIN` (carries no secret). The single statement `ALTER ROLE ... WITH LOGIN PASSWORD ''<plaintext>''` is PROHIBITED per the Sec B10 ruling of 2026-08-02: statement logging captures it verbatim, writing the credential to the server log in cleartext, and typing it also lands it in ~/.psql_history. Be precise about what \password buys: plaintext never leaves the client, but the resulting ALTER USER carrying a SCRAM-SHA-256 verifier IS still logged — that verifier is not a usable credential (a client proof needs ClientKey, which StoredKey does not yield), leaving only an offline attack bounded by secret entropy and iteration count, which is why the secret MUST be high-entropy and machine-generated. Do NOT claim "the secret isn''t logged". Ordering matters: running (2) without (1) leaves LOGIN-with-no-password, the exact state this role is shaped to avoid, and it is what the re-apply WARNING branch in 116 detects. NOLOGIN rather than LOGIN-without-a-password because rolcanlogin is checked BEFORE any pg_hba auth method: a passwordless LOGIN role is reachable with NO credential under a `trust` line, so the alternative shape would outsource its fail-closed property to a config file outside the repository. Consequence for tests: rolcanlogin is FALSE at migration time and TRUE only in a provisioned environment. ⚠ CREATING THIS ROLE DOES NOT BY ITSELF MOVE provider-sync OFF authenticator, and no catalog read can tell you whether it has moved: the cutover is the container''s PFIN_DB_USER environment variable, and rolcanlogin true here proves only that the deploy step ran. The deploy pass MUST verify the container''s effective PFIN_DB_USER. Revoke with ALTER ROLE pfin_provider_sync NOLOGIN — stops provider-sync and nothing else. This role and pfin_etl (migration 055) are deliberately SEPARATE and MUST NOT be converged: one shared worker role reintroduces the blast radius and the loss of independent revocation that the dedicated-role decision was ratified to remove.';
