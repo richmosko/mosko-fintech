@@ -1,0 +1,115 @@
+-- ============================================================================
+-- Migration: pfin_etl role comment — C1 LABEL RE-ATTRIBUTION. COMMENT-ONLY.
+--   Re-issues `comment on role pfin_etl` (created at 055) with ONE span replaced:
+--   the rotation-coupling condition label, which read "ADR-023's C1" and now reads
+--   "ADR-019 condition C1 (reconstructed 2026-09-09)". Nothing else in the comment
+--   changes; no role attribute, no membership, no grant, no privilege, no function,
+--   no table, no policy is created, altered or dropped by this file.
+--   BACKLOG §7.36 item 3. F/CTO ruling 2026-09-09 (the label's home is ADR-019
+--   condition C1, reconstructed by ADR amendment). apply-migration procedure applied.
+--   JOINT-REVIEW-MANDATORY (Sec veto surface): 055 is Sec-load-bearing and this
+--   re-issues its catalog text.
+--
+-- ----------------------------------------------------------------------------
+-- Numbering: 117 follows 116 (pfin_provider_sync role). Depends on: 055 having
+--   created the role `pfin_etl` — `comment on role` on a non-existent role errors.
+--   Depends on NOTHING in the pfin schema; creates no pfin object. Nothing
+--   downstream depends on 117. Order-independent past 055.
+--
+-- MERGE-ORDER DEPENDENCY (stated because a label is a reference, and a reference
+--   that resolves to nothing is worse than the wrong one it replaced): the
+--   reconstructed ADR-019 condition C1 text lands in a PARALLEL Architect PR on
+--   DECISIONS.md. This migration must not merge ahead of it. The PROPERTY the
+--   comment states — provider-sync's PFIN_DB_PASSWORD == the `authenticator`
+--   password == PostgREST's credential, so rotating either forces a coordinated
+--   redeploy of both, and pfin_etl is out of that coupling — is true independent of
+--   which ADR carries the label; the label is its current instrument, not its
+--   support.
+--
+-- ----------------------------------------------------------------------------
+-- WHY A NEW MIGRATION AND NOT AN EDIT TO 055 (apply-migration Step 1.6 (A)):
+--   `comment on role` has a DATABASE REPRESENTATION — it ships into the SHARED
+--   catalog pg_shdescription and is read at `\du+` / shobj_description() by an
+--   operator with no repo in front of them. Text with a database representation
+--   can only change by issuing new SQL, so the vehicle is a comment-only migration
+--   (the 052 shape), never an edit to the merged file. 055's own header records
+--   this file as the booked vehicle.
+--
+--   ⚠ THE LABEL IS RE-POINTED, NEVER DELETED. A condition label is a reference
+--   into a canonical enumeration; stripping it severs the reference and leaves a
+--   reader holding a rule with no way to look the instance up. The correction is
+--   re-attribution plus enumeration (Sec, PR #671).
+--
+-- ----------------------------------------------------------------------------
+-- WHAT DID NOT CHANGE, stated because the comment already gets it right and a
+--   reader may expect this migration to have touched it: the comment's DEPLOY-TIME
+--   CREDENTIAL HANDOFF wording is UNTOUCHED. It already prescribes the two-statement
+--   handoff in order — (1) `\password pfin_etl` then (2) `ALTER ROLE pfin_etl LOGIN`
+--   — and already states that the single statement `ALTER ROLE ... WITH LOGIN
+--   PASSWORD` is PROHIBITED per Sec B10. 055's own C5 note says so: the
+--   `comment on role` "already states the prohibition correctly and needs no
+--   migration 117 for THIS defect." The pre-B10 residue this PR also fixes lives in
+--   055's `raise warning` and one header line — NEITHER has a database
+--   representation, so neither is reachable from here. Nothing an operator is told
+--   to do changes in this file.
+--
+-- ----------------------------------------------------------------------------
+-- POSTURE RATIONALE — NO FUNCTION IS AUTHORED HERE, so the SECURITY INVOKER /
+--   SECURITY DEFINER question does not arise. This migration issues no `create`,
+--   `create or replace`, `alter` or `drop` of any function, so it neither adds to
+--   nor alters the ADR-011 Decision 9 SECURITY DEFINER allowlist, which is
+--   UNCHANGED. `set search_path = ''` is N/A: a `comment on` statement resolves one
+--   role name in a shared catalog and executes no expression.
+--
+-- CONTRACT
+--   comment on role pfin_etl — replaces the role's pg_shdescription entry with a
+--     regenerated copy of 055's text carrying exactly one replaced span (the
+--     condition label). No behaviour, no privilege and no attribute is contingent
+--     on this statement; a catalog comment is documentation.
+--   ⚠ pg_shdescription is a SHARED catalog: a role comment is CLUSTER-WIDE, not
+--     per-database. Applying this on a scratch database changes the comment for
+--     every database in that cluster. That is correct here (the new text is the
+--     intended end state) but it is why a scratch-DB apply of this file is not
+--     isolated the way a pfin-schema migration's is.
+--   IDEMPOTENCE: `comment on role` REPLACES; re-applying 117 is a no-op onto its
+--     own outcome. Re-applying 055 AFTER 117 would restore the OLD label — 055 is
+--     earlier in the sorted chain, so the sorted-order apply this repo uses always
+--     leaves 117's text last. Verified by applying 055 then 117 and re-reading.
+--
+-- ----------------------------------------------------------------------------
+-- §10 3-AXIS CROSS-CHECK — ADR-011 Decision 4 read VERBATIM, live, before drafting
+--   (2026-09-09). Path B: this file LINKS to Decision 4 and deliberately restates
+--   neither its catalogued list nor its size. Result: NO CHANGE ON ANY AXIS.
+--   (i)   Instance-numbering: 117 catalogues no §10 instance, adds none, removes
+--         none, reorders none. The ledger is untouched.
+--   (ii)  Layer-attribution: no layer moves. This file creates no fence at any
+--         layer — it replaces documentation text in a shared catalog.
+--   (iii) Verbatim-vs-paraphrase: Decision 4 is referenced, not restated; 117 is
+--         not the canonical anchor for it.
+--   ⚠ The §10 CATALOGUED set and the CI-FENCED RT set are DIFFERENT SETS and are
+--     not reconciled here. Nothing in this migration touches either.
+--   DE-CONFLATION GUARD: no FK-shaped reference column is added (no column at all),
+--     so the ADR-011 Decision 3 cross-tenant family is UNCHANGED and gains no
+--     instance. No new sensitive tenant-owned pfin table, so the ADR-029 / 025 aal2
+--     step-up backstop inheritance obligation does not arise.
+--
+-- ----------------------------------------------------------------------------
+-- JOINT-REVIEW routing: Sec joint-review before merge (055 is Sec-load-bearing;
+--   this re-issues its catalog text and moves a Sec condition label). QA: no RLS
+--   surface is extended and no policy changes, so the verification battery is not
+--   extended by this file; a pgTAP leg asserting shobj_description(...) text would
+--   read the changed span, and the tests were grepped for one (result recorded in
+--   the PR body). DevOps: no CI fixture change is required.
+-- ============================================================================
+
+create schema if not exists pfin;
+
+-- ----------------------------------------------------------------------------
+-- The role comment, REGENERATED from 055's literal (never retyped) with one
+-- anchored substitution asserted to match exactly once, and a containment proof
+-- that the prefix before the replaced span and the suffix after it are
+-- byte-identical to 055's text. The generator and its proof are recorded in the
+-- PR body.
+-- ----------------------------------------------------------------------------
+comment on role pfin_etl is
+  'Dedicated login identity for the workers/etl container (ADR-041; SELF-214 Sec joint-review B8 option (B), F/CTO-ratified 2026-08-02; migration 055). Created NOLOGIN + NOINHERIT with NO PASSWORD (inert by construction); NOT superuser, NOT owner, NOT BYPASSRLS, owns nothing, holds NO direct table or schema privilege in pfin. Its entire reach is via explicit SET ROLE to its two memberships: service_role (privileged writes, per the ADR-023 write role-of-record — table privileges stay decided in 008, not granted here) and authenticated (the W-1 session-impersonation read path reusing INVOKER fn_compute_nav under RLS, Lock 11). NOINHERIT is load-bearing: a forgotten SET ROLE fails 42501 loudly instead of silently running elevated. Because it is neither table owner nor superuser it can neither ALTER TABLE ... DISABLE TRIGGER nor set session_replication_role — which is what makes 054 nav_daily''s append-only fences and its B7 write-tenant binding fence un-bypassable by the writer. Chosen over sharing provider-sync''s authenticator so the ETL is INDEPENDENTLY REVOCABLE (ALTER ROLE pfin_etl NOLOGIN stops the ETL and nothing else) and so a compromised batch container does not yield the credential fronting the entire PostgREST Data API; this also pulls the ADR-019 condition C1 rotation coupling (reconstructed 2026-09-09; migration 117 re-pointed this label, which previously read ADR-023 — whose own enumerated C1 is a DIFFERENT condition, an exposure-readiness artifact reviewed before exposure) back to two consumers (PostgREST + provider-sync), leaving pfin_etl''s password independently rotatable. CREATED NOLOGIN WITH NO PASSWORD — a repo-committed credential is prohibited; an operator switches the role on at deploy time with TWO statements IN A LOAD-BEARING ORDER: (1) `\password pfin_etl` (prompts, computes the SCRAM verifier CLIENT-SIDE, sets ONLY the password while the role is still NOLOGIN and therefore inert), then (2) `ALTER ROLE pfin_etl LOGIN` (carries no secret). The single statement `ALTER ROLE ... WITH LOGIN PASSWORD ''<plaintext>''` is PROHIBITED per Sec B10: log_statement=ddl (measured) captures it verbatim, writing the credential to the server log in cleartext, and typing it also lands it in ~/.psql_history. Be precise about what \password buys: plaintext never leaves the client, but the resulting ALTER USER carrying a SCRAM-SHA-256$4096 verifier IS still logged — that verifier is not a usable credential (a client proof needs ClientKey, which StoredKey does not yield), leaving only an offline attack bounded by secret entropy and iteration count. Do NOT claim "the secret isn''t logged". Ordering matters: running (2) without (1) leaves LOGIN-with-no-password, the exact state this role is shaped to avoid. NOLOGIN rather than LOGIN-without-a-password because rolcanlogin is checked BEFORE any pg_hba auth method: a passwordless LOGIN role is reachable with NO credential under a `trust` line (measured on the local stack, which trusts 127.0.0.1/32 + ::1/128 + local), so the earlier shape outsourced its fail-closed property to a config file outside this repo. Consequence for tests: rolcanlogin is FALSE at migration time and TRUE only in a provisioned environment. Revoke with ALTER ROLE pfin_etl NOLOGIN — stops the ETL and nothing else. See SECURITY §4.4 SD-24 + §4.5 RT-31.';

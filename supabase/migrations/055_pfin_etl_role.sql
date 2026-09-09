@@ -440,8 +440,43 @@
 -- The role ships INERT: unreachable by its own attribute, independent of pg_hba.
 --
 -- WHY THIS GUARD DOES NOT RE-APPLY ATTRIBUTES — this is deliberate and it matters.
+--
+-- ⚠ CORRECTED IN PLACE 2026-09-09 — TWO EDITS IN THIS FILE, UNDER TWO DIFFERENT
+--   VEHICLES. Recorded here because both edited lines are in this block and the
+--   one below it, and because a reader who remembers the old text must learn it
+--   changed rather than doubt their memory (apply-migration Step 1.6, condition 3).
+--
+--   (1) THIS BLOCK'S NEXT SENTENCE — apply-migration Step 1.6 (B), edit-in-place,
+--       ordinary. It read: an operator ran `ALTER ROLE pfin_etl WITH LOGIN
+--       PASSWORD …`. It now reads: an operator ran the two-statement deploy
+--       handoff. The old wording described the Sec-B10-PROHIBITED single-statement
+--       form as the normal deploy action. All three (B) conditions hold and are
+--       demonstrated in the PR body, not asserted: comment-only (this is a `--`
+--       block with no database representation, and the mechanical count of
+--       non-comment lines added and removed by this hunk is zero); a DESCRIPTION,
+--       not a commitment (the DEPLOY-TIME CREDENTIAL HANDOFF block's two
+--       statements and their order are byte-untouched — nothing an operator is
+--       told to do changed); and the superseded claim is named above.
+--
+--   (2) THE `raise warning` IN THE GUARD BELOW — an executable line, so Step 1.6
+--       (B) does NOT reach it and Step 1.6's closing constraint would otherwise
+--       forbid it. Changed under a ONE-LINE EXCEPTION GRANTED BY F/CTO on
+--       2026-09-09, bounded by the ruling's own text to this single line and to
+--       nothing else. Sec finding F12, round 3 of the PR #671 joint review; the
+--       edit takes Sec's commit-ready text verbatim and returns to Sec joint
+--       review in the PR that carries it (round 5). THE GROUND OF THE EXCEPTION:
+--       the object Step 1.6 protects is a PRIOR APPROVAL OF DEPLOYED STATE, and
+--       under ADR-021 greenfield no deployed state exists — 055 has never been
+--       applied to a production database and will be replayed verbatim at first
+--       deploy, so the wrong instruction would print to the operator it is aimed
+--       at rather than to nobody. It read: Either complete the deploy step (ALTER
+--       ROLE pfin_etl WITH LOGIN PASSWORD ...) or disable it. It now prescribes
+--       the two-statement handoff in order and names the prohibited form as
+--       prohibited. ⚠ THIS IS NOT A GENERAL LICENCE: applied-migration SQL stays
+--       closed to edits, this exception is one line wide, and a second one needs
+--       its own F/CTO ruling.
 -- After a successful deploy, `pfin_etl` is LEGITIMATELY `LOGIN` (an operator ran
--- `ALTER ROLE pfin_etl WITH LOGIN PASSWORD …`). A guard that "corrected" attributes
+-- the two-statement deploy handoff). A guard that "corrected" attributes
 -- on re-application would flip a live production role back to NOLOGIN and take the
 -- ETL down on the next migration run. Non-resetting is therefore the CORRECT
 -- behaviour, not laziness — but it does mean this migration cannot vouch for a
@@ -485,7 +520,7 @@ begin
     end if;
 
     if v_canlogin and v_haspass = 'NO' then
-      raise warning 'pfin_etl exists as LOGIN with NO PASSWORD — reachable with NO CREDENTIAL under any pg_hba `trust` line (local/CI). This is the exact state 055 is shaped to avoid. Either complete the deploy step (ALTER ROLE pfin_etl WITH LOGIN PASSWORD ...) or disable it (ALTER ROLE pfin_etl NOLOGIN).';
+      raise warning 'pfin_etl exists as LOGIN with NO PASSWORD — reachable with NO CREDENTIAL under any pg_hba `trust` line (local/CI). This is the exact state 055 is shaped to avoid. Either complete the deploy step IN ORDER (1) \password pfin_etl  then (2) ALTER ROLE pfin_etl LOGIN;  or disable it (ALTER ROLE pfin_etl NOLOGIN). Do NOT use ALTER ROLE ... WITH LOGIN PASSWORD ''<plaintext>'' — statement logging captures it verbatim in the server log (Sec B10).';
     end if;
   end if;
 end
