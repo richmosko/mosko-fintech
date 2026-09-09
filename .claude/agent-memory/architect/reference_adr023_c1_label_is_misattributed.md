@@ -9,10 +9,14 @@ metadata:
 Measured at `d83dfdaf` (2026-09-08); the earlier "unsupported" version of this note was
 **refuted** by Sec at the PR #671 joint-review and this file replaces it.
 
-- **ADR-041 DOES attach the label to the rotation coupling** — three sites: the paragraph
-  arguing why it is not an ADR-023 amendment, its Consequences, and its Cross-references.
-  So the claim *"no text in DECISIONS.md attaches the coupling to a condition labeled C1"*
-  is **FALSE**. Do not restate it, and do not cite this file for it.
+- **ADR-041 DOES attach the label to the rotation coupling** — in several paragraphs,
+  including the sub-decision promoting ADR-019 C2 to a Phase-7 deploy gate (the paragraph
+  migration `116` realizes). So the claim *"no text in DECISIONS.md attaches the coupling
+  to a condition labeled C1"* is **FALSE**. Do not restate it, and do not cite this file
+  for it. **No count and no site list here.** An earlier revision of this note enumerated
+  the sites and omitted the ADR-019-C2 one — the site most likely to be left
+  un-re-attributed; a corrected count would re-arm the same trap. Find them with the grep
+  below, bracketed to ADR-041's body by its `## ADR-041` heading.
 - **ADR-023's own enumerated C1 is a different condition** — *"exposure-readiness artifact
   (per-table RLS + policy proof) reviewed before exposure"*. That pairing (both halves
   separately real) is the [[feedback_false_composite_citation]] class at cross-artifact
