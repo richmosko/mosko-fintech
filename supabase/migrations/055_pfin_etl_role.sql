@@ -62,17 +62,33 @@
 --   policy proof) reviewed before exposure. The rotation coupling is not it.
 --   The label is WRONG-POINTER, not invented, and is deliberately NOT deleted:
 --   a condition label is a reference into a canonical enumeration, and severing
---   it leaves a reader holding a rule with no way to look the instance up. Its
---   inferred home is ADR-019's Sec condition C1 — evidence is
---   `workers/provider-sync/.env.example` ("Sec conditions C1/C3", then
---   "CONDITION C1 (rotation coupling — Sec-load-bearing)"). But ADR-019
---   enumerates only C2 of the C1–C4 set its Status line ratifies, and WHETHER
---   THE C1 / C3 / C4 TEXT IS RECOVERABLE IS AN OPEN F/CTO RULING as of
---   2026-09-08. Until it is ruled, the label stands as written here and at its
---   other uses in this file. The full carrier list and the per-artifact
---   correction vehicles are recorded in migration `116`'s header. This file's
+--   it leaves a reader holding a rule with no way to look the instance up.
+--
+--   ⚠ RULED 2026-09-09 (F/CTO), superseding the two sentences this block carried
+--   until then: that "WHETHER THE C1 / C3 / C4 TEXT IS RECOVERABLE IS AN OPEN
+--   F/CTO RULING as of 2026-09-08", and that "until it is ruled, the label
+--   stands as written here and at its other uses in this file". Both are now
+--   false. THE HOME IS ADR-019'S SEC CONDITION C1, RECONSTRUCTED — the evidence
+--   is unchanged and still `workers/provider-sync/.env.example` — its
+--   DB-LOGIN-ROLE pin, whose parenthetical names Sec conditions C1/C3, and its
+--   CONDITION C1 rotation-coupling block. Described rather than quoted: the
+--   source wraps that parenthetical across two `#` comment lines, so any inline
+--   quotation of it silently rejoins them (Sec, ADR-019 review F3). `116`'s
+--   header carries the marked quotation.
+--   ⚠ RECONSTRUCTED, NOT RECOVERED: the originating Sec artifact was never
+--   committed, so ADR-019's C1 text is written FROM downstream tree evidence
+--   rather than quoted from Sec, and must be read as a record of what the
+--   project acted on — never as a quotation of what Sec wrote. Of the C1–C4 set
+--   ADR-019's Status line ratifies, C3 and C4 are ruled TEXT-UNRECOVERABLE with
+--   their NUMBERS RETAINED so the references are not severed, and NO ARTIFACT
+--   MAY CITE C3 OR C4 AS A RULE. The amendment carrying all three lands in
+--   PR #674 on DECISIONS.md. Re-pointing now PROCEEDS, per BACKLOG §7.36
+--   items 3-5; `workers/provider-sync/.env.example` is the named exception and
+--   is correct as written. The per-artifact correction vehicles and the
+--   carrier-finding grep are recorded in migration `116`'s header. This file's
 --   `comment on role` carries the same label and is a DATABASE object, so it is
---   correctable ONLY by a comment-only migration `117` — booked, not authored.
+--   correctable ONLY by a comment-only migration — `117`, authored in the same
+--   PR as this note.
 --
 -- ----------------------------------------------------------------------------
 -- POSTURE RATIONALE — NO FUNCTION IS AUTHORED HERE, so the SECURITY DEFINER
@@ -440,8 +456,43 @@
 -- The role ships INERT: unreachable by its own attribute, independent of pg_hba.
 --
 -- WHY THIS GUARD DOES NOT RE-APPLY ATTRIBUTES — this is deliberate and it matters.
+--
+-- ⚠ CORRECTED IN PLACE 2026-09-09 — TWO EDITS IN THIS FILE, UNDER TWO DIFFERENT
+--   VEHICLES. Recorded here because both edited lines are in this block and the
+--   one below it, and because a reader who remembers the old text must learn it
+--   changed rather than doubt their memory (apply-migration Step 1.6, condition 3).
+--
+--   (1) THIS BLOCK'S NEXT SENTENCE — apply-migration Step 1.6 (B), edit-in-place,
+--       ordinary. It read: an operator ran `ALTER ROLE pfin_etl WITH LOGIN
+--       PASSWORD …`. It now reads: an operator ran the two-statement deploy
+--       handoff. The old wording described the Sec-B10-PROHIBITED single-statement
+--       form as the normal deploy action. All three (B) conditions hold and are
+--       demonstrated in the PR body, not asserted: comment-only (this is a `--`
+--       block with no database representation, and the mechanical count of
+--       non-comment lines added and removed by this hunk is zero); a DESCRIPTION,
+--       not a commitment (the DEPLOY-TIME CREDENTIAL HANDOFF block's two
+--       statements and their order are byte-untouched — nothing an operator is
+--       told to do changed); and the superseded claim is named above.
+--
+--   (2) THE `raise warning` IN THE GUARD BELOW — an executable line, so Step 1.6
+--       (B) does NOT reach it and Step 1.6's closing constraint would otherwise
+--       forbid it. Changed under a ONE-LINE EXCEPTION GRANTED BY F/CTO on
+--       2026-09-09, bounded by the ruling's own text to this single line and to
+--       nothing else. Sec finding F12, round 3 of the PR #671 joint review; the
+--       edit takes Sec's commit-ready text verbatim and returns to Sec joint
+--       review in the PR that carries it (round 5). THE GROUND OF THE EXCEPTION:
+--       the object Step 1.6 protects is a PRIOR APPROVAL OF DEPLOYED STATE, and
+--       under ADR-021 greenfield no deployed state exists — 055 has never been
+--       applied to a production database and will be replayed verbatim at first
+--       deploy, so the wrong instruction would print to the operator it is aimed
+--       at rather than to nobody. It read: Either complete the deploy step (ALTER
+--       ROLE pfin_etl WITH LOGIN PASSWORD ...) or disable it. It now prescribes
+--       the two-statement handoff in order and names the prohibited form as
+--       prohibited. ⚠ THIS IS NOT A GENERAL LICENCE: applied-migration SQL stays
+--       closed to edits, this exception is one line wide, and a second one needs
+--       its own F/CTO ruling.
 -- After a successful deploy, `pfin_etl` is LEGITIMATELY `LOGIN` (an operator ran
--- `ALTER ROLE pfin_etl WITH LOGIN PASSWORD …`). A guard that "corrected" attributes
+-- the two-statement deploy handoff). A guard that "corrected" attributes
 -- on re-application would flip a live production role back to NOLOGIN and take the
 -- ETL down on the next migration run. Non-resetting is therefore the CORRECT
 -- behaviour, not laziness — but it does mean this migration cannot vouch for a
@@ -485,7 +536,7 @@ begin
     end if;
 
     if v_canlogin and v_haspass = 'NO' then
-      raise warning 'pfin_etl exists as LOGIN with NO PASSWORD — reachable with NO CREDENTIAL under any pg_hba `trust` line (local/CI). This is the exact state 055 is shaped to avoid. Either complete the deploy step (ALTER ROLE pfin_etl WITH LOGIN PASSWORD ...) or disable it (ALTER ROLE pfin_etl NOLOGIN).';
+      raise warning 'pfin_etl exists as LOGIN with NO PASSWORD — reachable with NO CREDENTIAL under any pg_hba `trust` line (local/CI). This is the exact state 055 is shaped to avoid. Either complete the deploy step IN ORDER (1) \password pfin_etl  then (2) ALTER ROLE pfin_etl LOGIN;  or disable it (ALTER ROLE pfin_etl NOLOGIN). Do NOT use ALTER ROLE ... WITH LOGIN PASSWORD ''<plaintext>'' — statement logging captures it verbatim in the server log (Sec B10).';
     end if;
   end if;
 end
