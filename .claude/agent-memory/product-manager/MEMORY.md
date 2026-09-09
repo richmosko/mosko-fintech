@@ -1,4 +1,6 @@
 # Memory index
+- [Stand-up preconditions scope](project_standup_preconditions.md) — Round 3 @d12ac693 (PR #670): ALL §F ruled (Q5 signup-off-until-allowlist §7.36; Q7 refuse; Q8 as drafted); §H liaison list; `role:arch` not `role:architect`; P-3 re-worded + P-4/P-5 owed.
+- [SELF-365 V1.final protocol — RULED](project_365_v1final_protocol.md) — 7 rulings applied 09-07 @6949dc88 (PR #661); six copy-ready specs; PM owes PRD amendment PR P-1/P-2/P-3 (after Architect ADR); (a) created only after Backend M0 check; role:devops label absent.
 
 - [V1.5 preflight recalibration](project_v15_preflight_recalibration.md) — sitting RAN 09-04 (R1–R14); PRD batch + SELF-364 fold on meta/v15-prd-amend @5d7f7c5 awaiting merge; SELF-365 AC in temp/; post-ADR cross-check owed.
 - [V1.4 preflight recalibration](project_v14_preflight_recalibration.md) — findings @25c5685 (baseline 2cd94ae), gates on sitting; 259/260/262 promote rec; CG-input-path gap, A-9 NAV double-count, Seam E A′, 264 ledger fix, 263 carries §7.28(3).
