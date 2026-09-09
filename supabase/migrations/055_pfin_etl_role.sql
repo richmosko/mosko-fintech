@@ -69,8 +69,12 @@
 --   F/CTO RULING as of 2026-09-08", and that "until it is ruled, the label
 --   stands as written here and at its other uses in this file". Both are now
 --   false. THE HOME IS ADR-019'S SEC CONDITION C1, RECONSTRUCTED — the evidence
---   is unchanged and still `workers/provider-sync/.env.example` ("Sec conditions
---   C1/C3", then "CONDITION C1 (rotation coupling — Sec-load-bearing)").
+--   is unchanged and still `workers/provider-sync/.env.example` — its
+--   DB-LOGIN-ROLE pin, whose parenthetical names Sec conditions C1/C3, and its
+--   CONDITION C1 rotation-coupling block. Described rather than quoted: the
+--   source wraps that parenthetical across two `#` comment lines, so any inline
+--   quotation of it silently rejoins them (Sec, ADR-019 review F3). `116`'s
+--   header carries the marked quotation.
 --   ⚠ RECONSTRUCTED, NOT RECOVERED: the originating Sec artifact was never
 --   committed, so ADR-019's C1 text is written FROM downstream tree evidence
 --   rather than quoted from Sec, and must be read as a record of what the

@@ -128,9 +128,19 @@
 --   `.env.example`, IS AN OPEN F/CTO RULING as of 2026-09-08. Until it is ruled,
 --   no artifact should re-point the label." Both sentences are superseded and
 --   the re-pointing block is LIFTED. Evidence unchanged and still the basis:
---   `workers/provider-sync/.env.example` pins the login role "(F/CTO-ratified;
---   Sec conditions C1/C3)" — ADR-019's condition set — and spells the condition
---   out as "CONDITION C1 (rotation coupling — Sec-load-bearing)".
+--   `workers/provider-sync/.env.example` pins the login role "(migration 116;
+--   F/CTO-ratified; Sec conditions C1/C3)" — ADR-019's condition set — and
+--   spells the condition out as "CONDITION C1 (rotation coupling —
+--   Sec-load-bearing)".
+--   ⚠ QUOTED WHOLE, with the one remaining transformation marked here rather
+--   than left silent: the source WRAPS that parenthetical across two `#`
+--   comment lines ("… Sec conditions" then "# C1/C3)"), so the quotation above
+--   REJOINS them and no contiguous byte-run in the file matches it. An earlier
+--   revision of this block quoted it as "(F/CTO-ratified; Sec conditions
+--   C1/C3)", silently dropping "migration 116" — an UNMARKED ELISION inside a
+--   verbatim quote (Sec, ADR-019 review F3), which ADR-019's own amendment then
+--   inherited from here. A quotation that normalises its source is the same
+--   class whether it drops words or joins lines; mark both or quote neither.
 --
 --   ⚠ RECONSTRUCTED, NOT RECOVERED. The originating Sec artifact was never
 --   committed, so C1's text is written FROM tree evidence rather than quoted
@@ -171,13 +181,26 @@
 --     · Manifest / runbook / `.env.example` — DevOps; `secrets-manifest.yml`
 --       returns to Sec joint-review.
 --     · Python worker source comments and docstrings — Backend.
+--     · A per-directory `CLAUDE.md` — edit-in-place (no DB representation);
+--       owner is the directory's owner — DevOps/Backend for
+--       `workers/CLAUDE.md` — under the same Sec gate as every other row here.
+--       This row exists because Sec's ADR-019 review (F7) measured
+--       `workers/CLAUDE.md` as a LIVE carrier that matched no row in this table
+--       and was named in no BACKLOG §7.36 booking: the grep surfaces it and
+--       nobody owned it. ⚠ That file's C1 sentence ALSO states the label's home
+--       is "under F/CTO ruling", which the 2026-09-09 ruling falsifies — a
+--       second defect on the same lines, to be corrected in the same pass.
 --     · BACKLOG §7.6 S5's AC — PM or Architect, edit-in-place. This row exists
 --       because Sec's round-2 re-confirm of PR #671 measured that S5's AC DOES
 --       carry the label (correcting its own round-1 finding) and that it was in
 --       NO vehicle list: not this one, not BACKLOG §7.36 item 3, not item 4.
 --     · `workers/provider-sync/.env.example` — an EXCEPTION to the manifest
---       class above: its "Sec conditions C1/C3" and "CONDITION C1" lines are
+--       class above: its DB-LOGIN-ROLE pin (the parenthetical naming Sec
+--       conditions C1/C3) and its CONDITION C1 rotation-coupling block are
 --       CORRECT AS WRITTEN under the re-attribution reading. Do not "fix" them.
+--       Described rather than quoted, deliberately — an inline quotation of the
+--       pin would silently rejoin the two `#` lines it wraps across, which is
+--       the F3 defect above.
 --
 -- ----------------------------------------------------------------------------
 -- WHAT DISCHARGES THE GATE — AND WHY THIS MIGRATION CANNOT OBSERVE IT.
