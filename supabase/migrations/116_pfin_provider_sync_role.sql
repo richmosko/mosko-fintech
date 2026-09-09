@@ -122,15 +122,33 @@
 --   block NAMES that class; it asserts nothing about the §10 catalogued ledger,
 --   which neither this migration nor this correction moves.
 --
---   INFERRED, and F/CTO's to rule: the label's home is ADR-019's Sec condition
---   C1. Evidence is `workers/provider-sync/.env.example`, which pins the login
---   role "(F/CTO-ratified; Sec conditions C1/C3)" — ADR-019's condition set —
---   and then spells the condition out as "CONDITION C1 (rotation coupling —
---   Sec-load-bearing)". ADR-019's Status line ratifies "Sec conditions C1–C4",
---   but of that set DECISIONS.md enumerates only C2. WHETHER THE C1 / C3 / C4
---   TEXT IS RECOVERABLE, or must be reconstructed from `.env.example`, IS AN
---   OPEN F/CTO RULING as of 2026-09-08. Until it is ruled, no artifact should
---   re-point the label.
+--   RULED 2026-09-09 (F/CTO): THE LABEL'S HOME IS ADR-019'S SEC CONDITION C1.
+--   ⚠ This block previously opened "INFERRED, and F/CTO's to rule" and closed
+--   "WHETHER THE C1 / C3 / C4 TEXT IS RECOVERABLE, or must be reconstructed from
+--   `.env.example`, IS AN OPEN F/CTO RULING as of 2026-09-08. Until it is ruled,
+--   no artifact should re-point the label." Both sentences are superseded and
+--   the re-pointing block is LIFTED. Evidence unchanged and still the basis:
+--   `workers/provider-sync/.env.example` pins the login role "(F/CTO-ratified;
+--   Sec conditions C1/C3)" — ADR-019's condition set — and spells the condition
+--   out as "CONDITION C1 (rotation coupling — Sec-load-bearing)".
+--
+--   ⚠ RECONSTRUCTED, NOT RECOVERED. The originating Sec artifact was never
+--   committed, so C1's text is written FROM tree evidence rather than quoted
+--   from Sec — a record of what the project acted on, not Sec's words. Of the
+--   C1–C4 set ADR-019's Status line ratifies, C3 and C4 are ruled
+--   TEXT-UNRECOVERABLE with their NUMBERS RETAINED so the references are not
+--   severed, and NO ARTIFACT MAY CITE C3 OR C4 AS A RULE.
+--   ⚠ Do NOT resolve C3 from a nearby "C3" elsewhere in the tree: the bare token
+--   labels several unrelated condition sets, and adopting one would produce
+--   right content under a wrong pointer — the same false-composite failure this
+--   block exists to correct. ⚠ And the Sec joint-review of PR #671 has its OWN
+--   C1 and C4 — different review, different numbering, not this ADR's set.
+--
+--   The amendment carrying all three conditions lands in PR #674 on
+--   DECISIONS.md. Re-pointing now PROCEEDS, per BACKLOG §7.36 items 3-5 and the
+--   vehicle classes below; `055`'s `comment on role` is re-pointed by the
+--   comment-only migration `117`. `workers/provider-sync/.env.example` is the
+--   named exception and is correct as written.
 --
 --   ⚠ THE CORRECTION IS RE-ATTRIBUTION PLUS ENUMERATION — NEVER DELETION. A
 --   condition label is a reference into a canonical enumeration; stripping it

@@ -62,17 +62,29 @@
 --   policy proof) reviewed before exposure. The rotation coupling is not it.
 --   The label is WRONG-POINTER, not invented, and is deliberately NOT deleted:
 --   a condition label is a reference into a canonical enumeration, and severing
---   it leaves a reader holding a rule with no way to look the instance up. Its
---   inferred home is ADR-019's Sec condition C1 — evidence is
---   `workers/provider-sync/.env.example` ("Sec conditions C1/C3", then
---   "CONDITION C1 (rotation coupling — Sec-load-bearing)"). But ADR-019
---   enumerates only C2 of the C1–C4 set its Status line ratifies, and WHETHER
---   THE C1 / C3 / C4 TEXT IS RECOVERABLE IS AN OPEN F/CTO RULING as of
---   2026-09-08. Until it is ruled, the label stands as written here and at its
---   other uses in this file. The full carrier list and the per-artifact
---   correction vehicles are recorded in migration `116`'s header. This file's
+--   it leaves a reader holding a rule with no way to look the instance up.
+--
+--   ⚠ RULED 2026-09-09 (F/CTO), superseding the two sentences this block carried
+--   until then: that "WHETHER THE C1 / C3 / C4 TEXT IS RECOVERABLE IS AN OPEN
+--   F/CTO RULING as of 2026-09-08", and that "until it is ruled, the label
+--   stands as written here and at its other uses in this file". Both are now
+--   false. THE HOME IS ADR-019'S SEC CONDITION C1, RECONSTRUCTED — the evidence
+--   is unchanged and still `workers/provider-sync/.env.example` ("Sec conditions
+--   C1/C3", then "CONDITION C1 (rotation coupling — Sec-load-bearing)").
+--   ⚠ RECONSTRUCTED, NOT RECOVERED: the originating Sec artifact was never
+--   committed, so ADR-019's C1 text is written FROM downstream tree evidence
+--   rather than quoted from Sec, and must be read as a record of what the
+--   project acted on — never as a quotation of what Sec wrote. Of the C1–C4 set
+--   ADR-019's Status line ratifies, C3 and C4 are ruled TEXT-UNRECOVERABLE with
+--   their NUMBERS RETAINED so the references are not severed, and NO ARTIFACT
+--   MAY CITE C3 OR C4 AS A RULE. The amendment carrying all three lands in
+--   PR #674 on DECISIONS.md. Re-pointing now PROCEEDS, per BACKLOG §7.36
+--   items 3-5; `workers/provider-sync/.env.example` is the named exception and
+--   is correct as written. The per-artifact correction vehicles and the
+--   carrier-finding grep are recorded in migration `116`'s header. This file's
 --   `comment on role` carries the same label and is a DATABASE object, so it is
---   correctable ONLY by a comment-only migration `117` — booked, not authored.
+--   correctable ONLY by a comment-only migration — `117`, authored in the same
+--   PR as this note.
 --
 -- ----------------------------------------------------------------------------
 -- POSTURE RATIONALE — NO FUNCTION IS AUTHORED HERE, so the SECURITY DEFINER
