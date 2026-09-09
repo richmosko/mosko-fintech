@@ -34,6 +34,8 @@
 - [Diff filter swallows removed comments](feedback_diff_filter_swallows_removed_comments.md) — assert "zero executable lines changed", never "comment-only".
 - [Auditing a consolidation against my own file](feedback_consolidation_drift_catch_method.md) — a quote attributed to me may be LAUNDERED; enumerate my ids first.
 - [Grading a composed verdict across a stacked chain](feedback_grading_a_composed_verdict_across_a_stacked_chain.md) — a close-gate composition is a FRESH claim; ask "did any blob arrive via an UNREVIEWED commit", not "did surface N's files change"; DELTAS reviewed ≠ TREE reviewed; watch for a cited leg that EXISTS but did not RUN.
+- [A correction pass inherits the reviewer's filter](feedback_a_correction_pass_inherits_the_reviewers_filter.md) — my enumeration BECOMES the fix scope; hand over the GREP, not the list.
+- [A discharge can go stale against its own PR](feedback_a_discharge_can_go_stale_against_its_own_pr.md) — grade the discharge set as a SET; one fix cites another's already-fixed defect.
 
 ## Mechanism / defect classes
 
@@ -71,6 +73,7 @@
 - [Pass-if-absent substitutes a path convention](feedback_pass_if_absent_substitutes_a_path_convention.md) — the inversion step must assert the output TOKEN.
 - [A name-key denylist misses every spec form in the value](feedback_a_name_key_denylist_misses_every_spec_form_in_the_value.md) — enumerate value grammars; always run a negative control.
 - [A manifest fence stops at the fields it parses](feedback_a_manifest_fence_stops_at_the_fields_it_parses.md) — lifecycle scripts and the lockfile `resolved` host are the two open doors.
+- [Per-role settings bypass a LOGIN role's whole posture](feedback_per_role_settings_bypass_a_login_roles_posture.md) — assert `rolconfig IS NULL`; `ALTER ROLE r SET role=` is self-grantable and catalog-invisible.
 
 ## Standing constraints on future work
 
@@ -82,4 +85,5 @@
 - [`account_trans` write surfaces auto-route to Sec](project_account_trans_write_surface_auto_routes_to_sec.md) — ADR-064 D5; D2-mandatory, never opt-in.
 - [aal2 `passkey` arm has no behavioural observer](project_aal2_passkey_arm_has_no_behavioural_observer.md) — standing QA item, never a per-member merge condition.
 - [Some F/CTO rulings live ONLY in Linear](project_off_tree_fcto_rulings_live_in_linear.md) — check the issue before calling an obligation undischarged.
+- [The "ADR-023 C1" rotation-coupling label is wrong-ADR](project_c1_rotation_coupling_label_is_misattributed.md) — inferred ADR-019 C1, F/CTO-unruled; 11+ carrier sites; re-attribute, never delete.
 - [Never tighten the CI-fenced-RT grep](project_ci_fenced_set_grep_must_not_be_tightened.md) — when fenced and §10 membership coincide, say so AND say they must not be reconciled.

@@ -11,3 +11,4 @@
 ## Git / worktree mechanics
 - [Worktree HEAD can be detached by a coordinator checkout, not by main moving](reference_worktree_head_detach_on_main_advance.md) — re-check `git status --short --branch` right before committing, not just after `git checkout -b`; a commit's "detached HEAD" line is the tell.
 - [Worktree paths move without warning](reference_worktree_path_moved.md) — `.claude/worktrees/<agent>`, not the old `~/Projects/mosko-fintech-worktrees/<agent>`; verify with `git worktree list`, don't assume data loss from a missing path.
+- [Fresh api/ worktree needs svelte-kit sync, not just node_modules](feedback_worktree_missing_svelte_kit_needs_sync.md) — `npm test` fails with an opaque rolldown/tsconfig error until `npx svelte-kit sync` regenerates gitignored `.svelte-kit/`.
