@@ -1,301 +1,284 @@
-# Stand-up preconditions — direct Plaid Item registration + historical categorized-transaction backfill (PM scope draft)
+# Stand-up preconditions — attach-at-Link + historical categorized-transaction backfill (PM scope, Round 2)
 
-**Status:** PM draft for F/CTO ruling · **Baseline:** `main` @ `bd7b5987` · **Date:** 2026-09-08 (repo clock, `-0700`) · **Author:** PM · **Inputs:** PRD §2.3 / §2.4 / §3.4 / §6 / §7.3, SECURITY §4.2 / §4.6, ADR-027 / ADR-034 / ADR-036 / ADR-037 / ADR-053, BACKLOG §5.1 / §5.4 / §7, `docs/records/self217-nav-seeding-run.md`, `docs/records/v1final/self365-protocol.md` §B.1 / §B.5 / §G, and the Backend read-only capability audit (scratchpad `backend-audit-plaid-backfill.md`, same baseline — cited below as **Backend audit §A–§D**; it is a `temp/`-class artifact, so every capability fact this record relies on is restated here, not pointed at).
+**Status:** PM draft, Round 2 — applies the 2026-09-08 (evening) facts and rulings (§G); three §F questions remain open · **Baseline:** `main` @ `bd7b5987` · **Date:** 2026-09-08 (repo clock, `-0700`) · **Author:** PM · **Round 1:** `bf026480` (same branch; superseded sections are named, not deleted from history) · **Inputs:** PRD §2.3 / §2.4 / §3.4 / §6 / §7.3, SECURITY §4.2 / §4.6, ADR-027 / ADR-034 / ADR-036 / ADR-037 / ADR-053, BACKLOG §5.4 / §7, migrations `015` / `021` / `042`, `workers/provider-sync/src/ingest/accountMapper.ts`, `docs/records/self217-nav-seeding-run.md`, `docs/records/v1final/self365-protocol.md` §B.1 / §B.5 / §G, Linear (read-only) SELF-383 / SELF-386 / SELF-387, and the team-lead's Plaid-dashboard measurements of 2026-09-08 evening (§G.1).
 
-**Assumed-ratify hook:** nothing below is ratified. Both items are F/CTO-ruled **V1** (2026-09-08); the *shape* of each — posture, ordering, Linear form — is what this record asks F/CTO to rule (§F). Post-ratify: surgical-fix deltas here, then the PRD amendment PR (§A.3) and the Linear creation (§D) — no Linear writes precede the ruling.
+**Assumed-ratify hook.** Ruled and applied below: **Q4 → S1** (backfill first, into manual accounts); **Item 1 struck** (Q1 / Q2 / Q3 / Q6 moot); **Item 1 replaced** by the attach-at-Link build (§B). Still open for F/CTO: **Q5 / Q7 / Q8** (§F). Post-ratify of those three: surgical-fix deltas here, then the PRD amendment PR (§A.3) and the Linear creation (§D.2) — **no Linear writes precede the ruling.** The `⟨OPEN⟩` markers are facts a named role confirms at stand-up, not decisions.
 
-**The two rulings, F/CTO verbatim (2026-09-08):**
+**Round 2 change log (from `bf026480`):** §0 D-4 resolved, D-6 superseded, D-8 / D-9 / D-10 added · §A.1 struck and replaced · §B rewritten for the attach build · §C.4 / §C.5 / §C.8 folded (refusal boundary = cutover date; S1 ruled) · §D rewritten for three issues with Linear IDs · §E re-cut · §F reduced to three · §G added.
 
-> "Plaid allows 10 'free' Items, and I am already at 9. I don't get those back... So we need a flow built in that allows an advanced setup where we can enter the Item credentials directly."
-
-> "Before we do that Plaid connection, I want to walk through backfilling more than just the NAV data. I do have a few years of already categorized transactions that I want populated for my accounts."
-
-Sequencing ruled: **deploy → backfill walk → Item registration → month-1 clock.** (§C.5 and §D.1 show where this order collides with account identity on the tree and offer the fix.)
+**The ruled sequence (F/CTO, 2026-09-08 evening):** **deploy → backfill walk (SELF-217 shape, into manual accounts) → attach-capable Link → Plaid connection → month-1 clock.**
 
 ---
 
 ## 0. Drift catches (read before the substance)
 
-Read against the tree at `bd7b5987` before drafting. None is load-bearing on the rulings; two change where a reader should look.
+Read against the tree at `bd7b5987`. D-8 is load-bearing on the §B AC; the rest change where a reader should look.
 
 | # | Brief says | Tree says | Effect |
 |---|---|---|---|
-| D-1 | "SECURITY §4.1 / §4.6 (Plaid + credential posture)" | §4.1 is *Tenant isolation posture*; the credential + external-API posture is **§4.2** ("Credential and external-API posture" — SD-03, RT-02 / RT-05, the Plaid OAuth-integrity bullet). §4.6 holds the V2-ship-gate inventory. | §4.2 is the section Item 1 collides with; cited as §4.2 throughout. |
-| D-2 | "BACKLOG §7 for SELF-201 import follow-ups" | SELF-201 shipped **§2.4.2 manual account onboarding** (CHANGELOG: PRs #141–#143; migration `013` `fn_create_manual_account`). Its §7 deferred list is audit-log infra / UX copy / visual-fidelity — **no import follow-ups**. **There is no CSV/OFX import on the tree** (Backend audit §B: zero `csv`/`ofx` matches in `api/src` + `workers/provider-sync`; adapters are Plaid + SimpleFIN only). ADR-027's sentence "CSV/OFX import + manual entry (SELF-201, shipped) as first-class providers" is a **false composite** — SELF-201 is the manual half only; the import half was never built. PRD §2.4.1's "CSV/OFX import or manual entry where none does" is therefore half-true on the tree. | Item 2 has **no** loader to walk; the loader is BUILD (§C.4). ADR-027 wording debt noted for Architect (§E). |
-| D-3 | "the 'restore/bulk-load runbook' booking in §7" | Not in BACKLOG §7 (grep `runbook` / `bulk-load`: two unrelated hits). It is in the **MILESTONES head** "Open for F/CTO" list, verbatim; `docs/deployment-runbook.md` is a stub. | Cited from MILESTONES, not §7. |
-| D-4 | "SELF-386 / SELF-387 / SELF-383" | None of the three appears anywhere in the tree at `bd7b5987`; the protocol record's §H names them by letter (B.1–B.5). Read here as: **SELF-386 = B.5** production stand-up; **SELF-387 = the Backend M0 completeness check** (B.1 Dependency 2 — the brief says "SELF-387's M0 completeness check"); **SELF-383 = unresolved** (a SELF-365 sub-issue — B.2 or B.3 month-1 — team-lead to confirm). | §D's relations are written against the letters; the liaison substitutes IDs at creation. |
-| D-5 | "byte-identity check like SELF-217" | SELF-217's record carries an **identity-agreement** line (CLI-supplied vs DB-resolved uid **AGREED**, 8-char prefix), not a byte-identity check. | §C.6 asks for the identity-agreement line **plus** an input-file sha256 — which is the closest thing to byte identity a run can record. |
-| D-6 | (context) "Plaid allows 10 'free' Items" | An F/CTO-stated external fact; nothing on the tree verifies the number or the error Plaid returns at the limit. | §B.7 treats the cap as a provider quota of **unknown exact size**: the app must *render* Plaid's refusal, never *count to 10* itself. DevOps confirms tier + limit at B.5 AC 2's `⟨OPEN⟩`. |
-| D-7 | (context) SECURITY §4.2 text | still names `pfin.plaid_items` / `pfin.decrypted_plaid_access_token` — both **dropped at migration `015`** (ADR-037 fact 1; live homes `pfin.linked_source` / `pfin.decrypted_source_credential`). BACKLOG §7 already notes §4.2's stale RT-26 composition. | Sec-owned wording debt; the Item 1 §4.2 amendment (§A.3) is the natural vehicle. |
+| D-1 | "SECURITY §4.1 / §4.6 (Plaid + credential posture)" | §4.1 is *Tenant isolation posture*; the credential + external-API posture is **§4.2**. §4.6 holds the V2-ship-gate inventory. | Cited as §4.2 throughout. |
+| D-2 | "BACKLOG §7 for SELF-201 import follow-ups" | SELF-201 shipped **§2.4.2 manual account onboarding** (migration `013` `fn_create_manual_account`); no import follow-ups. **There is no CSV/OFX import on the tree.** ADR-027's "CSV/OFX import + manual entry (SELF-201, shipped)" is a **false composite**. | The loader is BUILD (§C.4). ADR-027 wording debt → Architect (§E-7). |
+| D-3 | "the 'restore/bulk-load runbook' booking in §7" | In the **MILESTONES head** "Open for F/CTO" list, not §7; `docs/deployment-runbook.md` is a stub. | Cited from MILESTONES. |
+| D-4 | "SELF-386 / SELF-387 / SELF-383" | **Resolved (Linear, read-only, 2026-09-08 evening):** SELF-386 = *Production stand-up (Phase 7 entry; V1.final month-1 precondition)*, `role:devops`, Platform / Cross-cutting, blocks SELF-383 + SELF-387. SELF-387 = *V1.final (a) precondition: Backend M0 completeness check*, parent SELF-365. SELF-383 = *V1.final (c) month N: calendar month M counts under the R12 six-clause definition*, parent SELF-365, blocks SELF-384 / SELF-385. None appears in the tree. | §D.2 relations use the IDs. |
+| D-5 | "byte-identity check like SELF-217" | SELF-217's record carries an **identity-agreement** line, not a byte-identity check. | §C.6 asks for the agreement line **plus** an input-file sha256. |
+| D-6 | "Plaid allows 10 'free' Items … already at 9" | **Superseded by §G.1:** the old team is deleted; the new team is a **Trial plan with 10 free Production Items**, none spent. The number is now a measured dashboard fact, not an F/CTO recollection. | The app still must not *count to 10* (§E-10); the quota exposure moves from "1 slot left" to "10 shared slots" (Q5). |
+| D-7 | (context) SECURITY §4.2 text | Still names `pfin.plaid_items` / `pfin.decrypted_plaid_access_token`, both dropped at `015`. | Sec-owned wording debt. **Round 1 offered the Item 1 §4.2 amendment as the vehicle; that vehicle is gone** — the debt stands on its own (§E-7). |
+| **D-8** | "the matched-tenant trigger `fn_account_matched_linked_source` is BEFORE INSERT only, so an attach-by-UPDATE bypasses it" | **FALSE.** Migration `015` creates `account_matched_linked_source` as **`before insert or update on pfin.account … when (new.linked_source_id is not null)`**, and its `comment on function` says "Covers UPDATE (re-link path), not just INSERT." (The "BEFORE INSERT" phrasing in `accountMapper.ts`'s header comment describes the INSERT path it uses; it is not the trigger's definition.) | The §B AC does **not** extend the trigger. It **asserts** the existing fence on the new UPDATE path (a pgTAP leg: a cross-tenant `linked_source_id` set by UPDATE is rejected). Sec joint-review stays mandatory — Decision-3 instance #6 is *exercised on a new write path*, not extended. |
+| **D-9** | "`accountMapper.ts` only INSERTs new rows on `(linked_source_id, provider_account_id)`" | True for the **worker** path. The **app's** landing path at `bd7b5987` is `pfin.fn_land_linked_accounts(p_linked_source_id, p_accounts jsonb)` (`042`, SECURITY INVOKER) called from `api/src/routes/api/plaid/exchange` + `accounts/connect/attributes` (SELF-199 account selection + attributes). It is also INSERT … `ON CONFLICT (linked_source_id, provider_account_id) DO UPDATE SET is_active = true` — **insert-only in effect; no path attaches to an existing row.** | The conclusion holds (schema yes / code no). The attach build lands in the **`042` RPC family on the api side** — the screen the user already meets — with `accountMapper.ts` as the worker-side consumer that must resolve attached rows (§B.4). |
+| D-10 | "removals do not restore slots" (Plaid billing docs + help article) | External fact; nothing on the tree verifies it. | Carried as F/CTO-confirmed (§G.1); the remove-confirmation copy states it (§E-10). |
 
 ---
 
 ## A. V1 / V2 / never — first
 
-### A.1 Item 1 — direct Plaid Item registration ("advanced setup")
+### A.1 Item 1 — direct Plaid Item registration ("advanced setup") — **STRUCK from V1 (F/CTO 2026-09-08 evening)**
 
-**Ruled V1 (F/CTO 2026-09-08).** PM concurs on the *narrow* form: the ruling is a stand-up precondition (the F/CTO's own institutions cannot all be Link-connected with one free Item left), not a general onboarding feature. The wide form (every tenant, always) is not required by the ruling and is where the V2 creep lives (§E).
+The premise is gone: the Items the ruling wanted to adopt were minted under a Plaid team that **no longer exists** (§G.1); their `access_token`s were never held; a new team starts at 0 of 10 free Production Items. There is nothing to adopt, so there is nothing for an adoption path to do at stand-up.
 
-**Story trace.** Two stories, and a gap between them:
-- **§2.4.1 Connection initiation** — "hands off to the provider's authorization step … On success the system persists whatever access credential the provider issues … the client never holds a long-lived access credential." Link-only framing; no path admits a credential that already exists.
-- **§2.4.4 Credential lifecycle** — "Any long-lived access credential a provider issues on successful re-auth is exchanged and stored server-side; the client never holds it." Same commitment, lifecycle side.
-- **SECURITY §4.2 Plaid OAuth flow integrity** — "the access token never touches the client." Sec-owned restatement.
-- **Gap:** no §2 story admits an Item whose access credential was issued outside this deployment's connect flow. Item 1 is a **new sub-story under §2.4.1** ("credential adoption"), not a re-reading of an existing one.
+**Disposition: V2 candidate at most.** One-line booking at **BACKLOG §5.4** ("Register an existing Plaid Item by credential"), landed in this PR so the idea is findable without re-litigating it. It is *not* a permanent non-goal — the product need ("an Item Link cannot re-mint") can recur under any quota — but it has no V1 trigger. **Q1 / Q2 / Q3 / Q6 close as moot** (§F).
 
-**§6 check:** no §6 axis covers it (not public distribution, money movement, advisory, real-time, or mobile). **§5 check:** not listed in §5.4; not a deferred item being pulled forward. **Not** a permanent non-goal being re-litigated.
+**Round 1 §B (adoption story, posture options O1–O3, verification steps, nine Sec triggers, nine ACs) is retired with it.** It is in history at `bf026480`; whoever scopes the V2 candidate starts there, not from zero.
 
-**PRD amendment needed: YES.** (i) §2.4.1 — add a "Credential adoption path" paragraph after "Connection initiation" (Item 1's story, §B.1, at V1 scope with the gate F/CTO rules in §B.2); (ii) §2.4.1 + §2.4.4 — qualify "the client never holds a long-lived access credential" to "the client never *retains* …; the adoption path is the single, [gated] exception where the user *supplies* one, transiently, and the server stores it under §2.4.4's credential-class protection"; (iii) SECURITY §4.2's OAuth-integrity bullet — **Sec authors** the parallel qualification (PM does not edit §4.2). (iv) Appendix B §2.4 — a new routing flag (Sec-led / Architect joint) for the adoption surface. (v) Appendix C — a 2.4.1 trace row.
+### A.1′ Replacement — **attach a provider account to an existing manual account at Link time** (V1-required, F/CTO 2026-09-08 evening)
 
-### A.2 Item 2 — historical categorized-transaction backfill
+**Why it exists.** Q4 ruled **S1**: the categorized history backfills **first**, into **manual** accounts, before any Plaid connection. Round 1's S1 losing side was "two `pfin.account` rows per real account forever, history on one and live data on the other, no re-link path". F/CTO asked whether an existing manual account can later gain Plaid data; the tree's answer (§G.3) is **yes by schema, no by code.** The attach build removes S1's losing side — it *is* the re-link path, scoped to the moment it is needed (Link completion) and nowhere else.
 
-**Ruled V1 (F/CTO 2026-09-08) — as a supervised operator run, NOT as the §2.4.3 product surface.** The distinction is the same one the tree already draws for NAV: PRD §2.1 / Appendix C 2.1.3 commit V1 to importing the incumbent NAV history ("F/CTO has locked the *whether*; the *how* is routed to Architect"), SECURITY §4.6 shadow-workflow tear-down says that import "is a one-time event, not an ongoing sync", and SELF-217 delivered it as a dry-run-default script run by the F/CTO and recorded. Item 2 is that pattern applied to transactions.
+**V1 / V2 / never:** **V1**, by ruling and by dependency — without it the ruled sequence leaves the founding tenant with a split ledger on day one, which the A-3 M0 comparison would then read as a defect. Not a §6 axis. Not a §5 item pulled forward (§5.4's "manual un-share of an already-shared Plaid account" is the *opposite* direction and stays V2+). It is the **first app path that writes `linked_source_id` on an existing row** — the "re-link does not exist" fact BACKLOG §7 records (four-symptom entry) is partially discharged by it and must be re-read at ratify.
 
 **Story trace.**
-- **§2.3.1** — the taxonomy "derives from the founding user's existing categorization" (ADR-036 / ADR-057); the categories the F/CTO's history carries are, by construction, near-identical to the seeded set. The rows Item 2 lands are §2.3.1 classifiable items with an assignment already known.
-- **§2.4.3 V1/V2 boundary** — "CSV bulk-import of historical transactions V2+ (V1 ships single-transaction-at-a-time entry)"; mirrored at BACKLOG §5.4. **This is the PRD text that currently forbids Item 2 as a product feature.** It stays. The operator run is not that feature: no upload route, no form, no per-tenant surface.
-- **§3.4(a) via A-3** (protocol record §G.2 / §B.1 AC 4) — the M0 manual §2.6 comparison needs V1 to *hold* the history the §2.6 clauses read; B.1 Dependency 2 (Backend M0 completeness check) is the gate that Item 2 exists to pass.
-- **§4.6 shadow-workflow tear-down** — the precedent that a one-time import from the incumbent is inside V1's universe.
+- **§2.4.1** — "Account selection now happens **at connect time**, where an unwanted institution-side account is simply never imported." The attach choice is a third outcome of that same selection step: *import as new* / *don't import* / **attach to an existing manual account**. Same screen, same tenant-scoped write.
+- **§2.4.2** — "Once created, all transactions on the account come through §2.4.3 manual entry." **This is the sentence the build amends:** an attached manual account's transactions come through the provider **from its cutover date forward**, and through §2.4.3 before it (and still by hand after it, as today for any provider account).
+- **§2.4.3** — unchanged; the boundary sentence gains the one-time-run clause from A.2 only.
+- **§2.4.4 / SECURITY §4.2** — **unchanged.** No credential is entered by anyone; Link mints and exchanges exactly as shipped. Round 1's P-4 (ii)–(iv) qualifications of "the client never holds a long-lived access credential" are **withdrawn**.
 
-**§6 check:** none. **§5 check:** §5.4 "CSV bulk-import of historical transactions" stays V2+; Item 2 does not promote it. §5.1 "Historical NAV import beyond Dec-2015 parity import … bulk CSV import of NAV history for new tenants" stays V2+ (Item 2 is transactions, founding tenant only).
+**PRD amendment needed: YES — P-4 re-purposed.** (i) §2.4.1 connect-time selection paragraph: add the attach outcome and the cutover rule in one sentence; (ii) §2.4.2: qualify the "all transactions … through §2.4.3" sentence as above; (iii) Appendix B §2.4: routing flag (Architect-led, Sec joint) for the attach write path; (iv) Appendix C: 2.4.1 + 2.4.2 trace rows. Nothing in §2.4.4 or §4.2 moves.
 
-**PRD amendment needed: YES, one sentence.** §2.4.3 V1/V2 boundary, after the CSV-bulk-import clause: "A one-time supervised import of the founding user's categorized transaction history — the §2.1 NAV-import pattern, run by the operator and recorded at `docs/records/v1final/backfill-run.md` — is a V1 stand-up step, not this product surface." Plus Appendix C 2.4.3 trace row. Nothing else moves.
+### A.2 Item 2 — historical categorized-transaction backfill — **stands as scoped (Round 1 §A.2), one fold**
+
+**Ruled V1 as a supervised operator run, NOT as the §2.4.3 product surface** — the SELF-217 pattern applied to transactions (§C). **Fold (F/CTO 2026-09-08 evening):** the loader's per-account refusal boundary and `pfin.account.backfill_cutover_date` are **the same fact** (§C.5). The loader **writes** the column; the attach build **honors** it. Round 1's E-8 ("wire it or annotate it as reserved") resolves to **wire it**.
+
+**PRD amendment needed: YES, P-5 as before plus one clause.** §2.4.3 V1/V2 boundary, after the CSV-bulk-import clause: "A one-time supervised import of the founding user's categorized transaction history — the §2.1 NAV-import pattern, run by the operator and recorded at `docs/records/v1final/backfill-run.md` — is a V1 stand-up step, not this product surface; each imported account carries the import's last date as its provider cutover (§2.4.1)." Plus Appendix C 2.4.3 trace row.
 
 ### A.3 Amendment vehicle
 
-One PRD PR, after the ruling, folded with the already-booked P-1 / P-2 / P-3 (protocol record §H) as **P-4** (Item 1: §2.4.1 / §2.4.4 / App. B / App. C) and **P-5** (Item 2: §2.4.3 / App. C). Sec's §4.2 edit is a separate Sec-owned PR or a joint one — Sec's call.
+One PRD PR after the §F ruling, folded with the booked P-1 / P-2 / P-3 (protocol record §H) as **P-4** (attach: §2.4.1 / §2.4.2 / App. B / App. C) and **P-5** (backfill: §2.4.3 / App. C). No Sec-owned §4.2 edit rides with it any longer.
 
 ---
 
-## B. Item 1 — direct Plaid Item registration
+## B. Attach a provider account to an existing manual account at Link time
 
 ### B.1 User story
 
-> As the owner of a tenant who already holds a live Plaid Item minted under **this deployment's** Plaid `client_id` — an Item that Link cannot re-create because the free-Item quota is spent — I can register that Item by supplying its `access_token` and `item_id` directly, so its accounts flow into the app exactly as a Link-connected Item's would, without consuming another Item.
+> As a tenant who created manual accounts and populated their history before connecting the institution, when Link completes I can, **for each account the provider surfaces**, choose an existing manual account to attach it to — or "new" — so the provider's data lands on the account that already holds my history, from the day after my history ends, and my ledger never has two rows for one real account.
 
-Vocabulary (precise, per the tree): an **Item** is Plaid's connection object; **`item_id`** is its public identifier and becomes `linked_source.external_connection_id` (ADR-037 D1); the **`access_token`** is the SD-03 credential-class secret stored as a Vault handle in `linked_source.credential_secret_id`. **Adoption** = admitting a pre-existing Item; **connection** = the Link path. The user-facing label F/CTO used is "advanced setup"; the app copy should say *Register an existing Plaid Item* — "advanced" describes the audience, not the action.
+Vocabulary (per the tree): a **provider account** is one `AccountRef` in the adapter's post-Link enumeration (`provider_account_id` = Plaid's `account_id`); a **manual account** is a `pfin.account` row with `linked_source_id IS NULL` (`021`'s partial-index exemption); **attach** = setting `linked_source_id` + `provider_account_id` on that row by UPDATE; the **cutover** is `pfin.account.backfill_cutover_date`, documented at `015` as "arbitrates import (≤) vs aggregator (>)" and read by no code today.
 
-### B.2 Who can reach it — options (posture is Sec's; PM states product need + the losing side)
+### B.2 What the user sees (§2.4.1 connect-time selection, extended)
 
-The ruling's wording — "a flow built in", "we can enter" — is satisfied by O1 and O3 below. O2 is wider than the ruling.
+- The shipped post-Link screen (SELF-199: account selection + per-account attributes) gains, **per provider account**, a third choice beside *import* / *skip*: **attach to …** with a picker over the tenant's manual accounts that are (a) not already linked, (b) not closed (ADR-042), (c) of a compatible `account_type` (compatibility rule: Architect/Backend; the picker filters, the server re-checks).
+- An attached account **keeps its name and attributes** — the picker is choosing the row the history lives on; the provider's name is shown beside it for confirmation, never applied silently. (Whether the provider's `scope` / `tax_treatment` may overwrite the manual row's values: **no** — those were user-set; the screen shows both and the user keeps theirs unless they edit.)
+- The screen states the cutover it will apply — "provider transactions dated on or before ⟨cutover⟩ will not be imported; your existing entries stand" — and, when the account has **no** rows, that the cutover is empty (the provider history lands in full).
+- **Failure states, each named:** *manual account already attached to another provider account* (the `021` unique index would fire — refuse before it does); *closed account* (ADR-042: refuse; reopen first); *incompatible type*; *cross-tenant* — the `015` #6 fence raises; the surface renders a non-disclosing refusal and the picker never lists another tenant's accounts in the first place (RLS).
+- The §2.4.4 connection-state view shows the attached account like any provider account, with its cutover visible somewhere the user can find it (an audit fact).
 
-| | Option | What it is | Losing side |
-|---|---|---|---|
-| **O1** | **Operator-gated in-app surface** | An in-app form on the connections page, reachable only for tenants on an operator allowlist (deploy-time env, e.g. the F/CTO's `users_id`), otherwise absent from the DOM and refused server-side. | Introduces a *privilege concept the app does not have* — §7.3 / ADR-036 have tenants, not roles; an allowlist is a new auth surface Sec must posture (where it lives, who edits it, how it is audited). The gate is by identity, not by tier: a second operator means a second env edit. |
-| **O2** | **Every tenant, behind an "advanced" disclosure** | The same form, visible to all under an expander with copy explaining what an access_token is. | The widest credential-entry surface: it trains every tenant to paste a live credential into a browser form (inverts §4.2's "never touches the client" for the whole population, not one operator), and every mistaken paste (wrong environment, someone else's token) becomes a support event. Not required by the ruling. |
-| **O3** | **No UI — operator CLI on the worker** | Extend `workers/provider-sync/src/cli/admit.ts` with an *adopt* mode (`--access-token` read from **stdin or a file, never argv**; `--owner <users_id>`), lifting the SC3-C2 sandbox gate **only** for that mode under an explicit flag. Run by the F/CTO on the production worker, like SELF-217. | Strains "flow built in" (it is a shell command, not a screen); the credential transits an operator shell (history / `ps` exposure unless stdin-only); the C2 sandbox gate is "load-bearing" per its own header and would acquire an exception. No account-selection UI — the post-adoption attribute capture (§2.4.1 per-account attributes, SELF-199) still needs the app. |
+### B.3 Acceptance criteria (Linear grade)
 
-**PM product note (not a posture call):** O1 and O3 both satisfy the ruling; O2 is scope creep and PM would not spend V1 on it. Between O1 and O3 the *product* difference is only the entry screen; the *posture* difference (browser credential ingress vs. operator shell ingress) is Sec's to weigh. **Sec must read this section before it is posture** — see §B.8.
+1. **Choice per provider account.** At Link completion, for each provider account, the user selects an existing eligible manual account or "new"; "new" behaves exactly as today (`042` INSERT path). A test drives the screen with two provider accounts, attaches one and creates one, and asserts the resulting `pfin.account` row count is +1, not +2.
+2. **Attach is an UPDATE on the chosen row** setting `linked_source_id` + `provider_account_id`, under the caller's RLS (`account_update` policy, `003` + `025` aal2 clause), in the **same transaction** as the sibling INSERTs — one landing, all or nothing. Architect authors the primitive (extend `fn_land_linked_accounts` with an optional `attach_account_id` per entry, or a sibling RPC — Architect's call; either way SECURITY INVOKER, no DEFINER growth, allowlist unchanged — stated so it is checked).
+3. **Cutover set.** On attach, `backfill_cutover_date` := the account's latest existing `transaction_date` at attach time (NULL when the account has no rows). When the loader already stamped it (§C.5) the two agree by construction; a disagreement is refused, not resolved silently.
+4. **Ingest discards on/before cutover.** Provider transaction rows for an account whose cutover is non-NULL and whose `transaction_date ≤ cutover` are **not landed** (filter in the worker ingest path `mapper.ts` → `fn_ingest_transactions`, or in the RPC — Architect/Backend; Sec joint because it is a privileged-write filter). A test loads a manual row at date D, attaches, ingests provider rows at D−1 / D / D+1 and asserts only D+1 lands. Rows the filter discards are **counted in the sync summary** ("N rows before cutover skipped"), never silently.
+5. **The #6 fence fires on the UPDATE path.** A pgTAP leg attaches a manual account to a `linked_source_id` owned by the other fixture tenant by UPDATE and asserts the `015` trigger raises (per D-8: the trigger already covers UPDATE; this leg proves it on the new path, and would RED if anyone ever narrowed the trigger to INSERT).
+6. **`021` uniqueness on the UPDATE path.** Attaching a second provider account to an already-attached row is refused before the unique index fires, with the named message; a test asserts the refusal and that no partial write occurred.
+7. **Closed / incompatible / foreign accounts never appear in the picker** and are refused server-side if submitted (defense in depth; a test submits a closed account's id directly).
+8. **Post-attach parity.** An attached account then passes the same battery a Link-created account passes: webhook-driven sync (SELF-206), scheduled poll, update-mode re-auth, close-gate behavior — run against an *attached* row.
+9. **`accountMapper.ts` / `resolveAccountIds` resolve attached rows** — the worker's provider→account map must find a row that was attached (not inserted) by `(linked_source_id, provider_account_id)`; a test asserts a sync after attach resolves every provider account and reports zero `unresolvedAccounts`.
+10. **Sec joint-review attached** (§B.4); posture recorded in the PR body with the losing side.
+11. **PRD P-4 merged** before close (§A.3).
 
-### B.3 What is entered
+### B.4 Sec joint-review triggers (mandatory — every one)
 
-- `access_token` (secret; SD-03 class from the moment it is typed) and `item_id` (public), for an Item minted under **the same Plaid `client_id` / environment** the provider-sync worker runs against in production. Nothing else: no institution id, no account list — those come from Plaid.
-- **Config precondition (Backend audit §C gap 5, UNVERIFIED):** the F/CTO's 9 existing Items must have been minted under that same `client_id`. Tokens are client-bound; a token from another Plaid app fails at verification, and no adoption code changes that. **F/CTO question Q1 (§F).**
-- **A second, harder precondition the ruling assumes:** the F/CTO must *hold* those Items' `access_token`s. Plaid has no token-recovery path — an Item whose token was not kept is not registrable by any flow, and Link would re-mint it as a *new* Item (quota-consuming). **F/CTO question Q2 (§F).**
+1. **Decision-3 canonical instance #6 exercised on a new write path** (UPDATE of `pfin.account.linked_source_id` from the app). Not an extension (D-8) — but the first app path that sets the column on an existing row; the fence's UPDATE arm has had no caller until now.
+2. **Multi-tenant isolation** — the picker (RLS-scoped read), the attach write (RLS `account_update` + #6), and the ingest filter (a privileged-context write under `service_role` that now *drops* rows on a per-account column value — a wrong cutover silently loses provider data; a NULL-vs-non-NULL confusion loses all of it).
+3. **Plaid** — account selection semantics change on the exchange path; `/item/remove` on failure (the shipped C6-4 guard) must still fire for a failed landing that includes attaches, and must **not** leave a half-attached row (AC 2's one-transaction property).
+4. **Money flows** — the cutover decides which provider transactions exist in the ledger; §2.3 and cash-NAV read the result.
+5. **`fn_land_linked_accounts` signature change** — a PostgREST `/rpc` API contract (per its `comment on`); Sec grades whether the p_accounts object-key growth is a new surface.
+6. **DEFINER allowlist untouched** — asserted, not assumed.
 
-### B.4 What the app verifies before adopting (from the Backend audit §A; capability facts, not design)
+### B.5 Losing side of the attach design (recorded, not asked)
 
-1. **Token liveness + ownership:** `/item/get` with the supplied token (**BUILD** — `itemGet` is not on `PlaidClientLike` today). A token from another client or environment fails here; that failure *is* the ownership check.
-2. **`item_id` agreement:** the `item_id` Plaid returns must equal the one entered; on disagreement the app refuses ("token and Item ID do not belong together") rather than trusting the pasted id — the caller is a human, not Plaid's exchange response.
-3. **Accounts enumerable:** `/accounts/get` succeeds with ≥ 1 account (already the admit path's first step).
-4. **Product coverage:** `/item/get` reports the Item's products; if Transactions or Investments (ADR-027's V1 set) is absent, the app **surfaces** it ("this Item does not carry X; its data will be partial") and lets the user proceed or stop — it does not silently degrade. Whether to *block* is an F/CTO scope fact at ruling time (§F Q3).
-5. **Uniqueness / tenant:** `(provider, external_connection_id)` unique (`015`); an Item already registered **to this tenant** re-admits in place (credential rotation via `vault.update_secret` — the shipped path); an Item registered **to another tenant** fails closed (SC3-C8, shipped) with a **non-disclosing** error ("this Item cannot be registered here").
-6. **No revoke-on-failure.** The shipped `connect()` C6-4 guard calls `/item/remove` when admission fails after exchange. For an adopted, live, production Item — one of the nine — that guard is destructive and **must not be inherited** (Backend audit §A). Failure leaves the Item untouched at Plaid and nothing written here.
-7. **Webhook target (BUILD, product-required):** an Item minted outside this deployment may carry no webhook URL or a stale one. For "identical to a Link-created Item" (B.6) to be true, adoption must set the Item's webhook to this deployment's endpoint (`/item/webhook/update` — not on the adapter today). Until it is set the Item is poll-only (SimpleFIN-shaped), which the connection-state view must not present as healthy-push.
-
-### B.5 What the user sees
-
-- **Success:** the same post-connect screen Link lands on — account selection + per-account attributes (§2.4.1; SELF-199) — then the Item in the §2.4.4 connection-state view as `healthy` with "registered (not via Link)" provenance visible somewhere the user can find it (an audit fact, not a badge of shame).
-- **Failure states the UI must name (each a distinct message; none echoes the token):**
-  - *token rejected by Plaid* (invalid / wrong environment / wrong client) — "Plaid did not accept this access token for this app";
-  - *Item ID mismatch* (B.4.2);
-  - *already registered — yours* → offered as re-registration (rotation), not an error;
-  - *already registered — not yours* → non-disclosing refusal (B.4.5);
-  - *needs re-authentication* (`ITEM_LOGIN_REQUIRED` at adoption) → **adopt anyway**, land in `login_required`, show the §2.4.4 banner — a needs-re-auth Item is still the user's Item and update-mode Link (shipped) repairs it without a new Item;
-  - *partial products* (B.4.4);
-  - *transport / unknown* → generic, scrubbed (SC3-C4), with the token-free diagnostic in the worker log.
-
-### B.6 How the adopted Item behaves afterwards — identical to a Link-created one
-
-Same `linked_source` row shape, same `connection_status` machine (ADR-037 D1), same webhook handler (keys on `item_id` → `external_connection_id`, `045`), same scheduled poll (`cli/poll.ts` enumerates by provider, not by origin), same update-mode re-auth (`mintUpdateModeLinkToken` takes the stored token — origin-blind), same revoke (`/item/remove` → Vault destroy). **Product fact the copy must carry:** removing an adopted Item destroys it at Plaid and **does not return the quota slot** (F/CTO: "I don't get those back") — the remove confirmation for *any* Item should say so once production is on the free tier.
-
-### B.7 The Item cap as a product fact
-
-- The cap is **per Plaid `client_id` — per deployment — not per tenant.** Under ADR-036 open signup, *any* tenant's Link session consumes the shared quota. With 9 of 10 used, one signup by anyone else spends the F/CTO's last free Item. **Scope flag for F/CTO (§E-3):** gate Link (not adoption) behind the same operator allowlist until the production tier is on, or accept the exposure.
-- **At Item 10:** Link succeeds; nothing in the app knows it was the last.
-- **At Item 11:** Plaid refuses — *where* (link-token mint vs. exchange) and *with what code* is not on the tree (D-6). Product requirement: the connect flow renders that refusal as a **named state** — "Plaid's Item limit for this deployment is reached. Existing Items can be registered under *Register an existing Plaid Item*; removing an Item does not free a slot." — never the generic 5xx. `⟨OPEN⟩ Backend/DevOps`: the exact Plaid error code, confirmed at B.5 AC 2 against the production tier.
-- The app does **not** count Items (it only knows its own `linked_source` rows) and must not hardcode "10". A quota surface (count / remaining) is V2 and Plaid-API-dependent (§E-6).
-
-### B.8 Sec joint-review triggers (every one; Sec reads before any of this is posture)
-
-1. **Credential-class ingress from the user** — inverts §4.2's "never touches the client": transport (POST body over TLS only; never query string, never logged, never in an error), process lifetime, no persistence outside Vault. New channel, not a reuse (Backend audit §A).
-2. **RT-27 admission channel re-grade** — a new leg on the app→worker admission server carrying a long-lived credential where today only a short-TTL, single-use `public_token` transits; SELF-212's C6 conditions were argued on the public_token's properties.
-3. **Decision 1 privileged-context write** — the admission transaction under `service_role` from user-supplied input; SC3-C8 cross-tenant fail-closed must hold verbatim.
-4. **Revoke-on-failure divergence** (B.4.6) — a deliberate departure from the shipped C6-4 pattern.
-5. **`/item/webhook/update`** — a new outbound call that changes where Plaid pushes for an Item this deployment did not mint.
-6. **The gate itself** (O1 allowlist / O3 C2-gate exception) — a new auth or operator surface.
-7. **Audit row** — the shipped `connect()` writes no audit row on admission; a production credential adoption arguably should (`fn_emit_audit_log`, ADR-011 D9 amendment / E46). **Coordination fact:** SELF-375 M-3's battery leg REDs when `audit_log_surface_name_vocab` grows past its one value — a new `surface_name` is a deliberate, coordinated vocabulary change, not a side effect.
-8. **RT-26** — no new surface *if* the api/src relay stays credential-less (Backend audit §A); a Plaid credential in `api/src` would be a 5th RT-26 surface and an ADR-016 D2 gate.
-9. **DEFINER allowlist** — untouched (app-level TS under `service_role`, as `connect()`); stated so it is checked, not assumed.
-
-### B.9 Acceptance criteria (Linear grade)
-
-1. **Reachability per the ruled option** (§B.2): under O1, the surface renders and accepts only for allowlisted tenants and the server refuses others with a non-disclosing 404-class response; under O3, the CLI refuses outside its explicit adopt flag and reads the token from stdin/file only. A pgTAP/vitest leg asserts the refusal case.
-2. **Verification before write** (§B.4 1–5) — each check has a test that would fail if skipped: wrong-client token, mismatched `item_id`, foreign-tenant Item, same-tenant re-admission.
-3. **No revoke on failure** — a test that an admission failure after a successful `/item/get` issues **no** `/item/remove` (the C6-4 inversion is asserted, not assumed).
-4. **Webhook set** — after adoption the Item's webhook equals this deployment's endpoint, verified by `/item/get` read-back; if `/item/webhook/update` fails the Item is still adopted and the connection-state view shows "push not configured — polling".
-5. **Post-adoption parity** — one Plaid sandbox Item adopted via this path then exercised through: webhook receipt (SELF-206 battery), scheduled poll, update-mode re-auth, remove. Same tests the Link path passes, run against an adopted Item.
-6. **Token hygiene** — no test, log, error body, or audit row contains the token (C6-5 grep fence extended to the new files).
-7. **Failure copy** (§B.5) — each named state renders its message; the Item-limit state (§B.7) renders on the Plaid code DevOps records at B.5.
-8. **Sec joint-review** attached; posture option recorded in the PR body with the losing side.
-9. **PRD P-4 merged** before close (§A.3).
+- **A cutover is a hole-maker as well as a dedup.** If the history file's last date per account is **earlier** than the provider's earliest available transaction, the gap between them is a hole no path fills; if it is **later**, the provider rows in the overlap are dropped and the manual rows stand. The walk (§C.6) records the file's last date per account; `⟨OPEN⟩ Backend`: how far back the production Plaid initial pull reaches for a fresh Item (`transactionsSync` has no `days_requested` on the tree; `investmentsTransactionsGet` takes an explicit `start_date` range) — the walk names any hole per account.
+- **The attach choice is one-way in V1.** Detaching (UPDATE back to NULL) is not built; the `015` trigger is WHEN `new.linked_source_id IS NOT NULL`, so a detach would not even be fenced. Named so its absence is a decision; BACKLOG §5.4 candidate if F/CTO wants it findable.
+- **The ADR-042 close gate composes.** An attached account that is later closed accepts no provider rows (shipped behavior); nothing new.
 
 ---
 
-## C. Item 2 — historical categorized-transaction backfill (supervised walk)
+## C. Historical categorized-transaction backfill (supervised walk) — stands, with the cutover fold
 
 ### C.1 Framing — the SELF-217 precedent, applied to transactions
 
-SELF-217 seeded `pfin.nav_daily` from the incumbent sheet: dry-run by default, `--commit` explicit, an explicitly bounded date range with no defaults, **one transaction** (all rows or none), a structural refusal boundary (nothing on/after the tenant's `first_cron_checkpoint`), `ON CONFLICT DO NOTHING` re-runnability, dollars printed in dry-run, a **tracked-safe summary** (no `$`, uid prefix only) pasted into a record, and `pfin_etl` re-disarmed after (ADR-053 D5–D8; `docs/records/self217-nav-seeding-run.md`). Item 2 reproduces every one of those properties against `pfin.account_trans` + `pfin.account_trans_annotation`.
+SELF-217 seeded `pfin.nav_daily` from the incumbent sheet: dry-run by default, `--commit` explicit, an explicitly bounded date range with no defaults, **one transaction** (all rows or none), a structural refusal boundary, `ON CONFLICT DO NOTHING` re-runnability, dollars printed in dry-run, a **tracked-safe summary** (no `$`, uid prefix only) pasted into a record, and `pfin_etl` re-disarmed after (ADR-053 D5–D8; `docs/records/self217-nav-seeding-run.md`). The loader reproduces every one of those properties against `pfin.account_trans` + `pfin.account_trans_annotation`.
 
-**What the F/CTO holds:** "a few years of already categorized transactions" — the incumbent per-account workbooks (§2.3.3 parity text). Format unknown to the tree; **the loader's input format is whatever the F/CTO exports, normalized once** (§C.2 input 1).
+**What the F/CTO holds:** "a few years of already categorized transactions" — the incumbent per-account workbooks (§2.3.3 parity text). Format unknown to the tree; the loader's input format is whatever the F/CTO exports, normalized once. **Under S1, every target account is a manual account** the F/CTO creates on the deployed app (§2.4.2, SELF-201) before the run — one per real account, named for the institution account it will later be attached to.
 
 ### C.2 Inputs
 
-1. **The transaction file(s).** One row = one transaction: incumbent account label, date, amount (signed, dollars), vendor, description, incumbent category label(s). Format: CSV (the only reader precedent, `parse_baseline_csv`); the loader states the exact header contract in its usage text. Input file **sha256 recorded** (§C.6).
-2. **The account map** — incumbent account label → `pfin.account.account_id` for the target tenant. Authored by the F/CTO, checked into the record (labels only; no numbers). Every incumbent label must map; an unmapped label **refuses the run** (fail-closed, like SELF-217's "refused rows"), never lands on a guessed account.
-3. **The category map** — incumbent category label → `pfin.user_taxonomy (cat, sub_cat)` for the tenant's **cashflow** domain. Because the seeded taxonomy "derives from the founding user's existing categorization" (§2.3.1 / ADR-057), the map should be near-identity; the loader prints the unmapped set on dry-run. **Options for unmapped categories:** (i) **refuse the run until the map is complete** — PM lean: the run exists to give M0 *categorized* history, and §2.3.2's loud-unclassified banner over thousands of rows is noise, not signal; (ii) land unmapped rows unclassified and let the §2.3.2 banner count them (the V1.2 loud posture; correct for ordinary use, wrong for a deliberate import). Taxonomy CRUD stays V2+ (§2.3.1): a category with no seeded home is resolved by **mapping** it to an existing Sub-Cat in the map, not by creating one.
-4. **Trades and non-cash events are out.** Rows in the mechanical posting vocabulary (ADR-058: trades, splits, transfers-in-kind, their instrument legs) are **refused** by the loader — Item 2 lands cash-flow rows (§2.3.1 classifiable items) only. Security-bearing history for investment accounts is a separate question the ruling did not raise (§E-5).
+1. **The transaction file(s).** One row = one transaction: incumbent account label, date, amount (signed, dollars), vendor, description, incumbent category label(s). CSV (the only reader precedent, `parse_baseline_csv`); the loader states the exact header contract in its usage text. Input file **sha256 recorded** (§C.6).
+2. **The account map** — incumbent account label → `pfin.account.account_id` (the manual account) for the target tenant. Authored by the F/CTO, checked into the record (labels only). Every incumbent label must map; an unmapped label **refuses the run**.
+3. **The category map** — incumbent category label → `pfin.user_taxonomy (cat, sub_cat)` for the tenant's **cashflow** domain; near-identity by construction (§2.3.1 / ADR-057); the loader prints the unmapped set on dry-run. **Unmapped categories — Q7 (open):** (i) **refuse until the map is complete** — PM lean: the run exists to give M0 *categorized* history, and §2.3.2's loud-unclassified banner over thousands of rows is noise; (ii) land unmapped rows unclassified under the banner. Taxonomy CRUD stays V2+; a category with no seeded home is **mapped** to an existing Sub-Cat, not created.
+4. **Trades and non-cash events are out.** Mechanical-vocabulary rows (ADR-058: trades, splits, transfers-in-kind, instrument legs) are **refused** — the loader lands cash-flow rows (§2.3.1 classifiable items) only. Security-bearing history is a separate, unasked import (§E-5).
 
-### C.3 The classification model the rows land in (capability facts, Backend audit §B)
+### C.3 The classification model the rows land in (capability facts)
 
-- A landed row is an `account_trans` row plus a **023 annotation** row (`sub_cat_id → user_taxonomy`). GL / `tax_character` posting is **derived** downstream (`fn_gl_entries` `035`, `084` / `092` posting prototype) — the loader writes category, never postings.
-- Write primitives on the tree: (a) **`pfin.fn_create_manual_trans(p_account_id, p_transaction_date, p_amount, p_vendor, p_description, p_sub_cat_id, p_note, p_import_hash)`** — SECURITY INVOKER, one row + its annotation atomically, under the caller's own RLS (aal2-gated); no bulk variant. (b) **`pfin.fn_ingest_transactions(p_rows jsonb)`** — SECURITY INVOKER bulk insert granted to `authenticated`, provider-key dedup `ON CONFLICT (source_provider, provider_txn_id) DO NOTHING`, **writes no annotation**. Which primitive (or a new annotation-aware bulk RPC — Architect, new migration) is Backend/Architect's design call; the product requirements are §C.4–§C.5.
-- **The incumbent categories are the user's own** (§2.3.1: "the user's two-level taxonomy is authoritative"); a landed assignment is a user assignment, history-preserving under Lock 10 / ADR-031 like any other.
+- A landed row is an `account_trans` row plus a **`023` annotation** row (`sub_cat_id → user_taxonomy`). GL / `tax_character` posting is **derived** downstream; the loader writes category, never postings.
+- Write primitives on the tree: (a) `pfin.fn_create_manual_trans(p_account_id, p_transaction_date, p_amount, p_vendor, p_description, p_sub_cat_id, p_note, p_import_hash)` — SECURITY INVOKER, one row + annotation atomically, aal2-gated, no bulk variant; (b) `pfin.fn_ingest_transactions(p_rows jsonb)` — SECURITY INVOKER bulk insert, provider-key dedup `ON CONFLICT (source_provider, provider_txn_id) DO NOTHING`, **no annotation**. Which primitive (or a new annotation-aware bulk RPC — Architect) is Backend/Architect's design call.
+- **The incumbent categories are the user's own** (§2.3.1); a landed assignment is a user assignment, history-preserving under Lock 10 / ADR-031.
 
-### C.4 WALK vs BUILD (Backend audit §C, PM-sorted)
+### C.4 WALK vs BUILD (PM-sorted; Round 2)
 
 | | Item | Who |
 |---|---|---|
-| **BUILD** | **The loader** — one-shot script reproducing the SELF-217 contract (§C.1) against transactions: input contract, account + category maps, refusal set (unmapped label, unmapped category, mechanical-vocabulary row, **any date on/after the account's refusal boundary** §C.5), dry-run report (row counts per account, per-category counts, date span, refused rows with reasons, dollars totals per account for the eyeball check), one transaction on `--commit`, tracked-safe summary. Node, to reuse the canonical `computeImportHash` (Backend audit §C gap 1) — a third hash copy in Python is the ADR-034 D4 one-way door's failure mode. | Backend (+ Architect if a bulk RPC is authored) |
-| **BUILD (decide, then maybe build)** | **`backfill_cutover_date` arbitration** — the column exists on `pfin.account` (`015`), documented as "arbitrates import (≤) vs aggregator (>)", **read by no code** (Backend audit §B). Either wire it (Plaid's initial pull drops rows dated ≤ cutover — a new privileged-write filter, Sec joint) or leave it inert and rely on §C.5's refusal boundary + the detection view. PM lean: **do not wire it for this run** — the refusal boundary makes the overlap empty by construction; wiring a filter into the sync path for one operator run is the wrong side of the walk/build line. Revisit if a second tenant ever imports. | Architect ruling |
-| **WALK** | Producing the export + the two maps; dry-run locally against a scratch DB (`supabase db reset` discipline; Backend audit §D step 2), reviewing the printed figures; `--commit` against production; pasting the tracked-safe summary into the record; the reconciliation pass (§C.5) if any overlap survives. | F/CTO with Backend at the keyboard |
-| **WALK** | The restore/bulk-load runbook section that describes this run (MILESTONES open item; `deployment-runbook.md` stub) — written from the run, not before it. | DevOps + Backend |
-| **CONFIG** | Scratch-DB load check at the real row count before trusting a loop-of-RPC loader (Backend audit §C gap 8 — untested, not known-slow). | Backend |
+| **BUILD** | **The loader** — one-shot script reproducing the SELF-217 contract against transactions: input contract, account + category maps, refusal set (unmapped label, unmapped category per Q7, mechanical-vocabulary row, any date on/after an existing provider row for that account — the S1 case has none), dry-run report (rows per account, per-category counts, date span, **last date per account**, refused rows with reasons, dollar totals per account for the eyeball check), one transaction on `--commit`, tracked-safe summary, and **`backfill_cutover_date` stamped per account = that account's last landed `transaction_date`** (§C.5). Node, to reuse the canonical `computeImportHash` — a third hash copy in Python is the ADR-034 D4 one-way door's failure mode. | Backend (+ Architect if a bulk RPC is authored) |
+| **BUILD** | **Cutover honored on ingest** — the read side of the same fact; lives in the attach issue (§B.3 AC 4), not here. Round 1's "decide, then maybe build" is decided: **wire it.** | Architect + Backend (attach issue) |
+| **WALK** | Creating the manual accounts (§2.4.2) on the deployed app; producing the export + the two maps; dry-run locally against a scratch DB (`supabase db reset` discipline); reviewing the printed figures; `--commit` against production; pasting the tracked-safe summary into the record. | F/CTO with Backend at the keyboard |
+| **WALK** | The restore/bulk-load runbook section describing this run (MILESTONES open item; `deployment-runbook.md` stub) — written from the run. | DevOps + Backend |
+| **CONFIG** | Scratch-DB load check at the real row count before trusting a loop-of-RPC loader (untested, not known-slow). | Backend |
 
-### C.5 Idempotency against the later Plaid initial pull — the load-bearing finding
+### C.5 The refusal boundary and the cutover date are one fact — the load-bearing finding, folded
 
-**Facts (ADR-034 D2/D3 + migration `040`, Backend audit §B):** manual↔provider dedup on this tree is **DETECTION-ONLY**. The `004` hard-unique `(account_id, import_hash)` index was **relaxed to non-unique** (option X, F/CTO 2026-07-27) precisely so a manual row and its later provider echo **coexist**; `pfin.manual_provider_dup_candidate` surfaces exact-hash pairs for the user to reconcile **one pair at a time** (SELF-205). The hash is exact over normalized `vendor + description`, so an incumbent descriptor that differs from Plaid's `name` / `merchant_name` text is **not even a candidate** — silent double-count. Nothing auto-suppresses. The tree sets no `days_requested` on Link, so how far back Plaid's initial pull reaches for an adopted Item was fixed when that Item was minted — unknown here.
+**Facts (ADR-034 D2/D3 + migration `040`):** manual↔provider dedup on this tree is **DETECTION-ONLY** — the `004` hard-unique `(account_id, import_hash)` index was relaxed so a manual row and its provider echo coexist; `pfin.manual_provider_dup_candidate` surfaces exact-hash pairs one at a time; an incumbent descriptor that differs from Plaid's text is not even a candidate. Nothing auto-suppresses. "Dedup expectations" are met by **making the overlap empty**, not by dedup.
 
-**Consequence:** any backfilled date range that overlaps the Plaid pull double-counts §2.3 and cash-NAV for the overlap, detectably only where text happens to match. "Dedup expectations" cannot be met by dedup; they are met by **making the overlap empty**.
+**Under S1 (ruled):** at backfill time the target accounts are manual and hold no provider rows, so the Round 1 refusal boundary ("earliest provider-sourced date") is vacuous in the forward direction — the loader refuses nothing on that axis. The boundary that matters is the **reverse** one: the provider must not land what the backfill already holds. That is exactly what `backfill_cutover_date` was documented to arbitrate at `015` ("import (≤) vs aggregator (>)"). So:
 
-**Product requirement (PM):** the loader **structurally refuses any row dated on or after the account's refusal boundary**, where the boundary is — per account — **the earliest provider-sourced `account_trans.transaction_date` for that account** (read from the DB at run time; `source_provider IS NOT NULL`), or, for accounts with no provider rows, no boundary (manual accounts backfill in full). This is SELF-217's `first_cron_checkpoint` refusal, one level down. The record states the boundary per account. **Re-runnability:** rows carry `source_provider='import'` (in the `015` vocabulary) and a **deterministic `provider_txn_id`** (a stable key derived from the source row) so a re-run is a no-op through the `017` provider-key arbiter — idempotent by construction, not by operator care. `import_hash` is still computed and stored (the canonical field-set) so the detection view keeps working for whatever the F/CTO later enters by hand.
+- **The loader writes the cutover** — per account, `backfill_cutover_date := max(transaction_date)` of the rows it lands, in the same transaction (a `pfin.account` UPDATE under the impersonated tenant's RLS; the `015` trigger does not fire — `linked_source_id` stays NULL).
+- **The attach path reads/reconciles it** (§B.3 AC 3) and **ingest honors it** (§B.3 AC 4).
+- **Re-runnability:** rows carry `source_provider='import'` (in the `015` vocabulary) and a **deterministic `provider_txn_id`** derived from the source row, so a re-run is a no-op through the `017` provider-key arbiter; `import_hash` is still computed and stored so the detection view keeps working for hand-entered rows. A re-run with a *longer* date range moves the cutover forward — allowed before attach, **refused after attach** (the cutover is then load-bearing on the provider path; moving it is a different operation the walk does not need).
 
-**Which is why the ruled order collides with account identity.** Plaid-served accounts **do not exist in `pfin.account` until their Item is registered** (accountMapper creates them keyed `(linked_source_id, provider_account_id)`). Backfilling "before the Plaid connection" therefore means one of:
-
-| | Option | Losing side |
-|---|---|---|
-| **S1** | Backfill into manual accounts created for the purpose, then register Items. | Two `pfin.account` rows per real account forever: history on the manual one, live data on the Plaid one. Re-link does not exist (`linked_source_id` is never written by any app path — BACKLOG §7's four-symptom entry), and ADR-042 forbids closing an account that holds anything. §2.3.3's account selector shows both. NAV double-counts across the seam unless the manual account is drained by hand. |
-| **S2 (PM lean)** | **Register Items first**, let the first sync land, **then** backfill each Plaid-served account **below its refusal boundary**; manual / non-Plaid accounts backfill in full at any time. | Inverts the ruled order for Plaid-served accounts. The *reason* for the ruled order — M0's comparison needs populated history — is preserved: M0's check (SELF-387) runs after both. The overlap is empty by construction; the only reconciliation left is where the incumbent and Plaid disagree on a transaction's *existence*, which is a finding, not a dedup. |
-| **S3** | Build re-link first (the BACKLOG §7 four-symptom control), then S1 with a re-link at the end. | Largest build; re-link is a Sec-joint D3 #6 surface with its own ADR; not a stand-up precondition by any reading of the ruling. |
-
-**Escalation (F/CTO):** S2 changes the ruled sequence to **deploy → register Items → first sync → backfill (all accounts, each below its boundary) → M0 check → tenant-live date**. PM asks for that re-ruling rather than building S1 to the letter (§F Q4).
+**S2 / S3 (Round 1) are retired:** F/CTO ruled S1 and the attach build removes S1's losing side. Recorded, not re-asked.
 
 ### C.6 The record — `docs/records/v1final/backfill-run.md`
 
 Same shape as `self217-nav-seeding-run.md`, with:
-- run date (repo clock) and environment (production; deployed sha from the B.5 deploy log);
-- input file name + **sha256** + row count (the nearest thing to byte identity — D-5);
+- run date (repo clock) and environment (production; deployed sha from the SELF-386 deploy log);
+- input file name + **sha256** + row count (D-5);
 - the account map and category map (labels only);
-- **per account:** refusal boundary, requested date span, rows admitted / refused (with reason classes), rows per category (counts only — **no `$`**, PRD public-tier discipline);
-- the tracked-safe summary block verbatim: identity-agreement line (CLI-supplied vs DB-resolved uid, 8-char prefix — ADR-053 D5's writer obligation, which the loader must implement, not inherit), `--commit` / ack flags, one-transaction confirmation;
-- post-run verification by team-lead from the tree (row counts read back; boundary respected: zero import rows on/after any boundary);
-- whether any `manual_provider_dup_candidate` pairs exist after the first post-backfill sync (expected 0 under S2).
+- **per account:** requested date span, rows admitted / refused (reason classes), rows per category (counts only — **no `$`**), and the **cutover written**;
+- the tracked-safe summary verbatim: identity-agreement line (CLI-supplied vs DB-resolved uid, 8-char prefix — ADR-053 D5's writer obligation, which the loader implements), `--commit` / ack flags, one-transaction confirmation;
+- post-run verification by team-lead from the tree (row counts read back; every backfilled account's cutover equals its max landed date);
+- **after the Plaid connection:** per attached account, the provider's earliest landed date, the count of provider rows skipped at the cutover, and any **hole** between cutover and earliest provider date (§B.5) — the seam is a finding to name, not a dedup;
+- whether any `manual_provider_dup_candidate` pairs exist after the first sync (expected 0).
 
 ### C.7 What it unlocks
 
-- **SELF-387 / B.1 Dependency 2** — the Backend M0 completeness check can now find "the tenant's transactions for the whole of M0 [and] the §2.3 cash-flow rollup inputs" *and the prior-period columns those surfaces read* (Q1–Q4 / YTD in §2.3.2, the 5-year window in §2.3.4) — without this run, every multi-period cell in the M0 comparison is structurally N/A.
+- **SELF-387** — the Backend M0 completeness check finds the tenant's transactions for the whole of M0 *and the prior-period columns those surfaces read* (§2.3.2 Q1–Q4 / YTD; §2.3.4's 5-year window); without the run every multi-period cell is structurally N/A.
 - **A-3** — the per-cell checklist over §3.3's §2.6 clauses gets a populated left-hand side for the cash-flow cells.
-- **The Historical Expenditures chart** (§2.3.4) becomes meaningful at launch — the transaction analogue of the §2.1 NAV-import commitment.
+- **§2.3.4 Historical Expenditures** becomes meaningful at launch — the transaction analogue of the §2.1 NAV-import commitment.
 
-### C.8 Acceptance criteria (Linear grade — the loader issue; the walk is the record)
+### C.8 Acceptance criteria — the loader issue (Linear grade; the walk is its own issue, §D.2)
 
-1. Dry-run is the default; `--commit` writes; every run prints the §C.4 dry-run report and the tracked-safe summary.
-2. Bounded input: explicit date range per run, no defaults; account map and category map are required inputs; an unmapped account label or category **refuses the run** (per the option ruled at §C.2.3).
-3. Refusal boundary per account (§C.5) is computed from the DB, printed, and enforced — a test loads one provider row and asserts a same-date import row is refused.
-4. One transaction: a failure at row N leaves zero rows (test: inject a bad row at the end; assert count unchanged).
-5. Idempotent re-run: running `--commit` twice yields identical row counts (provider-key arbiter; test).
-6. Every landed row has its annotation (`sub_cat_id` non-null) in the same transaction; a mechanical-vocabulary row is refused.
+1. Dry-run is the default; `--commit` writes; every run prints the §C.4 report (incl. last date per account) and the tracked-safe summary.
+2. Bounded input: explicit date range per run, no defaults; account map + category map required; an unmapped account label refuses the run; an unmapped category behaves per the Q7 ruling.
+3. Every landed row has its annotation (`sub_cat_id` non-null) in the same transaction; a mechanical-vocabulary row is refused (test).
+4. One transaction: a failure at row N leaves zero rows and no cutover written (test: bad row at the end; assert counts and `backfill_cutover_date` unchanged).
+5. Idempotent re-run: `--commit` twice yields identical row counts and the same cutover (provider-key arbiter; test).
+6. **Cutover stamped** per account = max landed `transaction_date`; a test asserts it; a run against an account whose `linked_source_id` is non-NULL is **refused** (post-attach runs are out of scope; test).
 7. Tenant identity: impersonation binding + DB-resolved `auth.uid()` read-back; the summary carries the agreement line (ADR-053 D5).
-8. Token/secret hygiene as SELF-217: the writer role is armed for the run and re-disarmed after, recorded.
+8. Secret hygiene as SELF-217: the writer role armed for the run and re-disarmed after, recorded.
 9. Sec joint-review attached (money flows / Lock 14 write paths; plus Architect if a bulk RPC is authored).
-10. The run record (§C.6) exists and is cited by SELF-387's completeness record.
 
 ---
 
 ## D. Ordering + Linear shape
 
-### D.1 Ordering (with the S2 correction from §C.5)
+### D.1 Ordering (the ruled sequence, with Linear IDs)
 
 ```
-SELF-386 (B.5) AC 1–3   deploy at a named sha · Plaid production creds · gates walked
+SELF-386  AC 1–3   deploy at a named sha · NEW Plaid production creds (Trial, 10 Items) · gates walked
       │
-      ├─ Item 1 BUILD (adopt path)          ─┐  parallel; both Sec-joint
-      ├─ Item 2 BUILD (loader)              ─┘
+      ├─ I-2  loader BUILD          ─┐  parallel; both Sec-joint
+      ├─ I-1  attach BUILD          ─┘  (I-1 also Architect-authored primitive)
       │
       ▼
-SELF-386 AC 4, part 1   F/CTO tenant signs up; manual accounts created (§2.4.2)
+SELF-386  AC 4, part 1   F/CTO tenant signs up; manual accounts created (§2.4.2), one per real account
       │
-      ├─ Item 2 WALK — manual / non-Plaid accounts (no boundary)
       ▼
-Item 1 WALK             register the existing Items (Link only for any institution with a free slot)
-      │                 first sync lands → per-account refusal boundaries now exist
-      ├─ Item 2 WALK — Plaid-served accounts, below boundary
+I-3   backfill WALK      loader dry-run → --commit → cutovers stamped → backfill-run.md
+      │
       ▼
-backfill-run.md         recorded
+SELF-386  AC 4, part 2   attach-capable Link → Plaid connection; each provider account attached
+      │                  to its manual account; first sync lands ABOVE each cutover
       ▼
-SELF-387                Backend M0 completeness check → a-m0-completeness.md
+backfill-run.md          post-connection seam section (holes / skipped counts) appended
       ▼
-SELF-386 AC 4, part 2   tenant-accounts-live date written → M0 / M1 derived → month-1 clock
+SELF-387                 Backend M0 completeness check → a-m0-completeness.md
+      ▼
+SELF-386  AC 4, part 3   tenant-accounts-live date written → M0 / M1 derived → month-1 clock (SELF-383)
 ```
 
-If F/CTO keeps the ruled order verbatim (S1), the two WALK rows swap and the manual-account seam (§C.5 S1 losing side) is accepted knowingly.
+The sequence is the ruled one verbatim: **deploy → backfill walk → attach-capable Link → Plaid connection → month-1 clock.** Both builds must be merged and deployed before AC 4 part 2; I-2 before I-3.
 
-### D.2 Linear shape — options
+### D.2 Linear shape — three issues (PM lean; Q8 open on the parent choice)
 
-| | Shape | Losing side |
-|---|---|---|
-| **L-1 (PM lean)** | **Two feature issues + the walk carried on the loader issue.** (i) *Register an existing Plaid Item (adoption path)* — project **Onboarding / Plaid / Manual entry**, milestone tag **V1.final**, label `role:backend` + `role:sec-review` (+ `role:frontend` under O1); *blocks* SELF-386 (its AC 4 cannot complete without it). (ii) *Historical categorized-transaction loader + supervised backfill run* — project **Platform / Cross-cutting** (it is substrate + an operator run, like B.5), milestone **Platform / Cross-cutting V1.x** with tag **V1.final**, label `role:backend` + `role:sec-review`; *blocks* SELF-387 and, through it, B.1; *blocked by* SELF-386 AC 1–3 (nothing to backfill before production exists). | The walk has no issue of its own — its evidence is the record, and "Done" on the loader issue means *run and recorded*, which stretches one-session granularity (ADR-017 D2) for the loader issue. Two projects for two preconditions of one stand-up. |
-| **L-2** | **One parent "Stand-up preconditions" issue with the two as children**, under Platform / Cross-cutting, V1.final tag. | A parent with no work of its own; Linear's parent/child is not a blocking relation, so the real edges (→ SELF-386, → SELF-387) still have to be drawn on the children. Adds an object to keep in sync. |
-| **L-3** | **Fold both into SELF-386 as AC items.** | SELF-386 is DevOps-owned; these are Backend/Frontend + Sec work with their own joint-reviews and PRs — a single issue would hide two role hand-offs and two Sec gates behind one Done. Rejected by the one-issue-one-PR convention. |
+| | Title (proposed verbatim) | Project · milestone · labels | Relations |
+|---|---|---|---|
+| **I-1** | **§2.4.1 Attach a provider account to an existing manual account at Link time (backfill_cutover_date honored on ingest)** | Onboarding / Plaid / Manual entry · tag **V1.final** · `role:architect` + `role:backend` + `role:frontend` + `role:sec-review` | **blocks SELF-386** (AC 4 part 2 cannot complete without it). No parent (a product capability that outlives V1.final). Description carries §B.1–§B.5; AC = §B.3 verbatim. |
+| **I-2** | **Historical categorized-transaction loader — SELF-217 shape; writes backfill_cutover_date** | Platform / Cross-cutting · **V1.x — Cross-cutting infra** milestone with tag **V1.final** · `role:backend` + `role:sec-review` (+ `role:architect` if a bulk RPC) | **blocks I-3**. Parent: **SELF-365** (a V1.final protocol child, sibling of SELF-387) — *or* none; Q8. AC = §C.8 verbatim. |
+| **I-3** | **Backfill walk — founding tenant's categorized transaction history into manual accounts (backfill-run.md)** | Platform / Cross-cutting · same milestone · tag **V1.final** · `role:backend` (Backend at the keyboard; F/CTO drives) | **blocked by I-2**; **blocks SELF-387** and, through it, SELF-383. Parent as I-2. Description = §C.1 / §C.2 / §C.6; "Done" = record merged with the post-connection seam section. Its *deploy* dependency on SELF-386 AC 1–3 is stated in the description, **not** drawn as a relation — SELF-386 already blocks SELF-387, and I-3 → SELF-386 → I-3 would be a cycle. |
 
-**Milestone call:** these exist because of the month-1 clock, so **V1.final** tag on both; the adoption path outlives V1.final as a product capability, hence its home in the Onboarding project rather than Platform. Linear holds current + next only (ADR-017 D2) — V1.final is current, so both are created directly, no §7 staging.
+**Why three, not Round 1's two:** the walk is a dated operator event with its own evidence (the record) and its own "Done"; carrying it on the loader issue stretched one-session granularity (ADR-017 D2) and hid the F/CTO's keyboard time behind a Backend issue. **Alternatives (losing side):** L-2′ — a parent "Stand-up preconditions" issue over all three (an object with no work of its own; parent/child is not blocking, so the edges above are drawn anyway); L-3′ — fold I-3 into SELF-386 as an AC (hides the F/CTO's walk and the Sec gate on I-2 behind a DevOps Done).
 
-**Not created until ruled:** nothing here is written to Linear before F/CTO rules §F; the liaison creates from §B.9 / §C.8 verbatim afterwards.
+**Milestone call:** all three exist because of the month-1 clock → **V1.final** tag. Linear holds current + next only (ADR-017 D2); V1.final is current, so all three are created directly, no §7 staging. **Not created until Q8 is ruled;** the liaison creates from §B.3 / §C.8 / §C.6 verbatim afterwards.
 
 ---
 
-## E. Scope flags
+## E. Scope flags (Round 2)
 
-- **E-1 V2 creep — O2 (every-tenant advanced setup).** Not required by the ruling; widest credential surface. Stays out unless F/CTO says otherwise.
-- **E-2 V2 creep — the product import surface.** §2.4.3 / §5.4 "CSV bulk-import of historical transactions" stays V2+; the loader is an operator script with no route, no form, no per-tenant reachability. If the loader grows an upload endpoint, it has become the V2 feature and needs its own scoping.
-- **E-3 Product risk — open signup × shared Item quota.** ADR-036 open signup + a per-`client_id` quota with one free slot left means any stranger's Link session spends it. Options: gate Link behind the operator allowlist until the production tier is on; or accept. **F/CTO rules (§F Q5).** Not on the tree anywhere.
-- **E-4 PRD currently forbids.** "The client never holds a long-lived access credential" (§2.4.1, §2.4.4; §4.2) — Item 1 amends (§A.1). "CSV bulk-import … V2+" (§2.4.3) — Item 2 does *not* amend it; it adds the one-time-run sentence beside it (§A.2).
-- **E-5 Unasked: security-bearing history.** The ruling says "categorized transactions" — cash-flow rows. Investment-account trade history from the incumbent is a different import (mechanical vocabulary, positions, cost basis; §2.4.3's securities-edit deferral at BACKLOG §7.3 G3 is the adjacent open surface). Not scoped here; named so its absence is a decision.
-- **E-6 V2 — Item-quota telemetry** (count / remaining / which tenant spent one). Plaid-API-dependent; `BACKLOG §5.4` candidate if F/CTO wants it findable.
-- **E-7 Tree wording debts surfaced, not fixed:** ADR-027's "CSV/OFX import … (SELF-201, shipped)" false composite (D-2); SECURITY §4.2's dropped-table names (D-7); `api/CLAUDE.md` "three locked allowlist endpoints" vs ADR-016's live four (Backend audit §A). Each routes to its owner (Architect / Sec / Backend).
-- **E-8 `backfill_cutover_date`** — inert schema with a documented purpose nobody reads. Either wire it (Architect) or annotate it as reserved so the next reader does not assume it arbitrates anything (§C.4).
+- **E-1 (Round 1 O2 creep) — moot** with Item 1.
+- **E-2 V2 creep — the product import surface.** §2.4.3 / §5.4 "CSV bulk-import of historical transactions" stays V2+; the loader is an operator script with no route, no form, no per-tenant reachability. If it grows an upload endpoint it has become the V2 feature.
+- **E-3 → Q5 (live, unruled) — open signup × shared Item quota.** ADR-036 open signup + a **per-`client_id`** quota (10 free Production Items on the Trial plan; removals do not restore) means any tenant's Link session spends a slot the F/CTO's own institutions (≈ 4–6 Items) also draw on. Not urgent until a second tenant exists; **must be ruled before one does.** Options + PM lean at §F Q5.
+- **E-4 PRD currently forbids.** "CSV bulk-import … V2+" (§2.4.3) — not amended; the one-time-run clause sits beside it (A.2). "Once created, all transactions on the account come through §2.4.3 manual entry" (§2.4.2) — amended by P-4 (A.1′). **The credential sentences (§2.4.1 / §2.4.4 / §4.2) no longer move.**
+- **E-5 Unasked: security-bearing history.** "Categorized transactions" = cash-flow rows. Incumbent trade history for investment accounts is a different import (mechanical vocabulary, positions, cost basis; BACKLOG §7.3 G3 adjacent). Not scoped; named so its absence is a decision. **Under S1 this has a new edge:** an investment account attached at Link with a cutover gets provider *transactions* only after the cutover, and its positions from Plaid's holdings snapshot as-of connection — the pre-cutover position history stays absent unless E-5 is ever scoped.
+- **E-6 V2 candidates booked at BACKLOG §5.4 (this PR, one line each):** *Register an existing Plaid Item by credential* (the struck Item 1); *Item-quota telemetry* (count / remaining / which tenant spent one); *detach a provider account from a manual row* (§B.5). Findable, not scheduled.
+- **E-7 Tree wording debts surfaced, not fixed:** ADR-027's "CSV/OFX import … (SELF-201, shipped)" false composite (D-2 → Architect); SECURITY §4.2's dropped-table names (D-7 → Sec; **no PM vehicle any more**); `api/CLAUDE.md` "three locked allowlist endpoints" vs ADR-016's live four (→ Backend); `accountMapper.ts` header's "BEFORE INSERT" gloss on the #6 trigger (D-8 → Backend, one-line comment fix when the file is next touched).
+- **E-8 `backfill_cutover_date` — resolved: wire it** (Architect authors the ingest filter in I-1; the loader writes it in I-2). Its `015` column comment already says what it does; after I-1 it is true.
+- **E-9 CONFIG — Plaid credentials.** The old team's `client_id` in `workers/provider-sync/.env` (gitignored; present on disk at `bd7b5987`) is **stale and F/CTO's to replace**; `.env.example` says `PLAID_CLIENT_ID` is "shared with api/ + workers/etl/", so **three local surfaces plus the Coolify production env** take the new pair. Values are never recorded anywhere in the repo, this record, or chat. Lands as an AC on **SELF-386** ("new Plaid production creds"), not a new issue. `PLAID_ENV` production is gated by SELF-212 as before.
+- **E-10 The Item cap as a product fact (compact; Round 1 §B.7 carried).** Per `client_id`, not per tenant; **removals do not restore** (D-10) — the remove confirmation for any Item says so; the app never counts to 10 (it knows only its own `linked_source` rows); at the limit Plaid refuses somewhere on the connect path — `⟨OPEN⟩ DevOps/Backend`: where and with what code, confirmed at SELF-386 against the production tier — and the connect flow renders that as a **named state** ("Plaid's Item limit for this deployment is reached; removing an Item does not free a slot"), never the generic 5xx. With Item 1 struck the message no longer points at an adoption path.
 
 ---
 
-## F. What F/CTO is asked to rule (one line each; PM lean where PM has one)
+## F. What F/CTO is asked to rule — three remain
 
-1. **Q1** — Were the 9 existing Items minted under the `client_id` production will run with? (Config fact; no lean.)
-2. **Q2** — Do you hold those Items' `access_token`s? If not, adoption cannot register them and the ruling's premise changes (Link would re-mint, quota-consuming).
-3. **Q3** — Partial-products Item (§B.4.4): proceed-with-warning (PM lean) or block?
-4. **Q4** — Sequence: keep "backfill → register" verbatim (S1, two-account seam) or re-rule to S2 "register → first sync → backfill below boundary" (PM lean, §C.5)?
-5. **Q5** — Open signup × shared quota (E-3): gate Link behind the operator allowlist until production tier, or accept?
-6. **Q6** — Reachability option for Item 1 — O1 / O3 (O2 not recommended); **after Sec reads §B.2 / §B.8**.
-7. **Q7** — Unmapped categories: refuse the run (PM lean) or land unclassified under the banner?
-8. **Q8** — Linear shape L-1 (PM lean) / L-2 / L-3.
+| # | Question | PM lean | Losing side of the lean |
+|---|---|---|---|
+| **Q5** | Open signup × shared 10-Item quota (E-3): (a) gate Link behind an operator allowlist until the paid tier; (b) accept the exposure and watch; (c) close signup (ADR-036 inversion). | **(b) now, (a) before a second tenant exists** — no second tenant is planned inside the V1.final window, and (a) introduces a privilege concept the app does not have (§7.3 / ADR-036 have tenants, not roles), which is Sec posture work with no V1.final payoff. | If a stranger signs up during the window, their Link session spends a shared free slot and nothing in the app knows; (b) is a bet on the window's quiet, and the allowlist becomes urgent the day the bet loses. (c) is a one-way door on ADR-036 and is listed only so its rejection is explicit. |
+| **Q7** | Unmapped categories at backfill: refuse the run until the map is complete, or land unmapped rows unclassified under the §2.3.2 banner? | **Refuse.** The run exists to give M0 *categorized* history; a thousand-row unclassified banner is noise, and the map is the F/CTO's own vocabulary — completing it is minutes, not a build. | A stubborn label with no seeded home blocks the whole run until it is mapped somewhere; "map it to Suspense/Other" is the escape hatch, and it is a user assignment like any other. |
+| **Q8** | Linear shape: three issues as §D.2 (I-1 no parent, I-2 / I-3 under SELF-365)? Or all three under a new parent (L-2′)? Or I-3 folded into SELF-386 (L-3′)? | **§D.2 as drafted.** I-2 / I-3 are V1.final protocol children like SELF-387; I-1 is a product capability with a life after V1.final and belongs with §2.4.1's issues. | Two parents for three issues of one stand-up; a reader following SELF-365 does not see I-1. L-2′ fixes that at the cost of an empty parent. |
 
-**Routing before ruling:** §B (all) and §C.3–§C.5 → **Security Engineer** (credential ingress, RT-27 re-grade, Decision 1 write, money-flow bulk write); §C.4 bulk-RPC / `backfill_cutover_date` / re-link question → **Architect**; §B.4 / §B.7 Plaid facts + `⟨OPEN⟩`s → **Backend / DevOps** at B.5.
+**Closed this round (§G):** Q1 / Q2 / Q3 / Q6 — moot with Item 1; **Q4 — ruled S1** (backfill first, into manual accounts; attach at Link).
+
+**Routing before ruling:** §B (all) → **Security Engineer** (Decision-3 #6 on a new UPDATE path, ingest filter as a privileged-write drop, Plaid landing-path change, `042` signature); §B.3 AC 2 / AC 4 primitive + §C.3 bulk-RPC question → **Architect**; §B.5 / §E-10 `⟨OPEN⟩`s → **Backend / DevOps** at SELF-386.
+
+---
+
+## G. Rulings and facts (2026-09-08 evening)
+
+### G.1 Facts (team-lead measured in F/CTO's Plaid dashboard; external to the tree)
+
+- The **old** Plaid team ("Richard Mosko", Pay As You Go, Master Agreement 2026-07-14) held **6 Transactions / 4 Investments-Holdings / 3 Investments-Transactions** Items at Schwab, Fidelity, Capital One, Wells Fargo. Their `access_token`s were **lost** — the quickstart kept them in memory and the probe scripts are gone. No Item-listing API exists; Logs (14-day) and Link Analytics held nothing; Plaid Portal did not show them (no verified phone identity).
+- F/CTO removed one Item created that day via `/item/remove` with a recovered token, then **deleted the team and created a new one**: a fresh **Trial plan, 10 free Production Items, new `client_id` + `secret`** (values never in the repo or chat). **The orphan-Item problem is closed.**
+- **The 10-Item Trial cap is live again and removals do not restore slots** (Plaid billing docs + the help article "How do I stop billing…"). F/CTO's own four institutions ≈ **4–6 Items**.
+- The stale `client_id` in `workers/provider-sync/.env` is F/CTO's to replace — a CONFIG item (§E-9), values never recorded.
+
+### G.2 Rulings
+
+- **Item 1 (direct Item registration / "advanced setup") — STRUCK from V1.** Nothing to adopt. V2 candidate at most (BACKLOG §5.4 one line). Q1 / Q2 / Q3 / Q6 close as moot.
+- **Q4 → S1: backfill FIRST, into manual accounts, BEFORE the Plaid connection.** Item 1 is **replaced** by a new V1-required build: **attach a provider account to an existing manual account at Link time** (§B) — Architect authors the primitive; **Sec joint-review mandatory** (Decision-3 instance #6 on a new write path, multi-tenant isolation, Plaid).
+- **Item 2 (loader + walk) stands as scoped**; the loader's per-account refusal boundary and `backfill_cutover_date` are **the same fact** (§C.5).
+- **Q5 (open signup × shared quota) is live and unruled** — kept in §F; not urgent until a second tenant exists.
+- **Q7 / Q8 remain open** for F/CTO (§F).
+- **Ordering:** deploy → backfill walk (SELF-217 shape) → attach-capable Link → Plaid connection → month-1 clock (§D.1).
+
+### G.3 The tree's answer to "can an existing manual account later gain Plaid data?" (verified at `bd7b5987`)
+
+- **Yes by schema:** `pfin.account.linked_source_id` / `provider_account_id` / `backfill_cutover_date` (`015`) are nullable and purpose-built; the `021` partial unique index exempts unlinked rows; the `003` `account_update` RLS policy (+ `025` aal2 clause) permits the owner's UPDATE; the `015` `account_matched_linked_source` trigger is **`before insert or update`** and would fence the attach (D-8 — the brief's "INSERT only" is false).
+- **No by code:** both landing paths — `fn_land_linked_accounts` (`042`, api side, the live SELF-199 screen) and `accountMapper.ts` (worker side) — INSERT new rows keyed `(linked_source_id, provider_account_id)`; nothing UPDATEs an existing row's link columns; nothing reads `backfill_cutover_date` (the only reference in app code is a comment in `accountMapper.ts`).
+- **So:** the attach build is an app-path build over an existing, already-fenced schema — no new column, no Decision-3 family growth, no DEFINER growth (each asserted in §B.3, none assumed).
