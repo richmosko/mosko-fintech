@@ -78,9 +78,16 @@
 --   at the Sec joint-review of PR #671 (2026-09-08), which refuted the claim
 --   this block first carried. THE CLAIM THAT WAS HERE AND IS FALSE: "no text in
 --   DECISIONS.md attaches the rotation coupling to a condition labeled C1
---   anywhere." It does — ADR-041 attaches it in the paragraph arguing why it is
---   not an ADR-023 amendment, again in its Consequences, and again in its
---   Cross-references.
+--   anywhere." It does — ADR-041 attaches it in several paragraphs, INCLUDING
+--   the sub-decision that promotes ADR-019 C2 to a Phase-7 deploy gate, which is
+--   the paragraph THIS migration realizes. An earlier revision of this block
+--   ENUMERATED the attachment sites and omitted that one — an enumeration that
+--   points an ADR-041 amendment pass away from the paragraph most likely to be
+--   left un-re-attributed. NO COUNT AND NO SITE LIST IS RECORDED HERE, for the
+--   same reason the carrier block below records none: a corrected count re-arms
+--   the identical trap one cycle later. Find the sites with the grep recorded
+--   below, restricted to ADR-041's body by bracketing its `## ADR-041` heading
+--   to the next `## ADR-` — never by line number.
 --
 --   HOW TO FIND THE CARRIERS — THE MEASUREMENT, NOT A LIST. This block carries
 --   NO enumeration of carrier sites and NO count of them, deliberately. An
