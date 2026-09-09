@@ -15,16 +15,18 @@
 - [The NAV-definition flip is a ONE-WAY DOOR](reference_nav_definition_flip_is_a_oneway_door.md) — `nav_daily` append-only, no version column; 4 layers.
 - [AC10 fence does not reach the split-child grain](project_p4_split_child_journaled_cat_residual.md) — `092` structurally cannot see it.
 - [GL arc COMPLETE — rename + split + element ALL SHIPPED](project_gl_taxonomy_split_ratified.md) — ⚠ reverted to "no DDL yet" twice; grep the migrations.
-- [The "ADR-023 C1" rotation-coupling label is MIS-ATTRIBUTED](project_c1_label_carriers_and_055_stale_d3_count.md) — ADR-019 C1 inferred, F/CTO pending; BACKLOG S5 DOES carry it; `055` D3 count stale.
+- [C1 rotation-coupling label RULED → ADR-019 C1 (2026-09-09)](project_c1_label_carriers_and_055_stale_d3_count.md) — `117`/PR #675 re-points `055`; BACKLOG S5 carries it; `055` D3 count STILL stale.
+- [One-line exception to the applied-migration edit rule — GRANTED for `055`](project_055_one_line_exception_precedent.md) — greenfield ground; bounded to that line, expires on first deploy.
 - [A Backlog issue's deliverable may already have shipped](feedback_backlog_issue_deliverable_may_already_have_shipped.md) — widen the search, don't conclude UNBUILT.
 - [Schema-impossible ACs trace to the incumbent](reference_schema_impossible_ac_traces_to_incumbent.md) — the masked residual is load-bearing.
 
 ## Postgres / RLS facts worth not re-deriving
 
-- [The "ADR-023 C1" label is MIS-ATTRIBUTED, not unsupported](reference_adr023_c1_label_is_misattributed.md) — carriers by grep, no count; ADR-019 home pending F/CTO.
+- [The C1 label is MIS-ATTRIBUTED, not unsupported](reference_adr023_c1_label_is_misattributed.md) — home RULED ADR-019 C1 (reconstructed 2026-09-09); carriers by grep, no count.
 - [A worker LOGIN role's minimum grant set is EMPTY](reference_worker_login_role_minimum_grant_is_the_empty_set.md) — ⚠ granting it EXECUTE is a WIDENING.
 - [Local cluster has duplicate-grantor drift on `pfin_etl`](reference_local_cluster_duplicate_grantor_drift.md) — 3 RED in `054` is the BASELINE (2913 ok / 3 not ok).
 - [D3 entries record ORIGINAL provenance](reference_decision3_entries_record_original_provenance.md) — re-targets live in AMENDMENTS; the entry is never edited.
+- [A role comment is a SHARED CLUSTER catalog](reference_role_comment_is_a_shared_cluster_catalog.md) — `pg_shdescription`; a scratch-DB apply is NOT isolated. Use `shobj_description`.
 - [`WITH CHECK` is a POLICY, not a CHECK constraint](reference_with_check_is_a_policy_not_a_check_constraint.md) — subqueries, survives replica; "every fence is a trigger" is dated.
 - [A BEFORE ROW trigger can't see later rows in the statement](reference_before_row_trigger_cannot_see_later_rows.md) — SET-property fences need a deferred CONSTRAINT TRIGGER.
 - [A fail-closed lock in a DEFERRED fence can block CASCADE DELETE](reference_a_fail_closed_lock_in_a_deferred_fence_can_block_cascade_delete.md) — judge the empty SET before the empty LOCK.
@@ -116,5 +118,7 @@
 - [Diff filters strip `--` comment lines](feedback_diff_filter_strips_comment_lines.md) — use `--numstat`.
 - [A cited precedent transmits its RETRACTED half](feedback_cited_precedent_transmits_its_retracted_half.md) — grep the ADR for later amendments before citing.
 - [Prove derived text against its source](feedback_prove_derived_text_against_its_source.md) — verbatim carry is UNSAFE for indexicals and for FIGURES.
+- **[A quotation that rejoins wrapped lines is an unmarked elision](feedback_a_quotation_that_rejoins_wrapped_lines_is_an_unmarked_elision.md)** — verify by rejoining; 0-after-rejoin is the real test.
+- **[Never stage a PR body in shared /tmp](feedback_never_stage_a_pr_body_in_shared_tmp.md)** — a sibling clobbered mine and `gh pr edit` pushed THEIR body, exit 0. Read the body back.
 - [A fixture is shared state](feedback_fixture_is_shared_state.md) — a per-leg fixture edit is a global edit.
 - [Path beats paste for reviewable artifacts](feedback_path_beats_paste_for_reviewable_artifacts.md) — name which path, not the shared read anchor.

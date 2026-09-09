@@ -211,3 +211,27 @@ fixing only the instrument yields a confident wrong answer.**
 CHANGE entered during the wave; it does **not** prove every blob at the tip has been read — the
 starting point never was. *"No unreviewed change entered X"* and *"every blob at X has been read"*
 are different sentences; only the first is supportable, and the record must carry that one.
+
+## ⚠⚠ FOURTH malformed instrument — and this one failed toward a FALSE RED
+
+`for r in A B C; do git show $r:<path> | wc -l; done` in zsh. **Unbraced `$r:path` triggers zsh's
+history modifiers** (`:s`, `:h`, `:t`, `:a`, …), so `$r:supabase/...` expands to the **bare sha** —
+`git show` then prints the COMMIT (message + full diff) instead of the blob. Demonstrated:
+`r=ca82706b; echo "$r:supabase/x.sql"` → `ca82706b`. Braced `${r}:supabase/x.sql` is correct.
+
+At PR #675 round 2 this returned 117 line counts of 235/124/7 (truth: 115/115/143) and **three
+different md5s** for a file whose executable body is identical at all three refs. Had I reported it,
+the finding would have been *"117's shipped literal CHANGED since `c5298e81`"* — a **false RED against
+a teammate**, the opposite direction from the three prior instances, which all failed toward
+"everything is fine." **Both directions come from the same root: an instrument nobody positive-controlled.**
+The tell was implausibility again — a merge commit's "file" being 7 lines long.
+
+**Guards, added to the ones above.**
+- **Never write `git show $var:path`.** Write the sha literally, or `${var}:path`, or `"$var:$path"`.
+  Same family as the never-build-a-pathspec-from-`$var` rule; zsh mangles parameter expansion in
+  more places than the pathspec one.
+- **A loop is not a free abstraction over three commands.** When three refs must be compared, run
+  three separate commands with literal shas, or materialise the blobs one command at a time and
+  compare the FILES. The loop bought nothing and cost a near-miss.
+- **Before reporting a DIFFERENCE, re-run one leg standalone.** A difference is as much an
+  instrument artefact as a sameness is; I had internalised the second and not the first.

@@ -1,6 +1,6 @@
 ---
 name: adr023-c1-label-is-misattributed
-description: The "ADR-023 condition C1" label on the PostgREST/provider-sync rotation coupling is MIS-ATTRIBUTED, not unsupported — ADR-041 does attach it. Home inferred to be ADR-019 C1, pending an F/CTO ruling. Find carriers by grep, never by a stored list.
+description: The "ADR-023 condition C1" label on the PostgREST/provider-sync rotation coupling is MIS-ATTRIBUTED, not unsupported. F/CTO RULED 2026-09-09: the home is ADR-019 condition C1, reconstructed by ADR amendment. Find carriers by grep, never by a stored list.
 metadata:
   type: reference
 ---
@@ -24,13 +24,28 @@ Measured at `d83dfdaf` (2026-09-08); the earlier "unsupported" version of this n
 - **The coupling itself is real** — provider-sync's `PFIN_DB_PASSWORD` holds the
   `authenticator` password, which is also PostgREST's credential.
 
-**The home is INFERRED, not settled.** Inference: ADR-019's Sec condition C1.
-Evidence: `workers/provider-sync/.env.example` pins the login role *"(F/CTO-ratified;
-Sec conditions C1/C3)"* — ADR-019's condition set — and spells it out as *"CONDITION C1
-(rotation coupling — Sec-load-bearing)"*. ADR-019's Status ratifies *"Sec conditions
-C1–C4"* but `DECISIONS.md` enumerates only C2. **Whether the C1/C3/C4 text is recoverable
-or must be reconstructed from `.env.example` is an OPEN F/CTO ruling.** Until it is ruled,
-**no artifact may re-point the label** — including an ADR-041 amendment paragraph.
+**The home is RULED, no longer inferred (F/CTO, 2026-09-09).** It is **ADR-019's
+Sec condition C1**, whose text is **reconstructed by ADR amendment** rather than
+recovered — `DECISIONS.md` enumerated only C2 of the C1–C4 set ADR-019's Status line
+ratifies, and the reconstruction is sourced from `workers/provider-sync/.env.example`
+(*"(F/CTO-ratified; Sec conditions C1/C3)"*, then *"CONDITION C1 (rotation coupling —
+Sec-load-bearing)"*). The earlier *"do not re-point the label until F/CTO rules"*
+instruction is **DISCHARGED**.
+
+**C3 and C4 were ruled in the same amendment: TEXT UNRECOVERABLE, NUMBERS
+RETAINED, and NO ARTIFACT MAY CITE C3 OR C4 AS A RULE.** The tree evidences that
+they exist and belong to the set; nothing evidences what they require. ⚠ Do not
+resolve C3 from a nearby `"C3"` elsewhere in the tree — the bare token labels
+ADR-023's own C3, the SC-3 admission conditions and the CA-2 conditions in
+`workers/provider-sync/src/`, and adopting one would produce the same
+false-composite failure. ⚠ The PR #671 Sec review has its OWN C1 and C4 —
+different review, different numbering, not this set's.
+
+**Re-pointed form:** *"ADR-019 condition C1 (reconstructed 2026-09-09)"*. Migration
+`117` carries it into `055`'s `comment on role` (PR #675 — ⚠ verify it MERGED before
+relying on this; it was a draft awaiting Sec joint-review when written). **`117` must
+not merge ahead of the `DECISIONS.md` PR that lands the reconstruction** — a label is
+a reference, and one that resolves to nothing is worse than the wrong one it replaced.
 
 **Carriers: find them by grep. This file names none and counts none.** The earlier
 enumeration here (and in `116`'s header) was incomplete — it missed every carrier under
