@@ -33,10 +33,10 @@ Scope: accounts, CLI tooling, and the domain you need in hand before starting.
 
 Scope: stand up a fresh virtual server to host Coolify + all V1 containers.
 
-- **Reference class (starting point, NOT the target box):** Hetzner **cax21** — 8 ARM vCores / 16 GB RAM / 160 GB disk, Germany, ~€9.50/mo (per memory `reference_hetzner_cax21`). The incumbent runs on this class with substantial headroom; it's a sane *starting reference* for sizing the new box, not the box we deploy onto.
-- The new box is provisioned clean — fresh OS, no carried-over state from cax21.
+- **RULED 2026-09-08 (F/CTO): Option A — a new Hetzner CAX21 box.** Corrected spec, read from Hetzner's own product page/search results the same day: **CAX21 = 4 ARM vCPU / 8 GB RAM / 80 GB NVMe disk, Germany; price unverified** (Hetzner's pricing page did not render a figure to a direct fetch on 2026-09-08 — do not carry forward the €9.50/mo figure without re-reading it live). The previously-recorded "8 ARM vCores / 16 GB RAM / 160 GB disk, ~€9.50/mo" figure was **CAX31's** spec, misattributed to cax21 throughout the tree (a one-tier shift) — see `docs/records/v1final/production-standup.md` §5 for the sizing evidence supporting this class.
+- The new box is provisioned clean — fresh OS, no carried-over state from the incumbent cax21 box (whose own actual tier is itself unestablished from anything in this tree — it is referenced by name only, never read back from a live console).
 
-> **STUB —** Fill in: chosen provider/region/instance (F/CTO decision — cax21-class is a reference, not a commitment), OS image + initial hardening (SSH key-only, firewall, non-root user), and any base packages. Confirm ARM-vs-x86 (incumbent is ARM; container images must match). **Flag for F/CTO:** is the new box also Hetzner, and is it the same cax21 class or resized?
+> **STUB —** Fill in: chosen provider/region (Hetzner + CAX21 class is now decided; exact region/instance still to provision), OS image + initial hardening (SSH key-only, firewall, non-root user), and any base packages. Confirm ARM-vs-x86 (incumbent is ARM; container images must match — CAX21 is Ampere ARM, consistent).
 
 ---
 
