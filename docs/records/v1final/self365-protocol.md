@@ -261,17 +261,20 @@ Each entry: the option taken · the options not taken · the losing side **as al
 - [ ] **P-3 §7.3** — "V1 ships to a single user (the F/CTO) … closed and invite-controlled" → open signup + email confirmation per ADR-036; the F/CTO is the *first* tenant, not the only one; the §5.7 "Multi-user invite-only V2 expansion" cross-reference is re-worded to match. (The §2.1 / §2.2 / §2.3 story sentences "V1 ships to a single user" are the same debt — swept in the same PR, each re-read against its story's scope clause.)
 
 **BACKLOG bookings (landed in this PR):**
-- [ ] **B-1** §5.6 — SELF-375 M-1 committed-SQL measurement view + pgTAP vocabulary leg (durable form).
-- [ ] **B-2** §7.35 item 1 — T-3 empty-state copy on the report listing.
-- [ ] **B-3** §7.35 item 2 — the three PRD amendments P-1 / P-2 / P-3.
+
+> **All six verified present on `main` and ticked 2026-09-09**, each by reading the destination rather than trusting this heading: `BACKLOG.md` §5.6 carries the SELF-375 M-1 committed-SQL entry, and §7.35 carries items 1–5. The heading already asserted they landed; the boxes had simply never been ticked, so the record understated its own completion.
+
+- [x] **B-1** §5.6 — SELF-375 M-1 committed-SQL measurement view + pgTAP vocabulary leg (durable form).
+- [x] **B-2** §7.35 item 1 — T-3 empty-state copy on the report listing.
+- [x] **B-3** §7.35 item 2 — the three PRD amendments P-1 / P-2 / P-3.
 - [x] **B-4** §7.35 item 3 — terse ADR consolidating §G.1–§G.3 (Architect; the §3.4 reinterpretation and the Phase 6/7 ordering are non-obvious decisions) — **A-1** below.
-- [ ] **B-5** §7.35 item 5 — §3.3 parity harness retained as V2 spec (E-1).
-- [ ] **B-6** §7.35 item 4 — SECURITY §4.6 cutover obligations (E-4), owner Sec.
+- [x] **B-5** §7.35 item 5 — §3.3 parity harness retained as V2 spec (E-1).
+- [x] **B-6** §7.35 item 4 — SECURITY §4.6 cutover obligations (E-4), owner Sec.
 
 **Other owners:**
 - [x] **A-1 Architect** — terse ADR per B-4; cited by B.4 item 6. *(Discharged: **[ADR-070](../../../DECISIONS.md#adr-070)** consolidates §G.1–§G.3 — Phase 6/7 parallelism, §3.4(a)(ii) as one recorded manual comparison, §3.4(b) shedding its parity clause. Merged 2026-09-08 at PR #662 `926a03e1`; B.4 item 6's citation requirement is satisfied.)*
 - [ ] **Sec** — §7.35 item 4 (E-4): read-only archive at a Sec-acknowledged access-controlled location + cutover snapshot as an audit artifact; both are B.4 item 2 content.
-- [ ] **QA** — the M-3 battery leg (under SELF-375).
+- [x] **QA** — the M-3 battery leg (under SELF-375). *(Discharged: the `audit_log_surface_name_vocab` vocabulary-growth leg is live in `supabase/tests/rls/111_audit_log_rls.sql`, landed at PR #663.)*
 - [ ] **Backend** — the M0 completeness check (B.1 Dependency 2), after B.5.
 - [ ] **F/CTO** — create the `role:devops` label; the deploy target month (§G's *not set* line) if a target is wanted ahead of B.5.
 - [ ] **team-lead** — MILESTONES *Next deliverable* line (D-4 / D-1 / E-11) at the next ledger PR or the close-PR, whichever is first; WORKFLOW Phase 6 exit clause landed here (§G.1).
