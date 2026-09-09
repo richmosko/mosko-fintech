@@ -179,17 +179,18 @@ Checklist (✓ = already satisfied by a shipped migration/mechanism and only nee
 
 The ruling only affects **when** step 12 (F/CTO connects every account) happens relative to step 11 (Sec sign-off) — immediately, per Option 1 — not whether any gate in §4 is skipped.
 
-### Production signup gating (Q5) — RULED 2026-09-09 (F/CTO): allowlist-now
+### Production signup gating (Q5) — RULED 2026-09-09 (F/CTO): signup-off-until-allowlist
 
 **Ruling: production public signup stays OFF (`GOTRUE_DISABLE_SIGNUP=true`, step 5a above) until an operator allowlist exists on the Plaid Link-token route.** F/CTO's own account is created by invitation for the duration. Signup does not turn back on as a side effect of stand-up completing — OPEN-3 gate #16 holds it closed through the whole V1.final soak, independent of steps 1–13.
 
-This ruling was framed to team-lead against three options — **accept-now**, **allowlist-now**, and **Pay-As-You-Go** — and the option taken is **allowlist-now**, with signup held OFF as the interim control while the allowlist is built:
+This ruling was framed to team-lead against four options — **accept-now**, **allowlist-now**, **Pay-As-You-Go**, and **signup-off-until-allowlist** — and the option taken is the fourth:
 
-- **allowlist-now (taken).** Gate the Plaid Link-token route behind an operator allowlist before public signup opens; until the allowlist exists, hold signup off entirely rather than leave it open with an unenforced gate. *Why:* the failure mode this closes is a stranger's Link session spending one of the 10 Trial-plan Production-Item slots (OPEN-2/OPEN-3 gate #15) that F/CTO's own institutions also draw on, with nothing in the app able to see it happen — closing signup for the soak removes that exposure at zero build cost, at the price of the allowlist becoming a scheduled build rather than a someday one.
+- **signup-off-until-allowlist (option 4, taken).** Close production signup entirely for the soak rather than leave it open with an unenforced gate; reopen only once the operator allowlist exists on the Plaid Link-token route. *Why:* the failure mode this closes is a stranger's Link session spending one of the 10 Trial-plan Production-Item slots (OPEN-2/OPEN-3 gate #15) that F/CTO's own institutions also draw on, with nothing in the app able to see it happen — closing signup for the soak removes that exposure at zero build cost, at the price of ADR-036's open-signup story not being exercised until the allowlist ships.
 - **accept-now (not taken).** Leave signup open per ADR-036 and accept the shared-quota exposure, watching for it rather than gating it — this was PM's Round 2 lean (`docs/records/v1final/standup-preconditions.md` §F Q5, option (b)) before this ruling. *Losing side:* a stranger's Link session during the soak permanently consumes a slot the F/CTO's own accounts need, with no telemetry to notice it happened.
+- **allowlist-now (not taken).** Build the operator allowlist on the Plaid Link-token route immediately, as the gate, while leaving signup itself open the whole time. *Losing side:* signup stays open during the allowlist's own build window — the exposure the allowlist exists to close is live for as long as that build takes, and a build slipping past the soak's start leaves the same unenforced-gate problem the taken option avoids by closing signup outright first.
 - **Pay-As-You-Go (not taken).** Upgrade the Plaid team off the 10-Item Trial cap onto a paid Production plan, removing the quota-collision risk without touching signup or Link at all. *Losing side:* it pays to make room for exposure rather than closing the exposure — an unvetted signup can still create a real financial-account connection under the F/CTO's Plaid credentials; the quota was one symptom of that, not the whole problem, so this option was ruled out as treating a proxy rather than the risk.
 
-**Losing side of the ruling as a whole:** the open-signup story (ADR-036) is not exercised during the soak — no second tenant, no multi-tenant Link flow, gets a live run until the allowlist ships and signup reopens. This is a deliberate, scoped narrowing of what the soak proves, not an ADR-036 reversal.
+**Losing side of the taken option:** the open-signup story (ADR-036) is not exercised during the soak — no second tenant, no multi-tenant Link flow, gets a live run until the allowlist ships and signup reopens. This is a deliberate, scoped narrowing of what the soak proves, not an ADR-036 reversal.
 
 ---
 
