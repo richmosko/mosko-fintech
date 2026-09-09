@@ -82,11 +82,29 @@
 --   not an ADR-023 amendment, again in its Consequences, and again in its
 --   Cross-references.
 --
---   Carriers of the label, each reachable by grepping for C1 in the named file:
---   ADR-041 (the three sites above), migration `055`'s header AND its
---   `comment on role`, `secrets-manifest.yml`'s `PFIN_DB_PASSWORD` entry,
---   `docs/deployment-runbook.md` §6.1's rotation paragraph, and BACKLOG §7.6
---   S5's AC line ("Discharges the remainder of ADR-023 condition C1").
+--   HOW TO FIND THE CARRIERS — THE MEASUREMENT, NOT A LIST. This block carries
+--   NO enumeration of carrier sites and NO count of them, deliberately. An
+--   earlier revision enumerated them, and `055`'s header, BACKLOG §7.36 item 3
+--   and BACKLOG §7.36 item 4 all DEFER to that enumeration rather than restate
+--   it — so one list bounded the correction scope of every artifact downstream
+--   of it, and that list was incomplete: it missed every carrier under
+--   `workers/etl/`. A filtered grep is a claim about the filter, not about the
+--   tree, so the durable instruction is the command, run at the sha being
+--   corrected and NOT path-scoped beyond these exclusions:
+--
+--     git grep -n -E '(^|[^A-Za-z0-9])C1([^0-9A-Za-z]|$)' \
+--       -- ':!node_modules' ':!.claude/agent-memory' ':!docs/archive'
+--
+--   then read every hit and KEEP only the rotation-coupling uses — a hit is a
+--   carrier only where the surrounding text is about the PFIN_DB_PASSWORD /
+--   `authenticator` rotation coupling. The same token labels unrelated
+--   conditions elsewhere in the tree, so the raw hit set is a large superset
+--   and the filtering step is not optional. This file is itself a carrier.
+--
+--   ⚠ DO NOT run this as `git grep -E '\bC1\b'`: git's default ERE engine has
+--   no `\b`, so that form matches NOTHING and exits 1 with no output — which
+--   reads exactly like "there are no carriers". Use the character-class form
+--   above, or `git grep -P '\bC1\b'` where PCRE is compiled in.
 --
 --   MEASURED, not inferred: ADR-023's own enumerated C1 is a DIFFERENT
 --   condition — an exposure-readiness artifact (per-table RLS + policy proof)
@@ -114,16 +132,27 @@
 --   the tree. The remedy this block first proposed — name the property instead
 --   of the label — is WITHDRAWN for that reason.
 --
---   Per-artifact vehicles, so that no one corrects the wrong surface:
---     · ADR-041 — edit-in-place, folded into the ADR-019-C2 realization
---       amendment (Architect; a separate PR, after the ruling).
---     · `055`'s header — edit-in-place; a `--` block has no DB representation.
---     · `055`'s `comment on role` — a DATABASE object, correctable only by a
---       comment-only migration `117`. Booked, not authored here.
---     · `secrets-manifest.yml` and `docs/deployment-runbook.md` — DevOps;
---       `secrets-manifest.yml` returns to Sec joint-review.
---     · `workers/provider-sync/.env.example` — CORRECT AS WRITTEN under the
---       re-attribution reading. Do not "fix" the label there.
+--   Per-artifact VEHICLE CLASSES, so that no one corrects the wrong surface.
+--   These are classes keyed to WHERE THE TEXT LIVES, not a carrier inventory —
+--   run the grep above to find the sites, then match each site to its class:
+--     · ADR text in DECISIONS.md — edit-in-place PLUS an amendment paragraph
+--       (Architect; a separate PR, after the ruling).
+--     · A migration file `--` header — edit-in-place; a `--` block has no DB
+--       representation, so a no-op correction migration would leave the false
+--       text where readers actually look.
+--     · A `comment on role` / `comment on ...` — a DATABASE object, correctable
+--       ONLY by a comment-only migration (`117` for `055`'s). Booked, not
+--       authored here.
+--     · Manifest / runbook / `.env.example` — DevOps; `secrets-manifest.yml`
+--       returns to Sec joint-review.
+--     · Python worker source comments and docstrings — Backend.
+--     · BACKLOG §7.6 S5's AC — PM or Architect, edit-in-place. This row exists
+--       because Sec's round-2 re-confirm of PR #671 measured that S5's AC DOES
+--       carry the label (correcting its own round-1 finding) and that it was in
+--       NO vehicle list: not this one, not BACKLOG §7.36 item 3, not item 4.
+--     · `workers/provider-sync/.env.example` — an EXCEPTION to the manifest
+--       class above: its "Sec conditions C1/C3" and "CONDITION C1" lines are
+--       CORRECT AS WRITTEN under the re-attribution reading. Do not "fix" them.
 --
 -- ----------------------------------------------------------------------------
 -- WHAT DISCHARGES THE GATE — AND WHY THIS MIGRATION CANNOT OBSERVE IT.

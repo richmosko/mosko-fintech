@@ -20,7 +20,7 @@
 
 ## Postgres / RLS facts worth not re-deriving
 
-- ["ADR-023 C1" is NOT the rotation coupling](reference_adr023_c1_label_is_unsupported.md) — 5 artifacts carry the wrong label; substance real, pointer false.
+- [The "ADR-023 C1" label is MIS-ATTRIBUTED, not unsupported](reference_adr023_c1_label_is_misattributed.md) — carriers by grep, no count; ADR-019 home pending F/CTO.
 - [A worker LOGIN role's minimum grant set is EMPTY](reference_worker_login_role_minimum_grant_is_the_empty_set.md) — ⚠ granting it EXECUTE is a WIDENING.
 - [Local cluster has duplicate-grantor drift on `pfin_etl`](reference_local_cluster_duplicate_grantor_drift.md) — 3 RED in `054` is the BASELINE (2913 ok / 3 not ok).
 - [D3 entries record ORIGINAL provenance](reference_decision3_entries_record_original_provenance.md) — re-targets live in AMENDMENTS; the entry is never edited.
