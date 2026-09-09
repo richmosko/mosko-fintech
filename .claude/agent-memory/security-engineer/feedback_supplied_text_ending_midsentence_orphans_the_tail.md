@@ -1,6 +1,6 @@
 ---
 name: supplied-text-ending-midsentence-orphans-the-tail
-description: Commit-ready replacement text that ends mid-sentence leaves the target's surviving trailing clause attached to my new sentence — a misparse I authored. Name the splice boundary on BOTH sides, and state whether a fix's scope should EXPAND.
+description: Commit-ready replacement text that ends mid-sentence orphans the target's surviving trailing clause — and when that tail is a CONTROL, applying my block literally DELETES a fence. Name the splice boundary on BOTH sides; state whether a fix's scope should EXPAND; never carry a formatting marker into a file where that marker is a reserved register.
 metadata:
   type: feedback
 ---
@@ -41,6 +41,30 @@ incomplete, and a literal-scope rollback would have left two live instances of t
 Endorse the expansion explicitly and say why — an unstated endorsement reads as tolerated scope
 creep, and the next agent narrows the one after it. Grep the whole file for the *claim*, not for the
 sentences I happened to quote.
+
+⚠⚠ **THE SEVERE FORM — the orphaned tail is a CONTROL, so applying my block literally REMOVES A
+FENCE.** PR #674 / ADR-019 amendment, round-2 re-confirm 2026-09-09. My F6 "commit-ready
+replacement" for the C4 paragraph stopped at *"…is recoverable."* and silently dropped the
+paragraph's closing **`Number retained; nothing may cite C4 as a rule.`** Committed literally — the
+way I ask for supplied text to be applied — my precision fix would have **deleted the C4 citation
+fence** while reading as a tightening. Architect caught it and re-appended. The E1 lesson upgrades
+this class from "misattached prose" to "silent control deletion": **before handing over a
+replacement, ask what the target paragraph's LAST sentence does — if it is normative, my block must
+carry it or explicitly instruct that it survives.** Non-prose paragraphs (condition texts, fences,
+allowlists) are where the tail is load-bearing.
+
+**Sibling failure, same sitting, same root (E2) — a formatting marker is content when the file
+reserves that register.** My F4 block was supplied as a Markdown blockquote (`> `). In that
+amendment the blockquote is the **reserved register for reconstructed condition text**, so my
+caveat *about* the reconstruction would have rendered as though it were part of what Sec wrote —
+the exact confusion the amendment exists to prevent. Architect demoted it to a plain paragraph and
+was right. **Before supplying text: read what the target file's blockquote / bold / ⚠ / code-fence
+conventions MEAN there, and match the register of the thing I am writing, not the register that
+looks emphatic.** Endorse the committer's formatting correction explicitly — it is a real catch.
+
+**Common root of both:** I was supplying *fragments* while asking for *verbatim application*. A
+verbatim-application request obliges me to hand over a **complete, self-contained replacement
+unit** — full paragraph boundaries on both sides, in the target's own register.
 
 Related: [[supplied-verbatim-text-ships-unfiltered]],
 [[enumeration-and-watcher-stop-one-short]], [[a-stated-invariant-stronger-than-the-contract]],

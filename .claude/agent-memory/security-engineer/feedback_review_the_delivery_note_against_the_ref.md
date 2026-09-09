@@ -84,3 +84,22 @@ half that stops the wild-goose chase.
 the verdict — check-runs at the **exact sha under review**, the required-context list from branch
 protection, and the **job-level** conclusion of anything non-green. Related:
 [[which-ref-the-probe-was-aimed-at]], [[instrument-cannot-observe-the-property]].
+
+**⚠⚠ A PR BODY CAN BE A STALE COPY OF A SIBLING PR'S BODY — grade the body against its own
+`--stat`, always.** On PR #675 (`5f01a719`, three migration files, zero `DECISIONS.md`) the body
+returned by `gh pr view 675 --json body` was PR #674's body: Files section *"`DECISIONS.md` —
++62/−4"* and the sentence *"Nothing else is touched: no migration file."* A `diff` of the two
+bodies showed #675's was #674's **minus** #674's later Sec-disposition section — i.e. a copy taken
+mid-flight, not a swap. **The tell is free: does the body's Files section match `git diff --stat
+<base> <tip>`?** Run that comparison on every PR whose body you are told is "the author's report."
+
+**Why this is a Sec finding and not a tidiness one — SHIPPED TEXT CAN CITE THE PR BODY AS ITS
+EVIDENCE CARRIER.** Three migration-header sentences in that PR read *"demonstrated in the PR body,
+not asserted"*, *"The generator and its proof are recorded in the PR body"*, *"result recorded in
+the PR body"* — and the `apply-migration` Step 1.6 (B) edit-in-place vehicle was justified BY that
+demonstration. A wrong body turns three shipped claims false at merge and leaves a documented
+vehicle unsupported. A downstream BACKLOG booking in a third PR also cited *"PR #675 body, Test
+plan"* for a finding not present in it. **Grep the diff for `PR body` / `recorded in the PR` before
+accepting the body as the record**, and prove the cited facts yourself so the finding is
+"record defective, property holds" rather than an unresolved gap. Related:
+[[feedback_supplied_verbatim_text_ships_unfiltered]].
