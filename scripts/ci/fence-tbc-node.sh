@@ -14,10 +14,11 @@
 #   - ARCH §6 Security scan stage (ii) + ARCH §6.1 TBC row (Node analogue).
 #
 # §10 attribution: like the Python fence-tbc, TBC-node is the Privileged-context-
-# surfaces bullet — code-layer parallel to RT-26, NOT a third catalogued §10
-# instance. Decision 4's numbered list stays 2-instance (RT-22 first, RT-26 second)
-# per the discipline-preservation guard. Lock 13 mod #3 V1-SHIP-BLOCK is orthogonal
-# to the §10 catalogued-instance axis.
+# surfaces bullet — code-layer parallel to RT-26, NOT a catalogued §10 instance
+# (Path B: read ADR-011 Decision 4's catalogued-instance list live from
+# DECISIONS.md — no count or enumeration carried here; it has grown before and
+# will again). Lock 13 mod #3 V1-SHIP-BLOCK is orthogonal to the §10
+# catalogued-instance axis.
 #
 # WHY A SECOND FENCE (not extend fence-tbc): the Python fence greps SQLAlchemy /
 # psycopg patterns and discovers `class TenantBoundConnection`. Those patterns do
