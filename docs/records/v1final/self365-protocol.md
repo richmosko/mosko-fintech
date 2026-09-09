@@ -264,12 +264,12 @@ Each entry: the option taken · the options not taken · the losing side **as al
 - [ ] **B-1** §5.6 — SELF-375 M-1 committed-SQL measurement view + pgTAP vocabulary leg (durable form).
 - [ ] **B-2** §7.35 item 1 — T-3 empty-state copy on the report listing.
 - [ ] **B-3** §7.35 item 2 — the three PRD amendments P-1 / P-2 / P-3.
-- [ ] **B-4** §7.35 item 3 — terse ADR consolidating §G.1–§G.3 (Architect; the §3.4 reinterpretation and the Phase 6/7 ordering are non-obvious decisions) — **A-1** below.
+- [x] **B-4** §7.35 item 3 — terse ADR consolidating §G.1–§G.3 (Architect; the §3.4 reinterpretation and the Phase 6/7 ordering are non-obvious decisions) — **A-1** below.
 - [ ] **B-5** §7.35 item 5 — §3.3 parity harness retained as V2 spec (E-1).
 - [ ] **B-6** §7.35 item 4 — SECURITY §4.6 cutover obligations (E-4), owner Sec.
 
 **Other owners:**
-- [ ] **A-1 Architect** — terse ADR per B-4; cited by B.4 item 6.
+- [x] **A-1 Architect** — terse ADR per B-4; cited by B.4 item 6. *(Discharged: **[ADR-070](../../../DECISIONS.md#adr-070)** consolidates §G.1–§G.3 — Phase 6/7 parallelism, §3.4(a)(ii) as one recorded manual comparison, §3.4(b) shedding its parity clause. Merged 2026-09-08 at PR #662 `926a03e1`; B.4 item 6's citation requirement is satisfied.)*
 - [ ] **Sec** — §7.35 item 4 (E-4): read-only archive at a Sec-acknowledged access-controlled location + cutover snapshot as an audit artifact; both are B.4 item 2 content.
 - [ ] **QA** — the M-3 battery leg (under SELF-375).
 - [ ] **Backend** — the M0 completeness check (B.1 Dependency 2), after B.5.
