@@ -15,6 +15,7 @@
 - [The NAV-definition flip is a ONE-WAY DOOR](reference_nav_definition_flip_is_a_oneway_door.md) — `nav_daily` append-only, no version column; 4 layers.
 - [AC10 fence does not reach the split-child grain](project_p4_split_child_journaled_cat_residual.md) — `092` structurally cannot see it.
 - [GL arc COMPLETE — rename + split + element ALL SHIPPED](project_gl_taxonomy_split_ratified.md) — ⚠ reverted to "no DDL yet" twice; grep the migrations.
+- [The "ADR-023 C1" rotation-coupling label is MIS-ATTRIBUTED](project_c1_label_carriers_and_055_stale_d3_count.md) — ADR-019 C1 inferred, F/CTO pending; BACKLOG S5 DOES carry it; `055` D3 count stale.
 - [A Backlog issue's deliverable may already have shipped](feedback_backlog_issue_deliverable_may_already_have_shipped.md) — widen the search, don't conclude UNBUILT.
 - [Schema-impossible ACs trace to the incumbent](reference_schema_impossible_ac_traces_to_incumbent.md) — the masked residual is load-bearing.
 
