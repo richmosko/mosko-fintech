@@ -122,15 +122,53 @@
 --   block NAMES that class; it asserts nothing about the §10 catalogued ledger,
 --   which neither this migration nor this correction moves.
 --
---   INFERRED, and F/CTO's to rule: the label's home is ADR-019's Sec condition
---   C1. Evidence is `workers/provider-sync/.env.example`, which pins the login
---   role "(F/CTO-ratified; Sec conditions C1/C3)" — ADR-019's condition set —
---   and then spells the condition out as "CONDITION C1 (rotation coupling —
---   Sec-load-bearing)". ADR-019's Status line ratifies "Sec conditions C1–C4",
---   but of that set DECISIONS.md enumerates only C2. WHETHER THE C1 / C3 / C4
---   TEXT IS RECOVERABLE, or must be reconstructed from `.env.example`, IS AN
---   OPEN F/CTO RULING as of 2026-09-08. Until it is ruled, no artifact should
---   re-point the label.
+--   RULED 2026-09-09 (F/CTO): THE LABEL'S HOME IS ADR-019'S SEC CONDITION C1.
+--   ⚠ This block previously opened "INFERRED, and F/CTO's to rule" and closed
+--   "WHETHER THE C1 / C3 / C4 TEXT IS RECOVERABLE, or must be reconstructed from
+--   `.env.example`, IS AN OPEN F/CTO RULING as of 2026-09-08. Until it is ruled,
+--   no artifact should re-point the label." Both sentences are superseded and
+--   the re-pointing block is LIFTED. Evidence unchanged and still the basis:
+--   `workers/provider-sync/.env.example` pins the login role "(migration 116;
+--   F/CTO-ratified; Sec conditions C1/C3)" — ADR-019's condition set — and
+--   spells the condition out as "CONDITION C1 (rotation coupling —
+--   Sec-load-bearing)".
+--   ⚠ QUOTED WHOLE, with the one remaining transformation marked here rather
+--   than left silent: the source WRAPS that parenthetical across two `#`
+--   comment lines ("… Sec conditions" then "# C1/C3)"), so the quotation above
+--   REJOINS them and no contiguous byte-run in the file matches it. An earlier
+--   revision of this block quoted it as "(F/CTO-ratified; Sec conditions
+--   C1/C3)", silently dropping "migration 116" — an UNMARKED ELISION inside a
+--   verbatim quote (Sec, ADR-019 review F3), which ADR-019's own amendment then
+--   inherited from here.
+--   THE RULE, SCOPED — stated narrowly because its absolute form is failed by
+--   its own neighbours (Sec, #675 review C4). It governs quotation of a SOURCE
+--   ARTIFACT, where the reader's next move is to go find the quoted bytes:
+--   DROPPING OR ALTERING WORDS is a transformation and must be marked; quoting
+--   ACROSS A `--` / `#` COMMENT BLOCK'S OWN SOFT WRAPS is not — re-flowing a
+--   wrap restores the sentence the author wrote and changes no word. That is
+--   why the rejoin above is merely noted rather than treated as a defect, and
+--   why the superseded sentences quoted elsewhere in this header and in `055`,
+--   and the `.env.example` pin quoted in ADR-019's amendment, are all sound as
+--   written. ⚠ The narrow half is the load-bearing half: an elided clause is
+--   invisible and changes meaning; a rejoined wrap is neither.
+--
+--   ⚠ RECONSTRUCTED, NOT RECOVERED. The originating Sec artifact was never
+--   committed, so C1's text is written FROM tree evidence rather than quoted
+--   from Sec — a record of what the project acted on, not Sec's words. Of the
+--   C1–C4 set ADR-019's Status line ratifies, C3 and C4 are ruled
+--   TEXT-UNRECOVERABLE with their NUMBERS RETAINED so the references are not
+--   severed, and NO ARTIFACT MAY CITE C3 OR C4 AS A RULE.
+--   ⚠ Do NOT resolve C3 from a nearby "C3" elsewhere in the tree: the bare token
+--   labels several unrelated condition sets, and adopting one would produce
+--   right content under a wrong pointer — the same false-composite failure this
+--   block exists to correct. ⚠ And the Sec joint-review of PR #671 has its OWN
+--   C1 and C4 — different review, different numbering, not this ADR's set.
+--
+--   The amendment carrying all three conditions lands in PR #674 on
+--   DECISIONS.md. Re-pointing now PROCEEDS, per BACKLOG §7.36 items 3-5 and the
+--   vehicle classes below; `055`'s `comment on role` is re-pointed by the
+--   comment-only migration `117`. `workers/provider-sync/.env.example` is the
+--   named exception and is correct as written.
 --
 --   ⚠ THE CORRECTION IS RE-ATTRIBUTION PLUS ENUMERATION — NEVER DELETION. A
 --   condition label is a reference into a canonical enumeration; stripping it
@@ -153,13 +191,26 @@
 --     · Manifest / runbook / `.env.example` — DevOps; `secrets-manifest.yml`
 --       returns to Sec joint-review.
 --     · Python worker source comments and docstrings — Backend.
+--     · A per-directory `CLAUDE.md` — edit-in-place (no DB representation);
+--       owner is the directory's owner — DevOps/Backend for
+--       `workers/CLAUDE.md` — under the same Sec gate as every other row here.
+--       This row exists because Sec's ADR-019 review (F7) measured
+--       `workers/CLAUDE.md` as a LIVE carrier that matched no row in this table
+--       and was named in no BACKLOG §7.36 booking: the grep surfaces it and
+--       nobody owned it. ⚠ That file's C1 sentence ALSO states the label's home
+--       is "under F/CTO ruling", which the 2026-09-09 ruling falsifies — a
+--       second defect on the same lines, to be corrected in the same pass.
 --     · BACKLOG §7.6 S5's AC — PM or Architect, edit-in-place. This row exists
 --       because Sec's round-2 re-confirm of PR #671 measured that S5's AC DOES
 --       carry the label (correcting its own round-1 finding) and that it was in
 --       NO vehicle list: not this one, not BACKLOG §7.36 item 3, not item 4.
 --     · `workers/provider-sync/.env.example` — an EXCEPTION to the manifest
---       class above: its "Sec conditions C1/C3" and "CONDITION C1" lines are
+--       class above: its DB-LOGIN-ROLE pin (the parenthetical naming Sec
+--       conditions C1/C3) and its CONDITION C1 rotation-coupling block are
 --       CORRECT AS WRITTEN under the re-attribution reading. Do not "fix" them.
+--       Described rather than quoted, deliberately — an inline quotation of the
+--       pin would silently rejoin the two `#` lines it wraps across, which is
+--       the F3 defect above.
 --
 -- ----------------------------------------------------------------------------
 -- WHAT DISCHARGES THE GATE — AND WHY THIS MIGRATION CANNOT OBSERVE IT.
